@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """The road sign atlases (task 017): every role of server/data/sign_roles.json drawn to its cell, from vectors, so the
-geometry, colours and symbols are exact and the artwork is ours (no third party's picture goes in).
+geometry, colours and symbols are exact and the artwork is ours (no third party's picture goes in; Poland's D-6
+pedestrian and B-33 digits are the regulation's own, not under copyright: tools/trace_polish_signs.py).
 
     python tools/build_sign_atlas.py            writes mod/.../art/shapes/beamngEarth/bne_signs_<atlas>.color.png (one for
                                                 every system: variant_cells, sign_roles.json)
     python tools/build_sign_atlas.py --check    fails if a role has no drawing or a cell falls outside the sheet
+    python tools/build_sign_atlas.py --paint ROLE ...
+                                                draws just those roles' new cells (their own when they name one,
+                                                their variant cells) into the shipped source,
+                                                mod/texture_sources/.../bne_signs_<atlas>.color.webp, the other
+                                                cells' pixels kept as they are
+
+A role's cell is its place in the roles' list, or its own `cell` (the roles added after the variant cells: Poland's).
+A new role is painted in with --paint: a whole sheet drawn again differs from the shipped one at many cells' edges
+(this machine's PIL and fonts are not the ones that drew it), so the shipped cells are left alone.
 
 A cell is the unit square [-1, 1]^2 with y up. The sign's outline is cut by the mesh (native roadsigns.rs: outline(),
 the same corner rounding as OUTLINES here), so the sheet is opaque: outside the outline a cell is its rim's colour and
@@ -21,6 +31,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROLES = os.path.join(ROOT, "server", "data", "sign_roles.json")
+PL_SHAPES = os.path.join(ROOT, "server", "data", "pl_sign_shapes.json")    # tools/trace_polish_signs.py's
+SOURCES = os.path.join(ROOT, "mod", "texture_sources", "levels", "beamng_earth", "art", "shapes", "beamngEarth")
 OUT = os.path.join(ROOT, "mod", "beamng_earth", "levels", "beamng_earth", "art", "shapes", "beamngEarth")
 SS = 4                          # supersampling
 
@@ -468,12 +480,13 @@ def main_road(end):
     return go
 
 
-def give_way(pen, _f):
+def give_way(pen, f):
+    """A-7 / B5 / 205: on the system's field colour (Poland's yellow, Dz.U. 2019 poz. 2311 zał. 1 rys. 9.1.7)."""
     outer = rounded(tri_down(), CORNER)
     pen.poly(outer, WHITE)
     c = (0.0, -(TRI_TOP + 2 * TRI_BOTTOM) / 3.0)
     pen.poly(rounded(inset(tri_down(), 0.955, c), CORNER * 0.9), RED)
-    pen.poly(rounded(inset(tri_down(), 0.62, c), CORNER * 0.5), WHITE)
+    pen.poly(rounded(inset(tri_down(), 0.62, c), CORNER * 0.5), f)
 
 
 def stop(pen, _f):
@@ -650,6 +663,57 @@ def i_crossing(mirror):
     return go
 
 
+_pl = None
+
+
+def pl_shapes():
+    global _pl
+    if _pl is None:
+        with open(PL_SHAPES, encoding="utf-8") as f:
+            _pl = json.load(f)
+    return _pl
+
+
+def area(ring):
+    return 0.5 * sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1]))
+
+
+def rings(pen, rs, ink, under, at=lambda q: q):
+    """Traced rings (counter-clockwise outer, clockwise holes) filled: the largest first, a hole in `under`."""
+    for r in sorted(rs, key=lambda r: -abs(area(r))):
+        pen.poly([at(q) for q in r], ink if area(r) > 0 else under)
+
+
+def pl_crossing(pen, _f):
+    """D-6 (przejście dla pieszych): Dz.U. 2019 poz. 2311 zał. 1 rys. 9.4.9 (the triangle: its apex a/6 under the top,
+    its base 3/2 a over the bottom, of a 10 a square), its pedestrian walking right over three bars of zebra as in
+    rys. 5.2.6.1 (tools/trace_polish_signs.py)."""
+    blue_square(pen)
+    pen.poly(rounded([(0.0, 0.967), (-0.962, -0.70), (0.962, -0.70)], 0.03), WHITE)
+    pen.inner = WHITE
+    rings(pen, pl_shapes()["d6"], BLACK, WHITE)
+
+
+B33_GAP = 0.217                 # of the digit height: between two digits, as in rys. 3.2.34.1's 50
+
+
+def pl_speed(value):
+    """B-33 (ograniczenie prędkości): the red ring a tenth of the disc, the value in the regulation's digits 9/20 of
+    the disc high, 7/20 from 100 km/h (rys. 9.2.41), centred."""
+    def go(pen, _f):
+        ring_sign(pen)
+        text = str(value)
+        d = 0.99 * (0.9 if value < 100 else 0.7)
+        digits = pl_shapes()["digits"]
+        w = sum(digits[c]["width"] for c in text) + B33_GAP * (len(text) - 1)
+        x = -w * d / 2.0
+        for c in text:
+            g = digits[c]
+            rings(pen, g["rings"], BLACK, WHITE, lambda q, x=x: (x + q[0] * d, (q[1] - 0.5) * d))
+            x += (g["width"] + B33_GAP) * d
+    return go
+
+
 def i_tunnel(pen, _f):
     blue_square(pen)
     pen.poly(rounded(inset(square(), 0.84), 0.04), BLACK if False else WHITE)
@@ -750,6 +814,8 @@ DRAW = {
     "info.crossing_left": i_crossing(True), "info.bus_lane": blue(i_bus_lane),
     "warn.chevron_right": chevron(1), "warn.chevron_left": chevron(-1), "info.bus_stop_cz": bus_cz,
     "info.bus_stop_de": bus_de,
+    "info.crossing_pl": pl_crossing,
+    **{f"speed.pl_{v}": pl_speed(v) for v in range(20, 150, 10)},
 }
 
 
@@ -782,11 +848,36 @@ def sheet(table):
     base = FIELDS[next(iter(table["systems"].values()))]
     by_id = {r["id"]: r for r in table["roles"]}
     for k, role in enumerate(table["roles"]):
+        k = role.get("cell", k)
         out.paste(draw_cell(table, role, base), ((k % cols) * px, (k // cols) * px))
     for field, cells in table.get("variant_cells", {}).items():
         for rid, k in cells.items():
             out.paste(draw_cell(table, by_id[rid], FIELDS[field]), ((k % cols) * px, (k // cols) * px))
     return out
+
+
+def own_cells(table):
+    """[each role's own cell]: its place in the list, or its `cell`."""
+    return [r.get("cell", k) for k, r in enumerate(table["roles"])]
+
+
+def paint(table, ids, path):
+    """Draw roles ids' new cells into the sheet at path (a lossless WebP), the rest kept: a role's own cell when it
+    names one (`cell`), its variant cells."""
+    px, cols = table["cell_px"], table["cols"]
+    base = FIELDS[next(iter(table["systems"].values()))]
+    by_id = {r["id"]: (c, r) for c, r in zip(own_cells(table), table["roles"])}
+    img = Image.open(path).convert("RGB")
+    for rid in ids:
+        k, role = by_id[rid]
+        if "cell" in role:
+            img.paste(draw_cell(table, role, base), ((k % cols) * px, (k // cols) * px))
+        for field, cells in table.get("variant_cells", {}).items():
+            if rid in cells:
+                k = cells[rid]
+                img.paste(draw_cell(table, role, FIELDS[field]), ((k % cols) * px, (k // cols) * px))
+    img.save(path, "WEBP", lossless=True, quality=100, method=6, exact=True)
+    print(path, os.path.getsize(path) // 1024, "KB:", ", ".join(ids))
 
 
 def field_dependent(table):
@@ -803,22 +894,32 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--out", default=OUT)
+    ap.add_argument("--paint", nargs="+", metavar="ROLE")
     a = ap.parse_args()
     table = roles()
     ids = [r["id"] for r in table["roles"]]
     missing = sorted(set(ids) - set(DRAW))
     extra = sorted(set(DRAW) - set(ids))
-    if missing or extra or len(ids) != len(set(ids)) or len(ids) > table["cols"] * table["rows"]:
+    own = own_cells(table)
+    if (missing or extra or len(ids) != len(set(ids)) or len(own) != len(set(own))
+            or any(not 0 <= c < table["cols"] * table["rows"] for c in own)):
         print(f"roles without a drawing: {missing}; drawings without a role: {extra}", file=sys.stderr)
         return 1
     cells = [c for v in table.get("variant_cells", {}).values() for c in v.values()]
-    if (len(cells) != len(set(cells)) or any(c < len(ids) or c >= table["cols"] * table["rows"] for c in cells)
+    if (len(cells) != len(set(cells)) or any(c in own or c >= table["cols"] * table["rows"] for c in cells)
             or {f: sorted(v) for f, v in field_dependent(table).items()}
             != {f: sorted(table.get("variant_cells", {}).get(f, {})) for f in list(table["systems"].values())[1:]}):
         print("variant_cells: not exactly the roles drawn differently on each field colour, or cells taken twice / "
               "outside the sheet", file=sys.stderr)
         return 1
     if a.check:
+        return 0
+    if a.paint:
+        unknown = sorted(set(a.paint) - set(ids))
+        if unknown:
+            print(f"no such roles: {unknown}", file=sys.stderr)
+            return 1
+        paint(table, a.paint, os.path.join(SOURCES, f"bne_signs_{table['atlas']}.color.webp"))
         return 0
     path = os.path.join(a.out, f"bne_signs_{table['atlas']}.color.png")
     sheet(table).quantize(colors=224, dither=Image.NONE).save(path, optimize=True)

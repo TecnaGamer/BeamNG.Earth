@@ -53,7 +53,8 @@ def tables():
         roles = json.load(f)
     with open(os.path.join(DATA, "sign_systems.json"), encoding="utf-8") as f:
         systems = json.load(f)
-    return roles, systems, {r["id"]: (i, r) for i, r in enumerate(roles["roles"])}
+    # (a role's cell is its place in the list, or its own `cell`: the roles added after the variant cells)
+    return roles, systems, {r["id"]: (r.get("cell", i), r) for i, r in enumerate(roles["roles"])}
 
 
 def system(country):
@@ -77,6 +78,11 @@ def widest(sizes):
     return max(max(v) for v in sizes.values())
 
 
+def sizes_of(sys_row):
+    """{shape: [town, country, major road] m}: the shared sizes with the country's own over them (sign_systems.json)."""
+    return {**tables()[1]["sizes"]["default"], **sys_row.get("sizes", {})}
+
+
 def is_marked_crossing(tags):
     """Whether a crossing node's OSM tags state a marked crossing without signals."""
     if not tags:
@@ -90,6 +96,22 @@ def is_marked_crossing(tags):
     if t.get("foot") == "no":
         return False
     return t.get("crossing") in CROSSING_KINDS or t.get("crossing_ref") == "zebra"
+
+
+def is_crossing_with_markings(tags):
+    """Whether a crossing node's OSM tags state a marked pedestrian crossing, with signals or without (Poland: D-6 at
+    every pedestrian crossing, Dz.U. 2019 poz. 2311 zał. 1 pkt 5.2.6.3; its surface is the zebra P-10, pkt 5.2.6.1).
+    Markings of a cycle crossing only (lines, dots: P-11, D-6a) or none are not; crossing=traffic_signals with no
+    word on its markings is (a signalled crossing there is painted), also on a signal node that carries the crossing."""
+    t = _tags(tags)
+    if t.get("highway") not in ("crossing", "traffic_signals") or t.get("foot") == "no":
+        return False
+    if t.get("highway") == "traffic_signals" and "crossing" not in t and "crossing:markings" not in t:
+        return False
+    marks = set(str(t.get("crossing:markings", "")).replace(":", ";").split(";")) - {""}
+    if marks:
+        return bool(marks & {"zebra", "ladder", "yes"})
+    return t.get("crossing") in CROSSING_KINDS | {"traffic_signals"} or t.get("crossing_ref") == "zebra"
 
 
 def points(frame, cells, wanted):
@@ -109,8 +131,12 @@ def points(frame, cells, wanted):
     return np.ascontiguousarray(np.column_stack([e, n]), np.float64)
 
 
-def crossings(frame, cells):
-    """(n, 2) of the marked crossings of infrastructure cells, in frame, each once."""
+def crossings(frame, cells, reading=None):
+    """(n, 2) of the marked crossings of infrastructure cells, in frame, each once: without signals, or with signals
+    too where the country's reading (sign_systems.json `crossings`) is all_marked."""
+    if reading == "all_marked":
+        test = is_crossing_with_markings
+        return points(frame, cells, {"crossing": test, "traffic_signals": test})
     return points(frame, cells, {"crossing": is_marked_crossing})
 
 
@@ -377,7 +403,7 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
              for k in mapcells.cells_for_bbox(float(b_la.min()), float(b_lo.min()), float(b_la.max()), float(b_lo.max()))]
     cla, clo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), 0.0)
     poly, poly_off = speedsigns._outlines(context.pavements(frame, np.c_[clo, cla], left_hand))
-    sizes = tables()[1]["sizes"]["default"]
+    sizes = sizes_of(sys_row)
     poi = np.vstack([pois(frame, infra)] + portals)
     if len(poi):                                # (a bus station has its own plates: no stock stop post on its ground)
         import busstationkeep
@@ -385,20 +411,62 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
         if keep:
             drop = (poi[:, 2] == POI_BUS_STOP) & keep.contains(poi[:, :2])
             poi = np.ascontiguousarray(poi[~drop], np.float64)
-    got = fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off, crossings(frame, infra),
+    got = fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off,
+                                    crossings(frame, infra, sys_row.get("crossings")),
                                     signals(frame, infra), open_ends(frame, cells), poly, poly_off, [float(v) for v in box],
                                     bool(left_hand), [float(v) for v in sys_row["lateral"]], float(widest(sizes)),
                                     params(sys_row), speed_signs(frame, box, context, left_hand, mph), pole_params(sys_row),
                                     np.ascontiguousarray(poi, np.float64))
+    if sys_row.get("crossing_left_oneway"):
+        got = crossing_left(got, rows)
     import roundabouts
     return roundabouts.drop_on_islands(got, list(rows.values()))      # (none on a roundabout's island, plan 038)
+
+
+ONEWAY_NEAR_M = 1.0             # m from a one-way road's centre line a crossing sign's road point lies on that road
+
+
+def crossing_left(signs, rows):
+    """road_sign_place's rows with each crossing sign of a one-way road repeated on the road's left, facing the same
+    traffic on a pole of its own (Poland: "przy jezdniach jednokierunkowych znaki D-6 ... należy powtarzać po lewej
+    stronie", Dz.U. 2019 poz. 2311 zał. 1 pkt 5.2.6.1; a divided road's carriageways are one-way, its median gets them).
+    The left sign stands as far left of the road point as the right one stands right of it. rows: the roads
+    ({fid: speedsigns._cell_rows' row}, meta[1] the one-way direction, 0 two-way)."""
+    rule = float(tables()[1]["rules"].index("info.crossing_right"))
+    at = np.flatnonzero(signs[:, 4] == rule) if len(signs) else []
+    if not len(at):
+        return signs
+    oneway = [np.asarray(r[1], np.float64) for r in rows.values() if r[2][1] != 0 and len(r[1]) >= 2]
+    extra = []
+    pole = float(signs[:, 9].max()) + 1.0
+    for k in at:
+        q = signs[k, 6:8]
+        if not any(_near_line(line, q, ONEWAY_NEAR_M) for line in oneway):
+            continue
+        row = signs[k].copy()
+        row[0:2] = 2.0 * q - signs[k, 0:2]
+        row[9], row[10] = pole, 0.0
+        pole += 1.0
+        extra.append(row)
+    return np.ascontiguousarray(np.vstack([signs] + extra)) if extra else signs
+
+
+def _near_line(line, q, d):
+    """Whether point q lies within d of polyline line (n, 2)."""
+    if (line[:, 0].min() - d > q[0] or line[:, 0].max() + d < q[0] or line[:, 1].min() - d > q[1]
+            or line[:, 1].max() + d < q[1]):
+        return False
+    a, b = line[:-1], line[1:]
+    ab = b - a
+    t = np.clip(((q - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+    return bool((dnp.hypot(*(a + ab * t[:, None] - q).T) <= d).any())
 
 
 def table(signs, z_ground, z_road, sys_row):
     """road_sign_mesh's rows of road_sign_place's, heights given: the signs of one pole stacked from the lowest up, the top one
     first in slot order, `gap_m` between them."""
     roles, systems, by_id = tables()
-    sizes = systems["sizes"]["default"]
+    sizes = sizes_of(sys_row)
     gap = float(systems["pole"]["gap_m"])
     width = np.zeros(len(signs))
     cells = []

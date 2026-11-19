@@ -32,7 +32,9 @@ RANK = {"motorway": 7, "trunk": 6, "primary": 5, "secondary": 4, "tertiary": 3, 
 MARGIN_M = 900.0                # the roads this far round a tile: its junctions and the nearby signs that thin it out
 REPEAT_M = (1609.344, 3218.688)  # a reminder about every mile in town and every two out of it (PR #363's 2 miles)
 CELL_FRAMES = 4                 # anchors a cell keeps its rows for
-STYLE_MUTCD, STYLE_VIENNA, STYLE_CANADA, STYLE_SWEDEN = 0, 1, 2, 3     # (the kernels draw STYLE_SWEDEN as STYLE_VIENNA)
+STYLE_MUTCD, STYLE_VIENNA, STYLE_CANADA, STYLE_SWEDEN, STYLE_POLAND = 0, 1, 2, 3, 4
+# (the kernels place STYLE_SWEDEN and STYLE_POLAND as STYLE_VIENNA; their faces are drawn here: sweden_mesh,
+# poland_mesh)
 # speed_sign_mesh's material indices: white, red, metal, lettering, black (exit.materials.json's)
 MATERIALS = ['bne_exit_white', 'bne_guide_red', 'bne_exit_metal', 'bne_guide_letters_black', 'bne_guide_black']
 # C31 (sweden_mesh): Transportstyrelsen's artwork of the sign, tools/build_swedish_signs.py's sheet of 4 x 4 cells of
@@ -48,6 +50,9 @@ C31_POLE_X = -0.05
 C31_D = (0.60, 0.60, 0.90, 0.90)
 # m from the road to the lower edge: the Vienna mesh's mount(), within 1.0-2.0 m (TSFS 2019:74 1 kap. 13 §)
 C31_MOUNT_RURAL, C31_MOUNT_TOWN, C31_MIN_GROUND = 1.52, 2.0, 1.2
+# B-33 (poland_mesh): the road sign atlas's cells speed.pl_<value> (sign_roles.json), drawn by tools/build_sign_atlas.py
+# in the regulation's own digits (Dz.U. 2019 poz. 2311 zał. 1 rys. 9.2.41); 20 to 140 km/h, to 10 (pkt 3.2.34)
+B33_MIN, B33_MAX = 20.0, 140.0
 _lock = threading.Lock()
 
 
@@ -55,20 +60,23 @@ NO_SIGN_CLASSES = {"track"}     # in the AI's graph (navgraph.DRIVE, GitHub #756
 
 def posted(mph_value, mph=True, face=STYLE_VIENNA):
     """The number on the sign of a limit of mph_value mph: mph (to 5) where mph are posted, else km/h (to 5), in Sweden
-    to 10 from 30 to 120 (slower: no sign); 0 for none."""
+    to 10 from 30 to 120 (slower: no sign), in Poland to 10 from 20 to 140 (slower: none); 0 for none."""
     if mph_value is None or not np.isfinite(mph_value) or mph_value <= 0:
         return 0.0
     v = mph_value if mph else mph_value * 1.609344
     if face == STYLE_SWEDEN:
         return min(120.0, float(int(v / 10.0 + 0.5) * 10)) if v >= 25.0 else 0.0
+    if face == STYLE_POLAND:
+        return min(B33_MAX, max(B33_MIN, float(int(v / 10.0 + 0.5) * 10))) if v >= 15.0 else 0.0
     return float(max(5, int(v / 5.0 + 0.5) * 5))
 
 
 def style(country, us):
-    """The sign face: MUTCD where a US state is (signstates), Canada's Rb-1, Sweden's C31, else the Vienna's."""
+    """The sign face: MUTCD where a US state is (signstates), Canada's Rb-1, Sweden's C31, Poland's B-33, else the
+    Vienna's."""
     if us:
         return STYLE_MUTCD
-    return {"CA": STYLE_CANADA, "SE": STYLE_SWEDEN}.get((country or "").upper(), STYLE_VIENNA)
+    return {"CA": STYLE_CANADA, "SE": STYLE_SWEDEN, "PL": STYLE_POLAND}.get((country or "").upper(), STYLE_VIENNA)
 
 
 def _limits(feats, i, spec, mph, face):
@@ -225,7 +233,7 @@ def place(frame, box, context, left_hand=False, mph=True, face=STYLE_VIENNA):
 
 
 def _kernel_style(face):
-    return STYLE_VIENNA if face == STYLE_SWEDEN else int(face)
+    return STYLE_VIENNA if face in (STYLE_SWEDEN, STYLE_POLAND) else int(face)
 
 
 @lru_cache(maxsize=1)
@@ -244,6 +252,50 @@ def c31_uv(value, cos, sin):
     u = ((k % 4) + 0.5) * C31_CELL + cos * C31_R
     v = ((k // 4) + 0.5) * C31_CELL - sin * C31_R
     return u / C31_SHEET, 1.0 - v / C31_SHEET
+
+
+def b33_diameter(value, size, rank, urban):
+    """m: B-33's disc (Dz.U. 2019 poz. 2311 zał. 1 tabela 1.1, B: W 1.0, D 0.9, S 0.8, M 0.6) by the road. W on a
+    motorway; D on an expressway and a dual carriageway out of town (in town over 60 km/h); S on the other roads of the
+    state, the voivodeships and the powiats (taken as tertiary and up) and on any multi-lane road; M on the gminas'."""
+    if size >= 3 or rank >= RANK["motorway"]:
+        return 1.0
+    if size >= 2 or (size >= 1 and (not urban or value > 60.0)):
+        return 0.9
+    if size >= 1 or rank >= RANK["tertiary"]:
+        return 0.8
+    return 0.6
+
+
+def poland_table(table, rank):
+    """road_sign_mesh's rows (roadsigns.table's) of B-33s: _speed_mesh's table, rank the roads' (place()'s col 11)."""
+    import roadsigns
+    roles, systems, by_id = roadsigns.tables()
+    mount = systems["countries"]["PL"]["mount"]
+    out = []
+    for row, r in zip(table, rank):
+        value = float(row[6])               # (posted km/h already: place()'s)
+        role = by_id.get("speed.pl_%d" % int(round(value)))
+        if role is None:
+            continue
+        urban = row[8] != 0.0
+        out.append((row[0], row[1], row[2], row[3], row[4], row[5], role[0], roadsigns.SHAPES["circle"],
+                    b33_diameter(value, int(row[7]), int(r), urban), mount[0 if urban else 1]))
+    return np.ascontiguousarray(np.asarray(out, np.float64).reshape(-1, 10))
+
+
+def poland_mesh(table, rank, origin):
+    """(positions, triangles, uvs, materials, material of each triangle) of B-33s, or None: the road signs' mesh
+    (roadsigns.rs road_sign_mesh) with the atlas's speed.pl_<value> cells."""
+    import roadsigns
+    rows = poland_table(table, rank)
+    if not len(rows):
+        return None
+    roles = roadsigns.tables()[0]
+    p, t, uv, mi = fast._ef.road_sign_mesh(rows, roles["cols"], roles["rows"], [float(v) for v in origin])
+    if not len(t):
+        return None
+    return p, t, uv, ["bne_signs_vienna_y", roadsigns.METAL], mi
 
 
 def sweden_mesh(table, origin):
@@ -346,6 +398,8 @@ def _speed_mesh(frame, box, elev, signs, decks, face):
     table = np.column_stack([signs[:, 0:2], z[:n], z[n:], signs[:, 2:4], signs[:, 4:6], signs[:, 8]])
     if face == STYLE_SWEDEN:
         return sweden_mesh(table, (float(box[0]), float(box[1]), 0.0))
+    if face == STYLE_POLAND:
+        return poland_mesh(table, signs[:, 11], (float(box[0]), float(box[1]), 0.0))
     cp, glyph, cap = _glyphs()
     p, t, uv, mi = fast._ef.speed_sign_mesh(np.ascontiguousarray(table), _kernel_style(face), cp, glyph, cap,
                                             [float(box[0]), float(box[1]), 0.0])
