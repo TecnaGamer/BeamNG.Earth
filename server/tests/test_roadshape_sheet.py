@@ -64,6 +64,18 @@ def drawn(parts, sheet, chain=False):
     return chunks, tops, runs
 
 
+def sheet_marks(parts, box=(-60.0, -60.0, 360.0, 90.0), walks=None):
+    """deck_pads' skip list of the tile box over parts (BNE_ROADSHAPE=sheet: roads._sheet_marks)."""
+    old = roadshape.SHEET
+    roadshape.SHEET = True
+    marks = []
+    try:
+        roads._deck_chunks(parts, box, walks=walks, sheet_marks=marks)
+    finally:
+        roadshape.SHEET = old
+    return marks
+
+
 @unittest.skipUnless(HAVE, "earthfast.deck_sheets missing")
 class SheetRecords(unittest.TestCase):
     def recs(self, parts):
@@ -144,8 +156,10 @@ class SheetDecks(unittest.TestCase):
             self.assertTrue(any(c.get("noslab") for c in ramp))
             self.assertTrue(any(c.get("sk0") or c.get("sk1") for c in ramp if not c.get("noslab")))
             self.assertTrue(any(c.get("sx") for c in ch if str(c.get("fid")).startswith("b-through")))
-            # (the fork's node on the branch's union chunks: roads.deck_pads leaves its pad out)
-            self.assertTrue(all(c.get("sxn")[:2] == [0.0, 0.0] for c in ramp if c.get("noslab")))
+            # (the fork's node and its branch: roads.deck_pads leaves its pad out; none where its ramp has sidewalks
+            # and no union is drawn: its pad stays, Codex)
+            self.assertEqual([m[:2] + m[3:] for m in sheet_marks(parts)], [[0.0, 0.0, "c-ramp"]])
+            self.assertEqual(sheet_marks(parts, walks={"c-ramp": (2.0, (1,))}), [])
             # pinned: the ramp's road in the union at the through deck's heights (10 + 2 x / 300)
             for c in ramp:
                 if c.get("noslab"):
@@ -239,8 +253,7 @@ class SheetDecks(unittest.TestCase):
         try:
             pads = []
             for parts in (p, p + [side]):
-                allc = roads._deck_chunks(parts, (-60.0, -120.0, 360.0, 90.0))
-                skip = [c["sxn"] for c in allc if c.get("sxn") is not None]
+                skip = sheet_marks(parts, (-60.0, -120.0, 360.0, 90.0))
                 self.assertTrue(skip and all(s[3] == "c-ramp" for s in skip))
                 decks = [(f, s, np.asarray(q, np.float64)[:, :2], np.asarray(q, np.float64)[:, 2]) for f, s, q, _ in parts]
                 got = roads.deck_pads(decks, [], (-60.0, -120.0, 360.0, 90.0), lambda xy: np.zeros(len(xy)), own=False,
@@ -276,8 +289,7 @@ class SheetDecks(unittest.TestCase):
         old = roadshape.SHEET
         roadshape.SHEET = True
         try:
-            allc = roads._deck_chunks([thr, ramp], (-200.0, -60.0, 300.0, 60.0))
-            skip = [c["sxn"] for c in allc if c.get("sxn") is not None]
+            skip = sheet_marks([thr, ramp], (-200.0, -60.0, 300.0, 60.0))
             self.assertTrue(skip)
             decks = [(f, s, np.asarray(q, np.float64)[:, :2], np.asarray(q, np.float64)[:, 2]) for f, s, q, _ in
                      (thr, ramp)]
