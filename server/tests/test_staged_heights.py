@@ -151,3 +151,27 @@ def test_a_deck_with_no_weight_of_its_own_is_set_by_the_kernels_floor_on_every_w
     assert H.stats["converged"]
     assert max(float(np.abs(a - b).max()) for a, b in zip(H.zs, zk)) < 0.1
     assert h5.W_MIN == 1e-3
+
+
+def test_popolis_tubes_agree_with_the_kernel_curve_bound_and_all():
+    """Popoli's five systems: the vertical-curve rows are the kernel's own (a tube there bends against them: 0.35 m over the bound
+    without them, 15 m from the kernel's answer on two systems that a dual stop relative to the forces let go), and the stop on the
+    dual residual in forces: with both, the heights agree to 1 cm."""
+    try:
+        pl = places.replay("popoli_ss17_underpass")
+        S = staged.run(pl.members, pl.meta, pl.ll, pl.edge, pl.ground, name="popoli")
+    except (OSError, ImportError, FileNotFoundError):
+        pytest.skip("no Popoli replay here")
+    worst = 0.0
+    for n, sysm in enumerate(S.G.systems):
+        pcs = gs.pieces(S.net, sysm)
+        smp = gs.sample(S.net, pcs)
+        gl = s4.ground_lists(S.ground, S.net, smp)
+        zk = gs.solve_shape(S.net, sysm, pcs, smp, gl, S.ground.fixed, {})
+        if zk is None:
+            pytest.skip("no kernel here")
+        H = h5.solve_system(S.net, sysm, S.ground)
+        assert H.stats["converged"]
+        worst = max(worst, max(float(np.abs(a - b).max()) for a, b in zip(H.zs, zk)))
+        assert H.stats["curve_excess_m"] <= 2e-3
+    assert worst < 0.01

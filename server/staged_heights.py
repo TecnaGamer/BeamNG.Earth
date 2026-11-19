@@ -6,18 +6,22 @@ shapes' own objective (gradeshapes.shape_problem's chains: a target and weight p
 Output: a height per sample of every piece, the answer's residuals, and the iterations it took. Our own solver, deterministic
 (plain floats, the same operations in the same order), no kernel, no time budget: an iteration cap, then it says what it reached.
 
-The problem is the shapes' (carriageways.solve) without the vertical-curve bound:
+The problem is the shapes' (carriageways.solve), the same one:
 
     minimise   sum_i max(w_i, W_MIN) (z_i - t_i)^2  +  sum_chains lam * sum (z_{i-1} - 2 z_i + z_{i+1})^2
     such that  lo_e <= z_b - z_a <= hi_e   for every edge e of the constraint graph   (grade, clearance, joint, overlap)
                lo_k <= z_k <= hi_k          for every node with a floor, a ceiling or a ground point held
+               |r_i . z| <= hm^2 / (100 K)  for every window (i, i + 1, i + 2) of a piece   (the vertical curve, the kernel's row)
 
-The curve bound (|second difference| <= step^2 / (100 K)) is not a difference constraint, which is what makes stage 4 exact; it is
-not a hard constraint here, the stiffness lam is what keeps a deck's line, and the curvature of the answer is measured against the
-kernel's bound (Heights.stats["curve_excess_m"]) instead of enforced. W_MIN (the kernel's own floor on every weight, native/earthfast carriageway_solver.rs) makes the objective strictly convex and is
-part of the shapes' answer, not a regulariser of ours: a deck's middle weighs nothing and its line is kept by lam alone, so what
-sets its height is this floor's pull of every sample to its natural line (a deck joined at both ends, no target). At Brunau a
-weight of 1e-4 here instead (what this solver first took) put decks 8-10 m over the kernel's and the survey's.
+The curve rows are not difference constraints, which is what makes stage 4 exact: stage 4 says whether the grade law, the clearances
+and the joints can all hold, not whether the curves can too (a system that has heights for them and none for the curve is reported
+by stage 5 as not converged, with the curve rows' violation in stats["violation_by_kind"]). They are three entries wide and inside the
+matrix's band, so the ADMM below carries them at no cost in factoring. W_MIN (the kernel's own floor on every weight,
+native/earthfast carriageway_solver.rs) makes the objective strictly convex and is part of the shapes' answer, not a regulariser of
+ours: a deck's middle weighs nothing and its line is kept by lam alone, so what sets its height is this floor's pull of every sample
+to its natural line (a deck joined at both ends, no target). At Brunau a weight of 1e-4 here instead (what this solver first took) put
+decks 8-10 m over the kernel's and the survey's. Measured against the kernel: Popoli's five systems agree to 4 mm and in objective to
+1e-4, curve excess included; the kernel's answer breaks none of our rows (the same problem), ours none of its.
 
 The method: ADMM in OSQP's form (Stellato et al. 2020), l <= A x <= u the rows above, the objective 1/2 x'Hx - h'x:
 
@@ -42,7 +46,9 @@ ceiling, backward for the floor: Bellman-Ford with a queue, the graph has no neg
 feasible heights is unchanged by tightening a box with what the constraints already imply), and the potentials stage 4 found,
 heights that satisfy every constraint, are where the iteration starts.
 
-Stopping: the primal residual under TOL_M and the dual one under DUAL_ABS + DUAL_REL of the objective's own forces, or MAX_ITER. The
+Stopping: the primal residual under TOL_M and the dual one under DUAL_ABS (a force, not a share of the forces: the objective's flat
+directions weigh W_MIN, so a dual residual r is a height error of up to r / (2 W_MIN) there; DUAL_ABS 1e-4 is 5 cm per sample, and a
+share of the forces let Popoli's tubes stop 14 m from the kernel's), or MAX_ITER. The
 constraint violation of the answer itself is measured, edge by edge (stats["violation_m"]): where it is over VIOLATION_M the answer
 is not given as converged."""
 import math
@@ -68,10 +74,10 @@ PCG_MAX = 60
 PCG_TOL = 1e-9
 PCG_REL = 0.05
 DUAL_ABS = 1e-4
-DUAL_REL = 1e-4
 ALPHA = 1.6             # over-relaxation (Boyd 3.4.3: any value in (0, 2) keeps the convergence)
 W_MIN = 1e-3            # least weight of a sample on its target: the kernel's (carriageway_solver.rs W_MIN), the strictly convex part
-RHO_EVERY = 25          # sweeps between looks at the residuals' balance
+CURVE_MIN_GAP_M = 0.5   # m: the least spacing a segment's own `ds` gives (carriageways.MIN_SEGMENT_M)
+RHO_EVERY = 25         # sweeps between looks at the residuals' balance
 
 
 def implied_bounds(g):
@@ -161,6 +167,27 @@ class Problem:
         self.DLO = np.array([slab[k][0] for k in keys], np.float64)
         self.DHI = np.array([slab[k][1] for k in keys], np.float64)
         self.lo, self.hi = lo, hi
+        # the vertical curve's bound, the kernel's own row of each window (carriageway_solver.rs curve_row): the change of grade across
+        # (i, i + 1, i + 2) times the mean spacing, [hm / h0, -(hm / h0 + hm / h1), hm / h1] . z, within +- hm^2 / (100 K); the rows are
+        # inside the pentadiagonal band, so they cost the banded factor nothing
+        k0, ra, rc, cb = [], [], [], []
+        for c, ch in enumerate(cons.chains):
+            a, b = self.off[c], self.off[c + 1]
+            if b - a < 3:
+                continue
+            ds = ch.get("ds")
+            gap = np.maximum(np.asarray(ds, np.float64), CURVE_MIN_GAP_M) if ds is not None else np.full(b - a - 1, float(ch["step"]))
+            h0, h1 = gap[:-1], gap[1:]
+            hm = 0.5 * (h0 + h1)
+            k0.append(np.arange(a, b - 2))
+            ra.append(hm / h0)
+            rc.append(hm / h1)
+            cb.append(hm * hm / (float(ch["K"]) * 100.0))
+        cat = lambda xs, dt: np.concatenate(xs).astype(dt) if xs else np.zeros(0, dt)
+        self.K0 = cat(k0, np.int64)
+        self.CA = cat(ra, np.float64)
+        self.CC = cat(rc, np.float64)
+        self.CB = cat(cb, np.float64)
 
     def objective(self, z):
         """The shapes' objective at z (the kernel's floor on the weights included): sum w (z - t)^2 + lam sum (second differences)^2."""
@@ -186,7 +213,12 @@ class Problem:
         for kind in sorted(set(g.kind)):
             sel = np.fromiter((k_ == kind for k_ in g.kind), bool, len(g.kind))
             kinds[kind] = float(max(over[sel].max(), 0.0)) if sel.any() else 0.0
-        return float(max(over.max(), 0.0)) if len(over) else 0.0, kinds
+        worst = float(max(over.max(), 0.0)) if len(over) else 0.0
+        if len(self.K0):
+            row = self.CA * z[self.K0] - (self.CA + self.CC) * z[self.K0 + 1] + self.CC * z[self.K0 + 2]
+            kinds["curve"] = float(max((np.abs(row) - self.CB).max(), 0.0))
+            worst = max(worst, kinds["curve"])
+        return worst, kinds
 
 
 class Banded:
@@ -336,9 +368,15 @@ def admm(P, z0, max_iter=MAX_ITER):
     lo = np.maximum(P.lo, np.array(floor[:N], np.float64))
     hi = np.minimum(P.hi, np.array(ceil[:N], np.float64))
     bn = np.flatnonzero(np.isfinite(lo) | np.isfinite(hi))
-    m1, m2 = len(A), len(bn)
-    Lw = np.r_[P.DLO, lo[bn]]
-    Uw = np.r_[P.DHI, hi[bn]]
+    m1, m2, m3 = len(A), len(bn), len(P.K0)
+    K0 = P.K0
+    K1, K2 = K0 + 1, K0 + 2
+    c0, c1, c2 = P.CA, -(P.CA + P.CC), P.CC
+
+    def Cmul(v):
+        return c0 * v[K0] + c1 * v[K1] + c2 * v[K2]
+    Lw = np.r_[P.DLO, lo[bn], -P.CB]
+    Uw = np.r_[P.DHI, hi[bn], P.CB]
     eq = (Uw - Lw) <= 1e-9
     chain = np.searchsorted(np.array(P.off[1:], np.int64), np.arange(N), side="right")
     local = (B == A + 1) & (chain[A] == chain[B])
@@ -346,26 +384,38 @@ def admm(P, z0, max_iter=MAX_ITER):
     Ac, Bc = A[~local], B[~local]
     cmask = ~local
     x = np.clip(np.asarray(z0, np.float64), lo, hi)
-    Ax = np.r_[x[B] - x[A], x[bn]]
+    Ax = np.r_[x[B] - x[A], x[bn], Cmul(x)]
     z = np.minimum(np.maximum(Ax, Lw), Uw)
-    y = np.zeros(m1 + m2)
+    y = np.zeros(m1 + m2 + m3)
     rho = RHO0
     stats_pcg = 0
 
     def factor(rho):
         rv = np.where(eq, RHO_EQ * rho, rho)
-        rp, rb = rv[:m1], rv[m1:]
+        rp, rb, rc = rv[:m1], rv[m1:m1 + m2], rv[m1 + m2:]
         d = P.hd + SIGMA
         e = P.he.copy()
+        f = P.hf.copy()
         d = d + np.bincount(Al, weights=rp[local], minlength=N) + np.bincount(Bl, weights=rp[local], minlength=N)
         d[bn] += rb
         e[Al] += -rp[local]
-        return rv, d, e, BandedBatch(d, e, P.hf, P.off)
+        if m3:                              # (the curve rows' normal matrix: inside the three bands)
+            d[K0] += rc * c0 * c0
+            d[K1] += rc * c1 * c1
+            d[K2] += rc * c2 * c2
+            e[K0] += rc * c0 * c1
+            e[K1] += rc * c1 * c2
+            f[K0] += rc * c0 * c2
+        return rv, d, e, f, BandedBatch(d, e, f, P.off)
 
     def Aty(w):
-        return np.bincount(B, weights=w[:m1], minlength=N) - np.bincount(A, weights=w[:m1], minlength=N) + np.bincount(bn, weights=w[m1:], minlength=N)
+        out = np.bincount(B, weights=w[:m1], minlength=N) - np.bincount(A, weights=w[:m1], minlength=N) + np.bincount(bn, weights=w[m1:m1 + m2], minlength=N)
+        if m3:
+            wc = w[m1 + m2:]
+            out = out + np.bincount(K0, weights=wc * c0, minlength=N) + np.bincount(K1, weights=wc * c1, minlength=N) + np.bincount(K2, weights=wc * c2, minlength=N)
+        return out
 
-    rv, bd, be, fac = factor(rho)
+    rv, bd, be, bf, fac = factor(rho)
     xt = x.copy()
     rescalings = 0
     it = 0
@@ -376,7 +426,7 @@ def admm(P, z0, max_iter=MAX_ITER):
         rhs = SIGMA * x + P.h + Aty(rv * z - y)
 
         def Kmul(v):
-            out = _bandmul(bd, be, P.hf, v)
+            out = _bandmul(bd, be, bf, v)
             if len(Ac):
                 w = rv[:m1][cmask] * (v[Bc] - v[Ac])
                 out = out + np.bincount(Bc, weights=w, minlength=N) - np.bincount(Ac, weights=w, minlength=N)
@@ -402,14 +452,14 @@ def admm(P, z0, max_iter=MAX_ITER):
             xt = xt + a * p
             r = r - a * Kp
             stats_pcg += 1
-        zt = np.r_[xt[B] - xt[A], xt[bn]]
+        zt = np.r_[xt[B] - xt[A], xt[bn], Cmul(xt)]
         xr = ALPHA * xt + (1.0 - ALPHA) * x
         zr = ALPHA * zt + (1.0 - ALPHA) * z
         z_new = np.minimum(np.maximum(zr + y / rv, Lw), Uw)
         y = y + rv * (zr - z_new)
         x, z = xr, z_new
-        Ax = np.r_[x[B] - x[A], x[bn]]
-        Px = _bandmul(P.hd, P.he, P.hf, x)
+        Ax = np.r_[x[B] - x[A], x[bn], Cmul(x)]
+        Px =_bandmul(P.hd, P.he, P.hf, x)
         ATy = Aty(y)
         r_pri = float(np.abs(Ax - z).max(initial=0.0))
         r_dual = float(np.abs(Px - P.h + ATy).max(initial=0.0))
@@ -425,7 +475,7 @@ def admm(P, z0, max_iter=MAX_ITER):
             ratio = math.sqrt(pn / max(dn, 1e-30))
             if ratio > 5.0 or ratio < 0.2:
                 rho = min(max(rho * ratio, 1e-6), 1e8)
-                rv, bd, be, fac = factor(rho)
+                rv, bd, be, bf, fac = factor(rho)
                 rescalings += 1
     stats = dict(iterations=it, pcg_iterations=stats_pcg, rho=rho, rho_rescalings=rescalings, primal_residual_m=r_pri,
                  dual_residual=r_dual, converged=converged)
