@@ -6726,6 +6726,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationzone::station_zone, m)?)?;
     // 494: the full port's busstationmesh.zone loops and _clip_cell (stationzone::station_zone: a station's walkable
     // ground, kerb walls and tactile strips from walk_field's lattice in one call). 493 is another branch's
-    m.add("VERSION", 494)?;
+    // 496: power_line_layout takes span_ground and span_clear (the spans' clearance over the ground: towers (t, 5) with
+    // their scale, supports (k, 12)); skeleton_roof fails a skeleton with a node over its distance to the outline (an
+    // 18 km gabled roof, report W545TFKJ); street_points finds a spot clear of every carriageway (report 5T7V9FNQ).
+    // 495 is another branch's
+    m.add("VERSION", 496)?;
     Ok(())
 }

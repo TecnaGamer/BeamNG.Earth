@@ -131,7 +131,7 @@ class LineTest(unittest.TestCase):
         flat = lambda x, y: np.zeros(len(x))
         box1, box2 = [-50.0, -50.0, 90.0, 50.0], [90.0, -50.0, 250.0, 50.0]
         towers, _, wp, wo, sup = layout([line], box=box1, full=True)
-        rows = [powerlines.tower_row(powerlines.G_PYLON, powerlines.PYLON_H, *t) for t in towers]
+        rows = [powerlines.tower_row(powerlines.G_PYLON, powerlines.PYLON_H, *t[:4]) for t in towers]
         self.assertEqual([r[1] for r in rows], [0.0])
         wires = powerlines.span_wires(wp, wo, sup, powerlines.G_PYLON, powerlines.PYLON_H, powerlines.WIRE_R)
         self.assertEqual(len(wires), len(powerlines.ARMS))                # (the span 0 -> 100: its middle in box 1)
@@ -143,7 +143,7 @@ class LineTest(unittest.TestCase):
         self.assertEqual([r[1] for r in rows], [0.0])
         # the tower's own tile culls it
         towers, _, _, _, _ = layout([line], box=box2, full=True)
-        rows2 = [powerlines.tower_row(powerlines.G_PYLON, powerlines.PYLON_H, *t) for t in towers]
+        rows2 = [powerlines.tower_row(powerlines.G_PYLON, powerlines.PYLON_H, *t[:4]) for t in towers]
         racedig.clear_props(rows2, [], band, flat)
         self.assertNotIn(100.0, [r[1] for r in rows2])
 
@@ -473,7 +473,7 @@ class OffRoadsTest(unittest.TestCase):
 class TowerFootprintTest(unittest.TestCase):
     """The native layout decides yaw; check its emitted rows against the tile's authoritative solved roads."""
 
-    def place(self, lines=(), decks=(), clearance=None, tags=None, pts=((100., 100.), (200., 100.))):
+    def place(self, lines=(), decks=(), clearance=None, tags=None, pts=((100., 100.), (200., 100.)), elev=None):
         import furniture
         import mapgeom
         from test_roads import FRAME
@@ -494,9 +494,36 @@ class TowerFootprintTest(unittest.TestCase):
         props, wires = [], []
         if clearance is None:
             clearance = furniture.RoadClearance(lines, decks, bounds=(0., 0., 256., 256.))
-        powerlines.tile_lines(FRAME, 0, 0, Md(), lambda la, lo: np.zeros(np.shape(la)), props, wires,
+        powerlines.tile_lines(FRAME, 0, 0, Md(), elev or (lambda la, lo: np.zeros(np.shape(la))), props, wires,
                               clearance=clearance)
         return props, wires
+
+    def test_a_span_over_a_crest_clears_the_ground(self):
+        """A span climbing over a ridge between its towers (Breno, the player's report 0XESWVG2: its conductors through
+        the hill): every conductor at least SPAN_CLEAR_M over the ground along it, its towers scaled up where the chord
+        alone is under that; a span over flat ground keeps its towers' size and its whole sag."""
+        from test_roads import FRAME
+
+        def ridge(la, lo):                     # (a 30 m ridge across the middle of the span, x 125 +- 25 m)
+            e, n, _ = FRAME.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), 0.0)
+            return np.maximum(0.0, 30.0 * (1.0 - np.abs(np.asarray(e) - 125.0) / 25.0))
+        pts = ((20., 100.), (230., 100.))
+        for elev, scaled in ((ridge, True), (None, False)):
+            props, wires = self.place(tags='{"power":"line","voltage":"220000"}', pts=pts, elev=elev)
+            towers = [r for r in props if r[0] == powerlines.G_PYLON]
+            self.assertEqual(len(towers), 2)
+            self.assertEqual(all(r[6] > powerlines.PYLON_H for r in towers), scaled, towers)
+            self.assertTrue(all(r[6] <= 1.75 * powerlines.PYLON_H + 0.01 for r in towers))
+            ground = elev or (lambda la, lo: np.zeros(np.shape(la)))
+            for w, _ in wires:
+                w = np.asarray(w)
+                la, lo, _ = FRAME.enu_to_geodetic(w[:, 0], w[:, 1], np.zeros(len(w)))
+                clear = w[:, 2] - np.asarray(ground(la, lo))
+                self.assertGreaterEqual(float(clear.min()), powerlines.SPAN_CLEAR_M - 0.05)
+            if not scaled:                  # (flat: the whole sag, SAG x the span, at the middle)
+                w = np.asarray(wires[0][0])
+                chord = (w[0, 2] + w[-1, 2]) / 2
+                self.assertAlmostEqual(chord - float(w[:, 2].min()), powerlines.SAG * 210.0, delta=0.05)
 
     def test_service_road_rejects_collider_but_keeps_conductors(self):
         service = (4., np.array([[100., 0., 0.], [100., 256., 0.]]))
