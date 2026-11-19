@@ -16,9 +16,23 @@ const errors = new Map([
   ["teleport refused (see the status line)", "map.error.teleportRefused"],
   ["Position unknown (not in a BeamNG.Earth world yet)", "map.error.positionUnknown"],
   ["BeamNG.Earth is not loaded", "common.modUnavailable"],
+  ["Address search unavailable (offline mode)", "map.geocode.offline"],
+  ["Address search busy (too many requests): try again in a minute", "map.geocode.busy"],
+  ["Address search limit for today reached", "map.geocode.dailyLimit"],
+  ["Address search service not answering: try again in a minute", "map.geocode.unresponsive"],
+  ["Address search unavailable (offline?)", "map.geocode.unavailable"],
+  ["Address search gave an answer the map cannot read", "map.geocode.invalidResponse"],
 ])
 
 export function mapMessage(value) {
   const key = errors.get(value)
-  return key ? t(key) : messageText(value)
+  if (key) return t(key)
+  if (typeof value === "string") {
+    const service = /^Address search service (refused the request|error) \(HTTP (\d{3})\)$/.exec(value)
+    if (service) {
+      const params = { status: service[2] }
+      return service[1] === "error" ? t("map.geocode.httpError", params) : t("map.geocode.refused", params)
+    }
+  }
+  return messageText(value)
 }

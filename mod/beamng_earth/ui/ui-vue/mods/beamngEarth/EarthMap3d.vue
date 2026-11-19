@@ -10,7 +10,7 @@
          make the ui almost the same on both maps"; "set waypoints by clicking on the map and have a right click menu
          like the 2d map") -->
     <div class="map-top" @mousedown.stop @wheel.stop>
-      <div class="map-title">{{ t('map3d.beamNGEarthMap') }} <span class="m3-mode" :title="t('map3d.the3DMapIsNew')">{{ t('map3d.3DExperimental') }}</span></div>
+      <div class="map-title">{{ t('map3d.beamNGEarthMap') }} <span class="m3-mode" :title="t('map3d.the3DMapIsNew')">{{ t('map3d.experimentalBadge') }}</span></div>
       <div class="search">
         <input v-model="query" class="search-input" :placeholder="t('map3d.searchAddressesPlacesOrLat')" maxlength="120"
                @focus="typing(true)" @blur="typing(false)" @keydown.stop="onSearchKey" />
@@ -22,7 +22,7 @@
           </div>
           <div class="search-credit">{{ t('map3d.searchOpenStreetMapContributorsNominatimPhoton') }}</div>
         </div>
-        <div v-if="searchMsg && !results.length" class="search-msg">{{ messageText(searchMsg) }}</div>
+        <div v-if="searchMsg && !results.length" class="search-msg">{{ mapMessage(searchMsg) }}</div>
         <div v-else-if="searching && !results.length" class="search-msg">{{ t('map3d.searching') }}</div>
       </div>
       <button class="map-btn" @click="zoom(-3)" :title="t('map3d.zoomIn')">+</button>
@@ -53,7 +53,7 @@
           </template>
         </div>
       </div>
-      <button class="map-btn" @click="to2d" :title="t('map3d.theFlatWorldMap')">{{ t('map3d.2DMap') }}</button>
+      <button class="map-btn" @click="to2d" :title="t('map3d.theFlatWorldMap')">{{ t('map3d.switchTo2D') }}</button>
       <button class="map-btn close" @click="back" :title="t('map3d.flyBackDownToThe')">{{ t('map3d.close') }}</button>
     </div>
 
@@ -79,7 +79,7 @@
     <div v-if="ms.gps" class="gps-stack" @mousedown.stop>
       <div class="gps-chip">
         <div class="gps-chip-row">
-          <span>{{ t('map3d.gPS', { ms: ms.gps.name || fmt(ms.gps.lat, ms.gps.lon) }) }}</span>
+          <span>{{ t('map3d.routeDestination', { ms: ms.gps.name || fmt(ms.gps.lat, ms.gps.lon) }) }}</span>
           <span v-if="ms.gps.planning" class="gps-dist">{{ t('map3d.planningRoute') }}</span>
           <span v-else-if="ms.gps.remaining != null" class="gps-dist">{{ fmtMiles(ms.gps.remaining) }}<template
             v-if="ms.gps.eta != null">, {{ fmtDur(ms.gps.eta) }}</template></span>
@@ -177,7 +177,9 @@ function runSearch(full) {
         if (!res) { if (++tries < 60) setTimeout(poll, 150); else { searching.value = false; searchMsg.value = notice('map3d.searchNoReply') }; return }
         searching.value = false
         results.value = toArray(res.results)
-        if (!results.value.length) searchMsg.value = res.error ? notice('map3d.searchUnavailable') : full ? notice('map3d.searchNothingFound') : notice('map3d.searchEnter')
+        if (!results.value.length) searchMsg.value = res.error
+          ? res.text || notice('map3d.searchUnavailable')
+          : full ? notice('map3d.searchNothingFound') : notice('map3d.searchEnter')
       })
     }
     setTimeout(poll, 150)

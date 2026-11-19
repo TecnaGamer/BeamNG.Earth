@@ -12,7 +12,7 @@
       <div v-if="inMp" class="addons-note is-warn">{{ t('addons.aBeamMPServerIsJoined') }}</div>
       <div v-if="!connected" class="addons-note is-warn">{{ t('addons.theBeamNGEarthAppIs') }}</div>
       <div v-else-if="!loaded" class="addons-note">{{ t('addons.loadingTheList') }}</div>
-      <div v-if="listError" class="addons-note is-error">{{ listError }}</div>
+      <div v-if="listError" class="addons-note is-error">{{ messageText(listError) }}</div>
 
       <div
         v-for="c in cards"
@@ -210,7 +210,7 @@
 </template>
 
 <script setup>
-import { t, direction } from "./i18n.js"
+import { t, direction, messageText } from "./i18n.js"
 import { ref, computed, onMounted, onUnmounted } from "vue"
 import { BngButton, ACCENTS } from "@/common/components/base"
 import {

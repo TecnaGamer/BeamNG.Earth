@@ -317,6 +317,8 @@ export const connectionText = computed(() => {
 
 const OFFLINE_STATUS = "Offline - using cached data"
 export const statusText = computed(() => {
+  const message = status.value.statusMessage
+  if (message?.key) return t(message.key, message.params)
   const line = status.value.status || "-"
   return typeof line === "string" ? line.replaceAll(OFFLINE_STATUS, () => t("settings.status.offline")) : line
 })

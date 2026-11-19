@@ -3,6 +3,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import * as sm from '../beamng_earth/ui/ui-vue/mods/beamngEarth/mapsearch.js'
 import * as mm from '../beamng_earth/ui/ui-vue/mods/beamngEarth/mapmath.js'
+import { createTranslator } from '../beamng_earth/ui/ui-vue/mods/beamngEarth/i18nCore.js'
+
+const assets = new URL('../beamng_earth/ui/ui-vue/mods/beamngEarth/locales/', import.meta.url)
+const catalog = filename => JSON.parse(readFileSync(new URL(filename, assets), 'utf8'))
 
 const player = { lat: 40, lon: -75 }
 const nearby = { name: 'Test Circuit', kind: 'race track', lat: 40.01, lon: -75,
@@ -38,6 +42,9 @@ const source = readFileSync(new URL('../beamng_earth/ui/ui-vue/mods/beamngEarth/
 const fullScript = source.split('<script setup>')[1].split('</script>')[0]
 new Function(fullScript.replace(/^import .*$/gm, '')) // Syntax-check the complete setup script without a Vue install.
 const handlers = fullScript.slice(fullScript.indexOf('// ---- search '), fullScript.indexOf('// ---- teleport '))
+const mapMessages = readFileSync(new URL('../beamng_earth/ui/ui-vue/mods/beamngEarth/mapMessages.js', import.meta.url), 'utf8')
+const createMapMessage = new Function('t', 'messageText',
+  mapMessages.replace(/^import .*$/gm, '').replace('export function', 'function') + '\nreturn mapMessage')
 
 function harness() {
   let timerId = 0
@@ -55,16 +62,20 @@ function harness() {
   const state = ref({ places: [], recent: [], player }), view = ref({ ...player, z: 10 }), follow = ref(true)
   const document = { activeElement: null }
   const nextTick = fn => Promise.resolve().then(fn || (() => {}))
+  const translator = createTranslator(catalog('catalogs.json'), catalog('en.json'))
+  translator.load('pl-PL', catalog('pl-PL.json'))
+  const translatedNotice = (key, params) => () => translator.t(key, params)
+  const mapMessage = createMapMessage(translator.t, value => typeof value === 'function' ? value() : value)
   const factory = new Function('ref', 'computed', 'watch', 'onUnmounted', 'nextTick', 'setTimeout', 'clearTimeout',
     'engineLua', 'query', 'results', 'searchMsg', 'state', 'view', 'follow', 'sm', 'mm', 'w', 'h', 'screen',
-    'toArray', 'luaStr', 'document', 'searchEl', 'setGps', 'askTeleport',
+    'toArray', 'luaStr', 'document', 'searchEl', 'setGps', 'askTeleport', 'translatedNotice',
     handlers + '\nreturn { liveSearch, searchCategory, clearSearch, moveResult, previewResult, leaveResult, selectResult, onSearch, pickResult, searching, searchWide, resultIndex, hoverIndex, searchPreview, searchFocused, searchToolsVisible, searchPanelVisible, searchFocusOut };')
   const api = factory(ref, fn => ({ get value() { return fn() } }), (r, fn) => { r.watcher = fn },
     fn => unmount.push(fn), nextTick, (fn, delay) => { timers.set(++timerId, { fn, delay }); return timerId },
     id => timers.delete(id), (script, cb) => calls.push({ script, cb }), query, results, searchMsg, state, view,
     follow, sm, mm, ref(800), ref(600), () => ({ x: 300, y: 200 }), a => Array.isArray(a) ? a : [],
-    JSON.stringify, document, ref(null), (...args) => gps.push(args), () => {})
-  return { ...api, query, results, searchMsg, calls, gps, timers, unmount,
+    JSON.stringify, document, ref(null), (...args) => gps.push(args), () => {}, translatedNotice)
+  return { ...api, query, results, searchMsg, calls, gps, timers, unmount, translator, mapMessage,
     tick: async () => { await nextTick(); await nextTick() },
     run: delay => { const job = [...timers].find(([, t]) => t.delay === delay); assert.ok(job, `timer ${delay}`); timers.delete(job[0]); job[1].fn() } }
 }
@@ -102,10 +113,24 @@ function harness() {
   assert.ok(![...h.timers.values()].some(t => t.delay === 150))
   h.run(300); h.calls[1].cb({ id: 2 }); h.run(150)
   h.calls[2].cb({ results: [] })
-  assert.match(h.searchMsg.value, /No matches yet/)
+  assert.match(h.searchMsg.value(), /No matches yet/)
+  h.translator.select('pl-PL')
+  assert.match(h.searchMsg.value(), /Brak wyników/)
+  h.translator.select('en')
   h.liveSearch(true); h.calls[3].cb({ id: 3 }); h.run(150)
   h.calls[4].cb({ results: [] })
-  assert.match(h.searchMsg.value, /No places found/)
+  assert.match(h.searchMsg.value(), /No places found/)
+}
+{
+  const h = harness()
+  await h.searchCategory(sm.QUICK[0]); h.calls[0].cb({ id: 1 }); h.run(150)
+  const offline = 'Address search unavailable (offline mode)'
+  h.calls[1].cb({ error: 'diagnostic', text: offline, results: [] })
+  assert.equal(h.mapMessage(h.searchMsg.value), offline)
+  h.translator.select('pl-PL')
+  assert.match(h.mapMessage(h.searchMsg.value), /niedostępne w trybie offline/)
+  assert.match(h.mapMessage('Address search service refused the request (HTTP 403)'), /odrzuciła zapytanie \(HTTP 403\)/)
+  assert.equal(h.mapMessage('Provider details: <raw>'), 'Provider details: <raw>')
 }
 {
   const h = harness()
@@ -158,6 +183,7 @@ console.log('mapsearch presentation, chips, navigation, stale responses, empty/e
   h.query.value = 'forest'; await h.tick()
   assert.equal(h.searchToolsVisible.value, true, 'typed query keeps chips when focus leaves')
 }
-assert.match(source, /A sets GPS, then X teleports/)
+assert.ok(source.includes("t('map.chooseEnterASetsGPS')"))
+assert.match(catalog('en.json')['map.chooseEnterASetsGPS'], /A sets GPS, then X teleports/)
 const areaHandlers = fullScript.slice(fullScript.indexOf('function askRoute('), fullScript.indexOf('// ---- search '))
 assert.ok(!areaHandlers.includes('searchPollTimer'), 'area polling never shares the search timer (0494de12)')

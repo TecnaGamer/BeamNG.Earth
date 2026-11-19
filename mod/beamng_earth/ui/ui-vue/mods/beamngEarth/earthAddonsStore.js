@@ -2,7 +2,7 @@
 // addons.py lists the curated add-ons, sends an add-on's README and changelog as safe HTML (our own tags only, links
 // as indexes into a list of https URLs) and downloads a release; addons.lua hands the file to the game's mod manager.
 // The game's UI browser cannot fetch anything itself: everything comes through Lua.
-import { t, date, number } from "./i18n.js"
+import { t, date, number, notice } from "./i18n.js"
 import { ref, computed } from "vue"
 import { engineLua, openLink } from "./earthSettingsStore.js"
 
@@ -34,7 +34,7 @@ function call(script, cb) {
 export function poll() {
   call("uiAddons()", res => {
     if (!res || res.ok === false) {
-      listError.value = (res && res.error) || "BeamNG.Earth is not loaded"
+      listError.value = (res && res.error) || notice("addons.modUnavailable")
       return
     }
     cards.value = Array.isArray(res.addons) ? res.addons : []

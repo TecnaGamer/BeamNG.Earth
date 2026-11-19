@@ -171,7 +171,7 @@
           <div v-if="searchToolsVisible && !query && !searching" class="search-hint">{{ t('map.nearYouNotablePlacesWorldwide') }}</div>
           <div v-if="searching || searchMsg" class="search-status" role="status" aria-live="polite">
             <span v-if="searching" class="search-spinner" aria-hidden="true"></span>
-            <span>{{ searching ? (searchWide ? t('map.searchingWider') : t('map.searchingPlaces')) : messageText(searchMsg) }}</span>
+            <span>{{ searching ? (searchWide ? t('map.searchingWider') : t('map.searchingPlaces')) : mapMessage(searchMsg) }}</span>
           </div>
           <div v-if="results.length" id="earth-search-results" ref="resultsEl" class="search-results" role="listbox" :aria-label="t('map.searchResults')" :aria-busy="searching">
             <button v-for="(r, i) in displayResults" :id="'earth-result-' + i" :key="i" type="button"
@@ -222,7 +222,7 @@
             <div class="item-btns">
               <button class="map-btn small" :class="{ on: follow === p.pid }" @click="followPlayer(p)"
                       :title="follow === p.pid ? t('map.stopFollowing') : t('map.followHelp')">{{ follow === p.pid ? t('map.followActive') : t('map.followAction') }}</button>
-              <button class="map-btn small" @click="gpsToPlayer(p)" :title="t('map.aGPSRouteToWhere')">{{ t('map.gPS') }}</button>
+              <button class="map-btn small" @click="gpsToPlayer(p)" :title="t('map.routeToPlayerTooltip')">{{ t('map.routeToPlayer') }}</button>
             </div>
           </div>
           <div v-if="!otherList.length" class="panel-empty">{{ t('map.noOtherPlayersOnThe') }}</div>
@@ -259,7 +259,7 @@
     <div v-if="fastArea" class="fast-banner" @mousedown.stop @wheel.stop>
       <span>{{ t('map.fastPreCache') }} <b>{{ fastArea.name }}</b> {{ t('map.theGameIsPaused', { areaStateText: areaStateText(fastArea) }) }}</span>
       <div class="area-bar"><span class="area-bar-fill running" :style="{ width: areaPct(fastArea) + '%' }"></span></div>
-      <button class="map-btn small" @click="areaCmd(fastArea, 'slow')" :title="t('map.goOnInTheBackground')">{{ t('map.stopFast') }}</button>
+      <button class="map-btn small" @click="areaCmd(fastArea, 'slow')" :title="t('map.goOnInTheBackground')">{{ t('map.stopFastPrecache') }}</button>
     </div>
     <!-- the cache view's legend (bumpers: the next view) -->
     <div v-if="cacheOn" class="cache-legend" @mousedown.stop @wheel.stop>
@@ -267,7 +267,7 @@
       <div v-for="c in cacheLegendRows" :key="c.id" class="cache-legend-row">
         <span class="cache-swatch" :style="{ background: c.css }"></span>{{ c.name }}<span v-if="c.note" class="layer-hint">&nbsp;{{ c.note }}</span>
       </div>
-      <div v-if="cacheMode === 'elevation' || cacheMode === 'imagery'" class="cache-legend-hint">{{ t('map.faintOnlyPartOfThe') }}</div>
+      <div v-if="cacheMode === 'elevation' || cacheMode === 'imagery'" class="cache-legend-hint">{{ t('map.cacheLegendPartialCoverage') }}</div>
       <div v-if="cacheMsg" class="cache-legend-hint">{{ messageText(cacheMsg) }}</div>
     </div>
 
@@ -290,7 +290,7 @@
     <div v-if="state.gps" class="gps-stack" @mousedown.stop>
     <div class="gps-chip">
       <div class="gps-chip-row">
-        <span>{{ t('map.gPS2', { state: state.gps.name || fmtLatLon(state.gps.lat, state.gps.lon) }) }}</span>
+        <span>{{ t('map.routeDestination', { state: state.gps.name || fmtLatLon(state.gps.lat, state.gps.lon) }) }}</span>
         <span v-if="state.gps.planning && !routePts.length" class="gps-dist">{{ t('map.planningRoute') }}</span>
         <span v-else-if="state.gps.remaining != null" class="gps-dist">{{ fmtMiles(state.gps.remaining) }}<template
           v-if="state.gps.eta != null">, {{ fmtDur(state.gps.eta) }}</template></span>
@@ -355,7 +355,7 @@
       <div v-if="!areaAsk.plan" class="confirm-where">{{ t('map.workingOutWhatItNeeds') }}</div>
       <template v-else-if="areaAsk.plan.ok">
         <div class="confirm-where"><template v-if="areaAsk.plan.km != null">{{ t('map.ofRoute', { fmtMiles: fmtMiles(areaAsk.plan.km * 1000) }) }}
-          </template>{{ t('map.aboutToDownloadOnDisk', { fmtArea: fmtArea(areaAsk.plan.km2), fmtBytes: fmtBytes(areaAsk.plan.downloadBytes), fmtBytes3: fmtBytes(areaAsk.plan.diskBytes), fmtEta: fmtEta(areaAsk.plan) }) }}</div>
+          </template>{{ t('map.precacheEstimate', { fmtArea: fmtArea(areaAsk.plan.km2), fmtBytes: fmtBytes(areaAsk.plan.downloadBytes), fmtBytes3: fmtBytes(areaAsk.plan.diskBytes), fmtEta: fmtEta(areaAsk.plan) }) }}</div>
         <div v-for="hst in areaHosts" :key="hst[0]" class="area-host">{{ t('map.requests', { hst: hst[0], hst2: hst[1].toLocaleString() }) }}<template
           v-if="hst[2] > 1"> {{ t('map.aboutDaysItsDailyLimit', { Math: Math.ceil(hst[2]) }) }}</template></div>
         <div v-if="areaAsk.plan.excluded && areaAsk.plan.excluded.length" class="confirm-warn">{{ t('map.notIncludedTheseSourcesAre', { areaAsk: areaAsk.plan.excluded.join(", ") }) }}</div>
@@ -375,7 +375,7 @@
       <div v-if="areaAsk.error" class="confirm-warn">{{ mapMessage(areaAsk.error) }}</div>
       <div class="confirm-btns">
         <button class="map-btn primary" :disabled="!areaAsk.plan || !areaAsk.plan.ok || areaAsk.busy" @click="confirmArea">{{ t('map.preCache', { padMode: padMode ? " (X)" : "" }) }}</button>
-        <button class="map-btn" @click="cancelSelect">{{ t('map.cancel2', { padMode: padMode ? " (B)" : "" }) }}</button>
+        <button class="map-btn" @click="cancelSelect">{{ t('map.cancelPrecache', { padMode: padMode ? " (B)" : "" }) }}</button>
       </div>
     </div>
 
@@ -398,7 +398,7 @@
 
         <div class="panel-sub">{{ t('map.latitudeLongitude') }}</div>
         <div class="panel-row">
-          <input v-model="coordText" class="panel-input" @focus="typing(true)" @blur="typing(false)" :placeholder="t('map.3657851182923Or')" maxlength="400"
+          <input v-model="coordText" class="panel-input" @focus="typing(true)" @blur="typing(false)" :placeholder="t('map.coordinateExample')" maxlength="400"
                  @keydown.enter.stop.prevent="goText" @keydown.esc.stop.prevent="coordText = ''" />
           <button class="map-btn primary" :disabled="!!state.cannotGo || !coordText.trim()" @click="goText">{{ t('map.go') }}</button>
           <button class="map-btn" :disabled="!coordText.trim()" @click="saveText">{{ t('map.save') }}</button>
@@ -409,7 +409,7 @@
           <div v-if="renamingId === p.id" class="panel-row">
             <input v-model="renameText" class="panel-input" @focus="typing(true)" @blur="typing(false)" maxlength="60"
                    @keydown.enter.stop.prevent="commitRename(p)" @keydown.esc.stop.prevent="renamingId = null" />
-            <button class="map-btn primary" @click="commitRename(p)">{{ t('map.oK') }}</button>
+            <button class="map-btn primary" @click="commitRename(p)">{{ t('map.confirmRename') }}</button>
             <button class="map-btn" @click="renamingId = null">{{ t('map.cancel') }}</button>
           </div>
           <template v-else>
@@ -2005,8 +2005,7 @@ function liveSearch(full = false) {
         if (full) fullText = text
         if (res.error) searchMsg.value = res.text || translatedNotice('map.searchRetry')
         else if (!results.value.length) {
-          searchMsg.value = full ? translatedNotice('map.searchNoCategory')
-            : t('map.searchNoMatchesYet')
+          searchMsg.value = translatedNotice(full ? 'map.searchNoCategory' : 'map.searchNoMatchesYet')
         } else if (!full && !results.value[0].sure) {
           moreFor.value = text      // (a line in the list: a message under it would lie behind it)
         }

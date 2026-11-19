@@ -241,8 +241,9 @@ local function warnOnce(key, text)
   log('W', 'beamngEarth', text)
 end
 
-local function setStatus(text)
+local function setStatus(text, key, params)
   st.status = text
+  st.statusMessage = key and {key = key, params = params} or nil
   log('I', 'beamngEarth', text)
 end
 
@@ -288,7 +289,7 @@ local function startTeleport()
   if choice == levelinfo.RANDOM and net.isConnected() then
     st.randomStart = { id = nextId(), t0 = st.clock }
     net.send({ type = 'random_place', id = st.randomStart.id })
-    setStatus('Picking a random place...')
+    setStatus('Picking a random place...', "settings.status.pickPlace")
     return true
   end
   return defaultStart()
@@ -300,7 +301,7 @@ end
 -- player's anchor, mpsession.adoptAnchor).
 local function requestAnchor(lat, lon, purpose, cx, cy, place)
   if not net.isConnected() then
-    setStatus('Companion server not connected (127.0.0.1:' .. net.PORT .. ')')
+    setStatus('Companion server not connected (127.0.0.1:' .. net.PORT .. ')', "settings.status.notConnected", {port = tostring(net.PORT)})
     return false
   end
   if st.releaseHold then      -- (a server of other map data than this level's world: nothing is asked of it)
@@ -832,7 +833,7 @@ function M.failAnchorLoad(kind, detail)
   st.pending, st.teleportRetry = nil, nil
   st.loadingFault = kind
   loadprogress.start(st.clock)
-  setStatus('Ground load failed: ' .. tostring(detail))
+  setStatus('Ground load failed: ' .. tostring(detail), "settings.status.groundLoadFailed", {detail = tostring(detail)})
   if guihooks and guihooks.trigger then
     pcall(guihooks.trigger, 'Message', { ttl = 20, category = 'bngEarthGround', icon = 'warning',
       msg = M._anchorload.failure(kind) })
@@ -1230,7 +1231,7 @@ local function onMessage(msg)
       userPath = (FS and FS.getUserPath) and FS:getUserPath() or nil,
       deckGuard = M._deckguard.PROTO,  -- (it slows the car before a bridge whose road tile is late: 'deck_spans')
       readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
-    setStatus('Connected to companion server')
+    setStatus('Connected to companion server', "settings.status.connected")
   elseif t == '_disconnected' then
     -- (a generation swap: before its commit it is dropped at the next frame's step; from its commit on it is stepped
     -- to its end, committed or rolled back, and only then is the car let go: the new terrain was left under the old
@@ -1253,7 +1254,7 @@ local function onMessage(msg)
     trees.clear()
     ambience.clear()
     M._trafficvisuals.session(nil, false)
-    setStatus('Disconnected from companion server: ' .. tostring(msg.error))
+    setStatus('Disconnected from companion server: ' .. tostring(msg.error), "settings.status.disconnected", {detail = tostring(msg.error)})
   elseif t == 'runtime_profiler_pong' then
     require('beamngEarth/profiler').pong(msg)
   elseif t == 'runtime_profiler' then
@@ -1415,6 +1416,7 @@ local function onMessage(msg)
     end
   elseif t == 'status' then
     st.status = tostring(msg.text)
+    st.statusMessage = nil
     -- the server's network note ("Offline - using cached data" / "Degraded: ..."): the banner shows it
     st.serverNote, st.serverNoteDetail = banner.noteOf(msg.text)
     -- v1.4 M0: the server's far-tile backlog (desired - shown) rides on every status; nil from a
@@ -3456,7 +3458,7 @@ teleportTo = function(lat, lon, name, kind, heading)
   st.startHeading, st.headingFor = nil, nil   -- (only "Where you left off" sets the car's heading: the start's, below)
   lat, lon = tonumber(lat), tonumber(lon)
   if not lat or not lon or lat < -90 or lat > 90 or lon < -180 or lon > 180 then
-    setStatus('Teleport: invalid lat/lon')
+    setStatus('Teleport: invalid lat/lon', "settings.status.invalidTeleportCoordinates")
     return false
   end
   ui.setLatLon(lat, lon)
@@ -3485,7 +3487,7 @@ teleportTo = function(lat, lon, name, kind, heading)
     -- placement before that (the level start's flat ground) or another request never uses it (Codex on 2ffc2fcc)
     local h = places.validHeading(heading)
     st.headingFor = h and st.pending and { requestId = st.pending.requestId, heading = h } or nil
-    setStatus(string.format('Preparing terrain at %.5f, %.5f ...', lat, lon))
+    setStatus(string.format('Preparing terrain at %.5f, %.5f ...', lat, lon), "settings.status.prepareTerrain", {coordinates = string.format('%.5f, %.5f', lat, lon)})
     loadprogress.reset()
     loadprogress.start(st.clock)        -- the bar says "Loading" from now (loadprogress.lua)
     parking.onTeleport()

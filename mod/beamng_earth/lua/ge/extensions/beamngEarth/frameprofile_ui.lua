@@ -1,6 +1,7 @@
 -- Stacked per-frame histories. Layout is pure data so tests and exported previews
 -- use exactly the same geometry as the ImGui window.
 local frames = require('beamngEarth/frameprofile')
+local t = require('beamngEarth/i18n').t
 local M = {}
 local selected, visible, fitSpikes = nil, 180, true
 local palette = {
@@ -142,16 +143,16 @@ function M.draw(im, snapshot, width, graphHeight)
   if snapshot.count==0 then text(im,'Collecting frame history...'); return end
   width=width or 610
   for _,n in ipairs(snapshot.mode=='essential' and {180} or {180,300,600}) do
-    if im.Button(tostring(n)..' frames') then visible=n end
+    if im.Button(t('profiler.frameCount', {count = n}, tostring(n)..' frames')) then visible=n end
     im.SameLine()
   end
-  if im.Button(fitSpikes and 'Fit spikes' or 'Detail scale') then fitSpikes=not fitSpikes end
-  if im.Button('Follow latest frame') then selected=nil end
+  if im.Button(fitSpikes and t('profiler.fitSpikes', nil, "Fit spikes") or t('profiler.detailScale', nil, "Detail scale")) then fitSpikes=not fitSpikes end
+  if im.Button(t('profiler.latestFrame', nil, "Follow latest frame")) then selected=nil end
   im.SameLine()
-  if im.Button('Inspect worst frame') then selected=snapshot.worst end
-  if im.Button('60 FPS budget') then frames.BUDGET_MS=1000/60 end
+  if im.Button(t('profiler.worstFrame', nil, "Inspect worst frame")) then selected=snapshot.worst end
+  if im.Button(t('profiler.budget60', nil, "60 FPS budget")) then frames.BUDGET_MS=1000/60 end
   im.SameLine()
-  if im.Button('120 FPS budget') then frames.BUDGET_MS=1000/120 end
+  if im.Button(t('profiler.budget120', nil, "120 FPS budget")) then frames.BUDGET_MS=1000/120 end
   for i=1,math.min(2,#snapshot.observations) do wrap(im,snapshot.observations[i].text) end
   local scale=snapshot.budgetMs*1.25
   local first=math.max(1,#snapshot.history-visible+1)
