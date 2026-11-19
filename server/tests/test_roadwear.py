@@ -294,6 +294,46 @@ class SurfaceV2Test(unittest.TestCase):
         self.assertLess(float(old[:, 2].min()), -0.3)           # (as before, without clear)
         self.assertGreaterEqual(float(new[:, 2].min()), -1e-9)
 
+    def test_clear_keeps_the_cap_of_the_cell_holding_each_piece(self):
+        """follow_ground's clear: a marking crossing from a flat plateau into a descending step cell (a wall drawn as
+        teeth): its step-cell part stays held at the low side + FOLLOW_MAX_UP (a flat neighbour must not uncap a corner
+        on their shared edge and lift a sliver up the wall); its plateau part keeps the plateau's height."""
+        grid = np.array([[0.0, 0.0, -1.3, -1.3]] * 3)          # (x 0-1 a plateau, 1-2 a 1.3 m descending step)
+        lo_cap = -1.3 + roadmesh.FOLLOW_MAX_UP
+        for P in (np.array([[0.3, 0.4], [1.6, 0.4], [1.6, 0.6], [0.3, 0.6]]),       # (crossing the shared edge)
+                  np.array([[1.0, 0.4], [1.6, 0.4], [1.6, 0.6], [1.0, 0.6]])):      # (a corner on the shared edge)
+            T = np.array([[0, 1, 2], [0, 2, 3]])
+            for clear in (None, 0.003):
+                V, _uv, Tr, _s = roadmesh.follow_ground(P, np.zeros((4, 2)), T, grid, 0, 0, tol=0.02, cell=1.0,
+                                                        clear=clear)
+                for t in Tr:
+                    c = V[t].mean(axis=0)
+                    if c[0] > 1.0 + 1e-6:          # (a piece in the step cell: no corner up the wall)
+                        self.assertLessEqual(float(V[t][:, 2].max()), lo_cap + 1e-9, (clear, V[t]))
+                    elif clear is not None:        # (on the plateau: at its height; without clear, as before)
+                        self.assertGreaterEqual(float(V[t][:, 2].min()), -1e-9, (clear, V[t]))
+
+    def test_clear_step_cut_meets_its_whole_neighbour(self):
+        """follow_ground's clear: a triangle within tol of its plane but over a step cell and others is cut for the
+        cap only; its pieces keep its plane, so its edge meets a whole neighbour's exactly (on the terrain they opened
+        a gap at a kink on the shared edge, Codex review of the fix)."""
+        x = np.arange(5.0)
+        grid = np.tile(0.4 * x, (5, 1))                        # (a 0.4 m / m slope: no cell holds a step)
+        grid[1, 2] += 0.07                                     # (cells (1, 0) and (1, 1) now do: 0.47 > 0.45)
+        grid[3, 2] += 0.03                                     # (a kink on the shared edge, in uncapped cells)
+        P = np.array([[0.5, 3.0], [3.5, 3.0], [2.0, 0.5], [2.0, 3.9]])
+        T = np.array([[0, 1, 2], [1, 0, 3]])
+        V, _uv, Tr, src = roadmesh.follow_ground(P, np.zeros((4, 2)), T, grid, 0, 0, tol=0.1, cell=1.0, clear=0.003)
+        self.assertGreater(int((src == 0).sum()), 1)           # (the lower one cut)
+        self.assertEqual(int((src == 1).sum()), 1)             # (the upper one whole)
+        up = V[Tr[src == 1][0]]
+        a, b = up[np.argmin(up[:, 0] + 10 * np.abs(up[:, 1] - 3))], up[np.argmax(up[:, 0] - 10 * np.abs(up[:, 1] - 3))]
+        on_edge = [v for v in V[np.unique(Tr[src == 0])] if abs(v[1] - 3.0) < 1e-9]
+        self.assertGreater(len(on_edge), 2)
+        for v in on_edge:
+            f = (v[0] - a[0]) / (b[0] - a[0])
+            self.assertAlmostEqual(float(v[2]), float(a[2] + f * (b[2] - a[2])), delta=1e-9)
+
     def test_overlays_clear_the_bumpy_ground(self):
         """Every overlay keeps MARK_MIN_M over the drawn ground (the terrain's own triangles, where the asphalt is
         painted) at its points and inside its triangles; the asphalt mesh's draw order is v2_rank's."""

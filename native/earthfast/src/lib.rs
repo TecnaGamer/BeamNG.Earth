@@ -5007,7 +5007,9 @@ fn terrain_at(grid: &numpy::ndarray::ArrayView2<f64>, i0: i64, j0: i64, cell: f6
 /// tile clip copies points per triangle) by the most any of its whole triangles needs (a plane through raised corners
 /// is raised everywhere by at least their least), and a cut triangle's pieces by its corners' raises spread
 /// barycentrically (on the ground plus that: a whole neighbour's shared edge and theirs meet as they did without clear).
-/// The step cap still wins. NaN (the default): as before.
+/// The step cap still wins, taken from the terrain cell holding each piece (a whole triangle over a step cell and
+/// another cell is cut along the terrain first, its pieces on its own plane): a flat neighbour neither holds a corner on its edge down nor lifts a
+/// step cell's piece up the wall. NaN (the default): as before.
 /// Returns (points (m, 3), uvs (m, 2), triangles (r, 3), source triangle (r,)); points not shared.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
@@ -5108,21 +5110,34 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                 let (lo, hi) = c.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, &v| (a.0.min(v), a.1.max(v)));
                 if hi - lo > step_m { lo + max_up } else { f64::INFINITY }
             };
-            // (clear: a point on a cell's edge or corner takes the loosest cap of the cells it touches: a corner on a
-            // flat cell's edge beside a step cell was held down to the step's lowest corner, under the flat ground)
-            let cap_clear = |x: f64, y: f64| -> f64 {
-                let (gx, gy) = (x / cell, y / cell);
-                let on_x = (gx - gx.round()).abs() < 1e-9;
-                let on_y = (gy - gy.round()).abs() < 1e-9;
-                let mut best = cap(x, y);
-                for &(ox, oy) in &[(-0.5, 0.0), (0.0, -0.5), (-0.5, -0.5), (0.5, 0.0), (0.0, 0.5), (0.5, 0.5),
-                                   (-0.5, 0.5), (0.5, -0.5)] {
-                    if (ox != 0.0 && !on_x) || (oy != 0.0 && !on_y) { continue; }
-                    best = best.max(cap(x + ox * cell, y + oy * cell));
+            // (clear: a piece takes the cap of the terrain cell holding it, at every corner: a corner on a flat cell's
+            // edge beside a step cell is not held down to the step's lowest corner (under the flat ground), and a flat
+            // neighbour does not lift a step cell's piece up the wall. A whole triangle over more than one cell with a
+            // step among them is cut along the terrain (each piece then in one cell, on the triangle's own plane); its
+            // need still raises its points)
+            let mut whole_cap = f64::INFINITY;
+            let mut forced = false;
+            let mut need_cut = 0.0f64;
+            if clear.is_finite() && !split && step_m.is_finite() {
+                let (lx, hx) = (x0.min(x1).min(x2), x0.max(x1).max(x2));
+                let (ly, hy) = (y0.min(y1).min(y2), y0.max(y1).max(y2));
+                let ia = (lx / cell + 1e-9).floor() as i64;
+                let ib = ((hx / cell - 1e-9).ceil() as i64 - 1).max(ia);
+                let ja = (ly / cell + 1e-9).floor() as i64;
+                let jb = ((hy / cell - 1e-9).ceil() as i64 - 1).max(ja);
+                let mut stepped = false;
+                for gi in ia..=ib {
+                    for gj in ja..=jb {
+                        let c = cap((gi as f64 + 0.5) * cell, (gj as f64 + 0.5) * cell);
+                        if c.is_finite() { stepped = true; whole_cap = c; }
+                    }
                 }
-                best
-            };
-            let cap = |x: f64, y: f64| -> f64 { if clear.is_finite() { cap_clear(x, y) } else { cap(x, y) } };
+                if stepped && (ia != ib || ja != jb) {
+                    split = true;
+                    forced = true;
+                    need_cut = (up - clear).max(0.0);
+                }
+            }
             if !split {
                 let base = p_out.len() as i64;
                 if clear.is_finite() {
@@ -5130,11 +5145,11 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                     let vi = [key_of(tv[[ti, 0]] as usize, &mut raise), key_of(tv[[ti, 1]] as usize, &mut raise),
                               key_of(tv[[ti, 2]] as usize, &mut raise)];
                     for &v in &vi { if need > raise[v] { raise[v] = need; } }
-                    whole.push((base as usize, vi, [z[0], z[1], z[2]],
-                                [cap(tri[0][0], tri[0][1]), cap(tri[1][0], tri[1][1]), cap(tri[2][0], tri[2][1])]));
+                    whole.push((base as usize, vi, [z[0], z[1], z[2]], [whole_cap; 3]));
                 }
                 for (k, q) in tri.iter().enumerate() {
-                    p_out.push([q[0], q[1], z[k].min(cap(q[0], q[1]))]);
+                    let cz = if clear.is_finite() { whole_cap } else { cap(q[0], q[1]) };
+                    p_out.push([q[0], q[1], z[k].min(cz)]);
                     uv_out.push([q[2], q[3]]);
                 }
                 t_out.push([base, base + 1, base + 2]);
@@ -5142,8 +5157,10 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                 continue;
             }
             let corners = if clear.is_finite() {
-                [key_of(tv[[ti, 0]] as usize, &mut raise), key_of(tv[[ti, 1]] as usize, &mut raise),
-                 key_of(tv[[ti, 2]] as usize, &mut raise)]
+                let vi = [key_of(tv[[ti, 0]] as usize, &mut raise), key_of(tv[[ti, 1]] as usize, &mut raise),
+                          key_of(tv[[ti, 2]] as usize, &mut raise)];
+                for &v in &vi { if need_cut > raise[v] { raise[v] = need_cut; } }
+                vi
             } else { [0usize; 3] };
             let mut polys: Vec<Vec<V>> = vec![tri];
             for &(nx, ny) in fams.iter() {
@@ -5184,13 +5201,22 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                 }).sum::<f64>() / 2.0;
                 if area.abs() < 1e-8 { continue; }
                 let base = p_out.len() as i64;
+                // (clear: the cap of the cell holding the piece, its corners' mean inside it)
+                let piece_cap = if clear.is_finite() {
+                    let k = poly.len() as f64;
+                    let (mx, my) = poly.iter().fold((0.0, 0.0), |a, q| (a.0 + q[0], a.1 + q[1]));
+                    cap(mx / k, my / k)
+                } else { f64::INFINITY };
                 for q in poly.iter() {
-                    let (tz, cz) = (ter(q[0], q[1]), cap(q[0], q[1]));
+                    let (mut tz, cz) = (ter(q[0], q[1]), if clear.is_finite() { piece_cap } else { cap(q[0], q[1]) });
                     if clear.is_finite() && det.abs() >= 1e-12 {
                         // (a cut piece takes its whole neighbours' raises too, spread over its triangle
                         // barycentrically: the shared edges stay where they were without clear)
                         let s = ((q[0] - x0) * (y2 - y0) - (x2 - x0) * (q[1] - y0)) / det;
                         let t = ((x1 - x0) * (q[1] - y0) - (q[0] - x0) * (y1 - y0)) / det;
+                        // (a triangle cut only for the step cap keeps its own plane, as it would whole: its edges
+                        // meet a whole neighbour's exactly; only the cap differs, per piece)
+                        if forced { tz = z[0] + s * (z[1] - z[0]) + t * (z[2] - z[0]); }
                         cut.push((p_out.len(), corners, [1.0 - s - t, s, t], tz, cz));
                     }
                     p_out.push([q[0], q[1], tz.min(cz)]);
