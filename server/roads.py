@@ -12397,14 +12397,19 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True, skip=()):
     joints = []
     # (road revamp v2 P2b: a fork whose decks are one slab has no pad; skip: the forks' nodes the tile's deck chunks
     # drew so, their "sxn": the very records the mesh used)
-    sheet_nodes = [np.asarray(q, np.float64)[:2] for q in skip]
+    sheet_nodes = [np.asarray(q, np.float64) for q in skip if len(q) >= 3]
     for nd, incident in sorted(inc.items()):
         q = nodes[nd]
         if own and not box_owns(box, float(q[0]), float(q[1])):
             continue
-        if any(float(dnp.hypot(*(q - p))) <= PAD_JOIN_M + roadshape.SHEET_JOIN_M for p in sheet_nodes):
-            continue
         groups = _pad_height_groups(incident)
+        # (only the height group of the fork's own decks: a junction on another level at the same point keeps its pad)
+        at = [p for p in sheet_nodes if float(dnp.hypot(*(q - p[:2]))) <= PAD_JOIN_M + roadshape.SHEET_JOIN_M]
+        if at:
+            groups = [g for g in groups if not any(abs(float(np.mean([float(p[1][0]) for p in g])) - float(n[2]))
+                                                   <= PAD_JOIN_Z_M for n in at)]
+            if not groups:
+                continue
         near = np.flatnonzero(dnp.hypot(ends[:, 0] - q[0], ends[:, 1] - q[1]) < PAD_GROUND_M).tolist()
         for e in near:
             line, half = gl[e >> 1]
@@ -12764,6 +12769,9 @@ def _sub_line(orig, drawn, u0, u1, rev):
     return out[::-1] if rev else out
 
 
+SHEET_ALIGN_M = 2.0     # m the branch's split vertex may move along its drawn line onto the through deck's split line
+
+
 def _sheet_finish(recs, decks, shifted, width_of):
     """The P2b records on the drawn lines (shifted: each part's line as drawn, the decks' lines moved at merges and
     splits, its vertices the parts'): per part {"cuts": {vertex: the split line's unit direction}, "t": [(s0, s1,
@@ -12797,8 +12805,9 @@ def _sheet_finish(recs, decks, shifted, width_of):
                 x = p + d * min(max(u, 0.0), 1.0)
                 if best is None or float(dnp.hypot(*(x - B[kb, :2]))) < float(dnp.hypot(*(best - B[kb, :2]))):
                     best = x
-        if best is not None and float(dnp.hypot(*(best - B[kb, :2]))) <= 2.0:
-            B[kb, :2] = best
+        if best is None or float(dnp.hypot(*(best - B[kb, :2]))) > SHEET_ALIGN_M:
+            continue                # (the two split rows cannot share a line on the drawn decks: two decks, as before)
+        B[kb, :2] = best
         # the union's outer edge: the branch chain's far slab edge from the node to the split line
         pieces, hws = [], []
         for p, rv, role, _sd, u0, u1 in cover:
@@ -12817,7 +12826,8 @@ def _sheet_finish(recs, decks, shifted, width_of):
             continue
         line = np.concatenate(pieces)
         hw = np.concatenate(hws)
-        node = [round(float(line[0, 0]), 3), round(float(line[0, 1]), 3)]     # (the fork's node: its pad left out)
+        node = [round(float(line[0, 0]), 3), round(float(line[0, 1]), 3),      # (the fork's node: its pad left out)
+                round(float(line[0, 2]), 3)]
         if len(line) < 2:
             continue
         edges = [offset_polyline(line, hw + roadmesh.PARAPET_W), offset_polyline(line, -(hw + roadmesh.PARAPET_W))]

@@ -115,7 +115,7 @@ class SheetDecks(unittest.TestCase):
             self.assertTrue(any(c.get("sk0") or c.get("sk1") for c in ramp if not c.get("noslab")))
             self.assertTrue(any(c.get("sx") for c in ch if str(c.get("fid")).startswith("b-through")))
             # (the fork's node on the branch's union chunks: roads.deck_pads leaves its pad out)
-            self.assertTrue(all(c.get("sxn") == [0.0, 0.0] for c in ramp if c.get("noslab")))
+            self.assertTrue(all(c.get("sxn")[:2] == [0.0, 0.0] for c in ramp if c.get("noslab")))
             # pinned: the ramp's road in the union at the through deck's heights (10 + 2 x / 300)
             for c in ramp:
                 if c.get("noslab"):

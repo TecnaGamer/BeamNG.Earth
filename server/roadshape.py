@@ -696,8 +696,9 @@ PIN_BLEND_M = 120.0         # m after the split the branch's heights come back t
 PIN_SHARE = 0.5             # ... or this share of the rest of the branch (its far end keeps its height)
 SHEET_DZ_MAX = 3.0          # m: the two apart in height by more anywhere in the union: no union (a flyover over it)
 PIN_GRADE = 0.03            # the blend back at most this steep on average (else no union: no room to blend)
-SHEET_WINDOW_M = 160.0      # m round a tile its deck parts are read from (roads._bridge_chunks): every part of a union
-                            # or of its branch's blend (PIN_BLEND_M past the split, its through deck alongside) there
+SHEET_WINDOW_M = SHEET_REACH_M + PIN_BLEND_M + 40.0    # m round a tile its deck parts are read from (roads.
+                            # _bridge_chunks): a tile drawing any row of a union or of its branch's blend (at most
+                            # REACH + BLEND from the node, 40 m beside it) holds the node's every part, the candidates
 SHEET_CHAIN = 0             # 1: each arm through its plain continuations (pieces end to end). Off: a tile's parts are
                             # those round it, a chain's far pieces missing in one tile and present in the next (one
                             # fork drawn two ways); the two parts alone are whole in every tile that holds either
