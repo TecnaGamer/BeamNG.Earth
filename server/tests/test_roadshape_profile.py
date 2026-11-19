@@ -141,5 +141,25 @@ class Ride(unittest.TestCase):
         self.assertEqual(float(a[0]), 0.0)
 
 
+class RideRecord(unittest.TestCase):
+    def rec(self, dz):
+        ax = [[-float(x), 0.0] for x in range(0, 101, 2)]
+        dx = [[float(x), 0.0] for x in range(0, 101, 2)]
+        mem = lambda kind, xy, z, **k: dict({"kind": kind, "xy": xy, "z_today": z, "z_solved": z, "ll": [[0, 0], [0, 1]],
+                                             "cls": "motorway", "link": False, "deck": None, "end": None, "reach": None},
+                                            **k)      # noqa: E731
+        return {"status": "solved", "joins": [[1, 0, 0, 0, 1]],
+                "members": [mem("deck", dx, [dz] * len(dx)), mem("approach", ax, [0.0] * len(ax), deck=0, end=0, reach=0)]}
+
+    def test_flat_no_step(self):
+        self.assertEqual(rideprobe.abutment_rides(self.rec(0.0))[0][3], 0.0)
+
+    def test_step_kept(self):
+        # (a 0.2 m step at the abutment: the 20 m chord sees v^2 0.2 / 10^2 / g either side of it)
+        r = rideprobe.abutment_rides(self.rec(0.2))[0]
+        v = rideprobe.RIDE_V
+        self.assertAlmostEqual(r[3], round(v * v * 0.2 / 100.0 / 9.81, 3), places=2)
+
+
 if __name__ == "__main__":
     unittest.main()

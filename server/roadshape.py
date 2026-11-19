@@ -32,6 +32,7 @@ import os
 import numpy as np
 import dmath
 import dnp
+import mapgeom
 
 MODE = os.environ.get("BNE_ROADSHAPE", "off")
 DECKS = MODE in ("decks", "sheet", "profile")     # (P2's sheet builds on P1b's decks)
@@ -845,7 +846,7 @@ def profile_published(store, comp, parts, ground, reqs, short=False):
     counted), or solved here with PROFILE_SYNC. Never raises into the build."""
     job = (store, comp, parts, ground, reqs, short)
     if PROFILE_SYNC:
-        _profile_job(job)
+        _profile_job(job)       # (tools only: a fault here also marks the enclosing scope, the tool's)
         return
     global _PQ
     import queue
@@ -865,9 +866,7 @@ def _profile_loop():
     while True:
         job = _PQ.get()
         try:
-            import revisit
-            with revisit.scope():       # (a shadow: its reads never mark a build short)
-                _profile_job(job)
+            _profile_job(job)
         except Exception:               # (a shadow: never in the build's way)
             pass
 
@@ -875,9 +874,14 @@ def _profile_loop():
 def _profile_job(job):
     import logging
     import time
+    import revisit
     t0 = time.perf_counter()
     try:
-        rec = profile_chain(*job)
+        # (its own scope: what the shadow read short marks its record incomplete; rideprobe leaves those out)
+        with revisit.scope() as read:
+            rec = profile_chain(*job)
+        if rec is not None:
+            rec["complete"] = bool(read.complete)      # (the chain's own build read short: rec["short"])
     except Exception as ex:
         logging.getLogger("earthd.roadshape").debug("profile: %s: %s", type(ex).__name__, ex)
         with _PLOCK:
@@ -937,10 +941,7 @@ def _ground_lines(store, decks):
     keys = mapcells.cells_for_bbox(float(min(la)), float(min(lo)), float(max(la)), float(max(lo)))
     best = {}
     for key in sorted(keys, key=str):
-        _parts, roads_ = store._cell_entries(key)
-        for k, lines in roads_:
-            if k[1] != "g":
-                continue
+        for k, lines in _cell_ground(store, key):
             for j, ln in enumerate(lines):
                 ln = np.asarray(ln, np.float64)[:, :2]
                 if len(ln) < 2:
@@ -949,13 +950,43 @@ def _ground_lines(store, decks):
                 if d > reach:
                     continue
                 L = float(np.sum(dnp.hypot(*np.diff(ln, axis=0).T)))
-                kk = (k[0], j)
+                kk = (k, j)
                 old = best.get(kk)
                 if old is None or (L, ln.tobytes()) > (old[0], old[1].tobytes()):
                     best[kk] = (L, ln)
     out = [v[1] for v in best.values()]
     out.sort(key=lambda ln: (round(float(ln[0, 0]), 3), round(float(ln[0, 1]), 3), round(float(ln[-1, 0]), 3),
                              round(float(ln[-1, 1]), 3), len(ln)))
+    return out
+
+
+def _cell_ground(store, key):
+    """[(fid, [ground lines ENU])] of map cell key's drivable ground roads, read for the shadow ALONE: never through
+    the store's cell entries (their cache serves the builds; a shadow filling it evicted live entries, Codex review of
+    P3a) nor anything kept on the store. The map's cell itself is the process's shared read (the same data whoever
+    reads it). A lane section's line is the map's (lanesections.unplaced, memoised on the features as the store does)."""
+    import lanesections
+    import roads as roadsmod
+    feats = store.cell_fn(key)
+    if feats is None or not len(feats):
+        return []
+    rs = roadsmod.road_specs(feats)
+    placed = feats.attrs.get(lanesections.PROFILE)
+    out = []
+    for i in range(len(feats)):
+        if rs[i] is None:
+            continue
+        rings = roadsmod.ground_parts(feats, i)
+        if placed is not None and placed[i]:
+            # (on the map's line, as the decks are: roads.BridgeProfiles._cell_entries' rule and its memo on the
+            # features, a pure function of them)
+            memo = feats.__dict__.setdefault("_unplaced_ground", {})
+            got = memo.get(i)
+            if got is None:
+                got = memo[i] = lanesections.unplaced(feats, i, rings)
+            rings = got
+        if rings:
+            out.append((str(feats.ids[i]), mapgeom.enu_rings(feats, store.frame, rings)))
     return out
 
 

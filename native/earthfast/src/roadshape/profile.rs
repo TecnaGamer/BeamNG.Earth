@@ -67,6 +67,9 @@ const SOLVE_PARAMS: usize = 18;
 const GRID_M: f64 = 8.0;
 const MAX_KNOTS: usize = 400_000;
 const ATTEMPTS: usize = 4;
+const JOIN_DZ_M: f64 = 0.5;     // m: two joined deck ends further apart in height today are stacked, not joined
+const SLOPE_TOL: f64 = 0.01;    // the grade either side of a C1 joint may differ by this in a solved result (or
+                                // by as much as its members bend inside, between two pieces)
 const STACK_MIN_M: f64 = 1.0;   // m: two decks crossing closer than this in height today are one junction (no clearance)      // solves at most: each after letting go of a sheet union in conflict
 
 fn arcs(xy: &[[f64; 2]]) -> Vec<f64> {
@@ -605,6 +608,21 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
         n += m.xy.len();
     }
     let today: Vec<f64> = ms.iter().flat_map(|m| m.z.iter().copied()).collect();
+    // (two deck ends near in plan but apart in height today are no joint (stacked ends): not coupled, both kept)
+    let end_z = |m: usize, e: usize| if e == 0 { ms[m].z[0] } else { ms[m].z[ms[m].z.len() - 1] };
+    let mut joins_ok: Vec<[i64; 5]> = Vec::new();
+    let mut pins_v: Vec<[i64; 3]> = pins.to_vec();
+    for j in joins {
+        let (a, ea, b, eb) = (j[0] as usize, j[1] as usize, j[2] as usize, j[3] as usize);
+        if a < ms.len() && b < ms.len() && ms[a].deck && ms[b].deck && (end_z(a, ea) - end_z(b, eb)).abs() > JOIN_DZ_M {
+            pins_v.push([a as i64, ea as i64, 1]);
+            pins_v.push([b as i64, eb as i64, 1]);
+            continue;
+        }
+        joins_ok.push(*j);
+    }
+    let joins: &[[i64; 5]] = &joins_ok;
+    let pins: &[[i64; 3]] = &pins_v;
     let fallback = |status: i64, rep: Vec<f64>| SolveOut { z: today.clone(), tried: Vec::new(), status, report: rep };
     let mut rep = vec![0.0; 13];
     rep[1] = n as f64;
@@ -655,6 +673,10 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
                     continue;
                 }
                 work += ms[a].xy.len() as u64;
+                if work > BUDGET.work {
+                    rep[0] = S_BUDGET as f64;
+                    return fallback(S_BUDGET, rep);
+                }
                 let (dd, _t) = nearest(&ms[a].xy, &ms[a].s, p);
                 let r = ms[a].half + 1.0;
                 if dd <= r * r && host.map(|h| dd < h.1).unwrap_or(true) {
@@ -672,6 +694,10 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
                     break;
                 }
                 work += ms[a].xy.len() as u64;
+                if work > BUDGET.work {
+                    rep[0] = S_BUDGET as f64;
+                    return fallback(S_BUDGET, rep);
+                }
                 let (dd, t) = nearest(&ms[a].xy, &ms[a].s, ms[b].xy[k]);
                 let la = ms[a].s[ms[a].s.len() - 1];
                 if step > 0 && (t <= 0.5 || t >= la - 0.5) {
@@ -1087,6 +1113,33 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
             let mut out = fallback(S_CLEARANCE, rep);
             out.tried = z.iter().map(|v| (v * 1000.0).round() / 1000.0).collect();
             return out;
+        }
+        // (the pins held and no slope break at a C1 joint, on the solve as it is published)
+        let mut drift = 0.0f64;
+        for l in &pin_terms {
+            drift = drift.max(lin_val(&z, l).abs());
+        }
+        // (a C1 joint bends no more than SLOPE_TOL + 1.5 x what its two members do inside (their largest slope change
+        // between two pieces))
+        let bend: Vec<f64> = ms.iter().enumerate().map(|(mi, m)| {
+            let mut b = 0.0f64;
+            for k in 1..m.xy.len().saturating_sub(1) {
+                let (ha, hb) = ((m.s[k] - m.s[k - 1]).max(1e-3), (m.s[k + 1] - m.s[k]).max(1e-3));
+                let i = base[mi] + k;
+                b = b.max(((z[i + 1] - z[i]) / hb - (z[i] - z[i - 1]) / ha).abs());
+            }
+            b
+        }).collect();
+        let mut kink = 0.0f64;
+        for &(c, ha, hb) in &c1_terms {
+            let (sa, sb) = ((z[c[1]] - z[c[0]]) / ha.max(1e-3), (z[c[2]] - z[c[1]]) / hb.max(1e-3));
+            let lim = SLOPE_TOL + 1.5 * bend[member_of(c[0])].max(bend[member_of(c[2])]);
+            kink = kink.max((sa - sb).abs() - lim);
+        }
+        if drift > margin || kink > 0.0 {
+            rep[12] = drift.max(kink);
+            rep[0] = S_INFEASIBLE as f64;
+            return fallback(S_INFEASIBLE, rep);
         }
         for (mi, m) in ms.iter().enumerate() {
             let nm = m.xy.len();

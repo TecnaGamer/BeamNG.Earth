@@ -35,6 +35,7 @@ RIDE_V = 70.0 * 0.44704     # m/s: 70 mph
 RIDE_H_M = 10.0             # m: the half chord (a 20 m chord, the roadcorpus probe's launch chord)
 RIDE_TARGET_G = 0.3         # g: the P3 target at every abutment
 ABUT_WIN_M = 25.0           # m either side of an abutment its worst is read over
+STEP_RUN_M = 0.05           # m a step in height between two members' joint knots is driven over
 FOLLOW_M = 80.0             # m of deck read past the abutment (decks running straight on followed)
 G = 9.81
 
@@ -49,13 +50,6 @@ def ride_g(z, step, h=RIDE_H_M, v=RIDE_V):
     if len(z) > 2 * k:
         a[k:-k] = v * v * (2.0 * z[k:-k] - z[:-2 * k] - z[2 * k:]) / (hh * hh) / G
     return a
-
-
-def _resample(xy, z, step=1.0):
-    xy = np.asarray(xy, np.float64)
-    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
-    t = np.arange(0.0, s[-1] + 1e-9, step)
-    return t, dnp.interp(t, s, np.asarray(z, np.float64))
 
 
 def _deck_run(rec, d, e, key, reach):
@@ -80,19 +74,29 @@ def _deck_run(rec, d, e, key, reach):
 
 
 def _path(rec, parts, key):
-    """(xy, z) of members [(m, reversed)] end to end (joint knots shared once)."""
+    """(stations, z) of members [(m, reversed)] driven end to end. Every member keeps its own end knots: where two
+    meet at one point with one height the joint is taken once; a step in height there (today's deck end over its
+    approach) stays a step (STEP_RUN_M long), and a gap in plan is driven across (its length)."""
     ms = rec["members"]
-    P, Z = [], []
+    S, Z, last = [], [], None
     for m, rev in parts:
         xy = np.asarray(ms[m]["xy"], np.float64)
         z = np.asarray(ms[m][key], np.float64)
         if rev:
             xy, z = xy[::-1], z[::-1]
-        if P:
-            xy, z = xy[1:], z[1:]
-        P.append(xy)
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+        if last is not None:
+            gap = float(dnp.hypot(*(xy[0] - last[0])))
+            if gap < 1e-6 and abs(float(z[0]) - last[2]) < 1e-6:
+                s, z = s[1:], z[1:]
+                off = last[1]
+            else:
+                off = last[1] + max(gap, STEP_RUN_M)
+            s = s + off
+        S.append(s)
         Z.append(z)
-    return np.concatenate(P), np.concatenate(Z)
+        last = (xy[-1], float(s[-1]) if len(s) else last[1], float(z[-1]) if len(z) else last[2])
+    return np.concatenate(S), np.concatenate(Z)
 
 
 def abutment_rides(rec):
@@ -113,12 +117,10 @@ def abutment_rides(rec):
             appr = [(i, not at_end)]
             res = []
             for key in ("z_today", "z_solved"):
-                xa, za = _path(rec, appr, key)
-                xd, zd = _path(rec, run, key)
-                xy = np.concatenate([xa, xd[1:]])
-                z = np.concatenate([za, zd[1:]])
-                t, zz = _resample(xy, z, 1.0)
-                s0 = float(dnp.hypot(*np.diff(xa, axis=0).T).sum())      # (the abutment's station)
+                s, z = _path(rec, appr + run, key)
+                s0 = float(_path(rec, appr, key)[0][-1])        # (the abutment's station: the approach's end)
+                t = np.arange(0.0, s[-1] + 1e-9, 1.0)
+                zz = dnp.interp(t, s, z)
                 a = ride_g(zz, 1.0)
                 near = np.abs(t - s0) <= ABUT_WIN_M
                 k = int(np.argmax(np.abs(a) * near))
@@ -140,9 +142,12 @@ def summary(vals):
 
 def score(recs, R=None, frame=None):
     """The probe's JSON from profile records (only abutments within R of the frame's origin when both given)."""
-    rows, status = [], {}
+    rows, status, incomplete = [], {}, 0
     for rec in recs:
         status[rec["status"]] = status.get(rec["status"], 0) + 1
+        if not rec.get("complete", True):
+            incomplete += 1         # (read short: left out of the ride numbers, counted)
+            continue
         for r in abutment_rides(rec):
             if R is not None and frame is not None:
                 x, y, _ = frame.geodetic_to_enu(np.array([r[0]]), np.array([r[1]]), np.zeros(1))
@@ -152,7 +157,7 @@ def score(recs, R=None, frame=None):
     rows.sort(key=lambda r: (-r[3], r[0], r[1]))
     return {"abutments": len(rows), "today": summary([r[3] for r in rows]), "solved": summary([r[4] for r in rows]),
             "solved_ok_only": summary([r[4] for r in rows if r[6] == "solved"]),
-            "chains": len(recs), "status": dict(sorted(status.items())),
+            "chains": len(recs), "status": dict(sorted(status.items())), "incomplete": incomplete,
             "worst_today": [list(r) for r in rows[:15]],
             "worst_solved": [list(r) for r in sorted(rows, key=lambda r: (-r[4], r[0], r[1]))[:15]],
             "rows": [list(r) for r in rows]}
