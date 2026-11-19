@@ -319,6 +319,53 @@ def drop_huge(f, max_m2):
     return replace(f, lonlat=lonlat, en=en)
 
 
+def _ranges(a, b):
+    """The indices of the ranges [a[k], b[k]) one after another (int64)."""
+    ln = np.asarray(b, np.int64) - np.asarray(a, np.int64)
+    total = int(ln.sum())
+    if total == 0:
+        return np.zeros(0, np.int64)
+    first = np.concatenate([[0], np.cumsum(ln)[:-1]])
+    return np.repeat(np.asarray(a, np.int64) - first, ln) + np.arange(total, dtype=np.int64)
+
+
+def take(f, keep):
+    """The features of f whose keep (bool, one per feature) is set, in their order: geometry, en, own, clipped, attrs
+    and rules (renumbered) with them. f itself when every one is kept. Pure."""
+    keep = np.asarray(keep, bool)
+    if len(keep) != len(f):
+        raise ValueError("take: keep needs a value per feature")
+    if keep.all():
+        return f
+    rows = np.flatnonzero(keep)
+    part_off = np.asarray(f.part_off, np.int64)
+    ring_off = np.asarray(f.ring_off, np.int64)
+    coord_off = np.asarray(f.coord_off, np.int64)
+    p0, p1 = part_off[rows], part_off[rows + 1]
+    parts = _ranges(p0, p1)
+    r0, r1 = ring_off[parts], ring_off[parts + 1]
+    rings = _ranges(r0, r1)
+    c0, c1 = coord_off[rings], coord_off[rings + 1]
+    coords = _ranges(c0, c1)
+    new_part_off = np.r_[0, np.cumsum(p1 - p0)].astype(np.int64)
+    new_ring_off = np.r_[0, np.cumsum(r1 - r0)].astype(np.int64)
+    new_coord_off = np.r_[0, np.cumsum(c1 - c0)].astype(np.int64)
+    out = Features(f.layer, f.ids[rows], np.asarray(f.kind)[rows], new_part_off, new_ring_off, new_coord_off,
+                   np.asarray(f.lonlat, np.float64).reshape(-1, 2)[coords],
+                   None if f.en is None else np.asarray(f.en)[coords],
+                   None if f.own is None else np.asarray(f.own)[rows],
+                   None if f.clipped is None else np.asarray(f.clipped)[rows])
+    out.attrs = {k: np.asarray(v)[rows] for k, v in f.attrs.items()}
+    new_index = np.full(len(f), -1, np.int64)
+    new_index[rows] = np.arange(len(rows))
+    for k, r in f.rules.items():
+        fi = new_index[np.asarray(r.feature, np.int64)] if len(r.feature) else np.zeros(0, np.int64)
+        m = fi >= 0
+        out.rules[k] = RuleTable(fi[m].astype(np.int32), np.asarray(r.value)[m], np.asarray(r.start)[m],
+                                 np.asarray(r.end)[m])
+    return out
+
+
 def empty(layer):
     return Features(layer, np.zeros(0, "<U1"), np.zeros(0, np.uint8), np.zeros(1, np.int64),
                     np.zeros(1, np.int64), np.zeros(1, np.int64), np.zeros((0, 2), np.float64))
@@ -376,10 +423,11 @@ def concat(a, b):
 
 
 def text_column(values):
-    """Python strings (None = missing) -> a fixed-width unicode array ("" = missing)."""
-    v = ["" if x is None else str(x) for x in values]
-    width = max([1] + [len(x) for x in v])
-    return np.array(v, dtype=f"<U{width}")
+    """Python strings (None = missing) -> a fixed-width unicode array ("" = missing): np.array of str() of each value,
+    "<U" as wide as the longest (1 at least) (earthfast textcol::text_column)."""
+    import fast
+    fast.require(454, "text_column")
+    return fast._ef.text_column(values)
 
 
 def float_column(values, dtype=np.float32):
@@ -623,4 +671,49 @@ def enu_xy(feats, frame, ring):
             return xy[:, 0], xy[:, 1]
     e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
     return e, n
+
+
+def _native_rings(frame, rings):
+    """rings as earthfast's many-ring kernels take them (a list of float64 (k, >= 2) arrays), or None: a frame not
+    converting as EnuFrame does (the tests' stand-ins) or a ring of another type, which enu_xy takes one at a time."""
+    if type(frame).geodetic_to_enu is not _ENU_G2E:
+        return None
+    for r in rings:
+        if type(r) is not np.ndarray or r.dtype != np.float64 or r.ndim != 2:
+            return None
+    return rings
+
+
+def enu_rings(feats, frame, rings):
+    """[np.column_stack(enu_xy(feats, frame, ring)) for ring in rings]: (k, 2) east / north of each lon/lat ring, the
+    same numbers, in one native call (earthfast.enu_rings) instead of a call per ring (~434k enu_xy calls a three-place
+    cold road tile set, their own cost the wrapping: railways.crossings, 2026-11-19). Each point by geodetic_to_enu's
+    operations, as enu_xy's own conversion and xy_in's first frame have them (xy_in's later frames: the same operations
+    through the kept ECEF, the same numbers; only a NaN's payload, from a NaN coordinate, may differ there, as it already
+    did between xy_in's two ways by the order frames were asked in)."""
+    rings = rings if type(rings) is list else list(rings)
+    got = _native_rings(frame, rings)
+    if got is None:
+        return [np.column_stack(enu_xy(feats, frame, r)) for r in rings]
+    import fast
+    fast.require(500, "enu_rings")
+    return fast._ef.enu_rings(got, frame.origin, frame.rot)
+
+
+def enu_bounds(feats, frame, rings):
+    """(len(rings), 4) float64: (e.min(), e.max(), n.min(), n.max()) of enu_xy(feats, frame, ring) per ring, in one
+    native call (earthfast.enu_bounds: no (k, 2) array made per ring; roads.ChainView._todo's near test). Equal to
+    NumPy's as numbers, for comparing: a NaN point makes that axis' pair NaN (any NaN: its payload not kept), and of
+    equal +0.0 / -0.0 extremes either may come back, as NumPy's own SIMD reductions differ there."""
+    rings = rings if type(rings) is list else list(rings)
+    got = _native_rings(frame, rings)
+    if got is None:
+        out = np.empty((len(rings), 4), np.float64)
+        for k, r in enumerate(rings):
+            e, n = enu_xy(feats, frame, r)
+            out[k] = (e.min(), e.max(), n.min(), n.max())
+        return out
+    import fast
+    fast.require(500, "enu_bounds")
+    return fast._ef.enu_bounds(got, frame.origin, frame.rot)
 

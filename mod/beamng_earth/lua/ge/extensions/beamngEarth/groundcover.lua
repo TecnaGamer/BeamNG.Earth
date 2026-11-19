@@ -65,6 +65,11 @@ M.DEFS = {
   { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_scrub', layer = 'bngEarthGroundDusty', share = 0.08 },
   { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_scrub', layer = 'bngEarthGroundDusty', share = 0.05,
     fields = LONG_NEAR },
+  -- (2026-11-16, server/surface.py FOREST / DRYGRASS: tree cover had the grass layer and its full carpet) forest floor:
+  -- sparse short grass between the trunks; arid grassland: mostly West Coast USA's dry grass. Crop soil and sand: none.
+  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_forest', layer = 'bngEarthGroundForest', share = 0.08 },
+  { source = 'wcusa', src = 'grass_dry_1', name = 'grass_dry_1_dry', layer = 'bngEarthGroundDryGrass', share = 0.2 },
+  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_dry', layer = 'bngEarthGroundDryGrass', share = 0.06 },
 }
 M.PREFIX = 'bngEarthGC_'
 -- set on every object after the stock fields (see the header)

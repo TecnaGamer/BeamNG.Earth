@@ -176,6 +176,7 @@ fn expired(h: &Holder, now: u64) -> bool {
     now.saturating_sub(h.born) > LEASE_MS || h.born > now.saturating_add(LEASE_MS)
 }
 
+#[allow(clippy::disallowed_types)] // RandomState: a claim's random token on purpose (only compared for equality)
 fn new_token() -> u64 {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};

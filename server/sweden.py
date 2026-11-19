@@ -16,10 +16,10 @@ OUTLINE = np.array([(11.25, 59.10), (10.95, 58.85), (11.00, 58.00), (11.70, 56.9
 
 
 def contains(lon, lat):
-    """Bool array: inside OUTLINE (even-odd). Pure."""
+    """Bool array: inside OUTLINE (even-odd). Pure (earthfast roadnet::regions::outline_contains)."""
+    import fast
+    fast.require(385, "outline_contains")
     x, y = np.atleast_1d(np.asarray(lon, np.float64)), np.atleast_1d(np.asarray(lat, np.float64))
-    a, b = OUTLINE, np.roll(OUTLINE, -1, axis=0)
-    crosses = (a[:, 1, None] > y) != (b[:, 1, None] > y)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        at = a[:, 0, None] + (y - a[:, 1, None]) * (b[:, 0, None] - a[:, 0, None]) / (b[:, 1, None] - a[:, 1, None])
-    return (crosses & (x < at)).sum(0) % 2 == 1
+    x, y = np.broadcast_arrays(x, y)
+    got = fast._ef.outline_contains(OUTLINE, np.ascontiguousarray(x.ravel()), np.ascontiguousarray(y.ravel()))
+    return got.reshape(x.shape)

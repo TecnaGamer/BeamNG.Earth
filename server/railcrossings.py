@@ -59,11 +59,11 @@ def add(mesh, frame, elev, st, link, collide=False):
         if hi - lo < 4.0 or (a1 - a0) > SPAN_MAX_M:
             continue
         ts = np.unique(np.concatenate((np.arange(lo, hi, 1.0), [hi])))
-        line = np.c_[np.interp(ts, s, path[:, 0]), np.interp(ts, s, path[:, 1])]
+        line = np.c_[dnp.interp(ts, s, path[:, 0]), dnp.interp(ts, s, path[:, 1])]
         g = bm.ground(frame, elev, line)
         # the slab's level: the rail head - proud, from the first rail to the last; sloping to the ground past them
         z_c = float(np.median(bm.ground(frame, elev, np.c_[
-            np.interp([a0, a1], s, path[:, 0]), np.interp([a0, a1], s, path[:, 1])]))) + RAIL_TOP_M - CROSS_PROUD_M
+            dnp.interp([a0, a1], s, path[:, 0]), dnp.interp([a0, a1], s, path[:, 1])]))) + RAIL_TOP_M - CROSS_PROUD_M
         d_in = np.minimum(np.abs(ts - a0), np.abs(ts - a1))
         inside = (ts >= a0 - REACH_M) & (ts <= a1 + REACH_M)
         up = np.clip(1.0 - np.maximum(0.0, np.where(ts < a0, a0 - REACH_M - ts, ts - a1 - REACH_M)) / RAMP_M, 0.0, 1.0)

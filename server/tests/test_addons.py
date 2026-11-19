@@ -279,15 +279,20 @@ class DetailTest(Base):
         a = self.make()
         a.detail("some-mod")
         calls = []
-        # (os.startfile stubbed: on Windows open_page opens the page with it, not popen, and every run of the suite opened
-        # someone/Some-Mod's releases page in the player's browser)
+        page = f"https://github.com/{REPO}/releases"
+        # (Windows opens the page with os.startfile, not popen: without the patch this test opened the real browser)
         with mock.patch.object(updates.os, "startfile", create=True) as startfile:
             self.assertFalse(updates.open_page("https://img.example/z", popen=lambda *x, **k: calls.append(x)))
-            self.assertTrue(updates.open_page(f"https://github.com/{REPO}/releases", popen=lambda *x, **k: calls.append(x),
-                                              allow=a.openable))
+            self.assertTrue(updates.open_page(page, popen=lambda *x, **k: calls.append(x), allow=a.openable))
             self.assertFalse(updates.open_page("https://other.example/", popen=lambda *x, **k: calls.append(x),
                                                allow=a.openable))
-        self.assertEqual(len(calls) + startfile.call_count, 1, "(one page asked for, the allowed one)")
+        if sys.platform == "win32":
+            startfile.assert_called_once_with(page)
+            self.assertEqual(calls, [])
+        else:
+            startfile.assert_not_called()
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0][1], page)
 
     def test_companion_downloads(self):
         rel = dict(REL2, assets=[asset("build-2", SHA2, 10, name="tool-v2.py"), asset("build-2", SHA1, 20, name="app-v2.apk")])

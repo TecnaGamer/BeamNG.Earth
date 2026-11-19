@@ -841,6 +841,7 @@ pub fn far_clip_mesh<'py>(py: Python<'py>, positions: PyReadonlyArray2<'py, f64>
             }
         }
         let mut lows: HashMap<usize, usize> = HashMap::new();
+        #[allow(clippy::disallowed_methods)] // hash order: filtered per edge, then sort_unstable on the distinct keys
         let mut bound: Vec<(usize, usize)> = edges.keys().copied()
             .filter(|&(a, b)| !edges.contains_key(&(b, a)))
             .filter(|&(a, b)| match (on_edge(&verts[a]), on_edge(&verts[b])) {

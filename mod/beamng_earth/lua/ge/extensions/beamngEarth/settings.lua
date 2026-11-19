@@ -31,7 +31,8 @@ local credits = require('beamngEarth/credits')
 local places = require('beamngEarth/places')
 
 M.FILE = '/settings/beamngEarth.json'
-M.VERSION = 2     -- 2: town signs on by default (a version-1 file's townSigns = false was the old default: on)
+M.VERSION = 3     -- 2: town signs on by default (a version-1 file's townSigns = false was the old default: on)
+                  -- 3: road signs off by default, a real switch (a version-2 file's roadSigns = true was the hidden default)
 M.BUTTON_ID = 'beamngEarth-settings' -- index.js: the pause tab's first page button (earthSettingsStore.js pageId)
 M.LEVEL_ID = 'beamng_earth'
 
@@ -74,6 +75,11 @@ M.SCHEMA = {
   -- Medium presets (512² samples a km, a quarter of the data at each block swap), '1' the stock maps' resolution. The
   -- server reads it when it starts (launcher.start_server: BNGE_GROUND_SQUARE), so it holds from the next start
   groundGrid = { kind = 'enum', default = '1', values = { '2', '1' }, label = 'Ground grid (m)' },   -- (least to most)
+  -- the drawn terrain block's own sun shadows (terrain.lua setCastShadows; the user, 2026-11-16, "a visible border
+  -- between the collision ground and the no collision ground. noticeable in mountain areas": the far tiles past its edge
+  -- cast theirs, the block did not, so a ridge's shadow stopped at the block's edge and its shaded slopes were lit). Each
+  -- block move redraws the sun's cached shadow map (~6-14 ms once): off on the Low and Medium presets
+  terrainShadows = { kind = 'bool', default = true, label = 'Ground shadows' },
   -- the grass's reach (groundcover.lua DISTANCE)
   grassDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far' }, label = 'Grass draw distance' },
   -- the engine's shape detail in our level (enginepref.lua: $pref::TS::detailAdjust; 'game': the game's Mesh Quality)
@@ -122,8 +128,38 @@ M.SCHEMA = {
   telemetryChoice = { kind = 'number', default = 0, min = 0, max = 1000, label = 'Telemetry choice made (version)' },
   -- what the map key opens (map3d.lua; the user, 2026-11-07: "keep the 2d map and let players choose between the 2")
   mapStyle = { kind = 'enum', default = '2d', values = { '2d', '3d' }, label = 'Map style' },
-  -- ordinary road signs (server roadsigns.py, needs BNE_ROADSIGNS=on on the server)
-  roadSigns = { kind = 'bool', default = true, label = 'Road signs' },
+  -- ordinary road signs (server roadsigns.py): one of the Experimental switches below since 2026-11-15 (off by default:
+  -- the server's BNE_ROADSIGNS=on, set from this file when it starts; off again at once through the message road_signs)
+  roadSigns = { kind = 'bool', default = false, label = 'Road signs' },
+  -- the Experimental page (the user, 2026-11-15: "add the toggles for the features that can only be enabled via
+  -- environment variables"): each the server's BNE_* build switches (server/experimental.py FEATURES), all off by
+  -- default; the app's launcher (start.py for a source install) reads them from this file and starts the server with
+  -- them, so a change holds from the next start of BeamNG.Earth. Nothing here applies them in the game itself
+  expNlRoadSigns = { kind = 'bool', default = false, label = 'Dutch road signs' },
+  expEuScenery = { kind = 'bool', default = false, label = 'French and European road scenery' },
+  expDropRails = { kind = 'bool', default = false, label = 'Guard rails at drops' },
+  expEntranceFlares = { kind = 'bool', default = false, label = 'Widened entrances' },
+  expPriorityStops = { kind = 'bool', default = false, label = 'Right of way by road class' },
+  expRoadBumps = { kind = 'bool', default = false, label = 'Bumpy road surfaces' },
+  expRoughDirt = { kind = 'bool', default = false, label = 'Rough dirt roads' },
+  expWearStrips = { kind = 'bool', default = false, label = 'Tyre polish, crack networks and manholes' },
+  expGradeGuard = { kind = 'bool', default = false, label = 'Road steepness limit' },
+  expPhotoSurface = { kind = 'bool', default = false, label = 'Road surface from aerial photos' },
+  expTerrainBumps = { kind = 'bool', default = false, label = 'Rougher land off the roads' },
+  expCliffWalls = { kind = 'bool', default = false, label = 'Rock faces in deep road cuts' },
+  expTunnelLids = { kind = 'bool', default = false, label = 'Ground over shallow tunnels' },
+  expSubseaTunnels = { kind = 'bool', default = false, label = 'More undersea tunnels' },
+  expAiTunnels = { kind = 'bool', default = false, label = 'Traffic through tunnels' },
+  expRailCollide = { kind = 'bool', default = false, label = 'Solid railway rails' },
+  expCatenary = { kind = 'bool', default = false, label = 'Overhead railway wires' },
+  expRailCrossings = { kind = 'bool', default = false, label = 'Grouped level crossings' },
+  expRailTunnels = { kind = 'bool', default = false, label = 'Railway tunnels' },
+  expRailCurves = { kind = 'bool', default = false, label = 'Rounded railway curves' },
+  expWatertight = { kind = 'bool', default = false, label = 'Closed 3D models' },
+  expRoadRevamp = { kind = 'bool', default = false, label = 'Revamped roads' },
+  expCanadaLidar = { kind = 'bool', default = false, label = 'Detailed Canadian lidar' },
+  expGenGround = { kind = 'bool', default = false, label = 'Generated ground' },
+  expStaleRevisit = { kind = 'bool', default = false, label = 'Show the older world while rebuilding' },
   -- in Germany: the German right-of-way signs and markings at junctions, 30-zone signs and traffic that gives way
   -- accordingly (server designs.py; the message german_junctions)
   germanJunctionSigns = { kind = 'bool', default = false, label = 'German junction signs' },
@@ -149,6 +185,7 @@ M.SCHEMA = {
   creditsVisible = { kind = 'bool', default = true, label = 'Data credits on screen' },
   creditsCorner = { kind = 'enum', default = 'bottom-left', values = credits.CORNERS, label = 'Data credits corner' },
   creditsSize = { kind = 'enum', default = 'small', values = { 'small', 'normal' }, label = 'Data credits size' },
+  mainMenuTile = { kind = 'bool', default = true, label = 'BeamNG.Earth on the main menu' },
   -- the server's download cache (server cache.py): its size cap in GB, sent on every hello and change
   -- (typed on the page since 2026-10-29, the user: "change the cache limit setting to be a text box"; 0: unlimited.
   -- The old choices '5' .. '50' read as numbers, 'unlimited' as 0: MIGRATE)
@@ -161,6 +198,8 @@ M.SCHEMA = {
   -- after a teleport the server on every CPU core and the game on two, until the new place is loaded (server
   -- cpupin.full_split, read at each teleport; the user, 2026-10-31)
   teleportPriority = { kind = 'bool', default = false, label = 'Full priority loading (joining, teleports)' },
+  autodriveOncomingPass = { kind = 'bool', default = false, label = 'Autodrive opposing-lane passing' },
+  autodriveObstacles = { kind = 'bool', default = false, label = 'Autodrive obstacle avoidance' },
   -- the most memory the world server may hold, all its processes together (server budget.py / memwatch.py; read from
   -- this file when it starts, cpupin.player_settings, and sent at once when changed: core.memorySetLimit). 'auto': a
   -- third of the RAM (at least 1.5 GB), 60 % of it on a 24 GB or bigger machine (at most 24 GB)
@@ -170,6 +209,7 @@ M.SCHEMA = {
   -- (20 km), or the whole route (up to 300 miles)
   routeDownload = { kind = 'enum', default = 'ahead', values = { 'off', 'ahead', 'route' },
     label = 'Download along the GPS route' },
+  routeAvoidHighways = { kind = 'bool', default = false, label = 'GPS: avoid highways' },     -- (GitHub #330)
   devOutlineKm = { kind = 'number', default = 3, min = 0.5, max = 20, label = 'Dev outlines radius (km)' },
   devMapKm = { kind = 'number', default = 10, min = 1, max = 80, label = 'Dev mini-map radius (km)' },
   -- not on the page (not in ORDER): the welcome version last shown (EarthWelcome.vue)
@@ -178,15 +218,20 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
   devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
-M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
+M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'terrainShadows', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'models3dmr',
+  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
-  'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
-  'devMapKm' }
+  'creditsCorner', 'creditsSize', 'mainMenuTile', 'cacheCapGb', 'routeDownload', 'routeAvoidHighways', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
+  'devMapKm',
+  -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)
+  'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
+  'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
+  'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
+  'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
 
 -- Stored but not on the settings page
 M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, qualityDetected = true, telemetryChoice = true }
@@ -198,28 +243,28 @@ M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, q
 -- the first run (M.detectQuality).
 M.PRESET_KEYS = { 'trees', 'treeDistance', 'groundCover', 'groundCoverDensity', 'grassDistance', 'rocks', 'nightLights', 'distantTrafficQuality',
   'viewDistanceMode', 'viewDistanceKm', 'terrainDetail', 'buildingDistance', 'groundPhoto', 'objectDetail', 'roadDetail',
-  'groundGrid' }
+  'groundGrid', 'terrainShadows' }
 M.PRESETS = {
   low = { trees = 'low', treeDistance = 'near', groundCover = false, groundCoverDensity = 'low', grassDistance = 'near',
     rocks = true, nightLights = 'few', viewDistanceMode = 'fixed', viewDistanceKm = 40, terrainDetail = 'low',
     buildingDistance = 'near', groundPhoto = '1024', objectDetail = 'game', distantTrafficQuality = 'low', roadDetail = 'off',
-    groundGrid = '2' },
+    groundGrid = '2', terrainShadows = false },
   medium = { trees = 'medium', treeDistance = 'medium', groundCover = true, groundCoverDensity = 'low',
     grassDistance = 'normal', rocks = true, nightLights = 'few', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'medium',
-    roadDetail = 'basic', groundGrid = '2' },
+    roadDetail = 'basic', groundGrid = '2', terrainShadows = false },
   high = { trees = 'normal', treeDistance = 'normal', groundCover = true, groundCoverDensity = 'normal',
     grassDistance = 'normal', rocks = true, nightLights = 'normal', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high',
-    roadDetail = 'full', groundGrid = '1' },
+    roadDetail = 'full', groundGrid = '1', terrainShadows = true },
   ultra = { trees = 'high', treeDistance = 'far', groundCover = true, groundCoverDensity = 'high', grassDistance = 'normal',
     rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100, terrainDetail = 'high',
     buildingDistance = 'far', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high', roadDetail = 'full',
-    groundGrid = '1' },
+    groundGrid = '1', terrainShadows = true },
   extreme = { trees = 'extreme', treeDistance = 'max', groundCover = true, groundCoverDensity = 'high',
     grassDistance = 'far', rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'extreme', buildingDistance = 'max', groundPhoto = '4096', objectDetail = 'extreme', distantTrafficQuality = 'high',
-    roadDetail = 'full', groundGrid = '1' },
+    roadDetail = 'full', groundGrid = '1', terrainShadows = true },
 }
 M.PRESET_ORDER = { 'low', 'medium', 'high', 'ultra', 'extreme' }
 
@@ -323,6 +368,9 @@ function M.load(path)
     -- (town signs became on by default with version 2, the user 2026-11-10: a file from before had false as the
     -- old default, not as a choice; once saved as version 2 the player's own setting stands)
     if (tonumber(data.version) or 1) < 2 and data.townSigns == false then values.townSigns = true end
+    -- (road signs became a real switch, off by default, with version 3, 2026-11-15: a file from before had true as the
+    -- hidden switch's default, not as a choice; the server reads it so too, experimental.SINCE_VERSION)
+    if (tonumber(data.version) or 1) < 3 then values.roadSigns = false end
   elseif ok and data ~= nil then
     warnings[#warnings + 1] = 'settings file is not an object'
   elseif not ok and data ~= nil then
@@ -428,6 +476,7 @@ function M.memoryLine(m)
     line = line .. ', lowered to ' .. gb(m.effMB) .. ' while the computer is short of memory'
   end
   line = line .. string.format(', %d processes', tonumber(m.processes) or 0)
+  if m.tooLow then line = line .. '. Too low for this place: the world loads slowly, raise it' end
   if m.restart then line = line .. '. Restart BeamNG.Earth to resize its caches and processes' end
   return line
 end
@@ -534,6 +583,16 @@ local function inOurLevel()
 end
 
 M.APPLY = {
+  autodriveOncomingPass = function(v)
+    if be and be.queueAllObjectLua then
+      be:queueAllObjectLua("if beamngEarth_oncomingPass and beamngEarth_oncomingPass.setEnabled then beamngEarth_oncomingPass.setEnabled(" .. tostring(v) .. ') end')
+    end
+  end,
+  autodriveObstacles = function(v)
+    if be and be.queueAllObjectLua then
+      be:queueAllObjectLua("if beamngEarth_staticObstacles and beamngEarth_staticObstacles.setEnabled then beamngEarth_staticObstacles.setEnabled(" .. tostring(v) .. ') end')
+    end
+  end,
   rebaseDistance = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRebaseDistance then core.setRebaseDistance(v) else rebase.setDistance(v) end
@@ -573,6 +632,7 @@ M.APPLY = {
     sendGraphics()
   end,
   grassDistance = function(v) require('beamngEarth/groundcover').setDistance(v) end,
+  terrainShadows = function(v) require('beamngEarth/terrain').setCastShadows(v) end,
   objectDetail = function(v) require('beamngEarth/enginepref').setLevel(v, inOurLevel()) end,
   nightLights = function(v) require('beamngEarth/nightlights').setLightCount(v) end,
   distantTraffic = function(v) require('beamngEarth/trafficvisuals').setEnabled(v) end,
@@ -746,6 +806,8 @@ function M.uiState()
   -- the cache folder and the BeamMP launcher (the server's app_paths), asked with the cache numbers
   if core and core.appPath and cachePolls % M.CACHE_POLL == 1 then core.appPath() end
   status.paths = core and core.appPathState and core.appPathState() or nil
+  -- the settings waiting for a world server restart, and a restart under way (core.restartState, srvrestart.lua)
+  status.restart = core and core.restartState and core.restartState(values, M.ORDER) or nil
   local schema = {}
   for _, k in ipairs(M.ORDER) do
     local s = M.SCHEMA[k]
@@ -765,6 +827,16 @@ function M.uiReset()
   M.save()
   M.applyAll()
   return M.getAll()
+end
+
+-- "Restart world server" (the page's button, shown when a setting read only at the server's start differs from the
+-- value it started with): the server stops cleanly and its launcher starts it again with the settings read anew; the
+-- world reloads round the car, held meanwhile (core.restartServer, srvrestart.lua; server srvrestart.py).
+function M.uiRestartServer()
+  local core = ext('beamngEarth_core')
+  if not (core and core.restartServer) then return { ok = false, error = 'mod not loaded' } end
+  local ok, why = core.restartServer()
+  return { ok = ok == true, error = why }
 end
 
 -- "Clear cache" (the page asked for confirmation): the server removes every download but this
@@ -1227,13 +1299,15 @@ function M.mapControls(on)
       mapCtl.actionMap, mapCtl.trapHandledEvents = am, am.trapHandledEvents
       am.trapHandledEvents = true
     end
-  elseif not on and mapCtl then
-    if mapCtl.vt then mapCtl.vt.onActionEvent = mapCtl.vtOrig end
-    -- (pcall: the action map may be gone by now, a level unload)
-    if mapCtl.actionMap then pcall(function() mapCtl.actionMap.trapHandledEvents = mapCtl.trapHandledEvents end) end
-    for _, f in ipairs({ 'camMoveController', 'camMoveKey', 'zoomInOut', 'controllerZoom', 'zoom',
-        'onControllerSelect', 'onChangeUiFilter' }) do mapCtl.bm[f] = mapCtl[f] end
-    mapCtl = nil
+  elseif not on then
+    if mapCtl then
+      if mapCtl.vt then mapCtl.vt.onActionEvent = mapCtl.vtOrig end
+      -- (pcall: the action map may be gone by now, a level unload)
+      if mapCtl.actionMap then pcall(function() mapCtl.actionMap.trapHandledEvents = mapCtl.trapHandledEvents end) end
+      for _, f in ipairs({ 'camMoveController', 'camMoveKey', 'zoomInOut', 'controllerZoom', 'zoom',
+          'onControllerSelect', 'onChangeUiFilter' }) do mapCtl.bm[f] = mapCtl[f] end
+      mapCtl = nil
+    end
     pcall(popActionMap, 'BigMap')
     if filter and filter.addAction then pcall(filter.addAction, 0, 'beamngEarthMapBlocked', false) end
   end
@@ -1312,6 +1386,11 @@ end
 function M.onExtensionLoaded()
   M.load()
   M.applyAll()
+end
+
+function M.onExtensionUnloaded()
+  M.mapOpened(false)
+  M.redirectBigMap(false)
 end
 
 -- The one-time welcome (the user, 2026-10-15: "add a 1 time popup with info about this project"): shown a moment after

@@ -427,7 +427,7 @@ def _connected_depths(back, depth):
     flank = near < FRONTAGE_FLANK_M
     taper = np.where(a <= b, depth[left], depth[right]) * (1 - near / FRONTAGE_FLANK_M)
     depth[unknown[flank]] = taper[flank]
-    depth[unknown[between]] = np.interp(arc[unknown[between]], arc[known], depth[known])
+    depth[unknown[between]] = dnp.interp(arc[unknown[between]], arc[known], depth[known])
     return depth
 
 

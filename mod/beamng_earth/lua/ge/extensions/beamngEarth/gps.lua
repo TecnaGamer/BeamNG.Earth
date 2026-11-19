@@ -53,6 +53,8 @@ M.TAIL_STEP_M = 25
 -- path, in its lane, minding traffic, at the legal speed. Compatible updates extend the vehicle's current plan;
 -- graph replacement and recovery need a fresh lane-aware start.
 M.AUTO_STALL_S = 6
+M.SIGNAL_WAIT_MAX_S = 180   -- s a red-light stop excuses a standstill at most: a light whose phase never changes (or a
+                            -- stale signals table) is then a stall like any other (Codex review of PRs #1280 / #1282)
 M.AUTO_NOPROGRESS_S = 30  -- the route's remaining distance not down by AUTO_PROGRESS_M in this long: the path given again
 M.AUTO_PROGRESS_M = 20    -- (a car circling at 4 mph to reach a waypoint it could not, never standing still: GitHub #180)
 M.AUTO_RECOVER_M = 150    -- no progress after the path was given again either: the car put on its own carriageway this far
@@ -81,6 +83,7 @@ local info = nil        -- { dist, bearing, remaining, eta } at the last check
 local auto = false      -- autodrive on
 local autoPath = nil    -- the node ids last given to the AI
 local autoRoadPath = nil -- the same path including its rear endpoint, for underfoot edge continuity
+local surfaceGap = false
 local autoFinished = nil -- completed local endpoint: wait for a continuation instead of resubmitting it
 local autoSerial = nil  -- the graph (navgraph applies) they were taken from
 local autoForce = true -- restart after a stall/recovery, destination change or pause, even on the same path
@@ -94,6 +97,8 @@ local recoverAhead       -- (below)
 local paused = false    -- the AI holds the car (world server away)
 local vehGraph = {}     -- vehicle id -> the game's map buildSerial when its mapmgr last took the graph
 local pathWait = nil    -- os.clock() since a path waits for the car to have the graph it was planned on
+local signalWaitAt = nil -- recent vehicle confirmation of a deliberate red-light stop
+local signalWaitSince = nil -- when the current red-light stop began (SIGNAL_WAIT_MAX_S)
 local targetS = nil     -- the route distance of the arrows' target
 local downloadProgress = nil   -- { total, done, active } | nil: the route's corridor prefetch (server routeahead.py)
 
@@ -127,7 +132,8 @@ function M.edgeSegments(nodes)
         -- the way it may be driven: 0 both, 1 from this node to the other, -1 back (a one-way edge runs from its inNode)
         local way = 0
         if type(e) == 'table' and e.oneWay and e.inNode ~= nil then way = (e.inNode == id) and 1 or -1 end
-        segs[#segs + 1] = { a.x, a.y, o.pos.x, o.pos.y, (a.z + o.pos.z) / 2, way, a = id, b = other }
+        segs[#segs + 1] = { a.x, a.y, o.pos.x, o.pos.y, (a.z + o.pos.z) / 2, way, a = id, b = other,
+          za = a.z, zb = o.pos.z }
       end
     end
   end
@@ -156,6 +162,33 @@ function M.nearestEdge(segs, px, py, hx, hy, accept)
       if not accept or accept(point, d) then bd, bz, bp = d, s[5], point end
     end
     ::next::
+  end
+  return math.sqrt(bd), bz, bp
+end
+
+-- Pure: nearestEdge with the height: the segment nearest (px, py, pz) in 3D (its height interpolated along it, za / zb
+-- from edgeSegments), so a road under a viaduct is not taken for the carriageway on it (or the other way round): in 2D
+-- the farm track under the A7's Zillbach viaduct lay 5 m from the southbound carriageway's line, 24 m under it.
+-- Returns the horizontal distance (as nearestEdge's, for ON_GRAPH_M), the height there and the point (z added).
+function M.nearestEdge3(segs, px, py, pz, hx, hy, accept)
+  local bc, bd, bz, bp = math.huge, math.huge, 0, nil
+  for _, s in ipairs(segs) do
+    local ax, ay, bx, by = s[1], s[2], s[3], s[4]
+    local dx, dy = bx - ax, by - ay
+    if not (hx and (s[6] or 0) ~= 0 and (dx * hx + dy * hy) * s[6] <= 0) then
+      local L2 = dx * dx + dy * dy
+      local t = L2 > 0 and math.max(0, math.min(1, ((px - ax) * dx + (py - ay) * dy) / L2)) or 0
+      local qx, qy = ax + t * dx - px, ay + t * dy - py
+      local d = qx * qx + qy * qy
+      local z = s.za and s.zb and (s.za + t * (s.zb - s.za)) or s[5]
+      local c = d + (z - pz) ^ 2
+      if c < bc then
+        local fx, fy = dx, dy
+        if (s[6] or 0) < 0 or ((s[6] or 0) == 0 and hx and dx * hx + dy * hy < 0) then fx, fy = -dx, -dy end
+        local point = { x = qx + px, y = qy + py, z = z, dx = fx, dy = fy, segment = s, t = t }
+        if not accept or accept(point, d) then bc, bd, bz, bp = c, d, z, point end
+      end
+    end
   end
   return math.sqrt(bd), bz, bp
 end
@@ -218,6 +251,12 @@ local function clearArrows()
 end
 
 local function core() return rawget(_G, 'beamngEarth_core') end
+-- the "GPS: avoid highways" setting (GitHub #330); the route is planned again when it changes (update)
+local function avoidHighways()
+  local s = rawget(_G, 'beamngEarth_settings')
+  return s ~= nil and s.get('routeAvoidHighways') == true
+end
+local routedAvoid           -- its value the route was last asked with
 
 -- Pure: the compass bearing (degrees, 0 north, clockwise) of a direction (x east, y north), or nil when it is ~vertical.
 function M.compass(dx, dy)
@@ -246,7 +285,7 @@ local function requestRoute(player)
     for k, w in ipairs(vias) do via[k] = { w.lat, w.lon } end
   end
   if c.requestRoute(nextId, player.lat, player.lon, dest.lat, dest.lon, b, via) then
-    pendingId, lastRequest = nextId, os.clock()
+    pendingId, lastRequest, routedAvoid = nextId, os.clock(), avoidHighways()
   end
 end
 
@@ -297,6 +336,7 @@ function M.waypoints()
 end
 
 function M.clear()
+  surfaceGap=false
   if auto then M.setAutodrive(false) end
   vias = {}
   dest, route, routeError, pendingId, enu, info = nil, nil, nil, nil, nil, nil
@@ -324,6 +364,7 @@ function M.status()
            remaining = info and info.remaining, eta = info and info.eta, routeVersion = route and route.version or 0,
            progress = progress, planning = pendingId ~= nil, routeError = routeError, pendingId = pendingId,
            autodrive = auto, autoNodes = autoPath and #autoPath or nil, off = info and info.off, arrows = routedTo,
+           avoided = route and route.avoided, avoidHighways = avoidHighways(),
            routeDownload = downloadProgress, replans = M.noProgressReplans, recoveries = M.autoRecoveries,
            waypoints = #vias > 0 and M.waypoints() or nil, legs = route and route.legs or nil }
 end
@@ -689,6 +730,13 @@ function M.retryAutodrive()
   routedTo, autoForce = nil, true
 end
 
+-- Keep a terrain stop eligible for normal progress recovery, including a
+-- completed local endpoint. A hold/reset is not evidence that the surface cleared.
+function M.onAiSurfaceGap(id, active)
+  local veh = auto and playerVeh()
+  if veh and veh:getId()==id then surfaceGap=active==true end
+end
+
 function M.onAiRouteDone(id)
   local veh = auto and playerVeh()
   if not veh or veh:getId() ~= id then return end
@@ -699,9 +747,17 @@ function M.onAiRouteDone(id)
   lastCheck = -math.huge
 end
 
+function M.onAiSignalWait(id, waiting)
+  local veh=auto and playerVeh()
+  if veh and veh:getId()==id then
+    signalWaitAt=waiting and os.clock() or nil
+    signalWaitSince=waiting and (signalWaitSince or os.clock()) or nil
+  end
+end
+
 local function holdAutodrive(veh)
   if not autoBlocked then
-    veh:queueLuaCommand('if beamngEarth_autodrive then beamngEarth_autodrive.stop() else ai.setMode("stop") end')
+    veh:queueLuaCommand('if beamngEarth_autodrive then (beamngEarth_autodrive.hold or beamngEarth_autodrive.stop)() else ai.setMode("stop") end')
   end
   autoBlocked, autoForce, routedTo = true, true, nil
 end
@@ -927,7 +983,7 @@ local function driveArrowsPath(gm, nodes, target)
   for _, id in ipairs(ids) do autoRoadPath[#autoRoadPath + 1] = id end
   autoForce, autoBlocked = false, false
   -- A continuation gets its own progress window; waiting at the old endpoint was not a failed attempt.
-  if autoFinished then progRemaining, progAt, stuckTries = nil, nil, 0 end
+  if autoFinished and not surfaceGap then progRemaining, progAt, stuckTries = nil, nil, 0 end
   autoFinished = nil
 end
 
@@ -1072,10 +1128,12 @@ end
 function M.setAutodrive(on, brake)
   on = on and true or false
   if on == auto then return auto end
+  surfaceGap=false
   auto = on
   autoFinished = nil
   autoPath, autoRoadPath, autoSerial, stillSince, paused, pathWait = nil, nil, nil, nil, false, nil
   autoForce, autoBlocked = true, false
+  signalWaitAt, signalWaitSince = nil, nil
   progRemaining, progAt, stuckTries = nil, nil, 0
   if on then
     routedTo = nil                       -- the arrows (and the AI's path) set again at the next check
@@ -1113,10 +1171,12 @@ local function autoKeep(nodes, now)
     return
   end
   local c = core()
-  local healthy = not (c and c.serverHealthy) or c.serverHealthy()
+  local ready = c and (c.autodriveReady or c.serverHealthy)
+  local healthy = not ready or ready()
   if not healthy then
-    if not paused then veh:queueLuaCommand('ai.setMode("stop")') end
+    if not paused then holdAutodrive(veh) end
     paused, stillSince = true, nil
+    progRemaining, progAt, stuckTries = nil, nil, 0 -- waiting for the world is not failed driving
     return
   elseif paused then
     paused, routedTo = false, nil         -- back: the path given again
@@ -1124,13 +1184,64 @@ local function autoKeep(nodes, now)
   end
   local v = veh.getVelocity and veh:getVelocity()
   local speed = v and math.sqrt(v.x * v.x + v.y * v.y) or 0
-  if speed < 1 then stillSince = stillSince or now else stillSince = nil end
+  if speed >= 1 then surfaceGap, signalWaitSince = false, nil end
+  if signalWaitAt and now-signalWaitAt<2 and not (signalWaitSince and now-signalWaitSince>M.SIGNAL_WAIT_MAX_S) then
+    -- A signal stop is progress through traffic controls, not a stall. Require
+    -- a fresh vehicle heartbeat so unloading/cancelling a helper cannot mask a failure.
+    stillSince,progRemaining,progAt,stuckTries=nil,nil,nil,0
+  elseif speed < 1 then stillSince = stillSince or now else stillSince = nil end
   if pathWait and M.vehicleHasGraph(veh) then routedTo = nil end     -- the path that waited: given now
   if (autoPath and autoSerial ~= graphSerial()) or (stillSince and now - stillSince > M.AUTO_STALL_S) then
     routedTo = nil
   end
   if autoBlocked then routedTo = nil end
   if stillSince and now - stillSince > M.AUTO_STALL_S then autoForce = true end
+end
+
+M.RECOVER_RAY_UP_M = 3.5    -- m over the chosen edge's graph height the recovery's ground ray starts (under a bridge's
+                            -- clearance; the graph's height is within ~1.5 m of the drawn road, decks included)
+
+-- Pure: the edge a recovery puts the car on near (x, y), the route's point ahead (heading hx2, hy2), the car's route
+-- position (rx, ry, heading hx, hy) at height pz, ahead m along the route: of the edges within ON_GRAPH_M drivable that
+-- way, one the graph joins to the car's road (its route position's edge in 3D) within ahead + 2 ON_GRAPH_M, the
+-- nearest in 3D; none joined: the nearest in 3D. Returns nearestEdge3's.
+function M.recoverPick(segs, rx, ry, hx, hy, x, y, hx2, hy2, pz, ahead)
+  local within = function(_, dsq) return dsq <= M.ON_GRAPH_M ^ 2 end
+  local _, _, here = M.nearestEdge3(segs, rx, ry, pz, hx, hy, within)
+  if here and math.abs(here.z - pz) <= 4 then
+    local links = M.routeLinks(segs)
+    local limit = (ahead or M.AUTO_RECOVER_M) + 2 * M.ON_GRAPH_M
+    local d, z, bp = M.nearestEdge3(segs, x, y, pz, hx2, hy2, function(point, dsq)
+      return dsq <= M.ON_GRAPH_M ^ 2 and M.routeConnected(links, here, point, limit)
+    end)
+    if bp then return d, z, bp end
+  end
+  return M.nearestEdge3(segs, x, y, pz, hx2, hy2, within)
+end
+
+-- Pure: centre the body in a legal lane, rather than the road's centre line.
+-- Narrow lanes may share the centre line, but the whole body must still fit on the road.
+function M.recoveryOffset(nodes, point, halfWidth, rightHandDrive)
+  local s = point.segment
+  local a, b = nodes[s.a], nodes[s.b]
+  local edge = M.edge(nodes, s.a, s.b)
+  local ra, rb = edge.inRadius, edge.outRadius
+  if edge.inNode == s.b then ra, rb = rb, ra end
+  local radius = (ra or a.radius or 0) * (1-point.t) + (rb or b.radius or 0) * point.t
+  if radius < halfWidth then return nil end
+  local from = (b.pos.x-a.pos.x)*point.dx + (b.pos.y-a.pos.y)*point.dy >= 0 and s.a or s.b
+  local lanes = edge.lanes
+  if lanes and edge.inNode and edge.inNode ~= from then
+    lanes = lanes:reverse():gsub('[+-]', function(c) return c == '+' and '-' or '+' end)
+  end
+  lanes = lanes or (edge.oneWay and '+' or (rightHandDrive and '+-' or '-+'))
+  local best
+  for i = 1, #lanes do if lanes:sub(i,i) == '+' then
+    local offset = -radius + (i-.5)*2*radius/#lanes
+    if not best or math.abs(offset) < math.abs(best) then best = offset end
+  end end
+  local room = radius-halfWidth
+  return best and math.max(-room, math.min(room, best))
 end
 
 -- The car put back on the road AUTO_RECOVER_M ahead along route e (from segment i, fraction t): on the graph edge nearest
@@ -1145,16 +1256,29 @@ recoverAhead = function(e, nodes, i, t)
   local seg = e.cum[k + 1] - e.cum[k]
   local f = seg > 0 and (s - e.cum[k]) / seg or 0
   local x, y = e.x[k] + f * (e.x[k + 1] - e.x[k]), e.y[k] + f * (e.y[k + 1] - e.y[k])
-  local d, z, bp = M.nearestEdge(M.edgeSegments(nodes), x, y, e.x[k + 1] - e.x[k], e.y[k + 1] - e.y[k])
+  -- Height-aware (nearestEdge3, from the car's height): in 2D the nearest edge to the route's point can be a road
+  -- under a viaduct or over a cutting. Edges the graph joins to the car's own road within the recovery's reach first
+  -- (the carriageway it is stuck on, M.recoverPick), the nearest in 3D only when none is.
+  local p = veh:getPosition()
+  local hx, hy = e.x[i + 1] - e.x[i], e.y[i + 1] - e.y[i]
+  local rx, ry = e.x[i] + t * hx, e.y[i] + t * hy
+  local d, z, bp = M.recoverPick(M.edgeSegments(nodes), rx, ry, hx, hy, x, y, e.x[k + 1] - e.x[k], e.y[k + 1] - e.y[k],
+    p.z, s - (e.cum[i] + t * (e.cum[i + 1] - e.cum[i])))
   if not bp or d > M.ON_GRAPH_M then return false end
   local hl = math.sqrt(bp.dx * bp.dx + bp.dy * bp.dy)
   if hl < 1e-6 then return false end
-  local pos = vec3(bp.x, bp.y, z + 2)
+  local half = veh:getSpawnWorldOOBB():getHalfExtents()
+  local rules = require('beamngEarth/navgraph').rules or {}
+  local offset = M.recoveryOffset(nodes, bp, math.abs(half.x), rules.rightHandDrive)
+  if not offset then return false end
+  -- in a legal lane (PR #1282), on the ground under it looked for from just over the chosen edge's height (#1395: from
+  -- 40 m up the ray found a bridge over that road first and the car was set down on the bridge instead)
+  local pos = vec3(bp.x + bp.dy / hl * offset, bp.y - bp.dx / hl * offset, z + 2)
   local ray = rawget(_G, 'castRayStatic')
-  local hit = ray and ray(pos + vec3(0, 0, 40), vec3(0, 0, -1), 100)
-  if hit and hit < 100 then pos.z = pos.z + 40 - hit + 0.5 end
+  local hit = ray and ray(vec3(pos.x, pos.y, z + M.RECOVER_RAY_UP_M), vec3(0, 0, -1), M.RECOVER_RAY_UP_M + 8)
+  if hit and hit < M.RECOVER_RAY_UP_M + 8 then pos.z = z + M.RECOVER_RAY_UP_M - hit + math.abs(half.z) + 0.3 end
   local ok = pcall(spawn.safeTeleport, veh, pos, quatFromDir(vec3(bp.dx / hl, bp.dy / hl, 0), vec3(0, 0, 1)), nil, nil,
-    false, nil, true)
+    false, true, true)
   if ok then log('I', 'beamngEarth', string.format('autodrive: no progress, the car put on the route ahead at (%.0f, %.0f)',
     pos.x, pos.y)) end
   return ok
@@ -1197,6 +1321,11 @@ function M.update(anchor, player)
     stillSince, progRemaining, progAt, stuckTries = nil, nil, nil, 0
   end
   -- the planned route: asked once (and on re-routes), taken when it arrives
+  if pendingId and avoidHighways() ~= routedAvoid then       -- (the setting changed: that answer is the old one's)
+    local c = core()
+    if c and c.takeRoute then c.takeRoute(pendingId) end
+    pendingId = nil
+  end
   if pendingId then
     local c = core()
     local r = c and c.takeRoute and c.takeRoute(pendingId)
@@ -1205,7 +1334,7 @@ function M.update(anchor, player)
       if r.points and #r.points >= 2 and (tonumber(r.dist) or 0) >= 1 then
         routeVersion = routeVersion + 1
         route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion, elev = r.elev, legs = r.legs,
-          steps = r.steps }
+        avoided = r.avoided, steps = r.steps }
         routeError, enu, routedTo, leastRemaining, routeFails = nil, nil, nil, nil, 0
         autoForce = true
       else
@@ -1216,7 +1345,7 @@ function M.update(anchor, player)
     elseif now - lastRequest > 30 then
       pendingId = nil                      -- no answer: try again below
     end
-  elseif M.retryRoute(route, now - lastRequest, routeFails) then
+  elseif avoidHighways() ~= routedAvoid or M.retryRoute(route, now - lastRequest, routeFails) then
     requestRoute(player)
   end
 
@@ -1294,7 +1423,7 @@ function M.update(anchor, player)
         if progRemaining then stuckTries = 0 end
         progRemaining, progAt = info.remaining, now
       -- A completed path waits for streaming, but an unreachable loaded continuation still needs recovery.
-      elseif (not autoFinished or not tg) and now - progAt > M.AUTO_NOPROGRESS_S then
+      elseif (surfaceGap or not autoFinished or not tg) and now - progAt > M.AUTO_NOPROGRESS_S then
         stuckTries = stuckTries + 1
         if stuckTries >= 2 then         -- the path given again did not help: onto the route ahead
           stuckTries = 0
@@ -1337,6 +1466,8 @@ end
 
 -- The level ended: the arrows went with it (the destination and its route stay for the next level start).
 function M.reset()
+  signalWaitAt, signalWaitSince = nil, nil
+  surfaceGap=false
   routedTo, info, lastCheck, enu, progress, progressS = nil, nil, -math.huge, nil, 1, nil
   lineKey = nil
   autoPath, autoRoadPath, autoSerial, pathWait, vehGraph = nil, nil, nil, nil, {}

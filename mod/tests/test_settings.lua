@@ -599,6 +599,40 @@ do
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
+-- mapControls(false) and onExtensionUnloaded release BigMap and beamngEarthMapBlocked even when mapCtl is nil
+do
+  local popArgs, filterArgs = {}, {}
+  local origEnter, origToggle = function() end, function() end
+  local bm = { enterBigMap = origEnter, toggleBigMap = origToggle }
+  local saved = {
+    core_input_actionFilter = rawget(_G, 'core_input_actionFilter'),
+    freeroam_bigMapMode = rawget(_G, 'freeroam_bigMapMode'),
+    popActionMap = rawget(_G, 'popActionMap'),
+  }
+  core_input_actionFilter = {
+    addAction = function(dev, name, on) filterArgs[#filterArgs + 1] = { dev, name, on } end,
+  }
+  freeroam_bigMapMode = bm
+  popActionMap = function(name) popArgs[#popArgs + 1] = name end
+
+  settings.mapControls(false)
+  T.check(#popArgs == 1 and popArgs[1] == 'BigMap', 'mapControls(false) with nil mapCtl pops BigMap')
+  T.check(#filterArgs == 1 and filterArgs[1][1] == 0 and filterArgs[1][2] == 'beamngEarthMapBlocked' and filterArgs[1][3] == false,
+    'mapControls(false) with nil mapCtl clears beamngEarthMapBlocked filter')
+
+  settings.redirectBigMap(true)
+  T.check(bm.enterBigMap ~= origEnter and bm.toggleBigMap ~= origToggle, 'redirectBigMap(true) wraps BigMap handlers')
+  settings.onExtensionUnloaded()
+  T.check(#popArgs == 2 and popArgs[2] == 'BigMap', 'onExtensionUnloaded pops BigMap')
+  T.check(#filterArgs == 2 and filterArgs[2][2] == 'beamngEarthMapBlocked' and filterArgs[2][3] == false,
+    'onExtensionUnloaded clears beamngEarthMapBlocked filter')
+  T.check(not settings.isMapOpen(), 'onExtensionUnloaded clears mapOpen')
+  T.check(bm.enterBigMap == origEnter and bm.toggleBigMap == origToggle,
+    'onExtensionUnloaded restores BigMap handlers')
+
+  for k, v in pairs(saved) do rawset(_G, k, v) end
+end
+
 -- The map's other players in a BeamMP session: none is nil, not an empty table (it reaches EarthMap.vue as {}, not
 -- [], and the map's .map() threw every second: the map stopped drawing in multiplayer; PR #509 by Astel123457).
 do
@@ -692,6 +726,34 @@ T.check(settings.load().townSigns == true, 'a version-1 file: on (false was the 
 files[settings.FILE] = { version = 2, townSigns = false }
 T.check(settings.load().townSigns == false, 'a version-2 file: the player turned them off')
 files[settings.FILE] = nil
+
+-- the Experimental page (2026-11-15: the server's BNE_* build switches, server/experimental.py FEATURES): every switch
+-- a bool, off by default, on the settings page; road signs off by default since version 3 (a version-2 file's true was
+-- the hidden switch's default), a version-3 file's choice kept
+do
+  local exp = { 'roadSigns', 'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops',
+    'expRoadBumps', 'expRoughDirt', 'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls',
+    'expTunnelLids', 'expSubseaTunnels', 'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels',
+    'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
+  local inOrder = {}
+  for _, k in ipairs(settings.ORDER) do inOrder[k] = true end
+  for _, k in ipairs(exp) do
+    local s = settings.SCHEMA[k]
+    T.check(s and s.kind == 'bool' and s.default == false, 'experimental ' .. k .. ': a bool, off by default')
+    T.check(inOrder[k] and not settings.HIDDEN[k], 'experimental ' .. k .. ': on the settings page')
+  end
+  T.check(settings.VERSION >= 3, 'settings version 3: road signs a real switch')
+  files[settings.FILE] = nil
+  T.check(settings.load().roadSigns == false and settings.load().expRoadBumps == false, 'no file: all off')
+  files[settings.FILE] = { version = 2, roadSigns = true, expRoadBumps = true }
+  local v = settings.load()
+  T.check(v.roadSigns == false, 'a version-2 file: road signs off (true was the hidden default)')
+  T.check(v.expRoadBumps == true, 'a version-2 file: another experimental switch is the player\'s')
+  files[settings.FILE] = { version = 3, roadSigns = true }
+  T.check(settings.load().roadSigns == true, 'a version-3 file: the player turned road signs on')
+  files[settings.FILE] = nil
+  settings.load()
+end
 
 -- the map's preload of a place: picked (the box) or pointed at (hover: the light part), to core.preloadPlace
 do

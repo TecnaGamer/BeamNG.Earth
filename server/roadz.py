@@ -76,8 +76,10 @@ LIDAR_ON = os.environ.get("BNE_LIDAR_DECKS", "on") != "off"
 HK_ON = os.environ.get("BNE_ROADZ_HK", "on") != "off"
 # the "hk" source's cell folder (<source> above) and the tag of the plans made with it (hk_tags): changed with its
 # heights, so that cells and plans kept under the old one are not read (hk / hk1: a deck the median of 15 DSM reads
-# across it; hk2: the one surface deck_lidar finds in the DSM pixels round its line). Not VERSION: every source's cells
-HK_CELLS = "hk2"
+# across it; hk2: the one surface deck_lidar finds in the DSM pixels round its line; hk3: the lines asked for to
+# HK_LINE_TOL_DEG and their vertices roadzhk.VERTEX_MIN_M apart or more, a cell before held up to a million). Not
+# VERSION: every source's cells
+HK_CELLS = "hk3"
 LIDAR_INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usgs3dep_index.json.gz")
 PROVIDER = None             # the server's RoadZ (MapData makes it): BridgeProfiles / Grader ask it
 
@@ -95,7 +97,9 @@ NVDB_PAGE = 1000
 NVDB_PAGES = 40
 HK_TD_URL = ("https://portal.csdi.gov.hk/server/rest/services/common/td_rcd_1638949160594_2844/FeatureServer/10/"
              "query")
-HK_IDS = 200                # OBJECTIDs a request (its URL under the service's limit: 2.4 kB answered 404, 1.8 kB not)
+HK_LINE_TOL_DEG = 1e-7      # degrees (~1 cm): how far from its line a vertex may lie that the service leaves out
+                            # (maxAllowableOffset). Asked for whole, some curves come in vertices 0.03 mm apart: 3.3 MB
+                            # for one 57 m line, 139 MB for the cell at Hong Kong (22.28 N 114.16 E), 2026-11-15
 EPT_BASE = "https://s3-us-west-2.amazonaws.com/usgs-lidar-public/"
 EPT_R = 6378137.0           # EPSG:3857's sphere
 
@@ -620,7 +624,7 @@ def resample_line(xy, step):
         return xy[:1], np.zeros(min(1, len(xy)))
     m = max(1, int(math.ceil(s[-1] / step - 1e-9))) + 1
     t = np.linspace(0.0, s[-1], m)
-    return np.stack([np.interp(t, s, xy[:, 0]), np.interp(t, s, xy[:, 1])], 1), t
+    return np.stack([dnp.interp(t, s, xy[:, 0]), dnp.interp(t, s, xy[:, 1])], 1), t
 
 
 def datum_fit(z_src, z_dem):
@@ -1156,18 +1160,10 @@ class RoadZ:
         qlat = (CLIP_PAD_M + roadzhk.OCCLUDE_M) / 111320.0
         env = f"{lon0 - qlat * k:.6f},{lat0 - qlat:.6f},{lon1 + qlat * k:.6f},{lat1 + qlat:.6f}"
         fields = "OBJECTID,ELEVATION,ROUTE_NUM,STREET_ENAME"
-        feats = hklidar.arcgis(self._get_json, HK_TD_URL, {
+        lines = roadzhk.parse_td(hklidar.arcgis(self._get_json, HK_TD_URL, {
             "where": "1=1", "geometry": env, "geometryType": "esriGeometryEnvelope", "inSR": 4326,
-            "spatialRel": "esriSpatialRelIntersects", "outSR": 4326, "outFields": fields, "orderByFields": "OBJECTID"})
-        # the same features in HK1980 Grid by their ids: the envelope query with outSR 2326 answers another set of
-        # lines (2026-11-10: 89 for 84 at Shek Mun, some 50 m outside the box), the vertices themselves agree to 0.4 mm
-        ids = sorted({(f.get("attributes") or {}).get("OBJECTID") for f in feats} - {None})
-        grid = []
-        for i in range(0, len(ids), HK_IDS):
-            grid += hklidar.arcgis(self._get_json, HK_TD_URL, {
-                "objectIds": ",".join(str(int(v)) for v in ids[i:i + HK_IDS]), "outSR": 2326, "outFields": "OBJECTID",
-                "orderByFields": "OBJECTID"})
-        lines = roadzhk.parse_td(feats, grid)
+            "spatialRel": "esriSpatialRelIntersects", "outSR": 4326, "outFields": fields, "orderByFields": "OBJECTID",
+            "maxAllowableOffset": f"{HK_LINE_TOL_DEG:.9f}"}))
 
         def inside(ll):
             return ((ll[:, 0] >= lon0 - plon) & (ll[:, 0] <= lon1 + plon)
@@ -1517,7 +1513,7 @@ class RoadZ:
         if len(s) < 2 or not np.isfinite(z).any():
             return None
         arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
-        sx, sy = np.interp(s, arc, xy[:, 0]), np.interp(s, arc, xy[:, 1])
+        sx, sy = dnp.interp(s, arc, xy[:, 0]), dnp.interp(s, arc, xy[:, 1])
         sla, slo, _ = frame.enu_to_geodetic(sx, sy, 0.0)
         return s, z, sx, sy, np.asarray(sla, np.float64), np.asarray(slo, np.float64), arc
 
@@ -1571,7 +1567,7 @@ class RoadZ:
                 continue
             keep = s <= m + 1e-6
             rows.append((np.stack([slo, sla], 1)[keep], z[keep], 1, "", ""))
-            ex, ey = np.interp(m, arc, xy[:, 0]), np.interp(m, arc, xy[:, 1])
+            ex, ey = dnp.interp(m, arc, xy[:, 0]), dnp.interp(m, arc, xy[:, 1])
             ela, elo, _ = frame.enu_to_geodetic(np.array([ex]), np.array([ey]), 0.0)
             gaps.append((str(fid), (float(ring[0, 0]), float(ring[0, 1])), (float(elo[0]), float(ela[0]))))
         return rows, gaps

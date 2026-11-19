@@ -80,7 +80,7 @@ def candidates(ways):
         length = float(arc[-1])
         if length < 10.:
             continue
-        at = lambda s: np.array([np.interp(s, arc, path[:, j]) for j in (0, 1)])
+        at = lambda s: np.array([dnp.interp(s, arc, path[:, j]) for j in (0, 1)])
         one = routeindex.exitsigns._direction(tags)
         if not one and tags.get('highway') == 'motorway' and tags.get('oneway') not in ('no', 'false', '0'):
             one = 1

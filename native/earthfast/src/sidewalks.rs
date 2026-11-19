@@ -3,6 +3,7 @@
 //! numpy operations one by one), so a tile's shapes stay as they were; the Python Builder gathers the pieces and
 //! calls this once (it was the larger half of a road geotile's skin: ~70 ms of ~165 in Fells Point, 2026-10-29).
 use crate::dm::Dm;
+use crate::dmmatmul::{ad, mu};
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
@@ -494,9 +495,94 @@ pub fn sidewalk_mesh<'py>(py: Python<'py>, kind: PyReadonlyArray1<'py, i64>, pts
     Ok((mesh_out(py, full), mesh_out(py, lean)))
 }
 
+/// sidewalks._normals_2d: the unit left normals at each point of a polyline (n >= 2 points): each segment's
+/// (-ty, tx) of its direction over its length (a zero length 1), the ends the end segments', a joint's the two
+/// segments' mean direction over the cosine to the next segment's, the cosine clamped to [0.5, 1] (a mitre at most
+/// 2x); a closed loop (n > 3, its ends under 1e-6 m apart) mitred across its seam (the cosine to the first segment's,
+/// at least 0.5). The Python's numpy operations one by one (earthfast 508): no fused products, the sums left to
+/// right, hypot the libm crate's (dnp.hypot's), and numpy's x86 NaN rule (dmmatmul's ad / mu: a sum's or product's
+/// NaN is its first operand's where both are, which the compiler could otherwise swap), so a NaN's sign and payload
+/// are the Python's too. One documented difference (as dmmatmul's): two different NaNs meeting in a sum or product
+/// where numpy ran its SIMD tail kept the other operand's NaN there, which depended on the CPU's vector width, so the
+/// Python's own bits were the machine's; the kernel keeps its one rule. The server's calls make no NaN at all (the
+/// r2a18 call check: every call of three cold visits); one NaN, inf and -0.0 agree bit for bit (parity, 47k lines).
+pub fn normals_2d(xy: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    let n = xy.len();
+    let mut out = vec![[0.0f64; 2]; n];
+    if n < 2 {
+        return out;
+    }
+    let mut ns = Vec::with_capacity(n - 1);
+    for k in 0..n - 1 {
+        let (dx, dy) = (xy[k + 1][0] - xy[k][0], xy[k + 1][1] - xy[k][1]);
+        let mut l = dx.dhypot(dy);
+        if l == 0.0 {
+            l = 1.0;
+        }
+        // (black_box: the negation stays after the division, as numpy's -t[:, 1] did; LLVM may otherwise negate dy
+        // first, which leaves a NaN's sign bit as it was where the Python's flipped it)
+        let (tx, ty) = (dx / l, std::hint::black_box(dy / l));
+        ns.push([-ty, tx]);
+    }
+    out[0] = ns[0];
+    out[n - 1] = ns[n - 2];
+    for k in 1..n - 1 {
+        let m = [ad(ns[k - 1][0], ns[k][0]), ad(ns[k - 1][1], ns[k][1])];
+        let mut ml = m[0].dhypot(m[1]);
+        if ml < 1e-9 {
+            ml = 1.0;
+        }
+        let m = [m[0] / ml, m[1] / ml];
+        let c = ad(mu(m[0], ns[k][0]), mu(m[1], ns[k][1])).clamp(0.5, 1.0); // (np.clip: a NaN stays as it is)
+        out[k] = [m[0] / c, m[1] / c];
+    }
+    if n > 3 && (xy[0][0] - xy[n - 1][0]).dhypot(xy[0][1] - xy[n - 1][1]) < 1e-6 {
+        let m = [ad(ns[n - 2][0], ns[0][0]), ad(ns[n - 2][1], ns[0][1])];
+        let ml = m[0].dhypot(m[1]);
+        if ml > 1e-9 {
+            let m = [m[0] / ml, m[1] / ml];
+            let d = ad(mu(m[0], ns[0][0]), mu(m[1], ns[0][1])); // (dnp.dot: dm_matmul's k = 2 sum)
+            let den = if 0.5 > d { 0.5 } else { d }; // (Python's max(d, 0.5): a NaN d kept)
+            out[0] = [m[0] / den, m[1] / den];
+            out[n - 1] = out[0];
+        }
+    }
+    out
+}
+
+/// sidewalks._normals_2d of xy (n, 2), n >= 2 (the glue raises the Python's IndexError below): (n, 2) normals.
+#[pyfunction]
+pub fn sidewalk_normals<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let a = xy.as_array();
+    if a.ncols() != 2 || a.nrows() < 2 {
+        return Err(PyValueError::new_err("sidewalk_normals: xy must be (n >= 2, 2)"));
+    }
+    let p: Vec<[f64; 2]> = (0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]]]).collect();
+    let out = normals_2d(&p);
+    let flat: Vec<f64> = out.iter().flat_map(|v| [v[0], v[1]]).collect();
+    Ok(numpy::ndarray::Array2::from_shape_vec((out.len(), 2), flat).expect("n x 2").into_pyarray(py))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normals_2d_mitres_and_loops() {
+        // a right-angle bend: the joint's normal is the diagonal over cos 45 (length sqrt 2), the ends the segments'
+        let n = normals_2d(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]);
+        assert_eq!(n[0], [-0.0, 1.0]);
+        assert_eq!(n[2], [-1.0, 0.0]);
+        assert!((n[1][0] + 1.0).abs() < 1e-12 && (n[1][1] - 1.0).abs() < 1e-12);
+        // a closed square: its seam mitred like the other corners
+        let sq = normals_2d(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]]);
+        assert_eq!(sq[0], sq[4]);
+        assert!((sq[0][0] - 1.0).abs() < 1e-12 && (sq[0][1] - 1.0).abs() < 1e-12);
+        // a repeated point: its zero-length segment's normal is (0, 0) and the joint's mean the other's
+        let z = normals_2d(&[[0.0, 0.0], [0.0, 0.0], [2.0, 0.0]]);
+        assert_eq!(z[0], [-0.0, 0.0]);
+        assert_eq!(z[1], [-0.0, 1.0]);
+    }
 
     #[test]
     fn interp_like_numpy() {
@@ -517,4 +603,25 @@ mod tests {
         assert_eq!(m.p.len(), 7 * 2 * 5 + 2 * 8);
         assert_eq!(m.t.len(), 7 * 2 * 4 + 2 * 6);
     }
+
+    #[test]
+    fn v2_with_v1_inputs_is_v1() {
+        // uniform reveal, no drop, vertical, crossing ramps only: v2's run is v1's, bit for bit
+        let curb: Vec<[f64; 3]> = (0..6).map(|i| [i as f64 * 2.3, 0.1 * i as f64, 1.0 + 0.03 * (i * i) as f64]).collect();
+        let out = vec![[0.0, 1.0]; 6];
+        for lean in [false, true] {
+            let mut a = Mesh::default();
+            a.run(&curb, &out, 2.5, CURB_H, (true, false), &[(2.0, 4.5)], 1, lean, [1.0, 2.0, 0.5]);
+            let mut b = Mesh::default();
+            b.run_v2(&curb, &out, 2.5, &[CURB_H; 6], &[f64::NAN; 6], &[0.0; 6], (true, false), &[(2.0, 4.5, 0)], 1,
+                     lean, [1.0, 2.0, 0.5]);
+            assert_eq!(a.p, b.p);
+            assert_eq!(a.t, b.t);
+            assert_eq!(a.uv, b.uv);
+            assert_eq!(a.m, b.m);
+        }
+    }
 }
+
+#[path = "sidewalks_v2.rs"]
+pub(crate) mod v2;

@@ -176,7 +176,7 @@ TACTILE = ("line_white", 1.0)    # the strip for the blind along a platform's ke
 TACTILE_IN_M, TACTILE_W_M = 0.25, 0.40
 TACTILE_UP_M = 0.006            # over the slab's top (no z-fighting)
 CELL_M = 1.0                # the walkable field's lattice (a block of 2 x 2 full cells is one quad)
-MAX_VERTS = 600000
+MAX_VERTS = 600000          # (earthfast.station_zone's MAX_POINTS too)
 SDF_CHUNK = 20000
 
 
@@ -248,45 +248,6 @@ def walkable(st):
     return x0, y0, (F[:-1, :-1] + F[:-1, 1:] + F[1:, :-1] + F[1:, 1:]) >= 0.0
 
 
-def _clip_cell(pts, f):
-    """The part of a quad (corners pts (4, 2), values f (4,), counter-clockwise) where f >= 0, as a list of
-    (polygon [(x, y, source)], ...) and its cut edges [((x, y), (x, y))] in travel order. source: ("c", k) a corner,
-    ("e", k) a point on the edge k -> k + 1 (interpolated: the heights are blended the same way)."""
-    inside = [v >= 0.0 for v in f]
-    n_in = sum(inside)
-    if n_in == 0:
-        return [], []
-    if n_in == 4:
-        return [[(pts[k][0], pts[k][1], ("c", k)) for k in range(4)]], []
-
-    def cross(k):
-        a, b = f[k], f[(k + 1) % 4]
-        t = a / (a - b)
-        return (pts[k][0] + (pts[(k + 1) % 4][0] - pts[k][0]) * t, pts[k][1] + (pts[(k + 1) % 4][1] - pts[k][1]) * t,
-                ("e", k, t))
-    if n_in == 2 and inside[0] == inside[2]:                     # two opposite corners: two triangles
-        polys, cuts = [], []
-        for k in range(4):
-            if inside[k]:
-                e_in, e_out = cross((k - 1) % 4), cross(k)
-                polys.append([e_in, (pts[k][0], pts[k][1], ("c", k)), e_out])
-                cuts.append(((e_out[0], e_out[1]), (e_in[0], e_in[1])))
-        return polys, cuts
-    poly, cuts = [], []
-    ring = []
-    for k in range(4):
-        if inside[k]:
-            ring.append((pts[k][0], pts[k][1], ("c", k)))
-        if inside[k] != inside[(k + 1) % 4]:
-            ring.append(cross(k))
-    n = len(ring)
-    for i in range(n):
-        a, b = ring[i], ring[(i + 1) % n]
-        if a[2][0] == "e" and b[2][0] == "e":
-            cuts.append(((a[0], a[1]), (b[0], b[1])))
-    return [ring], cuts
-
-
 KERB_DROP_IN_M = 0.8        # a crossing's dropped kerb: the slab at the road's level this far in from the kerb ...
 KERB_DROP_RAMP_M = 1.5      # ... then rising to its height over this
 KERB_DROP_SIDE_M = 0.3      # the dropped part is the crossing's width and this much on each side
@@ -313,7 +274,9 @@ def _kerb_heights(st, pts):
 def zone(frame, elev, st, mesh, tactile=True):
     """The raised walkable ground (platforms, and the walking zone under the roofs with the drive lanes left free): marching
     squares over walk_field's distance, so the edge follows the real outline; 2 m quads inside, partial cells clipped at
-    the edge, a kerb wall along every cut edge; heights from the ground at the lattice points."""
+    the edge, a kerb wall along every cut edge; heights from the ground at the lattice points. The cells in Rust
+    (earthfast.station_zone, 494)."""
+    import fast
     x0, y0, F = walk_field(st)
     if not F.size or not (F >= 0).any():
         return
@@ -322,95 +285,15 @@ def zone(frame, elev, st, mesh, tactile=True):
     L = np.column_stack((lx.ravel(), ly.ravel()))
     zg = ground(frame, elev, L).reshape(ny + 1, nx + 1)
     H = _kerb_heights(st, L).reshape(ny + 1, nx + 1)        # (the slab's height: lowered at the crossings)
-    ins = F >= 0.0
-    full = ins[:-1, :-1] & ins[:-1, 1:] & ins[1:, 1:] & ins[1:, :-1]
-    part = (ins[:-1, :-1] | ins[:-1, 1:] | ins[1:, 1:] | ins[1:, :-1]) & ~full
-    P, UV, T = [], [], []
-    k0 = 0
-    done = np.zeros_like(full)
-    for j in range(0, ny - 1, 2):
-        for i in range(0, nx - 1, 2):
-            if full[j:j + 2, i:i + 2].all():
-                done[j:j + 2, i:i + 2] = True
-                for (jj, ii) in ((j, i), (j, i + 2), (j + 2, i + 2), (j + 2, i)):
-                    P.append((lx[jj, ii], ly[jj, ii], zg[jj, ii] + H[jj, ii]))
-                T += [[k0, k0 + 1, k0 + 2], [k0, k0 + 2, k0 + 3]]
-                k0 += 4
-    for j, i in zip(*np.nonzero(full & ~done)):
-        for (jj, ii) in ((j, i), (j, i + 1), (j + 1, i + 1), (j + 1, i)):
-            P.append((lx[jj, ii], ly[jj, ii], zg[jj, ii] + H[jj, ii]))
-        T += [[k0, k0 + 1, k0 + 2], [k0, k0 + 2, k0 + 3]]
-        k0 += 4
-    wall_P, wall_UV, wall_T = [], [], []
-    k1 = 0
-    tac_P, tac_UV, tac_T = [], [], []
-    k2 = 0
-    for j, i in zip(*np.nonzero(part)):
-        corners = ((j, i), (j, i + 1), (j + 1, i + 1), (j + 1, i))
-        pts = [(lx[a, b], ly[a, b]) for a, b in corners]
-        fv = [F[a, b] for a, b in corners]
-        zv = [zg[a, b] for a, b in corners]
-        hv = [H[a, b] for a, b in corners]
-
-        def height(src):
-            if src[0] == "c":
-                return zv[src[1]]
-            k, t = src[1], src[2]
-            return zv[k] + (zv[(k + 1) % 4] - zv[k]) * t
-
-        def lift(src):
-            if src[0] == "c":
-                return hv[src[1]]
-            k, t = src[1], src[2]
-            return hv[k] + (hv[(k + 1) % 4] - hv[k]) * t
-        polys, cuts = _clip_cell(pts, fv)
-        for poly in polys:
-            if len(poly) < 3:
-                continue
-            base = k0
-            for x, y, src in poly:
-                P.append((x, y, height(src) + lift(src)))
-                k0 += 1
-            for q in range(1, len(poly) - 1):
-                T.append([base, base + q, base + q + 1])
-        for poly in polys:
-            for q in range(len(poly)):
-                a, b = poly[q], poly[(q + 1) % len(poly)]
-                if a[2][0] == "e" and b[2][0] == "e" and (
-                        ((a[0], a[1]), (b[0], b[1])) in cuts or ((b[0], b[1]), (a[0], a[1])) in cuts):
-                    za, zb = height(a[2]), height(b[2])
-                    ha, hb = lift(a[2]), lift(b[2])
-                    length = float(math.hypot(b[0] - a[0], b[1] - a[1]))
-                    if length < 1e-4:
-                        continue
-                    wall_P += [(a[0], a[1], za - SLAB_FOOT_M), (b[0], b[1], zb - SLAB_FOOT_M),
-                               (b[0], b[1], zb + hb), (a[0], a[1], za + ha)]
-                    wall_UV += [(0, (za - SLAB_FOOT_M) / KERB[1]), (length / KERB[1], (zb - SLAB_FOOT_M) / KERB[1]),
-                                (length / KERB[1], (zb + hb) / KERB[1]), (0, (za + ha) / KERB[1])]
-                    wall_T += [[k1, k1 + 1, k1 + 2], [k1, k1 + 2, k1 + 3]]
-                    k1 += 4
-                    # the tactile strip for the blind along the kerb (TACTILE_IN_M in, TACTILE_W_M wide)
-                    cx = sum(v[0] for v in poly) / len(poly)
-                    cy = sum(v[1] for v in poly) / len(poly)
-                    ex, ey = (b[0] - a[0]) / length, (b[1] - a[1]) / length
-                    nx, ny = -ey, ex
-                    if (cx - (a[0] + b[0]) / 2) * nx + (cy - (a[1] + b[1]) / 2) * ny < 0:
-                        nx, ny = -nx, -ny
-                    z0, z1 = za + ha + TACTILE_UP_M, zb + hb + TACTILE_UP_M
-                    o0, o1 = TACTILE_IN_M, TACTILE_IN_M + TACTILE_W_M
-                    tac_P += [(a[0] + nx * o0, a[1] + ny * o0, z0), (b[0] + nx * o0, b[1] + ny * o0, z1),
-                              (b[0] + nx * o1, b[1] + ny * o1, z1), (a[0] + nx * o1, a[1] + ny * o1, z0)]
-                    ua, ub = (a[0] * ex + a[1] * ey) / TACTILE[1], (b[0] * ex + b[1] * ey) / TACTILE[1]
-                    tac_UV += [(ua, 0.0), (ub, 0.0), (ub, 1.0), (ua, 1.0)]
-                    tac_T += [[k2, k2 + 2, k2 + 1], [k2, k2 + 3, k2 + 2]] if nx * ey - ny * ex > 0 else \
-                        [[k2, k2 + 1, k2 + 2], [k2, k2 + 2, k2 + 3]]
-                    k2 += 4
-    if P:
-        Pn = np.asarray(P)
-        mesh.add(PLATFORM_TOP[0], Pn, Pn[:, :2] / PLATFORM_TOP[1], np.asarray(T))
-    if wall_P:
+    fast.require(494, "station_zone")
+    P, T, wall_P, wall_UV, wall_T, tac_P, tac_UV, tac_T = fast._ef.station_zone(
+        float(x0), float(y0), np.ascontiguousarray(F, np.float64), np.ascontiguousarray(zg, np.float64),
+        np.ascontiguousarray(H, np.float64), SLAB_FOOT_M, KERB[1], (TACTILE_UP_M, TACTILE_IN_M, TACTILE_W_M, TACTILE[1]))
+    if len(P):
+        mesh.add(PLATFORM_TOP[0], P, P[:, :2] / PLATFORM_TOP[1], T)
+    if len(wall_P):
         mesh.add(KERB[0], wall_P, wall_UV, wall_T)
-    if tac_P and tactile:
+    if len(tac_P) and tactile:
         mesh.add(TACTILE[0], tac_P, tac_UV, tac_T)
 
 

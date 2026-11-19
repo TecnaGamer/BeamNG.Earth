@@ -93,8 +93,15 @@ local tb = terrain.get()
 local asphalt = scenetree.findObject('bngEarthGroundAsphalt')
 T.check(asphalt.fields.baseColorBaseTex == '/temp/beamngEarth/s/hm_1_0_0_base.png' and asphalt.fields.baseColorBaseTexSize == '512',
   'base photo set on a surface layer, over the block size in samples (1024 m / 2 m)')
-T.check(asphalt.fields.baseColorDetailTex == '/assets/materials/terrain/asphalt/asphalt/t_asphalt_b.png',
-  'surface layer created with its own detail texture')
+T.check(asphalt.fields.baseColorDetailTex == '/temp/beamngEarth/terraintex/bne_rc_asphalt__asphalt__t_asphalt_b.png'
+  and asphalt.fields.normalDetailTex == '/assets/materials/terrain/asphalt/asphalt/t_asphalt_nm.png',
+  'surface layer created with its own detail texture (the colour as the server\'s zero-mean copy)')
+T.check(asphalt.fields.macroDistances == '0 0 100 200' and asphalt.fields.macroDistAtten == '0 1',
+  'the macro gone by 200 m (the block edge: the far tiles show the photo alone)')
+T.check(terrain.stockOf('/temp/beamngEarth/terraintex/bne_rc_soil__macro_clumply__t_macro_clumpy_b.png')
+  == '/assets/materials/terrain/soil/macro_clumply/t_macro_clumpy_b.png', 'stockOf: the copy\'s stock file')
+T.check(terrain.stockOf('/temp/beamngEarth/terraintex/bne_pavers_b.png') == nil
+  and terrain.stockOf('/assets/materials/terrain/soil/t_gravel/t_gravel_b.png') == nil, 'stockOf: other paths nil')
 T.check(asphalt.fields.baseColorDetailTexSize == '2' and asphalt.fields.baseColorMacroTexSize == '16',
   'repeat sizes in samples (4 m, 32 m on the 2 m block): they divide the 128 m block step')
 T.check(dirt.fields.baseColorBaseTex == '/temp/beamngEarth/s/hm_1_0_0_base.png' and dirt.fields.baseColorDetailTexSize == nil,

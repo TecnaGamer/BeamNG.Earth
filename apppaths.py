@@ -3,7 +3,8 @@ installed in a diffrent place or diffrent launcher let the player set the locati
 beamng, beammp, or the cache. Open the explorer for that operating system but have a text input for the path as
 fallback"): the game's folder, the download cache's folder (GitHub #254) and the BeamMP launcher (bmplaunch.remember).
 
-The launcher's remembered choices are app.json in data_dir() ({"cacheDir": ..., "gameDir": ...}); the launcher reads
+The launcher's remembered choices are app.json in data_dir() ({"cacheDir": ..., "gameDir": ..., "launchMode": ...}:
+launchMode is written by the launcher only, gameinstall.py); the launcher reads
 them at its start, the world server writes them from the settings page (they apply at the next start). pick() opens
 the system's own file or folder window: PowerShell's dialogs on Windows, kdialog or zenity on Linux; ("none", None) when
 there is none (Wine, Steam's Game Mode, no desktop), and the caller asks for the path as text (ask_path in a console,
@@ -164,6 +165,26 @@ def set_game_dir(path, dd=None):
     if d:
         save_app_settings(dd, gameDir=d)
     return d
+
+
+LAUNCH_MODES = ("steam", "direct")      # app.json launchMode (unset: "auto"; gameinstall.py)
+
+
+def saved_launch_mode(dd=None):
+    """How the game is started (gameinstall.resolve_mode): "steam", "direct", or "auto" (unset or not understood).
+    The launcher's own setting: only --launch and the launcher's questions write it (never the game's settings page:
+    PR #1309's page wrote its absent value back over the saved one)."""
+    v = app_settings(dd).get("launchMode")
+    return v if v in LAUNCH_MODES else "auto"
+
+
+def set_launch_mode(mode, dd=None):
+    """Keep the launch mode for the next starts ("auto" forgets it). ValueError for anything else."""
+    mode = (mode or "").strip().lower()
+    if mode not in ("auto",) + LAUNCH_MODES:
+        raise ValueError(f"launch mode must be auto, steam or direct, not {mode!r}")
+    save_app_settings(dd, launchMode=None if mode == "auto" else mode)
+    return mode
 
 
 def in_steam_library(path):

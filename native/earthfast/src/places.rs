@@ -671,8 +671,9 @@ fn corners_core(ring: &[P2], inset: f64, min_area: f64) -> Vec<P2> {
 
 /// Mapped street furniture beside the carriageways: each point (pts (n, 2)) moved straight off the nearest
 /// carriageway of seg (m, 5) [ax, ay, bx, by, half width] when it stands on it or within pad of its edge (a bench mapped
-/// on the road's line), and the direction toward that carriageway's line when its edge is within reach (NaN beyond).
-/// Returns (n, 4) [x, y, yaw degrees toward the road, m from the edge].
+/// on the road's line), to the nearest spot clear of every carriageway when that lands on another (STREET_SEARCH_M;
+/// none: x and y NaN, left out), and the direction toward the nearest carriageway's line when its edge is within reach
+/// (NaN beyond). Returns (n, 4) [x, y, yaw degrees toward the road, m from the edge].
 #[pyfunction]
 pub fn street_points<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, seg: PyReadonlyArray2<'py, f64>, pad: f64,
                           reach: f64) -> Bound<'py, PyArray2<f64>> {
@@ -683,36 +684,72 @@ pub fn street_points<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, seg:
     numpy::ndarray::Array2::from_shape_vec((n, 4), out).unwrap().into_pyarray(py)
 }
 
+/// The carriageway of segs nearest (x, y) by its edge within reach: (m from its edge, negative inside; the foot on its
+/// line; its half width), None when none is.
+fn street_nearest(segs: &Segs, x: f64, y: f64, reach: f64) -> Option<(f64, P2, f64)> {
+    let mut best: Option<(f64, P2, f64)> = None;      // (edge distance, foot, half width)
+    for k in segs.near([x - reach, y - reach, x + reach, y + reach]) {
+        let q = segs.s[k];
+        let (dx, dy) = (q[2] - q[0], q[3] - q[1]);
+        let l2 = dx * dx + dy * dy;
+        let t = if l2 > 1e-12 { (((x - q[0]) * dx + (y - q[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        let foot = (q[0] + t * dx, q[1] + t * dy);
+        let edge = (x - foot.0).dhypot(y - foot.1) - q[4];
+        if best.map_or(true, |b| edge < b.0) {
+            best = Some((edge, foot, q[4]));
+        }
+    }
+    best
+}
+
+/// m round a mapped item's point a spot clear of every carriageway is looked for (STREET_RING_M apart, STREET_DIRS
+/// spots a ring) when moving it straight off its nearest one puts it on another: at a junction's corner, within a
+/// few metres of four roads' lines (a hydrant mapped in the corner of Mayen's B 410 and K 88 at 50.2859,6.9245 was
+/// pushed off one road onto the next: the player's report 5T7V9FNQ, 2026-11-18). None found: left out (NaN).
+const STREET_SEARCH_M: f64 = 12.0;
+const STREET_RING_M: f64 = 0.5;
+const STREET_DIRS: usize = 24;
+
 fn street_core(p: &numpy::ndarray::ArrayView2<'_, f64>, segs: &Segs, pad: f64, reach: f64) -> Vec<f64> {
     let mut out = Vec::with_capacity(p.nrows() * 4);
+    let clear = |x: f64, y: f64| street_nearest(segs, x, y, reach).map_or(true, |b| b.0 >= pad - 1e-6);
     for i in 0..p.nrows() {
-        let (mut x, mut y) = (p[[i, 0]], p[[i, 1]]);
-        let mut best: Option<(f64, P2, f64)> = None;      // (edge distance, foot, half width)
-        for k in segs.near([x - reach, y - reach, x + reach, y + reach]) {
-            let q = segs.s[k];
-            let (dx, dy) = (q[2] - q[0], q[3] - q[1]);
-            let l2 = dx * dx + dy * dy;
-            let t = if l2 > 1e-12 { (((x - q[0]) * dx + (y - q[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-            let foot = (q[0] + t * dx, q[1] + t * dy);
-            let edge = (x - foot.0).dhypot(y - foot.1) - q[4];
-            if best.map_or(true, |b| edge < b.0) {
-                best = Some((edge, foot, q[4]));
-            }
-        }
-        let (mut yaw, mut edge) = (f64::NAN, f64::INFINITY);
-        if let Some((e, foot, hw)) = best {
-            edge = e;
+        let (x0, y0) = (p[[i, 0]], p[[i, 1]]);
+        let (mut x, mut y) = (x0, y0);
+        if let Some((e, foot, hw)) = street_nearest(segs, x, y, reach) {
             if e < pad {
                 let (ax, ay) = (x - foot.0, y - foot.1);
                 let l = ax.dhypot(ay);
                 if l > 1e-6 {
                     x = foot.0 + ax / l * (hw + pad);
                     y = foot.1 + ay / l * (hw + pad);
-                    edge = pad;
+                }
+                if l <= 1e-6 || !clear(x, y) {
+                    // (on another carriageway there, or on a line: the nearest spot clear of all of them)
+                    let mut found = None;
+                    let rings = (STREET_SEARCH_M / STREET_RING_M).round() as usize;
+                    'search: for r in 1..=rings {
+                        let rad = r as f64 * STREET_RING_M;
+                        for k in 0..STREET_DIRS {
+                            let a = std::f64::consts::TAU * k as f64 / STREET_DIRS as f64;
+                            let (cx, cy) = (x0 + rad * a.dcos(), y0 + rad * a.dsin());
+                            if clear(cx, cy) {
+                                found = Some((cx, cy));
+                                break 'search;
+                            }
+                        }
+                    }
+                    (x, y) = found.unwrap_or((f64::NAN, f64::NAN));
                 }
             }
-            if edge <= reach {
-                yaw = (foot.1 - y).datan2(foot.0 - x).to_degrees().rem_euclid(360.0);
+        }
+        let (mut yaw, mut edge) = (f64::NAN, f64::INFINITY);
+        if x.is_finite() {
+            if let Some((e, foot, _)) = street_nearest(segs, x, y, reach) {
+                edge = e.max(0.0);
+                if edge <= reach {
+                    yaw = (foot.1 - y).datan2(foot.0 - x).to_degrees().rem_euclid(360.0);
+                }
             }
         }
         out.extend_from_slice(&[x, y, yaw, edge]);
@@ -730,6 +767,28 @@ mod tests {
 
     fn empty_segs() -> Segs {
         Segs { s: vec![], cell: 32.0, index: HashMap::new() }
+    }
+
+    #[test]
+    fn street_point_at_a_junction_corner_lands_clear_of_every_carriageway() {
+        // report 5T7V9FNQ: a hydrant 2-3 m from the lines of roads meeting at a corner (here a + of 6 m wide roads and
+        // a third one diagonally), pushed off the nearest one onto the next
+        let seg = numpy::ndarray::arr2(&[[-50.0, 0.0, 50.0, 0.0, 3.0], [0.0, -50.0, 0.0, 50.0, 3.0],
+                                         [-30.0, -30.0, 30.0, 30.0, 2.5]]);
+        let segs = Segs::new(&seg.view(), 32.0);
+        let p = numpy::ndarray::arr2(&[[1.9, 2.2], [40.0, 9.0], [0.0, 0.0]]);
+        let out = street_core(&p.view(), &segs, 0.4, 25.0);
+        for k in 0..2 {
+            let (x, y) = (out[4 * k], out[4 * k + 1]);
+            assert!(x.is_finite() && y.is_finite(), "{k}");
+            let e = street_nearest(&segs, x, y, 25.0).unwrap().0;
+            assert!(e >= 0.4 - 1e-6, "item {k} at {x} {y} is {e} m from a carriageway's edge");
+        }
+        // the one clear already stays where it is mapped
+        assert_eq!((out[4], out[5]), (40.0, 9.0));
+        // the junction's middle: a spot within reach, still clear
+        let (x, y) = (out[8], out[9]);
+        assert!(!x.is_finite() || street_nearest(&segs, x, y, 25.0).unwrap().0 >= 0.4 - 1e-6);
     }
 
     #[test]

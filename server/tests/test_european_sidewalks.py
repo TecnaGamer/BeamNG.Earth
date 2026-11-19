@@ -38,6 +38,10 @@ class EuropeanSidewalksTest(unittest.TestCase):
         country = mock.patch.object(europewalks, "country_for", lambda lon, lat: "GB")
         country.start()
         self.addCleanup(country.stop)
+        roads_in = mock.patch.object(europewalks, "road_countries",       # (its batch form: each road's middle point)
+                                     lambda feats, mask: ["GB" if m else None for m in mask])
+        roads_in.start()
+        self.addCleanup(roads_in.stop)
 
     def features(self, lines, classes, **kwargs):
         with mock.patch.multiple(test_roads, LAT=LAT, LON=LON, M_LAT=M_LAT, M_LON=M_LON):
