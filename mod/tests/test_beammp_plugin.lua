@@ -58,6 +58,11 @@ T.check(a['1'].name == 'a' and a['1'].h == nil, 'anchors: the name, no heading w
 G.onPose(1, { v = G.PROTO, aLat = 36.2, aLon = -118, lat = 36.2, lon = -118, h = 90.5 }, 'a')
 T.check(G.anchors(G.live())['1'].h == 90.5, 'anchors: the heading (the map arrows)')
 G.onPose(1, { v = G.PROTO, aLat = 36.2, aLon = -118, lat = 36.2, lon = -118, h = 'x' }, 'a')
+-- each player's world server's map data release (rel) passed on; anything else is no release
+G.onPose(1, { v = G.PROTO, aLat = 36.2, aLon = -118, lat = 36.2, lon = -118, rel = '2026-11-18.0' }, 'a')
+G.onPose(2, { v = G.PROTO, aLat = 35, aLon = -118.7, lat = 35, lon = -118.7, rel = '../../etc' }, 'b')
+T.check(G.anchors(G.live())['1'].rel == '2026-11-18.0' and G.anchors(G.live())['2'].rel == nil,
+  'anchors: the map data release, a malformed one left out')
 T.check(G.anchors(G.live())['1'].h == nil, 'anchors: a bad heading left out')
 
 -- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))

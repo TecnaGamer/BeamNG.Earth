@@ -16,7 +16,9 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 487 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 503 # the newest kernel signature the server calls (earthd checks it at start) ...
+if os.environ.get("BNE_BATTER", "off") == "vanilla":
+    MIN_VERSION = 503   # ... with the vanilla slopes on (grading.BATTER_ON: batter_apply_vw), the only caller of 503
 
 
 class NativeMissing(RuntimeError):

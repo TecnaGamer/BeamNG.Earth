@@ -681,6 +681,209 @@ pub fn wear_plan<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyR
     Ok((pts_arr.into_pyarray(py), out.off.into_pyarray(py), at_arr.into_pyarray(py)))
 }
 
+// ---- the road revamp v2's surface overlays (P1c, BNE_SURFACE_V2: roadwear.py surface_chunks) -------------------------
+// The stock maps lay a second layer of DecalRoads over the terrain's asphalt on 72-93 % of it (the second vanilla study,
+// 2026-11-19): long faint surface-variation strips, tyre wear on the lane centres and repair patch strips, under the
+// markings. Each from the road's own seed and its distance along its whole centre line, as wear_plan's pieces.
+
+pub const K_VAR1: i64 = 10;     // surface variation, the mottled stock texture (strip, fades, not cut at junctions)
+pub const K_VAR2: i64 = 11;     // ... the streaked one
+pub const K_TREAD2: i64 = 12;   // tyre wear on a lane centre (strip, fades)
+pub const K_PATCH2: i64 = 13;   // a repair patch strip (strip, short fades)
+
+const VAR_W: (f64, f64) = (5.0, 9.0);       // m: a variation strip's width
+const VAR_TRACK_M: f64 = 9.0;               // m of carriageway per parallel variation track
+const VAR_RUN: (f64, f64) = (35.0, 65.0);   // m: a strip's length (about 50)
+const VAR_GAP: (f64, f64) = (5.0, 35.0);    // m between strips (about 20: ~70 % of the length covered)
+const VAR_TL: (f64, f64) = (80.0, 120.0);   // m: texture length (about 100)
+const VAR_FADE_M: f64 = 10.0;               // m: end fades
+const TREAD_W: (f64, f64) = (4.0, 5.0);     // m: a wear strip's width
+const TREAD_RUN: (f64, f64) = (40.0, 60.0);
+const TREAD_FADE: (f64, f64) = (5.0, 20.0);
+const PATCH_EVERY: (f64, f64) = (60.0, 190.0);   // m between patches (about 8 a km)
+const PATCH_LEN: (f64, f64) = (15.0, 40.0);
+const PATCH_W: (f64, f64) = (1.8, 3.6);
+const PATCH_FADE_M: f64 = 1.5;
+
+/// A v2 strip of road r: its path cut where it leaves the box (and, with `cut`, where it lies on another
+/// carriageway), its runs (at least min_m long) out with (kind, width, texture length, whole length, -1, end fade).
+#[allow(clippy::too_many_arguments)]
+fn emit_strip2(ctx: &Ctx, pts: &mut Vec<[f64; 4]>, off: &mut Vec<i64>, attrs: &mut Vec<[f64; 6]>, r: usize,
+               path: Vec<[f64; 4]>, kind: i64, width: f64, tl: f64, min_m: f64, cut: bool, fend: f64) {
+    if path.len() < 2 { return; }
+    let slen = path[path.len() - 1][3];
+    if slen < min_m.max(0.05) { return; }
+    let pad = BOX_PAD_M + width / 2.0;
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for q in &path {
+        x0 = x0.min(q[0]); x1 = x1.max(q[0]); y0 = y0.min(q[1]); y1 = y1.max(q[1]);
+    }
+    if x1 < ctx.bx[0] - pad || x0 > ctx.bx[2] + pad || y1 < ctx.bx[1] - pad || y0 > ctx.bx[3] + pad { return; }
+    let dense = densify(&path);
+    let ok: Vec<bool> = dense.iter()
+        .map(|q| ctx.in_box(q[0], q[1], pad) && !(cut && ctx.bl.blocked(r, q[0], q[1]))).collect();
+    let mut i = 0;
+    while i < dense.len() {
+        if !ok[i] { i += 1; continue; }
+        let mut j = i;
+        while j + 1 < dense.len() && ok[j + 1] { j += 1; }
+        if j > i && dense[j][3] - dense[i][3] >= min_m {
+            let run = simplify(&dense[i..=j]);
+            pts.extend_from_slice(&run);
+            off.push(pts.len() as i64);
+            attrs.push([kind as f64, width, tl, slen, -1.0, fend]);
+        }
+        i = j + 1;
+    }
+}
+
+/// One road's v2 surface pieces (tier >= 1: variation and tyre wear; tier 2: patches and their joints).
+#[allow(clippy::too_many_arguments)]
+fn road_surface(ctx: &Ctx, pts: &mut Vec<[f64; 4]>, off: &mut Vec<i64>, attrs: &mut Vec<[f64; 6]>, r: usize,
+                ln: &Line, a: &[f64], tier: i64) {
+    let len = ln.len();
+    if len < 2.0 { return; }
+    let seed = a[A_SEED] as u64;
+    let cls = (a[A_CLS] as i64).clamp(0, 7);
+    let traffic = TRAFFIC[cls as usize];
+    let lanes = (a[A_LANES].round() as i64).max(1);
+    let hw = a[A_HW].max(0.5);
+    let drive = a[A_DRIVE].max(1.0).min(2.0 * hw);
+    let doff = a[A_DOFF];
+    let lw = drive / lanes as f64;
+    let aisle = a[A_AISLE] > 0.5;
+    let win = windows(ln, &ctx.bx, hw + 12.0);
+    if win.is_empty() { return; }
+    let lane_c = |k: i64| doff - drive / 2.0 + (k as f64 + 0.5) * lw;
+    // surface variation: parallel tracks over the whole carriageway, each a run of strips and gaps; not cut at the
+    // other carriageways (the stock maps' strips run on through junction mouths and overlap there)
+    if tier >= 1 {
+        let full = 2.0 * hw;
+        let tracks = ((full / VAR_TRACK_M).round() as i64).max(1);
+        let band = full / tracks as f64;
+        for k in 0..tracks {
+            let mut rng = Rng::new(seed, 0x2000 + k as u64);
+            let mut s = rng.range(-30.0, 20.0);
+            while s < len {
+                // (every draw made whatever the box: the next strips' numbers are the same in every tile)
+                let run = rng.range(VAR_RUN.0, VAR_RUN.1);
+                let w = rng.range(VAR_W.0, VAR_W.1).min(band + 1.0).min(full);
+                let jit = rng.range(-1.0, 1.0);
+                let tl = rng.range(VAR_TL.0, VAR_TL.1);
+                let kind = if rng.f() < 0.5 { K_VAR1 } else { K_VAR2 };
+                let gap = rng.range(VAR_GAP.0, VAR_GAP.1);
+                let c = -hw + (k as f64 + 0.5) * band;
+                let reach = (hw - w / 2.0).max(0.0);
+                let d = (c + jit * ((band - w) / 2.0).max(0.0)).clamp(-reach, reach);
+                let (s0, s1) = (s.max(0.0), (s + run).min(len));
+                if s1 - s0 > 6.0 && overlaps(&win, s0, s1) {
+                    emit_strip2(ctx, pts, off, attrs, r, ln.path(s0, s1, d), kind, w, tl, 3.0, false, VAR_FADE_M);
+                }
+                s += run + gap;
+            }
+        }
+    }
+    // tyre wear: a strip on each lane's centre in runs (tertiary roads and up)
+    if tier >= 1 && traffic >= 0.4 && !aisle {
+        for k in 0..lanes {
+            let mut rng = Rng::new(seed, 0x2100 + k as u64);
+            let mut s = rng.range(-40.0, 30.0);
+            while s < len {
+                let run = rng.range(TREAD_RUN.0, TREAD_RUN.1);
+                let w = rng.range(TREAD_W.0, TREAD_W.1).min(drive);
+                let fend = rng.range(TREAD_FADE.0, TREAD_FADE.1);
+                let gap = rng.range(10.0, 30.0 + 120.0 * (1.0 - traffic));
+                let (s0, s1) = (s.max(0.0), (s + run).min(len));
+                if s1 - s0 > 8.0 && overlaps(&win, s0, s1) {
+                    emit_strip2(ctx, pts, off, attrs, r, ln.path(s0, s1, lane_c(k)), K_TREAD2, w, w * 4.0, 2.0, true,
+                                fend);
+                }
+                s += run + gap;
+            }
+        }
+    }
+    // repair patch strips (about 8 a km), a joint line across each end now and then
+    if tier >= 2 {
+        let mut rng = Rng::new(seed, 0x2200);
+        let mut s = rng.range(0.0, PATCH_EVERY.1);
+        while s < len {
+            let plen = rng.range(PATCH_LEN.0, PATCH_LEN.1);
+            let w = rng.range(PATCH_W.0, PATCH_W.1).min(drive);
+            let k = rng.pick(lanes as usize) as i64;
+            let jit = rng.range(-0.5, 0.5);
+            let joints = rng.f();
+            let reach = (hw - w / 2.0).max(0.0);
+            let d = (lane_c(k) + jit).clamp(-reach, reach);
+            let (s0, s1) = (s, (s + plen).min(len));
+            if s1 - s0 > 4.0 && overlaps(&win, s0 - 2.0, s1 + 2.0) {
+                emit_strip2(ctx, pts, off, attrs, r, ln.path(s0, s1, d), K_PATCH2, w, w * 8.0, 2.0, true, PATCH_FADE_M);
+                if joints < 0.5 {
+                    for &sj in &[s0, s1] {
+                        let (x, y, z, tx, ty) = ln.at(sj);
+                        let (nx, ny) = (-ty, tx);
+                        let (l, rr) = (d + w / 2.0, d - w / 2.0);
+                        let p = vec![[x + nx * l, y + ny * l, z, 0.0], [x + nx * rr, y + ny * rr, z, l - rr]];
+                        emit_strip2(ctx, pts, off, attrs, r, p, K_ACROSS, 0.2, 6.4, 0.5, true, -1.0);
+                    }
+                }
+            }
+            s += plen + rng.range(PATCH_EVERY.0, PATCH_EVERY.1);
+        }
+    }
+}
+
+/// roadwear.surface_chunks (BNE_SURFACE_V2): the v2 surface pieces of a tile's roads, wear_plan's inputs (attrs NA
+/// columns, tier). Returns (points (M, 4) x y z and the distance along its piece, offsets (P + 1,), per piece (P, 6):
+/// kind, width, texture length, the whole piece's length, -1, end fade m (-1: none)).
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+pub fn surface_plan<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
+                         attrs: PyReadonlyArray2<'py, f64>, excl: PyReadonlyArray2<'py, i64>,
+                         bx: PyReadonlyArray1<'py, f64>, tier: i64)
+                         -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray2<f64>>)> {
+    let (p, o, a, e, b) = (pts.as_array(), off.as_array(), attrs.as_array(), excl.as_array(), bx.as_array());
+    let nr = o.len().saturating_sub(1);
+    if a.nrows() != nr || (nr > 0 && a.ncols() < NA) || b.len() < 4 || p.ncols() < 3 || (e.nrows() > 0 && e.ncols() < 2) {
+        return Err(pyo3::exceptions::PyValueError::new_err("surface_plan: pts (N, 3), off (R + 1), attrs (R, 15), excl (E, 2), box (4)"));
+    }
+    let lines: Vec<Line> = (0..nr).map(|r| {
+        let (s, t) = (o[r] as usize, (o[r + 1] as usize).min(p.nrows()));
+        let s = s.min(t);
+        Line::new((s..t).map(|i| p[[i, 0]]).collect(), (s..t).map(|i| p[[i, 1]]).collect(),
+                  (s..t).map(|i| p[[i, 2]]).collect())
+    }).collect();
+    let rows: Vec<Vec<f64>> = (0..nr).map(|r| (0..NA).map(|c| a[[r, c]]).collect()).collect();
+    let block: Vec<f64> = rows.iter().map(|v| v[A_BLOCK]).collect();
+    let ex: HashSet<(usize, usize)> = (0..e.nrows()).filter_map(|k| {
+        let (x, y) = (e[[k, 0]], e[[k, 1]]);
+        if x >= 0 && y >= 0 { Some((x as usize, y as usize)) } else { None }
+    }).collect();
+    let bxa = [b[0], b[1], b[2], b[3]];
+    let work = p.nrows() * 64;
+    let (op, oo, oa) = crate::release(py, work, move || {
+        let bl = Blockers::new(&lines, &block, ex);
+        let ctx = Ctx { bl: &bl, bx: bxa };
+        let (mut op, mut oo, mut oa) = (Vec::new(), vec![0i64], Vec::new());
+        if tier > 0 {
+            for r in 0..nr {
+                if rows[r][A_WEAR] > 0.5 && lines[r].x.len() >= 2 {
+                    road_surface(&ctx, &mut op, &mut oo, &mut oa, r, &lines[r], &rows[r], tier);
+                }
+            }
+        }
+        (op, oo, oa)
+    });
+    let m = op.len();
+    let flat: Vec<f64> = op.iter().flat_map(|q| q.iter().copied()).collect();
+    let at: Vec<f64> = oa.iter().flat_map(|q| q.iter().copied()).collect();
+    let np = oa.len();
+    let pts_arr = numpy::ndarray::Array2::from_shape_vec((m, 4), flat)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let at_arr = numpy::ndarray::Array2::from_shape_vec((np, 6), at)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok((pts_arr.into_pyarray(py), oo.into_pyarray(py), at_arr.into_pyarray(py)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -707,6 +910,55 @@ mod tests {
         assert!(!bl.blocked(0, 20.0, 1.0));      // its own only
         let bl2 = Blockers::new(&lines, &[4.0, 4.0], [(0usize, 1usize)].into_iter().collect());
         assert!(!bl2.blocked(0, 50.0, 1.0));
+    }
+
+    fn attrs_row(hw: f64, lanes: f64, cls: f64, seed: f64) -> Vec<f64> {
+        let mut a = vec![0.0; NA];
+        a[A_HW] = hw; a[A_DRIVE] = 2.0 * hw; a[A_LANES] = lanes; a[A_CLS] = cls; a[A_COND] = -1.0;
+        a[A_SEED] = seed; a[A_WEAR] = 1.0; a[A_BLOCK] = hw + 0.5;
+        a
+    }
+
+    fn surface(ln: &Line, a: &[f64], bx: [f64; 4], tier: i64) -> (Vec<[f64; 4]>, Vec<i64>, Vec<[f64; 6]>) {
+        let bl = Blockers::new(std::slice::from_ref(ln), &[a[A_BLOCK]], HashSet::new());
+        let ctx = Ctx { bl: &bl, bx };
+        let (mut p, mut o, mut at) = (Vec::new(), vec![0i64], Vec::new());
+        road_surface(&ctx, &mut p, &mut o, &mut at, 0, ln, a, tier);
+        (p, o, at)
+    }
+
+    fn is_var(q: &[f64; 6]) -> bool { q[0] as i64 == K_VAR1 || q[0] as i64 == K_VAR2 }
+
+    #[test]
+    fn surface_variation_covers_about_seventy_percent() {
+        let ln = straight(3000.0);
+        let a = attrs_row(3.7, 2.0, 4.0, 12345.0);
+        let (_p, _o, at) = surface(&ln, &a, [-10.0, -50.0, 3010.0, 50.0], 2);
+        let var: f64 = at.iter().filter(|q| is_var(q)).map(|q| q[3]).sum();
+        let share = var / 3000.0;
+        assert!(share > 0.6 && share < 0.8, "variation share {share}");
+        assert!(at.iter().filter(|q| is_var(q))
+                  .all(|q| q[1] >= 5.0 - 1e-9 && q[1] <= 7.4 + 1e-9 && q[2] >= 80.0 && q[2] <= 120.0 && q[5] == 10.0));
+        let patches = at.iter().filter(|q| q[0] as i64 == K_PATCH2).count() as f64 / 3.0;
+        assert!(patches > 5.0 && patches < 11.0, "patches a km {patches}");
+        assert!(at.iter().any(|q| q[0] as i64 == K_TREAD2 && q[1] >= 4.0 && q[1] <= 5.0 && q[5] >= 5.0 && q[5] <= 20.0));
+    }
+
+    #[test]
+    fn surface_pieces_agree_across_tiles() {
+        // the same road built twice and for a smaller box: the same pieces where they share it
+        let ln = straight(800.0);
+        let a = attrs_row(3.5, 2.0, 2.0, 777.0);
+        let (p1, o1, a1) = surface(&ln, &a, [-10.0, -50.0, 810.0, 50.0], 2);
+        let (p2, o2, a2) = surface(&ln, &a, [-10.0, -50.0, 810.0, 50.0], 2);
+        assert_eq!(o1, o2);
+        assert_eq!(a1.len(), a2.len());
+        assert!(p1.iter().zip(&p2).all(|(x, y)| x == y));
+        let (_p3, _o3, a3) = surface(&ln, &a, [300.0, -50.0, 500.0, 50.0], 2);
+        assert!(a3.iter().any(is_var));
+        for q in a3.iter().filter(|q| is_var(q)) {
+            assert!(a1.iter().any(|w| w[0] == q[0] && w[1] == q[1] && w[3] == q[3]));
+        }
     }
 
     #[test]

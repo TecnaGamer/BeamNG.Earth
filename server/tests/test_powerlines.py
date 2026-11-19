@@ -131,7 +131,7 @@ class LineTest(unittest.TestCase):
         flat = lambda x, y: np.zeros(len(x))
         box1, box2 = [-50.0, -50.0, 90.0, 50.0], [90.0, -50.0, 250.0, 50.0]
         towers, _, wp, wo, sup = layout([line], box=box1, full=True)
-        rows = [powerlines.tower_row(powerlines.G_PYLON, powerlines.PYLON_H, *t) for t in towers]
+        rows = [powerlines.tower_row(powerlines.G_PYLON, powerlines.PYLON_H, *t[:4]) for t in towers]
         self.assertEqual([r[1] for r in rows], [0.0])
         wires = powerlines.span_wires(wp, wo, sup, powerlines.G_PYLON, powerlines.PYLON_H, powerlines.WIRE_R)
         self.assertEqual(len(wires), len(powerlines.ARMS))                # (the span 0 -> 100: its middle in box 1)
@@ -143,7 +143,7 @@ class LineTest(unittest.TestCase):
         self.assertEqual([r[1] for r in rows], [0.0])
         # the tower's own tile culls it
         towers, _, _, _, _ = layout([line], box=box2, full=True)
-        rows2 = [powerlines.tower_row(powerlines.G_PYLON, powerlines.PYLON_H, *t) for t in towers]
+        rows2 = [powerlines.tower_row(powerlines.G_PYLON, powerlines.PYLON_H, *t[:4]) for t in towers]
         racedig.clear_props(rows2, [], band, flat)
         self.assertNotIn(100.0, [r[1] for r in rows2])
 
@@ -473,15 +473,16 @@ class OffRoadsTest(unittest.TestCase):
 class TowerFootprintTest(unittest.TestCase):
     """The native layout decides yaw; check its emitted rows against the tile's authoritative solved roads."""
 
-    def place(self, lines=(), decks=(), clearance=None, tags=None):
+    def place(self, lines=(), decks=(), clearance=None, tags=None, pts=((100., 100.), (200., 100.)), elev=None):
         import furniture
         import mapgeom
         from test_roads import FRAME
-        la, lo, _ = FRAME.enu_to_geodetic(np.array([100., 200.]), np.array([100., 100.]), 0.)
+        pts = np.asarray(pts, np.float64)
+        la, lo, _ = FRAME.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
         infra = mapgeom.Features(
             layer="infrastructure", ids=np.array(["line"]), kind=np.array([mapgeom.LINE], np.uint8),
             part_off=np.array([0, 1], np.int64), ring_off=np.array([0, 1], np.int64),
-            coord_off=np.array([0, 2], np.int64), lonlat=np.column_stack([lo, la]),
+            coord_off=np.array([0, len(pts)], np.int64), lonlat=np.column_stack([lo, la]),
             attrs={"class": np.array(["power_line"]), **({"tags": np.array([tags], object)} if tags else {})},
             rules={})
 
@@ -493,9 +494,70 @@ class TowerFootprintTest(unittest.TestCase):
         props, wires = [], []
         if clearance is None:
             clearance = furniture.RoadClearance(lines, decks, bounds=(0., 0., 256., 256.))
-        powerlines.tile_lines(FRAME, 0, 0, Md(), lambda la, lo: np.zeros(np.shape(la)), props, wires,
+        powerlines.tile_lines(FRAME, 0, 0, Md(), elev or (lambda la, lo: np.zeros(np.shape(la))), props, wires,
                               clearance=clearance)
         return props, wires
+
+    def test_a_tower_two_ways_share_has_one_scale(self):
+        """Two ways sharing a tower, one on flat ground, the other over a ridge (Codex's review): the shared tower's
+        scale is the most either way's spans ask, and both ways' conductors hang on its arms at that scale, in the tile
+        drawing the tower and in the tiles drawing either way's span."""
+        def ground(x, y):
+            x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
+            return np.maximum(0.0, 30.0 * (1.0 - np.hypot(x - 120.0, y - 165.0) / 25.0))
+        flat_way = np.array([[20.0, 100.0, 0.0], [120.0, 100.0, 0.0]])
+        ridge_way = np.array([[120.0, 100.0, 0.0], [120.0, 230.0, 0.0]])
+        pts = np.ascontiguousarray(np.concatenate([flat_way, ridge_way]), np.float64)
+        off = np.array([0, 2, 4], np.int64)
+        tops = []
+        for box in ([-1e4, -1e4, 1e4, 1e4], [100.0, 90.0, 140.0, 110.0], [0.0, 90.0, 100.0, 110.0],
+                    [100.0, 150.0, 140.0, 180.0]):
+            towers, _, wp, wo, _ = fast._ef.power_line_layout(
+                pts, off, np.zeros(4, bool), powerlines.ARMS, powerlines.SAG, powerlines.SEG_M, powerlines.MIN_SPAN_M,
+                powerlines.MAX_SPAN_M, powerlines.DEDUPE_M, powerlines.END_MERGE_M, powerlines.GANTRY_FRONT, box,
+                np.zeros((0, 2)), np.zeros(1, np.int64), np.zeros(0, np.int64), list(powerlines.ANCHOR_AT),
+                powerlines.GANTRIES, None, ground, powerlines.SPAN_CLEAR_M)
+            at_t = [np.asarray(wp[a:b]) for a, b in zip(wo[:-1], wo[1:])]
+            ends = [q for w in at_t for q in (w[0], w[-1]) if np.hypot(q[0] - 120.0, q[1] - 100.0) < 6.0]
+            for t in towers:
+                if np.hypot(t[0] - 120.0, t[1] - 100.0) < 1e-6:
+                    tops.append(t[4])
+            # every conductor end at the shared tower: one of its arms' heights at a single scale
+            heights = sorted({round(float(q[2]), 4) for q in ends})
+            if ends:
+                s = heights[0] / powerlines.ARMS[:, 1].min()
+                self.assertTrue(all(any(abs(z - h * s) < 1e-3 for h in powerlines.ARMS[:, 1]) for z in heights),
+                                (box, heights, s))
+                tops.append(s)
+        self.assertGreater(max(tops), 1.0, "the ridge way lifts the shared tower")
+        self.assertTrue(all(abs(t - tops[0]) < 1e-6 for t in tops), tops)
+
+    def test_a_span_over_a_crest_clears_the_ground(self):
+        """A span climbing over a ridge between its towers (Breno, the player's report 0XESWVG2: its conductors through
+        the hill): every conductor at least SPAN_CLEAR_M over the ground along it, its towers scaled up where the chord
+        alone is under that; a span over flat ground keeps its towers' size and its whole sag."""
+        from test_roads import FRAME
+
+        def ridge(la, lo):                     # (a 30 m ridge across the middle of the span, x 125 +- 25 m)
+            e, n, _ = FRAME.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), 0.0)
+            return np.maximum(0.0, 30.0 * (1.0 - np.abs(np.asarray(e) - 125.0) / 25.0))
+        pts = ((20., 100.), (230., 100.))
+        for elev, scaled in ((ridge, True), (None, False)):
+            props, wires = self.place(tags='{"power":"line","voltage":"220000"}', pts=pts, elev=elev)
+            towers = [r for r in props if r[0] == powerlines.G_PYLON]
+            self.assertEqual(len(towers), 2)
+            self.assertEqual(all(r[6] > powerlines.PYLON_H for r in towers), scaled, towers)
+            self.assertTrue(all(r[6] <= 1.75 * powerlines.PYLON_H + 0.01 for r in towers))
+            ground = elev or (lambda la, lo: np.zeros(np.shape(la)))
+            for w, _ in wires:
+                w = np.asarray(w)
+                la, lo, _ = FRAME.enu_to_geodetic(w[:, 0], w[:, 1], np.zeros(len(w)))
+                clear = w[:, 2] - np.asarray(ground(la, lo))
+                self.assertGreaterEqual(float(clear.min()), powerlines.SPAN_CLEAR_M - 0.05)
+            if not scaled:                  # (flat: the whole sag, SAG x the span, at the middle)
+                w = np.asarray(wires[0][0])
+                chord = (w[0, 2] + w[-1, 2]) / 2
+                self.assertAlmostEqual(chord - float(w[:, 2].min()), powerlines.SAG * 210.0, delta=0.05)
 
     def test_service_road_rejects_collider_but_keeps_conductors(self):
         service = (4., np.array([[100., 0., 0.], [100., 256., 0.]]))
@@ -523,6 +585,36 @@ class TowerFootprintTest(unittest.TestCase):
         hv, hw = self.place(tags='{"power":"line","voltage":"220000"}')
         self.assertEqual({r[0] for r in hv}, {powerlines.G_PYLON})
         self.assertEqual(len(hw), 6)
+
+    def test_a_pole_faces_its_conductors_at_a_corner_and_on_a_straight(self):
+        """The wooden pole's cross-arm and insulators lie along its model's x (electric_pole_wood_old_01's anchor
+        points): each conductor's end at a pole is that far along the pole's x, turned by its row's yaw, at a corner
+        (the bisector: the player's report BTZMCHC4, Drumheller) and on a straight run alike."""
+        props, wires = self.place(tags='{"power":"line","voltage":"72000"}',
+                                  pts=((40., 60.), (120., 60.), (120., 200.), (180., 200.)))
+        poles = [r for r in props if r[0] == powerlines.G_POLE]
+        self.assertEqual(len(poles), 4)
+        lateral = sorted(powerlines.POLE_ARMS[:, 0].tolist())
+        for r in poles:
+            a = np.radians(r[4])
+            x_axis = np.array([np.cos(a), np.sin(a)])        # (trees.lua: a row's yaw turns the model's +x there)
+            ends = []
+            for w, _ in wires:
+                w = np.asarray(w)
+                for q in (w[0], w[-1]):
+                    if np.hypot(q[0] - r[1], q[1] - r[2]) < 3.0:
+                        ends.append(q[:2] - np.array([r[1], r[2]]))
+            self.assertGreaterEqual(len(ends), 3, r)
+            for d in ends:
+                along = float(d @ x_axis)
+                across = float(d @ np.array([-x_axis[1], x_axis[0]]))
+                self.assertLess(abs(across), 0.02, (r, d))
+                self.assertTrue(any(abs(along - v) < 0.02 for v in lateral), (r, d))
+        corner = min(poles, key=lambda r: np.hypot(r[1] - 120., r[2] - 60.))
+        # the corner's cross-arm bisects the turn: across the mean of its spans' directions (east, then north)
+        a = np.radians(corner[4])
+        self.assertAlmostEqual(abs(float(np.array([np.cos(a), np.sin(a)]) @ (np.array([1., 1.]) / np.sqrt(2.)))), 0.0,
+                               places=2)
 
     def test_mapped_pole_supports_put_a_high_voltage_line_on_poles(self):
         """(PR #919 by wyo-backroads) A 115 kV line whose mapped supports (its way's nodes) are power=pole points: the

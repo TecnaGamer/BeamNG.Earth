@@ -355,7 +355,7 @@ def main(argv=None):
     ap.add_argument("--out", required=True)
     ap.add_argument("--work", help="parts folder (default OUT/.work)")
     ap.add_argument("--archive", default="base", choices=sorted(bnwt.ARCHIVES))
-    ap.add_argument("--release", default=overture.RELEASE)
+    ap.add_argument("--release", default=overture.effective())
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"),
                     help="where the source files' blocks are kept (its mapdata/raw)")
     ap.add_argument("--jobs", type=int, default=max(1, min(8, (os.cpu_count() or 2) // 2)))

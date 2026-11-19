@@ -4,4 +4,7 @@
 //!
 //! Step S1 (earthfast 480): `structure_groups`, which decks of one chain form one structure (groups.rs). Nothing is
 //! built from it yet: roads writes it as a shadow JSON per chain (BNE_DECK_STRUCT=shadow).
+//!
+//! Step S2b part 1 (earthfast 488): `structure_heights`, ONE joint height solve per structure (heights.rs), shadow only.
 pub mod groups;
+pub mod heights;

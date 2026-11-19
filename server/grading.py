@@ -27,6 +27,7 @@ and the levels <= 0 tiles only (coarser tiles sink under the block and cover far
 """
 from runtimeprofiler import step as profile_step
 import copy
+import itertools
 import logging
 import math
 import os
@@ -148,6 +149,42 @@ BUCKET = 32.0               # m, query-point buckets (grade_points' pairs: a poi
 # 2.2-2.8x less CPU (a 2048² block at Roswell NM 2.6 -> 1.1 s, 2026-11-11). BNE_GRADE_BINNED=off: the bucket walk
 GRADE_BINNED_ON = os.environ.get("BNE_GRADE_BINNED", "on") != "off"
 GRADE_BIN_M = float(os.environ.get("BNE_GRADE_BIN_M", "8"))    # m, the fine bins (grown where the points are sparse)
+# Vanilla-style cut and fill slopes (road revamp v2 P1a, the user 2026-11-19: "wide vanilla slopes, 1:2 rural and 1:3.5
+# urban, up to 40 m out, with walls where a slope would hit buildings"; native/earthfast batter.rs): outside the cores
+# the ground is the natural one clamped to each road side's corridor (a near-level strip, a rounded crest, then a
+# constant batter out to the daylight line), a pure function of position. Off by default (BNE_BATTER=vanilla, a switch
+# of its own: not in Revamped roads before the user has looked at it in game); on, it is a plans format tag
+# (plancache.plans_format: ".bv1"), so no cache mixes the two.
+BATTER_ON = os.environ.get("BNE_BATTER", "off") == "vanilla"
+BATTER_L0_M = 1.0           # m of near-level strip past a core's edge (the core: carriageway + shoulder, 1 m+) ...
+BATTER_STRIP_LO = 0.04      # ... the ground there at most this much per m under the road's height ...
+BATTER_STRIP_UP = 0.02      # ... and this much over it
+BATTER_CREST_M = 6.0        # m over which the slope rounds from 0 to the batter's (the stock maps' 4-6 m crest)
+BATTER_RURAL = 2.0          # the batter, 1 : this: rural (the stock rural maps: 1:1.9-1:2.2) ...
+BATTER_URBAN = 3.5          # ... a building within BATTER_URBAN_M of the core (west_coast_usa / east_coast_usa: 1:3.3-1:4)
+BATTER_STEEP = 1.5          # ... a mountain pass road (Plan.steep)
+BATTER_M_MAX = 1.0          # the steepest a batter is made to reach the natural ground; steeper: today's grading there
+BATTER_FIT_K = 1.15         # where the class batter cannot reach the natural ground: this times the slope that just does,
+BATTER_FIT_ADD = 0.02       # plus this (a clean crossing, not a batter along a slope as steep as itself: its daylight wanders)
+BATTER_R_MAX = 40.0         # m past the core a corridor reaches at most (terraform.lua's DOI)
+BATTER_R_PAD = 4.0          # m past the sample its batter daylights by that it still reaches
+BATTER_URBAN_M = 30.0       # m from the core's edge: a building this near (either side) makes the urban batter
+BATTER_BLD_GAP_M = 1.0      # m a corridor stops short of a building's wall (beyond: the building's ground is natural)
+BATTER_DM = 0.01            # a side's slope along its plan: the most of its neighbours' less this per segment ...
+BATTER_DR = 3.0             # ... its reach: less this (m) per segment (no step between neighbours: no teeth) ...
+BATTER_DIL_N = 3            # ... over this many segments either side at most (a plan's end welded or trimmed in one plan
+                            # set and not another moves no params farther than this: _keys' margin holds it)
+BATTER_GAP_N = 2            # a sharp cutting's or too steep side keeps today's grading in runs along its plan only: gaps
+BATTER_RUN_N = 5            # of this many segments closed, then runs shorter than this many left out (no flicker)
+BATTER_OFFS = (3.0, 6.0, 11.0, 20.0, 40.0)   # m past the core the natural ground is sampled at
+BATTER_CLOSE_T = 3.0        # m before its reach a corridor closes (steepening to the natural ground) ...
+BATTER_CLOSE_K = 1.0        # ... at k u^2 / (1 - u)
+BATTER_SMOOTH_K = 1.0       # m: the smooth max / min at the daylight line (a rounded toe and top)
+BATTER_CORE_BLEND_M = 1.0   # m past a core today's heights fade into the corridor's
+BATTER_OLD_FADE_M = 10.0    # m past today's reach (T_MAX) a side that keeps today's grading fades into the corridor
+BATTER_BIN_M = 8.0          # m, the apply's bins
+BATTER_CHUNK = 256          # natural ground samples read at a time where a read of them all failed (_batter_of)
+BATTER_WALL_PAD_M = 2.0     # m round a ray's box a cell's walls are tested against it (_batter_rays)
 ROAD_LIFT = 0.04            # m the physics ground is raised under roads (see Grader.apply)
 BLEND_R = 4.0               # m: roads near each other blend their targets by 1 / (1 + (d / BLEND_R)^2)
 PROFILE_ZOOM = int(os.environ.get("BNE_DEM_ZOOM", "16"))   # DEM zoom of the profiles (one zoom for every caller)
@@ -7144,7 +7181,8 @@ class _Planner:
         """The map cells whose plans can reach the points (reach_m: those within that distance)."""
         lat = np.asarray(lat, np.float64)
         lon = np.asarray(lon, np.float64)
-        pad = (T_MAX + 40.0 if reach_m is None else reach_m) / 111320.0
+        # (the vanilla slopes reach BATTER_R_MAX past a core, not T_MAX: their roads' cells too, BATTER_ON)
+        pad = ((BATTER_R_MAX if BATTER_ON else T_MAX) + 40.0 if reach_m is None else reach_m) / 111320.0
         padlon = pad / max(0.05, dmath.cos(math.radians(float(np.mean(lat)))))
         keys = mapcells.cells_for_points(lat, lon, pad, padlon)
         if len(keys) > SPREAD_CELLS:        # points far apart: only the cells around them
@@ -7190,6 +7228,8 @@ class _Planner:
         # (the pieces of one road a cell edge cut apart meet at one height too, WELD_ON; a side road starts at the
         # main's painted edge, not in its middle, TRIM_SIDE_MOUTHS_ON)
         out = (plans, merge_plan_set(plans))
+        if BATTER_ON and out[1].n and not self._batter_of(out[1]):
+            return out          # (made from a stand-in's buildings or short of its ground: not kept)
         with self.lock:
             stages = self.__dict__.get("_road_stages", {})
             # (not while a cell's fetch failed: it is asked again; the roads' plans alone: a cell's road stage is its
@@ -7199,6 +7239,125 @@ class _Planner:
                 if len(memo) >= PLAN_SETS_MAX:
                     memo.pop(next(iter(memo)))
                 memo[mk] = out
+        return out
+
+    def _batter_of(self, pack):
+        """pack.bt: the vanilla slopes' params of a plan set's segments (batter_params) from the plans' ground (elev)
+        and the buildings (widths: RoadWidths' walls, the cells within BATTER_R_MAX of each segment's core). Each
+        segment's from its own samples only: a sample whose ground could not be read (BATTER_CHUNK points at a time)
+        makes its segment's side today's, a stand-in cell's buildings are taken as they are, and either marks the
+        request short (revisit.fault: not kept, made again). True when the set may be kept."""
+        import revisit
+        short = [False]
+        # (a read that falls back to finite heights while it says so, a fault: Hong Kong's DEM, the lidar rule)
+        f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
+
+        def elev_xy(x, y):
+            # (each point's own conversion: enu_to_ll_dense's grid and its exact branch follow the whole batch's extent
+            # and count, so a segment's samples moved by bits with the plan set: Codex review of ff9d2c55)
+            la, lo, _ = self.frame.enu_to_geodetic(x, y, 0.0)
+            la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+            # (the elevation as read, elev_raw: the deck patches of self.elev come from the cells planned so far, so a
+            # probe beside a deck read another ground once a neighbour was warm: Codex review of 861e550f)
+            elev = getattr(self, "elev_raw", None) or self.elev
+            try:
+                return np.asarray(elev(la, lo), np.float64)
+            except Exception as e:      # (the ground not at hand somewhere: read in chunks, the rest NaN)
+                _caught(e)
+                short[0] = True
+            out = np.full(len(la), np.nan)
+            for i in range(0, len(la), BATTER_CHUNK):
+                try:
+                    out[i:i + BATTER_CHUNK] = np.asarray(elev(la[i:i + BATTER_CHUNK], lo[i:i + BATTER_CHUNK]),
+                                                         np.float64)
+                except Exception as e:
+                    _caught(e)
+            return out
+        # (the planner holds RoadWidths.get, a bound method: its RoadWidths' walls)
+        widths = getattr(getattr(self, "widths", None), "__self__", getattr(self, "widths", None))
+        rays = None
+        if widths is not None and hasattr(widths, "_walls"):
+            def rays(org, dirs, reach):
+                return self._batter_rays(widths, org, dirs, reach, short)
+        # (each segment's ground and buildings beside it read once per planner, not once per plan set: the sets of
+        # neighbouring tiles share most of their segments, ~0.4 s each at Fells Point; kept only from a read with no
+        # fault, BatterMemo. Not with the tunnel lids: their cells are kept from a build that read short without a
+        # fault on the later reads, Codex review of 44ab3958)
+        import tunnellids
+        memo = None
+        if not tunnellids.ON:
+            with self.lock:
+                token = self.__dict__.setdefault("_batter_token", next(_BATTER_TOKENS))
+            memo = BatterMemo.of(token)
+        info = {}
+        try:
+            pack.bt = batter_params(pack, elev_xy, rays, memo, info)
+        except Exception as e:         # (a kernel's error: today's grading everywhere in the set, asked again)
+            _caught(e)
+            pack.bt = None
+            short[0] = True
+        if revisit.thread_faults() != f0 or revisit.thread_lidar_faults() != l0:
+            short[0] = True
+        if short[0]:
+            if info.get("hits"):
+                # (a short read: all of it again without the memo, as before it, so the ground not read is that of the
+                # same chunks; the set is not kept either way)
+                try:
+                    pack.bt = batter_params(pack, elev_xy, rays)
+                except Exception as e:
+                    _caught(e)
+                    pack.bt = None
+            revisit.fault(here=True)
+            return False
+        if info.get("rows"):
+            memo.add(*info["rows"])
+        return True
+
+    def _batter_rays(self, widths, org, dirs, reach, short):
+        """(k,) distance from each origin (this frame) along its unit direction to the first building wall within
+        reach (inf: none), over the walls of every cell the rays reach (each cell's own frame). short[0] set when a
+        cell's buildings are a stand-in's."""
+        out = np.full(len(org), np.inf)
+        if not len(org):
+            return out
+        end = org + dirs * reach
+        both = np.concatenate([org, end])
+        la, lo, _ = self.frame.enu_to_geodetic(both[:, 0], both[:, 1], 0.0)     # (each point's own: elev_xy)
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        # (each ray against the walls of every cell its own box meets within BATTER_WALL_PAD_M, decided by that ray
+        # alone: a diagonal ray crossing a cell near its corner, whatever other rays share the call. The cells
+        # gathered from the boxes' four corners with a wider margin than any ray's own test, so none a ray's test
+        # takes is ever missing)
+        k = len(org)
+        la0, la1 = np.minimum(la[:k], la[k:]), np.maximum(la[:k], la[k:])
+        lo0, lo1 = np.minimum(lo[:k], lo[k:]), np.maximum(lo[:k], lo[k:])
+        pad = BATTER_WALL_PAD_M / 111320.0
+        padlo = pad / np.maximum(0.05, dnp.cos(np.radians(np.maximum(np.abs(la0), np.abs(la1)))))
+        wide = 5.0 * pad
+        cla, clo = np.r_[la0, la0, la1, la1], np.r_[lo0, lo1, lo0, lo1]
+        keys = sorted(mapcells.cells_near_points(cla, clo, wide, wide / max(0.05, dmath.cos(math.radians(float(
+            np.max(np.abs(la))))))), key=str)
+        if hasattr(widths, "prefetch"):
+            widths.prefetch(keys)
+        for key in keys:
+            frame_c, walls = widths._walls(key)
+            if getattr(walls, "stand_in", False):
+                short[0] = True
+            if not len(walls.segs):
+                continue
+            lon0, lat0, lon1, lat1 = key.bounds()
+            near = ~((la1 < lat0 - pad) | (la0 > lat1 + pad) | (lo1 < lon0 - padlo) | (lo0 > lon1 + padlo))
+            if not near.any():
+                continue
+            idx = np.nonzero(near)[0]
+            e, n_, _ = frame_c.geodetic_to_enu(np.r_[la[:k][idx], la[k:][idx]], np.r_[lo[:k][idx], lo[k:][idx]], 0.0)
+            e, n_ = np.asarray(e, np.float64), np.asarray(n_, np.float64)
+            p0 = np.column_stack((e[:len(idx)], n_[:len(idx)]))
+            d = np.column_stack((e[len(idx):], n_[len(idx):])) - p0
+            ln = np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)
+            got = _walls_rays(walls, p0, d / ln[:, None], reach)
+            hit = np.isfinite(got)
+            out[idx[hit]] = np.minimum(out[idx[hit]], got[hit])
         return out
 
     @profile_step('Road grading')
@@ -8185,10 +8344,217 @@ def grade_points(px, py, base, plans, lift=0.0):
     if not len(px):
         return out
     pack = plans if isinstance(plans, PlanPack) else PlanPack(plans)
+    bt = getattr(pack, "bt", None) if BATTER_ON else None
+    if bt is None or not len(pack.h):
+        return _grade_points_today(px, py, base, pack, lift, out)
+    import fast
+    # (batter.rs: the vanilla slopes, every segment within its reach; 503: the corridors' heights v and today's weight w
+    # apart, so today's grading is made only at the points whose weight is not 0, the cores and the sides that keep
+    # it: each point's today's height is its own whatever other points a call holds, gradebins)
+    fast.require(503, "batter_apply_vw")
+    f64 = np.float64
+    v, w = fast._ef.batter_apply_vw(
+        np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64),
+        pack.a, pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.ba, pack.bb, bt[0], bt[1], bt[2],
+        (float(BATTER_L0_M), float(BATTER_CREST_M), float(BATTER_STRIP_LO), float(BATTER_STRIP_UP),
+         float(BATTER_CLOSE_T), float(BATTER_CLOSE_K), float(BATTER_SMOOTH_K), float(BATTER_CORE_BLEND_M),
+         float(T_MAX), float(BATTER_OLD_FADE_M), float(lift), float(BATTER_BIN_M)))
+    out = v
+    need = w > 0.0
+    sub = np.flatnonzero(need)
+    if len(sub):
+        # (today's over these points as over the whole call: the plans chosen by the whole call's box, and the points
+        # that make the call's bounds along (gradebins pairs segments and points by bucket squares from the bounds'
+        # corner and leaves out the segments past them; it reads the plans it is given beyond each point's reach too, a
+        # far cutting's NaN base rule): Codex review of a5814cb3)
+        box = (px.min(), py.min(), px.max(), py.max())
+        take = need.copy()
+        for c in (px, py):
+            if not np.isnan(c).all():
+                take[np.nanargmin(c)] = take[np.nanargmax(c)] = True
+        idx = np.flatnonzero(take)
+        got = _grade_points_today(px[idx], py[idx], base[idx], pack, lift, base[idx].copy(), box)
+        g0 = np.ascontiguousarray(np.asarray(got, f64)[need[idx]])
+        # (batter::combine: v + w (g0 - v), today's alone at 1: batter_apply's own arithmetic, a NaN's bits too)
+        out[sub] = fast._ef.batter_combine(np.ascontiguousarray(v[sub]), np.ascontiguousarray(w[sub]), g0)
+    return out
+
+
+_BATTER_TOKENS = itertools.count(1)       # (each planner's own: BatterMemo's rows of it)
+
+
+class BatterMemo:
+    """The vanilla slopes' reads beside each segment (batter_params: the natural ground at its probes, the distance to
+    the first building each side), by the planner (its token: its frame, its ground, its buildings) and the segment's
+    a, b and h to the bit; one store for the process. Kept in numpy arrays (~150 bytes a segment), the oldest let go
+    past CAP segments, dropped whole by the worker's memory shed (budget.register_shed); a lookup takes the exact rows
+    only (a hash's match checked against the whole key: anything else is read again). BatterMemo.of(token): the view
+    a planner looks up and adds through."""
+    CAP = 196608            # segments (~30 MB): a dense town's plan set holds 50-110 thousand
+    _all = None
+    _all_lock = threading.Lock()
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.keys = np.zeros((0, 6), np.uint64)
+        self.vals = np.zeros((0, 0))
+        self.hs = np.zeros(0, np.uint64)        # (the keys' hashes, sorted) ...
+        self.pos = np.zeros(0, np.int64)        # (... and their rows)
+
+    class _View:
+        def __init__(self, memo, token):
+            self.memo, self.token = memo, np.uint64(token)
+
+        def _k(self, keys):
+            return np.column_stack((np.full(len(keys), self.token, np.uint64), keys))
+
+        def find(self, keys):
+            return self.memo.find(self._k(keys))
+
+        def add(self, keys, vals):
+            self.memo.add(self._k(keys), vals)
+
+    @classmethod
+    def of(cls, token):
+        """The process's store as the planner of this token sees it (find / add by keys_of's rows)."""
+        with cls._all_lock:
+            if cls._all is None:
+                cls._all = cls()
+                try:
+                    import budget
+                    budget.register_shed(cls._all.clear)
+                except Exception as e:      # (no budget module: the cap alone)
+                    _caught(e)
+            return cls._View(cls._all, token)
+
+    @staticmethod
+    def keys_of(a, b, h):
+        """(n, 5) uint64: each segment's a, b, h as bits."""
+        f64 = np.float64
+        return np.ascontiguousarray(np.column_stack((np.asarray(a, f64)[:, :2], np.asarray(b, f64)[:, :2],
+                                                     np.asarray(h, f64)))).view(np.uint64)
+
+    @staticmethod
+    def _hash(keys):
+        hv = np.full(len(keys), 0xCBF29CE484222325, np.uint64)
+        with np.errstate(over="ignore"):
+            for c in range(keys.shape[1]):
+                hv ^= keys[:, c]
+                hv *= np.uint64(0x100000001B3)
+                hv ^= hv >> np.uint64(29)
+        return hv
+
+    def find(self, keys):
+        """(hit (n,) bool, the hits' values (hits, w)) of rows keys (n, 6: token, then keys_of's)."""
+        with self.lock:
+            ks, vs, hs, pos = self.keys, self.vals, self.hs, self.pos
+        n = len(keys)
+        if not len(hs) or not n:
+            return np.zeros(n, bool), vs[:0]
+        hv = self._hash(keys)
+        i = np.minimum(np.searchsorted(hs, hv), len(hs) - 1)
+        row = pos[i]
+        hit = (hs[i] == hv) & np.all(ks[row] == keys, axis=1)
+        return hit, vs[row[hit]]
+
+    def add(self, keys, vals):
+        """Remember the rows keys (n, 6) -> vals (n, w): new arrays of the rows kept alone (no slice of a larger
+        buffer held)."""
+        if not len(keys):
+            return
+        with self.lock:
+            if self.vals.ndim != 2 or self.vals.shape[1] != vals.shape[1]:
+                self.keys, self.vals = self.keys[:0], np.zeros((0, vals.shape[1]))
+            new = min(len(keys), self.CAP)
+            old = min(len(self.keys), self.CAP - new)
+            ks = np.concatenate([self.keys[len(self.keys) - old:], keys[len(keys) - new:]])
+            vs = np.concatenate([self.vals[len(self.vals) - old:], vals[len(vals) - new:]])
+            hv = self._hash(ks)
+            order = np.argsort(hv, kind="stable")
+            self.keys, self.vals, self.hs, self.pos = ks, vs, hv[order], order
+
+    def clear(self):
+        with self.lock:
+            self.keys, self.vals = self.keys[:0].copy(), np.zeros((0, 0))
+            self.hs, self.pos = self.hs[:0].copy(), self.pos[:0].copy()
+
+
+def batter_params(pack, elev_xy, walls_rays=None, memo=None, info=None):
+    """(m, r, fl) of the vanilla slopes (BATTER_ON) for a PlanPack's segments (batter.rs: each side's batter slope and
+    reach past its core at the segment's ends, (segments, 4): left, right at a, then at b; its flags, (segments, 2)):
+    the natural ground elev_xy(x, y) at BATTER_OFFS past each side's
+    core edge, and the distance from that edge to the first building along it (walls_rays(origins (k, 2), dirs (k, 2),
+    reach) -> (k,) distances, NaN or inf: none; None: no buildings known). A pure function of the segments, the ground
+    and the buildings: the same for a segment in every plan set. memo: a BatterMemo of segments read before (their
+    natural ground and buildings taken from it); info (a dict): "hits", the segments taken from the memo, and "rows",
+    the segments read here and their values, for the caller to add to the memo once it knows the reads were sound."""
+    import fast
+    fast.require(497, "batter_params")
+    f64 = np.float64
+    offs = np.asarray(BATTER_OFFS, f64)
+    ns = len(pack.h)
+    k2 = 2 * len(offs)
+    nat = np.empty((ns, k2))
+    bld = np.full((ns, 2), np.inf)
+    todo = np.arange(ns)
+    keys = None
+    if memo is not None and ns:
+        # (a segment's probes and rays are a pure function of its a, b and h: batter_probes; their reads each point's
+        # and ray's own, the same in any batch)
+        keys = BatterMemo.keys_of(pack.a, pack.b, pack.h)
+        hit, vals = memo.find(keys)
+        if info is not None:
+            info["hits"] = int(hit.sum())
+        if hit.any():
+            nat[hit] = vals[:, :k2]
+            bld[hit] = vals[:, k2:]
+        todo = np.flatnonzero(~hit)
+    if len(todo):
+        a_t, b_t, h_t = (np.ascontiguousarray(pack.a[todo], f64), np.ascontiguousarray(pack.b[todo], f64),
+                         np.ascontiguousarray(pack.h[todo], f64))
+        pts, org, dirs = fast._ef.batter_probes(a_t, b_t, h_t, offs)
+        nat[todo] = np.asarray(elev_xy(pts[:, 0], pts[:, 1]), f64).reshape(len(todo), k2)
+        if walls_rays is not None:
+            got = np.asarray(walls_rays(org, dirs, float(BATTER_R_MAX + BATTER_BLD_GAP_M + 1.0)), f64)
+            bld[todo] = np.where(np.isfinite(got), got, np.inf).reshape(len(todo), 2)
+        if info is not None and keys is not None and walls_rays is not None:
+            info["rows"] = (keys[todo], np.concatenate([nat[todo], bld[todo]], axis=1))
+    nat = nat.ravel()
+    bld = bld.ravel()
+    prm = np.array([BATTER_L0_M, BATTER_CREST_M, BATTER_STRIP_LO, BATTER_STRIP_UP, BATTER_RURAL, BATTER_URBAN,
+                    BATTER_STEEP, BATTER_M_MAX, BATTER_R_MAX, BATTER_R_PAD, BATTER_URBAN_M, BATTER_BLD_GAP_M,
+                    BATTER_DM, BATTER_DR, BATTER_GAP_N, BATTER_RUN_N, BATTER_FIT_K, BATTER_FIT_ADD, BATTER_DIL_N], f64)
+    return fast._ef.batter_params(pack.za, pack.zb, pack.rk, pack.rid, pack.ab, pack.st, pack.cut,
+                                  np.ascontiguousarray(pack.of, np.int64), np.ascontiguousarray(nat, f64),
+                                  np.ascontiguousarray(bld, f64), offs, list(prm))
+
+
+def _walls_rays(walls, p, d, reach):
+    """roadwidth.Walls.rays by the Rust loop (earthfast walls_rays: the same intersections ray by ray; the numpy one
+    was 1.1 s of a Fells Point plan set's 1.5): (k,) distance along each unit d from p to the first wall, NaN: none."""
+    import fast
+    import roadwidth
+    fast.require(497, "walls_rays")
+    f64 = np.float64
+    if not len(p) or not len(walls.keys):
+        return np.full(len(p), np.nan)
+    f32 = walls.segs.dtype == np.float32
+    fn = fast._ef.walls_rays32 if f32 else fast._ef.walls_rays
+    return np.asarray(fn(np.ascontiguousarray(p, f64), np.ascontiguousarray(d, f64),
+                         np.ascontiguousarray(walls.keys, np.int64), np.ascontiguousarray(walls.first, np.int64),
+                         np.ascontiguousarray(walls.counts, np.int64), np.ascontiguousarray(walls.seg_of, np.int64),
+                         np.ascontiguousarray(walls.segs, np.float32 if f32 else f64), float(roadwidth.BUCKET),
+                         float(reach)), f64)
+
+
+def _grade_points_today(px, py, base, pack, lift, out, box=None):
+    """grade_points without the vanilla slopes (gradebins.rs). box: the (x0, y0, x1, y1) the plans are chosen by (their
+    boxes meeting it; default the points'): a call's subset graded as the whole call grades it."""
     import fast
     f64 = np.float64
+    x0, y0, x1, y1 = (px.min(), py.min(), px.max(), py.max()) if box is None else box
     if GRADE_BINNED_ON:
-        keep = pack.seg_keep(px.min(), py.min(), px.max(), py.max())
+        keep = pack.seg_keep(x0, y0, x1, y1)
         if keep is None:
             return out
         fast.require(216, "grade_points_binned")    # (gradebins.rs)
@@ -8202,7 +8568,7 @@ def grade_points(px, py, base, plans, lift=0.0):
             float(RANK_HEIGHT_FADE_M), float(ABUT_UNDER_GRADE), np.ascontiguousarray(pack.abd, f64), keep,
             float(GRADE_BIN_M))
     # every segment of the plans near the points: ends, end heights, reach (core half width + T_MAX)
-    got = pack.near(px.min(), py.min(), px.max(), py.max())
+    got = pack.near(x0, y0, x1, y1)
     if got is None:
         return out
     A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK, ABD = got
@@ -9135,7 +9501,7 @@ def corridor_pairs(plans, specs, ramps=True):
     CORRIDOR_ABUT_HOLD_M of its own bridge end, as the pass holds j there (the solve's rows: a Fells Point slip road
     beside a road's ramp onto its bridge followed it up 1 m, under that bridge's deck a cap took it down again 12 m on,
     and the cells either side of it, a cap in one and not the other, stepped 0.37 m at their seam); None without the
-    kernel's plan_corridor_pairs (earthfast 490) or with fewer than two plans in it. plans [(fid, Plan)], specs their Specs. Pure."""
+    kernel's plan_corridor_pairs (earthfast 505) or with fewer than two plans in it. plans [(fid, Plan)], specs their Specs. Pure."""
     import fast
     if len(plans) < 2 or getattr(fast, "_ef", None) is None or not hasattr(fast._ef, "plan_corridor_pairs"):
         return None

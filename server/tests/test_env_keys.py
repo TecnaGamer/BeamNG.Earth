@@ -43,6 +43,8 @@ NO_OUTPUT = {
     "BNGE_MAP_SOURCE": "keyed by MapData.versions()['mapsrc'] (pmtiles.source_key)",
     "BNGE_OSM_FUEL": "keyed by MapData.versions()['osmfuel']",
     "BNGE_DUCKDB_THREADS": "DuckDB's threads per query",
+    "BNGE_OVERTURE_RELEASE": "keyed by MapData.versions()['overture'] (overture.effective: the release every reader "
+                             "of the process uses, frozen at its first ask; tests/test_overture_release.py)",
     "BNGE_OVERTURE_DEDUP_ALWAYS": "the dedup by id runs where an id repeats either way: the same rows",
     "BNGE_LIDAR_CLAIMS": "which process reads the lidar (scheduling)",
     "BNGE_LIDAR_PREFETCH": "lidar read ahead (scheduling)",

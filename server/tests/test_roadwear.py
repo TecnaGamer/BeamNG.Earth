@@ -215,5 +215,150 @@ class RoadWearTest(unittest.TestCase):
             self.assertEqual(roadwear.tier_of(7), 2)
 
 
+V2_MATS = {"bne_wear_var_01", "bne_wear_var_02", "bne_wear_tread2", "bne_wear_patchstrip"}
+
+
+class SurfaceV2Test(unittest.TestCase):
+    """The road revamp v2's surface overlays (BNE_SURFACE_V2: roadwear.surface_chunks, earthfast.surface_plan; the
+    road mesh's lifts, ground clearance and draw order: roadmesh.SURFACE_V2)."""
+
+    def setUp(self):
+        from unittest import mock
+        self._p = [mock.patch.object(roadwear, "SURFACE_V2", True), mock.patch.object(roadmesh, "SURFACE_V2", True),
+                   mock.patch.dict(roadmesh.LIFT, roadmesh.LIFT_V2)]
+        for p in self._p:
+            p.start()
+
+    def tearDown(self):
+        for p in self._p:
+            p.stop()
+
+    def test_off_draws_none(self):
+        rd = [("a", spec(lanes=2), line(-500, 128, 800, 128), 0.0)]
+        with __import__("unittest").mock.patch.object(roadwear, "SURFACE_V2", False):
+            self.assertFalse(V2_MATS & set(kinds(plan(rd))))
+
+    def test_pieces_and_their_numbers(self):
+        L = 3000.0
+        rd = [("gers-1", spec(lanes=2, width=7.4), line(0, 128, L, 128), 0.0)]
+        ch = plan(rd, box=(-10, 0, L + 10, 256))
+        got = kinds(ch)
+        self.assertTrue({"bne_wear_tread2", "bne_wear_patchstrip"} <= set(got), got)
+        self.assertNotIn("bne_wear_tread", got)          # (replaced by the lane-centre wear)
+        var = [c for c in ch if c["m"].startswith("bne_wear_var_")]
+        share = sum(c["slen"] for c in var) / L
+        self.assertTrue(0.6 < share < 0.8, share)         # about 70 % of the length (one track on a 7.4 m road)
+        for c in var:
+            self.assertEqual((c["layer"], c["feather"], c["fend_m"]), ("var", 0, 10.0))
+            self.assertTrue(5.0 <= c["w"] <= 7.4 and 80.0 <= c["tl"] <= 120.0, c)
+            self.assertTrue(np.all(np.abs(np.asarray(c["n"])[:, 1] - 128) <= 3.7 - c["w"] / 2 + 1e-6))
+        for c in ch:
+            if c["m"] == "bne_wear_tread2":
+                self.assertTrue(4.0 <= c["w"] <= 5.0 and 5.0 <= c["fend_m"] <= 20.0 and c["layer"] == "wear", c)
+        patches = len([c for c in ch if c["m"] == "bne_wear_patchstrip"]) / (L / 1000)
+        self.assertTrue(5 <= patches <= 11, patches)      # about 8 a km
+
+    def test_variation_runs_through_junctions(self):
+        """The variation strips run on across a crossing road's carriageway (the stock maps'); the wear stops."""
+        a = ("a", spec(lanes=2, width=7.4), line(-500, 128, 800, 128), 0.0)
+        b = ("b", spec(lanes=2, width=7.4), line(128, -500, 128, 800), 0.0)
+
+        def of_a(chunks, m):
+            return [c for c in chunks if c["m"].startswith(m) and abs(np.asarray(c["n"])[0, 1] - 128) < 4
+                    and np.ptp(np.asarray(c["n"])[:, 0]) > 1.0]
+        alone, crossed = plan([a]), plan([a, b])
+        self.assertTrue(of_a(alone, "bne_wear_var_"))
+        self.assertEqual(of_a(alone, "bne_wear_var_"), of_a(crossed, "bne_wear_var_"))   # (not cut)
+        self.assertNotEqual(of_a(alone, "bne_wear_tread2"), of_a(crossed, "bne_wear_tread2"))
+        for c in of_a(crossed, "bne_wear_tread2"):
+            x = np.asarray(c["n"])[:, 0]
+            self.assertFalse(x.min() < 124 and x.max() > 132, "the wear stops at the crossing carriageway")
+
+    def test_same_pieces_in_two_tiles(self):
+        rd = [("x", spec(lanes=2, cls="secondary"), line(-1000, 300, 1500, 300), 0.0)]
+        a = [c for c in plan(rd, box=(0, 172, 256, 428)) if c["m"] in V2_MATS]
+        b = [c for c in plan(rd, box=(200, 172, 456, 428)) if c["m"] in V2_MATS]
+        key = lambda c: (c["m"], c["w"], c["tl"], c["slen"], c.get("fend_m"))     # noqa: E731
+        common = {key(c) for c in a if np.asarray(c["n"])[:, 0].max() > 205} & {key(c) for c in b}
+        self.assertTrue(common)
+        self.assertEqual(plan(rd, box=(0, 172, 256, 428)), plan(rd, box=(0, 172, 256, 428)))
+
+    def test_clear_keeps_a_corner_on_a_flat_cells_edge_beside_a_step(self):
+        """follow_ground's clear: a corner on the edge a flat cell shares with a step cell (a wall the lattice draws as
+        teeth) takes the flat cell's (no) cap, not the step's lowest corner + FOLLOW_MAX_UP under the flat ground."""
+        grid = np.array([[0.0, 0.0, -0.5, -0.5]] * 3)          # (cells x 0-1 flat, 1-2 a 0.5 m step)
+        P = np.array([[0.2, 0.2], [1.0, 0.5], [0.2, 0.8]])
+        T = np.array([[0, 1, 2]])
+        old = roadmesh.follow_ground(P, np.zeros((3, 2)), T, grid, 0, 0, tol=0.02, cell=1.0)[0]
+        new = roadmesh.follow_ground(P, np.zeros((3, 2)), T, grid, 0, 0, tol=0.02, cell=1.0, clear=0.003)[0]
+        self.assertLess(float(old[:, 2].min()), -0.3)           # (as before, without clear)
+        self.assertGreaterEqual(float(new[:, 2].min()), -1e-9)
+
+    def test_clear_keeps_the_cap_of_the_cell_holding_each_piece(self):
+        """follow_ground's clear: a marking crossing from a flat plateau into a descending step cell (a wall drawn as
+        teeth): its step-cell part stays held at the low side + FOLLOW_MAX_UP (a flat neighbour must not uncap a corner
+        on their shared edge and lift a sliver up the wall); its plateau part keeps the plateau's height."""
+        grid = np.array([[0.0, 0.0, -1.3, -1.3]] * 3)          # (x 0-1 a plateau, 1-2 a 1.3 m descending step)
+        lo_cap = -1.3 + roadmesh.FOLLOW_MAX_UP
+        for P in (np.array([[0.3, 0.4], [1.6, 0.4], [1.6, 0.6], [0.3, 0.6]]),       # (crossing the shared edge)
+                  np.array([[1.0, 0.4], [1.6, 0.4], [1.6, 0.6], [1.0, 0.6]])):      # (a corner on the shared edge)
+            T = np.array([[0, 1, 2], [0, 2, 3]])
+            for clear in (None, 0.003):
+                V, _uv, Tr, _s = roadmesh.follow_ground(P, np.zeros((4, 2)), T, grid, 0, 0, tol=0.02, cell=1.0,
+                                                        clear=clear)
+                for t in Tr:
+                    c = V[t].mean(axis=0)
+                    if c[0] > 1.0 + 1e-6:          # (a piece in the step cell: no corner up the wall)
+                        self.assertLessEqual(float(V[t][:, 2].max()), lo_cap + 1e-9, (clear, V[t]))
+                    elif clear is not None:        # (on the plateau: at its height; without clear, as before)
+                        self.assertGreaterEqual(float(V[t][:, 2].min()), -1e-9, (clear, V[t]))
+
+    def test_clear_step_cut_meets_its_whole_neighbour(self):
+        """follow_ground's clear: a triangle within tol of its plane but over a step cell and others is cut for the
+        cap only; its pieces keep its plane, so its edge meets a whole neighbour's exactly (on the terrain they opened
+        a gap at a kink on the shared edge, Codex review of the fix)."""
+        x = np.arange(5.0)
+        grid = np.tile(0.4 * x, (5, 1))                        # (a 0.4 m / m slope: no cell holds a step)
+        grid[1, 2] += 0.07                                     # (cells (1, 0) and (1, 1) now do: 0.47 > 0.45)
+        grid[3, 2] += 0.03                                     # (a kink on the shared edge, in uncapped cells)
+        P = np.array([[0.5, 3.0], [3.5, 3.0], [2.0, 0.5], [2.0, 3.9]])
+        T = np.array([[0, 1, 2], [1, 0, 3]])
+        V, _uv, Tr, src = roadmesh.follow_ground(P, np.zeros((4, 2)), T, grid, 0, 0, tol=0.1, cell=1.0, clear=0.003)
+        self.assertGreater(int((src == 0).sum()), 1)           # (the lower one cut)
+        self.assertEqual(int((src == 1).sum()), 1)             # (the upper one whole)
+        up = V[Tr[src == 1][0]]
+        a, b = up[np.argmin(up[:, 0] + 10 * np.abs(up[:, 1] - 3))], up[np.argmax(up[:, 0] - 10 * np.abs(up[:, 1] - 3))]
+        on_edge = [v for v in V[np.unique(Tr[src == 0])] if abs(v[1] - 3.0) < 1e-9]
+        self.assertGreater(len(on_edge), 2)
+        for v in on_edge:
+            f = (v[0] - a[0]) / (b[0] - a[0])
+            self.assertAlmostEqual(float(v[2]), float(a[2] + f * (b[2] - a[2])), delta=1e-9)
+
+    def test_overlays_clear_the_bumpy_ground(self):
+        """Every overlay keeps MARK_MIN_M over the drawn ground (the terrain's own triangles, where the asphalt is
+        painted) at its points and inside its triangles; the asphalt mesh's draw order is v2_rank's."""
+        from test_roads import LAT, LON, M_LAT, M_LON
+
+        def elev(la, lo):           # (rolling, no cell steep enough for follow_ground's step cap)
+            e, n = (np.asarray(lo) - LON) * M_LON, (np.asarray(la) - LAT) * M_LAT
+            return 10.0 + 0.15 * np.sin(e / 7.0) * np.cos(n / 5.0) + 0.03 * e
+        rd =[("a", spec(lanes=2, width=7.4), line(-50, 20, 120, 60), 0.0)]
+        ch = plan(rd, box=(0, 0, 100, 100)) + [
+            {"m": "line_white", "w": 0.15, "tl": 6.4, "p": 2, "n": [[0, 21.0, 0], [100, 44.6, 0]]},
+            {**roads.EDGE_DECAL, "n": [[0, 25.0, 0], [100, 48.6, 0]]}]
+        q = 1 / 512
+        P, T, UV, mats, M, _fade = roadmesh.build(FRAME, ch, elev, (0.0, 0.0, 0.0), 0.0, clip=(0, 0, 100, 100),
+                                                  follow=True, q=q)
+        self.assertEqual([roadmesh.v2_rank(m) for m in mats], sorted(roadmesh.v2_rank(m) for m in mats))
+        self.assertEqual(mats[-1], "line_white")
+        tri = P[T]
+        w = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [1 / 3] * 3, [.6, .2, .2], [.2, .6, .2], [.2, .2, .6]])
+        pts = np.einsum("kj,tjc->tkc", w, tri).reshape(-1, 3)
+        dz = pts[:, 2] - roadmesh.drawn_ground(FRAME, elev, pts[:, :2], q)
+        ok = np.isfinite(dz)
+        self.assertGreater(ok.sum(), 1000)
+        self.assertGreaterEqual(float(dz[ok].min()), 0.002 - 1e-6)
+
+
 if __name__ == "__main__":
     unittest.main()

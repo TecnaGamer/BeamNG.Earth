@@ -149,7 +149,7 @@ core.onExtensionLoaded()
 local st = core._state()       -- (the level's state: made fresh on load)
 frames(3)
 T.check(#received('hello') == 1, 'connected (hello sent)')
-serverSend({ type = 'hello', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's1', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's1', farFormat = 'cdae',
   material = 'bngEarthFar_v3', nearVisual = 'terrain' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == 1 end), 'the level start\'s teleport asked with no car')
 
@@ -461,7 +461,7 @@ core.onExtensionUnloaded()
 core.onExtensionLoaded()
 st = core._state()
 frames(3)
-serverSend({ type = 'hello', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's2', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's2', farFormat = 'cdae',
   material = 'bngEarthFar_v3', nearVisual = 'terrain' })
 local nPrep = #received('prepare_anchor')
 T.check(pumpUntil(function() return #received('prepare_anchor') == nPrep + 1 end), 'a new level: its start asked')
