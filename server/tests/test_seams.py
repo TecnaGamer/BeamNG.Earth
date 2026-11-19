@@ -238,29 +238,59 @@ class StructEndsTest(unittest.TestCase):
             return np.asarray(out, np.float64)
         g.elev = elev
         g._end_filled = lambda line, at_end, past=False: -np.inf
-        g._end_lift = lambda xy: lift(xy) if lift is not None else None
+        g._end_lift_calc = lambda xy: lift(xy) if lift is not None else None
         return g
+
+    @staticmethod
+    def z(g, xy):
+        got = g._struct_end(np.asarray(xy, np.float64))
+        return None if got is None else got[0]
 
     def test_twins_share_each_end(self):
         g = self.planner((10.0, 11.0, 11.6, 10.3))
-        self.assertAlmostEqual(g._struct_end(np.array([0.0, 0.0])), 10.15, places=6)
-        self.assertAlmostEqual(g._struct_end(np.array([2.0, 9.0])), 10.15, places=6)
-        self.assertAlmostEqual(g._struct_end(np.array([61.0, 0.5])), 11.3, places=6)    # (a road end near it)
-        self.assertAlmostEqual(g._struct_end(np.array([62.0, 9.0])), 11.3, places=6)
-        self.assertIsNone(g._struct_end(np.array([500.0, 500.0])))     # (no twin)
-        self.assertIsNone(g._struct_end(np.array([30.0, -20.0])))      # (no bridge end)
+        self.assertAlmostEqual(self.z(g, [0.0, 0.0]), 10.15, places=6)
+        self.assertAlmostEqual(self.z(g, [2.0, 9.0]), 10.15, places=6)
+        self.assertAlmostEqual(self.z(g, [61.0, 0.5]), 11.3, places=6)    # (a road end near it)
+        self.assertAlmostEqual(self.z(g, [62.0, 9.0]), 11.3, places=6)
+        self.assertIsNone(self.z(g, [500.0, 500.0]))     # (no twin)
+        self.assertIsNone(self.z(g, [30.0, -20.0]))      # (no bridge end)
+
+    def test_each_point_answers_for_itself_whatever_asked_first(self):
+        """Two road ends in one half metre either side of the APPROACH_TOUCH_M cutoff: each its own answer, in
+        either order (Codex review: a half-metre memory answered for whoever asked first)."""
+        inside, outside = [-(grading.APPROACH_TOUCH_M - 0.01), 0.0], [-(grading.APPROACH_TOUCH_M + 0.01), 0.0]
+        for order in ((inside, outside), (outside, inside)):
+            g = self.planner((10.0, 11.0, 11.6, 10.3))
+            got = {tuple(p): self.z(g, p) for p in order}
+            self.assertAlmostEqual(got[tuple(inside)], 10.15, places=6)
+            self.assertIsNone(got[tuple(outside)])
 
     def test_a_clearance_need_lifts_the_whole_end(self):
         def lift(xy):
             return (1.5, [], [], False) if abs(float(xy[0])) < 1 and abs(float(xy[1])) < 1 else None
         g = self.planner((10.0, 11.0, 10.2, 10.1), lift=lift)
-        self.assertAlmostEqual(g._struct_end(np.array([0.0, 0.0])), 11.5, places=6)
-        self.assertAlmostEqual(g._struct_end(np.array([2.0, 9.0])), 11.5, places=6)
+        self.assertAlmostEqual(self.z(g, [0.0, 0.0]), 11.5, places=6)
+        self.assertAlmostEqual(self.z(g, [2.0, 9.0]), 11.5, places=6)
+
+    def test_a_small_need_over_the_mean_is_kept(self):
+        """A clearance target under APPROACH_MIN_LIFT over its own end but over the group's mean still bounds the
+        shared height from below (Codex review: it was dropped and the end lowered under it)."""
+        def lift(xy):
+            return (0.4, [], [], False) if abs(float(xy[0]) - 2.0) < 1 and abs(float(xy[1]) - 9.0) < 1 else None
+        g = self.planner((10.0, 11.0, 11.6, 10.6), lift=lift)
+        self.assertAlmostEqual(self.z(g, [0.0, 0.0]), 11.0, places=6)     # (10.6 + 0.4, over the mean 10.3)
 
     def test_spread_ends_are_left(self):
         g = self.planner((10.0, 11.0, 11.6, 11.5))
-        self.assertIsNone(g._struct_end(np.array([0.0, 0.0])))
-        self.assertIsNotNone(g._struct_end(np.array([60.0, 0.0])))
+        self.assertIsNone(self.z(g, [0.0, 0.0]))
+        self.assertIsNotNone(self.z(g, [60.0, 0.0]))
+
+    def test_a_short_approach_is_left(self):
+        g = self.planner((10.0, 11.0, 11.6, 10.3))
+        s = np.arange(0.0, 16.1, 4.0)
+        ra = grading.Plan(np.c_[-16.0 + s, np.zeros(len(s))], np.full(len(s), 11.0), 5.0, abut=(False, True))
+        ra.rid, ra.max_wall = 1, None
+        self.assertFalse(g._pin_struct_ends([("ra", ra)], [spec("primary")]))
 
     def test_approaches_meet_at_the_shared_height(self):
         g = self.planner((10.0, 11.0, 11.6, 10.3))
