@@ -4267,6 +4267,34 @@ def _ml_false(ring, bridges_xy, water_xy, roads_xy=None):
     return False
 
 
+# A building mapped above the ground (OSM layer / level 1 or more: Overture's level) whose footprint, or a part of it, lies
+# mostly over mapped water stands on a bridge's deck (a station on a railway bridge, shops on one), whose height the map
+# does not give: drawn from the water up it was a 300 m block across the Thames under Blackfriars station's roof, walling
+# off the river and the roads by it (the player's report BEF94SAA, 2026-11-18). Left out (the deck and the rails are the
+# bridge's own); the same footprint on land, anything at ground level and a part mapped with its own bottom up over the
+# water (ON_BRIDGE_FLOAT_M: the platforms' canopy at 9-11 m) as before.
+ON_BRIDGE_FLOAT_M = 5.0
+ON_BRIDGE_WATER_SHARE = 0.5     # of its outline's points (every ON_BRIDGE_STEP_M) and its centre on water
+ON_BRIDGE_STEP_M = 5.0
+
+
+def on_bridge_over_water(ring, level, water_xy, min_h=0.0):
+    """Is a footprint ring (local, not closed) of a building mapped at level (OSM layer, None: unknown), its bottom min_h
+    m up, a structure on a bridge over water (ON_BRIDGE_*)? Pure."""
+    if not water_xy or level is None or not np.isfinite(level) or level < 1:
+        return False
+    if min_h is not None and np.isfinite(min_h) and min_h >= ON_BRIDGE_FLOAT_M:
+        return False
+    r = np.asarray(ring, np.float64)[:, :2]
+    pts = [r.mean(0)[None]]
+    for a, b in zip(r, np.roll(r, -1, axis=0)):
+        k = max(1, int(np.ceil(float(dnp.hypot(*(b - a))) / ON_BRIDGE_STEP_M)))
+        pts.append(a + (b - a) * (np.arange(k) / k)[:, None])
+    allp = np.vstack(pts)
+    wet = sum(1 for p in allp if ships.on_water(p, water_xy))
+    return wet >= ON_BRIDGE_WATER_SHARE * len(allp)
+
+
 ML_STEEP_DEG = 25.0         # a machine-learned footprint on ground this steep ...
 ML_FAR_FROM_WAY_M = 60.0    # ... this far from any mapped way (a road, track or path) is a rock or a shadow, not a hut
 ML_CLIFF_DEG = 36.0         # ... and on ground this steep, wherever it is
@@ -5362,6 +5390,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     # Chrysler Building's top 47 m on 0.8 m²)
                     if r is None or _area2(r) / 2 < (PART_TINY_M2 if ph >= PART_TINY_TALL_M else PART_MIN_M2):
                         continue
+                    if on_bridge_over_water(r, lv, water_xy, pmh):
+                        continue        # (a part of a building on a bridge, over the water: on_bridge_over_water)
                     rings.append(r)
                     p_rshape = str(pat.get("roof_shape") or "").lower() or "flat"
                     # (its own colour or the building's; else a stone colour its parts carry by area, plan's
@@ -5413,6 +5443,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 continue
             if rails_xy and on_rail_bed(ring, rails_xy):        # (a building on a railway's bed: BNE_RAIL_XING)
                 continue
+            if on_bridge_over_water(ring, lv, water_xy, at.get("min_height")):
+                continue                # (a building on a bridge, over the water: on_bridge_over_water)
             is_ml = "src_dataset" in a and str(a["src_dataset"][i]) != "OpenStreetMap"
             if is_ml and _ml_false(ring, bridges_xy, water_xy, ml_roads_xy if ml_roads_xy is not None else roads_xy):
                 continue

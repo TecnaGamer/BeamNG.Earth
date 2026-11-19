@@ -3008,6 +3008,24 @@ class SkeletonGableTest(unittest.TestCase):
         self.assertAlmostEqual(P[:, 2].min(), 6.0, delta=1e-6)          # (gables stand on the walls: no eaves)
 
 
+class OnBridgeOverWaterTest(unittest.TestCase):
+    def test_a_building_mapped_on_a_bridge_over_a_river_is_left_out(self):
+        """Blackfriars station (the player's report BEF94SAA): OSM's building, layer 1, along the railway bridge across
+        the Thames, drawn from the water up as a 300 m block. A layer 1 footprint mostly over water is left out; its part
+        on land, one at ground level over the water (a moored ship's, a pier's tests are their own) and a part mapped with
+        its own bottom up (the platforms' canopy) stay."""
+        river = np.array([[-500.0, -300.0], [500.0, -300.0], [500.0, -40.0], [-500.0, -40.0]])
+        water = [(river, [])]
+        on_bridge = np.array([[-100.0, -315.0], [-54.0, -315.0], [-54.0, 30.0], [-100.0, 30.0]])
+        on_land = np.array([[-77.0, 4.0], [-46.0, 4.0], [-46.0, 62.0], [-77.0, 62.0]])
+        self.assertTrue(bld.on_bridge_over_water(on_bridge, 1.0, water))
+        self.assertFalse(bld.on_bridge_over_water(on_bridge, 0.0, water), "at ground level: as before")
+        self.assertFalse(bld.on_bridge_over_water(on_bridge, np.nan, water), "no level mapped: as before")
+        self.assertFalse(bld.on_bridge_over_water(on_land, 1.0, water))
+        self.assertFalse(bld.on_bridge_over_water(on_bridge, 1.0, water, 9.0), "a canopy 9 m up")
+        self.assertFalse(bld.on_bridge_over_water(on_bridge, 1.0, None))
+
+
 class RoofPhotoTest(unittest.TestCase):
     """Roof colours from the aerial photo (RoofPhoto, native roof_photo_colours)."""
 
