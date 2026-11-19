@@ -370,7 +370,7 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_not
     waited = False
     holder = seen = None
     pid, recheck = None, 0.0
-    warned = False
+    last_warn = 0.0
     while True:
         if take(lock, kind):
             got = ready()                   # (written by the process whose lock we just followed)
@@ -414,12 +414,13 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_not
         if time.monotonic() - t0 > wait_s:
             if not (live_s is not None and time.monotonic() - t0 <= live_s and _works(lock, pid) and holds_none()):
                 return None, False
-            if not warned and time.monotonic() - t0 > LIVE_WARN_S:
+            now = time.monotonic()
+            if now - t0 > LIVE_WARN_S and now - last_warn >= LIVE_WARN_S:
                 # (alive and touching its lock, not necessarily getting on: a holder stuck alive is waited out to
-                # live_s by every waiter, each of its cells)
-                warned = True
+                # live_s by every waiter, logged every LIVE_WARN_S)
+                last_warn = now
                 log.warning("%s: waited %.0f s for process %s, still at it (alive, its lock kept fresh)",
-                            live_note or os.path.basename(lock), time.monotonic() - t0, pid)
+                            live_note or os.path.basename(lock), now - t0, pid)
         if waited and _cancelled():
             import pools
             raise pools.Abandoned()

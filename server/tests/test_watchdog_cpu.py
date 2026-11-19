@@ -79,6 +79,24 @@ class WatchdogCpuTest(unittest.TestCase):
         self.assertIn("pid 101", msg)
         self.assertIn("54.0 s CPU in the last 60 s", msg)           # (0.9 of a core over the window)
 
+    def test_pids_includes_main_process(self):
+        p = pools.RespawningPool("test", 1)
+        try:
+            self.assertIn(os.getpid(), p._pids())
+        finally:
+            p.shutdown(wait=False)
+
+    def test_main_process_busy_protects_waiting_workers(self):
+        # Workers are idle (waiting on xproc lock), but main process is busy computing cell plans
+        self.rates.update({101: 0.0, 102: 0.0, os.getpid(): 0.5})
+        self.pool._pids = lambda: [101, 102, os.getpid()]
+        with self.assertLogs("earthd.pools", "WARNING") as logs:
+            self.assertIsNone(self.run_until(2.5 * HUNG_S))
+        self.assertEqual(self.recycles, [])
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("busy", logs.output[0])
+        self.assertIn(f"pid {os.getpid()}", logs.output[0])
+
     def test_flat_cpu_is_hung_restart_at_its_time(self):
         self.rates.update({101: 0.0, 102: 0.001})
         t = self.run_until(2 * HUNG_S)

@@ -642,7 +642,7 @@ PLAN_ELSEWHERE = os.environ.get("BNE_PLAN_ELSEWHERE", "on") != "off"
 FIRST_FANOUT = os.environ.get("BNE_FIRST_FANOUT", "on") != "off"   # (Server.plan_first; off: the block's process plans them)
 FIRST_FANOUT_CPUS = 8       # threads the server's processes may run on (server_threads) for plan_first to hand cells out
 WARM_SPLIT = os.environ.get("BNE_WARM_SPLIT", "on") != "off"     # (Server.warm_roads; off: both lanes plan ahead)
-PLAN_ELSEWHERE_S = 120.0    # s a cell's plans are waited for from there before they are made here after all
+PLAN_ELSEWHERE_S = float(os.environ.get("BNE_PLAN_ELSEWHERE_S", "600.0"))    # s a cell's plans are waited for from there before they are made here after all
 LANE_REQUEST, LANE_PREFETCH = 0, 1     # Server.block_pools: the blocks the mod asks for / the prefetch
 FAR_SPARE_THREADS = 32      # far threads beyond the far workers (Server.tile_pool; compute sharing v1's helper slots before)
 HM_BUSY_TILE_WORKERS = 1    # far tiles built at once while a physics block is building in the server process (an

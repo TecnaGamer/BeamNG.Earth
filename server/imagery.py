@@ -347,6 +347,11 @@ def zoom_for(lat, texel_m, max_zoom=19):
 
 def mercator_px(lat, lon, z):
     """Global pixel coordinates (x right, y down; pixel centres at +0.5) of lat/lon at zoom z."""
+    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+        w = float(TILE * (1 << int(z)))
+        x = (float(lon) / 360.0 + 0.5) * w
+        y = (0.5 - dmath.asinh(dmath.tan(math.radians(float(lat)))) / (2.0 * math.pi)) * w
+        return x, y
     w = TILE * 2 ** z
     x = (np.asarray(lon, np.float64) / 360.0 + 0.5) * w
     y = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * w
@@ -1480,9 +1485,9 @@ class Imagery:
                     continue
                 k = src.export
                 r_px = radius / ground_res(float(la), z)
-                fx, fy = mercator_px(np.array([la]), np.array([lo]), z)
-                for ty in range(int((fy[0] - r_px) // TILE), int((fy[0] + r_px) // TILE) + 1):
-                    for tx in range(int((fx[0] - r_px) // TILE), int((fx[0] + r_px) // TILE) + 1):
+                fx, fy = mercator_px(float(la), float(lo), z)
+                for ty in range(int((fy - r_px) // TILE), int((fy + r_px) // TILE) + 1):
+                    for tx in range(int((fx - r_px) // TILE), int((fx + r_px) // TILE) + 1):
                         key = (src, z, (tx >> k) << k, (ty >> k) << k)   # one child per parent
                         if key not in seen and in_bounds(*key) and not (cov and self._pack_covers(*key[1:])):
                             seen.add(key)
