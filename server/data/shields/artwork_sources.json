@@ -1,0 +1,2200 @@
+{
+  "version": 1,
+  "retrieved": "2026-11-08",
+  "network_reference": "https://wiki.openstreetmap.org/wiki/United_States_roads_tagging/Routes",
+  "artwork": {
+    "al": {
+      "file": "Alabama blank.svg",
+      "original_file": "Alabama blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/8/8b/Alabama_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Alabama_blank.svg",
+      "source_sha1": "f3c1b5c8d3d4539f53aaca0aeb66d366ae977af4",
+      "sha256": "2727d31c04f8d4853d4717bd78047ada7ce003662c8ddfa9689713708a2d8339",
+      "artist": "Ltljltlj",
+      "number_box": [
+        60,
+        115,
+        452,
+        360
+      ],
+      "reviewed": true
+    },
+    "ak": {
+      "file": "Alaska blank shield.svg",
+      "original_file": "Alaska blank shield.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/d/d7/Alaska_blank_shield.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Alaska_blank_shield.svg",
+      "source_sha1": "236258f8137fd254493b5379ba40868722a325f2",
+      "sha256": "c1bca146885b6611f0038f4487fe7ddc2d01d366fce5d4090c2d52d30cf896ee",
+      "artist": "Alaska Department of Transportation & Public Facilities",
+      "number_box": [
+        230,
+        155,
+        470,
+        360
+      ],
+      "reviewed": true
+    },
+    "az": {
+      "file": "Arizona blank.svg",
+      "original_file": "Arizona blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/f3/Arizona_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Arizona_blank.svg",
+      "source_sha1": "c6cbfbe4d49acf2e8bcf9c9aae22dcfab6f4992a",
+      "sha256": "deb0db9dd0d0c32c43eb99d61f111b9edc972bdba2827eb24237cac274dcc527",
+      "artist": "Ltljltlj",
+      "number_box": [
+        120,
+        185,
+        445,
+        365
+      ],
+      "reviewed": true
+    },
+    "ar": {
+      "file": "Arkansas blank.svg",
+      "original_file": "Arkansas blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/b/b2/Arkansas_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Arkansas_blank.svg",
+      "source_sha1": "caff128c610da0824e96bfd452bb2eee69c7bc29",
+      "sha256": "12914bc0c37c52cfcb6323b6f64491df49c25c22d48a9e7a54cdb0ccec16e9cb",
+      "artist": "Ltljltlj",
+      "number_box": [
+        60,
+        125,
+        410,
+        345
+      ],
+      "reviewed": true
+    },
+    "ca": {
+      "file": "California blank.svg",
+      "original_file": "California blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/b/b0/California_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:California_blank.svg",
+      "source_sha1": "e98411083d4789c88bef9b3d6d681d4a2c8ae325",
+      "sha256": "5fafcf1837ee2aaea55f504827630c870e11496db95d7a2f74c164ca836ad13d",
+      "artist": "SPUI",
+      "number_box": [
+        75,
+        245,
+        437,
+        445
+      ],
+      "reviewed": true,
+      "text_colour": [
+        255,
+        255,
+        255
+      ],
+      "cutout_nonblack": true
+    },
+    "co": {
+      "file": "Colorado blank.svg",
+      "original_file": "Colorado blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/f2/Colorado_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Colorado_blank.svg",
+      "source_sha1": "dd54dab09dbe35c1e04a33b60196ddddbaa1de9e",
+      "sha256": "3513ae6fb7935ef41e1b4c5bdf477d4f7558bd0228fdb064dc9021841abc1f7b",
+      "artist": "No machine-readable author provided. Holderca1~commonswiki assumed (based on copyright claims).",
+      "number_box": [
+        50,
+        295,
+        462,
+        470
+      ],
+      "reviewed": true
+    },
+    "ct": {
+      "file": "Connecticut Highway blank.svg",
+      "original_file": "Connecticut Highway blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/4/48/Connecticut_Highway_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Connecticut_Highway_blank.svg",
+      "source_sha1": "821dce317bcf7008ce91d82f2aef239efe9c4a0f",
+      "sha256": "e98bc1ab6b20ee3508b2b12e9f7a14827b196c96f1ca4e88f837428dc1afa3db",
+      "artist": "Mr. Matt\u00e9",
+      "number_box": [
+        55,
+        130,
+        457,
+        390
+      ],
+      "reviewed": true
+    },
+    "fl": {
+      "file": "Florida blank.svg",
+      "original_file": "Florida blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/d/da/Florida_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Florida_blank.svg",
+      "source_sha1": "1dc56d9510192ef9b2f51782b4b33af6684f6ad7",
+      "sha256": "a0023f3e00b08e51c62fda2e715e98bfc596b521f476208f9a1978cde33029b8",
+      "artist": "SPUI",
+      "number_box": [
+        155,
+        215,
+        395,
+        375
+      ],
+      "reviewed": true
+    },
+    "ga": {
+      "file": "Georgia blank.svg.png",
+      "original_file": "Georgia blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/a/a3/Georgia_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Georgia_blank.svg",
+      "source_sha1": "9e33012a624c146f5d7959e07b880b97c7e04510",
+      "sha256": "316ab8ea5a70663d65deff38e8bcae128eb1183000937609033a9624ce567854",
+      "artist": "Fredddie, originally created by Pedriana",
+      "number_box": [
+        95,
+        175,
+        395,
+        365
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a3/Georgia_blank.svg/960px-Georgia_blank.svg.png"
+    },
+    "hi": {
+      "file": "HI-blank.svg.png",
+      "original_file": "HI-blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/b/b7/HI-blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:HI-blank.svg",
+      "source_sha1": "3c25cd55f7236722778da96d89be74057e239e3b",
+      "sha256": "b4fbf4465c2fdb4726d25734b0c84d4dc204856cc8bf4e7231a0bed9dfb5f668",
+      "artist": "TwinsMetsFan",
+      "number_box": [
+        125,
+        200,
+        400,
+        420
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b7/HI-blank.svg/960px-HI-blank.svg.png"
+    },
+    "id": {
+      "file": "Idaho blank.svg.png",
+      "original_file": "Idaho blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/2/20/Idaho_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Idaho_blank.svg",
+      "source_sha1": "db23e62def813f24455891759bb9092f71691bcd",
+      "sha256": "4202dc81b0cc0e78c9abfcabcb4e7201ba7805268081e98960b69ba2775e3f54",
+      "artist": "Idaho Transportation Department",
+      "number_box": [
+        205,
+        35,
+        480,
+        245
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/20/Idaho_blank.svg/960px-Idaho_blank.svg.png"
+    },
+    "il": {
+      "file": "Illinois blank.svg.png",
+      "original_file": "Illinois blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/3/3d/Illinois_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Illinois_blank.svg",
+      "source_sha1": "6ec8427c45a06c3f395bb0c693e34ced3859a896",
+      "sha256": "8301301b5596a182c7fa1ca1e01e62c1230e44bf319ac93794ea7d8fcbfa135a",
+      "artist": "",
+      "number_box": [
+        70,
+        210,
+        442,
+        440
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/Illinois_blank.svg/960px-Illinois_blank.svg.png"
+    },
+    "in": {
+      "file": "Indiana blank.svg.png",
+      "original_file": "Indiana blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/fd/Indiana_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Indiana_blank.svg",
+      "source_sha1": "79e7fd6fe8d0129ddc2e52952b69032aab954bf7",
+      "sha256": "1b67fcde935de9988a37ead5f48c004a5a5df68be8d58eed3cb51eb024849a47",
+      "artist": "Fredddie, originally by Holderca1",
+      "number_box": [
+        65,
+        200,
+        447,
+        435
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fd/Indiana_blank.svg/960px-Indiana_blank.svg.png"
+    },
+    "ks": {
+      "file": "K-blank.svg.png",
+      "original_file": "K-blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/c/c4/K-blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:K-blank.svg",
+      "source_sha1": "529d6321e1c7a41b41e0e3319cd14386f8393484",
+      "sha256": "110301782525ea03ae76aff62bce72ddbccdc78bb8eae296149a2ada9a0e3f93",
+      "artist": "Scott Nazelrod, Jonathan N. Winkler",
+      "number_box": [
+        90,
+        140,
+        422,
+        375
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c4/K-blank.svg/960px-K-blank.svg.png"
+    },
+    "la": {
+      "file": "Louisiana blank (2008).svg.png",
+      "original_file": "Louisiana blank (2008).svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/a/af/Louisiana_blank_%282008%29.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Louisiana_blank_(2008).svg",
+      "source_sha1": "9670dfc150ee471b98f46d09f522f30a744d9549",
+      "sha256": "3bc61cd543c7cf31bea05c25b893f6ba759b426bb48571de99172dba1ecf1842",
+      "artist": "Minh Nguyen",
+      "number_box": [
+        100,
+        245,
+        420,
+        390
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/af/Louisiana_blank_%282008%29.svg/960px-Louisiana_blank_%282008%29.svg.png"
+    },
+    "me": {
+      "file": "Maine blank.svg.png",
+      "original_file": "Maine blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/8/8d/Maine_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Maine_blank.svg",
+      "source_sha1": "11a4aacef53d9e0919d4317a31199fc08ca45a89",
+      "sha256": "9067b4df34f86608fa0b89107a5b4a00a65e220c49146be4c6eb78612a885143",
+      "artist": "Fredddie",
+      "number_box": [
+        55,
+        130,
+        457,
+        390
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/Maine_blank.svg/960px-Maine_blank.svg.png"
+    },
+    "md": {
+      "file": "MD blank.svg.png",
+      "original_file": "MD blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/9/99/MD_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:MD_blank.svg",
+      "source_sha1": "f8d685d84ccf2c2f66c80750f22c3ac11a81906d",
+      "sha256": "4d16dd0a97404e8eec3b68b99dbfafcab02f804d8ffba8dfd2237c8e2ce160c4",
+      "artist": "Jeff02",
+      "number_box": [
+        65,
+        210,
+        447,
+        450
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/MD_blank.svg/960px-MD_blank.svg.png"
+    },
+    "ma": {
+      "file": "MA Route blank.svg.png",
+      "original_file": "MA Route blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/9/98/MA_Route_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:MA_Route_blank.svg",
+      "source_sha1": "a306957f27ce069c58db5cec5323ce54c97592b2",
+      "sha256": "4ce4c8d3933b56d1202a833147ecf8e31038f3599b2ce5fb7d273dd4b0f5b0f9",
+      "artist": "SPUI",
+      "number_box": [
+        55,
+        130,
+        457,
+        390
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/98/MA_Route_blank.svg/960px-MA_Route_blank.svg.png"
+    },
+    "mi": {
+      "file": "M-Blank.svg.png",
+      "original_file": "M-Blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/3/36/M-Blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:M-Blank.svg",
+      "source_sha1": "791c60d72a6e36bb8ce13bd445ed7004e4e3fae9",
+      "sha256": "0ab212701fcedf2683ecda99c4b200c5da302fce3ad3afd3424660d82e103786",
+      "artist": "IW4",
+      "number_box": [
+        145,
+        225,
+        367,
+        360
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/M-Blank.svg/960px-M-Blank.svg.png",
+      "cutout_nonblack": true
+    },
+    "mn": {
+      "file": "MN-blank.svg.png",
+      "original_file": "MN-blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/7/7a/MN-blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:MN-blank.svg",
+      "source_sha1": "5bf1b4362ef78205b3c305a0e3708f285ca59502",
+      "sha256": "e38d22d5b8e901bc4fe94b90027879a497c1cee7186e6a8b00ca5aaaced21a5c",
+      "artist": "Minnesota Department of Transportation",
+      "number_box": [
+        75,
+        190,
+        437,
+        385
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7a/MN-blank.svg/960px-MN-blank.svg.png",
+      "text_colour": [
+        255,
+        255,
+        255
+      ]
+    },
+    "mo": {
+      "file": "MO-blank.svg.png",
+      "original_file": "MO-blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/0/01/MO-blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:MO-blank.svg",
+      "source_sha1": "98c8ad91499202d63132b33358783a9c6644f079",
+      "sha256": "45489f594a770fadd8e3f153e9e5563f2b79608175924b09a64cd4dc83cfab8c",
+      "artist": "O",
+      "number_box": [
+        75,
+        145,
+        410,
+        350
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/01/MO-blank.svg/960px-MO-blank.svg.png"
+    },
+    "mt": {
+      "file": "MT-blank.svg.png",
+      "original_file": "MT-blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/d/d1/MT-blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:MT-blank.svg",
+      "source_sha1": "b25648ed82342b527cb837bd3277e5d5d643be24",
+      "sha256": "d7bf48406e4470d5f250ccb997123032e1e14e6bd7d7434eb0794f9c55d80448",
+      "artist": "Fredddie, originally created by Master son",
+      "number_box": [
+        75,
+        170,
+        437,
+        365
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d1/MT-blank.svg/960px-MT-blank.svg.png"
+    },
+    "ne": {
+      "file": "Nebraska state highway marker.svg.png",
+      "original_file": "Nebraska state highway marker.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/5/5e/Nebraska_state_highway_marker.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Nebraska_state_highway_marker.svg",
+      "source_sha1": "cbd7557402af7f0d86794415cf337df7ec38df47",
+      "sha256": "d41659f7faa9595f8ef7f61535fb820c45a38e1d6b613932b5ef6c3c6f9c573d",
+      "artist": "Fredddie, originally created by Scott Onson",
+      "number_box": [
+        100,
+        125,
+        412,
+        335
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/Nebraska_state_highway_marker.svg/960px-Nebraska_state_highway_marker.svg.png"
+    },
+    "nv": {
+      "file": "Nevada blank.svg.png",
+      "original_file": "Nevada blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/e/e2/Nevada_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Nevada_blank.svg",
+      "source_sha1": "683d799261b3fbb8543e60ece635c55768d4d08c",
+      "sha256": "d19851ac38b35662600947b18c9744c0d9dc6973252bc6bd33477182299a9a5e",
+      "artist": "Geopgeop; NevadaDOT",
+      "number_box": [
+        135,
+        60,
+        405,
+        245
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e2/Nevada_blank.svg/960px-Nevada_blank.svg.png"
+    },
+    "nh": {
+      "file": "NH Route blank.svg.png",
+      "original_file": "NH Route blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/e/e9/NH_Route_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:NH_Route_blank.svg",
+      "source_sha1": "af1b0fb7abf6406bcd12e80334a201f0d37063f2",
+      "sha256": "a184d2019450c6f531f3efbb6bacd645ad4ef24b8ffe87eb357fe3ad5988cd94",
+      "artist": "SPUI",
+      "number_box": [
+        155,
+        180,
+        465,
+        405
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e9/NH_Route_blank.svg/960px-NH_Route_blank.svg.png"
+    },
+    "nm": {
+      "file": "New Mexico blank.svg.png",
+      "original_file": "New Mexico blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/c/c5/New_Mexico_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:New_Mexico_blank.svg",
+      "source_sha1": "ab39adaccc3b66d79dcae634468e509342571880",
+      "sha256": "f87572cfbeceb01e649c1fdceeb92167e2faefcb4ec96589cfb825f4380b3178",
+      "artist": "",
+      "number_box": [
+        140,
+        155,
+        372,
+        365
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/New_Mexico_blank.svg/960px-New_Mexico_blank.svg.png"
+    },
+    "ny": {
+      "file": "NY-blank.svg.png",
+      "original_file": "NY-blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/5/54/NY-blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:NY-blank.svg",
+      "source_sha1": "8641205ad77d49a4627d2860da6327c1b7bc5345",
+      "sha256": "d8651572ec02c7ea24624286b0fe410621f803065dbacbfa0999ff3a180736fc",
+      "artist": "TwinsMetsFan",
+      "number_box": [
+        90,
+        195,
+        422,
+        395
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/54/NY-blank.svg/960px-NY-blank.svg.png"
+    },
+    "nc": {
+      "file": "NC blank.svg.png",
+      "original_file": "NC blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/ff/NC_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:NC_blank.svg",
+      "source_sha1": "f19ce8da69d6725c704a39c1e3675685caafb223",
+      "sha256": "ebc487fa8da28e22f4ea9b9294291e063222f447d786b620da5de8daa5bfe631",
+      "artist": "TwinsMetsFan",
+      "number_box": [
+        135,
+        160,
+        377,
+        355
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/ff/NC_blank.svg/960px-NC_blank.svg.png",
+      "cutout_nonblack": true
+    },
+    "nd": {
+      "file": "ND-blank.svg.png",
+      "original_file": "ND-blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/1/13/ND-blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:ND-blank.svg",
+      "source_sha1": "f2f40584545889780059db3d581c673e5e47e632",
+      "sha256": "a4300f1eb203b75504f5ea667fdf886c80a2881ba039967c38324c717d6abc28",
+      "artist": "North Dakota Department of Transportation",
+      "number_box": [
+        65,
+        195,
+        447,
+        390
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/13/ND-blank.svg/960px-ND-blank.svg.png"
+    },
+    "oh": {
+      "file": "OH-blank.svg.png",
+      "original_file": "OH-blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/e/ef/OH-blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:OH-blank.svg",
+      "source_sha1": "56f83dce56cec554b1d23a23845e24a87c09a998",
+      "sha256": "65c47efb3f325e7bfd76513440b3bd8a8d9ee81d38b37fb249bf4f1f68bcb97c",
+      "artist": "Holderca1",
+      "number_box": [
+        65,
+        145,
+        447,
+        360
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ef/OH-blank.svg/960px-OH-blank.svg.png"
+    },
+    "ok": {
+      "file": "Oklahoma State Highway blank.svg.png",
+      "original_file": "Oklahoma State Highway blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/0/08/Oklahoma_State_Highway_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Oklahoma_State_Highway_blank.svg",
+      "source_sha1": "7c177671233f8c2b84d02bae74ed517c6d95cb6f",
+      "sha256": "dc4b0c1d962a0a5bed7b4f3259351e927ad2c972713fec268dc4b3cfcb179ea0",
+      "artist": "SPUI",
+      "number_box": [
+        70,
+        300,
+        442,
+        460
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Oklahoma_State_Highway_blank.svg/960px-Oklahoma_State_Highway_blank.svg.png"
+    },
+    "or": {
+      "file": "OR blank 2.svg.png",
+      "original_file": "OR blank 2.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/4/4c/OR_blank_2.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:OR_blank_2.svg",
+      "source_sha1": "6dde5a56d7d39058f597b8a78b67ff841e0ae1f4",
+      "sha256": "14e675ae4154e157998ab957e5392e0e64922355bc5d333ffe2e7967509b8450",
+      "artist": "TwinsMetsFan",
+      "number_box": [
+        95,
+        140,
+        417,
+        370
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/OR_blank_2.svg/960px-OR_blank_2.svg.png"
+    },
+    "pa": {
+      "file": "PA-blank2di.svg.png",
+      "original_file": "PA-blank2di.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/f5/PA-blank2di.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:PA-blank2di.svg",
+      "source_sha1": "0a9632ed4a0b49cf22948bca65f2462771361319",
+      "sha256": "1a62b176e7e5a88fcda85e91e78065922c496a06b593db5fdee2575dbbade68d",
+      "artist": "TwinsMetsFan",
+      "number_box": [
+        125,
+        155,
+        387,
+        355
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f5/PA-blank2di.svg/960px-PA-blank2di.svg.png"
+    },
+    "ri": {
+      "file": "Rhode Island blank.svg.png",
+      "original_file": "Rhode Island blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/2/27/Rhode_Island_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Rhode_Island_blank.svg",
+      "source_sha1": "3d7355f8f98db5ba5cb1464905a5ded35ba4c473",
+      "sha256": "125b57e16e1f4bb79144a5b688ace3c6f59562259e913ab68805a84e1ddf0bb2",
+      "artist": "TwinsMetsFan",
+      "number_box": [
+        65,
+        215,
+        447,
+        455
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/27/Rhode_Island_blank.svg/960px-Rhode_Island_blank.svg.png"
+    },
+    "sd": {
+      "file": "SD Blank-2d.svg.png",
+      "original_file": "SD Blank-2d.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/9/94/SD_Blank-2d.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:SD_Blank-2d.svg",
+      "source_sha1": "fd24b2805a1da548b2db5957746442c1a2fd6438",
+      "sha256": "449f753d933ce03b80190a84c15b7e2eb6e711a189c3e690ccfe05bf8bd8ccce",
+      "artist": "Fredddie",
+      "number_box": [
+        105,
+        195,
+        440,
+        395
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/94/SD_Blank-2d.svg/960px-SD_Blank-2d.svg.png"
+    },
+    "tn": {
+      "file": "Tennessee blank.svg.png",
+      "original_file": "Tennessee blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/b/ba/Tennessee_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Tennessee_blank.svg",
+      "source_sha1": "fd5f463b58ed5dea994167082965dc46cfe334c2",
+      "sha256": "b2246e470af5f2c327bb91e73a8b98c108f1d80f95cbbba69890adde7c9fd5bd",
+      "artist": "Fredddie, state design by SPUI",
+      "number_box": [
+        75,
+        110,
+        437,
+        300
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/ba/Tennessee_blank.svg/960px-Tennessee_blank.svg.png"
+    },
+    "tx": {
+      "file": "Texas blank.svg.png",
+      "original_file": "Texas blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/0/02/Texas_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Texas_blank.svg",
+      "source_sha1": "54e33d1d46b5ad3d5a62e0ad7935350284001b04",
+      "sha256": "87aa528a1eb1ae8c781b3854854b814c9e1065effba305c37c75c511c23f0984",
+      "artist": "",
+      "number_box": [
+        55,
+        65,
+        457,
+        325
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/02/Texas_blank.svg/960px-Texas_blank.svg.png"
+    },
+    "ut": {
+      "file": "Utah blank.svg",
+      "original_file": "Utah blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/f1/Utah_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Utah_blank.svg",
+      "source_sha1": "9e7d30395178d16b584aa5d195e9d884b24a9b66",
+      "sha256": "4f0254d8be9cbd9f5c7a6be575746eba9a3bf351be754eb83557bb750cad590b",
+      "artist": "Fredddie",
+      "number_box": [
+        115,
+        175,
+        397,
+        345
+      ],
+      "reviewed": true
+    },
+    "vt": {
+      "file": "Vermont blank.svg.png",
+      "original_file": "Vermont blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/9/94/Vermont_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Vermont_blank.svg",
+      "source_sha1": "caa46b7091c04a37caba07e58ef7f15ab22df9d8",
+      "sha256": "69e3a58fc3b1a41c5e6974e60f005372c4fff7f17b2f346a30ddbb39a5f016a1",
+      "artist": "SPUI",
+      "number_box": [
+        90,
+        220,
+        422,
+        440
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/94/Vermont_blank.svg/960px-Vermont_blank.svg.png"
+    },
+    "va": {
+      "file": "Virginia blank.svg.png",
+      "original_file": "Virginia blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/8/88/Virginia_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Virginia_blank.svg",
+      "source_sha1": "64c9dec15561f1a4d2f2772ccc57e260115d2257",
+      "sha256": "cd9a881fc9432f4844040caf19ed54213177cc937ff19a905b537d7ec55929ac",
+      "artist": "",
+      "number_box": [
+        85,
+        135,
+        427,
+        350
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/Virginia_blank.svg/960px-Virginia_blank.svg.png"
+    },
+    "wa": {
+      "file": "WA-blank.svg.png",
+      "original_file": "WA-blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/5/52/WA-blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:WA-blank.svg",
+      "source_sha1": "0ce2d7c20332b9c35447d8a99ec61571887394ed",
+      "sha256": "11128bbfd27041b13f12a35cb59b8622a3a4cf3588d9a54d5b538dbf08db754e",
+      "artist": "The original uploader was PHenry at English Wikipedia.",
+      "number_box": [
+        140,
+        120,
+        385,
+        305
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/WA-blank.svg/960px-WA-blank.svg.png"
+    },
+    "wv": {
+      "file": "WV-blank.svg.png",
+      "original_file": "WV-blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/2/26/WV-blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:WV-blank.svg",
+      "source_sha1": "09385f61abd68ff840bcd553c1246d967199e040",
+      "sha256": "c11b1a952aa0bcb47a094170c3dfa59669f60f7dc826b8acab328808c7b0132f",
+      "artist": "TwinsMetsFan",
+      "number_box": [
+        60,
+        130,
+        452,
+        390
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/WV-blank.svg/960px-WV-blank.svg.png"
+    },
+    "wi": {
+      "file": "WIS blank.svg.png",
+      "original_file": "WIS blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/b/b9/WIS_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:WIS_blank.svg",
+      "source_sha1": "9a87a39b0c71af11218f83271555c51c66c866b5",
+      "sha256": "007299f9dc9027c63b6e06d1d6c72a01bea169b145f5bbb38257bd6aa002f121",
+      "artist": "SPUI",
+      "number_box": [
+        130,
+        180,
+        382,
+        345
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/WIS_blank.svg/960px-WIS_blank.svg.png"
+    },
+    "circle": {
+      "file": "Circle sign blank.svg.png",
+      "original_file": "Circle sign blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/1/16/Circle_sign_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Circle_sign_blank.svg",
+      "source_sha1": "93c3b2d6620c5f485b0d7584e30ece51f1433029",
+      "sha256": "af59a115a061c1411410b3ebba20bb71daf38e09806d2d78b211a055762d410a",
+      "artist": "No machine-readable author provided. Scott5114 assumed (based on copyright claims).",
+      "number_box": [
+        95,
+        150,
+        417,
+        362
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/16/Circle_sign_blank.svg/960px-Circle_sign_blank.svg.png"
+    },
+    "ellipse": {
+      "file": "Ellipse sign blank wide.svg.png",
+      "original_file": "Ellipse sign blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/4/42/Ellipse_sign_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Ellipse_sign_blank_wide.svg",
+      "source_sha1": "850a88700cd2bf86e7b53eabcf361cfe10a54849",
+      "sha256": "9627280422bf86a43c11035e1b9cafe7f165f7a8c916deeddde0aa3bfb6490c4",
+      "artist": "Vishwin60",
+      "number_box": [
+        55,
+        145,
+        457,
+        370
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/42/Ellipse_sign_blank_wide.svg/960px-Ellipse_sign_blank_wide.svg.png"
+    },
+    "al_wide": {
+      "file": "Alabama blank wide.svg.png",
+      "original_file": "Alabama blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/e/ee/Alabama_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Alabama_blank_wide.svg",
+      "source_sha1": "c4aaf2a5543c23724655c4a3f230bcf5ee7d32af",
+      "sha256": "c12835e41cd4cf85279ea1c26cda25b11d0a22fa89eab3a0bfa6e4af0300ada5",
+      "artist": "Ltljltlj",
+      "number_box": [
+        60,
+        115,
+        452,
+        360
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ee/Alabama_blank_wide.svg/960px-Alabama_blank_wide.svg.png"
+    },
+    "az_wide": {
+      "file": "Arizona blank wide.svg.png",
+      "original_file": "Arizona blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/f3/Arizona_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Arizona_blank_wide.svg",
+      "source_sha1": "fa21ec3377f496e0faf280c86ad2a1327a5d48c0",
+      "sha256": "4e5cc20d52988903dc1172455bc630b2f33cb93662af4332188c5628b3ab9a12",
+      "artist": "Ltljltlj",
+      "number_box": [
+        120,
+        185,
+        445,
+        365
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f3/Arizona_blank_wide.svg/960px-Arizona_blank_wide.svg.png"
+    },
+    "ar_wide": {
+      "file": "Arkansas blank wide.svg.png",
+      "original_file": "Arkansas blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/a/a4/Arkansas_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Arkansas_blank_wide.svg",
+      "source_sha1": "a6eb2b896893bbf8bbe376d4b17cb8e2c3464533",
+      "sha256": "62dc3ff0378ee337ea23b35fed044b3a29120aa686746e4ba2160d727aa8f827",
+      "artist": "Ltljltlj",
+      "number_box": [
+        60,
+        125,
+        410,
+        345
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a4/Arkansas_blank_wide.svg/960px-Arkansas_blank_wide.svg.png"
+    },
+    "ca_wide": {
+      "file": "California blank wide.svg.png",
+      "original_file": "California blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/9/92/California_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:California_blank_wide.svg",
+      "source_sha1": "f3e26168901867537ca6d66ed2b319b0ba6153a7",
+      "sha256": "3633ec8ef6cf59cc6cd1e2a0326a85139486633132927891c11a2fccda7929e3",
+      "artist": "SPUI",
+      "number_box": [
+        75,
+        245,
+        437,
+        445
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/92/California_blank_wide.svg/960px-California_blank_wide.svg.png",
+      "text_colour": [
+        255,
+        255,
+        255
+      ],
+      "cutout_nonblack": true
+    },
+    "fl_wide": {
+      "file": "Florida blank wide.svg.png",
+      "original_file": "Florida blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/5/52/Florida_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Florida_blank_wide.svg",
+      "source_sha1": "f16591e9bbb2e3d6388b847c3d34dbc763393728",
+      "sha256": "988f9910b8e2a99610a3df737389eac4a5b0a929086d70e0da8bf86635d436fc",
+      "artist": "SPUI",
+      "number_box": [
+        155,
+        215,
+        395,
+        375
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/Florida_blank_wide.svg/960px-Florida_blank_wide.svg.png"
+    },
+    "ga_wide": {
+      "file": "Georgia blank wide.svg.png",
+      "original_file": "Georgia blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/0/02/Georgia_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Georgia_blank_wide.svg",
+      "source_sha1": "0481d8fbd53625b32fe057e0ebd158039c20db7b",
+      "sha256": "94f7c32ce541d1322d9130bf4370a7e193760f43404a713fcbbf750e8761a078",
+      "artist": "Fredddie, originally created by Pedriana",
+      "number_box": [
+        95,
+        175,
+        395,
+        365
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/02/Georgia_blank_wide.svg/960px-Georgia_blank_wide.svg.png"
+    },
+    "id_wide": {
+      "file": "Idaho blank wide.svg.png",
+      "original_file": "Idaho blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/fe/Idaho_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Idaho_blank_wide.svg",
+      "source_sha1": "aa22eda102c80f9d528cb0e75316835e8b549e00",
+      "sha256": "4468e0f1193c4ae7b91071c25c5c051bec2f7fd620a5880fbe3710278a321a50",
+      "artist": "Idaho Transportation Department",
+      "number_box": [
+        205,
+        35,
+        480,
+        245
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fe/Idaho_blank_wide.svg/960px-Idaho_blank_wide.svg.png"
+    },
+    "il_wide": {
+      "file": "Illinois blank wide.svg.png",
+      "original_file": "Illinois blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/fd/Illinois_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Illinois_blank_wide.svg",
+      "source_sha1": "76f711f1864a7f09267e76cceafdb25f8ba01ca4",
+      "sha256": "04c2455f89a8fa529c9dbeb1f832e08175e0883634e1e6a67412814576e0e09f",
+      "artist": "Sehome Bay",
+      "number_box": [
+        70,
+        210,
+        442,
+        440
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fd/Illinois_blank_wide.svg/960px-Illinois_blank_wide.svg.png"
+    },
+    "in_wide": {
+      "file": "Indiana blank wide.svg.png",
+      "original_file": "Indiana blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/6/60/Indiana_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Indiana_blank_wide.svg",
+      "source_sha1": "a1abc72d71531795d9f3eb44868f18c31bcfcb89",
+      "sha256": "2ec77f76608c3df25bd8113ada2f57a609b11ebef379cceee1b9cdc3cb113276",
+      "artist": "Fredddie, originally by Holderca1",
+      "number_box": [
+        65,
+        200,
+        447,
+        435
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Indiana_blank_wide.svg/960px-Indiana_blank_wide.svg.png"
+    },
+    "ks_wide": {
+      "file": "K-blank wide.svg.png",
+      "original_file": "K-blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/b/bb/K-blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:K-blank_wide.svg",
+      "source_sha1": "9fcedd968d8a411eb53e9c73a75c8e0752c60de3",
+      "sha256": "84ed86b1f3e2f07ce5467e7ee3adf39d036126082800ac3ee1a6dd295cd2868e",
+      "artist": "Sehome Bay",
+      "number_box": [
+        90,
+        140,
+        422,
+        375
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bb/K-blank_wide.svg/960px-K-blank_wide.svg.png"
+    },
+    "me_wide": {
+      "file": "Maine blank wide.svg.png",
+      "original_file": "Maine blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/8/81/Maine_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Maine_blank_wide.svg",
+      "source_sha1": "3f69fd20b628d71fb47099163c53fedc298c722c",
+      "sha256": "a84f8e070893ffe9924a4f0efea84af64c6629c4fb8b24a0c3fe8817091c53d1",
+      "artist": "Fredddie",
+      "number_box": [
+        55,
+        130,
+        457,
+        390
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/81/Maine_blank_wide.svg/960px-Maine_blank_wide.svg.png"
+    },
+    "md_wide": {
+      "file": "MD blank wide.svg.png",
+      "original_file": "MD blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/e/e1/MD_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:MD_blank_wide.svg",
+      "source_sha1": "d040d47910a93f17abb362c97ecaf4c495ee1a63",
+      "sha256": "0137e8022875d3988af16ead796200a88056c9aad3b265abc4174c707b103142",
+      "artist": "Jeff02",
+      "number_box": [
+        65,
+        210,
+        447,
+        450
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/MD_blank_wide.svg/960px-MD_blank_wide.svg.png"
+    },
+    "ma_wide": {
+      "file": "MA Route blank wide.svg.png",
+      "original_file": "MA Route blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/4/40/MA_Route_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:MA_Route_blank_wide.svg",
+      "source_sha1": "e49ba2ce5e9ca8c171d9b8901ec0e238de83dcc4",
+      "sha256": "bd8cee3ed25c2c38c1050087afb05d9a0256320fc2136798bd2bb59dfdbc758e",
+      "artist": "SPUI",
+      "number_box": [
+        55,
+        130,
+        457,
+        390
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/MA_Route_blank_wide.svg/960px-MA_Route_blank_wide.svg.png"
+    },
+    "mi_wide": {
+      "file": "M-Blank3.svg.png",
+      "original_file": "M-Blank3.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/7/7d/M-Blank3.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:M-Blank3.svg",
+      "source_sha1": "d7b53c442ffc28a994b2465db6566ec85f6e0641",
+      "sha256": "6ce367e5cc5899612485a6d8efef1cee7917d19e8ba567e3dca732b1671c8384",
+      "artist": "IW4",
+      "number_box": [
+        145,
+        225,
+        367,
+        360
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7d/M-Blank3.svg/960px-M-Blank3.svg.png",
+      "cutout_nonblack": true
+    },
+    "mn_wide": {
+      "file": "MN-blank wide.svg.png",
+      "original_file": "MN-blank wide.svg",
+      "license": "CC BY-SA 4.0",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/0/01/MN-blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:MN-blank_wide.svg",
+      "source_sha1": "25f1483eb7ebe3376f0a9983ba8eaf1614cefb9d",
+      "sha256": "18a6b5c0df41598dcbaf80dfc0344b5d83af036349dfcf18288328950b570a73",
+      "artist": "Taniya Wilburn",
+      "number_box": [
+        75,
+        190,
+        437,
+        385
+      ],
+      "reviewed": true,
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0",
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/01/MN-blank_wide.svg/960px-MN-blank_wide.svg.png",
+      "text_colour": [
+        255,
+        255,
+        255
+      ]
+    },
+    "mt_wide": {
+      "file": "MT-blank-3d.svg.png",
+      "original_file": "MT-blank-3d.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/8/80/MT-blank-3d.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:MT-blank-3d.svg",
+      "source_sha1": "125095ee205d1615adc2288a7f540dc257941701",
+      "sha256": "640577bd5dfb909287077629014911135035ea80ce86d7a8d96829ff811e151d",
+      "artist": "Fredddie, originally created by Master son",
+      "number_box": [
+        75,
+        170,
+        437,
+        365
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/80/MT-blank-3d.svg/960px-MT-blank-3d.svg.png"
+    },
+    "nd_wide": {
+      "file": "ND-blank wide.svg.png",
+      "original_file": "ND-blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/9/95/ND-blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:ND-blank_wide.svg",
+      "source_sha1": "c2428435d146f1464500940195a956af96e85021",
+      "sha256": "cdbd48c3eb62b5369699f6b1d1d904ca2aac1798c1faf683ed21cddd0e750d11",
+      "artist": "North Dakota Department of Transportation",
+      "number_box": [
+        65,
+        195,
+        447,
+        390
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/95/ND-blank_wide.svg/960px-ND-blank_wide.svg.png"
+    },
+    "ok_wide": {
+      "file": "Oklahoma State Highway blank wide.svg.png",
+      "original_file": "Oklahoma State Highway blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/d/d3/Oklahoma_State_Highway_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Oklahoma_State_Highway_blank_wide.svg",
+      "source_sha1": "fc398ddbb9118e4168f1875f6f01b0f48e15af3f",
+      "sha256": "1e2ec9a4100c02dfd9473bfbb60579d07b321c353a22229bae020b583b8037d4",
+      "artist": "Philipp M. Moore",
+      "number_box": [
+        70,
+        300,
+        442,
+        460
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Oklahoma_State_Highway_blank_wide.svg/960px-Oklahoma_State_Highway_blank_wide.svg.png"
+    },
+    "or_wide": {
+      "file": "OR blank wide.svg.png",
+      "original_file": "OR blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/0/0b/OR_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:OR_blank_wide.svg",
+      "source_sha1": "515501aaf30041362ed46aba74217d6e0d38df8d",
+      "sha256": "0c0dbe848f9df463f0a9fd245ae9f416346c79fe1397aca67f6d356a81b5a1b3",
+      "artist": "Northenglish",
+      "number_box": [
+        95,
+        140,
+        417,
+        370
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0b/OR_blank_wide.svg/960px-OR_blank_wide.svg.png"
+    },
+    "pa_wide": {
+      "file": "PA-blank3di.svg.png",
+      "original_file": "PA-blank3di.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/4/46/PA-blank3di.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:PA-blank3di.svg",
+      "source_sha1": "771a15e537700466539cca2caefa6b20dfce1ada",
+      "sha256": "f424283cc68d0eb8e07c7397dab69e09d8d689a52b2a2a55b5b566c5e2b3ef27",
+      "artist": "TwinsMetsFan",
+      "number_box": [
+        125,
+        155,
+        387,
+        355
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/46/PA-blank3di.svg/960px-PA-blank3di.svg.png"
+    },
+    "sd_wide": {
+      "file": "SD Blank-3d.svg.png",
+      "original_file": "SD Blank-3d.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/a/a7/SD_Blank-3d.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:SD_Blank-3d.svg",
+      "source_sha1": "eafec97e8f7cdde1721460c213046af60067c2d8",
+      "sha256": "7a894e7469b4ac8915c63d1bd2d570e830e975d71eb65420e852177b210fb70a",
+      "artist": "Fredddie",
+      "number_box": [
+        105,
+        195,
+        440,
+        395
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/SD_Blank-3d.svg/960px-SD_Blank-3d.svg.png"
+    },
+    "ut_wide": {
+      "file": "Utah blank wide.svg.png",
+      "original_file": "Utah blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/e/e3/Utah_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Utah_blank_wide.svg",
+      "source_sha1": "e7d6d75ad07a0a5ebe851abc4e5f6190817570df",
+      "sha256": "0d4887ec8ba4c36e8f1274533726fed84712c157489060abb65d01225b7e8ce2",
+      "artist": "Fredddie",
+      "number_box": [
+        130,
+        180,
+        382,
+        315
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e3/Utah_blank_wide.svg/960px-Utah_blank_wide.svg.png"
+    },
+    "vt_wide": {
+      "file": "Vermont blank wide.svg.png",
+      "original_file": "Vermont blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/2/2a/Vermont_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Vermont_blank_wide.svg",
+      "source_sha1": "b2975f14a8de37faa56bd2d88940945eb8f8bfc0",
+      "sha256": "2041f5d14cd2b14a1acf85a8ab4c0d71e060bc0a1f6fe2d865daba05076a88f0",
+      "artist": "SPUI",
+      "number_box": [
+        90,
+        220,
+        422,
+        440
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2a/Vermont_blank_wide.svg/960px-Vermont_blank_wide.svg.png"
+    },
+    "va_wide": {
+      "file": "Virginia blank wide.svg.png",
+      "original_file": "Virginia blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/4/4d/Virginia_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Virginia_blank_wide.svg",
+      "source_sha1": "c9c825513ba3b53eadc8642541d736f5d5e3e182",
+      "sha256": "b6406c971f09cc9934a646bf42a52fe64c172e2900febde0fd804cac2dd0f793",
+      "artist": "VDOT",
+      "number_box": [
+        85,
+        135,
+        427,
+        350
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/Virginia_blank_wide.svg/960px-Virginia_blank_wide.svg.png"
+    },
+    "tx_fm": {
+      "file": "Texas FM blank.svg.png",
+      "original_file": "Texas FM blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/0/08/Texas_FM_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Texas_FM_blank.svg",
+      "source_sha1": "298f2cad62ff9da842b47daa04ad466ba6d43dad",
+      "sha256": "dc06b7eff8d50f88476ce27230e2b1ee66454bc722a92e093d1b341e79b0107c",
+      "artist": "SPUI",
+      "number_box": [
+        205,
+        215,
+        415,
+        330
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Texas_FM_blank.svg/960px-Texas_FM_blank.svg.png"
+    },
+    "tx_rm": {
+      "file": "Texas RM blank.svg.png",
+      "original_file": "Texas RM blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/2/29/Texas_RM_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Texas_RM_blank.svg",
+      "source_sha1": "6d1d4374524b1744fa310504684a98737dd3123c",
+      "sha256": "996e5e0932e6ff840541c7290e5a75927df62fca8bd09c9bba68f417c39b0ced",
+      "artist": "",
+      "number_box": [
+        205,
+        215,
+        415,
+        330
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/29/Texas_RM_blank.svg/960px-Texas_RM_blank.svg.png"
+    },
+    "tx_loop": {
+      "file": "Texas Loop blank.svg.png",
+      "original_file": "Texas Loop blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/f5/Texas_Loop_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Texas_Loop_blank.svg",
+      "source_sha1": "f6af6c4d1021f41c153df37aeec788d8fcdf282e",
+      "sha256": "178e90f76ede355e4a2e63f5eece7d4242fc5efba7b941d1b377deca1f951230",
+      "artist": "SPUI",
+      "number_box": [
+        55,
+        230,
+        457,
+        450
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f5/Texas_Loop_blank.svg/960px-Texas_Loop_blank.svg.png"
+    },
+    "tx_spur": {
+      "file": "Texas Spur blank.svg.png",
+      "original_file": "Texas Spur blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/e/ea/Texas_Spur_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Texas_Spur_blank.svg",
+      "source_sha1": "5cb243ea34ba04a5ddf862c359f7c780c62fa4fe",
+      "sha256": "da6d14cbcb11f92f43de2a307a9e11561a58c29c71160f5ef6638313afa1fcab",
+      "artist": "SPUI",
+      "number_box": [
+        55,
+        230,
+        457,
+        450
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Texas_Spur_blank.svg/960px-Texas_Spur_blank.svg.png"
+    },
+    "tx_beltway": {
+      "file": "Texas Beltway blank.svg.png",
+      "original_file": "Texas Beltway blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/d/d0/Texas_Beltway_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Texas_Beltway_blank.svg",
+      "source_sha1": "326276089bc434d5d866b7aaaf465031d4be2e7c",
+      "sha256": "de1b648b9faa95c6b8157dd932dba5f535bc9ef7010918477a8be36e90f432e9",
+      "artist": "SPUI",
+      "number_box": [
+        55,
+        230,
+        457,
+        450
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/Texas_Beltway_blank.svg/960px-Texas_Beltway_blank.svg.png"
+    },
+    "tx_park": {
+      "file": "Texas Park Road blank.svg.png",
+      "original_file": "Texas Park Road blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/c/cc/Texas_Park_Road_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Texas_Park_Road_blank.svg",
+      "source_sha1": "41d866bdefe0c723ad722dbf4b9d780b28b21141",
+      "sha256": "6a9041e9dcccf35343c050a6480a9b699f5e6ca01cf2729e8d5a3251a3f324bd",
+      "artist": "SPUI",
+      "number_box": [
+        55,
+        290,
+        457,
+        465
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cc/Texas_Park_Road_blank.svg/960px-Texas_Park_Road_blank.svg.png"
+    },
+    "tx_recreational": {
+      "file": "Texas Recreational Road blank.svg.png",
+      "original_file": "Texas Recreational Road blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/a/a5/Texas_Recreational_Road_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Texas_Recreational_Road_blank.svg",
+      "source_sha1": "2bade7f9def0a498c81bf490f7dd3a137541d874",
+      "sha256": "f21cab0ac645d7a560f580ecb7cc4ed114e0748d10c8b7a6de86e14aa93fec62",
+      "artist": "SPUI",
+      "number_box": [
+        205,
+        215,
+        415,
+        330
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Texas_Recreational_Road_blank.svg/960px-Texas_Recreational_Road_blank.svg.png",
+      "text_colour": [
+        111,
+        68,
+        44
+      ]
+    },
+    "tx_nasa": {
+      "file": "Texas NASA Road blank.svg.png",
+      "original_file": "Texas NASA Road blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/c/c2/Texas_NASA_Road_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Texas_NASA_Road_blank.svg",
+      "source_sha1": "af78a0df1e98e191568de344514c3533907640d8",
+      "sha256": "1a5a6f0d79d0da18ec463c0fb3c100694b02e2a8f193ba159f632f90daf90576",
+      "artist": "SPUI",
+      "number_box": [
+        55,
+        290,
+        457,
+        465
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Texas_NASA_Road_blank.svg/960px-Texas_NASA_Road_blank.svg.png"
+    },
+    "tx_business": {
+      "file": "Texas Business blank.svg.png",
+      "original_file": "Texas Business blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/9/9f/Texas_Business_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Texas_Business_blank.svg",
+      "source_sha1": "4a873d536cef636b154bd137d80204930d7085a1",
+      "sha256": "5314be66a5cf7c13306d1aff0d32145454de9d3da6bf10b5a008ca15f517db54",
+      "artist": "SPUI",
+      "number_box": [
+        55,
+        180,
+        457,
+        400
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9f/Texas_Business_blank.svg/960px-Texas_Business_blank.svg.png",
+      "modifiers": [
+        "BUSINESS"
+      ],
+      "modifier_plaque": false
+    },
+    "tn_secondary": {
+      "file": "Secondary Tennessee Blank.svg.png",
+      "original_file": "Secondary Tennessee Blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/b/be/Secondary_Tennessee_Blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Secondary_Tennessee_Blank.svg",
+      "source_sha1": "05319a7a0a5f1d297c414ab2bcae7231491119da",
+      "sha256": "6d5c697dc5337243057e60c573f417f9d02308074ae1ffb920483c4ab74322ac",
+      "artist": "",
+      "number_box": [
+        135,
+        80,
+        377,
+        280
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/be/Secondary_Tennessee_Blank.svg/960px-Secondary_Tennessee_Blank.svg.png"
+    },
+    "mt_secondary": {
+      "file": "MT-sec-blank.svg.png",
+      "original_file": "MT-sec-blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/c/cf/MT-sec-blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:MT-sec-blank.svg",
+      "source_sha1": "1549510d4440be05bc3c99c6fec2c9f40f4c9bac",
+      "sha256": "e0ea8ae76b1b69e65405e6082c9930d866a788b3498b580aefc907e8c9233de5",
+      "artist": "User:Master_son",
+      "number_box": [
+        135,
+        160,
+        385,
+        310
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cf/MT-sec-blank.svg/960px-MT-sec-blank.svg.png"
+    },
+    "mo_supplemental": {
+      "file": "MO-supp-blank.svg.png",
+      "original_file": "MO-supp-blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/8/8d/MO-supp-blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:MO-supp-blank.svg",
+      "source_sha1": "0f1d94109e12a35d85dde91436bf09f7c2d88cb5",
+      "sha256": "072078b7cdb65f6dbca573d1a7af597dcbff40e88df7a27c62ed583b798ac3ba",
+      "artist": "Fredddie",
+      "number_box": [
+        60,
+        135,
+        452,
+        390
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/MO-supp-blank.svg/960px-MO-supp-blank.svg.png"
+    },
+    "ne_link": {
+      "file": "N LINK Blank.svg.png",
+      "original_file": "N LINK Blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/ff/N_LINK_Blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:N_LINK_Blank.svg",
+      "source_sha1": "a7932ea3cadc06a77ff47fb7f6b5843f7bb88244",
+      "sha256": "a420b8a2f17a58cedae447c2e52e2d8d10da137665aa10ddaaa63bea96928bdd",
+      "artist": "Scott Onson",
+      "number_box": [
+        90,
+        90,
+        422,
+        315
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/ff/N_LINK_Blank.svg/960px-N_LINK_Blank.svg.png"
+    },
+    "ne_spur": {
+      "file": "N SPUR Blank.svg.png",
+      "original_file": "N SPUR Blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/4/42/N_SPUR_Blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:N_SPUR_Blank.svg",
+      "source_sha1": "4d3609022cb7c16b6b81cf6a724c6c90f5022cb3",
+      "sha256": "b2cdd7bb34e41c18bb9d34c32cdf7dcd78cc036968cb0a738f41e1b07c63a2bb",
+      "artist": "Scott Onson",
+      "number_box": [
+        90,
+        90,
+        422,
+        315
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/42/N_SPUR_Blank.svg/960px-N_SPUR_Blank.svg.png"
+    },
+    "i_business_loop": {
+      "file": "Business Loop blank.svg.png",
+      "original_file": "Business Loop blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/2/24/Business_Loop_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Business_Loop_blank.svg",
+      "source_sha1": "b0a38d122157ac8a8c7c73a862f8f25af7363576",
+      "sha256": "ea5b33996be8c00cdc04faf18eeef8d8fe59ebfff58cb4daf5a9e1740662c8d5",
+      "artist": "",
+      "number_box": [
+        95,
+        245,
+        417,
+        415
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/24/Business_Loop_blank.svg/960px-Business_Loop_blank.svg.png",
+      "text_colour": [
+        255,
+        255,
+        255
+      ],
+      "cutout_nonblack": true,
+      "modifiers": [
+        "BUSINESS LOOP"
+      ],
+      "modifier_plaque": false
+    },
+    "i_business_loop_wide": {
+      "file": "Business Loop blank wide.svg.png",
+      "original_file": "Business Loop blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/f7/Business_Loop_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Business_Loop_blank_wide.svg",
+      "source_sha1": "61004366ef63264d7bc22ea334767fed172a1247",
+      "sha256": "aeeca339840d42595c3de46a476235c5884b539cfc6b7fce6bcebfdbd9178719",
+      "artist": "",
+      "number_box": [
+        95,
+        245,
+        417,
+        415
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f7/Business_Loop_blank_wide.svg/960px-Business_Loop_blank_wide.svg.png",
+      "text_colour": [
+        255,
+        255,
+        255
+      ],
+      "cutout_nonblack": true,
+      "modifiers": [
+        "BUSINESS LOOP"
+      ],
+      "modifier_plaque": false
+    },
+    "i_business_spur": {
+      "file": "Business Spur blank.svg.png",
+      "original_file": "Business Spur blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/2/28/Business_Spur_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Business_Spur_blank.svg",
+      "source_sha1": "27e96320927ae91e99cd2628dfaa6eec73b8a7fd",
+      "sha256": "5325350c80d044f3169745f4c4c93fb01eaaf21a0c081449f71c64a49bc69f5b",
+      "artist": "",
+      "number_box": [
+        95,
+        245,
+        417,
+        415
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/28/Business_Spur_blank.svg/960px-Business_Spur_blank.svg.png",
+      "text_colour": [
+        255,
+        255,
+        255
+      ],
+      "cutout_nonblack": true,
+      "modifiers": [
+        "BUSINESS SPUR"
+      ],
+      "modifier_plaque": false
+    },
+    "i_business_spur_wide": {
+      "file": "Business Spur blank wide.svg.png",
+      "original_file": "Business Spur blank wide.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/c/c0/Business_Spur_blank_wide.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:Business_Spur_blank_wide.svg",
+      "source_sha1": "a95b9b580cdc0e4c2dd9575d3132ae3360886ed6",
+      "sha256": "2af67d5d1a9ba78bf88f13193b532e914a97af64a78fbaecd9f32ce17b0d0109",
+      "artist": "",
+      "number_box": [
+        95,
+        245,
+        417,
+        415
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Business_Spur_blank_wide.svg/960px-Business_Spur_blank_wide.svg.png",
+      "text_colour": [
+        255,
+        255,
+        255
+      ],
+      "cutout_nonblack": true,
+      "modifiers": [
+        "BUSINESS SPUR"
+      ],
+      "modifier_plaque": false
+    },
+    "sc_modern": {
+      "file": "South Carolina blank.svg.png",
+      "original_file": "South Carolina blank.svg",
+      "license": "Public domain",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/a/a8/South_Carolina_blank.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "description_url": "https://commons.wikimedia.org/wiki/File:South_Carolina_blank.svg",
+      "source_sha1": "0cfce75e9a00d7ae907ec99d789dbed7781bea33",
+      "sha256": "480e5b001ce400f636ce178ce4d9f1f433506567acdf330a87dabd3d89ae7907",
+      "artist": "Mr. Matt\u00e9",
+      "number_box": [
+        55,
+        215,
+        457,
+        465
+      ],
+      "reviewed": true,
+      "cached_preview_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a8/South_Carolina_blank.svg/960px-South_Carolina_blank.svg.png",
+      "text_colour": [
+        0,
+        51,
+        161
+      ]
+    }
+  },
+  "networks": {
+    "US:AL": {
+      "template": "al",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "al_wide"
+        }
+      ]
+    },
+    "US:AK": {
+      "template": "ak",
+      "verified": true
+    },
+    "US:AZ": {
+      "template": "az",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "az_wide"
+        }
+      ]
+    },
+    "US:AR": {
+      "template": "ar",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "ar_wide"
+        }
+      ]
+    },
+    "US:CA": {
+      "template": "ca",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "ca_wide"
+        }
+      ]
+    },
+    "US:CO": {
+      "template": "co",
+      "verified": true
+    },
+    "US:CT": {
+      "template": "ct",
+      "verified": true
+    },
+    "US:DE": {
+      "template": "circle",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "ellipse"
+        }
+      ]
+    },
+    "US:FL": {
+      "template": "fl",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "fl_wide"
+        }
+      ]
+    },
+    "US:GA": {
+      "template": "ga",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "ga_wide"
+        }
+      ]
+    },
+    "US:HI": {
+      "template": "hi",
+      "verified": true
+    },
+    "US:ID": {
+      "template": "id",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "id_wide"
+        }
+      ]
+    },
+    "US:IL": {
+      "template": "il",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "il_wide"
+        }
+      ]
+    },
+    "US:IN": {
+      "template": "in",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "in_wide"
+        }
+      ]
+    },
+    "US:IA": {
+      "template": "circle",
+      "verified": true
+    },
+    "US:KS": {
+      "template": "ks",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "ks_wide"
+        }
+      ]
+    },
+    "US:KY": {
+      "template": "circle",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "ellipse"
+        }
+      ]
+    },
+    "US:LA": {
+      "template": "la",
+      "verified": true
+    },
+    "US:ME": {
+      "template": "me",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "me_wide"
+        }
+      ]
+    },
+    "US:MD": {
+      "template": "md",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "md_wide"
+        }
+      ]
+    },
+    "US:MA": {
+      "template": "ma",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "ma_wide"
+        }
+      ]
+    },
+    "US:MI": {
+      "template": "mi",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "mi_wide"
+        }
+      ]
+    },
+    "US:MN": {
+      "template": "mn",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "mn_wide"
+        }
+      ]
+    },
+    "US:MS": {
+      "template": "circle",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "ellipse"
+        }
+      ]
+    },
+    "US:MO": {
+      "template": "mo",
+      "verified": true
+    },
+    "US:MT": {
+      "template": "mt",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "mt_wide"
+        }
+      ]
+    },
+    "US:NE": {
+      "template": "ne",
+      "verified": true
+    },
+    "US:NV": {
+      "template": "nv",
+      "verified": true
+    },
+    "US:NH": {
+      "template": "nh",
+      "verified": true
+    },
+    "US:NJ": {
+      "template": "circle",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "ellipse"
+        }
+      ]
+    },
+    "US:NM": {
+      "template": "nm",
+      "verified": true
+    },
+    "US:NY": {
+      "template": "ny",
+      "verified": true
+    },
+    "US:NC": {
+      "template": "nc",
+      "verified": true
+    },
+    "US:ND": {
+      "template": "nd",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "nd_wide"
+        }
+      ]
+    },
+    "US:OH": {
+      "template": "oh",
+      "verified": true
+    },
+    "US:OK": {
+      "template": "ok",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "ok_wide"
+        }
+      ]
+    },
+    "US:OR": {
+      "template": "or",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "or_wide"
+        }
+      ]
+    },
+    "US:PA": {
+      "template": "pa",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "pa_wide"
+        }
+      ]
+    },
+    "US:RI": {
+      "template": "ri",
+      "verified": true
+    },
+    "US:SD": {
+      "template": "sd",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "sd_wide"
+        }
+      ]
+    },
+    "US:TX": {
+      "template": "tx",
+      "verified": true,
+      "design_variants": {
+        "BUSINESS": "tx_business"
+      }
+    },
+    "US:UT": {
+      "template": "ut",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "ut_wide"
+        }
+      ]
+    },
+    "US:VT": {
+      "template": "vt",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "vt_wide"
+        }
+      ]
+    },
+    "US:VA": {
+      "template": "va",
+      "verified": true,
+      "width_variants": [
+        {
+          "min_chars": 3,
+          "template": "va_wide"
+        }
+      ]
+    },
+    "US:WA": {
+      "template": "wa",
+      "verified": true
+    },
+    "US:WV": {
+      "template": "wv",
+      "verified": true
+    },
+    "US:WI": {
+      "template": "wi",
+      "verified": true
+    },
+    "US:SC": {
+      "template": "sc_modern",
+      "width_variants": [],
+      "verified": true
+    },
+    "US:TX:FM": {
+      "template": "tx_fm",
+      "verified": true
+    },
+    "US:TX:RM": {
+      "template": "tx_rm",
+      "verified": true
+    },
+    "US:TX:LOOP": {
+      "template": "tx_loop",
+      "verified": true
+    },
+    "US:TX:SPUR": {
+      "template": "tx_spur",
+      "verified": true
+    },
+    "US:TX:BELTWAY": {
+      "template": "tx_beltway",
+      "verified": true
+    },
+    "US:TX:PARK": {
+      "template": "tx_park",
+      "verified": true
+    },
+    "US:TX:RECREATIONAL": {
+      "template": "tx_recreational",
+      "verified": true
+    },
+    "US:TX:NASA": {
+      "template": "tx_nasa",
+      "verified": true
+    },
+    "US:TN:PRIMARY": {
+      "template": "tn",
+      "verified": true
+    },
+    "US:TN:SECONDARY": {
+      "template": "tn_secondary",
+      "verified": true
+    },
+    "US:MT:SECONDARY": {
+      "template": "mt_secondary",
+      "verified": true
+    },
+    "US:MO:SUPPLEMENTAL": {
+      "template": "mo_supplemental",
+      "verified": true
+    },
+    "US:NE:LINK": {
+      "template": "ne_link",
+      "verified": true
+    },
+    "US:NE:SPUR": {
+      "template": "ne_spur",
+      "verified": true
+    },
+    "US:VA:SECONDARY": {
+      "template": "circle",
+      "verified": true
+    },
+    "US:I": {
+      "design_variants": {
+        "BUSINESS LOOP": {
+          "template": "i_business_loop",
+          "wide_template": "i_business_loop_wide",
+          "min_chars": 3
+        },
+        "BUSINESS SPUR": {
+          "template": "i_business_spur",
+          "wide_template": "i_business_spur_wide",
+          "min_chars": 3
+        }
+      }
+    }
+  },
+  "review": {
+    "approved": [
+      "ak",
+      "al",
+      "al_wide",
+      "ar",
+      "ar_wide",
+      "az",
+      "az_wide",
+      "ca",
+      "ca_wide",
+      "circle",
+      "co",
+      "ct",
+      "ellipse",
+      "fl",
+      "fl_wide",
+      "ga",
+      "ga_wide",
+      "hi",
+      "i_business_loop",
+      "i_business_loop_wide",
+      "i_business_spur",
+      "i_business_spur_wide",
+      "id",
+      "id_wide",
+      "il",
+      "il_wide",
+      "in",
+      "in_wide",
+      "ks",
+      "ks_wide",
+      "la",
+      "ma",
+      "ma_wide",
+      "md",
+      "md_wide",
+      "me",
+      "me_wide",
+      "mi",
+      "mi_wide",
+      "mn",
+      "mn_wide",
+      "mo",
+      "mo_supplemental",
+      "mt",
+      "mt_secondary",
+      "mt_wide",
+      "nc",
+      "nd",
+      "nd_wide",
+      "ne",
+      "ne_link",
+      "ne_spur",
+      "nh",
+      "nm",
+      "nv",
+      "ny",
+      "oh",
+      "ok",
+      "ok_wide",
+      "or",
+      "or_wide",
+      "pa",
+      "pa_wide",
+      "ri",
+      "sc_modern",
+      "sd",
+      "sd_wide",
+      "tn",
+      "tn_secondary",
+      "tx",
+      "tx_beltway",
+      "tx_business",
+      "tx_fm",
+      "tx_loop",
+      "tx_nasa",
+      "tx_park",
+      "tx_recreational",
+      "tx_rm",
+      "tx_spur",
+      "ut",
+      "ut_wide",
+      "va",
+      "va_wide",
+      "vt",
+      "vt_wide",
+      "wa",
+      "wi",
+      "wv"
+    ],
+    "reviewed": "2026-11-08",
+    "method": "Source/license metadata, per-template runtime raster contact sheets, number-field inspection, and OSM network conventions. No in-engine verification.",
+    "references": {
+      "SC": "https://www.scdot.org/content/dam/scdot-legacy/business/pdf/accessmgt/traffic-engineering-guidelines/tg16.pdf",
+      "ID": "https://apps.itd.idaho.gov/apps/manuals/Sign_Chart_Supplement.pdf"
+    }
+  }
+}

@@ -6,17 +6,35 @@ streaming tiles. This never guesses a route number or a mile reference.
 from collections import OrderedDict
 import math
 import threading
+import json
+import logging
+import os
+from pathlib import Path
+import tempfile
+import time
+from concurrent.futures import CancelledError
 import numpy as np
 import dmath
 import dnp
 import osmtags
 import routeindex
 import signstates
+import highwayroutes
+import routerelations
+
+log = logging.getLogger("earthd.route_repeaters")
+CANDIDATE_CACHE_VERSION = 2
 
 CELL_DEG = .1
-CANDIDATE_M = 700.
-SEPARATION_M = 2400.       # local minima: typically about three miles apart
+SEPARATION_M = routeindex.SHIELD_SPACING        # duplicate suppression only; stations come from junctions
 HALO_M = SEPARATION_M + 200.
+
+
+def expanded(bounds):
+    x0,y0,x1,y1=bounds
+    dy=HALO_M/110000.
+    dx=dy/max(.2,dmath.cos(math.radians(max(abs(y0),abs(y1))+dy)))
+    return x0-dx,y0-dy,x1+dx,y1+dy
 
 
 def read_routes(tags, remote, bounds, kind='demand'):
@@ -27,20 +45,19 @@ def read_routes(tags, remote, bounds, kind='demand'):
         uri = f"'{proto}://{osmtags.PATH}'"
         groups = tags._groups(con, uri, remote, kind)
         candidates = tags._candidates(groups, bounds)
-        if not candidates or not all('ref' in groups[g]['cols'] for g in candidates):
+        if not candidates:
             return []
         cols = ('id', 'bbox', 'highway', 'ref')
         rd._fetch(files, {osmtags.PATH: [r for g in candidates for c in cols
                                        for r in groups[g]['cols'].get(c, ())]}, kind)
         x0, y0, x1, y1 = map(float, bounds)
         predicate = (f"bbox.xmin <= {x1} AND bbox.xmax >= {x0} AND bbox.ymin <= {y1} AND bbox.ymax >= {y0} "
-                     "AND highway IN ('motorway','trunk','primary','secondary','tertiary') "
-                     "AND regexp_matches(ref, '(?i)(^|;)\\s*(I|US)[ -]?[0-9]{1,3}\\s*(;|$)')")
+                     "AND highway IN ('motorway','trunk','primary','secondary','tertiary')")
         rows = con.execute(f'SELECT file_row_number FROM read_parquet({uri}, file_row_number=true) WHERE {predicate}').fetchall()
         if not rows:
             return []
         hit = [g for g in candidates if any(groups[g]['first'] <= r[0] < groups[g]['first']+groups[g]['n'] for r in rows)]
-        wanted = ('oneway', 'bridge', 'tunnel', 'access', 'junction', 'direction')
+        wanted = ('oneway', 'bridge', 'tunnel', 'access', 'junction', 'direction', 'network', 'modifier')
         available = set.intersection(*(set(groups[g]['cols']) for g in hit))
         rd._fetch(files, {osmtags.PATH: [r for g in hit for c in (*wanted, 'geometry')
                                        for r in groups[g]['cols'].get(c, ())]}, kind)
@@ -50,9 +67,10 @@ def read_routes(tags, remote, bounds, kind='demand'):
             pass
         columns = ', '.join(f'"{c}"' if c in available else f'NULL AS "{c}"' for c in wanted)
         numbers = ','.join(str(int(r[0])) for r in rows)
+        ref_column='ref' if 'ref' in available else 'NULL AS ref'
         result = []
         for wid, highway, ref, *rest in con.execute(
-                f'SELECT id, highway, ref, {columns}, geometry FROM read_parquet({uri}, file_row_number=true) '
+                f'SELECT id, highway, {ref_column}, {columns}, geometry FROM read_parquet({uri}, file_row_number=true) '
                 f'WHERE file_row_number IN ({numbers})').fetchall():
             line = osmtags._linestring(bytes(rest[-1])) if rest[-1] is not None else None
             if line is not None and len(line) >= 2:
@@ -68,43 +86,26 @@ def read_routes(tags, remote, bounds, kind='demand'):
         con.close()
 
 
-def candidates(ways):
-    result = []
-    for wid, line, tags in sorted(ways, key=lambda w: w[0]):
-        routes = routeindex.route_refs(tags, ())
-        if not routes or tags.get('highway') not in routeindex.ROAD_CLASSES or not routeindex.ground(tags):
-            continue
-        path = np.asarray(line, float)
-        scale = np.array([111320.*dmath.cos(math.radians(float(path[0, 1]))), 111320.])
-        arc = np.r_[0., np.cumsum(dnp.norm(np.diff(path, axis=0)*scale, axis=1))]
-        length = float(arc[-1])
-        if length < 10.:
-            continue
-        at = lambda s: np.array([dnp.interp(s, arc, path[:, j]) for j in (0, 1)])
-        one = routeindex.exitsigns._direction(tags)
-        if not one and tags.get('highway') == 'motorway' and tags.get('oneway') not in ('no', 'false', '0'):
-            one = 1
-        stations = np.linspace(0., length, max(1, int(math.ceil(length/CANDIDATE_M)))+1)
-        for k, station in enumerate((stations[:-1]+stations[1:])/2):
-            point = at(station)
-            a, b = max(0., station-60.), min(length, station+60.)
-            local = np.vstack([at(a), path[(arc > a) & (arc < b)], at(b)])
-            for direction in ((one,) if one else (1, -1)):
-                approach = local if direction > 0 else local[::-1]
-                axis = (approach[-1]-approach[0])*scale
-                axis /= max(dnp.norm(axis), 1e-9)
-                panels = [dict(kind='interstate' if r[0]=='I' else 'us', number=r[1],
-                               direction=routeindex.posted_direction(tags, (), direction, r, axis)) for r in routes[:3]]
-                extra = dict(type='shield', routes=panels, main_id=wid, point=point.tolist(),
-                             approach=approach.tolist(), axis=axis.tolist())
-                obj = routeindex.record(('fallback-shield-v1', wid, k, direction), point, extra)
-                obj.pop('ways'); obj['roadside'] = extra
-                result.append(obj)
-    return result
+def candidates(ways, relations=None):
+    # Full geometry from the existing parquet reader; shared coordinate IDs join
+    # adjacent OSM ways without restarting stations at way or streaming seams.
+    coords, rows = {}, []
+    import hashlib
+    def node(point):
+        key = tuple(round(float(v),7) for v in point)
+        nid = int.from_bytes(hashlib.blake2b(repr(key).encode(),digest_size=8).digest(),'little')
+        coords[nid] = key
+        return nid
+    for wid,line,tags in ways:
+        rows.append((wid,[node(p) for p in line],tags))
+    out = routeindex.index_records(rows,coords,relations)
+    for obj in out:
+        obj['roadside'] = obj.pop('ways')[0]
+    return out
 
 
 def keys(obj):
-    return {(r['kind'], r['number'], r.get('direction', '')) for r in obj.get('roadside', {}).get('routes', ())}
+    return {highwayroutes.identity(r) for r in obj.get('roadside', {}).get('routes', ())}
 
 
 def distance(a, b):
@@ -133,20 +134,84 @@ def thin(objects, bounds):
 class Source:
     def __init__(self, raw_dir, fetcher):
         self.tags = osmtags.OsmTags(raw_dir, fetcher)
+        self.relations = routerelations.Source(raw_dir, fetcher)
         self.cache = OrderedDict()
         self.lock = threading.Lock()
+        self.saved = Path(raw_dir)/'route-candidates-v2'
+        self.retry_at = OrderedDict()
+        self.persisted = OrderedDict()
+        self.warned = -float("inf")
+
+    def _saved_cell(self, path):
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+            if data['format'] != CANDIDATE_CACHE_VERSION:
+                return None
+            objects = data['objects']
+            if not isinstance(objects, list):
+                return None
+            for obj in objects:
+                float(obj['lon']); float(obj['lat']); int(obj['id'])
+                if obj['roadside']['type'] != 'shield' or not obj['roadside']['routes']:
+                    return None
+            return objects
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
 
     def _cell(self, x, y):
+        path = self.saved/f'{x}_{y}.json'
+        if time.monotonic() < self.retry_at.get((x,y), 0):
+            saved = self._saved_cell(path)
+            if saved is not None:
+                return saved
+        try:
+            result = self._online_cell(x, y)
+        except CancelledError:
+            raise
+        except Exception:
+            saved = self._saved_cell(path)
+            if saved is None:
+                raise
+            self.retry_at[(x,y)] = time.monotonic()+osmtags.RETRY_S
+            while len(self.retry_at)>32: self.retry_at.popitem(last=False)
+            log.warning('Road source unavailable for cell %s,%s; using saved shield candidates', x, y)
+            return saved
+        # Persist semantic candidates, never mixed Parquet blocks from two releases.
+        self.retry_at.pop((x,y), None)
+        try:
+            if self.persisted.get((x,y)) is not result:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                fd, temp = tempfile.mkstemp(prefix=path.stem+'-', suffix='.tmp', dir=path.parent)
+                try:
+                    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                        json.dump(dict(format=CANDIDATE_CACHE_VERSION, saved_at=time.time(), objects=result), f)
+                    os.replace(temp, path)
+                    self.persisted[(x,y)] = result
+                    self.persisted.move_to_end((x,y))
+                    while len(self.persisted)>32: self.persisted.popitem(last=False)
+                finally:
+                    if os.path.exists(temp): os.remove(temp)
+        except OSError as error:
+            log.debug('Cannot save shield candidates: %s', error)
+        return result
+
+    def _online_cell(self, x, y):
         for attempt in (0, 1):
+            self.relations.prepare()
             version, remote = self.tags.version()
-            key = version, x, y
+            key = version, self.relations.version(), x, y
             if key not in self.cache:
                 box = (x*CELL_DEG, y*CELL_DEG, (x+1)*CELL_DEG, (y+1)*CELL_DEG)
                 dy = HALO_M/110000.
                 dx = dy/max(.25, dmath.cos(math.radians(max(abs(box[1]), abs(box[3]))+dy)))
                 area = (box[0]-dx, box[1]-dy, box[2]+dx, box[3]+dy)
                 try:
-                    self.cache[key] = thin(candidates(read_routes(self.tags, remote, area)), box)
+                    ways=read_routes(self.tags,remote,area)
+                    relations=self.relations.query(wid for wid,_,_ in ways)
+                    result = thin(candidates(ways,relations), box)
+                    if not self.relations.ready:
+                        return result  # explicit refs work now; retry memberships on the next cell request
+                    self.cache[key] = result
                 except osmtags.rangeread.Changed:
                     self.tags._forget()
                     if attempt:
@@ -162,10 +227,24 @@ class Source:
         # Explicit US refs only. Avoid an optional download outside US latitudes.
         if lon1 < -180 or lon0 > -60 or lat1 < 18 or lat0 > 72:
             return []
-        result = []
+        result, answered, failure = [], 0, None
         with self.lock:
             for x in range(math.floor(lon0/CELL_DEG), math.floor(lon1/CELL_DEG)+1):
                 for y in range(math.floor(lat0/CELL_DEG), math.floor(lat1/CELL_DEG)+1):
-                    result.extend(o for o in self._cell(x, y) if lon0 <= o['lon'] <= lon1 and lat0 <= o['lat'] <= lat1)
+                    try:
+                        objects = self._cell(x, y)
+                    except CancelledError:
+                        raise
+                    except Exception as error:
+                        failure = error
+                        continue
+                    answered += 1
+                    result.extend(o for o in objects if lon0 <= o['lon'] <= lon1 and lat0 <= o['lat'] <= lat1)
+            if failure is not None:
+                if not answered:
+                    raise failure
+                if time.monotonic()-self.warned >= 60.:
+                    self.warned = time.monotonic()
+                    log.warning('Partial shield coverage: unavailable uncached cells; keeping available candidates: %s', failure)
         shields = [(o, keys(o)) for o in existing if o.get('roadside', {}).get('type') == 'shield']
         return [o for o in result if not any(keys(o) & k and distance(o, old) < SEPARATION_M for old, k in shields)]

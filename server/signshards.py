@@ -12,7 +12,7 @@ import dmath
 
 ZOOM = 7
 FORMAT = 1
-KINDS = {"exit": "exit", "through": "through", "mile": "mile_marker"}     # shard "k" -> the sign modules' key
+KINDS = {"exit": "exit", "through": "through", "mile": "mile_marker", "shield": "roadside"}     # shard "k" -> the sign modules' key
 PATHS = ("approach", "ramp", "de_approach", "de_ramp")   # [[lon, lat], ...] in "d", stored as encode_path's integers
 DE_VERSION = 1                      # the German raw block "de" of an exit record inside DE_OUTLINE
 
