@@ -257,6 +257,78 @@ class Batter(unittest.TestCase):
         self.assertFalse(off.endswith(".bv1"))
         self.assertEqual(on, off + ".bv1")
 
+    def test_bins_and_today_where_it_weighs(self):
+        # batter.rs meets each bin's segments nearest first (stopping at today's weight 1) and grade_points makes
+        # today's grading only where it weighs: the bins' size (which segments a point meets, in which order) changes
+        # no height, over a ground with cuts, fills, roads over roads (conflicts), banks and sides that keep today's
+        # grading, and the heights are batter_apply's over today's everywhere
+        rng = np.random.default_rng(23)
+        plans = random_plans(rng, 120, (0, 0, 400, 400))
+        for i, p in enumerate(plans):
+            p.z = np.asarray(p.z, np.float64) + (12.0 if i % 7 == 0 else 0.0)        # (some raised: fills, conflicts)
+            if i % 5 == 0:
+                p.bank = np.full(len(p.xy), 0.04)
+
+        def ground(x, y):
+            x, y = np.asarray(x), np.asarray(y)
+            return 100.0 + 0.2 * x + 6.0 * np.sin(y / 23.0) + 2.0 * np.cos(x / 11.0)
+        pack = packed(plans, ground)
+        self.assertTrue((pack.bt[2] != 0).any() and (pack.bt[2] == 0).any())
+        px, py = rng.uniform(-30, 430, 60000), rng.uniform(-30, 430, 60000)
+        base = ground(px, py) + rng.normal(0, 0.5, len(px))
+        base[::997] = np.nan                    # (a bin with a ground not read: nothing left out there)
+        was = grading.BATTER_BIN_M
+        try:
+            got = []
+            for bm in (8.0, 0.5, 3.0, 40.0):
+                grading.BATTER_BIN_M = bm
+                got.append(grading.grade_points(px, py, base, pack).view(np.uint64))
+        finally:
+            grading.BATTER_BIN_M = was
+        for g in got[1:]:
+            np.testing.assert_array_equal(g, got[0])
+        # and the same as batter_apply (today's everywhere, then the corridors): today's is made only where it weighs
+        f64 = np.float64
+        g0 = grading._grade_points_today(px, py, base, pack, 0.0, base.copy())
+        prm = (grading.BATTER_L0_M, grading.BATTER_CREST_M, grading.BATTER_STRIP_LO, grading.BATTER_STRIP_UP,
+               grading.BATTER_CLOSE_T, grading.BATTER_CLOSE_K, grading.BATTER_SMOOTH_K, grading.BATTER_CORE_BLEND_M,
+               grading.T_MAX, grading.BATTER_OLD_FADE_M, 0.0, grading.BATTER_BIN_M)
+        ref = EF.batter_apply(px, py, base, np.ascontiguousarray(g0, f64), pack.a, pack.b, pack.za, pack.zb, pack.h,
+                              pack.rh, pack.ba, pack.bb, *pack.bt, tuple(float(v) for v in prm))
+        np.testing.assert_array_equal(np.asarray(ref).view(np.uint64), got[0])
+
+    def test_memo_reads_each_segment_once(self):
+        # the planner's memo of each segment's reads: the same params as reading them all, and a second plan set
+        # sharing segments reads only its new ones
+        rng = np.random.default_rng(5)
+        plans = random_plans(rng, 40, (0, 0, 300, 300))
+        asked = []
+
+        def ground(x, y):
+            asked.append(len(x))
+            return 50.0 + 0.3 * np.asarray(x) - 0.1 * np.asarray(y)
+
+        def rays(org, dirs, reach):
+            return np.where(np.asarray(org)[:, 0] > 150.0, 25.0, np.inf)
+        memo = grading.BatterMemo()
+        for sub in (plans[:25], plans[10:]):
+            pack = grading.PlanPack(sub)
+            want = grading.batter_params(pack, ground, rays)
+            asked.clear()
+            staged = []
+            got = grading.batter_params(pack, ground, rays, memo, staged)
+            for a, b in zip(got, want):
+                np.testing.assert_array_equal(a, b)
+            if staged:
+                memo.add(*staged)
+        # (the second set: only the segments of plans[25:] read)
+        first = grading.PlanPack(plans[10:25])
+        k2 = 2 * len(grading.BATTER_OFFS)
+        self.assertEqual(sum(asked), (len(grading.PlanPack(plans[10:]).h) - len(first.h)) * k2)
+        hit, vals = memo.find(grading.BatterMemo.keys_of(first.a, first.b, first.h))
+        self.assertTrue(hit.all())
+        self.assertEqual(vals.shape, (len(first.h), k2 + 2))
+
 
 if __name__ == "__main__":
     unittest.main()

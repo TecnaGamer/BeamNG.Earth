@@ -325,6 +325,9 @@ pub fn params(za: ArrayView1<f64>, zb: ArrayView1<f64>, rk: ArrayView1<i64>, rid
 struct Seg {
     ax: f64, ay: f64, abx: f64, aby: f64, l2: f64, len: f64, za: f64, zb: f64, h: f64, rh: f64, ba: f64, bb: f64,
     banked: bool, m: [[f64; 2]; 2], r: [[f64; 2]; 2], old: [f64; 2], reach: f64, reach2: f64,  // (m, r: [side][end])
+    // (its middle and the square of a radius past which no point is within its reach: half its length + the reach,
+    // with a margin far over any rounding of either distance)
+    mx: f64, my: f64, rc2: f64,
 }
 
 /// The segments' arrays (grading.PlanPack's) and each side's params (m, r: (n, 4) as params gives them).
@@ -344,54 +347,64 @@ fn prep(s: &Segs, i: usize, p: &ApplyPrm) -> Seg {
     let m = [[s.m[[i, 0]], s.m[[i, 2]]], [s.m[[i, 1]], s.m[[i, 3]]]];
     let old_r = if old[0] > 0.0 || old[1] > 0.0 { p.old_reach + p.old_fade } else { 0.0 };
     let reach = s.h[i] + r[0][0].max(r[0][1]).max(r[1][0]).max(r[1][1]).max(old_r).max(p.core_blend);
+    let len = l2.sqrt();
+    let rc = 0.5 * len + reach;
+    let rc = rc + 1e-6 * (1.0 + rc);
     Seg {
-        ax, ay, abx, aby, l2, len: l2.sqrt(), za: s.za[i], zb: s.zb[i], h: s.h[i], rh: s.rh[i], ba: s.ba[i],
+        ax, ay, abx, aby, l2, len, za: s.za[i], zb: s.zb[i], h: s.h[i], rh: s.rh[i], ba: s.ba[i],
         bb: s.bb[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0, m, r, old, reach, reach2: reach * reach,
+        mx: ax + 0.5 * abx, my: ay + 0.5 * aby, rc2: rc * rc,
     }
 }
 
-/// A point's state over its segments.
-#[derive(Clone)]
+/// A point's state over its segments: the corridors' tightest bounds and their offsets, today's weight.
+#[derive(Clone, Copy)]
 struct St {
     lo: f64, lo_off: f64, up: f64, up_off: f64, w: f64,
-    // every pair's bounds and offsets (the conflict blend's weights: finish)
-    los: Vec<(f64, f64)>, ups: Vec<(f64, f64)>,
+    lo_si: u32, up_si: u32,     // (the segments that gave them: a tie's earlier segment, as a pass in segment order)
+}
+
+const ST0: St = St { lo: f64::NEG_INFINITY, lo_off: 0.0, up: f64::INFINITY, up_off: 0.0, w: 0.0, lo_si: u32::MAX,
+                     up_si: u32::MAX };
+
+/// One segment's share at a point: today's weights (inside its core and core_blend past it; beside a side that is
+/// today's) and, inside its corridor (cor), the corridor's bounds and their offsets.
+#[derive(Clone, Copy)]
+struct Pv {
+    wc: f64, wo: f64, cor: bool, lo: f64, lo_off: f64, up: f64, up_off: f64,
 }
 
 #[inline(always)]
-fn pair(st: &mut St, g: &Seg, x: f64, y: f64, p: &ApplyPrm) {
+fn pair_eval(g: &Seg, x: f64, y: f64, p: &ApplyPrm) -> Option<Pv> {
+    // (farther from its middle than half its length + its reach: out of its reach, decided without a division)
+    let (ex, ey) = (x - g.mx, y - g.my);
+    if ex * ex + ey * ey > g.rc2 {
+        return None;
+    }
     let (qx, qy) = (x - g.ax, y - g.ay);
-    let (tu, cross) = if g.l2 > 1e-12 {
-        ((qx * g.abx + qy * g.aby) / g.l2, (qy * g.abx - qx * g.aby) / g.len)
-    } else {
-        (0.0, 0.0)
-    };
+    let tu = if g.l2 > 1e-12 { (qx * g.abx + qy * g.aby) / g.l2 } else { 0.0 };
     let t = tu.clamp(0.0, 1.0);
     let (dx, dy) = (qx - t * g.abx, qy - t * g.aby);
     let d2 = dx * dx + dy * dy;
     if d2 > g.reach2 {
-        return;
+        return None;
     }
+    let cross = if g.l2 > 1e-12 { (qy * g.abx - qx * g.aby) / g.len } else { 0.0 };
     let d = d2.sqrt();
     let x_out = d - g.h;
+    let mut v = Pv { wc: 0.0, wo: 0.0, cor: false, lo: 0.0, lo_off: 0.0, up: 0.0, up_off: 0.0 };
     // inside the core and core_blend past it: today's
     if x_out < p.core_blend {
-        let wc = 1.0 - smooth(x_out / p.core_blend);
-        if wc > st.w {
-            st.w = wc;
-        }
+        v.wc = 1.0 - smooth(x_out / p.core_blend);
     }
     // the side (its left's share: 1 beside its left, 0 beside its right, mixed across its end caps)
     let wl = if d > 1e-12 { smooth(0.5 + 0.5 * (cross / d).clamp(-1.0, 1.0)) } else { 0.5 };
     let old = wl * g.old[0] + (1.0 - wl) * g.old[1];
     if old > 0.0 {
-        let wo = old * (1.0 - smooth((x_out - p.old_reach) / p.old_fade));
-        if wo > st.w {
-            st.w = wo;
-        }
+        v.wo = old * (1.0 - smooth((x_out - p.old_reach) / p.old_fade));
     }
     if x_out <= 0.0 || old >= 1.0 {
-        return;
+        return Some(v);
     }
     // the corridor round the segment's height at the foot of the perpendicular, carried on along its line past its
     // ends (up to EXT_M, at EXT_GRADE at most): taken at a clamped end, a graded road's vertices' end caps stood
@@ -400,7 +413,7 @@ fn pair(st: &mut St, g: &Seg, x: f64, y: f64, p: &ApplyPrm) {
     // down its slopes
     let (m, r) = side_mr(g, t, wl);
     if x_out >= r {
-        return;
+        return Some(v);
     }
     let mut z = g.za + (g.zb - g.za) * t + p.lift;
     if g.l2 > 1e-12 && tu != t {
@@ -422,20 +435,36 @@ fn pair(st: &mut St, g: &Seg, x: f64, y: f64, p: &ApplyPrm) {
     if old > 0.0 {
         f += OLD_LOOSEN_M * old / (1.0 - old);
     }
-    let lo_off = p.s_lo * xs + f;
-    let up_off = p.s_up * xs + f;
-    let lo = z - lo_off;
-    let up = z + up_off;
-    if lo > st.lo || (lo == st.lo && lo_off < st.lo_off) {
-        st.lo = lo;
-        st.lo_off = lo_off;
+    v.lo_off = p.s_lo * xs + f;
+    v.up_off = p.s_up * xs + f;
+    v.lo = z - v.lo_off;
+    v.up = z + v.up_off;
+    v.cor = true;
+    Some(v)
+}
+
+/// Segment si's share into the point's state: the same state in any pair order (max and min; of bounds equal with
+/// equal offsets, which differ at most in a zero's sign, the earlier segment's, as a pass in segment order keeps).
+#[inline(always)]
+fn take(st: &mut St, v: &Pv, si: u32) {
+    if v.wc > st.w {
+        st.w = v.wc;
     }
-    if up < st.up || (up == st.up && up_off < st.up_off) {
-        st.up = up;
-        st.up_off = up_off;
+    if v.wo > st.w {
+        st.w = v.wo;
     }
-    st.los.push((lo, lo_off));
-    st.ups.push((up, up_off));
+    if v.cor {
+        if v.lo > st.lo || (v.lo == st.lo && (v.lo_off < st.lo_off || (v.lo_off == st.lo_off && si < st.lo_si))) {
+            st.lo = v.lo;
+            st.lo_off = v.lo_off;
+            st.lo_si = si;
+        }
+        if v.up < st.up || (v.up == st.up && (v.up_off < st.up_off || (v.up_off == st.up_off && si < st.up_si))) {
+            st.up = v.up;
+            st.up_off = v.up_off;
+            st.up_si = si;
+        }
+    }
 }
 
 /// m: the bounds within this of a conflict's limit weigh in its offset (finish)
@@ -480,54 +509,75 @@ fn smin(a: f64, b: f64, k: f64) -> f64 {
     b + (a - b) * hh - k * hh * (1.0 - hh)
 }
 
+/// The corridors' two corridors disagree (finish's third case).
 #[inline(always)]
-fn finish(st: &St, base: f64, g0: f64, p: &ApplyPrm) -> f64 {
-    let v = if st.lo == f64::NEG_INFINITY && st.up == f64::INFINITY {
-        base
-    } else if st.lo <= st.up {
-        let mut v = base;
-        if st.lo != f64::NEG_INFINITY {
-            v = -smin(-v, -st.lo, p.smooth_k);
+fn conflict(st: &St) -> bool {
+    !(st.lo == f64::NEG_INFINITY && st.up == f64::INFINITY) && !(st.lo <= st.up)
+}
+
+/// The height without today's weight where the corridors agree (not conflict(st)): the natural base clamped to
+/// [lo, up], smoothly at the daylight line.
+#[inline(always)]
+fn finish_agree(st: &St, base: f64, p: &ApplyPrm) -> f64 {
+    if st.lo == f64::NEG_INFINITY && st.up == f64::INFINITY {
+        return base;
+    }
+    let mut v = base;
+    if st.lo != f64::NEG_INFINITY {
+        v = -smin(-v, -st.lo, p.smooth_k);
+    }
+    if st.up != f64::INFINITY {
+        v = smin(v, st.up, p.smooth_k);
+    }
+    v.clamp(st.lo, st.up)
+}
+
+/// The height without today's weight where two corridors disagree (conflict(st), st over every pair of the point's
+/// list): between the binding limits by their offsets, each side's offset the mean of the bounds within CONFLICT_K of
+/// its limit, weighted by how near (a bound taking over from another changes it smoothly; the binding one's alone
+/// jumped there: Codex review of 861e550f). Summed in the pairs' order (the plan set's segment order: the same for the
+/// same segments in every set), each pair's bounds evaluated again (a pure function of the pair).
+fn finish_conflict(st: &St, segs: &[Seg], list: &[u32], x: f64, y: f64, p: &ApplyPrm) -> f64 {
+    let (mut lsw, mut lso, mut usw, mut uso) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let acc = |sw: &mut f64, so: &mut f64, b: f64, off: f64, lim: f64, sign: f64| {
+        let u = 1.0 - sign * (lim - b) / CONFLICT_K;
+        if u > 0.0 {
+            let w = u * u;
+            *sw += w;
+            *so += w * off;
         }
-        if st.up != f64::INFINITY {
-            v = smin(v, st.up, p.smooth_k);
-        }
-        v.clamp(st.lo, st.up)
-    } else {
-        // two corridors disagree: between the binding limits by their offsets, each side's offset the mean of the
-        // bounds within CONFLICT_K of its limit, weighted by how near (a bound taking over from another changes it
-        // smoothly; the binding one's alone jumped there: Codex review of 861e550f). Summed in the pairs' order (the
-        // plan set's segment order: the same for the same segments in every set)
-        let wavg = |v: &[(f64, f64)], lim: f64, sign: f64| {
-            let (mut sw, mut so) = (0.0f64, 0.0f64);
-            for &(b, off) in v {
-                let u = 1.0 - sign * (lim - b) / CONFLICT_K;
-                if u > 0.0 {
-                    let w = u * u;
-                    sw += w;
-                    so += w * off;
-                }
-            }
-            if sw > 0.0 { so / sw } else { 0.0 }
-        };
-        let lo_off = wavg(&st.los, st.lo, 1.0);
-        let up_off = wavg(&st.ups, st.up, -1.0);
-        let s = lo_off + up_off;
-        if s > 1e-12 { (up_off * st.lo + lo_off * st.up) / s } else { 0.5 * (st.lo + st.up) }
     };
-    if st.w >= 1.0 { g0 } else if st.w <= 0.0 { v } else { v + st.w * (g0 - v) }
+    for &si in list {
+        if let Some(v) = pair_eval(&segs[si as usize], x, y, p) {
+            if v.cor {
+                acc(&mut lsw, &mut lso, v.lo, v.lo_off, st.lo, 1.0);
+                acc(&mut usw, &mut uso, v.up, v.up_off, st.up, -1.0);
+            }
+        }
+    }
+    let lo_off = if lsw > 0.0 { lso / lsw } else { 0.0 };
+    let up_off = if usw > 0.0 { uso / usw } else { 0.0 };
+    let s = lo_off + up_off;
+    if s > 1e-12 { (up_off * st.lo + lo_off * st.up) / s } else { 0.5 * (st.lo + st.up) }
 }
 
 const BIN_POINTS_PER_THREAD: usize = 4096;
 
-/// The heights at the points (px, py): natural base, today's graded g0, the corridor's where the segments' sides are
-/// not today's. Each point meets every segment within its reach (nothing depends on the other points of the call).
-pub fn apply(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, g0: ArrayView1<f64>, s: &Segs,
-             p: &ApplyPrm) -> Vec<f64> {
+/// The heights at the points (px, py) without today's weight (v) and today's weight (w, 1: today's g0 alone): the
+/// natural base where no corridor binds, the corridor's where the segments' sides are not today's. The height is
+/// v + w (g0 - v) (combine). Each point meets every segment within its reach (nothing depends on the other points of
+/// the call). A point with a coordinate not finite: w 1.
+///
+/// A point meets its bin's segments nearest first (from the bin's centre, past their cores): the state is order free
+/// (take), and a point in a core or beside a side that keeps today's grading reaches weight 1 within its first pairs
+/// and stops there. A conflict's sums run in the segments' order (finish_conflict).
+pub fn apply_vw(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, s: &Segs, p: &ApplyPrm)
+                -> (Vec<f64>, Vec<f64>) {
     let n = px.len();
-    let mut out: Vec<f64> = g0.iter().copied().collect();
+    let mut vo: Vec<f64> = base.iter().copied().collect();
+    let mut wo = vec![1.0f64; n];
     if n == 0 || s.h.is_empty() {
-        return out;
+        return (vo, wo);
     }
     let segs: Vec<Seg> = (0..s.h.len()).map(|i| prep(s, i, p)).collect();
     let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
@@ -538,7 +588,7 @@ pub fn apply(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, g0
         }
     }
     if !(x0 <= x1 && y0 <= y1) {
-        return out;
+        return (vo, wo);
     }
     let (wx, wy) = (x1 - x0, y1 - y0);
     let mut fb = p.bin_m.max(0.5);
@@ -549,7 +599,7 @@ pub fn apply(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, g0
     let fnx = (wx / fb).floor() as usize + 1;
     let fny = (wy / fb).floor() as usize + 1;
     let nb = fnx * fny;
-    // the points by bin (counting sort; a NaN coordinate: no bin, kept at g0)
+    // the points by bin (counting sort; a NaN coordinate: no bin, w 1)
     let mut pb: Vec<u32> = vec![u32::MAX; n];
     let mut pstart = vec![0u32; nb + 1];
     for i in 0..n {
@@ -573,9 +623,9 @@ pub fn apply(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, g0
             fill[b] += 1;
         }
     }
-    // each bin's segments (every segment whose reach can touch the bin)
+    // each bin's segments (every segment whose reach can touch the bin), with their centre's distance past the core
     let half_diag = fb * std::f64::consts::FRAC_1_SQRT_2;
-    let mut found: Vec<(u32, u32)> = Vec::new();
+    let mut found: Vec<(u32, u32, f64)> = Vec::new();
     for (si, g) in segs.iter().enumerate() {
         let rr = g.reach + 1e-6;
         let (lx, hx) = (g.ax.min(g.ax + g.abx) - rr, g.ax.max(g.ax + g.abx) + rr);
@@ -600,51 +650,66 @@ pub fn apply(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, g0
                 let (qx, qy) = (cx - g.ax, cy - g.ay);
                 let t = if g.l2 > 1e-12 { ((qx * g.abx + qy * g.aby) / g.l2).clamp(0.0, 1.0) } else { 0.0 };
                 let (dx, dy) = (qx - t * g.abx, qy - t * g.aby);
-                if (dx * dx + dy * dy).sqrt() <= lim {
-                    found.push((b as u32, si as u32));
+                let dc = (dx * dx + dy * dy).sqrt();
+                if dc <= lim {
+                    found.push((b as u32, si as u32, dc - g.h));
                 }
             }
         }
     }
+    // (in segment order within each bin: the counting sort is stable); nearest first: a copy sorted by the distance
+    // past the core, then the segment (a total order: the same in every run)
     let mut start = vec![0u32; nb + 1];
-    for &(b, _) in &found {
+    for &(b, _, _) in &found {
         start[b as usize + 1] += 1;
     }
     for k in 0..nb {
         start[k + 1] += start[k];
     }
     let mut items = vec![0u32; found.len()];
+    let mut near = vec![(0f64, 0u32); found.len()];
     let mut at = start.clone();
-    for &(b, si) in &found {
+    for &(b, si, dx) in &found {
         items[at[b as usize] as usize] = si;
+        near[at[b as usize] as usize] = (dx, si);
         at[b as usize] += 1;
     }
+    for b in 0..nb {
+        near[start[b] as usize..start[b + 1] as usize].sort_unstable_by(|u, v| u.0.total_cmp(&v.0).then(u.1.cmp(&v.1)));
+    }
+    let nitems: Vec<u32> = near.iter().map(|v| v.1).collect();
+    drop(near);
     drop(found);
     let np_ = porder.len();
-    let mut res = vec![0f64; np_];
-    let work = |b0: usize, b1: usize, r: &mut [f64]| {
+    let mut res = vec![[0f64; 2]; np_];
+    let run = |list: &[u32], x: f64, y: f64| -> St {
+        let mut st = ST0;
+        for &si in list {
+            if let Some(v) = pair_eval(&segs[si as usize], x, y, p) {
+                take(&mut st, &v, si);
+                if st.w >= 1.0 {
+                    break;      // (today's height stands whatever the rest: the same result, fewer pairs)
+                }
+            }
+        }
+        st
+    };
+    let work = |b0: usize, b1: usize, r: &mut [[f64; 2]]| {
         let off = pstart[b0] as usize;
-        let mut st = St { lo: f64::NEG_INFINITY, lo_off: 0.0, up: f64::INFINITY, up_off: 0.0, w: 0.0,
-                          los: Vec::new(), ups: Vec::new() };
         for b in b0..b1 {
             let list = &items[start[b] as usize..start[b + 1] as usize];
+            let nlist = &nitems[start[b] as usize..start[b + 1] as usize];
             for k in pstart[b] as usize..pstart[b + 1] as usize {
                 let i = porder[k] as usize;
                 let (x, y) = (px[i], py[i]);
-                st.lo = f64::NEG_INFINITY;
-                st.lo_off = 0.0;
-                st.up = f64::INFINITY;
-                st.up_off = 0.0;
-                st.w = 0.0;
-                st.los.clear();
-                st.ups.clear();
-                for &si in list {
-                    pair(&mut st, &segs[si as usize], x, y, p);
-                    if st.w >= 1.0 {
-                        break;      // (today's height stands whatever the rest: the same result, fewer pairs)
-                    }
-                }
-                r[k - off] = finish(&st, base[i], g0[i], p);
+                let st = run(nlist, x, y);
+                r[k - off] = if st.w >= 1.0 {
+                    [base[i], 1.0]
+                } else if conflict(&st) {
+                    [finish_conflict(&st, &segs, list, x, y, p), st.w]
+                } else {
+                    [finish_agree(&st, base[i], p), st.w]
+                };
             }
         }
     };
@@ -654,8 +719,8 @@ pub fn apply(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, g0
     } else {
         let want = (threads * 8).min(nb);
         let per = np_.div_ceil(want).max(1);
-        let mut parts: Vec<(usize, usize, &mut [f64])> = Vec::with_capacity(want + 1);
-        let mut rest: &mut [f64] = &mut res;
+        let mut parts: Vec<(usize, usize, &mut [[f64; 2]])> = Vec::with_capacity(want + 1);
+        let mut rest: &mut [[f64; 2]] = &mut res;
         let mut b0 = 0usize;
         while b0 < nb {
             let mut b1 = b0 + 1;
@@ -671,7 +736,22 @@ pub fn apply(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, g0
         crate::par::run_parts(parts, threads, |(b0, b1, r)| work(b0, b1, r));
     }
     for (k, &i) in porder.iter().enumerate() {
-        out[i as usize] = res[k];
+        vo[i as usize] = res[k][0];
+        wo[i as usize] = res[k][1];
     }
-    out
+    (vo, wo)
+}
+
+/// The height from apply_vw's v and w and today's g0.
+#[inline(always)]
+pub fn combine(v: f64, w: f64, g0: f64) -> f64 {
+    if w >= 1.0 { g0 } else if w <= 0.0 { v } else { v + w * (g0 - v) }
+}
+
+/// The heights at the points (px, py): natural base, today's graded g0, the corridor's where the segments' sides are
+/// not today's (apply_vw combined with g0).
+pub fn apply(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, g0: ArrayView1<f64>, s: &Segs,
+             p: &ApplyPrm) -> Vec<f64> {
+    let (v, w) = apply_vw(px, py, base, s, p);
+    (0..px.len()).map(|i| combine(v[i], w[i], g0[i])).collect()
 }

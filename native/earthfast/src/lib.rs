@@ -2107,6 +2107,39 @@ fn batter_apply<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
     Ok(out.into_pyarray(py))
 }
 
+/// batter_apply without today's grading (batter::apply_vw, grading.grade_points: today's is made only where its weight
+/// is not 0): (v, w), the height v + w (g0 - v) for today's g0 (batter::combine; w 1: g0 alone, also where a
+/// coordinate is not finite). prm as batter_apply's.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn batter_apply_vw<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
+                        base: PyReadonlyArray1<'py, f64>, a: PyReadonlyArray2<'py, f64>,
+                        b: PyReadonlyArray2<'py, f64>, za: PyReadonlyArray1<'py, f64>, zb: PyReadonlyArray1<'py, f64>,
+                        h: PyReadonlyArray1<'py, f64>, rh: PyReadonlyArray1<'py, f64>, ba: PyReadonlyArray1<'py, f64>,
+                        bb: PyReadonlyArray1<'py, f64>, m: PyReadonlyArray2<'py, f64>, r: PyReadonlyArray2<'py, f64>,
+                        fl: PyReadonlyArray2<'py, u8>,
+                        prm: (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64))
+                        -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let s = batter::Segs { a: a.as_array(), b: b.as_array(), za: za.as_array(), zb: zb.as_array(), h: h.as_array(),
+                           rh: rh.as_array(), ba: ba.as_array(), bb: bb.as_array(), m: m.as_array(),
+                           r: r.as_array(), fl: fl.as_array() };
+    let n = s.h.len();
+    if s.a.nrows() != n || s.b.nrows() != n || s.a.ncols() < 2 || s.b.ncols() < 2 || s.za.len() != n
+        || s.zb.len() != n || s.rh.len() != n || s.ba.len() != n || s.bb.len() != n || s.m.dim() != (n, 4)
+        || s.r.dim() != (n, 4) || s.fl.dim() != (n, 2) {
+        return Err(pyo3::exceptions::PyValueError::new_err("batter_apply_vw: the segment arrays disagree"));
+    }
+    let (px, pyy, base) = (px.as_array(), pyy.as_array(), base.as_array());
+    if pyy.len() != px.len() || base.len() != px.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("batter_apply_vw: the point arrays disagree"));
+    }
+    let p = batter::ApplyPrm { l0: prm.0, crest: prm.1, s_lo: prm.2, s_up: prm.3, close_t: prm.4, close_k: prm.5,
+                               smooth_k: prm.6, core_blend: prm.7, old_reach: prm.8, old_fade: prm.9, lift: prm.10,
+                               bin_m: prm.11 };
+    let (v, w) = py.detach(|| batter::apply_vw(px, pyy, base, &s, &p));
+    Ok((v.into_pyarray(py), w.into_pyarray(py)))
+}
+
 /// roads.tunnel_sections: a tunnel's road level and its sections from the ground over it, sampled at arc lengths s.
 /// The floor: the lower convex hull of (s, g) (the road's level under the covered parts, the ground where it lies
 /// open). Each run of samples with cover (g - floor) of at least open_cover is one section: kind 2 (a full tunnel)
@@ -6871,6 +6904,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 497: vanilla-style cut and fill slopes (batter: batter_probes, batter_params, batter_apply, and walls_rays /
     // walls_rays32 for the buildings beside them; grading BNE_BATTER, road revamp v2 P1a). 495 and 496 are other
     // branches'
-    m.add("VERSION", 497)?;
+    m.add_function(wrap_pyfunction!(batter_apply_vw, m)?)?;
+    // 503: batter_apply_vw (the vanilla slopes' heights and today's weight apart: today's grading made only where its
+    // weight is not 0; each bin's segments met nearest first, so a point in a core stops within its first pairs).
+    // 498-502 are other branches'
+    m.add("VERSION", 503)?;
     Ok(())
 }

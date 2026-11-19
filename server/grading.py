@@ -6943,8 +6943,14 @@ class _Planner:
         if widths is not None and hasattr(widths, "_walls"):
             def rays(org, dirs, reach):
                 return self._batter_rays(widths, org, dirs, reach, short)
+        # (each segment's ground and buildings beside it read once per planner, not once per plan set: the sets of
+        # neighbouring tiles share most of their segments, ~0.4 s each at Fells Point; kept only from a read with no
+        # fault, BatterMemo)
+        with self.lock:
+            memo = self.__dict__.setdefault("_batter_memo", BatterMemo())
+        staged = []
         try:
-            pack.bt = batter_params(pack, elev_xy, rays)
+            pack.bt = batter_params(pack, elev_xy, rays, memo, staged)
         except Exception as e:         # (a kernel's error: today's grading everywhere in the set, asked again)
             _caught(e)
             pack.bt = None
@@ -6954,6 +6960,8 @@ class _Planner:
         if short[0]:
             revisit.fault(here=True)
             return False
+        if staged:
+            memo.add(*staged)
         return True
 
     def _batter_rays(self, widths, org, dirs, reach, short):
@@ -7987,40 +7995,129 @@ def grade_points(px, py, base, plans, lift=0.0):
     if not len(px):
         return out
     pack = plans if isinstance(plans, PlanPack) else PlanPack(plans)
-    out = _grade_points_today(px, py, base, pack, lift, out)
     bt = getattr(pack, "bt", None) if BATTER_ON else None
-    if bt is not None and len(pack.h):
-        import fast
-        fast.require(497, "batter_apply")       # (batter.rs: the vanilla slopes, every segment within its reach)
-        f64 = np.float64
-        out = fast._ef.batter_apply(
-            np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64),
-            np.ascontiguousarray(out, f64), pack.a, pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.ba, pack.bb,
-            bt[0], bt[1], bt[2],
-            (float(BATTER_L0_M), float(BATTER_CREST_M), float(BATTER_STRIP_LO), float(BATTER_STRIP_UP),
-             float(BATTER_CLOSE_T), float(BATTER_CLOSE_K), float(BATTER_SMOOTH_K), float(BATTER_CORE_BLEND_M),
-             float(T_MAX), float(BATTER_OLD_FADE_M), float(lift), float(BATTER_BIN_M)))
+    if bt is None or not len(pack.h):
+        return _grade_points_today(px, py, base, pack, lift, out)
+    import fast
+    # (batter.rs: the vanilla slopes, every segment within its reach; 503: the corridors' heights v and today's weight w
+    # apart, so today's grading is made only at the points whose weight is not 0, the cores and the sides that keep
+    # it: each point's today's height is its own whatever other points a call holds, gradebins)
+    fast.require(503, "batter_apply_vw")
+    f64 = np.float64
+    v, w = fast._ef.batter_apply_vw(
+        np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64),
+        pack.a, pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.ba, pack.bb, bt[0], bt[1], bt[2],
+        (float(BATTER_L0_M), float(BATTER_CREST_M), float(BATTER_STRIP_LO), float(BATTER_STRIP_UP),
+         float(BATTER_CLOSE_T), float(BATTER_CLOSE_K), float(BATTER_SMOOTH_K), float(BATTER_CORE_BLEND_M),
+         float(T_MAX), float(BATTER_OLD_FADE_M), float(lift), float(BATTER_BIN_M)))
+    out = np.array(v, f64)
+    sub = np.flatnonzero(w > 0.0)
+    if len(sub):
+        g0 = _grade_points_today(px[sub], py[sub], base[sub], pack, lift, base[sub].copy())
+        ws, vs = w[sub], v[sub]
+        # (batter::combine: v + w (g0 - v), today's alone at 1)
+        out[sub] = np.where(ws >= 1.0, g0, vs + ws * (g0 - vs))
     return out
 
 
-def batter_params(pack, elev_xy, walls_rays=None):
+class BatterMemo:
+    """The vanilla slopes' reads beside each segment (batter_params: the natural ground at its probes, the distance to
+    the first building each side), by the segment's a, b and h to the bit, for one planner (its frame, its ground, its
+    buildings). Kept in numpy arrays (~140 bytes a segment), the oldest let go past CAP segments; a lookup takes the
+    exact rows only (a hash's match checked against the whole key: anything else is read again)."""
+    CAP = 196608            # segments (~27 MB): a dense town's plan set holds 50-110 thousand
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.keys = np.zeros((0, 5), np.uint64)
+        self.vals = np.zeros((0, 0))
+        self.hs = np.zeros(0, np.uint64)        # (the keys' hashes, sorted) ...
+        self.pos = np.zeros(0, np.int64)        # (... and their rows)
+
+    @staticmethod
+    def keys_of(a, b, h):
+        """(n, 5) uint64: each segment's a, b, h as bits."""
+        f64 = np.float64
+        return np.ascontiguousarray(np.column_stack((np.asarray(a, f64)[:, :2], np.asarray(b, f64)[:, :2],
+                                                     np.asarray(h, f64)))).view(np.uint64)
+
+    @staticmethod
+    def _hash(keys):
+        hv = np.full(len(keys), 0xCBF29CE484222325, np.uint64)
+        with np.errstate(over="ignore"):
+            for c in range(keys.shape[1]):
+                hv ^= keys[:, c]
+                hv *= np.uint64(0x100000001B3)
+                hv ^= hv >> np.uint64(29)
+        return hv
+
+    def find(self, keys):
+        """(hit (n,) bool, the hits' values (hits, w))."""
+        with self.lock:
+            ks, vs, hs, pos = self.keys, self.vals, self.hs, self.pos
+        n = len(keys)
+        if not len(hs) or not n:
+            return np.zeros(n, bool), vs[:0]
+        hv = self._hash(keys)
+        i = np.minimum(np.searchsorted(hs, hv), len(hs) - 1)
+        row = pos[i]
+        hit = (hs[i] == hv) & np.all(ks[row] == keys, axis=1)
+        return hit, vs[row[hit]]
+
+    def add(self, keys, vals):
+        """Remember the rows keys (n, 5) -> vals (n, w)."""
+        if not len(keys):
+            return
+        with self.lock:
+            if self.vals.ndim != 2 or self.vals.shape[1] != vals.shape[1]:
+                self.keys, self.vals = self.keys[:0], np.zeros((0, vals.shape[1]))
+            ks = np.concatenate([self.keys, keys])[-self.CAP:]
+            vs = np.concatenate([self.vals, vals])[-self.CAP:]
+            hv = self._hash(ks)
+            order = np.argsort(hv, kind="stable")
+            self.keys, self.vals, self.hs, self.pos = ks, vs, hv[order], order
+
+
+def batter_params(pack, elev_xy, walls_rays=None, memo=None, staged=None):
     """(m, r, fl) of the vanilla slopes (BATTER_ON) for a PlanPack's segments (batter.rs: each side's batter slope and
     reach past its core at the segment's ends, (segments, 4): left, right at a, then at b; its flags, (segments, 2)):
     the natural ground elev_xy(x, y) at BATTER_OFFS past each side's
     core edge, and the distance from that edge to the first building along it (walls_rays(origins (k, 2), dirs (k, 2),
     reach) -> (k,) distances, NaN or inf: none; None: no buildings known). A pure function of the segments, the ground
-    and the buildings: the same for a segment in every plan set."""
+    and the buildings: the same for a segment in every plan set. memo: a BatterMemo of segments read before (their
+    natural ground and buildings taken from it); staged (a list): set to the segments read here and their values, for
+    the caller to add to the memo once it knows the reads were sound."""
     import fast
     fast.require(497, "batter_params")
     f64 = np.float64
     offs = np.asarray(BATTER_OFFS, f64)
     ns = len(pack.h)
-    pts, org, dirs = fast._ef.batter_probes(pack.a, pack.b, pack.h, offs)
-    nat = np.asarray(elev_xy(pts[:, 0], pts[:, 1]), f64)
-    bld = np.full(2 * ns, np.inf)
-    if walls_rays is not None and ns:
-        got = np.asarray(walls_rays(org, dirs, float(BATTER_R_MAX + BATTER_BLD_GAP_M + 1.0)), f64)
-        bld = np.where(np.isfinite(got), got, np.inf)
+    k2 = 2 * len(offs)
+    nat = np.empty((ns, k2))
+    bld = np.full((ns, 2), np.inf)
+    todo = np.arange(ns)
+    keys = None
+    if memo is not None and ns:
+        # (a segment's probes and rays are a pure function of its a, b and h: batter_probes; their reads each point's
+        # and ray's own, the same in any batch)
+        keys = BatterMemo.keys_of(pack.a, pack.b, pack.h)
+        hit, vals = memo.find(keys)
+        if hit.any():
+            nat[hit] = vals[:, :k2]
+            bld[hit] = vals[:, k2:]
+        todo = np.flatnonzero(~hit)
+    if len(todo):
+        a_t, b_t, h_t = (np.ascontiguousarray(pack.a[todo], f64), np.ascontiguousarray(pack.b[todo], f64),
+                         np.ascontiguousarray(pack.h[todo], f64))
+        pts, org, dirs = fast._ef.batter_probes(a_t, b_t, h_t, offs)
+        nat[todo] = np.asarray(elev_xy(pts[:, 0], pts[:, 1]), f64).reshape(len(todo), k2)
+        if walls_rays is not None:
+            got = np.asarray(walls_rays(org, dirs, float(BATTER_R_MAX + BATTER_BLD_GAP_M + 1.0)), f64)
+            bld[todo] = np.where(np.isfinite(got), got, np.inf).reshape(len(todo), 2)
+        if staged is not None and keys is not None and walls_rays is not None:
+            staged[:] = [keys[todo], np.concatenate([nat[todo], bld[todo]], axis=1)]
+    nat = nat.ravel()
+    bld = bld.ravel()
     prm = np.array([BATTER_L0_M, BATTER_CREST_M, BATTER_STRIP_LO, BATTER_STRIP_UP, BATTER_RURAL, BATTER_URBAN,
                     BATTER_STEEP, BATTER_M_MAX, BATTER_R_MAX, BATTER_R_PAD, BATTER_URBAN_M, BATTER_BLD_GAP_M,
                     BATTER_DM, BATTER_DR, BATTER_GAP_N, BATTER_RUN_N, BATTER_FIT_K, BATTER_FIT_ADD, BATTER_DIL_N], f64)
