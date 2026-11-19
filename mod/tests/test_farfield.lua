@@ -1,7 +1,7 @@
 -- luajit mod/tests/test_farfield.lua  (far field, V1_2_DESIGN 2.3, 2.5, 2.8, 4.4, 5.4; V1_3_SPEC C-E)
 -- Hidden preload, swap groups (no removal before the replacement is loaded), C2 crossover timing,
--- C1 off-screen swaps, crossovers at any distance in view, the transition cap (near in-view groups
--- wait for a slot), covered-L0 sink/hide and onBlockCommit, commit gating, governor budget (no
+-- C1 off-screen swaps, crossovers at any distance in view, transition cap waits for nearby and
+-- large visible replacements, covered-L0 sink/hide and onBlockCommit, commit gating, governor budget (no
 -- imports around a commit), rebase transform, prefetch, a randomized no-hole simulation against a
 -- scripted server; then (v1.3) mesh near-visual mode and the per-tile imagery material lifecycle.
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
@@ -225,23 +225,75 @@ step(free, camNorth, 40)
 T.check(farfield.stats().transitions == 0 and farfield.stats().groups == 0, 'all crossovers finished, none waiting')
 T.check(farfield.stats().crossovers == cross0 + 25 and farfield.stats().pops == pops, 'all 25 crossed over, no pop')
 for n = 1, 25 do T.check(obj(capKeys[n]).pos.z == 103, 're-sent key replaced in place') end
--- at the cap, a far in-view group (beyond NEAR_POP_M) still swaps instantly rather than waiting
-for n = 1, 24 do farfield.onTile(tile(1, 0, n - 13, 12, { z = 104 })) end
-farfield.onTile(tile(1, 3, 0, 4)) -- 2 km tile 8 km north
-step(free, camNorth)
-farfield.onSwap(swap(1, sid + 1, { key(3, 0, 4) }))
-step(free, camNorth)
-farfield.onTile(tile(1, 3, 0, 4, { z = 97 }))
-step(free, camNorth)
-for n = 1, 24 do sid = sid + 1; farfield.onSwap(swap(1, sid + 1, { capKeys[n] }, { capKeys[n] }, 1, 1)) end
-sid = sid + 2
-farfield.onSwap(swap(1, sid, { key(3, 0, 4) }, { key(3, 0, 4) }, 1, 1))
-local inst0, pops0 = farfield.stats().instant, farfield.stats().pops
-step(free, camNorth)
-T.check(farfield.stats().transitions == 24 and farfield.stats().instant == inst0 + 1 and obj(key(3, 0, 4)).pos.z == 97,
-  'at the cap, an in-view group beyond 5 km swaps instantly')
-T.check(farfield.stats().pops == pops0 + 1, 'that in-view instant swap counts as a pop')
-step(free, camNorth, 40)
+-- At the cap, a split covering a large part of the view (> 5 km away) must keep its old parent
+-- visible until C2 can start. One slot here makes the extra wait limit easy to exercise.
+do
+  local limit = crossover.MAX_GROUPS
+  crossover.MAX_GROUPS = 1
+  local wide, overflow = key(3, 0, 4), key(3, -1, 4) -- 2048 m tiles at y = 8192
+  local small, behind, retire = key(0, 0, 25), key(3, 0, -5), key(0, 0, 13)
+  local children = { key(2, 0, 8), key(2, 1, 8), key(2, 0, 9), key(2, 1, 9) }
+  local id = sid
+  local function emit(add, remove, dIn, dOut)
+    id = id + 1
+    farfield.onSwap(swap(1, id, add, remove, dIn, dOut))
+  end
+  farfield.onTile(tile(1, 3, 0, 4))
+  farfield.onTile(tile(1, 3, -1, 4))
+  farfield.onTile(tile(1, 0, 0, 25)) -- 256 m tile beyond 5 km: < 5% of a 60 degree view
+  farfield.onTile(tile(1, 3, 0, -5)) -- large but behind the camera
+  farfield.onTile(tile(1, 0, 0, 13)) -- visible and near, but only being retired
+  step(free, camNorth)
+  emit({ wide, overflow, small, behind, retire })
+  step(free, camNorth)
+  local oldWide, oldRetire = obj(wide), obj(retire)
+  local busy = capKeys[13]
+  farfield.onTile(tile(1, 0, 0, 12, { z = 104 }))
+  farfield.onTile(tile(1, 0, 0, 25, { z = 97 }))
+  farfield.onTile(tile(1, 3, 0, -5, { z = 97 }))
+  farfield.onTile(tile(1, 3, -1, 4, { z = 97 }))
+  for j = 8, 9 do for i = 0, 1 do farfield.onTile(tile(1, 2, i, j, { z = 96 })) end end
+  step(free, camNorth)
+  emit({ busy }, { busy }, 2, 1)
+  emit({ small }, { small }, 1, 4)
+  emit({ behind }, { behind }, 1, 4)
+  emit({}, { retire })
+  emit(children, { wide }, 1, 5)
+  emit({ overflow }, { overflow }, 1, 4)
+  local before = farfield.stats()
+  step(free, camNorth)
+  local atCap = farfield.stats()
+  T.check(atCap.transitions == 1 and atCap.groups == 1 and atCap.capWaits == before.capWaits + 1,
+    'at the cap, the large in-view split beyond 5 km waits')
+  T.check(visible(oldWide) and oldWide.pos.z == 100, 'waiting leaves the old coarse surface in place')
+  for _, k in ipairs(children) do
+    local pending = farfield._pending(k)
+    local child = pending and S.objects[pending.id]
+    T.check(child and child.hidden and child.fields.collisionType == 'None',
+      'waiting children stay loaded, hidden and render-only')
+  end
+  T.check(obj(small).pos.z == 97 and obj(behind).pos.z == 97, 'tiny in-view and large off-screen tiles still swap instantly')
+  T.check(obj(retire) == nil and not visible(oldRetire), 'at-cap pure removal does not wait for the visible split')
+  T.check(obj(overflow).pos.z == 97 and atCap.instant == before.instant + 4 and atCap.pops == before.pops + 3,
+    'only one extra wave can wait; every visible instant swap is counted')
+  for _ = 1, 31 do
+    if not obj(wide) then break end
+    step(free, camNorth)
+  end
+  local child = obj(children[1])
+  T.check(farfield.stats().groups == 0 and farfield.stats().transitions == 1
+    and visible(oldWide) and oldWide.pos.z == 100 and visible(child) and child.pos.z == 95,
+    'free slot starts the split below the old surface, without an instant replacement')
+  step(free, camNorth, 23)
+  T.check(visible(oldWide) and oldWide.pos.z < 100 and oldWide.pos.z > 95 and child.pos.z == 96,
+    'children reach true height before the old surface sinks away')
+  step(free, camNorth, 10)
+  local after = farfield.stats()
+  T.check(not visible(oldWide) and visible(child) and child.pos.z == 96 and after.transitions == 0
+    and after.crossovers == before.crossovers + 2 and after.pops == atCap.pops,
+    'large split completes continuously and does not register a pop')
+  crossover.MAX_GROUPS = limit
+end
 
 ------------------------------------------------------------------------------------------
 -- covered L0 tiles under the block (block centred at (0,0): cover box [-1024, 1024]^2)

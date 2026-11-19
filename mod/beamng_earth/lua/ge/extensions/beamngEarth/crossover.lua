@@ -12,8 +12,8 @@
 -- Delta = 1.2 * (err_new + err_old) + 0.2 m, err = the per-tile geometric error the server sends.
 -- C1 (instant swap) when the whole group is outside the camera frustum (+10 deg margin). Every
 -- in-view swap crosses over, at any distance (v1.3 D removed v1.2's "beyond 30 km instant" rule).
--- At most MAX_GROUPS crossovers run at once: beyond that a group in view within NEAR_POP_M waits for
--- a free slot (farfield.lua), a farther one swaps instantly.
+-- At most MAX_GROUPS crossovers run at once. At the cap, farfield.lua lets nearby or large in-view
+-- replacements wait for a slot; other groups swap instantly.
 -- A translucent instance-alpha fade was probed and does not work on TSStatic (P2), hence transforms.
 
 local M = {}
@@ -26,8 +26,7 @@ M.PHASE2_S = 0.25          -- old tiles sink
 M.COVER_SINK_S = 0.3       -- far tiles newly covered by the terrain block sink this long (phase 2 only)
 M.MAX_GROUPS = 24          -- concurrent crossovers (transition cap)
 M.MARGIN_DEG = 10          -- frustum margin for the off-screen test
-M.NEAR_POP_M = 5000        -- at the cap, an in-view group nearer than this waits instead of popping
-                           -- (a farther one swaps instantly: counted in farfield stats().pops)
+M.NEAR_POP_M = 5000        -- at the cap, keep the foreground safeguard regardless of apparent tile size
 M.ASPECT_MAX = 2.4         -- widest screen assumed by the frustum cone (21:9)
 M.CELLS = 32               -- far tile grid (cells per side) of a FORMAT 3 server (no hello.cells)
 

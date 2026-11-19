@@ -53,7 +53,7 @@ from dataclasses import dataclass, replace as dc_replace
 
 import numpy as np
 
-from PIL import Image, ImageFilter
+from PIL import Image
 
 import cache as cachemod
 import dem as demmod
@@ -378,24 +378,59 @@ MATCH_SIGMA_M = 40.0     # m: match_colours keeps the detail below this scale, t
 MATCH_DOWN, MATCH_MIN_PX = 8, 16    # render(): the reference at px / MATCH_DOWN (at least MATCH_MIN_PX)
 
 
-def match_colours(rgb, ref, sigma_px):
-    """rgb with the large-scale colour of ref (uint8; ref the same size or coarser, sigma_px in ref's texels):
-    rgb * blur(ref) / blur(rgb), per channel, the gain clipped to [1/3, 3] (Gaussian blur of sigma_px
-    texels) and, for a coarser ref, computed at its size and scaled up. Where rgb already is ref, nothing
-    changes; elsewhere the detail is rgb's and everything coarser than ~sigma ref's."""
-    r = max(1.0, float(sigma_px))
+def match_colours(rgb, ref, sigma_px, mask=None):
+    """Keep the detail in rgb, but take the large-scale colour of ref (uint8, at the same size or coarser).
+
+    The gain is the ratio of the blurred, co-registered colours, clipped to [1/3, 3]. With a mask, only
+    samples from that source contribute to either blur, and only its texels change. Otherwise the
+    background biases the gain toward 1 at an imagery boundary, leaving a colour step there.
+    """
+    from colormatch import dt_blur
+
     h, w = ref.shape[:2]
-    im = Image.fromarray(rgb, "RGB")
-    if (h, w) != rgb.shape[:2]:
-        im = im.resize((w, h), Image.BOX)
-    a = im.filter(ImageFilter.GaussianBlur(r))
-    b = Image.fromarray(ref, "RGB").filter(ImageFilter.GaussianBlur(r))
-    gain = np.clip((np.asarray(b, np.float32) + 4.0) / (np.asarray(a, np.float32) + 4.0), 1 / 3, 3)
-    if (h, w) != rgb.shape[:2]:
-        gain = np.stack([np.asarray(Image.fromarray(gain[..., c], "F").resize(rgb.shape[1::-1], Image.BILINEAR))
-                         for c in range(3)], -1)
-    out = rgb.astype(np.float32) * gain
-    return np.clip(np.rint(out), 0, 255).astype(np.uint8)
+    same_size = (h, w) == rgb.shape[:2]
+    if mask is not None and mask.all():
+        mask = None
+
+    def down(a):
+        return a if same_size else np.asarray(Image.fromarray(a).resize((w, h), Image.BOX))
+
+    # Keep the weighted averages in float: a source may contribute only a few pixels to a reference texel.
+    samples = np.empty((h, w, 6 if mask is None else 7), np.float32)
+    if mask is None:
+        samples[..., 3:6] = ref
+        if same_size:
+            samples[..., :3] = rgb
+        else:
+            for c in range(3):
+                samples[..., c] = down(rgb[..., c].astype(np.float32))
+    else:
+        weight = mask.astype(np.float32)
+        samples[..., 6] = down(weight)
+        np.multiply(ref, samples[..., 6:7], out=samples[..., 3:6])
+        for c in range(3):
+            samples[..., c] = down(rgb[..., c] * weight)
+    low = dt_blur(samples, max(1.0, float(sigma_px)))
+    floor = 4.0 if mask is None else 4.0 * low[..., 6:7]
+    num, den = low[..., 3:6] + floor, low[..., :3] + floor
+    if mask is None:
+        gain = num
+        gain /= den
+    else:
+        gain = np.ones_like(num)
+        np.divide(num, den, out=gain, where=floor > 1e-6)
+    np.clip(gain, 1 / 3, 3, out=gain)
+
+    out = np.empty_like(rgb) if mask is None else rgb.copy()
+    for c in range(3):
+        g = gain[..., c]
+        if not same_size:
+            g = np.asarray(Image.fromarray(g).resize(rgb.shape[1::-1], Image.BILINEAR))
+        v = rgb[..., c] * g
+        np.rint(v, out=v)
+        np.clip(v, 0, 255, out=v)
+        np.copyto(out[..., c], v, casting="unsafe", where=True if mask is None else mask)
+    return out
 
 
 def zoom_caps(src, lat):
@@ -607,6 +642,8 @@ class Imagery:
         season_mode: the season grade of every texture (season.amounts_for: "auto" = today's, "fall", "off")."""
         self.cache_dir = cache_dir
         self.chain = tuple(SOURCES[s] if isinstance(s, str) else s for s in chain)
+        self._match_lazy_zoom = (min((s.min_zoom for s in self.chain if s.lazy), default=math.inf)
+                                 if any(not s.lazy for s in self.chain) else math.inf)
         self.fetcher = fetcher if fetcher is not None else netfetch.Fetcher()
         self.fetcher.register_chain("imagery", [s.url for s in self.chain])
         self.pool = HostPools(min(fetch_workers, FETCH_WORKERS), "img-fetch")
@@ -2086,10 +2123,9 @@ class Imagery:
 
     @profile_step('Imagery render')
     def render(self, frame, x0, y0, size, px, pending=None, gutter=False):
-        """_render(); texels from a lazy source (NAIP) then take their large-scale colour from the rest of
-        the chain (match_colours): NAIP's detail, USGS's colours, so the block's photo meets the far tiles
-        around it (USGS, colour-matched and de-shadowed) without a seam (in-game 2026-10-13, Annapolis: the
-        NAIP block was a darker, greener square, its water much darker)."""
+        """Render the sharper lazy photos (e.g. NAIP) in the large-scale colours of their fallback
+        imagery. Near base photos and far textures use the same source assembly and colour transfer.
+        """
         return self.render_where(self.square(frame, x0, y0, size, px, gutter), px, pending)
 
     @profile_step('Imagery render')
@@ -2135,13 +2171,13 @@ class Imagery:
     @profile_step('Imagery source assembly')
     def render_where(self, where, px, pending=None):
         """render() of a square (EnuSquare, MercSquare)."""
-        rgb, used = self._render(where, px, pending)
-        if any(s.lazy and s.name in used for s in self.chain) and not all(s.lazy for s in self.chain):
+        rgb, used, layers = self._render(where, px, pending)
+        if layers is not None:
             # the reference only gives the colour above MATCH_SIGMA_M: rendered and matched at MATCH_DOWN times
             # coarser texels (64x fewer texels to render, blur and stream through memory than at full size)
             small = max(MATCH_MIN_PX, px // MATCH_DOWN)
             try:
-                ref, ref_used = self._render(where, small, pending, skip_lazy=True)
+                ref, ref_used, _ = self._render(where, small, pending, skip_lazy=True)
             except ImageryError:            # the reference is unreachable: NAIP as served
                 ref, ref_used = None, {}
             if ref is not None and ref_used.get("none"):
@@ -2150,10 +2186,14 @@ class Imagery:
                 # was pulled to the fallback's grey-brown, Fells Point's mean blue 115 -> 76, 2026-11-13)
                 ref = None
             if ref is not None:
-                rgb = match_colours(rgb, ref, MATCH_SIGMA_M / (where.size / small))
-                if self.leaf_on and any(s.leaf_off and s.name in used for s in self.chain):
-                    rgb = season.leaf_on(rgb, ref)
-                    used["leafon"] = sum(used.get(s.name, 0) for s in self.chain if s.leaf_off)
+                filled, lazy = layers
+                for src, marker in lazy.items():
+                    mask = filled == marker
+                    rgb = match_colours(rgb, ref, MATCH_SIGMA_M / (where.size / small), mask)
+                    if self.leaf_on and src.leaf_off:
+                        leaf = season.leaf_on(rgb, ref)
+                        np.copyto(rgb, leaf, where=mask[..., None])
+                        used["leafon"] = used.get("leafon", 0) + used[src.name]
         return self._seasoned(where, rgb), used
 
     SEASON_GRID = 17            # world positions for the season noise: on this grid, bilinear in between
@@ -2173,7 +2213,7 @@ class Imagery:
         """Texture of a square (where: EnuSquare: [x0, x0+size] x [y0, y0+size] of an anchor's frame; MercSquare),
         px x px,
         row 0 = north edge, column 0 = west edge (texel centres at (i + 0.5) * size / px).
-        Returns (uint8 [px, px, 3], tone-mapped, {source: texels}).
+        Returns (uint8 [px, px, 3], tone-mapped, {source: texels}, lazy layers or None).
 
         A warp of the finished source tiles (finished(): de-shadowed, colour-matched, tone-mapped once per
         source tile and kept on disk, so nothing of that is done again for another anchor's tiles): the ENU ->
@@ -2197,6 +2237,8 @@ class Imagery:
         out = np.zeros((px, px, 3), np.uint8)
         filled = np.zeros((px, px), np.uint8)
         used, error, relit, full = {}, None, 0, False
+        # A lazy layer gets its own label in the native warp's fill mask; ordinary imagery shares label 2.
+        lazy = {} if not skip_lazy and zw >= self._match_lazy_zoom else None
         g = 0 if GUTTER_FETCH else int(getattr(where, "g", 0) or 0)     # (the gutter: on hand or clamped)
         fast.require(108, "imagery tile_warp")
         clat = float(lat[cells // 2, cells // 2])
@@ -2275,6 +2317,9 @@ class Imagery:
                         self._fin_rgb.popitem(last=False)
             if hits:
                 used[src.name] = int(hits)
+                if lazy is not None:
+                    # tile_warp leaves nonzero texels alone and writes 1 only to newly filled texels.
+                    filled[filled == 1] = lazy.setdefault(src, len(lazy) + 3) if src.lazy else 2
                 relit += int(rh)
                 if cm_any:
                     used["colormatch"] = used.get("colormatch", 0) + int(hits)
@@ -2306,10 +2351,13 @@ class Imagery:
                 del used["none"]
         if gfill is not None:
             i, j = np.nonzero(gfill)
-            out[i, j] = out[np.clip(i, g, px - g - 1), np.clip(j, g, px - g - 1)]
+            r, c = np.clip(i, g, px - g - 1), np.clip(j, g, px - g - 1)
+            out[i, j] = out[r, c]
+            if lazy:
+                filled[i, j] = filled[r, c]
         if relit:
             used["deshadow"] = relit
-        return out, used
+        return out, used, (filled, lazy) if lazy else None
 
     def close(self):
         if self.deshadow is not None:
