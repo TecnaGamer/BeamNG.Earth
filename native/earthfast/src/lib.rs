@@ -7177,6 +7177,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // server/vsolve.py); "le" couplings and one-sample couplings (b None)
     // 505 (first 472, then 482, 488 and 490): corridor::plan_corridor_pairs (the one vertical solve's corridor rows:
     // share_corridors' pairs, their geometry alone)
-    m.add("VERSION", 505)?;
+    // 506: carriageway_profiles takes a chain grade of +inf and a K of 0: no grade or curvature rows (the one vertical
+    // solve's chains, vsolve.LOOSE_KERNEL)
+    m.add("VERSION", 506)?;
     Ok(())
 }

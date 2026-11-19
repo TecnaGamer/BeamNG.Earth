@@ -113,7 +113,7 @@ class NativeProfilesTest(unittest.TestCase):
 
     def test_invalid_inputs_fail_before_native_indexing(self):
         for key, value in [("w", [1.]), ("t", [[1., 2.]]), ("lo", [1.]),
-                           ("hi", [-np.inf, 0.]), ("grade", -1.), ("K", 0.),
+                           ("hi", [-np.inf, 0.]), ("grade", -1.), ("grade", np.nan), ("K", -1.), ("K", np.inf),
                            ("step", 0.), ("lam", -1.), ("length", np.nan), ("t", [np.inf, 0.])]:
             c = road([1., 2.]); c[key] = value
             with self.subTest(key=key, value=value), self.assertRaises((ValueError, TypeError)):
@@ -130,6 +130,19 @@ class NativeProfilesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             fast._ef.carriageway_profiles(a, a, a, a, np.array([0, 3], np.int64), np.ones((1, 5)),
                                          np.empty((0, 5), np.int64), np.empty(0), 10, 1.)
+
+    def test_an_infinite_grade_and_a_zero_k_bound_nothing(self):
+        # (earthfast 506: no grade or curvature rows at all, the one vertical solve's chains: a 50 m step stays)
+        import fast
+        try:
+            fast.require(506, "carriageway_profiles' unbounded chains")
+        except Exception:
+            self.skipTest("earthfast 506")
+        target = [0., 50., 0., 0.]
+        z, info = self.solve([{**road(target), "grade": np.inf, "K": 0., "lam": 0., "length": 0.}])
+        np.testing.assert_allclose(z[0], target, atol=1e-6)
+        z, _info = self.solve([{**road(target), "lam": 0., "length": 0.}])     # (its grade and curvature bounds)
+        self.assertGreater(float(np.abs(z[0] - target).max()), 1.0)
 
     def test_repeatable_concurrent_calls_leave_inputs_unchanged(self):
         roads, couplings = cases()["stacked_corridor"]

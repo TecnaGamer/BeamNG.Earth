@@ -96,6 +96,22 @@ GRADE_ROW_REACH = 10    # segments either side of a broken one that get rows too
 GRADE_D = 10.0          # the kernel's own grade bound, on the corrections: none
 K_LOOSE = 0.001         # m per % of grade change: the kernel's curvature bound, on the corrections: none (at 0.05,
                         # 0.8 m per 2 m step: a dip held beside a held sample made cells infeasible)
+
+
+def _loose():
+    """(grade, K) of the kernel's chains: no bound at all (+inf, 0: no rows) on a kernel that takes them (earthfast
+    506), else bounds never reached (GRADE_D, K_LOOSE: 4 rows a sample that the interior point carries all the same;
+    the same heights to 1e-6 m)."""
+    try:
+        import fast
+        if int(getattr(getattr(fast, "_ef", None), "VERSION", 0) or 0) >= 506:
+            return float("inf"), 0.0
+    except Exception:
+        pass
+    return GRADE_D, K_LOOSE
+
+
+_LOOSE = _loose()
 BUDGET_S = float(os.environ.get("BNE_VSOLVE_BUDGET_S", "60"))
 # Roads side by side at one height (grading.share_corridors' rule, its pairs from grading.corridor_pairs): two heights
 # beside each other differ by at most what the gap between the carriageways holds at CORRIDOR_BANK (none where the
@@ -296,7 +312,7 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
             if a == n:
                 lo[i] = hi[i] = h - z[i]
                 w[i] = 0.0
-        chains.append({"t": np.zeros(m), "w": w, "lo": lo, "hi": hi, "grade": GRADE_D, "K": K_LOOSE, "lam": lam,
+        chains.append({"t": np.zeros(m), "w": w, "lo": lo, "hi": hi, "grade": _LOOSE[0], "K": _LOOSE[1], "lam": lam,
                        "step": step, "length": 0.0})
         stiff[n] = hold * max(spread / step, 1.0)
         pen = CLEAR_PENALTY * stiff[n]
