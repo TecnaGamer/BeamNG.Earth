@@ -2410,6 +2410,23 @@ def _map_chunks(src, dst, chunks):
         v = m[at:at + ln, :max(2, min(cols, 3))]
         at += ln
         out[k][field] = v if field == "n" else v.tolist()
+    # (roadshape, BNE_ROADSHAPE=decks: a shaped deck's skewed end lines turned with the frames through their end node,
+    # its buried ends' overlap lines mapped as its nodes are; Codex review)
+    for k, c in enumerate(chunks):
+        for e, at in ((0, 0), (1, -1)):
+            d, ov = c.get(f"sk{e}"), c.get(f"ov{e}")
+            if d is None and ov is None:
+                continue
+            p = np.asarray(c["n"], np.float64)[at]
+            if d is not None:
+                q = geotiles.world_map(src, dst, np.array([[p[0], p[1], 0.0],
+                                                           [p[0] + 10.0 * d[0], p[1] + 10.0 * d[1], 0.0]]))
+                v = q[1, :2] - q[0, :2]
+                ln = float(np.sqrt(v[0] * v[0] + v[1] * v[1]))
+                out[k][f"sk{e}"] = [round(float(v[0] / ln), 6), round(float(v[1] / ln), 6)] if ln > 1e-12 else d
+            if ov is not None:
+                o = np.asarray(ov, np.float64)
+                out[k][f"ov{e}"] = geotiles.world_map(src, dst, np.c_[o[:, :2], np.zeros(len(o))])[:, :2].tolist()
     return out
 
 

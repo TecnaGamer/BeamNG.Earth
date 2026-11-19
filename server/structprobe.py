@@ -18,7 +18,18 @@ rampcheck) and measures TODAY's bridge decks as one structure per level would dr
   skew_err_deg    at a free deck end near a road / railway crossing under its deck, the angle between the drawn end
                   line and the crossed line's direction (a square end over a skew crossing: 90 - the crossing angle)
   groups          the structures the design's grouping rules (its section "Grouping") WOULD form from the members: a
-                  prediction only, nothing built from it
+                  prediction only, nothing built from it; "simple": the groups (singles too) of one or two road decks
+                  with no END_ON / OVERLAP edge (road revamp v2 P1b's simple structures, roadshape)
+  simple          the P1b targets on the simple groups' members alone (road revamp v2, BNE_ROADSHAPE=decks):
+                  chord_err_m   the drawn deck centre line (its ribbon rows, sampled between them) off the smooth line
+                                through the member's own rows (centripetal Catmull-Rom): the chord rule as drawn
+                  smooth_dev_m  the drawn deck centre line off the road's smooth line (earthfast.deck_shape's curve of
+                                the member and the roads going on from its ends, here, to 1 mm; None without the
+                                kernel): a deck kept on the map's chord across a curving road shows here
+                  end_kink_deg  at a free end with a road going on (its end within JOIN_ROAD_M), the angle between the
+                                drawn deck's direction and that road's (DIR_M of each)
+                  seam_step, skew_err_deg, parapet_in_cw_m as above, on those members
+  deck_tris       the deck meshes' triangles (all colliding) per tile that has one: total, mean, max
 
 Members are the bridge parts as the tiles get them (bridges.parts, shifted as roads.shifted_parts: the deck_pads input),
 their carriageway half width spec.width / 2. Everything is rounded and sorted: the same code and data give the same JSON
@@ -57,6 +68,10 @@ SKEW_MIN_CROSS = 15.0   # degrees: a line meeting the deck flatter than this run
 SKEW_BEND_DEG = 30.0    # degrees: a deck turning more between the crossing and its end is not that crossing's end
 GROUP_STEP = 1.0        # m between the grouping tests' samples
 BIN_M = 8.0             # m: overlap / hole cells pooled for the worst-places list
+JOIN_ROAD_M = 0.75      # m: a ground road's end this near a deck's free end goes on from it (end_kink_deg)
+DIR_M = 2.0             # m of a deck / road its end direction is read over (end_kink_deg: the tangent there)
+CHORD_SAMPLE_M = 0.25   # m between the samples of the drawn deck centre line (chord_err_m)
+OWN_M = 4.0             # m: a drawn ribbon's samples this near a member's line are that member's (chord_err_m)
 WALK_CLASSES = ("footway", "path", "cycleway", "pedestrian", "steps", "bridleway", "corridor", "track_foot")
 # the design's grouping rules (section "Grouping"): name -> (|dz| limit m, geometry)
 JOIN_END_M, JOIN_DZ = 0.5, 0.3
@@ -831,8 +846,33 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
                       and level(b) is not None and level(a) != level(b))
     conf = sorted([members[a]["key"][:10], members[b]["key"][:10]] for a, b in conflicts if inside(a) or inside(b))
     out.sort(key=lambda g: (-g["n"], g["root"]))
+    # (road revamp v2 P1b: a group of one or two road decks with no END_ON / OVERLAP edge inside it is simple)
+    # (simple_literal: the design's words, one or two members; simple: earthfast.deck_simple's rule, the JOIN edges a
+    # path, as roadshape takes it: a short bridge carried onto the roads at its ends is three members end to end)
+    simple_keys, n_all, n_simple, n_literal = [], 0, 0, 0
+    for root, mem in sorted(groups.items()):
+        if not any(inside(i) for i in mem):
+            continue
+        n_all += 1
+        mine = [(a, b, kd) for (a, b), kd in edges.items() if find(a) == root]
+        bad = any(kd[0] in ("END_ON", "OVERLAP_ALONG", "OVERLAP_CROSS") for a, b, kd in mine) or \
+            any(members[i]["walk"] for i in mem)
+        if bad:
+            continue
+        if len(mem) <= 2:
+            n_literal += 1
+        deg = {}
+        for a, b, kd in mine:
+            if kd[0] == "JOIN":
+                deg[a] = deg.get(a, 0) + 1
+                deg[b] = deg.get(b, 0) + 1
+        if max(deg.values(), default=0) <= 2 and sum(deg.values()) // 2 < max(1, len(mem)):
+            n_simple += 1
+            simple_keys += [members[i]["key"] for i in mem]
     return {"n": len(out), "grouped": sum(g["n"] for g in out), "single": single, "edges": by,
-            "height_rejected": rejected, "cross_level_edges": cross_level, "data_conflicts": conf, "list": out}
+            "height_rejected": rejected, "cross_level_edges": cross_level, "data_conflicts": conf, "list": out,
+            "all_groups": n_all, "simple_groups": n_simple, "simple_literal": n_literal,
+            "simple_keys": sorted(simple_keys)}
 
 
 def _near(xy, R):
@@ -853,6 +893,10 @@ def score(inp, R, frame_ll=None):
         "skew_err_deg": skew_errors(inp["ends"], inp["members"], inp["crossed"], R, frame_ll),
         "groups": predict_groups([dict(m) for m in inp["members"]], inp.get("outlines", ()), R, frame_ll),
     }
+    res["simple"] = simple_metrics(inp, set(res["groups"]["simple_keys"]), R, frame_ll)
+    tris = [int(t) for t in inp.get("deck_tris", ()) if t]
+    res["deck_tris"] = {"tiles": len(tris), "total": int(sum(tris)),
+                        "mean": round(float(np.mean(tris)), 1) if tris else 0.0, "max": max(tris) if tris else 0}
     inr = sum(1 for m in inp["members"]
               if _near(m["xy"], R))
     res["counts"] = {"members": inr, "members_all": len(inp["members"]), "chunks": len(inp["ribbons"]),
@@ -865,8 +909,181 @@ def score(inp, R, frame_ll=None):
                       "seam_step_max": res["seam_step"]["max"], "twin_dz_max": res["twin_dz"]["max"],
                       "twin_pairs": res["twin_dz"]["pairs"], "skew_err_max": res["skew_err_deg"]["max"],
                       "skew_ends": res["skew_err_deg"]["ends"], "decks": inr, "groups": g["n"],
-                      "grouped": g["grouped"]}
+                      "grouped": g["grouped"], "all_groups": g["all_groups"], "simple_groups": g["simple_groups"],
+                      "simple_literal": g["simple_literal"],
+                      "s_chord_err_m": res["simple"]["chord_err_m"], "s_end_kink_deg": res["simple"]["end_kink_deg"],
+                      "s_smooth_dev_m": res["simple"]["smooth_dev_m"],
+                      "s_seam_step_max": res["simple"]["seam_step"]["max"],
+                      "s_seam_step_n": res["simple"]["seam_step"]["n_over"],
+                      "s_skew_err_max": res["simple"]["skew_err_deg"]["max"],
+                      "s_skew_ends": res["simple"]["skew_err_deg"]["ends"],
+                      "s_parapet_in_cw_m": res["simple"]["parapet_in_cw"]["m"],
+                      "deck_tris": res["deck_tris"]["total"], "deck_tris_tiles": res["deck_tris"]["tiles"]}
     return res
+
+
+def _dir_end(xy, at, reach=DIR_M):
+    """The unit direction out of polyline xy (k, 2) at its start (at 0) or end (1), read over reach m of it."""
+    xy = np.asarray(xy, np.float64)
+    if at == 1:
+        xy = xy[::-1]
+    s = arc(xy)
+    r = min(reach, float(s[-1]))
+    q = np.array([_dnp().interp(r, s, xy[:, 0]), _dnp().interp(r, s, xy[:, 1])])
+    d = xy[0] - q
+    ln = float(_dnp().hypot(d[0], d[1]))
+    return d / ln if ln > 1e-9 else None
+
+
+def _smooth_ref(m, members, roads):
+    """The road's smooth line over member m (earthfast.deck_shape on it with the ground roads and the other decks
+    round it, rows to 1 mm and 0.25 m), or None without the kernel."""
+    try:
+        import fast
+        import roadshape
+        if not hasattr(fast._ef, "deck_shape"):
+            return None
+    except Exception:
+        return None
+    xy = np.asarray(m["xy"], np.float64)
+    lo, hi = xy.min(0) - 60.0, xy.max(0) + 60.0
+    lines, kinds, owns = [], [], []
+    for fid, rxy in roads:
+        if (rxy.max(0) < lo).any() or (rxy.min(0) > hi).any():
+            continue
+        lines.append(rxy)
+        kinds.append(0)
+        owns.append(1 if fid == m["fid"] else 0)
+    for o in members:
+        if o is m or (o["xy"].max(0) < lo).any() or (o["xy"].min(0) > hi).any():
+            continue
+        lines.append(np.asarray(o["xy"], np.float64))
+        kinds.append(2)
+        owns.append(0)
+    prm = roadshape.PARAMS.copy()
+    prm[0], prm[1] = 0.001, 0.25
+    off = np.r_[0, np.cumsum([len(a) for a in lines])].astype(np.int64)
+    pts = np.ascontiguousarray(np.concatenate(lines) if lines else np.zeros((0, 2)), np.float64)
+    got = fast._ef.deck_shape(np.ascontiguousarray(xy), np.zeros(len(xy)), pts, off, np.asarray(kinds, np.int64),
+                              np.asarray(owns, np.int64), prm)
+    return np.asarray(got[0], np.float64).reshape(-1, 2)
+
+
+def _near_line(pts, line, d):
+    """(m,) bool: points pts (m, 2) within d of the polyline line (k, 2)."""
+    if not len(pts) or len(line) < 2:
+        return np.zeros(len(pts), bool)
+    a, dd = line[:-1], np.diff(line, axis=0)
+    l2 = np.maximum((dd * dd).sum(1), 1e-18)
+    t = np.clip(((pts[:, None, :] - a[None]) * dd[None]).sum(2) / l2[None], 0.0, 1.0)
+    g = pts[:, None, :] - (a[None] + t[..., None] * dd[None])
+    return (g * g).sum(2).min(1) <= d * d
+
+
+def _off_line(pts, ref):
+    """The largest distance from points pts (m, 2) to the polyline ref (k, 2)."""
+    if not len(pts):
+        return 0.0
+    a, d = ref[:-1], np.diff(ref, axis=0)
+    l2 = np.maximum((d * d).sum(1), 1e-18)
+    t = np.clip(((pts[:, None, :] - a[None]) * d[None]).sum(2) / l2[None], 0.0, 1.0)
+    f = a[None] + t[..., None] * d[None]
+    g = pts[:, None, :] - f
+    return float(np.sqrt((g * g).sum(2).min(1)).max())
+
+
+def _cr_dense(xy, n=24):
+    """The centripetal Catmull-Rom curve through the rows xy (k, 2), n points per piece (the ends' tangents from
+    reflected rows): the smooth line the rows stand for (chord_err_m)."""
+    xy = np.asarray(xy, np.float64)
+    d0 = np.diff(xy, axis=0)
+    xy = xy[np.r_[True, np.sqrt((d0 * d0).sum(1)) > 1e-6]]
+    if len(xy) < 3:
+        return xy
+    P = np.vstack([2 * xy[0] - xy[1], xy, 2 * xy[-1] - xy[-2]])
+    out = [xy[:1]]
+    for i in range(1, len(P) - 2):
+        p0, p1, p2, p3 = P[i - 1], P[i], P[i + 1], P[i + 2]
+        t0 = 0.0
+        t1 = t0 + float(np.sqrt(np.sqrt(((p1 - p0) * (p1 - p0)).sum())))
+        t2 = t1 + float(np.sqrt(np.sqrt(((p2 - p1) * (p2 - p1)).sum())))
+        t3 = t2 + float(np.sqrt(np.sqrt(((p3 - p2) * (p3 - p2)).sum())))
+        if min(t1 - t0, t2 - t1, t3 - t2) <= 1e-12:
+            out.append(p2[None])
+            continue
+        t = np.linspace(t1, t2, n + 1)[1:, None]
+        a1 = (t1 - t) / (t1 - t0) * p0 + (t - t0) / (t1 - t0) * p1
+        a2 = (t2 - t) / (t2 - t1) * p1 + (t - t1) / (t2 - t1) * p2
+        a3 = (t3 - t) / (t3 - t2) * p2 + (t - t2) / (t3 - t2) * p3
+        b1 = (t2 - t) / (t2 - t0) * a1 + (t - t0) / (t2 - t0) * a2
+        b2 = (t3 - t) / (t3 - t1) * a2 + (t - t1) / (t3 - t1) * a3
+        out.append((t2 - t) / (t2 - t1) * b1 + (t - t1) / (t2 - t1) * b2)
+    return np.concatenate(out)
+
+
+def simple_metrics(inp, simple_keys, R, frame_ll=None):
+    """The P1b targets on the simple groups' members (simple_keys): chord_err_m, end_kink_deg, seam_step,
+    skew_err_deg, parapet_in_cw (module doc)."""
+    dnp = _dnp()
+    members = inp["members"]
+    keys_of = {}
+    for m in members:
+        keys_of.setdefault(m["fid"], []).append(m["key"])
+    sfids = {f for f, ks in keys_of.items() if all(k in simple_keys for k in ks)}
+    rib = [r for r in inp["ribbons"] if r[3] in sfids]
+    # (the roads on the ground round it, every piece: collect()'s crossed lines, railways left out)
+    roads = [(str(fid), np.asarray(gl, np.float64)) for gl, tag, fid in inp["crossed"] if not str(tag).startswith("rail:")]
+    chord = smooth = None
+    kinks = []
+    for m in members:
+        if m["key"] not in simple_keys or not _near(m["xy"], R):
+            continue
+        xy = np.asarray(m["xy"], np.float64)
+        mine = [r for r in rib if r[3] == m["fid"]]
+        for ref, name in ((_cr_dense(xy), "chord"), (_smooth_ref(m, members, roads), "smooth")):
+            if ref is None or len(ref) < 2:
+                continue
+            worst = 0.0
+            for left, right, _z, _f in mine:
+                mid = (np.asarray(left) + np.asarray(right)) / 2
+                if len(mid) < 2:
+                    continue
+                pts, _zz, _piece, _u = resample(mid, np.zeros(len(mid)), CHORD_SAMPLE_M)
+                if not len(pts):
+                    continue
+                far = dnp.hypot(*(pts[:, None, :] - xy[None, [0, -1], :]).transpose(2, 0, 1)).min(1) > 0.5
+                far &= _near_line(pts, xy, OWN_M)        # (its own ribbons: a way's other parts are other members)
+                worst = max(worst, _off_line(pts[far], ref))
+            if name == "chord":
+                chord = worst if chord is None else max(chord, worst)
+            else:
+                smooth = worst if smooth is None else max(smooth, worst)
+        for at in (0, 1):
+            p = xy[0] if at == 0 else xy[-1]
+            dd = _dir_end(xy, at)
+            best = None
+            for fid, rxy in roads:
+                for e in (0, 1):
+                    q = rxy[0] if e == 0 else rxy[-1]
+                    if float(dnp.hypot(*(q - p))) > JOIN_ROAD_M:
+                        continue
+                    rd = _dir_end(rxy, e)
+                    if dd is None or rd is None:
+                        continue
+                    a = float(angle_deg(-dd, rd)[0])      # (the road leaving the deck's end: against the deck's way in)
+                    if a <= 45.0 and (best is None or (fid == m["fid"], -a) > best[0]):
+                        best = ((fid == m["fid"], -a), a)
+            if best is not None:
+                kinks.append(best[1])
+    ends = [(mi, at, d) for mi, at, d in inp["ends"] if members[mi]["key"] in simple_keys]
+    runs = [r for r, f in zip(inp["parapets"], inp.get("parapet_fids") or ()) if f in sfids]
+    return {"members": sum(1 for m in members if m["key"] in simple_keys and _near(m["xy"], R)),
+            "chord_err_m": None if chord is None else round(chord, 4),
+            "smooth_dev_m": None if smooth is None else round(smooth, 4),
+            "end_kink_deg": round(max(kinks), 2) if kinks else 0.0,
+            "end_kinks": len(kinks), "seam_step": seam_steps(rib, R, frame_ll),
+            "skew_err_deg": skew_errors(ends, members, inp["crossed"], R, frame_ll),
+            "parapet_in_cw": parapet_in_carriageway(runs, inp["carriageways"], R, frame_ll)}
 
 
 def text_summary(res):
@@ -886,6 +1103,15 @@ def text_summary(res):
              + ", ".join(f"{k} {v}" for k, v in res["groups"]["edges"].items() if v)
              + "; over the height limit " + ", ".join(f"{k} {v}" for k, v in res["groups"]["height_rejected"].items()
                                                       if v)]
+    sm = res.get("simple")
+    if sm is not None:
+        lines.append(f"simple groups {s.get('simple_groups')} of {s.get('all_groups')} ({sm['members']} members): "
+                     f"chord_err_m {sm['chord_err_m']}, smooth_dev_m {sm['smooth_dev_m']}, end_kink_deg {sm['end_kink_deg']} ({sm['end_kinks']} ends), "
+                     f"seam_step max {sm['seam_step']['max']} ({sm['seam_step']['n_over']} over), skew_err max "
+                     f"{sm['skew_err_deg']['max']} ({sm['skew_err_deg']['ends']} ends), parapet_in_cw_m "
+                     f"{sm['parapet_in_cw']['m']}")
+        lines.append(f"deck tris: {res['deck_tris']['total']} in {res['deck_tris']['tiles']} tiles (mean "
+                     f"{res['deck_tris']['mean']}, max {res['deck_tris']['max']})")
     lines.append(f"  edges across OSM levels {res['groups']['cross_level_edges']}, data conflicts (one level, "
                  f"> {CONFLICT_DZ} m) {len(res['groups']['data_conflicts'])}")
     for g in res["groups"]["list"][:8]:
@@ -947,6 +1173,7 @@ def collect(lat, lon, R, cache, offline=False):
         roadsmod.build_tile, roadsmod.deck_pads, rm.deck = orig
         shutil.rmtree(out, True)
     tops, ribbons, cuts, parapets, pads = [], [], [], [], []
+    parapet_fids, deck_tris = [], []
     parts, ground_roads = {}, {}
     grounds = []
     for (tx, ty), box, got in tiles:
@@ -967,6 +1194,7 @@ def collect(lat, lon, R, cache, offline=False):
         if "deck" not in got:
             continue
         chunks, origin, pars, tpads, mesh = got["deck"]
+        deck_tris.append(0 if mesh is None else len(mesh[1]))
         if mesh is not None:
             pp, tt, _uu, mats, M = mesh
             if rm.DECK_TOP in mats:
@@ -979,6 +1207,8 @@ def collect(lat, lon, R, cache, offline=False):
                 flat = np.abs(nz) > 0.3 * np.sqrt(nx * nx + ny * ny + nz * nz)
                 tops.append(tri[flat])
         dch = [c for c in chunks if c.get("deck") and c.get("fixed") and not c.get("ctx") and not c.get("tunnel")]
+        all_dch = [c for c in chunks if c.get("deck")]      # (deck()'s own list: a parapet's "deck" indexes its ribbons)
+        rb_fid = [str(c.get("fid", "")) for r, c in rm.ribbon_pairs(all_dch) if r[5] is not None]
         for r, c in rm.ribbon_pairs(dch):
             if r[5] is None:
                 continue
@@ -989,12 +1219,15 @@ def collect(lat, lon, R, cache, offline=False):
                                   abs(mid[e, 1] - box[3])) < CUT_EPS for e in (0, -1)))
         for p in pars:
             parapets.append((np.asarray(p["edge"], np.float64)[:, :2], np.asarray(p["z"], np.float64)))
+            n_ = p.get("deck")
+            parapet_fids.append(rb_fid[n_] if isinstance(n_, int) and 0 <= n_ < len(rb_fid) else "")
         for pad in tpads:
             pads.append(np.asarray(pad[0], np.float64))
             for pts, outv in (pad[2] if len(pad) > 2 else ()):
                 pts, outv = np.asarray(pts, np.float64), np.asarray(outv, np.float64)
                 if len(pts) >= 2:
                     parapets.append((pts[:, :2] + outv * (rm.JERSEY_HALF_W + 0.02), pts[:, 2] - rm.PAD_DROP))
+                    parapet_fids.append("")
     tops = np.concatenate(tops) if tops else np.zeros((0, 3, 3))
 
     def ground_z(xy):
@@ -1112,6 +1345,7 @@ def collect(lat, lon, R, cache, offline=False):
     crossed.sort(key=lambda q: (q[1], round(float(q[0][0, 0]), 2), round(float(q[0][0, 1]), 2)))
     outlines.sort(key=lambda o: (round(float(o[:, 0].min()), 2), round(float(o[:, 1].min()), 2), len(o)))
     return {"tops": tops, "ribbons": ribbons, "cuts": cuts, "parapets": parapets, "pads": pads,
+            "parapet_fids": parapet_fids, "deck_tris": deck_tris,
             "members": members, "carriageways": carriageways, "ends": ends, "crossed": crossed,
             "outlines": outlines, "errors": errors, "tiles": len(tiles), "frame": frame}
 

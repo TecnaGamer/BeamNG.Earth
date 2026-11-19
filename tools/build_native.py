@@ -129,8 +129,13 @@ def main():
         # (a release module built against this rolling distro's glibc (2.44) fails to load on older systems; an agent
         # worktree has no .claude/devtools, so a $PWD zig path came up empty and the build fell through silently,
         # 2026-11-18: refuse instead; --host-glibc for a local-only module)
-        sys.exit("build_native: no zig / cargo-zigbuild on PATH: the Linux module would need this machine's glibc. "
-                 "Put .claude/devtools/ziglang (the main checkout's) on PATH, or pass --host-glibc for a local build.")
+        msg = ("build_native: no zig / cargo-zigbuild on PATH: the Linux module would need this machine's glibc. "
+               "Put .claude/devtools/ziglang (the main checkout's) on PATH, or pass --host-glibc for a local build.")
+        if os.environ.get("CI") != "true":
+            sys.exit(msg)
+        # (a CI job builds a module only for itself, e.g. the data repo's BNWT builders on ubuntu-26.04 (2026-11-19:
+        # refused, every shard failed); the release ships from ubuntu-22.04, whose glibc passes the check above)
+        print("warning: " + msg + " (CI: built for this runner only)", file=sys.stderr)
     if sys.platform.startswith("linux") and shutil.which("cargo-zigbuild") and shutil.which("zig"):
         # against glibc LINUX_GLIBC (cargo-zigbuild), not this machine's: built on a rolling distro, the module asked
         # for glibc 2.43 / 2.44 and failed to load on a Steam Deck (2.43 without the 2.44 symbols) and would on every
