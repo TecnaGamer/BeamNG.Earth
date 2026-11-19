@@ -2348,7 +2348,7 @@ def choose_game(installs, ask=None):
     span = f"1-{len(installs)}, M" if installs else "M"
     for _ in range(3):
         try:
-            a = (ask(f"  Your choice [{span}]: ") or "").strip().lower()
+            a = (ask(t("launcher.game.choice", span=span)) or "").strip().lower()
         except (EOFError, OSError):
             return None
         if a == "m":
@@ -2356,7 +2356,7 @@ def choose_game(installs, ask=None):
         if a.isdigit() and 1 <= int(a) <= len(installs):
             root = installs[int(a) - 1].root
             if apppaths.set_game_dir(root):
-                say(f"  Using {root} (from now on; --choose-game asks again).")
+                say(t("launcher.game.useInstall", path=root))
                 return root
         say(t("launcher.game.chooseNumber"))
     return None
@@ -2368,7 +2368,7 @@ def ask_launch_mode(inst, ask=None):
         return
     ask = ask or input
     try:
-        a = (ask("  Start it [S]team (Steam's overlay, Steam Input, play time) or [D]irectly, without Steam? [S/d]: ")
+        a = (ask(t("launcher.game.launchMode"))
              or "").strip().lower()
     except (EOFError, OSError):
         return
@@ -2429,12 +2429,12 @@ def ask_game_dir(ask=None, searched=True):
         say("BeamNG.drive was not found (Steam's libraries, BeamNG's own records" +
             (", the Epic Games Launcher)." if IS_WIN else ")."))
     exe = "BeamNG.drive.exe" if IS_WIN else "BinLinux/BeamNG.drive.x64"
-    d = apppaths.ask_path(f"Where is BeamNG.drive installed? (the folder with {exe})", "folder",
+    d = apppaths.ask_path(t("launcher.game.pickFolder", program=exe), "folder",
                           apppaths.set_game_dir, ask=ask, say=say)
     if d:
-        say(f"  Using {d} (from now on; --game-dir PATH or --choose-game changes it, --game-dir default forgets it).")
+        say(t("launcher.game.useFolder", path=d))
     else:
-        say("  Not set: the game is started through Steam.")
+        say(t("launcher.game.noFolder"))
     return d
 
 
@@ -2445,22 +2445,22 @@ def beammp_install(user_dir, dd, ask=None):
     launcher's path, or None."""
     import bmplaunch
     ask = ask or input
-    say("BeamMP (multiplayer: play on BeamNG.Earth servers with other players) is not installed.")
-    question = ("  Install the official BeamMP launcher now (a few MB from GitHub)?" if IS_WIN else
-                "  Build BeamMP's launcher from its source now (a few minutes, once)?")
+    say(t("launcher.multiplayer.install"))
+    question = (t("launcher.multiplayer.installWindows") if IS_WIN else
+                t("launcher.multiplayer.buildLinux"))
     try:
-        answer = ask(question + " [Y]es / [N]o / [D]on't ask again / [H]ave it already: ")
+        answer = ask(question + t("launcher.multiplayer.installChoices"))
     except (EOFError, OSError):
         return None                         # (no console to ask in: asked next time)
     answer = (answer or "").strip().lower()
     if answer in ("h", "have", "have it", "have it already"):
         # (a player's own launcher in a folder of their own: they did not want a second one, Discord 2026-10-24)
-        exe = apppaths.ask_path(f"Where is your BeamMP launcher ({bmplaunch.EXE}, or its folder)?", "file",
+        exe = apppaths.ask_path(t("launcher.multiplayer.pickLauncher", program=bmplaunch.EXE), "file",
                                 lambda p: bmplaunch.remember(dd, p), ask=ask, say=say, name=bmplaunch.EXE)
         if exe:
-            say(f"  Using {exe} (from now on; --beammp-launcher PATH changes it).")
+            say(t("launcher.multiplayer.useLauncher", path=exe))
         else:
-            say(f"  No {bmplaunch.EXE} there: asked again next time (or start with --beammp-launcher PATH).")
+            say(t("launcher.multiplayer.noLauncher", program=bmplaunch.EXE))
         return exe
     if answer in ("d", "don't", "dont", "never"):
         bmplaunch.set_on_launch(user_dir, False)
@@ -2468,7 +2468,7 @@ def beammp_install(user_dir, dd, ask=None):
         say("  in the game: Pause menu, Mods, BeamNG.Earth.")
         return None
     if answer in ("n", "no"):
-        say("  Not installed this time.")
+        say(t("launcher.multiplayer.skipInstall"))
         return None
     import install
     ua = f"BeamNG.Earth/{install.version()}"

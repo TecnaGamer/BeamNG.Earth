@@ -60,7 +60,7 @@ def validate(value, locale):
 
 def references(base):
     roots = [MOD / "ui/ui-vue/mods/beamngEarth", MOD / "lua/ge/extensions/beamngEarth"]
-    paths = [ROOT / "launcher.py", *MOD.glob("ui/modules/apps/BeamNGEarth*/app.js")]
+    paths = [ROOT / "launcher.py", ROOT / "apppaths.py", *MOD.glob("ui/modules/apps/BeamNGEarth*/app.js")]
     for root in roots:
         paths.extend(path for path in root.glob("*") if path.suffix in (".js", ".vue", ".lua"))
     quoted = re.compile(r"'(" + KEY + r")'|\"(" + KEY + r")\"")

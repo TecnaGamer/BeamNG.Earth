@@ -4,10 +4,12 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from localization import Translator
+from localization import Translator, configure
+from apppaths import ask_path
 
 spec = importlib.util.spec_from_file_location("check_locales", ROOT / "tools/check_locales.py")
 check_locales = importlib.util.module_from_spec(spec)
@@ -20,6 +22,16 @@ class LocalizationTests(unittest.TestCase):
         self.assertEqual(Translator("fr-CA").t("launcher.label.worldServer"), "World server")
         self.assertEqual(Translator("pl").t("launcher.update.downloaded", version="1.2.3"),
                          "Pobrano BeamNG.Earth 1.2.3")
+
+    def test_path_prompt_is_localized_and_keeps_input_unchanged(self):
+        configure("pl-PL")
+        self.addCleanup(configure, "en")
+        user_path = r"C:\Gry\Łódź"
+        ask = Mock(return_value=user_path)
+        accept = Mock(return_value=user_path)
+        self.assertEqual(ask_path("Wybierz folder", "folder", accept, ask=ask), user_path)
+        self.assertIn("Możesz też wpisać lub wkleić ścieżkę", ask.call_args.args[0])
+        accept.assert_called_once_with(user_path)
 
     def test_damaged_catalog_falls_back_and_validator_reports_it(self):
         with tempfile.TemporaryDirectory() as target:
