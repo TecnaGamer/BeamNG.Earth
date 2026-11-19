@@ -7,7 +7,7 @@
     "persistentId": "b1e0d002-0001-4a11-9c01-000000000001",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -16,10 +16,10 @@
         "opacityMap": "/assets/materials/decalroad/treadmark/tread_marks_worn/t_tread_marks_worn_o.data.png",
         "roughnessMap": "/assets/materials/decalroad/treadmark/tread_marks_worn/t_tread_marks_worn_r.data.png",
         "baseColorFactor": [
-          1,
-          1,
-          1,
-          0.7
+          0.7,
+          0.7,
+          0.7,
+          1
         ],
         "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityDetailMapUseUV": 1,
@@ -27,7 +27,9 @@
         "detailScale": [
           1,
           1
-        ]
+        ],
+        "opacityFactor": 0.69,
+        "ambientOcclusionMap": "/assets/materials/decalroad/treadmark/tread_marks_worn/t_tread_marks_worn_ao.data.png"
       },
       {},
       {},
@@ -42,7 +44,7 @@
     "persistentId": "b1e0d002-0002-4a11-9c01-000000000002",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -51,10 +53,10 @@
         "opacityMap": "/assets/materials/decalroad/asphalt/AsphaltRoad_joint_01/t_asphalt_repair_joint_01_o.data.png",
         "roughnessMap": "/assets/materials/decalroad/asphalt/AsphaltRoad_joint_01/t_asphalt_repair_joint_01_r.data.png",
         "baseColorFactor": [
-          1,
-          1,
-          1,
-          0.9
+          0.7,
+          0.7,
+          0.7,
+          1
         ],
         "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityDetailMapUseUV": 1,
@@ -62,7 +64,9 @@
         "detailScale": [
           1,
           1
-        ]
+        ],
+        "opacityFactor": 0.69,
+        "ambientOcclusionMap": "/assets/materials/decalroad/asphalt/AsphaltRoad_joint_01/t_asphalt_repair_joint_01_ao.data.png"
       },
       {},
       {},
@@ -77,7 +81,7 @@
     "persistentId": "b1e0d002-0003-4a11-9c01-000000000003",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -86,10 +90,10 @@
         "opacityMap": "/assets/materials/decalroad/asphalt/m_asphalt_cracks_02/t_asphalt_cracks_02_o.data.png",
         "roughnessMap": "/assets/materials/decalroad/asphalt/m_asphalt_cracks_02/t_asphalt_cracks_02_r.data.png",
         "baseColorFactor": [
-          1,
-          1,
-          1,
-          0.9
+          0.7,
+          0.7,
+          0.7,
+          1
         ],
         "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityDetailMapUseUV": 1,
@@ -97,7 +101,9 @@
         "detailScale": [
           1,
           1
-        ]
+        ],
+        "opacityFactor": 0.69,
+        "ambientOcclusionMap": "/assets/materials/decalroad/asphalt/m_asphalt_cracks_02/t_asphalt_cracks_02_ao.data.png"
       },
       {},
       {},
@@ -112,7 +118,7 @@
     "persistentId": "b1e0d002-0004-4a11-9c01-000000000004",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -139,7 +145,7 @@
     "persistentId": "b1e0d002-0005-4a11-9c01-000000000005",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -167,7 +173,7 @@
     "persistentId": "b1e0d002-0006-4a11-9c01-000000000006",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -195,7 +201,7 @@
     "persistentId": "b1e0d002-0007-4a11-9c01-000000000007",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -224,7 +230,7 @@
     "persistentId": "b1e0d002-0008-4a11-9c01-000000000008",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -251,7 +257,7 @@
     "persistentId": "b1e0d002-0009-4a11-9c01-000000000009",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -279,7 +285,7 @@
     "persistentId": "b1e0d002-0010-4a11-9c01-000000000010",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -312,7 +318,7 @@
     "persistentId": "b1e0d002-0011-4a11-9c01-000000000011",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -349,7 +355,7 @@
     "persistentId": "b1e0d002-0012-4a11-9c01-000000000012",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -387,7 +393,7 @@
     "persistentId": "b1e0d002-0013-4a11-9c01-000000000013",
     "annotation": "ASPHALT",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {
@@ -421,7 +427,7 @@
     "persistentId": "b1e0d002-0014-4a11-9c01-000000000014",
     "annotation": "GRAVEL",
     "translucent": true,
-    "translucentZWrite": false,
+    "translucentZWrite": true,
     "castShadows": false,
     "Stages": [
       {

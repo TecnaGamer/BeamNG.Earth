@@ -85,6 +85,9 @@ MATERIALS = tuple(sorted({v["m"] for v in LOOKS.values()}
 # Fells Point 2026-11-11: "the extra road decals look out of place and very bright"): in the road mesh their stock
 # opacity maps did not shape them (whole bright bands across each lane; darkened, uniform brown bands like rails).
 # BNE_WEAR_STRIPS=on draws them (for reworking the materials); the spots and crack lines stay.
+# 2026-11-19 (the user: "they're way too bright and they're not affected by shadows"): the strip materials write
+# depth (translucentZWrite, as every stock road decal; without it the forward pass gave them no sun shadow and drew
+# them over the paint) and take the stock tread marks' tint 0.7, opacityFactor 0.69 and each texture's AO map.
 STRIPS_ON = os.environ.get("BNE_WEAR_STRIPS", "off").strip().lower() == "on"
 STRIP_KINDS = (K_TREAD, K_SEALED, K_CRACKS, K_MANHOLE)   # (the manhole covers too: bright white discs in game)
 # With the v2 surface overlays (SURFACE_V2) the full-lane strips are left out even with BNE_WEAR_STRIPS=on: the v2

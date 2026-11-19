@@ -157,13 +157,15 @@ class RoadWearTest(unittest.TestCase):
         nz = np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]])[:, 2]
         self.assertTrue(np.all(nz > 0))
 
-    def test_mesh_fades_wear_and_draws_it_first(self):
+    def test_mesh_fades_wear_and_draws_it_over_the_paint(self):
+        """The wear strips draw after the paint (the tyre paths wear the crosswalks too), the spots after the strips."""
         rd = [("a", spec(lanes=2), line(0, 128, 256, 128), 0.0)]
-        ch = [c for c in plan(rd, tier=1) if c["m"] == "bne_wear_tread"]
+        ch = [{"m": "bne_spot_patch", "w": 1.0, "tl": 2.0, "p": 8, "n": [[10, 129, 0], [12, 129, 0]]}]
+        ch += [c for c in plan(rd, tier=1) if c["m"] == "bne_wear_tread"]
         ch.append({"m": "line_white", "w": 0.15, "tl": 6.4, "p": 2, "n": [[0, 128, 0], [256, 128, 0]]})
         mesh = roadmesh.build(FRAME, ch, lambda la, lo: np.zeros(np.shape(la)), (0.0, 0.0, 0.0), clip=BOX)
         self.assertEqual(len(mesh), 6)          # (the fade uv)
-        self.assertEqual(mesh[3][0], "bne_wear_tread")
+        self.assertEqual(mesh[3], ["line_white", "bne_wear_tread", "bne_spot_patch"])
         fade = mesh[5]
         self.assertLess(fade[:, 1].min(), 0.05)     # (a run's open start)
 

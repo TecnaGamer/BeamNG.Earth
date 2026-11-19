@@ -32,8 +32,10 @@ import roadshape as _roadshape
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
 # Metres above the physics ground, which grading.ROAD_LIFT raises under roads.
 LIFT = {"base": 0.0, "edge": 0.001, "gutter": 0.0015, "mark": 0.002, "frontage": 0.03,
-        # road wear (roadwear.py): its materials write no depth (roadwear.materials.json), so their order in the mesh,
-        # not their height, decides what lies on top: the strips (fade materials) first, the paint over them
+        # road wear (roadwear.py): their order in the mesh (_draw_rank), not their height, decides what lies on top. Their
+        # materials write depth since 2026-11-19, as the stock road decals do (without it they took no sun shadow), but
+        # the layers are a fraction of a mm apart: in game (High Street, Morgantown) the paint 0.2 mm under the strips,
+        # drawn first, stayed whole and did not flicker
         # (2026-11-11, the user: "can we make the road decals even closer to the ground?": 3-3.2 cm -> 1.2-1.4 cm, the
         # crack lines on the paint's own tight ground following)
         # then (the user: "make both a pixel or 2 above the ground so they dont z fight"): the paint 1 cm -> 5 mm, the wear
@@ -49,7 +51,8 @@ WEAR_TOL = float(os.environ.get("BNE_WEAR_TOL", "0.02"))
 # The road revamp v2's surface overlays (P1c, BNE_SURFACE_V2; .claude/work/road-revamp-v2-road-shape-first-2026-11-19.md
 # section 2.7 and its addendum): the stock maps' markings float ~5 mm over their road (Italy's mesh lines 4.9 mm p50),
 # so the overlays here sit a few mm up, markings 5 mm, tyre wear 4 mm, edge blends 2.5 mm, the surface variation
-# (roadwear.surface_chunks) 3 mm; the mesh's draw order does the layering (their materials write no depth: v2_rank).
+# (roadwear.surface_chunks) 3 mm; the mesh's draw order does the layering (v2_rank: the strips' materials write depth
+# since 2026-11-19, as the stock road decals do, else they take no sun shadow; the spots and crack lines too).
 # An overlay triangle the ground follow leaves whole is raised where the drawn ground bulges inside it, so the ground
 # stays MARK_MIN_M under every overlay (follow_ground's clear: with fewer rows than the terrain the paint sagged into it,
 # 6.9 mm deep at Fells Point with the 2 mm lift, markprobe.py); cutting those triangles along the terrain's instead was
@@ -197,6 +200,23 @@ def v2_rank(m):
     if m.startswith(V2_ORDER_WEAR):
         return 3
     return 4
+
+
+WEAR_STRIP_PREFIX = "bne_wear_"             # roadwear's strips (tyre polish, crack networks)
+WEAR_OVER_STRIPS = ("bne_spot_", "bne_crack_line")   # roadwear's spots and crack lines, drawn over the strips
+
+
+def _draw_rank(m):
+    """A material's place in a strip mesh's draw order: the dirt strips and the frontage asphalt first, so the
+    markings and anything else translucent draw over them; then the road and its paint; then the wear strips over the
+    paint (the user, 2026-11-19: "the tire marks are supposed to go over the crosswalks": real wheel paths wear the
+    paint too; the strips write depth, and the paint 0.2 mm under them is no depth test apart, so the order decides);
+    then the wear spots and crack lines over the strips."""
+    if m.startswith(WEAR_STRIP_PREFIX):
+        return 2
+    if m.startswith(WEAR_OVER_STRIPS):
+        return 3
+    return 0 if m.startswith(FADE_PREFIX) or m == FRONTAGE_ASPHALT else 1
 
 
 def _resample(pts, step, keep_vertices=False, corner_half=0.0):
@@ -1707,9 +1727,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             remap[order] = np.arange(len(mats))
             return out[0], T, UV, [mats[j] for j in order], remap[np.asarray(M, np.int64)]
         return out
-    # a strip in the mesh: the fade uv for every point (a sixth element: write, plazas.merge), and the strips' materials
-    # first, so the markings and anything else translucent in the mesh draw over them (one primitive per material, in
-    # the list's order)
+    # a strip in the mesh: the fade uv for every point (a sixth element: write, plazas.merge), and the draw order (one
+    # primitive per material, in the list's order: _draw_rank)
     vr = np.full(len(P), -1, np.int64)
     vr[T.ravel()] = np.repeat(RI, 3)
     fade = _fade_uv(UV, vr, rpar)
@@ -1719,8 +1738,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         blend = (weight * weight) * (3 - 2 * weight)
         out[0][used, 2] -= (LIFT["frontage"] + lift - .001) * (1 - blend)
         fade[used] = np.c_[.001 + .499 * weight, np.full(len(used), .5)]
-    order = sorted(range(len(mats)), key=lambda j: (v2_rank(mats[j]), j) if SURFACE_V2 else
-                   (not (mats[j].startswith(FADE_PREFIX) or mats[j] == FRONTAGE_ASPHALT), j))
+    order = sorted(range(len(mats)), key=lambda j: (v2_rank(mats[j]) if SURFACE_V2 else _draw_rank(mats[j]), j))
     remap = np.empty(len(mats), np.int64)
     remap[order] = np.arange(len(mats))
     return out[0], T, UV, [mats[j] for j in order], remap[np.asarray(M, np.int64)], fade
