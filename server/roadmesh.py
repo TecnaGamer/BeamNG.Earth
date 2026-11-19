@@ -406,6 +406,10 @@ TRIM_GAP_M = 0.05                   # ... each slab ends this short of halfway b
 # fell into it at 80 km/h on two survey drives (2026-11-15/16).
 TRIM_ALONG_DEG = 30.0
 TRIM_ALONG_COS = dmath.cos(math.radians(TRIM_ALONG_DEG))
+# (BNE_ROADSHAPE=profile, P3e) two decks' surfaces meeting at their coplanar seam (trim_overlaps' coplanar cut: each
+# one's centre height and cross slope there) at most this far apart: one surface, butted; further, both kept (a step
+# made by the cut would stand in the carriageway: Codex P3d)
+COP_TOL_M = 0.03
 
 # Short, connected bridge forks need a common two-dimensional surface. Three independently sloped, flat-width
 # ribbons can start at one height and still overlap by tens of centimetres a few metres later. Keep the longitudinal
@@ -778,14 +782,19 @@ def trim_overlaps(rb, context=(), shared=None, coplanar=False):
     if not rb:
         return rb
     import fast
-    fast.require(534 if coplanar else 373, "deck_trim_overlaps")
+    fast.require(536 if coplanar else 373, "deck_trim_coplanar" if coplanar else "deck_trim_overlaps")
     # (the cuts are native: earthfast deck_trim_overlaps, meshtrim.rs; each deck against every other deck near it was
     # a numpy round of a few rows, hundreds a tile)
     owners, groups, lefts, rights, zs, lens, own_in, targets = {}, {}, [], [], [], [], [], []
-    oid, gid, sh = [], [], []
+    oid, gid, sh, bks, pes = [], [], [], [], []
     for n, ((left, right, v, m, layer, z), c) in enumerate(list(rb) + list(context)):
         if z is None:
             continue
+        if coplanar:        # (P3e: each row's cross slope, and whether its first / last row is its part's own end)
+            bk = _bank_rows(c, len(left))
+            bks.append(np.zeros(len(left)) if bk is None else bk)
+            pe = c.get("pe")
+            pes.extend([True, True] if pe is None else [bool(pe[0]), bool(pe[1])])
         if n < len(rb):
             targets.append(len(oid))
         owner = c.get("fid", ("n", n))
@@ -810,9 +819,9 @@ def trim_overlaps(rb, context=(), shared=None, coplanar=False):
         [TRIM_DZ[0], TRIM_DZ[1], TRIM_GAP_M, 1.0 if shared else 0.0, TRIM_ALONG_COS], np.float64))
     cop = None
     if coplanar:
-        # (BNE_ROADSHAPE=profile, road revamp v2 P3d: two decks running along each other in plan within TRIM_DZ[0] in
-        # height, which the joint profile holds at one height (its sheet and twin couplings), each end on the line
-        # halfway between their centre lines with no gap: one surface, where both slabs' full tops overlapped (two
+        # (BNE_ROADSHAPE=profile, road revamp v2 P3d / P3e: two decks running along each other in plan whose surfaces
+        # meet at one height at their seam (COP_TOL_M), which the joint profile holds (its sheet and twin couplings),
+        # each end on one seam line between their centre lines (earthfast deck_trim_coplanar) with no gap: one surface, where both slabs' full tops overlapped (two
         # faces at one height, z-fighting: Ottawa t4's merge, the Nordschleife's overlapping raceway decks), a
         # junction's (shared) too: its field lays each half on its one surface. Not an exit's union (P2b: "sx" /
         # "noslab", drawn as one already) against anything)
@@ -829,11 +838,13 @@ def trim_overlaps(rb, context=(), shared=None, coplanar=False):
                 lens_a = np.asarray(lens, np.int64)
                 off_a = np.r_[0, np.cumsum(lens_a)]
                 rows = np.concatenate([np.arange(off_a[i], off_a[i + 1]) for i in pick])
-                cl, cr = fast._ef.deck_trim_overlaps(
+                pe_a = np.asarray(pes, bool).reshape(-1, 2)
+                cl, cr = fast._ef.deck_trim_coplanar(
                     np.ascontiguousarray(args[0][rows]), np.ascontiguousarray(args[1][rows]),
-                    np.ascontiguousarray(args[2][rows]), np.r_[0, np.cumsum(lens_a[pick])].astype(np.int64),
-                    args[4][pick], args[5][pick], args[6][pick], np.array(sub_t, np.int64),
-                    np.array([0.0, TRIM_DZ[0], 0.0, 0.0, TRIM_ALONG_COS, 1.0], np.float64))
+                    np.ascontiguousarray(args[2][rows]), np.ascontiguousarray(np.concatenate(bks)[rows], np.float64),
+                    np.r_[0, np.cumsum(lens_a[pick])].astype(np.int64), args[4][pick], args[5][pick],
+                    args[6][pick], np.ascontiguousarray(pe_a[pick].reshape(-1)), np.array(sub_t, np.int64),
+                    np.array([COP_TOL_M, TRIM_ALONG_COS, 0.0, TRIM_DZ[0]], np.float64))
                 # (back onto the targets' rows, in targets' order: each target's run of points)
                 tpos = np.r_[0, np.cumsum(lens_a[np.asarray(targets, np.int64)])]
                 spos = np.r_[0, np.cumsum(lens_a[pick[sub_t]])]

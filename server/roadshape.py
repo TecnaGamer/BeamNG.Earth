@@ -784,7 +784,7 @@ def deck_sheets(parts, node=None):
 #   it to the split); anchors pinned in z and z'. Infeasible or over budget: today's heights, the status recorded.
 # Nothing built reads the result. PROFILE_STATS counts statuses and seconds; with BNE_ROADSHAPE_DEBUG=1 each record is
 # written as JSON under <cache>/debug/roadshape_profile/; PROFILE_SINKS (callables) get each record (rideprobe.py).
-PROFILE_KERNEL = 534        # earthfast.profile_members / profile_solve (534: P3d's twins, nodes, approach clearance)
+PROFILE_KERNEL = 536        # earthfast.profile_members / profile_solve (534: P3d's twins, nodes, approach clearance; 536: P3e)
 PROFILE_FORMAT = 1          # the record's JSON
 PROF_STEP_M = 2.0           # m between knots
 PROF_JOIN_M = 1.0           # m: ends this near meet (a deck's and a ground line's, two decks')
@@ -816,6 +816,14 @@ PROF_MARGIN = 0.02          # m: couplings and clearances re-checked to this
 PROF_ROUNDS = 40            # active-set rounds per attempt
 PROF_ACTIVE_TOL = 0.001     # m: a clearance short by more joins the active set ...
 PROF_RELEASE_TOL = 0.001    # ... and one its penalty holds down by more is let go (hysteresis: no cycling)
+# (P3e, earthfast 536) a deck over another along it (an overlap: one pavement) held as twins are; a twin's run of knots
+# beside the other held whole once one of them is within the twin height today (a ramp parting uphill from its
+# mainline within 2.5 m: I-95 Middle Branch, 0.56 m); solves at most; a failure lets go of every twin group holding
+# its members at once (one a solve: the attempts ran out); from half the solves on P3d's couplings alone
+PROF_TWIN_OVERLAP = 1.0
+PROF_TWIN_FLOOD = 1.0
+PROF_ATTEMPTS = 16
+PROF_DROP_ALL = 1.0
 PROFILE_SYNC = False        # (tools: solve inline, in the chain solve's thread)
 PROFILE_SINKS = []          # (tools: callables given each record)
 PROFILE_ACCEPT_SHORT = False    # (tools offline: a chain read short is solved too, its record marked "short")
@@ -1265,7 +1273,8 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
             fmeta.append((idx[k], p[0], p[1], float(r[2]), c))     # (the probes': the surface under, the clearance)
     sprm = [PROF_LAMBDA, PROF_W_G, PROF_D0_M, PROF_D1_M, PROF_EPS_W, PROF_MU, PROF_SPLIT_GAP_M, PROF_SHEET_DZ_M,
             dmath.cos(math.radians(PROF_SHEET_DEG)), PROF_SHEET_REACH_M, PROF_AT_GRADE_M, PROF_DECK_GROUND_M,
-            PROF_MAX_GRADE, PROF_GRADE_ADD, PROF_MARGIN, float(PROF_ROUNDS), PROF_ACTIVE_TOL, PROF_RELEASE_TOL]
+            PROF_MAX_GRADE, PROF_GRADE_ADD, PROF_MARGIN, float(PROF_ROUNDS), PROF_ACTIVE_TOL, PROF_RELEASE_TOL,
+            PROF_TWIN_OVERLAP, PROF_TWIN_FLOOD, float(PROF_ATTEMPTS), PROF_DROP_ALL]
     zsol, report, tried = ef.profile_solve(allxy, koff, kz_all, np.ascontiguousarray(kg_all), deck, half + [0.0] * len(ameta),
                                     level, under, abut, jn, pins, floors, sprm)
     t3 = time.perf_counter()
