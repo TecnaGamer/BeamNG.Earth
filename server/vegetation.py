@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 45          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 46          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -86,6 +86,7 @@ VERSION = 45          # (the cached cells hold their groups: 14 for the regional
                       # 43: the species' stands one ragged grid (stand_cells); the maps read on a grid (_on_grid)
                       # 44: North America's generic conifers spruces and pines (NA_SPRUCE_LAT)
                       # 45: the tropics' shores' coconut palms (coast_palms); the thickets no-collide
+                      # 46: the Mediterranean coasts under a mountain ecoregion (eco_med, MED_FRINGE_*)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -176,6 +177,29 @@ CLUMP_SHIFT_M = 4.0
 # (their trees the stone and cluster pines, oaks and olives planted since the 1650s). California's keeps the West
 # Coast's own groups.
 ECO_MED = (785, 787, 789, 790, 791, 792, 793, 794, 795, 796, 797, 798, 799, 803, 804, 805, 806, 596, 89, 90)
+# (46) The coast below a mountain ecoregion: RESOLVE's polygons are coarse, and where a range rises from the sea its
+# mountain ecoregion reaches the shore (the Dinaric Mountains' at Makarska, under Biokovo: its Aleppo pine park forest
+# came out Scots pines, beeches and ferns, and no cypress; the Pindus's, Corsica's, the South Apennines', western
+# Anatolia's coasts the same). A Csa point (Koppen: hot dry summers, the lowlands' climate there) outside ECO_MED with
+# one of them within MED_FRINGE_DEG is that one's (the nearer ring first, then the ring's order): Galicia's and northern
+# Portugal's summer-dry oceanic woods are Csb, so stay out.
+# The Koppen map is 0.1 degree: a coast's pixel averages the sea's and the mountain's (Makarska's northern half Cfb,
+# its quays the sea's class 0), so one of MED_FRINGE_NEAR_K next to a Csa pixel (MED_FRINGE_K_DEG) and by the sea
+# (a sea pixel within MED_FRINGE_SEA_DEG, or its own) counts as Csa: Makarska's north half, not Biokovo's summit.
+MED_FRINGE_DEG = (0.075, 0.15)
+MED_FRINGE_K = (8,)
+MED_FRINGE_NEAR_K = (0, 14, 15)         # the sea, Cfa, Cfb
+MED_FRINGE_K_DEG = 0.1
+MED_FRINGE_SEA_DEG = 0.05
+# The mountain and hill ecoregions whose foot is a Mediterranean coast or lowland (a world survey at 0.05 degrees,
+# 2026-11-19: the Dinaric Mountains', western Anatolia's, the Maghreb's, northwest Iberia's (the Douro's), the Pindus's,
+# the Apennines', Corsica's, the Balkans' and the Rhodopes' Thracian feet, the Marmara's, the Ligurian Alps', the
+# Cevennes', the Pyrenees' Roussillon, central Chile's Andean foot). Not the steppes' and the plains' that touch a
+# Csa pixel (central and eastern Anatolia's, the Zagros', Syria's, the Po's, the Karoo's, the High Atlas's): their
+# trees are deciduous oaks, pistachios and poplars, not the maquis.
+MED_FRINGE_ECO = (660, 786, 701, 800, 801, 802, 644, 788, 646, 665, 678, 689, 686, 676, 648, 563)
+_RING = ((0.0, 1.0), (0.7071, 0.7071), (1.0, 0.0), (0.7071, -0.7071), (0.0, -1.0), (-0.7071, -0.7071), (-1.0, 0.0),
+         (-0.7071, 0.7071))     # (south-north, west-east) unit steps
 # More regional trees (the asset survey 2026-11-10, the stock shapes the flora supports; earthfast.regional_groups):
 # - Australia: eucalypts most of its trees (West Coast USA's eucalyptus_double / _tall, eucalyptus_group far).
 # - Temperate Europe's river banks: a share of the broadleaves within RIPARIAN_M of water are poplars (Automation Test
@@ -331,12 +355,11 @@ MED_EVERGREEN = 0.6             # (Greece's, Anatolia's, the Maghreb's, Chile's,
 def _mediterranean_leaf(pre, g, lat, lon, lcls, u):
     """regional's groups (g) with the Mediterranean ecoregions' trees off town by their leaf type (pre: the groups
     before; ECO_EVERGREEN). Pure."""
-    import ecoregion
     cand = _in(pre, (G_CONIFER, G_DECIDUOUS)) & (lcls != WC["built"]) & _in(g, (G_CONIFER, G_DECIDUOUS,
                                                                                G_MEDITERRANEAN))
     if not cand.any():
         return g
-    eco = ecoregion.eco_many(lat[cand], lon[cand])
+    eco = eco_med(lat[cand], lon[cand])
     med = _in(eco, ECO_MED)
     if not med.any():
         return g
@@ -371,11 +394,63 @@ def _in_box(lat, lon, box):
     return (lat >= box[0]) & (lat <= box[2]) & (lon >= box[1]) & (lon <= box[3])
 
 
-def zones(lat, lon, riparian=None):
-    """Per point: its regional zone for earthfast.regional_groups (ZONE_*; 0 none)."""
+def _med_fringe(lat, lon):
+    """Per point: the ECO_MED ecoregion a Csa point's coast belongs to (MED_FRINGE_*), else 0. Pure."""
+    import climate
     import ecoregion
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    out = np.zeros(len(lat), np.int64)
+    k = np.asarray(climate.koppen_many(lat, lon), np.int64)
+    csa = _in(k, MED_FRINGE_K)
+    near = np.flatnonzero(_in(k, MED_FRINGE_NEAR_K))
+    sea = k[near] == 0
+    for dy, dx in _RING:
+        if sea.all():
+            break
+        rest = np.flatnonzero(~sea)
+        sea[rest] = np.asarray(climate.koppen_many(lat[near[rest]] + dy * MED_FRINGE_SEA_DEG,
+                                                   lon[near[rest]] + dx * MED_FRINGE_SEA_DEG)) == 0
+    near = near[sea]
+    for dy, dx in _RING:
+        if not len(near):
+            break
+        kn = np.asarray(climate.koppen_many(lat[near] + dy * MED_FRINGE_K_DEG, lon[near] + dx * MED_FRINGE_K_DEG),
+                        np.int64)
+        hit = _in(kn, MED_FRINGE_K)
+        csa[near[hit]] = True
+        near = near[~hit]
+    todo = np.flatnonzero(csa)
+    for r in MED_FRINGE_DEG:
+        for dy, dx in _RING:
+            if not len(todo):
+                return out
+            e = ecoregion.eco_many(lat[todo] + dy * r, lon[todo] + dx * r)
+            hit = _in(e, ECO_MED)
+            out[todo[hit]] = e[hit]
+            todo = todo[~hit]
+    return out
+
+
+def eco_med(lat, lon):
+    """ecoregion.eco_many, a Mediterranean coast's points under a mountain ecoregion given the Mediterranean one's
+    (MED_FRINGE_*): the ecoregion the vegetation's Mediterranean rules read. Pure."""
+    import ecoregion
+    lat, lon = np.atleast_1d(np.asarray(lat, np.float64)), np.atleast_1d(np.asarray(lon, np.float64))
     eco = ecoregion.eco_many(lat, lon)
+    cand = np.flatnonzero(_in(eco, MED_FRINGE_ECO))
+    if len(cand):
+        f = np.asarray(_on_grid(_med_fringe, lat[cand], lon[cand]), np.int64).reshape(-1)
+        hit = f > 0
+        if hit.any():
+            eco = eco.copy()
+            eco[cand[hit]] = f[hit]
+    return eco
+
+
+def zones(lat, lon, riparian=None):
+    """Per point: its regional zone for earthfast.regional_groups (ZONE_*; 0 none)."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    eco = eco_med(lat, lon)
     z = np.where(_in(eco, ECO_MED), ZONE_MED, 0).astype(np.uint8)
     if riparian is not None:
         z[(z == 0) & np.asarray(riparian, bool) & _in_box(lat, lon, RIPARIAN_BOX)] = ZONE_RIPARIAN
@@ -384,9 +459,8 @@ def zones(lat, lon, riparian=None):
 
 
 def mediterranean(lat, lon):
-    """Per point: in the Mediterranean basin's lowland ecoregions (ECO_MED)."""
-    import ecoregion
-    return np.ascontiguousarray(_in(ecoregion.eco_many(lat, lon), ECO_MED))
+    """Per point: in the Mediterranean basin's lowland ecoregions (ECO_MED, eco_med)."""
+    return np.ascontiguousarray(_in(eco_med(lat, lon), ECO_MED))
 
 
 def _north_america(lat, lon):
@@ -785,8 +859,7 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     k = np.asarray(koppen)
     built = np.asarray(lcls) == WC["built"]
     ea = eurasia(lat, lon)
-    import ecoregion
-    eco = ecoregion.eco_many(lat, lon)
+    eco = eco_med(lat, lon)
     z = np.zeros(len(g)) if elev is None else np.asarray(elev, np.float64)
     line = spruce_line(lat)
     fade = np.clip((MOUNTAIN_FADE[1] - lat) / (MOUNTAIN_FADE[1] - MOUNTAIN_FADE[0]), 0.0, 1.0)
@@ -1050,7 +1123,7 @@ def shrub_groups(group, height, lat, lon, lcls, koppen, u, u_floor, understory=N
     # matorral, the Cape's fynbos, Australia's mallee; before, Koppen Cs: Galicia's and the Pacific Northwest's
     # summer-dry oceanic woods and the Central Asian mountains' Cs pockets too)
     import ecoregion
-    med = ecoregion.biome_of(ecoregion.eco_many(lat, lon)) == ecoregion.B_MEDITERRANEAN
+    med = ecoregion.biome_of(eco_med(lat, lon)) == ecoregion.B_MEDITERRANEAN
     north = (_in(k, K_POLAR) | (_in(k, K_BOREAL) & (alat >= BOREAL_SHRUB_LAT)) | (c == WC["moss"])) & ~med
     tropical = (_in(k, K_RAINFOREST) | (c == WC["mangrove"])
                 | (_in(k, K_SAVANNA) & (u < TROPICAL_SAVANNA_SHARE))) & (alat < 30.0)
@@ -1067,7 +1140,7 @@ def shrub_groups(group, height, lat, lon, lcls, koppen, u, u_floor, understory=N
         # in the open (a monstera on a savanna or a field's hedge; the gallery 2026-11-17)
         g[bush & tropical & np.asarray(understory, bool)] = G_TRO_UNDERSTORY
         floor = bush & np.asarray(understory, bool) & ~tropical & ~arid
-        humid = np.isin(k, K_HUMID) & ~north
+        humid = np.isin(k, K_HUMID) & ~north & ~med     # (46: a Mediterranean coast's Cfb pixel: no ferns)
         p = np.where(humid, FERN_SHARE["humid"], np.where(north & ~np.isin(k, K_POLAR), FERN_SHARE["boreal"], 0.0))
         fern = floor & (uf < p) & (h <= FERN_MAX_M)
         g[fern] = G_FERN

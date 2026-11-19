@@ -736,6 +736,26 @@ class CrownSpacingTest(unittest.TestCase):
                             (lat, lon, s))
 
 
+class MedFringeTest(unittest.TestCase):
+    """(46) a Mediterranean coast under a mountain ecoregion takes the Mediterranean one's rules (eco_med)."""
+
+    def test_makarska_is_mediterranean(self):
+        # Sveti Petar's Aleppo pine park forest, in the Dinaric Mountains' polygon under Biokovo; the town's north
+        # half (a Cfb pixel by the sea) too
+        for lat, lon in ((43.2948, 17.0093), (43.3020, 17.0180)):
+            e = int(veg.eco_med(np.array([lat]), np.array([lon]))[0])
+            self.assertIn(e, veg.ECO_MED, (lat, lon, e))
+        self.assertTrue(bool(veg.mediterranean(np.array([43.2948]), np.array([17.0093]))[0]))
+
+    def test_inland_and_oceanic_stay(self):
+        # Biokovo's summit, the Po plain at Alessandria, the Zagros at Duhok, Galicia (Csb) at Santiago, Sarajevo
+        for lat, lon in ((43.343, 17.050), (44.91, 8.61), (36.87, 42.99), (42.88, -8.54), (43.86, 18.41)):
+            e = int(veg.eco_med(np.array([lat]), np.array([lon]))[0])
+            import ecoregion
+            self.assertEqual(e, int(ecoregion.eco_many(np.array([lat]), np.array([lon]))[0]), (lat, lon))
+            self.assertNotIn(e, veg.ECO_MED, (lat, lon))
+
+
 class ShareRulesTest(unittest.TestCase):
     """(38) the conifer share kept to the map, the beech belt, the pine woods' broadleaves."""
 
