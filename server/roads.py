@@ -12399,6 +12399,7 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True, skip=()):
     # (road revamp v2 P2b: a fork whose decks are one slab has no pad; skip: the forks' nodes the tile's deck chunks
     # drew so, their "sxn" [x, y, z, the branch's id]: the very records the mesh used)
     sheet_nodes = [(np.asarray(q[:3], np.float64), str(q[3]) if len(q) >= 4 else None) for q in skip if len(q) >= 3]
+    omitted = []                # (the union branches' arms left out of their pads: they still open its rim)
     for nd, incident in sorted(inc.items()):
         q = nodes[nd]
         if own and not box_owns(box, float(q[0]), float(q[1])):
@@ -12406,6 +12407,7 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True, skip=()):
         groups = _pad_height_groups(incident)
         # (only the height group of the fork's own decks: a junction on another level at the same point keeps its pad)
         at = [(p, f) for p, f in sheet_nodes if float(dnp.hypot(*(q - p[:2]))) <= PAD_JOIN_M + roadshape.SHEET_JOIN_M]
+        rests = set()
         if at:
             kept = []
             for g in groups:
@@ -12414,13 +12416,20 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True, skip=()):
                     kept.append(g)
                     continue
                 # P2c: only the union's branches leave the pad (their road is on the union's slab); an arm meeting
-                # there that is in no union (a third deck at the node) keeps the pad of the rest: the corner it uses.
-                # A fork alone (the through deck and its straight going on) has none, as before (_padded).
+                # there that is in no union (a third deck at the node) keeps the pad of the rest: the corner it uses
+                # (if it is still a pad with its ground approaches: below). A fork alone (the through deck and its
+                # straight going on) has none, as before. A marker whose branch is not in this group (another
+                # junction near it) takes nothing from it (Codex P2c r1).
                 if None in hit:
+                    continue                    # (a marker without its branch: P2b's whole group)
+                drop = [x for x in g if id(x) in owner and str(decks[owner[id(x)][0]][0]) in hit]
+                if not drop:
+                    kept.append(g)
                     continue
-                rest = [x for x in g if not (id(x) in owner and str(decks[owner[id(x)][0]][0]) in hit)]
-                if len(rest) < len(g) and _padded(rest):
-                    kept.append(rest)
+                rest = [x for x in g if not any(x is y for y in drop)]
+                omitted.extend(drop)
+                rests.add(id(rest))
+                kept.append(rest)
             groups = kept
             if not groups:
                 continue
@@ -12443,7 +12452,7 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True, skip=()):
                     matches.append((abs(float(zz[0]) - float(np.mean(heights))), k))
             if matches:
                 groups[min(matches)[1]].append((ln, zz, half))
-        joints.extend((q, parts) for parts in groups)
+        joints.extend((q, parts) for parts in groups if id(parts) not in rests or _padded(parts))
     joints = _merge_pad_joints(joints, owner)
     for q, parts in joints:
         if len(parts) < 2:
@@ -12461,7 +12470,14 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True, skip=()):
         if len(hull) < 3:
             continue
         zc = float(np.mean([p[1][0] for p in parts]))
-        rim = np.asarray(fast._ef.deck_pad_rim(np.ascontiguousarray(hull), pts, off, halves, PAD_RIM_STEP_M,
+        r_pts, r_off, r_halves = pts, off, halves
+        extra = [o for o in omitted if any(float(dnp.hypot(*(o[0][0] - p[0][0]))) <= PAD_JOIN_M + roadshape.SHEET_JOIN_M
+                                           for p in parts)]
+        if extra:                   # (P2c: no railing across a union branch leaving the pad, Codex r1)
+            r_pts = np.ascontiguousarray(np.concatenate([pts] + [np.asarray(o[0], np.float64) for o in extra]))
+            r_off = np.r_[off, off[-1] + np.cumsum([len(o[0]) for o in extra])].astype(np.int64)
+            r_halves = np.r_[halves, [o[2] for o in extra]].astype(np.float64)
+        rim = np.asarray(fast._ef.deck_pad_rim(np.ascontiguousarray(hull), r_pts, r_off, r_halves, PAD_RIM_STEP_M,
                                                PAD_FORK_OPEN_M if margin == PAD_FORK_MARGIN_M else PAD_OPEN_M),
                          np.float64)
         walls = []
@@ -12883,8 +12899,9 @@ def _sheet_finish(recs, decks, shifted, width_of):
     side, the union's outer edge (m, 2))], "b": [(s0, s1, the fork's node [x, y, z, the branch's id])]} (arcs along
     the drawn line). The split line is the record's own (its point on the through line and that line's normal there:
     from the fork's 20 m input alone, never the tile's drawn lines): the through part's split vertex stays on it under
-    its lane shift (a vertex inside a straight piece moves along the piece's normal), the branch's is put on it, moved
-    along it only (by its own lane shift's share across the through line: none for a ramp, which never shifts).
+    its lane shift (a vertex inside a straight piece moves along the piece's normal; one on a bend is put back on it,
+    moved along it only), the branch's too (by its own lane shift's share across the through line: none for a ramp,
+    which never shifts).
     (P2c: P2b moved the branch's vertex along its drawn line onto the drawn through line's normal and dropped the
     record past 2 m, both from the tile's lane shifts: one fork drawn two ways across a tile seam, Codex.) In place
     on shifted."""
@@ -12897,10 +12914,13 @@ def _sheet_finish(recs, decks, shifted, width_of):
         kt, kb = _vertex_of(decks[t][2], at), _vertex_of(decks[b][2], at_b)
         if kt is None or kb is None:
             continue
-        B = shifted[b]
+        T, B = shifted[t], shifted[b]
         nrm = np.asarray(nrm_r, np.float64)
         o = np.asarray(at, np.float64)
         ab = np.asarray(at_b, np.float64)
+        # (each moved along the line only: a vertex inside a straight piece is on it already; one on a bend of the
+        # map's line moves by its mitre, which a tile's lane shift changes: Codex P2c r1)
+        T[kt, :2] = o + nrm * float(nrm[0] * (T[kt, 0] - o[0]) + nrm[1] * (T[kt, 1] - o[1]))
         B[kb, :2] = ab + nrm * float(nrm[0] * (B[kb, 0] - ab[0]) + nrm[1] * (B[kb, 1] - ab[1]))
         # the union's outer edge: the branch chain's far slab edge from the node to the split line
         pieces, hws = [], []

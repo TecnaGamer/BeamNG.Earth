@@ -256,6 +256,16 @@ class SheetDecks(unittest.TestCase):
         self.assertEqual(len(pads[1]), 1)
         ring = np.asarray(pads[1][0][0], np.float64)
         self.assertLess(float(ring[:, 0].min()), -5.0)          # (it reaches along the third arm)
+        # (no railing of it across the ramp leaving the node: the left-out branch still opens its rim)
+        ramp = p[2][2][:, :2]
+        for pts, _out in pads[1][0][2]:
+            w = np.asarray(pts, np.float64)[:, :2]
+            self.assertGreater(float(roads._seg_dist(w, ramp[:-1], ramp[1:]).min()), float(RAMP.width) / 2 - 0.25)
+        # (a marker of another junction's branch near this node takes nothing from it, Codex P2c r1)
+        decks = [(f, s, np.asarray(q, np.float64)[:, :2], np.asarray(q, np.float64)[:, 2]) for f, s, q, _ in p + [side]]
+        got = roads.deck_pads(decks, [], (-60.0, -120.0, 360.0, 90.0), lambda xy: np.zeros(len(xy)), own=False,
+                              skip=[[1.2, 0.0, 10.0, "y-elsewhere"]])
+        self.assertEqual(len([g for g in got if float(np.hypot(*np.asarray(g[1], np.float64)[:2])) < 5.0]), 1)
 
     def test_before(self):
         """The same scene without the switch: the two slabs overlap at the fork (what P2b removes)."""
