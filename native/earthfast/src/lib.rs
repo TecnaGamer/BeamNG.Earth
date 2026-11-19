@@ -127,6 +127,8 @@ mod roadwear;
 mod roadtone;
 mod railbeds;
 mod raildrawn;
+mod railindex;
+mod railunder;
 mod railspans;
 mod osmml;
 mod railxing;
@@ -6706,6 +6708,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(osmml::osm_over_ml, m)?)?;
     // 489: OpenStreetMap over machine-learned building outlines (osmml::osm_over_ml: an ML outline where OSM maps a
     // cell's buildings, or overlapping an OSM one, left out; the user, 2026-11-18). 488 is another branch's
-    m.add("VERSION", 489)?;
+    m.add_class::<railindex::RailIndex>()?;
+    m.add_function(wrap_pyfunction!(railindex::rail_parts_select, m)?)?;
+    m.add_class::<railunder::UnderpassIndex>()?;
+    m.add_class::<railunder::UnderpassSeen>()?;
+    m.add_function(wrap_pyfunction!(railunder::rail_underpass_select, m)?)?;
+    // 491: the full port's railways.parts feature loop (railindex: a layer's rail features per frame in a RailIndex,
+    // a window's selection, pieces, clip test, resampling and sort in one call) and railways.road_underpasses
+    // (railunder: a layer's roads with a tunnel in an UnderpassIndex, a window's short tunnels in one call). 488-490
+    // are other branches'
+    m.add("VERSION", 491)?;
     Ok(())
 }
