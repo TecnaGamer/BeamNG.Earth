@@ -11,6 +11,7 @@
 local M = {}
 local localplayers = require('beamngEarth/localplayers')
 local overtake = require('beamngEarth/overtake')
+local distanttraffic = require('beamngEarth/distanttraffic')
 local controlled = {}
 
 M.EDGE_M = 60           -- graph nodes this far inside the block's ground box only
@@ -1131,10 +1132,12 @@ local function newAdaptive()
 end
 local adaptive = newAdaptive()
 
--- Pure: the amount (whole cars) for a profile target t and the player's amount cap.
-function M.adaptiveTarget(t, cap)
+-- Pure: the amount (whole cars) for a profile target t and the player's amount cap, with optional diurnal time factor.
+function M.adaptiveTarget(t, cap, timeFactor)
   t, cap = tonumber(t), tonumber(cap)
   if not t or t ~= t or not cap or cap ~= cap then return nil end
+  local tf = tonumber(timeFactor)
+  if tf and tf == tf and tf > 0 then t = t * tf end
   return math.max(0, math.min(math.floor(cap), math.floor(t + 0.5)))
 end
 
@@ -1142,6 +1145,18 @@ end
 function M.adaptiveStep(current, target)
   if current < target then return current + 1 elseif current > target then return current - 1 end
   return current
+end
+
+-- Diurnal time factor (0.10 to 1.0) based on local game environment time of day (24-hour cycle)
+function M.timeFactor()
+  local env = rawget(_G, 'core_environment')
+  local tod = env and env.getTimeOfDay and env.getTimeOfDay()
+  if not tod or tod.time == nil then return 1.0 end
+  local hour = (((tod.time or 0) + 0.5) % 1.0) * 24.0
+  if distanttraffic and distanttraffic.density then
+    return math.max(0.1, distanttraffic.density(hour))
+  end
+  return 1.0
 end
 
 -- The player's amount as a number of cars: base, at most the cars the traffic spawned (a ceiling of math.huge: those).
@@ -1156,7 +1171,8 @@ end
 -- The amount the graph's profile asks for now (nil: adaptive off, no profile or no player's amount yet).
 local function adaptiveAmount(gt)
   if not (M.ADAPTIVE and graph and graph.trafficProfile and gt and adaptive.base) then return nil end
-  return M.adaptiveTarget(graph.trafficProfile.target, adaptiveCap(gt))
+  local tf = M.timeFactor()
+  return M.adaptiveTarget(graph.trafficProfile.target, adaptiveCap(gt), tf)
 end
 
 local function updateAdaptive(now)
@@ -1206,7 +1222,8 @@ function M.setAdaptive(on) M.ADAPTIVE = on and true or false end
 
 function M.trafficStatus()
   return { enabled = M.ADAPTIVE, target = adaptive.target, applied = adaptive.touched and adaptive.seen or nil,
-           base = adaptive.base, paused = adaptive.paused, profile = graph and graph.trafficProfile or nil }
+           base = adaptive.base, paused = adaptive.paused, timeFactor = M.timeFactor(),
+           profile = graph and graph.trafficProfile or nil }
 end
 
 -- A rebase (core finishRebase, xf: the old frame -> the new one): the server's graph moved into the new anchor and
