@@ -6857,6 +6857,9 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
                     mark("centre", st.centre, markings.BARRIER_LINE_W, at(off + sd * markings.BARRIER_LINE_M))
             elif role == "lane":
                 along = at(off)
+                if sweden and how == "bus":      # (M6: broken, wider than the lane lines)
+                    mark("lane", "line_white", max(lw_, markings.M6_W), along, markings.M6_PATTERN)
+                    continue
                 if lane_growth is None:
                     mark("lane", "line_white", lw_, along, None if how else pat)
                     continue

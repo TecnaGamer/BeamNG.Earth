@@ -61,14 +61,16 @@ class LanePlanTest(unittest.TestCase):
 
     def test_a_bus_lane_boundary_is_solid(self):
         plan = markings.lane_plan({"bus:lanes": "designated|no"}, False, 7.0, 2)
-        self.assertEqual([h for _, _, h in plan], [True])
+        self.assertEqual([h for _, _, h in plan], ["bus"], "solid (truthy), and Sweden's M6")
         same = markings.lane_plan({"bus:lanes": "designated|designated"}, False, 7.0, 2)
         self.assertEqual([h for _, _, h in same], [False], "two bus lanes share the ordinary broken line")
         psv = markings.lane_plan({"psv:lanes": "yes|no"}, False, 7.0, 2)
-        self.assertEqual([h for _, _, h in psv], [True])
+        self.assertEqual([h for _, _, h in psv], ["bus"])
+        both = markings.lane_plan({"bus:lanes": "designated|no", "change:lanes": "no|no"}, False, 7.0, 2)
+        self.assertEqual([h for _, _, h in both], [True], "a mapped no-change line stays solid")
         two = markings.lane_plan({"lanes:forward": "2", "lanes:backward": "1",
                                   "bus:lanes:forward": "designated|no"}, True, 9.9, 3)
-        self.assertEqual([(r, h) for _, r, h in two if r == "lane"], [("lane", True)])
+        self.assertEqual([(r, h) for _, r, h in two if r == "lane"], [("lane", "bus")])
 
     def test_extras_draws_the_plan(self):
         sp = roads.Spec(10.0, "paved", False, "primary", False)
@@ -129,6 +131,16 @@ class SwedenTest(unittest.TestCase):
     def extras(self, width=9.0, cls="primary", urban=False, oneway=False, osm=None, kmh=None):
         sp = roads.Spec(width, "paved", urban, cls, oneway)._replace(kmh=kmh)
         return roads.extras(sp, self.LINE, 12.0, country="SE", osm=osm)
+
+    def test_a_bus_lane_is_set_off_by_m6(self):
+        # TSFS 2010:171 2 kap. 11 §: 3.0 m dashes, at least 0.20 m; VGU 2024 figure 12.2.1.3.6-1: 3.0 m gaps
+        sp = roads.Spec(7.0, "paved", True, "secondary", True)._replace(lanes=2)
+        lane = self.lines(roads.extras(sp, self.LINE, 12.0, country="SE", osm={"bus:lanes": "designated|no"}), "lane")
+        self.assertEqual({(w, n) for w, _, n in lane}, {(0.2, 3.0)})
+        self.assertEqual(len(lane), 20, "3 + 3 m over 118 m")
+        plain = self.lines(roads.extras(sp, self.LINE, 12.0, country="SE", osm={"lanes": "2"}), "lane")
+        self.assertTrue(plain)
+        self.assertEqual({w for w, _, _ in plain}, {0.1}, "the ordinary lane line is not widened")
 
     def test_a_rural_road_has_broken_edge_lines(self):
         ex = self.extras()
