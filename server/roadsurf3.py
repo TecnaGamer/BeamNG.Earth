@@ -14,12 +14,12 @@ on their outer edges. Heights: today's (the mesh is draped on the graded ground 
 and tunnels stay as they are: a piece ends where its road goes onto a structure (its end on the deck's end when that is
 within DECK_JOIN_M; the gap left there is S3's, in the status).
 
-Window independence: the pieces and roads are read from the map cells round the tile (S1's lane graph from every cell
-within lanegraph.lane_rings of the tile's cells; the roads of the cells round the pieces), never the tile window; the
-kernel's mesh round the tile is the same in every tile that reads them, each tile cutting it at its own edges
-(roadmesh.build's clip). Keys: the switch (switches_key), the map data's versions (the road tile's key) and the code
-(code_key: these sources and the native module), so a lane tag edited within LANE_REACH_M changes the release and so
-the key."""
+Each tile reads the home cells of events that reach it and the neighbours that may trim those events. Each home
+graph records its actual input cells, including distant copies of long segments. The per-process cache validates
+those layers and their lane revisions on each use. Road tiles use revisit's code, map and surface-switch keys."""
+from collections import OrderedDict
+from threading import Lock
+
 import math
 import os
 
@@ -29,7 +29,7 @@ import dnp
 import lanegraph
 
 ON = lanegraph.MODE == "surface"
-SURF_VERSION = 542              # earthfast.lane_surface, cut_lines
+SURF_VERSION = 550              # earthfast.lane_surface, cut_lines
 V3_CLASSES = ("motorway", "trunk")
 STRIP = {"through": 1, "gore": 2, "branch": 3, "branch_merging": 3, "added": 4, "dropped": 4}
 LINE = ("edge", "edge_left", "lane", "exit", "channel", "stripe")
@@ -71,33 +71,56 @@ def params(country):
                      CROSS_COS, STRUCT_COS, CUT_M, CUT_WIDE_M, END_EXT_M, ROAD_CLEAR], np.float64)
 
 
-_LANES_LRU = []                 # [(key, cell_lanes result)]: a worker builds many tiles of a cell
+_LANES_LRU = OrderedDict()
+_LANES_LOCK = Lock()
 _LANES_LRU_N = 48
 
 
-def _features_key(keys, cell_fn):
-    """The identity of the map data cell_lanes reads round a cell (the features objects and their lane revisions)."""
-    out = []
-    for k in keys:
-        f = cell_fn(k)
-        out.append((str(k), id(f), getattr(f, "_road_revision", 0) if f is not None else 0))
-    return tuple(out)
-
-
-def _rings(key, n):
-    import mapcells
-    return [mapcells.CellKey(key.z, (key.x + dx) % key.n, key.y + dy)
-            for dy in range(-n, n + 1) for dx in range(-n, n + 1) if 0 <= key.y + dy < key.n]
-
-
 def _cell_lanes(key, cell_fn, memo):
-    rk = _features_key(_rings(key, lanegraph.lane_rings(key) + 1), cell_fn)
-    for k, v in _LANES_LRU:
-        if k == rk:
-            return v
-    got = lanegraph.cell_lanes(key, cell_fn, memo)
-    _LANES_LRU.append((rk, got))
-    del _LANES_LRU[:-_LANES_LRU_N]
+    import countrybounds
+    import revisit
+    # Per tile, read each dependency once, including an absent cell. Keep the
+    # snapshots with this tile's segment memo so all home graphs see the same inputs.
+    snapshots = memo.setdefault("features", {})
+
+    def snapshot(k):
+        if k not in snapshots:
+            with revisit.scope() as read:
+                f = cell_fn(k)
+            # An absent layer has no row data. Its presence (and any read fault)
+            # is checked again on every use, including cache hits.
+            if f is not None and not read.complete:
+                memo.setdefault("short_lane_rows", set()).add(k)
+            # A token survives in the cache key without retaining the layer. Unlike
+            # id(f), a newly decoded feature can never recycle an evicted layer's token.
+            stamp = None if f is None else (f.__dict__.setdefault("_lane_graph_token", object()),
+                                            getattr(f, "_road_revision", 0))
+            snapshots[k] = f, stamp
+        return snapshots[k]
+
+    home = (key, countrybounds.signature())
+    with _LANES_LOCK:
+        entry = _LANES_LRU.get(home)
+    if entry is not None:
+        keys, stamps, got = entry
+        if all(snapshot(k)[1] == stamp for k, stamp in zip(keys, stamps)):
+            with _LANES_LOCK:
+                if _LANES_LRU.get(home) is entry:
+                    _LANES_LRU.move_to_end(home)
+            return got
+    keys = []
+    got = lanegraph.cell_lanes(key, lambda k: snapshot(k)[0], memo, read_cells=keys)
+    stamps = [snapshot(k)[1] for k in keys]
+    if any(stamp is not None and getattr(snapshots[k][0], "_road_revision", 0) != stamp[1]
+           for k, stamp in zip(keys, stamps)):
+        # Lane tags can join a decoded layer while another tile builds its graph.
+        revisit.fault()
+    elif not memo.get("short_lane_rows", set()).intersection(keys):
+        with _LANES_LOCK:
+            _LANES_LRU[home] = (keys, stamps, got)
+            _LANES_LRU.move_to_end(home)
+            if len(_LANES_LRU) > _LANES_LRU_N:
+                _LANES_LRU.popitem(last=False)
     return got
 
 
@@ -123,16 +146,20 @@ def tile_events(frame, box, cell_fn, memo=None):
     """The lane events whose rows reach box (x0, y0, x1, y1, in frame): [(event, rows in frame (k, 3): s m, x, y,
     boundaries (k, nb) m)], read from every cell within lane_rings of the box's cells, each event once (its home
     cell's), in the kernel's order: forks before adds and drops, then node id."""
-    memo = {} if memo is None else memo
-    keys = {}
-    for k in _cells_of(frame, box):
-        for r in _rings(k, lanegraph.lane_rings(k) + 1):
-            keys[str(r)] = r
+    # Snapshot only this build. Cross-tile reuse is validated in _cell_lanes.
+    memo = {}
+    # S1 walks at most LANE_REACH_M along each arm. Allow 256 m across
+    # the rows (both carriageways, their placement offsets and the painted nose).
+    pad = lanegraph.LANE_REACH_M + 256.0 + BOX_MARGIN_M
+    def homes(b):
+        return _cells_of(frame, (b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad))
+
     x0, y0, x1, y1 = box
-    m = BOX_MARGIN_M
+    m = BOX_MARGIN_M + BLEND_MAX_M + REACH_M
     cand = []
-    for ks in sorted(keys):
-        got = _cell_lanes(keys[ks], cell_fn, memo)
+
+    def collect(key):
+        got = _cell_lanes(key, cell_fn, memo)
         for ev in got["events"]:
             rows = ev.get("rows")
             if not rows or ev["kind"] not in ("diverge", "merge", "add", "drop"):
@@ -150,7 +177,13 @@ def tile_events(frame, box, cell_fn, memo=None):
             cand.append((ev, np.c_[r[:, 0] / 1000.0, xy], r[:, 5:] / 1000.0, bb, here))
     # the pieces reaching the tile and every piece whose box meets one of theirs (the ones that may trim them: each
     # piece the same whichever tile reads it)
+    direct = set(homes((x0 - m, y0 - m, x1 + m, y1 + m)))
+    for key in sorted(direct):
+        collect(key)
     near = [c[3] for c in cand if c[4]]
+    context = {key for b in near for key in homes(b)}
+    for key in sorted(context - direct):
+        collect(key)
     meets = lambda a, b: not (a[2] < b[0] or a[0] > b[2] or a[3] < b[1] or a[1] > b[3])   # noqa: E731
     out = [(ev, r, t) for ev, r, t, bb, here in cand if here or any(meets(bb, nb) for nb in near)]
     rank = {"diverge": 0, "merge": 0, "add": 1, "drop": 1}
@@ -264,7 +297,6 @@ def tile_surface(frame, box, cell_fn, urban_fn=None, widths=None, left_hand=Fals
     import fast
     import roads as roadsmod
     fast.require(SURF_VERSION, "lane_surface")
-    memo = {} if memo is None else memo
     evs = tile_events(frame, box, cell_fn, memo)
     roi = list(box)
     for _ev, r, _t in evs:
@@ -354,6 +386,51 @@ def run_kernel(inp):
             "kept": [x["piece"] for x in st if x.get("kept")], "status": st}
 
 
+def paint_geometry(surface, frame, box, widths, pending=None):
+    """Ground triangles for the terrain painter. Use its cached map cells and queue
+    missing ones through Surface, as for the other layers of a terrain block."""
+    import countrybounds
+    import navgraph
+    import revisit
+
+    missing = set()
+
+    def cell(key):
+        if not surface.md.has(key, "roads"):
+            if key not in missing:
+                missing.add(key)
+                surface._queue(key, ("roads",))
+            return None
+        return surface.md.cell(key, layers=("roads",), kind="background").layers.get("roads")
+
+    try:
+        country = countrybounds.bundled().at(frame.lat0, frame.lon0)
+        got = tile_surface(frame, box, cell, surface.urban, widths, navgraph.road_rules(country)["rightHandDrive"],
+                           country)
+        if missing:
+            raise LookupError(f"{len(missing)} road cells pending")
+        if got is None:
+            return None
+        mesh = got["mesh"]
+        concrete = [sp.surf == "concrete" for _, sp in got["pieces"]] + [
+            sp.surf == "concrete" for _, sp in reversed(got["roads"])]
+        return mesh["v"], mesh["tri"], np.asarray(concrete, np.uint8)[mesh["owner"]]
+    except Exception as ex:
+        import logging
+        revisit.fault()
+        if pending is not None:
+            from surface import PHOTO_ROADS_PENDING
+            pending.add(PHOTO_ROADS_PENDING)
+        logging.getLogger("earthd.roadsurf3").debug("road paint at %s: %s", box, ex)
+        return None
+
+
+def paint_coverage(geom, xy, width, height, antialias):
+    import fast
+    fast.require(550, "pavement_coverage")
+    return fast._ef.pavement_coverage(np.ascontiguousarray(xy, np.float64), geom[1], geom[2], width, height, antialias)
+
+
 def cut_chunks(chunks, cut, cut_wide, is_edge):
     """chunks with their draped lines and overlays' parts inside the polygons cut out (cut; cut_wide for is_edge(chunk):
     the edge blends) and a filled polygon whose middle lies inside dropped; decks, tunnels and fixed heights kept."""
@@ -430,14 +507,18 @@ def apply(frame, box, chunks, cell_fn, urban_fn=None, widths=None, left_hand=Fal
     inside its pieces cut out. box: the tile's own box. Never raises: on a fault the chunks as they were (logged)."""
     try:
         got = tile_surface(frame, box, cell_fn, urban_fn, widths, left_hand, country)
-    except Exception as ex:     # noqa: BLE001 (the tile as today rather than none)
+        if got is not None:
+            draw = [c for c in chunks if "_v3_fallback" not in c]
+            return cut_chunks(draw, got["cut"], got["cut_wide"], _is_edge) + surface_chunks(
+                got, box, country, lon, surface_v2)
+    except Exception as ex:
+        import revisit
+        revisit.fault()
         if log is not None:
             log.warning("road surface v3: %s: %s", type(ex).__name__, ex)
-        return chunks
-    if got is None:
-        return chunks
-    return list(cut_chunks(chunks, got["cut"], got["cut_wide"], _is_edge)) + surface_chunks(
-        got, box, country, lon, surface_v2)
+    for c in chunks:
+        c.pop("_v3_fallback", None)
+    return chunks
 
 
 def _is_edge(c):

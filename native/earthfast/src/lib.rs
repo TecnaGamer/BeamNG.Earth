@@ -7376,6 +7376,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 513: v2 P2a2 (fork_records: noses from the lanes + a fitted gore width, the separation held; at-grade slip lanes
     // flagged, no record; three more params)
     m.add_function(wrap_pyfunction!(roadshape::sheet::deck_sheets, m)?)?;
+    m.add_class::<roadshape::segments::SegmentCell>()?;
+    m.add_class::<roadshape::segments::SegmentWindow>()?;
+    m.add_function(wrap_pyfunction!(roadshape::segments::connector_vertices, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::paint::pavement_coverage, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::lanes::lane_graph, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::lane_surface, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::cut_lines, m)?)?;
@@ -7423,6 +7427,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 548: try598 with 547 and 545 (busstation) merged
     m.add_function(wrap_pyfunction!(railcrossings::rail_crossing_roads, m)?)?;
     m.add_function(wrap_pyfunction!(railcrossings::rail_cut_worn, m)?)?;
-    m.add("VERSION", 549)?;
+    // 550: ground-road surface partitions, lane window selection and pavement coverage.
+    // 552: try598 with 549 (codex-port2 rail crossings) and 550 (v3 S2b) merged
+    m.add("VERSION", 552)?;
     Ok(())
 }
