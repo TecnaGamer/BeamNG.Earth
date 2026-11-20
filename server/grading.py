@@ -395,6 +395,12 @@ _gsh.RAIL_DECK_DEPTH_M = railwaysmod.RAIL_TOP_M + railwaysmod.DECK_D - railwaysm
 SHAPES_PAD_M = 800.0        # m round a cell its systems and their ramps are read from (a ramp is at most RAMP_MAX_M)
 SHAPES_CAP_M = 4000.0       # m: the farthest a system is followed from the cell
 SHAPES_NEAR_M = 3.0         # m: a plan vertex this near a shape's or a ramp's line takes its height
+SHAPES_ALONG_M = 2.0 * _gsh.STEP_M    # m of a line either side of a point: of a road's pieces within reach, the one this
+                            # stretch of the line runs along gives the point its height (two sample steps: the chords
+                            # a piece is sampled in). The nearest piece alone cannot tell a road's own piece from
+                            # another of its levels, which a road winding over itself passes nearer than the chords
+                            # of its own piece stand off its line
+SHAPES_BLOCK = 256          # points of a line met with a piece's segments at once (_shape_at: memory on a long line)
 RAIL_WINDOW_M = 64.0        # m: the cells the railways' beds are made and kept by (_track_bed)
 RAIL_SAFE_M = railwaysmod.GRADE_REACH_M - 2 * railwaysmod.STEP_M    # m: a part this near a point is whole round it in any window
 RAIL_WINDOWS_KEPT = 256     # cells' railways kept a planner (_track_beds_window)
@@ -5227,7 +5233,9 @@ class _Planner:
 
     def _shape_at(self, line, pts, fid, modes):
         """Per point of pts on road fid (its line in the frame): (height, mode) from the shapes and ramps of its cell's
-        region within SHAPES_NEAR_M, else (NaN, None)."""
+        region within SHAPES_NEAR_M, else (NaN, None). Of the pieces within reach of a point, the one the line runs
+        along (the least worst standoff over SHAPES_ALONG_M of the line either side), then the nearest. pts follow
+        the line in order."""
         line = np.asarray(line, np.float64)[:, :2]
         mid = line[len(line) // 2]
         la, lo, _ = self.frame.enu_to_geodetic(np.array([mid[0]]), np.array([mid[1]]), 0.0)
@@ -5243,24 +5251,46 @@ class _Planner:
         m_out = [None] * len(pts)
         if not items:
             return z_out, m_out
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))] if len(pts) > 1 else np.zeros(len(pts))
+        w0 = np.searchsorted(s, s - SHAPES_ALONG_M, side="left")
+        w1 = np.searchsorted(s, s + SHAPES_ALONG_M, side="right")
         best = np.full(len(pts), np.inf)
+        best_at = np.full(len(pts), np.inf)
         for xy, z, mode in items:
             if len(xy) < 2:
                 continue
-            a, b = xy[:-1], xy[1:]
+            a, b = np.asarray(xy[:-1], np.float64), np.asarray(xy[1:], np.float64)
+            z = np.asarray(z, np.float64)
             ab = b - a
             L2 = np.maximum((ab * ab).sum(1), 1e-12)
-            for n, q in enumerate(pts):
-                t = np.clip(((q - a) * ab).sum(1) / L2, 0.0, 1.0)
-                d = dnp.hypot(*(a + t[:, None] * ab - q).T)
-                j = int(np.argmin(d))
-                if d[j] > SHAPES_NEAR_M or d[j] >= best[n]:
-                    continue
-                if (t[j] <= 0.0 and j == 0) or (t[j] >= 1.0 and j == len(ab) - 1):
-                    if d[j] > 0.5:
-                        continue            # (past the piece's end: not its)
-                best[n] = d[j]
-                z_out[n] = z[j] + (z[j + 1] - z[j]) * t[j]
+            dn, tn, j = np.empty(len(pts)), np.empty(len(pts)), np.empty(len(pts), np.int64)
+            for c0 in range(0, len(pts), SHAPES_BLOCK):     # (blocks of points: a long line against a long piece)
+                q = pts[c0:c0 + SHAPES_BLOCK, None]
+                t = np.clip(((q - a) * ab).sum(2) / L2, 0.0, 1.0)
+                d = dnp.hypot(*(a + t[..., None] * ab - q).transpose(2, 0, 1))
+                r = np.arange(len(d))
+                jb = np.argmin(d, axis=1)
+                dn[c0:c0 + len(d)], tn[c0:c0 + len(d)], j[c0:c0 + len(d)] = d[r, jb], t[r, jb], jb
+            past = ((tn <= 0.0) & (j == 0)) | ((tn >= 1.0) & (j == len(ab) - 1))
+            cand = np.flatnonzero((dn <= SHAPES_NEAR_M) & ~(past & (dn > 0.5)))   # (past the piece's end: not its)
+            if not len(cand):
+                continue
+            # (the piece's worst standoff over the stretch of the line round each point, where the piece is: the
+            # line runs along its own piece the whole stretch, and meets one that only crosses it at the crossing.
+            # Past the piece's end the line says nothing of it (a deck of a road winding over itself ends right over
+            # another of its levels), so those points of the stretch are left out. Standoffs are taken to the
+            # millimetre: copies of one stretch stand off alike, whatever their rounding, and then the nearest goes)
+            stand = np.where(past, -1.0, dn)
+            worst = np.array([stand[w0[n]:w1[n]].max() for n in cand])
+            along = np.round(np.where(worst >= 0.0, worst, dn[cand]), 3)    # (all past its end: the point's own)
+            better = (along < best[cand]) | ((along == best[cand]) & (dn[cand] < best_at[cand]))
+            take = cand[better]
+            if not len(take):
+                continue
+            best[take] = along[better]
+            best_at[take] = dn[take]
+            z_out[take] = z[j[take]] + (z[j[take] + 1] - z[j[take]]) * tn[take]
+            for n in take.tolist():
                 m_out[n] = mode
         return z_out, m_out
 
