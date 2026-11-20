@@ -34,6 +34,7 @@ import beaches
 import fast
 import dmath
 import dnp
+import ignrpg
 
 import mapcells
 import pacer
@@ -284,6 +285,8 @@ class Vegetation:
         self.md = md
         self.dem = None                 # (set by the server: rocks on bare ground by slope, ROCK_SLOPE)
         self.surface = self.widths = None   # (set by the server: the roads' drawn widths, roads.road_specs)
+        self.ignrpg = getattr(md, "ignrpg", None) or (
+            ignrpg.Source(cache_dir, getattr(md, "fetcher", None)) if ignrpg.ON else None)
         self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
         self._mem = OrderedDict()
         self._lock = threading.Lock()
@@ -582,6 +585,19 @@ class Vegetation:
                 _mask_polys(lu, vines, chm, 0.0, select=lclass == "vineyard")
         except Exception as e:                  # not at hand: scattered as before
             log.debug("vegetation: land use of %s: %s", (x, y), e)
+        bounds = (lon0, lat0, lon1, lat1)
+        rpg_recs = None
+        rpg_src = getattr(self.md, "ignrpg", None) or self.ignrpg
+        if ignrpg.ON and rpg_src is not None and ignrpg.covers(bounds):
+            try:
+                rpg_recs = rpg_src.cell(key)
+            except Exception as e:
+                log.debug("vegetation: ignrpg of %s: %s", (x, y), e)
+        planted = orchard_items(lu, chm, blocked, bounds)
+        hedges = farm_foliage(lu, chm, blocked, bounds)
+        rows = vineyard_items(lu, chm, blocked, bounds, rpg=rpg_recs, mask=vines)
+        olives = olive_items(lu, chm, blocked, bounds, rpg=rpg_recs, mask=orchard)
+        bales = bale_items(lu, chm, blocked, bounds)
         if orchard.any():
             keep = _keep_off_mask(tree, orchard, chm)
             tree, lcls = tree.take(keep), lcls[keep]
@@ -593,12 +609,7 @@ class Vegetation:
                       roads=ClumpRoads(clump_roads, chm, blocked, (ex0, ey0, ex1, ey1)))
         scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
         edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
-        bounds = (lon0, lat0, lon1, lat1)
-        planted = orchard_items(lu, chm, blocked, bounds)
-        hedges = farm_foliage(lu, chm, blocked, bounds)
-        rows = vineyard_items(lu, chm, blocked, bounds)
-        bales = bale_items(lu, chm, blocked, bounds)
-        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
+        return _concat_all([tree, scatter, edge, planted, olives, hedges, rows, bales])
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
@@ -1033,9 +1044,10 @@ def _field_rings(feats, cls_name, min_m2):
             yield fid, np.column_stack([x, y]), parts[0][1:], area
 
 
-def vineyard_items(feats, chm, blocked, bounds=None):
-    """The rows of vines of land_use class vineyard (VINE_*): G_VINE items, yaw along the rows. blocked: the canopy
-    grid's buildings, roads and water; bounds (lon0, lat0, lon1, lat1) keeps an item in this cell."""
+def vineyard_items(feats, chm, blocked, bounds=None, rpg=None, mask=None):
+    """The rows of vines of land_use class vineyard (VINE_*) and deduplicated French IGN RPG vineyard parcels
+    (ignrpg.py): G_VINE items, yaw along the rows. blocked: the canopy grid's buildings, roads and water;
+    bounds (lon0, lat0, lon1, lat1) keeps an item in this cell."""
     from polygon import Path
     xs, ys, yaws, us = [], [], [], []
     for fid, xy, holes, area in _field_rings(feats, "vineyard", VINE_MIN_M2):
@@ -1077,19 +1089,75 @@ def vineyard_items(feats, chm, blocked, bounds=None):
         ys.append(pts[:, 1])
         yaws.append(yaw0 + 180.0 * (uh < 0.5))
         us.append(uh)
-    if not xs:
+    base = _empty()
+    if xs:
+        x, y, yaw, u = np.concatenate(xs), np.concatenate(ys), np.concatenate(yaws), np.concatenate(us)
+        rank = (u * 0.15).astype(np.float32)
+        if len(x) > VINE_CELL_MAX:
+            keep = np.sort(np.argsort(rank, kind="stable")[:VINE_CELL_MAX])
+            x, y, yaw, u, rank = x[keep], y[keep], yaw[keep], u[keep], rank[keep]
+        lon, lat = _to4326(x, y)
+        n = len(lon)
+        h = (VINE_H_M * (0.95 + 0.1 * _hash01(np.arange(n, dtype=np.uint64), np.full(n, 7, np.uint64), 33))).astype(
+            np.float32)
+        base = Items(lon, lat, h, np.full(n, 1.2, np.float32), np.full(n, KIND_BUSH, np.uint8),
+                     np.full(n, G_VINE, np.uint8), rank, yaw.astype(np.float32), np.ones(n, np.float32))
+    if rpg is None:
+        return base
+    if not isinstance(rpg, ignrpg.Records):
+        rpg = ignrpg.Records(ignrpg.parse(rpg))
+    if rpg.n == 0:
+        return base
+    keep_rpg = ignrpg.dedup(rpg, feats, classes=("vineyard", "orchard"))
+    if not keep_rpg.any():
+        return base
+    b = bounds
+    if b is None:
+        b = (float(rpg.lonlat[:, 0].min()) - 0.01, float(rpg.lonlat[:, 1].min()) - 0.01,
+             float(rpg.lonlat[:, 0].max()) + 0.01, float(rpg.lonlat[:, 1].max()) + 0.01)
+    bl = np.zeros((1, 1), bool) if blocked is None else np.asarray(blocked, bool)
+    rlon, rlat, rh, rrad, ryaw, rrank, rscale = ignrpg.sample_parcels(
+        rpg, keep_rpg, ignrpg.KIND_VINEYARD, chm, bl, b, mask=mask)
+    m = len(rlon)
+    if m == 0:
+        return base
+    rpg_it = Items(np.asarray(rlon, np.float64), np.asarray(rlat, np.float64), np.asarray(rh, np.float32),
+                   np.asarray(rrad, np.float32), np.full(m, KIND_BUSH, np.uint8),
+                   np.full(m, G_VINE, np.uint8), np.asarray(rrank, np.float32),
+                   np.asarray(ryaw, np.float32), np.asarray(rscale, np.float32))
+    out = _concat(base, rpg_it) if len(base) else rpg_it
+    if len(out) > VINE_CELL_MAX:
+        keep = np.sort(np.argsort(out.rank, kind="stable")[:VINE_CELL_MAX])
+        out = out.take(keep)
+    return out
+
+
+def olive_items(feats, chm, blocked, bounds=None, rpg=None, mask=None):
+    """Olive trees (`G_MEDITERRANEAN` at olive height 3.6..4.4 m -> `trees_italy/olive`) in deduplicated French IGN RPG
+    olive / truffle parcels (`OLI`, `TRU`, group `23`), sampled in Rust via `ignrpg.sample_parcels`."""
+    if rpg is None:
         return _empty()
-    x, y, yaw, u = np.concatenate(xs), np.concatenate(ys), np.concatenate(yaws), np.concatenate(us)
-    rank = (u * 0.15).astype(np.float32)
-    if len(x) > VINE_CELL_MAX:
-        keep = np.sort(np.argsort(rank, kind="stable")[:VINE_CELL_MAX])
-        x, y, yaw, u, rank = x[keep], y[keep], yaw[keep], u[keep], rank[keep]
-    lon, lat = _to4326(x, y)
+    if not isinstance(rpg, ignrpg.Records):
+        rpg = ignrpg.Records(ignrpg.parse(rpg))
+    if rpg.n == 0:
+        return _empty()
+    keep_rpg = ignrpg.dedup(rpg, feats, classes=("orchard", "vineyard"))
+    if not keep_rpg.any():
+        return _empty()
+    b = bounds
+    if b is None:
+        b = (float(rpg.lonlat[:, 0].min()) - 0.01, float(rpg.lonlat[:, 1].min()) - 0.01,
+             float(rpg.lonlat[:, 0].max()) + 0.01, float(rpg.lonlat[:, 1].max()) + 0.01)
+    bl = np.zeros((1, 1), bool) if blocked is None else np.asarray(blocked, bool)
+    lon, lat, h, rad, yaw, rank, scale = ignrpg.sample_parcels(
+        rpg, keep_rpg, ignrpg.KIND_OLIVE, chm, bl, b, mask=mask)
     n = len(lon)
-    h = (VINE_H_M * (0.95 + 0.1 * _hash01(np.arange(n, dtype=np.uint64), np.full(n, 7, np.uint64), 33))).astype(
-        np.float32)
-    return Items(lon, lat, h, np.full(n, 1.2, np.float32), np.full(n, KIND_BUSH, np.uint8),
-                 np.full(n, G_VINE, np.uint8), rank, yaw.astype(np.float32), np.ones(n, np.float32))
+    if n == 0:
+        return _empty()
+    return Items(np.asarray(lon, np.float64), np.asarray(lat, np.float64), np.asarray(h, np.float32),
+                 np.asarray(rad, np.float32), np.full(n, KIND_TREE, np.uint8),
+                 np.full(n, G_MEDITERRANEAN, np.uint8), np.asarray(rank, np.float32),
+                 np.asarray(yaw, np.float32), np.asarray(scale, np.float32))
 
 
 # Round bales on fields after the harvest (the asset survey's #16): the stock race props s_haybaleround_large_01
