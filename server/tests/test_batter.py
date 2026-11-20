@@ -72,6 +72,33 @@ class Batter(unittest.TestCase):
             far = off > day + grading.BATTER_SMOOTH_K
             np.testing.assert_array_equal(g[far], nat[far])
 
+    def test_surface_outline_is_the_start_of_each_fill(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import roadsurf3
+
+        plan = road(z=6.)
+        outline = np.array([[-80., .1], [-40., .1], [-20., 10.], [80., 10.],
+                            [80., -4.], [-20., -4.], [-40., -.1], [-80., -.1]])
+        surface = {"pieces": [({"segs": ["way", "through", "ramp"]}, None)],
+                   "kept": [0], "outlines": [outline]}
+        planner = SimpleNamespace(frame=None, _roads_cell=None, widths=None)
+        with patch.object(roadsurf3, "tile_surface", return_value=surface):
+            roadsurf3.grade_plans(planner, (-200., -30., 200., 30.), [("way", plan)],
+                                  [SimpleNamespace(kind="paved", cls="motorway")], "US")
+        ground = lambda x, y: np.zeros_like(np.asarray(y))  # noqa: E731
+        pack = packed([plan], ground)
+        ys = np.array([-21., -5., -4., 0., 10., 11., 27.])
+        # The clipped tip is narrower than the old shoulder. A negative
+        # banking width here would panic when the terrain is evaluated.
+        np.testing.assert_allclose(self.profile(pack, ground, np.array([0.]), x=-60.), 6.)
+        self.assertGreater(float(np.min(pack.rh)), 0.)
+        zs = self.profile(pack, ground, ys)
+        np.testing.assert_allclose(zs[2:5], 6., atol=1e-6)
+        np.testing.assert_allclose(zs[[1, 5]], 6. - grading.BATTER_STRIP_LO, atol=1e-6)
+        self.assertLess(float(max(zs[0], zs[-1])), .1)
+        self.assertEqual(plan.half + plan.widen[0], 4.5)  # the core beyond the lane event
+
     def test_off_is_today(self):
         rng = np.random.default_rng(3)
         plans = random_plans(rng, 60, (0, 0, 400, 400))

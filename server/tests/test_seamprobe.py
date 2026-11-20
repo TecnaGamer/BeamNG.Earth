@@ -302,12 +302,13 @@ class SeamProbe(unittest.TestCase):
     built = {}
 
     def setUp(self):
-        old = roadshape.SHEET, roadshape.SHEET_WINDOW_M
+        old = roadshape.SHEET, roadshape.SHEET_WINDOW_M, roadshape.PROFILE_BUILT
 
         def restore():
-            roadshape.SHEET, roadshape.SHEET_WINDOW_M = old
+            roadshape.SHEET, roadshape.SHEET_WINDOW_M, roadshape.PROFILE_BUILT = old
         self.addCleanup(restore)
         roadshape.SHEET = True
+        roadshape.PROFILE_BUILT = False     # sheet fixtures contain the S3 heights
 
     PLACES = PLACES
 
@@ -592,6 +593,25 @@ class SurfaceDeckSeam(unittest.TestCase):
             np.testing.assert_allclose(skin_xyz[:, 2], 8. + .02 * skin_xyz[:, 0] + roadmesh.DECK_SKIN, atol=1e-6)
         self.assertGreaterEqual(len(points[0]), 2)
         np.testing.assert_array_equal(points[0], points[1])
+
+    def test_solved_fort_pitt_surface_cut(self):
+        from unittest.mock import patch
+        import roadsurf3_decks
+        parts, _ground = load("fort_pitt_profile")
+        ids = PROFILED["fort_pitt_profile"]
+        self.assertTrue(ids)
+        cuts = []
+        for box, ordered in [((-256., -256., 0., 256.), parts), ((0., -256., 256., 256.), parts[::-1])]:
+            with patch("roadsurf3._tile_events", return_value=[]):
+                covered, chunks, _ = roadsurf3_decks.prepare(
+                    ordered, None, box, ({}, None, None), None, None, "US", None,
+                    solved=[p[0] in ids for p in ordered])
+            self.assertTrue(any(key[0] in ids for key in covered))
+            self.assertTrue(all(not any(v[3]) for key, v in covered.items() if key[0] in ids))
+            xyz = np.concatenate([np.c_[ch["xy"], ch["deck_z"]] for ch in chunks if "deck_z" in ch])
+            cuts.append(np.unique(xyz[xyz[:, 0] == 0.], axis=0))
+        self.assertGreater(len(cuts[0]), 4)
+        np.testing.assert_array_equal(*cuts)
 
     def test_skewed_banked_abutment_keeps_both_edge_heights(self):
         import roadsurf3_decks

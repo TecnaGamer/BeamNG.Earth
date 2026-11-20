@@ -110,7 +110,9 @@ def plans_format():
     # BNE_DECK_STRUCT=abut, RS S2b part 2a: the plans give a structure's twins one abutment height per end, keyed by
     # the switch's version, so its plans never mix with anyone else's)
     ds = f".ds{revisit.SWITCH_VERSIONS['BNE_DECK_STRUCT']}" if structures.ABUT else ""
-    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + (".gg1" if grading.GUARD_ON else "") + ds \
+    import roadshape
+    profile = ".s4v2" if roadshape.SURFACE_PROFILE else ""
+    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + profile + (".gg1" if grading.GUARD_ON else "") + ds \
         + (".bv3" if grading.BATTER_ON else "")
 
 

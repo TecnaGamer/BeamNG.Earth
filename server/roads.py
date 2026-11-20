@@ -8860,6 +8860,9 @@ class BridgeProfiles:
                 got = None
             if got is not None:
                 out = [g if g is not None else z for g, z in zip(got, out)]
+        if req_out is not None and roadshape.SURFACE_PROFILE and cr:
+            # Evaluate the topology with the profile inside its per-chain fallback scope.
+            req_out["road_crossings"] = (gl, cr, road_z, gi if LEVEL_SPACING else None)
         return out
 
     def _raw_solve(self, comp, pool, ground):
@@ -9396,11 +9399,18 @@ class BridgeProfiles:
                 prof_short = short.n > n0
             except Exception as ex:
                 prof_short = True
+                if roadshape.SURFACE_PROFILE:
+                    roadshape.profile_skipped("error")
                 # (today's heights; the chain marked short, never kept: a cell the profile reads not at hand made
                 # today's here and the profile's elsewhere)
                 log.debug("chain %s: profile: %s: %s", key, type(ex).__name__, ex)
                 import revisit
                 revisit.fault(here=True)
+                prof = None
+            if prof is not None and roadshape.SURFACE_PROFILE and any(
+                    k not in prof["deck_z"] or len(prof["deck_z"][k]) != len(shaped[k][1])
+                    or not np.isfinite(prof["deck_z"][k]).all() for k in comp):
+                roadshape.profile_skipped("incomplete heights")
                 prof = None
             if prof is not None:
                 for k in comp:
@@ -9413,7 +9423,9 @@ class BridgeProfiles:
                     if srec is not None:
                         srec = dict(srec, z=z)
                         xy = _shaped_line(srec["xy"], srec, xy.raw_n)
-                    shaped[k] = (v[0], xy, z, v[3])
+                    shaped[k] = (v[0], xy, z.view(_SurfaceHeights) if roadshape.SURFACE_PROFILE else z, v[3])
+        elif roadshape.SURFACE_PROFILE and reqs is not None and keep and not getattr(self, "PROFILE_OFF", False):
+            roadshape.profile_skipped("window" if block is not None else "partial chain")
         pre = {k: self._precommit(k, shaped[k], ground) for k in keep}
         beams = tpiers = None
         # (BNE_DECK_STRUCT=shadow, road revamp RS: the chain's structure groups as a JSON, from what this solve read
@@ -9556,7 +9568,8 @@ class BridgeProfiles:
                 rec = getattr(xy, "shape_rec", None)
                 if rec is not None:                     # (roadshape: its shape mapped with it, on the line itself)
                     xy2 = _shaped_line(xy2, roadshape.mapped(rec, mp), xy.raw_n)
-                self.done[k] = (spec, xy2, xyz[:, 2].copy(), lon)
+                z2 = xyz[:, 2].copy()
+                self.done[k] = (spec, xy2, z2.view(_SurfaceHeights) if isinstance(z, _SurfaceHeights) else z2, lon)
                 self.piers[k] = [mp.pier(q) for q in piers[k]]
                 if depth.get(k) is not None:
                     self.__dict__.setdefault("depth", {})[k] = depth[k]
@@ -10656,7 +10669,7 @@ class ChainView:
         self.cell_fn = cs.cell_fn
         self.elev = cs.elev
         self.lock = threading.Lock()
-        self._mapped = {}           # (store region, pid, id(xy)) -> (xy ref, mapped part)
+        self._mapped = {}           # (store region, pid, id(xy)) -> (xy ref, mapped part, S4 source heights)
         self._piers = {}            # store region -> (version, mapped piers, mapped beams)
         self.specs_of, self.parts_of = cs.cls.specs_of, cs.cls.parts_of
         self.keys_of = getattr(cs.cls, "keys_of", None)
@@ -10704,10 +10717,14 @@ class ChainView:
             k = (st.region, pid, id(xy))
             with self.lock:
                 hit = self._mapped.get(k)
-            if hit is None or hit[0] is not xy:
+            source_z = z if roadshape.SURFACE_PROFILE else None
+            if hit is None or hit[0] is not xy or hit[2] is not source_z:
                 mp = mp or _Mapper(st.frame, self.frame)
                 xyz = mp.pts(np.c_[np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)])
-                hit = (xy, (pid, spec, xyz[:, :2].copy(), xyz[:, 2].copy(), lon))
+                z2 = xyz[:, 2].copy()
+                if isinstance(z, _SurfaceHeights):
+                    z2 = z2.view(_SurfaceHeights)
+                hit = (xy, (pid, spec, xyz[:, :2].copy(), z2, lon), source_z)
                 with self.lock:
                     if len(self._mapped) > 20000:
                         self._mapped.clear()
@@ -12188,18 +12205,19 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
             import roadsurf3_decks
             import revisit
             def surface_parts(full_cells, bbox):
-                shapes_in_window = None
+                shapes_in_window = solved = None
                 if shaped:
-                    records = [(fid, sp, np.c_[xy, z], lon, shape) for fid, sp, xy, z, lon, shape in
+                    records = [(fid, sp, np.c_[xy, z], lon, shape, isinstance(z, _SurfaceHeights)) for fid, sp, xy, z, lon, shape in
                                bridges.parts_shaped(full_cells, bbox) if np.isfinite(z).all()]
                     parts = [r[:4] for r in records]
                     shapes_in_window = [r[4] for r in records]
+                    solved = [r[5] for r in records]
                 else:
                     parts = [(fid, sp, np.c_[xy, z], lon) for fid, sp, xy, z, lon in
                              bridges.parts(full_cells, bbox) if np.isfinite(z).all()]
                 context = context_of(full_cells) if context_of else (walks or {}, shift_of, width_of)
                 return roadsurf3_decks.prepare(parts, shapes_in_window, exact, context, dd, frame, country,
-                                               surface["cell_fn"], surface.get("lane_memo"))
+                                               surface["cell_fn"], surface.get("lane_memo"), solved)
 
             with revisit.scope() as deck_scope:
                 try:
@@ -12501,6 +12519,10 @@ def _merge_pad_joints(joints, owner):
             m.joints = np.array([joints[i][0] for i in ks])
             out.append((m, [p for i in ks for p in joints[i][1]]))
     return out
+
+
+class _SurfaceHeights(np.ndarray):
+    """Solved S4 heights attached to this exact part, including across frame mappings."""
 
 
 class _ShapedLine(np.ndarray):

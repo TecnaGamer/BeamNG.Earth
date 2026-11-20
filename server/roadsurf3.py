@@ -315,7 +315,7 @@ def _base(fid):
     return str(fid).split("|", 1)[0].split("~", 1)[0]
 
 
-def tile_surface(frame, box, cell_fn, urban_fn=None, widths=None, left_hand=False, country=None, memo=None, build_memo=None):
+def tile_surface(frame, box, cell_fn, urban_fn=None, widths=None, left_hand=False, country=None, memo=None, build_memo=None, outlines_only=False):
     """The kernel's result for the tile box: a dict (mesh: v (n, 2), uv, tri (m, 3), owner, kind; lines: list of
     (kind name, xy (k, 2), phase m, piece); outlines, cut / cut_wide polygons per kept piece; pieces: [(event, main
     spec)]; roads: [(fid, spec)]; status), or None (no v3 road near)."""
@@ -324,6 +324,8 @@ def tile_surface(frame, box, cell_fn, urban_fn=None, widths=None, left_hand=Fals
     fast.require(SURF_VERSION, "lane_surface")
     evs = (tile_events(frame, box, cell_fn, memo) if build_memo is None else
            _tile_events(frame, box, cell_fn, build_memo))
+    if outlines_only and not evs:
+        return None
     roi = list(box)
     for _ev, r, _t in evs:
         roi = [min(roi[0], float(r[:, 1].min())), min(roi[1], float(r[:, 2].min())),
@@ -332,10 +334,10 @@ def tile_surface(frame, box, cell_fn, urban_fn=None, widths=None, left_hand=Fals
     specs_of, ground, structs = tile_roads(frame, roi, cell_fn, urban_fn, widths, left_hand)
     if not ground and not evs:
         return None
-    return _mesh_surface(box, country, evs, specs_of, ground, structs)
+    return _mesh_surface(box, country, evs, specs_of, ground, structs, outlines_only)
 
 
-def _mesh_surface(box, country, evs, specs_of, ground, structs):
+def _mesh_surface(box, country, evs, specs_of, ground, structs, outlines_only=False):
     import roads as roadsmod
     pieces, rows, t, toff, kinds, koff, meta = [], [], [], [0], [], [0], []
     for ev, r, tb in evs:
@@ -383,12 +385,12 @@ def _mesh_surface(box, country, evs, specs_of, ground, structs):
            "r_oneway": np.array([bool(g[1].oneway) for g in ground], bool),
            "sxy": stack(sxy, 2), "s_off": offs(sxy), "s_hw": np.array([float(x[1].width) / 2.0 for x in structs]),
            "box": np.array([box[0] - m, box[1] - m, box[2] + m, box[3] + m], np.float64), "params": params(country)}
-    got = run_kernel(inp)
+    got = run_kernel(inp, outlines_only) if outlines_only else run_kernel(inp)
     got.update(pieces=pieces, roads=[(g[0], g[1]) for g in ground], inputs=inp)
     return got
 
 
-def run_kernel(inp):
+def run_kernel(inp, outlines_only=False):
     """earthfast.lane_surface on tile_surface's inputs (a dict of arrays: a test fixture keeps them): its result without
     the pieces' and roads' records (tile_surface adds them)."""
     import json
@@ -402,19 +404,58 @@ def run_kernel(inp):
         [float(x) for x in inp["r_hw"]], [bool(x) for x in inp["r_oneway"]],
         np.ascontiguousarray(inp["sxy"], np.float64).reshape(-1, 2), np.asarray(inp["s_off"]).tolist(),
         [float(x) for x in inp["s_hw"]], [float(b) for b in inp["box"]],
-        np.ascontiguousarray(inp["params"], np.float64))
+        np.ascontiguousarray(inp["params"], np.float64), *([True] if outlines_only else []))
     lxy = np.asarray(lxy).reshape(-1, 2)
     lines = [(LINE[int(lkind[k])], lxy[loff[k]:loff[k + 1]], float(lphase[k]), int(lpiece[k]))
              for k in range(len(lkind))]
     oxy = np.asarray(oxy).reshape(-1, 2)
     polys = [oxy[ooff[k]:ooff[k + 1]] for k in range(len(ooff) - 1)]
-    n = len(polys) // 3
+    n = len(polys) if outlines_only else len(polys) // 3
     st = json.loads(status)
     return {"mesh": {"v": np.asarray(v).reshape(-1, 2), "uv": np.asarray(uv).reshape(-1, 2),
                      "tri": np.asarray(tri, np.int64).reshape(-1, 3), "owner": np.asarray(owner, np.int64),
                      "kind": np.asarray(kind, np.int64)},
             "lines": lines, "outlines": polys[:n], "cut": polys[n:2 * n], "cut_wide": polys[2 * n:],
             "kept": [x["piece"] for x in st if x.get("kept")], "status": st}
+
+
+def grade_plans(planner, box, plans, specs, country):
+    """Give P1a the welded ground outline of a kept lane event on its main road."""
+    import fast
+    import grading
+    import navgraph
+    major = [(fid, p, sp) for (fid, p), sp in zip(plans, specs) if sp.kind == "paved" and sp.cls in V3_CLASSES]
+    if not major or box is None:
+        return
+    fast.require(555, "surface_grade_sections")
+    got = tile_surface(planner.frame, box, planner._roads_cell, widths=planner.widths,
+                       left_hand=navgraph.road_rules(country)["rightHandDrive"], country=country, outlines_only=True)
+    outlines = {}
+    for k, outline in zip((got or {}).get("kept", ()), (got or {}).get("outlines", ())):
+        event = got["pieces"][k][0]
+        for fid in sorted({_base(fid) for fid in event["segs"][:2]}):
+            outlines.setdefault(fid, []).append(outline)
+    for fid, plan, _spec in major:
+        edges = outlines.get(_base(fid))
+        if not edges:
+            continue
+        rows = fast._ef.surface_grade_sections(plan.xy, edges)
+        inside = rows[:, 2] > 0.
+        if not inside.any():
+            continue
+        # PlanPack interpolates one width and bank along its centreline.
+        # Recentring the section carries its old bank plane onto the new axis.
+        plan.xy = rows[:, :2].copy()
+        if plan.bank is not None:
+            plan.z = plan.z + plan.bank * rows[:, 3]
+        widen = np.zeros(len(rows)) if plan.widen is None else plan.widen.copy()
+        # PlanPack adds widen to both core and banking widths. A clipped
+        # nose can be narrower than the old shoulder. Use one physical edge
+        # here, preserving the old full core on the rest of this way.
+        widen += plan.half - plan.road_half
+        plan.half = plan.road_half
+        widen[inside] = rows[inside, 2] - plan.road_half
+        grading.set_widen(plan, widen)
 
 
 def paint_geometry(surface, frame, box, widths, pending=None):

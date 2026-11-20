@@ -105,11 +105,11 @@ def _profile(part, shape, widths=None):
     return fid, spec, profile, lon
 
 
-def prepare(records, shapes, exact, context, depths, frame, country, cell_fn, memo=None):
+def prepare(records, shapes, exact, context, depths, frame, country, cell_fn, memo=None, solved=None):
     import roads
     fast.require(553, "deck_surface_groups")
     walks, shift_of, width_of = context
-    parts, eligible, sections, keys, spans, source = [], [], [], [], [], []
+    parts, eligible, sections, keys, spans, source, profiled = [], [], [], [], [], [], []
     # Two cells may supply the same part with millimetre differences in
     # its solved rows. Their iteration order changes across tile windows.
     def order(i):
@@ -122,6 +122,7 @@ def prepare(records, shapes, exact, context, depths, frame, country, cell_fn, me
         if keys and keys[-1] == key:
             continue
         keys.append(key)
+        profiled.append(bool(solved and solved[i]))
         ok = sp.cls in roadsurf3.V3_CLASSES and sp.kind == "paved" and not walks.get(fid)
         source.append(p)
         w = None
@@ -137,9 +138,15 @@ def prepare(records, shapes, exact, context, depths, frame, country, cell_fn, me
     groups = fast._ef.deck_surface_groups(source, widths, eligible, exact)
     offsets = {}
     for group in groups:
+        if all(profiled[i] for i in group):
+            offsets.update((i, ()) for i in group)
+            continue
         corrections = fast._ef.deck_ramp_offsets(
             [source[i] for i in group], [parts[i][1].width for i in group], [bool(parts[i][1].link) for i in group])
         for i, dz in zip(group, corrections):
+            if profiled[i]:
+                offsets[i] = ()
+                continue
             offsets[i] = dz
             if any(dz):
                 fid, sp, p, lon = parts[i]

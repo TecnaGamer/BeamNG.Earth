@@ -842,6 +842,7 @@ def anchor_m(spec):
 # nothing pinned. Window chains (CHAIN_CELLS capped: Manhattan, Tokyo)
 # are not solved (P3's lattice cuts, later): today's. BNE_ROADSHAPE_SHADOW=1 keeps P3a's shadow (nothing built).
 PROFILE_BUILT = PROFILE and os.environ.get("BNE_ROADSHAPE_SHADOW", "") not in ("1", "on", "true")
+SURFACE_PROFILE = PROFILE_BUILT and os.environ.get("BNE_ROADSURF_V3") == "surface"
 PIN_FULL_M = 150.0          # m from an abutment along its approach the solve's change is pinned in full ...
 PIN_REACH_M = 200.0         # ... faded out to nothing here (the solve's weight toward today's is full from PROF_D1_M)
 PIN_MIN_DZ_M = 0.001        # m: an approach moved less than this nowhere is not pinned
@@ -1161,13 +1162,53 @@ def _flat(lines):
     return np.ascontiguousarray(xy, np.float64), [int(v) for v in off]
 
 
+def _surface_forks(store, keys, decks, dz, specs):
+    """Lane-graph forks at deck bearings in this chain's canonical frame.
+    Only members of one structural level can share the pavement up to a nose."""
+    import fast
+    import roadsurf3
+    eligible = [sp.kind == "paved" and sp.cls in roadsurf3.V3_CLASSES for sp in specs]
+    if sum(eligible) < 2:
+        return []
+    ends = np.concatenate([d[[0, -1]] for d, ok in zip(decks, eligible) if ok])
+    box = [*ends.min(axis=0), *ends.max(axis=0)]
+    groups = fast._ef.deck_surface_groups([np.c_[d, z] for d, z in zip(decks, dz)],
+                                           [float(sp.width) for sp in specs], eligible, box)
+    out, memo = [], {}
+    for group in groups:
+        if len(group) < 2:
+            continue
+        indices = {}
+        homes = set()
+        for i in group:
+            indices.setdefault(roadsurf3._base(keys[i][0]), []).append(i)
+            for x, y in decks[i][[0, -1]]:
+                homes.update(roadsurf3._cells_of(store.frame, (x - JOIN_M, y - JOIN_M, x + JOIN_M, y + JOIN_M)))
+        for home in sorted(homes):
+            graph = roadsurf3._cell_lanes(home, store.cell_fn, memo)
+            for ev, _rows, _bounds, _box, _reach in roadsurf3._projected_events(store.frame, graph):
+                if ev["kind"] not in ("diverge", "merge"):
+                    continue
+                trunk, main, branch = [indices.get(roadsurf3._base(fid), []) for fid in ev["segs"]]
+                if not main or not branch:
+                    continue
+                node, = roadsurf3._to_frame(store.frame, graph["frame"], [ev["node_xy"]])
+                reach = ev["s"]["nose"] * (0.001 if ev["kind"] == "diverge" else -0.001)
+                for a in main:
+                    for b in branch:
+                        for t in trunk or [-1]:
+                            if a != b:
+                                out.append((t, a, b, *node, max(0., reach)))
+    return sorted(set(out))
+
+
 def profile_chain(store, comp, parts, ground, reqs, short=False):
     """One chain's shadow profile record (a dict), or None (no deck). parts: {key: (spec, xy, z, lon, level)} as
     published (the level: the chain pool's)."""
     import time
     import fast
     import roads as roadsmod
-    fast.require(PROFILE_KERNEL, "profile_solve")
+    fast.require(555 if SURFACE_PROFILE else PROFILE_KERNEL, "profile_solve")
     ef = fast._ef
     keys, seen = [], set()
     for k in comp:          # (one deck kept twice under two part keys, a copy per cell: once, the first key's)
@@ -1184,6 +1225,10 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
         return None
     t0 = time.perf_counter()
     specs = [parts[k][0] for k in keys]
+    on_surface = False
+    if SURFACE_PROFILE:
+        import roadsurf3
+        on_surface = any(sp.kind == "paved" and sp.cls in roadsurf3.V3_CLASSES for sp in specs)
     decks = [np.asarray(parts[k][1], np.float64)[:, :2] for k in keys]
     dz = [np.asarray(parts[k][2], np.float64) for k in keys]
     gl = _ground_lines(store, decks)
@@ -1249,7 +1294,18 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
         lines = reqs["lines"]
         clear = float(reqs["clear"])
         idx = {k: i for i, k in enumerate(keys)}
-        for r in reqs["req"]:
+        mask = ()
+        if on_surface and reqs.get("road_crossings"):
+            gl, cr, road_z, gi = reqs["road_crossings"]
+            if gi is None:
+                gi = roadsmod.fast_crossing_ground(lines, gl)
+            mask = ef.surface_road_floors(
+                [np.c_[np.asarray(ln)[[0, -1], :2], np.asarray(parts[k][2])[[0, -1]]] for k, ln in zip(comp, lines)],
+                [np.asarray(g)[[0, -1], :2] for g in gl],
+                [(c[0], g, *c[2], z) for c, g, z in zip(cr, gi, road_z)])
+        for n, r in enumerate(reqs["req"]):
+            if n < len(mask) and not mask[n]:
+                continue
             k = comp[int(r[0])] if int(r[0]) < len(comp) else None
             if k not in idx:
                 continue
@@ -1263,8 +1319,11 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
             dmath.cos(math.radians(PROF_SHEET_DEG)), PROF_SHEET_REACH_M, PROF_AT_GRADE_M, PROF_DECK_GROUND_M,
             PROF_MAX_GRADE, PROF_GRADE_ADD, PROF_MARGIN, float(PROF_ROUNDS), PROF_ACTIVE_TOL, PROF_RELEASE_TOL,
             PROF_TWIN_OVERLAP, PROF_TWIN_FLOOD, float(PROF_ATTEMPTS), PROF_DROP_ALL]
+    surface = []
+    if on_surface:
+        surface = [_surface_forks(store, keys, decks, dz, specs)]
     zsol, report, tried = ef.profile_solve(allxy, koff, kz_all, np.ascontiguousarray(kg_all), deck, half + [0.0] * len(ameta),
-                                    level, under, abut, jn, pins, floors, sprm)
+                                    level, under, abut, jn, pins, floors, sprm, *surface)
     t3 = time.perf_counter()
     la, lo, _ = store.frame.enu_to_geodetic(allxy[:, 0], allxy[:, 1], 0.0)
     status = _STATUS[int(report[0])] if 0 <= int(report[0]) < len(_STATUS) else "solver"
