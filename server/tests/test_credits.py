@@ -714,6 +714,38 @@ class FeatureSourcesTest(unittest.TestCase):
                 self.assertFalse(threedmr.credited_near(39, -76, 50, root))
                 self.assertTrue(threedmr.credited_near(42, -76, 0, root))
 
+    def test_hong_kong_lamps_near(self):
+        # the Highways Department's lamp records on disk within FEATURE_NEAR_M of the player (an empty cell is none), with
+        # road tiles shown: the department is named, as CREDITS.md words it; never a download
+        import geodesy
+        import hklamps
+        import mapcells
+        import numpy as np
+        from unittest import mock
+
+        lat, lon = 22.3000, 114.1700
+        with tempfile.TemporaryDirectory() as root:
+            key = mapcells.cells_for_bbox(lat, lon, lat, lon)[0]
+            md = types.SimpleNamespace(cache_dir=root, hklamps=hklamps.Source(root, None))
+            s = types.SimpleNamespace(anchors={1: types.SimpleNamespace(frame=geodesy.EnuFrame(lat, lon))},
+                                      mapdata=md, surface=None, veg=None, airports=None)
+            conn = types.SimpleNamespace(s=s, active=1, focus=(0.0, 0.0), roads=types.SimpleNamespace(aid=1, sent={1}),
+                                         veg=None, sea_sent=None, gravity=None)
+            self.assertNotIn("lamps:hk", credits.feature_ids(conn))
+            path = md.hklamps.path(key)
+            os.makedirs(os.path.dirname(path))
+            np.savez_compressed(path, empty=np.zeros(0))
+            self.assertNotIn("lamps:hk", credits.feature_ids(conn))
+            lon_s = lon + np.arange(30) * 1e-4
+            np.savez_compressed(path, lon=lon_s, lat=np.full(30, lat), no=np.array([f"AA{k:04d}" for k in range(30)]))
+            self.assertIn("lamps:hk", credits.feature_ids(conn))
+            self.assertEqual(credits.line({"lamps:hk"}), "Street lamps: HK Gov HyD (DATA.GOV.HK, CSDI)")
+            with mock.patch.object(hklamps, "ON", False):
+                self.assertNotIn("lamps:hk", credits.feature_ids(conn))
+        text = (Path(__file__).resolve().parents[2] / "CREDITS.md").read_text()
+        self.assertIn(f'"{credits.line({"lamps:hk"})}"', text)
+        self.assertIn(credits.full_label("lamps:hk"), text)
+
     def test_leaf_off_share_is_no_source(self):
         ids = credits.tile_sources(None, (0, 0, 1, 1), None, None, {"usgs": 5, "leafon": 5})
         self.assertEqual(ids, frozenset({"img:usgs"}))

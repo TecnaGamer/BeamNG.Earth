@@ -413,6 +413,8 @@ class MapData:
         self.lod2_roofs = lod2roofs.Source(cache_dir, self.fetcher) if lod2roofs.ON else None
         import bdtopo                   # (France's measured buildings: IGN BD TOPO, joined in cell(), BNE_BDTOPO)
         self.bdtopo = bdtopo.Source(cache_dir, self.fetcher) if bdtopo.ON else None
+        import hklamps                  # (Hong Kong's street lamps: the Highways Department's points, worldprops.tile_props)
+        self.hklamps = hklamps.Source(cache_dir, self.fetcher) if hklamps.ON else None
         import railtags                 # (OSM's railway tags joined to the roads layer's rail segments)
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None
         # the weekly station shards (railtags.StationTags: fuel and charging stations, capacity, charge points)
@@ -1654,6 +1656,8 @@ class MapData:
         key = _key(key)
         if layer == "buildings" and getattr(self, "bdtopo", None) is not None and self.bdtopo.wanted(key):
             self.bdtopo.load(key, "predownload")    # (a saved area: France's measured buildings with it)
+        if layer == "infrastructure" and getattr(self, "hklamps", None) is not None and self.hklamps.wanted(key):
+            self.hklamps.load(key, "predownload")   # (and Hong Kong's street lamps, which the infrastructure tile reads)
         path = self.path(key, layer)
         if os.path.exists(path):
             return False

@@ -1765,7 +1765,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         try:
             import worldprops
             mapped_lamps = [] if worldprops.MAPPED_LAMPS else None     # (furniture.place draws them)
-            wrows, barn_ids = worldprops.tile_props(frame, tx, ty, _s.md, elev, lamps=mapped_lamps)
+            wrows, barn_ids = worldprops.tile_props(frame, tx, ty, _s.md, elev, lamps=mapped_lamps,
+                                                    spec_args=(urban, _s.widths, left_hand))
             skip = frozenset(skip) | frozenset(barn_ids)
         except Exception as ex:
             log.warning("world props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)

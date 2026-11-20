@@ -3235,7 +3235,8 @@ class Server:
             try:
                 import worldprops
                 mapped_lamps = [] if worldprops.MAPPED_LAMPS else None     # (furniture.place draws them)
-                wrows, barn_ids = worldprops.tile_props(anchor.frame, tx, ty, self.mapdata, elev, lamps=mapped_lamps)
+                wrows, barn_ids = worldprops.tile_props(anchor.frame, tx, ty, self.mapdata, elev, lamps=mapped_lamps,
+                                                        spec_args=(urban, self.road_widths, self.left_hand(anchor)))
                 skip = frozenset(skip) | frozenset(barn_ids)
             except Exception as ex:
                 log.warning("world props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
