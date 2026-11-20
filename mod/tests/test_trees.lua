@@ -15,7 +15,8 @@ createObject = function(class)
     function fdata:createNewItem(d, m, sc)
       if CREATE_HOOK then CREATE_HOOK() end      -- (the time budget's tests: a fake clock's tick)
       -- (the engine copies the transform into the item: trees.lua passes the same matrix for every item)
-      local it = { d = d, m = { p = m.p, e = m.e }, sc = sc }; items[it] = true; mine[it] = true; return it
+      local c = m.c and { [0] = m.c[0], m.c[1], m.c[2] }
+      local it = { d = d, m = { p = m.p, e = m.e, c = c }, sc = sc }; items[it] = true; mine[it] = true; return it
     end
     function fdata:removeItem(it) items[it] = nil; mine[it] = nil end
     function o:getData() return fdata end
@@ -31,7 +32,9 @@ loadJsonMaterialsFile = function() end
 local matrices = 0
 MatrixF = function()        -- (copies what it is given, as the engine's matrix does)
   matrices = matrices + 1
-  return { setFromEuler = function(self, e) self.e = vec3(e) end, setPosition = function(self, p) self.p = vec3(p) end }
+  return { setFromEuler = function(self, e) self.e = vec3(e); self.c = nil end,
+           setColumn = function(self, c, v) self.c = self.c or {}; self.c[c] = vec3(v); self.e = nil end,
+           setPosition = function(self, p) self.p = vec3(p) end }
 end
 local files = {}
 readFile = function(p) return files[p] end
@@ -509,6 +512,38 @@ do
   trees.onTile({ anchorId = 8, key = '0_0', path = '/t/bad', n = 1 }, 8)
   trees.update(8, { x = 50, y = 50 })
   T.check(count() == 0 and trees.errors == errs + 1, 'flat with a stride under 8: an error, nothing shown')
+  trees.clear()
+end
+
+do -- vines on the slope (server vegetation._vine_tilt, a tile of stride 10: pitch and roll after the 8 numbers)
+  local function near(a, b) return math.abs(a - b) < 1e-9 end
+  local fx, fy, fz, sx, sy, sz, ux, uy, uz = trees.tiltBasis(30, 0, 0)
+  T.check(near(fx, math.cos(math.rad(30))) and near(fy, math.sin(math.rad(30))) and near(fz, 0) and near(uz, 1),
+          'tiltBasis, no tilt: the yaw alone, upright')
+  fx, fy, fz, sx, sy, sz, ux, uy, uz = trees.tiltBasis(90, 5.7, 3)
+  T.check(near(fz, math.sin(math.rad(5.7))) and math.abs(fx) < 1e-9 and fy > 0, 'pitch: the x axis up the slope')
+  T.check(near(fx * sx + fy * sy + fz * sz, 0) and near(sx * sx + sy * sy + sz * sz, 1) and uz > 0.99,
+          'pitch and roll: orthonormal, still about upright')
+  T.check(near(ux, fy * sz - fz * sy) and near(uz, fx * sy - fy * sx), 'right-handed: z = x cross y')
+  T.check(sx < 0 and sz > 0, 'roll: the y axis (west at yaw 90) raised')
+  local rowShape, rowSc = trees.pick('vine_row', 2.6, 0.1)
+  T.check(rowShape:find('/trees_italy/grape_vine', 1, true) ~= nil and not rowShape:find('group', 1, true)
+          and math.abs(rowSc - 1) < 1e-9, 'a single row (server vegetation._row_fill): Italy\'s grape_vine at scale 1')
+  T.check(trees.GROUP_MAX_M.vine_row == trees.GROUP_MAX_M.vine, 'single rows as far as the groups')
+  files['/t/vines'] = '{ groups = { "vine", "deciduous" }, stride = 10, flat = { '
+    .. '0, 10, 10, 5, 90, 1, 2.6, 0.1, 5.7, 0, '      -- a vine group pitched up the slope
+    .. '0, 12, 10, 5, 90, 1, 2.6, 0.1, 0, 0, '        -- one on flat ground
+    .. '1, 14, 10, 5, 45, 1, 12, 0.1, 0, 0 } }'       -- a tree
+  trees.clear()
+  trees.onTile({ anchorId = 9, key = '0_0', path = '/t/vines', n = 3 }, 9)
+  trees.update(9, { x = 12, y = 10 })
+  local tilted, flat = 0, 0
+  for it in pairs(items) do
+    if it.m.c and it.m.p.x == 10 and near(it.m.c[0].z, math.sin(math.rad(5.7))) then tilted = tilted + 1 end
+    if it.m.e and (it.m.p.x == 12 or it.m.p.x == 14) then flat = flat + 1 end
+  end
+  T.check(count() == 3 and tilted == 1, 'a pitched vine group: its columns, the x axis up the slope')
+  T.check(flat == 2, 'no tilt: the flat yaw as before (vine and tree)')
   trees.clear()
 end
 
