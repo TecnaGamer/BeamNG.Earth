@@ -5174,7 +5174,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 continue
             if rails_xy and on_rail_bed(ring, rails_xy):        # (a building on a railway's bed: BNE_RAIL_XING)
                 continue
-            is_ml = "src_dataset" in a and str(a["src_dataset"][i]) != "OpenStreetMap"
+            is_ml = "src_dataset" in a and str(a["src_dataset"][i]) not in ("OpenStreetMap", "IGN_BDTOPO")
             if is_ml and _ml_false(ring, bridges_xy, water_xy, ml_roads_xy if ml_roads_xy is not None else roads_xy):
                 continue
             if key is not None:

@@ -6784,6 +6784,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 182: roofphoto::roof_photo_colours (buildings.RoofPhoto: roof colours from the cached orthophoto)
     m.add_function(wrap_pyfunction!(bdtopo::bdtopo_points, m)?)?;
     m.add_function(wrap_pyfunction!(bdtopo::bdtopo_match, m)?)?;
+    m.add_function(wrap_pyfunction!(bdtopo::bdtopo_unmatched, m)?)?;
     // 183: bdtopo::bdtopo_points,
     // bdtopo::bdtopo_match (France's measured buildings, server/bdtopo.py: PR #456's BD TOPO join, ported)
     // 184: building_walls' vary / win_cells (wall_cells: the night windows' cells, PR #916 reworked)
@@ -7452,6 +7453,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 552: try598 with 549 (codex-port2 rail crossings) and 550 (v3 S2b) merged
     // 556: merged
     // 558: merged
-    m.add("VERSION", 560)?;
+    // 561: bdtopo::bdtopo_unmatched (IGN BD TOPO buildings missing from Overture/OSM appended per French cell)
+    m.add("VERSION", 561)?;
     Ok(())
 }

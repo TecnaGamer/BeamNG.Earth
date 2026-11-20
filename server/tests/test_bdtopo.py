@@ -146,6 +146,77 @@ class JoinTest(unittest.TestCase):
         self.assertIsNone(bdtopo.join(layer([square(self.lon, self.lat)]), bdtopo.EMPTY))
 
 
+class UnmatchedTest(unittest.TestCase):
+    def setUp(self):
+        self.lon, self.lat = 5.4474, 43.5297
+        self.recs = bdtopo.Records(bdtopo.parse([
+            # 0: matches the first map footprint
+            feature(square(self.lon, self.lat), cleabs="BAT_MATCHED", hauteur=14.2,
+                    altitude_minimale_toit=209.0, altitude_maximale_toit=211.0, nombre_d_etages=4,
+                    materiaux_des_murs="10", materiaux_de_la_toiture="10", usage_1="Commercial et services"),
+            # 1 & 2: two cadastre buildings both inside the second map footprint (neither is unmatched)
+            feature(square(self.lon + 0.001, self.lat, 0.00004), cleabs="BAT_CAD_A", hauteur=5.0, nombre_d_etages=1),
+            feature(square(self.lon + 0.00104, self.lat, 0.00006), cleabs="BAT_CAD_B", hauteur=11.0, nombre_d_etages=3),
+            # 3 & 4: two unmatched rural buildings (given out of order to verify deterministic ~ign:<id> sort)
+            feature(square(self.lon + 0.003, self.lat), cleabs="BAT_RURAL_2", hauteur=7.5,
+                    altitude_minimale_toit=100.0, altitude_maximale_toit=102.0, nombre_d_etages=2,
+                    nombre_de_logements=1, materiaux_des_murs="10", materiaux_de_la_toiture="10",
+                    usage_1="Résidentiel"),
+            feature(square(self.lon + 0.002, self.lat), cleabs="BAT_RURAL_1", hauteur=6.0,
+                    nombre_d_etages=1, usage_1="Agricole", materiaux_des_murs="60", materiaux_de_la_toiture="10"),
+            # 5: outside the cell bounds -> not owned by this cell
+            feature(square(self.lon + 0.05, self.lat), cleabs="BAT_OUTSIDE", hauteur=8.0, nombre_d_etages=2),
+        ]))
+
+    def test_appends_unmatched_sorted_without_suppressing_overture(self):
+        # Map has 3 footprints: 0 matches BAT_MATCHED, 1 covers BAT_CAD_A & BAT_CAD_B, 2 has no BD TOPO match at all
+        f = layer([square(self.lon, self.lat), square(self.lon + 0.001, self.lat), square(self.lon + 0.005, self.lat)],
+                  height=[np.nan, np.nan, 9.5], height_src=["", "", "OpenStreetMap"],
+                  **{"class": ["", "", "house"]})
+        bounds = (self.lon - 0.001, self.lat - 0.001, self.lon + 0.01, self.lat + 0.01)
+        bdtopo.merge(f, self.recs, bounds=bounds)
+        self.assertEqual(list(f.ids), ["b0", "b1", "b2", "~ign:BAT_RURAL_1", "~ign:BAT_RURAL_2"])
+        # Existing unmatched Overture building b2 is preserved intact (never suppressed to 0.01m)
+        self.assertAlmostEqual(float(f.attrs["height"][2]), 9.5, places=3)
+        self.assertEqual(str(f.attrs["class"][2]), "house")
+        self.assertTrue(bool(f.own[2]))
+        # Appended BD TOPO buildings carry their measured attributes and IGN_BDTOPO dataset
+        self.assertAlmostEqual(float(f.attrs["height"][3]), 6.0, places=3)
+        self.assertEqual(str(f.attrs["height_src"][3]), "ign_bdtopo_eave")
+        self.assertEqual(str(f.attrs["class"][3]), "farm_auxiliary")
+        self.assertEqual(str(f.attrs["facade_material"][3]), "wood")
+        self.assertEqual(str(f.attrs["src_dataset"][3]), "IGN_BDTOPO")
+        self.assertAlmostEqual(float(f.attrs["height"][4]), 9.5, places=3)
+        self.assertEqual(str(f.attrs["height_src"][4]), "ign_bdtopo")
+        self.assertEqual(str(f.attrs["class"][4]), "house")
+        self.assertEqual(str(f.attrs["facade_material"][4]), "stone")
+        self.assertEqual(str(f.attrs["roof_material"][4]), "tile")
+        self.assertTrue(bool(f.own[3]) and bool(f.own[4]))
+
+    def test_empty_map_layer_receives_unmatched_buildings(self):
+        import geodesy
+        import mapdata
+        key = mapcells.cell_of(*AIX)
+        with tempfile.TemporaryDirectory() as d:
+            fx = FakeFetcher([
+                feature(square(AIX[1], AIX[0]), cleabs="BAT_B", hauteur=8.0, nombre_d_etages=2),
+                feature(square(AIX[1] + 0.0005, AIX[0]), cleabs="BAT_A", hauteur=5.0, nombre_d_etages=1),
+            ])
+            md = mapdata.MapData.__new__(mapdata.MapData)
+            md._lock = threading.Lock()
+            md.bdtopo = bdtopo.Source(d, fx)
+            self.assertTrue(md.bdtopo.wait([key]))
+            empty = mapgeom.empty("buildings")
+            empty.localize(geodesy.EnuFrame(*key.center()))
+            out = md._bdtopo(key, "buildings", empty)
+            self.assertEqual(list(out.ids), ["~ign:BAT_A", "~ign:BAT_B"])
+            self.assertEqual(len(out.en), len(out.lonlat))
+
+    def test_bdtopo_cache_is_managed(self):
+        import cache
+        self.assertIn("bdtopo", cache.MANAGED)
+
+
 class PlanTest(unittest.TestCase):
     RING = np.array([[0, 0], [10, 0], [10, 8], [0, 8]], np.float64)
 
