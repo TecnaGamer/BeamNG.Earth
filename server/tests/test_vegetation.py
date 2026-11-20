@@ -842,3 +842,11 @@ class TiedCapTest(unittest.TestCase):
         import os
         import revisit
         self.assertIn("vegetation.py", revisit.source_closure(os.path.dirname(os.path.abspath(veg.__file__))))
+
+
+class HedgerowGroupsTest(unittest.TestCase):
+    def test_cypress_and_olive_groups_in_vegetation(self):
+        self.assertEqual(veg.GROUPS[veg.G_CYPRESS], "cypress")
+        self.assertEqual(veg.GROUPS[veg.G_OLIVE], "olive")
+        self.assertIn(veg.G_CYPRESS, veg.AUDIO_SOUND)
+        self.assertIn(veg.G_OLIVE, veg.AUDIO_SOUND)

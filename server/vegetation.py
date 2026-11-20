@@ -64,11 +64,11 @@ KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
           "oak_west", "tropical", "mediterranean", "conifer_clump", "deciduous_clump", "oak_west_clump",
           "mediterranean_clump", "vine", "straw_n", "straw_s", "silage_n", "silage_s", "eucalyptus",
-          "eucalyptus_clump", "poplar", "creosote")
+          "eucalyptus_clump", "poplar", "creosote", "cypress", "olive")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
- G_POPLAR, G_CREOSOTE) = range(25)
+ G_POPLAR, G_CREOSOTE, G_CYPRESS, G_OLIVE) = range(27)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -285,6 +285,8 @@ class Vegetation:
         self.dem = None                 # (set by the server: rocks on bare ground by slope, ROCK_SLOPE)
         self.surface = self.widths = None   # (set by the server: the roads' drawn widths, roads.road_specs)
         self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
+        import bdtopo
+        self.haie = bdtopo.HaieSource(cache_dir or getattr(md, "cache_dir", None), getattr(md, "fetcher", None))
         self._mem = OrderedDict()
         self._lock = threading.Lock()
         self._cell_locks = {}
@@ -518,6 +520,16 @@ class Vegetation:
             hs[nr[ok], nc[ok]] = np.maximum(hs[nr[ok], nc[ok]], hs[rj_[ok], ri_[ok]])     # keep its height
             tops |= moved
         blocked |= road
+        import bdtopo
+        haie_items, hedge_mask = _empty(), None
+        if bdtopo.ON and bdtopo.covers(cd.bounds):
+            haie_src = getattr(self.md, "haie", None) or getattr(self, "haie", None)
+            if haie_src is not None:
+                h_recs = haie_src.load(key)
+                if h_recs is not None and h_recs.n > 0:
+                    haie_items, hedge_mask = bdtopo.haie_items(h_recs, chm, hs, blocked, cd.bounds)
+                    if hedge_mask is not None:
+                        tops &= ~hedge_mask
         jj, ii = np.nonzero(tops)
         # one top per crown (flat crowns had several); a crown's radius in pixels as at MERC_REF_LAT (chm.dx / k), and
         # equal heights (a canopy raster upsampled into flat plateaus) ranked by a hash of the global pixel, not by
@@ -591,14 +603,16 @@ class Vegetation:
         # (a clump moved off a road stays in this cell and off its buildings, water and decks: ClumpRoads)
         tree = clumps(tree, lcls, (lat0 + lat1) / 2,
                       roads=ClumpRoads(clump_roads, chm, blocked, (ex0, ey0, ex1, ey1)))
-        scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
-        edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
+        no_scatter = blocked | paved | orchard | vines if hedge_mask is None else (blocked | paved | orchard | vines | hedge_mask)
+        no_edge = blocked | orchard | vines if hedge_mask is None else (blocked | orchard | vines | hedge_mask)
+        scatter = self._scatter(cd, lc, no_scatter, chm, hs)
+        edge = self._edge(cd, lc, no_edge, road, chm, hs)
         bounds = (lon0, lat0, lon1, lat1)
         planted = orchard_items(lu, chm, blocked, bounds)
         hedges = farm_foliage(lu, chm, blocked, bounds)
         rows = vineyard_items(lu, chm, blocked, bounds)
         bales = bale_items(lu, chm, blocked, bounds)
-        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
+        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales, haie_items])
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""

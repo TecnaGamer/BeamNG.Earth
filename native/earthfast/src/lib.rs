@@ -112,6 +112,7 @@ mod stationgeom;
 mod busstation;
 mod railpiers;
 mod bdtopo;
+mod hedgerows;
 mod nycmassing;
 mod rooftop;
 mod bldmesh;
@@ -7452,6 +7453,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 552: try598 with 549 (codex-port2 rail crossings) and 550 (v3 S2b) merged
     // 556: merged
     // 558: merged
-    m.add("VERSION", 560)?;
+    m.add_function(wrap_pyfunction!(hedgerows::bdtopo_hedgerows, m)?)?;
+    // 561: hedgerows::bdtopo_hedgerows (IGN BD TOPO haie linear hedgerows -> cypress / olive trees + shrubs in Rust)
+    m.add("VERSION", 561)?;
     Ok(())
 }

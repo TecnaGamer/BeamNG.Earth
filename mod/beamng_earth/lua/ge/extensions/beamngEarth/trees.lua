@@ -341,6 +341,13 @@ M.CATALOG = {
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler', 33.0 },
   },
+  -- IGN BD TOPO `haie` hedgerows in Provence / Mediterranean France (server bdtopo.py + vegetation.py)
+  cypress = {
+    { IT .. 'trees/trees_italy/cypress_hedge_3m', 1.65 }, { IT .. 'trees/trees_italy/cypress_tree', 7.0 },
+  },
+  olive = {
+    { IT .. 'trees/trees_italy/olive', 4.0 }, { IT .. 'trees/trees_italy/holm_oak', 11.4 },
+  },
 }
 -- Italy's authored three-metre crash barrier and two end treatments. The back-facing variants reuse
 -- the same mesh with its longitudinal/lateral axes reversed; the caps are swapped to flare outwards.

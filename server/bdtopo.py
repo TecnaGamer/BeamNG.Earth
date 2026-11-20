@@ -505,3 +505,198 @@ def credited_near(cache_dir, lat, lon, near_m):
         except OSError:
             pass
     return False
+
+
+# ---- IGN BD TOPO `haie` (linear hedgerows: Mistral cypress windbreaks & olive / bocage hedgerows) -------------------
+HAIE_NATIVE = 561               # earthfast.VERSION of bdtopo_hedgerows
+HAIE_VERSION = 1                # the hedgerows' layout on disk (bdtopo/haie_v1)
+HAIE_FIELDS = "geometrie,hauteur"
+HAIE_FIELDS_NPZ = ("line_off", "lonlat", "h")
+
+
+def parse_haie(features):
+    """The arrays (line_off, lonlat, h) of BD TOPO `haie` GeoJSON features (CRS:84): LineString and MultiLineString
+    polylines of 2 finite points or more. Pure."""
+    coords, off, hs = [], [0], []
+    for f in features or ():
+        if not isinstance(f, dict):
+            continue
+        g = f.get("geometry") or {}
+        if not isinstance(g, dict):
+            continue
+        gtype = g.get("type")
+        cs = g.get("coordinates")
+        if not isinstance(cs, list) or not cs:
+            continue
+        lines = [cs] if gtype == "LineString" else (cs if gtype == "MultiLineString" else ())
+        p = f.get("properties") or {}
+        hv = _num(p.get("hauteur")) if isinstance(p, dict) else math.nan
+        h_m = float(hv) if hv > 0.0 else 0.0
+        for ln in lines:
+            if not isinstance(ln, list) or len(ln) < 2:
+                continue
+            try:
+                arr = np.asarray([(float(pt[0]), float(pt[1])) for pt in ln], np.float64)
+            except (TypeError, ValueError, IndexError):
+                continue
+            if len(arr) < 2 or not np.isfinite(arr).all():
+                continue
+            coords.append(arr)
+            off.append(off[-1] + len(arr))
+            hs.append(h_m)
+    lonlat = np.ascontiguousarray(np.concatenate(coords), np.float64) if coords else np.zeros((0, 2), np.float64)
+    return {"line_off": np.asarray(off, np.int64), "lonlat": lonlat, "h": np.asarray(hs, np.float32)}
+
+
+class HaieRecords:
+    """A cell's BD TOPO `haie` polylines (`HAIE_FIELDS_NPZ` arrays)."""
+
+    def __init__(self, arrays):
+        self.line_off = np.ascontiguousarray(arrays["line_off"], np.int64)
+        self.lonlat = np.ascontiguousarray(arrays["lonlat"], np.float64)
+        self.h = np.ascontiguousarray(arrays["h"], np.float32)
+        self.n = max(0, len(self.line_off) - 1)
+        self.raw = arrays
+
+
+EMPTY_HAIE = HaieRecords({"line_off": np.zeros(1, np.int64), "lonlat": np.zeros((0, 2), np.float64),
+                          "h": np.zeros(0, np.float32)})
+
+
+def haie_items(recs, chm, hs, blocked, bounds):
+    """(vegetation.Items, hedge_mask (rows, cols) bool or None) of a cell's HaieRecords sampled in Rust
+    (earthfast.bdtopo_hedgerows). Pure."""
+    import vegetation as veg
+    if recs is None or recs.n == 0 or chm is None or hs is None or blocked is None:
+        return veg._empty(), None
+    fast.require(HAIE_NATIVE, "bdtopo_hedgerows")
+    grid = (float(chm.x0), float(chm.y0), float(chm.dx), float(chm.dy))
+    b = tuple(float(v) for v in bounds)
+    groups = (int(veg.G_CYPRESS), int(veg.G_OLIVE), int(veg.G_DECIDUOUS), int(veg.G_SHRUB))
+    kinds = (int(veg.KIND_TREE), int(veg.KIND_BUSH))
+    lon, lat, h, rad, kind, grp, rank, yaw, scale, mask = fast._ef.bdtopo_hedgerows(
+        recs.line_off, recs.lonlat, recs.h,
+        np.ascontiguousarray(hs, np.float32), np.ascontiguousarray(blocked, bool),
+        grid, b, groups, kinds)
+    if len(lon) == 0:
+        return veg._empty(), None
+    return veg.Items(np.asarray(lon, np.float64), np.asarray(lat, np.float64), np.asarray(h, np.float32),
+                     np.asarray(rad, np.float32), np.asarray(kind, np.uint8), np.asarray(grp, np.uint8),
+                     np.asarray(rank, np.float32), np.asarray(yaw, np.float32), np.asarray(scale, np.float32)), \
+        np.asarray(mask, bool)
+
+
+class HaieSource:
+    """Per-cell BD TOPO `haie` records: fetched via WFS with gzip, cached under `<cache>/bdtopo/haie_v1/<z>/<x>/<y>.npz`."""
+
+    def __init__(self, cache_dir, fetcher):
+        self.dir = os.path.join(cache_dir, "bdtopo", f"haie_v{HAIE_VERSION}") if cache_dir else None
+        self.fetcher = fetcher
+        self._lock = threading.Lock()
+        self._mem = OrderedDict()
+        self._failed = {}
+        self.stats = {"cells": 0, "requests": 0, "bytes": 0, "seconds": 0.0}
+
+    def path(self, key):
+        key = _key(key)
+        return os.path.join(self.dir, str(key.z), str(key.x), f"{key.y}.npz") if self.dir else None
+
+    def cached(self, key):
+        """The cell's HaieRecords in memory or on disk, or None (never the network)."""
+        key = _key(key)
+        k = (key.z, key.x, key.y)
+        with self._lock:
+            got = self._mem.get(k)
+            if got is not None:
+                self._mem.move_to_end(k)
+                return got
+        p = self.path(key)
+        if not p or not os.path.exists(p):
+            return None
+        try:
+            with np.load(p, allow_pickle=False) as z:
+                got = HaieRecords({f: z[f] for f in HAIE_FIELDS_NPZ}) if "line_off" in z.files else EMPTY_HAIE
+        except Exception as e:
+            log.debug("bdtopo haie read %s: %s", p, e)
+            return None
+        self._keep(k, got)
+        return got
+
+    def _keep(self, k, got):
+        with self._lock:
+            self._mem[k] = got
+            self._mem.move_to_end(k)
+            while len(self._mem) > MEM_CELLS:
+                self._mem.popitem(last=False)
+
+    def load(self, key, kind="demand"):
+        """The cell's HaieRecords, downloaded now when not here (xproc lock), or None on failure / no fetcher."""
+        import xproc
+        if not ON:
+            return EMPTY_HAIE
+        key = _key(key)
+        got = self.cached(key)
+        if got is not None:
+            return got
+        if not covers(key.bounds()):
+            return EMPTY_HAIE
+        if self.fetcher is None:
+            return None
+        k = (key.z, key.x, key.y)
+        with self._lock:
+            if time.time() - self._failed.get(k, -1e18) < RETRY_S:
+                return None
+        p = self.path(key)
+        mine = False
+        if p:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            got, mine = xproc.once(p + ".lock", lambda: self.cached(key), LOCK_WAIT_S, kind)
+            if got is not None:
+                return got
+        try:
+            t0 = time.monotonic()
+            try:
+                arrays = parse_haie(self._features(key, kind))
+            except Exception as e:
+                log.debug("bdtopo haie fetch %s: %s: %s", key, type(e).__name__, e)
+                with self._lock:
+                    self._failed[k] = time.time()
+                return None
+            got = HaieRecords(arrays) if len(arrays["h"]) else EMPTY_HAIE
+            if p:
+                import staging
+                tmp = staging.tmp_for(p)
+                with open(tmp, "wb") as fh:
+                    np.savez_compressed(fh, **({f: arrays[f] for f in HAIE_FIELDS_NPZ}
+                                               if got.n else {"empty": np.zeros(0)}))
+                staging.replace_cached(tmp, p)
+            with self._lock:
+                self.stats["cells"] += 1
+                self.stats["seconds"] += time.monotonic() - t0
+                self._failed.pop(k, None)
+            self._keep(k, got)
+            return got
+        finally:
+            if mine:
+                xproc.release(p + ".lock")
+
+    def _features(self, key, kind):
+        import json
+        lon0, lat0, lon1, lat1 = key.bounds()
+        feats = []
+        for page in range(PAGES):
+            url = (f"{WFS_URL}?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3:haie"
+                   f"&PROPERTYNAME={HAIE_FIELDS}&BBOX={lon0:.6f},{lat0:.6f},{lon1:.6f},{lat1:.6f},CRS:84&SRSNAME=CRS:84"
+                   f"&OUTPUTFORMAT=application/json&COUNT={PAGE}&STARTINDEX={page * PAGE}&SORTBY=cleabs")
+            res = self.fetcher.get(url, kind=kind, lane=LANE, headers={"Accept-Encoding": "gzip"})
+            body = res.body
+            if body[:2] == b"\x1f\x8b":
+                body = gzip.decompress(body)
+            with self._lock:
+                self.stats["requests"] += 1
+                self.stats["bytes"] += len(res.body)
+            got = json.loads(body.decode("utf-8")).get("features") or []
+            feats += got
+            if len(got) < PAGE:
+                return feats
+        raise IOError(f"bdtopo haie {key}: more than {PAGES * PAGE} hedgerows")
