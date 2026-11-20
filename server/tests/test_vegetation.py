@@ -683,10 +683,13 @@ class RegionalTest(unittest.TestCase):
         self.assertEqual(self.g(veg.G_CONIFER, 20, -37.8, 145.0, 10, u=0.95), veg.G_CONIFER, "a share stays (pines)")
         self.assertEqual(self.g(veg.G_DECIDUOUS, 15, -12.4, 130.8, 10, u=0.5), veg.G_EUCALYPTUS, "Darwin's savanna")
 
-        def rip(lat, lon, group=veg.G_DECIDUOUS, u=0.2, near=True):
+        def rip(lat, lon, group=veg.G_DECIDUOUS, u=0.2, near=True, lc=veg.WC["grass"]):
             return int(veg.regional(np.array([group]), np.array([18.0]), np.array([lat]), np.array([lon]),
-                                    np.array([10]), np.array([u]), riparian=np.array([near]))[0])
+                                    np.array([lc]), np.array([u]), riparian=np.array([near]))[0])
         self.assertEqual(rip(47.4, 0.7), veg.G_POPLAR, "the Loire's banks")
+        self.assertEqual(rip(47.4, 0.7, lc=veg.WC["built"]), veg.G_POPLAR, "a riverside town")
+        self.assertEqual(rip(49.15, 22.48, lc=veg.WC["tree"]), veg.G_DECIDUOUS,
+                         "(51) a forest stream: no Lombardy poplars (Bieszczady)")
         self.assertEqual(rip(47.4, 0.7, near=False), veg.G_DECIDUOUS, "away from water")
         self.assertEqual(rip(47.4, 0.7, u=0.6), veg.G_DECIDUOUS, "a share only")
         self.assertEqual(rip(47.4, 0.7, group=veg.G_CONIFER), veg.G_CONIFER, "broadleaves only")

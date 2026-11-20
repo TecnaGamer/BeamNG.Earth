@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 51          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 52          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -92,6 +92,7 @@ VERSION = 51          # (the cached cells hold their groups: 14 for the regional
                       # 49: more birches: Europe's north fewer conifers (NORTH_CONIFER_FACTOR), central Europe CONT_BIRCH_SOUTH
                       # 50: dev's thinning back (its count of trees), the tall trunks at least TRUNK_MIN_M apart (_thin_trunks)
                       # 51: 50's last two builds kept 50's spread cells (the same VERSION); the trunk distance by height
+                      # 52: the riverside poplars off the forest's land cover (regional)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -322,7 +323,9 @@ def regional(group, height, lat, lon, lcls, u, riparian=None):
     and desert bushes, Johnson Valley's rocks, Jungle Rock Island's palms and tropical trees) from the generic
     ones, by a coarse climate from the position and the land cover class at the item (until a species map): the Rust
     kernel earthfast.regional_groups (its rules there). u: a hashed [0, 1) per item; riparian: per item, within
-    RIPARIAN_M of water (None: none). Pure."""
+    RIPARIAN_M of water (None: none), counted only off the forest's land cover (51: the poplars are Automation Test
+    Track's Lombardy poplars, a planted columnar cultivar of the lowland rivers' farmland and towns: 8 % of the trees of
+    Bieszczady's beech forest, along its mountain streams, the model audit 2026-11-20). Pure."""
     fast.require(201, "regional_groups")
     f64 = np.float64
     n = np.size(group)
@@ -333,7 +336,7 @@ def regional(group, height, lat, lon, lcls, u, riparian=None):
         pre, bc(height, f64), la, lo, lc, uu,
         [G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
          G_OAK_WEST, G_TROPICAL], [WC["shrub"], WC["bare"], WC["grass"], WC["built"]],
-        zones(la, lo, None if riparian is None else bc(riparian, bool)),
+        zones(la, lo, None if riparian is None else bc(riparian, bool) & (lc != WC["tree"])),
         [G_MEDITERRANEAN, G_EUCALYPTUS, G_POPLAR, G_CREOSOTE]), np.uint8)
     return _mediterranean_leaf(pre, g, la, lo, lc, uu)
 

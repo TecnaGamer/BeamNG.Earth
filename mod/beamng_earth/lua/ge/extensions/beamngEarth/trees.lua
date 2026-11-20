@@ -201,7 +201,9 @@ M.CATALOG = {
   deciduous = {
     { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
     { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_c', 9.7 },
-    { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 }, { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.2 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 },
+    -- (no tree_oak_large_a: a veteran oak's swollen trunk, 2.6 m wide at the ground at 13.2 m; scaled to a 20 m forest
+    -- tree's top it was a 3-4 m boulder of bark among the trunks, the user's Rogowska 2026-11-20)
     { ECA .. 'trees/trees_oak/tree_oak_large_b', 15.9 }, { ECA .. 'trees/trees_oak/tree_oak_large_c', 15.5 },
     { ECA .. 'trees/trees_oak/tree_oak_forest_a', 15.9 }, { ECA .. 'trees/trees_oak/tree_oak_forest_b', 16.0 },
     { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
@@ -467,7 +469,7 @@ M.CATALOG = {
   },
   oak = {
     { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
-    { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.2 }, { ECA .. 'trees/trees_oak/tree_oak_large_c', 15.5 },
+    { ECA .. 'trees/trees_oak/tree_oak_large_c', 15.5 },     -- (not tree_oak_large_a: as deciduous)
     { ECA .. 'trees/trees_oak/tree_oak_large_b', 15.9 }, { ECA .. 'trees/trees_oak/tree_oak_forest_a', 15.9 },
     { ECA .. 'trees/trees_oak/tree_oak_forest_b', 16.0 },
   },
@@ -1181,7 +1183,11 @@ end
 -- VARIANT_WINDOWS' steps; furniture and props keep the first window that has any: their sizes are authored).
 M.HEIGHT_VARY = 0.15
 M.MIN_VARIANTS = 3
-M.VARIANT_WINDOWS = { { 0.8, 1.25 }, { 0.7, 1.43 }, { 0.6, 1.6 } }
+-- (2026-11-20) the windows widen upward, not down: a taller shape drawn smaller keeps a slender trunk, a shorter one
+-- scaled up 1.6 times had a trunk 1.6 times as thick (the user's Rogowska: trunks through each other). Trees scaled
+-- 1.5x or more on real cells: Pennsylvania 5.6 -> 1.3 %, Finland 3.1 -> 0.1 %, the Black Forest 17 -> 9 %, Syrynka
+-- 19 -> 13 % (its 25 m oaks: the catalog's tallest oak is 16 m)
+M.VARIANT_WINDOWS = { { 0.8, 1.25 }, { 0.75, 1.5 }, { 0.75, 1.8 } }
 function M.varies(group)
   return townsigns.TREE_GROUPS[group] or M.FAR_ONLY[group] or false
 end
