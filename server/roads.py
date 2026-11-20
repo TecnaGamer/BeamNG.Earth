@@ -2024,12 +2024,108 @@ def _map_surface_value(feats, i):
     import busstations
     if busstations.PASSAGE_IDS and str(feats.ids[i]) in busstations.PASSAGE_IDS:
         return "asphalt"            # a bus station's drive lane (Hradec: the map says paving_stones for the whole yard)
-    osm = feats.attrs.get("osm_surface")
+    osm = osm_surface_column(feats)
     if osm is not None and i < len(osm):
         v = str(osm[i]).strip()
         if v and v.lower() not in ("nan", "none"):
             return v
     return _rule_value(feats.rules.get("surface"), i)
+
+
+def _osm_text(v):
+    """An OpenStreetMap text column's element as a value, or None ("", "nan" and "none" in any case: no value)."""
+    v = str(v).strip()
+    return v if v and v.lower() not in ("nan", "none") else None
+
+
+def _surface_look(cls, v):
+    """What a surface value is drawn as, for comparing two of them: 'rock' / 'grass' (the ground's own materials,
+    terrain_surface) or surface_kind's paved / cobble / gravel / dirt."""
+    t = surface_token(v)
+    if t in ROCKISH:
+        return "rock"
+    if t in GRASSY:
+        return "grass"
+    return surface_kind(cls, v)
+
+
+UNPAVED_LOOKS = frozenset({"gravel", "dirt", "grass", "rock"})
+
+
+def _overlap(s, e, ranges):
+    """Length of [s, e] inside the union of the disjoint ranges [(a, b)]."""
+    return sum(max(0.0, min(e, b) - max(s, a)) for a, b in ranges)
+
+
+def merged_surface(cls, osm, own, rules):
+    """The surface value of a segment Overture merged from several OpenStreetMap ways: osm, the surface of the one way
+    its tags were joined from (src_record; own: that way's ranges on the segment, fractions of its length), unless the
+    rest of the segment, by Overture's surface rules ([(value, start, end)]), is mostly of another look (_surface_look):
+    then that look's value covering the most of the rest. Every look weighed by its share of the segment: the joined
+    way's by its own ranges, Overture's rules by their length outside them (a generic "unpaved" as the joined way's
+    look when that is unpaved too); a tie keeps osm. Pure."""
+    share, best = {}, {}
+    mine = _surface_look(cls, osm)
+    share[mine] = sum(b - a for a, b in own)
+    for v, s, e in rules:
+        v = _osm_text(v)
+        if v is None or v.lower() == "unknown":     # (Overture's "unknown": no surface known there)
+            continue
+        w = (e - s) - _overlap(s, e, own)
+        if w <= 0.0:
+            continue
+        # Overture's generic "unpaved" (its list has no grass, ground or compacted: OSM's are folded into it) says
+        # nothing against an unpaved joined way: it counts as that way's look, never against it
+        look = mine if mine in UNPAVED_LOOKS and surface_token(v) == "unpaved" else _surface_look(cls, v)
+        share[look] = share.get(look, 0.0) + w
+        if w > best.get(look, (None, 0.0))[1]:
+            best[look] = (v, w)
+    top = max(share, key=lambda k: (share[k], k == mine))
+    return osm if top == mine or share[top] <= share[mine] else best[top][0]
+
+
+def osm_surface_column(feats):
+    """feats' osm_surface column (osmtags.join: the surface of each road's own OpenStreetMap way) with the segments
+    Overture merged from several ways corrected, kept on feats; the column itself where none needs it.
+
+    Overture merges the ways between two junctions into one segment ("src_ways", overture.way_sources) and osmtags.join
+    reads the tags of one of them, the way covering most of it (src_record). Its surface held for the whole segment, and
+    Overture's own surface rules, which have each way's surface along it, were never read: Sulzburg's Herrenweg, a
+    gravel track (w50822567, w1563039711), merged with the grass track before it (w50822566, 35 % of the segment), was
+    drawn as a grass track with grass growing on it (2026-11-20). A segment whose ways are mostly of another look than
+    the joined way now takes that look (merged_surface). One look per segment still: the segment is not split."""
+    st = getattr(feats, "__dict__", None)
+    st = st if isinstance(st, dict) else {}     # (a stand-in class's mappingproxy: nothing kept)
+    if "_osm_surface_col" in st:
+        return st["_osm_surface_col"]
+    col = feats.attrs.get("osm_surface")
+    ways, table = feats.rules.get("src_ways"), feats.rules.get("surface")
+    recs, classes = feats.attrs.get("src_record"), feats.attrs.get("class")
+    out = col
+    if (col is not None and recs is not None and ways is not None and len(ways.feature) and table is not None
+            and len(table.feature)):
+        vals = None
+        for i in np.unique(np.asarray(ways.feature, np.int64)).tolist():
+            if i >= len(col):
+                continue
+            osm = _osm_text(col[i])
+            if osm is None:
+                continue
+            rec = str(recs[i])
+            own = [(float(s), float(e)) for w, s, e in ways.for_feature(i) if str(w) == rec]
+            rules = [(v, float(s), float(e)) for v, s, e in table.for_feature(i)]
+            if not own or not rules:
+                continue
+            cls = str(classes[i]) if classes is not None else "unknown"
+            v = merged_surface(cls, osm, own, rules)
+            if v != osm:
+                if vals is None:
+                    vals = [str(x) for x in col.tolist()]
+                vals[i] = v
+        if vals is not None:
+            out = mapgeom.text_column(vals)
+    st["_osm_surface_col"] = out
+    return out
 
 
 # Untagged minor roads in country where the mapped ones are gravel (2026-11-03: Estonia's unclassified roads and
@@ -3831,7 +3927,7 @@ def _map_surface_values(feats):
         return got
     import fast
     fast.require(380, "map_surface_values")
-    out = fast._ef.map_surface_values(len(feats), feats.attrs.get("osm_surface"), feats.rules.get("surface"))
+    out = fast._ef.map_surface_values(len(feats), osm_surface_column(feats), feats.rules.get("surface"))
     feats.__dict__["_map_surface_values"] = out
     return out
 
@@ -3923,7 +4019,7 @@ def _spec_inputs(feats):
     if n:
         first = ll[co[ro[po[:-1]]]]
         se = np.asarray(sweden.contains(first[:, 0], first[:, 1]), bool)
-    se_tag, se_kind, se_tok, tokens = _surface_rules().sweden_surfaces(cls_s, se, a.get("osm_surface"), sf["tokens"])
+    se_tag, se_kind, se_tok, tokens = _surface_rules().sweden_surfaces(cls_s, se, osm_surface_column(feats), sf["tokens"])
     aisle = fast._ef.aisles(se, rules.get("subclass"))
     cols = {"cls": cls, "elig": elig, "has_w": has_w, "wv": wv, "osm_w": _osm_widths(feats, *OSM_WIDTH_M),
             "osm_lanes": osm_lanes, "osm_ms": _osm_values(feats, "maxspeed", 5.0, 200.0), "has_ow": has_ow,
