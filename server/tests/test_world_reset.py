@@ -25,9 +25,13 @@ class WorldResetTest(unittest.TestCase):
                                bldsky=None, brfar=None, turbines=vegetation.Tracker(kind="turbines", geo=True),
                                distant_traffic=vegetation.Tracker(kind="traffic", geo=True),
                                distant_traffic_far=vegetation.Tracker(kind="traffic_far", geo=True),
-                               nav=earthd.navgraphmod.Tracker(), active=7, shown={(earthd.GLOBAL_AID, "g"): None},
-                               sent={"g": 1}, desired={"g": 1}, groups=[1], queue=[1], qi=1, refined={1},
-                               node_changed={1: 0}, failed={"x"})
+                               nav=earthd.navgraphmod.Tracker(), active=7, desired={}, refined={1},
+                               node_changed={1: 0}, far=earthd.msgs.FarState(earthd._far_cfg()))
+        g = earthd.farfield.GTile(12, 1, 1, 3, (0, 0, 1, 0, 1, 1, 0, 1), 1.0)
+        conn.far.set_desired({g.key: g})
+        conn.far.set_shown({(earthd.GLOBAL_AID, g.key): (0, 0, 1, 1)})
+        conn.far.set_sent({g.key: g})
+        conn.far.set_queue([g])
         conn.signs.sent = {(0, 0)}
         earthd.Connection.forget_world(conn)
         self.assertTrue(roads.closed)
@@ -36,8 +40,9 @@ class WorldResetTest(unittest.TestCase):
         self.assertEqual(conn.signs.sent, set())
         self.assertEqual((veg.sent, veg.aid, far.sent), (set(), None, set()))
         self.assertIsNone(conn.active)
-        self.assertEqual((conn.shown, conn.sent, conn.desired, conn.groups, conn.queue, conn.qi), ({}, {}, {}, [], [], 0))
-        self.assertEqual((conn.refined, conn.node_changed, conn.failed), (set(), {}, set()))
+        f = conn.far
+        self.assertEqual((f.shown, f.sent, conn.desired, f.groups, f.queue, f.qi), ({}, {}, {}, [], [], 0))
+        self.assertEqual((conn.refined, conn.node_changed, f.failed), (set(), {}, set()))
 
 
 if __name__ == "__main__":

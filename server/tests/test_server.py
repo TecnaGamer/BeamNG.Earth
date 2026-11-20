@@ -595,9 +595,9 @@ class ServerTest(ServerHarness):
         async def run():
             conn = self.conn()
             conn.active = 1
-            conn._retire([(1, "0_0_0")])
+            conn.far.retire_at((1, "0_0_0"), time.monotonic())
             used = self.server.in_use()
-            conn.retired[(1, "0_0_0")] -= 61.0
+            conn.far.retire_at((1, "0_0_0"), conn.retired[(1, "0_0_0")] - 61.0)
             return used, self.server.in_use()
         self.hello()
         used, later = asyncio.run_coroutine_threadsafe(run(), self.loop).result(10)

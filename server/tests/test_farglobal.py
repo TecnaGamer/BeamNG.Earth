@@ -96,7 +96,10 @@ def inside_convex(poly, pts):
 
 
 def footprint(t):
-    return ff._square(t.bbox) if isinstance(t, ff.Tile) else t.poly
+    if isinstance(t, ff.Tile):
+        x0, y0, x1, y1 = t.bbox
+        return (x0, y0, x1, y0, x1, y1, x0, y1)
+    return t.poly
 
 
 class SelectionTest(unittest.TestCase):

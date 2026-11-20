@@ -4537,31 +4537,34 @@ fn view_distances<'py>(py: Python<'py>, bboxes: PyReadonlyArray2<'py, f64>, px: 
     let b = bboxes.as_array();
     let n = b.shape()[0];
     let out: Vec<f64> = release(py, n * cone.len().max(1), || {
-        (0..n).map(|k| {
-            let (x0, y0, x1, y1) = (b[[k, 0]], b[[k, 1]], b[[k, 2]], b[[k, 3]]);
-            let dx = (x0 - px).max(0.0).max(px - x1);
-            let dy = (y0 - py_).max(0.0).max(py_ - y1);
-            let d = dx.dhypot(dy);
-            if cone.len() == 8 {
-                if d <= 0.0 {
-                    return d;
-                }
-                let (cx, cy, cz) = ((x0 + x1) / 2.0 - cone[0], (y0 + y1) / 2.0 - cone[1], cone[7] - cone[2]);
-                let r = (cx * cx + cy * cy + cz * cz).sqrt();
-                // (the tile's corner nearest the cone's axis counts too: half its diagonal as an angle at r)
-                let slack = ((x1 - x0) * std::f64::consts::FRAC_1_SQRT_2 / r.max(1.0)).min(1.0).dasin();
-                let c = ((cx * cone[3] + cy * cone[4] + cz * cone[5]) / r.max(1e-9)).clamp(-1.0, 1.0);
-                return if c.dacos() - slack <= cone[6].clamp(-1.0, 1.0).dacos() { d } else { d * penalty };
-            }
-            if cone.len() != 5 || d <= 0.0 {
-                return d;
-            }
-            let (cx, cy) = ((x0 + x1) / 2.0 - cone[0], (y0 + y1) / 2.0 - cone[1]);
-            let r = cx.dhypot(cy);
-            if r <= x1 - x0 || (cx * cone[2] + cy * cone[3]) / r >= cone[4] { d } else { d * penalty }
-        }).collect()
+        (0..n).map(|k| view_distance([b[[k, 0]], b[[k, 1]], b[[k, 2]], b[[k, 3]]], px, py_, &cone, penalty)).collect()
     });
     numpy::ndarray::Array1::from(out).into_pyarray(py)
+}
+
+/// One tile's view_distances (the far state machine's build order, host/farstate.rs).
+pub fn view_distance(bb: [f64; 4], px: f64, py_: f64, cone: &[f64], penalty: f64) -> f64 {
+    let (x0, y0, x1, y1) = (bb[0], bb[1], bb[2], bb[3]);
+    let dx = (x0 - px).max(0.0).max(px - x1);
+    let dy = (y0 - py_).max(0.0).max(py_ - y1);
+    let d = dx.dhypot(dy);
+    if cone.len() == 8 {
+        if d <= 0.0 {
+            return d;
+        }
+        let (cx, cy, cz) = ((x0 + x1) / 2.0 - cone[0], (y0 + y1) / 2.0 - cone[1], cone[7] - cone[2]);
+        let r = (cx * cx + cy * cy + cz * cz).sqrt();
+        // (the tile's corner nearest the cone's axis counts too: half its diagonal as an angle at r)
+        let slack = ((x1 - x0) * std::f64::consts::FRAC_1_SQRT_2 / r.max(1.0)).min(1.0).dasin();
+        let c = ((cx * cone[3] + cy * cone[4] + cz * cone[5]) / r.max(1e-9)).clamp(-1.0, 1.0);
+        return if c.dacos() - slack <= cone[6].clamp(-1.0, 1.0).dacos() { d } else { d * penalty };
+    }
+    if cone.len() != 5 || d <= 0.0 {
+        return d;
+    }
+    let (cx, cy) = ((x0 + x1) / 2.0 - cone[0], (y0 + y1) / 2.0 - cone[1]);
+    let r = cx.dhypot(cy);
+    if r <= x1 - x0 || (cx * cone[2] + cy * cone[3]) / r >= cone[4] { d } else { d * penalty }
 }
 
 /// vegetation._mask_roads' inner loop: the road corridors of segments (n, 4) [ax, ay, bx, by] in CHM grid px (column,
@@ -7385,6 +7388,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 533: try598 (532) with 528 (port2a) merged: the version the protocol layer asks for (532 lacks it)
     // 534: v2 P3d on try598 (533): profile_solve's twins, junction nodes, cross-level sheet ends, approaches under
     // decks; deck_trim_overlaps' coplanar mode
-    m.add("VERSION", 536)?;
+    // 535: the full Rust port's phase 2b on try598 (534): host/farstate.rs, the far state machine (FarState;
+    // far_swap_groups)
+    // 537: try598 with 536 (P3e) and 535 (port2b) merged
+    m.add("VERSION", 537)?;
     Ok(())
 }
