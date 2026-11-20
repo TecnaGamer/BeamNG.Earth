@@ -479,5 +479,59 @@ class ReachStation(unittest.TestCase):
         np.testing.assert_allclose(ch["rch"]["st"], [220.0, 230.0, 240.0], atol=1e-9)
 
 
+@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 542, "earthfast 542")
+class SeamProbeSurfaceV3(unittest.TestCase):
+    """Road surface v3 S2 (BNE_ROADSURF_V3=surface, roadsurf3.py): two neighbouring road tiles at MD-295's 3 -> 4 lane
+    merge (fixtures/seamprobe_v3s2_md295.npz: each tile's kernel inputs as roadsurf3.tile_surface gathered them from the
+    map cells round it, tools/probes/surfprobe.py --fixture; two lane pieces cross the seam). The tiles' inputs are the
+    same (gathered from the cells round each tile, never its window), the meshes each tile keeps round the seam the
+    same bits, and both cut at the shared edge (clip_tris_convex, as roadmesh.build) leave the same points on it."""
+
+    def setUp(self):
+        import roadsurf3
+        f = np.load(os.path.join(HERE, "fixtures", "seamprobe_v3s2_md295.npz"))
+        self.box = {t: [float(v) for v in f[f"box_{t}"]] for t in "ab"}
+        self.inp = {t: {k[2:]: f[k] for k in f.files if k.startswith(t + "_")} for t in "ab"}
+        self.got = {t: roadsurf3.run_kernel(self.inp[t]) for t in "ab"}
+
+    def test_same_inputs(self):
+        for k, v in self.inp["a"].items():
+            if k == "box":
+                continue
+            self.assertEqual(np.asarray(v).tobytes(), np.asarray(self.inp["b"][k]).tobytes(), k)
+
+    def test_seam(self):
+        ba, bb = self.box["a"], self.box["b"]
+        axis, at = (0, ba[2]) if ba[2] == bb[0] else (1, ba[3])
+        self.assertTrue(ba[2] == bb[0] or ba[3] == bb[1])
+
+        def band(got, lo, hi):
+            v, t = got["mesh"]["v"], got["mesh"]["tri"]
+            c = v[t]
+            m = (c[:, :, axis].min(1) >= lo) & (c[:, :, axis].max(1) <= hi)
+            return sorted(tuple(x.reshape(-1).tolist()) for x in c[m])
+        ta, tb = band(self.got["a"], at - 6.0, at + 6.0), band(self.got["b"], at - 6.0, at + 6.0)
+        self.assertGreater(len(ta), 50)
+        self.assertEqual(ta, tb)
+
+        def cut(got, box):
+            v, t = got["mesh"]["v"], got["mesh"]["tri"]
+            poly = np.array([[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]], np.float64)
+            P, _uv, T, _src = fast._ef.clip_tris_convex(np.ascontiguousarray(np.c_[v, np.zeros(len(v))]),
+                                                       np.zeros((len(v), 2)), np.ascontiguousarray(t, np.int64), poly)
+            P = np.asarray(P)
+            return np.unique(np.round(P[np.abs(P[:, axis] - at) < 1e-7][:, 1 - axis], 9))
+        ea, eb = cut(self.got["a"], ba), cut(self.got["b"], bb)
+        self.assertGreater(len(ea), 4)
+        np.testing.assert_allclose(ea, eb, atol=1e-6)
+
+    def test_bit_stable(self):
+        import roadsurf3
+        again = roadsurf3.run_kernel(self.inp["a"])
+        self.assertEqual(again["mesh"]["v"].tobytes(), self.got["a"]["mesh"]["v"].tobytes())
+        self.assertEqual(again["mesh"]["tri"].tobytes(), self.got["a"]["mesh"]["tri"].tobytes())
+        self.assertEqual(again["status"], self.got["a"]["status"])
+
+
 if __name__ == "__main__":
     unittest.main()

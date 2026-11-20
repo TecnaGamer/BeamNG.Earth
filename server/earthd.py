@@ -3291,8 +3291,11 @@ class Server:
                                                                           blockworker.TOWNS_MARGIN_M),
                                      self.out_dir, self.vfs_dir, town_faces)
         sheet_marks = []        # (BNE_ROADSHAPE=sheet: the forks' nodes, deck_pads' skip: roads._sheet_marks)
+        import roadsurf3
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
                                      sign_obstacles=sign_obstacles, sheet_marks=sheet_marks,
+                                     v3=({"cell_fn": lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand")
+                                          .layers.get("roads")} if roadsurf3.ON and self.mapdata is not None else None),
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
                                      left_hand=self.left_hand(anchor), mph=self.mph(anchor), buried=self.buried(anchor),

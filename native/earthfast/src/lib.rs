@@ -7357,6 +7357,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // flagged, no record; three more params)
     m.add_function(wrap_pyfunction!(roadshape::sheet::deck_sheets, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::lanes::lane_graph, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::lane_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::cut_lines, m)?)?;
+    // 542: road surface v3 phase S2 (roadshape::surface: the ground road surface as one mesh, lane strips sharing
+    // their rows, pieces welded to the roads on shared rows, markings from the boundaries; BNE_ROADSURF_V3=surface)
     // 538: road surface v3 phase S1 (roadshape::lanes::lane_graph: strokes, anchored ordered lane boundaries, gore
     // from geometry, the TaperRule table; BNE_ROADSURF_V3=shadow, nothing built reads it)
     // 514: v2 P2b (roadshape::sheet::deck_sheets: exits off bridges as one deck, BNE_ROADSHAPE=sheet)
@@ -7395,6 +7399,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // far_swap_groups)
     // 537: try598 with 536 (P3e) and 535 (port2b) merged
     // 538: v3 S1 on try598 (537): roadshape::lanes::lane_graph
-    m.add("VERSION", 538)?;
+    // 542: v3 S2 on try598 (538): roadshape::surface::lane_surface, cut_lines; 539-541 are other branches'
+    m.add("VERSION", 542)?;
     Ok(())
 }
