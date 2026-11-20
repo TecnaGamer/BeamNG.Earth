@@ -342,6 +342,13 @@ def set_cancel(check):
         _cancel_proc[0] = check
 
 
+def set_thread_cancel(check):
+    """This thread's own cancel check, never the worker process's job-wide one (set_cancel): a thread beside the
+    process's jobs (blockworker._warm_loop, the road plans ahead of the anchor its list is for) neither takes the
+    abandonment of another anchor's job nor goes on for an anchor a teleport left when the process has no job."""
+    _cancel.check = check
+
+
 def _cancelled():
     check = getattr(_cancel, "check", None) or _cancel_proc[0]
     return check is not None and check()

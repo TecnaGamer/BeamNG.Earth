@@ -503,6 +503,8 @@ def _read_warm(warm_q):
             continue
         with _s.cv:
             _s.want = [(g, k) for k in keys]
+            # (the anchor the list is for, and the server's folder of its abandoned anchors: _warm_loop's own cancel)
+            _s.warm_of = (aid, rest[1] if len(rest) > 1 else None)
             # (earthd.Server.warm_roads: this process only reads them while it builds a block, _warm_loop)
             _s.warm_read_only = bool(rest and rest[0])
             _s.cv.notify()
@@ -545,10 +547,18 @@ def _warm_loop():
                     # (the cells other processes are planning now are looked at again: no pose may come to say so)
                     # ... nor that this process's block is built: the cells left are planned here then)
                     _s.cv.wait(WARM_RECHECK_S if _FIRST[0] > 0 or any(not g.planned(k) for g, k in _s.want) else None)
+            aid, out_dir = getattr(_s, "warm_of", (None, None))
+        import pools
+        # (its own check: the process's job-wide one is another anchor's job's, or none)
+        xproc.set_thread_cancel((lambda a=aid, o=out_dir: abandoned(o, a)) if out_dir is not None else (lambda: False))
         try:
             t0 = time.perf_counter()
             job[0].warm(job[1])
             log.debug("road plans ahead: %s in %.2f s", job[1], time.perf_counter() - t0)
+        except pools.Abandoned:         # (a teleport left the anchor: its cells are not wanted now)
+            log.debug("road plans ahead for %s: given up, a teleport left anchor %s", job[1], aid)
+            with _s.cv:
+                _s.want = [w for w in _s.want if w[1] != job[1]]
         except Exception:
             log.exception("road plans ahead for %s", job[1])
             with _s.cv:

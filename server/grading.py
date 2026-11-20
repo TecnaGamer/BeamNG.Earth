@@ -5064,6 +5064,7 @@ class _Planner:
         return h.hexdigest()
 
     def _shape_region_calc(self, home, hk):
+        import xproc
         t0 = time.perf_counter()
         lon0, lat0, lon1, lat1 = (float(v) for v in home.bounds())
         ce, cn, _ = self.frame.geodetic_to_enu(np.array([lat0, lat0, lat1, lat1]), np.array([lon0, lon1, lon0, lon1]),
@@ -5103,6 +5104,7 @@ class _Planner:
 
         byk, loaded = {}, set()
         while True:
+            xproc.check_cancel()        # (a place a teleport left: its systems not found and solved for it)
             cla, clo, _ = self.frame.enu_to_geodetic(np.array([box_lo[0], box_hi[0], box_lo[0], box_hi[0]]),
                                                      np.array([box_lo[1], box_lo[1], box_hi[1], box_hi[1]]), 0.0)
             keys = sorted(set(mapcells.cells_for_bbox(float(np.min(cla)), float(np.min(clo)), float(np.max(cla)),
@@ -5137,6 +5139,7 @@ class _Planner:
 
         shapes, failed, solved = [], 0, []
         for sysm in mine:
+            xproc.check_cancel()        # (... nor its next system: a left city's 40 s solves held the road tiles)
             pcs = _gsh.pieces(net, sysm)
             smp = _gsh.sample(net, pcs)
             ck = self._shape_sys_key(net, sysm, smp)
