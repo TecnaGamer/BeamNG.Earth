@@ -455,6 +455,29 @@ T.check(pumpUntil(function() return #received('commit_anchor') == commits + 1 en
 T.check(pumpUntil(function() return st.placeFrames == nil end, 10), 'placed')
 T.check(#cam.puts == puts0 + 2, 'no car again: the camera moved at the commit and the placement')
 
+-- 7b. snapped teleport at (0, 0): lifts when ground g > z (underground spawn prevention), keeps z when g < z (roof immunity)
+groundAt = function() return 1308 end
+core.teleport(42.512, -107.012)
+answer(1300, { px = 0, py = 0 })
+commits = #received('commit_anchor')
+T.check(pumpUntil(function() return #received('commit_anchor') == commits + 1 end), 'commit (snapped (0,0), g > z)')
+T.check(pumpUntil(function() return st.placeFrames == nil end, 10), 'placed (snapped (0,0), g > z)')
+put = cam.puts[#cam.puts]
+T.check(st.placeSnapped == true and st.placeX == 0 and st.placeY == 0, 'snapped at (0, 0)')
+T.check(near(put.z, 1308 + 1 + core.CAM_ABOVE_M),
+  string.format('snapped (0,0) with g > z lifts above ground (%.1f, want %.1f)', put.z, 1308 + 1 + core.CAM_ABOVE_M))
+
+groundAt = function() return 1294 end
+core.teleport(42.612, -107.012)
+answer(1300, { px = 0, py = 0 })
+commits = #received('commit_anchor')
+T.check(pumpUntil(function() return #received('commit_anchor') == commits + 1 end), 'commit (snapped (0,0), g < z)')
+T.check(pumpUntil(function() return st.placeFrames == nil end, 10), 'placed (snapped (0,0), g < z)')
+put = cam.puts[#cam.puts]
+T.check(st.placeSnapped == true and st.placeX == 0 and st.placeY == 0, 'snapped at (0, 0) for g < z')
+T.check(near(put.z, 1300 + 1 + core.CAM_ABOVE_M),
+  string.format('snapped (0,0) with g < z keeps z without dropping onto lower surface (%.1f, want %.1f)', put.z, 1300 + 1 + core.CAM_ABOVE_M))
+
 -- 8. the level start's terrain fails to import (commitTeleport: no terrain in the answer): nothing is on its way and
 -- there is no ground, so Go must not stay greyed (another place may be asked)
 core.onExtensionUnloaded()
