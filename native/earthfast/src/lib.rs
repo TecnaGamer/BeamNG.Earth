@@ -7391,6 +7391,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 535: the full Rust port's phase 2b on try598 (534): host/farstate.rs, the far state machine (FarState;
     // far_swap_groups)
     // 537: try598 with 536 (P3e) and 535 (port2b) merged
-    m.add("VERSION", 537)?;
+    // 540: the full Rust port's phase 2b part 2 on try598 (537): host/farselect.rs, the far selection called from Rust
+    // (far_select / far_select_global, FarState.update_far / prebuild_coarse), the far messages straight to the wire
+    m.add("VERSION", 540)?;
     Ok(())
 }

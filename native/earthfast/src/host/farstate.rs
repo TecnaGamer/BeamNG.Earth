@@ -25,6 +25,10 @@ use pyo3::types::{PyDict, PyFloat, PyList, PySet, PyString, PyTuple};
 use super::msgs;
 use super::pyjson::J;
 
+#[path = "farselect.rs"]
+pub mod farselect;
+use farselect::{Node, SelSt};
+
 type Key = Arc<str>;
 type Ck = (i64, Key);
 type Group = (Vec<Key>, Vec<Key>);
@@ -403,6 +407,8 @@ struct St {
     gpolys: HashMap<Ck, Vec<f64>>,
     /// piece key -> its polygon (pieces sent / shown under the active anchor)
     ppolys: HashMap<Key, Vec<f64>>,
+    /// the selection's own (farselect.rs)
+    sel: SelSt,
 }
 
 struct Cfg {
@@ -422,6 +428,10 @@ struct Cfg {
     view_penalty: f64,
     far_trace: bool,
     groups: GroupCfg,
+    /// earthd's globals (its constants and modules, read live: the tests patch them); None: no selection here
+    globals: Option<Py<PyDict>>,
+    /// Connection.send (its own: the messages go straight to the wire; another, a test's, is called)
+    send_fn: Option<Py<PyAny>>,
 }
 
 static NEXT_TID: AtomicU64 = AtomicU64::new(1);
@@ -677,14 +687,35 @@ impl FarState {
         self.cfg.global_aid
     }
 
-    fn send(conn: &Bound<'_, PyAny>, m: J) -> PyResult<()> {
-        conn.call_method1("send", (m.to_py(conn.py())?,))?;
+    /// Connection.send of a message made here: straight to the wire (send_frame) when the connection's send is its own,
+    /// else through the one it has (a test's capture).
+    fn send(&self, conn: &Bound<'_, PyAny>, m: J) -> PyResult<()> {
+        let py = conn.py();
+        let f = conn.getattr("send")?;
+        let own = match (&self.cfg.send_fn, f.getattr("__func__")) {
+            (Some(sf), Ok(func)) => func.is(sf.bind(py)),
+            _ => false,
+        };
+        if !own {
+            f.call1((m.to_py(py)?,))?;
+            return Ok(());
+        }
+        let limit: usize = match &self.cfg.globals {
+            Some(g) => g.bind(py).get_item("SEND_BUFFER_MAX")?
+                .ok_or_else(|| PyRuntimeError::new_err("earthd.SEND_BUFFER_MAX"))?.extract()?,
+            None => return Err(PyRuntimeError::new_err("FarState: no earthd globals (g)")),
+        };
+        let mut data = vec![0u8; 4];
+        m.encode(py, &mut data)?;
+        let n = (data.len() - 4) as u32;
+        data[..4].copy_from_slice(&n.to_le_bytes());
+        send_frame(conn, &data, limit)?;
         Ok(())
     }
 
-    fn far_remove(conn: &Bound<'_, PyAny>, aid: i64, key: &str) -> PyResult<()> {
+    fn far_remove(&self, conn: &Bound<'_, PyAny>, aid: i64, key: &str) -> PyResult<()> {
         let a = if aid == NO_AID { J::Null } else { J::Int(aid) };
-        Self::send(conn, J::O(vec![("type", J::S("far_remove".into())), ("anchorId", a), ("key", J::S(key.into()))]))
+        self.send(conn, J::O(vec![("type", J::S("far_remove".into())), ("anchorId", a), ("key", J::S(key.into()))]))
     }
 
     fn poke(conn: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -820,7 +851,7 @@ impl FarState {
             };
             let msg = msgs::far_swap(&aid_py, &gid.into_pyobject(py)?.into_any(), strs(py, &adds)?.as_any(),
                                      strs(py, &removes)?.as_any(), &d_in, &d_out)?;
-            Self::send(conn, msg)?;
+            self.send(conn, msg)?;
             {
                 let now = self.now(py)?;
                 let mut st = self.lock(py)?;
@@ -882,7 +913,7 @@ impl FarState {
                 st.shown.remove(&ck);
                 st.retire([ck.clone()], now);
             }
-            Self::far_remove(conn, ck.0, &ck.1)?;
+            self.far_remove(conn, ck.0, &ck.1)?;
             Self::poke(conn)?;
         }
         Ok(())
@@ -903,7 +934,7 @@ impl FarState {
                 groups: Vec::new(), rg_last: None, deltas: HashMap::new(), queue: Vec::new(), qi: 0, queue_gen: 0,
                 graded_wait: VecDeque::new(), restore_wait: Vec::new(), next_group: 1, inflight: OMap::new(),
                 prefetched: HashMap::new(), failed: HashSet::new(), dirty: false, batch: Batch::default(),
-                gpolys: HashMap::new(), ppolys: HashMap::new(),
+                gpolys: HashMap::new(), ppolys: HashMap::new(), sel: SelSt::default(),
             }),
             owner: AtomicU64::new(0),
             cfg: Cfg {
@@ -916,6 +947,8 @@ impl FarState {
                 far_trace: get("far_trace")?.extract()?,
                 groups: GroupCfg { min_area: get("min_area")?.extract()?, overlap_rel: get("overlap_rel")?.extract()?,
                                    horizon_max_level: get("horizon_max_level")?.extract()? },
+                globals: cfg.get_item("g")?.map(|g| g.cast_into::<PyDict>().map(|d| d.unbind())).transpose()?,
+                send_fn: cfg.get_item("send_fn")?.map(|f| f.unbind()),
             },
         })
     }
@@ -931,7 +964,109 @@ impl FarState {
             m.insert(r.key.clone(), r);
         }
         st.desired = m;
+        st.sel.gen += 1;
         Ok(())
+    }
+
+    // --- the selection (farselect.rs: Connection.update_far and its parts) ------------------------------------------
+
+    /// Connection.update_far: the desired set, the swap groups and the build queue; the streamer woken. gate (a pose):
+    /// not when nothing the selection goes by has changed.
+    #[pyo3(signature = (conn, server, gate=false))]
+    fn update_far(&self, conn: &Bound<'_, PyAny>, server: &Bound<'_, PyAny>, gate: bool) -> PyResult<()> {
+        self.update_far_impl(conn, server, gate)
+    }
+
+    /// Connection.prebuild_coarse: a teleport's coarse cover built ahead; the builds started.
+    fn prebuild_coarse(&self, conn: &Bound<'_, PyAny>, server: &Bound<'_, PyAny>, anchor: &Bound<'_, PyAny>)
+                       -> PyResult<usize> {
+        self.prebuild_coarse_impl(conn, server, anchor)
+    }
+
+    /// Connection.eye_clearance: the camera's height over the ground under the view (0 below EYE_LOD_MIN_M).
+    fn eye_clearance(&self, conn: &Bound<'_, PyAny>, server: &Bound<'_, PyAny>) -> PyResult<f64> {
+        self.eye_clearance_impl(conn, server)
+    }
+
+    /// The screen-space LOD camera (cx, cy, dz, ppr, tau, reach, h, cap, cells, errs, aid, gerr), or None.
+    fn view_args<'py>(&self, conn: &Bound<'py, PyAny>, server: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyTuple>>> {
+        self.view_impl(conn, server)
+    }
+
+    /// The pixels per radian the screen-space LOD goes by (the sliding maximum).
+    fn lod_ppr(&self, py: Python<'_>, h: f64, fov: f64, now: f64) -> PyResult<f64> {
+        self.lod_ppr_impl(py, h, fov, now)
+    }
+
+    /// K of this connection's levels 0..=n (0 below level 1).
+    fn ks(&self, conn: &Bound<'_, PyAny>, server: &Bound<'_, PyAny>, n: i32) -> PyResult<Vec<f64>> {
+        self.ks_impl(conn, server, n)
+    }
+
+    /// The nodes refined by the last selection (the hysteresis), a set of (L, i, j) / ("m", z, x, y).
+    #[getter]
+    fn refined<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PySet>> {
+        let ns: Vec<Node> = self.lock(py)?.sel.refined.iter().copied().collect();
+        let out = PySet::empty(py)?;
+        for n in ns {
+            out.add(n.to_py(py)?)?;
+        }
+        Ok(out)
+    }
+
+    fn set_refined(&self, py: Python<'_>, v: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut ns = std::collections::BTreeSet::new();
+        for n in v.try_iter()? {
+            ns.insert(Node::of(&n?)?);
+        }
+        let mut st = self.lock(py)?;
+        st.sel.refined = ns;
+        st.sel.gen += 1;
+        Ok(())
+    }
+
+    /// node -> monotonic time of its last state change (held for HOLD_S).
+    #[getter]
+    fn node_changed<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let ns: Vec<(Node, f64)> = self.lock(py)?.sel.node_changed.iter().map(|(n, t)| (*n, *t)).collect();
+        let d = PyDict::new(py);
+        for (n, t) in ns {
+            d.set_item(n.to_py(py)?, t)?;
+        }
+        Ok(d)
+    }
+
+    fn set_node_changed(&self, py: Python<'_>, d: &Bound<'_, PyDict>) -> PyResult<()> {
+        let mut m = std::collections::BTreeMap::new();
+        for (n, t) in d.iter() {
+            m.insert(Node::of(&n)?, t.extract::<f64>()?);
+        }
+        self.lock(py)?.sel.node_changed = m;
+        Ok(())
+    }
+
+    /// Pose selections skipped by the gate (the last one surely the same).
+    #[getter]
+    fn skipped(&self, py: Python<'_>) -> PyResult<u64> {
+        Ok(self.lock(py)?.sel.skipped)
+    }
+
+    /// A pose's far field (Connection.on_pose): the selection (gated), the far PVS (Connection.pvs_tick, after the
+    /// selection: its radius), the larger far tiles' best photos (far_lazy_tick).
+    fn pose(&self, conn: &Bound<'_, PyAny>, server: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.update_far_impl(conn, server, true)?;
+        conn.call_method0("pvs_tick")?;
+        self.far_lazy_tick_impl(conn, server)
+    }
+
+    /// Connection.pvs_reveal: far tiles a new far PVS no longer hides re-rendered (far_retex).
+    fn pvs_reveal(&self, conn: &Bound<'_, PyAny>, server: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.pvs_reveal_impl(conn, server)
+    }
+
+    /// Connection.far_lazy_tick: the larger far tiles' best photos queued (every FAR_LAZY_EVERY_S at most).
+    fn far_lazy_tick(&self, conn: &Bound<'_, PyAny>, server: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.far_lazy_tick_impl(conn, server)
     }
 
     #[getter]
@@ -1298,6 +1433,7 @@ impl FarState {
             st.graded_wait.clear();
             st.restore_wait.clear();
             st.prefetched.clear();
+            st.sel = SelSt::default();
             (std::mem::take(&mut st.deltas), std::mem::replace(&mut st.inflight, OMap::new()))
         };
         #[allow(clippy::iter_over_hash_type)] // hash order: each job cancelled on its own
@@ -1410,7 +1546,7 @@ impl FarState {
             removed
         };
         for k in removed {
-            Self::far_remove(conn, aid, &k)?;
+            self.far_remove(conn, aid, &k)?;
         }
         Ok(())
     }
@@ -1631,7 +1767,7 @@ impl FarState {
                                    frame.as_ref(), poly.as_ref(), serial.as_ref(),
                                    if material.is_none() { None } else { Some(&material) }, Some(texture.as_any()),
                                    tex.as_ref())?;
-            Self::send(conn, m)?;
+            self.send(conn, m)?;
             if self.cfg.far_trace {
                 conn.call_method1("_fartrace", (obj, &info))?;
             }
@@ -1648,8 +1784,99 @@ impl FarState {
     }
 }
 
+// --- Connection.send ------------------------------------------------------------------------------------------------
+
+/// A frame to the connection's writer as earthd's Connection.send sent it: nothing once it is closing (abort_stream),
+/// lost its lease (a BeamMP reconnect's new connection holds it) or its writer is closing; past `limit` bytes waiting the
+/// connection is aborted ("outgoing buffer limit exceeded"). A HostStream's wire is written here, any other writer
+/// (asyncio's, the tests') through its write. True: sent.
+pub fn send_frame<'py>(conn: &Bound<'py, PyAny>, data: &[u8], limit: usize) -> PyResult<bool> {
+    let py = conn.py();
+    let get = |o: &Bound<'py, PyAny>, n: &str| -> PyResult<Option<Bound<'py, PyAny>>> {
+        match o.getattr(n) {
+            Ok(v) => Ok(Some(v)),
+            Err(e) if e.is_instance_of::<pyo3::exceptions::PyAttributeError>(py) => Ok(None),
+            Err(e) => Err(e),
+        }
+    };
+    if let Some(c) = get(conn, "closing")? {
+        if c.is_truthy()? {
+            return Ok(false);
+        }
+    }
+    if let Some(lease) = get(conn, "lease")?.filter(|l| !l.is_none()) {
+        if !lease.getattr("connection")?.is(conn) {
+            return Ok(false);
+        }
+    }
+    let writer = conn.getattr("writer")?;
+    let abort = || -> PyResult<bool> {
+        conn.call_method1("abort_stream", ("outgoing buffer limit exceeded",))?;
+        Ok(false)
+    };
+    // (a HostStream whose methods nobody replaced, the tests' mocks of its transport: straight to its wire)
+    let own = |o: &Bound<'py, PyAny>, names: &[&str]| -> PyResult<bool> {
+        let d = get(o, "__dict__")?;
+        match d {
+            Some(d) => {
+                for n in names {
+                    if d.contains(*n)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            None => Ok(true),
+        }
+    };
+    let transport = get(&writer, "transport")?.filter(|t| !t.is_none());
+    if type_name_is(&writer, "HostStream") && own(&writer, &["write", "is_closing"])?
+        && transport.as_ref().map(|t| own(t, &["get_write_buffer_size"])).transpose()?.unwrap_or(true) {
+        if let Some(w) = get(&writer, "_wire")? {
+            if let Ok(w) = w.cast::<super::Wire>() {
+                let core = &w.get().core;
+                if core.is_closing() {
+                    return Ok(false);
+                }
+                if core.pending() + data.len() > limit {
+                    return abort();
+                }
+                core.write(data);
+                return Ok(true);
+            }
+        }
+    }
+    if writer.call_method0("is_closing")?.is_truthy()? {
+        return Ok(false);
+    }
+    let pending: usize = match transport {
+        Some(t) => t.call_method0("get_write_buffer_size")?.extract()?,
+        None => 0,
+    };
+    if pending + data.len() > limit {
+        return abort();
+    }
+    writer.call_method1("write", (pyo3::types::PyBytes::new(py, data),))?;
+    Ok(true)
+}
+
+fn type_name_is(o: &Bound<'_, PyAny>, name: &str) -> bool {
+    o.get_type().name().map(|n| n.to_str().is_ok_and(|n| n == name)).unwrap_or(false)
+}
+
+/// earthd Connection.send(msg): its frame (protocol.encode's) through send_frame. True: sent.
+#[pyfunction]
+fn conn_send(conn: &Bound<'_, PyAny>, msg: &Bound<'_, PyAny>, limit: usize) -> PyResult<bool> {
+    let py = conn.py();
+    let raw = py.import("protocol")?.getattr("RawJson")?;
+    let data = super::pyjson::encode_frame(py, msg, Some(&raw))?;
+    send_frame(conn, data.as_bytes(), limit)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(conn_send, m)?)?;
     m.add_class::<FarState>()?;
     m.add_function(wrap_pyfunction!(far_swap_groups, m)?)?;
+    farselect::register(m)?;
     Ok(())
 }

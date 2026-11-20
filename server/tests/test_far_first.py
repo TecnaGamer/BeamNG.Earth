@@ -86,21 +86,14 @@ class FarFirstTest(unittest.TestCase):
             c.focus = steps[0]
             c._set_block(a.id, 0.0, 0.0)
             c.update_far()
-            skipped = [0]
-            orig = c._far_unchanged
-
-            def counted(*args):
-                r = orig(*args)
-                skipped[0] += r
-                return r
-            c._far_unchanged = counted
+            skipped0 = c.far.skipped        # (the selections the gate skipped: earthfast FarState)
             out = []
             for k, p in enumerate(steps):
                 clock.now += 0.5
                 c.focus = p
                 c.update_far(gate=gate)
                 out.append((sorted(c.desired), sorted(c.refined, key=str), [t.key for t in c.queue[:32]]))
-            return out, skipped[0]
+            return out, c.far.skipped - skipped0
         with mock.patch.object(earthd, "time", clock):
             return asyncio.run(go())
 

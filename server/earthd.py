@@ -2729,7 +2729,6 @@ class Server:
             memo[(kind, gx, gy)] = got
         return got
 
-
     def build_traffic_geo(self, gx, gy, far=False):
         """One visual-road geotile, on the existing worker pool; session files survive anchor changes."""
         if self.far_bld_pool is None or self.mapdata is None:
@@ -7593,7 +7592,7 @@ def _far_cfg():
             "spare_again": PREFETCH_SPARE_AGAIN_S, "spare_per_pass": PREFETCH_SPARE_PER_PASS,
             "prefetched_max": PREFETCHED_MAX, "view_penalty": farfield.VIEW_PENALTY, "far_trace": FAR_TRACE,
             "min_area": farfield.GLOBAL_MIN_AREA, "overlap_rel": farfield.GLOBAL_OVERLAP_REL,
-            "horizon_max_level": farfield.HORIZON_MAX_LEVEL}
+            "horizon_max_level": farfield.HORIZON_MAX_LEVEL, "g": globals(), "send_fn": Connection.send}
 
 
 class _BoundedLru:
@@ -7778,7 +7777,6 @@ class Connection:
         # the mod's screen-space LOD (lodPx: the largest pop allowed on screen, px; 0: the distance rule alone; None:
         # not sent, the server's --lod-px) and the recent pixels per radian [(time, ppr)] (view)
         self.lod_px = None
-        self.ppr_hist = deque()
 
     async def map_tiles(self, msg):
         """The world map's tiles {"tiles": [[z, x, y, layer?], ...]} (layer "sat" by default, "map", "labels"; the
@@ -8625,6 +8623,8 @@ class Connection:
     groups = property(lambda self: self._far().groups)
     retired = property(lambda self: self._far().retired)
     failed = property(lambda self: self._far().failed)
+    refined = property(lambda self: self._far().refined, lambda self, v: self._far().set_refined(v))   # (hysteresis)
+    node_changed = property(lambda self: self._far().node_changed, lambda self, d: self._far().set_node_changed(d))
 
     def _delta_waker(self):
         """The swap deltas' done callback (FarState: from the delta pool's thread): the streamer woken."""
@@ -8637,17 +8637,10 @@ class Connection:
                  any(isinstance(p, tuple) and p[:1] == (imagerymod.IMG_PENDING,) for p in info.cm_pending))
 
     def send(self, msg):
-        lease = getattr(self, "lease", None)
-        if not getattr(self, "closing", False) and (lease is None or lease.connection is self) and not self.writer.is_closing():
-            data = protocol.encode(msg)
-            transport = getattr(self.writer, "transport", None)
-            pending = transport.get_write_buffer_size() if transport is not None else 0
-            if pending + len(data) > SEND_BUFFER_MAX:
-                self.abort_stream("outgoing buffer limit exceeded")
-                return False
-            self.writer.write(data)
-            return True
-        return False
+        """The message to the game: nothing once closing, without the lease (a reconnect's new connection has it) or the
+        writer closing; past SEND_BUFFER_MAX bytes waiting the connection is aborted (earthfast conn_send; the far
+        state machine's messages go the same way from Rust)."""
+        return msgs.conn_send(self, msg, SEND_BUFFER_MAX)
 
     def abort_stream(self, reason):
         """Close this transport, preserving ownership until the game's next complete snapshot."""
@@ -8853,7 +8846,7 @@ class Connection:
         self.nav = navgraphmod.Tracker()
         self.active = None              # (far tiles in flight land unwanted: not desired, skipped)
         self.far.forget()
-        self.desired, self._far_last = {}, None
+        self.desired = {}
         self.refined, self.node_changed = set(), {}
         log.info("world reset: the mod's level started again, every tile sent anew")
 
@@ -9320,13 +9313,6 @@ class Connection:
                  f"{self.lod_px_now():g} px" if self.lod_px_now() > 0 else "off")
         if far and self.active is not None:
             self.update_far()
-
-    def kfun(self):
-        """K(L) of this connection's far field: the server's times the mod's terrain detail (lodScale), times
-        MAP_LOD_SCALE with the 3D map's view frame (finer tiles farther out: high res at every zoom)."""
-        m = self.map_view or self.map_open
-        k, s = self.s.kfun, self.lod_scale * (MAP_LOD_SCALE * getattr(self, "lod_ramp", 1.0) if m else 1.0)
-        return k if s == 1.0 else (lambda lvl: k(lvl) * s)
 
     async def globe(self, msg):
         """The mod's globe.lua (the 3D map far out): the whole earth as one sphere in anchorId's frame, its world texture
@@ -10004,7 +9990,7 @@ class Connection:
         # anchor's: the mod keeps them loading, placed into the new anchor; not after a resync, old is None)
         self.far.commit(self.active, old is not None)
         self.active = aid
-        self.desired, self._far_last = {}, None
+        self.desired = {}
         old_grid = self.s.horizon_grids.get(old.id) if old is not None else None
         self.prev_horizon = (old.frame, old_grid) if old_grid is not None and old_grid.merc is not None else None
         # (the global far tiles' split state is any anchor's: kept, so their hysteresis holds across the rebase)
@@ -10323,9 +10309,9 @@ class Connection:
             elif self.eye < ref / MAP_ZOOM_RAMP_K and getattr(self, "lod_ramp", 1.0) >= 1.0:
                 self.lod_ramp, self.zoom_ref = MAP_RAMP_START, self.eye
                 log.info("3D map: zoomed in x%.0f, coarse first", ref / self.eye)
-        self.update_far(gate=True)         # (not again when nothing it goes by moved: _far_unchanged)
-        self.pvs_tick()                     # (the far PVS for where the player is now; after the selection: its radius)
-        self.far_lazy_tick()
+        # the far field (earthfast FarState.pose): the selection (not again when nothing it goes by moved), the far PVS
+        # for where the player is now (pvs_tick, after the selection: its radius), the larger tiles' best photos
+        self._far().pose(self, self.s)
         if self.teleport_pending and time.monotonic() - self.teleport_t0 > TELEPORT_PAUSE_MAX_S:
             self.teleport_pending = False   # the mod never committed it (it stayed): the old place's work goes on
             self.unabandon_old()
@@ -11257,37 +11243,6 @@ class Connection:
         if self.eye is None or abs(h - self.eye) > max(EYE_STEP, EYE_STEP_REL * abs(self.eye)):
             self.eye = h
 
-    def horizon_select(self):
-        """M1h: (radius, extra select() arguments) for the active anchor: the disc out to the
-        line-of-sight horizon with the per-tile cull, L10 roots; until the anchor's zmax grid is
-        built, the HORIZON_MIN disc without a cull. Reports a changed radius in a status."""
-        anchor = self.s.anchors[self.active]
-        eye = self.eye if self.eye is not None else 0.0
-        grid = self.s.horizon_grid(anchor, eye)
-        cull = None
-        focus = self.view_focus
-        if grid is None and self.global_far and self.prev_horizon is not None:
-            # (a rebase whose grid is not built yet: the previous anchor's, the focus in its plane. Its Mercator
-            # table culls the global tiles the same for any anchor; without it they went and came back once the new
-            # grid was built. The anchor's own tiles lie within HORIZON_MIN: never culled)
-            pframe, grid = self.prev_horizon
-            fx, fy, _ = pframe.ecef_to_enu(*self.s.anchors[self.active].frame.enu_to_ecef(*focus, 0.0))
-            focus = (float(fx), float(fy))
-        if grid is None:
-            radius = farfield.HORIZON_MIN
-        else:
-            radius, zr = grid.radius(*focus, eye)
-            cull = farfield.Horizon(eye, grid)
-            self._lod_grid = grid
-            if zr != self.zmax_region or abs(radius - self.radius) > RADIUS_REPORT_REL * self.radius:
-                log.info("horizon: eye %.0f m, highest visible terrain %.0f m, radius %.0f km",
-                         eye, zr, radius / 1000)
-            self.zmax_region = zr
-        self.radius = radius
-        if self.radius_sent is None or abs(radius - self.radius_sent) > RADIUS_REPORT_REL * self.radius_sent:
-            self.status(self.last_status or f"Horizon {radius / 1000:.0f} km")
-        return radius, {"max_level": self.s.max_level, "disc": True, "horizon": cull}
-
     def send_ready_set(self):
         """'terrain_ready_set' {anchorId, centres}: the blocks of the active anchor built already, within READY_SET_M of
         the player (the mod asks for one of them instead of its own target when it is close: follow.preferReady), when
@@ -11363,159 +11318,16 @@ class Connection:
         return False
 
     # --- far field ----------------------------------------------------------
-    def forced(self):
-        """Boxes refined to L0 (terrain mode: the mod covers L0 under the block; detail mode: to L-1).
-        None in mesh mode: the block is invisible, so tiles never depend on it (V1_3_SPEC §B).
-        Detail mode: each box grown by DETAIL_RING_M, so the block's neighbours are L-1 tiles too (2 m
-        cells, the block's own lattice: their edge meets the block's; L1 neighbours, 8 m cells, left a
-        step and their dark skirt along the block's edge, in-game 2026-10-13)."""
-        if self.s.near_visual not in BLOCK_DRAWN:
-            return []
-        g = DETAIL_RING_M if self.s.near_visual == "detail" else 0.0
-        return [(x0 - g, y0 - g, x1 + g, y1 + g) for x0, y0, x1, y1 in
-                (b.bbox for b in (self.block, self.pending_block, self.predicted_block) if b is not None)]
 
     def prebuild_coarse(self, anchor):
-        """A teleport's coarse cover (FIRST_RAMP: the global far tiles round anchor.prebuild_focus, as the commit's
-        first selection will choose them) built ahead, while its first block is (prepare_anchor), nearest first; a
-        second call (its horizon grid in: the radius to the horizon) adds the rest. Returns the builds started."""
-        focus = getattr(anchor, "prebuild_focus", None)
-        if focus is None or not FIRST_RAMP or not self.global_far or self.map_view or self.map_open:
-            return 0
-        extra = {}
-        radius = self.s.radius
-        if self.s.horizon:
-            grid = self.s.horizon_grids.get(anchor.id)
-            eye = self.eye if self.eye is not None else 0.0
-            radius = farfield.HORIZON_MIN if grid is None else grid.radius(*focus, eye)[0]
-            extra = {"max_level": self.s.max_level, "disc": True,
-                     "horizon": None if grid is None else farfield.Horizon(eye, grid)}
-        if self.view_cap is not None and not (self.map_view or self.map_open):     # (the 3D map: its own reach)
-            radius, extra = min(radius, self.view_cap), dict(extra, disc=True)
-        # (the far PVS's rings are made at the commit, not here: beside the first block they held it 2.3 -> 7 s at a
-        # cold Zermatt, their DEM fetches and this interpreter, 2026-11-11)
-        if not self.global_on(anchor, radius):
-            return 0
-        k0 = self.kfun()
-        new, _ = farfield.select_global(anchor.frame, *focus, anchor.zf, [], set(), lambda lvl: k0(lvl) * FIRST_RAMP_K,
-                                        self.s.hysteresis, radius, min_level=self.s.min_level, radii=self.s.near_radii,
-                                        layout=self.s.layout, forced_level=self.s.forced_level, view=None,
-                                        anchor_nodes=False, **extra)
-        self.s.coarse_keys.update(new)
-        n = 0
-        for t in farfield.nearest_first(list(new.values()), *focus):
-            ck = self.s.far_ck(anchor.id, t.key)
-            if ck not in self.s.tiles and ck not in self.s.tile_inflight:
-                self.s.tile(anchor, t, shield=False)
-                n += 1
-        log.info("anchor %d: %d coarse far tiles built ahead (%d chosen, radius %.0f km)", anchor.id, n, len(new),
-                 radius / 1000)
-        return n
-
-    def _far_unchanged(self, now, anchor, radius, extra, forced, min_level, view):
-        """Is this selection surely the last one's (update_far's gate, on_pose)? Only when it could not differ: the last
-        selection changed no node (so its result is its own fixed point: the held nodes the same too), every discrete
-        input is the same (the anchor, the forced boxes, the detail scale and the 3D map, the coarse cover, the held
-        nodes, the horizon's grid and eye, the camera's pixels per radian and pop size, the known tile errors), and the
-        player, the radius, the eye's height over the ground and the camera moved less in all than the last selection's
-        slack (farfield.LAST_SLACK: every bound a node's answer went by is farther from its value than that). The
-        selection, not its tiles' build order: update_far still regroups and wakes the streamer. Remembers these inputs
-        when not (with the slack the selection then reports: update_far)."""
-        hz = extra.get("horizon")
-        cone = self.map_cone(aid=anchor.id) if self.global_on(anchor, radius) else None
-        disc = (self.active, tuple(tuple(b) for b in forced), self.lod_scale, self.map_view,
-                self.map_open, getattr(self, "lod_ramp", 1.0), self.first_ramp is None, min_level,
-                frozenset(self.node_changed), extra.get("disc"), extra.get("max_level"),
-                None if hz is None else (hz.eye, id(hz.grid)), self.view_cap, self.global_on(anchor, radius),
-                None if cone is None else tuple(cone), self.eye is not None and self.eye > MAP_HIGH_EYE_M,
-                None if view is None else (view.ppr, view.tau, view.reach, view.cap, view.h, view.cells,
-                                           getattr(self.s, "lod_errs_gen", 0)))
-        fx, fy = self.view_focus
-        cont = (fx, fy, radius, self.eye_clearance()) + (() if view is None else (view.cx, view.cy, view.dz))
-        last = getattr(self, "_far_last", None)
-        # (the last selection's own result still in place: no other update_far, a reset of the desired set, since)
-        if last is not None and last[0] == disc and len(last[1]) == len(cont) and last[3] is self.desired \
-                and last[4] is self.refined:
-            a, b = cont, last[1]
-            moved = math.hypot(a[0] - b[0], a[1] - b[1]) + abs(a[2] - b[2]) + abs(a[3] - b[3])
-            if len(a) > 4:
-                moved += math.hypot(a[4] - b[4], a[5] - b[5]) + abs(a[6] - b[6])
-            if moved < last[2] - SELECT_SLACK_EPS:
-                return True
-        self._far_pending = (disc, cont)    # (kept with its result and slack: update_far)
-        return False
+        """A teleport's coarse cover built ahead while its first block is (FIRST_RAMP; earthfast FarState): the builds
+        started."""
+        return self._far().prebuild_coarse(self, self.s, anchor)
 
     def update_far(self, gate=False):
         """Recompute the desired set, the swap groups and the build queue; wake the streamer. gate (a pose): not when
-        nothing the selection goes by has changed (_far_unchanged)."""
-        if self.active is None:
-            return
-        now = time.monotonic()
-        self.far.prune_retired(now, self.s.retired_keep)
-        self.node_changed = {n: t for n, t in self.node_changed.items() if now - t < farfield.HOLD_S}
-        radius, extra = (self.horizon_select() if self.s.horizon else (self.s.radius, {}))
-        if self.view_cap is not None and not (self.map_view or self.map_open):
-            # (a fixed view distance: nothing past it is drawn; a disc, as the horizon. Not for the 3D map, whose view
-            # reaches as far as its eye: a 1 km driving distance would leave it a 1 km map)
-            radius, extra = min(radius, self.view_cap), dict(extra, disc=True)
-        anchor = self.s.anchors[self.active]
-        t_sel = time.perf_counter()
-        forced, kfun, min_level, view = self.forced(), self.kfun(), self.s.min_level, self.view()
-        if self.first_ramp is not None:     # a teleport's coarse cover first (FIRST_RAMP)
-            k0 = kfun
-            forced, kfun, view = [], (lambda lvl: k0(lvl) * FIRST_RAMP_K), None
-            min_level = max(min_level, FIRST_RAMP_MIN_LEVEL)
-        if gate and self._far_unchanged(now, anchor, radius, extra, forced, min_level, view):
-            # (the same selection surely: not made again; the build order goes by the focus, as after one)
-            self._regroup()
-            self.wake.set()
-            return
-        if self.global_on(anchor, radius):
-            # far levels from 3 up as global tiles (geotiles phase 3b): the same for every anchor, kept at a rebase
-            high = self.eye is not None and self.eye > MAP_HIGH_EYE_M
-            eye_h = self.eye_clearance()
-            if high:
-                self.s.start_world_warm(anchor)
-            new, refined = farfield.select_global(anchor.frame, *self.view_focus, anchor.zf, forced,
-                                                  self.refined, kfun, self.s.hysteresis, radius,
-                                                  hold=set(self.node_changed), min_level=min_level,
-                                                  radii=self.s.near_radii, layout=self.s.layout,
-                                                  forced_level=self.s.forced_level, view=view,
-                                                  anchor_nodes=not high and self.first_ramp is None, eye_h=eye_h,
-                                                  cone=self.map_cone(aid=anchor.id),
-                                                  **extra)
-        else:
-            new, refined = farfield.select(*self.view_focus, forced, self.refined, kfun,
-                                           self.s.hysteresis, radius, hold=set(self.node_changed),
-                                           min_level=min_level, radii=self.s.near_radii, layout=self.s.layout,
-                                           forced_level=self.s.forced_level, view=view, **extra)
-        t_sel = time.perf_counter() - t_sel
-        if t_sel > SLOW_SELECT_S:
-            log.warning("far selection took %.2f s (radius %.0f km, eye %.0f m, %d tiles, %d refined nodes; global "
-                        "part, anchor part s, regions, global tiles: %s)", t_sel, radius / 1000, self.eye or 0.0,
-                        len(new), len(refined), farfield.LAST_GLOBAL_SELECT)
-        if self.desired:                # the first selection of an anchor is not a change
-            for n in refined ^ self.refined:
-                self.node_changed[n] = now
-        if FAR_TRACE and time.monotonic() - getattr(self, "_sel_logged", 0.0) > 0.5:
-            self._sel_logged = time.monotonic()
-            lv = {}
-            for t in new.values():
-                lv[t.level] = lv.get(t.level, 0) + 1
-            log.info("fartrace select eye %.0f radius %.0f km focus %.0f,%.0f held %d levels %s", self.eye or -1,
-                     radius / 1000, *self.view_focus, len(self.node_changed), dict(sorted(lv.items())))
-        self.refined = refined
-        if self.first_ramp is not None:
-            self.s.coarse_keys.update(k for k in new if farfield.is_global_key(k))
-        changed = new.keys() != self.desired.keys()
-        self.desired = new
-        pend = self.__dict__.pop("_far_pending", None) if gate else None
-        slack = farfield.LAST_SLACK
-        self._far_last = None if pend is None or slack is None else (pend[0], pend[1], slack, new, refined)
-        self._regroup()
-        if changed:
-            self.far.start_batch(time.perf_counter())
-        self.wake.set()
+        nothing the selection goes by has changed (earthfast FarState.update_far, host/farselect.rs)."""
+        self._far().update_far(self, self.s, gate)
 
     def set_hz_reach(self):
         """The horizon ring's reach for the building distance and the fixed view distance now (bldhz.reach); turned off
@@ -11561,15 +11373,6 @@ class Connection:
             self.bldpack.send_m, self.bldpack.drop_m = far, far + extra
             self.bldpack.inner = (inner, 1)
 
-    def map_cone(self, aid):
-        """The 3D map's view cone for the selection (farfield.out_of_view: off-screen nodes MAP_OUT_OF_VIEW_K times as
-        far), or None (driving: every direction counts; no 3D camera yet)."""
-        if not (self.map_view or self.map_open) or not isinstance(self.cam, dict) or \
-                getattr(self, "cam_aid", None) != aid:
-            return None
-        c = farfield.view_cone(self.cam)
-        return list(c) + [MAP_OUT_OF_VIEW_K] if c is not None and len(c) == 8 else None
-
     # --- the far PVS (farpvs.py) ------------------------------------------------------------------------------------
     def tex_short(self, info, t):
         """A built far tile's texture is less than it should have now: smaller than tile_tex_px, or the coarse cover's
@@ -11590,40 +11393,9 @@ class Connection:
         return out
 
     def far_lazy_tick(self):
-        """The far tiles shown larger than their level's texture (farpvs.UP_ON: in sight, the screen resolving more):
-        their best photos (the lazy sources: NAIP in the US, a regional service) fetched after the near ones, nearest
-        first (Imagery.far_warm), each tile rendered again when they are in (the user, 2026-11-11: "sharpen with the
-        best source available in the region"). Every FAR_LAZY_EVERY_S at most."""
-        s = self.s
-        im = s.imagery
-        anchor = s.anchors.get(self.active) if self.active is not None else None
-        if im is None or anchor is None or not imagerymod.FAR_LAZY or not farpvsmod.UP_ON or self.map_view \
-                or self.map_open:
-            return
-        now = time.monotonic()
-        if now - getattr(self, "_far_lazy_at", 0.0) < FAR_LAZY_EVERY_S:
-            return
-        self._far_lazy_at = now
-        queued = self.__dict__.setdefault("far_lazy", {})      # ck -> px queued
-        x, y = self.view_focus
-        loop = asyncio.get_running_loop()
-        for key, t in list(self.desired.items()):
-            ck = self.ck(key)
-            info = s.tiles.get(ck)
-            if info is None or info.material is None or not info.tex_px or info.tile is None or info.coarse:
-                continue
-            tile = info.tile
-            node = tile.base if isinstance(tile, farfield.Piece) else tile
-            if info.tex_px <= s.tex_size(node.level) or queued.get(ck) == info.tex_px:
-                continue
-            queued[ck] = info.tex_px
-            frame, x0, y0, size = s.tile_where(anchor, tile)
-            bx0, by0, bx1, by1 = node.bbox
-            d = math.hypot(max(bx0 - x, x - bx1, 0.0), max(by0 - y, y - by1, 0.0))
-
-            def done(ck=ck):
-                loop.call_soon_threadsafe(s.far_lazy_done, ck)
-            im.far_warm(ck, d, frame, *imagerymod.gutter_square(x0, y0, size, info.tex_px), info.tex_px, done)
+        """The far tiles shown larger than their level's texture get their best photos (the lazy sources) after the near
+        ones, nearest first, every FAR_LAZY_EVERY_S at most (earthfast FarState.far_lazy_tick)."""
+        self._far().far_lazy_tick(self, self.s)
 
     def pvs_tick(self):
         """Keep this connection's far PVS (farpvs.Set) current (every pose): drop it when it no longer holds (the
@@ -11715,99 +11487,21 @@ class Connection:
 
     def pvs_reveal(self):
         """Far tiles shown (or sent) with less texture than they should have now (a PVS that no longer hides them):
-        stale, re-rendered live nearest first (far_retex)."""
-        anchor = self.s.anchors.get(self.active) if self.active is not None else None
-        if anchor is None or self.first_ramp is not None or not self.s.pvs_on:
-            return                          # (a teleport's coarse cover: sharpened as the full selection replaces it)
-        n = 0
-        cands = []
-        for key in self.far.reveal_keys(self.active):
-            ck, t = self.ck(key), self.desired[key]
-            info = self.s.tiles.get(ck)
-            if info is None or info.material is None or info.stale:
-                continue
-            cands.append((ck, info, t))
-        short = self.tex_short_many([(info, t) for _ck, info, t in cands])
-        for (ck, info, t), sh in zip(cands, short):
-            if not sh:
-                continue
-            info.stale = True
-            self.s.retex_request(ck, pump=False)
-            n += 1
-        if n:
-            self.s.pvs_stats["revealed"] += n
-            log.info("far PVS: %d far tiles in sight now, sharpened", n)
-            self.s._retex_pump()
+        stale, re-rendered live nearest first (earthfast FarState.pvs_reveal)."""
+        self._far().pvs_reveal(self, self.s)
 
     def ck(self, key):
         """The server's key of far tile `key` under the active anchor (Server.far_ck: a global tile's names none)."""
         return (GLOBAL_AID, key) if farfield.is_global_key(key) else (self.active, key)
 
     def eye_clearance(self):
-        """The camera's height over the ground under the view (the far tiles' detail goes by the 3D distance:
-        farfield.select_global eye_h): 0 below EYE_LOD_MIN_M (driving, the car's camera: as before), else the eye over
-        the highest terrain of the horizon grid's cell there (an under-estimate on a mountain: finer, never coarser)."""
-        eye = self.eye
-        if eye is None or eye < EYE_LOD_MIN_M:
-            return 0.0
-        zg = 0.0
-        grid = getattr(self, "_lod_grid", None)
-        if grid is not None:
-            s = farfield.level_size(farfield.HORIZON_GRID_LEVEL)
-            fx, fy = self.view_focus
-            z = grid.zmax(farfield.HORIZON_GRID_LEVEL, int(math.floor(fx / s)), int(math.floor(fy / s)))
-            if math.isfinite(z):
-                zg = max(0.0, z)
-        return max(0.0, float(eye) - zg)
-
-    def global_on(self, anchor, radius):
-        """Global far tiles for this selection: the mod places them (hello.globalFar) and the radius stays within Web
-        Mercator (farfield.GLOBAL_MAX_LAT; beyond it the anchor's quadtree as before)."""
-        return bool(self.global_far) and abs(anchor.lat) + (radius + 20000.0) / 110574.0 < farfield.GLOBAL_MAX_LAT
+        """The camera's height over the ground under the view (0 below EYE_LOD_MIN_M; earthfast FarState)."""
+        return self._far().eye_clearance(self, self.s)
 
     def lod_px_now(self):
         """This connection's screen-space LOD tau (px; 0: off): the mod's lodPx, else the server's --lod-px."""
         v = getattr(self, "lod_px", None)
         return self.s.lod_px if v is None else v
-
-    def lod_ppr(self, h, fov, now=None):
-        """The pixels per radian the screen-space LOD goes by: this pose's (h / (2 tan(vfov / 2))), at most
-        LOD_PPR_ZOOM times a LOD_BASE_FOV_DEG camera's, the most of the last LOD_PPR_WINDOW_S seconds."""
-        now = time.monotonic() if now is None else now
-        ppr = h / (2 * dmath.tan(math.radians(fov) / 2))     # BeamNG's fov: vertical
-        ppr = min(ppr, LOD_PPR_ZOOM * h / (2 * dmath.tan(math.radians(LOD_BASE_FOV_DEG) / 2)))
-        hist = self.__dict__.setdefault("ppr_hist", deque())     # (a sliding maximum: decreasing pprs)
-        while hist and hist[-1][1] <= ppr:
-            hist.pop()
-        hist.append((now, ppr))
-        while now - hist[0][0] > LOD_PPR_WINDOW_S:
-            hist.popleft()
-        return hist[0][1]
-
-    def view(self):
-        """The camera for screen-space LOD (farfield.View) from pose.cam (x, y, z, fovDeg, h: the screen's height px),
-        or None: no camera yet, an older mod without h, a camera of another anchor's frame, or tau 0 (lod_px_now). The
-        tile errors are the built tiles' along the normal (Server.lod_errs / glod_errs; a node never built goes by the
-        distance rule only)."""
-        c = self.cam
-        tau = self.lod_px_now()
-        if not isinstance(c, dict) or not tau > 0 or getattr(self, "cam_aid", None) != self.active:
-            return None
-        try:
-            cx, cy, cz = float(c["x"]), float(c["y"]), float(c["z"])
-            h, fov = float(c.get("h") or 0), float(c.get("fovDeg") or 60)
-        except (KeyError, TypeError, ValueError):
-            return None
-        if not (h > 0 and 1 < fov < 170 and math.isfinite(cx) and math.isfinite(cy) and math.isfinite(cz)):
-            return None
-        ppr = self.lod_ppr(h, fov)
-        err = farfield.ErrLookup(self.s.lod_errs, self.active)    # (looked up node by node in the Rust selection)
-        reach, cap = farfield.SSE_REACH, farfield.SSE_SPACING_CAP
-        tune = os.environ.get("BNGE_LOD")      # experiments: "reach,cap"
-        if tune:
-            reach, cap = (float(v) for v in tune.split(","))
-        return farfield.View(cx, cy, cz - getattr(self, "pz", cz), ppr, err, tau=tau, reach=reach,
-                             cells=self.s.layout.cells, cap=cap, gerr=self.s.glod_errs)
 
     def _regroup(self):
         """The swap groups, the sent tiles no group needs (far_remove) and the build order (FarState.regroup)."""
