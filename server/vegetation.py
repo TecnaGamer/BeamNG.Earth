@@ -42,7 +42,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 29          #(the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 30          #(the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -51,7 +51,8 @@ VERSION = 29          #(the cached cells hold their groups: 14 for the regional 
                       # Mediterranean basin's own trees, G_MEDITERRANEAN; 26: the far clumps, CLUMP_OF, and the
                       # vineyards' rows, vineyard_items; the round bales after the harvest, bale_items; 27: no bushes in a bus station's yard, PR #1023;
                       # 28: lengths in ground metres at every latitude, _merc_k; ties among flat crowns by a hash;
-                      # 29: the far clumps kept off the carriageways, CLUMP_ROAD_MARGIN_M)
+                      # 29: the far clumps kept off the carriageways, CLUMP_ROAD_MARGIN_M; 30: the vineyards' rows
+                      # down the slope, _row_axis)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -659,7 +660,7 @@ class Vegetation:
         bounds = (lon0, lat0, lon1, lat1)
         planted = orchard_items(lu, chm, blocked, bounds)
         hedges = farm_foliage(lu, chm, blocked, bounds)
-        rows = vineyard_items(lu, chm, blocked, bounds)
+        rows = vineyard_items(lu, chm, blocked, bounds, self._heights if self.dem is not None else None)
         bales = bale_items(lu, chm, blocked, bounds)
         extra = []
         if mapped is not None:
@@ -878,6 +879,16 @@ class Vegetation:
             self._tl.dem_failed = True
             return None
         return dnp.hypot(z[0] - z[1], z[2] - z[3]) / (2 * ROCK_SLOPE_D)
+
+    def _heights(self, lat, lon):
+        """The DEM's heights at lat / lon (ROCK_SLOPE_ZOOM), or None when it cannot say (the cell is then not kept,
+        as _slope's)."""
+        try:
+            return np.asarray(self.dem.sample(lat, lon, ROCK_SLOPE_ZOOM), np.float64)
+        except Exception as e:          # (offline, no tile): the rows along the field's edge
+            log.debug("vegetation: no heights: %s", e)
+            self._tl.dem_failed = True
+            return None
 
     def _scatter(self, cd, lc, blocked, chm, hs, nat=None):
         """Bushes and rocks on a hashed SCATTER_CELL_M grid over shrubland, grass and bare ground. nat: the mapped
@@ -1252,6 +1263,17 @@ VINE_H_M = 2.6              # the shape's height (trees.lua CATALOG.vine)
 VINE_MIN_M2 = 300.0
 VINE_CELL_MAX = 40000
 VINE_TREE_M = 4.0           # a canopy top this tall in a vineyard is a tree, kept
+VINE_ROW_M = 2.45           # the group's outer rows this far either side of its middle one (its roll, _vine_tilt)
+# Rows down the slope (as World-to-BeamNG's vineyard generator lays them, by its author; vineyards on a hillside
+# are planted along the fall line: Mosel, Douro, Lavaux): the field's fall line where its mean slope is
+# VINE_FALL_MIN or more, its dominant edge where that edge is within VINE_SNAP_DEG of the fall line (the rows stay
+# parallel to the parcel's sides) and on flat ground (_row_axis).
+VINE_FALL_MIN = 0.02        # rise over run
+VINE_SNAP_DEG = 15.0
+VINE_FALL_STEP_M = 8.0      # the fall line's sample grid (ground m), coarser on a big field: VINE_FALL_POINTS at most
+VINE_FALL_POINTS = 256
+VINE_FALL_D_M = 20.0        # the gradient's central difference, ground m (the DEM at ROCK_SLOPE_ZOOM: ~38 m pixels)
+VINE_TILT_MAX_DEG = 30.0    # a group's pitch and roll at most (a DEM spike under one end)
 EDGE_AXIS_DEG = 8.0         # _edge_axis: edges this near a direction count for it
 
 
@@ -1291,15 +1313,76 @@ def _field_rings(feats, cls_name, min_m2):
             yield fid, np.column_stack([x, y]), parts[0][1:], area
 
 
-def vineyard_items(feats, chm, blocked, bounds=None):
+def _canonical_axis(u):
+    """A unit axis pointing east, or north when it runs north-south (as _edge_axis gives it)."""
+    u = np.asarray(u, np.float64)
+    if u[0] < -1e-9 or (abs(float(u[0])) <= 1e-9 and u[1] < 0):
+        u = -u
+    return u
+
+
+def _fall_axis(xy, holes, area, heights, sec):
+    """(the fall line's axis as a unit vector pointing east or north, the mean slope as rise over run) of a field
+    (ring xy and area in Web Mercator m, holes as lon / lat rings; sec: Web Mercator m per ground m), or None (too
+    few points, the DEM cannot say). heights(lat, lon): the ground's heights, or None. The gradients' structure
+    tensor rather than their mean: a field over a crest, its sides falling either way, has one axis (World-to-BeamNG's
+    _fall_line)."""
+    from polygon import Path
+    x0, y0 = (float(v) for v in xy.min(axis=0))
+    x1, y1 = (float(v) for v in xy.max(axis=0))
+    step = max(VINE_FALL_STEP_M * sec, dmath.sqrt(area / VINE_FALL_POINTS))
+    gx, gy = np.meshgrid(np.arange(x0 + step / 2, x1, step), np.arange(y0 + step / 2, y1, step))
+    p = np.column_stack([gx.ravel(), gy.ravel()])
+    if len(p) == 0:
+        return None
+    inside = np.asarray(Path(xy).contains_points(p), bool)
+    for hole in holes:
+        hole = np.asarray(hole, np.float64)
+        if len(hole) >= 3:
+            inside &= ~np.asarray(Path(np.column_stack(_to3857(hole[:, 0], hole[:, 1]))).contains_points(p), bool)
+    p = p[inside]
+    if len(p) < 3:
+        return None
+    d = VINE_FALL_D_M * sec
+    px = np.concatenate([p[:, 0] + d, p[:, 0] - d, p[:, 0], p[:, 0]])
+    py = np.concatenate([p[:, 1], p[:, 1], p[:, 1] + d, p[:, 1] - d])
+    lon, lat = _to4326(px, py)
+    z = heights(lat, lon)
+    if z is None:
+        return None
+    z = np.asarray(z, np.float64).reshape(4, len(p))
+    ge = (z[0] - z[1]) / (2 * VINE_FALL_D_M)
+    gn = (z[2] - z[3]) / (2 * VINE_FALL_D_M)
+    sxx, syy, sxy = float(np.mean(ge * ge)), float(np.mean(gn * gn)), float(np.mean(ge * gn))
+    angle = 0.5 * dmath.atan2(2.0 * sxy, sxx - syy)        # (the tensor's major eigenvector)
+    u = _canonical_axis([dmath.cos(angle), dmath.sin(angle)])
+    return u, float(np.mean(np.sqrt(ge * ge + gn * gn)))
+
+
+def _row_axis(xy, holes, area, heights, sec):
+    """The way a vineyard's rows run (VINE_FALL_MIN, VINE_SNAP_DEG): the fall line on a slope, the field's dominant
+    edge (_edge_axis) where that is near it, on flat ground or without heights."""
+    edge = _edge_axis(xy)
+    if heights is None:
+        return edge
+    fall = _fall_axis(xy, holes, area, heights, sec)
+    if fall is None or fall[1] < VINE_FALL_MIN:
+        return edge
+    if abs(float(edge[0] * fall[0][0] + edge[1] * fall[0][1])) >= dmath.cos(math.radians(VINE_SNAP_DEG)):
+        return edge
+    return fall[0]
+
+
+def vineyard_items(feats, chm, blocked, bounds=None, heights=None):
     """The rows of vines of land_use class vineyard (VINE_*): G_VINE items, yaw along the rows. blocked: the canopy
-    grid's buildings, roads and water; bounds (lon0, lat0, lon1, lat1) keeps an item in this cell."""
+    grid's buildings, roads and water; bounds (lon0, lat0, lon1, lat1) keeps an item in this cell; heights(lat, lon):
+    the ground's heights (or None: the DEM cannot say), for rows down the slope (_row_axis)."""
     from polygon import Path
     xs, ys, yaws, us = [], [], [], []
     for fid, xy, holes, area in _field_rings(feats, "vineyard", VINE_MIN_M2):
-        u = _edge_axis(xy)
         key = np.uint64(_fid_key(fid))
         sec = 1.0 / max(dmath.cos(math.radians(float(_to4326(xy[:1, 0], xy[:1, 1])[1][0]))), 0.05)   # (merc m / m)
+        u = _row_axis(xy, holes, area, heights, sec)
         along, across = VINE_ALONG_M * sec, VINE_ACROSS_M * sec
         phase_a = float(_hash01(np.array([key]), np.array([1], np.uint64), 31)[0]) * along
         phase_b = float(_hash01(np.array([key]), np.array([2], np.uint64), 31)[0]) * across
@@ -1731,8 +1814,9 @@ TRACK_MAX_S = 2.0           # ... or this long after its last pass, or something
 
 class JsonRows(str):
     """tile_items' rows already as their JSON text (as_json; write_tile writes it as is); n: how many; audio, biome:
-    the tile's forest ambience (_ambience)."""
+    the tile's forest ambience (_ambience); stride: its rows' length (8, or 10 with vines: _tile_rows)."""
     n = 0
+    stride = 8
     audio = ()
     biome = (0, 0)
 
@@ -1842,18 +1926,7 @@ def tile_items(frame, tx, ty, veg, cell_ready, elev, sea=None, as_json=False, ra
     _, _, z = frame.geodetic_to_enu(it.lat, it.lon, zg)
     z = _sink_rocks(frame, it, e, n, np.asarray(z, np.float64), elev)
     it, z = _fit_cliffs(frame, it, e, n, z, elev)
-    if as_json:
-        # Rust: the same text json.dumps would write for the rows below, without a Python list per tree
-        fast.require(0, "veg_rows_json")
-        f64 = lambda a: np.ascontiguousarray(a, np.float64)     # noqa: E731
-        out = JsonRows(fast._ef.veg_rows_json(np.ascontiguousarray(it.group, np.int64), f64(e), f64(n), f64(z),
-                                               f64(it.yaw), f64(it.scale), f64(it.height), f64(it.rank)))
-        out.n = len(it)
-        out.audio, out.biome = _ambience(it.group, e, n, z, it.height, clat, clon)
-        return out
-    return [[int(g), round(float(a), 2), round(float(b), 2), round(float(c), 2), round(float(yw), 1),
-             round(float(sc), 3), round(float(h), 1), round(float(r), 4)]
-            for g, a, b, c, yw, sc, h, r in zip(it.group, e, n, np.asarray(z), it.yaw, it.scale, it.height, it.rank)]
+    return _tile_rows(it, e, n, z, _vine_tilt(frame, it, e, n, elev), as_json, clat, clon)
 
 
 def geo_tile_items(gx, gy, veg, cell_ready, elev, sea=None, as_json=False, raw=None):
@@ -1894,18 +1967,61 @@ def geo_tile_items(gx, gy, veg, cell_ready, elev, sea=None, as_json=False, raw=N
     z = _sink_rocks(frame, it, e, n, np.asarray(z, np.float64), elev)
     it, z = _fit_cliffs(frame, it, e, n, z, elev)
     pivot = round(float(np.median(z)), 2)
+    return _tile_rows(it, e, n, z, _vine_tilt(frame, it, e, n, elev), as_json, clat, clon), pivot
+
+
+TILT_STRIDE = 10            # a tile with vines: FLAT_STRIDE's numbers and the item's pitch and roll (_vine_tilt)
+
+
+def _tile_rows(it, e, n, z, tilt, as_json, clat, clon):
+    """tile_items' rows [group, x, y, z, yaw, scale, height, rank] (as_json: their JsonRows text), each with its
+    [pitch, roll] after them when tilt (_vine_tilt: a tile with vines) is given; the stride is the row's length."""
     if as_json:
+        # Rust: the same text json.dumps would write for the rows below, without a Python list per tree
         fast.require(0, "veg_rows_json")
         f64 = lambda a: np.ascontiguousarray(a, np.float64)     # noqa: E731
-        out = JsonRows(fast._ef.veg_rows_json(np.ascontiguousarray(it.group, np.int64), f64(e), f64(n), f64(z),
-                                               f64(it.yaw), f64(it.scale), f64(it.height), f64(it.rank)))
+        text = fast._ef.veg_rows_json(np.ascontiguousarray(it.group, np.int64), f64(e), f64(n), f64(z),
+                                      f64(it.yaw), f64(it.scale), f64(it.height), f64(it.rank))
+        if tilt is not None:
+            # (the native module's rows with the tilt spliced in: only a tile with vines, and no rebuild of earthfast)
+            extra = [f",{round(float(p), 1)!r},{round(float(r), 1)!r}" for p, r in zip(tilt[0], tilt[1])]
+            parts = text[2:-2].split("],[")
+            text = "[[" + "],[".join(a + b for a, b in zip(parts, extra)) + "]]"
+        out = JsonRows(text)
         out.n = len(it)
+        out.stride = FLAT_STRIDE if tilt is None else TILT_STRIDE
         out.audio, out.biome = _ambience(it.group, e, n, z, it.height, clat, clon)
-        return out, pivot
-    return [[int(g), round(float(a), 2), round(float(b), 2), round(float(c), 2), round(float(yw), 1),
+        return out
+    rows = [[int(g), round(float(a), 2), round(float(b), 2), round(float(c), 2), round(float(yw), 1),
              round(float(sc), 3), round(float(h), 1), round(float(r), 4)]
-            for g, a, b, c, yw, sc, h, r in zip(it.group, e, n, np.asarray(z), it.yaw, it.scale, it.height,
-                                                it.rank)], pivot
+            for g, a, b, c, yw, sc, h, r in zip(it.group, e, n, np.asarray(z), it.yaw, it.scale, it.height, it.rank)]
+    if tilt is not None:
+        for row, p, r in zip(rows, tilt[0], tilt[1]):
+            row += [round(float(p), 1), round(float(r), 1)]
+    return rows
+
+
+def _vine_tilt(frame, it, e, n, elev):
+    """(pitch, roll) in degrees of each item, or None when the tile has no vines: a vine group (Italy's
+    grape_vine_group, 15.9 m along its x, three rows across) lies on the slope as World-to-BeamNG's rows do, its x
+    from the ground at its two ends, its y from the ground under its outer rows (VINE_ROW_M); laid flat its ends
+    stood 0.8 m clear of a 10 % slope or sank into it. Everything else 0 (upright)."""
+    vine = np.asarray(it.group) == G_VINE
+    if not vine.any():
+        return None
+    k = np.flatnonzero(vine)
+    yaw = np.radians(np.asarray(it.yaw, np.float64)[k])
+    c, s = dnp.cos(yaw), dnp.sin(yaw)
+    a, w = 0.5 * VINE_ALONG_M - 1.0, VINE_ROW_M
+    ex = np.concatenate([e[k] + a * c, e[k] - a * c, e[k] - w * s, e[k] + w * s])
+    ny = np.concatenate([n[k] + a * s, n[k] - a * s, n[k] + w * c, n[k] - w * c])
+    la, lo, _ = frame.enu_to_geodetic(ex, ny, np.zeros(len(ex)))
+    _, _, zz = frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))
+    zz = np.asarray(zz, np.float64).reshape(4, len(k))
+    out = np.zeros((2, len(it)), np.float64)
+    out[0, k] = np.degrees(dnp.arctan2(zz[0] - zz[1], np.full(len(k), 2 * a)))
+    out[1, k] = np.degrees(dnp.arctan2(zz[2] - zz[3], np.full(len(k), 2 * w)))
+    return np.clip(out, -VINE_TILT_MAX_DEG, VINE_TILT_MAX_DEG)
 
 
 ROCK_SINK = 0.35            # a rock sinks this share of its height per unit of ground slope (1 = 45 degrees) ...
@@ -1998,7 +2114,10 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, rows, flat=False, geo=None):
         if geo is not None:             # (the tile's frame and pivot: the mod places it, geotile.lua)
             sound = dict(sound, frame=list(geo["frame"]), pivot=geo["pivot"])
         if flat:
-            head = dict({"groups": groups_list()}, **sound, stride=FLAT_STRIDE, flat=[])
+            # (a tile with vines: TILT_STRIDE, the rows' pitch and roll after FLAT_STRIDE's; an older mod skips them)
+            stride = (getattr(rows, "stride", FLAT_STRIDE) if isinstance(rows, JsonRows)
+                      else len(rows[0]) if rows else FLAT_STRIDE)
+            head = dict({"groups": groups_list()}, **sound, stride=stride, flat=[])
             f.write(json.dumps(head, separators=(",", ":"))[:-3] + flat_json(rows) + "}")
         elif isinstance(rows, JsonRows):  # (tile_items as_json: the items' text, as json.dumps writes them)
             head = dict({"groups": groups_list()}, **sound, items=[])
