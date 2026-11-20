@@ -1475,4 +1475,16 @@ function M.reset()
   autoFinished = nil
 end
 
+-- A route carried across a codeswap (codeswap.lua M.GPS: another copy's code loaded at a BeamMP join forgot this module
+-- and its destination): the waypoints still ahead and the destination, taken once at load and planned again. Autodrive
+-- stays off.
+M.CARRY = 'beamngEarthGpsCarry'
+do
+  local carry = rawget(_G, M.CARRY)
+  if carry ~= nil then
+    rawset(_G, M.CARRY, nil)
+    if type(carry) == 'table' then pcall(M.setRoute, carry) end
+  end
+end
+
 return M
