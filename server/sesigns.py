@@ -19,8 +19,11 @@ TSFS 2019:74.
                 L m gets a pair with chance L / MOOSE_SPACING_M, by a hash of its id: MOOSE_FROM_M into it, each
                 facing the traffic entering it. Not on motorways, 2+1 roads or divided roads: those have game fences.
 
-Spansk sväng: the data has no turn bans (Overture's prohibited_transitions are not downloaded), so it is told by shape:
-a one-way link leaving a fast main road on the right that comes back across it, or ends beside it heading along it. Of
+Spansk sväng: require a confirmed 2+1 section (including its connecting 1+1 stretches), paired one-way
+carriageways with a mapped 2/1 lane split, or a one-lane one-way piece within ISLAND_SECTION_M of a section (the road
+split around the junction's island). The data has no turn bans (Overture's prohibited_transitions are not
+downloaded), so the turning link is told by shape: a one-way link leaving the main road on the right that comes
+back across it, or ends beside it heading along it. Of
 148 such links across Sweden 92% had OpenStreetMap's no_left_turn on the main road; 42% of plain right slip roads did.
 
 Tile independence: every place is worked out from motesfri._ways, which are the same near a place whichever tile reads
@@ -60,6 +63,9 @@ RURAL_KMH = 70.0
 MAIN_CLASSES = {"trunk", "primary", "secondary"}
 LINK_M = (20.0, 300.0)      # m long, a spansk sväng's link: the real ones are 30-163
 NEAR_MAIN_M = 3.0           # m from the main road a link starts
+ISLAND_SECTION_M = 400.0    # m from a 2+1 section (or its connector) a one-lane one-way main road may be, split around a
+                            # spansk sväng's island: OSM draws the road there as short one-way pieces with no lane tags
+                            # (Rv 27 south of Borås, 57.6600 12.9184: the section 236 m north, another 1.1 km south)
 SIDE_ROAD_M = (6.0, 45.0)   # m from it a form B or C link ends
 TAIL_M = 12.0               # m of a link's end its heading is read over
 LINK_BACK = 0.7             # forms' limits: the unit heading across the main road, towards it (A, C) ...
@@ -365,11 +371,48 @@ def _link(w):
             and (s.link or s.cls in ("unclassified", "tertiary")) and LINK_M[0] <= _length(w.xy) <= LINK_M[1])
 
 
+def _spanish_main(main, at, ways, sections):
+    """A confirmed 2+1 corridor at the turning link, rather than any fast rural main road. sections: {id: way} of
+    motesfri.sections' pieces."""
+    if not main.spec.oneway:
+        return id(main) in sections
+    lanes = motesfri._lanes(main.spec, main.tags)
+    p, u = _point(main.xy[:, :2], at)
+    if lanes == 1 and _island(main, p, sections):
+        return True
+    if lanes not in (1, 2) or _length(main.xy) < motesfri.MIN_WAY_M:
+        return False
+    u = u * _travel(main)
+    for other in ways:
+        if (other is main or not _main(other.spec) or not other.spec.oneway
+                or other.spec.cls != main.spec.cls or _length(other.xy) < motesfri.MIN_WAY_M
+                or motesfri._lanes(other.spec, other.tags) != 3 - lanes):
+            continue
+        s, _, dist = motesfri._project(p[None], other.xy[:, :2])
+        q, t = _point(other.xy[:, :2], float(s[0]))
+        # Close, parallel, opposing traffic on the left: not a crossing or a nearby slip road.
+        if (dist[0] <= (main.spec.width + other.spec.width) / 2 + CLEAR_M
+                and float(dnp.dot(q - p, _right(u))) < 0
+                and float(dnp.dot(u, t * _travel(other))) < -0.85
+                and abs(float(dnp.dot(q - p, u))) < NEAR_MAIN_M):
+            return True
+    return False
+
+
+def _island(main, p, sections):
+    """Is p on a one-way piece of a 2+1 road split around a junction's island: a section of its class this near?"""
+    for w in sections.values():
+        if w.spec.cls == main.spec.cls and float(motesfri._project(p[None], w.xy[:, :2])[2][0]) <= ISLAND_SECTION_M:
+            return True
+    return False
+
+
 def spanish(ways):
     """[(link, main way, arc length on it of the link's start, travel on it +1 / -1)] of ways' spansk svängar."""
     mains = [w for w in ways if _main(w.spec)]
     if not mains:
         return []
+    sections = {id(p.way): p.way for p in motesfri.sections(ways)}
     a = np.vstack([w.xy[:-1, :2] for w in mains])
     b = np.vstack([w.xy[1:, :2] for w in mains])
     own = np.repeat(np.arange(len(mains)), [len(w.xy) - 1 for w in mains])
@@ -392,6 +435,8 @@ def spanish(ways):
         main = mains[int(own[k])]
         first = int(np.flatnonzero(own == own[k])[0])
         at = float(dnp.hypot(*ab[first:k].T).sum() + t * math.sqrt(l2[k]))
+        if not _spanish_main(main, at, ways, sections):
+            continue
         u = ab[k] / math.sqrt(l2[k])
         left = np.array([-u[1], u[0]])
         mid = _point(xy, _length(xy) / 2)[0]
