@@ -90,7 +90,6 @@ pub struct SelSt {
     pub gen: u64,
     /// (inputs, continuous inputs, slack, gen, the horizon grid held) of the last selection whose inputs were kept
     last: Option<(Disc, Vec<f64>, f64, u64, Option<Py<PyAny>>)>,
-    pending: Option<(Disc, Vec<f64>, Option<Py<PyAny>>)>,
     /// (monotonic time, ppr): decreasing pprs, the sliding maximum (lod_ppr)
     ppr_hist: VecDeque<(f64, f64)>,
     pub lod_grid: Option<Py<PyAny>>,
@@ -160,15 +159,9 @@ fn level_size(ff: &Bound<'_, PyModule>, level: i64) -> PyResult<f64> {
     Ok(fget(ff, "BASE")? * libm::ldexp(1.0, level as i32))
 }
 
-fn bbox_dist(b: [f64; 4], x: f64, y: f64) -> f64 {
-    // (Python's max(x0 - x, 0.0, x - x1): the first of equal ones; the sign of a zero is lost in hypot)
-    let mx = |a: f64, b: f64, c: f64| {
-        let mut m = a;
-        if b > m { m = b; }
-        if c > m { m = c; }
-        m
-    };
-    mx(b[0] - x, 0.0, x - b[2]).dhypot(mx(b[1] - y, 0.0, y - b[3]))
+/// CPython's math.hypot (its own algorithm, not always the correctly rounded one: the deleted Python's values bit for bit)
+fn py_hypot(py: Python<'_>, a: f64, b: f64) -> PyResult<f64> {
+    py.import("math")?.getattr("hypot")?.call1((a, b))?.extract()
 }
 
 /// The camera for screen-space LOD: (cx, cy, dz, ppr, tau, reach, h, cap, cells), the errors {(aid, node): err} (or a
@@ -398,9 +391,12 @@ fn sel_global<'py>(py: Python<'py>, ff: &Bound<'py, PyModule>, lat0: f64, lon0: 
     if !regions.is_empty() && !anchor_nodes {
         // (a camera high above the ground, the 3D map: the finest global tiles are leaves, no anchor nodes in them)
         for (x, y, q) in &regions {
-            let e: Vec<f64> = (0..4).map(|k| (q[(2 * k + 2) % 8] - q[2 * k]).dhypot(q[(2 * k + 3) % 8] - q[2 * k + 1]))
-                .collect();
-            let s = (((e[0] + e[1]) + e[2]) + e[3]) / 4.0;
+            // (the mean edge as Python made it: math.hypot, and sum's compensated addition)
+            let e = PyList::empty(py);
+            for k in 0..4 {
+                e.append(py_hypot(py, q[(2 * k + 2) % 8] - q[2 * k], q[(2 * k + 3) % 8] - q[2 * k + 1])?)?;
+            }
+            let s: f64 = py.import("builtins")?.getattr("sum")?.call1((e,))?.extract::<f64>()? / 4.0;
             let t = gtile.call1((zf, *x, *y, gmin, PyTuple::new(py, q)?, s))?;
             out.put(Key::from(format!("m{zf}_{x}_{y}").as_str()), t.unbind());
             refined.remove(&Node::G(zf, *x, *y));
@@ -948,18 +944,21 @@ impl FarState {
                 cont.extend([v.v[0], v.v[1], v.v[2]]);
             }
             let eps = c.gf("SELECT_SLACK_EPS")?;
-            let mut st = self.lock(py)?;
-            let gen = st.sel.gen;
-            if let Some((ld, lc, slack, lgen, _)) = &st.sel.last {
-                if *ld == disc && lc.len() == cont.len() && *lgen == gen {
-                    let (a, b) = (&cont, lc);
-                    let mut moved = (a[0] - b[0]).dhypot(a[1] - b[1]) + (a[2] - b[2]).abs() + (a[3] - b[3]).abs();
+            let last = {
+                let st = self.lock(py)?;
+                let gen = st.sel.gen;
+                st.sel.last.as_ref().filter(|(ld, lc, _, lgen, _)| *ld == disc && lc.len() == cont.len() && *lgen == gen)
+                    .map(|(_, lc, slack, _, _)| (lc.clone(), *slack))
+            };
+            if let Some((b, slack)) = last {
+                {
+                    let a = &cont;
+                    let mut moved = py_hypot(py, a[0] - b[0], a[1] - b[1])? + (a[2] - b[2]).abs() + (a[3] - b[3]).abs();
                     if a.len() > 4 {
-                        moved += (a[4] - b[4]).dhypot(a[5] - b[5]) + (a[6] - b[6]).abs();
+                        moved += py_hypot(py, a[4] - b[4], a[5] - b[5])? + (a[6] - b[6]).abs();
                     }
                     if moved < slack - eps {
-                        st.sel.skipped += 1;
-                        drop(st);
+                        self.lock(py)?.sel.skipped += 1;
                         // (the same selection surely: not made again; the build order goes by the focus, as after one)
                         conn.call_method0("_regroup")?;
                         conn.getattr("wake")?.call_method0("set")?;
@@ -1282,7 +1281,7 @@ impl FarState {
             let w = s.call_method1("tile_where", (&anchor, &tile))?;
             let b = floats(&node.getattr("bbox")?)?;
             let mx = |a: f64, b: f64| { let mut m = a; if b > m { m = b; } if 0.0 > m { m = 0.0; } m };
-            let d = mx(b[0] - x, x - b[2]).dhypot(mx(b[1] - y, y - b[3]));
+            let d = py_hypot(py, mx(b[0] - x, x - b[2]), mx(b[1] - y, y - b[3]))?;
             let done = partial.call1((&soon, &lazy_done, &ckt))?;
             let sq = gutter.call1((w.get_item(1)?, w.get_item(2)?, w.get_item(3)?, &tex_px))?;
             let mut args: Vec<Bound<'_, PyAny>> = vec![ckt.clone().into_any(), PyFloat::new(py, d).into_any(), w.get_item(0)?];

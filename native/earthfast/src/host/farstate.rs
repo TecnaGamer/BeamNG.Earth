@@ -705,11 +705,13 @@ impl FarState {
                 .ok_or_else(|| PyRuntimeError::new_err("earthd.SEND_BUFFER_MAX"))?.extract()?,
             None => return Err(PyRuntimeError::new_err("FarState: no earthd globals (g)")),
         };
-        let mut data = vec![0u8; 4];
-        m.encode(py, &mut data)?;
-        let n = (data.len() - 4) as u32;
-        data[..4].copy_from_slice(&n.to_le_bytes());
-        send_frame(conn, &data, limit)?;
+        send_frame(conn, limit, &mut || {
+            let mut data = vec![0u8; 4];
+            m.encode(py, &mut data)?;
+            let n = (data.len() - 4) as u32;
+            data[..4].copy_from_slice(&n.to_le_bytes());
+            Ok(data)
+        })?;
         Ok(())
     }
 
@@ -1789,8 +1791,10 @@ impl FarState {
 /// A frame to the connection's writer as earthd's Connection.send sent it: nothing once it is closing (abort_stream),
 /// lost its lease (a BeamMP reconnect's new connection holds it) or its writer is closing; past `limit` bytes waiting the
 /// connection is aborted ("outgoing buffer limit exceeded"). A HostStream's wire is written here, any other writer
-/// (asyncio's, the tests') through its write. True: sent.
-pub fn send_frame<'py>(conn: &Bound<'py, PyAny>, data: &[u8], limit: usize) -> PyResult<bool> {
+/// (asyncio's, the tests') through its write. The frame is made (encode) only once those checks pass, as Python's
+/// Connection.send called protocol.encode. True: sent.
+pub fn send_frame<'py>(conn: &Bound<'py, PyAny>, limit: usize, encode: &mut dyn FnMut() -> PyResult<Vec<u8>>)
+                       -> PyResult<bool> {
     let py = conn.py();
     let get = |o: &Bound<'py, PyAny>, n: &str| -> PyResult<Option<Bound<'py, PyAny>>> {
         match o.getattr(n) {
@@ -1838,10 +1842,11 @@ pub fn send_frame<'py>(conn: &Bound<'py, PyAny>, data: &[u8], limit: usize) -> P
                 if core.is_closing() {
                     return Ok(false);
                 }
+                let data = encode()?;
                 if core.pending() + data.len() > limit {
                     return abort();
                 }
-                core.write(data);
+                core.write(&data);
                 return Ok(true);
             }
         }
@@ -1849,6 +1854,7 @@ pub fn send_frame<'py>(conn: &Bound<'py, PyAny>, data: &[u8], limit: usize) -> P
     if writer.call_method0("is_closing")?.is_truthy()? {
         return Ok(false);
     }
+    let data = encode()?;
     let pending: usize = match transport {
         Some(t) => t.call_method0("get_write_buffer_size")?.extract()?,
         None => 0,
@@ -1856,7 +1862,7 @@ pub fn send_frame<'py>(conn: &Bound<'py, PyAny>, data: &[u8], limit: usize) -> P
     if pending + data.len() > limit {
         return abort();
     }
-    writer.call_method1("write", (pyo3::types::PyBytes::new(py, data),))?;
+    writer.call_method1("write", (pyo3::types::PyBytes::new(py, &data),))?;
     Ok(true)
 }
 
@@ -1869,8 +1875,7 @@ fn type_name_is(o: &Bound<'_, PyAny>, name: &str) -> bool {
 fn conn_send(conn: &Bound<'_, PyAny>, msg: &Bound<'_, PyAny>, limit: usize) -> PyResult<bool> {
     let py = conn.py();
     let raw = py.import("protocol")?.getattr("RawJson")?;
-    let data = super::pyjson::encode_frame(py, msg, Some(&raw))?;
-    send_frame(conn, data.as_bytes(), limit)
+    send_frame(conn, limit, &mut || Ok(super::pyjson::encode_frame(py, msg, Some(&raw))?.as_bytes().to_vec()))
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

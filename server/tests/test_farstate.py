@@ -157,5 +157,48 @@ class StateViewTest(unittest.TestCase):
         self.assertEqual(got, [({"type": "far_remove", "anchorId": 1, "key": t.key}, 0)])
 
 
+
+class ConnSendTest(unittest.TestCase):
+    """earthfast.conn_send (Connection.send): nothing, and nothing encoded, for a closing connection, one that lost its
+    lease or one whose writer is closing; past the limit the connection is aborted; else the frame protocol.encode
+    makes."""
+
+    class Writer:
+        def __init__(self, closing=False):
+            self.data, self.closing = [], closing
+
+        def write(self, b):
+            self.data.append(b)
+
+        def is_closing(self):
+            return self.closing
+
+    class Conn:
+        def __init__(self, writer, closing=False, lease=None):
+            self.writer, self.closing, self.lease, self.aborted = writer, closing, lease, []
+
+        def abort_stream(self, why):
+            self.aborted.append(why)
+
+    def test_checks_before_encoding(self):
+        import protocol
+        bad = {"type": "x", "v": object()}         # (not JSON: encoding it raises)
+        w = self.Writer()
+        self.assertFalse(fast._ef.conn_send(self.Conn(w, closing=True), bad, 1 << 20))
+        other = type("L", (), {"connection": None})()
+        self.assertFalse(fast._ef.conn_send(self.Conn(w, lease=other), bad, 1 << 20))
+        self.assertFalse(fast._ef.conn_send(self.Conn(self.Writer(closing=True)), bad, 1 << 20))
+        self.assertEqual(w.data, [])
+        with self.assertRaises(TypeError):
+            fast._ef.conn_send(self.Conn(w), bad, 1 << 20)
+        msg = {"type": "status", "text": "é", "n": 1.5}
+        c = self.Conn(w)
+        c.lease = type("L", (), {"connection": c})()
+        self.assertTrue(fast._ef.conn_send(c, msg, 1 << 20))
+        self.assertEqual(w.data, [protocol.encode(msg)])
+        self.assertFalse(fast._ef.conn_send(c, msg, 4))
+        self.assertEqual(c.aborted, ["outgoing buffer limit exceeded"])
+
+
 if __name__ == "__main__":
     unittest.main()
