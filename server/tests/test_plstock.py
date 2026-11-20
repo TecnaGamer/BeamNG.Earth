@@ -1,6 +1,7 @@
 """Default signs on the three arms of a roundabout, with and without surveyed designs."""
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 import xml.etree.ElementTree as ET
@@ -108,6 +109,32 @@ class PolishDefaults(unittest.TestCase):
             np.testing.assert_allclose(parts[group+"-mat"], single[group+"-mat"] + [0, 0, .85 if group=="pl_a_7" else 0],
                                        atol=1e-5)
             self.assertEqual(sum(parts[steel][:, 2] < 0), sum(single[steel][:, 2] < 0))
+
+    def test_cell_bounds_keep_crossing_roads_and_refresh_after_lane_updates(self):
+        feats = SimpleNamespace()
+        def segment(x, y):
+            return (None, np.array([[x-100, y], [x+100, y]]), [3., 0], [], [], [], None)
+        raw = {"crossing": segment(0, 0), "distant": segment(0, 500)}
+        window = (-5., -5., 5., 5.)
+        self.assertEqual([r[0] for r in plstock.roads_in_window(feats, raw, window)], ["crossing"])
+        cached = feats._pl_road_bounds
+        self.assertEqual([r[0] for r in plstock.roads_in_window(feats, raw, window)], ["crossing"])
+        self.assertIs(feats._pl_road_bounds, cached)
+        changed = {"new road": segment(0, 10)}
+        self.assertEqual([r[0] for r in plstock.roads_in_window(feats, changed, window)], ["new road"])
+
+    def test_elevation_sampled_once_for_visible_posts_and_skipped_for_matching(self):
+        entries = [[None, 0., 0., None, 0.], [None, 45., 30., None, 90.]]
+        ground = mock.Mock(side_effect=lambda lat, lon: np.full_like(lat, 150.))
+        layout = plstock.roundabout_layout(entries, [], self.frame, ground)
+        self.assertEqual(len(layout.rows), 2)
+        ground.assert_called_once()
+        self.assertEqual(len(ground.call_args.args[0]), 2)
+        with mock.patch.object(plstock, "ring_entries", return_value=entries), \
+                mock.patch.object(plsigns, "tile_rows", return_value=[]):
+            index = plstock.sign_stream(None, self.frame, (-20., -20., 60., 60.), ground, None, False, False)
+        ground.assert_called_once()
+        self.assertTrue(index.matched("C-12", 0., 0., 0.))
 
     def test_empty_or_failed_survey_keeps_generated_junction_sign(self):
         box = (-10., -10., 10., 10.)

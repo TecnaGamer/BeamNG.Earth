@@ -165,23 +165,29 @@ def index():
 
 
 def road_segments(roads, box):
-    """Ground carriageway segments near the tile, in local metres."""
-    segments = []
+    """Ground carriageway segments near the tile, in matching order for nearest-road ties."""
+    starts, ends, widths, directions = [], [], [], []
     for _, spec, points, *_ in roads:
         xy = np.asarray(points, dtype=float)[:, :2]
         if len(xy) < 2:
             continue
         a, b = xy[:-1], xy[1:]
-        low = np.minimum(a, b)
-        high = np.maximum(a, b)
-        mask = ((low[:, 0] <= box[2] + REACH) & (high[:, 0] >= box[0] - REACH) &
-                (low[:, 1] <= box[3] + REACH) & (high[:, 1] >= box[1] - REACH))
-        for start, end in zip(a[mask], b[mask]):
-            v = end - start
-            length = float(np.linalg.norm(v))
-            if length > 0.01:
-                segments.append((start, v / length, length, spec.width / 2, spec.dir if spec.oneway else 0))
-    return segments
+        starts.append(a)
+        ends.append(b)
+        widths.append(spec.width / 2)
+        directions.append(spec.dir if spec.oneway else 0)
+    if not starts:
+        return None
+    counts = [len(a) for a in starts]
+    a, b = np.concatenate(starts), np.concatenate(ends)
+    low, high = np.minimum(a, b), np.maximum(a, b)
+    vector = b - a
+    length = np.linalg.norm(vector, axis=1)
+    keep = ((low[:, 0] <= box[2] + REACH) & (high[:, 0] >= box[0] - REACH) &
+            (low[:, 1] <= box[3] + REACH) & (high[:, 1] >= box[1] - REACH) & (length > 0.01))
+    if not keep.any():
+        return None
+    return a[keep], vector[keep] / length[keep, None], length[keep], np.repeat(widths, counts)[keep], np.repeat(directions, counts)[keep]
 
 
 def placement(point, angle, segments, measured=False):
@@ -260,9 +266,8 @@ def tile_rows(frame, box, roads, elev, cache_dir=None, fetcher=None):
     import guardrails
     import geotiles
     segments = road_segments(roads, box)
-    if segments:
-        segments = tuple(np.asarray(column) for column in zip(*segments))
     rows = []
+    ground_points = []
     for lng, lat, name, angle, mapillary_id in records:
         east, north, _ = frame.geodetic_to_enu(lat, lng, 0.)
         point = np.array([east, north])
@@ -279,10 +284,15 @@ def tile_rows(frame, box, roads, elev, cache_dir=None, fetcher=None):
         la, lo, _ = frame.enu_to_geodetic(np.array([x]), np.array([y]), 0.)
         if not inside_poland(float(lo[0]), float(la[0])):
             continue
-        z = float(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo)))[2][0])
+        ground_points.append((la[0], lo[0]))
         fx, fy = float(ty), float(-tx)
-        rows.append([guardrails.polish_groups().index(name), round(float(x), 3), round(float(y), 3), round(z, 3),
+        rows.append([guardrails.polish_groups().index(name), round(float(x), 3), round(float(y), 3), 0.,
                      round(math.degrees(math.atan2(fy, fx)), 2), 0., HEIGHT, 0., fx, fy, 0., -fy, fx, 0., 0., 0., 1.])
+    if rows and elev is not None:
+        la, lo = np.asarray(ground_points).T
+        heights = frame.geodetic_to_enu(la, lo, elev(la, lo))[2]
+        for row, height in zip(rows, heights):
+            row[3] = round(float(height), 3)
     return rows
 
 

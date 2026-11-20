@@ -143,6 +143,7 @@ def roundabout_layout(entries, observed, frame, elev):
         else:
             remaining.append(row)
     aliases = []
+    needs_ground = []
     for i, (anchor, hits) in enumerate(zip(anchors, assignments)):
         # A mapped STOP is a different priority control; do not infer a yield above it.
         stops = [r for r in hits if r[0] == stop]
@@ -152,16 +153,42 @@ def roundabout_layout(entries, observed, frame, elev):
                  key=lambda r: (r[0] != circle, math.hypot(r[1]-anchor[1], r[2]-anchor[2])),
                  default=anchor)
         x, y, z, yaw = (anchor if i in use_arm_pose else at)[1:5]
-        if z is None:
-            lat, lon, _ = frame.enu_to_geodetic(np.array([x]), np.array([y]), 0.)
-            z = float(frame.geodetic_to_enu(lat, lon, elev(lat, lon))[2][0])
         a = math.radians(yaw)
         fx, fy = math.cos(a), math.sin(a)
         group, height = (circle, plsigns.HEIGHT) if stops else (pair, 3.6)
-        remaining.append([group, x, y, z, yaw, 0., height, 0., fx, fy, 0., -fy, fx, 0., 0., 0., 1.])
+        row = [group, x, y, z if z is not None else 0., yaw, 0., height, 0., fx, fy, 0., -fy, fx, 0., 0., 0., 1.]
+        remaining.append(row)
+        if z is None and elev is not None:
+            needs_ground.append(row)
         aliases.append([group, *anchor[1:5]])
         aliases.extend([group, *r[1:5]] for r in hits if r[0] != stop)
+    if needs_ground:
+        x, y = np.array([r[1:3] for r in needs_ground]).T
+        lat, lon, _ = frame.enu_to_geodetic(x, y, 0.)
+        heights = frame.geodetic_to_enu(lat, lon, elev(lat, lon))[2]
+        for r, height in zip(needs_ground, heights):
+            r[3] = float(height)
     return Nearby(remaining, aliases)
+
+
+def roads_in_window(feats, raw, window):
+    """Cache ground road bounds with the decoded map cell. A new lane or anchor projection replaces the index."""
+    cached = getattr(feats, "_pl_road_bounds", None)
+    if cached is None or cached[0] is not raw:
+        rows, bounds = [], []
+        for fid, (_, xy, meta, _, _, skips, _) in raw.items():
+            if skips or len(xy) < 2:
+                continue
+            spec = SimpleNamespace(width=2*meta[0], dir=meta[1], oneway=bool(meta[1]))
+            rows.append((fid, spec, xy, 0.))
+            bounds.append((*xy[:, :2].min(axis=0), *xy[:, :2].max(axis=0)))
+        cached = raw, rows, np.asarray(bounds).reshape(-1, 4).T
+        feats._pl_road_bounds = cached
+    _, rows, (west, south, east, north) = cached
+    x0, y0, x1, y1 = window
+    pad = plsigns.REACH
+    selected = (west <= x1+pad) & (south <= y1+pad) & (east >= x0-pad) & (north >= y0-pad)
+    return (rows[i] for i in np.flatnonzero(selected))
 
 
 def post_layout(md, frame, bounds, elev, context, left_hand, mph, local_roads=()):
@@ -190,9 +217,8 @@ def post_layout(md, frame, bounds, elev, context, left_hand, mph, local_roads=()
                 continue
             raw = speedsigns._cell_rows(feats, frame, context.urban, context.widths, left_hand, mph)
             ring.update(roadsigns.cell_rings(feats, frame, context.urban, context.widths, left_hand, mph, raw))
-            for fid, (_, xy, meta, _, _, skips, _) in raw.items():
-                if not skips and fid not in by_id:
-                    by_id[fid] = (fid, SimpleNamespace(width=2*meta[0], dir=meta[1], oneway=bool(meta[1])), xy, 0.)
+            for road in roads_in_window(feats, raw, window):
+                by_id.setdefault(road[0], road)
         roads = list(by_id.values())
         ring.intersection_update(by_id)
         if not roads and local_roads:
@@ -204,7 +230,8 @@ def post_layout(md, frame, bounds, elev, context, left_hand, mph, local_roads=()
 
 
 def sign_stream(md, frame, box, elev, context, left_hand, mph):
-    return post_layout(md, frame, box, elev, context, left_hand, mph)
+    # This layer suppresses duplicate meshes using only position and heading.
+    return post_layout(md, frame, box, None, context, left_hand, mph)
 
 
 @lru_cache(maxsize=128)
