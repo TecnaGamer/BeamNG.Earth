@@ -1052,21 +1052,43 @@ def _cut_worn_at_motorways(rails, wear_of, roads_xy, kept=frozenset(), cut_ends=
     crossing. Pure."""
     if not roads_xy:
         return rails
-    out = []
-    for fid, cls, kind, xy in rails:
+    # (the worn parts that share a set of roads crossed in one kernel call: with BNE_RAIL_LIFECYCLE every road of the
+    # window is one, and a part at a time packed all of them again for each part, 28 % of a cold Baltimore cell's
+    # planning, 2026-11-19. The kernel's hits per part are those of the part alone, in the same order)
+    groups, todo = {}, []
+    for i, (fid, cls, kind, xy) in enumerate(rails):
         w = wear_of.get(fid)
         if kind != "ground" or not w:
-            out.append((fid, cls, kind, xy))
             continue
         table = HERITAGE_CUT_CLASSES if fid in kept else WORN_CUT_CLASSES
-        lines = [(line, half) for line, half, c in roads_xy if c in table.get(w, ())]
-        if not lines:
+        allowed = table.get(w, ())
+        gk = (fid in kept, w)
+        if gk not in groups:
+            groups[gk] = ([(line, half) for line, half, c in roads_xy if c in allowed], [])
+        if groups[gk][0]:
+            groups[gk][1].append(i)
+            todo.append(i)
+    hits_of = {}
+    for lines, members in groups.values():
+        if not members:
+            continue
+        got = roads._crossings_by([rails[i][3] for i in members], [ln for ln, _h in lines])
+        per = {i: [[] for _ in lines] for i in members}
+        for li, hits in enumerate(got):
+            for pi, arc, p in hits:
+                per[members[pi]][li].append((arc, p))
+        for i in members:
+            hits_of[i] = (lines, per[i])
+    out = []
+    for i, (fid, cls, kind, xy) in enumerate(rails):
+        if i not in hits_of:
             out.append((fid, cls, kind, xy))
             continue
+        lines, per = hits_of[i]
         s = _arc(xy)
         cut = np.zeros(len(xy), bool)
-        for (line, half), hits in zip(lines, roads._crossings_by([xy], [ln for ln, _h in lines])):
-            for _pi, arc, p in hits:
+        for (line, half), hits in zip(lines, per):
+            for arc, p in hits:
                 j = int(np.clip(np.searchsorted(s, arc) - 1, 0, len(xy) - 2))
                 t = xy[j + 1] - xy[j]
                 r = _segment_at(line, p)        # (the road's direction at the crossing)
