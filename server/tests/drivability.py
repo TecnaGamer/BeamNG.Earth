@@ -71,6 +71,7 @@ SITES = {       # name: (fixture prefix, what was reported)
     "dc_capitol_crossing_1083": ("drive", "GitHub #1083, Washington DC: F Street over I-395 at Capitol Crossing"),
     "boston_bowker": ("drive", "Boston: the Bowker Overpass over Storrow Drive under its 3.2-3.35 m height limits"),
     "boston_storrow_massave": ("drive", "Boston: Storrow and Memorial Drives under Mass Ave, 2.74-3.66 m height limits"),
+    "pitesti_a1_1496": ("drive", "GitHub #1496, Pitesti: the A1's slip roads run into the side of its viaduct, 1.3 m under it"),
     **{name: ("interchange", what) for name, (_issue, what) in interchanges.SITES.items()},
 }
 RADIUS_M = 200.0
