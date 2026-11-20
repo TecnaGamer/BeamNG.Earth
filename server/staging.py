@@ -10,154 +10,57 @@ atomic), so only the finished file shows up. Paths outside a user folder's "temp
 replace() is the atomic rename into the game's folder; a destination folder that vanished mid-session is made again
 (GitHub #27: a player's session folder under temp/beamngEarth was gone, and every terrain write after it failed).
 """
-import itertools
+import asyncio
 import logging
 import os
 import threading
-import time
+from concurrent.futures import ThreadPoolExecutor
 
+import fast
+
+_native = fast.native(557, "session file staging")
 STAGING = "beamngEarth_staging"
-_made = set()
-_lock = threading.Lock()
-_serial = itertools.count()
-_remade = set()
-log = logging.getLogger("earthd.staging")
-
-
 SWEEP_AGE_S = 3600
-
-
-def _sweep(d):
-    """Temporary files left by a process that ended mid-write (older than SWEEP_AGE_S), once per process."""
-    import time
-    now = time.time()
-    for name in os.listdir(d):
-        p = os.path.join(d, name)
-        try:
-            if name.endswith(".tmp") and now - os.path.getmtime(p) > SWEEP_AGE_S:
-                os.remove(p)
-        except OSError:
-            pass
+WARM_READ = os.environ.get("BNGE_WARM_READ", "1" if os.name == "nt" else "0") != "0"
+GAME_WAITS = (0.02, 0.05, 0.1, 0.25, 0.5, 1.0)
+REPLACE_WAITS = (0.02, 0.05, 0.1, 0.25, 0.5)
+READ_WAITS = (0.02, 0.05, 0.1, 0.25)
+log = logging.getLogger("earthd.staging")
+_io = ThreadPoolExecutor(1, thread_name_prefix="staging-io")
+warm = _native.staging_warm
 
 
 def staging_dir(path):
-    """The staging folder for a file in a user folder's temp tree, or None."""
-    p = os.path.abspath(path)
-    sep = os.sep
-    i = p.rfind(f"{sep}temp{sep}")
-    if i <= 0:
-        return None
-    user = p[:i]                                        # .../BeamNG.drive/current
-    return os.path.join(os.path.dirname(user), STAGING)
+    return _native.staging_dir(os.path.abspath(path))
 
 
 def tmp_for(path):
-    """A temporary path to write path's content to before os.replace(tmp, path)."""
-    d = staging_dir(path)
-    if d is not None:
-        with _lock:
-            known = d in _made
-        if not known:
-            try:
-                os.makedirs(d, exist_ok=True)
-                _sweep(d)
-                with _lock:
-                    _made.add(d)
-            except OSError:
-                d = None
-    if d is None:
-        return path + ".tmp"
-    return os.path.join(d, f"{os.getpid()}_{threading.get_ident()}_{next(_serial)}_{os.path.basename(path)}.tmp")
+    return _native.staging_tmp(path, os.path.abspath(path), threading.get_ident())
 
 
-WARM_READ = os.environ.get("BNGE_WARM_READ", "1" if os.name == "nt" else "0") != "0"   # (=1 elsewhere: tests)
-WARM_CHUNK = 1 << 20
-
-
-def warm(path):
-    """Read a file just written into the game's folder once, here (Windows): the first open of a new file is scanned
-    by the antivirus, and the game paid it in the frame (a far tile's shape and texture 20-184 ms per tile on a
-    Windows test PC, 2026-10-24, 0.4 ms on Linux; a second open of the same file 0.15 ms). Read in this process, a
-    server worker, the scan is done before the game opens it. Errors ignored (the game reads it anyway)."""
-    try:
-        with open(path, "rb") as f:
-            while f.read(WARM_CHUNK):
-                pass
-    except OSError:
-        pass
-
-
-GAME_WAITS = (0.02, 0.05, 0.1, 0.25, 0.5, 1.0)  # s between the tries of replace into the game's folder (~1.9 s in all)
-
-
-def replace(tmp, path):
-    """os.replace(tmp, path), making path's folder again if it was deleted under us (the game or the player
-    clearing its temp folder) instead of failing every write after it. On Windows a file going into the game's folder
-    is read once at once (warm), and one held there for a moment (the game reading the copy it has, a virus scanner:
-    PermissionError, WinError 5) is tried again GAME_WAITS: a block's surface mask replaced over the one the game was
-    showing failed the whole block (a provisional block and a graded one, Windows 11, 2026-11-13). The last try's
-    PermissionError goes to the caller."""
-    if staging_dir(path) is None or _on_event_loop():
-        return _replace_once(tmp, path)     # (on the server's event loop, e.g. Server.reslot: one try, never a sleep)
-    for n, wait in enumerate(GAME_WAITS + (None,)):
-        try:
-            _replace_once(tmp, path)
-            if n:
-                log.info("%s was held (Windows: the game or a virus scanner): replaced at try %d",
-                         os.path.basename(path), n + 1)
-            return
-        except PermissionError:
-            if wait is None:
-                raise
-            time.sleep(wait)
-
-
-def _on_event_loop():
-    """True in a thread running an asyncio loop (the server's main loop: a sleep there stalls every client)."""
-    import asyncio
+def _rename(tmp, path, cached):
+    game = staging_dir(path) is not None
+    waits = REPLACE_WAITS if cached else GAME_WAITS if game else ()
+    args = (cached, os.replace, warm if WARM_READ and game else None, log)
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return False
-    return True
+        return _native.staging_replace(tmp, path, waits, *args)
+    # Synchronous API used by callers that immediately open the destination. Single try
+    # for game files. The streaming paths prepare their files in workers before delivery.
+    return _io.submit(_native.staging_replace, tmp, path, waits if cached else (), *args).result()
 
 
-def _replace_once(tmp, path):
-    _replace(tmp, path)
-    if WARM_READ and staging_dir(path) is not None:
-        warm(path)
+def replace(tmp, path):
+    _rename(tmp, path, False)
 
 
-def _replace(tmp, path):
-    try:
-        os.replace(tmp, path)
-    except FileNotFoundError:
-        if not os.path.exists(tmp):
-            raise
-        d = os.path.dirname(path)
-        os.makedirs(d, exist_ok=True)
-        with _lock:
-            first = d not in _remade
-            _remade.add(d)
-        if first:
-            log.warning("folder %s was deleted while in use (cleared temp folder?): made again", d)
-        os.replace(tmp, path)
-
-
-REPLACE_WAITS = (0.02, 0.05, 0.1, 0.25, 0.5)    # s between the tries of replace_cached (~0.9 s in all)
-READ_WAITS = (0.02, 0.05, 0.1, 0.25)            # s between the tries of read_held
+def replace_cached(tmp, path):
+    return _rename(tmp, path, True)
 
 
 def read_held(read):
-    """read() of a cache file, tried again READ_WAITS when it raises PermissionError: on Windows a file another thread
-    or process is replacing cannot be opened for a moment (a map data water layer was "unreadable" and rebuilt from
-    the network, GitHub #240 / #241). The last try's PermissionError goes to the caller."""
-    for wait in READ_WAITS:
-        try:
-            return read()
-        except PermissionError:
-            time.sleep(wait)
-    return read()
+    return _native.staging_read_held(read, READ_WAITS)
 
 
 DAMAGED_NPZ = (OSError, ValueError, EOFError, KeyError)     # (and zipfile.BadZipFile: read_npz)
@@ -187,28 +90,6 @@ def read_npz(path, read, what="cache file"):
         except OSError:
             pass
         return None
-
-
-def replace_cached(tmp, path):
-    """replace(tmp, path) for a cache file whose content is the same whoever writes it (a download, a decoded or built
-    copy of one). On Windows a file another thread or process has open, or memory-mapped, cannot be replaced
-    (PermissionError, WinError 5: GitHub #67, the DEM tile cache on a cloud PC failed terrain requests): retried
-    REPLACE_WAITS; still held but there, that copy is kept and tmp removed. True when tmp went in, False when the
-    copy already there was kept."""
-    for wait in REPLACE_WAITS + (None,):
-        try:
-            _replace_once(tmp, path)        # (its own tries: not replace's too)
-            return True
-        except PermissionError:
-            if wait is None:
-                if not os.path.exists(path):
-                    raise
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
-                return False
-            time.sleep(wait)
 
 
 INLINE_MAX = 1 << 20        # bytes: a session file this small or smaller goes inside its message (inline_json)
@@ -242,10 +123,28 @@ def inline_raw(out_dir, vfs_path, max_bytes=INLINE_MAX, digest=False):
 class Inlined:
     """A tracker build's result with its files' inline data read in the worker (build_inline): the event loop sends
     it without opening or parsing a file. files: {vfs path: RawJson or None}; data: the first file's."""
-    __slots__ = ("res", "data", "digest", "files")
+    __slots__ = ("res", "data", "digest", "files", "prepared")
 
     def __init__(self, res, data, digest=None, files=None):
+        self.prepared = None
         self.res, self.data, self.digest, self.files = res, data, digest, files or {}
+
+    def pool(self, conn, files):
+        return self.prepared.claim(conn, files)
+
+
+def prepare_shape_files(server, files):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _native.prepare_shape_files(server, files)
+    return _io.submit(_native.prepare_shape_files, server, files).result()
+
+
+def prepare_shapes(server, kind, geo, aid, key, job, *args):
+    result = job(*args)
+    result.prepared = _native.prepare_shapes(server, kind, geo, aid, key, result.res)
+    return result
 
 
 def build_inline(build, out_dir, digest, *args):

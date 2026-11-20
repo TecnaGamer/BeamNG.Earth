@@ -14972,6 +14972,8 @@ class Tracker:
             # arguments as before)
             job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
                                     False)
+            if hasattr(getattr(conn, "s", None), "matslots"):
+                job = functools.partial(staging.prepare_shapes, conn.s, "roads", False, aid, key, job)
             fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, job, aid, tx, ty)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
 
@@ -15028,7 +15030,7 @@ class Tracker:
         data = staging.inline_from(pre, out_dir, path)
         if data is not None:                # (the game need not open the file: staging.inline_json)
             m["data"] = data
-        pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
+        pool = pre.pool if pre and pre.prepared is not None else getattr(getattr(conn, "s", None), "pool_shapes", None)
         if pool is not None:                # its meshes at pooled shape paths (matslots.py)
             slots = pool(conn, shape_files(aid, *key))
             if slots:
@@ -15223,6 +15225,8 @@ class GeoTracker:
             # (the content's and the skin's files read in the worker, not on the event loop)
             job = functools.partial(staging.build_inline_paths, build,
                                     getattr(getattr(conn, "s", None), "out_dir", None), _geo_inline_paths)
+            if hasattr(getattr(conn, "s", None), "matslots"):
+                job = functools.partial(staging.prepare_shapes, conn.s, "roads", True, aid, k, job)
             fut = self.futs[k] = loop.run_in_executor(self.pool, job, aid, k[0], k[1], content, skin, make)
             fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make:
                                   self._built(conn, a, kk, f, c, sk, m))
@@ -15293,7 +15297,7 @@ class GeoTracker:
         gkey = geotiles.key(*key)
         s = getattr(conn, "s", None)
         out_dir = getattr(s, "out_dir", None)
-        pool = getattr(s, "pool_shapes", None)
+        pool = pre.pool if pre and pre.prepared is not None else getattr(s, "pool_shapes", None)
         tm = res.get("time") or {}
         self.stats["content_cpu"] += float(tm.get("content_cpu", 0.0))
         self.stats["skin_cpu"] += float(tm.get("skin_cpu", 0.0))

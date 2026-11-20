@@ -279,18 +279,10 @@ FOCI_R_MAX_M = 640.0            # ... and radii at most this
 def parse_foci(raw):
     """The pose's "foci" ([{x, y, r, trees}], the mod's collisionfoci.lua: other players' cars, traffic) as a tuple of
     (x, y, r, trees), FOCI_MAX at most, bad entries left out."""
-    out = []
-    if not isinstance(raw, list):
-        return ()
-    for f in raw[:FOCI_MAX]:
-        try:
-            x, y, r = float(f["x"]), float(f["y"]), float(f["r"])
-        except (TypeError, KeyError, ValueError):
-            continue
-        if not all(math.isfinite(v) for v in (x, y, r)) or max(abs(x), abs(y)) > FOCI_RANGE_M or r <= 0:
-            continue
-        out.append((x, y, min(r, FOCI_R_MAX_M), bool(f.get("trees"))))
-    return tuple(out)
+    fast.require(557, "pose_foci")
+    return fast._ef.pose_foci(raw, FOCI_MAX, FOCI_RANGE_M, FOCI_R_MAX_M)
+
+
 GROUND_RESEND_M, GROUND_RESEND_S = 1.0, 1.5   # ground_ahead: sent on a change, else this often (the mod's
                                                # follow.GROUND_STALE_S is 3 s)
 DETAIL_RING_M = 128.0           # detail mode: L-1 tiles this far beyond the block (forced())
@@ -1512,6 +1504,7 @@ class Server:
         self.hm_sent = _SentLog(maxlen=HM_KEEP_SENT)
         # Far tiles: (anchorId, key) -> TileInfo, LRU order; files are far_<anchorId>_<key>.<fmt>.
         self.tiles = OrderedDict()
+        self.renewing = set()
         self.tile_inflight = {}
         # A node across the global tiles' region edge is a piece per global tile it overlaps (farfield.Piece), each
         # its node's geometry and texture cut: (anchorId, node key) -> {"built", "tex": (DDS bytes, bytes, sources,
@@ -1824,19 +1817,7 @@ class Server:
         still use. Earlier runs' folders among them are adopted (kept, their markers touched); one this
         game named before and names no longer is released (release_session) unless another game
         claims it. Our own session and unknown names are ignored."""
-        if isinstance(sessions, dict):      # an empty Lua table may encode as {}
-            sessions = list(sessions.values())
-        if not isinstance(sessions, list):
-            return
-        mine = {sid for sid in sessions if isinstance(sid, str) and sid in self.orphans}
-        for sid in sorted(mine - conn.sessions):
-            log.info("adopting session %s: the game still shows its tiles, its files stay until it lets go", sid)
-            self._touch(sid)
-        released = conn.sessions - mine
-        conn.sessions = mine
-        others = self.claimed_sessions()
-        for sid in sorted(released - others):
-            self.release_session(sid)
+        streamleases.claim_sessions(self, conn, sessions, log)
 
     def drop_claims(self, conn):
         """A connection closed: the sessions it claimed are orphans again (the game may come back,
@@ -6714,208 +6695,28 @@ class Server:
         """Event loop (Connection._stream): the connection's queued far tiles that the revisit cache may hold finished
         put back in bulk (restore_far) when there are MIN_BATCH or more not tried yet; once per queue. Not with the
         3D map open (its textures follow the screen) nor for a coarse cover's or a piece's tiles."""
-        far = conn.far
-        if getattr(conn, "_restore_q", None) == far.queue_gen:
+        fast.require(557, "bulk far restore")
+        reservation = conn.far.reserve_restore(conn, self, anchor, farrestoremod.MIN_BATCH)
+        if reservation is None:
             return
-        conn._restore_q = far.queue_gen
-        if not self.fin_name_len() or self.map_on():
-            return
-        cands = []
-        for t in far.queue_rest():
-            if isinstance(t, farfield.Piece) or t.key in self.coarse_keys or far.is_sent(t.key) or \
-                    t.key not in conn.desired:
-                continue
-            ck = conn.ck(t.key)
-            if ck in self.tiles or ck in self.tile_inflight or ck in self.restore_tried or ck in self.restoring or \
-                    far.is_inflight(ck):
-                continue
-            cands.append(t)
-        if len(cands) < farrestoremod.MIN_BATCH:
-            return
-        if len(self.restore_tried) > 200_000:
-            self.restore_tried.clear()
-        cks = [self.far_ck(anchor.id, t.key) for t in cands]
-        self.restoring.update(cks)
-        self.restore_tried.update(cks)
+        tiles, keys = reservation
         loop = asyncio.get_running_loop()
-        fut = loop.run_in_executor(self.restore_pool, self.restore_far, anchor, cands, loop)
-
-        def done(f, cks=cks):
-            if not f.cancelled() and f.exception() is not None:
-                log.warning("far restore failed: %r", f.exception())
-            if any(ck in self.restoring for ck in cks):     # (a batch that ended early: the usual way for the rest)
-                self.restoring.difference_update(cks)
-                for c in self.connections:
-                    c.wake.set()
-        fut.add_done_callback(done)
+        try:
+            fut = loop.run_in_executor(self.restore_pool, self.restore_far, anchor, tiles, loop)
+        except BaseException:
+            self.restoring.difference_update(keys)
+            self.restore_tried.difference_update(keys)
+            raise
+        fut.add_done_callback(lambda f: fast._ef.restore_finished(self, keys, f, log))
 
     def restore_far(self, anchor, tiles, loop):
-        """Restore thread: far tiles of anchor put back from the revisit cache's finished shapes (farrestore.py), the
-        nearest first, in chunks (farrestore.FIRST_CHUNK, then CHUNK): a far worker finds which are kept (their keys
-        need its map data), one native call writes them; each chunk's TileInfos go to the event loop (_restored), the
-        rest is built the usual way. Each chunk's find runs while the one before is written. None of the first chunk
-        kept: all left to the usual way."""
-        n_name = self.fin_name_len()
-        if not n_name:
-            return
-        im = self.imagery
-        analyses = self.deshadow is not None or self.colormatch is not None
-        fin = {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain} if analyses else None
-        bounds = [0] + list(range(farrestoremod.FIRST_CHUNK, len(tiles), farrestoremod.CHUNK)) + [len(tiles)]
-        chunks = [tiles[i:j] for i, j in zip(bounds, bounds[1:])]
-
-        def submit(chunk):
-            t0 = time.perf_counter()
-            specs, prep, why = self._restore_prepare(anchor, chunk, n_name, fin)
-            fut = self.far_pool.submit(blockworker.far_restore_find, anchor.id, anchor.lat, anchor.lon, specs) \
-                if specs else None
-            return chunk, prep, why, fut, t0
-        nxt = submit(chunks[0]) if chunks else None
-        k = 0
-        while nxt is not None:
-            chunk, prep, why, fut, t0 = nxt
-            found = fut.result() if fut is not None else []
-            t1 = time.perf_counter()
-            k += 1
-            # (the next chunk's find in a far worker while this one is written; one at a time: more at once woke the
-            # elastic pool's spare processes, seconds to start)
-            nxt = submit(chunks[k]) if k < len(chunks) and (k > 1 or any(f is not None for f in found)) else None
-            infos, t2 = self._restore_write(anchor, prep, found, why, n_name, t0)
-            st = self.restore_stats
-            st["batches"] += 1
-            st["asked"] += len(chunk)
-            st["restored"] += len(infos)
-            st["seconds"] += time.perf_counter() - t0
-            log.info("far restore: %d of %d tiles in %.0f ms (find %.0f, write %.0f); not kept: %s", len(infos),
-                     len(chunk), 1000 * (time.perf_counter() - t0), 1000 * (t1 - t0), 1000 * (t2 - t1),
-                     dict(sorted(why.items())) or "-")
-            loop.call_soon_threadsafe(self._restored, [self.far_ck(anchor.id, t.key) for t in chunk], infos)
-            if k == 1 and nxt is None:  # (none of the nearest kept: a place not seen with this build; the rest at once)
-                rest = [self.far_ck(anchor.id, t.key) for c in chunks[1:] for t in c]
-                if rest:
-                    loop.call_soon_threadsafe(self._restored, rest, {})
-
-    def _restore_prepare(self, anchor, chunk, n_name, fin):
-        """restore_far: the far worker's specs of a chunk's tiles (blockworker.far_restore_find), with what the write
-        needs of each (prep), and the count of tiles left out by why (a global tile without a kept texture)."""
-        im = self.imagery
-        specs, prep, why = [], [], {}
-        for tile in chunk:
-            ck = self.far_ck(anchor.id, tile.key)
-            px = self.tile_tex_px(anchor, tile)
-            # (the size it needs now, else one kept larger (the far PVS gives tiles the screen resolves more of up to
-            # farpvs.UP_PX_MAX once it is there; the restore asks before it), else one kept smaller (sharpened when
-            # sent like one built so: Connection.tex_short): the PVS sizes textures as it goes)
-            pxs = [px] + [px << k for k in (1, 2) if px << k <= farpvsmod.UP_PX_MAX] + \
-                [px >> k for k in range(1, 4) if px >> k >= farrestoremod.MIN_PX]
-            texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
-            gtex = None
-            if isinstance(tile, farfield.GTile):
-                zoom = farfield.global_dem_zoom(tile.z, self.layout.cells)
-                gref = farfield.global_dem_zoom(tile.z + 1, self.layout.cells)
-                for p_ in pxs:
-                    got = revisitmod.load(self.cache_dir, "fartex", self.tex_key(anchor, tile, p_))
-                    if got is not None and isinstance(got[0].get("tex.dds"), revisitmod.Side):
-                        gtex = got
-                        break
-                if gtex is None:
-                    why["global texture"] = why.get("global texture", 0) + 1
-                    continue
-                specs.append(("global", tile.z, tile.x, tile.y, zoom, gref, self.layout, [p_], n_name))
-            else:
-                lvl = tile.level
-                q = self.anchor_q(anchor) if lvl <= 0 else None
-                ref_zoom = anchor.zooms[lvl - 1] if lvl > 0 else None
-                zoom = anchor.zooms[max(lvl, 0)]
-                tex = {"path": os.path.join(self.out_dir, texture), "px": px,
-                       "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
-                                self.road_mask_px(lvl)) if self.road_masks else None,
-                       "chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                       "season_mode": im.season_mode, "keep_fin": n_name, **self.gen_far_tex()}
-                if fin is not None:
-                    tex["fin"] = fin
-                specs.append(("tile", tile, zoom, q, ref_zoom, self.near_visual in BLOCK_DRAWN, self.layout, tex,
-                              pxs))
-            prep.append((tile, ck, texture, zoom, gtex))
-        return specs, prep, why
-
-    def _restore_write(self, anchor, prep, found, why, n_name, t0):
-        """restore_far: the found tiles of a chunk written (farrestore.restore: one native call), their material
-        names taken -> ({ck: TileInfo}, the time the write ended)."""
-        items, meta = [], []
-        for (tile, ck, texture, zoom, gtex), got in zip(prep, found):
-            if got is None:
-                w = "global shape" if gtex is not None else f"L{tile.level} shape"
-                why[w] = why.get(w, 0) + 1
-                continue
-            loc, sides, px = got
-            if gtex is not None:
-                sides = {"tex.dds": gtex[0]["tex.dds"].path}
-            if "tex.dds" not in sides:
-                continue
-            material = self.matslots.take(ck)
-            if len(material) != n_name:     # (past 99,999 names: the usual way)
-                continue
-            tex_path = os.path.join(self.out_dir, texture)
-            side_list = [(sides["tex.dds"], staging.tmp_for(tex_path), tex_path)]
-            if gtex is None and "mask.dds" in sides and self.road_masks and self.road_mask_px(tile.level):
-                mp = os.path.join(self.out_dir, surfacemod.road_mask_name(texture))
-                side_list.append((sides["mask.dds"], staging.tmp_for(mp), mp))
-            shape = os.path.join(self.out_dir, self.tile_name(*ck))
-            slot = os.path.join(self.out_dir, matslotsmod.MatSlots.file(material))
-            items.append((loc, farrestoremod.placeholder(n_name), material,
-                          (staging.tmp_for(shape), shape, staging.tmp_for(slot), slot), side_list))
-            meta.append((tile, ck, px, texture, zoom, gtex, material, set(sides)))
-        res = farrestoremod.restore(items, staging.WARM_READ) if items else []
-        t2 = time.perf_counter()
-        infos = {}
-        for (tile, ck, px, texture, zoom, gtex, material, have), r in zip(meta, res):
-            if isinstance(r, str):
-                log.debug("far restore: %s: %s", tile.key, r)
-                continue
-            size, extra, grid = r
-            if not set(extra.get("sides") or ()) <= have:      # (a kept texture file gone: built again)
-                continue
-            pending = frozenset()
-            if gtex is not None:
-                tex_bytes, used = int(gtex[1]["tex_bytes"]), gtex[1]["used"]
-                if self.colormatch is not None or self.deshadow is not None:
-                    pending = frozenset(kept_pending(gtex[1]))
-            else:
-                tex_bytes, used = int(extra["tex_bytes"]), extra["used"]
-            sources = frozenset()
-            if self.credits is not None:
-                frame, x0, y0, s = self.tile_where(anchor, tile)
-                sources = creditsmod.tile_sources(frame, (x0, y0, x0 + s, y0 + s), self.dem, zoom, used)
-            info = TileInfo(list(extra["pos"]), float(extra["err"]), extra["sink"], float(extra["skirt"]), grid,
-                            size, t2 - t0, material, texture, tex_bytes, 0.0, credits=sources,
-                            err_n=extra.get("err_n"))
-            info.tile = tile
-            info.tex_px = px
-            info.coarse = False
-            if gtex is not None:
-                info.frame = farfield.global_frame_ll(tile.z, tile.x, tile.y)
-            info.shape = matslotsmod.MatSlots.file(material)
-            info.rev = self.tex_rev.get(ck, 0)
-            info.cm_pending = pending
-            self.degraded.discard(ck)
-            infos[ck] = info
-        return infos, t2
+        fast.require(557, "restore_batches")
+        fast._ef.restore_batches(self, anchor, tiles, loop, globals(), farrestoremod.FIRST_CHUNK, farrestoremod.CHUNK)
 
     def _restored(self, cks, infos):
         """Event loop: a restore chunk's tiles: the ones put back into the tile cache (as a build's: _tile_done), the
         rest left to the usual build; the streamers woken."""
-        loop = asyncio.get_running_loop()
-        for ck in cks:
-            self.restoring.discard(ck)
-            info = infos.get(ck)
-            if info is None or ck in self.tiles or ck in self.tile_inflight:
-                continue
-            f = loop.create_future()
-            f.set_result(info)
-            self._tile_done(ck, f)
-        for c in self.connections:
-            c.wake.set()
+        fast._ef.restore_publish(self, cks, infos)
 
     @staticmethod
     def write_file(path, data):
@@ -7136,6 +6937,9 @@ class Server:
         Connection.prebuild_coarse)."""
         ck = self.far_ck(anchor.id, tile.key)
         loop = self.loop = asyncio.get_running_loop()
+        if ck in self.renewing:
+            fut = self.tile_inflight[ck]
+            return asyncio.shield(fut) if shield else fut
         prev = None
         if ck in self.tiles:
             self.tiles.move_to_end(ck)
@@ -7161,7 +6965,7 @@ class Server:
         prune_delay ago: after a far_swap / far_remove the mod still shows the tile until the
         swap has run (its adds load within the governor budget, then a 0.5 s crossover) and
         deletes it time-sliced, and a shape file must not vanish under a live TSStatic."""
-        out = self.matslots.held_owners()
+        out = self.matslots.held_owners() | self.renewing
         now = time.monotonic()
         for c in self.connections:
             # (shown, sent, retired, in flight and desired: built for the active anchor but not sent yet, evicting
@@ -7183,54 +6987,19 @@ class Server:
 
     def slot_held(self, n):
         """Does some game still hold pooled slot n (a far_tile with it not reported gone)?"""
-        # Allocation can query this from a tile worker while the event loop
-        # connects/disconnects clients; do not iterate the mutable set directly.
-        return self.stream_leases.held(n) or any(n in c.slot_holds for c in tuple(self.connections)
-                                                 if getattr(c, "lease", None) is None)
+        return streamleases.slot_held(self, n)
 
     def attach_stream(self, conn, msg):
         """Reconcile a game's complete resource snapshot before sending it new pooled files."""
-        resumable = msg.get("streamLease") == 1
-        token = msg.get("leaseId") if msg.get("leaseSession") == self.sid else None
-        if not isinstance(token, str):
-            token = None
-        same_session = msg.get("slotSession") == self.sid
-        try:
-            if resumable and token in self.stream_leases.entries and not same_session:
-                raise ValueError("resuming a stream requires its complete slot snapshot")
-            slots = streamleases.snapshot(msg.get("slotsHeld"), self.matslots.made) if same_session else None
-            held = msg.get("held", []) if same_session else []
-            if held == {}:
-                held = []
-            if not isinstance(held, list) or any(not streamleases.integer(n) for n in held):
-                raise ValueError("held anchors must be an array of integers")
-            anchors = {int(n) for n in held if n in self.anchors}
-        except ValueError as e:
-            # (lenient: a bad snapshot starts a fresh lease rather than failing the hello; the old lease, if any,
-            # stays detached and expires: expire_leases)
-            log.warning("client %s: stream snapshot not resumed (%s): a new lease", getattr(conn, "peer", None), e)
-            token, slots, anchors = None, None, set()
-        lease, released, previous = self.stream_leases.attach(conn, token, slots, anchors, resumable)
-        if previous is not None:
-            previous.abort_stream("replaced by this game's reconnect")
-        self.slots_let_go(released)
-        return lease.token
+        return streamleases.attach_stream(self, conn, msg, log)
 
     def slots_let_go(self, slots):
         """Event loop: these slots were reported gone or excluded by a complete reconnect snapshot."""
-        for n in slots:
-            if not self.slot_held(n):
-                self.matslots.unheld(n)
+        streamleases.slots_let_go(self, slots)
 
     def held_anchors(self):
         """Previous anchors whose tile objects some mod still has (pose.held): their files stay."""
-        out = self.stream_leases.anchors()
-        for c in self.connections:
-            lease = getattr(c, "lease", None)
-            if lease is None or lease.connection is c:
-                out |= c.held
-        out.discard(GLOBAL_AID)
-        return out
+        return streamleases.held_anchors(self, GLOBAL_AID)
 
     def note_lod_err(self, ck, info):
         """Keep a built far tile's normal error for the screen-space LOD (lod_errs / glod_errs)."""
@@ -7301,11 +7070,7 @@ class Server:
         """Event loop: the pooled names (and shape files) of tiles about to be neither sent nor built back to the
         pool (matslots; one a game still holds waits for its report): names left by builds that never finished
         first, then idle cached tiles, least recently used first."""
-        used = self.names_in_use()
-        owners = self.matslots.holders()
-        lost = [ck for ck in owners if ck not in self.tiles and ck not in self.tile_inflight and ck not in used]
-        idle = (ck for ck in self.tiles if ck not in used and ck not in self.tile_inflight)
-        n = self.matslots.reclaim(itertools.chain(lost, idle))
+        n = self.matslots.reclaim_server(self)
         log.debug("material names: %d reclaimed, %s", n, self.matslots.stats())
 
     def pool_shapes(self, conn, files):
@@ -7313,70 +7078,36 @@ class Server:
         (matslots.py; the far tiles' slots): each a hard link at a slot path, held by conn until the mod reports it
         gone (pose.slotsGone). Returns {what: [vfs path, serial]} for the message's `slots` (files that do not exist
         are left out; a slot that cannot be placed too: the mod then loads the tile's own file)."""
-        out = {}
         lease = getattr(conn, "lease", None)
         if getattr(conn, "closing", False) or (lease is not None and lease.connection is not conn):
-            return out
-        if self.far_format != "cdae":
-            return out
-        for what, fname in files.items():
-            src = os.path.join(self.out_dir, fname)
-            if not os.path.exists(src):
-                continue
-            owner = ("shape", next(self.slot_serial))
-            name = self.matslots.take(owner)
-            slot = matslotsmod.MatSlots.file(name)
-            try:
-                matslotsmod.place(src, os.path.join(self.out_dir, slot))
-            except OSError as e:
-                log.debug("pooled shape %s: %s", fname, e)
-                self.matslots.release(owner)
-                continue
-            serial = next(self.slot_serial)
-            conn.slot_holds[matslotsmod.MatSlots.number(name)] = serial
-            self.matslots.release(owner)        # no tile owns it: free again once the mod lets go
-            out[what] = [f"{self.vfs_dir}/{slot}", serial]
-        return out
+            return {}
+        fast.require(557, "prepare_shape_files")
+        return staging.prepare_shape_files(self, files).claim(conn, files)
+
+    def _write_reslot(self, ck, info):
+        return matslotsmod.write_renewal(self, ck, info, cdae.PACKED)
 
     def reslot(self, ck, info):
-        """Event loop: a cached tile whose material name went to another tile meanwhile (reclaim_names) is
-        sent again: a copy of its shape with the new name in the new name's pooled file (slot_<n>; DAE tiles: a file
-        _s<serial>, the old copy deleted), even when it got its own name back (its pooled file may hold another
-        tile by now).
-        On failure the tile keeps its name: the caller builds it again rather than send it with another tile's name."""
-        new = self.matslots.take(ck)
-        src = os.path.join(self.out_dir, self.tile_name(*ck))
-        pooled = self.far_format == "cdae"
-        name = matslotsmod.MatSlots.file(new) if pooled else f"{os.path.splitext(self.tile_name(*ck))[0]}_s{next(self.reslot_serial)}.{self.far_format}"
+        return matslotsmod.reslot_sync(self, ck, info)
+
+    def renew_slot(self, ck, info, anchor, tile):
+        """One producer holds the slot through I/O and publication, even across a disconnect."""
+        return matslotsmod.start_renewal(self, ck, info, anchor, tile)
+
+    async def _renew_slot(self, loop, ck, info, anchor, tile):
         try:
-            with open(src, "rb") as fh:
-                data = fh.read()
-            packed = pooled and cdae.is_packed(data)
-            if packed:                  # (a compressed shape: the names are inside its body; written back so)
-                data = cdae.plain(data)
-            # the name in the tile's own file: the one it was built with, not info.material once it was renamed before
-            # (a global far tile kept across rebases is renamed again and again: restamping info.material failed from
-            # its second rename on, and the tile was sent with a name another tile had, drawing that tile's texture:
-            # Utah's red far tiles on the Pikes Peak ground, 2026-10-29)
-            have = info.material if info.material.encode() in data else self.matslots.name_in(data)
-            if have is None:
-                raise ValueError(f"no pooled name in {os.path.basename(src)}")
-            if new != have:
-                data = matslotsmod.restamp(data, have, new)
-            if packed:
-                data = cdae.pack(data)
-            dst = os.path.join(self.out_dir, name)
-            tmp = staging.tmp_for(dst)
-            with open(tmp, "wb") as fh:
-                fh.write(data)
-            staging.replace(tmp, dst)
-        except (OSError, ValueError) as e:
-            log.warning("tile %s of anchor %d: material name not renewed (%s)", ck[1], ck[0], e)
-            return info
-        if not pooled and info.shape is not None:
-            self.queue_delete([os.path.join(self.out_dir, info.shape)])
-        info = self.tiles[ck] = replace(info, material=new, shape=name)
-        return info
+            try:
+                renewed = await loop.run_in_executor(self.tile_pool, self._write_reslot, ck, info)
+            except (OSError, ValueError) as exc:
+                log.warning("tile %s of anchor %d: material name not renewed (%s)", ck[1], ck[0], exc)
+                built = matslotsmod.rebuild_renewal(self, ck, anchor, tile, loop)
+                await built
+                self._tile_done(ck, built)
+                return built.result()
+            return matslotsmod.finish_renewal(self, ck, info, renewed)
+        finally:
+            self.renewing.discard(ck)
+            self.tile_inflight.pop(ck, None)
 
     def _evict_tile(self, ck):
         info = self.tiles.pop(ck)
@@ -10269,24 +10000,7 @@ class Connection:
     def slots_gone(self, gone):
         """pose.slotsGone [[slot, serial], ...]: the mod's objects (or never-spawned instances) of those far_tile
         messages are gone; a slot whose latest send is among them is no longer held by this game."""
-        lease = getattr(self, "lease", None)
-        if lease is not None and lease.connection is not self:
-            return
-        if isinstance(gone, dict):      # an empty Lua table may encode as {}
-            gone = list(gone.values())
-        if not isinstance(gone, list):
-            return
-        let_go = []
-        for g in gone:
-            if isinstance(g, dict):
-                g = [g.get("1"), g.get("2")]
-            if not isinstance(g, (list, tuple)) or len(g) != 2:
-                continue
-            n, serial = g
-            if streamleases.integer(n) and streamleases.integer(serial) and self.slot_holds.get(int(n)) == serial:
-                del self.slot_holds[int(n)]
-                let_go.append(int(n))
-        self.s.slots_let_go(let_go)
+        streamleases.slots_gone(self, gone)
 
     def far_first_pending(self):
         """Is the far field of the place teleported to last (or the session's first) still to be done, for at most
@@ -10305,104 +10019,17 @@ class Connection:
         return self.far.dirty or self.far.has_inflight()
 
     def on_pose(self, msg):
-        self.slots_gone(msg.get("slotsGone"))
-        held = msg.get("held")
-        if isinstance(held, dict):      # an empty Lua table may encode as {}
-            held = list(held.values())
-        if isinstance(held, list):
-            self.held = {int(a) for a in held if isinstance(a, (int, float)) and not isinstance(a, bool)}
-        self.s.claim_sessions(self, msg.get("sessions"))   # earlier runs' folders still in use (or released)
-        self.weather.on_pose(self, msg.get("lat"), msg.get("lon"))
-        feed = getattr(self.s, "feed", None)
-        if feed is not None:            # the companion feed (companionfeed.py)
-            feed.publish(msg.get("lat"), msg.get("lon"), msg.get("speed"), msg.get("vx"), msg.get("vy"),
-                         msg.get("anchorId"))
-        if isinstance(msg.get("lat"), (int, float)) and isinstance(msg.get("lon"), (int, float)):
-            self.pose_ll = (float(msg["lat"]), float(msg["lon"]))     # (the BeamMP share hub's prefetch)
-        if self.s.surface is not None and isinstance(msg.get("lat"), (int, float)) and isinstance(msg.get("lon"), (int, float)):
-            self.s.surface.prefetch(float(msg["lat"]), float(msg["lon"]))
-        aid = msg.get("anchorId")
-        # The latest committed anchor is the one the mod reports in its pose
-        # (ids only grow, so never switch back to an older one).
-        if aid in self.s.anchors and (self.active is None or aid > self.active):
-            self.commit_anchor(aid)
-        x, y = _num(msg, "x", 0.0), _num(msg, "y", 0.0)
-        vx, vy = _num(msg, "vx", 0.0), _num(msg, "vy", 0.0)
-        if aid == self.active:
-            self.focus = (x, y)
-            self.pz = _num(msg, "z", 0.0)
-        elif aid in self.s.anchors and self.active in self.s.anchors:
-            # A late pose of the previous anchor: move it into the active frame.
-            src, dst = self.s.anchors[aid].frame, self.s.anchors[self.active].frame
-            fx, fy, _ = dst.ecef_to_enu(*src.enu_to_ecef(x, y, 0.0))
-            self.focus = (float(fx), float(fy))
-        else:
-            return
-        self.vel = (vx, vy)
-        now = time.monotonic()
-        it = self.__dict__.get("intent")
-        if it is None or getattr(self, "intent_aid", None) != self.active:
-            it = self.intent = reachmod.Intent()        # (a new frame: the velocities of the old one not compared)
-            self.intent_aid = self.active
-        it.feed(now, vx, vy)
-        self.s.speed = math.hypot(vx, vy)
-        if math.hypot(vx, vy) > FAST_BASE_V:
-            self.s.fast_at = now
-        self.s.fast = now - getattr(self.s, "fast_at", -1e9) < FAST_KEEP_S
-        self.hold_boost(msg.get("guardHold") is True)
-        self.catch_up(math.hypot(vx, vy))
-        if self.s.boost_on and not self.catchup:
-            since = time.monotonic() - getattr(self, "boost_t0", 0.0)
-            moving = math.hypot(vx, vy) > BOOST_MOVE_MS and since > BOOST_GRACE_S     # (the car settling: not moving)
-            if moving and self.s.mapdata is not None:
-                # (not while the roads round the car are still being built: a 2-core server's boost ended as the
-                # player drove off on bare ground, its road tiles minutes late, GitHub #412)
-                done, want = self.roads.progress()
-                moving = done >= want
-            if self.s.boost_full:
-                # (full priority: until the far field and the roads round the car are done, moving or not)
-                done, want = self.roads.progress() if self.s.mapdata is not None else (1, 1)
-                # (its own far field done since the teleport: right after it nothing was loading yet, ended in 0.7 s)
-                loaded = getattr(self, "far_done_at", 0.0) > getattr(self, "boost_t0", 0.0) and not self.far_loading()
-                if (loaded and done >= want) or since > BOOST_FULL_MAX_S:
-                    self.s.load_boost(False, "loaded" if since <= BOOST_FULL_MAX_S else "timeout")
-            elif moving or since > BOOST_MAX_S:
-                self.s.load_boost(False, "moving" if moving else "timeout")
-        if isinstance(msg.get("cam"), dict):
-            self.cam, self.cam_aid = msg["cam"], aid
-        self.view_at = self.camera_away(msg.get("cam")) if aid == self.active else None
-        self.foci = parse_foci(msg.get("foci")) if aid == self.active else ()
-        if self.s.horizon:
-            self.update_eye(self.s.anchors[aid].frame, *(self.view_at or (x, y)), msg)
-        hint = getattr(self, "focus_hint", None)
-        if hint is not None:
-            if hint[0] == aid == self.active and time.monotonic() < hint[4]:
-                # (the 3D map flying there: the far field built round where the view will end, at its detail)
-                self.view_at, self.eye = (hint[1], hint[2]), hint[3]
-            elif time.monotonic() >= hint[4]:
-                self.focus_hint = None
+        fast.require(557, "connection_pose")
+        fast._ef.connection_pose(self, msg, globals())
+
+    def _pose_ground(self, aid, x, y, vx, vy, msg):
         self.gravity.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0))
         self.ground_ahead(aid, x, y, vx, vy)
         self.deck_spans(aid, x, y)
         if self.s.sea is not None:
             self.sea_tiles(aid, x, y)
-        # the mod's altitude rule: high above the ground it does not move its block, so no block is
-        # built ahead (prefetch, road plans) until it comes down
-        self.following = msg.get("follow") is not False
-        self.map_view = msg.get("view") is True     # (the 3D map's view frame: mod core st.viewFrame)
-        self.map_open = msg.get("map") is True      # (the 3D map open, near the car or not: map3d.isActive)
-        # the 3D map open: every core for the server (cpupin.full_split, the game on its first cores: it draws the map
-        # and runs no physics there), so the ten far-tile processes are not squeezed onto the server's four CPUs
-        # (2026-11-07: a fresh city's first far tile came 19 s after the flight began)
-        # (asked again on every pose while it is not ours: full priority loading or an edge hold has the split, and
-        # theirs ends while the map is still open)
-        want = self.map_view or self.map_open
-        if want and not getattr(self, "map_split", False) and time.monotonic() >= getattr(self, "map_split_try", 0.0):
-            self.map_split_try = time.monotonic() + 2.0
-            self.map_split = self.s.split_boost(True, "3D map")
-        elif not want and getattr(self, "map_split", False):
-            self.map_split = False
-            self.s.split_boost(False, "3D map closed")
+
+    def _pose_blocks(self, aid):
         self.predicted_block = None
         tree = self.tree = self.reach_tree(aid) if aid == self.active else None
         self.tree_led = False           # (the blocks predicted along the tree: Server.block_unwanted)
@@ -10443,26 +10070,9 @@ class Connection:
                 else:
                     cs = predict_chain(px, py, *self.vel, base.cx, base.cy, rule, PREFETCH_CHAIN, at)
                 self.predicted_chain = [self.s.layout.block_at(*c) for c in cs]
-        if (self.map_view or self.map_open) and self.eye:
-            # the 3D map zoomed far in (the user, 2026-11-07: "no matter where i am it should only take a couple seconds
-            # to see detailed terrain"): coarse first there too, as at a new anchor (commit_anchor), not the finest of
-            # ~360 tiles first and the screen filling in 15 s (Minneapolis, no origin move)
-            ref = getattr(self, "zoom_ref", None)
-            if ref is None or self.eye > ref:
-                self.zoom_ref = self.eye
-            elif self.eye < ref / MAP_ZOOM_RAMP_K and getattr(self, "lod_ramp", 1.0) >= 1.0:
-                self.lod_ramp, self.zoom_ref = MAP_RAMP_START, self.eye
-                log.info("3D map: zoomed in x%.0f, coarse first", ref / self.eye)
-        # the far field (earthfast FarState.pose): the selection (not again when nothing it goes by moved), the far PVS
-        # for where the player is now (pvs_tick, after the selection: its radius), the larger tiles' best photos
-        self._far().pose(self, self.s)
-        if self.teleport_pending and time.monotonic() - self.teleport_t0 > TELEPORT_PAUSE_MAX_S:
-            self.teleport_pending = False   # the mod never committed it (it stayed): the old place's work goes on
-            self.unabandon_old()
-            self.wake.set()
-        if self.teleport_pending:           # the old place's work waits: the new place has the CPU and the network
-            self.refresh_status()
-            return
+        return tree
+
+    def _pose_refresh(self, aid, tree):
         self.maybe_prefetch()
         self.send_ready_set()
         if aid == self.active and self.following:
@@ -10474,8 +10084,8 @@ class Connection:
             self.pads_refresh(aid)
             self.roads_refresh(aid)
             self.prov_refresh(aid)
-        fast.require(551, "tracker_pose")
-        fast._ef.tracker_pose(self, aid, msg, tree, MAP_DETAIL_EYE_M, MAP_BUILDINGS_EYE_M)
+
+    def _pose_nav(self, aid):
         if self.s.traffic and aid == self.active and not self.map_view and self.nav_may_start(aid):
             # (centred ahead of a moving car: the minimap's roads, the AI's and the GPS's graph, ran out in front at
             # speed, a graph built round where the car was when it started; the user, 2026-11-04)
@@ -10484,11 +10094,6 @@ class Connection:
             sp = max(math.hypot(vx, vy), 1e-6)
             cx, cy = self.focus[0] + vx / sp * lead, self.focus[1] + vy / sp * lead
             self.nav.on_pose(self, aid, cx, cy, asyncio.get_running_loop(), self.s.build_navgraph)
-        fast._ef.traffic_pose(self, aid)
-        if aid == self.active:
-            self.send_progress(aid)
-        self.refresh_status()
-        self.credits.poke(self)             # the player moved: the near / far credits may change
 
     def reach_tree(self, aid):
         """The car's time-to-reach tree for this pose (reach.Tree), or None: the switch off (REACH_ON), no map data or
@@ -10571,16 +10176,8 @@ class Connection:
         round it as well as round the car; what collides stays round the car (the terrain block, the road and
         building colliders in the tiles round the car, the nav graph). The user, 2026-10-20: "All collision ...
         should be following the car while visual stuff should follow the camera"."""
-        if not isinstance(cam, dict):
-            return None
-        cx, cy = cam.get("x"), cam.get("y")
-        if cam.get("tx") is not None and cam.get("ty") is not None:
-            cx, cy = cam.get("tx"), cam.get("ty")       # (the 3D map's target on the ground: mod map3d.lua)
-        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (cx, cy)):
-            return None
-        if math.hypot(cx - self.focus[0], cy - self.focus[1]) <= VIEW_AWAY_M:
-            return None
-        return float(cx), float(cy)
+        fast.require(557, "pose_camera")
+        return fast._ef.pose_camera(cam, self.focus, VIEW_AWAY_M)
 
     @property
     def view_focus(self):
@@ -11306,16 +10903,8 @@ class Connection:
         z, else EYE_ABOVE_PLAYER over the player's. The frame's z is the height above the anchor's
         tangent plane, whose origin is at sea level, so the exact geodetic height adds the d²/2R the
         plane lies above the ellipsoid at the player (17.7 m at 15 km). Quantised (EYE_STEP)."""
-        cam = msg.get("cam")
-        z = cam.get("z") if isinstance(cam, dict) else None
-        if isinstance(z, (int, float)) and not isinstance(z, bool) and math.isfinite(z):
-            z = float(z)
-        else:
-            z = _num(msg, "z", 0.0) + EYE_ABOVE_PLAYER
-        h = float(frame.enu_to_geodetic(x, y, z)[2])
-        self.eye_now = h                    # (exact: the far PVS's eye check, pvs_tick)
-        if self.eye is None or abs(h - self.eye) > max(EYE_STEP, EYE_STEP_REL * abs(self.eye)):
-            self.eye = h
+        fast.require(557, "pose_eye")
+        fast._ef.pose_eye(self, frame, x, y, msg, globals())
 
     def send_ready_set(self):
         """'terrain_ready_set' {anchorId, centres}: the blocks of the active anchor built already, within READY_SET_M of
