@@ -106,6 +106,19 @@ class RoadClearanceTest(unittest.TestCase):
             if s.min_h <= 0.5:
                 self.assertAlmostEqual(bld.base_z(s, a, b) + s.height, under, places=6)
 
+    def test_a_station_outline_the_road_runs_through_is_left_out(self):
+        """Lenox MARTA station, Atlanta: building=train_station drawn over the open junction (2026-11-21)."""
+        cw = street()
+        out, stats = items_of([ll(20, 80, 20, 40)], cw, heights=[15.0], classes=["train_station"])
+        self.assertEqual(stats, {"osm_station_dropped": 1})
+        self.assertEqual(out, [])
+        try:
+            bld.ROAD_CLEAR_STATION_ON = False
+            out, stats = items_of([ll(20, 80, 20, 40)], cw, heights=[15.0], classes=["train_station"])
+            self.assertEqual(stats, {"osm_passage": 1})
+        finally:
+            bld.ROAD_CLEAR_STATION_ON = True
+
     def test_a_low_shed_on_the_roads_line_is_left_out_a_low_house_keeps_its_pieces(self):
         cw = street()
         out, stats = items_of([ll(20, 97, 6, 6), ll(60, 85, 10, 40)], cw, heights=[3.0, 3.0])

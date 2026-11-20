@@ -1899,6 +1899,13 @@ def _sleepers(s, xy, u, top, i, j, gone=0.0):
 
 
 PIER_ROAD_M = 1.5           # m a pier keeps off a road's carriageway (its sidewalks included) or a footway under the bridge
+# ... and a motorway's or trunk road's off its shoulder (grading.shoulder: the flat ground graded beside the
+# carriageway, its paved shoulders): the Norfolk Southern bridges over I-75 / I-85 at 17th Street, Atlanta, stood their piers 1.5 m past the
+# lanes' edge, on the shoulder the road is drawn over (the user's report 2026-11-21: "railroad track support ... walls
+# still obstructing the roadway"). BNE_PIER_SHOULDER=off: the carriageway and sidewalks only.
+PIER_SHOULDER_ON = os.environ.get("BNE_PIER_SHOULDER", "on") != "off"
+PIER_SHOULDER_CLASSES = {"motorway", "trunk", "motorway_link", "trunk_link"}     # (a town street's "shoulder" is its
+                            # sidewalk, already kept off: Caledonian Road's pier had no room left and was dropped)
 PIER_OBST_REACH_M = 60.0    # m round the tile the roads and footways the piers keep off are taken (a site moves up to
                             # 0.4 of a span along the deck: within reach of any tile that draws it)
 
@@ -1920,7 +1927,11 @@ def pier_obstacles(frame, cells, box, reach=PIER_OBST_REACH_M):
             if sp is None or fid in seen:
                 continue
             seen.add(fid)
-            half = sp.width / 2 + (float(sp.walk or 0.0) if roads.has_sidewalks(sp) else 0.0)
+            side = float(sp.walk or 0.0) if roads.has_sidewalks(sp) else 0.0
+            if PIER_SHOULDER_ON and sp.cls in PIER_SHOULDER_CLASSES:
+                import grading
+                side = max(side, float(grading.shoulder(sp)))
+            half = sp.width / 2 + side
             for ring in roads.ground_parts(feats, i):
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 lines.append((np.column_stack((e, n)), half))
