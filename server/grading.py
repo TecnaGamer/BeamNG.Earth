@@ -5331,6 +5331,11 @@ class _Planner:
                 zs, m, put = shape(i)
                 free = np.isfinite(zs) & ~put
                 lo, hi = np.where(free & (m == "fill"), zs, -np.inf), np.where(free & (m == "cut"), zs, np.inf)
+                # (a fill's floor is an embankment's: over its ground. Under it, the ramp's landing curve sagging below a
+                # ground that climbs on, it is no embankment and holds the road that lands on it up: Porte Maillot's side
+                # road, 12 % between a mouth at 38.22 and a floor 0.5 m over it 7.5 m on, in a 11 % road)
+                if np.isfinite(lo).any():
+                    lo = np.where(lo > self._ground_line(np.asarray(plans[i][1].xy, np.float64)[:, :2]), lo, -np.inf)
             got = over(i) if over is not None else None
             if got is not None:
                 got = np.asarray(got, np.float64)
