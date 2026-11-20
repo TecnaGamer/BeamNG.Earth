@@ -80,10 +80,11 @@ MATERIALS = (
     ("bngEarthGroundDryGrass", "GRASS"),
     ("bngEarthGroundCrop", "DIRT"),
     ("bngEarthGroundSand", "SAND"),
+    ("bngEarthGroundGenericCrop", "DIRT"),        # same crop soil, with generic plants outside planted special fields
 )
 ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
     GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, PAVERS, BRICK, DIRT, \
-    FOREST, DRYGRASS, CROP, SAND = range(len(MATERIALS))
+    FOREST, DRYGRASS, CROP, SAND, GENERIC_CROP = range(len(MATERIALS))
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
@@ -1083,6 +1084,57 @@ FARM_ROAD_CLEAR_M = 4.0     # furrows stop this far short of a dirt road's edge
 def paint_fields(idx, lat, lon, feats_list):
     """idx with farmland polygons drawn as crop soil (the whole field: the furrows are only in the photo). Pure."""
     return _paint(idx, lat, lon, feats_list, _farmland, CROP)
+
+
+def classify_generic_crops(idx, lat, lon, feats_list, *, land=None):
+    """Add generic crop cover while preserving existing orchard trees and vineyard rows.
+
+    feats_list is the land-use data already read by Surface.lots; this pass never
+    fetches map data. Unprotected crop soil receives a plant-bearing layer with
+    identical soil appearance and physics. Special fields keep their original
+    crop soil. Polygon holes and every non-crop surface are preserved.
+    Apply after layer folding, which can otherwise spread crop soil back into a
+    protected field. The planted vegetation itself remains untouched.
+    """
+    eligible = idx == CROP
+    if land is not None:
+        eligible &= ~np.isin(land, (ROCK, SNOW, MUD, heightmap.TER_HOLE))
+    if not eligible.any():
+        return idx
+    h, w = idx.shape
+    blocked = np.zeros(idx.shape, bool)
+    to_px = None
+    for feats in feats_list or ():
+        if feats is None or feats.layer != "land_use" or not len(feats):
+            continue
+        cls = feats.attrs.get("class")
+        if cls is None:
+            continue
+        selected = np.isin(np.asarray(cls).astype(str), ("orchard", "vineyard")) & (feats.kind == 3)
+        for i in np.flatnonzero(selected):
+            if to_px is None:
+                to_px = grid_affine(lat, lon)
+            for part in feats.parts(i):
+                if not part or len(part[0]) < 3:
+                    continue
+                rings = [to_px(np.asarray(r)[:, 0], np.asarray(r)[:, 1]) for r in part]
+                c, r = rings[0]
+                c0, c1 = max(0, int(np.floor(c.min()))), min(w, int(np.ceil(c.max())) + 1)
+                r0, r1 = max(0, int(np.floor(r.min()))), min(h, int(np.ceil(r.max())) + 1)
+                if c1 <= c0 or r1 <= r0 or not eligible[r0:r1, c0:c1].any():
+                    continue
+                image = Image.new("L", (c1 - c0, r1 - r0), 0)
+                draw = ImageDraw.Draw(image)
+                for j, (c, r) in enumerate(rings):
+                    if len(c) >= 3:
+                        draw.polygon(list(zip((c - c0).tolist(), (r - r0).tolist())), fill=255 if j == 0 else 0)
+                blocked[r0:r1, c0:c1] |= (np.asarray(image) > 0) & eligible[r0:r1, c0:c1]
+    generic = eligible & ~blocked
+    if not generic.any():
+        return idx
+    out = idx.copy()
+    out[generic] = GENERIC_CROP
+    return out
 
 
 def paint_grass(idx, lat, lon, feats_list):

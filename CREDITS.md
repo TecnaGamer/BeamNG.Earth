@@ -264,3 +264,9 @@ weather). The pause-menu integration follows the pattern of the TAA Standalone m
 - Brown recreation, park and forest entrance boards: original procedural geometry and the existing guide lettering;
   their agency badges are simple drawn shapes (no NPS arrowhead or Forest Service shield). Names come from the map
   data (Overture Maps, © OpenStreetMap contributors, ODbL).
+
+## Generic cropland crops
+
+- The three corn-like crop meshes and their texture-free material are original procedural assets
+  under the repository MIT licence. `tools/make_crop_asset.py` reproduces them without game files
+  or third-party models.

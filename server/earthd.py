@@ -4645,6 +4645,7 @@ class Server:
                 idx = self.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
             stages["roadPaint"] = time.perf_counter() - t1
             idx = surfacemod.fold_layers(idx, land, heightmap.SQUARE, stages)   # (fewer layers: a cheaper swap)
+            idx = surfacemod.classify_generic_crops(idx, keep["lat"], keep["lon"], lots, land=land)
             complete = complete and roads_complete
             info["layers"] = surfacemod.write_masks(idx[::-1], self.out_dir, self.hm_name((anchor.id, cx, cy))[:-4])
             info["surfaceComplete"] = complete

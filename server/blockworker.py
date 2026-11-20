@@ -938,6 +938,7 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
             idx = _s.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
         stages["roadPaint"] = time.perf_counter() - t1
         idx = surfacemod.fold_layers(idx, land, heightmap.SQUARE, stages)   # (fewer layers: a cheaper swap)
+        idx = surfacemod.classify_generic_crops(idx, keep["lat"], keep["lon"], lots, land=land)
         info["layers"] = surfacemod.write_masks(idx[::-1], out_dir, name[:-4])
         info["surfaceComplete"] = complete and roads_complete
         info["roadsComplete"] = roads_complete
