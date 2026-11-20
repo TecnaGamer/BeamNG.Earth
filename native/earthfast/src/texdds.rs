@@ -129,7 +129,7 @@ fn decode_webp(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
     Ok((w, h, chans, buf))
 }
 
-fn decode_image(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
+pub(crate) fn decode_image(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
     if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
         decode_webp(data)
     } else if data.starts_with(b"\x89PNG") {
