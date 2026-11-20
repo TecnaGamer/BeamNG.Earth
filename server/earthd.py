@@ -396,6 +396,7 @@ LEFT_MIN_V = 3.0                # m/s: slower, "behind" means nothing (only LEFT
 PADS_REFRESH_IN_USE = os.environ.get("BNGE_PADS_REFRESH", "on") != "off"     # (Connection.pads_refresh; A/B runs)
 # Full priority loading (the settings page's teleportPriority) squeezes the game onto two cores only with this on
 FULL_PIN_GAME = os.environ.get("BNGE_FULL_PIN_GAME", "off") == "on"
+REVISIT_BASE_WAIT_S = 2.0       # s a block whose final photo is in the revisit cache waits for it at most (make_heightmap)
 BASE_WAIT_S = 2.5               # ... and slower, this long: a slow photo held the heightmap thread and the blocks behind
                                 # it (a city's first visit at 127 mph: 4.75 s for one photo, the next block 7.8 s and the
                                 # car at the edge of its ground; a 4-core PC's photos took ~26 s, GitHub #496); it then
@@ -432,6 +433,11 @@ BASE_SIZES = (1024, 2048, 4096)
 def base_ao_vfs(px):
     """The level's flat AO map of ground photo size px (every surface layer's aoBaseTex at that size)."""
     return BASE_AO_VFS if px == BASE_PX else f"{BASE_AO_VFS[:-4]}_{px}.png"
+# The kept base photos' own version (base_revisit_key): earthd.py is not in the revisit code key (revisit.source_closure
+# takes the modules that call revisit.key / load / store, and this one calls them as revisitmod), so a change here to how
+# a block's photo is made (write_base, write_quick_base's overlap, _base_in's arguments, BASE_SHIFT_M) bumps it, or a
+# place visited before keeps the photo the older code made. blockworker.base_photo and genground.py are in the code key.
+BASE_PHOTO_VERSION = 1
 BASE_AO = 251                   # its flat value (tools/make_level_assets.py)
 GRAPHICS_SCALE = (0.5, 3.0)     # the 'graphics' message's scales are clamped to this (Connection.set_graphics)
 # Screen-space LOD (the mod's lodPx setting, the 'graphics' message; Connection.view): tau is clamped to LOD_PX_MAX; the
@@ -464,8 +470,13 @@ WHERE_PLACE_RETRY_S, WHERE_PLACE_TRIES = 5.0, 60
 # each waits (tries x WHERE_PLACE_RETRY_S: 2 min, then its last answer says it is still incomplete)
 PLACES_FOLLOWUPS, PLACES_TRIES = 4, 24
 
-HM_CACHE = 16               # heightmaps kept beyond the protected ones (6 before 2026-10-30: a fast player's prefetched
-                            # chain (PREFETCH_CHAIN) was evicted before the mod asked for it and built again)
+HM_CACHE = 48               # heightmaps kept, the protected ones with them (6 before 2026-10-30: a fast player's
+                            # prefetched chain (PREFETCH_CHAIN) was evicted before the mod asked for it and built again;
+                            # 16 until 2026-11-19: a lap of a race track (Daytona, 4 km, ~20 blocks asked for and as
+                            # many prefetched) evicted every block before the car was back on it, each built again
+                            # every lap with a stand-in photo or none. Least recently used first; ~17 MB of files a
+                            # block (heights, .ter, masks, photos and their packed copies), ~0.8 GB at 48)
+HM_CACHE_TIER = {"small": 32, "lean": 16, "emergency": 16}  # at most this many on a smaller machine's tier (budget.TIER)
 TERRAIN_STUCK_S = 90.0      # s: a terrain request still building this long is logged once (prepare_terrain)
 HM_KEEP_COMMITTED = 3       # the current terrain and the last two
 HM_KEEP_SENT = 2            # terrains handed to the mod but maybe not committed yet
@@ -1176,6 +1187,19 @@ TURBINE_DROP_M = 5000.0
 TURBINE_PER_POSE = 2       # bounded batches: only populated cells request terrain elevations
 
 
+class _SentLog(deque):
+    """hm_sent: the last terrains handed to the mod (a deque), and every one ever handed to it while still in hm (ever):
+    evict_heightmaps drops the blocks the mod never had (prefetched guesses) before the ones it used."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.ever = set()
+
+    def append(self, key):
+        self.ever.add(key)
+        super().append(key)
+
+
 class Server:
     host = None                 # the game connection's protocol.HostServer (BNGE_HOST=on, main_async), else None
 
@@ -1484,7 +1508,7 @@ class Server:
         # teleport, stop generating the old city"; a fresh Albuquerque waited behind the Newark it left, its graded
         # first block and road tiles still building 46 s later); back when the teleport is never committed
         self.abandoned = set()
-        self.hm_sent = deque(maxlen=HM_KEEP_SENT)
+        self.hm_sent = _SentLog(maxlen=HM_KEEP_SENT)
         # Far tiles: (anchorId, key) -> TileInfo, LRU order; files are far_<anchorId>_<key>.<fmt>.
         self.tiles = OrderedDict()
         self.tile_inflight = {}
@@ -4289,9 +4313,20 @@ class Server:
         if gone():
             raise poolsmod.Abandoned()
         q = self.anchor_q(anchor)
-        fb, base = anchor.first_base, None
+        fb, base, kept = anchor.first_base, None, False
         if fb is not None and fb[0] == (cx, cy):        # the provisional first block's photo (make_provisional)
             anchor.first_base, base = None, fb[1]
+        elif self.near_visual == "detail" and self.imagery is not None and self.fast \
+                and (anchor.id, cx, cy) not in self.hm_committed and not Server.stale_of(self, anchor, 0.0) \
+                and Server.base_kept(self, anchor, cx, cy):
+            # (its final photo in the revisit cache: taken from there beside the heights, on its own threads (never
+            # queued behind the photos being painted), and the block waits for it (REVISIT_BASE_WAIT_S at most). Skipped
+            # as below, a block built again (evicted, then asked for once more: every lap of a race track) went with
+            # a stand-in, or none (the level's brown base), and its photo was painted again each time; Daytona with
+            # the generated ground, 2026-11-19: 3-5 times a block in 10 min, the ground brown meanwhile)
+            kept = True
+            base = self._revisit_base_pool().submit(self._base_kept_photo, anchor, cx, cy)
+            base.kept = True
         elif self.near_visual == "detail" and self.imagery is not None and self.fast \
                 and (lane == LANE_PREFETCH or (progress is None and getattr(self, "speed", 0.0) >= PHOTO_SKIP_V)) \
                 and (anchor.id, cx, cy) not in self.hm_committed:     # (a rebuild of the block in use keeps its photo)
@@ -4346,7 +4381,8 @@ class Server:
                                          if finished else {}),
                                       **info.get("stages", {})}
                 self.hm_stage[key] = "its base photo"
-                return self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=lane == LANE_REQUEST, lane=lane)
+                return self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=lane == LANE_REQUEST, lane=lane,
+                                              base_wait=REVISIT_BASE_WAIT_S if kept else None)
             self.hm_stage[key] = "the build in the server's process"
             urgent = getattr(self.dem, "urgent", None)     # (test DEMs have no lane)
             with urgent() if urgent is not None else contextlib.nullcontext():     # the player waits for it (teleport,
@@ -4361,6 +4397,27 @@ class Server:
                 return self._make_heightmap_here(anchor, cx, cy, progress, t0, q, base)
         finally:
             self.hm_stage.pop(key, None)
+
+    def _base_kept_photo(self, anchor, cx, cy):
+        """_base_photo's result for a block whose final photo base_kept found: taken from the revisit cache, never
+        painted here (a load that fails is (None, [], s): _finish_heightmap_now then marks it skipped, as the fast
+        path's skip does, and it gets its stand-in and base_refresh; the Codex review: a failed load painted the photo on
+        these two threads, the next blocks' kept photos behind it)."""
+        t1 = time.perf_counter()
+        photo = []
+        name, _bk = Server._base_from_revisit(self, anchor, cx, cy, photo)
+        return name, photo, time.perf_counter() - t1
+
+    def _revisit_base_pool(self):
+        """The threads that take blocks' final photos from the revisit cache (base_kept; a file read and a JPEG decode,
+        ~0.1 s): their own, never behind the photos the base pools paint (seconds each)."""
+        pool = getattr(self, "_rv_base_pool", None)
+        if pool is None:
+            with self.base_lock:
+                pool = getattr(self, "_rv_base_pool", None)
+                if pool is None:
+                    pool = self._rv_base_pool = ThreadPoolExecutor(2, thread_name_prefix="base-revisit")
+        return pool
 
     def block_shared(self):
         """Do both block lanes share one process (a lean tier: main_async)?"""
@@ -4741,15 +4798,11 @@ class Server:
         kw = {"rev": rev} if rev else {}
         # (an anchor shown from an older version: that version's photo where this one has none yet, painted again
         # behind it as a stale one, base_refresh)
-        with revisitmod.stale(Server.stale_of(self, anchor, 0.0)):
-            revisitmod.take_stale_hit()
-            bk = self.base_revisit_key(anchor, cx, cy) if not rev else None
-            if bk is not None:
-                name = self._base_revisited(anchor, cx, cy, bk, photo)
-                if name is not None:
-                    if revisitmod.take_stale_hit() is not None and aid is not None:
-                        self.base_stale.add((aid, cx, cy))
-                    return name, photo, time.perf_counter() - t1
+        bk = None
+        if not rev:
+            name, bk = Server._base_from_revisit(self, anchor, cx, cy, photo)
+            if name is not None:
+                return name, photo, time.perf_counter() - t1
         f0 = revisitmod.begin()             # (this photo's own faults: revisit.scope)
         try:
             ck = {"canopy_out": canopies} if genground.ON else {}
@@ -4778,12 +4831,14 @@ class Server:
             return None
         try:
             return revisitmod.key("basephoto", round(float(anchor.lat), 7), round(float(anchor.lon), 7), float(cx),
-                                  float(cy), self.layout.block, heightmap.SQUARE, BASE_RENDER_PX, self.base_px,
+                                  float(cy), ("v", BASE_PHOTO_VERSION, BASE_SHIFT_M), self.layout.block,
+                                  heightmap.SQUARE, BASE_RENDER_PX, self.base_px,
                                   BASE_AO, [s.name for s in im.chain], self.tone, im.leaf_on, im.season_mode,
                                   self.tex_modes, roadsmod.ROADS_IN_GROUND, bool(self.buildings),
                                   self.mapdata.versions() if self.mapdata is not None else None,
                                   self.road_widths is not None, self.surface is not None, anchor.zooms[0],
                                   terraincache.PHOTO_EXT, terraincache.NO_PACK, ("rules", Server.ground_rules(self)),
+                                  ("pads", Server._base_pad_digest(self, anchor, cx, cy)),
                                   *((("genground", vegetationmod.VERSION, getattr(self, "veg", None) is not None,
                                       ("shade", genground.SHADE_VERSION, getattr(self, "dem", None) is not None),
                                       genground.block_fade_key()),)
@@ -4792,13 +4847,58 @@ class Server:
             log.debug("revisit: base photo key: %s: %s", type(e).__name__, e)
             return None
 
+    def _base_pad_digest(self, anchor, cx, cy):
+        """The gas station / frontage pads a block's photo is painted with (block_fuel_pads' box: surface.pad_digest,
+        in the order kept), for its revisit key: one painted before a road tile brought a pad near it is another photo
+        (pads_stale paints it again; the Codex review of the Daytona fix: base_refresh took the one without them)."""
+        surf = getattr(self, "surface", None)
+        if surf is None or not hasattr(surf, "pad_digest"):
+            return None
+        h = self.layout.block * heightmap.SQUARE / 2 + 64.0
+        la, lo, _ = anchor.frame.enu_to_geodetic(np.array([cx - h, cx + h]), np.array([cy - h, cy + h]), np.zeros(2))
+        return surf.pad_digest(float(min(la)), float(max(la)), float(min(lo)), float(max(lo))).hex()
+
+    def _base_from_revisit(self, anchor, cx, cy, photo, rev=0, stale=True):
+        """The block's final photo from the revisit cache (_base_revisited; rev: under base_name's rev name, for a block
+        in use whose photo the engine watches), in this anchor's stale scope (an older version's marks it stale, as
+        _base_photo did; stale False: the current version's alone, base_refresh): (file name or None, its revisit key
+        or None)."""
+        aid = getattr(anchor, "id", None)
+        with revisitmod.stale(Server.stale_of(self, anchor, 0.0) if stale else ()):
+            revisitmod.take_stale_hit()
+            bk = self.base_revisit_key(anchor, cx, cy)
+            if bk is None:
+                return None, None
+            name = self._base_revisited(anchor, cx, cy, bk, photo, rev)
+            if name is not None and revisitmod.take_stale_hit() is not None and aid is not None:
+                self.base_stale.add((aid, cx, cy))
+            if name is not None and aid is not None and self.base_revisit_key(anchor, cx, cy) != bk:
+                # (its inputs changed while it was read: a road tile brought a pad near it, pads_stale's mark cleared
+                # by _base_revisited; painted again, base_refresh. The Codex review, round 2)
+                self.base_stale.add((aid, cx, cy))
+            return name, bk
+
+    def base_kept(self, anchor, cx, cy):
+        """Is the block's final photo in the revisit cache (its key in this anchor's stale scope; nothing read)? A block
+        built again (evicted from hm, then asked for once more: a lap of a race track, Daytona 2026-11-19) takes it from
+        there instead of going with a stand-in photo, or none, and painted again (make_heightmap)."""
+        if not revisitmod.ON or self.near_visual != "detail" or self.imagery is None:
+            return False
+        try:
+            with revisitmod.stale(Server.stale_of(self, anchor, 0.0)):
+                bk = self.base_revisit_key(anchor, cx, cy)
+                return bk is not None and revisitmod.has(self.cache_dir, "basephoto", bk)
+        except Exception as e:          # (rendered as before)
+            log.debug("revisit: base photo of %s: %s: %s", (getattr(anchor, "id", None), cx, cy), type(e).__name__, e)
+            return False
+
     def _base_pack_path(self, name):
         return os.path.join(terraincache.cache_dir(self.user_dir),
                             terraincache.base_key(f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px)) + ".dds")
 
-    def _base_revisited(self, anchor, cx, cy, bk, photo):
-        """The block's photo from the revisit cache under this session's name, then its packed copy (the newer file,
-        as write_base orders them), its rgb into photo: the file name, or None."""
+    def _base_revisited(self, anchor, cx, cy, bk, photo, rev=0):
+        """The block's photo from the revisit cache under this session's name (base_name, rev), then its packed copy
+        (the newer file, as write_base orders them), its rgb into photo: the file name, or None."""
         try:
             hit = revisitmod.load(self.cache_dir, "basephoto", bk)
             if hit is None:
@@ -4806,7 +4906,7 @@ class Server:
             blobs, _extra = hit
             if "photo" not in blobs or (not terraincache.NO_PACK and "base.dds" not in blobs):
                 return None
-            name = self.base_name((anchor.id, cx, cy))
+            name = self.base_name((anchor.id, cx, cy), rev)
             path = os.path.join(self.out_dir, name)
             ph = blobs["photo"]
             data = ph.read() if isinstance(ph, revisitmod.Side) else ph
@@ -4998,6 +5098,28 @@ class Server:
         """The base photo (detail mode; rendered here: the imagery corrections live in this process; base: its
         future from _base_photo, started with the heights), the timings. base_wait: s it waits for the photo at most
         (default by speed: BASE_FAST_WAIT_S / BASE_WAIT_S)."""
+        if getattr(base, "kept", False):
+            # (a kept photo from the revisit cache, make_heightmap: one that could not be read after all goes the fast
+            # path's skip way, its stand-in now and its photo painted once the mod has it, base_refresh)
+            key = (anchor.id, cx, cy)
+            concurrent.futures.wait([base], timeout=base_wait)
+
+            def missed(f):
+                try:
+                    return not f.result()[0]
+                except Exception:
+                    return True
+            def skip(f):
+                if missed(f):
+                    self.base_stale.add(key)
+                    self.base_skipped.add(key)
+            if base.done():                 # (one decision: a miss after it is the done callback's and the guard below)
+                if missed(base):
+                    skip(base)
+                    base = None
+            else:
+                base.add_done_callback(skip)
+            base_wait = 0.0                 # (waited for already: the rest below at once)
         if base is not None:
             t1 = time.perf_counter()
             if not base.done():
@@ -5049,6 +5171,11 @@ class Server:
                 return info
             info["base"], photo, info["stages"]["baseRender"] = base.result()
             info["stages"]["baseWait"] = time.perf_counter() - t1
+            if not info["base"] and getattr(base, "kept", False):
+                # (a kept photo that could not be read, done between the checks above: its stand-in, as a skipped one's)
+                self.base_stale.add((anchor.id, cx, cy))
+                self.base_skipped.add((anchor.id, cx, cy))
+                self.quick_pool.submit(self._quick_later, anchor, cx, cy)
             if photo and info.get("layers") and info.get("ter"):
                 try:                # lawns only where the photo is green (before the game reads the block)
                     surfacemod.photo_lawns(self.out_dir, info["ter"], info["layers"], photo[0])
@@ -5564,7 +5691,8 @@ class Server:
         self.evict_heightmaps(fresh=key)
 
     def evict_heightmaps(self, fresh=None):
-        """Keep at most HM_CACHE entries, never deleting the current terrain, the
+        """Keep at most HM_CACHE entries (HM_CACHE_TIER's on a smaller machine; the least recently used go first), never
+        deleting the current terrain, the
         last two committed ones, the last two handed to the mod, or `fresh` (the terrain
         just built: a request about to be answered, or the prefetch the mod asks for next)."""
         keep = set(self.hm_committed) | set(self.hm_sent)
@@ -5579,8 +5707,18 @@ class Server:
         newest = max((c.active for c in self.connections if c.active is not None), default=None)
         keep |= {(aid, *a.first_terrain) for aid, a in sorted(self.anchors.items())[-2:]
                  if a.first_terrain is not None and (newest is None or aid > newest)}
-        for key in [k for k in self.hm if k not in keep][:max(0, len(self.hm) - HM_CACHE)]:
+        import budget
+        cap = min(HM_CACHE, HM_CACHE_TIER.get(budget.TIER, HM_CACHE))
+        # (the blocks the mod never had first, then the ones it did, each least recently used first: a lap of Daytona
+        # built ~30 blocks the mod never asked for beside its ~10, and those pushed out the ones it would ask for again
+        # on the next lap, 2026-11-19)
+        used = getattr(self.hm_sent, "ever", ())
+        cands = [k for k in self.hm if k not in keep]
+        cands = [k for k in cands if k not in used] + [k for k in cands if k in used]
+        for key in cands[:max(0, len(self.hm) - cap)]:
             info = self.hm.pop(key)
+            if used:
+                used.discard(key)
             paths = [os.path.join(self.out_dir, self.hm_name(key))]
             self.base_stale.discard(key)
             self.base_pending.pop(key, None)
@@ -7516,6 +7654,7 @@ class Server:
             for key in [k for k in self.hm if k[0] == aid]:
                 if key not in self.hm_committed and key not in self.hm_sent:
                     del self.hm[key]
+                    getattr(self.hm_sent, "ever", set()).discard(key)
             keep = {self.hm_name(k) for k in self.hm} | {i["ter"] for i in self.hm.values() if i.get("ter")}
             doomed = []
             for p in starting(self.out_dir, "far", aid):
@@ -10554,16 +10693,20 @@ class Connection:
                 # behind it and came late, 2026-11-05)
                 pool = getattr(s, "photo_pool", None) or (s.block_pools[LANE_PREFETCH][0] if s.block_pools else None)
                 rev = next(s.base_rev)
-                name = None
+                # (its final photo kept in the revisit cache, this version's: taken, not painted again; a block built
+                # again whose photo was skipped (a fast player's prefetch) had it painted again every time)
+                name, _bk = await self.loop.run_in_executor(s.hm_pool, s._base_from_revisit, anchor, key[1], key[2],
+                                                            [], rev, False)
+                kept = name is not None
                 # (each step's own faults, in the thread it runs in: revisit.scoped_call)
-                bk, f0 = s.base_revisit_key(anchor, key[1], key[2]), []
-                if pool is not None:
+                bk, f0 = (s.base_revisit_key(anchor, key[1], key[2]) if not kept else None), []
+                if pool is not None and not kept:
                     # (in the block process: from the finished tiles with the analyses on; they were all rendered
                     # here, 121 of a warm 8 min drive at 150 mph, beside the event loop, 2026-11-04)
                     name, b = await self.loop.run_in_executor(s.hm_pool, revisitmod.scoped_call, s._base_elsewhere,
                                                               anchor, key[1], key[2], pool, [], False, rev)
                     f0.append(b)
-                if name is None:
+                if name is None and not kept:
                     name, b = await self.loop.run_in_executor(s.hm_pool, revisitmod.scoped_call, s.write_base, anchor,
                                                               key[1], key[2], pool, rev)
                     f0.append(b)
@@ -10576,7 +10719,8 @@ class Connection:
                     # refresh deferred at speed (core BASE_LATER_MS), and a material rebuild then needs the pack;
                     # deleted here, the game packed the photo again on its main thread, ~0.75 s frames, 2026-11-03)
                     info.setdefault("old_bases", []).append(old)
-                log.info("base photo of %s rendered again with its NAIP (%s)", key, name)
+                if not kept:
+                    log.info("base photo of %s rendered again with its NAIP (%s)", key, name)
                 if bk is not None:          # (the place's final photo: a later visit's first takes it, revisit)
                     await self.loop.run_in_executor(s.hm_pool, s._base_keep, anchor, key[1], key[2], bk, name, f0)
                 s.note_base(key, name)
