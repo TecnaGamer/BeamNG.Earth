@@ -124,15 +124,18 @@ def work_copy(src, dst):
     check_apart(src, dst)
     check_cache(src)
     check_cache(dst)
+    if not os.path.isdir(src):
+        raise SystemExit(f"missing corpus cache: {src}")
     if os.path.exists(dst):
         shutil.rmtree(dst)
     os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
-    if os.path.isdir(src):
-        # (macOS's cp has no --reflink: -c clones on APFS, the same copy-on-write idea)
-        subprocess.run(["cp", "-cR", src, dst] if sys.platform == "darwin" else ["cp", "-a", "--reflink=auto", src, dst],
-                       check=True)
-    else:
-        os.makedirs(dst)
+    # A reflink is an independent file. No derived output from an older run may seed this one.
+    subprocess.run(["cp", "-cR", src, dst] if sys.platform == "darwin" else ["cp", "-a", "--reflink=auto", src, dst],
+                   check=True)
+    for name in (*DERIVED, "bake"):
+        path = os.path.join(dst, name)
+        if os.path.isdir(path):
+            shutil.rmtree(path)
     return dst
 
 
@@ -235,7 +238,7 @@ def npz_diff(pa, pb, limit=5):
                 elif n == "meta" or a.dtype.kind in "SUV" or (a.dtype == np.uint8 and a.ndim == 1):
                     try:
                         ja, jb = json.loads(bytes(a).decode("utf-8")), json.loads(bytes(b).decode("utf-8"))
-                        out += [f"{n}{p[1:]}: {x} vs {y}" for p, x, y in json_diff(ja, jb, "$", limit)]
+                        out += [f"{n}{p[1:]}: {x} vs {y}" for p, x, y in json_diff(ja, jb, "$", limit)] or [f"{n}: bytes differ"]
                     except (ValueError, UnicodeDecodeError):
                         out.append(f"{n}: bytes differ")
                 else:
@@ -326,7 +329,11 @@ class Report:
                       file=out)
         print(f"{self.what}: {self.same} identical, {self.differ} differ, {len(self.only_a)} only in A, "
               f"{len(self.only_b)} only in B", file=out)
-        return 1 if self.differ else 2 if (self.only_a or self.only_b) else 0
+        if self.differ:
+            return 1
+        if self.only_a or self.only_b or not self.same:
+            return 2
+        return 0
 
 
 def compare_trees(a, b, sub, rep, select=None):
@@ -341,8 +348,31 @@ def compare_trees(a, b, sub, rep, select=None):
                     got[rel] = os.path.join(d, n)
         return got
     la, lb = listing(a), listing(b)
+    if not la and not lb:
+        rep.item(sub, ["no files on either side"])
     for rel in sorted(set(la) & set(lb)):
         rep.item(rel, file_diff(la[rel], lb[rel]))
     rep.only("A", sorted(set(la) - set(lb)))
     rep.only("B", sorted(set(lb) - set(la)))
     return rep
+
+def check_comparison(a, b):
+    """Each comparison needs two independently recorded output trees."""
+    a, b = map(os.path.realpath, (a, b))
+    if _inside(a, b) or _inside(b, a):
+        raise SystemExit("comparison needs two separate output trees")
+
+def comparison_places(a, b, sub, selected):
+    """The full frozen corpus by default. An explicitly named subset is a partial comparison."""
+    names = set(selected or corpus()["places"])
+    if not selected:
+        for root in (a, b):
+            folder = os.path.join(root, sub)
+            if os.path.isdir(folder):
+                names.update(os.listdir(folder))
+    kind = "build" if sub in ("plans", "facts") else "session"
+    for name in sorted(names):
+        for root in (a, b):
+            if os.path.exists(os.path.join(root, f"{kind}-{name}.pending")):
+                raise SystemExit(f"incomplete {kind} for {name} in {root}")
+    return sorted(names)

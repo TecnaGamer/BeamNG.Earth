@@ -2,7 +2,7 @@
 (ANCHOR_LAT, ANCHOR_LON)'s own far buildings / far bridge tiles under (LAT, LON) and (BLAT, BLON) first (its frames' chain
 views and caches warm, as a session would have them), then the far geotiles: the far buildings tile and the skyline
 square under (LAT, LON), the far bridge square under (BLAT, BLON), in their own frames; prints the files' sha1s (one
-"name hash" line each). Map data from ~/.cache/beamng-earth, offline; the revisit cache off."""
+"name hash" line each). Map data from the parent test’s private copy, offline; the revisit cache off."""
 import hashlib
 import logging
 import math
@@ -19,7 +19,7 @@ import roads  # noqa: E402
 
 out, lat, lon, blat, blon, alat, alon = sys.argv[1], *map(float, sys.argv[2:8])
 revisit.ON = False
-bw._s = bw._State(os.path.expanduser("~/.cache/beamng-earth"), True, True, True, True, True, True, True)
+bw._s = bw._State(os.environ["BNGE_GEO_WORK_CACHE"], True, True, True, True, True, True, True)
 os.makedirs(os.path.join(out, "anchor"), exist_ok=True)
 f = geodesy.EnuFrame(alat, alon)
 for la, lo in ((lat, lon), (blat, blon)):

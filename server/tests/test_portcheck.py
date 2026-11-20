@@ -50,33 +50,57 @@ class PlansFactsTest(Base):
     def test_plans(self):
         self.plans(self.a, [1.0, 2.0])
         self.plans(self.b, [1.0, 2.0])
-        self.assertEqual(quiet(plancmp.main, [self.a, self.b])[0], 0)
+        self.assertEqual(quiet(plancmp.main, [self.a, self.b, "--places", "p"])[0], 0)
         self.plans(self.b, [1.0, 2.0 + 2 ** -40])
-        code, out = quiet(plancmp.main, [self.a, self.b])
+        code, out = quiet(plancmp.main, [self.a, self.b, "--places", "p"])
         self.assertEqual(code, 1)
         self.assertIn("z: 1 of 2 values differ", out)
         self.plans(self.b, [1.0, -0.0 + 2.0])
         self.plans(self.a, [1.0, 2.0])
         os.remove(os.path.join(self.b, "plans", "p", "14_1_2.npz"))
-        code, out = quiet(plancmp.main, [self.a, self.b])
+        code, out = quiet(plancmp.main, [self.a, self.b, "--places", "p"])
         self.assertEqual(code, 1)
         self.assertIn("one side only", out)
+
+    def test_missing_or_aliased_outputs(self):
+        for compare in (plancmp.main, factcmp.main):
+            self.assertNotEqual(quiet(compare, [self.a, self.b, "--places", "p"])[0], 0)
+            with self.assertRaises(SystemExit):
+                compare([self.a, self.a])
+        for root in (self.a, self.b):
+            self.plans(root, [1.0])
+            os.remove(os.path.join(root, "plans", "p", "14_1_2.npz"))
+        self.assertNotEqual(quiet(plancmp.main, [self.a, self.b, "--places", "p"])[0], 0)
+
+    def test_unfinished_build_and_changed_metadata_bytes(self):
+        for root in (self.a, self.b):
+            self.plans(root, [1.0])
+        mark = Path(self.b) / "build-p.pending"
+        mark.touch()
+        for compare in (factcmp.main, plancmp.main):
+            with self.assertRaisesRegex(SystemExit, "incomplete build"):
+                compare([self.a, self.b, "--places", "p"])
+        mark.unlink()
+        for root, data in ((self.a, b'{"a": 1}'), (self.b, b'{"a":1 }')):
+            np.savez(Path(root) / "plans/p/14_1_2.npz", meta=np.frombuffer(data, np.uint8))
+        self.assertNotEqual(quiet(plancmp.main, [self.a, self.b, "--places", "p"])[0], 0)
 
     def test_facts(self):
         for r, v in ((self.a, 0.0), (self.b, 0.0)):
             pcommon.write_json(os.path.join(r, "facts", "p", "ranges_14_1_2_x.json"), {"data": [[v, 1.5]]})
-        self.assertEqual(quiet(factcmp.main, [self.a, self.b])[0], 0)
+        self.assertEqual(quiet(factcmp.main, [self.a, self.b, "--places", "p"])[0], 0)
         pcommon.write_json(os.path.join(self.b, "facts", "p", "ranges_14_1_2_x.json"), {"data": [[-0.0, 1.5]]})
-        code, out = quiet(factcmp.main, [self.a, self.b])
+        code, out = quiet(factcmp.main, [self.a, self.b, "--places", "p"])
         self.assertEqual(code, 1, out)
         pcommon.write_json(os.path.join(self.b, "facts", "p", "specs_14_1_2_x.json"), {"data": []})
-        self.assertIn("only in B: 1", quiet(factcmp.main, [self.a, self.b])[1])
+        self.assertIn("only in B: 1", quiet(factcmp.main, [self.a, self.b, "--places", "p"])[1])
 
 
 class SessionsTest(Base):
     def session(self, root, msgs_, blobs=()):
         d = os.path.join(root, "sessions", "p")
         os.makedirs(os.path.join(d, "blobs"), exist_ok=True)
+        pcommon.write_json(os.path.join(d, "summary.json"), {"settled": True, "messages": len(msgs_)})
         for name, data in blobs:
             with open(os.path.join(d, "blobs", name), "wb") as f:
                 f.write(data)
@@ -90,12 +114,12 @@ class SessionsTest(Base):
         return buf.getvalue()
 
     def test_order_fields_ignored(self):
-        far = {"type": "far_tile", "anchorId": 1, "key": "3_1_2", "level": 3, "shape": "@aa.cdae", "slotSerial": 7}
+        far = {"type": "far_tile", "anchorId": 1, "key": "3_1_2", "level": 3, "slotSerial": 7}
         self.session(self.a, [{"type": "status", "text": "1 s"}, far, {"type": "far_swap", "id": 1, "add": ["x"]}])
         self.session(self.b, [dict(far, slotSerial=9), {"type": "status", "text": "2 s"},
                               {"type": "far_swap", "id": 7, "add": ["x"]}, {"type": "far_swap", "id": 8, "add": []}])
-        self.assertEqual(quiet(msgs.compare, self.a, self.b, "far")[0], 0)
-        code, out = quiet(msgs.compare, self.a, self.b, None)
+        self.assertEqual(quiet(msgs.compare, self.a, self.b, "far", ["p"])[0], 0)
+        code, out = quiet(msgs.compare, self.a, self.b, None, ["p"])
         self.assertEqual(code, 0)
         self.assertIn("far field bookkeeping", out)
 
@@ -105,17 +129,43 @@ class SessionsTest(Base):
         blk = {"type": "terrain_ready", "anchorId": 1, "requestId": 1, "cx": 0, "cy": 0}
         self.session(self.a, [dict(blk, heightmap=f"@{ha}.png")], [(ha + ".png", pa)])
         self.session(self.b, [dict(blk, heightmap=f"@{ha}.png")], [(ha + ".png", pa)])
-        self.assertEqual(quiet(msgs.compare, self.a, self.b, "blocks")[0], 0)
+        self.assertEqual(quiet(msgs.compare, self.a, self.b, "blocks", ["p"])[0], 0)
         self.session(self.b, [dict(blk, heightmap=f"@{hb}.png")], [(hb + ".png", pb)])
-        code, out = quiet(msgs.compare, self.a, self.b, "blocks")
+        code, out = quiet(msgs.compare, self.a, self.b, "blocks", ["p"])
         self.assertEqual(code, 1)
         self.assertIn("pixels: 16 of 16 differ, max 1", out)
         # the last copy of a block is what counts; a tile only one side sent is reported as such
         self.session(self.b, [dict(blk, heightmap=f"@{hb}.png"), dict(blk, heightmap=f"@{ha}.png"),
                               {"type": "roads_tile", "anchorId": 1, "key": "g17_1_2", "path": "@x.json"}],
                      [(ha + ".png", pa)])
-        self.assertEqual(quiet(msgs.compare, self.a, self.b, "blocks")[0], 0)
-        self.assertEqual(quiet(msgs.compare, self.a, self.b, "tiles")[0], 2)
+        self.assertEqual(quiet(msgs.compare, self.a, self.b, "blocks", ["p"])[0], 0)
+        self.assertEqual(quiet(msgs.compare, self.a, self.b, "tiles", ["p"])[0], 2)
+
+    def test_incomplete_recordings(self):
+        for root in (self.a, self.b):
+            self.session(root, [{"type": "hello"}])
+        self.assertNotEqual(quiet(msgs.compare, self.a, self.b, "tiles", ["p"])[0], 0)
+        for root in (self.a, self.b):
+            self.session(root, [{"type": "far_retex", "path": "@" + pcommon.sha(b"x") + ".dds"}])
+        self.assertNotEqual(quiet(msgs.compare, self.a, self.b, "far", ["p"])[0], 0)
+        for root in (self.a, self.b):
+            self.session(root, [{"type": "far_tile", "key": "x"}])
+        os.remove(os.path.join(self.b, "sessions", "p", "summary.json"))
+        self.assertNotEqual(quiet(msgs.compare, self.a, self.b, "far", ["p"])[0], 0)
+        self.assertFalse(session.loaded({"ground": [1, 1]}))
+
+    def test_legacy_settlement_and_complete_message_count(self):
+        progress = dict.fromkeys(("ground", "far", "trees", "roads"), [1, 1])
+        events = [{"type": "far_tile", "key": "x"}, {"type": "far_done", "anchorId": 1},
+                  dict(progress, type="load_progress", anchorId=1, net=[0])]
+        summary = {"anchor": 1, "far_done": True, "seconds": 21., "messages": 3}
+        for root in (self.a, self.b):
+            self.session(root, events)
+            pcommon.write_json(os.path.join(root, "sessions/p/summary.json"), summary)
+        self.assertEqual(quiet(msgs.compare, self.a, self.b, "far", ["p"])[0], 0)
+        for overrides in ({"seconds": 2}, {"messages": 4}, {"anchor": 2}):
+            pcommon.write_json(os.path.join(self.b, "sessions/p/summary.json"), dict(summary, **overrides))
+            self.assertNotEqual(quiet(msgs.compare, self.a, self.b, "far", ["p"])[0], 0)
 
     def test_far_field_end_state(self):
         """The far field's swaps compared by what they leave shown and take away, not by their order or counter."""
@@ -125,17 +175,19 @@ class SessionsTest(Base):
              {"type": "far_swap", "anchorId": 1, "id": 5, "add": ["3_1_1"], "remove": []}]
         self.session(self.a, a)
         self.session(self.b, b)
-        self.assertEqual(quiet(msgs.compare, self.a, self.b, "far")[0], 0)
+        self.assertEqual(quiet(msgs.compare, self.a, self.b, "far", ["p"])[0], 0)
         self.session(self.b, b + [{"type": "far_remove", "anchorId": 1, "key": "3_1_1"}])
-        code, out = quiet(msgs.compare, self.a, self.b, "far")
+        code, out = quiet(msgs.compare, self.a, self.b, "far", ["p"])
         self.assertEqual(code, 1)
         self.assertIn("far_field", out)
 
     def test_slots_serials_ignored(self):
-        t = {"type": "roads_tile", "anchorId": 1, "key": "g17_1_2", "slots": {"mesh": ["@s.cdae", 4]}}
-        self.session(self.a, [t])
-        self.session(self.b, [dict(t, slots={"mesh": ["@s.cdae", 11]})])
-        self.assertEqual(quiet(msgs.compare, self.a, self.b, "tiles")[0], 0)
+        shape = "@" + pcommon.sha(b"shape") + ".cdae"
+        blob = [(shape[1:], b"shape")]
+        t = {"type": "roads_tile", "anchorId": 1, "key": "g17_1_2", "slots": {"mesh": [shape, 4]}}
+        self.session(self.a, [t], blob)
+        self.session(self.b, [dict(t, slots={"mesh": [shape, 11]})], blob)
+        self.assertEqual(quiet(msgs.compare, self.a, self.b, "tiles", ["p"])[0], 0)
 
 
 class RecorderTest(Base):
@@ -158,6 +210,16 @@ class RecorderTest(Base):
 
 
 class SetupTest(unittest.TestCase):
+    def test_session_deadline_requires_settlement(self):
+        client = mock.Mock()
+        client.recv.side_effect = [{"type": "hello"}, {"type": "anchor_ready", "anchorId": 1}]
+        with self.assertRaisesRegex(TimeoutError, "did not settle"):
+            session.play(mock.Mock(server_dir=pcommon.SERVER, timeout=0), client, mock.Mock(progress=None),
+                         {"lat": 0, "lon": 0, "view_m": 2000})
+        counts = dict.fromkeys(("ground", "roads", "trees", "far"), [2, 2])
+        self.assertTrue(session.loaded(dict(counts, net=[0, 0])))
+        self.assertFalse(session.loaded(dict(counts, ground=["2", "2"], net=[0, 0])))
+
     def test_launcher_options(self):
         import launcher
         self.assertEqual(session.RECOMMENDED, launcher.RECOMMENDED)

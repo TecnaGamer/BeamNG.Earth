@@ -587,9 +587,9 @@ class StaticGuardTest(unittest.TestCase):
     def test_the_native_module_reads_none(self):
         """The planning's native kernels (earthfast) read no listed switch (their few environment reads are others)."""
         src = ROOT / "native" / "earthfast" / "src"
-        if not src.is_dir():
-            self.skipTest("no native sources")
-        text = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in sorted(src.rglob("*.rs")))
+        sources = sorted(src.rglob("*.rs"))
+        self.assertIn(src / "lib.rs", sources, "earthfast sources required for the environment audit")
+        text = "\n".join(p.read_text(encoding="utf-8") for p in sources)
         for env in revisit.PLAN_NEUTRAL:
             self.assertNotIn(env, text)
 
@@ -754,8 +754,7 @@ class CorpusTest(unittest.TestCase):
         return r.returncode, r.stdout.strip().splitlines()[-1:] if r.stdout.strip() else r.stderr
 
     def test_plans_and_facts_identical(self):
-        if not CORPUS.is_dir():
-            self.skipTest(f"no corpus cache at {CORPUS}")
+        self.assertTrue(CORPUS.is_dir(), f"requested corpus cache missing at {CORPUS}")
         self.places = os.environ.get("PLAN_NEUTRAL_PLACES", "laramie")
         with tempfile.TemporaryDirectory(dir=os.path.expanduser("~/bnge-tests") if
                                          os.path.isdir(os.path.expanduser("~/bnge-tests")) else None) as tmp:

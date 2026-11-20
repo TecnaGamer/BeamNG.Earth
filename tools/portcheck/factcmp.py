@@ -19,15 +19,12 @@ def main(argv=None):
     ap.add_argument("--places", default="")
     ap.add_argument("--show", type=int, default=20)
     a = ap.parse_args(argv)
+    pcommon.check_comparison(a.a, a.b)
     rep = pcommon.Report("facts", a.show)
     names = [n for n in a.places.split(",") if n] or None
-    for name in names or sorted({n for r in (a.a, a.b) for n in _ls(os.path.join(r, "facts"))}):
+    for name in pcommon.comparison_places(a.a, a.b, "facts", names):
         pcommon.compare_trees(a.a, a.b, os.path.join("facts", name), rep)
     return rep.finish()
-
-
-def _ls(d):
-    return os.listdir(d) if os.path.isdir(d) else []
 
 
 if __name__ == "__main__":

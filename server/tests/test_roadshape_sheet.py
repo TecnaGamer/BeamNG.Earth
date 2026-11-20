@@ -301,11 +301,11 @@ class SheetDecks(unittest.TestCase):
         finally:
             roadshape.SHEET = old
 
-    def test_before(self):
-        """The same scene without the switch: the two slabs overlap at the fork (what P2b removes)."""
-        _ch, tops, _runs = drawn(scene(), False)
-        tk, tz, _ = structprobe.raster_tris(tops)
-        self.assertGreater(len(structprobe.overlap_keys(tk, tz)) * structprobe.RASTER_M ** 2, 20.0)
+    def test_off_keeps_the_mapped_decks(self):
+        chunks, tops, _runs = drawn(scene(), False)
+        self.assertGreater(len(tops), 0)
+        self.assertEqual({c["fid"] for c in chunks if "fid" in c}, {part[0] for part in scene()})
+        self.assertFalse(any("sx" in c or c.get("noslab") for c in chunks))
 
 
 if __name__ == "__main__":

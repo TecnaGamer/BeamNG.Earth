@@ -4,8 +4,9 @@ meet the block's 128 m-grid edges), gives them sinks, and writes the block's aer
 the block's footprint) next to its heightmap; terrain messages name it (base, baseSize)."""
 import os
 import sys
-import time
+import threading
 import unittest
+from unittest.mock import patch
 
 import struct
 
@@ -204,28 +205,37 @@ class DetailFastPhotoLaterTest(ServerHarness):
     cells = 64
     block = 1024
 
-    def _slow_block(self, speed, fast=True, photo_s=1.0, held_s=0.95):
+    def _slow_block(self, speed, fast=True):
         self.hello()
         aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
         s = self.server
         orig = s.write_base
 
+        release_photo = threading.Event()
+
         def slow(*a, **kw):
-            time.sleep(photo_s)
+            if not release_photo.wait(65):
+                raise TimeoutError("the block never arrived while its photo was pending")
             return orig(*a, **kw)
         s.write_base = slow
         s.fast = fast
         s.speed = speed
-        t0 = time.monotonic()
-        self.c.send({"type": "prepare_terrain", "requestId": 3, "anchorId": aid, "cx": 512.0, "cy": 0.0})
-        tr, _ = self.c.until(lambda m: m["type"] == "terrain_ready", timeout=60)
-        self.assertLess(time.monotonic() - t0, held_s, "not held for the photo")
+        futures = earthd.concurrent.futures
+        with_wait = patch.object(futures, "wait", wraps=futures.wait)
+        try:
+            with with_wait as wait:
+                self.c.send({"type": "prepare_terrain", "requestId": 3, "anchorId": aid, "cx": 512.0, "cy": 0.0})
+                tr, _ = self.c.until(lambda m: m["type"] == "terrain_ready", timeout=60)
+            if not fast:
+                self.assertIn(earthd.BASE_WAIT_S, [call.kwargs.get("timeout") for call in wait.call_args_list])
+        finally:
+            release_photo.set()
         return aid, tr
 
     def test_slow_photo_is_not_waited_for(self):
         """Slower than FAST_BASE_V a block waits BASE_WAIT_S at most for its photo (it held the blocks behind it), then
         goes with its stand-in."""
-        aid, tr = self._slow_block(20.0, fast=False, photo_s=earthd.BASE_WAIT_S + 3, held_s=earthd.BASE_WAIT_S + 2)
+        aid, tr = self._slow_block(20.0, fast=False)
         self.assertTrue(tr.get("base", "").endswith("_base_q" + EXT), "sent with its stand-in")
         self._own_photo_follows(aid)
 

@@ -309,10 +309,21 @@ class SurfaceV2Test(unittest.TestCase):
         rd = [("x", spec(lanes=2, cls="secondary"), line(-1000, 300, 1500, 300), 0.0)]
         a = [c for c in plan(rd, box=(0, 172, 256, 428)) if c["m"] in V2_MATS]
         b = [c for c in plan(rd, box=(200, 172, 456, 428)) if c["m"] in V2_MATS]
-        key = lambda c: (c["m"], c["w"], c["tl"], c["slen"], c.get("fend_m"))     # noqa: E731
-        common = {key(c) for c in a if np.asarray(c["n"])[:, 0].max() > 205} & {key(c) for c in b}
-        self.assertTrue(common)
-        self.assertEqual(plan(rd, box=(0, 172, 256, 428)), plan(rd, box=(0, 172, 256, 428)))
+        def overlap(chunks):
+            pieces = []
+            for c in chunks:
+                points = np.asarray(c["n"])
+                lo, hi = max(200., points[0, 0]), min(256., points[-1, 0])
+                if hi <= lo:
+                    continue
+                # This fixture runs due east. The two clipped chunks must draw the same
+                # span, width and texture at the same station on the underlying piece.
+                pieces.append((c["m"], lo, hi, points[0, 1], c["w"], c["tl"], c["slen"],
+                               round(c["s0"] + lo - points[0, 0], 3), c["fend_m"]))
+            return sorted(pieces)
+        shared = overlap(a)
+        self.assertTrue(shared)
+        self.assertEqual(shared, overlap(b))
 
     def test_clear_keeps_a_corner_on_a_flat_cells_edge_beside_a_step(self):
         """follow_ground's clear: a corner on the edge a flat cell shares with a step cell (a wall the lattice draws as

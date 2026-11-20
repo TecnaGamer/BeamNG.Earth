@@ -113,14 +113,16 @@ def child(a):
                         roads.road_specs(f, None, bw._s.widths, lh)
                         roads.road_specs(f, None, None, lh)
             except Exception as ex:      # (a cell short of something: reported, the comparison shows it)
+                if not a.online or pass_ == PASSES - 1:
+                    raise RuntimeError(f"{name}: failed to build cell {k}") from ex
                 print(f"{name}: cell {k}: {type(ex).__name__}: {ex}", flush=True)
     index = {}
     for key, (path, complete) in sorted(made.items()):
         cell = "_".join(map(str, key))
-        if os.path.exists(path):
-            with open(path, "rb") as src, open(os.path.join(out_plans, cell + ".npz"), "wb") as dst:
-                dst.write(src.read())
+        shutil.copyfile(path, os.path.join(out_plans, cell + ".npz"))
         index[cell] = {"complete": complete and not os.path.exists(path + ".short")}
+    if not index or not os.listdir(out_facts):
+        raise RuntimeError(f"{name}: no plans or facts produced")
     pcommon.write_json(os.path.join(out_plans, "index.json"),
                        {"place": name, "cells": [str(k) for k in keys], "plans": index,
                         "plans_format": plancache.plans_format(), "facts_format": roads.FACTS_FORMAT,
@@ -143,17 +145,26 @@ def main():
     a.cache, a.out = os.path.abspath(os.path.expanduser(a.cache)), os.path.abspath(os.path.expanduser(a.out))
     a.server_dir = os.path.abspath(a.server_dir)
     pcommon.check_cache(a.cache)
-    if a.one:               # (the parent checked: the child's cache is the work copy under --out)
+    if a.one:
+        pcommon.check_cache(a.out)
+        if a.online:
+            pcommon.check_apart(a.cache, a.out)
+        elif os.path.realpath(a.cache) != os.path.realpath(os.path.join(a.out, "work-cache")):
+            ap.error("offline child needs the private work-cache under --out")
         return child(a)
     pcommon.check_apart(a.cache, a.out)
     pcommon.check_cache(a.out)
     pcommon.nice_self()
     os.makedirs(a.out, exist_ok=True)
-    os.makedirs(a.cache, exist_ok=True)
+    if a.online:
+        os.makedirs(a.cache, exist_ok=True)
+    selected = pcommon.places(a.places)
+    for name, _ in selected:
+        open(os.path.join(a.out, f"build-{name}.pending"), "w").close()
     work = a.cache if a.online else pcommon.work_copy(a.cache, os.path.join(a.out, "work-cache"))
     failed = []
     try:
-        for name, _place in pcommon.places(a.places):
+        for name, _place in selected:
             cmd = [sys.executable, os.path.abspath(__file__), "--one", "--places", name, "--cache", work, "--out",
                    a.out, "--server-dir", a.server_dir] + (["--online"] if a.online else [])
             with open(os.path.join(a.out, f"build-{name}.log"), "w") as log:
@@ -163,6 +174,8 @@ def main():
             print(last[-1] if last else f"{name}: no result (exit {r.returncode}, see build-{name}.log)", flush=True)
             if r.returncode:
                 failed.append(name)
+            else:
+                os.remove(os.path.join(a.out, f"build-{name}.pending"))
     finally:
         if not a.online:
             import shutil

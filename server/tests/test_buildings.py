@@ -2766,7 +2766,7 @@ class RoadPassageTest(unittest.TestCase):
         self.assertEqual(bld.road_lines(FRAME, [f], 0.0, 0.0, classes={"residential"}), [])
 
 
-class MappedRoofTest(unittest.TestCase):
+class MappedRoofAttributesTest(unittest.TestCase):
     """Research 2026-11-10: Overture's half_hipped, mapped roof heights, roof:orientation and roof:direction."""
 
     def test_overtures_half_hipped_is_drawn(self):
