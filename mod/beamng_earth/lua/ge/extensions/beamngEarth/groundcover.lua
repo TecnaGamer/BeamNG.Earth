@@ -215,7 +215,7 @@ end
 local NEAR_3D = { radius = 45, dissolveRadius = 30, shapeCullRadius = 45 }
 local function join(...)
   local out = {}
-  for _, t in ipairs({ ... }) do for _, x in ipairs(t) do out[#out + 1] = x end end
+  for _, t in ipairs({ ... }) do for _, x in ipairs(t) do if x then out[#out + 1] = x end end end   -- (false: an entry left out)
   return out
 end
 
@@ -241,12 +241,12 @@ local function meadow(w)
       types = { [3] = { layer = DUSTY, p = 0.1 } } }),
     -- the spring flowers of the forest floor (East Coast USA's violet flowers)
     E('woodflowers', 'eca', 'Purple_flowers', FOREST, 0.03, { months = w.woodflowers }),
-    -- the lush undergrowth (ivy, grass blades, twigs) and climbing vines in summer. Not its fern fronds (2, 3) nor its
-    -- big tropical leaf (5): a single frond stood up as a billboard reads as a conifer seedling, hundreds of them on a
-    -- Finnish forest floor (the user's 2026-11-20, Pirkanmaa); the forest floor's ferns are the server's 3D ones
-    -- (vegetation FERN_SHARE). Its share cut as its types are (2.1 of their 4.1 probability left)
-    E('undergrowth', 'own', 'bngEarth_lush', FOREST, 0.2, { types = { [2] = { p = 0 }, [3] = { p = 0 }, [5] = { p = 0 } } }),
-    E('vines', 'own', 'bngEarth_vines', FOREST, 0.3, { months = w.nettles }),
+    -- (no bngEarth_lush undergrowth: its pieces of the game's lush_vegetation atlas, a fern frond, a frond on a bare
+    -- stem, an ivy strand, a bare twig, stood up as billboards read as seedlings: hundreds on a Finnish forest floor,
+    -- the user's 2026-11-20, Pirkanmaa. The forest floor's ferns are the server's 3D ones, vegetation FERN_SHARE)
+    -- climbing vines (ivy) in summer where w.vines: the temperate oceanic woods, not the continental ones (common ivy
+    -- is a mild-winter plant: southern Finland, the Baltics and Russia have none)
+    w.vines and E('vines', 'own', 'bngEarth_vines', FOREST, 0.3, { months = w.vines }) or false,
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.15),
     E('weeds', 'att', 'weed1', DUSTY, 0.03, { months = w.nettles }),
   }, wetland(0.05, 0.15, 0.01), fields(w.fields))
@@ -256,7 +256,7 @@ M.PROFILES = {
   generic = M.DEFS,
   -- Cfb, Cfc, Cwb, Cwc: oceanic Europe, the highlands
   temperate = meadow({ green = span(3, 11), brown = span(12, 2), heads = span(5, 9), buttercups = span(4, 6),
-    flowers = span(6, 8), daisies = span(4, 9), nettles = span(5, 10), woodflowers = span(4, 5),
+    flowers = span(6, 8), daisies = span(4, 9), nettles = span(5, 10), woodflowers = span(4, 5), vines = span(5, 10),
     fields = { young = span(3, 5), ripe = span(6, 7), stubble = span(8, 9), winter = span(10, 11) } }),
   -- Dfa, Dfb, Dsa, Dsb, Dwa, Dwb: a shorter season
   continental = meadow({ green = span(4, 10), brown = span(11, 3), heads = span(6, 8), buttercups = span(5, 6),
@@ -274,8 +274,10 @@ M.PROFILES = {
     E('lawn', 'wcusa', 'mown_grass_close', LAWN, 0.7),
     E('woodflowers', 'eca', 'Purple_flowers', FOREST, 0.03, { months = span(3, 5) }),
     E('nettles', 'industrial', 'Nettles_01', FOREST, 0.05, { months = span(4, 10) }),
-    -- (its fern fronds out as in meadow(): seedlings; its big leaf and ivy kept; 2.5 of 4.5 of its probability left)
-    E('undergrowth', 'own', 'bngEarth_lush', FOREST, 0.28, { types = { [2] = { p = 0 }, [3] = { p = 0 }, [4] = { p = 0 } } }),
+    -- (its big leaf and grass blades only: its fern fronds, ivy strand and twig read as seedlings, as in meadow();
+    -- 1.5 of 4.5 of its probability left)
+    E('undergrowth', 'own', 'bngEarth_lush', FOREST, 0.17, { types = { [0] = { p = 0 }, [2] = { p = 0 }, [3] = { p = 0 },
+      [4] = { p = 0 } } }),
     E('vines', 'own', 'bngEarth_vines', FOREST, 0.5, { months = span(4, 11) }),
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.15),
   }, wetland(0.06, 0.15, 0.01), fields({ young = span(3, 4), ripe = span(5, 6), stubble = span(7, 8) })),
@@ -404,6 +406,32 @@ M.PROFILES = {
 M.SPLIT = { small_grass_close = true, long_grass_distant = true, grass_dry_1 = true, mown_grass_close = true,
   mown_grass_dry = true, bngEarth_ripe_grain = true, bngEarth_stubble = true, Dry_grass_clump = true }
 M.NEAR_RADIUS, M.NEAR_SHARE, M.FAR_SHARE = 0.6, 0.6, 0.7
+-- Stock plant types that draw broken pictures (every stock type with a layer goes to the profile entry's layer:
+-- fieldsFor; the stock maps carry a template's leftover types, their layers absent there or their UVs over a corner of
+-- another plant, never seen in the game's own maps). Found by rendering every type every profile draws (2026-11-20,
+-- after the user's seedlings): a corner of a bush, a bush cut by the picture's edge, collages of several plants.
+-- Off in every profile, the generic one (dev's) too.
+M.BROKEN_TYPES = {
+  ['wcusa/shrubs_near'] = { 3, 4 },        -- (its layer grass4 is not in West Coast USA: a bush's corner, a cut bush)
+  ['att/Bush'] = { 3, 4 },                 -- (the same template UVs: a bush's corner, a cut bush)
+  ['cliff/Buttercup1'] = { 4 },            -- (seeds, cranesbills and a nettle cut off, in one picture)
+  ['industrial/wet_weed_01'] = { 2, 3 },   -- (an empty picture with a seed head's corner; an empty one)
+  ['island/spanish_bayonet'] = { 2, 3 },   -- (a collage of leaf pieces; one huge leaf cut by the edges)
+  ['italy/shrub_grass_02'] = { 3, 4, 5 },  -- (collages of several bushes, hard-edged)
+}
+for _, p in pairs(M.PROFILES) do
+  for i, e in ipairs(p) do
+    local off = M.BROKEN_TYPES[tostring(e.source) .. '/' .. tostring(e.src)]
+    if off then
+      local n, types = {}, {}
+      for k, v in pairs(e) do n[k] = v end
+      for k, v in pairs(e.types or {}) do types[k] = v end
+      for _, t in ipairs(off) do types[t] = { p = 0 } end
+      n.types = types
+      p[i] = n
+    end
+  end
+end
 for name, p in pairs(M.PROFILES) do
   if name ~= 'generic' then
     local out = {}

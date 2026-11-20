@@ -236,4 +236,24 @@ gc.setMonth(nil)
 gc.reset()
 T.check(gc.status().profile == 'generic', 'a new level: generic until the tiles vote')
 
+-- (2026-11-20) the stock types that draw broken pictures are off in every profile, the generic one too; no
+-- bngEarth_lush seedlings on the temperate, continental or boreal forest floor; no ivy in the continental woods
+do
+  local n = 0
+  for name, p in pairs(gc.PROFILES) do
+    for _, e in ipairs(p) do
+      local off = gc.BROKEN_TYPES[tostring(e.source) .. '/' .. tostring(e.src)]
+      for _, t in ipairs(off or {}) do
+        n = n + 1
+        T.check(e.types and e.types[t] and e.types[t].p == 0, name .. ' ' .. e.src .. ' type ' .. t .. ' off')
+      end
+      if name == 'temperate' or name == 'continental' or name == 'boreal' then
+        T.check(e.src ~= 'bngEarth_lush', name .. ': no lush undergrowth')
+      end
+      if name == 'continental' or name == 'boreal' then T.check(e.src ~= 'bngEarth_vines', name .. ': no ivy') end
+    end
+  end
+  T.check(n > 20, 'broken types checked in the profiles (' .. n .. ')')
+end
+
 T.done('test_groundcover')
