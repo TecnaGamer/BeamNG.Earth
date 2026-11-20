@@ -5,6 +5,7 @@ import warnings
 from pathlib import Path
 
 import numpy as np
+from chain_profiles import PROFILES
 from PIL import Image, ImageDraw, ImageFont
 
 CHAINS = {"Walmart", "The Home Depot", "Lowe's", "Chick-fil-A"}
@@ -47,6 +48,11 @@ MARKETS = {
     "Costco": "#a33335",
     "Sam's Club": "#206592",
 }
+for name, (family, background, lettering) in PROFILES.items():
+    if family == "dining":
+        DINING[name] = ("siding", "#eee6d7", background, lettering)
+    else:
+        MARKETS[name] = background
 CHAINS.update(DINING, MARKETS)
 ACCENTS.update(MARKETS)
 
@@ -78,6 +84,10 @@ FASCIA = {
 }
 
 
+for name, (family, background, lettering) in PROFILES.items():
+    FASCIA[name] = (.22 if family in {"cinema", "discount"} else .13, background, lettering)
+
+
 def simplify(ring):
     """Merge straight wall segments, retaining entrance coordinates separately."""
     keep = []
@@ -92,6 +102,7 @@ def simplify(ring):
 
 # span, sill, head height, maximum distance around a public corner (metres)
 CAFE_GLAZING = {
+    "In-N-Out Burger": (5.2, .60, 2.65, 4.2),
     "Starbucks": (5.6, 0.22, 3.05, 6.4),
     "Dunkin'": (3.45, 0.36, 2.76, 0),
     "Domino's": (4.25, 0.67, 2.65, 0),
@@ -104,6 +115,8 @@ CAFE_GLAZING = {
     "KFC": (4.15, 0.38, 2.85, 3.2),
     "Arby's": (3.9, 0.54, 2.8, 3.9),
 }
+CAFE_GLAZING.update({name: (5.8, .28, 3.1, 0) for name, (family, _, _) in PROFILES.items()
+                     if family == "specialty"})
 
 
 def shopfront_glass(name, width, doors, at_start, at_end):
@@ -292,6 +305,9 @@ def elevation(
         rect(0, height - 0.52, width, height, "#353736")
     if name == "Arby's" and (entries or dining):
         rect(0, 2.90, width, 3.13, "#af3233")
+    if name == "In-N-Out Burger":
+        rect(0, .55, width, .75, "#b62224")
+        rect(0, height - .94, width, height - .78, "#b62224")
     if name in FASCIA:
         share, paint, trim = FASCIA[name]
         bottom = height * (1 - share) - 0.14
@@ -408,7 +424,7 @@ def sign_image(name, aspect=4.5):
         }
     )
     colors["Dollar General"] = ("#e7bd34", "#242620")
-    bg, fg = colors[name]
+    bg, fg = PROFILES[name][1:] if name in PROFILES else colors[name]
     width = max(12, round(200 * aspect))
     img = Image.new("RGB", (width, 200), bg)
     d = ImageDraw.Draw(img)
@@ -497,9 +513,10 @@ def build(
             (i for i in range(len(ring)) if entries[i]),
             key=lambda i: (len(entries[i]), lengths[i]),
         )
+    family = PROFILES[name][0] if name in PROFILES else None
     if not any(entries):
         # A long unobstructed customer wall supports a paired warehouse entrance layout.
-        fractions = (0.25, 0.75) if not restaurant and lengths[front] >= 42 else (0.5,)
+        fractions = (0.25, 0.75) if not restaurant and family not in {"cinema", "specialty"} and lengths[front] >= 42 else (0.5,)
         entries[front] = [f * lengths[front] for f in fractions]
     # The entrance tower already has a sign. Choose one substantial second wall visible
     # from the addressed street or an approach around the public corner.
@@ -772,6 +789,19 @@ def build(
                 inner, outer = base + .12 * normals[i], base + (reach + .12) * normals[i]
                 a, b = (inner, outer) if side == -1 else (outer, inner)
                 mesh([(*a,bottom), (*b,bottom), (*b,top), (*a,bottom), (*b,top), (*a,top)], art, uv)
+        if i == front and family == "cinema":
+            # A projecting marquee and display cases distinguish the lobby from auditorium walls.
+            span = min(width * .78, 21.)
+            left = (width - span) / 2
+            depth = min(2.8, span * .18)
+            block(left, left + span, depth, 3.6, 5.15, 2)
+            face(left, left + span, depth + .02, 3.64, 5.1,
+                 texture(sign_image(name, span / 1.46)), True)
+            for side in (left - 1.6, left + span + .4):
+                if side > 0 and side + 1.2 < width:
+                    block(side, side + 1.2, .16, .85, 2.55, 2)
+                    face(side + .09, side + 1.11, .18, .95, 2.45,
+                         texture(Image.new("RGB", (8, 8), FASCIA[name][1])), True)
         if i == secondary:
             sign_width = min(width * 0.64, 7.2)
             sign_height = min(1.35, sign_width / 4.5, height * 0.21)
@@ -850,6 +880,7 @@ def build(
                     mesh([a, b, f, a, f, e], red, uv)
             block(center - half, center + half, reach, z, z + 0.25, 2)
             awning = {
+                "In-N-Out Burger": "#b62224",
                 "Popeyes": "#ae3234",
                 "Ace Hardware": "#aa3236",
                 "Pizza Hut": "#b92e34",

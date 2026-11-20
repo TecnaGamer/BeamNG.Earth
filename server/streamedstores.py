@@ -17,20 +17,9 @@ TOOLS = Path(__file__).resolve().parents[1] / "tools" / "storefronts"
 if str(TOOLS) not in sys.path:
     sys.path.append(str(TOOLS))
 from build_stores import export_store
-from store_match import BRANDS, CHAIN_GROUPS, parking_frontage
+from store_match import BRANDS, chain, parking_frontage
+from chain_profiles import GROUPS
 
-NAMES = {name.casefold(): name for _, names in CHAIN_GROUPS for name in names}
-NAMES.update(
-    {
-        "walmart supercenter": "Walmart",
-        "walmart neighborhood market": "Walmart",
-        "cvs pharmacy": "CVS",
-        "lowe's home improvement": "Lowe's",
-        "home depot": "The Home Depot",
-        "costco wholesale": "Costco",
-        "publix super market": "Publix",
-    }
-)
 SPECIFIC = {
     "restaurant",
     "fast_food",
@@ -40,13 +29,10 @@ SPECIFIC = {
     "department_store",
     "hardware",
 }
+SPECIFIC.update(kind for _, _, types, _ in GROUPS for kind in types)
 COMMERCIAL = SPECIFIC | {"commercial", "retail", "shop"}
-VERSION = 4
+VERSION = 5
 LOG = logging.getLogger("earthd.storefronts")
-
-
-def chain(value):
-    return NAMES.get(str(value or "").strip().replace("\u2019", "'").casefold())
 
 
 def businesses(md, keys):
@@ -81,13 +67,14 @@ def mapped_tenants(layers, ring):
                 "closed",
             }:
                 continue
+            categories = {value("basic_category"), value("taxonomy")}
             name = (
                 BRANDS.get(str(value("brand_wikidata")))
                 or chain(value("brand_name"))
-                or chain(value("name"))
+                or chain(value("name"), "movie_theater" in categories)
             )
             confidence = value("confidence")
-            if value("basic_category") in GAS_CATEGORIES or value("taxonomy") in GAS_CATEGORIES:
+            if categories & GAS_CATEGORIES or "drive_in_theater" in categories:
                 name = None
             trusted = confidence is not None and float(confidence) >= 0.8
             tenants[str(f.ids[i])] = (name if trusted else None, points[j])
@@ -186,7 +173,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
             continue
         _, label, material, subtype = spec.storefront
         kind = str(spec.cls or "").lower()
-        name = chain(label)
+        name = chain(label, kind == "cinema")
         if label:
             if not name or (kind and kind not in COMMERCIAL):
                 continue

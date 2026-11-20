@@ -3,6 +3,7 @@ from xml.etree import ElementTree
 
 import numpy as np
 from polygon import contains_points
+from chain_profiles import ALIASES, GROUPS
 
 BRANDS = {"Q38076": "McDonald's", "Q153417": "Kroger", "Q483551": "Walmart"}
 HEIGHTS = {"McDonald's": 4.3, "Kroger": 7, "Walmart": 9}
@@ -56,34 +57,46 @@ CHAIN_GROUPS = [
     ),
     (("amenity", {"pharmacy"}), ["CVS", "Walgreens"]),
 ]
+for family, key, types, brands in GROUPS:
+    names = [name for name, _, _ in brands]
+    CHAIN_GROUPS.append(((key, types), names))
+    for name in names:
+        HEIGHTS[name] = {"dining": 4.5, "warehouse": 8.5, "cinema": 10.0}.get(family, 6.0)
 for _, names in CHAIN_GROUPS:
     for name in names:
         HEIGHTS.setdefault(name, 4.3 if names[0] == "McDonald's" else 6)
 
 
+NAMES = {name.casefold(): name for _, names in CHAIN_GROUPS for name in names}
+NAMES.update(ALIASES)
+NAMES.update({
+    "walmart supercenter": "Walmart", "walmart neighborhood market": "Walmart",
+    "publix super market": "Publix", "costco wholesale": "Costco",
+    "home depot": "The Home Depot", "lowe's home improvement": "Lowe's",
+    "cvs pharmacy": "CVS",
+})
+
+
+def chain(value, cinema=False):
+    label = str(value or "").strip().replace("\u2019", "'").casefold()
+    if cinema:
+        for prefix in ("amc", "regal", "cinemark"):
+            if label.startswith(prefix + " "):
+                return NAMES[prefix]
+    return NAMES.get(label)
+
+
 def brand(tags):
-    labels = {
-        tags.get(k, "").casefold().replace("\u2019", "'") for k in ("brand", "name")
-    }
-    labels.add(BRANDS.get(tags.get("brand:wikidata"), "").casefold())
-    if "cvs pharmacy" in labels:
-        labels.add("cvs")
-    for alias, canonical in {
-        "walmart supercenter": "walmart",
-        "walmart neighborhood market": "walmart",
-        "publix super market": "publix",
-        "costco wholesale": "costco",
-        "home depot": "the home depot",
-        "lowe's home improvement": "lowe's",
-    }.items():
-        if alias in labels:
-            labels.add(canonical)
+    labels = {chain(tags.get(key), tags.get("amenity") == "cinema") for key in ("brand", "name")}
+    if tags.get("drive_in") == "yes":
+        return None
+    labels.add(BRANDS.get(tags.get("brand:wikidata")))
     for (key, types), names in CHAIN_GROUPS:
         if tags.get(key) in types or (
             names[0] == "CVS" and tags.get("shop") == "chemist"
         ):
             for name in names:
-                if name.casefold() in labels:
+                if name in labels:
                     return name
 
 
@@ -169,12 +182,11 @@ def matches(path):
             buildings.append((way.get("id"), coords, props, refs))
     # A tagged advertising totem has its own location. Keep ordinary advertising billboards
     # on the existing billboard path; their operator need not be the advertised business.
-    labels = {name.casefold(): name for _, names in CHAIN_GROUPS for name in names}
     for node in nodes.values():
         props = tags(node)
         if props.get("advertising") != "totem":
             continue
-        name = labels.get((props.get("brand") or props.get("name") or "").casefold())
+        name = chain(props.get("brand")) or chain(props.get("name"))
         if not name:
             continue
         try:

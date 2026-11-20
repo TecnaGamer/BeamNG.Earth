@@ -50,6 +50,15 @@ def tile(frame, name, tenants, kind="supermarket", subtype="commercial"):
 
 
 class StreamedStoresTest(unittest.TestCase):
+    def test_catalog_matches_typed_cinemas_and_restaurant_aliases(self):
+        from streamedstores import chain
+        from store_match import brand
+        self.assertEqual(chain("Regal Green Hills", cinema=True), "Regal Cinemas")
+        self.assertIsNone(chain("Regal Nails"))
+        self.assertEqual(brand({"amenity": "cinema", "name": "AMC CLASSIC Plaza 12"}), "AMC Theatres")
+        self.assertIsNone(brand({"amenity": "cinema", "brand": "AMC", "drive_in": "yes"}))
+        self.assertEqual(brand({"amenity": "fast_food", "name": "In-N-Out"}), "In-N-Out Burger")
+
     def test_parking_aisles_identify_customer_side(self):
         from streamedstores import parking_direction
         ring = np.array([[0., 0.], [80., 0.], [80., 60.], [0., 60.]])
@@ -89,6 +98,9 @@ class StreamedStoresTest(unittest.TestCase):
 
     def test_discovery_cache_and_ambiguous_tenants(self):
         for lat, lon, name, tenants, kind, subtype, expected in (
+            (37., -120., "In-N-Out", [], "fast_food", "commercial", 1),
+            (40., -83., "", ["AMC Theatres"], "cinema", "commercial", 1),
+            (40., -83., "Best Buy", [], "retail", "commercial", 1),
             (36.1, -86.8, "Kroger", [], "supermarket", "commercial", 1),
             (39.0, -84.0, "Walmart Supercenter", ["Pharmacy", "ATM"], "retail", "commercial", 1),
             (41.9, -87.7, "", ["Wendy's"], "", "commercial", 1),
