@@ -1823,6 +1823,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  # (the mapped utility poles mappedpoles.tile_poles draws: no guessed ones along them)
                                  mapped_poles=(mappedpoles.road_points(_s.md, frame, tx, ty, pole_profile)
                                                if props is not None else None),
+                                 # (the mapped street lamps worldprops.tile_props made: no guessed ones along them)
+                                 mapped_lamps=mapped_lamps,
                                  wear=wear if isinstance(wear, dict) else roadwear.tier_of(wear),
                                  cover_fn=getattr(getattr(_s, "surface", None), "classes", None))
     P.surface_short = bool(v3 and v3.get("short"))
