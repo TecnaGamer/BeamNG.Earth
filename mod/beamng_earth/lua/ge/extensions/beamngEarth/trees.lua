@@ -322,6 +322,9 @@ M.CATALOG = {
   -- vineyards' rows (server vegetation.vineyard_items): Italy's grape_vine_group, three rows 2.45 m apart and 15.9 m
   -- long along its x (out to 450 m, GROUP_MAX_M: beyond it the ground photo shows the rows)
   vine = { { IT .. 'trees/trees_italy/grape_vine_group', 2.6 } },
+  -- the rows' rest up to the field's edge and its roads (server vegetation._row_fill): Italy's single row, 5.5 m
+  -- along its x (the height as the group's: the server sends the same, at scale 1)
+  vine_row = { { IT .. 'trees/trees_italy/grape_vine', 2.6 } },
   -- round bales after the harvest (server vegetation.bale_items): the stock race props, straw on farmland, wrapped
   -- silage on meadows; by hemisphere, shown in their season only (SEASON)
   straw_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_large_01', 1.22 } },
@@ -530,6 +533,7 @@ M.GROUP_MAX_M.billboard = 900
 M.GROUP_MAX_M.barn = 800
 M.GROUP_MAX_M.golfflag = 400
 M.GROUP_MAX_M.vine = 450
+M.GROUP_MAX_M.vine_row = 450
 M.GROUP_MAX_M.creosote = 250       -- (as the other shrubs)
 M.NO_COLLIDE.creosote = true
 M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n

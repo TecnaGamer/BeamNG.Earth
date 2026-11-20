@@ -526,6 +526,10 @@ do -- vines on the slope (server vegetation._vine_tilt, a tile of stride 10: pit
           'pitch and roll: orthonormal, still about upright')
   T.check(near(ux, fy * sz - fz * sy) and near(uz, fx * sy - fy * sx), 'right-handed: z = x cross y')
   T.check(sx < 0 and sz > 0, 'roll: the y axis (west at yaw 90) raised')
+  local rowShape, rowSc = trees.pick('vine_row', 2.6, 0.1)
+  T.check(rowShape:find('/trees_italy/grape_vine', 1, true) ~= nil and not rowShape:find('group', 1, true)
+          and math.abs(rowSc - 1) < 1e-9, 'a single row (server vegetation._row_fill): Italy\'s grape_vine at scale 1')
+  T.check(trees.GROUP_MAX_M.vine_row == trees.GROUP_MAX_M.vine, 'single rows as far as the groups')
   files['/t/vines'] = '{ groups = { "vine", "deciduous" }, stride = 10, flat = { '
     .. '0, 10, 10, 5, 90, 1, 2.6, 0.1, 5.7, 0, '      -- a vine group pitched up the slope
     .. '0, 12, 10, 5, 90, 1, 2.6, 0.1, 0, 0, '        -- one on flat ground
