@@ -134,5 +134,31 @@ class EndBesideItsPieceTest(unittest.TestCase):
         self.assertTrue(np.isnan(z[-1]) and np.isfinite(z[-3]), z[-4:])
 
 
+
+@unittest.skipUnless(os.path.exists(REPLAY), "the Popoli replay")
+class LeftPlaceTest(unittest.TestCase):
+    """A region's shapes for a place a teleport left are given up before its next system (xproc.check_cancel): a left
+    city's systems (Shanghai's, ~40 s to find and ~40 s to solve a region) held the road tiles of the place the
+    player was at for minutes. Nothing is kept of a region given up: asked again, it is solved."""
+
+    def test_given_up_then_solved(self):
+        import interchanges
+        import pools
+        import xproc
+        from interchange_audit_run import planner_of
+        rep = interchanges.load("popoli_ss17_underpass")
+        with unittest.mock.patch.object(revisit, "ON", False),                 unittest.mock.patch.object(grading, "SHAPES_ON", True):
+            pl = planner_of(rep)
+            home = mapcells.cell_of(*AT)
+            xproc.set_thread_cancel(lambda: True)
+            try:
+                with self.assertRaises(pools.Abandoned):
+                    pl._shape_region(home)
+            finally:
+                xproc.set_thread_cancel(None)
+            self.assertNotIn(str(home), pl.__dict__.get("_shape_regions", {}))
+            self.assertTrue(pl._shape_region(home))
+
+
 if __name__ == "__main__":
     unittest.main()

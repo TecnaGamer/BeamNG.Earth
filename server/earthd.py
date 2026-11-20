@@ -4003,7 +4003,7 @@ class Server:
         split = WARM_SPLIT and len(bp) > LANE_PREFETCH and bp[LANE_PREFETCH][0] is not bp[LANE_REQUEST][0]
         for lane, (_, q) in {id(q_): (n_, (p_, q_)) for n_, (p_, q_) in enumerate(self.block_pools)}.values():
             try:
-                q.put_nowait((anchor.id, anchor.lat, anchor.lon, keys, split and lane == LANE_REQUEST))
+                q.put_nowait((anchor.id, anchor.lat, anchor.lon, keys, split and lane == LANE_REQUEST, self.out_dir))
             except Exception as e:      # a full / closed queue only costs the lookahead
                 log.debug("road plans ahead: %s", e)
         if self.road_pool is not None:      # road tiles plan in their processes: this one needs none ahead
