@@ -141,6 +141,8 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 - **Oil wells and refineries** (OpenStreetMap, exported once): pump jacks, refinery sounds.
 - **Bridge types** (the US National Bridge Inventory and Wikidata): trusses, arches, suspension and cable-stayed
   bridges, and their real spans and heights.
+- **Bridge build years** (the US National Bridge Inventory, `server/bridges_built_us.npz`): every US bridge built
+  or rebuilt since 2005, so lidar surveyed before a bridge existed is not used for its deck.
 - **The Overture Maps file index**: a copy for when its server does not answer.
 - **Interstate mile references** (`server/mile_markers_us.json`): the restored Michigan DOT and Kentucky
   Transportation Cabinet inventory from the 1.7.0 custom build, dated 2026-10-23. Source URLs and calibration
