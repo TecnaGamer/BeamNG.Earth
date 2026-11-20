@@ -7357,6 +7357,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // flagged, no record; three more params)
     m.add_function(wrap_pyfunction!(roadshape::sheet::deck_sheets, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::lanes::lane_graph, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::lane_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::cut_lines, m)?)?;
+    // 542: road surface v3 phase S2 (roadshape::surface: the ground road surface as one mesh, lane strips sharing
+    // their rows, pieces welded to the roads on shared rows, markings from the boundaries; BNE_ROADSURF_V3=surface)
     // 538: road surface v3 phase S1 (roadshape::lanes::lane_graph: strokes, anchored ordered lane boundaries, gore
     // from geometry, the TaperRule table; BNE_ROADSURF_V3=shadow, nothing built reads it)
     // 514: v2 P2b (roadshape::sheet::deck_sheets: exits off bridges as one deck, BNE_ROADSHAPE=sheet)
@@ -7394,9 +7398,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 535: the full Rust port's phase 2b on try598 (534): host/farstate.rs, the far state machine (FarState;
     // far_swap_groups)
     // 537: try598 with 536 (P3e) and 535 (port2b) merged
-    // 540: the full Rust port's phase 2b part 2 on try598 (537): host/farselect.rs, the far selection called from Rust
-    // (far_select / far_select_global, FarState.update_far / prebuild_coarse), the far messages straight to the wire
-    // 546: try598 with 538 (v3 S1) and 540 (port2b2) merged; 541-545 are other branches'
-    m.add("VERSION", 546)?;
+    // 542: v3 S2 (roadshape::surface::lane_surface, cut_lines)
+    // 547: try598 with 546 and 542 (v3 S2) merged
+    m.add("VERSION", 547)?;
     Ok(())
 }

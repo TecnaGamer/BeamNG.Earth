@@ -13870,7 +13870,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
                sign_obstacles=None, roadside_jobs=None, towns=None, mapped_poles=None, de_on=False, de_routes=(),
-               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, sheet_marks=None):
+               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, sheet_marks=None, v3=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -13899,7 +13899,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     Germany's border (markings.style of germany.effective_country at the tile's middle). wear: the road wear's
     argument (roadwear.py: tyre polish, concrete joints, cracks, patches, manholes, oil spots, fallen leaves as chunks
     of the road mesh; a tier or {"tier", "season"}; None or 0: none); cover_fn(lat, lon) -> (WorldCover classes, complete): with wear, a rural road's asphalt edge
-    is the grassy one where grass grows to it, and its fallen leaves (roadwear.verges).
+    is the grassy one where grass grows to it, and its fallen leaves (roadwear.verges). v3: {"cell_fn": cell -> its
+    roads features} with BNE_ROADSURF_V3=surface (roadsurf3.py): the motorway / trunk ground surface as one mesh, read
+    from the cells round the tile (not their carriageway chunks: its mesh instead).
     Pure given its inputs (sorted by feature id)."""
     own_box = tile_bbox(tx, ty)                 # (a geotile's knows its own points: box_owns)
     x0, y0, x1, y1 = own_box
@@ -14015,11 +14017,15 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     rough = (lambda sp: terrain_paint and terrain_surface(sp) is not None)     # noqa: E731
     strip_ends = _strip_open_ends(roads, rings, seen, near, rough) if DIRT_STRIPS else {}
     paved_segs = _built_segments(roads) if DIRT_STRIPS else None
+    import roadsurf3
+    v3_on = v3 is not None and roadsurf3.ON
     for k_road, (fid, spec, pts, _) in enumerate(roads):
         # the carriageway painted into the ground (surface.photo_roads); a dirt or gravel road's strip over it
         # (DIRT_LOOK)
         if ROADS_IN_GROUND and not (DIRT_STRIPS and spec.kind in DIRT_LOOK):
             continue
+        if v3_on and spec.cls in roadsurf3.V3_CLASSES and spec.kind == "paved":
+            continue                            # (road surface v3: its mesh, roadsurf3.apply below)
         if rough(spec):
             continue
         look = look_of(spec, fid)
@@ -14804,6 +14810,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         if marks is not None and aisles:            # stall lines along the aisles (parking.aisle_markings)
             marks.extend(parking.aisle_markings(roads, aisles, wexact))
     chunks.extend(rampmerges.chunks(merge_layouts, box))
+    if v3_on:                                   # (road surface v3, S2: the ground surface of motorways and trunks)
+        import logging
+        chunks = roadsurf3.apply(frame, own_box, chunks, v3["cell_fn"], urban_fn, widths, left_hand, line_country,
+                                 float(frame.lon0), SURFACE_V2, log=logging.getLogger("earthd.roadsurf3"))
     return roadmarkings.paint(chunks)
 
 

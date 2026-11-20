@@ -1537,12 +1537,17 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 new_rbc.append((r, c))
         rbc = new_rbc
     rb = [r for r, _c in rbc]
-    polys = [c for c in chunks if c.get("poly")]
+    # (filled polygons; road surface v3's "tri" chunks, roadsurf3.py: draped triangles of their own, their uv given)
+    polys = [c for c in chunks if c.get("poly") or (c.get("tri") and len(c.get("T", ())))]
     if not rb and not polys:
         return None
     draped = [r for r in rb if r[5] is None]
     pv, fans = [], []
     for c in polys:
+        if c.get("tri"):
+            pv.append(np.asarray(c["xy"], np.float64)[:, :2])
+            fans.append(np.asarray(c["T"], np.int64).reshape(-1, 3))
+            continue
         p = np.asarray(c["poly"], np.float64)[:, :2]
         if c.get("quads"):                      # (many quads, 4 corners each: roadwear's spots, one chunk a material)
             fan = (np.array([[0, 1, 2], [0, 2, 3]], np.int64)[None]
@@ -1654,7 +1659,9 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         if c["m"] not in mats:
             mats.append(c["m"])
         P.append(np.c_[pq[:, :2], z])
-        if c["m"] == FRONTAGE_ASPHALT:
+        if c.get("tri"):
+            UV.append(np.asarray(c["uv"], np.float64))
+        elif c["m"] == FRONTAGE_ASPHALT:
             UV.append(pq / asphalt_repeat)
         else:
             UV.append(np.asarray(c["uvq"], np.float64) if c.get("uvq") is not None else   # markings.arrow_quad

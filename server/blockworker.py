@@ -1799,8 +1799,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     import lanegraph
     if lanegraph.SHADOW and lanegraph.DEBUG:    # (v3 S1: the cells' lane graphs beside the build, a debug aid only)
         lanegraph.shadow_lanes(cell_keys, cell_fn, _s.cache_dir)
+    import roadsurf3
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  sign_obstacles=sign_obstacles, sheet_marks=sheet_marks,
+                                 v3={"cell_fn": cell_fn} if roadsurf3.ON else None,     # (v3 S2: BNE_ROADSURF_V3=surface)
                                  # (the stations' made-up driveways: no sidewalk across them; nor along a square's
                                  # street-side parking rows, streetparking.plaza_bay_cuts)
                                  walk_cuts=fuel_cuts + (streetparking.plaza_bay_cuts(frame, tx, ty, _s.md)

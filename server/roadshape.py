@@ -588,24 +588,36 @@ def _segments_round(key, cell_fn, memo, rings, cell_segments):
     # every segment id's parts all from ONE copy, never parts of two copies mixed (copies of one segment may be cut
     # differently): every cell its copies' points lie in is read (more than COPY_CELLS_MAX: the rings' only), and the
     # copy with the most points (then the least cell) is taken: the same whichever cells were read first, in any order
+    def by_sid(c):
+        # (a cell's parts by segment id, sorted by part id, memoised beside its segments: the scans of every part of
+        # every cell per segment id were most of a lane graph's cost, 2026-11-19 v3 S2; the same parts either way)
+        ck = (c, "_by_sid", getattr(cell_segments, "__name__", ""))
+        got = memo.get(ck)
+        if got is None:
+            got = {}
+            for pid, r in sorted(_cell_segments(by_str.get(c) or _key_of(c), cell_fn, memo).items(),
+                                 key=lambda kv: kv[0]):
+                got.setdefault(pid.split("|", 1)[0], []).append((pid, r))
+            memo[ck] = got
+        return got
+
     found = {}
-    for k in keys:
-        for pid in _cell_segments(k, cell_fn, memo):
-            found.setdefault(pid.split("|", 1)[0], set()).add(str(k))
     by_str = {}
+    for k in keys:
+        by_str[str(k)] = k
+        for sid in by_sid(str(k)):
+            found.setdefault(sid, set()).add(str(k))
     segs = {}
     for sid in sorted(found):
         cells = set(found[sid])
         for c in sorted(found[sid]):
-            for pid, r in _cell_segments(by_str.get(c) or _key_of(c), cell_fn, memo).items():
-                if pid.split("|", 1)[0] == sid:
-                    for cc in mapcells.cells_for_points(r["ll"][:, 1], r["ll"][:, 0], z=key.z):
-                        cells.add(str(cc))
-                        by_str[str(cc)] = cc
+            for _pid, r in by_sid(c).get(sid, ()):
+                for cc in mapcells.cells_for_points(r["ll"][:, 1], r["ll"][:, 0], z=key.z):
+                    cells.add(str(cc))
+                    by_str[str(cc)] = cc
         best = None
         for c in (sorted(cells) if len(cells) <= COPY_CELLS_MAX else sorted(found[sid])):   # (a long one: the ring's)
-            parts = sorted((pid, r) for pid, r in _cell_segments(by_str.get(c) or _key_of(c), cell_fn, memo).items()
-                           if pid.split("|", 1)[0] == sid)
+            parts = by_sid(c).get(sid, [])
             n = sum(len(r["ll"]) for _pid, r in parts)
             if parts and (best is None or n > best[0]):
                 best = (n, parts)

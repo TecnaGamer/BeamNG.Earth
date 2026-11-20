@@ -2,7 +2,7 @@
 v3 on 2026-11-19: one continuous road surface, the ground surface first). Rust kernel: earthfast.lane_graph
 (native/earthfast/src/roadshape/lanes.rs, whose module doc has the rules).
 
-Switch BNE_ROADSURF_V3 (off / shadow; later the surface itself). BNE_ROADSURF is taken (roadsurf.py: the photo road
+Switch BNE_ROADSURF_V3 (off / shadow / surface: S2's ground surface mesh built from these records, roadsurf3.py). BNE_ROADSURF is taken (roadsurf.py: the photo road
 surface verdicts, a build switch on by default), hence the _V3.
 - shadow, with BNE_ROADSURF_V3_DEBUG=1: each map cell's lane graph (strokes' links, anchored ordered lane boundaries,
   gores from the geometry, tapers from the TaperRule table) written as JSON beside the build, in
