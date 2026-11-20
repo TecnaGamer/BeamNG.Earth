@@ -6216,11 +6216,11 @@ class Server:
         return {"gen_trees": getattr(self, "veg", None) is not None} if genground.ON else {}
 
     def render_tile(self, anchor, tile, px, pending):
-        """(rgb, used): a far tile's photo with its gutter (a global tile's: its Mercator square, render_merc); with the
-        generated ground on, the near rings' cut from its squares (genground.render_far: the block's colours)."""
+        """Return the guttered FarPhoto or RGB and its source counts. Global tiles use the Mercator renderer.
+        With generated ground on, the near rings take their cut from the block's ground squares."""
         genground.clear_fade()
         if isinstance(tile, farfield.GTile):
-            return self.imagery.far_photo(imagerymod.MercSquare(tile.z, tile.x, tile.y, px), px, pending)
+            return imagerymod.render_far(self.imagery.render_merc, tile.z, tile.x, tile.y, px, pending=pending)
         frame, x0, y0, size = self.tile_where(anchor, tile)
         sq = imagerymod.gutter_square(x0, y0, size, px)
         if genground.ON:
@@ -6229,7 +6229,7 @@ class Server:
                                        pending, getattr(self, "veg", None), level=node.level)
             if got is not None:
                 return got
-        return self.imagery.far_photo(self.imagery.square(frame, *sq, px, gutter=True), px, pending)
+        return imagerymod.render_far(self.imagery.render, frame, *sq, px, pending=pending, gutter=True)
 
     def make_tile(self, anchor, tile, prev=None):
         urgencymod.wait_turn()          # (a block the game waits for first: urgency.py)
