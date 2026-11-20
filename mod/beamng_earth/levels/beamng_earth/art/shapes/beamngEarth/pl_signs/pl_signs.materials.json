@@ -1,4 +1,29 @@
 {
+  "pl_a_1": {
+    "name": "pl_a_1",
+    "mapTo": "pl_a_1",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_1_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
+      },
+      {},
+      {},
+      {}
+    ]
+  },
   "pl_a_11": {
     "name": "pl_a_11",
     "mapTo": "pl_a_11",
@@ -16,7 +41,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -40,7 +66,33 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_12a": {
+    "name": "pl_a_12a",
+    "mapTo": "pl_a_12a",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_12a_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -64,7 +116,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -88,7 +141,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -112,7 +166,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -136,7 +191,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -160,7 +216,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -184,7 +241,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -208,7 +266,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -232,7 +291,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -256,7 +316,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -280,7 +341,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -304,7 +366,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -328,7 +391,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -352,7 +416,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -376,7 +441,58 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_6b": {
+    "name": "pl_a_6b",
+    "mapTo": "pl_a_6b",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_6b_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_6c": {
+    "name": "pl_a_6c",
+    "mapTo": "pl_a_6c",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_6c_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -400,7 +516,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -424,7 +541,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -448,7 +566,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -472,7 +591,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -496,7 +616,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -520,7 +641,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -544,7 +666,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -568,7 +691,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -592,7 +716,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -616,7 +741,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -640,7 +766,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -664,7 +791,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -688,7 +816,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -712,7 +841,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -736,7 +866,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -760,7 +891,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -784,7 +916,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -808,7 +941,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -832,7 +966,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -856,7 +991,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -880,7 +1016,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -904,7 +1041,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -928,7 +1066,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -952,7 +1091,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -976,7 +1116,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -1000,7 +1141,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -1024,7 +1166,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -1048,7 +1191,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -1072,7 +1216,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -1096,7 +1241,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -1120,7 +1266,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -1144,7 +1291,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},
@@ -1168,7 +1316,8 @@
           1
         ],
         "roughnessFactor": 0.6,
-        "metallicFactor": 0
+        "metallicFactor": 0,
+        "retroreflectivity": 0.35
       },
       {},
       {},

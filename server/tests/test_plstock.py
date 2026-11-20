@@ -64,3 +64,17 @@ class PolishDefaults(unittest.TestCase):
                 self.assertFalse(measured)
         with mock.patch.object(plsigns, "ON", True), mock.patch.object(plsigns, "signature", side_effect=AssertionError):
             self.assertEqual(plsigns.cache_parts(self.frame, box, rsigns=False), ())
+
+    def test_no_token_uses_rules_even_inside_bundled_survey_coverage(self):
+        box = (-20., -20., 20., 20.)
+        props = [["giveway", 3., 5., 2., 0., 1., 3., 0.]]
+        with mock.patch.object(plsigns, "ON", True), mock.patch.object(plsigns.plmapillary, "token", return_value=""), \
+                mock.patch.object(plsigns, "index", side_effect=AssertionError), \
+                mock.patch.object(plsigns.plmapillary, "fetch_cell", side_effect=AssertionError):
+            measured = []
+            md = mock.Mock()
+            rows = plsigns.road_layer(self.frame, box, [], self.ground, md, props, measured)
+            self.assertEqual([r[0] for r in rows], ["pl_a_7"])
+            self.assertFalse(measured)
+            self.assertFalse(plstock.sign_stream(md, self.frame, box, self.ground, None, False, False).items)
+            self.assertEqual(plsigns.cache_parts(self.frame, box)[0][-1], "road-rules")

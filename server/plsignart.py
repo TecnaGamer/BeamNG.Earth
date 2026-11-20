@@ -69,6 +69,12 @@ def _prepare(root, originals):
         ready = json.loads(registry.read_bytes())
     except FileNotFoundError:
         ready = {}
+    def update_materials():
+        mats = {v["group"]: material(v["group"], VFS) for v in ready.values()}
+        plmapillary.atomic_write(root / "extra.materials.json", json.dumps(mats).encode())
+
+    if ready:
+        update_materials()  # Refresh previously built faces even if Commons is unavailable.
     wanted = set(plmapillary.classes().values())
     wanted.update(code for code in inventory if code.startswith("B-33-"))
     sample = {r[3] for r in json.loads((plmapillary.DATA / "mapillary.json").read_bytes())}
@@ -114,8 +120,7 @@ def _prepare(root, originals):
                 elif license_name == "CC0":
                     credit["license_url"] = "https://creativecommons.org/publicdomain/zero/1.0/"
             ready[code] = credit
-            mats = {v["group"]: material(v["group"], VFS) for v in ready.values()}
-            plmapillary.atomic_write(root / "extra.materials.json", json.dumps(mats).encode())
+            update_materials()
             plmapillary.atomic_write(registry, json.dumps(ready, ensure_ascii=False).encode("utf8"))
             print("Gotowy model:", code, flush=True)
             if not local:

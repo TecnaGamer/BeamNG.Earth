@@ -377,7 +377,8 @@ local PL_SIGNS = {
   'pl_a_29', 'pl_a_3', 'pl_a_30', 'pl_a_4', 'pl_a_5', 'pl_a_6a', 'pl_a_7', 'pl_a_8', 'pl_b_1', 'pl_b_16_3_5m',
   'pl_b_18_3_5t', 'pl_b_2', 'pl_b_20', 'pl_b_21', 'pl_b_22', 'pl_b_23', 'pl_b_25', 'pl_b_33_20', 'pl_b_33_30',
   'pl_b_35', 'pl_b_42', 'pl_c_12', 'pl_c_16', 'pl_c_2', 'pl_c_9', 'pl_d_1', 'pl_d_15', 'pl_d_2', 'pl_d_3',
-  'pl_d_40', 'pl_d_41', 'pl_d_6', 'pl_d_6a', 'pl_d_6b', 'pl_b_33_50', 'pl_d_42', 'pl_d_43', 'pl_b_9', 'pl_f_12a'
+  'pl_d_40', 'pl_d_41', 'pl_d_6', 'pl_d_6a', 'pl_d_6b', 'pl_b_33_50', 'pl_d_42', 'pl_d_43', 'pl_b_9', 'pl_f_12a',
+  'pl_a_1', 'pl_a_12a', 'pl_a_6b', 'pl_a_6c'
 }
 for _, g in ipairs(PL_SIGNS) do
   M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/' .. g .. '_plate', 2.75 } }

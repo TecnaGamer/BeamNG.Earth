@@ -56,6 +56,26 @@ local function makeMaterial(name, texture)
   local ok = type(texture) == 'string' and FS:fileExists(texture)
   if not ok then log('W', 'beamngEarth', 'town sign texture missing: ' .. tostring(texture)) end
   local m = scenetree.findObject(name)
+  if name:match('^bne_townin_pl_') or name:match('^bne_townout_pl_') then
+    local existing = m ~= nil
+    m = m or createObject('Material')
+    m:setField('version', 0, '1.5')
+    m:setField('mapTo', 0, name)
+    m:setField('baseColorMap', 0, ok and texture or '')
+    m:setField('baseColorFactor', 0, '1 1 1 1')
+    m:setField('metallicFactor', 0, '0')
+    m:setField('roughnessFactor', 0, '0.6')
+    m:setField('retroreflectivity', 0, '0.35')
+    if existing then
+      m:flush()
+      m:reload()
+    else
+      m.canSave = false
+      m:registerObject(name)
+      M.count = M.count + 1
+    end
+    return
+  end
   if m then
     if ok then
       m:setField('colorMap', 0, texture)

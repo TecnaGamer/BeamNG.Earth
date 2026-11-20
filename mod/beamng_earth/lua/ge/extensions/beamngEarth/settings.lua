@@ -821,6 +821,27 @@ end
 
 function M.uiSet(key, v) return M.set(key, v) end
 
+-- Kept apart from the settings exported by uiState and multiplayer. An empty profile token selects road rules.
+local mapillaryFile = '/settings/beamngearth-mapillary.json'
+function M.uiMapillaryStatus()
+  local ok, data = pcall(jsonReadFile, mapillaryFile)
+  if ok and type(data) == 'table' and type(data.token) == 'string' then
+    return data.token ~= '' and 'saved' or 'rules'
+  end
+  return 'default'
+end
+
+function M.uiMapillarySet(value)
+  if type(value) ~= 'string' or #value > 4096 or value:find('[^!-~]') then
+    return { ok = false, error = 'Enter a client access token without spaces.' }
+  end
+  local ok, wrote = pcall(jsonWriteFile, mapillaryFile, { token = value }, false)
+  local read, data = pcall(jsonReadFile, mapillaryFile)
+  if not (ok and wrote ~= false and read and type(data) == 'table' and data.token == value) then
+    return { ok = false, error = 'Could not save the Mapillary setting in the game user folder.' }
+  end
+  return { ok = true }
+end
 
 function M.uiReset()
   values = defaults()

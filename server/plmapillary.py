@@ -25,6 +25,15 @@ def token_path():
 
 @lru_cache(maxsize=1)
 def token():
+    user = os.environ.get("BNGE_USER_DIR")
+    if user:
+        try:
+            value = json.loads((Path(user) / "settings" / "beamngearth-mapillary.json").read_bytes())["token"]
+            return value if isinstance(value, str) and re.fullmatch(r"[!-~]{1,4096}", value) else ""
+        except FileNotFoundError:
+            pass  # Existing installations may have configured the launcher or environment.
+        except (OSError, ValueError, TypeError, KeyError):
+            return ""
     if value := os.environ.get("MAPILLARY_ACCESS_TOKEN", "").strip():
         return value
     try:
@@ -49,11 +58,14 @@ def atomic_write(path, data):
         temp.unlink(missing_ok=True)
 
 
-def configure():
+def configure(user_dir=None):
     value = getpass.getpass("Wklej token dostepu Mapillary i nacisnij Enter: ").strip()
-    if not value or any(ch.isspace() for ch in value):
+    if not re.fullmatch(r"[!-~]{1,4096}", value):
         raise SystemExit("Nie zapisano tokenu. Potrzebny jest token dostepu klienta Mapillary.")
-    atomic_write(token_path(), value.encode("utf8"))
+    if user_dir:
+        atomic_write(Path(user_dir) / "settings" / "beamngearth-mapillary.json", json.dumps({"token": value}).encode())
+    else:
+        atomic_write(token_path(), value.encode("utf8"))
     token.cache_clear()
     print("Token zapisany dla tego konta. Uruchom ponownie BeamNG.Earth.")
 

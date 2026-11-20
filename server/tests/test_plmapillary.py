@@ -26,6 +26,17 @@ def feature(ident, lon, lat, kind):
 
 
 class PolishMapillary(unittest.TestCase):
+    def test_game_profile_token_and_explicit_rules_only_override(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, BNGE_USER_DIR=tmp,
+                MAPILLARY_ACCESS_TOKEN="legacy-test"):
+            path = Path(tmp, "settings", "beamngearth-mapillary.json")
+            self.addCleanup(api.token.cache_clear)
+            api.token.cache_clear()
+            self.assertEqual(api.token(), "legacy-test")
+            for data, expected in [({"token":"game-test"}, "game-test"), ({"token":""}, ""), ({}, "")]:
+                api.atomic_write(path, json.dumps(data).encode())
+                api.token.cache_clear()
+                self.assertEqual(api.token(), expected)
     def test_current_tile_only_and_offline_revisit(self):
         cell = mapcells.cell_of(53.69, 17.56)
         lat, lon = cell.center()
@@ -89,5 +100,9 @@ class PolishMapillary(unittest.TestCase):
                 with Image.open(root / "pl_d_1_face_256.png") as face:
                     self.assertEqual(face.size, (256, 256))
                 self.assertIn("pl_d_1", json.loads((root / "extra.materials.json").read_bytes()))
+                (root / "extra.materials.json").write_text("{}")
+                plsignart.prepare(user, originals)
+                stages = json.loads((root / "extra.materials.json").read_bytes())["pl_d_1"]["Stages"]
+                self.assertEqual(stages[0]["retroreflectivity"], 0.35)
                 plsigns.supported_codes.cache_clear()
                 self.assertIn("D-1", plsigns.supported_codes())

@@ -2228,7 +2228,7 @@ def main():
     if sys.argv[1:] == ["--configure-mapillary"]:
         sys.path.insert(0, os.path.join(ROOT, "server"))
         import plmapillary
-        plmapillary.configure()
+        plmapillary.configure(user_folder())
         return
     if sys.argv[1:2] == ["--prepare-pl-models"]:
         sys.path[:0] = [os.path.join(ROOT, "server"), os.path.join(ROOT, "tools")]

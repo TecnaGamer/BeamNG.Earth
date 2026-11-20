@@ -1,4 +1,11 @@
 {
+  "A-1": {
+    "file": "https://commons.wikimedia.org/wiki/File:PL_road_sign_A-1.svg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/b/b3/PL_road_sign_A-1.svg",
+    "credit": "",
+    "license": "Public domain",
+    "sha256": "aa0086b0e083d772339a9f9d18067ee590dc11878cd823595aeaff5ecd1dad1c"
+  },
   "A-11": {
     "credit": "",
     "file": "https://commons.wikimedia.org/wiki/File:PL_road_sign_A-11.svg",
@@ -12,6 +19,13 @@
     "license": "Public domain",
     "original": "https://upload.wikimedia.org/wikipedia/commons/9/98/PL_road_sign_A-11a.svg",
     "sha256": "fa5429e49c694ed68bdf44c633f09936706571a1fd9f62696772b5adf3e4435e"
+  },
+  "A-12a": {
+    "file": "https://commons.wikimedia.org/wiki/File:PL_road_sign_A-12a.svg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/f/fe/PL_road_sign_A-12a.svg",
+    "credit": "",
+    "license": "Public domain",
+    "sha256": "d469f43db1aabdeac9f8d11531b3c78562adb995dfa9c8b198488cd45731a150"
   },
   "A-12b": {
     "credit": "Amada44",
@@ -110,6 +124,20 @@
     "license": "Public domain",
     "original": "https://upload.wikimedia.org/wikipedia/commons/e/e4/PL_road_sign_A-6a.svg",
     "sha256": "8fce0f48f3de672df2b11032fb0706d93e84d6e6700eda814cbcfc7eb43c25b7"
+  },
+  "A-6b": {
+    "file": "https://commons.wikimedia.org/wiki/File:PL_road_sign_A-6b.svg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/9/96/PL_road_sign_A-6b.svg",
+    "credit": "",
+    "license": "Public domain",
+    "sha256": "859fbb48be9477b089bcc0334550da102942a56d3e69bbbbfabc1c59c6e12007"
+  },
+  "A-6c": {
+    "file": "https://commons.wikimedia.org/wiki/File:PL_road_sign_A-6c.svg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/6/6e/PL_road_sign_A-6c.svg",
+    "credit": "",
+    "license": "Public domain",
+    "sha256": "c21681ee00f4c55de76cbc481f1a51aca193aa4d42c0af1e90831b3a6b2c12a9"
   },
   "A-7": {
     "credit": "MStankie",

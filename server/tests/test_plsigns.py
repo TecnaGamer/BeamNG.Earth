@@ -37,6 +37,7 @@ class PolishSigns(unittest.TestCase):
                 raw = (art / (code + ".svg")).read_bytes()
                 self.assertEqual(hashlib.sha256(raw).hexdigest(), sources[code]["sha256"])
                 g = plsigns.group(code)
+                self.assertEqual(materials[g]["Stages"][0]["retroreflectivity"], 0.35)
                 model = ET.parse(assets / (g + "_plate.dae"))
                 triangles = model.findall(".//{*}triangles")
                 self.assertEqual({t.get("material") for t in triangles}, {g+"-mat", "bne_cable_steel-mat"})
@@ -82,7 +83,8 @@ class PolishSigns(unittest.TestCase):
         road = mock.Mock(width=6., oneway=False)
         roads = [("way", road, [[0., -50.], [0., 50.]])]
         ground = lambda lat, lon: np.full_like(lat, 112.)
-        with mock.patch.object(plsigns, "index", return_value=records), mock.patch.object(plsigns, "ON", True):
+        with mock.patch.object(plsigns.plmapillary, "token", return_value="test"), \
+                mock.patch.object(plsigns, "index", return_value=records), mock.patch.object(plsigns, "ON", True):
             tiles = [plsigns.tile_rows(frame, box, roads, ground)
                      for box in ((-20., -20., 3., 20.), (3., -20., 20., 20.))]
             self.assertEqual([len(t) for t in tiles], [0, 1])
@@ -116,7 +118,8 @@ class PolishSigns(unittest.TestCase):
         self.assertFalse(plsigns.inside_poland(dx, de))
         records = {plsigns.cell(lo, la): [(lo, la, "pl_d_1", 180., None)]}
         road = mock.Mock(width=18., oneway=False)
-        with mock.patch.object(plsigns, "ON", True), mock.patch.object(plsigns, "index", return_value=records):
+        with mock.patch.object(plsigns.plmapillary, "token", return_value="test"), \
+                mock.patch.object(plsigns, "ON", True), mock.patch.object(plsigns, "index", return_value=records):
             rows = plsigns.tile_rows(frame, (-25., -25., 25., 25.), [("way", road, [[5., -20.], [5., 20.]])],
                                      lambda *_: self.fail("A foreign shoulder must never sample terrain"))
             self.assertEqual(rows, [])

@@ -1,12 +1,14 @@
 # Polish road signs
 
-Enable **Experimental → Road signs** and restart the world server. The feature defaults to off. Enter a Mapillary client access token once with `BeamNG.Earth.exe --configure-mapillary`, or set `MAPILLARY_ACCESS_TOKEN` for the server. The launcher saves the token under the current Windows user's LocalAppData. Live requests send it to Mapillary in the authorization header.
+Enable **Experimental → Road signs** in BeamNG. To add surveyed signs, paste your own client access token into **Mapillary access token** and choose **Save token**. Choose **Use road rules only** to clear the profile token and use generated positions. Restart the world server after changing the mode or token.
+
+The masked field saves to the local game profile. The launcher command `BeamNG.Earth.exe --configure-mapillary` can also set the profile token. A profile choice takes precedence over `MAPILLARY_ACCESS_TOKEN` and tokens saved by older launchers. Live requests use Mapillary's authorization header.
 
 ## Driving and coverage
 
 As road tiles load, the server queries intersecting Mapillary cells in Poland, caches them by location and refreshes them by calendar month. A return visit reuses those results. If the service is offline or rate-limited, previously saved observations remain available. Network latency can increase the generation time on a first visit. Only confirmed classifications with an installed Polish design are rendered. Limit values must match the original artwork exactly.
 
-The bundled snapshot adds 14,611 OSM nodes, 50 Wrocław inventory records and 145 Mapillary observations with identified Polish designs. Try **53.7281, 17.4980** near Charzykowy. Source coverage and survey dates vary. The Geoportal PRG boundary is checked again after moving a pole to the shoulder. Direction is inferred from the road when no absolute bearing is available. A Mapillary detection without a road nearby uses its surveyed position with a north-facing plate.
+With a token, the bundled snapshot adds 14,611 OSM nodes, 50 Wrocław inventory records and 145 Mapillary observations with identified Polish designs. Try **53.7281, 17.4980** near Charzykowy. Source coverage and survey dates vary. The Geoportal PRG boundary is checked again after moving a pole to the shoulder. Direction is inferred from the road when no absolute bearing is available. A Mapillary detection without a road nearby uses its surveyed position with a north-facing plate.
 
 ## Default signs
 
@@ -16,7 +18,7 @@ The Road signs switch controls both surveyed and generated signs. Each generated
 
 ## Models
 
-The executable includes 49 three-dimensional models, with a steel pole, metal rim, back and an individual 256 × 256 RGBA texture. The original Wikimedia Commons SVG is scaled uniformly. Its visible outline determines the shape of the plate. Credits, file pages and source hashes for these assets are in `tools/sign_art/pl/sources.json`. Rebuild them with `python tools/build_pl_signs.py` after installing numpy, Pillow and resvg-py.
+The executable includes 53 three-dimensional models, with a steel pole, metal rim, back and an individual 256 × 256 RGBA texture. The original Wikimedia Commons SVG is scaled uniformly. Its visible outline determines the shape of the plate. The fronts of Polish signs, including locality boards, use the material's retroreflectivity at 0.35 for a mild headlight response. Credits, file pages and source hashes are in `tools/sign_art/pl/sources.json`. Rebuild these assets with `python tools/build_pl_signs.py` after installing numpy, Pillow and resvg-py. Rerunning model preparation refreshes the materials of previously prepared extras.
 
 Run `BeamNG.Earth.exe --prepare-pl-models` before starting the game to expand the library. Its manifest lists 364 original designs including the bundled ones. It verifies each source against its Commons checksum and licence, generates its mesh and texture once, and records completed models in a separate unpacked mod. Restart the game and world server to pick them up. This downloads artwork only. It can resume after a download limit. To use originals already downloaded, pass `--originals DIRECTORY`. The mapping from Mapillary classes to exact Polish variants is in `server/data/pl_signs/mapillary-classes.json`.
 

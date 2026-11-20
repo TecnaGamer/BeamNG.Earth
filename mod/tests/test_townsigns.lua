@@ -53,6 +53,14 @@ T.check(townsigns.faceSolid('townin_a1', true) == false, 'the face never collide
 T.check(townsigns.faceSolid('rock', true) == true, 'other groups keep theirs')
 T.check(townsigns.shapeOf('/a/b.dae') == '/a/b', 'shapeOf drops the extension')
 
+for _, g in ipairs({'townin_pl_ab', 'townout_pl_ab'}) do
+  townsigns.register(trees, { [g] = { shape = '/t/face.dae', texture = defs.townin_a1.texture, material = 'bne_' .. g } })
+  local fields = scenetree.findObject('bne_' .. g).fields
+  T.check(fields.version == '1.5' and fields.retroreflectivity == '0.35', 'Polish locality board headlight response')
+  T.check(fields.baseColorMap == defs.townin_a1.texture, 'Polish name texture is the PBR base color')
+end
+T.check(m.fields.retroreflectivity == nil, 'other countries keep their own material')
+
 -- The trees in front of a sign: hidden within CLEAR_M of it, in its anchor only; the tiles near it looked at again
 local near = {}
 trees.refreshNear = function(a, x, y, r) near[#near + 1] = { a, x, y, r } end

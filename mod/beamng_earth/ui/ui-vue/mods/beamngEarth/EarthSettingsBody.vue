@@ -42,7 +42,7 @@
       v-for="item in rows"
       :key="item.id"
       class="earth-row"
-      :vertical="item.type === 'text' || item.type === 'path' || item.type === 'contributors'"
+      :vertical="item.type === 'text' || item.type === 'path' || item.type === 'contributors' || item.type === 'mapillary'"
       @mouseenter="setHelp(item)"
       @focusin="setHelp(item)"
     >
@@ -60,6 +60,7 @@
         :modelValue="config[item.id] === true"
         @update:modelValue="val => onSwitchChange(item, val)"
       />
+      <MapillaryToken v-else-if="item.type === 'mapillary'" />
       <BngSlider
         v-else-if="item.type === 'float'"
         :min="item.min"
@@ -154,6 +155,7 @@ import {
 } from "./earthSettingsStore.js"
 import { CONTRIBUTORS } from "./contributors.js"
 import EarthAddons from "./EarthAddons.vue"
+import MapillaryToken from "./MapillaryToken.vue"
 
 const props = defineProps({
   page: { type: String, default: "Graphics" },     // the page's name (settingsSchema's)

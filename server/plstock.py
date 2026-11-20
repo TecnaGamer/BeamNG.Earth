@@ -17,6 +17,7 @@ ROLES = {
     "reg.no_entry": "B-2", "info.dead_end": "D-4a", "info.crossing_right": "D-6",
     "warn.curve_right": "A-1", "warn.curve_left": "A-2", "warn.double_right": "A-3", "warn.double_left": "A-4",
     "warn.signals": "A-29", "info.motorway": "D-9", "info.motorway_end": "D-10",
+    "warn.side_right": "A-6b", "warn.side_left": "A-6c",
     "info.living_street": "D-40", "info.living_street_end": "D-41", "info.oneway": "D-3",
     "warn.narrow_both": "A-12a", "info.tunnel": "D-37", "mand.bicycle": "C-13",
     "info.bus_stop": "D-15", "info.parking": "D-18",

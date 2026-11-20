@@ -77,7 +77,7 @@ def cache_parts(frame=None, box=None, rsigns=True):
             frame = geodesy.EnuFrame(*frame)
         if not covers(frame, box):
             return ()
-    return (("pl_signs", signature(), plmapillary.epoch() if plmapillary.token() else "local"),)
+    return (("pl_signs", signature(), plmapillary.epoch() if plmapillary.token() else "road-rules"),)
 
 
 def cell(lon, lat):
@@ -218,7 +218,7 @@ def placement(point, angle, segments, measured=False):
 
 
 def tile_rows(frame, box, roads, elev, cache_dir=None, fetcher=None):
-    if not ON:
+    if not ON or not plmapillary.token():
         return []
     x0, y0, x1, y1 = box
     pad = REACH
@@ -231,7 +231,7 @@ def tile_rows(frame, box, roads, elev, cache_dir=None, fetcher=None):
     c, d = cell(east, north)
     records = [r for i in range(a, c + 1) for j in range(b, d + 1) for r in index().get((i, j), ())
                if west <= r[0] <= east and south <= r[1] <= north]
-    if cache_dir and fetcher is not None and plmapillary.token() and intersects_poland((west, south, east, north)):
+    if cache_dir and fetcher is not None and intersects_poland((west, south, east, north)):
         import mapcells
         by_id = {r[4]: r for r in records if r[4]}
         local = [r for r in records if r[4] is None]

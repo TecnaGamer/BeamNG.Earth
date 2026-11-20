@@ -118,7 +118,7 @@ def material(group, vfs=VFS):
             "alphaTest": True, "alphaRef": 1,
             "Stages": [{"baseColorMap": f"/{vfs}/{group}_face_256.png",
                         "baseColorFactor": [1, 1, 1, 1], "roughnessFactor": 0.6,
-                        "metallicFactor": 0}, {}, {}, {}]}
+                        "metallicFactor": 0, "retroreflectivity": 0.35}, {}, {}, {}]}
 
 
 def main():

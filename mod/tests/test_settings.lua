@@ -775,4 +775,8 @@ do
   T.check(settings.uiMapPreload(1, 2, true).ok == false, 'no core: nothing')
   beamngEarth_core = core0
 end
+T.check(settings.uiMapillaryStatus() == 'default', 'no game token yet')
+T.check(settings.uiMapillarySet('example|test').ok and settings.uiMapillaryStatus() == 'saved', 'set a local token')
+T.check(not settings.uiMapillarySet('two words').ok, 'reject whitespace')
+T.check(settings.uiMapillarySet('').ok and settings.uiMapillaryStatus() == 'rules', 'remove token and choose rules')
 T.done('test_settings')
