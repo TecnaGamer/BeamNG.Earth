@@ -7364,7 +7364,7 @@ class _Planner:
                 memo[mk] = out
         return out
 
-    def _pin_field(self, lat, lon, e, n, z):
+    def _pin_field(self, lat, lon, e, n, z, lift=ROAD_LIFT):
         """The second stage's change at the points (BNE_ROADSHAPE=profile, road revamp v2 P3b), or None: the joint
         profile's approach ground (roadshape._built's pins: each approach member's knots, the solve's change, today's
         height, its road's half width) as earthfast.profile_pin_field lays it over the first stage's graded heights z:
@@ -7385,7 +7385,7 @@ class _Planner:
         PIN_STATS["pins_s"] += t1 - t0      # (the chains' solves it asked included)
         if not pins:
             return None
-        fast.require(roadshape.PIN_KERNEL, "profile_pin_field")
+        fast.require(562 if roadshape.ROBUST_PROFILE else roadshape.PIN_KERNEL, "profile_pin_field")
         qxy, qoff = [], [0]
         for p in pins:
             x, y, _ = self.frame.geodetic_to_enu(p[0], p[1], 0.0)
@@ -7398,7 +7398,7 @@ class _Planner:
             np.ascontiguousarray(np.concatenate([p[3] for p in pins]), np.float64),
             np.ascontiguousarray(np.concatenate([p[5] for p in pins]), np.float64),
             np.ascontiguousarray(np.concatenate([p[6] for p in pins]), np.float64), [float(p[4]) for p in pins],
-            [PIN_TAPER_M, PIN_GATE_M[0], PIN_GATE_M[1]])
+            [PIN_TAPER_M, *PIN_GATE_M] + ([ROAD_LIFT - lift] if roadshape.ROBUST_PROFILE else []))
         PIN_STATS["field_s"] += time.perf_counter() - t1
         PIN_STATS["pinned"] += 1
         return np.asarray(got, np.float64)
@@ -7589,7 +7589,7 @@ class _Planner:
             out[keep] = base.ravel()[keep]
         if pinned and PROFILE_PINS is not None and not roads_only and not planned_only:
             # (BNE_ROADSHAPE=profile, P3b: the second stage, the joint profile's approach ground: _pin_field)
-            d = self._pin_field(lat.ravel(), lon.ravel(), e, n, out)
+            d = self._pin_field(lat.ravel(), lon.ravel(), e, n, out, lift)
             if d is not None:
                 if keep is not None:
                     d[keep] = 0.0
