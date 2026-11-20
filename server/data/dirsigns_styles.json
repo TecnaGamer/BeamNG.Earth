@@ -77,6 +77,29 @@
       "networks": [
         {"network": "bab", "plate": "a"}, {"network": "de:national", "plate": "b"},
         {"network": "", "ref": "^[LK]\\s?\\d", "plate": "l"}, {"network": "e-road", "plate": "e"}]
+    },
+    "SE": {
+      "verified": true,
+      "source": "TSFS 2019:74 7 kap. 1 § (a board is blue before a public road, green before a motorway or motortrafikled; white in a town but on a through public road, where it is blue) and 24 § (European routes above the others); the colours are read from Transportstyrelsen's own pictures of F1 and F14 (transportstyrelsen.se, 2026-11-17): blue 0 85 150, green 0 128 101, white text and edge. Every board here is blue: a motorway's boards lead off it to public roads, a town's stand where numbered routes fork (through public roads); the green board at the last junction before a motorway is not told apart. Route numbers: F14, a European route green, a national (riksväg, se:rv) or county road (länsväg, se:lv) the board's blue in a white frame. Networks as Overture has them round Göteborg and Alingsås (2026-11-17).",
+      "board": {"freeway": {"bg": [0, 85, 150], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "road": {"bg": [0, 85, 150], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "urban": {"bg": [0, 85, 150], "ink": [255, 255, 255], "trim": [255, 255, 255]}},
+      "plates": {"e": [0, [0, 128, 101], [255, 255, 255], [255, 255, 255]],
+                 "n": [0, [0, 85, 150], [255, 255, 255], [255, 255, 255]]},
+      "networks": [{"network": "e-road", "plate": "e"}, {"network": "se:rv", "plate": "n"},
+                   {"network": "se:lv", "plate": "n"}]
+    },
+    "BG": {
+      "verified": false,
+      "source": "Наредба № 18 (2001, as amended to ДВ бр. 13/2020; sars.gov.bg): чл. 165 (3) 1 the board green on a motorway, blue outside towns, white in towns, (4) white text on green or blue, black on white; чл. 159 (9) only motorways, expressways and I and II class roads have their numbers on the board; чл. 160 the national number (Ж20.1 motorway, green; Ж20.2 road, blue) before the European (Ж21, blue off motorways: чл. 165 (3) 8). The law names the colours, not their values: the green and blue are the other countries' here, so verified stays false. Networks as Overture has them round Sofia and Plovdiv (2026-11-17): a national road of one or two digits is I or II class.",
+      "board": {"freeway": {"bg": [0, 110, 60], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "road": {"bg": [0, 85, 165], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "urban": {"bg": [255, 255, 255], "ink": [0, 0, 0], "trim": [0, 0, 0]}},
+      "plates": {"a": [0, [0, 110, 60], [255, 255, 255], [255, 255, 255]],
+                 "n": [0, [0, 85, 165], [255, 255, 255], [255, 255, 255]],
+                 "e": [0, [0, 85, 165], [255, 255, 255], [255, 255, 255]]},
+      "networks": [{"network": "bg:motorway", "plate": "a"}, {"network": "bg:national", "ref": "^\\d{1,2}$", "plate": "n"},
+                   {"network": "e-road", "plate": "e"}]
     }
   }
 }
