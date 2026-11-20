@@ -9714,6 +9714,8 @@ class BridgeProfiles:
         # (its ground roads and railways: the chain's ground also holds its cells' height limits, ("lim", cell), which
         # are no lines: pier_sites raised on them and the bridge lost every pier, the Bowker Overpass 2026-11-14)
         lines = [ln for gk, v in (ground or {}).items() if gk[1] in ("g", "r") for ln in v]
+        # (and the road tunnels under it: a road in a tunnel is no ground line, yet a pier walled across its tube)
+        lines += self._tunnels_near(np.asarray(xy, np.float64))
         try:
             return pier_sites(np.asarray(xy, np.float64), np.asarray(z, np.float64), spec.width,
                               self._ground, lines, self._wet_at, self.__dict__.get("depth", {}).get(k))
@@ -9744,6 +9746,23 @@ class BridgeProfiles:
             for i in range(len(feats)):
                 if rs[i] is not None:
                     for ring in ground_parts(feats, i):
+                        e, n = mapgeom.enu_xy(feats, self.frame, ring)
+                        out.append(np.stack([e, n], axis=1))
+        return out
+
+    def _tunnels_near(self, xy):
+        """The road tunnel lines (k, 2) of the map cells around the points xy (n, 2): the tunnel pieces of the roads
+        there (tunnel_parts), which no ground line holds (a pier site keeps off them as off a ground road)."""
+        la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        out = []
+        for key in {mapcells.cell_of(float(a), float(b)) for a, b in zip(la, lo)}:
+            feats = self.cell_fn(key)
+            if feats is None or len(feats) == 0:
+                continue
+            specs = tunnel_specs(feats)
+            for i in range(len(feats)):
+                if specs[i] is not None:
+                    for ring in tunnel_parts(feats, i):
                         e, n = mapgeom.enu_xy(feats, self.frame, ring)
                         out.append(np.stack([e, n], axis=1))
         return out
