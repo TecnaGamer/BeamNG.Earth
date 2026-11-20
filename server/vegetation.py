@@ -90,7 +90,7 @@ VERSION = 50          # (the cached cells hold their groups: 14 for the regional
                       # 47: a tile's biome carries its Koppen class (the ground cover's grasses by climate)
                       # 48: the tropics' remote floor half dead wood (G_DEADWOOD_TROPICAL, THICKET_SHARE)
                       # 49: more birches: Europe's north fewer conifers (NORTH_CONIFER_FACTOR), central Europe CONT_BIRCH_SOUTH
-                      # 50: dev's count of trees back, spread apart to the crown spacing instead of thinned to it (_spread)
+                      # 50: dev's thinning back (its count of trees), the tall trunks at least TRUNK_MIN_M apart (_thin_trunks)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -99,13 +99,8 @@ TREE_MIN_M = 3.0
 # to what they were at MERC_REF_LAT, so the tuned look holds everywhere (and the tropics are no longer a little sparse).
 MERC_REF_LAT = 40.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
-# (36) ... in the conifers' forests: their forest-grown crowns are narrow (radius ~0.07 h: 0.5 x (0.12 h + 1 m) is
-# ~1.9 m at 23 m). A broadleaf's crown is about twice as wide (~0.14 h), and at 0.5 one oak's, beech's or rainforest
-# tree's crown gave two or three tops a metre or two apart: trunks in pairs, walls of them (the user's test at
-# Syrynka 2026-11-18; real cells measured: the nearest neighbour's median 1.6-1.9 m in every biome, for 120-370
-# trees/ha, where a random stand of that density has ~3 m). crown_spacing blends them by the cell's leaf type.
-CROWN_SPACING_BROAD = 1.0
-CROWN_SPACING_TROPICAL = 1.05
+# (36-49 thinned broadleaf cells at 1.0 crown radii, crown_spacing: the trunks in pairs gone with 35-45 % of their
+# trees; 50: dev's thinning again, the tall trunks spaced by _thin_trunks without losing them)
 BUSH_MIN_M = 1.0
 KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
@@ -497,7 +492,7 @@ def _conifer_share(lat, lon, north=True):
     Land Cover 100 m's Forest Type, 2019), else the coarse rule below. South of the tropics no less than the coarse
     rule: the map takes the radiata pine plantations of Chile, New Zealand and South Africa for evergreen
     broadleaves (Kaingaroa's 0.27, Biobio's 0.0). north: Europe's north's birches (NORTH_CONIFER_FACTOR); without it
-    the maps' own share (crown_spacing: the forest's density as before)."""
+    the maps' own share."""
     import leaftype
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     m = np.reshape(_on_grid(leaftype.conifer_share, lat, lon), lat.shape)
@@ -1448,11 +1443,13 @@ class Vegetation:
         gx0 = np.floor((mx[ii] + 20037508.342789244) / chm.dx).astype(np.int64)
         gy0 = np.floor((20037508.342789244 - my[jj]) / chm.dy).astype(np.int64)
         tie = (_hash01(gx0, gy0, 29) * 1e-3).astype(np.float32)
-        # (50) thinned as dev (CROWN_SPACING: dev's count of trees), then spread apart to the cell's crown spacing
-        # (SPREAD_ITERS below): the broadleaves' crowns one tree each without losing the trees
-        spacing = crown_spacing((lat0 + lat1) / 2.0, (lon0 + lon1) / 2.0)
+        # (50) thinned as dev (CROWN_SPACING: dev's count of trees), then the tall trees' trunks at least TRUNK_MIN_M
+        # apart (_thin_trunks: only where they stood closer, the shorter one goes; none moved)
         jj, ii = _thin(jj, ii, hs[jj, ii] + tie, chm.dx, k)
-        spread_k = k                         # (k: reused below for the barren ground's)
+        valid = (hs >= TRUNK_TALL_M) & ~blocked        # (where a tall top may stand: as the tops above)
+        valid[~rj, :] = False
+        valid[:, ~ci] = False
+        jj, ii = _thin_trunks(jj, ii, hs, valid, chm.dx, (lat0 + lat1) / 2.0, mx, my)
         th = hs[jj, ii]
         tlon, tlat = _to4326(mx[ii], my[jj])
         is_tree = th >= TREE_MIN_M
@@ -1501,10 +1498,7 @@ class Vegetation:
         group = open_groups(group, open_)
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
-        px_, py_ = mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter
-        px_, py_ = _spread(px_, py_, th, spread_k * spacing, blocked | curb, chm.x0, chm.y0, chm.dx, chm.dy,
-                           TRUNK_MIN_M / max(0.05, dmath.cos(dmath.radians(clat))))
-        tlon2, tlat2 = _to4326(px_, py_)
+        tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)
         tree = Items(tlon2, tlat2, th.astype(np.float32), (0.12 * th + 1.0).astype(np.float32), kind, group,
                      _hash01(gx, gy, 5).astype(np.float32), (u2 * 360.0).astype(np.float32),
                      (0.85 + 0.3 * _hash01(gx, gy, 6)).astype(np.float32))
@@ -1774,19 +1768,6 @@ class Vegetation:
         return climate_shrubs(it, cls[sel], understory=cls[sel] == UNDERSTORY)
 
 
-def crown_spacing(lat, lon):
-    """(36) The thinning's crown spacing for a cell at (lat, lon): by its forests' leaf type (leaftype.py; the coarse
-    rule where the map has none) and biome, between CROWN_SPACING (the conifers' narrow forest-grown crowns: a radius
-    of ~0.07 h) and CROWN_SPACING_BROAD (the broadleaves': ~0.14 h; the tropics' CROWN_SPACING_TROPICAL)."""
-    import ecoregion as er
-    c = float(_conifer_share(np.array([lat]), np.array([lon]), north=False)[0])
-    bio = int(er.biome_of(er.eco_many(np.array([lat]), np.array([lon])))[0])
-    broad = CROWN_SPACING_TROPICAL if bio in (er.B_TROP_MOIST, er.B_TROP_DRY, er.B_TROP_GRASS, er.B_MANGROVE) \
-        else CROWN_SPACING_BROAD
-    c = min(max(c, 0.0), 1.0)
-    return c * CROWN_SPACING + (1.0 - c) * broad
-
-
 def _thin(jj, ii, h, px, k=1.0, spacing=None):
     """Non-maximum suppression: the tallest tops first, each removing the others within its crown
     radius (0.12 h + 1 m, times CROWN_SPACING). Deterministic (ties broken by position). earthfast thin_tops
@@ -1803,104 +1784,78 @@ def _thin(jj, ii, h, px, k=1.0, spacing=None):
     return jj[keep], ii[keep]
 
 
-SPREAD_ITERS = 16       # (50) _spread's passes (4 left a flat canopy's lattice 2-2.5 m apart)
-SPREAD_PAIRS_EVERY = 4  # its near pairs found again every this many passes
-TRUNK_MIN_M = 3.5       # two trees of TRUNK_TALL_M or more spread at least this far apart (ground m): a flat canopy
-TRUNK_TALL_M = 8.0      # plateau's tops are a thinning-radius lattice, 2 m apart (Rogowska, the user's 2026-11-20)
-SPREAD_MAX = 1.25       # a top moved at most this many of its own (spaced) radii from where the canopy has it
+TRUNK_MIN_M = 3.0       # (50) two trees of TRUNK_TALL_M or more at least this far apart (ground m): a flat canopy
+TRUNK_TALL_M = 8.0      # plateau's tops are a lattice of the thinning radius, 2 m apart (Rogowska, the user's 2026-11-20)
+TRUNK_BLOCK_M = 40.0    # dev's count of tall trees kept in every square this big (ground m)
+TRUNK_CAND_M = 2.5      # a removed tree's replacement: one canopy pixel at a hashed spot of every square this big
 
 
-def _near_pairs(x, y, cell):
-    """The index pairs (i < j by bucket order, each once) of points x, y within one bucket of cell metres of each
-    other (the 3 x 3 buckets around each): the candidates of a distance test."""
-    n = len(x)
-    kx = np.floor(x / cell).astype(np.int64)
-    ky = np.floor(y / cell).astype(np.int64)
-    kx -= kx.min() - 1
-    ky -= ky.min() - 1
-    w = int(ky.max()) + 3
-    key = kx * w + ky
-    order = np.argsort(key, kind="stable")
-    sk = key[order]
-    out_i, out_j = [], []
-    for ox, oy in ((0, 0), (1, -1), (1, 0), (1, 1), (0, 1)):
-        nk = key + ox * w + oy
-        lo = np.searchsorted(sk, nk, "left")
-        cnt = np.searchsorted(sk, nk, "right") - lo
-        tot = int(cnt.sum())
-        if tot == 0:
-            continue
-        i = np.repeat(np.arange(n), cnt)
-        off = np.arange(tot) - np.repeat(np.cumsum(cnt) - cnt, cnt)
-        j = order[np.repeat(lo, cnt) + off]
-        if (ox, oy) == (0, 0):
-            m = j > i
-            i, j = i[m], j[m]
-        out_i.append(i)
-        out_j.append(j)
-    if not out_i:
-        z = np.zeros(0, np.int64)
-        return z, z
-    return np.concatenate(out_i), np.concatenate(out_j)
-
-
-def _spread(x, y, h, scale, forbid, x0, y0, dx, dy, trunk=0.0):
-    """(50) Tops x, y (Web Mercator m) of heights h pushed apart, keeping every one: two tops nearer than scale x
-    their mean crown radius (0.12 h + 1 m) move away from each other, the shorter one the more (the tall crown keeps
-    its canopy top), each at most SPREAD_MAX of its own radius x scale from where it was (two tops of TRUNK_TALL_M or more: at least trunk apart), never onto a forbidden
-    pixel (buildings, water, roads and their curbs: forbid over the grid x0, y0, dx, dy). Dev's thinning (0.5 crown
-    radii) left a broadleaf's crown two or three trunks a metre or two apart (the user's Syrynka 2026-11-18); the
-    wider thinning of 37 fixed that by dropping 35-45 % of the trees, and the user wanted the spacing, not fewer
-    trees (2026-11-20). Deterministic: sums in index order (bincount), square roots only."""
-    n = len(x)
-    if n < 2:
-        return x, y
-    x0_, y0_ = np.asarray(x, np.float64).copy(), np.asarray(y, np.float64).copy()
-    x, y = x0_.copy(), y0_.copy()
-    h = np.asarray(h, np.float64)
-    r = (0.12 * h + 1.0) * scale
-    if trunk > 0.0:                         # (two tall trees' trunks at least trunk apart: TRUNK_MIN_M)
-        r = np.where(h >= TRUNK_TALL_M, np.maximum(r, trunk), r)
-    cap = SPREAD_MAX * r
-    n_r, n_c = forbid.shape
-    cell = float(r.max())
-    for it in range(SPREAD_ITERS):
-        if it % SPREAD_PAIRS_EVERY == 0:     # (the pairs within reach, found again as the tops move)
-            i, j = _near_pairs(x, y, cell)
-            ex, ey = x[j] - x[i], y[j] - y[i]
-            need = 0.5 * (r[i] + r[j])
-            m = ex * ex + ey * ey < dnp.sq(need + 0.25 * cell)
-            i, j, need = i[m], j[m], need[m]
-            if len(i) == 0:
-                break
-            hi_, hj_ = h[i] + 1.0, h[j] + 1.0
-            wi = hj_ / (hi_ + hj_)              # (the shorter one's share the larger)
-        ex, ey = x[j] - x[i], y[j] - y[i]
-        d2 = ex * ex + ey * ey
-        m = np.flatnonzero(d2 < need * need)
-        if len(m) == 0:
-            break
-        pi, pj, ex, ey, w_ = i[m], j[m], ex[m], ey[m], wi[m]
-        d = np.sqrt(d2[m])
-        gap = need[m] - d
-        same = d < 1e-6
-        dd = np.where(same, 1.0, d)
-        gx_ = np.where(same, gap, gap * ex / dd)
-        gy_ = np.where(same, 0.0, gap * ey / dd)
-        mvx = np.bincount(pj, gx_ * (1.0 - w_), n) - np.bincount(pi, gx_ * w_, n)
-        mvy = np.bincount(pj, gy_ * (1.0 - w_), n) - np.bincount(pi, gy_ * w_, n)
-        nx, ny = x + 0.6 * mvx, y + 0.6 * mvy   # (under-relaxed: a crowd's pushes add up)
-        ox, oy = nx - x0_, ny - y0_
-        o = np.sqrt(ox * ox + oy * oy)
-        f = np.where(o > cap, cap / np.maximum(o, 1e-9), 1.0)
-        nx, ny = x0_ + ox * f, y0_ + oy * f
-        col = np.floor((nx - x0) / dx).astype(np.int64)
-        row = np.floor((y0 - ny) / dy).astype(np.int64)
-        ok = (col >= 0) & (col < n_c) & (row >= 0) & (row < n_r)
-        ok[ok] &= ~forbid[row[ok], col[ok]]
-        x = np.where(ok, nx, x)
-        y = np.where(ok, ny, y)
-    return x, y
+def _thin_trunks(jj, ii, hs, valid, dx, lat, mx, my):
+    """(50) The thinned tops (pixel rows jj, columns ii of the smoothed canopy hs) with the trees of TRUNK_TALL_M or
+    more re-chosen so no two stand within TRUNK_MIN_M on the ground, and as many of them in every TRUNK_BLOCK_M
+    square as dev's thinning had where the canopy has room. Dev's tops are kept tallest first (ties by a hash of the
+    pixel, as _thin's); in a square that lost some, canopy pixels (valid: tall canopy, not blocked; one at a hashed spot of
+    every TRUNK_CAND_M square) fill the free spots, the taller first. No tree moves and none stands off the canopy. Dev's
+    thinning left a flat canopy's tops a lattice 2 m apart (Rogowska, the user's 2026-11-20); pushing them apart
+    filled clearings and packed dense patches into grids, and thinning alone dropped ~57 % of the trees
+    (Pennsylvania at 3 m). Shorter tops untouched. earthfast thin_tops with a constant radius (heights 1e7 + rank:
+    exact in float32, its radius varying under 0.7 %)."""
+    h = hs[jj, ii]
+    tall = h >= TRUNK_TALL_M
+    if tall.sum() < 2:
+        return jj, ii
+    fast.require(64, "thin_tops")
+    px_m = dx * max(0.05, dmath.cos(dmath.radians(min(abs(float(lat)), 85.0))))    # (a pixel on the ground)
+    blk = max(1, int(round(TRUNK_BLOCK_M / px_m)))
+    dj, di = jj[tall], ii[tall]
+    spacing = (TRUNK_MIN_M / px_m) / (0.12 * 1.0e7 + 1.0)
+    tx = np.floor((mx[di] + 20037508.342789244) / dx).astype(np.int64)
+    ty = np.floor((20037508.342789244 - my[dj]) / dx).astype(np.int64)
+    od = np.lexsort((_hash01(tx, ty, 29), h[tall].astype(np.float64)))
+    rank_d = np.empty(len(dj), np.float64)
+    rank_d[od] = np.arange(len(dj), dtype=np.float64)
+    first = fast._ef.thin_tops(np.ascontiguousarray(dj, np.int64), np.ascontiguousarray(di, np.int64),
+                               np.ascontiguousarray(1.0e7 + rank_d, np.float32), float(spacing), 1.0)
+    # the blocks short of dev's count after it: there, one canopy pixel (valid) at a hashed spot of every
+    # TRUNK_CAND_M square is a candidate
+    kj, ki = dj[first], di[first]
+    n_r, n_c = valid.shape
+    bw = n_c // blk + 2
+    nb = (n_r // blk + 2) * bw
+    quota = np.bincount((dj // blk) * bw + di // blk, minlength=nb)
+    short = quota > np.bincount((kj // blk) * bw + ki // blk, minlength=nb)
+    if not short.any():
+        return np.concatenate([jj[~tall], kj]), np.concatenate([ii[~tall], ki])
+    c = max(1, int(round(TRUNK_CAND_M / px_m)))
+    sy, sx = np.meshgrid(np.arange(0, n_r, c), np.arange(0, n_c, c), indexing="ij")
+    sy, sx = sy.ravel(), sx.ravel()
+    gx = np.floor((mx[sx] + 20037508.342789244) / dx).astype(np.int64) // c
+    gy = np.floor((20037508.342789244 - my[sy]) / dx).astype(np.int64) // c
+    cj = np.minimum(sy + (_hash01(gx, gy, 37) * c).astype(np.int64), n_r - 1)
+    ci_ = np.minimum(sx + (_hash01(gx, gy, 38) * c).astype(np.int64), n_c - 1)
+    ok = valid[cj, ci_] & short[(cj // blk) * bw + ci_ // blk]
+    cj, ci_ = cj[ok], ci_[ok]
+    u = _hash01(gx[ok], gy[ok], 39)
+    dj, di, rank_d = kj, ki, rank_d[first]          # (the kept ones: no conflict among them)
+    nd, nc = len(dj), len(cj)
+    # priorities: every dev top above every candidate; within each, the taller first
+    oc = np.lexsort((u, hs[cj, ci_].astype(np.float64)))
+    pri = np.empty(nd + nc, np.float64)
+    pri[:nd] = nc + rank_d
+    pri[nd + oc] = np.arange(nc, dtype=np.float64)
+    aj, ai = np.concatenate([dj, cj]), np.concatenate([di, ci_])
+    keep = fast._ef.thin_tops(np.ascontiguousarray(aj, np.int64), np.ascontiguousarray(ai, np.int64),
+                              np.ascontiguousarray(1.0e7 + pri, np.float32), float(spacing), 1.0)
+    # each block keeps as many as dev had there, the highest priorities first
+    bkey = (aj // blk) * bw + ai // blk
+    k_idx = np.flatnonzero(keep)
+    o = k_idx[np.lexsort((-pri[k_idx], bkey[k_idx]))]
+    kb = bkey[o]
+    grp = np.r_[0, np.flatnonzero(kb[1:] != kb[:-1]) + 1]
+    start = np.repeat(grp, np.diff(np.r_[grp, len(o)]))
+    sel = o[(np.arange(len(o)) - start) < quota[kb]]
+    sel.sort()
+    return np.concatenate([jj[~tall], aj[sel]]), np.concatenate([ii[~tall], ai[sel]])
 
 
 def _empty():

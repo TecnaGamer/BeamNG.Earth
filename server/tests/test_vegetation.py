@@ -723,85 +723,55 @@ class DilateTest(unittest.TestCase):
         self.assertTrue(d[2:7, 2:7].all())
 
 
-class CrownSpacingTest(unittest.TestCase):
-    """(36) crown_spacing: the thinning's radius by the cell's leaf type and biome."""
+class TrunkThinTest(unittest.TestCase):
+    """(50) _thin_trunks: the tall trees' trunks TRUNK_MIN_M apart, dev's count kept where the canopy has room, every
+    tree on the canopy, none moved."""
 
-    def test_by_leaf_type_and_biome(self):
-        self.assertLess(veg.crown_spacing(62.0, 26.0), 0.6, "Finland's spruces and pines: narrow crowns")
-        self.assertLess(veg.crown_spacing(53.6, 17.9), 0.6, "Bory Tucholskie's pines")
-        self.assertGreater(veg.crown_spacing(49.99, 18.37), 0.85, "Silesia's oak-hornbeam woods: wide crowns")
-        self.assertGreater(veg.crown_spacing(41.0, -77.5), 0.85, "Pennsylvania's hardwoods")
-        self.assertAlmostEqual(veg.crown_spacing(-2.9, -60.0), veg.CROWN_SPACING_TROPICAL, places=2, msg="Amazonia")
-        for lat, lon in ((62.0, 26.0), (49.99, 18.37), (-2.9, -60.0), (0.0, -30.0)):
-            s = veg.crown_spacing(lat, lon)
-            self.assertTrue(veg.CROWN_SPACING <= s <= max(veg.CROWN_SPACING_BROAD, veg.CROWN_SPACING_TROPICAL),
-                            (lat, lon, s))
+    def _canopy(self, n=200, h=22.0):
+        hs = np.full((n, n), h, np.float32)          # a flat canopy plateau, 1 m pixels (Web Mercator, at the equator)
+        mx = (np.arange(n) + 0.5) * 1.0
+        my = 1000.0 - (np.arange(n) + 0.5) * 1.0
+        return hs, mx, my
 
-
-class SpreadTest(unittest.TestCase):
-    """(50) _spread: tops pushed apart to the crown spacing, every one kept, off the forbidden pixels."""
-
-    def _grid(self):
-        forbid = np.zeros((100, 100), bool)      # 1 m pixels, x 0..100, y 100..0
-        return forbid, 0.0, 100.0, 1.0, 1.0
-
-    def test_pair_spread_kept(self):
-        forbid, x0, y0, dx, dy = self._grid()
-        x, y, h = np.array([50.0, 51.0]), np.array([50.0, 50.0]), np.array([20.0, 20.0])
-        nx, ny = veg._spread(x, y, h, 1.0, forbid, x0, y0, dx, dy)
-        self.assertEqual(len(nx), 2)
-        self.assertGreater(abs(nx[1] - nx[0]), 2.0, "a metre apart: pushed apart")
-        self.assertAlmostEqual(nx[0] + nx[1], 101.0, places=6, msg="equal heights: both moved alike")
-
-    def test_short_one_moves(self):
-        forbid, x0, y0, dx, dy = self._grid()
-        x, y, h = np.array([50.0, 51.0]), np.array([50.0, 50.0]), np.array([25.0, 5.0])
-        nx, _ = veg._spread(x, y, h, 1.0, forbid, x0, y0, dx, dy)
-        self.assertLess(abs(nx[0] - 50.0), abs(nx[1] - 51.0), "the tall crown keeps its place")
-
-    def test_far_apart_unmoved_and_capped(self):
-        forbid, x0, y0, dx, dy = self._grid()
-        x, y, h = np.array([20.0, 80.0, 50.0, 50.0]), np.array([20.0, 80.0, 50.0, 50.0]), np.full(4, 20.0)
-        nx, ny = veg._spread(x, y, h, 1.0, forbid, x0, y0, dx, dy)
-        self.assertTrue(np.allclose(nx[:2], x[:2]) and np.allclose(ny[:2], y[:2]))
-        cap = veg.SPREAD_MAX * (0.12 * 20.0 + 1.0)
-        self.assertTrue(np.all(np.hypot(nx - x, ny - y) <= cap + 1e-9), "never past its cap")
-        self.assertGreater(abs(nx[3] - nx[2]), 1.0, "two on one spot: pushed apart")
-
-    def test_forbidden(self):
-        forbid, x0, y0, dx, dy = self._grid()
-        forbid[:, 52:] = True                     # a road from x 52 on
-        x, y, h = np.array([50.0, 51.5]), np.array([50.0, 50.0]), np.array([25.0, 5.0])
-        nx, ny = veg._spread(x, y, h, 1.0, forbid, x0, y0, dx, dy)
-        col = np.floor((nx - x0) / dx).astype(int)
-        row = np.floor((y0 - ny) / dy).astype(int)
-        self.assertFalse(forbid[row, col].any(), "no top onto the road")
-
-    def test_trunk_floor(self):
-        """Tall trees as dense as a flat canopy's tops (450 / ha, random: nearest neighbours ~2.2 m) spread to the trunk
-        spacing, every tree kept."""
-        forbid, x0, y0, dx, dy = self._grid()
-        rng = np.random.default_rng(5)
-        x, y = rng.uniform(32, 68, 58), rng.uniform(32, 68, 58)
-        h = np.full(len(x), 22.0)
-        nx, ny = veg._spread(x, y, h, 0.5, forbid, x0, y0, dx, dy, trunk=3.5)
-        self.assertEqual(len(nx), len(x))
-        d = np.hypot(nx[:, None] - nx[None, :], ny[:, None] - ny[None, :])
+    def _nn(self, jj, ii):
+        d = np.hypot(jj[:, None] - jj[None, :], ii[:, None] - ii[None, :]).astype(float)
         np.fill_diagonal(d, 1e9)
-        self.assertGreater(float(np.median(d.min(axis=1))), 3.0)
-        lo_x, lo_y = veg._spread(x, y, np.full(len(x), 5.0), 0.5, forbid, x0, y0, dx, dy, trunk=3.5)
-        d = np.hypot(lo_x[:, None] - lo_x[None, :], lo_y[:, None] - lo_y[None, :])
-        np.fill_diagonal(d, 1e9)
-        self.assertLess(float(np.median(d.min(axis=1))), 2.5, "small trees: no trunk floor")
+        return d.min(axis=1)
 
-    def test_deterministic(self):
-        forbid, x0, y0, dx, dy = self._grid()
-        rng = np.random.default_rng(3)
-        x, y, h = rng.uniform(10, 90, 300), rng.uniform(10, 90, 300), rng.uniform(4, 30, 300)
-        a = veg._spread(x, y, h, 1.19, forbid, x0, y0, dx, dy)
-        b = veg._spread(x, y, h, 1.19, forbid, x0, y0, dx, dy)
+    def test_lattice_spaced_count_kept(self):
+        hs, mx, my = self._canopy()
+        g = np.arange(60, 140, 2)                    # dev's plateau lattice: tops 2 m apart, 2500 / ha
+        jj, ii = [a.ravel() for a in np.meshgrid(g, g, indexing="ij")]
+        jj, ii = jj[::8], ii[::8]                    # (310 / ha: room for them at 3.5 m)
+        valid = np.zeros(hs.shape, bool)
+        valid[60:140, 60:140] = True
+        oj, oi = veg._thin_trunks(jj, ii, hs, valid, 1.0, 0.0, mx, my)
+        self.assertGreater(float(self._nn(oj, oi).min()), veg.TRUNK_MIN_M * 0.99, "no two trunks nearer")
+        self.assertGreater(len(oj), 0.9 * len(jj), "dev's count kept (the canopy has room)")
+        self.assertTrue(valid[oj, oi].all(), "every tree on the canopy")
+
+    def test_never_off_canopy(self):
+        hs, mx, my = self._canopy()
+        jj = np.array([100, 101, 100, 101]); ii = np.array([100, 100, 101, 101])
+        valid = np.zeros(hs.shape, bool)
+        valid[99:103, 99:103] = True                 # a single crown: no room for four trunks
+        oj, oi = veg._thin_trunks(jj, ii, hs, valid, 1.0, 0.0, mx, my)
+        self.assertEqual(len(oj), 1, "one trunk where only one fits")
+        self.assertTrue(valid[oj, oi].all())
+
+    def test_short_untouched_deterministic(self):
+        hs, mx, my = self._canopy(h=5.0)
+        jj, ii = np.array([100, 101, 102]), np.array([100, 100, 100])
+        valid = np.zeros(hs.shape, bool)
+        oj, oi = veg._thin_trunks(jj, ii, hs, valid, 1.0, 0.0, mx, my)
+        self.assertEqual(sorted(zip(oj.tolist(), oi.tolist())), [(100, 100), (101, 100), (102, 100)])
+        hs, mx, my = self._canopy()
+        rng = np.random.default_rng(1)
+        jj, ii = rng.integers(50, 150, 900), rng.integers(50, 150, 900)
+        valid = np.ones(hs.shape, bool)
+        a = veg._thin_trunks(jj, ii, hs, valid, 1.0, 0.0, mx, my)
+        b = veg._thin_trunks(jj, ii, hs, valid, 1.0, 0.0, mx, my)
         self.assertTrue(np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1]))
-        self.assertEqual(len(a[0]), 300)
 
 
 class NorthBirchTest(unittest.TestCase):
