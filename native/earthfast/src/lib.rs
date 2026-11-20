@@ -169,6 +169,7 @@ mod decisions;
 mod lidarz;
 mod paintlist;
 mod nearcross;
+mod ignrpg;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -7452,6 +7453,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 552: try598 with 549 (codex-port2 rail crossings) and 550 (v3 S2b) merged
     // 556: merged
     // 558: merged
-    m.add("VERSION", 560)?;
+    // 561: ignrpg (IGN RPG French agricultural parcel filtering and oriented row sampling, server/ignrpg.py)
+    ignrpg::register(m)?;
+    m.add("VERSION", 561)?;
     Ok(())
 }
