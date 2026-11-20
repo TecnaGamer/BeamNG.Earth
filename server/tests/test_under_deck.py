@@ -223,7 +223,10 @@ class DeckHitsTest(unittest.TestCase):
     def test_every_near_deck_at_once_is_bit_for_bit_one_at_a_time(self):
         """Wiggly roads under a city's worth of random decks (some colinear with the road, some ending on it): the
         native kernel, numpy's every-deck-at-once test (in small chunks too) and the one-deck-at-a-time form give the
-        same answer to the last bit, and z itself where nothing is capped."""
+        same answer to the last bit, and z itself where nothing is capped. (The stack pass over runs of decks,
+        UNDER_STACK_PLAN_ON, is by design more than one deck at a time: off here.)"""
+        from unittest import mock
+        self.enterContext(mock.patch.object(grading, "UNDER_STACK_PLAN_ON", False))
         rng = np.random.default_rng(698)
         decks = []
         for _ in range(120):
@@ -276,6 +279,37 @@ class UnderDeckTest(unittest.TestCase):
         under = z[np.abs(ys) <= 4.0]
         self.assertLess(under.max(), need + 0.2, "the road clears the deck")
         self.assertGreater(z.min(), need - 0.6, "dug only as deep as the clearance needs")
+
+
+
+class StackCapTest(unittest.TestCase):
+    """grading._stack_capped (UNDER_STACK_PLAN_ON): a road under a run of decks the elevation holds as ground (a lid:
+    Atlanta's Downtown Connector under Memorial Drive) is capped at the straight line between its ground past the run;
+    two decks with the road's own ground between them are left to deck_capped's per-deck reading."""
+
+    def _road(self, plateau_between):
+        s = np.arange(0.0, 400.0, 2.0)
+        pts = np.c_[s, np.zeros_like(s)]
+        z = 100.0 - 0.01 * s                           # (the road's own grade)
+        lid = (s >= 150) & (s <= 260)
+        z = np.where(lid, 104.0, z)                    # (the decks as ground over the whole run)
+        if not plateau_between:
+            z = np.where((s > 175) & (s < 235), 100.0 - 0.01 * s, z)
+        decks = [(np.array([[160.0, -40.0], [160.0, 40.0]]), 8.0),
+                 (np.array([[250.0, -40.0], [250.0, 40.0]]), 8.0)]
+        return s, pts, z, decks
+
+    def test_a_lid_is_capped_at_the_ground_past_it(self):
+        s, pts, z, decks = self._road(True)
+        got = grading._stack_capped(pts, z, z.copy(), decks)
+        mid = (s >= 170) & (s <= 240)
+        self.assertLess(float(np.max(got[mid] - (100.0 - 0.01 * s[mid]))), 0.05)
+        self.assertTrue(np.array_equal(got[s < 120], z[s < 120]))     # (nothing outside the run changes)
+
+    def test_separate_decks_over_real_ground_are_not_one_run(self):
+        s, pts, z, decks = self._road(False)
+        got = grading._stack_capped(pts, z, z.copy(), decks)
+        self.assertTrue(np.array_equal(got, z))
 
 
 if __name__ == "__main__":

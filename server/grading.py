@@ -9338,7 +9338,88 @@ def deck_capped(pts, z, decks):
     import fast
     code, out = fast.deck_capped(pts, z, la, decks.box, test_box, decks.flat(), UNDER_DECK_MAX_M,
                                  UNDER_DECK_SIDE_M, APPROACH_MIN_CROSS_M)
-    return z if code == 0 else np.asarray(z, np.float64) if code == 1 else out
+    got = z if code == 0 else np.asarray(z, np.float64) if code == 1 else out
+    if UNDER_STACK_PLAN_ON and len(decks) >= 2:
+        got = _stack_capped(pts, np.asarray(z, np.float64), got, decks)
+    return got
+
+
+# deck_capped reads a road's ground UNDER_DECK_SIDE_M past each deck over it on its own; under a run of decks side by
+# side (a lid of street bridges, an interchange's stack) that is still under the next deck, which a lidar model keeps as
+# ground. Atlanta's Downtown Connector (I-75 / I-85) under Memorial Drive, Capitol Avenue and the I-20 ramps: 160 m of
+# decks the 2018 lidar holds at 310 m, the Connector under them at 303-301 m; its plan humped 4.5 m up into their
+# girders, 0.3 m of clearance where the National Bridge Inventory has 5.2 m (2026-11-19). Crossings of two or more decks
+# whose covered stretches lie within UNDER_STACK_GAP_M of each other are one run: the road is capped there at the
+# straight line between its ground UNDER_DECK_SIDE_M past the run's ends (never raised, UNDER_MAX_DROP_M at most).
+# BNE_UNDER_STACK_PLAN=off: each deck alone, as before.
+UNDER_STACK_PLAN_ON = os.environ.get("BNE_UNDER_STACK_PLAN", "on") != "off"
+UNDER_STACK_GAP_M = 20.0
+UNDER_STACK_PLATEAU_GAP_M = 80.0    # ... or this far apart where the elevation between them stays within
+UNDER_STACK_PLATEAU_DROP_M = 1.0    # this of the decks' edges (the lid's unmapped stretches: Memorial Drive's, 56 m)
+UNDER_STACK_RUN_MAX_M = 400.0
+
+
+def _stack_capped(pts, z_raw, z, decks):
+    """z (deck_capped's) further capped under runs of two or more decks (UNDER_STACK_PLAN_*). Pure."""
+    lines = [np.asarray(ln, np.float64)[:, :2] for ln, _h in decks]
+    halves = [float(h) for _ln, h in decks]
+    hits = roadsmod._crossings(lines, [pts])
+    if len(hits) < 2:
+        return z
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))]
+    a, b = pts[:-1], pts[1:]
+    ab = b - a
+    iv = []
+    for di, darc, p in hits:
+        ln = lines[di]
+        dl = float(dnp.hypot(*np.diff(ln, axis=0).T).sum())
+        if min(float(darc), dl - float(darc)) <= APPROACH_MIN_CROSS_M:
+            continue                    # (at a deck's end: a junction at grade)
+        t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+        k = int(np.argmin(dnp.hypot(*(a + t[:, None] * ab - p).T)))
+        sc = float(s[k] + t[k] * (s[k + 1] - s[k]))
+        # (the deck's width along the road: its half over the sine of the crossing, UNDER_DECK_MAX_M at most)
+        seg = ln[min(max(int(np.searchsorted(np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))], darc)) - 1, 0),
+                     len(ln) - 2):][:2]
+        dv = seg[1] - seg[0]
+        rv = ab[k]
+        sin = abs(float(dv[0] * rv[1] - dv[1] * rv[0])) / max(float(dnp.hypot(*dv) * dnp.hypot(*rv)), 1e-9)
+        w = min(halves[di] / max(sin, 0.2), UNDER_DECK_MAX_M)
+        iv.append((sc - w, sc + w, di))
+    if len(iv) < 2:
+        return z
+    iv.sort()
+    runs, cur, n = [], list(iv[0][:2]), {iv[0][2]}
+    def plateau(a_, b_):                 # (the elevation over the gap stays on the decks' level: more lid unmapped)
+        m_ = (s >= a_) & (s <= b_)
+        if not m_.any():
+            return True
+        edge = min(float(np.interp(a_, s, z_raw)), float(np.interp(b_, s, z_raw)))
+        return float(z_raw[m_].min()) >= edge - UNDER_STACK_PLATEAU_DROP_M
+    for lo, hi, di in iv[1:]:
+        if lo <= cur[1] + UNDER_STACK_GAP_M or (lo <= cur[1] + UNDER_STACK_PLATEAU_GAP_M and plateau(cur[1], lo)):
+            cur[1] = max(cur[1], hi)
+            n.add(di)
+        else:
+            runs.append((cur[0], cur[1], len(n)))
+            cur, n = [lo, hi], {di}
+    runs.append((cur[0], cur[1], len(n)))      # (n: the run's distinct decks; a crossing on a vertex comes twice)
+    out = None
+    for lo, hi, n in runs:
+        if n < 2 or hi - lo > UNDER_STACK_RUN_MAX_M:
+            continue
+        s0, s1 = lo - UNDER_DECK_SIDE_M, hi + UNDER_DECK_SIDE_M
+        if s0 < 0.0 or s1 > s[-1]:
+            continue                    # (the run's far ground beyond this stretch: left as it is)
+        z0, z1 = float(np.interp(s0, s, z_raw)), float(np.interp(s1, s, z_raw))
+        m = (s >= s0) & (s <= s1)
+        line = z0 + (z1 - z0) * (s[m] - s0) / (s1 - s0)
+        cur_z = np.asarray(z if out is None else out, np.float64)
+        capped = np.minimum(cur_z[m], np.maximum(line, z_raw[m] - UNDER_MAX_DROP_M))
+        if (capped < cur_z[m] - 1e-6).any():
+            out = np.array(cur_z, np.float64, copy=True)
+            out[m] = capped
+    return z if out is None else out
 
 
 def gap_line(zb):
