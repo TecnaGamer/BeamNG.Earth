@@ -679,11 +679,13 @@ fn fork_event(c: &Ctx, n: usize) -> Option<String> {
     // (a lane-sum auxiliary lane carries one of the ramp's lanes to the exit: its others merge over the entrance
     // taper after the gore; the carried one is the lane next to the through lanes)
     let lane_sum = evidence == "lane_sum";
+    // (the merging lanes close before the exit the carried lane runs to, however near it is)
+    let merge_end = { let e = sg_ + entry_taper; if e > par1 && par1 > sg_ { par1 } else { e } };
     let push_branch = |names: &mut Vec<&'static str>, ws: &mut Vec<Box<dyn Fn(f64) -> f64>>| {
         for k in 0..lb {
             let carried = !lane_sum || (if right { k == 0 } else { k == lb - 1 });
             if carried { names.push("branch"); let b = branch_w.clone(); ws.push(Box::new(move |s: f64| b(s))); }
-            else { names.push("branch_merging"); ws.push(Box::new(move |s: f64| piece(s, sg_, sg_ + entry_taper, w, 0.0))); }
+            else { names.push("branch_merging"); ws.push(Box::new(move |s: f64| piece(s, sg_, merge_end, w, 0.0))); }
         }
     };
     if right {

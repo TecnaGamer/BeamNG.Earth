@@ -260,8 +260,7 @@ def accept(places, cell_fn, overlay_dir=None):
         row["ours"] = ours
         row["measured"] = pl.get("measured", {})
         row["err"] = {k: round(ours[k] - v, 1) for k, v in pl.get("measured", {}).items() if k in ours}
-        lat, lon = ev["node_ll"]
-        key = mapcells.cells_for_bbox(lat, lon, lat, lon)[0]
+        key = roadshape._key_of(ev["cell"])     # (the event's own home cell, never one found from rounded points)
         b = three_ways(key, cell_fn)
         row["window_independent"] = b[0] == b[1] == b[2]
         if "lane_start_max" in pl:
