@@ -406,32 +406,6 @@ M.PROFILES = {
 M.SPLIT = { small_grass_close = true, long_grass_distant = true, grass_dry_1 = true, mown_grass_close = true,
   mown_grass_dry = true, bngEarth_ripe_grain = true, bngEarth_stubble = true, Dry_grass_clump = true }
 M.NEAR_RADIUS, M.NEAR_SHARE, M.FAR_SHARE = 0.6, 0.6, 0.7
--- Stock plant types that draw broken pictures (every stock type with a layer goes to the profile entry's layer:
--- fieldsFor; the stock maps carry a template's leftover types, their layers absent there or their UVs over a corner of
--- another plant, never seen in the game's own maps). Found by rendering every type every profile draws (2026-11-20,
--- after the user's seedlings): a corner of a bush, a bush cut by the picture's edge, collages of several plants.
--- Off in every profile, the generic one (dev's) too.
-M.BROKEN_TYPES = {
-  ['wcusa/shrubs_near'] = { 3, 4 },        -- (its layer grass4 is not in West Coast USA: a bush's corner, a cut bush)
-  ['att/Bush'] = { 3, 4 },                 -- (the same template UVs: a bush's corner, a cut bush)
-  ['cliff/Buttercup1'] = { 4 },            -- (seeds, cranesbills and a nettle cut off, in one picture)
-  ['industrial/wet_weed_01'] = { 2, 3 },   -- (an empty picture with a seed head's corner; an empty one)
-  ['island/spanish_bayonet'] = { 2, 3 },   -- (a collage of leaf pieces; one huge leaf cut by the edges)
-  ['italy/shrub_grass_02'] = { 3, 4, 5 },  -- (collages of several bushes, hard-edged)
-}
-for _, p in pairs(M.PROFILES) do
-  for i, e in ipairs(p) do
-    local off = M.BROKEN_TYPES[tostring(e.source) .. '/' .. tostring(e.src)]
-    if off then
-      local n, types = {}, {}
-      for k, v in pairs(e) do n[k] = v end
-      for k, v in pairs(e.types or {}) do types[k] = v end
-      for _, t in ipairs(off) do types[t] = { p = 0 } end
-      n.types = types
-      p[i] = n
-    end
-  end
-end
 for name, p in pairs(M.PROFILES) do
   if name ~= 'generic' then
     local out = {}
