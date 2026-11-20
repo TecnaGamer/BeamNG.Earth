@@ -4,6 +4,7 @@
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
+lpack = { encode = function(value) return value end }
 table.clear = table.clear or function(t) for k in pairs(t) do t[k] = nil end end
 
 local rawQuat = quat
@@ -59,7 +60,7 @@ core_multiseat = { getPlayers = function(result)
   for i, player in ipairs(roster) do result[i] = player end
   return result
 end }
-be = {}
+be = { sendToMailbox = function() end }
 function be:getPlayerVehicleID(player) return slots[player] or -1 end
 function be:getObjectCount()
   local n = 0

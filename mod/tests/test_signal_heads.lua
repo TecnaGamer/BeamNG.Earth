@@ -15,7 +15,7 @@ writeFile = function() end
 jsonDecode = function() return graph end
 jsonEncode = function() return '{}' end
 serialize = function() return '{}' end
-lpack = { encodeBin = function() return '' end }
+lpack = { encodeBin = function() return '' end, encode = function(value) return value end }
 be.queueAllObjectLua = function() end
 be.sendToMailbox = function() end
 path = { getPathLevelInfo = function() end }

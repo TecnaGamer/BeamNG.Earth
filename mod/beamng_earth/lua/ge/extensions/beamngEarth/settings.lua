@@ -198,6 +198,7 @@ M.SCHEMA = {
   -- after a teleport the server on every CPU core and the game on two, until the new place is loaded (server
   -- cpupin.full_split, read at each teleport; the user, 2026-10-31)
   teleportPriority = { kind = 'bool', default = false, label = 'Full priority loading (joining, teleports)' },
+  trafficTurnYield = { kind = 'bool', default = false, label = 'Traffic green-turn yielding' },
   autodriveOncomingPass = { kind = 'bool', default = false, label = 'Autodrive opposing-lane passing' },
   autodriveObstacles = { kind = 'bool', default = false, label = 'Autodrive obstacle avoidance' },
   -- the most memory the world server may hold, all its processes together (server budget.py / memwatch.py; read from
@@ -221,7 +222,7 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'terrainShadows', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
+  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'trafficTurnYield', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
@@ -583,6 +584,11 @@ local function inOurLevel()
 end
 
 M.APPLY = {
+  trafficTurnYield = function(v)
+    if be and be.queueAllObjectLua then
+      be:queueAllObjectLua("if beamngEarth_trafficBoundary and beamngEarth_trafficBoundary.setTurnYieldEnabled then beamngEarth_trafficBoundary.setTurnYieldEnabled(" .. tostring(v) .. ') end')
+    end
+  end,
   autodriveOncomingPass = function(v)
     if be and be.queueAllObjectLua then
       be:queueAllObjectLua("if beamngEarth_oncomingPass and beamngEarth_oncomingPass.setEnabled then beamngEarth_oncomingPass.setEnabled(" .. tostring(v) .. ') end')
