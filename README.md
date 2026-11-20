@@ -58,7 +58,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   spaced as real street lamps are (North American design standards there, OpenStreetMap's mapped lamps elsewhere),
   and lit highways in towns and their ramps. Street lamps mapped in OpenStreetMap stand where they are mapped, as the
   post their mount names (high masts, straight masts, double arms), their arms toward the road
-  (`BNE_MAPPED_LAMPS=off` leaves them out).
+  (`BNE_MAPPED_LAMPS=off` leaves them out). In Hong Kong the Highways Department's lamp posts stand where the department has them
+  (OpenStreetMap has few there), as ordinary posts with their arms toward the road: one the road's carriageway covers
+  moves to its edge (or to the middle of a narrow median, or the far edge, where the near one is taken), one with no road within 40 m and ones on flyovers and in tunnels are left out; downloaded per map
+  cell in the background beside the map data, about 150 KB a cell, once (`BNE_HK_LAMPS=off` turns it off).
 - Buildings from Overture / OpenStreetMap with regional styles (US siding and brick, Alpine chalets, Nordic
   wood, Mediterranean stucco, East Asian and Latin American looks), real heights, roofs, windows, shopfronts,
   porches, churches with steeples, glass towers. Roof shapes mapped on building parts are kept and sloped along their
