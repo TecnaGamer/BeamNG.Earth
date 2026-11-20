@@ -5,7 +5,11 @@
 -- notify; the events as game hooks and listeners (worldReady after loading, teleported after a teleport only,
 -- routeArrived from gps.lua), a failing listener contained; places / buildings (1.4): the request sent, each answer
 -- to its own callback (a pending one kept for the next), paging, a timeout heard once; cachedOnly (1.8): the flag
--- sent and result.truncated surfaced.
+-- sent and result.truncated surfaced; roadGraph: the request sent cached-only, one answer a request, every result
+-- field defended, its own timeout beside the places one.
+-- sent and result.truncated surfaced; a saved area along a route (1.9): the request as it goes out (no fast, no
+-- mode), the arguments refused before anything is sent, the estimate and the new area's id decoded, areaStatus
+-- over the app's area list (unavailable and msg surfaced, and a copy), and a timeout heard once.
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 dofile(dir .. '/stubs.lua')
@@ -54,8 +58,9 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 8,
-  'version 1.8 (routeSteps, rebase from 1.7; cachedPlaces)')
+T.check(api.version() == 1 and select(2, api.version()) == 9,
+  'version 1.9 (routeSteps, rebase from 1.7; cachedPlaces 1.8; roadGraph and areaRoute here)')
+T.check(api.has('roadGraph') and api.has('areaRoute'), 'both of this change\'s calls are offered')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -347,5 +352,235 @@ T.near(bo, 7.01, 1e-8, 'toGeo round trip')
 st.inOurLevel = false
 T.check(api.toGame(45.0, 7.0) == nil and api.toGeo(0, 0) == nil, 'another level: nil')
 st.inOurLevel = true
+
+-- the road graph round a point (has('roadGraph'); server earthd Connection.road_graph, navgraph.py)
+api._reset()
+sent = {}
+T.check(api.has('roadGraph'), 'roadGraph: has()')
+T.check(select(2, api.version()) > 8, 'roadGraph: the minor version bumped past the cachedPlaces one')
+local graphs = {}
+local gid = api.roadGraph(39.2847, -76.5925, { radius = 1500 }, function(r) graphs[#graphs + 1] = r end)
+local gq = sent[#sent]
+T.check(gid and gq.type == 'road_graph' and gq.id == gid and gq.lat == 39.2847 and gq.radius == 1500,
+  'roadGraph: the request sent')
+T.check(gq.cachedOnly == true, 'roadGraph: cached-only is its only mode')
+-- the graph is read and decoded for the add-on, not left as a file name for it to find (in game, 2026-11-13: an
+-- add-on written against an earlier draft of this call checked `r.nodes` and saw every window as "no answer")
+local graphFiles = {
+  ['/temp/beamngEarth/s1/roadgraph_3_1.json'] = 'GRAPH1',
+  ['/temp/beamngEarth/s1/roadgraph_3_2.json'] = 'GRAPH2',
+}
+function readFile(path) return graphFiles[path] end
+function jsonDecode(text)
+  if text == 'GRAPH1' then
+    return { nodes = { a = { 10, 20, 30, 4 }, b = { 11, 21, 31, 5 } },
+             edges = { { 'a', 'b', false, 1, 1, 25, 1.0, 4 } },
+             signals = { x = 1 }, rules = { right = true }, lines = { { 1, 2, 3, 4 } }, mph = false }
+  end
+  if text == 'GRAPH2' then return { nodes = {}, edges = {} } end
+  error('not a graph: ' .. tostring(text))
+end
+api._onRoadGraph({ id = gid, path = '/temp/beamngEarth/s1/roadgraph_3_1.json', anchorId = 3, serial = 1,
+  complete = true })
+T.check(#graphs == 1 and graphs[1].path == '/temp/beamngEarth/s1/roadgraph_3_1.json' and graphs[1].anchorId == 3
+  and graphs[1].serial == 1 and graphs[1].complete == true and graphs[1].error == nil, 'roadGraph: the answer')
+T.check(type(graphs[1].nodes) == 'table' and graphs[1].nodes.a[1] == 10 and graphs[1].nodes.b[4] == 5,
+  'roadGraph: the nodes come decoded, keyed by their stable names')
+T.check(type(graphs[1].edges) == 'table' and #graphs[1].edges == 1 and graphs[1].edges[1][1] == 'a'
+  and graphs[1].edges[1][2] == 'b', 'roadGraph: the edges come decoded, naming their two nodes')
+T.check(graphs[1].signals.x == 1 and graphs[1].rules.right == true and #graphs[1].lines == 1
+  and graphs[1].mph == false, 'roadGraph: the graph\'s other fields carried through')
+api._onRoadGraph({ id = gid, path = '/temp/beamngEarth/s1/roadgraph_3_2.json', complete = true })
+T.check(#graphs == 1, 'roadGraph: one answer a request, nothing after it')
+-- the graph was built but cannot be read back: an error, not a silent empty answer the caller cannot tell apart
+local gone = nil
+local goneId = api.roadGraph(1, 2, {}, function(r) gone = r end)
+api._onRoadGraph({ id = goneId, path = '/temp/beamngEarth/s1/roadgraph_9_9.json', anchorId = 9, complete = true })
+T.check(gone and gone.nodes == nil and gone.edges == nil and gone.complete == false
+  and gone.error and gone.error:find('could not be read back'),
+  'roadGraph: a graph file that will not read is an error, and not complete')
+api._onRoadGraph({ id = gid + 100, path = '/x', complete = true })
+T.check(#graphs == 1, 'roadGraph: another request\'s answer not ours')
+-- a result that says nothing useful: every field defended, nothing invented
+local bare = nil
+local bid = api.roadGraph(1, 2, function(r) bare = r end)
+T.check(bid and sent[#sent].radius == nil, 'roadGraph: opts may be left out; no radius sent (the app\'s default)')
+api._onRoadGraph({ id = bid, path = 7, anchorId = 'three', serial = {}, complete = 'yes', error = 42 })
+T.check(bare and bare.path == nil and bare.anchorId == nil and bare.serial == nil and bare.complete == false
+  and bare.error == nil, 'roadGraph: wrong types are nil, not passed on')
+local err = nil
+local eid = api.roadGraph(1, 2, {}, function(r) err = r end)
+api._onRoadGraph({ id = eid, complete = false, error = 'no map data (BeamNG.Earth\'s roads are off)' })
+T.check(err and err.path == nil and err.nodes == nil and err.error:find('no map data') and err.complete == false,
+  'roadGraph: the app\'s reason surfaced, with no graph')
+local g0, gwhy = api.roadGraph(91, 0, {}, print)
+T.check(g0 == nil and gwhy == 'bad coordinates', 'roadGraph: bad coordinates refused')
+T.check(api.roadGraph(1, 2, {}) == nil, 'roadGraph: no callback refused')
+connected = false
+local g1, gwhy1 = api.roadGraph(1, 2, {}, print)
+T.check(g1 == nil and gwhy1 and gwhy1:find('not connected'), 'roadGraph: not connected')
+connected = true
+-- never answered: heard once, timed out, and a failing callback contained
+local lateG = {}
+api.roadGraph(1, 2, {}, function(r) lateG[#lateG + 1] = r error('a broken callback') end)
+api.onUpdate(api.ROAD_GRAPH_TIMEOUT_S - 1)
+T.check(#lateG == 0, 'roadGraph: not timed out yet')
+api.onUpdate(2)
+T.check(#lateG == 1 and lateG[1].error == 'timed out' and lateG[1].complete == false, 'roadGraph: timed out once')
+api.onUpdate(api.ROAD_GRAPH_TIMEOUT_S * 2)
+T.check(#lateG == 1, 'roadGraph: only once')
+T.check(api.ROAD_GRAPH_TIMEOUT_S > 0 and api.ROAD_GRAPH_TIMEOUT_S < api.PLACES_TIMEOUT_S,
+  'roadGraph: its own wait, under the places one (no download is ever waited on)')
+-- the two request kinds keep their own tables and their own waits
+api._reset()
+sent = {}
+local bothP, bothG = {}, {}
+local pid = api.places(1, 2, {}, function(r) bothP[#bothP + 1] = r end)
+local ggid = api.roadGraph(1, 2, {}, function(r) bothG[#bothG + 1] = r end)
+api.onUpdate(api.ROAD_GRAPH_TIMEOUT_S + 1)
+T.check(#bothG == 1 and bothG[1].error == 'timed out' and #bothP == 0,
+  'the road graph times out on its own clock, the places request still waiting')
+api.onUpdate(api.PLACES_TIMEOUT_S)
+T.check(#bothP == 1 and bothP[1].error == 'timed out', 'and the places request on its own')
+api._onPlaces({ id = pid, places = {}, complete = true })
+api._onRoadGraph({ id = ggid, path = '/x', complete = true })
+T.check(#bothP == 1 and #bothG == 1, '_reset\'s tables: a late answer to a swept request is dropped')
+------------------------------------------------------------------------------------------
+-- a saved area along a route (1.9, has('areaRoute'))
+
+T.check(api.has('areaRoute'), 'has areaRoute')
+local LINE = { { 45.0, 7.0 }, { 45.004, 7.004 }, { 45.008, 7.008 } }
+sent = {}
+local areaRes = nil
+local function onArea(r) areaRes = r end
+
+-- refused before anything goes on the wire
+local bad = {
+  { 'no callback', function() return api.areaPlan(LINE, { half = 300 }) end },
+  { 'one point', function() return api.areaPlan({ LINE[1] }, { half = 300 }, onArea) end },
+  { 'no points', function() return api.areaPlan('nope', { half = 300 }, onArea) end },
+  { 'a point off the map', function() return api.areaPlan({ { 91, 0 }, { 0, 0 } }, { half = 300 }, onArea) end },
+  { 'a point that is not a pair', function() return api.areaPlan({ 1, 2 }, { half = 300 }, onArea) end },
+  { 'no half width', function() return api.areaPlan(LINE, {}, onArea) end },
+  { 'no opts at all', function() return api.areaPlan(LINE, nil, onArea) end },
+  { 'an empty layers list', function() return api.areaPlan(LINE, { half = 300, layers = {} }, onArea) end },
+  { 'layers that is not a list', function() return api.areaPlan(LINE, { half = 300, layers = 'roads' }, onArea) end },
+  { 'a layer that is not a name', function() return api.areaPlan(LINE, { half = 300, layers = { 1 } }, onArea) end },
+}
+for _, case in ipairs(bad) do
+  local id, why = case[2]()
+  T.check(id == nil and type(why) == 'string' and #why > 0, 'areaPlan refuses ' .. case[1] .. ' (' .. tostring(why) .. ')')
+end
+T.check(#sent == 0, 'and put nothing on the wire for any of them')
+connected = false
+local id, why = api.areaPlan(LINE, { half = 300 }, onArea)
+T.check(id == nil and why == 'Companion server not connected', 'not connected: says so, sends nothing')
+connected = true
+T.check(#sent == 0, 'still nothing sent')
+
+-- the request as it really goes out
+local planId = api.areaPlan(LINE, { half = 300, layers = { 'roads' } }, onArea)
+T.check(planId ~= nil and #sent == 1, 'areaPlan sent one message')
+local m = sent[1]
+T.check(m.type == 'area_route_plan' and m.id == planId, 'an area_route_plan with the request id')
+T.check(type(m.route) == 'table' and #m.route.lat == 3 and #m.route.lon == 3
+  and m.route.lat[2] == 45.004 and m.route.lon[3] == 7.008, 'the points as two parallel lists, in order')
+T.check(m.half == 300 and m.layers[1] == 'roads', 'the half width and the layers subset')
+T.check(m.fast == nil and m.mode == nil and m.name == nil,
+  'no fast (it pauses the player game), no mode, no name on a plan')
+
+-- the estimate back, decoded
+api._onAreaPlan({ id = planId, ok = true, km = 1.2, km2 = 3.4, items = 51, missing = 51, downloadBytes = 30600000,
+  diskBytes = 67300000, seconds = 20, days = 0, hosts = {}, excluded = {}, layers = { 'roads' } })
+T.check(areaRes ~= nil and areaRes.ok == true, 'the callback was called, ok')
+T.check(areaRes.km == 1.2 and areaRes.items == 51 and areaRes.downloadBytes == 30600000
+  and areaRes.diskBytes == 67300000, 'the numbers came over as numbers')
+T.check(type(areaRes.layers) == 'table' and areaRes.layers[1] == 'roads' and areaRes.error == nil,
+  'and the subset the app honoured')
+areaRes = nil
+api._onAreaPlan({ id = planId, ok = true, km = 9 })
+T.check(areaRes == nil, 'one answer a request: a second is ignored')
+api._onAreaPlan({ id = 9999, ok = true })
+T.check(areaRes == nil, "another request's answer is ignored")
+api._onAreaPlan(nil)
+api._onAreaPlan({ })
+T.check(areaRes == nil, 'a malformed answer is ignored rather than thrown')
+
+-- every result field defended against a wrong type
+sent = {}
+planId = api.areaPlan(LINE, { half = 300 }, onArea)
+T.check(sent[1].layers == nil, 'no subset asked for: no layers field on the wire')
+areaRes = nil
+api._onAreaPlan({ id = planId, ok = 'yes', km = 'far', items = {}, layers = 'roads', error = 7 })
+T.check(areaRes ~= nil and areaRes.ok == false and areaRes.km == nil and areaRes.items == nil
+  and areaRes.layers == nil and areaRes.error == nil, 'wrong types are dropped, not passed through')
+
+-- a refusal from the app reaches the add-on in words
+sent = {}
+planId = api.areaPlan(LINE, { half = 300 }, onArea)
+areaRes = nil
+api._onAreaPlan({ id = planId, ok = false, error = 'saved areas need the download cache' })
+T.check(areaRes.ok == false and areaRes.error == 'saved areas need the download cache', 'the reason, and ok false')
+
+-- the add: the same request plus a name, still no fast
+sent = {}
+local addId = api.areaAdd(LINE, { half = 300, layers = { 'roads' }, name = 'Earth Rally: stage 3' }, onArea)
+T.check(addId ~= nil and #sent == 1 and sent[1].type == 'area_route_add', 'areaAdd sent an area_route_add')
+T.check(sent[1].name == 'Earth Rally: stage 3' and sent[1].layers[1] == 'roads', 'the name and the subset')
+T.check(sent[1].fast == nil and sent[1].mode == nil, 'and no fast and no mode, on the add either')
+areaRes = nil
+api._onAreaAdd({ id = addId, ok = true, area = 'a7' })
+T.check(areaRes.ok == true and areaRes.id == 'a7', "the new area's id, as a string")
+areaRes = nil
+sent = {}
+addId = api.areaAdd(LINE, { half = 300 }, onArea)
+api._onAreaAdd({ id = addId, ok = true, area = 42 })
+T.check(areaRes.ok == false and areaRes.id == nil, 'an id that is not a string is no id, and not ok')
+areaRes = nil
+sent = {}
+addId = api.areaAdd(LINE, { half = 300 }, onArea)
+api._onAreaAdd({ id = addId, ok = false, error = 'at most 10 saved areas: delete one first' })
+T.check(areaRes.ok == false and areaRes.error:find('10 saved areas'), 'the refusal, for the add-on to show')
+
+-- areaStatus over the app's own area list
+T.check(api.areaStatus('a7') == nil, 'no area list yet: nil')
+T.check(api.areaStatus(nil) == nil, 'no id: nil')
+local areaList = { areas = { { id = 'a7', name = 'Earth Rally: stage 3', state = 'done', done = 51, total = 51,
+  unavailable = 6, msg = '6 items unavailable (no server had them in 3 tries): Resume tries again', mode = 'data',
+  half = 300, layers = { 'roads' } } }, fast = '' }
+beamngEarth_core.areasState = function() return areaList end
+local a7 = api.areaStatus('a7')
+T.check(a7 ~= nil and a7.id == 'a7' and a7.state == 'done' and a7.done == 51 and a7.total == 51, 'the area by its id')
+T.check(a7.unavailable == 6 and a7.msg:find('Resume tries again'),
+  "done is not the data arrived: unavailable and msg reach the add-on")
+T.check(a7.half == 300 and a7.layers[1] == 'roads', 'its width and the subset it was added with')
+a7.layers[1] = 'buildings'
+T.check(api.areaStatus('a7').layers[1] == 'roads', 'a copy: the caller changes nothing in the mod')
+areaList.areas[1].msg = ''
+T.check(api.areaStatus('a7').msg == nil, 'an empty msg is nil rather than an empty string to print')
+areaList.areas[1].unavailable = nil
+T.check(api.areaStatus('a7').unavailable == 0, 'an older app without the field reads as none')
+T.check(api.areaStatus('a1') == nil, 'an area that is not in the list (deleted): nil')
+areaList.areas = {}
+T.check(api.areaStatus('a7') == nil, 'an empty list: nil')
+beamngEarth_core.areasState = function() return nil end
+
+-- a request the app never answers
+sent = {}
+areaRes = nil
+local lateId = api.areaPlan(LINE, { half = 300 }, onArea)
+api.onUpdate(1.0)
+T.check(areaRes == nil and lateId ~= nil, 'nothing handed over while it is in flight')
+api.onUpdate(api.AREA_TIMEOUT_S + 1.0)
+T.check(areaRes ~= nil and areaRes.ok == false and areaRes.error == 'timed out', 'after AREA_TIMEOUT_S: timed out')
+areaRes = nil
+api.onUpdate(1000.0)
+T.check(areaRes == nil, 'and heard once')
+-- a callback that throws is contained, and the request still forgotten
+sent = {}
+local boomId = api.areaAdd(LINE, { half = 300 }, function() error('boom') end)
+api._onAreaAdd({ id = boomId, ok = true, area = 'a8' })
+api._onAreaAdd({ id = boomId, ok = true, area = 'a8' })
+T.check(true, 'a failing area callback is contained')
 
 T.done('test_api')

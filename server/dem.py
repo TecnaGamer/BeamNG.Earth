@@ -246,6 +246,16 @@ class DemUnavailable(IOError):
     """Neither Mapterhorn nor AWS could deliver a tile (network, offline)."""
 
 
+class NotOnDisk(Exception):
+    """Inside Dem.cached_only(), no source in a tile's chain has heights for it in the cache: there are none to be
+    had here without a download, and none were made up. Raised at the end of the chain, not for the first tile that
+    is not cached -- a coarser cached ancestor is read for that (see _download).
+
+    Deliberately not a netfetch.FetchError: the DEM's own fall-backs catch those and answer from somewhere else,
+    and the last of those answers is zeros (sea level), which is the one thing a reader that cannot download must
+    not be handed."""
+
+
 def zoom_for(lat, pixel_m, max_zoom=MAX_ZOOM):
     """Smallest zoom whose 512 px tile pixels are <= pixel_m at this latitude."""
     c = 40075016.686 * max(dmath.cos(math.radians(min(abs(lat), MAX_LAT))), 1e-6)
@@ -409,6 +419,17 @@ class Dem:
         with self._lock:
             self._lru.clear()
             self._lru_short.clear()
+    def _lane_skips(self, what):
+        """Inside cached_only(): True, and the tile marked a stand-in, where a source would be read that fetches over
+        the network (HRDEM, BC's lidar, Hong Kong's DTM: their own range reads and sheet downloads, which _download's
+        guard does not see). The tile is then Mapterhorn's cached heights alone -- measured, not invented -- kept for
+        the lane only and never mirrored, so the player's world still makes the full one."""
+        if not getattr(self._local, "cached", False):
+            return False
+        self._count(what + ":cached_only")
+        self._partial()
+        return True
+
     def _canada(self, key, a):
         """Tile key's heights a with Canada's lidar terrain (hrdem.py) put in where it has data (z13 and deeper)."""
         z, x, y = key
@@ -423,6 +444,8 @@ class Dem:
         off it: its forests and drawn-out coarse model, at the lidar's level, for a few hundred kB a region."""
         z, x, y = key
         if self.hrdem is None or z not in BIAS_ZOOMS or not hrdemmod.covers(z, x, y):
+            return a
+        if self._lane_skips("hrdem-bias"):
             return a
         try:
             got = self.hrdem.tile(z, x, y, size=HRDEM_BIAS_PX, min_px=HRDEM_BIAS_M)
@@ -453,6 +476,8 @@ class Dem:
         box = (lat_of(y + 1), x / n * 360.0 - 180.0, lat_of(y), (x + 1) / n * 360.0 - 180.0)
         s_, w_, n_, e_ = lb._index()[4]
         if box[0] > n_ or box[2] < s_ or box[1] > e_ or box[3] < w_:
+            return a
+        if self._lane_skips("lidarbc-bias"):
             return a
         try:
             plat, plon, ph = lb.sparse(box, BIAS_STEP_M, coarse_m=BIAS_COARSE_M)
@@ -522,6 +547,8 @@ class Dem:
                 continue
             if name == "hrdem" and not hrdemmod.covers(z, x, y):
                 continue
+            if self._lane_skips(name):
+                continue
             try:
                 got = src.tile(z, x, y)
             except (netfetch.FetchError, OSError, ValueError) as e:
@@ -553,6 +580,8 @@ class Dem:
         """Tile key's heights a with Hong Kong's lidar terrain (hkdtm.py) put in where this run reads its sheets (the
         near terrain). Where it goes without one it has, the tile is not mirrored and nothing built on it kept."""
         if a is None or self.hkdtm is None or not hkdtmmod.covers(*key):
+            return a
+        if self._lane_skips("hkdtm"):
             return a
         h, ok, short = self.hkdtm.tile(*key)
         if short:
@@ -624,6 +653,10 @@ class Dem:
                         return c["index"]
             except (OSError, ValueError):
                 pass
+            if getattr(self._local, "cached", False):
+                # (cached_only: the list as it stands, from disk or not at all. Not fetched, and not marked failed
+                #  either: that would hold the retry off for the readers that may download.)
+                return c["index"]
             try:
                 body = self.fetcher.get(COVERAGE_URL, kind="demand").body
                 doc = json.loads(body)
@@ -705,6 +738,20 @@ class Dem:
         url = src["url"].format(z=z, x=x, y=y)
         if self.fetcher.miss_alive(miss, url):
             self._note(src, z, "miss")
+            return None
+        if getattr(self._local, "cached", False):
+            # cached_only, and the one place every tile download goes through. Not in the cache is answered the way
+            # a source with no tile here is answered -- None -- so _make_tile0's own chain reads a coarser tile
+            # instead: a z16 window's z15 parent covers four of its tiles and its z12 ancestor four thousand, and
+            # those are measured heights upsampled, which is what the world itself is built on wherever Mapterhorn
+            # publishes nothing deeper (most of it at z16). Not a height invented to fill a hole. AWS is the floor
+            # of that chain with no ancestor under it, so a tile it cannot answer for raises instead: the caller is
+            # left with no heights rather than with the zeros _make_tile0 would otherwise return.
+            self._partial()         # (a stand-in: the tile is not mirrored, nor kept in the world's own LRU)
+            revisit.fault()         # (nor is anything built on it kept: gradesep's spans read the DEM too)
+            log.debug("dem cached_only: %s %d/%d/%d is not in the cache", src["name"], z, x, y)
+            if src is AWS:
+                raise NotOnDisk(f"no cached elevation for {z}/{x}/{y}")
             return None
         if src is MAPTERHORN and z <= MT_CDN_MAX_ZOOM and self.cdn_release:
             got = self._download_pack(z, x, y, kind)
@@ -1070,7 +1117,11 @@ class Dem:
     def _ahead(self, keys):
         """Start the raw Mapterhorn downloads of keys at once (on disk afterwards, or a remembered 404); one request
         per tile however many ask. Returns their futures (result: the bytes or None; errors are left for the caller's
-        own _download to meet)."""
+        own _download to meet). Nothing is started for a reader inside cached_only(): a probe runs on a pool thread
+        of its own, which the lane does not reach, and every caller asks _download for the same tile right after
+        anyway (from the disk cache, or NotOnDisk)."""
+        if getattr(self._local, "cached", False):
+            return []
         futs = []
         caller = self._caller()
         with self._lock:
@@ -1430,7 +1481,7 @@ class Dem:
         for k in kids:
             if os.path.exists(self._path(MAPTERHORN, *k)) and self._download(MAPTERHORN, *k) is not None:
                 return True
-        if self.archives is not None:
+        if self.archives is not None and not getattr(self._local, "cached", False):
             # (the children the cache knows nothing of answered by the regional archive's directories, no tile read:
             # the endpoint's answer; a 404 remembered for a child it lacks, as the endpoint's would be)
             name = MAPTERHORN["name"]
@@ -1579,9 +1630,70 @@ class Dem:
         """Whether this thread is in urgent() (a helper it starts carries the lane over: grading._plan_missing)."""
         return getattr(self._local, "urgent", False)
 
+    @contextlib.contextmanager
+    def cached_only(self):
+        """Inside this, every sample() of this thread reads only the elevation already in the disk cache, and
+        nothing is downloaded, queued or probed for it: for a reader that must not outrun the world's own downloads
+        nor spend the host's rate limits on ground the player has never been near (the modding API's cached-only
+        road graph, earthd.Server.road_graph_data). It holds for every source a tile comes from through _download
+        -- Mapterhorn, its CDN packs, AWS and the file list.
+
+        A tile that is not cached is not a failure: its coarser cached ancestor is read instead (_download), as the
+        world's own tiles are wherever Mapterhorn publishes nothing deeper. Only where no source in the chain has
+        anything cached for that ground does sample() raise NotOnDisk, because the answer there would be zeros.
+
+        Its loads run in this thread, never in the pool: the pool's futures are shared with the world's own loads
+        (_inflight), and a load that cannot download must not be the one a block the player waits for ends up
+        waiting on. A tile read whole goes in the LRU like any other; one made with a stand-in is kept for this
+        lane alone, so a window is still sampled hundreds of times without making it again."""
+        prev, prev_tiles = getattr(self._local, "cached", False), getattr(self._local, "cached_tiles", None)
+        self._local.cached, self._local.cached_tiles = True, {}
+        try:
+            yield
+        finally:
+            self._local.cached, self._local.cached_tiles = prev, prev_tiles
+
+    def _cached_tile(self, key):
+        """One tile for cached_only(): the LRU's copy, else loaded in this thread. A tile made with a stand-in (a
+        coarser cached ancestor for one that is not cached: its marks, _load_marked) is kept for this lane only and
+        never put in the LRU: that one is the world's, and the player's next read of this tile must download the
+        real one rather than find ours."""
+        mine = getattr(self._local, "cached_tiles", None)
+        if mine is None:                        # (not in a lane after all: as the pool path would)
+            return self._load_tile(key)
+        got = mine.get(key)
+        if got is not None:
+            a, marks = got
+            _replay(marks)      # (a stand-in: every reader of it is short, not only the first)
+            return a
+        with self._lock:
+            a = self._lru.get(key)
+            marks = self._lru_short.get(key)
+            if a is not None and _stale(marks):
+                a = None
+            if a is not None:
+                self._lru.move_to_end(key)
+        if a is not None:
+            _replay(marks)      # (kept copies made short of something: this reader is too, as tiles())
+            return a
+        a, marks = self._load_marked(key)
+        if marks is None:
+            with self._lock:
+                self._lru_put(key, a, None)
+        else:
+            mine[key] = (a, marks)
+        return a
+
     def tiles(self, keys, progress=None):
         """Fetch many tiles concurrently (deduplicated across callers)."""
         keys = list(dict.fromkeys(keys))
+        if getattr(self._local, "cached", False):       # cached_only: in this thread, nothing shared with the pool
+            out = {}
+            for k in keys:
+                out[k] = self._cached_tile(k)
+                if progress:
+                    progress(len(out), len(keys))
+            return out
         if self.archives is not None:
             # (the cold zoom 13+ tiles' raw bytes first, in as few archive range reads as they allow: each load then
             # finds its tile on disk)
@@ -1700,6 +1812,10 @@ class Dem:
     def _polar_heights(self, lat, lon, zoom):
         """(dem_sample's polar) heights at points past polardem.FROM_LAT, None when the polar DEM can't be had."""
         px = 40075016.686 * dmath.cos(math.radians(MAX_LAT)) / (TILE * 2 ** zoom)
+        if getattr(self._local, "cached", False):
+            # (cached_only: the polar DEM downloads its own files, and its failure answer is sea level, which a reader
+            #  that cannot download must not be handed)
+            raise NotOnDisk("the polar DEM is not read inside cached_only")
         try:
             out = np.zeros(lat.shape, np.float64)
             out[np.ones(lat.shape, bool)] = self.polar().sample(lat, lon, px)     # (numpy's assignment rules, as before)
