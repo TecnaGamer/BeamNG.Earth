@@ -23,6 +23,7 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(markings.style(None, -100.0).centre, "line_yellow", "unknown: by longitude")
         self.assertEqual(markings.style(None, 10.0).centre, "line_white")
         self.assertEqual(markings.style("SE").centre_rural, (3.0, 9.0))
+        self.assertEqual(markings.style("BG").lane_motorway, (4.0, 12.0))
 
 
 class DashTest(unittest.TestCase):
@@ -77,6 +78,44 @@ class LanePlanTest(unittest.TestCase):
               roads.extras(sp, line, -76.0, country="US", osm={"lanes:forward": "1", "lanes:backward": "1",
                                                                 "overtaking": "no"}) if lk.get("kind") == "centre"]
         self.assertEqual(sorted(set(lk)), [("centre", -0.12), ("centre", 0.12)], "a double solid yellow line")
+
+
+class BulgariaTest(unittest.TestCase):
+    """Наредба № 2 от 2001: line widths and broken-line patterns (annex 3), M2 on roads of more than three lanes,
+    solid edge lines 0.15 / 0.25 m."""
+    LINE = np.array([[0.0, 0, 0], [120, 0, 0]])     # (whole cycles of 3 + 6, 3 + 9, 4 + 12)
+
+    # (a line ending right on a cycle's end leaves a 0 m piece there)
+    lines = staticmethod(lambda ex, kind: [x for x in SwedenTest.lines(ex, kind) if x[2] > 0.0])
+
+    def extras(self, width=9.0, cls="primary", urban=False, oneway=False, lanes=None):
+        sp = roads.Spec(width, "paved", urban, cls, oneway)._replace(lanes=lanes)
+        return roads.extras(sp, self.LINE, 25.0, country="BG")
+
+    def test_a_two_lane_road(self):
+        ex = self.extras()
+        centre = self.lines(ex, "centre")
+        self.assertEqual({(w, n) for w, _, n in centre}, {(0.10, 3.0)}, "M3 0.10/3/6")
+        self.assertEqual(len(centre), 14, "3 + 6 m over 120 m")
+        self.assertEqual({(w, n) for w, _, n in self.lines(ex, "edge")}, {(0.15, 120.0)}, "solid, 0.15 m")
+
+    def test_more_than_three_lanes_a_double_solid_centre_line(self):
+        ex = self.extras(15.0, "trunk", lanes=4)
+        self.assertEqual(sorted(self.lines(ex, "centre")), [(0.10, -0.10, 120.0), (0.10, 0.10, 120.0)],
+                         "M2: two 0.10 m lines 0.10 m apart")
+        self.assertEqual({n for _, _, n in self.lines(ex, "lane")}, {3.0})
+        self.assertEqual(len(self.lines(ex, "lane")), 2 * 10, "3 + 9 m between the lanes of each direction")
+        self.assertEqual({w for w, _, _ in self.lines(ex, "edge")}, {0.25})
+
+    def test_a_motorway(self):
+        ex = self.extras(11.0, "motorway", oneway=True, lanes=2)
+        self.assertEqual({(w, n) for w, _, n in self.lines(ex, "lane")}, {(0.15, 4.0)}, "0.15/4/12")
+        self.assertEqual(len(self.lines(ex, "lane")), 8)
+        self.assertEqual({w for w, _, _ in self.lines(ex, "edge")}, {0.25})
+
+    def test_a_town_street(self):
+        got = self.lines(self.extras(urban=True), "centre")
+        self.assertEqual(({w for w, _, _ in got}, len(got)), ({0.10}, 14), "3 / 6 in town too")
 
 
 class BuswayStripeTest(unittest.TestCase):
