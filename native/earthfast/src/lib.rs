@@ -164,6 +164,10 @@ mod genground;
 mod ggshapes;
 mod ggshade;
 mod layerfold;
+mod terrainblock;
+mod blockgrid;
+mod blockphoto;
+mod landcover;
 mod roadsurf;
 mod levelways;
 mod meshtrim;
@@ -7498,6 +7502,31 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 561: merged
     // 562: merged
     // 563: merged
-    m.add("VERSION", 563)?;
+    m.add_function(wrap_pyfunction!(terrainblock::block_coordinates, m)?)?;
+    m.add_function(wrap_pyfunction!(terrainblock::block_up, m)?)?;
+    m.add_function(wrap_pyfunction!(terrainblock::block_quantize, m)?)?;
+    m.add_function(wrap_pyfunction!(terrainblock::block_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(terrainblock::block_write_ter, m)?)?;
+    m.add_function(wrap_pyfunction!(terrainblock::block_carve, m)?)?;
+    m.add_function(wrap_pyfunction!(layerfold::block_materials, m)?)?;
+    m.add_function(wrap_pyfunction!(layerfold::block_fold_policy, m)?)?;
+    m.add_function(wrap_pyfunction!(layerfold::block_fold, m)?)?;
+    m.add_function(wrap_pyfunction!(landcover::landcover_warp, m)?)?;
+    m.add_function(wrap_pyfunction!(landcover::landcover_classify, m)?)?;
+    m.add_function(wrap_pyfunction!(landcover::landcover_lawns, m)?)?;
+    m.add_function(wrap_pyfunction!(landcover::landcover_sand, m)?)?;
+    m.add_function(wrap_pyfunction!(landcover::koppen_samples, m)?)?;
+    m.add_function(wrap_pyfunction!(blockgrid::block_chunk_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(terrainblock::build_block, m)?)?;
+    m.add_function(wrap_pyfunction!(blockphoto::block_base_photo, m)?)?;
+    m.add_function(wrap_pyfunction!(blockphoto::block_rgba, m)?)?;
+    m.add_class::<blockphoto::BlockPhotoOverlap>()?;
+    m.add_function(wrap_pyfunction!(landcover::landcover_samples, m)?)?;
+    m.add_function(wrap_pyfunction!(blockgrid::block_cached_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(terrainblock::block_params, m)?)?;
+    m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
+    m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
+    // 564: merged
+    m.add("VERSION", 564)?;
     Ok(())
 }

@@ -4607,28 +4607,18 @@ class Server:
                 return roadsmod.block_arch_raise(tun, cell_fn, anchor.frame, la, lo, elev(la, lo),
                                                  (cx - half, cy - half, cx + half, cy + half))
         l0_st = {}              # (a provisional block's L0 roads: its painted roads' corridors flattened, l0roads.py)
-        info = heightmap.generate(anchor.frame, gen,
-                                  os.path.join(self.out_dir, self.hm_name((anchor.id, cx, cy))), cx, cy, q=q,
-                                  size=self.layout.block, keep=keep, chunks=None if provisional else anchor.chunks,
-                                  ground_at=ground_at,
-                                  post=l0roads.post_for(anchor.frame, self.surface, cx, cy, self.layout.block, l0_st)
-                                  if provisional else None, disk=bc.disk if bc is not None else None)
-        stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], "gradingCpu": grade_s[1],
-                  "heightsCpu": time.thread_time() - c0, **part_s, **l0_st}
-        idx = None
-        if self.surface is not None:
-            # ground models per 2 m sample from the cached land cover and the slope (surface.py);
-            # rows flipped as the heightmap's (row 0 = north)
-            t1 = time.perf_counter()
-            classes, complete = self.surface.block_classes(anchor.frame, cx, cy, keep["lat"], keep["lon"])
-            stages["classes"] = time.perf_counter() - t1
-            idx = surfacemod.classify(classes, keep["u"], heightmap.SQUARE, keep["lat"], keep["lon"])
-            if self.sea is not None and not provisional:    # under water: the bed (no grass through the surface)
-                idx[self.sea.depth(keep["lat"], keep["lon"]) > blockworker.WATER_BED_M] = surfacemod.MUD
-            land = idx.copy()           # (the land cover before the paint: surface.fold_layers)
-            road_feats, roads_complete = self.surface.roads(keep["lat"], keep["lon"])
-            stages["landcover"] = time.perf_counter() - t1
-            t1 = time.perf_counter()
+        def heights():
+            info = heightmap.generate(anchor.frame, gen,
+                                      os.path.join(self.out_dir, self.hm_name((anchor.id, cx, cy))), cx, cy, q=q,
+                                      size=self.layout.block, keep=keep, chunks=None if provisional else anchor.chunks,
+                                      ground_at=ground_at,
+                                      post=l0roads.post_for(anchor.frame, self.surface, cx, cy, self.layout.block, l0_st)
+                                      if provisional else None, disk=bc.disk if bc is not None else None)
+            stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], "gradingCpu": grade_s[1],
+                      "heightsCpu": time.thread_time() - c0, **part_s, **l0_st}
+            return info, stages
+
+        def paint(idx, road_feats):
             lots = (self.surface.lots(keep["lat"], keep["lon"]) if hasattr(self.surface, "lots") else None)
             if lots:                    # farmland under the carriageways (a field does not cover the asphalt)
                 idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
@@ -4643,24 +4633,17 @@ class Server:
                                         blockworker._us_square_looks(anchor.frame)) if lots else idx
             if hasattr(self.surface, "paint_ground_pads"):
                 idx = self.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
-            stages["roadPaint"] = time.perf_counter() - t1
-            idx = surfacemod.fold_layers(idx, land, heightmap.SQUARE, stages)   # (fewer layers: a cheaper swap)
-            complete = complete and roads_complete
-            info["layers"] = surfacemod.write_masks(idx[::-1], self.out_dir, self.hm_name((anchor.id, cx, cy))[:-4])
-            info["surfaceComplete"] = complete
-            info["roadsComplete"] = roads_complete
-        pre = None if idx is None else idx.copy()      # (the block cache's: before the holes)
-        if not provisional:
-            idx = self._tunnel_holes(anchor, elev, keep, cx, cy, idx, info)
-        info["ter"], mats = surfacemod.write_ter(self.out_dir, self.ter_name((anchor.id, cx, cy)), keep["qgrid"], idx)
-        if mats is not None:          # the .ter's own material list (MATERIALS indices)
-            info["mats"] = mats
-        if bc is not None:
-            t1 = time.perf_counter()
-            bc.finish(info, keep, pre, idx, g)
-            stages["blockCache"] = time.perf_counter() - t1
-            stages["chunksRead"] = float(bc.disk.read)
-        info["stages"] = stages
+            return idx
+
+        def holes(idx, info):
+            return self._tunnel_holes(anchor, elev, keep, cx, cy, idx, info)
+
+        key = anchor.id, cx, cy
+        fast.require(564, "terrain block build")
+        info = fast._ef.build_block(heights, paint, None if provisional else holes, anchor.frame, (cx, cy),
+                                    self.surface, None if provisional else self.sea, bc, g, keep, self.out_dir,
+                                    self.hm_name(key), self.ter_name(key), heightmap.SQUARE, blockworker.WATER_BED_M,
+                                    False)
         return self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=True,       # (a teleport's, a first block:
                                       ground=ground)                                    # waited for)
 
@@ -5404,25 +5387,16 @@ class Server:
             tq = [("start", time.perf_counter())]
             with self.base_lock:
                 recent = list(self.recent_full)
-            parts = []                  # (the oldest first: the newer is pasted over it)
-            have = np.zeros((n, n), bool)
-            for aid, ocx, ocy, orgb, *ocan in recent:
-                if aid != anchor.id or orgb.shape[:2] != (n, n):
-                    continue
-                dx, dy = int(round((cx - ocx) * sc)), int(round((ocy - cy) * sc))
-                i0, i1, j0, j1 = max(0, -dy), min(n, n - dy), max(0, -dx), min(n, n - dx)
-                if i0 < i1 and j0 < j1:
-                    parts.append((i0, i1, j0, j1, dy, dx, orgb, ocan[0] if ocan else None))
-                    have[i0:i1, j0:j1] = True
-            if have.all():
-                rgb = np.empty((n, n, 3), np.uint8)
-            else:                       # the rest (the new ground at the block's edge): the imagery alone
+            fast.require(564, "terrain base overlap")
+            overlap = fast._ef.BlockPhotoOverlap(recent, anchor.id, cx, cy, n, sc)
+            fill = None
+            if not overlap.complete:
                 tq.append(("overlap", time.perf_counter()))
                 with (self.deshadow.no_wait() if self.deshadow is not None else contextlib.nullcontext()):
                     small, used = self.imagery.render(anchor.frame, x0, y0, size, QUICK_BASE_PX, set())
                 tq.append(("imagery", time.perf_counter()))
                 covered = sum(v for k, v in (used or {}).items() if k != "colormatch")
-                if covered < QUICK_MIN_COVER * QUICK_BASE_PX * QUICK_BASE_PX and have.mean() < 0.5:
+                if covered < QUICK_MIN_COVER * QUICK_BASE_PX * QUICK_BASE_PX and overlap.share < 0.5:
                     # its imagery not here yet and little of it shown before: the renderer's dirt-brown fill over the
                     # block ("the entire ground now turns brown"); none then, as before
                     return None
@@ -5435,17 +5409,9 @@ class Server:
                         log.debug("quick base photo %s: roads: %s", key, e)
                 tq.append(("roads", time.perf_counter()))
                 # (at the photo's own size: the engine refuses another, "dont have required size of 4096-4096")
-                rgb = np.array(surfacemod.enlarge(small, n), np.uint8)
+                fill = surfacemod.enlarge(small, n)
                 tq.append(("enlarge", time.perf_counter()))
-            # plain slices, not masks: masked copies took 0.9 s of a 4096² stand-in's 1.4 s, and at 230 mph (a block
-            # every 1.2 s) the stand-ins fell behind and the flat base showed between them (the user, 2026-10-30)
-            # (the generated ground's canopy versions with them: the stand-in's forest floor fades out through its
-            # packed mips as the photos' did; its own imagery has no floor, its canopy version is itself)
-            canopy = rgb.copy() if any(p[7] is not None for p in parts) else None
-            for i0, i1, j0, j1, dy, dx, orgb, ocan in parts:
-                rgb[i0:i1, j0:j1] = orgb[i0 + dy:i1 + dy, j0 + dx:j1 + dx]
-                if canopy is not None:
-                    canopy[i0:i1, j0:j1] = (ocan if ocan is not None else orgb)[i0 + dy:i1 + dy, j0 + dx:j1 + dx]
+            rgb, canopy = overlap.paste(fill)
             tq.append(("paste", time.perf_counter()))
             name = self.quick_base_name(key)
             path = os.path.join(self.out_dir, name)
@@ -5514,43 +5480,45 @@ class Server:
         name = self.base_name((anchor.id, cx, cy), rev)
         path = os.path.join(self.out_dir, name)
         rgb = np.asarray(rgb, np.uint8)
-        # (the canopy version follows every step: what a step paints, as painted; a copy, a step may paint in place)
-        rgb0 = rgb.copy() if canopy is not None else rgb
         stamps = [("imagery", time.perf_counter())]
-        if self.buildings and self.mapdata is not None and not quick:   # no roofs beside the 3D buildings
-            try:
-                mask = buildingsmod.photo_mask(anchor.frame, x0, y0, size, BASE_RENDER_PX, self.mapdata)
-                if mask is not None:
-                    rgb = buildingsmod.fill_photo(rgb, mask, size, BASE_RENDER_PX)
+
+        def prepare(rgb):
+            if self.buildings and self.mapdata is not None and not quick:   # no roofs beside the 3D buildings
+                try:
+                    mask = buildingsmod.photo_mask(anchor.frame, x0, y0, size, BASE_RENDER_PX, self.mapdata)
+                    if mask is not None:
+                        rgb = buildingsmod.fill_photo(rgb, mask, size, BASE_RENDER_PX)
+                except Exception as e:      # the photo stays as it is
+                    log.info("base photo %s: building mask: %s", (anchor.id, cx, cy), e)
+            if roadsmod.ROADS_IN_GROUND and not quick:      # the photo's own pavement beside the drawn roads
+                try:
+                    rgb = surfacemod.unghost_square(rgb, anchor.frame, x0, y0, size, self.surface, self.road_widths)
+                except Exception as e:      # the photo stays as it is
+                    log.info("base photo %s: road ghosts: %s", (anchor.id, cx, cy), e)
+            return rgb
+
+        def detail(rgb):
+            stamps.append(("buildings", time.perf_counter()))
+            if roadsmod.ROADS_IN_GROUND and not quick:      # the carriageways in the ground (surface.photo_roads)
+                try:
+                    rgb = surfacemod.paint_square(rgb, anchor.frame, x0, y0, size, self.surface, self.road_widths,
+                                                  pending=pending)
+                except Exception as e:      # the photo stays as it is
+                    log.info("base photo %s: roads: %s", (anchor.id, cx, cy), e)
+            stamps.append(("roads", time.perf_counter()))
+            try:            # its cliffs as rock, like the far tiles' (rockface.py), from a 16 m grid of the ground
+                n = 65
+                xs = x0 + np.arange(n) * (size / (n - 1))
+                ys = y0 + np.arange(n) * (size / (n - 1))
+                zoom = anchor.zooms[0]
+                _, U = heightmap.surface(anchor.frame, lambda la, lo: self.dem.sample(la, lo, zoom), xs, ys)
+                rgb = rockfacemod.rock(rgb, anchor.frame, x0, y0, size, U, x0, y0, size / (n - 1))
             except Exception as e:      # the photo stays as it is
-                log.info("base photo %s: building mask: %s", (anchor.id, cx, cy), e)
-        if roadsmod.ROADS_IN_GROUND and not quick:      # the photo's own pavement beside the drawn roads
-            try:
-                rgb = surfacemod.unghost_square(rgb, anchor.frame, x0, y0, size, self.surface, self.road_widths)
-            except Exception as e:      # the photo stays as it is
-                log.info("base photo %s: road ghosts: %s", (anchor.id, cx, cy), e)
-        canopy = genground.keep_painted(rgb0, rgb, canopy)
-        rgb = surfacemod.enlarge(rgb, self.base_px)
-        canopy = surfacemod.enlarge(canopy, self.base_px) if canopy is not None else None
-        rgb1 = np.array(rgb, np.uint8, copy=True) if canopy is not None else rgb
-        stamps.append(("buildings", time.perf_counter()))
-        if roadsmod.ROADS_IN_GROUND and not quick:      # the carriageways in the ground (surface.photo_roads)
-            try:
-                rgb = surfacemod.paint_square(rgb, anchor.frame, x0, y0, size, self.surface, self.road_widths,
-                                              pending=pending)
-            except Exception as e:      # the photo stays as it is
-                log.info("base photo %s: roads: %s", (anchor.id, cx, cy), e)
-        stamps.append(("roads", time.perf_counter()))
-        try:            # its cliffs as rock, like the far tiles' (rockface.py), from a 16 m grid of the ground
-            n = 65
-            xs = x0 + np.arange(n) * (size / (n - 1))
-            ys = y0 + np.arange(n) * (size / (n - 1))
-            zoom = anchor.zooms[0]
-            _, U = heightmap.surface(anchor.frame, lambda la, lo: self.dem.sample(la, lo, zoom), xs, ys)
-            rgb = rockfacemod.rock(rgb, anchor.frame, x0, y0, size, U, x0, y0, size / (n - 1))
-        except Exception as e:      # the photo stays as it is
-            log.debug("base photo %s: rock faces: %s", (anchor.id, cx, cy), e)
-        canopy = genground.keep_painted(rgb1, rgb, canopy)
+                log.debug("base photo %s: rock faces: %s", (anchor.id, cx, cy), e)
+            return rgb
+
+        fast.require(564, "terrain base rendering")
+        rgb, canopy = fast._ef.block_base_photo(rgb, canopy, self.base_px, prepare, detail)
         # a lazy source (NAIP) not fetched yet for all of it: rendered again once it is (base_refresh)
         # ... and the analyses (de-shadow, colour match) it was rendered without (never waited for)
         key = (anchor.id, cx, cy)
