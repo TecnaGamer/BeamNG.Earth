@@ -5057,20 +5057,28 @@ def _curve_grade(lines, zs):
     return g
 
 
+END_STEP_RUN_M = 5.0    # m from a free end _end_step measures its grade over (the part's length when shorter)
+
+
 def _end_step(lines, zs):
-    """The steepest grade of a deck's first or last segment at a free end (an abutment: no other part ends within
-    0.75 m), where a curve that cannot meet its end leaves a step. Pure."""
+    """The steepest grade over a deck's first or last END_STEP_RUN_M at a free end (an abutment: no other part ends
+    within 0.75 m), where a curve that cannot meet its end leaves a step. Over its first segment alone, 0.59 m long on
+    one of the Shuto's 76 parts, 1 m of ground there chose between the curve and the ground envelope for the whole
+    chain, 23 m apart over 4 km (2026-11-17). Pure."""
     ends = [np.asarray(ln, np.float64)[k, :2] for ln in lines for k in (0, -1)]
     g = 0.0
     for ln, z in zip(lines, zs):
         ln = np.asarray(ln, np.float64)
         if len(ln) < 2:
             continue
-        for a, b in ((0, 1), (-1, -2)):
+        z = np.asarray(z, np.float64)
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln[:, :2], axis=0).T))]
+        run = max(min(END_STEP_RUN_M, float(s[-1])), 0.5)
+        for a in (0, -1):
             if sum(dnp.hypot(*(e - ln[a, :2])) < 0.75 for e in ends) > 1:
                 continue
-            run = max(float(dnp.hypot(*(ln[b, :2] - ln[a, :2]))), 0.5)
-            g = max(g, abs(float(z[b]) - float(z[a])) / run)
+            zr = float(dnp.interp(run, s, z)) if a == 0 else float(dnp.interp(s[-1] - run, s, z))
+            g = max(g, abs(zr - float(z[a])) / run)
     return g
 
 
