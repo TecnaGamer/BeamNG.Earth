@@ -102,6 +102,18 @@ Results, central Göteborg, about 150 km of track:
 
 Limits: paved track still lies in a sidewalk's outer band for 3.3 km, because only the curb line is tested. Not tested in game.
 
+## Bus stop signs (E22)
+
+`server/sebusstops.py`, country SE only, built in the sign tile next to the bus stations' name signs. At every mapped bus stop a pole stands at the kerb with a flag read from both directions: E22 Busshållplats (TSFS 2019:74, the small 0.45 m size) and under it a white plate with the stop's name, and its letter ("Läge") where one is mapped.
+
+- **Data:** 58,504 stops are mapped in Sweden; 97.7% have a name and 3.0% a `local_ref` (Overpass, 2026-11-16). A `ref` of one or two characters counts as the letter too; a longer one is the stop's number.
+- **Which stops:** the stops the shelters stand at (`shelters.py`), including `shelter=no`, plus `public_transport=stop_position` nodes on the carriageway. Most town stops are mapped that way: 686 of 714 in Göteborg (Overture, 2026-10-21). A stop mapped twice gets one pole.
+- **Side of the road:** a node on the carriageway does not say which kerb it is on. The pole goes on the side of the nearest mapped platform within 20 m (39 of 42 in central Göteborg), else on the right of a one-way road, else on a side picked by the stop's id.
+- **Placement:** 0.9 m past the carriageway's edge, 2.3 m past the stop's point in the direction the bus travels (the head of the stop, clear of the shelter), the plate's bottom 2.1 m up (TSFS 1 kap. 13 §: at least 2.0 m over a pavement).
+- **Left out:** stops on a bridge's deck or on a bus station's ground. A tile makes at most 30 name plates; stops past that keep only E22.
+- **Shelters:** unchanged. `shelter=no` already gets no shelter; untagged stops still get one everywhere.
+- **Checked in game** (2026-11-17). Spots in central Göteborg: Brunnsparken E1 and E2 (57.7068, 11.9670), Domkyrkan A and B (57.7043, 11.9637).
+
 ## Lane ends on 2+1 roads and signs from the road's shape
 
 Sources: VGU 2024 (remiss version 0.9) and TSFS 2019:74, requirement numbers in `server/motesfri.py` and `server/sesigns.py`.
@@ -162,18 +174,6 @@ Not built:
 - **Rule:** rural two-lane trunk, primary, secondary and tertiary roads at 70-100 km/h, not one-way. A piece of road (a map segment, junction to junction) of at least 1 km and L m long gets a pair with chance L / 15 km, decided by a hash of its id, so every tile and every run agree. Each sign stands 150 m into the piece facing the traffic entering it, 1.5 m past the edge.
 - **Measured:** one sign per 12-25 km of such road per direction (Borås 312 km of road, 30 signs; Härnösand 125 km, 10; Jämtland 152 km, 26).
 - **Left out:** motorways, 2+1 and divided roads, which have game fences (viltstängsel) for long stretches; where fences end has no data.
-
-## Bus stop signs (E22)
-
-`server/sebusstops.py`, country SE only, built in the sign tile next to the bus stations' name signs. At every mapped bus stop a pole stands at the kerb with a flag read from both directions: E22 Busshållplats (TSFS 2019:74, the small 0.45 m size) and under it a white plate with the stop's name, and its letter ("Läge") where one is mapped.
-
-- **Data:** 58,504 stops are mapped in Sweden; 97.7% have a name and 3.0% a `local_ref` (Overpass, 2026-11-16). A `ref` of one or two characters counts as the letter too; a longer one is the stop's number.
-- **Which stops:** the stops the shelters stand at (`shelters.py`), including `shelter=no`, plus `public_transport=stop_position` nodes on the carriageway. Most town stops are mapped that way: 686 of 714 in Göteborg (Overture, 2026-10-21). A stop mapped twice gets one pole.
-- **Side of the road:** a node on the carriageway does not say which kerb it is on. The pole goes on the side of the nearest mapped platform within 20 m (39 of 42 in central Göteborg), else on the right of a one-way road, else on a side picked by the stop's id.
-- **Placement:** 0.9 m past the carriageway's edge, 2.3 m past the stop's point in the direction the bus travels (the head of the stop, clear of the shelter), the plate's bottom 2.1 m up (TSFS 1 kap. 13 §: at least 2.0 m over a pavement).
-- **Left out:** stops on a bridge's deck or on a bus station's ground. A tile makes at most 30 name plates; stops past that keep only E22.
-- **Shelters:** unchanged. `shelter=no` already gets no shelter; untagged stops still get one everywhere.
-- **Not yet seen in game.** Check in central Göteborg: Brunnsparken E1 and E2 (57.7068, 11.9670), Domkyrkan A and B (57.7043, 11.9637).
 
 ## Road type detection
 
