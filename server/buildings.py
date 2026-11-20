@@ -850,7 +850,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml", "storefront")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -4915,7 +4915,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
                    passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None, tanks=None,
                    industrial=None, parts_min_top=None, nyc=None, carriageways=None, clear_stats=None, years=None,
-                   colours=None):
+                   colours=None, storefronts=False):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -5214,6 +5214,12 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         holes_.append(hr if _area2(hr) < 0 else hr[::-1])       # (clockwise: walls face the yard)
                 if holes_:
                     at = dict(at, _holes=holes_)
+            if (storefronts and key is not None and not bparts
+                    and not (a.get("has_parts") is not None and a["has_parts"][i])
+                    and str(at.get("subtype") or "").lower() in {"", "commercial"}
+                    and len(parts) == len(parts[0]) == len(pieces) == 1 and mh == 0 and not edge
+                    and not (float(at.get("num_floors") or 0) > 2) and not (float(at.get("height") or 0) > 14)):
+                at["_storefront"] = (str(key), str(at.get("name") or ""), str(at.get("facade_material") or ""))
             at0, mh0 = at, mh
             for ring in kept:           # (a long one on varied ground: its pieces, each on its own ground)
                 at, mh = at0, mh0
@@ -5395,6 +5401,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                       _fr_residential=bool(house_res[k]) if house_res is not None else False)
         spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
         spec.min_h = mh
+        spec.storefront = at.get("_storefront") if mh == 0 else None
         # (a building drawn from its parts (the map's, New York's 3-D model's): its tank on its topmost part, the
         # building's storeys from its whole height; without, the setbacks took New York's tanks away)
         top_b = at.get("building_height")
@@ -6331,7 +6338,10 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                 max(max(dx, dy) / 2.0 + SUPPRESS_MARGIN_M, SUPPRESS_MIN_M),
                 SUPPRESS_MAX_M,
             )
-            if not overlay:  # A tenant sign needs its procedural host building.
+            if c.get("storefront_host") is not None:
+                host_x, host_y = c["storefront_host"]
+                radii.append((cid, host_x, host_y, 0.05))
+            elif not overlay:  # A tenant sign needs its procedural host building.
                 radii.append((cid, float(c["xy"][0]), float(c["xy"][1]), radius))
         except threedmr.UnsupportedModelError:
             pass  # already logged (threedmr.gltf_mesh): not a transient failure, no revisit.fault()
@@ -6399,6 +6409,8 @@ def road_tile_items(
         )
         for k in keys
     ]
+    storefronts = cache_dir is not None and os.environ.get("BNE_STOREFRONTS") == "1"
+    streets = road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0)
     items = tile_buildings(
         frame,
         x0,
@@ -6414,9 +6426,9 @@ def road_tile_items(
         bag3d=bag3d,
         nyc=nyc,
         years=years,
-        colours=colours,
+        colours=colours, storefronts=storefronts,
         west_town=district_town(frame, tx, ty, md),
-        roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+        roads_xy=streets,
         ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, classes=ML_ROAD_CLASSES),
         passage_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
                               classes=ROAD_PASSAGE_CLASSES, skip_sub=ROAD_PASSAGE_SKIP),
@@ -6484,6 +6496,9 @@ def road_tile_items(
                         "source": "local",
                     }
                 )
+        if storefronts and streets and any(spec.storefront for spec, _, _ in items):
+            import streamedstores
+            custom.extend(streamedstores.models(items, custom, frame, (x0, y0), streets, md, keys, cache_dir))
     return items, custom
 
 
