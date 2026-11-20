@@ -38,7 +38,7 @@ SPECIFIC = {
     "hardware",
 }
 COMMERCIAL = SPECIFIC | {"commercial", "retail", "shop"}
-VERSION = 1
+VERSION = 2
 LOG = logging.getLogger("earthd.storefronts")
 
 
@@ -131,13 +131,13 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir):
             or ground_max - ground_min > 3
         ):
             continue
-        _, label, material = spec.storefront
+        _, label, material, subtype = spec.storefront
         kind = str(spec.cls or "").lower()
         name = chain(label)
         if label:
             if not name or (kind and kind not in COMMERCIAL):
                 continue
-        elif kind not in SPECIFIC:
+        elif kind not in COMMERCIAL and not (not kind and subtype == "commercial"):
             continue
         ring = np.asarray(spec.ring)[:, :2]
         if len(ring) > 96 or np.any(np.ptp(ring, axis=0) > 250):

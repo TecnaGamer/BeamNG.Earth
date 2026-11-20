@@ -17,7 +17,7 @@ import mapgeom
 import threedmr
 
 
-def tile(frame, name, tenants):
+def tile(frame, name, tenants, kind="supermarket", subtype="commercial"):
     def features(layer, kind, rows):
         geoms = []
         for xy, _ in rows:
@@ -34,7 +34,7 @@ def tile(frame, name, tenants):
         "buildings": features(
             "buildings",
             mapgeom.POLYGON,
-            [(ring, {"class": "supermarket", "name": name})],
+            [(ring, {"class": kind, "subtype": subtype, "name": name})],
         )
     }
     if tenants:
@@ -51,10 +51,12 @@ def tile(frame, name, tenants):
 
 class StreamedStoresTest(unittest.TestCase):
     def test_discovery_cache_and_ambiguous_tenants(self):
-        for lat, lon, name, tenants, expected in (
-            (36.1, -86.8, "Kroger", [], 1),
-            (34.0, -118.2, "", ["Walmart"], 1),
-            (13.7, 100.5, "", ["Walmart", "Pharmacy"], 0),
+        for lat, lon, name, tenants, kind, subtype, expected in (
+            (36.1, -86.8, "Kroger", [], "supermarket", "commercial", 1),
+            (41.9, -87.7, "", ["Wendy's"], "", "commercial", 1),
+            (40.1, -83.1, "", ["Taco Bell"], "", "", 0),
+            (34.0, -118.2, "", ["Walmart"], "retail", "commercial", 1),
+            (13.7, 100.5, "", ["Walmart", "Pharmacy"], "", "commercial", 0),
         ):
             with (
                 self.subTest(lat=lat),
@@ -62,7 +64,7 @@ class StreamedStoresTest(unittest.TestCase):
                 patch.dict(os.environ, BNE_STOREFRONTS="1"),
             ):
                 frame = geodesy.EnuFrame(lat, lon)
-                md = tile(frame, name, tenants)
+                md = tile(frame, name, tenants, kind, subtype)
 
                 def load():
                     return buildings.road_tile_items(

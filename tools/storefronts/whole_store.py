@@ -498,6 +498,18 @@ def build(
         # A long unobstructed customer wall supports a paired warehouse entrance layout.
         fractions = (0.25, 0.75) if not restaurant and lengths[front] >= 42 else (0.5,)
         entries[front] = [f * lengths[front] for f in fractions]
+    # The entrance tower already has a sign. Choose one substantial second wall visible
+    # from the addressed street or an approach around the public corner.
+    street_front = int(np.argmax(score))
+    secondary = None
+    if street_front != front and lengths[street_front] >= 7 and not docks[street_front]:
+        secondary = street_front
+    elif restaurant:
+        sides = [i for i in range(len(ring)) if i != front and lengths[i] >= 7
+                 and not docks[i] and abs(normals[i] @ normals[front]) < 0.55]
+        if sides:
+            secondary = max(sides, key=lambda i: (round(float(normals[i] @ street), 2),
+                                                   lengths[i], -np.linalg.norm(ring[i] - ring[front])))
     uv = [(0, 1), (1, 1), (1, 0), (0, 1), (1, 0), (0, 0)]
 
     def paint_wall(i):
@@ -742,6 +754,13 @@ def build(
                 True,
             )
             block(left - 0.08, left + span + 0.08, 0.84, top - 0.1, top + 0.03, 2)
+        if i == secondary:
+            sign_width = min(width * 0.64, 7.2)
+            sign_height = min(1.35, sign_width / 4.5, height * 0.21)
+            left = (width - sign_width) / 2
+            top = height - 0.24
+            face(left, left + sign_width, 0.12, top - sign_height, top,
+                 texture(sign_image(name, sign_width / sign_height)), True)
         painting = elevation(
             name,
             width,

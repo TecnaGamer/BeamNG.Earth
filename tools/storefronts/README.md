@@ -10,7 +10,7 @@ Inspect the pack or use the game's threedmr_cache directory as the output to ins
 
 ## Generate stores as you drive
 
-Set `BNE_STOREFRONTS=1` in the server environment to enable storefront discovery on near road tiles in a source checkout. There is no city list or extract to prepare. A supported chain name on a low standalone commercial footprint can identify the store directly. For an unnamed footprint mapped specifically as a supermarket, restaurant, pharmacy or similar business, the server checks the places layer for a single business inside with confidence of at least 0.8. Multiple tenants, incomplete street evidence and complex buildings keep their procedural appearance. A nearby road provides an approximate facing direction. Installed custom models take priority.
+Set `BNE_STOREFRONTS=1` in the server environment to enable storefront discovery on near road tiles in a source checkout. There is no city list or extract to prepare. A supported chain name on a low standalone commercial footprint can identify the store directly. For an unnamed commercial footprint, including one mapped only as retail or commercial, the server checks the places layer for a single business inside with confidence of at least 0.8. Multiple tenants, incomplete street evidence and complex buildings keep their procedural appearance. A nearby road provides an approximate facing direction. Detailed standalone models can carry a second wall sign on the public approach while keeping the main sign over a mapped entrance. Installed custom models take priority.
 
 Generated meshes are reused from `threedmr_cache/storefronts`. Data coverage varies by location. The streaming path uses mapped wall material. The offline workflow below also accepts photo observations.
 

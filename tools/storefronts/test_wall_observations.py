@@ -126,6 +126,23 @@ def test_only_observed_elevation_changes():
         assert changed[0].shape[:2] == (192, 660), name
 
 
+def test_street_sign_when_entrance_faces_parking():
+    from unittest.mock import patch
+    ring = np.array([(0., 0.), (24., 0.), (24., 18.), (0., 18.)])
+    marker = object()
+    for name in ("Taco Bell", "Wendy's"):
+        signs = []
+        def mesh(points, material, uv=None):
+            if material == 99:
+                signs.append(np.mean(points, axis=0))
+        with patch("whole_store.sign_image", return_value=marker):
+            build(name, ring, np.array([0., -1.]), 5., [(np.array([24., 9.]), False)],
+                  mesh, lambda image: 99 if image is marker else 3)
+        assert len(signs) == 2
+        assert any(point[0] > 24 for point in signs)
+        assert any(point[1] < 0 for point in signs)
+
+
 def test_tenant_panel_requires_clear_frontage():
     ring = np.array([[0, 0], [.001, 0], [.001, .001], [0, .001]])
     tenant = np.array([.0005, .00008])
@@ -139,6 +156,7 @@ def test_tenant_panel_requires_clear_frontage():
 
 
 if __name__ == "__main__":
+    test_street_sign_when_entrance_faces_parking()
     test_tenant_panel_requires_clear_frontage()
     test_wall_observations()
     test_only_observed_elevation_changes()

@@ -234,7 +234,7 @@ def matches(path):
             offset = nearest[np.argmin(np.linalg.norm(nearest, axis=1))]
             if 1 <= np.linalg.norm(offset) <= np.linalg.norm((hi - lo) * scale) / 2 + 100:
                 road_points.append(center + offset / scale)
-        targets = doors or road_points or parking
+        targets = road_points or doors or parking
         if len(targets) == 0:
             continue
         offset = min(
