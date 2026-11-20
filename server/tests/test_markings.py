@@ -1,4 +1,5 @@
 """markings: country styles, real dashes and the lines lane by lane from OpenStreetMap's lane tags."""
+import collections
 import sys
 import unittest
 from unittest import mock
@@ -23,6 +24,7 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(markings.style(None, -100.0).centre, "line_yellow", "unknown: by longitude")
         self.assertEqual(markings.style(None, 10.0).centre, "line_white")
         self.assertEqual(markings.style("SE").centre_rural, (3.0, 9.0))
+        self.assertEqual(markings.style("HK").centre_urban, (3.0, 5.0), "Hong Kong: one centre line module")
 
 
 class DashTest(unittest.TestCase):
@@ -175,6 +177,41 @@ class SwedenTest(unittest.TestCase):
                                  False, "SE")
         mids = {round(float(ln[0][1]), 1) for lk, _, ln in ex if lk.get("kind") == "centre"}
         self.assertEqual(len(mids), 4, f"each way's two lines, on its own side of the middle: {mids}")
+
+
+class HongKongTest(unittest.TestCase):
+    """Hong Kong's lines (the Transport Department's manual, Volume 3 chapter 5): lane lines as Britain's, its own
+    centre line, every line 100 mm."""
+    LINE = np.array([[0.0, 0, 0], [118, 0, 0]])
+
+    @staticmethod
+    def lines(ex, kind):
+        return collections.Counter((round(float(w), 2), round(float(np.hypot(*(ln[-1] - ln[0])[:2])), 1))
+                                   for lk, w, ln in ex if lk.get("kind") == kind)
+
+    def extras(self, width=9.0, cls="primary", urban=False, oneway=False, country="HK"):
+        return roads.extras(roads.Spec(width, "paved", urban, cls, oneway), self.LINE, 114.2, left_hand=True,
+                            country=country)
+
+    def test_lane_lines_are_1_and_5_m_in_town_and_2_and_7_m_on_fast_roads(self):
+        self.assertEqual(self.lines(self.extras(urban=True, oneway=True), "lane"), {(0.10, 1.0): 20}, "RM 1101")
+        fast = self.lines(self.extras(14.0, "motorway", oneway=True), "lane")
+        self.assertEqual(fast, {(0.10, 2.0): 13, (0.10, 1.0): 1}, "RM 1102: 2 + 7 m, the last dash cut at the end")
+        self.assertEqual(self.lines(self.extras(11.0, "trunk", oneway=True), "lane"), fast)
+
+    def test_the_centre_line_is_3_and_5_m_everywhere(self):
+        for urban in (True, False):
+            self.assertEqual(self.lines(self.extras(urban=urban), "centre"), {(0.10, 3.0): 15}, "RM 1103")
+
+    def test_edge_lines_are_100_mm_on_a_motorway_too(self):
+        for kw in (dict(), dict(width=14.0, cls="motorway", oneway=True)):
+            self.assertEqual(self.lines(self.extras(**kw), "edge"), {(0.10, 118.0): 2}, "RM 1109")
+
+    def test_britain_keeps_its_own(self):
+        self.assertIs(markings.style("IE"), markings.style("GB"))
+        self.assertEqual(self.lines(self.extras(urban=True, country="GB"), "centre"), {(0.10, 2.0): 20})
+        self.assertEqual(self.lines(self.extras(14.0, "motorway", oneway=True, country="GB"), "edge"),
+                         {(0.20, 118.0): 2})
 
 
 class AiLanesTest(unittest.TestCase):
