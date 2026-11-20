@@ -911,24 +911,31 @@ def _pieces_of(feats, i, rngs):
 
 def crossings(frame, cells, box, reach=REACH_M):
     """[(xy (k, 2), half width)]: the ground roads near box (their carriageways cut the track at grade)."""
+    return _road_crossings(frame, cells, box, reach, worn=False)
+
+
+def _road_crossings(frame, cells, box, reach, worn):
+    import fast
+    fast.require(549, "rail_crossing_roads")
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
     seen, out = set(), []
     for feats in cells:
-        if feats is None or len(feats) == 0:
+        if feats is None or not len(feats):
             continue
-        specs = roads.road_specs(feats)
-        rings, halves = [], []      # (the cell's rings converted in one call)
-        for i in _box_hits(feats.boxes(frame), near):
-            sp = specs[i]
-            fid = str(feats.ids[i])
-            if sp is None or fid in seen:
+        specs = classes = eligible = None
+        if worn:
+            classes = feats.attrs.get("class")
+            if classes is None:
                 continue
-            seen.add(fid)
-            for ring in roads.ground_parts(feats, i):
-                rings.append(ring)
-                halves.append(sp.width / 2)
-        if rings:
-            out += zip(mapgeom.enu_rings(feats, frame, rings), halves)
+            if RAIL_LIFECYCLE:
+                sub = feats.attrs.get("subtype")
+                eligible = None if sub is None else _is(sub, ("road",))
+            else:
+                eligible = _is(classes, ("motorway", "trunk", "motorway_link", "trunk_link"))
+        else:
+            specs = roads.road_specs(feats)
+        fast._ef.rail_crossing_roads(feats.boxes(frame), near, feats.ids, specs, classes, eligible, roads.STYLE,
+                                     feats, frame, roads, mapgeom.enu_rings, seen, out)
     return out
 
 
@@ -998,46 +1005,7 @@ WORN_CUT_MIN_SIN = 0.2      # (a crossing flatter than this cuts as if at this a
 
 def motorway_crossings(frame, cells, box, reach=REACH_M):
     """[(xy (k, 2), half width, class)]: the ground motorway and trunk carriageways (their links too) near box."""
-    near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
-    seen, out = set(), []
-    for feats in cells:
-        if feats is None or len(feats) == 0 or "class" not in feats.attrs:
-            continue
-        clss = feats.attrs["class"]
-        big = _is(clss, ("motorway", "trunk", "motorway_link", "trunk_link"))
-        if RAIL_LIFECYCLE:              # (every road: worn lines are cut at all of them)
-            sub = feats.attrs.get("subtype")
-            big = np.ones(len(feats), bool) if sub is None else _is(sub, ("road",))
-        if not big.any():
-            continue
-        rings, rest = [], []        # (the cell's rings converted in one call)
-        for i in _box_hits(feats.boxes(frame), near, big):
-            c = str(clss[i])
-            base = c[:-5] if c.endswith("_link") else c
-            fid = str(feats.ids[i])
-            if fid in seen:
-                continue
-            seen.add(fid)
-            st = roads.STYLE.get(c) or roads.STYLE.get(base)
-            if st is None or roads.unbuilt(feats, i):
-                continue
-            for ring in roads.ground_parts(feats, i):
-                rings.append(ring)
-                rest.append((st[0] / 2.0, base))
-        if rings:
-            for xy, (half, base) in zip(mapgeom.enu_rings(feats, frame, rings), rest):
-                if len(xy) >= 2:
-                    out.append((xy, half, base))
-    return out
-
-
-def _segment_at(line, p):
-    """The direction (b - a) of line's segment nearest point p. Pure."""
-    a, b = line[:-1], line[1:]
-    d = b - a
-    t = np.clip(dnp.vecdot(p - a, d) / np.maximum(dnp.vecdot(d, d), 1e-9), 0.0, 1.0)
-    k = int(np.argmin(dnp.norm(p - (a + t[:, None] * d), axis=1)))
-    return d[k]
+    return _road_crossings(frame, cells, box, reach, worn=True)
 
 
 def end_key(p):
@@ -1050,64 +1018,10 @@ def _cut_worn_at_motorways(rails, wear_of, roads_xy, kept=frozenset(), cut_ends=
     class): motorway_crossings) of its wear's WORN_CUT_CLASSES (HERITAGE_CUT_CLASSES for the fids in kept: heritage
     lines): no point within the carriageway's half width (over the crossing's angle) and WORN_CUT_M either side of the
     crossing. Pure."""
-    if not roads_xy:
-        return rails
-    # (the worn parts that share a set of roads crossed in one kernel call: with BNE_RAIL_LIFECYCLE every road of the
-    # window is one, and a part at a time packed all of them again for each part, 28 % of a cold Baltimore cell's
-    # planning, 2026-11-19. The kernel's hits per part are those of the part alone, in the same order)
-    groups, todo = {}, []
-    for i, (fid, cls, kind, xy) in enumerate(rails):
-        w = wear_of.get(fid)
-        if kind != "ground" or not w:
-            continue
-        table = HERITAGE_CUT_CLASSES if fid in kept else WORN_CUT_CLASSES
-        allowed = table.get(w, ())
-        gk = (fid in kept, w)
-        if gk not in groups:
-            groups[gk] = ([(line, half) for line, half, c in roads_xy if c in allowed], [])
-        if groups[gk][0]:
-            groups[gk][1].append(i)
-            todo.append(i)
-    hits_of = {}
-    for lines, members in groups.values():
-        if not members:
-            continue
-        got = roads._crossings_by([rails[i][3] for i in members], [ln for ln, _h in lines])
-        per = {i: [[] for _ in lines] for i in members}
-        for li, hits in enumerate(got):
-            for pi, arc, p in hits:
-                per[members[pi]][li].append((arc, p))
-        for i in members:
-            hits_of[i] = (lines, per[i])
-    out = []
-    for i, (fid, cls, kind, xy) in enumerate(rails):
-        if i not in hits_of:
-            out.append((fid, cls, kind, xy))
-            continue
-        lines, per = hits_of[i]
-        s = _arc(xy)
-        cut = np.zeros(len(xy), bool)
-        for (line, half), hits in zip(lines, per):
-            for arc, p in hits:
-                j = int(np.clip(np.searchsorted(s, arc) - 1, 0, len(xy) - 2))
-                t = xy[j + 1] - xy[j]
-                r = _segment_at(line, p)        # (the road's direction at the crossing)
-                sin = abs(t[0] * r[1] - t[1] * r[0]) / max(dnp.norm(t) * dnp.norm(r), 1e-9)
-                cut |= np.abs(s - arc) <= half / max(sin, WORN_CUT_MIN_SIN) + WORN_CUT_M
-        if not cut.any():
-            out.append((fid, cls, kind, xy))
-            continue
-        keep = ~cut
-        idx = np.flatnonzero(keep)
-        for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1) if len(idx) else []:
-            if len(run) >= 2:
-                out.append((fid, cls, kind, xy[run[0]:run[-1] + 1]))
-                if cut_ends is not None:        # (the ends the cut made: the line just ends there, no buffer stop)
-                    if run[0] > 0:
-                        cut_ends.add(end_key(xy[run[0]]))
-                    if run[-1] < len(xy) - 1:
-                        cut_ends.add(end_key(xy[run[-1]]))
-    return out
+    import fast
+    fast.require(549, "rail_cut_worn")
+    return fast._ef.rail_cut_worn(rails, wear_of, roads_xy, kept, WORN_CUT_CLASSES, HERITAGE_CUT_CLASSES,
+                                  cut_ends, end_key, WORN_CUT_MIN_SIN, WORN_CUT_M)
 
 
 def _resample(xy, step):
