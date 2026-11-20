@@ -78,6 +78,7 @@ mod chaingraph;
 mod geocontent;
 mod farcontent;
 mod sidewalks;
+mod townwalk;
 mod roadz;
 mod fartex;
 mod finished_tile;
@@ -7482,6 +7483,16 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 556: merged
     // 558: merged
     // 559: merged
-    m.add("VERSION", 559)?;
+    m.add_function(wrap_pyfunction!(townwalk::sidewalk_join_run, m)?)?;
+    m.add_class::<townwalk::TownFrontage>()?;
+    m.add_function(wrap_pyfunction!(townwalk::town_marks, m)?)?;
+    m.add_function(wrap_pyfunction!(townwalk::town_brick, m)?)?;
+    m.add_function(wrap_pyfunction!(townwalk::town_slab, m)?)?;
+    m.add_function(wrap_pyfunction!(frontage::town::town_paving, m)?)?;
+    m.add_function(wrap_pyfunction!(sidewalks::town::town_area_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(sidewalks::town::town_weld, m)?)?;
+    m.add_function(wrap_pyfunction!(sidewalks::town::town_outline, m)?)?;
+    // 561: merged
+    m.add("VERSION", 561)?;
     Ok(())
 }

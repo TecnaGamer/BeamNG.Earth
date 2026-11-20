@@ -6485,9 +6485,10 @@ def road_tile_items(
     return items, custom
 
 
-def near_rings(frame, tx, ty, md, margin=2.0, skip=frozenset()):
+def near_rings(frame, tx, ty, md, margin=2.0, skip=frozenset(), city_classes=None):
     """The outer rings (k, 2) in the anchor frame of every building of the map within margin m of road tile (tx, ty):
-    its own and its neighbours' (road_tile_items has only the ones whose centre is in it). skip: ids left out."""
+    its own and its neighbours' (road_tile_items has only the ones whose centre is in it). skip: ids left out.
+    city_classes selects mapped urban facades on both sides of a geotile boundary."""
     import roads
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
     out = []
@@ -6496,11 +6497,23 @@ def near_rings(frame, tx, ty, md, margin=2.0, skip=frozenset()):
         f = md.cell(k, layers=("buildings",), kind="demand").layers.get("buildings")
         if f is None or not len(f):
             continue
+        eligible = None
+        if city_classes is not None:
+            eligible = np.isin(f.attrs.get("class", np.full(len(f), "")), tuple(city_classes))
+            subtype = f.attrs.get("subtype")
+            if subtype is not None:
+                eligible |= np.isin(subtype, ("commercial", "civic", "education", "religious"))
+            floors = f.attrs.get("num_floors")
+            if floors is not None:
+                eligible |= floors >= 3
+            min_height = f.attrs.get("min_height")
+            if min_height is not None:
+                eligible &= ~(min_height > .5)
         bx = f.boxes(frame)
         rings = []          # (the cell's outer rings converted in one call)
         for i in range(len(f)):
             fid = str(f.ids[i])
-            if fid in seen or fid in skip:
+            if fid in seen or fid in skip or (eligible is not None and not eligible[i]):
                 continue
             b = bx[i]
             if b[2] < x0 - margin or b[0] > x1 + margin or b[3] < y0 - margin or b[1] > y1 + margin:

@@ -203,6 +203,7 @@ struct K {
     bulb_m: f64, taper_m: f64, nose_deg: f64, nose_gap_m: f64, nose_max_m: f64, cw_cell_m: f64, cw_gap: f64,
     cw_w: f64, stop_gap: f64, stop_w: f64, node_tol: f64, merge_m: f64, connector_m: f64, connector_widths: f64,
     pave_radius: f64, pave_radius_major: f64, service_r: f64, curb_w: f64, radius_tries: Vec<f64>,
+    sidewalk_v2: bool,
     arc_step: f64,              // m per curb-return arc segment (0.75; sidewalks v2's curb returns 0.5: earthfast 502)
     left_hand: bool,            // traffic drives on the left: the stop line across the branch's other half
 }
@@ -722,6 +723,9 @@ fn find_core(k: &K, net: &Net, walk_w: Option<f64>, parking_m: f64, pavement: bo
                 if hwi && hwj && !pavement {
                     if let Some((mut corner, ci, cj)) = across(k, net, &bi, &bj, cr, x, walk_w, fi, fj) {
                         corner.footway = footway;
+                        if k.sidewalk_v2 {
+                            corner.sides = Some((ri, li, rj, -lj));
+                        }
                         let id = out.corners.len();
                         out.corners.push(corner);
                         out.cuts.push((ri, li, pi, ui, ci));
@@ -890,8 +894,10 @@ fn find_core(k: &K, net: &Net, walk_w: Option<f64>, parking_m: f64, pavement: bo
                 }
                 let arc: Vec<P3> = curb2.iter().zip(&zs).map(|(c, zz)| [c[0], c[1], *zz]).collect();
                 let mut corner = Corner { arc, inward: nrm, outer, fill, footway, ..Default::default() };
-                if pavement {
+                if pavement || k.sidewalk_v2 {
                     corner.sides = Some((ri, li, rj, -lj));
+                }
+                if pavement {
                     corner.edge = Some((pi, ui, ci, pj, uj, cj));
                 }
                 let id = out.corners.len();
@@ -1093,7 +1099,7 @@ pub fn junctions_find<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off
         branch_m: c[6], bulb_m: c[7], taper_m: c[8], nose_deg: c[9], nose_gap_m: c[10], nose_max_m: c[11],
         cw_cell_m: c[12], cw_gap: c[13], cw_w, stop_gap: c[14], stop_w, node_tol: c[15], merge_m: c[16],
         connector_m: c[17], connector_widths: c[18], pave_radius: c[19], pave_radius_major: c[20], service_r: c[21],
-        curb_w: c[22], radius_tries, arc_step: if c.len() > 23 { c[23] } else { 0.75 }, left_hand,
+        curb_w: c[22], sidewalk_v2: c.len() > 23, radius_tries, arc_step: if c.len() > 23 { c[23] } else { 0.75 }, left_hand,
     };
     let bounds = bounds.map(|b| [b.0, b.1, b.2, b.3]);
     let o = py.detach(|| find_core(&k, &net, walk_w, parking_m, pavement, bounds));
@@ -1103,7 +1109,21 @@ pub fn junctions_find<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off
     for cn in &o.corners {
         let d = PyDict::new(py);
         d.set_item("arc", rows3(py, &cn.arc))?;
-        d.set_item("inward", rows2(py, &cn.inward))?;
+        if k.sidewalk_v2 && cn.sides.is_some() && cn.outer.len() >= 2 {
+            // Use the branch's surveyed cross section at either tangent.
+            // A chord normal is turned inward by half the last arc segment.
+            let mut inward = cn.inward.clone();
+            for (a, o) in [(0, cn.outer.len() - 1), (cn.arc.len() - 1, 0)] {
+                let dir = [cn.outer[o][0] - cn.arc[a][0], cn.outer[o][1] - cn.arc[a][1]];
+                let width = mhyp(dir);
+                if width > 0.1 {
+                    inward[a] = [dir[0] / width, dir[1] / width];
+                }
+            }
+            d.set_item("inward", rows2(py, &inward))?;
+        } else {
+            d.set_item("inward", rows2(py, &cn.inward))?;
+        }
         let outer = PyList::empty(py);
         for q in &cn.outer {
             outer.append(PyTuple::new(py, q.iter())?)?;

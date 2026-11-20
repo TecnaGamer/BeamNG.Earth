@@ -1877,7 +1877,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                 streetfront.city_frontage(frame, tx, ty, _s.md, frontage_walks, rings, items, near_roads,
                                           _cover >= streetfront.CITY_DENSE_COVER,
                                           z_at=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
-                                          redrape=walks_raw is None)
+                                          redrape=walks_raw is None, drives=drives)
             except Exception as ex:         # (the sidewalks as they are)
                 log.warning("city frontage: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         if frontage_country and front_grass is not None:
@@ -1893,6 +1893,20 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         buildingsmod.brick_walks(walks, items, centre[0], centre[1], side)
         if walks_raw is not None:
             buildingsmod.brick_walks(walks_raw, items, centre[0], centre[1], side)
+    if roadsmod._sw_v2():
+        import townwalk
+        frontage_walks = walks if walks_raw is None else walks_raw
+        try:
+            area = townwalk.paving(frame, (tx, ty), _s.md, frontage_walks, rings if items is not None else None, near_roads, drives,
+                                   skin_margin, getattr(_s, "cache_dir", None), chunks)
+        except (OSError, RuntimeError) as exc:
+            log.debug("town paving inputs unavailable: %s", exc)
+            area = None
+        if area is not None:
+            frontage_walks.append(area)
+            if walks_raw is None:
+                roadsmod.drape_walks(frame, elev, [area], ground=lambda x, y: roadmeshmod.drawn_ground(
+                    frame, drawn, np.c_[x, y], q))
     mark("doors_park")
     chunks += parkingmod.finish_markings(frame, tx, ty, _s.md, elev, items, marks, separate_bays=bool(frontage_country))
     chunks += _bay_lines(frame, tx, ty, _s.md)
@@ -2641,7 +2655,9 @@ def _map_walks(src, dst, walks):
     out = []
     for wk in walks:
         wk = dict(wk)
-        if "disc" in wk:
+        if "town" in wk:
+            wk["town"] = {**wk["town"], "pts": mp(wk["town"]["pts"])}
+        elif "disc" in wk:
             d = dict(wk["disc"])
             d["ring"] = mp(d["ring"])
             d["apex"] = mp(np.asarray(d["apex"], np.float64).reshape(1, 3))[0]
@@ -2815,11 +2831,13 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
         mark("walks")
         if not b.empty():
             P_, T_, UV_, M_ = b.arrays()
-            wm = _clip_mesh((P_, T_, UV_, list(sidewalksmod.MATERIALS), M_), origin, quad)
+            wm = _clip_mesh((P_, T_, UV_, list(b.materials), M_), origin, quad)
             if wm is not None:
                 cdae.write(os.path.join(out_dir, names["walk"]), wm[0], wm[1], uvs=wm[2], material=wm[3],
                            tri_materials=wm[4], object_name="walk")
                 data["walk"] = {"shape": f"{vfs_dir}/{names['walk']}", "pos": list(origin)}
+                if sidewalksmod.V2 and np.any(wm[4] == sidewalksmod.BRICK):
+                    data["walk"]["townBrick"] = True
                 P_, T_, UV_, M_ = b.col.arrays()
                 cm = _clip_mesh((P_, T_, UV_, [sidewalksmod.MATERIALS[0]], M_), origin, quad)
                 if cm is not None:

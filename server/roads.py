@@ -7368,7 +7368,10 @@ def _drape_walks_v2(frame, elev, walks, ground):
             h0, lo, hi = nominal(wk, roll)
             wv.append(np.full(len(arc), np.nan))
             extra.append(arc[:, :2])
-            extra.append(np.asarray([q[:2] for q in c["outer"]], np.float64).reshape(-1, 2))
+            toe = np.asarray([q[:2] for q in c["outer"]], np.float64).reshape(-1, 2)
+            if len(toe) >= 2:
+                toe[[0, -1]] += WALK_V2_TOE_M * np.asarray(c["inward"])[[-1, 0], :2]
+            extra.append(toe)
         else:
             pts, curb, out, w, roll = data
             probe_xy.append(curb[:, :2])
@@ -7451,7 +7454,15 @@ def drape_walks(frame, elev, walks, ground=None):
     _drape_walks_v2.)"""
     import sidewalks
     if sidewalks.V2:
-        return _drape_walks_v2(frame, elev, walks, ground)
+        for wk in walks:
+            if "town" in wk:
+                p = wk["town"]["pts"]
+                if ground is None:
+                    la, lo, _ = frame.enu_to_geodetic(p[:, 0], p[:, 1], 0.)
+                    p[:, 2] = frame.geodetic_to_enu(la, lo, elev(la, lo))[2]
+                else:
+                    p[:, 2] = ground(p[:, 0], p[:, 1])
+        return _drape_walks_v2(frame, elev, [w for w in walks if "town" not in w], ground)
     items, xy = [], []
     for wk in walks:
         if "disc" in wk:                    # (an island's planting: its ring and its middle on the ground)
@@ -14162,6 +14173,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     sm = float(skin_margin or 0.0)
     wexact = (x0 - sm, y0 - sm, x1 + sm, y1 + sm) if sm else exact    # (the skin's pieces: skin_margin)
 
+    # The skin clips to the exact geotile later. A frontage can reach 8 m
+    # past a kerb whose centreline belongs to the neighbouring tile.
+    walk_box = (x0 - 12., y0 - 12., x1 + 12., y1 + 12.) if sm and _sw_v2() else wexact
+
     def skin_own(px, py):                       # a draped piece's owner test (skin_margin: the margin box)
         if sm:
             return wexact[0] <= px < wexact[2] and wexact[1] <= py < wexact[3]
@@ -14307,6 +14322,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     if walks is not None:
         cornered = _cornered(jcuts, roads)
         corner_ctx = None
+        return_corners = corners
         for c in corners:                       # each corner / crosswalk made by the tile it is in
             p = c["arc"][len(c["arc"]) // 2]
             if isl and islands.in_island(isl, p[:2]):
@@ -14317,7 +14333,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                    < float(np.max(dnp.hypot(*(f["poly"] - f["poly"].mean(0)).T))) + islands.ENTRY_CLEAR_M
                    for f in isl if f.get("round")):
                 continue
-            if skin_own(p[0], p[1]):
+            if (skin_own(p[0], p[1]) or
+                    (sm and _sw_v2() and _box_meets(np.vstack((c["arc"], c["outer"])), wexact))):
                 style = c.pop("footway", None)
                 if style is None and _sw_v2():         # (sidewalks v2: the kerbs of the roads it joins)
                     if corner_ctx is None:
@@ -14592,6 +14609,27 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         legacy_surfaces = {}
         import sidewalks as _sw
         v2_walks = _sw_v2() and bool(roads)
+        if v2_walks:
+            import fast
+            import townwalk
+            returns = townwalk.junction_sections(return_corners, runs_near)
+            import buildings as _bld
+            import streetfront
+            brick_region = _bld.brick_share(frame.lat0, frame.lon0) >= .7
+            side_materials = {}
+            for fid, (feats, index, spec) in seen.items():
+                if spec is None or not has_sidewalks(spec):
+                    continue
+                tags = streetfront.tags_of(feats, index)
+                for sd, name in ((1, "left"), (-1, "right")):
+                    raw = tags.get(f"sidewalk:{name}:surface") or tags.get("sidewalk:both:surface") or tags.get("sidewalk:surface")
+                    side_materials[fid, sd] = fast._ef.town_slab(str(raw or ""), str(spec.surf or spec.kind), brick_region)
+            for wk in walks:
+                if "corner" in wk and not wk.get("surface"):
+                    mats = [side_materials.get(key, 1) for key in wk["corner"].get("road_sides", ())]
+                    if mats and mats[0] == mats[-1]:
+                        wk["town_mat"] = mats[0]
+            wear_lines = {fid: line for fid, _sp, line, _lon in roads}
         if v2_walks:                            # (sidewalks v2: the driveways a walk crosses, each road's kerb)
             drive_lines = [(p2[:, :2], s2.width / 2) for (_f2, s2, p2, _l2), d in zip(roads, drive_m.tolist()) if d]
             kerb_of = road_rolls(seen, country, widths)
@@ -14601,9 +14639,15 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             detached = footway is not None and footway.setback > 0.
             v2_extra = {}
             if v2_walks and not detached and not rn.get("mapped"):
+                if not rn.get("median"):
+                    v2_extra["town_mat"] = side_materials.get((fid, side), 1)
                 v2_extra["roll"] = 0.0 if rn.get("median") else kerb_of(fid)
                 v2_extra["minor"] = fid in seen and seen[fid][2] is not None and seen[fid][2].cls in DRIVE_CLASSES
                 # (the curb line of the whole run: the drives' stations along it, a piece's bent ends' mitres)
+                tangents = (None, None)
+                if any(rn["j"]):
+                    run0, tangents = fast._ef.sidewalk_join_run(
+                        np.asarray(run0, np.float64), w, side, rn["j"], returns.get((fid, side), []))
                 n0 = _sw.normals_2d(np.asarray(run0, np.float64)[:, :2])
                 curb0, _ = _sw.run_geometry(run0, side, w)
                 drives0 = [] if rn.get("median") else walk_drives(run0, drive_lines, curb0)
@@ -14625,15 +14669,15 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                             region, str(names[i]) if names is not None else "", spec.cls, lon, lat) if region else None
                     if legacy_surfaces[fid] is not None:
                         style = {"surface": legacy_surfaces[fid], "europe": True}
-            for run in clip_polyline(run0, *wexact):
+            for run in clip_polyline(run0, *walk_box):
                 if len(run) < 2:
                     continue
                 first = dnp.hypot(*(run[0, :2] - run0[0, :2])) < 1e-6
                 last = dnp.hypot(*(run[-1, :2] - run0[-1, :2])) < 1e-6
                 at_j0 = first and rn["j"][0]
                 at_j1 = last and rn["j"][1]
-                caps = (first and not at_j0 and not _on_box(run[0], wexact),
-                        last and not at_j1 and not _on_box(run[-1], wexact))
+                caps = (first and not at_j0 and not _on_box(run[0], walk_box),
+                        last and not at_j1 and not _on_box(run[-1], walk_box))
                 rl = [r for key in rn.get("ramp_keys", [(fid, side)]) for r in jramps.get(key, [])]
                 ramps = [] if detached else junctions.ramp_ranges(run, rl)
                 walks.append({"pts": run, "side": side, "caps": caps, "ramps": ramps, "w": w, "fid": fid,
@@ -14643,9 +14687,15 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                     for q in (run[0, :2], run[-1, :2]):
                         k = np.flatnonzero(dnp.hypot(*(run0[1:-1, :2] - q).T) < 1e-9)
                         ends.append((q.copy(), n0[1 + int(k[0])].copy()) if len(k) else None)
+                    for e, (index, whole) in enumerate(((0, first), (-1, last))):
+                        if whole and tangents[e] is not None:
+                            ends[e] = (run[index, :2].copy(), tangents[e])
                     walks[-1]["end_n"] = tuple(ends)
+                    walks[-1]["junction"] = (at_j0, at_j1)
                     curb, _ = _sw.run_geometry(run, side, w, walks[-1]["end_n"])
                     walks[-1]["drives"] = drives_on(curb, curb0, drives0)
+                    if not rn.get("median") and fid in wear_lines:
+                        walks[-1]["marks"] = fast._ef.town_marks(wear_lines[fid], curb, str(fid), side)
                 if not rn.get("median") and not detached:
                     walks[-1]["drain_ends"] = (caps[0] or at_j0, caps[1] or at_j1)
         if walks is not None and pole_profile is not None:
@@ -15604,6 +15654,8 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             shape = f"walks_{aid}_{tx}_{ty}.cdae"
             b.write(os.path.join(out_dir, shape))
             data["walk"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+            if sidewalks.V2 and np.any(b.arrays()[3] == sidewalks.BRICK):
+                data["walk"]["townBrick"] = True
             shape = f"walkcol_{aid}_{tx}_{ty}.cdae"     # the lean physics-only mesh (the drawn one then only renders)
             b.write_collision(os.path.join(out_dir, shape))
             data["walkcol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
@@ -15708,6 +15760,10 @@ def collider_boxes(walks, chunks):
                                            np.round(poly, 3).ravel().tolist()])
 
     for wk in walks or ():
+        if "town" in wk:
+            pts = wk["town"]["pts"]
+            add("walk", pts, .2, -.2, .25)
+            continue
         if "disc" in wk:
             ring = np.asarray(wk["disc"]["ring"], np.float64)
             add("walk", ring[np.argsort(dnp.arctan2(ring[:, 1] - ring[:, 1].mean(), ring[:, 0] - ring[:, 0].mean()), kind="stable")],
@@ -15723,6 +15779,12 @@ def collider_boxes(walks, chunks):
                     0.5, -1.0, 1.0)
             continue
         ww = wk.get("w", SIDEWALK["w"])
+        if wk.get("front_widths"):
+            curb, back = sidewalks.fitted_edges(wk)
+            keep = sidewalks.simplify(np.c_[curb, back], .045)
+            for i, quad in enumerate(sidewalks._slab_quads(curb[keep, :2], back[keep, :2])):
+                precise(quad, curb[keep[i]:keep[i + 1] + 1, 2], .4)
+            continue
         curb, outv = sidewalks.run_geometry(wk["pts"], wk["side"], ww)
         if wk.get("europe"):
             top = wk.get("height", sidewalks.CURB_H) + ww * sidewalks.CROSS_SLOPE
