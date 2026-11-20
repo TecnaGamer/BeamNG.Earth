@@ -25,6 +25,12 @@ RADIUS = 5.0                    # m, curb return radius when the class is not li
 # by the larger road's class (street-view study of Fells Point, 2026-10-11: city corners are tight)
 RADII = {"residential": 3.0, "living_street": 3.0, "unclassified": 3.0, "service": 3.0,
          "tertiary": 4.5, "secondary": 6.0, "primary": 6.0, "trunk": 8.0}
+# sidewalks v2 (sidewalks.V2, BNE_SIDEWALK_V2): vanilla's curb returns (the second vanilla study, 2026-11-19: p50 5.5 m
+# downtown (2.5-8), 7.8 m in a suburb, 11 m in Italy; 10-30 segments a quarter turn), by the larger road's class, at
+# sidewalks.ARC_STEP_M a segment (RADIUS_TRIES still shrink one that does not fit)
+RADIUS_V2 = 6.0
+RADII_V2 = {"residential": 5.5, "living_street": 5.0, "unclassified": 6.0, "service": 3.0,
+            "tertiary": 6.5, "secondary": 7.0, "primary": 7.5, "trunk": 8.0}
 STOP_LINE = {"m": "line_white", "tl": 6.4, "p": 2, "w": 0.45}   # 1 m before the crosswalk
 STOP_GAP = 1.0
 BULB_M = 6.0                    # m a curb extension runs along the street past the corner
@@ -119,7 +125,11 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
       traffic comes in, across its whole driving width, a single lane's across all of it), curb ramps on both sidewalks
       (on a bulb: the corner piece's), the road's markings cut beyond it."""
     fast.require(266, "junctions find (one-way stop lines)")
-    from sidewalks import CURB_W
+    from sidewalks import CURB_W, V2, V2_NATIVE, ARC_STEP_M
+    v2 = V2 and not pavement                # (the curbless corners keep their radii and steps: roadcorners.py)
+    if v2:
+        fast.require(V2_NATIVE, "junctions find (sidewalks v2's curb returns)")
+    radii, radius = (RADII_V2, RADIUS_V2) if v2 else (RADII, RADIUS)
     n = len(roads)
     if n == 0:
         return [], {}, [], {}, {}, set()
@@ -158,7 +168,7 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                     f = street.side(side)
                     sides.append((1, 0.0, None, None) if f is None or f.setback else
                                  (2, float(f.width), (f.width, f.surface), f))
-            got = per[id(sp)] = (float(sp.width), float(RADII.get(sp.cls, RADIUS)),
+            got = per[id(sp)] = (float(sp.width), float(radii.get(sp.cls, radius)),
                                  float("nan") if w is None else float(w), fl, sides)
         width[i], rad[i], walk[i], flags[i], sides = got
         for s, (state, fw, key, f) in enumerate(sides):
@@ -169,7 +179,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
     out = fast._ef.junctions_find(
         allp, off, fids, np.array([rank[f] for f in fids], np.int64), width, rad, walk, flags, fw_state, fw_width,
         fw_rank, walks, None if walk_w is None else float(walk_w), float(parking_m), bool(pavement),
-        None if pavement_bounds is None else tuple(float(v) for v in pavement_bounds), _consts(float(CURB_W)),
+        None if pavement_bounds is None else tuple(float(v) for v in pavement_bounds),
+        _consts(float(CURB_W)) + ([float(ARC_STEP_M)] if v2 else []),
         [float(v) for v in RADIUS_TRIES], float(CROSSWALK["w"]), float(STOP_LINE["w"]), bool(left_hand))
     return tuple(out)
 
@@ -188,7 +199,7 @@ def apply_cuts(line, cuts, near=40.0):
     if s[-1] <= 0:
         return []
     t = np.linspace(0.0, s[-1], max(2, int(s[-1] / 0.5) + 1))
-    d = np.stack([np.interp(t, s, pts[:, c]) for c in range(pts.shape[1])], axis=1)
+    d = np.stack([dnp.interp(t, s, pts[:, c]) for c in range(pts.shape[1])], axis=1)
     keep = np.ones(len(d), bool)
     alongs = []
     for X, u, tc in cuts:
@@ -240,11 +251,11 @@ def ramp_ranges(run, ramps):
         m = (lateral < 40.0)
         if not m.any():
             continue
-        a = np.interp(t0, along[m], s[m]) if np.all(np.diff(along[m]) > 0) else None
-        b = np.interp(t1, along[m], s[m]) if np.all(np.diff(along[m]) > 0) else None
+        a = dnp.interp(t0, along[m], s[m]) if np.all(np.diff(along[m]) > 0) else None
+        b = dnp.interp(t1, along[m], s[m]) if np.all(np.diff(along[m]) > 0) else None
         if a is None and np.all(np.diff(along[m]) < 0):
-            a = np.interp(t0, along[m][::-1], s[m][::-1])
-            b = np.interp(t1, along[m][::-1], s[m][::-1])
+            a = dnp.interp(t0, along[m][::-1], s[m][::-1])
+            b = dnp.interp(t1, along[m][::-1], s[m][::-1])
         if a is None or b is None:
             continue
         lo, hi = min(a, b), max(a, b)

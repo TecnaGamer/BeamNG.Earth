@@ -25,6 +25,29 @@ SETTINGS_FILE = ("settings", "beamngEarth.json")    # (cpupin.MOD_SETTINGS; the 
 FEATURES = (
     ("roadSigns", {"BNE_ROADSIGNS": "on"}, None),                         # roadsigns.ON
     ("expNlRoadSigns", {"BNE_NL_ROADSIGNS": "on"}, "roadSigns"),           # roadsigns.NL_ON (only with ON)
+    # The road revamp's switches as one (the user, 2026-11-17: "if revamped roads arent enabled by default in the dev
+    # builds yet make it a single experemental toggle"); each later revamp switch joins this set, not the page
+    # (BNE_LEVEL_SPACING left out: on the 33-place ride corpus it made perth_915 and a5_underpass worse, 2026-11-17)
+    ("expRoadRevamp", {"BNE_SPEED_TAPERS": "on", "BNE_DECK_K_SPEED": "on",
+                       "BNE_FOOT_CLEAR": "on", "BNE_RAIL_LIFECYCLE": "on", "BNE_RACEWAY_DIG": "on",
+                       "BNE_TUNNEL_ROAD_OVER": "on",
+                       # the ski-ramp fixes (the clearance study's causes 1-3; BNE_UNDER_SPEED left out: no gain)
+                       "BNE_FAST_DECK_ENDS": "on", "BNE_FAST_GAP": "on", "BNE_FAST_DECK_GROUND": "on",
+                       # racetracks without street poles (BNE_POWER_YARDS left out: one open Codex high, feeders
+                       # classified differently by the span and yard tiles)
+                       "BNE_RACEWAY_PROPS": "on",
+                       # railways at roads (the user's reports r61-r64, r80, r92)
+                       "BNE_RAIL_ROAD_FIT": "on", "BNE_RAIL_SEAM_NATURAL": "on",
+                       # road revamp v2, "road shape first" (the user, 2026-11-19: "put them under revamped roads. Have
+                       # that toggle include the latest and what would be the final roads"): vanilla-style cut and fill
+                       # slopes with rocks and wall-foot skirts (P1a), decks that follow the road's curve and bank
+                       # (P1b) and exits off bridges as one deck with their road (P2b, "sheet": builds on P1b's decks),
+                       # the surface overlay layer with lifted markings (P1c) and the new sidewalks (P1d)
+                       "BNE_BATTER": "vanilla", "BNE_ROADSHAPE": "sheet", "BNE_SURFACE_V2": "on",
+                       "BNE_SIDEWALK_V2": "on",
+                       # road surface v3 (2026-11-20: one continuous lane surface for motorways/trunks and their
+                       # bridge decks; beats the sheet decks at all five probe sites, 0 m of parapet in a carriageway)
+                       "BNE_ROADSURF_V3": "surface"}, None),
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
     ("expEntranceFlares", {"BNE_ENTRANCE_FLARES": "on"}, None),           # roads.flares_enabled

@@ -88,17 +88,13 @@ def cell_pieces(feats, frame):
         if not pieces:
             continue
         fid = str(feats.ids[i])
-        for part in feats.parts(i):
-            for ring in part:
-                if len(ring) < 2:
-                    continue
-                for a, b in pieces:
-                    r = ring if (a, b) == (0.0, 1.0) else roads.sub_polyline(ring, a, b)
-                    if len(r) < 2:
-                        continue
-                    r = np.asarray(r, np.float64)
-                    x, y, _ = geotiles.geodetic_to_world(frame, r[:, 1], r[:, 0])
-                    out.append((fid, np.stack([np.asarray(x, np.float64), np.asarray(y, np.float64)], 1)))
+        rings = [ring for part in feats.parts(i) for ring in part if len(ring) >= 2]
+        for r in roads.sub_polylines(rings, pieces):
+            if len(r) < 2:
+                continue
+            r = np.asarray(r, np.float64)
+            x, y, _ = geotiles.geodetic_to_world(frame, r[:, 1], r[:, 0])
+            out.append((fid, np.stack([np.asarray(x, np.float64), np.asarray(y, np.float64)], 1)))
     return out
 
 

@@ -21,7 +21,6 @@ roads use their width guesses (roads.carriageway), as before.
 """
 import json
 import logging
-import math
 import os
 import zipfile
 import re
@@ -29,7 +28,6 @@ import threading
 import time
 
 import numpy as np
-import dmath
 import dnp
 
 import netfetch
@@ -459,20 +457,25 @@ _ROW_VAL = 4
 
 
 def _rows(t, idx):
-    """Rows idx of a decoded row group (OsmTags._table) as (id, raceway, busway, file row, COLUMNS' values)."""
-    names = list(COLUMNS)
-    out = []
-    for i in idx:
-        vals = []
-        for c in names:
-            if c in TEXT_COLUMNS:
-                o = t[c + "_off"]
-                vals.append(t[c][o[i]:o[i + 1]].tobytes().decode("utf-8") if t[c + "_ok"][i] else None)
-            else:
-                v = float(t[c][i])
-                vals.append(None if v != v else (int(v) if c in INT_COLUMNS else v))
-        out.append((int(t["id"][i]), bool(t["race"][i]), bool(t["bus"][i]), int(t["frn"][i]), *vals))
-    return out
+    """Rows idx of a decoded row group (OsmTags._table) as (id, raceway, busway, file row, COLUMNS' values)
+    (earthfast osmrows::osm_rows). Input contract (R2a): t an exact dict of OsmTags._decode's arrays (int64 id / frn,
+    bool race / bus, a text column's uint8 bytes with int32 / int64 offsets and bool NULL flags, float32 / float64
+    numbers), idx an int64 array; anything else TypeError."""
+    import fast
+    fast.require(453, "osm_rows")
+    if not isinstance(idx, np.ndarray):
+        if type(idx) not in (list, tuple) or any(type(i) is not int for i in idx):
+            raise TypeError("osmtags._rows: idx is an int64 array or a list / tuple of ints (the contract)")
+        idx = np.array(idx, np.int64)
+    return fast._ef.osm_rows(t, idx, list(COLUMNS),
+                             sorted(TEXT_COLUMNS), sorted(INT_COLUMNS))
+
+
+def _tags_of(rows):
+    """{way id: {column: value}} of rows (_rows' tuples), the None values left out (earthfast osmrows::osm_tags)."""
+    import fast
+    fast.require(453, "osm_tags")
+    return fast._ef.osm_tags(rows if type(rows) is list else list(rows), list(COLUMNS))
 
 
 def cell_rows(t, bounds):
@@ -492,8 +495,7 @@ def tags_and_ways(rows, extra, inside, lines):
     """OsmTags.cell's answer from the cell's rows (cell_rows), the file rows of its raceways and busways (extra), of the
     raceways inside each raceway that may be a facility's outline (inside: {file row: [file rows]}) and the raceway /
     busway lines {file row: {RACEWAY_COLUMNS..., "coords"}}: ({way id: tags}, [the drawn raceways and busways])."""
-    names = list(COLUMNS)
-    tags = {int(r[0]): {k: v for k, v in zip(names, r[_ROW_VAL:]) if v is not None} for r in rows}
+    tags = _tags_of(rows)
     outlines = {f for f, ins in inside.items() if f in lines
                 and is_outline(lines[f]["coords"], [lines[g]["coords"] for g in ins if g in lines])}
     if outlines:
@@ -631,71 +633,22 @@ def _linestring(wkb):
     return np.frombuffer(wkb, dtype=end + "f8", count=2 * n, offset=9).reshape(n, 2).astype(np.float64)
 
 
-def _named_way(feats, i, by_name):
-    """The OSM way id of the same-named way (by_name: name -> [(way id, lon0, lat0, lon1, lat1)]) whose bbox, grown by
-    NAME_MATCH_M, holds feature i's middle vertex: the smallest such, else None."""
-    names = feats.attrs.get("name")
-    cands = by_name.get(str(names[i])) if names is not None else None
-    if not cands:
-        return None
-    a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
-    b = feats.coord_off[feats.ring_off[feats.part_off[i + 1]]]
-    if b <= a:
-        return None
-    lon, lat = (float(v) for v in feats.lonlat[(a + b - 1) // 2][:2])
-    my = NAME_MATCH_M / 111320.0
-    mx = my / max(dmath.cos(math.radians(lat)), 0.1)
-    best = None
-    for w, x0, y0, x1, y1 in cands:
-        if x0 - mx <= lon <= x1 + mx and y0 - my <= lat <= y1 + my:
-            area = (x1 - x0) * (y1 - y0)
-            if best is None or area < best[0]:
-                best = (area, w)
-    return best[1] if best else None
-
-
 def join(feats, tags, geometry=None):
     """The tags of each road feature (its source record's way id) as attrs columns: floats (NaN where unknown) for
     FLOATS, text ('' where unknown) for TEXTS. feats: an Overture roads Features (attrs src_record). A segment without a
     known way (from a relation) takes the tags of the same-named way around it (_named_way), but its oneway: that way may
-    be one carriageway of the road the segment draws."""
+    be one carriageway of the road the segment draws. A way without a lane count takes the count of the same-named way
+    around it going the same way (one-way or not): OpenStreetMap's lanes ahead of the class's width (Portland's
+    arterials carry lanes on some of their ways only, the rest were drawn at the class's guess, the user 2026-10-27).
+    earthfast osmjoin::osm_join; roadlanes.join after it. Input contract (R2a): feats.attrs an exact dict whose
+    src_record / name / class columns are of the contract, tags osm_tags' exact dict of int way ids -> exact dicts,
+    int64 offsets and a float64 (k, 2) lonlat; anything else TypeError."""
+    import fast
     import mapgeom as mg
     import roadlanes
-    recs = feats.attrs.get("src_record")
-    n = len(feats)
-    ids = [way_id(str(recs[i])) if recs is not None else None for i in range(n)]
-    by_name = {}
-    for w, t in tags.items():
-        if t.get("name") and all(k in t for k in ("bx0", "by0", "bx1", "by1")):
-            by_name.setdefault(str(t["name"]), []).append((w, t["bx0"], t["by0"], t["bx1"], t["by1"]))
-    named = [w if w in tags else _named_way(feats, i, by_name) for i, w in enumerate(ids)]
-    for c in FLOATS:
-        if c == "lanes":
-            classes = feats.attrs.get("class", [""] * n)
-            src = [ids[i] if classes[i] in roadlanes.HIGHWAYS else w for i, w in enumerate(named)]
-            feats.attrs["osm_lanes"] = np.array([roadlanes.count(tags.get(w, {}).get(c)) or np.nan for w in src])
-            continue
-        feats.attrs["osm_" + c if not c.startswith("osm_") else c] = np.array(
-            [float(tags.get(w, {}).get(c, np.nan)) if w is not None else np.nan for w in named], np.float64)
-    for c in TEXTS:
-        src = ids if c == "osm_oneway" else named
-        feats.attrs[c if c.startswith("osm_") else "osm_" + c] = mg.text_column(
-            [str(tags.get(w, {}).get(c, "")) if w is not None else "" for w in src])
-    # A way without a lane count takes the count of the same-named way around it going the same way (one-way or
-    # not): OpenStreetMap's lanes ahead of the class's width (Portland's arterials carry lanes on some of their ways
-    # only, the rest were drawn at the class's guess, the user 2026-10-27).
-    lanes, ows = feats.attrs["osm_lanes"], feats.attrs["osm_oneway"]
-    names = feats.attrs.get("name")
-    sense = {}
-    for w, t in tags.items():
-        if "lanes" in t and t.get("name") and all(k in t for k in ("bx0", "by0", "bx1", "by1")):
-            key = (str(t["name"]), str(t.get("osm_oneway", "")) in ONEWAY_YES)
-            sense.setdefault(key, []).append((w, t["bx0"], t["by0"], t["bx1"], t["by1"]))
-    for i in range(n if sense and names is not None else 0):
-        if np.isnan(lanes[i]) and classes[i] not in roadlanes.HIGHWAYS:
-            nm = str(names[i])
-            w = _named_way(feats, i, {nm: sense.get((nm, str(ows[i]) in ONEWAY_YES), [])})
-            if w is not None:
-                lanes[i] = roadlanes.count(tags[w]["lanes"]) or np.nan
+    fast.require(455, "osm_join")
+    ids = fast._ef.osm_join(feats.attrs, tags, len(feats), feats.part_off, feats.ring_off, feats.coord_off,
+                            feats.lonlat, list(FLOATS), list(TEXTS), sorted(roadlanes.HIGHWAYS), list(ONEWAY_YES),
+                            way_id, mg.text_column)
     roadlanes.join(feats, tags, ids, geometry)
     return feats

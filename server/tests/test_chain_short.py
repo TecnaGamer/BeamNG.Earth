@@ -16,6 +16,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import revisit  # noqa: E402
 import roads  # noqa: E402
+import roadshape  # noqa: E402
 
 
 class _Store(roads.BridgeProfiles):
@@ -73,6 +74,28 @@ class _Same:
 
 
 class ChainShortTest(unittest.TestCase):
+    # (the chains' bookkeeping, whatever BNE_ROADSHAPE says: the stores here are stubs without a real frame, and the
+    # shaped decks (decks / sheet, in the Revamped roads setting) read heights through it; their shapes have tests of
+    # their own: test_roadshape*)
+    def setUp(self):
+        for name in ("DECKS", "SHEET", "SKEW", "PROFILE", "PROFILE_BUILT", "SURFACE_PROFILE"):
+            p = mock.patch.object(roadshape, name, False)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_surface_view_refreshes_heights_on_the_same_line(self):
+        view = roads.ChainView.__new__(roads.ChainView)
+        view.frame, view.lock, view._mapped = None, threading.Lock(), {}
+        store = types.SimpleNamespace(frame=None, region=(0, 0))
+        xy = np.array([[0., 0.], [3., 0.]])
+        today = np.array([1., 2.])
+        solved = np.array([2., 3.]).view(roads._SurfaceHeights)
+        with mock.patch.object(roadshape, "SURFACE_PROFILE", True), mock.patch.object(roads, "_Mapper", return_value=_Same()):
+            for z in (today, solved, today):
+                got, = view._map(store, [("f", None, xy, z, 0.)])
+                np.testing.assert_array_equal(got[3], z)
+                self.assertIs(type(got[3]), type(z))
+
     def test_a_short_solve_is_short_again_for_a_later_scope(self):
         for kind, field in (("plain", "n"), ("lidar", "lidar")):
             st = _Store(kind)
@@ -316,6 +339,40 @@ class ChainShortTest(unittest.TestCase):
             self.assertEqual(seen, [(("f", 0), (1, 0))], where)
             self.assertEqual(st.short[("f", 0)], (1, 0), f"{where}: nothing was added after")
             self.assertFalse(b.complete)
+
+    def test_a_short_profile_is_solved_again_when_due(self):
+        """BNE_ROADSHAPE=profile (P3c, Codex review of P3b): a chain published while its joint profile raised (a cell
+        not at hand) is short, and solved again once roads.PROFILE_RETRY_S has passed, not kept until the store goes:
+        the retry, read complete, is complete and kept."""
+        st = _Store(None)
+        st.STRUCTURES = True
+
+        def solve(comp, pool, ground, req_out=None):
+            st.solves += 1
+            return [np.zeros(2) for _ in comp]
+        st._solve = solve
+        calls = []
+
+        def prof(store, comp, parts, ground, reqs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise OSError("a cell not at hand")
+            return None, None                           # (read complete; not solved: today's heights)
+        with mock.patch.object(roadshape, "PROFILE", True), mock.patch.object(roadshape, "PROFILE_BUILT", True), \
+                mock.patch.object(roadshape, "profile_built", prof), mock.patch.object(roads, "PROFILE_RETRY_S", 0.0):
+            with revisit.scope() as a:
+                self.assertIsNotNone(st._chain_of(("f", 0), ENDS))
+            self.assertFalse(a.complete, "the profile's failure: short")
+            self.assertIn(("f", 0), st.profile_retry)
+            with revisit.scope() as b:
+                self.assertIsNotNone(st._chain_of(("f", 0), ENDS))
+            self.assertEqual((st.solves, len(calls)), (2, 2), "solved again when due")
+            self.assertTrue(b.complete, "the retry read complete")
+            self.assertEqual(st.profile_retry, {})
+            with revisit.scope() as c:
+                st._chain_of(("f", 0), ENDS)
+            self.assertEqual(st.solves, 2, "kept since")
+            self.assertTrue(c.complete)
 
     def test_adopted_parts_are_published_with_their_note(self):
         """As above for a chain adopted from its owner: checked from inside the adopting store's lock, the moment

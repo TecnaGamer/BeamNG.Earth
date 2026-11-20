@@ -151,6 +151,184 @@ dm_scalar1!(dm_sin => libm::sin, dm_cos => libm::cos, dm_tan => libm::tan, dm_as
             dm_log10 => libm::log10, dm_cbrt => libm::cbrt);
 dm_scalar2!(dm_atan2 => libm::atan2, dm_pow => libm::pow, dm_hypot => libm::hypot);
 
+// ---- np.interp (dnp.interp): numpy's compiled_base.c arr_interp, line for line, with no fused multiply-add
+//
+// numpy's interp computes slope * (x - xp[j]) + fp[j] in C. A compiler allowed to contract (clang's default
+// -ffp-contract=on: numpy's macOS arm64 wheels; any build whose baseline has FMA and contracts) makes it one fused
+// multiply-add, which rounds once instead of twice: the M1 Mac's railway bed lines moved 1-2 ulps from the PC's and the
+// plans of 36 of the corpus's 116 cells differed (2026-11-18). Rust never contracts, so these are the x86 wheels' bits.
+
+const LIKELY_IN_CACHE_SIZE: usize = 8;
+
+// The NaN a result carries, as x86's SSE arithmetic (numpy's x86 wheels) makes it on every CPU: the first operand's when
+// it is a NaN, else the second's (quieted), else the "default NaN" of an invalid operation (inf - inf, 0 * inf), whose
+// sign is set on x86 (0xFFF8...) and clear on ARM. Which operand is first is numpy's compiled code's order (GCC put the
+// difference before the slope in the product: found on raw bits, tests/test_determinism.py). LLVM may swap a commutative
+// operation's operands and an ARM CPU makes the other default NaN: the NaN is chosen here instead.
+const X86_DEFAULT_NAN: u64 = 0xFFF8_0000_0000_0000;
+
+#[inline]
+fn x86_nan(r: f64, a: f64, b: f64) -> f64 {
+    if !r.is_nan() {
+        r
+    } else if a.is_nan() {
+        f64::from_bits(a.to_bits() | 0x0008_0000_0000_0000)
+    } else if b.is_nan() {
+        f64::from_bits(b.to_bits() | 0x0008_0000_0000_0000)
+    } else {
+        f64::from_bits(X86_DEFAULT_NAN)
+    }
+}
+
+#[inline]
+fn xsub(a: f64, b: f64) -> f64 { x86_nan(a - b, a, b) }
+#[inline]
+fn xdiv(a: f64, b: f64) -> f64 { x86_nan(a / b, a, b) }
+#[inline]
+fn xmul(a: f64, b: f64) -> f64 { x86_nan(a * b, a, b) }
+#[inline]
+fn xadd(a: f64, b: f64) -> f64 { x86_nan(a + b, a, b) }
+
+/// numpy's slope (dy[i+1] - dy[i]) / (dx[i+1] - dx[i]) and value slope * (x - dx[j]) + dy[j], NaNs as numpy's x86 code
+/// makes them (x86_nan; its product's operands in its order).
+#[inline]
+fn slope_of(fp: &[f64], xp: &[f64], i: usize) -> f64 {
+    xdiv(xsub(fp[i + 1], fp[i]), xsub(xp[i + 1], xp[i]))
+}
+
+#[inline]
+fn along(slope: f64, v: f64, x0: f64, y0: f64) -> f64 {
+    xadd(xmul(xsub(v, x0), slope), y0)
+}
+
+/// numpy's binary_search_with_guess: the index j of arr's bracket of key (arr[j] <= key < arr[j + 1] for a sorted
+/// arr), -1 left of arr[0], len right of arr[len - 1]; guess: the last answer (numpy's order of probes kept, so that an
+/// unsorted or NaN-holding arr gives numpy's answer too).
+fn search_with_guess(key: f64, arr: &[f64], guess: isize) -> isize {
+    let len = arr.len();
+    let mut imin: usize = 0;
+    let mut imax: usize = len;
+    if key > arr[len - 1] {
+        return len as isize;
+    } else if key < arr[0] {
+        return -1;
+    }
+    if len <= 4 {
+        let mut i = 1;
+        while i < len && key >= arr[i] {
+            i += 1;
+        }
+        return i as isize - 1;
+    }
+    let mut guess = guess;
+    if guess > len as isize - 3 {
+        guess = len as isize - 3;
+    }
+    if guess < 1 {
+        guess = 1;
+    }
+    let g = guess as usize;
+    if key < arr[g] {
+        if key < arr[g - 1] {
+            imax = g - 1;
+            if g > LIKELY_IN_CACHE_SIZE && key >= arr[g - LIKELY_IN_CACHE_SIZE] {
+                imin = g - LIKELY_IN_CACHE_SIZE;
+            }
+        } else {
+            return g as isize - 1;
+        }
+    } else if key < arr[g + 1] {
+        return g as isize;
+    } else if key < arr[g + 2] {
+        return g as isize + 1;
+    } else {
+        imin = g + 2;
+        if g + LIKELY_IN_CACHE_SIZE + 1 < len && key < arr[g + LIKELY_IN_CACHE_SIZE] {
+            imax = g + LIKELY_IN_CACHE_SIZE;
+        }
+    }
+    while imin < imax {
+        let imid = imin + ((imax - imin) >> 1);
+        if key >= arr[imid] {
+            imin = imid + 1;
+        } else {
+            imax = imid;
+        }
+    }
+    imin as isize - 1
+}
+
+/// np.interp(x, xp, fp, left, right) of float64 x, xp, fp (xp and fp of one length, at least 1); left / right None:
+/// fp[0] / fp[-1].
+pub fn interp(x: &[f64], xp: &[f64], fp: &[f64], left: Option<f64>, right: Option<f64>) -> Vec<f64> {
+    let n = xp.len();
+    let lval = left.unwrap_or(fp[0]);
+    let rval = right.unwrap_or(fp[n - 1]);
+    if n == 1 {
+        let (xv, fv) = (xp[0], fp[0]);
+        return x.iter().map(|&v| if v < xv { lval } else if v > xv { rval } else { fv }).collect();
+    }
+    // (numpy keeps the slopes when there are no more of them than points; the same division either way)
+    let slopes: Option<Vec<f64>> = if n <= x.len() {
+        Some((0..n - 1).map(|i| slope_of(fp, xp, i)).collect())
+    } else {
+        None
+    };
+    let mut out = Vec::with_capacity(x.len());
+    let mut j: isize = 0;
+    for &v in x {
+        if v.is_nan() {
+            out.push(v);
+            continue;
+        }
+        j = search_with_guess(v, xp, j);
+        let r = if j == -1 {
+            lval
+        } else if j == n as isize {
+            rval
+        } else if j == n as isize - 1 {
+            fp[j as usize]
+        } else {
+            let k = j as usize;
+            if xp[k] == v {
+                fp[k]
+            } else {
+                let slope = match &slopes {
+                    Some(s) => s[k],
+                    None => slope_of(fp, xp, k),
+                };
+                let mut r = along(slope, v, xp[k], fp[k]);
+                if r.is_nan() {         // (numpy: a NaN one way, the other way; still NaN on a level stretch: fp)
+                    r = along(slope, v, xp[k + 1], fp[k + 1]);
+                    if r.is_nan() && fp[k] == fp[k + 1] {
+                        r = fp[k];
+                    }
+                }
+                r
+            }
+        };
+        out.push(r);
+    }
+    out
+}
+
+/// dnp.interp: np.interp of flat float64 arrays.
+#[pyfunction]
+#[pyo3(signature = (x, xp, fp, left=None, right=None))]
+pub fn dm_interp<'py>(py: Python<'py>, x: PyReadonlyArray1<'py, f64>, xp: PyReadonlyArray1<'py, f64>,
+                      fp: PyReadonlyArray1<'py, f64>, left: Option<f64>, right: Option<f64>)
+    -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let (x, xp, fp) = (x.as_slice()?, xp.as_slice()?, fp.as_slice()?);
+    if xp.is_empty() {
+        return Err(PyValueError::new_err("array of sample points is empty"));
+    }
+    if xp.len() != fp.len() {
+        return Err(PyValueError::new_err("fp and xp are not of the same length."));
+    }
+    let out = py.detach(|| interp(x, xp, fp, left, right));
+    Ok(PyArray1::from_vec(py, out))
+}
+
 // ---- small dense linear algebra for dnp.py (numpy's linalg is LAPACK / BLAS: CPU-specific kernels, FMA or not)
 
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2, PyUntypedArrayMethods};
@@ -323,6 +501,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dm_solve, m)?)?;
     m.add_function(wrap_pyfunction!(dm_lstsq, m)?)?;
     m.add_function(wrap_pyfunction!(dm_eigh, m)?)?;
+    m.add_function(wrap_pyfunction!(dm_interp, m)?)?;
     for f in [wrap_pyfunction!(dm_sin, m)?, wrap_pyfunction!(dm_cos, m)?, wrap_pyfunction!(dm_tan, m)?,
               wrap_pyfunction!(dm_asin, m)?, wrap_pyfunction!(dm_acos, m)?, wrap_pyfunction!(dm_atan, m)?,
               wrap_pyfunction!(dm_sinh, m)?, wrap_pyfunction!(dm_cosh, m)?, wrap_pyfunction!(dm_tanh, m)?,
@@ -348,5 +527,22 @@ mod tests {
         assert_eq!(0.5f64.dhypot(0.25), 0.5590169943749475);
         assert_eq!(1.0f64.datan2(2.0), 0.4636476090008061);
         assert_eq!(2.0f64.dln(), std::f64::consts::LN_2);
+    }
+
+    #[test]
+    fn interp_unfused() {
+        // slope * (x - xp[j]) + fp[j] rounded twice (a multiply, then an add), as numpy's x86 wheels compute it
+        let r = super::interp(&[0.3, -1.0, 2.0, 1.0, f64::NAN], &[0.0, 1.0], &[0.7, 0.8], None, Some(9.0));
+        assert_eq!(r[1], 0.7);
+        assert_eq!(r[2], 9.0);
+        assert_eq!(r[3], 0.8);
+        assert!(r[4].is_nan());
+        let slope = (0.8f64 - 0.7) / (1.0 - 0.0);
+        assert_eq!(r[0].to_bits(), (0.3 * slope + 0.7).to_bits());
+        // (an invalid operation's NaN is x86's default, on every CPU: inf - inf in the slope)
+        let n = super::interp(&[1.0], &[0.0, 2.0], &[f64::INFINITY, f64::INFINITY], None, None);
+        assert_eq!(n[0].to_bits(), f64::INFINITY.to_bits());
+        let n = super::interp(&[1.0], &[0.0, 2.0], &[-f64::INFINITY, f64::INFINITY], None, None);
+        assert_eq!(n[0].to_bits(), 0xFFF8_0000_0000_0000);
     }
 }

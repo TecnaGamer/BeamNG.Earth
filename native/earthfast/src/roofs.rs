@@ -663,6 +663,11 @@ fn skeleton_faces(loops: &[Vec<P>], gable: bool) -> Option<Faces> {
         }
         faces_i.push(poly);
     }
+    // (a node the wavefront reached at time t lies at least t from the outline: one past it is an event computed
+    // wrong, a near-parallel pair of edges meeting far off: a house's gabled skeleton rose 18 km at Eifel's
+    // 50.2430,6.9358 (the player's report W545TFKJ), its walls cut down to make room. Failed: the caller's other roof.
+    // Before the gables' tops are moved onto their walls)
+    if !skeleton_nodes_valid(&nodes, loops) { return None; }
     let mut gables: Vec<[(f64, f64, f64); 3]> = Vec::new();
     if gable {
         let mut degree = vec![0usize; nodes.len()];
@@ -875,6 +880,37 @@ pub fn skeleton_roof<'py>(py: Python<'py>, outer: PyReadonlyArray2<'py, f64>, ho
      numpy::ndarray::Array2::from_shape_vec((g, 3), gab).unwrap().into_pyarray(py))
 }
 
+/// Whether every skeleton node (x, y, t) lies at least t from the outline (its loops' edges), within a millimetre: the
+/// straight skeleton's wavefront sweeps inward at unit speed, so a node is never higher than its distance to the
+/// nearest wall; one over it is an event computed wrong (near-parallel edges meeting far off).
+fn skeleton_nodes_valid(nodes: &[(f64, f64, f64)], outline: &[Vec<P>]) -> bool {
+    let mut segs: Vec<(P, P)> = Vec::new();
+    for lp in outline {
+        for i in 0..lp.len() {
+            segs.push((lp[i], lp[(i + 1) % lp.len()]));
+        }
+    }
+    for q in nodes {
+        if !(q.0.is_finite() && q.1.is_finite() && q.2.is_finite()) {
+            return false;
+        }
+        if q.2 <= 1e-3 {
+            continue;
+        }
+        let mut d = f64::INFINITY;
+        for (a, b) in &segs {
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let l2 = dx * dx + dy * dy;
+            let t = if l2 > 1e-18 { (((q.0 - a.0) * dx + (q.1 - a.1) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+            d = d.min((q.0 - a.0 - t * dx).dhypot(q.1 - a.1 - t * dy));
+        }
+        if q.2 > d + 1e-3 {
+            return false;
+        }
+    }
+    true
+}
+
 /// A triangle's part under (below: true) or over z.
 fn clip_z(t: &[(f64, f64, f64); 3], z: f64, below: bool) -> Vec<(f64, f64, f64)> {
     let inside = |q: &(f64, f64, f64)| if below { q.2 <= z } else { q.2 >= z };
@@ -893,6 +929,30 @@ fn clip_z(t: &[(f64, f64, f64); 3], z: f64, below: bool) -> Vec<(f64, f64, f64)>
 #[cfg(test)]
 mod slope_wall_tests {
     use super::*;
+
+    #[test]
+    fn skeleton_nodes_over_their_wall_distance_are_invalid() {
+        // a 10 x 6 box's hipped skeleton: its ridge 3 m up, 3 m from the long walls
+        let outline = vec![vec![(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]];
+        let good = vec![(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (7.0, 3.0, 3.0), (3.0, 3.0, 3.0)];
+        assert!(skeleton_nodes_valid(&good, &outline));
+        // the same nodes with the ridge 18 km up (report W545TFKJ's skeleton)
+        let bad = vec![(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (7.0, 3.0, 18286.0), (3.0, 3.0, 3.0)];
+        assert!(!skeleton_nodes_valid(&bad, &outline));
+        let nan = vec![(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (7.0, 3.0, f64::NAN)];
+        assert!(!skeleton_nodes_valid(&nan, &outline));
+        // the whole skeleton: every node of the box's is valid; the hipped and gabled skeletons both succeed
+        assert!(skeleton_faces(&outline, false).is_some());
+        assert!(skeleton_faces(&outline, true).is_some());
+        // report W545TFKJ's footprint (cut at a carriageway's edge): no 18 km skeleton, a failure (the other roof)
+        let w545 = vec![vec![(18.9178692467, 0.0452073521), (20.6767692372, 1.7992849494), (21.8247669715, 0.2728416349),
+                             (24.5034039463, 2.5625249972), (22.9727422795, 4.0889654141), (28.712666233, 9.8131666211),
+                             (22.9726911617, 15.9189168255), (13.1434547151, 6.1166355389)]];
+        if let Some((faces, _)) = skeleton_faces(&w545, true) {
+            let top = faces.iter().flatten().map(|q| q.2).fold(0.0f64, f64::max);
+            assert!(top < 10.0, "{top}");
+        }
+    }
 
     #[test]
     fn slope_wall_floors_cut_by_floor() {

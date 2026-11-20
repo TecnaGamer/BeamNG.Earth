@@ -108,7 +108,7 @@ def cyrillic(name):
 def sc_of(radius):
     """Annex 23 в's spacing Sc (m) of С7 boards on a bend of radius m (interpolated, held at the table's ends)."""
     rs, ss = zip(*C7_SC)
-    return float(np.interp(radius, rs, ss))
+    return float(dnp.interp(radius, rs, ss))
 
 
 def _resample(xy, step):
@@ -117,7 +117,7 @@ def _resample(xy, step):
     if cum[-1] < 2 * step:
         return None, None
     s = np.arange(0.0, cum[-1] + 1e-9, step)
-    return np.column_stack([np.interp(s, cum, xy[:, 0]), np.interp(s, cum, xy[:, 1])]), s
+    return np.column_stack([dnp.interp(s, cum, xy[:, 0]), dnp.interp(s, cum, xy[:, 1])]), s
 
 
 def bends(xy):

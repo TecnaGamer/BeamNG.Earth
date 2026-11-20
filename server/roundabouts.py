@@ -200,7 +200,7 @@ def _corner(p, d, entry, ring_hw):
     d = d / max(float(dnp.hypot(*d)), 1e-9)
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     sq = min(ring_hw + OUTER_JOIN_M, float(s[-1]))
-    at = np.array([np.interp(sq, s, xy[:, 0]), np.interp(sq, s, xy[:, 1])])
+    at = np.array([dnp.interp(sq, s, xy[:, 0]), dnp.interp(sq, s, xy[:, 1])])
     k = int(np.clip(np.searchsorted(s, sq) - 1, 0, len(xy) - 2))
     u = xy[k + 1] - xy[k]
     u = u / max(float(dnp.hypot(*u)), 1e-9)
@@ -256,7 +256,7 @@ def _from(line, m):
     if s[-1] <= m + 1.0:
         return None
     keep = s > m
-    start = np.array([np.interp(m, s, line[:, k]) for k in range(3)])
+    start = np.array([dnp.interp(m, s, line[:, k]) for k in range(3)])
     return np.vstack([start, line[keep]])
 
 
@@ -293,7 +293,7 @@ def _loops(roads_list, ring):
     for g in groups.values():
         xy = np.concatenate(g)
         c = xy.mean(0)
-        out.append(xy[np.argsort(dnp.arctan2(xy[:, 1] - c[1], xy[:, 0] - c[0]))])
+        out.append(xy[np.argsort(dnp.arctan2(xy[:, 1] - c[1], xy[:, 0] - c[0]), kind="stable")])
     return out
 
 
@@ -434,7 +434,7 @@ def splitters(roads_list, refuges):
             continue
         used.add(fid)
         st = np.linspace(near, far, 9)
-        c = np.stack([np.interp(st, s, line[:, k]) for k in range(3)], 1)
+        c = np.stack([dnp.interp(st, s, line[:, k]) for k in range(3)], 1)
         u = np.gradient(c[:, :2], axis=0)
         u /= np.maximum(dnp.hypot(*u.T), 1e-9)[:, None]
         nrm = np.stack([-u[:, 1], u[:, 0]], 1)

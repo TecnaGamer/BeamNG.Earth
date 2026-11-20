@@ -1361,10 +1361,17 @@ CLI). The only change to an existing module: host policies in `netfetch.POLICIES
   file, up to ~0.75 GiB after a long drive). One dense city cell is
   3.3 MB of layer files and ~66 MB of raw blocks (they serve the neighbours too: the next cells
   cost 0-9 MB); a desert cell 60-90 KB and 35 MB.
-- **Release pinning**: `overture.RELEASE = "2026-09-23.1"`; `mapdata.py --latest` prints the newest;
-  bump the constant (cells are cached per release; a data update may change a place, a restart
-  never does). A pinned release Overture has deleted raises `ReleaseGone` for uncached cells (also
-  when its STAC index is cached and the files answer 404).
+- **Release pinning**: the build's own release is `overturepick.RELEASE = "2026-11-18.0"`
+  (`overture.RELEASE`); `mapdata.py --latest` prints the newest. A newer one reaches players without
+  an app update through the data repo's `cdn.json` `{"overture": {"release": ...}}` (once its products
+  are built): the server's supervisor (the launcher, `start.py`; the share helper and the decisions
+  builder for themselves) decides once per app session (`overturepick.Pick`: listed in Overture's STAC
+  catalogue, a supported schema, one 5 s deadline; no answer in time: the last session's release when
+  newer than the build's and its STAC index is kept in `<cache>/cdn`, else the build's) and hands it to
+  every server it starts (`BNGE_OVERTURE_RELEASE`; `overture.effective()`, frozen per process, keys the
+  cells, plans and facts). The hello carries it; the mod pins a level to its live connection's release
+  and holds (no anchor, no resync) on another (`releasepin.lua`). A release Overture has deleted raises
+  `ReleaseGone` for uncached cells (also when its STAC index is cached and the files answer 404).
 - **Provenance**: per cell a list of records (Overture per theme with the source datasets and
   licences of its features and the release, WorldCover with its files, CHM with its file), each
   with the exact attribution and licence (CREDITS.md; Overture's per-theme texts whole, read

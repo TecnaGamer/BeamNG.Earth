@@ -860,6 +860,69 @@ class DirtTest(unittest.TestCase):
                                  "the synthetic tilt raises a road edge at most four centimetres")
 
 
+class DirtNoiseTest(unittest.TestCase):
+    """earthfast.DirtNoise (dirtnoise.rs): the dirt profile's random numbers, the same bits on every platform (numpy's
+    Generator's normal and poisson called the platform's C maths library, GitHub #1169)."""
+
+    def setUp(self):
+        import fast
+        fast.require(470, "DirtNoise")
+        self.ef = fast._ef
+
+    def test_splitmix64_reference(self):
+        # Vigna's splitmix64.c, seed 1234567: first output 6457827717110365317; a uniform is its top 53 bits / 2^53
+        self.assertEqual(self.ef.DirtNoise(1234567).uniform(0.0, 1.0), (6457827717110365317 >> 11) / 2.0 ** 53)
+
+    def test_pinned_bits(self):
+        bits = lambda a: [float(v).hex() for v in np.atleast_1d(a)]
+        r = self.ef.DirtNoise(42)
+        got = (bits(r.uniform(3.0, 6.0)), bits(r.normals(3)), r.poisson(5.0), r.poisson(80.0),
+               bits(r.uniforms(-1.0, 1.0, 2)), r.poisson(0.3))
+        self.assertEqual(got, PINNED_DIRT_NOISE)
+
+    def test_the_draws_have_their_moments(self):
+        r = self.ef.DirtNoise(7)
+        x = r.normals(200_000)
+        self.assertLess(abs(float(x.mean())), 0.01)
+        self.assertLess(abs(float(x.var()) - 1.0), 0.015)
+        self.assertLessEqual(float(np.abs(x).max()), 6.0)
+        u = r.uniforms(2.0, 5.0, 100_000)
+        self.assertGreaterEqual(float(u.min()), 2.0)
+        self.assertLess(float(u.max()), 5.0)
+        self.assertLess(abs(float(u.mean()) - 3.5), 0.02)
+        for lam in (0.3, 1.0, 4.0, 31.0, 33.0, 95.0, 400.0):    # (chunks of at most 32: 33 is the first split)
+            k = np.array([r.poisson(lam) for _ in range(20_000)], np.float64)
+            self.assertLess(abs(float(k.mean()) - lam), 4.0 * math.sqrt(lam / len(k)), lam)
+            self.assertLess(abs(float(k.var()) / lam - 1.0), 0.06, lam)
+        self.assertEqual(r.poisson(0.0), 0)
+        with self.assertRaises(ValueError):
+            r.poisson(float("nan"))
+        with self.assertRaises(ValueError):
+            r.uniform(1.0, float("inf"))
+
+    def test_the_dirt_profile_draws_no_numpy_randoms(self):
+        import inspect
+        for fn in (grading.dirt_bumps, grading.dirt_bank):
+            self.assertNotIn("np.random", inspect.getsource(fn), fn.__name__)
+
+    def test_the_damage_is_pinned(self):
+        # the whole profile for one road, both switches on: a moved draw (another stream order, a platform's maths)
+        # changes these bits
+        xy = np.stack([np.arange(300, dtype=np.float64) * 2.0 + 1234.5, np.full(300, -877.25)], axis=1)
+        sp = roads.Spec(3.5, "dirt", False, "track")
+        with unittest.mock.patch.object(grading, "DIRT_ROUGH", 1.0), \
+                unittest.mock.patch.object(grading, "DIRT_BANK_M", 0.015):
+            b = grading.dirt_bumps(xy, sp, len(xy))
+            lean = grading.dirt_bank(xy, sp)
+        import hashlib
+        self.assertEqual(hashlib.sha1(b.tobytes() + lean.tobytes()).hexdigest()[:16], PINNED_DIRT_PROFILE)
+
+
+PINNED_DIRT_NOISE = (["0x1.4e61659ca3f09p+2"], ["-0x1.1f4f328577338p+0", "-0x1.cfc1194c04938p-1", "0x1.94d6e0146acf0p+0"],
+                     4, 79, ["-0x1.37fba1759aee4p-1", "-0x1.92d6b49cfcc7cp-1"], 0)
+PINNED_DIRT_PROFILE = "3a1ebc7c11dd161a"
+
+
 class GraderTest(unittest.TestCase):
     def setUp(self):
         # (no measured road heights' provider: a test that made a Server (test_areas, test_fargeo) left one set, and
@@ -1014,7 +1077,7 @@ class ChainTest(unittest.TestCase):
         coff = np.array([0, 2, 4, 6, 8], np.int64)
 
         def ext(roads, cls=(1, 1, 1, 1), reach=50.0):
-            pts, off = fast._ef.chain_extensions(
+            pts, off, _which = fast._ef.chain_extensions(
                 cxy, coff, np.array(cls, np.int64), np.array(roads, np.int64), np.array([[0.0, 0.0]]),
                 np.array([[1.0, 0.0]]), np.array([1], np.int64), np.array([7], np.int64), np.array([reach]),
                 1.0, 35.0, 10.0)
@@ -1635,3 +1698,60 @@ class ContinuationHoldTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BumpsOffRoadSidesTest(unittest.TestCase):
+    """terrain_bumps with a grader: none within BUMP_CLEAR_M of a built road's core (a median's barrier stood module by
+    module on them, jagged: I-40, the user's report 2026-11-16), fading in past it without a ledge, the same value
+    however the points are asked (a block's grid, a few scattered points), and as before far from the roads."""
+
+    def setUp(self):
+        for name, val in (("TERRAIN_BUMPS_ON", True), ("TERRAIN_ROUGH_M", 0.35)):
+            p = unittest.mock.patch.object(grading, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+        f = features([[(-400, 20), (400, 20)]], ["residential"])
+        self.g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+
+    def _across(self, ys, x=None):
+        x = np.linspace(-150.0, 150.0, 601) if x is None else x
+        X, Y = np.meshgrid(x, np.asarray(ys, np.float64))
+        la, lo, _ = FRAME.enu_to_geodetic(X.ravel(), Y.ravel(), 0.0)
+        return np.asarray(la), np.asarray(lo), X.shape
+
+    def test_none_beside_the_road_full_far_off(self):
+        half = float(max(p.half for p in self.g.plans(*self._across([20.0])[:2])))
+        la, lo, shape = self._across([20.0, 20.0 + half + 2.0, -60.0, 120.0])
+        got = np.asarray(grading.terrain_bumps(la, lo, self.g)).reshape(shape)
+        plain = np.asarray(grading.terrain_bumps(la, lo)).reshape(shape)
+        self.assertEqual(float(np.abs(got[:2]).max()), 0.0, "on the road and just past its core: no bumps")
+        self.assertGreater(float(plain[:2].std()), 0.1, "(there were bumps there before)")
+        self.assertTrue(np.array_equal(got[2:], plain[2:]), "far off the road: the bumps as before")
+
+    def test_fades_in_without_a_ledge(self):
+        x = np.linspace(-50.0, 50.0, 21)
+        ys = np.arange(20.0, 60.0, 0.25)
+        la, lo, shape = self._across(ys, x)
+        got = np.asarray(grading.terrain_bumps(la, lo, self.g)).reshape(shape)
+        plain = np.asarray(grading.terrain_bumps(la, lo)).reshape(shape)
+        steepest = float(np.abs(np.diff(plain, axis=0)).max())
+        self.assertLessEqual(float(np.abs(np.diff(got, axis=0)).max()), 1.2 * steepest,
+                             "no steeper than the bumps themselves across the band's edge (no ledge)")
+        self.assertEqual(float(np.abs(got[ys <= 30.0]).max()), 0.0, "smooth well past the core")
+        self.assertGreater(float(got[ys >= 50.0].std()), 0.25, "full past the band")
+
+    def test_same_value_however_asked(self):
+        la, lo, _ = self._across(np.arange(10.0, 50.0, 1.0))
+        grid = np.asarray(grading.terrain_bumps(la, lo, self.g))
+        pick = np.arange(0, len(la), 997)
+        lone = np.asarray(grading.terrain_bumps(la[pick], lo[pick], self.g))
+        self.assertTrue(np.array_equal(grid[pick], lone))
+        one = grading.terrain_bumps(la[pick[3]], lo[pick[3]], self.g)
+        self.assertEqual(float(one), float(grid[pick[3]]))
+
+    def test_dirt_roads_keep_them(self):
+        f = features([[(-400, 20), (400, 20)]], ["track"])
+        g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+        la, lo, _ = self._across([24.0])
+        self.assertTrue(np.array_equal(np.asarray(grading.terrain_bumps(la, lo, g)),
+                                       np.asarray(grading.terrain_bumps(la, lo))))

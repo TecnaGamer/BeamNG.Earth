@@ -13,6 +13,8 @@ import os
 import struct
 import weakref
 
+import fast
+
 HEADER = struct.Struct("<I")
 MAX_FRAME = 16 * 1024 * 1024
 # the game connection in Rust (earthfast.Host) instead of asyncio's: off by default until proven (the Rust port's
@@ -26,6 +28,7 @@ RECORD = os.environ.get("BNGE_HOST_RECORD") or None
 RECORD_OUT = os.environ.get("BNGE_HOST_RECORD_OUT") == "1"
 HOST_VERSION = 371          # the earthfast with Host / Wire (the pose merge, the recorder, the read flow control)
 log = logging.getLogger("earthd.host")
+ef = fast.native(533, "the messages' JSON (protocol.encode)")
 
 
 class ProtocolError(Exception):
@@ -70,17 +73,10 @@ class RawJson:
 
 
 def encode(msg):
-    # real UTF-8, not \u escapes: the game's jsonDecode leaves those as text ("Provence-Alpes-Cu00f4te d'Azur" in the status
-    # bar, 2026-10-15)
-    raw = [k for k, v in msg.items() if type(v) is RawJson]
-    if raw:                 # (values already encoded: after the rest, as they are)
-        rest = {k: v for k, v in msg.items() if type(v) is not RawJson}
-        head = json.dumps(rest, separators=(",", ":"), ensure_ascii=False)
-        body = ",".join(json.dumps(k, ensure_ascii=False) + ":" + msg[k].text for k in raw)
-        payload = (head[:-1] + ("," if rest else "") + body + "}").encode("utf-8")
-    else:
-        payload = json.dumps(msg, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    return HEADER.pack(len(payload)) + payload
+    """A message's frame: its JSON as json.dumps(separators=(",", ":"), ensure_ascii=False) writes it (real UTF-8, not
+    \\u escapes, which the game's jsonDecode left as text, 2026-10-15), RawJson values after the other fields as they
+    are. Made in Rust (pyjson.rs, the Rust port's phase 2a)."""
+    return ef.encode_frame(msg, RawJson)
 
 
 def decode_payload(payload):

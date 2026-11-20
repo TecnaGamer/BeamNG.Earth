@@ -366,7 +366,8 @@
     "lon1": {"type": "num"},
     "bearing": {"type": "num", "optional": true, "doc": "the GPS (routing.py); bearing: the car's heading, the route starts that way"},
     "download": {"type": "str", "optional": true, "doc": "the \"Download along route\" setting: off / ahead / route (route_download)"},
-    "via": {"type": "list", "optional": true, "doc": "[[lat, lon], ...] waypoints on the way (routing.MAX_VIA; GitHub #935)"}
+    "via": {"type": "list", "optional": true, "doc": "[[lat, lon], ...] waypoints on the way (routing.MAX_VIA; GitHub #935)"},
+    "avoid": {"type": "bool", "optional": true, "doc": "the \"GPS: avoid highways\" setting (routing.plan avoid_highways; PR #1263)"}
    }
   },
   "where": {
@@ -517,7 +518,8 @@
   "share_info": {
    "fields": {
     "code": {"type": "str"},
-    "weight": {"type": "num", "doc": "BeamMP sharing v2: our share code for the poses"}
+    "weight": {"type": "num", "doc": "BeamMP sharing v2: our share code for the poses"},
+    "overtureRelease": {"type": "str", "optional": true, "doc": "2026-11-18: this server's Overture release: the poses carry it (rel), the plugin passes it in bngeAnchors, players of another release are told (mpsession.releaseNote)"}
    }
   },
   "share_out": {
@@ -595,7 +597,8 @@
     "error": {"type": "str", "optional": true},
     "elev": {"type": ["list", "dict"], "optional": true, "doc": "OSRM; elev: the map's profile (routing.resample, dem.sample)"},
     "legs": {"type": "list", "optional": true, "doc": "with via: [[dist_m, dur_s], ...] per leg"},
-    "steps": {"type": "list", "optional": true, "doc": "OSRM maneuvers (routing.parse; the API's gpsRoute().steps)"}
+    "steps": {"type": "list", "optional": true, "doc": "OSRM maneuvers (routing.parse; the API's gpsRoute().steps)"},
+    "avoided": {"type": "bool", "optional": true, "doc": "with avoid: true Valhalla's route without motorways, false it has none (the normal route), absent: not reached"}
    }
   },
   "route_download": {
@@ -759,6 +762,7 @@
     "memoryNote": {"type": "str", "optional": true, "doc": "low-memory machines only (budget.TIER lean / emergency)"},
     "startSettings": {"type": "dict", "optional": true, "doc": "the start-time values of the settings read only at a start (srvrestart.start_view: {id: value}) and whether a supervisor starts the server again (srvrestart.ENV): the settings page's restart button"},
     "restartable": {"type": "bool", "optional": true},
+    "overtureRelease": {"type": "str", "optional": true, "doc": "2026-11-18: the Overture release this server reads (overture.effective: its supervisor's pick for the app session, overturepick.Pick); the mod pins its level's world to the live connection's and holds on another or none (releasepin.lua)"},
     "startFixed": {"type": ["list", "dict"], "optional": true, "doc": "... the ids set by hand there (never pending: srvrestart.lua)"},
     "farFormat": {"type": "str"},
     "material": {"type": "str"},

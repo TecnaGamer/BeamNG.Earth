@@ -9,7 +9,10 @@ import numpy as np
 import dnp
 
 Profile = namedtuple('Profile', 'travel ramp solid')
-DEFAULT = Profile((3.0, 8.0, .35), (1.2, 2.8, .35), .35)
+# the US default (states without their own row): lane lines 3.0 / 9.2 m and exit / drop (auxiliary) lines 1.0 / 2.8 m,
+# measured on Maryland's I-95 and I-270 aerials (real-lane-changes-exits study, 2026-11-19; MUTCD 10 / 30 ft and the
+# wide dotted 3 / 9 ft); before: 3.0 / 8.0 and 1.2 / 2.8
+DEFAULT = Profile((3.0, 9.2, .35), (1.0, 2.8, .35), .35)
 PROFILES = {
     'KY': Profile((3.5, 8.2, .3), None, .3),
     'MI': Profile((4.5, 11.5, .4), (1.5, 6.0, .35), .4),
@@ -70,7 +73,7 @@ def paint(chunks):
             a, b = max(0., start), min(s[-1], start + length)
             if b - a > 1e-5:
                 at = np.r_[a, s[(s > a) & (s < b)], b]
-                nodes = np.column_stack([np.interp(at, s, p[:, d]) for d in range(p.shape[1])])
+                nodes = np.column_stack([dnp.interp(at, s, p[:, d]) for d in range(p.shape[1])])
                 out.append(dict(base, n=nodes.tolist()))
             start += period
     return out

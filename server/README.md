@@ -680,7 +680,7 @@ cell.provenance, cell.credit_line(), cell.digest()
   kept across VERSIONs). A layer file that does not load, or a block of the wrong length, is a miss
   (rebuilt / fetched again), never a lasting error. Hot blocks stay in one in-memory LRU for the
   whole process (`rangeread.MEM_BYTES`, 64 MiB).
-- **Overture release**: pinned in `overture.RELEASE` (`2026-09-23.1`); `python3 server/mapdata.py
+- **Overture release**: pinned in `overture.RELEASE` (`2026-11-18.0`); `python3 server/mapdata.py
   --latest` prints the newest. Bump the constant to update (cells are cached per release). Once
   Overture has deleted the pinned release, uncached cells raise `overture.ReleaseGone`.
 - **CLI** (development): `python3 server/mapdata.py --cell 39.2834,-76.5934 --dump --png out.png`

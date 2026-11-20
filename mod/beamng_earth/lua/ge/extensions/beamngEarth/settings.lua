@@ -156,6 +156,7 @@ M.SCHEMA = {
   expRailTunnels = { kind = 'bool', default = false, label = 'Railway tunnels' },
   expRailCurves = { kind = 'bool', default = false, label = 'Rounded railway curves' },
   expWatertight = { kind = 'bool', default = false, label = 'Closed 3D models' },
+  expRoadRevamp = { kind = 'bool', default = false, label = 'Revamped roads' },
   expCanadaLidar = { kind = 'bool', default = false, label = 'Detailed Canadian lidar' },
   expGenGround = { kind = 'bool', default = false, label = 'Generated ground' },
   expStaleRevisit = { kind = 'bool', default = false, label = 'Show the older world while rebuilding' },
@@ -184,6 +185,7 @@ M.SCHEMA = {
   creditsVisible = { kind = 'bool', default = true, label = 'Data credits on screen' },
   creditsCorner = { kind = 'enum', default = 'bottom-left', values = credits.CORNERS, label = 'Data credits corner' },
   creditsSize = { kind = 'enum', default = 'small', values = { 'small', 'normal' }, label = 'Data credits size' },
+  mainMenuTile = { kind = 'bool', default = true, label = 'BeamNG.Earth on the main menu' },
   -- the server's download cache (server cache.py): its size cap in GB, sent on every hello and change
   -- (typed on the page since 2026-10-29, the user: "change the cache limit setting to be a text box"; 0: unlimited.
   -- The old choices '5' .. '50' read as numbers, 'unlimited' as 0: MIGRATE)
@@ -196,6 +198,8 @@ M.SCHEMA = {
   -- after a teleport the server on every CPU core and the game on two, until the new place is loaded (server
   -- cpupin.full_split, read at each teleport; the user, 2026-10-31)
   teleportPriority = { kind = 'bool', default = false, label = 'Full priority loading (joining, teleports)' },
+  autodriveOncomingPass = { kind = 'bool', default = false, label = 'Autodrive opposing-lane passing' },
+  autodriveObstacles = { kind = 'bool', default = false, label = 'Autodrive obstacle avoidance' },
   -- the most memory the world server may hold, all its processes together (server budget.py / memwatch.py; read from
   -- this file when it starts, cpupin.player_settings, and sent at once when changed: core.memorySetLimit). 'auto': a
   -- third of the RAM (at least 1.5 GB), 60 % of it on a 24 GB or bigger machine (at most 24 GB)
@@ -205,6 +209,7 @@ M.SCHEMA = {
   -- (20 km), or the whole route (up to 300 miles)
   routeDownload = { kind = 'enum', default = 'ahead', values = { 'off', 'ahead', 'route' },
     label = 'Download along the GPS route' },
+  routeAvoidHighways = { kind = 'bool', default = false, label = 'GPS: avoid highways' },     -- (GitHub #330)
   devOutlineKm = { kind = 'number', default = 3, min = 0.5, max = 20, label = 'Dev outlines radius (km)' },
   devMapKm = { kind = 'number', default = 10, min = 1, max = 80, label = 'Dev mini-map radius (km)' },
   -- not on the page (not in ORDER): the welcome version last shown (EarthWelcome.vue)
@@ -216,14 +221,14 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'terrainShadows', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'models3dmr',
+  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
-  'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
+  'creditsCorner', 'creditsSize', 'mainMenuTile', 'cacheCapGb', 'routeDownload', 'routeAvoidHighways', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
   'devMapKm',
   -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)
-  'expNlRoadSigns', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
+  'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
   'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
   'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
   'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
@@ -578,6 +583,16 @@ local function inOurLevel()
 end
 
 M.APPLY = {
+  autodriveOncomingPass = function(v)
+    if be and be.queueAllObjectLua then
+      be:queueAllObjectLua("if beamngEarth_oncomingPass and beamngEarth_oncomingPass.setEnabled then beamngEarth_oncomingPass.setEnabled(" .. tostring(v) .. ') end')
+    end
+  end,
+  autodriveObstacles = function(v)
+    if be and be.queueAllObjectLua then
+      be:queueAllObjectLua("if beamngEarth_staticObstacles and beamngEarth_staticObstacles.setEnabled then beamngEarth_staticObstacles.setEnabled(" .. tostring(v) .. ') end')
+    end
+  end,
   rebaseDistance = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRebaseDistance then core.setRebaseDistance(v) else rebase.setDistance(v) end
@@ -1284,13 +1299,15 @@ function M.mapControls(on)
       mapCtl.actionMap, mapCtl.trapHandledEvents = am, am.trapHandledEvents
       am.trapHandledEvents = true
     end
-  elseif not on and mapCtl then
-    if mapCtl.vt then mapCtl.vt.onActionEvent = mapCtl.vtOrig end
-    -- (pcall: the action map may be gone by now, a level unload)
-    if mapCtl.actionMap then pcall(function() mapCtl.actionMap.trapHandledEvents = mapCtl.trapHandledEvents end) end
-    for _, f in ipairs({ 'camMoveController', 'camMoveKey', 'zoomInOut', 'controllerZoom', 'zoom',
-        'onControllerSelect', 'onChangeUiFilter' }) do mapCtl.bm[f] = mapCtl[f] end
-    mapCtl = nil
+  elseif not on then
+    if mapCtl then
+      if mapCtl.vt then mapCtl.vt.onActionEvent = mapCtl.vtOrig end
+      -- (pcall: the action map may be gone by now, a level unload)
+      if mapCtl.actionMap then pcall(function() mapCtl.actionMap.trapHandledEvents = mapCtl.trapHandledEvents end) end
+      for _, f in ipairs({ 'camMoveController', 'camMoveKey', 'zoomInOut', 'controllerZoom', 'zoom',
+          'onControllerSelect', 'onChangeUiFilter' }) do mapCtl.bm[f] = mapCtl[f] end
+      mapCtl = nil
+    end
     pcall(popActionMap, 'BigMap')
     if filter and filter.addAction then pcall(filter.addAction, 0, 'beamngEarthMapBlocked', false) end
   end
@@ -1369,6 +1386,11 @@ end
 function M.onExtensionLoaded()
   M.load()
   M.applyAll()
+end
+
+function M.onExtensionUnloaded()
+  M.mapOpened(false)
+  M.redirectBigMap(false)
 end
 
 -- The one-time welcome (the user, 2026-10-15: "add a 1 time popup with info about this project"): shown a moment after

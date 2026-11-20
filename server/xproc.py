@@ -413,6 +413,12 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_not
                 on_wait()
         if time.monotonic() - t0 > wait_s:
             if not (live_s is not None and time.monotonic() - t0 <= live_s and _works(lock, pid) and holds_none()):
+                # (a holder writes its result before it releases: one that finished since the last look has no lock
+                # left to look fresh, and its result is there: read it, not build it again here. Windows CI,
+                # 2026-11-19: LockTest's waiter returned (None, False) in that gap)
+                got = ready()
+                if got is not None:
+                    return got, False
                 return None, False
             if not warned and time.monotonic() - t0 > LIVE_WARN_S:
                 # (alive and touching its lock, not necessarily getting on: a holder stuck alive is waited out to

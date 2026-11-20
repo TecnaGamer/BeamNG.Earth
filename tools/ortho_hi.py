@@ -5,7 +5,8 @@ roads and markings with the real ones (the user, 2026-10-28: "compare against hi
 
 SOURCE: auto (the first that covers the point and has a picture there; also the server's regional sources,
 imagery_regional.REGIONAL), md3in (Maryland 0.076 m), penn (Pennsylvania 0.15 m), virginia (0.3 m;
-0.076 m in cities), jeffco (Jefferson County CO 0.15 m), naip (USGS NAIP, ~0.6 m, the US). Sources and licences:
+0.076 m in cities), jeffco (Jefferson County CO 0.15 m), naip (USGS NAIP, ~0.6 m, the US), ottawa, de_rlp, qld, esri (Esri World Imagery,
+anywhere: the last resort, for looking only, never a game source). Sources and licences:
 docs/research/2026-10-10-us-state-imagery.md. Fetched through the server's netfetch (its limits, the project's
 User-Agent)."""
 import math
@@ -33,6 +34,18 @@ SOURCES = {
                (39.40, -105.40, 39.95, -105.05), None),
     "naip": ("export", "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer/exportImage?"
              "bbox={bbox}&bboxSR=3857&imageSR=3857&size={w},{h}&format=jpg&f=image", (18.0, -180.0, 72.0, -60.0), None),
+    # (2026-11-17, for comparing reports with the real place: open government orthophotos where the list had none)
+    "ottawa": ("export", "https://maps.ottawa.ca/arcgis/rest/services/Basemap_Imagery_2022/MapServer/export?"
+               "bbox={bbox}&bboxSR=3857&imageSR=3857&size={w},{h}&format=jpg&f=image", (44.96, -76.36, 45.54, -75.24), None),
+    "de_rlp": ("export", "https://geo4.service24.rlp.de/wms/rp_dop20.fcgi?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&"
+               "LAYERS=rp_dop20&STYLES=&CRS=EPSG:3857&BBOX={bbox}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg",
+               (48.96, 6.11, 50.95, 8.51), None),
+    "qld": ("export", "https://spatial-img.information.qld.gov.au/arcgis/rest/services/Basemaps/"
+            "LatestStateProgram_AllUsers/ImageServer/exportImage?bbox={bbox}&bboxSR=3857&imageSR=3857&size={w},{h}&"
+            "format=jpg&f=image", (-29.2, 137.9, -9.0, 153.6), None),
+    # The last resort anywhere (a developer's look at the real place only; never a game source): Esri World Imagery
+    "esri": ("xyz", "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+             (-85.0, -180.0, 85.0, 180.0), 17),
 }
 # ... and the server's regional XYZ sources (imagery_regional.REGIONAL: Switzerland, France, the Netherlands, Japan,
 # New South Wales, US states...), read at z19
@@ -42,7 +55,7 @@ for _n, _v in imagery_regional.REGIONAL.items():
     if _n not in SOURCES:           # (an "export" one: a WMS / ArcGIS export, its url takes {bbox} / {bbox4326}, {size})
         SOURCES[_n] = (_v[3], _v[0], _v[2], XYZ_MAX_ZOOM.get(_n, 19) if _v[3] == "xyz" else None)
 ORDER = ("md3in", "penn", "virginia", "jeffco") + tuple(n for n in SOURCES if n not in
-                                                        ("md3in", "penn", "virginia", "jeffco", "naip")) + ("naip",)
+                                                        ("md3in", "penn", "virginia", "jeffco", "naip", "esri")) + ("naip", "esri")
 
 
 def merc(lat, lon):

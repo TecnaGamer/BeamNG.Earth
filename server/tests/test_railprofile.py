@@ -162,6 +162,26 @@ class NodeMemoFaultTest(RailProfileTest):
         pool.shutdown()
         self.assertEqual(len(railprofile._NODES), 0)
 
+    def test_a_nodes_beds_by_line_and_centimetre(self):
+        """earthfast.rail_node_pack / RailNode.find: a point two parts of a line share has the later part's height, a
+        key a centimetre off is found, another kind or line is not, a miss is NaN."""
+        rails = [("a", "rail", "ground", np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])),
+                 ("a", "rail", "bridge", np.array([[2.0, 0.0], [3.0, 0.0]])),
+                 ("a", "rail", "ground", np.array([[2.0, 0.0], [2.5, 0.0]])),
+                 ("b", "rail", "ground", np.array([[1.0, 0.0]]))]
+        xy, off = railprofile._flat(rails)
+        z = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+        groups = {}
+        group = np.array([groups.setdefault((f, k), len(groups)) for f, _c, k, _xy in rails], np.int64)
+        node = (groups, railprofile.fast._ef.rail_node_pack(railprofile._cm(xy), z, off, group, len(groups)))
+        self.assertEqual(railprofile._points(node), 7)
+        q = railprofile._cm(np.array([[2.0, 0.0], [1.0, 0.01], [9.0, 9.0], [0.0, 0.0]]))
+        np.testing.assert_array_equal(railprofile._find(node, "a", "ground", q), [6.0, 2.0, np.nan, 1.0])
+        np.testing.assert_array_equal(railprofile._find(node, "a", "bridge", q), [4.0, np.nan, np.nan, np.nan])
+        np.testing.assert_array_equal(railprofile._find(node, "b", "ground", q), [np.nan, 8.0, np.nan, np.nan])
+        self.assertTrue(np.isnan(railprofile._find(node, "c", "ground", q)).all())
+        self.assertTrue(np.isnan(railprofile._find(railprofile._EMPTY, "a", "ground", q)).all())
+
 
 if __name__ == "__main__":
     unittest.main()

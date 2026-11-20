@@ -294,6 +294,48 @@ class TrimOverlapsTest(unittest.TestCase):
             np.testing.assert_allclose(m[1], main[0][1])
             np.testing.assert_allclose(r[0], ramp[0][0])
 
+    def crossing(self, angle_deg, dz, half=3.25):
+        """A deck along x at z 100 and another deck 1.75 m half wide crossing it at the origin, angle_deg off its way,
+        dz under it (the B 254 over a farm track's bridge at Trutzhain: 6.5 m wide, 49 degrees, 4.1 m)."""
+        x = np.arange(-30.0, 30.01, 1.0)
+        main = ((np.c_[x, np.full(len(x), half)], np.c_[x, np.full(len(x), -half)], x / 10, "m", "base",
+                 np.full(len(x), 100.0)), {"fid": "b254"})
+        a = np.radians(angle_deg)
+        s = np.arange(-30.0, 30.01, 1.0)
+        mid = np.c_[s * np.cos(a), s * np.sin(a)]
+        n = np.array([-np.sin(a), np.cos(a)])
+        track = ((mid + 1.75 * n, mid - 1.75 * n, s / 10, "m", "base", np.full(len(s), 100.0 - dz)), {"fid": "track"})
+        return main, track
+
+    def test_crossing_deck_leaves_the_carriageway_whole(self):
+        """A deck crossing over or under another one at another height is an overpass: neither is cut round the
+        crossing. Before, the B 254's deck kept a tenth of its half width there (0.65 m of 6.5 m): a hole 4 m deep across
+        both lanes the autodrive fell into at 80 km/h (50.8968, 9.2746, two survey drives)."""
+        for angle in (49.0, 90.0, 35.0):
+            main, track = self.crossing(angle, 4.1)
+            (m, _), (t, _) = roadmesh.trim_overlaps([main, track])
+            np.testing.assert_allclose(m[0], main[0][0])
+            np.testing.assert_allclose(m[1], main[0][1])
+            np.testing.assert_allclose(t[0], track[0][0])
+            np.testing.assert_allclose(t[1], track[0][1])
+
+    def test_shallow_ramp_trimmed_as_before(self):
+        """A ramp leaving its mainline at a shallow angle (within TRIM_ALONG_DEG) is cut exactly as before the angle
+        test (every overlapping piece counted: TRIM_ALONG_COS -1)."""
+        main, ramp = self.crossing(8.0, 2.4)
+        got = roadmesh.trim_overlaps([main, ramp])
+        old = roadmesh.TRIM_ALONG_COS
+        try:
+            roadmesh.TRIM_ALONG_COS = -1.0
+            before = roadmesh.trim_overlaps([main, ramp])
+        finally:
+            roadmesh.TRIM_ALONG_COS = old
+        for (r, _), (b, _) in zip(got, before):
+            np.testing.assert_array_equal(r[0], b[0])
+            np.testing.assert_array_equal(r[1], b[1])
+        width = np.hypot(*(got[0][0][0] - got[0][0][1]).T)
+        self.assertLess(width.min(), 4.0)           # (the gore: cut where the ramp's line runs under the deck's)
+
 
 class MedianGapTest(unittest.TestCase):
     """The gap from a deck's edge to another deck's across a median: beside it and outside it only (a merge on I-95 by

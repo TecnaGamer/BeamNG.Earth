@@ -376,8 +376,9 @@ class Archive:
 class Reader:
     """Overture layers per cell from the PMTiles archives (overture.Reader's query: the same Features and sources)."""
 
-    def __init__(self, raw_dir, fetcher, release=overture.RELEASE):
+    def __init__(self, raw_dir, fetcher, release=None):
         fast.require(NATIVE, "pmtiles")
+        release = release or overture.effective()
         self.root = os.path.join(raw_dir, "overture-pmtiles")
         self.fetcher, self.release = fetcher, release
         self.mirrors = Mirrors(self.root, fetcher)

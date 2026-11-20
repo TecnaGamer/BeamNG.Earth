@@ -112,7 +112,7 @@ def records(links, mains, ways, nodes):
             if station<250:continue
             projected=p[k]+t[k]*(p[k+1]-p[k]);arc=np.r_[0.,np.cumsum(lengths)]
             start=max(0.,station-1800.)
-            approach=np.vstack([[np.interp(start,arc,p[:,j]) for j in (0,1)],p[(arc>start)&(arc<station)],projected])
+            approach=np.vstack([[dnp.interp(start,arc,p[:,j]) for j in (0,1)],p[(arc>start)&(arc<station)],projected])
             right=np.array([tangent[1],-tangent[0]])
             lateral=dnp.matmul((path-point)*scale, right)
             side=next((1 if v>0 else -1 for v in lateral if abs(v)>1.),None)

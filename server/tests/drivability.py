@@ -242,7 +242,7 @@ def _resample(xy):
     if s[-1] < 3.0:
         return None
     ss = np.arange(0.0, s[-1], 1.0)
-    return np.c_[np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])]
+    return np.c_[dnp.interp(ss, s, xy[:, 0]), dnp.interp(ss, s, xy[:, 1])]
 
 
 def _inside(xy):
@@ -283,7 +283,7 @@ def _structure(surface, fid, spec, xy, z, ground):
         return None
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(centre, axis=0).T))]
-    zz = np.interp(arc, s, z)
+    zz = dnp.interp(arc, s, z)
     if surface == "bridge":
         zz = np.maximum(zz, ground(centre))
     return SimpleNamespace(surface=surface, fid=fid, spec=spec, xy=centre, z=zz)
@@ -324,7 +324,7 @@ def _every_metre(xy, z):
     between them is a slope over its length, not a ledge over one metre)."""
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     ss = np.arange(0.0, s[-1] + 1e-9, 1.0)
-    return np.c_[np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])], np.interp(ss, s, z)
+    return np.c_[dnp.interp(ss, s, xy[:, 0]), dnp.interp(ss, s, xy[:, 1])], dnp.interp(ss, s, z)
 
 
 def _measure_structure(report, st, structures, ground):

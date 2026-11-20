@@ -169,7 +169,7 @@ def switches():
         sw["BNE_BRIDGE_PROFILE"] = roads.bridge_profile_mode()
         h = hashlib.sha1()
         for k in sorted(sw):
-            h.update(f"{k}={sw[k]}".encode())
+            h.update(revisit.keyed_value(k, sw[k]).encode())
         _switches.append(h.hexdigest()[:16])
     return _switches[0]
 

@@ -224,11 +224,13 @@ BED_REACH_M = 12.0      # m round the tile its tracks are taken from
 
 def rail_obstacles(frame, cells, box):
     """[(id, half width, polyline (k, 3))] the railway tracks on the ground round a road tile box, for furniture.place:
-    a utility pole stood on the ballast and between two tracks (Kalynivka, 2026-11-05)."""
+    a utility pole stood on the ballast and between two tracks (Kalynivka, 2026-11-05), poles, signs and street trees in
+    the tracks beside Oregon's roads (the player's reports RHSE7A23, 6ECWWD96, 2026-11-18). Every level-crossing kit or
+    none: furniture.place keeps off them always. Not a tram's (in the street: its curb's lamps and trees stand by it)."""
     import railways
     out = []
-    for fid, _cls, kind, xy in railways.parts(frame, cells, box, reach=BED_REACH_M):
-        if kind == "ground" and len(xy) >= 2:
+    for fid, cls, kind, xy in railways.parts(frame, cells, box, reach=BED_REACH_M):
+        if kind == "ground" and cls != "tram" and len(xy) >= 2:
             out.append(("rail:" + str(fid), BED_KEEP_M, np.c_[xy, np.zeros(len(xy))]))
     return out
 

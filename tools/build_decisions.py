@@ -40,6 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SERVER = os.path.join(ROOT, "server")
 sys.path.insert(0, SERVER)
+import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 
 PASSES = 3
 WEEKLY_KEYS = ("rails", "lanes", "stations")      # (decisions.WEEKLY: kept in each record's versions, not the vkey)
@@ -494,6 +495,9 @@ def main():
     airports.Store(a.cache, netfetch.Fetcher()).load()
     if "BNGE_DEM_CDN" not in os.environ:
         os.environ["BNGE_DEM_CDN"] = cdn.dem_release(netfetch.Fetcher(), a.cache) or "off"
+    # (the Overture release players' apps pick, or BNGE_OVERTURE_RELEASE for a candidate: in the vkey)
+    import overturepick
+    print("Overture release", overturepick.choose_for_process(a.cache), flush=True)
     work = os.path.join(a.cache, "dec_work")
     stats = []
     for name, s, w, n, e in places:
