@@ -8,6 +8,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -43,6 +44,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -78,6 +80,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -113,6 +116,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -140,6 +144,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -168,6 +173,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -196,6 +202,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -225,6 +232,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -252,6 +260,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -280,6 +289,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -313,6 +323,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -350,6 +361,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -388,6 +400,7 @@
     "annotation": "ASPHALT",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
@@ -423,6 +436,7 @@
     "annotation": "GRAVEL",
     "translucent": true,
     "translucentZWrite": false,
+    "translucentRecvShadows": true,
     "castShadows": false,
     "Stages": [
       {
