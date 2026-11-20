@@ -1020,6 +1020,35 @@ end
 -- thousands a second while a forest loads. Every item sets the whole rotation and the position: nothing of the item
 -- before stays.
 local itemMat, itemVec, itemPos = nil, nil, nil
+
+-- Pure: the columns (x, y, z axes; 9 numbers) of an item turned by yaw (degrees counter-clockwise from +x, the
+-- server's), then tilted by pitch (its x axis this many degrees above the horizontal) and roll (its y axis): a vine
+-- group lying on the slope (server vegetation._vine_tilt, a tile of stride F_ROLL or more). Orthonormal, right-handed.
+function M.tiltBasis(yaw, pitch, roll)
+  local y, p, r = math.rad(yaw or 0), math.rad(pitch or 0), math.rad(roll or 0)
+  local cy, sy = math.cos(y), math.sin(y)
+  local fx, fy, fz = math.cos(p) * cy, math.cos(p) * sy, math.sin(p)
+  local sx, sy2, sz = -math.cos(r) * sy, math.cos(r) * cy, math.sin(r)
+  local d = sx * fx + sy2 * fy + sz * fz           -- (the side made square to the forward axis)
+  sx, sy2, sz = sx - d * fx, sy2 - d * fy, sz - d * fz
+  local l = math.sqrt(sx * sx + sy2 * sy2 + sz * sz)
+  sx, sy2, sz = sx / l, sy2 / l, sz / l
+  return fx, fy, fz, sx, sy2, sz, fy * sz - fz * sy2, fz * sx - fx * sz, fx * sy2 - fy * sx
+end
+local F_PITCH, F_ROLL = 9, 10      -- (a vegetation tile of stride 10: server vegetation.TILT_STRIDE)
+
+-- Columns c (0-2) of a basis into the item matrix, turned by a geotile's placement rotation r (nil: none).
+local function setBasis(m, r, b)
+  for c = 0, 2 do
+    local vx, vy, vz = b[1 + 3 * c], b[2 + 3 * c], b[3 + 3 * c]
+    if r then
+      vx, vy, vz = r[1] * vx + r[2] * vy + r[3] * vz, r[4] * vx + r[5] * vy + r[6] * vz, r[7] * vx + r[8] * vy + r[9] * vz
+    end
+    itemVec:set(vx, vy, vz); m:setColumn(c, itemVec)
+  end
+end
+local basis9 = { 0, 0, 0, 0, 0, 0, 0, 0, 0 }      -- (reused: no table an item)
+
 local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   local d = itemType(shape, vienna.faceSolid(group, townsigns.faceSolid(group, solid)))
   if not d then M.errors = M.errors + 1; return nil end
@@ -1041,14 +1070,15 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   if t.s >= 17 and type(f[b + 17]) == 'number' then
     -- Guardrails carry their orthonormal world-space basis; local X follows the road chord. (A geotile's: in its
     -- frame, turned by its placement's rotation.)
-    local r = t.geo and t.madePl and t.madePl.r
-    for c = 0, 2 do
-      local vx, vy, vz = f[b + 9 + 3 * c], f[b + 10 + 3 * c], f[b + 11 + 3 * c]
-      if r then
-        vx, vy, vz = r[1] * vx + r[2] * vy + r[3] * vz, r[4] * vx + r[5] * vy + r[6] * vz, r[7] * vx + r[8] * vy + r[9] * vz
-      end
-      itemVec:set(vx, vy, vz); m:setColumn(c, itemVec)
-    end
+    for j = 1, 9 do basis9[j] = f[b + 8 + j] end
+    setBasis(m, t.geo and t.madePl and t.madePl.r, basis9)
+    m:setPosition(itemPos)
+  elseif t.s >= F_ROLL and (f[b + F_PITCH] ~= 0 or f[b + F_ROLL] ~= 0) then
+    -- A vine group on the slope (its pitch and roll, server vegetation._vine_tilt): its basis from the server's yaw,
+    -- in the tile's frame (a geotile's turned by its placement, as the guardrails').
+    basis9[1], basis9[2], basis9[3], basis9[4], basis9[5], basis9[6], basis9[7], basis9[8], basis9[9] =
+      M.tiltBasis(f[b + F_YAW], f[b + F_PITCH], f[b + F_ROLL])
+    setBasis(m, t.geo and t.madePl and t.madePl.r, basis9)
     m:setPosition(itemPos)
   else
     -- Existing props use a flat yaw (counter-clockwise in server coordinates).
