@@ -739,6 +739,10 @@ class ElasticPool:
         if not self.extra_n or self.base.inflight < self.base_n or self._within_base():
             return self.base.submit(fn, *args, **kwargs)
         with self._lock:            # (the reaper stops them under it: never a submit to a pool shut down)
+            if self.extra is None and not burst_fits(self.name, self.extra_n):
+                # (nor a burst that would take the server over its memory limit: its processes as big as the base's;
+                # checked here, under the lock the reaper detaches them with)
+                return self.base.submit(fn, *args, **kwargs)
             if self.extra is None:
                 self.extra = RespawningPool(self.name, self.extra_n, *self._args, **self._kwargs)
                 self.extra_starts += 1
@@ -751,8 +755,6 @@ class ElasticPool:
         import budget
         if budget.OVER:             # (the server over its memory limit, memwatch.py: no burst processes)
             return True
-        if self.extra is None and not burst_fits(self.name, self.extra_n):
-            return True             # (nor when the burst would take it over: its processes as big as the base's)
         want = self.want
         if want is None:
             return False

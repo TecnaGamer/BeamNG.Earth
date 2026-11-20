@@ -154,7 +154,8 @@ class BasePhotoRevisitTest(unittest.TestCase):
                 base_stale=set(), base_skipped=set(), quick_futs={}, quick_early=pool, block_pools=None,
                 anchor_q=lambda a: 1 / 1024, layout=SimpleNamespace(block=1024), hm_stage={}, dem=None,
                 _revisit_base_pool=lambda: pool, _base_process=lambda lane: None,
-                _base_photo=lambda *a: calls.append(("photo", a[1:3])) or ("x", [], 0.0),
+                _base_photo=lambda *a: calls.append(("paint", a[1:3])) or ("x", [], 0.0),
+                _base_kept_photo=lambda *a: calls.append(("photo", a[1:3])) or ("x", [], 0.0),
                 _stand_in=lambda *a: calls.append(("standin", a[1:3])),
                 _make_heightmap_here=lambda anchor, cx, cy, progress, t0, q, base: calls.append(
                     ("here", base is not None and base.result()[0])) or {})
@@ -174,6 +175,7 @@ class BasePhotoRevisitTest(unittest.TestCase):
         self.assertNotIn((6, 768.0, -128.0), srv.base_skipped)
         self.assertEqual(calls[0], ("photo", (768.0, -128.0)))
         self.assertNotIn("standin", [c[0] for c in calls])
+        self.assertNotIn("paint", [c[0] for c in calls], "the revisit threads never paint")
 
     def test_off(self):
         revisit.ON = False
