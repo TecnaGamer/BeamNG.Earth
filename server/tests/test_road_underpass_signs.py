@@ -124,6 +124,9 @@ class PiersBesideLimitsTest(unittest.TestCase):
         import types
         bp = object.__new__(roads.BridgeProfiles)
         bp._ground, bp.wet = flat, None
+        # (no map cells around it: no road tunnels for the piers to keep off)
+        bp.frame = types.SimpleNamespace(enu_to_geodetic=lambda e, n, h: (np.asarray(e) * 0 + 45.0, np.asarray(n) * 0 + 7.0, h))
+        bp.cell_fn = lambda key: None
         xy = line(200.0)
         part = (types.SimpleNamespace(width=10.0), xy, np.full(len(xy), FLAT + 10.0), None)
         road = np.array([[100.0, -50.0], [100.0, 50.0]])

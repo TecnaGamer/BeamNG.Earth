@@ -655,6 +655,25 @@ def test_a_road_cut_in_lane_sections_in_one_cell_and_whole_in_its_neighbour_is_o
     assert ix.one_road(both) is both
 
 
+def test_a_deck_read_from_two_cells_with_its_line_cut_differently_is_one_deck():
+    """A part's key is its road's and the middle of its line: the copies a neighbouring cell reads of a deck (a vertex more,
+    its line a few metres longer, its width measured differently) were two decks, each the other's continuation at both ends,
+    so neither was an end of the structure on the road it lands on."""
+    a = Member(("r1", "deck", 100, 0), _line(0, 0, 200, 0, 40), "deck", "motorway", 100, 1, 7.0, None)
+    b = Member(("r1", "deck", 99, 0), _line(0, 0.5, 198, 0.5, 38), "deck", "motorway", 100, 1, 9.0, None)
+    same = Member(("r1", "deck", 100, 0), _line(0, 0, 200, 0, 40), "deck", "motorway", 100, 1, 7.0, None)
+    next_part = Member(("r1", "deck", 300, 0), _line(200, 0, 400, 0, 40), "deck", "motorway", 100, 1, 7.0, None)
+    tun = Member(("r1", "tunnel", 100, 0), _line(0, 0, 200, 0, 40), "tunnel", "motorway", 100, -1, 7.0, None)
+    other = Member(("r2", "deck", 100, 0), _line(0, 0, 200, 0, 40), "deck", "motorway", 100, 1, 7.0, None)
+    got = {id(m) for m in ix.one_road([b, a, next_part, tun, other])}
+    assert id(a) in got and id(b) not in got, "(the longer copy stays)"
+    assert id(next_part) in got, "(the next part of the road is another part)"
+    assert id(tun) in got and id(other) in got, "(a tunnel, another road's deck, are not copies)"
+    assert len(ix.one_road([same, a])) == 1, "(copies as long as each other keep one)"
+    c = Member(("r1", "deck", 101, 0), _line(0, 0, 200, 0, 40), "deck", "motorway", 100, 1, 7.0, None)
+    assert ix.one_road([c, a])[0].key == ix.one_road([a, c])[0].key == a.key, "(the first by key, whatever their order)"
+
+
 def test_the_maps_levels_order_two_structures_of_one_kind_and_a_track_as_a_road():
     def mem(kind, level, cls="rail"):
         return Member(f"{kind}{level}", _line(0, 0, 10, 0, 3), kind, cls, None, level, 2.0, None)

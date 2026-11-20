@@ -428,13 +428,14 @@ def one_road(members):
     from several cells then held the road twice, a 46 m deck and its 53 m sections a lane's width apart, and the tunnels it
     goes into twice, 21 ends where the road has 6: Vienna's A23 deck rose 2.3 m over its own ground in the world's solve
     (z 162.4) where the 300 m replay, with one copy, kept it at 160.2, its carriageway beside it at 160.2 (1.7 m step, the
-    trucks into it). A copy lying along a section of its own road, within the widths of the two, is that road's section's."""
+    trucks into it). A copy lying along a section of its own road, within the widths of the two, is that road's section's.
+    Then one_part: a deck or tunnel part twice."""
     lanes = {}
     for m in members:
         if "~lanes" in str(m.key[0] if isinstance(m.key, tuple) else m.key):
             lanes.setdefault((_road_of(m), m.kind), []).append(m)
     if not lanes:
-        return members
+        return one_part(members)
     out = []
     for m in members:
         key = str(m.key[0] if isinstance(m.key, tuple) else m.key)
@@ -444,7 +445,35 @@ def one_road(members):
                    for o in lanes[(key, m.kind)]):
                 continue
         out.append(m)
-    return out
+    return one_part(out)
+
+
+def one_part(members):
+    """members without the second copy of a deck or tunnel part. A part's key is its road's and the middle of its line, so
+    the same part read from two neighbouring cells, its line cut a vertex or a few metres differently (or its width
+    measured differently), is two members, and the system took each for a deck going on in the other: its end on the other's
+    line was a joint, no end of the structure, so it was neither held to the ground it lands on nor given the abutment
+    it has no girders over, and its floor (the ground and the girders' depth) stood under it to the very last sample,
+    metres over the hill it lands on; the joint of the carriageways it goes on from was raised with it, and the carriageways
+    beside each other came out apart in height. A part lying along another of its own road and kind, within the widths of
+    the two, from end to end, is that part's copy: the longer one stays (the first by key where they are as long)."""
+    by = {}
+    for n, m in enumerate(members):
+        if m.kind in ("deck", "tunnel") and len(m.line) >= 2:
+            by.setdefault((_road_of(m), m.kind), []).append(n)
+    drop = set()
+    for ids in by.values():
+        if len(ids) < 2:
+            continue
+        lines = {n: np.asarray(members[n].line, np.float64)[:, :2] for n in ids}
+        length = {n: float(arclen(lines[n])[-1]) for n in ids}
+        kept = []
+        for n in sorted(ids, key=lambda n: (-round(length[n], 3), str(members[n].key))):
+            if any(_near_line(lines[n], lines[o], float(members[n].half + members[o].half)).all() for o in kept):
+                drop.add(n)
+            else:
+                kept.append(n)
+    return [m for n, m in enumerate(members) if n not in drop] if drop else members
 
 
 def _end_meets(net, e, se, o, so, crossed):
