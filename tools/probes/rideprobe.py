@@ -26,10 +26,14 @@ import os
 import sys
 import time
 
-import numpy as np
+SERVER = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server"))
+if SERVER not in sys.path:
+    sys.path.insert(0, SERVER)      # (the server's modules: this probe lives in tools/probes/)
 
-import dmath
-import dnp
+import numpy as np  # noqa: E402
+
+import dmath  # noqa: E402
+import dnp  # noqa: E402
 
 RIDE_V = 70.0 * 0.44704     # m/s: 70 mph
 RIDE_H_M = 10.0             # m: the half chord (a 20 m chord, the roadcorpus probe's launch chord)

@@ -23,7 +23,7 @@ import tempfile
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server")))
 os.environ.setdefault("BNGE_LOG", "warning")
 
 import numpy as np  # noqa: E402
@@ -124,7 +124,7 @@ def pose_msg(aid, t, speed):
 def settle(c):
     """Every desired tile built and swapped in (the mod shows them all, none sent and waiting for its group): the
     steady state of a drive. Each has a server record (its texture its level's size), as a built tile has."""
-    c.sent.clear()
+    c.sent = {}
     c.shown = {c.ck(k): t.bbox for k, t in c.desired.items()}
     s = c.s
     for k, t in c.desired.items():
@@ -163,7 +163,9 @@ def watch():
         owner = importlib.import_module(mod)
         if cls:
             owner = getattr(owner, cls)
-        f = getattr(owner, name)
+        f = getattr(owner, name, None)
+        if f is None:           # (moved to Rust: earthfast.FarState)
+            continue
         st = BREAKDOWN.setdefault(name, [0, 0.0, 0])
 
         def wrap(*a, _f=f, _st=st, **kw):

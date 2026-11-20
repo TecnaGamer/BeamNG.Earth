@@ -506,15 +506,6 @@ def fork_rings(key):
     return max(1, int(math.ceil(1.25 * FORK_REACH_M / max(w, 1.0))))
 
 
-def _vertex_shares(ll):
-    """Each vertex's share of a line's length (lon / lat (k, 2)), in the line's own local metric (its first point's
-    latitude): the same whatever frame or cell it is read in."""
-    c = dmath.cos(math.radians(float(ll[0, 1])))
-    d = np.diff(ll, axis=0) * np.array([111320.0 * c, 110574.0])
-    s = np.r_[0.0, np.cumsum(dnp.hypot(d[:, 0], d[:, 1]))]
-    return s / s[-1] if s[-1] > 0 else s
-
-
 def _segment_rows(feats, i, specs, roadsmod):
     """Feature i of a roads layer as fork_records reads it, or None (no road spec, no line). Every road counts for the
     connectors' degrees (a service road at a split makes it a junction, and a walk stops there); only a paved road of
@@ -533,9 +524,11 @@ def _segment_rows(feats, i, specs, roadsmod):
     con = feats.rules.get("connectors")
     cons = []
     if con is not None:
-        shares = _vertex_shares(ll)
-        for r in con.rows(i).tolist():
-            cons.append((str(con.value[r]), int(np.argmin(np.abs(shares - float(con.start[r]))))))
+        import fast
+        fast.require(550, "connector_vertices")
+        rows = con.rows(i)
+        vertices = fast._ef.connector_vertices(ll, con.start[rows])
+        cons = [(str(con.value[r]), v) for r, v in zip(rows.tolist(), vertices)]
     arm = sp.cls in FORK_CLASSES and sp.kind == "paved"
     return {"ll": ll, "cls": FORK_CLASSES[sp.cls] if arm else 0, "link": bool(sp.link),
             "dir": int(sp.dir or 0) if sp.oneway else 0, "pave": float(sp.width),
@@ -545,10 +538,12 @@ def _segment_rows(feats, i, specs, roadsmod):
             "turn": t if isinstance(t, str) else "", "cons": cons}
 
 
-def _cell_segments(key, cell_fn, memo):
+def _cell_segments(key, cell_fn, memo, reader=None):
     """{part id: _segment_rows} of cell key's roads (memo: per cell). A part id is the segment's id and its first point
-    (a segment split at its lane tags' ways is several features of one id: lanesections)."""
-    k = str(key)
+    (a segment split at its lane tags' ways is several features of one id: lanesections). reader: another row reader
+    of _segment_rows' signature (lanegraph's), memoised apart."""
+    k = str(key) if reader is None else f"{key}|{reader.__module__}.{reader.__name__}"
+    reader = _segment_rows if reader is None else reader
     got = memo.get(k)
     if got is None:
         import roads as roadsmod
@@ -559,7 +554,7 @@ def _cell_segments(key, cell_fn, memo):
             specs = [a if a is not None else b for a, b in zip(roadsmod.road_specs(feats),
                                                                roadsmod.BridgeProfiles.specs_of(feats))]
             for i in range(len(feats)):
-                r = _segment_rows(feats, i, specs, roadsmod)
+                r = reader(feats, i, specs, roadsmod)
                 if r is not None:
                     got[f"{feats.ids[i]}|{r['ll'][0, 0]:.7f},{r['ll'][0, 1]:.7f}"] = r
         memo[k] = got
@@ -569,11 +564,33 @@ def _cell_segments(key, cell_fn, memo):
 COPY_CELLS_MAX = 16         # cells a segment's copies are looked for in at most
 
 
-def _key_of(text):
-    """A CellKey from its str ("z/x/y")."""
+def _segments_round(key, cell_fn, memo, rings, cell_segments, read_cells=None, indexed=False):
+    """All parts of each segment from its longest copy, breaking ties by cell name.
+    read_cells receives the full input window, including cells consulted for distant copies."""
+    import fast
     import mapcells
-    z, x, y = (int(v) for v in str(text).split("/"))
-    return mapcells.CellKey(z, x, y)
+    fast.require(550, "SegmentWindow")
+
+    def read(k):
+        ck = (k, cell_segments)
+        if ck not in memo:
+            if indexed:
+                memo[ck] = cell_segments(k, cell_fn, memo)
+            else:
+                parts = cell_segments(k, cell_fn, memo)
+                index = fast._ef.SegmentCell(k.z, list(parts), [r["ll"] for r in parts.values()], COPY_CELLS_MAX)
+                memo[ck] = parts, index
+        return memo[ck]
+
+    ring = [mapcells.CellKey(key.z, (key.x + dx) % key.n, key.y + dy)
+            for dy in range(-rings, rings + 1) for dx in range(-rings, rings + 1) if 0 <= key.y + dy < key.n]
+    indices = {str(k): read(k)[1] for k in ring}
+    window = fast._ef.SegmentWindow(indices, COPY_CELLS_MAX)
+    keys = [mapcells.parse(c) for c in window.cells]
+    if read_cells is not None:
+        read_cells.extend(keys)
+    copies = {str(k): read(k) for k in keys}
+    return {pid: copies[c][0][pid] for c, pid in window.choose({c: pair[1] for c, pair in copies.items()})}
 
 
 def cell_forks(key, cell_fn, memo=None):
@@ -583,38 +600,9 @@ def cell_forks(key, cell_fn, memo=None):
     import json
     import fast
     import geodesy
-    import mapcells
     fast.require(FORK_VERSION, "fork_records")
     memo = {} if memo is None else memo
-    rings = fork_rings(key)
-    keys = [mapcells.CellKey(key.z, (key.x + dx) % key.n, key.y + dy)
-            for dy in range(-rings, rings + 1) for dx in range(-rings, rings + 1) if 0 <= key.y + dy < key.n]
-    # every segment id's parts all from ONE copy, never parts of two copies mixed (copies of one segment may be cut
-    # differently): every cell its copies' points lie in is read (more than COPY_CELLS_MAX: the rings' only), and the
-    # copy with the most points (then the least cell) is taken: the same whichever cells were read first, in any order
-    found = {}
-    for k in keys:
-        for pid in _cell_segments(k, cell_fn, memo):
-            found.setdefault(pid.split("|", 1)[0], set()).add(str(k))
-    by_str = {}
-    segs = {}
-    for sid in sorted(found):
-        cells = set(found[sid])
-        for c in sorted(found[sid]):
-            for pid, r in _cell_segments(by_str.get(c) or _key_of(c), cell_fn, memo).items():
-                if pid.split("|", 1)[0] == sid:
-                    for cc in mapcells.cells_for_points(r["ll"][:, 1], r["ll"][:, 0], z=key.z):
-                        cells.add(str(cc))
-                        by_str[str(cc)] = cc
-        best = None
-        for c in (sorted(cells) if len(cells) <= COPY_CELLS_MAX else sorted(found[sid])):   # (a long one: the ring's)
-            parts = sorted((pid, r) for pid, r in _cell_segments(by_str.get(c) or _key_of(c), cell_fn, memo).items()
-                           if pid.split("|", 1)[0] == sid)
-            n = sum(len(r["ll"]) for _pid, r in parts)
-            if parts and (best is None or n > best[0]):
-                best = (n, parts)
-        for pid, r in best[1]:
-            segs[pid] = r
+    segs = _segments_round(key, cell_fn, memo, fork_rings(key), _cell_segments)
     fids = sorted(segs)
     if not fids:
         return []
@@ -784,7 +772,7 @@ def deck_sheets(parts, node=None):
 #   it to the split); anchors pinned in z and z'. Infeasible or over budget: today's heights, the status recorded.
 # Nothing built reads the result. PROFILE_STATS counts statuses and seconds; with BNE_ROADSHAPE_DEBUG=1 each record is
 # written as JSON under <cache>/debug/roadshape_profile/; PROFILE_SINKS (callables) get each record (rideprobe.py).
-PROFILE_KERNEL = 516        # earthfast.profile_members / profile_solve
+PROFILE_KERNEL = 536        # earthfast.profile_members / profile_solve (534: P3d's twins, nodes, approach clearance; 536: P3e)
 PROFILE_FORMAT = 1          # the record's JSON
 PROF_STEP_M = 2.0           # m between knots
 PROF_JOIN_M = 1.0           # m: ends this near meet (a deck's and a ground line's, two decks')
@@ -816,6 +804,14 @@ PROF_MARGIN = 0.02          # m: couplings and clearances re-checked to this
 PROF_ROUNDS = 40            # active-set rounds per attempt
 PROF_ACTIVE_TOL = 0.001     # m: a clearance short by more joins the active set ...
 PROF_RELEASE_TOL = 0.001    # ... and one its penalty holds down by more is let go (hysteresis: no cycling)
+# (P3e, earthfast 536) a deck over another along it (an overlap: one pavement) held as twins are; a twin's run of knots
+# beside the other held whole once one of them is within the twin height today (a ramp parting uphill from its
+# mainline within 2.5 m: I-95 Middle Branch, 0.56 m); solves at most; a failure lets go of every twin group holding
+# its members at once (one a solve: the attempts ran out); from half the solves on P3d's couplings alone
+PROF_TWIN_OVERLAP = 1.0
+PROF_TWIN_FLOOD = 1.0
+PROF_ATTEMPTS = 16
+PROF_DROP_ALL = 1.0
 PROFILE_SYNC = False        # (tools: solve inline, in the chain solve's thread)
 PROFILE_SINKS = []          # (tools: callables given each record)
 PROFILE_ACCEPT_SHORT = False    # (tools offline: a chain read short is solved too, its record marked "short")
@@ -846,19 +842,45 @@ def anchor_m(spec):
 # nothing pinned. Window chains (CHAIN_CELLS capped: Manhattan, Tokyo)
 # are not solved (P3's lattice cuts, later): today's. BNE_ROADSHAPE_SHADOW=1 keeps P3a's shadow (nothing built).
 PROFILE_BUILT = PROFILE and os.environ.get("BNE_ROADSHAPE_SHADOW", "") not in ("1", "on", "true")
+SURFACE_PROFILE = PROFILE_BUILT and os.environ.get("BNE_ROADSURF_V3") == "surface"
 PIN_FULL_M = 150.0          # m from an abutment along its approach the solve's change is pinned in full ...
 PIN_REACH_M = 200.0         # ... faded out to nothing here (the solve's weight toward today's is full from PROF_D1_M)
 PIN_MIN_DZ_M = 0.001        # m: an approach moved less than this nowhere is not pinned
 PIN_HALF_MAX_M = 15.0       # m: an approach's road half width (its deck's) at most
-PIN_KERNEL = 521            # earthfast.profile_pin_field
+PIN_KERNEL = 523            # earthfast.profile_pin_field (523: shares by the distance from the line, P3c)
 
 
-def _built(comp, parts, keys, decks, koff, nd, ameta, allxy, la, lo, zsol, ztoday, htoday, halves):
+PIN_FINE_M = 20.0           # m from an abutment its approach's pins are read every PIN_FINE_STEP_M (P3c) ...
+PIN_FINE_STEP_M = 0.25      # ... (the graded ground's shape there is no line between 2 m knots: it falls away at
+PIN_SHARE_DROP = 0.9        # a pin's share (profile_pin_field's) 1 at its abutment, 1 - this from PIN_REACH_M on
+PIN_END_IN_M = 0.05         # the deck end, ABUT_UNDER_GRADE) from this far inside (the deck end itself: under the deck)
+
+
+def _pin_stations(xy, two):
+    """(the knots' arcs, stations, their distance from the nearest abutment) along an approach's knots xy (P3c):
+    PIN_FINE_STEP_M apart from PIN_END_IN_M to PIN_FINE_M off each abutment end (its start; its far end too when two),
+    the knots past that."""
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+    L = float(s[-1])
+    fine = PIN_END_IN_M + PIN_FINE_STEP_M * np.arange(int(PIN_FINE_M / PIN_FINE_STEP_M) + 1, dtype=np.float64)
+    fine = fine[fine < L - PIN_END_IN_M]
+    d_of = (lambda t: np.minimum(t, L - t)) if two else (lambda t: t)
+    st = [fine, s[d_of(s) > PIN_FINE_M + 1e-9]]
+    if two:
+        st.append(L - fine)
+    t = np.unique(np.concatenate(st))
+    t = t[(t >= PIN_END_IN_M - 1e-9) & (t <= (L - PIN_END_IN_M if two else L) + 1e-9)]
+    return s, t, d_of(t)
+
+
+def _built(comp, parts, keys, decks, koff, nd, ameta, allxy, zsol, halves, frame, ground):
     """profile_chain's built outputs of a solved chain: {"deck_z": {part key: heights per vertex of its line as
-    published}, "pins": [(lat (n,), lon (n,), dz (n,), height today (n,), half width, fade (n,))], "digest": the
-    pins' sha256 (hex, 16), "knots": each deck's built heights back on its knots}. htoday: the knots' heights today
-    (geodetic, as the graded ground reads them); halves: the decks' half widths (an approach's road's: its deck's).
-    Pure."""
+    published}, "pins": [(lat (n,), lon (n,), dz (n,), height today (n,), half width, fade (n,), share (n,))],
+    "digest": the pins' sha256 (hex, 16), "knots": each deck's built heights back on its knots}. halves: the decks' half widths (an
+    approach's road's: its deck's). An approach's pins (P3c): at _pin_stations, today's height read there (ground(xy):
+    the store's graded ground, ENU up; geodetic in the pins, as the graded ground reads them), the solve's linear
+    between its knots. (P3b's pins were the knots, today's at the deck end read under the deck end, where the graded
+    ground falls away: a dz metres too large there, linear to the next knot: Nordschleife's 1.3-1.9 g humps.)"""
     import hashlib
     out = {}
     kept = {}
@@ -880,31 +902,51 @@ def _built(comp, parts, keys, decks, koff, nd, ameta, allxy, la, lo, zsol, ztoda
         if got is not None:
             z = out[got[0]]
             out[k] = z[::-1].copy() if got[1] else z.copy()
-    pins = []
-    h = hashlib.sha256()
+    # (the approaches' pin stations, their ground read in one call)
+    lines, pxy, poff = [], [], [0]
     for i in range(len(ameta)):
         a, b = koff[nd + i], koff[nd + i + 1]
         if b - a < 2:
+            lines.append(None)
             continue
-        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(allxy[a:b], axis=0).T))]
-        d = np.minimum(s, s[-1] - s) if int(ameta[i][3]) == 2 and int(ameta[i][2]) >= 0 else s
+        two = int(ameta[i][3]) == 2 and int(ameta[i][2]) >= 0
+        s, t, d = _pin_stations(allxy[a:b], two)
+        if len(t) < 2:
+            lines.append(None)
+            continue
+        q = np.stack([dnp.interp(t, s, allxy[a:b, 0]), dnp.interp(t, s, allxy[a:b, 1])], axis=1)
+        lines.append((d, np.asarray(dnp.interp(t, s, zsol[a:b]), np.float64), poff[-1]))
+        pxy.append(q)
+        poff.append(poff[-1] + len(q))
+    pins = []
+    h = hashlib.sha256()
+    if pxy:
+        allq = np.ascontiguousarray(np.concatenate(pxy), np.float64)
+        gz = np.asarray(ground(allq), np.float64)
+        qla, qlo, qh = (np.asarray(v, np.float64) for v in frame.enu_to_geodetic(allq[:, 0], allq[:, 1], gz))
+    for i in range(len(ameta)):
+        if lines[i] is None:
+            continue
+        d, zs, a = lines[i]
+        b = a + len(d)
         f = np.clip((PIN_REACH_M - d) / (PIN_REACH_M - PIN_FULL_M), 0.0, 1.0)
         w = f * f * (3.0 - 2.0 * f)
-        dz = zsol[a:b] - ztoday[a:b]
+        dz = zs - gz[a:b]
         if not np.isfinite(dz).all() or float(np.abs(dz * w).max()) < PIN_MIN_DZ_M:
             continue
         nz = np.flatnonzero(w > 0.0)
-        last = min(b - a, int(nz.max()) + 2) if len(nz) else 0
-        if last < 2:
+        sl = slice(max(0, int(nz.min()) - 1), min(len(d), int(nz.max()) + 2))
+        if sl.stop - sl.start < 2:
             continue
-        pla = np.round(np.asarray(la[a:a + last], np.float64), 9)
-        plo = np.round(np.asarray(lo[a:a + last], np.float64), 9)
-        pdz = np.round(dz[:last], 4)
-        ph = np.round(np.asarray(htoday[a:a + last], np.float64), 4)
-        pw = np.round(w[:last], 4)
+        pla = np.round(qla[a:b][sl], 9)
+        plo = np.round(qlo[a:b][sl], 9)
+        pdz = np.round(dz[sl], 4)
+        ph = np.round(qh[a:b][sl], 4)
+        pw = np.round(w[sl], 4)
+        psh = np.round(1.0 - PIN_SHARE_DROP * np.minimum(d[sl], PIN_REACH_M) / PIN_REACH_M, 4)
         hw = round(min(PIN_HALF_MAX_M, float(halves[int(ameta[i][0])])), 3)
-        pins.append((pla, plo, pdz, ph, hw, pw))
-        for arr in (pla, plo, pdz, ph, pw, np.array([hw])):
+        pins.append((pla, plo, pdz, ph, hw, pw, psh))
+        for arr in (pla, plo, pdz, ph, pw, np.array([hw]), psh):
             h.update(np.ascontiguousarray(arr, np.float64).tobytes())
     return {"deck_z": out, "pins": pins, "digest": h.hexdigest()[:16], "knots": back}
 
@@ -949,7 +991,7 @@ def pins_near(recs, la0, lo0, la1, lo1, pad_m):
             pla, plo = p[0], p[1]
             if (pla.max() < la0 - dla or pla.min() > la1 + dla or plo.max() < lo0 - dlo or plo.min() > lo1 + dlo):
                 continue
-            k = (pla.tobytes(), plo.tobytes(), p[2].tobytes(), p[3].tobytes(), p[4], p[5].tobytes())
+            k = (pla.tobytes(), plo.tobytes(), p[2].tobytes(), p[3].tobytes(), p[4], p[5].tobytes(), p[6].tobytes())
             out.setdefault(k, p)
     return [out[k] for k in sorted(out)]
 
@@ -1120,13 +1162,53 @@ def _flat(lines):
     return np.ascontiguousarray(xy, np.float64), [int(v) for v in off]
 
 
+def _surface_forks(store, keys, decks, dz, specs):
+    """Lane-graph forks at deck bearings in this chain's canonical frame.
+    Only members of one structural level can share the pavement up to a nose."""
+    import fast
+    import roadsurf3
+    eligible = [sp.kind == "paved" and sp.cls in roadsurf3.V3_CLASSES for sp in specs]
+    if sum(eligible) < 2:
+        return []
+    ends = np.concatenate([d[[0, -1]] for d, ok in zip(decks, eligible) if ok])
+    box = [*ends.min(axis=0), *ends.max(axis=0)]
+    groups = fast._ef.deck_surface_groups([np.c_[d, z] for d, z in zip(decks, dz)],
+                                           [float(sp.width) for sp in specs], eligible, box)
+    out, memo = [], {}
+    for group in groups:
+        if len(group) < 2:
+            continue
+        indices = {}
+        homes = set()
+        for i in group:
+            indices.setdefault(roadsurf3._base(keys[i][0]), []).append(i)
+            for x, y in decks[i][[0, -1]]:
+                homes.update(roadsurf3._cells_of(store.frame, (x - JOIN_M, y - JOIN_M, x + JOIN_M, y + JOIN_M)))
+        for home in sorted(homes):
+            graph = roadsurf3._cell_lanes(home, store.cell_fn, memo)
+            for ev, _rows, _bounds, _box, _reach in roadsurf3._projected_events(store.frame, graph):
+                if ev["kind"] not in ("diverge", "merge"):
+                    continue
+                trunk, main, branch = [indices.get(roadsurf3._base(fid), []) for fid in ev["segs"]]
+                if not main or not branch:
+                    continue
+                node, = roadsurf3._to_frame(store.frame, graph["frame"], [ev["node_xy"]])
+                reach = ev["s"]["nose"] * (0.001 if ev["kind"] == "diverge" else -0.001)
+                for a in main:
+                    for b in branch:
+                        for t in trunk or [-1]:
+                            if a != b:
+                                out.append((t, a, b, *node, max(0., reach)))
+    return sorted(set(out))
+
+
 def profile_chain(store, comp, parts, ground, reqs, short=False):
     """One chain's shadow profile record (a dict), or None (no deck). parts: {key: (spec, xy, z, lon, level)} as
     published (the level: the chain pool's)."""
     import time
     import fast
     import roads as roadsmod
-    fast.require(PROFILE_KERNEL, "profile_solve")
+    fast.require(560 if SURFACE_PROFILE else PROFILE_KERNEL, "profile_solve")
     ef = fast._ef
     keys, seen = [], set()
     for k in comp:          # (one deck kept twice under two part keys, a copy per cell: once, the first key's)
@@ -1143,6 +1225,10 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
         return None
     t0 = time.perf_counter()
     specs = [parts[k][0] for k in keys]
+    on_surface = False
+    if SURFACE_PROFILE:
+        import roadsurf3
+        on_surface = any(sp.kind == "paved" and sp.cls in roadsurf3.V3_CLASSES for sp in specs)
     decks = [np.asarray(parts[k][1], np.float64)[:, :2] for k in keys]
     dz = [np.asarray(parts[k][2], np.float64) for k in keys]
     gl = _ground_lines(store, decks)
@@ -1180,7 +1266,10 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
     nm = nd + len(ameta)
     deck = [1] * nd + [0] * len(ameta)
     depth = reqs.get("depth") if reqs else None
-    under = [float(roadsmod.crossing_clear(depth, getattr(sp, "cls", None))) for sp in specs] + [0.0] * len(ameta)
+    under = [float(roadsmod.crossing_clear(depth, getattr(sp, "cls", None))) for sp in specs]
+    # (P3d: an approach under a deck needs its own deck's clearance: the road going on from it, the solve's crossing
+    # test holds the pinned ground under the chain's decks)
+    under += [under[int(ameta[i][0])] for i in range(len(ameta))]
     level = [float(parts[k][4]) if len(parts[k]) > 4 and parts[k][4] is not None else 1.0 for k in keys]
     level += [0.0] * len(ameta)
     # (abutment bits: a deck's ends with an approach or nothing on; an approach's start, and its end at a deck)
@@ -1200,12 +1289,23 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
             jn += [m, 1, int(to) // 2, int(to) % 2, 1]
         else:
             pins += [m, 1, 2 if reach == 0 else 1]     # (an anchor: z and z'; a stop short (a junction): z)
-    floors = []
+    floors, fmeta = [], []
     if reqs and reqs.get("req"):
         lines = reqs["lines"]
         clear = float(reqs["clear"])
         idx = {k: i for i, k in enumerate(keys)}
-        for r in reqs["req"]:
+        mask = ()
+        if on_surface and reqs.get("road_crossings"):
+            gl, cr, road_z, gi = reqs["road_crossings"]
+            if gi is None:
+                gi = roadsmod.fast_crossing_ground(lines, gl)
+            mask = ef.surface_road_floors(
+                [np.c_[np.asarray(ln)[[0, -1], :2], np.asarray(parts[k][2])[[0, -1]]] for k, ln in zip(comp, lines)],
+                [np.asarray(g)[[0, -1], :2] for g in gl],
+                [(c[0], g, *c[2], z) for c, g, z in zip(cr, gi, road_z)])
+        for n, r in enumerate(reqs["req"]):
+            if n < len(mask) and not mask[n]:
+                continue
             k = comp[int(r[0])] if int(r[0]) < len(comp) else None
             if k not in idx:
                 continue
@@ -1214,19 +1314,23 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
             p = (float(dnp.interp(float(r[1]), s, ln[:, 0])), float(dnp.interp(float(r[1]), s, ln[:, 1])))
             c = float(r[3]) if len(r) > 3 and r[3] is not None else clear
             floors += [float(idx[k]), p[0], p[1], float(r[2]) + c]
+            fmeta.append((idx[k], p[0], p[1], float(r[2]), c))     # (the probes': the surface under, the clearance)
     sprm = [PROF_LAMBDA, PROF_W_G, PROF_D0_M, PROF_D1_M, PROF_EPS_W, PROF_MU, PROF_SPLIT_GAP_M, PROF_SHEET_DZ_M,
             dmath.cos(math.radians(PROF_SHEET_DEG)), PROF_SHEET_REACH_M, PROF_AT_GRADE_M, PROF_DECK_GROUND_M,
-            PROF_MAX_GRADE, PROF_GRADE_ADD, PROF_MARGIN, float(PROF_ROUNDS), PROF_ACTIVE_TOL, PROF_RELEASE_TOL]
+            PROF_MAX_GRADE, PROF_GRADE_ADD, PROF_MARGIN, float(PROF_ROUNDS), PROF_ACTIVE_TOL, PROF_RELEASE_TOL,
+            PROF_TWIN_OVERLAP, PROF_TWIN_FLOOD, float(PROF_ATTEMPTS), PROF_DROP_ALL]
+    surface = []
+    if on_surface:
+        surface = [_surface_forks(store, keys, decks, dz, specs)]
     zsol, report, tried = ef.profile_solve(allxy, koff, kz_all, np.ascontiguousarray(kg_all), deck, half + [0.0] * len(ameta),
-                                    level, under, abut, jn, pins, floors, sprm)
+                                    level, under, abut, jn, pins, floors, sprm, *surface)
     t3 = time.perf_counter()
     la, lo, _ = store.frame.enu_to_geodetic(allxy[:, 0], allxy[:, 1], 0.0)
     status = _STATUS[int(report[0])] if 0 <= int(report[0]) < len(_STATUS) else "solver"
     built = None
     if status == "solved":
-        _a, _b, htoday = store.frame.enu_to_geodetic(allxy[:, 0], allxy[:, 1], kz_all)
-        built = _built(comp, parts, keys, decks, koff, nd, ameta, allxy, la, lo, np.asarray(zsol, np.float64), kz_all,
-                       np.asarray(htoday, np.float64), half)
+        built = _built(comp, parts, keys, decks, koff, nd, ameta, allxy, np.asarray(zsol, np.float64), half,
+                       store.frame, store._ground)
     members = []
     for m in range(nm):
         a, b = koff[m], koff[m + 1]
@@ -1248,4 +1352,4 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
             "report": [round(float(v), 4) for v in report], "joins": [jn[i:i + 5] for i in range(0, len(jn), 5)],
             "pins": [pins[i:i + 3] for i in range(0, len(pins), 3)], "floors": len(floors) // 4,
             "members": members, "timing": {"members_s": t1 - t0, "sample_s": t2 - t1, "solve_s": t3 - t2},
-            "_built": built}
+            "_built": built, "_floors": fmeta}

@@ -1154,6 +1154,15 @@ M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 
     swap_begin = true, swap_end = true, swap_abort = true,
     block_base = true, terrain_patch = true, ground_ahead = true, deck_spans = true, status = true, load_progress = true, where_result = true, geocode_result = true, stations_result = true,
     route_result = true, random_place_result = true, runtime_profiler_pong = true } }
+-- Pure: may a ready block (its terrain message msg) be taken now as far as its photo goes? Detail mode: not one that came
+-- without its photo (the level's flat brown base until its block_base, which fills msg.base) while the block in use
+-- shows one (shown: terrain.base()). It is follow.decide's gate, so only until the hard commit distance: past it the
+-- block is taken anyway. The ground went brown for seconds at a time on every lap of Daytona (2026-11-19): blocks built
+-- again came without their photo and were taken at once; the block in use still had its own under the car.
+function M.photoGateOpen(msg, shown, mode)
+  if mode ~= 'detail' or shown == nil or type(msg) ~= 'table' then return true end
+  return type(msg.base) == 'string'
+end
 -- A block's refreshed base photo (block_base) waits while the car is faster than BASE_LATER_MS, and is applied once it
 -- is slower than BASE_NOW_MS, if that block is still the one in use (a later block brings its own photo)
 M.BASE_LATER_MS, M.BASE_NOW_MS = 35, 30         -- m/s (78 / 67 mph; the server skips a block's photo wait over 89 mph)
@@ -2131,7 +2140,11 @@ local function updateWorld(dt)
   local b = st.block
   -- commit gating: the far tiles of the strip the move uncovers must be live, and no coarse tile
   -- may straddle the new block (design 2.3, farfield.uncoverReady)
-  local gate = b and function(ncx, ncy) return farfield.uncoverReady(b.cx, b.cy, ncx, ncy) end
+  -- detail mode: and a block that came without its photo is not taken while the one in use shows one (M.photoGateOpen)
+  local gate = b and function(ncx, ncy)
+    local tp = st.terrainPending
+    return farfield.uncoverReady(b.cx, b.cy, ncx, ncy) and M.photoGateOpen(tp and tp.msg, terrain.base(), nearVisual)
+  end
   local fa, tx, ty, preferred = follow.decide(pl.x, pl.y, pl.vx, pl.vy, b and b.cx, b and b.cy, st.terrainPending,
     st.clock, st.terrainRetryAt, gate, st.terrainLatency)
   if fa == 'prepare' then

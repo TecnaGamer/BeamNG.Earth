@@ -37,7 +37,8 @@ byte for byte. Wall clock and memory go to --timing only. Items count only insid
 
 A measurement tool (Python is fine here); nothing in the game reads it. The scratch cache must not be the player's
 ~/.cache/beamng-earth (refused) nor link into it. tools/roadcorpus/run.py build --probe struct runs it per corpus place.
-The metric functions are pure (plain arrays in, numbers out): tests/test_structprobe.py checks them on small cases."""
+The metric functions are pure (plain arrays in, numbers out): server/tests/test_structprobe.py checks them on small
+cases."""
 import argparse
 import json
 import logging
@@ -46,7 +47,11 @@ import resource
 import sys
 import time
 
-import numpy as np
+SERVER = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server"))
+if SERVER not in sys.path:
+    sys.path.insert(0, SERVER)      # (the server's modules: this probe lives in tools/probes/)
+
+import numpy as np  # noqa: E402
 
 RASTER_M = 0.25         # m: the raster of the overlap and hole tests
 FACE_DZ = 0.3           # m: two faces this near in height are one level
@@ -61,6 +66,7 @@ SEAM_TURN_DEG = 30.0    # chunks meeting end to end run on within this (deckedge
 TWIN_STEP = 2.0         # m between the twin test's samples
 TWIN_OVER = 0.02        # m: the design's twin target
 TWIN_TOUCH_M = 0.5      # m two twins' carriageways may overlap (one deck); more is an overlap (overlap_m2's)
+TWIN_END_EPS = 1e-6     # m: a sample whose nearest point on the other deck is that deck's end is past it (P3d)
 SKEW_REACH_M = 40.0     # m along the deck from a free end to the crossing it is the end of
 SKEW_OVER = 3.0         # degrees: the design's skew target
 SKEW_NEAR_M = 1.0       # m: a crossing nearer the end than this is a road joining it, not crossed
@@ -602,6 +608,11 @@ def twin_dz(members, R, frame_ll=None):
     ang = angle_deg(pr["ua"], pr["ub"])
     dz = np.abs(pr["za"] - pr["zb"])
     ok = (pr["gap"] <= BESIDE_GAP_M) & (pr["gap"] >= -TWIN_TOUCH_M) & (ang <= BESIDE_DEG) & (dz <= BESIDE_DZ)
+    # (a sample whose nearest point on B is B's very end lies past B, not beside it: the road going on from B's end,
+    # its height some metres along the road; a 2.4 m deck continuing a 29 m one at the Nordschleife paired that one's
+    # samples 10 m from the joint with the joint itself, a 0.14 m "twin" step that was the road's grade (road revamp
+    # v2 P3d; the solve's twin rule is the same))
+    ok &= (pr["sb"] > TWIN_END_EPS) & (pr["sb"] < np.array([lengths[b] for b in pr["b"].tolist()]) - TWIN_END_EPS)
     pairs = {}
     for k in np.flatnonzero(ok).tolist():
         a, b = int(pr["a"][k]), int(pr["b"][k])
@@ -1602,7 +1613,7 @@ def main():
                     help="RS S2b: check chain discovery's fixpoint property here (BNE_DECK_STRUCT=shadow) with SEEDS "
                          "random orders per part and two full solves; JSON to --json; exit 1 when it fails")
     a = ap.parse_args()
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = SERVER
     if a.server:
         srv = os.path.realpath(a.server)
         sys.path[:] = [srv] + [p for p in sys.path if os.path.realpath(p or ".") != here]

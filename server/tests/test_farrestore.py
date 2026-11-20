@@ -186,6 +186,55 @@ class FarRestoreTest(unittest.TestCase):
         self.assertIsNone(revisit.load(self.cache, "fartex", "t2"))
         self.assertEqual(earthd.kept_pending(revisit.load(self.cache, "fartex", "t3")[1]), set())
 
+    def test_restore_pipeline_first_miss_and_chunk_publication(self):
+        """Find at most one chunk ahead. A cold first chunk releases the entire remaining queue."""
+        import types
+        from concurrent.futures import Future
+        from unittest import mock
+        import earthd
+
+        srv = earthd.Server(self.root, self.cache, cells=64, imagery=None)
+        self.addCleanup(srv.tile_pool.shutdown)
+        self.addCleanup(srv.hm_pool.shutdown)
+        srv.imagery = types.SimpleNamespace(chain=[], leaf_on=True, season_mode="auto")
+        srv.fin_name_len = lambda: len(self.NAME)
+        srv.tile_tex_px = lambda anchor, tile: self.PX
+        anchor = types.SimpleNamespace(id=7, lat=LAT0, lon=LON0, zooms=[14, 13])
+        tiles = [ff.Tile(1, i, 0) for i in range(6)]
+        loc, sides = self.keep()
+        hits = set()
+        calls, published = [], []
+
+        def submit(fn, aid, lat, lon, specs):
+            keys = [spec[1].key for spec in specs]
+            calls.append(keys)
+            f = Future()
+            f.set_result([(loc, sides, self.PX) if k in hits else None for k in keys])
+            return f
+
+        srv.far_pool = types.SimpleNamespace(submit=submit)
+        loop = types.SimpleNamespace(call_soon_threadsafe=lambda cb, keys, infos: published.append((keys, infos)))
+        with mock.patch.object(farrestore, "FIRST_CHUNK", 2), mock.patch.object(farrestore, "CHUNK", 3):
+            srv.restore_far(anchor, tiles, loop)
+            self.assertEqual(calls, [[t.key for t in tiles[:2]]])
+            self.assertEqual([keys for keys, _ in published], [[(7, t.key) for t in batch]
+                                                              for batch in (tiles[:2], tiles[2:])])
+            self.assertFalse(any(infos for _, infos in published))
+            calls.clear()
+            published.clear()
+            hits.update(t.key for t in tiles[::2])
+            srv.restore_far(anchor, tiles, loop)
+        self.assertEqual(calls, [[t.key for t in batch] for batch in (tiles[:2], tiles[2:5], tiles[5:])])
+        records = {ck: info for _, infos in published for ck, info in infos.items()}
+        self.assertEqual(set(records), {(7, k) for k in hits})
+        for ck, info in records.items():
+            self.assertTrue(srv.matslots.owns(ck, info.material))
+            self.assertEqual(info.tex_px, self.PX)
+            self.assertEqual(Path(srv.out_dir, info.texture).read_bytes(), Path(self.tex_src).read_bytes())
+            self.assertEqual(Path(srv.out_dir, info.shape).read_bytes(),
+                             Path(srv.out_dir, srv.tile_name(*ck)).read_bytes())
+            np.testing.assert_array_equal(info.grid, np.asarray(self.built.grid, np.float32))
+
     def test_stamp_matches_write_built(self):
         plain = ff.built_shape(self.built, farrestore.placeholder(len(self.NAME)), self.PX, packed=False)
         ref = os.path.join(self.root, "ref.cdae")
