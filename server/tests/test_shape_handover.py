@@ -107,5 +107,32 @@ class RoadOverItselfTest(unittest.TestCase):
         self.assertEqual(set(modes), {"deck"})
 
 
+class EndBesideItsPieceTest(unittest.TestCase):
+    """A deck whose line runs a metre beside its solved piece takes the piece's height to its very end: its endpoint is
+    level with the piece's end, not past it (the whole distance to the end point counted the side offset as overshoot,
+    and the deck lost the solve's height for all its points, built at its own over the roads under it)."""
+
+    def test_the_end_level_with_the_pieces_end_takes_its_height(self):
+        x = np.arange(0.0, 40.1, 4.0)
+        piece = np.c_[x, np.zeros(len(x))]
+        line = np.c_[np.arange(0.0, 40.1, 2.0), np.full(21, 1.0)]       # (1 m beside it, its ends level with the piece's)
+        reg = {"road": [(piece, 10.0 + 0.1 * x, "deck")]}
+        frame = types.SimpleNamespace(enu_to_geodetic=lambda e, n, h: (e * 0 + 45.0, e * 0 + 7.0, h))
+        pl = types.SimpleNamespace(frame=frame, _shape_region=lambda home: reg)
+        z, modes = grading._Planner._shape_at(pl, line, line, "road", ("deck",))
+        self.assertTrue(np.isfinite(z).all(), z)
+        self.assertAlmostEqual(float(z[-1]), 14.0, places=6)
+
+    def test_a_point_past_the_pieces_end_is_not_its(self):
+        x = np.arange(0.0, 40.1, 4.0)
+        piece = np.c_[x, np.zeros(len(x))]
+        line = np.c_[np.arange(0.0, 44.1, 2.0), np.full(23, 1.0)]       # (its last 4 m past the piece's end)
+        reg = {"road": [(piece, 10.0 + 0.1 * x, "deck")]}
+        frame = types.SimpleNamespace(enu_to_geodetic=lambda e, n, h: (e * 0 + 45.0, e * 0 + 7.0, h))
+        pl = types.SimpleNamespace(frame=frame, _shape_region=lambda home: reg)
+        z, _m = grading._Planner._shape_at(pl, line, line, "road", ("deck",))
+        self.assertTrue(np.isnan(z[-1]) and np.isfinite(z[-3]), z[-4:])
+
+
 if __name__ == "__main__":
     unittest.main()

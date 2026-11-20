@@ -2056,6 +2056,22 @@ class ShapeHoldTest(unittest.TestCase):
         self.assertEqual(put.tolist(), [True, False, True, False, True, False, True])
         np.testing.assert_allclose(h, [11.0, 10.0, 9.0, 10.0, 12.0, 10.0, 10.0])
 
+    def test_a_road_ending_on_a_deck_takes_the_decks_height(self):
+        # a road's end onto a bridge (Plan.abut) is the deck's height: a fill floor under the plan, or a cut ceiling over
+        # it, set nothing along the road, but at its abutment end the deck's height stands whichever side it is
+        z = np.array([10.0, 10.0, 10.0, 10.0])
+        zs = np.array([9.0, 9.0, 11.0, 11.0])
+        modes = ["fill", "fill", "cut", "cut"]
+        h, put = grading.shape_heights(z, zs, modes)
+        self.assertEqual(put.tolist(), [False, False, False, False])
+        h, put = grading.shape_heights(z, zs, modes, (True, True))
+        self.assertEqual(put.tolist(), [True, False, False, True])
+        np.testing.assert_allclose(h, [9.0, 10.0, 10.0, 11.0])
+        h, put = grading.shape_heights(z, zs, modes, (False, False))
+        self.assertEqual(put.tolist(), [False, False, False, False])
+        h, put = grading.shape_heights(z, np.array([np.nan, 9.0, 11.0, np.nan]), [None, "fill", "cut", None], (True, True))
+        self.assertEqual(put.tolist(), [False, False, False, False], "no shape there: nothing to take")
+
 
 class ShapeSolvedOnceTest(unittest.TestCase):
     """The regions round a system are planned on as many threads, and each found the shapes' cache empty and solved the

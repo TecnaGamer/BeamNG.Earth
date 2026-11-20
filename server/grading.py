@@ -2684,22 +2684,28 @@ def _under_decks(xy, segs):
     return out
 
 
-def shape_heights(z, zs, modes):
+def shape_heights(z, zs, modes, ends=None):
     """(heights, set) of a plan's points z under the shapes' heights there (zs, modes: _Planner._shape_at's): a "fill"
     raises a point to its embankment, a "cut" lowers it into its cut, a "set" puts it there; set: the points whose
     height is the shape's. A fill under a road above it, a cut over a road below it, set nothing: the height there is
     the passes' before the shapes, a floor or a ceiling to the road laws, not a height they hold (held, two pieces of a
     roundabout at Popoli under two cuts' ceilings 1.7-2.4 m over them kept their bases' 0.93 m step at their joint,
-    and the primary leaving there, pinned to it at 17.7 % against its 9 %, had no answer). Pure."""
+    and the primary leaving there, pinned to it at 17.7 % against its 9 %, had no answer). ends: the plan's (start, end)
+    flags of the ends that lead onto a bridge (Plan.abut): a road's end at a deck's end is the deck's height whichever
+    side of the plan it is, the shape's ramp starting from the deck. A fill floor under the plan's abutment fill left the
+    road a metre over the deck it leads onto, its trucks in the ground ahead of the deck's end. Pure."""
     z = np.asarray(z, np.float64)
     zs = np.asarray(zs, np.float64)
     m = np.array([str(v) for v in modes])
     ok = np.isfinite(zs)
     put = ok & ((m == "set") | ((m == "fill") & (zs >= z)) | ((m == "cut") & (zs <= z)))
+    if ends is not None and len(z):
+        for at, onto in ((0, ends[0]), (-1, ends[1])):
+            put[at] |= bool(onto) and bool(ok[at]) and m[at] in ("fill", "cut")
     return np.where(put, zs, z), put
 
 
-def shape_reach(xy, z, zs, modes, grade, ground):
+def shape_reach(xy, z, zs, modes, grade, ground, ends=None):
     """A plan's points z (along xy (n, 2+); its ground there: ground (n,)) under the shapes' heights there (zs, modes:
     _Planner._shape_at's), carried on at the road's grade (rise over run) past where the shapes end, across the stretch
     the plan is off its ground on that side: an embankment ("fill", "set") on down over a plan under its ground until it
@@ -2730,7 +2736,7 @@ def shape_reach(xy, z, zs, modes, grade, ground):
             lo[k] = max(lo[k], lo[k + 1] - run[k])
         if over[k]:
             hi[k] = min(hi[k], hi[k + 1] + run[k])
-    put = shape_heights(z, zs, modes)
+    put = shape_heights(z, zs, modes, ends)
     return np.where(put[1], put[0], np.minimum(np.maximum(z, lo), hi))
 
 
@@ -5264,15 +5270,24 @@ class _Planner:
             ab = b - a
             L2 = np.maximum((ab * ab).sum(1), 1e-12)
             dn, tn, j = np.empty(len(pts)), np.empty(len(pts)), np.empty(len(pts), np.int64)
+            raw = np.empty(len(pts))
             for c0 in range(0, len(pts), SHAPES_BLOCK):     # (blocks of points: a long line against a long piece)
                 q = pts[c0:c0 + SHAPES_BLOCK, None]
-                t = np.clip(((q - a) * ab).sum(2) / L2, 0.0, 1.0)
+                tr = ((q - a) * ab).sum(2) / L2
+                t = np.clip(tr, 0.0, 1.0)
                 d = dnp.hypot(*(a + t[..., None] * ab - q).transpose(2, 0, 1))
                 r = np.arange(len(d))
                 jb = np.argmin(d, axis=1)
                 dn[c0:c0 + len(d)], tn[c0:c0 + len(d)], j[c0:c0 + len(d)] = d[r, jb], t[r, jb], jb
+                raw[c0:c0 + len(d)] = tr[r, jb]
             past = ((tn <= 0.0) & (j == 0)) | ((tn >= 1.0) & (j == len(ab) - 1))
-            cand = np.flatnonzero((dn <= SHAPES_NEAR_M) & ~(past & (dn > 0.5)))   # (past the piece's end: not its)
+            # (how far a point lies past the piece's end along its last segment: a point level with the end, its line
+            # beside the piece, is at the end, however far to the side; the whole distance to the end point counted
+            # that side offset as overshoot, and a deck whose line runs a metre beside its piece lost its endpoint,
+            # and with it the solve's height for the whole deck)
+            seg = np.sqrt(L2[j])
+            over = np.where(past, np.where(raw < 0.0, -raw, raw - 1.0) * seg, 0.0)
+            cand = np.flatnonzero((dn <= SHAPES_NEAR_M) & ~(over > 0.5))   # (past the piece's end: not its)
             if not len(cand):
                 continue
             # (the piece's worst standoff over the stretch of the line round each point, where the piece is: the
@@ -5345,7 +5360,8 @@ class _Planner:
                 fid, p = plans[i]
                 xy = np.asarray(p.xy, np.float64)[:, :2]
                 zs, modes = self._shape_at(xy, xy, str(fid).split(":")[0], ("fill", "cut", "set"))
-                shaped[i] = (zs, np.array([str(v) for v in modes]), shape_heights(p.z, zs, modes)[1])
+                shaped[i] = (zs, np.array([str(v) for v in modes]),
+                             shape_heights(p.z, zs, modes, getattr(p, "abut", None))[1])
             return shaped[i]
 
         def held(i):
@@ -5517,7 +5533,7 @@ class _Planner:
             if not np.isfinite(zs).any():
                 continue
             import roadlaws
-            z = shape_reach(xy, p.z, zs, modes, roadlaws.laws(sp)[0], self._ground_line(xy))
+            z = shape_reach(xy, p.z, zs, modes, roadlaws.laws(sp)[0], self._ground_line(xy), getattr(p, "abut", None))
             if np.abs(z - np.asarray(p.z, np.float64)).max() < 1e-6:
                 continue
             np_ = Plan(p.xy, z, p.half, p.abut, p.cut, p.road_half)
