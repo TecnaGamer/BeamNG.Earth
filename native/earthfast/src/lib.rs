@@ -7438,6 +7438,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(railcrossings::rail_cut_worn, m)?)?;
     // 550: ground-road surface partitions, lane window selection and pavement coverage.
     // 552: try598 with 549 (codex-port2 rail crossings) and 550 (v3 S2b) merged
-    m.add("VERSION", 553)?;
+    m.add("VERSION", 554)?;
     Ok(())
 }
