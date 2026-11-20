@@ -7356,6 +7356,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 513: v2 P2a2 (fork_records: noses from the lanes + a fitted gore width, the separation held; at-grade slip lanes
     // flagged, no record; three more params)
     m.add_function(wrap_pyfunction!(roadshape::sheet::deck_sheets, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::lanes::lane_graph, m)?)?;
+    // 538: road surface v3 phase S1 (roadshape::lanes::lane_graph: strokes, anchored ordered lane boundaries, gore
+    // from geometry, the TaperRule table; BNE_ROADSURF_V3=shadow, nothing built reads it)
     // 514: v2 P2b (roadshape::sheet::deck_sheets: exits off bridges as one deck, BNE_ROADSHAPE=sheet)
     // 515: v2 P2c (deck_sheets: the union ends where the heights part when the edges' split fails the height tests)
     m.add_function(wrap_pyfunction!(roadshape::profile::profile_members, m)?)?;
@@ -7391,6 +7394,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 535: the full Rust port's phase 2b on try598 (534): host/farstate.rs, the far state machine (FarState;
     // far_swap_groups)
     // 537: try598 with 536 (P3e) and 535 (port2b) merged
-    m.add("VERSION", 537)?;
+    // 538: v3 S1 on try598 (537): roadshape::lanes::lane_graph
+    m.add("VERSION", 538)?;
     Ok(())
 }

@@ -17,6 +17,7 @@
 //! Phase P3b (earthfast 521, BNE_ROADSHAPE=profile): the solve built; its approach ground into the graded ground, pins.rs.
 pub mod decks;
 pub mod forks;
+pub mod lanes;
 pub mod pins;
 pub mod profile;
 pub mod sheet;

@@ -1796,6 +1796,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     import roadshape
     if roadshape.SHEET and roadshape.DEBUG:     # (v2 P2a: the cells' fork records beside the build, a debug aid only)
         roadshape.shadow_forks(cell_keys, cell_fn, _s.cache_dir)
+    import lanegraph
+    if lanegraph.SHADOW and lanegraph.DEBUG:    # (v3 S1: the cells' lane graphs beside the build, a debug aid only)
+        lanegraph.shadow_lanes(cell_keys, cell_fn, _s.cache_dir)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  sign_obstacles=sign_obstacles, sheet_marks=sheet_marks,
                                  # (the stations' made-up driveways: no sidewalk across them; nor along a square's

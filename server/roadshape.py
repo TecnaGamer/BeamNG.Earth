@@ -545,10 +545,12 @@ def _segment_rows(feats, i, specs, roadsmod):
             "turn": t if isinstance(t, str) else "", "cons": cons}
 
 
-def _cell_segments(key, cell_fn, memo):
+def _cell_segments(key, cell_fn, memo, reader=None):
     """{part id: _segment_rows} of cell key's roads (memo: per cell). A part id is the segment's id and its first point
-    (a segment split at its lane tags' ways is several features of one id: lanesections)."""
-    k = str(key)
+    (a segment split at its lane tags' ways is several features of one id: lanesections). reader: another row reader
+    of _segment_rows' signature (lanegraph's), memoised apart."""
+    k = str(key) if reader is None else f"{key}|{reader.__module__}.{reader.__name__}"
+    reader = _segment_rows if reader is None else reader
     got = memo.get(k)
     if got is None:
         import roads as roadsmod
@@ -559,7 +561,7 @@ def _cell_segments(key, cell_fn, memo):
             specs = [a if a is not None else b for a, b in zip(roadsmod.road_specs(feats),
                                                                roadsmod.BridgeProfiles.specs_of(feats))]
             for i in range(len(feats)):
-                r = _segment_rows(feats, i, specs, roadsmod)
+                r = reader(feats, i, specs, roadsmod)
                 if r is not None:
                     got[f"{feats.ids[i]}|{r['ll'][0, 0]:.7f},{r['ll'][0, 1]:.7f}"] = r
         memo[k] = got
@@ -576,17 +578,11 @@ def _key_of(text):
     return mapcells.CellKey(z, x, y)
 
 
-def cell_forks(key, cell_fn, memo=None):
-    """The fork records of the nodes homed in map cell key (earthfast.fork_records' JSON, parsed): a list sorted by
-    connector id, points in mm in the cell's frame ("frame": its centre lat / lon). cell_fn(key) -> the cell's roads
-    features. memo: {cell: segments} shared across calls (optional)."""
-    import json
-    import fast
-    import geodesy
+def _segments_round(key, cell_fn, memo, rings, cell_segments):
+    """{part id: row} of every road segment in the rings of cells round key, each segment id's parts from ONE copy
+    (cell_segments(key, cell_fn, memo): _cell_segments or another reader's)."""
     import mapcells
-    fast.require(FORK_VERSION, "fork_records")
-    memo = {} if memo is None else memo
-    rings = fork_rings(key)
+    _cell_segments = cell_segments      # noqa: N806 (the block below names it so)
     keys = [mapcells.CellKey(key.z, (key.x + dx) % key.n, key.y + dy)
             for dy in range(-rings, rings + 1) for dx in range(-rings, rings + 1) if 0 <= key.y + dy < key.n]
     # every segment id's parts all from ONE copy, never parts of two copies mixed (copies of one segment may be cut
@@ -615,6 +611,19 @@ def cell_forks(key, cell_fn, memo=None):
                 best = (n, parts)
         for pid, r in best[1]:
             segs[pid] = r
+    return segs
+
+
+def cell_forks(key, cell_fn, memo=None):
+    """The fork records of the nodes homed in map cell key (earthfast.fork_records' JSON, parsed): a list sorted by
+    connector id, points in mm in the cell's frame ("frame": its centre lat / lon). cell_fn(key) -> the cell's roads
+    features. memo: {cell: segments} shared across calls (optional)."""
+    import json
+    import fast
+    import geodesy
+    fast.require(FORK_VERSION, "fork_records")
+    memo = {} if memo is None else memo
+    segs = _segments_round(key, cell_fn, memo, fork_rings(key), _cell_segments)
     fids = sorted(segs)
     if not fids:
         return []

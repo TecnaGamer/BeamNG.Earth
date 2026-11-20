@@ -229,7 +229,7 @@ fn walk(segs: &[Seg], node_rows: &[Vec<(usize, usize)>], start: usize, g0: usize
 }
 
 /// The branch side's lanes of a turn:lanes value given to the branch alone (no through / none), from that edge.
-fn exit_lanes(turn: &str, left: bool) -> i64 {
+pub(crate) fn exit_lanes(turn: &str, left: bool) -> i64 {
     if turn.is_empty() { return 0; }
     let lanes: Vec<&str> = turn.split('|').collect();
     let want: &[&str] = if left { &["slight_left", "left", "sharp_left"] } else { &["slight_right", "right", "sharp_right"] };
@@ -245,7 +245,7 @@ fn exit_lanes(turn: &str, left: bool) -> i64 {
     k
 }
 
-fn json_str(s: &str) -> String { serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string()) }
+pub(crate) fn json_str(s: &str) -> String { serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string()) }
 
 struct Main<'a> { t: &'a Arm, m: &'a Arm }
 
