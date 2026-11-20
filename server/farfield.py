@@ -59,7 +59,6 @@ import json
 import functools
 import math
 import os
-import time
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -390,73 +389,29 @@ def out_of_view(cone, x0, y0, x1, y1, d):
 SELECT_NEED = 304      # earthfast farsel.rs (far_select_nodes with its slack, far_horizon_radius)
 
 
-def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
-           radius=RADIUS, max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131,
-           disc=False, horizon=None, forced_level=0, view=None, region=None, eye_h=0.0, cone=None):
-    """Desired tiles for a player at (px, py) (earthfast farsel.rs far_select_nodes: the quadtree's traversal; every
-    pose asks it, and in Python it was the event loop's largest share of a drive's poses).
+def _rust(name):
+    """earthfast's function of that name (a stub that raises as fast.require does when the module is older)."""
+    f = getattr(fast._ef, name, None)
+    if f is not None:
+        return f
 
-    region (global far tiles, select_global): a Region, the refined finest global tiles; the roots are then the
-    max_level nodes over it, a node outside it is dropped, one across its edge is a Piece per global tile it overlaps
-    when it does not split (only its part inside that tile), one inside it a Tile.
-
-    forced: bboxes (terrain blocks) under which everything is refined to `forced_level` (terrain mode:
-    L0; detail mode: L-1, so tile edges meet the 128 m-grid edges of a 512² block).
-    prev_refined: the nodes (L, i, j) refined last time (for the hysteresis).
-    hold: nodes whose state must not change now (they changed less than HOLD_S ago).
-    min_level: finest level (0; layout.min_level in mesh mode); kfun / radii: K(L) and the
-    min-level radii (default: the layout's K table and NEAR_RADII row; only levels >= min_level
-    count).
-    disc (horizon mode): keep the nodes whose nearest point is closer than `radius` (a disc, not
-    the square). horizon: a Horizon; beyond HORIZON_MIN it drops every node past the line-of-sight
-    horizon, with its subtree (the server passes it with disc=True and max_level HORIZON_MAX_LEVEL).
-    view: a View (screen-space LOD, used when view.tau > 0): a node whose known geometric error would pop more than
-    view.tau px on screen splits too (within view.reach x the switch distance), one whose pop is under it does not
-    split even inside the distance rule, down to one level coarser than the distance rule (View.decide; the near
-    radii, the forced boxes, the holds and the finest level's switch distance stay as they are).
-    Returns ({key: Tile}, set of refined nodes)."""
-    fast.require(SELECT_NEED, "the far field's selection")
-    kfun = kfun or layout.k
-    radii = NEAR_RADII[layout.cells] if radii is None else radii
-    ks = [float(kfun(lvl)) if lvl >= 1 else 0.0 for lvl in range(max(max_level, 0) + 1)]
-    hz = None
-    if horizon is not None:
-        hz = (float(horizon.reach), float(HORIZON_MIN), float(R_REFRACTED),
-              np.ascontiguousarray(horizon.grid.base, np.float64), HORIZON_GRID_LEVEL, HORIZON_MAX_LEVEL)
-    vw = None
-    if view is not None and view.tau > 0:
-        errs, aid = view.err, None
-        if isinstance(view.err, ErrLookup):         # (a dict looked up node by node: earthd's lod_errs)
-            errs, aid = view.err.errs, view.err.aid
-        vw = (float(view.cx), float(view.cy), float(view.dz), float(view.ppr), float(view.tau), float(view.reach),
-              float(view.h), float(view.cap), float(view.cells), errs, aid)
-    reg = (region.arr, float(GLOBAL_MIN_AREA)) if region is not None else None
-    global LAST_SLACK
-    items, refined, LAST_SLACK = fast._ef.far_select_nodes(
-        float(px), float(py), float(radius), bool(disc), int(max_level), int(min_level), int(forced_level), float(h),
-        float(eye_h), ks, [(int(m), float(r)) for m, r in radii.items()],
-        [n for n in prev_refined if len(n) == 3], [n for n in hold if len(n) == 3],
-        [tuple(float(v) for v in b) for b in forced], hz, vw, reg, [float(v) for v in cone] if cone else None)
-    out = {}
-    for lvl, i, j, qi, poly in items:
-        if qi < 0:
-            t = tile_of(f"{lvl}_{i}_{j}")
-        else:
-            t = Piece(lvl, i, j, *region.tiles[qi], tuple(poly), region.quads[qi])
-        out[t.key] = t
-    return out, set(refined)
+    def missing(*a, **kw):
+        fast.require(540, "the far field's selection")
+    return missing
 
 
-class ErrLookup:
-    """A View's err(node) over a dict {(aid, node): err} (earthd's lod_errs): select looks it up node by node in Rust,
-    without a call back into Python per node."""
-
-    def __init__(self, errs, aid):
-        self.errs, self.aid = errs, aid
-
-    def __call__(self, node):
-        return self.errs.get((self.aid, node)) if len(node) == 3 else None
-
+# The desired tiles for a player at (px, py): ({key: Tile / Piece}, the refined nodes), earthfast host/farselect.rs
+# (far_select; the traversal is farsel.rs). Arguments: forced (boxes refined to forced_level), prev_refined (the
+# hysteresis), kfun (K(L); default the layout's), h, radius, max_level, hold (nodes whose state must not change now),
+# min_level, radii (the min-level radii; default the layout's NEAR_RADII row), layout, disc (keep the nodes nearer than
+# radius), horizon (a Horizon: the line-of-sight cull), forced_level, view (a View: screen-space LOD when view.tau > 0),
+# eye_h, cone (the 3D map's view cone, 9 values); with_slack=True adds the slack (the move under which the result
+# stays the same).
+select = _rust("far_select")
+# select with the levels from GLOBAL_MIN_LEVEL up as global tiles (GTile) and the anchor's nodes (L <= 2, Tile / Piece)
+# in the refined zoom-zf tiles: select_global(frame, px, py, zf, ...) with select's arguments and anchor_nodes (False:
+# the finest global tiles are leaves, the 3D map high up); the refined nodes are (L, i, j) and ("m", z, x, y).
+select_global = _rust("far_select_global")
 
 # Load order (2026-10-16): tiles outside the camera's view cone count as VIEW_PENALTY times as far, so what is on
 # screen fills first after a teleport; the cone is half the horizontal field of view plus VIEW_MARGIN_DEG (at most
@@ -682,111 +637,6 @@ class Piece:
     def distance(self, x, y):
         x0, y0, x1, y1 = self.bbox
         return math.hypot(max(x0 - x, 0.0, x - x1), max(y0 - y, 0.0, y - y1))
-
-
-class Region:
-    """The refined tiles of the finest global zoom (far_global_select's regions): what the anchor's nodes fill."""
-
-    def __init__(self, z, regions):
-        self.tiles = [(int(z), int(x), int(y)) for x, y, _ in regions]
-        self.quads = [tuple(float(v) for v in q) for _, _, q in regions]
-        self.arr = np.ascontiguousarray(np.array(self.quads, np.float64).reshape(-1, 8))
-        xs, ys = self.arr[:, 0::2], self.arr[:, 1::2]
-        self.bbox = (float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max()))
-
-    def cover(self, x0, y0, x1, y1):
-        """None: the box lies inside the region; []: outside it; else [(index, area, polygon)] of the tiles it
-        overlaps (it crosses the region's edge)."""
-        got = fast._ef.far_box_cover(self.arr, float(x0), float(y0), float(x1), float(y1), GLOBAL_MIN_AREA)
-        a = (x1 - x0) * (y1 - y0)
-        if sum(g[1] for g in got) >= a - max(1e-7 * a, GLOBAL_MIN_AREA * (1 + len(got))):
-            return None
-        return got
-
-
-def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS, radius=RADIUS,
-                  max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131, disc=False,
-                  horizon=None, forced_level=0, view=None, anchor_nodes=True, eye_h=0.0, cone=None):
-    """select() with the levels from GLOBAL_MIN_LEVEL up as global tiles (GTile, Mercator zoom zf for level 3) and the
-    anchor's nodes (L <= 2, Tile / Piece) in the refined zoom-zf tiles. frame: the anchor's EnuFrame; the rest as
-    select(). Returns ({key: tile}, refined nodes: anchor (L, i, j) and global ("m", z, x, y))."""
-    fast.require(GLOBAL_NEED if cone is None else GLOBAL_CONE_NEED, "global far tiles")
-    kfun = kfun or layout.k
-    radii = NEAR_RADII[layout.cells] if radii is None else radii
-    gprev = [tuple(n[1:]) for n in prev_refined if len(n) == 4]
-    ghold = [tuple(n[1:]) for n in hold if len(n) == 4]
-    ks = [float(kfun(lvl)) if lvl >= 1 else 0.0 for lvl in range(max_level + 1)]
-    rmin = max([float(r) for m, r in radii.items() if m >= min_level] or [0.0])
-    hz = None
-    if horizon is not None:
-        g = horizon.grid
-        merc = getattr(g, "merc", None)
-        hz = (float(horizon.reach), float(HORIZON_MIN), float(R_REFRACTED), np.ascontiguousarray(g.base, np.float64),
-              float(g.half), float(level_size(HORIZON_GRID_LEVEL)),
-              (int(merc[0]), int(merc[1]), int(merc[2]), merc[3]) if merc is not None else None)
-    kw = {}
-    if cone is not None:
-        kw["cone"] = [float(v) for v in cone]
-    if view is not None and view.tau > 0:       # (screen-space LOD: the same rule as select's, View.decide)
-        fast.require(SSE_NEED, "screen-space LOD")
-        kw["view"] = (float(view.cx), float(view.cy), float(view.dz), float(view.ppr), float(view.tau),
-                      float(view.reach), float(view.h), float(view.cap), float(view.cells), view.gerr)
-    t0 = time.perf_counter()
-    global LAST_SLACK
-    tiles, grefined, regions, gslack = fast._ef.far_global_select(
-        float(frame.lat0), float(frame.lon0), float(px), float(py), float(radius), bool(disc), int(zf), int(max_level),
-        ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz, float(eye_h), **kw)
-    out = {}
-    memo = _gtile_memo(frame, zf)
-    for z, x, y, q, s in tiles:
-        t = memo.get((z, x, y))
-        if t is None:           # (a tile's quad and size are its anchor's alone: the same object at every pose)
-            t = memo[(z, x, y)] = GTile(int(z), int(x), int(y), GLOBAL_MIN_LEVEL + int(zf) - int(z), tuple(q),
-                                        float(s))
-        out[t.key] = t
-    refined = {("m", int(z), int(x), int(y)) for z, x, y in grefined}
-    t1 = time.perf_counter()
-    if regions and not anchor_nodes:
-        # (a camera high above the ground, the 3D map: the finest global tiles are leaves, no anchor nodes in them;
-        # those nodes, a few metres to a km, are below a pixel from there, and their Python selection took 0.25-0.37 s
-        # of the event loop at each camera move, 2026-11-07)
-        for x, y, q in regions:
-            q = tuple(float(v) for v in q)
-            e = [math.hypot(q[(2 * k + 2) % 8] - q[2 * k], q[(2 * k + 3) % 8] - q[2 * k + 1]) for k in range(4)]
-            t = GTile(int(zf), int(x), int(y), GLOBAL_MIN_LEVEL, q, float(sum(e) / 4))
-            out[t.key] = t
-            refined.discard(("m", int(zf), int(x), int(y)))
-        regions = []
-    if regions:
-        aout, aref = select(px, py, forced, {n for n in prev_refined if len(n) == 3}, kfun, h, radius,
-                            GLOBAL_MIN_LEVEL - 1, {n for n in hold if len(n) == 3}, min_level, radii, layout, disc,
-                            None, forced_level, view, region=Region(zf, regions), eye_h=eye_h, cone=cone)
-        out.update(aout)
-        refined |= aref
-        gslack = min(gslack, LAST_SLACK)
-    LAST_SLACK = gslack
-    global LAST_GLOBAL_SELECT
-    LAST_GLOBAL_SELECT = (t1 - t0, time.perf_counter() - t1, len(regions or ()), len(tiles))
-    return out, refined
-
-
-LAST_GLOBAL_SELECT = None   # (global part s, anchor part s, regions, global tiles) of the last select_global (logs)
-# The last select / select_global's slack (m): its result stays the same while the player, the radius, the eye's height
-# over the ground and the camera (the screen-space LOD's) move less than this in all, the other inputs unchanged and
-# the previous result as prev_refined (earthd Connection._far_unchanged: a pose's selection skipped only then)
-LAST_SLACK = None
-_GTILE_MEMO = {}            # (lat0, lon0, zf) -> {(z, x, y): GTile}: select_global's tiles of an anchor's world
-_GTILE_MEMO_MAX = 20000
-
-
-def _gtile_memo(frame, zf):
-    k = (float(frame.lat0), float(frame.lon0), int(zf))
-    m = _GTILE_MEMO.get(k)
-    if m is None or len(m) > _GTILE_MEMO_MAX:
-        if len(_GTILE_MEMO) >= 4:       # (the last few anchors: a rebase's previous one stays useful a while)
-            _GTILE_MEMO.pop(next(iter(_GTILE_MEMO)))
-        m = _GTILE_MEMO[k] = {}
-    return m
 
 
 def global_frame_ll(z, x, y):

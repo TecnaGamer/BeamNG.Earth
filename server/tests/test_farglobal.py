@@ -597,14 +597,14 @@ class GlobalSlackTest(unittest.TestCase):
             def sel(q, prev):
                 return ff.select(*q, forced, prev, lambda lvl: lay.k(lvl) * scale, 0.25, radius,
                                  ff.HORIZON_MAX_LEVEL if hz else ff.MAX_LEVEL, min_level=lay.min_level, layout=lay,
-                                 disc=disc, horizon=hz, eye_h=eye_h, cone=cone, view=view)
+                                 disc=disc, horizon=hz, eye_h=eye_h, cone=cone, view=view, with_slack=True)
 
             def fixed():
                 prev = set()
                 for _ in range(8):
-                    out, ref = sel(p, prev)
+                    out, ref, slack = sel(p, prev)
                     if ref == prev:
-                        return out, ref, ff.LAST_SLACK
+                        return out, ref, slack
                     prev = ref
                 return None
             got = fixed()
@@ -621,7 +621,7 @@ class GlobalSlackTest(unittest.TestCase):
                     break
                 a, r = rng.uniform(0, 6.28), slack * rng.uniform(0, 0.999)
                 q = (p[0] + r * math.cos(a), p[1] + r * math.sin(a))    # det-ok: a test's random directions
-                out2, ref2 = sel(q, ref)
+                out2, ref2, _ = sel(q, ref)
                 self.assertEqual((sorted(out2), ref2), (sorted(out), ref), f"case {t}: {r:.2f} m under {slack:.2f}")
                 n += 1
         self.assertGreater(n, 100)
