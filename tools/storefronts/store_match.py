@@ -85,6 +85,34 @@ def brand(tags):
                     return name
 
 
+def parking_frontage(coords, point, parking):
+    """Estimate a short sign panel on a wall supported by both a tenant point and parking in front."""
+    if not len(parking):
+        return None
+    scale = np.array([111320 * np.cos(np.radians(point[1])), 111132])
+    ring = (coords - point) * scale
+    edges = np.roll(ring, -1, axis=0) - ring
+    widths = np.linalg.norm(edges, axis=1)
+    along = np.clip(-np.sum(ring * edges, axis=1) / widths**2, 0, 1)
+    closest = ring + along[:, None] * edges
+    distances = np.linalg.norm(closest, axis=1)
+    first, second = distances.argsort()[:2]
+    if distances[first] > 15 or distances[second] < distances[first] + 5:
+        return None
+    axis = edges[first] / widths[first]
+    if np.sum(ring[:, 0] * edges[:, 1] - ring[:, 1] * edges[:, 0]) < 0:
+        axis = -axis
+    normal = np.array([axis[1], -axis[0]])
+    ahead = (parking - point) * scale - closest[first]
+    depth = ahead @ normal
+    if not np.any((depth > 2) & (depth < 45) & (np.abs(ahead @ axis) < 20)):
+        return None
+    half = min(6., min(along[first], 1-along[first]) * widths[first] - 1)
+    if half < 3:
+        return None
+    return point + np.array([closest[first] - half * axis, closest[first] + half * axis]) / scale
+
+
 def matches(path):
     tree = ElementTree.parse(path)
 
@@ -96,6 +124,7 @@ def matches(path):
     def point(n):
         return [float(n.get("lon")), float(n.get("lat"))]
 
+    address_roads = {}
     parking = []
     buildings = []
     units = []
@@ -103,7 +132,13 @@ def matches(path):
         refs = [n.get("ref") for n in way.findall("nd")]
         if any(ref not in nodes for ref in refs):
             continue  # Partial extracts may omit nodes outside the download boundary.
-        if tags(way).get("service") == "parking_aisle":
+        attributes = tags(way)
+        if attributes.get("name") and attributes.get("highway") in {
+            "primary", "secondary", "tertiary", "residential", "unclassified", "living_street"
+        } and len(refs) >= 2:
+            road = np.array([point(nodes[r]) for r in refs])
+            address_roads.setdefault(attributes["name"].casefold(), []).append(road)
+        if attributes.get("service") == "parking_aisle":
             parking.extend(point(nodes[r]) for r in refs)
         if len(refs) < 4 or refs[0] != refs[-1]:
             continue
@@ -130,10 +165,13 @@ def matches(path):
             units.append((way.get("id"), refs, brand(props)))
         if props.get("building") and props["building"] != "no":
             buildings.append((way.get("id"), coords, props, refs))
+    tenant_points = [(n.get("id"), name, np.array(point(n))) for n in nodes.values()
+                     if (name := brand(tags(n))) and tags(n).get("level", "0") == "0"]
+    parking = np.asarray(parking).reshape(-1, 2)
     for ident, coords, props, refs in buildings:
         lo, hi = coords.min(0), coords.max(0)
         name = brand(props)
-        # A point inside a footprint identifies a tenant, but cannot establish its frontage.
+        # Prefer a mapped tenant wall over an inferred parking-facing panel.
         exterior = {
             frozenset((a, b)): i for i, (a, b) in enumerate(itertools.pairwise(refs))
         }
@@ -163,6 +201,13 @@ def matches(path):
             if signed_area < 0:
                 span = span[::-1]
             yield unit_name, unit_id, span, None, [], None
+        if not name and not has_unit and props.get("building") == "retail":
+            for node_id, tenant, location in tenant_points:
+                if not (np.all(location > lo) and np.all(location < hi) and contains_points(coords, [location])[0]):
+                    continue
+                panel = parking_frontage(coords, location, parking)
+                if panel is not None:
+                    yield tenant, "poi_" + node_id, panel, None, [], None
         if (
             not name
             or has_unit
@@ -178,8 +223,19 @@ def matches(path):
             if tags(nodes[r]).get("entrance") in {"main", "yes"}
             and tags(nodes[r]).get("access") not in {"private", "no"}
         ]
-        targets = doors or parking
-        if not targets:
+        # When the door is unmapped, a store's addressed street identifies its public approach.
+        road_points = []
+        for road in address_roads.get(props.get("addr:street", "").casefold(), []):
+            starts = (road[:-1] - center) * scale
+            segments = np.diff(road, axis=0) * scale
+            along = np.clip(-np.sum(starts * segments, axis=1) /
+                            np.maximum(np.sum(segments**2, axis=1), 1e-12), 0, 1)
+            nearest = starts + along[:, None] * segments
+            offset = nearest[np.argmin(np.linalg.norm(nearest, axis=1))]
+            if 1 <= np.linalg.norm(offset) <= np.linalg.norm((hi - lo) * scale) / 2 + 100:
+                road_points.append(center + offset / scale)
+        targets = doors or road_points or parking
+        if len(targets) == 0:
             continue
         offset = min(
             ((target - center) * scale for target in targets), key=np.linalg.norm

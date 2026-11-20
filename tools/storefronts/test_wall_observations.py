@@ -14,7 +14,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parents[1] / "server"))
-from store_match import CHAIN_GROUPS
+from store_match import CHAIN_GROUPS, parking_frontage
 from whole_store import CHAINS, build
 
 
@@ -126,7 +126,20 @@ def test_only_observed_elevation_changes():
         assert changed[0].shape[:2] == (192, 660), name
 
 
+def test_tenant_panel_requires_clear_frontage():
+    ring = np.array([[0, 0], [.001, 0], [.001, .001], [0, .001]])
+    tenant = np.array([.0005, .00008])
+    parking = np.array([[.0005, -.0001]])
+    panel = parking_frontage(ring, tenant, parking)
+    assert panel is not None
+    np.testing.assert_allclose(panel[:, 1], 0, atol=1e-10)
+    np.testing.assert_allclose(parking_frontage(ring[::-1], tenant, parking), panel)
+    assert parking_frontage(ring, tenant, np.array([[.0005, .0005]])) is None
+    assert parking_frontage(ring, np.array([.00008, .00008]), parking) is None
+
+
 if __name__ == "__main__":
+    test_tenant_panel_requires_clear_frontage()
     test_wall_observations()
     test_only_observed_elevation_changes()
     print(
