@@ -178,6 +178,7 @@ import updates as updatesmod  # noqa: E402
 import cpupin  # noqa: E402
 import netstate as netstatemod  # noqa: E402
 import netfetch  # noqa: E402
+import fast  # noqa: E402
 import protocol  # noqa: E402
 msgs = protocol.ef  # noqa: E402  (made in Rust: far_tile, far_swap, far_remove, far_done, status, load_progress)
 import weather as weathermod  # noqa: E402
@@ -10473,76 +10474,8 @@ class Connection:
             self.pads_refresh(aid)
             self.roads_refresh(aid)
             self.prov_refresh(aid)
-        # (the 3D map's view frame high up, pose.view: no roads, trees, buildings, turbines or traffic round its target,
-        # built as round a car: none of them shows from there, and their builds held the far tiles back and stalled the
-        # event loop 2.1 s over Turin, 2026-11-07; nearer the ground they come, as what the view shows)
-        detail = not (self.map_view and self.eye_clearance() > MAP_DETAIL_EYE_M)
-        if self.s.mapdata is not None and aid == self.active and detail:
-            if getattr(self.roads, "geo", False):
-                anchor = self.s.anchors.get(aid)
-                # (the tiles the mod's deck guard slows the car for, a bridge's not in yet: built first, deckguard.lua)
-                self.roads.deck_first = deckspansmod.wait_keys(msg.get("deckWait"))
-                self.roads.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_roads_geo,
-                                   vel=self.vel, ground_busy=self.terrain_wait > 0, view=self.view_at,
-                                   foci=self.foci, frame=anchor.frame if anchor is not None else None, tree=tree)
-                # (the sign tiles stay the anchor's: each once the road geotiles under it are in)
-                ready = self.roads.ready_tiles(anchor.frame, *self.focus, roadsmod.SEND_M) if anchor is not None \
-                    else set()
-            else:
-                self.roads.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_roads_tile,
-                                   vel=self.vel, ground_busy=self.terrain_wait > 0, view=self.view_at,
-                                   foci=self.foci)
-                ready = self.roads.sent
-            self.s.osm_fuel_want(self, aid, getattr(self.roads, "car", ()))   # (OpenStreetMap's fuel stations)
-            source = getattr(self.s.mapdata, "highway_signs", None)
-            if source is not None and self.signs_on:      # (after the roads: signs only for road tiles sent)
-                self.signs.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_signs_tile,
-                                   ready, version=source.tags.known())
-        if self.turbine_geo and aid == self.active and detail:
-            anchor = self.s.anchors.get(aid)
-            if anchor is not None:
-                self.turbines.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_turbines_geo,
-                                      view=self.view_at, frame=anchor.frame)
-        if self.s.veg is not None and aid == self.active and detail:
-            anchor = self.s.anchors.get(aid)
-            if anchor is not None:                            # a teleport's cells built at once, ahead
-                la, lo, _ = anchor.frame.enu_to_geodetic(*self.focus, 0.0)
-                self.s.veg.warm_around(float(la), float(lo))
-            self.veg.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
-                             self.build_veg_geo if self.veg.geo else self.build_veg_tile,
-                             view=self.view_at, foci=[f for f in self.foci if f[3]],
-                             frame=anchor.frame if anchor is not None else None, tree=tree)
-        bld_on = not (self.map_view and self.eye_clearance() > MAP_BUILDINGS_EYE_M)
-        if self.s.buildings and aid == self.active and bld_on:
-            self.building_reach()
-            geo = self.far_geo
-            anchor = self.s.anchors.get(aid)
-            frame = anchor.frame if anchor is not None else None
-            self.bldfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
-                                self.build_far_geo("bldfar") if geo else self.s.build_far_bld_tile,
-                                view=self.view_at, frame=frame)
-            # (the packs, the skyline and the far bridges only once the place's own far field is done:
-            # far_first_pending)
-            later = not self.far_first_pending()
-            if self.bldpack is not None and later:     # (past the road geotiles' far tiles: buildings.PACK_*)
-                self.bldpack.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.build_far_geo("bldpack"),
-                                     view=self.view_at, frame=frame)
-            near_done = self.bldfar.progress()[0] >= self.bldfar.progress()[1] and (
-                self.bldpack is None or self.bldpack.progress()[0] >= self.bldpack.progress()[1])
-            if self.bldsky is not None and later and near_done:
-                # (only once the far buildings round the car are all there: the skyline is the least urgent)
-                self.bldsky.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
-                                    self.build_far_geo("bldsky") if geo else self.s.build_sky_tile,
-                                    view=self.view_at, frame=frame)
-                # (the horizon ring last, once the skyline round the car is there)
-                if self.bldhz is not None and self.bldhz.send_m > 0 \
-                        and self.bldsky.progress()[0] >= self.bldsky.progress()[1]:
-                    self.bldhz.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.build_far_geo("bldhz"),
-                                       view=self.view_at, frame=frame)
-            if self.brfar is not None and later and self.bldfar.progress()[0] >= self.bldfar.progress()[1]:
-                self.brfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
-                                   self.build_far_geo("brfar") if geo else self.s.build_far_bridge_tile,
-                                   view=self.view_at, frame=frame)
+        fast.require(551, "tracker_pose")
+        fast._ef.tracker_pose(self, aid, msg, tree, MAP_DETAIL_EYE_M, MAP_BUILDINGS_EYE_M)
         if self.s.traffic and aid == self.active and not self.map_view and self.nav_may_start(aid):
             # (centred ahead of a moving car: the minimap's roads, the AI's and the GPS's graph, ran out in front at
             # speed, a graph built round where the car was when it started; the user, 2026-11-04)
@@ -10551,14 +10484,7 @@ class Connection:
             sp = max(math.hypot(vx, vy), 1e-6)
             cx, cy = self.focus[0] + vx / sp * lead, self.focus[1] + vy / sp * lead
             self.nav.on_pose(self, aid, cx, cy, asyncio.get_running_loop(), self.s.build_navgraph)
-        if self.traffic_on and aid == self.active and not self.map_view and self.nav_may_start(aid):
-            self.distant_traffic.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_traffic_geo,
-                                         view=self.view_at, frame=self.s.anchors[aid].frame)
-            done, want = self.distant_traffic.progress()
-            if done >= want / 2:
-                self.distant_traffic_far.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
-                                                functools.partial(self.s.build_traffic_geo, far=True),
-                                                view=self.view_at, frame=self.s.anchors[aid].frame)
+        fast._ef.traffic_pose(self, aid)
         if aid == self.active:
             self.send_progress(aid)
         self.refresh_status()

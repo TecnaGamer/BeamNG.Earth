@@ -19,6 +19,7 @@ pub mod msgs;
 pub mod pyjob;
 pub mod pyjson;
 mod record;
+mod trackers;
 mod wire;
 
 use std::io::Write;
@@ -672,5 +673,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyjob::register(m)?;
     msgs::register(m)?;
     farstate::register(m)?;
+    trackers::register(m)?;
     Ok(())
 }
