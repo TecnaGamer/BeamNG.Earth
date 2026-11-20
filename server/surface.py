@@ -843,7 +843,11 @@ def enlarge(rgb, px):
     rgb = np.asarray(rgb, np.uint8)
     if rgb.shape[0] == px and rgb.shape[1] == px:
         return rgb
-    return np.asarray(Image.fromarray(rgb, "RGB").resize((px, px), Image.BILINEAR), np.uint8)
+    if rgb.shape[0] != rgb.shape[1]:
+        # Pillow 13 can do the vertical pass first on rectangular inputs; older Pillow rounded horizontally first.
+        return np.asarray(Image.fromarray(rgb, "RGB").resize((px, px), Image.BILINEAR), np.uint8)
+    fast.require(559, "photo_resize")
+    return fast._ef.photo_resize(rgb, px)
 
 
 def _square_pts(frame, x0, y0, size):
@@ -967,6 +971,12 @@ def _photo_pavement(surface, frame, x0, y0, size, widths, w, h, pending=None):
     xy = geom[0]
     px = np.c_[(xy[:, 0] - x0) * (w / size), (y0 + size - xy[:, 1]) * (h / size)]
     return roadsurf3.paint_coverage(geom, px, w, h, True)
+
+
+def far_photo_roads(size, px):
+    """Whether the road paint can change this far tile's guttered texture."""
+    import imagery
+    return roadsmod.ROADS_IN_GROUND and imagery.gutter_square(0, 0, size, px)[2] / px <= PHOTO_ROADS_MAX_TEXEL
 
 
 def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False, pending=None, pads=None):

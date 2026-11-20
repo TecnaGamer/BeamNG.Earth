@@ -80,6 +80,7 @@ mod farcontent;
 mod sidewalks;
 mod roadz;
 mod fartex;
+mod finished_tile;
 mod farglobal;
 mod farpvs;
 mod farsel;
@@ -2834,21 +2835,35 @@ fn rf_noise3(x: f64, y: f64, z: f64) -> f64 {
     out
 }
 
-/// rockface.rock: the tile photo rgb (px, px, 3) with its steep texels drawn toward rock, or None when nothing is
-/// steep. U: the tile's height grid [j, i], origin (ux0, uy0), spacing usp. steep_a / steep_b: the slopes
-/// (rise / run) of STEEP_DEG; octaves (k, 2) (scale m, weight); m_lat / m_lon: metres per degree.
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-fn rock<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, u: PyReadonlyArray2<'py, f64>, x0: f64, y0: f64,
-             size: f64, ux0: f64, uy0: f64, usp: f64, lat: f64, lon: f64, m_lat: f64, m_lon: f64, steep_a: f64,
-             steep_b: f64, octaves: PyReadonlyArray2<'py, f64>, strata_m: f64, strata_w: f64,
-             tint: (f32, f32, f32), desat: f64, darken: f64) -> Option<Bound<'py, numpy::PyArray3<u8>>> {
-    let img = rgb.as_array();
-    let u = u.as_array();
-    let oct = octaves.as_array();
-    let res = py.detach(|| {
+/// Photo origin and side in ENU, height grid origin and spacing, anchor latitude and longitude.
+type RockArea = (f64, f64, f64, f64, f64, f64, f64, f64);
+
+fn rock_core(img: numpy::ndarray::ArrayView3<u8>, u: numpy::ndarray::ArrayView2<f64>,
+             (x0, y0, size, ux0, uy0, usp, lat, lon): RockArea) -> Option<numpy::ndarray::Array3<u8>> {
+    let steep_a = 38.0_f64.to_radians().dtan();
+    let steep_b = 58.0_f64.to_radians().dtan();
+    let m_lat = 111320.0;
+    let m_lon = m_lat * lat.to_radians().dcos();
+    let oct = [(28.0, 0.55), (9.0, 0.3), (3.0, 0.15)];
+    let (strata_m, strata_w) = (7.0, 0.10);
+    let tint = (1.04f32, 1.0f32, 0.94f32);
+    let (desat, darken) = (0.7f64, 0.82f64);
     let px = img.shape()[0];
     let (ny, nx) = (u.nrows(), u.ncols());
+    // A bilinear patch's steepest gradient is bounded by its greatest edge differences.
+    // The same conservative rejection previously in rockface.rock saves a full texture pass on flat tiles.
+    if nx < 2 || ny < 2 { return None; }
+    let mut dx = 0.0f64;
+    let mut dy = 0.0f64;
+    for j in 0..ny {
+        for i in 0..nx {
+            let z = u[[j, i]];
+            if i > 0 { dx = dx.max((z - u[[j, i-1]]).abs()); }
+            if j > 0 { dy = dy.max((z - u[[j-1, i]]).abs()); }
+        }
+    }
+    let upper = ((dx.dhypot(dy) / usp - steep_a) / (steep_b - steep_a)).clamp(0.0, 1.0);
+    if upper * upper * (3.0 - 2.0 * upper) <= 0.01 { return None; }
     let t = size / px as f64;
     let c: Vec<f64> = (0..px).map(|k| (k as f64 + 0.5) * t).collect();
     let xs: Vec<f64> = c.iter().map(|v| x0 + v).collect();
@@ -2905,7 +2920,7 @@ fn rock<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, u: PyReadonlyArray
     if !any {
         return None;
     }
-    let wsum: f64 = (0..oct.nrows()).map(|o| oct[[o, 1]]).sum();
+    let wsum: f64 = oct.iter().map(|o| o.1).sum();
     let mut out = img.to_owned();
     let (one_m_desat, desat32, darken32) = ((1.0 - desat) as f32, desat as f32, darken as f32);
     let lw = (0.299f32, 0.587f32, 0.114f32);
@@ -2921,8 +2936,7 @@ fn rock<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, u: PyReadonlyArray
             let nyv = lat * m_lat + ys[j];
             let foot = t * sl.max(1.0);
             let mut n = 0.0f64;
-            for o in 0..oct.nrows() {
-                let (scale, w) = (oct[[o, 0]], oct[[o, 1]]);
+            for &(scale, w) in &oct {
                 let a = (1.0 - 1.5 * foot / scale).clamp(0.0, 1.0) * w;
                 if a > 0.0 {
                     n += a * (rf_noise3(ex / scale, nyv / scale, hs / scale) - 0.5);
@@ -2944,8 +2958,16 @@ fn rock<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, u: PyReadonlyArray
         }
     }
     Some(out)
-    });
-    res.map(|o| o.into_pyarray(py))
+}
+
+#[pyfunction]
+fn rock<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, u: PyReadonlyArray2<'py, f64>, area: RockArea)
+             -> PyResult<Option<Bound<'py, numpy::PyArray3<u8>>>> {
+    let (img, u) = (rgb.as_array(), u.as_array());
+    if img.shape()[0] != img.shape()[1] || img.shape()[2] != 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err("rock: expected a square RGB photo"));
+    }
+    Ok(py.detach(|| rock_core(img, u, area)).map(|o| o.into_pyarray(py)))
 }
 
 /// The byte of imagery._to_srgb for a float32 in [0, 1]: rint(x ** (1 / 2.2) * 255).
@@ -6721,7 +6743,14 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sidewalks::sidewalk_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(sidewalks::sidewalk_normals, m)?)?;
     m.add_function(wrap_pyfunction!(farcontent::bridge_slabs, m)?)?;
-    m.add_function(wrap_pyfunction!(fartex::tile_warp, m)?)?;
+    bc1fast::register_photo(m)?;
+    m.add_function(wrap_pyfunction!(finished_tile::read_finished_tile, m)?)?;
+    m.add_function(wrap_pyfunction!(fartex::photo_resize, m)?)?;
+    m.add_class::<fartex::PhotoCanvas>()?;
+    m.add_function(wrap_pyfunction!(fartex::photo_colour_gain, m)?)?;
+    m.add_function(wrap_pyfunction!(fartex::finish_far_photo, m)?)?;
+    m.add_function(wrap_pyfunction!(fartex::match_colours, m)?)?;
+    m.add_function(wrap_pyfunction!(fartex::cut_ground, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::core_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
@@ -7439,6 +7468,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 550: ground-road surface partitions, lane window selection and pavement coverage.
     // 552: try598 with 549 (codex-port2 rail crossings) and 550 (v3 S2b) merged
     // 556: merged
-    m.add("VERSION", 556)?;
+    m.add("VERSION", 559)?;
     Ok(())
 }

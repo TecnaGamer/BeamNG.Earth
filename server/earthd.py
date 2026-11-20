@@ -6271,7 +6271,7 @@ class Server:
         generated ground on, the near rings' cut from its squares (genground.render_far: the block's colours)."""
         genground.clear_fade()
         if isinstance(tile, farfield.GTile):
-            return self.imagery.render_merc(tile.z, tile.x, tile.y, px, pending=pending)
+            return self.imagery.far_photo(imagerymod.MercSquare(tile.z, tile.x, tile.y, px), px, pending)
         frame, x0, y0, size = self.tile_where(anchor, tile)
         sq = imagerymod.gutter_square(x0, y0, size, px)
         if genground.ON:
@@ -6280,7 +6280,7 @@ class Server:
                                        pending, getattr(self, "veg", None), level=node.level)
             if got is not None:
                 return got
-        return self.imagery.render(frame, *sq, px, pending=pending, gutter=True)
+        return self.imagery.far_photo(self.imagery.square(frame, *sq, px, gutter=True), px, pending)
 
     def make_tile(self, anchor, tile, prev=None):
         urgencymod.wait_turn()          # (a block the game waits for first: urgency.py)
@@ -6574,12 +6574,7 @@ class Server:
                             w0 = time.perf_counter()
                             built, geo = geo.result(), None
                             geo_wait = time.perf_counter() - w0
-                        rgb = self.rock_faces(anchor, tile, px, rgb, built.grid)
-                        if not is_global:
-                            rgb = self.road_faces(anchor, node, px, rgb)
-                            self.write_road_mask(anchor, node, px, texture)
-                        tex_bytes = genground.write_far_dds(os.path.join(self.out_dir, texture), rgb,
-                                                            imagerymod.FAR_SRGB)
+                        tex_bytes = self.finish_tile_texture(anchor, tile, px, rgb, built.grid, texture)
                     finally:
                         revisitmod.end(f0)
                     self.keep_texture(tk, texture, tex_bytes, used, pending, f0)
@@ -6925,6 +6920,26 @@ class Server:
             f.write(data)
         staging.replace(tmp, path)
 
+    def finish_tile_texture(self, anchor, tile, px, photo, grid, texture):
+        path = os.path.join(self.out_dir, texture)
+        if isinstance(photo, imagerymod.FarPhoto):
+            frame, x0, y0, size = self.tile_where(anchor, tile)
+            rock = rockfacemod.tile_inputs(frame, x0, y0, size, px, grid)
+            if isinstance(tile, farfield.GTile):
+                return photo.write(path, rock, imagerymod.FAR_SRGB)
+            if not surfacemod.far_photo_roads(size, px):
+                node = tile.base if isinstance(tile, farfield.Piece) else tile
+                self.write_road_mask(anchor, node, px, texture)
+                return photo.write(path, rock, imagerymod.FAR_SRGB)
+            rgb = photo.shade(rock)
+        else:
+            rgb = self.rock_faces(anchor, tile, px, photo, grid)
+        if not isinstance(tile, farfield.GTile):
+            node = tile.base if isinstance(tile, farfield.Piece) else tile
+            rgb = self.road_faces(anchor, node, px, rgb)
+            self.write_road_mask(anchor, node, px, texture)
+        return genground.write_far_dds(path, rgb, imagerymod.FAR_SRGB)
+
     def rock_faces(self, anchor, tile, px, rgb, grid):
         """The far tile's photo with its steep ground drawn as rock (rockface.py: cliffs were the photo's top
         stretched down the wall); as it was if that fails."""
@@ -7056,15 +7071,9 @@ class Server:
         except imagerymod.ImageryError as e:
             log.debug("tile %s of anchor %d: texture not rendered again (%s)", tile.key, anchor.id, e)
             return replace(prev, retex_repeat=prev.retex_repeat + 1)
-        rgb = self.rock_faces(anchor, tile, px, rgb, prev.grid)
-        node = tile.base if isinstance(tile, farfield.Piece) else tile
         ck = self.far_ck(anchor.id, tile.key)
-        if not isinstance(tile, farfield.GTile):
-            rgb = self.road_faces(anchor, node, px, rgb)
         texture = self.texture_name(*ck, prev.rev + 1)
-        if not isinstance(tile, farfield.GTile):
-            self.write_road_mask(anchor, node, px, texture)
-        tex_bytes = genground.write_far_dds(os.path.join(self.out_dir, texture), rgb, imagerymod.FAR_SRGB)
+        tex_bytes = self.finish_tile_texture(anchor, tile, px, rgb, prev.grid, texture)
         self.keep_texture(self.tex_key(anchor, tile, px), texture, tex_bytes, used, pending, None)
         sources = prev.credits
         if self.credits is not None:        # the new texture's sources (the corrected one names S2 too)

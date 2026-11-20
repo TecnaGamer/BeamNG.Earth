@@ -3806,20 +3806,14 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
     try:
         im.quick_all = bool(tex.get("quick"))
         try:
-            rgb, used = im.render_merc(z, x, y, px)
+            photo, used = im.far_photo(imagerymod.MercSquare(z, x, y, px), px)
         finally:
             im.quick_all = False
     except imagerymod.ImageryError:
         return built, None
-    if built.grid is not None:          # (earthd.Server.rock_faces, its tile_where for a global tile)
-        try:
-            g = np.asarray(built.grid)
-            s = built.size
-            rgb = rockfacemod.rock(rgb, geotiles.frame(x, y, z), *imagerymod.gutter_square(-s / 2, -s / 2, s, px), g,
-                                   -s / 2, -s / 2, s / (g.shape[1] - 1))
-        except Exception as e:
-            log.debug("rock faces of global %s: %s", (z, x, y), e)
-    n = imagerymod.write_dds(tex["path"], rgb, imagerymod.FAR_SRGB)
+    s = built.size
+    rock = rockfacemod.tile_inputs(geotiles.frame(x, y, z), -s / 2, -s / 2, s, px, built.grid)
+    n = photo.write(tex["path"], rock, imagerymod.FAR_SRGB)
     return built, (n, used)
 
 
@@ -4151,19 +4145,27 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
         if rgb is None:
             im.quick_all = bool(tex.get("quick"))
             try:
-                rgb, used = im.render(frame, *sq, px, gutter=True)
+                rgb, used = im.far_photo(im.square(frame, *sq, px, gutter=True), px)
             finally:
                 im.quick_all = False
     except imagerymod.ImageryError:
         return built, None
-    if built.grid is not None:          # (earthd.Server.rock_faces)
+    import surface as surfacemod
+    if isinstance(rgb, imagerymod.FarPhoto):
+        rock = rockfacemod.tile_inputs(frame, x0, y0, tile.size, px, built.grid)
+        if surfacemod.far_photo_roads(tile.size, px):
+            rgb = rgb.shade(rock)
+        else:
+            n = rgb.write(tex["path"], rock, imagerymod.FAR_SRGB)
+            rgb = None
+    elif built.grid is not None:          # (earthd.Server.rock_faces)
         try:
             g = np.asarray(built.grid)
             rgb = rockfacemod.rock(rgb, frame, *sq, g, x0, y0, tile.size / (g.shape[1] - 1))
         except Exception as e:
             log.debug("rock faces of %s: %s", tile.key, e)
     import roads as roadsmod
-    if roadsmod.ROADS_IN_GROUND:          # (earthd.Server.road_faces)
+    if rgb is not None and roadsmod.ROADS_IN_GROUND:          # (earthd.Server.road_faces)
         try:
             import surface as surfacemod
             # (the server's pads with the job; a helper's: none. The far pool's processes had no Surface, and the
@@ -4179,7 +4181,9 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
                 imagerymod.write_dds(mask[0], np.repeat(m[..., None], 3, axis=2))
         except Exception as e:
             log.debug("road mask of %s: %s", tile.key, e)
-    return built, (genground.write_far_dds(tex["path"], rgb, imagerymod.FAR_SRGB), used)
+    if rgb is not None:
+        n = genground.write_far_dds(tex["path"], rgb, imagerymod.FAR_SRGB)
+    return built, (n, used)
 
 
 def _paint_surface():
