@@ -163,7 +163,7 @@ GRADE_BIN_M = float(os.environ.get("BNE_GRADE_BIN_M", "8"))    # m, the fine bin
 # constant batter out to the daylight line), a pure function of position. Off by default (BNE_BATTER=vanilla, a switch
 # of its own: not in Revamped roads before the user has looked at it in game); on, it is a plans format tag
 # (plancache.plans_format: ".bv3"), so no cache mixes the two.
-BATTER_ON = os.environ.get("BNE_BATTER", "off") == "vanilla"
+BATTER_ON = os.environ.get("BNE_BATTER", "off") == "vanilla" or roadshape.SURFACE_PROFILE
 BATTER_L0_M = 1.0           # m of near-level strip past a core's edge (the core: carriageway + shoulder, 1 m+) ...
 BATTER_STRIP_LO = 0.04      # ... the ground there at most this much per m under the road's height ...
 BATTER_STRIP_UP = 0.02      # ... and this much over it
@@ -3041,6 +3041,14 @@ class _Planner:
             # through the Stelvio's asphalt, GitHub #108's 2.5 m step at a bridge end in Meppen, 2026-10-21)
             own = self._clip_box(key, 0.0)
             sub = feats.attrs.get("subtype")
+            if roadshape.SURFACE_PROFILE:
+                import countrybounds
+                import roadsurf3
+                try:
+                    roadsurf3.grade_plans(self, own, plans, pspecs, countrybounds.bundled().at(*key.center()))
+                except Exception as e:
+                    _caught(e)
+                    log.warning("surface grading of %s: %s", key, e)
             if RAIL_GRADE_ON and own is not None and sub is not None and (np.asarray(sub).astype(str) == "rail").any():
                 try:            # the railways' bed lines (railways.grade_plans): cuttings and embankments for the track
                     import railways     # (the cells around only where this one has a line: their fetches cost)

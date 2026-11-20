@@ -78,10 +78,23 @@ class ChainShortTest(unittest.TestCase):
     # shaped decks (decks / sheet, in the Revamped roads setting) read heights through it; their shapes have tests of
     # their own: test_roadshape*)
     def setUp(self):
-        for name in ("DECKS", "SHEET", "SKEW"):
+        for name in ("DECKS", "SHEET", "SKEW", "PROFILE", "PROFILE_BUILT", "SURFACE_PROFILE"):
             p = mock.patch.object(roadshape, name, False)
             p.start()
             self.addCleanup(p.stop)
+
+    def test_surface_view_refreshes_heights_on_the_same_line(self):
+        view = roads.ChainView.__new__(roads.ChainView)
+        view.frame, view.lock, view._mapped = None, threading.Lock(), {}
+        store = types.SimpleNamespace(frame=None, region=(0, 0))
+        xy = np.array([[0., 0.], [3., 0.]])
+        today = np.array([1., 2.])
+        solved = np.array([2., 3.]).view(roads._SurfaceHeights)
+        with mock.patch.object(roadshape, "SURFACE_PROFILE", True), mock.patch.object(roads, "_Mapper", return_value=_Same()):
+            for z in (today, solved, today):
+                got, = view._map(store, [("f", None, xy, z, 0.)])
+                np.testing.assert_array_equal(got[3], z)
+                self.assertIs(type(got[3]), type(z))
 
     def test_a_short_solve_is_short_again_for_a_later_scope(self):
         for kind, field in (("plain", "n"), ("lidar", "lidar")):

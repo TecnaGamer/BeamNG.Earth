@@ -111,6 +111,35 @@ class Solve(unittest.TestCase):
         self.assertEqual(int(rep[0]), 0)
         self.assertGreaterEqual(zs[25], 5.5 - 0.02)
 
+    def test_surface_bearing_excludes_only_a_ground_end_at_the_same_height(self):
+        decks = [[[0., 0., 10.], [50., 0., 10.]]]
+        ground = [[[0., 0.], [-20., 0.]], [[0., -10.], [0., 10.]]]
+        cross = [(0, 0, 0., 0., 10.), (0, 0, 0., 0., 4.), (0, 1, 0., 0., 10.)]
+        self.assertEqual(EF.surface_road_floors(decks, ground, cross), [False, True, True])
+
+    def test_surface_floor_can_raise_a_previously_low_deck(self):
+        xy, off, z, g, joins, pins, _ = self.setup_ramp(lambda x: np.full(len(x), 5.))
+        args = (xy, off, z, g, [1, 0, 0], [5., 0., 0.], [1., 0., 0.], [5., 0., 0.],
+                [3, 1, 1], joins, pins, [0., 50., 0., 5.5], sprm())
+        solved, report, _ = EF.profile_solve(*args, [])
+        self.assertEqual(report[0], 0)
+        self.assertGreaterEqual(solved[25], 5.5)
+
+    def test_surface_nose_limits_required_fork_couplings(self):
+        main = knots(0., 120.)
+        ramp = main.copy()
+        ramp[:, 1] = .08 * ramp[:, 0]
+        xy, off = flat([main, ramp])
+        z = np.r_[np.full(len(main), 10.), 10. + .025 * ramp[:, 0]]
+        args = (xy, off, z, np.full(len(z), np.nan), [1, 1], [6., 4.], [1., 1.], [5., 5.],
+                [3, 3], [0, 0, 1, 0, 0], [], [], sprm())
+        for nose in (20., 60.):
+            solved, report, _ = EF.profile_solve(*args, [(-1, 0, 1, 0., 0., nose)])
+            self.assertEqual(report[0], 0)
+            self.assertEqual(report[15], nose / 2 + 1)
+            k = int(nose / 2) + 1
+            np.testing.assert_allclose(solved[:k], solved[off[1]:off[1] + k], atol=.02, rtol=0)
+
     def test_sheet_union_held(self):
         # a ramp leaving a through deck: today 2 m above it inside the union (a hump); held to it up to the split
         th = knots(0.0, 200.0)

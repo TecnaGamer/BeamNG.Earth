@@ -78,6 +78,20 @@ class Kernel(unittest.TestCase):
         w_at = 3.5 * quintic(min(float(xy[0, 0]) for xy in ex) / 100.0)
         self.assertGreaterEqual(w_at, roadsurf3.LINE_W_MIN * 3.5 - 0.3)
 
+    def test_grading_uses_both_welded_edges_of_an_asymmetric_taper(self):
+        rows, bounds = piece(widths=(None, None, lambda s: 3.5 * quintic(s / 100.)))
+        inp = inputs([(rows, bounds, (1, 1, 4))])
+        full = roadsurf3.run_kernel(inp)
+        edges = roadsurf3.run_kernel(inp, outlines_only=True)
+        np.testing.assert_array_equal(edges["outlines"][0], full["outlines"][0])
+        self.assertEqual(len(edges["mesh"]["tri"]), 0)
+        for line in (rows[:, 1:], rows[::-1, 1:]):
+            section = fast._ef.surface_grade_sections(line, edges["outlines"])
+            index = np.argsort(section[:, 0])
+            centre, half = section[index, 1], section[index, 2]
+            np.testing.assert_allclose(centre + half, bounds[:, 0] + 1.)
+            np.testing.assert_allclose(centre - half, bounds[:, -1] - 1.)
+
     def test_weld_onto_road_rows(self):
         # a road along y = 1.4 (half width 4.0) through a piece from x = 20 to 120: the road is cut at both end rows,
         # and the piece's end rows ARE the road's cut rows (the same points: a shared row, no gap or overlap)
@@ -173,7 +187,7 @@ class BuildFaults(unittest.TestCase):
     def test_surface_cache_generation(self):
         import revisit
         self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "off"), "BNE_ROADSURF_V3=off")
-        self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "surface"), "BNE_ROADSURF_V3=surface@v4")
+        self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "surface"), "BNE_ROADSURF_V3=surface@v5")
 
     def test_fallback_marks_the_active_tile_short(self):
         from unittest.mock import patch

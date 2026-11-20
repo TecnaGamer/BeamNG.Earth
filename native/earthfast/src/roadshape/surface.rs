@@ -41,6 +41,7 @@
 //! (the tile and a margin) are left out; the rest is the same in every tile that builds the same pieces and roads.
 //! No FMA, no libm, no hash maps: sqrt (correctly rounded) and + - * / only, in a fixed order.
 mod gore;
+pub mod grade;
 mod junction;
 pub mod paint;
 mod partition;
@@ -441,11 +442,12 @@ fn pair(a: i64, b: i64, wa: bool, wb: bool) -> Option<i64> {
 /// direction: only one going the piece's way goes on from its end); structures sxy / s_off / s_hw; boxm: x0 y0 x1 y1.
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[pyo3(signature = (rows, row_off, t, t_off, kinds, k_off, pmeta, rxy, r_off, r_hw, r_oneway, sxy, s_off, s_hw, boxm, params, outlines_only=false))]
 pub fn lane_surface<'py>(py: Python<'py>, rows: PyReadonlyArray2<'py, f64>, row_off: Vec<i64>, t: PyReadonlyArray1<'py, f64>,
                          t_off: Vec<i64>, kinds: Vec<i64>, k_off: Vec<i64>, pmeta: PyReadonlyArray2<'py, f64>,
                          rxy: PyReadonlyArray2<'py, f64>, r_off: Vec<i64>, r_hw: Vec<f64>, r_oneway: Vec<bool>,
                          sxy: PyReadonlyArray2<'py, f64>, s_off: Vec<i64>, s_hw: Vec<f64>,
-                         boxm: Vec<f64>, params: PyReadonlyArray1<'py, f64>)
+                         boxm: Vec<f64>, params: PyReadonlyArray1<'py, f64>, outlines_only: bool)
                          -> PyResult<((Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>,
                                        Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>),
                                       (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>,
@@ -518,7 +520,7 @@ pub fn lane_surface<'py>(py: Python<'py>, rows: PyReadonlyArray2<'py, f64>, row_
     joints(&mut roads);
     let structs = lines_of(&sxy, &s_off, &s_hw);
     let boxa = [boxm[0], boxm[1], boxm[2], boxm[3]];
-    let out = py.detach(|| build(&pieces, &roads, &structs, &boxa, &prm));
+    let out = py.detach(|| build(&pieces, &roads, &structs, &boxa, &prm, outlines_only));
     let (mesh, lines, outl, cut, cutw, status) = out;
     let flat2 = |v: &Vec<P2>| -> Vec<f64> { let mut o = Vec::with_capacity(v.len() * 2); for p in v { o.push(p[0]); o.push(p[1]); } o };
     let tri: Vec<i64> = mesh.t.iter().flat_map(|t| t.iter().copied()).collect();
@@ -574,7 +576,7 @@ fn joints(roads: &mut [Line]) {
 }
 
 #[allow(clippy::type_complexity)]
-fn build(pieces: &[Piece], roads: &[Line], structs: &[Line], boxm: &[f64; 4], prm: &[f64])
+fn build(pieces: &[Piece], roads: &[Line], structs: &[Line], boxm: &[f64; 4], prm: &[f64], outlines_only: bool)
          -> (Mesh, Lines, Vec<Vec<P2>>, Vec<Vec<P2>>, Vec<Vec<P2>>, String) {
     let mut kept: Vec<Kept> = Vec::new();
     let mut status: Vec<String> = Vec::new();
@@ -854,6 +856,12 @@ fn build(pieces: &[Piece], roads: &[Line], structs: &[Line], boxm: &[f64; 4], pr
     let boxm = &context;
     let mut mesh = Mesh { v: Vec::new(), uv: Vec::new(), t: Vec::new(), owner: Vec::new(), kind: Vec::new() };
     let mut lines = Lines { xy: Vec::new(), off: Vec::new(), kind: Vec::new(), phase: Vec::new(), piece: Vec::new() };
+    if outlines_only {
+        let outlines = kept.iter().map(|kp| outline(&kp.pts)).collect();
+        let status = kept.iter().map(|kp| format!(r#"{{"piece":{},"kept":true}}"#, kp.idx))
+            .collect::<Vec<_>>().join(",");
+        return (mesh, lines, outlines, vec![], vec![], format!("[{}]", status));
+    }
     // pieces: strips and markings
     for kp in &kept {
         let pc = &pieces[kp.idx];
