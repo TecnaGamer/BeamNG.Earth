@@ -520,60 +520,12 @@ def nearest_first(tiles, x, y):
     return sorted(tiles, key=lambda t: (t.distance(x, y), t.level, t.key))
 
 
-def diff(old, new):
-    """Keys to add and to remove to go from tile set `old` to `new` (dicts or sets of keys)."""
-    return [k for k in new if k not in old], [k for k in old if k not in new]
-
-
 def swap_groups(old, new, polys=None):
-    """LOD changes from key set `old` to `new` as swap groups: [(adds, removes)], each a
-    connected set of added and removed tiles that overlap (a parent and its descendants), so
-    both sides have the same footprint. Tiles that enter or leave the far radius have no
-    counterpart and form one-sided groups. Sorted lists, deterministic order.
-    Global tiles and pieces (select_global) join by their footprints: polys(key) -> the key's footprint polygon (flat
-    x, y list) in the anchor's world, or None (unknown: one-sided)."""
-    adds, removes = diff(old, new)
-    side = {k: 0 for k in adds}
-    side.update({k: 1 for k in removes})
-    by_node = {tile_of(k).node: k for k in side if not is_special_key(k)}
-    parent = {k: k for k in side}
-
-    def find(k):
-        while parent[k] != k:
-            parent[k] = parent[parent[k]]
-            k = parent[k]
-        return k
-
-    special = [k for k in side if is_special_key(k)]
-    if special and polys is not None:
-        keys, ps = [], []
-        for k in side:
-            p = polys(k) if is_special_key(k) else _square(tile_of(k).bbox)
-            if p is not None:
-                keys.append(k)
-                ps.append([float(v) for v in p])
-        fast.require(GLOBAL_NEED, "global far tiles")
-        for a, b in fast._ef.far_overlap_pairs(ps, [side[k] for k in keys], GLOBAL_MIN_AREA, GLOBAL_OVERLAP_REL):
-            ka, kb = keys[a], keys[b]
-            if is_special_key(ka) or is_special_key(kb):
-                parent[find(ka)] = find(kb)
-    for k in side:
-        if is_special_key(k):
-            continue
-        lvl, i, j = tile_of(k).node
-        while lvl < HORIZON_MAX_LEVEL:          # (no L10 node exists outside horizon mode)
-            lvl, i, j = lvl + 1, i >> 1, j >> 1
-            a = by_node.get((lvl, i, j))
-            if a is not None and side[a] != side[k]:
-                parent[find(k)] = find(a)
-    comps = {}
-    for k in side:
-        comps.setdefault(find(k), []).append(k)
-    groups = []
-    for ks in comps.values():
-        groups.append((sorted(k for k in ks if side[k] == 0), sorted(k for k in ks if side[k] == 1)))
-    groups.sort(key=lambda g: (g[0] or g[1])[0])
-    return groups
+    """LOD changes from key set `old` to `new` as swap groups [(adds, removes)]: each a connected set of added and removed
+    tiles that overlap (a parent and its descendants), so both sides have the same footprint; tiles entering or leaving
+    the far radius form one-sided groups; global tiles and pieces join by their footprints, polys(key) -> the polygon
+    (flat x, y) or None. Sorted lists, deterministic order (earthfast host/farstate.rs, the far state machine's own)."""
+    return fast._ef.far_swap_groups(old, new, polys)
 
 
 def transform_bbox(src, dst, bb):
@@ -654,11 +606,6 @@ def parse_global(k):
     except ValueError:
         return None
     return z, x, y
-
-
-def _square(bb):
-    x0, y0, x1, y1 = bb
-    return (x0, y0, x1, y0, x1, y1, x0, y1)
 
 
 def _poly_bbox(p):

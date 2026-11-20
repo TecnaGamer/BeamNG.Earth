@@ -68,7 +68,11 @@ def load(name):
         a, b = u - i, v - j
         return (grid[j, i] * (1 - a) * (1 - b) + grid[j, i + 1] * a * (1 - b) + grid[j + 1, i] * (1 - a) * b
                 + grid[j + 1, i + 1] * a * b)
+    PROFILED[name] = ({str(v) for v in f["profiled"] if str(v)} if "profiled" in f.files else None)
     return parts, ground
+
+
+PROFILED = {}           # (a fixture's "profiled" ids: captured with BNE_ROADSHAPE=profile, P3e)
 
 
 class Bridges:
@@ -76,8 +80,10 @@ class Bridges:
     (in the given order; only those within keep of it, when given: a tile's own windows), _ground the graded ground."""
     cell_fn = None
 
-    def __init__(self, parts, ground, order=None, keep=None):
+    def __init__(self, parts, ground, order=None, keep=None, profiled=None):
         self.p = [parts[i] for i in order] if order is not None else list(parts)
+        if profiled is not None:
+            self.profiled_ids = lambda: set(profiled)
         self.bb = [(p[2][:, :2].min(0), p[2][:, :2].max(0)) for p in self.p]
         self._ground = ground
         if keep is not None:
@@ -303,8 +309,13 @@ class SeamProbe(unittest.TestCase):
         self.addCleanup(restore)
         roadshape.SHEET = True
 
+    PLACES = PLACES
+
+    def br(self, name, parts, ground, order=None, keep=None):
+        return Bridges(parts, ground, order, keep, PROFILED.get(name))
+
     def places(self):
-        for name in PLACES:
+        for name in self.PLACES:
             parts, ground = load(name)
             tiles, nrec = fork_tiles(parts)
             self.assertGreater(nrec, 0, f"{name}: no fork in the fixture (the probe would check nothing)")
@@ -313,7 +324,7 @@ class SeamProbe(unittest.TestCase):
     def test_neighbours_agree_at_seams(self):
         found, cuts, shared = [], 0, 0
         for name, parts, ground, tiles in self.places():
-            br = Bridges(parts, ground)
+            br = self.br(name, parts, ground)
             built = {t: build(br, roads.tile_bbox(*t)) for t in tiles}
             for a, b, axis, at, lo, hi in seams(tiles):
                 cuts += len(cut_ends(built[a], axis, at, lo, hi))
@@ -326,23 +337,125 @@ class SeamProbe(unittest.TestCase):
     def test_tile_same_from_any_window_and_order(self):
         for name, parts, ground, tiles in self.places():
             ref = {}
-            br = Bridges(parts, ground)
+            br = self.br(name, parts, ground)
             for t in tiles:
                 ref[t] = build(br, roads.tile_bbox(*t))
             for t in reversed(tiles):           # (after its neighbours, from only the parts its windows read)
                 x0, y0, x1, y1 = roads.tile_bbox(*t)
                 m = max(roadshape.SHEET_WINDOW_M, 3 * roadmesh.JUNCTION_MAX_PART_M + roads.DECK_CONTEXT_M,
                         PAD_M) + roads.NEAR_M
-                own = Bridges(parts, ground, keep=(x0 - m, y0 - m, x1 + m, y1 + m))
+                own = self.br(name, parts, ground, keep=(x0 - m, y0 - m, x1 + m, y1 + m))
                 self.assertEqual(build(own, roads.tile_bbox(*t)).blob(), ref[t].blob(), f"{name} {t}: own windows")
             roadshape.SHEET_WINDOW_M += 2 * roads.TILE
             for t in tiles:
                 self.assertEqual(build(br, roads.tile_bbox(*t)).blob(), ref[t].blob(), f"{name} {t}: wider window")
             roadshape.SHEET_WINDOW_M -= 2 * roads.TILE
             mid = sorted(range(len(parts)), key=lambda i: (i * 7919) % len(parts))
-            br = Bridges(parts, ground, mid)
+            br = self.br(name, parts, ground, mid)
             for t in tiles:
                 self.assertEqual(build(br, roads.tile_bbox(*t)).shape(), ref[t].shape(), f"{name} {t}: parts order")
+
+
+@unittest.skipUnless(HAVE and getattr(fast._ef, "VERSION", 0) >= 536, "earthfast 536")
+class SeamProbeProfile(SeamProbe):
+    """The same seams with BNE_ROADSHAPE=profile (road revamp v2 P3e): the parts at their chains' joint profile (the
+    twins' and the junctions' coupled heights), the coplanar trim (roadmesh.trim_overlaps: one seam between two decks
+    at one height, read past a chunk end inside its part), a branch's surface on its union's through deck."""
+    PLACES = ("fort_pitt_profile",)
+
+    def setUp(self):
+        super().setUp()
+        old = roadshape.PROFILE_BUILT
+
+        def restore():
+            roadshape.PROFILE_BUILT = old
+        self.addCleanup(restore)
+        roadshape.PROFILE_BUILT = True
+
+    def test_coplanar_cut_somewhere(self):
+        # (the fixture must hold decks the coplanar trim cuts, or the seams check nothing of it)
+        name = self.PLACES[0]
+        parts, ground = load(name)
+        tiles, _n = fork_tiles(parts)
+        br = self.br(name, parts, ground)
+        rows = 0
+        for t in tiles:
+            tile = build(br, roads.tile_bbox(*t))
+            rb = [(r, c) for r, c in roadmesh.ribbon_pairs([c for c in tile.chunks if c.get("deck")])
+                  if r[5] is not None]
+            ctx = [(r, c) for r, c in roadmesh.ribbon_pairs(tile.ctx) if r[5] is not None]
+            out = roadmesh.trim_overlaps(rb, ctx, roadmesh._junction_surfaces(tile.chunks, tile.ctx), coplanar=True)
+            rows += sum(int(np.asarray(c["cop"]).any(axis=1).sum()) for _r, c in out if c.get("cop") is not None)
+        self.assertGreater(rows, 10)
+
+
+def surface_at(chunks, origin, pts, mat):
+    """At the points pts (n, 2): (covered (n,) bool, height (n,), points held twice) of material mat's triangles in
+    the road surface roadmesh.build draws of chunks."""
+    sys.path.insert(0, os.path.join(HERE, "..", "..", "tools", "probes"))
+    import markprobe
+    cov, z = np.zeros(len(pts), bool), np.full(len(pts), np.nan)
+    mesh = roadmesh.build(None, chunks, None, origin)
+    if mesh is None or mat not in mesh[3]:
+        return cov, z, 0
+    P = np.asarray(mesh[0], np.float64) + np.asarray(origin, np.float64)
+    T = np.asarray(mesh[1], np.int64).reshape(-1, 3)[np.asarray(mesh[4]) == mesh[3].index(mat)]
+    pi, _ti, zz = markprobe.lookup(P[T], pts)
+    cov[pi] = True
+    z[pi] = zz
+    return cov, z, int(len(pi) - len(np.unique(pi)))
+
+
+class NoslabLift(unittest.TestCase):
+    """A branch's road surface on an exit union's slab (P2b "noslab": the chunks in the union's branch intervals, from
+    the fork's record) lies roadmesh.NOSLAB_LIFT over its through road's, pinned to the same heights: no point of the two
+    opaque skins within 1 mm (they crossed in bands, 378 m2 at the I-95's Middle Branch: revampfix), and the same from
+    the two tiles either side of a seam as from one build spanning it, from a row wholly inside the through road to a
+    straddling one too (Codex reviews of revampfix / revampfix2)."""
+
+    def test_lifted_over_the_through_road_at_any_seam(self):
+        # (level: on a grade, the branch's rows (flat across, square to its own line) and the through road's meet at
+        # heights a grade x offset x sin(angle) apart, the lift's margin to spend; I-95 measured in the commit)
+        line = np.array([[-30.0, 4.5, 10.5], [-6.0, 0.0, 10.5], [6.0, 0.0, 10.5], [30.0, 4.5, 10.5]])
+        xs = np.array([-40.0, -30.0, -6.0, 6.0, 30.0, 40.0])
+        through = np.c_[xs, np.zeros(len(xs)), np.full(len(xs), 10.5)]
+        tm, bm = roads.DECK_CONCRETE["m"], roads.DECK["m"]
+
+        def chunks(box):
+            out = []
+            for pts, look, w, fid, ns in ((through, roads.DECK_CONCRETE, 7.0, "t", False),
+                                          (line, roads.DECK, 4.0, "b", True)):
+                for piece in roads.clip_polyline(pts, *box):
+                    if len(piece) >= 2:
+                        ch = roads._chunk({**look, "deck": True}, w, np.asarray(piece, np.float64))
+                        ch.update(fixed=True, deck=True, fid=fid)
+                        if ns:
+                            ch["noslab"] = True
+                        out.append(ch)
+            return out
+        g = np.mgrid[-32.0:32.0:0.137, -4.0:8.0:0.137].reshape(2, -1).T + (0.0123457, 0.0098765)
+        everything = (-100.0, -100.0, 100.0, 100.0)
+        cb, zb, twice = surface_at(chunks(everything), (0.0, 0.0, 0.0), g, bm)
+        ct, zt, _t = surface_at(chunks(everything), (0.0, 0.0, 0.0), g, tm)
+        both = cb & ct
+        self.assertGreater(int(both.sum()), 1000)
+        self.assertEqual(twice, 0)
+        dz = zb[both] - zt[both]
+        self.assertGreater(float(dz.min()), 0.001)
+        np.testing.assert_allclose(dz, roadmesh.NOSLAB_LIFT, atol=5e-4)
+        for seam in (-12.3, 3.1):
+            got, zs = np.zeros(len(g), bool), np.full(len(g), np.nan)
+            for box in ((-100.0, -100.0, seam, 100.0), (seam, -100.0, 100.0, 100.0)):
+                c, z, t = surface_at(chunks(box), (box[0] + 7.0, 0.0, 0.0), g, bm)
+                self.assertEqual(t + int((c & got).sum()), 0, f"seam {seam}")
+                got |= c
+                zs[c] = z[c]
+            near = np.abs(g[:, 0] - seam) < 1e-6
+            np.testing.assert_array_equal(got & ~near, cb & ~near, f"seam {seam}")
+            # (on each triangle's own plane: the rows either side of a seam lie elsewhere along a ribbon whose heights
+            # bend at its vertices, the quads' diagonals a fraction of a mm apart, as on any deck ribbon cut there)
+            np.testing.assert_allclose(zs[got], zb[got], atol=1e-3)
+            self.assertGreater(float((zs[both & got] - zt[both & got]).min()), 0.001, f"seam {seam}")
 
 
 class ReachStation(unittest.TestCase):

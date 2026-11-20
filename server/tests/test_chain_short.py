@@ -327,6 +327,40 @@ class ChainShortTest(unittest.TestCase):
             self.assertEqual(st.short[("f", 0)], (1, 0), f"{where}: nothing was added after")
             self.assertFalse(b.complete)
 
+    def test_a_short_profile_is_solved_again_when_due(self):
+        """BNE_ROADSHAPE=profile (P3c, Codex review of P3b): a chain published while its joint profile raised (a cell
+        not at hand) is short, and solved again once roads.PROFILE_RETRY_S has passed, not kept until the store goes:
+        the retry, read complete, is complete and kept."""
+        st = _Store(None)
+        st.STRUCTURES = True
+
+        def solve(comp, pool, ground, req_out=None):
+            st.solves += 1
+            return [np.zeros(2) for _ in comp]
+        st._solve = solve
+        calls = []
+
+        def prof(store, comp, parts, ground, reqs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise OSError("a cell not at hand")
+            return None, None                           # (read complete; not solved: today's heights)
+        with mock.patch.object(roadshape, "PROFILE", True), mock.patch.object(roadshape, "PROFILE_BUILT", True), \
+                mock.patch.object(roadshape, "profile_built", prof), mock.patch.object(roads, "PROFILE_RETRY_S", 0.0):
+            with revisit.scope() as a:
+                self.assertIsNotNone(st._chain_of(("f", 0), ENDS))
+            self.assertFalse(a.complete, "the profile's failure: short")
+            self.assertIn(("f", 0), st.profile_retry)
+            with revisit.scope() as b:
+                self.assertIsNotNone(st._chain_of(("f", 0), ENDS))
+            self.assertEqual((st.solves, len(calls)), (2, 2), "solved again when due")
+            self.assertTrue(b.complete, "the retry read complete")
+            self.assertEqual(st.profile_retry, {})
+            with revisit.scope() as c:
+                st._chain_of(("f", 0), ENDS)
+            self.assertEqual(st.solves, 2, "kept since")
+            self.assertTrue(c.complete)
+
     def test_adopted_parts_are_published_with_their_note(self):
         """As above for a chain adopted from its owner: checked from inside the adopting store's lock, the moment
         each part appears in `done`."""

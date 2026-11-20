@@ -325,6 +325,9 @@ pub fn params(za: ArrayView1<f64>, zb: ArrayView1<f64>, rk: ArrayView1<i64>, rid
 struct Seg {
     ax: f64, ay: f64, abx: f64, aby: f64, l2: f64, len: f64, za: f64, zb: f64, h: f64, rh: f64, ba: f64, bb: f64,
     banked: bool, m: [[f64; 2]; 2], r: [[f64; 2]; 2], old: [f64; 2], reach: f64, reach2: f64,  // (m, r: [side][end])
+    // (per end, then side: the unit direction out of the segment its end cap measures how far behind that end a point
+    // lies (cap_loosen); the neighbour's own along the plan where it goes on with that side's corridor)
+    cap: [[[f64; 2]; 2]; 2],
     // (its middle and the square of a radius past which no point is within its reach: half its length + the reach,
     // with a margin far over any rounding of either distance)
     mx: f64, my: f64, rc2: f64,
@@ -336,6 +339,9 @@ pub struct Segs<'a> {
     pub h: ArrayView1<'a, f64>, pub rh: ArrayView1<'a, f64>, pub ba: ArrayView1<'a, f64>,
     pub bb: ArrayView1<'a, f64>, pub m: ArrayView2<'a, f64>, pub r: ArrayView2<'a, f64>,
     pub fl: ArrayView2<'a, u8>,
+    // (each segment end's continuation (segments, 2: its a's, its b's): -1 none, else 2 k + j, segment k's end j (0 its
+    // a, 1 its b) lying there; PlanPack's nb, from its plans and its validated links between them, never inferred here)
+    pub nb: ArrayView2<'a, i64>,
 }
 
 fn prep(s: &Segs, i: usize, p: &ApplyPrm) -> Seg {
@@ -348,11 +354,39 @@ fn prep(s: &Segs, i: usize, p: &ApplyPrm) -> Seg {
     let old_r = if old[0] > 0.0 || old[1] > 0.0 { p.old_reach + p.old_fade } else { 0.0 };
     let reach = s.h[i] + r[0][0].max(r[0][1]).max(r[1][0]).max(r[1][1]).max(old_r).max(p.core_blend);
     let len = l2.sqrt();
+    let (ux, uy) = if len > 1e-9 { (abx / len, aby / len) } else { (0.0, 0.0) };
+    // (each end's neighbour along the plan: the segment PlanPack says it goes on into there (nb: the next segment of
+    // its own plan, or the one plan its end carries straight on into); a side it carries on with is not today's there.
+    // Not from the pack's order or coincident points: an unrelated plan's end there is no continuation, Codex)
+    let n = s.h.len();
+    let mut cap = [[[-ux, -uy]; 2], [[ux, uy]; 2]];
+    #[allow(clippy::needless_range_loop)]
+    for e in 0..2usize {
+        let v = s.nb[[i, e]];
+        if v < 0 || (v >> 1) as usize >= n {
+            continue;
+        }
+        let (k, j) = ((v >> 1) as usize, (v & 1) as usize);
+        // (away from the joint along k: from its end j to its other end; its sides as ours where it runs our way)
+        let (nx, ny) = (s.b[[k, 0]] - s.a[[k, 0]], s.b[[k, 1]] - s.a[[k, 1]]);
+        let nl = (nx * nx + ny * ny).sqrt();
+        if nl <= 1e-9 {
+            continue;
+        }
+        let sg = if j == 0 { 1.0 } else { -1.0 };
+        let swap = j == e;
+        for (side, c) in cap[e].iter_mut().enumerate() {
+            let ks = if swap { 1 - side } else { side };
+            if s.fl[[k, ks]] & OLD == 0 {
+                *c = [sg * nx / nl, sg * ny / nl];
+            }
+        }
+    }
     let rc = 0.5 * len + reach;
     let rc = rc + 1e-6 * (1.0 + rc);
     Seg {
         ax, ay, abx, aby, l2, len, za: s.za[i], zb: s.zb[i], h: s.h[i], rh: s.rh[i], ba: s.ba[i],
-        bb: s.bb[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0, m, r, old, reach, reach2: reach * reach,
+        bb: s.bb[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0, m, r, old, reach, reach2: reach * reach, cap,
         mx: ax + 0.5 * abx, my: ay + 0.5 * aby, rc2: rc * rc,
     }
 }
@@ -435,6 +469,13 @@ fn pair_eval(g: &Seg, x: f64, y: f64, p: &ApplyPrm) -> Option<Pv> {
     if old > 0.0 {
         f += OLD_LOOSEN_M * old / (1.0 - old);
     }
+    // (behind an end its plan does not carry its corridor on past (the plan's end, or a neighbour whose side keeps
+    // today's grading: a bridge's abutment metres), loosened by how far behind: its probes read the ground beside it
+    // only, and the corridor swept round its end cap cut a 14 m trench with walls behind the Stelvio's deck end at
+    // Premadio and stood a 24 m fill in the valley past a plan's end, each closing at its reach as a wall)
+    if tu != t {
+        f += cap_loosen(g, x, y, tu > 1.0, wl);
+    }
     v.lo_off = p.s_lo * xs + f;
     v.up_off = p.s_up * xs + f;
     v.lo = z - v.lo_off;
@@ -471,6 +512,37 @@ fn take(st: &mut St, v: &Pv, si: u32) {
 const CONFLICT_K: f64 = 1.0;
 /// m a corridor is loosened by at a side mix half today's (old / (1 - old) times this)
 const OLD_LOOSEN_M: f64 = 4.0;
+/// m per m behind an end its plan does not carry its corridor on past (cap_loosen), on from ...
+const CAP_K: f64 = 1.0;
+/// ... a rounded start over this many metres (no crease at the end's line)
+const CAP_ROUND_M: f64 = 6.0;
+
+/// How much a segment's corridor is loosened at (x, y) in its end cap (past_b: b's, else a's): CAP_K per metre the
+/// point lies behind that end (the less of behind its own end's line and) along the direction its plan goes on in (the neighbour's, where the plan goes on with that
+/// side's corridor: nothing in the wedge outside a bend, where the point is past the neighbour's end too, and only
+/// metres beside the neighbour, whose own corridor binds there), rounded in over CAP_ROUND_M; each side's mixed by wl
+/// as side_mr mixes them. Behind the end of a plan, or of a run that a neighbour's today's side ends, every segment's
+/// cap is loosened at least as much as the last one's: the ground there rises (falls) to the natural at m + CAP_K at
+/// most instead of closing at the reach.
+#[inline(always)]
+fn cap_loosen(g: &Seg, x: f64, y: f64, past_b: bool, wl: f64) -> f64 {
+    let (e, ox, oy) = if past_b { (1, g.ax + g.abx, g.ay + g.aby) } else { (0, g.ax, g.ay) };
+    let (qx, qy) = (x - ox, y - oy);
+    // (and no more than behind its own end's line: nothing on that line, the corridor beside the segment carried on
+    // continuously into its cap)
+    let sg = if past_b { 1.0 } else { -1.0 };
+    let own = if g.len > 1e-9 { sg * (qx * g.abx + qy * g.aby) / g.len } else { 0.0 };
+    let side = |s: usize| shape((qx * g.cap[e][s][0] + qy * g.cap[e][s][1]).min(own).max(0.0), CAP_ROUND_M);
+    let l = if g.old[0] > 0.0 {
+        side(1)
+    } else if g.old[1] > 0.0 {
+        side(0)
+    } else {
+        wl * side(0) + (1.0 - wl) * side(1)
+    };
+    CAP_K * l
+}
+
 /// m a segment's line is carried on past its ends (the corridor's height there) ...
 const EXT_M: f64 = 4.0;
 /// ... at this grade at most (gradebins' EXTRAP_MAX_GRADE: a few cm long segment holding a step)

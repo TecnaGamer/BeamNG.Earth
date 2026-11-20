@@ -8016,6 +8016,7 @@ CORNER_CONCRETE_M = 4.0  # m: a concrete street this close to a curb return fill
 AT_GRADE_M = 3.0        # m: a road crossing a deck within AT_GRADE_REACH_M of an abutment that cannot get this
 AT_GRADE_REACH_M = 12.0     # high over it is a junction at grade (the intersection a ramp starts from)
 CHAIN_CELLS = 12        # map cells read at most to close one bridge chain
+PROFILE_RETRY_S = 10.0  # s after a chain published while its joint profile read short it is solved again (P3c, _retry_due)
 # BNE_DECK_STRUCT=shadow (RS S2a fix): the cells the closure reads only for its halo (structures.halo: within reach of
 # the chain, holding none of its parts) have this budget of their own, apart from CHAIN_CELLS (the cells that hold the
 # chain's parts): a chain of 7 cells beside a cell row touched 7 empty ones and went to window solves (Codex review).
@@ -9150,6 +9151,8 @@ class BridgeProfiles:
                 ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
                 if not self._held_in(key, ring):
                     continue
+            if not solved_only and self.__dict__.get("profile_retry"):
+                self._retry_due(key)    # (P3c: a short profile's chain asked again when due; Codex review of P3c)
             got = self._take(key)       # (with its note: whoever builds on a solve made short is short too)
             if got is None and not solved_only:
                 if ring is None:
@@ -9210,6 +9213,8 @@ class BridgeProfiles:
         """Solve the chain of part key (its ring's ends (lat, lon) say where to start loading): its parts into done.
         Returns done[key] or None. A chain another store owns (owner_of) is solved there and its result taken in, its
         geometry mapped into this frame (one deck profile per chain, whichever store a tile asks)."""
+        if self.__dict__.get("profile_retry"):
+            self._retry_due(key)
         got = self._take(key)
         if got is not None:
             return got
@@ -9224,6 +9229,31 @@ class BridgeProfiles:
         comp = []
         with revisit.scope() as short:
             return self._chain_solve(key, ends, adopt, comp, short)
+
+    def _retry_due(self, key):
+        """BNE_ROADSHAPE=profile (P3c, Codex review of P3b): a chain published while its joint profile read short (a
+        cell, a ground line not at hand: today's heights, noted short) is solved again once PROFILE_RETRY_S has passed
+        since: its parts leave `done` together (their notes, piers and profile marks with them, and the chain's pins,
+        truss and truss piers: kept first-come, they would outlive the retry; Codex review of P3c) and the next ask
+        (_chain_of, parts_todo) solves the chain again, as a fresh store would (an adopted copy carries the owner's due
+        time: its re-solve adopts the owner's). The builds that took the short parts were short (not kept)."""
+        with self.lock:
+            pr = self.__dict__.get("profile_retry", {})
+            got = pr.get(key)
+            if got is None or time.monotonic() < got[1]:
+                return False
+            ck = got[0]
+            self.__dict__.get("profiles", {}).pop(ck, None)
+            self.trusses.pop(ck, None)
+            self.piers.pop(("truss", ck), None)
+            for k in [k for k, v in pr.items() if v[0] == ck]:
+                pr.pop(k, None)
+                self.done.pop(k, None)
+                self.__dict__.get("short", {}).pop(k, None)
+                self.piers.pop(k, None)
+                self.__dict__.get("profiled", set()).discard(k)
+                self.__dict__.get("profile_of", {}).pop(k, None)
+            return True
 
     def _note_short(self, k, n, lidar):
         """Under self.lock: part k's solve read n things short (lidar: built on the lidar rule)."""
@@ -9383,12 +9413,16 @@ class BridgeProfiles:
         # deck_profile + _tie_beside; its approach pins go to the plans' second stage (grading.PROFILE_PINS). Every
         # part of the chain this solve's (a whole chain: one answer whoever solves it); anything but "solved": today's)
         prof = None
+        prof_short = False      # (P3c: the profile read short or raised: the chain solved again later, _retry_due)
         if (reqs is not None and roadshape.PROFILE_BUILT and block is None and comp and len(keep) == len(comp)
                 and not getattr(self, "PROFILE_OFF", False)):
+            n0 = short.n
             try:
                 _rec, prof = roadshape.profile_built(self, list(comp), {k: shaped[k] + (pool[k][3],) for k in comp},
                                                      dict(ground), reqs)
+                prof_short = short.n > n0
             except Exception as ex:
+                prof_short = True
                 # (today's heights; the chain marked short, never kept: a cell the profile reads not at hand made
                 # today's here and the profile's elsewhere)
                 log.debug("chain %s: profile: %s: %s", key, type(ex).__name__, ex)
@@ -9441,6 +9475,8 @@ class BridgeProfiles:
                 if prof is not None:                    # (P3b: its heights are the profile's; the sheet's pins held)
                     self.__dict__.setdefault("profiled", set()).add(k)
                     self.__dict__.setdefault("profile_of", {})[k] = ck
+                if prof_short:                          # (P3c: solved again after PROFILE_RETRY_S, _retry_due)
+                    self.__dict__.setdefault("profile_retry", {})[k] = (ck, time.monotonic() + PROFILE_RETRY_S)
             if prof is not None and publish:
                 self.__dict__.setdefault("profiles", {}).setdefault(ck, prof)
             if fresh and ck not in self.trusses:
@@ -9524,6 +9560,7 @@ class BridgeProfiles:
             tpiers = owner.piers.get(("truss", ck))
             depth = {k: owner.__dict__.get("depth", {}).get(k) for k in mine}
             theirs = {k: owner.__dict__.get("short", {}).get(k) for k in mine}
+            retry = {k: owner.__dict__.get("profile_retry", {}).get(k) for k in mine}
             extra = owner._adopt_extra(comp)
         mp = ChainView.mapper(owner.frame, self.frame)
         with self.lock:
@@ -9540,6 +9577,8 @@ class BridgeProfiles:
                 n_s, n_l = max(mine_n, (theirs[k] or (0, 0))[0]), max(mine_l, (theirs[k] or (0, 0))[1])
                 if n_s or n_l:                          # (before the part itself: never a part without its note)
                     self._note_short(k, n_s, n_l)
+                if retry[k] is not None:                # (P3c: the owner's short profile: asked again when due)
+                    self.__dict__.setdefault("profile_retry", {})[k] = retry[k]
                 xy2 = xyz[:, :2].copy()
                 rec = getattr(xy, "shape_rec", None)
                 if rec is not None:                     # (roadshape: its shape mapped with it, on the line itself)
@@ -13036,7 +13075,7 @@ def _sheet_finish(recs, decks, shifted, width_of):
     info = {}
 
     def put(i):
-        return info.setdefault(i, {"cuts": {}, "t": [], "b": []})
+        return info.setdefault(i, {"cuts": {}, "t": [], "b": [], "bt": []})
     for t, b, side, at, at_b, nrm_r, cover in recs:
         kt, kb = _vertex_of(decks[t][2], at), _vertex_of(decks[b][2], at_b)
         if kt is None or kb is None:
@@ -13089,6 +13128,8 @@ def _sheet_finish(recs, decks, shifted, width_of):
                     ab_ = float(_arc(shifted[p])[kb])
                     a0, a1 = (a0, ab_) if abs(a1 - ab_) <= abs(a0 - ab_) else (ab_, a1)
                 put(p)["b"].append((min(a0, a1), max(a0, a1)))
+                # (P3e: the union's through parts, whose surface the branch's lies on: _noslab_on_through)
+                put(p)["bt"].append(sorted({q for q, _rv, rl, _sd, _u0, _u1 in cover if rl == 0}))
         put(t)["cuts"][kt] = nrm
         put(b)["cuts"][kb] = nrm
     return info
@@ -13138,6 +13179,91 @@ def _sheet_tag(ch, line, info):
             if float(nrm[1] * t[0] - nrm[0] * t[1]) < 0:
                 nrm = -nrm
             ch[f"sk{e}"] = [round(float(nrm[0]), 6), round(float(nrm[1]), 6)]
+
+
+def _part_ends(ch, line):
+    """BNE_ROADSHAPE=profile (road revamp v2 P3e): a deck chunk's "pe": [its first node is its part's own end, its last
+    node is], from the part's line alone (a chunk end on a tile's box or a split inside the part goes on in the next
+    chunk: roadmesh.trim_overlaps' coplanar cut reads past it as the whole line gives it, the same in every tile; Codex
+    P3d). In place."""
+    c = np.asarray(ch["n"], np.float64)[:, :2]
+    ln = np.asarray(line, np.float64)[:, :2]
+    if len(c) < 2 or len(ln) < 2:
+        return
+
+    def end(p):
+        return bool(min(float(dnp.hypot(*(p - ln[0]))), float(dnp.hypot(*(p - ln[-1])))) <= 2e-3)
+    ch["pe"] = [end(c[0]), end(c[-1])]
+
+
+def _noslab_on_through(ch, info, line, throughs):
+    """BNE_ROADSHAPE=profile (road revamp v2 P3e): a branch's chunk inside its exit union ("noslab") laid on the union's
+    through surface: rows every roadmesh.DRAPE_STEP (its own: "kr"), each row's centre at the through deck's height
+    under it and its cross slope ("bk") the through surface's slope across the branch there (the through line's grade
+    along its way x the share of it across the branch's row), so its two edges meet the through surface too (flat
+    across and square to its own line it crossed that surface by -38..+49 mm on the grade: concrete and asphalt within
+    1 mm, I-95 Middle Branch). The through surface is its parts' drawn lines (throughs: (k, 3) each, whole, canonical:
+    the same in every tile), linear between their vertices, as the tiles draw them (unsimplified: _deck_chunks). In
+    place."""
+    import roadmesh
+    c = np.asarray(ch["n"], np.float64)
+    if len(c) < 2 or not throughs:
+        return
+    lo, hi = sorted((_station(line, c[0, :2]), _station(line, c[-1, :2])))
+    tl = []
+    for (s0, s1), ts in zip(info["b"], info.get("bt", ())):
+        if min(hi, s1) - max(lo, s0) > 1e-3:
+            tl.extend(t for t in ts if t in throughs)
+    lines = [np.asarray(throughs[t], np.float64) for t in sorted(set(tl))]
+    lines = [ln for ln in lines if len(ln) >= 2 and ln.shape[1] >= 3]
+    if not lines:
+        return
+    corner = float(np.max(ch.get("ws", ch["w"]))) / 2 + roadmesh.PARAPET_W
+    xy, _s, _z = roadmesh._resample(c, roadmesh.DRAPE_STEP, keep_vertices=True, corner_half=corner)
+    if len(xy) < 2:
+        return
+    best = np.full(len(xy), np.inf)
+    zc, slope, tan = np.zeros(len(xy)), np.zeros(len(xy)), np.zeros((len(xy), 2))
+    for ln in lines:
+        a, d = ln[:-1, :2], np.diff(ln[:, :2], axis=0)
+        L = np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)
+        rel = xy[:, None, :] - a[None]
+        t = np.clip((rel * d[None]).sum(2) / (L * L)[None], 0.0, 1.0)
+        f = a[None] + t[..., None] * d[None]
+        dist = dnp.hypot((xy[:, None, 0] - f[..., 0]).ravel(), (xy[:, None, 1] - f[..., 1]).ravel()).reshape(t.shape)
+        j = np.argmin(dist, axis=1)
+        r = np.arange(len(xy))
+        dj = dist[r, j]
+        win = dj < best         # (the first line of equals: lines in their part order)
+        best = np.where(win, dj, best)
+        za, zb = ln[j, 2], ln[j + 1, 2]
+        zc = np.where(win, za + t[r, j] * (zb - za), zc)
+        slope = np.where(win, (zb - za) / L[j], slope)
+        tan = np.where(win[:, None], d[j] / L[j][:, None], tan)
+    # the branch's left normal per row (roadmesh._normals' way: the mean of the segments either side)
+    seg = np.diff(xy, axis=0)
+    seg = seg / np.maximum(dnp.hypot(seg[:, 0], seg[:, 1]), 1e-9)[:, None]
+    dirs = np.empty_like(xy)
+    dirs[0], dirs[-1] = seg[0], seg[-1]
+    if len(xy) > 2:
+        m = seg[:-1] + seg[1:]
+        dirs[1:-1] = m / np.maximum(dnp.hypot(m[:, 0], m[:, 1]), 1e-9)[:, None]
+    nrm = np.stack([-dirs[:, 1], dirs[:, 0]], axis=1)
+    # (each row's own line: square, or its end's skew / tile cut line (roadmesh.skew_ends); roadmesh.tilted reads a
+    # point's offset square to the branch: the slope that puts the row's edges on the through surface along its line)
+    rowl = nrm.copy()
+    for e, k in ((0, 0), (1, len(xy) - 1)):
+        v = ch.get(f"sk{e}") if ch.get(f"sk{e}") is not None else ch.get(f"ct{e}")
+        if v is not None:
+            rowl[k] = np.asarray(v, np.float64)[:2]
+    cr = dirs[:, 0] * rowl[:, 1] - dirs[:, 1] * rowl[:, 0]
+    bk = np.where(np.abs(cr) > 0.2, slope * (tan * rowl).sum(1) / np.where(np.abs(cr) > 0.2, cr, 1.0),
+                  slope * (tan * nrm).sum(1))
+    if ch.get("ws") is not None and len(ch["ws"]) == len(c):     # (a taper: its widths on the new rows)
+        ch["ws"] = [round(float(v), 3) for v in dnp.interp(_s, _arc(c[:, :2]), np.asarray(ch["ws"], np.float64))]
+    ch["n"] = np.round(np.c_[xy, zc], 3).tolist()
+    ch["kr"] = True
+    ch["bk"] = [round(float(v), 5) for v in bk]
 
 
 def _cut_ends(ch, line, box):
@@ -13220,6 +13346,11 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         sh = shift_of(fid, pts) if shift_of else None
         shifted[i] = offset_polyline(pts, sh) if sh is not None else pts
     sheet = _sheet_finish(sheet_recs, decks, shifted, width_of) if sheet_recs else {}
+    # (BNE_ROADSHAPE=profile, P3e: the parts of an exit union, through or branch, drawn on their lines' own vertices,
+    # never simplified: SIMPLIFY_Z_M let a through deck's rows leave its line by up to 5 cm, which the branch's surface
+    # laid on that line (_noslab_on_through) could not follow; from the fork records alone, the same in every tile)
+    unioned = (set(sheet) | {t for inf in sheet.values() for ts in inf.get("bt", ()) for t in ts}
+               if roadshape.PROFILE_BUILT else set())
     # Complete profiles survive tile clipping. The bounded common field currently covers constant-width,
     # unshifted carriageways; keep existing sidewalk/taper/lane-shift geometry on its current surface.
     counts = {}
@@ -13264,7 +13395,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         frame_line = offset_polyline(pts, dc) if dc else pts
         for piece0 in clip_polyline(frame_line, *(junction_box if fid in joint_profiles else wide)):
           for piece in _sheet_pieces(piece0, frame_line, sheet.get(i)):
-            for c in split(_deck_rows(piece, shp)):
+            for c in split(densify(piece) if i in unioned else _deck_rows(piece, shp)):
                 if len(c) >= 2:
                     ch = _chunk({**_deck_look(spec), "deck": True}, dw, c)
                     ch.update(fixed=True, deck=True, fid=fid, ctx=True, tdir=_travel(spec))
@@ -13272,6 +13403,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                     if shp is not None:
                         ch["kr"] = True
                         _deck_shape_ends(ch, frame_line, shp, False)
+                    if roadshape.PROFILE_BUILT:
+                        _part_ends(ch, frame_line)
                     if fid in joint_profiles:
                         ch['jn'] = joint_profiles[fid]
                         ch['jskip'] = fid in joint_excluded
@@ -13319,8 +13452,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         for look, w, line in lines:
             for piece in [q for p0 in clip_polyline(line, *exact)
                           for q in (_sheet_pieces(p0, line, sheet.get(i)) if look.get("deck") else (p0,))]:
-                for c in split(_deck_rows(piece, shp) if look.get("deck") else
-                               densify(simplify(piece, ztol=SIMPLIFY_Z_M))):
+                for c in split((densify(piece) if i in unioned else _deck_rows(piece, shp))
+                               if look.get("deck") else densify(simplify(piece, ztol=SIMPLIFY_Z_M))):
                     if len(c) >= 2:
                         ch = _chunk(look, w, c)
                         ch["fixed"] = True
@@ -13344,6 +13477,11 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                             ch["tdir"] = _travel(spec)  # (roadmesh: opposite traffic beside it, a median)
                             _sheet_tag(ch, line, sheet.get(i))
                             _cut_ends(ch, line, exact)
+                            if roadshape.PROFILE_BUILT:
+                                _part_ends(ch, line)
+                                if ch.get("noslab") and fid in (profiled or ()):
+                                    _noslab_on_through(ch, sheet.get(i), line, {
+                                        t: shifted[t] for t in range(len(decks)) if decks[t][0] in profiled})
                             _reach_tag(ch, line, reach.get(i))
                             if depths and fid in depths:
                                 ch["dd"] = round(float(depths[fid]), 3)     # (roadmesh.deck: its slab and girders)

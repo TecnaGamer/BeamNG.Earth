@@ -32,6 +32,13 @@
 //!   one it runs straight on into) is held to it knot by knot while the knot projects inside that deck, the edges stay
 //!   within SPLIT_GAP_M and the two run within SHEET_DEG (P2b's union up to its split); today's two heights further
 //!   apart than SHEET_DZ_MAX anywhere in it: a flyover, no union (an end held by nothing else keeps its height).
+//! - P3d (534): twins (two decks side by side, structprobe's BESIDE rule) held at one height knot by knot, each one's
+//!   knots on the other's line; two deck ends at one junction (within the wider one's half width, NODE_DZ_M today)
+//!   held at one height; a deck end on a deck of another OSM level a sheet end when within NODE_DZ_M today; an
+//!   approach under a deck held its clearance under it (the pins' ground). A grade failure lets go of a coupling
+//!   group holding that member first (the last made first), as a clearance conflict does.
+//! - P3e (536): a deck over another along it (an overlap, not only side by side) held as twins are; a twin's run
+//!   of knots beside the other held whole once one of them is within TWIN_DZ_M today (a ramp parting uphill).
 //! - Pins (MU): an approach that reached its anchor keeps z and z' there (its last two knots), one stopped short (a
 //!   junction) z; a deck end with nothing on keeps z.
 //! - Clearances (an active set, ROUNDS rounds with hysteresis: in past ACTIVE_TOL, out past RELEASE_TOL; each never
@@ -40,7 +47,8 @@
 //!   the abutments), deck over deck where two deck lines cross more than STACK_MIN_M apart today (the higher today
 //!   stays over the lower by min(the lower's clearance need, today's gap): the solve never swaps two decks).
 //! - Checks: couplings within MARGIN, clearances within MARGIN, no segment steeper than max(MAX_GRADE, the member's
-//!   steepest today) + GRADE_ADD. A coupling or clearance failure that a sheet union takes part in lets that union go
+//!   steepest today) + GRADE_ADD, no C1 joint bending more than SLOPE_TOL + 1.5 x its members' own bend + KINK_STEEP x
+//!   the steeper member's steepest grade today (523). A coupling or clearance failure that a sheet union takes part in lets that union go
 //!   and solves again (at most ATTEMPTS solves; counted); any other failure keeps today's heights (status recorded).
 //! - Budget: structures::heights' (checked counts before allocation; every factorisation charged before it runs):
 //!   over it today's heights (S_BUDGET).
@@ -66,10 +74,27 @@ const MEMBER_PARAMS: usize = 5;
 const SOLVE_PARAMS: usize = 18;
 const GRID_M: f64 = 8.0;
 const MAX_KNOTS: usize = 400_000;
-const ATTEMPTS: usize = 4;
+const ATTEMPTS: usize = 10;
 const JOIN_DZ_M: f64 = 0.5;     // m: two joined deck ends further apart in height today are stacked, not joined
 const SLOPE_TOL: f64 = 0.01;    // the grade either side of a C1 joint may differ by this in a solved result (or
                                 // by as much as its members bend inside, between two pieces)
+const KINK_STEEP: f64 = 0.1;
+const GAP_LOOK: f64 = 2.0;      // an approach's walk looks this many anchors on for another deck end (P3c)    // ... plus this share of the steeper member's steepest grade today (P3c)
+const NODE_DZ_M: f64 = 0.5;     // m: a deck end on a deck of another OSM level this near in height today is held to
+                                // it (roadshape.SHEET_NODE_DZ, P2b's fork test at the node; P3d)
+// (P3d, 534) twins: two decks side by side (structprobe's BESIDE: the edges at most TWIN_GAP_M apart, or overlapping,
+// running within TWIN_DEG of each other, at most TWIN_DZ_M apart in height today) for at least min(TWIN_MIN_M,
+// TWIN_SHORT x the shorter deck) are held at one height knot by knot (the design's equal z across shared pavement);
+// a pair in conflict with a clearance or another coupling is let go as a sheet union is
+const TWIN_GAP_M: f64 = 2.5;
+const TWIN_TOUCH_M: f64 = 0.5;  // m two twins' carriageways may overlap ([18] off: more is an overlap, roadmesh's trim)
+const TWIN_HOLD_M: f64 = 1.0;   // m past TWIN_GAP_M a qualifying pair's knots are still held (no step where it parts)
+const TWIN_COS: f64 = 0.906_307_787_036_649_9;     // cos(25 degrees)
+const TWIN_DZ_M: f64 = 1.0;
+const TWIN_MIN_M: f64 = 20.0;
+const TWIN_SHORT: f64 = 0.8;
+const TWIN_END_M: f64 = 1e-6;   // m: a knot whose nearest point on the other is its end (clamped there) is past it
+const APPROACH_PAD_M: f64 = 0.02;   // m an approach under a deck is held under its clearance more (P3d)
 const STACK_MIN_M: f64 = 1.0;   // m: two decks crossing closer than this in height today are one junction (no clearance)      // solves at most: each after letting go of a sheet union in conflict
 
 fn arcs(xy: &[[f64; 2]]) -> Vec<f64> {
@@ -88,6 +113,14 @@ fn arcs(xy: &[[f64; 2]]) -> Vec<f64> {
 fn d2(a: [f64; 2], b: [f64; 2]) -> f64 {
     let (dx, dy) = (a[0] - b[0], a[1] - b[1]);
     dx * dx + dy * dy
+}
+
+/// whether p's foot on polyline xy's end segment at end e (0: its start) lies past that end (beyond it, not on it)
+fn past_end(xy: &[[f64; 2]], e: usize, p: [f64; 2]) -> bool {
+    let n = xy.len();
+    let (q, r) = if e == 0 { (xy[0], xy[1]) } else { (xy[n - 1], xy[n - 2]) };
+    let d = [q[0] - r[0], q[1] - r[1]];
+    (p[0] - q[0]) * d[0] + (p[1] - q[1]) * d[1] > 1e-9
 }
 
 fn unit(v: [f64; 2]) -> [f64; 2] {
@@ -330,6 +363,12 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
             let mut path = vec![p];
             let mut len = 0.0f64;
             let lim = anchor[d];
+            // (P3c, earthfast 523: the walk looks on to GAP_LOOK x its anchor for another deck's end along the road:
+            // found, one member between the two (reach 2); else cut back to its anchor. Two anchors walked from two
+            // abutments 135 m apart along one road overlapped, each pinned to today's ground at the other's moved
+            // abutment: I-95 Middle Branch's 4.5 g, the two solved 5 m apart on one road)
+            let look = lim * GAP_LOOK;
+            let mut cut: Option<(usize, [f64; 2])> = None;     // (path length before the anchor point, the point)
             let mut used = BTreeSet::new();
             let (mut reach, mut to) = (1i64, -1i64);
             let mut first: Option<(usize, usize, f64)> = None;
@@ -376,10 +415,11 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
                     if seg <= 1e-6 {
                         continue;
                     }
-                    if len + seg >= lim {
+                    if cut.is_none() && len + seg >= lim {
                         let f = (lim - len) / seg;
-                        path.push([last[0] + f * (q[0] - last[0]), last[1] + f * (q[1] - last[1])]);
-                        len = lim;
+                        cut = Some((path.len(), [last[0] + f * (q[0] - last[0]), last[1] + f * (q[1] - last[1])]));
+                    }
+                    if len + seg >= look {
                         reach = 0;
                         done = true;
                         break;
@@ -399,6 +439,14 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
                 p = path[path.len() - 1];
                 let ps = arcs(&path);
                 u = out_dir(&path, &ps, 1, dir_m);
+            }
+            if reach != 2 {
+                if let Some((n, q)) = cut {
+                    path.truncate(n);
+                    path.push(q);
+                    len = lim;
+                    reach = 0;
+                }
             }
             if path.len() < 2 || len < step {
                 ends.push([d as i64, e as i64, if joined[d][e] { 2 } else { 0 }]);
@@ -428,6 +476,17 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
                 keep[i] = false;
                 break;
             }
+        }
+    }
+    // (P3c: an anchor walked from a deck end another walk reached as its gap's far end, found from that side alone
+    // (the other's anchor shorter): the gap member covers its road; Codex review of P3c)
+    for i in 0..walks.len() {
+        if !keep[i] || walks[i].3.reach == 2 {
+            continue;
+        }
+        let me = (walks[i].0 * 2 + walks[i].1) as i64;
+        if (0..walks.len()).any(|j| j != i && keep[j] && walks[j].3.reach == 2 && walks[j].3.to == me) {
+            keep[i] = false;
         }
     }
     for (i, w) in walks.into_iter().enumerate() {
@@ -601,6 +660,13 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
     let (lambda, w_g, d0, d1, eps_w, mu) = (prm[0], prm[1], prm[2], prm[3], prm[4], prm[5]);
     let (split_gap, sheet_dz, cos_sheet, sheet_reach, at_grade, deck_ground) = (prm[6], prm[7], prm[8], prm[9], prm[10], prm[11]);
     let (max_grade, grade_add, margin, rounds_max, active_tol, release_tol) = (prm[12], prm[13], prm[14], prm[15] as usize, prm[16], prm[17]);
+    // (P3e, 536: optional [18] decks over each other along held as twins (1), [19] a twin run held whole once seeded
+    // (1), [20] solves at most, [21] a failure lets go of every twin group holding its members at once (1); 18
+    // values: P3d's rules)
+    let opt = |i: usize, d: f64| if prm.len() > i { prm[i] } else { d };
+    let (twin_overlap, twin_flood) = (opt(18, 0.0) != 0.0, opt(19, 0.0) != 0.0);
+    let attempts = (opt(20, ATTEMPTS as f64) as usize).clamp(1, 32);
+    let drop_all = opt(21, 0.0) != 0.0;
     let mut base = Vec::with_capacity(ms.len());
     let mut n = 0usize;
     for m in ms {
@@ -624,7 +690,7 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
     let joins: &[[i64; 5]] = &joins_ok;
     let pins: &[[i64; 3]] = &pins_v;
     let fallback = |status: i64, rep: Vec<f64>| SolveOut { z: today.clone(), tried: Vec::new(), status, report: rep };
-    let mut rep = vec![0.0; 13];
+    let mut rep = vec![0.0; 15];
     rep[1] = n as f64;
     if n == 0 || n > MAX_KNOTS {
         rep[0] = S_BUDGET as f64;
@@ -633,6 +699,8 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
     // equalities (couplings, held by MU) and inequalities (the clearances' candidates)
     let mut eqs: Vec<Lin> = Vec::new();
     let mut eq_group: Vec<i64> = Vec::new();       // (-1: a join; else the sheet union it belongs to)
+    let mut twin_groups: BTreeSet<i64> = BTreeSet::new();      // (the groups the twins' pass made)
+    let mut extra_groups: BTreeSet<i64> = BTreeSet::new();     // (P3e's additions among them)
     let mut unions = 0i64;
     for j in joins {
         let (a, ea, b, eb) = (j[0] as usize, j[1] as usize, j[2] as usize, j[3] as usize);
@@ -656,6 +724,9 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
         }
     }
     let mut sheet_pairs = 0usize;
+    let mut twin_pairs = 0usize;
+    let mut node_pairs = 0usize;
+    let mut held: BTreeSet<usize> = BTreeSet::new();
     let mut pinned_end: Vec<[bool; 2]> = vec![[false; 2]; ms.len()];
     let mut work: u64 = 0;
     for b in 0..ms.len() {
@@ -666,10 +737,14 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
             let p = if eb == 0 { ms[b].xy[0] } else { ms[b].xy[ms[b].xy.len() - 1] };
             // (the host: a deck of the same level whose edge zone holds the end, not one running straight on from
             // it (a C1 joint); nearest, then the lowest index)
+            // (P3d, 534: or of another OSM level whose surface is within NODE_DZ_M of the end today, as P2b's
+            // deck_sheets takes a fork by its heights at the node: Fort Pitt's level 2 decks ending on a level 3
+            // deck 0.36 m apart were pinned to it at tile time in sheet mode and solved apart here, a 0.4 m step
+            // and 270 m2 of holes in the slab)
+            let zb_end = if eb == 0 { ms[b].z[0] } else { ms[b].z[ms[b].z.len() - 1] };
             let mut host: Option<(usize, f64)> = None;
             for a in 0..ms.len() {
-                if a == b || !ms[a].deck || ms[a].xy.len() < 2 || ms[a].level != ms[b].level
-                    || c1_of.contains(&(b, eb, a)) {
+                if a == b || !ms[a].deck || ms[a].xy.len() < 2 || c1_of.contains(&(b, eb, a)) {
                     continue;
                 }
                 work += ms[a].xy.len() as u64;
@@ -677,8 +752,11 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
                     rep[0] = S_BUDGET as f64;
                     return fallback(S_BUDGET, rep);
                 }
-                let (dd, _t) = nearest(&ms[a].xy, &ms[a].s, p);
+                let (dd, t) = nearest(&ms[a].xy, &ms[a].s, p);
                 let r = ms[a].half + 1.0;
+                if ms[a].level != ms[b].level && (z_at(&ms[a], t) - zb_end).abs() > NODE_DZ_M {
+                    continue;
+                }
                 if dd <= r * r && host.map(|h| dd < h.1).unwrap_or(true) {
                     host = Some((a, dd));
                 }
@@ -734,12 +812,181 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
                 lin_at(&base, &ms[a], a, t, -1.0, &mut terms);
                 eqs.push(Lin { terms, r: 0.0 });
                 eq_group.push(unions);
+                held.insert(base[b] + k);
                 sheet_pairs += 1;
             }
             unions += 1;
         }
     }
+    // nodes (P3d): two deck ends of the chain not joined, each inside the other's carriageway (within the wider one's
+    // half width) and within NODE_DZ_M in height today, are one junction: held at one height (Fort Pitt's level 2 and
+    // level 3 forks, their nodes 3.9 m apart and 0.36 m today, were solved 0.41 m apart: a step through the junction
+    // and 270 m2 of holes in its slab); a pair in conflict let go as a union is
+    let mut ends_v: Vec<(usize, usize)> = Vec::new();
+    for (mi, m) in ms.iter().enumerate() {
+        if m.deck && m.xy.len() >= 2 {
+            ends_v.push((mi, 0));
+            ends_v.push((mi, 1));
+        }
+    }
+    let end_k = |m: usize, e: usize| if e == 0 { 0 } else { ms[m].xy.len() - 1 };
+    for i in 0..ends_v.len() {
+        for j in i + 1..ends_v.len() {
+            let ((ma, ea), (mb, eb)) = (ends_v[i], ends_v[j]);
+            let joined = joins.iter().any(|q| {
+                let (a, b) = ((q[0] as usize, q[1] as usize), (q[2] as usize, q[3] as usize));
+                (a == (ma, ea) && b == (mb, eb)) || (a == (mb, eb) && b == (ma, ea))
+            });
+            if ma == mb || joined {
+                continue;
+            }
+            let (ka, kb) = (end_k(ma, ea), end_k(mb, eb));
+            let r = ms[ma].half.max(ms[mb].half);
+            if d2(ms[ma].xy[ka], ms[mb].xy[kb]) > r * r || (ms[ma].z[ka] - ms[mb].z[kb]).abs() > NODE_DZ_M {
+                continue;
+            }
+            eqs.push(Lin { terms: vec![(base[ma] + ka, 1.0), (base[mb] + kb, -1.0)], r: 0.0 });
+            eq_group.push(unions);
+            unions += 1;
+            node_pairs += 1;
+        }
+    }
+    rep[14] = node_pairs as f64;
+    // twins (P3d): the later deck's knots held on the earlier's line where the two run side by side (TWIN_*); a knot
+    // a sheet union holds already is left to it
+    let boxes: Vec<[f64; 4]> = ms.iter().map(|m| {
+        let mut bx = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for p in &m.xy {
+            bx = [bx[0].min(p[0]), bx[1].min(p[1]), bx[2].max(p[0]), bx[3].max(p[1])];
+        }
+        bx
+    }).collect();
+    for b0 in 0..ms.len() {
+        if !ms[b0].deck || ms[b0].xy.len() < 2 {
+            continue;
+        }
+        for a0 in 0..b0 {
+            if !ms[a0].deck || ms[a0].xy.len() < 2 {
+                continue;
+            }
+            let pad = ms[a0].half + ms[b0].half + TWIN_GAP_M + TWIN_HOLD_M;
+            let (ba, bb) = (boxes[a0], boxes[b0]);
+            if bb[0] > ba[2] + pad || bb[2] < ba[0] - pad || bb[1] > ba[3] + pad || bb[3] < ba[1] - pad {
+                continue;
+            }
+            // (each one's knots on the other's line: both sides held, no step where one's knots fall between)
+            let (la0, lb0) = (ms[a0].s[ms[a0].s.len() - 1], ms[b0].s[ms[b0].s.len() - 1]);
+            let mut got = Vec::new();
+            let (mut run, mut run_base) = (0.0f64, 0.0f64);
+            for (a, b) in [(a0, b0), (b0, a0)] {
+            let la = ms[a].s[ms[a].s.len() - 1];
+            let lb = ms[b].s[ms[b].s.len() - 1];
+            let nb = ms[b].xy.len();
+            let (mut side_run, mut side_base) = (0.0f64, 0.0f64);
+            let mut ovl = vec![false; nb];
+            // (P3e, 536: per knot of b: whether it lies beside or over a (cand), within TWIN_DZ_M of it today (seed),
+            // and held by a sheet union already; a candidate run is held whole when one of its knots is a seed: a
+            // ramp climbing away from its mainline while still beside it (I-95 Middle Branch: 3.4 m apart today
+            // within 2.5 m, solved 0.56 m) stays at the mainline's height until it parts, as a twin does)
+            let mut cand = vec![false; nb];
+            let mut seed = vec![false; nb];
+            let mut tk = vec![0.0f64; nb];
+            for k in 0..nb {
+                // (a knot a sheet union holds: P3d's rules skip it before any work; P3e's read it as a run's seed)
+                let is_held = held.contains(&(base[b] + k));
+                if is_held && !twin_flood && !twin_overlap {
+                    continue;
+                }
+                work += ms[a].xy.len() as u64;
+                if work > BUDGET.work {
+                    rep[0] = S_BUDGET as f64;
+                    return fallback(S_BUDGET, rep);
+                }
+                let (dd, t) = nearest(&ms[a].xy, &ms[a].s, ms[b].xy[k]);
+                if (t <= TWIN_END_M && past_end(&ms[a].xy, 0, ms[b].xy[k]))
+                    || (t >= la - TWIN_END_M && past_end(&ms[a].xy, 1, ms[b].xy[k])) {
+                    continue;
+                }
+                let gap = dd.sqrt() - ms[a].half - ms[b].half;
+                // (P3e: an overlap too, one over the other (OVERLAP_ALONG): one pavement, held at one height, never
+                // trimmed into a step (P3d left overlaps past TWIN_TOUCH_M to roadmesh's trim))
+                if gap > TWIN_GAP_M + TWIN_HOLD_M || (!twin_overlap && gap < -TWIN_TOUCH_M) {
+                    continue;
+                }
+                let ub = {
+                    let k0 = if k + 1 < nb { k } else { k - 1 };
+                    unit([ms[b].xy[k0 + 1][0] - ms[b].xy[k0][0], ms[b].xy[k0 + 1][1] - ms[b].xy[k0][1]])
+                };
+                let ua = {
+                    let pa = point_at(&ms[a].xy, &ms[a].s, (t - 1.0).max(0.0));
+                    let qa = point_at(&ms[a].xy, &ms[a].s, (t + 1.0).min(la));
+                    unit([qa[0] - pa[0], qa[1] - pa[1]])
+                };
+                if dot(ua, ub).abs() < TWIN_COS {
+                    continue;
+                }
+                cand[k] = true;
+                tk[k] = t;
+                seed[k] = (ms[b].z[k] - z_at(&ms[a], t)).abs() <= TWIN_DZ_M;
+                ovl[k] = gap < -TWIN_TOUCH_M;
+                let piece = if k == 0 { ms[b].s[1] / 2.0 } else if k == nb - 1 { (lb - ms[b].s[k - 1]) / 2.0 }
+                    else { (ms[b].s[k + 1] - ms[b].s[k - 1]) / 2.0 };
+                if gap <= TWIN_GAP_M && (twin_flood || seed[k]) {
+                    side_run += piece;
+                }
+                if gap <= TWIN_GAP_M && seed[k] && !ovl[k] && !is_held {
+                    side_base += piece;      // (P3d's rule alone)
+                }
+            }
+            // (a run of candidates holding a seed: held whole)
+            let mut k = 0;
+            while k < nb {
+                if !cand[k] {
+                    k += 1;
+                    continue;
+                }
+                let k0 = k;
+                while k < nb && cand[k] {
+                    k += 1;
+                }
+                if (k0..k).any(|q| seed[q]) {
+                    for q in k0..k {
+                        if !held.contains(&(base[b] + q)) && (twin_flood || seed[q]) {
+                            // (P3d's knots one group, P3e's additions (a run held whole, an overlap) another: a
+                            // failure no group of its members answers lets go of every addition first)
+                            got.push((a, b, q, tk[q], !seed[q] || ovl[q]));
+                        }
+                    }
+                }
+            }
+            run = run.max(side_run);
+            run_base = run_base.max(side_base);
+            }
+            let need = TWIN_MIN_M.min(TWIN_SHORT * la0.min(lb0));
+            if got.is_empty() || run < need {
+                continue;
+            }
+            let base_ok = run_base >= need;
+            for (a, b, k, t, extra) in got {
+                if !extra && !base_ok {
+                    continue;
+                }
+                let g = unions + extra as i64;
+                let mut terms = vec![(base[b] + k, 1.0)];
+                lin_at(&base, &ms[a], a, t, -1.0, &mut terms);
+                eqs.push(Lin { terms, r: 0.0 });
+                eq_group.push(g);
+                twin_groups.insert(g);
+                if extra {
+                    extra_groups.insert(g);
+                }
+                twin_pairs += 1;
+            }
+            unions += 2;
+        }
+    }
     rep[4] = sheet_pairs as f64;
+    rep[13] = twin_pairs as f64;
     if work > BUDGET.work {
         rep[0] = S_BUDGET as f64;
         return fallback(S_BUDGET, rep);
@@ -813,10 +1060,9 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
     // deck over deck of another level where the lines cross (a grid of segments)
     let mut grid: BTreeMap<(i64, i64), Vec<(usize, usize)>> = BTreeMap::new();
     let mut entries: u64 = 0;
+    // (P3d, 534: and an approach under a deck: the ground road the pins raise under one of the chain's decks, held
+    // its clearance under it (a Fort Pitt road pinned 0.1-0.35 m up under a deck, one 0.02 m short of C))
     for (mi, m) in ms.iter().enumerate() {
-        if !m.deck {
-            continue;
-        }
         for k in 0..m.xy.len().saturating_sub(1) {
             let (a, b) = (m.xy[k], m.xy[k + 1]);
             let (x0, y0) = gkey([a[0].min(b[0]), a[1].min(b[1])], GRID_M);
@@ -835,6 +1081,10 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
     }
     let mut seen = BTreeSet::new();
     let mut ncross = 0usize;
+    let app_joined: BTreeSet<(usize, usize)> = joins.iter().filter_map(|q| {
+        let (a, b) = (q[0] as usize, q[2] as usize);
+        if a < ms.len() && b < ms.len() && ms[a].deck != ms[b].deck { Some((a.min(b), a.max(b))) } else { None }
+    }).collect();
     for v in grid.values() {
         work += (v.len() as u64) * (v.len() as u64);
         if work > BUDGET.work {
@@ -844,7 +1094,7 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
         for i in 0..v.len() {
             for j in i + 1..v.len() {
                 let ((ma, ka), (mb, kb)) = (v[i], v[j]);
-                if ma == mb {
+                if ma == mb || (!ms[ma].deck && !ms[mb].deck) {
                     continue;
                 }
                 let (ma, ka, mb, kb) = if (ma, ka) < (mb, kb) { (ma, ka, mb, kb) } else { (mb, kb, ma, ka) };
@@ -855,7 +1105,11 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
                 let Some((u, w)) = seg_cross(a.xy[ka], a.xy[ka + 1], b.xy[kb], b.xy[kb + 1]) else { continue };
                 let ta = a.s[ka] + u * (a.s[ka + 1] - a.s[ka]);
                 let tb = b.s[kb] + w * (b.s[kb + 1] - b.s[kb]);
-                if abut_dist(a, ta) < at_grade || abut_dist(b, tb) < at_grade {
+                // (a deck and an approach: only the approach's own joint with that deck is at grade; any other deck
+                // over it holds the clearance near its abutment too (never worse than today's: min(need, dz)), Codex
+                // review of P3d)
+                let near = abut_dist(a, ta) < at_grade || abut_dist(b, tb) < at_grade;
+                if near && (a.deck && b.deck || app_joined.contains(&(ma.min(mb), ma.max(mb)))) {
                     continue;
                 }
                 let (za, zb) = (z_at(a, ta), z_at(b, tb));
@@ -868,7 +1122,11 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
                 } else {
                     (mb, tb, ma, ta, zb - za)
                 };
-                let need = ms[lo].under.min(dz);
+                if !ms[up].deck {
+                    continue;       // (a ground road over a deck: not this solve's to clear)
+                }
+                // (an approach under: its clearance and the checks' margin, so the pinned ground ends at C or lower)
+                let need = if ms[lo].deck { ms[lo].under.min(dz) } else { (ms[lo].under + APPROACH_PAD_M).min(dz) };
                 let mut terms = Vec::new();
                 lin_at(&base, &ms[up], up, tu, 1.0, &mut terms);
                 lin_at(&base, &ms[lo], lo, tl, -1.0, &mut terms);
@@ -1003,7 +1261,53 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
     let member_of = |i: usize| base.partition_point(|&b| b <= i) - 1;
     let mut dropped: BTreeSet<i64> = BTreeSet::new();
     let mut total_rounds = 0usize;
-    for _attempt in 0..ATTEMPTS {
+    // (P3e: a failure no group of its members answers lets go of every addition (extra_groups) at once, if any is left:
+    // P3d's couplings alone then)
+    let drop_extras = |dropped: &mut BTreeSet<i64>| -> bool {
+        let left: Vec<i64> = extra_groups.iter().copied().filter(|g| !dropped.contains(g)).collect();
+        for g in &left {
+            dropped.insert(*g);
+        }
+        !left.is_empty()
+    };
+    // (P3e: a failure no group of its members answers: the last-made group holding a member joined to one of them
+    // (one join on), with those members)
+    let near_group = |dropped: &BTreeSet<i64>, mm: &BTreeSet<usize>| -> Option<(i64, BTreeSet<usize>)> {
+        let mut nb = mm.clone();
+        for j in joins {
+            let (x, y) = (j[0] as usize, j[2] as usize);
+            if mm.contains(&x) {
+                nb.insert(y);
+            }
+            if mm.contains(&y) {
+                nb.insert(x);
+            }
+        }
+        for (i, l) in eqs.iter().enumerate().rev() {
+            let g = eq_group[i];
+            if g >= 0 && !dropped.contains(&g) && l.terms.iter().any(|t| nb.contains(&member_of(t.0))) {
+                return Some((g, nb));
+            }
+        }
+        None
+    };
+    // ([21]: every twin group holding one of the members, let go with the one chosen)
+    let drop_with = |dropped: &mut BTreeSet<i64>, mm: &BTreeSet<usize>| {
+        if !drop_all {
+            return;
+        }
+        for (i, l) in eqs.iter().enumerate() {
+            let g = eq_group[i];
+            if g >= 0 && twin_groups.contains(&g) && l.terms.iter().any(|t| mm.contains(&member_of(t.0))) {
+                dropped.insert(g);
+            }
+        }
+    };
+    for attempt in 0..attempts {
+        // (P3e: from half the solves on, P3d's couplings alone: the additions never cost the chain its solve)
+        if attempt == attempts / 2 && drop_extras(&mut dropped) {
+            rep[9] = dropped.len() as f64;
+        }
         // (the couplings per attempt: a sheet union in conflict is let go)
         let mut rows1 = rows0.clone();
         let mut rhs1 = rhs0.clone();
@@ -1088,7 +1392,8 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
                 cand = Some(eq_group[worst]);
             } else if unmet > 0 {
                 let mms: BTreeSet<usize> = ineq[wi].terms.iter().map(|t| member_of(t.0)).collect();
-                for (i, l) in eqs.iter().enumerate() {
+                // (the last made first: a twin pair before a sheet union, P3d)
+                for (i, l) in eqs.iter().enumerate().rev() {
                     let g = eq_group[i];
                     if g >= 0 && !dropped.contains(&g) && l.terms.iter().any(|t| mms.contains(&member_of(t.0))) {
                         cand = Some(g);
@@ -1098,6 +1403,16 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
             }
             if let Some(g) = cand {
                 dropped.insert(g);
+                let mm: BTreeSet<usize> = if unmet > 0 && !(resid > margin && eq_group[worst] >= 0) {
+                    ineq[wi].terms.iter().map(|t| member_of(t.0)).collect()
+                } else {
+                    eqs[worst].terms.iter().map(|t| member_of(t.0)).collect()
+                };
+                drop_with(&mut dropped, &mm);
+                rep[9] = dropped.len() as f64;
+                continue;
+            }
+            if drop_extras(&mut dropped) {
                 rep[9] = dropped.len() as f64;
                 continue;
             }
@@ -1130,17 +1445,71 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
             }
             b
         }).collect();
+        // (P3c, earthfast 523: and KINK_STEEP x the steeper member's steepest grade today: a steep road is a slow one,
+        // the ride of a slope break goes with v^2 (Tromso's 13-23 % streets fell back over a 0.35 % excess))
+        let steep: Vec<f64> = ms.iter().map(|m| {
+            let mut g = 0.0f64;
+            for k in 0..m.xy.len().saturating_sub(1) {
+                let h = m.s[k + 1] - m.s[k];
+                if h >= 0.5 {
+                    g = g.max((m.z[k + 1] - m.z[k]).abs() / h);
+                }
+            }
+            g
+        }).collect();
         let mut kink = 0.0f64;
+        let mut kink_at: Option<(usize, usize)> = None;
         for &(c, ha, hb) in &c1_terms {
             let (sa, sb) = ((z[c[1]] - z[c[0]]) / ha.max(1e-3), (z[c[2]] - z[c[1]]) / hb.max(1e-3));
-            let lim = SLOPE_TOL + 1.5 * bend[member_of(c[0])].max(bend[member_of(c[2])]);
-            kink = kink.max((sa - sb).abs() - lim);
+            let (ma, mb) = (member_of(c[0]), member_of(c[2]));
+            let lim = SLOPE_TOL + 1.5 * bend[ma].max(bend[mb]) + KINK_STEEP * steep[ma].max(steep[mb]);
+            let k = (sa - sb).abs() - lim;
+            if k > kink {
+                kink = k;
+                kink_at = Some((ma, mb));
+            }
+        }
+        if drift <= margin && kink > 0.0 {
+            // (P3e, 536: a slope break at a C1 joint lets go of a coupling group holding one of its two members
+            // first, the last made first, as a grade failure does; solved again; counted)
+            let (ma, mb) = kink_at.unwrap_or((usize::MAX, usize::MAX));
+            let mut cand: Option<i64> = None;
+            for (i, l) in eqs.iter().enumerate().rev() {
+                let g = eq_group[i];
+                if g >= 0 && !dropped.contains(&g) && l.terms.iter().any(|t| {
+                    let m = member_of(t.0);
+                    m == ma || m == mb
+                }) {
+                    cand = Some(g);
+                    break;
+                }
+            }
+            if let Some(g) = cand {
+                dropped.insert(g);
+                drop_with(&mut dropped, &[ma, mb].into_iter().collect());
+                rep[9] = dropped.len() as f64;
+                continue;
+            }
+        }
+        if drift <= margin && kink > 0.0 {
+            let (ma, mb) = kink_at.unwrap_or((usize::MAX, usize::MAX));
+            if let Some((g, nb)) = near_group(&dropped, &[ma, mb].into_iter().collect()) {
+                dropped.insert(g);
+                drop_with(&mut dropped, &nb);
+                rep[9] = dropped.len() as f64;
+                continue;
+            }
+        }
+        if (drift > margin || kink > 0.0) && drop_extras(&mut dropped) {
+            rep[9] = dropped.len() as f64;
+            continue;
         }
         if drift > margin || kink > 0.0 {
             rep[12] = drift.max(kink);
             rep[0] = S_INFEASIBLE as f64;
             return fallback(S_INFEASIBLE, rep);
         }
+        let mut regrade = false;
         for (mi, m) in ms.iter().enumerate() {
             let nm = m.xy.len();
             let mut today_max: f64 = 0.0;
@@ -1154,12 +1523,44 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
                 new_max = new_max.max((z[base[mi] + k + 1] - z[base[mi] + k]).abs() / h);
             }
             if new_max > max_grade.max(today_max) + grade_add {
+                // (P3d: a twin pair or sheet union holding that member let go first, the last made first (the twins
+                // after the unions), solved again; counted)
+                let mut cand: Option<i64> = None;
+                for (i, l) in eqs.iter().enumerate().rev() {
+                    let g = eq_group[i];
+                    if g >= 0 && !dropped.contains(&g) && l.terms.iter().any(|t| member_of(t.0) == mi) {
+                        cand = Some(g);
+                        break;
+                    }
+                }
+                if let Some(g) = cand {
+                    dropped.insert(g);
+                    drop_with(&mut dropped, &[mi].into_iter().collect());
+                    rep[9] = dropped.len() as f64;
+                    regrade = true;
+                    break;
+                }
+                if let Some((g, nb)) = near_group(&dropped, &[mi].into_iter().collect()) {
+                    dropped.insert(g);
+                    drop_with(&mut dropped, &nb);
+                    rep[9] = dropped.len() as f64;
+                    regrade = true;
+                    break;
+                }
+                if drop_extras(&mut dropped) {
+                    rep[9] = dropped.len() as f64;
+                    regrade = true;
+                    break;
+                }
                 rep[10] = mi as f64;
                 rep[0] = S_GRADE as f64;
                 let mut out = fallback(S_GRADE, rep);
                 out.tried = z.iter().map(|v| (v * 1000.0).round() / 1000.0).collect();
                 return out;
             }
+        }
+        if regrade {
+            continue;
         }
         let out: Vec<f64> = z.iter().map(|v| (v * 1000.0).round() / 1000.0).collect();
         rep[0] = S_SOLVED as f64;
@@ -1187,7 +1588,7 @@ pub fn profile_solve<'py>(py: Python<'py>, kxy: PyReadonlyArray2<'py, f64>, koff
     let n = kxy.nrows();
     if kxy.ncols() != 2 || !check_off(&koff, n) || kz.len() != n || kg.len() != n || deck.len() != nm
         || half.len() != nm || level.len() != nm || under.len() != nm || abut.len() != nm || joins.len() % 5 != 0
-        || pins.len() % 3 != 0 || floors.len() % 4 != 0 || params.len() != SOLVE_PARAMS
+        || pins.len() % 3 != 0 || floors.len() % 4 != 0 || (params.len() != SOLVE_PARAMS && params.len() != SOLVE_PARAMS + 4)
         || (0..nm).any(|i| koff[i + 1] - koff[i] < 2) {
         return Err(PyValueError::new_err("profile_solve: bad shapes"));
     }
@@ -1205,7 +1606,18 @@ pub fn profile_solve<'py>(py: Python<'py>, kxy: PyReadonlyArray2<'py, f64>, koff
     let pn: Vec<[i64; 3]> = pins.chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
     let fl: Vec<(usize, [f64; 2], f64)> = floors.chunks(4).filter(|c| c[0] >= 0.0)
         .map(|c| (c[0] as usize, [c[1], c[2]], c[3])).collect();
-    let out = py.detach(|| solve_core(&ms, &jn, &pn, &fl, &params));
+    let out = py.detach(|| {
+        let out = solve_core(&ms, &jn, &pn, &fl, &params);
+        // (P3e: the additions ([18], [19]) over the budget: solved again without them, P3d's couplings alone, never a
+        // fallback the baseline would not take; Codex P3e)
+        if out.status == S_BUDGET && params.len() > SOLVE_PARAMS && (params[18] != 0.0 || params[19] != 0.0) {
+            let mut p2 = params.clone();
+            p2[18] = 0.0;
+            p2[19] = 0.0;
+            return solve_core(&ms, &jn, &pn, &fl, &p2);
+        }
+        out
+    });
     Ok((out.z, out.report, out.tried))
 }
 
@@ -1260,6 +1672,27 @@ mod tests {
         let out = solve_core(&ms, &joins, &pins, &floors, &prm());
         assert_eq!(out.status, S_SOLVED);
         assert!(out.z[25] >= 5.5 - 0.02, "{}", out.z[25]);
+    }
+
+    #[test]
+    fn twins_held_level() {
+        // (P3d) two parallel decks 1 m apart edge to edge, 0.3 m apart today and rising differently: one height
+        let mut a = line(0.0, 100.0, 2.0, |x| 0.02 * x, true, [true, true]);
+        let mut b = line(0.0, 100.0, 2.0, |x| 0.1 + 0.025 * x, true, [true, true]);
+        for p in b.xy.iter_mut() {
+            p[1] = 11.0;
+        }
+        a.half = 5.0;
+        b.half = 5.0;
+        let ms = vec![a, b];
+        let pins = vec![[0, 0, 1], [0, 1, 1]];
+        let out = solve_core(&ms, &[], &pins, &[], &prm());
+        assert_eq!(out.status, S_SOLVED);
+        assert!(out.report[13] > 0.0);
+        let n = ms[0].xy.len();
+        for k in 5..n - 5 {
+            assert!((out.z[k] - out.z[n + k]).abs() < 0.02, "{} {} {}", k, out.z[k], out.z[n + k]);
+        }
     }
 
     #[test]

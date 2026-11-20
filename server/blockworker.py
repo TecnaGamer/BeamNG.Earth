@@ -1030,7 +1030,7 @@ def _elev_stage1(la, lo):
 
 
 _PIN_FRAME = geodesy.EnuFrame(0.0, 0.0)     # (any frame: a Grader's heights are its planners', anchor-free)
-PIN_PARTS_KEPT = 256        # cells whose bridge parts' boxes are kept (_cell_bridge_parts)
+PIN_PARTS_KEPT = 256        # cells whose bridge parts' end boxes are kept (_cell_bridge_parts)
 
 
 def _cell_bridge_parts(key):
@@ -1078,9 +1078,12 @@ def _bridge_parts_of(feats):
                 continue
             for j, ring in roadsmod._keyed(bp.keys_of, bp.parts_of, feats, i):
                 ring = np.asarray(ring, np.float64)
+                # (the box of its two ends, P3c: the pins lie along approaches from deck ends, within
+                # roadshape.PIN_REACH_M of one; a long viaduct passing near a block with both ends far brings none.
+                # A copy clipped by its cell ends at the cell's edge: its real end is another cell's copy's end)
+                e = ring[[0, -1]]
                 out.append(((str(feats.ids[i]), j), feats, i, (float(ring[0, 1]), float(ring[0, 0])),
-                            (float(ring[:, 1].min()), float(ring[:, 0].min()), float(ring[:, 1].max()),
-                             float(ring[:, 0].max()))))
+                            (float(e[:, 1].min()), float(e[:, 0].min()), float(e[:, 1].max()), float(e[:, 0].max()))))
     return out
 
 
