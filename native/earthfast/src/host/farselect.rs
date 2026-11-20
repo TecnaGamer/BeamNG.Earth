@@ -344,36 +344,53 @@ fn sel_global<'py>(py: Python<'py>, ff: &Bound<'py, PyModule>, lat0: f64, lon0: 
     let gtile = ff.getattr("GTile")?;
     let ntiles = tiles.len();
     {
+        // (the memo's lock is never held while Python runs: no GTile made, nor one let go, under it; another thread
+        // waiting for it holds the GIL)
         let mk = (lat0.to_bits(), lon0.to_bits(), zf);
-        let mut gm = GTILE_MEMO.lock().unwrap_or_else(|p| p.into_inner());
-        let pos = gm.iter().position(|(k, m)| *k == mk && m.len() <= GTILE_MEMO_MAX);
-        let pos = match pos {
-            Some(p) => p,
-            None => {
-                if let Some(p) = gm.iter().position(|(k, _)| *k == mk) {
-                    gm[p].1.clear();
-                    p
-                } else {
-                    if gm.len() >= 4 {
-                        gm.remove(0);
+        let (have, gone): (Vec<Option<Py<PyAny>>>, Vec<HashMap<(u32, i64, i64), Py<PyAny>>>) = {
+            let mut gm = GTILE_MEMO.lock().unwrap_or_else(|p| p.into_inner());
+            let mut gone = Vec::new();
+            let pos = match gm.iter().position(|(k, m)| *k == mk && m.len() <= GTILE_MEMO_MAX) {
+                Some(p) => p,
+                None => {
+                    if let Some(p) = gm.iter().position(|(k, _)| *k == mk) {
+                        gone.push(std::mem::take(&mut gm[p].1));
+                        p
+                    } else {
+                        if gm.len() >= 4 {
+                            gone.push(gm.remove(0).1);
+                        }
+                        gm.push((mk, HashMap::new()));
+                        gm.len() - 1
                     }
-                    gm.push((mk, HashMap::new()));
-                    gm.len() - 1
                 }
-            }
+            };
+            let m = &gm[pos].1;
+            (tiles.iter().map(|(z, x, y, _, _)| m.get(&(*z, *x, *y)).map(|t| t.clone_ref(py))).collect(), gone)
         };
-        let m = &mut gm[pos].1;
-        for (z, x, y, q, s) in tiles {
-            let t = match m.get(&(z, x, y)) {
-                Some(t) => t.clone_ref(py),
+        drop(gone);
+        let mut made = Vec::new();
+        for ((z, x, y, q, s), t) in tiles.into_iter().zip(have) {
+            let t = match t {
+                Some(t) => t,
                 None => {
                     let t = gtile.call1((z, x, y, gmin + zf as i32 - z as i32, PyTuple::new(py, &q)?, s))?.unbind();
-                    m.insert((z, x, y), t.clone_ref(py));
+                    made.push(((z, x, y), t.clone_ref(py)));
                     t
                 }
             };
             out.put(Key::from(format!("m{z}_{x}_{y}").as_str()), t);
         }
+        if !made.is_empty() {
+            let mut gm = GTILE_MEMO.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(p) = gm.iter().position(|(k, _)| *k == mk) {
+                for (k, t) in made.drain(..) {
+                    gm[p].1.entry(k).or_insert(t);
+                }
+            }
+            // (made's leftovers, a memo replaced meanwhile, are let go after the lock)
+        }
+        drop(made);
     }
     let mut refined: BTreeSet<Node> = grefined.into_iter().map(|(z, x, y)| Node::G(z, x, y)).collect();
     let t1 = t0.elapsed().as_secs_f64();
