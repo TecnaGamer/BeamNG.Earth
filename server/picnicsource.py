@@ -26,10 +26,18 @@ URL = "https://data.openstreetmap.us/layercake/pois.parquet"
 PATH = "osm/pois.parquet"
 VERSION_TTL_S = 7 * 86400
 RETRY_S = 3600
-COLUMNS = ("id", "leisure", "amenity", "tourism")
+COLUMNS = ("id", "leisure", "amenity", "tourism", "historic", "description")
 TABLES = {"picnic_table"}
 SITES = {"picnic_site"}
 GRILLS = {"bbq", "barbecue", "bbq_grill"}
+FIREPITS = {"firepit"}
+# historic=wayside_cross / wayside_shrine (a roadside cross, a "Boží muka" column): localpoi.py draws them
+WAYSIDE = {"wayside_cross", "wayside_shrine"}
+# historic=memorial / monument / stone (a memorial, a monument, a penance stone): localpoi.py draws them by the description's words
+MEMORIALS = {"memorial", "monument", "stone"}
+DESCRIPTION_MAX = 160
+# amenity=shelter that is not a building (a picnic hut; a roofed bus stop is Overture's, shelters.py): localpoi.py draws it
+SHELTERS = {"shelter"}
 
 
 class Source:
@@ -195,30 +203,31 @@ class Source:
             cand = _candidates(groups, bounds)
             if not cand:
                 return []
-            want = set(COLUMNS) | {"bbox"}
+            want = set(COLUMNS) | {"bbox", "building"}
             rd._fetch(files, {PATH: [r for rg in cand for c, rs in groups[rg]["cols"].items() if c in want
                                      for r in rs]}, kind)
             only = " OR ".join(f"file_row_number BETWEEN {groups[rg]['first']} AND "
                                f"{groups[rg]['first'] + groups[rg]['n'] - 1}" for rg in cand)
             box = (f"bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND bbox.ymin <= {lat1!r} "
                    f"AND bbox.ymax >= {lat0!r}")
-            mark = ("lower(leisure) IN ('picnic_table', 'picnic_site') OR "
+            mark = ("lower(leisure) IN ('picnic_table', 'picnic_site', 'firepit') OR "
                     "lower(amenity) IN ('picnic_table', 'bbq', 'barbecue', 'bbq_grill') OR "
-                    "lower(tourism) = 'picnic_site'")
-            rows = con.execute(f"""SELECT id, leisure, amenity, tourism, file_row_number
+                    "lower(tourism) = 'picnic_site' OR (lower(amenity) = 'shelter' AND building IS NULL) OR "
+                    "lower(historic) IN ('wayside_cross', 'wayside_shrine', 'memorial', 'monument', 'stone')")
+            rows = con.execute(f"""SELECT id, leisure, amenity, tourism, historic, description, file_row_number
                 FROM read_parquet({uri}, file_row_number = true)
                 WHERE ({only}) AND {box} AND ({mark})""").fetchall()
             if not rows:
                 return []
             hit = sorted({rg for row in rows for rg in cand
-                          if groups[rg]["first"] <= row[4] < groups[rg]["first"] + groups[rg]["n"]})
+                          if groups[rg]["first"] <= row[6] < groups[rg]["first"] + groups[rg]["n"]})
             rd._fetch(files, {PATH: [r for rg in hit for span in groups[rg]["cols"].get("geometry", [])
                                      for r in (span,)]}, kind)
             try:
                 con.execute("SET enable_geoparquet_conversion = false")
             except Exception:
                 pass
-            nums = ", ".join(str(int(row[4])) for row in rows)
+            nums = ", ".join(str(int(row[6])) for row in rows)
             geoms = dict(con.execute(f"""SELECT file_row_number, geometry
                 FROM read_parquet({uri}, file_row_number = true)
                 WHERE file_row_number IN ({nums})""").fetchall())
@@ -230,11 +239,11 @@ class Source:
         finally:
             con.close()
         out = []
-        for fid, leisure, amenity, tourism, num in rows:
+        for fid, leisure, amenity, tourism, historic, description, num in rows:
             geom = geoms.get(num)
             if geom is None:
                 continue
-            out.append((int(fid), leisure, amenity, tourism, bytes(geom)))
+            out.append((int(fid), leisure, amenity, tourism, bytes(geom), historic, description))
         return out
 
 
@@ -278,11 +287,12 @@ def _candidates(groups, bounds):
             and stat(g, "ymin", 0, -1e9) <= lat1 and stat(g, "ymax", 1, 1e9) >= lat0]
 
 
-def _mark(leisure, amenity, tourism):
+def _mark(leisure, amenity, tourism, historic=None, description=None):
     """(class, tags) of a picnic row, else None."""
     leisure = str(leisure or "").strip().lower()
     amenity = str(amenity or "").strip().lower()
     tourism = str(tourism or "").strip().lower()
+    historic = str(historic or "").strip().lower()
     tags = {}
     if leisure:
         tags["leisure"] = leisure
@@ -290,20 +300,31 @@ def _mark(leisure, amenity, tourism):
         tags["amenity"] = amenity
     if tourism:
         tags["tourism"] = tourism
+    if historic:
+        tags["historic"] = historic
+        text = str(description or "").strip()
+        if text:
+            tags["description"] = text[:DESCRIPTION_MAX]
     if leisure in TABLES or amenity in TABLES:
         return "picnic_table", tags
     if tourism in SITES or leisure in SITES:
         return "picnic_site", tags
     if amenity in GRILLS:
         return "bbq", tags
+    if leisure in FIREPITS:
+        return "firepit", tags
+    if amenity in SHELTERS:
+        return "shelter", tags
+    if historic in WAYSIDE or historic in MEMORIALS:
+        return historic, tags
     return None
 
 
 def features_of(rows):
-    """Features of (id, leisure, amenity, tourism, wkb) rows. Ids sort as osm-picnic-<id>."""
+    """Features of (id, leisure, amenity, tourism, wkb[, historic[, description]]) rows. Ids sort as osm-picnic-<id>."""
     built = []
-    for fid, leisure, amenity, tourism, wkb in rows:
-        mark = _mark(leisure, amenity, tourism)
+    for fid, leisure, amenity, tourism, wkb, *rest in rows:
+        mark = _mark(leisure, amenity, tourism, rest[0] if rest else None, rest[1] if len(rest) > 1 else None)
         if mark is None or not wkb:
             continue
         try:
