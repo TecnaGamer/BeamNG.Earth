@@ -1502,8 +1502,8 @@ class Vegetation:
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
         px_, py_ = mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter
-        if spacing > CROWN_SPACING + 1e-6:
-            px_, py_ = _spread(px_, py_, th, spread_k * spacing, blocked | curb, chm.x0, chm.y0, chm.dx, chm.dy)
+        px_, py_ = _spread(px_, py_, th, spread_k * spacing, blocked | curb, chm.x0, chm.y0, chm.dx, chm.dy,
+                           TRUNK_MIN_M / max(0.05, dmath.cos(dmath.radians(clat))))
         tlon2, tlat2 = _to4326(px_, py_)
         tree = Items(tlon2, tlat2, th.astype(np.float32), (0.12 * th + 1.0).astype(np.float32), kind, group,
                      _hash01(gx, gy, 5).astype(np.float32), (u2 * 360.0).astype(np.float32),
@@ -1803,9 +1803,11 @@ def _thin(jj, ii, h, px, k=1.0, spacing=None):
     return jj[keep], ii[keep]
 
 
-SPREAD_ITERS = 4        # (50) _spread's passes (10 spread no better: Syrynka 23 % / 20 % of trees within 2 m)
-SPREAD_PAIRS_EVERY = 2  # its near pairs found again every this many passes
-SPREAD_MAX = 0.75       # a top moved at most this many of its own (spaced) crown radii from where the canopy has it
+SPREAD_ITERS = 16       # (50) _spread's passes (4 left a flat canopy's lattice 2-2.5 m apart)
+SPREAD_PAIRS_EVERY = 4  # its near pairs found again every this many passes
+TRUNK_MIN_M = 3.5       # two trees of TRUNK_TALL_M or more spread at least this far apart (ground m): a flat canopy
+TRUNK_TALL_M = 8.0      # plateau's tops are a thinning-radius lattice, 2 m apart (Rogowska, the user's 2026-11-20)
+SPREAD_MAX = 1.25       # a top moved at most this many of its own (spaced) radii from where the canopy has it
 
 
 def _near_pairs(x, y, cell):
@@ -1842,10 +1844,10 @@ def _near_pairs(x, y, cell):
     return np.concatenate(out_i), np.concatenate(out_j)
 
 
-def _spread(x, y, h, scale, forbid, x0, y0, dx, dy):
+def _spread(x, y, h, scale, forbid, x0, y0, dx, dy, trunk=0.0):
     """(50) Tops x, y (Web Mercator m) of heights h pushed apart, keeping every one: two tops nearer than scale x
     their mean crown radius (0.12 h + 1 m) move away from each other, the shorter one the more (the tall crown keeps
-    its canopy top), each at most SPREAD_MAX of its own radius x scale from where it was, never onto a forbidden
+    its canopy top), each at most SPREAD_MAX of its own radius x scale from where it was (two tops of TRUNK_TALL_M or more: at least trunk apart), never onto a forbidden
     pixel (buildings, water, roads and their curbs: forbid over the grid x0, y0, dx, dy). Dev's thinning (0.5 crown
     radii) left a broadleaf's crown two or three trunks a metre or two apart (the user's Syrynka 2026-11-18); the
     wider thinning of 37 fixed that by dropping 35-45 % of the trees, and the user wanted the spacing, not fewer
@@ -1855,7 +1857,10 @@ def _spread(x, y, h, scale, forbid, x0, y0, dx, dy):
         return x, y
     x0_, y0_ = np.asarray(x, np.float64).copy(), np.asarray(y, np.float64).copy()
     x, y = x0_.copy(), y0_.copy()
-    r = (0.12 * np.asarray(h, np.float64) + 1.0) * scale
+    h = np.asarray(h, np.float64)
+    r = (0.12 * h + 1.0) * scale
+    if trunk > 0.0:                         # (two tall trees' trunks at least trunk apart: TRUNK_MIN_M)
+        r = np.where(h >= TRUNK_TALL_M, np.maximum(r, trunk), r)
     cap = SPREAD_MAX * r
     n_r, n_c = forbid.shape
     cell = float(r.max())

@@ -777,6 +777,23 @@ class SpreadTest(unittest.TestCase):
         row = np.floor((y0 - ny) / dy).astype(int)
         self.assertFalse(forbid[row, col].any(), "no top onto the road")
 
+    def test_trunk_floor(self):
+        """Tall trees as dense as a flat canopy's tops (450 / ha, random: nearest neighbours ~2.2 m) spread to the trunk
+        spacing, every tree kept."""
+        forbid, x0, y0, dx, dy = self._grid()
+        rng = np.random.default_rng(5)
+        x, y = rng.uniform(32, 68, 58), rng.uniform(32, 68, 58)
+        h = np.full(len(x), 22.0)
+        nx, ny = veg._spread(x, y, h, 0.5, forbid, x0, y0, dx, dy, trunk=3.5)
+        self.assertEqual(len(nx), len(x))
+        d = np.hypot(nx[:, None] - nx[None, :], ny[:, None] - ny[None, :])
+        np.fill_diagonal(d, 1e9)
+        self.assertGreater(float(np.median(d.min(axis=1))), 3.0)
+        lo_x, lo_y = veg._spread(x, y, np.full(len(x), 5.0), 0.5, forbid, x0, y0, dx, dy, trunk=3.5)
+        d = np.hypot(lo_x[:, None] - lo_x[None, :], lo_y[:, None] - lo_y[None, :])
+        np.fill_diagonal(d, 1e9)
+        self.assertLess(float(np.median(d.min(axis=1))), 2.5, "small trees: no trunk floor")
+
     def test_deterministic(self):
         forbid, x0, y0, dx, dy = self._grid()
         rng = np.random.default_rng(3)
