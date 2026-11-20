@@ -1680,13 +1680,17 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     P, T, UV, M = np.concatenate(P), np.concatenate(T), np.concatenate(UV), np.concatenate(M)
     TL, RI, RW = np.concatenate(TL), np.concatenate(RI), np.concatenate(RW)
     tid = np.arange(len(T))
+    v3_clip = any(c.get("tri") for c in polys)
+    if v3_clip and clip_poly is None and clip is not None:
+        x0, y0, x1, y1 = clip
+        clip_poly = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
     if clip_poly is not None:
         import fast
-        fast.require(104, "clip_tris_convex")
+        fast.require(550, "clip_tris_convex")
         P, UV, T, src = fast._ef.clip_tris_convex(np.ascontiguousarray(P[:, :3], np.float64),
                                                   np.ascontiguousarray(UV, np.float64),
                                                   np.ascontiguousarray(T, np.int64),
-                                                  np.ascontiguousarray(np.asarray(clip_poly, np.float64)[:, :2]))
+                                                  np.ascontiguousarray(np.asarray(clip_poly, np.float64)[:, :2]), v3_clip)
         tid = tid[src]
         if not len(T):
             return None

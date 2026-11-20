@@ -9,7 +9,7 @@ graph and the roads from the map cells round the tile) and measures:
   width_rate     per kept piece the largest change of its paved width per metre between rows (m / m), against its
                  taper's own peak (the quintic's 1.875 x lane width / taper length)
   seam           every pair of neighbouring tiles: each tile's mesh cut at its own box (earthfast.clip_tris_convex, as
-                 roadmesh.build), the vertices on the shared edge compared (the same points, within SEAM_TOL_M), and the
+                 roadmesh.build), the used vertices on the shared edge compared bit for bit, and the
                  triangles both tiles keep before the cut the same bits
   pieces         the kernel's status per piece (kept, trimmed, welds, free ends, deck joins and their gaps)
 
@@ -109,7 +109,7 @@ def clip_tile(v, tri, box):
     P = np.c_[v, np.zeros(len(v))]
     poly = np.array([[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]], np.float64)
     P2, _uv, T2, _src = fast._ef.clip_tris_convex(np.ascontiguousarray(P), np.zeros((len(P), 2)),
-                                                 np.ascontiguousarray(tri, np.int64), poly)
+                                                 np.ascontiguousarray(tri, np.int64), poly, True)
     return np.asarray(P2)[:, :2], np.asarray(T2)
 
 
@@ -124,18 +124,21 @@ def seam_check(a, b, box_a, box_b):
         axis, at = 1, box_a[3]
     else:
         return None
-    on_a = np.unique(np.round(va[np.abs(va[:, axis] - at) < 1e-7][:, 1 - axis], 6))
-    on_b = np.unique(np.round(vb[np.abs(vb[:, axis] - at) < 1e-7][:, 1 - axis], 6))
+    # clip_tris_convex also returns the original (possibly unused) vertices.
+    va, vb = va[np.unique(ta)], vb[np.unique(tb)]
+    on_a = np.unique(va[np.abs(va[:, axis] - at) < 1e-7], axis=0)
+    on_b = np.unique(vb[np.abs(vb[:, axis] - at) < 1e-7], axis=0)
     same_pts = len(on_a) == len(on_b) and (len(on_a) == 0 or float(np.max(np.abs(on_a - on_b))) <= SEAM_TOL_M)
 
     def tris_in(got, lo, hi):
         v, t = got["mesh"]["v"], got["mesh"]["tri"]
         c = v[t]
         m = (c[:, :, axis].min(1) >= lo) & (c[:, :, axis].max(1) <= hi)
-        return sorted(tuple(np.round(x.reshape(-1), 9).tolist()) for x in c[m])
+        return sorted(x.tobytes() for x in c[m])
     band = (at - 6.0, at + 6.0)
     same_tris = tris_in(a, *band) == tris_in(b, *band)
-    return {"edge_pts": [int(len(on_a)), int(len(on_b))], "same_pts": bool(same_pts), "same_tris": bool(same_tris)}
+    return {"edge_pts": [len(on_a), len(on_b)], "same_pts": same_pts,
+            "same_bits": on_a.tobytes() == on_b.tobytes(), "same_tris": same_tris}
 
 
 def render(got, frame, lat, lon, half, out):
@@ -272,7 +275,7 @@ def main():
         with open(a.json, "w") as fh:
             fh.write(txt)
     print(json.dumps({k: res[k] for k in ("overlap_m2", "overlap_by", "kernel_s") if k in res}),
-          "seams", sum(1 for s in res["seams"] if s["same_pts"] and s["same_tris"]), "/", len(res["seams"]),
+          "seams", sum(1 for s in res["seams"] if s["same_bits"] and s["same_tris"]), "/", len(res["seams"]),
           "max width rate", max((w["rate"] for w in res["width"]), default=None))
 
 

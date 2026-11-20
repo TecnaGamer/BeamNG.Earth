@@ -14024,8 +14024,6 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         # (DIRT_LOOK)
         if ROADS_IN_GROUND and not (DIRT_STRIPS and spec.kind in DIRT_LOOK):
             continue
-        if v3_on and spec.cls in roadsurf3.V3_CLASSES and spec.kind == "paved":
-            continue                            # (road surface v3: its mesh, roadsurf3.apply below)
         if rough(spec):
             continue
         look = look_of(spec, fid)
@@ -14046,7 +14044,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             for piece in clip_polyline(line, *box):
                 for c in split(densify(simplify(piece))):
                     if len(c) >= 2:
-                        chunks.append(_chunk(look, lw, c))
+                        ch = _chunk(look, lw, c)
+                        if v3_on and spec.cls in roadsurf3.V3_CLASSES and spec.kind == "paved":
+                            # Retain the strip in its original order until its replacement succeeds.
+                            ch["_v3_fallback"] = True
+                        chunks.append(ch)
     decks_near = []                             # (retaining_walls: none under a bridge)
     traffic_decks = []                          # genuine bridge geometry only, never the tunnel vaults below
     deck_walk = {}                              # the bridges that carry sidewalks (deck_walks)
@@ -14812,8 +14814,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     chunks.extend(rampmerges.chunks(merge_layouts, box))
     if v3_on:                                   # (road surface v3, S2: the ground surface of motorways and trunks)
         import logging
-        chunks = roadsurf3.apply(frame, own_box, chunks, v3["cell_fn"], urban_fn, widths, left_hand, line_country,
-                                 float(frame.lon0), SURFACE_V2, log=logging.getLogger("earthd.roadsurf3"))
+        import revisit
+        with revisit.scope() as surface_build:
+            chunks = roadsurf3.apply(frame, own_box, chunks, v3["cell_fn"], urban_fn, widths, left_hand, line_country,
+                                     float(frame.lon0), SURFACE_V2, log=logging.getLogger("earthd.roadsurf3"))
+        v3["short"] = not surface_build.kept_until()[0]
     return roadmarkings.paint(chunks)
 
 

@@ -466,7 +466,8 @@ SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER
 def keyed_value(k, v):
     """The text a set build switch k = v is hashed as (code_key, switches_key, bakepack.switches): k=v, its
     SWITCH_VERSIONS version after it when it has one."""
-    n = SWITCH_VERSIONS.get(k)
+    # S2b replaces S2a's ground meshes, including tiles S2a kept after a fault.
+    n = 2 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
     return f"{k}={v}" if n is None else f"{k}={v}@v{n}"
 
 

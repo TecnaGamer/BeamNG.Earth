@@ -40,6 +40,11 @@
 //! tile's own lines and overlays inside them are left out); a JSON status per piece. Triangles wholly outside the box
 //! (the tile and a margin) are left out; the rest is the same in every tile that builds the same pieces and roads.
 //! No FMA, no libm, no hash maps: sqrt (correctly rounded) and + - * / only, in a fixed order.
+mod gore;
+mod junction;
+pub mod paint;
+mod partition;
+
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -85,6 +90,7 @@ const ABUT_M: f64 = 4.0;            // m: a piece trimmed by an earlier one weld
 
 type P2 = [f64; 2];
 
+fn snapped(p: P2) -> P2 { p.map(|v| (v * 1000.0).round() / 1000.0) }
 fn sub(a: P2, b: P2) -> P2 { [a[0] - b[0], a[1] - b[1]] }
 fn add(a: P2, b: P2) -> P2 { [a[0] + b[0], a[1] + b[1]] }
 fn mul(a: P2, k: f64) -> P2 { [a[0] * k, a[1] * k] }
@@ -558,6 +564,8 @@ fn build(pieces: &[Piece], roads: &[Line], structs: &[Line], boxm: &[f64; 4], pr
     let mut status: Vec<String> = Vec::new();
     // road crossings: (road, station, piece slot in kept, hi end)
     let mut crossings: Vec<(usize, f64)> = Vec::new();
+    // (road, nose station, outward sign, easing length, shift at the nose).
+    let mut ramp_blends: Vec<(usize, f64, f64, f64, P2)> = Vec::new();
     for (pi, pc) in pieces.iter().enumerate() {
         let nr = pc.s.len();
         let nb = pc.nb();
@@ -747,10 +755,35 @@ fn build(pieces: &[Piece], roads: &[Line], structs: &[Line], boxm: &[f64; 4], pr
                 if pc.kinds[g] != K_GO { continue; }
                 let ax = unit(sub(tg[nb - 1], tg[0]));
                 let gwt = dot(sub(tg[g + 1], tg[g]), ax);
-                if gwt >= 0.0 { continue; }
-                flags.push(format!("nose_overlap:{}", (-gwt * 100.0).round() / 100.0));
-                if (0..g).any(|k| pc.kinds[k] == K_TH) { for k in g + 1..nb { tg[k] = add(tg[k], mul(ax, -gwt)); } }
-                else { for k in 0..=g { tg[k] = sub(tg[k], mul(ax, -gwt)); } }
+                let through_left = pc.kinds[..g].contains(&K_TH);
+                let (l, r) = if through_left { (g + 1, nb - 1) } else { (0, g) };
+                let mut gap = gwt.max(0.0);
+                // Keep the designed physical nose open. Carry the matching ramp's cut
+                // row with it and ease back to that road's mapped line downstream.
+                let raw_gap = dot(sub(pts[i_end][g + 1], pts[i_end][g]), ax);
+                if raw_gap >= 0.5 {
+                    for &(ri, station) in &crossings {
+                        let rd = &roads[ri];
+                        let (q, normal) = rd.row(station);
+                        let (a, b) = (add(q, mul(normal, rd.hw)), sub(q, mul(normal, rd.hw)));
+                        let same = norm(sub(tg[l], a)) + norm(sub(tg[r], b)) < 1e-5;
+                        let reverse = norm(sub(tg[l], b)) + norm(sub(tg[r], a)) < 1e-5;
+                        if !same && !reverse { continue; }
+                        let sign = if hi == same { 1.0 } else { -1.0 };
+                        let avail = if sign > 0.0 { rd.len() - station } else { station };
+                        if avail < prm[P_BLEND_MIN] { continue; }
+                        gap = raw_gap;
+                        let d = (gap - gwt) * if through_left { 1.0 } else { -1.0 };
+                        let len = clampf(d.abs() * prm[P_BLEND_K], prm[P_BLEND_MIN], prm[P_BLEND_MAX]).min(avail);
+                        ramp_blends.push((ri, station, sign, len, mul(ax, d)));
+                        flags.push(format!("ramp_ease:{}", (len * 10.0).round() / 10.0));
+                        break;
+                    }
+                }
+                if gwt < 0.0 { flags.push(format!("nose_overlap:{}", (-gwt * 100.0).round() / 100.0)); }
+                let d = mul(ax, gap - gwt);
+                if through_left { for p in &mut tg[g + 1..] { *p = add(*p, d); } }
+                else { for p in &mut tg[..=g] { *p = sub(*p, d); } }
             }
             let d: Vec<P2> = (0..nb).map(|k| sub(tg[k], pts[i_end][k])).collect();
             let mut dmax = 0.0;
@@ -798,6 +831,11 @@ fn build(pieces: &[Piece], roads: &[Line], structs: &[Line], boxm: &[f64; 4], pr
         if reordered { flags.push("reordered".to_string()); }
         kept.push(Kept { idx: pi, a, b, pts, raw_outline, flags });
     }
+    // Partition complete faces across the crop line. A face in the seam band
+    // can meet the next face beyond the requested box near a diagonal edge.
+    let crop = boxm;
+    let context = [crop[0] - 64.0, crop[1] - 64.0, crop[2] + 64.0, crop[3] + 64.0];
+    let boxm = &context;
     let mut mesh = Mesh { v: Vec::new(), uv: Vec::new(), t: Vec::new(), owner: Vec::new(), kind: Vec::new() };
     let mut lines = Lines { xy: Vec::new(), off: Vec::new(), kind: Vec::new(), phase: Vec::new(), piece: Vec::new() };
     // pieces: strips and markings
@@ -810,14 +848,18 @@ fn build(pieces: &[Piece], roads: &[Line], structs: &[Line], boxm: &[f64; 4], pr
         for (r, row) in kp.pts.iter().enumerate() {
             let tot = norm(sub(row[nb - 1], row[0]));
             for k in 0..nb {
-                mesh.v.push(row[k]);
+                mesh.v.push(snapped(row[k]));
                 let u = if tot > 1e-9 { norm(sub(row[k], row[0])) / tot } else { 0.0 };
                 mesh.uv.push([u, pc.s[kp.a + r]]);
             }
         }
         let width = |r: usize, k: usize| norm(sub(kp.pts[r][k + 1], kp.pts[r][k]));
+        for k in 0..ns {
+            if pc.kinds[k] == K_GO { gore::zone(&mut mesh, base, nb, nr, k, kp.idx as i64, boxm); }
+        }
         for r in 0..nr - 1 {
             for k in 0..ns {
+                if pc.kinds[k] == K_GO { continue; }
                 if width(r, k) < COLLAPSE_M && width(r + 1, k) < COLLAPSE_M { continue; }
                 let id = |rr: usize, kk: usize| base + rr * nb + kk;
                 mesh.quad([id(r, k), id(r, k + 1), id(r + 1, k + 1), id(r + 1, k)], kp.idx as i64, pc.kinds[k], boxm);
@@ -883,10 +925,10 @@ fn build(pieces: &[Piece], roads: &[Line], structs: &[Line], boxm: &[f64; 4], pr
     }
     // roads: their stretches outside every kept piece, rows canonical (every vertex and every ROAD_STEP from 0, plus
     // the cuts)
+    let spans = junction::build(roads, &kept, &crossings, &mut mesh, boxm);
     let step = prm[P_ROAD_STEP];
     for (ri, rd) in roads.iter().enumerate() {
         if rd.p.len() < 2 { continue; }
-        let lenr = rd.len();
         let mut cuts: Vec<f64> = crossings.iter().filter(|c| c.0 == ri).map(|c| c.1).collect();
         // the kept pieces' outlines widened by most of this road's half width: a road running beside a piece's edge
         // (a ramp's mapped line outside the lane S1 gives it) is cut where its strip would lie on the piece
@@ -907,8 +949,8 @@ fn build(pieces: &[Piece], roads: &[Line], structs: &[Line], boxm: &[f64; 4], pr
                 }
             }
         }
-        cuts.push(0.0);
-        cuts.push(lenr);
+        cuts.retain(|s| *s > spans[ri][0] && *s < spans[ri][1]);
+        cuts.extend(spans[ri]);
         cuts.sort_by(|a, b| a.partial_cmp(b).unwrap());
         cuts.dedup();
         for w in cuts.windows(2) {
@@ -933,16 +975,25 @@ fn build(pieces: &[Piece], roads: &[Line], structs: &[Line], boxm: &[f64; 4], pr
             // skip rows far from the box
             let near = |p: P2| p[0] >= boxm[0] - rd.hw - step && p[0] <= boxm[2] + rd.hw + step
                 && p[1] >= boxm[1] - rd.hw - step && p[1] <= boxm[3] + rd.hw + step;
-            let rws: Vec<(P2, P2)> = st.iter().map(|&x| rd.row(x)).collect();
+            let rws: Vec<(P2, P2)> = st.iter().map(|&x| {
+                let (mut p, nn) = rd.row(x);
+                for &(road, nose, sign, length, delta) in &ramp_blends {
+                    let dist = (x - nose) * sign;
+                    if road == ri && dist >= 0.0 && dist < length {
+                        p = add(p, mul(delta, quintic(1.0 - dist / length)));
+                    }
+                }
+                (p, nn)
+            }).collect();
             let mut prev: Option<(usize, usize)> = None;
             for (j, (p, nn)) in rws.iter().enumerate() {
                 let here = near(*p) || (j + 1 < rws.len() && near(rws[j + 1].0)) || (j > 0 && near(rws[j - 1].0));
                 if !here { prev = None; continue; }
                 let (l, r) = (add(*p, mul(*nn, rd.hw)), sub(*p, mul(*nn, rd.hw)));
                 let il = mesh.v.len();
-                mesh.v.push(l);
+                mesh.v.push(snapped(l));
                 mesh.uv.push([0.0, st[j]]);
-                mesh.v.push(r);
+                mesh.v.push(snapped(r));
                 mesh.uv.push([1.0, st[j]]);
                 if let Some((pl, pr)) = prev {
                     mesh.quad([pl, pr, il + 1, il], -1 - ri as i64, K_TH, boxm);
@@ -951,6 +1002,19 @@ fn build(pieces: &[Piece], roads: &[Line], structs: &[Line], boxm: &[f64; 4], pr
             }
         }
     }
+    partition::apply(&mut mesh);
+    let mut n = 0;
+    for i in 0..mesh.t.len() {
+        let pts = mesh.t[i].map(|j| mesh.v[j as usize]);
+        if (0..2).any(|a| pts.iter().all(|p| p[a] < crop[a]) || pts.iter().all(|p| p[a] > crop[a+2])) {continue;}
+        mesh.t[n] = mesh.t[i];
+        mesh.owner[n] = mesh.owner[i];
+        mesh.kind[n] = mesh.kind[i];
+        n += 1;
+    }
+    mesh.t.truncate(n);
+    mesh.owner.truncate(n);
+    mesh.kind.truncate(n);
     let outl: Vec<Vec<P2>> = kept.iter().map(|kp| outline(&kp.pts)).collect();
     let cut: Vec<Vec<P2>> = kept.iter().map(|kp| widened(&kp.pts, prm[P_CUT_M])).collect();
     let cutw: Vec<Vec<P2>> = kept.iter().map(|kp| widened(&kp.pts, prm[P_CUT_WIDE_M])).collect();

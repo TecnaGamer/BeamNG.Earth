@@ -506,15 +506,6 @@ def fork_rings(key):
     return max(1, int(math.ceil(1.25 * FORK_REACH_M / max(w, 1.0))))
 
 
-def _vertex_shares(ll):
-    """Each vertex's share of a line's length (lon / lat (k, 2)), in the line's own local metric (its first point's
-    latitude): the same whatever frame or cell it is read in."""
-    c = dmath.cos(math.radians(float(ll[0, 1])))
-    d = np.diff(ll, axis=0) * np.array([111320.0 * c, 110574.0])
-    s = np.r_[0.0, np.cumsum(dnp.hypot(d[:, 0], d[:, 1]))]
-    return s / s[-1] if s[-1] > 0 else s
-
-
 def _segment_rows(feats, i, specs, roadsmod):
     """Feature i of a roads layer as fork_records reads it, or None (no road spec, no line). Every road counts for the
     connectors' degrees (a service road at a split makes it a junction, and a walk stops there); only a paved road of
@@ -533,9 +524,11 @@ def _segment_rows(feats, i, specs, roadsmod):
     con = feats.rules.get("connectors")
     cons = []
     if con is not None:
-        shares = _vertex_shares(ll)
-        for r in con.rows(i).tolist():
-            cons.append((str(con.value[r]), int(np.argmin(np.abs(shares - float(con.start[r]))))))
+        import fast
+        fast.require(550, "connector_vertices")
+        rows = con.rows(i)
+        vertices = fast._ef.connector_vertices(ll, con.start[rows])
+        cons = [(str(con.value[r]), v) for r, v in zip(rows.tolist(), vertices)]
     arm = sp.cls in FORK_CLASSES and sp.kind == "paved"
     return {"ll": ll, "cls": FORK_CLASSES[sp.cls] if arm else 0, "link": bool(sp.link),
             "dir": int(sp.dir or 0) if sp.oneway else 0, "pave": float(sp.width),
@@ -571,59 +564,30 @@ def _cell_segments(key, cell_fn, memo, reader=None):
 COPY_CELLS_MAX = 16         # cells a segment's copies are looked for in at most
 
 
-def _key_of(text):
-    """A CellKey from its str ("z/x/y")."""
+def _segments_round(key, cell_fn, memo, rings, cell_segments, read_cells=None):
+    """All parts of each segment from its longest copy, breaking ties by cell name.
+    read_cells receives the full input window, including cells consulted for distant copies."""
+    import fast
     import mapcells
-    z, x, y = (int(v) for v in str(text).split("/"))
-    return mapcells.CellKey(z, x, y)
+    fast.require(550, "SegmentWindow")
 
+    def read(k):
+        ck = (k, cell_segments)
+        if ck not in memo:
+            parts = cell_segments(k, cell_fn, memo)
+            index = fast._ef.SegmentCell(k.z, list(parts), [r["ll"] for r in parts.values()], COPY_CELLS_MAX)
+            memo[ck] = parts, index
+        return memo[ck]
 
-def _segments_round(key, cell_fn, memo, rings, cell_segments):
-    """{part id: row} of every road segment in the rings of cells round key, each segment id's parts from ONE copy
-    (cell_segments(key, cell_fn, memo): _cell_segments or another reader's)."""
-    import mapcells
-    _cell_segments = cell_segments      # noqa: N806 (the block below names it so)
-    keys = [mapcells.CellKey(key.z, (key.x + dx) % key.n, key.y + dy)
+    ring = [mapcells.CellKey(key.z, (key.x + dx) % key.n, key.y + dy)
             for dy in range(-rings, rings + 1) for dx in range(-rings, rings + 1) if 0 <= key.y + dy < key.n]
-    # every segment id's parts all from ONE copy, never parts of two copies mixed (copies of one segment may be cut
-    # differently): every cell its copies' points lie in is read (more than COPY_CELLS_MAX: the rings' only), and the
-    # copy with the most points (then the least cell) is taken: the same whichever cells were read first, in any order
-    def by_sid(c):
-        # (a cell's parts by segment id, sorted by part id, memoised beside its segments: the scans of every part of
-        # every cell per segment id were most of a lane graph's cost, 2026-11-19 v3 S2; the same parts either way)
-        ck = (c, "_by_sid", getattr(cell_segments, "__name__", ""))
-        got = memo.get(ck)
-        if got is None:
-            got = {}
-            for pid, r in sorted(_cell_segments(by_str.get(c) or _key_of(c), cell_fn, memo).items(),
-                                 key=lambda kv: kv[0]):
-                got.setdefault(pid.split("|", 1)[0], []).append((pid, r))
-            memo[ck] = got
-        return got
-
-    found = {}
-    by_str = {}
-    for k in keys:
-        by_str[str(k)] = k
-        for sid in by_sid(str(k)):
-            found.setdefault(sid, set()).add(str(k))
-    segs = {}
-    for sid in sorted(found):
-        cells = set(found[sid])
-        for c in sorted(found[sid]):
-            for _pid, r in by_sid(c).get(sid, ()):
-                for cc in mapcells.cells_for_points(r["ll"][:, 1], r["ll"][:, 0], z=key.z):
-                    cells.add(str(cc))
-                    by_str[str(cc)] = cc
-        best = None
-        for c in (sorted(cells) if len(cells) <= COPY_CELLS_MAX else sorted(found[sid])):   # (a long one: the ring's)
-            parts = by_sid(c).get(sid, [])
-            n = sum(len(r["ll"]) for _pid, r in parts)
-            if parts and (best is None or n > best[0]):
-                best = (n, parts)
-        for pid, r in best[1]:
-            segs[pid] = r
-    return segs
+    indices = {str(k): read(k)[1] for k in ring}
+    window = fast._ef.SegmentWindow(indices, COPY_CELLS_MAX)
+    keys = [mapcells.parse(c) for c in window.cells]
+    if read_cells is not None:
+        read_cells.extend(keys)
+    copies = {str(k): read(k) for k in keys}
+    return {pid: copies[c][0][pid] for c, pid in window.choose({c: pair[1] for c, pair in copies.items()})}
 
 
 def cell_forks(key, cell_fn, memo=None):
