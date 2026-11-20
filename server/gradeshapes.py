@@ -1675,12 +1675,21 @@ def embankments(net, systems, shapes, ground_along):
         # decks end together, each with its ramp. Where the one met its ground and the other's landing runs past all it
         # had to land on — the one end's embankment laid twice, the second running on over the plan's own grading past
         # the ground the first met — the second stops at once: the one end has the one ramp, the first. Its reach for
-        # the junctions it meets is still its touch, the ramp the road's height that far)
+        # the junctions it meets is still its touch, the ramp the road's height that far. A deck's or a dip's own ramp
+        # stops where it enters a shape's piece it did not start in: the road there is the shape's, and a fill's floor
+        # laid over a dip's ceiling has no height to be (Gravelly Hill: a deck's end at the start of a road's dip laid
+        # 12 samples of fill, 3.7 m over the dip's 92 m, over its first 44 m)
         if twin:
             ks = min(ks, 1)
-        elif branch:
+        else:
             for i in range(1, len(z)):
-                if any(a + 0.5 < float(ms[i]) < b - 0.5 for a, b in done.get(int(mem[i]), ())):
+                m_, v_ = int(mem[i]), float(ms[i])
+                if branch:
+                    stop = any(a + 0.5 < v_ < b - 0.5 for a, b in done.get(m_, ()))
+                else:
+                    stop = any(a + 0.5 < v_ < b - 0.5 and not (m_ == j and a + 0.5 < s0 < b - 0.5)
+                               for a, b in pieced.get(m_, ()))
+                if stop:
                     ks = min(ks, i)
                     break
         ramps.append((j, s0, d_, z0, x, z, k, sign, gr, ks, g_along))
@@ -1772,8 +1781,19 @@ def embankments(net, systems, shapes, ground_along):
                     zv = za + (zb - za) * t
                 out.setdefault(ja, []).append((sv, zv, "set"))
                 used |= {a, b}
-    for n, (j, s0, d, z0, x, z, k, sign, _gr, ks, _g0) in enumerate(ramps):
+    for n, (j, s0, d, z0, x, z, k, sign, gr, ks, _g0) in enumerate(ramps):
         if n in used:
             continue
-        _split(net, x, z, min(ks, len(z)), "fill" if sign > 0 else "cut", out)
+        k_end = min(ks, len(z))
+        if sign < 0:
+            # (a cut is the road under its ground: past where its ramp meets the ground, a ceiling over it is no cut, and
+            # it holds the roads that land on it down: Porte Maillot's side road ended at a landing curve 0.16 m over
+            # its ground, 39.56 under the 39.64 floor of the road it joins. The ceiling ends on the ground, at the first
+            # sample the ramp is not under it)
+            on = np.flatnonzero(np.asarray(z)[1:k_end] >= np.asarray(gr)[1:k_end])
+            if len(on):
+                k_end = int(on[0]) + 2
+                z = np.array(z, np.float64)
+                z[k_end - 1] = min(z[k_end - 1], gr[k_end - 1])
+        _split(net, x, z, k_end, "fill" if sign > 0 else "cut", out)
     return out

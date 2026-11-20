@@ -2,6 +2,7 @@
 embankments, _junction_roads; grading.shape_reach). Porte Maillot's square at the end of a 21.8 m wide deck: the
 embankment went on along one road only, the five others stayed under it and the junction snap put the square back at
 theirs, 1.1 m under its ground: the deck's last 5.4 m fell 1.6 m into the square."""
+import logging
 import os
 import sys
 import types
@@ -73,6 +74,35 @@ class SquareAtTheDecksEndTest(unittest.TestCase):
                 worst = float((np.abs(np.diff(z))[k] / ds[k]).max()) if len(k) else 0.0
                 self.assertLessEqual(worst, g + 0.01, "%s: %.1f %% within 15 m of the node, its law %.1f %%"
                                      % (want, 100 * worst, 100 * g))
+
+
+class _Errors(logging.Handler):
+    def __init__(self):
+        super().__init__(logging.ERROR)
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append(record.getMessage())
+
+
+@unittest.skipUnless(os.path.exists(REPLAY), "the Porte Maillot replay")
+class RoadLawsHaveAnAnswerTest(unittest.TestCase):
+    """The junctions' ramps and the heights the shapes set meet the road laws' own: no network of roads the laws cannot
+    hold (infeasible: all its roads left as the earlier passes made them). A cut's ceiling ended 0.16 m over its ground,
+    under the floor of the road it landed on in the square's own cell."""
+
+    def test_the_replay_logs_no_infeasible_network(self):
+        import drivability
+        h = _Errors()
+        log = logging.getLogger("earthd.grading")
+        log.addHandler(h)
+        try:
+            with unittest.mock.patch.object(grading, "SHAPES_ON", True):
+                drivability.measure("paris_maillot_1083")
+        finally:
+            log.removeHandler(h)
+        bad = [ln for ln in h.lines if "road laws infeasible network" in ln]
+        self.assertEqual(bad, [], bad[:1])
 
 
 if __name__ == "__main__":
