@@ -292,6 +292,9 @@ M.CATALOG = {
     -- (the stock survey 2026-11-16: low dry and dead bushes, the groundcover kind as the grey bushes above; not
     -- Juniper_bush_small_dry_03: its Juniper_bark material is in no level)
     { UT .. 'groundcover/s_gc_dead_bush_02', 0.71 }, { JV .. 'groundcover/s_gc_jv_dry_bush_04', 1.06 },
+    -- (2026-11-20, the unused stock survey) West Coast USA's big bunchgrass clump (no imposter: a low shape, drawn to
+    -- desert_shrub's 160 m; not Juniper_dead_branch_01: its Juniper_bark material is in no level)
+    { WCA .. 'trees/grassclump_large', 1.2 },
     { UT .. 'trees/Juniper/Juniper_bush_small_dry_02', 2.15 },
     -- (the asset survey 2026-11-19: the rest of Utah's and Johnson Valley's low dry bushes; not Juniper_dead_branch_01:
     -- its Juniper_bark material is in no level)
@@ -451,6 +454,9 @@ M.CATALOG = {
   poplar = { { ATT .. 'trees/trees_poplar/s_poplar_large_01', 16.5 }, { ATT .. 'trees/trees_poplar/s_poplar_large_02', 23.1 },
     { ATT .. 'trees/trees_poplar/s_poplar_large_03', 23.03 } },     -- (the stock survey 2026-11-15)
   creosote = { { ATT .. 'trees/trees_shrub/shrub_c', 1.15 }, { ATT .. 'trees/trees_shrub/shrub_b', 1.63 },
+    -- (2026-11-20, the unused stock survey) West Coast USA's Spanish bayonets: yuccas among the Mojave's and the
+    -- Sonoran's creosote (no imposter: low shapes, drawn to creosote's 250 m)
+    { WCA .. 'trees/spanishbayonet1', 1.6 }, { WCA .. 'trees/spanishbayonet2', 1.6 },
     { ATT .. 'trees/trees_shrub/shrub_a', 2.43 },
     -- (the stock survey 2026-11-16) West Coast USA's big old creosotes (its trees_shrub d-g: the same m_creosote_*
     -- materials as Automation Test Track's, loaded with that folder; leaves_thin from WCA .. 'trees')
@@ -522,6 +528,7 @@ M.CATALOG = {
     { IT .. 'trees/trees_italy/cork_oak_bush_medium', 3.04 }, { IT .. 'trees/trees_italy/scraggly_bush', 3.8 },
     -- (the asset survey 2026-11-19) the tall maquis: Italy's large cork oak bush and its tall-plant bush
     { IT .. 'trees/trees_italy/cork_oak_bush_large', 5.7 }, { IT .. 'trees/trees_italy/tall_plant_bush', 5.93 },
+    { IT .. 'trees/trees_italy/tall_plant', 2.7 },     -- (2026-11-20, the unused stock survey)
   },
   -- the north's and the mountains' tops: birch / willow scrub (the birch-barked aspen bushes), spruce saplings, junipers
   shrub_north = {
@@ -555,7 +562,8 @@ M.CATALOG = {
   -- its fallen giant (34 m long); heights given in dead wood's 1-3 m so each draws at about its own size (as deadwood's)
   deadwood_tropical = {
     { JRI .. 'trees/trees_palm/deadpalm_03', 1.0 }, { JRI .. 'trees/trees_palm/deadpalm_02', 1.25 },
-    { JRI .. 'trees/trees_palm/deadpalm_01', 1.5 }, { JRI .. 'trees/vines/vine_ground_large', 1.75 },
+    { JRI .. 'trees/trees_palm/deadpalm_01', 1.5 }, { JRI .. 'trees/vines/vine_ground_medium', 1.6 },     -- (2026-11-20)
+    { JRI .. 'trees/vines/vine_ground_large', 1.75 },
     { JRI .. 'trees/trees_tropical_2/deadbranch_02', 2.0 }, { JRI .. 'trees/trees_tropical_2/deadbranch_04', 2.25 },
     { JRI .. 'trees/trees_tropical_2/deadbranch_03', 2.5 }, { JRI .. 'trees/trees_tropical_2/deadbranch_01', 2.75 },
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_fallen', 2.95 },
@@ -826,6 +834,8 @@ for _, g in ipairs({ 'deciduous', 'oak', 'birch', 'beech', 'pine_west', 'mediter
   end
   M.CATALOG[g .. '_open'] = out
 end
+-- (2026-11-20, the unused stock survey: not Italy's city holm oaks: they wear the deciduous oaks' oak_leaves_01 / 02,
+-- which seasonlook turns rust-brown in the fall, and a holm oak is evergreen)
 M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n
 for _, g in ipairs({ 'straw_n', 'straw_s', 'silage_n', 'silage_s' }) do M.GROUP_MAX_M[g] = 400; M.ONE_SPELLING[g] = true end
 -- The months (1-12) a group shows in (server vegetation.bale_items: the bales after the harvest; the south's six months
