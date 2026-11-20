@@ -289,12 +289,14 @@ do
   N.enabled = true
   local jd, rf = rawget(_G, 'jsonDecode'), rawget(_G, 'readFile')
   jsonDecode = function() return { nodes = { a = { 100, 200, 5, 3 }, b = { 150, 200, 5, 3 } },
-                                   edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3 } }, lines = { { 10, 20, 30, 40, 1 } } } end
+                                   edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3 } }, cuts={'b'},
+                                   lines = { { 10, 20, 30, 40, 1 } } } end
   readFile = function() return '{}' end
   T.check(N.onMessage({ anchorId = 7, path = 'x', serial = 1 }, 7), 'a graph for anchor 7')
   local xf = { apply = function(_, x, y, z) return x - 1000, y + 50, z - 2 end }
   T.check(N.transform(xf, 8), 'moved into anchor 8')
   local g = N.currentGraph()
+  T.check(g.cuts and g.cuts[1]=='b','source cut identities survive graph reception and rebase')
   T.check(g.anchor == 8 and g.nodes.a[1] == -900 and g.nodes.a[2] == 250 and g.nodes.a[3] == 3 and g.nodes.a[4] == 3,
     'its nodes in the new frame, radius kept')
   T.check(g.lines and g.lines[1][1] == -990 and g.lines[1][2] == 70 and g.lines[1][3] == -970 and g.lines[1][5] == 1,
@@ -396,7 +398,7 @@ do
   N.takeChoice(nil)
   N.enabled = true
   local names = { 'jsonDecode', 'readFile', 'writeFile', 'jsonEncode', 'map', 'be', 'path',
-                  'getObjectByID', 'gameplay_traffic' }
+                  'getObjectByID', 'gameplay_traffic', 'lpack', 'vec3' }
   local sg = {}
   for _, k in ipairs(names) do sg[k] = rawget(_G, k) end
   local log0 = rawget(_G, 'log')
@@ -404,9 +406,17 @@ do
   local clock0 = os.clock
   local now = 1000
   os.clock = function() return now end
+  local mt = {}
   local function v(x, y, z)
-    return { x = x, y = y, z = z or 0, length = function(s) return math.sqrt(s.x * s.x + s.y * s.y + s.z * s.z) end }
+    if type(x) == 'table' then x, y, z = x.x, x.y, x.z end
+    return setmetatable({ x = x, y = y, z = z or 0,
+      length = function(s) return math.sqrt(s.x * s.x + s.y * s.y + s.z * s.z) end,
+      normalized = function(s) local l=s:length();return v(s.x/l,s.y/l,s.z/l) end,
+      dot = function(s,o) return s.x*o.x+s.y*o.y+s.z*o.z end }, mt)
   end
+  mt.__sub = function(a,b) return v(a.x-b.x,a.y-b.y,a.z-b.z) end
+  mt.__unm = function(a) return v(-a.x,-a.y,-a.z) end
+  vec3 = v
   -- c is a junction: the a-b-c road loses its leg to `far` (the cut), and the c-s road runs through north
   jsonDecode = function() return { nodes = { a = { 0, 0, 1, 4 }, b = { 50, 0, 1, 4 }, c = { 100, 0, 1, 3 },
       far = { 5000, 0, 1, 3 }, s = { 100, 200, 1, 4 } },
@@ -419,20 +429,29 @@ do
   local world = {}
   map = { reset = function(n) world.nodes = n end, getMap = function() return world end,
           findClosestRoad = function(p) if p.x > 97 and p.y > 5 then return 'c', 's' end return 'b', 'c' end }
-  be = { getPlayerVehicleID = function() return -1 end, queueAllObjectLua = function() end,
-         sendToMailbox = function() end }
-  local cars, ports = {}, {}
+  local boundaryMailbox, boundariesBeforeRequest
+  lpack = { encode = function(value) return value end }
+  be = { getPlayerVehicleID = function() return -1 end, queueAllObjectLua = function(_, command)
+           if command:find('mapmgr.requestMap', 1, true) then boundariesBeforeRequest = boundaryMailbox end
+         end,
+         sendToMailbox = function(_, name, value) if name == 'beamngEarthTrafficCuts' then boundaryMailbox = value end end }
+  local cars, ports, spawnArgs, commands = {}, {}, {}, {}
   getObjectByID = function(id)
     local c = cars[id]
     if not c then return nil end
     return { getActive = function() return true end, getPosition = function() return c.pos end,
-             getVelocity = function() return c.vel end, getDirectionVector = function() return c.dir end }
+             getVelocity = function() return c.vel end, getDirectionVector = function() return c.dir end,
+             queueLuaCommand = function(_,command) commands[id]=command end }
   end
   gameplay_traffic = {
     getState = function() return 'on' end,
     getTrafficData = function()
       local d = {}
-      for id in pairs(cars) do d[id] = { isAi = true } end
+      for id,c in pairs(cars) do
+        c.traffic = c.traffic or {}
+        c.traffic.isAi, c.traffic.state, c.traffic.respawnCount = true, 'active', c.rc
+        d[id] = c.traffic
+      end
       return d
     end,
     getTrafficList = function()
@@ -440,15 +459,43 @@ do
       for id in pairs(cars) do l[#l + 1] = id end
       return l
     end,
-    forceTeleport = function(id) ports[id] = (ports[id] or 0) + 1 end,
+    forceTeleport = function(id, p, d, lo, hi)
+      ports[id] = (ports[id] or 0) + 1;spawnArgs[id] = {p=p,d=d,lo=lo,hi=hi}
+    end,
   }
   local box = { -500, -500, 500, 500 }
   T.check(N.onMessage({ anchorId = 1, path = 'x', serial = 1 }, 1), 'guard: a graph whose clip cuts c at (100, 0)')
   N.update(1, box)              -- applies the graph; the guard runs from the next frame on
   T.check(N.status().cuts == 1, 'guard: applied, one cut')
+  T.check(boundariesBeforeRequest and #boundariesBeforeRequest == 1 and boundariesBeforeRequest[1] == 'c',
+    'the applied map publishes its exact boundary before vehicles request the replacement map')
+  do
+    local getter=getObjectByID
+    local queued={}
+    getObjectByID=function(id)
+      if id==4 then return nil end
+      return {isTraffic=id~=2 and 'true' or nil,isPlayerControlled=function()return id==3 end,
+        queueLuaCommand=function(_,cmd)queued[#queued+1]=cmd end}
+    end
+    N.onTrafficVehicleAdded(1)
+    T.check(#queued==1 and queued[1]==N.trafficBoundaryCommand(true),
+      'traffic registration queues first-map protection even before AI mode activates')
+    N.onTrafficVehicleAdded(2);N.onTrafficVehicleAdded(3);N.onTrafficVehicleAdded(4)
+    T.check(#queued==1,'parked cars, registered players and missing vehicles are not installed')
+    N.onVehicleMapmgrUpdate(1)
+    T.check(queued[2]==N.trafficBoundaryCommand(),'map acknowledgements gate installation on traffic mode')
+    N.onTrafficVehicleRemoved(1)
+    T.check(queued[3]:find('extensions.unload',1,true)~=nil,'leaving the traffic pool unloads the helper')
+    N.onTrafficVehicleAdded(1)
+    T.check(queued[4]==queued[1],'a reused pool vehicle receives protection again')
+    getObjectByID=getter
+  end
   cars[101] = { pos = v(95, 2), vel = v(0, 0), dir = v(0, 1) }      -- stopped at the dead end, turned off it
   cars[102] = { pos = v(92, -2), vel = v(-3, 0), dir = v(1, 0) }    -- backing through its turn, nose at the cut
   cars[103] = { pos = v(0, 0), vel = v(0, 0), dir = v(1, 0) }       -- stopped far from any cut (a signal queue)
+  cars[101].traffic = { respawnSpeed = 8.333 }
+  cars[102].traffic = { respawnSpeed = -1 } -- stock trailer attachment impulse
+  cars[103].traffic = { respawnSpeed = 8.333 }
   now = 1001
   N.update(1, box)
   T.check(ports[101] == nil and ports[102] == nil, 'guard: both just placed (FRESH_S): not yet')
@@ -457,6 +504,9 @@ do
   T.check(ports[101] == 1, 'guard: stopped at the cut, turned off it: respawned at once, not after STUCK_S')
   T.check(ports[102] == 1, 'guard: turning round at the cut (backing): respawned at once')
   T.check(ports[103] == nil, 'guard: a car stopped far from any cut: untouched')
+  T.check(cars[101].traffic.respawnSpeed == nil, 'a recycled car discards the previous spawn boost')
+  T.check(cars[102].traffic.respawnSpeed == -1, 'recycling preserves the stock trailer attachment impulse')
+  T.check(cars[103].traffic.respawnSpeed == 8.333, 'an untouched car keeps its native spawn state')
   now = 1009                    -- within COOLDOWN_S of those respawns
   N.update(1, box)
   T.check(ports[101] == 1 and ports[102] == 1, 'guard: the same car within COOLDOWN_S: not again')
@@ -506,6 +556,158 @@ do
   now = 1048
   N.update(1, box)
   T.check(ports[101] == p101 + 1, 'guard: unpaused: taken again')
+  -- Native traffic stops at the penultimate waypoint of a clipped plan. A
+  -- long final edge puts that stop beyond the guard's fixed distance window.
+  cars[107]={pos=v(0,-20,1),vel=v(0,0),dir=v(1,0)}
+  now=1050;N.update(1,box)
+  T.check(ports[107]==nil,'a stopped car outside the cut radius is not geometrically recycled')
+  N.onTrafficCutStop(107,'c',0,-20,1);now=1051;N.update(1,box)
+  T.check(ports[107]==1,'a matching native cut-stop report clears the blocked approach without the generic stuck delay')
+  now=1052;N.update(1,box)
+  T.check(ports[107]==1,'recycling clears the report and retains the normal cooldown')
+  cars[108]={pos=v(0,-30,1),vel=v(0,0),dir=v(1,0)}
+  now=1053;N.update(1,box);now=1059;N.update(1,box)
+  T.check(ports[108]==nil,'ordinary distant signal and following stops still remain alone')
+  N.onTrafficCutStop(108,'old-cut',0,-30,1);now=1060;N.update(1,box)
+  T.check(ports[108]==nil,'a report for a cut absent from the current graph is ignored')
+  N.onTrafficCutStop(108,'c',0,-30,1);N.onTrafficCutStop(108,'');now=1061;N.update(1,box)
+  T.check(ports[108]==nil,'the vehicle can release its previous boundary report')
+  N.onTrafficCutStop(108,'c',0,-30,1);cars[108].pos=v(0,-34,1);now=1062;N.update(1,box)
+  T.check(ports[108]==nil,'a stale report cannot follow a car to another position')
+  N.onTrafficCutStop(108,'c',0,-34,1);cars[108].pos=v(0,-34,11);now=1063;N.update(1,box)
+  T.check(ports[108]==nil,'matching horizontal coordinates on another road level do not reuse a stale stop')
+  cars[108].pos=v(0,-34,1);cars[108].vel=v(1,0);N.onTrafficCutStop(108,'c',0,-34,1)
+  now=1064;N.update(1,box)
+  T.check(ports[108]==nil,'a moving car is not recycled for a delayed stop report')
+  local playerGetter0=be.getPlayerVehicleID;be.getPlayerVehicleID=function()return 108 end
+  cars[108].vel=v(0,0);now=1065;N.update(1,box)
+  T.check(ports[108]==nil,'a player taking over the traffic vehicle remains protected')
+  be.getPlayerVehicleID=playerGetter0;N.onTrafficCutStop(108,'c',0,-34,1)
+  simTimeAuthority={getPause=function()return true end};now=1066;N.update(1,box)
+  T.check(ports[108]==nil,'an explicit boundary stop still cannot recover while paused')
+  simTimeAuthority=nil;now=1067;N.update(1,box)
+  T.check(ports[108]==1,'the current stopped boundary is handled once driving resumes: '..tostring(ports[108]))
+  -- Recycling a car ahead must leave its normal gap beyond the existing traffic.
+  local camera0, vec0 = core_camera, vec3
+  vec3 = v
+  core_camera = {getPosition=function() return v(-10,0) end,getForward=function() return v(1,0) end}
+  be.getPlayerVehicleID = function() return 999 end
+  cars = {[999]={pos=v(0,0),vel=v(30,0),dir=v(1,0)},
+          [101]={pos=v(1000,0),vel=v(0,0),dir=v(1,0)},
+          [102]={pos=v(100,1),vel=v(30,0),dir=v(1,0)}}
+  now=1100;N.update(1,box)
+  T.check(spawnArgs[101].p.x==100 and spawnArgs[101].p.y==0 and spawnArgs[101].lo==N.AHEAD_M[1],
+    'ahead recycling leaves the normal spawn gap beyond the leading traffic')
+  cars[102].pos=v(400,0);now=1101;N.update(1,box)
+  T.check(spawnArgs[101].p.x==0,
+    'traffic beyond the ahead-spawn window does not push its reference out of the block')
+  cars[102].pos=v(2000,0);now=1101.6;N.update(1,box)
+  T.check(spawnArgs[101].p.x==0,'a car two kilometres away cannot remove nearby ahead spawns')
+  cars[102].pos=v(200,20);now=1102;N.update(1,box)
+  T.check(spawnArgs[101].p.x==0,'traffic on a separated parallel road does not move the spawn reference')
+  cars[102].pos=v(200,0,20);now=1103;N.update(1,box)
+  T.check(spawnArgs[101].p.x==0,'traffic on an overpass does not move the spawn reference')
+  cars[102].pos=v(-50,0);now=1104;N.update(1,box)
+  T.check(spawnArgs[101].p.x==0,'traffic behind and the recycled car itself do not move the spawn reference')
+  core_camera, vec3 = camera0, vec0
+  -- A fresh car can be waiting on a short forward path while the guard is in cooldown.
+  -- The respawn launch must respect that boundary instead of adding highway speed.
+  local guard0 = N.GUARD_S
+  N.GUARD_S = 1e9
+  cars = {[101]={pos=v(75,0),vel=v(0,0),dir=v(1,0),rc=0}}
+  now=2000;N.update(1,box)
+  cars[101].rc=1;now=2001;N.update(1,box)
+  now=2002;N.update(1,box)
+  T.check(commands[101]==nil,'respawn launch does not boost a car toward a nearby streaming cut')
+  cars[101].pos=v(-100,0);cars[101].rc=2
+  now=2003;N.update(1,box);now=2004;N.update(1,box)
+  T.check(commands[101] and commands[101]:find('spawnMotion',1,true),
+    'respawn launch still boosts a clear road with enough stopping distance')
+  local function request(command) return tonumber(command:match('onSpawnLaunch%(%%d,(%d+)')) end
+  local firstRequest=request(commands[101])
+  T.check(firstRequest~=nil,'a boost attempt includes its acknowledgement token')
+  N.onSpawnLaunch(101,firstRequest,false,'ai-not-driving')
+  commands[101]=nil;now=2004.2;N.update(1,box)
+  local secondRequest=request(commands[101])
+  T.check(secondRequest and secondRequest~=firstRequest,'a skipped VE boost is retried while its window is open')
+  local launched=N.status().launches or 0
+  N.onSpawnLaunch(101,firstRequest,true,'launched')
+  T.check((N.status().launches or 0)==launched,'a late acknowledgement cannot consume a newer attempt')
+  N.onSpawnLaunch(101,secondRequest,true,'launched')
+  commands[101]=nil;now=2004.4;N.update(1,box)
+  T.check(commands[101]==nil and N.status().launches==launched+1,'success is counted once and ends retries')
+  T.check(N.status().launchSkipReasons['ai-not-driving']==1,'skip reasons are visible separately from successful boosts')
+  commands[101]=nil;cars[101].pos=v(75,0);cars[101].dir=v(-1,0);cars[101].rc=3
+  now=2005;N.update(1,box);now=2006;N.update(1,box)
+  T.check(commands[101] and commands[101]:find('spawnMotion',1,true),
+    'a streaming cut behind a car does not prevent its launch away from it')
+  -- The stock tick consumes respawnSpeed and queues an impulse independently
+  -- of navgraph's launch command. Exercise that external lifecycle contract.
+  local nativeCalls, positiveBoosts, attachments = 0, 0, 0
+  local function nativeTick(self, a, b)
+    nativeCalls = nativeCalls + 1
+    if self.respawnSpeed then
+      if self.respawnSpeed > 0 then positiveBoosts = positiveBoosts + 1 else attachments = attachments + 1 end
+      self.respawnSpeed = nil
+    end
+    return a, b
+  end
+  local traffic = cars[101].traffic
+  traffic.onTrafficTick = nativeTick
+  now=2007;N.update(1,box)
+  local readTraffic=gameplay_traffic.getTrafficData
+  local trafficReads=0
+  gameplay_traffic.getTrafficData=function()trafficReads=trafficReads+1;return readTraffic()end
+  now=2007.01;N.update(1,box)
+  T.check(trafficReads==0,'frames between launch scans do not walk traffic to synchronise callbacks')
+  gameplay_traffic.getTrafficData=readTraffic
+  T.check(traffic.onTrafficTick ~= nativeTick, 'stock traffic tick is protected while our launch policy owns the map')
+  traffic.respawnSpeed = 8.333
+  local a, b = traffic:onTrafficTick('tick',17)
+  T.check(positiveBoosts == 0 and nativeCalls == 1, 'the unconditional stock boost is suppressed before it queues a command')
+  T.check(a == 'tick' and b == 17, 'the stock tick still receives its arguments and returns its result')
+  traffic.respawnSpeed = -1;traffic:onTrafficTick()
+  T.check(attachments == 1, 'the negative trailer attachment request still reaches stock traffic')
+  N.LAUNCH=false;now=2008;N.update(1,box)
+  T.check(traffic.onTrafficTick == nativeTick, 'disabling our launch policy restores the native callback')
+  traffic.respawnSpeed=8.333;traffic:onTrafficTick()
+  T.check(positiveBoosts == 1, 'native launch behavior remains available with our policy off')
+  N.LAUNCH=true;now=2009;N.update(1,box)
+  local playerGetter = be.getPlayerVehicleID
+  be.getPlayerVehicleID=function()return 101 end
+  now=2010;N.update(1,box);traffic.respawnSpeed=8.333;traffic:onTrafficTick()
+  T.check(positiveBoosts == 2, 'a locally occupied traffic vehicle retains its native state')
+  be.getPlayerVehicleID=playerGetter
+  traffic.isAi=false;traffic.respawnSpeed=8.333;traffic:onTrafficTick()
+  T.check(positiveBoosts == 3, 'a non-AI traffic entry is not changed')
+  N.enabled=false;now=2011;N.update(1,box)
+  T.check(traffic.onTrafficTick == nativeTick, 'disabling the graph restores its traffic callback too')
+  N.enabled=true;now=2012;N.update(1,box)
+  cars[101]=nil;now=2013;N.update(1,box)
+  T.check(traffic.onTrafficTick == nativeTick, 'removing a traffic instance releases its callback')
+  cars[101]={pos=v(-100,0),vel=v(0,0),dir=v(1,0),traffic=traffic}
+  now=2014;N.update(1,box)
+  local owned = traffic.onTrafficTick
+  local external = function()return 'external'end
+  traffic.onTrafficTick=external
+  N.LAUNCH=false;now=2015;N.update(1,box)
+  T.check(traffic.onTrafficTick == external, 'cleanup preserves an externally replaced callback')
+  traffic.respawnSpeed=8.333;owned(traffic)
+  T.check(positiveBoosts == 4, 'an obsolete wrapper does not keep suppressing native state')
+  N.LAUNCH=true;now=2016;N.update(1,box)
+  cars[101].rc=0;now=2020;N.update(1,box)
+  cars[101].rc=1;now=2021;N.update(1,box)
+  now=2022;N.update(1,box)
+  local expiredRequest=request(commands[101])
+  N.onSpawnLaunch(101,expiredRequest,false,'traffic-blocked')
+  commands[101]=nil;now=2021+N.LAUNCH_TIMEOUT_S;N.update(1,box)
+  T.check(commands[101]==nil and (N.status().launchExpired or 0)>0,'the retry window expires even when a vehicle remains active')
+  launched=N.status().launches
+  N.onSpawnLaunch(101,expiredRequest,true,'launched')
+  T.check(N.status().launches==launched,'an expired request cannot later be counted as a boost')
+  N.reset()
+  T.check(traffic.onTrafficTick == external, 'level cleanup restores the callback that it actually wrapped')
+  N.GUARD_S = guard0
   table.clear = tc0
   for _, k in ipairs(names) do _G[k] = sg[k] end
   if not log0 then log = nil end
