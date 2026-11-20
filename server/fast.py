@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 562 # the newest kernel signature the server calls (earthd checks it at start) ...
+MIN_VERSION = 563 # the newest kernel signature the server calls (earthd checks it at start) ...
 if os.environ.get("BNE_BATTER", "off") == "vanilla":
     # ... with the vanilla slopes on (grading.BATTER_ON: batter_apply_vw, 503) too: never below the default (it was
     # set to 503 outright, which let a 505 binary start in that mode and fail at the first sidewalk, Codex r2a18)
@@ -321,3 +321,9 @@ def deck_capped(pts, z, la, box, test_box, flat, max_m, side_m, min_cross):
     return _ef.deck_capped(pts, np.ascontiguousarray(z, np.float64), np.ascontiguousarray(la, np.float64),
                            np.ascontiguousarray(box, np.float64), bool(test_box), off, q, sv,
                            np.ascontiguousarray(lb, np.float64), half, float(max_m), float(side_m), float(min_cross))
+
+
+def photo_jpeg(rgb, quality, full_chroma):
+    """RGB JPEG bytes for stored photos and previews."""
+    require(563, "photo_jpeg")
+    return _ef.photo_jpeg(np.asarray(rgb, np.uint8), quality, full_chroma)

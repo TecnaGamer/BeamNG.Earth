@@ -25,6 +25,7 @@ import struct
 import numpy as np
 import staging
 
+import fast
 import bc7
 
 M64 = 0xFFFFFFFFFFFFFFFF
@@ -121,11 +122,7 @@ def stored_photo(rgb):
     """The base photo's file bytes (PHOTO_EXT): a JPEG, or stored_png with BNGE_PHOTO_PNG=1."""
     if PHOTO_PNG:
         return stored_png(rgb)
-    import io
-    from PIL import Image
-    b = io.BytesIO()
-    Image.fromarray(np.ascontiguousarray(rgb, np.uint8), "RGB").save(b, "JPEG", quality=PHOTO_QUALITY, subsampling=0)
-    return b.getvalue()
+    return fast.photo_jpeg(rgb, PHOTO_QUALITY, True)
 
 
 def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, fade=None):

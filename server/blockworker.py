@@ -4172,11 +4172,15 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
     import surface as surfacemod
     if isinstance(rgb, imagerymod.FarPhoto):
         rock = rockfacemod.tile_inputs(frame, x0, y0, tile.size, px, built.grid)
+        paint = None
         if surfacemod.far_photo_roads(tile.size, px):
-            rgb = rgb.shade(rock)
-        else:
-            n = rgb.write(tex["path"], rock, imagerymod.FAR_SRGB)
-            rgb = None
+            try:
+                paint = surfacemod.square_paint_layers(frame, *sq, px, px, _paint_surface(), _s.widths,
+                                                       pads=tex.get("pads") or ())
+            except Exception as e:
+                log.debug("road faces of %s: %s", tile.key, e)
+        n = rgb.write(tex["path"], rock, imagerymod.FAR_SRGB, paint=paint)
+        rgb = None
     elif built.grid is not None:          # (earthd.Server.rock_faces)
         try:
             g = np.asarray(built.grid)

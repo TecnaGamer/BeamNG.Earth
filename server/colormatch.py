@@ -139,55 +139,16 @@ _LUT16 = to_srgb(np.arange(65536) / 65535.0)     # linear (16 bit) -> sRGB
 
 
 # --- filters -----------------------------------------------------------------------------------
-def _rf_pass(X, cut_prev, a):
-    """In place recursive filter along axis 1 of X [rows, cols, ch], forward and backward;
-    cut_prev[r, c] True = no link between c - 1 and c."""
-    fast.require(1, "rf_pass")
-    Y = X if X.dtype == np.float32 and X.flags.c_contiguous and X.flags.writeable else np.ascontiguousarray(X, np.float32)
-    pacer.pace()
-    fast._ef.rf_pass(Y, np.ascontiguousarray(cut_prev, bool), float(a))     # (Rust)
-    pacer.pace()
-    if Y is not X:
-        X[...] = Y
-
-
 def dt_blur(X, sigma, cut=None, iters=3):
-    """Edge-aware blur (domain transform, recursive filter) of X [h, w, ch] with spatial sigma in
-    cells; cut: bool [h, w] cells that block propagation (every link touching one is cut)."""
-    X = X.astype(np.float32).copy()
-    h, w = X.shape[:2]
-    if cut is None:
-        cut = np.zeros((h, w), bool)
-    cut_h = np.zeros((h, w), bool)
-    cut_h[:, 1:] = cut[:, 1:] | cut[:, :-1]
-    cut_v = np.zeros((w, h), bool)
-    cut_v[:, 1:] = cut.T[:, 1:] | cut.T[:, :-1]
-    for i in range(iters):
-        pacer.pace()
-        s = sigma * math.sqrt(3) * 2 ** (iters - i - 1) / math.sqrt(4 ** iters - 1)
-        a = dmath.exp(-math.sqrt(2) / s)
-        _rf_pass(X, cut_h, a)
-        Xt = np.ascontiguousarray(X.transpose(1, 0, 2))
-        _rf_pass(Xt, cut_v, a)
-        X = np.ascontiguousarray(Xt.transpose(1, 0, 2))
-    return X
+    """Recursive edge-aware blur. Each cut cell blocks propagation through its links."""
+    fast.require(563, "colour_blur")
+    return fast._ef.colour_blur(np.asarray(X, np.float32), sigma, iters, pacer.pace, cut)
 
 
 def dilate(m, r=1):
     """8-neighbour dilation, r steps."""
-    out = m.copy()
-    for _ in range(r):
-        g = out.copy()
-        g[1:] |= out[:-1]
-        g[:-1] |= out[1:]
-        g[:, 1:] |= out[:, :-1]
-        g[:, :-1] |= out[:, 1:]
-        g[1:, 1:] |= out[:-1, :-1]
-        g[:-1, :-1] |= out[1:, 1:]
-        g[1:, :-1] |= out[:-1, 1:]
-        g[:-1, 1:] |= out[1:, :-1]
-        out = g
-    return out
+    fast.require(563, "colour_dilate")
+    return fast._ef.colour_dilate(m, r)
 
 
 def fill(C, mask, iters=64):
@@ -238,20 +199,9 @@ def smooth_ratio(U, S, w0, sigma, cut=None, robust=2, tau=0.25, usgs=False):
     """(Lsm, w): log ratio USGS / S2 of edge-aware weighted blurs, with IRLS outlier rejection
     (residuals against the blur, tau in log units). usgs: also the log of the weighted USGS blur
     alone, (Lsm, w, Lu) (the weight blurred as one more channel: the others are unchanged)."""
-    L = dnp.log(U + EPS) - dnp.log(S + EPS)
-    w = w0.copy()
-    for it in range(robust + 1):
-        pacer.pace()
-        last = usgs and it == robust
-        X = np.concatenate([U * w[..., None], S * w[..., None]] + ([w[..., None]] if last else []), -1)
-        B = dt_blur(X, sigma, cut)
-        Lsm = dnp.log(B[..., :3] + EPS * 0.25) - dnp.log(B[..., 3:6] + EPS * 0.25)
-        if it < robust:
-            r = np.sqrt((dnp.sq(L - Lsm)).mean(-1))
-            w = w0 * dnp.exp(-0.5 * dnp.sq(r / tau))
-    if usgs:
-        return Lsm, w, dnp.log(B[..., :3] / np.maximum(B[..., 6:], 1e-6) + EPS)
-    return Lsm, w
+    fast.require(563, "colour_ratio")
+    sm, w, lu = fast._ef.colour_ratio(U, S, w0, sigma, robust, tau, EPS, usgs, pacer.pace, cut)
+    return (sm, w, lu) if usgs else (sm, w)
 
 
 # --- seam detection ----------------------------------------------------------------------------
@@ -365,24 +315,8 @@ def _hysteresis(weak, strong):
 
 def _components(mask):
     """(ys, xs, root per cell) of the 8-connected components of mask (union-find)."""
-    ys, xs = np.nonzero(mask)
-    idx = {(y, x): i for i, (y, x) in enumerate(zip(ys.tolist(), xs.tolist()))}
-    parent = list(range(len(ys)))
-
-    def find(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-    for (y, x), i in idx.items():
-        pacer.pace()
-        for dy, dx in ((0, 1), (1, -1), (1, 0), (1, 1)):
-            j = idx.get((y + dy, x + dx))
-            if j is not None:
-                a, b = find(i), find(j)
-                if a != b:
-                    parent[max(a, b)] = min(a, b)
-    return ys, xs, np.array([find(i) for i in range(len(ys))], np.int64)
+    fast.require(563, "seam_components")
+    return fast._ef.seam_components(mask, pacer.pace)
 
 
 def _drop_small(mask, min_cells, score, min_score, D, max_incons):

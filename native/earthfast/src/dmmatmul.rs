@@ -211,6 +211,16 @@ pub(crate) fn dot1(a: &[f64], b: &[f64]) -> f64 {
     }
 }
 
+/// Pairwise reduction of one contiguous float32 vector (NumPy's add.reduce).
+pub(crate) fn sum1_f32(n: usize, mut value: impl FnMut(usize) -> f32) -> f32 {
+    ad(0.0, pairwise::<f32, false, _>(&mut value, 0, n, 0, &mut 0))
+}
+
+pub(crate) fn dot1_f32(n: usize, product: impl FnMut(usize) -> f32) -> f32 {
+    if n <= 8 { return (0..n).map(product).reduce(ad).unwrap_or(0.0); }
+    sum1_f32(n, product)
+}
+
 /// The Python's k > 8 order: is k the inner loop of np.add.reduce(A' * B', axis=-2)? dims: the products' shape (C
 /// order: S.., n, k, m); sa / sb: A' = a[.., :, :, None] and B' = b[.., None, :, :] as numpy's iterator holds them
 /// broadcast to dims (byte strides, 0 where the operand's axis is 1 or missing).

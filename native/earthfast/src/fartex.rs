@@ -174,7 +174,11 @@ pub fn warp_rgba(a: ArrayView3<u8>, qx: ArrayView2<f64>, qy: ArrayView2<f64>, ce
 #[pyfunction]
 pub fn core_tiles(qx: PyReadonlyArray2<'_, f64>, qy: PyReadonlyArray2<'_, f64>, cells: usize, cw: usize, g: usize,
                   px: usize) -> PyResult<(i64, i64, i64, i64)> {
-    let (qx, qy) = (qx.as_array(), qy.as_array());
+    footprint_tiles(qx.as_array(), qy.as_array(), cells, cw, g, px)
+}
+
+pub(crate) fn footprint_tiles(qx: ArrayView2<f64>, qy: ArrayView2<f64>, cells: usize, cw: usize, g: usize,
+                              px: usize) -> PyResult<(i64, i64, i64, i64)> {
     if qx.shape() != [cells + 1, cells + 1] || qy.shape() != [cells + 1, cells + 1] || cells * cw != px
         || cells == 0 || 2 * g >= px {
         return Err(PyValueError::new_err("core_tiles: the mesh is not (cells + 1)^2, cells * cw != px or no footprint"));
@@ -275,9 +279,8 @@ impl PhotoCanvas {
     }
 
     /// Source tile coordinates under mesh cells with remaining holes, including the bilinear taps.
-    fn unfilled_tiles(&self, py: Python<'_>, cells: usize, cw: usize, fx: PyReadonlyArray2<'_, f64>,
-                      fy: PyReadonlyArray2<'_, f64>) -> PyResult<std::collections::BTreeSet<(i64, i64)>> {
-        let (fx, fy) = (fx.as_array(), fy.as_array());
+    fn unfilled_tiles(&self, py: Python<'_>, cells: usize, cw: usize, mesh: &crate::photomesh::SourceMesh) -> PyResult<std::collections::BTreeSet<(i64, i64)>> {
+        let (fx, fy) = (mesh.x.view(), mesh.y.view());
         let px = self.filled.nrows();
         if cells == 0 || px == 0 || cw != px / cells || fx.dim() != (cells + 1, cells + 1) || fx.dim() != fy.dim() {
             return Err(PyValueError::new_err("unfilled_tiles: invalid mesh"));
@@ -350,6 +353,20 @@ impl PhotoCanvas {
         Ok((none, snow))
     }
 
+    /// Both composites stay native while the lazy layer takes its reference's low-frequency colour.
+    fn correct_lazy(&mut self, py: Python<'_>, reference: &PhotoCanvas, sigma: f32, leaf_on: bool) -> PyResult<()> {
+        if !self.filled.is_empty() || !reference.filled.is_empty() || self.image.is_empty() || reference.image.is_empty() {
+            return Err(PyValueError::new_err("correct_lazy: expected finished canvases"));
+        }
+        py.detach(|| {
+            let matched = matched(self.image.view(), reference.image.view(), sigma);
+            self.image = if leaf_on {
+                crate::leafon::correct(matched.view(), reference.image.view()).unwrap_or(matched)
+            } else { matched };
+        });
+        Ok(())
+    }
+
     fn take_rgb<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray3<u8>>> {
         if !self.filled.is_empty() || self.image.is_empty() {
             return Err(PyValueError::new_err("expected a finished photo canvas"));
@@ -361,6 +378,20 @@ impl PhotoCanvas {
     fn warp<'py>(&mut self, py: Python<'py>, tiles: Vec<(usize, usize, TileSrc<'py>, u8, Option<TileMask<'py>>)>,
                  nx: usize, ny: usize, qx: PyReadonlyArray2<'py, f64>, qy: PyReadonlyArray2<'py, f64>,
                  cells: usize, cw: usize) -> PyResult<(u64, u64, bool, Vec<(usize, DecodedTile)>)> {
+        self.warp_views(py, tiles, nx, ny, qx.as_array(), qy.as_array(), cells, cw)
+    }
+
+    fn warp_mesh<'py>(&mut self, py: Python<'py>, tiles: Vec<(usize, usize, TileSrc<'py>, u8, Option<TileMask<'py>>)>,
+                      mesh: &crate::photomesh::SourceMesh, cells: usize, cw: usize)
+                      -> PyResult<(u64, u64, bool, Vec<(usize, DecodedTile)>)> {
+        self.warp_views(py, tiles, mesh.tiles.2, mesh.tiles.3, mesh.qx.view(), mesh.qy.view(), cells, cw)
+    }
+}
+
+impl PhotoCanvas {
+    fn warp_views<'py>(&mut self, py: Python<'py>, tiles: Vec<(usize, usize, TileSrc<'py>, u8, Option<TileMask<'py>>)>,
+                       nx: usize, ny: usize, qx: ArrayView2<f64>, qy: ArrayView2<f64>, cells: usize, cw: usize)
+                       -> PyResult<(u64, u64, bool, Vec<(usize, DecodedTile)>)> {
         let views: Vec<(usize, usize, Src, u8, Option<ArrayView2<bool>>)> = tiles.iter()
             .map(|(c, r, t, al, h)| (*c, *r, match t {
                 TileSrc::Decoded(t) => Src::Rgb(t.get().0.view()),
@@ -378,7 +409,6 @@ impl PhotoCanvas {
                 return Err(PyValueError::new_err(format!("tile_warp: tile ({c}, {r}) of a {nx} x {ny} mosaic")));
             }
         }
-        let (qx, qy) = (qx.as_array(), qy.as_array());
         if qx.shape() != [cells + 1, cells + 1] || qy.shape() != [cells + 1, cells + 1] {
             return Err(PyValueError::new_err("tile_warp: the mesh is not (cells + 1)^2"));
         }
@@ -606,6 +636,10 @@ pub fn resize_box_rgb(a: ArrayView3<u8>, ow: usize, oh: usize) -> Array3<u8> {
     resize_rgb(a, ow, oh, 0.5, box_filter)
 }
 
+pub(crate) fn resize_bilinear_rgb(a: ArrayView3<u8>, ow: usize, oh: usize) -> Array3<u8> {
+    resize_rgb(a, ow, oh, 1.0, bilinear_filter)
+}
+
 fn resize_rgb(a: ArrayView3<u8>, ow: usize, oh: usize, support: f64, filter: fn(f64) -> f64) -> Array3<u8> {
     let (ih, iw) = (a.shape()[0], a.shape()[1]);
     let own = a.as_standard_layout();
@@ -658,7 +692,7 @@ pub fn photo_resize<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, px: us
     if a.is_empty() || a.shape()[0] != a.shape()[1] || a.shape()[2] != 3 || px == 0 {
         return Err(PyValueError::new_err("photo_resize: expected nonempty square RGB and a positive size"));
     }
-    Ok(py.detach(|| resize_rgb(a, px, px, 1.0, bilinear_filter)).into_pyarray(py))
+    Ok(py.detach(|| resize_bilinear_rgb(a, px, px)).into_pyarray(py))
 }
 
 /// season._box: the mean over (2r + 1)^2 windows, edges clamped, by numpy's float64 cumulative sums (the same
@@ -886,10 +920,11 @@ type GradeInput<'py> = (PyReadonlyArray2<'py, f32>, PyReadonlyArray2<'py, f32>, 
 /// Shade a source composite. A photo that still needs road paint returns its RGB; otherwise
 /// the same detached call delivers the complete DDS, without exporting a pixel buffer to Python.
 #[pyfunction]
-#[pyo3(signature = (source, season, rock, dds, *, path=None))]
+#[pyo3(signature = (source, season, rock, dds, *, path=None, paint=None))]
 pub fn finish_far_photo<'py>(py: Python<'py>, source: Rendered<'py>,
                     season: Option<GradeInput<'py>>, rock: Option<(PyReadonlyArray2<'py, f64>, crate::RockArea)>,
-                    dds: Option<(PyReadonlyArray1<'py, f32>, f32, bool)>, path: Option<std::path::PathBuf>)
+                    dds: Option<(PyReadonlyArray1<'py, f32>, f32, bool)>, path: Option<std::path::PathBuf>,
+                    paint: Option<&crate::paintlist::PaintLayers>)
                     -> PyResult<Bound<'py, PyAny>> {
     let img = match &source {
         Rendered::Canvas(c) if c.filled.is_empty() => c.image.view(),
@@ -904,13 +939,18 @@ pub fn finish_far_photo<'py>(py: Python<'py>, source: Rendered<'py>,
         h < 2 || x.is_empty() || x.dim() != y.dim() || p.dim() != (3,3)) {
         return Err(PyValueError::new_err("far_dds: invalid square RGB texture, season grid or palette"));
     }
+    if let Some(layers) = paint { layers.validate(img.dim())?; }
     enum Finished { Dds(Vec<u8>), Written(usize), Rgb(Array3<u8>) }
     let output = py.detach(|| -> std::io::Result<Finished> {
         let graded = season.and_then(|(x,y,p,s)| grade_at(img, x, y, p, s));
         let a = graded.as_ref().map_or_else(|| img.view(), |v| v.view());
         let shaded = rock.and_then(|(u,s)| crate::rock_core(a, u, s));
+        let mut owned = shaded.or(graded);
+        if let Some(layers) = paint {
+            owned = Some(layers.apply(owned.unwrap_or_else(|| img.to_owned())));
+        }
         if let Some((lut, sharpen, srgb)) = dds {
-            let a = shaded.as_ref().map_or_else(|| a.view(), |v| v.view());
+            let a = owned.as_ref().map_or_else(|| img.view(), |v| v.view());
             let data = crate::bc1fast::photo_dds(a, lut, sharpen, srgb, None);
             if let Some(path) = path {
                 std::fs::write(path, &data)?;
@@ -919,7 +959,7 @@ pub fn finish_far_photo<'py>(py: Python<'py>, source: Rendered<'py>,
                 Ok(Finished::Dds(data))
             }
         } else {
-            Ok(Finished::Rgb(shaded.or(graded).unwrap_or_else(|| img.to_owned())))
+            Ok(Finished::Rgb(owned.unwrap_or_else(|| img.to_owned())))
         }
     })?;
     Ok(match output {
@@ -982,28 +1022,31 @@ pub fn dds_levels<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, lut: PyR
 pub fn match_colours<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, reference: PyReadonlyArray3<'py, u8>,
                           sigma: f32) -> PyResult<Bound<'py, numpy::PyArray3<u8>>> {
     let (a, b) = (rgb.as_array(), reference.as_array());
-    let (h, w, nc) = a.dim();
-    let (rh, rw, rc) = b.dim();
+    let nc = a.dim().2;
+    let rc = b.dim().2;
     if a.is_empty() || b.is_empty() || nc != 3 || rc != 3 {
         return Err(PyValueError::new_err("match_colours: expected two nonempty RGB images"));
     }
-    let out = py.detach(|| {
-        let small = resize_box_rgb(a, rw, rh);
-        let gain = blurred_gain(small.view(), b, sigma);
-        let mut out = Array3::zeros((h, w, 3));
-        for ch in 0..3 {
-            let g = gain.slice(s![.., .., ch]);
-            let full;
-            let g = if (h, w) == (rh, rw) { g } else {
-                full = resize_f32(g, w, h);
-                full.view()
-            };
-            numpy::ndarray::Zip::from(out.slice_mut(s![.., .., ch])).and(a.slice(s![.., .., ch])).and(g)
-                .for_each(|v, &p, &g| *v = rint_small(p as f32 * g) as u8);
-        }
-        out
-    });
-    Ok(out.into_pyarray(py))
+    Ok(py.detach(|| matched(a, b, sigma)).into_pyarray(py))
+}
+
+fn matched(a: ArrayView3<u8>, b: ArrayView3<u8>, sigma: f32) -> Array3<u8> {
+    let (h, w, _) = a.dim();
+    let (rh, rw, _) = b.dim();
+    let small = resize_box_rgb(a, rw, rh);
+    let gain = blurred_gain(small.view(), b, sigma);
+    let mut out = Array3::zeros((h, w, 3));
+    for ch in 0..3 {
+        let g = gain.slice(s![.., .., ch]);
+        let full;
+        let g = if (h, w) == (rh, rw) { g } else {
+            full = resize_f32(g, w, h);
+            full.view()
+        };
+        numpy::ndarray::Zip::from(out.slice_mut(s![.., .., ch])).and(a.slice(s![.., .., ch])).and(g)
+            .for_each(|v, &p, &g| *v = rint_small(p as f32 * g) as u8);
+    }
+    out
 }
 
 fn blurred_gain(a: ArrayView3<u8>, b: ArrayView3<u8>, sigma: f32) -> Array3<f32> {

@@ -593,10 +593,11 @@ class FarPhoto:
         fast.require(559, "finish_far_photo")
         return fast._ef.finish_far_photo(self.pixels, self.grade, rock, None)
 
-    def write(self, path, rock, srgb):
-        fast.require(559, "finish_far_photo")
+    def write(self, path, rock, srgb, paint=None):
+        fast.require(563, "finish_far_photo")
         tmp = staging.tmp_for(path)
-        size = fast._ef.finish_far_photo(self.pixels, self.grade, rock, (_TO_LIN, MIP_SHARPEN, srgb), path=tmp)
+        size = fast._ef.finish_far_photo(self.pixels, self.grade, rock, (_TO_LIN, MIP_SHARPEN, srgb), path=tmp,
+                                         paint=paint)
         staging.replace(tmp, path)
         return size
 
@@ -1286,12 +1287,12 @@ class Imagery:
         cw = px // cells
         if netfetch.NETLOG_STACK:
             netfetch._why.ctx = f"{where.size / px:.2f}m{px}px"
-        lat, lon = where.grid(cells)
-        if np.abs(lat).max() > MAX_LAT:
+        grid = _photo_grid(where, cells)
+        south, _, north, _, clat = grid.bounds()
+        if max(-south, north) > MAX_LAT:
             return
         g = 0 if GUTTER_FETCH else int(getattr(where, "g", 0) or 0)
-        zw = zoom_for(float(lat[cells // 2, cells // 2]), where.size / px)
-        clat = float(lat[cells // 2, cells // 2])
+        zw = zoom_for(clat, where.size / px)
         for k, src in enumerate(self.chain):
             mz, mv = zoom_caps(src, clat)
             if zw > mv:
@@ -1299,13 +1300,11 @@ class Imagery:
             z = min(zw, mz)
             if z < src.min_zoom or src.lazy:    # (a lazy source's tiles: only warm() fetches them)
                 continue
-            n = 2 ** z
-            fx, fy = mercator_px(lat, lon, z)
-            fx = fx - n * TILE * np.round((fx - fx[0, 0]) / (n * TILE))
-            m = self._mosaic_keys(src, z, fx, fy)
-            if m is None:
+            mesh = grid.project(z, MAX_MOSAIC)
+            if mesh is None:
                 return
-            tx0, ty0, nx, ny, keys = m
+            tx0, ty0, nx, ny = mesh.tiles
+            keys = _mosaic_keys(mesh, src, z)
             if not range_in_bounds(src, z, tx0, tx0 + nx - 1, ty0, ty0 + ny - 1):
                 # outside the source's area: never asked, and the next source is the one render draws from (it skips
                 # this one too). It ended the prefetch here (2026-10-15: carrying on to the base sources made the
@@ -1318,7 +1317,7 @@ class Imagery:
                     return
                 continue
             if g:
-                cx0, cx1, cy0, cy1 = _core_tiles(fx, fy, cells, cw, g, px)
+                cx0, cx1, cy0, cy1 = mesh.core_tiles(cells, cw, g, px)
                 keys = {t: kk for t, kk in keys.items() if cx0 <= t[0] <= cx1 and cy0 <= t[1] <= cy1}
             yield k, src, netfetch.host_of(src.url), list(keys.values())
 
@@ -1900,13 +1899,12 @@ class Imagery:
         to come; its RGB as a JPEG (FIN_QUALITY, 4:4:4; a uniform tile's as a PNG); its nodata mask as packed bits if it
         has one) and to memory as the disk has it (the JPEG: a texture is the same from either)."""
         path = self._fin_path(key)
-        b = io.BytesIO()
         if f.uniform:                   # (one colour: a PNG of ~1 KB, exact)
+            b = io.BytesIO()
             Image.fromarray(f.data, "RGB").save(b, "PNG", compress_level=1)
+            jpg = b.getvalue()
         else:
-            Image.fromarray(f.data, "RGB").save(b, "JPEG", quality=FIN_QUALITY, subsampling=0)
-        jpg = b.getvalue()
-        if not f.uniform:
+            jpg = fast.photo_jpeg(f.data, FIN_QUALITY, True)
             f.data = jpg
         self._fin_put(key, f)
         flags = (1 if f.uniform else 0) | (2 if f.relit else 0) | (4 if f.cm else 0) | (8 if f.hole is not None else 0)
@@ -2062,19 +2060,6 @@ class Imagery:
                     ev.set()
         return out
 
-    def _mosaic_keys(self, src, z, fx, fy):
-        """(tx0, ty0, nx, ny, {(tx, ty): key}) of src's zoom-z tiles covering global pixel coordinates fx, fy, or None
-        if that would take more than MAX_MOSAIC tiles."""
-        n = 2 ** z
-        tx0, tx1 = int(math.floor(fx.min() - 1)) // TILE, int(math.floor(fx.max() + 1)) // TILE
-        ty0 = max(0, int(math.floor(fy.min() - 1)) // TILE)
-        ty1 = min(n - 1, int(math.floor(fy.max() + 1)) // TILE)
-        nx, ny = tx1 - tx0 + 1, ty1 - ty0 + 1
-        if nx * ny > MAX_MOSAIC or ny <= 0:
-            return None
-        return tx0, ty0, nx, ny, {(tx, ty): (src, z, tx % n, ty) for ty in range(ty0, ty1 + 1)
-                                  for tx in range(tx0, tx1 + 1)}
-
     @profile_step('Imagery render')
     def render(self, frame, x0, y0, size, px, pending=None, gutter=False):
         """_render(); texels from a lazy source (NAIP) then take their large-scale colour from the rest of
@@ -2131,13 +2116,13 @@ class Imagery:
     @profile_step('Imagery source assembly')
     def render_where(self, where, px, pending=None, far=False):
         """render() of a square (EnuSquare, MercSquare)."""
-        rgb, used = self._render(where, px, pending, keep_canvas=far)
+        rgb, used = self._render(where, px, pending, keep_canvas=True)
         if any(s.lazy and s.name in used for s in self.chain) and not all(s.lazy for s in self.chain):
             # the reference only gives the colour above MATCH_SIGMA_M: rendered and matched at MATCH_DOWN times
             # coarser texels (64x fewer texels to render, blur and stream through memory than at full size)
             small = max(MATCH_MIN_PX, px // MATCH_DOWN)
             try:
-                ref, ref_used = self._render(where, small, pending, skip_lazy=True)
+                ref, ref_used = self._render(where, small, pending, skip_lazy=True, keep_canvas=True)
             except ImageryError:            # the reference is unreachable: NAIP as served
                 ref, ref_used = None, {}
             if ref is not None and ref_used.get("none"):
@@ -2146,15 +2131,14 @@ class Imagery:
                 # was pulled to the fallback's grey-brown, Fells Point's mean blue 115 -> 76, 2026-11-13)
                 ref = None
             if ref is not None:
-                if far:
-                    rgb = rgb.take_rgb()
-                rgb = match_colours(rgb, ref, MATCH_SIGMA_M / (where.size / small))
-                if self.leaf_on and any(s.leaf_off and s.name in used for s in self.chain):
-                    rgb = season.leaf_on(rgb, ref)
+                leaf_on = self.leaf_on and any(s.leaf_off and s.name in used for s in self.chain)
+                fast.require(563, "correct_lazy")
+                rgb.correct_lazy(ref, MATCH_SIGMA_M / (where.size / small), leaf_on)
+                if leaf_on:
                     used["leafon"] = sum(used.get(s.name, 0) for s in self.chain if s.leaf_off)
         if far:
             return FarPhoto(rgb, self._season_inputs(where)), used
-        return self._seasoned(where, rgb), used
+        return self._seasoned(where, rgb.take_rgb()), used
 
     SEASON_GRID = 17            # world positions for the season noise: on this grid, bilinear in between
 
@@ -2169,11 +2153,11 @@ class Imagery:
     def _season_inputs(self, where):
         if self.season_mode in (None, "off", "summer"):
             return None
-        lat, lon = where.grid(self.SEASON_GRID - 1)
-        amounts = season.amounts_for(self.season_mode, float(np.mean(lat)))
+        lat, east, north = _photo_grid(where, self.SEASON_GRID - 1).season_grid()
+        amounts = season.amounts_for(self.season_mode, lat)
         if not any(v > 0 for v in amounts.values()):
             return None
-        return (*season.world_metres(lat, lon), season._PAL32, season.grade_params(amounts))
+        return (east, north, season._PAL32, season.grade_params(amounts))
 
     def _render(self, where, px, pending=None, skip_lazy=False, keep_canvas=False):
         """Texture of a square (where: EnuSquare: [x0, x0+size] x [y0, y0+size] of an anchor's frame; MercSquare),
@@ -2197,14 +2181,15 @@ class Imagery:
         cw = px // cells
         if netfetch.NETLOG_STACK:
             netfetch._why.ctx = f"{where.size / px:.2f}m{px}px{type(where).__name__[:4]}"
-        lat_raw, lon = where.grid(cells)                         # [row (north first), col]
-        lat = np.clip(lat_raw, -89.9, 89.9)
-        zw = zoom_for(float(lat[cells // 2, cells // 2]), where.size / px)
+        grid = _photo_grid(where, cells)
+        south, west, north, east, center = grid.bounds()
+        polar = max(-south, north) > MAX_LAT
+        south, north, clat = (min(89.9, max(-89.9, la)) for la in (south, north, center))
+        zw = zoom_for(clat, where.size / px)
         used, error, relit, full = {}, None, 0, False
         g = 0 if GUTTER_FETCH else int(getattr(where, "g", 0) or 0)     # (the gutter: on hand or clamped)
         fast.require(559, "PhotoCanvas")
         canvas = fast._ef.PhotoCanvas(px, g)
-        clat = float(lat[cells // 2, cells // 2])
         for i, src in enumerate(self.chain):
             last = i == len(self.chain) - 1
             mz, mv = zoom_caps(src, clat)
@@ -2215,29 +2200,26 @@ class Imagery:
                 continue
             if src.bounds:                  # a regional source elsewhere: not even its mosaic's keys
                 bs, bw, bn, be = src.bounds
-                if lat.max() < bs or lat.min() > bn or lon.max() < bw or lon.min() > be:
+                if north < bs or south > bn or east < bw or west > be:
                     continue
-            m = None
             while True:
-                fx, fy = mercator_px(lat, lon, z)
-                w = TILE * 2 ** z
-                fx = fx - w * np.round((fx - fx[0, 0]) / w)        # unwrap across the antimeridian
-                m = self._mosaic_keys(src, z, fx, fy)
-                if m is not None or z <= src.min_zoom:
+                mesh = grid.project(z, MAX_MOSAIC)
+                if mesh is not None or z <= src.min_zoom:
                     break
                 z -= 1                      # footprint too large for the zoom: coarser
-            if m is None:
+            if mesh is None:
                 continue
-            tx0, ty0, nx, ny, keys = m
+            tx0, ty0, _, _ = mesh.tiles
+            keys = _mosaic_keys(mesh, src, z)
             if g:
-                cx0, cx1, cy0, cy1 = _core_tiles(fx, fy, cells, cw, g, px)
+                cx0, cx1, cy0, cy1 = mesh.core_tiles(cells, cw, g, px)
                 keys = {t: kk for t, kk in keys.items()
                         if (cx0 <= t[0] <= cx1 and cy0 <= t[1] <= cy1) or self._on_hand(kk)}
             if used:
                 # a later source: only the tiles under the texels still unfilled (an all-sea tile of the first is
                 # one colour, "missing", and the whole footprint was fetched again from the next: at Bergen EOX's
                 # 2016 layer was fetched for 1347 of the 1792 tiles of its 2023 one, on the far field's slowest host)
-                need = _unfilled_tiles(canvas, cells, cw, fx, fy)
+                need = _unfilled_tiles(canvas, cells, cw, mesh)
                 keys = {t: kk for t, kk in keys.items() if t in need}
                 if not keys:
                     continue
@@ -2266,9 +2248,7 @@ class Imagery:
                 cm_any |= f.cm
             if not tiles:
                 continue
-            qx = np.ascontiguousarray(fx - tx0 * TILE, np.float64)
-            qy = np.ascontiguousarray(fy - ty0 * TILE, np.float64)
-            hits, rh, full, decoded = canvas.warp(tiles, nx, ny, qx, qy, cells, cw)
+            hits, rh, full, decoded = canvas.warp_mesh(tiles, mesh, cells, cw)
             if decoded:
                 with self._lock:
                     for i, rgb in decoded:
@@ -2288,7 +2268,7 @@ class Imagery:
         if not full and error is not None:
             raise error
         cap = None
-        if not full and np.abs(lat_raw).max() > MAX_LAT:
+        if not full and polar:
             i, j = canvas.holes()
             cap = np.abs(where.texel_lat(i, j, px)) > MAX_LAT
         none, snow = canvas.fill(self.lut[list(FALLBACK_RGB)], self.lut[list(POLAR_RGB)], cap)
@@ -2346,12 +2326,22 @@ class EnuSquare:
     def __init__(self, frame, x0, y0, size):
         self.frame, self.x0, self.y0, self.size = frame, x0, y0, size
 
-    def grid(self, n):
-        """(lat, lon) of its (n + 1)^2 grid of corners, row 0 north, column 0 west."""
+    def mesh(self, n):
+        import geodesy
+        import geotiles
+        if type(self.frame) is geodesy.EnuFrame:
+            return fast._ef.PhotoGrid.enu(n, self.x0, self.y0, self.size, self.frame.origin, self.frame.rot)
+        if type(self.frame) is geotiles.WorldFrame:
+            return fast._ef.PhotoGrid.world(n, self.x0, self.y0, self.size, self.frame.lat0, self.frame.lon0)
+        # Custom projections supply the lat/lon grid themselves.
         k = np.arange(n + 1) * (self.size / n)
         E, N = np.meshgrid(self.x0 + k, self.y0 + self.size - k)
         lat, lon, _ = self.frame.enu_to_geodetic(E, N, 0.0)
-        return lat, lon
+        return fast._ef.PhotoGrid(lat, lon)
+
+    def grid(self, n):
+        fast.require(563, "PhotoGrid")
+        return self.mesh(n).arrays()
 
     def texel_lat(self, i, j, px):
         t = self.size / px
@@ -2359,20 +2349,21 @@ class EnuSquare:
         return la
 
 
-def _core_tiles(fx, fy, cells, cw, g, px):
-    """(tx0, tx1, ty0, ty1): the tiles (global pixel coordinates fx, fy at the (cells + 1)^2 grid corners, as
-    _mosaic_keys) the bilinear taps of a texture's footprint texels (g .. px - g - 1 on both axes) touch, as the warp
-    (earthfast warp_rgba) places them (Rust: earthfast core_tiles)."""
-    fast.require(222, "core_tiles")
-    return fast._ef.core_tiles(np.ascontiguousarray(fx, np.float64), np.ascontiguousarray(fy, np.float64),
-                               int(cells), int(cw), int(g), int(px))
+def _photo_grid(where, cells):
+    fast.require(563, "PhotoGrid")
+    if type(where) in (EnuSquare, MercSquare):
+        return where.mesh(cells)
+    return fast._ef.PhotoGrid(*where.grid(cells))
 
 
-def _unfilled_tiles(canvas, cells, cw, fx, fy):
-    """{(tx, ty)} of the tiles (global pixel coordinates fx, fy at the (cells + 1)^2 grid corners, as _mosaic_keys)
-    under the render cells (cw texels each, the last taking the rest) that still have unfilled texels, with the
-    bilinear taps' pixel round them. Pure."""
-    return canvas.unfilled_tiles(cells, cw, fx, fy)
+def _mosaic_keys(mesh, src, z):
+    tx0, ty0, nx, ny = mesh.tiles
+    n = 2 ** z
+    return {(tx, ty): (src, z, tx % n, ty) for ty in range(ty0, ty0 + ny) for tx in range(tx0, tx0 + nx)}
+
+
+def _unfilled_tiles(canvas, cells, cw, mesh):
+    return canvas.unfilled_tiles(cells, cw, mesh)
 
 
 class MercSquare:
@@ -2393,10 +2384,12 @@ class MercSquare:
         lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1.0 - 2.0 * (self.y + fy) / w))))
         return lat, lon
 
+    def mesh(self, n):
+        return fast._ef.PhotoGrid.mercator(n, self.z, self.x, self.y, self.f0, self.f1)
+
     def grid(self, n):
-        f = self.f0 + np.arange(n + 1) * ((self.f1 - self.f0) / n)
-        FX, FY = np.meshgrid(f, f)                       # row 0 north: y fraction grows southwards
-        return self._ll(FX, FY)
+        fast.require(563, "PhotoGrid")
+        return self.mesh(n).arrays()
 
     def texel_lat(self, i, j, px):
         t = (self.f1 - self.f0) / px

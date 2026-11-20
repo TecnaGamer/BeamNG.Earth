@@ -652,6 +652,14 @@ def paint(rgb, frame, x0, y0, size, roads, lots=(), urban=None, widths=None, pad
     """surface.paint_square's paint of the photo rgb (h x w x 3, row 0 north, over [x0, x0 + size]² of frame) with
     the road Features roads and the lot Features lots of its cells and the pads [(lat, lon)], in one native call
     (earthfast.paint_photo); steps: the parts painted (surface's photo_* helpers each paint one). A new array."""
+    layers = prepare(frame, x0, y0, size, roads, lots, urban, widths, pads, simple, steps, pavement)
+    return layers.paint(np.asarray(rgb, np.uint8))
+
+
+def prepare(frame, x0, y0, size, roads, lots=(), urban=None, widths=None, pads=(), simple=False, steps=ALL,
+            pavement=None):
+    """Capture this square's paint inputs while its cached map cells are available."""
+    fast.require(563, "PaintLayers")
     roads, lots = list(roads or ()), list(lots or ())
     s = cell_set(frame, roads, lots, urban, widths)
     v = s.view(roads, lots)
@@ -679,8 +687,7 @@ def paint(rgb, frame, x0, y0, size, roads, lots=(), urban=None, widths=None, pad
         if not simple:
             kw["islands"] = s.part(("islands",) + g, lambda: _build_islands(v, g))
             kw["corners"] = s.corners(x0, y0, size, roads)
-    return fast._ef.paint_photo(np.ascontiguousarray(rgb, np.uint8), float(x0), float(y0), float(size), style(),
-                                has_roads=has_roads, simple=bool(simple), **kw)
+    return fast._ef.PaintLayers(float(x0), float(y0), float(size), style(), has_roads=has_roads, simple=bool(simple), **kw)
 
 
 def road_segments(frame, x0, y0, size, w, h, roads, urban=None, widths=None, omit_v3=False):
