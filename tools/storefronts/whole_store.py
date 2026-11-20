@@ -126,6 +126,8 @@ PUBLIC_GLAZING = {
 CAFE_GLAZING.update({name: PUBLIC_GLAZING[family] for name, (family, _, _) in PROFILES.items()
                      if family in PUBLIC_GLAZING})
 CAFE_GLAZING["Kroger"] = PUBLIC_GLAZING["grocery"]
+CAFE_GLAZING["Waffle House"] = (14., .55, 2.55, 7.)
+DINING["Cracker Barrel"] = ("timber", "#85634d", "#ebbd62", "#623520")
 
 # Share of frontage, maximum span, roof depth, parapet rise and pitch.
 ENTRANCE_PROFILES = {
@@ -326,7 +328,11 @@ def elevation(
     if name == "In-N-Out Burger":
         rect(0, .55, width, .75, "#b62224")
         rect(0, height - .94, width, height - .78, "#b62224")
-    if name in FASCIA:
+    if name == "IKEA" and not observed_brick and not photo_color:
+        rect(0, .28, width, height, "#174d91")
+        for x in np.arange(.4, width, .7):
+            rect(x, .28, x + .035, height, "#3463a0")
+    if name in FASCIA and name != "Cracker Barrel":
         share, paint, trim = FASCIA[name]
         bottom = height * (1 - share) - 0.14
         rect(0, bottom, width, height - 0.14, paint)
@@ -456,6 +462,17 @@ def sign_image(name, aspect=4.5):
     x0, y0, x1, y1 = base.getbbox(name)
     size = max(1, int(160 * min((right - left) / (x1 - x0), 168 / (y1 - y0))))
     font = ImageFont.truetype(face, size)
+    if name == "Waffle House" and aspect >= 4:
+        # Each letter occupies its own yellow cabinet, with a break between words.
+        cell = width / 11
+        tile_font = ImageFont.truetype(face, max(1, int(min(163, cell * .94))))
+        for index, letter in enumerate("WAFFLEHOUSE"):
+            left_edge = round(index * cell)
+            if index:
+                seam = max(1, round(cell * (.11 if index == 6 else .045)))
+                d.rectangle((left_edge, 0, left_edge + seam, 199), fill="#37302b")
+            d.text(((index+.51)*cell, 100), letter, font=tile_font, fill=fg, anchor="mm")
+        return img
     x0, y0, x1, y1 = font.getbbox(name)
     d.text(
         ((left + right - x0 - x1) / 2, (200 - y0 - y1) / 2), name, fill=fg, font=font
@@ -631,7 +648,37 @@ def build(
                 )
                 and all(abs(x - e) > 4.9 for e in door)
             ]
-        if i == front:
+        if i == front and name == "Cracker Barrel":
+            # Keep the ridge inside a convex four-sided footprint, including skewed plans.
+            if len(ring) == 4 and np.all(edges[:, 0] * np.roll(edges[:, 1], -1)
+                                         - edges[:, 1] * np.roll(edges[:, 0], -1) > 0):
+                a, b, c, d = np.roll(ring, -i, axis=0)
+                rise = min(3.6, np.linalg.norm(c-b)*.23, width*.20)
+                ridge_a, ridge_b = ((*((a+d)/2), height+rise), (*((b+c)/2), height+rise))
+                for p, q, r, s in (((*a,height), (*b,height), ridge_b, ridge_a),
+                                   ((*c,height), (*d,height), ridge_a, ridge_b)):
+                    mesh([p,q,r,p,r,s], 2)
+                mesh([(*b,height), (*c,height), ridge_b, (*d,height), (*a,height), ridge_a], 0)
+            reach = min(2.3, width*.13)
+            def porch_point(x, depth, z):
+                return (*(ring[i] + axes[i]*x + normals[i]*depth), z)
+            start, end = width*.05, width*.95
+            a, b = porch_point(start, 0, 3.7), porch_point(end, 0, 3.7)
+            c, d = porch_point(end, reach, 2.95), porch_point(start, reach, 2.95)
+            mesh([a,b,c,a,c,d], 2)
+            for x in np.linspace(start, end, max(2, math.ceil((end-start)/3.5)+1)):
+                if any(abs(x-door_x) < 1.1 for door_x in door):
+                    continue
+                corners = [porch_point(x+side, reach+offset, 0)[:2]
+                           for side, offset in ((-.10,-.13),(.10,-.13),(.10,.07),(-.10,.07))]
+                for p,q in zip(corners, corners[1:]+corners[:1]):
+                    mesh([(*p,0),(*q,0),(*q,2.97),(*p,0),(*q,2.97),(*p,2.97)], 0)
+        if i == front and name in {"Cracker Barrel", "Waffle House"}:
+            span = min(width*.8, 9.)
+            lo = (width-span)/2
+            face(lo, lo+span, .12, height-.83, height-.12,
+                 texture(sign_image(name, span/.71)), True)
+        if i == front and name not in {"Cracker Barrel", "Waffle House"}:
             # Model the entrance as a roof volume extending back into the footprint.
             # Width share, maximum width, interior depth, rise and roof pitch vary by format.
             profiles = {
@@ -802,7 +849,7 @@ def build(
                 True,
             )
             block(left - 0.08, left + span + 0.08, 0.84, top - 0.1, top + 0.03, 2)
-        if i == street_front and width >= 10 and not docks[i]:
+        if i == street_front and width >= 10 and not docks[i] and name not in {"Cracker Barrel", "Waffle House", "IKEA"}:
             # A bracket on the approach wall carries the sign above head height. Its two faces
             # read in opposite directions along the street, including from a shallow approach.
             reach = min(2.8, width * .13)
@@ -851,6 +898,8 @@ def build(
         face(0, width, 0.025, 0, height, texture(painting), True)
         block(0, width, 0.09, height - 0.13, height + 0.04, 2)
         for x in door:
+            if name in {"Cracker Barrel", "Waffle House"}:
+                continue
             half = min(2.25 if restaurant else 6.5, width * 0.49)
             center = np.clip(x, half, width - half)
             z = 2.92 if restaurant else 3.8
@@ -907,6 +956,11 @@ def build(
                     e, f = vertex(u, reach, zu + 0.2), vertex(v, reach, zv + 0.2)
                     mesh([a, b, f, a, f, e], red, uv)
             block(center - half, center + half, reach, z, z + 0.25, 2)
+            if name == "IKEA":
+                yellow = texture(Image.new("RGB", (8,8), "#ffce21"))
+                depth = min(3.6, width*.16)
+                block(center-half, center+half, depth, z, z+.95, 2)
+                face(center-half, center+half, depth+.02, z, z+.95, yellow, True)
             awning = {
                 "In-N-Out Burger": "#b62224",
                 "Popeyes": "#ae3234",

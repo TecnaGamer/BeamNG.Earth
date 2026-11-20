@@ -158,7 +158,29 @@ def test_tenant_panel_requires_clear_frontage():
     assert parking_frontage(ring, np.array([.00008, .00008]), parking) is None
 
 
+def test_signature_shapes_stay_on_standalone_buildings():
+    from build_stores import export_store
+    import threedmr
+    footprint = np.array([[0., 0.], [.0003, 0.], [.0003, .00018], [0., .00018]])
+    with tempfile.TemporaryDirectory() as tmp:
+        cache = Path(tmp) / "threedmr_cache"
+        cache.mkdir()
+        for name, low, high in (("Waffle House", 3.5, 3.7), ("Cracker Barrel", 7., 8.6), ("IKEA", 12., 16.)):
+            for overlay in (False, True):
+                outline = footprint[:2] if overlay else footprint
+                direction = None if overlay else np.array([0., -1.])
+                ident = f"{name}-{overlay}"
+                entry = export_store(Path("shape.osm"), (name, ident, outline, direction, [], None), {}, cache)
+                vertices = threedmr.load_local_model(tmp, entry)[0]
+                size = np.ptp(vertices, axis=0)
+                if overlay:
+                    assert entry["storefront_overlay"] and size[1] <= 1.1 and size[2] < 6, name
+                else:
+                    assert low <= size[2] <= high, (name, size)
+
+
 if __name__ == "__main__":
+    test_signature_shapes_stay_on_standalone_buildings()
     test_street_sign_when_entrance_faces_parking()
     test_tenant_panel_requires_clear_frontage()
     test_wall_observations()

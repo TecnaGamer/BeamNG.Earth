@@ -67,6 +67,8 @@ for _, names in CHAIN_GROUPS:
         HEIGHTS.setdefault(name, 4.3 if names[0] == "McDonald's" else 6)
 
 
+HEIGHTS.update({"Cracker Barrel": 4.8, "Waffle House": 3.55, "IKEA": 12.})
+
 NAMES = {name.casefold(): name for _, names in CHAIN_GROUPS for name in names}
 NAMES.update(ALIASES)
 NAMES.update({
