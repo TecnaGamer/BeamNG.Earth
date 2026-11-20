@@ -77,9 +77,12 @@ HK_ON = os.environ.get("BNE_ROADZ_HK", "on") != "off"
 # the "hk" source's cell folder (<source> above) and the tag of the plans made with it (hk_tags): changed with its
 # heights, so that cells and plans kept under the old one are not read (hk / hk1: a deck the median of 15 DSM reads
 # across it; hk2: the one surface deck_lidar finds in the DSM pixels round its line; hk3: the lines asked for to
-# HK_LINE_TOL_DEG and their vertices roadzhk.VERTEX_MIN_M apart or more, a cell before held up to a million). Not
-# VERSION: every source's cells
-HK_CELLS = "hk3"
+# HK_LINE_TOL_DEG and their vertices roadzhk.VERTEX_MIN_M apart or more, a cell before held up to a million; hk4: the
+# untagged stretches of an elevated structure and the approaches down from its ends, _hk_gaps, _hk_approaches, and the
+# bridge parts measured on their own lines beside the government's, OWN_ROWS, each read off the DSM pixels that are
+# no other deck's and only where that is the surface across the part, roadzhk.hidden_pixels, across). Not VERSION:
+# every source's cells
+HK_CELLS = "hk4"
 LIDAR_INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usgs3dep_index.json.gz")
 PROVIDER = None             # the server's RoadZ (MapData makes it): BridgeProfiles / Grader ask it
 
@@ -149,6 +152,23 @@ LIDAR_GAP_RISE_M = 3.0
 LIDAR_GAP_END_TOL_M = 1.5
 LIDAR_GAP_MISS = 1
 LIDAR_GAP_MIN_M = 8.0
+HK_GAP_ROUNDS = 4           # times Hong Kong asks the pieces going on from the stretches found (_hk_gaps)
+# Hong Kong's stretch goes on down to this far over the DTM, not LIDAR_GAP_RISE_M: a flyover's ramp there stands on
+# walls with a road at grade either side, and the planner draws the ground piece going on from the stretch on fill:
+# the roads beside a piece 3 m up were raised with it (share_corridors: 1.6 m at 22.37046 N 114.13449 E and at
+# 22.24973 N 114.16882 E, lab 2026-11-15). A deck raises nothing beside it.
+HK_GAP_RISE_M = 1.0
+# The LiDAR index's answers for a box (hklidar.Sheets.index: the sheets meeting it) are asked this much wider and the
+# last HK_INDEX_KEPT of a layer kept for the process (_hk_sheets_in): a cell's reads ask the same sheets again, its
+# lines', its decks', each round of its stretches' and its approaches', 10-14 requests a cell of a host limited to
+# 2 a second where the lines alone made 2. The index is the 2020 survey's: it does not change.
+HK_INDEX_PAD_M = 500.0
+# A bridge part whose own row stands HK_GAP_RISE_M over the DTM at under this share of its measured stations is no
+# structure in the survey (built after the 2020 flight, or held as ground by the DTM): it has no row, and is left to
+# the government's line and the inference as before. A deck was drawn along the floor of a 2020 building site, 22 m
+# under the decks it meets: Hong Kong (22.30192 N 114.23322 E, lab 2026-11-16).
+HK_DECK_MIN_SHARE = 0.25
+HK_INDEX_KEPT = 8
 LIDAR_GAPS_WAIT_S = float(os.environ.get("BNE_LIDAR_GAPS_WAIT", "8"))
 # the sources a road build waits that long at most for a cell of, the inference for the rest of the run meanwhile
 # (gap_answers). Hong Kong's read goes on where the lidar's stops (_read): its heights apply only once each sheet of the
@@ -240,6 +260,34 @@ def prefetched():
 APPROACH_END_TOL_M = 1.0
 APPROACH_REJOIN_M = 0.3
 APPROACH_MIN_DEV_M = 0.5
+APPROACH_SOURCES = ("lidar", "hk")      # (Hong Kong's on its DSM and DTM: RoadZ._hk_approaches)
+APPROACH_BESIDE = ("hk",)               # (kept beside the source's own ground lines; on coarse terrain too)
+# the least share of an approach's stations (to where it is back on the DTM) the DSM reader finds a surface at: the
+# lidar's road points lie all along an embankment, the reader's surface does not. A road given a row of 4 measured
+# stations in 20 is planned as a measured approach all the same, and was pinned to its deck's end 4 m over the deck
+# with a 20 % ramp down, where the planner before left it on the ground: Hong Kong (22.24755 N 114.15572 E)
+HK_APPROACH_MIN_SHARE = 0.5
+# Hong Kong's approach is given only where our terrain (the game's) is the survey's at the approach's ground end, within
+# this: the row's last height after the datum offset against our DEM there. Over reclaimed land our terrain is 0.0 and
+# the survey's ground 3-4 m up: an approach that ended "on the ground" 16 m from the deck's end at 4.9 m left the
+# planner no lift to ramp, and the road fell to 0 at 18 %, Hong Kong (22.31204 N 113.95722 E). Not given, the
+# planner ramps the road down itself
+HK_APPROACH_TERRAIN_M = 1.0
+# Sources whose ground line gives a ground part no height where a line of another tier lies OTHER_TIER_NEARER_M or more
+# nearer the station and its height is nearer our terrain under the station than the ground line's by over
+# APPROACH_END_TOL_M: that one is the road's own (the government holds as a deck a road the map draws on the ground),
+# the ground line a carriageway's beside it at another height. A street took the one 6-10 m beside it, 2.6 m over its
+# own ground, and the ramp of the bridge after it was filled up to that, 6.9 m over the road beside: Hong Kong
+# (22.27946 N 114.16113 E). (A ground line under or beside a deck's, the terrain's own height: kept.)
+OTHER_TIER_NEARER = ("hk",)
+OTHER_TIER_NEARER_M = 3.0
+# The sources whose bridge parts have deck lines measured on the map's own lines too (Lines.own, as the lidar's
+# decks are: RoadZ._decks): a part takes its own row alone (OWN_REACH_M off its line at most: another part's is
+# another deck's, a viaduct's row 5 to 7 m beside a road 12 m under it was taken for the road's, Hong Kong
+# (22.33168 N 114.14187 E)), joined with the government's deck lines into one surface (observed,
+# roadzhk.one_surface): the government's heights where it has them, as before, the own row's where it has none.
+OWN_ROWS = ("hk",)
+OWN_REACH_M = 1.5
 SESSION_ENV = xproc.RUN_ENV
 
 class LidarDropped(Exception):
@@ -476,6 +524,10 @@ class Lines:
         ident = getattr(self, "lidarz", None)
         if ident is not None:
             extra["lidarz"] = np.frombuffer(lidarz.identity_bytes(ident), np.uint8)
+        for attr, pre in (("approaches", "appr"), ("own", "own")):
+            ln = getattr(self, attr, None)
+            if ln is not None and len(ln):      # (Hong Kong's approaches, own rows: inside the file, as the identity)
+                extra.update({pre + "_lonlat": ln.lonlat, pre + "_z": ln.z, pre + "_off": ln.off})
         with open(tmp, "wb") as fh:
             np.savez_compressed(fh, lonlat=self.lonlat, z=self.z, off=self.off, level=self.level, ref=self.ref,
                                 name=self.name, corrected=np.array(self.corrected), **extra)
@@ -487,6 +539,11 @@ class Lines:
             got = cls(d["lonlat"], d["z"], d["off"], d["level"], d["ref"], d["name"], bool(d["corrected"]))
             if "lidarz" in d.files:     # (a CDN cell: its identity, lidarz.kept_ok)
                 got.lidarz = lidarz.identity_of(d["lidarz"].tobytes())
+            for attr, pre, level in (("approaches", "appr", 0), ("own", "own", 1)):
+                if pre + "_off" in d.files:
+                    n = len(d[pre + "_off"]) - 1
+                    setattr(got, attr, cls(d[pre + "_lonlat"], d[pre + "_z"], d[pre + "_off"],
+                                           np.full(n, level, np.int8), [""] * n, [""] * n))
         return got
 
 
@@ -736,6 +793,7 @@ class RoadZ:
         self._lock = threading.Lock()
         self._cell_locks = {}
         self.sheets = hklidar.at(cache_dir, fetcher)     # (Hong Kong's LiDAR sheets: the terrain reads them too)
+        self._hk_index = {}     # layer -> [(box, the index's rows)] the last asked (_hk_sheets_in)
         self.stats = {"cells": 0, "requests": 0, "bytes": 0, "seconds": 0.0}     # (built here, not read from disk)
         self._raw = OrderedDict()           # (dataset, node) -> its .laz bytes (_node_bytes; RAW_NODES_MB kept)
         self._raw_bytes = 0
@@ -790,7 +848,7 @@ class RoadZ:
             if p and os.path.exists(p):
                 try:
                     got = Lines.load(p)
-                    if src == "lidar":      # (its elevated ground stretches: written before the lines)
+                    if src in ("lidar", "hk"):      # (its elevated ground stretches: written before the lines)
                         with open(p + ".gaps.json", encoding="utf-8") as fh:
                             got.gaps = [(str(f), tuple(a), tuple(b)) for f, a, b in json.load(fh)]
                         # (a cell the CDN's product gave (its identity inside the file, Lines.load): taken again
@@ -814,7 +872,7 @@ class RoadZ:
                     # the next visit read its ~5 MB again and planned on the rule meanwhile: Windows PC, 2026-11-14)
                     import cache as cachemod
                     cachemod.touch_once(p)
-                    if src == "lidar":
+                    if src in ("lidar", "hk"):  # (Hong Kong's too: read back with the lines above, or made again)
                         cachemod.touch_once(p + ".gaps.json")
                 except Exception as e:
                     log.debug("roadz read %s: %s", p, e)
@@ -847,7 +905,7 @@ class RoadZ:
                     self.stats["seconds"] += time.monotonic() - t0
                 if p:
                     try:
-                        if src == "lidar":
+                        if src in ("lidar", "hk"):
                             import staging
                             os.makedirs(os.path.dirname(p), exist_ok=True)
                             tmp = staging.tmp_for(p + ".gaps.json")
@@ -1169,7 +1227,238 @@ class RoadZ:
             return ((ll[:, 0] >= lon0 - plon) & (ll[:, 0] <= lon1 + plon)
                     & (ll[:, 1] >= lat0 - plat) & (ll[:, 1] <= lat1 + plat))
         runs = roadzhk.stations(lines, inside)
-        return Lines.build(roadzhk.rows(lines, runs, self._hk_reader("dtm"), self._hk_reader("dsm")))
+        more, gaps, appr, decks = self._hk_gaps(key)
+        got = Lines.build(roadzhk.rows(lines, runs, self._hk_reader("dtm"), self._hk_reader("dsm")))
+        got.gaps = gaps
+        got.approaches = Lines.build(appr)
+        got.own = Lines.build(decks + more)     # (the map's own lines: the bridge parts', the stretches')
+        return got
+
+    def _hk_gaps(self, key):
+        """(rows, gaps, approaches, decks): the cell's elevated ground stretches [(fid, lon / lat from, lon / lat to)],
+        their measured lines (Lines.build rows, decks), the measured approaches going on from the decks' and
+        stretches' ends (Lines.build rows, ground: _hk_approaches) and the bridge parts' measured lines (rows, decks:
+        _hk_own_rows), as the lidar's (_stretches, _approaches, _decks): a drawn road's
+        ground piece going on from a deck's end (_gap_candidates) is elevated from that end while the DSM's surface
+        along it (roadzhk._deck_heights, the decks' own read) goes on from the deck's measured end HK_GAP_RISE_M or
+        more over the DTM, by the lidar's kernel and its other limits. A piece shorter than LIDAR_GAP_MIN_M counts
+        when all of it is. The pieces going on from a stretch's end are asked the same way, HK_GAP_ROUNDS times at
+        most (an elevated junction is untagged pieces in a row; a stretch longer than the reach). None on a road the
+        map has covered anywhere (is_covered: the DSM there is its cover, a noise enclosure's roof)."""
+        mapped = hasattr(self.md, "cell")           # (no map: no bridge parts, no candidates)
+        dtm, dsm = self._hk_reader("dtm"), self._hk_reader("dsm")
+        decks = self._hk_decks(key, dsm, dtm) if mapped else []
+        cands = self._gap_candidates(key) if mapped else []
+        if not cands:
+            return [], [], [], self._hk_own_rows(decks)
+        import roads
+        feats = self.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+        t = feats.rules.get("flags")
+        covered = ({str(feats.ids[f]) for f, v in zip(t.feature.tolist(), t.value) if "is_covered" in str(v)}
+                   if t is not None and len(t.feature) else set())
+        fast.require(GAP_NATIVE, "roadz hk gaps")
+        ends = self._hk_deck_ends(decks, cands)
+        bridges = [(d[1], d[6]) for d in decks]
+        rows, gaps, found, seen = [], [], {}, set()
+        for turn in range(HK_GAP_ROUNDS):
+            # (one that found nothing is asked again: a stretch found since may end at its start, at its height)
+            new = [c for c in cands if c[0] not in covered
+                   and (c[0], float(c[1][0, 0]), float(c[1][0, 1])) not in seen]
+            got = self._hk_stretches(new, ends, bridges, dtm, dsm)
+            for fid, a, b, end, row in got:
+                seen.add((fid, a[0], a[1]))
+                rows.append(row)
+                gaps.append((fid, a, b))
+                found.setdefault(fid, []).append((a, b))
+                ends.append(end)
+            if not got:
+                break
+            cands = roads.lidar_gap_candidates(feats, found)
+            if turn == HK_GAP_ROUNDS - 1:
+                break
+        # (cands: the ground pieces going on from every deck's and stretch's end, the last round's too)
+        return rows, gaps, self._hk_approaches([c for c in cands if c[0] not in covered], ends, bridges, dtm, dsm), \
+            self._hk_own_rows(decks)
+
+    def _hk_decks(self, key, dsm, dtm):
+        """[(lon / lat ring, its HK1980 Grid xy, stations (n, 2), their s, the DSM's surface z along them
+        (roadzhk._deck_heights), the map's level, half width)] of the cell's bridge parts (_bridge_parts), each measured along its
+        own line as the lidar's decks are (_decks), on the DSM pixels that are not a bridge's that may stand over the
+        part (roadzhk.hidden_pixels; a join is the ends within 2 LIDAR_STEP_M). No height where such a bridge's line
+        runs over the part's (roadzhk.stacked), none where the surface found is not the one across the part's width
+        (roadzhk.across, OWN_TOL_M: the ground at the edge of a hole in the survey, a barrier beside the road), and
+        none at all for a part that is no structure in the survey (HK_DECK_MIN_SHARE). One read of the DTM, two of
+        the DSM for them all."""
+        runs, halves = [], []
+        for ring, half, level in self._bridge_parts(key):
+            x, y = hkdtm.grid(ring[:, 1], ring[:, 0])
+            xy = np.stack([x, y], 1)
+            pts, s = resample_line(xy, LIDAR_STEP_M)
+            if len(pts) >= 2:
+                runs.append((ring, xy, pts, s, level))
+                halves.append(half)
+        if not runs:
+            return []
+        allp = np.vstack([r[2] for r in runs])
+        ground = np.split(np.asarray(dtm(np.ascontiguousarray(allp[:, 0]), np.ascontiguousarray(allp[:, 1])), np.float64),
+                          np.cumsum([len(r[2]) for r in runs])[:-1])
+        parts, lines = [(xy, pts, level) for _ring, xy, pts, _s, level in runs], [r[2] for r in runs]
+        under = roadzhk.stacked(parts, 2.0 * LIDAR_STEP_M)
+        theirs = roadzhk.hidden_pixels(parts, halves, 2.0 * LIDAR_STEP_M)
+        out = []
+        for (ring, xy, pts, s, level), half, z, mid, hide, g in zip(runs, halves,
+                                                                    roadzhk._deck_heights(lines, dsm, theirs),
+                                                                    roadzhk.across(lines, halves, dsm, theirs), under,
+                                                                    ground):
+            z = np.where(hide | ~(np.abs(z - mid) <= roadzhk.OWN_TOL_M), np.nan, z)
+            known = np.isfinite(z) & np.isfinite(g)
+            if known.any() and float((z[known] - g[known] >= HK_GAP_RISE_M).mean()) < HK_DECK_MIN_SHARE:
+                z = np.full(len(z), np.nan)
+            out.append((ring, xy, pts, s, z, level, half))
+        return out
+
+    def _hk_own_rows(self, decks):
+        """Lines.build rows (level 1) of the bridge parts measured on their own lines (_hk_decks)."""
+        rows = []
+        for ring, xy, _pts, s, z, _level, _half in decks:
+            arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+            rows.append((np.stack([np.interp(s, arc, ring[:, 0]), np.interp(s, arc, ring[:, 1])], 1), z, 1, "", ""))
+        return rows
+
+    def _hk_deck_ends(self, decks, cands):
+        """[(x, y, z)] (HK1980 Grid, the DSM's datum): the measured ends of the cell's bridge parts (_hk_decks) that end
+        within 2 LIDAR_STEP_M of a candidate's start, as the lidar's (_decks)."""
+        clon, clat = np.array([c[1][0, 0] for c in cands]), np.array([c[1][0, 1] for c in cands])
+        cx, cy = hkdtm.grid(clat, clon)
+        ends = []
+        for _ring, _xy, pts, s, z, _level, _half in decks:
+            if min(dnp.hypot(cx - pts[0, 0], cy - pts[0, 1]).min(),
+                   dnp.hypot(cx - pts[-1, 0], cy - pts[-1, 1]).min()) > 2.0 * LIDAR_STEP_M:
+                continue
+            ok = np.flatnonzero(np.isfinite(z))
+            if not len(ok):
+                continue
+            for at, far in ((ok[0], s[ok[0]]), (ok[-1], s[-1] - s[ok[-1]])):
+                if far <= LIDAR_STEP_M:             # (measured right at its end: where a stretch must go on from)
+                    ends.append((float(pts[at, 0]), float(pts[at, 1]), float(z[at])))
+        return ends
+
+    def _hk_profiles(self, cands, ends, bridges, dtm, dsm):
+        """[(fid, lon / lat line, its HK1980 Grid xy, stations (n, 2), their s, the DSM's surface z along them
+        (roadzhk._deck_heights), the DTM g under them, the heights of the measured ends within 2 LIDAR_STEP_M of its
+        start)] of the candidates cands that start at a measured end (ends [(x, y, z)]), read as the bridge parts'
+        own rows are (_hk_decks): not on the pixels of a bridge of bridges [(HK1980 Grid xy, half width)] it is not
+        joined with (roadzhk.hidden_by_bridges: a road under a viaduct, a service road 4 m from a ramp, read the
+        deck's surface: a 3 m wide road on open ground held 3 m up for 55 m, Hong Kong (22.27508 N 114.17521 E); a
+        72 m stretch at a viaduct's height over the road under it, Hong Kong (22.33451 N 114.10796 E)), and no
+        height where it stands over the surface across the candidate's own width (roadzhk.across, OWN_TOL_M: a
+        ramp beside a narrow road), not where it stands under it: a median 6 to 9 m over a deck's own surface at two
+        stations lost a 75 m ramp's stretch, Hong Kong (22.24685 N 114.15551 E). One read of each surface for them
+        all."""
+        de = np.asarray(ends, np.float64).reshape(-1, 3)
+        runs, halves = [], []
+        for fid, ring, half in cands:
+            ring = np.asarray(ring, np.float64)[:, :2]
+            x, y = hkdtm.grid(ring[:, 1], ring[:, 0])
+            xy = np.stack([x, y], 1)
+            near = de[dnp.hypot(de[:, 0] - xy[0, 0], de[:, 1] - xy[0, 1]) <= 2.0 * LIDAR_STEP_M, 2]
+            pts, s = resample_line(xy, LIDAR_STEP_M)
+            if len(near) and len(pts) >= 2:
+                runs.append((fid, ring, xy, pts, s, near))
+                halves.append(half)
+        if not runs:
+            return []
+        allp = np.vstack([r[3] for r in runs])
+        ground = np.split(np.asarray(dtm(allp[:, 0], allp[:, 1]), np.float64),
+                          np.cumsum([len(r[3]) for r in runs])[:-1])
+        lines = [r[3] for r in runs]
+        theirs = roadzhk.hidden_by_bridges(lines, bridges, 2.0 * LIDAR_STEP_M)
+        return [(fid, ring, xy, pts, s, np.where(z - mid <= roadzhk.OWN_TOL_M, z, np.nan), g, near)
+                for (fid, ring, xy, pts, s, near), z, mid, g
+                in zip(runs, roadzhk._deck_heights(lines, dsm, theirs), roadzhk.across(lines, halves, dsm, theirs),
+                       ground)]
+
+    def _hk_stretches(self, cands, ends, bridges, dtm, dsm):
+        """[(fid, lon / lat from, lon / lat to, (x, y, z) of its last station, its Lines.build row: a deck's)] of the
+        candidates cands that go on elevated from a measured deck end (ends: of those within 2 LIDAR_STEP_M of the
+        candidate's start, the one nearest its first height; a junction on a structure has several)."""
+        out = []
+        for fid, ring, xy, pts, s, z, g, near in self._hk_profiles(cands, ends, bridges, dtm, dsm):
+            first = np.flatnonzero(np.isfinite(z[:2]))
+            if not len(first):
+                continue
+            z_end = float(near[np.argmin(np.abs(near - z[first[0]]))])
+            m = float(fast._ef.lidar_gap_stretch(np.ascontiguousarray(s), np.ascontiguousarray(z),
+                                                 np.ascontiguousarray(g), z_end,
+                                                 HK_GAP_RISE_M, LIDAR_GAP_END_TOL_M, LIDAR_GAP_MISS))
+            if m < min(LIDAR_GAP_MIN_M, s[-1] - 1e-6):
+                continue
+            arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+            k = int(np.argmin(np.abs(s - m)))
+            keep = s <= m + 1e-6
+            lonlat = np.stack([np.interp(s[keep], arc, ring[:, 0]), np.interp(s[keep], arc, ring[:, 1])], 1)
+            out.append((str(fid), (float(ring[0, 0]), float(ring[0, 1])),
+                        (float(np.interp(m, arc, ring[:, 0])), float(np.interp(m, arc, ring[:, 1]))),
+                        (float(pts[k, 0]), float(pts[k, 1]), float(z[k])), (lonlat, z[keep], 1, "", "")))
+        return out
+
+    def _hk_approaches(self, cands, ends, bridges, dtm, dsm):
+        """Lines.build rows (ground) of the approaches, as the lidar's (_approaches, APPROACH_*), on the DSM and the
+        DTM: each candidate of cands (a ground piece going on from a deck's or a stretch's end) measured from that
+        end, while its surface starts within APPROACH_END_TOL_M of the end's height, up to where it is back on the DTM
+        (APPROACH_REJOIN_M, two stations running); none where it never stands APPROACH_MIN_DEV_M off it. A stretch
+        ends where the structure stands under HK_GAP_RISE_M over the DTM: the road is that high there still. A DSM has
+        a height everywhere, the lidar's road points do not: where the decks' reader finds no surface, the DSM at the
+        station says whether the road is back on the DTM (a road down a hillside from a deck's end read no surface for
+        40 m and then a structure beside it, and was drawn 4.4 m up: 22.41404 N 114.21331 E, lab 2026-11-16); and an
+        approach the reader finds a surface on at under HK_APPROACH_MIN_SHARE of its stations is none."""
+        profs = self._hk_profiles(cands, ends, bridges, dtm, dsm)
+        if not profs:
+            return []
+        allp = np.vstack([p[3] for p in profs])
+        tops = np.split(np.asarray(dsm(np.ascontiguousarray(allp[:, 0]), np.ascontiguousarray(allp[:, 1])), np.float64),
+                        np.cumsum([len(p[3]) for p in profs])[:-1])
+        rows = []
+        for (_fid, ring, xy, _pts, s, z, g, near), top in zip(profs, tops):
+            ok = np.flatnonzero(np.isfinite(z))
+            if not len(ok) or s[ok[0]] > 2.0 * LIDAR_STEP_M:
+                continue
+            if np.abs(near - z[ok[0]]).min() > APPROACH_END_TOL_M:
+                continue
+            dev = np.abs(z - g)
+            back = np.abs(np.where(np.isfinite(z), z, top) - g)
+            on = np.isfinite(back) & (back < APPROACH_REJOIN_M)
+            stop = len(s)
+            for k in range(int(ok[0]) + 1, len(s) - 1):
+                if on[k] and on[k + 1]:
+                    stop = k + 2
+                    break
+            if not (np.isfinite(dev[:stop]) & (dev[:stop] >= APPROACH_MIN_DEV_M)).any():
+                continue
+            if np.isfinite(z[:stop]).mean() < HK_APPROACH_MIN_SHARE:
+                continue
+            arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+            keep = np.arange(len(s)) < stop
+            rows.append((np.stack([np.interp(s[keep], arc, ring[:, 0]), np.interp(s[keep], arc, ring[:, 1])], 1),
+                         z[keep], 0, "", ""))
+        return rows
+
+    def _hk_sheets_in(self, layer, box):
+        """hklidar.Sheets.index's rows of the layer's sheets meeting box (HK1980 Grid), or those of a wider box asked
+        before that holds it (HK_INDEX_PAD_M, HK_INDEX_KEPT: by name as the index gives them, so a point takes the
+        same sheet either way). A failed request keeps nothing."""
+        box = tuple(float(v) for v in box)
+        with self._lock:
+            for b, rows in self._hk_index.get(layer, ()):
+                if b[0] <= box[0] and b[1] <= box[1] and b[2] >= box[2] and b[3] >= box[3]:
+                    return rows
+        wide = (box[0] - HK_INDEX_PAD_M, box[1] - HK_INDEX_PAD_M, box[2] + HK_INDEX_PAD_M, box[3] + HK_INDEX_PAD_M)
+        rows = self.sheets.index(layer, wide)
+        with self._lock:
+            kept = self._hk_index.setdefault(layer, [])
+            kept.append((wide, rows))
+            del kept[:-HK_INDEX_KEPT]
+        return rows
 
     def _hk_reader(self, layer):
         """(x, y) -> the LiDAR layer's ("dtm" / "dsm") heights at those HK1980 Grid points, NaN where it has none: the
@@ -1179,8 +1468,8 @@ class RoadZ:
             if not len(x):
                 return out
             todo, taken = [], np.zeros(len(x), bool)
-            for name, url, (x0, y0, x1, y1) in self.sheets.index(layer, (x.min() - 1, y.min() - 1, x.max() + 1,
-                                                                          y.max() + 1)):
+            for name, url, (x0, y0, x1, y1) in self._hk_sheets_in(layer, (x.min() - 1, y.min() - 1, x.max() + 1,
+                                                                           y.max() + 1)):
                 m = (x >= x0) & (x < x1) & (y >= y0) & (y < y1) & ~taken
                 if m.any():
                     taken |= m
@@ -1227,6 +1516,12 @@ class RoadZ:
 
     def _bridges(self, key):
         """[(lonlat (k, 2), half width)] of the cell's road bridge parts within CLIP_PAD_M of its box."""
+        return [(ring, half) for ring, half, _level in self._bridge_parts(key)]
+
+    def _bridge_parts(self, key):
+        """[(lonlat (k, 2), half width, the map's level)] of _bridges' parts. The level (roads._bridge_level_spans: the
+        map's level rule, 1 for a bridge without one) as roads.bridge_levels has it; 1 where a part's pieces do not
+        line up with the spans."""
         import roads
         feats = self.md.cell(key, layers=("roads",), kind="demand").layers.get("roads") if self.md else None
         if feats is None or not len(feats):
@@ -1242,12 +1537,16 @@ class RoadZ:
             w = roads._structure_width(feats, i)
             if w is None:
                 continue
-            for ring in roads._parts_by_level_new(feats, i, "bridge", rr):
+            rings = roads._parts_by_level_new(feats, i, "bridge", rr)
+            spans = [v for _, _, v in roads._bridge_level_spans(feats, i, rr)]
+            same = bool(spans) and len(rings) % len(spans) == 0
+            levels = spans * (len(rings) // len(spans)) if same else [1.0] * len(rings)
+            for ring, level in zip(rings, levels):
                 ring = np.asarray(ring, np.float64)[:, :2]
                 inside = ((ring[:, 0] >= lon0 - pad_lon) & (ring[:, 0] <= lon1 + pad_lon)
                           & (ring[:, 1] >= lat0 - pad_lat) & (ring[:, 1] <= lat1 + pad_lat))
                 if len(ring) >= 2 and inside.any():
-                    out.append((ring, max(2.5, w / 2)))
+                    out.append((ring, max(2.5, w / 2), float(level)))
         return out
 
     def _gap_candidates(self, key):
@@ -1802,6 +2101,12 @@ class RoadZ:
                 self._enu.popitem(last=False)
         return got
 
+    def approaches_on_coarse(self, lat, lon):
+        """Does a source at (lat, lon) measure approaches where the grading's elevation is coarse (APPROACH_BESIDE:
+        Hong Kong's, Grader._obs)? No network."""
+        return bool(self.enabled and self.fetcher is not None
+                    and any(s in APPROACH_BESIDE for s in sources_at(lat, lon, self.lidar)))
+
     def observed(self, frame, xy, half, level, name="", info=None, lidar_ground=False):
         """Heights (m, geodetic like dem.sample: on our DEM's datum) at the points xy (k, 2) of a map road part in the
         anchor frame, its carriageway half width `half`, level > 0 a bridge, 0 ground, < 0 a tunnel, `name` its map
@@ -1818,9 +2123,7 @@ class RoadZ:
         # (the lidar's ground lines are the approaches alone: asked for those (lidar_ground), any share of the part;
         # lidar_ground alone asks no vector source either)
         srcs = [s for s in sources_at(float(la[mid]), float(lo[mid]), self.lidar)
-                if (s == "lidar") == bool(lidar_ground) or (s == "lidar" and level > 0)]
-        if lidar_ground:
-            srcs = [s for s in srcs if s == "lidar"]
+                if (s in APPROACH_SOURCES if lidar_ground else (s != "lidar" or level > 0))]
         if not srcs:
             return None
         pad = (half + MATCH_REACH_M) / 111320.0
@@ -1830,30 +2133,52 @@ class RoadZ:
         d = np.gradient(xy, axis=0)
         qdir = np.ascontiguousarray(d / np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None])
         for src in srcs:
-            segs, segz, oks, lvs, cells = [], [], [], [], []
             if src in DEFERRED and self._lidar_skipped(keys, src):
                 return None                 # (this run goes without a cell's lidar: the inference, every process)
+            # (Hong Kong's approaches are kept beside its lines, whose ground lines are the government's on the DTM)
+            beside = lidar_ground and src in APPROACH_BESIDE
+            # (and its own rows, the bridge parts' measured lines, beside them: one surface with the government's)
+            rows = level > 0 and not lidar_ground and src in OWN_ROWS
+            # (the lines matched: the cell's own, or those kept beside them; _segments keeps each under its tag)
+            kinds = ("approaches",) if beside else ("own", "") if rows else ("",)
+            sets, cells, ground_ends = {kind: ([], [], [], []) for kind in kinds}, [], []
             for k in keys:
-                ln = self.lines(src, k)
-                if ln is None:
+                whole = self.lines(src, k)
+                if whole is None:
                     return None             # (incomplete: the inference rather than half a source)
-                if not len(ln):
-                    continue
-                seg, sz, line_of, vxy = self._segments(frame, src, k, ln)
-                lv = ln.level[line_of]
-                if level > 0 and src in LOOSE_BRIDGES:
-                    want = lv >= 0          # (its own heights on a bridge whatever its flag: not a tunnel's)
-                else:
-                    want = (lv > 0) if level > 0 else ((lv < 0) if level < 0 else (lv == 0))
-                nm_ok = self._names_ok(src, k, ln, name)
-                segs.append(seg)
-                segz.append(sz)
-                oks.append((want & nm_ok[line_of]).astype(np.uint8))
-                lvs.append(lv)
-                cells.append((k, ln, vxy))
+                for kind in kinds:
+                    ln = getattr(whole, kind, None) if kind else whole
+                    if ln is None or not len(ln):
+                        continue
+                    tag = src + "+" + kind if kind else src
+                    seg, sz, line_of, vxy = self._segments(frame, tag, k, ln)
+                    ln_d, at = ln, vxy
+                    if kind == "approaches":    # (the datum from the cell's own ground lines: _local_offset)
+                        ln_d, vxy = whole, self._segments(frame, src, k, whole)[3]
+                    lv = ln.level[line_of]
+                    if level > 0 and src in LOOSE_BRIDGES:
+                        want = lv >= 0      # (its own heights on a bridge whatever its flag: not a tunnel's)
+                    else:
+                        want = (lv > 0) if level > 0 else ((lv < 0) if level < 0 else (lv == 0))
+                    nm_ok = self._names_ok(tag, k, ln, name)
+                    if kind == "approaches":
+                        # (the approach going on from this part's own end alone: another road's, beside or over it,
+                        # is at another height: a service road under a ramp took the ramp's, 4.4 m up, lab 2026-11-15)
+                        ends = at[ln.off[:-1]]
+                        nm_ok = nm_ok & (np.minimum(dnp.hypot(*(ends - xy[0]).T), dnp.hypot(*(ends - xy[-1]).T))
+                                         <= 2.0 * LIDAR_STEP_M)
+                        for j in np.flatnonzero(nm_ok).tolist():
+                            v = ln.off[j] + np.flatnonzero(np.isfinite(ln.z[ln.off[j]:ln.off[j + 1]]))
+                            if len(v):
+                                ground_ends.append((at[v[-1]], ln.lonlat[v[-1]], ln.z[v[-1]]))
+                    for got, v in zip(sets[kind], (seg, sz, (want & nm_ok[line_of]).astype(np.uint8), lv)):
+                        got.append(v)
+                    if kind != "own":
+                        cells.append((k, ln_d, vxy))
+            segs, segz, oks, lvs = sets["approaches" if beside else ""]
             if not segs:
                 continue
-            reach = half + (LIDAR_REACH_M if src == "lidar" else MATCH_REACH_M)
+            reach = half + (LIDAR_REACH_M if src == "lidar" or beside else MATCH_REACH_M)
             q, seg, ok = np.ascontiguousarray(xy), np.ascontiguousarray(np.vstack(segs)), np.concatenate(oks)
             z, dist = fast._ef.roadz_match(q, qdir, seg, np.ascontiguousarray(np.vstack(segz)), ok, float(reach),
                                            MATCH_COS)
@@ -1867,6 +2192,14 @@ class RoadZ:
                 fast.require(TIER_NATIVE, "roadz tier crossings")
                 z = np.where(fast._ef.tier_crossing_runs(s, np.ascontiguousarray(tier, np.float64),
                                                          TIER_CROSS_M), np.nan, z)
+            taken = np.zeros(len(z), bool)
+            if rows and sets["own"][0]:
+                zo, _ = fast._ef.roadz_match(q, qdir, np.ascontiguousarray(np.vstack(sets["own"][0])),
+                                             np.ascontiguousarray(np.vstack(sets["own"][1])),
+                                             np.concatenate(sets["own"][2]), OWN_REACH_M, MATCH_COS)
+                z, zo = roadzhk.one_surface(s, z, dist, zo)
+                taken = np.isfinite(zo)
+                z = np.where(taken, zo, z)
             if not np.isfinite(z).any():
                 continue
             off = 0.0
@@ -1874,15 +2207,40 @@ class RoadZ:
                 off = self._local_offset(src, cells, xy, frame)
                 if off is None:
                     continue
+            if self._approach_off_terrain(ground_ends, xy, reach, off):
+                continue                    # (HK_APPROACH_TERRAIN_M)
+            if level == 0 and not lidar_ground and src in OTHER_TIER_NEARER:
+                other = (np.concatenate(lvs) != 0).astype(np.uint8)
+                if other.any():     # (the road's own line of another tier: OTHER_TIER_NEARER)
+                    zown, own = fast._ef.roadz_match(q, qdir, seg, np.ascontiguousarray(np.vstack(segz)), other,
+                                                     float(reach), MATCH_COS)
+                    far = np.isfinite(z) & (np.asarray(dist) >= np.asarray(own) + OTHER_TIER_NEARER_M)
+                    if far.any():
+                        g = np.asarray(self._dem_raw(la, lo), np.float64) + off
+                        with np.errstate(invalid="ignore"):
+                            z = np.where(far & (np.abs(z - g) > np.abs(np.asarray(zown) - g) + APPROACH_END_TOL_M),
+                                         np.nan, z)
             zc = np.asarray(fast._ef.profile_clean(s, np.ascontiguousarray(z - off), CLEAN_GRADE, CLEAN_SPIKE_M,
                                                    CLEAN_WIN_M, CLEAN_GAP_M, CLEAN_SIGMA_M), np.float64)
             cover = float(np.isfinite(zc).mean())
             if info is not None:
                 info.update(source=src, cover=cover, offset=off, matched=float(np.isfinite(z).mean()))
+                if rows:
+                    info["own"] = float(taken.mean())
             if cover < (0.0 if (lidar_ground and level == 0) else MIN_COVER) or not np.isfinite(zc).any():
                 return None
             return zc
         return None
+
+    def _approach_off_terrain(self, ground_ends, xy, reach, off):
+        """Does an approach row's ground end in ground_ends [(anchor frame xy, lon / lat, z)] that lies within reach of
+        the part xy stand over HK_APPROACH_TERRAIN_M off our terrain there, after the datum offset off?"""
+        for at, ll, z in ground_ends:
+            if float(dnp.hypot(*(xy - at).T).min()) <= reach:
+                g = float(self._dem_raw(np.array([ll[1]]), np.array([ll[0]]))[0])
+                if abs(z - off - g) > HK_APPROACH_TERRAIN_M:
+                    return True
+        return False
 
     def _names_ok(self, src, key, ln, name):
         """Per line of ln: may it be the map road called name (name_ok)? Kept per (source, cell, name)."""

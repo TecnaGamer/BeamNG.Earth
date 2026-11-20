@@ -3451,43 +3451,64 @@ class _Planner:
         if not (self._coarse(key) if key is not None else self._coarse_ll(lonlat)):
             if not APPROACH_LIDAR_ON or not getattr(prov, "lidar", False):
                 return None
-
-            ready = {}          # id(xy) -> (xy, _touches_bridge_ends' answer): plan_roads' parts at once (prepare)
-
-            def approach_obs(xy, spec):
-                # (on lidar terrain: the lidar's measured approaches alone, the parts from a bridge's end: roadz
-                # APPROACH_*; their embankments our DTM smooths away)
-                got = ready.get(id(xy))
-                touch = got[1] if got is not None and got[0] is xy else self._touches_bridge_end(xy)
-                if isinstance(touch, BaseException):
-                    raise touch
-                if not touch:
-                    return None
-                try:
-                    return prov.observed(self.frame, xy, spec.width / 2, 0, lidar_ground=True)
-                except Exception as e:  # the DEM's rather than no grading
-                    _caught(e)
-                    log.debug("grading: measured approach: %s: %s", type(e).__name__, e)
-                    return None
-
-            def prepare(xys):
-                ready.clear()
-                try:
-                    ready.update((id(xy), (xy, t)) for xy, t in zip(xys, self._touches_bridge_ends(xys)))
-                except Exception as e:      # (each asked on its own then)
-                    _caught(e)
-                    log.debug("grading: bridge ends at once: %s: %s", type(e).__name__, e)
-            approach_obs.prepare = prepare
-            return approach_obs
+            return self._approach_obs(prov)
+        # (Hong Kong's terrain is coarse to the grading (dem.coarse_at) and its source measures approaches as the lidar
+        # does (roadz._hk_approaches): taken first there, the source's ground lines where the approach has none)
+        appr = None
+        if APPROACH_LIDAR_ON and hasattr(prov, "approaches_on_coarse"):
+            if key is not None:
+                lon0, lat0, lon1, lat1 = key.bounds()
+                at = ((lat0 + lat1) / 2, (lon0 + lon1) / 2)
+            else:
+                at = tuple(np.asarray(lonlat, np.float64)[len(lonlat) // 2][1::-1]) if len(lonlat) else None
+            if at is not None and prov.approaches_on_coarse(float(at[0]), float(at[1])):
+                appr = self._approach_obs(prov)
 
         def obs(xy, spec):
             try:
-                return prov.observed(self.frame, xy, spec.width / 2, 0)
+                got = prov.observed(self.frame, xy, spec.width / 2, 0)
             except Exception as e:      # the DEM's rather than no grading
                 _caught(e)
                 log.debug("grading: measured road heights: %s: %s", type(e).__name__, e)
-                return None
+                got = None
+            if appr is None:
+                return got
+            first = appr(xy, spec)
+            if first is None or got is None or len(got) != len(first):
+                return got if first is None else first
+            return np.where(np.isfinite(first), first, got)
+        if appr is not None:
+            obs.prepare = appr.prepare
         return obs
+
+    def _approach_obs(self, prov):
+        """plan_roads' obs of the measured approaches alone (roadz APPROACH_*): the parts from a bridge's end, their
+        embankments our DTM smooths away; None for any other part."""
+        ready = {}          # id(xy) -> (xy, _touches_bridge_ends' answer): plan_roads' parts at once (prepare)
+
+        def approach_obs(xy, spec):
+            got = ready.get(id(xy))
+            touch = got[1] if got is not None and got[0] is xy else self._touches_bridge_end(xy)
+            if isinstance(touch, BaseException):
+                raise touch
+            if not touch:
+                return None
+            try:
+                return prov.observed(self.frame, xy, spec.width / 2, 0, lidar_ground=True)
+            except Exception as e:  # the DEM's rather than no grading
+                _caught(e)
+                log.debug("grading: measured approach: %s: %s", type(e).__name__, e)
+                return None
+
+        def prepare(xys):
+            ready.clear()
+            try:
+                ready.update((id(xy), (xy, t)) for xy, t in zip(xys, self._touches_bridge_ends(xys)))
+            except Exception as e:      # (each asked on its own then)
+                _caught(e)
+                log.debug("grading: bridge ends at once: %s: %s", type(e).__name__, e)
+        approach_obs.prepare = prepare
+        return approach_obs
 
     def _touches_bridge_ends(self, xys):
         """_touches_bridge_end of each road part of xys at once (both tips' cells read once for all, earthfast
