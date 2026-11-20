@@ -22,7 +22,7 @@ fn clip(x: f64, lo: f64, hi: f64) -> f64 {
 }
 
 /// railways._arc: [0, cumsum(hypot(diff))].
-fn arc(xy: &[[f64; 2]]) -> Vec<f64> {
+pub(crate) fn arc(xy: &[[f64; 2]]) -> Vec<f64> {
     let mut s = vec![0.0f64; xy.len()];
     for k in 1..xy.len() {
         s[k] = s[k - 1] + (xy[k][0] - xy[k - 1][0]).dhypot(xy[k][1] - xy[k - 1][1]);
