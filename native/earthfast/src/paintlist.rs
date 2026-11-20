@@ -927,8 +927,8 @@ pub fn paint_photo<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, x0: f64
     if coverage.iter().any(|(k, m)| *k >= st.colors.nrows() || m.dim() != (sq.h, sq.w)) {
         return Err(pyo3::exceptions::PyValueError::new_err("paint_photo: invalid pavement mask"));
     }
-    let mut img = src.to_owned();
     let out = py.detach(move || {
+        let mut img = src.to_owned();
         if sq.w == 0 || sq.h == 0 {
             return img;
         }

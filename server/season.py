@@ -109,6 +109,12 @@ GRADE_HALF_PX = 512         # textures this big are graded at half size and appl
 _PAL32 = np.array(FALL_PALETTE, np.float32)
 
 
+def grade_params(amounts):
+    return (float(amounts.get("fall", 0.0)), float(amounts.get("winter", 0.0)), float(amounts.get("spring", 0.0)),
+            FALL_YELLOW, WINTER_BARE_DESAT, tuple(CANOPY_V), tuple(CANOPY_STD), tuple(PATCH_M), NOISE_GRID,
+            CANOPY_TEXTURE_MAX_M, GRADE_HALF_PX)
+
+
 def grade(rgb, xm, ym, amounts):
     """rgb (uint8 (h, w, 3), a summer look) toward the season: amounts {"fall": 0..1, "winter", "spring"}; xm, ym (float
     (h, w)) the texels' world position in metres (east, north: noise anchored to the world). Unchanged when every
@@ -118,8 +124,8 @@ def grade(rgb, xm, ym, amounts):
     colour change is a few metres coarse at most, the detail stays the texture's own). xm, ym may instead be a 2-D
     grid over the texture (corner to corner), upscaled to its texels by Pillow's BILINEAR. The Rust kernel
     earthfast.season_img (Pillow's resampling where this module used it: the same numbers)."""
-    fall, winter, spring = (float(amounts.get(k, 0.0)) for k in ("fall", "winter", "spring"))
-    if fall <= 0.0 and winter <= 0.0 and spring <= 0.0:
+    params = grade_params(amounts)
+    if max(params[:3]) <= 0.0:
         return rgb
     fast.require(108, "season grade")
 
@@ -129,8 +135,7 @@ def grade(rgb, xm, ym, amounts):
             a = np.broadcast_to(a, rgb.shape[:2])
         return np.ascontiguousarray(a)
     out = fast._ef.season_img(np.ascontiguousarray(np.asarray(rgb, np.uint8)[..., :3]), f32(xm), f32(ym), _PAL32,
-                              (fall, winter, spring, FALL_YELLOW, WINTER_BARE_DESAT, tuple(CANOPY_V), tuple(CANOPY_STD),
-                               tuple(PATCH_M), NOISE_GRID, CANOPY_TEXTURE_MAX_M, GRADE_HALF_PX))
+                              params)
     return rgb if out is None else out
 
 
