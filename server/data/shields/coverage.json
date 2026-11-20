@@ -1,0 +1,489 @@
+{
+  "format": 1,
+  "checked": "2026-11-08",
+  "verification": "Source/mapping/layout/automated checks; no nationwide in-engine drive",
+  "states": {
+    "AK": {
+      "primary_network": "US:AK",
+      "template": "ak",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:AK"
+      ],
+      "indexed_relations": 15
+    },
+    "AL": {
+      "primary_network": "US:AL",
+      "template": "al",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:AL"
+      ],
+      "indexed_relations": 237
+    },
+    "AR": {
+      "primary_network": "US:AR",
+      "template": "ar",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:AR"
+      ],
+      "indexed_relations": 481
+    },
+    "AZ": {
+      "primary_network": "US:AZ",
+      "template": "az",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:AZ"
+      ],
+      "indexed_relations": 104
+    },
+    "CA": {
+      "primary_network": "US:CA",
+      "template": "ca",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:CA"
+      ],
+      "indexed_relations": 294
+    },
+    "CO": {
+      "primary_network": "US:CO",
+      "template": "co",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:CO"
+      ],
+      "indexed_relations": 182
+    },
+    "CT": {
+      "primary_network": "US:CT",
+      "template": "ct",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:CT"
+      ],
+      "indexed_relations": 207
+    },
+    "DE": {
+      "primary_network": "US:DE",
+      "template": "circle",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:DE"
+      ],
+      "indexed_relations": 62
+    },
+    "FL": {
+      "primary_network": "US:FL",
+      "template": "fl",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:FL"
+      ],
+      "indexed_relations": 397
+    },
+    "GA": {
+      "primary_network": "US:GA",
+      "template": "ga",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:GA"
+      ],
+      "indexed_relations": 494
+    },
+    "HI": {
+      "primary_network": "US:HI",
+      "template": "hi",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:HI"
+      ],
+      "indexed_relations": 57
+    },
+    "IA": {
+      "primary_network": "US:IA",
+      "template": "circle",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:IA"
+      ],
+      "indexed_relations": 90
+    },
+    "ID": {
+      "primary_network": "US:ID",
+      "template": "id",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:ID"
+      ],
+      "indexed_relations": 72
+    },
+    "IL": {
+      "primary_network": "US:IL",
+      "template": "il",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:IL"
+      ],
+      "indexed_relations": 156
+    },
+    "IN": {
+      "primary_network": "US:IN",
+      "template": "in",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:IN"
+      ],
+      "indexed_relations": 179
+    },
+    "KS": {
+      "primary_network": "US:KS",
+      "template": "ks",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:KS"
+      ],
+      "indexed_relations": 172
+    },
+    "KY": {
+      "primary_network": "US:KY",
+      "template": "circle",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:KY"
+      ],
+      "indexed_relations": 2867
+    },
+    "LA": {
+      "primary_network": "US:LA",
+      "template": "la",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:LA"
+      ],
+      "indexed_relations": 1253
+    },
+    "MA": {
+      "primary_network": "US:MA",
+      "template": "ma",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:MA"
+      ],
+      "indexed_relations": 143
+    },
+    "MD": {
+      "primary_network": "US:MD",
+      "template": "md",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:MD"
+      ],
+      "indexed_relations": 440
+    },
+    "ME": {
+      "primary_network": "US:ME",
+      "template": "me",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:ME"
+      ],
+      "indexed_relations": 190
+    },
+    "MI": {
+      "primary_network": "US:MI",
+      "template": "mi",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:MI"
+      ],
+      "indexed_relations": 144
+    },
+    "MN": {
+      "primary_network": "US:MN",
+      "template": "mn",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:MN"
+      ],
+      "indexed_relations": 153
+    },
+    "MO": {
+      "primary_network": "US:MO",
+      "template": "mo",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:MO",
+        "US:MO:SUPPLEMENTAL"
+      ],
+      "indexed_relations": 2156
+    },
+    "MS": {
+      "primary_network": "US:MS",
+      "template": "circle",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:MS"
+      ],
+      "indexed_relations": 289
+    },
+    "MT": {
+      "primary_network": "US:MT",
+      "template": "mt",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:MT",
+        "US:MT:SECONDARY"
+      ],
+      "indexed_relations": 289
+    },
+    "NC": {
+      "primary_network": "US:NC",
+      "template": "nc",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:NC"
+      ],
+      "indexed_relations": 251
+    },
+    "ND": {
+      "primary_network": "US:ND",
+      "template": "nd",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:ND"
+      ],
+      "indexed_relations": 74
+    },
+    "NE": {
+      "primary_network": "US:NE",
+      "template": "ne",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:NE",
+        "US:NE:LINK",
+        "US:NE:SPUR"
+      ],
+      "indexed_relations": 309
+    },
+    "NH": {
+      "primary_network": "US:NH",
+      "template": "nh",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:NH"
+      ],
+      "indexed_relations": 121
+    },
+    "NJ": {
+      "primary_network": "US:NJ",
+      "template": "circle",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:NJ"
+      ],
+      "indexed_relations": 105
+    },
+    "NM": {
+      "primary_network": "US:NM",
+      "template": "nm",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:NM"
+      ],
+      "indexed_relations": 406
+    },
+    "NV": {
+      "primary_network": "US:NV",
+      "template": "nv",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:NV"
+      ],
+      "indexed_relations": 164
+    },
+    "NY": {
+      "primary_network": "US:NY",
+      "template": "ny",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:NY"
+      ],
+      "indexed_relations": 491
+    },
+    "OH": {
+      "primary_network": "US:OH",
+      "template": "oh",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:OH"
+      ],
+      "indexed_relations": 535
+    },
+    "OK": {
+      "primary_network": "US:OK",
+      "template": "ok",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:OK"
+      ],
+      "indexed_relations": 268
+    },
+    "OR": {
+      "primary_network": "US:OR",
+      "template": "or",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:OR"
+      ],
+      "indexed_relations": 136
+    },
+    "PA": {
+      "primary_network": "US:PA",
+      "template": "pa",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:PA"
+      ],
+      "indexed_relations": 490
+    },
+    "RI": {
+      "primary_network": "US:RI",
+      "template": "ri",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:RI"
+      ],
+      "indexed_relations": 60
+    },
+    "SC": {
+      "primary_network": "US:SC",
+      "template": "sc_modern",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:SC"
+      ],
+      "indexed_relations": 327
+    },
+    "SD": {
+      "primary_network": "US:SD",
+      "template": "sd",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:SD"
+      ],
+      "indexed_relations": 81
+    },
+    "TN": {
+      "primary_network": "US:TN:PRIMARY",
+      "template": "tn",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:TN:PRIMARY",
+        "US:TN:SECONDARY"
+      ],
+      "indexed_relations": 551
+    },
+    "TX": {
+      "primary_network": "US:TX",
+      "template": "tx",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:TX",
+        "US:TX:FM",
+        "US:TX:RM",
+        "US:TX:LOOP",
+        "US:TX:SPUR",
+        "US:TX:BELTWAY",
+        "US:TX:PARK",
+        "US:TX:RECREATIONAL",
+        "US:TX:NASA"
+      ],
+      "indexed_relations": 4324
+    },
+    "UT": {
+      "primary_network": "US:UT",
+      "template": "ut",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:UT"
+      ],
+      "indexed_relations": 226
+    },
+    "VA": {
+      "primary_network": "US:VA",
+      "template": "va",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:VA",
+        "US:VA:SECONDARY"
+      ],
+      "indexed_relations": 6419
+    },
+    "VT": {
+      "primary_network": "US:VT",
+      "template": "vt",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:VT"
+      ],
+      "indexed_relations": 100
+    },
+    "WA": {
+      "primary_network": "US:WA",
+      "template": "wa",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:WA"
+      ],
+      "indexed_relations": 216
+    },
+    "WI": {
+      "primary_network": "US:WI",
+      "template": "wi",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:WI"
+      ],
+      "indexed_relations": 179
+    },
+    "WV": {
+      "primary_network": "US:WV",
+      "template": "wv",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:WV"
+      ],
+      "indexed_relations": 134
+    },
+    "WY": {
+      "primary_network": "US:WY",
+      "template": "wy",
+      "checked": true,
+      "networks_with_artwork": [
+        "US:WY"
+      ],
+      "indexed_relations": 176
+    }
+  },
+  "network_keys": 70,
+  "textured_designs": 89,
+  "procedural_federal_designs": 2,
+  "route_index": {
+    "osm_timestamp": "2026-11-08T10:34:50Z",
+    "relations": 30569,
+    "members": 1688006,
+    "ways": 1418961,
+    "database_bytes": 36421632,
+    "database_sha256": "67e5b6f3ce52689d68793108325a7c9dc3d6cd8305ea335fb01b502349501dc0"
+  },
+  "generic_networks": [
+    "US:TN",
+    "US:NE:REC",
+    "US:SD:SECONDARY",
+    "US:TX:PA"
+  ],
+  "tests_passed": 335
+}

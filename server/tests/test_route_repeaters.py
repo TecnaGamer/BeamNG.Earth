@@ -20,12 +20,21 @@ from test_highway_signs import fixture
 
 
 def corridor(two_way=False):
-    return [(i+1, [[-85.1,34.7+i*.02],[-85.1,34.7+(i+1)*.02]],
+    rows = [(i+1, [[-85.1,34.7+i*.02],[-85.1,34.7+(i+1)*.02]],
              dict(highway='primary' if two_way else 'motorway',ref='US 41' if two_way else 'I 75',
                   oneway='no' if two_way else 'yes')) for i in range(30)]
+    # Real junction events, rather than interval stations on a featureless road.
+    rows += [(100+i,[[-85.11,34.7+i*.02],[-85.1,34.7+i*.02],[-85.09,34.7+i*.02]],
+              dict(highway='secondary')) for i in (5,10,15,20,25)]
+    return rows
 
 
 class RouteRepeatersTest(unittest.TestCase):
+    def setUp(self):
+        prepare=mock.patch.object(repeat.routerelations.Source,'prepare',return_value=None)
+        prepare.start();self.addCleanup(prepare.stop)
+        join=mock.patch.object(repeat.routerelations.Source,'query',return_value={})
+        join.start();self.addCleanup(join.stop)
     def test_spacing_directions_and_adjacent_queries_are_stable(self):
         for two in (False,True):
             candidates=repeat.candidates(corridor(two))
@@ -35,7 +44,7 @@ class RouteRepeatersTest(unittest.TestCase):
             right=repeat.thin(candidates,(-85.2,35.,-85.,35.25))
             self.assertEqual({o['id'] for o in all_},{o['id'] for o in left+right})
             self.assertEqual(len(left+right),len(all_))
-            self.assertGreater(len(all_),6)
+            self.assertEqual(len(all_),10 if two else 5)
             for a in all_:
                 for b in all_:
                     if a['id']!=b['id'] and repeat.keys(a)&repeat.keys(b):
@@ -45,12 +54,16 @@ class RouteRepeatersTest(unittest.TestCase):
 
     def test_no_invented_route_or_ramp_bridge_private_signs(self):
         way=corridor()[0]
-        for change in ({'ref':'75'}, {'ref':'GA 2'}, {'bridge':'yes'}, {'tunnel':'yes'},
+        for change in ({'ref':'75'}, {'bridge':'yes'}, {'tunnel':'yes'},
                        {'access':'private'}, {'junction':'roundabout'}, {'highway':'motorway_link'}):
             self.assertEqual(repeat.candidates([(way[0],way[1],dict(way[2],**change))]),[])
+        state=repeat.candidates([(way[0],way[1],dict(way[2],ref='GA 2'))])
+        self.assertEqual(state[0]['roadside']['routes'][0]['network'],'US:GA')
 
     def test_source_reuses_cells_and_prefers_existing_route_sign(self):
-        source=repeat.Source('unused',None)
+        tmp=tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        source=repeat.Source(tmp.name,None)
         source.tags.version=lambda: ('test',None)
         with mock.patch.object(repeat,'read_routes',return_value=corridor()) as read:
             first=source.query(-85.2,34.8,-85.,35.1)
@@ -82,19 +95,21 @@ class RouteRepeatersTest(unittest.TestCase):
             tags=SimpleNamespace(_reader=SimpleNamespace(_connect=lambda *a:(Connection(),'test',[]),_fetch=lambda *a:None),
                                  _groups=lambda *a:{0:dict(first=0,n=4,cols=columns)},_candidates=lambda *a:[0])
             ways=repeat.read_routes(tags,None,(-85.2,34.8,-85.,35.1))
-            self.assertEqual({w[0] for w in ways},{1,2})
-            self.assertEqual({w[2]['ref'] for w in ways},{'I 75','US 41'})
+            self.assertEqual({w[0] for w in ways},{1,2,4})
+            self.assertEqual({w[2]['ref'] for w in ways},{'I 75','US 41','GA 2'})
             np.testing.assert_allclose(ways[0][1],[[-85.1,34.9],[-85.1,35.]])
 
     def test_source_retries_a_replaced_osm_snapshot(self):
-        source=repeat.Source('unused',None)
+        tmp=tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        source=repeat.Source(tmp.name,None)
         source.tags.version=mock.Mock(side_effect=[('old',None),('new',None)])
         source.tags._forget=mock.Mock()
         with mock.patch.object(repeat,'read_routes',side_effect=[repeat.osmtags.rangeread.Changed(),corridor()]) as read:
             source._cell(-852,349)
         self.assertEqual(read.call_count,2)
         source.tags._forget.assert_called_once()
-        self.assertEqual(list(source.cache),[('new',-852,349)])
+        self.assertEqual(list(source.cache),[('new',None,-852,349)])
 
     def test_shield_mesh_places_clear_of_widened_pavement(self):
         with tempfile.TemporaryDirectory() as tmp:
