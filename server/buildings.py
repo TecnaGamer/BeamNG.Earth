@@ -767,6 +767,9 @@ MAST_SLENDER = 8.0
 MAST_TOP_SHARE = 0.9        # a building part is a mast only reaching this share of its building's top (or mapped metal)
 CROWN_MIN_M = 60.0          # m: a part of a building this tall with a sloped or curved top and no roof material: metal
 MAST_RGB = (0.62, 0.64, 0.66)
+# (a heightless part fills to the building's height, unless that height is just the parts' own top: within this many m
+# of the tallest known part's top, BNE_PART_FILL_TOL_M)
+PART_FILL_TOL_M = float(os.environ.get("BNE_PART_FILL_TOL_M", "1.0"))
 GREENHOUSE_CLASSES = {"greenhouse", "glasshouse"}
 GREENHOUSE_H = 6.0          # m to the gutter of a commercial block (no height mapped)
 GREENHOUSE_SMALL_M2 = 150.0     # m2: a garden greenhouse this small at most ...
@@ -1159,7 +1162,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                      and (not part or (float(attrs.get("_part_min") or 0.0) > 0.0
                                        and float(attrs.get("_part_min") or 0.0) + h
                                        >= MAST_TOP_SHARE * float(attrs["building_height"]))))):
-        look = custom_look(METALWALL, MAST_RGB)
+        # (a mast keeps the colour mapped on it: the Palace of Culture's spire, Warsaw, is mapped gold, #F2C200, and was
+        # grey steel, 2026-11-17)
+        look = custom_look(METALWALL, parse_color(attrs.get("facade_color")) or MAST_RGB)
         mroof = ROOF_ALIASES.get((attrs.get("roof_shape") or "").lower(), (attrs.get("roof_shape") or "").lower())
         rh_m = mapped_roof_h(mroof, attrs.get("roof_height")) if mroof == "pyramidal" else None
         walls = max(h - rh_m, 1.0) if rh_m else h
@@ -5088,8 +5093,13 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 # without a height takes the building's (else its lowest known part's)
                 look = _hash01(str(key), "look")
                 bh = at.get("height")
-                fill = float(bh) if bh is not None and np.isfinite(bh) and bh > 0 else \
-                    min(p[1][0] + p[1][1] for p in bparts if p[1] is not None)
+                known_tops = [p[1][0] + p[1][1] for p in bparts if p[1] is not None]
+                # (... but not where the building's height is just its parts' top: Overture's outline of the Palace of
+                # Culture, Warsaw, is 237 m, its spire's, and its 606 m2 roof part west of the tower, mapped with no
+                # height, was drawn a 0-237 m prism; it takes the lowest part's top, as with no building height, while
+                # a church's heightless tower under a taller outline still takes the outline's, 2026-11-17)
+                fill = float(bh) if bh is not None and np.isfinite(bh) and bh > 0 \
+                    and float(bh) > max(known_tops) + PART_FILL_TOL_M else min(known_tops)
                 top = max([fill] + [p[1][0] + p[1][1] for p in bparts if p[1] is not None])
                 # (a part with no material or colour of its own takes its siblings' most common: half of New York by
                 # Gehry's parts are "metal", the others mapped bare; of equally common ones the first part's: a set's
