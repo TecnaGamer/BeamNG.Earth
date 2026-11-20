@@ -38,6 +38,7 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pcommon  # noqa: E402
@@ -322,22 +323,33 @@ def main():
     pcommon.check_cache(a.out)
     pcommon.nice_self()
     os.makedirs(a.out, exist_ok=True)
+    with pcommon.output_lock(a.out, writing=True), tempfile.TemporaryDirectory(prefix=".portcheck-session-", dir=a.out) as stage:
+        record(a, stage)
+
+
+def record(a, stage):
     if a.online:
         os.makedirs(a.cache, exist_ok=True)
     selected = pcommon.places(a.places)
     for name, _ in selected:
         open(os.path.join(a.out, f"session-{name}.pending"), "w").close()
     for name, place in selected:
-        work = a.cache if a.online else pcommon.work_copy(a.cache, os.path.join(a.out, "work-cache"))
+        work = a.cache if a.online else pcommon.work_copy(a.cache, os.path.join(stage, "work-cache"))
         try:
-            s = run_session(a, name, place, work, os.path.join(a.out, "sessions", name))
-            s["plans"] = copy_plans(work, os.path.join(a.out, "splans", name))
+            s = run_session(a, name, place, work, os.path.join(stage, "sessions", name))
+            s["plans"] = copy_plans(work, os.path.join(stage, "splans", name))
+        except BaseException:
+            log = os.path.join(stage, "sessions", name, "server.log")
+            if os.path.isfile(log):
+                shutil.copyfile(log, os.path.join(a.out, f"session-{name}.log"))
+            raise
         finally:
             if a.online:
                 pcommon.prune_derived(a.cache)
             else:
                 shutil.rmtree(work, ignore_errors=True)
-        pcommon.write_json(os.path.join(a.out, "sessions", name, "summary.json"), s)
+        pcommon.write_json(os.path.join(stage, "sessions", name, "summary.json"), s)
+        pcommon.publish_place(stage, a.out, name, ("sessions", "splans"))
         os.remove(os.path.join(a.out, f"session-{name}.pending"))
         print(f"{name}: {json.dumps(s)}", flush=True)
 

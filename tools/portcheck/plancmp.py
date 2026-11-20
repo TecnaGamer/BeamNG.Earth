@@ -22,8 +22,13 @@ def main(argv=None):
     ap.add_argument("--show", type=int, default=20)
     ap.add_argument("--sub", default="plans", help="plans (build.py's) or splans (session.py's: the session's own run)")
     a = ap.parse_args(argv)
-    pcommon.check_comparison(a.a, a.b)
+    with pcommon.comparing(a.a, a.b):
+        return compare(a)
+
+
+def compare(a):
     rep = pcommon.Report("plans", a.show)
+    frozen = pcommon.corpus()["places"]
     for name in pcommon.comparison_places(a.a, a.b, a.sub, list(filter(None, a.places.split(",")))):
         ia, ib = (os.path.join(r, a.sub, name, "index.json") for r in (a.a, a.b))
         if not os.path.exists(ia) and not os.path.exists(ib):
@@ -36,13 +41,20 @@ def main(argv=None):
         for what in ("cells", "plans_format", "facts_format", "versions"):
             if xa.get(what) != xb.get(what):
                 rep.item(f"{name} {what}", ["different inputs or format"])
+        if a.sub == "plans":
+            for side, index in (("A", xa), ("B", xb)):
+                errors = pcommon.coverage_errors(index, frozen[name]["plan_cells"] if name in frozen else None)
+                if errors:
+                    rep.item(f"{name} {side}", errors[:5])
+            if "road_features" in xa and "road_features" in xb and xa["road_features"] != xb["road_features"]:
+                rep.item(name, ["road input counts differ"])
         pa, pb = xa["plans"], xb["plans"]
         if not pa and not pb:
             rep.item(name, ["no plans on either side"])
         for cell in sorted(set(pa) & set(pb)):
             diffs = []
-            if pa[cell]["complete"] != pb[cell]["complete"]:
-                diffs.append(f"complete {pa[cell]['complete']} vs {pb[cell]['complete']}")
+            if pa[cell].get("complete") is not True or pb[cell].get("complete") is not True:
+                diffs.append("plan is short or unverified")
             fa, fb = (os.path.join(r, a.sub, name, cell + ".npz") for r in (a.a, a.b))
             if os.path.exists(fa) and os.path.exists(fb):
                 diffs += pcommon.npz_diff(fa, fb)

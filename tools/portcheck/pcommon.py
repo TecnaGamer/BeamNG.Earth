@@ -26,6 +26,8 @@ The usual round, on the mini PC (the plan: the corpus's caches sit there):
     python3 tools/portcheck/session.py --cache ... --out OUT --server-dir TREE/server
     python3 tools/portcheck/plancmp.py BEFORE OUT   (factcmp, tilecmp, blkcmp, farcmp, msgcmp the same way)
 """
+from contextlib import contextmanager, ExitStack
+from pathlib import Path
 import hashlib
 import json
 import os
@@ -355,6 +357,84 @@ def compare_trees(a, b, sub, rep, select=None):
     rep.only("A", sorted(set(la) - set(lb)))
     rep.only("B", sorted(set(lb) - set(la)))
     return rep
+
+
+@contextmanager
+def output_lock(root, writing):
+    """Readers exclude writers. The lock file stays at the same inode between runs."""
+    stamp = Path(root) / ".portcheck.lock"
+    try:
+        fh = stamp.open("a+b" if writing else "rb")
+    except FileNotFoundError:
+        if writing:
+            raise
+        # Legacy and read-only comparisons need no new files. Detect a writer which
+        # introduced the first lock while this reader was inspecting its results.
+        yield
+        if stamp.exists():
+            raise SystemExit(f"portcheck output changed during comparison: {root}")
+        return
+    with fh:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK if writing else msvcrt.LK_NBRLCK, 1)
+            else:
+                import fcntl
+                mode = fcntl.LOCK_EX if writing else fcntl.LOCK_SH
+                fcntl.flock(fh, mode | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise SystemExit(f"cannot lock portcheck output {root}: {exc}") from exc
+        yield
+
+
+@contextmanager
+def comparing(a, b):
+    check_comparison(a, b)
+    with ExitStack() as locks:
+        for root in (a, b):
+            locks.enter_context(output_lock(root, writing=False))
+        yield
+
+
+def publish_place(staging, out, name, kinds):
+    """Under the writer lock, replace this place. Its pending marker covers the entire group."""
+    for kind in kinds:
+        dest = Path(out) / kind / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            shutil.rmtree(dest)
+        os.replace(Path(staging) / kind / name, dest)
+
+
+def coverage_errors(index, expected_cells=None):
+    """Every demanded map cell needs a completed plan, including cells with zero roads."""
+    cells = index.get("cells")
+    if not isinstance(cells, list) or not cells:
+        return ["missing demanded cell inventory"]
+    plans = index["plans"]
+    errors = [f"{cell}: demanded plan missing" for cell in cells if cell.replace("/", "_") not in plans]
+    if expected_cells is not None and sorted(cells) != sorted(expected_cells):
+        errors.append("demanded cells differ from the frozen corpus")
+    if "road_features" in index:
+        counts = index["road_features"]
+        if not isinstance(counts, dict) or set(counts) != set(cells) or any(type(n) is not int or n < 0 for n in counts.values()):
+            errors.append("missing or invalid verified road feature counts")
+    errors.extend(f"{key}: short plan" for key, plan in plans.items() if plan.get("complete") is not True)
+    return errors
+
+
+def missing_fact_cells(cells, counts, directory):
+    """build.py names each stored fact kind_z_x_y_hash.json. Neighbours cannot cover a demanded cell."""
+    covered = set()
+    for path in Path(directory).glob("*.json"):
+        parts = path.stem.split("_")
+        if len(parts) == 5 and path.is_file():
+            covered.add("/".join(parts[1:4]))
+    return [f"{cell}: no facts stored or verified empty input" for cell in cells
+            if counts.get(cell) != 0 and cell not in covered]
+
 
 def check_comparison(a, b):
     """Each comparison needs two independently recorded output trees."""

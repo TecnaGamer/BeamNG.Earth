@@ -174,7 +174,11 @@ def compare_message(ma, mb, da, db, verified):
 
 def compare(root_a, root_b, kind, places=None, show=20, what=None):
     """Compare the sessions of root_a and root_b for kind ("tiles", "blocks", "far" or None: every message)."""
-    pcommon.check_comparison(root_a, root_b)
+    with pcommon.comparing(root_a, root_b):
+        return _compare(root_a, root_b, kind, places, show, what)
+
+
+def _compare(root_a, root_b, kind, places, show, what):
     rep = pcommon.Report(what or kind or "messages", show)
     names = pcommon.comparison_places(root_a, root_b, "sessions", places)
     for name in names:

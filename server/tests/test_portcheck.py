@@ -43,9 +43,11 @@ class PlansFactsTest(Base):
     def plans(self, root, z):
         d = os.path.join(root, "plans", "p")
         os.makedirs(d, exist_ok=True)
-        meta = np.frombuffer(json.dumps({"plans": [{"fid": "w1", "half": 3.5}]}).encode(), np.uint8)
-        np.savez(os.path.join(d, "14_1_2.npz"), meta=meta, z=np.asarray(z, np.float64), p_n=np.array([2], np.int64))
-        pcommon.write_json(os.path.join(d, "index.json"), {"plans": {"14_1_2": {"complete": True}}})
+        roads = [{"fid": "w1", "half": 3.5}] if z else []
+        meta = np.frombuffer(json.dumps({"plans": roads}).encode(), np.uint8)
+        np.savez(os.path.join(d, "14_1_2.npz"), meta=meta, z=np.asarray(z, np.float64),
+                 p_n=np.array([len(z)] if z else [], np.int64))
+        pcommon.write_json(os.path.join(d, "index.json"), {"cells": ["14/1/2"], "plans": {"14_1_2": {"complete": True}}})
 
     def test_plans(self):
         self.plans(self.a, [1.0, 2.0])
@@ -85,8 +87,58 @@ class PlansFactsTest(Base):
             np.savez(Path(root) / "plans/p/14_1_2.npz", meta=np.frombuffer(data, np.uint8))
         self.assertNotEqual(quiet(plancmp.main, [self.a, self.b, "--places", "p"])[0], 0)
 
+    def test_short_missing_and_verified_empty_cells(self):
+        for root in (self.a, self.b):
+            self.plans(root, [])
+            (Path(root) / "facts/p").mkdir(parents=True)
+        cell = "14/1/2"
+        plan = {"14_1_2": {"complete": True}}
+        for plans, cells, counts, ok in (
+                (plan, [cell], {cell: 0}, True),
+                ({"14_1_2": {"complete": False}}, [cell], {cell: 0}, False),
+                (plan, [cell, "14/2/3"], {cell: 0, "14/2/3": 0}, False),
+                (plan, [cell], {}, False)):
+            for root in (self.a, self.b):
+                pcommon.write_json(os.path.join(root, "plans/p/index.json"),
+                                   {"cells": cells, "plans": plans, "road_features": counts})
+            for compare in (plancmp.main, factcmp.main):
+                with self.subTest(plans=plans, cells=cells, compare=compare.__module__):
+                    self.assertEqual(quiet(compare, [self.a, self.b, "--places", "p"])[0] == 0, ok)
+
+    def test_writer_excludes_other_writers_and_readers(self):
+        for root in (self.a, self.b):
+            self.plans(root, [1.0])
+        with pcommon.output_lock(self.a, writing=True):
+            with self.assertRaisesRegex(SystemExit, "cannot lock"):
+                with pcommon.output_lock(self.a, writing=True):
+                    self.fail("second writer acquired lock")
+            with self.assertRaisesRegex(SystemExit, "cannot lock"):
+                plancmp.main([self.a, self.b, "--places", "p"])
+        with pcommon.comparing(self.a, self.b):
+            with self.assertRaisesRegex(SystemExit, "cannot lock"):
+                with pcommon.output_lock(self.a, writing=True):
+                    self.fail("writer acquired reader's lock")
+        self.assertEqual(quiet(plancmp.main, [self.a, self.b, "--places", "p"])[0], 0)
+
+    def test_matching_omissions_from_both_inventories(self):
+        cell = "14/1/2"
+        for root in (self.a, self.b):
+            self.plans(root, [2.0])
+            pcommon.write_json(Path(root) / "plans/p/index.json",
+                               {"cells": [cell], "plans": {"14_1_2": {"complete": True}}, "road_features": {cell: 1}})
+            pcommon.write_json(Path(root) / "facts/p/specs_14_9_9_a.json", {"data": [2]})
+        rc, why = quiet(factcmp.main, [self.a, self.b, "--places", "p"])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("no facts stored", why)
+        with mock.patch.object(pcommon, "corpus", return_value={"places": {"p": {"plan_cells": [cell, "14/2/3"]}}}):
+            for compare in (plancmp.main, factcmp.main):
+                rc, why = quiet(compare, [self.a, self.b])
+                self.assertNotEqual(rc, 0)
+                self.assertIn("frozen corpus", why)
+
     def test_facts(self):
         for r, v in ((self.a, 0.0), (self.b, 0.0)):
+            self.plans(r, [v])
             pcommon.write_json(os.path.join(r, "facts", "p", "ranges_14_1_2_x.json"), {"data": [[v, 1.5]]})
         self.assertEqual(quiet(factcmp.main, [self.a, self.b, "--places", "p"])[0], 0)
         pcommon.write_json(os.path.join(self.b, "facts", "p", "ranges_14_1_2_x.json"), {"data": [[-0.0, 1.5]]})

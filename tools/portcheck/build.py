@@ -13,12 +13,14 @@ Written: OUT/plans/<place>/<z>_<x>_<y>.npz (the plan cache's own file, as the se
 index.json ({cell: {"complete": ...}}: a plan made short of an input is marked so); OUT/facts/<place>/<kind>_<z>_<x>_<y>
 _<extra hash>.json ({kind, cell, extra, versions, data}). OUT/build-<place>.log: the run's warnings.
 
---online: fill the corpus cache itself (downloads; once, before it is frozen). Without it the build runs offline on a
-work copy of the cache (OUT/work-cache, removed after), so the corpus cache never changes. See pcommon.py.
+--online fills the corpus cache once. Offline builds use a temporary work copy in the output's staging directory.
+See pcommon.py.
 """
 import argparse
 import json
 import os
+from pathlib import Path
+import tempfile
 import subprocess
 import sys
 import time
@@ -99,14 +101,19 @@ def child(a):
     g, _ = bw._s.anchor(1, place["lat"], place["lon"])
     md = bw._s.md
     t0 = time.time()
+    road_features = {}
     for pass_ in range(PASSES if a.online else 1):
         for k in keys:
             w, s, e, n = k.bounds()
             LA, LO = np.meshgrid(np.linspace(s, n, 3), np.linspace(w, e, 3))
             try:
                 g.prepare(LA.ravel(), LO.ravel())
-                f = md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
-                if f is not None and len(f):
+                with revisit.scope() as inputs:
+                    f = md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+                if f is None or not inputs.complete or getattr(f, "_bnge_fallback", None) is not None:
+                    raise RuntimeError(f"missing or provisional road input for {k}")
+                road_features[str(k)] = len(f)
+                if len(f):
                     for i in range(len(f)):
                         roads.level_ranges(f, i)
                     for lh in (False, True):
@@ -121,13 +128,14 @@ def child(a):
         cell = "_".join(map(str, key))
         shutil.copyfile(path, os.path.join(out_plans, cell + ".npz"))
         index[cell] = {"complete": complete and not os.path.exists(path + ".short")}
-    if not index or not os.listdir(out_facts):
-        raise RuntimeError(f"{name}: no plans or facts produced")
-    pcommon.write_json(os.path.join(out_plans, "index.json"),
-                       {"place": name, "cells": [str(k) for k in keys], "plans": index,
-                        "plans_format": plancache.plans_format(), "facts_format": roads.FACTS_FORMAT,
-                        "versions": json.loads(json.dumps(md.versions(), sort_keys=True)),
-                        "seconds": round(time.time() - t0, 1)})
+    manifest = {"place": name, "cells": [str(k) for k in keys], "plans": index, "road_features": road_features,
+                "plans_format": plancache.plans_format(), "facts_format": roads.FACTS_FORMAT,
+                "versions": json.loads(json.dumps(md.versions(), sort_keys=True)), "seconds": round(time.time() - t0, 1)}
+    errors = pcommon.coverage_errors(manifest, place["plan_cells"])
+    errors.extend(pcommon.missing_fact_cells(manifest["cells"], road_features, out_facts))
+    if errors:
+        raise RuntimeError(f"{name}: {errors[:5]}")
+    pcommon.write_json(os.path.join(out_plans, "index.json"), manifest)
     print(f"{name}: {len(keys)} cells asked, {len(index)} cells planned "
           f"({sum(v['complete'] for v in index.values())} complete), {len(os.listdir(out_facts))} facts, "
           f"{time.time() - t0:.0f} s", flush=True)
@@ -146,6 +154,8 @@ def main():
     a.server_dir = os.path.abspath(a.server_dir)
     pcommon.check_cache(a.cache)
     if a.one:
+        if not Path(a.out).name.startswith(".portcheck-build-"):
+            ap.error("internal child requires its private staging directory")
         pcommon.check_cache(a.out)
         if a.online:
             pcommon.check_apart(a.cache, a.out)
@@ -156,17 +166,22 @@ def main():
     pcommon.check_cache(a.out)
     pcommon.nice_self()
     os.makedirs(a.out, exist_ok=True)
+    with pcommon.output_lock(a.out, writing=True), tempfile.TemporaryDirectory(prefix=".portcheck-build-", dir=a.out) as stage:
+        return build(a, stage)
+
+
+def build(a, stage):
     if a.online:
         os.makedirs(a.cache, exist_ok=True)
     selected = pcommon.places(a.places)
     for name, _ in selected:
         open(os.path.join(a.out, f"build-{name}.pending"), "w").close()
-    work = a.cache if a.online else pcommon.work_copy(a.cache, os.path.join(a.out, "work-cache"))
+    work = a.cache if a.online else pcommon.work_copy(a.cache, os.path.join(stage, "work-cache"))
     failed = []
     try:
         for name, _place in selected:
             cmd = [sys.executable, os.path.abspath(__file__), "--one", "--places", name, "--cache", work, "--out",
-                   a.out, "--server-dir", a.server_dir] + (["--online"] if a.online else [])
+                   stage, "--server-dir", a.server_dir] + (["--online"] if a.online else [])
             with open(os.path.join(a.out, f"build-{name}.log"), "w") as log:
                 r = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)
             with open(os.path.join(a.out, f"build-{name}.log")) as log:
@@ -175,6 +190,7 @@ def main():
             if r.returncode:
                 failed.append(name)
             else:
+                pcommon.publish_place(stage, a.out, name, ("plans", "facts"))
                 os.remove(os.path.join(a.out, f"build-{name}.pending"))
     finally:
         if not a.online:
