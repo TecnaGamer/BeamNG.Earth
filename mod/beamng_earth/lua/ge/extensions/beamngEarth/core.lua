@@ -2960,6 +2960,7 @@ local function onUpdate(dtReal, dtSim)
   require('beamngEarth/enginepref').update(st.inOurLevel)      -- (the settings' object detail: our level only)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
+
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
   t = mark('ui', t)
   local frameMs = frameMs0
@@ -3111,7 +3112,10 @@ local function onUpdate(dtReal, dtSim)
   updatePlayer(dtReal)
   -- Rebase commits can change the anchor after the previous frame's player sample. Route only with
   -- this frame's position, once the vehicle move has become visible in the matching world frame.
-  if st.inOurLevel and not st.lagProbe then gps.update(st.anchor, st.player) end
+  if st.inOurLevel and not st.lagProbe then
+    gps.update(st.anchor, st.player)
+    if st.player then require('beamngEarth/roads_driven').update(dtReal, st.player, st.paused) end
+  end
   if st.active then
     if not dropHoldFailed and (not st.paused or dropHold.active) then     -- (it runs on while it paused the game)
       local ok, err = pcall(updateDropHold, dtReal)
@@ -3385,6 +3389,7 @@ local function onClientEndMission()
   pcall(farcars.reset)
   pcall(mpsession.reset)
   gps.reset()
+  pcall(function() require('beamngEarth/roads_driven').save() end)
   do local stg = rawget(_G, 'beamngEarth_settings') if stg and stg.redirectBigMap then stg.redirectBigMap(false) end end
   seasonlook.restore()
   -- runs before the level deletes its objects (server/server.lua:19 vs :34): delete the far tiles
@@ -3447,6 +3452,7 @@ local function onExtensionUnloaded()
   M._swapTeardown()     -- (a generation swap under way: its hold released, nothing of it left)
   M._restartTeardown()  -- (a world server restart's hold released)
   roads.clear()
+  pcall(function() require('beamngEarth/roads_driven').reset() end)
   sea.clear()
   trees.clear()
   ambience.clear()
