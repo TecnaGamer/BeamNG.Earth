@@ -132,6 +132,14 @@ def export_store(path, match, observations, out):
         elif tenant_sign:
             # Ground-floor glazing and an independent fascia with lettering readable across parking.
             panel_width = 2 * np.linalg.norm(half_span)
+            # The entrance canopy stays within the tenant's frontage.
+            canopy_half = axis * min(panel_width * .38, 4.5)
+            outer = normal * .95
+            corners = [-canopy_half, -canopy_half + outer, canopy_half + outer, canopy_half]
+            for left, right in zip(corners, corners[1:] + corners[:1]):
+                wall(left, right, 2.84, 3.04, 2)
+            for z, indices in ((3.04, (0,1,2,0,2,3)), (2.84, (2,1,0,3,2,0))):
+                mesh([(*corners[j], z) for j in indices], 2)
             for bottom, top, image in (
                 (0., 3.1, whole_store.elevation(name, panel_width, 3.1, [panel_width / 2], [], [])),
                 (3.1, 3.1 + min(2.5, panel_width / 4), None),

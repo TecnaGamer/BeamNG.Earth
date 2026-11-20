@@ -882,6 +882,15 @@ def build(
                     height + 0.46,
                     2,
                 )
+                # Separate entrance signs remain visible when the middle of a big box
+                # is set back or screened by another mapped structure.
+                if i == front and len(door) >= 2 and width >= 42 and half >= 4:
+                    sign_width = min(2 * half - 1.2, 11)
+                    sign_height = min(1.95, sign_width / 4.5, height - z - .35)
+                    if sign_height > .65:
+                        top = height - .55
+                        face(center - sign_width / 2, center + sign_width / 2, .69,
+                             top - sign_height, top, texture(sign_image(name, sign_width / sign_height)), True)
 
         if restaurant:
             for x in dining:

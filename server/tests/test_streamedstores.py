@@ -50,6 +50,43 @@ def tile(frame, name, tenants, kind="supermarket", subtype="commercial"):
 
 
 class StreamedStoresTest(unittest.TestCase):
+    def test_parking_aisles_identify_customer_side(self):
+        from streamedstores import parking_direction
+        ring = np.array([[0., 0.], [80., 0.], [80., 60.], [0., 60.]])
+        front = [np.array([[x, -8.], [x, -45.]]) for x in (20., 60.)]
+        for footprint in (ring, ring[::-1]):
+            np.testing.assert_allclose(parking_direction(footprint, front), [0., -1.])
+            self.assertIsNone(parking_direction(footprint, front[:1]))
+            self.assertIsNone(parking_direction(footprint, front + [line + [0, 100] for line in front]))
+
+    def test_fuel_site_with_supermarket_brand(self):
+        from streamedstores import businesses, mapped_tenants
+        frame = geodesy.EnuFrame(0., 0.)
+        md = tile(frame, "", ["Kroger"])
+        place = md.cell(None).layers["places"]
+        place.attrs["basic_category"] = np.array(["gas_station"])
+        footprint = md.cell(None).layers["buildings"].lonlat
+        self.assertIsNone(mapped_tenants(list(businesses(md, [None])), footprint)[0][0])
+        place.attrs["basic_category"] = np.array(["supermarket"])
+        self.assertEqual(mapped_tenants(list(businesses(md, [None])), footprint)[0][0], "Kroger")
+
+    def test_shared_retail_panel_preserves_host_and_neighbour(self):
+        frame = geodesy.EnuFrame(40., -83.)
+        md = tile(frame, "", ["Kroger", "Other shop"], "retail")
+        places = md.cell(None).layers["places"]
+        lat, lon, _ = frame.enu_to_geodetic(np.array([50., 72.]), np.array([33., 55.]), np.zeros(2))
+        places.lonlat[:] = np.column_stack((lon, lat))
+        aisle = np.array([[50., 15.], [50., 20.]])
+        with (tempfile.TemporaryDirectory() as cache, patch.dict(os.environ, BNE_STOREFRONTS="1"),
+              patch("threedmr.region_ids", return_value=[]), patch("buildings.road_lines", return_value=[aisle])):
+            def generate():
+                return buildings.road_tile_items(frame, 0, 0, md, lambda la, lo: np.zeros(np.shape(la)), cache_dir=cache)[1]
+            panel, = generate()
+            self.assertTrue(panel["local"]["storefront_overlay"])
+            self.assertIsNone(panel["storefront_host"])
+            places.lonlat[1] = places.lonlat[0]
+            self.assertFalse(generate())
+
     def test_discovery_cache_and_ambiguous_tenants(self):
         for lat, lon, name, tenants, kind, subtype, expected in (
             (36.1, -86.8, "Kroger", [], "supermarket", "commercial", 1),

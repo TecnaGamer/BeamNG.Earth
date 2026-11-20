@@ -3454,7 +3454,7 @@ class RoadLines(list):
 
 
 
-def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THROUGH_CLASSES, skip_sub=()):
+def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THROUGH_CLASSES, skip_sub=(), only_sub=()):
     """Polylines (k, 2) relative to (x0, y0) of the public roads on the ground near the tile (for road_through), a
     RoadLines (their drawn half-widths in .half). classes: the road classes taken; skip_sub: the OSM subclasses left
     out (a car park's aisles)."""
@@ -3466,13 +3466,15 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THRO
         cls = f.attrs.get("class")
         if cls is None:
             continue
-        sub = f.attrs.get("subclass") if skip_sub else None
+        sub = f.attrs.get("subclass") if skip_sub or only_sub else None
         bb = f.boxes(frame)             # (only the roads near the tile: the test below, all at once)
         near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
                               & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
         specs = None
         rings, halves = [], []      # (the layer's lines converted in one call)
         for i in near.tolist():
+            if only_sub and (sub is None or str(sub[i]) not in only_sub):
+                continue
             if str(cls[i]) not in classes or (sub is not None and str(sub[i]) in skip_sub):
                 continue
             if specs is None:
@@ -6504,7 +6506,9 @@ def road_tile_items(
             approach = streets or road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
                                              margin=150, size=max(x1-x0, y1-y0),
                                              classes=THROUGH_CLASSES | {"service"})
-            custom.extend(streamedstores.models(items, custom, frame, (x0, y0), approach, md, keys, cache_dir))
+            aisles = road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                                margin=150, size=max(x1-x0, y1-y0), classes={"service"}, only_sub={"parking_aisle"})
+            custom.extend(streamedstores.models(items, custom, frame, (x0, y0), approach, md, keys, cache_dir, aisles))
     return items, custom
 
 
