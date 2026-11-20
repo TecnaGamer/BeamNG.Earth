@@ -47,7 +47,7 @@ def outline_of(mask):
     return np.asarray(hull, dtype=float) + 0.5, missing.sum() > 0.006 * mask.sum()
 
 
-def make_model(code, source, art=ART, out=OUT):
+def make_model(code, source, art=ART, out=OUT, *, assembly=None, plate_lift=0.):
     path = art / (code + ".svg")
     if hashlib.sha256(path.read_bytes()).hexdigest() != source["sha256"]:
         raise ValueError(f"Source checksum changed: {path}")
@@ -60,7 +60,8 @@ def make_model(code, source, art=ART, out=OUT):
     canvas.paste(face, (left, top))
     group = "pl_" + code.lower().replace("-", "_").replace(".", "_")
     # Downsample the whole viewport. Keep the original mesh and UV coordinate grid.
-    canvas.resize((256, 256), Image.Resampling.BOX).save(out / (group + "_face_256.png"))
+    if assembly is None:
+        canvas.resize((256, 256), Image.Resampling.BOX).save(out / (group + "_face_256.png"))
 
     mask = np.uint8(np.asarray(face.getchannel("A")) > 127)
     ring, rectangular_strips = outline_of(mask)
@@ -69,11 +70,12 @@ def make_model(code, source, art=ART, out=OUT):
     xmid = (ring[:, 0].min() + ring[:, 0].max()) / 2
     ztop = ring[:, 1].min()
     def xyz(x, y, depth):
-        return ((x - xmid) * scale, depth, TOP - (y - ztop) * scale)
+        return ((x - xmid) * scale, depth, TOP + plate_lift - (y - ztop) * scale)
 
     front, back = -0.046, -0.032
-    mesh = Mesh(12)
-    mesh.cylinder(METAL, 0, 0, -0.12, TOP - 0.14, 0.032)
+    mesh = assembly if assembly is not None else Mesh(12)
+    if assembly is None:
+        mesh.cylinder(METAL, 0, 0, -0.12, TOP - 0.14, 0.032)
     if rectangular_strips:
         # Nonconvex arrows and multipart silhouettes: merge equal horizontal spans.
         # This preserves holes instead of filling the sign's convex hull.
@@ -94,6 +96,8 @@ def make_model(code, source, art=ART, out=OUT):
                 del spans[x0, x1]
             for span in current:
                 spans.setdefault(span, y)
+        if assembly is not None:
+            return group
         col = Mesh(6)
         col.cylinder(METAL, 0, 0, -0.12, TOP - 0.14, 0.032)
         write_dae(out / (group + "_plate.dae"), group, [(2, mesh)], col)
@@ -107,6 +111,8 @@ def make_model(code, source, art=ART, out=OUT):
     outline = ring[::-1]
     mesh.face(group, [xyz(x, y, front) for x, y in outline],
               [((left + x) / PIXELS, 1 - (top + y) / PIXELS) for x, y in outline])
+    if assembly is not None:
+        return group
     col = Mesh(6)
     col.cylinder(METAL, 0, 0, -0.12, TOP - 0.14, 0.032)
     write_dae(out / (group + "_plate.dae"), group, [(2, mesh)], col)
@@ -124,10 +130,22 @@ def material(group, vfs=VFS):
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     materials = {}
-    for code, source in json.loads((ART / "sources.json").read_text(encoding="utf8")).items():
+    sources = json.loads((ART / "sources.json").read_text(encoding="utf8"))
+    for code, source in sources.items():
         group = make_model(code, source)
         materials[group] = material(group)
     (OUT / "pl_signs.materials.json").write_text(json.dumps(materials, indent=2) + "\n", encoding="utf8")
+    build_roundabout_post(sources)
+
+
+def build_roundabout_post(sources):
+    mesh, collision = Mesh(12), Mesh(6)
+    for part in (mesh, collision):
+        part.cylinder(METAL, 0, 0, -0.12, TOP + 0.85 - 0.14, 0.032)
+    for code, lift in (("C-12", 0.), ("A-7", 0.85)):
+        make_model(code, sources[code], assembly=mesh, plate_lift=lift)
+    name = "pl_a_7_c_12"
+    write_dae(OUT / (name + "_plate.dae"), name, [(2, mesh)], collision)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,17 @@ ROLES = {
 }
 FURNITURE = {"giveway": "A-7", "stop": "B-20"}
 MATCH_M = 12.
+POST = "pl_a_7_c_12"
+POST_REACH = 20.  # Allow for a detection upstream of the generated shoulder point.
+
+
+def approach_distance(row, x, y, yaw, reach, lateral, angle):
+    dx, dy = row[1] - x, row[2] - y
+    a = math.radians(yaw)
+    if abs((row[4] - yaw + 180) % 360 - 180) > angle or abs(dx*math.cos(a) + dy*math.sin(a)) > lateral:
+        return math.inf
+    distance = math.hypot(dx, dy)
+    return distance if distance <= reach else math.inf
 
 
 def in_country(frame, x, y):
@@ -32,31 +43,29 @@ def in_country(frame, x, y):
 
 
 class Nearby:
-    def __init__(self, rows):
+    def __init__(self, rows, anchors=()):
         import guardrails
+        self.rows = rows
         self.items = defaultdict(list)
-        for row in rows:
+        for row in (*rows, *anchors):
             self.items[guardrails.polish_groups()[row[0]]].append(row)
 
     def matched(self, code, x, y, yaw):
-        a = math.radians(yaw)
         # Yield/stop and posted speed values describe one control on this approach.
         # Roundabout warning, mandatory circulation and yield are separate controls.
         name = plsigns.group(code)
+        if code in ("A-7", "C-12", "B-20") and any(
+                math.isfinite(approach_distance(r, x, y, yaw, POST_REACH, 4., 40.))
+                for r in self.items.get(POST, ())):
+            return True
         groups = ("pl_a_7", "pl_b_20") if code in ("A-7", "B-20") else (name,)
         if code.startswith("B-33-"):
             groups = [g for g in self.items if g.startswith("pl_b_33_")]
         for g in groups:
             for r in self.items.get(g, ()):
-                dx, dy = r[1] - x, r[2] - y
-                if (abs((r[4] - yaw + 180) % 360 - 180) <= 30 and abs(dx*math.cos(a) + dy*math.sin(a)) <= 2.5
-                        and dx*dx + dy*dy <= MATCH_M**2):
+                if math.isfinite(approach_distance(r, x, y, yaw, MATCH_M, 2.5, 30.)):
                     return True
         return False
-
-    def same_post(self, code, x, y, yaw):
-        return next((r for r in self.items.get(plsigns.group(code), ())
-                     if math.hypot(r[1]-x, r[2]-y) < 0.75 and abs((r[4]-yaw+180) % 360-180) < 20), None)
 
 
 def furniture(rows, frame, nearby):
@@ -69,24 +78,133 @@ def furniture(rows, frame, nearby):
             result.append(row)
         elif not nearby.matched(code, row[1], row[2], row[4]):
             localized = [plsigns.group(code), *row[1:6], plsigns.HEIGHT, *row[7:]]
-            if code == "A-7" and (post := nearby.same_post("C-12", row[1], row[2], row[4])):
-                localized[1:5] = [post[1], post[2], post[3] + .85, post[4]]
             result.append(localized)
     return result
 
 
-def sign_stream(md, frame, box, elev, context, left_hand, mph):
-    """Include signs on the far side of a tile seam when comparing two placements."""
+def ring_entries(roads, ring, frame, bounds):
+    """Nominal roadside posts on incoming arms, including split one-way entrances."""
+    import furniture
+    if not ring:
+        return []
+    nodes = np.vstack([p[[0, -1], :2] for fid, _, p, _ in roads if fid in ring])
+    result = []
+    for fid, spec, line, _ in roads:
+        if fid in ring or len(line) < 2:
+            continue
+        for start in (False, True):
+            p = line[0 if start else -1, :2]
+            if not (bounds[0]-10 <= p[0] <= bounds[2]+10 and bounds[1]-10 <= p[1] <= bounds[3]+10):
+                continue
+            if (spec.oneway and (spec.dir > 0) == start) or np.min(np.sum((nodes - p)**2, axis=1)) > 2.5**2:
+                continue
+            arm = line if start else line[::-1]
+            spot, direction = furniture._at(arm, np.array([min(8., furniture._arclen(arm)[-1] / 2)]))
+            side, yaw = furniture.approach_pose(direction[0], furniture.G_YIELD)
+            x, y = spot[0, :2] + side * (spec.width / 2 + 1.)
+            if in_country(frame, x, y):
+                result.append([None, x, y, None, yaw])
+    return sorted(result, key=lambda row: tuple(row[1:3]) + (row[4],))
+
+
+def roundabout_layout(entries, observed, frame, elev):
+    """A measured circle or an incoming arm owns one assembly. A yield sign alone cannot identify a roundabout."""
+    import guardrails
+    groups = guardrails.polish_groups()
+    circle, priority, stop, pair = (groups.index(g) for g in ("pl_c_12", "pl_a_7", "pl_b_20", POST))
+    anchors = list(entries)
+    assignments = [[] for _ in anchors]
+    use_arm_pose = set()
+    remaining = []
+    for row in sorted(observed, key=lambda r: (r[0] != circle, tuple(r[:5]))):
+        if row[0] not in (circle, priority, stop):
+            remaining.append(row)
+            continue
+        dist, i = min(((approach_distance(a, row[1], row[2], row[4], POST_REACH, 4., 40.), i)
+                       for i, a in enumerate(anchors)), default=(math.inf, -1))
+        if not math.isfinite(dist) and row[0] == priority:
+            # Two plates at one surveyed spot can inherit different headings from neighbouring road segments.
+            dist, i = min(((approach_distance(r, row[1], row[2], row[4], 3., 3., 65.), j)
+                           for j, hits in enumerate(assignments) for r in hits if r[0] == circle),
+                          default=(math.inf, -1))
+        if not math.isfinite(dist) and row[0] == circle:
+            # A detection snapped to the circulating road can face across its own approach.
+            # Accept a wider bearing only when there is one plausible incoming arm.
+            close = sorted((approach_distance(a, row[1], row[2], row[4], 14., 9., 65.), j)
+                           for j, a in enumerate(entries))
+            if close and math.isfinite(close[0][0]) and (len(close) == 1 or close[1][0] - close[0][0] > 4.):
+                dist, i = close[0]
+                use_arm_pose.add(i)
+        if math.isfinite(dist):
+            assignments[i].append(row)
+        elif row[0] == circle:
+            anchors.append(row)
+            assignments.append([row])
+        else:
+            remaining.append(row)
+    aliases = []
+    for i, (anchor, hits) in enumerate(zip(anchors, assignments)):
+        # A mapped STOP is a different priority control; do not infer a yield above it.
+        stops = [r for r in hits if r[0] == stop]
+        if stops:
+            remaining.append(stops[0])
+        at = min((r for r in hits if r[0] != stop),
+                 key=lambda r: (r[0] != circle, math.hypot(r[1]-anchor[1], r[2]-anchor[2])),
+                 default=anchor)
+        x, y, z, yaw = (anchor if i in use_arm_pose else at)[1:5]
+        if z is None:
+            lat, lon, _ = frame.enu_to_geodetic(np.array([x]), np.array([y]), 0.)
+            z = float(frame.geodetic_to_enu(lat, lon, elev(lat, lon))[2][0])
+        a = math.radians(yaw)
+        fx, fy = math.cos(a), math.sin(a)
+        group, height = (circle, plsigns.HEIGHT) if stops else (pair, 3.6)
+        remaining.append([group, x, y, z, yaw, 0., height, 0., fx, fy, 0., -fy, fx, 0., 0., 0., 1.])
+        aliases.append([group, *anchor[1:5]])
+        aliases.extend([group, *r[1:5]] for r in hits if r[0] != stop)
+    return Nearby(remaining, aliases)
+
+
+def post_layout(md, frame, bounds, elev, context, left_hand, mph, local_roads=()):
+    """Use the same road geometry and survey matching for Forest instances and streamed mesh suppression."""
+    import mapcells
+    import roadsigns
     import speedsigns
-    x0, y0, x1, y1 = box
-    bounds = (x0 - MATCH_M, y0 - MATCH_M, x1 + MATCH_M, y1 + MATCH_M)
-    def roads():
-        for ll, xy, meta, _, _, skips, _ in speedsigns._tile_rows(
-                frame, bounds, context, left_hand, mph, speedsigns.STYLE_VIENNA, margin=plsigns.REACH):
-            if not skips:
-                yield None, SimpleNamespace(width=2*meta[0], dir=meta[1], oneway=bool(meta[1])), xy
-    found = plsigns.tile_rows(frame, bounds, roads(), elev, getattr(md, "cache_dir", None), getattr(md, "fetcher", None))
-    return Nearby(found)
+    x0, y0, x1, y1 = bounds
+    pad = 2 * POST_REACH
+    window = (x0-pad, y0-pad, x1+pad, y1+pad)
+    if context is None:
+        import islands
+        roads = [(fid, sp, np.asarray(p), lon) for fid, sp, p, lon in local_roads]
+        ring = islands.ring_fids(roads)
+    else:
+        lat, lon, _ = frame.enu_to_geodetic(np.array([x0-pad-30, x1+pad+30]), np.array([y0-pad-30, y1+pad+30]), 0.)
+        by_id, ring = {}, set()
+        for key in mapcells.cells_for_bbox(min(lat), min(lon), max(lat), max(lon)):
+            try:
+                feats = context.cell(key)
+            except OSError:
+                import revisit
+                revisit.fault(here=True)
+                continue
+            if feats is None or not len(feats):
+                continue
+            raw = speedsigns._cell_rows(feats, frame, context.urban, context.widths, left_hand, mph)
+            ring.update(roadsigns.cell_rings(feats, frame, context.urban, context.widths, left_hand, mph, raw))
+            for fid, (_, xy, meta, _, _, skips, _) in raw.items():
+                if not skips and fid not in by_id:
+                    by_id[fid] = (fid, SimpleNamespace(width=2*meta[0], dir=meta[1], oneway=bool(meta[1])), xy, 0.)
+        roads = list(by_id.values())
+        ring.intersection_update(by_id)
+        if not roads and local_roads:
+            import islands
+            roads = list(local_roads)
+            ring = islands.ring_fids(roads)
+    found = plsigns.tile_rows(frame, window, roads, elev, getattr(md, "cache_dir", None), getattr(md, "fetcher", None))
+    return roundabout_layout(ring_entries(roads, ring, frame, window), found, frame, elev)
+
+
+def sign_stream(md, frame, box, elev, context, left_hand, mph):
+    return post_layout(md, frame, box, elev, context, left_hand, mph)
 
 
 @lru_cache(maxsize=128)
@@ -145,15 +263,6 @@ def split(frame, signs, table, codes, nearby, origin, stacked=False):
             continue
         try:
             mount = row[9] if stacked else None
-            if code == "C-12" and (post := nearby.same_post("A-7", s[0], s[1], yaw)):
-                # Keep the round blue face below the surveyed priority triangle.
-                row = row.copy()
-                row[:3] = post[1:4]
-                mount = plsigns.HEIGHT - 1.55 + row[2] - row[3]
-            elif code == "A-7" and (post := nearby.same_post("C-12", s[0], s[1], yaw)):
-                row = row.copy()
-                row[:3] = post[1:4]
-                mount = plsigns.HEIGHT + .1 + row[2] - row[3]
             part = replacement(code, row, origin, mount)
         except (OSError, KeyError, ET.ParseError):
             keep.append(i)

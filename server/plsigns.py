@@ -77,7 +77,7 @@ def cache_parts(frame=None, box=None, rsigns=True):
             frame = geodesy.EnuFrame(*frame)
         if not covers(frame, box):
             return ()
-    return (("pl_signs", signature(), plmapillary.epoch() if plmapillary.token() else "road-rules"),)
+    return (("pl_signs", "roundabout-post-v1", signature(), plmapillary.epoch() if plmapillary.token() else "road-rules"),)
 
 
 def cell(lon, lat):
@@ -283,31 +283,26 @@ def tile_rows(frame, box, roads, elev, cache_dir=None, fetcher=None):
         fx, fy = float(ty), float(-tx)
         rows.append([guardrails.polish_groups().index(name), round(float(x), 3), round(float(y), 3), round(z, 3),
                      round(math.degrees(math.atan2(fy, fx)), 2), 0., HEIGHT, 0., fx, fy, 0., -fy, fx, 0., 0., 0., 1.])
-    if rows:
-        import plstock
-        nearby = plstock.Nearby(rows)
-        priority = guardrails.polish_groups().index("pl_a_7")
-        for row in rows:
-            if row[0] == priority and (post := nearby.same_post("C-12", row[1], row[2], row[4])):
-                row[1:4] = [post[1], post[2], post[3] + .85]
     return rows
 
 
-def road_layer(frame, box, roads, elev, md, props, guardrail_rows):
+def road_layer(frame, box, roads, elev, md, props, guardrail_rows, urban=None, widths=None, left_hand=False, mph=False):
     """Add measured signs owned by this tile and localize its generated junction furniture."""
     if not covers(frame, box):
         return props
     import geotiles
     import plstock
     # Junction furniture may extend 20 m into the next tile.
-    pad = 20 + plstock.MATCH_M
+    pad = 20
     window = (box[0]-pad, box[1]-pad, box[2]+pad, box[3]+pad)
     try:
-        found = tile_rows(frame, window, roads, elev, getattr(md, "cache_dir", None), getattr(md, "fetcher", None))
+        source = getattr(md, "highway_signs", None)
+        context = source.context(urban, widths) if source is not None else None
+        layout = plstock.post_layout(md, frame, window, elev, context, left_hand, mph, roads)
     except (OSError, ValueError) as error:
         import revisit
         revisit.fault(here=True)
         logging.getLogger(__name__).warning("Using generated Polish junction signs: %s", error)
-        found = []
-    guardrail_rows.extend(r for r in found if geotiles.box_owns(box, r[1], r[2]))
-    return plstock.furniture(props, frame, plstock.Nearby(found))
+        layout = plstock.Nearby([])
+    guardrail_rows.extend(r for r in layout.rows if geotiles.box_owns(box, r[1], r[2]))
+    return plstock.furniture(props, frame, layout)

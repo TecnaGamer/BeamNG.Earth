@@ -40,7 +40,7 @@ ALL_GROUPS = GROUPS + euguardrails.GROUPS
 @lru_cache(maxsize=1)
 def polish_groups():
     import plsigns
-    return ALL_GROUPS + plsigns.catalog()
+    return ALL_GROUPS + plsigns.catalog() + ("pl_a_7_c_12",)
 
 
 def groups_for(rows):

@@ -3545,7 +3545,8 @@ class Server:
         racedig.tile_clear(anchor.frame, cells, props, wires, elev, self.mapdata)
         if roadsignsmod.enabled(self):
             import plsigns
-            props = plsigns.road_layer(anchor.frame, box, near_roads, elev, self.mapdata, props, guardrail_rows)
+            props = plsigns.road_layer(anchor.frame, box, near_roads, elev, self.mapdata, props, guardrail_rows,
+                                       urban, self.road_widths, self.left_hand(anchor), self.mph(anchor))
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,

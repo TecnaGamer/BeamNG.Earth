@@ -2115,7 +2115,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     racedig.tile_clear(frame, cells, props, wires, elev, _s.md)
     if rsigns:
         import plsigns
-        props = plsigns.road_layer(frame, box, near_roads, elev, _s.md, props, guardrail_rows)
+        props = plsigns.road_layer(frame, box, near_roads, elev, _s.md, props, guardrail_rows,
+                                   urban, _s.widths, left_hand, mph)
     P.signs = signs
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.custom, P.custom_entries = _custom, _entries

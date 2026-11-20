@@ -385,6 +385,11 @@ for _, g in ipairs(PL_SIGNS) do
   M.GROUP_MAX_M[g] = 450
   M.ONE_SPELLING[g] = true
 end
+local roundaboutPost = 'pl_a_7_c_12'
+M.CATALOG[roundaboutPost] = { { '/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/' .. roundaboutPost .. '_plate', 3.6 } }
+M.GROUP_MAX_M[roundaboutPost] = 450
+M.ONE_SPELLING[roundaboutPost] = true
+PL_SIGNS[#PL_SIGNS + 1] = roundaboutPost
 local plExtraDir = '/levels/beamng_earth/art/shapes/beamngEarth/pl_signs_extra/'
 if jsonReadFile and FS and FS.fileExists and FS:fileExists(plExtraDir .. 'ready.json') then
   local ready = jsonReadFile(plExtraDir .. 'ready.json') or {}
