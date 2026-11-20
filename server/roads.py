@@ -8863,6 +8863,11 @@ class BridgeProfiles:
         if req_out is not None and roadshape.SURFACE_PROFILE and cr:
             # Evaluate the topology with the profile inside its per-chain fallback scope.
             req_out["road_crossings"] = (gl, cr, road_z, gi if LEVEL_SPACING else None)
+        if req_out is not None and roadshape.ROBUST_PROFILE:
+            req_out["floor_ids"] = [k[0] for k, lines_ in ground.items() if k[1] == "g" for _ in lines_]
+            if rcr:
+                req_out["rail_crossings"] = (len(cr), rl, rcr, fast_crossing_ground(lines, rl),
+                                             [k[0] for k, lines_ in ground.items() if k[1] == "r" for _ in lines_])
         return out
 
     def _raw_solve(self, comp, pool, ground):

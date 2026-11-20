@@ -1126,6 +1126,7 @@ def _profile_pins(planner, la0, lo0, la1, lo1, pad):
 
 
 def _bridge_setup(p):
+    p.profile_bed_elev = getattr(getattr(_s, "plan_store", None), "elev", None)
     sea = getattr(_s, "sea", None)
     p.wet = sea.depth if sea is not None else None        # (decks clear the water: roads.water_clear)
     p.infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(

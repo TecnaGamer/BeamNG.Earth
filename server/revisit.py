@@ -469,7 +469,7 @@ def keyed_value(k, v):
     # The surface generation includes the supporting deck and its parapet outline.
     n = 5 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
     if (k, v) == ("BNE_ROADSHAPE", "profile") and os.environ.get("BNE_ROADSURF_V3") == "surface":
-        n = 10
+        n = 10 if os.environ.get("BNE_PROFILE_ROBUST") == "0" else 11
     return f"{k}={v}" if n is None else f"{k}={v}@v{n}"
 
 
