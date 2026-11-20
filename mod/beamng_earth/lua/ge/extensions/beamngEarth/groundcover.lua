@@ -48,6 +48,8 @@ M.SOURCES = {
               items = HIROCHI .. 'main/MissionGroup/vegetation/terrain_grass/items.level.json' },
   wcusa = { materials = WCUSA .. 'art/groundcover/main.materials.json',
             items = WCUSA .. 'main/MissionGroup/vegetation/items.level.json' },
+  crops = { materials = '/art/shapes/crops/main.materials.json',
+            items = '/art/shapes/crops/items.level.json' },
 }
 -- stock GroundCover (source, src name) -> our layer, element share; `name` (default src) names our
 -- object, for a stock definition used on two layers; `fields` override stock fields. The shares keep
@@ -66,10 +68,12 @@ M.DEFS = {
   { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_scrub', layer = 'bngEarthGroundDusty', share = 0.05,
     fields = LONG_NEAR },
   -- (2026-11-16, server/surface.py FOREST / DRYGRASS: tree cover had the grass layer and its full carpet) forest floor:
-  -- sparse short grass between the trunks; arid grassland: mostly West Coast USA's dry grass. Crop soil and sand: none.
+  -- sparse short grass between the trunks; arid grassland: mostly West Coast USA's dry grass. Crop soil and sand: no stock grass.
   { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_forest', layer = 'bngEarthGroundForest', share = 0.08 },
   { source = 'wcusa', src = 'grass_dry_1', name = 'grass_dry_1_dry', layer = 'bngEarthGroundDryGrass', share = 0.2 },
   { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_dry', layer = 'bngEarthGroundDryGrass', share = 0.06 },
+  -- Special crops retain their original crop-soil layer; this carrier is generic cropland only.
+  { source = 'crops', src = 'corn_like_crop', layer = 'bngEarthGroundGenericCrop', share = 1 },
 }
 M.PREFIX = 'bngEarthGC_'
 -- set on every object after the stock fields (see the header)
@@ -83,7 +87,7 @@ M.density = 1.0
 -- times it, its element count times its square (the same density on the larger disc: the rebuild frame grows with it)
 M.DISTANCE = { near = 0.7, normal = 1.0, far = 1.5 }
 M.distance = 1.0
-M.RADIUS_FIELDS = { radius = true, dissolveRadius = true }
+M.RADIUS_FIELDS = { radius = true, dissolveRadius = true, shapeCullRadius = true }
 
 local created = {}        -- object names we made
 local layered = false     -- a block with surface layers was loaded this level (objects can exist)
