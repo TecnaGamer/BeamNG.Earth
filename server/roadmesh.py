@@ -319,15 +319,21 @@ def tilted(left, right, z, bk, pts):
     """Heights at points pts (k, 2) beside a fixed deck ribbon's rows (edges left / right (k, 2), centre heights z):
     z + bk x each point's offset to the left of the row's centre line (bk: the cross slope, m per m toward the left;
     grading.bank's sign: + raises the left). Pure."""
+    mid, d = _row_dirs(left, right)
+    off = d[:, 0] * (pts[:, 1] - mid[:, 1]) - d[:, 1] * (pts[:, 0] - mid[:, 0])
+    return z + bk * off
+
+
+def _row_dirs(left, right):
+    """A ribbon's row centres (k, 2) and the unit direction of its centre line at each (central differences, one-sided
+    at the ends). Pure."""
     mid = (left + right) * 0.5
     d = np.empty_like(mid)
     if len(mid) > 2:
         d[1:-1] = mid[2:] - mid[:-2]
     d[0] = mid[1] - mid[0]
     d[-1] = mid[-1] - mid[-2]
-    d = d / np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
-    off = d[:, 0] * (pts[:, 1] - mid[:, 1]) - d[:, 1] * (pts[:, 0] - mid[:, 0])
-    return z + bk * off
+    return mid, d / np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
 
 
 SKEW_MIN_COS = 0.2      # an end line nearer than this (cos) to the ribbon's own direction is left square
@@ -822,6 +828,162 @@ def trim_overlaps(rb, context=(), shared=None):
         tl = np.minimum(tl, 0.9 * hw)           # (never past the centre line: at least a tenth of the deck stays)
         tr = np.minimum(tr, 0.9 * hw)
         out.append(((left - u * tl[:, None], right + u * tr[:, None], v, m, layer, z), c))
+    return out
+
+
+def _seg_gap(a, b, c, d):
+    """The plan distance between the segments a-b and c-d (2,). Pure."""
+    def side(p, q, r):
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+
+    def to(p, q, r):
+        e = q - p
+        t = min(1.0, max(0.0, float(((r - p) * e).sum()) / max(float((e * e).sum()), 1e-12)))
+        return float(dnp.hypot(*(r - p - t * e)))
+    if side(a, b, c) * side(a, b, d) < 0 and side(c, d, a) * side(c, d, b) < 0:
+        return 0.0
+    return min(to(a, b, c), to(a, b, d), to(c, d, a), to(c, d, b))
+
+
+def _in_slab(left, right, pts):
+    """Which of the points pts (n, 2) lie over the ribbon's road (the quads between its rows' edges). Pure."""
+    quads_ = np.stack([left[:-1], right[:-1], right[1:], left[1:]], 1)           # (k - 1, 4, 2)
+    e = np.roll(quads_, -1, axis=1) - quads_
+    delta = pts[:, None, None, :] - quads_[None]
+    cross = e[None, ..., 0] * delta[..., 1] - e[None, ..., 1] * delta[..., 0]     # (n, k - 1, 4)
+    return ((cross >= -1e-9).all(2) | (cross <= 1e-9).all(2)).any(1)
+
+
+def _top_at(left, right, z, bk, field, pts, gap=False):
+    """The top of a deck ribbon at the plan points pts (n, 2): its junction field's, else its rows' height at the point's
+    foot on the centre line (rows interpolated along it), each row's height at the point z + bk x the point's offset
+    to the left of that row (tilted()), the ends continued at their grade. gap: also each point's distance to the
+    centre line. Pure."""
+    if field is not None:
+        return field.at(pts)
+    mid, d = _row_dirs(left, right)
+    a, e = mid[:-1], np.diff(mid, axis=0)
+    raw = ((pts[:, None] - a) * e).sum(2) / np.maximum((e * e).sum(1), 1e-12)
+    t = np.clip(raw, 0, 1)
+    j = np.argmin(dnp.norm(pts[:, None] - a - t[:, :, None] * e, axis=2), axis=1)
+    at = np.arange(len(pts))
+    # (past an end the last segment goes on at its grade, as _JunctionSurface._height continues an approach)
+    f = np.where(((j == 0) & (raw[at, j] < 0)) | ((j == len(e) - 1) & (raw[at, j] > 1)), raw[at, j], t[at, j])
+    h = np.broadcast_to(z, (len(pts), len(z)))
+    if bk is not None:
+        off = d[:, 0] * (pts[:, 1:2] - mid[:, 1]) - d[:, 1] * (pts[:, 0:1] - mid[:, 0])
+        h = h + bk * off
+    top = h[at, j] + f * (h[at, j + 1] - h[at, j])
+    if not gap:
+        return top
+    return top, dnp.norm(pts - (a[j] + t[at, j][:, None] * e[j]), axis=1)
+
+
+def camber_joints(rb, context=(), shared=None):
+    """The deck ribbons rb ([(ribbon, chunk)], after trim_overlaps) with a deck that meets a longer one at a joint (an
+    end row of each within JUNCTION_JOIN_M in plan, their heights there within JUNCTION_JOIN_Z_M) taking the longer
+    one's top where the two lie over each other at nearly one height (under TRIM_DZ[0]: trim_overlaps leaves those
+    alone): the shorter deck's rows get the longer's height at their centres and its cross slope across their width (the
+    chunk's "bk", read by tilted()), so its slab, its skin and its parapets follow the segment going on, not a flat
+    fan of their own beside it, a step along the seam. Past the overlap the rows ease back to their own heights over
+    JUNCTION_PIN_R_M of the deck's length. The longer deck is left as it is, and a deck on a junction field (shared:
+    by fid) is, as its partner's surface. What lies on a moved deck (its sidewalks and markings: ribbons of its fid that
+    are no deck) moves with its top. The context (the decks around the tile) supplies partners. Pure."""
+    shared = shared or {}
+    items = list(rb) + list(context)
+
+    def eligible(r, c):
+        return (r[5] is not None and c.get("deck") and not c.get("tunnel") and len(r[0]) >= 2
+                and np.isfinite(np.asarray(r[5], np.float64)).all())
+    ok = [eligible(r, c) for r, c in items]
+    if not any(ok[:len(rb)]):
+        return list(rb)
+    ends, ends_of, half = [], [], []
+    length = []
+    for n, (r, c) in enumerate(items):
+        if not ok[n]:
+            length.append(0.0)
+            continue
+        left, right = np.asarray(r[0], np.float64), np.asarray(r[1], np.float64)
+        mid = (left + right) / 2
+        length.append(float(dnp.hypot(*np.diff(mid, axis=0).T).sum()))
+        for e in (0, -1):
+            ends.append(mid[e])
+            ends_of.append((n, e))
+            half.append(float(dnp.hypot(*(left[e] - right[e]))) / 2)
+    ends, half = np.asarray(ends), np.asarray(half)
+    near = dnp.hypot(ends[:, None, 0] - ends[None, :, 0], ends[:, None, 1] - ends[None, :, 1]) \
+        <= half[:, None] + half[None, :] + JUNCTION_JOIN_M
+    partners = {}                       # target index -> the longer decks it meets at a joint
+    for p, q in zip(*np.nonzero(near)):
+        (a, ea), (b, eb) = ends_of[p], ends_of[q]
+        if a >= len(rb) or a == b or length[b] <= length[a]:
+            continue
+        ca, cb = items[a][1], items[b][1]
+        if ca.get("fid") is not None and ca.get("fid") == cb.get("fid"):
+            continue
+        if ca.get("fid") in shared:
+            continue
+        ra, rb_ = items[a][0], items[b][0]
+        if abs(float(ra[5][ea]) - float(rb_[5][eb])) > JUNCTION_JOIN_Z_M:
+            continue
+        if _seg_gap(np.asarray(ra[0][ea], np.float64), np.asarray(ra[1][ea], np.float64),
+                    np.asarray(rb_[0][eb], np.float64), np.asarray(rb_[1][eb], np.float64)) <= JUNCTION_JOIN_M:
+            partners.setdefault(a, set()).add(b)
+    out = list(rb)
+    moved = {}
+    for a, bs in partners.items():
+        r, c = items[a]
+        left, right, z = (np.asarray(r[0], np.float64), np.asarray(r[1], np.float64),
+                          np.asarray(r[5], np.float64).reshape(-1))
+        k = len(z)
+        mid = (left + right) / 2
+        width = np.maximum(dnp.hypot(*(left - right).T), 1e-9)
+        arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
+        own_bk = _bank_rows(c, k)
+        own_bk = np.zeros(k) if own_bk is None else own_bk
+        best, zc, bkc = np.zeros(k), z.copy(), own_bk.copy()
+        for b in sorted(bs, key=lambda i: -length[i]):
+            rb_, cb = items[b]
+            bl, br, bz = (np.asarray(rb_[0], np.float64), np.asarray(rb_[1], np.float64),
+                          np.asarray(rb_[5], np.float64).reshape(-1))
+            field = shared.get(cb.get("fid"))
+            bbk = _bank_rows(cb, len(bz)) if field is None else None
+            over = _in_slab(bl, br, np.concatenate([mid, left, right]))
+            over = (over[:k] | over[k:2 * k] | over[2 * k:])
+            hm = _top_at(bl, br, bz, bbk, field, mid)
+            like = np.abs(z - hm) < TRIM_DZ[0]
+            src = over & like
+            if not src.any():
+                continue
+            gap = np.abs(arc[:, None] - arc[src][None]).min(1)
+            w = np.clip(1.0 - gap / JUNCTION_PIN_R_M, 0.0, 1.0)
+            w = np.where(src, 1.0, w * w * (3 - 2 * w)) * like
+            hl, hr = _top_at(bl, br, bz, bbk, field, left), _top_at(bl, br, bz, bbk, field, right)
+            take = w > best
+            zc[take] = z[take] + w[take] * (hm[take] - z[take])
+            slope = (hl - hr) / width
+            bkc[take] = own_bk[take] + w[take] * (slope[take] - own_bk[take])
+            best = np.where(take, w, best)
+        if best.any():
+            out[a] = ((r[0], r[1], r[2], r[3], r[4], zc), {**c, "bk": bkc.tolist()})
+            moved[a] = ((left, right), z, _bank_rows(c, k), zc, bkc)
+    # what lies on a deck that moved (its sidewalks and markings: ribbons of its fid on fixed heights, not decks
+    # themselves) moves with the deck's top at its rows by as much as the top moved there
+    for n, (r, c) in enumerate(rb):
+        if r[5] is None or c.get("deck") or len(r[0]) < 2 or c.get("fid") is None:
+            continue
+        pts = (np.asarray(r[0], np.float64) + np.asarray(r[1], np.float64)) / 2
+        best_gap, shift = np.inf, None
+        for a, ((left, right), z, bk, zc, bkc) in moved.items():
+            if items[a][1].get("fid") != c.get("fid"):
+                continue
+            was, gap = _top_at(left, right, z, bk, None, pts, gap=True)
+            now = _top_at(left, right, zc, bkc, None, pts)
+            if gap.min() < best_gap:
+                best_gap, shift = gap.min(), now - was
+        if shift is not None and np.abs(shift).max() > 0:
+            out[n] = ((r[0], r[1], r[2], r[3], r[4], np.asarray(r[5], np.float64) + shift), c)
     return out
 
 
@@ -1389,6 +1551,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     if any(r[5] is not None for r, _c in rbc):  # (trimmed as deck() trims their slabs: context, the decks around)
         ctx = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
         rbc = list(trim_overlaps(rbc, ctx, junctions))
+        rbc = camber_joints(rbc, ctx, junctions)
     if shells.ON:           # (the overlays on decks follow the deck surface and stop at its end: PR #987)
         rbc = _overlays_on_decks(rbc)
     # (each deck end with its layer and width: a ground ribbon's end takes the edges of a deck end of its own layer and
@@ -1935,6 +2098,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     junctions = _junction_surfaces(chunks, context)
     cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
     rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all, junctions)
+    rb = camber_joints(rb, cr_all, junctions)
     if not rb and not piers and not beams and not pads:
         return None
     low_parapet_decks = set(low_parapet_decks or ())
@@ -2571,6 +2735,7 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
         cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
         rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all,
                            junctions)
+        rb = camber_joints(rb, cr_all, junctions)
     else:
         rb = _rb
     if not rb:
