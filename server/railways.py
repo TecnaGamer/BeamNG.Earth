@@ -76,8 +76,10 @@ FOOTBRIDGES_ON = os.environ.get("BNE_FOOTBRIDGES", "on") != "off"     # (footbri
 # line is near, so a footbridge over a motorway near a railway saw no road under it and its slab stood 0.5-1.9 m over
 # the lanes (Brisbane's Ipswich Motorway, a 72 m footway over a secondary road near Hofheim). With BNE_FOOT_CLEAR=on it
 # gets every carriageway (and tunnel) near the tile: one that cannot clear them is left out, as footbridges.py
-# intends. Off by default until reviewed in game.
-FOOT_CLEAR = os.environ.get("BNE_FOOT_CLEAR", "off") == "on"
+# intends. On by default (atlanta-roads, 2026-11-20): Decatur Street's sidewalk, mapped as its own bridge beside
+# the street's over the Downtown Connector, sloped from the Connector's cut up to the far abutment 0.3-4 m over its
+# lanes (33.74975, -84.38259), and the Buford-Spring Connector's at Peachtree (33.79905, -84.39162) the same.
+FOOT_CLEAR = os.environ.get("BNE_FOOT_CLEAR", "on") == "on"
 # Worn railways (disused, abandoned; OSM railway=historic not drawn) cut at every road they cross on the ground (the
 # road revamp's R1, plan §2.2 LIFE; 1.9.0 cut them at motorways and, abandoned, trunk roads only: complaints of old
 # lines across country roads in South Wales, Rheinland-Pfalz, Indiana). BNE_RAIL_LIFECYCLE=on; off by default until
@@ -332,8 +334,10 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
         out = _cut_worn_at_motorways(out, wear_of, motorway_crossings(frame, cells, box, reach), kept, cut_ends)
     out = _drop_stubs(out)
     out = level_bridges(frame, cells, out, near)
-    return _span_clip(out, road_underpasses(frame, cells, box, reach) if underpasses is None else underpasses,
-                      near if clip else None)
+    out = _span_clip(out, road_underpasses(frame, cells, box, reach) if underpasses is None else underpasses)
+    if END_CLEAR_ON:
+        out = _clear_bridge_ends(out, frame, cells)
+    return _span_clip(out, (), near) if clip else out
 
 
 
@@ -744,6 +748,108 @@ def _span_clip(rails, tunnels, near=None):
             out.append(r if r[2] != "ground" or not tunnels else (r[0], r[1], r[2], xy[a:b + 1]))
         else:
             out.append((r[0], r[1], "bridge" if bridge else r[2], xy[a:b + 1]))
+    return out
+
+
+# A rail bridge whose map line ends over the road it spans: its ground part (the ballast's embankment, its foot fanned
+# FOOT_MAX_M out, the grading's fill under it) stood in the road's lanes, a wall of earth to the track's height across
+# the carriageway (the Norfolk Southern line over I-75 / I-85 at 17th Street, Atlanta, 33.79705, -84.39455: the bridge's
+# line stops at the freeway's shoulder, 11 m of embankment over the outer lanes; the user's report 2026-11-20). The
+# ground part's points from a bridge end on are made bridge while they are within the road's half width (+
+# END_CLEAR_SIDE_M) + FOOT_MAX_M + STEP_M of a car road the bridge crosses, END_CLEAR_MAX_M at most.
+# BNE_RAIL_END_CLEAR=off: as mapped.
+END_CLEAR_ON = os.environ.get("BNE_RAIL_END_CLEAR", "on") != "off"
+END_CLEAR_SIDE_M = 1.0
+END_CLEAR_MAX_M = 30.0
+END_CLEAR_JOIN_M = 0.5      # m: a ground part's end this near a bridge part's end of the same line goes on from it
+END_CLEAR_NOT = {"footway", "path", "cycleway", "steps", "pedestrian", "bridleway", "corridor"}
+
+
+def _spanned_roads(frame, cells, boxes):
+    """[(xy (k, 2), half width)] of the car roads' ground parts in cells whose boxes hit any of boxes ((n, 4))."""
+    out, seen = [], set()
+    for feats in cells:
+        if feats is None or not len(feats):
+            continue
+        fb = feats.boxes(frame)
+        hit = np.zeros(len(feats), bool)
+        for b in boxes:
+            hit[_box_hits(fb, tuple(b))] = True
+        if not hit.any():
+            continue
+        specs = roads.road_specs(feats)
+        for i in np.flatnonzero(hit):
+            sp = specs[i]
+            if sp is None or sp.cls in END_CLEAR_NOT:
+                continue
+            for ring in roads.ground_parts(feats, i):
+                e, n = mapgeom.enu_xy(feats, frame, ring)
+                xy = np.column_stack((e, n))
+                key = (str(feats.ids[i]), tuple(np.round(xy[[0, -1]].ravel(), 2))) if len(xy) else None
+                if len(xy) >= 2 and key not in seen:
+                    seen.add(key)
+                    out.append((xy, sp.width / 2 + END_CLEAR_SIDE_M))
+    return out
+
+
+def _clear_bridge_ends(rails, frame, cells):
+    """rails with the ground part going on from a bridge's end (of any feature of the line: a way split at the bridge)
+    made bridge from that end while it stands over a road the bridge crosses (END_CLEAR_*): a bridge piece of its own,
+    the rest ground. The parts keep their sample lattice."""
+    bridges = [n for n, r in enumerate(rails) if r[2] == "bridge" and len(r[3]) >= 2]
+    if not bridges:
+        return rails
+    pad = END_CLEAR_MAX_M + FOOT_MAX_M + STEP_M + 30.0
+    boxes = np.array([[*(rails[n][3].min(0) - pad), *(rails[n][3].max(0) + pad)] for n in bridges])
+    spanned = _spanned_roads(frame, cells, boxes)
+    if not spanned:
+        return rails
+    ground = [m for m, r in enumerate(rails) if r[2] == "ground" and len(r[3]) >= 2]
+    take = {}                                   # ground part index -> [points made bridge from its start, from its end]
+    for n in bridges:
+        _fid, cls, _k, bxy = rails[n]
+        crossed = [(line, half) for line, half in spanned if roads._crossings([bxy], [line])]
+        if not crossed:
+            continue
+        for p in (bxy[0], bxy[-1]):
+            for m in ground:
+                gxy = rails[m][3]
+                if rails[m][1] != cls:
+                    continue
+                for g_end in (False, True):
+                    if float(dnp.hypot(*((gxy[-1] if g_end else gxy[0]) - p))) > END_CLEAR_JOIN_M:
+                        continue
+                    run = gxy[::-1] if g_end else gxy           # from the bridge's end outward
+                    s = _arc(run)
+                    over = np.zeros(len(run), bool)
+                    for line, half in crossed:
+                        d, _a = _underpass_distance(run, line)
+                        over |= d <= half + FOOT_MAX_M + STEP_M
+                    k = 0
+                    while k + 1 < len(run) and over[k + 1] and s[k + 1] <= END_CLEAR_MAX_M:
+                        k += 1
+                    if k == 0:
+                        continue
+                    k = min(k + 1, len(run) - 1)                # (one more: the end clear of the band)
+                    t = take.setdefault(m, [0, 0])
+                    t[int(g_end)] = max(t[int(g_end)], k)
+    if not take:
+        return rails
+    out = []
+    for m, r in enumerate(rails):
+        if m not in take:
+            out.append(r)
+            continue
+        fid, c, _k, xy = r
+        a, b = take[m]
+        if a + b >= len(xy) - 1:                # (all of it over the road: one bridge)
+            out.append((fid, c, "bridge", xy))
+            continue
+        if a:
+            out.append((fid, c, "bridge", xy[:a + 1]))
+        out.append((fid, c, "ground", xy[a:len(xy) - b]))
+        if b:
+            out.append((fid, c, "bridge", xy[len(xy) - b - 1:]))
     return out
 
 

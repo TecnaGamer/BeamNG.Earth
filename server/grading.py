@@ -762,6 +762,19 @@ FAST_GAP_FITS = 4
 # over the ground, the junction's decks humped 2-4 m on it, 2026-11-19). BNE_ABUT_FILL_MAX_GRADE=off: any grade.
 _afg = os.environ.get("BNE_ABUT_FILL_MAX_GRADE", "0.12")
 ABUT_FILL_MAX_GRADE = None if _afg == "off" else float(_afg)
+# A road's last metres into a tunnel's portal: the DEM (and the lidar) there read the cutting's retaining wall, the
+# portal's headwall or the road over the mouth, not the road going in (I-75 northbound's ramp to I-285 eastbound under
+# the Cobb Cloverleaf, 33.88186, -84.45447: the ground 280.3 m at the mouth, 272.3 m 5 m out, the road graded up that
+# 8 m face and the tube's floor pinned on it, a 52 % ramp into the tunnel, 2026-11-20). The samples within
+# PORTAL_LIP_M of a portal end are held to the road's own line from PORTAL_LIP_M to PORTAL_LIP_M + PORTAL_REF_M out
+# (a least-squares line, extended in), PORTAL_LIP_TOL_M over it at most, when the end stands PORTAL_LIP_MIN_M over it.
+# BNE_PORTAL_LIP=off: as read.
+PORTAL_LIP_ON = os.environ.get("BNE_PORTAL_LIP", "on") != "off"
+PORTAL_LIP_M = 10.0
+PORTAL_REF_M = 25.0
+PORTAL_LIP_TOL_M = 0.3
+PORTAL_LIP_MIN_M = float(os.environ.get("BNE_PORTAL_LIP_MIN", "1.5"))   # (1.0 m lowered a crest into a mouth at Porte Maillot, Paris; 2.0 m missed the Downtown Connector at Pine Street)
+PORTAL_END_M = 4.0          # m: a ground part's end this near a tunnel part's end is a portal
 # A track crossing a road at grade (or running along the street, Fells Point's Thames Street) has its bed flushed RAIL_TOP_M
 # (~0.55 m) under the road's surface (railways._flush), and the bed's plan, whose ballast top never gives way, pulled the
 # road's own ground down toward it: a 0.3-0.7 m pothole across the road at every level crossing, a 30 cm step along
@@ -1059,7 +1072,7 @@ def field_heights(frame, elev, xy, r, sigma):
 
 
 def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None, decks=None,
-               rings=None, landings=None, part_ids=None, ext_ids=None, bank_through=None):
+               rings=None, landings=None, part_ids=None, ext_ids=None, bank_through=None, portals=None):
     """plan_road for many (lonlat, spec) parts with one elev call (its cost is per call); abut: per part (start, end)
     flags, the ends leading onto a bridge (fill_abutment); ext: per part (before, after), the lines (k, 2) in the frame
     from its start / end outward along the part the road goes on in (Grader._extensions), or None: their ground is in
@@ -1075,7 +1088,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     part (before, after), None unknown), whose samples a landing then takes by their road (gap_apply); bank_through(xy
     (2,)) -> bool (BNE_ROADSHAPE=decks: Grader._deck_end_simple): a banked road's end onto a bridge whose deck banks
     with it (a simple structure's, roadshape) keeps its curve's context and is not faded level there. Pure given elev,
-    obs and bank_through."""
+    obs and bank_through. portals: per part (start, end) flags, the ends at a tunnel's portal
+    (portal_lip)."""
     if not parts:
         return []
     ll = np.concatenate([lonlat for lonlat, _ in parts])
@@ -1182,6 +1196,10 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
             for at_end, n_ext in ((False, nb), (True, na)):
                 if ab[int(at_end)] or (n_ext and onto[int(at_end)]):
                     zx = fill_abutment(zx, at_end, step)
+        if portals is not None and PORTAL_LIP_ON:
+            for at_end, n_ext in ((False, nb), (True, na)):
+                if portals[j][int(at_end)] and not n_ext and not ab[int(at_end)]:
+                    zx = portal_lip(zx, at_end, step)
         pin = pins[j] if pins is not None else (None, None)
         if pin[0] is not None and not nb and not ab[0]:     # (the end sample held: the smoothing keeps an end's height)
             zx = zx.copy()
@@ -2933,12 +2951,20 @@ class _Planner:
             pclip = []
             pparts = []                         # (fid, spec, lon/lat ring) of each plan (roadcorners.grade_rows)
             coarse = COARSE_EASE_ON and self._coarse(key)
+            portals = None
+            if PORTAL_LIP_ON and parts:
+                try:
+                    portals = self._portal_ends(feats, specs, parts)
+                except Exception as e:      # read as it is rather than no grading
+                    _caught(e)
+                    log.debug("grading: portals of %s: %s: %s", key, type(e).__name__, e)
             through = self._deck_end_simple if roadshape.DECKS else None
             for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
                                                                          coarse=coarse, obs=self._obs(key),
                                                                          decks=self._decks_near(key), rings=rings,
                                                                          landings=landings, part_ids=pids,
-                                                                         ext_ids=ext_ids, bank_through=through)):
+                                                                         ext_ids=ext_ids, bank_through=through,
+                                                                         portals=portals)):
                 if p is not None:
                     p.rid = road_id(fid)
                     import lanesections
@@ -5188,6 +5214,29 @@ class _Planner:
             ap = aa[i]
             out[i] = prev
         return z
+
+    def _portal_ends(self, feats, specs, parts):
+        """plan_roads' portals of a cell's parts [(lonlat, spec)]: per part (start, end), is that end within
+        PORTAL_END_M of an end of a car road's tunnel part in feats (PORTAL_LIP_*)."""
+        ends = []
+        for i in range(len(feats)):
+            if specs[i] is None:
+                continue
+            for ring in roadsmod.tunnel_parts(feats, i):
+                ring = np.asarray(ring, np.float64)
+                if len(ring) >= 2:
+                    ends.extend([ring[0, :2], ring[-1, :2]])
+        if not ends:
+            return [(False, False)] * len(parts)
+        te = np.asarray(ends, np.float64)
+        e, n, _ = self.frame.geodetic_to_enu(te[:, 1], te[:, 0], 0.0)
+        txy = np.stack([np.asarray(e), np.asarray(n)], axis=1)
+        pe = np.array([[r[0], r[-1]] for r, _sp in parts], np.float64).reshape(-1, 2)
+        e, n, _ = self.frame.geodetic_to_enu(pe[:, 1], pe[:, 0], 0.0)
+        pxy = np.stack([np.asarray(e), np.asarray(n)], axis=1)
+        d = dnp.hypot(pxy[:, None, 0] - txy[None, :, 0], pxy[:, None, 1] - txy[None, :, 1]).min(axis=1)
+        near = (d <= PORTAL_END_M).reshape(-1, 2)
+        return [(bool(a), bool(b)) for a, b in near]
 
     def _abut_ends(self, key, pe, ok=None):
         """Which of the points pe (n, 2) (road ends; ok: those to look at) near cell key are within APPROACH_TOUCH_M
@@ -9588,6 +9637,31 @@ def gap_fill(z, d, zb):
     d = np.asarray(d, np.float64)
     far = max(float(np.max(d)) if len(d) else 0.0, FAST_GAP_FAR_M) + 1.0
     return gap_apply(z, np.stack([d, np.zeros(len(d))], axis=1), np.array([[0.0, 0.0], [far, 0.0]]), line)
+
+
+def portal_lip(z, at_end, step=PROFILE_STEP):
+    """z (a part's profile samples, step m apart) with the ones within PORTAL_LIP_M of its start (at_end False) or end
+    held to the line of the road's own samples PORTAL_LIP_M .. PORTAL_LIP_M + PORTAL_REF_M from there (PORTAL_LIP_*)."""
+    z = np.asarray(z, np.float64)
+    near = int(round(PORTAL_LIP_M / step))
+    far = near + int(round(PORTAL_REF_M / step))
+    if len(z) < far + 1 or near < 1:
+        return z
+    w = z[::-1] if at_end else z
+    d = np.arange(len(w), dtype=np.float64) * step
+    ref = slice(near, far + 1)
+    if not np.isfinite(w[ref]).all():
+        return z
+    x, y = d[ref], w[ref]           # (the least-squares line in plain sums: np.polyfit is LAPACK, platform maths)
+    xm, ym = float(x.sum()) / len(x), float(y.sum()) / len(y)
+    a = float(((x - xm) * (y - ym)).sum()) / max(float(((x - xm) * (x - xm)).sum()), 1e-12)
+    b = ym - a * xm
+    line = a * d[:near] + b
+    if not w[0] - line[0] > PORTAL_LIP_MIN_M:
+        return z
+    w = w.copy()
+    w[:near] = np.minimum(w[:near], line + PORTAL_LIP_TOL_M)
+    return w[::-1] if at_end else w
 
 
 def fill_abutment(z, at_end, step=PROFILE_STEP):
