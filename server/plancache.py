@@ -111,7 +111,7 @@ def plans_format():
     # the switch's version, so its plans never mix with anyone else's)
     ds = f".ds{revisit.SWITCH_VERSIONS['BNE_DECK_STRUCT']}" if structures.ABUT else ""
     import roadshape
-    profile = ".s4v2" if roadshape.SURFACE_PROFILE else ""
+    profile = ".s4v3" if roadshape.SURFACE_PROFILE else ""
     return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + profile + (".gg1" if grading.GUARD_ON else "") + ds \
         + (".bv3" if grading.BATTER_ON else "")
 
@@ -195,6 +195,7 @@ class PlanCache:
             pl.rid, pl.max_wall = m["rid"], m["max_wall"]
             pl.rank = int(m.get("rank", -1))
             pl.steep = bool(m.get("steep", False))
+            pl.surface_width = bool(m.get("surface_width", False))
             pl.open_tunnel = bool(m.get("open_tunnel", False))
             pl.bank = next(banks) if m.get("bank") else None
             if m.get("widen"):
@@ -373,6 +374,7 @@ class PlanCache:
                            "max_wall": float(p.max_wall), "cut": p.cut is not None,
                            "bank": getattr(p, "bank", None) is not None, "steep": bool(getattr(p, "steep", False)),
                            "open_tunnel": bool(getattr(p, "open_tunnel", False)),
+                           **({"surface_width": True} if getattr(p, "surface_width", False) else {}),
                            "widen": getattr(p, "widen", None) is not None}
                           for fid, p in plans],
                 "keeps": [float(hw) for _xy, hw in keeps], "covers": [float(w) for _xy, w in covers],
@@ -582,6 +584,7 @@ class PlanCache:
                            "rid": int(p.rid), "rank": int(getattr(p, "rank", -1)),
                            "max_wall": float(p.max_wall), "cut": p.cut is not None,
                            "bank": getattr(p, "bank", None) is not None, "steep": bool(getattr(p, "steep", False)),
+                           **({"surface_width": True} if getattr(p, "surface_width", False) else {}),
                            "widen": getattr(p, "widen", None) is not None}
                           for fid, p in plans],
                 "keeps": [float(hw) for _xy, hw in keeps], "short": bool(short), "decks": decks}
@@ -625,6 +628,7 @@ class PlanCache:
                 pl.rid, pl.max_wall = m["rid"], m["max_wall"]
                 pl.rank = int(m.get("rank", -1))
                 pl.steep = bool(m.get("steep", False))
+                pl.surface_width = bool(m.get("surface_width", False))
                 pl.bank = next(banks) if m.get("bank") else None
                 if m.get("widen"):
                     set_widen(pl, next(widens))

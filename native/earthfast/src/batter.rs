@@ -324,7 +324,7 @@ pub fn params(za: ArrayView1<f64>, zb: ArrayView1<f64>, rk: ArrayView1<i64>, rid
 #[derive(Clone, Copy)]
 struct Seg {
     ax: f64, ay: f64, abx: f64, aby: f64, l2: f64, len: f64, za: f64, zb: f64, h: f64, rh: f64, ba: f64, bb: f64,
-    banked: bool, m: [[f64; 2]; 2], r: [[f64; 2]; 2], old: [f64; 2], reach: f64, reach2: f64,  // (m, r: [side][end])
+    width_delta: f64, banked: bool, m: [[f64; 2]; 2], r: [[f64; 2]; 2], old: [f64; 2], reach: f64, reach2: f64,  // (m, r: [side][end])
     // (per end, then side: the unit direction out of the segment its end cap measures how far behind that end a point
     // lies (cap_loosen); the neighbour's own along the plan where it goes on with that side's corridor)
     cap: [[[f64; 2]; 2]; 2],
@@ -336,6 +336,7 @@ struct Seg {
 /// The segments' arrays (grading.PlanPack's) and each side's params (m, r: (n, 4) as params gives them).
 pub struct Segs<'a> {
     pub a: ArrayView2<'a, f64>, pub b: ArrayView2<'a, f64>, pub za: ArrayView1<'a, f64>, pub zb: ArrayView1<'a, f64>,
+    pub width_delta: Option<ArrayView1<'a, f64>>,
     pub h: ArrayView1<'a, f64>, pub rh: ArrayView1<'a, f64>, pub ba: ArrayView1<'a, f64>,
     pub bb: ArrayView1<'a, f64>, pub m: ArrayView2<'a, f64>, pub r: ArrayView2<'a, f64>,
     pub fl: ArrayView2<'a, u8>,
@@ -385,6 +386,7 @@ fn prep(s: &Segs, i: usize, p: &ApplyPrm) -> Seg {
     let rc = 0.5 * len + reach;
     let rc = rc + 1e-6 * (1.0 + rc);
     Seg {
+        width_delta: s.width_delta.as_ref().map_or(0.0, |d| d[i]),
         ax, ay, abx, aby, l2, len, za: s.za[i], zb: s.zb[i], h: s.h[i], rh: s.rh[i], ba: s.ba[i],
         bb: s.bb[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0, m, r, old, reach, reach2: reach * reach, cap,
         mx: ax + 0.5 * abx, my: ay + 0.5 * aby, rc2: rc * rc,
@@ -425,7 +427,8 @@ fn pair_eval(g: &Seg, x: f64, y: f64, p: &ApplyPrm) -> Option<Pv> {
     }
     let cross = if g.l2 > 1e-12 { (qy * g.abx - qx * g.aby) / g.len } else { 0.0 };
     let d = d2.sqrt();
-    let x_out = d - g.h;
+    let inset = crate::gradebins::taper_inset(g.width_delta, t);
+    let x_out = d - (g.h - inset);
     let mut v = Pv { wc: 0.0, wo: 0.0, cor: false, lo: 0.0, lo_off: 0.0, up: 0.0, up_off: 0.0 };
     // inside the core and core_blend past it: today's
     if x_out < p.core_blend {
@@ -456,7 +459,7 @@ fn pair_eval(g: &Seg, x: f64, y: f64, p: &ApplyPrm) -> Option<Pv> {
         z += grade * over.clamp(-EXT_M, EXT_M);
     }
     if g.banked && g.l2 > 1e-12 {   // (a banked curve: its edge's height, as gradebins' target)
-        z += (g.ba + (g.bb - g.ba) * t) * cross.clamp(-g.rh, g.rh);
+        z += (g.ba + (g.bb - g.ba) * t) * cross.clamp(-(g.rh - inset), g.rh - inset);
     }
     let xs = x_out.min(p.l0);
     let mut f = m * shape(x_out - p.l0, p.crest);

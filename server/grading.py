@@ -904,7 +904,7 @@ class Plan:
     """One road's grading: vertices (n, 2) in the frame's ENU metres, their target heights, core half width; abut: does
     it lead onto a bridge at its (first, last) vertex (grade_points)."""
     __slots__ = ("xy", "z", "half", "bbox", "abut", "cut", "road_half", "rid", "rank", "max_wall", "bank", "steep",
-                 "widen", "open_tunnel")
+                 "widen", "open_tunnel", "surface_width")
 
     def __init__(self, xy, z, half, abut=(False, False), cut=None, road_half=None):
         self.xy, self.z, self.half, self.abut = xy, z, float(half), (bool(abut[0]), bool(abut[1]))
@@ -918,6 +918,7 @@ class Plan:
         self.bank = None                # (n,) its cross slope (m per m toward its left: a banked curve, bank) or None
         self.steep = False              # a mountain pass road's: steep sides (STEEP_RUN, roads._mountain_roads)
         self.open_tunnel = False        # a tunnel part's open section: a lower road crossing it eases onto it (_plan_flags)
+        self.surface_width = False       # width sampled on a welded pavement outline
         self.widen = None               # (n,) m its core and carriageway are wider each side there (hairpin_cores) or None
         pad = half + T_MAX
         self.bbox = (xy[:, 0].min() - pad, xy[:, 1].min() - pad, xy[:, 0].max() + pad, xy[:, 1].max() + pad)
@@ -1665,6 +1666,7 @@ def _replan(p, xy, z, abut=None, cut=False):
     q.rank = getattr(p, "rank", GRADE_RANK_NONE)
     q.steep = bool(getattr(p, "steep", False))
     q.open_tunnel = bool(getattr(p, "open_tunnel", False))
+    q.surface_width = getattr(p, "surface_width", False)
     set_widen(q, getattr(p, "widen", None))
     return q
 
@@ -7879,6 +7881,7 @@ def mapped_plan(p, fn):
     q.rank = getattr(p, "rank", GRADE_RANK_NONE)
     q.steep = getattr(p, "steep", False)
     q.open_tunnel = getattr(p, "open_tunnel", False)
+    q.surface_width = getattr(p, "surface_width", False)
     set_widen(q, getattr(p, "widen", None))
     return q
 
@@ -8230,6 +8233,7 @@ def trim_plan(p, box):
             q.bank = pb
             q.steep = getattr(p, "steep", False)
             q.open_tunnel = getattr(p, "open_tunnel", False)
+            q.surface_width = getattr(p, "surface_width", False)
             set_widen(q, pw)
             out.append(q)
         i = j + 1
@@ -8371,7 +8375,7 @@ def merge_plan_set(plans):
     plans): weld_continuations (WELD_ON; a failure logged, the plans left as they were), trim_side_mouths
     (TRIM_SIDE_MOUTHS_ON), each with the plans' own ranks, on plans (a plain [Plan], in place); returns PlanPack(plans)."""
     import fast
-    fast.require(283, "plan_merge")     # (217: the trimmed plans' banks / widens; 283: the plans' flags, _plan_flags)
+    fast.require(560, "plan_merge")     # (217: the trimmed plans' banks / widens; 283: the plans' flags, _plan_flags)
     f64 = np.float64
     xy, off, z = _plan_lines(plans)
     wds = [getattr(p, "widen", None) for p in plans]
@@ -8407,7 +8411,7 @@ def merge_plan_set(plans):
     return pack
 
 
-PLAN_STEEP, PLAN_OPEN_TUNNEL = 1, 2     # (earthfast gradebins STEEP / OPEN_TUNNEL)
+PLAN_STEEP, PLAN_OPEN_TUNNEL, PLAN_SURFACE_WIDTH = 1, 2, 4     # (earthfast gradebins STEEP / OPEN_TUNNEL)
 
 
 def _plan_flags(plans):
@@ -8415,7 +8419,8 @@ def _plan_flags(plans):
     (Plan.steep), PLAN_OPEN_TUNNEL a tunnel's open section (Plan.open_tunnel: a lower-ranked road crossing it takes the
     side ease onto it, whatever the class gap)."""
     return np.array([(PLAN_STEEP if getattr(p, "steep", False) else 0)
-                     | (PLAN_OPEN_TUNNEL if getattr(p, "open_tunnel", False) else 0) for p in plans], np.uint8)
+                     | (PLAN_OPEN_TUNNEL if getattr(p, "open_tunnel", False) else 0)
+                     | (PLAN_SURFACE_WIDTH if getattr(p, "surface_width", False) else 0) for p in plans], np.uint8)
 
 
 def _per_plan(vs, width=None):
@@ -8455,7 +8460,7 @@ class PlanPack:
       end abutment within ABUT_NEAR_M, NaN if none, through the plans it goes on into too (the piece a map cell's edge
       cut a few metres short of an abutment; Codex's review of PR #920, GitHub #909): the ground past the abutment
       falls away at ABUT_UNDER_GRADE (grade_points);
-    - a plan widened in places (Plan.widen): each segment by the more of its ends'.
+    - a plan widened in places (Plan.widen): each segment by the more of its ends', with width_delta for welded outlines.
     Its arrays: a, b (segments, 2), za, zb, ba, bb, h, rh, rid, rk, ab, abd (segments, 2), cut (segments, 6), st, lk;
     box (plans, 4); of: each segment's plan; s0 (plans + 1,): each plan's first segment; nb (segments, 2): each
     segment end's continuation (-1 none, else 2 k + j: segment k's end j lies there; its own plan's next segment, or at
@@ -8463,7 +8468,7 @@ class PlanPack:
 
     def __init__(self, plans):
         import fast
-        fast.require(283, "plan_pack")     # (283: the plans' flags, _plan_flags)
+        fast.require(560, "plan_pack")     # (283: the plans' flags, _plan_flags)
         f64 = np.float64
         xy, off, z = _plan_lines(plans)
         rids = [getattr(p, "rid", -1) for p in plans]
@@ -8527,14 +8532,14 @@ def grade_points(px, py, base, plans, lift=0.0):
     # (522: a corridor loosened behind an end its plan does not carry it on past, batter.rs cap_loosen; 531: each end's
     # continuation from the pack (nb: its own plan's next segment, the one plan it goes on into), not inferred from the
     # pack's order and coincident points)
-    fast.require(531, "batter_apply_vw")
+    fast.require(560, "batter_apply_vw")
     f64 = np.float64
     v, w = fast._ef.batter_apply_vw(
         np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64),
         pack.a, pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.ba, pack.bb, bt[0], bt[1], bt[2], pack.nb,
         (float(BATTER_L0_M), float(BATTER_CREST_M), float(BATTER_STRIP_LO), float(BATTER_STRIP_UP),
          float(BATTER_CLOSE_T), float(BATTER_CLOSE_K), float(BATTER_SMOOTH_K), float(BATTER_CORE_BLEND_M),
-         float(T_MAX), float(BATTER_OLD_FADE_M), float(lift), float(BATTER_BIN_M)))
+         float(T_MAX), float(BATTER_OLD_FADE_M), float(lift), float(BATTER_BIN_M)), getattr(pack, "width_delta", None))
     out = v
     need = w > 0.0
     sub = np.flatnonzero(need)
@@ -8674,10 +8679,11 @@ def batter_params(pack, elev_xy, walls_rays=None, memo=None, info=None):
     bld = np.full((ns, 2), np.inf)
     todo = np.arange(ns)
     keys = None
+    probe_half = getattr(pack, "probe_half", pack.h)
     if memo is not None and ns:
         # (a segment's probes and rays are a pure function of its a, b and h: batter_probes; their reads each point's
         # and ray's own, the same in any batch)
-        keys = BatterMemo.keys_of(pack.a, pack.b, pack.h)
+        keys = BatterMemo.keys_of(pack.a, pack.b, probe_half)
         hit, vals = memo.find(keys)
         if info is not None:
             info["hits"] = int(hit.sum())
@@ -8687,7 +8693,7 @@ def batter_params(pack, elev_xy, walls_rays=None, memo=None, info=None):
         todo = np.flatnonzero(~hit)
     if len(todo):
         a_t, b_t, h_t = (np.ascontiguousarray(pack.a[todo], f64), np.ascontiguousarray(pack.b[todo], f64),
-                         np.ascontiguousarray(pack.h[todo], f64))
+                         np.ascontiguousarray(probe_half[todo], f64))
         pts, org, dirs = fast._ef.batter_probes(a_t, b_t, h_t, offs)
         nat[todo] = np.asarray(elev_xy(pts[:, 0], pts[:, 1]), f64).reshape(len(todo), k2)
         if walls_rays is not None:
@@ -8733,7 +8739,7 @@ def _grade_points_today(px, py, base, pack, lift, out, box=None):
         keep = pack.seg_keep(x0, y0, x1, y1)
         if keep is None:
             return out
-        fast.require(216, "grade_points_binned")    # (gradebins.rs)
+        fast.require(560, "grade_points_binned")    # (gradebins.rs)
         return fast._ef.grade_points_binned(
             np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64), pack.a,
             pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.rid, pack.rk, pack.ab, pack.cut, pack.ba, pack.bb, pack.st,
@@ -8742,13 +8748,16 @@ def _grade_points_today(px, py, base, pack, lift, out, box=None):
             float(WALL_AHEAD_M), bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
             float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(RANK_SIDE_FADE_M),
             float(RANK_HEIGHT_FADE_M), float(ABUT_UNDER_GRADE), np.ascontiguousarray(pack.abd, f64), keep,
-            float(GRADE_BIN_M))
+            float(GRADE_BIN_M), getattr(pack, "width_delta", None))
     # every segment of the plans near the points: ends, end heights, reach (core half width + T_MAX)
     got = pack.near(x0, y0, x1, y1)
     if got is None:
         return out
     A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK, ABD = got
-    fast.require(181, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
+    delta = getattr(pack, "width_delta", None)
+    if delta is not None and len(A) != len(delta):
+        delta = delta[pack.seg_keep(x0, y0, x1, y1).astype(bool)]
+    fast.require(560, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
                                              # legs blend over each other's bands: 133, a pass road's core
                                              # given way to whole: 134, no carriageway past an abutment end: 169,
                                              # a lower road over a higher one's core, easing onto it: 181)
@@ -8760,7 +8769,7 @@ def _grade_points_today(px, py, base, pack, lift, out, box=None):
                                  bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
                                  float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(RANK_SIDE_FADE_M),
                                  float(RANK_HEIGHT_FADE_M), float(ABUT_UNDER_GRADE),
-                                 np.ascontiguousarray(ABD, f64))
+                                 np.ascontiguousarray(ABD, f64), delta)
 
 
 def _line_boxes(lines):

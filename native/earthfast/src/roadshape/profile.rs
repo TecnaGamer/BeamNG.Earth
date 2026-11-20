@@ -677,6 +677,58 @@ pub fn surface_road_floors(decks: Vec<[[f64; 3]; 2]>, ground: Vec<[[f64; 2]; 2]>
     }).collect()
 }
 
+/// A pin and the grade check bound every reachable knot on the same member.
+/// Ignore sub-0.5 m segments exactly as the grade check does. Interpolation of
+/// two upper bounds is an upper bound on the height at a recorded crossing.
+fn pinned_ceiling(ms: &[Member], base: &[usize], pins: &[Lin], n: usize,
+                  max_grade: f64, grade_add: f64, margin: f64) -> Vec<f64> {
+    let mut ceiling = vec![f64::INFINITY; n];
+    for p in pins {
+        let i = p.terms[0].0;
+        ceiling[i] = ceiling[i].min(p.r + margin);
+    }
+    for (m, &start) in ms.iter().zip(base) {
+        let bounds = &mut ceiling[start..start + m.s.len()];
+        if bounds.iter().all(|h| !h.is_finite()) { continue; }
+        let mut grade = max_grade;
+        for (s, z) in m.s.windows(2).zip(m.z.windows(2)) {
+            let ds = s[1] - s[0];
+            if ds >= 0.5 { grade = grade.max((z[1] - z[0]).abs() / ds); }
+        }
+        grade += grade_add;
+        for k in 1..bounds.len() {
+            let ds = m.s[k] - m.s[k - 1];
+            if ds >= 0.5 { bounds[k] = bounds[k].min(bounds[k - 1] + ds * grade); }
+        }
+        for k in (1..bounds.len()).rev() {
+            let ds = m.s[k] - m.s[k - 1];
+            if ds >= 0.5 { bounds[k - 1] = bounds[k - 1].min(bounds[k] + ds * grade); }
+        }
+    }
+    ceiling
+}
+
+/// Follow the through joins from a fork arm, including an approach where the
+/// pavement continues on ground. Stop at an ambiguous junction or a cycle.
+type ThroughJoins = BTreeMap<(usize, usize), BTreeSet<(usize, usize)>>;
+
+fn fork_arm(ms: &[Member], through: &ThroughJoins, first: (usize, usize), reach: f64)
+    -> Vec<(usize, usize, f64)> {
+    let mut path = Vec::new();
+    let mut used = BTreeSet::new();
+    let (mut m, mut e) = first;
+    let mut start = 0.0;
+    while used.insert(m) {
+        path.push((m, e, start));
+        start += ms[m].s.last().unwrap();
+        if start >= reach { break; }
+        let Some(next) = through.get(&(m, 1 - e)) else { break };
+        if next.len() != 1 { break; }
+        (m, e) = *next.first().unwrap();
+    }
+    path
+}
+
 /// floors: (member, x, y, floor m).
 fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(usize, [f64; 2], f64)], prm: &[f64],
               surface: Option<&[SurfaceFork]>)
@@ -771,31 +823,77 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
     let mut pinned_end: Vec<[bool; 2]> = vec![[false; 2]; ms.len()];
     let mut work: u64 = 0;
     if surface.is_some() {
-        rep.push(0.0); // number of non-relaxable surface equalities
+        rep.extend([0.0, 0.0]); // required surface equalities; events ending before their nose
+    }
+    let mut through = ThroughJoins::new();
+    if !pavement.is_empty() {
+        for &[a, ea, b, eb, c1] in joins {
+            let (x, y) = ((a as usize, ea as usize), (b as usize, eb as usize));
+            if c1 != 0 && x.0 < ms.len() && y.0 < ms.len() && x.1 <= 1 && y.1 <= 1 {
+                through.entry(x).or_default().insert(y);
+                through.entry(y).or_default().insert(x);
+            }
+        }
     }
     for (a, ea, b, eb, reach) in pavement {
-        let main = &ms[a];
-        let branch = &ms[b];
-        let length = *main.s.last().unwrap();
-        let reach = f64::from_bits(reach).min(length);
-        for i in 0..branch.xy.len() {
-            let k = if eb == 0 { i } else { branch.xy.len() - 1 - i };
-            work += main.xy.len() as u64;
-            if work > BUDGET.work {
-                rep[0] = S_BUDGET as f64;
-                return fallback(S_BUDGET, rep);
+        let nose = f64::from_bits(reach);
+        let main = fork_arm(ms, &through, (a, ea), nose);
+        // The outside arm of a curved fork may be longer than the main.
+        let branch = fork_arm(ms, &through, (b, eb), f64::INFINITY);
+        let mut prev = None;
+        let mut reached = false;
+        'branch: for (m, e, _) in branch {
+            for i in 0..ms[m].xy.len() {
+                let k = if e == 0 { i } else { ms[m].xy.len() - 1 - i };
+                let p = ms[m].xy[k];
+                let mut best = (f64::INFINITY, 0, 0., 0.);
+                for &(host, end, offset) in &main {
+                    work += ms[host].xy.len() as u64;
+                    if work > BUDGET.work {
+                        rep[0] = S_BUDGET as f64;
+                        return fallback(S_BUDGET, rep);
+                    }
+                    let (dist, t) = nearest(&ms[host].xy, &ms[host].s, p);
+                    if dist < best.0 {
+                        let length = *ms[host].s.last().unwrap();
+                        best = (dist, host, t, offset + if end == 0 { t } else { length - t });
+                    }
+                }
+                let (_, host, t, station) = best;
+                if i > 0 && station <= 0.0 { break 'branch; }
+                let last = main.last().unwrap();
+                let available = last.2 + ms[last.0].s.last().unwrap();
+                if available < nose && station >= available && past_end(&ms[last.0].xy, 1 - last.1, p) {
+                    break 'branch;
+                }
+                let id = base[m] + k;
+                let mut terms = Vec::new();
+                if station > nose {
+                    // The nose falls between two branch knots. Constrain the
+                    // interpolated height at that station on both roads.
+                    if let Some((prior, s)) = prev {
+                        if s < nose {
+                            let u = (nose - s) / (station - s);
+                            terms.extend([(prior, 1.0 - u), (id, u)]);
+                            let &(h, end, offset) = main.iter().rev().find(|row| row.2 <= nose).unwrap();
+                            let arc = if end == 0 { nose - offset } else { ms[h].s.last().unwrap() - (nose - offset) };
+                            lin_at(&base, &ms[h], h, arc, -1.0, &mut terms);
+                        }
+                    }
+                } else {
+                    terms.push((id, 1.0));
+                    lin_at(&base, &ms[host], host, t, -1.0, &mut terms);
+                }
+                if !terms.is_empty() {
+                    eqs.push(Lin { terms, r: 0.0 });
+                    eq_group.push(-1);
+                    rep[15] += 1.0;
+                }
+                if station >= nose { reached = true; break 'branch; }
+                prev = Some((id, station));
             }
-            let (_, t) = nearest(&main.xy, &main.s, branch.xy[k]);
-            let station = if ea == 0 { t } else { length - t };
-            if station > reach || (i > 0 && (station <= 0.0 || station >= length)) {
-                break;
-            }
-            let mut terms = vec![(base[b] + k, 1.0)];
-            lin_at(&base, main, a, t, -1.0, &mut terms);
-            eqs.push(Lin { terms, r: 0.0 });
-            eq_group.push(-1); // a conflict requires fallback of the whole chain
-            rep[15] += 1.0;
         }
+        if !reached { rep[16] += 1.0; }
     }
     for b in 0..ms.len() {
         if !ms[b].deck || ms[b].xy.len() < 2 {
@@ -1097,18 +1195,30 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
         }
         d
     };
+    let ceiling = surface.map(|_| pinned_ceiling(ms, &base, &pin_terms, n, max_grade, grade_add, margin));
     for &(m, p, f) in floors {
         if m >= ms.len() || !ms[m].deck {
             continue;
         }
         work += ms[m].xy.len() as u64;
         let (_, t) = nearest(&ms[m].xy, &ms[m].s, p);
-        if abut_dist(&ms[m], t) < at_grade {
+        if surface.is_none() && abut_dist(&ms[m], t) < at_grade {
             continue;
         }
         let r = if surface.is_some() { f + margin } else { f.min(z_at(&ms[m], t)) };
         let mut terms = Vec::new();
         lin_at(&base, &ms[m], m, t, 1.0, &mut terms);
+        if let Some(bound) = &ceiling {
+            let highest: f64 = terms.iter().map(|&(i, w)| w * bound[i]).sum();
+            if highest + 1e-6 < f {
+                rep[0] = S_CLEARANCE as f64;
+                rep[7] = 1.0;
+                rep[10] = m as f64;
+                rep[12] = f - highest;
+                rep.extend([t, f, highest]);
+                return fallback(S_CLEARANCE, rep);
+            }
+        }
         ineq.push(Lin { terms, r });
         ineq_kind.push(0u8);
     }
@@ -1177,15 +1287,23 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
                 // over it holds the clearance near its abutment too (never worse than today's: min(need, dz)), Codex
                 // review of P3d)
                 let near = abut_dist(a, ta) < at_grade || abut_dist(b, tb) < at_grade;
-                if near && (a.deck && b.deck || app_joined.contains(&(ma.min(mb), ma.max(mb)))) {
+                if near && surface.is_none() && (a.deck && b.deck || app_joined.contains(&(ma.min(mb), ma.max(mb)))) {
                     continue;
                 }
                 let (za, zb) = (z_at(a, ta), z_at(b, tb));
                 if (za - zb).abs() < STACK_MIN_M {
                     continue;       // (level with each other today: a junction at grade, nothing to clear)
                 }
-                // (the upper: the higher today, whatever the map's levels say: the solve never swaps two decks)
-                let (up, tu, lo, tl, dz) = if za >= zb {
+                // When neither profile has established the crossing clearance, use mapped deck
+                // order. An already separated pair retains its built order.
+                let existing_clearance = if za >= zb { b.under } else { a.under };
+                let a_over = if surface.is_some() && a.deck && b.deck && a.level != b.level
+                    && (za - zb).abs() < existing_clearance {
+                    a.level > b.level
+                } else {
+                    za >= zb
+                };
+                let (up, tu, lo, tl, dz) = if a_over {
                     (ma, ta, mb, tb, za - zb)
                 } else {
                     (mb, tb, ma, ta, zb - za)

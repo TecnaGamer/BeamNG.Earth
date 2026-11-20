@@ -99,6 +99,23 @@ class Batter(unittest.TestCase):
         self.assertLess(float(max(zs[0], zs[-1])), .1)
         self.assertEqual(plan.half + plan.widen[0], 4.5)  # the core beyond the lane event
 
+    def test_welded_taper_between_grading_sections(self):
+        xy = np.array([[0., 0.], [40., 0.], [80., 0.]])
+        plan = grading.Plan(xy, np.full(3, 6.), 3.)
+        plan.rank, plan.rid = 110, 1
+        plan.surface_width = True
+        grading.set_widen(plan, np.array([0., 4., 0.]))
+
+        def ground(x, y):
+            return np.zeros_like(y)
+
+        pack = packed([plan], ground)
+        for station in (10., 20., 30., 39.999, 40., 40.001, 50., 60., 70.):
+            half = 3. + min(station, 80. - station) * .1
+            for side in (-1., 1.):
+                z = self.profile(pack, ground, side * np.array([half, half + 1.]), station)
+                np.testing.assert_allclose(z, [6., 6. - grading.BATTER_STRIP_LO], atol=1e-5, rtol=0)
+
     def test_off_is_today(self):
         rng = np.random.default_rng(3)
         plans = random_plans(rng, 60, (0, 0, 400, 400))
