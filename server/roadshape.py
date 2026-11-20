@@ -1208,7 +1208,7 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
     import time
     import fast
     import roads as roadsmod
-    fast.require(555 if SURFACE_PROFILE else PROFILE_KERNEL, "profile_solve")
+    fast.require(560 if SURFACE_PROFILE else PROFILE_KERNEL, "profile_solve")
     ef = fast._ef
     keys, seen = [], set()
     for k in comp:          # (one deck kept twice under two part keys, a copy per cell: once, the first key's)

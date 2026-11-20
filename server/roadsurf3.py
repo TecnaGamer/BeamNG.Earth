@@ -455,6 +455,7 @@ def grade_plans(planner, box, plans, specs, country):
         widen += plan.half - plan.road_half
         plan.half = plan.road_half
         widen[inside] = rows[inside, 2] - plan.road_half
+        plan.surface_width = True
         grading.set_widen(plan, widen)
 
 

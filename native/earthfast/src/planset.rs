@@ -724,7 +724,7 @@ struct PackConsts {
 /// PlanPack's arrays (None: no plan of 2+ vertices).
 type PackOut = Option<(usize, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<i64>,
                        Vec<i64>, Vec<u8>, Vec<f64>, Vec<f64>, Vec<u8>, Vec<u8>, Vec<f64>, Vec<i64>, Vec<i64>,
-                       Vec<i64>)>;
+                       Vec<i64>, Option<Vec<f64>>)>;
 
 /// A plan as PlanPack packs it (_dedupe_plan's): plan k's arrays.
 struct Row {
@@ -811,6 +811,8 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
         // (np.concatenate of the rows' banks / widens, read at the vertices' positions in the concatenated rows)
         let bk: Vec<f64> = rows.iter().flat_map(|r| r.bank.iter().copied()).collect();
         let wd: Vec<f64> = rows.iter().flat_map(|r| r.widen.iter().copied()).collect();
+        const SURFACE_WIDTH: u8 = 4; // grading.PLAN_SURFACE_WIDTH
+        let mut width_delta = steep.iter().any(|&f| f & SURFACE_WIDTH != 0).then(|| Vec::with_capacity(ns));
         let any_w = wd.iter().any(|&w| w != 0.0);
         let mut g = 0usize;
         for r in &rows {
@@ -832,6 +834,9 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
                 h.push(half[j]);
                 rh.push(road_half[j]);
                 ws.push(nmax(w0, w1));
+                if let Some(delta) = &mut width_delta {
+                    delta.push(if steep[j] & SURFACE_WIDTH != 0 { w1 - w0 } else { 0.0 });
+                }
             }
             g += r.xy.len();
         }
@@ -1050,7 +1055,7 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
         let mut lastv = vec![false; ns];
         for r in 0..n {
             for _ in 0..nseg[r] {
-                st.push(steep[rows[r].k]);
+                st.push(steep[rows[r].k] & !SURFACE_WIDTH);
             }
             if nseg[r] > 0 {
                 first[s0[r]] = true;
@@ -1105,7 +1110,7 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
                 }
             }
         }
-        Ok(Some((n, a, b, za, zb, ba, bb, h, rh, ridv, rk, ab, abd, cutp, st, lk, boxv, of, s0v, nbv)))
+        Ok(Some((n, a, b, za, zb, ba, bb, h, rh, ridv, rk, ab, abd, cutp, st, lk, boxv, of, s0v, nbv, width_delta.filter(|v| v.iter().any(|&d| d != 0.0)))))
     }
 }
 
@@ -1243,7 +1248,7 @@ fn pack_dict(py: Python<'_>, res: PackOut) -> PyResult<Bound<'_, PyDict>> {
     let d = PyDict::new(py);
     match res {
         None => d.set_item("n", 0)?,
-        Some((n, a, b, za, zb, ba, bb, h, rh, ridv, rk, ab, abd, cutp, st, lk, boxv, of, s0v, nbv)) => {
+        Some((n, a, b, za, zb, ba, bb, h, rh, ridv, rk, ab, abd, cutp, st, lk, boxv, of, s0v, nbv, width_delta)) => {
             let ns = za.len();
             d.set_item("n", n)?;
             d.set_item("a", Array2::from_shape_vec((ns, 2), a).unwrap().into_pyarray(py))?;
@@ -1252,6 +1257,11 @@ fn pack_dict(py: Python<'_>, res: PackOut) -> PyResult<Bound<'_, PyDict>> {
             d.set_item("zb", zb.into_pyarray(py))?;
             d.set_item("ba", ba.into_pyarray(py))?;
             d.set_item("bb", bb.into_pyarray(py))?;
+            if let Some(delta) = width_delta {
+                let mid: Vec<_> = delta.iter().zip(&h).map(|(d, h)| h - 0.5 * d.abs()).collect();
+                d.set_item("probe_half", mid.into_pyarray(py))?;
+                d.set_item("width_delta", delta.into_pyarray(py))?;
+            }
             d.set_item("h", h.into_pyarray(py))?;
             d.set_item("rh", rh.into_pyarray(py))?;
             d.set_item("rid", ridv.into_pyarray(py))?;

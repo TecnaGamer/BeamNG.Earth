@@ -140,6 +140,53 @@ class Solve(unittest.TestCase):
             k = int(nose / 2) + 1
             np.testing.assert_allclose(solved[:k], solved[off[1]:off[1] + k], atol=.02, rtol=0)
 
+    def test_surface_floor_inside_abutment_reach(self):
+        deck = knots(0., 100.)
+        xy, off = flat([deck])
+        args = (xy, off, np.zeros(len(xy)), np.full(len(xy), np.nan), [1], [6.], [1.], [5.], [3], [])
+        floor = [0., 6., 0., 1.]
+        heights, report, _ = EF.profile_solve(*args, [], floor, sprm(), [])
+        self.assertEqual(report[0], 0)
+        self.assertGreaterEqual(heights[3], 1.)
+        # A fixed bearing six metres away puts that floor beyond the grade limit.
+        heights, report, _ = EF.profile_solve(*args, [0, 0, 1], floor, sprm(), [])
+        self.assertNotEqual(report[0], 0)
+        self.assertEqual(report[2], 0)
+        self.assertEqual(report[-3:-1], [6., 1.])
+        self.assertLess(report[-1], 1.)
+        np.testing.assert_array_equal(heights, args[2])
+
+    def test_surface_orders_ambiguous_bridge_crossing_by_level(self):
+        lower = knots(-60., 60.)
+        upper = lower[:, ::-1].copy()
+        xy, off = flat([lower, upper])
+        for first, second, expected_sign in ((10., 8.8, 1), (20., 10., -1)):
+            z = np.repeat([first, second], len(lower))
+            h, report, _ = EF.profile_solve(xy, off, z, np.full(len(xy), np.nan), [1, 1],
+                [5., 5.], [2., 3.], [5., 5.], [3, 3], [], [], [], sprm(), [])
+            self.assertEqual(report[0], 0)
+            dz = h[off[1] + len(upper) // 2] - h[len(lower) // 2]
+            self.assertGreaterEqual(expected_sign * dz, 5.)
+
+    def test_surface_nose_after_branch_deck(self):
+        main = knots(0., 100.)
+        ramp = main.copy()
+        ramp[:, 1] = .08 * ramp[:, 0]
+        xy, off = flat([main, ramp[:11], ramp[10:]])
+        z = 10. + .025 * xy[:, 0]
+        z[:len(main)] = 10.
+        links = [0, 0, 1, 0, 0, 1, 1, 2, 0, 1]
+        solved, report, _ = EF.profile_solve(xy, off, z, np.full(len(z), np.nan), [1, 1, 0],
+            [6., 4., 4.], [1., 1., 1.], [5., 5., 5.], [0, 0, 0], links, [], [], sprm(),
+            [(-1, 0, 1, 0., 0., 41.)])
+        self.assertEqual(report[0], 0)
+        # A 20 m deck, followed by its ground approach. The nose lies halfway between knots.
+        self.assertEqual(report[15], 23)
+        for station in (20., 30., 40., 41.):
+            host = np.interp(station, main[:, 0], solved[:off[1]])
+            branch = np.interp(station, ramp[10:, 0], solved[off[2]:])
+            self.assertAlmostEqual(host, branch, delta=.02)
+
     def test_sheet_union_held(self):
         # a ramp leaving a through deck: today 2 m above it inside the union (a hump); held to it up to the split
         th = knots(0.0, 200.0)
