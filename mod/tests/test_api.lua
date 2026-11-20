@@ -54,7 +54,7 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 8,
+T.check(api.version() == 1 and select(2, api.version()) == 9,
   'version 1.8 (routeSteps, rebase from 1.7; cachedPlaces)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
