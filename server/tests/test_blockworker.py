@@ -722,5 +722,39 @@ class FirstCellsTest(unittest.TestCase):
                 self.assertFalse(earthd.sharing_machine())
 
 
+class ParentPidTest(unittest.TestCase):
+    """GitHub #1389: on Windows the worker must not call os.getppid() (Wine has no PssCaptureSnapshot under it)."""
+    def test_windows_reads_multiprocessings_record(self):
+        from unittest import mock
+        with mock.patch.object(blockworker.os, "name", "nt"), \
+                mock.patch.object(blockworker.os, "getppid", side_effect=AssertionError("os.getppid called")), \
+                mock.patch.object(blockworker.multiprocessing, "parent_process", return_value=SimpleNamespace(pid=4242)):
+            self.assertEqual(blockworker._parent_pid(), 4242)
+
+    def test_windows_outside_multiprocessing_asks_getppid(self):
+        # test_process_lifecycle starts init() with subprocess.Popen: its parent guard must still run there.
+        from unittest import mock
+        with mock.patch.object(blockworker.os, "name", "nt"), \
+                mock.patch.object(blockworker.os, "getppid", return_value=777), \
+                mock.patch.object(blockworker.multiprocessing, "parent_process", return_value=None):
+            self.assertEqual(blockworker._parent_pid(), 777)
+
+    def test_elsewhere_the_parent_is_getppids(self):
+        if os.name == "nt":
+            self.skipTest("POSIX path")
+        self.assertEqual(blockworker._parent_pid(), os.getppid())
+
+    def test_a_spawned_worker_knows_its_parent(self):
+        import multiprocessing
+        ctx = multiprocessing.get_context("spawn")
+        with ctx.Pool(1) as pool:
+            self.assertEqual(pool.apply(_spawned_parent), os.getpid())
+
+
+def _spawned_parent():
+    import multiprocessing
+    return multiprocessing.parent_process().pid
+
+
 if __name__ == "__main__":
     unittest.main()

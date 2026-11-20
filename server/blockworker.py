@@ -17,6 +17,7 @@ import collections
 import json
 import math
 import logging
+import multiprocessing
 import os
 import queue
 import sys
@@ -361,7 +362,9 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
     sampler.maybe_start(f".{os.getpid()}")      # BNGE_SAMPLE: this worker's own sampling profile (debugging)
     xproc.PRIORITY = nice
     _s = _State(cache_dir, offline, roads, grading, road_widths, surface, airports, sea, gas_stations)
-    threading.Thread(target=_watch_parent, args=(os.getppid(),), daemon=True, name="parent-watch").start()
+    ppid = _parent_pid()
+    if ppid:
+        threading.Thread(target=_watch_parent, args=(ppid,), daemon=True, name="parent-watch").start()
     if warm_q is not None:      # (only the block pools plan roads ahead: the far, road and far building pools pass None)
         blockcache.warm()       # (and build blocks: their cache's code id now)
         threading.Thread(target=_read_warm, args=(warm_q,), daemon=True, name="warm-read").start()
@@ -460,6 +463,20 @@ def _watch_parent(ppid):
     while os.getppid() == ppid:
         time.sleep(PARENT_POLL_S)
     os._exit(0)
+
+
+def _parent_pid():
+    """The server's process id, None where it cannot be known. Windows: multiprocessing's record of the process that
+    started this one (the parent wrote its own id), not os.getppid(): CPython makes that of PssCaptureSnapshot, which
+    Wine does not have, so under Wine / CrossOver the call killed the worker at once (GitHub #1389). A process that
+    multiprocessing did not start still asks os.getppid(), so its parent guard keeps working there."""
+    if os.name == "nt":
+        parent = multiprocessing.parent_process()
+        if parent is not None:
+            return parent.pid
+        # Not a multiprocessing child (a server or test that started this process itself): only os.getppid() knows
+        # the parent. Real Windows has PssCaptureSnapshot; under Wine this path is not reached by the block pools.
+    return os.getppid()
 
 
 def _wait_process(pid):
