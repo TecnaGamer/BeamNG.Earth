@@ -378,7 +378,7 @@ def local_signature(cache_dir):
         except (OSError, TypeError, ValueError):
             out.append((repr(entry), None, None))
     if os.environ.get("BNE_STOREFRONTS") == "1":
-        out.append(("streamed-storefronts", 5))
+        out.append(("streamed-storefronts", 6))
     return tuple(out)
 
 

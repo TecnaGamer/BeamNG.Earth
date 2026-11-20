@@ -117,6 +117,24 @@ CAFE_GLAZING = {
 }
 CAFE_GLAZING.update({name: (5.8, .28, 3.1, 0) for name, (family, _, _) in PROFILES.items()
                      if family == "specialty"})
+PUBLIC_GLAZING = {
+    "cinema": (8.0, .18, 5.4, 0),
+    "grocery": (7.0, .48, 3.5, 3.4),
+    "discount": (4.4, .55, 3.2, 0),
+    "warehouse": (3.4, .82, 3.25, 0),
+}
+CAFE_GLAZING.update({name: PUBLIC_GLAZING[family] for name, (family, _, _) in PROFILES.items()
+                     if family in PUBLIC_GLAZING})
+CAFE_GLAZING["Kroger"] = PUBLIC_GLAZING["grocery"]
+
+# Share of frontage, maximum span, roof depth, parapet rise and pitch.
+ENTRANCE_PROFILES = {
+    "cinema": (.67, 27., 6., 1.9, .05),
+    "grocery": (.51, 22., 5., 1.4, .04),
+    "specialty": (.78, 17., 3., .65, 0),
+    "warehouse": (.38, 21., 7., 2.3, .05),
+    "discount": (.62, 18., 4., .95, 0),
+}
 
 
 def shopfront_glass(name, width, doors, at_start, at_end):
@@ -636,9 +654,8 @@ def build(
                 left = (width - span) / 2
                 top = height + (2.1 if name == "Taco Bell" else 1.15)
             else:
-                share, limit, depth, rise, pitch = profiles.get(
-                    name, (0.44, 9, 4, 0.78, 0) if restaurant else (0.52, 23, 6, 1.1, 0)
-                )
+                default_profile = (0.44, 9, 4, 0.78, 0) if restaurant else (0.52, 23, 6, 1.1, 0)
+                share, limit, depth, rise, pitch = profiles.get(name, ENTRANCE_PROFILES.get(family, default_profile))
                 span = min(
                     width * 0.94, max(min(3.0, width), min(width * share, limit))
                 )
@@ -751,6 +768,17 @@ def build(
                         2,
                     )
             block(left, left + span, 0.76, height - 0.9, top, 0)
+            if family in {"warehouse", "cinema"}:
+                # Tie the sign and the entrance together with a clad portal, scaled to this bay.
+                finish = "#164579" if name == "Best Buy" else PROFILES[name][1]
+                cladding = texture(Image.new("RGB", (8, 8), finish))
+                face(left, left + span, .77, height - .9, top, cladding, True)
+                pier = min(1.45, span * .09)
+                for x in (left, left + span - pier):
+                    if any(x - 1.65 <= entrance <= x + pier + 1.65 for entrance in door):
+                        continue
+                    block(x, x + pier, .81, 0, top, 2)
+                    face(x, x + pier, .83, 0, top, cladding, True)
             sign_h = top - height + 0.72
             sign_width = min(span - 0.06, sign_h * 4.5)
             if name in {"CVS", "Walgreens", "Costco", "Publix", "ALDI", "Sam's Club"}:
