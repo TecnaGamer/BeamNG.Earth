@@ -172,6 +172,7 @@ import imagery as imagerymod  # noqa: E402
 import matslots as matslotsmod  # noqa: E402
 import maptiles as maptilesmod  # noqa: E402
 import geocode as geocodemod  # noqa: E402
+import buslines as buslinesmod  # noqa: E402
 import stationindex as stationindexmod  # noqa: E402
 import routing as routingmod  # noqa: E402
 import updates as updatesmod  # noqa: E402
@@ -7700,7 +7701,8 @@ class Connection:
             try:
                 r = await asyncio.get_running_loop().run_in_executor(
                     self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                    float(msg["lon1"]), self.s.net, msg.get("bearing"), routingmod.via_points(msg.get("via")), msg.get("avoid") is True)
+                    float(msg["lon1"]), self.s.net, msg.get("bearing"), routingmod.via_points(msg.get("via")), msg.get("avoid") is True,
+                    "bus" if msg.get("profile") == "bus" else None)
                 out.update(r)
                 out.pop("error", None)
                 break
@@ -7724,7 +7726,8 @@ class Connection:
                 log.debug("route elevation: %s: %s", type(e).__name__, e)
         log.info("route %d (%s, %s -> %s, %s): %d points, %.1f km%s%s", int(msg.get("id") or 0), msg.get("lat0"),
                  msg.get("lon0"), msg.get("lat1"), msg.get("lon1"), len(out["points"]), out["dist"] / 1000,
-                 {True: ", highways avoided", False: ", highways not avoided"}.get(out.get("avoided"), ""),
+                 {True: ", highways avoided", False: ", highways not avoided"}.get(out.get("avoided"), "") +
+                 (", bus" if out.get("profile") == "bus" else ", bus asked, car route" if msg.get("profile") == "bus" else ""),
                  (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
         if "error" not in out:
@@ -8380,6 +8383,21 @@ class Connection:
         log.debug("geocode %r: %d results%s", q, len(out["results"]), (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
 
+    async def bus_lines(self, msg):
+        """The bus lines near the player {"id", "lat", "lon"} -> bus_lines_result {"id", "lines": [...], "attribution",
+        "error"?} (buslines.near: Västtrafik's timetable data in its area, else one Overpass request per place; in the
+        search pool)."""
+        out = {"type": "bus_lines_result", "id": msg.get("id"), "lines": [], "attribution": buslinesmod.ATTRIBUTION}
+        try:
+            lat, lon = float(msg["lat"]), float(msg["lon"])
+            out["lines"] = await asyncio.get_running_loop().run_in_executor(
+                self.s.search_pool, buslinesmod.near, lat, lon, self.s.net, self.s.cache_dir)
+            out["attribution"] = buslinesmod.attribution(out["lines"])
+        except Exception as e:          # offline, rate limited, a bad answer: the game says so
+            out["error"] = buslinesmod.error_text(e)[:500]
+            log.warning("bus lines: %s: %s", type(e).__name__, e)
+        self.send(out)
+
     async def stations(self, msg):
         """The station finder {"id", "lat", "lon", "r_km", "kinds", "mode"} -> stations_result {"id", "items": [{"lat",
         "lon", "name", "brand", "kind", "km"}], "partial", "error"?} (stationindex.StationIndex.query, in the search
@@ -8992,6 +9010,8 @@ class Connection:
             self.spawn(self.map_tiles(msg))
         elif kind == "geocode":                 # the map's search box: addresses and places (geocode.py)
             self.spawn(self.geocode(msg))
+        elif kind == "bus_lines":               # the bus lines near the player (buslines.py, busline.lua)
+            self.spawn(self.bus_lines(msg))
         elif kind == "cache_map":               # the map's cache view: what is cached where (covermap.py)
             self.spawn(self.cache_map(msg))
         elif kind == "area_plan":               # the map's picked area: the estimate for its confirm box (areas.py)

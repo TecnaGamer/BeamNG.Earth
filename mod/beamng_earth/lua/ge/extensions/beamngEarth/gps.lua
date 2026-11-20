@@ -284,7 +284,7 @@ local function requestRoute(player)
     via = {}
     for k, w in ipairs(vias) do via[k] = { w.lat, w.lon } end
   end
-  if c.requestRoute(nextId, player.lat, player.lon, dest.lat, dest.lon, b, via) then
+  if c.requestRoute(nextId, player.lat, player.lon, dest.lat, dest.lon, b, via, M._profile) then
     pendingId, lastRequest, routedAvoid = nextId, os.clock(), avoidHighways()
   end
 end
@@ -293,6 +293,7 @@ function M.setDestination(lat, lon, name)
   lat, lon = tonumber(lat), tonumber(lon)
   if not lat or not lon then return false end
   dest = { lat = lat, lon = lon, name = name }
+  M._profile = nil               -- (M.setRoute's: a field, not a local)
   autoFinished = nil
   vias = {}
   route, routeError, pendingId, enu, progress, info, progressS = nil, nil, nil, nil, 1, nil, nil
@@ -318,13 +319,15 @@ function M.routeStops(points)
   return out
 end
 
--- The GPS through waypoints: points as M.routeStops takes them, the last the destination. True, or false and why.
-function M.setRoute(points)
+-- The GPS through waypoints: points as M.routeStops takes them, the last the destination; profile 'bus' routes
+-- them as a bus may drive (a bus line's stops: busline.lua; server routing.plan). True, or false and why.
+function M.setRoute(points, profile)
   local stops, why = M.routeStops(points)
   if not stops then return false, why end
   local last = table.remove(stops)
   if not M.setDestination(last.lat, last.lon, last.name) then return false, 'bad coordinates' end
   vias = stops
+  M._profile = profile
   return true
 end
 

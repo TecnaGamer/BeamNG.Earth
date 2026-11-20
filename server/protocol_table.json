@@ -293,6 +293,13 @@
     "full": {"type": "bool", "optional": true, "doc": "the map's search box"}
    }
   },
+  "bus_lines": {
+   "fields": {
+    "id": {"type": "int"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num", "doc": "the bus lines near the player (busline.lua)"}
+   }
+  },
   "stations": {
    "fields": {
     "id": {"type": "int"},
@@ -367,7 +374,8 @@
     "bearing": {"type": "num", "optional": true, "doc": "the GPS (routing.py); bearing: the car's heading, the route starts that way"},
     "download": {"type": "str", "optional": true, "doc": "the \"Download along route\" setting: off / ahead / route (route_download)"},
     "via": {"type": "list", "optional": true, "doc": "[[lat, lon], ...] waypoints on the way (routing.MAX_VIA; GitHub #935)"},
-    "avoid": {"type": "bool", "optional": true, "doc": "the \"GPS: avoid highways\" setting (routing.plan avoid_highways; PR #1263)"}
+    "avoid": {"type": "bool", "optional": true, "doc": "the \"GPS: avoid highways\" setting (routing.plan avoid_highways; PR #1263)"},
+    "profile": {"type": "str", "optional": true, "doc": "\"bus\": a bus line's route through its stops (routing.plan profile; busline.lua)"}
    }
   },
   "where": {
@@ -534,6 +542,14 @@
     "results": {"type": "list"},
     "error": {"type": "str", "optional": true},
     "text": {"type": "str", "optional": true, "doc": "geocode.py"}
+   }
+  },
+  "bus_lines_result": {
+   "fields": {
+    "id": {"type": "int"},
+    "lines": {"type": "list"},
+    "attribution": {"type": "str"},
+    "error": {"type": "str", "optional": true, "doc": "buslines.py"}
    }
   },
   "stations_result": {

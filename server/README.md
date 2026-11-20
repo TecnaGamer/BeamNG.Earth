@@ -459,7 +459,7 @@ built in `main_async` and handed to `Dem`, `Imagery`, `weather.fetch` and `gravi
 | `downloads.sourceforge.net` (EGM2008) | 1/s, 1 | 1 | — | no | — |
 | `stac.overturemaps.org` (map data: the Overture STAC index) | 5/s, 10 | 2 | 5,000 | above half a bucket | 30 days |
 | `overturemaps-us-west-2.s3.us-west-2.amazonaws.com`, `overturemapswestus2.blob.core.windows.net` (Overture GeoParquet, AWS then the Azure mirror), `esa-worldcover.s3.eu-central-1.amazonaws.com`, `dataforgood-fb-data.s3.amazonaws.com` (canopy height) | 20/s, 40 | 4 | — | above half a bucket | never |
-| `overpass-api.de` (map category search, on Enter only: interactive, no retries, breaker after one failure) | 0.1/s, 1 | 1 | 50 (hard 100) | no | 1 day |
+| `overpass-api.de`, `overpass.private.coffee` (fallback for bus-line outages; map category search and Bus lines: interactive, no retries, breaker after one failure; 4 s connect / 65 s read timeout) | 0.1/s, 1 | 1 | 50 (hard 100) | no | 1 day |
 | `vector.openstreetmap.org`, `build.protomaps.com` | never at runtime (`PolicyDenied`) | | | | |
 | any other host | 2/s, 4 | 2 | 5,000 | no | 30 days |
 
@@ -1005,6 +1005,35 @@ Cross-component (server ↔ mod):
   `CALM_TIMEOUT`, so poses would go out meanwhile).
   `test_protocol_agreement.SessionsAgreementTest`: `sessions` on both sides (the mod's constructors,
   `farfield.folderOf` against the server's paths, adoption and release over the protocol).
+
+## Bus lines
+
+Bus-line lookups select nearby stops first and then their parent routes. Completed replies are stored in the
+download cache under `buslines/` for 30 days and can be reused offline or after a world-server restart.
+
+Open **Bus lines** from the radial menu's Other ring, choose **Find lines here**, then **Drive**. Lookups show up to
+40 bus or trolleybus route variants with a stop within 700 m of the player. The snapped query includes a margin
+so the edge of a search cell does not hide nearby stops. Radius queries and wrapped longitude distances support
+the date line and high latitudes. Nodes, platform ways (including `highway=platform`), and platform relations with
+centres are supported. The importer reads ordered stop and platform members, blank roles on tagged stops,
+and legacy directional and numbered stop roles. Route masters supply missing labels, operators and colours.
+Trolleybus routes use the same driving controls as regular bus routes.
+
+The importer preserves Unicode stop names and distinguishes routes by their stop coordinates, network and
+operator. Stop positions keep their own names even when short; a platform listed just before or after a stop position is paired with it only within 60 m.
+Västtrafik's GTFS feed is an optional regional source; other regions use OSM without a Trafiklab key. An unavailable
+primary Overpass endpoint, an incomplete query reply or a reply from data more than 14 days old gets one fallback,
+respecting offline, rate and budget limits. Allow about three minutes for a first regional lookup and slow endpoints.
+
+Coverage depends on OSM containing ordered route members. Older relations with ambiguous shared stops may still
+require mapper corrections. Some names are only available in stop-area relations, which this lookup skips.
+Long routes return up to 120 stops and keep the nearest stop in that window. The GPS connects stops using
+Valhalla's bus profile with ordinary car routing as a fallback, so it may use different roads than the service.
+The stock destination sign has an ASCII atlas. Non-Latin destinations remain visible in the window and stop screen
+and may appear blank on that sign.
+These limits require regional in-game checks before claiming worldwide route fidelity.
+
+Tagging reference: [OSM bus routes](https://wiki.openstreetmap.org/wiki/Tag:route%3Dbus).
 
 ## Attribution
 
