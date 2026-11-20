@@ -21,6 +21,8 @@ from store_match import BRANDS, CHAIN_GROUPS
 NAMES = {name.casefold(): name for _, names in CHAIN_GROUPS for name in names}
 NAMES.update(
     {
+        "walmart supercenter": "Walmart",
+        "walmart neighborhood market": "Walmart",
         "cvs pharmacy": "CVS",
         "lowe's home improvement": "Lowe's",
         "home depot": "The Home Depot",
@@ -38,7 +40,7 @@ SPECIFIC = {
     "hardware",
 }
 COMMERCIAL = SPECIFIC | {"commercial", "retail", "shop"}
-VERSION = 2
+VERSION = 3
 LOG = logging.getLogger("earthd.storefronts")
 
 
@@ -144,7 +146,8 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir):
             continue
         centre = ring.mean(0)
         lower, upper = ring.min(0) + origin - 3, ring.max(0) + origin + 3
-        if any(np.all((c["xy"] >= lower) & (c["xy"] <= upper)) for c in existing):
+        if any(np.all((c["xy"] >= lower) & (c["xy"] <= upper)) for c in existing
+               if not (c.get("local") or {}).get("storefront_pylon")):
             continue
         offset = (
             starts
@@ -155,7 +158,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir):
             - centre
         )
         facing = offset[np.argmin(np.sum(offset * offset, axis=1))]
-        if not 1 <= np.linalg.norm(facing) <= 150:
+        if not 1 <= np.linalg.norm(facing) <= 150 + np.max(np.linalg.norm(ring - centre, axis=1)):
             continue
         ll = frame.enu_to_geodetic(
             ring[:, 0] + origin[0], ring[:, 1] + origin[1], np.zeros(len(ring))

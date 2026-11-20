@@ -69,6 +69,8 @@ def brand(tags):
     if "cvs pharmacy" in labels:
         labels.add("cvs")
     for alias, canonical in {
+        "walmart supercenter": "walmart",
+        "walmart neighborhood market": "walmart",
         "publix super market": "publix",
         "costco wholesale": "costco",
         "home depot": "the home depot",
@@ -107,7 +109,7 @@ def parking_frontage(coords, point, parking):
     depth = ahead @ normal
     if not np.any((depth > 2) & (depth < 45) & (np.abs(ahead @ axis) < 20)):
         return None
-    half = min(6., min(along[first], 1-along[first]) * widths[first] - 1)
+    half = min(10., min(along[first], 1-along[first]) * widths[first] - 1)
     if half < 3:
         return None
     return point + np.array([closest[first] - half * axis, closest[first] + half * axis]) / scale
@@ -165,6 +167,46 @@ def matches(path):
             units.append((way.get("id"), refs, brand(props)))
         if props.get("building") and props["building"] != "no":
             buildings.append((way.get("id"), coords, props, refs))
+    # A tagged advertising totem has its own location. Keep ordinary advertising billboards
+    # on the existing billboard path; their operator need not be the advertised business.
+    labels = {name.casefold(): name for _, names in CHAIN_GROUPS for name in names}
+    for node in nodes.values():
+        props = tags(node)
+        if props.get("advertising") != "totem":
+            continue
+        name = labels.get((props.get("brand") or props.get("name") or "").casefold())
+        if not name:
+            continue
+        try:
+            height = float(props.get("height", 6))
+            facing = float(props["direction"]) if "direction" in props else None
+        except ValueError:
+            continue
+        if not 2 <= height <= 20:
+            continue
+        location = np.array(point(node))
+        scale = np.array([111320*np.cos(np.radians(location[1])), 111132])
+        if facing is None:
+            # Pole signs read along the road. Use the tangent of its nearest segment.
+            best = 100.
+            for roads in address_roads.values():
+                for road in roads:
+                    starts = (road[:-1] - location) * scale
+                    edges = np.diff(road, axis=0) * scale
+                    along = np.clip(-np.sum(starts*edges, axis=1) /
+                                    np.maximum(np.sum(edges**2, axis=1), 1e-12), 0, 1)
+                    dist = np.linalg.norm(starts + along[:, None]*edges, axis=1)
+                    k = int(dist.argmin())
+                    if dist[k] < best and np.linalg.norm(edges[k]) > 0:
+                        best = dist[k]
+                        facing = np.degrees(np.arctan2(edges[k, 0], edges[k, 1]))
+        if facing is None or not np.isfinite(facing):
+            continue
+        angle = np.radians(facing)
+        half = np.array([np.cos(angle), -np.sin(angle)]) * min(2.5, height*.32) / scale
+        yield (name, "totem_" + node.get("id"), np.array([location-half, location+half]),
+               None, [], None, height)
+
     tenant_points = [(n.get("id"), name, np.array(point(n))) for n in nodes.values()
                      if (name := brand(tags(n))) and tags(n).get("level", "0") == "0"]
     parking = np.asarray(parking).reshape(-1, 2)

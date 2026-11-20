@@ -138,7 +138,10 @@ def test_street_sign_when_entrance_faces_parking():
         with patch("whole_store.sign_image", return_value=marker):
             build(name, ring, np.array([0., -1.]), 5., [(np.array([24., 9.]), False)],
                   mesh, lambda image: 99 if image is marker else 3)
-        assert len(signs) == 2
+        assert len(signs) == 4
+        # Both faces of the blade share a projecting centre, with a small lateral separation.
+        blades = sorted((pt for pt in signs if pt[1] < -.5), key=lambda pt: pt[0])
+        assert len(blades) == 2 and np.isclose(blades[1][0] - blades[0][0], .17)
         assert any(point[0] > 24 for point in signs)
         assert any(point[1] < 0 for point in signs)
 

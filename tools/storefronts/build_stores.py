@@ -22,7 +22,7 @@ def cross(a, b, c):
 
 
 def export_store(path, match, observations, out):
-    name, ident, coords, street, fixtures, wall_material = match
+    name, ident, coords, street, fixtures, wall_material, *sign_size = match
     height = HEIGHTS[name]
     center = (coords.min(0) + coords.max(0)) / 2
     xy = (coords - center) * [111320 * math.cos(math.radians(center[1])), 111132]
@@ -91,7 +91,7 @@ def export_store(path, match, observations, out):
     painted_faces = []
 
     def mesh(points, mat, uv=None):
-        if painted and mat >= 3 and detailed:
+        if painted and mat >= 3 and (detailed or tenant_sign):
             painted_faces.append((points, mat - 3, uv))
         else:
             emit(points, mat, uv)
@@ -101,15 +101,47 @@ def export_store(path, match, observations, out):
         return 2 + len(painted)
 
     detailed = name in whole_store.CHAINS and not overlay
+    tenant_sign = overlay and (name in whole_store.CHAINS or bool(sign_size))
     if overlay:
         a, b = xy
         width = np.linalg.norm(b - a)
-        if width < 2:
+        if width < 2 and not sign_size:
             return None
         normal = np.array([b[1] - a[1], a[0] - b[0]]) / width
-        half_span = (b - a) / width * min(width * 0.48, 4)
-        offset = normal * 0.12
-        wall(-half_span, half_span, 0, min(3.2, np.linalg.norm(half_span) * 0.8), 1)
+        axis = (b - a) / width
+        half_span = axis * min(width * 0.48, 10 if name in whole_store.MARKETS else 5)
+        offset = normal * 0.24
+        if sign_size:
+            offset = np.zeros(2)
+            top = sign_size[0]
+            bottom = top - min(top * .45, width / 2.4)
+            post = min(.24, width * .07)
+            for corners, lo, hi, material in [
+                ([axis*s*post + normal*t*post for s,t in ((-1,-1),(1,-1),(1,1),(-1,1))], 0., bottom, 2),
+                ([axis*s*width/2 + normal*t*.18 for s,t in ((-1,-1),(1,-1),(1,1),(-1,1))], bottom, top, 2),
+            ]:
+                for left, right in zip(corners, corners[1:] + corners[:1]):
+                    wall(left, right, lo, hi, material)
+                mesh([(*corners[j], hi) for j in (0,1,2,0,2,3)], material)
+            art = texture(whole_store.sign_image(name, width / (top-bottom)))
+            for side in (-1, 1):
+                left = -side * axis * width/2 + normal * side * .19
+                right = side * axis * width/2 + normal * side * .19
+                mesh([(*left,bottom), (*right,bottom), (*right,top), (*left,bottom), (*right,top), (*left,top)],
+                     art, [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
+        elif tenant_sign:
+            # Ground-floor glazing and an independent fascia with lettering readable across parking.
+            panel_width = 2 * np.linalg.norm(half_span)
+            for bottom, top, image in (
+                (0., 3.1, whole_store.elevation(name, panel_width, 3.1, [panel_width / 2], [], [])),
+                (3.1, 3.1 + min(2.5, panel_width / 4), None),
+            ):
+                art = image if image is not None else whole_store.sign_image(name, panel_width / (top-bottom))
+                a1, b1 = -half_span, half_span
+                points = [(*a1,bottom), (*b1,bottom), (*b1,top), (*a1,bottom), (*b1,top), (*a1,top)]
+                mesh(points, texture(art), [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
+        else:
+            wall(-half_span, half_span, 0, min(3.2, np.linalg.norm(half_span) * 0.8), 1)
         center = center + offset / [111320 * math.cos(math.radians(center[1])), 111132]
     else:
         if detailed:
@@ -224,7 +256,7 @@ def export_store(path, match, observations, out):
             {"baseColorFactor": [0.38, 0.38, 0.36, 1]},
         ]
     ]
-    if name == "McDonald's":
+    if name == "McDonald's" and not sign_size:
         mats.extend(
             {
                 "doubleSided": True,
@@ -289,6 +321,7 @@ def export_store(path, match, observations, out):
     return dict(
         storefront_source=path.name,
         **({"storefront_overlay": True} if overlay else {}),
+        **({"storefront_pylon": True} if sign_size else {}),
         file=filename,
         title=name,
         branded_storefront=True,

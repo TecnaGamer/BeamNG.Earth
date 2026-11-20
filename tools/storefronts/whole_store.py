@@ -391,6 +391,7 @@ def elevation(
 
 def sign_image(name, aspect=4.5):
     colors = {
+        "McDonald's": ("#ac2825", "#ffcc32"),
         "Chick-fil-A": ("#ede6d7", "#ad2039"),
         "Walmart": ("#24527d", "#ffffff"),
         "Lowe's": ("#233e63", "#ffffff"),
@@ -429,12 +430,14 @@ def sign_image(name, aspect=4.5):
         d.rectangle((width * 0.18, 184, width * 0.82, 189), fill="#244c78")
     if name == "Target":
         for r, c in ((67, "white"), (44, bg), (22, "white")):
-            d.ellipse((142 - r, 100 - r, 142 + r, 100 + r), fill=c)
+            radius = min(1., width / 900) * r
+            cx = width * .15
+            d.ellipse((cx - radius, 100 - radius, cx + radius, 100 + radius), fill=c)
     if name == "Walmart":
         for angle in range(0, 360, 60):
             a = math.radians(angle)
             d.line(
-                [(752 + math.sin(a) * r, 96 + math.cos(a) * r) for r in (18, 48)],
+                [(width * .87 + math.sin(a) * r, 100 + math.cos(a) * r) for r in (min(21, width*.025), min(54, width*.065))],
                 fill="#ffc83d",
                 width=13,
             )
@@ -754,6 +757,21 @@ def build(
                 True,
             )
             block(left - 0.08, left + span + 0.08, 0.84, top - 0.1, top + 0.03, 2)
+        if i == street_front and width >= 10 and not docks[i]:
+            # A bracket on the approach wall carries the sign above head height. Its two faces
+            # read in opposite directions along the street, including from a shallow approach.
+            reach = min(2.8, width * .13)
+            bottom = max(3.5, height - .35)
+            top = bottom + min(1.65, reach * .58)
+            along = width * .19
+            block(along - .09, along + .09, reach, bottom - .12, bottom + .08, 2)
+            anchor = ring[i] + axes[i] * along
+            art = texture(sign_image(name, reach / (top - bottom)))
+            for side in (-1, 1):
+                base = anchor + side * .085 * axes[i]
+                inner, outer = base + .12 * normals[i], base + (reach + .12) * normals[i]
+                a, b = (inner, outer) if side == -1 else (outer, inner)
+                mesh([(*a,bottom), (*b,bottom), (*b,top), (*a,bottom), (*b,top), (*a,top)], art, uv)
         if i == secondary:
             sign_width = min(width * 0.64, 7.2)
             sign_height = min(1.35, sign_width / 4.5, height * 0.21)

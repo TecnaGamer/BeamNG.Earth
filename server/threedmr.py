@@ -378,7 +378,7 @@ def local_signature(cache_dir):
         except (OSError, TypeError, ValueError):
             out.append((repr(entry), None, None))
     if os.environ.get("BNE_STOREFRONTS") == "1":
-        out.append(("streamed-storefronts", 2))
+        out.append(("streamed-storefronts", 3))
     return tuple(out)
 
 
@@ -2444,6 +2444,7 @@ def write_model(
     alpha_cutoff=None,
     tex_cache_dir=None,
     tilt=None,
+    authored_floor=False,
 ):
     """Write threedmr_<id>.cdae (and its texture(s)) into out_dir, atomically. positions are centered on the
     mesh's own bbox center first (glTFs are not origin-centered: some carry their original georeferenced
@@ -2499,7 +2500,8 @@ def write_model(
     P[:, 0] += offset_xy[0]
     P[:, 1] += offset_xy[1]
     zmin = float(P[:, 2].min())
-    support_z = _support_z(P[:, 2])
+    # Storefronts are authored in local coordinates with their base at zero.
+    support_z = 0.0 if authored_floor else _support_z(P[:, 2])
     support_dz = support_z - zmin
     P[:, 2] += (ground_z - 0.2) - support_z
     if tilt is not None:    # (a model bridge leaned onto its ground roads: bridge_tilt, in the centred frame)

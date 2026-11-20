@@ -6264,6 +6264,7 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                     alpha_cutoff=alpha_cutoffs[0],
                     tex_cache_dir=cache_dir,
                     tilt=tilt,
+                    authored_floor=bool((c.get("local") or {}).get("branded_storefront")),
                 )
             else:
                 res = threedmr.write_model(
@@ -6280,6 +6281,7 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                     alpha_cutoff=alpha_cutoffs,
                     tex_cache_dir=cache_dir,
                     tilt=tilt,
+                    authored_floor=bool((c.get("local") or {}).get("branded_storefront")),
                 )
             # a mesh over Torque's 16-bit IBO limit (threedmr.SPLIT_VERTEX_TRIGGER) comes back as several
             # sections (threedmr.write_model's "sections"), each its own TSStatic entry at the same pos -
@@ -6497,9 +6499,12 @@ def road_tile_items(
                         "source": "local",
                     }
                 )
-        if storefronts and streets and any(spec.storefront for spec, _, _ in items):
+        if storefronts and any(spec.storefront for spec, _, _ in items):
             import streamedstores
-            custom.extend(streamedstores.models(items, custom, frame, (x0, y0), streets, md, keys, cache_dir))
+            approach = streets or road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                                             margin=150, size=max(x1-x0, y1-y0),
+                                             classes=THROUGH_CLASSES | {"service"})
+            custom.extend(streamedstores.models(items, custom, frame, (x0, y0), approach, md, keys, cache_dir))
     return items, custom
 
 

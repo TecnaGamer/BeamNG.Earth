@@ -53,6 +53,7 @@ class StreamedStoresTest(unittest.TestCase):
     def test_discovery_cache_and_ambiguous_tenants(self):
         for lat, lon, name, tenants, kind, subtype, expected in (
             (36.1, -86.8, "Kroger", [], "supermarket", "commercial", 1),
+            (39.0, -84.0, "Walmart Supercenter", ["Pharmacy", "ATM"], "retail", "commercial", 1),
             (41.9, -87.7, "", ["Wendy's"], "", "commercial", 1),
             (40.1, -83.1, "", ["Taco Bell"], "", "", 0),
             (34.0, -118.2, "", ["Walmart"], "retail", "commercial", 1),
