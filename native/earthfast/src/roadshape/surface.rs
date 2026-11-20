@@ -44,6 +44,7 @@ mod gore;
 mod junction;
 pub mod paint;
 mod partition;
+pub mod deck;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
@@ -138,13 +139,13 @@ fn seg_cross(p0: P2, p1: P2, q0: P2, q1: P2) -> Option<(f64, f64)> {
 }
 
 /// A polyline with its arc lengths.
-struct Line { p: Vec<P2>, s: Vec<f64>, hw: f64, ends: [Option<P2>; 2], oneway: bool }
+struct Line { p: Vec<P2>, s: Vec<f64>, section: Vec<P2>, hw: f64, ends: [Option<P2>; 2], oneway: bool }
 
 impl Line {
     fn new(p: Vec<P2>, hw: f64) -> Line {
         let mut s = vec![0.0; p.len()];
         for k in 1..p.len() { s[k] = s[k - 1] + norm(sub(p[k], p[k - 1])); }
-        Line { p, s, hw, ends: [None, None], oneway: false }
+        Line { p, s, section: Vec::new(), hw, ends: [None, None], oneway: false }
     }
     fn len(&self) -> f64 { *self.s.last().unwrap_or(&0.0) }
     /// The segment index holding station t (the last segment for t past the end).
@@ -158,6 +159,15 @@ impl Line {
     /// The row at station t: (point, left unit normal scaled by the mitre at a vertex).
     fn row(&self, t: f64) -> (P2, P2) {
         let n = self.p.len();
+        if !self.section.is_empty() {
+            let i = self.s.partition_point(|&s| s < t);
+            if i == 0 || i == n || self.s[i] == t {
+                let j = i.min(n-1);
+                return (self.p[j], self.section[j]);
+            }
+            let u = (t-self.s[i-1])/(self.s[i]-self.s[i-1]);
+            return (lerp(self.p[i-1],self.p[i],u), lerp(self.section[i-1],self.section[i],u));
+        }
         for v in 0..n {
             if self.s[v] == t {
                 let p = self.p[v];
@@ -446,7 +456,7 @@ pub fn lane_surface<'py>(py: Python<'py>, rows: PyReadonlyArray2<'py, f64>, row_
     let np_ = row_off.len().saturating_sub(1);
     let ok_off = |o: &Vec<i64>, n: usize| o.first() == Some(&0) && o.windows(2).all(|w| w[1] >= w[0])
         && o.last().map(|&v| v as usize == n).unwrap_or(false);
-    let bad = rows.ncols() != 3 || pmeta.ncols() != 3 || rxy.ncols() != 2 || sxy.ncols() != 2 || prm.len() != NPARAMS
+    let bad = rows.ncols() != 3 || pmeta.ncols() != 3 || !matches!(rxy.ncols(), 2 | 4) || sxy.ncols() != 2 || prm.len() != NPARAMS
         || boxm.len() != 4 || t_off.len() != np_ + 1 || k_off.len() != np_ + 1 || pmeta.nrows() != np_
         || !ok_off(&row_off, rows.nrows()) || !ok_off(&t_off, t.len()) || !ok_off(&k_off, kinds.len())
         || !ok_off(&r_off, rxy.nrows()) || r_hw.len() + 1 != r_off.len() || r_oneway.len() != r_hw.len()
@@ -490,11 +500,17 @@ pub fn lane_surface<'py>(py: Python<'py>, rows: PyReadonlyArray2<'py, f64>, row_
     let lines_of = |xy: &numpy::ndarray::ArrayView2<f64>, off: &Vec<i64>, hw: &Vec<f64>| -> Vec<Line> {
         (0..hw.len()).map(|k| {
             let mut p: Vec<P2> = Vec::new();
+            let mut section = Vec::new();
             for r in off[k] as usize..off[k + 1] as usize {
                 let q = [xy[[r, 0]], xy[[r, 1]]];
-                if p.last().map(|o: &P2| o[0] != q[0] || o[1] != q[1]).unwrap_or(true) { p.push(q); }
+                if p.last() != Some(&q) {
+                    p.push(q);
+                    if xy.ncols() == 4 { section.push([xy[[r,2]],xy[[r,3]]]); }
+                }
             }
-            Line::new(p, hw[k])
+            let mut line = Line::new(p, hw[k]);
+            line.section = section;
+            line
         }).collect()
     };
     let mut roads = lines_of(&rxy, &r_off, &r_hw);
@@ -929,6 +945,22 @@ fn build(pieces: &[Piece], roads: &[Line], structs: &[Line], boxm: &[f64; 4], pr
     let step = prm[P_ROAD_STEP];
     for (ri, rd) in roads.iter().enumerate() {
         if rd.p.len() < 2 { continue; }
+        // Structural cross-sections carry pavement under a lane event all
+        // the way to its surveyed edge. Let partition subtract the actual
+        // event faces, including a partial lane, from the supporting slab.
+        if !rd.section.is_empty() {
+            let mut prev = None;
+            for (j, (&p, &axis)) in rd.p.iter().zip(&rd.section).enumerate() {
+                let il = mesh.v.len();
+                mesh.v.extend([snapped(add(p,mul(axis,rd.hw))),snapped(sub(p,mul(axis,rd.hw)))]);
+                mesh.uv.extend([[0.0,rd.s[j]], [1.0,rd.s[j]]]);
+                if let Some(pl) = prev {
+                    mesh.quad([pl,pl+1,il+1,il], -1-ri as i64,K_TH,boxm);
+                }
+                prev = Some(il);
+            }
+            continue;
+        }
         let mut cuts: Vec<f64> = crossings.iter().filter(|c| c.0 == ri).map(|c| c.1).collect();
         // the kept pieces' outlines widened by most of this road's half width: a road running beside a piece's edge
         // (a ramp's mapped line outside the lane S1 gives it) is cut where its strip would lie on the piece

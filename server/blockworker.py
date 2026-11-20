@@ -2582,7 +2582,10 @@ def _map_chunks(src, dst, chunks):
             idx.append((k, "poly", len(a), a.shape[1]))
     out = [dict(c) for c in chunks]
     for k, c in enumerate(chunks):
-        if c.get("tri"):
+        if "deck_z" in c:
+            xyz = geotiles.world_map(src, dst, np.c_[c["xy"], c["deck_z"]])
+            out[k]["xy"], out[k]["deck_z"] = xyz[:, :2], xyz[:, 2]
+        elif c.get("tri"):
             out[k]["xy"] = geotiles.world_xy_map(src, dst, c["xy"])
     if not pts:
         return out

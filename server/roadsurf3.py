@@ -10,9 +10,7 @@ welded to the roads on shared rows; the road tile's own lines and overlays insid
 piece's markings drawn from its boundaries: edge lines, lane lines (through-lane dashes go on past an exit), the exit /
 auxiliary dashes of the added lane (the country's pattern, EXIT_DASH), the gore's channelizing lines and chevrons (US,
 Canada) or hatching. With BNE_SURFACE_V2 the pieces get the variation overlay on their own triangles and the edge blends
-on their outer edges. Heights: today's (the mesh is draped on the graded ground as every ground road surface). Decks
-and tunnels stay as they are: a piece ends where its road goes onto a structure (its end on the deck's end when that is
-within DECK_JOIN_M; the gap left there is S3's, in the status).
+on their outer edges. Heights: today's (the mesh is draped on the graded ground as every ground road surface). Ground pieces end at structures. roadsurf3_decks uses the same lane mesh on supported bridge profiles.
 
 Each tile reads the home cells of events that reach it and the neighbours that may trim those events. Each home
 graph records its actual input cells, including distant copies of long segments. The per-process cache validates
@@ -109,7 +107,7 @@ def _cell_lanes(key, cell_fn, memo):
                     _LANES_LRU.move_to_end(home)
             return got
     keys = []
-    got = lanegraph.cell_lanes(key, lambda k: snapshot(k)[0], memo, read_cells=keys)
+    got = lanegraph.cell_lanes(key, lambda k: snapshot(k)[0], memo, read_cells=keys, events_only=True)
     stamps = [snapshot(k)[1] for k in keys]
     if any(stamp is not None and getattr(snapshots[k][0], "_road_revision", 0) != stamp[1]
            for k, stamp in zip(keys, stamps)):
@@ -142,12 +140,46 @@ def _to_frame(frame, rec_frame, mm):
     return np.c_[np.asarray(e, np.float64), np.asarray(n, np.float64)]
 
 
+def _projected_events(frame, graph):
+    # A home graph is immutable and dependency-checked. Keep just its most
+    # recent destination frame, so many player anchors cannot grow the LRU.
+    key = (frame.lat0, frame.lon0, frame.h0)
+    hit = graph.get("_projected")
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    out = []
+    for ev in graph["events"]:
+        rows = ev.get("rows")
+        if not rows or ev["kind"] not in ("diverge", "merge", "add", "drop"):
+            continue
+        if "opposite" in ev.get("strips", ()) or any(f in ev.get("flags", ()) for f in ("at_grade", "unordered")):
+            continue
+        r = np.asarray(rows, np.float64)
+        xy = _to_frame(frame, graph["frame"], r[:, 1:3])
+        reach = float(np.max(np.abs(r[:, 5:]))) / 1000.0 + 1.0
+        bb = (float(xy[:, 0].min()) - reach, float(xy[:, 1].min()) - reach, float(xy[:, 0].max()) + reach,
+              float(xy[:, 1].max()) + reach)
+        out.append((ev, np.c_[r[:, 0] / 1000.0, xy], r[:, 5:] / 1000.0, bb, reach))
+    graph["_projected"] = key, out
+    return out
+
+
 def tile_events(frame, box, cell_fn, memo=None):
     """The lane events whose rows reach box (x0, y0, x1, y1, in frame): [(event, rows in frame (k, 3): s m, x, y,
     boundaries (k, nb) m)], read from every cell within lane_rings of the box's cells, each event once (its home
     cell's), in the kernel's order: forks before adds and drops, then node id."""
     # Snapshot only this build. Cross-tile reuse is validated in _cell_lanes.
-    memo = {}
+    return _tile_events(frame, box, cell_fn, {})
+
+
+def _tile_events(frame, box, cell_fn, memo):
+    # Deck and ground ask for the same event window within a tile. A build
+    # memo owns its dependency snapshot, including any reads marked short.
+    windows = memo.setdefault("event_windows", {})
+    window = (frame.lat0, frame.lon0, frame.h0, *box)
+    if window in windows:
+        return windows[window]
+    graphs = memo.setdefault("home_graphs", {})
     # S1 walks at most LANE_REACH_M along each arm. Allow 256 m across
     # the rows (both carriageways, their placement offsets and the painted nose).
     pad = lanegraph.LANE_REACH_M + 256.0 + BOX_MARGIN_M
@@ -159,22 +191,14 @@ def tile_events(frame, box, cell_fn, memo=None):
     cand = []
 
     def collect(key):
-        got = _cell_lanes(key, cell_fn, memo)
-        for ev in got["events"]:
-            rows = ev.get("rows")
-            if not rows or ev["kind"] not in ("diverge", "merge", "add", "drop"):
-                continue
-            if "opposite" in ev.get("strips", ()) or any(f in ev.get("flags", ()) for f in ("at_grade", "unordered")):
-                continue
-            r = np.asarray(rows, np.float64)
-            xy = _to_frame(frame, got["frame"], r[:, 1:3])
-            reach = float(np.max(np.abs(r[:, 5:]))) / 1000.0 + 1.0
-            bb = (float(xy[:, 0].min()) - reach, float(xy[:, 1].min()) - reach, float(xy[:, 0].max()) + reach,
-                  float(xy[:, 1].max()) + reach)
+        if key not in graphs:
+            graphs[key] = _cell_lanes(key, cell_fn, memo)
+        for ev, r, bounds, bb, reach in _projected_events(frame, graphs[key]):
+            xy = r[:, 1:]
             mm_ = m + reach
             here = bool(((xy[:, 0] >= x0 - mm_) & (xy[:, 0] <= x1 + mm_) & (xy[:, 1] >= y0 - mm_)
                          & (xy[:, 1] <= y1 + mm_)).any())
-            cand.append((ev, np.c_[r[:, 0] / 1000.0, xy], r[:, 5:] / 1000.0, bb, here))
+            cand.append((ev, r, bounds, bb, here))
     # the pieces reaching the tile and every piece whose box meets one of theirs (the ones that may trim them: each
     # piece the same whichever tile reads it)
     direct = set(homes((x0 - m, y0 - m, x1 + m, y1 + m)))
@@ -188,6 +212,7 @@ def tile_events(frame, box, cell_fn, memo=None):
     out = [(ev, r, t) for ev, r, t, bb, here in cand if here or any(meets(bb, nb) for nb in near)]
     rank = {"diverge": 0, "merge": 0, "add": 1, "drop": 1}
     out.sort(key=lambda e: (rank[e[0]["kind"]], e[0]["node"], e[0]["kind"], str(e[0].get("segs"))))
+    windows[window] = out
     return out
 
 
@@ -290,14 +315,15 @@ def _base(fid):
     return str(fid).split("|", 1)[0].split("~", 1)[0]
 
 
-def tile_surface(frame, box, cell_fn, urban_fn=None, widths=None, left_hand=False, country=None, memo=None):
+def tile_surface(frame, box, cell_fn, urban_fn=None, widths=None, left_hand=False, country=None, memo=None, build_memo=None):
     """The kernel's result for the tile box: a dict (mesh: v (n, 2), uv, tri (m, 3), owner, kind; lines: list of
     (kind name, xy (k, 2), phase m, piece); outlines, cut / cut_wide polygons per kept piece; pieces: [(event, main
     spec)]; roads: [(fid, spec)]; status), or None (no v3 road near)."""
     import fast
     import roads as roadsmod
     fast.require(SURF_VERSION, "lane_surface")
-    evs = tile_events(frame, box, cell_fn, memo)
+    evs = (tile_events(frame, box, cell_fn, memo) if build_memo is None else
+           _tile_events(frame, box, cell_fn, build_memo))
     roi = list(box)
     for _ev, r, _t in evs:
         roi = [min(roi[0], float(r[:, 1].min())), min(roi[1], float(r[:, 2].min())),
@@ -306,6 +332,11 @@ def tile_surface(frame, box, cell_fn, urban_fn=None, widths=None, left_hand=Fals
     specs_of, ground, structs = tile_roads(frame, roi, cell_fn, urban_fn, widths, left_hand)
     if not ground and not evs:
         return None
+    return _mesh_surface(box, country, evs, specs_of, ground, structs)
+
+
+def _mesh_surface(box, country, evs, specs_of, ground, structs):
+    import roads as roadsmod
     pieces, rows, t, toff, kinds, koff, meta = [], [], [], [0], [], [0], []
     for ev, r, tb in evs:
         segs = [_base(s) for s in ev.get("segs", ()) if s]
@@ -367,7 +398,7 @@ def run_kernel(inp):
         np.ascontiguousarray(inp["rows"], np.float64).reshape(-1, 3), np.asarray(inp["row_off"]).tolist(),
         np.ascontiguousarray(inp["t"], np.float64), np.asarray(inp["t_off"]).tolist(), np.asarray(inp["kinds"]).tolist(),
         np.asarray(inp["k_off"]).tolist(), np.ascontiguousarray(inp["pmeta"], np.float64).reshape(-1, 3),
-        np.ascontiguousarray(inp["rxy"], np.float64).reshape(-1, 2), np.asarray(inp["r_off"]).tolist(),
+        np.ascontiguousarray(inp["rxy"], np.float64), np.asarray(inp["r_off"]).tolist(),
         [float(x) for x in inp["r_hw"]], [bool(x) for x in inp["r_oneway"]],
         np.ascontiguousarray(inp["sxy"], np.float64).reshape(-1, 2), np.asarray(inp["s_off"]).tolist(),
         [float(x) for x in inp["s_hw"]], [float(b) for b in inp["box"]],
@@ -501,12 +532,12 @@ def _inside_any(q, polys):
 
 
 def apply(frame, box, chunks, cell_fn, urban_fn=None, widths=None, left_hand=False, country=None, lon=None,
-          surface_v2=False, log=None):
+          surface_v2=False, log=None, build_memo=None):
     """BNE_ROADSURF_V3=surface in a road tile (roads.build_tile, before the dashes are cut): chunks with the v3 ground
     surface added (its mesh as "tri" chunks, its markings and overlays as chunks) and the tile's own lines and overlays
     inside its pieces cut out. box: the tile's own box. Never raises: on a fault the chunks as they were (logged)."""
     try:
-        got = tile_surface(frame, box, cell_fn, urban_fn, widths, left_hand, country)
+        got = tile_surface(frame, box, cell_fn, urban_fn, widths, left_hand, country, build_memo=build_memo)
         if got is not None:
             draw = [c for c in chunks if "_v3_fallback" not in c]
             return cut_chunks(draw, got["cut"], got["cut_wide"], _is_edge) + surface_chunks(

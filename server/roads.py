@@ -4441,7 +4441,7 @@ def tunnel_specs(feats):
     return list(_cell_memo(feats, "_tunnel_specs", lambda: _bridge_specs(feats, "tunnel")))
 
 
-def _bridge_specs(feats, want="bridge"):
+def _bridge_specs(feats, want="bridge", ground_fallback=None):
     """bridge_specs' / tunnel_specs' making (earthfast.RoadRules.bridge_specs): the roads with a range of that kind
     (bridges: the lengthened level_ranges, a bridge's range carried onto the road joined at its end (_skew_decks) is a
     deck too: with the raw ranges that stretch was neither deck nor ground, the deck's end lost its approach ramp and
@@ -4450,10 +4450,16 @@ def _bridge_specs(feats, want="bridge"):
     way, Kommunalny Bridge in Perm, GitHub #378 by RiDexSS), Sweden's widths, and one carriageway of a divided road
     (dual_carriageways on its ground specs) one carriageway wide, as its approaches (Baltimore's motorways: 18.8 m
     decks on 12 m roads, the user 2026-10-31: "bridge widths dont always match the road widths")."""
-    ground = road_specs(feats)
+    ground = road_specs(feats) if ground_fallback is None else ground_fallback
     inp = _spec_inputs(feats)
     n = len(feats)
     elig = np.flatnonzero(inp["cols"]["elig"]).tolist()
+    if ground_fallback is not None:
+        # The lane graph uses the ground spec wherever one exists. Only the
+        # remaining eligible features can need the structural level lookup.
+        elig = [i for i in elig if ground[i] is None]
+        if not elig:
+            return [None] * n
     lv = _level_lists(feats, elig) if want == "bridge" else _raw_all(feats)
     has = _has_kind(lv, elig, want, n)
     import fast
@@ -12133,7 +12139,7 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
 
 
 def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=None, shift_of=None, width_of=None,
-                   context_of=None, context_m=None, left_hand=False, country=None, sheet_marks=None):
+                   context_of=None, context_m=None, left_hand=False, country=None, sheet_marks=None, surface=None):
     """The chunks of the bridges crossing the tile box `exact` (deck surfaces flagged "deck", their
     centre / edge lines; every bridge chunk "fixed": its z is the deck's, not the ground's). Deck
     heights: from `bridges` (BridgeProfiles: whole chains, shared by every tile), else from the
@@ -12210,13 +12216,62 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
                 if roadshape.SHEET and any(_travel(sp) != 0 for _f, sp, _p, _l in got) else None)
         pf = getattr(bridges, "profiled_ids", None) if roadshape.PROFILE_BUILT and wide is not None else None
         pf = pf() if pf is not None else None
-        if shaped:
-            return _deck_chunks(got, exact, bridges._ground, {d[0]: dd(d[0]) for d in got} if dd else None, walks,
-                                shift_of, width_of, context_m, marks_of=marks_of, shapes=shapes, sheet_wide=wide,
-                                sheet_marks=sheet_marks, profiled=pf)
-        return _deck_chunks(got, exact, bridges._ground, {d[0]: dd(d[0]) for d in got} if dd else None, walks,
-                            shift_of, width_of, context_m, marks_of=marks_of, sheet_wide=wide, sheet_marks=sheet_marks,
-                            profiled=pf)
+        covered, face_chunks = {}, []
+        if surface is not None and any(sp.cls in ("motorway", "trunk") for _, sp, _, _ in got):
+            import roadsurf3_decks
+            import revisit
+            def surface_parts(full_cells, bbox):
+                shapes_in_window = None
+                if shaped:
+                    records = [(fid, sp, np.c_[xy, z], lon, shape) for fid, sp, xy, z, lon, shape in
+                               bridges.parts_shaped(full_cells, bbox) if np.isfinite(z).all()]
+                    parts = [r[:4] for r in records]
+                    shapes_in_window = [r[4] for r in records]
+                else:
+                    parts = [(fid, sp, np.c_[xy, z], lon) for fid, sp, xy, z, lon in
+                             bridges.parts(full_cells, bbox) if np.isfinite(z).all()]
+                context = context_of(full_cells) if context_of else (walks or {}, shift_of, width_of)
+                return roadsurf3_decks.prepare(parts, shapes_in_window, exact, context, dd, frame, country,
+                                               surface["cell_fn"], surface.get("lane_memo"))
+
+            with revisit.scope() as deck_scope:
+                try:
+                    covered, face_chunks, skip = _sheet_window_parts(bridges, frame, cells, exact, surface_parts)
+                    if sheet_marks is not None:
+                        sheet_marks.extend(skip)
+                except Exception as ex:
+                    import logging
+                    revisit.fault()
+                    logging.getLogger("earthd.roadsurf3").warning("deck surface: %s", ex)
+            surface["deck_short"] = not deck_scope.kept_until()[0]
+        depth = {d[0]: dd(d[0]) for d in got} if dd else None
+        if not covered:
+            return _deck_chunks(got, exact, bridges._ground, depth, walks, shift_of, width_of, context_m,
+                                marks_of=marks_of, shapes=shapes, sheet_wide=wide, sheet_marks=sheet_marks,
+                                profiled=pf)
+        if wide is not None:
+            wide = [d for d in wide if _sheet_key(d[0], d[2]) not in covered]
+        ordinary, by_group = [], {}
+        for i, (fid, _, p, _) in enumerate(got):
+            key = _sheet_key(fid, p)
+            if key in covered:
+                group, cut, wide_cut, dz = covered[key]
+                if any(dz):
+                    p = p.copy()
+                    p[:, 2] += dz
+                    got[i] = (fid, got[i][1], p, got[i][3])
+                by_group.setdefault(group, ([], (cut, wide_cut)))[0].append(i)
+            else:
+                ordinary.append(i)
+
+        def chunks_for(indices, cuts=None):
+            return _deck_chunks([got[i] for i in indices], exact, bridges._ground, depth, walks, shift_of,
+                                width_of, context_m, marks_of=marks_of, shapes=[shapes[i] for i in indices]
+                                if shapes is not None else None, sheet_wide=wide, sheet_marks=sheet_marks,
+                                profiled=pf, surface_cuts=cuts)
+        for indices, cuts in by_group.values():
+            face_chunks.extend(chunks_for(indices, cuts))
+        return chunks_for(ordinary) + face_chunks
     if not bseen:
         return []
     parts = []                                  # (fid, spec, xy (k, 2), lon)
@@ -12891,7 +12946,7 @@ def _sheet_key(fid, pts):
     return (str(fid), round(float(p[0, 0]), 2), round(float(p[0, 1]), 2), len(p))
 
 
-def _sheet_window_parts(bridges, frame, cells, exact):
+def _sheet_window_parts(bridges, frame, cells, exact, reader=None):
     """BNE_ROADSHAPE=sheet: the deck parts within roadshape.SHEET_WINDOW_M of the tile box exact (the cells round it
     read through bridges.cell_fn as the short-branch forks' are), one per _sheet_key: the forks' input only, never
     drawn (a wider drawn set changed other decks: SD Fwy's I-605 connector drawn twice)."""
@@ -12913,8 +12968,11 @@ def _sheet_window_parts(bridges, frame, cells, exact):
                     continue
                 cells.append(features)
     m = max(0.0, reach - NEAR_M)            # (parts() adds NEAR_M)
+    box = (x0 - m, y0 - m, x1 + m, y1 + m)
+    if reader is not None:
+        return reader(cells, box)
     return [(fid, spec, np.c_[xy, z], lon) for fid, spec, xy, z, lon in
-            bridges.parts(cells, (x0 - m, y0 - m, x1 + m, y1 + m)) if np.isfinite(z).all()]
+            bridges.parts(cells, box) if np.isfinite(z).all()]
 
 
 def _sheet_records(src):
@@ -13303,7 +13361,7 @@ def _cut_ends(ch, line, box):
 
 
 def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of=None, width_of=None, context_m=None,
-                 marks_of=None, shapes=None, sheet_wide=None, sheet_marks=None, profiled=None):
+                 marks_of=None, shapes=None, sheet_wide=None, sheet_marks=None, profiled=None, surface_cuts=None):
     """Deck + line chunks of bridge parts [(fid, spec, pts (k, 3), lon)] clipped to the box `exact`, and their decks
     within context_m (default DECK_CONTEXT_M) as "ctx" chunks (not drawn: build_tile's caller hands them to roadmesh.deck).
     ground_fn(xy) -> heights: a part's ends on the ground are its abutments (each deck chunk's "abut" points: the
@@ -13321,9 +13379,9 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         ws = width_of(fid, pts) if width_of else None
         return pts, spec.width if ws is None else ws
     sheet_recs = []
-    if roadshape.SHEET:     # (road revamp v2 P2b: an exit off a bridge one deck with its road; its heights pinned first)
+    if roadshape.SHEET and surface_cuts is None:     # (road revamp v2 P2b: an exit off a bridge one deck with its road; its heights pinned first)
         sheet_recs, decks = _sheet_plan(decks, walks, shapes, sheet_wide, sheet_marks, profiled)
-    layouts = rampmerges.plans(decks, geometry=geometry, pavement=geometry)
+    layouts = [] if surface_cuts is not None else rampmerges.plans(decks, geometry=geometry, pavement=geometry)
     walks = walks or {}
     out = []
     abut = {}
@@ -13416,7 +13474,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                     if depths and fid in depths:
                         ch["dd"] = round(float(depths[fid]), 3)
                     out.append(ch)
-    reach = _deck_reach(decks, shifted, walks, width_of, sheet, exact,
+    reach = {} if surface_cuts is not None else _deck_reach(decks, shifted, walks, width_of, sheet, exact,
                         {fid for fid in joint_profiles if fid not in joint_excluded})
     for i, (fid, spec, pts, lon) in enumerate(decks):
         # at a merge / split the whole deck shifted toward the ramp (its lines with it): the far edge goes straight on
@@ -13488,6 +13546,18 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                             if abut.get(fid):
                                 ch["abut"] = abut[fid]
                         out.append(ch)
+    if surface_cuts is not None:
+        import roadsurf3
+        for c in out:
+            if c.get("deck"):
+                c["surface_ref"] = True
+                c.pop("jn", None)
+        # A member retains its old markings outside the lane-event footprint.
+        # The clipper accepts draped chunks; restore the surveyed height flag.
+        marks = [dict(c, fixed=False) for c in out if not c.get("deck")]
+        cuts, wide_cuts = surface_cuts
+        out = [c for c in out if c.get("deck")] + [
+            dict(c, fixed=True) for c in roadsurf3.cut_chunks(marks, cuts, wide_cuts, roadsurf3._is_edge)]
     out.extend(rampmerges.chunks(layouts, exact, fixed=True))
     return roadmarkings.paint(out)
 
@@ -14019,6 +14089,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     paved_segs = _built_segments(roads) if DIRT_STRIPS else None
     import roadsurf3
     v3_on = v3 is not None and roadsurf3.ON
+    if v3_on:
+        v3["lane_memo"] = {}
     for k_road, (fid, spec, pts, _) in enumerate(roads):
         # the carriageway painted into the ground (surface.photo_roads); a dirt or gravel road's strip over it
         # (DIRT_LOOK)
@@ -14078,7 +14150,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
 
     for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells, deck_walk, deck_shift, deck_width,
                              bridge_context, context_m=context_m if traffic_context else None,
-                             left_hand=left_hand, country=country, sheet_marks=sheet_marks):
+                             left_hand=left_hand, country=country, sheet_marks=sheet_marks, surface=v3 if v3_on else None):
         if ch.get("deck"):
             decks_near.append(ch)
             traffic_decks.append(_deck_clearance(ch))
@@ -14817,8 +14889,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         import revisit
         with revisit.scope() as surface_build:
             chunks = roadsurf3.apply(frame, own_box, chunks, v3["cell_fn"], urban_fn, widths, left_hand, line_country,
-                                     float(frame.lon0), SURFACE_V2, log=logging.getLogger("earthd.roadsurf3"))
-        v3["short"] = not surface_build.kept_until()[0]
+                                     float(frame.lon0), SURFACE_V2, log=logging.getLogger("earthd.roadsurf3"),
+                                     build_memo=v3.pop("lane_memo"))
+        v3["short"] = v3.get("deck_short", False) or not surface_build.kept_until()[0]
     return roadmarkings.paint(chunks)
 
 

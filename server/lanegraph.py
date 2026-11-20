@@ -95,66 +95,57 @@ def lane_rings(key):
     return max(1, int(math.ceil(1.25 * LANE_REACH_M / max(w, 1.0))))
 
 
-def _lane_rows(feats, i, specs, roadsmod):
-    """Feature i as lane_graph reads it (roadshape._segment_rows' columns and the lane tags), or None."""
-    import railtags
-    import roadshape
-    r = roadshape._segment_rows(feats, i, specs, roadsmod)
-    if r is None:
-        return None
-    a = feats.attrs
-
-    def tag(key):
-        col = a.get(railtags.lane_attr(key))
-        v = col[i] if col is not None else None
-        return v if isinstance(v, str) else ""
-
-    def count(key):
-        v = tag(key)
-        try:
-            n = int(v.split(";")[0].strip())
-        except ValueError:
-            return -1
-        return n if 0 <= n <= 16 else -1
-    sp = specs[i]
-    fw, bw = count("lanes:forward"), count("lanes:backward")
-    two_way = r["dir"] == 0
-    r["lfw"], r["lbw"] = (fw, bw) if two_way else (-1, -1)
-    r["turn_bw"] = tag("turn:lanes:backward") if two_way else ""
-    if two_way and tag("turn:lanes:forward"):
-        r["turn"] = tag("turn:lanes:forward")
-    r["place"] = tag("placement") or tag("placement:forward")
-    lanes = r["lanes"] if r["lanes"] >= 1 else 0
-    r["lane_w"] = float(r["drive"]) / lanes if lanes else float(roadsmod.lane_layout(sp)[0]) / max(
-        1, roadsmod.lane_layout(sp)[1])
-    return r
-
-
 def _cell_lane_segments(key, cell_fn, memo):
-    """{part id: _lane_rows} of cell key's roads (memo: per cell), as roadshape._cell_segments."""
+    """The lane rows and native copy index of a decoded cell, validated together."""
+    import fast
     import roadshape
     import countrybounds
     import revisit
     feats = cell_fn(key)
     if feats is None or not len(feats):
-        return {}
-    stamp = (getattr(feats, "_road_revision", 0), countrybounds.signature())
+        return {}, fast._ef.SegmentCell(key.z, [], [], roadshape.COPY_CELLS_MAX)
+    stamp = (key.z, getattr(feats, "_road_revision", 0), countrybounds.signature())
     saved = feats.__dict__.get("_lane_graph_rows")
     if saved is not None and saved[0] == stamp:
         return saved[1]
     with revisit.scope() as built:
-        rows = roadshape._cell_segments(key, lambda _: feats, memo, reader=_lane_rows)
+        import railtags
+        fast.require(553, "lane_cell_rows")
+        names = ("lanes:forward", "lanes:backward", "turn:lanes:forward", "turn:lanes:backward",
+                 "placement", "placement:forward")
+        cols = [feats.attrs.get(railtags.lane_attr(name)) for name in names]
+        import roads
+        def columns(sp):
+            if sp is None:
+                return None
+            cls = roadshape.FORK_CLASSES.get(sp.cls, 0) if sp.kind == "paved" else 0
+            drive, inferred = roads.lane_layout(sp)
+            return (cls, bool(sp.link), int(sp.dir or 0) if sp.oneway else 0, int(sp.lanes or -1),
+                    float(sp.kmh or roadshape.CLASS_KMH.get(sp.cls, 50.)), sp.width, drive, inferred)
+
+        ground = roads.road_specs(feats)
+        bridges = (roads.bridge_specs(feats) if "_bridge_specs" in feats.__dict__ else
+                   roads._bridge_specs(feats, ground_fallback=ground))
+        specs = [columns(sp or bridge) for sp, bridge in zip(ground, bridges)]
+        con = feats.rules.get("connectors")
+        rows = fast._ef.lane_cell_rows(feats.lonlat, feats.part_off.tolist(), feats.ring_off.tolist(),
+                                       feats.coord_off.tolist(), feats.ids.tolist(), specs,
+                                       [list(c) if c is not None else None for c in cols],
+                                       list(feats.attrs.get("osm_turn_lanes", ())),
+                                       con.feature.tolist() if con else [], con.start.tolist() if con else [],
+                                       [str(c) for c in con.value] if con else [])
         points = [(r["ll"][0, 1], r["ll"][0, 0]) for r in rows.values()]
         for r, code in zip(rows.values(), countrybounds.bundled().codes_at(points)):
             r["region"] = REGION_OF.get(str(code or "").upper(), 0)
+    indexed = rows, fast._ef.SegmentCell(key.z, list(rows), [r["ll"] for r in rows.values()], roadshape.COPY_CELLS_MAX)
     if built.complete:
-        feats._lane_graph_rows = stamp, rows
+        feats._lane_graph_rows = stamp, indexed
     else:
         memo.setdefault("short_lane_rows", set()).add(key)
-    return rows
+    return indexed
 
 
-def cell_lanes(key, cell_fn, memo=None, read_cells=None):
+def cell_lanes(key, cell_fn, memo=None, read_cells=None, events_only=False):
     """The lane graph of map cell key's home nodes and segments (earthfast.lane_graph's JSON, parsed): {"events": [...]
     sorted by connector id, "segs": [...] by id, "links": the home nodes' stroke links, "frame": the cell's centre
     lat / lon, "cell"}, points in mm in the cell's frame. cell_fn(key) -> the cell's roads features; memo: {cell: segments} shared across calls (optional)."""
@@ -162,37 +153,26 @@ def cell_lanes(key, cell_fn, memo=None, read_cells=None):
     import fast
     import geodesy
     import roadshape
-    fast.require(LANES_VERSION, "lane_graph")
+    fast.require(553, "lane_connectors")
     memo = {} if memo is None else memo
-    segs = roadshape._segments_round(key, cell_fn, memo, lane_rings(key), _cell_lane_segments, read_cells)
+    segs = roadshape._segments_round(key, cell_fn, memo, lane_rings(key), _cell_lane_segments, read_cells, indexed=True)
     fids = sorted(segs)
     lat0, lon0 = key.center()
     if not fids:
         return {"events": [], "segs": [], "links": [], "frame": [lat0, lon0], "cell": str(key)}
     frame = geodesy.EnuFrame(lat0, lon0)
-    lon_a, lat_a, lon_b, lat_b = key.bounds()
-    inside = lambda lo, la: bool(lon_a <= lo < lon_b and lat_b > la >= lat_a)   # noqa: E731
     lines = [segs[fid]["ll"] for fid in fids]
     ll_all = np.concatenate(lines)
     e, n, _ = frame.geodetic_to_enu(ll_all[:, 1], ll_all[:, 0], 0.0)
     xy = np.column_stack((e, n))
     off = np.r_[0, np.cumsum([len(ll) for ll in lines])].tolist()
-    home = []
-    con_id, con_seg, con_vtx, con_home = [], [], [], []
-    for g, fid in enumerate(fids):
-        ll = segs[fid]["ll"]
-        home.append(inside(float(ll[0, 0]), float(ll[0, 1])))
-        for cid, v in segs[fid]["cons"]:
-            con_id.append(cid)
-            con_seg.append(g)
-            con_vtx.append(v)
-            con_home.append(inside(float(ll[v, 0]), float(ll[v, 1])))
     col = lambda name: [segs[f][name] for f in fids]   # noqa: E731
+    home, con_id, con_seg, con_vtx, con_home = fast._ef.lane_connectors(ll_all, off, col("cons"), key.bounds())
     got = fast._ef.lane_graph(
         xy, off, fids, col("cls"), col("link"), col("dir"),
         col("lanes"), col("lfw"), col("lbw"), col("kmh"), col("lane_w"), col("turn"), col("turn_bw"), col("place"),
         col("region"), home, con_id, con_seg, con_vtx, con_home, LANE_PARAMS,
-        np.ascontiguousarray(TAPER_TABLE.reshape(-1)))
+        np.ascontiguousarray(TAPER_TABLE.reshape(-1)), events_only)
     out = json.loads(got)
     out["frame"] = [lat0, lon0]
     out["cell"] = str(key)

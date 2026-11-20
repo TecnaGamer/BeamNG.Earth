@@ -564,7 +564,7 @@ def _cell_segments(key, cell_fn, memo, reader=None):
 COPY_CELLS_MAX = 16         # cells a segment's copies are looked for in at most
 
 
-def _segments_round(key, cell_fn, memo, rings, cell_segments, read_cells=None):
+def _segments_round(key, cell_fn, memo, rings, cell_segments, read_cells=None, indexed=False):
     """All parts of each segment from its longest copy, breaking ties by cell name.
     read_cells receives the full input window, including cells consulted for distant copies."""
     import fast
@@ -574,9 +574,12 @@ def _segments_round(key, cell_fn, memo, rings, cell_segments, read_cells=None):
     def read(k):
         ck = (k, cell_segments)
         if ck not in memo:
-            parts = cell_segments(k, cell_fn, memo)
-            index = fast._ef.SegmentCell(k.z, list(parts), [r["ll"] for r in parts.values()], COPY_CELLS_MAX)
-            memo[ck] = parts, index
+            if indexed:
+                memo[ck] = cell_segments(k, cell_fn, memo)
+            else:
+                parts = cell_segments(k, cell_fn, memo)
+                index = fast._ef.SegmentCell(k.z, list(parts), [r["ll"] for r in parts.values()], COPY_CELLS_MAX)
+                memo[ck] = parts, index
         return memo[ck]
 
     ring = [mapcells.CellKey(key.z, (key.x + dx) % key.n, key.y + dy)

@@ -197,6 +197,10 @@ pub fn connector_vertices(ll: PyReadonlyArray2<'_, f64>, starts: Vec<f64>) -> Py
     if ll.ncols() != 2 || ll.is_empty() {
         return Err(PyValueError::new_err("connector_vertices: empty line"));
     }
+    Ok(vertices(ll, &starts))
+}
+
+pub(super) fn vertices(ll: numpy::ndarray::ArrayView2<'_, f64>, starts: &[f64]) -> Vec<usize> {
     let scale = 111320.0 * ll[[0, 1]].to_radians().dcos();
     let mut shares = vec![0.0; ll.nrows()];
     for i in 1..ll.nrows() {
@@ -210,7 +214,7 @@ pub fn connector_vertices(ll: PyReadonlyArray2<'_, f64>, starts: Vec<f64>) -> Py
             *s /= length;
         }
     }
-    Ok(starts
+    starts
         .iter()
         .map(|s| {
             let mut best = 0;
@@ -221,5 +225,5 @@ pub fn connector_vertices(ll: PyReadonlyArray2<'_, f64>, starts: Vec<f64>) -> Py
             }
             best
         })
-        .collect())
+        .collect()
 }
