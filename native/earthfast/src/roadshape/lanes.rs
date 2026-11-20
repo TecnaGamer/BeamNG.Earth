@@ -676,8 +676,15 @@ fn fork_event(c: &Ctx, n: usize) -> Option<String> {
     let push_through = |names: &mut Vec<&'static str>, ws: &mut Vec<Box<dyn Fn(f64) -> f64>>| {
         for _ in 0..lm_e { names.push("through"); ws.push(Box::new(move |_s: f64| w)); }
     };
+    // (a lane-sum auxiliary lane carries one of the ramp's lanes to the exit: its others merge over the entrance
+    // taper after the gore; the carried one is the lane next to the through lanes)
+    let lane_sum = evidence == "lane_sum";
     let push_branch = |names: &mut Vec<&'static str>, ws: &mut Vec<Box<dyn Fn(f64) -> f64>>| {
-        for _ in 0..lb { names.push("branch"); let b = branch_w.clone(); ws.push(Box::new(move |s: f64| b(s))); }
+        for k in 0..lb {
+            let carried = !lane_sum || (if right { k == 0 } else { k == lb - 1 });
+            if carried { names.push("branch"); let b = branch_w.clone(); ws.push(Box::new(move |s: f64| b(s))); }
+            else { names.push("branch_merging"); ws.push(Box::new(move |s: f64| piece(s, sg_, sg_ + entry_taper, w, 0.0))); }
+        }
     };
     if right {
         push_through(&mut names, &mut ws);
@@ -920,8 +927,20 @@ fn node_links(c: &Ctx, n: usize) -> Vec<String> {
         if fa != 0 && fa == -fb {
             let (i, o) = if fa < 0 { (0, 1) } else { (1, 0) };
             let (li, lo) = (c.segs[all[i].0].lanes, c.segs[all[o].0].lanes);
-            let lht = c.t(c.segs[all[o].0].region, T_LHT) > 0.5;
-            out.push(link(i, o, "continue", if lht && li >= 1 && lo >= 1 { lo - li } else { 0 }));
+            // (the side the lane is added or dropped on, as the add / drop event resolves it: on the left the left
+            // lanes' numbers move)
+            let mut shift = 0;
+            if li >= 1 && lo >= 1 && li != lo {
+                let add = lo > li;
+                let reach = c.prm[P_REACH];
+                let up = walk(c, n, all[i].0, all[i].1, all[i].2, reach);
+                let dn = walk(c, n, all[o].0, all[o].1, all[o].2, reach);
+                let (si, so) = (&c.segs[all[i].0], &c.segs[all[o].0]);
+                let (wide, wide_fwd, narrow) = if add { (so, all[o].2, si) } else { (si, !all[i].2, so) };
+                let (right, _why, _feed) = add_side(c, wide, wide_fwd, narrow, &dn, &up, add, so.region);
+                if !right { shift = lo - li; }
+            }
+            out.push(link(i, o, "continue", shift));
         }
     } else if let Some((arms, ti, mi, bi, dv)) = fork_roles(c, n) {
         let (gm, vm, fm) = arms[mi];

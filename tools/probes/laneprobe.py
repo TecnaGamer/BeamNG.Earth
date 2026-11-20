@@ -252,6 +252,7 @@ def accept(places, cell_fn, overlay_dir=None):
             table.append(row)
             print(json.dumps(row))
             continue
+        row["rows_ok"] = bool(ev.get("rows"))
         row.update({"node": ev["node"][:12], "kind": ev["kind"], "side": ev["side"], "lanes": ev["lanes"],
                     "evidence": ev.get("evidence"), "type": ev.get("type"), "flags": ev.get("flags", []),
                     "ordered": ordered(ev)})
@@ -299,6 +300,15 @@ def main():
         if a.json:
             with open(a.json, "w") as fh:
                 json.dump(table, fh, indent=1, sort_keys=True)
+        # (strict: a place whose event is missing, has no rows, is out of order, differs between start cells, or an
+        # expected-none place with an event, fails the run; the station errors are reported, not judged)
+        bad = [r["name"] for r in table if (r.get("expect_none") and not r.get("pass"))
+               or (not r.get("expect_none") and (not r.get("found") or not r.get("rows_ok", True)
+                                                 or r.get("ordered") is False or r.get("window_independent") is False))]
+        missing = [(r["name"], k) for r in table for k in r.get("measured", {}) if k not in r.get("ours", {})]
+        print(json.dumps({"failed": bad, "stations_missing": missing}))
+        sys.stdout.flush()
+        os._exit(1 if bad else 0)
     else:
         recs = collect(a.lat, a.lon, a.r, cell_fn)
         for i, ev in enumerate(recs):

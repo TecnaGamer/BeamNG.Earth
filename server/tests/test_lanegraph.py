@@ -187,6 +187,18 @@ class LaneGraphTest(unittest.TestCase):
         self.assertEqual([r["fid"] for r in out["segs"]], ["a1"])
         self.assertEqual(out["segs"][0]["lanes"][0], 4)
 
+    def test_left_add_link(self):
+        # placement keeps the right edge (right_of:last): the lane is added on the left, so the left lanes' numbers move
+        segs = [seg("a", [(-600.0, 0.0), (0.0, 0.0)], lanes=2, place="right_of:2"),
+                seg("b", [(0.0, 0.0), (600.0, 0.0)], lanes=3, place="right_of:3")]
+        cons = [("na", "a", 0), ("n0", "a", 1), ("n0", "b", 0), ("nb", "b", 1)]
+        _, out = run(segs, cons)
+        self.assertEqual(out["events"][0]["side"], "left")
+        self.assertEqual(out["links"], [["a", "b", "continue", 1]])
+        segs[0]["place"], segs[1]["place"] = "left_of:1", "left_of:1"
+        _, out = run(segs, cons)
+        self.assertEqual(out["links"], [["a", "b", "continue", 0]])
+
     def test_not_home(self):
         _, out = run(*scene(), home=())
         self.assertEqual(out["events"], [])
