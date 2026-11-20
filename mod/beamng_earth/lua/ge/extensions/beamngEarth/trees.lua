@@ -322,6 +322,8 @@ M.CATALOG = {
   -- vineyards' rows (server vegetation.vineyard_items): Italy's grape_vine_group, three rows 2.45 m apart and 15.9 m
   -- long along its x (out to 450 m, GROUP_MAX_M: beyond it the ground photo shows the rows)
   vine = { { IT .. 'trees/trees_italy/grape_vine_group', 2.6 } },
+  -- lavender rows (server vegetation.lavender_items, ignrpg.py: IGN RPG LAV / LVH parcels in France)
+  lavender = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_lavender_row', 0.74 } },
   -- round bales after the harvest (server vegetation.bale_items): the stock race props, straw on farmland, wrapped
   -- silage on meadows; by hemisphere, shown in their season only (SEASON)
   straw_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_large_01', 1.22 } },
@@ -530,6 +532,9 @@ M.GROUP_MAX_M.billboard = 900
 M.GROUP_MAX_M.barn = 800
 M.GROUP_MAX_M.golfflag = 400
 M.GROUP_MAX_M.vine = 450
+M.GROUP_MAX_M.lavender = 350
+M.NO_COLLIDE.lavender = true
+M.ONE_SPELLING.lavender = true
 M.GROUP_MAX_M.creosote = 250       -- (as the other shrubs)
 M.NO_COLLIDE.creosote = true
 M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n
@@ -570,6 +575,7 @@ for group, a in pairs(require('beamngEarth/europeStopAssets')) do
   M.ONE_SPELLING[group] = true
 end
 local MATERIALS = {
+  '/levels/beamng_earth/art/shapes/beamngEarth',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_radars',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_fences',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_stops',

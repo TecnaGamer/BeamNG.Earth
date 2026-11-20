@@ -34,6 +34,7 @@ import beaches
 import fast
 import dmath
 import dnp
+import ignrpg
 
 import mapcells
 import pacer
@@ -64,11 +65,11 @@ KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
           "oak_west", "tropical", "mediterranean", "conifer_clump", "deciduous_clump", "oak_west_clump",
           "mediterranean_clump", "vine", "straw_n", "straw_s", "silage_n", "silage_s", "eucalyptus",
-          "eucalyptus_clump", "poplar", "creosote")
+          "eucalyptus_clump", "poplar", "creosote", "lavender")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
- G_POPLAR, G_CREOSOTE) = range(25)
+ G_POPLAR, G_CREOSOTE, G_LAVENDER) = range(26)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -284,6 +285,8 @@ class Vegetation:
         self.md = md
         self.dem = None                 # (set by the server: rocks on bare ground by slope, ROCK_SLOPE)
         self.surface = self.widths = None   # (set by the server: the roads' drawn widths, roads.road_specs)
+        self.ignrpg = getattr(md, "ignrpg", None) or (
+            ignrpg.Source(cache_dir, getattr(md, "fetcher", None)) if ignrpg.ON else None)
         self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
         self._mem = OrderedDict()
         self._lock = threading.Lock()
@@ -567,6 +570,7 @@ class Vegetation:
         paved = np.zeros(h.shape, bool)
         orchard = np.zeros(h.shape, bool)
         vines = np.zeros(h.shape, bool)
+        lavender = np.zeros(h.shape, bool)
         lu = None
         try:
             cl = self.md.cell((mapcells.ZOOM, x, y), layers=("land_use", "infrastructure"))
@@ -582,23 +586,35 @@ class Vegetation:
                 _mask_polys(lu, vines, chm, 0.0, select=lclass == "vineyard")
         except Exception as e:                  # not at hand: scattered as before
             log.debug("vegetation: land use of %s: %s", (x, y), e)
+        bounds = (lon0, lat0, lon1, lat1)
+        lav_rows = _empty()
+        rpg_src = getattr(self.md, "ignrpg", None) or self.ignrpg
+        if ignrpg.ON and rpg_src is not None and ignrpg.covers(bounds):
+            try:
+                recs = rpg_src.cell(key)
+                if recs is not None and recs.n > 0:
+                    lav_rows = lavender_items(recs, chm, blocked | paved | orchard | vines, bounds, mask=lavender)
+            except Exception as e:
+                log.debug("vegetation: ignrpg of %s: %s", (x, y), e)
         if orchard.any():
             keep = _keep_off_mask(tree, orchard, chm)
             tree, lcls = tree.take(keep), lcls[keep]
         if vines.any():             # (the vines' own canopy read as bushes all over a vineyard: its rows stand there)
             keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
             tree, lcls = tree.take(keep), lcls[keep]
+        if lavender.any():
+            keep = _keep_off_mask(tree, lavender, chm) | (tree.height >= VINE_TREE_M)
+            tree, lcls = tree.take(keep), lcls[keep]
         # (a clump moved off a road stays in this cell and off its buildings, water and decks: ClumpRoads)
         tree = clumps(tree, lcls, (lat0 + lat1) / 2,
                       roads=ClumpRoads(clump_roads, chm, blocked, (ex0, ey0, ex1, ey1)))
-        scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
-        edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
-        bounds = (lon0, lat0, lon1, lat1)
+        scatter = self._scatter(cd, lc, blocked | paved | orchard | vines | lavender, chm, hs)
+        edge = self._edge(cd, lc, blocked | orchard | vines | lavender, road, chm, hs)
         planted = orchard_items(lu, chm, blocked, bounds)
         hedges = farm_foliage(lu, chm, blocked, bounds)
         rows = vineyard_items(lu, chm, blocked, bounds)
         bales = bale_items(lu, chm, blocked, bounds)
-        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
+        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales, lav_rows])
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
@@ -1092,6 +1108,33 @@ def vineyard_items(feats, chm, blocked, bounds=None):
                  np.full(n, G_VINE, np.uint8), rank, yaw.astype(np.float32), np.ones(n, np.float32))
 
 
+LAV_RADIUS_M = 1.25
+
+
+def lavender_items(recs, chm, blocked, bounds=None, mask=None):
+    """Oriented lavender furrow rows (`G_LAVENDER`, `bne_lavender_row`) inside IGN RPG `LAV`/`LVH` parcels in France,
+    sampled in Rust via `ignrpg.lavender_rows`."""
+    if recs is None:
+        return _empty()
+    if not isinstance(recs, ignrpg.Records):
+        recs = ignrpg.Records(ignrpg.parse(recs))
+    if recs.n == 0:
+        return _empty()
+    if bounds is None:
+        lon0, lat0 = float(recs.lonlat[:, 0].min()) - 0.01, float(recs.lonlat[:, 1].min()) - 0.01
+        lon1, lat1 = float(recs.lonlat[:, 0].max()) + 0.01, float(recs.lonlat[:, 1].max()) + 0.01
+        bounds = (lon0, lat0, lon1, lat1)
+    bl = np.zeros((1, 1), bool) if blocked is None else np.asarray(blocked, bool)
+    lon, lat, h, yaw, rank, scale = ignrpg.lavender_rows(recs, chm, bl, bounds, mask=mask)
+    n = len(lon)
+    if n == 0:
+        return _empty()
+    return Items(np.asarray(lon, np.float64), np.asarray(lat, np.float64), np.asarray(h, np.float32),
+                 np.full(n, LAV_RADIUS_M, np.float32), np.full(n, KIND_BUSH, np.uint8),
+                 np.full(n, G_LAVENDER, np.uint8), np.asarray(rank, np.float32),
+                 np.asarray(yaw, np.float32), np.asarray(scale, np.float32))
+
+
 # Round bales on fields after the harvest (the asset survey's #16): the stock race props s_haybaleround_large_01
 # (straw, on land_use class farmland: the cereals' straw) and s_haybaleround_alt_01 (wrapped silage, on meadows),
 # along windrows BALE_ACROSS_M apart down the field's dominant edge, one every ~BALE_ALONG_M, some left out. An OSM
@@ -1485,7 +1528,7 @@ class JsonRows(str):
 AUDIO_CELL_M = 256.0 / 12
 AUDIO_H_MID = 15.0
 AUDIO_H_LARGE = 19.0
-AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE) + CLUMP_GROUPS
+AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE, G_LAVENDER) + CLUMP_GROUPS
                + BALE_GROUPS]
 
 
