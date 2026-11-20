@@ -1053,6 +1053,18 @@ do
   T.check(a == 5 and b == 5 and c == 7, 'safeSpot: ground under the spot: the spot itself')
   T.check(core.safeSpot(0, 0, function() return nil end) == nil, 'safeSpot: no ground anywhere near: nil')
 end
+-- a ready block without its photo waits (the gate, until the hard commit distance) while the block in use shows one
+do
+  local core = require('beamngEarth/core')
+  local shown = '/temp/beamngEarth/s2/hm_6_768_-128_base.jpg'
+  T.check(not core.photoGateOpen({ cx = 896, cy = -128 }, shown, 'detail'), 'photo gate: no photo, one shown: waits')
+  T.check(not core.photoGateOpen({ base = false }, shown, 'detail'), 'photo gate: base false: waits')
+  T.check(core.photoGateOpen({ base = '/temp/beamngEarth/s2/hm_6_896_-128_base_q.jpg' }, shown, 'detail'),
+    'photo gate: a stand-in photo is a photo')
+  T.check(core.photoGateOpen({ base = false }, nil, 'detail'), 'photo gate: nothing shown either: no reason to wait')
+  T.check(core.photoGateOpen({ base = false }, shown, 'terrain'), 'photo gate: only in detail mode')
+  T.check(core.photoGateOpen(nil, shown, 'detail'), 'photo gate: no message: open')
+end
 -- a block's refreshed base photo (block_base) waits while the car is fast and comes once it is slower (core.applyBaseLater)
 do
   local core = require('beamngEarth/core')

@@ -9,6 +9,7 @@ import tempfile
 import threading
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 
@@ -105,6 +106,74 @@ class BasePhotoRevisitTest(unittest.TestCase):
         srv._base_keep(a1, 0.0, 0.0, bk, name, (revisit.Build(),))
         self.assertIsNone(revisit.load(srv.cache_dir, "basephoto", bk))
         self.assertIsNone(srv._base_revisited(a1, 0.0, 0.0, bk, []))
+
+    def test_a_block_built_again_takes_its_kept_photo(self):
+        """Daytona laps with the generated ground (2026-11-19): a fast player's block built again (evicted, then asked
+        for once more) skipped its photo, went with a stand-in and had it painted again every lap. base_kept says the
+        final one is kept (nothing read), _base_from_revisit takes it (a block in use: under a new rev name), and
+        make_heightmap takes that path instead of skipping it."""
+        srv = fake_server(self.tmp.name)
+        srv.near_visual = "detail"
+        a1 = SimpleNamespace(id=1, lat=29.18, lon=-81.07, zooms=[17])
+        S = earthd.Server
+        self.assertFalse(S.base_kept(srv, a1, 768.0, -128.0))
+        name = painted(srv, a1, 768.0, -128.0, np.full((64, 64, 3), 90, np.uint8))
+        bk = srv.base_revisit_key(a1, 768.0, -128.0)
+        srv._base_kept(a1, 768.0, -128.0, ())
+        srv._base_keep(a1, 768.0, -128.0, bk, name, (revisit.Build(),))
+        self.assertTrue(S.base_kept(srv, a1, 768.0, -128.0))
+        self.assertFalse(S.base_kept(srv, a1, 896.0, -128.0))
+        srv.near_visual = "terrain"
+        self.assertFalse(S.base_kept(srv, a1, 768.0, -128.0))
+        srv.near_visual = "detail"
+        # (evicted: its files gone) then built again in use: under the refresh's own rev name, the current version's
+        os.remove(os.path.join(srv.out_dir, name))
+        srv.base_stale.add((1, 768.0, -128.0))
+        photo = []
+        got, k = S._base_from_revisit(srv, a1, 768.0, -128.0, photo, 7, False)
+        self.assertEqual((got, k), (srv.base_name((1, 768.0, -128.0), 7), bk))
+        self.assertTrue(os.path.exists(os.path.join(srv.out_dir, got)))
+        self.assertEqual(photo[0].shape, (64, 64, 3))
+        self.assertNotIn((1, 768.0, -128.0), srv.base_stale)        # (final: nothing to paint again)
+        self.assertEqual(srv.base_pending[(1, 768.0, -128.0)], frozenset())
+
+    def test_make_heightmap_takes_the_kept_photo_instead_of_skipping(self):
+        import collections
+        import concurrent.futures
+        S = earthd.Server
+        calls = []
+
+        def run(kept):
+            del calls[:]
+            pool = concurrent.futures.ThreadPoolExecutor(1)
+            self.addCleanup(pool.shutdown)
+            done = concurrent.futures.Future()
+            done.set_result({"stages": {}})
+            srv = SimpleNamespace(
+                near_visual="detail", imagery=object(), fast=True, speed=50.0, hm_committed=collections.deque(),
+                base_stale=set(), base_skipped=set(), quick_futs={}, quick_early=pool, block_pools=None,
+                anchor_q=lambda a: 1 / 1024, layout=SimpleNamespace(block=1024), hm_stage={}, dem=None,
+                _revisit_base_pool=lambda: pool, _base_process=lambda lane: None,
+                _base_photo=lambda *a: calls.append(("photo", a[1:3])) or ("x", [], 0.0),
+                _stand_in=lambda *a: calls.append(("standin", a[1:3])),
+                _make_heightmap_here=lambda anchor, cx, cy, progress, t0, q, base: calls.append(
+                    ("here", base is not None and base.result()[0])) or {})
+            anchor = SimpleNamespace(id=6, first_base=None, stale=(), stale_fresh=())
+            with mock.patch.object(S, "base_kept", lambda self, a, cx, cy: kept), \
+                    mock.patch.object(S, "is_abandoned", lambda self, aid: False), \
+                    mock.patch.object(S, "left_behind", lambda self, *a: False), \
+                    mock.patch.object(S, "block_unwanted", lambda self, *a: False):
+                S.make_heightmap(srv, anchor, 768.0, -128.0, None, earthd.LANE_PREFETCH)
+            pool.shutdown(wait=True)
+            return srv
+
+        srv = run(False)                    # (not kept: skipped, painted once the mod has it, as before)
+        self.assertIn((6, 768.0, -128.0), srv.base_skipped)
+        self.assertNotIn(("photo", (768.0, -128.0)), calls)
+        srv = run(True)                     # (kept: taken beside the heights, no stand-in, not skipped)
+        self.assertNotIn((6, 768.0, -128.0), srv.base_skipped)
+        self.assertEqual(calls[0], ("photo", (768.0, -128.0)))
+        self.assertNotIn("standin", [c[0] for c in calls])
 
     def test_off(self):
         revisit.ON = False
