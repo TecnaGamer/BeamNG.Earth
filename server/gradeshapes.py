@@ -537,9 +537,22 @@ def _pair_relations(net, i, j):
                    for u in uniq):
             uniq.append(r_)
     out[:] = uniq
+    up = _over(net.m[i], net.m[j])
     for si, sj, q in hits:
         if any(r_[0] == j and r_[1] == "cross" and abs(r_[2] - si) < 1.0 for r_ in out):
             continue                        # (on a vertex: found on both its segments)
+        if up is not None and net.m[i].kind in STRUCTURES and net.m[j].kind in STRUCTURES:
+            # (a crossing nearer a joint of the same two structures than the clearance takes at their grade, along both
+            # to it, is that joint: one stretch of road meeting itself at a shallow angle, not one over the other, which
+            # the joint holds at one height and the clearance at several metres apart: _stacked's rule. Only between
+            # two structures: both heights are the shape's, the joint an equation. A deck's end on a road on the
+            # ground is no equation (the road's own height is read, the deck's end weighs where it meets it), and a
+            # deck that crosses that road a metre or two before its end is over it)
+            u, d = (i, j) if up == "i" else (j, i)
+            need = clearance_need(net, u, d, q)
+            g = max(deck_grade(net.m[i]), deck_grade(net.m[j]))
+            if any(r_[0] == j and r_[1] == "join" and abs(r_[2] - si) + abs(r_[3] - sj) < need / g for r_ in out):
+                continue
         out.append((j, "cross", si, sj, q))
     return [r_[1:] for r_ in out]
 
