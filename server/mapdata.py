@@ -599,28 +599,31 @@ class MapData:
         return lanesections.split(f, frame, lane_context)
 
     def _bdtopo(self, key, layer, feats):
-        """A French buildings layer with IGN BD TOPO's measured heights, storeys, materials and use (bdtopo.py), joined
-        once its cell's records are here; never waits for them nor asks for them: the building tiles do, for their own
-        cells (bdtopo_wait), not every reader of the outlines (the town coverage's 30-odd cells round a tile, the
-        trees' masks). Returns the layer."""
+        """A French buildings layer with IGN BD TOPO's measured heights, storeys, materials and use (bdtopo.py), and
+        any BD TOPO buildings missing from the map appended, once its cell's records are here; never waits for them
+        nor asks for them: the building tiles do, for their own cells (bdtopo_wait), not every reader of the outlines
+        (the town coverage's 30-odd cells round a tile, the trees' masks). Returns the layer."""
         src = getattr(self, "bdtopo", None)
         if src is None or layer != "buildings" or feats is None or feats.__dict__.get("_bdtopo") is not None:
             return feats
         import bdtopo
-        if not bdtopo.covers(_key(key).bounds()):
+        ck = _key(key)
+        bounds = ck.bounds()
+        if not bdtopo.covers(bounds):
             feats.__dict__["_bdtopo"] = False
             return feats
-        recs = src.cached(key)
+        recs = src.cached(ck)
         if recs is None:
             return feats
-        try:
-            got = bdtopo.join(feats, recs) if len(feats) else None
-        except Exception as e:      # (the map's attributes alone)
-            log.warning("bdtopo join %s: %s: %s", key, type(e).__name__, e)
-            got = None
-        if got is not None:
-            feats.attrs = got       # (one swap: a reader holds either the old attrs or the new ones)
-        feats.__dict__["_bdtopo"] = recs.n
+        with self._lock:
+            if feats.__dict__.get("_bdtopo") is not None:
+                return feats
+            try:
+                lat_c, lon_c = ck.center()
+                bdtopo.merge(feats, recs, bounds=bounds, frame=geodesy.EnuFrame(lat_c, lon_c, 0.0))
+            except Exception as e:      # (the map's attributes alone)
+                log.warning("bdtopo join %s: %s: %s", key, type(e).__name__, e)
+            feats.__dict__["_bdtopo"] = recs.n
         return feats
 
     def bdtopo_wait(self, keys, wait=True):

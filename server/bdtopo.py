@@ -47,13 +47,14 @@ log = logging.getLogger("earthd.bdtopo")
 
 ON = os.environ.get("BNE_BDTOPO", "on") != "off"
 NATIVE = 183                    # earthfast.VERSION of bdtopo_points / bdtopo_match
-VERSION = 1                     # the records' layout on disk (BDTOPO_DIR)
+NATIVE_UNMATCHED = 561          # earthfast.VERSION of bdtopo_unmatched
+VERSION = 2                     # the records' layout on disk (BDTOPO_DIR: v2 adds id, coord_off, ring_lonlat)
 WFS_URL = "https://data.geopf.fr/wfs/ows"
 LANE = "ign_wfs"                # (roadz's lane: one bucket for IGN's WFS)
 PAGE = 5000                     # the Geoplateforme's most features a request
 PAGES = 12
-FIELDS = ("geometrie,nature,usage_1,construction_legere,nombre_d_etages,nombre_de_logements,materiaux_des_murs,"
-          "materiaux_de_la_toiture,hauteur,altitude_minimale_toit,altitude_maximale_toit")
+FIELDS = ("geometrie,cleabs,nature,usage_1,construction_legere,nombre_d_etages,nombre_de_logements,"
+          "materiaux_des_murs,materiaux_de_la_toiture,hauteur,altitude_minimale_toit,altitude_maximale_toit")
 THREADS = 4                     # background cell downloads at once per process (the host allows 12, roadz shares it)
 # (BNGE_: not part of the revisit cache's code key; the wait changes when a tile is built, not what)
 WAIT_S = float(os.environ.get("BNGE_BDTOPO_WAIT", "4"))
@@ -140,8 +141,9 @@ def _code(v):
 def parse(features):
     """The records (dict of arrays) of BD TOPO `batiment` GeoJSON features (CRS:84): one per building with an outline
     of 3 points or more. Pure (but for the native points)."""
+    import mapgeom
     fast.require(NATIVE, "bdtopo_points")
-    coords, off = [], [0]
+    coords, off, ids = [], [0], []
     h, rise, floors, dwell, wall, roof, use, nat, light = [], [], [], [], [], [], [], [], []
     for f in features or ():
         if not isinstance(f, dict):
@@ -159,6 +161,8 @@ def parse(features):
         if len(ring) < 4 or not np.isfinite(ring).all():
             continue
         p = f.get("properties") or {}
+        fid = str(p.get("cleabs") or f.get("id") or f"b{len(ids)}").strip()
+        ids.append(fid or f"b{len(ids)}")
         coords.append(ring)
         off.append(off[-1] + len(ring))
         eave = _num(p.get("hauteur"))
@@ -177,18 +181,25 @@ def parse(features):
         nat.append(NATURES.index(n_) if n_ in NATURES else 0)
         light.append(bool(p.get("construction_legere")))
     if coords:
-        pts, area = fast._ef.bdtopo_points(np.asarray(off, np.int64), np.ascontiguousarray(np.concatenate(coords)))
+        ring_lonlat = np.ascontiguousarray(np.concatenate(coords), np.float64)
+        coord_off = np.asarray(off, np.int64)
+        pts, area = fast._ef.bdtopo_points(coord_off, ring_lonlat)
     else:
+        ring_lonlat = np.zeros((0, 2), np.float64)
+        coord_off = np.zeros(1, np.int64)
         pts, area = np.zeros((0, 2)), np.zeros(0)
     return {"lon": np.asarray(pts[:, 0], np.float64), "lat": np.asarray(pts[:, 1], np.float64),
             "area": np.asarray(area, np.float32), "h": np.asarray(h, np.float32),
             "rise": np.asarray(rise, np.float32), "floors": np.asarray(floors, np.int16),
             "dwell": np.asarray(dwell, np.int16), "wall": np.asarray(wall, np.uint8),
             "roof": np.asarray(roof, np.uint8), "use": np.asarray(use, np.uint8), "nature": np.asarray(nat, np.uint8),
-            "light": np.asarray(light, bool)}
+            "light": np.asarray(light, bool),
+            "id": mapgeom.text_column(ids) if ids else np.zeros(0, "<U1"),
+            "coord_off": coord_off, "ring_lonlat": ring_lonlat}
 
 
-FIELDS_NPZ = ("lon", "lat", "area", "h", "rise", "floors", "dwell", "wall", "roof", "use", "nature", "light")
+FIELDS_NPZ = ("lon", "lat", "area", "h", "rise", "floors", "dwell", "wall", "roof", "use", "nature", "light",
+              "id", "coord_off", "ring_lonlat")
 
 
 def interpret(r):
@@ -289,6 +300,120 @@ def join(feats, recs):
     return a
 
 
+def unmatched(feats, recs, bounds=None):
+    """A buildings Features of the records in recs that match no footprint of feats and whose point lies in bounds
+    ((lon0, lat0, lon1, lat1); None: any), sorted by their '~ign:<id>' key, or None when there are none. Existing
+    footprints in feats are never suppressed or replaced."""
+    import buildings
+    import mapgeom
+    if recs.n == 0 or not len(recs.ring_lonlat):
+        return None
+    fast.require(NATIVE_UNMATCHED, "bdtopo_unmatched")
+    n = len(feats) if feats is not None else 0
+    if n > 0:
+        po, ro, co = (np.asarray(a, np.int64) for a in (feats.part_off, feats.ring_off, feats.coord_off))
+        has = (po[1:] > po[:-1]) & (np.asarray(feats.kind) == mapgeom.POLYGON)
+        first = ro[np.minimum(po[:-1], len(ro) - 1)]
+        first = np.minimum(first, len(co) - 2)
+        start = np.ascontiguousarray(np.where(has, co[first], 0), np.int64)
+        end = np.ascontiguousarray(np.where(has, co[first + 1], 0), np.int64)
+        ll = np.ascontiguousarray(feats.lonlat, np.float64)
+    else:
+        start = np.zeros(0, np.int64)
+        end = np.zeros(0, np.int64)
+        ll = np.zeros((0, 2), np.float64)
+    b = tuple(float(v) for v in bounds) if bounds is not None else (-180.0, -90.0, 180.0, 90.0)
+    idx, ids, coord_off, ring_ll = fast._ef.bdtopo_unmatched(
+        start, end, ll, recs.lon, recs.lat, recs.area.astype(np.float64),
+        recs.coord_off, recs.ring_lonlat, list(recs.ids), b, float(buildings.MIN_AREA_M2))
+    idx = np.asarray(idx, np.int64)
+    if len(idx) == 0:
+        return None
+    m = len(idx)
+    it = recs.attrs
+    rec_h = it["height"][idx].astype(np.float32)
+    rec_r = it["roof_rise"][idx].astype(np.float32)
+    rec_f = it["num_floors"][idx].astype(np.float32)
+    has_h = np.isfinite(rec_h)
+    h_src = np.where(~has_h, "", np.where(it["eave_only"][idx], "ign_bdtopo_eave", "ign_bdtopo"))
+    rh = np.where(np.isfinite(rec_r) & (rec_r >= RISE_FLAT_M), rec_r, np.nan).astype(np.float32)
+    step = np.arange(m + 1, dtype=np.int64)
+    id_col = mapgeom.text_column(ids)
+    empty_txt = mapgeom.text_column([""] * m)
+    nan_col = np.full(m, np.nan, np.float32)
+    false_col = np.zeros(m, bool)
+    attrs = {
+        "subtype": mapgeom.text_column(["building"] * m),
+        "class": mapgeom.text_column(it["cls"][idx].tolist()),
+        "name": empty_txt,
+        "src_dataset": mapgeom.text_column(["IGN_BDTOPO"] * m),
+        "src_record": id_col,
+        "roof_shape": empty_txt,
+        "roof_orientation": empty_txt,
+        "roof_material": mapgeom.text_column(it["roof_material"][idx].tolist()),
+        "roof_color": empty_txt,
+        "facade_material": mapgeom.text_column(it["facade_material"][idx].tolist()),
+        "facade_color": empty_txt,
+        "height_src": mapgeom.text_column(h_src.tolist()),
+        "height": rec_h,
+        "min_height": nan_col.copy(),
+        "num_floors": rec_f,
+        "num_floors_underground": nan_col.copy(),
+        "min_floor": nan_col.copy(),
+        "level": nan_col.copy(),
+        "roof_rise": rec_r,
+        "roof_height": rh,
+        "roof_direction": nan_col.copy(),
+        "is_underground": false_col.copy(),
+        "has_parts": false_col.copy(),
+    }
+    return mapgeom.Features(
+        layer="buildings", ids=id_col, kind=np.full(m, mapgeom.POLYGON, np.uint8),
+        part_off=step, ring_off=step.copy(), coord_off=np.asarray(coord_off, np.int64),
+        lonlat=np.ascontiguousarray(ring_ll, np.float64),
+        own=np.ones(m, bool), clipped=np.zeros(m, bool), attrs=attrs)
+
+
+def merge(feats, recs, bounds=None, frame=None):
+    """feats with the matched records' attributes (join) and the unmatched records' footprints appended (unmatched),
+    without suppressing or replacing any footprint of feats. Mutates feats in place and returns it."""
+    import mapgeom
+    if feats is None or recs.n == 0:
+        return feats
+    if len(feats):
+        got = join(feats, recs)
+        if got is not None:
+            feats.attrs = got
+    extra = unmatched(feats, recs, bounds=bounds)
+    if extra is None or len(extra) == 0:
+        return feats
+    if len(feats) and feats.own is None:
+        feats.own = np.ones(len(feats), bool)
+    had_en = feats.en is not None
+    en_a = feats.en
+    merged = mapgeom.concat(feats, extra) if len(feats) else extra
+    if had_en:
+        if frame is not None:
+            extra.localize(frame)
+            merged.en = np.vstack([en_a, extra.en]) if len(en_a) else extra.en
+        else:
+            merged.en = None
+    feats.ids = merged.ids
+    feats.kind = merged.kind
+    feats.part_off = merged.part_off
+    feats.ring_off = merged.ring_off
+    feats.coord_off = merged.coord_off
+    feats.lonlat = merged.lonlat
+    feats.en = merged.en
+    feats.own = merged.own
+    feats.clipped = merged.clipped
+    feats.attrs = merged.attrs
+    feats.rules = merged.rules
+    for k in ("_xy_in", "_ecef", "_centres", "_boxes", "_ll_boxes"):
+        feats.__dict__.pop(k, None)
+    return feats
+
+
 class Records:
     """A cell's records (FIELDS_NPZ arrays) and what they give (interpret)."""
 
@@ -297,11 +422,20 @@ class Records:
         self.lat = np.ascontiguousarray(arrays["lat"], np.float64)
         self.area = np.ascontiguousarray(arrays["area"], np.float32)
         self.n = len(self.lon)
+        self.ids = ([str(x) for x in arrays["id"].tolist()] if "id" in arrays
+                    else [f"b{i}" for i in range(self.n)])
+        self.coord_off = (np.ascontiguousarray(arrays["coord_off"], np.int64) if "coord_off" in arrays
+                          else np.zeros(self.n + 1, np.int64))
+        self.ring_lonlat = (np.ascontiguousarray(arrays["ring_lonlat"], np.float64) if "ring_lonlat" in arrays
+                            else np.zeros((0, 2), np.float64))
         self.raw = arrays
         self.attrs = interpret(arrays) if self.n else {}
 
 
-EMPTY = Records({k: np.zeros(0) for k in FIELDS_NPZ})
+EMPTY = Records({**{k: np.zeros(0) for k in FIELDS_NPZ},
+                 "id": np.zeros(0, "<U1"),
+                 "coord_off": np.zeros(1, np.int64),
+                 "ring_lonlat": np.zeros((0, 2), np.float64)})
 
 
 class Source:
