@@ -241,8 +241,11 @@ local function meadow(w)
       types = { [3] = { layer = DUSTY, p = 0.1 } } }),
     -- the spring flowers of the forest floor (East Coast USA's violet flowers)
     E('woodflowers', 'eca', 'Purple_flowers', FOREST, 0.03, { months = w.woodflowers }),
-    -- the lush undergrowth (ivy, fern fronds, ferns, twigs: not its big tropical leaf) and climbing vines in summer
-    E('undergrowth', 'own', 'bngEarth_lush', FOREST, 0.4, { types = { [5] = { p = 0 } } }),
+    -- the lush undergrowth (ivy, grass blades, twigs) and climbing vines in summer. Not its fern fronds (2, 3) nor its
+    -- big tropical leaf (5): a single frond stood up as a billboard reads as a conifer seedling, hundreds of them on a
+    -- Finnish forest floor (the user's 2026-11-20, Pirkanmaa); the forest floor's ferns are the server's 3D ones
+    -- (vegetation FERN_SHARE). Its share cut as its types are (2.1 of their 4.1 probability left)
+    E('undergrowth', 'own', 'bngEarth_lush', FOREST, 0.2, { types = { [2] = { p = 0 }, [3] = { p = 0 }, [5] = { p = 0 } } }),
     E('vines', 'own', 'bngEarth_vines', FOREST, 0.3, { months = w.nettles }),
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.15),
     E('weeds', 'att', 'weed1', DUSTY, 0.03, { months = w.nettles }),
@@ -271,7 +274,8 @@ M.PROFILES = {
     E('lawn', 'wcusa', 'mown_grass_close', LAWN, 0.7),
     E('woodflowers', 'eca', 'Purple_flowers', FOREST, 0.03, { months = span(3, 5) }),
     E('nettles', 'industrial', 'Nettles_01', FOREST, 0.05, { months = span(4, 10) }),
-    E('undergrowth', 'own', 'bngEarth_lush', FOREST, 0.5, { types = { [4] = { p = 0 } } }),
+    -- (its fern fronds out as in meadow(): seedlings; its big leaf and ivy kept; 2.5 of 4.5 of its probability left)
+    E('undergrowth', 'own', 'bngEarth_lush', FOREST, 0.28, { types = { [2] = { p = 0 }, [3] = { p = 0 }, [4] = { p = 0 } } }),
     E('vines', 'own', 'bngEarth_vines', FOREST, 0.5, { months = span(4, 11) }),
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.15),
   }, wetland(0.06, 0.15, 0.01), fields({ young = span(3, 4), ripe = span(5, 6), stubble = span(7, 8) })),
