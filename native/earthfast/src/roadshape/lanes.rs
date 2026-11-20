@@ -964,17 +964,198 @@ fn node_links(c: &Ctx, n: usize) -> Vec<String> {
     out
 }
 
+/// Directional counts, turn tags and placement for an entire decoded layer.
+/// Missing or non-string values carry the same defaults as absent OSM tags.
+#[pyfunction]
+pub fn lane_tag_columns(
+    py: Python<'_>, n: usize, cols: Vec<Option<Vec<Py<PyAny>>>>,
+) -> PyResult<Vec<(i64, i64, String, String, String)>> {
+    if cols.len() != 6 || cols.iter().flatten().any(|c| c.len() != n) {
+        return Err(PyValueError::new_err("lane_tag_columns: invalid tag columns"));
+    }
+    let tag = |col: usize, i: usize| -> &str {
+        cols[col].as_ref().and_then(|c| c[i].bind(py).cast::<pyo3::types::PyString>().ok())
+            .and_then(|s| s.to_str().ok()).unwrap_or("")
+    };
+    let int = py.get_type::<pyo3::types::PyInt>();
+    let mut parsed = std::collections::BTreeMap::new();
+    let mut count = |s: &str| -> i64 {
+        if s.is_empty() { return -1; }
+        if let Some(&v) = parsed.get(s) { return v; }
+        let token = s.split(';').next().unwrap_or("").trim_matches(|c: char|
+            c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c));
+        let v = int.call1((token,)).and_then(|x| x.extract::<i64>()).ok()
+            .filter(|v| (0..=16).contains(v)).unwrap_or(-1);
+        parsed.insert(s.to_owned(), v);
+        v
+    };
+    Ok((0..n).map(|i| {
+        let p = tag(4, i);
+        (count(tag(0,i)), count(tag(1,i)), tag(2,i).to_owned(), tag(3,i).to_owned(),
+         if p.is_empty() { tag(5,i) } else { p }.to_owned())
+    }).collect())
+}
+
+/// Build S1's per-feature columns in one pass over a decoded cell. The
+/// Python caller supplies the driving width/count from the shared lane layout
+/// rule. Connector stations use the same first-nearest rule as the fork graph.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn lane_cell_rows<'py>(
+    py: Python<'py>,
+    ll: PyReadonlyArray2<'py, f64>,
+    parts: Vec<usize>,
+    rings: Vec<usize>,
+    coords: Vec<usize>,
+    ids: Vec<String>,
+    specs: Vec<Option<(i64, bool, i64, i64, f64, f64, f64, i64)>>,
+    tags: Vec<Option<Vec<Py<PyAny>>>>,
+    turns: Vec<Py<PyAny>>,
+    features: Vec<usize>,
+    starts: Vec<f64>,
+    connectors: Vec<String>,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    use numpy::ndarray::s;
+    use pyo3::types::{PyDict, PySlice, PyString};
+    let n = ids.len();
+    let geom = ll.as_array();
+    let offsets = |v: &[usize], total: usize| {
+        v.first() == Some(&0) && v.windows(2).all(|w| w[0] <= w[1]) && v.last() == Some(&total)
+    };
+    if specs.len() != n
+        || !turns.is_empty() && turns.len() != n
+        || parts.len() != n + 1
+        || rings.is_empty()
+        || coords.is_empty()
+        || !offsets(&parts, rings.len() - 1)
+        || !offsets(&rings, coords.len() - 1)
+        || !offsets(&coords, geom.nrows())
+        || geom.ncols() != 2
+        || features.len() != starts.len()
+        || starts.len() != connectors.len()
+        || features.iter().any(|&i| i >= n)
+    {
+        return Err(PyValueError::new_err(
+            "lane_cell_rows: inconsistent geometry or rule columns",
+        ));
+    }
+    let tags = lane_tag_columns(py, n, tags)?;
+    let mut rules = vec![Vec::new(); n];
+    for (j, &i) in features.iter().enumerate() {
+        rules[i].push(j);
+    }
+    let out = PyDict::new(py);
+    for (i, spec) in specs.into_iter().enumerate() {
+        let Some((cls, link, dir, lanes, kmh, pave, drive, inferred)) = spec else {
+            continue;
+        };
+        let p = parts[i];
+        if p == parts[i + 1] || rings[p] == rings[p + 1] {
+            continue;
+        }
+        let k = rings[p];
+        let (a, b) = (coords[k], coords[k + 1]);
+        if b - a < 2 {
+            continue;
+        }
+        let line = geom.slice(s![a..b, ..]);
+        let key = format!("{}|{:.7},{:.7}", ids[i], line[[0, 0]], line[[0, 1]]);
+        let row = PyDict::new(py);
+        row.set_item(
+            "ll",
+            ll.get_item(PySlice::new(py, a as isize, b as isize, 1))?,
+        )?;
+        let st: Vec<_> = rules[i].iter().map(|&j| starts[j]).collect();
+        let verts = super::segments::vertices(line, &st);
+        let con: Vec<_> = rules[i]
+            .iter()
+            .zip(verts)
+            .map(|(&j, v)| (&connectors[j], v))
+            .collect();
+        row.set_item("cons", con)?;
+        let (fw, bw, ref tf, ref tb, ref place) = tags[i];
+        let fallback = turns
+            .get(i)
+            .and_then(|v| v.bind(py).cast::<PyString>().ok())
+            .and_then(|s| s.to_str().ok())
+            .unwrap_or("");
+        row.set_item("cls", cls)?;
+        row.set_item("link", link)?;
+        row.set_item("dir", dir)?;
+        row.set_item("lanes", lanes)?;
+        row.set_item("kmh", kmh)?;
+        row.set_item("lfw", if dir == 0 { fw } else { -1 })?;
+        row.set_item("lbw", if dir == 0 { bw } else { -1 })?;
+        row.set_item(
+            "turn",
+            if dir == 0 && !tf.is_empty() {
+                tf.as_str()
+            } else {
+                fallback
+            },
+        )?;
+        row.set_item("turn_bw", if dir == 0 { tb.as_str() } else { "" })?;
+        row.set_item("place", place)?;
+        let lane_w = if lanes > 0 {
+            (if cls > 0 { drive } else { pave }) / lanes as f64
+        } else {
+            drive / inferred.max(1) as f64
+        };
+        row.set_item("lane_w", lane_w)?;
+        out.set_item(key, row)?;
+    }
+    Ok(out)
+}
+
+/// Assemble the lane graph connector columns in sorted segment order. The home
+/// cell is west/south inclusive, east/north exclusive, in unprojected lon/lat.
+#[pyfunction]
+pub fn lane_connectors(
+    ll: PyReadonlyArray2<'_, f64>,
+    off: Vec<usize>,
+    rows: Vec<Vec<(String, usize)>>,
+    bounds: [f64; 4],
+) -> PyResult<(Vec<bool>, Vec<String>, Vec<usize>, Vec<usize>, Vec<bool>)> {
+    let ll = ll.as_array();
+    if ll.ncols() != 2 || off.len() != rows.len() + 1 || off.first() != Some(&0)
+        || off.last() != Some(&ll.nrows()) || off.windows(2).any(|r| r[1] <= r[0]) {
+        return Err(PyValueError::new_err("lane_connectors: invalid segment offsets"));
+    }
+    let inside = |i: usize| {
+        let (x, y) = (ll[[i, 0]], ll[[i, 1]]);
+        bounds[0] <= x && x < bounds[2] && bounds[1] <= y && y < bounds[3]
+    };
+    let (mut home, mut ids, mut seg, mut vertex, mut con_home) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for (g, cons) in rows.into_iter().enumerate() {
+        home.push(inside(off[g]));
+        for (id, v) in cons {
+            if v >= off[g + 1] - off[g] {
+                return Err(PyValueError::new_err("lane_connectors: vertex outside segment"));
+            }
+            ids.push(id);
+            seg.push(g);
+            vertex.push(v);
+            con_home.push(inside(off[g] + v));
+        }
+    }
+    Ok((home, ids, seg, vertex, con_home))
+}
+
+
 /// lanegraph.cell_lanes: the lane graph of the home nodes and segments, one JSON object (module doc). Segments in fid
 /// order (xy rows off[k]..off[k+1], the home cell's frame, m); connector rows (id, segment, vertex, home) in any
 /// order; seg_home: the segments whose record the cell writes; table: the TaperRule table, REGIONS x T_N.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (xy, off, fid, cls, link, dir, lanes, lanes_fw, lanes_bw, kmh, lane_w, turn, turn_bw,
+                    place, region, seg_home, con_id, con_seg, con_vtx, con_home, params, table, events_only=false))]
 pub fn lane_graph<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: Vec<i64>, fid: Vec<String>,
                        cls: Vec<i64>, link: Vec<bool>, dir: Vec<i64>, lanes: Vec<i64>, lanes_fw: Vec<i64>,
                        lanes_bw: Vec<i64>, kmh: Vec<f64>, lane_w: Vec<f64>, turn: Vec<String>, turn_bw: Vec<String>,
                        place: Vec<String>, region: Vec<i64>, seg_home: Vec<bool>,
                        con_id: Vec<String>, con_seg: Vec<i64>, con_vtx: Vec<i64>, con_home: Vec<bool>,
-                       params: PyReadonlyArray1<'py, f64>, table: PyReadonlyArray1<'py, f64>) -> PyResult<String> {
+                       params: PyReadonlyArray1<'py, f64>, table: PyReadonlyArray1<'py, f64>, events_only: bool) -> PyResult<String> {
     let (xy, prm, tab) = (xy.as_array(), params.as_array().to_vec(), table.as_array().to_vec());
     let ns = off.len().saturating_sub(1);
     let regions = tab.len() / T_N;
@@ -1033,6 +1214,9 @@ pub fn lane_graph<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: Vec
             let recs: Vec<String> = if arms.len() == 3 { fork_event(&c, n).into_iter().collect() }
                                     else if arms.len() == 2 { add_drop_events(&c, n) } else { Vec::new() };
             for r in recs { ev.push(format!("{{\"node\":{},{}", json_str(&node_id[n]), r)); }
+        }
+        if events_only {
+            return format!("{{\"events\":[{}]}}", ev.join(","));
         }
         let sr: Vec<String> = (0..ns).filter(|&g| seg_home[g] && segs[g].cls > 0 && segs[g].pts.len() >= 2)
             .map(|g| seg_record(&c, g)).collect();

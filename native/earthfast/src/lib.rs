@@ -7380,8 +7380,17 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<roadshape::segments::SegmentWindow>()?;
     m.add_function(wrap_pyfunction!(roadshape::segments::connector_vertices, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::paint::pavement_coverage, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::lanes::lane_cell_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::lanes::lane_tag_columns, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::lanes::lane_connectors, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::lanes::lane_graph, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::lane_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_slab_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_ramp_offsets, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_surface_groups, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_surface_z, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_event_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_surface_edges, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::cut_lines, m)?)?;
     // 542: road surface v3 phase S2 (roadshape::surface: the ground road surface as one mesh, lane strips sharing
     // their rows, pieces welded to the roads on shared rows, markings from the boundaries; BNE_ROADSURF_V3=surface)
@@ -7429,6 +7438,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(railcrossings::rail_cut_worn, m)?)?;
     // 550: ground-road surface partitions, lane window selection and pavement coverage.
     // 552: try598 with 549 (codex-port2 rail crossings) and 550 (v3 S2b) merged
-    m.add("VERSION", 552)?;
+    m.add("VERSION", 553)?;
     Ok(())
 }

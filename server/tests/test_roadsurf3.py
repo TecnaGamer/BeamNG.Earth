@@ -173,7 +173,7 @@ class BuildFaults(unittest.TestCase):
     def test_surface_cache_generation(self):
         import revisit
         self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "off"), "BNE_ROADSURF_V3=off")
-        self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "surface"), "BNE_ROADSURF_V3=surface@v2")
+        self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "surface"), "BNE_ROADSURF_V3=surface@v4")
 
     def test_fallback_marks_the_active_tile_short(self):
         from unittest.mock import patch
@@ -226,7 +226,7 @@ class BuildFaults(unittest.TestCase):
         import revisit
         home = mapcells.CellKey(14, 3000, 6001)
         feature = SimpleNamespace(_road_revision=0)
-        def build(key, cell, memo, read_cells):
+        def build(key, cell, memo, read_cells, events_only):
             read_cells.append(key)
             cell(key)._road_revision += 1
             return {}
@@ -243,7 +243,7 @@ class BuildFaults(unittest.TestCase):
         import mapcells
         home, copy = mapcells.CellKey(14, 3000, 6000), mapcells.CellKey(14, 3004, 6000)
         f = SimpleNamespace(_road_revision=0)
-        def read(key, cell, memo, read_cells):
+        def read(key, cell, memo, read_cells, events_only):
             read_cells.extend((home, copy))
             return cell(copy)._road_revision
         with patch.object(roadsurf3.lanegraph, "cell_lanes", side_effect=read) as build:
