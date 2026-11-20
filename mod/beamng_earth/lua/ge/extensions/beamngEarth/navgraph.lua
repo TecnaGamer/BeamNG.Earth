@@ -1240,6 +1240,21 @@ function M.transform(xf, anchorId)
 end
 
 function M.currentGraph() return graph end      -- (tests)
+
+-- Pure: does the graph in the game's map (a: navgraph's applied {anchor, serial, box}) belong to anchor aid and cover
+-- r round (x, y)? After a teleport the map keeps the old anchor's graph, in the old frame, until the new one is applied
+-- (the junction tour read it at once: a drive 1.1 km off, its start 52 m over the junction's ground). A box with no
+-- corners: the graph unclipped.
+function M.covers(a, aid, x, y, r)
+  if not a or a.anchor ~= aid then return false end
+  local b = a.box
+  if not (b and b[1]) then return true end
+  return x - r >= b[1] and x + r <= b[3] and y - r >= b[2] and y + r <= b[4]
+end
+
+-- The graph in the game's map (map.getMap()) is anchor aid's and covers r round (x, y) (tools reading the map's nodes:
+-- the EarthRally junction tour).
+function M.appliedCovers(aid, x, y, r) return M.covers(applied, aid, x, y, r) end
 function M._startTraffic() return startTraffic() end    -- (tests: the level start's traffic, by hand)
 function M._cuts() return cuts end      -- (probes: the clip's cut nodes)
 
