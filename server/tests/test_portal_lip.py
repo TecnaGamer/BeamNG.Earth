@@ -95,8 +95,9 @@ class ClearBridgeEndsTest(unittest.TestCase):
         self.assertEqual(self.run_rule(rails), rails)
 
     def test_at_most_end_clear_max(self):
-        bridge = np.vstack(                                # (a bridge crossing to the road's centre line ...[_line((0.0, -40.0), (0.0, 0.0))[:-1], _line((0.0, 0.0), (0.0, 0.5))])
-        ground = _line((0.0, 0.5), (200.0, 0.5))          # (then along the road's centre line)
+        # (a bridge crossing to the road's centre line, its ground part then running along it)
+        bridge = np.vstack([_line((0.0, -40.0), (0.0, 0.0))[:-1], _line((0.0, 0.0), (0.0, 0.5))])
+        ground = _line((0.0, 0.5), (200.0, 0.5))
         got = self.run_rule([("a", "standard_gauge", "bridge", bridge), ("a", "standard_gauge", "ground", ground)])
         added = got[1][3]
         self.assertLessEqual(railways._arc(added)[-1], railways.END_CLEAR_MAX_M + railways.STEP_M + 1e-6)
