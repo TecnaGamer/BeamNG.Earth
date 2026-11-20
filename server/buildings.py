@@ -6287,6 +6287,7 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
 
                     revisit.fault()     # (built again next visit; meanwhile the model keeps its own collision)
                     log.warning("3dmr model %s: deck slab failed", cid, exc_info=True)
+            overlay = bool((c.get("local") or {}).get("storefront_overlay"))
             for sec in sections:
                 for (
                     material,
@@ -6302,8 +6303,8 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                         double_sided=double_sided,
                     )
                 entry = {"shape": f"{vfs_dir}/{sec['shape']}", "pos": pos_xy}
-                if plate is not None:
-                    entry["col"] = False    # (drawn only: the car is carried by its deck slab)
+                if plate is not None or overlay:
+                    entry["col"] = False
                 entries.append(entry)
             if plate is not None:
                 entries.append({"shape": f"{vfs_dir}/{plate['shape']}", "pos": pos_xy})
@@ -6330,7 +6331,8 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                 max(max(dx, dy) / 2.0 + SUPPRESS_MARGIN_M, SUPPRESS_MIN_M),
                 SUPPRESS_MAX_M,
             )
-            radii.append((cid, float(c["xy"][0]), float(c["xy"][1]), radius))
+            if not overlay:  # A tenant sign needs its procedural host building.
+                radii.append((cid, float(c["xy"][0]), float(c["xy"][1]), radius))
         except threedmr.UnsupportedModelError:
             pass  # already logged (threedmr.gltf_mesh): not a transient failure, no revisit.fault()
         except Exception:

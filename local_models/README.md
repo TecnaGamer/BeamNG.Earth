@@ -34,6 +34,9 @@ you want them: a mast, a monument, a building of your town nobody has uploaded y
 
 Procedural buildings whose footprint lies under the model are left out, so they do not poke through it.
 
+To generate standalone stores and ground-floor tenant facades from an OSM extract, see the
+[storefront generator](../tools/storefronts/README.md). A tenant overlay keeps the host building and its collision.
+
 ## Sharing a model with everyone
 
 Upload it to [3dmr.eu](https://3dmr.eu) (an OpenStreetMap account is the login; choose the licence, CC0 or
