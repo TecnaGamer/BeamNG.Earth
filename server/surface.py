@@ -988,8 +988,15 @@ def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False, p
     per set of cells, not again for every square.
     simple: the carriageways alone (a stand-in photo). pads: the gas station pads [(lat, lon)] (the server's, handed
     to a far-tile process with the square); None: the surface's own (_square_pads)."""
-    if surface is None or size / max(rgb.shape[1], 1) > PHOTO_ROADS_MAX_TEXEL:
-        return rgb
+    h, w = rgb.shape[:2]
+    layers = square_paint_layers(frame, x0, y0, size, w, h, surface, widths, simple, pending, pads)
+    return rgb if layers is None else layers.paint(np.asarray(rgb, np.uint8))
+
+
+def square_paint_layers(frame, x0, y0, size, w, h, surface, widths=None, simple=False, pending=None, pads=None):
+    """Native paint inputs for the square, or None when there is nothing to paint."""
+    if surface is None or size / max(w, 1) > PHOTO_ROADS_MAX_TEXEL:
+        return None
     import paintlist
     roads = _square_roads(frame, x0, y0, size, surface, pending)
     lots = []
@@ -998,9 +1005,9 @@ def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False, p
         if pads is None:
             pads = _square_pads(frame, x0, y0, size, surface)
     if simple and not roads:
-        return rgb
-    pavement = _photo_pavement(surface, frame, x0, y0, size, widths, rgb.shape[1], rgb.shape[0], pending) if roads else None
-    return paintlist.paint(rgb, frame, x0, y0, size, roads, lots, getattr(surface, "urban", None), widths,
+        return None
+    pavement = _photo_pavement(surface, frame, x0, y0, size, widths, w, h, pending) if roads else None
+    return paintlist.prepare(frame, x0, y0, size, roads, lots, getattr(surface, "urban", None), widths,
                            pads or (), simple=simple, pavement=pavement)
 
 

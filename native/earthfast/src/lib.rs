@@ -81,6 +81,11 @@ mod sidewalks;
 mod townwalk;
 mod roadz;
 mod fartex;
+mod photojpeg;
+mod leafon;
+mod photomesh;
+mod deshadow;
+mod colormatch;
 mod finished_tile;
 mod farglobal;
 mod farpvs;
@@ -4373,29 +4378,8 @@ fn terrarium_heights<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bo
 #[pyfunction]
 fn rf_pass(py: Python<'_>, mut x: numpy::PyReadwriteArray3<'_, f32>, cut_prev: PyReadonlyArray2<'_, bool>, a: f64) {
     let cut = cut_prev.as_array();
-    let mut xa = x.as_array_mut();
-    let (rows, cols, ch) = (xa.shape()[0], xa.shape()[1], xa.shape()[2]);
-    let af = a as f32;
-    py.detach(|| {
-        for r in 0..rows {
-            for c in 1..cols {
-                let f = if cut[[r, c]] { 0.0f32 } else { af };
-                for k in 0..ch {
-                    let prev = xa[[r, c - 1, k]];
-                    let cur = xa[[r, c, k]];
-                    xa[[r, c, k]] = cur + f * (prev - cur);
-                }
-            }
-            for c in (0..cols.saturating_sub(1)).rev() {
-                let f = if cut[[r, c + 1]] { 0.0f32 } else { af };
-                for k in 0..ch {
-                    let next = xa[[r, c + 1, k]];
-                    let cur = xa[[r, c, k]];
-                    xa[[r, c, k]] = cur + f * (next - cur);
-                }
-            }
-        }
-    });
+    let xa = x.as_array_mut();
+    py.detach(|| colormatch::rf_pass(xa, cut, a as f32));
 }
 
 /// colormatch._vmedian: the lower median over axis 0 of X (K, h, w) float32 of the entries with ok (K, h, w), the
@@ -4688,30 +4672,32 @@ fn horizon_steps<'py>(py: Python<'py>, hpad: PyReadonlyArray2<'py, f32>, mut bes
     let n = best.as_array().shape()[0];
     let b = best.as_slice_mut().expect("contiguous");
     let p = pad as usize;
-    py.detach(|| {
-        for k in 0..st.shape()[0] {
-            let (iy, ix, fy, fx, d) = (st[[k, 0]] as i64, st[[k, 1]] as i64, st[[k, 2]], st[[k, 3]], st[[k, 4]]);
-            let (wx0, wx1, wy0, wy1) = ((1.0 - fx) as f32, fx as f32, (1.0 - fy) as f32, fy as f32);
-            let df = d as f32;
-            let r0 = (pad + iy) as usize;
-            let c0 = (pad + ix) as usize;
-            for r in 0..n {
-                let top_row = &hp[(r0 + r) * w + c0..(r0 + r) * w + c0 + n + 1];
-                let bot_row = &hp[(r0 + r + 1) * w + c0..(r0 + r + 1) * w + c0 + n + 1];
-                let h0_row = &hp[(p + r) * w + p..(p + r) * w + p + n];
-                let b_row = &mut b[r * n..(r + 1) * n];
-                for c in 0..n {
-                    let top = top_row[c] * wx0 + top_row[c + 1] * wx1;
-                    let bot = bot_row[c] * wx0 + bot_row[c + 1] * wx1;
-                    let hs = top * wy0 + bot * wy1;
-                    let v = (hs - h0_row[c]) / df;
-                    if v > b_row[c] {
-                        b_row[c] = v;
-                    }
+    let steps: Vec<[f64; 5]> = st.outer_iter().map(|r| [r[0], r[1], r[2], r[3], r[4]]).collect();
+    py.detach(|| apply_horizon(hp, w, b, n, p, &steps));
+}
+
+fn apply_horizon(hp: &[f32], w: usize, b: &mut [f32], n: usize, p: usize, steps: &[[f64; 5]]) {
+    for &[iy, ix, fy, fx, d] in steps {
+        let (wx0, wx1, wy0, wy1) = ((1.0 - fx) as f32, fx as f32, (1.0 - fy) as f32, fy as f32);
+        let df = d as f32;
+        let r0 = (p as i64 + iy as i64) as usize;
+        let c0 = (p as i64 + ix as i64) as usize;
+        for r in 0..n {
+            let top_row = &hp[(r0 + r) * w + c0..(r0 + r) * w + c0 + n + 1];
+            let bot_row = &hp[(r0 + r + 1) * w + c0..(r0 + r + 1) * w + c0 + n + 1];
+            let h0_row = &hp[(p + r) * w + p..(p + r) * w + p + n];
+            let b_row = &mut b[r * n..(r + 1) * n];
+            for c in 0..n {
+                let top = top_row[c] * wx0 + top_row[c + 1] * wx1;
+                let bot = bot_row[c] * wx0 + bot_row[c + 1] * wx1;
+                let hs = top * wy0 + bot * wy1;
+                let v = (hs - h0_row[c]) / df;
+                if v > b_row[c] {
+                    b_row[c] = v;
                 }
             }
         }
-    });
+    }
 }
 
 /// grading.Grader._over_tunnels for one covered tunnel, into mask (m,) in place: the points (e, n) over the line xy
@@ -6661,6 +6647,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gpu_name, m)?)?;
     m.add_function(wrap_pyfunction!(seam_detect_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(bc1_encode_gpu, m)?)?;
+    m.add_function(wrap_pyfunction!(colormatch::colour_blur, m)?)?;
+    m.add_function(wrap_pyfunction!(colormatch::colour_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(colormatch::colour_dilate, m)?)?;
+    m.add_function(wrap_pyfunction!(colormatch::seam_components, m)?)?;
     m.add_function(wrap_pyfunction!(rf_pass, m)?)?;
     m.add_function(wrap_pyfunction!(vmedian, m)?)?;
     m.add_function(wrap_pyfunction!(bc1_encode, m)?)?;
@@ -6668,6 +6658,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(seam_pass, m)?)?;
     m.add_function(wrap_pyfunction!(view_distances, m)?)?;
     m.add_function(wrap_pyfunction!(road_corridors, m)?)?;
+    m.add_function(wrap_pyfunction!(deshadow::sun_scores, m)?)?;
+    m.add_function(wrap_pyfunction!(deshadow::shadow_box, m)?)?;
+    m.add_function(wrap_pyfunction!(deshadow::shadow_normals, m)?)?;
+    m.add_function(wrap_pyfunction!(deshadow::shadow_horizon, m)?)?;
     m.add_function(wrap_pyfunction!(horizon_steps, m)?)?;
     m.add_function(wrap_pyfunction!(tunnel_holes, m)?)?;
     m.add_function(wrap_pyfunction!(arch_raise_part, m)?)?;
@@ -6757,6 +6751,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     bc1fast::register_photo(m)?;
     m.add_function(wrap_pyfunction!(finished_tile::read_finished_tile, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::photo_resize, m)?)?;
+    m.add_class::<photomesh::PhotoGrid>()?;
+    m.add_function(wrap_pyfunction!(photomesh::season_metres, m)?)?;
+    m.add_class::<photomesh::SourceMesh>()?;
     m.add_class::<fartex::PhotoCanvas>()?;
     m.add_function(wrap_pyfunction!(fartex::photo_colour_gain, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::finish_far_photo, m)?)?;
@@ -6765,6 +6762,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::core_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
+    m.add_function(wrap_pyfunction!(leafon::season_amounts, m)?)?;
+    m.add_function(wrap_pyfunction!(leafon::leaf_on, m)?)?;
+    m.add_function(wrap_pyfunction!(leafon::leaf_fields, m)?)?;
+    m.add_function(wrap_pyfunction!(leafon::leaf_blend, m)?)?;
+    m.add_function(wrap_pyfunction!(photojpeg::photo_jpeg, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
     m.add_class::<traffic::Routes>()?;
     m.add_class::<clearance::Clearance>()?;
@@ -7493,6 +7495,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sidewalks::town::town_weld, m)?)?;
     m.add_function(wrap_pyfunction!(sidewalks::town::town_outline, m)?)?;
     // 561: merged
-    m.add("VERSION", 561)?;
+    m.add("VERSION", 563)?;
     Ok(())
 }

@@ -6732,6 +6732,17 @@ class Server:
                 node = tile.base if isinstance(tile, farfield.Piece) else tile
                 self.write_road_mask(anchor, node, px, texture)
                 return photo.write(path, rock, imagerymod.FAR_SRGB)
+            if not (PAINT_WORKER and self.far_pool is not None and self.surface is not None):
+                node = tile.base if isinstance(tile, farfield.Piece) else tile
+                x, y, _, _ = node.bbox
+                sq = imagerymod.gutter_square(x, y, node.size, px)
+                layers = None
+                try:
+                    layers = surfacemod.square_paint_layers(anchor.frame, *sq, px, px, self.surface, self.road_widths)
+                except Exception as e:
+                    log.debug("road faces of %s: %s", node.key, e)
+                self.write_road_mask(anchor, node, px, texture)
+                return photo.write(path, rock, imagerymod.FAR_SRGB, paint=layers)
             rgb = photo.shade(rock)
         else:
             rgb = self.rock_faces(anchor, tile, px, photo, grid)
