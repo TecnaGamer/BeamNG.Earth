@@ -7423,6 +7423,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 548: try598 with 547 and 545 (busstation) merged
     m.add_function(wrap_pyfunction!(railcrossings::rail_crossing_roads, m)?)?;
     m.add_function(wrap_pyfunction!(railcrossings::rail_cut_worn, m)?)?;
-    m.add("VERSION", 549)?;
+    m.add("VERSION", 551)?;
     Ok(())
 }

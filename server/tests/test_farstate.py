@@ -5,6 +5,7 @@ import os
 import random
 import sys
 import unittest
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -155,6 +156,31 @@ class StateViewTest(unittest.TestCase):
         far.regroup(Conn(), 1, 0.0, 0.0, None, [], 0, None)        # (far_remove sent after the state is let go)
         self.assertEqual(far.sent, {})
         self.assertEqual(got, [({"type": "far_remove", "anchorId": 1, "key": t.key}, 0)])
+
+    def test_rebase_removes_old_key_after_its_new_anchor_swap(self):
+        far = earthd.msgs.FarState(earthd._far_cfg())
+        tile, outer = ff.tile_of("0_0_0"), ff.tile_of("6_5_4")
+        far.set_shown({(1, tile.key): tile.bbox, (1, outer.key): outer.bbox})
+        far.commit(1, True)
+        far.set_desired({tile.key: tile})
+        events = []
+        conn = SimpleNamespace(send=events.append, credits=SimpleNamespace(poke=lambda conn: None))
+        server = SimpleNamespace(tiles={})
+        far.regroup(conn, 2, 0., 0., None, [], 0, None)
+        far.dirty = True
+
+        # No workers: step the actual pump on either side of the replacement's send.
+        far.pump(conn, server, object(), 2, False, 0, 0, 0, (), False)
+        self.assertEqual(events, [{"type": "far_remove", "anchorId": 1, "key": outer.key}])
+        self.assertFalse(far.whole())
+        far.set_sent({tile.key: tile})
+        far.pump(conn, server, object(), 2, False, 0, 0, 0, (), False)
+        _, swap, remove = events
+        self.assertEqual((swap["type"], swap["anchorId"], swap["add"]), ("far_swap", 2, [tile.key]))
+        self.assertEqual(remove, {"type": "far_remove", "anchorId": 1, "key": tile.key})
+        self.assertEqual(far.shown, {(2, tile.key): tile.bbox})
+        self.assertEqual(set(far.retired), {(1, tile.key), (1, outer.key)})
+        self.assertTrue(far.whole())
 
 
 
