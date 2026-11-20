@@ -43,18 +43,19 @@ pub fn ring_centroid(xy: PyReadonlyArray2<'_, f64>) -> PyResult<Option<(f64, f64
             n -= 1;
         }
     }
-    if n < 3 {
-        return Ok(None);
-    }
-    let nx = |i: usize| (i + 1) % n;
-    let cr: Vec<f64> = (0..n).map(|i| r[[i, 0]] * r[[nx(i), 1]] - r[[nx(i), 0]] * r[[i, 1]]).collect();
+    Ok(area_centroid(n, |i| (r[[i, 0]], r[[i, 1]])))
+}
+
+/// Shoelace centroid of an already opened ring. The products are reduced in numpy order.
+pub(crate) fn area_centroid(n: usize, xy: impl Fn(usize) -> (f64, f64)) -> Option<(f64, f64)> {
+    if n < 3 { return None; }
+    let edges = (0..n).map(|i| (xy(i), xy((i + 1) % n)));
+    let cr: Vec<_> = edges.clone().map(|((x, y), (nx, ny))| x * ny - nx * y).collect();
     let a = crate::junctionsnap::np_sum(&cr) * 0.5;
-    if !(a.abs() > 1e-6) {
-        return Ok(None);
-    }
-    let sx: Vec<f64> = (0..n).map(|i| (r[[i, 0]] + r[[nx(i), 0]]) * cr[i]).collect();
-    let sy: Vec<f64> = (0..n).map(|i| (r[[i, 1]] + r[[nx(i), 1]]) * cr[i]).collect();
-    Ok(Some((crate::junctionsnap::np_sum(&sx) / (6.0 * a), crate::junctionsnap::np_sum(&sy) / (6.0 * a))))
+    if !(a.abs() > 1e-6) { return None; }
+    let sx: Vec<_> = edges.clone().zip(&cr).map(|(((x, _), (nx, _)), c)| (x + nx) * c).collect();
+    let sy: Vec<_> = edges.zip(&cr).map(|(((_, y), (_, ny)), c)| (y + ny) * c).collect();
+    Some((crate::junctionsnap::np_sum(&sx) / (6.0 * a), crate::junctionsnap::np_sum(&sy) / (6.0 * a)))
 }
 
 /// busstations.contains(ring, p): p inside the polygon (even-odd), ring opened first.
@@ -177,7 +178,7 @@ fn max_eps(h: f64) -> f64 {
 /// One segment's (distance, foot x, foot y) from point (x, y): the Python's numpy steps (np.clip of the projection
 /// over np.maximum(|ab|^2, 1e-9), the foot a + ab * t, libm hypot).
 #[inline]
-fn seg_foot(ax: f64, ay: f64, abx: f64, aby: f64, x: f64, y: f64) -> (f64, f64, f64) {
+pub(crate) fn seg_foot(ax: f64, ay: f64, abx: f64, aby: f64, x: f64, y: f64) -> (f64, f64, f64) {
     let s2 = abx * abx + aby * aby;
     let ab2 = if s2.is_nan() || s2 > 1e-9 { s2 } else { 1e-9 };
     let t = clip01(((x - ax) * abx + (y - ay) * aby) / ab2);

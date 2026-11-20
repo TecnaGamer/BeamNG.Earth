@@ -109,6 +109,7 @@ mod classgrid;
 mod frontage;
 mod furnstations;
 mod stationgeom;
+mod busstation;
 mod railpiers;
 mod bdtopo;
 mod nycmassing;
@@ -7398,8 +7399,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 535: the full Rust port's phase 2b on try598 (534): host/farstate.rs, the far state machine (FarState;
     // far_swap_groups)
     // 537: try598 with 536 (P3e) and 535 (port2b) merged
-    // 542: v3 S2 (roadshape::surface::lane_surface, cut_lines)
-    // 547: try598 with 546 and 542 (v3 S2) merged
-    m.add("VERSION", 547)?;
+    // 545: bus station feature extraction, layout, render and collision meshes (Codex GPT-6.2-Astra port).
+    busstation::register(m)?;
+    // 548: try598 with 547 and 545 (busstation) merged
+    m.add("VERSION", 548)?;
     Ok(())
 }
