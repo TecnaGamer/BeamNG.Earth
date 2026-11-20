@@ -1816,6 +1816,8 @@ class Tracker:
         out_dir = getattr(getattr(conn, "s", None), "out_dir", None)
         digest = self.geo and (self.digests or key in self.redo)
         job = functools.partial(staging.build_inline, build, out_dir, digest)
+        if hasattr(getattr(conn, "s", None), "matslots") and self.kind in ("bldfar", "bldsky", "brfar", "bldpack", "bldhz"):
+            job = functools.partial(staging.prepare_shapes, conn.s, self.kind, self.geo, self.aid, key, job)
         args = key if self.geo else (self.aid, *key)
         self.building.add(key)
         fut = self.futs[key] = loop.run_in_executor(self.pool, job, *args)
@@ -1889,7 +1891,7 @@ class Tracker:
         data = pre.data if pre is not None else staging.inline_json(out_dir, path) if out_dir else None
         if data is not None:
             m["data"] = data
-        pool = getattr(s, "pool_shapes", None)
+        pool = pre.pool if pre and pre.prepared is not None else getattr(s, "pool_shapes", None)
         if shapes and pool is not None:
             slots = pool(conn, shapes)
             if slots:
@@ -1932,7 +1934,7 @@ class Tracker:
         data = pre.data if pre is not None else staging.inline_json(out_dir, path) if out_dir else None
         if data is not None:                # (the game need not open the file: staging.inline_json)
             m["data"] = data
-        pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
+        pool = pre.pool if pre and pre.prepared is not None else getattr(getattr(conn, "s", None), "pool_shapes", None)
         if self.kind in ("bldfar", "bldsky", "brfar", "bldpack") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
             slots = pool(conn, {"shape": f"{self.kind}_{aid}_{key[0]}_{key[1]}.cdae"})
             if slots:

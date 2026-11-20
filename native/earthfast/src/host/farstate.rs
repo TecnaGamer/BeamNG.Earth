@@ -683,6 +683,13 @@ impl FarState {
         self.cfg.monotonic.bind(py).call0()?.extract()
     }
 
+    pub(super) fn visit_shown<'py>(&self, py: Python<'py>,
+        mut visit: impl FnMut(Bound<'py,PyTuple>, [f64;4]) -> PyResult<()>) -> PyResult<()> {
+        let state = self.lock(py)?;
+        for (ck, bbox) in state.shown.iter() { visit(ck_tuple(py,ck)?,*bbox)?; }
+        Ok(())
+    }
+
     fn ga(&self) -> i64 {
         self.cfg.global_aid
     }
@@ -1192,10 +1199,41 @@ impl FarState {
         Ok(self.lock(py)?.queue_gen)
     }
 
-    /// The queue from qi on (Server.maybe_restore).
-    fn queue_rest<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let st = self.lock(py)?;
-        PyList::new(py, st.queue[st.qi.min(st.queue.len())..].iter().map(|t| t.obj.bind(py)))
+    /// Reserve eligible tiles from the unconsumed build queue, in streamer order. The worker
+    /// publishes its results later. A retry of the same queue generation schedules nothing.
+    fn reserve_restore<'py>(&self, py: Python<'py>, conn: &Bound<'py, PyAny>, server: &Bound<'py, PyAny>,
+                            anchor: &Bound<'py, PyAny>, min_batch: usize) -> PyResult<Option<(Bound<'py,PyList>,Bound<'py,PyList>)>> {
+        let generation = self.lock(py)?.queue_gen;
+        if conn.getattr("_restore_q").is_ok_and(|v| v.extract::<u64>().ok() == Some(generation)) { return Ok(None); }
+        conn.setattr("_restore_q", generation)?;
+        if !server.call_method0("fin_name_len")?.is_truthy()? || server.call_method0("map_on")?.is_truthy()? { return Ok(None); }
+        let aid = aid_of(&conn.getattr("active")?)?;
+        let anchor_id = aid_of(&anchor.getattr("id")?)?;
+        let coarse = server.getattr("coarse_keys")?;
+        let tiles = server.getattr("tiles")?;
+        let inflight = server.getattr("tile_inflight")?;
+        let tried = server.getattr("restore_tried")?;
+        let restoring = server.getattr("restoring")?;
+        let batch = PyList::empty(py);
+        let keys = PyList::empty(py);
+        {
+            let st = self.lock(py)?;
+            for t in &st.queue[st.qi.min(st.queue.len())..] {
+                if t.kind == Kind::Piece || st.sent.contains_key(&t.key) || !st.desired.contains_key(&t.key)
+                    || coarse.contains(t.key.as_ref())? { continue; }
+                let ck = st.ck(self.ga(), aid, &t.key);
+                if st.inflight.contains_key(&ck) { continue; }
+                let k = ck_tuple(py, &ck)?;
+                if tiles.contains(&k)? || inflight.contains(&k)? || tried.contains(&k)? || restoring.contains(&k)? { continue; }
+                batch.append(t.obj.bind(py))?;
+                keys.append(ck_tuple(py, &st.ck(self.ga(),anchor_id,&t.key))?)?;
+            }
+        }
+        if batch.len() < min_batch { return Ok(None); }
+        if tried.len()? > 200_000 { tried.call_method0("clear")?; }
+        tried.call_method1("update", (&keys,))?;
+        restoring.call_method1("update", (&keys,))?;
+        Ok(Some((batch,keys)))
     }
 
     #[getter]
@@ -1702,17 +1740,13 @@ impl FarState {
             }
             let ckt = ck_tuple(py, &ck)?;
             // the server's latest record: a live retexture may have finished since this build
-            let mut info = tiles.call_method1("get", (&ckt, fut.call_method0("result")?))?;
-            if !info.getattr("material")?.is_none() && !matslots.call_method1("owns", (&ckt, info.getattr("material")?))?.is_truthy()? {
-                info = server.call_method1("reslot", (&ckt, &info))?;      // its material name went to another tile
-                if !matslots.call_method1("owns", (&ckt, info.getattr("material")?))?.is_truthy()? {
-                    // not renamed: sent with that name it would draw the other tile's texture; built again (its files
-                    // are written anew; the cached entry and its claim on the name go)
-                    tiles.call_method1("pop", (&ckt, py.None()))?;
-                    matslots.call_method1("release", (&ckt,))?;
-                    self.lock(py)?.queue.push(t);
-                    continue;
-                }
+            let info = tiles.call_method1("get", (&ckt, fut.call_method0("result")?))?;
+            if !info.getattr("material")?.is_none() && (server.getattr("renewing")?.contains(&ckt)?
+                || !matslots.call_method1("owns", (&ckt, info.getattr("material")?))?.is_truthy()?) {
+                let anchor = server.getattr("anchors")?.get_item(aid_py)?;
+                let renewal = server.call_method1("renew_slot", (&ckt, &info, anchor, t.obj.bind(py)))?;
+                self.lock(py)?.inflight.insert(ck, (renewal.unbind(), t));
+                continue;
             }
             self.lock(py)?.sent.insert(t.key.clone(), t.clone());
             let material = info.getattr("material")?;

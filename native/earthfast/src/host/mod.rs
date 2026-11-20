@@ -14,6 +14,16 @@
 //! order read, per connection; connections are independent.
 pub mod frame;
 mod merge;
+mod matslots;
+mod leases;
+mod credits;
+mod shapes;
+mod staging;
+mod restore;
+mod restore_tiles;
+mod renewal;
+mod pose;
+mod pose_view;
 pub mod farstate;
 pub mod msgs;
 pub mod pyjob;
@@ -674,5 +684,17 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     msgs::register(m)?;
     farstate::register(m)?;
     trackers::register(m)?;
+    renewal::register(m)?;
+    matslots::register(m)?;
+    leases::register(m)?;
+    credits::register(m)?;
+    m.add_function(wrap_pyfunction!(shapes::prepare_shapes, m)?)?;
+    m.add_function(wrap_pyfunction!(shapes::prepare_shape_files, m)?)?;
+    staging::register(m)?;
+    restore::register(m)?;
+    m.add_function(wrap_pyfunction!(pose::connection_pose, m)?)?;
+    m.add_function(wrap_pyfunction!(pose_view::pose_camera, m)?)?;
+    m.add_function(wrap_pyfunction!(pose_view::pose_eye, m)?)?;
+    m.add_function(wrap_pyfunction!(pose_view::pose_foci, m)?)?;
     Ok(())
 }

@@ -7439,6 +7439,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 550: ground-road surface partitions, lane window selection and pavement coverage.
     // 552: try598 with 549 (codex-port2 rail crossings) and 550 (v3 S2b) merged
     // 556: merged
-    m.add("VERSION", 556)?;
+    m.add("VERSION", 557)?;
     Ok(())
 }

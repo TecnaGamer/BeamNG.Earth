@@ -144,7 +144,7 @@ fn complete(tr: &Obj<'_>) -> PyResult<bool> {
 }
 
 #[pyfunction]
-pub(super) fn tracker_pose<'py>(
+pub(in crate::host) fn tracker_pose<'py>(
     conn: &Obj<'py>,
     aid: &Obj<'py>,
     msg: &Obj<'py>,
@@ -205,7 +205,7 @@ pub(super) fn tracker_pose<'py>(
 }
 
 #[pyfunction]
-pub(super) fn traffic_pose<'py>(conn: &Obj<'py>, aid: &Obj<'py>) -> PyResult<()> {
+pub(in crate::host) fn traffic_pose<'py>(conn: &Obj<'py>, aid: &Obj<'py>) -> PyResult<()> {
     if !conn.getattr("traffic_on")?.is_truthy()?
         || !aid.eq(conn.getattr("active")?)?
         || conn.getattr("map_view")?.is_truthy()?

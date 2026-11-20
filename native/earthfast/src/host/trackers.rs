@@ -8,7 +8,7 @@ use pyo3::types::{PyDict, PySet};
 
 use crate::geotiles::{quad, quad_dist, Frame};
 
-mod pose;
+pub(super) mod pose;
 mod roads;
 mod scenery;
 mod signs;
