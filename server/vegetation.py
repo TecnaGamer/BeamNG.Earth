@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 50          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 51          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -91,6 +91,7 @@ VERSION = 50          # (the cached cells hold their groups: 14 for the regional
                       # 48: the tropics' remote floor half dead wood (G_DEADWOOD_TROPICAL, THICKET_SHARE)
                       # 49: more birches: Europe's north fewer conifers (NORTH_CONIFER_FACTOR), central Europe CONT_BIRCH_SOUTH
                       # 50: dev's thinning back (its count of trees), the tall trunks at least TRUNK_MIN_M apart (_thin_trunks)
+                      # 51: 50's last two builds kept 50's spread cells (the same VERSION); the trunk distance by height
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -1785,21 +1786,31 @@ def _thin(jj, ii, h, px, k=1.0, spacing=None):
 
 
 TRUNK_MIN_M = 3.0       # (50) two trees of TRUNK_TALL_M or more at least this far apart (ground m): a flat canopy
+TRUNK_PER_H = 0.14      # ... and taller ones TRUNK_PER_H of their height (a 25 m oak: 3.5 m; its stock shape, a 16 m one
+#                         scaled up 1.6-1.8 times, has a trunk 2-2.6 m wide at the ground)
 TRUNK_TALL_M = 8.0      # plateau's tops are a lattice of the thinning radius, 2 m apart (Rogowska, the user's 2026-11-20)
 TRUNK_BLOCK_M = 40.0    # dev's count of tall trees kept in every square this big (ground m)
 TRUNK_CAND_M = 2.5      # a removed tree's replacement: one canopy pixel at a hashed spot of every square this big
 
 
+def _trunk_v(h, u):
+    """(50) _thin_trunks' heights for thin_tops: 0.12 v + 1 = the trunk distance (ground m) of a tree of height h
+    (TRUNK_MIN_M, or TRUNK_PER_H x h when more), plus h / 1000 and u (a hash 0..1) / 10000 so the taller rank first
+    and equal heights by the hash (exact in float32 up to ~60 m: 4e-6)."""
+    h = np.asarray(h, np.float64)
+    return (np.maximum(TRUNK_MIN_M, TRUNK_PER_H * h) - 1.0) / 0.12 + h * 1e-3 + np.asarray(u, np.float64) * 1e-4
+
+
 def _thin_trunks(jj, ii, hs, valid, dx, lat, mx, my):
     """(50) The thinned tops (pixel rows jj, columns ii of the smoothed canopy hs) with the trees of TRUNK_TALL_M or
-    more re-chosen so no two stand within TRUNK_MIN_M on the ground, and as many of them in every TRUNK_BLOCK_M
+    more re-chosen so no two stand within their trunk distance on the ground (TRUNK_MIN_M, TRUNK_PER_H of the taller's
+    height when more), and as many of them in every TRUNK_BLOCK_M
     square as dev's thinning had where the canopy has room. Dev's tops are kept tallest first (ties by a hash of the
     pixel, as _thin's); in a square that lost some, canopy pixels (valid: tall canopy, not blocked; one at a hashed spot of
     every TRUNK_CAND_M square) fill the free spots, the taller first. No tree moves and none stands off the canopy. Dev's
     thinning left a flat canopy's tops a lattice 2 m apart (Rogowska, the user's 2026-11-20); pushing them apart
     filled clearings and packed dense patches into grids, and thinning alone dropped ~57 % of the trees
-    (Pennsylvania at 3 m). Shorter tops untouched. earthfast thin_tops with a constant radius (heights 1e7 + rank:
-    exact in float32, its radius varying under 0.7 %)."""
+    (Pennsylvania at 3 m). Shorter tops untouched. earthfast thin_tops, its radius the trunk distance (_trunk_v)."""
     h = hs[jj, ii]
     tall = h >= TRUNK_TALL_M
     if tall.sum() < 2:
@@ -1808,14 +1819,13 @@ def _thin_trunks(jj, ii, hs, valid, dx, lat, mx, my):
     px_m = dx * max(0.05, dmath.cos(dmath.radians(min(abs(float(lat)), 85.0))))    # (a pixel on the ground)
     blk = max(1, int(round(TRUNK_BLOCK_M / px_m)))
     dj, di = jj[tall], ii[tall]
-    spacing = (TRUNK_MIN_M / px_m) / (0.12 * 1.0e7 + 1.0)
+    # thin_tops' radius spacing x (0.12 v + 1) / px set to the trunk distance by the height: v from it, the height and
+    # a hash added so the taller go first and equal heights by the hash (not by position: a lattice)
     tx = np.floor((mx[di] + 20037508.342789244) / dx).astype(np.int64)
     ty = np.floor((20037508.342789244 - my[dj]) / dx).astype(np.int64)
-    od = np.lexsort((_hash01(tx, ty, 29), h[tall].astype(np.float64)))
-    rank_d = np.empty(len(dj), np.float64)
-    rank_d[od] = np.arange(len(dj), dtype=np.float64)
+    v_d = _trunk_v(h[tall], _hash01(tx, ty, 29))
     first = fast._ef.thin_tops(np.ascontiguousarray(dj, np.int64), np.ascontiguousarray(di, np.int64),
-                               np.ascontiguousarray(1.0e7 + rank_d, np.float32), float(spacing), 1.0)
+                               np.ascontiguousarray(v_d, np.float32), float(1.0 / px_m), 1.0)
     # the blocks short of dev's count after it: there, one canopy pixel (valid) at a hashed spot of every
     # TRUNK_CAND_M square is a candidate
     kj, ki = dj[first], di[first]
@@ -1836,16 +1846,12 @@ def _thin_trunks(jj, ii, hs, valid, dx, lat, mx, my):
     ok = valid[cj, ci_] & short[(cj // blk) * bw + ci_ // blk]
     cj, ci_ = cj[ok], ci_[ok]
     u = _hash01(gx[ok], gy[ok], 39)
-    dj, di, rank_d = kj, ki, rank_d[first]          # (the kept ones: no conflict among them)
+    dj, di, v_d = kj, ki, v_d[first]          # (the kept ones: no conflict among them)
     nd, nc = len(dj), len(cj)
-    # priorities: every dev top above every candidate; within each, the taller first
-    oc = np.lexsort((u, hs[cj, ci_].astype(np.float64)))
-    pri = np.empty(nd + nc, np.float64)
-    pri[:nd] = nc + rank_d
-    pri[nd + oc] = np.arange(nc, dtype=np.float64)
+    pri = np.concatenate([v_d, _trunk_v(hs[cj, ci_].astype(np.float64), u)])
     aj, ai = np.concatenate([dj, cj]), np.concatenate([di, ci_])
     keep = fast._ef.thin_tops(np.ascontiguousarray(aj, np.int64), np.ascontiguousarray(ai, np.int64),
-                              np.ascontiguousarray(1.0e7 + pri, np.float32), float(spacing), 1.0)
+                              np.ascontiguousarray(pri, np.float32), float(1.0 / px_m), 1.0)
     # each block keeps as many as dev had there, the highest priorities first
     bkey = (aj // blk) * bw + ai // blk
     k_idx = np.flatnonzero(keep)
