@@ -4,6 +4,7 @@ under either id. On the Popoli replay the A25's decks were solved as sections an
 found, the decks built at their own, 1 m over the streets under them (the law: 6.35 m)."""
 import os
 import sys
+import types
 import unittest
 import unittest.mock
 
@@ -87,6 +88,23 @@ class DeckUnderRoadIdTest(unittest.TestCase):
                                         % (u[:8], str(net.m[c["d"]].key[0])[:8], np.round(q, 1)))
                 n += 1
         self.assertGreaterEqual(n, 5, "the A25's decks cross the streets 5 times")
+
+
+class RoadOverItselfTest(unittest.TestCase):
+    """A road winding over itself: its deck passes another of its levels within SHAPES_NEAR_M, nearer than its own
+    piece stands off the line, and takes its own level's height (the nearest piece's was a step of 20 m)."""
+
+    def test_the_deck_takes_its_own_levels_height(self):
+        x = np.arange(-40.0, 40.1, 4.0)
+        own = np.c_[x, np.full(len(x), 1.2)]                # (the level the road runs along: 1.2 m off its line)
+        over = np.c_[x, 0.3 * x]                            # (another level crossing the line at a slant, on it at 0)
+        line = np.c_[np.arange(-30.0, 30.1, 2.0), np.zeros(31)]
+        reg = {"road": [(own, np.full(len(x), 10.0), "deck"), (over, np.full(len(x), 30.0), "deck")]}
+        frame = types.SimpleNamespace(enu_to_geodetic=lambda e, n, h: (e * 0 + 45.0, e * 0 + 7.0, h))
+        pl = types.SimpleNamespace(frame=frame, _shape_region=lambda home: reg)
+        z, modes = grading._Planner._shape_at(pl, line, line, "road", ("deck",))
+        self.assertEqual(set(z.tolist()), {10.0})
+        self.assertEqual(set(modes), {"deck"})
 
 
 if __name__ == "__main__":
