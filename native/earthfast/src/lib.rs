@@ -109,6 +109,7 @@ mod classgrid;
 mod frontage;
 mod furnstations;
 mod stationgeom;
+mod busstation;
 mod railpiers;
 mod bdtopo;
 mod nycmassing;
@@ -7395,6 +7396,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // far_swap_groups)
     // 537: try598 with 536 (P3e) and 535 (port2b) merged
     // 538: v3 S1 on try598 (537): roadshape::lanes::lane_graph
-    m.add("VERSION", 538)?;
+    // 545: bus station feature extraction, layout, render and collision meshes.
+    busstation::register(m)?;
+    m.add("VERSION", 545)?;
     Ok(())
 }
