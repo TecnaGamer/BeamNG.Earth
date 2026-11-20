@@ -41,11 +41,6 @@ def ground(a, px_m, window_m=WINDOW_M, threshold_m=THRESHOLD_M, slope_k=SLOPE_K,
     - times clip((TERRAIN_CUT_M[1] - deep) / (TERRAIN_CUT_M[1] - TERRAIN_CUT_M[0]), 0, 1), deep the cut's max over
       w (a hill nearby: nothing cut around it);
     - a - min(cut * k, max_cut_m)."""
-    fast.require(61, "dsmground.ground")
-    a = np.ascontiguousarray(a, np.float32)
-    px = max(px_m, 1e-3)
-    w = max(3, int(round(window_m / px)) | 1)
-    return fast._ef.dsm_ground(a, float(px_m), float(window_m), float(threshold_m), float(slope_k), float(max_cut_m),
-                               w, max(3, w // 2 | 1), max(3, int(round(relief_m / px)) | 1),
-                               max(3, int(round(RELIEF_OPEN_M / px)) | 1), RELIEF_HILLS_M, RELIEF_FLAT_M,
-                               TERRAIN_CUT_M[0], TERRAIN_CUT_M[1])
+    fast.require(565, "dsmground.ground")
+    return fast._ef.dem_ground(np.ascontiguousarray(a, np.float32), px_m, window_m, threshold_m, slope_k,
+                               max_cut_m, relief_m, RELIEF_OPEN_M, RELIEF_HILLS_M, RELIEF_FLAT_M, *TERRAIN_CUT_M)

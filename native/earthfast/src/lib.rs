@@ -9,6 +9,11 @@ use crate::dm::Dm;
 mod dm;
 mod deckreach;
 mod demsample;
+mod demtiles;
+mod dembias;
+mod regionaldem;
+mod lidarbc;
+mod polardem;
 mod dmmatmul;
 mod devctx;
 mod reach;
@@ -4359,6 +4364,10 @@ fn bilinear_tiles<'py>(
     Ok(out.into_pyarray(py))
 }
 
+fn terrarium_value(r: u8, g: u8, b: u8) -> f32 {
+    r as f32 * 256.0 + g as f32 + b as f32 / 256.0 - 32768.0
+}
+
 /// dem.decode_terrarium's arithmetic on the decoded image (h, w, 3|4 uint8): R * 256 + G + B / 256 - 32768 in float32,
 /// in numpy's order, without the RGB conversion and float temporaries.
 #[pyfunction]
@@ -4366,7 +4375,7 @@ fn terrarium_heights<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bo
     let a = img.as_array();
     let out = py.detach(|| {
         numpy::ndarray::Array2::from_shape_fn((a.shape()[0], a.shape()[1]), |(y, x)| {
-            a[[y, x, 0]] as f32 * 256.0f32 + a[[y, x, 1]] as f32 + a[[y, x, 2]] as f32 / 256.0f32 - 32768.0f32
+            terrarium_value(a[[y,x,0]], a[[y,x,1]], a[[y,x,2]])
         })
     });
     out.into_pyarray(py)
@@ -6536,6 +6545,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_town_face, m)?)?;
     m.add_function(wrap_pyfunction!(island_ring_rays, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::dsm_ground, m)?)?;
+    m.add_function(wrap_pyfunction!(dsm::dem_ground, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::fill_holes, m)?)?;
     m.add_function(wrap_pyfunction!(roadgeom::dedupe_polyline, m)?)?;
     m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_line, m)?)?;
@@ -7042,6 +7052,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // the dm_<fn> scalars for server/dnp.py / dmath.py: Windows and Linux plan the same roads, GitHub #1169)
     dm::register(m)?;
     demsample::register(m)?;
+    demtiles::register(m)?;
+    m.add_function(wrap_pyfunction!(dembias::dem_bias, m)?)?;
+    regionaldem::register(m)?;
+    m.add_function(wrap_pyfunction!(lidarbc::bc_sample, m)?)?;
+    m.add_function(wrap_pyfunction!(lidarbc::bc_sparse, m)?)?;
+    polardem::register(m)?;
         // 264: 262 (deterministic maths) and 263 (stationgeom) in one module
     // 266: bldclear::footprint_twins (the same building mapped twice: one of the two outlines left out, London's
     // reports 2026-11-12); junctions_find's one-way / single-lane arms' stop lines (London reports 3, 8, 9)
@@ -7521,6 +7537,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(terrainblock::block_params, m)?)?;
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
-    m.add("VERSION", 564)?;
+    m.add("VERSION", 565)?;
     Ok(())
 }
