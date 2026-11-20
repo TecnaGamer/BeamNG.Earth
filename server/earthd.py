@@ -4872,6 +4872,10 @@ class Server:
             name = self._base_revisited(anchor, cx, cy, bk, photo, rev)
             if name is not None and revisitmod.take_stale_hit() is not None and aid is not None:
                 self.base_stale.add((aid, cx, cy))
+            if name is not None and aid is not None and self.base_revisit_key(anchor, cx, cy) != bk:
+                # (its inputs changed while it was read: a road tile brought a pad near it, pads_stale's mark cleared
+                # by _base_revisited; painted again, base_refresh. The Codex review, round 2)
+                self.base_stale.add((aid, cx, cy))
             return name, bk
 
     def base_kept(self, anchor, cx, cy):
@@ -5105,12 +5109,17 @@ class Server:
                     return not f.result()[0]
                 except Exception:
                     return True
-            if base.done() and missed(base):
-                self.base_stale.add(key)
-                self.base_skipped.add(key)
-                base = None
-            elif not base.done():
-                base.add_done_callback(lambda f: missed(f) and (self.base_stale.add(key), self.base_skipped.add(key)))
+            def skip(f):
+                if missed(f):
+                    self.base_stale.add(key)
+                    self.base_skipped.add(key)
+            if base.done():                 # (one decision: a miss after it is the done callback's and the guard below)
+                if missed(base):
+                    skip(base)
+                    base = None
+            else:
+                base.add_done_callback(skip)
+            base_wait = 0.0                 # (waited for already: the rest below at once)
         if base is not None:
             t1 = time.perf_counter()
             if not base.done():
@@ -5162,6 +5171,11 @@ class Server:
                 return info
             info["base"], photo, info["stages"]["baseRender"] = base.result()
             info["stages"]["baseWait"] = time.perf_counter() - t1
+            if not info["base"] and getattr(base, "kept", False):
+                # (a kept photo that could not be read, done between the checks above: its stand-in, as a skipped one's)
+                self.base_stale.add((anchor.id, cx, cy))
+                self.base_skipped.add((anchor.id, cx, cy))
+                self.quick_pool.submit(self._quick_later, anchor, cx, cy)
             if photo and info.get("layers") and info.get("ter"):
                 try:                # lawns only where the photo is green (before the game reads the block)
                     surfacemod.photo_lawns(self.out_dir, info["ter"], info["layers"], photo[0])

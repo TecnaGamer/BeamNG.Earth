@@ -137,6 +137,27 @@ class BasePhotoRevisitTest(unittest.TestCase):
         self.assertNotIn((1, 768.0, -128.0), srv.base_stale)        # (final: nothing to paint again)
         self.assertEqual(srv.base_pending[(1, 768.0, -128.0)], frozenset())
 
+    def test_a_pad_that_comes_while_the_photo_is_read_paints_it_again(self):
+        """The Codex review, round 2: the pads are in the photo's key; one that came while the kept photo was read
+        (pads_stale's mark cleared by _base_revisited) leaves the block stale, painted again by base_refresh."""
+        srv = fake_server(self.tmp.name)
+        srv.near_visual = "detail"
+        frame = SimpleNamespace(enu_to_geodetic=lambda e, n, u: (np.asarray(n) * 1e-5 + 29.18,
+                                                                 np.asarray(e) * 1e-5 - 81.07, u))
+        a1 = SimpleNamespace(id=1, lat=29.18, lon=-81.07, zooms=[17], frame=frame)
+        digests = iter([b"a", b"a", b"b"])
+        srv.surface = SimpleNamespace(pad_digest=lambda *box: next(digests, b"b"))
+        name = painted(srv, a1, 0.0, 0.0, np.full((64, 64, 3), 90, np.uint8))
+        bk = srv.base_revisit_key(a1, 0.0, 0.0)                       # (painted with pads "a")
+        srv._base_kept(a1, 0.0, 0.0, ())
+        srv._base_keep(a1, 0.0, 0.0, bk, name, (revisit.Build(),))
+        os.remove(os.path.join(srv.out_dir, name))
+        got, k = earthd.Server._base_from_revisit(srv, a1, 0.0, 0.0, [])   # (read under "a", "b" after)
+        self.assertEqual(k, bk)
+        self.assertIsNotNone(got)
+        self.assertIn((1, 0.0, 0.0), srv.base_stale)
+        self.assertNotEqual(srv.base_revisit_key(a1, 0.0, 0.0), bk, "the pads in the key")
+
     def test_make_heightmap_takes_the_kept_photo_instead_of_skipping(self):
         import collections
         import concurrent.futures
