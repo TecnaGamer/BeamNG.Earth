@@ -18,7 +18,10 @@ class Entrance:
 DESIGNS = {
     "Whataburger": Entrance("striped_gable", "#d76621", "#fff1d9", 13),
     "IHOP": Entrance("striped_gable", "#235388", "#235388", 10),
-    "Pizza Hut": Entrance("hip", "#a4352c", "#542b25", 19),
+    "Pizza Hut": Entrance("hat_roof", "#a4352c", "#542b25", 19),
+    "In-N-Out Burger": Entrance("tile_canopy", "#ad563c", "#c92e2b", 22),
+    "Chili's": Entrance("awning_tower", "#b2987e", "#315d47", 21),
+    "ALDI": Entrance("shed_lobby", "#775540", "#354951", 22),
     "Panda Express": Entrance("hip", "#a6322a", "#3b3732", 14),
     "Bob Evans": Entrance("hip", "#992f2c", "#f2e2c3", 21),
     "Perkins": Entrance("hip", "#426849", "#e7dfc5", 18),
@@ -131,7 +134,7 @@ def draw(profile, span, height, vertex, mesh, texture, sign, symbol_only=False):
             post(side*(half-.35),eave+.12,field)
         box(-half,half,reach-.23,reach,eave-.30,eave+.04,field)
         sign_z += .12
-    elif form == "hip":
+    elif form in {"hip", "hat_roof"}:
         top = eave + min(2.6, half*.37)
         upper = .62*half
         outer = reach+.18
@@ -144,6 +147,16 @@ def draw(profile, span, height, vertex, mesh, texture, sign, symbol_only=False):
         prism([(-half,eave),(half,eave),(upper,top),(-upper,top)],0,.03,field)
         box(-half,half,.03,reach+.15,eave-.24,eave,trim)
         box(-upper,upper,0,inner+.12,top,top+.17,trim)
+        if form == "hat_roof":
+            # The raised cap and broad eaves give the classic red roof its two slopes.
+            cap = upper*.67
+            ridge = top + min(1.5,half*.18)
+            surface([(-upper,inner+.12,top+.17),(upper,inner+.12,top+.17),
+                     (cap,.04,ridge),(-cap,.04,ridge)],field)
+            for side in (-1,1):
+                surface([(side*upper,.02,top+.17),(side*upper,inner+.12,top+.17),
+                         (side*cap,.04,ridge)],field)
+            box(-cap,cap,.02,.21,ridge,ridge+.14,field)
         sign_z = (eave+top)/2
         box(-sign_width*.51,sign_width*.51,inner,reach,sign_z-sign_h*.52,sign_z+sign_h*.52,trim)
     elif form == "castle":
@@ -184,6 +197,42 @@ def draw(profile, span, height, vertex, mesh, texture, sign, symbol_only=False):
         sign_depth=reach+.08
         box(-sign_width*.53,sign_width*.53,reach-.20,reach+.04,
             sign_z-sign_h*.55,sign_z+sign_h*.55,field)
+    elif form in {"tile_canopy", "awning_tower"}:
+        tiled = form == "tile_canopy"
+        tower = span * .18
+        crown = height + (1.1 if tiled else 1.7)
+        box(-tower,tower,.04,.85,2.95,crown,"#f1e8d6" if tiled else field)
+        if tiled:
+            for left,right in ((-half,-tower),(tower,half)):
+                surface([(left,reach,eave),(right,reach,eave),(right,.02,eave+.83),
+                         (left,.02,eave+.83)],field)
+                box(left,right,reach-.1,reach,eave-.16,eave,"#f1e8d6")
+        else:
+            box(-tower-.15,tower+.15,.03,1.02,crown-.22,crown+.08,trim)
+        for left,right in ((-half,-tower-.22),(tower+.22,half)):
+            # Each fabric awning shades a dining window and leaves the entry clear.
+            panels = 1 if tiled else max(3,round((right-left)/.46))
+            for j in range(panels):
+                x = left+(right-left)*j/panels
+                u = left+(right-left)*(j+1)/panels
+                color = trim if j%2 == 0 else "#e7dbb9"
+                surface([(x,1.28,2.75),(u,1.28,2.75),(u,.08,3.30),(x,.08,3.30)],color)
+                surface([(x,1.28,2.57),(u,1.28,2.57),(u,1.28,2.75),(x,1.28,2.75)],color)
+        sign_h = min(2.60 if tiled else 1.55,tower*.80)
+        sign_width = tower*1.85
+        sign_z,sign_depth = crown-sign_h*.60,.90
+    elif form == "shed_lobby":
+        # Timber rainscreen above a glazed vestibule under an asymmetric shed roof.
+        low, high = height+.18, height+min(2.15,span*.13)
+        prism([(-half,3.1),(half,3.1),(half,high),(-half,low)],.04,.58,field)
+        for z in np.arange(3.38,low,.34):
+            box(-half,half,.58,.60,z,z+.033,"#4c392f")
+        prism([(-half,low),(half,high),(half,high+.27),(-half,low+.27)],.02,reach,trim)
+        for x in (-half+.22,half-.22):
+            post(x,low if x < 0 else high,trim,.25)
+        sign_h = min(2.2,span*.13)
+        sign_width = min(half,sign_h*2.6)
+        sign_z,sign_depth = (high+low)*.5-sign_h*.57,.65
     elif form == "cinema_lobby":
         # A high arched clerestory breaks up the flat roofline of the auditorium block.
         spring = max(5.7, height + .35)

@@ -168,7 +168,13 @@ def artwork(name, width, font_path, height_m, surface):
         img = Image.new("RGB", (width, 200), paper)
         centered_mark(img, mask(), ink)
         return img
-    if name == "Burger King":
+    if name == "In-N-Out Burger":
+        master = Image.new("RGB", (480,200), "#fff1da")
+        pen = ImageDraw.Draw(master)
+        pen.polygon([(18,100),(18,67),(335,67),(364,39),(339,34),(411,9),(403,73),
+                     (387,56),(350,100)], fill="#f7be26", outline="#b5262e", width=5)
+        pen.text((240,103), "IN-N-OUT", anchor="mt", font=ImageFont.truetype(font_path,86), fill="#ad2028")
+    elif name == "Burger King":
         master = burger_king(font_path)
     elif name == "Best Buy":
         master = Image.new("RGB", (340,200), "#174579")

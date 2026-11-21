@@ -4,7 +4,7 @@ All 250 supported chains, rendered from generated GLBs on sample footprints. Eac
 
 ![Twelve storefront examples](overview.jpg)
 
-[Standalone AMC cinema before and after, from driver height](amc-comparison.jpg).
+[Cinema lobby comparison](amc-comparison.jpg) · [Six storefronts before and after the architecture pass](architecture-comparison.jpg)
 
 | Entries | Catalog sheet |
 | --- | --- |

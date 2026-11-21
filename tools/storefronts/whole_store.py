@@ -136,6 +136,8 @@ DESIGN_GLAZING = {
     "porch": (4.4, .70, 2.75, 2.), "outfitter": (6.8, .75, 3.8, 0),
     "market": (9., .32, 4.2, 3.2), "wing": (4.2, .65, 2.75, 3.),
     "streamline": (7.2, .55, 2.8, 4.5), "step": (5., .70, 3.1, 0),
+    "hat_roof": (5.2, .65, 2.8, 3.6), "tile_canopy": (5.2, .60, 2.65, 4.2),
+    "awning_tower": (5., .55, 2.65, 3.6), "shed_lobby": (8., .16, 3.1, 0),
     "cinema_lobby": PUBLIC_GLAZING["cinema"],
     "glass": (12., .12, 4.9, 5.),
 }
@@ -341,6 +343,8 @@ def elevation(
     if name == "Arby's" and (entries or dining):
         rect(0, 2.90, width, 3.13, "#af3233")
     if name == "In-N-Out Burger":
+        if not observed_brick and not photo_color:
+            rect(0, .12, width, height, "#f1e8d6")
         rect(0, .55, width, .75, "#b62224")
         rect(0, height - .94, width, height - .78, "#b62224")
     if name == "IKEA" and not observed_brick and not photo_color:
@@ -421,6 +425,22 @@ def elevation(
         if sill:
             rect(left - 0.06, sill - 0.09, right + 0.06, sill, "#d6c5ad")
 
+    # Applied entrance surrounds also fit a tenant overlay; keep the host wall finish outside the bay.
+    if name in {"Sephora", "Bath & Body Works"}:
+        for center in entries:
+            half = min(5.3, center, width-center)
+            top = min(4.45, height)
+            cell = .42
+            left = center-half
+            for row in range(math.ceil(top/cell)):
+                y = row*cell
+                if name == "Sephora":
+                    rect(left,y,center+half,min(top,y+cell),"#27282a" if row%2 else "#f0eee9")
+                else:
+                    tones = ("#eaedf0","#92b3cf","#476e99")
+                    for col in range(math.ceil(2*half/cell)):
+                        x = left+col*cell
+                        rect(x,y,min(center+half,x+cell),min(top,y+cell),tones[row%2+col%2])
     for center, span, sill, head in shop_bays:
         glass(center, span, sill, head, False)
     for x in dining:
