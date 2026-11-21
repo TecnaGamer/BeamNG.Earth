@@ -85,9 +85,10 @@ corridors) are the same in every one of them, place by place (`2026-11-19-vsolve
 The RFC's condition is not met: the solve still costs about 0.9 of the passes again. What is left, from the
 profiles (Tokyo, where 2/3 of the 8 places' time is):
 
-- **The passes still run under on.** The solve takes the passes' discrete decisions (the decks' heights at their
-  abutments, the approach lifts, the dips) as its inputs, and their final heights as caps under decks. Removing the
-  passes one by one (the RFC's step 4) takes their CPU away: the 247 s are the ceiling of what that gives back.
+- **Not the passes.** The 247 s of off mode are mostly the planning every mode does (the profiles, the decks, the
+  chains); the passes the solve replaces are a small part of them. Solo mode (`BNE_VSOLVE=solo`: those passes
+  skipped) took as long as on mode, measured after dev's 560 merge: Tokyo 358 s against 366, the 8 places 506 s
+  against 517 in the same session. Removing the passes (the RFC's step 4) will not bring the CPU down by itself.
 - **The underpass rule runs twice**: once in the passes, once in the shadow over the solve's whole margin (its
   `near` is 400 m past the box, not UNDER_NEAR_M). The cells, spans and ground it gathers are nearly the same; kept
   once they would be found once.

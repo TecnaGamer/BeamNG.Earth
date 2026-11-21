@@ -169,14 +169,22 @@ def joins(xys, z0, r=JOIN_M, dz=JOIN_DZ_M, r_end=None, halves=None, cut=()):
     seg = gm._Segments(xys)
     far = max(halves) + JOIN_REACH_M if halves is not None and len(halves) else 0.0
     out, seen = [], set()
+    # (every end's candidates at once: near_many, near's answers; those within r_end for the ends with none within r)
+    ends = [(a, ia) for a, xy in enumerate(xys) if len(xy) >= 2 for ia in (0, len(xy) - 1)]
+    got = seg.near_many([xys[a][ia] for a, ia in ends], r) if ends else []
+    first = {}
+    for (a, ia), h in zip(ends, got):
+        first[(a, ia)] = {b: v for b, v in h.items() if b != a and v[0] <= r}
+    lone = [e for e in ends if not first[e]] if r_end > r else []
+    wide = dict(zip(lone, seg.near_many([xys[a][ia] for a, ia in lone], r_end))) if lone else {}
     for a, xy in enumerate(xys):
         if len(xy) < 2:
             continue
         for ia in (0, len(xy) - 1):
             p = xy[ia]
-            hits = {b: h for b, h in seg.near(p, r).items() if b != a and h[0] <= r}
+            hits = first[(a, ia)]
             if not hits and r_end > r:
-                for b, (dist, sj, t) in seg.near(p, r_end).items():
+                for b, (dist, sj, t) in wide[(a, ia)].items():
                     q = xys[b]
                     if b == a or len(q) < 2:
                         continue

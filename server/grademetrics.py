@@ -102,6 +102,54 @@ class _Segments:
             out[int(lines_sorted[np.flatnonzero(first)[q]])] = (float(dist[c]), int(self._seg[g[c]]), float(t[c]))
         return out
 
+    def near_many(self, ps, r):
+        """[near(p, r) for p in ps], the queries' candidates computed together: the same operations on each pair of a
+        query and a segment, so the same answers to the bit, in the same order (a solve's joins asked near 98,000
+        times one by one: 25 of Tokyo's 366 s)."""
+        ps = np.asarray(ps, np.float64).reshape(-1, 2)
+        nq = len(ps)
+        k = int(math.ceil(r / NEAR_M))
+        gq, gs = [], []
+        for i in range(nq):
+            gx, gy = int(math.floor(ps[i, 0] / NEAR_M)), int(math.floor(ps[i, 1] / NEAR_M))
+            for dx in range(-k, k + 1):
+                for dy in range(-k, k + 1):
+                    c = self.grid.get((gx + dx, gy + dy))
+                    if c is not None:
+                        gs.append(c)
+                        gq.append(np.full(len(c), i, np.int64))
+        out = [{} for _ in range(nq)]
+        if not gs:
+            return out
+        g = np.concatenate(gs)
+        qi = np.concatenate(gq)
+        # (each pair's place in its query's candidates, as near's ok indexes them: the first met between equals)
+        start = np.r_[0, np.flatnonzero(qi[1:] != qi[:-1]) + 1]
+        cnt = np.diff(np.r_[start, len(qi)])
+        place = np.arange(len(qi)) - np.repeat(start, cnt)
+        px, py = ps[qi, 0], ps[qi, 1]
+        ax, ay, dx, dy, L2 = self._ax[g], self._ay[g], self._dx[g], self._dy[g], self._L2[g]
+        num = (px - ax) * dx + (py - ay) * dy
+        pos = L2 > 0
+        t = np.zeros(len(g))
+        t[pos] = np.minimum(1.0, np.maximum(0.0, num[pos] / L2[pos]))
+        dist = dnp.hypot(ax + t * dx - px, ay + t * dy - py)
+        ok = np.flatnonzero(dist <= r)
+        if not len(ok):
+            return out
+        line = self._line[g[ok]]
+        q = qi[ok]
+        o = np.lexsort((place[ok], dist[ok], line, q))
+        first = np.r_[True, (line[o][1:] != line[o][:-1]) | (q[o][1:] != q[o][:-1])]
+        heads = np.flatnonzero(first)
+        best = ok[o[heads]]
+        met = np.minimum.reduceat(place[ok][o], heads)
+        gl, gqq = line[o][heads], q[o][heads]
+        for h in np.lexsort((met, gqq)).tolist():
+            c = int(best[h])
+            out[int(gqq[h])][int(gl[h])] = (float(dist[c]), int(self._seg[g[c]]), float(t[c]))
+        return out
+
     def near_scalar(self, p, r):
         """near, one segment at a time (the reference tests/test_grademetrics compares near with)."""
         gx, gy = int(math.floor(p[0] / NEAR_M)), int(math.floor(p[1] / NEAR_M))

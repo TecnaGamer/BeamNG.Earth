@@ -3443,43 +3443,8 @@ class _Planner:
         # (a deck's end another deck goes on from is a joint, not an abutment: a viaduct is mapped in parts, and with
         # every part's ends left out, a junction under one of the Shuto's joints was raised 2.7 m by the solve, which
         # stood its 76-part chain up to 25 m off, Tokyo's low decks 72 -> 139 with BNE_VSOLVE=on)
-        ends = np.array([ln[e] for ln, _h in decks for e in (0, -1)], f64)
-        joined = np.zeros(len(ends), bool)
-        for i in range(len(ends)):
-            d = dnp.hypot(*(ends - ends[i]).T)
-            d[i ^ 1] = np.inf                  # (its own other end)
-            d[i] = np.inf
-            joined[i] = bool((d <= VSOLVE_JOINT_M).any())
-        dbox = np.array([(*(ln.min(0) - h), *(ln.max(0) + h)) for ln, h in decks], f64)
-        out = []
-        for p, hz in zip(ground, heights):
-            xy = np.asarray(p.xy, f64)[:, :2]
-            pl, ph = xy.min(0), xy.max(0)
-            under = np.zeros(len(xy), bool)
-            pl, ph = pl - float(p.half), ph + float(p.half)
-            for j in np.flatnonzero((dbox[:, 0] <= ph[0]) & (dbox[:, 2] >= pl[0]) & (dbox[:, 1] <= ph[1])
-                                    & (dbox[:, 3] >= pl[1])).tolist():
-                ln, h = decks[j]
-                # (only the samples in the deck's box widened by the road's half width: one farther is farther from
-                # its line than h + half. Each sample's row is its own, so the same bits as over all of them, which
-                # took 137 of Tokyo's 386 s: every plan against every deck its box met, all its samples)
-                w = float(p.half)
-                r = np.flatnonzero((xy[:, 0] >= dbox[j, 0] - w) & (xy[:, 0] <= dbox[j, 2] + w)
-                                   & (xy[:, 1] >= dbox[j, 1] - w) & (xy[:, 1] <= dbox[j, 3] + w))
-                if not len(r):
-                    continue
-                q = xy[r]
-                a, ab = ln[:-1], np.diff(ln, axis=0)
-                lab = np.maximum(dnp.hypot(*ab.T), 1e-9)
-                t = np.clip(((q[:, None, :] - a[None]) * ab[None]).sum(2) / (lab * lab)[None], 0.0, 1.0)
-                dist = dnp.hypot(*(a[None] + t[..., None] * ab[None] - q[:, None, :]).transpose(2, 0, 1))
-                k = np.argmin(dist, axis=1)
-                ri = np.arange(len(q))
-                at = np.r_[0.0, np.cumsum(lab)][:-1][k] + t[ri, k] * lab[k]
-                under[r] |= (dist[ri, k] <= h + w) & ((at > APPROACH_MIN_CROSS_M) | joined[2 * j]) & (
-                    (at < lab.sum() - APPROACH_MIN_CROSS_M) | joined[2 * j + 1])
-            out.append(np.where(under, np.asarray(hz, f64), np.nan) if under.any() else None)
-        return out
+        return caps_under(decks, [np.asarray(p.xy, f64)[:, :2] for p in ground], [float(p.half) for p in ground],
+                          heights)
 
     @_marked("_chain_memo", lambda self, key, feats=None, specs=None: key)
     def _chain_cands(self, key, feats=None, specs=None):
@@ -8563,6 +8528,128 @@ class Grader:
                     seen.add(k)
                     out.append((la, lo, spec))
         return out
+
+
+def _deck_joints(decks):
+    """Per deck its two ends (2 * j, 2 * j + 1): True where another deck's end is within VSOLVE_JOINT_M (a joint, not
+    an abutment: a viaduct is mapped in parts). decks [(line (m, 2), half)]. Pure."""
+    f64 = np.float64
+    ends = np.array([ln[e] for ln, _h in decks for e in (0, -1)], f64).reshape(-1, 2)
+    joined = np.zeros(len(ends), bool)
+    idx = np.arange(len(ends))
+    for c in range(0, len(ends), 512):      # (each end's row as ends - ends[i]: the same bits as one by one)
+        i = idx[c:c + 512]
+        d = dnp.hypot(ends[None, :, 0] - ends[i, None, 0], ends[None, :, 1] - ends[i, None, 1])
+        d[np.arange(len(i)), i ^ 1] = np.inf    # (its own other end)
+        d[np.arange(len(i)), i] = np.inf
+        joined[i] = (d <= VSOLVE_JOINT_M).any(axis=1)
+    return joined
+
+
+def caps_under(decks, xys, halves, heights, cell=32.0):
+    """Per plan (its samples xys[i] (n, 2), half width halves[i]) heights[i] where it runs under a deck of decks
+    [(line (m, 2), half h)] (within h + its half of the deck's line, its nearest point past APPROACH_MIN_CROSS_M of
+    the deck's abutment ends, _deck_joints' joints none), NaN elsewhere; None where nowhere. Each sample against only
+    the deck segments a grid of `cell` m finds within reach (every segment within h + half of it among them: the
+    nearest, ties to the first in the deck's order, as over all of them): the same bits as caps_under_scalar, which
+    took 104 of Tokyo's 366 s in its own lines (every plan against every deck its box met). Pure."""
+    f64 = np.float64
+    n_p = len(xys)
+    if not decks or not n_p:
+        return [None] * n_p
+    joined = _deck_joints(decks)
+    A, AB, LAB, CS, DJ, LT = [], [], [], [], [], []
+    for j, (ln, _h) in enumerate(decks):
+        a, ab = ln[:-1], np.diff(ln, axis=0)
+        lab = np.maximum(dnp.hypot(*ab.T), 1e-9)
+        A.append(a)
+        AB.append(ab)
+        LAB.append(lab)
+        CS.append(np.r_[0.0, np.cumsum(lab)][:-1])
+        DJ.append(np.full(len(a), j, np.int64))
+        LT.append(lab.sum())
+    A, AB, LAB, CS, DJ = (np.concatenate(v) for v in (A, AB, LAB, CS, DJ))
+    LT = np.array(LT, f64)
+    H = np.array([h for _ln, h in decks], f64)
+    sizes = np.array([len(x) for x in xys], np.int64)
+    Q = np.concatenate([np.asarray(x, f64).reshape(-1, 2) for x in xys])
+    W = np.repeat(np.asarray(halves, f64), sizes)
+    under = np.zeros(len(Q), bool)
+    if len(Q) and len(A):
+        # (each segment in the grid's cells its box widened by its deck's h and the widest half meets)
+        reach = H[DJ] + float(W.max()) + 1e-6
+        blo, bhi = np.minimum(A, A + AB), np.maximum(A, A + AB)
+        c0 = np.floor((blo - reach[:, None]) / cell).astype(np.int64)
+        c1 = np.floor((bhi + reach[:, None]) / cell).astype(np.int64)
+        nx, ny = c1[:, 0] - c0[:, 0] + 1, c1[:, 1] - c0[:, 1] + 1
+        cnt = nx * ny
+        seg = np.repeat(np.arange(len(A)), cnt)
+        off = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+        gkey = (c0[seg, 0] + off % nx[seg]) * 1_000_003 + (c0[seg, 1] + off // nx[seg])
+        o = np.lexsort((seg, gkey))
+        gkey, seg = gkey[o], seg[o]
+        qc = np.floor(Q / cell).astype(np.int64)
+        qkey = qc[:, 0] * 1_000_003 + qc[:, 1]
+        lo_ = np.searchsorted(gkey, qkey, "left")
+        m = np.searchsorted(gkey, qkey, "right") - lo_
+        si = np.repeat(np.arange(len(Q)), m)
+        sk = seg[np.repeat(lo_, m) + (np.arange(int(m.sum())) - np.repeat(np.cumsum(m) - m, m))]
+        # (the segment's box widened by its deck's h and this sample's own half: every segment within h + half of the
+        # sample is among those kept)
+        r_ = H[DJ[sk]] + W[si] + 1e-6
+        k_ = ((Q[si, 0] >= blo[sk, 0] - r_) & (Q[si, 0] <= bhi[sk, 0] + r_)
+              & (Q[si, 1] >= blo[sk, 1] - r_) & (Q[si, 1] <= bhi[sk, 1] + r_))
+        si, sk = si[k_], sk[k_]
+        if len(si):
+            q, a, ab, lab = Q[si], A[sk], AB[sk], LAB[sk]
+            t = np.clip(((q - a) * ab).sum(1) / (lab * lab), 0.0, 1.0)
+            dist = dnp.hypot(*(a + t[:, None] * ab - q).T)
+            dj = DJ[sk]
+            # (per sample and deck its nearest segment, the first of equals: sorted by sample, deck, distance, segment)
+            o = np.lexsort((sk, dist, dj, si))
+            si, sk, dj, t, dist = si[o], sk[o], dj[o], t[o], dist[o]
+            first = np.r_[True, (si[1:] != si[:-1]) | (dj[1:] != dj[:-1])]
+            si, sk, dj, t, dist = si[first], sk[first], dj[first], t[first], dist[first]
+            at = CS[sk] + t * LAB[sk]
+            ok = (dist <= H[dj] + W[si]) & ((at > APPROACH_MIN_CROSS_M) | joined[2 * dj]) & (
+                (at < LT[dj] - APPROACH_MIN_CROSS_M) | joined[2 * dj + 1])
+            under[si[ok]] = True
+    out, s0 = [], 0
+    for i in range(n_p):
+        u = under[s0:s0 + sizes[i]]
+        s0 += int(sizes[i])
+        out.append(np.where(u, np.asarray(heights[i], f64), np.nan) if u.any() else None)
+    return out
+
+
+def caps_under_scalar(decks, xys, halves, heights):
+    """caps_under's reference (the tests'): each plan against each deck whose box meets its own, all its samples."""
+    f64 = np.float64
+    if not decks or not xys:
+        return [None] * len(xys)
+    joined = _deck_joints(decks)
+    dbox = np.array([(*(ln.min(0) - h), *(ln.max(0) + h)) for ln, h in decks], f64)
+    out = []
+    for xy, w, hz in zip(xys, halves, heights):
+        xy = np.asarray(xy, f64)
+        w = float(w)
+        under = np.zeros(len(xy), bool)
+        pl, ph = xy.min(0) - w, xy.max(0) + w
+        for j in np.flatnonzero((dbox[:, 0] <= ph[0]) & (dbox[:, 2] >= pl[0]) & (dbox[:, 1] <= ph[1])
+                                & (dbox[:, 3] >= pl[1])).tolist():
+            ln, h = decks[j]
+            q = xy
+            a, ab = ln[:-1], np.diff(ln, axis=0)
+            lab = np.maximum(dnp.hypot(*ab.T), 1e-9)
+            t = np.clip(((q[:, None, :] - a[None]) * ab[None]).sum(2) / (lab * lab)[None], 0.0, 1.0)
+            dist = dnp.hypot(*(a[None] + t[..., None] * ab[None] - q[:, None, :]).transpose(2, 0, 1))
+            k = np.argmin(dist, axis=1)
+            ri = np.arange(len(q))
+            at = np.r_[0.0, np.cumsum(lab)][:-1][k] + t[ri, k] * lab[k]
+            under |= (dist[ri, k] <= h + w) & ((at > APPROACH_MIN_CROSS_M) | joined[2 * j]) & (
+                (at < lab.sum() - APPROACH_MIN_CROSS_M) | joined[2 * j + 1])
+        out.append(np.where(under, np.asarray(hz, f64), np.nan) if under.any() else None)
+    return out
 
 
 def trim_plan(p, box):

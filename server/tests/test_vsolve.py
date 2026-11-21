@@ -406,6 +406,40 @@ class CapsTest(unittest.TestCase):
         self.assertTrue(got is None or not np.isfinite(got[np.abs(xs - 5.0) < 1.0]).any())
 
 
+    def test_the_grid_gives_the_scalar_caps(self):
+        """caps_under (each sample against the deck segments a grid finds near it) gives caps_under_scalar's (each plan
+        against each deck, all its samples) to the bit: random decks and roads, joints, exact ties on rounded
+        coordinates, any grid cell."""
+        rng = np.random.default_rng(7)
+        for _trial in range(120):
+            decks = []
+            for _ in range(int(rng.integers(1, 10))):
+                m = int(rng.integers(2, 25))
+                p0 = rng.uniform(-150, 150, 2)
+                ln = np.vstack([p0, p0 + np.cumsum(rng.normal(0, 15, (m - 1, 2)), 0)])
+                if decks and rng.random() < 0.25:
+                    ln[0] = decks[-1][0][-1] + rng.normal(0, 0.5, 2)
+                if rng.random() < 0.15:
+                    ln = np.round(ln)
+                decks.append((ln, float(rng.uniform(2, 9))))
+            xys, halves, hts = [], [], []
+            for _ in range(int(rng.integers(1, 12))):
+                n = int(rng.integers(1, 60))
+                p0 = rng.uniform(-170, 170, 2)
+                xy = np.vstack([p0, p0 + np.cumsum(rng.normal(0, 6, (n - 1, 2)), 0)]) if n > 1 else p0[None]
+                if rng.random() < 0.15:
+                    xy = np.round(xy)
+                xys.append(xy)
+                halves.append(float(rng.uniform(1, 8)))
+                hts.append(rng.normal(0, 5, n))
+            a = grading.caps_under(decks, xys, halves, hts, cell=float(rng.choice([8.0, 32.0, 100.0])))
+            b = grading.caps_under_scalar(decks, xys, halves, hts)
+            for x, y in zip(a, b):
+                self.assertEqual(x is None, y is None)
+                if x is not None:
+                    np.testing.assert_array_equal(x, y)
+
+
 class DefaultModeTest(unittest.TestCase):
     """BNE_VSOLVE unset (the RFC's step 4): on where the native kernel has the solve, off on an older build."""
 

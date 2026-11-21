@@ -178,11 +178,17 @@ class SegmentsTest(unittest.TestCase):
                 for r in (1.0, 2.5, 9.0):
                     p = np.asarray(p, np.float64)
                     self.assertEqual(list(seg.near(p, r).items()), list(seg.near_scalar(p, r).items()))
+            ps = [l[e] for l in lines for e in (0, -1)] + list(rng.uniform(-110, 110, (20, 2)))
+            for r in (1.0, 2.5, 9.0):       # (near_many: every query's at once, near's answers in near's order)
+                self.assertEqual([list(d.items()) for d in seg.near_many(ps, r)],
+                                 [list(seg.near(np.asarray(p, np.float64), r).items()) for p in ps])
 
     def test_no_line_near(self):
         seg = gm._Segments([np.array([[0.0, 0.0], [10.0, 0.0]])])
         self.assertEqual(seg.near(np.array([0.0, 50.0]), 2.0), {})
         self.assertEqual(gm._Segments([]).near(np.array([0.0, 0.0]), 5.0), {})
+        self.assertEqual(gm._Segments([]).near_many([[0.0, 0.0]], 5.0), [{}])
+        self.assertEqual(seg.near_many(np.zeros((0, 2)), 2.0), [])
 
 
 if __name__ == "__main__":
