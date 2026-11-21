@@ -19,6 +19,7 @@ import numpy as np
 import dmath
 import dnp
 
+import polishpoles
 import franceroads
 import furniture
 import poleprofiles
@@ -159,7 +160,7 @@ def _french_kit(pole_profile):
     return franceroads.ON and poleprofiles.kit_enabled(pole_profile)
 
 
-def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, everywhere=False, clearance=None):
+def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, everywhere=False, clearance=None, only_poland=False):
     """Append mapped rural FR props and wires in the existing furniture formats.
 
     Points retain their mapped side and coordinates. Missing mapping is unknown,
@@ -183,6 +184,8 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
             if not np.isfinite(ll).all():
                 continue
             lon, lat = map(float, ll)
+            if only_poland and not polishpoles.inside(lat, lon):
+                continue
             if not everywhere and not (-5.3 < lon < 9.8 and 41.3 < lat < 51.2):
                 continue
             x, y, _ = frame.geodetic_to_enu(lat, lon, 0.)
@@ -277,14 +280,18 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
     _, _, z = frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), float))
     poles, rows_of = {}, {}
     for k, key in enumerate(keys):
-        xy, _, _, tags, height = unique[key]
+        xy, lat_k, lon_k, tags, height = unique[key]
         # (everywhere: the game's own wooden pole, the one furniture.place guesses, at its own height for its wires)
         style = poleprofiles.STOCK if everywhere else _style(choose(key, *xy, float(z[k])), tags, height)
         pole = (*map(float, xy), float(z[k]), yaw.get(key, 0.), style)
         row = [style.group, round(pole[0], 2), round(pole[1], 2), round(pole[2], 2), round(pole[3], 1), 1.,
                style.height, 0.]
         if clearance is not None:
-            row = _clear_spot(clearance, row)
+            if polishpoles.inside(lat_k, lon_k):
+                if not clearance.clear(row):
+                    continue
+            else:
+                row = _clear_spot(clearance, row)
             if row is None:
                 continue                # (on a carriageway with no clear spot near: its spans go too, below)
             pole = (row[1], row[2], pole[2], pole[3], style)

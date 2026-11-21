@@ -40,6 +40,7 @@ import heightmap
 import l0roads
 import mapdata as mapdatamod
 import mappedpoles
+import polishpoles
 import netfetch
 import plancache
 import roadwidth as roadwidthmod
@@ -1365,6 +1366,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                     *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat), bool(roadsmod.ROADS_IN_GROUND),
                     *_surf_tags(geodesy.EnuFrame(lat, lon), *roadsmod_tile_bbox(tx, ty)),
                     _nyc_key(geodesy.EnuFrame(lat, lon), roadsmod_tile_bbox(tx, ty)) if buildings else None,
+                    *polishpoles.cache_parts(geodesy.EnuFrame(lat, lon), roadsmod_tile_bbox(tx, ty)),
                     bool(de_junctions), *de)     # (the German junction parts last)
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
@@ -2352,6 +2354,7 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
                        # (the ground rules: rules, the server's own when it asks, earthd.Server.geo_content_key)
                        ("rules", _ground_rules() if rules is None else rules),
                        _nyc_key(tile.frame, tile.box, cache_dir) if buildings else None,
+                       *polishpoles.cache_parts(tile.frame, tile.box),
                        bool(de_junctions), *de)     # (the German junction parts last)
 
 

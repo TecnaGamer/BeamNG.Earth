@@ -176,3 +176,25 @@ approximate bounding-box limits only, so border matches may be imperfect. Small 
 `near` searches use the named location as their origin. Large regions may have few results for sparsely mapped classes.
 Rally/gravel, off-road and rock crawling use terrain/sport tag proxies, not verified routes or access guarantees.
 OSM object centers and Wikidata coordinates identify the destination, not a verified drivable entrance.
+
+## Polish power supports
+
+The bundled snapshot uses the Polish Head Office of Geodesy and Cartography (GUGiK)
+national BDOT10k point layer and the State Register of Boundaries (PRG), retrieved
+2026-11-21. It contains 154,662 distinct active power-support coordinates. The
+existing Overture infrastructure layer supplies OpenStreetMap support points and
+overhead lines. Coverage and survey dates vary. The standalone BDOT10k model is
+a visual approximation of a tall support; the inventory does not specify its mesh.
+
+- [BDOT10k OT_BUWT_P GeoParquet](https://opendata.geoportal.gov.pl/bdot10k/schemat2021/GeoParquet/OT_BUWT_P.parquet)
+  SHA-256 `cb128201840c3efd5fac25af878e63cd648d6a02495d9fa32ffee6eb135f4082`.
+- [PRG country boundary GML](https://mapy.geoportal.gov.pl/wss/service/PZGIK/PRG/WFS/AdministrativeBoundaries?service=WFS&version=1.0.0&request=GetFeature&typeName=ms:A00_Granice_panstwa&srsName=EPSG:4326)
+  SHA-256 `3105f246136f4b69448054c257278c4c4151c48e0bcfa0af5684616eda130a08`.
+  The service returned EPSG:2180 in the GML geometry.
+
+Rebuild with `python tools/build_polish_poles.py OT_BUWT_P.parquet border.gml`.
+The builder also accepts optional [Mapillary point-feature GeoJSON exports](https://help.mapillary.com/hc/en-us/articles/4407521157138-Downloading-map-data-via-the-Mapillary-web-app)
+as additional arguments. It imports Polish triangulated utility-pole points. The
+distributed snapshot includes no Mapillary export. At runtime, points from the
+next source within eight metres of a higher-priority source are suppressed
+(OSM via Overture, then BDOT10k, then Mapillary).
