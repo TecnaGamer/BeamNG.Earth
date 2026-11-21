@@ -45,6 +45,13 @@ COMMERCIAL = SPECIFIC | {"commercial", "retail", "shop"}
 LOG = logging.getLogger("earthd.storefronts")
 
 
+MIN_BUSINESS_CONFIDENCE = 0.75
+
+
+def qualifies_business(confidence):
+    return confidence is not None and MIN_BUSINESS_CONFIDENCE < float(confidence) <= 1.0
+
+
 class LocalSign(NamedTuple):
     name: str
     style: str
@@ -141,7 +148,7 @@ def mapped_tenants(layers, ring, anchor=None, local=False):
                 name = None
             if local and not name and "drive_in_theater" not in categories:
                 name = local_sign(value("name"), categories)
-            trusted = confidence is not None and float(confidence) >= 0.8
+            trusted = qualifies_business(confidence)
             tenants[str(f.ids[i])] = (name if trusted else None, points[j])
     return list(tenants.values())
 
@@ -164,7 +171,7 @@ def suite_directory(layers, center, anchor):
             def value(key):
                 return attrs[key][i] if key in attrs else None
             addr = SUITE_ADDRESS.fullmatch(str(value("street_address") or "").strip())
-            if (not addr or not float(value("confidence") or 0) >= .9
+            if (not addr or not qualifies_business(value("confidence"))
                     or value("operating_status") in {"closed","permanently_closed"}):
                 continue
             name = str(value("name") or "").strip()
@@ -205,7 +212,7 @@ def exterior_frontages(layers, coords, ring, label, neighbors):
             i = rows[j]
             def attr(key):
                 return feats.attrs[key][i] if key in feats.attrs else None
-            if not float(attr("confidence") or 0) >= .9 or attr("operating_status") in {"permanently_closed","closed"}:
+            if not qualifies_business(attr("confidence")) or attr("operating_status") in {"permanently_closed","closed"}:
                 continue
             sign = local_sign(attr("name"), {attr("basic_category"),attr("taxonomy")})
             if not sign:

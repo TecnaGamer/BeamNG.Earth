@@ -142,7 +142,7 @@ class StreamedStoresTest(unittest.TestCase):
         ring = np.array([[0.,0.],[30.,0.],[30.,12.],[0.,12.]])
         scale = [111320.,111132.]
         points = np.array([[5.,-1.],[24.,-2.],[15.,-6.],[0.,-.5]])/scale
-        attrs = {"name": ["West","East","Across","Corner"], "confidence": [1.]*4,
+        attrs = {"name": ["West","East","Across","Corner"], "confidence": [.76]*4,
                  "basic_category": ["sporting_goods_store"]*4}
         layers = [(SimpleNamespace(attrs=attrs),np.arange(4),points)]
         def names(neighbors=()):
@@ -157,7 +157,7 @@ class StreamedStoresTest(unittest.TestCase):
         center = np.array([-80.,35.])
         coords = center+np.array([[0.,0.],[.00010,0.],[.00012,0.]])
         attrs = {"street_address":["101 Oak Dr., Ste. B","101 Oak Drive Suite A","110 Oak Dr #C"],
-                 "name":["Anchor","Oak Tea","Other"],"confidence":[.99]*3,"basic_category":["cafe"]*3}
+                 "name":["Anchor","Oak Tea","Other"],"confidence":[.76]*3,"basic_category":["cafe"]*3}
         layers = [(SimpleNamespace(attrs=attrs),np.arange(3),coords)]
         directory = suite_directory(layers,center,"Anchor")
         self.assertEqual(directory,(("A","Oak Tea"),("B","Anchor")))
@@ -170,6 +170,13 @@ class StreamedStoresTest(unittest.TestCase):
         self.assertFalse(suite_directory(layers,center,"Anchor"))
         del attrs["street_address"]
         self.assertFalse(suite_directory(layers,center,"Anchor"))
+
+    def test_business_confidence_cutoff(self):
+        from streamedstores import qualifies_business
+        for score in (None, float("nan"), .74, .75, 1.01):
+            self.assertFalse(qualifies_business(score))
+        for score in (.75001, .76, .92, 1.0):
+            self.assertTrue(qualifies_business(score))
 
     def test_catalog_matches_typed_cinemas_and_restaurant_aliases(self):
         from streamedstores import chain
