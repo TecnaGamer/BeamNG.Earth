@@ -5,6 +5,8 @@ import csv
 from functools import lru_cache
 import json
 import logging
+import os
+from typing import NamedTuple
 import dmath
 import dnp
 import struct
@@ -42,6 +44,54 @@ COMMERCIAL = SPECIFIC | {"commercial", "retail", "shop"}
 LOG = logging.getLogger("earthd.storefronts")
 
 
+class LocalSign(NamedTuple):
+    name: str
+    style: str
+
+
+SIGN_STYLES = {
+    "smoke_shop": "tobacco", "tobacco": "tobacco", "tobacco_shop": "tobacco",
+    "vape_shop": "tobacco", "car_wash": "wash", "carwash": "wash",
+    "fuel": "fuel", "gas_station": "fuel", "fueling_station": "fuel",
+    "convenience_store": "market", "grocery_store": "market",
+}
+
+
+def local_sign(label, categories):
+    if not isinstance(label, str):
+        return None
+    name = " ".join(label.split())
+    if not 2 <= len(name) <= 80 or not name.isprintable():
+        return None
+    for category, style in SIGN_STYLES.items():
+        if category in categories:
+            return LocalSign(name, style)
+    if categories & (SPECIFIC | {"shop", "retail"}):
+        return LocalSign(name, "shop")
+    return None
+
+
+def approach_panel(ring, coords, facing, doors):
+    """Select a broad outward-facing wall, preferring a mapped customer door."""
+    edges = np.roll(ring, -1, axis=0) - ring
+    lengths = np.linalg.norm(edges, axis=1)
+    winding = 1 if np.sum(ring[:,0]*edges[:,1]-ring[:,1]*edges[:,0]) >= 0 else -1
+    normals = winding * np.column_stack((edges[:,1], -edges[:,0])) / np.maximum(lengths[:,None], 1e-9)
+    score = np.maximum(0, normals @ facing / np.linalg.norm(facing))**2 * np.minimum(lengths, 20)
+    if doors:
+        scale = np.array([111320*dmath.cos(dmath.radians(coords[0,1])), 111132])
+        for door in doors:
+            offsets = (door-coords)*scale
+            fraction = np.clip(np.sum(offsets*edges, axis=1)/np.maximum(lengths**2, 1e-9), 0, 1)
+            score += 30 * (np.linalg.norm(offsets-fraction[:,None]*edges, axis=1) <= 1.5)
+    score[lengths < 4] = 0
+    wall = int(score.argmax())
+    if score[wall] <= 0:
+        return None
+    panel = coords[[wall, (wall+1) % len(coords)]]
+    return panel if winding == 1 else panel[::-1]
+
+
 def businesses(md, keys):
     """Keep all mapped POIs in the cells so another tenant can rule out a whole-building match."""
     for key in keys:
@@ -56,7 +106,7 @@ def businesses(md, keys):
         yield f, rows, f.lonlat[f.coord_off[f.ring_off[f.part_off[rows]]]]
 
 
-def mapped_tenants(layers, ring, anchor=None):
+def mapped_tenants(layers, ring, anchor=None, local=False):
     lo, hi = ring.min(0), ring.max(0)
     tenants = {}
     for f, rows, points in layers:
@@ -88,6 +138,8 @@ def mapped_tenants(layers, ring, anchor=None):
             confidence = value("confidence")
             if categories & GAS_CATEGORIES or "drive_in_theater" in categories:
                 name = None
+            if local and not name and "drive_in_theater" not in categories:
+                name = local_sign(value("name"), categories)
             trusted = confidence is not None and float(confidence) >= 0.8
             tenants[str(f.ids[i])] = (name if trusted else None, points[j])
     return list(tenants.values())
@@ -150,7 +202,7 @@ def mapped_doors(source, coords):
     return tuple(sorted(set(public or paths)))
 
 
-def cached_entry(cache, name, coords, bearing, material, sign_height=None, doors=(), entrance_bearing=None):
+def cached_entry(cache, name, coords, bearing, material, sign_height=None, doors=(), entrance_bearing=None, local_panel=None):
     # Round away sub-centimetre anchor differences. The key describes the geometry actually exported.
     coords = coords.round(7)
     parameters = [STOREFRONT_VERSION, name, coords.tolist(), bearing, material]
@@ -160,6 +212,8 @@ def cached_entry(cache, name, coords, bearing, material, sign_height=None, doors
         parameters.append(doors)
     if entrance_bearing is not None:
         parameters.append({"entrance_bearing": entrance_bearing})
+    if local_panel:
+        parameters.append({"local_panel": local_panel})
     signature = json.dumps(parameters).encode()
     ident = hashlib.sha256(signature).hexdigest()[:24]
     meta = cache / f"store_{ident}.json"
@@ -190,7 +244,7 @@ def cached_entry(cache, name, coords, bearing, material, sign_height=None, doors
     if entrance_bearing is not None:
         angle = dmath.radians(entrance_bearing)
         parking = np.array([dmath.cos(angle), dmath.sin(angle)])
-    entry = export_store(Path("streamed"), match, {}, cache, entrance_direction=parking)
+    entry = export_store(Path("streamed"), match, {}, cache, entrance_direction=parking, **({"local_panel": local_panel} if local_panel else {}))
     with NamedTemporaryFile(mode="w", dir=cache, delete=False) as handle:
         json.dump(entry, handle)
     Path(handle.name).replace(meta)
@@ -232,6 +286,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
     if not len(starts):
         return
     layers = None
+    local_enabled = os.environ.get("BNE_LOCAL_BUSINESS_SIGNS") == "1"
     parking_points = None
     cache = Path(cache_dir) / "threedmr_cache" / "storefronts"
     for spec, ground_min, ground_max in items:
@@ -247,9 +302,13 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
         kind = str(spec.cls or "").lower()
         name = chain(label, kind == "cinema")
         generic_host = kind in {"retail", "commercial", "shop"} or (not kind and subtype == "commercial")
-        if kind not in COMMERCIAL and not generic_host and not (name and not kind):
+        categories = {kind}
+        if subtype == "commercial" and label.casefold().endswith("restaurant"):
+            categories.add("restaurant")
+        fallback = local_sign(label, categories) if local_enabled else None
+        if kind not in COMMERCIAL and not (local_enabled and kind in SIGN_STYLES) and not generic_host and not (name and not kind):
             continue
-        if label and not name and not generic_host:
+        if label and not name and not generic_host and not fallback:
             continue
         ring = np.asarray(spec.ring)[:, :2]
         if len(ring) > 96 or np.any(np.ptp(ring, axis=0) > 250):
@@ -278,11 +337,13 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
             if generic_host or not name:
                 if layers is None:
                     layers = list(businesses(md, keys))
-                tenants = mapped_tenants(layers, coords, anchor=name)
+                tenants = mapped_tenants(layers, coords, anchor=name, local=local_enabled)
                 if name and any(brand != name for brand, _ in tenants):
                     # A retail host may carry its anchor's name but also contain independent stores.
                     name = None
-                elif not label and len(tenants) == 1:
+                elif fallback and not name and (not tenants or all(t == fallback for t, _ in tenants)):
+                    name = fallback
+                elif not name and len(tenants) == 1 and (not label or isinstance(tenants[0][0], LocalSign) and not generic_host):
                     name = tenants[0][0]
                 if not name and not (generic_host and tenants and len(aisles)):
                     continue
@@ -293,7 +354,12 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                 if parking is not None:
                     entrance_bearing = round(dmath.degrees(dmath.atan2(parking[1], parking[0])))
             bearing = round(dmath.degrees(dmath.atan2(facing[1], facing[0])))
-            if name:
+            if isinstance(name, LocalSign):
+                panel = approach_panel(ring, coords, facing, doors)
+                if panel is None:
+                    continue
+                matches = [(name, panel, None, None)]
+            elif name:
                 matches = [(name, coords, bearing, material)]
             else:
                 if parking_points is None:
@@ -302,7 +368,13 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     parking_points = np.column_stack((lon, lat))
                 matches = ((brand, panel, None, None) for brand, panel in tenant_panels(tenants, coords, parking_points))
             for brand, geometry, heading, finish in matches:
-                entry = cached_entry(cache, brand, geometry, heading, finish, doors=doors, entrance_bearing=entrance_bearing)
+                options = {}
+                if isinstance(brand, LocalSign):
+                    if spec.height < 2.8:
+                        continue
+                    options["local_panel"] = (brand.style, round(min(4.2, spec.height - .2), 1))
+                    brand = brand.name
+                entry = cached_entry(cache, brand, geometry, heading, finish, doors=doors, entrance_bearing=entrance_bearing, **options)
                 local = dict(entry, file="storefronts/" + entry["file"])
                 x, y, _ = frame.geodetic_to_enu(entry["lat"], entry["lon"], 0.0)
                 yield {

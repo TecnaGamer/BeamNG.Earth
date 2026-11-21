@@ -850,7 +850,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml", "storefront")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml", "storefront", "retail_front")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -1471,6 +1471,11 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         facade, plain = wall, False
     elif fm in ("plastic", "vinyl") and not (barn or shed):     # (vinyl siding, the US's most mapped "plastic")
         facade, band, plain = SIDING, None, True
+    retail_front = bool(attrs.get("_retail_front"))
+    if retail_front:
+        shop, plain, house, row = True, False, False, False
+        wall = BRICK_WALL if fm == "brick" else wall or PANEL
+        facade = wall
     fc = parse_color(attrs.get("facade_color"))
     if fc is not None and not attrs.get("bridge_part"):
         fc = facade_tone(fc)
@@ -1489,8 +1494,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         facade, band, plain = OFFICE, BAND_OFFICE, False
     elif garage:
         facade, band, plain = FACADE_TINTS[3], BAND_PANEL, False
-    windows = True
-    if not (shed or barn or row or house or terminal or garage or church) and nf <= 2 and roof == "flat" \
+    windows = not retail_front
+    if not retail_front and not (shed or barn or row or house or terminal or garage or church) and nf <= 2 and roof == "flat" \
             and (area >= BIG_BOX_M2 or industrial) \
             and cls not in HOUSE_CLASSES and cls != "apartments":
         kind = METALWALL if industrial else PANEL
@@ -3125,6 +3130,56 @@ def _shared_walls(rings, tol=0.6):
     return np.asarray(fast._ef.shared_walls(coords, offs, np.ascontiguousarray(cents, np.float64),
                                             np.ascontiguousarray(rads, np.float64), order.astype(np.int64),
                                             float(tol)), np.int64)
+
+
+def _retail_frontages(rings, attrs):
+    """Identify low shop buildings and measured, unclassified units sharing a retail party wall."""
+    shops = set()
+    anchors = []
+    candidates = []
+    for i, (ring, at) in enumerate(zip(rings, attrs)):
+        if not at.get("_storefront") or at.get("_parts_drawn") or at.get("_holes"):
+            continue
+        height = at.get("height")
+        floors = at.get("num_floors")
+        if ((height is not None and np.isfinite(height) and not 2.8 <= height <= 7)
+                or (floors is not None and np.isfinite(floors) and floors > 1)
+                or str(at.get("roof_shape") or "flat").lower() != "flat"):
+            continue
+        cls = str(at.get("class") or "").lower()
+        subtype = str(at.get("subtype") or "").lower()
+        name = str(at.get("name") or "").casefold()
+        if cls in {"retail", "shop", "supermarket", "restaurant", "fast_food", "cafe"} or (
+                cls in {"", "commercial"} and subtype == "commercial" and name.endswith("restaurant")):
+            shops.add(i)
+            anchors.append(ring)
+        elif not cls and not name and subtype in {"", "commercial"} and height is not None and 2.8 <= height <= 6.5:
+            candidates.append(i)
+    if not anchors or not candidates:
+        return shops
+    # Only opposite, overlapping edges count. A corner touch or a shop across an alley does not.
+    start = np.concatenate(anchors)
+    end = np.concatenate([np.roll(r, -1, axis=0) for r in anchors])
+    lower, upper = np.minimum(start, end)-.6, np.maximum(start, end)+.6
+    for i in candidates:
+        ring = rings[i]
+        near = np.all(upper >= ring.min(0), axis=1) & np.all(lower <= ring.max(0), axis=1)
+        if not near.any():
+            continue
+        for a, b in zip(ring, np.roll(ring, -1, axis=0)):
+            length = math.hypot(*(b-a))
+            if length < 6:
+                continue
+            axis = (b-a)/length
+            normal = np.array([-axis[1], axis[0]])
+            p, q = start[near]-a, end[near]-a
+            along_p, along_q = dnp.dot(p, axis), dnp.dot(q, axis)
+            overlap = np.minimum(length, along_p) - np.maximum(0., along_q)
+            if np.any((overlap >= 6) & (np.abs(dnp.dot(p, normal)) <= .6)
+                      & (np.abs(dnp.dot(q, normal)) <= .6)):
+                shops.add(i)
+                break
+    return shops
 
 def _part_heights(a, i):
     """A building part's (own height, its bottom) from its attributes, or None without a height."""
@@ -5314,6 +5369,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     if ROAD_PASSAGE_ON and passage_xy:     # a road mapped inside a building: a passage (a mall's covered way)
         rings, attrs, looks, mins = _road_passages(rings, attrs, looks, mins, passage_xy)
     shared = _shared_walls(rings)
+    retail = _retail_frontages(rings, attrs) if storefronts else set()
     cover = sum(_area2(r) / 2 for r, mh in zip(rings, mins) if mh <= 0.5) / ((x1 - x0) * (y1 - y0))
     town, dense = cover < TOWN_COVERAGE, cover > BRICK_WALK_COVERAGE
     clat, clon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.0)
@@ -5403,8 +5459,14 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             at = dict(at, _fr_location=(hlat, hlon), _fr_altitude=float(np.nanmean(g_all[i0:i1])),
                       _fr_part=look is not None or mh > .5, _fr_neighbours=int(sh),
                       _fr_residential=bool(house_res[k]) if house_res is not None else False)
+        if k in retail and look is None and mh == 0 and not at.get("_land") and not dense:
+            # One shop floor behind a parapet. Preserve the measured top when one is available.
+            height = at.get("height")
+            at = dict(at, _retail_front=True, roof_shape="flat", num_floors=1,
+                      height=height if height is not None and np.isfinite(height) and height > 0 else 4.8)
         spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
         spec.min_h = mh
+        spec.retail_front = at.get("_retail_front")
         spec.storefront = at.get("_storefront") if mh == 0 else None
         # (a building drawn from its parts (the map's, New York's 3-D model's): its tank on its topmost part, the
         # building's storeys from its whole height; without, the setbacks took New York's tanks away)
@@ -5781,7 +5843,7 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
             out = np.array([e[1], -e[0]]) / Le
             if float(dnp.dot(QK[i] - mid, out)) <= 0:
                 continue                                 # the wall faces away from that road
-            rank = (bool(SMINOR[k]) if storefront else False, float(dk))
+            rank = (bool(SMINOR[k]) if storefront else False, bool(spec.retail_front and Le < 6), float(dk))
             if best is None or rank < best[0]:
                 best = (rank, a, e / Le, Le, out, i, bool(SMAIN[k]) and dk < SHALF[k] + MAIN_STREET_SETBACK_M,
                         k)
@@ -5790,6 +5852,8 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
         _, a, d, Le, out, edge, on_main, kseg = best
         if spec.windows is False:
             spec.front = edge                   # a big box: its storefront faces the road
+            if spec.retail_front and spec.storefront[1]:
+                continue
             if storefront:
                 spec.sign = edge
             rows.extend(_sign_in_open(_wall_sign(spec, a, d, Le, out, gmax), spec, d, out, others))

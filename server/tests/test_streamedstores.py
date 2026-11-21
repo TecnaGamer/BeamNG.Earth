@@ -50,6 +50,36 @@ def tile(frame, name, tenants, kind="supermarket", subtype="commercial"):
 
 
 class StreamedStoresTest(unittest.TestCase):
+    def test_shared_retail_wall_requires_overlap_and_low_height(self):
+        ring = np.array([[0.,0.],[12.,0.],[12.,10.],[0.,10.]])
+        shop = {"_storefront": True, "class": "shop"}
+        unit = {"_storefront": True, "height": 5.2}
+        for shift, attrs, expected in [([12,0], unit, {0,1}), ([12,9], unit, {0}),
+                                      ([13,0], unit, {0}), ([12,0], dict(unit,num_floors=2), {0})]:
+            self.assertEqual(buildings._retail_frontages([ring,ring+shift],[shop,attrs]), expected)
+
+    def test_optional_local_sign_uses_mapped_name_and_keeps_host(self):
+        frame = geodesy.EnuFrame(40., -83.)
+        for category, name in (("car_wash", "River Wash"), ("smoke_shop", "Northside Smoke"),
+                               ("gas_station", "East End Fuel"), ("retail", "Olive Books")):
+            md = tile(frame, "", [name], "retail")
+            md.cell(None).layers["places"].attrs["basic_category"] = np.array([category])
+            with (self.subTest(category=category), tempfile.TemporaryDirectory() as cache,
+                  patch.dict(os.environ, BNE_STOREFRONTS="1", BNE_LOCAL_BUSINESS_SIGNS="1"),
+                  patch("threedmr.region_ids", return_value=[]),
+                  patch("buildings.road_lines", return_value=[np.array([[0.,15.],[256.,15.]])])):
+                def generate():
+                    return buildings.road_tile_items(frame, 0, 0, md, lambda a,b: np.zeros(np.shape(a)),
+                                                     cache_dir=cache)[1]
+                entry, = generate()
+                self.assertTrue(entry["local"]["storefront_overlay"])
+                self.assertEqual(entry["local"]["title"], name)
+                self.assertIsNone(entry["storefront_host"])
+                model = threedmr.load_local_model(cache, entry["local"])
+                self.assertEqual(len(model[2]), 4)
+                with patch.dict(os.environ, BNE_LOCAL_BUSINESS_SIGNS="0"):
+                    self.assertFalse(generate())
+
     def test_catalog_matches_typed_cinemas_and_restaurant_aliases(self):
         from streamedstores import chain
         from store_match import brand

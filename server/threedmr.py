@@ -55,7 +55,7 @@ import staging
 
 log = logging.getLogger("earthd.threedmr")
 
-STOREFRONT_VERSION = 20  # Shared by generated model filenames and tile revisit keys.
+STOREFRONT_VERSION = 21  # Shared by generated model filenames and tile revisit keys.
 TAG_KEY = "3dmr"
 API_URL = "https://3dmr.eu/api/model/{}"
 SEARCH_URL = "https://3dmr.eu/api/search/{lat:.6f}/{lon:.6f}/{range_m}"
@@ -380,6 +380,8 @@ def local_signature(cache_dir):
             out.append((repr(entry), None, None))
     if os.environ.get("BNE_STOREFRONTS") == "1":
         out.append(("streamed-storefronts", STOREFRONT_VERSION))
+        if os.environ.get("BNE_LOCAL_BUSINESS_SIGNS") == "1":
+            out.append(("local-business-signs", 1))
     return tuple(out)
 
 

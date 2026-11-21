@@ -556,6 +556,24 @@ SIGN_COLORS["AMC Theatres"] = ("#282427", "#ed364a")
 SIGN_FONT = Path(__file__).resolve().parents[1] / "fonts" / "DejaVuSans-Bold.ttf"
 
 
+def local_sign_image(name, style, aspect):
+    colors = {"tobacco": ("#302435", "#d6a860"), "wash": ("#144558", "#76ded8"),
+              "fuel": ("#263545", "#f4ab54"), "market": ("#254335", "#d1c69c"),
+              "shop": ("#303941", "#c8b99f")}
+    base, accent = colors[style]
+    width = min(512, max(128, round(64 * aspect)))
+    height = max(32, round(width / aspect))
+    image = Image.new("RGB", (width, height), base)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, height-4, width, height), fill=accent)
+    font = ImageFont.truetype(SIGN_FONT, 48)
+    box = font.getbbox(name)
+    size = max(1, int(48 * min((width-12)/max(1, box[2]-box[0]), (height-12)/max(1, box[3]-box[1]))))
+    font = ImageFont.truetype(SIGN_FONT, size)
+    draw.text((width/2, (height-4)/2), name, font=font, fill="white", anchor="mm")
+    return image
+
+
 def sign_image(name, aspect=4.5, height_m=1., surface="facade"):
     width = max(12, round(200 * aspect))
     custom = brand_signs.artwork(name, width, SIGN_FONT, height_m, surface)

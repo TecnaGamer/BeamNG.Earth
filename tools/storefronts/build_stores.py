@@ -21,9 +21,9 @@ def cross(a, b, c):
     return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 
 
-def export_store(path, match, observations, out, *, entrance_direction=None):
+def export_store(path, match, observations, out, *, entrance_direction=None, local_panel=None):
     name, ident, coords, street, fixtures, wall_material, *sign_size = match
-    height = HEIGHTS[name]
+    height = None if local_panel else HEIGHTS[name]
     center = (coords.min(0) + coords.max(0)) / 2
     scale = [111320 * math.cos(math.radians(center[1])), 111132]
     xy = (coords - center) * scale
@@ -102,7 +102,7 @@ def export_store(path, match, observations, out, *, entrance_direction=None):
         return 2 + len(painted)
 
     detailed = name in whole_store.CHAINS and not overlay
-    tenant_sign = overlay and (name in whole_store.CHAINS or bool(sign_size))
+    tenant_sign = overlay and (name in whole_store.CHAINS or bool(sign_size) or bool(local_panel))
     if overlay:
         a, b = xy
         width = np.linalg.norm(b - a)
@@ -131,6 +131,17 @@ def export_store(path, match, observations, out, *, entrance_direction=None):
                 right = side * axis * width/2 + normal * side * .19
                 mesh([(*left,bottom), (*right,bottom), (*right,top), (*left,bottom), (*right,top), (*left,top)],
                      art, [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
+        elif local_panel:
+            style, top = local_panel
+            span = 2 * np.linalg.norm(half_span)
+            tall = min(1.25, span / 4)
+            art = whole_store.local_sign_image(name, style, span / tall)
+            # A narrow fascia support also locates the model's ground plane for the game writer.
+            wall(-half_span, -half_span + axis * .08, 0, top, 2)
+            left, right = -half_span, half_span
+            bottom = top - tall
+            mesh([(*left,bottom), (*right,bottom), (*right,top), (*left,bottom), (*right,top), (*left,top)],
+                 texture(art), [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
         elif tenant_sign:
             # Ground-floor glazing and an independent fascia with lettering readable across parking.
             panel_width = 2 * np.linalg.norm(half_span)
