@@ -105,6 +105,59 @@ def approach_panel(ring, coords, facing, doors):
     return panel if winding == 1 else panel[::-1]
 
 
+def mapped_mall(layers, coords, label):
+    """A mall POI must corroborate the host name as well as lie within the footprint."""
+    words = " ".join(re.findall(r"[^\W_]+", label.casefold()))
+    if not words:
+        return False
+    lo, hi = coords.min(0), coords.max(0)
+    for f, rows, points in layers:
+        near = np.flatnonzero(np.all((points >= lo) & (points <= hi), axis=1))
+        for j in near:
+            i = rows[j]
+            def value(key):
+                return f.attrs[key][i] if key in f.attrs else None
+            if not {value("basic_category"), value("taxonomy")} & MALL_CLASSES:
+                continue
+            title = " ".join(re.findall(r"[^\W_]+", str(value("name") or "").casefold()))
+            if (f" {words} " in f" {title} " and qualifies_business(value("confidence"))
+                    and value("operating_status") not in {"closed", "permanently_closed"}
+                    and contains_points(coords, points[j:j+1])[0]):
+                return True
+    return False
+
+
+def mall_identity_panel(coords, walks, occupied):
+    """Place one mall name by a mapped approach that ends at a broad exterior wall."""
+    if not len(walks):
+        return None
+    scale = np.array([111320*dmath.cos(dmath.radians(coords[0,1])), 111132])
+    lo, hi = coords.min(0)-2/scale, coords.max(0)+2/scale
+    walks = np.asarray(walks)
+    near = np.any(np.all((walks >= lo) & (walks <= hi),axis=2),axis=1)
+    best = None
+    for start,end in walks[near]:
+        for door, approach in ((start,end),(end,start)):
+            distance = np.linalg.norm((approach-door)*scale)
+            if distance < 2:
+                continue
+            outside = door + (approach-door)*min(1., 8./distance)
+            if contains_points(coords,outside[None])[0]:
+                continue
+            panel = parking_frontage(coords,door,(),walks=[outside])
+            if panel is None:
+                continue
+            center = panel.mean(0)
+            if any(np.linalg.norm((center-p.mean(0))*scale)<22 for _,p in occupied):
+                continue
+            if np.linalg.norm((center-door)*scale)>2:
+                continue
+            width = np.linalg.norm((panel[1]-panel[0])*scale)
+            if best is None or width>best[0]:
+                best = width,panel
+    return None if best is None else best[1]
+
+
 def named_frontage(layers, coords, label):
     """Corroborate a named footprint with a trading name inside it or just across its wall."""
     def words(name):
@@ -468,7 +521,9 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
         if venue_only and not local_enabled:
             continue
         kind = str(spec.cls or "").lower()
-        name = chain(label, kind == "cinema")
+        name = chain(label, kind == "cinema" or subtype == "entertainment")
+        if subtype == "entertainment" and name not in {"AMC Theatres", "Regal Cinemas", "Cinemark"}:
+            continue
         mall = kind in MALL_CLASSES or (kind in {"", "commercial", "retail", "shop"} and label.casefold().endswith((" mall", " outlets")))
         generic_host = mall or kind in {"retail", "commercial", "shop"} or (not kind and subtype == "commercial")
         categories = {kind}
@@ -484,11 +539,22 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
         if not venue_only and label and not name and not generic_host and not fallback and not probe:
             continue
         ring = np.asarray(spec.ring)[:, :2]
-        if len(ring) > 96 or np.any(np.ptp(ring, axis=0) > 250):
+        span = np.max(np.ptp(ring,axis=0))
+        if len(ring) > 512 or span > 1500:
+            continue
+        ll = frame.enu_to_geodetic(
+            ring[:, 0] + origin[0], ring[:, 1] + origin[1], np.zeros(len(ring))
+        )
+        coords = np.column_stack((ll[1], ll[0]))
+        if not mall and generic_host and label and span > 180:
+            if layers is None:
+                layers = list(businesses(md, keys))
+            mall = mapped_mall(layers, coords, label)
+        if not mall and (len(ring) > 96 or span > 250):
             continue
         centre = ring.mean(0)
         lower, upper = ring.min(0) + origin - 3, ring.max(0) + origin + 3
-        if any(np.all((c["xy"] >= lower) & (c["xy"] <= upper)) for c in existing
+        if not mall and any(np.all((c["xy"] >= lower) & (c["xy"] <= upper)) for c in existing
                if not (c.get("local") or {}).get("storefront_pylon")):
             continue
         facing = None
@@ -500,10 +566,6 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
             facing = offset[np.argmin(np.sum(offset*offset,axis=1))]
             if not 1 <= dnp.norm(facing) <= 150 + np.max(dnp.norm(ring-centre,axis=1)):
                 continue
-        ll = frame.enu_to_geodetic(
-            ring[:, 0] + origin[0], ring[:, 1] + origin[1], np.zeros(len(ring))
-        )
-        coords = np.column_stack((ll[1], ll[0]))
         try:
             exterior = []
             doors = mapped_doors(sources[0], coords) if sources and (spec.retail_front or name or mall) else ()
@@ -516,7 +578,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                 confirmed = named_frontage(layers, coords, label)
             if confirmed:
                 name = confirmed
-            elif venue_only:
+            elif venue_only and not mall:
                 if mall or kind not in {"", "commercial", "retail", "shop", "bar", "pub", "music_venue"}:
                     continue
                 if layers is None:
@@ -614,6 +676,10 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                         walk_segments = np.column_stack((lon,lat)).reshape(-1,2,2)
                 panels = list(tenant_panels(tenants,coords,parking_points if parking_points is not None else (),
                                             doors if mall else (), walk_segments if mall and walk_segments is not None else ()))
+                if mall and label and walk_segments is not None and local_enabled:
+                    identity = mall_identity_panel(coords, walk_segments, panels)
+                    if identity is not None:
+                        panels.append((LocalSign(label, "shop"), identity))
                 if spec.retail_front and not spec.retail_doors:
                     centers = [panel.mean(0) for _,panel in panels]
                     spec.retail_doors = entrance_offsets(coords, ring, centers)
@@ -632,6 +698,9 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                             options["local_panel"] += (directory,)
                     brand = brand.name
                 if mall:
+                    panel_xy = np.asarray(frame.geodetic_to_enu(geometry[:,1],geometry[:,0],np.zeros(2))[:2]).mean(1)
+                    if any(np.linalg.norm(panel_xy-c["xy"]) < 15 for c in existing):
+                        continue
                     # An exterior sign is justified by the wall evidence, independently of the brand.
                     style = options.get("local_panel", ("brand",))[0]
                     options["local_panel"] = ("mall_"+style, round(min(spec.height-.45,9.),2))

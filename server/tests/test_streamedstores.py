@@ -276,6 +276,23 @@ class StreamedStoresTest(unittest.TestCase):
                 self.assertAlmostEqual(np.ptp(mesh[0][:,2]),8.55,places=2)
                 self.assertFalse(generate(45.))
 
+    def test_retail_mall_identity_uses_approach_and_matching_place(self):
+        import streamedstores as stores
+        frame = geodesy.EnuFrame(40.,-83.)
+        md = tile(frame, "Lake Crossing", ["Lake Crossing Mall"], "retail")
+        layer = md.cell(None).layers["places"]
+        layer.attrs["basic_category"] = np.array(["shopping_mall"])
+        coords = md.cell(None).layers["buildings"].lonlat[:-1]
+        layers = list(stores.businesses(md,[None]))
+        self.assertTrue(stores.mapped_mall(layers,coords,"Lake Crossing"))
+        self.assertFalse(stores.mapped_mall(layers,coords,"River Crossing"))
+        lat,lon,_ = frame.enu_to_geodetic(np.array([52.,52.]),np.array([30.,15.]),np.zeros(2))
+        walk = np.column_stack((lon,lat))[None]
+        panel = stores.mall_identity_panel(coords,walk,[])
+        self.assertIsNotNone(panel)
+        self.assertIsNone(stores.mall_identity_panel(coords,walk,[("Existing tenant",panel)]))
+        self.assertIsNone(stores.mall_identity_panel(coords,[],[]))
+
     def test_named_venue_with_offset_business_pin(self):
         import streamedstores
         frame = geodesy.EnuFrame(40., -83.)

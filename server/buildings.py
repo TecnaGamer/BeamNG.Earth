@@ -5335,7 +5335,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     at = dict(at, _holes=holes_)
             if (storefronts and key is not None and not bparts
                     and not (a.get("has_parts") is not None and a["has_parts"][i])
-                    and str(at.get("subtype") or "").lower() in {"", "commercial"}
+                    and str(at.get("subtype") or "").lower() in {"", "commercial", "entertainment"}
                     and len(parts) == len(parts[0]) == len(pieces) == 1 and mh == 0 and not edge):
                 venue_only = float(at.get("num_floors") or 0) > 2 or float(at.get("height") or 0) > 14
                 at["_storefront"] = (str(key), str(at.get("name") or ""), str(at.get("facade_material") or ""),
