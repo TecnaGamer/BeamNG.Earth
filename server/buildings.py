@@ -1710,12 +1710,21 @@ def _retail_glazing(m, ring, front, ground, eave, mat_idx, lite):
     left = a + axis*margin + outward*.05
     right = b - axis*margin + outward*.05
     top = min(ground+3.15, eave-.55)
-    # The corporate glass texture has three full-height bays per repeat. Keep each pane
-    # about three metres wide and crop only its ground-floor row.
-    repeats = max(1, round((length-2*margin)/9))
-    v0, v1, _ = LOBBY_BAND
-    m.quad((*left, ground), (*right, ground), (*right, top), (*left, top),
-           (0., v0), (repeats, v0), (repeats, v1), (0., v1), mat_idx[LOBBY])
+    # The lower atlas row contains two distinct entry doors. Sample one only at
+    # the entrance; use the upper display glass elsewhere so doors never tile.
+    span = length - 2*margin
+    entry = min(1.8, span*.42)
+    wing = (span-entry)/2
+    count = max(1, round(wing/2.9))
+    def pane(start, end, sill, u0, v0, u1, v1):
+        p, q = left+axis*start, left+axis*end
+        m.quad((*p, sill), (*q, sill), (*q, top), (*p, top),
+               (u0,v0),(u1,v0),(u1,v1),(u0,v1),mat_idx[LOBBY])
+    for offset in (0., wing+entry):
+        for i in range(count):
+            pane(offset+wing*i/count, offset+wing*(i+1)/count, ground+.22,
+                 .169, .648, .405, .901)
+    pane(wing, wing+entry, ground, .315, .004, .634, .496)
     if not lite:
         _box(m, (left+right)/2+outward*.27, axis, (length-2*margin)/2+.12, .34,
              top, min(top+.22, eave), mat_idx[METALWALL])
@@ -5863,7 +5872,7 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
             mid = MID[i]
             dk = DK[i]
             k = int(K[i])
-            if dk > DOOR_ROAD_M:
+            if dk > (75.0 if spec.retail_front else DOOR_ROAD_M):
                 continue
             out = np.array([e[1], -e[0]]) / Le
             if float(dnp.dot(QK[i] - mid, out)) <= 0:
