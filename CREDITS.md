@@ -147,6 +147,10 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
 | LiDAR HD | IGN France | buildings, canopy heights | Etalab Open Licence 2.0 | "IGN - LiDAR HD" | planned |
 | Mapillary street-level imagery | Mapillary (Meta) | tuning the city generator against real photos | CC BY-SA 4.0, free API token | "Street-level imagery: Mapillary" | planned (reference) |
 
+## Audio assets
+
+- `mod/beamng_earth/levels/beamng_earth/art/sound/rumble_strip.ogg`: a short looping excerpt from **“TRANSPORTATION CAR PASS BY 01.wav”** by sengjinn, recorded as a car passes over rumble strips/sleeper lines. Source: [Freesound sound 176215](https://freesound.org/people/sengjinn/sounds/176215/). **CC0 1.0**; the bundled mono OGG is excerpted from the public high-quality preview and encoded for the in-game positional loop. Attribution is not required; author and source are listed here for provenance.
+
 ## Software and libraries
 
 | Software | Used for | Licence | Status |
