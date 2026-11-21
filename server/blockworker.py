@@ -2236,12 +2236,19 @@ def _content_hash(text, vfs_dir):
     return hashlib.sha1(text.replace(f"{vfs_dir}/", "@V@/").encode("utf-8")).hexdigest()[:16]
 
 
+def _profiled_deck_slabs():
+    import lanegraph
+    import shells
+    return shells.ON or lanegraph.MODE == "surface"
+
+
 @profile_step('Geometry serialization')
 def _write_geo_content(out_dir, vfs_dir, tile, P):
     """A geotile's content written to the session folder: its shapes (rg_<key>_<what>.cdae, each with its pivot and
     relief), its rows (props, guard rails, parking, stations, wells, turbines, sound) and colliders in its own frame, and the
     skin's inputs (rg_<key>.skin.pkl: the chunks, their deck context and the sidewalk pieces). Returns (vfs path of
     the JSON, chunk count, its info for the tracker: {"h", "parts": {what: {pivot, relief, col}}})."""
+    import hashlib
     import json
     import pickle
     import roads as roadsmod
@@ -2274,7 +2281,12 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
             info = _shape_info(src, e["pos"], what)
             dst = names[what]
             with open(src, "rb") as fh:
-                _write_bytes(os.path.join(out_dir, dst), fh.read())
+                shape = fh.read()
+            _write_bytes(os.path.join(out_dir, dst), shape)
+            if what == "deck" and _profiled_deck_slabs():
+                # Lua keeps an existing collider when the tile hash matches. A different cap can have
+                # identical bounds, pivot and relief, so the mesh must participate in that hash.
+                e["meshHash"] = hashlib.sha1(shape).hexdigest()[:16]
             e["shape"] = f"{vfs_dir}/{dst}"
             e.update(info)
             parts[what] = dict(info)
@@ -2337,6 +2349,9 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
     import geotiles
     z, gx, gy = geotiles.parse(key)
     tile = geotiles.geobox(gx, gy, z)
+    # The stale-generation lookup reuses these same parts with an older code ID. Superseded slab
+    # collision must never fill in while the repaired tile is loading. Its skin key also includes this key.
+    deck_key = ("profiled-deck-slab-v1",) if _profiled_deck_slabs() else ()
     de = ()
     if de_junctions:
         import designs
@@ -2349,7 +2364,7 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
                        # (the ground rules: rules, the server's own when it asks, earthd.Server.geo_content_key)
                        ("rules", _ground_rules() if rules is None else rules),
                        _nyc_key(tile.frame, tile.box, cache_dir) if buildings else None,
-                       bool(de_junctions), *de)     # (the German junction parts last)
+                       *deck_key, bool(de_junctions), *de)     # (the German junction parts last)
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,

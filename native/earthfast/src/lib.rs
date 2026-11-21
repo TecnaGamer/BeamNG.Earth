@@ -7434,6 +7434,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(railindex::surface_rail_samples, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::grade::surface_grade_sections, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::lane_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_slab_solid, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_slab_rows, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_ramp_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_surface_groups, m)?)?;
@@ -7527,6 +7528,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
-    m.add("VERSION", 564)?;
+    m.add("VERSION", 568)?;
     Ok(())
 }
