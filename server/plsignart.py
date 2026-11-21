@@ -47,17 +47,14 @@ def provenance(code, entry):
 
 
 def prepare(user_dir, originals=None):
-    import netfetch
+    from xproc import _try_lock
     root = folder(user_dir)
     root.mkdir(parents=True, exist_ok=True)
     with (root / "prepare.lock").open("a+b") as guard:
-        if not netfetch._flock(guard.fileno(), blocking=False):
+        if not _try_lock(guard.fileno()):
             print("Przygotowanie modeli jest juz uruchomione.")
             return
-        try:
-            _prepare(root, originals)
-        finally:
-            netfetch._funlock(guard.fileno())
+        _prepare(root, originals)
 
 
 def _prepare(root, originals):
