@@ -30,6 +30,16 @@ class LightingTest(unittest.TestCase):
         kwargs.update(overrides)
         return lighting.tile_rows(**kwargs)
 
+    def test_half_density_preserves_stations_and_tile_seams(self):
+        for kind in ("cycleway", "footway", "pedestrian"):
+            f = self.route(kind)
+            full = self.rows(f)
+            with patch.dict(os.environ, BNE_HALF_STREET_LAMPS="on"):
+                half = self.rows(f)
+                self.assertCountEqual(half, self.rows(f, (-110,-10,0,120)) + self.rows(f,(0,-10,130,120)))
+            self.assertTrue(all(row in full for row in half))
+            self.assertLessEqual(abs(len(half[::3]) * 2 - len(full[::3])), 1)
+
     def test_unknown_negative_and_conditional_tags(self):
         for value in ("no", "", "automatic", "yes;no"):
             f = self.route(tag=value)

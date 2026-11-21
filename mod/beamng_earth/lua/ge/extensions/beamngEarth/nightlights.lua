@@ -111,7 +111,8 @@ M.LIGHT = { range = 36, inner = 50, outer = 130, brightness = 8.0, color = '1 0.
 M.HIGH_MAST = { range = 70, inner = 70, outer = 150, brightness = 12.0, color = '1 0.82 0.60 1', drop = 0.12, tilt = 0 }
 M.LANTERN = { range = 20, inner = 65, outer = 150, brightness = 4.0, color = '1 0.68 0.12 1', drop = 0.12, tilt = 0 }
 
-local brightness, glowScale = 1, 1
+local brightness, glowScale, beamScale = 1, 1, 1
+local halfDensity = false
 local lastCheck = -1e9
 local shown = {}         -- material name -> the factor and nits set (set again only when they change)
 local shownMap = {}      -- material name -> the emissive map set (none: its materials.json's, M.MAPS' first)
@@ -202,6 +203,8 @@ function M.nearest(x, y, r, n, fx, fy, around)
   local cand, r2 = {}, r * r
   local limit = math.max(0, math.floor(n))
   if limit == 0 then return cand end
+  local totalLimit = limit
+  if halfDensity then limit = math.ceil(limit / 2) end
   local a2 = (around or r) ^ 2
   local function consider(l)
     local dx, dy = l[1] - x, l[2] - y
@@ -234,6 +237,7 @@ function M.nearest(x, y, r, n, fx, fy, around)
   for _, list in pairs(lenses) do
     for _, l in ipairs(list) do consider(l) end
   end
+  limit = totalLimit
   for _, fn in pairs(M.providers) do
     local ok, pts = pcall(fn)
     if ok and type(pts) == 'table' then for _, l in ipairs(pts) do consider(l) end end
@@ -268,12 +272,13 @@ local function place(e, l)
     local L = l[6] and M.HIGH_MAST or l[5] and M.LANTERN or M.LIGHT
     -- Reapply on reuse: a light previously serving a lantern can serve a stock lamp.
     local intensity = L.brightness * (l[7] and brightness * l[7] or 1)
-    if e.profile ~= L or e.intensity ~= intensity then
-      for field, value in pairs({ range = L.range, innerAngle = L.inner, outerAngle = L.outer,
+    local beam = l[7] and beamScale or 1
+    if e.profile ~= L or e.intensity ~= intensity or e.beam ~= beam then
+      for field, value in pairs({ range = L.range, innerAngle = L.inner * beam, outerAngle = math.min(175, L.outer * beam),
                                   brightness = intensity, color = L.color }) do
         o:setField(field, 0, tostring(value))
       end
-      e.profile, e.intensity = L, intensity
+      e.profile, e.intensity, e.beam = L, intensity, beam
     end
     if l[4] then                                        -- (its forward, local y: down, tilted toward the road)
       local a, t = math.rad(l[4]), math.rad(L.tilt)
@@ -293,6 +298,16 @@ end
 
 function M.setBrightness(percent)
   brightness = math.max(0, math.min(100, percent)) / 100
+  for _, e in ipairs(pool) do if e.at then place(e, e.at) end end
+end
+
+function M.setHalfDensity(enabled)
+  halfDensity = enabled == true
+  lastLights = -1e9
+end
+
+function M.setBeam(percent)
+  beamScale = math.max(50, math.min(150, percent)) / 100
   for _, e in ipairs(pool) do if e.at then place(e, e.at) end end
 end
 

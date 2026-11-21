@@ -117,6 +117,7 @@ def path_sites(parts, cells, box, frame, md=None):
             lit = spans.has_yes if spans is not None else f.attrs["osm_way_lit"][i] == "yes"
             if lit:
                 profiles[fid] = str(f.attrs["class"][i]), spans
+    stride = furniture.lamp_stride()
     pending = []
     for fid, xy, width, _ in parts:
         if fid not in profiles:
@@ -124,7 +125,7 @@ def path_sites(parts, cells, box, frame, md=None):
         kind, spans = profiles[fid]
         spacing = PROFILES[kind][0]
         phase = (.25 + .5 * furniture._h01(fid, "lighting")) * spacing
-        for k, _, (x,y), (dx,dy) in stations(xy, spacing, phase, box):
+        for k, _, (x,y), (dx,dy) in stations(xy, spacing * stride, phase, box):
             if spans is not None and spans.at(np.array([x, y])) != "yes":
                 continue
             pending.append(((0, fid, k), (x, y), (-dy, dx), width / 2 + .75, kind))
@@ -152,6 +153,7 @@ def area_kind(tags):
 
 def area_sites(frame, box, md, keys, exclusions=None):
     layers = ("land_use", "infrastructure", "water") if exclusions is not None else ("land_use", "infrastructure")
+    stride = furniture.lamp_stride()
     keys = list(keys)
     for key, cd in zip(keys, mapcells.load_cells(md, keys, layers)):
         bounds = key.bounds()
@@ -182,7 +184,7 @@ def area_sites(frame, box, md, keys, exclusions=None):
                     spacing = PROFILES[kind][0]
                     if not np.array_equal(ring[0], ring[-1]):
                         ring = np.vstack((ring, ring[0]))
-                    for k,j,point,direction in stations(ring, spacing, spacing/2, box):
+                    for k,j,point,direction in stations(ring, spacing * stride, spacing/2, box):
                         # A clipped cell boundary is not a surveyed plaza edge.
                         ends = part[0][[j, (j+1) % len(part[0])]]
                         if f.clipped is not None and f.clipped[i] and any(

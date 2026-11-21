@@ -41,6 +41,12 @@ for i, lens in ipairs(selected) do T.near(lens[1], i / 2, 1e-8, 'dense-area sele
 local providerCalls = 0
 nl.providers.stress = function() providerCalls = providerCalls + 1; return {} end
 T.check(#nl.nearest(0, 0, 900, 0) == 0 and providerCalls == 0, 'zero lights skips candidate and provider work')
+nl.setHalfDensity(true)
+nl.providers.stress = function() return {{2, 0, 0}, {3, 0, 0}} end
+local reduced = nl.nearest(0, 0, 900, 8)
+T.check(#reduced == 6, 'four street lights plus both independent provider lights')
+nl.setHalfDensity(false)
+T.check(#nl.nearest(0, 0, 900, 8) == 8, 'full density restored')
 nl.providers.stress = nil
 nl.reset()
 
@@ -78,7 +84,15 @@ for _, percent in ipairs({0, 25, 40, 50, 75, 100}) do
   T.near(tonumber(light.fields.brightness), nl.HIGH_MAST.brightness * percent / 100, 1e-9, 'live intensity')
   T.check(light.fields.range == '70' and light.id == id, 'range and pool slot retained')
 end
+nl.setBeam(150)
+T.check(tonumber(light.fields.outerAngle) == 175 and tonumber(light.fields.innerAngle) == 105, 'wide high-mast beam')
+T.check(light.fields.range == '70' and light.id == id, 'beam adjustment reuses the active light')
 nl.dropKey('high-mast')
+nl.providers.test = function() return {{1, 0, 8, 0}} end
+clock = clock + 1; nl.update()
+T.check(tonumber(light.fields.outerAngle) == nl.LIGHT.outer, 'independent light keeps its original beam')
+nl.providers.test = nil
+nl.setBeam(100)
 nl.onRows('double-arm', { {0, 4.9, 0, 12.62, 0}, {0, -4.9, 0, 12.62, 180} }, {'lamplens'})
 T.check(nl.status().lenses == 2, 'double-arm pole supplies two separately aimed lamps')
 clock = clock + 1; nl.update()

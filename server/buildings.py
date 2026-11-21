@@ -7045,6 +7045,7 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
     import fast
     if not built:
         return []
+    stride = furniture.lamp_stride()
     table = furniture.lamp_spacing(region)
     hw = "na" if furniture._na(region) else None
     span_by_line = []
@@ -7094,7 +7095,7 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
                 for every, sd, shift in rules:
                     pts.append(xy)
                     off.append(off[-1] + len(xy))
-                    spacing.append(every)
+                    spacing.append(every * stride)
                     phase.append(ph0 * every + shift)
                     side.append(sd * reach)
                     span_by_line.append(spans)

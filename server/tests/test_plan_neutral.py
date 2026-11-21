@@ -77,6 +77,7 @@ PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARE
 NOT_LISTED = {
     "BNE_STANDALONE_PATHS": "changes path surfaces and vegetation cells",
     "BNE_PEDESTRIAN_LIGHTING": "selects direct-source lighting road cells and changes generated props",
+    "BNE_HALF_STREET_LAMPS": "changes generated lamp assemblies and distant lamp tiles",
     "BNE_STRICT_LIGHTING": "selects direct-source lighting road cells",
     "BNE_SURFACE_V2": "road tiles' surface overlays and marking lift only (roadmesh / roadwear, revamp v2 P1c); comes with the Revamped roads setting, whose other switches the plans read, so it stays keyed with it",
     "BNE_GEN_GROUND": "its gated code (the base photo with other arguments: genground.render, blockworker.base_photo, "
