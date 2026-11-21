@@ -1,5 +1,5 @@
-"""Step 2 (SPEC.md): one interchange (gradeshapes.find_interchanges, found in the region growth loop) as the Extent
-artifact. make_fixed is the planner's fixed_z maker (it needs the planner: the rails' tops, the ground lines)."""
+"""Step 2 (SPEC.md): one interchange (gradeshapes.find_interchanges) as the Extent artifact, and the region's own find of
+the interchanges its box holds. make_fixed is the planner's fixed_z maker (it needs the planner: the rails' tops, the ground lines)."""
 import time
 
 import numpy as np
@@ -10,7 +10,7 @@ import gradeshapes as _gsh
 from . import artifacts, cache, s1_paths
 
 FORMAT = 2
-LAWS = (("gradeshapes", ["TUNNEL_MAX_M", "CONNECT_M"]),)
+LAWS = (("gradeshapes", ["TUNNEL_MAX_M"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 2
 
@@ -65,38 +65,23 @@ def _reaches(net, seeds, h_lo, h_hi):
     return not ((pts.max(0) < h_lo).any() or (pts.min(0) > h_hi).any())
 
 
-def find(planner, hk, h_lo, h_hi, box_lo, box_hi, cap_lo, cap_hi, clock=None):
-    """The region growth loop and gradeshapes' find_interchanges, as _shape_region_calc ran find_systems:
-    (net, mine, loaded, members). mine is the interchanges this region solves (those reaching its home box), in solve
-    order. clock (a dict): the seconds of the cells' members' reading and one_road are added to its "load", those of
-    finding the interchanges to its "find"."""
+def find(planner, h_lo, h_hi, clock=None):
+    """The region's own find: (net, mine, loaded, members). The cells' members in the home box h_lo..h_hi (and 200 m round
+    it), and gradeshapes' find_interchanges among them: mine are the interchanges reaching the home box, as that box holds
+    them (a box cuts one anywhere: the owner, ix/owner.py, follows each whole), in solve order. clock (a dict): the seconds
+    of the cells' members' reading and one_road are added to its "load", those of finding the interchanges to its
+    "find"."""
     import xproc
     clock = {} if clock is None else clock
+    xproc.check_cancel()        # (a place a teleport left: its interchanges not found and solved for it)
+    box_lo, box_hi = h_lo - 200.0, h_hi + 200.0
+    t0 = time.perf_counter()
     byk, loaded = {}, set()
-    while True:
-        xproc.check_cancel()        # (a place a teleport left: its systems not found and solved for it)
-        t0 = time.perf_counter()
-        s1_paths.load(planner, box_lo, box_hi, byk, loaded)
-        members = s1_paths.members_of(byk, box_lo, box_hi)
-        t1 = time.perf_counter()
-        net, found = _gsh.find_interchanges(members, lambda net_: (planner._ground_line, make_fixed(planner, net_)),
-                                            want=lambda net_, seeds: _reaches(net_, seeds, h_lo, h_hi))
-        clock["load"] = clock.get("load", 0.0) + t1 - t0
-        clock["find"] = clock.get("find", 0.0) + time.perf_counter() - t1
-        mine = []
-        n_lo, n_hi = box_lo.copy(), box_hi.copy()
-        for ix in found:
-            sysm = ix.sysm
-            pts = np.concatenate([net.lines[i] for i in sysm["seeds"]])
-            b_lo, b_hi = pts.min(0), pts.max(0)
-            if (b_hi < h_lo).any() or (b_lo > h_hi).any():
-                continue
-            mine.append(ix)
-            if (b_lo < box_lo + 100.0).any() or (b_hi > box_hi - 100.0).any():     # (open: follow it)
-                n_lo = np.minimum(n_lo, b_lo - 300.0)
-                n_hi = np.maximum(n_hi, b_hi + 300.0)
-        n_lo, n_hi = np.maximum(n_lo, cap_lo), np.minimum(n_hi, cap_hi)
-        if (n_lo >= box_lo).all() and (n_hi <= box_hi).all():
-            break
-        box_lo, box_hi = n_lo, n_hi
+    s1_paths.load(planner, box_lo, box_hi, byk, loaded)
+    members = s1_paths.members_of(byk, box_lo, box_hi)
+    t1 = time.perf_counter()
+    net, mine = _gsh.find_interchanges(members, lambda net_: (planner._ground_line, make_fixed(planner, net_)),
+                                       want=lambda net_, seeds: _reaches(net_, seeds, h_lo, h_hi))
+    clock["load"] = clock.get("load", 0.0) + t1 - t0
+    clock["find"] = clock.get("find", 0.0) + time.perf_counter() - t1
     return net, mine, loaded, members

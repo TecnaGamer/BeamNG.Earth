@@ -349,8 +349,7 @@ class TimingLinesTest(unittest.TestCase):
         pat = re.compile(r"^ix step: (\w+) key ([0-9a-f]{12}) pieces (\d+) crossings (\d+) (\d+\.\d\d) s (ok|failed: .+) @ \S+")
         self.assertTrue(all(pat.match(ln) for ln in step), step)
         names = [pat.match(ln).group(1) for ln in step]
-        # (the region's own, then the interchange's: its extent (its paths only for the cache), then its one system's steps)
-        self.assertEqual(names, ["paths", "extent", "extent", "order", "terrain", "datum", "heights"])
+        self.assertEqual(names, list(pipeline.STEPS))
         self.assertTrue(all(" ok " in ln for ln in step), step)
         region = [ln for ln in lines if ln.startswith("ix region: ")]
         self.assertEqual(len(region), 1)
@@ -448,6 +447,8 @@ class PerInterchangeTest(unittest.TestCase):
     def test_two_regions_find_the_same_interchange_with_the_same_artifacts(self):
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
             for tmp, hk in ((a, "one"), (b, "two")):
+                for table in (owner.PROCESS, owner.INDEX):      # (a region of a process of its own: the first's interchange is
+                    table.clear()                               # not the second's to read)
                 with unittest.mock.patch.object(cache, "ROOT", tmp):
                     prof_of(overpass(), lambda p, h, k: pipeline.region(p, h, k), hk)
             names = {}

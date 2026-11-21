@@ -3,10 +3,7 @@ and every region and process solved the pieces it found (one system of about 1,3
 regions, a build of 729 s taking 15025 s). Now the region's piece is only the way in:
 
 - grow() follows it, through its joins and crossings, to the whole interchange whatever box it is found in, so every
-  region reaches the same members and the same key (gradeshapes.interchange_key). An interchange too wide to follow
-  whole (a city's elevated roads, joined end to end for tens of kilometres: one system of thousands of pieces and
-  crossings, more than the kernel can hold) is followed as far as the tile of the asking cell (TILE_UP levels over it),
-  the same box for every cell of that tile, and its key names the tile;
+  region reaches the same members and the same key (gradeshapes.interchange_key);
 - the cell holding the interchange's centre is its owner (owner_cell); its solution is made once, by the process that
   takes the key's lock (plancache.PlanCache.shape_claim), and every other thread and process reaching the key waits for
   it and reads it. A holder that is gone hands the lock to the next waiter: there is no wait after which an interchange is
@@ -37,7 +34,6 @@ PROCESS = OrderedDict()     # interchange key -> its solution as stored (pack): 
 #                             something it is not in the run's store; with no run store it is the only one
 INDEX = {}                  # road canonical id -> [(interchange key, lat / lon box of its seeds)]: this process's
 KEPT = 512                  # solutions kept (per planner, per process)
-TILE_UP = 2                 # map zoom levels over a cell: the tile (4 x 4 cells, about 8 km) an interchange is followed to at most
 FIELDS = ("key", "failed", "pieces", "crossings", "owner", "pid", "secs")
 
 
@@ -99,29 +95,17 @@ def owner_cell(planner, net, sysm):
     return mapcells.cell_of(*centre(planner, net, sysm))
 
 
-def tile_of(home):
-    """The tile of cell home: the cell TILE_UP zoom levels over it."""
-    import mapcells
-    return mapcells.CellKey(home.z - TILE_UP, home.x >> TILE_UP, home.y >> TILE_UP)
+def key_of(planner, net, sysm):
+    """The key of the interchange sysm is (the whole one: grow): its roads, where its centre is, and what a solve of it is
+    made from (gradeshapes.interchange_key). The same from every region, process and planning frame."""
+    return _gsh.interchange_key(_gsh.system_ids(net, sysm), centre(planner, net, sysm), version())
 
 
-def tile_box(planner, home):
-    """(lo, hi) of the tile of cell home in the planner's frame (ENU), SHAPES_PAD_M round it: what an interchange is
-    followed within when it is too wide to follow whole."""
-    import grading
-    lon0, lat0, lon1, lat1 = (float(v) for v in tile_of(home).bounds())
-    e, n, _ = planner.frame.geodetic_to_enu(np.array([lat0, lat0, lat1, lat1]), np.array([lon0, lon1, lon0, lon1]), 0.0)
-    return (np.array([np.min(e), np.min(n)]) - grading.SHAPES_PAD_M,
-            np.array([np.max(e), np.max(n)]) + grading.SHAPES_PAD_M)
-
-
-def pick(entries, pt, tile=""):
-    """The key of the entry [(key, (lat0, lon0, lat1, lon1), cut)] whose box holds pt (lat, lon) within BOX_DEG (the smallest
-    box where several do), else None; an entry bounded by a tile (cut) only for that tile (a string)."""
+def pick(entries, pt):
+    """The key of the entry [(key, (lat0, lon0, lat1, lon1))] whose box holds pt (lat, lon) within BOX_DEG (the smallest
+    box where several do), else None."""
     best = None
-    for ik, (a, b, c, d), cut in entries:
-        if cut not in ("", "-", tile):
-            continue
+    for ik, (a, b, c, d) in entries:
         if a - BOX_DEG <= pt[0] <= c + BOX_DEG and b - BOX_DEG <= pt[1] <= d + BOX_DEG:
             area = (c - a) * (d - b)
             if best is None or area < best[0]:
@@ -129,18 +113,18 @@ def pick(entries, pt, tile=""):
     return None if best is None else best[1]
 
 
-def known_key(planner, cid, pt, tile=""):
-    """The key of the interchange the road cid (a canonical id) at pt (lat, lon) is part of (for tile: the cell's), when
-    this process or the run's index knows it, else None."""
+def known_key(planner, cid, pt):
+    """The key of the interchange the road cid (a canonical id) at pt (lat, lon) is part of, when this process or the
+    run's index knows it, else None."""
     with LOCK:
-        ik = pick(INDEX.get(cid, ()), pt, tile)
+        ik = pick(INDEX.get(cid, ()), pt)
     sh = planner.shared
     if ik is None and sh is not None and hasattr(sh, "shape_index"):
         ents = sh.shape_index(cid)
         if ents:
             with LOCK:
                 INDEX[cid] = ents
-            ik = pick(ents, pt, tile)
+            ik = pick(ents, pt)
     return ik
 
 
@@ -153,7 +137,7 @@ def probe(planner, net, sysm, cid):
     return float(la[0]), float(lo[0])
 
 
-def index_add(planner, ik, net, sysm, cut=""):
+def index_add(planner, ik, net, sysm):
     """Interchange ik's seeds' roads into the process's index and the run's: each road's box over its seeds (lat, lon)."""
     boxes = {}
     for i in sysm["seeds"]:
@@ -166,57 +150,53 @@ def index_add(planner, ik, net, sysm, cut=""):
         if len(INDEX) > 50000:
             INDEX.clear()
         for cid, b in boxes.items():
-            INDEX[cid] = [e for e in INDEX.get(cid, ()) if e[0] != ik] + [(ik, b, cut)]
+            INDEX[cid] = [e for e in INDEX.get(cid, ()) if e[0] != ik] + [(ik, b)]
     sh = planner.shared
     if sh is not None and hasattr(sh, "shape_index_store"):
-        sh.shape_index_store(ik, boxes, cut)
+        sh.shape_index_store(ik, boxes)
 
 
-def grow(planner, net, sysm, cid, pt, home, adopt=True, clock=None):
-    """(key, net, system, the net's other systems, cut) of the whole interchange the system sysm (a piece of it, found in some
-    region's box) is part of: the members within SHAPES_PAD_M of the system's seeds (what a ramp reaches) found again as
-    systems, the one holding the road cid taken, and so on until it takes in nothing more. Whichever piece it starts
-    from, the end is the same set of roads and the same last box (a system taking in nothing at its own box's size is
-    closed, and every interchange has one such set), so every region finds the same key. adopt: the run's index is looked
-    at between rounds, and an interchange another process has found meanwhile is taken as it is ((key, None, None, None,
-    cut)). home: the asking cell: where the whole is too wide it is followed as far as the cell's tile (tile_box) and
-    cut is the tile's name, else "". clock (a dict): the seconds of the members' reading and of find_systems added to its "paths" and "extent"."""
+def grow(planner, net, ix, cid, pt, adopt=True):
+    """(key, net, Interchange, the net's other systems) of the whole interchange the one found (ix, in net: a piece of it,
+    as some region's box holds it) is part of: the members within SHAPES_PAD_M of its seeds (what a ramp reaches) found
+    again as interchanges, the one holding the road cid taken, and so on until it takes in nothing more. Whichever piece it
+    starts from, the end is the same set of roads and the same last box (an interchange taking in nothing at its own box's
+    size is closed, and every interchange has one such set), so every region finds the same key. adopt: the run's index is
+    looked at between rounds, and an interchange another process has found meanwhile is taken as it is ((key, None, None,
+    None)). The Interchange returned carries the seconds this took (its paths: the members read, its relations; its
+    extent: the finding), for the steps' lines."""
     import grading
     import xproc
-    clock = {} if clock is None else clock
-    ver = version()
-    tile = str(tile_of(home))
-    bound_lo, bound_hi = tile_box(planner, home)
-    cut = ""
-    ids = _gsh.system_ids(net, sysm)
-    cur_net, cur = net, sysm
+    ids = _gsh.system_ids(net, ix.sysm)
+    cur_net, cur = net, ix
     byk, loaded = {}, set()
+    read_s = find_s = 0.0
     while True:
         xproc.check_cancel()
         if adopt:
-            known = known_key(planner, cid, pt, tile)
+            known = known_key(planner, cid, pt)
             if known is not None:
-                return known, None, None, None, cut
-        seeds = np.concatenate([cur_net.lines[i] for i in cur["seeds"]])
+                return known, None, None, None
+        seeds = np.concatenate([cur_net.lines[i] for i in cur.sysm["seeds"]])
         lo, hi = seeds.min(0) - grading.SHAPES_PAD_M, seeds.max(0) + grading.SHAPES_PAD_M
-        if (lo < bound_lo).any() or (hi > bound_hi).any():      # (too wide to follow whole: as far as the tile)
-            lo, hi, cut = np.maximum(lo, bound_lo), np.minimum(hi, bound_hi), tile
         t0 = time.perf_counter()
         s1_paths.load(planner, lo, hi, byk, loaded)
         members = s1_paths.members_of(byk, lo, hi)
         t1 = time.perf_counter()
-        nxt_net, systems = _gsh.find_systems(members, lambda n_: (planner._ground_line, s2_extent.make_fixed(planner, n_)))
-        clock["paths"] = clock.get("paths", 0.0) + t1 - t0
-        clock["extent"] = clock.get("extent", 0.0) + time.perf_counter() - t1
-        nxt = next((s for s in systems if cid in {_gsh.canonical_id(nxt_net.m[i]) for i in s["seeds"]}), None)
-        if nxt is None:         # (its seeds are not seeds in the wider find: the system as it was)
-            log.error("grading: SHAPES interchange: road %s no longer a seed of the system round it", cid)
-            return _gsh.interchange_key(ids, centre(planner, cur_net, cur), ver, cut), cur_net, cur, [], cut
-        more = _gsh.system_ids(nxt_net, nxt)
+        nxt_net, found = _gsh.find_interchanges(members, lambda n_: (planner._ground_line, s2_extent.make_fixed(planner, n_)))
+        read_s += t1 - t0
+        find_s += time.perf_counter() - t1
+        nxt = next((x for x in found if cid in {_gsh.canonical_id(nxt_net.m[i]) for i in x.sysm["seeds"]}), None)
+        if nxt is None:         # (its seeds are not seeds in the wider find: the interchange as it was)
+            log.error("grading: SHAPES interchange: road %s no longer a seed of the interchange round it", cid)
+            nxt_net, nxt, found = cur_net, cur, [cur]
+            break
+        more = _gsh.system_ids(nxt_net, nxt.sysm)
         if more <= ids:
-            return (_gsh.interchange_key(more, centre(planner, nxt_net, nxt), ver, cut), nxt_net, nxt,
-                    [s for s in systems if s is not nxt], cut)
+            break
         ids, cur_net, cur = more, nxt_net, nxt
+    whole = _gsh.Interchange(nxt.sysm, read_s + nxt.paths_s, find_s - nxt.paths_s)
+    return key_of(planner, nxt_net, nxt.sysm), nxt_net, whole, [x.sysm for x in found if x is not nxt]
 
 
 # ---- the solution, in a planner's frame and as stored ----
@@ -293,44 +273,44 @@ def unpack(planner, meta, lat, lon, z):
 
 # ---- one interchange, asked for by a region ----
 
-def interchange(planner, net, sysm, home, hk, clock):
-    """The solution of the interchange the system sysm of net (found in region hk's box) is part of: {"key", "roads"
-    ({road feature id: [(xy, z, mode)]}), "failed" (None, or why it has none), "pieces", "crossings", "owner" (the cell
-    holding its centre), "pid" and "secs" of the process that solved it}. Made once for the run: by the process that takes
-    the interchange's lock, read by the others while they wait for it."""
+def interchange(planner, net, ix, hk, clock):
+    """The solution of the interchange ix (gradeshapes.Interchange of net, found in region hk's box) is part of: {"key",
+    "roads" ({road feature id: [(xy, z, mode)]}), "failed" (None, or why it has none), "pieces", "crossings", "owner"
+    (the cell holding its centre), "pid" and "secs" of the process that solved it}. Made once for the run: by the process
+    that takes the interchange's lock, read by the others while they wait for it."""
     import xproc
     t0 = time.perf_counter()
     sh = planner.shared
+    sysm = ix.sysm
     cid = sorted({_gsh.canonical_id(net.m[i]) for i in sysm["seeds"]})[0]
     pt = probe(planner, net, sysm, cid)
-    tile = str(tile_of(home))
 
     def solution(ik, ctx):
         def solve():
             c = ctx
             if c is None:       # (the extent was found by another process or thread: found here for the solve)
-                _ik, n2, s2, others, _cut = grow(planner, net, sysm, cid, pt, home, adopt=False, clock=clock)
-                c = (n2, s2, others)
+                _ik, n2, i2, others = grow(planner, net, ix, cid, pt, adopt=False)
+                c = (n2, i2, others)
             return made(planner, ik, hk, clock, *c)
         return once(planner, "sol", ik, lambda: have(planner, ik), solve)
-    ik = known_key(planner, cid, pt, tile)
+    ik = known_key(planner, cid, pt)
     got = mine = None
     if ik is None:
         name = sh.shape_member_name(cid) if sh is not None and hasattr(sh, "shape_member_name") else cid
 
         def known():
-            found = known_key(planner, cid, pt, tile)
+            found = known_key(planner, cid, pt)
             return None if found is None else (found, None, False)
 
         def grown():
             # (the interchange's own solution is taken before the claim on its extent is given back: a thread or process
             # that learns its key from the index meanwhile finds the solution claimed, not the whole interchange to be
             # followed and solved again)
-            ik_, n2, s2, others, cut = grow(planner, net, sysm, cid, pt, home, clock=clock)
+            ik_, n2, i2, others = grow(planner, net, ix, cid, pt)
             if n2 is None:
                 return ik_, None, False
-            index_add(planner, ik_, n2, s2, cut)
-            return (ik_,) + solution(ik_, (n2, s2, others))
+            index_add(planner, ik_, n2, i2.sysm)
+            return (ik_,) + solution(ik_, (n2, i2, others))
         (ik, got, mine), _ = once(planner, "ext", name, known, grown)
     if got is None:
         got, mine = solution(ik, None)
@@ -349,18 +329,18 @@ def interchange(planner, net, sysm, home, hk, clock):
     return got
 
 
-def made(planner, ik, hk, clock, net, sysm, others):
-    """Interchange ik's solution made now (pipeline.interchange: the steps of its one system, its embankments), stored for
-    the run's other processes (when nothing it read was short: a solve made without some elevation is this process's
+def made(planner, ik, hk, clock, net, ix, others):
+    """Interchange ik's solution made now (pipeline.interchange: the steps of its one interchange, its embankments), stored
+    for the run's other processes (when nothing it read was short: a solve made without some elevation is this process's
     alone) and kept."""
     import revisit
     from . import pipeline
     t0 = time.perf_counter()
-    pieces, crossings = _gsh.system_size(net, sysm)
+    pieces, crossings = _gsh.system_size(net, ix.sysm)
     with revisit.scope() as b:
-        roads, why = pipeline.interchange(planner, ik, net, sysm, others, hk, clock)
+        roads, why = pipeline.interchange(planner, net, ix, others, hk, clock)
     got = dict(key=ik, roads=roads, failed=why, pieces=pieces, crossings=crossings,
-               owner=str(owner_cell(planner, net, sysm)), pid=os.getpid(), secs=round(time.perf_counter() - t0, 3))
+               owner=str(owner_cell(planner, net, ix.sysm)), pid=os.getpid(), secs=round(time.perf_counter() - t0, 3))
     sh = planner.shared
     packed = pack(planner, got)
     if sh is not None and hasattr(sh, "shape_store") and b.complete:

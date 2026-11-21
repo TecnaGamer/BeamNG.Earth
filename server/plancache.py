@@ -762,9 +762,9 @@ class PlanCache:
         return True
 
     def shape_index(self, cid):
-        """[(interchange key, (lat0, lon0, lat1, lon1), cut)] of the interchanges the road cid (a canonical id) is a member
+        """[(interchange key, (lat0, lon0, lat1, lon1))] of the interchanges the road cid (a canonical id) is a member
         of: the box of its parts in each (a road's parts of one kind are in more than one interchange where it passes
-        over several) and the tile that bounded it ("" when it was followed whole). Empty: none known yet."""
+        over several). Empty: none known yet."""
         name = self.shape_member_name(cid)
         d = os.path.dirname(self._shape_path("ext", name))
         out = []
@@ -776,14 +776,14 @@ class PlanCache:
             try:
                 with open(os.path.join(d, n), encoding="utf-8") as fh:
                     t = fh.read().split()
-                out.append((t[0], tuple(float(v) for v in t[1:5]), t[5] if len(t) > 5 else ""))
+                out.append((t[0], tuple(float(v) for v in t[1:5])))
             except (OSError, ValueError, IndexError):
                 continue
         return out
 
-    def shape_index_store(self, ik, boxes, cut=""):
+    def shape_index_store(self, ik, boxes):
         """The index of interchange ik's members: boxes {canonical id: (lat0, lon0, lat1, lon1)}, one file each (named by
-        the id and the key: the interchanges of one road never write the same file); cut: its bounding tile ("" none)."""
+        the id and the key: the interchanges of one road never write the same file)."""
         for cid, box in sorted(boxes.items()):
             name = self.shape_member_name(cid)
             p = self._shape_path("ext", name)[:-len(".ik")] + "_" + ik[:24] + ".ik"
@@ -791,7 +791,7 @@ class PlanCache:
                 os.makedirs(os.path.dirname(p), exist_ok=True)
                 tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
                 with open(tmp, "w", encoding="utf-8") as fh:
-                    fh.write("%s %.7f %.7f %.7f %.7f %s" % ((ik,) + tuple(box) + (cut or "-",)))
+                    fh.write("%s %.7f %.7f %.7f %.7f" % ((ik,) + tuple(box)))
                 os.replace(tmp, p)
             except OSError:
                 return False
