@@ -417,17 +417,16 @@ def two_overpasses(gap=60.0):
             road(("n", "ground", "n"), line(0, 90 + gap, 0, 700), half=5.0)]
 
 
-def test_two_interchanges_joined_only_by_a_ground_road_are_two_systems_where_today_has_one():
+def test_two_interchanges_joined_only_by_a_ground_road_are_two_systems_in_find_systems_too():
     S, pl = stages(two_overpasses(), feasibility=False)
-    assert len(pl.today) == 1 and len(pl.today[0]["seeds"]) == 2          # (find_systems: a road of up to CONNECT_M between two ends)
+    assert len(pl.today) == 2 and all(len(s["seeds"]) == 1 for s in pl.today)    # (find_systems: the road between joins no ends)
     assert len(S.G.systems) == 2 and all(len(s["seeds"]) == 1 for s in S.G.systems)
-    assert [sorted(ss) for _j, ss in S.G.ramps] and len(S.G.ramps) == 1   # (the road the old rule joined them through: named)
+    assert [sorted(ss) for _j, ss in S.G.ramps] and len(S.G.ramps) == 1   # (the road between the two ends: named)
     # the decks' ends meet that road at grade: a ground point on each deck's path
     for pid in {S.P.path_of[i] for s in S.G.systems for i in s["seeds"]}:
         assert any(g.why in ("segment", "at_grade") for g in S.G.points[pid])
-    # a road with a deck of the other system's over it keeps them joined: here the deck's own joint does
     cmp_ = staged.compare(S, pl.today, pl.net)
-    assert cmp_["today_split_into"] == [2]
+    assert cmp_["today_split_into"] == []        # (find_systems has them apart too: nothing is cut that it joined)
 
 
 def test_a_path_with_no_ground_point_is_reported_and_one_joined_to_a_grounded_path_is_anchored():

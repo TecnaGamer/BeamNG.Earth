@@ -79,7 +79,8 @@ DECK_SPAN_RATIO = 22.0
 RAIL_DECK_DEPTH_M = 1.68
 COVER_M = 1.0               # m of structure over an underpass's headroom (the roof under a road or track at grade)
 TUNNEL_MAX_M = 300.0        # m: a longer road tunnel is a tunnel network of its own (tunnels.py), not an underpass
-CONNECT_M = 400.0           # m: a road joining two decks' (or tunnels') ends no longer than this ties them in one system
+CONNECT_M = 400.0           # m: a road on the ground this short between two structures' ends is named by the audits (it joins
+#                             nothing: find_interchanges)
 RAMP_MAX_M = 600.0          # m: the longest embankment or cut followed along a road
 DIP_MARGIN_M = 3.0          # m past the upper part's edge a road going under holds its dip before its cut ramps up
 FOOT_STEP_M = 1.0           # m between the points of a crossing's footprint (under_pairs)
@@ -654,8 +655,9 @@ def find_interchanges(members, reader=None, trace=None, want=None):
     reader(net) -> (ground, fixed): the
     elevation the cost of a move is read from (_Verdicts); None, flat ground. trace (a dict, the audit's: interchange_audit):
     filled with what merged the seeds, [(a, b, why, detail)] in the order they were united (why "relation": a join or a
-    crossing of two seeds, detail (kind, s on a, s on b); "ramp": a road on the ground between two seeds' ends, detail the
-    road; "dip": two seeds over one road they dig, detail None), with the seeds; nothing else about the answer."""
+    crossing of two seeds, detail (kind, s on a, s on b); "dip": two seeds over one road they dig, detail None), with the
+    seeds; nothing else about the answer. A road on the ground between two structures' ends joins no interchanges: an
+    interchange ends where its roads come back to the ground."""
     net = Net(members)
     n = len(members)
     if trace is not None:
@@ -705,18 +707,13 @@ def find_interchanges(members, reader=None, trace=None, want=None):
         ra, rb = root(a), root(b)
         if ra != rb:
             par[max(ra, rb, key=lambda x: str(members[x].key))] = min(ra, rb, key=lambda x: str(members[x].key))
-    ends_of = {}            # ground member -> the seeds whose ends join it (a ramp from one deck to the next)
+    # (structures meet one another: a joint or a crossing. A road on the ground between two structures' ends does not join
+    # them: it is at its ground, and an interchange ends where its roads come back to it, each structure's end a boundary
+    # held at the ground there, the road no further followed to the next structure)
     for i in seeds:
         for j, kind, si, sj, q in rel[i]:
             if j in par:
                 unite(i, j, "relation", (kind, si, sj))
-            elif kind == "join" and members[j].kind == "ground":
-                ends_of.setdefault(j, set()).add(i)
-    for j, ss in ends_of.items():
-        if len(ss) >= 2 and net.L[j] <= CONNECT_M:
-            ss = sorted(ss)
-            for i in ss[1:]:
-                unite(ss[0], i, "ramp", j)
     dig = _Verdicts(net, rel, droot, reader)
     t_dip = {}
     for a, b in _shared_dips(net, seeds, rel, dig, t_dip):
@@ -1054,13 +1051,12 @@ def system_ids(net, sysm):
     return {canonical_id(net.m[i]) for i in sysm["seeds"]} | {canonical_id(net.m[d]) for d, _a, _b in sysm["dips"]}
 
 
-def interchange_key(ids, centre, version="", cut=""):
+def interchange_key(ids, centre, version=""):
     """An interchange's key: the hash of its sorted member ids (canonical_id), of where its centre is (lat, lon, to
     KEY_DEG: a road's parts over two places are two interchanges of the same roads, and its centre, found from the whole
     system whatever region found it, is the same to far less than that) and of the version of what a solve of it is made
-    from (the plans' format: a solve made by other rules is another interchange's). cut: the tile that bounded it when the
-    whole of it was too wide to follow (grading's owner: "" when it was followed whole)."""
-    h = hashlib.sha1(str(version).encode("utf-8") + b"\0" + str(cut).encode("utf-8"))
+    from (the plans' format: a solve made by other rules is another interchange's)."""
+    h = hashlib.sha1(str(version).encode("utf-8"))
     h.update(b"\0%d,%d" % (round(centre[0] / KEY_DEG), round(centre[1] / KEY_DEG)))
     for i in sorted(ids):
         h.update(b"\0" + i.encode("utf-8"))

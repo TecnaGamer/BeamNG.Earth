@@ -271,6 +271,8 @@ def capture(planner, home, solve=False, region_calc=None):
         return False
 
     def find(members, reader=None, trace=None, want=None):
+        if held:        # (a later find: an interchange followed whole from the region's piece of it, not the region's)
+            return real_find(members, reader, trace, want)
         tr = {}                 # (every interchange: want is not asked, the audit reads those round the region too)
         net, found = real_find(members, reader, tr)
         systems = [x.sysm for x in found]
@@ -281,25 +283,24 @@ def capture(planner, home, solve=False, region_calc=None):
         return net, found
 
     def audit(net, sysm, pcs, smp, ground, fixed_z, diagnostics=None):
-        held["fixed"] = fixed_z
-        n = next(k for k, s in enumerate(held["systems"]) if s is sysm)
-        per[n] = ia.audit_system(net, sysm, pcs, smp, ground, fixed_z, held["namer"], held["rels"])
-        if solve:
-            diag = {}
-            got = real_solve(net, sysm, pcs, smp, ground, fixed_z, diag)
-            per[n][3]["stats"]["kernel"] = dict(solved=got is not None, status=diag.get("status"),
-                                                 qp_error=diag.get("qp_error"))
-        return None
+        return None         # (the interchanges are solved whole, in nets of their own: the region's pieces are audited below)
     with mock.patch.object(gs, "find_interchanges", find), mock.patch.object(gs, "solve_shape", audit):
         (region_calc or planner._shape_region_calc)(home, str(home))
     net, systems = held["net"], held["systems"]
     # (the systems round the region the planner did not solve: the same steps, on the same ground and fixed heights)
+    import ix.s2_extent as s2
+    fixed = s2.make_fixed(planner, net)
     for n, sysm in enumerate(systems):
-        if n not in per and "fixed" in held:
+        if n not in per:
             pcs = gs.pieces(net, sysm)
             smp = gs.sample(net, pcs)
-            per[n] = ia.audit_system(net, sysm, pcs, smp, [planner._ground_line(x["xy"]) for x in smp], held["fixed"],
-                                     held["namer"], held["rels"])
+            ground = [planner._ground_line(x["xy"]) for x in smp]
+            per[n] = ia.audit_system(net, sysm, pcs, smp, ground, fixed, held["namer"], held["rels"])
+            if solve:
+                diag = {}
+                got = real_solve(net, sysm, pcs, smp, ground, fixed, diag)
+                per[n][3]["stats"]["kernel"] = dict(solved=got is not None, status=diag.get("status"),
+                                                     qp_error=diag.get("qp_error"))
     audits = ia.audit_region(net, systems, held["trace"], held["namer"], per)
     return net, systems, audits, held["namer"], held["trace"]
 

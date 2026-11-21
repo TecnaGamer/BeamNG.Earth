@@ -55,14 +55,21 @@ def planner(cache_dir=None):
 
 
 def local(pl, home):
-    """(net, systems, members, cells) of the region of cell home: its own find (ix.s2_extent.run), each system only the
-    piece of its interchange the region's box has."""
+    """(net, interchanges, members, cells) of the region of cell home: its own find (ix.s2_extent.find), each interchange
+    only the piece of it the region's box has."""
     lon0, lat0, lon1, lat1 = (float(v) for v in home.bounds())
     ce, cn, _ = pl.frame.geodetic_to_enu(np.array([lat0, lat0, lat1, lat1]), np.array([lon0, lon1, lon0, lon1]), 0.0)
     h_lo = np.array([np.min(ce), np.min(cn)]) - grading.SHAPES_PAD_M
     h_hi = np.array([np.max(ce), np.max(cn)]) + grading.SHAPES_PAD_M
-    _extent, net, mine, loaded, members = s2_extent.run(pl, str(home), h_lo, h_hi, h_lo - 200.0, h_hi + 200.0)
+    net, mine, loaded, members = s2_extent.find(pl, h_lo, h_hi)
     return net, mine, members, loaded
+
+
+def whole(pl, net, ix):
+    """(key, net, Interchange) of the whole interchange the region's piece ix is part of (owner.grow)."""
+    cid = sorted({gs.canonical_id(net.m[i]) for i in ix.sysm["seeds"]})[0]
+    ik, n2, i2, _others = owner.grow(pl, net, ix, cid, owner.probe(pl, net, ix.sysm, cid), adopt=False)
+    return ik, n2, i2
 
 
 def locks(cache_dir):
@@ -105,44 +112,21 @@ class OwnerKeyTest(unittest.TestCase):
         net, mine, _members, _loaded = local(pl, home)
         self.assertGreaterEqual(len(mine), 1)
         got = []
-        for sysm in mine:
-            cid = sorted({gs.canonical_id(net.m[i]) for i in sysm["seeds"]})[0]
-            ik, n2, s2, _o, _c = owner.grow(pl, net, sysm, cid, owner.probe(pl, net, sysm, cid), home, adopt=False)
-            got.append((ik, str(owner.owner_cell(pl, n2, s2))))
+        for ix in mine:
+            ik, n2, i2 = whole(pl, net, ix)
+            got.append((ik, str(owner.owner_cell(pl, n2, i2.sysm))))
         # (the same interchange asked for again from a region of another cell: the neighbours' boxes cut it differently)
         keys = {}
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 other = mapcells.CellKey(home.z, home.x + dx, home.y + dy)
                 n3, mine3, _m, _l = local(pl, other)
-                for sysm in mine3:
-                    cid = sorted({gs.canonical_id(n3.m[i]) for i in sysm["seeds"]})[0]
-                    ik, n4, s4, _o, _c = owner.grow(pl, n3, sysm, cid, owner.probe(pl, n3, sysm, cid), other, adopt=False)
-                    keys.setdefault(ik, set()).add(str(owner.owner_cell(pl, n4, s4)))
+                for ix in mine3:
+                    ik, n4, i4 = whole(pl, n3, ix)
+                    keys.setdefault(ik, set()).add(str(owner.owner_cell(pl, n4, i4.sysm)))
         for ik, cell in got:
             self.assertIn(ik, keys, "reached from the neighbouring cells too")
             self.assertEqual(keys[ik], {cell}, "one owner cell")
-
-    def test_an_interchange_too_wide_to_follow_whole_is_cut_at_the_tile_the_same_for_every_cell_of_it(self):
-        pl, home = planner()
-        net, mine, _m, _l = local(pl, home)
-        sysm = mine[0]
-        cid = sorted({gs.canonical_id(net.m[i]) for i in sysm["seeds"]})[0]
-        pt = owner.probe(pl, net, sysm, cid)
-        whole, _n, _s, _o, cut = owner.grow(pl, net, sysm, cid, pt, home, adopt=False)
-        self.assertEqual(cut, "", "followed whole")
-        # (a tile that holds only part of it: the overpass's deck is 70 m long, the motorway under it 1 km)
-        small = (np.array([-30.0, -30.0]), np.array([30.0, 30.0]))
-        with unittest.mock.patch.object(owner, "tile_box", lambda planner, cell: small):
-            k1, _n1, _s1, _o1, cut1 = owner.grow(pl, net, sysm, cid, pt, home, adopt=False)
-            k2, _n2, _s2, _o2, cut2 = owner.grow(pl, net, sysm, cid, pt, home, adopt=False)
-        self.assertEqual(cut1, str(owner.tile_of(home)))
-        self.assertEqual((k1, cut1), (k2, cut2), "the same from every ask of the tile")
-        self.assertNotEqual(k1, whole, "a cut interchange is not the whole one")
-        # (the index tells a cell of another tile the whole one, not this tile's piece)
-        pick = owner.pick([(k1, (0.0, 0.0, 1.0, 1.0), cut1), (whole, (0.0, 0.0, 1.0, 1.0), "")], (0.5, 0.5), "9/1/1")
-        self.assertEqual(pick, whole)
-        self.assertEqual(owner.pick([(k1, (0.0, 0.0, 1.0, 1.0), cut1)], (0.5, 0.5), cut1), k1)
 
     @unittest.skipUnless(os.path.exists(REPLAY), "the Popoli replay")
     def test_a_replay_found_from_the_cells_round_it(self):
@@ -160,12 +144,10 @@ class OwnerKeyTest(unittest.TestCase):
                         net, mine, _m, _l = local(pl, home)
                     except Exception:       # (a cell the replay has no data for)
                         continue
-                    for sysm in mine:
-                        cid = sorted({gs.canonical_id(net.m[i]) for i in sysm["seeds"]})[0]
-                        ik, n2, s2, _o, _c = owner.grow(pl, net, sysm, cid, owner.probe(pl, net, sysm, cid), home,
-                                                          adopt=False)
-                        by_cell.setdefault(ik, []).append((str(home), str(owner.owner_cell(pl, n2, s2)),
-                                                           len(gs.system_ids(n2, s2))))
+                    for ix in mine:
+                        ik, n2, i2 = whole(pl, net, ix)
+                        by_cell.setdefault(ik, []).append((str(home), str(owner.owner_cell(pl, n2, i2.sysm)),
+                                                           len(gs.system_ids(n2, i2.sysm))))
             self.assertTrue(by_cell)
             for ik, rows in by_cell.items():
                 self.assertEqual(len({r[1] for r in rows}), 1, "one owner cell for %s" % ik[:8])

@@ -283,47 +283,22 @@ def _two_interchanges(link_m):
             _ground("n2", _line(0, y1 + 60, 0, y1 + 700))]
 
 
-def test_two_interchanges_merged_through_one_link_have_a_ground_node_between_them():
-    net, systems, audits = _audit(_two_interchanges(250.0))
-    assert len(systems) == 1 and len(systems[0]["seeds"]) == 2, "find_systems joins them through the road between (CONNECT_M)"
-    s4 = audits[0]["steps"][4]
-    assert not s4["ok"]
-    f = _finds(audits, 4, "merged_over_a_ground_node")
-    assert len(f) == 1 and f[0].refs[2]["earth"] == "link"
-    assert {r["earth"] for r in f[0].refs[:2]} == {"d1", "d2"}
-    assert s4["stats"]["components_if_reset"] == 2 and s4["stats"]["ground_nodes"] == 1
-    assert "250 m on the ground" in f[0].text or "on the ground between their ends" in f[0].text
-
-
-def test_a_longer_link_leaves_two_systems_and_both_pass():
-    net, systems, audits = _audit(_two_interchanges(450.0))
-    assert len(systems) == 2
-    assert all(a["steps"][4]["ok"] for a in audits)
+def test_two_interchanges_joined_only_by_a_ground_road_are_two_systems_and_both_pass():
+    # (an interchange ends where its roads come back to the ground: the road between is a boundary held at the ground, of
+    # any length, not a way on to the next structure)
+    for link_m in (60.0, 250.0, 450.0, 2000.0):
+        net, systems, audits = _audit(_two_interchanges(link_m))
+        assert len(systems) == 2 and all(len(s["seeds"]) == 1 for s in systems), link_m
+        assert all(a["steps"][4]["ok"] for a in audits), link_m
+        assert not _finds(audits, 4, "merged_over_a_ground_node")
 
 
 def test_a_road_dug_under_a_deck_between_the_ends_is_no_ground_node():
     # (the link goes under a third deck: its ground is not free)
     m = _two_interchanges(250.0) + [_deck("d3", _line(-25, 150, 25, 150, 8), "tertiary")]
     net, systems, audits = _audit(m)
-    assert len(systems) == 2, "d3 is a system of its own (it digs the link under it)"
+    assert len(systems) == 3, "d3 is a system of its own (it digs the link under it)"
     assert not _finds(audits, 4, "merged_over_a_ground_node")
-
-
-def test_an_oversized_system_names_the_chain_that_merged_it():
-    m = _two_interchanges(250.0)
-    y2 = 30.0 + 250.0 + 60.0 + 250.0
-    m += [_ground("link2", _line(0, 340, 0, y2, 30)),
-          _deck("d3", _line(0, y2, 0, y2 + 60, 13)), _ground("m3", _line(-800, y2 + 30, 800, y2 + 30, 200), "motorway"),
-          _ground("n3", _line(0, y2 + 60, 0, y2 + 700))]
-    m = [x for x in m if x.key[0] != "n2"]
-    with mock.patch.object(ia, "OVERSIZE_PIECES", 2):
-        net, systems, audits = _audit(m)
-    assert len(systems) == 1 and len(systems[0]["seeds"]) == 3
-    s4 = audits[0]["steps"][4]
-    assert not s4["ok"] and s4["stats"]["oversized"]
-    links = _finds(audits, 4, "merging_link")
-    assert {f.refs[-1]["earth"] for f in links} == {"link", "link2"}, [f.text for f in links]
-    assert len(s4["chain"]) == 2 and all("ramp road" in t for t in s4["chain"])
 
 
 # ---- naming ----
