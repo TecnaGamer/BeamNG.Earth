@@ -202,6 +202,23 @@ def mapped_doors(source, coords):
     return tuple(sorted(set(public or paths)))
 
 
+def entrance_offsets(coords, ring, points):
+    """Place each observation on its closest wall, in metres from the wall start."""
+    offsets = {}
+    if not points:
+        return offsets
+    scale = np.array([111320*dmath.cos(dmath.radians(coords[0,1])), 111132])
+    edges = (np.roll(coords,-1,axis=0)-coords)*scale
+    squared = np.maximum(np.sum(edges*edges,axis=1), 1e-12)
+    lengths = np.linalg.norm(np.roll(ring,-1,axis=0)-ring, axis=1)
+    for point in points:
+        delta = (point-coords)*scale
+        along = np.clip(np.sum(delta*edges,axis=1)/squared,0,1)
+        wall = int(np.argmin(np.sum((delta-along[:,None]*edges)**2,axis=1)))
+        offsets.setdefault(wall, []).append(float(along[wall]*lengths[wall]))
+    return offsets
+
+
 def cached_entry(cache, name, coords, bearing, material, sign_height=None, doors=(), entrance_bearing=None, local_panel=None):
     # Round away sub-centimetre anchor differences. The key describes the geometry actually exported.
     coords = coords.round(7)
@@ -306,7 +323,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
         if subtype == "commercial" and label.casefold().endswith("restaurant"):
             categories.add("restaurant")
         fallback = local_sign(label, categories) if local_enabled else None
-        if kind not in COMMERCIAL and not (local_enabled and kind in SIGN_STYLES) and not generic_host and not (name and not kind):
+        if kind not in COMMERCIAL and not (local_enabled and kind in SIGN_STYLES) and not generic_host and not spec.retail_front and not (name and not kind):
             continue
         if label and not name and not generic_host and not fallback:
             continue
@@ -334,6 +351,9 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
         )
         coords = np.column_stack((ll[1], ll[0]))
         try:
+            doors = mapped_doors(sources[0], coords) if sources and (spec.retail_front or name) else ()
+            if spec.retail_front and doors:
+                spec.retail_doors = entrance_offsets(coords, ring, doors)
             if generic_host or not name:
                 if layers is None:
                     layers = list(businesses(md, keys))
@@ -347,7 +367,8 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     name = tenants[0][0]
                 if not name and not (generic_host and tenants and len(aisles)):
                     continue
-            doors = mapped_doors(sources[0], coords) if name and sources else ()
+            if name and sources and not doors and not spec.retail_front:
+                doors = mapped_doors(sources[0], coords)
             entrance_bearing = None
             if name and not doors and kind in {"retail", "supermarket", "department_store", "hypermarket", "wholesale"}:
                 parking = parking_direction(ring, aisles)
@@ -366,6 +387,9 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     length = float(np.linalg.norm(ring[ends[1]]-ring[ends[0]]))
                     margin, bays, pier, opening = retail_bays(length)
                     along = margin + ((bays-1)//2)*(opening+pier) + opening/2
+                    observed = (spec.retail_doors or {}).get(wall)
+                    if observed:
+                        along = float(np.clip(min(observed, key=lambda x: abs(x-along)), opening*.45, length-opening*.45))
                     delta = (coords[(wall+1) % len(ring)]-coords[wall])/length
                     center = coords[wall]+along*delta
                     half = min(opening*.45, 3.5)*(panel[1]-panel[0])/length
@@ -379,7 +403,11 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     xy = np.concatenate(aisles) + origin
                     lat, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
                     parking_points = np.column_stack((lon, lat))
-                matches = ((brand, panel, None, None) for brand, panel in tenant_panels(tenants, coords, parking_points))
+                panels = list(tenant_panels(tenants, coords, parking_points))
+                if spec.retail_front and not spec.retail_doors:
+                    centers = [panel.mean(0) for _,panel in panels]
+                    spec.retail_doors = entrance_offsets(coords, ring, centers)
+                matches = ((brand, panel, None, None) for brand, panel in panels)
             for brand, geometry, heading, finish in matches:
                 options = {}
                 if isinstance(brand, LocalSign):

@@ -850,7 +850,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml", "storefront", "retail_front")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml", "storefront", "retail_front", "retail_doors")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -1694,8 +1694,10 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
         LOBBY_BAND if lobby else None)
     if len(mid):
         m.quads(P, UV, mid, mats)
-    if spec.retail_front and not hole and spec.front is not None:
-        _retail_glazing(m, ring, spec.front, z_eave-spec.height, z_eave, mat_idx, lite)
+    if spec.retail_front and not hole:
+        walls = spec.retail_doors or ({spec.front: None} if spec.front is not None else {})
+        for wall, offsets in walls.items():
+            _retail_glazing(m, ring, wall, z_eave-spec.height, z_eave, mat_idx, lite, offsets)
 
 
 def retail_bays(length):
@@ -1707,7 +1709,7 @@ def retail_bays(length):
     return margin, bays, pier, (span-(bays-1)*pier)/bays
 
 
-def _retail_glazing(m, ring, front, ground, eave, mat_idx, lite):
+def _retail_glazing(m, ring, front, ground, eave, mat_idx, lite, offsets=None):
     """Group ground-floor glazing into openings separated by the host wall finish."""
     a, b = ring[front], ring[(front+1) % len(ring)]
     length = float(np.linalg.norm(b-a))
@@ -1727,20 +1729,29 @@ def _retail_glazing(m, ring, front, ground, eave, mat_idx, lite):
     for i in range(bays):
         start = i*(opening+pier)
         end = start+opening
-        if i == (bays-1)//2:
-            door = min(1.8, opening*.42)
-            jamb = start+(opening-door)/2
-            pane(start, jamb, ground+.22, .169, .648, .405, .901)
+        centers = [opening/2] if offsets is None and i == (bays-1)//2 else []
+        for offset in offsets or ():
+            bay = int(np.clip(round((offset-margin-opening/2)/(opening+pier)), 0, bays-1))
+            if bay == i:
+                centers.append(offset-margin-start)
+        door = min(1.8, opening*.42)
+        edge = start
+        for center in sorted(centers):
+            jamb = start+float(np.clip(center-door/2, 0, opening-door))
+            if jamb < edge-.01:
+                continue  # Coincident map observations describe the same opening.
+            if jamb > edge+.01:
+                pane(edge, jamb, ground+.22, .169, .648, .405, .901)
             pane(jamb, jamb+door, ground, .315, .004, .634, .496)
-            pane(jamb+door, end, ground+.22, .169, .648, .405, .901)
-            if not lite:
-                center = left+axis*(start+opening/2)+outward*.27
-                _box(m, center, axis, opening/2+.12, .34, top, min(top+.22,eave), mat_idx[METALWALL])
-        else:
-            panes = max(1, round(opening/2.9))
+            edge = jamb+door
+        if end > edge+.01:
+            panes = max(1, round((end-edge)/2.9))
             for j in range(panes):
-                pane(start+opening*j/panes, start+opening*(j+1)/panes,
+                pane(edge+(end-edge)*j/panes, edge+(end-edge)*(j+1)/panes,
                      ground+.22, .169, .648, .405, .901)
+        if centers and not lite:
+            center = left+axis*(start+opening/2)+outward*.27
+            _box(m, center, axis, opening/2+.12, .34, top, min(top+.22,eave), mat_idx[METALWALL])
 
 
 # Night windows, each its own brightness (the user, 2026-11-08: "the brightness of windows should be randomized at

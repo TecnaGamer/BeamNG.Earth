@@ -117,6 +117,26 @@ class StreamedStoresTest(unittest.TestCase):
             self.assertEqual(len(triangles), 12)
             self.assertAlmostEqual(np.ptp(vertices[:,2]), spec.height+.65, places=2)
 
+    def test_four_customer_doors_on_two_walls_of_unnamed_retail_host(self):
+        import streamedstores
+        frame = geodesy.EnuFrame(40., -83.)
+        md = tile(frame, "", [], "retail")
+        md.cell(None).layers["buildings"].attrs["src_record"] = np.array(["w42@1"])
+        lat,lon,_ = frame.enu_to_geodetic(np.array([36.,44.,56.,75.]),np.array([30.,30.,30.,48.]),np.zeros(4))
+        with (tempfile.TemporaryDirectory() as cache, patch.dict(os.environ,BNE_STOREFRONTS="1"),
+              patch("threedmr.region_ids",return_value=[]),
+              patch.object(streamedstores,"entrance_index",return_value={"w42": list(zip(lon,lat,[1]*4))}),
+              patch("buildings.road_lines",return_value=[np.array([[0.,15.],[256.,15.]])])):
+            items,_ = buildings.road_tile_items(frame,0,0,md,lambda a,b: np.zeros(np.shape(a)),cache_dir=cache)
+            spec = items[0][0]
+            self.assertEqual(sorted(map(len,spec.retail_doors.values())),[1,3])
+            for lite in (False,True):
+                mesh = buildings.Mesh()
+                buildings._walls(mesh,spec,spec.ring,-1.,spec.height,buildings._Looks(spec.seed),lite)
+                points,_,triangles,materials,_ = mesh.arrays()
+                glass = triangles[materials == buildings.MATERIALS.index(buildings.LOBBY)]
+                self.assertEqual(sum(points[t,2].min() == 0 for t in glass),8)
+
     def test_catalog_matches_typed_cinemas_and_restaurant_aliases(self):
         from streamedstores import chain
         from store_match import brand
