@@ -105,6 +105,9 @@ mod dirtsteps;
 mod dirtnoise;
 mod racedig;
 mod racejoin;
+mod railmesh;
+mod railstations;
+mod catenary;
 mod railfit;
 mod gridinterp;
 mod dejunction;
@@ -7624,6 +7627,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
-    m.add("VERSION", 582)?;
+    railmesh::register(m)?;
+    railstations::register(m)?;
+    catenary::register(m)?;
+    m.add("VERSION", 584)?;
     Ok(())
 }
