@@ -99,8 +99,6 @@ NOT_LISTED = {
                          "platforms); not yet proven plan-neutral both ways, so it stays keyed with the Revamped "
                          "roads setting",
 }
-if "BNE_STANDALONE_PATHS" in EXPERIMENTAL_VARS:
-    NOT_LISTED["BNE_STANDALONE_PATHS"] = "changes path surfaces and vegetation cells"
 
 # Functions of the planning closure that read the environment by a computed name: the keys' own (they hash the
 # switches' names and values), the proxy settings (a fixed list of proxy variables)
@@ -458,6 +456,8 @@ def _clean_env():
 
 
 EXPERIMENTAL_VARS = sorted({k for _sid, env, _n in experimental.FEATURES for k in env})
+if "BNE_STANDALONE_PATHS" in EXPERIMENTAL_VARS:
+    NOT_LISTED["BNE_STANDALONE_PATHS"] = "changes path surfaces and vegetation cells"
 
 
 def _switch_env(var):

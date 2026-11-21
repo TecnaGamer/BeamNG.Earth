@@ -489,6 +489,7 @@ class Vegetation:
                 road_cells.append(c2.layers.get("roads"))
         # the rounded corners of curbless junctions (roadcorners.py): no tree, bush or rock on their asphalt
         _mask_corners(road_cells, (road, curb), chm, cd.bounds, getattr(self.surface, "urban", None), self.widths)
+        import pathlayout
         path_frame = path_box = path_parts = None
         path_blockers = []
         # smoothed heights (3 x 3 mean), then the local maxima by height band
@@ -523,7 +524,6 @@ class Vegetation:
             hs[nr[ok], nc[ok]] = np.maximum(hs[nr[ok], nc[ok]], hs[rj_[ok], ri_[ok]])     # keep its height
             tops |= moved
         blocked |= road
-        import pathlayout
         import pedestrianlighting
         if pedestrianlighting.enabled():
             if path_frame is None:
