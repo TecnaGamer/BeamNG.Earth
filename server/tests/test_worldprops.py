@@ -119,6 +119,21 @@ class WorldPropsTest(unittest.TestCase):
         _, out = self.lamps(FakeMD({"infrastructure": lamps, "roads": road_feats}))
         self.assertAlmostEqual(next(r for r in out if r[0] == "streetlight")[4], 0., places=1)
 
+    def test_mapped_path_lamp_prefers_adjacent_street_but_not_a_remote_street(self):
+        from unittest.mock import patch
+        lamps = feats("infrastructure", [
+            ("roadside", (104., 60.), {"class": "street_lamp", "src_record": "n120@1"}),
+            ("park", (130., 100.), {"class": "street_lamp", "src_record": "n121@1"}),
+        ], mg.POINT)
+        lines = feats("roads", [
+            ("street", [(100., 0.), (100., 220.)], {"class": "residential"}),
+            ("walk", [(106., 0.), (106., 220.)], {"class": "footway"}),
+            ("cycle", [(132., 0.), (132., 220.)], {"class": "cycleway"}),
+        ], mg.LINE)
+        with patch.dict(os.environ, BNE_PEDESTRIAN_LIGHTING="on"):
+            _, posts = self.lamps(FakeMD({"infrastructure": lamps, "roads": lines}))
+        self.assertEqual([(r[1], r[4]) for r in sorted(posts)], [(104., 180.), (130., 0.)])
+
     def test_lamp_rotation_curved_road_double_arm_and_layers(self):
         import fast
         fast.require(199, "test")
