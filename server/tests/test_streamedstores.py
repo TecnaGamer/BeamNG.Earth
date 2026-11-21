@@ -255,6 +255,27 @@ class StreamedStoresTest(unittest.TestCase):
             places.lonlat[1] = places.lonlat[0]
             self.assertFalse(generate())
 
+    def test_anchor_on_mall_exterior_requires_a_supported_wall(self):
+        frame = geodesy.EnuFrame(40., -83.)
+        for brand in ("Macy's", "Target", "Dick's Sporting Goods", "The Cheesecake Factory"):
+            md = tile(frame, "", [brand], "shopping_mall")
+            layers = md.cell(None).layers
+            layers["buildings"].attrs["height"] = np.array([9.])
+            aisle = np.array([[50.,15.],[50.,20.]])
+            with (self.subTest(brand=brand), tempfile.TemporaryDirectory() as cache,
+                  patch.dict(os.environ,BNE_STOREFRONTS="1"), patch("threedmr.region_ids",return_value=[]),
+                  patch("buildings.road_lines",return_value=[aisle])):
+                def generate(y):
+                    lat,lon,_ = frame.enu_to_geodetic(50.,y,0.)
+                    layers["places"].lonlat[:] = [lon,lat]
+                    return buildings.road_tile_items(frame,0,0,md,lambda a,b: np.zeros(np.shape(a)),cache_dir=cache)[1]
+                sign, = generate(33.)
+                self.assertIsNone(sign["storefront_host"])
+                self.assertEqual(sign["local"]["title"],brand)
+                mesh = threedmr.load_local_model(cache,sign["local"])
+                self.assertAlmostEqual(np.ptp(mesh[0][:,2]),8.55,places=2)
+                self.assertFalse(generate(45.))
+
     def test_named_retail_host_requires_tenant_frontage(self):
         frame = geodesy.EnuFrame(40., -83.)
         aisle = np.array([[50., 15.], [50., 20.]])

@@ -45,6 +45,9 @@ COMMERCIAL = SPECIFIC | {"commercial", "retail", "shop"}
 LOG = logging.getLogger("earthd.storefronts")
 
 
+MALL_ANCHORS = {"Macy's", "Dick's Sporting Goods", "Target", "The Cheesecake Factory"}
+MALL_CLASSES = {"mall", "shopping_mall", "shopping_center", "outlet_mall"}
+
 MIN_BUSINESS_CONFIDENCE = 0.75
 
 
@@ -422,7 +425,8 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
         _, label, material, subtype, *sources = spec.storefront
         kind = str(spec.cls or "").lower()
         name = chain(label, kind == "cinema")
-        generic_host = kind in {"retail", "commercial", "shop"} or (not kind and subtype == "commercial")
+        mall = kind in MALL_CLASSES or (kind in {"", "commercial", "retail", "shop"} and label.casefold().endswith((" mall", " outlets")))
+        generic_host = mall or kind in {"retail", "commercial", "shop"} or (not kind and subtype == "commercial")
         categories = {kind}
         if subtype == "commercial" and label.casefold().endswith("restaurant"):
             categories.add("restaurant")
@@ -469,7 +473,9 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     nearby[item_index] = False
                     neighbors = list(zip(lower_bounds[nearby],upper_bounds[nearby]))
                     exterior = exterior_frontages(layers,coords,ring,label,neighbors)
-                if name and any(brand != name for brand, _ in tenants):
+                if mall:
+                    name = None  # A single mapped tenant can still occupy just one wing.
+                elif name and any(brand != name for brand, _ in tenants):
                     # A retail host may carry its anchor's name but also contain independent stores.
                     name = None
                 elif fallback and not name and (not tenants or all(t == fallback for t, _ in tenants)):
@@ -523,6 +529,8 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                 matches = ((brand, panel, None, None) for brand, panel in panels)
             for index,(brand, geometry, heading, finish) in enumerate(matches):
                 options = {}
+                if (mall and brand in MALL_ANCHORS and spec.height >= 5.0):
+                    options["local_panel"] = ("mall_anchor", round(min(spec.height-.45, 9.), 2))
                 if isinstance(brand, LocalSign):
                     if spec.height < 2.8:
                         continue

@@ -133,11 +133,17 @@ def export_store(path, match, observations, out, *, entrance_direction=None, loc
                      art, [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
         elif local_panel:
             style, top, *raised = local_panel
-            if raised:
+            if style == "mall_anchor":
+                half_span = axis * min(width*.46, 7.5)
+            elif raised:
                 half_span = axis * width/2
             span = 2 * np.linalg.norm(half_span)
             tall = min(1.25, span / 4)
-            art = whole_store.local_sign_image(name, style, span / tall)
+            if style == "mall_anchor":
+                tall = min(2.35, span/4)
+                art = whole_store.sign_image(name, span/tall, tall)
+            else:
+                art = whole_store.local_sign_image(name, style, span / tall)
             # A narrow fascia support also locates the model's ground plane for the game writer.
             wall(-half_span, -half_span + axis * .08, 0, top, 2)
             left, right = -half_span, half_span
