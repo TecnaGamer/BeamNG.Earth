@@ -226,7 +226,10 @@ See [global turbine report](../docs/research/2026-11-01-wind-turbine-global.md) 
   its height PNG, terrain file and every layer mask. The server deletes them after every recipient has
   returned its ticket in `terrain_release`. The mod keeps installed, deferred, pending and rollback
   revisions, including the file still bound to the engine's TerrainBlock. A reconnect reports the
-  surviving tickets in `hello.terrainHeld`. A Windows sharing violation leaves the file queued for retry. For older mods, the server retains all candidate revisions of the committed centre until a later commit moves on.
+  surviving tickets in `hello.terrainHeld`. A Windows sharing violation leaves the file queued for retry.
+  Older mods have one pending follow request. The server keeps candidate revisions at their confirmed
+  centre and pending centre. A replacement follow request invalidates the earlier request ID, even
+  if the car stays on its current block. Prepared future anchors and swap rollback keep their holds.
 - Prefetch: on each pose ≥ 200 m (Chebyshev) from the block centre, the server predicts the mod's
   next `prepare_terrain` (`predict_request`, REACH = 420 m as in `follow.lua`), builds it in the
   background and forces L0 over it. While a request is pending the prediction starts from the
