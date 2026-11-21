@@ -2,6 +2,93 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## 1.10.1 beta (2026-11-15)
+
+> **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
+> develop the mod.** For help, that includes multiplayer:
+> BeamNG.Earth isn't like a normal BeamNG mod (it runs its own app next to the game), so if something isn't working
+> with BeamMP, it's almost certainly a BeamNG.Earth problem, not a BeamMP one. Please don't contact the BeamMP team or
+> open BeamMP support tickets about it. BeamNG.Earth servers are hidden from players who don't run BeamNG.Earth
+> (BeamMP can't install it for them: it needs its own app), so they only show in the BeamNG.Earth tab of BeamMP's
+> server browser.
+
+Works with BeamNG.drive 0.40.5.
+
+> **BeamMP server hosts: please update your server's BeamNG.Earth files.** While players are connected, BeamMP runs
+> the copy of BeamNG.Earth your server sends, not their own, so the multiplayer fixes below (the HUD flicker, far
+> players' cars, the bridge guard) only reach your players once your server sends 1.10.1 (the Host package or the
+> Docker image of this release).
+
+### Fixed
+- **Reduced the chance of falling through a bridge that hasn't loaded yet**: the car now slows down smoothly and stops
+  short of a bridge whose road hasn't arrived, is held there as a last resort, and is put back on the road if it went
+  over anyway; those bridges are also built first. Works in BeamMP too (only your own car is slowed). The user, after
+  a fast drive: "I've fallen off the road many times because a small bridge didn't generate in time". Setting:
+  World > "Slow down before bridges still loading" (on).
+- **Far fewer freezes in BeamMP**: other players' cars far away (more than about 15 miles) are no longer spawned or
+  rebuilt on your computer until they come near; each of those spawns and part changes used to freeze the game for
+  0.5-4 seconds, even for players on the other side of the world (in one session: 240 spawns and 70 edits in 40
+  minutes). Their latest car and paint appear when they get close.
+- **Reduced the chance of the world server pausing for seconds while you drive** (2-7 s pauses in a BeamMP session,
+  each holding up the world around you): the work done for every position update (which distant tiles to show, their
+  texture sizes) now runs in native code and is skipped when nothing can change, and file work moved off the main
+  loop. In our tests that work went from 5.6 to 2.7 ms per update at speed, and to almost nothing when stopped.
+- **Faster road planning near railways** (Baltimore, rail yards): the railway step of a busy cell went from 0.6 s to
+  0.02 s in our tests.
+- **Fewer elevation downloads** from Mapterhorn (the free service our terrain heights come from): the same tile is
+  no longer downloaded by several server processes at once, and parent tiles only when needed.
+- Add-ons: the planned route's turn steps and legs (`gpsRoute().steps`) are no longer always empty (GitHub #1259,
+  thanks SirColeslaw).
+- **Reduced the chance of the HUD flickering and the UI becoming unusable after joining a BeamMP server** (GitHub
+  #1302, thanks INSANE416): joining built the HUD twice in a row (BeamMP's layout, then ours), which could set off the
+  UI's crash recovery again and again. The HUD is now built once, and only on BeamNG.Earth servers; a join on a stock
+  map no longer leaves our layout waiting for your next single-player drive, and a missing UI file no longer holds
+  the whole interface for 30 seconds.
+- **Reduced the chance of BeamNG.Earth staying switched off after you leave a BeamMP server** (until the game was
+  restarted: no BeamNG.Earth map, no BeamNG.Earth servers tab). BeamMP switches your copy off while you're connected;
+  it is now switched back on as the session ends, also when you leave through Esc > Main menu and when the server
+  sends an older copy of the mod.
+- **Reduced the chance of the world never finishing loading with a low "Max RAM for BeamNG.Earth"** (3 GB, or Auto on
+  8 GB and 4 GB computers): if one of the road helper processes closed, roads, trees and buildings could wait for
+  good. The helpers are now started again by themselves, the server is never held below 3 GB, and the status line
+  says when Max RAM is too low for the place you are in.
+- **Hong Kong**: first visits no longer stall (the first road tiles came after up to 17 minutes, or never) and the
+  server uses far less memory there (in our tests 22.9 GB down to 8 GB) (PR #1331 and #1337, glki6). Hong Kong's
+  roads are planned again once after updating.
+- **Reduced the chance of short server stalls on Windows** (6-9 s in a player's log): the CPU core split looked at
+  every process on the computer each time (from PR #1328, OmdevShastri).
+- **Windows, installed from the source ZIP**: the sky fix and the engine patches the .exe has were missing from the
+  ZIP, so a source install ran without them; they are now included.
+- Faster road tiles in cities with many stations, tunnels and ramps (in our tests on two Sydney tiles: ramps about
+  30 s to 2 s, tunnel sides 3.9 s to 0.75 s, stations 55.6 s to 44.4 s) (PR #1283, #1315 and #1314, crunchdomo).
+
+### New
+- **Epic Games and no-Steam launch** (new; please tell us how it goes): on Windows the app now finds BeamNG.drive
+  installed from the Epic Games Store, and it can start the game without Steam on Windows and Linux (`--launch direct`, kept for later
+  starts; it uses the same user folder, so your mods and settings stay put). With several copies installed it asks
+  which one to use (`--choose-game` to ask again). Steam players see no change. BeamMP on Linux still needs the game in
+  a Steam library. Builds on ideas from PR #1309 (ProxyFirewall202).
+- **Where you left off** now also remembers which way your car was facing, and starts you facing the same way.
+- **Restart world server** button on the settings page: settings that need the world server to restart (Experimental
+  features, Ground grid, CPU cores and priority, 3D models from 3dmr.eu, Max RAM's sizing, the cache folder) apply
+  without closing the game; the world reloads around your car, which is held still meanwhile.
+- **Experimental settings page**: features that could only be turned on with environment variables are now switches
+  (all off by default; they apply when the world server restarts, with the Restart world server button): road signs (and the Dutch ones), French and European
+  road scenery, guard rails at drops, widened entrances, right of way by road class, bumpy and rough dirt roads, tyre
+  polish, crack networks and manholes, the road steepness limit, road surfaces from aerial photos, rougher land off the roads, rock faces in
+  deep cuts, ground over shallow tunnels, more undersea tunnels, traffic through tunnels, solid railway rails,
+  overhead railway wires, grouped level crossings, railway tunnels, rounded railway curves, closed 3D models,
+  detailed Canadian lidar and showing the older world while a place rebuilds. With any of them on, places you visit
+  are built for your settings (the shared prebuilt road plans are not used).
+
+### Behind the scenes
+- The BeamMP server's Docker image builds again (PR #1310, ReinderN).
+- When the world server stalls, its log now records what every part of it was doing, to find the cause.
+- Groundwork for faster first visits: lidar road heights and Mapterhorn's elevation archives can be read from
+  prebuilt, signed downloads instead of the raw sources (switched on separately once published).
+- Telemetry (only what you chose to share): network counts are no longer counted twice after a restart, and the
+  elevation requests are split by what asked for them (counts only).
+
 ## 1.10.0 beta (2026-11-14)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

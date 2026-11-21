@@ -18,6 +18,10 @@ import time
 import urllib.parse
 import urllib.request
 
+try:        # (first: numpy's AVX-512 kernels held back before anything imports numpy, tools/npyfirst.py)
+    import npyfirst  # noqa: E402,F401
+except ImportError:     # (loaded by its path into another process, a test: that process's entry point guards)
+    pass
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server"))

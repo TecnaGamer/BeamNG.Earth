@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 /// roads._EndJoin(tol): the first point seen names a node; a later one joins the node of its nearest point within tol
 /// (squared distances; on a tie the point seen first), and is one of that node's points after unless it lies on it
 /// (1e-12); the 3 x 3 grid cells of tol round it looked up, in _EndJoin's order.
-struct EndJoin {
+pub(crate) struct EndJoin {
     tol: f64,
     grid: HashMap<(i64, i64), Vec<usize>>,
     pts: Vec<(f64, f64)>,
@@ -20,12 +20,12 @@ struct EndJoin {
 }
 
 impl EndJoin {
-    fn new(tol: f64) -> EndJoin {
+    pub(crate) fn new(tol: f64) -> EndJoin {
         EndJoin { tol, grid: HashMap::new(), pts: Vec::new(), node_of: Vec::new(), n: 0 }
     }
 
     /// (node, new: whether the point named a new node)
-    fn join(&mut self, x: f64, y: f64) -> (usize, bool) {
+    pub(crate) fn join(&mut self, x: f64, y: f64) -> (usize, bool) {
         let (gx, gy) = ((x / self.tol).floor() as i64, (y / self.tol).floor() as i64);
         let (mut best, mut bd): (Option<usize>, f64) = (None, self.tol * self.tol);
         for dx in -1..=1 {

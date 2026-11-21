@@ -177,7 +177,7 @@ def tunnel_portals(feats, own):
         i = ids.get(fid)
         if i is None:
             continue
-        at = lambda m, c: float(np.interp(min(max(m, 0.0), s[-1]), s, pts[:, c]))     # noqa: E731
+        at = lambda m, c: float(dnp.interp(min(max(m, 0.0), s[-1]), s, pts[:, c]))     # noqa: E731
         for a, b, kind in roads.level_ranges(feats, i):
             if kind != "tunnel" or (b - a) * s[-1] < TUNNEL_MIN_M:
                 continue

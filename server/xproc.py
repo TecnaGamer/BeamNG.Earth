@@ -342,6 +342,13 @@ def set_cancel(check):
         _cancel_proc[0] = check
 
 
+def set_thread_cancel(check):
+    """This thread's own cancel check, never the worker process's job-wide one (set_cancel): a thread beside the
+    process's jobs (blockworker._warm_loop, the road plans ahead of the anchor its list is for) neither takes the
+    abandonment of another anchor's job nor goes on for an anchor a teleport left when the process has no job."""
+    _cancel.check = check
+
+
 def _cancelled():
     check = getattr(_cancel, "check", None) or _cancel_proc[0]
     return check is not None and check()
@@ -354,14 +361,15 @@ def check_cancel():
         raise pools.Abandoned()
 
 
-def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_note=None):
+def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_note=None, patient=False):
     """(result, False): ready() gave it (at once or after waiting for another process); (None, True): this process
     does the work (release(lock) after the result is written); (None, False): do it without the lock (a wait past
     wait_s, or a less urgent holder). on_wait(): called once when this process starts waiting. live_s: past wait_s,
     waited on up to live_s while the holder still works (alive, its lock touched within LIVE_FRESH_S: _heartbeat) and
     this thread holds no lock itself (no wait of its can close a circle of waits: the holder's own waits for other
     processes stay bounded by their wait_s); such a wait past LIVE_WARN_S is logged once (live_note: what it waits
-    for)."""
+    for). patient: a less urgent holder is waited for too (work already in flight that ends sooner than the same work
+    started again here: a raw DEM tile's one download, dem.Dem._download)."""
     got = ready()
     if got is not None:
         return got, False
@@ -396,7 +404,7 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_not
                     holder = None
                     continue
                 # (not broken now, its guard busy: the deadline and cancel checks below, then looked at again)
-            if h is not None and h[:2] > _rank(kind):
+            if not patient and h is not None and h[:2] > _rank(kind):
                 return None, False          # do it here, not wait
         elif holder is not None and holder == now_holder and pid is not None and time.monotonic() >= recheck:
             # (the same holder, looked at again now and then: one that died after we first looked, a road tile's

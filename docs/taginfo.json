@@ -436,6 +436,11 @@
       "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
     },
     {
+      "key": "railway:preserved",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
       "key": "razed:railway",
       "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
       "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"

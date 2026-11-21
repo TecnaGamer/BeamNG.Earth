@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request replaces its run under way (issue #1273). Keyed on the PR number, not head_ref:
+# fork PRs often share a branch name (patch-1). Called from release.yml (a push) or dispatched, there is no PR number:
+# the run's own id, a group of its own, never cancelled, and never release.yml's release-<ref> (no caller deadlock).
+concurrency:
+  group: quality-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 # (the tests start servers through the launcher: never usage reports from CI, telemetry.py)
 env:

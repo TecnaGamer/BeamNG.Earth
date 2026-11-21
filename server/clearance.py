@@ -82,7 +82,7 @@ def _arc(xyz):
 
 def _at(s, xyz, t):
     """The line's points (n, 3) at the arc lengths t."""
-    return np.stack([np.interp(t, s, xyz[:, c]) for c in range(3)], axis=1)
+    return np.stack([np.interp(t, s, xyz[:, c]) for c in range(3)], axis=1)  # det-ok: the clearance log only
 
 
 def _stations(length, env, every):

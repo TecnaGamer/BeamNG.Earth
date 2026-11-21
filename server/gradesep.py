@@ -22,6 +22,7 @@ import numpy as np
 import fast
 import dnp
 import mapcells
+import racedig
 import roads
 import railways
 
@@ -37,8 +38,9 @@ log = logging.getLogger("earthd.gradesep")
 MODE = os.environ.get("BNE_GRADESEP", "tunnels")
 ON = MODE == "on"
 TUNNELS = MODE in ("on", "tunnels")
-VERSION = 3             # in MapData.versions(): every cell's ranges (cell_facts) and tiles made again on a change
-                        # (3: a road joined end to end with a short tunnel is no line over it, PORTAL_JOIN)
+VERSION = 4             # in MapData.versions(): every cell's ranges (cell_facts) and tiles made again on a change
+                        # (3: a road joined end to end with a short tunnel is no line over it, PORTAL_JOIN; 4: a railway's
+                        # short tunnel short along the line, railways.tunnel_run_m)
 DEM_ZOOM = 15
 SEP_M = 4.0             # m the upper line's ground stands above the lower one's (medians of four heights each)
 SIDE_M = 2.0            # m ... at least, on each side of each line
@@ -101,7 +103,7 @@ def _spans_kept(md, key, feats):
     import revisit
     import roads
     cid = feats.__dict__.get("_bnge_cell")
-    mk = (cid, "gradesep", MODE, VERSION, ON, TUNNELS) if cid is not None else None
+    mk = (cid, "gradesep", MODE, VERSION, ON, TUNNELS, racedig.ON) if cid is not None else None
     if mk is not None:
         with roads._FACTS_LOCK:
             got = roads._FACTS_MEM.get(mk)
@@ -199,8 +201,10 @@ def _layer_rows(f):
             clss = strs(f.attrs["class"]) if "class" in f.attrs else np.full(n, "unknown", dtype=object)
             unb = np.asarray(roads.unbuilt_mask(f), bool)
             road = (subs == "road") & ~unb
-            for c in set(clss[road].tolist()):
+            for c in sorted(set(clss[road].tolist())):
                 st = roads.STYLE.get(c)
+                if c == "raceway" and racedig.ON:
+                    continue        # (a racetrack is no crossing line: never a bridge, the tunnels under it kept)
                 if st is not None:
                     sel = road & (clss == c)
                     if c == "cycleway":         # (only a street closed to cars is a road: roads.cycle_streets)
@@ -215,6 +219,18 @@ def _layer_rows(f):
                 kinds, toff, trng, tkind, np.ascontiguousarray(f.lonlat, np.float64).reshape(-1, 2),
                 np.ascontiguousarray(f.coord_off, np.int64), np.ascontiguousarray(f.ring_off, np.int64),
                 np.ascontiguousarray(f.part_off, np.int64), roads.MIN_PART, roads.MIN_PART_M, railways.SHORT_TUNNEL_M)
+            # (a railway's tunnel is short along the line, not on its segment: railways.tunnel_run_m, the railways'
+            # own test; the kernel measures the segment's range alone, and a road over the tracks under the Bullring,
+            # 450 m of tunnel in 7-55 m segments, got a bridge over each)
+            short = np.flatnonzero(pk == 2)
+            if len(short):
+                feat = np.searchsorted(poff, short, side="right") - 1
+                keep = np.ones(len(pk), bool)
+                for q, i in zip(short.tolist(), feat.tolist()):
+                    keep[q] = railways.tunnel_run_m(f, int(i), float(pa[q]), float(pb[q])) < railways.SHORT_TUNNEL_M
+                if not keep.all():
+                    poff = np.r_[0, np.cumsum(keep)].astype(np.int64)[poff]
+                    pk, pa, pb = pk[keep], pa[keep], pb[keep]
         else:
             poff, pk, pa, pb = np.zeros(n + 1, np.int64), np.zeros(0, np.int64), np.zeros(0), np.zeros(0)
         got = f.__dict__["_gs_layer"] = (kinds, halves, poff, pk, pa, pb, [str(x) for x in f.ids])
@@ -289,6 +305,8 @@ def _spans(md, key, feats):
             log.debug("gradesep %s underpasses: %s: %s", key, type(e).__name__, e)
             revisit.fault()
             return {}
+        if racedig.ON:
+            keep &= ~_under_raceways(frame, lays, pts, starts, kinds)
         if not keep.all():
             pts = pts[np.repeat(keep, np.diff(starts))]
             starts = np.r_[0, np.cumsum(np.diff(starts)[keep])].astype(np.int64)
@@ -404,6 +422,37 @@ def _portal_joins(pts, starts, cand):
         up, lo = int(cand[r, 0]), int(cand[r, 1])
         su, sl = float(cand[r, 2]), float(cand[r, 3])
         out[r] = (min(su, length[up] - su) < END_M) and (min(sl, length[lo] - sl) < END_M)
+    return out
+
+
+def _under_raceways(frame, lays, pts, starts, kinds):
+    """(n,) bool per line: a road's tunnel (kind 3) crossing under a raceway (racedig.ON: never an underpass, whatever
+    else crosses over it: dug under the track, its surface kept; GitHub #1352, Daytona's infield tunnel opened to the
+    ground across the oval). The raceways by the map's own bridge / tunnel tags (roads.quick_ground_parts: their level
+    ranges are this module's own). Pure."""
+    out = np.zeros(len(kinds), bool)
+    tun = np.flatnonzero(np.asarray(kinds) == 3)
+    if not len(tun):
+        return out
+    races, seen = [], set()
+    for f in lays:
+        if "class" not in f.attrs:
+            continue
+        cls = f.attrs["class"]
+        for i in range(len(f)):
+            fid = str(f.ids[i])
+            if str(cls[i]) != "raceway" or fid in seen:
+                continue
+            seen.add(fid)
+            for ring in roads.quick_ground_parts(f, i):
+                e, n, _ = frame.geodetic_to_enu(np.asarray(ring)[:, 1], np.asarray(ring)[:, 0], 0.0)
+                if len(ring) >= 2:
+                    races.append(np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1))
+    if not races:
+        return out
+    lines = [np.asarray(pts[starts[t]:starts[t + 1]], np.float64).reshape(-1, 2) for t in tun.tolist()]
+    for t, cr in zip(tun.tolist(), roads._crossings_by(races, lines)):
+        out[t] = bool(cr)
     return out
 
 

@@ -13,6 +13,37 @@ REL_TOL = 0.05          # of a value already over its limit, when more than the 
                         # becoming 22.1 g is a road already broken shifting a little, not a new defect
 UPDATE = "python server/tests/drivability.py --update {}"
 
+# The baseline was 20 merged PRs behind the code at 2026-11-18 (402b4d85d, PR 19, was its last). Re-measured on the head and bisected
+# per site, the sites that were worse were not all new defects (a site's score, 402b4d85d's baseline -> the head's):
+#   a20_921 10.7 -> 18.3: the measurement. The native gradebins' under_deck rule (53edbea74) grades the ground past an abutment's
+#       end under the deck at the abutment's slope; the harness walks that ground as a road under its own deck, 13 m of it.
+#   perth_915 44.9 -> 63.0: PR 19 (find-ground), but not the track's ramp, which is at railways.GRADE with no step
+#       (test_findground RiseRampTest). Measured chain (2026-11-18): two rail bridges and two motorway decks cross one street
+#       (Morley Drive) side by side, the rails 4.8 m from the southbound deck's axis. The street under the decks is dug 6 m by
+#       the road decks' own dip (grading._lower_underpasses, still the older law for a road deck: the road goes down) while the
+#       rail bridges, by find-ground, leave the street where the elevation has it and rise 5.25 m over THAT ground (railways
+#       are the elevation's alone: their beds are pure in it, railprofile.py), so the rail stands 11.7 m over the dug street
+#       and its 5 % approaches are 5 m embankments whose toes lie under both ends of the motorway deck: the ground there
+#       27.5-28.1 over the deck's 26.8-27.2, and the deck, which stays DECK_CLEAR over the ground under it with its
+#       abutments pinned, rises 1.2 m in its first 3.4 m (a 35 % grade) and drops 0.8 m at its end. Without the rise
+#       (plain_underpasses -> []) 45.6, steps 136 -> 40; RISE_PIECE_M 25 -> 60 changes nothing (62.9). BNE_SHAPES=1, where no
+#       road is dug and the decks rise instead (the one rule), 44.8 with the rise and 49.2 without it. Making the legacy dips
+#       follow find-ground for road decks too (findground.leaves in _lower_underpasses, every span) measured 63.0 -> 30.6 here
+#       and 1126.7 -> 1076.0 over the 29 sites (castlegar 21.8 -> 5.7, prague 34.1 -> 29.9, m1_ireland 71.0 -> 68.6;
+#       mooslacken 11.2 -> 16.3 the one worse): that is the I-20 question (a motorway over a local road: dug or raised), not
+#       the rail's. A defect, not fixed (the baseline holds it).
+#   casagranda_portal 35.0 -> 55.3, casagranda_bridge 37.4 -> 51.1: PR 34 (tunnel mouths: a tunnel's portal where a bridge
+#       goes on read the ground line outward from the mouth, the gorge's floor 14 m under the deck: the tunnels and the
+#       bridge between them lowered 15 m, 31 % grade into the portal). Fixed: where a bridge goes on the portal is the
+#       structure's own height (roads.mouth_over_deck), 30.9 and 26.7, under both the old numbers (the bridge between the
+#       tunnels no longer climbs 5 m in its 31 m).
+#   riva_pontera_tunnel 20.6 -> 24.2 (the centre line of d4d83607 rises 1.8 m), boston_storrow_massave 26.1 -> 31.3,
+#       boston_bowker 81.6 -> 84.3, paris_maillot_ax 120.0 -> 124.5, tamar_bridge 20.7 -> 21.4: PR 33 (retaining walls: the wall
+#       line between two roads at other levels, which the harness reads as a step across it). The Riva one is a probable
+#       defect; not fixed (the baseline holds them).
+#   vienna_mooslacken 8.0 -> 11.2 (steps 75 -> 34): PR 39 (rail grade 5 %, the rail beds' ramps), fewer longer steps.
+# Fix the defect, then lock the improvement in with UPDATE.
+
 
 def compare(result, base):
     """([worse], [better]) of a measurement against its baseline entry, each a line for whoever reads the failure."""

@@ -278,8 +278,8 @@ def _stations(xy, offsets_of):
     # vertices' directions, their two segments' mean, blended along each segment: no jump at a vertex (medians.rs)
     v = np.vstack([u[:1], u[:-1] + u[1:], u[-1:]])
     v /= np.maximum(dnp.hypot(*v.T), 1e-9)[:, None]
-    p = np.c_[np.interp(s, cum, xy[:, 0]), np.interp(s, cum, xy[:, 1])]
-    t = np.c_[np.interp(s, cum, v[:, 0]), np.interp(s, cum, v[:, 1])]
+    p = np.c_[dnp.interp(s, cum, xy[:, 0]), dnp.interp(s, cum, xy[:, 1])]
+    t = np.c_[dnp.interp(s, cum, v[:, 0]), dnp.interp(s, cum, v[:, 1])]
     t /= np.maximum(dnp.hypot(*t.T), 1e-9)[:, None]
     return p + np.c_[-t[:, 1], t[:, 0]] * np.asarray(offsets_of(s, length))[:, None]
 

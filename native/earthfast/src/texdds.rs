@@ -14,6 +14,7 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use crate::dm::Dm;
 use pyo3::types::PyBytes;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -198,7 +199,7 @@ fn blur_fft(g: &mut [f64], w: usize, h: usize, sigma: f64) {
         let gain: Vec<f64> = (0..n)
             .map(|k| {
                 let f = freq(k, n);
-                libm::exp(-2.0 * (std::f64::consts::PI * sigma).powi(2) * (f * f))
+                libm::exp(-2.0 * (std::f64::consts::PI * sigma).sq() * (f * f))
             })
             .collect();
         let (mut re, mut im) = (vec![0f64; n], vec![0f64; n]);

@@ -121,9 +121,11 @@ class FindNearTest(unittest.TestCase):
         same line, any kind, within half a step are interpolated; another line's, or farther, stay NaN."""
         xy = np.array([[0.0, 0.0], [railways.STEP_M, 0.0], [2 * railways.STEP_M, 0.0]])
         cm = railprofile._cm(xy)
-        keys = railprofile._pack(cm[:, 0], cm[:, 1])
-        node = {("f", "bridge"): (np.sort(keys), np.array([10.0, 12.0, 14.0])[np.argsort(keys)]),
-                ("g", "ground"): (np.sort(keys), np.full(3, 99.0))}
+        # (a node as _make_node packs it: its groups by (fid, kind), their beds in one earthfast.RailNode)
+        groups = {("f", "bridge"): 0, ("g", "ground"): 1}
+        packed = railprofile.fast._ef.rail_node_pack(np.r_[cm, cm], np.r_[[10.0, 12.0, 14.0], np.full(3, 99.0)],
+                                                     np.array([0, 3, 6], np.int64), np.array([0, 1], np.int64), 2)
+        node = (groups, packed)
         ask = railprofile._cm(np.array([[0.5 * railways.STEP_M, 0.0], [0.0, 3 * railways.STEP_M]]))
         out = railprofile._find(node, "f", "ground", ask)
         self.assertTrue(np.isnan(out).all(), "(no exact key: other kind, other points)")
@@ -211,6 +213,91 @@ class NodeMemoFaultTest(RailProfileTest):
         pool.shutdown()
         self.assertEqual(len(railprofile._NODES), 0)
 
+    def test_a_nodes_beds_by_line_and_centimetre(self):
+        """earthfast.rail_node_pack / RailNode.find: a point two parts of a line share has the later part's height, a
+        key a centimetre off is found, another kind or line is not, a miss is NaN."""
+        rails = [("a", "rail", "ground", np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])),
+                 ("a", "rail", "bridge", np.array([[2.0, 0.0], [3.0, 0.0]])),
+                 ("a", "rail", "ground", np.array([[2.0, 0.0], [2.5, 0.0]])),
+                 ("b", "rail", "ground", np.array([[1.0, 0.0]]))]
+        xy, off = railprofile._flat(rails)
+        z = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+        groups = {}
+        group = np.array([groups.setdefault((f, k), len(groups)) for f, _c, k, _xy in rails], np.int64)
+        node = (groups, railprofile.fast._ef.rail_node_pack(railprofile._cm(xy), z, off, group, len(groups)))
+        self.assertEqual(railprofile._points(node), 7)
+        q = railprofile._cm(np.array([[2.0, 0.0], [1.0, 0.01], [9.0, 9.0], [0.0, 0.0]]))
+        np.testing.assert_array_equal(railprofile._find(node, "a", "ground", q), [6.0, 2.0, np.nan, 1.0])
+        np.testing.assert_array_equal(railprofile._find(node, "a", "bridge", q), [4.0, np.nan, np.nan, np.nan])
+        np.testing.assert_array_equal(railprofile._find(node, "b", "ground", q), [np.nan, 8.0, np.nan, np.nan])
+        self.assertTrue(np.isnan(railprofile._find(node, "c", "ground", q)).all())
+        self.assertTrue(np.isnan(railprofile._find(railprofile._EMPTY, "a", "ground", q)).all())
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class MeshGraderLatticeTest(unittest.TestCase):
+    """Popoli (42.1712 N 13.8250 E, 2026-11-17): a bridge's track level carried 700 m along the line at 2 % over a valley
+    side, past the nodes' MARGIN_M: the nodes whose window held the bridge laid the ramp, the others the ground, 7 m
+    apart. The mesh blended the nodes of the anchor's lattice, the grader those of its planning region's: the ground was
+    graded 1.4-1.7 m over the track drawn on it and the wagons hit it. The mesh's bed is read from the grader's lattice:
+    the same bed whatever the anchor. (railways.profile stands in here for a window that sees the bridge or not.)"""
+
+    def setUp(self):
+        railprofile._NODES.clear()
+        self.f = features([[(-1500.0, 100.0), (-30.0, 100.0)], [(-30.0, 100.0), (-10.0, 100.0)],
+                           [(-10.0, 100.0), (2500.0, 100.0)]],
+                          ["standard_gauge"] * 3, subtypes=["rail"] * 3, flags=[(1, "is_bridge")])
+        self.load = lambda key: self.f
+        self._cells = railways.cells_near
+        railways.cells_near = lambda frame, box, reach=railways.REACH_M: [0]
+
+    def tearDown(self):
+        railways.cells_near = self._cells
+        railprofile._NODES.clear()
+
+    @staticmethod
+    def profile(rails, ground, underpasses=()):
+        """railways.profile's stand-in: the bed 5 m over the ground in a window that holds the bridge (its ramp), on the
+        ground in one that does not."""
+        up = 5.0 if any(kind == "bridge" for _f, _c, kind, _xy in rails) else 0.0
+        out = []
+        for _f, _c, _kind, xy in rails:
+            zg = np.asarray(ground(xy), np.float64)
+            out.append((zg + up, zg))
+        return out
+
+    def test_the_mesh_has_the_bed_the_ground_is_graded_to(self):
+        import geotiles
+        elev = hill
+        with unittest.mock.patch.object(railways, "profile", self.profile):
+            region = geotiles.region_frame(*geotiles.region_of(FRAME.lat0, FRAME.lon0))
+            # (the grader: grade_plans in its planning region's frame, the DEM's heights)
+            corners = geotiles.world_xy_map(FRAME, region, np.array([[-1600.0, 0.0], [2600.0, 200.0]]))
+            box = (float(corners[:, 0].min()), float(corners[:, 1].min()), float(corners[:, 0].max()),
+                   float(corners[:, 1].max()))
+            plans = railways.grade_plans(region, [self.f], box, elev, load=self.load)
+            # (the mesh: tile_mesh's beds in the anchor's frame, in its heights)
+            rails = railways.parts(FRAME, [self.f], (-1600.0, 0.0, 2600.0, 200.0), clip=True)
+            ground = railways.point_ground(FRAME, elev)
+            prof = railways._beds(FRAME, rails, ground, [], self.load, elev)
+        gxy = np.concatenate([geotiles.world_xy_map(region, FRAME, xy) for _f, xy, _z in plans])
+        gz = np.concatenate([z for _f, _xy, z in plans])
+        worst, mixed = 0.0, 0
+        for (_fid, _c, kind, xy), (zb, _zg) in zip(rails, prof):
+            if kind != "ground":
+                continue
+            m = (xy[:, 0] > 200.0) & (xy[:, 0] < 1000.0)
+            for p, z in zip(xy[m], zb[m]):
+                d = np.hypot(gxy[:, 0] - p[0], gxy[:, 1] - p[1])
+                j = int(np.argmin(d))
+                self.assertLess(float(d[j]), 0.05, "(the grader plans the same stretch)")
+                la, lo, _ = FRAME.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
+                want = float(FRAME.geodetic_to_enu(la, lo, np.array([gz[j]]))[2][0])
+                worst = max(worst, abs(float(z) - want))
+                mixed += 0.5 < float(z) - float(ground(p[None])[0]) < 4.5
+        self.assertGreater(mixed, 20, "(the case: points between the nodes that see the bridge and those that do not)")
+        self.assertLess(worst, 0.01, "the track drawn on the bed the ground is graded to")

@@ -94,8 +94,10 @@ def items_from_layers(frame, layers, hub_xy=(0.0, 0.0), radius=260.0):
             # station group is laid out again in every road tile's frame, ~60k feature dicts for London's 4 groups in
             # 4 tiles, 2026-11-12)
             memo = _item_memo(feats)
-            for i in idx:
-                fid = str(feats.ids[i])
+            ids = [str(feats.ids[i]) for i in idx]
+            batch = len(set(ids)) == len(ids)   # (an id twice in the cell: a row at a time, the later row only read
+            cand = []                           # when the earlier one was not taken)
+            for i, fid in zip(idx, ids):
                 if (name, fid) in seen:
                     continue
                 got = memo.get(i, _MISSING)
@@ -103,16 +105,35 @@ def items_from_layers(frame, layers, hub_xy=(0.0, 0.0), radius=260.0):
                     got = memo[i] = _item_base(feats, name, i, fid)
                 if got is None:
                     continue
-                ring, base = got
-                e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
-                xy = np.column_stack((e, n)).astype(np.float64)
-                if float(dnp.hypot(xy[:, 0] - hx, xy[:, 1] - hy).min()) > radius:
-                    continue
-                seen.add((name, fid))
-                it = dict(base)
-                it["xy"] = xy
-                out.append(it)
+                cand.append((fid, got))
+                if not batch:
+                    _take_near(frame, name, cand, hx, hy, radius, seen, out)
+                    cand = []
+            _take_near(frame, name, cand, hx, hy, radius, seen, out)
     return out
+
+
+def _take_near(frame, name, cand, hx, hy, radius, seen, out):
+    """items_from_layers: the candidates [(id, (lon / lat ring, item base))] of a cell within radius of (hx, hy) as
+    items in frame metres onto out, in order, each id once (seen). Every ring into metres and its distances to the
+    hub in one call each, the points in order: the kernels are per point, the same numbers as a call per feature (a
+    call per feature was 64k hypot calls in a cold Manhattan visit, 2026-11-19)."""
+    if not cand:
+        return
+    rings = [got[0] for _fid, got in cand]
+    e, n, _ = frame.geodetic_to_enu(np.concatenate([r[:, 1] for r in rings]),
+                                    np.concatenate([r[:, 0] for r in rings]), 0.0)
+    ends = np.cumsum([len(r) for r in rings])               # (each ring has a point: _item_base)
+    near = np.minimum.reduceat(dnp.hypot(e - hx, n - hy), np.r_[0, ends[:-1]]).tolist()
+    k = 0
+    for (fid, (_ring, base)), m, d in zip(cand, ends.tolist(), near):
+        lo, k = k, m
+        if d > radius or (name, fid) in seen:
+            continue
+        seen.add((name, fid))
+        it = dict(base)
+        it["xy"] = np.column_stack((e[lo:m], n[lo:m])).astype(np.float64)
+        out.append(it)
 
 
 _MISSING = object()

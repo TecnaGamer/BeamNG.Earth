@@ -431,7 +431,7 @@ end
 M.POS_FILE = '/settings/beamngEarth_lastpos.json'
 M.POS_EVERY_S = 60
 M.POS_MOVE_M = 100
-local lastPos = nil         -- { lat, lon } as last read or written
+local lastPos = nil         -- { lat, lon, heading? } as last read or written (heading: degrees clockwise from true north)
 local posRead = false
 local posWrittenAt = -math.huge
 
@@ -442,15 +442,23 @@ function M.lastPosition()
     local ok, data = pcall(function() return read and read(M.POS_FILE) end)
     if ok and type(data) == 'table' then
       local lat, lon = validLatLon(data.lat, data.lon)
-      if lat then lastPos = { lat = lat, lon = lon } end
+      if lat then lastPos = { lat = lat, lon = lon, heading = M.validHeading(data.heading) } end
     end
   end
   return lastPos
 end
 
--- The car at (lat, lon) now (clock: seconds, any monotonic clock); force: write whatever the time and distance.
--- Returns whether it wrote.
-function M.notePosition(lat, lon, clock, force)
+-- A heading in degrees clockwise from true north, [0, 360), or nil (not a finite number).
+function M.validHeading(h)
+  h = tonumber(h)
+  if not h or h ~= h or h == math.huge or h == -math.huge then return nil end
+  return h % 360
+end
+
+-- The car at (lat, lon) now, facing heading (degrees clockwise from true north, or nil: not known; the user,
+-- 2026-11-15: "also save and load your cars rotation"); clock: seconds, any monotonic clock; force: write whatever the
+-- time and distance. Returns whether it wrote.
+function M.notePosition(lat, lon, clock, force, heading)
   lat, lon = validLatLon(lat, lon)
   if not lat then return false end
   local prev = M.lastPosition()
@@ -461,6 +469,8 @@ function M.notePosition(lat, lon, clock, force)
   local write = rawget(_G, 'jsonWriteFile')
   if not write then return false end
   local e = { lat = round6(lat), lon = round6(lon) }
+  heading = M.validHeading(heading)
+  if heading then e.heading = math.floor(heading * 10 + 0.5) / 10 % 360 end   -- (0.1 degree)
   local ok, err = pcall(write, M.POS_FILE, e, true)
   if not ok or err == false then return false end
   lastPos, posWrittenAt = e, clock or posWrittenAt

@@ -27,6 +27,7 @@ import cdae
 import heightmap
 import portals
 import shells
+import roadshape as _roadshape
 
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
 # Metres above the physics ground, which grading.ROAD_LIFT raises under roads.
@@ -45,6 +46,25 @@ LIFT = {"base": 0.0, "edge": 0.001, "gutter": 0.0015, "mark": 0.002, "frontage":
 # at FOLLOW_TOL, +9k at 4 cm. The spots (small quads) keep FOLLOW_TOL.
 WEAR_STRIPS = ("wear", "wear2")
 WEAR_TOL = float(os.environ.get("BNE_WEAR_TOL", "0.02"))
+# The road revamp v2's surface overlays (P1c, BNE_SURFACE_V2; .claude/work/road-revamp-v2-road-shape-first-2026-11-19.md
+# section 2.7 and its addendum): the stock maps' markings float ~5 mm over their road (Italy's mesh lines 4.9 mm p50),
+# so the overlays here sit a few mm up, markings 5 mm, tyre wear 4 mm, edge blends 2.5 mm, the surface variation
+# (roadwear.surface_chunks) 3 mm; the mesh's draw order does the layering (their materials write no depth: v2_rank).
+# An overlay triangle the ground follow leaves whole is raised where the drawn ground bulges inside it, so the ground
+# stays MARK_MIN_M under every overlay (follow_ground's clear: with fewer rows than the terrain the paint sagged into it,
+# 6.9 mm deep at Fells Point with the 2 mm lift, markprobe.py); cutting those triangles along the terrain's instead was
+# 7x the triangles (the 1/512 m height steps bulge nearly every square). Off: today's lifts and tolerances.
+SURFACE_V2 = os.environ.get("BNE_SURFACE_V2", "off").strip().lower() in ("on", "1", "yes", "true")
+MARK_MIN_M = 0.0021     # m an overlay keeps over the drawn ground (markprobe's 2 mm and a margin)
+LIFT_V2 = {"var": 0.0030, "patch": 0.0034, "spot": 0.0036, "edge": 0.0025, "gutter": 0.0028, "wear": 0.0040,
+           "wear2": 0.0042, "wline": 0.0044, "mark": 0.0050}
+if SURFACE_V2:
+    LIFT.update(LIFT_V2)
+# the v2 draw order (build: one primitive per material, the list's order), by material: the dirt strips and the
+# frontage first, then the variation, the patches and spots, the wear, crack lines and edge blends, the markings last
+V2_ORDER_VAR = ("bne_wear_var_",)
+V2_ORDER_PATCH = ("bne_wear_patch", "bne_spot_")
+V2_ORDER_WEAR = ("bne_wear_", "bne_crack_line", "bne_edge_", "ECA_road_edge_", "m_road_edge_")
 FRONTAGE_ASPHALT = "bne_eu_frontage_asphalt"
 FRONTAGE_REPEAT_M = 5.
 FRONTAGE_TERRAIN_REPEAT_M = 4.
@@ -166,6 +186,19 @@ def layer_of(chunk):
     return "base"
 
 
+def v2_rank(m):
+    """The v2 draw rank of material m (0 first: SURFACE_V2's order)."""
+    if m.startswith("bne_dirt_") or m == FRONTAGE_ASPHALT:
+        return 0
+    if m.startswith(V2_ORDER_VAR):
+        return 1
+    if m.startswith(V2_ORDER_PATCH):
+        return 2
+    if m.startswith(V2_ORDER_WEAR):
+        return 3
+    return 4
+
+
 def _resample(pts, step, keep_vertices=False, corner_half=0.0):
     """Points every `step` m along a polyline (k, 3), ends kept: (xy (m, 2), distance (m,), z (m,))."""
     seg = dnp.hypot(*np.diff(pts[:, :2], axis=0).T)
@@ -194,8 +227,8 @@ def _resample(pts, step, keep_vertices=False, corner_half=0.0):
                 reach = corner_half * np.sqrt((1 - cos[j]) / (1 + cos[j]))
                 keep &= original | (np.abs(t - s[j + 1]) >= reach + 1e-8)
             t = t[keep]
-    return (np.stack([np.interp(t, s, pts[:, 0]), np.interp(t, s, pts[:, 1])], axis=1), t,
-            np.interp(t, s, pts[:, 2]))
+    return (np.stack([dnp.interp(t, s, pts[:, 0]), dnp.interp(t, s, pts[:, 1])], axis=1), t,
+            dnp.interp(t, s, pts[:, 2]))
 
 
 def _normals(xy):
@@ -236,14 +269,21 @@ def ribbons(chunks, keep_none=False):
             continue
         if c.get("deck") and c.get("fixed"):
             corner_half = float(np.max(c.get("ws", c["w"]))) / 2 + PARAPET_W
-            xy, s, z = _resample(p, DRAPE_STEP, keep_vertices=True, corner_half=corner_half)
+            # (a shaped deck's rows are its own knots, already by the chord rule: roadshape, "kr")
+            xy, s, z = _resample(p, math.inf if c.get("kr") else DRAPE_STEP, keep_vertices=True,
+                                 corner_half=corner_half)
             if len(xy) < 2:
                 continue
             hw = float(c["w"]) / 2
             if c.get("ws") is not None and len(c["ws"]) == len(p):     # (tapering: roads.deck_width_fn)
                 s0 = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(p[:, :2], axis=0).T))]
-                hw = (np.interp(s - s[0], s0, np.asarray(c["ws"], np.float64)) / 2)[:, None]
+                hw = (dnp.interp(s - s[0], s0, np.asarray(c["ws"], np.float64)) / 2)[:, None]
             n = _normals(xy) * hw
+            if c.get("sk0") is not None or c.get("sk1") is not None:     # (roadshape: a shaped deck's skewed ends)
+                left, right = skew_ends(xy, n, c.get("sk0"), c.get("sk1"))
+                out[k] = (left, right, s / float(c.get("tl") or 10.0), c["m"], layer_of(c), z)
+                LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
+                continue
             out[k] = (xy + n, xy - n, s / float(c.get("tl") or 10.0), c["m"], layer_of(c), z)
             LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
             continue
@@ -266,6 +306,89 @@ def ribbons(chunks, keep_none=False):
     return out if keep_none else [r for r in out if r is not None]
 
 
+def _bank_rows(c, k):
+    """A shaped deck chunk's cross slope per ribbon row (roadshape "bk": one per node, its rows its nodes, "kr"), or
+    None."""
+    bk = c.get("bk")
+    if bk is None or len(bk) != k:
+        return None
+    return np.asarray(bk, np.float64)
+
+
+def tilted(left, right, z, bk, pts):
+    """Heights at points pts (k, 2) beside a fixed deck ribbon's rows (edges left / right (k, 2), centre heights z):
+    z + bk x each point's offset to the left of the row's centre line (bk: the cross slope, m per m toward the left;
+    grading.bank's sign: + raises the left). Pure."""
+    mid, d = _row_dirs(left, right)
+    off = d[:, 0] * (pts[:, 1] - mid[:, 1]) - d[:, 1] * (pts[:, 0] - mid[:, 0])
+    return z + bk * off
+
+
+def _row_dirs(left, right):
+    """A ribbon's row centres (k, 2) and the unit direction of its centre line at each (central differences, one-sided
+    at the ends). Pure."""
+    mid = (left + right) * 0.5
+    d = np.empty_like(mid)
+    if len(mid) > 2:
+        d[1:-1] = mid[2:] - mid[:-2]
+    d[0] = mid[1] - mid[0]
+    d[-1] = mid[-1] - mid[-2]
+    return mid, d / np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+
+
+SKEW_MIN_COS = 0.2      # an end line nearer than this (cos) to the ribbon's own direction is left square
+
+
+def clamp_to_end(mid, left, right, e, p, d):
+    """A ribbon's rows (centres mid, edges left / right (k, 2)) whose edge points lie past the end line through p
+    along d (unit), beyond the row at end e (0 or -1), moved along the ribbon onto it: a skewed end row pulled in past
+    them folded the ribbon there (roadshape, BNE_ROADSHAPE=decks). In place; stops at the first row inside."""
+    k = len(mid)
+    if k < 2:
+        return
+    inner = mid[1] if e == 0 else mid[-2]
+    side = d[0] * (inner[1] - p[1]) - d[1] * (inner[0] - p[0])
+    if abs(side) < 1e-9:
+        return
+    rows = range(1, k) if e == 0 else range(k - 2, -1, -1)
+    for i in rows:
+        moved = False
+        for edge in (left, right):
+            q = edge[i]
+            sq = d[0] * (q[1] - p[1]) - d[1] * (q[0] - p[0])
+            if sq * side >= 0:
+                continue
+            j0, j1 = max(0, i - 1), min(k - 1, i + 1)
+            t = mid[j1] - mid[j0]                       # (along the ribbon there)
+            den = d[0] * t[1] - d[1] * t[0]
+            if abs(den) > 1e-12:
+                edge[i] = q - t * (sq / den)
+            moved = True
+        if not moved:
+            return
+
+
+def skew_ends(xy, nrm, sk0, sk1):
+    """A fixed deck ribbon's edges (centres xy, miter normals nrm scaled to the half width) with each skewed end row
+    along its end line (sk0 / sk1: unit, toward the deck's left; None: square), the rows it passes clamped to it
+    (clamp_to_end). (left, right)."""
+    left, right = xy + nrm, xy - nrm
+    for e, d in ((0, sk0), (-1, sk1)):
+        if d is None:
+            continue
+        d = np.asarray(d, np.float64)
+        hw = float(dnp.hypot(nrm[e, 0], nrm[e, 1]))
+        if hw <= 1e-9:
+            continue
+        c = float(d[0] * nrm[e, 0] + d[1] * nrm[e, 1]) / hw
+        if c < SKEW_MIN_COS:
+            continue
+        left[e] = xy[e] + d * (hw / c)
+        right[e] = xy[e] - d * (hw / c)
+        clamp_to_end(xy, left, right, e, xy[e], d)
+    return left, right
+
+
 def _ribbon_v(s, c):
     """v along a ribbon: s (m along the chunk) over its texture length. A dirt or gravel strip's chunk carries s0 / s1,
     m along its whole road to its ends (roads._surface_pieces): v is that distance, so the ruts run on across a tile's
@@ -280,6 +403,12 @@ def _ribbon_v(s, c):
 TRIM_DZ = (0.3, 4.5)                # m: another deck overlapping a deck in plan this far above or below it (two
                                     # surfaces, too near to pass over it: a ramp leaving its mainline) ...
 TRIM_GAP_M = 0.05                   # ... each slab ends this short of halfway between their centre lines
+# ... and runs along it: within TRIM_ALONG_DEG of the deck's own way (a ramp leaving or joining it). A deck crossing it
+# passes over or under: a farm track's bridge 4.1 m under the B 254's at Trutzhain (50.8968, 9.2746) had both edges of
+# the B 254 cut to a tenth of its half width round the crossing point, a 4 m deep hole across both lanes; the autodrive
+# fell into it at 80 km/h on two survey drives (2026-11-15/16).
+TRIM_ALONG_DEG = 30.0
+TRIM_ALONG_COS = dmath.cos(math.radians(TRIM_ALONG_DEG))
 
 # Short, connected bridge forks need a common two-dimensional surface. Three independently sloped, flat-width
 # ribbons can start at one height and still overlap by tens of centimetres a few metres later. Keep the longitudinal
@@ -647,11 +776,12 @@ def trim_overlaps(rb, context=(), shared=None):
     higher one from PARAPET_COVER_DZ apart), each road on its own surface, instead of the higher one's side standing in
     the lower one's lanes, and a car on the lower one's line riding the higher one's slab until it ends: a
     US-101 exit ramp diverging downhill under its mainline's 18.8 m deck put that deck's edge 0.9 m from the ramp's
-    centre, and an AI car drove into it at 29 mph (Los Angeles, 2026-10-27). Pure."""
+    centre, and an AI car drove into it at 29 mph (Los Angeles, 2026-10-27). Only a deck running along it (within
+    TRIM_ALONG_DEG) trims it: one crossing it at another height is an overpass, not a gore. Pure."""
     if not rb:
         return rb
     import fast
-    fast.require(235, "deck_trim_overlaps")
+    fast.require(373, "deck_trim_overlaps")
     # (the cuts are native: earthfast deck_trim_overlaps, meshtrim.rs; each deck against every other deck near it was
     # a numpy round of a few rows, hundreds a tile)
     owners, groups, lefts, rights, zs, lens, own_in, targets = {}, {}, [], [], [], [], [], []
@@ -680,7 +810,7 @@ def trim_overlaps(rb, context=(), shared=None):
         np.ascontiguousarray(np.concatenate(lefts)), np.ascontiguousarray(np.concatenate(rights)),
         np.ascontiguousarray(np.concatenate(zs)), np.r_[0, np.cumsum(lens)].astype(np.int64),
         np.array(oid, np.int64), np.array(gid, np.int64), np.array(sh, bool), np.array(targets, np.int64),
-        np.array([TRIM_DZ[0], TRIM_DZ[1], TRIM_GAP_M, 1.0 if shared else 0.0], np.float64))
+        np.array([TRIM_DZ[0], TRIM_DZ[1], TRIM_GAP_M, 1.0 if shared else 0.0, TRIM_ALONG_COS], np.float64))
     out = []
     at = 0
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
@@ -698,6 +828,162 @@ def trim_overlaps(rb, context=(), shared=None):
         tl = np.minimum(tl, 0.9 * hw)           # (never past the centre line: at least a tenth of the deck stays)
         tr = np.minimum(tr, 0.9 * hw)
         out.append(((left - u * tl[:, None], right + u * tr[:, None], v, m, layer, z), c))
+    return out
+
+
+def _seg_gap(a, b, c, d):
+    """The plan distance between the segments a-b and c-d (2,). Pure."""
+    def side(p, q, r):
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+
+    def to(p, q, r):
+        e = q - p
+        t = min(1.0, max(0.0, float(((r - p) * e).sum()) / max(float((e * e).sum()), 1e-12)))
+        return float(dnp.hypot(*(r - p - t * e)))
+    if side(a, b, c) * side(a, b, d) < 0 and side(c, d, a) * side(c, d, b) < 0:
+        return 0.0
+    return min(to(a, b, c), to(a, b, d), to(c, d, a), to(c, d, b))
+
+
+def _in_slab(left, right, pts):
+    """Which of the points pts (n, 2) lie over the ribbon's road (the quads between its rows' edges). Pure."""
+    quads_ = np.stack([left[:-1], right[:-1], right[1:], left[1:]], 1)           # (k - 1, 4, 2)
+    e = np.roll(quads_, -1, axis=1) - quads_
+    delta = pts[:, None, None, :] - quads_[None]
+    cross = e[None, ..., 0] * delta[..., 1] - e[None, ..., 1] * delta[..., 0]     # (n, k - 1, 4)
+    return ((cross >= -1e-9).all(2) | (cross <= 1e-9).all(2)).any(1)
+
+
+def _top_at(left, right, z, bk, field, pts, gap=False):
+    """The top of a deck ribbon at the plan points pts (n, 2): its junction field's, else its rows' height at the point's
+    foot on the centre line (rows interpolated along it), each row's height at the point z + bk x the point's offset
+    to the left of that row (tilted()), the ends continued at their grade. gap: also each point's distance to the
+    centre line. Pure."""
+    if field is not None:
+        return field.at(pts)
+    mid, d = _row_dirs(left, right)
+    a, e = mid[:-1], np.diff(mid, axis=0)
+    raw = ((pts[:, None] - a) * e).sum(2) / np.maximum((e * e).sum(1), 1e-12)
+    t = np.clip(raw, 0, 1)
+    j = np.argmin(dnp.norm(pts[:, None] - a - t[:, :, None] * e, axis=2), axis=1)
+    at = np.arange(len(pts))
+    # (past an end the last segment goes on at its grade, as _JunctionSurface._height continues an approach)
+    f = np.where(((j == 0) & (raw[at, j] < 0)) | ((j == len(e) - 1) & (raw[at, j] > 1)), raw[at, j], t[at, j])
+    h = np.broadcast_to(z, (len(pts), len(z)))
+    if bk is not None:
+        off = d[:, 0] * (pts[:, 1:2] - mid[:, 1]) - d[:, 1] * (pts[:, 0:1] - mid[:, 0])
+        h = h + bk * off
+    top = h[at, j] + f * (h[at, j + 1] - h[at, j])
+    if not gap:
+        return top
+    return top, dnp.norm(pts - (a[j] + t[at, j][:, None] * e[j]), axis=1)
+
+
+def camber_joints(rb, context=(), shared=None):
+    """The deck ribbons rb ([(ribbon, chunk)], after trim_overlaps) with a deck that meets a longer one at a joint (an
+    end row of each within JUNCTION_JOIN_M in plan, their heights there within JUNCTION_JOIN_Z_M) taking the longer
+    one's top where the two lie over each other at nearly one height (under TRIM_DZ[0]: trim_overlaps leaves those
+    alone): the shorter deck's rows get the longer's height at their centres and its cross slope across their width (the
+    chunk's "bk", read by tilted()), so its slab, its skin and its parapets follow the segment going on, not a flat
+    fan of their own beside it, a step along the seam. Past the overlap the rows ease back to their own heights over
+    JUNCTION_PIN_R_M of the deck's length. The longer deck is left as it is, and a deck on a junction field (shared:
+    by fid) is, as its partner's surface. What lies on a moved deck (its sidewalks and markings: ribbons of its fid that
+    are no deck) moves with its top. The context (the decks around the tile) supplies partners. Pure."""
+    shared = shared or {}
+    items = list(rb) + list(context)
+
+    def eligible(r, c):
+        return (r[5] is not None and c.get("deck") and not c.get("tunnel") and len(r[0]) >= 2
+                and np.isfinite(np.asarray(r[5], np.float64)).all())
+    ok = [eligible(r, c) for r, c in items]
+    if not any(ok[:len(rb)]):
+        return list(rb)
+    ends, ends_of, half = [], [], []
+    length = []
+    for n, (r, c) in enumerate(items):
+        if not ok[n]:
+            length.append(0.0)
+            continue
+        left, right = np.asarray(r[0], np.float64), np.asarray(r[1], np.float64)
+        mid = (left + right) / 2
+        length.append(float(dnp.hypot(*np.diff(mid, axis=0).T).sum()))
+        for e in (0, -1):
+            ends.append(mid[e])
+            ends_of.append((n, e))
+            half.append(float(dnp.hypot(*(left[e] - right[e]))) / 2)
+    ends, half = np.asarray(ends), np.asarray(half)
+    near = dnp.hypot(ends[:, None, 0] - ends[None, :, 0], ends[:, None, 1] - ends[None, :, 1]) \
+        <= half[:, None] + half[None, :] + JUNCTION_JOIN_M
+    partners = {}                       # target index -> the longer decks it meets at a joint
+    for p, q in zip(*np.nonzero(near)):
+        (a, ea), (b, eb) = ends_of[p], ends_of[q]
+        if a >= len(rb) or a == b or length[b] <= length[a]:
+            continue
+        ca, cb = items[a][1], items[b][1]
+        if ca.get("fid") is not None and ca.get("fid") == cb.get("fid"):
+            continue
+        if ca.get("fid") in shared:
+            continue
+        ra, rb_ = items[a][0], items[b][0]
+        if abs(float(ra[5][ea]) - float(rb_[5][eb])) > JUNCTION_JOIN_Z_M:
+            continue
+        if _seg_gap(np.asarray(ra[0][ea], np.float64), np.asarray(ra[1][ea], np.float64),
+                    np.asarray(rb_[0][eb], np.float64), np.asarray(rb_[1][eb], np.float64)) <= JUNCTION_JOIN_M:
+            partners.setdefault(a, set()).add(b)
+    out = list(rb)
+    moved = {}
+    for a, bs in partners.items():
+        r, c = items[a]
+        left, right, z = (np.asarray(r[0], np.float64), np.asarray(r[1], np.float64),
+                          np.asarray(r[5], np.float64).reshape(-1))
+        k = len(z)
+        mid = (left + right) / 2
+        width = np.maximum(dnp.hypot(*(left - right).T), 1e-9)
+        arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
+        own_bk = _bank_rows(c, k)
+        own_bk = np.zeros(k) if own_bk is None else own_bk
+        best, zc, bkc = np.zeros(k), z.copy(), own_bk.copy()
+        for b in sorted(bs, key=lambda i: -length[i]):
+            rb_, cb = items[b]
+            bl, br, bz = (np.asarray(rb_[0], np.float64), np.asarray(rb_[1], np.float64),
+                          np.asarray(rb_[5], np.float64).reshape(-1))
+            field = shared.get(cb.get("fid"))
+            bbk = _bank_rows(cb, len(bz)) if field is None else None
+            over = _in_slab(bl, br, np.concatenate([mid, left, right]))
+            over = (over[:k] | over[k:2 * k] | over[2 * k:])
+            hm = _top_at(bl, br, bz, bbk, field, mid)
+            like = np.abs(z - hm) < TRIM_DZ[0]
+            src = over & like
+            if not src.any():
+                continue
+            gap = np.abs(arc[:, None] - arc[src][None]).min(1)
+            w = np.clip(1.0 - gap / JUNCTION_PIN_R_M, 0.0, 1.0)
+            w = np.where(src, 1.0, w * w * (3 - 2 * w)) * like
+            hl, hr = _top_at(bl, br, bz, bbk, field, left), _top_at(bl, br, bz, bbk, field, right)
+            take = w > best
+            zc[take] = z[take] + w[take] * (hm[take] - z[take])
+            slope = (hl - hr) / width
+            bkc[take] = own_bk[take] + w[take] * (slope[take] - own_bk[take])
+            best = np.where(take, w, best)
+        if best.any():
+            out[a] = ((r[0], r[1], r[2], r[3], r[4], zc), {**c, "bk": bkc.tolist()})
+            moved[a] = ((left, right), z, _bank_rows(c, k), zc, bkc)
+    # what lies on a deck that moved (its sidewalks and markings: ribbons of its fid on fixed heights, not decks
+    # themselves) moves with the deck's top at its rows by as much as the top moved there
+    for n, (r, c) in enumerate(rb):
+        if r[5] is None or c.get("deck") or len(r[0]) < 2 or c.get("fid") is None:
+            continue
+        pts = (np.asarray(r[0], np.float64) + np.asarray(r[1], np.float64)) / 2
+        best_gap, shift = np.inf, None
+        for a, ((left, right), z, bk, zc, bkc) in moved.items():
+            if items[a][1].get("fid") != c.get("fid"):
+                continue
+            was, gap = _top_at(left, right, z, bk, None, pts, gap=True)
+            now = _top_at(left, right, zc, bkc, None, pts)
+            if gap.min() < best_gap:
+                best_gap, shift = gap.min(), now - was
+        if shift is not None and np.abs(shift).max() > 0:
+            out[n] = ((r[0], r[1], r[2], r[3], r[4], np.asarray(r[5], np.float64) + shift), c)
     return out
 
 
@@ -775,6 +1061,13 @@ def _reach_past(c, box):
     if ends[1] is not None:
         n.append(ends[1][None])
     out = {**c, "n": np.concatenate(n).tolist()}
+    if c.get("bk") is not None:     # (roadshape: a banked deck's slope per node, the new nodes the ends')
+        bk = list(c["bk"])
+        out["bk"] = ([bk[0]] if ends[0] is not None else []) + bk + ([bk[-1]] if ends[1] is not None else [])
+    for e, got in ((0, ends[0]), (1, ends[1])):
+        if got is not None:         # (an end carried past the tile's edge is a cut, never the deck's skewed / buried end)
+            out.pop(f"sk{e}", None)
+            out.pop(f"ov{e}", None)
     if c.get("s0") is not None and c.get("s1") is not None:    # (a strip's distance along its road: the same reach)
         out["s0"] = float(c["s0"]) - (reach if ends[0] is not None else 0.0)
         out["s1"] = float(c["s1"]) + (reach if ends[1] is not None else 0.0)
@@ -891,17 +1184,24 @@ def road_tol(q):
     return min(FOLLOW_TOL, max(FOLLOW_TOL_MIN, 2.5 * float(q)))
 
 
-def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None):
+def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None, clear=None):
     """(points (m, 3), uvs, triangles, source triangle) of the triangles T over P (n, 2) on the drawn ground (grid:
-    _height_grid), held down in the cells holding a step (FOLLOW_STEP_M, or step_m): earthfast.follow_tris."""
+    _height_grid), held down in the cells holding a step (FOLLOW_STEP_M, or step_m): earthfast.follow_tris. clear: a
+    triangle left whole is raised (per input point) so that the ground stands at most this over it (None: not)."""
     import fast
     tol = FOLLOW_TOL if tol is None else tol
     P = np.ascontiguousarray(np.asarray(P, np.float64)[:, :2])
     UV = np.ascontiguousarray(UV, np.float64)
     T = np.ascontiguousarray(T, np.int64)
-    fast.require(52, "follow_tris")
-    a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0), int(j0),
-                                      float(tol), FOLLOW_STEP_M if step_m is None else float(step_m), FOLLOW_MAX_UP)
+    step = FOLLOW_STEP_M if step_m is None else float(step_m)
+    if clear is None:
+        fast.require(52, "follow_tris")
+        a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0),
+                                          int(j0), float(tol), step, FOLLOW_MAX_UP)
+    else:
+        fast.require(499, "follow_tris clear")
+        a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0),
+                                          int(j0), float(tol), step, FOLLOW_MAX_UP, float(clear))
     return np.asarray(a), np.asarray(b), np.asarray(c), np.asarray(d)
 
 
@@ -1091,7 +1391,11 @@ def _overlays_on_decks(rbc):
         if r[5] is not None and r[4] == "base" and c.get("deck"):
             mid = (np.asarray(r[0]) + np.asarray(r[1])) * 0.5
             hw = dnp.hypot(*(np.asarray(r[0]) - np.asarray(r[1])).T) * 0.5
-            base.setdefault(c.get("fid"), []).append((np.c_[mid, np.asarray(r[5], np.float64)], hw))
+            entry = (np.c_[mid, np.asarray(r[5], np.float64)], hw)
+            bk = _bank_rows(c, len(mid))
+            if bk is not None:              # (roadshape: a banked deck's tilt, for the markings on it)
+                entry = entry + (bk,)
+            base.setdefault(c.get("fid"), []).append(entry)
     if not base:
         return rbc
     out = []
@@ -1106,7 +1410,7 @@ def _overlays_on_decks(rbc):
         bz = np.full(len(mid), np.nan)
         bd = np.full(len(mid), np.inf)
         own = c.get("fid") in base
-        for ln, hw in lines:
+        for ln, hw, *bkl in lines:
             if len(ln) < 2:
                 continue
             a, b = ln[:-1, :2], ln[1:, :2]
@@ -1122,6 +1426,10 @@ def _overlays_on_decks(rbc):
             seg_len = np.sqrt(L2[j])
             past = ((j == 0) & (t[k, j] * seg_len < -OVERLAY_DECK_END_M)) |                    ((j == len(ab) - 1) & ((t[k, j] - 1.0) * seg_len > OVERLAY_DECK_END_M))
             zz = ln[j, 2] + tc[k, j] * (ln[j + 1, 2] - ln[j, 2])
+            if bkl:                             # (on a banked deck: its tilt at the section's offset)
+                bk = bkl[0]
+                off = (ab[j, 0] * (mid[:, 1] - a[j, 1]) - ab[j, 1] * (mid[:, 0] - a[j, 0])) / seg_len
+                zz = zz + (bk[j] + tc[k, j] * (bk[j + 1] - bk[j])) * off
             wide = np.maximum(hw[j], hw[np.minimum(j + 1, len(hw) - 1)]) + OVERLAY_DECK_END_M
             better = (d[k, j] < bd) & ~past & (d[k, j] <= wide)      # (on the deck surface as drawn: within its half width)
             bz[better], bd[better] = zz[better], d[k, j][better]
@@ -1144,6 +1452,76 @@ def _overlays_on_decks(rbc):
         if b_ - a_ >= 2:
             out.append(((left[a_:b_], right[a_:b_], v[a_:b_], m, layer, bz[a_:b_]), c))
     return out
+
+
+def _weld_clamp(left, right, e):
+    """A ground ribbon's end row welded to a deck end (build): its other rows clamped to that end line
+    (clamp_to_end). In place."""
+    d = left[e] - right[e]
+    ln = float(dnp.hypot(d[0], d[1]))
+    if ln <= 1e-9:
+        return
+    clamp_to_end((left + right) * 0.5, left, right, e, (left[e] + right[e]) * 0.5, d / ln)
+
+
+def _f64_pairs(rs):
+    """Every ribbon of rs (left, right, ...) a float64 (k, 2) pair (its rows batched as one array: the same numbers)."""
+    return all(type(a) is np.ndarray and a.dtype == np.float64 and a.ndim == 2 and a.shape[1] == 2
+               for r in rs for a in (r[0], r[1]))
+
+
+def _to_points(ab, m):
+    """The distances (len(m), len(ab)) from each point of m to each of ab, a row each, in one call."""
+    return dnp.hypot(ab[None, :, 0] - m[:, None, 0], ab[None, :, 1] - m[:, None, 1])
+
+
+_TO_POINTS_MAX = 1 << 16                        # (distances a _to_points call takes at most: a bounded buffer)
+
+
+def _chunks(n, ab):
+    step = max(1, _TO_POINTS_MAX // max(len(ab), 1))
+    return ((a, min(a + step, n)) for a in range(0, n, step))
+
+
+def _end_rows(rs, ab):
+    """build's ground ribbons rs, one (first point's mid distances to the deck ends ab, last point's, first point's
+    width, last's) after another, in rs's order (a call per quantity for a chunk of ribbons); None without them or
+    with a pair not float64 (k, 2) (a call each)."""
+    if not rs or not _f64_pairs(rs):
+        return None
+
+    def rows():
+        for a, b in _chunks(len(rs), ab):
+            l0, r0 = np.array([r[0][0] for r in rs[a:b]]), np.array([r[1][0] for r in rs[a:b]])
+            l1, r1 = np.array([r[0][-1] for r in rs[a:b]]), np.array([r[1][-1] for r in rs[a:b]])
+            yield from zip(_to_points(ab, (l0 + r0) * 0.5), _to_points(ab, (l1 + r1) * 0.5),
+                           dnp.hypot(*(l0 - r0).T).tolist(), dnp.hypot(*(l1 - r1).T).tolist())
+    return rows()
+
+
+def _ground_runs(rs, ab):
+    """build's ground ribbons rs, one (lengths along the mid line from its start, its start's distance to the nearest
+    deck end of ab, its end's) after another in rs's order (a call per quantity for a chunk of ribbons); None as
+    _end_rows."""
+    if not rs or not _f64_pairs(rs):
+        return None
+
+    def runs():
+        for a, b in _chunks(len(rs), ab):
+            part = rs[a:b]
+            lens = [len(r[0]) for r in part]
+            mid = (np.concatenate([r[0] for r in part]) + np.concatenate([r[1] for r in part])) * 0.5
+            ends = np.cumsum(lens)
+            starts = ends - lens
+            inner = np.ones(len(mid), bool)     # (each ribbon's own legs only: none from one ribbon to the next)
+            inner[starts] = False
+            legs = np.flatnonzero(inner)
+            d = mid[legs] - mid[legs - 1]
+            seg = dnp.hypot(d[:, 0], d[:, 1])
+            d0, d1 = _to_points(ab, mid[starts]).min(1), _to_points(ab, mid[ends - 1]).min(1)
+            for i, (s0, s1, x0, x1) in enumerate(zip(starts.tolist(), ends.tolist(), d0, d1)):
+                yield np.r_[0.0, np.cumsum(seg[s0 - i:s1 - i - 1])], x0, x1
+    return runs()
 
 
 @profile_step('Road mesh generation')
@@ -1173,6 +1551,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     if any(r[5] is not None for r, _c in rbc):  # (trimmed as deck() trims their slabs: context, the decks around)
         ctx = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
         rbc = list(trim_overlaps(rbc, ctx, junctions))
+        rbc = camber_joints(rbc, ctx, junctions)
     if shells.ON:           # (the overlays on decks follow the deck surface and stop at its end: PR #987)
         rbc = _overlays_on_decks(rbc)
     # (each deck end with its layer and width: a ground ribbon's end takes the edges of a deck end of its own layer and
@@ -1199,29 +1578,40 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             return None
         return int(np.where(ok, d, np.inf).argmin())
     if len(deck_abuts):
+        # (every ground ribbon's end distances and widths in one call each where all are float64 pairs, the rows the
+        # ribbons' own numbers: a few calls per ribbon were 26k hypot calls in a cold Manhattan visit, 2026-11-19)
+        ends_of = _end_rows([r for r, _c in rbc if r[5] is None and len(r[0]) >= 2], ab_pts)
         new_rbc = []
         for r, c in rbc:
             if r[5] is None and len(r[0]) >= 2:
                 left, right, v, m, layer, fz = r
                 left, right = left.copy(), right.copy()
-                mid0 = (left[0] + right[0]) * 0.5
-                mid1 = (left[-1] + right[-1]) * 0.5
-                d0 = dnp.hypot(ab_pts[:, 0] - mid0[0], ab_pts[:, 1] - mid0[1])
-                d1 = dnp.hypot(ab_pts[:, 0] - mid1[0], ab_pts[:, 1] - mid1[1])
-                hit0 = _abut(d0, layer, float(dnp.hypot(*(left[0] - right[0]))))
-                hit1 = _abut(d1, layer, float(dnp.hypot(*(left[-1] - right[-1]))))
+                if ends_of is not None:
+                    d0, d1, w0, w1 = next(ends_of)
+                else:
+                    mid0 = (left[0] + right[0]) * 0.5
+                    mid1 = (left[-1] + right[-1]) * 0.5
+                    d0 = dnp.hypot(ab_pts[:, 0] - mid0[0], ab_pts[:, 1] - mid0[1])
+                    d1 = dnp.hypot(ab_pts[:, 0] - mid1[0], ab_pts[:, 1] - mid1[1])
+                    w0, w1 = float(dnp.hypot(*(left[0] - right[0]))), float(dnp.hypot(*(left[-1] - right[-1])))
+                hit0 = _abut(d0, layer, w0)
+                hit1 = _abut(d1, layer, w1)
                 if hit0 is not None:
                     _, l_ab, r_ab = deck_abuts[hit0][:3]
                     if (dnp.hypot(*(left[0] - l_ab)) + dnp.hypot(*(right[0] - r_ab))) <= (dnp.hypot(*(left[0] - r_ab)) + dnp.hypot(*(right[0] - l_ab))):
                         left[0], right[0] = l_ab, r_ab
                     else:
                         left[0], right[0] = r_ab, l_ab
+                    if _roadshape.DECKS:            # (a skewed deck end: the ground's rows it passes clamped to it)
+                        _weld_clamp(left, right, 0)
                 if hit1 is not None:
                     _, l_ab, r_ab = deck_abuts[hit1][:3]
                     if (dnp.hypot(*(left[-1] - l_ab)) + dnp.hypot(*(right[-1] - r_ab))) <= (dnp.hypot(*(left[-1] - r_ab)) + dnp.hypot(*(right[-1] - l_ab))):
                         left[-1], right[-1] = l_ab, r_ab
                     else:
                         left[-1], right[-1] = r_ab, l_ab
+                    if _roadshape.DECKS:
+                        _weld_clamp(left, right, -1)
                 new_rbc.append(((left, right, v, m, layer, fz), c))
             else:
                 new_rbc.append((r, c))
@@ -1251,17 +1641,22 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     TL = []                                     # per triangle: its layer's lift over the ground (None: on a deck)
     RI = []                                     # per triangle: its ribbon (-1: a filled polygon), for the fade uv
     RW = []                                     # per triangle: a raceway's (no step cap: follow_ground, below)
-    rpar = []                                   # per ribbon: _fade_uv's (feather share, tl, tu, slen, open ends)
+    rpar = []                                   # per ribbon: _fade_uv's (feather share, tl, tu, slen, open ends, end fade)
     k0 = nverts = 0
+    # (the ground ribbons' lengths along and end distances to the deck ends, one call each as above)
+    runs = _ground_runs([r for r, _c in rbc if r[5] is None and len(r[0]) >= 2], ab_pts) if len(deck_abuts) else None
     for ri, ((left, right, v, m, layer, fz), c) in enumerate(rbc):
         k = len(left)
         if fz is None:
             cur_lift = np.full(k, lift)
             if len(deck_abuts) and k >= 2:
-                mid = (left + right) * 0.5
-                s_from_start = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
-                d0 = dnp.hypot(ab_pts[:, 0] - mid[0, 0], ab_pts[:, 1] - mid[0, 1]).min()
-                d1 = dnp.hypot(ab_pts[:, 0] - mid[-1, 0], ab_pts[:, 1] - mid[-1, 1]).min()
+                if runs is not None:
+                    s_from_start, d0, d1 = next(runs)
+                else:
+                    mid = (left + right) * 0.5
+                    s_from_start = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
+                    d0 = dnp.hypot(ab_pts[:, 0] - mid[0, 0], ab_pts[:, 1] - mid[0, 1]).min()
+                    d1 = dnp.hypot(ab_pts[:, 0] - mid[-1, 0], ab_pts[:, 1] - mid[-1, 1]).min()
                 if d0 <= 0.75:
                     w0 = np.clip(s_from_start / 4.0, 0.0, 1.0)
                     cur_lift = np.minimum(cur_lift, DECK_SKIN + (lift - DECK_SKIN) * w0)
@@ -1273,7 +1668,12 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             z = u[k0:k0 + 2 * k] + LIFT[layer] + lift_2k
             k0 += 2 * k
         else:                                   # on a deck: over its opaque concrete top
-            z = np.concatenate((fz, fz)) + LIFT[layer] + DECK_SKIN
+            bk = _bank_rows(c, k)
+            if bk is not None:                  # (roadshape: a banked shaped deck, tilted across)
+                z = np.concatenate((tilted(left, right, fz, bk, left), tilted(left, right, fz, bk, right))) \
+                    + LIFT[layer] + DECK_SKIN
+            else:
+                z = np.concatenate((fz, fz)) + LIFT[layer] + DECK_SKIN
             # (a cluster's decks overlap all over its junction at one height: their skins, and the wear (patches, cracks:
             # roadwear) of one over another's skin, flickered as noise, Rautenweg in game 2026-11-12. Its plain asphalt
             # skins take the world's texture coordinates (below: where two lie on each other, one texture), its wear is
@@ -1321,7 +1721,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         RW.append(np.full(len(tri), str(c.get("fid", "")).startswith("osm-raceway-")))
         ends = c.get("fends") or (1, 1)
         rpar.append((fu, float(c.get("tl") or 10.0), tu, float(slen) if slen else np.nan,
-                     float(bool(ends[0])), float(bool(ends[1]))))
+                     float(bool(ends[0])), float(bool(ends[1])), float(c.get("fend_m") or END_FADE_M)))
         nverts += len(P[-1])
     # Match the asphalt tile scale of the visible terrain or of satmat's mesh layer.
     asphalt_repeat = FRONTAGE_TERRAIN_REPEAT_M if lift > 0 else FRONTAGE_REPEAT_M
@@ -1392,10 +1792,25 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 batches = [(m & ~RW, t, None) for m, t in batches] + [(m & RW, t, float("inf")) for m, t in batches]
             else:
                 batches = [(m, t, None) for m, t in batches]
-            for mask, tol, step in batches:
+            batches = [(m, t, st, None) for m, t, st in batches]
+            if SURFACE_V2:          # (each overlay lift its own batch, raised where the ground bulges past MARK_MIN_M)
+                v2 = []
+                for m, t, st, _b in batches:
+                    rest = m.copy()
+                    for L in np.unique(TL[m]):
+                        up = float(L) - lift
+                        if not up > 0.0 or float(L) == LIFT["frontage"] + lift:
+                            continue
+                        sel = m & (TL == L)
+                        rest &= ~sel
+                        v2.append((sel, t, st, max(0.0, up - MARK_MIN_M)))
+                    v2.append((rest, t, st, None))
+                batches = v2
+            for mask, tol, step, clear in batches:
                 if not mask.any():
                     continue
-                fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[mask], grid, i0, j0, tol=tol, step_m=step)
+                fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[mask], grid, i0, j0, tol=tol, step_m=step,
+                                                 clear=clear)
                 lifts = TL[mask][src]
                 vl = np.zeros(len(fP))              # (a cut piece's points are its fan's: one lift each, set once)
                 for kk in range(3):
@@ -1430,6 +1845,11 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         P, UV, T = _shared(P, UV, T)
     out =(P - np.asarray(origin, np.float64), T, UV, mats, M)
     if not asphalt and not dirt:
+        if SURFACE_V2:      # (the v2 draw order: v2_rank)
+            order = sorted(range(len(mats)), key=lambda j: (v2_rank(mats[j]), j))
+            remap = np.empty(len(mats), np.int64)
+            remap[order] = np.arange(len(mats))
+            return out[0], T, UV, [mats[j] for j in order], remap[np.asarray(M, np.int64)]
         return out
     # a strip in the mesh: the fade uv for every point (a sixth element: write, plazas.merge), and the strips' materials
     # first, so the markings and anything else translucent in the mesh draw over them (one primitive per material, in
@@ -1443,8 +1863,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         blend = (weight * weight) * (3 - 2 * weight)
         out[0][used, 2] -= (LIFT["frontage"] + lift - .001) * (1 - blend)
         fade[used] = np.c_[.001 + .499 * weight, np.full(len(used), .5)]
-    order = sorted(range(len(mats)), key=lambda j: (not (mats[j].startswith(FADE_PREFIX)
-                                                        or mats[j] == FRONTAGE_ASPHALT), j))
+    order = sorted(range(len(mats)), key=lambda j: (v2_rank(mats[j]), j) if SURFACE_V2 else
+                   (not (mats[j].startswith(FADE_PREFIX) or mats[j] == FRONTAGE_ASPHALT), j))
     remap = np.empty(len(mats), np.int64)
     remap[order] = np.arange(len(mats))
     return out[0], T, UV, [mats[j] for j in order], remap[np.asarray(M, np.int64)], fade
@@ -1479,7 +1899,9 @@ def _fade_uv(UV, vr, par):
     has = vr >= 0
     if not has.any() or not len(par):
         return C
-    fu, tl, tu, slen, o0, o1 = np.asarray(par, np.float64)[vr[has]].T
+    cols = np.asarray(par, np.float64)[vr[has]].T
+    fu, tl, tu, slen, o0, o1 = cols[:6]
+    fend = cols[6] if len(cols) > 6 else np.full(len(fu), END_FADE_M)     # (a strip's own end fade: "fend_m")
     u = UV[has, 0] / tu
     f = np.maximum(fu, 1e-9)
     cu = np.where(u < fu, 0.5 * u / f, np.where(u > 1.0 - fu, 1.0 - 0.5 * (1.0 - u) / f, 0.5))
@@ -1487,7 +1909,7 @@ def _fade_uv(UV, vr, par):
     s = UV[has, 1] * tl
     strip = np.isfinite(slen)
     sl = np.where(strip, slen, 0.0)
-    fade = np.minimum(END_FADE_M, END_FADE_SHARE * sl)
+    fade = np.minimum(fend, END_FADE_SHARE * sl)
     strip &= fade > 1e-3
     fd = np.maximum(fade, 1e-9)
     cv = np.full(len(s), 0.5)
@@ -1676,6 +2098,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     junctions = _junction_surfaces(chunks, context)
     cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
     rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all, junctions)
+    rb = camber_joints(rb, cr_all, junctions)
     if not rb and not piers and not beams and not pads:
         return None
     low_parapet_decks = set(low_parapet_decks or ())
@@ -1750,6 +2173,9 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         er = right - u * _smooth_reach(_reach(wide, xr), right)[:, None]
         zl = active_field.at(el) if active_field is not None else z
         zr = active_field.at(er) if active_field is not None else z
+        bk = _bank_rows(c, k) if active_field is None else None
+        if bk is not None:                      # (roadshape: a banked shaped deck, tilted across)
+            zl, zr = tilted(left, right, z, bk, el), tilted(left, right, z, bk, er)
         L = np.c_[el, zl] - origin
         R = np.c_[er, zr] - origin
         # (a chunk's "dd": its bridge's slab and girders, roads.deck_depth of its span, split 1.2 : 1.0 as the full deck)
@@ -1783,11 +2209,20 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
             gl, gr = mid + u * GIRDER_W / 2, mid - u * GIRDER_W / 2
             glz = active_field.at(gl) if active_field is not None else z
             grz = active_field.at(gr) if active_field is not None else z
+            if bk is not None:
+                glz, grz = tilted(left, right, z, bk, gl), tilted(left, right, z, bk, gr)
             GL, GR = np.c_[gl, glz - slab] - origin, np.c_[gr, grz - slab] - origin
             GLb, GRb = GL - [0, 0, gird], GR - [0, 0, gird]
             quads(GL, GLb, 0.0, 0.1, v, v, side, out_l)
             quads(GR, GRb, 0.0, 0.1, v, v, side, -out_l)
             quads(GLb, GRb, 0.0, 0.05, v, v, side, np.array([0.0, 0.0, -1.0]))
+        # (roadshape, BNE_ROADSHAPE=decks: a shaped deck's buried ends, a skirt over its approach)
+        for e in (0, -1):
+            ov = c.get("ov0" if e == 0 else "ov1")
+            if ov is not None and k >= 2:
+                for a, b, ua, ub, va, vb, up in skirt(el, er, z, dd, e, np.asarray(ov, np.float64),
+                                                       0.0 if bk is None else float(bk[e])):
+                    quads(a - origin, b - origin, ua, ub, va, vb, side, up)
         # a parapet on each free edge (parapet_runs: not where another deck goes on beside it, a ramp leaving, a
         # carriageway); a low curb under the rail where mapped guard rails put stock rail modules on it (guardrails)
         for parapet in parapets_by_deck.get(n, ()):
@@ -1850,6 +2285,53 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     if junctions:
         pp, uu, tt = _shared(pp, uu, tt)
     return pp, tt, uu, mats, np.concatenate(M)
+
+
+def skirt(el, er, z, dd, e, ov, bank=0.0):
+    """A shaped deck's buried end (roadshape, BNE_ROADSHAPE=decks; the vanilla Italy bridge's deck overlapping its
+    approach, Hero Road's deckSweep end skirt): a solid over its approach's line ov (j, 2, from the deck's end) under the
+    slab's edges el / er (k, 2) at end e (0 or -1), its first row the slab's end row (skewed as it is), its top
+    roadshape.SKIRT_TOP_M under the deck's top z there and SKIRT_DIP_M at the far end along the deck's end grade,
+    its depth from the slab and girders' dd to a SKIRT_LIP_M lip, tilted across by the deck's end bank (m per m, left
+    up). [(row a, row b, ua, ub, va, vb, up)]: deck()'s
+    quads (absolute positions): top, sides, soffit and the far end. Pure."""
+    k = len(z)
+    o = np.asarray(ov, np.float64)[:, :2]
+    if len(o) < 2:
+        return []
+    s_ = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(o, axis=0).T))]
+    S = float(s_[-1])
+    if S <= 0.5:
+        return []
+    i1 = 1 if e == 0 else k - 2
+    run = float(dnp.hypot(*(((el[e] + er[e]) - (el[i1] + er[i1])) * 0.5)))
+    g = (float(z[e]) - float(z[i1])) / run if run > 1e-6 else 0.0      # (rising outward: +)
+    g = max(-_roadshape.SKIRT_GRADE_MAX, min(_roadshape.SKIRT_GRADE_MAX, g))
+    half = float(np.median(dnp.hypot(*(el - er).T))) / 2      # (the perpendicular half width: the bank's lever)
+    lat = el[e] - er[e]
+    lat = lat / max(float(dnp.hypot(lat[0], lat[1])), 1e-9)
+    # (its rows parallel to the slab's end row, skewed or square: square rows behind a skewed end ran back through
+    # the skirt's first strip, Codex review)
+    hl = float(dnp.hypot(*(el[e] - er[e]))) / 2
+    L, R = [el[e].copy()], [er[e].copy()]
+    for j in range(1, len(o)):
+        L.append(o[j] + lat * hl)
+        R.append(o[j] - lat * hl)
+    L, R = np.asarray(L), np.asarray(R)
+    f = s_ / S
+    top = float(z[e]) + g * s_ - (_roadshape.SKIRT_TOP_M + (_roadshape.SKIRT_DIP_M - _roadshape.SKIRT_TOP_M) * f)
+    depth = float(dd) + (_roadshape.SKIRT_LIP_M - float(dd)) * f
+    Lt, Rt = np.c_[L, top + bank * half], np.c_[R, top - bank * half]
+    Lb, Rb = np.c_[L, top + bank * half - depth], np.c_[R, top - bank * half - depth]
+    v = s_ / 4.0
+    out_l = np.c_[np.broadcast_to(lat, (len(o), 2)), np.zeros(len(o))]
+    up, down = np.array([0.0, 0.0, 1.0]), np.array([0.0, 0.0, -1.0])
+    tdir = o[-1] - o[-2]
+    tdir = np.r_[tdir / max(float(dnp.hypot(tdir[0], tdir[1])), 1e-9), 0.0]
+    cap_a = np.stack([Lt[-1], Rt[-1]])
+    cap_b = np.stack([Lb[-1], Rb[-1]])
+    return [(Lt, Rt, 0.0, 1.0, v, v, up), (Lt, Lb, 0.0, 0.1, v, v, out_l), (Rt, Rb, 0.0, 0.1, v, v, -out_l),
+            (Lb, Rb, 0.0, 1.0, v, v, down), (cap_a, cap_b, 0.0, 0.1, np.zeros(2), np.full(2, 0.1), tdir)]
 
 
 TRUSS_STEEL = "bne_truss_steel"     # painted steel (the stock metal_paint, grey: tunnel.materials.json) ...
@@ -2180,7 +2662,7 @@ def _fill_short(g, k):
         return g
     for a, b in zip(nz[:-1], nz[1:]):
         if 1 < b - a <= k + 1:
-            g[a + 1:b] = np.interp(np.arange(a + 1, b), [a, b], [g[a], g[b]])
+            g[a + 1:b] = dnp.interp(np.arange(a + 1, b), [a, b], [g[a], g[b]])
     return g
 
 
@@ -2253,6 +2735,7 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
         cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
         rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all,
                            junctions)
+        rb = camber_joints(rb, cr_all, junctions)
     else:
         rb = _rb
     if not rb:
@@ -2310,7 +2793,9 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
                         "line": (edge_run + inner_run) * 0.5,
                         "edge": edge_run,
                         "inner": inner_run,
-                        "z": junctions[c['fid']].at(edge_run) if c.get('fid') in junctions else z[sl],
+                        "z": junctions[c['fid']].at(edge_run) if c.get('fid') in junctions else
+                        (tilted(left, right, z, _bank_rows(c, k), edge)[sl] if _bank_rows(c, k) is not None
+                         else z[sl]),
                         "v": v[sl],
                         "out": u[sl] * sgn,
                         "nose": bool(nz[sl].any()),     # (a gore nose's: a full barrier, never the low curb)
@@ -2458,8 +2943,10 @@ def _retaining_walls(walls, origin, P, T, UV, M, nv):
         cop_hi = np.c_[b - tw * cop[:, None], top] - origin
         quads = [(face_lo, face_hi, foot, top, face_m), (face_hi, cop_hi, None, float(np.mean(cop)), face_m)]
         if (thick > cop + 0.01).any():          # the soil behind the coping (a parapet is all stone)
-            # (a mountain pass road's: the rocky ground of the slopes round it, WALL_SCREE; grass elsewhere)
-            quads.append((cop_hi, back_hi, None, float(np.mean(thick - cop)), 6 if w.get("mountain") else 4))
+            # (a mountain pass road's: the rocky ground of the slopes round it, WALL_SCREE; grass elsewhere; where two
+            # roads at other levels meet, the higher one's edge on it: its face's concrete, roads.retaining_walls)
+            quads.append((cop_hi, back_hi, None, float(np.mean(thick - cop)),
+                          face_m if w.get("carries") else 6 if w.get("mountain") else 4))
         if w.get("parapet"):                    # a parapet's back, seen from the valley
             bot = foot
         else:                                   # a retaining wall's back: down into the ground behind it (where the
@@ -2511,6 +2998,28 @@ def _retaining_walls(walls, origin, P, T, UV, M, nv):
             T.append(tri + nv)
             M.append(face_m)
             nv += 5
+        for run in w.get("skirt", ()):          # (the vanilla slopes: soil along its foot, roads.wall_skirts)
+            run = np.asarray(run, np.float64)   # (k, rows, 3): up the face, then out over the ground
+            m, nr = run.shape[0], run.shape[1]
+            if m < 2:
+                continue
+            mat = 6 if w.get("mountain") else 4
+            sc = SCREE_UV_M if mat == 6 else SOIL_UV_M
+            pts = run.transpose(1, 0, 2).reshape(-1, 3)      # (row-major: row r's k points at r * k)
+            P.append(pts - origin)
+            UV.append(pts[:, :2] / sc)                       # (world-planar, as the terrain's detail lies)
+            i = np.arange(m - 1)
+            tris = []
+            for r in range(nr - 1):
+                A, A1, B, B1 = nv + r * m + i, nv + r * m + i + 1, nv + (r + 1) * m + i, nv + (r + 1) * m + i + 1
+                tris += [np.stack([A, B, B1], 1), np.stack([A, B1, A1], 1)]
+            tri = np.concatenate(tris)
+            q = pts[tri - nv]
+            up = np.cross(q[:, 1] - q[:, 0], q[:, 2] - q[:, 0])[:, 2] < 0     # (facing up)
+            tri[up] = tri[up][:, ::-1]
+            T.append(tri)
+            M.append(mat)
+            nv += len(pts)
     return nv
 
 
@@ -2592,7 +3101,7 @@ def tunnel(chunks, origin, walls=()):
             cn = np.asarray(c["n"], np.float64)[:, :2]
             sc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(cn, axis=0).T))]
             sm = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
-            gr = np.interp(sm * (sc[-1] / max(float(sm[-1]), 1e-9)), sc, np.asarray(c["ground"], np.float64))
+            gr = dnp.interp(sm * (sc[-1] / max(float(sm[-1]), 1e-9)), sc, np.asarray(c["ground"], np.float64))
             # (no cover under a hood: it is the tube's outside from its mouth back to the hill's face)
             for e_, f_ in enumerate(fits if c.get("portal") else ()):
                 if f_ is not None and (c.get("portal") or (False, False))[e_]:
@@ -2742,8 +3251,8 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
         jj = max(j - 1, 0)
         t = mid[j] - mid[jj]
         t = t / max(float(dnp.hypot(*t)), 1e-9)
-        p = np.array([np.interp(sc, s, mid[:, 0]), np.interp(sc, s, mid[:, 1])])
-        zc = float(np.interp(sc, s, z))
+        p = np.array([dnp.interp(sc, s, mid[:, 0]), dnp.interp(sc, s, mid[:, 1])])
+        zc = float(dnp.interp(sc, s, z))
         uu = u[j]
         for side in (-1.0, 1.0):
             e = p + uu * side * (hw - TUNNEL_LAMP_IN)

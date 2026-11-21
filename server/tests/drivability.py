@@ -152,7 +152,9 @@ def measure(name, threads=1, approach=None):
         box = (-RADIUS_M, -RADIUS_M, RADIUS_M, RADIUS_M)
         tunnels = roads.TunnelProfiles(site.frame, lambda k: site.cells.get(str(k)), elev)
         tunnels.raw = site.sample
-        tunnels.ends = lambda la, lo: grader.apply(la, lo, site.sample(la, lo), grading.ROAD_LIFT, roads_only=True)
+        # (as the game's: the ground read as the road's own level at a portal arrives as `base`, earthd / blockworker)
+        tunnels.ends = lambda la, lo, base=None: grader.apply(la, lo, site.sample(la, lo) if base is None else base,
+                                                               grading.ROAD_LIFT, roads_only=True)
         report = Report()
         _measure_ground(report, cells, site.frame, ground, roads)
         structures = [s for surface, profiles in
@@ -242,7 +244,7 @@ def _resample(xy):
     if s[-1] < 3.0:
         return None
     ss = np.arange(0.0, s[-1], 1.0)
-    return np.c_[np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])]
+    return np.c_[dnp.interp(ss, s, xy[:, 0]), dnp.interp(ss, s, xy[:, 1])]
 
 
 def _inside(xy):
@@ -283,7 +285,7 @@ def _structure(surface, fid, spec, xy, z, ground):
         return None
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(centre, axis=0).T))]
-    zz = np.interp(arc, s, z)
+    zz = dnp.interp(arc, s, z)
     if surface == "bridge":
         zz = np.maximum(zz, ground(centre))
     return SimpleNamespace(surface=surface, fid=fid, spec=spec, xy=centre, z=zz)
@@ -324,7 +326,7 @@ def _every_metre(xy, z):
     between them is a slope over its length, not a ledge over one metre)."""
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     ss = np.arange(0.0, s[-1] + 1e-9, 1.0)
-    return np.c_[np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])], np.interp(ss, s, z)
+    return np.c_[dnp.interp(ss, s, xy[:, 0]), dnp.interp(ss, s, xy[:, 1])], dnp.interp(ss, s, z)
 
 
 def _measure_structure(report, st, structures, ground):

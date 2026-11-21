@@ -199,6 +199,8 @@ impl ClassGridCache {
         if complete && plan.generation == self.generation {
             for &(key, start) in &plan.chunks {
                 if !self.entries.contains_key(&key) && self.entries.len() >= self.limit {
+                    // (hash order: the LRU entry evicted, by distinct clock ticks; a cache, not an output)
+                    #[allow(clippy::disallowed_methods)]
                     if let Some((&old, _)) = self.entries.iter().min_by_key(|(_, e)| e.used) {
                         self.entries.remove(&old);
                     }

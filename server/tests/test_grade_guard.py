@@ -106,6 +106,18 @@ class GradeGuardTest(unittest.TestCase):
         self.assertNotEqual(on, off)
         self.assertFalse(off.endswith(".gg1"))
 
+    def test_the_plans_key_is_apart_with_the_shapes_and_each_of_their_switches(self):
+        import plancache
+        from unittest import mock
+        keys = {}
+        for name, flags in (("off", (False, False, False)), ("shapes", (True, True, True)),
+                            ("no laws", (True, False, True)), ("no flanks", (True, True, False))):
+            with mock.patch.object(grading, "SHAPES_ON", flags[0]), mock.patch.object(grading, "ROAD_LAWS_ON", flags[1]),                     mock.patch.object(grading, "FLANKS_ON", flags[2]), mock.patch.object(grading, "GUARD_ON", False):
+                keys[name] = plancache.plans_format()
+        self.assertEqual(len(set(keys.values())), 4, keys)
+        import roads
+        self.assertEqual(keys["off"], f"{plancache.PLANS_FORMAT}.{roads.FACTS_FORMAT}", "the default's key is as it was")
+
     def test_limits_by_class(self):
         p = grading.Plan(np.zeros((2, 2)), np.zeros(2), 3)
         self.assertEqual(grading.guard_limits(spec("motorway"), p)[0], 0.06)

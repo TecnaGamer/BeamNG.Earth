@@ -61,9 +61,6 @@ _dem_t = threading.local()
 class _State:
     def __init__(self, cache_dir, offline, roads, grading, road_widths, surface, airports=False, sea=False,
                  gas_stations=False):
-        if os.environ.get("BNGE_WORLD_BUNDLE") and not (roads and grading):
-            from worldbundle import BundleError
-            raise BundleError("Pinned road plans require roads and grading enabled")
         self.cache_dir = cache_dir
         import revisit
         revisit.CACHE_DIR = cache_dir
@@ -80,10 +77,6 @@ class _State:
                 finally:
                     _dem_t.v = getattr(_dem_t, "v", 0.0) + time.perf_counter() - t0
             self.dem.tiles = _timed
-        import railways as _railways    # (coarse elevation: rail decks raised over the roads under them)
-        _railways.COARSE_AT = self.dem.coarse_at
-        # (and no separation in the ground under a rail bridge: railways.flat_rail_crossing)
-        _railways.RAW_ELEV = lambda la, lo, _d=self.dem: _d.sample(la, lo, gradingmod.PROFILE_ZOOM)
         # runways graded in (--airports on): the copy the server loaded, never refreshed here
         self.airports = load_airports(cache_dir, self.dem) if airports else None
         md = mapdatamod.MapData(cache_dir, fetcher=net) if (roads or surface or sea) else None
@@ -510,6 +503,8 @@ def _read_warm(warm_q):
             continue
         with _s.cv:
             _s.want = [(g, k) for k in keys]
+            # (the anchor the list is for, and the server's folder of its abandoned anchors: _warm_loop's own cancel)
+            _s.warm_of = (aid, rest[1] if len(rest) > 1 else None)
             # (earthd.Server.warm_roads: this process only reads them while it builds a block, _warm_loop)
             _s.warm_read_only = bool(rest and rest[0])
             _s.cv.notify()
@@ -557,15 +552,18 @@ def _warm_loop():
 
 def _warm_one(job):
     """Plan one cell ahead (job: (grader, cell key)). A cell that fails, or that a teleport left (pools.Abandoned: its plans no
-    longer wanted, quietly: the user, 2026-11-16, read the traceback as a fault while driving), is dropped from the wanted."""
+    longer wanted, quietly: a traceback was read as a fault while driving), is dropped from the wanted."""
     import pools
+    aid, out_dir = getattr(_s, "warm_of", (None, None))
+    # (its own check: the process's job-wide one is another anchor's job's, or none)
+    xproc.set_thread_cancel((lambda a=aid, o=out_dir: abandoned(o, a)) if out_dir is not None else (lambda: False))
     try:
         t0 = time.perf_counter()
         job[0].warm(job[1])
         log.debug("road plans ahead: %s in %.2f s", job[1], time.perf_counter() - t0)
         return
-    except pools.Abandoned:
-        log.debug("road plans ahead for %s: given up (a teleport left it)", job[1])
+    except pools.Abandoned:         # (a teleport left the anchor: its cells are not wanted now)
+        log.debug("road plans ahead for %s: given up, a teleport left anchor %s", job[1], aid)
     except Exception:
         log.exception("road plans ahead for %s", job[1])
     with _s.cv:
@@ -675,11 +673,13 @@ def sea_ahead(frame, cx, cy, half):
         log.debug("sea ahead of block (%s, %s): %s: %s", cx, cy, type(e).__name__, e)
 
 
-def ground(frame, la, lo, z):
+def ground(frame, la, lo, z, grader=None):
     """The DEM heights z at (la, lo) shaped before the road grading: runways graded in (--airports on),
-    the sea floor carved in (--sea on), and the land off the roads roughened (grading.terrain_bumps)."""
+    the sea floor carved in (--sea on), and the land off the roads roughened (grading.terrain_bumps; grader: the
+    Grader that grades it after this, which keeps the bumps off the built roads' sides)."""
     import grading
-    z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
+    z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64),
+                                                          grader)
     if _s.airports is not None:
         z = _s.airports.apply(la, lo, z)
     if getattr(_s, "lids", None) is not None:
@@ -743,7 +743,7 @@ def _veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
     g, _ = _s.anchor(aid, lat, lon)
 
     def raw(la, lo):
-        return ground(None, la, lo, _s.dem.sample(la, lo, zoom))
+        return ground(None, la, lo, _s.dem.sample(la, lo, zoom), g)
 
     def elev(la, lo):
         z = raw(la, lo)
@@ -866,7 +866,7 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
         if provisional:
             part_s["dem"] += t2 - t1
             return _level_yards_of(_s, _s.airports.apply(la, lo, z) if _s.airports is not None else z, la, lo)
-        z = ground(frame, la, lo, z)
+        z = ground(frame, la, lo, z, g)
         part_s["dem"] += t2 - t1
         part_s["sea"] += time.perf_counter() - t2
         if g is None:
@@ -1013,6 +1013,28 @@ def _nav_bridges(aid, frame, elev):
                               prefer=_chain_store("bridges", roadsmod.BridgeProfiles, elev, _bridge_setup))
 
 
+class _NavBand:
+    """The AI graph's grader for grading.terrain_bumps: its road band past NAV_GRADED_M from the graph's centre (x, y)
+    only from the cells planned already, as the graph's road lift (Grader.apply planned_only): with BNE_TERRAIN_BUMPS
+    on, the band planned every cell of the graph's 2.2 km window (Codex review of PR #1407; that planning held a
+    Windows PC's road processes for minutes, 2026-10-25)."""
+
+    def __init__(self, g, frame, x, y):
+        self.g, self.frame, self.x, self.y = g, frame, x, y
+
+    def road_band(self, lat, lon, reach):
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        e, n, _ = self.frame.geodetic_to_enu(lat, lon, 0.0)
+        near = np.maximum(np.abs(np.asarray(e) - self.x), np.abs(np.asarray(n) - self.y)) <= NAV_GRADED_M
+        out = np.zeros(lat.shape, bool)
+        if near.any():
+            out[near] = self.g.road_band(lat[near], lon[near], reach)
+        if (~near).any():
+            out[~near] = self.g.road_band(lat[~near], lon[~near], reach, planned_only=True)
+        return out
+
+
 def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph, rules):
     """earthd.Server.build_navgraph here (a road-tile process): the AI road graph around (x, y) written to out_dir;
     returns (vfs path, nodes, edges), in a road process (in the server's interpreter it cost 13 s of its CPU in a
@@ -1027,7 +1049,8 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     feats = [cd.layers.get("roads") for cd in mapcells.load_cells(_s.md, keys, ("roads",))]
 
     def elev(la_, lo_):         # the physics ground, lifted under roads (as the road tiles'); past their reach
-        z = ground(frame, la_, lo_, _s.dem.sample(la_, lo_, zoom))     # (NAV_GRADED_M) only under cells planned already
+        # (NAV_GRADED_M) only under cells planned already, the terrain bumps' road band too (_NavBand)
+        z = ground(frame, la_, lo_, _s.dem.sample(la_, lo_, zoom), _NavBand(g, frame, x, y) if g is not None else None)
         if g is None:
             return z
         la_, lo_, z = np.asarray(la_, np.float64), np.asarray(lo_, np.float64), np.asarray(z, np.float64)
@@ -1082,7 +1105,7 @@ def terrain_patch(aid, lat, lon, zoom, box, path):
     frame = geodesy.EnuFrame(lat, lon)
 
     def elev(la, lo):
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     return terrainpatch.build(frame, elev, box, path)
 
@@ -1152,7 +1175,7 @@ def _signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, 
     frame = geodesy.EnuFrame(lat, lon)
 
     def elev(la, lo):           # the graded ground, as the road tile's
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     towns = None
     if towns_on and _s.md is not None and _s.surface is not None:
@@ -1186,6 +1209,7 @@ def _radar_key():
 def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
                        gas_stations, buried, lamp_region, country=None, pole_profile=None, de_junctions=False, towns_on=False, wear=None):
     import revisit
+    import roads as roadsmod      # (ROADS_IN_GROUND: a helper's per-client setting, init())
     import threedmr
     de = ()                         # (the German junction signs on near Germany: the border data in use too)
     if de_junctions:
@@ -1195,7 +1219,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _md_versions(bool(buildings)), float(buried), lamp_region, country,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
-                    *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat),
+                    *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat), bool(roadsmod.ROADS_IN_GROUND),
                     *_surf_tags(geodesy.EnuFrame(lat, lon), *roadsmod_tile_bbox(tx, ty)),
                     _nyc_key(geodesy.EnuFrame(lat, lon), roadsmod_tile_bbox(tx, ty)) if buildings else None,
                     bool(de_junctions), *de)     # (the German junction parts last)
@@ -1514,7 +1538,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("anchor")
 
     def elev(la, lo):           # the physics ground (lifted under roads: grading.ROAD_LIFT)
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     P.elev = elev
     bridges = _bridges(None, frame, elev)
@@ -1625,7 +1649,17 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     town_faces = {}                     # the town signs' faces the tile's props use (towns_on)
     towns = (town_signs(frame, tx, ty, out_dir, vfs_dir, town_faces)
              if towns_on and props is not None and out_dir is not None else None)
+    import railways
+    rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
+    rground = railways.point_ground(frame, elev, rkey)
+    rfar = railways.point_ground(frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
+                                 ("raw",) + tuple(rkey))
+    rbed = getattr(getattr(_s, "plan_store", None), "elev", None)
+    runder = ((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy)) if _bridge_fps else None)
+    # (the railways' bridge decks before the road tile's retaining walls: they stand under them as under a road's deck)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
+                                 rail_decks=railways.tile_decks(frame, tx, ty, rcells, rground, far_ground=rfar, load=cell_fn,
+                                                                bed_elev=rbed, under=runder),
                                  sign_obstacles=sign_obstacles,
                                  # (the stations' made-up driveways: no sidewalk across them; nor along a square's
                                  # street-side parking rows, streetparking.plaza_bay_cuts)
@@ -1650,7 +1684,25 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  cover_fn=getattr(getattr(_s, "surface", None), "classes", None))
     P.town_faces = town_faces
     mark("build_tile")
-    chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground
+    import railways
+    rail_tracks = []                # (the tracks drawn, with their beds: the clearance check's wagons stand on them)
+    rail_rec = rail_early = None    # (BNE_RAIL_ROAD_FIT: one record of the level crossings, the track made first from it,
+    if railways.RAIL_ROAD_FIT:      # the decks here for the parts it drew)
+        _rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
+        _rground = railways.point_ground(frame, elev, rkey)
+        _rfar = railways.point_ground(frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
+                                      ("raw",) + tuple(rkey))
+        _rbed = getattr(getattr(_s, "plan_store", None), "elev", None)
+        rail_rec = railways.crossing_records(frame, tx, ty, _rcells, _rground, far_ground=_rfar, load=cell_fn,
+                                             bed_elev=_rbed)
+        rail_early_props = []
+        rail_early = railways.tile_mesh(frame, tx, ty, _rcells, _rground, far_ground=_rfar, return_decks=True,
+                                        load=cell_fn, bed_elev=_rbed, furniture=rail_early_props,
+                                        under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
+                                               if _bridge_fps else None), records=rail_rec,
+                                        tracks_out=rail_tracks)
+    chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban,      # railway and tram tracks on the ground
+                                   records=rail_rec)
     mark("rails")
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -1666,6 +1718,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
         drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
         chunks += drives
+        if drives and roadsmod._sw_v2():    # (sidewalks v2: a lowered kerb and apron where a house's drive crosses)
+            roadsmod.walk_drive_ranges(walks, drives)
+            if walks_raw is not None:
+                roadsmod.walk_drive_ranges(walks_raw, drives)
         park = parkingmod.clear_of(park, props, drives)
         park = parkingmod.tile_lot_spots(frame, tx, ty, _s.md, elev, items, park, separate_bays=bool(frontage_country))
         front_grass = [] if _s.surface is not None else None
@@ -1773,10 +1829,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         log.warning("stone walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
     P.tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
     mark("tunnel_mesh")
-    import railways
-    rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
-    rground = railways.point_ground(frame, elev, rkey)
-    fra_kits = None                 # (the US: the FRA inventory's gates and lamps, else the road classes')
+    fra_kits = None                # (the US: the FRA inventory's gates and lamps, else the road classes')
     if getattr(_s, "fra", None) is not None:
         try:
             fra_kits = _s.fra.kits(frame, roadsmod.cells_of_tile(frame, tx, ty))
@@ -1802,15 +1855,13 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         except Exception as e:
             log.debug("catenary: %s: %s", type(e).__name__, e)
     rail_props = []                 # (buffer stops and the walk signs at footway crossings: railways.tile_mesh's furniture)
-    rail_tracks = []                # (the tracks drawn, with their beds: the clearance check's wagons stand on them)
-    P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground, tracks_out=rail_tracks,
-                                 far_ground=railways.point_ground(
-                                     frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                     ("raw",) + tuple(rkey)),
-                                 return_decks=True, load=cell_fn,
-                                 bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None), furniture=rail_props,
-                                 under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
-                                        if _bridge_fps else None))
+    if rail_early is not None:      # (made above, before the decks: BNE_RAIL_ROAD_FIT)
+        (P.rmesh, rail_decks), rail_props = rail_early, rail_early_props
+    else:
+        P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground,
+                                   far_ground=rfar, return_decks=True, load=cell_fn, bed_elev=rbed,
+                                   furniture=rail_props, under=runder, records=rail_rec,
+                                   tracks_out=rail_tracks)
     if rail_props:
         props = (props or []) + rail_props
     mark("railways")
@@ -1880,7 +1931,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         except Exception as ex:
             log.warning("lights and fans: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         try:           # (solar farms, container terminals, marinas, trailer parks, construction sites)
-            props.extend(places.tile_rows(frame, box, _s.md, elev, near_roads, country))
+            props.extend(places.tile_rows(frame, box, _s.md, elev, near_roads, country,
+                                          clearance=clearance[0] if clearance else None))
         except fast.NativeMissing:
             raise
         except Exception as ex:
@@ -1916,6 +1968,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     radar_props, P.speed_traps = radars.tile_rows(frame, box, _s.md, elev, _s.widths, urban)
     if radar_props:
         props = (props or []) + radar_props
+    import racedig                  # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
+    racedig.tile_clear(frame, cells, props, wires, elev, _s.md)
     P.signs = signs
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.custom, P.custom_entries = _custom, _entries
@@ -2398,6 +2452,23 @@ def _map_chunks(src, dst, chunks):
         v = m[at:at + ln, :max(2, min(cols, 3))]
         at += ln
         out[k][field] = v if field == "n" else v.tolist()
+    # (roadshape, BNE_ROADSHAPE=decks: a shaped deck's skewed end lines turned with the frames through their end node,
+    # its buried ends' overlap lines mapped as its nodes are; Codex review)
+    for k, c in enumerate(chunks):
+        for e, at in ((0, 0), (1, -1)):
+            d, ov = c.get(f"sk{e}"), c.get(f"ov{e}")
+            if d is None and ov is None:
+                continue
+            p = np.asarray(c["n"], np.float64)[at]
+            if d is not None:
+                q = geotiles.world_map(src, dst, np.array([[p[0], p[1], 0.0],
+                                                           [p[0] + 10.0 * d[0], p[1] + 10.0 * d[1], 0.0]]))
+                v = q[1, :2] - q[0, :2]
+                ln = float(np.sqrt(v[0] * v[0] + v[1] * v[1]))
+                out[k][f"sk{e}"] = [round(float(v[0] / ln), 6), round(float(v[1] / ln), 6)] if ln > 1e-12 else d
+            if ov is not None:
+                o = np.asarray(ov, np.float64)
+                out[k][f"ov{e}"] = geotiles.world_map(src, dst, np.c_[o[:, :2], np.zeros(len(o))])[:, :2].tolist()
     return out
 
 
@@ -2433,7 +2504,15 @@ def _map_walks(src, dst, walks):
             c["inward"] = inw / np.maximum(dnp.hypot(*inw.T), 1e-12)[:, None]
             wk["corner"] = c
         else:
-            wk["pts"] = mp(wk["pts"])
+            src_pts = np.asarray(wk["pts"], np.float64)
+            wk["pts"] = mp(src_pts)
+            if wk.get("end_n") is not None:     # (sidewalks v2: a bent end's mitre: at the mapped end, turned)
+                ends = []
+                for i, e in zip((0, -1), wk["end_n"]):
+                    ok = e is not None and float(dnp.hypot(*(src_pts[i, :2] - np.asarray(e[0])[:2]))) < 1e-6
+                    ends.append((np.asarray(wk["pts"][i, :2], np.float64).copy(),
+                                 dnp.matmul(np.asarray(e[1], np.float64)[:2], r2.T)) if ok else None)
+                wk["end_n"] = tuple(ends)
         out.append(wk)
     return out
 
@@ -2542,7 +2621,7 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
     origin = (qx0, qy0, 0.0)
 
     def elev(la, lo):
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     tunnels = tunnel_profiles(aid, frame, elev, g)
     cell_fn = lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
@@ -2974,12 +3053,29 @@ def _station_collision(frame, box, elev, md):
             if rail:
                 import plazas
                 import railstationmesh
-                rc = railstationmesh.collision(frame, tuple(box), rail, elev, (float(box[0]), float(box[1]), 0.0))
+                rc = railstationmesh.collision(frame, tuple(box), rail, elev, (float(box[0]), float(box[1]), 0.0),
+                                               bed=_rail_beds(frame, box, md))
                 if rc[0] is not None:
                     got = rc if got is None else (plazas.merge(got[0], rc[0]), list(got[1]) + list(rc[1]))
         except Exception:
             log.exception("rail station collision of the tile at %s", tuple(round(float(v), 1) for v in box[:2]))
     return got
+
+
+def _rail_beds(frame, box, md):
+    """bed(track id or None, xy (k, 2)) -> (the rail's own bed there (railways.track_beds: the profile the track mesh draws, the
+    plans' heights), NaN where that line has no part; whether that part is a bridge): what a station's platforms stand by
+    (railstationmesh.reference, _slab). None without a map, a grader or a rail near the box."""
+    store = getattr(_s, "plan_store", None)
+    if md is None or store is None or getattr(store, "elev", None) is None:
+        return None
+    import railways
+    load = lambda key: md.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
+    rails, beds, _worn = railways.track_beds(frame, [load(k) for k in railways.cells_near(frame, box)], tuple(box),
+                                             store.elev, load)
+    if not rails:
+        return None
+    return lambda fid, xy: railways.bed_at(rails, beds, xy, fid, bridge=True)
 
 
 def _with_rail_stations(mesh, frame, box, elev, origin, md, quad=None, drawn_fn=None):
@@ -2999,7 +3095,7 @@ def _with_rail_stations(mesh, frame, box, elev, origin, md, quad=None, drawn_fn=
         import railstationmesh
         sm = railstationmesh.mesh(frame, tuple(box),  stations,
                                   busstationmesh.DrawnGround(drawn_fn) if drawn_fn is not None else elev, origin,
-                                  overlap=quad is not None)
+                                  overlap=quad is not None, bed=_rail_beds(frame, box, md))
         log.info("rail stations: %s in the tile at %s: %d triangles", [s.name or "?" for s in stations],
                  tuple(round(float(v)) for v in box[:2]), 0 if sm is None else len(sm[1]))
         if quad is not None:
@@ -3109,7 +3205,8 @@ def _rail_tunnel_parts(frame):
 
 def tunnel_profiles(aid, frame, elev, g=None):
     """The anchor's view of this process's tunnel chains (road tiles and the blocks' terrain holes share them): their
-    ground read at grading.PROFILE_ZOOM (raw; ends: graded), as in every other process."""
+    ground read at grading.PROFILE_ZOOM (raw: the plans' tunnel ground, Grader.tunnel_ground; ends: graded), as in
+    every other process."""
     import roads as roadsmod
     if getattr(_s, "tunnels", None) is None:        # (a state made without it: tests)
         _s.tunnels = {}
@@ -3118,9 +3215,14 @@ def tunnel_profiles(aid, frame, elev, g=None):
         sea = getattr(_s, "sea", None)
         t.wet = sea.depth if sea is not None else None
         t.water = sea.water if sea is not None else None
-        t.raw = lambda la, lo: ground(None, la, lo, _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))  # noqa: E731
+        raw = lambda la, lo: ground(None, la, lo, _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))  # noqa: E731
+        t.raw = raw
         if g is not None:
-            t.ends = lambda la, lo: g.apply(la, lo, t.raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)    # noqa: E731
+            # (the cover read with the bridges under mapped decks taken out, as the plans read it: one ground for the
+            # plans' tunnel networks and these; the portals graded from the elevation as read, apply takes them out)
+            t.raw = g.tunnel_ground
+            t.ends = lambda la, lo, base=None: g.apply(la, lo, raw(la, lo) if base is None else base,
+                                                       gradingmod.ROAD_LIFT, roads_only=True)    # noqa: E731
     return roadsmod.ChainView(_chain_store("tunnels", roadsmod.TunnelProfiles, elev, setup), frame)
 
 
@@ -3455,9 +3557,11 @@ def far_geo_stats():
     return dict(_far_geo_stats)
 
 
-def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
+def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, fade=None):
     """terraincache.base_entry here (its BC7 encode is the base photo's main cost)."""
-    return terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+    if fade is None:
+        return terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+    return terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, fade)
 
 
 def far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
@@ -3586,14 +3690,14 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
                                    -s / 2, -s / 2, s / (g.shape[1] - 1))
         except Exception as e:
             log.debug("rock faces of global %s: %s", (z, x, y), e)
-    n = imagerymod.write_dds(tex["path"], rgb)
+    n = imagerymod.write_dds(tex["path"], rgb, imagerymod.FAR_SRGB)
     return built, (n, used)
 
 
 def _imagery(tex):
     """This process's imagery.Imagery for the server's chain settings (tex: chain, tone, leaf_on, season_mode): the
-    imagery tiles on disk alone (strict: a missing tile fails the render), or, for a compute-sharing helper
-    (tex["online"], peerwork.py), fetched as needed."""
+    imagery tiles on disk alone (strict: a missing tile fails the render), or, with tex["online"], fetched as
+    needed."""
     import imagery as imagerymod
     online = bool(tex.get("online"))
     fin = tuple(sorted((tex.get("fin") or {}).items()))
@@ -3621,8 +3725,20 @@ def roadsurf_area(lat0, lon0, lat1, lon1):
     return len(roadsurf.measure_area(getattr(_s, "md", None), lat0, lon0, lat1, lon1))
 
 
+def _base_veg():
+    """This process's Vegetation for the generated ground's tree floor (genground.tree_floor: its cache read, cells never
+    built here), as _veg_geo's."""
+    import vegetation as vegetationmod
+    if getattr(_s, "veg", None) is None and getattr(_s, "md", None) is not None:
+        v = vegetationmod.Vegetation(_s.md, _s.cache_dir)
+        v.dem = _s.dem
+        v.surface, v.widths = _s.surface, _s.widths
+        _s.veg = v
+    return getattr(_s, "veg", None)
+
+
 def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,
-               quick=False):
+               quick=False, trees=False, canopy=False):
     """earthd.Server.write_base here, for a server without its imagery analyses (a small machine): the block's base
     photo from the imagery tiles on disk, its building footprints filled and its cliffs as rock, written to path
     (PNG) and packed into the game's terrain texture cache (cache: terraincache.base_entry's arguments but the rgb).
@@ -3632,7 +3748,9 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     the gas station pads around it (_take_pads). px: the imagery's render size, out_px: the photo's (enlarged before
     the roads are painted in: earthd.BASE_PX). quick: earthd.Server.write_quick_base's stand-in (the imagery and the
     roads at px, then enlarged; no roofs' mask, road ghosts or rock): the main process's ran 5-6 s beside the rest of
-    its threads at 185 mph (2026-10-31), here ~1 s."""
+    its threads at 185 mph (2026-10-31), here ~1 s. With the generated ground on, the packed copy fades its forest
+    floor out through the mips (earthd.Server.write_base); canopy: its canopy version (or None) returned too, a
+    fourth element."""
     _take_pads(fuel_pads)
     import imagery as imagerymod
     import roads as roadsmod
@@ -3643,8 +3761,24 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     im = _imagery(tex)
     frame = geodesy.EnuFrame(lat, lon)
     pending = set()
+    import genground
+    rgb = can = None
+    if genground.ON and not quick:      # (earthd.Server.write_base)
+        try:
+            cout = []
+            rgb, used = genground.render(im, frame, x0, y0, size, px, getattr(_s, "md", None),
+                                         getattr(_s, "surface", None), _s.widths, pending, _base_veg() if trees else None,
+                                         getattr(_s, "dem", None), canopy_out=cout)
+            can = genground.canopy_if_differs(rgb, cout)
+        except imagerymod.ImageryError:
+            return None
+        except Exception as e:      # (the Sentinel-2 photo alone then)
+            log.info("base photo: generated ground: %s: %s", type(e).__name__, e)
+            rgb = can = None
+            pending.discard(genground.GEN_PENDING)
     try:
-        rgb, used = im.render(frame, x0, y0, size, px, pending)
+        if rgb is None:
+            rgb, used = im.render(frame, x0, y0, size, px, pending)
     except imagerymod.ImageryError:
         return None
     rgb = np.asarray(rgb, np.uint8)
@@ -3664,6 +3798,8 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
         user_dir, base_vfs, ao_vfs, ao_value = cache
         terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
         return rgb, used, pending
+    # (the canopy version follows every step: what a step paints, as painted; a copy, a step may paint in place)
+    rgb0 = rgb.copy() if can is not None else rgb
     if buildings and _s.md is not None:
         try:
             mask = buildingsmod.photo_mask(frame, x0, y0, size, px, _s.md)
@@ -3677,7 +3813,10 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
             rgb = surfacemod.unghost_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths)
         except Exception as e:      # the photo stays as it is
             log.info("base photo: road ghosts: %s", e)
+    can = genground.keep_painted(rgb0, rgb, can)
     rgb = surfacemod.enlarge(rgb, out_px or px)
+    can = surfacemod.enlarge(can, out_px or px) if can is not None else None
+    rgb1 = np.array(rgb, np.uint8, copy=True) if can is not None else rgb
     if roadsmod.ROADS_IN_GROUND:          # (earthd.Server.write_base)
         try:
             rgb = surfacemod.paint_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths,
@@ -3692,13 +3831,19 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
         rgb = rockfacemod.rock(rgb, frame, x0, y0, size, U, x0, y0, size / (n - 1))
     except Exception as e:
         log.debug("base photo: rock faces: %s", e)
+    can = genground.keep_painted(rgb1, rgb, can)
     tmp = staging.tmp_for(path)
     # (terraincache.stored_photo: the game reads the packed cache entry, this file only if that is stale)
     with open(tmp, "wb") as f:
         f.write(terraincache.stored_photo(rgb))
     staging.replace(tmp, path)
     user_dir, base_vfs, ao_vfs, ao_value = cache
-    terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+    if can is not None:         # (the forest floor faded out through the mips, as the far tiles')
+        terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, (can, size / rgb.shape[0]))
+    else:
+        terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+    if canopy:
+        return rgb, used, pending, can
     return rgb, used, pending
 
 
@@ -3750,6 +3895,12 @@ def _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     surf = ()           # (a near far tile has the roads painted into its photo: the photo's road surfaces in its key)
     if tile.size / max(int(tex["px"]), 1) <= surfacemod.PHOTO_ROADS_MAX_TEXEL:
         surf = _surf_tags(geodesy.EnuFrame(lat, lon), *tile.bbox)
+    import genground
+    import imagery as imagerymod
+    _gx, _gy, gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, int(tex["px"]))
+    if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, int(tex["px"])) is not None \
+            and not tex.get("quick"):
+        surf = (*surf, genground.far_key(getattr(_s, "md", None), tex.get("gen_trees")))
     return revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
                        mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
                        bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
@@ -3851,12 +4002,29 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
     x0, y0, _, _ = tile.bbox
     px = tex["px"]
     sq = imagerymod.gutter_square(x0, y0, tile.size, px)
-    try:
-        im.quick_all = bool(tex.get("quick"))
+    import genground
+    rgb = None
+    genground.clear_fade()
+    if genground.ON and not tex.get("quick"):  # (the generated ground's near rings: earthd.Server.render_tile)
         try:
-            rgb, used = im.render(frame, *sq, px, gutter=True)
-        finally:
-            im.quick_all = False
+            got = genground.render_far(im, frame, *sq, px, getattr(_s, "md", None), _paint_surface(), _s.widths,
+                                       None, True if tex.get("gen_trees") else None, level=tile.level)
+            if got is not None:
+                rgb, used = got
+        except imagerymod.ImageryError:     # (a square's photo not on disk: the server fetches it, far_fetch, and asks
+            return built, None              # again)
+        except Exception as e:      # (the plain photo, not kept: made again)
+            log.debug("far tile %s: generated ground: %s: %s", tile.key, type(e).__name__, e)
+            import revisit
+            revisit.fault()
+            rgb = None
+    try:
+        if rgb is None:
+            im.quick_all = bool(tex.get("quick"))
+            try:
+                rgb, used = im.render(frame, *sq, px, gutter=True)
+            finally:
+                im.quick_all = False
     except imagerymod.ImageryError:
         return built, None
     if built.grid is not None:          # (earthd.Server.rock_faces)
@@ -3882,7 +4050,7 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
                 imagerymod.write_dds(mask[0], np.repeat(m[..., None], 3, axis=2))
         except Exception as e:
             log.debug("road mask of %s: %s", tile.key, e)
-    return built, (imagerymod.write_dds(tex["path"], rgb), used)
+    return built, (genground.write_far_dds(tex["path"], rgb, imagerymod.FAR_SRGB), used)
 
 
 def _paint_surface():
@@ -3936,18 +4104,26 @@ def _accounted(fn):
             now = time.monotonic()
             if now - _cpu_logged[0] >= CPU_LOG_S:
                 _cpu_logged[0] = now
-                shared = [g.shared.stats for g in list(getattr(_s, "graders", {}).values())
-                          if g is not None and g.shared is not None]
-                if os.environ.get("BNGE_DEM_STATS") and getattr(_s, "dem", None) is not None:
-                    # (measuring the decoded DEM mirror: its tiles written here vs the decodes it saved here)
-                    st = getattr(_s.dem, "stats", {}) or {}
-                    log.info("worker %d dem: %s", os.getpid(), {k: v for k, v in st.items() if k.startswith("dem:")})
-                log.debug("worker %d cpu: %s%s", os.getpid(),
-                          ", ".join(f"{k} {v[0]} jobs {v[1]:.1f} s" for k, v in sorted(_cpu.items())),
-                          "; shared road plans " + ", ".join(f"{k} {sum(st[k] for st in shared):.0f}"
-                                                             for k in ("read", "written", "waited", "wait_s"))
-                          if shared else "")
+                try:
+                    _log_cpu()
+                except Exception as e:     # (a log line never fails the job it follows: a test's stand-in state, 2026-11-16)
+                    log.debug("worker cpu log: %s", e)
     return run
+
+
+def _log_cpu():
+    """The periodic per-worker CPU line (_accounted)."""
+    shared = [g.shared.stats for g in list(getattr(_s, "graders", {}).values())
+              if g is not None and g.shared is not None]
+    if os.environ.get("BNGE_DEM_STATS") and getattr(_s, "dem", None) is not None:
+        # (measuring the decoded DEM mirror: its tiles written here vs the decodes it saved here)
+        st = getattr(_s.dem, "stats", {}) or {}
+        log.info("worker %d dem: %s", os.getpid(), {k: v for k, v in st.items() if k.startswith("dem:")})
+    log.debug("worker %d cpu: %s%s", os.getpid(),
+              ", ".join(f"{k} {v[0]} jobs {v[1]:.1f} s" for k, v in sorted(_cpu.items())),
+              "; shared road plans " + ", ".join(f"{k} {sum(st[k] for st in shared):.0f}"
+                                                 for k in ("read", "written", "waited", "wait_s"))
+              if shared else "")
 
 
 build = _accounted(build)

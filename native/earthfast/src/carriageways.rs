@@ -5,7 +5,12 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+/// coupling_rows: (n, 5) [chain a, sample, chain b, sample, kind] or (n, 7) with [chain c, sample] after them (chain
+/// c -1: none); kind 0: z_a - z_b = 0, 1: >= value, 2: <= value. With c the coupled quantity is
+/// z_a - (1 - alpha) z_b - alpha z_c (coupling_alpha, 0 without it): b's height moved alpha of the way to c.
 #[pyfunction]
+#[pyo3(signature = (target, weight, lower, upper, offsets, parameters, coupling_rows, coupling_values, rounds, budget_s,
+                    coupling_alpha = None, spacing = None))]
 #[allow(clippy::too_many_arguments)]
 pub fn carriageway_profiles<'py>(
     py: Python<'py>,
@@ -19,6 +24,8 @@ pub fn carriageway_profiles<'py>(
     coupling_values: PyReadonlyArray1<'py, f64>,
     rounds: usize,
     budget_s: f64,
+    coupling_alpha: Option<PyReadonlyArray1<'py, f64>>,
+    spacing: Option<PyReadonlyArray1<'py, f64>>,
 ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyDict>)> {
     let bad = |message: &str| PyValueError::new_err(message.to_owned());
     if rounds == 0 || budget_s.is_nan() || budget_s < 0. {
@@ -34,7 +41,19 @@ pub fn carriageway_profiles<'py>(
     let params = parameters.as_array();
     let rows = coupling_rows.as_array();
     let values = coupling_values.as_slice()?;
+    let alpha = match &coupling_alpha {
+        Some(a) => a.as_slice()?.to_vec(),
+        None => vec![0.; values.len()],
+    };
     let n = target.len();
+    // (the distance of each sample to the next, per sample: a chain's last one unused; none: each chain's own step)
+    let spacing = match &spacing {
+        Some(a) => a.as_slice()?.to_vec(),
+        None => Vec::new(),
+    };
+    if !spacing.is_empty() && (spacing.len() != n || spacing.iter().any(|v| !v.is_finite() || *v < 0.)) {
+        return Err(bad("carriageway spacing must be one finite nonnegative distance per sample"));
+    }
     if weight.len() != n
         || lower.len() != n
         || upper.len() != n
@@ -44,8 +63,9 @@ pub fn carriageway_profiles<'py>(
         || offsets.iter().any(|&v| v < 0 || v > n as i64)
         || params.ncols() != 5
         || params.nrows() + 1 != offsets.len()
-        || rows.ncols() != 5
+        || (rows.ncols() != 5 && rows.ncols() != 7)
         || rows.nrows() != values.len()
+        || alpha.len() != values.len()
     {
         return Err(bad("inconsistent carriageway array shapes or offsets"));
     }
@@ -98,14 +118,19 @@ pub fn carriageway_profiles<'py>(
     };
     let mut couplings = Vec::with_capacity(values.len());
     for (i, row) in rows.rows().into_iter().enumerate() {
-        if !(0..=1).contains(&row[4]) || !values[i].is_finite() {
+        if !(0..=2).contains(&row[4]) || !values[i].is_finite() || !alpha[i].is_finite() {
             return Err(bad("invalid carriageway coupling"));
         }
+        let b = sample(row[2], row[3])?;
+        let c = if row.len() == 7 && row[5] >= 0 { sample(row[5], row[6])? } else { b };
         couplings.push(Coupling {
             a: sample(row[0], row[1])?,
-            b: sample(row[2], row[3])?,
-            inequality: row[4] == 1,
-            value: if row[4] == 1 { values[i] } else { 0. },
+            b,
+            inequality: row[4] != 0,
+            value: if row[4] != 0 { values[i] } else { 0. },
+            c,
+            alpha: if c == b { 0. } else { alpha[i] },
+            upper: row[4] == 2,
         });
     }
     let problem = Problem {
@@ -115,6 +140,7 @@ pub fn carriageway_profiles<'py>(
         upper,
         offsets: offsets.iter().map(|&v| v as usize).collect(),
         parameters,
+        spacing,
         couplings,
     };
     let (z, d) = py

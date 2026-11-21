@@ -25,7 +25,7 @@ impl Join {
                 if let Some(v) = self.grid.get(&(gx + dx, gy + dy)) {
                     for &i in v {
                         let (qx, qy) = self.pts[i];
-                        let d = (qx - x).powi(2) + (qy - y).powi(2);
+                        let d = (qx - x).sq() + (qy - y).sq();
                         if d < bd || (d == bd && best != usize::MAX && i < best) {
                             best = i;
                             bd = d;
@@ -109,7 +109,10 @@ enum Req {
 /// - At a junction of 3+ lines (no loose end within jflat + jfade, no crossing within jflat + jfade + flat): every
 ///   line there takes the deepest drop within jflat of it, blended back over jfade (smoothstep).
 /// The queries (qxy, qline) are points on those lines: each is placed at the nearest point of its line.
-/// prm: [flat, grade, max_grade, max_drop, jflat, jfade, tol]. Pure and deterministic for a given input order.
+/// prm: [flat, grade, max_grade, max_drop, jflat, jfade, tol]. req may carry a 4th column: that dip's own grade in
+/// place of grade (at most grade, at least depth * grade / max_drop; 0 or NaN: grade); a joined dip on its own grade
+/// ends before the nearest junction it reaches (never shorter than at grade). Pure and deterministic for a given input
+/// order.
 #[pyfunction]
 pub fn underpass_offsets<'py>(
     py: Python<'py>,
@@ -183,7 +186,12 @@ pub fn underpass_offsets<'py>(
         }
         let (a, b) = ends[part];
         let ll = len[part];
-        let run = depth * PI / grade;
+        // (a 4th column: this dip's own ramp grade, gentler than grade for a fast road (grading.UNDER_SPEED), never so
+        // gentle that its ramp outruns max_drop's at grade: every dip still ends within max_run)
+        let own = req.shape()[1] > 3 && req[[r, 3]] > 0.0;
+        let run0 = depth * PI / grade;
+        let grade = if own { req[[r, 3]].min(grade).max(depth * grade / max_drop) } else { grade };
+        let mut run = depth * PI / grade;
         let limit = (flat + run + 1.0).max(jreach + 1.0);
         dijkstra(&adj, &[(a, sc), (b, ll - sc)], limit, &mut buf, &mut touched);
         let mut dist = HashMap::with_capacity(touched.len());
@@ -227,7 +235,16 @@ pub fn underpass_offsets<'py>(
             }
             continue;
         }
+        if own {
+            // (a longer ramp ends jflat before the nearest junction (3+ lines) it would reach, never shorter than the dip at
+            // grade had: the roads joining there get no more of it than before. Run on through a junction, a trunk's
+            // 1 m dip, 52 -> 208 m long, put a drop on a slip road 75 m on, blended back over jfade: a crest on it)
+            #[allow(clippy::iter_over_hash_type, clippy::disallowed_methods)] // (a minimum: the order does not matter)
+            let jd = dist.iter().filter(|(n, _)| degree[**n] > 2).map(|(_, d)| *d).fold(f64::INFINITY, f64::min);
+            run = run.min((jd - flat - jflat).max(run0));      // (and clear of its common drop's reach)
+        }
         let mut lines: Vec<usize> = vec![part];
+        #[allow(clippy::iter_over_hash_type)] // hash order: the lines are sorted and deduplicated after
         for (&n, &d) in &dist {
             if d < flat + run + 1.0 {
                 lines.extend(inc[n].iter().copied());
@@ -251,7 +268,7 @@ pub fn underpass_offsets<'py>(
                     let d = s - sc;
                     let rr = if d < 0.0 { *r0 } else { *r1 };
                     let u = clip01((d.abs() - flat) / rr.max(1e-9));
-                    power += (depth * 0.5 * (1.0 + (PI * u).dcos())).powi(8);
+                    power += (depth * 0.5 * (1.0 + (PI * u).dcos())).sq().sq().sq();
                 }
                 Req::Joined { part, sc, depth, run, dist } => {
                     let da = dist.get(&ea).copied().unwrap_or(f64::INFINITY);
@@ -265,7 +282,7 @@ pub fn underpass_offsets<'py>(
                     let room = (terminal[ea] + s).min(terminal[eb] + ll - s);
                     let v = clip01(room / run.max(1e-9));
                     drop = drop.min(depth * 0.5 * (1.0 - (PI * v).dcos()));
-                    power += drop.powi(8);
+                    power += drop.sq().sq().sq();
                 }
             }
         }
@@ -336,7 +353,7 @@ pub fn underpass_offsets<'py>(
                 let (ax, ay, bx, by) = (xy[[j, 0]], xy[[j, 1]], xy[[j + 1, 0]], xy[[j + 1, 1]]);
                 let (abx, aby) = (bx - ax, by - ay);
                 let t = clip01(((px - ax) * abx + (py_ - ay) * aby) / (abx * abx + aby * aby).max(1e-12));
-                let d = (ax + t * abx - px).powi(2) + (ay + t * aby - py_).powi(2);
+                let d = (ax + t * abx - px).sq() + (ay + t * aby - py_).sq();
                 if d < bd {
                     bd = d;
                     let i = j - r.start;

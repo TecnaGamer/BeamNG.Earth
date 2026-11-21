@@ -40,7 +40,7 @@ def _run_points(pl, step, inset, start=0.0):
         if s[-1] < step * 0.5:
             continue
         for at in np.arange(start + step / 2.0, s[-1], step):
-            x, y = np.interp(at, s, pts[:, 0]), np.interp(at, s, pts[:, 1])
+            x, y = dnp.interp(at, s, pts[:, 0]), dnp.interp(at, s, pts[:, 1])
             k = min(int(np.searchsorted(s, at)), len(pts) - 1)
             a, b = pts[max(0, k - 1)], pts[min(len(pts) - 1, k)]
             d = b - a

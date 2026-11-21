@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 /// several levels: promoting the whole feature to their maximum loses deck-over-deck ordering (#866).
 #[pyfunction]
 pub fn bridge_level_spans<'py>(py: Python<'py>, ranges: PyReadonlyArray2<'py, f64>,
-    starts: PyReadonlyArray1<'py, f64>, ends: PyReadonlyArray1<'py, f64>, values: Vec<String>, min_part: f64)
+    starts: PyReadonlyArray1<'py, f64>, ends: PyReadonlyArray1<'py, f64>, values: Vec<String>, min_part: f64, absorb_part: f64)
     -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>)> {
     let ranges = ranges.as_array();
     let starts = starts.as_array();
@@ -23,7 +23,7 @@ pub fn bridge_level_spans<'py>(py: Python<'py>, ranges: PyReadonlyArray2<'py, f6
     let rules: Vec<(f64, f64, f64)> = values.iter().enumerate()
         .filter_map(|(i, v)| level_rule(starts[i], ends[i], v)).collect();
     let ranges: Vec<(f64, f64)> = ranges.rows().into_iter().map(|r| (r[0], r[1])).collect();
-    let result = level_spans(&ranges, &rules, min_part);
+    let result = level_spans(&ranges, &rules, min_part, absorb_part);
     let xy: Vec<f64> = result.iter().flat_map(|r| [r.0, r.1]).collect();
     let levels: Vec<f64> = result.iter().map(|r| r.2).collect();
     Ok((numpy::ndarray::Array2::from_shape_vec((result.len(), 2), xy).unwrap().into_pyarray(py),
@@ -38,7 +38,10 @@ pub(crate) fn level_rule(a: f64, b: f64, v: &str) -> Option<(f64, f64, f64)> {
 }
 
 /// bridge_level_spans on slices (levelrules.rs: lidar_gap_candidates' bridge pieces).
-pub(crate) fn level_spans(ranges: &[(f64, f64)], rules: &[(f64, f64, f64)], min_part: f64) -> Vec<(f64, f64, f64)> {
+/// A range of min_part or less is dropped; a level fragment of a range of absorb_part or less is absorbed into its
+/// neighbour (roads._bridge_level_spans: min_part the feature's part floor, a metre of a long road, absorb_part the share
+/// of it, MIN_PART: the end pieces a level rule cuts off a bridge are no bridges of their own).
+pub(crate) fn level_spans(ranges: &[(f64, f64)], rules: &[(f64, f64, f64)], min_part: f64, absorb_part: f64) -> Vec<(f64, f64, f64)> {
     let mut result = Vec::new();
     for &(a, b) in ranges {
         if !a.is_finite() || !b.is_finite() || b - a <= min_part { continue; }
@@ -62,7 +65,7 @@ pub(crate) fn level_spans(ranges: &[(f64, f64)], rules: &[(f64, f64, f64)], min_
         // Do not create tiny bridge parts (nor holes): absorb them into the adjacent retained span.
         let mut i = 0;
         while spans.len() > 1 && i < spans.len() {
-            if spans[i].1 - spans[i].0 <= min_part {
+            if spans[i].1 - spans[i].0 <= absorb_part.max(min_part) {
                 if i == 0 { spans[1].0 = spans[0].0; } else { spans[i - 1].1 = spans[i].1; }
                 spans.remove(i);
             } else { i += 1; }

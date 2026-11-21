@@ -984,7 +984,7 @@ impl LevelLayer {
                     continue;
                 }
                 let br: Vec<(f64, f64)> = rule[i].iter().filter(|r| r.2 == BRIDGE).map(|r| (r.0, r.1)).collect();
-                let pieces: Vec<(f64, f64)> = level_spans(&br, &lv[i], part_floor(min_part, min_part_m, geo.length_m(i))).iter().map(|s| (s.0, s.1)).collect();
+                let pieces: Vec<(f64, f64)> = level_spans(&br, &lv[i], part_floor(min_part, min_part_m, geo.length_m(i)), min_part).iter().map(|s| (s.0, s.1)).collect();
                 for r in cut_rings(&geo.rings(i), &pieces, false) {
                     ends.push(r[0]);
                     ends.push(r[r.len() - 1]);

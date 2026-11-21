@@ -38,7 +38,7 @@ impl Line {
         let mut acc = 0.0;
         for i in 0..p.len() {
             if i > 0 {
-                acc += ((p[i][0] - p[i - 1][0]).powi(2) + (p[i][1] - p[i - 1][1]).powi(2)).sqrt();
+                acc += ((p[i][0] - p[i - 1][0]).sq() + (p[i][1] - p[i - 1][1]).sq()).sqrt();
             }
             arc.push(acc);
         }

@@ -192,6 +192,116 @@ class LowArch(unittest.TestCase):
         self.assertFalse(used & {roadmesh.TUNNEL_STONE, roadmesh.TUNNEL_STONE_IN}, used)
 
 
+class BoreFitPiece(unittest.TestCase):
+    """Popoli: a street over the A25's two tubes 12-20 m inside their portals, 5.2 m over the floor; the tunnels 870 m
+    long, one full section each, too long for BORE_FIT: their 6.8 m tubes stood 1-1.7 m through the street."""
+
+    def solve(self, at_x):
+        from test_roads import features, FRAME, LON, M_LON
+        # a 600 m motorway tunnel through a ridge rising 0.26 m per m from its portals (x = +-300), a street across it
+        f = features([[(-300, 0), (300, 0)], [(at_x, -60), (at_x, 60)]], ["motorway", "residential"],
+                     flags=[(0, "is_tunnel")])
+
+        def ridge(la, lo):
+            e = (np.asarray(lo) - LON) * M_LON
+            return 10.0 + np.clip((300.0 - np.abs(e)) * 0.26, 0.0, 60.0)
+        tp = roads.TunnelProfiles(FRAME, lambda key: f, ridge)
+        parts = tp.parts([f], (-320.0, -64.0, 320.0, 64.0))
+        out = []
+        for fid, spec, xy, z, _lon in parts:
+            xy = np.asarray(xy, np.float64)[:, :2]
+            out.append((xy[:, 0].min(), xy[:, 0].max(), float(np.min(z)), tp.height(fid)))
+        return sorted(out)
+
+    def test_the_tube_under_a_street_near_its_portal_fits_under_it(self):
+        # the street 20 m inside the east portal, 5.2 m over the floor: the piece under it a box no taller than the
+        # room under the street allows (MAJOR_LOW_H at the least), the rest of the tunnel its full tube
+        got = self.solve(280.0)
+        under = [g for g in got if g[0] <= 280.0 <= g[1]]
+        self.assertTrue(under, got)
+        floor = under[0][2]
+        self.assertLessEqual(under[0][3], max(10.0 + 20 * 0.26 - floor - roads.BORE_FIT_M, roads.MAJOR_LOW_H) + 1e-6,
+                             got)
+        self.assertGreaterEqual(under[0][1], 299.0, "carried on to the portal: no tube's stub between")
+        self.assertTrue(any(h >= roadmesh.TUNNEL_H - 1e-6 and x1 - x0 > 400.0 for x0, x1, _z, h in got),
+                        "the tunnel inside the hill keeps its full tube")
+
+    def test_a_street_high_over_it_leaves_the_tube(self):
+        got = self.solve(200.0)         # 26 m over the floor
+        self.assertTrue(all(h >= roadmesh.TUNNEL_H - 1e-6 for x0, x1, _z, h in got if x0 <= 200.0 <= x1), got)
+
+
+class ShapedFloor(unittest.TestCase):
+    """Vienna's A23 at Erzherzog-Karl-Strasse: a 280 m motorway tube under a rail yard at grade, an underpass its
+    interchange's shape solved 7.15 m under the tracks. The tube took its floor from the ground's hull between its
+    portals instead (the shape's cut had lowered one portal, and under 4 m of cover the hull was not buried): 1.5 m
+    over the shape's, its vault in the tracks."""
+
+    def floor(self, hook):
+        from test_roads import features, FRAME, LON, M_LON
+        f = features([[(-140, 0), (140, 0)]], ["motorway"], flags=[(0, "is_tunnel")])
+
+        def yard(la, lo):       # the yard at 160 m, the portals' approaches down to 155 m (west) and 153.5 m (east)
+            e = (np.asarray(lo) - LON) * M_LON
+            return np.where(e < -120.0, 155.0 + (e + 140.0) * 0.25,
+                            np.where(e > 120.0, 160.0 - (e - 120.0) * 0.325, 160.0))
+        with mock.patch.object(roads, "TUNNEL_Z_HOOK", hook):
+            tp = roads.TunnelProfiles(FRAME, lambda key: f, yard)
+            parts = tp.parts([f], (-160.0, -64.0, 160.0, 64.0))
+        xy = np.concatenate([np.asarray(p[2], np.float64)[:, :2] for p in parts])
+        z = np.concatenate([np.asarray(p[3], np.float64) for p in parts])
+        return xy, z
+
+    @staticmethod
+    def dip(x):
+        """The shape's: down at 6 % from the portals to 7.15 m under the tracks."""
+        return np.maximum(160.0 - 7.15, np.maximum(155.0 - 0.06 * (x + 140.0), 153.5 - 0.06 * (140.0 - x)))
+
+    def test_the_tube_s_floor_is_the_shape_s(self):
+        calls = []
+
+        def hook(frame, lines, fids):
+            calls.append(list(fids))
+            return [self.dip(np.asarray(ln, np.float64)[:, 0]) for ln in lines]
+        xy, z = self.floor(hook)
+        self.assertTrue(calls)
+        self.assertAlmostEqual(float(z.min()), 160.0 - 7.15, delta=0.05)
+        self.assertTrue((z <= self.dip(xy[:, 0]) + 0.05).all(), "never over the shape: the tracks keep their clearance")
+
+    def test_no_shape_the_hull(self):
+        _xy, z = self.floor(lambda frame, lines, fids: [None for _ln in lines])
+        self.assertGreater(float(z.min()), 153.4)       # (the hull between the portals, as before)
+
+class CoverRoadsMouth(unittest.TestCase):
+    """Popoli: the street over the A25's west tube 6.9 m inside its low arch's portal face, the arch carried on 2 m past
+    the street's carriageway (4 m half width) to the face; its mouth band, the ground at the floor 3-4.5 m in from the
+    face, stood 4.5 m from the street's line, the arch's corner 3.3 m: a 5.6 m drop at the street's edge, the cliff's
+    terrain through the arch's roof (the crossing cut)."""
+
+    def test_the_mouth_band_stays_clear_of_a_road_crossing_near_the_portal(self):
+        import math
+        s = np.arange(0.0, 60.1, 3.27)
+        xy = np.c_[s, np.zeros_like(s)]
+        kinds = np.where(s <= 20.0, 1, 0).astype(np.int64)      # a low arch, open from 20 m on
+        ang = math.radians(82.0)
+        c = 22.0                                                # the street across it at 22 m, 82 degrees
+        d = np.array([math.cos(ang), math.sin(ang)])
+        street = np.array([[c, 0.0] - 60 * d, [c, 0.0] + 60 * d])
+        out = roads.cover_roads(xy, s, kinds, [street], [4.0])
+        face = float(s[out > 0].max())
+        band = roads.LOW_HOLE_M + roads.LOW_HOLE_STEP          # (the ground over the last of it at the floor)
+        self.assertGreaterEqual(band, grading.MOUTH_PLAN_M)     # (grading's floor plan into the mouth within it)
+        # the mouth band's inner edge, across the street from its line: past its carriageway and the clearance
+        self.assertGreaterEqual((face - band - c) * math.sin(ang), 4.0 + roads.TUNNEL_ROAD_CLEAR_M - 1e-6, face)
+
+    def test_a_road_far_from_the_portal_carries_nothing_on(self):
+        s = np.arange(0.0, 90.1, 3.0)
+        xy = np.c_[s, np.zeros_like(s)]
+        kinds = np.where(s <= 30.0, 1, 0).astype(np.int64)
+        street = np.array([[75.0, -60.0], [75.0, 60.0]])      # 45 m past the face: over the open cut, out of reach
+        np.testing.assert_array_equal(roads.cover_roads(xy, s, kinds, [street], [4.0]), kinds)
+
+
 class PortalCover(unittest.TestCase):
     def test_a_major_road_s_shallow_open_end_is_covered_a_park_road_s_is_not(self):
         # the Gotthard road tunnel's north portal: a cut-and-cover box under ~3 m of meadow, then the mountain

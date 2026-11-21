@@ -130,6 +130,16 @@ class ShortTunnelTest(unittest.TestCase):
         self.assertLess(got[0][0], 0.5)
         self.assertGreater(got[0][1], 0.5)
 
+    def test_a_road_over_a_long_tunnel_in_short_segments_is_none(self):
+        # the railway's 90 m tunnel in three 30 m segments (split at its switches): the road over the middle one
+        # crosses a tunnel, not a short "tunnel" under a road bridge (Worcester Street over the tracks under the
+        # Bullring at Birmingham New Street got a deck over each)
+        f = hooked(features([[(-45.0, 0.0), (-15.0, 0.0)], [(-15.0, 0.0), (15.0, 0.0)], [(15.0, 0.0), (45.0, 0.0)],
+                             [(0.0, -200.0), (0.0, 200.0)]],
+                            ["standard_gauge"] * 3 + ["residential"], subtypes=["rail"] * 3 + ["road"],
+                            flags=[(0, "is_tunnel"), (1, "is_tunnel"), (2, "is_tunnel")]), lambda e, n: np.zeros_like(e))
+        self.assertEqual(roads.level_ranges(f, 3), [])
+
     def test_a_level_crossing_is_none(self):
         f = hooked(cross(("residential", "standard_gauge"), subtypes=["road", "rail"]), lambda e, n: np.zeros_like(e))
         self.assertEqual(roads.level_ranges(f, 0), [])

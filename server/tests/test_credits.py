@@ -162,6 +162,7 @@ class DemServedTest(unittest.TestCase):
     def test_served(self):
         tmp = tempfile.TemporaryDirectory()
         dem = demmod.Dem(tmp.name)
+        dem.archives = None             # (the stand-in _download below is every download here: no archive index)
 
         def png(size):
             b = io.BytesIO()

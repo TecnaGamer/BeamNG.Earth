@@ -18,7 +18,9 @@ from test_roads import features, FRAME  # noqa: E402
 from test_roadz import StubProvider  # noqa: E402
 
 NATIVE = fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 105
-CROSS = [[(-200, -150), (200, -150)], [(-200, 150), (200, 150)]]       # streets under the viaduct
+# streets under the viaduct, near enough to its joint (from the road law's 4 m headroom, falling at roads.DECK_GRADE from
+# each) for the deck to still stand over the ground there, which the joint's tests need
+CROSS = [[(-200, -80), (200, -80)], [(-200, 80), (200, 80)]]
 BRIDGE = (None, "is_bridge", 0.0, 1.0)
 
 
