@@ -87,13 +87,23 @@ class SignNodeTest(unittest.TestCase):
     def test_filters_read_every_key_used(self):
         """The first pass's filters: a way every key lane_way and rule_tags read (dev's LANE_KEYS and junction
         among them), a node the three sign keys."""
-        for k in lt.RULE_KEYS + lt.LANE_KEYS + ("junction",):
+        for k in lt.RULE_KEYS + lt.LANE_KEYS + ("lanes", "junction"):
             self.assertIn(k, lt.WAY_KEYS)
         self.assertEqual(len(lt.WAY_KEYS), len(set(lt.WAY_KEYS)))
         self.assertEqual(lt.NODE_KEYS, ("traffic_sign", "traffic_sign:forward", "traffic_sign:backward"))
 
 
 class LaneWayTest(unittest.TestCase):
+    def test_plain_lane_counts_kept_only_for_motorways_and_trunks(self):
+        for highway in ("motorway", "trunk"):
+            with self.subTest(highway=highway):
+                tags = {"highway": highway, "lanes": "3", "oneway": "yes", "name": "X"}
+                self.assertEqual(lt.lane_way(tags), {"highway": highway, "lanes": "3", "oneway": "yes"})
+                self.assertIsNone(lt.lane_way({"highway": highway}))
+        for highway in ("motorway_link", "trunk_link", "primary", "secondary", "residential", "service"):
+            with self.subTest(highway=highway):
+                self.assertIsNone(lt.lane_way({"highway": highway, "lanes": "2", "oneway": "yes"}))
+
     def test_lane_way_is_its_tags(self):
         t = {"highway": "primary", "turn:lanes": "left|through", "lanes": "2", "name": "X"}
         self.assertEqual(lt.lane_way(t), {"turn:lanes": "left|through", "highway": "primary", "lanes": "2"})
@@ -171,6 +181,16 @@ def _shards(out):
 
 
 class FirstPassTest(unittest.TestCase):
+    def test_plain_highway_lanes_reach_the_export(self):
+        objects = [_way(1, {"highway": "motorway", "lanes": "3", "oneway": "yes"}, [1, 2]),
+                   _way(2, {"highway": "trunk", "lanes": "4", "oneway": "yes"}, [2, 3]),
+                   _way(3, {"highway": "secondary", "lanes": "2"}, [3, 4])]
+        # Model the native input key filter as well as the Python selection.
+        ways, rules, nodes = lt._first_pass(o for o in objects if any(k in o.tags for k in lt.WAY_KEYS))
+        self.assertEqual([(wid, tags["lanes"]) for wid, tags, _refs in ways], [(1, "3"), (2, "4")])
+        self.assertEqual(rules, [])
+        self.assertEqual(nodes, [])
+
     def test_ways_are_todays_and_rules_apart(self):
         ways, rules, nodes = lt._first_pass(OBJECTS)
         up = _upstream_first_pass(OBJECTS)
@@ -184,6 +204,57 @@ class FirstPassTest(unittest.TestCase):
                          [(201, {"traffic_sign": "DE:205", "direction": "forward"}),
                           (202, {"traffic_sign": "DE:306", "direction": "forward"}),
                           (202, {"traffic_sign": "DE:307", "direction": "backward"})])
+
+
+class HighwayLaneExportTest(unittest.TestCase):
+    def test_kerspelstraat_bridge_counts_survive_export_join_and_split(self):
+        """Simplified E40 source-way sequences on straight geometry, with no Layercake primary count.
+
+        The westbound bridge's plain lanes=3 used to be absent from the shard. The eastbound bridge had lanes=4
+        exported, but missing plain counts elsewhere stopped the entire merged segment from being split.
+        """
+        import lanesections
+        import railtags
+        import roads
+        from test_roadlanes import highway
+        from test_roads import FRAME, rules
+
+        cases = [
+            (15365082, [3878533, 15364879, 15365082, 19787334], [4, 3, 3, 4],
+             [0., .1, .2, .9, 1.], ("none|none|none|merge_to_left", None, None,
+                                    "none|none|none|slight_right"), (.12, .18), 3, [4, 3, 4]),
+            (15366661, [479908704, 15366661, 15364866], [5, 3, 4],
+             [0., .1, .8, 1.], ("none|none|none|none|merge_to_left", None,
+                                "none|none|none|slight_right"), (.85, .9), 4, [5, 3, 4]),
+        ]
+        for primary, ids, counts, stations, turns, span, expected, sections in cases:
+            with self.subTest(bridge=ids[1] if expected == 3 else ids[-1]):
+                objects = []
+                for wid, count, turn in zip(ids, counts, turns):
+                    tags = {"highway": "motorway", "lanes": str(count), "oneway": "yes"}
+                    if turn:
+                        tags["turn:lanes"] = turn
+                    objects.append(_way(wid, tags, [1, 2]))
+                ways, rule_rows, nodes = lt._first_pass(
+                    o for o in objects if any(k in o.tags for k in lt.WAY_KEYS))
+                with tempfile.TemporaryDirectory() as out:
+                    rail.write(out, ways, nodes, NID, NLON, NLAT, rules=rule_rows)
+                    exported = {}
+                    for body in _shards(out).values():
+                        exported.update(json.loads(body)["ways"])
+                f = highway([[(1000. * s, 0.) for s in stations]])
+                f.attrs["src_record"] = np.array([f"w{primary}@1"])
+                f.rules["src_ways"] = rules([(0, f"w{wid}@1", a, b)
+                                             for wid, a, b in zip(ids, stations, stations[1:])])
+                f.rules["level"] = rules([(0, 1., *span)], "float")
+                tags = railtags.LaneTags.__new__(railtags.LaneTags)
+                tags.of_cell = lambda _key: {"ways": railtags.Ways(exported)}
+                tags.join(f, None)
+                split = lanesections.split(f, FRAME)
+                self.assertEqual([sp.lanes for sp in roads.road_specs(split)], sections)
+                bridges = [sp for sp in roads.bridge_specs(split) if sp is not None]
+                self.assertEqual([sp.lanes for sp in bridges], [expected])
+                self.assertEqual([roads.lane_layout(sp)[1] for sp in bridges], [expected])
 
 
 class ShardsTest(unittest.TestCase):
