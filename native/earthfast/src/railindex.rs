@@ -334,6 +334,38 @@ fn resample(xy: &[P], step: f64) -> Result<Vec<P>, ResErr> {
     Ok(rx.into_iter().zip(ry).map(|(x, y)| [x, y]).collect())
 }
 
+/// Stations of the rendered ground rail on either side of a profile crossing.
+#[pyfunction]
+pub fn surface_rail_samples(lines: Vec<Vec<P>>, points: Vec<(usize, P)>, step: f64)
+    -> PyResult<Vec<(P, P, f64)>> {
+    if !step.is_finite() || step <= 0. { return Err(PyValueError::new_err("invalid rail step")); }
+    let mut sampled = vec![None; lines.len()];
+    let mut out = Vec::with_capacity(points.len());
+    for (i, p) in points {
+        if i >= lines.len() || lines[i].len() < 2 {
+            return Err(PyValueError::new_err("invalid rail line"));
+        }
+        if sampled[i].is_none() {
+            sampled[i] = Some(resample(&lines[i], step).map_err(|_| PyValueError::new_err("invalid rail span"))?);
+        }
+        let rail = sampled[i].as_ref().unwrap();
+        let mut best = f64::INFINITY;
+        let mut hit = (rail[0], rail[0], 0.);
+        for w in rail.windows(2) {
+            let d = [w[1][0] - w[0][0], w[1][1] - w[0][1]];
+            let v = [p[0] - w[0][0], p[1] - w[0][1]];
+            let norm = d[0] * d[0] + d[1] * d[1];
+            if norm == 0. { continue; }
+            let u = ((d[0] * v[0] + d[1] * v[1]) / norm).clamp(0., 1.);
+            let (x,y) = (v[0] - u*d[0], v[1] - u*d[1]);
+            let dist = x*x + y*y;
+            if dist < best { best = dist; hit = (w[0], w[1], u); }
+        }
+        out.push(hit);
+    }
+    Ok(out)
+}
+
 /// roads.clip_polyline(xy, *near) is not empty: a segment of xy reaches into the box (Liang-Barsky, the kernel's).
 fn clips(p: &[P], n: &[f64; 4]) -> bool {
     let [x0, y0, x1, y1] = *n;

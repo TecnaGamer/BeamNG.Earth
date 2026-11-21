@@ -102,7 +102,9 @@ jobs:
       - name: Smoke test (the packaged server starts and answers --help)
         run: |
           f=$(ls dist/*.AppImage)
-          "$f" --appimage-extract-and-run --server --help > help.txt && head -3 help.txt
+          "$f" --appimage-extract-and-run --server --help > help.txt
+          grep -q -- "--near-visual" help.txt
+          head -3 help.txt
       - name: numpy starts with its AVX-512 targets held back (server/npyguard.py, -W error)
         run: |
           f=$(ls dist/*.AppImage)
@@ -180,7 +182,9 @@ jobs:
         shell: bash
         run: |
           f=$(ls dist/*.exe)
-          "$f" --server --help > help.txt && head -3 help.txt
+          "$f" --server --help > help.txt
+          grep -q -- "--near-visual" help.txt
+          head -3 help.txt
       - name: numpy starts with its AVX-512 targets held back (server/npyguard.py, -W error)
         shell: bash
         run: |

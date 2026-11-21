@@ -14,10 +14,11 @@ Selection (select()):
     K' table, so selection stays one level coarser at the same distance);
   - hysteresis: a node refined last time stays refined until the player is (1 + h) times its
     switch distance away (h = 0.25, so the band is 25 % of the switch distance);
-  - terrain mode only: nodes overlapping a forced box (the committed, pending and predicted
+  - terrain mode: nodes overlapping a forced box (the committed, pending and predicted
     terrain blocks) are refined down to L0, so the 8 x 8 L0 tiles under every such block are
     always present: the mod hides the ones under the committed block and sinks the edge ring
-    (§2.3). Mesh mode has no forced boxes: the TerrainBlock is invisible (physics only);
+    (§2.3). In mesh mode the server forces exact tiles along a moving car's projected path
+    so sibling groups can be built and swapped before the car enters them;
   - everything intersecting the square of half-size RADIUS (80 km) around the player is kept.
 The selected tiles tile the radius square exactly once.
 
@@ -100,10 +101,9 @@ BLOCK_SIZES = tuple(int(m / heightmap.SQUARE) for m in (1024, 2048))  # terrain 
 # 2048 samples at 1 m
 TERRAIN_BLOCK = int(2048 / heightmap.SQUARE)
 # Triangles per tile shape: 8192 + 512 at 64 cells. The old 8192 was the ProceduralMesh rule;
-# .cdae has no such cliff (§3.1): its limit is the engine's 16-bit vertex indices (VERTS_MAX), which the fine near
+# .cdae has no such cliff (§3.1): its limit is the engine's 16-bit vertex indices (cdae.VERTS_MAX), which the fine near
 # tiles (NEAR_FINE_M, up to ~2x the grid's triangles at a cutting) keep under.
 TRIS_MAX = 9000
-VERTS_MAX = 65535
 HYSTERESIS = 0.25           # a refined node stays refined while d < (1 + h) * its switch distance
 HOLD_S = 2.0                # a node changes state at most once per HOLD_S seconds (§2.4)
 DETAIL_M = 2.0              # UV1 (detail map) repeat in metres; must divide 64 (see module doc)
@@ -1165,7 +1165,6 @@ def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_
     has its own imagery texture (UV0 = footprint, UV1 = world-locked detail); otherwise UV0 is
     the shared palette coordinate and there is no UV1. tex_px: the texture has a border of
     imagery.gutter(tex_px) texels around the footprint (UV0 is inset to match)."""
-    assert len(built.positions) <= VERTS_MAX
     uvs = built.uvs
     if textured:
         uvs = built.planar if tex_px is None else imagery.gutter_uv(built.planar, tex_px)
@@ -1182,7 +1181,6 @@ def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_
 def built_shape(built, material, tex_px=None, packed=None):
     """The .cdae bytes write_built writes for a textured tile (farrestore: a worker's kept shape, packed=False with a
     placeholder name, the session's name stamped in when it is put back)."""
-    assert len(built.positions) <= VERTS_MAX
     uvs = built.planar if tex_px is None else imagery.gutter_uv(built.planar, tex_px)
     return cdae.encode(built.positions, built.tris, normals=built.normals, uvs=uvs, uvs2=built.detail_uvs,
                        material=material, tangent_uvs=built.planar, close=False, open_tris=None, packed=packed)

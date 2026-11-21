@@ -119,91 +119,44 @@ for _c, _m in CLASS_MATERIAL.items():
 
 def dry_west(lat, lon):
     """The arid West (a coarse climate stand-in, vegetation.regional's): its towns have fewer lawns."""
-    lat, lon = np.asarray(lat), np.asarray(lon)
-    return (lon < -102.0) & (lat > 25.0) & (lat < 46.0) & ~((lon < -121.0) & (lat > 37.0))
+    fast.require(564, "arid west")
+    lat, lon = np.broadcast_arrays(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    out = fast._ef.landcover_dry_west(lat.ravel(), lon.ravel())
+    return out.reshape(lat.shape) if lat.ndim else out[0]
 
 
 def lawns(lat, lon):
     """True where built-up land is a lawn (LAWN_* above). A pure function of the world position."""
-    lat = np.asarray(lat, np.float64)
-    lon = np.asarray(lon, np.float64)
-    xm = lon * M_PER_DEG * dnp.cos(np.radians(lat))
-    ym = lat * M_PER_DEG
-    n = 0.65 * _value_noise(xm / LAWN_PATCH_M, ym / LAWN_PATCH_M, 5) \
-        + 0.35 * _value_noise(xm / (LAWN_PATCH_M / 3), ym / (LAWN_PATCH_M / 3), 6)
-    share = np.where(dry_west(lat, lon), LAWN_SHARE_DRY, LAWN_SHARE_HUMID)
-    # threshold near the noise sum's share quantile (see the test)
-    return n > (0.5 - share) * 1.1
+    fast.require(564, "land-cover lawns")
+    lat, lon = np.broadcast_arrays(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    out = fast._ef.landcover_lawns(lat.ravel(), lon.ravel(), (LAWN_PATCH_M, LAWN_SHARE_DRY, LAWN_SHARE_HUMID))
+    return out.reshape(lat.shape) if lat.ndim else out[0]
 
 
 def classify(classes, u, square, lat=None, lon=None):
-    """Material index per sample: the land-cover class's material, ROCK where the slope of the
-    height grid u (metres, [row, col], `square` m apart) is steeper than ROCK_SLOPE_DEG (snow stays
-    snow). With the samples' positions, built-up land is LAWN where lawns() says. Pure."""
+    """WorldCover materials, including lawns, dry grass, sandy shores and steep rock."""
+    import climate
+    fast.require(564, "terrain surface classification")
     classes = np.asarray(classes, np.uint8)
-    idx = _LUT[classes]
+    grid = None
     if lat is not None and lon is not None:
-        # (KyzoFox 1.5.4: lawns() only at the built-up samples, the only ones it can change: on rural ground
-        # that is almost none of a block)
-        urban = classes == 50
-        if urban.any():
-            idx = idx.copy()
-            sub = idx[urban]
-            sub[lawns(np.asarray(lat, np.float64)[urban], np.asarray(lon, np.float64)[urban])] = np.uint8(LAWN)
-            idx[urban] = sub
-        grass = classes == 30
-        if grass.any():
-            import climate
-            dry = np.isin(climate.koppen_many(np.asarray(lat, np.float64)[grass], np.asarray(lon, np.float64)[grass]),
-                          DRY_KOPPEN)
-            if dry.any():               # (idx is _LUT's own new array: written in place)
-                sub = idx[grass]
-                sub[dry] = np.uint8(DRYGRASS)
-                idx[grass] = sub
-    sand = beaches.sand_grid(classes, square)      # a beach's grassland pixels: bare sand, no grass (GitHub #578)
-    if sand.any():
-        idx = np.where(sand, np.uint8(SAND), idx)
-    u = np.asarray(u, np.float64)
-    if min(u.shape) < 2:            # no slope from a single row / column
-        return idx.astype(np.uint8)
-    gy, gx = np.gradient(u, square)
-    steep = (gx * gx + gy * gy) > dnp.sq(dmath.tan(math.radians(ROCK_SLOPE_DEG)))
-    return np.where(steep & (idx != SNOW), np.uint8(ROCK), idx).astype(np.uint8)
-
-
-def _value_noise(x, y, seed):
-    """Smooth value noise in [-1, 1] at points (x, y) given in lattice units."""
-    return _value_noises(x, y, (seed,))[0]
-
-
-def _value_noises(x, y, seeds):
-    """_value_noise(x, y, seed) for each of seeds (warp's dx and dy share their points): earthfast.value_noises (the
-    hash of each lattice corner, smoothstep weights, bilinear; ported 2026-11-01 from the numpy version, the same
-    values bit for bit)."""
-    fast.require(139, "value noise")
-    x = np.asarray(x, np.float64)
-    y = np.asarray(y, np.float64)
-    out = fast._ef.value_noises(np.ascontiguousarray(x.ravel()), np.ascontiguousarray(y.ravel()),
-                                [int(v) for v in seeds])
-    return [o.reshape(x.shape) for o in out]
+        lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+        if (classes == 30).any():
+            grid = climate._load()
+    else:
+        lat = lon = None
+    return fast._ef.landcover_classify(classes, np.asarray(u, np.float64), square, lat, lon, grid, climate.RES, _LUT,
+                                       (LAWN, DRYGRASS, SAND, ROCK, SNOW), DRY_KOPPEN,
+                                       dmath.tan(math.radians(ROCK_SLOPE_DEG)),
+                                       (LAWN_PATCH_M, LAWN_SHARE_DRY, LAWN_SHARE_HUMID), beaches.grid_distances())
 
 
 def warp(lat, lon):
-    """(lat, lon) moved by a few metres of smooth noise (WARP_OCTAVES): where each sample reads the
-    land cover, so class borders follow organic curves instead of the 10 m pixel grid. A pure
-    function of the world position (blocks agree along their shared samples). Pure."""
-    lat = np.asarray(lat, np.float64)
-    lon = np.asarray(lon, np.float64)
-    m_lon = M_PER_DEG * dnp.cos(np.radians(lat))
-    xm = lon * m_lon                     # metres east of the lon 0 meridian (at this latitude)
-    ym = lat * M_PER_DEG                 # metres north of the equator
-    dx = np.zeros_like(lat)
-    dy = np.zeros_like(lat)
-    for k, (size, amp) in enumerate(WARP_OCTAVES):
-        nx, ny = _value_noises(xm / size, ym / size, (2 * k + 1, 2 * k + 2))
-        dx += amp * nx
-        dy += amp * ny
-    return lat + dy / M_PER_DEG, lon + dx / np.maximum(m_lon, 1e-6)
+    """Shift land-cover sample positions with smooth world-locked noise."""
+    fast.require(564, "land-cover warp")
+    lat, lon = np.broadcast_arrays(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    la, lo = fast._ef.landcover_warp(lat.ravel(), lon.ravel(), WARP_OCTAVES)
+    return (la.reshape(lat.shape), lo.reshape(lat.shape)) if lat.ndim else (la[0], lo[0])
 
 
 # road surface kind (roads.py) -> material; drawn in this order (paved last: it wins at junctions)
@@ -390,7 +343,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
                             add(footpaths, c, r, walk.width / 2 + .15)
                 continue
             seen.add(fid)
-            if pavement is not None and specs[i].cls in roadsurf3.V3_CLASSES and specs[i].kind == "paved":
+            if pavement is not None and roadsurf3.replaces_ground_paint(specs[i]):
                 continue
             # (all of it off the grid, with room for everything drawn beside it: no sample of it is painted)
             m = (specs[i].width + 2 * AISLE_STALLS_M + 2 * (specs[i].walk + square) + 2 * VERGE_M
@@ -600,7 +553,7 @@ def _gore_fills(frame, feats_list, box, urban_fn=None, widths=None, quick=False,
         for i in range(len(feats)):
             sp = specs[i]
             fid = str(feats.ids[i])
-            if omit_v3 and sp is not None and sp.cls in roadsurf3.V3_CLASSES and sp.kind == "paved":
+            if omit_v3 and sp is not None and roadsurf3.replaces_ground_paint(sp):
                 continue
             if sp is None or fid in seen or not sp.oneway or sp.kind != "paved" or \
                     (sp.cls not in markings.GORE_MAJOR and not sp.link):
@@ -843,7 +796,11 @@ def enlarge(rgb, px):
     rgb = np.asarray(rgb, np.uint8)
     if rgb.shape[0] == px and rgb.shape[1] == px:
         return rgb
-    return np.asarray(Image.fromarray(rgb, "RGB").resize((px, px), Image.BILINEAR), np.uint8)
+    if rgb.shape[0] != rgb.shape[1]:
+        # Pillow 13 can do the vertical pass first on rectangular inputs; older Pillow rounded horizontally first.
+        return np.asarray(Image.fromarray(rgb, "RGB").resize((px, px), Image.BILINEAR), np.uint8)
+    fast.require(559, "photo_resize")
+    return fast._ef.photo_resize(rgb, px)
 
 
 def _square_pts(frame, x0, y0, size):
@@ -969,6 +926,12 @@ def _photo_pavement(surface, frame, x0, y0, size, widths, w, h, pending=None):
     return roadsurf3.paint_coverage(geom, px, w, h, True)
 
 
+def far_photo_roads(size, px):
+    """Whether the road paint can change this far tile's guttered texture."""
+    import imagery
+    return roadsmod.ROADS_IN_GROUND and imagery.gutter_square(0, 0, size, px)[2] / px <= PHOTO_ROADS_MAX_TEXEL
+
+
 def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False, pending=None, pads=None):
     """photo_roads for a ground photo over [x0, x0 + size]² of frame with the roads of surface's cached cells (a
     Surface; never waits); as it was when its texels are coarser than PHOTO_ROADS_MAX_TEXEL or no cell is cached.
@@ -978,8 +941,15 @@ def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False, p
     per set of cells, not again for every square.
     simple: the carriageways alone (a stand-in photo). pads: the gas station pads [(lat, lon)] (the server's, handed
     to a far-tile process with the square); None: the surface's own (_square_pads)."""
-    if surface is None or size / max(rgb.shape[1], 1) > PHOTO_ROADS_MAX_TEXEL:
-        return rgb
+    h, w = rgb.shape[:2]
+    layers = square_paint_layers(frame, x0, y0, size, w, h, surface, widths, simple, pending, pads)
+    return rgb if layers is None else layers.paint(np.asarray(rgb, np.uint8))
+
+
+def square_paint_layers(frame, x0, y0, size, w, h, surface, widths=None, simple=False, pending=None, pads=None):
+    """Native paint inputs for the square, or None when there is nothing to paint."""
+    if surface is None or size / max(w, 1) > PHOTO_ROADS_MAX_TEXEL:
+        return None
     import paintlist
     roads = _square_roads(frame, x0, y0, size, surface, pending)
     lots = []
@@ -988,9 +958,9 @@ def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False, p
         if pads is None:
             pads = _square_pads(frame, x0, y0, size, surface)
     if simple and not roads:
-        return rgb
-    pavement = _photo_pavement(surface, frame, x0, y0, size, widths, rgb.shape[1], rgb.shape[0], pending) if roads else None
-    return paintlist.paint(rgb, frame, x0, y0, size, roads, lots, getattr(surface, "urban", None), widths,
+        return None
+    pavement = _photo_pavement(surface, frame, x0, y0, size, widths, w, h, pending) if roads else None
+    return paintlist.prepare(frame, x0, y0, size, roads, lots, getattr(surface, "urban", None), widths,
                            pads or (), simple=simple, pavement=pavement)
 
 
@@ -1457,15 +1427,18 @@ def mask_names(stem):
     return [f"{stem}_m{i}.png" for i in range(len(MATERIALS))]
 
 
-def write_masks(idx, out_dir, stem):
+def write_masks(idx, out_dir, stem, south_first=False):
     """One 0/255 greyscale PNG per material (rows as the heightmap's: row 0 = north), written
     atomically. Returns the file names (in out_dir), in MATERIALS order."""
+    fast.require(564, "terrain layer masks")
+    idx = np.asarray(idx, np.uint8)
+    if south_first:
+        idx = idx[::-1]
     names = mask_names(stem)
     for i, name in enumerate(names):
         path = os.path.join(out_dir, name)
-        tmp = staging.tmp_for(path)
-        Image.fromarray(np.where(idx == i, 255, 0).astype(np.uint8), "L").save(tmp, format="PNG", compress_level=1)
-        staging.replace(tmp, path)
+        with staging.staged_write(path) as tmp:
+            Image.fromarray(fast._ef.block_mask(idx, i), "L").save(tmp, format="PNG", compress_level=1)
     return names
 
 
@@ -1543,15 +1516,9 @@ def used_materials(idx):
     turn them into (LAWN -> DIRT, SNOW -> LOOSE), in MATERIALS order, DIRT last. Each distinct material a .ter lists costs
     the engine's first draw after the swap ~20 ms (in-game probes 2026-10-18 at Tower Bridge: one material
     55-80 ms, three 80-180, all ten 250-560 ms in RenderShadows, whether a sample uses them or not)."""
-    u = set(np.unique(np.asarray(idx, np.uint8)).tolist())
-    u.discard(heightmap.TER_HOLE)
-    if LAWN in u:
-        u.add(DIRT)
-    if SNOW in u:
-        u.add(LOOSE)
-    # (MATERIALS order, DIRT last: an imported mask set's all-zero sample takes the last layer, the default dirt as
-    # before the layers appended after it)
-    return sorted(u, key=lambda i: (i == DIRT, i)) or [DIRT]
+    fast.require(564, "terrain material listing")
+    return list(fast._ef.block_materials(np.asarray(idx, np.uint8).ravel()))
+
 
 
 # Fewer ground layers per block (the user, 2026-11-11: "combine the ground layers and reduce them without reducing
@@ -1591,65 +1558,29 @@ def fold_policy(counts, painted, core, n, square, cap=LAYER_CAP):
     """Which MATERIALS indices a block gives up (fold_layers' rules) from its layer statistics (earthfast.layer_stats:
     samples, painted samples and core samples per index, n² samples `square` m apart). Returns (folded: indices whose
     samples take their neighbours' materials, merged: [(dropped, kept)] whose samples become `kept`)."""
-    folded, merged = [], []
-    max_n = FOLD_SHARE * n * n
-    max_core = FOLD_CORE_M2 / (square * square)
-    for m in FOLD_FROM:
-        if counts[m] and not painted[m] and counts[m] <= max_n and core[m] <= max_core:
-            folded.append(m)
+    fast.require(564, "terrain layer policy")
+    folded, merged = fast._ef.block_fold_policy(np.asarray(counts, np.uint64), np.asarray(painted, np.uint64),
+                                                np.asarray(core, np.uint64), n, square, _fold_rules(cap))
+    return list(folded), merged
 
-    def listed():
-        live = [i for i in range(len(MATERIALS))
-                if counts[i] and i not in folded and all(i != a for a, _ in merged)]
-        return set(used_materials(np.array(live, np.uint8))) if live else set()
-    if len(listed()) > cap:
-        for a, b in LOOKALIKE:
-            now = listed()
-            if len(now) <= cap:
-                break
-            if a in now and b in now:
-                merged.append((a, b))
-        rest = sorted((m for m in FOLD_FROM if counts[m] and m not in folded and not painted[m]),
-                      key=lambda m: counts[m])
-        for m in rest:
-            if len(listed()) <= cap:
-                break
-            folded.append(m)
-    return folded, merged
+
+def _fold_rules(cap):
+    return len(MATERIALS), FOLD_FROM, LOOKALIKE, FOLD_SHARE, FOLD_CORE_M2, cap
 
 
 def fold_layers(idx, land, square, stages=None):
-    """The block's layer map (idx: MATERIALS indices, rows as written, row 0 = south) with fold_policy's layers given
-    up; land: the same map before anything was painted over the land cover (classify and the water bed). Returns the
-    new map (idx itself when nothing changes). stages (optional): gets "layersFolded" (how many listed materials fewer)
-    and the time."""
+    """Fold rare land-cover layers and record changes to the block's material list."""
     if not FOLD_ON or idx is None:
         return idx
-    import fast
-    fast.require(220, "ground layer fold")
+    fast.require(564, "terrain layer fold")
     t0 = time.perf_counter()
     idx = np.ascontiguousarray(idx, np.uint8)
-    painted = np.ascontiguousarray(idx != np.asarray(land, np.uint8), np.uint8)
-    n = idx.shape[0]
-    counts, paint, core = fast._ef.layer_stats(idx, painted, int(FOLD_SHARE * n * n), core_radius(square))
-    folded, merged = fold_policy(counts, paint, core, n, square)
-    if not folded and not merged:
+    result = fast._ef.block_fold(idx, np.asarray(land, np.uint8), square, core_radius(square), _fold_rules(LAYER_CAP))
+    if result is None:
         return idx
-    out = idx
-    if merged:
-        lut = np.arange(256, dtype=np.uint8)
-        for a, b in merged:
-            lut[lut == a] = b
-        out = lut[out]
-    if folded:
-        drop = np.zeros(256, np.uint8)
-        drop[folded] = 1
-        out = fast._ef.layer_fold(np.ascontiguousarray(out), drop, painted)
+    out, gone = result
     if stages is not None:
-        live = [i for i in range(len(MATERIALS)) if counts[i]]
-        gone = set(folded) | {a for a, _ in merged}
-        stages["layersFolded"] = len(used_materials(np.array(live, np.uint8))) - len(
-            used_materials(np.array([i for i in live if i not in gone], np.uint8)))
+        stages["layersFolded"] = gone
         stages["layerFold"] = time.perf_counter() - t0
     return out
 
@@ -1662,10 +1593,7 @@ def write_ter(out_dir, name, qgrid, idx):
         heightmap.write_ter(os.path.join(out_dir, name), qgrid, None, [MATERIALS[DIRT][0]])
         return name, None
     used = used_materials(idx)
-    lut = np.full(256, heightmap.TER_HOLE, np.uint8)
-    lut[used] = np.arange(len(used), dtype=np.uint8)
-    heightmap.write_ter(os.path.join(out_dir, name), qgrid, lut[np.asarray(idx, np.uint8)],
-                        [MATERIALS[i][0] for i in used])
+    heightmap.write_ter(os.path.join(out_dir, name), qgrid, idx, [MATERIALS[i][0] for i in used], used)
     return name, used
 
 
@@ -1930,22 +1858,11 @@ class Surface:
         """(WorldCover class per point, complete): 0 (no data) where the cell is not cached yet. The
         land cover is read at the warped points (warp: organic borders)."""
         lat, lon = warp(lat, lon)
-        out = np.zeros(lat.shape, np.uint8)
-        complete = True
-        for key in mapcells.cells_for_points(lat, lon):
-            r = self._cached(key)
-            lon0, lat0, lon1, lat1 = key.bounds()
-            inside = (lat >= lat0) & (lat < lat1) & (lon >= lon0) & (lon < lon1)
-            if not inside.any():
-                continue
-            if r is None:
-                complete = complete and not self._is_queued(key)
-                if not complete:
-                    revisit.fault()         # (not cached yet: nothing built now is kept)
-                continue
-            out[inside] = r.sample(lon[inside], lat[inside])
-        out[np.abs(lat) > mapcells.MAX_LAT] = POLAR_CLASS
-        return out, complete
+        fast.require(564, "land-cover raster samples")
+        out, complete = fast._ef.landcover_samples(lat.ravel(), lon.ravel(), mapcells.cells_for_points(lat, lon),
+                                                   self._cached, self._is_queued, revisit.fault,
+                                                   mapcells.MAX_LAT, POLAR_CLASS)
+        return out.reshape(lat.shape), complete
 
     def block_classes(self, frame, cx, cy, lat, lon):
         """Raw classes on a physics block's exact lattice, with bounded native reuse of overlapping chunks.

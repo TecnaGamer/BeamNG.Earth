@@ -16,8 +16,8 @@ exists: the DTM reads nodata there and the tile keeps Mapterhorn's heights.
     got = h.tile(z, x, y)       # None, or (heights float32 [512, 512], valid bool [512, 512]) on dem.py's grid
 
 Reads go through netfetch (rangeread.RemoteFile: the file's blocks cached on disk, so a place is fetched once) and
-the decoded file tiles through a cog.TileCache. Pure numpy otherwise: the Lambert projection is the EPSG formula
-(conformal conic, two standard parallels, GRS80), checked against PROJ in tests/test_hrdem.py.
+the decoded file tiles through a cog.TileCache. Rust projects the sample grid with the EPSG two-standard-parallel
+Lambert formula on GRS80 and interpolates the valid mosaic pixels. tests/test_bclidar.py checks projected positions.
 
 Horizontal datum: NAD83(CSRS) is taken as WGS84 (they differ by ~1-2 m on the west coast; below a 2 m terrain
 lattice's own error). Vertical: CGVD2013 vs Mapterhorn's EGM2008 differ by decimetres; dem.py feathers the seams.
@@ -30,7 +30,8 @@ from collections import OrderedDict
 
 import numpy as np
 import dmath
-import dnp
+import fast
+import bcproj
 
 import cog as cogmod
 import rangeread
@@ -66,34 +67,9 @@ TILE_CACHE_BYTES = 256 * 1024 * 1024
 LATTICE_M = 1.0                 # m: the terrain's lattice; finer mosaic pixels are not read (z16's 0.8 m: the 1 m overview)
 MAX_LEVEL = 8                   # overviews asked down to 2^8 = 256 m pixels (dem.py asks z13 and deeper: <= 12 m)
 
-# EPSG:3979: NAD83(CSRS) / Canada Atlas Lambert
-_A = 6378137.0
-_F = 1 / 298.257222101
-_E = math.sqrt(_F * (2 - _F))
-_LAT1, _LAT2, _LAT0, _LON0 = map(math.radians, (49.0, 77.0, 49.0, -95.0))
-
-
-def _m(phi):
-    return dmath.cos(phi) / math.sqrt(1 - dnp.sq(_E * dmath.sin(phi)))
-
-
-def _t(phi):
-    s = dnp.sin(phi)
-    return dnp.tan(np.pi / 4 - phi / 2) / dnp.power((1 - _E * s) / (1 + _E * s), _E / 2)
-
-
-_N = (dmath.log(_m(_LAT1)) - dmath.log(_m(_LAT2))) / (dmath.log(float(_t(_LAT1))) - dmath.log(float(_t(_LAT2))))
-_FF = _m(_LAT1) / (_N * dnp.power(float(_t(_LAT1)), _N))
-_R0 = _A * _FF * dnp.power(float(_t(_LAT0)), _N)
-
-
 def lcc(lat, lon):
-    """EPSG:3979 easting / northing (m) of WGS84 lat / lon (degrees; arrays)."""
-    phi = np.radians(np.asarray(lat, np.float64))
-    lam = np.radians(np.asarray(lon, np.float64))
-    r = _A * _FF * dnp.power(_t(phi), _N)
-    th = _N * (lam - _LON0)
-    return r * dnp.sin(th), _R0 - r * dnp.cos(th)
+    """EPSG:3979 coordinates on the NRCan mosaic."""
+    return bcproj._conic(lat, lon, (49., 77.), (49., -95.), (0., 0.), hrdem=True)
 
 
 def item_of(x, y):
@@ -103,10 +79,8 @@ def item_of(x, y):
 
 def tile_lat_lon(z, x, y, size=TILE):
     """Pixel-centre lat / lon grids [size, size] of Web-Mercator tile (z, x, y) on dem.py's grid (row 0 north)."""
-    n = 2 ** z
-    i = (np.arange(size) + 0.5) / size
-    lon = (x + i) / n * 360.0 - 180.0
-    lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1 - 2 * (y + i) / n))))
+    fast.require(565, "regional DEM tile grid")
+    lat, lon = fast._ef.dem_tile_axes(z, x, y, size)
     return np.broadcast_to(lat[:, None], (size, size)), np.broadcast_to(lon[None, :], (size, size))
 
 
@@ -177,73 +151,18 @@ class Hrdem:
             return None
         lat, lon = tile_lat_lon(z, x, y, size)
         ex, ny = lcc(lat, lon)
-        # the tile's ground pixel (m) at its centre: the mosaic level that is as fine as that or one finer
-        clat = math.radians(float(lat[size // 2, 0]))
-        px = 40075016.686 * dmath.cos(clat) / 2 ** z / size
-        want = max(0, min(MAX_LEVEL, int(math.floor(dmath.log2(max(px, min_px, 1.0))))))
-        out = np.zeros((size, size), np.float32)
-        ok = np.zeros((size, size), bool)
-        ix = np.floor(ex / ITEM_M).astype(np.int64)
-        iy = np.floor(ny / ITEM_M).astype(np.int64)
-        code = (ix + 64) * 4096 + (iy + 64)             # (negative indices south / west of the origin)
-        items = {f"{int(cd) // 4096 - 64 + 6}_{int(cd) % 4096 - 64 + 3}": code == cd for cd in np.unique(code)}
-        for item, m in items.items():
-            if not m.any():
-                continue
-            c = None
-            level = want
-            while level >= 0:
-                c = self._cog(item, level)
-                if c is not None or level == 0:
-                    break
-                level -= 1              # (fewer overviews than asked: the finest there is under it)
-            if c is None:
-                continue
-            col, row = c.pixel_of(ex[m], ny[m])
-            col, row = col - 0.5, row - 0.5             # pixel centres at integers
-            c0, r0 = int(math.floor(col.min())) - 1, int(math.floor(row.min())) - 1
-            c1, r1 = int(math.floor(col.max())) + 3, int(math.floor(row.max())) + 3
-            win = c.read_window(c0, r0, c1 - c0, r1 - r0).astype(np.float32)
-            bad = ~np.isfinite(win) | (win < NODATA_LIMIT)
-            if c.nodata is not None:
-                bad |= win == np.float32(c.nodata)
-            if bad.all():
-                continue
-            u, v = col - c0, row - r0
-            u0, v0 = np.floor(u).astype(np.int64), np.floor(v).astype(np.int64)
-            fu, fv = (u - u0).astype(np.float32), (v - v0).astype(np.float32)
-            a00, a01 = win[v0, u0], win[v0, u0 + 1]
-            a10, a11 = win[v0 + 1, u0], win[v0 + 1, u0 + 1]
-            good = ~(bad[v0, u0] | bad[v0, u0 + 1] | bad[v0 + 1, u0] | bad[v0 + 1, u0 + 1])
-            h = (a00 * (1 - fu) + a01 * fu) * (1 - fv) + (a10 * (1 - fu) + a11 * fu) * fv
-            out[m] = np.where(good, h, 0.0)
-            ok[m] = good
+        fast.require(565, "HRDEM mosaic sampling")
+        result = fast._ef.dem_hr_tile(ex, ny, lat[size // 2, 0], z, min_px, ITEM_M, MAX_LEVEL, NODATA_LIMIT, self._cog)
         with self._lock:
             self.stats["tiles"] += 1
-            if not ok.any():
+            if result is None:
                 self.stats["empty"] += 1
-        if not ok.any():
-            return None
-        return out, ok
+        return result
 
 
 def feather(valid, px):
     """Blend weights [0, 1] for a partly valid tile: 1 deeper than px pixels inside the valid area, falling linearly
     to 0 at its edge (seams between lidar and the coarse model become slopes, not steps). The tile's border counts as
     valid beyond it (neighbouring tiles agree there). Pure."""
-    if valid.all():
-        return np.ones(valid.shape, np.float32)
-    px = max(1, int(px))
-    w = valid.astype(np.float32)
-    d = np.where(valid, float(px), 0.0).astype(np.float32)
-    cur = valid.copy()
-    for k in range(1, px + 1):          # distance (4-neighbour) to the invalid area, up to px
-        p = np.pad(cur, 1, mode="edge")
-        cur = cur & p[:-2, 1:-1] & p[2:, 1:-1] & p[1:-1, :-2] & p[1:-1, 2:]
-        ring = valid & ~cur & (d == px)
-        d[ring] = k
-        if not cur.any():
-            break
-    w = np.clip(d / px, 0.0, 1.0)
-    return w.astype(np.float32)
-
+    fast.require(565, "regional DEM edge weights")
+    return fast._ef.dem_feather(valid, max(1, int(px)))

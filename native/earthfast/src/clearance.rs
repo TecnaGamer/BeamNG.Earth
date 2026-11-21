@@ -59,7 +59,7 @@ impl Grid {
 }
 
 /// Does the segment come within the grid cell (i, j)? (its distance to the cell's box under half a cell's diagonal)
-fn seg_cell(x0: f64, y0: f64, x1: f64, y1: f64, i: i64, j: i64, c: f64) -> bool {
+pub(crate) fn seg_cell(x0: f64, y0: f64, x1: f64, y1: f64, i: i64, j: i64, c: f64) -> bool {
     let lo = [i as f64 * c, j as f64 * c];
     let hi = [lo[0] + c, lo[1] + c];
     box_distance2([x0, y0], [x1, y1], lo, hi) <= 0.0

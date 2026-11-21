@@ -614,7 +614,7 @@ mod tests {
             a.run(&curb, &out, 2.5, CURB_H, (true, false), &[(2.0, 4.5)], 1, lean, [1.0, 2.0, 0.5]);
             let mut b = Mesh::default();
             b.run_v2(&curb, &out, 2.5, &[CURB_H; 6], &[f64::NAN; 6], &[0.0; 6], (true, false), &[(2.0, 4.5, 0)], 1,
-                     lean, [1.0, 2.0, 0.5]);
+                     lean, [1.0, 2.0, 0.5], &[], &[]);
             assert_eq!(a.p, b.p);
             assert_eq!(a.t, b.t);
             assert_eq!(a.uv, b.uv);
@@ -625,3 +625,6 @@ mod tests {
 
 #[path = "sidewalks_v2.rs"]
 pub(crate) mod v2;
+
+#[path = "town_mesh.rs"]
+pub(crate) mod town;

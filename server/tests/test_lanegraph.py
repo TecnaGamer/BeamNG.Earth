@@ -45,7 +45,7 @@ def scene(trunk_lanes=3, merge=False, region=1):
     return segs, cons
 
 
-def run(segs, cons, home=("n0",), order=None, seg_home=()):
+def run(segs, cons, home=("n0",), order=None, seg_home=(), divided_crossings=False):
     segs = sorted(segs, key=lambda s: s["fid"])
     idx = {s["fid"]: k for k, s in enumerate(segs)}
     off = [0]
@@ -59,7 +59,7 @@ def run(segs, cons, home=("n0",), order=None, seg_home=()):
                               col("lane_w"), col("turn"), col("turn_bw"), col("place"), col("region"),
                               [s["fid"] in seg_home for s in segs], [c[0] for c in cons], [idx[c[1]] for c in cons],
                               [c[2] for c in cons], [c[0] in home for c in cons], lanegraph.LANE_PARAMS,
-                              np.ascontiguousarray(lanegraph.TAPER_TABLE.reshape(-1)))
+                              np.ascontiguousarray(lanegraph.TAPER_TABLE.reshape(-1)), divided_crossings=divided_crossings)
     return got, json.loads(got)
 
 
@@ -81,6 +81,29 @@ def gore_s(lanes_main=3, lanes_branch=1, w=W_US):
 
 
 class LaneGraphTest(unittest.TestCase):
+    def test_slip_lane_at_divided_crossing(self):
+        segs, cons = scene()
+        for road in segs:
+            road["cls"] = 2  # divided trunk, all arms one-way
+        segs[2]["pts"] = np.array([[0., 0.], [35., 0.], [250., 0.]])
+        segs[3]["pts"][:, 1] = -.45 * segs[3]["pts"][:, 0]
+        segs.append(seg("cross", [(35., -40.), (35., 0.), (35., 40.)], cls=3))
+        cons.extend([("crossing", "b", 1), ("crossing", "cross", 1)])
+        def event():
+            return run(segs, cons, divided_crossings=True)[1]["events"][0]
+        self.assertEqual(event()["flags"], ["at_grade"])
+        segs[-1]["pts"] = np.array([[0., -2.], [35., 0.], [70., 2.]])
+        self.assertIn("rows", event())  # four nearly parallel arms
+        segs[-1]["pts"] = np.array([[35., -40.], [35., 0.], [35., 40.]])
+        segs[1]["cls"] = segs[2]["cls"] = 1
+        self.assertIn("rows", event())  # a true motorway exit
+        # A crossing at the end of the designed gore is still an at-grade conflict
+        # when the connector node is farther away than the short-arm test.
+        segs[1]["cls"] = segs[2]["cls"] = 2
+        segs[2]["pts"][1, 0] = 90
+        segs[-1]["pts"][:, 0] = 90
+        self.assertEqual(event()["flags"], ["at_grade"])
+
     def test_gore_from_geometry_design(self):
         _, out = run(*scene())
         (ev,) = out["events"]

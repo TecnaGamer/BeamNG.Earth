@@ -34,7 +34,7 @@ NP_FUNCS = {"sin", "cos", "tan", "arcsin", "arccos", "arctan", "arctan2", "hypot
             "cov", "corrcoef", "linalg", "logaddexp", "sinc",
             "interp"}       # (numpy's C: slope * dx + y fused into one multiply-add by clang on arm64: dnp.interp)
 MATH_FUNCS = {"sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "expm1", "exp2", "log", "log2", "log10",
-              "log1p", "pow", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "cbrt"}
+              "log1p", "pow", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "cbrt", "fma"}
 RUST_METHODS = ("sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sin_cos", "hypot", "exp", "exp2", "exp_m1", "ln",
                 "ln_1p", "log", "log2", "log10", "powf", "cbrt", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
                 "mul_add")
@@ -58,7 +58,20 @@ def platform_maths(path):
     with open(path, encoding="utf-8") as fh:
         src = fh.read()
     ok = {i + 1 for i, ln in enumerate(src.splitlines()) if "# det-ok" in ln}
+    tree = ast.parse(src)
     out = []
+    modules = {"np": "numpy", "math": "math"}
+    # A direct import also permits passing the function around without any qualified call.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in ("numpy", "math"):
+                    modules[alias.asname or alias.name] = alias.name
+        if isinstance(node, ast.ImportFrom):
+            names = NP_FUNCS if node.module == "numpy" else MATH_FUNCS if node.module == "math" else set()
+            for alias in node.names:
+                if alias.name in names or (names and alias.name == "*"):
+                    out.append((node.lineno, f"from {node.module} import {alias.name}"))
     toks = [t for t in tokenize.generate_tokens(io.StringIO(src).readline)
             if t.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT)]
     for i, t in enumerate(toks[:-2]):
@@ -67,11 +80,11 @@ def platform_maths(path):
         name = toks[i + 2].string
         if name == "linalg" and i + 4 < len(toks) and toks[i + 4].string == "LinAlgError":
             continue
-        if (t.string == "np" and name in NP_FUNCS) or (t.string == "math" and name in MATH_FUNCS):
+        if (modules.get(t.string) == "numpy" and name in NP_FUNCS) or (modules.get(t.string) == "math" and name in MATH_FUNCS):
             out.append((t.start[0], f"{t.string}.{name}"))
         elif name == "dot" and i + 3 < len(toks) and toks[i + 3].string == "(" and t.string not in ("dnp", "self"):
             out.append((t.start[0], f"{t.string}.dot (ndarray.dot is BLAS)"))
-    for n in ast.walk(ast.parse(src)):
+    for n in ast.walk(tree):
         if isinstance(n, ast.BinOp) and isinstance(n.op, ast.MatMult):
             out.append((n.lineno, "@ (BLAS)"))
         elif isinstance(n, ast.AugAssign) and isinstance(n.op, (ast.MatMult, ast.Pow)):
@@ -89,6 +102,8 @@ def _unstable_order(call):
     the PC's AVX2 argsort and the Mac's disagree on ties, 2026-11-18)."""
     name = call.func.attr
     if name == "argsort":
+        if any(k.arg == "stable" and isinstance(k.value, ast.Constant) and k.value.value is True for k in call.keywords):
+            return False
         kind = next((k.value for k in call.keywords if k.arg == "kind"), None)
         return not (isinstance(kind, ast.Constant) and kind.value in ("stable", "mergesort"))
     if name == "argpartition":
@@ -106,18 +121,20 @@ class NoPlatformMathsTest(unittest.TestCase):
         import tempfile
         src = ("a = np.argsort(x)\nb = x.argsort()\nc = np.argsort(x, kind='stable')\nd = np.argpartition(x, 3)\n"
                "e = np.partition(x, 3)\nf = s.partition(':')\ng = np.interp(1, [0, 1], [0, 1])\n"
-               "h = np.argsort(x)  # det-ok: a test\n")
+               "h = np.argsort(x)  # det-ok: a test\n"
+               "import math as m\nm.sin(x)\nfrom numpy import dot as product\nx.argsort(stable=True)\n")
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
             fh.write(src)
         try:
-            self.assertEqual(sorted(ln for ln, _w in platform_maths(fh.name)), [1, 2, 4, 5, 7])
+            self.assertEqual(sorted(ln for ln, _w in platform_maths(fh.name)), [1, 2, 4, 5, 7, 10, 11])
         finally:
             os.unlink(fh.name)
 
     def test_rust_kernels(self):
         src_dir = os.path.join(ROOT, "native", "earthfast", "src")
-        pat = re.compile(r"\.(" + "|".join(RUST_METHODS) + r")\(")
+        pat = re.compile(r"(?:\.\s*|\bf(?:32|64)\s*::\s*)(" + "|".join(RUST_METHODS) + r")\s*\(")
         bad = []
+        self.assertTrue(os.path.isfile(os.path.join(src_dir, "lib.rs")), "missing earthfast sources")
         for dirpath, _dirs, files in os.walk(src_dir):
             for f in files:
                 p = os.path.join(dirpath, f)

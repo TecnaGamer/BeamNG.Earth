@@ -1,17 +1,14 @@
-"""The command line's defaults are exactly v1.4 M1's (docs/V1_4_SPEC.md §0: every later milestone ships
-behind a flag that is off until its in-game probes pass; M4 `--block 512`, M1h `--horizon`): the server
-`earthd.py` builds with no flags but `--block 1024` (mesh mode, 64 cells, no horizon; the CLI's block is
-512 since M4's probes passed, test_new_flags_default_off; since 2026-11-01 the lattice is 1 m and M1's 2 km block is
-`--block 2048`, whose every second sample is M1's) answers hello and
-status with the same messages, selects the same tiles (with hysteresis and HOLD_S, on a fake clock),
-groups and orders them the same way, predicts the same terrain requests (the prefetch), snaps and
-commits the same blocks, and writes the same heightmap as the M1 tree did, compared with
-fixtures/m1_cli_golden.json.
+"""Check the CLI defaults and replay the 64-cell mesh drive against fixtures/m1_cli_golden.json.
+The replay uses M1's 2 km block and disables the horizon. On the 1 m lattice every second sample
+lands on the old 2 m grid. A fake clock drives selection, hysteresis, build order, terrain
+requests and commits. The other case checks the current block and horizon defaults directly.
 
-The fixture was written by the M1 code (git HEAD 5db1faf, before M4 and M1h) through compute() below;
-regenerate it only from such a tree with
+The fixture originates at M1 (5db1faf, before M4 and M1h). Only drive columns 5 through 10
+(desired tiles, refined nodes, groups and build order) come from 9ce547c5. Mesh mode requests
+whole exact-level sibling groups on the car's projected path so they can swap before it arrives.
+To record a tree for comparison without replacing the other historical expectations:
 
-    python3 server/tests/test_cli_default.py --write <server dir> server/tests/fixtures/m1_cli_golden.json
+    python3 server/tests/test_cli_default.py --write <server dir> <scratch output.json>
 
 (test_v131_default.py pins the Server() library default and terrain mode the same way.) compute()
 patches the fake clock into the earthd module it imported only inside a `with` block.
@@ -126,9 +123,9 @@ def compute(server_dir):
             out["zooms"] = [a.zooms[lvl] for lvl in range(0, 10)]
             info = await s.terrain(a, snap(300.0), snap(-140.0))
             out["terrain"] = {k: (round(v, 6) if isinstance(v, float) else v)
-                              for k, v in sorted(info.items()) if k not in ("seconds", "stages", "ter")}
+                              for k, v in sorted(info.items()) if k not in ("seconds", "stages", "heightmap", "ter")}
             from PIL import Image
-            with Image.open(os.path.join(s.out_dir, s.hm_name((a.id, snap(300.0), snap(-140.0))))) as im:
+            with Image.open(os.path.join(s.out_dir, info["heightmap"])) as im:
                 px = np.asarray(im)[sub - 1::sub, ::sub]       # (the 2 m samples: odd rows from the north)
                 out["terrain_png"] = [px.shape[1], im.mode, _h(px.tobytes())]
             a.first_terrain = (0.0, 0.0)

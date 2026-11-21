@@ -38,6 +38,8 @@ def main():
         ap.error("--timeout must be positive")
     names = args.tests or [p.stem for p in sorted(TESTS.glob("test_*.lua"))]
     paths = [TESTS / (Path(name).stem + ".lua") for name in names]
+    if not paths:
+        ap.error("no Lua tests found")
     if any(not p.is_file() for p in paths):
         ap.error("unknown test: " + ", ".join(p.name for p in paths if not p.is_file()))
     if args.child:

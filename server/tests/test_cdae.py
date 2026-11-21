@@ -217,6 +217,32 @@ class SplitCollisionTest(unittest.TestCase):
 
 
 class DrawnPartsTest(unittest.TestCase):
+    def test_oversized_draw_preserves_every_triangle_and_vertex_channel(self):
+        from unittest.mock import patch
+        p = np.array([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [1., 1., 1.], [2., 1., 0.]])
+        t = np.array([[0, 1, 2], [2, 1, 3], [3, 1, 4]])
+        kwargs = dict(material=["paint", "asphalt"], tri_materials=[1, 0, 0], uvs=p[:, :2],
+                      tangent_uvs=p[:, 1:], uvs2=p[:, :2] / 2, colors=np.arange(20, dtype=np.uint8).reshape(-1, 4))
+        whole = cdae.decode(cdae.encode(p, t, **kwargs))
+        with patch.object(cdae, "VERTS_MAX", 3):
+            split = cdae.decode(cdae.encode(p, t, split_drawn=True, **kwargs))
+        self.assertEqual(whole["bounds"], split["bounds"])
+        self.assertEqual(len(split["meshes"]), 3)
+        def expanded(shape):
+            attrs, materials = [], []
+            for mesh in shape["meshes"]:
+                a = cdae.mesh_arrays(mesh)
+                rgba = np.frombuffer(mesh["colors"][2], np.uint8).reshape(-1, 4)
+                vertex = np.column_stack([a[k] for k in ("verts", "norms", "tangents", "tverts", "tverts2")] + [rgba])
+                attrs.append(vertex[a["indices"]])
+                for _, count, mat in a["primitives"]:
+                    materials.extend([mat] * (count // 3))
+            return np.concatenate(attrs), materials
+        expected, mats = expanded(whole)
+        actual, split_mats = expanded(split)
+        np.testing.assert_array_equal(actual, expected)
+        self.assertEqual(split_mats, mats)
+
     def test_parts_are_objects_of_the_one_detail(self):
         """parts=: further drawn meshes, each its own object ("<name>2", ...) with one mesh in the one detail: a shape
         past the engine's 16-bit indices as several meshes under them (the far building packs, 2026-11-14)."""
@@ -242,6 +268,124 @@ class DrawnPartsTest(unittest.TestCase):
             cdae.encode(P, T, material="m", parts=parts[:1], collision_only=True)
         # without parts: the shape as before
         self.assertEqual(cdae.encode(P, T, material="m", parts=None), cdae.encode(P, T, material="m"))
+
+
+class VertexLimitTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # All 65,535 vertices used. The last triangle shares an edge with the first,
+        # and introduces just one more vertex in a different plane.
+        n = cdae.VERTS_MAX
+        i = np.arange(n + 1)
+        cls.p = np.column_stack((i // 3, i % 3 == 1, i % 3 == 2)).astype(float)
+        cls.t = np.vstack((i[:n].reshape(-1, 3), [1, 0, n]))
+        cls.uv = cls.p[:, 1:].copy()
+        cls.colors = np.column_stack((i % 256, i % 79, i % 41, i % 19)).astype(np.uint8)
+
+    def test_attributes_and_materials_cross_the_cut(self):
+        n = cdae.VERTS_MAX
+        self.assertEqual(n, cdae.fast._ef.MESH_VERTICES_MAX)
+        tm = np.zeros(len(self.t), np.int64)
+        tm[-1] = 1
+        shape = cdae.decode(cdae.encode(self.p, self.t, material=["a", "b"], tri_materials=tm,
+                                        uvs=self.uv, uvs2=self.uv * 3, colors=self.colors))
+        first, second = shape["meshes"]
+        self.assertEqual((first["vertsPerFrame"], second["vertsPerFrame"]), (n, 3))
+        for m, original, material in [(first, self.t[:-1], 0), (second, self.t[-1:], 1)]:
+            a = cdae.mesh_arrays(m)
+            inds = a["indices"].reshape(-1, 3)
+            np.testing.assert_array_equal(a["verts"][inds], self.p[original[:, ::-1]])
+            self.assertEqual(a["primitives"].tolist(), [[0, original.size, cdae.PRIM_INDEXED | material]])
+        for field in ("verts", "norms", "tangents", "tverts", "tverts2", "colors"):
+            def at(mesh, source_id):
+                a = cdae.mesh_arrays(mesh)
+                idx, = np.flatnonzero((a["verts"] == self.p[source_id]).all(axis=1))
+                _, width, data = mesh[field]
+                return data[idx * width:(idx + 1) * width]
+            for i in (0, 1):
+                self.assertEqual(at(first, i), at(second, i), field)
+
+    def test_each_detail_gets_all_its_meshes(self):
+        p, t = self.p, self.t
+        one = dict(positions=p[:3], tris=t[:1])
+        two = dict(positions=p, tris=t)
+        for fine, lods, counts in [(two, [(300, one)], [0, 0, 0, 4]),
+                                   (one, [(300, two)], [0, 0, 4, 0])]:
+            d = cdae.decode(cdae.encode(**fine, lods=lods))
+            self.assertEqual([m["type"] for m in d["meshes"]], counts)
+            self.assertEqual(d["smallestVisibleDL"], 1)
+        d = cdae.decode(cdae.encode(p, t, collisions=[(p, t, None)]))
+        self.assertEqual(d["header"]["objectNames"], ["tile", "tile2", "Colmesh0", "Colmesh1"])
+        self.assertEqual([m["type"] for m in d["meshes"]], [0, 4, 0, 4, 4, 0, 4, 0])
+        d = cdae.decode(cdae.encode(p, t, collision_only=True))
+        self.assertEqual(d["header"]["objectNames"], ["Colmesh", "Colmesh2"])
+        self.assertEqual([m["type"] for m in d["meshes"]], [4, 0, 4, 0])
+        # A large source array with a single addressable triangle still uses one object.
+        self.assertEqual(len(cdae.decode(cdae.encode(p, t[:1]))["meshes"]), 1)
+
+    def test_shell_closed_before_partition(self):
+        # A long open ribbon. Its top fits, its skirts and bottom take it over the limit.
+        import shells
+        n = 17000
+        i = np.arange(n)
+        pos = np.column_stack((np.repeat(i, 2), np.tile([0, 1], n), np.zeros(2 * n)))
+        j = i[:-1] * 2
+        tri = np.column_stack((j, j + 2, j + 1, j + 1, j + 2, j + 3)).reshape(-1, 3)
+        closed, faces, _, _ = shells.close(pos, tri)
+        self.assertGreater(len(closed), cdae.VERTS_MAX)
+        d = cdae.decode(cdae.encode(pos, tri, close=True))
+        meshes = [cdae.mesh_arrays(m) for m in d["meshes"]]
+        self.assertGreater(len(meshes), 1)
+        actual = np.concatenate([a["verts"][a["indices"].reshape(-1, 3)] for a in meshes])
+        np.testing.assert_array_equal(actual, closed.astype(np.float32)[faces[:, ::-1]])
+
+    def test_packaged_shape_geometry_limits(self):
+        # Authored props are written by offline asset tools, outside the tile exporter.
+        # A Collada vertex can split at a normal/UV seam. Count complete corner tuples
+        # per primitive, including material boundaries, across the entire geometry.
+        mod = FIX.parents[2] / "mod"
+        paths = list(mod.rglob("*.dae"))
+        self.assertTrue(paths)
+        for path in paths:
+            for mesh in ET.parse(path).iter(NS + "mesh"):
+                for pos in mesh.findall(f"{NS}vertices/{NS}input[@semantic='POSITION']"):
+                    source = mesh.find(f"{NS}source[@id='{pos.get('source')[1:]}']")
+                    accessor = source.find(f"{NS}technique_common/{NS}accessor")
+                    self.assertLessEqual(int(accessor.get("count")), dae.IMPORT_VERTS_MAX, path)
+                used = 0
+                for prim in mesh:
+                    indices = prim.findall(".//" + NS + "p")
+                    if not indices:
+                        continue
+                    stride = 1 + max(int(i.get("offset", 0)) for i in prim.findall(NS + "input"))
+                    corners = np.fromstring(" ".join(p.text or "" for p in indices), sep=" ", dtype=int)
+                    used += len(np.unique(corners.reshape(-1, stride), axis=0))
+                self.assertLessEqual(used, dae.IMPORT_VERTS_MAX, path)
+        for path in mod.rglob("*.cdae"):
+            for mesh in cdae.read(path)["meshes"]:
+                if mesh["type"] == 0:
+                    arrays = cdae.mesh_arrays(mesh)
+                    self.assertLessEqual(len(arrays["verts"]), cdae.VERTS_MAX, path)
+                    indices = arrays["indices"]
+                    self.assertTrue(np.all((indices >= 0) & (indices < len(arrays["verts"]))), path)
+
+    def test_grid_dae_has_separate_local_geometries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "road.dae")
+            dae.write_grid_dae(path, self.p.ravel(), self.uv.ravel(), self.t.ravel(), material="road",
+                               uvs2=self.uv.ravel())
+            root = ET.parse(path)
+        geos = root.findall(".//" + NS + "geometry")
+        self.assertEqual(len(geos), 2)
+        nodes = root.findall(".//" + NS + "node")
+        self.assertEqual([n.find(NS + "instance_geometry").get("url") for n in nodes],
+                         ["#" + g.get("id") for g in geos])
+        for g, nv in zip(geos, [cdae.VERTS_MAX - 3, 6]):
+            self.assertTrue(all(int(a.get("count")) == nv for a in g.iter(NS + "accessor")))
+            tri = g.find(".//" + NS + "triangles")
+            idx = np.fromstring(tri.find(NS + "p").text, dtype=int, sep=" ")
+            self.assertLess(idx.max(), nv)
+            self.assertEqual(len(idx), int(tri.get("count")) * 9)
 
 
 class PackedTest(unittest.TestCase):

@@ -2646,8 +2646,7 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
 # The far tiles and packs too (players' "spiderweb" reports 2026-11-14: a Manhattan pack was one mesh of 705k
 # vertices, a far tile 80k): every building shape is build_parts' meshes, several in one shape (write: an object each).
 MAX_MESH_VERTS = 60000
-VERTS_MAX = 65535           # cdae.VERTS_MAX: a single building past it is left out (build_parts; none near: ~11k most)
-over_limit = {"buildings": 0}   # buildings left out so by this process (build_parts)
+VERTS_MAX = 65535           # keep ordinary skyline groups together below the per-mesh limit
 
 
 def _concat(meshes):
@@ -2664,8 +2663,8 @@ def _concat(meshes):
 def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod=False):
     """build() split into meshes of at most max_verts vertices each (whole buildings per mesh): a list, [] if empty.
     Each building is built once (build draws them one by one) and the meshes joined. with_lod: each mesh carries the
-    lite mesh of its buildings as a 7th element (write: the shape's coarse detail). A building alone past VERTS_MAX
-    (the engine's 16-bit indices: its triangles would join far-apart vertices) is left out, counted in over_limit."""
+    lite mesh of its buildings as a 7th element (write: the shape's coarse detail). A building too big for one
+    standard mesh travels alone to the exporter, which can split it without losing its shading or LOD."""
     parts, cur, cur_lite, n = [], [], [], 0
     if not isinstance(specs_and_ground, (list, tuple)):
         specs_and_ground = list(specs_and_ground)
@@ -2682,9 +2681,6 @@ def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod
     for i, item in enumerate(specs_and_ground):
         one = prepared[i][0] if prepared is not None else build([item], lite)
         if one is None:
-            continue
-        if len(one[0]) > VERTS_MAX:
-            over_limit["buildings"] += 1
             continue
         if cur and n + len(one[0]) > max_verts:
             flush()
@@ -6485,9 +6481,10 @@ def road_tile_items(
     return items, custom
 
 
-def near_rings(frame, tx, ty, md, margin=2.0, skip=frozenset()):
+def near_rings(frame, tx, ty, md, margin=2.0, skip=frozenset(), city_classes=None):
     """The outer rings (k, 2) in the anchor frame of every building of the map within margin m of road tile (tx, ty):
-    its own and its neighbours' (road_tile_items has only the ones whose centre is in it). skip: ids left out."""
+    its own and its neighbours' (road_tile_items has only the ones whose centre is in it). skip: ids left out.
+    city_classes selects mapped urban facades on both sides of a geotile boundary."""
     import roads
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
     out = []
@@ -6496,11 +6493,23 @@ def near_rings(frame, tx, ty, md, margin=2.0, skip=frozenset()):
         f = md.cell(k, layers=("buildings",), kind="demand").layers.get("buildings")
         if f is None or not len(f):
             continue
+        eligible = None
+        if city_classes is not None:
+            eligible = np.isin(f.attrs.get("class", np.full(len(f), "")), tuple(city_classes))
+            subtype = f.attrs.get("subtype")
+            if subtype is not None:
+                eligible |= np.isin(subtype, ("commercial", "civic", "education", "religious"))
+            floors = f.attrs.get("num_floors")
+            if floors is not None:
+                eligible |= floors >= 3
+            min_height = f.attrs.get("min_height")
+            if min_height is not None:
+                eligible &= ~(min_height > .5)
         bx = f.boxes(frame)
         rings = []          # (the cell's outer rings converted in one call)
         for i in range(len(f)):
             fid = str(f.ids[i])
-            if fid in seen or fid in skip:
+            if fid in seen or fid in skip or (eligible is not None and not eligible[i]):
                 continue
             b = bx[i]
             if b[2] < x0 - margin or b[0] > x1 + margin or b[3] < y0 - margin or b[1] > y1 + margin:
@@ -7215,19 +7224,17 @@ def _sky_mesh(items, day=False):
 def _sky_close(pieces, out):
     """_sky_mesh's pieces [(P, UV, T, M, C, starts)] each closed into solids (shells.close, BNE_WATERTIGHT) and added
     to out as build's meshes, in order. The cut counts the open vertices: a piece past VERTS_MAX once closed (its caps'
-    vertices) is cut again between its buildings, in halves; only a building past it alone is left out (over_limit)."""
+    vertices) is cut again between its buildings, in halves. An oversized single building is split at the exporter."""
     import shells       # each building a closed solid, its bottom sunk (shells.close; the user, 2026-11-07)
     for P, UV, T, M, C, starts in pieces:
         P2, T2, M2, UV2, C2 = P, T, M, UV, C
         if shells.ON:
             P2, T2, M2, (UV2, C2) = shells.close(P, T, M, (UV, C), skirt=False)  # (the walls already reach under
                                                                                 # the ground: the bottom capped there)
-        if len(P2) <= VERTS_MAX:
-            out.append((P2, UV2, T2, M2, MATERIALS, C2))
-        elif any(0 < k < len(P) for k in starts):
+        if len(P2) > VERTS_MAX and any(0 < k < len(P) for k in starts):
             _sky_close(_cut_buildings(P, UV, T, M, C, starts, max(1, len(P) // 2)), out)
         else:
-            over_limit["buildings"] += 1
+            out.append((P2, UV2, T2, M2, MATERIALS, C2))
 
 
 def _cut_buildings(P, UV, T, M, C, starts, limit):

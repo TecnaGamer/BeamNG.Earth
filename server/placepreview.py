@@ -9,7 +9,7 @@ import os
 import re
 
 import numpy as np
-from PIL import Image
+import fast
 
 import geodesy
 
@@ -46,10 +46,11 @@ def write(imagery, user_dir, items):
             continue
         h = PX * 9 // 16
         y0 = (PX - h) // 2
-        pic = Image.fromarray(np.ascontiguousarray(np.asarray(rgb)[y0:y0 + h, :, :3]).astype(np.uint8))
+        pic = fast.photo_jpeg(np.asarray(rgb)[y0:y0 + h, :, :3], 85, False)
         os.makedirs(os.path.dirname(out), exist_ok=True)
         tmp = out + ".tmp"
-        pic.save(tmp, format="JPEG", quality=85)
+        with open(tmp, "wb") as f:
+            f.write(pic)
         os.replace(tmp, out)
         done.append(key)
     return done

@@ -144,6 +144,21 @@ fn clip01(v: f32) -> f32 {
 }
 
 /// dsmground.ground(a, px_m, ...): a [rows, cols] float32 elevation with the surface objects narrower than window_m
+/// taken down to the ground around them. Window widths are rounded to odd sample counts before casting metres to float32.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn dem_ground<'py>(py: Python<'py>, a: PyReadonlyArray2<'py, f32>, px_m: f64, window_m: f64, threshold_m: f32,
+                       slope_k: f32, max_cut_m: f32, relief_m: f64, open_m: f64,
+                       hills_m: f32, flat_m: f32, cut_lo: f32, cut_hi: f32) -> Bound<'py, PyArray2<f32>> {
+    let px = px_m.max(1e-3);
+    let odd = |m: f64| ((m / px).round_ties_even() as usize | 1).max(3);
+    let (w, wr, w_small) = (odd(window_m), odd(relief_m), odd(open_m));
+    let w_half = ((w / 2) | 1).max(3);
+    dsm_ground(py, a, px_m as f32, window_m as f32, threshold_m, slope_k, max_cut_m, w, w_half, wr,
+               w_small, hills_m, flat_m, cut_lo, cut_hi)
+}
+
+/// dsmground.ground(a, px_m, ...): a [rows, cols] float32 elevation with the surface objects narrower than window_m
 /// taken down to the ground around them. w, w_half, wr, w_small: the odd window sizes in samples (computed in Python,
 /// as before); the thresholds as dsmground's constants.
 #[pyfunction]

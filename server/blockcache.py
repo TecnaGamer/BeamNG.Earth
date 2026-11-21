@@ -483,7 +483,7 @@ class Build:
         import surface as surfacemod
         q, z_base, max_height, qgrid = heightmap.write_png(os.path.join(out_dir, name), u, self.q)
         gz = heightmap.height_at(qgrid, z_base, max_height, self.cx, self.cy, *ground_at) if ground_at else None
-        info = {"cx": self.cx, "cy": self.cy, "zBase": z_base, "maxHeight": max_height, "q": q,
+        info = {"heightmap": name, "cx": self.cx, "cy": self.cy, "zBase": z_base, "maxHeight": max_height, "q": q,
                 "groundZ": None if gz is None else round(gz, 3), "minU": float(u.min()), "maxU": float(u.max())}
         if idx is not None and meta.get("surface"):
             info["layers"] = surfacemod.write_masks(idx[::-1], out_dir, name[:-4])

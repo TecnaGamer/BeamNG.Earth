@@ -42,12 +42,16 @@ FEATURES = (
                        # that toggle include the latest and what would be the final roads"): vanilla-style cut and fill
                        # slopes with rocks and wall-foot skirts (P1a), decks that follow the road's curve and bank
                        # (P1b) and exits off bridges as one deck with their road (P2b, "sheet": builds on P1b's decks),
-                       # the surface overlay layer with lifted markings (P1c) and the new sidewalks (P1d)
-                       "BNE_BATTER": "vanilla", "BNE_ROADSHAPE": "sheet", "BNE_SURFACE_V2": "on",
-                       "BNE_SIDEWALK_V2": "on",
+                       # (the surface overlay P1c and the new sidewalks P1d moved to their own toggles below, 2026-11-21:
+                       # the wide corpus (193 places) found the overlay alone buried the road surface 2+ cm under terrain
+                       # at Hong Kong and Chicago, and the sidewalks alone added kerb steps at Paris; the user: "Sure go
+                       # ahead" on splitting them out so Revamped roads keeps what clearly helps)
+                       "BNE_BATTER": "vanilla", "BNE_ROADSHAPE": "sheet",
                        # road surface v3 (2026-11-20: one continuous lane surface for motorways/trunks and their
                        # bridge decks; beats the sheet decks at all five probe sites, 0 m of parapet in a carriageway)
                        "BNE_ROADSURF_V3": "surface"}, None),
+    ("expSurfaceOverlay", {"BNE_SURFACE_V2": "on"}, None),                # roadsurf: the second surface layer (P1c)
+    ("expNewSidewalks", {"BNE_SIDEWALK_V2": "on"}, None),                 # sidewalks_v2: town sidewalks (P1d, S5)
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
     ("halfStreetLamps", {"BNE_HALF_STREET_LAMPS": "on"}, None),
