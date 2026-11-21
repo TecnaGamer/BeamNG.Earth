@@ -198,6 +198,9 @@ def test_fitted_entrances_and_shared_wall_exports():
             assert fit(name, 40, 1, [1]) == 0
             assert fit(name, 40, 20, [20, 21]) == 0
             assert fit(name, 40, 10, [10, 20]) <= 10
+            if design.form == "cinema_lobby":
+                assert fit(name, 15, 7.5, [7.5]) == 0
+                assert fit(name, 60, 18, [18, 42]) == 0
             # Shared hosts must retain their roof and mass even for a flagship brand.
             with patch.object(entrance_designs, "draw", side_effect=AssertionError(name)):
                 entry = export_store(Path("tenant.osm"), (name, "tenant", wall, None, [], None), {}, cache)

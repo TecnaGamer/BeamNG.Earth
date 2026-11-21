@@ -54,6 +54,7 @@ DESIGNS = {
     "Advance Auto Parts": Entrance("step", "#a62e2d", "#e7bb40", 16),
     "O'Reilly Auto Parts": Entrance("step", "#276442", "#dfd9bd", 18),
     "Harbor Freight Tools": Entrance("step", "#9e302c", "#494744", 21),
+    "AMC Theatres": Entrance("cinema_lobby", "#bda78c", "#932a36", 32),
     "Apple Store": Entrance("glass", "#bdbfbb", "#626962", 23),
     "Crate & Barrel": Entrance("glass", "#ddd8cb", "#494a46", 20),
     "Lululemon": Entrance("glass", "#bdb6a9", "#52504a", 17),
@@ -70,6 +71,8 @@ def fitted_span(name, wall_width, entrance, doors):
         if other != entrance:
             clear = min(clear, abs(other - entrance) / 2)
     span = min(profile.span, 1.86 * clear)
+    if profile.form == "cinema_lobby":
+        return span if span >= 16 and len(set(doors)) == 1 else 0.
     return span if span >= min(6., profile.span*.66) else 0.
 
 
@@ -181,6 +184,48 @@ def draw(profile, span, height, vertex, mesh, texture, sign, symbol_only=False):
         sign_depth=reach+.08
         box(-sign_width*.53,sign_width*.53,reach-.20,reach+.04,
             sign_z-sign_h*.55,sign_z+sign_h*.55,field)
+    elif form == "cinema_lobby":
+        # A high arched clerestory breaks up the flat roofline of the auditorium block.
+        spring = max(5.7, height + .35)
+        radius = half * .72
+        rise = min(4.2, span * .14)
+        points = [(radius*cos(a), spring+rise*sin(a)) for a in np.linspace(pi, 0, 13)]
+        prism([(-radius, 3.3), (radius, 3.3), *reversed(points)], .04, .68, "#41606b")
+        for (x,z),(u,v) in zip(points, points[1:]):
+            prism([(x,z),(u,v),(u,v+.40),(x,z+.40)], .03, .92, field)
+            if abs(x) < radius-.01:
+                box(x-.055,x+.055,.68,.75,3.4,z,"#b3b6ad")
+        box(-radius,radius,.68,.76,spring-.14,spring,"#b3b6ad")
+        for side in (-1,1):
+            x = side * (radius + .53)
+            box(x-.62,x+.62,.05,1.45,0,spring+.55,field)
+            box(x-.37,x+.37,1.45,1.53,.45,spring+.24,trim)
+            box(x-.79,x+.79,.04,1.62,spring+.45,spring+.77,field)
+        # Chamfered corners make the marquee visible on an oblique approach.
+        reach = min(4.5, span*.16)
+        outline = [(-half,.06),(half,.06),(half,reach*.42),
+                   (half-1.5,reach),(-half+1.5,reach),(-half,reach*.42)]
+        for low,high,color in ((3.25,3.41,trim),(3.41,4.13,"#ead8aa"),(4.13,4.34,trim)):
+            surface([(x,y,high) for x,y in outline],color)
+            surface([(x,y,low) for x,y in reversed(outline)],color)
+            for (x,y),(u,v) in zip(outline,outline[1:]+outline[:1]):
+                surface([(x,y,low),(u,v,low),(u,v,high),(x,y,high)],color)
+        # Repeated pairs of glazed lobby doors sit under the marquee.
+        for x in np.linspace(-radius*.72,radius*.72,5):
+            box(x-1.05,x+1.05,.03,.18,.06,2.78,"#c3b9a5")
+            for dx in (-.49,.49):
+                box(x+dx-.43,x+dx+.43,.18,.20,.17,2.65,"#354b50")
+                box(x+dx-.40,x+dx+.40,.20,.22,1.03,1.11,"#c3b9a5")
+        # Abstract poster art gives the entrance cases a readable silhouette at road distance.
+        for side,sky,land in ((-1,"#406378","#efbd70"),(1,"#734052","#c1c5ab")):
+            x = side * (half-.95)
+            box(x-.73,x+.73,.03,.20,.57,2.65,"#352e32")
+            surface([(x-.62,.21,.71),(x+.62,.21,.71),(x+.62,.21,2.51),(x-.62,.21,2.51)],sky)
+            surface([(x-.62,.22,.71),(x+.62,.22,.71),(x+.62,.22,1.95),(x-.62,.22,1.12)],land)
+            box(x-.41,x+.41,.22,.23,.84,.92,"#eee2cb")
+        sign_h = min(2.55, span*.095)
+        sign_width = sign_h*2.8
+        sign_z,sign_depth = spring+rise*.30,.97
     elif form == "streamline":
         # Stepped horizontal fins with clipped ends frame the diner entrance.
         for i in range(3):

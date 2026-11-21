@@ -4,6 +4,8 @@ All 250 supported chains, rendered from generated GLBs on sample footprints. Eac
 
 ![Twelve storefront examples](overview.jpg)
 
+[Standalone AMC cinema before and after, from driver height](amc-comparison.jpg).
+
 | Entries | Catalog sheet |
 | --- | --- |
 | 1-25 | [99 Ranch Market through Bass Pro Shops](catalog-01.jpg) |

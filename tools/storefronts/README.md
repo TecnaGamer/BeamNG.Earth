@@ -20,9 +20,9 @@ shared storefront panel. Standalone Cracker Barrel stores have a timber porch an
 four-sided footprints also support a pitched roof. Waffle House uses a low glazed diner, and
 IKEA uses a tall blue warehouse with a yellow canopy. Bass Pro Shops can use a projecting lodge
 entrance with a timber truss and stone bases when one customer entrance has enough wall on each side.
-An additional 41 brands use 11 reusable entrance designs in `entrance_designs.py`, including
+An additional 42 brands use 12 reusable entrance designs in `entrance_designs.py`, including
 striped gables, low hipped roofs, castle towers, three-arch arcades, porches, outfitter gables,
-market halls, coffee canopies, diner fins, stepped signs and glazed showrooms. Each entrance
+market halls, coffee canopies, diner fins, stepped signs, glazed showrooms and an arched cinema lobby. A standalone AMC with at least 16 m of clear entrance frontage can get a tall glass arch, paired doors and a deep marquee. Each entrance
 fits between its neighbouring doors and wall ends. A narrow entrance or a shared service wall
 uses the existing building design. The catalog represents typical formats, including some
 classic restaurant designs. Map records rarely identify the renovation era of an individual branch.

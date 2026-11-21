@@ -136,6 +136,7 @@ DESIGN_GLAZING = {
     "porch": (4.4, .70, 2.75, 2.), "outfitter": (6.8, .75, 3.8, 0),
     "market": (9., .32, 4.2, 3.2), "wing": (4.2, .65, 2.75, 3.),
     "streamline": (7.2, .55, 2.8, 4.5), "step": (5., .70, 3.1, 0),
+    "cinema_lobby": PUBLIC_GLAZING["cinema"],
     "glass": (12., .12, 4.9, 5.),
 }
 CAFE_GLAZING.update({name: DESIGN_GLAZING[design.form] for name, design in entrance_designs.DESIGNS.items()})
@@ -987,7 +988,7 @@ def build(
                 inner, outer = base + .12 * normals[i], base + (reach + .12) * normals[i]
                 a, b = (inner, outer) if side == -1 else (outer, inner)
                 mesh([(*a,bottom), (*b,bottom), (*b,top), (*a,bottom), (*b,top), (*a,top)], art, uv)
-        if i == front and family == "cinema":
+        if i == front and family == "cinema" and not fitted:
             # A projecting marquee and display cases distinguish the lobby from auditorium walls.
             span = min(width * .78, 21.)
             left = (width - span) / 2
