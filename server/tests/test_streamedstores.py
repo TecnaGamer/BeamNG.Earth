@@ -276,6 +276,17 @@ class StreamedStoresTest(unittest.TestCase):
                 self.assertAlmostEqual(np.ptp(mesh[0][:,2]),8.55,places=2)
                 self.assertFalse(generate(45.))
 
+    def test_mall_cladding_wraps_the_shell_at_world_scale(self):
+        ring = np.array([[0.,0.],[65.,0.],[65.,30.],[0.,30.]])
+        mesh = buildings.Mesh()
+        buildings._mall_cladding(mesh,ring,-1.,0.,10.,buildings._Looks(.5),.5)
+        positions,uv,_,materials,_ = mesh.arrays()
+        self.assertEqual(set(materials), {buildings.MATERIALS.index(buildings.BRICK_WALL),
+                                          buildings.MATERIALS.index(buildings.CONCRETE)})
+        self.assertEqual(set(positions[:,2].round(2).tolist()),
+                         set(np.array([-1.,1.6,8.4,9.65,10.],dtype=positions.dtype).tolist()))
+        self.assertGreater(np.ptp(uv[:,0]),10.)
+
     def test_retail_mall_identity_uses_approach_and_matching_place(self):
         import streamedstores as stores
         frame = geodesy.EnuFrame(40.,-83.)

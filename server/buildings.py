@@ -850,7 +850,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml", "storefront", "retail_front", "retail_doors")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml", "storefront", "retail_front", "retail_doors", "mall_cladding")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -1698,6 +1698,29 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
         walls = spec.retail_doors or ({spec.front: None} if spec.front is not None else {})
         for wall, offsets in walls.items():
             _retail_glazing(m, ring, wall, z_eave-spec.height, z_eave, mat_idx, lite, offsets)
+
+
+def _mall_cladding(m, ring, bottom, ground, eave, mat_idx, seed):
+    """One palette for a whole mall. Tile the materials in metres across continuous courses."""
+    brick = mat_idx["bne_brick_tan" if _hash01(seed,"mall brick") < .5 else "bne_brick_red"]
+    field = mat_idx["bne_precast_warm"]
+    trim = mat_idx["bne_precast"]
+    height = eave-ground
+    levels = (bottom, ground+min(1.6,height*.17), eave-min(1.6,height*.19), eave-.35, eave)
+    distance = 0.
+    for left,right in zip(ring,np.roll(ring,-1,axis=0)):
+        length = float(np.linalg.norm(right-left))
+        bays = max(1, round(length/13))
+        for bay in range(bays):
+            a = left+(right-left)*(bay/bays)
+            b = left+(right-left)*((bay+1)/bays)
+            u = (distance+length*bay/bays)/3
+            v = (distance+length*(bay+1)/bays)/3
+            upper = brick if bays < 3 or bay%3 != 1 else field
+            for low,high,material in zip(levels,levels[1:],(brick,field,upper,trim)):
+                m.quad((*a,low),(*b,low),(*b,high),(*a,high),
+                       (u,(low-ground)/3),(v,(low-ground)/3),(v,(high-ground)/3),(u,(high-ground)/3),material)
+        distance += length
 
 
 def retail_bays(length):
@@ -3045,7 +3068,10 @@ def build(specs_and_ground, lite=False):
             continue
         z0 = gmin - (SKIRT_LITE_M if lite else SKIRT_M) if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
         z_eave = base_z(spec, gmin, gmax) + mh + spec.height
-        _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
+        if spec.mall_cladding and not lite:
+            _mall_cladding(m, ring, z0, z_eave-spec.height, z_eave, mat_idx, spec.seed)
+        else:
+            _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
         for hole in (spec.holes or ()):               # (a courtyard's walls, facing the yard: the hole clockwise)
             _walls(m, spec, hole, z0, z_eave, mat_idx, lite, hole=True)
         if mh > 0.5:                                  # a part standing on another / over a street: its underside

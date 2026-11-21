@@ -623,6 +623,8 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
             if layers is None:
                 layers = list(businesses(md, keys))
             mall = mapped_mall(layers, coords, label)
+        if mall and spec.roof == "flat" and spec.height >= 5.5 and not material and "|c_" not in spec.facade:
+            spec.mall_cladding = True
         if not mall and (len(ring) > 96 or span > 250):
             continue
         centre = ring.mean(0)
