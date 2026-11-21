@@ -1699,7 +1699,7 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
 
 
 def _retail_glazing(m, ring, front, ground, eave, mat_idx, lite):
-    """A continuous ground-floor display with a recessed-looking head beneath the fascia."""
+    """Group ground-floor glazing into openings separated by the host wall finish."""
     a, b = ring[front], ring[(front+1) % len(ring)]
     length = float(np.linalg.norm(b-a))
     if length < 3:
@@ -1708,26 +1708,34 @@ def _retail_glazing(m, ring, front, ground, eave, mat_idx, lite):
     outward = np.array([axis[1], -axis[0]])
     margin = min(1.1, length*.09)
     left = a + axis*margin + outward*.05
-    right = b - axis*margin + outward*.05
     top = min(ground+3.15, eave-.55)
     # The lower atlas row contains two distinct entry doors. Sample one only at
     # the entrance; use the upper display glass elsewhere so doors never tile.
     span = length - 2*margin
-    entry = min(1.8, span*.42)
-    wing = (span-entry)/2
-    count = max(1, round(wing/2.9))
+    bays = max(1, round(span/8.5))
+    pier = .85
+    opening = (span-(bays-1)*pier)/bays
     def pane(start, end, sill, u0, v0, u1, v1):
         p, q = left+axis*start, left+axis*end
         m.quad((*p, sill), (*q, sill), (*q, top), (*p, top),
                (u0,v0),(u1,v0),(u1,v1),(u0,v1),mat_idx[LOBBY])
-    for offset in (0., wing+entry):
-        for i in range(count):
-            pane(offset+wing*i/count, offset+wing*(i+1)/count, ground+.22,
-                 .169, .648, .405, .901)
-    pane(wing, wing+entry, ground, .315, .004, .634, .496)
-    if not lite:
-        _box(m, (left+right)/2+outward*.27, axis, (length-2*margin)/2+.12, .34,
-             top, min(top+.22, eave), mat_idx[METALWALL])
+    for i in range(bays):
+        start = i*(opening+pier)
+        end = start+opening
+        if i == (bays-1)//2:
+            door = min(1.8, opening*.42)
+            jamb = start+(opening-door)/2
+            pane(start, jamb, ground+.22, .169, .648, .405, .901)
+            pane(jamb, jamb+door, ground, .315, .004, .634, .496)
+            pane(jamb+door, end, ground+.22, .169, .648, .405, .901)
+            if not lite:
+                center = left+axis*(start+opening/2)+outward*.27
+                _box(m, center, axis, opening/2+.12, .34, top, min(top+.22,eave), mat_idx[METALWALL])
+        else:
+            panes = max(1, round(opening/2.9))
+            for j in range(panes):
+                pane(start+opening*j/panes, start+opening*(j+1)/panes,
+                     ground+.22, .169, .648, .405, .901)
 
 
 # Night windows, each its own brightness (the user, 2026-11-08: "the brightness of windows should be randomized at

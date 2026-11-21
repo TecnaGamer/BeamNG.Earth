@@ -69,7 +69,9 @@ class StreamedStoresTest(unittest.TestCase):
             buildings._walls(mesh, spec, ring, -1., spec.height, buildings._Looks(spec.seed), lite)
             points, uv, triangles, materials, _ = mesh.arrays()
             glass = triangles[materials == buildings.MATERIALS.index(buildings.LOBBY)]
-            self.assertEqual(len(glass), 22)
+            spans = sorted((points[t, 0].min(), points[t, 0].max()) for t in glass[::2])
+            gaps = [right[0]-left[1] for left,right in zip(spans,spans[1:]) if right[0]-left[1] > .01]
+            np.testing.assert_allclose(gaps, [.85,.85])
             # Only the central entry reaches the pavement.
             self.assertEqual(sum(points[t, 2].min() == 0 for t in glass), 2)
             np.testing.assert_allclose(np.ptp(points[glass].reshape(-1,3),axis=0), [28.8,0.,3.15])
