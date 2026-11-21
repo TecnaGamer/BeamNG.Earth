@@ -171,10 +171,9 @@ def region(planner, home, hk):
         found[got["key"]] = got
     t_owner = time.perf_counter() - t1
     prof = {}
-    for decks in (True, False):     # (a road's decks first, then the embankments and cuts: the order the consumers read)
-        for ik in sorted(found):
-            for fid, items in found[ik]["roads"].items():
-                prof.setdefault(fid, []).extend(it for it in items if (it[2] == "deck") == decks)
+    for ik in sorted(found):
+        for fid, items in found[ik]["roads"].items():
+            prof.setdefault(fid, []).extend(items)
     failed = sum(1 for g in found.values() if g["failed"])
     log.warning("grading: SHAPES pid %d region %s: %d cells, %d members, %d systems (%d interchanges, %d infeasible, "
                 "left as they are), %d roads graded, find %.2f s, solve %.2f s", os.getpid(), hk, len(loaded),

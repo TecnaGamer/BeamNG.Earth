@@ -113,8 +113,7 @@ its centre, the plans format). The cell holding its centre is its owner. The int
 its lock (`plancache.PlanCache.shape_claim`, `xproc.once` without a wait budget), by `pipeline.interchange`: the steps of its
 one system, then its embankments. Every other thread and process waits for the lock and reads the stored solution
 (`PlanCache.shape_store`: lat / lon and heights, no frame). A holder that is gone hands the lock over; an abandoned one
-gives it back. `pipeline.region` is the region's own find, the owner calls and the merge of their profiles (a road's
-decks first, then the embankments and cuts, as the region's one embankments call gave them).
+gives it back. `pipeline.region` is the region's own find, the owner calls and the merge of their profiles.
 
 An interchange ends where its roads come back to the ground: a road on the ground between two structures' ends joins no
 interchanges (`find_interchanges` unites structures only through their joints, crossings and shared dips), the structure's
