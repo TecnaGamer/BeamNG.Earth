@@ -122,6 +122,7 @@ import runtimeprofiler
 import streamleases
 import pools as poolsmod  # noqa: E402
 import memwatch as memwatchmod  # noqa: E402
+import serverlog  # noqa: E402
 import srvrestart as srvrestartmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
 import grading as gradingmod  # noqa: E402
@@ -11624,7 +11625,7 @@ async def main_async(args, restart=None):
             # (the welcome page's choice and the settings page's switches: nothing before the choice; TELEMETRY.md)
             allowed=lambda: telemetry.choices(cpupin.player_settings(args.user_dir)),
             keep_id=not privacyregionmod.region()[1], perf=server.perf.take).start()
-        logging.getLogger().addHandler(server.perf.errors)    # (error fingerprints: perfstats.ErrorPrints)
+        serverlog.add_sink(server.perf.errors)    # (error fingerprints: perfstats.ErrorPrints)
         log.info("telemetry: on, as the player chose on the welcome page (TELEMETRY.md; nothing before the choice; "
                  "BNE_TELEMETRY=off turns it off)")
     # the in-game reports' sends (reportsend.py): only what the player clicked "Send to the developers" for, so not
@@ -11672,17 +11673,18 @@ async def main_async(args, restart=None):
     srv = await protocol.start_server(lambda r, w: Connection(server, r, w).run(), "127.0.0.1", args.port)
     server.host = srv if isinstance(srv, protocol.HostServer) else None
     port = protocol.listen_port(srv)
-    print(f"earthd listening on 127.0.0.1:{port} session {server.sid} -> {server.out_dir} "
-          f"(far tiles: {fmt}, near visual: {server.near_visual}, cells: {server.layout.cells} "
-          f"(format {server.layout.format}), block: {server.layout.block}, "
-          f"horizon: {'on' if server.horizon else 'off'}, "
-          f"imagery: {','.join(args.imagery) if args.imagery else 'off'}"
-          f"{'' if server.deshadow is None else ', deshadow: ' + server.deshadow.mode}"
-          f"{'' if server.colormatch is None else ', colormatch: ' + server.colormatch.mode}, "
-          f"weather: {args.weather}, gravity: {args.gravity}, credits: {args.credits}, "
-          f"cache cap: {f'{disk.cap / cachemod.GB:g} GB' if disk.cap else 'unlimited'}"
-          f"{', OFFLINE' if args.offline else ''})",
-          flush=True)
+    await asyncio.to_thread(
+        print, f"earthd listening on 127.0.0.1:{port} session {server.sid} -> {server.out_dir} "
+               f"(far tiles: {fmt}, near visual: {server.near_visual}, cells: {server.layout.cells} "
+               f"(format {server.layout.format}), block: {server.layout.block}, "
+               f"horizon: {'on' if server.horizon else 'off'}, "
+               f"imagery: {','.join(args.imagery) if args.imagery else 'off'}"
+               f"{'' if server.deshadow is None else ', deshadow: ' + server.deshadow.mode}"
+               f"{'' if server.colormatch is None else ', colormatch: ' + server.colormatch.mode}, "
+               f"weather: {args.weather}, gravity: {args.gravity}, credits: {args.credits}, "
+               f"cache cap: {f'{disk.cap / cachemod.GB:g} GB' if disk.cap else 'unlimited'}"
+               f"{', OFFLINE' if args.offline else ''})",
+        flush=True)
     if PRELOAD and START_PRELOAD and args.roads == "on" and args.user_dir:
         # (the place the game's level start teleports to, loaded while the game loads: preload.Preloader.start_place,
         # its files read on the preloader's thread once the server listens)
@@ -12194,6 +12196,14 @@ def main():
                          "never what this session used within the hour, the gravity model or netstats/")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    serverlog.configure(logging.DEBUG if args.verbose else logging.INFO)
+    try:
+        return run(ap, args)
+    finally:
+        serverlog.shutdown()
+
+
+def run(ap, args):
     try:
         bad = _app_modules()[0].drive_relative_problem(args.cache_dir)
     except Exception:
@@ -12246,8 +12256,6 @@ def main():
         ap.error(f"--block {args.block} needs --near-visual mesh (terrain mode is frozen at its layout)")
     if args.horizon and args.near_visual not in MESH_LAYOUT:
         ap.error("--horizon needs --near-visual mesh (terrain mode is frozen at the v1.3.1 layout)")
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log.info("download cache: %s", args.cache_dir)
     import overture as overturemod     # (frozen here, before any worker starts: every process of this start reads it)
     log.info("Overture release %s (this build's own: %s)", overturemod.effective(), overturemod.RELEASE)
