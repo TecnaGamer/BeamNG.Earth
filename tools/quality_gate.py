@@ -20,7 +20,7 @@ MODULES = (
     "test_road_seams", "test_drivability", "test_determinism", "test_npyguard", "test_roadgeo", "test_fast", "test_restart",
     "test_revisit", "test_revisit_side", "test_revisitpack", "test_plancache", "test_bake_formats", "test_chunkcache", "test_pools",
     "test_prefetch_chain", "test_demand", "test_roadwidth", "test_roadcorners",
-    "test_sketchfab_assets", "test_subsea_tunnels", "test_tunnels",
+    "test_sketchfab_assets", "test_streamedstores", "test_subsea_tunnels", "test_tunnels",
     "test_host_package", "test_carriageway_solver",
     "test_portugal_imagery",
     "test_rail_crossing_assets",

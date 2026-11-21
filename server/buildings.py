@@ -850,7 +850,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml", "storefront", "retail_front", "retail_doors", "mall_cladding")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -1471,6 +1471,11 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         facade, plain = wall, False
     elif fm in ("plastic", "vinyl") and not (barn or shed):     # (vinyl siding, the US's most mapped "plastic")
         facade, band, plain = SIDING, None, True
+    retail_front = bool(attrs.get("_retail_front"))
+    if retail_front:
+        shop, plain, house, row = True, False, False, False
+        wall = "bne_brick_red" if fm == "brick" else wall or f"{PANEL}|0"
+        facade = wall
     fc = parse_color(attrs.get("facade_color"))
     if fc is not None and not attrs.get("bridge_part"):
         fc = facade_tone(fc)
@@ -1489,8 +1494,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         facade, band, plain = OFFICE, BAND_OFFICE, False
     elif garage:
         facade, band, plain = FACADE_TINTS[3], BAND_PANEL, False
-    windows = True
-    if not (shed or barn or row or house or terminal or garage or church) and nf <= 2 and roof == "flat" \
+    windows = not retail_front
+    if not retail_front and not (shed or barn or row or house or terminal or garage or church) and nf <= 2 and roof == "flat" \
             and (area >= BIG_BOX_M2 or industrial) \
             and cls not in HOUSE_CLASSES and cls != "apartments":
         kind = METALWALL if industrial else PANEL
@@ -1683,12 +1688,93 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
         bool(spec.plain), int(band[0]), int(band[1]), [int(g) for g in good], int(spec.floors), float(spec.floor_h),
         bool(spec.shop), int(door[0]) if door else -1, float(door[1]) if door else 0.0, spec.roof == "flat",
         float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
-        int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS, vary,
+        int(spec.front) if spec.front is not None and not spec.retail_front else -1, bool(lite), _WALL_CONSTS, vary,
         WIN_CELLS if spec.wall else [],
         [-1] if hole else [int(e) for e in (spec.street or ())],    # (a shop's ground floor on its street walls: doors())
         LOBBY_BAND if lobby else None)
     if len(mid):
         m.quads(P, UV, mid, mats)
+    if spec.retail_front and not hole:
+        walls = spec.retail_doors or ({spec.front: None} if spec.front is not None else {})
+        for wall, offsets in walls.items():
+            _retail_glazing(m, ring, wall, z_eave-spec.height, z_eave, mat_idx, lite, offsets)
+
+
+def _mall_cladding(m, ring, bottom, ground, eave, mat_idx, seed):
+    """One palette for a whole mall. Tile the materials in metres across continuous courses."""
+    brick = mat_idx["bne_brick_tan" if _hash01(seed,"mall brick") < .5 else "bne_brick_red"]
+    field = mat_idx["bne_precast_warm"]
+    trim = mat_idx["bne_precast"]
+    height = eave-ground
+    levels = (bottom, ground+min(1.6,height*.17), eave-min(1.6,height*.19), eave-.35, eave)
+    distance = 0.
+    for left,right in zip(ring,np.roll(ring,-1,axis=0)):
+        length = float(np.linalg.norm(right-left))
+        bays = max(1, round(length/13))
+        for bay in range(bays):
+            a = left+(right-left)*(bay/bays)
+            b = left+(right-left)*((bay+1)/bays)
+            u = (distance+length*bay/bays)/3
+            v = (distance+length*(bay+1)/bays)/3
+            upper = brick if bays < 3 or bay%3 != 1 else field
+            for low,high,material in zip(levels,levels[1:],(brick,field,upper,trim)):
+                m.quad((*a,low),(*b,low),(*b,high),(*a,high),
+                       (u,(low-ground)/3),(v,(low-ground)/3),(v,(high-ground)/3),(u,(high-ground)/3),material)
+        distance += length
+
+
+def retail_bays(length):
+    """Dimensions shared by the window openings and the entrance sign above them."""
+    margin = min(1.1, length*.09)
+    span = length - 2*margin
+    bays = max(1, round(span/8.5))
+    pier = .85
+    return margin, bays, pier, (span-(bays-1)*pier)/bays
+
+
+def _retail_glazing(m, ring, front, ground, eave, mat_idx, lite, offsets=None):
+    """Group ground-floor glazing into openings separated by the host wall finish."""
+    a, b = ring[front], ring[(front+1) % len(ring)]
+    length = float(np.linalg.norm(b-a))
+    if length < 3:
+        return
+    axis = (b-a)/length
+    outward = np.array([axis[1], -axis[0]])
+    margin, bays, pier, opening = retail_bays(length)
+    left = a + axis*margin + outward*.05
+    top = min(ground+3.15, eave-.55)
+    # The lower atlas row contains two distinct entry doors. Sample one only at
+    # the entrance; use the upper display glass elsewhere so doors never tile.
+    def pane(start, end, sill, u0, v0, u1, v1):
+        p, q = left+axis*start, left+axis*end
+        m.quad((*p, sill), (*q, sill), (*q, top), (*p, top),
+               (u0,v0),(u1,v0),(u1,v1),(u0,v1),mat_idx[LOBBY])
+    for i in range(bays):
+        start = i*(opening+pier)
+        end = start+opening
+        centers = [opening/2] if offsets is None and i == (bays-1)//2 else []
+        for offset in offsets or ():
+            bay = int(np.clip(round((offset-margin-opening/2)/(opening+pier)), 0, bays-1))
+            if bay == i:
+                centers.append(offset-margin-start)
+        door = min(1.8, opening*.42)
+        edge = start
+        for center in sorted(centers):
+            jamb = start+float(np.clip(center-door/2, 0, opening-door))
+            if jamb < edge-.01:
+                continue  # Coincident map observations describe the same opening.
+            if jamb > edge+.01:
+                pane(edge, jamb, ground+.22, .169, .648, .405, .901)
+            pane(jamb, jamb+door, ground, .315, .004, .634, .496)
+            edge = jamb+door
+        if end > edge+.01:
+            panes = max(1, round((end-edge)/2.9))
+            for j in range(panes):
+                pane(edge+(end-edge)*j/panes, edge+(end-edge)*(j+1)/panes,
+                     ground+.22, .169, .648, .405, .901)
+        if centers and not lite:
+            center = left+axis*(start+opening/2)+outward*.27
+            _box(m, center, axis, opening/2+.12, .34, top, min(top+.22,eave), mat_idx[f"{METALWALL}|0"])
 
 
 # Night windows, each its own brightness (the user, 2026-11-08: "the brightness of windows should be randomized at
@@ -2982,14 +3068,21 @@ def build(specs_and_ground, lite=False):
             continue
         z0 = gmin - (SKIRT_LITE_M if lite else SKIRT_M) if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
         z_eave = base_z(spec, gmin, gmax) + mh + spec.height
-        _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
+        if spec.mall_cladding and not lite:
+            _mall_cladding(m, ring, z0, z_eave-spec.height, z_eave, mat_idx, spec.seed)
+        else:
+            _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
         for hole in (spec.holes or ()):               # (a courtyard's walls, facing the yard: the hole clockwise)
             _walls(m, spec, hole, z0, z_eave, mat_idx, lite, hole=True)
         if mh > 0.5:                                  # a part standing on another / over a street: its underside
             _bld.bld_lid(m, np.asarray(ring, np.float64), float(z0), None, True, mat_idx[spec.facade])
         _roof(m, spec, ring, z_eave, mat_idx, lite)
         if spec.roof == "flat" and not spec.plain and spec.floors <= 6 and not lite:
-            _cornice(m, spec, ring, z_eave, mat_idx)
+            if spec.retail_front:
+                _bld.bld_cornice(m, np.asarray(ring,np.float64), float(z_eave), mat_idx[spec.wall],
+                                 .10, .14, .08)
+            else:
+                _cornice(m, spec, ring, z_eave, mat_idx)
         if not lite and not spec.holes:               # (roof clutter scattered over a yard would float)
             _clutter(m, spec, ring, z_eave, mat_idx)
         if spec.steeple:
@@ -3125,6 +3218,56 @@ def _shared_walls(rings, tol=0.6):
     return np.asarray(fast._ef.shared_walls(coords, offs, np.ascontiguousarray(cents, np.float64),
                                             np.ascontiguousarray(rads, np.float64), order.astype(np.int64),
                                             float(tol)), np.int64)
+
+
+def _retail_frontages(rings, attrs):
+    """Identify low shop buildings and measured, unclassified units sharing a retail party wall."""
+    shops = set()
+    anchors = []
+    candidates = []
+    for i, (ring, at) in enumerate(zip(rings, attrs)):
+        if not at.get("_storefront") or at.get("_parts_drawn") or at.get("_holes"):
+            continue
+        height = at.get("height")
+        floors = at.get("num_floors")
+        if ((height is not None and np.isfinite(height) and not 2.8 <= height <= 7)
+                or (floors is not None and np.isfinite(floors) and floors > 1)
+                or str(at.get("roof_shape") or "flat").lower() != "flat"):
+            continue
+        cls = str(at.get("class") or "").lower()
+        subtype = str(at.get("subtype") or "").lower()
+        name = str(at.get("name") or "").casefold()
+        if cls in {"retail", "shop", "supermarket", "restaurant", "fast_food", "cafe"} or (
+                cls in {"", "commercial"} and subtype == "commercial" and name.endswith("restaurant")):
+            shops.add(i)
+            anchors.append(ring)
+        elif not cls and not name and subtype in {"", "commercial"} and height is not None and 2.8 <= height <= 6.5:
+            candidates.append(i)
+    if not anchors or not candidates:
+        return shops
+    # Only opposite, overlapping edges count. A corner touch or a shop across an alley does not.
+    start = np.concatenate(anchors)
+    end = np.concatenate([np.roll(r, -1, axis=0) for r in anchors])
+    lower, upper = np.minimum(start, end)-.6, np.maximum(start, end)+.6
+    for i in candidates:
+        ring = rings[i]
+        near = np.all(upper >= ring.min(0), axis=1) & np.all(lower <= ring.max(0), axis=1)
+        if not near.any():
+            continue
+        for a, b in zip(ring, np.roll(ring, -1, axis=0)):
+            length = math.hypot(*(b-a))
+            if length < 6:
+                continue
+            axis = (b-a)/length
+            normal = np.array([-axis[1], axis[0]])
+            p, q = start[near]-a, end[near]-a
+            along_p, along_q = dnp.dot(p, axis), dnp.dot(q, axis)
+            overlap = np.minimum(length, along_p) - np.maximum(0., along_q)
+            if np.any((overlap >= 6) & (np.abs(dnp.dot(p, normal)) <= .6)
+                      & (np.abs(dnp.dot(q, normal)) <= .6)):
+                shops.add(i)
+                break
+    return shops
 
 def _part_heights(a, i):
     """A building part's (own height, its bottom) from its attributes, or None without a height."""
@@ -3454,7 +3597,7 @@ class RoadLines(list):
 
 
 
-def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THROUGH_CLASSES, skip_sub=()):
+def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THROUGH_CLASSES, skip_sub=(), only_sub=()):
     """Polylines (k, 2) relative to (x0, y0) of the public roads on the ground near the tile (for road_through), a
     RoadLines (their drawn half-widths in .half). classes: the road classes taken; skip_sub: the OSM subclasses left
     out (a car park's aisles)."""
@@ -3466,13 +3609,15 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THRO
         cls = f.attrs.get("class")
         if cls is None:
             continue
-        sub = f.attrs.get("subclass") if skip_sub else None
+        sub = f.attrs.get("subclass") if skip_sub or only_sub else None
         bb = f.boxes(frame)             # (only the roads near the tile: the test below, all at once)
         near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
                               & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
         specs = None
         rings, halves = [], []      # (the layer's lines converted in one call)
         for i in near.tolist():
+            if only_sub and (sub is None or str(sub[i]) not in only_sub):
+                continue
             if str(cls[i]) not in classes or (sub is not None and str(sub[i]) in skip_sub):
                 continue
             if specs is None:
@@ -4915,7 +5060,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
                    passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None, tanks=None,
                    industrial=None, parts_min_top=None, nyc=None, carriageways=None, clear_stats=None, years=None,
-                   colours=None):
+                   colours=None, storefronts=False):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -5214,6 +5359,14 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         holes_.append(hr if _area2(hr) < 0 else hr[::-1])       # (clockwise: walls face the yard)
                 if holes_:
                     at = dict(at, _holes=holes_)
+            if (storefronts and key is not None and not bparts
+                    and not (a.get("has_parts") is not None and a["has_parts"][i])
+                    and str(at.get("subtype") or "").lower() in {"", "commercial", "entertainment"}
+                    and len(parts) == len(parts[0]) == len(pieces) == 1 and mh == 0 and not edge):
+                venue_only = float(at.get("num_floors") or 0) > 2 or float(at.get("height") or 0) > 14
+                at["_storefront"] = (str(key), str(at.get("name") or ""), str(at.get("facade_material") or ""),
+                                     str(at.get("subtype") or "").lower(),
+                                     str(a["src_record"][i]) if a.get("src_record") is not None else "", venue_only)
             at0, mh0 = at, mh
             for ring in kept:           # (a long one on varied ground: its pieces, each on its own ground)
                 at, mh = at0, mh0
@@ -5304,6 +5457,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     if ROAD_PASSAGE_ON and passage_xy:     # a road mapped inside a building: a passage (a mall's covered way)
         rings, attrs, looks, mins = _road_passages(rings, attrs, looks, mins, passage_xy)
     shared = _shared_walls(rings)
+    retail = _retail_frontages(rings, attrs) if storefronts else set()
     cover = sum(_area2(r) / 2 for r, mh in zip(rings, mins) if mh <= 0.5) / ((x1 - x0) * (y1 - y0))
     town, dense = cover < TOWN_COVERAGE, cover > BRICK_WALK_COVERAGE
     clat, clon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.0)
@@ -5393,8 +5547,15 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             at = dict(at, _fr_location=(hlat, hlon), _fr_altitude=float(np.nanmean(g_all[i0:i1])),
                       _fr_part=look is not None or mh > .5, _fr_neighbours=int(sh),
                       _fr_residential=bool(house_res[k]) if house_res is not None else False)
+        if k in retail and look is None and mh == 0 and not at.get("_land") and not dense:
+            # One shop floor behind a parapet. Preserve the measured top when one is available.
+            height = at.get("height")
+            at = dict(at, _retail_front=True, roof_shape="flat", num_floors=1,
+                      height=height if height is not None and np.isfinite(height) and height > 0 else 4.8)
         spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
         spec.min_h = mh
+        spec.retail_front = at.get("_retail_front")
+        spec.storefront = at.get("_storefront") if mh == 0 else None
         # (a building drawn from its parts (the map's, New York's 3-D model's): its tank on its topmost part, the
         # building's storeys from its whole height; without, the setbacks took New York's tanks away)
         top_b = at.get("building_height")
@@ -5765,12 +5926,12 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
             mid = MID[i]
             dk = DK[i]
             k = int(K[i])
-            if dk > DOOR_ROAD_M:
+            if dk > (75.0 if spec.retail_front else DOOR_ROAD_M):
                 continue
             out = np.array([e[1], -e[0]]) / Le
             if float(dnp.dot(QK[i] - mid, out)) <= 0:
                 continue                                 # the wall faces away from that road
-            rank = (bool(SMINOR[k]) if storefront else False, float(dk))
+            rank = (bool(SMINOR[k]) if storefront else False, bool(spec.retail_front and Le < 6), float(dk))
             if best is None or rank < best[0]:
                 best = (rank, a, e / Le, Le, out, i, bool(SMAIN[k]) and dk < SHALF[k] + MAIN_STREET_SETBACK_M,
                         k)
@@ -5778,7 +5939,11 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
             continue
         _, a, d, Le, out, edge, on_main, kseg = best
         if spec.windows is False:
+            if spec.retail_front and spec.front is not None:
+                continue  # The named frontage already shares its wall with the entrance sign.
             spec.front = edge                   # a big box: its storefront faces the road
+            if spec.retail_front and spec.storefront[1]:
+                continue
             if storefront:
                 spec.sign = edge
             rows.extend(_sign_in_open(_wall_sign(spec, a, d, Le, out, gmax), spec, d, out, others))
@@ -6217,7 +6382,8 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
             la, lo, _ = frame.enu_to_geodetic(
                 np.array([c["xy"][0]]), np.array([c["xy"][1]]), np.zeros(1)
             )
-            gz = float(np.asarray(ground(la, lo), np.float64)[0])
+            gz = (float(c["storefront_ground"]) if c.get("storefront_ground") is not None else
+                  float(np.asarray(ground(la, lo), np.float64)[0]))
             tilt = surf = None
             if is_bridge:
                 # the road over it is the model's: its deck traced (threedmr.bridge_deck_surface, in the frame
@@ -6256,6 +6422,7 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                     alpha_cutoff=alpha_cutoffs[0],
                     tex_cache_dir=cache_dir,
                     tilt=tilt,
+                    authored_floor=bool((c.get("local") or {}).get("branded_storefront")),
                 )
             else:
                 res = threedmr.write_model(
@@ -6272,6 +6439,7 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                     alpha_cutoff=alpha_cutoffs,
                     tex_cache_dir=cache_dir,
                     tilt=tilt,
+                    authored_floor=bool((c.get("local") or {}).get("branded_storefront")),
                 )
             # a mesh over Torque's 16-bit IBO limit (threedmr.SPLIT_VERTEX_TRIGGER) comes back as several
             # sections (threedmr.write_model's "sections"), each its own TSStatic entry at the same pos -
@@ -6287,6 +6455,7 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
 
                     revisit.fault()     # (built again next visit; meanwhile the model keeps its own collision)
                     log.warning("3dmr model %s: deck slab failed", cid, exc_info=True)
+            overlay = bool((c.get("local") or {}).get("storefront_overlay"))
             for sec in sections:
                 for (
                     material,
@@ -6302,8 +6471,8 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                         double_sided=double_sided,
                     )
                 entry = {"shape": f"{vfs_dir}/{sec['shape']}", "pos": pos_xy}
-                if plate is not None:
-                    entry["col"] = False    # (drawn only: the car is carried by its deck slab)
+                if plate is not None or overlay:
+                    entry["col"] = False
                 entries.append(entry)
             if plate is not None:
                 entries.append({"shape": f"{vfs_dir}/{plate['shape']}", "pos": pos_xy})
@@ -6330,7 +6499,11 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                 max(max(dx, dy) / 2.0 + SUPPRESS_MARGIN_M, SUPPRESS_MIN_M),
                 SUPPRESS_MAX_M,
             )
-            radii.append((cid, float(c["xy"][0]), float(c["xy"][1]), radius))
+            if c.get("storefront_host") is not None:
+                host_x, host_y = c["storefront_host"]
+                radii.append((cid, host_x, host_y, 0.05))
+            elif not overlay:  # A tenant sign needs its procedural host building.
+                radii.append((cid, float(c["xy"][0]), float(c["xy"][1]), radius))
         except threedmr.UnsupportedModelError:
             pass  # already logged (threedmr.gltf_mesh): not a transient failure, no revisit.fault()
         except Exception:
@@ -6397,6 +6570,8 @@ def road_tile_items(
         )
         for k in keys
     ]
+    storefronts = cache_dir is not None and os.environ.get("BNE_STOREFRONTS") == "1"
+    streets = road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0)
     items = tile_buildings(
         frame,
         x0,
@@ -6412,9 +6587,9 @@ def road_tile_items(
         bag3d=bag3d,
         nyc=nyc,
         years=years,
-        colours=colours,
+        colours=colours, storefronts=storefronts,
         west_town=district_town(frame, tx, ty, md),
-        roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+        roads_xy=streets,
         ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, classes=ML_ROAD_CLASSES),
         passage_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
                               classes=ROAD_PASSAGE_CLASSES, skip_sub=ROAD_PASSAGE_SKIP),
@@ -6482,6 +6657,19 @@ def road_tile_items(
                         "source": "local",
                     }
                 )
+        if storefronts:
+            import streamedstores
+            custom.extend(streamedstores.pylons(keys, frame, box, streets, custom, cache_dir))
+        if storefronts and any(spec.storefront for spec, _, _ in items):
+            approach = streets or road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                                             margin=150, size=max(x1-x0, y1-y0),
+                                             classes=THROUGH_CLASSES | {"service"})
+            aisles = road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                                margin=150, size=max(x1-x0, y1-y0), classes={"service"}, only_sub={"parking_aisle"})
+            def mall_walks():
+                return road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                                  margin=400, size=max(x1-x0,y1-y0), classes={"pedestrian","footway"})
+            custom.extend(streamedstores.models(items, custom, frame, (x0, y0), approach, md, keys, cache_dir, aisles, mall_walks))
     return items, custom
 
 

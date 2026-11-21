@@ -1373,6 +1373,19 @@ class CustomModelSuppressionTest(unittest.TestCase):
         out = bld._suppress_under_models(items, [], 0.0, 0.0)
         self.assertEqual(out, items)
 
+    def test_storefront_overlay_keeps_host_and_is_visual_only(self):
+        model = {"id": "local_sign", "xy": (10., 10.), "local": {"storefront_overlay": True}}
+        shape = {"shape": "sign.cdae", "texture": None, "material": "sign",
+                 "has_alpha": False, "alpha_cutoff": None}
+        with mock.patch("threedmr.load_local_model", return_value=self._gltf_mesh((8., 1.))), \
+             mock.patch("threedmr.write_model", return_value=shape), \
+             mock.patch("threedmr.update_materials"):
+            entries, radii, _ = bld._custom_tile_entries(
+                self.f, [model], lambda la, lo: np.zeros(np.shape(la)), "/tmp/s1", "/temp/beamngEarth/s1")
+        self.assertEqual(len(entries), 1)
+        self.assertIs(entries[0]["col"], False)
+        self.assertEqual(radii, [])
+
     def test_suppress_radius_clamped(self):
         custom = [{"id": 41, "xy": (10.0, 10.0)}, {"id": 3, "xy": (20.0, 20.0)}]
 
