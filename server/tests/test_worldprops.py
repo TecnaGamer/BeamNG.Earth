@@ -134,6 +134,29 @@ class WorldPropsTest(unittest.TestCase):
             _, posts = self.lamps(FakeMD({"infrastructure": lamps, "roads": lines}))
         self.assertEqual([(r[1], r[4]) for r in sorted(posts)], [(104., 180.), (130., 0.)])
 
+    def test_opposite_carriageways_at_tile_seam(self):
+        from unittest.mock import patch
+        import furniture
+        # West road heads north, east road heads south. The median crosses x=256.
+        nodes = feats("infrastructure", [
+            (str(i), (x, 90.), {"class": "street_lamp", "src_record": f"n{700+i}@1",
+                                  "tags": json.dumps({"lamp_mount": mount})})
+            for i, (x, mount) in enumerate([(246., ""), (256., "double_arm"), (266., "")])
+        ], mg.POINT)
+        roads = feats("roads", [
+            ("west", [(251., 0.), (251., 200.)], {"class": "primary"}),
+            ("east", [(261., 200.), (261., 0.)], {"class": "primary"}),
+            ("walk", [(245., 0.), (245., 200.)], {"class": "footway"}),
+        ], mg.LINE)
+        md = FakeMD({"roads": roads, "infrastructure": nodes})
+        with patch.dict(os.environ, BNE_PEDESTRIAN_LIGHTING="on"):
+            tiles = [sorted(self.lamps(md, tx)[1]) for tx in (0, 1)]
+        self.assertEqual(tiles[0], tiles[1])
+        posts = sorted(tiles[0], key=lambda r: r[1])
+        self.assertEqual([r[4] for r in posts], [0., 0., 180.])
+        heads = furniture.lamp_lenses([posts[1]])[::2]
+        self.assertEqual(sorted((r[1], r[4]) for r in heads), [(251.1, 180.), (260.9, 0.)])
+
     def test_lamp_rotation_curved_road_double_arm_and_layers(self):
         import fast
         fast.require(199, "test")

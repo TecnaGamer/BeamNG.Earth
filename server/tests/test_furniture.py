@@ -63,6 +63,37 @@ class LampTest(unittest.TestCase):
         d = np.array([np.cos(np.radians(lamp[4])), np.sin(np.radians(lamp[4]))])
         self.assertGreater(float(d @ np.array([0.0, 50.0 - lamp[2]])), 0)
 
+    def test_mapped_lamps_do_not_suppress_the_opposite_carriageway(self):
+        import os
+        pair = []
+        for fid, y, direction in [("south", 50, 1), ("north", 60, -1)]:
+            _, spec, line, lon = road(fid, "trunk", True, y=y)
+            pair.append((fid, spec._replace(oneway=True, dir=direction), line, lon))
+        poles = [[furniture.G_LAMP, x, 47., 0., 90., 1., 9., 0.] for x in (60., 110.)]
+        box = (0, 0, 256, 256)
+        with mock.patch.dict(os.environ, BNE_STRICT_LIGHTING="off"):
+            def generate(mapped):
+                return furniture.place(pair, [], box, mapped_lamps=mapped, lamp_coverage=[], town=False)
+            full = generate([])
+            result = generate(poles)
+        far = lambda rows: [r for r in rows if r[0] == furniture.G_LAMP and r[2] > 60]
+        self.assertTrue(far(full))
+        self.assertEqual(far(result), far(full))
+        self.assertEqual([r for r in result if r[0] == furniture.G_LAMP and r[2] < 50], poles)
+        # A single-arm median pole close to a planned station must not erase
+        # that station if the pole points across the other carriageway.
+        median = [[furniture.G_LAMP, far(full)[0][1], 54.5, 0., 270., 1., 9., 0.]]
+        with mock.patch.dict(os.environ, BNE_STRICT_LIGHTING="on"):
+            rows = furniture.place(pair, [], box, mapped_lamps=median, town=False,
+                                   lighting={"south": "yes", "north": "yes"})
+        self.assertEqual(far(rows), far(full))
+        reversed_pair = [(fid, sp._replace(dir=-sp.dir), line[::-1], lon)
+                         for fid, sp, line, lon in reversed(pair)]
+        self.assertEqual(furniture._opposite_lamp_exclusions(pair, median),
+                         furniture._opposite_lamp_exclusions(reversed_pair, median))
+        double = ["streetlight_double_arm", 100., 55., 0., 90., 1., 13.76, 0.]
+        self.assertFalse(any(furniture._opposite_lamp_exclusions(pair, [double]).values()))
+
     def test_same_stations_in_neighbouring_tiles(self):
         r = road("b", "residential", True)
         side = 1 if furniture._h01("b", "side") < 0.5 else -1
@@ -551,7 +582,7 @@ class JunctionTest(unittest.TestCase):
         self.assertAlmostEqual(max(x for x, _ in edge) - min(x for x, _ in edge), props.B1_W, 3,
                                "S1 is measured across the rounded corners")
         self.assertAlmostEqual(max(z for _, z in edge) - min(z for _, z in edge), props.B1_TOP - props.B1_LOW, 3)
-        self.assertGreaterEqual(props.B1_LOW, 1.0)      # TSFS 2019:74 1 kap. 13 §: 1.0-2.0 m up
+        self.assertGreaterEqual(props.B1_LOW, 1.0)      # TSFS 2019:74 1 kap. 13 Ă‚Â§: 1.0-2.0 m up
         self.assertLessEqual(props.B1_LOW, 2.0)
 
     def test_b1_face_is_on_the_sheet(self):
