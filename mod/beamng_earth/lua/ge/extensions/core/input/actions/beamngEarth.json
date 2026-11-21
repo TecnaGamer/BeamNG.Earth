@@ -4,34 +4,34 @@
 "order": 90,
 "ctx": "tlua",
 "onDown": "if beamngEarth_dev then beamngEarth_dev.toggleLast() end",
-"title": "BeamNG.Earth: toggle dev overlays",
-"desc": "Turns the last-used BeamNG.Earth dev tools preset on (default: LOD), or everything off. Unbound by default."
+"title": "beamngEarth.controls.devToggle.title",
+"desc": "beamngEarth.controls.devToggle.desc"
 },
 "beamngEarth_wireframe": {
 "cat": "debug",
 "order": 93,
 "ctx": "tlua",
 "onDown": "if beamngEarth_dev then beamngEarth_dev.toggleWireframe() end",
-"title": "BeamNG.Earth: wireframe view",
-"desc": "Shows the world as triangle edges (how the ground, the far terrain and the roads are built), or turns it off again (Ctrl+Alt+W)."
+"title": "beamngEarth.controls.wireframe.title",
+"desc": "beamngEarth.controls.wireframe.desc"
 },
 "beamngEarth_reportNote": {
 "cat": "gameplay",
 "order": 91,
 "ctx": "tlua",
 "onDown": "if beamngEarth_report then beamngEarth_report.note() end",
-"title": "BeamNG.Earth: report an issue / idea",
-"desc": "Captures a screenshot, the location, the performance and your hardware now, and opens a window to describe a map issue, performance issue, bug or idea; saves a ready-to-post GitHub issue (Ctrl+Shift+E)."
+"title": "beamngEarth.controls.reportNote.title",
+"desc": "beamngEarth.controls.reportNote.desc"
 },
 "beamngEarth_reportBench": {
 "cat": "gameplay",
 "order": 92,
 "ctx": "tlua",
 "onDown": "if beamngEarth_report then beamngEarth_report.profiler() end",
-"title": "BeamNG.Earth: performance profiler (30 s)",
-"desc": "Records 30 s of frame times while you drive, then opens the report window for a performance issue (Ctrl+Shift+Y)."
+"title": "beamngEarth.controls.reportBench.title",
+"desc": "beamngEarth.controls.reportBench.desc"
 },
-"beamngEarth_nearestStation": {"cat":"gameplay", "order": 98, "ctx": "tlua", "onDown": "if beamngEarth_finder then beamngEarth_finder.nearest() end", "title": "BeamNG.Earth: route to the nearest station", "desc": "Sets the GPS to the nearest gas station, or the nearest EV charger for an electric car (Ctrl+Shift+Q). The low fuel prompt names this key."},
-"beamngEarth_mapToggle": {"cat":"gameplay", "order": 99, "ctx": "tlua", "onDown": "if beamngEarth_settings then beamngEarth_settings.toggleMap() end", "title": "BeamNG.Earth: world map", "desc": "Opens the BeamNG.Earth world map (where you are, saved places, click to teleport), or closes it. In our level the game's map key (M) and the pause menu's Map open it; unbound by default (bind a key here if you like)."},
-"beamngEarth_map3dToggle": {"cat":"gameplay", "order": 100, "ctx": "tlua", "onDown": "if beamngEarth_map3d then beamngEarth_map3d.toggle() end", "title": "BeamNG.Earth: 3D map", "desc": "Flies the camera up from the car into the 3D map (move with WASD or the left stick, turn and tilt with the mouse or the right stick, zoom with the wheel), or back down to the car. Unbound by default; the map key opens it when Settings > Interface > Map style is 3D."}
+"beamngEarth_nearestStation": {"cat":"gameplay", "order": 98, "ctx": "tlua", "onDown": "if beamngEarth_finder then beamngEarth_finder.nearest() end", "title": "beamngEarth.controls.nearestStation.title", "desc": "beamngEarth.controls.nearestStation.desc"},
+"beamngEarth_mapToggle": {"cat":"gameplay", "order": 99, "ctx": "tlua", "onDown": "if beamngEarth_settings then beamngEarth_settings.toggleMap() end", "title": "beamngEarth.controls.mapToggle.title", "desc": "beamngEarth.controls.mapToggle.desc"},
+"beamngEarth_map3dToggle": {"cat":"gameplay", "order": 100, "ctx": "tlua", "onDown": "if beamngEarth_map3d then beamngEarth_map3d.toggle() end", "title": "beamngEarth.controls.map3dToggle.title", "desc": "beamngEarth.controls.map3dToggle.desc"}
 }

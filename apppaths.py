@@ -347,11 +347,13 @@ def ask_path(question, want, accept, ask=None, say=print, name=None, start=None,
     """In a console: the path of something, from the system's window (Enter) or typed / pasted. accept(path) gives the
     value to keep or None when it is not there; returns that value, or None (skipped: an empty answer with no window,
     "s", or tries wrong answers)."""
+    from localization import t
+
     ask = ask or input
     window = True
     for _ in range(tries):
-        hint = "Enter: choose it in a window, or type / paste the path (S: skip): " if window else \
-            "Type or paste the path (Enter: skip): "
+        hint = t("launcher.path.window") if window else \
+            t("launcher.path.type")
         try:
             answer = ask(f"  {question}\n  {hint}")
         except (EOFError, OSError):
@@ -364,15 +366,15 @@ def ask_path(question, want, accept, ask=None, say=print, name=None, start=None,
                 return None
             state, path = pick(want, question, start=start, name=name)
             if state == "none":
-                say("  (no file window here: type the path instead)")
+                say(t("launcher.path.noWindow"))
                 window = False
                 continue
             if state == "cancel":
-                say("  (nothing chosen)")
+                say(t("launcher.path.cancelled"))
                 continue
             answer = path
         value = accept(answer)
         if value:
             return value
-        say(f"  Not found there: {answer}")
+        say(t("launcher.path.missing", path=answer))
     return None

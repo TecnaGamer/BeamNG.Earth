@@ -14,6 +14,7 @@
 -- car is there again the car is held (step's answer): the game paused, in BeamMP only our own car (simhold), let go for
 -- the frames the resync needs to commit in single player (it moves vehicles only with physics running, core.lua). Each
 -- phase has a time limit: nothing waits for ever, the car is never held for good.
+local i18n = require('beamngEarth/i18n')
 local M = {}
 
 M.ASK_S = 10        -- s for the server's answer to the request
@@ -108,9 +109,14 @@ end
 function M.text(r, held)
   local ph = r.phase
   if not ph then return nil end
-  if ph == 'failed' then return 'World server restart: ' .. tostring(r.error) end
-  local t = M.TEXT[ph]
-  if held and M.BUSY[ph] then t = t .. M.HELD end
+  if ph == 'failed' then return i18n.t('restart.failedDetail', { error = tostring(r.error) }, 'World server restart: ' .. tostring(r.error)) end
+  local key = ({
+    asked = 'restart.phase.asked', stopping = 'restart.phase.stopping', starting = 'restart.phase.starting',
+    loading = 'restart.phase.loading', done = 'restart.phase.done',
+  })[ph]
+  if not key then return nil end
+  local t = i18n.t(key, nil, M.TEXT[ph])
+  if held and M.BUSY[ph] then t = t .. i18n.t('restart.held', nil, M.HELD) end
   return t
 end
 

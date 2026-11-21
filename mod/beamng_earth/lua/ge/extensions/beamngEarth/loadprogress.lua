@@ -8,6 +8,7 @@
 -- placing what came; "ground" while the block under the car is still to be replaced (the graded first block, its full
 -- photo with the roads painted in: the user saw the road texture change after the loading line had gone); before the
 -- car is on the ground: "Loading the ground". Pure but for the clock the caller passes.
+local i18n = require('beamngEarth/i18n')
 local M = {}
 
 M.QUIET_S = 3           -- everything in this long: the load is over
@@ -16,6 +17,10 @@ M.SEP = '  ·  '
 
 -- The parts in the order shown: key in the progress / the caller's info, the label.
 M.PARTS = { { 'ground', 'ground' }, { 'roads', 'roads & buildings' }, { 'trees', 'trees' }, { 'far', 'distant land' } }
+
+local partKeys = {
+  ground = 'hud.loading.ground', roads = 'hud.loading.roads', trees = 'hud.loading.trees', far = 'hud.loading.far',
+}
 
 local load = nil        -- { since, quietSince }
 
@@ -42,12 +47,13 @@ function M.downloadText(net)
   if type(net) ~= 'table' then return nil end
   local act, rate = tonumber(net[1]) or 0, tonumber(net[3]) or 0
   if act <= 0 then return nil end
-  local s = act == 1 and 'downloading 1 file' or string.format('downloading %d files', act)
+  local s = i18n.t('hud.loading.files', { count = act },
+    act == 1 and 'downloading 1 file' or string.format('downloading %d files', act))
   -- what most of them are, and whether the world's own request limit for that source holds them (the user,
   -- 2026-11-11: players with gigabit lines read "1 MB/s" as their connection; it is the photo services' request
   -- limits, many small tiles at a fixed number a second): 'downloading 14 files · satellite photos, rate-limited'
   local what = type(net[4]) == 'string' and net[4] ~= '' and net[4] or nil
-  if what then s = s .. ' · ' .. what .. (net[5] == true and ', rate-limited' or '') end
+  if what then s = s .. ' · ' .. what .. (net[5] == true and i18n.t('hud.loading.rateLimited', nil, ', rate-limited') or '') end
   if rate >= 0.05 then s = s .. string.format(' · %.1f MB/s', rate) end
   return s
 end
@@ -69,7 +75,7 @@ function M.line(now, info)
   if now - load.since > M.MAX_S then load = nil; return nil end
   if not info.placed then
     load.quietSince = nil
-    return info.groundLine or 'Loading the ground'
+    return info.groundLine or i18n.t('hud.loading.groundPending', nil, 'Loading the ground')
   end
   local prog, pend = info.progress or {}, info.pending or {}
   local parts, sumD, sumN, busy = {}, 0, 0, false
@@ -81,11 +87,11 @@ function M.line(now, info)
       sumD, sumN = sumD + d, sumN + n
       if d < n or waiting then
         busy = true
-        parts[#parts + 1] = n == 1 and p[2] or string.format('%s %d/%d', p[2], d, n)   -- (the ground: one, no counts)
+        parts[#parts + 1] = n == 1 and i18n.t(partKeys[p[1]], nil, p[2]) or string.format('%s %d/%d', i18n.t(partKeys[p[1]], nil, p[2]), d, n)   -- (the ground: one, no counts)
       end
     elseif waiting then
       busy = true
-      parts[#parts + 1] = p[2]
+      parts[#parts + 1] = i18n.t(partKeys[p[1]], nil, p[2])
     end
   end
   if not info.progress then busy = true end           -- (no counts from the server yet)
@@ -93,13 +99,13 @@ function M.line(now, info)
   if not busy then
     load.quietSince = load.quietSince or now
     if now - load.quietSince >= M.QUIET_S then load = nil; return nil end
-    return 'Loading 100%'
+    return i18n.t('hud.loading.complete', nil, 'Loading 100%')
   end
   load.quietSince = nil
   local dl = M.downloadText(prog.net)
   if dl then table.insert(parts, 1, dl) end      -- (first, the user, 2026-11-04; it does not keep a load on by itself)
   local pct = math.min(99, math.floor(100 * sumD / sumN))
-  local head = string.format('Loading %d%%', pct)
+  local head = i18n.t('hud.loading.progress', { percent = pct }, string.format('Loading %d%%', pct))
   if #parts == 0 then return head end
   return head .. '  |  ' .. table.concat(parts, M.SEP)
 end

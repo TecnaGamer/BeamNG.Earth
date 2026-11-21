@@ -781,7 +781,7 @@ function M.uiState()
     anchorLat = st and st.anchor and st.anchor.lat, anchorLon = st and st.anchor and st.anchor.lon,
     playerLat = st and st.player and st.player.lat, playerLon = st and st.player and st.player.lon,
     dist = st and st.player and st.player.dist, rebaseDistance = rebase.distance,
-    status = st and st.status or '', inOurLevel = st and st.inOurLevel or false,
+    status = st and st.status or '', statusMessage = st and st.statusMessage, inOurLevel = st and st.inOurLevel or false,
     attribution = core and core.attribution and core.attribution() or '',
     credits = core and core.credits and core.credits() or nil, -- the on-screen data credits now
     -- the connection banner's state line { id, level, text, guard } (docs/ROADMAP.md "Robustness" 1)
@@ -1382,6 +1382,12 @@ function M.redirectBigMap(inOurLevel)
     bigMapOrig = nil
   end
 end
+
+local i18n = require('beamngEarth/i18n')
+M.uiLanguagePreference = i18n.preference
+M.uiSetLanguage = i18n.setPreference
+M.onSettingsChanged = i18n.gameLanguageChanged
+M.onLanguageChanged = i18n.gameLanguageChanged
 
 function M.onExtensionLoaded()
   M.load()

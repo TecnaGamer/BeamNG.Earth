@@ -21,6 +21,7 @@
 -- viewport width changed. Hidden in the pause menu and the big map (core passes credits.hiddenByUi()).
 -- An error in the imgui calls turns the banner off (logged once) instead of failing every frame.
 
+local i18n = require('beamngEarth/i18n')
 local M = {}
 
 M.STARTING_S = 6          -- s after the mod loaded before "starting" becomes "not running"
@@ -71,6 +72,25 @@ local EDGE_TEXT = {
   hold = 'Paused at the edge of the loaded ground until the BeamNG.Earth server %s (resume to drive back)',
 }
 
+local deckKeys = {
+  slow = 'hud.banner.bridgeSlow',
+  wait = 'hud.banner.bridgeWait',
+  hold = 'hud.banner.bridgeHold',
+}
+local function deckLine(mode, fallback)
+  return i18n.t(deckKeys[mode], nil, fallback)
+end
+
+local function edgeLine(mode, why, fallback)
+  local key
+  if mode == 'warn' then
+    key = why == 'is back' and 'hud.banner.edgeWarn' or 'hud.banner.edgeWarnStuck'
+  else
+    key = why == 'is back' and 'hud.banner.edgeHold' or 'hud.banner.edgeHoldStuck'
+  end
+  return i18n.t(key, nil, string.format(fallback, why))
+end
+
 -- The state for a set of inputs (pure):
 --   info.net         'connected' | 'connecting' | 'disconnected'
 --   info.session     the server's hello arrived (a session id)
@@ -90,50 +110,50 @@ function M.compute(info, t)
   elseif info.net ~= 'connected' then
     if not info.everConnected then
       if (t or 0) < M.STARTING_S then
-        id, level, text = 'starting', 'info', 'BeamNG.Earth: looking for the BeamNG.Earth server on this PC (127.0.0.1:' .. tostring(info.port or 47613) .. ') ...'
+        id, level, text = 'starting', 'info', i18n.t('hud.banner.starting', { port = info.port or 47613 }, 'BeamNG.Earth: looking for the BeamNG.Earth server on this PC (127.0.0.1:' .. tostring(info.port or 47613) .. ') ...')
       else
         id, level = 'noserver', 'error'
-        text = 'BeamNG.Earth server not running on this PC - start BeamNG.Earth with its launcher (or:  '
-          .. M.START_CMD .. ')'
+        text = i18n.t('hud.banner.noServer', { command = M.START_CMD }, 'BeamNG.Earth server not running on this PC - start BeamNG.Earth with its launcher (or:  ' .. M.START_CMD .. ')')
       end
     else
       id, level = 'lost', 'warn'
       -- the program on this PC, not the internet (the user, 2026-10-17: "make this more clear if it's the server or
       -- a data provider that's not connected"; data sources are the offline / degraded lines below)
-      text = 'Lost the BeamNG.Earth server on this PC - reconnecting (attempt ' .. tostring(math.max(1, info.attempts or 1))
-        .. '). Is its launcher window still open?'
+      text = i18n.t('hud.banner.lost', { attempt = math.max(1, info.attempts or 1) }, 'Lost the BeamNG.Earth server on this PC - reconnecting (attempt ' .. tostring(math.max(1, info.attempts or 1)) .. '). Is its launcher window still open?')
     end
   elseif not info.session then
-    id, level, text = 'starting', 'info', 'Connected - waiting for the BeamNG.Earth server ...'
+    id, level, text = 'starting', 'info', i18n.t('hud.banner.handshake', nil, 'Connected - waiting for the BeamNG.Earth server ...')
   elseif info.note == 'offline' then
-    id, level, text = 'offline', 'warn', 'Server OK, internet data sources unreachable - using cached data (areas never visited have no terrain)'
+    id, level, text = 'offline', 'warn', i18n.t('hud.banner.offline', nil, 'Server OK, internet data sources unreachable - using cached data (areas never visited have no terrain)')
   elseif info.note == 'degraded' then
-    id, level, text = 'degraded', 'warn', 'Server OK, some internet data sources not answering: ' .. tostring(info.noteDetail or '')
+    id, level, text = 'degraded', 'warn', i18n.t('hud.banner.degraded', { detail = tostring(info.noteDetail or '') }, 'Server OK, some internet data sources not answering: ' .. tostring(info.noteDetail or ''))
   else
     id, level, text = 'ok', 'ok', ''
   end
   local e = info.edge and EDGE_TEXT[info.edge]
   if e then
     local why = (info.stuck and info.net == 'connected' and info.session) and 'answers terrain requests again' or 'is back'
-    local line = string.format(e, why)
+    local line = edgeLine(info.edge, why, e)
     text = (text ~= '') and (text .. '\n' .. line) or line
     local want = info.edge == 'hold' and 'error' or 'warn'
     if M.LEVEL_RANK[want] > M.LEVEL_RANK[level] then level = want end
     if id == 'ok' then id = 'edge' end
   end
   if info.dropHold then         -- drophold.lua: a car dropped far away waits for its ground (the user, 2026-10-18)
-    text = (text ~= '') and (text .. '\n' .. M.DROP_HOLD_TEXT) or M.DROP_HOLD_TEXT
+    local line = i18n.t('hud.banner.dropHold', nil, M.DROP_HOLD_TEXT)
+    text = (text ~= '') and (text .. '\n' .. line) or line
     if M.LEVEL_RANK.info > M.LEVEL_RANK[level] then level = 'info' end
     if id == 'ok' then id = 'drophold' end
   end
   local dk = info.deck and M.DECK_TEXT[info.deck]
   if dk then                    -- deckguard.lua: a bridge ahead whose road tile has not come yet
+    dk = deckLine(info.deck, dk)
     text = (text ~= '') and (text .. '\n' .. dk) or dk
     if M.LEVEL_RANK.info > M.LEVEL_RANK[level] then level = 'info' end
     if id == 'ok' then id = 'deck' end
   end
   if info.download and (info.edge or info.dropHold or info.deck) then   -- (what the held car waits on: loadprogress.downloadText)
-    local line = 'The world is ' .. info.download
+    local line = i18n.t('hud.banner.download', { download = info.download }, 'The world is ' .. info.download)
     text = (text ~= '') and (text .. '\n' .. line) or line
   end
   return id, level, text
@@ -144,7 +164,7 @@ local KEYS = { 'net', 'session', 'everConnected', 'attempts', 'note', 'noteDetai
 
 -- Did any input change since the text was built? (Compared field by field: nothing allocated.)
 local function changed(info)
-  if not key then return true end
+  if not key or key.language ~= i18n.revision then return true end
   for _, k in ipairs(KEYS) do
     if key[k] ~= info[k] then return true end
   end
@@ -163,7 +183,7 @@ function M.update(dt, info)
     end
     lastProblem = nil
     if recoveredUntil and clock < recoveredUntil then
-      id, level, text = 'recovered', 'ok', 'BeamNG.Earth server connected'
+      id, level, text = 'recovered', 'ok', i18n.t('hud.banner.connected', nil, 'BeamNG.Earth server connected')
     else
       recoveredUntil = nil
     end
@@ -171,7 +191,7 @@ function M.update(dt, info)
     lastProblem = id
     recoveredUntil = nil
   end
-  key = { starting = clock < M.STARTING_S }
+  key = { starting = clock < M.STARTING_S, language = i18n.revision }
   for _, k in ipairs(KEYS) do key[k] = info[k] end
   cur = { id = id, level = level, text = text, visible = text ~= '' }
   return cur
@@ -182,7 +202,7 @@ function M.current() return cur end
 -- The settings page's state line: the banner's text, or what all-is-well means.
 function M.line()
   if cur.text ~= '' then return cur.text end
-  return 'BeamNG.Earth server connected'
+  return i18n.t('hud.banner.connected', nil, 'BeamNG.Earth server connected')
 end
 
 local function u32(im, rgba) return im.GetColorU322(im.ImVec4(rgba[1], rgba[2], rgba[3], rgba[4])) end

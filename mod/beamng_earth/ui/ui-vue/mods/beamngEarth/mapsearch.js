@@ -24,8 +24,36 @@ export const CATEGORIES = Object.entries(paths).map(([kind, path]) => ({ kind, p
   label: ({ 'race track': 'Race tracks', rally: 'Rally / gravel', 'off-road': 'Off-road',
     'mountain peak': 'Peaks', forest: 'Forests', 'rock crawling': 'Rocks' })[kind] || kind[0].toUpperCase() + kind.slice(1),
   query: kind }))
+const categoryKeys = {
+  "race track": "map.category.raceTrack",
+  "karting": "map.category.karting",
+  "drag strip": "map.category.dragStrip",
+  "rally": "map.category.rally",
+  "off-road": "map.category.offRoad",
+  "motocross": "map.category.motocross",
+  "rock crawling": "map.category.rockCrawling",
+  "mountain peak": "map.category.peak",
+  "mountain pass": "map.category.pass",
+  "forest": "map.category.forest",
+  "lake": "map.category.lake",
+  "beach": "map.category.beach",
+  "desert": "map.category.desert",
+  "airport": "map.category.airport",
+  "bridge": "map.category.bridge",
+  "tunnel": "map.category.tunnel",
+  "dam": "map.category.dam",
+  "canyon": "map.category.canyon",
+  "scenic drive": "map.category.scenic",
+}
 export const QUICK = ['race track', 'rally', 'off-road', 'mountain peak', 'forest'].map(k => CATEGORIES.find(c => c.kind === k))
 export const GROUPS = { saved: 'Saved / recent', category: 'Category places', name: 'Name match', address: 'Address' }
+const groupKeys = {
+  "saved": "map.resultGroup.saved",
+  "category": "map.resultGroup.category",
+  "name": "map.resultGroup.name",
+  "address": "map.resultGroup.address",
+}
+export const categoryLabel = (category, translate) => translate(categoryKeys[category.kind])
 const addressKinds = new Set(['house', 'road', 'street', 'residential', 'pedestrian', 'service', 'living_street', 'tertiary', 'secondary', 'primary', 'unclassified'])
 const pin = 'M12 22S4 14 4 9a8 8 0 1 1 16 0c0 5-8 13-8 13ZM12 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z'
 const aliases = { peak: 'mountain peak', saddle: 'mountain pass', wood: 'forest', raceway: 'race track', aerodrome: 'airport', track: 'off-road' }
@@ -37,15 +65,19 @@ export function miles(a, b) {
   const h = Math.min(1, Math.max(0, x * x + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * y * y))
   return 7917.5 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
 }
-export function present(r, player) {
+export function present(r, player, translate, formatDistance) {
   const group = r.saved ? 'saved' : r.result_type || (addressKinds.has(r.kind) ? 'address' : 'name')
   // Distances for category queries are relative to the resolved near/in origin, supplied by the server.
   const distance = Number.isFinite(r.distance_mi) ? r.distance_mi : miles(player, r)
   const raw = (r.kind || '').replaceAll('_', ' ')
   const label = !raw || ['wikipedia', 'wikidata'].includes(raw) ? 'Place' : raw[0].toUpperCase() + raw.slice(1)
-  const kind = CATEGORIES.find(c => c.kind === (aliases[r.kind] || r.kind))?.label || (group === 'address' ? 'Address' : label)
-  const meta = [kind, distance == null ? '' : `${distance.toFixed(1)} mi`, r.country].filter(Boolean).join(' · ')
-  return { ...r, group, groupLabel: GROUPS[group] || GROUPS.name, icon: icon(r.kind), meta,
+  const category = CATEGORIES.find(c => c.kind === (aliases[r.kind] || r.kind))
+  const kind = translate
+    ? category ? categoryLabel(category, translate)
+      : group === "address" ? translate("map.resultGroup.address") : label === "Place" ? translate("map.resultPlace") : label
+    : category?.label || (group === "address" ? "Address" : label)
+  const meta = [kind, distance == null ? '' : formatDistance ? formatDistance(distance * 1609.344) : `${distance.toFixed(1)} mi`, r.country].filter(Boolean).join(' · ')
+  return { ...r, group, groupLabel: translate ? translate(groupKeys[group] || groupKeys.name) : GROUPS[group] || GROUPS.name, icon: icon(r.kind), meta,
     // Category detail already contains these three fields; ordinary descriptions and addresses remain useful.
     description: group === 'category' ? '' : r.detail || (validPoint(r) ? `${r.lat.toFixed(4)}, ${r.lon.toFixed(4)}` : '') }
 }

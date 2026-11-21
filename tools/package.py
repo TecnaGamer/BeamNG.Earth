@@ -19,7 +19,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-FILES = ["install.py", "modtextures.py", "start.py", "launcher.py", "bmplaunch.py", "apppaths.py", "gameinstall.py", "skypatch.py",
+FILES = ["install.py", "modtextures.py", "start.py", "launcher.py", "localization.py", "bmplaunch.py", "apppaths.py", "gameinstall.py", "skypatch.py",
          "enginepatch.py", "enginepatch_code.py", "enginepatch_terfast.py", "enginepatch_terfast_code.py", "run_server.bat", "run_server.sh", "README.md", "LICENSE", "CREDITS.md", "TELEMETRY.md",
          "VERSION", "docs/QUICKSTART.md", "docs/MODERNIZATION.md", "docs/MODERNIZATION_VALIDATION.md",
          "docs/SKETCHFAB_ASSETS.md", "docs/RELAUNCH_TROUBLESHOOTING.md", "docs/STABILITY_VALIDATION.md",

@@ -1,3 +1,5 @@
+import { t } from "./i18n.js"
+
 // A "BeamNG.Earth" category in BeamMP's server browser (main menu > More > BeamMP), listing the BeamNG.Earth servers
 // (the user, 2026-10-24: "you can add it as a new tab that just shows a list of .earth servers"; 2026-10-25: "use the
 // official list (look at the other categories) and make the category have its own unique color and have my official
@@ -193,7 +195,7 @@ function inject() {
   const button = document.createElement("button")
   button.className = "nav-btn bnge-earth-tab"
   button.textContent = "BeamNG.Earth"
-  button.title = "BeamNG.Earth servers. Server countries: IP Geolocation by DB-IP (db-ip.com, CC BY 4.0)"
+  button.title = t("multiplayer.tabHelp")
   // BeamMP's styles are scoped to its own elements (Vue's data-v-* marks): the same marks give ours its look
   const sample = sidebar.querySelector(".nav-btn")
   if (sample) for (const a of sample.attributes) if (a.name.startsWith("data-v-")) button.setAttribute(a.name, "")
@@ -259,4 +261,9 @@ export function stop() {
   for (const b of document.querySelectorAll(".bnge-earth-tab")) b.remove()
   for (const w of document.querySelectorAll(".bnge-earth-view")) w.classList.remove("bnge-earth-view")
   for (const row of document.querySelectorAll(".bnge-official")) row.classList.remove("bnge-official")
+}
+
+export function refreshLanguage() {
+  const button = document.querySelector(".bnge-earth-tab")
+  if (button) button.title = t("multiplayer.tabHelp")
 }

@@ -12,7 +12,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = (
-    "test_protocol", "test_protocol_agreement", "test_geodesy", "test_cache",
+    "test_localization", "test_protocol", "test_protocol_agreement", "test_geodesy", "test_cache",
     "test_budget", "test_class_grid", "test_install", "test_updates", "test_selfupdate", "test_bmplaunch",
     "test_launcher_linux", "test_launcher_lifecycle", "test_process_lifecycle", "test_srvrestart",
     "test_connection_cleanup", "test_initial_loading", "test_tile_ownership", "test_matslots", "test_stream_reconnect",
@@ -52,11 +52,12 @@ def main():
     print(f"Python {sys.version.split()[0]}, earthfast {fast._ef.VERSION}, "
           f"DuckDB {duckdb.__version__}, fsspec {fsspec.__version__}", flush=True)
     commands = [
+        [sys.executable, "tools/check_locales.py", "--require", "pl-PL"],
         [sys.executable, "tools/run_tests.py", *MODULES, "--par", str(args.par),
          "--timeout", str(args.timeout), "--logs", "build/quality-tests"],
         [sys.executable, "tools/run_lua_tests.py"],
         ["node", "--test", "mod/tests/test_mapmath.mjs", "server/tests/test_mapmath.mjs", "mod/tests/test_ui_lifecycle.mjs",
-         "mod/tests/test_restart_box.mjs", "mod/tests/test_mainmenu_tile.mjs"],
+         "mod/tests/test_restart_box.mjs", "mod/tests/test_mainmenu_tile.mjs", "mod/tests/test_i18n.mjs"],
         ["cargo", "test", "--locked", "--manifest-path", "native/serverlist/Cargo.toml"],
         [sys.executable, "tools/package.py", "--beammp", "--out", "build/quality-packages"],
     ]

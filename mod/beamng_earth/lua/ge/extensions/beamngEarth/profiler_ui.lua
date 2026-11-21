@@ -1,6 +1,7 @@
 -- Native ImGui presentation; all values come from profiler snapshots.
 local V = require('beamngEarth/profiler_view')
 local IO = require('beamngEarth/ioprofile_ui')
+local t = require('beamngEarth/i18n').t
 local M = {}
 local ffi = require('ffi')
 local serviceFilter, serviceSort = 'all', 'latency'
@@ -67,12 +68,21 @@ function M.pushStyle(im)
   im.PushStyleVar2(im.StyleVar_WindowPadding,im.ImVec2(10*s,8*s))
   return #values,7
 end
+local tabLabels = {
+  all = 'profiler.tab.all',
+  gpu = 'profiler.tab.gpu',
+  cpu = 'profiler.tab.cpu',
+  network = 'profiler.tab.network',
+  disk = 'profiler.tab.disk',
+  server = 'profiler.tab.server',
+}
+
 function M.tabs(im,ctl)
   local requested=ctl.tabRequest
   ctl.tabRequest=nil
   if im.BeginTabBar('##earth-profiler-tabs',0) then
     for _,tab in ipairs(V.tabs) do
-      if im.BeginTabItem(tab[2],nil,requested==tab[1] and im.TabItemFlags_SetSelected or 0) then
+      if im.BeginTabItem(t(tabLabels[tab[1]], nil, tab[2]) .. "###earth-profiler-" .. tab[1],nil,requested==tab[1] and im.TabItemFlags_SetSelected or 0) then
         ctl.page=tab[1]
         local a,b=im.GetItemRectMin(),im.GetItemRectMax()
         rect(im,im.GetWindowDrawList(),a.x,b.y-3,b.x-a.x,3,color(im,orange))
@@ -111,10 +121,10 @@ function M.toolbar(im,ctl,frozen,view)
   local compact=im.GetContentRegionAvail().x<820*s
   local p=im.GetCursorScreenPos()
   rect(im,im.GetWindowDrawList(),p.x,p.y+7*s,7*s,7*s,color(im,frozen and V.colors.disk or V.colors.network))
-  im.Dummy(im.ImVec2(10*s,20*s));im.SameLine();text(im,frozen and 'Held display' or 'Capturing')
-  im.SameLine();action(im,frozen and 'Resume display' or 'Freeze display',function() ctl.setFrozen(not frozen) end)
+  im.Dummy(im.ImVec2(10*s,20*s));im.SameLine();text(im,frozen and t('profiler.held', nil, "Held display") or t('profiler.capturing', nil, "Capturing"))
+  im.SameLine();action(im,frozen and t('profiler.resumeDisplay', nil, "Resume display") or t('profiler.freezeDisplay', nil, "Freeze display"),function() ctl.setFrozen(not frozen) end)
   local function controls()
-    selector(im,'##profiler-mode',ctl.mode=='full' and 'Full' or 'Essential',118*s,function() ctl.chooseMode(ctl.mode=='full' and 'essential' or 'full') end)
+    selector(im,'##profiler-mode',ctl.mode=='full' and t('profiler.full', nil, "Full") or t('profiler.essential', nil, "Essential"),118*s,function() ctl.chooseMode(ctl.mode=='full' and 'essential' or 'full') end)
     im.SameLine()
     selector(im,'##profiler-history',string.format('%.2g s',V.seconds),92*s,function(direction)
       local choices={5,10,30}
@@ -125,17 +135,17 @@ function M.toolbar(im,ctl,frozen,view)
     im.SameLine()
     selector(im,'##profiler-budget',string.format('%d FPS',math.floor(1000/view.frameDetail.budgetMs+0.5)),112*s,ctl.toggleBudget)
     if not compact then im.SameLine() end
-    action(im,'Export',ctl.saveSnapshot,true)
+    action(im,t('profiler.export', nil, "Export"),ctl.saveSnapshot,true)
   end
   if not compact then im.SameLine();controls() end
   im.SameLine()
-  if im.Button('More...') then im.OpenPopup('##profiler-options') end
+  if im.Button(t('profiler.more', nil, "More...")) then im.OpenPopup('##profiler-options') end
   if im.BeginPopup('##profiler-options') then
     if compact then controls() end
-    text(im,'Collection mode (starts a fresh capture)')
-    buttonRow(im,{{'Essential',function() ctl.chooseMode('essential') end},{'Full',function() ctl.chooseMode('full') end}})
-    action(im,'Status overlay',function() ctl.setCompact(true) end)
-    action(im,'Stop profiling',ctl.stop)
+    text(im,t('profiler.collectionMode', nil, "Collection mode (starts a fresh capture)"))
+    buttonRow(im,{{t('profiler.essential', nil, "Essential"),function() ctl.chooseMode('essential') end},{t('profiler.full', nil, "Full"),function() ctl.chooseMode('full') end}})
+    action(im,t('profiler.overlay', nil, "Status overlay"),function() ctl.setCompact(true) end)
+    action(im,t('profiler.stop', nil, "Stop profiling"),ctl.stop)
     wrap(im,string.format('%d frames sampled / %.1f s elapsed. Freezing holds the display; collection continues.',view.capturedFrames,view.elapsedMs/1000))
     im.EndPopup()
   end

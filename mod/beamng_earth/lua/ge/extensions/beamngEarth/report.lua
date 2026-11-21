@@ -22,6 +22,7 @@
 -- home folders scrubbed out (also from report.json / hardware.json: report_saved). The saved window's "Send to the
 -- developers" opens reportsend's window: what is sent, with boxes to leave out the screenshot, the exact location and
 -- the logs; nothing is sent before its Send. Reports are private (never published); "Open GitHub issue page" stays.
+local i18n = require('beamngEarth/i18n')
 local M = {}
 M.dependencies = { 'ui_imgui' }
 
@@ -418,8 +419,8 @@ local function drawSaved()
   if sender.isOpen() then saved.untilT = now() + M.SAVED_S end
   if now() > saved.untilT then saved = nil return end
   im.SetNextWindowSize(im.ImVec2(560, 0), im.Cond_FirstUseEver)
-  if im.Begin('BeamNG.Earth report saved##bngeSaved', nil, im.WindowFlags_AlwaysAutoResize) then
-    im.TextUnformatted(saved.kind .. ' report saved in:')
+  if im.Begin(i18n.t('report.savedWindow', nil, 'BeamNG.Earth report saved') .. '###bngeSaved', nil, im.WindowFlags_AlwaysAutoResize) then
+    im.TextUnformatted(i18n.t('report.savedIn', { kind = saved.kind }, saved.kind .. ' report saved in:'))
     im.TextUnformatted(saved.folder)
     -- (no "python3 tools/reports.py" here: the packaged app has no Python or tools folder for players to run, and
     -- one tried to and asked how to fix Python, GitHub #744)
@@ -429,22 +430,22 @@ local function drawSaved()
       .. 'issue.md\'s text into it.')
     local st = sender.status(saved.dir:match('([^/]+)/?$'))
     if st and st.state == 'sent' then
-      im.TextUnformatted('Sent to the developers. Report id: ' .. tostring(st.id or '?'))
+      im.TextUnformatted(i18n.t('report.sent', { id = tostring(st.id or '?') }, 'Sent to the developers. Report id: ' .. tostring(st.id or '?')))
     elseif st and st.state and st.state ~= '' then
       im.TextUnformatted('Send: ' .. st.state .. (st.text and (' (' .. st.text .. ')') or ''))
     end
-    if im.Button('Send to the developers') then
+    if im.Button(i18n.t('report.sendPrivate', nil, 'Send to the developers')) then
       sender.open(saved.dir, saved.data)
       saved.untilT = now() + M.SAVED_S
     end
     im.SameLine()
-    if im.Button('Open folder') then
+    if im.Button(i18n.t('report.folder', nil, 'Open folder')) then
       pcall(Engine.Platform.exploreFolder, '/' .. saved.dir)
       saved.untilT = now() + M.SAVED_S
     end
     if saved.url then
       im.SameLine()
-      if im.Button('Open GitHub issue page') then
+      if im.Button(i18n.t('report.github', nil, 'Open GitHub issue page')) then
         local core = rawget(_G, 'beamngEarth_core')
         if core and core.openPage then pcall(core.openPage, saved.url)
         else pcall(openWebBrowser, saved.url) end
@@ -452,10 +453,17 @@ local function drawSaved()
       end
     end
     im.SameLine()
-    if im.Button('Close') then saved = nil end
+    if im.Button(i18n.t('report.close', nil, 'Close')) then saved = nil end
   end
   im.End()
 end
+
+local reportKinds = {
+  map = { name = 'report.kind.map', hint = 'report.hint.map' },
+  perf = { name = 'report.kind.performance', hint = 'report.hint.performance' },
+  bug = { name = 'report.kind.bug', hint = 'report.hint.bug' },
+  idea = { name = 'report.kind.idea', hint = 'report.hint.idea' },
+}
 
 local function drawForm()
   local f = form
@@ -465,39 +473,39 @@ local function drawForm()
     f.noteBuf = im.ArrayChar(4096, f.data.note or '')
   end
   im.SetNextWindowSize(im.ImVec2(560, 360), im.Cond_FirstUseEver)
-  if im.Begin('BeamNG.Earth report##bngeNote', nil, 0) then
+  if im.Begin(i18n.t('report.window', nil, 'BeamNG.Earth report') .. '###bngeNote', nil, 0) then
     im.TextUnformatted(string.format('%s  |  %s', f.data.time or '',
-      f.data.lat and string.format('%.5f, %.5f', f.data.lat, f.data.lon) or 'no location'))
+      f.data.lat and string.format('%.5f, %.5f', f.data.lat, f.data.lon) or i18n.t('report.noLocation', nil, 'no location')))
     for i, k in ipairs(fmt.KINDS) do
       if i > 1 then im.SameLine() end
-      if im.RadioButton1(k.name .. '##bngeKind' .. i, f.kind == k.id) then f.kind = k.id end
+      if im.RadioButton1(i18n.t(reportKinds[k.id].name, nil, k.name) .. '###bngeKind' .. i, f.kind == k.id) then f.kind = k.id end
     end
-    wrapped(fmt.kind(f.kind).hint)
-    im.TextUnformatted('Title:')
+    wrapped(i18n.t(reportKinds[f.kind].hint, nil, fmt.kind(f.kind).hint))
+    im.TextUnformatted(i18n.t('report.title', nil, 'Title:'))
     if f.frames == 2 then im.SetKeyboardFocusHere() end
     im.PushItemWidth(-1)
     im.InputText('##bngeTitle', f.titleBuf, im.GetLengthArrayCharPtr(f.titleBuf))
     im.PopItemWidth()
-    im.TextUnformatted('Description:')
+    im.TextUnformatted(i18n.t('report.description', nil, 'Description:'))
     im.InputTextMultiline('##bngeNoteText', f.noteBuf, im.GetLengthArrayCharPtr(f.noteBuf), im.ImVec2(-1, 130))
     local b = f.data.bench
     if b and b.fps then
       im.TextUnformatted('Performance profiler: ' .. (fmt.framesLine(b) or ''))
     end
-    if im.Button('Save report') then
+    if im.Button(i18n.t('report.save', nil, 'Save report')) then
       formText(f)
       write(f.dir, f.data)
       form = nil
     end
     if form and f.kind == 'perf' and not b then
       im.SameLine()
-      if im.Button(string.format('Save + record %d s profile', M.BENCH_S)) then
+      if im.Button(i18n.t('report.saveAndProfile', { seconds = M.BENCH_S }, string.format('Save + record %d s profile', M.BENCH_S))) then
         formText(f)
         M.profiler()
       end
     end
     im.SameLine()
-    if form and im.Button(b and 'Close (keep the profile)' or 'Cancel') then form = nil end
+    if form and im.Button(b and i18n.t('report.keepProfile', nil, 'Close (keep the profile)') or i18n.t('report.cancel', nil, 'Cancel')) then form = nil end
   end
   im.End()
 end
