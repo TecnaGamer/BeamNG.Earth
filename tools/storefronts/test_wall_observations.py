@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parents[1] / "server"))
 from store_match import CHAIN_GROUPS, parking_frontage
 from whole_store import CHAINS, build, sign_image
-from brand_signs import LETTERING
+import brand_signs
 
 
 def texture_and_geometry(path):
@@ -218,8 +218,10 @@ def test_storefront_signs():
     compact = sign(2.4, .1, "roadside")
     assert np.array_equal(compact, sign(2.4, 1.2, "projecting"))
     assert not np.array_equal(compact, sign(2.4, 1.2, "roadside"))
-    assert set(LETTERING).issubset(CHAINS)
-    assert LETTERING["Freddy's Frozen Custard & Steakburgers"] == "Freddy\u2019s"
+    marks = [*brand_signs.SYMBOL_ONLY, *brand_signs.SCRIPT_MARKS, *brand_signs.SYMBOL_AND_NAME]
+    assert len(marks) == len(set(marks))
+    assert set(marks).union(brand_signs.LETTERING).issubset(CHAINS)
+    assert brand_signs.LETTERING["Freddy's Frozen Custard & Steakburgers"] == "Freddy\u2019s"
     for name in ("Apple Store", "Best Buy", "Domino's", "Freddy's Frozen Custard & Steakburgers"):
         for aspect in (1, 4.5):
             pixels = np.asarray(sign_image(name, aspect))

@@ -127,17 +127,22 @@ def symbol_and_name(symbol, label, font_path, width, height_m, surface, ink):
     return canvas
 
 
+# Catalog keys stay the same across the matcher, facade, tenant and roadside paths.
+SYMBOL_ONLY = {"Apple Store": (apple, "#34383a", "#f9faf8")}
+SCRIPT_MARKS = {"Freddy's Frozen Custard & Steakburgers": (freddys, "#fff4df", "#af1d2d")}
+SYMBOL_AND_NAME = {"Domino's": (domino_tile, "#17649a")}
+
+
 def artwork(name, width, font_path, height_m, surface):
     """Return custom artwork when the storefront uses a symbol or a distinctive lockup."""
-    if name == "Domino's":
-        return symbol_and_name(domino_tile(), "Domino's", font_path, width, height_m, surface, "#17649a")
-    if name == "Apple Store":
-        img = Image.new("RGB", (width,200), "#34383a")
-        centered_mark(img, apple(), "#f9faf8")
-        return img
-    if name == "Freddy's Frozen Custard & Steakburgers":
-        img = Image.new("RGB", (width,200), "#fff4df")
-        centered_mark(img, freddys(), "#af1d2d")
+    if name in SYMBOL_AND_NAME:
+        symbol, ink = SYMBOL_AND_NAME[name]
+        return symbol_and_name(symbol(), LETTERING.get(name, name), font_path, width, height_m, surface, ink)
+    mark = SYMBOL_ONLY.get(name) or SCRIPT_MARKS.get(name)
+    if mark:
+        mask, paper, ink = mark
+        img = Image.new("RGB", (width, 200), paper)
+        centered_mark(img, mask(), ink)
         return img
     if name == "Best Buy":
         master = Image.new("RGB", (340,200), "#174579")

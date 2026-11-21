@@ -469,49 +469,51 @@ def elevation(
     return img
 
 
-def sign_image(name, aspect=4.5, height_m=1., surface="facade"):
-    colors = {
-        "McDonald's": ("#ac2825", "#ffcc32"),
-        "Chick-fil-A": ("#ede6d7", "#ad2039"),
-        "Walmart": ("#24527d", "#ffffff"),
-        "Lowe's": ("#233e63", "#ffffff"),
-        "The Home Depot": ("#d06529", "#fff5e8"),
+SIGN_COLORS = {
+    "McDonald's": ("#ac2825", "#ffcc32"),
+    "Chick-fil-A": ("#ede6d7", "#ad2039"),
+    "Walmart": ("#24527d", "#ffffff"),
+    "Lowe's": ("#233e63", "#ffffff"),
+    "The Home Depot": ("#d06529", "#fff5e8"),
+}
+SIGN_COLORS.update({k: v[2:] for k, v in DINING.items()})
+SIGN_COLORS.update({k: (v, "#ffffff") for k, v in MARKETS.items()})
+SIGN_COLORS.update(
+    {
+        "Costco": ("#eae4d9", "#b32732"),
+        "Publix": ("#f0e9d7", "#28613b"),
+        "CVS": ("#f3ece1", "#b92337"),
+        "Walgreens": ("#eee6d7", "#aa2034"),
     }
-    colors.update({k: v[2:] for k, v in DINING.items()})
-    colors.update({k: (v, "#ffffff") for k, v in MARKETS.items()})
-    colors.update(
-        {
-            "Costco": ("#eae4d9", "#b32732"),
-            "Publix": ("#f0e9d7", "#28613b"),
-            "CVS": ("#f3ece1", "#b92337"),
-            "Walgreens": ("#eee6d7", "#aa2034"),
-        }
-    )
-    colors["Dollar General"] = ("#e7bd34", "#242620")
-    bg, fg = PROFILES[name][1:] if name in PROFILES else colors[name]
-    if name == "AMC Theatres":
-        bg, fg = "#282427", "#ed364a"
+)
+SIGN_COLORS["Dollar General"] = ("#e7bd34", "#242620")
+SIGN_COLORS.update({name: (background, ink) for name, (_, background, ink) in PROFILES.items()})
+SIGN_COLORS["AMC Theatres"] = ("#282427", "#ed364a")
+SIGN_FONT = Path(__file__).resolve().parents[1] / "fonts" / "DejaVuSans-Bold.ttf"
+
+
+def sign_image(name, aspect=4.5, height_m=1., surface="facade"):
     width = max(12, round(200 * aspect))
-    img = Image.new("RGB", (width, 200), bg)
-    d = ImageDraw.Draw(img)
-    face = Path(__file__).resolve().parents[1] / "fonts" / "DejaVuSans-Bold.ttf"
-    custom = brand_signs.artwork(name, width, face, height_m, surface)
+    custom = brand_signs.artwork(name, width, SIGN_FONT, height_m, surface)
     if custom is not None:
         return custom
+    bg, fg = SIGN_COLORS[name]
+    img = Image.new("RGB", (width, 200), bg)
+    d = ImageDraw.Draw(img)
     lettering = brand_signs.LETTERING.get(name, name)
     left, right = width * 0.035, width * 0.965
     if name == "Target":
         left = width * 0.245
     if name == "Walmart":
         right = width * 0.763
-    base = ImageFont.truetype(face, 160)
+    base = ImageFont.truetype(SIGN_FONT, 160)
     x0, y0, x1, y1 = base.getbbox(lettering)
     size = max(1, int(160 * min((right - left) / (x1 - x0), 168 / (y1 - y0))))
-    font = ImageFont.truetype(face, size)
+    font = ImageFont.truetype(SIGN_FONT, size)
     if name == "Waffle House" and aspect >= 4:
         # Each letter occupies its own yellow cabinet, with a break between words.
         cell = width / 11
-        tile_font = ImageFont.truetype(face, max(1, int(min(163, cell * .94))))
+        tile_font = ImageFont.truetype(SIGN_FONT, max(1, int(min(163, cell * .94))))
         for index, letter in enumerate("WAFFLEHOUSE"):
             left_edge = round(index * cell)
             if index:
@@ -718,7 +720,7 @@ def build(
             def vertex(x, depth, z):
                 return (*(ring[i] + axes[i]*(center+x) + normals[i]*depth), z)
             entrance_designs.draw(design, span, height, vertex, mesh, texture, lambda aspect, h: sign_image(name, aspect, h),
-                                      symbol_only=name == "Apple Store")
+                                      symbol_only=name in brand_signs.SYMBOL_ONLY)
         public = bool(door) or (restaurant and normals[i] @ normals[front] >= -0.15)
         dining = (
             [

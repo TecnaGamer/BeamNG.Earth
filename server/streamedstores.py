@@ -10,6 +10,7 @@ from tempfile import NamedTemporaryFile
 
 import numpy as np
 
+from threedmr import STOREFRONT_VERSION
 from gasstations import GAS_CATEGORIES
 from polygon import contains_points
 
@@ -31,7 +32,6 @@ SPECIFIC = {
 }
 SPECIFIC.update(kind for _, _, types, _ in GROUPS for kind in types)
 COMMERCIAL = SPECIFIC | {"commercial", "retail", "shop"}
-VERSION = 11
 LOG = logging.getLogger("earthd.storefronts")
 
 
@@ -106,7 +106,7 @@ def tenant_panels(tenants, ring, parking):
 def cached_entry(cache, name, coords, bearing, material):
     # Round away sub-centimetre anchor differences. The key describes the geometry actually exported.
     coords = coords.round(7)
-    signature = json.dumps([VERSION, name, coords.tolist(), bearing, material]).encode()
+    signature = json.dumps([STOREFRONT_VERSION, name, coords.tolist(), bearing, material]).encode()
     ident = hashlib.sha256(signature).hexdigest()[:24]
     meta = cache / f"store_{ident}.json"
     mesh = cache / f"store_{ident}.glb"
