@@ -2225,6 +2225,25 @@ def beammp_wait_seconds(value):
 
 
 def main():
+    if sys.argv[1:] == ["--configure-mapillary"]:
+        sys.path.insert(0, os.path.join(ROOT, "server"))
+        import plmapillary
+        plmapillary.configure(user_folder())
+        return
+    if sys.argv[1:2] == ["--prepare-pl-models"]:
+        sys.path[:0] = [os.path.join(ROOT, "server"), os.path.join(ROOT, "tools")]
+        import plsignart
+        from pathlib import Path
+        options = argparse.ArgumentParser(description="Prepare additional Polish sign models")
+        options.add_argument("--originals", type=Path, help="Use original Commons SVG files from this folder")
+        options.add_argument("--user-dir", help="BeamNG user folder (default: auto-detect)")
+        settings = options.parse_args(sys.argv[2:])
+        ensure_ca_certs()
+        user_dir = settings.user_dir or user_folder()
+        if not user_dir:
+            raise SystemExit("Uruchom najpierw BeamNG.Earth, aby wybrac folder gry.")
+        plsignart.prepare(user_dir, settings.originals)
+        return
     if len(sys.argv) > 2 and sys.argv[1] == "--run-addon":     # (before tee_log: its output is its own run.log)
         ensure_ca_certs()
         run_addon(sys.argv[2:])

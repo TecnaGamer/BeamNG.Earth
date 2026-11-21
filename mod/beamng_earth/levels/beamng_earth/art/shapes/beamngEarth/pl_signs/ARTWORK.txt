@@ -1,0 +1,13 @@
+Polish traffic sign faces from Wikimedia Commons
+https://commons.wikimedia.org/wiki/Category:SVG_road_signs_in_Poland
+
+C-9 by odder. Original SVG and uniformly rasterised PNG face: CC BY-SA 2.5.
+https://commons.wikimedia.org/wiki/File:PL_road_sign_C-9.svg
+https://creativecommons.org/licenses/by-sa/2.5/
+
+B-18-3.5t: CC0. The remaining originals are listed as public domain on their individual file pages.
+The source distribution includes tools/sign_art/pl/sources.json with per-file credits and SHA-256 checksums.
+
+Road sign positions: OpenStreetMap contributors (ODbL), Mapillary (mapillary.com), and Gmina Wrocław.
+Spatial filter: Państwowy Rejestr Granic, Główny Urząd Geodezji i Kartografii.
+See server/data/pl_signs/NOTICE.md in the companion server for dataset details.

@@ -251,12 +251,17 @@ def living_ids(feats, frame, urban, widths, left_hand):
     return got
 
 
+# Ring directions keep only a few feature IDs. Retain more geotile frames than the full sign geometry.
+_RING_CELL_FRAMES = 16
+
+
 def cell_rings(feats, frame, urban, widths, left_hand, mph, rows):
     """{fid: way round} of the roundabout rings made of the roads of one map cell (islands.ring_directions: the same loops the
     road tiles and the graph see), kept on the cell. A ring whose roads are in two cells is not seen: every road is whole in
     each cell it crosses, so it is lost only when no cell holds all of it. (Asked per tile for the roads round it, it was 60 %
     of a tile's time, 2026-11-07.)"""
-    key = (frame.lat0, frame.lon0, urban, widths, bool(left_hand), bool(mph))
+    key = (frame.lat0, frame.lon0, getattr(frame, "h0", 0.), urban, widths, bool(left_hand), bool(mph),
+           feats.__dict__.get("_lanes_built"), getattr(feats, "_road_revision", 0))
     with _lock:
         memo = feats.__dict__.setdefault('_rsign_rings', {})
         got = memo.get(key)
@@ -264,7 +269,7 @@ def cell_rings(feats, frame, urban, widths, left_hand, mph, rows):
         roads_list = [(fid, types.SimpleNamespace(oneway=bool(r[2][1]), dir=int(r[2][1])), r[1], 0.0) for fid, r in rows.items()]
         got = dict(islands.ring_directions(roads_list, left_hand)) if roads_list else {}
         with _lock:
-            if len(memo) >= speedsigns.CELL_FRAMES:
+            if len(memo) >= _RING_CELL_FRAMES:
                 memo.pop(next(iter(memo)))
             memo[key] = got
     return got
@@ -419,7 +424,7 @@ def table(signs, z_ground, z_road, sys_row):
     return np.ascontiguousarray(out)
 
 
-def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, country=None):
+def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, country=None, pl=None):
     """The mesh (signstream.write_tile's) of road tile (tx, ty)'s road signs, or None (none)."""
     sys_row = system(country)
     if sys_row is None:
@@ -437,8 +442,21 @@ def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=
     z = np.asarray(frame.geodetic_to_enu(la, lo, h)[2], np.float64).ravel()
     n = len(signs)
     roles = tables()[0]
-    p, t, uv, mi = fast._ef.road_sign_mesh(table(signs, z[:n], z[n:], sys_row), roles["cols"], roles["rows"],
+    native = table(signs, z[:n], z[n:], sys_row)
+    localized = None
+    if pl is not None:
+        import plstock
+        rules = tables()[1]["rules"]
+        codes = [plstock.ROLES.get(rules[int(row[4])]) for row in signs]
+        native, localized = plstock.split(frame, signs, native, codes, pl, box, stacked=True)
+        if not len(native):
+            return localized
+    p, t, uv, mi = fast._ef.road_sign_mesh(native, roles["cols"], roles["rows"],
                                            [float(box[0]), float(box[1]), 0.0])
     if not len(t):
         return None
-    return p, t, uv, ["bne_signs_" + sys_row["atlas"], METAL], mi
+    mesh = (p, t, uv, ["bne_signs_" + sys_row["atlas"], METAL], mi)
+    if localized is not None:
+        import dezones
+        return dezones._merged(mesh, localized)
+    return mesh

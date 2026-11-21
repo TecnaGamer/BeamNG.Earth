@@ -100,6 +100,8 @@ def chosen(settings):
         version = 1
 
     def on(sid):
+        if sid == "roadSigns" and settings.get("expPlRoadSigns") is True:
+            return True  # Migrate an earlier Polish-signs build before the game next saves its settings.
         return settings.get(sid) is True and version >= SINCE_VERSION.get(sid, 0)
 
     return [sid for sid, _env, needs in FEATURES if on(sid) and (needs is None or on(needs))]

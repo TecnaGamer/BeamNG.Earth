@@ -751,6 +751,13 @@ do
   T.check(v.expRoadBumps == true, 'a version-2 file: another experimental switch is the player\'s')
   files[settings.FILE] = { version = 3, roadSigns = true }
   T.check(settings.load().roadSigns == true, 'a version-3 file: the player turned road signs on')
+  files[settings.FILE] = { version = 3, roadSigns = false, expPlRoadSigns = true }
+  local merged, warnings = settings.load()
+  T.check(merged.roadSigns and #warnings == 0, 'an existing Polish signs selection enables Road signs')
+  settings.set('roadSigns', false)
+  settings.save()
+  T.check(files[settings.FILE].expPlRoadSigns == nil and settings.load().roadSigns == false,
+    'turning off the merged setting survives saving and loading')
   files[settings.FILE] = nil
   settings.load()
 end
@@ -768,4 +775,8 @@ do
   T.check(settings.uiMapPreload(1, 2, true).ok == false, 'no core: nothing')
   beamngEarth_core = core0
 end
+T.check(settings.uiMapillaryStatus() == 'default', 'no game token yet')
+T.check(settings.uiMapillarySet('example|test').ok and settings.uiMapillaryStatus() == 'saved', 'set a local token')
+T.check(not settings.uiMapillarySet('two words').ok, 'reject whitespace')
+T.check(settings.uiMapillarySet('').ok and settings.uiMapillaryStatus() == 'rules', 'remove token and choose rules')
 T.done('test_settings')

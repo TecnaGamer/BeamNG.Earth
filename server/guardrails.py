@@ -4,6 +4,7 @@ Mapped guard rails, jersey barriers (the stock jersey barrier) and cable barrier
 Their Forest rows reuse the game's model batching and near-field collision path instead of creating a custom mesh
 for every road tile. medians.py adds the median barriers where none is mapped, in the same rows.
 """
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -36,8 +37,19 @@ import euguardrails
 ALL_GROUPS = GROUPS + euguardrails.GROUPS
 
 
+@lru_cache(maxsize=1)
+def polish_groups():
+    import plsigns
+    return ALL_GROUPS + plsigns.catalog() + ("pl_a_7_c_12",)
+
+
 def groups_for(rows):
-    return ALL_GROUPS if any(int(r[0])>=len(STOCK_GROUPS)for r in rows) else STOCK_GROUPS
+    last = max((int(r[0]) for r in rows), default=-1)
+    if last >= len(ALL_GROUPS):
+        return polish_groups()
+    return ALL_GROUPS if last >= len(STOCK_GROUPS) else STOCK_GROUPS
+
+
 G_JERSEY, G_JERSEY_END, G_CABLE = 6, 7, 8
 KINDS = {"guard_rail": 0, "jersey_barrier": G_JERSEY, "cable_barrier": G_CABLE}    # mapped class -> its module group
 HEIGHTS = {G_JERSEY: 0.88, G_JERSEY_END: 0.88, G_CABLE: 1.0}                       # (the rest: MODULE_HEIGHT_M)

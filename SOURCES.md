@@ -176,3 +176,7 @@ approximate bounding-box limits only, so border matches may be imperfect. Small 
 `near` searches use the named location as their origin. Large regions may have few results for sparsely mapped classes.
 Rally/gravel, off-road and rock crawling use terrain/sport tag proxies, not verified routes or access guarantees.
 OSM object centers and Wikidata coordinates identify the destination, not a verified drivable entrance.
+
+## Experimental Polish road signs
+
+The position layers use OpenStreetMap, Mapillary, the Wrocław municipal sign inventory and the Polish national boundary from Geoportal. The sign models use individually credited SVG originals from Wikimedia Commons. [Sources and licences](server/data/pl_signs/NOTICE.md) · [Coverage and import](docs/POLISH_ROAD_SIGNS.md).
