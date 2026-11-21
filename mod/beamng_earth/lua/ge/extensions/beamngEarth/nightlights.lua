@@ -171,6 +171,17 @@ local function apply(night, step)
   M.nightStep = night and step or nil
 end
 
+-- Keep a tile's extent in the same coordinate frame as its lenses. Most loaded
+-- tiles are outside the spotlight pool's radius even when their halos are visible.
+local function updateBounds(list)
+  local xmin, ymin, xmax, ymax = math.huge, math.huge, -math.huge, -math.huge
+  for _, l in ipairs(list) do
+    xmin, ymin = math.min(xmin, l[1]), math.min(ymin, l[2])
+    xmax, ymax = math.max(xmax, l[1]), math.max(ymax, l[2])
+  end
+  list.xmin, list.ymin, list.xmax, list.ymax = xmin, ymin, xmax, ymax
+end
+
 -- A road tile's furniture rows (roads.lua: { group index, x, y, z, yaw, ... } with its groups): its lenses.
 function M.onRows(key, items, groups)
   local groupsById = {}
@@ -184,6 +195,7 @@ function M.onRows(key, items, groups)
       out[#out + 1] = { r[2], r[3], r[4], r[5], groupsById[r[1]] == 'fr_lantern_light', groupsById[r[1]] == 'high_mast_light', r[9] or 1 }
     end
   end
+  if #out > 0 then updateBounds(out) end
   lenses[key] = #out > 0 and out or nil
 end
 
@@ -193,6 +205,7 @@ function M.dropKey(key) lenses[key] = nil end
 function M.transform(xf)
   for _, list in pairs(lenses) do
     for _, l in ipairs(list) do l[1], l[2], l[3] = xf:apply(l[1], l[2], l[3]) end
+    updateBounds(list)
   end
   for _, e in ipairs(pool) do e.at = nil end           -- (placed again at the next step)
 end
@@ -235,7 +248,12 @@ function M.nearest(x, y, r, n, fx, fy, around)
     end
   end
   for _, list in pairs(lenses) do
-    for _, l in ipairs(list) do consider(l) end
+    local dx = math.max(0, list.xmin - x, x - list.xmax)
+    local dy = math.max(0, list.ymin - y, y - list.ymax)
+    local cutoff = #cand == limit and cand[1][2] or r2
+    if dx * dx + dy * dy <= cutoff then
+      for _, l in ipairs(list) do consider(l) end
+    end
   end
   limit = totalLimit
   for _, fn in pairs(M.providers) do

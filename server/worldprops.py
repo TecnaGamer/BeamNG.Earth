@@ -233,7 +233,9 @@ def _aim_lamps(lamps, lines_fn):
     yaw = fast._ef.lamp_road_yaw(xy, layers, arms, *surfaces, LAMP_ROAD_M)
     if edges and len(carriageways[1]) > 1:
         roadside = fast._ef.lamp_road_yaw(xy, layers, arms, *carriageways, LAMP_ADJACENT_ROAD_M)
-        todo = np.flatnonzero(np.isfinite(roadside))
+        # The common case already faces the street. Only ambiguous heads
+        # need the width-group distance checks.
+        todo = np.flatnonzero(np.isfinite(roadside) & (yaw != roadside))
         for width, lines in edges.items():
             if not len(todo):
                 break
@@ -552,7 +554,7 @@ def _centres(frame, feats, rows, least=1):
 
 
 def _local_offset(yaw_deg, ox, oy):
-    """World offset of local (ox, oy) at yaw (trees.lua: local +x turns toward yaw, +y is +x rotated 90Ă‚Â° CCW)."""
+    """World offset of local (ox, oy) at yaw (trees.lua: local +x turns toward yaw, +y is +x rotated 90Ä‚â€šĂ‚Â° CCW)."""
     t = math.radians(yaw_deg)
     c, s = dmath.cos(t), dmath.sin(t)
     return ox * c + oy * -s, ox * s + oy * c
