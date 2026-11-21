@@ -170,12 +170,25 @@ def artwork(name, width, font_path, height_m, surface):
         return img
     if name == "Uniqlo":
         canvas = Image.new("RGB", (width,200), "#eeece6")
-        size = min(width,196)
-        badge = Image.new("RGB",(196,196),"#c71d2d")
+        size = min(width,200)
+        badge = Image.new("RGB",(200,200),"#dc1826")
         pen = ImageDraw.Draw(badge)
-        for y,line in ((22,"UNI"),(100,"QLO")):
-            pen.text((98,y),line,font=ImageFont.truetype(font_path,67),anchor="mt",fill="white")
-        canvas.paste(badge.resize((size,size),Image.Resampling.LANCZOS),((width-size)//2,(200-size)//2))
+        for y,line in ((23,"UNI"),(101,"QLO")):
+            pen.text((100,y),line,font=ImageFont.truetype(font_path,78),anchor="mt",fill="white")
+        paired = width >= 2*size+10
+        left = (width-(2*size+10 if paired else size))//2
+        if paired:
+            # Draw ユニ / クロ as strokes so the offline generator needs no CJK font.
+            kana = Image.new("RGB",(200,200),"#dc1826")
+            ink = ImageDraw.Draw(kana)
+            for stroke in (((30,44),(75,44),(70,77)),((22,78),(87,78)),
+                           ((116,44),(172,44)),((110,77),(178,77)),
+                           ((48,113),(40,129),(26,140)),((45,121),(79,121),(67,150),(42,169)),
+                           ((116,122),(173,122),(173,165),(116,165),(116,119))):
+                ink.line(stroke, fill="white", width=8)
+            canvas.paste(kana,(left,0))
+            left += size+10
+        canvas.paste(badge.resize((size,size),Image.Resampling.LANCZOS),(left,(200-size)//2))
         return canvas
     if name == "In-N-Out Burger":
         master = Image.new("RGB", (480,200), "#fff1da")

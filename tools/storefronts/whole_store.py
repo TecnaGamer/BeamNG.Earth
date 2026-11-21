@@ -143,6 +143,7 @@ DESIGN_GLAZING = {
     "glazed_shed": (11.,.15,4.1,4.),
     "cinema_lobby": PUBLIC_GLAZING["cinema"],
     "glass": (12., .12, 4.9, 5.),
+    "cube_gallery": (12., .12, 4.9, 5.),
 }
 CAFE_GLAZING.update({name: DESIGN_GLAZING[design.form] for name, design in entrance_designs.DESIGNS.items()})
 DINING["Cracker Barrel"] = ("timber", "#85634d", "#ebbd62", "#623520")
@@ -294,7 +295,8 @@ def elevation(
         if not observed_brick:
             for x in np.arange(3.6, width, 4.8):
                 rect(x, base, x + 0.045, height, "#998f82")
-        rect(0, height * 0.77, width, height * 0.80, ACCENTS[name])
+        if name != "Uniqlo":
+            rect(0, height * 0.77, width, height * 0.80, ACCENTS[name])
     if name in {"The Home Depot", "Lowe's"}:
         paint = "#dc671e" if name == "The Home Depot" else "#174b85"
         rect(0, height * 0.70, width, height - 0.22, paint)
@@ -380,7 +382,11 @@ def elevation(
         for row in range(4):
             for x in np.arange(-.6 + (row%2)*.3, width, .64):
                 rect(x, row*.33, x+.61, row*.33+.30, "#8f8373")
-    if name in FASCIA and name != "Cracker Barrel" and not lodge_walls:
+    if name == "Uniqlo" and not observed_brick and not photo_color:
+        rect(0,0,width,height,"#ecece7")
+        for joint in np.arange(2.4,width,2.4):
+            rect(joint,0,joint+.035,height,"#c4c7c3")
+    if name in FASCIA and name not in {"Cracker Barrel","Uniqlo"} and not lodge_walls:
         share, paint, trim = FASCIA[name]
         bottom = height * (1 - share) - 0.14
         rect(0, bottom, width, height - 0.14, paint)
@@ -478,6 +484,19 @@ def elevation(
                         rect(shutter-side_room*.07,z,shutter+side_room*.07,z+.12,"#63594b")
                 else:
                     glass(mid,side_room-.12,.12,min(3.65,height),False)
+                    if name == "Uniqlo":
+                        # Folded-clothing displays baked into the window texture.
+                        colors = ("#c2abb0","#9ca9b8","#b5ae93") if side_room >= 2.4 else ("#9ca9b8",)
+                        pitch = side_room*.69/len(colors)
+                        for column,color in enumerate(colors):
+                            start = mid + (column-len(colors)/2)*pitch
+                            end = start + pitch*.87
+                            for row in range(3):
+                                shelf = .52 + row*.47
+                                rect(start,shelf,end,shelf+.055,"#b5a18d")
+                                for layer in range(3):
+                                    y = shelf+.07+layer*.072
+                                    rect(start+.06,y,end-.06,y+.055,color)
     if name in {"Kroger", "Ace Hardware", "Target"}:
         for x in entries:
             for offset in (-4.9, 4.9):

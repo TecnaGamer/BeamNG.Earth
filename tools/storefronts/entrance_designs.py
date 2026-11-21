@@ -62,7 +62,7 @@ DESIGNS = {
     "Lidl": Entrance("glazed_shed", "#485764", "#cbd1cf", 27),
     "Old Navy": Entrance("arched_glass", "#28445b", "#547589", 19),
     "Hollister": Entrance("shuttered_porch", "#5d5446", "#996149", 14),
-    "Uniqlo": Entrance("glass", "#f0eee9", "#777d7e", 20),
+    "Uniqlo": Entrance("cube_gallery", "#ecece7", "#777d7e", 25),
     "AMC Theatres": Entrance("cinema_lobby", "#bda78c", "#932a36", 32),
     "Apple Store": Entrance("glass", "#bdbfbb", "#626962", 23),
     "Crate & Barrel": Entrance("glass", "#ddd8cb", "#494a46", 20),
@@ -122,6 +122,7 @@ def draw(profile, span, height, vertex, mesh, texture, sign, symbol_only=False):
     eave = max(3.25, height-.45)
     sign_z, sign_depth, sign_h = eave, reach+.04, min(1.15, span*.095)
     sign_width = min(span*.69, sign_h*6)
+    sign_center = 0.
     if form in {"outfitter", "market", "glass", "step"}:
         sign_h = min(1.90, span * .115)
         sign_width = min(span * .75, sign_h * 7)
@@ -267,6 +268,29 @@ def draw(profile, span, height, vertex, mesh, texture, sign, symbol_only=False):
         sign_h = min(1.65,span*.10)
         sign_width = min(span*.82,sign_h*5.3)
         sign_z,sign_depth = base-sign_h*.5,.72
+    elif form == "cube_gallery":
+        # Keep the entry axis clear. Small bays carry the cabinet above the doors.
+        size = min(5.8, span*.28, height*.90)
+        left = -half
+        bottom = 0 if half-size >= 3.15 else 3.5
+        top = max(height+.7, bottom+size)
+        depth = min(size*.65, reach)
+        box(left,left+size,.02,depth,bottom,top,"#dc1826")
+        box(left+size,half,.02,.68,height-.34,height,field)
+        door_half = min(3.1,half-size)
+        box(-door_half,door_half,.02,.18,3.43,max(3.55,height-.34),"#55696c")
+        box(-door_half,door_half,.03,min(1.15,reach),3.41,3.55,field)
+        sign_h = sign_width = size*.93
+        sign_z,sign_depth = top-size*.5,depth+.012
+        sign_center = left+size*.5
+        # A square badge on the return is visible on an oblique approach.
+        side = depth*.88
+        middle = depth/2
+        corners = [vertex(left+size+.012,d,z) for d,z in
+                   ((middle+side/2,sign_z-side/2),(middle-side/2,sign_z-side/2),
+                    (middle-side/2,sign_z+side/2),(middle+side/2,sign_z+side/2))]
+        mesh([corners[i] for i in (0,1,2,0,2,3)], texture(sign(1.,side)),
+             [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
     elif form == "shuttered_porch":
         ridge = eave+min(1.9, half*.28)
         prism([(-half,eave),(half,eave),(0,ridge)],.02,reach-.12,field)
@@ -354,6 +378,7 @@ def draw(profile, span, height, vertex, mesh, texture, sign, symbol_only=False):
         sign_z = height - sign_h*.60
     x=sign_width/2
     lo,hi=sign_z-sign_h/2,sign_z+sign_h/2
-    corners=[vertex(-x,sign_depth,lo),vertex(x,sign_depth,lo),vertex(x,sign_depth,hi),vertex(-x,sign_depth,hi)]
+    corners=[vertex(sign_center-x,sign_depth,lo),vertex(sign_center+x,sign_depth,lo),
+             vertex(sign_center+x,sign_depth,hi),vertex(sign_center-x,sign_depth,hi)]
     mesh([corners[i] for i in (0,1,2,0,2,3)], texture(sign(sign_width/sign_h, sign_h)),
          [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
