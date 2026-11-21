@@ -3807,13 +3807,15 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
     try:
         im.quick_all = bool(tex.get("quick"))
         try:
-            photo, used = im.far_photo(imagerymod.MercSquare(z, x, y, px), px)
+            photo, used = imagerymod.render_far(im.render_merc, z, x, y, px)
         finally:
             im.quick_all = False
     except imagerymod.ImageryError:
         return built, None
     s = built.size
     rock = rockfacemod.tile_inputs(geotiles.frame(x, y, z), -s / 2, -s / 2, s, px, built.grid)
+    if not isinstance(photo, imagerymod.FarPhoto):
+        photo = imagerymod.FarPhoto(np.asarray(photo, np.uint8), None)  # provider RGB already has its seasonal grade
     n = photo.write(tex["path"], rock, imagerymod.FAR_SRGB)
     return built, (n, used)
 
@@ -4149,7 +4151,7 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
         if rgb is None:
             im.quick_all = bool(tex.get("quick"))
             try:
-                rgb, used = im.far_photo(im.square(frame, *sq, px, gutter=True), px)
+                rgb, used = imagerymod.render_far(im.render, frame, *sq, px, gutter=True)
             finally:
                 im.quick_all = False
     except imagerymod.ImageryError:

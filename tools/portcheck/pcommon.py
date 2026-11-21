@@ -4,6 +4,7 @@ The tools prove that a port step changed no output: they build the frozen corpus
 server, again with another, and compare the two outputs exactly.
 
   build.py    the plans and cell facts of every corpus place's map cells, in-process (plancmp, factcmp)
+  farfail.py  replay imagery outages and recovery on local and global far tiles (independent of the corpus cache)
   session.py  a real server session per place in the players' layout (the launcher's options, the mod's hello):
               every message and every file a message names (tilecmp, blkcmp, farcmp, msgcmp), and the run's plans
   plancmp.py  factcmp.py  tilecmp.py  blkcmp.py  farcmp.py  msgcmp.py: compare two outputs (exit 0: identical,
