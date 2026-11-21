@@ -92,3 +92,5 @@ when a mapped parking aisle, outdoor pedestrian approach, or nearby mapped entra
 Sign width follows the available frontage. Catalog tenants use brand art where available and the local
 business option enables named independent retailers and restaurants. Interior and ambiguous tenants
 receive no exterior sign from this rule. The existing mall building remains in place.
+
+Mall exterior signage can also use a qualified tenant pin within two metres of an explicitly mapped customer door. For operator-documented exterior access, `server/data/mall_exterior_access.csv` pairs an OSM building way with the tenant listing name and a source URL. Include only a tenant-specific exterior entrance. A recommended shared mall entry is insufficient. Each record still needs a current qualifying place pin on a distinguishable wall.

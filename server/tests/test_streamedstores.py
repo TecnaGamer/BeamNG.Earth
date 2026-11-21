@@ -306,6 +306,27 @@ class StreamedStoresTest(unittest.TestCase):
         tenants = [("Target",ring[0]),("Target",ring[1]),("Old Navy",ring[2]),(None,ring[3])]
         self.assertEqual(stores.mall_directory(tenants,ring[0]), ("Target","Old Navy"))
 
+    def test_mall_tenant_exterior_evidence_requires_a_live_wall_match(self):
+        import streamedstores as stores
+        frame = geodesy.EnuFrame(40., -83.)
+        md = tile(frame, "Test Center", ["River Kitchen"], "retail")
+        layer = md.cell(None).layers["places"]
+        layer.attrs["basic_category"] = np.array(["restaurant"])
+        coords = md.cell(None).layers["buildings"].lonlat[:-1]
+        def panels(y, documented=False, entrance=False):
+            lat,lon,_ = frame.enu_to_geodetic(50.,y,0.)
+            layer.lonlat[:] = [lon,lat]
+            lat,lon,_ = frame.enu_to_geodetic(50.,30.,0.)
+            doors = ((lon,lat),) if entrance else ()
+            return stores.confirmed_mall_panels(list(stores.businesses(md,[None])),coords,
+                                                {"river kitchen"} if documented else (), doors)
+        self.assertFalse(panels(29.))
+        self.assertEqual(len(panels(29.,documented=True)),1)
+        self.assertEqual(len(panels(29.,entrance=True)),1)
+        self.assertFalse(panels(44.,documented=True))
+        layer.attrs["operating_status"] = np.array(["closed"])
+        self.assertFalse(panels(29.,documented=True,entrance=True))
+
     def test_named_venue_with_offset_business_pin(self):
         import streamedstores
         frame = geodesy.EnuFrame(40., -83.)

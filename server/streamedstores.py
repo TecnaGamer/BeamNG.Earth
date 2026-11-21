@@ -349,6 +349,66 @@ def exterior_frontages(layers, coords, ring, label, neighbors, inside_only=False
     return [next(iter(matches.values())) for matches in bays.values() if len(matches)==1]
 
 
+@lru_cache(maxsize=1)
+def exterior_access_index():
+    """Operator-confirmed tenant access, scoped to the mapped building, read once per worker."""
+    index = {}
+    path = Path(__file__).parent / "data" / "mall_exterior_access.csv"
+    try:
+        with path.open(encoding="utf8", newline="") as source:
+            for row in csv.DictReader(source):
+                index.setdefault(row["building"], set()).add(row["tenant"].casefold())
+    except OSError as error:
+        LOG.warning("Mall exterior access data unavailable: %s", error)
+    return index
+
+
+def confirmed_mall_panels(layers, coords, names, doors=()):
+    """Exterior access identifies the tenant. Its live pin must independently identify a wall."""
+    if not names and not doors:
+        return []
+    names = names or ()
+    scale = np.array([111320*dmath.cos(dmath.radians(coords[0,1])), 111132])
+    lo, hi = coords.min(0)-4/scale, coords.max(0)+4/scale
+    edges = (np.roll(coords,-1,axis=0)-coords)*scale
+    widths = np.linalg.norm(edges,axis=1)
+    axes = edges/np.maximum(widths[:,None],1e-9)
+    ring = (coords-coords[0])*scale
+    winding = np.sum(ring[:,0]*edges[:,1]-ring[:,1]*edges[:,0])
+    matches = {}
+    for f,rows,points in layers:
+        for j in np.flatnonzero(np.all((points >= lo) & (points <= hi),axis=1)):
+            i = rows[j]
+            def value(key):
+                return f.attrs[key][i] if key in f.attrs else None
+            label = str(value("name") or "").strip()
+            documented = label.casefold() in names
+            brand = chain(label) or local_sign(label, {value("basic_category"), value("taxonomy")})
+            if not documented and (not doors or not brand or not any(
+                    np.linalg.norm((points[j]-door)*scale)<=2 for door in doors)):
+                continue
+            if (not qualifies_business(value("confidence"))
+                    or value("operating_status") in {"closed","permanently_closed"}):
+                continue
+            offsets = (points[j]-coords)*scale
+            along = np.clip(np.sum(offsets*axes,axis=1),0,widths)
+            distances = np.linalg.norm(offsets-along[:,None]*axes,axis=1)
+            wall, second = distances.argsort()[:2]
+            # Near a corner, require the perpendicular projection to land inside the edge.
+            if (distances[wall]>8 or distances[second]-distances[wall]<.75
+                    or min(along[wall],widths[wall]-along[wall])<1.5 or widths[wall]<8):
+                continue
+            half = min(5., widths[wall]/2-1.)
+            center = np.clip(along[wall],half+1,widths[wall]-half-1)
+            bounds = center+np.array([-half,half])
+            panel = coords[wall]+bounds[:,None]*axes[wall]/scale
+            brand = brand or LocalSign(label,"shop")
+            matches.setdefault(label.casefold(),{})[wall] = brand, panel if winding>0 else panel[::-1]
+    candidates = [next(iter(m.values())) for m in matches.values() if len(m)==1]
+    return [(name,p) for name,p in candidates if all(other==name or
+            np.linalg.norm((q.mean(0)-p.mean(0))*scale)>11 for other,q in candidates)]
+
+
 def tenant_panels(tenants, ring, parking, entrances=(), walks=()):
     """Leave room for all mapped tenants, including businesses without a brand model."""
     for i, (name, point) in enumerate(tenants):
@@ -395,7 +455,7 @@ def entrance_index():
     return by_way
 
 
-def mapped_doors(source, coords):
+def mapped_doors(source, coords, *, explicit_only=False):
     """Use only evidence on the same OSM way and still on the current footprint."""
     way = source.partition("@")[0]
     if not way.startswith("w") or not way[1:].isdigit():
@@ -413,7 +473,7 @@ def mapped_doors(source, coords):
         residual = offset-edges*fraction[:,None]
         if np.min(np.sum(residual*residual, axis=1)) <= 1.5*1.5:
             (public if explicit else paths).append((lon,lat))
-    return tuple(sorted(set(public or paths)))
+    return tuple(sorted(set(public if explicit_only else public or paths)))
 
 
 def entrance_offsets(coords, ring, points):
@@ -689,6 +749,15 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                         walk_segments = np.column_stack((lon,lat)).reshape(-1,2,2)
                 panels = list(tenant_panels(tenants,coords,parking_points if parking_points is not None else (),
                                             doors if mall else (), walk_segments if mall and walk_segments is not None else ()))
+                if mall and local_enabled and sources:
+                    access = exterior_access_index().get(sources[0].partition("@")[0])
+                    verified = confirmed_mall_panels(layers, coords, access,
+                                                     mapped_doors(sources[0],coords,explicit_only=True))
+                    if verified:
+                        scale = np.array([111320*dmath.cos(dmath.radians(coords[0,1])), 111132])
+                        panels = [(n,p) for n,p in panels if all(n != v and
+                                  np.linalg.norm((p.mean(0)-q.mean(0))*scale) > 16 for v,q in verified)]
+                        panels.extend(verified)
                 if mall and label and spec.height >= 5.5 and walk_segments is not None and local_enabled:
                     panels.extend((LocalSign(label, "entrance"), p)
                                   for p in mall_entrance_panels(coords, walk_segments, panels))
