@@ -45,6 +45,7 @@ import plancache
 import roadwidth as roadwidthmod
 import roadwear
 import seacarve as seacarvemod
+import serverlog
 import staging
 import surface as surfacemod
 import terraincache
@@ -351,7 +352,8 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
         budget.lower_priority(nice, worker=True)    # (Windows: the server's class, as inherited)
     except (OSError, AttributeError):
         pass
-    logging.basicConfig(level=log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    serverlog.configure(log_level)
+    threading.Thread(target=_watch_parent, args=(os.getppid(),), daemon=True, name="parent-watch").start()
     budget.apply()              # (this process's caches: smaller on a small machine)
     if os.environ.get("BNGE_TRACEMALLOC"):      # debug: this worker's memory (earthd's trace_mem)
         _trace_memory()
@@ -361,7 +363,6 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
     sampler.maybe_start(f".{os.getpid()}")      # BNGE_SAMPLE: this worker's own sampling profile (debugging)
     xproc.PRIORITY = nice
     _s = _State(cache_dir, offline, roads, grading, road_widths, surface, airports, sea, gas_stations)
-    threading.Thread(target=_watch_parent, args=(os.getppid(),), daemon=True, name="parent-watch").start()
     if warm_q is not None:      # (only the block pools plan roads ahead: the far, road and far building pools pass None)
         blockcache.warm()       # (and build blocks: their cache's code id now)
         threading.Thread(target=_read_warm, args=(warm_q,), daemon=True, name="warm-read").start()
@@ -456,29 +457,29 @@ def _watch_parent(ppid):
     cache's files across server restarts); there the process handle is waited on."""
     if os.name == "nt":
         _wait_process(ppid)
-        os._exit(0)
-    while os.getppid() == ppid:
-        time.sleep(PARENT_POLL_S)
+    else:
+        while os.getppid() == ppid:
+            time.sleep(PARENT_POLL_S)
+    serverlog.shutdown()
     os._exit(0)
 
 
 def _wait_process(pid):
-    """Windows: return once process pid has exited (at once if it cannot be opened: gone already)."""
+    """Windows: wait for the parent to exit or for its clean restart to request this worker's stop."""
     import ctypes
     from ctypes import wintypes
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     k32.OpenProcess.restype = wintypes.HANDLE
     k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    k32.WaitForSingleObject.restype = wintypes.DWORD
-    k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
     k32.CloseHandle.argtypes = [wintypes.HANDLE]
-    h = k32.OpenProcess(0x00100000, False, int(pid))       # SYNCHRONIZE
-    if not h:
+    parent = k32.OpenProcess(0x00100000, False, int(pid))  # SYNCHRONIZE
+    if not parent:
         return
     try:
-        k32.WaitForSingleObject(h, 0xFFFFFFFF)             # INFINITE
+        import srvrestart
+        srvrestart.wait_parent_or_stop(parent)
     finally:
-        k32.CloseHandle(h)
+        k32.CloseHandle(parent)
 
 
 PARENT_POLL_S = 2.0
