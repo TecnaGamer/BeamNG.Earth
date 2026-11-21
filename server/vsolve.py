@@ -39,7 +39,7 @@ import dnp
 
 log = logging.getLogger("earthd.vsolve")
 
-KERNEL_MIN = 513        # earthfast's VERSION with the solve's soft couplings (512) and corridor pairs (513)
+KERNEL_MIN = 562        # earthfast's VERSION with the solve's soft couplings (561) and corridor pairs (562)
 
 
 def _default_mode():
