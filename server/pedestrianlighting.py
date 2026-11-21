@@ -9,6 +9,7 @@ import citylamps
 import fast
 import furniture
 import mapcells
+import lightingranges
 import mapgeom
 import standalonepaths
 import streetfront
@@ -63,20 +64,28 @@ def stations(xy, spacing, phase, box):
             yield k, j, xy[j] + (k*spacing + phase-chain[j])*direction, direction
 
 
-def path_sites(parts, cells, box):
+def path_sites(parts, cells, box, frame):
+    wanted = {fid for fid, _, _, _ in parts}
     profiles = {}
     for f in cells:
         if f is None or "osm_way_lit" not in f.attrs:
             continue
-        for i in np.flatnonzero(f.attrs["osm_way_lit"] == "yes"):
-            profiles[str(f.ids[i])] = str(f.attrs["class"][i])
+        for i, fid in enumerate(f.ids):
+            if fid not in wanted or fid in profiles:
+                continue
+            spans = lightingranges.ranges(f, i, frame)
+            lit = spans.has_yes if spans is not None else f.attrs["osm_way_lit"][i] == "yes"
+            if lit:
+                profiles[fid] = str(f.attrs["class"][i]), spans
     for fid, xy, width, _ in parts:
-        kind = profiles.get(fid)
-        if kind not in PROFILES:
+        if fid not in profiles:
             continue
+        kind, spans = profiles[fid]
         spacing = PROFILES[kind][0]
         phase = (.25 + .5 * furniture._h01(fid, "lighting")) * spacing
         for k, _, (x,y), (dx,dy) in stations(xy, spacing, phase, box):
+            if spans is not None and spans.at(np.array([x, y])) != "yes":
+                continue
             offset = width / 2 + .75
             yield (0, fid, k), x - dy * offset, y + dx * offset, furniture._yaw(dy, -dx), kind
 
@@ -142,7 +151,7 @@ def area_sites(frame, box, md, keys, exclusions=None):
 def tile_rows(frame, box, cells, urban, widths, md, keys, elev, props, mapped, rings,
               clearance, road_rows, near_lamps, country_at):
     parts = standalonepaths.parts(frame, box, cells, urban, widths, lighting=True)
-    candidates = list(path_sites(parts, cells, box))
+    candidates = list(path_sites(parts, cells, box, frame))
     exclusions = []
     candidates.extend(area_sites(frame, box, md, keys, exclusions))
     candidates = [c for c in candidates if box[0]-20 <= c[1] <= box[2]+20 and box[1]-20 <= c[2] <= box[3]+20]

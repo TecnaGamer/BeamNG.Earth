@@ -36,6 +36,41 @@ class LightingTest(unittest.TestCase):
             f.attrs["osm_lit"] = np.array(["yes"])
             self.assertEqual(self.rows(f), [])
 
+    def test_merged_ways_use_their_own_light_tags_after_cell_round_trip(self):
+        import osmtags
+        f = features([[(0, 0), (100, 0), (100, 100)]], ["pedestrian"])
+        f.attrs["src_record"] = np.array(["w337675417@5"])
+        f.rules["src_ways"] = mapgeom.rule_table([
+            (0, "w1@1", [0., .22289]), (0, "w276088773@11", [.22289, .59205]),
+            (0, "w337675417@5", [.59205, 1.])])
+        osmtags.join(f, {276088773: {"lit": "yes"}, 1: {"lit": "no"}})
+        f = mapgeom.Features.from_arrays("roads", f.to_arrays(""), "")
+        rows = self.rows(f, (-5, -5, 120, 110))
+        self.assertGreaterEqual(len(rows[::3]), 3)
+        for _, x, y, *_ in rows[::3]:
+            station = x if y < 5 else 100 + y
+            self.assertTrue(.22289 * 200 <= station < .59205 * 200)
+        # Reversing the tags on the longest and middle ways must not flood the segment.
+        osmtags.join(f, {337675417: {"lit": "yes"}, 276088773: {"lit": "no"}})
+        rows = self.rows(f, (-5, -5, 120, 110))
+        self.assertTrue(rows)
+        self.assertTrue(all(r[2] > 18 for r in rows[::3]))
+
+    def test_strict_carriageway_filters_posts_and_pole_arms_by_station(self):
+        from lightingranges import LightingRanges
+        from test_furniture import road, LampTest
+        r = road("merged", "residential", True)
+        fid, _, line, _ = r
+        spans = LightingRanges([line[:, :2]], [("no", 0., .3), ("yes", .3, .7), ("", .7, 1.)])
+        walks = LampTest().walks(r, 1) + LampTest().walks(r, -1)
+        with patch.dict(os.environ, BNE_STRICT_LIGHTING="on"):
+            for town, buried, group in [(False, 1., furniture.G_LAMP), (True, 0., furniture.G_POLELAMP)]:
+                rows = furniture.place([r], walks, (0, 0, 512, 256), lighting={fid: ""},
+                                       light_ranges={fid: spans}, town=town, buried=buried)
+                lamps = [r for r in rows if r[0] == group]
+                self.assertTrue(lamps)
+                self.assertTrue(all(spans.at(np.array(r[1:3])) == "yes" for r in lamps))
+
     def test_prom_routes_clearance_orientation_and_profiles(self):
         for kind in ("cycleway", "pedestrian", "footway", "path"):
             rows = self.rows(self.route(kind))

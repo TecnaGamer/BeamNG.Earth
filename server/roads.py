@@ -14518,12 +14518,19 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         rail_beds = railxing.rail_obstacles(frame, cells, own_box)
         if sign_obstacles is not None:
             sign_obstacles.ground = ground
+        import lightingranges
+        spans = {}
+        if lamp_coverage is not None or furniture.strict_lighting():
+            for fid, (f, i, _) in seen.items():
+                span = lightingranges.ranges(f, i, frame)
+                if span is not None:
+                    spans[fid] = span
         props.extend(furniture.place(roads, walks, own_box, wires=wires, town=bool(town), left_hand=left_hand,
                                      decks=[(p, h) for p, h, _depth in traffic_decks], clearance=clearance,
                                      signals=signals, buried=buried, region=lamp_region, country=country,
                                      priority=priority, ground=ground, development=development,
                                      pole_profile=pole_profile, pole_frame=frame, sign_obstacles=sign_obstacles,
-                                     defer_gore=detailed_signs, lamp_coverage=lamp_coverage, mapped_poles=mapped_poles, mapped_lamps=mapped_lamps,
+                                     defer_gore=detailed_signs, lamp_coverage=lamp_coverage, light_ranges=spans, mapped_poles=mapped_poles, mapped_lamps=mapped_lamps,
                                      obstacles=rail_beds,
                                      de_on=de_on, de_ctx=de_ctx, de_ctl=de_ctl,
                                      lighting={fid: furniture.way_lighting(f, i, direct=lamp_coverage is not None)
