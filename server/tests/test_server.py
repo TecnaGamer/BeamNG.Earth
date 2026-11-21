@@ -918,7 +918,7 @@ class MeshServerTest(ServerHarness):
         but offline_flag is False), tiles still receive fallback material and recover in-place via
         far_retex once breakers close and hosts recover."""
         class Broken(FakeImagery):
-            def render(self, *a, **kw):
+            def render_where(self, *a, **kw):
                 raise imagery.ImageryError("temporary outage: all breakers open")
         working_dir = os.path.join(self.tmp.name, "cache", "working")
         broken_dir = os.path.join(self.tmp.name, "cache", "broken")
@@ -949,10 +949,9 @@ class MeshServerTest(ServerHarness):
         self.server.imagery = FakeImagery(working_dir)
         for h_name in all_hosts:
             b = self.server.net.host(h_name).breaker
-            b.state = "closed"
-            b.open_until = 0.0
-            b.failures.clear()
-            b.probing = False
+            with mock.patch.object(b, "clock", return_value=b.open_until):
+                self.assertEqual(b.allow()[:2], (True, True))
+                self.assertTrue(b.success())
         self.assertFalse(self.server.net.offline)
 
         # Close circuit for imagery hosts to trigger recovery
