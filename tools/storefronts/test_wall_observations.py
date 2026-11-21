@@ -180,7 +180,32 @@ def test_signature_shapes_stay_on_standalone_buildings():
                     assert low <= size[2] <= high, (name, size)
 
 
+def test_fitted_entrances_and_shared_wall_exports():
+    import entrance_designs
+    import threedmr
+    from build_stores import export_store
+    from unittest.mock import patch
+
+    wall = np.array([[0., 0.], [.00034, 0.]])
+    with tempfile.TemporaryDirectory() as tmp:
+        cache = Path(tmp) / "threedmr_cache"
+        cache.mkdir()
+        for name, design in entrance_designs.DESIGNS.items():
+            assert name in CHAINS
+            fit = entrance_designs.fitted_span
+            assert fit(name, 40, 20, [20]) == design.span
+            assert fit(name, 40, 1, [1]) == 0
+            assert fit(name, 40, 20, [20, 21]) == 0
+            assert fit(name, 40, 10, [10, 20]) <= 10
+            # Shared hosts must retain their roof and mass even for a flagship brand.
+            with patch.object(entrance_designs, "draw", side_effect=AssertionError(name)):
+                entry = export_store(Path("tenant.osm"), (name, "tenant", wall, None, [], None), {}, cache)
+            vertices = threedmr.load_local_model(tmp, entry)[0]
+            assert entry["storefront_overlay"] and np.ptp(vertices[:,1]) <= 1.1, name
+
+
 if __name__ == "__main__":
+    test_fitted_entrances_and_shared_wall_exports()
     test_signature_shapes_stay_on_standalone_buildings()
     test_street_sign_when_entrance_faces_parking()
     test_tenant_panel_requires_clear_frontage()

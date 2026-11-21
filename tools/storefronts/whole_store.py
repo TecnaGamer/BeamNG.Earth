@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 from chain_profiles import PROFILES
+import entrance_designs
 from PIL import Image, ImageDraw, ImageFont
 
 CHAINS = {"Walmart", "The Home Depot", "Lowe's", "Chick-fil-A"}
@@ -128,6 +129,15 @@ CAFE_GLAZING.update({name: PUBLIC_GLAZING[family] for name, (family, _, _) in PR
 CAFE_GLAZING["Kroger"] = PUBLIC_GLAZING["grocery"]
 CAFE_GLAZING["Waffle House"] = (14., .55, 2.55, 7.)
 CAFE_GLAZING["Bass Pro Shops"] = (7., .7, 4.1, 0)
+DESIGN_GLAZING = {
+    "striped_gable": (5.4, .45, 2.9, 3.8), "hip": (5.2, .65, 2.8, 3.6),
+    "castle": (3.8, .68, 2.6, 1.9), "arcade": (5., .40, 2.85, 0),
+    "porch": (4.4, .70, 2.75, 2.), "outfitter": (6.8, .75, 3.8, 0),
+    "market": (9., .32, 4.2, 3.2), "wing": (4.2, .65, 2.75, 3.),
+    "streamline": (7.2, .55, 2.8, 4.5), "step": (5., .70, 3.1, 0),
+    "glass": (12., .12, 4.9, 5.),
+}
+CAFE_GLAZING.update({name: DESIGN_GLAZING[design.form] for name, design in entrance_designs.DESIGNS.items()})
 DINING["Cracker Barrel"] = ("timber", "#85634d", "#ebbd62", "#623520")
 
 # Share of frontage, maximum span, roof depth, parapet rise and pitch.
@@ -183,6 +193,7 @@ def elevation(
     photo_color=None,
     observed_brick=False,
     lodge_walls=False,
+    entrance_form=None,
 ):
     restaurant = name == "Chick-fil-A" or name in DINING
     w, h = max(8, min(1536, round(width * 30))), 192
@@ -334,6 +345,24 @@ def elevation(
         rect(0, .28, width, height, "#174d91")
         for x in np.arange(.4, width, .7):
             rect(x, .28, x + .035, height, "#3463a0")
+    if entrance_form and not observed_brick and not photo_color:
+        if entrance_form in {"castle","streamline"}:
+            rect(0, .1, width, height, "#e5e4de")
+            for x in np.arange(.65,width,.65):
+                rect(x, .1, x+.018, height, "#b5b8b3")
+            for y in np.arange(.55,height,.55):
+                rect(0, y, width, y+.02, "#b5b8b3")
+            if name in {"Checkers","Rally's"}:
+                for i in range(math.ceil(width/.44)):
+                    y = .22 + (i%2)*.44
+                    rect(i*.44,y,(i+1)*.44,y+.44,"#303235")
+        elif entrance_form in {"porch","outfitter"}:
+            rect(0,.85,width,height,"#97775c")
+            for y in np.arange(.9,height,.24):
+                rect(0,y,width,y+.026,"#705441")
+        elif entrance_form=="arcade":
+            rect(0,.45,width,height,"#d6c2a3")
+            rect(0,.12,width,.45,"#ad8263")
     if lodge_walls and not observed_brick and not photo_color:
         rect(0, 0, width, height, "#896a50")
         for y in np.arange(1.35, height, .29):
@@ -672,6 +701,16 @@ def build(
                 mesh([(*a, z), (*b, z), (*q, z), (*a, z), (*q, z), (*p, z)], material)
 
         door = entries[i]
+        design = entrance_designs.DESIGNS.get(name)
+        fitted = []
+        if design and i == front and door and not docks[i]:
+            fitted = [(x, entrance_designs.fitted_span(name, width, x, door)) for x in dict.fromkeys(door)]
+            if not all(span for _, span in fitted):
+                fitted = []
+        for center, span in fitted:
+            def vertex(x, depth, z):
+                return (*(ring[i] + axes[i]*(center+x) + normals[i]*depth), z)
+            entrance_designs.draw(design, span, height, vertex, mesh, texture, lambda aspect: sign_image(name, aspect))
         public = bool(door) or (restaurant and normals[i] @ normals[front] >= -0.15)
         dining = (
             [
@@ -752,7 +791,7 @@ def build(
                 def vertex(x, depth, z):
                     return (*(ring[i] + axes[i]*x + normals[i]*depth), z)
                 lodge_entry(mesh, texture, vertex, center, span, height)
-        if i == front and not lodge and name not in {"Cracker Barrel", "Waffle House"}:
+        if i == front and not fitted and not lodge and name not in {"Cracker Barrel", "Waffle House"}:
             # Model the entrance as a roof volume extending back into the footprint.
             # Width share, maximum width, interior depth, rise and roof pitch vary by format.
             profiles = {
@@ -923,7 +962,7 @@ def build(
                 True,
             )
             block(left - 0.08, left + span + 0.08, 0.84, top - 0.1, top + 0.03, 2)
-        if i == street_front and not lodge and width >= 10 and not docks[i] and name not in {"Cracker Barrel", "Waffle House", "IKEA"}:
+        if i == street_front and not fitted and not lodge and width >= 10 and not docks[i] and name not in {"Cracker Barrel", "Waffle House", "IKEA"}:
             # A bracket on the approach wall carries the sign above head height. Its two faces
             # read in opposite directions along the street, including from a shallow approach.
             reach = min(2.8, width * .13)
@@ -969,11 +1008,12 @@ def build(
             photo_color=photo_colors.get(i),
             observed_brick=mapped_brick or i in photo_colors,
             lodge_walls=name == "Bass Pro Shops",
+            entrance_form=design.form if design else None,
         )
         face(0, width, 0.025, 0, height, texture(painting), True)
         block(0, width, 0.09, height - 0.13, height + 0.04, 2)
         for x in door:
-            if lodge or name in {"Cracker Barrel", "Waffle House"}:
+            if fitted or lodge or name in {"Cracker Barrel", "Waffle House"}:
                 continue
             half = min(2.25 if restaurant else 6.5, width * 0.49)
             center = np.clip(x, half, width - half)
