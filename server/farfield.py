@@ -14,10 +14,11 @@ Selection (select()):
     K' table, so selection stays one level coarser at the same distance);
   - hysteresis: a node refined last time stays refined until the player is (1 + h) times its
     switch distance away (h = 0.25, so the band is 25 % of the switch distance);
-  - terrain mode only: nodes overlapping a forced box (the committed, pending and predicted
+  - terrain mode: nodes overlapping a forced box (the committed, pending and predicted
     terrain blocks) are refined down to L0, so the 8 x 8 L0 tiles under every such block are
     always present: the mod hides the ones under the committed block and sinks the edge ring
-    (§2.3). Mesh mode has no forced boxes: the TerrainBlock is invisible (physics only);
+    (§2.3). In mesh mode the server forces exact tiles along a moving car's projected path
+    so sibling groups can be built and swapped before the car enters them;
   - everything intersecting the square of half-size RADIUS (80 km) around the player is kept.
 The selected tiles tile the radius square exactly once.
 
