@@ -7,7 +7,9 @@ IKEA, PetSmart, AMC Theatres, Regal Cinemas and Cinemark. Standalone multiplexes
 projecting lobby marquee. A supported tenant with an identifiable exterior wall can use the
 shared storefront panel. Standalone Cracker Barrel stores have a timber porch and posts. Convex
 four-sided footprints also support a pitched roof. Waffle House uses a low glazed diner, and
-IKEA uses a tall blue warehouse with a yellow canopy. The catalog represents typical formats.
+IKEA uses a tall blue warehouse with a yellow canopy. Bass Pro Shops can use a projecting lodge
+entrance with a timber truss and stone bases when one customer entrance has enough wall on each side.
+The catalog represents typical formats.
 
 Run these offline tools from the repository root using the server Python environment. The generator reads OpenStreetMap XML extracts and writes GLB models plus a local model catalog. Supply a closed building way with its nodes, a supported business name or brand and shop or amenity tag, and a mapped entrance or nearby parking geometry. Supported brands are listed in store_match.py and chain_profiles.py. A ground-floor tenant sharing one mapped exterior edge with a host can receive a facade overlay. A business point inside a retail footprint can also receive a small panel when one exterior wall is distinctly closest and mapped parking faces it. For standalone stores without mapped entrances, the generator checks the addressed street before using nearby parking to choose the front.
 

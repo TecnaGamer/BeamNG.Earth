@@ -165,7 +165,8 @@ def test_signature_shapes_stay_on_standalone_buildings():
     with tempfile.TemporaryDirectory() as tmp:
         cache = Path(tmp) / "threedmr_cache"
         cache.mkdir()
-        for name, low, high in (("Waffle House", 3.5, 3.7), ("Cracker Barrel", 7., 8.6), ("IKEA", 12., 16.)):
+        for name, low, high in (("Waffle House", 3.5, 3.7), ("Cracker Barrel", 7., 8.6),
+                                ("IKEA", 12., 16.), ("Bass Pro Shops", 12., 14.)):
             for overlay in (False, True):
                 outline = footprint[:2] if overlay else footprint
                 direction = None if overlay else np.array([0., -1.])

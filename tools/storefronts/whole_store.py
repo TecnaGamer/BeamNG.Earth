@@ -127,6 +127,7 @@ CAFE_GLAZING.update({name: PUBLIC_GLAZING[family] for name, (family, _, _) in PR
                      if family in PUBLIC_GLAZING})
 CAFE_GLAZING["Kroger"] = PUBLIC_GLAZING["grocery"]
 CAFE_GLAZING["Waffle House"] = (14., .55, 2.55, 7.)
+CAFE_GLAZING["Bass Pro Shops"] = (7., .7, 4.1, 0)
 DINING["Cracker Barrel"] = ("timber", "#85634d", "#ebbd62", "#623520")
 
 # Share of frontage, maximum span, roof depth, parapet rise and pitch.
@@ -181,6 +182,7 @@ def elevation(
     shop_bays=(),
     photo_color=None,
     observed_brick=False,
+    lodge_walls=False,
 ):
     restaurant = name == "Chick-fil-A" or name in DINING
     w, h = max(8, min(1536, round(width * 30))), 192
@@ -332,7 +334,15 @@ def elevation(
         rect(0, .28, width, height, "#174d91")
         for x in np.arange(.4, width, .7):
             rect(x, .28, x + .035, height, "#3463a0")
-    if name in FASCIA and name != "Cracker Barrel":
+    if lodge_walls and not observed_brick and not photo_color:
+        rect(0, 0, width, height, "#896a50")
+        for y in np.arange(1.35, height, .29):
+            rect(0, y, width, y+.035, "#69503d")
+        rect(0, 0, width, 1.32, "#a49885")
+        for row in range(4):
+            for x in np.arange(-.6 + (row%2)*.3, width, .64):
+                rect(x, row*.33, x+.61, row*.33+.30, "#8f8373")
+    if name in FASCIA and name != "Cracker Barrel" and not lodge_walls:
         share, paint, trim = FASCIA[name]
         bottom = height * (1 - share) - 0.14
         rect(0, bottom, width, height - 0.14, paint)
@@ -495,6 +505,61 @@ def sign_image(name, aspect=4.5):
     return img
 
 
+def lodge_entry(mesh, texture, vertex, center, span, height):
+    """Project a timber gable from the door wall. Coordinates are local to the entrance."""
+    half = span / 2
+    reach = min(3.8, half * .45)
+    eave = height - 1.0
+    peak = eave + half * .53
+    wood = texture(Image.new("RGB", (4, 4), "#69432c"))
+    roofing = texture(Image.new("RGB", (4, 4), "#445248"))
+    stone_image = Image.new("RGB", (64, 64), "#82786a")
+    brush = ImageDraw.Draw(stone_image)
+    for row in range(5):
+        for col in range(-1, 4):
+            x, y = col*24 + (row % 2)*12, row*13
+            brush.rectangle((x+1, y+1, x+23, y+12), fill=("#a89a85", "#928571", "#b2a590")[(row+col)%3])
+    stone = texture(stone_image)
+    uv = [(0,1), (1,1), (1,0), (0,1), (1,0), (0,0)]
+    # Close the ridge at the building wall; the projected truss stays open.
+    mesh([vertex(center-half,0,eave), vertex(center+half,0,eave), vertex(center,0,peak)],
+         wood, [(0,1),(1,1),(.5,0)])
+
+    def quad(a, b, c, d, material):
+        mesh([vertex(center+x, depth, z) for x,depth,z in (a,b,c,a,c,d)], material, uv)
+
+    def timber(x1, z1, x2, z2, thickness, material, depth):
+        # Rectangular beam in the front truss, extruded toward the parking lot.
+        dx, dz = x2-x1, z2-z1
+        scale = thickness / (2*math.hypot(dx,dz))
+        px, pz = -dz*scale, dx*scale
+        ends = [(x1+px,z1+pz),(x2+px,z2+pz),(x2-px,z2-pz),(x1-px,z1-pz)]
+        front = [(x,reach,z) for x,z in ends]
+        back = [(x,reach-depth,z) for x,z in ends]
+        quad(*front, material)
+        quad(*reversed(back), material)
+        for i in range(4):
+            j = (i+1)%4
+            quad(front[i],front[j],back[j],back[i],material)
+
+    for side in (-1,1):
+        edge = side * half
+        post = side * (half-.65)
+        quad((edge,0,eave),(edge,reach+.45,eave),(0,reach+.45,peak),(0,0,peak),roofing)
+        timber(post,0,post,1.7,.85,stone,.8)
+        timber(post,1.7,post,eave+.22,.43,wood,.43)
+        timber(edge,eave,0,peak,.35,wood,.35)
+        timber(post,eave-1.35,post-side*1.45,eave,.29,wood,.32)
+    timber(-half,eave,half,eave,.48,wood,.38)
+    timber(0,eave,0,peak,.36,wood,.35)
+    sign_width = min(span*.52,10.)
+    low = eave-.16
+    high = low + sign_width/4.8
+    quad((-sign_width/2,reach+.15,low),(sign_width/2,reach+.15,low),
+         (sign_width/2,reach+.15,high),(-sign_width/2,reach+.15,high),
+         texture(sign_image("Bass Pro Shops",4.8)))
+
+
 def build(
     name, ring, street, height, points, mesh, texture, mapped_brick=False, photos=()
 ):
@@ -551,7 +616,7 @@ def build(
     family = PROFILES[name][0] if name in PROFILES else None
     if not any(entries):
         # A long unobstructed customer wall supports a paired warehouse entrance layout.
-        fractions = (0.25, 0.75) if not restaurant and family not in {"cinema", "specialty"} and lengths[front] >= 42 else (0.5,)
+        fractions = (0.25, 0.75) if not restaurant and family not in {"cinema", "specialty"} and name != "Bass Pro Shops" and lengths[front] >= 42 else (0.5,)
         entries[front] = [f * lengths[front] for f in fractions]
     # The entrance tower already has a sign. Choose one substantial second wall visible
     # from the addressed street or an approach around the public corner.
@@ -678,7 +743,16 @@ def build(
             lo = (width-span)/2
             face(lo, lo+span, .12, height-.83, height-.12,
                  texture(sign_image(name, span/.71)), True)
-        if i == front and name not in {"Cracker Barrel", "Waffle House"}:
+        lodge = name == "Bass Pro Shops" and i == front and len(door) == 1
+        if lodge:
+            center = door[0]
+            span = min(width*.65, 21., 2*min(center,width-center)-.3)
+            lodge = span >= 9
+            if lodge:
+                def vertex(x, depth, z):
+                    return (*(ring[i] + axes[i]*x + normals[i]*depth), z)
+                lodge_entry(mesh, texture, vertex, center, span, height)
+        if i == front and not lodge and name not in {"Cracker Barrel", "Waffle House"}:
             # Model the entrance as a roof volume extending back into the footprint.
             # Width share, maximum width, interior depth, rise and roof pitch vary by format.
             profiles = {
@@ -849,7 +923,7 @@ def build(
                 True,
             )
             block(left - 0.08, left + span + 0.08, 0.84, top - 0.1, top + 0.03, 2)
-        if i == street_front and width >= 10 and not docks[i] and name not in {"Cracker Barrel", "Waffle House", "IKEA"}:
+        if i == street_front and not lodge and width >= 10 and not docks[i] and name not in {"Cracker Barrel", "Waffle House", "IKEA"}:
             # A bracket on the approach wall carries the sign above head height. Its two faces
             # read in opposite directions along the street, including from a shallow approach.
             reach = min(2.8, width * .13)
@@ -894,11 +968,12 @@ def build(
             shop_bays,
             photo_color=photo_colors.get(i),
             observed_brick=mapped_brick or i in photo_colors,
+            lodge_walls=name == "Bass Pro Shops",
         )
         face(0, width, 0.025, 0, height, texture(painting), True)
         block(0, width, 0.09, height - 0.13, height + 0.04, 2)
         for x in door:
-            if name in {"Cracker Barrel", "Waffle House"}:
+            if lodge or name in {"Cracker Barrel", "Waffle House"}:
                 continue
             half = min(2.25 if restaurant else 6.5, width * 0.49)
             center = np.clip(x, half, width - half)

@@ -279,6 +279,7 @@ PROFILES = {name: (family, background, lettering)
             for family, _, _, brands in GROUPS for name, background, lettering in brands}
 
 ALIASES = {
+    "bass pro shops outdoor world": "Bass Pro Shops",
     "cracker barrel old country store": "Cracker Barrel",
     "bojangles'": "Bojangles",
     "freddy's": "Freddy's Frozen Custard & Steakburgers", "church's chicken": "Church's Texas Chicken",
