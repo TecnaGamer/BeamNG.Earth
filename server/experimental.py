@@ -24,6 +24,7 @@ FEATURES = (
     ("roadSigns", {"BNE_ROADSIGNS": "on"}, None),                         # roadsigns.ON
     ("expNlRoadSigns", {"BNE_NL_ROADSIGNS": "on"}, "roadSigns"),           # roadsigns.NL_ON (only with ON)
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
+    ("standalonePaths", {"BNE_STANDALONE_PATHS": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
     ("expEntranceFlares", {"BNE_ENTRANCE_FLARES": "on"}, None),           # roads.flares_enabled
     ("expPriorityStops", {"BNE_PRIORITY_STOPS": "on"}, None),             # furniture.PRIORITY_STOPS
