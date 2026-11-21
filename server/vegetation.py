@@ -451,12 +451,12 @@ class Vegetation:
                 road_cells.append(c2.layers.get("roads"))
         # the rounded corners of curbless junctions (roadcorners.py): no tree, bush or rock on their asphalt
         _mask_corners(road_cells, (road, curb), chm, cd.bounds, getattr(self.surface, "urban", None), self.widths)
+        import pathlayout
         path_frame = path_box = path_parts = None
         path_blockers = []
         # smoothed heights (3 x 3 mean), then the local maxima by height band
         p = np.pad(h, 1, mode="edge")
         hs = sum(p[a:a + n_r, b:b + n_c] for a in range(3) for b in range(3)) / 9.0
-        import pathlayout
         import standalonepaths
         if standalonepaths.enabled():
             path_frame, path_box, path_parts = pathlayout.cell_parts(
