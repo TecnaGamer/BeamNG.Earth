@@ -31,7 +31,7 @@ SPECIFIC = {
 }
 SPECIFIC.update(kind for _, _, types, _ in GROUPS for kind in types)
 COMMERCIAL = SPECIFIC | {"commercial", "retail", "shop"}
-VERSION = 9
+VERSION = 10
 LOG = logging.getLogger("earthd.storefronts")
 
 

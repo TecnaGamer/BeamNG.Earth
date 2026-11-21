@@ -50,3 +50,7 @@ python -m unittest discover -s tools/storefronts -p test_photo_match.py
 python tools/storefronts/test_wall_observations.py
 python -m unittest discover -s server/tests -p test_buildings.py -k CustomModelSuppressionTest
 ```
+
+### Street-facing signs
+
+Keep the canonical chain name for map matching and exported metadata. Add a display name to `brand_signs.LETTERING` when the storefront usually shows a shorter name or distinctive casing. Use `brand_signs.artwork` for symbols and stacked marks. Check the mark at square and wide aspect ratios and on a driver-height render before adding it to a brand profile. Individual locations may use other sign variants.

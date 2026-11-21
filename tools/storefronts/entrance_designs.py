@@ -73,7 +73,7 @@ def fitted_span(name, wall_width, entrance, doors):
     return span if span >= min(6., profile.span*.66) else 0.
 
 
-def draw(profile, span, height, vertex, mesh, texture, sign):
+def draw(profile, span, height, vertex, mesh, texture, sign, symbol_only=False):
     """Draw a fitted entrance around x=0. Positive depth faces out from the building."""
     half = span / 2
     reach = min(2.6, span*.13)
@@ -212,6 +212,10 @@ def draw(profile, span, height, vertex, mesh, texture, sign):
             box(-half,half,.02,reach,3.38,3.54,trim)
             sign_z,sign_depth=high-.70,.14
 
+    if symbol_only:
+        sign_h = min(2.1, height*.33, span*.31)
+        sign_width = sign_h
+        sign_z = height - sign_h*.60
     x=sign_width/2
     lo,hi=sign_z-sign_h/2,sign_z+sign_h/2
     corners=[vertex(-x,sign_depth,lo),vertex(x,sign_depth,lo),vertex(x,sign_depth,hi),vertex(-x,sign_depth,hi)]

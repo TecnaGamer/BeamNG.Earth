@@ -15,7 +15,8 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parents[1] / "server"))
 from store_match import CHAIN_GROUPS, parking_frontage
-from whole_store import CHAINS, build
+from whole_store import CHAINS, build, sign_image
+from brand_signs import LETTERING
 
 
 def texture_and_geometry(path):
@@ -204,7 +205,22 @@ def test_fitted_entrances_and_shared_wall_exports():
             assert entry["storefront_overlay"] and np.ptp(vertices[:,1]) <= 1.1, name
 
 
+def test_storefront_signs():
+    assert set(LETTERING).issubset(CHAINS)
+    assert LETTERING["Freddy's Frozen Custard & Steakburgers"] == "Freddy\u2019s"
+    for name in ("Apple Store", "Best Buy", "Domino's", "Freddy's Frozen Custard & Steakburgers"):
+        for aspect in (1, 4.5):
+            pixels = np.asarray(sign_image(name, aspect))
+            assert pixels.shape == (200, int(200 * aspect), 3)
+            ys, xs = np.where(np.any(pixels != pixels[0, 0], axis=2))
+            assert xs.size and ys.size
+            if name == "Apple Store":
+                assert .7 < np.ptp(xs) / np.ptp(ys) < 1
+                assert abs(xs.mean() - pixels.shape[1] / 2) < 12
+
+
 if __name__ == "__main__":
+    test_storefront_signs()
     test_fitted_entrances_and_shared_wall_exports()
     test_signature_shapes_stay_on_standalone_buildings()
     test_street_sign_when_entrance_faces_parking()

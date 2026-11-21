@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 from chain_profiles import PROFILES
 import entrance_designs
+import brand_signs
 from PIL import Image, ImageDraw, ImageFont
 
 CHAINS = {"Walmart", "The Home Depot", "Lowe's", "Chick-fil-A"}
@@ -488,17 +489,23 @@ def sign_image(name, aspect=4.5):
     )
     colors["Dollar General"] = ("#e7bd34", "#242620")
     bg, fg = PROFILES[name][1:] if name in PROFILES else colors[name]
+    if name == "AMC Theatres":
+        bg, fg = "#282427", "#ed364a"
     width = max(12, round(200 * aspect))
     img = Image.new("RGB", (width, 200), bg)
     d = ImageDraw.Draw(img)
     face = Path(__file__).resolve().parents[1] / "fonts" / "DejaVuSans-Bold.ttf"
+    custom = brand_signs.artwork(name, width, face)
+    if custom is not None:
+        return custom
+    lettering = brand_signs.LETTERING.get(name, name)
     left, right = width * 0.035, width * 0.965
     if name == "Target":
         left = width * 0.245
     if name == "Walmart":
         right = width * 0.763
     base = ImageFont.truetype(face, 160)
-    x0, y0, x1, y1 = base.getbbox(name)
+    x0, y0, x1, y1 = base.getbbox(lettering)
     size = max(1, int(160 * min((right - left) / (x1 - x0), 168 / (y1 - y0))))
     font = ImageFont.truetype(face, size)
     if name == "Waffle House" and aspect >= 4:
@@ -512,9 +519,9 @@ def sign_image(name, aspect=4.5):
                 d.rectangle((left_edge, 0, left_edge + seam, 199), fill="#37302b")
             d.text(((index+.51)*cell, 100), letter, font=tile_font, fill=fg, anchor="mm")
         return img
-    x0, y0, x1, y1 = font.getbbox(name)
+    x0, y0, x1, y1 = font.getbbox(lettering)
     d.text(
-        ((left + right - x0 - x1) / 2, (200 - y0 - y1) / 2), name, fill=fg, font=font
+        ((left + right - x0 - x1) / 2, (200 - y0 - y1) / 2), lettering, fill=fg, font=font
     )
     if name == "Costco":
         d.rectangle((width * 0.18, 184, width * 0.82, 189), fill="#244c78")
@@ -710,7 +717,8 @@ def build(
         for center, span in fitted:
             def vertex(x, depth, z):
                 return (*(ring[i] + axes[i]*(center+x) + normals[i]*depth), z)
-            entrance_designs.draw(design, span, height, vertex, mesh, texture, lambda aspect: sign_image(name, aspect))
+            entrance_designs.draw(design, span, height, vertex, mesh, texture, lambda aspect: sign_image(name, aspect),
+                                      symbol_only=name == "Apple Store")
         public = bool(door) or (restaurant and normals[i] @ normals[front] >= -0.15)
         dining = (
             [
