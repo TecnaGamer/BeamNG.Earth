@@ -16,7 +16,7 @@ least-squares problem on the carriageway solver's kernel (carriageways.solve: ea
   lift over it, was made against those heights: the solve may lower it, not raise it into the deck; raised by a
   junction's tie it put Tokyo's roads through 8 decks where the passes had 6); onto a deck, a road no lower than the
   approach rule raised it (grading._lift_approaches: the deck's need, not the road's); a grade ceiling per road (its class's, or its ground's own where that is steeper: a steep street), met
-  wherever the hard rows leave room and broken by the least where they don't (earthfast 512's soft couplings: an
+  wherever the hard rows leave room and broken by the least where they don't (earthfast 561's soft couplings: an
   exact L1 penalty). Hard, one ceiling that could not hold made the whole cell's solve infeasible, and the cell
   was solved again with looser ceilings, then none: three stages, in place of a row that says where it breaks;
   roads side by side at one height, the difference between two what their gap holds as a bank (grading's
@@ -39,7 +39,7 @@ import dnp
 
 log = logging.getLogger("earthd.vsolve")
 
-KERNEL_MIN = 513        # earthfast's VERSION with the solve's soft couplings (512) and corridor pairs (513)
+KERNEL_MIN = 562        # earthfast's VERSION with the solve's soft couplings (561) and corridor pairs (562)
 
 
 def _default_mode():
@@ -100,11 +100,11 @@ K_LOOSE = 0.001         # m per % of grade change: the kernel's curvature bound,
 
 def _loose():
     """(grade, K) of the kernel's chains: no bound at all (+inf, 0: no rows) on a kernel that takes them (earthfast
-    514), else bounds never reached (GRADE_D, K_LOOSE: 4 rows a sample that the interior point carries all the same;
+    563), else bounds never reached (GRADE_D, K_LOOSE: 4 rows a sample that the interior point carries all the same;
     the same heights to 1e-6 m)."""
     try:
         import fast
-        if int(getattr(getattr(fast, "_ef", None), "VERSION", 0) or 0) >= 514:
+        if int(getattr(getattr(fast, "_ef", None), "VERSION", 0) or 0) >= 563:
             return float("inf"), 0.0
     except Exception:
         pass

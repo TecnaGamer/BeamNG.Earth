@@ -77,6 +77,10 @@ class PoolTest(unittest.TestCase):
 class Conn:
     def __init__(self):
         self.slot_holds, self.sent, self.desired, self.inflight, self.active = {}, {}, {}, {}, 1
+        self.far = self                 # (Connection.far's query over these dicts: Server.names_in_use)
+
+    def names_in_use(self, aid):
+        return {(aid, k) for k in list(self.sent) + list(self.desired)} | set(self.inflight)
 
 
 class ServerTest(unittest.TestCase):
@@ -127,6 +131,50 @@ class ServerTest(unittest.TestCase):
         with open(slot, "rb") as fh:
             self.assertEqual(fh.read(), b"head" + name.encode() + b"tail")
 
+    def test_renewal_is_shared_and_survives_a_cancelled_waiter(self):
+        import asyncio
+        import threading
+        from types import SimpleNamespace
+
+        ck, original = self.add("0_0_0")
+        self.s.matslots.release(ck)
+        self.s.matslots.take("another tile")
+        info = self.s.tiles[ck]
+        anchor, tile = SimpleNamespace(id=ck[0]), SimpleNamespace(key=ck[1])
+        write = self.s._write_reslot
+        entered, proceed = threading.Event(), threading.Event()
+        writers = []
+
+        def held_write(*args):
+            writers.append(threading.get_ident())
+            entered.set()
+            if not proceed.wait(5):
+                raise AssertionError("the loop did not release the worker")
+            return write(*args)
+
+        self.s._write_reslot = held_write
+
+        async def run():
+            first = self.s.renew_slot(ck, info, anchor, tile)
+            try:
+                self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+                first.cancel()
+                second = self.s.tile(anchor, tile)
+                self.assertIn(ck, self.s.in_use())
+                self.assertFalse(second.done())
+            finally:
+                proceed.set()
+            renewed = await second
+            self.assertNotEqual(writers, [threading.get_ident()])
+            self.assertEqual(len(writers), 1)
+            self.assertIs(self.s.tiles[ck], renewed)
+            self.assertNotEqual(renewed.material, original)
+            self.assertTrue(self.s.matslots.owns(ck, renewed.material))
+            self.assertNotIn(ck, self.s.renewing)
+            self.assertNotIn(ck, self.s.tile_inflight)
+
+        asyncio.run(run())
+
     def test_reslot_again_restamps_the_files_own_name(self):
         """A tile renamed twice (a global far tile kept across rebases, its name reclaimed at each): the second rename
         restamps the name its own file carries, not the first rename's (that failed, and the tile was sent under a
@@ -170,6 +218,58 @@ class ServerTest(unittest.TestCase):
         with open(dst, "rb") as fh:
             self.assertEqual(fh.read(), b"two")
         self.assertFalse(os.path.exists(dst + ".tmp"))
+
+    def test_unpublished_slot_survives_reclaim_and_returns_on_cancel(self):
+        import gc
+        import staging
+        from pathlib import Path
+
+        c = Conn()
+        c.s = self.s
+        self.s.connections.add(c)
+        files = {"road": "first.cdae"}
+        Path(self.s.out_dir, files["road"]).write_bytes(b"first")
+        prepared = staging.prepare_shape_files(self.s, files)
+        self.s.reclaim_names()
+        next_name = self.s.matslots.take("other")
+        self.assertNotEqual(next_name, self.s.matslots.name(0))
+        self.assertEqual(c.slot_holds, {})
+        del prepared
+        gc.collect()
+        self.assertEqual(self.s.matslots.take("after cancel"), self.s.matslots.name(0))
+
+    def test_snapshot_arriving_after_shape_preparation_keeps_its_hold(self):
+        import staging
+        from pathlib import Path
+
+        conn = Conn()
+        conn.s = self.s
+        self.s.connections.add(conn)
+        files = {"road": "ready.cdae"}
+        Path(self.s.out_dir, files["road"]).write_bytes(b"new")
+        prepared = staging.prepare_shape_files(self.s, files)
+        conn.slot_holds[0] = 91
+        self.assertEqual(prepared.claim(conn, files), {})
+        self.assertEqual(conn.slot_holds, {0: 91})
+        self.assertIn(0, self.s.matslots.waiting)
+
+    def test_prepared_shape_transfers_only_to_current_lease(self):
+        import staging
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        old, current = Conn(), Conn()
+        old.s = current.s = self.s
+        old.lease = current.lease = SimpleNamespace(connection=current)
+        files = {"road": "ready.cdae"}
+        Path(self.s.out_dir, files["road"]).write_bytes(b"original")
+        prepared = staging.prepare_shape_files(self.s, files)
+        self.assertEqual(prepared.claim(old, files), {})
+        path, serial = prepared.claim(current, files)["road"]
+        slot = int(Path(path).stem.split("_")[1])
+        self.assertEqual(current.slot_holds, {slot: serial})
+        self.assertIn(slot, self.s.matslots.waiting)
+        self.assertEqual(prepared.claim(current, files), {})
 
     def test_slots_wait_for_the_mods_report(self):
         ck, name = self.add("0_0_0")

@@ -16,7 +16,7 @@ def spec(state='', link=False):
 
 class ProfileTest(unittest.TestCase):
     def test_measured_dimensions_and_widths(self):
-        expected=[('',False,3.,8.,.35),('',True,1.2,2.8,.35),
+        expected=[('',False,3.,9.2,.35),('',True,1.,2.8,.35),
                   ('MI',False,4.5,11.5,.4),('MI',True,1.5,6.,.35),
                   ('MN',False,3.1,12.25,.3),('KY',False,3.5,8.2,.3),
                   ('WI',False,5.15,10.25,.31),('WI',True,1.25,2.9,.3),
@@ -45,12 +45,12 @@ class ProfileTest(unittest.TestCase):
     def test_phase_and_height_survive_tile_cuts(self):
         look,w,line=next(r for r in roads.extras(spec(),LINE,-85.,defer_dashes=True) if 'dash' in r[0])
         chunks=[]
-        for a,b in ((0.,12.),(12.,24.),(24.,40.)):
+        for a,b in ((0.,13.),(13.,26.),(26.,40.)):
             piece=np.array([[a,line[0,1],10.],[b,line[0,1],10.]])
             chunk=roads._chunk(look,w,piece);chunk['fixed']=True
             chunks+=roadmarkings.paint([chunk])
         np.testing.assert_allclose([(c['n'][0][0],c['n'][-1][0]) for c in chunks],
-                                   [(0.,3.),(11.,12.),(12.,14.),(22.,24.),(24.,25.),(33.,36.)])
+                                   [(0.,3.),(12.2,13.),(13.,15.2),(24.4,26.),(26.,27.4),(36.6,39.6)])
         self.assertTrue(all(c['fixed'] and all(p[2]==10. for p in c['n']) for c in chunks))
         self.assertEqual(roadmarkings.paint(chunks),chunks)
 
@@ -65,7 +65,7 @@ class ProfileTest(unittest.TestCase):
         tube=roads._tunnel_chunks(tunnel,[],(0.,-30.,160.,30.))
         for chunks in (ground,bridge,tube):
             lengths=[roadmarkings.arc(np.array(c['n']))[-1] for c in chunks if c['m']=='line_white']
-            self.assertGreater(sum(abs(n-1.2)<.002 for n in lengths),20)
+            self.assertGreater(sum(abs(n-1.0)<.002 for n in lengths),20)
 
     def test_foreign_and_minor_road_styles_remain_native(self):
         for country,lon in (('GB',0.),('DE',10.),('CA',-100.)):

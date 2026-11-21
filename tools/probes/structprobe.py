@@ -37,7 +37,8 @@ byte for byte. Wall clock and memory go to --timing only. Items count only insid
 
 A measurement tool (Python is fine here); nothing in the game reads it. The scratch cache must not be the player's
 ~/.cache/beamng-earth (refused) nor link into it. tools/roadcorpus/run.py build --probe struct runs it per corpus place.
-The metric functions are pure (plain arrays in, numbers out): tests/test_structprobe.py checks them on small cases."""
+The metric functions are pure (plain arrays in, numbers out): server/tests/test_structprobe.py checks them on small
+cases."""
 import argparse
 import json
 import logging
@@ -46,7 +47,11 @@ import resource
 import sys
 import time
 
-import numpy as np
+SERVER = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server"))
+if SERVER not in sys.path:
+    sys.path.insert(0, SERVER)      # (the server's modules: this probe lives in tools/probes/)
+
+import numpy as np  # noqa: E402
 
 RASTER_M = 0.25         # m: the raster of the overlap and hole tests
 FACE_DZ = 0.3           # m: two faces this near in height are one level
@@ -61,6 +66,7 @@ SEAM_TURN_DEG = 30.0    # chunks meeting end to end run on within this (deckedge
 TWIN_STEP = 2.0         # m between the twin test's samples
 TWIN_OVER = 0.02        # m: the design's twin target
 TWIN_TOUCH_M = 0.5      # m two twins' carriageways may overlap (one deck); more is an overlap (overlap_m2's)
+TWIN_END_EPS = 1e-6     # m: a sample whose nearest point on the other deck is that deck's end is past it (P3d)
 SKEW_REACH_M = 40.0     # m along the deck from a free end to the crossing it is the end of
 SKEW_OVER = 3.0         # degrees: the design's skew target
 SKEW_NEAR_M = 1.0       # m: a crossing nearer the end than this is a road joining it, not crossed
@@ -430,6 +436,44 @@ def overlap_hole(tops, ideal, R, frame_ll=None, pads=()):
             "overlap_worst": worst_bins(ov, ll), "hole_worst": worst_bins(hk, ll)}
 
 
+def top_steps(tops, R, frame_ll=None, cell=RASTER_M):
+    """Height steps in the drawn deck tops (road revamp v2 P2b: the step at the shared edge where an exit's deck meets
+    its road's): raster points holding exactly one top (overlaps are overlap_m2's) whose 4-neighbour also holds
+    exactly one, the two more than STEP_DZ and at most FACE_DZ apart in height (a slab's own grade and bank move
+    under 3 cm between raster points; farther apart is another level). n points, m = n x the raster (an edge's
+    length), max dz, the worst places, and the keys (sheetview draws them; not in the JSON)."""
+    tk, tz, _ = raster_tris(tops, cell)
+    tk = np.asarray(tk, np.int64)
+    out = {"n": 0, "m": 0.0, "max": 0.0, "worst": [], "keys": np.zeros(0, np.int64)}
+    if not len(tk):
+        return out
+    u, inv, cnt = np.unique(tk, return_inverse=True, return_counts=True)
+    zu = np.zeros(len(u))
+    zu[inv] = np.asarray(tz, np.float64)
+    one = cnt == 1
+    u1, z1 = u[one], zu[one]
+    hit_k, hit_dz = [], []
+    for step in (_MUL, 1):          # (the neighbour at +1 in i, then in j)
+        j = np.searchsorted(u1, u1 + step)
+        ok = j < len(u1)
+        j = np.minimum(j, len(u1) - 1)
+        ok &= u1[j] == u1 + step
+        dz = np.abs(z1[j] - z1)
+        ok &= (dz > STEP_DZ) & (dz <= FACE_DZ)
+        hit_k.append(u1[ok])
+        hit_dz.append(dz[ok])
+    k = np.concatenate(hit_k)
+    d = np.concatenate(hit_dz)
+    inr = in_disc(k, R, cell) if len(k) else np.zeros(0, bool)
+    k, d = k[inr], d[inr]
+    ll = frame_ll or (lambda p: [round(float(p[0]), 1), round(float(p[1]), 1)])
+    return {"n": int(len(k)), "m": round(len(k) * cell, 2), "max": round(float(d.max()), 3) if len(d) else 0.0,
+            "worst": worst_bins(np.unique(k), ll), "keys": np.unique(k)}
+
+
+STEP_DZ = 0.05          # m: a drawn top's step over this between raster points (top_steps)
+
+
 def parapet_in_carriageway(runs, carriageways, R, frame_ll=None):
     """Parapet length (m) inside a carriageway within PARAPET_DZ of its height. runs [(edge (k, 2), z (k,))];
     carriageways [(xy (k, 2), z (k,), half width m, (kind, id))]. Per sample of PARAPET_STEP: inside when the nearest
@@ -564,6 +608,11 @@ def twin_dz(members, R, frame_ll=None):
     ang = angle_deg(pr["ua"], pr["ub"])
     dz = np.abs(pr["za"] - pr["zb"])
     ok = (pr["gap"] <= BESIDE_GAP_M) & (pr["gap"] >= -TWIN_TOUCH_M) & (ang <= BESIDE_DEG) & (dz <= BESIDE_DZ)
+    # (a sample whose nearest point on B is B's very end lies past B, not beside it: the road going on from B's end,
+    # its height some metres along the road; a 2.4 m deck continuing a 29 m one at the Nordschleife paired that one's
+    # samples 10 m from the joint with the joint itself, a 0.14 m "twin" step that was the road's grade (road revamp
+    # v2 P3d; the solve's twin rule is the same))
+    ok &= (pr["sb"] > TWIN_END_EPS) & (pr["sb"] < np.array([lengths[b] for b in pr["b"].tolist()]) - TWIN_END_EPS)
     pairs = {}
     for k in np.flatnonzero(ok).tolist():
         a, b = int(pr["a"][k]), int(pr["b"][k])
@@ -889,6 +938,7 @@ def score(inp, R, frame_ll=None):
         "overlap_worst": oh["overlap_worst"], "hole_worst": oh["hole_worst"],
         "parapet_in_cw": parapet_in_carriageway(inp["parapets"], inp["carriageways"], R, frame_ll),
         "seam_step": seam_steps(inp["ribbons"], R, frame_ll),
+        "top_step": {k: v for k, v in top_steps(inp["tops"], R, frame_ll).items() if k != "keys"},
         "twin_dz": twin_dz(inp["members"], R, frame_ll),
         "skew_err_deg": skew_errors(inp["ends"], inp["members"], inp["crossed"], R, frame_ll),
         "groups": predict_groups([dict(m) for m in inp["members"]], inp.get("outlines", ()), R, frame_ll),
@@ -906,7 +956,9 @@ def score(inp, R, frame_ll=None):
     g = res["groups"]
     res["summary"] = {"overlap_m2": res["overlap_m2"], "hole_m2": res["hole_m2"],
                       "parapet_in_cw_m": res["parapet_in_cw"]["m"], "seam_step_n": res["seam_step"]["n_over"],
-                      "seam_step_max": res["seam_step"]["max"], "twin_dz_max": res["twin_dz"]["max"],
+                      "seam_step_max": res["seam_step"]["max"],
+                      "top_step_m": res["top_step"]["m"], "top_step_max": res["top_step"]["max"],
+                      "twin_dz_max": res["twin_dz"]["max"],
                       "twin_pairs": res["twin_dz"]["pairs"], "skew_err_max": res["skew_err_deg"]["max"],
                       "skew_ends": res["skew_err_deg"]["ends"], "decks": inr, "groups": g["n"],
                       "grouped": g["grouped"], "all_groups": g["all_groups"], "simple_groups": g["simple_groups"],
@@ -1148,10 +1200,10 @@ def collect(lat, lon, R, cache, offline=False):
         cur["ground"] = kw.get("ground")
         return orig[0](frame_, tx, ty, cells, elev, *a, **kw)
 
-    def g_pads(decks, ground_roads, box, ground_fn, own=True):
+    def g_pads(decks, ground_roads, box, ground_fn, own=True, **kw):
         cur["parts"] = list(decks)
         cur["roads"] = list(ground_roads)
-        return orig[1](decks, ground_roads, box, ground_fn, own)
+        return orig[1](decks, ground_roads, box, ground_fn, own, **kw)     # (skip: v2 P2b's fork nodes)
 
     def g_deck(chunks, origin, *a, **kw):
         r = orig[2](chunks, origin, *a, **kw)
@@ -1561,7 +1613,7 @@ def main():
                     help="RS S2b: check chain discovery's fixpoint property here (BNE_DECK_STRUCT=shadow) with SEEDS "
                          "random orders per part and two full solves; JSON to --json; exit 1 when it fails")
     a = ap.parse_args()
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = SERVER
     if a.server:
         srv = os.path.realpath(a.server)
         sys.path[:] = [srv] + [p for p in sys.path if os.path.realpath(p or ".") != here]

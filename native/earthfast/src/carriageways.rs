@@ -74,7 +74,7 @@ pub fn carriageway_profiles<'py>(
     }
     let mut parameters = Vec::with_capacity(params.nrows());
     for row in params.rows() {
-        // (514: a grade of +inf and a K of 0 are no bound at all, no rows: the one vertical solve's chains, whose
+        // (563: a grade of +inf and a K of 0 are no bound at all, no rows: the one vertical solve's chains, whose
         // grade and curvature are its own rows; 40 m bounds never reached were 4 rows a sample in its KKT system)
         if row.iter().any(|v| v.is_nan())
             || row.iter().skip(1).any(|v| !v.is_finite())

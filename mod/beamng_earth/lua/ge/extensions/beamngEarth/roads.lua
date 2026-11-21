@@ -544,12 +544,17 @@ local function switchAnchor(aid)
   walkQ = keep
 end
 
+-- The DecalRoads' depth bias: in the stock maps' range (0 to 0.05: West Coast USA 0.05 on its lines and wear, Italy
+-- 0.0015 on every decal; the vanilla roads study 2026-11-19); it was 0.1 (2026-10-11, from when the asphalt itself was
+-- a DecalRoad over coarse ground tiles), twice the stock maps' largest.
+M.DECAL_BIAS = '0.05'
+
 -- Pure: the DecalRoad fields of a chunk (name, value), in order.
 function M.fieldsFor(chunk)
   return {
     { 'material', chunk.m }, { 'textureLength', tostring(chunk.tl or 10) },
     { 'renderPriority', tostring(chunk.p or 20) }, { 'drivability', '-1' }, { 'improvedSpline', 'true' },
-    { 'overObjects', 'false' }, { 'distanceFade', M.FADE }, { 'decalBias', '0.1' },
+    { 'overObjects', 'false' }, { 'distanceFade', M.FADE }, { 'decalBias', M.DECAL_BIAS },
   }
 end
 

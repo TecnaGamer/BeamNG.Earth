@@ -132,12 +132,12 @@ class NativeProfilesTest(unittest.TestCase):
                                          np.empty((0, 5), np.int64), np.empty(0), 10, 1.)
 
     def test_an_infinite_grade_and_a_zero_k_bound_nothing(self):
-        # (earthfast 514: no grade or curvature rows at all, the one vertical solve's chains: a 50 m step stays)
+        # (earthfast 563: no grade or curvature rows at all, the one vertical solve's chains: a 50 m step stays)
         import fast
         try:
-            fast.require(514, "carriageway_profiles' unbounded chains")
+            fast.require(563, "carriageway_profiles' unbounded chains")
         except Exception:
-            self.skipTest("earthfast 514")
+            self.skipTest("earthfast 563")
         target = [0., 50., 0., 0.]
         z, info = self.solve([{**road(target), "grade": np.inf, "K": 0., "lam": 0., "length": 0.}])
         np.testing.assert_allclose(z[0], target, atol=1e-6)
