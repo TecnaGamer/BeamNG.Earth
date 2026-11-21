@@ -18,6 +18,7 @@ import paintlist
 import pathfootprints
 import roads
 import standalonepaths as paths
+import pathlayout
 import surface
 import vegetation
 from test_buildings import rect
@@ -55,20 +56,20 @@ class StandalonePathsTest(unittest.TestCase):
         ends = starts + [10., 0.]
         radii = np.ones(40)
         bounds = np.c_[starts - radii[:, None], ends + radii[:, None]]
-        runs = paths._outside_verges(np.array([[0., 0.], [2500., 0.]]), 2.,
+        runs = pathlayout._outside_verges(np.array([[0., 0.], [2500., 0.]]), 2.,
                                      starts, ends - starts, np.full(40, 10.), radii, bounds)
         expected = np.c_[np.r_[0., x + 12.], np.r_[x - 2., 2500.]]
         np.testing.assert_allclose([[run[0, 0], run[-1, 0]] for run in runs], expected, rtol=0., atol=1e-9)
 
     def test_charzykowy_width_is_scoped_to_osm_ways(self):
-        ways = sorted(paths.CHARZYKOWY_PROMENADE)
+        ways = sorted(pathlayout.CHARZYKOWY_PROMENADE)
         n = len(ways)
         f = features([[(0, 20 + i * 10), (100, 20 + i * 10)] for i in range(n + 3)],
                      ["path"] * (n + 3), widths=[(n + 2, 2.5)])
         f.attrs["name"] = np.full(n + 3, "Promenada")
         f.attrs["src_dataset"] = np.array(["OpenStreetMap"] * n + ["Other", "OpenStreetMap", "OpenStreetMap"])
         f.attrs["src_record"] = np.array([f"w{way}@5" for way in ways] + [f"w{ways[0]}@5", "w9999999999@1", "w9999999998@1"])
-        self.assertEqual([paths.profile(f, i)[0] for i in range(n + 3)], [4.] * n + [1.2, 1.2, 2.5])
+        self.assertEqual([pathlayout.profile(f, i)[0] for i in range(n + 3)], [4.] * n + [1.2, 1.2, 2.5])
         with patch.dict(os.environ, BNE_STANDALONE_PATHS="off"):
             self.assertEqual(self.parts(f), [])
 
@@ -94,7 +95,7 @@ class StandalonePathsTest(unittest.TestCase):
             self.assertFalse(self.parts(f))
         f.attrs["osm_highway"] = np.array([""] * 7 + ["construction", ""])
         f.__dict__.pop("_unbuilt", None)
-        self.assertIsNone(paths.profile(f, 7))
+        self.assertIsNone(pathlayout.profile(f, 7))
 
     def test_unlabelled_sidewalk_turns_into_an_independent_path_across_cells(self):
         street = features([[(0, 0), (100, 0)]], ["residential"])
@@ -189,11 +190,11 @@ class StandalonePathsTest(unittest.TestCase):
         points = np.array([[10., 3.], [10., 4.1], [-3., 0.], [20., 23.],
                            [22., -2.], [24., -4.], [10., 0.]])
         # All but the last centre are off the paving; shrubs/crowns still overlap it.
-        self.assertEqual(paths.keep_outside(points, blockers).tolist(), [True] * 6 + [False])
-        self.assertEqual(paths.keep_outside(points, blockers, np.full(7, 2.)).tolist(),
+        self.assertEqual(pathlayout.keep_outside(points, blockers).tolist(), [True] * 6 + [False])
+        self.assertEqual(pathlayout.keep_outside(points, blockers, np.full(7, 2.)).tolist(),
                          [False, True, False, False, False, True, False])
-        self.assertEqual(paths.keep_outside(points, [], np.full(7, 2.)).tolist(), [True] * 7)
-        self.assertEqual(paths.keep_outside([], blockers, []).size, 0)
+        self.assertEqual(pathlayout.keep_outside(points, [], np.full(7, 2.)).tolist(), [True] * 7)
+        self.assertEqual(pathlayout.keep_outside([], blockers, []).size, 0)
 
     def test_final_plant_filter_uses_each_footprint(self):
         # Shrubs need their full footprint clear, but a tree's branches may
@@ -241,7 +242,7 @@ class StandalonePathsTest(unittest.TestCase):
                 ["hydrant_eu", 64., 90., 10., 0., 1., .79, .5],
                 ["shrub", 68., 80., 10., 0., 1., 1.8, .5],
                 ["bin", 80., 70., 10., 0., 1., 1.1, .5]]
-        for cls in paths.WIDTH:
+        for cls in pathlayout.WIDTH:
             f = features([[(0, 64), (128, 64)], [(64, 0), (64, 128)]],
                          ["residential", cls], widths=[(1, 4.)])
             md = FakeMapData(f, roads.cells_of_tile(FRAME, 0, 0)[0])
@@ -269,7 +270,7 @@ class StandalonePathsTest(unittest.TestCase):
         # Its old canopy radius (1.216 m) misses the overlap at this point.
         points = np.array([[10., 4.], [10., 6.]])
         blockers = [(np.array([[0., 0.], [20., 0.]]), 2.)]
-        self.assertEqual(paths.keep_outside(points, blockers, 1.216).tolist(), [True, True])
+        self.assertEqual(pathlayout.keep_outside(points, blockers, 1.216).tolist(), [True, True])
         self.assertAlmostEqual(pathfootprints.radii('shrub', np.array([1.8]))[0], 3.31)
         items = SimpleNamespace(lon=LON + points[:, 0] / M_LON, lat=LAT + points[:, 1] / M_LAT,
                                 radius=np.full(2, 1.216), height=np.full(2, 1.8),

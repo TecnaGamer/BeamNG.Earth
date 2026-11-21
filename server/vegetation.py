@@ -451,9 +451,17 @@ class Vegetation:
                 road_cells.append(c2.layers.get("roads"))
         # the rounded corners of curbless junctions (roadcorners.py): no tree, bush or rock on their asphalt
         _mask_corners(road_cells, (road, curb), chm, cd.bounds, getattr(self.surface, "urban", None), self.widths)
+        path_frame = path_box = path_parts = None
+        path_blockers = []
         # smoothed heights (3 x 3 mean), then the local maxima by height band
         p = np.pad(h, 1, mode="edge")
         hs = sum(p[a:a + n_r, b:b + n_c] for a in range(3) for b in range(3)) / 9.0
+        import pathlayout
+        import standalonepaths
+        if standalonepaths.enabled():
+            path_frame, path_box, path_parts = pathlayout.cell_parts(
+                cd.bounds, road_cells, getattr(self.surface, "urban", None), self.widths)
+            path_blockers.extend((xy, width / 2) for _, xy, width, _ in path_parts)
         tops = np.zeros(h.shape, bool)
         k = _merc_k((lat0 + lat1) / 2)     # (the radii below in pixels at MERC_REF_LAT: scaled to the ground's)
         for lo_m, hi_m, r in ((BUSH_MIN_M, TREE_MIN_M, 1), (TREE_MIN_M, 8.0, 2), (8.0, 15.0, 3), (15.0, 1e9, 4)):
@@ -550,21 +558,12 @@ class Vegetation:
         if orchard.any():
             keep = _keep_off_mask(tree, orchard, chm)
             tree, lcls = tree.take(keep), lcls[keep]
+        if path_blockers:
+            keep = _off_paths(tree, path_frame, path_blockers)
+            tree, lcls = tree.take(keep), lcls[keep]
         if vines.any():             # (the vines' own canopy read as bushes all over a vineyard: its rows stand there)
             keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
             tree, lcls = tree.take(keep), lcls[keep]
-        import standalonepaths
-        path_blockers = []
-        if standalonepaths.enabled():
-            import geodesy
-            path_frame = geodesy.EnuFrame((lat0 + lat1) / 2, (lon0 + lon1) / 2)
-            e, n, _ = path_frame.geodetic_to_enu(np.array([lat0, lat1]), np.array([lon0, lon1]), 0.)
-            box = (min(e), min(n), max(e), max(n))
-            path_blockers = [(xy, width / 2) for _, xy, width, _ in standalonepaths.parts(
-                path_frame, box, road_cells, getattr(self.surface, "urban", None), self.widths)]
-            if path_blockers:
-                keep = _off_paths(tree, path_frame, path_blockers)
-                tree, lcls = tree.take(keep), lcls[keep]
         tree = clumps(tree, lcls, (lat0 + lat1) / 2)
         scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
         edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
@@ -763,7 +762,7 @@ FARM_MIN_M2 = 800.0
 
 def _off_paths(items, frame, blockers):
     """Keep trunks and low vegetation off paths, allowing individual tree crowns to overhang."""
-    import standalonepaths
+    import pathlayout
     e, n, _ = frame.geodetic_to_enu(items.lat, items.lon, 0.)
     # A far clump represents several trunks spread over its footprint, not one
     # trunk at its centre. Its individual near trees are tested separately.
@@ -773,7 +772,7 @@ def _off_paths(items, frame, blockers):
     for group in np.unique(items.group[~single_tree]):
         sel = (~single_tree) & (items.group == group)
         radius[sel] = pathfootprints.radii(GROUPS[int(group)], items.height[sel], radius[sel])
-    return standalonepaths.keep_outside(np.column_stack((e, n)), blockers, radius)
+    return pathlayout.keep_outside(np.column_stack((e, n)), blockers, radius)
 
 
 def _keep_off_mask(items, mask, chm):
