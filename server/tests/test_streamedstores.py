@@ -276,6 +276,27 @@ class StreamedStoresTest(unittest.TestCase):
                 self.assertAlmostEqual(np.ptp(mesh[0][:,2]),8.55,places=2)
                 self.assertFalse(generate(45.))
 
+    def test_named_venue_with_offset_business_pin(self):
+        import streamedstores
+        frame = geodesy.EnuFrame(40., -83.)
+        md = tile(frame, "The Lantern", ["THE LANTERN"], "retail")
+        layer = md.cell(None).layers["places"]
+        layer.attrs["basic_category"] = np.array(["music_venue"])
+        ring = np.array([[30,30], [75,30], [75,60], [30,60]])
+        lat,lon,_ = frame.enu_to_geodetic(ring[:,0],ring[:,1],np.zeros(4))
+        coords = np.column_stack((lon,lat))
+        for y,label,expected in ((24,"The Lantern",True), (24,"The Lantern Annex",False),
+                                 (18,"The Lantern",False)):
+            lat,lon,_ = frame.enu_to_geodetic(50., y, 0.)
+            layer.lonlat[:] = [lon,lat]
+            layers = list(streamedstores.businesses(md,[None]))
+            self.assertEqual(bool(streamedstores.named_frontage(layers,coords,label)),expected)
+        lat,lon,_ = frame.enu_to_geodetic(50., 24., 0.)
+        layer.lonlat[:] = [lon,lat]
+        layers = list(streamedstores.businesses(md,[None]))
+        layer.attrs["operating_status"] = np.array(["closed"])
+        self.assertIsNone(streamedstores.named_frontage(layers,coords,"The Lantern"))
+
     def test_multistory_venue_sign_preserves_host_and_requires_one_identity(self):
         frame = geodesy.EnuFrame(40., -83.)
         with (tempfile.TemporaryDirectory() as cache,

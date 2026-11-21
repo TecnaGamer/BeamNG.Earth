@@ -105,6 +105,38 @@ def approach_panel(ring, coords, facing, doors):
     return panel if winding == 1 else panel[::-1]
 
 
+def named_frontage(layers, coords, label):
+    """Corroborate a named footprint with a trading name inside it or just across its wall."""
+    def words(name):
+        return re.findall(r"[^\W_]+", str(name or "").casefold())
+
+    key = words(label)
+    if not key:
+        return None
+    scale = np.array([111320*dmath.cos(dmath.radians(coords[0,1])), 111132])
+    pad = 8 / scale
+    lo, hi = coords.min(0)-pad, coords.max(0)+pad
+    edges = (np.roll(coords,-1,axis=0)-coords)*scale
+    lengths2 = np.maximum(np.sum(edges*edges,axis=1), 1e-9)
+    for features, rows, points in layers:
+        for j in np.flatnonzero(np.all((points >= lo) & (points <= hi),axis=1)):
+            i = rows[j]
+            def value(field):
+                return features.attrs[field][i] if field in features.attrs else None
+            if (words(value("name")) != key or not qualifies_business(value("confidence"))
+                    or value("operating_status") in {"closed", "permanently_closed"}):
+                continue
+            sign = local_sign(value("name"), {value("basic_category"),value("taxonomy")})
+            if not sign:
+                continue
+            offsets = (points[j]-coords)*scale
+            fractions = np.clip(np.sum(offsets*edges,axis=1)/lengths2,0,1)
+            if (contains_points(coords,points[j:j+1])[0]
+                    or np.min(np.linalg.norm(offsets-fractions[:,None]*edges,axis=1)) <= 8):
+                return sign
+    return None
+
+
 def businesses(md, keys):
     """Keep all mapped POIs in the cells so another tenant can rule out a whole-building match."""
     for key in keys:
@@ -477,7 +509,14 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
             doors = mapped_doors(sources[0], coords) if sources and (spec.retail_front or name or mall) else ()
             if spec.retail_front and doors:
                 spec.retail_doors = entrance_offsets(coords, ring, doors)
-            if venue_only:
+            confirmed = None
+            if local_enabled and label and not mall and not name and kind in {"commercial", "retail", "shop"}:
+                if layers is None:
+                    layers = list(businesses(md, keys))
+                confirmed = named_frontage(layers, coords, label)
+            if confirmed:
+                name = confirmed
+            elif venue_only:
                 if mall or kind not in {"", "commercial", "retail", "shop", "bar", "pub", "music_venue"}:
                     continue
                 if layers is None:
