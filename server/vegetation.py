@@ -191,6 +191,53 @@ def _shift_max(a, r):
     return fast._ef.disc_max(np.ascontiguousarray(a, np.float32), int(r))
 
 
+def _disc_offsets(r):
+    """(dj, di) of the disc of radius r (_shift_max's: dj^2 + di^2 <= r * r + r) outside the 3 x 3 around its centre,
+    the nearest first."""
+    out = [(dj, di) for dj in range(-r, r + 1) for di in range(-r, r + 1)
+           if dj * dj + di * di <= r * r + r and max(abs(dj), abs(di)) > 1]
+    return sorted(out, key=lambda o: (o[0] * o[0] + o[1] * o[1], o))
+
+
+def _max3(a):
+    """_shift_max(a, 1): the maximum over the 3 x 3 around each pixel (that disc is the whole 3 x 3), a row pass and a
+    column pass in place (a third of disc_max's time)."""
+    h = a.copy()
+    np.maximum(h[:, 1:], a[:, :-1], out=h[:, 1:])
+    np.maximum(h[:, :-1], a[:, 1:], out=h[:, :-1])
+    v = h.copy()
+    np.maximum(v[1:], h[:-1], out=v[1:])
+    np.maximum(v[:-1], h[1:], out=v[:-1])
+    return v
+
+
+def _band_tops(hs, bands):
+    """The local maxima of the heights hs by band: the pixels of each band (lo, hi, r) as high as the highest of their
+    disc of radius r (_shift_max: band & (hs >= _shift_max(hs, r))). Every disc holds the 3 x 3 around its pixel, so
+    the tops are among the 3 x 3 maxima, ~2 % of the pixels: only those are compared with the rest of their disc, the
+    nearest pixels first, the ones already beaten dropped as it goes. A whole-array disc maximum per band (earthfast
+    disc_max, 4 a cell) was a third of a trees cell's build. (Heights without NaN, as the canopy's: a NaN in a disc
+    compares unlike in disc_max.)"""
+    n_r, n_c = hs.shape
+    tops = np.zeros(hs.shape, bool)
+    jj, ii = np.nonzero((hs >= min(lo for lo, _, _ in bands)) & (hs >= _max3(hs)))
+    v = hs[jj, ii]
+    rmax = max([r for _, _, r in bands] + [1])
+    pad = np.full((n_r + 2 * rmax, n_c + 2 * rmax), -np.inf, np.float32)    # (outside the array: -inf, as disc_max)
+    pad[rmax:rmax + n_r, rmax:rmax + n_c] = hs
+    flat, w = pad.ravel(), n_c + 2 * rmax
+    at0 = (jj + rmax) * w + (ii + rmax)
+    for lo, hi, r in bands:
+        sel = np.flatnonzero((v >= lo) & (v < hi))
+        at, h = at0[sel], v[sel]
+        for dj, di in (_disc_offsets(r) if r > 1 else ()):
+            ok = h >= flat[at + (dj * w + di)]
+            if not ok.all():
+                sel, at, h = sel[ok], at[ok], h[ok]
+        tops[jj[sel], ii[sel]] = True
+    return tops
+
+
 def _dilate(m, r):
     """Bool mask grown by r pixels (a square window, separable)."""
     out = m.copy()
@@ -290,6 +337,8 @@ class Vegetation:
         self._cell_locks = {}
         self._tl = threading.local()    # per build thread: .dem_failed (the DEM could not answer: _load keeps no cell)
         self._warm_at, self._warm_thread = None, None   # warm_around's latest (lat, lon, radius_m), for the warm thread
+        self.warm_hold = False      # warm_around does nothing meanwhile (earthd: the cells on a moving car's way are
+                                    # the map ahead processes')
         self._warm_cv = threading.Condition()
         self._on_disk = set()           # cells whose file ready() found (the warm thread's: each file checked once)
         self._soon = OrderedDict()      # build_soon's cells (x, y), oldest first, at most BUILD_SOON_MAX
@@ -318,6 +367,8 @@ class Vegetation:
         near a teleport's destination then find them ready instead of waiting ~3.5 s each. The event loop's, at every
         pose: only the place is kept here, the warm thread picks the cells (their file checks, up to 64 a pose, held
         the loop on a busy hard drive: GitHub #1054)."""
+        if self.warm_hold:
+            return
         with self._warm_cv:
             self._warm_at = (lat, lon, radius_m)
             if self._warm_thread is None:
@@ -488,13 +539,13 @@ class Vegetation:
         _mask_corners(road_cells, (road, curb), chm, cd.bounds, getattr(self.surface, "urban", None), self.widths)
         # smoothed heights (3 x 3 mean), then the local maxima by height band
         p = np.pad(h, 1, mode="edge")
-        hs = sum(p[a:a + n_r, b:b + n_c] for a in range(3) for b in range(3)) / 9.0
-        tops = np.zeros(h.shape, bool)
+        hs = 0 + p[:n_r, :n_c]             # (summed in place, in the same order)
+        for a, b in ((a, b) for a in range(3) for b in range(3) if a or b):
+            np.add(hs, p[a:a + n_r, b:b + n_c], out=hs)
+        np.divide(hs, 9.0, out=hs)
         k = _merc_k((lat0 + lat1) / 2)     # (the radii below in pixels at MERC_REF_LAT: scaled to the ground's)
-        for lo_m, hi_m, r in ((BUSH_MIN_M, TREE_MIN_M, 1), (TREE_MIN_M, 8.0, 2), (8.0, 15.0, 3), (15.0, 1e9, 4)):
-            band = (hs >= lo_m) & (hs < hi_m)
-            if band.any():
-                tops |= band & (hs >= _shift_max(hs, max(1, int(round(r * k)))))
+        tops = _band_tops(hs, [(lo_m, hi_m, max(1, int(round(r * k)))) for lo_m, hi_m, r in
+                               ((BUSH_MIN_M, TREE_MIN_M, 1), (TREE_MIN_M, 8.0, 2), (8.0, 15.0, 3), (15.0, 1e9, 4))])
         tops &= ~blocked
         tops[~rj, :] = False
         tops[:, ~ci] = False
@@ -616,6 +667,9 @@ class Vegetation:
         GI, GJ = np.meshgrid(np.arange(math.floor(ex0 / s), math.ceil(ex1 / s)),
                              np.arange(math.floor(ey0 / s), math.ceil(ey1 / s)))
         GI, GJ = GI.ravel(), GJ.ravel()
+        # (the grid's points the hash keeps first: EDGE_P of them, the only ones placed and looked up below)
+        lucky = _hash01(GI, GJ, 23) < EDGE_P
+        GI, GJ = GI[lucky], GJ[lucky]
         px = (GI + _hash01(GI, GJ, 21)) * s
         py = (GJ + _hash01(GI, GJ, 22)) * s
         c_ = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
@@ -623,7 +677,6 @@ class Vegetation:
         ok = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1) & (c_ >= 0) & (c_ < hs.shape[1]) \
             & (r_ >= 0) & (r_ < hs.shape[0])
         ok[ok] &= band[r_[ok], c_[ok]] & (hs[r_[ok], c_[ok]] >= TREE_MIN_M)     # under the forest's canopy
-        ok &= _hash01(GI, GJ, 23) < EDGE_P
         if not ok.any():
             return _empty()
         GI, GJ, px, py = GI[ok], GJ[ok], px[ok], py[ok]
@@ -669,13 +722,17 @@ class Vegetation:
         gj = np.arange(math.floor(ey0 / s), math.ceil(ey1 / s))
         GI, GJ = np.meshgrid(gi, gj)
         GI, GJ = GI.ravel(), GJ.ravel()
+        # (a point gets a bush or a rock only below its class's odds, SCATTER_P: the ones above the highest are dropped
+        # before they are placed and looked up, ~3/4 of the grid)
+        u = _hash01(GI, GJ, 13)
+        lucky = u < max(b + r for b, r in SCATTER_P.values())
+        GI, GJ, u = GI[lucky], GJ[lucky], u[lucky]
         px = (GI + _hash01(GI, GJ, 11)) * s
         py = (GJ + _hash01(GI, GJ, 12)) * s
         keep = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1)
-        px, py, GI, GJ = px[keep], py[keep], GI[keep], GJ[keep]
+        px, py, GI, GJ, u = px[keep], py[keep], GI[keep], GJ[keep], u[keep]
         lon, lat = _to4326(px, py)
         cls = lc.sample(lon, lat)
-        u = _hash01(GI, GJ, 13)
         pb = np.zeros(len(px))
         pr = np.zeros(len(px))
         for c, (b, r) in SCATTER_P.items():
@@ -1467,6 +1524,19 @@ TILE_ROWS_MAX = 6000        # items a tile sends at most, the lowest ranks: the 
 SEND_M = 1280.0             # tiles this close to the player (Euclidean, to the square's nearest point) are sent
 DROP_M = 1536.0             # ... and dropped beyond this
 BUILD_PER_POSE = 8
+# At speed the trees reach along the car's way (Tracker lead, as the road tiles' corridor: roads.LEAD_S): the disc of
+# SEND_M is 14.7 s of driving at 190 mph and a trees geotile took 12.6 s, so the trees came as the car passed them (the
+# user, 2026-11-16: "it feels like driving on the moon"). At LEAD_FAST_MS or more the tiles within LEAD_CORRIDOR_M of the
+# way ahead (the time-to-reach tree's roads, a straight line without one) are wanted too, LEAD_S of driving ahead
+# (LEAD_MAX_M at most), and kept LEAD_KEEP_S past their last pass on it whatever DROP_M says.
+LEAD_FAST_MS = 25.0         # m/s (56 mph)
+LEAD_S = 30.0
+LEAD_MAX_M = 5000.0
+LEAD_CORRIDOR_M = 320.0     # m either side of the way
+LEAD_KEEP_S = 20.0
+LEAD = (LEAD_FAST_MS, LEAD_S, LEAD_MAX_M, LEAD_CORRIDOR_M)
+NEAR_FIRST_M = 128.0        # (no tree: the tiles this close to the car first, reach.ORDER_NEAR_M)
+SIDE_SLOW = 4.0             # ... and one off the way counts as this many times its distance (roads.SIDE_PENALTY)
 TRACK_MOVE_M = 8.0          # a geotile tracker passes again once the car, camera or a focus moved this much ...
 TRACK_MAX_S = 2.0           # ... or this long after its last pass, or something it sent, built or redoes changed
 
@@ -1612,7 +1682,7 @@ def geo_tile_items(gx, gy, veg, cell_ready, elev, sea=None, as_json=False, raw=N
     items = veg.cell(key)
     if len(items) == 0:
         return _no_items(as_json, clat, clon), 0.0
-    tx, ty = geotiles.tile_of(items.lat, items.lon)
+    tx, ty = _geotiles_of(items)
     sel = (tx == gx) & (ty == gy)
     if not sel.any():
         return _no_items(as_json, clat, clon), 0.0
@@ -1646,6 +1716,17 @@ def geo_tile_items(gx, gy, veg, cell_ready, elev, sea=None, as_json=False, raw=N
              round(float(sc), 3), round(float(h), 1), round(float(r), 4)]
             for g, a, b, c, yw, sc, h, r in zip(it.group, e, n, np.asarray(z), it.yaw, it.scale, it.height,
                                                 it.rank)], pivot
+
+
+def _geotiles_of(items):
+    """geotiles.tile_of of every item of a map cell's Items, worked out once per Items (kept on it: veg.cell keeps the
+    cell's Items in memory, and each of the cell's geotiles asked for the whole cell's again, a mercator projection of
+    every item a geotile: 1.2 of the trees' 22 CPU-s of a motorway drive)."""
+    import geotiles
+    got = items.__dict__.get("_geotiles")
+    if got is None or got[0] != geotiles.Z:
+        got = items.__dict__["_geotiles"] = (geotiles.Z,) + tuple(geotiles.tile_of(items.lat, items.lon))
+    return got[1], got[2]
 
 
 ROCK_SINK = 0.35            # a rock sinks this share of its height per unit of ground slope (1 = 45 degrees) ...
@@ -1723,7 +1804,7 @@ class Tracker:
     (messages veg_tile / veg_drop); the far buildings use one too (buildings.FAR_*)."""
 
     def __init__(self, send_m=SEND_M, drop_m=DROP_M, per_pose=BUILD_PER_POSE, kind="veg", skip_m=None, group=None,
-                 unit=1, inner=None, geo=False, z=None, group_z=None, rebuild_history=True):
+                 unit=1, inner=None, geo=False, z=None, group_z=None, rebuild_history=True, lead=None):
         # group G (the far buildings under the skyline tiles): every tile of a G x G group whose square comes within
         # send_m is wanted (a skyline tile shows only while none of its tiles do: no overlap, no hole). unit U (the
         # skyline tiles): keys are U x U squares of road tiles; inner (m, G): squares whose G-group comes within m are
@@ -1757,6 +1838,10 @@ class Tracker:
         self.redo, self.sent_h, self.digests = set(), {}, False
         self.epoch = 0              # (drop_all: a build started before it lands unwanted)
         self._gate = None           # last geotile pass's inputs, for the TRACK_MOVE_M gate
+        # lead (geotiles): (fast m/s, s, max m, corridor m), the tiles along a fast car's way ahead wanted too (LEAD);
+        # ahead: those of the last passes -> when last on the way (not dropped for LEAD_KEEP_S)
+        self.lead, self.ahead = lead, {}
+        self.rank = {}              # key -> its place in the last pass's order (earthd Server.veg_rank: what goes next)
 
     def redo_all(self):
         """Every geotile sent is asked for again (earthd Connection.stale_run's swap: they may be an older version's);
@@ -1781,7 +1866,7 @@ class Tracker:
         fast.require(551, "tracker_progress")
         return fast._ef.tracker_progress(getattr(self, "car", ()), self.sent, None, None, None, None, None)
 
-    def on_pose(self, conn, aid, x, y, loop, build, view=None, foci=(), frame=None, tree=None):
+    def on_pose(self, conn, aid, x, y, loop, build, view=None, foci=(), frame=None, tree=None, vel=None):
         """As roads.Tracker.on_pose: the tiles within send_m of the car (x, y) and of the camera when it is away
         (view), the car's first; dropped beyond drop_m of both. foci: other vehicles' collision foci (x, y, r, ...)
         whose trees collide: the tiles within r + 128 m of each, after the car's and camera's, kept within r + 256 m.
@@ -1790,6 +1875,8 @@ class Tracker:
         from runtimeprofiler import TileJobs
         import geotiles
         fast.require(551, "scenery tile tracker")
+        if vel is None:                 # (the pose's: earthfast's tracker_pose passes none)
+            vel = getattr(conn, "vel", None)
         if self.geo and frame is None:
             return
         if aid != self.aid:
@@ -1806,9 +1893,12 @@ class Tracker:
         start = functools.partial(self._start, conn, loop, build)
         if self.geo:
             z = self.z or geotiles.Z
-            fast._ef.scenery_geo(self, aid, frame, (x, y), view, foci, tree, z, time.monotonic(),
-                                 TRACK_MAX_S, TRACK_MOVE_M, start,
-                                 functools.partial(self._drop_geo, conn, z))
+            drop = functools.partial(self._drop_geo, conn, z)
+            if self.lead is None:
+                fast._ef.scenery_geo(self, aid, frame, (x, y), view, foci, tree, z, time.monotonic(),
+                                     TRACK_MAX_S, TRACK_MOVE_M, start, drop)
+            else:               # (with a way ahead, lead: the same pass with the way's tiles, here)
+                self._on_pose_lead(aid, x, y, view, foci, frame, tree, vel, z, start, drop)
         else:
             fast._ef.anchor_tiles(self, conn, aid, (x, y), view, foci, None, False, 0., start, None)
 
@@ -1825,6 +1915,130 @@ class Tracker:
             fut.add_done_callback(lambda f, e=self.epoch: self._built_geo(conn, key, f, e))
         else:
             fut.add_done_callback(lambda f, a=self.aid: self._built(conn, a, key, f))
+
+    def _way_ahead(self, frame, x, y, vel, tree, z):
+        """{key: s of driving to it} of the geotiles along a fast car's way ahead (lead): the tree's roads it is likely
+        to take, a straight line along vel without a tree. {} when slow or without lead."""
+        import geotiles
+        if self.lead is None:
+            return {}
+        fast_ms, lead_s, lead_max, corridor = self.lead
+        v = float(tree.speed) if tree is not None else math.hypot(*vel) if vel is not None else 0.0
+        if v < fast_ms:
+            return {}
+        horizon = min(lead_s, lead_max / v)
+        if tree is not None:
+            return {k: got[2] for k, got in tree.geotile_keys(frame, corridor, z=z, horizon=horizon).items() if got[1]}
+        ux, uy = vel[0] / v, vel[1] / v
+        out, d, step = {}, 0.0, corridor / 2
+        while d <= horizon * v:
+            for a, b, _dd in geotiles.tiles_near(frame, x + ux * d, y + uy * d, corridor, z):
+                out.setdefault((a, b), d / v)
+            d += step
+        return out
+
+    def _on_pose_lead(self, aid, x, y, view, foci, frame, tree, vel, z, start, drop):
+        """on_pose's geotile pass for a tracker with a way ahead (lead): earthfast.scenery_geo's rules (send_m, drop_m,
+        the camera's, other cars' foci; group_z's whole groups, inner's tiles left out; start(key) builds one,
+        drop(key) drops one) and the tiles along a fast car's way (_way_ahead), kept while they are on it; the order of
+        the pass is kept (rank)."""
+        import geotiles
+        spots = [(x, y)] + ([tuple(view)] if view else [])
+        # (a pose that changes nothing this tracker goes by: no pass; the car, the camera and the other cars' foci
+        # within TRACK_MOVE_M of the last pass's, nothing sent, built or asked again since, at most TRACK_MAX_S ago)
+        now = time.monotonic()
+
+        def gate_key():
+            return (aid, id(frame), view is None, len(foci), id(tree), self.send_m, self.drop_m, self.inner,
+                    self.group_z, z, len(self.sent), len(self.building), len(self.redo), self.epoch, self.per_pose)
+        cont = [float(v) for p in spots for v in p[:2]] + [float(v) for f in foci for v in f[:3]]
+        last = getattr(self, "_gate", None)
+        if last is not None and last[0] == gate_key() and now - last[2] < TRACK_MAX_S and len(cont) == len(last[1]) \
+                and all(abs(a - b) <= TRACK_MOVE_M for a, b in zip(cont, last[1])) \
+                and not (last[3] and len(self.building) < self.per_pose):
+            return
+
+        def near(px, py, r):
+            """Keys within r of (px, py), nearest first (each tile by its own quad)."""
+            if self.group_z is None:
+                return [(a, b) for a, b, _d in geotiles.tiles_near(frame, px, py, r, z)]
+            keys = [c for a, b, _d in geotiles.tiles_near(frame, px, py, r, self.group_z)
+                    for c in geotiles.children(a, b, self.group_z, z)]
+            if not keys:
+                return keys
+            d = geotiles.dists(self.frame, keys, z, [(px, py)])[:, 0].tolist()     # (each by its own quad)
+            return [k for _d, k in sorted(zip(d, keys))]
+        skip = set()
+        if self.inner is not None:
+            for p in spots:
+                skip.update((a, b) for a, b, _d in geotiles.tiles_near(frame, p[0], p[1], self.inner[0], z))
+        car = [k for k in near(x, y, self.send_m) if k not in skip]
+        self.car = set(car)             # (progress: the loading line's tiles, the disc's)
+        try:
+            way = self._way_ahead(frame, x, y, vel, tree, z)
+        except Exception as e:          # (the disc alone, as before)
+            way = {}
+            log.debug("%s geotiles along the way ahead: %s: %s", self.kind, type(e).__name__, e)
+        if way:
+            have = set(car)
+            car += [k for k in sorted(way, key=way.get) if k not in have and k not in skip]
+            self.ahead.update((k, now) for k in way)
+        if self.ahead:
+            self.ahead = {k: t for k, t in self.ahead.items() if now - t < LEAD_KEEP_S}
+        if tree is not None and car:
+            import reach
+            try:
+                car = reach.order_geotiles(tree, frame, car, x, y, z,
+                                           corridor_m=self.lead[3] if self.lead else None)
+            except Exception as e:      # (nearest first, as before)
+                log.debug("%s geotiles in the tree's order: %s: %s", self.kind, type(e).__name__, e)
+        elif way:                       # (no tree: right round the car first, then by the time to reach them)
+            d = dict(zip(car, geotiles.dists(frame, car, z, [(x, y)])[:, 0].tolist()))
+            v = max(math.hypot(*vel), 1.0)
+            car.sort(key=lambda k: (0, d[k]) if d[k] <= NEAR_FIRST_M
+                     else (1, min(way.get(k, 1e9), SIDE_SLOW * d[k] / v)))
+        seen = [k for k in near(*view, self.send_m) if k not in skip] if view else []
+        others = []
+        for f in foci:
+            others += [k for k in near(f[0], f[1], min(self.send_m, f[2] + 128.0)) if k not in skip]
+        order, done = [], set()
+        for k in car + seen + others:           # (nearest first)
+            if k not in done:
+                done.add(k)
+                order.append(k)
+        self.redo &= self.sent
+        self.rank = {k: i for i, k in enumerate(order)}
+        want = [k for k in order if (k not in self.sent or k in self.redo) and k not in self.building]
+        n_go = max(0, self.per_pose - len(self.building))
+        more = len(want) > n_go             # (left for a later pass: the gate lets that one through)
+        for k in want[:n_go]:
+            start(k)
+        for k in self._far_sent(spots, foci):
+            drop(k)
+        self._gate = (gate_key(), cont, now, more)
+
+    def _far_sent(self, spots, foci):
+        """The sent tiles farther than drop_m from every spot and than its reach + 256 m from every focus (each pair's quad distance,
+        by group when group_z): one batch call (earthfast.geo_tiles_dist; tile by tile from Python they
+        were whole seconds of a busy event loop, 2026-11-07)."""
+        import geotiles
+        sent = [k for k in self.sent if k not in self.ahead] if self.ahead else list(self.sent)
+        if not sent:
+            return []
+        z = self.z or geotiles.Z
+        keys, kz = sent, z
+        if self.group_z is not None:
+            keys, kz = [geotiles.parent(k[0], k[1], z, self.group_z) for k in sent], self.group_z
+        pts = [tuple(p[:2]) for p in spots] + [(f[0], f[1]) for f in foci]
+        if not pts:
+            return sent
+        d = geotiles.dists(self.frame, keys, kz, pts)
+        far = np.ones(len(sent), bool)
+        if spots:
+            far &= (d[:, :len(spots)] > self.drop_m).all(axis=1)
+        if foci:
+            far &= (d[:, len(spots):] > np.asarray([f[2] + 256.0 for f in foci], np.float64)).all(axis=1)
+        return [k for k, f in zip(sent, far.tolist()) if f]
 
     def _drop_geo(self, conn, z, key):
         import geotiles
@@ -1881,9 +2095,13 @@ class Tracker:
                     h = hashlib.sha1(f.read()).digest()
             except (OSError, AttributeError):
                 pass
+        again = key in self.redo
         fast.require(551, "scenery_result")
         if not fast._ef.scenery_result(self, key, h):
             return
+        if not again:
+            import arrival
+            arrival.note_geo(conn, self.kind, self.frame, key, self.z or geotiles.Z)
         m = {"type": f"{self.kind}_tile", "anchorId": self.aid, "key": geotiles.key(*key, self.z or geotiles.Z),
              "path": path, "n": n, "frame": [float(frame[0]), float(frame[1])], "pivot": float(pivot)}
         s = getattr(conn, "s", None)

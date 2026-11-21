@@ -99,6 +99,42 @@ class PlanTest(unittest.TestCase):
         inside = [n for n in trib if abs(n[1] - big_y) < 40.0]
         self.assertLessEqual(len(inside), 1, "the stream stops at the river (one node into it)")
 
+    def test_chains_kept_between_plans_give_the_pieces_planned_afresh(self):
+        # plan's memo: a chain's nodes are measured once and give, wherever the player is and whatever roads are at
+        # hand, the pieces a plan measuring every chain gives; a chain measured while water was not at hand is not kept
+        f = geodesy.EnuFrame(LAT, LON)
+        lines = Lines([("big", "river", "river", [(LON - 0.03, LAT + 0.003), (LON + 0.03, LAT + 0.003)]),
+                       ("trib", "stream", "stream", [(LON, LAT - 0.004), (LON, LAT + 0.003)]),
+                       ("far", "stream", "stream", [(LON + 0.05, LAT - 0.004), (LON + 0.05, LAT + 0.003)])])
+        outline = lambda la, lo: np.abs((np.asarray(la) - (LAT + 0.003)) * 111320.0) < 40.0   # noqa: E731
+        wet = lambda la, lo: np.zeros(np.shape(la))                                           # noqa: E731
+        probes = []
+
+        def dem(la, lo):
+            probes.append(np.size(la))
+            return 20.0 - np.asarray(lo) * 50.0
+        road = riverlines.RoadClearance([(-900.0, 345.0, 900.0, 345.0, 4.0)])
+        memo, n = {}, [0]
+        for k, (x, y, rc) in enumerate([(0.0, 0.0, None), (500.0, 100.0, None), (500.0, 100.0, road),
+                                        (3000.0, 0.0, road), (0.0, 0.0, None)]):
+            plain = riverlines.plan(f, x, y, lambda key: lines, wet, dem, outline, road_clear=rc)
+            before = sum(probes)
+            got = riverlines.plan(f, x, y, lambda key: lines, wet, dem, outline, road_clear=rc, memo=memo,
+                                  settled=lambda: n[0])
+            self.assertEqual(got, plain, (x, y))
+            self.assertTrue(plain)
+            if k in (1, 2):         # (the chains measured before: no probe again, the road's clearance all the same)
+                self.assertEqual(sum(probes), before)
+        self.assertNotEqual(riverlines.plan(f, 500.0, 100.0, lambda key: lines, wet, dem, outline, road_clear=road),
+                            riverlines.plan(f, 500.0, 100.0, lambda key: lines, wet, dem, outline))
+
+        def unsettled(la, lo):      # (water not at hand yet: asked for, the count moves on)
+            n[0] += 1
+            return np.zeros(np.shape(la))
+        memo = {}
+        riverlines.plan(f, 0.0, 0.0, lambda key: lines, unsettled, dem, outline, memo=memo, settled=lambda: n[0])
+        self.assertEqual(memo, {})
+
     def test_tributary_wide_at_its_mouth_never_outranks_the_river(self):
         """GitHub #323: a 30 m river whose last nodes measured 780 m (probed along the river it joins) left that
         river's nodes out under itself; ranked by the median width, the main river keeps its water there."""
@@ -126,6 +162,22 @@ class RoadClearanceTest(unittest.TestCase):
         self.assertAlmostEqual(d[0], 6.0)
         self.assertEqual(d[1], 0.0)
         self.assertTrue(np.isinf(d[2]), "no road within the search radius")
+
+    def test_every_square_a_segment_touches_lists_it(self):
+        """The grid is made for all segments at once: each square lists, in order, the segments whose box with the
+        road's half width reaches into it (as the loop per segment and square listed them)."""
+        rng = np.random.default_rng(3)
+        a = rng.uniform(-900.0, 900.0, (300, 2))
+        b = a + rng.uniform(-260.0, 260.0, (300, 2))
+        segs = np.column_stack([a, b, rng.choice([2.5, 4.0, 7.0], 300)])
+        segs[0] = (-64.0, 0.0, 64.0, 128.0, 4.0)                    # (ends on the grid's lines)
+        want, g = {}, riverlines.CLEAR_GRID_M
+        for k, (x0, y0, x1, y1, hw) in enumerate(segs):
+            for gx in range(math.floor((min(x0, x1) - hw) / g), math.floor((max(x0, x1) + hw) / g) + 1):
+                for gy in range(math.floor((min(y0, y1) - hw) / g), math.floor((max(y0, y1) + hw) / g) + 1):
+                    want.setdefault((gx, gy), []).append(k)
+        self.assertEqual(riverlines.RoadClearance(segs).grid, want)
+        self.assertEqual(riverlines.RoadClearance([]).grid, {})
 
     def test_width_capped_beside_a_road(self):
         """A river along y = 0 with a road along y = 10: its width stops short of the road; without the road

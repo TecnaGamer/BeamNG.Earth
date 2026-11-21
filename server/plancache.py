@@ -126,6 +126,9 @@ def for_grader(cache_dir, grader, widths, wet):
     instead of planning again."""
     md = getattr(grader, "md", None)
     signature = f"w{int(widths is not None)}s{int(wet is not None)}"
+    import grading
+    if grading.PROFILE_ZOOM != 16:
+        signature += f"z{grading.PROFILE_ZOOM}"
     run = os.environ.get(RUN_ENV)
     if not run:
         return None

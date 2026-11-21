@@ -1238,7 +1238,9 @@ local function onMessage(msg)
       -- (the game's own user folder: the server checks it writes its files there, GitHub #770)
       userPath = (FS and FS.getUserPath) and FS:getUserPath() or nil,
       deckGuard = M._deckguard.PROTO,  -- (it slows the car before a bridge whose road tile is late: 'deck_spans')
-      readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
+      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set'; 2: also one a grid step
+      -- past its reach on the way it drives, follow.readyReach)
+      readySet = 2 })
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
     -- (a generation swap: before its commit it is dropped at the next frame's step; from its commit on it is stepped
@@ -1263,6 +1265,9 @@ local function onMessage(msg)
     ambience.clear()
     M._trafficvisuals.session(nil, false)
     setStatus('Disconnected from companion server: ' .. tostring(msg.error))
+  elseif t == 'load_map' then         -- the dev tools' loading map (dev.lua, its 'loadmap' panel asks for it)
+    local dev = rawget(_G, 'beamngEarth_dev')
+    if dev and dev.receiveLoadMap then dev.receiveLoadMap(msg) end
   elseif t == 'runtime_profiler_pong' then
     require('beamngEarth/profiler').pong(msg)
   elseif t == 'runtime_profiler' then

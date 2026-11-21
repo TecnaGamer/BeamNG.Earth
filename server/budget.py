@@ -11,6 +11,8 @@ desktop sizes.
 """
 import os
 import sys
+import threading
+import time
 
 SMALL_GB = 20.0             # below this much RAM: the small profile (a Steam Deck shows ~14.5 GB)
 TINY_GB = 13.0              # ... and below this (an 8 or 12 GB PC) its smaller sizes (TINY_*)
@@ -1046,19 +1048,56 @@ def trim():
 # far workers got nothing at all (a Windows player, i5-9400F, 1.6.1: "distant land 5/514", only the land near the car
 # loading). os.nice elsewhere only weights the share.
 WIN_BELOW_NORMAL = 0x4000
+# The work for later (the map ahead's, the far field's, the far buildings', the late pool's: BACKGROUND_NICE or nicer)
+# gives way to the work the car is about to need, as os.nice has it elsewhere. With every worker in the server's one
+# class, a road tile of 0.7 s of CPU took 2.3 s (4.4 s with its wait for a free road process, 292 tiles of a 300 km/h
+# drive on Windows, the server's 3 cores 2.8 in use, 2026-11-18): its three processes got 0.6 of a core between them
+# beside a map ahead 107 s in front of the car. So such a worker runs in the idle class, and for BACKGROUND_SHARE of
+# the time in the class it inherited: a floor under it, not the "nothing at all" above.
+WIN_IDLE = 0x40
+WIN_THREAD_TIME_CRITICAL = 15   # (the share's thread: it only sleeps and sets the class, and must run to raise it)
+BACKGROUND_NICE = 4
+BACKGROUND_SHARE = 0.125
+BACKGROUND_PERIOD_S = 2.0
+# ... unless the car is about to need what it works on (due): with the floor alone the map ahead fell from 104 s in
+# front of a 300 km/h car to 46 s, one cell in ten begun as the car reached it (and the road tiles planned its roads
+# themselves meanwhile, 20 s of their waits), 2026-11-18. Work due stays in the inherited class until it is done.
+_DUE = {}           # running job (due) -> the time.time() from which it is urgent
+_DUE_LOCK = threading.Lock()
+_DUE_NOW = []       # background's: this process into its inherited class now
 
 
-def lower_priority(nice, worker=False):
-    """This process below the game: os.nice(nice) where it exists; on Windows the "below normal" class for the
-    server (worker False, nice > 0); a worker keeps the class it inherited. Returns the change made, for the log
-    ("nice +n", "below normal", None)."""
-    if not nice or nice <= 0:
-        return None
-    if hasattr(os, "nice"):
-        os.nice(int(nice))
-        return f"nice +{int(nice)}"
-    if sys.platform != "win32" or worker:
-        return None
+class due:
+    """with due(at): what this block works on is urgent from the time.time() `at` on (None: work for later, as
+    ever): a background process (background) keeps its inherited class while such a block runs in it, from that
+    moment. Any thread; elsewhere than Windows it only keeps the time."""
+
+    def __init__(self, at):
+        self.at = None if at is None else float(at)
+
+    def __enter__(self):
+        if self.at is not None:
+            with _DUE_LOCK:
+                _DUE[self] = self.at
+            if pressed():
+                for up in list(_DUE_NOW):
+                    up()
+        return self
+
+    def __exit__(self, *exc):
+        with _DUE_LOCK:
+            _DUE.pop(self, None)
+        return False
+
+
+def pressed(now=None):
+    """Is a job of this process (due) urgent by now (time.time())?"""
+    now = time.time() if now is None else now
+    with _DUE_LOCK:
+        return any(at <= now for at in _DUE.values())
+
+
+def _kernel32():
     import ctypes
     from ctypes import wintypes
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -1066,9 +1105,68 @@ def lower_priority(nice, worker=False):
     k32.GetCurrentProcess.restype = wintypes.HANDLE
     k32.SetPriorityClass.argtypes = (wintypes.HANDLE, wintypes.DWORD)
     k32.SetPriorityClass.restype = wintypes.BOOL
+    k32.GetPriorityClass.argtypes = (wintypes.HANDLE,)
+    k32.GetPriorityClass.restype = wintypes.DWORD
+    k32.GetCurrentThread.restype = wintypes.HANDLE
+    k32.SetThreadPriority.argtypes = (wintypes.HANDLE, ctypes.c_int)
+    k32.SetThreadPriority.restype = wintypes.BOOL
+    return k32
+
+
+def lower_priority(nice, worker=False):
+    """This process below the game: os.nice(nice) where it exists; on Windows the "below normal" class for the
+    server (worker False, nice > 0); a worker keeps the class it inherited, one of BACKGROUND_NICE or nicer has it
+    for a share of the time only (background). Returns the change made, for the log ("nice +n", "below normal",
+    "idle, its class 1/8 of the time", None)."""
+    if not nice or nice <= 0:
+        return None
+    if hasattr(os, "nice"):
+        os.nice(int(nice))
+        return f"nice +{int(nice)}"
+    if sys.platform != "win32":
+        return None
+    k32 = _kernel32()
+    if worker:
+        return background(k32) if nice >= BACKGROUND_NICE else None
     if not k32.SetPriorityClass(k32.GetCurrentProcess(), WIN_BELOW_NORMAL):
         raise OSError("SetPriorityClass(below normal) failed")
     return "below normal"
+
+
+def background(k32, sleep=None, rounds=None, start=None):
+    """This process in Windows' idle class, and in the class it has now for BACKGROUND_SHARE of every
+    BACKGROUND_PERIOD_S (a thread of its own, the processes each at their own moment of the period, by their pid) and
+    while a job of it is urgent (due).
+    k32: kernel32 (_kernel32); sleep, rounds, start: the tests' (a clock, an end, the thread's start). Returns the
+    change made, None when the process is in the idle class already."""
+    sleep = sleep or time.sleep
+    me = k32.GetCurrentProcess()
+    own = int(k32.GetPriorityClass(me) or 0)
+    if not own or own == WIN_IDLE:
+        return None
+    if not k32.SetPriorityClass(me, WIN_IDLE):
+        raise OSError("SetPriorityClass(idle) failed")
+    high = BACKGROUND_PERIOD_S * BACKGROUND_SHARE
+
+    def run():
+        # (above every thread of the server: it has to run to give the process its share when nothing else of it runs)
+        k32.SetThreadPriority(k32.GetCurrentThread(), WIN_THREAD_TIME_CRITICAL)
+        sleep((os.getpid() % 16) / 16.0 * BACKGROUND_PERIOD_S)
+        n = 0
+        while rounds is None or n < rounds:
+            n += 1
+            k32.SetPriorityClass(me, own)
+            sleep(high)
+            if not pressed():           # (work the car is about to need: its class until it is done, due)
+                k32.SetPriorityClass(me, WIN_IDLE)
+            sleep(BACKGROUND_PERIOD_S - high)
+
+    _DUE_NOW.append(lambda: k32.SetPriorityClass(me, own))
+    if start is None:
+        threading.Thread(target=run, name="priority-share", daemon=True).start()
+    else:
+        start(run)
+    return f"idle, its class 1/{round(1 / BACKGROUND_SHARE)} of the time"
 
 
 # The server's event loop answers every message the game sends (a pose, a block request). In the "below normal" class
@@ -1093,6 +1191,61 @@ def raise_thread():
     if not k32.SetThreadPriority(k32.GetCurrentThread(), WIN_THREAD_ABOVE_NORMAL):
         raise OSError("SetThreadPriority(above normal) failed")
     return "thread above normal"
+
+
+# What the car reaches within moments is built before the rest of the server's work. The road tiles' processes shared
+# the server's cores thread for thread with everything else of its class (the server's own ~20 threads, the blocks 30 s
+# ahead, the trees, the map ahead's and the far buildings' urgent jobs): at 330 km/h on Windows (A2 / A33 at Bielefeld,
+# 3 server cores, 2026-11-18) the three got 0.75 of a core between them, a tile of 0.6 s of CPU took 2.3 s in its
+# process and waited 1.9 s for a free one before (152 of 449 tiles over 3 s, 4.3 s in the median), and 21 % of the
+# road tiles, their lane markings and guard rails with them, reached the game behind the car. A job the car needs
+# within RUSH_S (rush) runs one step above the server's other threads, as its event loop's does (raise_thread: inside
+# the server's class, below the game): the same CPU, spent first.
+RUSH_S = 10.0
+WIN_THREAD_NORMAL = 0
+_RUSH = threading.local()
+
+
+def _thread_priority(level):
+    """The calling thread at `level` inside its process's class (Windows: True when set). Nothing elsewhere: os.nice
+    only lowers."""
+    if sys.platform != "win32":
+        return False
+    k32 = _kernel32()
+    return bool(k32.SetThreadPriority(k32.GetCurrentThread(), level))
+
+
+class rush:
+    """with rush(at): the calling thread one step above the server's other threads (Windows) while this block runs,
+    when the car needs its work by now: time.time() is `at` or later as it begins (None: never; a job that begins
+    before is done well before the car is there). on: was it?"""
+
+    def __init__(self, at):
+        self.at = None if at is None else float(at)
+        self.on = False
+
+    def __enter__(self):
+        if self.at is not None and self.at <= time.time():
+            self.on = True
+            n = _RUSH.__dict__.get("n", 0)
+            _RUSH.n = n + 1
+            if n == 0:
+                try:
+                    _thread_priority(WIN_THREAD_ABOVE_NORMAL)
+                except Exception:       # (built at its usual priority rather than not at all)
+                    pass
+        return self
+
+    def __exit__(self, *exc):
+        if self.on:
+            self.on = False
+            _RUSH.n -= 1
+            if _RUSH.n == 0:
+                try:
+                    _thread_priority(WIN_THREAD_NORMAL)
+                except Exception:
+                    pass
+        return False
 
 
 def road_processes(cpus=None, gb=None):

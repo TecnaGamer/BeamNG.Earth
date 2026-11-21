@@ -200,8 +200,26 @@ def proc_name(name):
     return ("bnge:" + name.replace(" ", ""))[:15]
 
 
-def _named_init(name, init, *initargs):
-    """A pool's initializer, after naming its process (proc_name)."""
+# In a worker process: its pool's count of jobs waiting for a process (RespawningPool.waiting, shared; None elsewhere)
+_WAITING = None
+
+
+def backlog():
+    """In a worker process: how many of its pool's jobs wait for a process now (0 elsewhere). A job that may wait for
+    what it can be built without (townentry.patience) gives way when this is not 0."""
+    w = _WAITING
+    if w is None:
+        return 0
+    try:
+        return int(w.value)
+    except Exception:
+        return 0
+
+
+def _named_init(name, init, *initargs, waiting=None):
+    """A pool's initializer, after naming its process (proc_name); waiting: its pool's shared count (backlog)."""
+    global _WAITING
+    _WAITING = waiting
     if sys.platform.startswith("linux"):
         try:
             import ctypes
@@ -275,7 +293,16 @@ class RespawningPool:
     """ProcessPoolExecutor(*args, **kwargs) made again when broken. submit / shutdown as the executor's."""
 
     def __init__(self, name, *args, hung_s=None, tasks_per_child=0, **kwargs):
-        kwargs = dict(kwargs, initializer=functools.partial(_named_init, name, kwargs.get("initializer")),
+        # (the jobs waiting for a process, read by the processes: backlog. A road tile that waited 8 s for its roofs'
+        # photo in one of three road processes held up the tiles asked for meanwhile, 2026-11-18)
+        try:
+            import multiprocessing
+            ctx = kwargs.get("mp_context") or multiprocessing
+            self.waiting = ctx.RawValue("i", 0)
+        except Exception:
+            self.waiting = None
+        kwargs = dict(kwargs, initializer=functools.partial(_named_init, name, kwargs.get("initializer"),
+                                                            waiting=self.waiting),
                       initargs=tuple(kwargs.get("initargs", ())))         # (its processes named: proc_name)
         self.name, self._args, self._kwargs = name, args, kwargs
         self._lock = threading.Lock()
@@ -339,15 +366,22 @@ class RespawningPool:
             fut = self._to_pool(fn, args, kwargs)
         with self._count_lock:
             self.inflight += 1
+            self._tell_waiting()
         if self.hung_s:
             with self._live_lock:
                 self._live[fut] = None
         fut.add_done_callback(self._done)
         return fut
 
+    def _tell_waiting(self):
+        """The shared count of jobs waiting for a process (backlog), under _count_lock."""
+        if self.waiting is not None:
+            self.waiting.value = max(0, self.inflight - self.workers)
+
     def _done(self, _fut):
         with self._count_lock:
             self.inflight = max(0, self.inflight - 1)
+            self._tell_waiting()
         if self.hung_s:
             with self._live_lock:
                 self._live.pop(_fut, None)
@@ -454,10 +488,28 @@ class RespawningPool:
         waits can join it (Server.build_veg_geo: the trees geotiles waiting together go in one job)."""
         return self._queue_low(fn, (), {}, make_args)
 
-    def _queue_low(self, fn, args, kwargs, make_args):
+    def submit_idle(self, wait_s, fn, *args, **kwargs):
+        """submit for work that gives way to the pool's other jobs: handed to the processes when one of them is free,
+        or once it has waited wait_s (never starved). The AI road graph round the car (earthd.Server.build_navgraph):
+        built again every 400 m, at 300 km/h it held one of the three road processes most of the time while the road
+        geotiles ahead of the car queued behind it (11 graphs, 96 s of a 135 s drive, 2026-11-16). Behind the low jobs
+        asked before it; its future is running once handed over (result_running)."""
+        return self._queue_low(fn, args, kwargs, None, time.monotonic() + max(0.0, float(wait_s)))
+
+    def _low_ready(self):
+        """May the first low job be handed over now (under _low_cv)? A free process: yes. Else a submit_low job when
+        no low job runs, a submit_idle job once its wait is over."""
+        if not self._low:
+            return False
+        if self.inflight < self.workers:
+            return True
+        until = self._low[0][5]
+        return self._low_active == 0 if until is None else time.monotonic() >= until
+
+    def _queue_low(self, fn, args, kwargs, make_args, until=None):
         outer = concurrent.futures.Future()
         with self._low_cv:
-            self._low.append((outer, fn, args, kwargs, make_args))
+            self._low.append((outer, fn, args, kwargs, make_args, until))
             if self._low_thread is None:
                 self._low_thread = threading.Thread(target=self._low_loop, daemon=True, name=f"{self.name}-low")
                 self._low_thread.start()
@@ -467,9 +519,9 @@ class RespawningPool:
     def _low_loop(self):
         while True:
             with self._low_cv:
-                while not (self._low and (self.inflight < self.workers or self._low_active == 0)):
+                while not self._low_ready():
                     self._low_cv.wait(timeout=1.0)
-                outer, fn, args, kwargs, make_args = self._low.popleft()
+                outer, fn, args, kwargs, make_args, _until = self._low.popleft()
                 if not outer.set_running_or_notify_cancel():
                     continue                # (cancelled while it waited)
                 self._low_active += 1

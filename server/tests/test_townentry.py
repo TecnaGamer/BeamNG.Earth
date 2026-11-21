@@ -1453,5 +1453,59 @@ class BodyGeometryTest(unittest.TestCase):
             self.assertEqual([s for s in spans if s[0] < face_y < s[1]], [], lod)
 
 
+class PatienceTest(unittest.TestCase):
+    """patience: a road tile a fast car is about to reach waits for its town signs' inputs only that long."""
+
+    class MD:
+        def __init__(self):
+            self.queued = []
+
+        def has(self, k, layer):
+            return False
+
+        def prefetch(self, k, layers):
+            self.queued.append((k, layers))
+
+    def test_wait_s(self):
+        self.assertEqual(ts.wait_s(), ts.POINTS_WAIT_S)
+        with ts.patience(None):
+            self.assertEqual(ts.wait_s(), ts.POINTS_WAIT_S)
+        with ts.patience(3.0):
+            self.assertLessEqual(ts.wait_s(), 3.0)
+            self.assertGreater(ts.wait_s(), 2.5)
+            with ts.patience(1000.0):
+                self.assertEqual(ts.wait_s(), ts.POINTS_WAIT_S)
+            self.assertLessEqual(ts.wait_s(), 3.0)
+        with ts.patience(0.0):
+            self.assertEqual(ts.wait_s(), 0.0)
+        self.assertEqual(ts.wait_s(), ts.POINTS_WAIT_S)
+
+    def test_a_hurried_tile_does_not_wait_for_village_points(self):
+        import time as _t
+        towns = ts.Towns(self.MD(), None)
+        t0 = _t.monotonic()
+        with ts.patience(0.3), revisit.scope() as f:
+            self.assertIsNone(towns._points(["k"]))
+        self.assertLess(_t.monotonic() - t0, 2.0)
+        self.assertFalse(f.kept_until()[0], "built without them: not kept (built again later)")
+        self.assertLess(towns._waited_in_vain, 0.0, "a cut wait says nothing about the next tile's")
+        with mock.patch.object(ts, "POINTS_WAIT_S", 0.3):   # (a whole wait in vain: not again for a while)
+            self.assertIsNone(towns._points(["k"]))
+            self.assertGreater(towns._waited_in_vain, 0.0)
+
+    def test_warm_reads_the_cell_and_the_eight_around_it(self):
+        seen = {}
+
+        class Towns(ts.Towns):
+            def communes(self, frame, keys):
+                seen["keys"], seen["frame"] = keys, frame
+                return []
+        self.assertTrue(Towns(None, None).warm((14, 8720, 5667)))
+        self.assertEqual(len(seen["keys"]), 9)
+        self.assertEqual({(k.x, k.y) for k in seen["keys"]}, {(8720 + dx, 5667 + dy) for dx in (-1, 0, 1)
+                                                              for dy in (-1, 0, 1)})
+        self.assertAlmostEqual(seen["frame"].lat0, 48.4, delta=0.2)
+
+
 if __name__ == "__main__":
     unittest.main()

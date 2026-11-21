@@ -124,6 +124,8 @@ class _State:
             budget.register_shed(rw.clear_memory)
         import roads as _roads
         budget.register_shed(_roads.clear_facts_memory)
+        import germanroads          # (the German roads' surveyed axes: up to 32 shards of ~25 km and their segments)
+        budget.register_shed(germanroads.clear_memory)
         import paintlist            # (the photos' paint lists: they hold their cells' layers)
         budget.register_shed(paintlist.clear)
         budget.register_shed(self._clear_chunks)
@@ -347,11 +349,15 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
         import roads as roadsmod
         roadsmod.ROADS_IN_GROUND = roads_in_ground
     import budget
+    how = None
     try:
-        budget.lower_priority(nice, worker=True)    # (Windows: the server's class, as inherited)
+        # (Windows: the server's class, as inherited; the work for later in the idle class beside it, budget.background)
+        how = budget.lower_priority(nice, worker=True)
     except (OSError, AttributeError):
         pass
     logging.basicConfig(level=log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if how and sys.platform == "win32":
+        logging.getLogger(__name__).info("worker priority: %s", how)
     budget.apply()              # (this process's caches: smaller on a small machine)
     if os.environ.get("BNGE_TRACEMALLOC"):      # debug: this worker's memory (earthd's trace_mem)
         _trace_memory()
@@ -679,6 +685,90 @@ def ground(frame, la, lo, z, grader=None):
     return z
 
 
+_towns_warm_ex = None
+
+
+def _towns_warm(key):
+    """The town signs' inputs of map cell key's road tiles fetched on a thread of this process (townentry.Towns.warm:
+    the communes' areas, their village points and land cover; it waits for them as a road tile would, so not in
+    warm_map's own time: the cell's next job starts meanwhile)."""
+    global _towns_warm_ex
+    if _s.md is None or _s.surface is None:
+        return
+    if getattr(_s, "towns", None) is None:
+        _s.towns = townsignsmod.Towns(_s.md, _s.surface)
+    if _towns_warm_ex is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _towns_warm_ex = ThreadPoolExecutor(1, thread_name_prefix="towns-warm")
+
+    def run():
+        try:
+            _s.towns.warm(key)
+        except Exception as e:      # (the tile asks itself, as before)
+            log.debug("warm towns %s: %s: %s", key, type(e).__name__, e)
+    _towns_warm_ex.submit(run)
+
+
+def warm_map(key, layers, veg=True, towns=False, plan=None, due=None):
+    """Map data cell key ((z, x, y)) built into the disk caches ahead of the car (earthd.Server.map_ahead): its
+    layers (MapData.cell) and its vegetation cell (Vegetation.cell, which reads its 3 x 3 neighbours' roads,
+    buildings and water). On a first visit a trees geotile spent ~56 s on its cell's map data and 0.01 s on its
+    trees, and the tiles asked for it only ~200 m before the car at 175 mph. towns: the town signs' inputs of its road
+    tiles too (_towns_warm, behind this call: a road geotile of a cell without them waited up to 45 s for its
+    communes' village points and land cover, 9-14 s at 300 km/h). plan: (anchor id, lat, lon): the cell's road plans
+    too (plan_cell, into the run's plan cache: the grading every road and trees tile of the cell reads its ground
+    through; unplanned, the first trees tile of each new cell waited 3-14 s for them and its road tiles up to 6 s,
+    2026-11-16). due: the time.time() from which the car is about to need the cell (budget.due: this process, work
+    for later otherwise, at the server's own priority from then). Seconds."""
+    import budget
+    with budget.due(due):
+        return _warm_map(key, layers, veg, towns, plan)
+
+
+def _warm_map(key, layers, veg, towns, plan):
+    import vegetation as vegetationmod
+    if _s.md is None:
+        return 0.0
+    from concurrent.futures import ThreadPoolExecutor
+    t0 = time.perf_counter()
+    z, x, y = (int(v) for v in key)
+
+    def one(k, lys):
+        try:
+            _s.md.cell(k, layers=tuple(lys), kind="background")
+        except Exception as e:      # (the tile asks again, on demand)
+            log.debug("warm map %s: %s: %s", k, type(e).__name__, e)
+    # the cell's layers and its 8 neighbours' roads, buildings and water (what Vegetation.cell reads) at once: mostly
+    # downloads; one after another a first-visit cell took 101 s on 2 cores
+    # (the neighbours' infrastructure too: a road tile reads it for the stations, bridges and power lines that reach in
+    # from the next cell, railstations.stations_near: 13 s of a first-visit drive's road tiles waited for it)
+    jobs = [(key, layers)] if layers else []
+    if veg:
+        jobs += [((z, x + dx, y + dy), ("buildings", "roads", "water", "infrastructure"))
+                 for dy in (-1, 0, 1) for dx in (-1, 0, 1) if (dx, dy) != (0, 0)]
+    if jobs:
+        with ThreadPoolExecutor(min(9, len(jobs)), thread_name_prefix="warm-map") as ex:
+            list(ex.map(lambda j: one(*j), jobs))
+    if veg:
+        try:
+            if getattr(_s, "veg", None) is None:
+                v = vegetationmod.Vegetation(_s.md, _s.cache_dir)
+                v.dem = _s.dem
+                v.surface, v.widths = _s.surface, _s.widths
+                _s.veg = v
+            _s.veg.cell(key)
+        except Exception as e:
+            log.debug("warm veg %s: %s: %s", key, type(e).__name__, e)
+    # (after the trees' cell, which the first tiles ask for: a tile that needs the plans before this builds them
+    # itself, as before, and this reads them)
+    if plan is not None:
+        try:
+            plan_cell(*plan, key)
+        except Exception as e:      # (the first tile that reads the cell plans it, as before)
+            log.debug("warm plans %s: %s: %s", key, type(e).__name__, e)
+    if towns:
+        _towns_warm(key)
+    return time.perf_counter() - t0
 def plan_elev(la, lo):
     """The road plans' ground (PlanStore's elev): the DEM at grading.PROFILE_ZOOM with the tunnels' lids
     (tunnellids), as earthd.Server._plan_elev."""
@@ -748,18 +838,28 @@ def _veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
     return path, n, frame, pivot
 
 
+VEG_JOB_SLOW_S = 1.0        # a trees job (veg_geo_many) slower than this is logged
+
+
 def veg_geo_many(aid, lat, lon, zoom, tiles, out_dir, vfs_dir, flat=False):
     """veg_geo of each geotile (gx, gy) of tiles in one job: [its result, or the exception it raised]. A tile whose
     map cell this process has is ~10 ms; one job each, every one waited behind the road tiles in the pool's queue
     (Server.build_veg_geo)."""
     out = []
+    t0, slow = time.perf_counter(), (0.0, None)
     for gx, gy in tiles:
+        t1 = time.perf_counter()
         try:
             out.append(veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat))
         except Exception as e:
             import revisit
             out.append(None if isinstance(e, revisit.StaleMiss) else e)
+        slow = max(slow, (time.perf_counter() - t1, (gx, gy)))
+    dt = time.perf_counter() - t0
+    if dt > VEG_JOB_SLOW_S:         # (where a slow job's time went: one tile's map cell or plans, or all of them)
+        log.info("trees job: %d geotiles in %.1f s, the slowest %s %.1f s", len(tiles), dt, slow[1], slow[0])
     return out
+
 
 def _take_pads(fuel_pads):
     """Use only this job's fuel and frontage pads from earthd.Server.block_fuel_pads."""
@@ -769,13 +869,15 @@ def _take_pads(fuel_pads):
 
 
 def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
-          ground_at=(0.0, 0.0)):
-    """_build, given up (pools.Abandoned) once a teleport leaves anchor aid (_abandon_check)."""
+          ground_at=(0.0, 0.0), rush=None):
+    """_build, given up (pools.Abandoned) once a teleport leaves anchor aid (_abandon_check). rush: the time.time()
+    from which the car needs the block within moments (budget.rush: before the server's other work from then)."""
     _BUILDING[0] += 1               # (the pool's one job thread: _warm_loop reads it)
+    import budget
     import revisit
     depth = revisit.depth()         # (the block cache's scope, blockcache.Build: closed if the build raised)
     try:
-        with _abandon_check(out_dir, aid):
+        with _abandon_check(out_dir, aid), budget.rush(rush):
             return _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name, fuel_pads, provisional,
                           ground_at)
     finally:
@@ -2276,8 +2378,14 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
                 continue
             info = _shape_info(src, e["pos"], what)
             dst = names[what]
-            with open(src, "rb") as fh:
-                _write_bytes(os.path.join(out_dir, dst), fh.read())
+            # (moved there, not read and written again: each shape was created, written, read twice and deleted
+            # here and created and written a second time beside it; the "write" stage was 0.6 s of a road tile's
+            # 4 s on Windows, 32 s of a drive, 2026-11-17)
+            try:
+                staging.replace(src, os.path.join(out_dir, dst))
+            except OSError:             # (the staging folder on another volume, the file held: copied, as before)
+                with open(src, "rb") as fh:
+                    _write_bytes(os.path.join(out_dir, dst), fh.read())
             e["shape"] = f"{vfs_dir}/{dst}"
             e.update(info)
             parts[what] = dict(info)
@@ -2896,19 +3004,30 @@ def _geo_near(gx, gy, lat, lon):
 
 def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
               gas_stations, buried=0.0, lamp_region=None, country=None, content=True, skin=True, exact=None, pole_profile=None,
-              de_junctions=False, towns_on=False, wear=None):
-    """earthd.Server.build_roads_geo here (road-tile pool): geotile (gx, gy)'s content (content: built in its own
+              de_junctions=False, towns_on=False, wear=None, patient_until=None, rush=None):
+    """earthd.Server.build_roads_geo here (road-tile pool; patient_until: the time.time() until which its content may
+    wait for what it can be built without, townentry.patience: the car is that close; None: as long as it takes;
+    rush: the time.time() from which the car reaches the tile within moments, budget.rush: before the server's other
+    work from then): geotile (gx, gy)'s content (content: built in its own
     frame, or from the revisit cache; gzoom its DEM zoom, the rules its own place's), anchor aid's skin (skin) and its
     parts' exact variants for that anchor (exact: {what: {pivot}}, or "auto": those of the content built here that its
     rigid placement would leave off, roads.geo_exact_auto). Returns {"content": (vfs path, chunks, info,
     fuel pads) or None, "skin": (vfs path, info) or None, "exact": {what: vfs path}, "stages": {...}}."""
+    import budget
+    import waits as waitsmod
     watch = _stack_watch(f"road geotile {gx}_{gy}")
     chk = _abandon_check(out_dir, aid)      # (given up once a teleport leaves aid: pools.Abandoned)
     chk.__enter__()
+    waited = waitsmod.collect()             # (what this build's thread waited for, by name: the slow tile's log line)
+    waits = waited.__enter__()
+    first = budget.rush(rush)
+    first.__enter__()
     try:
-        out = {"content": None, "skin": None, "exact": {}, "stages": {}}
+        out = {"content": None, "skin": None, "exact": {}, "stages": {}, "waits": waits}
+        began = time.time()         # (the clock the server's process reads too: its wait before this process took it)
         t0 = time.perf_counter()
         c0 = time.process_time()
+        own0 = time.thread_time()
 
         near = _geo_near(gx, gy, lat, lon)
 
@@ -2916,7 +3035,10 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
             if out["content"] is not None:
                 return out["content"]
             import buildings as buildingsmod
-            with buildingsmod.urgent_photos(near):      # (the tiles round the car: their roof photos first)
+            import townentry
+            # (the tiles round the car: their roof photos first; a tile the car is about to reach: no long waits)
+            patience = None if patient_until is None else max(0.0, patient_until - time.time())
+            with buildingsmod.urgent_photos(near), townentry.patience(patience):
                 return _geo_content(gx, gy, gzoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried,
                                     lamp_region, country, pole_profile, de_junctions=de_junctions, towns_on=towns_on,
                                     wear=wear)
@@ -2942,9 +3064,12 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
         if exact:
             out["exact"] = _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, exact)
         out["time"] = {"content_s": t1 - t0, "content_cpu": c1 - c0, "skin_s": t2 - t1, "skin_cpu": c2 - c1,
-                       "exact_s": time.perf_counter() - t2}
+                       "exact_s": time.perf_counter() - t2, "own_cpu": time.thread_time() - own0,
+                       "began": began, "ended": time.time(), "rush": first.on}
         return out
     finally:
+        first.__exit__()
+        waited.__exit__()
         chk.__exit__()
         watch.cancel()
 
@@ -3623,13 +3748,20 @@ def traffic_geo(gx, gy, gzoom, out_dir, vfs_dir, left_hand=False, mph=True, far=
     return distanttraffic.write(out_dir, vfs_dir, data, "traffic_far" if far else "traffic") if data is not None else None
 
 
-def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
+def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None, due=None):
     """earthd.Server.build_far_geo here (the far buildings' pool): far geotile (gx, gy) of kind ("bldfar": its far
     buildings, the lite mesh of those road geotile (gx, gy) holds, and their streets' lamps; "bldsky": the skyline of a
     SKY_Z square; "brfar": the bridge decks of a BRIDGE_Z square as a piece per road geotile under it), built in its own
     frame (gzoom its DEM zoom, lamp_region its rules) or from the revisit cache (no anchor in the key). Written as
     <prefix>_<key>.json (+ its shapes); returns (vfs path of the JSON, count, frame (lat, lon), pivot, {what: shape
-    file name}) or None when its cells are not at hand yet."""
+    file name}) or None when its cells are not at hand yet. due: the time.time() from which a moving car is about to
+    need it (budget.due: this process, work for later otherwise, at the server's own priority from then)."""
+    import budget
+    with budget.due(due):
+        return _far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region)
+
+
+def _far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region):
     import json
     import buildings as buildingsmod
     import geotiles

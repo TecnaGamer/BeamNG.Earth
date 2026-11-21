@@ -49,6 +49,7 @@ import dnp
 
 import furniture
 import polygon
+import waits
 from overture import LATIN_COLS, REGIONAL_LANGS
 
 log = logging.getLogger("earthd.townsigns")
@@ -487,12 +488,38 @@ def on_agglo(agglo, lat, lon):
     return out
 
 
+_RING_BOXES = {}            # id(ring) -> (ring, its box): _ring_box
+RING_BOXES_MAX = 8192
+
+
+def _ring_box(ring):
+    """(x0, y0, x1, y1) of a ring's vertices, kept per ring (a commune's rings are asked about for every road of
+    every tile near it)."""
+    got = _RING_BOXES.get(id(ring))
+    if got is not None and got[0] is ring:
+        return got[1]
+    r = np.asarray(ring, np.float64).reshape(-1, 2)
+    box = (float(r[:, 0].min()), float(r[:, 1].min()), float(r[:, 0].max()), float(r[:, 1].max()))
+    if len(_RING_BOXES) >= RING_BOXES_MAX:
+        _RING_BOXES.clear()
+    _RING_BOXES[id(ring)] = (ring, box)     # (the ring itself held: its id is its own while it is here)
+    return box
+
+
 def inside(parts, xy):
-    """Which points xy (n, 2) lie inside a polygon of parts (each a list of rings: outer first, then its holes)."""
+    """Which points xy (n, 2) lie inside a polygon of parts (each a list of rings: outer first, then its holes). A part
+    whose outer ring's box the points' box does not touch is not asked: none of them is inside it (a road's points
+    were counted against every vertex of every commune near the tile, 25 000 times in 62 motorway tiles)."""
     xy = np.asarray(xy, np.float64).reshape(-1, 2)
     hit = np.zeros(len(xy), bool)
+    if not len(xy):
+        return hit
+    x0, y0, x1, y1 = float(xy[:, 0].min()), float(xy[:, 1].min()), float(xy[:, 0].max()), float(xy[:, 1].max())
     for rings in parts:
         if not len(rings) or len(rings[0]) < 3:
+            continue
+        b = _ring_box(rings[0])
+        if x0 > b[2] or x1 < b[0] or y0 > b[3] or y1 < b[1]:
             continue
         here = polygon.contains_points(rings[0], xy)
         for hole in rings[1:]:
@@ -1278,16 +1305,44 @@ def _runs(s, st):
     return runs
 
 
-def _changes(line, communes, frame):
-    """[(s, a, b)]: the arc lengths along line (k, 3) where the state (state's, its short stretches taken out:
-    _runs) changes from a to b, each found to within STEP_M / 2**REFINE. The line's whole length is read, its last
-    stretch too, so a road made of several segments has each change in exactly one of them."""
+def _stations(line):
+    """(s, the points there) of _changes' stations along line, None for a line with no length."""
     L = furniture._arclen(line)[-1]
     if L <= 0:
-        return []
+        return None
     s = np.append(np.arange(0.0, L, STEP_M), L)
-    p, _ = furniture._at(line, s)
-    st = state(p[:, :2], communes, frame)
+    return s, furniture._at(line, s)[0]
+
+
+def _states_many(lines, communes, frame):
+    """Per line its _stations and their state, None for a line with no length: every line's stations in one state()
+    (each point's state is its own). A tile's roads asked every commune near it line by line, 15 000 counts of a
+    road's few points against a commune's whole boundary in 62 motorway tiles (2026-11-18)."""
+    got = [_stations(line) for line in lines]
+    have = [g for g in got if g is not None]
+    if not have:
+        return got
+    st = state(np.concatenate([p[:, :2] for _s, p in have]), communes, frame)
+    out, at = [], 0
+    for g in got:
+        if g is None:
+            out.append(None)
+            continue
+        out.append((g[0], st[at:at + len(g[0])]))
+        at += len(g[0])
+    return out
+
+
+def _changes(line, communes, frame, stations=None):
+    """[(s, a, b)]: the arc lengths along line (k, 3) where the state (state's, its short stretches taken out:
+    _runs) changes from a to b, each found to within STEP_M / 2**REFINE. The line's whole length is read, its last
+    stretch too, so a road made of several segments has each change in exactly one of them. stations: the line's of
+    _states_many, when a caller with several lines has them."""
+    if stations is None:
+        stations = _states_many([line], communes, frame)[0]
+    if stations is None:
+        return []
+    s, st = stations
     # (the stretches are of towns: the villages of one German Gemeinde grown together are one, no sign between them)
     town = _towns(communes)
     tk = town[st]
@@ -1494,7 +1549,8 @@ def town_signs(roads, communes, frame, box, left_hand=False, rings=(), mapped=No
         if spec.cls not in SIGN_CLASSES or spec.link or spec.kind != "paved":
             continue
         lines.append((spec, line))
-        changes += [(len(lines) - 1, s, a, b) for s, a, b in _changes(line, communes, frame)]
+    for n, ((_spec, line), stations) in enumerate(zip(lines, _states_many([ln for _sp, ln in lines], communes, frame))):
+        changes += [(n, s, a, b) for s, a, b in _changes(line, communes, frame, stations)]
     signs = []
     if mapped:
         changes, signs = mapped_signs(lines, changes, communes, frame, mapped, urban, mlines)
@@ -2966,6 +3022,55 @@ LANDCOVER_REACH_M = 10000.0    # m: the farthest from a commune's middle its lan
 POINTS_REACH_M = 4000.0
 
 
+# How long the road tile being built may wait for its town signs' inputs. A tile under a parked car waits POINTS_WAIT_S
+# for them (its signs come with it); a tile a fast car reaches in 6 s that waited 45 s for a commune's village points
+# came long after the car (Felix's 300 km/h drives, 2026-11-16: road geotiles 9-14 s in build_tile with 1-2 s of CPU,
+# the road popping in under the car). The caller that knows when the tile is needed says so (patience: earthd
+# Server.geo_patience, blockworker.roads_geo): what is not in by then is left out, the tile not kept (revisit.fault,
+# as any wait that ran out) and built whole for the next visit (latework.py).
+_hurry = threading.local()
+
+
+class patience:
+    """with patience(s): the tile built inside by this thread waits `s` seconds in all for its town signs' inputs
+    and its roofs' photo, and not while other jobs wait for its process (give_way) (None: POINTS_WAIT_S and
+    buildings.ROOF_PHOTO_WAIT_S for each, as without it)."""
+
+    def __init__(self, s):
+        self.s = s
+
+    def __enter__(self):
+        self.old = getattr(_hurry, "until", None)
+        _hurry.until = None if self.s is None else time.monotonic() + max(0.0, float(self.s))
+        return self
+
+    def __exit__(self, *exc):
+        _hurry.until = self.old
+        return False
+
+
+def left(cap):
+    """s a wait of the tile this thread builds may take now for what it can be built without: cap, less inside a
+    patience() that ends sooner (the town signs' inputs, wait_s; the roofs' photo, buildings.RoofPhotoFuture)."""
+    until = getattr(_hurry, "until", None)
+    return cap if until is None else max(0.0, min(cap, until - time.monotonic()))
+
+
+def give_way():
+    """Should a wait of the tile this thread builds inside a patience() end now: other jobs wait for its process
+    (pools.backlog)? A tile the car is 30 s from waited out its roofs' photo in one of the three road processes while
+    the tiles nearer the car waited for one (2026-11-18). Outside a patience() (nobody moving): never."""
+    if getattr(_hurry, "until", None) is None:
+        return False
+    import pools
+    return pools.backlog() > 0
+
+
+def wait_s():
+    """s a wait for a town sign input may take now: POINTS_WAIT_S, less inside a patience() that ends sooner."""
+    return left(POINTS_WAIT_S)
+
+
 class Towns:
     """A process's town signs for its road tiles: the communes of a tile's map cells (mapdata layer "town_areas") with
     their agglomerations, made once per commune from the land cover (surface: surface.Surface) and kept, and the
@@ -2995,12 +3100,15 @@ class Towns:
             # (not again for a while after a wait in vain: a tile's every commune and exit sign asks, the road tile's
             # worker is killed at 300 s)
             now = time.monotonic()
-            deadline = now + (POINTS_WAIT_S if now - self._waited_in_vain > POINTS_WAIT_S else 0.0)
-            while time.monotonic() < deadline and not all(self.md.has(k, "town_points") for k in missing):
-                time.sleep(0.2)
+            wait = wait_s()             # (less for a tile a fast car is about to reach: patience)
+            deadline = now + (wait if now - self._waited_in_vain > POINTS_WAIT_S else 0.0)
+            with waits.waiting("town signs"):
+                while time.monotonic() < deadline and not all(self.md.has(k, "town_points") for k in missing) \
+                        and not give_way():
+                    time.sleep(0.2)
             if not all(self.md.has(k, "town_points") for k in missing):
-                if deadline > now:
-                    self._waited_in_vain = time.monotonic()
+                if deadline > now and wait >= POINTS_WAIT_S:    # (a whole wait in vain; a hurried tile's cut one says
+                    self._waited_in_vain = time.monotonic()     # nothing about the next tile's)
                 revisit.fault()
                 return None
         return [self.md.cell(k, layers=("town_points",), kind="background").layers.get("town_points")
@@ -3055,7 +3163,7 @@ class Towns:
         if not ready[0]:                # (a village's points not cached yet: no signs now, the tile built again)
             return None
         done = [True]
-        deadline = time.monotonic() + POINTS_WAIT_S             # (the tile's one wait for land cover)
+        deadline = time.monotonic() + wait_s()                  # (the tile's one wait for land cover)
 
         def agglo_of(c):
             if c.fid in self._agglo:
@@ -3072,6 +3180,20 @@ class Towns:
             return a
         out = with_agglomerations(communes, agglo_of)
         return out if done[0] else None
+
+    def warm(self, key):
+        """The town signs' inputs of the road tiles of map cell key ((z, x, y)) fetched ahead of the car (the map
+        ahead processes, blockworker.warm_map): communes() of the cell and the eight around it (every tile of the cell
+        reads a part of them: blockworker.TOWNS_MARGIN_M), which reads their town areas, fetches the village points
+        near them and the land cover of their communes, and waits for them as a tile would, here where no tile
+        waits. True when all were there in the end."""
+        import geodesy
+        import mapcells
+        z, x, y = (int(v) for v in key)
+        n = 1 << z
+        keys = [mapcells.CellKey(z, (x + dx) % n, y + dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if 0 <= y + dy < n]
+        lat, lon = mapcells.CellKey(z, x, y).center()
+        return self.communes(geodesy.EnuFrame(lat, lon, 0.0), keys) is not None
 
     def _wait_landcover(self, c, deadline):
         """Fetch the land cover of the map cells over the commune c's box (and AGGLO_MARGIN_M; LANDCOVER_REACH_M at
@@ -3097,11 +3219,13 @@ class Towns:
         missing = [k for k in keys if not self.md.has(k, "landcover")]
         for k in missing:
             self._queue(k, "landcover")
-        while time.monotonic() < deadline and not all(self.md.has(k, "landcover") for k in missing):
-            time.sleep(0.2)
+        with waits.waiting("town signs"):
+            while time.monotonic() < deadline and not all(self.md.has(k, "landcover") for k in missing):
+                time.sleep(0.2)
         if all(self.md.has(k, "landcover") for k in missing):
             return True
-        self._waited_in_vain = time.monotonic()
+        if wait_s() >= POINTS_WAIT_S:   # (not a hurried tile's cut wait: _points)
+            self._waited_in_vain = time.monotonic()
         return False
 
     def _points_of(self, c, near=None):

@@ -189,14 +189,18 @@ end
 --   latency: the last measured heightmap latency, s (the 512² re-check; nil = LATENCY_S)
 -- Returns 'prepare' (+ new cx, cy), 'commit', 'discard' or nil. 'commit' is a request: the caller
 -- runs it in a governor heavy slot (governor.lua), so it may be returned on several frames.
--- Pure: is the block's centre still ahead of a player moving at town speed, the target set by MIN_LEAD (decide)?
+-- Pure: is the block's centre still ahead of a moving player (decide), as far as its target is put ahead: MIN_LEAD at
+-- town speed, the reach where LOOKAHEAD_S goes further (above 187 km/h on the 1 km block: asked for at once there, the
+-- next block was one grid step on, built and then dropped for the one after it, or taken, a move after 128 m and the
+-- next after 384; every second block of a 300 km/h motorway drive was not the one the server had built ahead, and the
+-- car waited at the edge for it, 2026-11-17)? Not in the fast mode (its prepare test is a point ahead of the player).
 function M.centreAhead(px, py, vx, vy, cx, cy)
   vx, vy = vx or 0, vy or 0
   local v2 = vx * vx + vy * vy
-  if M.MIN_LEAD <= 0 or v2 <= M.MIN_LEAD_V * M.MIN_LEAD_V or v2 * M.LOOKAHEAD_S * M.LOOKAHEAD_S >= M.MIN_LEAD * M.MIN_LEAD then
-    return false
-  end
-  return (cx - px) * vx + (cy - py) * vy > 0 and M.cheb(px, py, cx, cy) <= M.MIN_LEAD + M.GRID
+  local _, reach, ahead = mode(vx, vy)
+  if M.MIN_LEAD <= 0 or v2 <= M.MIN_LEAD_V * M.MIN_LEAD_V or ahead > 0 then return false end
+  local lead = v2 * M.LOOKAHEAD_S * M.LOOKAHEAD_S < M.MIN_LEAD * M.MIN_LEAD and M.MIN_LEAD or reach
+  return (cx - px) * vx + (cy - py) * vy > 0 and M.cheb(px, py, cx, cy) <= lead + M.GRID
 end
 
 -- The hard commit distance at a speed: HARD_COMMIT_DIST, nearer where the edge guard would warn sooner (its warning
@@ -259,15 +263,18 @@ function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency)
       end
     end
     -- a prepared centre that would no longer keep the player 600 m inside its edges is useless
-    if pd > reach then return 'discard' end
+    -- (a block taken from the ready set a grid step further on, M.readyReach: kept while that still holds)
+    if pd > reach and not (pending.preferred and M.readyReach(px, py, vx, vy, pending.cx, pending.cy, reach)) then
+      return 'discard'
+    end
     return nil
   end
   -- the prepare test point: the player (fast mode: PREP_AHEAD_FAST_S ahead)
   if M.cheb(px + (vx or 0) * ahead, py + (vy or 0) * ahead, cx, cy) <= M.PREPARE_DIST or now < (retryAt or 0) then
     return nil
   end
-  -- (MIN_LEAD: the block just committed is centred ahead of the player; the box test, symmetric, asked for the next one
-  -- at once, and a prediction made then was overtaken by the bend: the next one once the player is past this centre)
+  -- (the block just committed is centred ahead of the player; the box test, symmetric, asked for the next one at once,
+  -- and a prediction made then was overtaken by the bend: the next one once the player is past this centre)
   if M.centreAhead(px, py, vx, vy, cx, cy) then return nil end
   local tx, ty = M.target(px, py, vx, vy)
   if tx == cx and ty == cy then return nil end -- heading back towards the centre: nothing to gain
@@ -281,7 +288,7 @@ end
 -- next request missed by a grid step or two half the time, and the block asked for was built from scratch (the game
 -- held the car for its ground, Indianapolis 2026-10-30).
 M.ready = {}
-M.READY_STEPS = 2       -- grid steps a ready block may be from the target (Chebyshev)
+M.READY_STEPS = 3       -- grid steps a ready block may be from the target (Chebyshev; 2 until 2026-11-07)
 function M.setReady(list)
   local r = {}
   for _, c in ipairs(list or {}) do
@@ -289,14 +296,31 @@ function M.setReady(list)
   end
   M.ready = r
 end
+-- Pure: is a player at (px, py) moving at (vx, vy) near enough to the ready centre (rx, ry) to take its block? Within
+-- reach on both axes, and a grid step more on an axis where the block lies ahead and the player comes a grid step
+-- nearer within LOOKAHEAD_S, never past REACH_FAST (the fast mode's own reach: the player is that far inside the edge
+-- behind it and drives away from it). The target is the furthest centre within reach, so a block the server built one
+-- grid step further on (its prediction asked a moment later than the mod did) was never within reach: left unused,
+-- its neighbour built from scratch and the car held at the edge 4.2 s (the A2 at Herford, 330 km/h, 2026-11-18).
+function M.readyReach(px, py, vx, vy, rx, ry, reach)
+  local far = min(reach + M.GRID, max(reach, M.REACH_FAST))
+  local function near(p, v, c)
+    local d = c - p
+    if abs(d) <= reach then return true end
+    return abs(d) <= far and d * v > 0 and abs(v) * M.LOOKAHEAD_S >= M.GRID
+  end
+  return near(px, vx or 0, rx) and near(py, vy or 0, ry)
+end
+
 -- Pure (but for M.ready): the ready centre to ask for instead of the target (tx, ty), or nil: within READY_STEPS grid
--- steps of it, keeping the player within reach, not the current centre; the nearest to the target, then the one
--- furthest along the way the player goes.
+-- steps of it, keeping the player within reach (M.readyReach), not the current centre; the nearest to the target, then
+-- the one furthest along the way the player goes.
 function M.preferReady(px, py, vx, vy, tx, ty, cx, cy, reach)
   local best, bd, ba = nil, math.huge, -math.huge
   for _, c in pairs(M.ready) do
     local d = M.cheb(c[1], c[2], tx, ty)
-    if d <= M.READY_STEPS * M.GRID and M.cheb(px, py, c[1], c[2]) <= reach and not (c[1] == cx and c[2] == cy) then
+    if d <= M.READY_STEPS * M.GRID and M.readyReach(px, py, vx, vy, c[1], c[2], reach)
+        and not (c[1] == cx and c[2] == cy) then
       local along = (c[1] - px) * (vx or 0) + (c[2] - py) * (vy or 0)
       if d < bd or (d == bd and along > ba) then best, bd, ba = c, d, along end
     end

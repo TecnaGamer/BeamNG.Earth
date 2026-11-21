@@ -41,7 +41,9 @@ def ground_square(environ=None):
     or 2 (the lighter ground of the Low and Medium quality presets, GitHub #943: the same kilometre in 512² samples, a
     quarter of the .ter to parse at each swap; the launcher sets it from the settings page's groundGrid). Read once, at
     import: every block-size rule below and in the modules using them follows it."""
-    v = (os.environ if environ is None else environ).get("BNGE_GROUND_SQUARE", "").strip()
+    env = os.environ if environ is None else environ
+    # (BNGE_SQUARE: Felix's test switch of before upstream's BNGE_GROUND_SQUARE, still read)
+    v = (env.get("BNGE_GROUND_SQUARE", "") or env.get("BNGE_SQUARE", "")).strip()
     try:
         sq = float(v) if v else 1.0
     except ValueError:

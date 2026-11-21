@@ -46,6 +46,7 @@ import railways as railwaysmod
 import roads as roadsmod
 import roadshape
 import seatiles
+import waits
 
 log = logging.getLogger("earthd.grading")
 
@@ -195,7 +196,14 @@ BATTER_CHUNK = 256          # natural ground samples read at a time where a read
 BATTER_WALL_PAD_M = 2.0     # m round a ray's box a cell's walls are tested against it (_batter_rays)
 ROAD_LIFT = 0.04            # m the physics ground is raised under roads (see Grader.apply)
 BLEND_R = 4.0               # m: roads near each other blend their targets by 1 / (1 + (d / BLEND_R)^2)
-PROFILE_ZOOM = int(os.environ.get("BNE_DEM_ZOOM", "16"))   # DEM zoom of the profiles (one zoom for every caller)
+# DEM zoom of the profiles (one zoom for every caller). With 2 m terrain squares (BNGE_SQUARE=2, whose terrain reads z15:
+# dem.terrain_zoom) z15 too: the profiles at z16 were 1237 of a cold 10 km drive's DEM tiles at 48 N, z16 tiles all of
+# them (4 for each z15 one), for 0.8 m pixels under 4 m vertices smoothed over tens of metres (2026-11-04).
+# BNE_DEM_ZOOM sets it; BNGE_PROFILE_Z16=1: z16 with 2 m squares as before.
+import heightmap as _hm                 # (BNGE_GROUND_SQUARE=2, or BNGE_SQUARE=2 as before)
+_SQUARE2 = _hm.SQUARE == 2.0
+PROFILE_ZOOM = int(os.environ.get("BNE_DEM_ZOOM") or (15 if _SQUARE2 and os.environ.get("BNGE_PROFILE_Z16") != "1"
+                                                      else 16))
 WALL_CUT_M = 2.0            # a road cut deeper than this into the ground: a retaining wall at the core's edge
 WALL_T_M = 0.8              # (roadmesh.retaining_walls) and the ground at its natural height right behind it, over
                             # this; on a 1:2 slope Central Park's sunken transverse was a grassy ditch between its
@@ -7289,7 +7297,7 @@ class _Planner:
         with _STAGE_CROWD_LOCK:         # (their road stages made side by side: none of them claimed, _road_stage)
             _STAGE_CROWD[0] += n
         try:
-            with ThreadPoolExecutor(n, thread_name_prefix="plans") as ex:
+            with ThreadPoolExecutor(n, thread_name_prefix="plans") as ex, waits.waiting("road plans"):
                 list(ex.map(one, missing))
         finally:
             with _STAGE_CROWD_LOCK:

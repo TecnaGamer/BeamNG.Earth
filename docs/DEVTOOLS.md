@@ -190,6 +190,13 @@ level after a console teleport).
   rebase now, rebase distance slider (exists), teleport (exists), reload far field, toggle sky mode
   (real/manual) and time of day, motion-blur hold test, screenshot-with-overlays.
 - **Log**: last 50 mod events (commits, rebases, swaps blocked at the cap, failures) with timestamps.
+- **Loading map**: what the server builds ahead of the car, from above (north up, the car in the middle): the
+  zone it predicts (earthd map_ahead's path by speed and turn, each point's lateral reach; a circle when standing),
+  its map cells coloured missing / queued / loading / ready / on disk / failed, and a white ring where the map data
+  stops being ready along the path ("ready ahead"). Over them the terrain blocks, outlined by state: predicted,
+  queued, building, on its base photo, ready, in use, and red when the game asked for it and it is not ready yet (the
+  car waits; the panel says how long). The panel asks the server every second (`load_map`); the server answers twice
+  a second while asked and stops 3 s after the panel closes.
 
 ## Cost rules
 - Off: nothing per frame. On: <= 0.3 ms per frame with every overlay (budget checked with perfmon,

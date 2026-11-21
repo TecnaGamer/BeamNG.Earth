@@ -76,6 +76,7 @@ import revisit
 import levelways
 import roadsmooth
 import staging
+import waits
 import xproc
 
 log = logging.getLogger("earthd.mapdata")
@@ -1369,7 +1370,8 @@ class MapData:
         for layer, fut, shared in futs:     # all finish before an error is raised (no stray fetches)
             start = time.perf_counter()
             try:
-                results[layer] = fut.result()
+                with waits.waiting("map data"):
+                    results[layer] = fut.result()
             except Exception as e:
                 err = err or e
             finally:
@@ -1461,8 +1463,9 @@ class MapData:
             self._slim.clear()
             self._slim_bytes = 0
         # (the OSM tag shards: ~20 MB each; the station shards too, Codex on #1111, 2026-11-10)
+        # (and the map source's blocks of cells: overture.Reader._block)
         for tags in (self.rail_tags, self.lane_tags, getattr(self, "station_tags", None),
-                     getattr(self, "osm_shards", None)):
+                     getattr(self, "osm_shards", None), getattr(self, "overture", None)):
             if tags is not None:
                 tags.clear_memory()
 

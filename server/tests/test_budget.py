@@ -2,6 +2,7 @@
 the system's out-of-memory guard, 2026-10-20)."""
 import os
 import sys
+import threading
 import unittest
 from unittest import mock
 
@@ -283,12 +284,160 @@ class PriorityTest(unittest.TestCase):
                    "k.GetCurrentProcess.restype=wintypes.HANDLE; k.GetPriorityClass.argtypes=(wintypes.HANDLE,); "
                    "print(budget.lower_priority({n}, {w}), hex(k.GetPriorityClass(k.GetCurrentProcess())))")
             self.assertEqual(self.run_child(get.format(n=10, w=False)), "below normal 0x4000")
-            for n in (3, 6, 9):
-                self.assertTrue(self.run_child(get.format(n=n, w=True)).startswith("None "), "a worker: as inherited")
+            self.assertTrue(self.run_child(get.format(n=3, w=True)).startswith("None "), "a worker: as inherited")
+            for n in (4, 6, 9):     # (the work for later: idle, its own class a share of the time)
+                self.assertEqual(self.run_child(get.format(n=n, w=True)), "idle, its class 1/8 of the time 0x40")
         elif hasattr(os, "nice"):
             # (+3, or up to the ceiling of 19 when the test itself already runs nice: a niced shell's gate run)
             got = self.run_child("import os; b=os.nice(0); budget.lower_priority(3); print(os.nice(0)-b, b)").split()
             self.assertEqual(int(got[0]), min(3, 19 - int(got[1])))
+
+
+class BackgroundTest(unittest.TestCase):
+    """background: the idle class, and the process's own class for BACKGROUND_SHARE of every period (any system:
+    kernel32 stood in for)."""
+
+    class K32:
+        def __init__(self, cls):
+            self.cls, self.calls, self.thread = cls, [], None
+
+        def GetCurrentProcess(self):
+            return -1
+
+        def GetCurrentThread(self):
+            return -2
+
+        def GetPriorityClass(self, h):
+            return self.cls
+
+        def SetPriorityClass(self, h, cls):
+            self.cls = cls
+            self.calls.append(("class", cls))
+            return 1
+
+        def SetThreadPriority(self, h, p):
+            self.thread = p
+            return 1
+
+    def test_its_class_for_a_share_of_the_time(self):
+        k, slept, runs = self.K32(budget.WIN_BELOW_NORMAL), [], []
+        how = budget.background(k, sleep=lambda s: (slept.append(s), k.calls.append(("sleep", s))), rounds=2,
+                                start=runs.append)
+        self.assertEqual(how, "idle, its class 1/8 of the time")
+        self.assertEqual(k.calls, [("class", budget.WIN_IDLE)], "idle at once, before its thread runs")
+        runs[0]()
+        self.assertEqual(k.thread, budget.WIN_THREAD_TIME_CRITICAL)
+        high = budget.BACKGROUND_PERIOD_S * budget.BACKGROUND_SHARE
+        self.assertEqual([c for c in k.calls[2:]],      # (after its own moment of the period: slept[0])
+                         [("class", budget.WIN_BELOW_NORMAL), ("sleep", high), ("class", budget.WIN_IDLE),
+                          ("sleep", budget.BACKGROUND_PERIOD_S - high)] * 2)
+        self.assertLess(slept[0], budget.BACKGROUND_PERIOD_S)
+        self.assertEqual(k.cls, budget.WIN_IDLE)
+
+    def test_work_the_car_is_about_to_need_keeps_its_class(self):
+        k, runs, now = self.K32(budget.WIN_BELOW_NORMAL), [], [1000.0]
+        job = budget.due(1003.0)        # (urgent from 1003 on)
+
+        def sleep(s):
+            k.calls.append(("sleep", s))
+            now[0] += s
+        with mock.patch.object(budget.time, "time", lambda: now[0]), mock.patch.object(budget, "_DUE_NOW", []):
+            budget.background(k, sleep=sleep, rounds=3, start=runs.append)
+            self.assertFalse(budget.pressed())
+            with job:
+                self.assertFalse(budget.pressed(), "not yet")
+                self.assertEqual(k.cls, budget.WIN_IDLE)
+                k.calls.clear()
+                now[0] = 1000.0
+                with mock.patch.object(budget.os, "getpid", lambda: 0):
+                    runs[0]()
+            classes = [c[1] for c in k.calls if c[0] == "class"]
+            # (its share of rounds 1 and 2 ends at 1000.25 and 1002.25: idle again; round 3's at 1004.25: urgent)
+            self.assertEqual(classes, [budget.WIN_BELOW_NORMAL, budget.WIN_IDLE, budget.WIN_BELOW_NORMAL,
+                                       budget.WIN_IDLE, budget.WIN_BELOW_NORMAL])
+            self.assertFalse(budget.pressed(), "done: work for later again")
+            k.cls = budget.WIN_IDLE
+            with budget.due(now[0] - 1.0):
+                self.assertEqual(k.cls, budget.WIN_BELOW_NORMAL, "urgent as it begins: its class at once")
+            with budget.due(None):
+                self.assertFalse(budget.pressed())
+
+    def test_an_idle_process_stays_as_it_is(self):
+        k, runs = self.K32(budget.WIN_IDLE), []
+        self.assertIsNone(budget.background(k, start=runs.append))
+        self.assertEqual((k.calls, runs), ([], []))
+
+    def test_only_the_work_for_later(self):
+        self.assertGreater(budget.BACKGROUND_NICE, 3, "the road tiles' and the trees' workers keep the server's class")
+
+
+class RushTest(unittest.TestCase):
+    """rush: the calling thread one step above the server's others while a job the car needs by now runs."""
+
+    def run_with(self, body):
+        levels = []
+        with mock.patch.object(budget, "_thread_priority", lambda level: levels.append(level) or True), \
+                mock.patch.object(budget.time, "time", lambda: 1000.0), mock.patch.object(budget, "_RUSH", threading.local()):
+            body()
+        return levels
+
+    def test_from_its_moment_on(self):
+        def body():
+            with budget.rush(1000.0) as r:
+                self.assertTrue(r.on)
+        self.assertEqual(self.run_with(body), [budget.WIN_THREAD_ABOVE_NORMAL, budget.WIN_THREAD_NORMAL])
+
+    def test_not_before_and_not_work_for_later(self):
+        def body():
+            with budget.rush(1000.5) as r:
+                self.assertFalse(r.on)
+            with budget.rush(None) as r:
+                self.assertFalse(r.on)
+        self.assertEqual(self.run_with(body), [])
+
+    def test_one_inside_another(self):
+        def body():
+            with budget.rush(990.0):
+                with budget.rush(1001.0):
+                    pass
+                with budget.rush(995.0):
+                    pass
+        self.assertEqual(self.run_with(body), [budget.WIN_THREAD_ABOVE_NORMAL, budget.WIN_THREAD_NORMAL],
+                         "raised once, lowered when the outer one ends")
+
+    def test_back_to_normal_when_the_job_fails(self):
+        def body():
+            with self.assertRaises(KeyError):
+                with budget.rush(0.0):
+                    raise KeyError("x")
+        self.assertEqual(self.run_with(body)[-1], budget.WIN_THREAD_NORMAL)
+
+    def test_a_priority_that_cannot_be_set_does_not_stop_the_job(self):
+        def no(level):
+            raise OSError("no")
+        with mock.patch.object(budget, "_thread_priority", no), mock.patch.object(budget, "_RUSH", threading.local()):
+            with budget.rush(0.0) as r:
+                self.assertTrue(r.on)
+
+    def test_the_threads_own_step(self):
+        if sys.platform != "win32":
+            self.assertFalse(budget._thread_priority(budget.WIN_THREAD_ABOVE_NORMAL))
+            return
+        got = []
+
+        def run():          # (a thread of its own: the test runner's keeps its priority)
+            import ctypes
+            from ctypes import wintypes
+            k = ctypes.WinDLL("kernel32")
+            k.GetCurrentThread.restype = wintypes.HANDLE
+            k.GetThreadPriority.argtypes = (wintypes.HANDLE,)
+            with budget.rush(0.0):
+                got.append(k.GetThreadPriority(k.GetCurrentThread()))
+            got.append(k.GetThreadPriority(k.GetCurrentThread()))
+        t = threading.Thread(target=run)
+        t.start()
+        t.join()
+        self.assertEqual(got, [1, 0])
 
 
 class RaiseThreadTest(unittest.TestCase):

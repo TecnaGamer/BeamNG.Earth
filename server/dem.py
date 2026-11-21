@@ -55,6 +55,7 @@ import netfetch
 import polardem
 import revisit
 import staging
+import waits
 import xproc
 
 log = logging.getLogger("earthd.dem")
@@ -250,6 +251,14 @@ def zoom_for(lat, pixel_m, max_zoom=MAX_ZOOM):
     """Smallest zoom whose 512 px tile pixels are <= pixel_m at this latitude."""
     c = 40075016.686 * max(dmath.cos(math.radians(min(abs(lat), MAX_LAT))), 1e-6)
     return int(min(max_zoom, max(0, math.ceil(dmath.log2(c / (TILE * pixel_m))))))
+
+
+def terrain_zoom(lat):
+    """The near terrain's DEM zoom: pixels of about its squares (heightmap.SQUARE). 2 m squares at z16's 0.75 m took four
+    times the tiles of z15's 1.5 m for detail the terrain drops: on the A13 (2026-11-03) 5145 of a drive's 7026 tile
+    loads, 2043 of its 3454 DEM downloads (110 of 193 MB) and 1 MB of decoded mirror per tile."""
+    import heightmap
+    return zoom_for(lat, 1.25 * heightmap.SQUARE, FINE_ZOOM)
 
 
 def decode_terrarium(data, size):
@@ -1617,7 +1626,8 @@ class Dem:
         if progress:
             progress(done, len(keys))
         for k, fut in futs.items():
-            out[k] = fut.result()[0]        # (its faults are this reader's: revisit.bind)
+            with waits.waiting("elevation"):
+                out[k] = fut.result()[0]        # (its faults are this reader's: revisit.bind)
             done += 1
             if progress:
                 progress(done, len(keys))
