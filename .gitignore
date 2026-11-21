@@ -20,6 +20,13 @@ docs/research/*.jsonl
 
 # agent worktrees
 .claude/
+!/.claude/
+/.claude/*
+!/.claude/skills/
+/.claude/skills/*
+!/.claude/skills/port-review/
+/.claude/skills/port-review/*
+!/.claude/skills/port-review/SKILL.md
 tools/gcpatch/build/
 docs/research/streetview/
 docs/research/ortho/
