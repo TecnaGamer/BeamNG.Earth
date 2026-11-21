@@ -175,20 +175,24 @@ def roads_in_window(feats, raw, window):
     """Cache ground road bounds with the decoded map cell. A new lane or anchor projection replaces the index."""
     cached = getattr(feats, "_pl_road_bounds", None)
     if cached is None or cached[0] is not raw:
-        rows, bounds = [], []
-        for fid, (_, xy, meta, _, _, skips, _) in raw.items():
-            if skips or len(xy) < 2:
-                continue
-            spec = SimpleNamespace(width=2*meta[0], dir=meta[1], oneway=bool(meta[1]))
-            rows.append((fid, spec, xy, 0.))
-            bounds.append((*xy[:, :2].min(axis=0), *xy[:, :2].max(axis=0)))
-        cached = raw, rows, np.asarray(bounds).reshape(-1, 4).T
+        rows = [(fid, xy, meta) for fid, (_, xy, meta, _, _, skips, _) in raw.items()
+                if not skips and len(xy) >= 2]
+        bounds = np.empty((0, 4), dtype=np.float64)
+        if rows:
+            xy = np.concatenate([line[:, :2] for _, line, _ in rows])
+            starts = np.cumsum([0] + [len(line) for _, line, _ in rows[:-1]])
+            bounds = np.column_stack((np.minimum.reduceat(xy, starts, axis=0),
+                                      np.maximum.reduceat(xy, starts, axis=0)))
+        cached = raw, rows, bounds.T
         feats._pl_road_bounds = cached
     _, rows, (west, south, east, north) = cached
     x0, y0, x1, y1 = window
     pad = plsigns.REACH
     selected = (west <= x1+pad) & (south <= y1+pad) & (east >= x0-pad) & (north >= y0-pad)
-    return (rows[i] for i in np.flatnonzero(selected))
+    for i in np.flatnonzero(selected):
+        fid, xy, meta = rows[i]
+        spec = SimpleNamespace(width=2*meta[0], dir=meta[1], oneway=bool(meta[1]))
+        yield fid, spec, xy, 0.
 
 
 def post_layout(md, frame, bounds, elev, context, left_hand, mph, local_roads=()):

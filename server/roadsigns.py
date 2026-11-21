@@ -251,12 +251,17 @@ def living_ids(feats, frame, urban, widths, left_hand):
     return got
 
 
+# Ring directions keep only a few feature IDs. Retain more geotile frames than the full sign geometry.
+_RING_CELL_FRAMES = 16
+
+
 def cell_rings(feats, frame, urban, widths, left_hand, mph, rows):
     """{fid: way round} of the roundabout rings made of the roads of one map cell (islands.ring_directions: the same loops the
     road tiles and the graph see), kept on the cell. A ring whose roads are in two cells is not seen: every road is whole in
     each cell it crosses, so it is lost only when no cell holds all of it. (Asked per tile for the roads round it, it was 60 %
     of a tile's time, 2026-11-07.)"""
-    key = (frame.lat0, frame.lon0, urban, widths, bool(left_hand), bool(mph))
+    key = (frame.lat0, frame.lon0, getattr(frame, "h0", 0.), urban, widths, bool(left_hand), bool(mph),
+           feats.__dict__.get("_lanes_built"), getattr(feats, "_road_revision", 0))
     with _lock:
         memo = feats.__dict__.setdefault('_rsign_rings', {})
         got = memo.get(key)
@@ -264,7 +269,7 @@ def cell_rings(feats, frame, urban, widths, left_hand, mph, rows):
         roads_list = [(fid, types.SimpleNamespace(oneway=bool(r[2][1]), dir=int(r[2][1])), r[1], 0.0) for fid, r in rows.items()]
         got = dict(islands.ring_directions(roads_list, left_hand)) if roads_list else {}
         with _lock:
-            if len(memo) >= speedsigns.CELL_FRAMES:
+            if len(memo) >= _RING_CELL_FRAMES:
                 memo.pop(next(iter(memo)))
             memo[key] = got
     return got
