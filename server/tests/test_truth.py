@@ -31,7 +31,9 @@ TODAY = {
         not_built=3,            # (the way is a path in the map: Earth builds none)
         shape_p95=4.9,          # m: the Sihl viaduct's decks, solved up to 6.3 m off the real ones (was 7.9)
         under_laws=2, steeper=2,
-        dug=(7, 8),             # per mille of the ground roads' points, 3.3 m at the deepest
+        dug=(9, 8),             # per mille of the ground roads' points, 3.3 m at the deepest. Without the shapes 9 (was 7): a road
+                                # crossing under a long deck near its end dips by the deck's climb from that end (grading.UNDER_LONG_ON,
+                                # BNE_UNDERPASS_LONG: the deck there is only as high as it climbs, trucks stood in it); with them 8
         filled=(14, 14),        # 2.3 m at most (was 6.5): the motorway at its tunnels' mouths. The mouths are right (floor
                                 # 449.4 / 436.3 against the survey's 450.6 / 436); the roads beside the tunnel's low arch were
                                 # lifted to its cover (5.8 m) until the cover was asked over the tube's own footprint
