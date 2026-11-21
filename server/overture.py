@@ -35,6 +35,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import Future
 from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
@@ -85,6 +86,9 @@ RG_DIR = "rows"                 # the row groups' local copies (Reader._local_ro
 RG_ROWS = 2048                  # rows a row group of a local copy: a cell's bbox filter skips the others by their stats
 RG_WAIT_S = 60.0                # a copy another process makes is waited for this long
 META_FILE = "rowgroups.json"     # a file's parsed row groups, beside its cached blocks (_meta_load)
+BLOCK_Z = 12                    # a layer's rows are read for the cell's parent at this zoom at once (Reader._block)
+BLOCK_ROWS = 50_000             # rows of such blocks kept per Reader (the last block whatever its size)
+PER_CELL = {"roads"}            # layers read a cell at a time: their query asks the database more than their rows (_road_rules)
 BOX_ROWS = 2_000_000           # row groups' bbox rows kept per Reader (_plan: ~16 B a row as float32)
 FETCH_THREADS = 8               # parallel range requests per Reader (Overture's hosts allow 8 at once each)
 FOOTER_GUESS = 256 * 1024       # bytes read from a file's end first for its footer (one block)
@@ -720,6 +724,49 @@ def _number_rows(con, dedup_if_repeated=None):
               QUALIFY row_number() OVER (PARTITION BY id ORDER BY version DESC, wkb) = 1)""")
 
 
+def _geometry(spec, wkb, cx, cy):
+    """(kind, parts) of a row: its WKB decoded, or a point at its bbox centre for a layer that reads no geometry."""
+    if spec.get("geometry") is False:
+        return (mg.POINT, [[np.array([[cx, cy]], np.float64)]])
+    return mg.parse_wkb(wkb)
+
+
+def _thinned(spec, at, r, g):
+    """Whether the layer's spec thins row r's geometry g (its `simplify`: the counties' outlines)."""
+    col, values = spec["simplify"]
+    return r[at[col]] in values and g[0] == mg.POLYGON and r[at["country"]] not in spec.get("whole", ())
+
+
+class _Block:
+    """A layer's rows of a block of cells (Reader._block). rows: (names' columns..., version, [[dataset, license]],
+    the row group's copy), box: their bbox (x0, x1, y0, y1) arrays in the files' type. Their geometries are decoded once, by the first cell
+    that shows them (a commune's outline lies in every cell it touches)."""
+
+    def __init__(self, names, rows, box, spec, groups=(), group=None):
+        self.names, self.rows, self.box, self.spec = tuple(names), rows, box, spec
+        self.groups, self.group = groups, group     # (file, bbox statistics) of the rows' row groups; each row's
+        self.at = {c: i for i, c in enumerate(self.names)}
+        self._geoms, self._simple = {}, {}
+
+    def rank(self, i):
+        """Row i's place among the rows of its id: the highest version first, then the first geometry (_number_rows)."""
+        r = self.rows[i]
+        v, wkb = r[len(self.names)], r[self.at["wkb"]]
+        return (v is None, -(v or 0), wkb is None, wkb or b"")
+
+    def geom(self, i, r):
+        g = self._geoms.get(i)
+        if g is None:
+            g = self._geoms[i] = _geometry(self.spec, r[self.at["wkb"]], r[self.at["cx"]], r[self.at["cy"]])
+        return g
+
+    def simple(self, i, r, g):
+        out = self._simple.get(i)
+        if out is None:
+            out = self._simple[i] = (mg.POLYGON, mg.simplify_polygon_parts(g[1], SIMPLIFY_DEG))
+        return out
+
+
 class Reader:
     """Overture layers per cell (see the module docstring). threads: DuckDB threads per query."""
 
@@ -737,6 +784,9 @@ class Reader:
         self._boxes = OrderedDict()     # (path, row group) -> its rows' bbox (x0, x1, y0, y1) arrays (_plan)
         self._box_rows = 0
         self._hints = None              # "theme/type" -> the largest footer seen (_footer_guess)
+        self._blocks = OrderedDict()    # (layer, block cell) -> _Block (_block)
+        self._blocks_n = 0
+        self._making = {}               # (layer, block cell) -> Future of the thread reading it
 
     def close(self):
         self.pool.shutdown(wait=False)
@@ -868,14 +918,26 @@ class Reader:
 
     def query(self, layer, cell, kind="demand"):
         """The layer's Features of one cell (lon/lat only; mapdata localises and marks `own`), and
-        {(dataset, license): count} of the sources of its features."""
+        {(dataset, license): count} of the sources of its features. Its rows come from the cell's block (_block),
+        read once for all its cells."""
         spec = LAYERS[layer]
         bounds = cell.bounds()
+        if layer not in PER_CELL and getattr(cell, "z", 0) > BLOCK_Z:
+            blk = self._block(layer, spec, cell.parent(BLOCK_Z), kind)
+            if blk is not None:
+                return self._from_block(layer, blk, bounds, kind)
+        out = self._read(layer, spec, bounds, kind, cell, lambda con, proto, paths, files, spec, rows: self._run(
+            con, proto, paths, layer, spec, bounds, rows, files, kind))
+        return (empty(layer), {}) if out is None else out
+
+    def _read(self, layer, spec, bounds, kind, what, fn):
+        """fn(con, proto, paths, files, spec, rows)'s answer with a connection to the layer's files that touch bounds,
+        their row groups there planned and fetched (rows: _plan's); None when no row lies there."""
         t0 = time.perf_counter()
         hits = self.index.files(spec["theme"], spec["type"], bounds, kind)
         t1 = time.perf_counter()
         if not hits:
-            return empty(layer), {}
+            return None
         files = {f"{spec['theme']}/{spec['type']}/{name}": self._remote(spec["theme"], spec["type"], name, urls, size)
                  for name, urls, size in hits}
         con, proto, errors = self._connect(files, kind)
@@ -883,11 +945,10 @@ class Reader:
             paths = sorted(files)
             rows = self._plan(con, proto, paths, files, spec, bounds, kind)
             if not rows:
-                return empty(layer), {}         # no row of these files lies in the cell
+                return None                     # no row of these files lies there
             t2 = time.perf_counter()
-            out = self._run(con, proto, paths, layer, tolerant(spec, getattr(_PLAN, "present", None), layer), bounds,
-                            rows, files, kind)
-            log.debug("mapdata %s %s: index %.2f s, plan %.2f s, query %.2f s", layer, cell, t1 - t0, t2 - t1,
+            out = fn(con, proto, paths, files, tolerant(spec, getattr(_PLAN, "present", None), layer), rows)
+            log.debug("mapdata %s %s: index %.2f s, plan %.2f s, query %.2f s", layer, what, t1 - t0, t2 - t1,
                       time.perf_counter() - t2)
             return out
         except Exception as e:
@@ -903,6 +964,134 @@ class Reader:
             raise
         finally:
             con.close()
+
+    # --- a block of cells at once --------------------------------------------------------------
+    def _block(self, layer, spec, bcell, kind):
+        """The layer's rows of the block of cells bcell (_Block), read once and kept (BLOCK_ROWS): a cell's query
+        opened its own database, planned and scanned the same row groups' copies as its neighbours' for a handful of
+        rows, 25-75 ms of CPU each (the town signs' areas and villages, 216 queries for a motorway's 20 map cells and a
+        third of the map ahead's CPU, 2026-11-17). None when its rows cannot be read at once (no local copies: a cell
+        at a time, as before)."""
+        k = (layer, bcell)
+        while True:
+            with self._lock:
+                blk = self._blocks.get(k)
+                if blk is not None:
+                    self._blocks.move_to_end(k)
+                    return blk
+                fut = self._making.get(k)
+                mine = fut is None
+                if mine:
+                    fut = self._making[k] = Future()
+            if mine:
+                break
+            try:
+                return fut.result()
+            except Exception:           # (its reader's own failure, a prefetch the hosts had no room for: read here)
+                continue
+        try:
+            bounds = bcell.bounds()
+            blk = self._read(layer, spec, bounds, kind, bcell, lambda con, proto, paths, files, spec, rows:
+                             self._block_read(con, layer, spec, bounds, rows, files, kind))
+            if blk is None:
+                blk = _Block((), [], tuple(np.zeros(0, np.float32) for _ in range(4)), spec)
+        except BaseException as e:
+            with self._lock:
+                del self._making[k]
+            fut.set_exception(e)
+            raise
+        with self._lock:
+            del self._making[k]
+            if blk is not False:
+                self._blocks[k] = blk
+                self._blocks_n += len(blk.rows)
+                while len(self._blocks) > 1 and self._blocks_n > BLOCK_ROWS:
+                    self._blocks_n -= len(self._blocks.popitem(last=False)[1].rows)
+        blk = None if blk is False else blk
+        fut.set_result(blk)
+        return blk
+
+    def clear_memory(self):
+        """Drop the blocks of cells kept in memory (mapdata.MapData.clear_memory: a process short of memory); a cell's
+        next query reads its block again."""
+        with self._lock:
+            self._blocks.clear()
+            self._blocks_n = 0
+
+    def _block_read(self, con, layer, spec, bounds, rows, files, kind):
+        """_Block of the layer's rows in bounds from the row groups rows' local copies; False without them."""
+        try:
+            local = self._local_rows(con, layer, spec, rows, files, kind)
+        except Exception as e:      # (a full disk, DuckDB's own errors: a cell at a time, from the files)
+            log.debug("mapdata %s: local row groups: %s: %s", layer, type(e).__name__, e)
+            return False
+        if not local:
+            return False
+        # (a cell's own query reads the row groups whose file's box and whose bbox statistics touch it, both compared in
+        # double, not the rows' float32: each row with its row group, for the same test per cell)
+        groups, at = [], {}
+        with self._lock:
+            for (uri, first, _last), f in zip(rows, local):
+                path = uri.split("://", 1)[-1]
+                g = next((g for g in self._meta.get(path, {}).values() if g["first"] == first), None)
+                if g is None:
+                    return False
+                stats = []
+                for leaf, i, default in (("xmin", 0, -1e9), ("xmax", 1, 1e9), ("ymin", 0, -1e9), ("ymax", 1, 1e9)):
+                    try:
+                        stats.append(float(g["bbox"][leaf][i]))
+                    except (KeyError, TypeError, ValueError):
+                        stats.append(default)
+                at[os.path.abspath(f)] = len(groups)
+                groups.append((path, tuple(stats)))
+        lon0, lat0, lon1, lat1 = bounds
+        where = f" AND ({spec['where']})" if spec.get("where") else ""
+        con.execute(f"""CREATE TEMP TABLE s AS SELECT * FROM read_parquet([{", ".join(f"'{_q(f)}'" for f in local)}],
+                filename = true)
+              WHERE bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND bbox.ymin <= {lat1!r}
+                AND bbox.ymax >= {lat0!r}{where}""")
+        names = ("id", "wkb", "cx", "cy") + tuple(c for k in ("text", "float", "bool") for c in spec.get(k, ()))
+        got = con.execute("""SELECT bbox.xmin AS x0, bbox.xmax AS x1, bbox.ymin AS y0, bbox.ymax AS y1
+              FROM s ORDER BY rowid""").fetchnumpy()
+        box = tuple(np.ascontiguousarray(np.ma.filled(np.ma.asarray(got[c]), np.nan)) for c in ("x0", "x1", "y0", "y1"))
+        data = con.execute(f"""SELECT {', '.join(names)}, version, list_transform(sources, x -> [x.dataset, x.license]),
+              filename FROM s ORDER BY rowid""").fetchall()
+        group = np.array([at[os.path.abspath(r[-1])] for r in data], np.int64)
+        return _Block(names, data, box, spec, groups, group)
+
+    def _from_block(self, layer, blk, bounds, kind):
+        """query()'s answer for the cell with bounds from its block's rows: the rows of the files and row groups the
+        cell's own query reads (_plan) whose box touches the cell (compared in the column's own type, as DuckDB
+        compares it), one per id (its highest version, then its first geometry) in id order, as _run's statements give
+        them."""
+        rows, spec = blk.rows, blk.spec
+        if not rows:
+            return empty(layer), {}
+        lon0, lat0, lon1, lat1 = bounds
+        x0, x1, y0, y1 = blk.box
+        t = x0.dtype.type
+        own = {f"{spec['theme']}/{spec['type']}/{name}"
+               for name, _, _ in self.index.files(spec["theme"], spec["type"], bounds, kind)}
+        read = np.array([path in own and a <= lon1 and b >= lon0 and c <= lat1 and d >= lat0
+                         for path, (a, b, c, d) in blk.groups], bool)
+        best = {}
+        for i in np.flatnonzero((x0 <= t(lon1)) & (x1 >= t(lon0)) & (y0 <= t(lat1)) & (y1 >= t(lat0))
+                                & read[blk.group]).tolist():
+            j = best.setdefault(rows[i][0], i)
+            if j != i and blk.rank(i) < blk.rank(j):
+                best[rows[i][0]] = i
+        pick = [best[k] for k in sorted(best, key=lambda v: (v is None, v or ""))]
+        feats = self._features(layer, spec, bounds, blk.names, [rows[i] for i in pick],
+                               lambda n, r: blk.geom(pick[n], r), (lambda n, r, g: blk.simple(pick[n], r, g))
+                               if not spec["clip"] else None)[0]
+        count = {}
+        for i in pick:
+            for ds, lic in rows[i][-2] or ():
+                count[(ds, lic)] = count.get((ds, lic), 0) + 1
+        sources = {}
+        for ds, lic in sorted(count, key=lambda v: (v[0] is None, v[0] or "", v[1] is None, v[1] or "")):
+            sources[(ds or "", lic or "")] = count[(ds, lic)]
+        return feats, sources
 
     # --- fetch planning ------------------------------------------------------------------------
     def _parallel(self, tasks):
@@ -1170,12 +1359,27 @@ class Reader:
         _number_rows(con)
         names = ["id", "wkb", "cx", "cy"] + [c for k in ("text", "float", "bool") for c in spec.get(k, ())]
         rows = con.execute(f"SELECT {', '.join(names)} FROM t ORDER BY fi").fetchall()
+        feats, keep, fmap = self._features(layer, spec, bounds, names, rows)
+        if layer == "roads":
+            self._road_rules(con, feats, keep, fmap)
+        sources = {}
+        for ds, lic, n in con.execute("""SELECT s.dataset, s.license, count(*) FROM
+                (SELECT unnest(sources) AS s FROM t) GROUP BY ALL ORDER BY 1, 2""").fetchall():
+            sources[(ds or "", lic or "")] = int(n)
+        return feats, sources
+
+    @staticmethod
+    def _features(layer, spec, bounds, names, rows, geom=None, simple=None):
+        """(Features, keep, fmap) of a cell's rows (names: their columns), one per id in id order: their geometries
+        decoded, cut to the cell and thinned as the layer's spec says. keep: the rows that have a feature, fmap: a row's
+        feature. geom(n, row), simple(n, row, geometry): row n's decoded and its thinned geometry where the caller
+        keeps them (a block's rows, _Block)."""
         at = {c: i for i, c in enumerate(names)}
         ids = mg.text_column([r[at["id"]] for r in rows])
-        if spec.get("geometry") is False:     # (a point at the bbox centre: the geometry column is never read)
-            geoms = [(mg.POINT, [[np.array([[r[at["cx"]], r[at["cy"]]]], np.float64)]]) for r in rows]
+        if geom is not None:
+            geoms = [geom(n, r) for n, r in enumerate(rows)]
         else:
-            geoms = [mg.parse_wkb(r[at["wkb"]]) for r in rows]
+            geoms = [_geometry(spec, r[at["wkb"]], r[at["cx"]], r[at["cy"]]) for r in rows]
         clipped = np.zeros(len(rows), bool)
         if spec["clip"]:
             keep = []
@@ -1189,11 +1393,10 @@ class Reader:
         else:
             keep = np.ones(len(rows), bool)
         if spec.get("simplify"):
-            col, values = spec["simplify"]
-            whole = spec.get("whole", ())
             for i, r in enumerate(rows):
-                if r[at[col]] in values and geoms[i][0] == mg.POLYGON and r[at["country"]] not in whole:
-                    geoms[i] = (mg.POLYGON, mg.simplify_polygon_parts(geoms[i][1], SIMPLIFY_DEG))
+                if _thinned(spec, at, r, geoms[i]):
+                    geoms[i] = simple(i, r, geoms[i]) if simple is not None else (
+                        mg.POLYGON, mg.simplify_polygon_parts(geoms[i][1], SIMPLIFY_DEG))
         feats = mg.build(layer, ids[keep], [g for g, k in zip(geoms, keep) if k])
         feats.clipped = clipped[keep]
         fmap = np.cumsum(keep) - 1          # old feature index -> new (rows dropped by clipping: unused)
@@ -1206,13 +1409,7 @@ class Reader:
             feats.attrs[c] = mg.float_column([r[at[c]] for r in sel])
         for c in spec.get("bool", ()):
             feats.attrs[c] = mg.bool_column([r[at[c]] for r in sel])
-        if layer == "roads":
-            self._road_rules(con, feats, keep, fmap)
-        sources = {}
-        for ds, lic, n in con.execute("""SELECT s.dataset, s.license, count(*) FROM
-                (SELECT unnest(sources) AS s FROM t) GROUP BY ALL ORDER BY 1, 2""").fetchall():
-            sources[(ds or "", lic or "")] = int(n)
-        return feats, sources
+        return feats, keep, fmap
 
     @staticmethod
     def _road_rules(con, feats, keep, fmap):

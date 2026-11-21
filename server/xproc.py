@@ -29,6 +29,8 @@ import threading
 import time
 import uuid
 
+import waits
+
 log = logging.getLogger("earthd.xproc")
 
 STALE_S = 120.0
@@ -429,7 +431,8 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_not
         if waited and _cancelled():
             import pools
             raise pools.Abandoned()
-        time.sleep(POLL_S)
+        with waits.waiting("another process"):
+            time.sleep(POLL_S)
         got = ready()
         if got is not None:
             return got, False

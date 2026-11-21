@@ -138,6 +138,10 @@ RAW_MAGIC = 0x53424b31          # "1KBS": the file's first int32 (then block px,
 RAW_HEAD = 5                    # int32s before the index
 
 
+_RAW_SHIFT, _RAW_MASK = RAW_BLOCK_PX.bit_length() - 1, RAW_BLOCK_PX - 1      # (a power of two: _Blocks' lookups)
+assert 1 << _RAW_SHIFT == RAW_BLOCK_PX
+
+
 def _raw_path(p):
     return p[:-4] + ".rawb.npy" if p else None
 
@@ -154,8 +158,7 @@ class _Blocks:
     def __getitem__(self, key):
         j, i = key
         j, i = np.asarray(j), np.asarray(i)
-        b = RAW_BLOCK_PX
-        return self.data[self.idx[j // b, i // b], j % b, i % b]
+        return self.data[self.idx[j >> _RAW_SHIFT, i >> _RAW_SHIFT], j & _RAW_MASK, i & _RAW_MASK]
 
     def __array__(self, dtype=None, copy=None):
         m, b = self.idx.shape[0], RAW_BLOCK_PX
@@ -607,6 +610,7 @@ class SeaCarver:
         river = np.zeros((n, n), bool)
         lake = np.full((n, n), -1, np.int32)
         lake_ids = []
+        boxes = {}                      # a lake's index -> the box (j0, j1, i0, i1) its outlines were drawn in
         around = [(dx, dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if (dx, dy) != (0, 0)]
         with ThreadPoolExecutor(FETCH_THREADS, thread_name_prefix="sea-water") as ex:     # (side by side)
             got = dict(zip(around, ex.map(lambda d: self._water((mapcells.ZOOM, x + d[0], y + d[1])), around)))
@@ -632,9 +636,12 @@ class SeaCarver:
                         gid = str(f.ids[i])
                         if gid not in lake_ids:
                             lake_ids.append(gid)
-                        m = np.zeros((n, n), bool)
-                        self._rasterise(f, i, m, ox, oy)
-                        lake[m] = lake_ids.index(gid)
+                        k = lake_ids.index(gid)
+                        for j0, j1, i0, i1, inside in self._windows(f, i, n, ox, oy):
+                            lake[j0:j1, i0:i1][inside] = k
+                            b = boxes.get(k)
+                            boxes[k] = (j0, j1, i0, i1) if b is None else (min(b[0], j0), max(b[1], j1),
+                                                                           min(b[2], i0), max(b[3], i1))
         lat_c = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 0.5) / (1 << mapcells.ZOOM)))))
         px = _px_m(lat_c)
         level = np.full((n, n), np.nan, np.float32)
@@ -643,24 +650,35 @@ class SeaCarver:
         river &= ~sea & (lake < 0)
         outline = river.copy()          # every river outline (riverlines.py measures widths across it)
         through = self._river_line_px(x, y, ox, oy, n) if (self.dem is not None and lake_ids) else None
+        # each lake in its own box of the raster, with the room its neighbourhoods look at (_shore_ground's ring,
+        # _touches' reach) and on the coarse DEM's lattice (_coarse_dem): the same pixels, levels and floors as over
+        # the whole raster. Every pond took a dozen passes over all 1.2 million pixels, ~26 ponds a cell: half of a
+        # cell's 0.2 s, 103 cells in a 12 km motorway drive, a tenth of the whole server's CPU (2026-11-17).
+        pad = max(SHORE_RING_PX[1] + 2, JOIN_SEA_PX + 1)
         for k in range(len(lake_ids)):
-            m = lake == k
-            if through is not None and (m & through).any():
-                river |= m              # a river runs through it (a pool behind a dam, water=river): it
+            b = boxes.get(k)
+            if b is None:               # (an outline with no pixel in the raster)
+                continue
+            j0 = max(0, (b[0] - pad) // RIVER_DEM_STEP * RIVER_DEM_STEP)
+            i0 = max(0, (b[2] - pad) // RIVER_DEM_STEP * RIVER_DEM_STEP)
+            w = (slice(j0, min(n, b[1] + pad)), slice(i0, min(n, b[3] + pad)))
+            m = lake[w] == k
+            if through is not None and (m & through[w]).any():
+                river[w] |= m           # a river runs through it (a pool behind a dam, water=river): it
                 continue                # flows, as the river (River objects), not a still lake tile
-            lv = self._lake_level(m, ox, oy, px, wet=sea | river | (lake >= 0))
+            lv = self._lake_level(m, ox + i0, oy + j0, px, wet=sea[w] | river[w] | (lake[w] >= 0))
             if lv is None:
                 continue
-            if SEA_LO <= lv <= SEA_HI and _touches(m, sea, JOIN_SEA_PX):
-                sea |= m                # a lagoon, a tidal pond: part of the sea
+            if SEA_LO <= lv <= SEA_HI and _touches(m, sea[w], JOIN_SEA_PX):
+                sea[w] |= m             # a lagoon, a tidal pond: part of the sea
                 continue
             if abs(lv - SEA_E) < 0.01:  # a lake at sea level away from the sea (the Netherlands'): not the sea's
                 lv = SEA_E + LAKE_NOT_SEA_M     # tiles (sea_at), which flooded every town round it (GitHub #8)
-            m &= ~self._lake_dry(m, lv, ox, oy)
+            m &= ~self._lake_dry(m, lv, ox + i0, oy + j0)
             kmax = int(math.ceil(LAKE_DEPTH_CAP / DEPTH_SLOPE / px)) + 2
             st = shore_steps(m, kmax).astype(np.float32)
-            depth[m] = np.minimum(LAKE_DEPTH_CAP, DEPTH_SLOPE * (st[m] - 0.5) * px)
-            level[m] = lv
+            depth[w][m] = np.minimum(LAKE_DEPTH_CAP, DEPTH_SLOPE * (st[m] - 0.5) * px)
+            level[w][m] = lv
         if river.any():
             rl = self._river_levels(river, ox, oy)
             if rl is not None:
@@ -1116,7 +1134,12 @@ class SeaCarver:
 
     @staticmethod
     def _rasterise(f, i, water, ox, oy):
-        n = water.shape[0]
+        for j0, j1, i0, i1, inside in SeaCarver._windows(f, i, water.shape[0], ox, oy):
+            water[j0:j1, i0:i1] |= inside
+
+    @staticmethod
+    def _windows(f, i, n, ox, oy):
+        """Feature i's parts on an n px raster at z16 pixel (ox, oy): (j0, j1, i0, i1, the pixels inside) per part."""
         for part in f.parts(i):
             rings = []
             for ring in part:
@@ -1132,7 +1155,7 @@ class SeaCarver:
             inside = np.zeros(len(pts), bool)
             for r in rings:             # even-odd: holes (islands) cut out
                 inside ^= Path(r).contains_points(pts)
-            water[j0:j1, i0:i1] |= inside.reshape(j1 - j0, i1 - i0)
+            yield j0, j1, i0, i1, inside.reshape(j1 - j0, i1 - i0)
 
     # --- queries --------------------------------------------------------------------------------
     def ready(self, x, y):
@@ -1238,12 +1261,15 @@ class SeaCarver:
         carved = fast._ef.block_carve(heights.ravel(), d.ravel(), lv.ravel())
         return z if carved is None else carved.reshape(d.shape)
 
-    def lake_at(self, lat, lon, wait=True):
+    def lake_at(self, lat, lon, wait=True, known=False):
         """The level of the lakes (still water above sea level) at the points: NaN on land, at sea, away
         from water and in rivers (they slope: River objects, riverlines.py, not flat tiles; their beds are
-        carved here all the same); wait=False: also in cells not at hand yet, built in the background."""
-        d, lv = self.water(lat, lon, wait=wait)[:2]
-        return np.where((d > 0) & (np.abs(lv - SEA_E) >= 0.01) & ~self.outline_at(lat, lon), lv, np.nan)
+        carved here all the same); wait=False: also in cells not at hand yet, built in the background. known (with
+        wait=False): (the levels, which points' cells were at hand)."""
+        got = self.water(lat, lon, wait=wait)
+        d, lv = got[:2]
+        out = np.where((d > 0) & (np.abs(lv - SEA_E) >= 0.01) & ~self.outline_at(lat, lon), lv, np.nan)
+        return (out, got[2] if len(got) > 2 else np.ones(out.shape, bool)) if known else out
 
     def outline_at(self, lat, lon):
         """Inside a river outline above sea level (any, flattened or not) at the points; False in cells not

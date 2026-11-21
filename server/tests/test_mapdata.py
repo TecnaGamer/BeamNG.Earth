@@ -741,6 +741,33 @@ class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertIn("surface", cd.layers["roads"].rules)
         self.assertEqual(cd.provenance, [])
 
+    def test_a_block_of_cells_is_read_once_and_gives_the_same_cells(self):
+        """A layer's rows are read for a block of cells at once (overture.Reader._block): every cell made from them is
+        the cell its own query gives, array for array, and the block's other cells cost no further read."""
+        layers = ("buildings", "water", "land_use", "infrastructure", "connectors", "places", "town_areas")
+        cells = [mapcells.CellKey(14, mf.CELL.x + dx, mf.CELL.y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)]
+        with mock.patch.object(overture, "BLOCK_Z", 99):         # (finer than the cells: each read alone)
+            md, t = self.mapdata(cache=os.path.join(self.tmp, "alone"))
+            alone = {(c, la): md.overture.query(la, c) for c in cells for la in layers}
+        md, t = self.mapdata(cache=os.path.join(self.tmp, "blocks"))
+        reads = []
+        read = md.overture._block_read
+        md.overture._block_read = lambda con, layer, *a: reads.append(layer) or read(con, layer, *a)
+        for (c, la), (feats, sources) in alone.items():
+            got, got_sources = md.overture.query(la, c)
+            a, b = mapdata._layer_arrays(feats), mapdata._layer_arrays(got)
+            self.assertEqual(sorted(a), sorted(b), (c, la))
+            for k in a:
+                self.assertEqual((a[k].dtype, a[k].shape), (b[k].dtype, b[k].shape), (c, la, k))
+                self.assertTrue(np.array_equal(a[k], b[k], equal_nan=a[k].dtype.kind == "f"), (c, la, k))
+            self.assertEqual(list(sources.items()), list(got_sources.items()), (c, la))
+        self.assertTrue(any(len(f) for f, _ in alone.values()))
+        blocks = {c.parent(overture.BLOCK_Z) for c in cells}
+        for la in layers:
+            self.assertLessEqual(reads.count(la), len(blocks), la)
+        md.clear_memory()                                        # (a process short of memory: the blocks go too)
+        self.assertEqual((len(md.overture._blocks), md.overture._blocks_n), (0, 0))
+
     def test_fetch_errors_surface(self):
         """A host that cannot deliver: the netfetch error, not DuckDB's generic one."""
         md, t = self.mapdata()
@@ -1147,9 +1174,10 @@ class ShedTest(unittest.TestCase):
         cleared = []
         spy = lambda name: SimpleNamespace(clear_memory=lambda: cleared.append(name))
         md = SimpleNamespace(_mem_lock=threading.Lock(), _mem={"k": 1}, _mem_bytes=5, _slim={}, _slim_bytes=0,
-                             rail_tags=spy("rail"), lane_tags=spy("lanes"), station_tags=spy("stations"))
+                             rail_tags=spy("rail"), lane_tags=spy("lanes"), station_tags=spy("stations"),
+                             overture=spy("blocks"))
         mapdata.MapData.clear_memory(md)
-        self.assertEqual(sorted(cleared), ["lanes", "rail", "stations"])
+        self.assertEqual(sorted(cleared), ["blocks", "lanes", "rail", "stations"])
 
 
 class StoreLevelTest(unittest.TestCase):

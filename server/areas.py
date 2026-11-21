@@ -380,7 +380,7 @@ class Areas:
         """x6, y6 -> the near terrain's DEM zoom there (earthd.new_anchor's, capped where Mapterhorn has less)."""
         import dem as demmod
         lat = (box[0] + box[2]) / 2
-        hm = demmod.zoom_for(lat, 1.25, demmod.FINE_ZOOM)
+        hm = demmod.terrain_zoom(lat)
         try:        # (Mapterhorn's file list: on disk, read again weekly; None when it cannot be had)
             cov = self.s.dem._coverage() if hasattr(self.s.dem, "_coverage") else demmod._coverage.get("index")
         except Exception:

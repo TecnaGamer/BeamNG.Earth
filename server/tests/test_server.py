@@ -548,6 +548,80 @@ class ServerTest(ServerHarness):
             self.assertIn(key, s.hm)
         s.connections = set()
 
+    @mock.patch.object(earthd, "HM_CACHE", 6)
+    def test_blocks_built_ahead_survive_eviction(self):
+        """A fast player's chain of blocks built ahead is longer than the cache has room for beside the protected
+        ones: the blocks the prediction lists stay, the ones behind the car go, the one listed longest ago first
+        (in the order they were built the next block on the car's road went first and was built again as the car
+        asked for it, 17 of a 300 km/h drive's 83 blocks, 2026-11-18)."""
+        s = self.server
+        frame = s.new_anchor(LAT, LON).frame
+        s.anchors = {1: earthd.Anchor(1, LAT, LON, frame)}
+        block = s.layout.block_at
+        ahead = [(1, 384.0 * i, 0.0) for i in range(4, 13)]         # (the next block and 8 after it)
+        behind = [(1, 384.0 * i, 0.0) for i in range(-2, 1)]        # (passed: no prediction lists them any more)
+
+        class Conn:
+            active = 1
+            predicted_block = block(*ahead[0][1:])
+            predicted_chain = [block(*k[1:]) for k in ahead[1:]]
+            chain_wanted_at = {**{k[1:]: 100.0 for k in ahead}, behind[0][1:]: 50.0, behind[2][1:]: 70.0}
+        s.connections = {Conn()}
+        try:
+            s.hm_committed.extend([(1, 384.0 * i, 0.0) for i in (1, 2, 3)])
+            s.hm_sent.append((1, 384.0 * 3, 0.0))
+            for key in ahead[:5] + behind[::-1] + list(s.hm_committed) + ahead[5:]:      # (built in any order)
+                s.hm[key] = {}
+            s.evict_heightmaps(fresh=ahead[-1])
+            for key in ahead + list(s.hm_committed):
+                self.assertIn(key, s.hm)
+            self.assertEqual([k for k in behind if k in s.hm], [])
+            # with room for some of what is behind: the one no prediction listed goes first, then the oldest listing
+            s.hm.clear()
+            for key in behind + list(s.hm_committed) + ahead[:1]:
+                s.hm[key] = {}
+            Conn.predicted_chain = []
+            with mock.patch.object(earthd, "HM_CACHE", 6):
+                s.evict_heightmaps()
+            self.assertEqual([k for k in behind if k in s.hm], [behind[0], behind[2]])
+            with mock.patch.object(earthd, "HM_CACHE", 5):
+                s.evict_heightmaps()
+            self.assertEqual([k for k in behind if k in s.hm], [behind[2]])
+        finally:
+            s.connections = set()
+            s.hm.clear()
+            s.removes_flush()
+
+    @mock.patch.object(earthd, "HM_CACHE", 6)
+    def test_blocks_built_past_a_rebase_survive_eviction(self):
+        """The blocks built for the anchor a rebase asked for (Connection.predict_rebase) stay as the ones this
+        frame's prediction lists do: no prediction of this frame lists them, and they were the first to go."""
+        s = self.server
+        frame = s.new_anchor(LAT, LON).frame
+        new = earthd.Anchor(2, LAT, LON, frame)
+        s.anchors = {1: earthd.Anchor(1, LAT, LON, frame)}
+        block = s.layout.block_at
+        past = [(2, 384.0 * i, 0.0) for i in range(1, 5)]
+        behind = [(1, 384.0 * i, 0.0) for i in range(-6, 0)]
+
+        class Conn:
+            active = 1
+            predicted_block = None
+            predicted_chain = []
+            chain_wanted_at = {k[1:]: 50.0 for k in behind}
+            rebase_to = (new, 0.0, 0.0)
+            rebase_chain = [block(*k[1:]) for k in past]
+        s.connections = {Conn()}
+        try:
+            for key in past + behind:
+                s.hm[key] = {}
+            s.evict_heightmaps()
+            self.assertEqual([k for k in past if k not in s.hm], [])
+            self.assertEqual(len(s.hm), 6)
+        finally:
+            s.connections = set()
+            s.hm.clear()
+            s.removes_flush()
     @mock.patch.object(earthd, "HM_CACHE", 4)
     def test_eviction_drops_the_blocks_the_mod_never_had_first(self):
         """Daytona laps (2026-11-19): ~30 prefetched guesses a lap beside the ~10 blocks the mod asked for pushed those
@@ -1031,6 +1105,49 @@ class MeshServer64Test(MeshServerTest):
         while conn.predicted_block != want and time.monotonic() < end:
             time.sleep(0.01)
         self.assertEqual(conn.predicted_block, want)
+
+
+    def test_blocks_past_a_rebase_are_built_from_its_request(self):
+        """A fast player's rebase: from its request on the blocks the mod asks for after it are built in the new
+        anchor's frame (Connection.predict_rebase), this frame's chain past it is not; at the commit they are the new
+        frame's chain."""
+        far, aid, _, _, _ = self.start()
+        c, conn, s = self.c, self.conn(), self.server
+        v = 68.0                                            # 345 km/h, north-east, away from the origin
+        self.pose(aid, 600.0, 600.0, v, v)
+        lat2, lon2, _ = s.anchors[aid].frame.enu_to_geodetic(600.0, 600.0, 0.0)
+        aid2 = self.prepare_anchor(7, float(lat2), float(lon2), cx=256, cy=256, purpose="rebase")["anchorId"]
+        self.assertEqual((conn.rebase_to[0].id, conn.rebase_to[1:]), (aid2, (256.0, 256.0)))
+        self.pose(aid, 700.0, 700.0, v, v)                  # (still this frame's: the mod commits at its distance)
+        end = time.monotonic() + 10
+        while not conn.rebase_chain and time.monotonic() < end:
+            time.sleep(0.01)
+        chain = [(aid2, b.cx, b.cy) for b in conn.rebase_chain]
+        self.assertGreaterEqual(len(chain), 2, chain)
+        self.assertEqual(conn.predicted_chain, [])
+        self.assertTrue(all(k[1] > 256.0 or k[2] > 256.0 for k in chain), chain)
+        end = time.monotonic() + 60
+        while chain[0] not in s.hm and time.monotonic() < end:
+            self.pose(aid, 700.0, 700.0, v, v)
+            time.sleep(0.05)
+        self.assertIn(chain[0], s.hm, "built before the commit")
+        self.assertEqual(conn.active, aid)
+        c.send({"type": "commit_anchor", "anchorId": aid2})
+        end = time.monotonic() + 10
+        while conn.active != aid2 and time.monotonic() < end:
+            time.sleep(0.01)
+        self.assertEqual(conn.active, aid2)
+        self.assertIsNone(conn.rebase_to)
+        self.assertEqual(conn.rebase_chain, [])
+        self.assertIn(chain[0], s.hm)
+        self.assertEqual(conn.block, ff.Block(256.0, 256.0, 1024))
+        # the new frame's own prediction goes on with them: no other block instead of the first one built
+        self.pose(aid2, 100.0, 100.0, v, v, held=[aid])
+        end = time.monotonic() + 10
+        while conn.focus != (100.0, 100.0) and time.monotonic() < end:
+            time.sleep(0.01)
+        ahead = [b for b in [conn.predicted_block] + list(conn.predicted_chain) if b is not None]
+        self.assertEqual((aid2, ahead[0].cx, ahead[0].cy), chain[0])
 
 
 class MeshServer64HorizonTest(ServerHarness):

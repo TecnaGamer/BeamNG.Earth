@@ -97,6 +97,41 @@ class VegGeoJobTest(unittest.TestCase):
             self.assertEqual((f.result(timeout=10), i), ([("tile", 4, 5)], 0))
 
 
+class VegPoolTest(unittest.TestCase):
+    """The trees geotiles in processes of their own (Server.veg_pool, earthd.veg_processes): their jobs go there, not
+    behind the road tiles; without them (0, or none made) in the road processes as before."""
+
+    def setUp(self):
+        patch = unittest.mock.patch.object(blockworker, "veg_geo",
+                                           lambda aid, lat, lon, zoom, gx, gy, *a: ("tile", gx, gy))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_jobs_go_to_the_trees_processes(self):
+        road, trees = FakePool(), FakePool()
+        s = server(road)
+        s.veg_pool = trees
+        f, i = earthd.Server._veg_geo_job(s, ANCHOR, 15, 1, 2, False)
+        self.assertEqual((len(trees.queued), len(road.queued), i), (1, 0, 0))
+        trees.hand_over()
+        self.assertEqual(f.result()[i], ("tile", 1, 2))
+
+    def test_none_falls_back_to_the_road_processes(self):
+        road = FakePool()
+        s = server(road)
+        s.veg_pool = None
+        earthd.Server._veg_geo_job(s, ANCHOR, 15, 1, 2, False)
+        self.assertEqual(len(road.queued), 1)
+
+    def test_process_count(self):
+        self.assertEqual(earthd.veg_processes({}, small=False), earthd.VEG_PROCESSES_DEFAULT)
+        self.assertEqual(earthd.veg_processes({}, small=True), 1)
+        self.assertEqual(earthd.veg_processes({"BNGE_VEG_PROCESSES": "0"}, small=False), 0)
+        self.assertEqual(earthd.veg_processes({"BNGE_VEG_PROCESSES": "3"}, small=True), 3)
+        self.assertEqual(earthd.veg_processes({"BNGE_VEG_PROCESSES": "9"}, small=False), 4)
+        self.assertEqual(earthd.veg_processes({"BNGE_VEG_PROCESSES": "x"}, small=False), earthd.VEG_PROCESSES_DEFAULT)
+
+
 class TrackerGateTest(unittest.TestCase):
     """vegetation.Tracker's geotile pass is skipped while the car moved under TRACK_MOVE_M and nothing it goes by
     changed (its builds still pending); a longer move, a build landing or TRACK_MAX_S passes again."""

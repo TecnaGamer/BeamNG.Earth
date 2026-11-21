@@ -247,6 +247,7 @@ export const settingsSchema = [
       { id: "map", type: "dev", name: "Mini-map panel", desc: "Top-down map of the tiles around you; click a tile to inspect it. Session only." },
       { id: "controls", type: "dev", name: "Controls panel", desc: "Overlay toggles, freeze LOD, force rebase, streaming budget, sky mode. Session only." },
       { id: "log", type: "dev", name: "Event log", desc: "The last 50 mod events (terrain commits, rebases, pops, failures, status). Session only." },
+      { id: "loadmap", type: "dev", name: "Loading map", desc: "What the server builds ahead of you, from above: the zone it predicts from your speed and turn, its map cells ready, loading, queued or missing, and how far ahead they are ready. Session only." },
       { id: "devOutlineKm", type: "float", min: 0.5, max: 20, step: 0.5, default: 3, name: "Outline radius (km)", desc: "Tile outlines and loading heat are drawn within this distance of you." },
       { id: "devMapKm", type: "float", min: 1, max: 80, step: 1, default: 10, name: "Mini-map radius (km)", desc: "The mini-map's initial zoom." },
     ],

@@ -189,7 +189,7 @@ ORDER_NEAR_M = 128.0        # m: order_geotiles' tiles this close to the car fir
 ORDER_CORRIDOR_M = 160.0    # ... the tree's within this of its roads next (roads.CORRIDOR_M)
 
 
-def order_geotiles(tree, frame, keys, x, y, z=None):
+def order_geotiles(tree, frame, keys, x, y, z=None, corridor_m=None):
     """keys (zoom-z geotiles, the trackers' wanted ones round the car at (x, y)) in the order the car's tree reaches
     them: those within ORDER_NEAR_M of the car first (by distance: the ground right round it whatever the tree says),
     then the ones within ORDER_CORRIDOR_M of its roads by their priority (time to reach, a less likely way later), then
@@ -199,7 +199,8 @@ def order_geotiles(tree, frame, keys, x, y, z=None):
     if not keys:
         return keys
     z = geotiles.Z if z is None else int(z)
-    tk = tree.geotile_keys(frame, ORDER_CORRIDOR_M, z=z, horizon=horizon_s(tree.speed))
+    # (corridor_m: a tracker's own, wider than the roads': the trees beside the way, vegetation.LEAD_CORRIDOR_M)
+    tk = tree.geotile_keys(frame, corridor_m or ORDER_CORRIDOR_M, z=z, horizon=horizon_s(tree.speed))
     fast.require(551, "detail_order")
     return fast._ef.detail_order(frame, keys, z, (x, y), tk, ORDER_NEAR_M)
 

@@ -437,7 +437,7 @@ class ContentGuard(unittest.TestCase):
     unchanged; then the fingerprint here is updated."""
     # (2026-11-18: mapgeom.text_column ported to Rust, earthfast 454; its output byte for byte the same: 11.3 M values
     # over three cold visits and test_textcol_native's parity, so the archives stay at CONTENT 1)
-    FINGERPRINT = {("base", 1): "3e0d97bbbe8d058e", ("transportation", 1): "3d94e4d2261a7dd0",
+    FINGERPRINT = {("base", 1): "59b0e5f25639570b", ("transportation", 1): "3d94e4d2261a7dd0",
                    ("buildings", 1): "628fa00065e3eecd", ("places", 1): "21b3b00b2b99c951"}
 
     @staticmethod
@@ -449,7 +449,9 @@ class ContentGuard(unittest.TestCase):
         spec = bnwt.ARCHIVES[name]
         parts = [repr(sorted((k, overture.LAYERS[k]) for k in spec["layers"])), repr(sorted(spec.items()))]
         if spec["source"] == "parquet":
-            fns = (overture.Reader.query, overture.Reader._run, overture.Reader._plan, overture._number_rows,
+            fns = (overture.Reader.query, overture.Reader._read, overture.Reader._block, overture.Reader._block_read,
+                   overture.Reader._from_block, overture._Block, overture.Reader._run, overture.Reader._features,
+                   overture._geometry, overture._thinned, overture.Reader._plan, overture._number_rows,
                    overture.tolerant, overture.empty, overture.intersects, mg.build, mg.clip_polygon_parts,
                    mg.clip_ring, mg._clip_edge, mg.parse_wkb, mg._geom, mg._coords, mg.text_column, mg.float_column,
                    mg.bool_column, bnwtunit.unit_rows, bnwtunit.cell_layer, bnwtunit.assign)

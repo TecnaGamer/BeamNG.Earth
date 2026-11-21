@@ -371,7 +371,7 @@ class CoverMap:
         self._sidecars()
         self._caps()
         lat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y0 + h / 2) / n))))
-        hm = demmod.zoom_for(lat, 1.25, demmod.FINE_ZOOM)
+        hm = demmod.terrain_zoom(lat)
         world = self.world_classes() if m == MODES["world"] else []
         with self.lock:
             cells = self.idx.grid(z, x0, y0, w, h, m, dem=DEM, img=IMG, layers=self.layers,

@@ -570,6 +570,38 @@ class LakeTest(unittest.TestCase):
             la, lo, _ = f.enu_to_geodetic(t.x, t.y, 0.0)
             self.assertAlmostEqual(t.z, float(f.geodetic_to_enu(la, lo, 50.0)[2]), places=5)
 
+    def test_lake_tiles_kept_by_square_are_the_tiles_planned_afresh(self):
+        # plan_lakes' memo: a lattice square's tiles are worked out once and are the same tiles, in the same order,
+        # as a plan that works every square out; a square with water not at hand yet is worked out again
+        import seatiles
+        f = geodesy.EnuFrame(LAKE_LAT + D / 2, LAKE_LON + D / 2)
+        dem = LakeDem()
+        ground = lambda la, lo: dem.sample(la, lo, 15)      # noqa: E731
+        asked = []
+
+        def lake(la, lo):
+            asked.append(len(la))
+            return self.sc.lake_at(la, lo, wait=False, known=True)
+        self.sc.lake_at(np.array([LAKE_LAT + D / 2]), np.array([LAKE_LON + D / 2]))     # (the lake's cell at hand)
+        memo, first = {}, None
+        for k, (x, y) in enumerate([(0.0, 0.0), (300.0, 0.0), (600.0, 100.0), (1100.0, -500.0), (0.0, 0.0)]):
+            plain = seatiles.plan_lakes(f, x, y, self.sc.lake_at, ground)
+            n0 = sum(asked)
+            self.assertEqual(seatiles.plan_lakes(f, x, y, lake, ground, memo=memo), plain, (x, y))
+            if k == 0:
+                first = sum(asked) - n0
+                self.assertTrue(plain)
+            elif k == 1:        # (the same plan square: nothing asked again)
+                self.assertEqual(sum(asked) - n0, 0)
+            else:
+                self.assertLess(sum(asked) - n0, first)
+        # a square whose water was not known is not kept
+        memo2 = {}
+        unknown = lambda la, lo: (self.sc.lake_at(la, lo), np.zeros(len(la), bool))     # noqa: E731
+        self.assertEqual(seatiles.plan_lakes(f, 0.0, 0.0, unknown, ground, memo=memo2),
+                         seatiles.plan_lakes(f, 0.0, 0.0, self.sc.lake_at, ground))
+        self.assertEqual(memo2, {})
+
 
 CAN_LAT, CAN_LON = 39.36, -76.62          # a 40 m wide town canal the DEM does not see (flat 2 m all round),
 CW, CL = 40 / 111320.0, 0.006               # and a polder's lake 2 m under the sea in ground 1.5 m under it
