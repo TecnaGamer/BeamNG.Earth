@@ -141,7 +141,6 @@ M.SCHEMA = {
   -- them, so a change holds from the next start of BeamNG.Earth. Nothing here applies them in the game itself
   expNlRoadSigns = { kind = 'bool', default = false, label = 'Dutch road signs' },
   expEuScenery = { kind = 'bool', default = false, label = 'French and European road scenery' },
-  standalonePaths = { kind = 'bool', default = false, label = 'Standalone paths and residential driveways' },
   osmPedestrianLighting = { kind = 'bool', default = false, label = 'OSM Pedestrian and Recreational Lighting' },
   strictOsmLighting = { kind = 'bool', default = false, label = 'Strict OSM Lighting' },
   expDropRails = { kind = 'bool', default = false, label = 'Guard rails at drops' },
@@ -235,8 +234,9 @@ M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 't
   'creditsCorner', 'creditsSize', 'mainMenuTile', 'cacheCapGb', 'routeDownload', 'routeAvoidHighways', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
   'devMapKm',
   -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)
-  'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'standalonePaths', 'strictOsmLighting', 'osmPedestrianLighting', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
+  'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
   'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
+  'strictOsmLighting', 'osmPedestrianLighting',
   'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
   'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
 

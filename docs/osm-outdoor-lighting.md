@@ -26,7 +26,7 @@ Urban roads retain the regional spacing and mounting profiles. Use the brightnes
 | CP5 Â· Runtime | The Lua night-light suite exercised live intensity at 0, 25, 40, 50, 75 and 100%, pool reuse, range and lens versus window emissions. All 96 assertions passed. Settings passed 547 assertions. | Lua engine stubs verify numeric behaviour. A real night drive is still needed for shadow visibility, HDR and bloom. |
 | CP6 Â· Configuration and caches | The two generation switches reach both builders through the restart settings. Build keys include the environment switches. Direct-evidence road cells and vegetation cells have distinct cache names. Brightness and glow are player-local. Tests cover independent switches and default settings. | Placement needs a server restart. With the placement switches off, the worker now forwards the mapped lamps it was already collecting, matching the in-process builder. This corrects missing mapped poles in that worker. |
 | CP7 Â· Compatibility and performance | Integrated PR #1362 head 0e13b03 with development head 4915490. The final focused Python run passed 185 tests. On a synthetic flat tile with a lit cycleway and unlit residential road, both builders produced zero lenses off and eight on. Worker median over 20 warm builds was 6.94 ms off and 7.63 ms on. | These timings cover tile generation on a small fixture. In-game FPS, cold-cache city generation and the requested visual comparison are pending. The game and workspace volumes had insufficient headroom for an isolated install and capture. |
-| CP8 Â· Review | The integration of PR #1362 is a separate commit below the lighting changes. Run the commands below and compare the feature commit with that integration commit when reviewing. | Keep the PR in draft until a real-game run records the location, source tags, game build, graphics settings, time of day, frame-time distribution and screenshots. Recheck the base when #1362 lands. |
+| CP8 · Review | Lighting works independently and shares ground-path geometry with PR #1362. | Use the visual procedure below to record in-game behaviour. |
 
 ## Reproduction
 
@@ -34,7 +34,6 @@ With the server dependencies and native module installed, run from the repositor
 
 ~~~sh
 python -m unittest discover -s server/tests -p test_pedestrianlighting.py
-python -m unittest discover -s server/tests -p test_standalone_paths.py
 luajit mod/tests/test_nightlights.lua
 luajit mod/tests/test_settings.lua
 ~~~

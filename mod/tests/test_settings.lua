@@ -731,8 +731,9 @@ files[settings.FILE] = nil
 -- a bool, off by default, on the settings page; road signs off by default since version 3 (a version-2 file's true was
 -- the hidden switch's default), a version-3 file's choice kept
 do
-  local exp = { 'roadSigns', 'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'standalonePaths', 'strictOsmLighting', 'osmPedestrianLighting', 'expDropRails', 'expEntranceFlares', 'expPriorityStops',
+  local exp = { 'roadSigns', 'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops',
     'expRoadBumps', 'expRoughDirt', 'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls',
+    'strictOsmLighting', 'osmPedestrianLighting',
     'expTunnelLids', 'expSubseaTunnels', 'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels',
     'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
   local inOrder = {}

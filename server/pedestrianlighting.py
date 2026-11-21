@@ -11,7 +11,7 @@ import furniture
 import mapcells
 import lightingranges
 import mapgeom
-import standalonepaths
+import pathlayout
 import streetfront
 
 # Spacing, mounting height, and intensity relative to the stock road light.
@@ -201,7 +201,7 @@ def area_sites(frame, box, md, keys, exclusions=None):
 def tile_rows(frame, box, cells, urban, widths, md, keys, elev, props, mapped, rings,
               clearance, road_rows, near_lamps, country_at, *, path_parts=None):
     if path_parts is None:
-        path_parts = standalonepaths.parts(frame, box, cells, urban, widths, lighting=True)
+        path_parts = pathlayout.parts(frame, box, cells, urban, widths)
     candidates = list(path_sites(path_parts, cells, box, frame, md))
     exclusions = []
     candidates.extend(area_sites(frame, box, md, keys, exclusions))
@@ -215,7 +215,7 @@ def tile_rows(frame, box, cells, urban, widths, md, keys, elev, props, mapped, r
         paths.append((line[:,:2], sp.width/2 + walk))
     candidates.sort()
     pts = np.array([c[1:3] for c in candidates])
-    keep = standalonepaths.keep_outside(pts, paths, .25)
+    keep = pathlayout.keep_outside(pts, paths, .25)
     for outer, *holes in exclusions:
         idx = np.flatnonzero(keep & np.all((pts >= outer.min(0)) & (pts <= outer.max(0)), axis=1))
         if len(idx):

@@ -1712,6 +1712,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     _scene = (0, 0.0) if buildings else None
     wrows = []
     mapped_lamps = None
+    path_parts = None
     _custom, _entries = [], []      # the 3dmr.eu / local models in the tile, their baked entries (roads.write_tile)
     _bridge_fps = []                # 3dmr model bridges over the tile: no procedural bridge under them
     _bridge_ends = {}
@@ -2119,17 +2120,15 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     radar_props, P.speed_traps = radars.tile_rows(frame, box, _s.md, elev, _s.widths, urban)
     if radar_props:
         props = (props or []) + radar_props
-    import standalonepaths
-    path_parts = None
+    import pathlayout
     if items is not None and pedestrianlighting.enabled():
-        path_parts = standalonepaths.parts(frame, box, cells, urban, _s.widths, lighting=True)
+        path_parts = pathlayout.parts(frame, box, cells, urban, _s.widths)
         props.extend(pedestrianlighting.tile_rows(frame, box, cells, urban, _s.widths,
             _s.md, cell_keys, drawn, props, mapped_lamps, rings, clearance[0] if clearance else None,
             near_roads, near_lamps, poleprofiles.lamp_country_selector(pole_profile, frame),
             path_parts=path_parts))
     import racedig                  # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
     racedig.tile_clear(frame, cells, props, wires, elev, _s.md)
-    props = standalonepaths.finish_props(props, frame, box, cells, urban, _s.widths, path_parts=path_parts)
     P.signs = signs
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.custom, P.custom_entries = _custom, _entries

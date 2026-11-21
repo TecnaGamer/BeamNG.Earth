@@ -251,7 +251,7 @@ def _aim_lamps(lamps, lines_fn):
 def _lamp_roads(frame, layers, near=None):
     """Pack nearby surfaces, carriageways and width groups for layer-aware lamp aiming."""
     import pedestrianlighting
-    import standalonepaths
+    import pathlayout
     import roads
     classes = LAMP_ROAD_CLASSES
     enhanced = pedestrianlighting.enabled()
@@ -279,10 +279,10 @@ def _lamp_roads(frame, layers, near=None):
                 except (ValueError, TypeError):
                     level = math.nan
                 width = None
-                if kind in standalonepaths.WIDTH:
+                if kind in pathlayout.WIDTH:
                     width = roads.mapped_osm_width(feats, i, .4, 12.) or roads.mapped_rule_width(feats, i)
                     if width is None or not .4 <= width <= 12.:
-                        width = standalonepaths.WIDTH[kind]
+                        width = pathlayout.WIDTH[kind]
                 road_width = None
                 if width is None and enhanced:
                     mapped = roads.mapped_osm_width(feats, i, .4, 40.) or roads.mapped_rule_width(feats, i)

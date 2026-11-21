@@ -1,6 +1,5 @@
-"""Ground-only walking and cycling surfaces. They never enter the road graph or the street-edge generator."""
+"""Ground-level walking and cycling geometry for surfaces and lights."""
 import math
-import os
 
 import numpy as np
 
@@ -19,10 +18,6 @@ EXCLUDE = {"sidewalk", "crossing", "crosswalk", "cycle_crossing", "traffic_islan
 # An unlabelled line following the roadside can be a separately surveyed sidewalk.
 VERGE_M = 4.0
 PARALLEL = math.cos(math.radians(35))
-
-
-def enabled():
-    return os.environ.get("BNE_STANDALONE_PATHS", "off").lower() in {"1", "on", "true"}
 
 
 def profile(f, i):
@@ -115,48 +110,8 @@ def keep_outside(points, blockers, radii=None):
     return keep
 
 
-def clear_props(rows, blockers):
-    """Reject scenery overlapping a walking strip, including mapped and late-added props."""
-    import furniture
-    import pathfootprints
-    if not rows or not blockers:
-        return rows
-    # These are freestanding ground objects. Signs, bridge fixtures, overhead
-    # wires and building attachments can share their XY with a path on another
-    # level and must not be removed by a 2D test.
-    boxed = {furniture.G_HYDRANT, furniture.G_BENCH, furniture.G_BIN}
-    candidates = {}
-    for i, row in enumerate(rows):
-        if row[0] in pathfootprints.CATALOG or row[0] in boxed or row[0] == furniture.G_STREET_TREE:
-            candidates.setdefault(row[0], []).append(i)
-    keep = np.ones(len(rows), bool)
-    clearance = None
-    for group, indices in candidates.items():
-        if group in boxed:
-            if clearance is None:
-                clearance = furniture.RoadClearance([(half, line) for line, half in blockers])
-            keep[indices] = [clearance.clear(rows[i], margin=0.0) for i in indices]
-        else:
-            radii = (0.0 if group == furniture.G_STREET_TREE else
-                     pathfootprints.radii(group, [rows[i][6] for i in indices], 0.))
-            keep[indices] = keep_outside([rows[i][1:3] for i in indices], blockers, radii)
-    return [row for row, ok in zip(rows, keep) if ok]
-
-
-def finish_props(rows, frame, box, cells, urban=None, widths=None, *, path_parts=None):
-    """The final generation gate, after every source has contributed its scenery."""
-    if not rows or not enabled():
-        return rows
-    if path_parts is None:
-        path_parts = parts(frame, box, cells, urban, widths)
-    blockers = [(xy, width / 2) for _, xy, width, _ in path_parts]
-    return clear_props(rows, blockers)
-
-
-def parts(frame, box, cells, urban=None, widths=None, quick=False, lighting=False):
+def parts(frame, box, cells, urban=None, widths=None, quick=False):
     """(feature id, ENU polyline, width, material) near a square. All callers share the same exclusions."""
-    if not lighting and not enabled():
-        return []
     parts_of = roads.quick_ground_parts if quick else roads.ground_parts
     candidates, segments, half = [], [], []
     seen = set()
@@ -200,3 +155,13 @@ def parts(frame, box, cells, urban=None, widths=None, quick=False, lighting=Fals
     bounds = np.c_[np.minimum(a, b) - radii[:, None], np.maximum(a, b) + radii[:, None]]
     return [(fid, run, width, kind) for fid, xy, width, kind in candidates
             for run in _outside_verges(xy, width, a, delta, lengths, radii, bounds)]
+
+
+def cell_parts(bounds, cells, urban=None, widths=None):
+    """Prepare the accepted walking and cycling strips around a vegetation cell."""
+    import geodesy
+    lon0, lat0, lon1, lat1 = bounds
+    frame = geodesy.EnuFrame((lat0 + lat1) / 2, (lon0 + lon1) / 2)
+    e, n, _ = frame.geodetic_to_enu(np.array([lat0, lat1]), np.array([lon0, lon1]), 0.)
+    box = (min(e), min(n), max(e), max(n))
+    return frame, box, parts(frame, box, cells, urban, widths)

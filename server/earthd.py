@@ -3196,6 +3196,7 @@ class Server:
         signs = [] if self.buildings and poleprofiles.kit_enabled(Server.pole_profile(self, anchor)) else None
         items = town = None
         wrows, mapped_lamps = [], None
+        path_parts = None
         _bridge_fps, _bridge_ends = [], {}      # 3dmr model bridges over the tile (as blockworker._tile_parts)
         if self.buildings:
             # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
@@ -3552,17 +3553,15 @@ class Server:
         radar_props, speed_traps = radars.tile_rows(anchor.frame, box, self.mapdata, elev, self.road_widths, urban)
         if radar_props:
             props = (props or []) + radar_props
-        import standalonepaths
-        path_parts = None
+        import pathlayout
         if items is not None and pedestrianlighting.enabled():
-            path_parts = standalonepaths.parts(anchor.frame, box, cells, urban, self.road_widths, lighting=True)
+            path_parts = pathlayout.parts(anchor.frame, box, cells, urban, self.road_widths)
             props.extend(pedestrianlighting.tile_rows(anchor.frame, box, cells, urban, self.road_widths,
                 self.mapdata, nkeys, drawn, props, mapped_lamps, rings, clearance[0] if clearance else None,
                 near_roads, near_lamps, poleprofiles.lamp_country_selector(Server.pole_profile(self, anchor), anchor.frame),
                 path_parts=path_parts))
         import racedig              # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
         racedig.tile_clear(anchor.frame, cells, props, wires, elev, self.mapdata)
-        props = standalonepaths.finish_props(props, anchor.frame, box, cells, urban, self.road_widths, path_parts=path_parts)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
