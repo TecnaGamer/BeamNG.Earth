@@ -102,6 +102,30 @@ def brand(tags):
                     return name
 
 
+def sign_endpoints(location, height, facing, nearby_roads):
+    """Return lon/lat panel endpoints. Roads are metre offsets from the mapped sign."""
+    if facing is None:
+        nearest = 100.
+        for road in nearby_roads:
+            edges = np.diff(road, axis=0)
+            if not len(edges):
+                continue
+            length2 = np.sum(edges**2, axis=1)
+            along = np.clip(-np.sum(road[:-1]*edges, axis=1) / np.maximum(length2, 1e-12), 0, 1)
+            dist = np.linalg.norm(road[:-1] + along[:, None]*edges, axis=1)
+            dist[length2 == 0] = np.inf
+            k = int(dist.argmin())
+            if dist[k] < nearest:
+                nearest = dist[k]
+                facing = np.degrees(np.arctan2(edges[k, 0], edges[k, 1]))
+    if facing is None or not np.isfinite(facing):
+        return None
+    angle = np.radians(facing)
+    scale = np.array([111320*np.cos(np.radians(location[1])), 111132])
+    half = np.array([np.cos(angle), -np.sin(angle)]) * min(2.5, height*.32) / scale
+    return np.array([location-half, location+half])
+
+
 def parking_frontage(coords, point, parking):
     """Estimate a short sign panel on a wall supported by both a tenant point and parking in front."""
     if not len(parking):
@@ -200,26 +224,10 @@ def matches(path):
             continue
         location = np.array(point(node))
         scale = np.array([111320*np.cos(np.radians(location[1])), 111132])
-        if facing is None:
-            # Pole signs read along the road. Use the tangent of its nearest segment.
-            best = 100.
-            for roads in address_roads.values():
-                for road in roads:
-                    starts = (road[:-1] - location) * scale
-                    edges = np.diff(road, axis=0) * scale
-                    along = np.clip(-np.sum(starts*edges, axis=1) /
-                                    np.maximum(np.sum(edges**2, axis=1), 1e-12), 0, 1)
-                    dist = np.linalg.norm(starts + along[:, None]*edges, axis=1)
-                    k = int(dist.argmin())
-                    if dist[k] < best and np.linalg.norm(edges[k]) > 0:
-                        best = dist[k]
-                        facing = np.degrees(np.arctan2(edges[k, 0], edges[k, 1]))
-        if facing is None or not np.isfinite(facing):
-            continue
-        angle = np.radians(facing)
-        half = np.array([np.cos(angle), -np.sin(angle)]) * min(2.5, height*.32) / scale
-        yield (name, "totem_" + node.get("id"), np.array([location-half, location+half]),
-               None, [], None, height)
+        roads = ((road-location)*scale for lines in address_roads.values() for road in lines)
+        endpoints = sign_endpoints(location, height, facing, roads)
+        if endpoints is not None:
+            yield (name, "totem_" + node.get("id"), endpoints, None, [], None, height)
 
     tenant_points = [(n.get("id"), name, np.array(point(n))) for n in nodes.values()
                      if (name := brand(tags(n))) and tags(n).get("level", "0") == "0"]

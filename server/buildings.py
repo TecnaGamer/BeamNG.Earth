@@ -6501,8 +6501,10 @@ def road_tile_items(
                         "source": "local",
                     }
                 )
-        if storefronts and any(spec.storefront for spec, _, _ in items):
+        if storefronts:
             import streamedstores
+            custom.extend(streamedstores.pylons(keys, frame, box, streets, custom, cache_dir))
+        if storefronts and any(spec.storefront for spec, _, _ in items):
             approach = streets or road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
                                              margin=150, size=max(x1-x0, y1-y0),
                                              classes=THROUGH_CLASSES | {"service"})

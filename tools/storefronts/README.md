@@ -43,6 +43,14 @@ The coordinates above illustrate the argument format. Use the actual camera posi
 
 The material detector recognizes staggered brickwork or returns unknown. A mapped building material takes priority. Accepted brick observations affect one wall of a supported standalone store. McDonald's uses separate geometry. Photos are processed locally at build time. Street imagery retrieval, multipolygon visibility and automatic crop selection are outside the current tool.
 
+### Freestanding roadside signs
+
+With storefront streaming enabled, the server looks up branded OpenStreetMap sign nodes in a bundled geographic index. Each sign belongs to one road tile and can appear even when its restaurant is on the next tile. A mapped height controls the model (default 6 m). A numeric direction or a nearby road sets the orientation of both faces. An installed local sign at the same position takes priority.
+
+The index contains recognized `advertising=totem` nodes from the global QLever OSM snapshot. Coverage depends on someone mapping the sign itself. It can be refreshed offline with `python tools/storefronts/index_totems.py server/data/storefront_totems.csv`. After publishing changed data, update `STOREFRONT_VERSION`. Index data © OpenStreetMap contributors, available under the [Open Database License](https://www.openstreetmap.org/copyright).
+
+[See both approaches to the mapped Burger King on Mount Vernon Avenue in Marion, Ohio](marion-roadside-preview.jpg). The image shows the exported building and sign from driver height.
+
 ## Validation
 
 ```sh

@@ -96,6 +96,34 @@ class StreamedStoresTest(unittest.TestCase):
             places.lonlat[1] = places.lonlat[0]
             self.assertFalse(generate())
 
+    def test_mapped_pylon_owns_one_tile_and_survives_a_revisit(self):
+        import streamedstores
+        import storefront_totems
+        frame = geodesy.EnuFrame(38., -90.)
+        lat, lon, _ = frame.enu_to_geodetic(28., 20., 0.)
+        row = (float(lat), float(lon), "12345", "Burger King", 12., None)
+        md = tile(frame, "Burger King", [], "fast_food")
+        with (tempfile.TemporaryDirectory() as cache, patch.dict(os.environ, BNE_STOREFRONTS="1"),
+              patch("threedmr.region_ids", return_value=[]),
+              patch.object(storefront_totems, "rows", return_value=[row]),
+              patch("buildings.road_lines", return_value=[np.array([[0., 15.], [256., 15.]])])):
+            def generate(tx=0):
+                return buildings.road_tile_items(frame, tx, 0, md, lambda a,b: np.zeros(np.shape(a)), cache_dir=cache)[1]
+            sign, building = generate()
+            self.assertEqual(sign["id"], "osm_storefront_totem_12345")
+            self.assertTrue(sign["local"]["storefront_pylon"])
+            self.assertEqual(building["local"]["title"], "Burger King")
+            verts = threedmr.load_local_model(cache, sign["local"])[0]
+            self.assertAlmostEqual(float(np.ptp(verts[:, 2])), 12.)
+            self.assertGreater(np.ptp(verts[:, 1]), np.ptp(verts[:, 0]))
+            with patch.object(streamedstores, "export_store", side_effect=AssertionError("cache miss")):
+                self.assertEqual(generate()[0]["local"], sign["local"])
+            self.assertFalse(any(item["id"] == sign["id"] for item in generate(1)))
+            with patch("threedmr.local_models", return_value=[dict(sign["local"], id="installed")]):
+                self.assertEqual([item["id"] for item in generate() if item["local"].get("storefront_pylon")], ["installed"])
+            with patch.dict(os.environ, BNE_STOREFRONTS="0"):
+                self.assertFalse(generate())
+
     def test_discovery_cache_and_ambiguous_tenants(self):
         for lat, lon, name, tenants, kind, subtype, expected in (
             (37., -120., "In-N-Out", [], "fast_food", "commercial", 1),

@@ -103,10 +103,13 @@ def tenant_panels(tenants, ring, parking):
             yield name, panel
 
 
-def cached_entry(cache, name, coords, bearing, material):
+def cached_entry(cache, name, coords, bearing, material, sign_height=None):
     # Round away sub-centimetre anchor differences. The key describes the geometry actually exported.
     coords = coords.round(7)
-    signature = json.dumps([STOREFRONT_VERSION, name, coords.tolist(), bearing, material]).encode()
+    parameters = [STOREFRONT_VERSION, name, coords.tolist(), bearing, material]
+    if sign_height is not None:
+        parameters.append(sign_height)
+    signature = json.dumps(parameters).encode()
     ident = hashlib.sha256(signature).hexdigest()[:24]
     meta = cache / f"store_{ident}.json"
     mesh = cache / f"store_{ident}.glb"
@@ -118,6 +121,8 @@ def cached_entry(cache, name, coords, bearing, material):
         angle = math.radians(bearing)
         direction = np.array([math.cos(angle), math.sin(angle)])
     match = (name, ident, coords, direction, [], material)
+    if sign_height is not None:
+        match += (sign_height,)
     entry = export_store(Path("streamed"), match, {}, cache)
     with NamedTemporaryFile(mode="w", dir=cache, delete=False) as handle:
         json.dump(entry, handle)
@@ -240,3 +245,16 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
             LOG.warning(
                 "Could not generate storefront for %s: %s", spec.storefront[0], error
             )
+
+
+def pylons(keys, frame, box, streets, existing, cache_dir):
+    import storefront_totems
+    cache = Path(cache_dir) / "threedmr_cache" / "storefronts"
+    for node, name, coords, height, xy, latlon in storefront_totems.matches(keys, frame, box, streets, existing):
+        try:
+            entry = cached_entry(cache, name, coords, None, None, sign_height=height)
+        except (OSError, ValueError, RuntimeError) as error:
+            LOG.warning("Could not generate mapped storefront sign %s: %s", node, error)
+            continue
+        yield {"id": "osm_storefront_totem_" + node, "xy": xy, "latlon": latlon,
+               "local": dict(entry, file="storefronts/" + entry["file"]), "source": "local"}
