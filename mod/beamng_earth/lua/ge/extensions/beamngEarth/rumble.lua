@@ -18,8 +18,8 @@ M.SOUND_FILE = '/levels/beamng_earth/art/sound/rumble_strip.ogg'
 M.VOLUME = 1.35
 M.REFERENCE_DISTANCE_M = 1.8
 M.MAX_DISTANCE_M = 8.0
-M.SENSOR_ENABLE_COMMAND = 'if not extensions.beamngEarth_rumbleSensor then extensions.load("beamngEarth_rumbleSensor") end; if extensions.beamngEarth_rumbleSensor then extensions.beamngEarth_rumbleSensor.setEnabled(true) end'
-M.SENSOR_DISABLE_COMMAND = 'if extensions.beamngEarth_rumbleSensor then extensions.beamngEarth_rumbleSensor.setEnabled(false) end'
+M.SENSOR_ENABLE_COMMAND = 'if not beamngEarth_rumbleSensor then extensions.load("beamngEarth_rumbleSensor") end; if beamngEarth_rumbleSensor then beamngEarth_rumbleSensor.setEnabled(true) end'
+M.SENSOR_DISABLE_COMMAND = 'if beamngEarth_rumbleSensor then beamngEarth_rumbleSensor.setEnabled(false) end'
 
 local sample = 0
 local sensorVehicleId, sensorVehicle = nil, nil
