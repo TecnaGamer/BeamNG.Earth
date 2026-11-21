@@ -159,6 +159,50 @@ def test_tenant_panel_requires_clear_frontage():
     assert parking_frontage(ring, np.array([.00008, .00008]), parking) is None
 
 
+def test_restaurant_doors_stay_on_mapped_walls():
+    from restaurant import restaurant
+    # Road is south. Two customer doors open on the east and north.
+    shell = np.array([[0.,0.],[20.,0.],[20.,15.],[0.,15.]])
+    handles = []
+    def mesh(points, material, *uv):
+        if material == 4 and all(.89 <= p[2] <= 1.23 for p in points):
+            handles.extend(points)
+    restaurant(shell, 0, 4.3, mesh, [[],[8.],[7.],[]])
+    xy = np.array(handles)[:,:2]
+    assert np.any((xy[:,0] > 20) & (np.abs(xy[:,1]-8) < .6))
+    assert np.any((xy[:,1] > 15) & (np.abs(xy[:,0]-13) < .6))
+    assert np.all(xy[:,1] > 0)
+
+
+def test_mapped_unit_door_on_split_exterior():
+    import whole_store
+    from build_stores import export_store
+    from store_match import matches
+    from unittest.mock import patch
+    root = ET.Element("osm")
+    for j,(x,y) in enumerate([(0,0),(8,0),(30,0),(48,0),(48,32),(0,32),(30,12),(0,12)]):
+        node = ET.SubElement(root, "node", id=str(j), lon=str(x/111320), lat=str(y/111132))
+        if j == 1:
+            ET.SubElement(node, "tag", k="entrance", v="main")
+    for ident,refs,tags in (("host",(0,1,2,3,4,5,0),{"building":"retail"}),
+                            ("unit",(0,1,2,6,7,0),{"shop":"clothes","name":"Uniqlo","level":"0"})):
+        way = ET.SubElement(root, "way", id=ident)
+        for j in refs:
+            ET.SubElement(way, "nd", ref=str(j))
+        for k,v in tags.items():
+            ET.SubElement(way, "tag", k=k, v=v)
+    with tempfile.TemporaryDirectory() as temp:
+        folder = Path(temp)
+        source = folder/"units.osm"
+        ET.ElementTree(root).write(source)
+        match, = matches(source)
+        assert match[3] is None and len(match[4]) == 1
+        with patch("whole_store.elevation", wraps=whole_store.elevation) as paint:
+            assert export_store(source, match, {}, folder)["storefront_overlay"]
+            _, width, _, doors, *_ = paint.call_args.args
+            np.testing.assert_allclose([width,*doors], [30,8], atol=.02)
+
+
 def test_signature_shapes_stay_on_standalone_buildings():
     from build_stores import export_store
     import threedmr
@@ -254,6 +298,8 @@ if __name__ == "__main__":
     test_signature_shapes_stay_on_standalone_buildings()
     test_street_sign_when_entrance_faces_parking()
     test_tenant_panel_requires_clear_frontage()
+    test_restaurant_doors_stay_on_mapped_walls()
+    test_mapped_unit_door_on_split_exterior()
     test_wall_observations()
     test_only_observed_elevation_changes()
     print(

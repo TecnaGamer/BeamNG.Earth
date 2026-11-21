@@ -12,7 +12,8 @@ MATERIALS = [
 ]
 
 
-def restaurant(xy, front, height, mesh):
+def restaurant(xy, front, height, mesh, entries):
+    mapped = any(entries)
     def part(origin, along, outward, x0, x1, y0, y1, z0, z1, material):
         corners = [
             (*(origin + x * along + y * outward), z)
@@ -44,17 +45,16 @@ def restaurant(xy, front, height, mesh):
         box(0, width, 0.09, 0.26, height - 0.22, height + 0.10, 4)
         # A compact entrance and dining area is the fallback when glazing is unmapped.
         # Adjacent footprint segments may represent service walls or small setbacks.
-        if i != front:
-            return
-        start = 3.8
-        available = min(width - start - 0.65, 8.0)
-        if available >= 1.2:
+        starts = [float(np.clip(x-.525,.08,width-1.13)) for x in entries[i]] if mapped else (
+            [3.8] if i == front and width >= 5.65 else [])
+        for start in sorted(starts):
             door_end = start + 1.05
             box(start, door_end, 0.10, 0.17, 0.06, 2.45, 4)
             box(start + 0.07, door_end - 0.07, 0.17, 0.19, 0.15, 2.36, 5)
             box(door_end - 0.18, door_end - 0.14, 0.19, 0.26, 0.90, 1.22, 4)
             glass_start = door_end + 0.45
-            glass_width = start + available - glass_start
+            next_door = min((x for x in starts if x > start), default=width)
+            glass_width = min(6.5, next_door-.30-glass_start, width-.65-glass_start)
             if glass_width >= 1.4:
                 panes = max(1, round(glass_width / 1.8))
                 bay = glass_width / panes
@@ -62,7 +62,14 @@ def restaurant(xy, front, height, mesh):
                 for index in range(panes):
                     x = glass_start + index * bay
                     box(x + 0.045, x + bay - 0.045, 0.17, 0.19, 0.73, 2.37, 5)
-        box(0.25, 2.75, 0.10, 0.40, 0, height + 0.85, 6)
+        if i != front:
+            if starts:
+                left, right = min(starts)-.08, max(starts)+1.13
+                box(left,right,.09,.85,2.76,2.97,4)
+            return
+        tower_clear = not any(start < 3.5 for start in starts)
+        if tower_clear:
+            box(0.25, 2.75, 0.10, 0.40, 0, height + 0.85, 6)
         # Fixed-aspect sign art above the entry; all remaining width is real bays.
         for start, size, base, crop in [
             (0.52, 1.95, height - 1.05, (55, 15, 238, 170)),
@@ -97,8 +104,9 @@ def restaurant(xy, front, height, mesh):
             )
         box(3.1, min(width - 0.35, 12.1), 0.09, 1.05, 2.76, 2.97, 4)
         box(3.1, min(width - 0.35, 12.1), 1.05, 1.08, 2.90, 2.97, 7)
-        for x in np.arange(2.82, 3.50, 0.13):
-            box(x, x + 0.055, 0.10, 0.17, 0.1, height - 0.24, 8)
+        if tower_clear:
+            for x in np.arange(2.82, 3.50, 0.13):
+                box(x, x + 0.055, 0.10, 0.17, 0.1, height - 0.24, 8)
 
     for index, origin in enumerate(xy):
         draw_wall(index, origin)

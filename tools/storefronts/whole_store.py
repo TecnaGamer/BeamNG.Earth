@@ -662,8 +662,27 @@ def lodge_entry(mesh, texture, vertex, center, span, height):
          texture(sign_image("Bass Pro Shops",4.8)))
 
 
+def wall_fixtures(ring, points):
+    """Project mapped doors and docks onto wall-local distances in metres."""
+    edges = np.roll(ring, -1, axis=0) - ring
+    lengths = np.linalg.norm(edges, axis=1)
+    axes = edges / lengths[:, None]
+    entries = [[] for _ in ring]
+    docks = [[] for _ in ring]
+    for point, service in points:
+        along = np.clip(np.sum((point - ring) * axes, axis=1), 0, lengths)
+        distance = np.linalg.norm(ring + along[:, None] * axes - point, axis=1)
+        choices = np.flatnonzero(distance <= distance.min() + 0.08)
+        i = max(
+            choices,
+            key=lambda j: min(along[j], lengths[j] - along[j]) + 0.001 * lengths[j],
+        )
+        (docks if service else entries)[i].append(along[i])
+    return entries, docks
+
+
 def build(
-    name, ring, street, height, points, mesh, texture, mapped_brick=False, photos=()
+    name, ring, street, height, points, mesh, texture, mapped_brick=False, photos=(), entrance_direction=None
 ):
     restaurant = name == "Chick-fil-A" or name in DINING
     ring = simplify(ring)
@@ -698,22 +717,13 @@ def build(
     axes = edges / lengths[:, None]
     normals = np.column_stack((axes[:, 1], -axes[:, 0]))
     score = np.maximum(0, normals @ street) ** 2 * np.minimum(lengths, 45)
-    entries = [[] for _ in ring]
-    docks = [[] for _ in ring]
-    for point, service in points:
-        along = np.clip(np.sum((point - ring) * axes, axis=1), 0, lengths)
-        distance = np.linalg.norm(ring + along[:, None] * axes - point, axis=1)
-        choices = np.flatnonzero(distance <= distance.min() + 0.08)
-        i = max(
-            choices,
-            key=lambda j: min(along[j], lengths[j] - along[j]) + 0.001 * lengths[j],
-        )
-        (docks if service else entries)[i].append(along[i])
-    front = int(np.argmax(score))
+    entries, docks = wall_fixtures(ring, points)
+    front = int(np.argmax(score if entrance_direction is None else
+                          np.maximum(0, normals @ entrance_direction) ** 2 * np.minimum(lengths, 45)))
     if any(entries):
         front = max(
             (i for i in range(len(ring)) if entries[i]),
-            key=lambda i: (len(entries[i]), lengths[i]),
+            key=lambda i: (len(entries[i]), score[i], lengths[i]),
         )
     family = PROFILES[name][0] if name in PROFILES else None
     if not any(entries):

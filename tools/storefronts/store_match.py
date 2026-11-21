@@ -174,6 +174,11 @@ def parking_frontage(coords, point, parking):
     return point + np.array([closest[first] - half * axis, closest[first] + half * axis]) / scale
 
 
+def public_ground(tags):
+    return (tags.get("access", "yes") in {"customers", "yes", "public", "permissive"}
+            and tags.get("level", "0") == "0" and tags.get("foot") != "no")
+
+
 def matches(path):
     tree = ElementTree.parse(path)
 
@@ -185,6 +190,7 @@ def matches(path):
     def point(n):
         return [float(n.get("lon")), float(n.get("lat"))]
 
+    path_ends = set()
     address_roads = {}
     parking = []
     buildings = []
@@ -194,6 +200,9 @@ def matches(path):
         if any(ref not in nodes for ref in refs):
             continue  # Partial extracts may omit nodes outside the download boundary.
         attributes = tags(way)
+        if (len(refs) >= 2 and refs[0] != refs[-1] and attributes.get("highway") in {"footway","path","pedestrian"}
+                and public_ground(attributes) and attributes.get("indoor") != "yes"):
+            path_ends.update((refs[0], refs[-1]))
         if attributes.get("name") and attributes.get("highway") in {
             "primary", "secondary", "tertiary", "residential", "unclassified", "living_street"
         } and len(refs) >= 2:
@@ -271,10 +280,26 @@ def matches(path):
             if not interior or not all(contains_points(coords, interior)):
                 continue
             has_unit = True
-            if len(shared) != 1:
+            # A door node splits a straight shared wall into two OSM edges.
+            sides = set(shared)
+            starts = [i for i in sides if (i-1) % len(coords) not in sides]
+            if len(starts) != 1:
                 continue
-            i = shared[0]
-            span = coords[[i, (i + 1) % len(coords)]]
+            indices = [(starts[0]+j) % len(coords) for j in range(len(sides)+1)]
+            span = coords[[indices[0],indices[-1]]]
+            scale = [111320*np.cos(np.radians(span[0,1])),111132]
+            line = (span[1]-span[0])*scale
+            if np.linalg.norm(line) < 2:
+                continue
+            axis = line/np.linalg.norm(line)
+            wall = (coords[indices]-span[0])*scale
+            if np.max(np.abs(wall @ [-axis[1],axis[0]])) > .25 or np.any(np.diff(wall @ axis) <= 0):
+                continue  # Multiple sides or a recessed corner cannot share one flat tenant panel.
+            unit_doors = []
+            for j in indices[1:-1]:
+                t = tags(nodes[refs[j]])
+                if (t.get("entrance") in {"yes","main"} and public_ground(t) and t.get("amenity") != "loading_dock"):
+                    unit_doors.append((coords[j],False))
             # Host ring winding determines which side faces outside.
             ring = coords - coords[0]
             signed_area = sum(
@@ -283,7 +308,7 @@ def matches(path):
             )
             if signed_area < 0:
                 span = span[::-1]
-            yield unit_name, unit_id, span, None, [], None
+            yield unit_name, unit_id, span, None, unit_doors, None
         if not name and not has_unit and props.get("building") == "retail":
             for node_id, tenant, location in tenant_points:
                 if not (np.all(location > lo) and np.all(location < hi) and contains_points(coords, [location])[0]):
@@ -300,12 +325,17 @@ def matches(path):
             continue
         center = (lo + hi) / 2
         scale = np.array([111320 * np.cos(np.radians(center[1])), 111132])
-        doors = [
-            point(nodes[r])
-            for r in refs[:-1]
-            if tags(nodes[r]).get("entrance") in {"main", "yes"}
-            and tags(nodes[r]).get("access") not in {"private", "no"}
-        ]
+        marked, inferred, docks = [], [], []
+        for ref in refs[:-1]:
+            attributes = tags(nodes[ref])
+            if attributes.get("amenity") == "loading_dock":
+                docks.append(point(nodes[ref]))
+            elif public_ground(attributes):
+                if attributes.get("entrance") in {"yes","main"}:
+                    marked.append(point(nodes[ref]))
+                elif "entrance" not in attributes and ref in path_ends:
+                    inferred.append(point(nodes[ref]))
+        doors = marked or inferred
         # When the door is unmapped, a store's addressed street identifies its public approach.
         road_points = []
         for road in address_roads.get(props.get("addr:street", "").casefold(), []):
@@ -328,15 +358,7 @@ def matches(path):
             or np.linalg.norm(offset) < 1
         ):
             continue
-        fixtures = []
-        for ref in refs[:-1]:
-            attributes = tags(nodes[ref])
-            dock = attributes.get("amenity") == "loading_dock"
-            if dock or (
-                attributes.get("entrance") in {"yes", "main"}
-                and attributes.get("access") not in {"private", "no"}
-            ):
-                fixtures.append((point(nodes[ref]), dock))
+        fixtures = [(p, False) for p in doors] + [(p, True) for p in docks]
         yield (
             name,
             ident,

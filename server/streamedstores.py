@@ -1,6 +1,8 @@
 """Opt-in near-tile storefronts from ordinary building and place cells."""
 
 import hashlib
+import csv
+from functools import lru_cache
 import json
 import logging
 import dmath
@@ -114,12 +116,50 @@ def tenant_panels(tenants, ring, parking):
             yield name, panel
 
 
-def cached_entry(cache, name, coords, bearing, material, sign_height=None):
+@lru_cache(maxsize=1)
+def entrance_index():
+    by_way = {}
+    try:
+        with (Path(__file__).parent / "data" / "storefront_entrances.csv").open(encoding="utf8", newline="") as f:
+            for row in csv.DictReader(f):
+                by_way.setdefault("w"+row["way"], []).append((float(row["lon"]), float(row["lat"]), int(row["explicit"])))
+    except (OSError, KeyError, ValueError) as exc:
+        LOG.warning("Mapped entrance data unavailable: %s", exc)
+        return {}
+    return by_way
+
+
+def mapped_doors(source, coords):
+    """Use only evidence on the same OSM way and still on the current footprint."""
+    way = source.partition("@")[0]
+    if not way.startswith("w") or not way[1:].isdigit():
+        return ()
+    rows = entrance_index().get(way, ())
+    if not rows:
+        return ()
+    scale = np.array([111320*dmath.cos(dmath.radians(coords[0,1])), 111132])
+    edges = (np.roll(coords, -1, axis=0)-coords)*scale
+    length2 = np.maximum(np.sum(edges*edges, axis=1), 1e-12)
+    public, paths = [], []
+    for lon, lat, explicit in rows:
+        offset = (np.array([lon,lat])-coords)*scale
+        fraction = np.clip(np.sum(edges*offset, axis=1)/length2, 0, 1)
+        residual = offset-edges*fraction[:,None]
+        if np.min(np.sum(residual*residual, axis=1)) <= 1.5*1.5:
+            (public if explicit else paths).append((lon,lat))
+    return tuple(sorted(set(public or paths)))
+
+
+def cached_entry(cache, name, coords, bearing, material, sign_height=None, doors=(), entrance_bearing=None):
     # Round away sub-centimetre anchor differences. The key describes the geometry actually exported.
     coords = coords.round(7)
     parameters = [STOREFRONT_VERSION, name, coords.tolist(), bearing, material]
     if sign_height is not None:
         parameters.append(sign_height)
+    if doors:
+        parameters.append(doors)
+    if entrance_bearing is not None:
+        parameters.append({"entrance_bearing": entrance_bearing})
     signature = json.dumps(parameters).encode()
     ident = hashlib.sha256(signature).hexdigest()[:24]
     meta = cache / f"store_{ident}.json"
@@ -143,10 +183,14 @@ def cached_entry(cache, name, coords, bearing, material, sign_height=None):
     if bearing is not None:
         angle = dmath.radians(bearing)
         direction = np.array([dmath.cos(angle), dmath.sin(angle)])
-    match = (name, ident, coords, direction, [], material)
+    match = (name, ident, coords, direction, [(np.array(p), False) for p in doors], material)
     if sign_height is not None:
         match += (sign_height,)
-    entry = export_store(Path("streamed"), match, {}, cache)
+    parking = None
+    if entrance_bearing is not None:
+        angle = dmath.radians(entrance_bearing)
+        parking = np.array([dmath.cos(angle), dmath.sin(angle)])
+    entry = export_store(Path("streamed"), match, {}, cache, entrance_direction=parking)
     with NamedTemporaryFile(mode="w", dir=cache, delete=False) as handle:
         json.dump(entry, handle)
     Path(handle.name).replace(meta)
@@ -199,7 +243,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
             or ground_max - ground_min > 3
         ):
             continue
-        _, label, material, subtype = spec.storefront
+        _, label, material, subtype, *sources = spec.storefront
         kind = str(spec.cls or "").lower()
         name = chain(label, kind == "cinema")
         generic_host = kind in {"retail", "commercial", "shop"} or (not kind and subtype == "commercial")
@@ -242,10 +286,12 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     name = tenants[0][0]
                 if not name and not (generic_host and tenants and len(aisles)):
                     continue
-            if kind in {"retail", "supermarket", "department_store", "hypermarket", "wholesale"}:
+            doors = mapped_doors(sources[0], coords) if name and sources else ()
+            entrance_bearing = None
+            if name and not doors and kind in {"retail", "supermarket", "department_store", "hypermarket", "wholesale"}:
                 parking = parking_direction(ring, aisles)
                 if parking is not None:
-                    facing = parking
+                    entrance_bearing = round(dmath.degrees(dmath.atan2(parking[1], parking[0])))
             bearing = round(dmath.degrees(dmath.atan2(facing[1], facing[0])))
             if name:
                 matches = [(name, coords, bearing, material)]
@@ -256,7 +302,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     parking_points = np.column_stack((lon, lat))
                 matches = ((brand, panel, None, None) for brand, panel in tenant_panels(tenants, coords, parking_points))
             for brand, geometry, heading, finish in matches:
-                entry = cached_entry(cache, brand, geometry, heading, finish)
+                entry = cached_entry(cache, brand, geometry, heading, finish, doors=doors, entrance_bearing=entrance_bearing)
                 local = dict(entry, file="storefronts/" + entry["file"])
                 x, y, _ = frame.geodetic_to_enu(entry["lat"], entry["lon"], 0.0)
                 yield {

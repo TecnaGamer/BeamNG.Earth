@@ -6,6 +6,8 @@ All 250 supported chains, rendered from generated GLBs on sample footprints. Eac
 
 [Cinema lobby comparison](amc-comparison.jpg) · [Six storefronts before and after the architecture pass](architecture-comparison.jpg) · [Grocery and apparel comparison](grocery-apparel.jpg) · [Uniqlo from driver height](uniqlo-comparison.jpg) · [Five storefronts from the road](approach-comparison.jpg)
 
+[Mapped entrances on four real store footprints](mapped-entrances.jpg)
+
 | Entries | Catalog sheet |
 | --- | --- |
 | 1-25 | [99 Ranch Market through Bass Pro Shops](catalog-01.jpg) |

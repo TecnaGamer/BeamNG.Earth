@@ -21,11 +21,12 @@ def cross(a, b, c):
     return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 
 
-def export_store(path, match, observations, out):
+def export_store(path, match, observations, out, *, entrance_direction=None):
     name, ident, coords, street, fixtures, wall_material, *sign_size = match
     height = HEIGHTS[name]
     center = (coords.min(0) + coords.max(0)) / 2
-    xy = (coords - center) * [111320 * math.cos(math.radians(center[1])), 111132]
+    scale = [111320 * math.cos(math.radians(center[1])), 111132]
+    xy = (coords - center) * scale
     overlay = street is None
     if not overlay:
         if sum(cross((0, 0), a, b) for a, b in zip(xy, np.roll(xy, -1, axis=0))) < 0:
@@ -109,7 +110,8 @@ def export_store(path, match, observations, out):
             return None
         normal = np.array([b[1] - a[1], a[0] - b[0]]) / width
         axis = (b - a) / width
-        half_span = axis * min(width * 0.48, 10 if name in whole_store.MARKETS else 5)
+        # An explicitly mapped unit wall with its own doors gives us the tenant's full frontage.
+        half_span = axis * (width/2 if fixtures else min(width * 0.48, 10 if name in whole_store.MARKETS else 5))
         offset = normal * 0.24
         if sign_size:
             offset = np.zeros(2)
@@ -132,16 +134,23 @@ def export_store(path, match, observations, out):
         elif tenant_sign:
             # Ground-floor glazing and an independent fascia with lettering readable across parking.
             panel_width = 2 * np.linalg.norm(half_span)
-            # The entrance canopy stays within the tenant's frontage.
-            canopy_half = axis * min(panel_width * .38, 4.5)
+            panel_doors = sorted(float(((pt - center) * scale) @ axis) + panel_width/2
+                                 for pt, dock in fixtures if not dock) or [panel_width/2]
+            # Each canopy covers its own door and stops before the neighbouring bay.
             outer = normal * .95
-            corners = [-canopy_half, -canopy_half + outer, canopy_half + outer, canopy_half]
-            for left, right in zip(corners, corners[1:] + corners[:1]):
-                wall(left, right, 2.84, 3.04, 2)
-            for z, indices in ((3.04, (0,1,2,0,2,3)), (2.84, (2,1,0,3,2,0))):
-                mesh([(*corners[j], z) for j in indices], 2)
+            reach = min(panel_width * .38, 4.5)
+            for j, door in enumerate(panel_doors):
+                low = (panel_doors[j-1]+door)/2 if j else 0.
+                high = (panel_doors[j+1]+door)/2 if j+1 < len(panel_doors) else panel_width
+                left = axis * (max(low, door-reach)-panel_width/2)
+                right = axis * (min(high, door+reach)-panel_width/2)
+                corners = [left, left+outer, right+outer, right]
+                for a, b in zip(corners, corners[1:] + corners[:1]):
+                    wall(a, b, 2.84, 3.04, 2)
+                for z, indices in ((3.04, (0,1,2,0,2,3)), (2.84, (2,1,0,3,2,0))):
+                    mesh([(*corners[k], z) for k in indices], 2)
             for bottom, top, image in (
-                (0., 3.1, whole_store.elevation(name, panel_width, 3.1, [panel_width / 2], [], [])),
+                (0., 3.1, whole_store.elevation(name, panel_width, 3.1, panel_doors, [], [])),
                 (3.1, 3.1 + min(2.5, panel_width / 4), None),
             ):
                 art = image if image is not None else whole_store.sign_image(name, panel_width / (top-bottom), top-bottom)
@@ -153,7 +162,6 @@ def export_store(path, match, observations, out):
         center = center + offset / [111320 * math.cos(math.radians(center[1])), 111132]
     else:
         if detailed:
-            scale = [111320 * math.cos(math.radians(center[1])), 111132]
             points = [((pt - center) * scale, dock) for pt, dock in fixtures]
             material = (wall_material or "").strip().lower()
             photos = []
@@ -162,10 +170,16 @@ def export_store(path, match, observations, out):
                     ends = (np.asarray(record["wall"]) - center) * scale
                     photos.append((ends, record.get("color")))
             whole_store.build(
-                name, xy, street, height, points, mesh, texture, material == "brick", photos
+                name, xy, street, height, points, mesh, texture, material == "brick", photos, entrance_direction
             )
         if name == "McDonald's":
-            restaurant(xy, front, height, mesh)
+            shell = whole_store.simplify(xy)
+            entries, _ = whole_store.wall_fixtures(shell, [((p-center)*scale, dock) for p,dock in fixtures])
+            walls = np.roll(shell, -1, axis=0)-shell
+            widths = np.linalg.norm(walls, axis=1)
+            outwards = np.column_stack((walls[:,1],-walls[:,0]))/widths[:,None]
+            street_wall = int(np.argmax(np.maximum(0,outwards @ street)**3 * np.minimum(widths,28)))
+            restaurant(shell, street_wall, height, mesh, entries)
         for i, (a, b) in enumerate(zip(xy, np.roll(xy, -1, axis=0))):
             wall(a, b, 0, height, 0)
             if i == front and name != "McDonald's" and not detailed:

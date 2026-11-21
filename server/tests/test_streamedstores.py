@@ -68,6 +68,37 @@ class StreamedStoresTest(unittest.TestCase):
             self.assertIsNone(parking_direction(footprint, front[:1]))
             self.assertIsNone(parking_direction(footprint, front + [line + [0, 100] for line in front]))
 
+    def test_mapped_doors_reach_the_export_and_change_its_cache_key(self):
+        import streamedstores
+        from build_stores import export_store
+        frame = geodesy.EnuFrame(40., -83.)
+        md = tile(frame, "Walmart", [], "supermarket")
+        layer = md.cell(None).layers["buildings"]
+        layer.attrs["src_record"] = np.array(["w42@7"])
+        # Customer doors on the far wall, a path at the road, an obsolete interior point.
+        lat, lon, _ = frame.enu_to_geodetic(np.array([40.,65.,48.,50.]),
+                                            np.array([60.,60.,30.,44.]), np.zeros(4))
+        rows = list(zip(lon,lat,(1,1,0,1)))
+        index = {"w42": rows}
+        with (tempfile.TemporaryDirectory() as cache, patch.dict(os.environ, BNE_STOREFRONTS="1"),
+              patch("threedmr.region_ids", return_value=[]),
+              patch("buildings.road_lines", return_value=[np.array([[0.,15.],[256.,15.]])]),
+              patch.object(streamedstores, "entrance_index", return_value=index),
+              patch.object(streamedstores, "export_store", wraps=export_store) as export):
+            def generate():
+                return buildings.road_tile_items(frame, 0, 0, md, lambda a,b: np.zeros(np.shape(a)),
+                                                 cache_dir=cache)[1][0]["local"]["file"]
+            first = generate()
+            match = export.call_args.args[1]
+            self.assertLess(match[3][1], -.9)  # Road still faces south.
+            np.testing.assert_allclose([p for p, dock in match[4]], sorted(zip(lon[:2],lat[:2])))
+            index["w42"] = rows[2:]
+            self.assertNotEqual(first, generate())
+            np.testing.assert_allclose(export.call_args.args[1][4][0][0], [lon[2],lat[2]])
+            layer.attrs["src_record"] = np.array(["w43@7"])
+            generate()
+            self.assertEqual(export.call_args.args[1][4], [])
+
     def test_fuel_site_with_supermarket_brand(self):
         from streamedstores import businesses, mapped_tenants
         frame = geodesy.EnuFrame(0., 0.)

@@ -5222,7 +5222,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     and len(parts) == len(parts[0]) == len(pieces) == 1 and mh == 0 and not edge
                     and not (float(at.get("num_floors") or 0) > 2) and not (float(at.get("height") or 0) > 14)):
                 at["_storefront"] = (str(key), str(at.get("name") or ""), str(at.get("facade_material") or ""),
-                                     str(at.get("subtype") or "").lower())
+                                     str(at.get("subtype") or "").lower(),
+                                     str(a["src_record"][i]) if a.get("src_record") is not None else "")
             at0, mh0 = at, mh
             for ring in kept:           # (a long one on varied ground: its pieces, each on its own ground)
                 at, mh = at0, mh0
