@@ -155,7 +155,7 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
 
 ## Audio assets
 
-- `mod/beamng_earth/levels/beamng_earth/art/sound/rumble_strip.ogg`: a short looping excerpt from **“TRANSPORTATION CAR PASS BY 01.wav”** by sengjinn, recorded as a car passes over rumble strips/sleeper lines. Source: [Freesound sound 176215](https://freesound.org/people/sengjinn/sounds/176215/). **CC0 1.0**; the bundled mono OGG is excerpted from the public high-quality preview and encoded for the in-game positional loop. Attribution is not required; author and source are listed here for provenance.
+- `mod/beamng_earth/levels/beamng_earth/art/sound/rumble_strip.ogg`: user-created rumble-strip recording supplied by ProxyFirewall202; converted to mono OGG and cross-faded for in-game looping.
 
 ## Software and libraries
 

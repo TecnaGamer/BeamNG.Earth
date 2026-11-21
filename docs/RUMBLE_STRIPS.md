@@ -25,6 +25,6 @@ References: [NSW Transport for NSW, ATLM installation direction](https://www.tra
 
 ## Audio asset and limitations
 
-`mod/beamng_earth/levels/beamng_earth/art/sound/rumble_strip.ogg` is a trimmed, cross-faded, mono 44.1 kHz OGG excerpt of sengjinn's [“TRANSPORTATION CAR PASS BY 01.wav”](https://freesound.org/people/sengjinn/sounds/176215/), whose page describes a car passing over rumble strips/sleeper lines. The source is marked CC0 1.0; provenance and attribution are recorded in [`CREDITS.md`](../CREDITS.md).
+`mod/beamng_earth/levels/beamng_earth/art/sound/rumble_strip.ogg` is a cross-faded, mono 44.1 kHz OGG conversion of the rumble-strip recording supplied by ProxyFirewall202. Playback gently fades when tyres enter and leave the marking; the loop seam is cross-faded to avoid an obvious restart or click. Provenance is recorded in [`CREDITS.md`](../CREDITS.md).
 
 This is a road-side field recording rather than a recording made inside the cabin of the player's simulated car. Placing a separate 3D emitter at each touching tyre makes the cue local to the tyre(s) at the line and audible from the cabin listener position, but the sound will still vary with the vehicle's camera/listener placement and BeamNG's audio settings. In-game validation is needed to tune the perceived level and spatial balance across vehicles.
