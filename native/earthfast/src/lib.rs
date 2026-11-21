@@ -11,6 +11,9 @@ mod island_kerb;
 mod deckreach;
 mod demsample;
 mod demtiles;
+mod follow;
+mod terrainready;
+mod provisional;
 mod dembias;
 mod regionaldem;
 mod lidarbc;
@@ -95,6 +98,7 @@ mod deshadow;
 mod colormatch;
 mod finished_tile;
 mod farglobal;
+mod farlocal;
 mod farpvs;
 mod farsel;
 mod dirtsteps;
@@ -7120,6 +7124,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     dm::register(m)?;
     demsample::register(m)?;
     demtiles::register(m)?;
+    follow::register(m)?;
+    farlocal::register(m)?;
+    terrainready::register(m)?;
+    provisional::register(m)?;
     m.add_function(wrap_pyfunction!(dembias::dem_bias, m)?)?;
     regionaldem::register(m)?;
     m.add_function(wrap_pyfunction!(lidarbc::bc_sample, m)?)?;
@@ -7610,6 +7618,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
-    m.add("VERSION", 576)?;
+    m.add("VERSION", 578)?;
     Ok(())
 }

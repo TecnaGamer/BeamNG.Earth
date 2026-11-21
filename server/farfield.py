@@ -497,7 +497,8 @@ def zoom_for_level(layout, lat, level):
 
 
 def skirt_depth(size, err=0.0):
-    return max(2.0, 0.02 * size, 2.5 * err + 1.0)
+    fast.require(578, "far skirt depth")
+    return fast._ef.far_skirt_depth(size, err)
 
 
 # --- global far tiles (geotiles phase 3b: docs/V1_4_SPEC.md 3.7 M6 on the geotiles grid) ------------------------
@@ -650,22 +651,14 @@ def build_global(dem, z, x, y, zoom, ref_zoom, layout=V131):
     Mercator position, u east, v north; grid: its surface's world z on the Mercator vertex grid, [j north, i east]):
     the DEM at `zoom` on its (cells + 1)^2 Mercator grid, the 2x reference at ref_zoom, simplified like the anchor's far
     levels (rtin within ADAPT_EPS of the spacing)."""
-    fast.require(GLOBAL_NEED, "global far tiles")
-    n = layout.cells
+    fast.require(578, "global far geometry")
+    def sample(steps, dem_zoom):
+        lat, lon = fast._ef.far_global_coordinates(z, x, y, steps)
+        return np.ascontiguousarray(dem.sample(lat, lon, dem_zoom), np.float64)
 
-    def ll(steps):
-        f = np.arange(steps + 1) / steps
-        X, Y = np.meshgrid(x + f, (y + 1) - f)          # [j north, i east]
-        w = float(2 ** z)
-        lon = X / w * 360.0 - 180.0
-        lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1.0 - 2.0 * Y / w))))
-        return lat, lon
-    lat, lon = ll(n)
-    elev = np.ascontiguousarray(np.asarray(dem.sample(lat, lon, zoom), np.float64))
-    rlat, rlon = ll(2 * n)
-    ref = np.ascontiguousarray(np.asarray(dem.sample(rlat, rlon, ref_zoom), np.float64))
+    elev = sample(layout.cells, zoom)
+    ref = sample(2 * layout.cells, ref_zoom)
     eps = ADAPT_EPS if layout.cells == 64 else 0.0
-    fast.require(SSE_NEED, "global far tiles' normal error")
     P, nrm, uv, planar, tris, grid, pz, err, skirt, size, err_n = fast._ef.far_global_mesh(int(z), int(x), int(y),
                                                                                            elev, ref, float(eps))
     return Built([0.0, 0.0, float(pz)], P, nrm, uv, planar, tris, grid.astype(np.float32), float(err), None,
@@ -940,49 +933,22 @@ def write_mod_assets(mod_dir):
 
 
 # --- geometry --------------------------------------------------------------------------
-def _skirt(nx, ny):
-    """Edge vertex index runs, each ordered so that the skirt faces outwards
-    (direction along the edge = up x outward normal)."""
-    g = np.arange(nx * ny).reshape(ny, nx)          # [j, i], j = north
-    return [g[0, :],            # south, west -> east
-            g[:, -1],           # east, south -> north
-            g[-1, ::-1],        # north, east -> west
-            g[::-1, 0]]         # west, north -> south
-
-
 def surface_at(grid, sp, fx, fy):
     """Height of a tile's triangulated surface at tile-local plane points (fx, fy in metres
     from the SW corner, inside the tile). grid: [j, i] vertex heights, spacing sp. Cells with
     i + j even are split along the SW-NE diagonal, the others along SE-NW, as build_tile
     triangulates them (the TerrainBlock's pattern, see torque_split45)."""
-    n = grid.shape[0] - 1
-    gx, gy = np.asarray(fx, np.float64) / sp, np.asarray(fy, np.float64) / sp
-    i = np.clip(np.floor(gx).astype(np.int64), 0, n - 1)
-    j = np.clip(np.floor(gy).astype(np.int64), 0, n - 1)
-    a, b = gx - i, gy - j
-    z00, z10 = grid[j, i], grid[j, i + 1]
-    z01, z11 = grid[j + 1, i], grid[j + 1, i + 1]
-    split45 = (i + j) % 2 == 0
-    # SW-NE diagonal: triangles (00, 10, 11) where a >= b and (00, 11, 01) above it.
-    z45 = np.where(a >= b, z00 + a * (z10 - z00) + b * (z11 - z10),
-                   z00 + a * (z11 - z01) + b * (z01 - z00))
-    # SE-NW diagonal: triangles (00, 10, 01) where a + b <= 1 and (10, 11, 01) above it.
-    z135 = np.where(a + b <= 1.0, z00 + a * (z10 - z00) + b * (z01 - z00),
-                    z11 + (1 - a) * (z01 - z11) + (1 - b) * (z10 - z11))
-    return np.where(split45, z45, z135)
+    fast.require(578, "far mesh surface sampling")
+    gx, gy = np.broadcast_arrays(np.asarray(fx, np.float64) / sp, np.asarray(fy, np.float64) / sp)
+    z = fast._ef.far_surface_points(grid, grid.shape[0], gx.ravel(), gy.ravel())
+    return z.reshape(gx.shape)
 
 
 def grid_triangles(n):
     """Triangles (counter-clockwise from +Z) of an (n+1) x (n+1) vertex grid indexed [j, i]:
     cell (i, j) is split SW-NE when i + j is even, SE-NW otherwise (torque_split45)."""
-    nx = n + 1
-    jj, ii = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
-    a = (jj * nx + ii).ravel()
-    b, c, d = a + 1, a + nx, a + nx + 1
-    even = ((ii + jj) % 2 == 0).ravel()[:, None]
-    t1 = np.where(even, np.stack([a, b, d], -1), np.stack([a, b, c], -1))
-    t2 = np.where(even, np.stack([a, d, c], -1), np.stack([b, d, c], -1))
-    return np.stack([t1, t2], 1).reshape(-1, 3)
+    fast.require(578, "far grid triangles")
+    return fast._ef.far_grid_triangles(n)
 
 
 @dataclass
@@ -1019,6 +985,7 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
     (the anchor's height quantum) and the heightmap zoom: vertices are then Q-rounded 2 m lattice
     samples, the same values the terrain block stores, and (L0, with_sink) `sink` is measured
     against the terrain's 2 m lattice."""
+    fast.require(578, "far tile geometry")
     cells = layout.cells
     x0, y0, x1, y1 = tile.bbox
     S = tile.size
@@ -1051,16 +1018,12 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
             # (on the far lattice, not the block's own 1 m samples: a dip at an odd metre can show a sliver of the tile
             # at the drawn block's edge ring; measuring at 1 m made every near tile ~4x the surface work and the
             # pending block's tiles slower than the rest, 2026-11-01)
-            terrain, terrain_sq = lq, heightmap.FAR_SQUARE
+            terrain = lq
     else:
-        xs = x0 + np.arange(cells + 1) * sp
-        ys = y0 + np.arange(cells + 1) * sp
+        xs, ys = fast._ef.far_axes((x0, y0), cells, sp)
         elev, U = heightmap.surface(frame, elev_fn, xs, ys)
-        if q is not None:
-            U = heightmap.quantise(U, q) * q
         rz = zoom if ref_zoom is None else ref_zoom
-        rxs = x0 + np.arange(2 * cells + 1) * (sp / 2)
-        rys = y0 + np.arange(2 * cells + 1) * (sp / 2)
+        rxs, rys = fast._ef.far_axes((x0, y0), 2 * cells, sp / 2)
         ref = heightmap.surface_u(frame, lambda la, lo: dem.sample(la, lo, rz), rxs, rys)
     step_f = (NEAR_FINE_M if tile.level == layout.exact_level else
               NEAR_FINE_NEXT_M if tile.level == layout.exact_level + 1 else 0.0) if NEAR_FINE_M > 0 else 0.0
@@ -1072,91 +1035,15 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
         ys = y0 + np.arange(nf) * step_f
         elev, U = heightmap.surface(frame, elev_fn, xs, ys)
         sp, cells = step_f, nf - 1
-    U = np.asarray(U, np.float64)
-    shade = U                           # the vertex normals: the whole grid's (its detail in the light)
-    adaptive = None
-    if fine:
-        fast.require(51, "fine near ground")
-        eps = NEAR_FINE_EPS * step_f
-        while True:
-            adaptive, surf, worst = fast._ef.rtin_mesh(np.ascontiguousarray(U), eps)
-            if len(np.unique(adaptive)) + 4 * nf <= NEAR_FINE_VERTS:
-                break
-            eps *= 2
-        U = surf
-    elif tile.level >= ADAPT_MIN_LEVEL and ADAPT_EPS > 0 and layout.cells == 64:    # (the v1.3.1 layout: its grid)
-        fast.require(51, "adaptive far tiles")
-        adaptive, U, _ = fast._ef.rtin_mesh(np.ascontiguousarray(U), ADAPT_EPS * sp)     # U: the mesh's surface
-
-    # Geometric error: the reference against the triangulated tile, on the 2x grid (fine: the samples themselves);
-    # vertical (the skirts) and along the normal (the screen-space LOD, earthfast normal_err)
-    if fine:
-        err = err_n = float(worst)
-    else:
-        rf = np.arange(2 * cells + 1) * (sp / 2)
-        RX, RY = np.meshgrid(rf, rf)
-        model = surface_at(U, sp, RX, RY)
-        err = float(np.abs(ref - model).max())
-        fast.require(SSE_NEED, "the far tiles' normal error")
-        err_n = float(fast._ef.far_normal_err(np.ascontiguousarray(ref, np.float64),
-                                              np.ascontiguousarray(model, np.float64), float(sp / 2)))
-    sink = None
-    if terrain is not None:
-        lf = np.arange(terrain.shape[0]) * terrain_sq
-        LX, LY = np.meshgrid(lf, lf)
-        sink = float(max(0.0, (surface_at(U, sp, LX, LY) - terrain).max()) + SINK_MARGIN)
-
-    X, Y = np.meshgrid(xs, ys)          # [j, i], j = north
-    # Colour: height along u, slope along v (mirrored palette, flat = 0.5).
-    gy, gx = np.gradient(elev, ys, xs)
-    slope_t = np.clip(dnp.hypot(gx, gy) / 1.0, 0.0, 1.0)
-    water = (elev <= 0.5) & (slope_t < 0.02)
-    uu = np.where(water, WATER_U, u_from_elev(elev))
-    vv = 0.5 - 0.47 * slope_t
-
-    # Vertex normals from the grid (central differences).
-    Ps = np.stack([X, Y, shade], -1)
-    di = np.gradient(Ps, axis=1)
-    dj = np.gradient(Ps, axis=0)
-    nrm = np.cross(di, dj)
-    nrm /= dnp.norm(nrm, axis=-1, keepdims=True)
-    P = np.stack([X, Y, U], -1)
-
-    ny, nx = X.shape
-    P, nrm = P.reshape(-1, 3), nrm.reshape(-1, 3)
-    uv = np.stack([uu, vv], -1).reshape(-1, 2)
-    runs = _skirt(nx, ny)
-    if adaptive is None:
-        tris = [grid_triangles(nx - 1)]     # CCW from +Z, the TerrainBlock's diagonals
-    else:                               # the mesh's vertices only; the skirts along its edge vertices
-        used = np.unique(adaptive)
-        new_of = np.full(nx * ny, -1, np.int64)
-        new_of[used] = np.arange(len(used))
-        tris = [new_of[adaptive]]
-        P, nrm, uv = P[used], nrm[used], uv[used]
-        runs = [new_of[r[new_of[r] >= 0]] for r in runs]
-
-    # Skirts: copies of the edge vertices, lowered; same normal and uv as the edge.
-    depth = skirt_depth(S, err)
-    extra_p, extra_n, extra_uv, nv = [], [], [], len(P)
-    for run in runs:
-        low = P[run] - (0.0, 0.0, depth)
-        t0, t1 = run[:-1], run[1:]
-        lo0 = nv + np.arange(len(run) - 1)
-        lo1 = lo0 + 1
-        tris.append(np.stack([t0, lo0, t1, t1, lo0, lo1], -1).reshape(-1, 3))
-        extra_p.append(low)
-        extra_n.append(nrm[run])
-        extra_uv.append(uv[run])
-        nv += len(run)
-    P = np.concatenate([P] + extra_p)
-    nrm = np.concatenate([nrm] + extra_n)
-    uv = np.concatenate([uv] + extra_uv)
-
-    pos = [float(x0), float(y0), float(np.round(U.mean()))]
-    P -= pos
-    planar = (P[:, :2] / S)
-    return Built(pos, P, nrm, uv, planar, np.concatenate(tris), U.astype(np.float32), err, sink, depth, S, err_n)
+    eps = (NEAR_FINE_EPS * step_f if fine else
+           ADAPT_EPS * sp if tile.level >= ADAPT_MIN_LEVEL and layout.cells == 64 else 0.0)
+    precision = elev.dtype.itemsize * 8 if elev.dtype.kind == "f" else 64
+    P, nrm, uv, planar, tris, grid, pz, err, sink, depth, err_n = fast._ef.far_local_mesh(
+        np.asarray(elev, np.float64), np.asarray(U, np.float64), np.asarray(ref, np.float64),
+        (x0, y0), S, sp, eps, NEAR_FINE_VERTS if fine else None, precision,
+        None if terrain is None else np.asarray(terrain, np.float64), heightmap.FAR_SQUARE, SINK_MARGIN,
+        q if tile.level > 0 else None)
+    return Built([float(x0), float(y0), pz], P, nrm, uv, planar, tris, grid, err, sink, depth, S, err_n)
 
 
 def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_px=None):
