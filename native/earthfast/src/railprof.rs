@@ -17,11 +17,11 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 /// np.maximum(a, b): a NaN either side wins, else a when a > b, else b (numpy's tie: b).
-fn np_max(a: f64, b: f64) -> f64 {
+pub(crate) fn np_max(a: f64, b: f64) -> f64 {
     if a.is_nan() { a } else if b.is_nan() { b } else if a > b { a } else { b }
 }
 /// np.minimum(a, b): a NaN either side wins, else a when a < b, else b.
-fn np_min(a: f64, b: f64) -> f64 {
+pub(crate) fn np_min(a: f64, b: f64) -> f64 {
     if a.is_nan() { a } else if b.is_nan() { b } else if a < b { a } else { b }
 }
 /// np.clip(x, lo, hi) for floats: x on a tie with lo, NaN through.
@@ -33,7 +33,7 @@ fn np_clip(x: f64, lo: f64, hi: f64) -> f64 {
     if hi < v { hi } else { v }
 }
 /// Python's max(a, b): a unless b > a.
-fn py_max(a: f64, b: f64) -> f64 {
+pub(crate) fn py_max(a: f64, b: f64) -> f64 {
     if b > a { b } else { a }
 }
 
@@ -139,7 +139,7 @@ fn sift_up(h: &mut [(f64, usize)], mut pos: usize) {
 }
 
 /// roads._dijkstra(adj, seeds) with heapq's own heap (the seeds in their dict's order).
-fn dijkstra(adj: &[Vec<(usize, f64)>], seeds: &[(usize, f64)]) -> Vec<f64> {
+pub(crate) fn dijkstra(adj: &[Vec<(usize, f64)>], seeds: &[(usize, f64)]) -> Vec<f64> {
     let mut d = vec![f64::INFINITY; adj.len()];
     let mut q: Vec<(f64, usize)> = Vec::new();
     for &(n, d0) in seeds {

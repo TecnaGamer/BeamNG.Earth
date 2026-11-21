@@ -4859,6 +4859,30 @@ DUAL_DECK_M = 30.0      # m: parts of one level parallel within this are one dec
 _NO_MERGE = threading.local()
 
 
+def _profile_ground_cache(sample):
+    """Share complete, identical terrain queries between the fits of one deck chain.
+    Keep batch boundaries: grading a collection of points reads its own plan set.
+    Short or expiring reads still run on every request."""
+    import revisit
+    cache = {}
+    remaining = 16 * 1024 * 1024
+
+    def ground(xy):
+        nonlocal remaining
+        key = np.asarray(xy, np.float64).tobytes()
+        hit = cache.get(key)
+        if hit is not None:
+            return hit.copy()
+        with revisit.scope() as read:
+            z = np.asarray(sample(xy), np.float64)
+        size = len(key) + z.nbytes + 128
+        if read.complete and size <= remaining:
+            cache[key] = z.copy()
+            remaining -= size
+        return z
+    return ground
+
+
 def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, levels=None, widths=None, pins=None,
                  crest=None, fast=False, level_clear=None):
     """deck_profile_once, then repeated with the deck-over-deck requirements: where two parts of
@@ -5116,7 +5140,7 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
     zs = deck_heights(lines, ground_fn, pins)
     if not zs:
         return zs
-    nodes, edges, adj = _chain_graph(lines)
+    nodes, edges, _ = _chain_graph(lines)
     allxy = np.concatenate([ln[:, :2] for ln in lines])
     gz = np.asarray(ground_fn(allxy), np.float64)
     deg = np.zeros(len(nodes), int)
@@ -5126,56 +5150,18 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
     deg = _pin(nodes, deg, pins)
     # no steeper than DECK_MAX_GRADE from an abutment: a short bridge over a road cannot reach full
     # headroom (2026-10-11: such decks became steep wedges, "walls" in the user's screenshot)
-    cap = [np.full(len(ln), np.inf) for ln in lines]
-    dab = [np.full(len(ln), np.inf) for ln in lines]      # m to the nearest abutment
-    steep = [np.full(len(ln), np.inf) for ln in lines]    # DECK_STEEP_GRADE off each abutment (below)
-    for k, (a, b, s) in enumerate(edges):
-        for node, zend in ((a, zs[k][0]), (b, zs[k][-1])):
-            if deg[node] != 1 or not np.isfinite(zend):
-                continue
-            d = _dijkstra(adj, {node: 0.0})
-            for k2, (ea, eb, es) in enumerate(edges):
-                dk = np.minimum(d[ea] + es, d[eb] + (es[-1] - es))
-                cap[k2] = np.minimum(cap[k2], zend + DECK_MAX_GRADE * dk)
-                dab[k2] = np.minimum(dab[k2], dk)
-                steep[k2] = np.minimum(steep[k2], zend + DECK_STEEP_GRADE * dk)
-    n_road = len(crossings) if n_road is None else n_road
-    req = [np.full(len(ln), -np.inf) for ln in lines]
-    for ci, cr in enumerate(crossings):     # (part, arc, height under it[, its own clearance: over water])
-        pi, sc, zc = cr[:3]
-        cl = cr[3] if len(cr) > 3 and cr[3] is not None else clear
-        # a deck-over-deck requirement (its 5th element: the upper part's level) lifts the parts of that level and
-        # above only: falling along the chain it reached the lower deck it was measured on, lifting it, and so the
-        # upper again each round (the Tsing Ma Bridge's upper deck 33 m over its lower one, 7 m in life, 2026-10-18)
-        min_lv = cr[4] if len(cr) > 4 and levels is not None else None
-        a, b, s = edges[pi]
-        d = _dijkstra(adj, {a: sc, b: s[-1] - sc})
-        # a junction at grade (Queens Plaza, the user's report #55, 2026-10-17: a ramp's map line starts in the
-        # intersection it climbs from; its deck rose 0.8 m over the cross street there, a hump across it)
-        flat = (ci < n_road and _road_crossing(cr) and float(dnp.interp(sc, s, dab[pi])) <= AT_GRADE_REACH_M
-                and float(dnp.interp(sc, s, cap[pi])) < zc + AT_GRADE_M)
-        for k, (ea, eb, es) in enumerate(edges):
-            dk = np.minimum(d[ea] + es, d[eb] + (es[-1] - es))
-            if k == pi:
-                dk = np.minimum(dk, np.abs(es - sc))
-            if flat:
-                cap[k] = np.minimum(cap[k], zc + DECK_MAX_GRADE * dk)
-            elif min_lv is None or levels[k] >= min_lv:
-                # A lower road has width: keep a level clearance corridor around its
-                # centreline instead of reaching the target at just one point.
-                reach = DECK_CLEAR_REACH_M if _road_crossing(cr) else 0.0
-                req[k] = np.maximum(req[k], zc + cl - grade * np.maximum(dk - reach, 0.0))
-                if k == pi:
-                    # A crossing can lie between mesh vertices. Both bracketing vertices
-                    # need full height, otherwise linear interpolation loses headroom.
-                    for point in (sc - reach, sc, sc + reach):
-                        if not 0 <= point <= es[-1]:
-                            continue
-                        j = int(np.searchsorted(es, point, side="left"))
-                        near = [j] if j < len(es) and abs(es[j] - point) < 1e-8 else [j - 1, j]
-                        for at in near:
-                            if 0 <= at < len(es):
-                                req[k][at] = max(req[k][at], zc + cl)
+    import fast
+    fast.require(574, "deck_constraints")
+    abut = [(node, z) for k, (a, b, _) in enumerate(edges) for node, z in ((a, zs[k][0]), (b, zs[k][-1]))
+            if deg[node] == 1 and np.isfinite(z)]
+    rows = [(cr[0], cr[1], cr[2], cr[3] if len(cr) > 3 and cr[3] is not None else clear,
+             _road_crossing(cr), cr[4] if len(cr) > 4 and levels is not None else None) for cr in crossings]
+    bounds = fast._ef.deck_constraints(len(nodes), [(a, b) for a, b, _ in edges], [s for _, _, s in edges], abut,
+                                       levels if levels is not None else [0.] * len(edges), rows,
+                                       len(crossings) if n_road is None else n_road,
+                                       (DECK_MAX_GRADE, DECK_STEEP_GRADE, grade, DECK_CLEAR_REACH_M,
+                                        AT_GRADE_REACH_M, AT_GRADE_M))
+    cap, steep, req = map(list, zip(*bounds))
     # the caps (from an abutment, from a junction at grade) never under the straight line between the abutments: two
     # abutments further apart in height than DECK_MAX_GRADE allows had the higher one pulled under its own road, a
     # step onto the deck (0.9 m up onto the I-20 bridge near Temple, GA, once its approaches were raised, 2026-10-20)
@@ -5526,7 +5512,7 @@ def _path_crest(info, crest):
 # at 130 km/h) as branches. BNE_FAST_DECK_ENDS=on.
 FAST_DECK_ENDS = os.environ.get("BNE_FAST_DECK_ENDS", "off") == "on"
 FAST_DECK_CLASSES = ("motorway", "trunk")
-TURN_BACK_COS = 0.0         # a path turning more than 90 degrees at a joint turns back (_turns_back)
+TURN_BACK_COS = 0.0         # a path turning more than 90 degrees at a joint turns back
 TURN_LOOK_M = 10.0          # m along each part its direction at the joint is read over
 
 
@@ -5544,16 +5530,13 @@ def _dir_at(ln, start):
     return u / n if n > 1e-9 else np.zeros(2)
 
 
-def _turns_back(lines, path):
-    """Does the path [(part, reversed)] turn back on itself (more than 90 degrees, TURN_BACK_COS) at any joint? Pure."""
-    for (k1, r1), (k2, r2) in zip(path[:-1], path[1:]):
-        u = _dir_at(lines[k1], r1)          # (arriving: its end, or its start when walked reversed)
-        u = -u if r1 else u
-        w = _dir_at(lines[k2], not r2)      # (leaving: its start, or its end when walked reversed)
-        w = -w if r2 else w
-        if float(dnp.dot(u, w)) < TURN_BACK_COS:
-            return True
-    return False
+def _deck_paths(lines, nodes, edges, need, fast_ends):
+    """Rank all abutment pairs using one shortest-path tree per source abutment."""
+    import fast
+    fast.require(574, "deck_paths")
+    tangents = [(_dir_at(ln, True), -_dir_at(ln, False)) for ln in lines] if fast_ends else None
+    return fast._ef.deck_paths(len(nodes), [(a, b, s[-1], need.get(k, -np.inf))
+                                            for k, (a, b, s) in enumerate(edges)], tangents, TURN_BACK_COS)
 
 
 def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, max_grade=None, pins=None, crest=None,
@@ -5565,7 +5548,7 @@ def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, 
     (part, arc m, height under it[, its own clearance]) roads and water under it (held `clear`, or their own
     clearance, over +-DECK_ROAD_HALF); spans: (part, arc from, arc to, min deck height). pins: joints at ground
     roads, split into independent abutments in the graph without moving the mapped geometry. fast: a motorway's or
-    trunk's chain (FAST_DECK_ENDS): a trunk turning back at a joint (_turns_back) comes after every other. Pure given
+    trunk's chain (FAST_DECK_ENDS): a trunk turning back at a joint comes after every other. Pure given
     ground_fn."""
     clear = DECK_ROAD_CLEAR if clear is None else clear
     lift = DECK_CLEAR if lift is None else lift
@@ -5612,50 +5595,8 @@ def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, 
             for k, z in zip(ks, sub):
                 out[k] = z
         return out
-    deg = np.zeros(len(nodes), int)
-    inc = [[] for _ in nodes]
-    for k, (a, b, _) in enumerate(edges):
-        deg[a] += 1
-        deg[b] += 1
-        inc[a].append(k)
-        inc[b].append(k)
-    abut = [i for i in range(len(nodes)) if deg[i] == 1]
-    if not abut:
-        return None
     out = [None] * len(lines)
     solved = {}                                 # node -> (z, [(unit tangent arriving, grade along it)])
-
-    def walk(start, done_edges, stop):
-        """Longest path from start through edges not in done_edges, ending at an abutment or a solved node
-        (stop): [(edge, reversed)] (Dijkstra on lengths, the farthest such end)."""
-        import heapq
-        dist, prev = {start: 0.0}, {}
-        q = [(0.0, start)]
-        while q:
-            d, u = heapq.heappop(q)
-            if d > dist.get(u, np.inf):
-                continue
-            if u != start and stop(u):
-                continue
-            for k in inc[u]:
-                if k in done_edges:
-                    continue
-                a, b, s = edges[k]
-                v = b if u == a else a
-                if d + s[-1] < dist.get(v, np.inf):
-                    dist[v] = d + s[-1]
-                    prev[v] = (u, k)
-                    heapq.heappush(q, (d + s[-1], v))
-        ends = [v for v in dist if v != start and stop(v)]
-        if not ends:
-            return None
-        v = max(ends, key=lambda x: dist[x])
-        path = []
-        while v != start:
-            u, k = prev[v]
-            path.append((k, edges[k][0] != u))
-            v = u
-        return path[::-1]
 
     def record(order, s, z, xy):
         """The solved path's nodes: their heights and the tangents / grades arriving there both ways."""
@@ -5692,35 +5633,16 @@ def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, 
         need[k] = max(need.get(k, -np.inf), zc + cl)
     for k, _, _, zmin in spans:
         need[k] = max(need.get(k, -np.inf), zmin)
-    best = None
-    for a0 in abut:
-        for a1 in abut:
-            if a1 <= a0:
-                continue
-            p = walk(a0, set(), lambda v, a1=a1: v == a1)
-            if p is None:
-                continue
-            L = sum(edges[k][2][-1] for k, _ in p)
-            top = max((need.get(k, -np.inf) for k, _ in p), default=-np.inf)
-            # (FAST_DECK_ENDS: a path turning back on itself at a joint, up one carriageway and down the other, is no
-            # trunk: it comes after every path that goes on through)
-            key = ((0 if fast and _turns_back(lines, p) else 1),
-                   top if np.isfinite(top) else -1e9, L)
-            if best is None or key > best[0]:
-                best = (key, p)
-    if best is None:
+    paths = _deck_paths(lines, nodes, edges, need, fast)
+    if not paths:
         return None
-    done = set()
-    todo = [best[1]]
-    first = True
-    while todo:
-        order = todo.pop()
+    for i, order in enumerate(paths):
         k0, r0 = order[0]
         start = edges[k0][1] if r0 else edges[k0][0]
         kl, rl = order[-1]
         end = edges[kl][0] if rl else edges[kl][1]
         e0 = e1 = None
-        if not first:
+        if i:
             ln0 = np.asarray(lines[k0], np.float64)[:, :2]
             ln0 = ln0[::-1] if r0 else ln0
             d0 = (ln0[1] - ln0[0]) / max(dnp.hypot(*(ln0[1] - ln0[0])), 1e-9)
@@ -5731,25 +5653,13 @@ def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, 
                 d1 = (lnl[-1] - lnl[-2]) / max(dnp.hypot(*(lnl[-1] - lnl[-2])), 1e-9)
                 z1, g1 = end_of(end, d1)
                 e1 = (z1, g1)
-        first = False
         got = _path_curve(lines, order, *args, ends=(e0, e1))
-        for k, _ in order:
-            done.add(k)
         if got is None:
-            continue
+            return None
         res, xy, s, z = got
         for k, v in res.items():
             out[k] = v
         record(order, s, z, xy)
-        if not todo:                            # the next branch: from any solved node with an open edge
-            for nd in list(solved):
-                if any(k not in done for k in inc[nd]):
-                    p = walk(nd, done, lambda v: deg[v] == 1 or v in solved)
-                    if p:
-                        todo.append(p)
-                        break
-    if any(o is None for o in out):             # parts not reached (should not happen): the legacy answer
-        return None
     return out
 
 
@@ -8831,6 +8741,8 @@ class BridgeProfiles:
                                 levels=levels, widths=[pool[k][0].width for k in comp], pins=pins, crest=crest,
                                 fast=fast, level_clear=level_clear)
         base = self._landing_ground(lines, gl)
+        if crest is not None:
+            base = _profile_ground_cache(base)
         zs = solve(base)
         # a free end standing on another deck: solved again with it at that deck's height as drawn (measured too:
         # _observed) (_end_ons)
@@ -9203,7 +9115,7 @@ class BridgeProfiles:
                 return True
         return False
 
-    def _chain_of(self, key, ends, adopt=True):
+    def _chain_of(self, key, ends, adopt=True, needed=()):
         """Solve the chain of part key (its ring's ends (lat, lon) say where to start loading): its parts into done.
         Returns done[key] or None. A chain another store owns (owner_of) is solved there and its result taken in, its
         geometry mapped into this frame (one deck profile per chain, whichever store a tile asks)."""
@@ -9222,7 +9134,7 @@ class BridgeProfiles:
         import revisit
         comp = []
         with revisit.scope() as short:
-            return self._chain_solve(key, ends, adopt, comp, short)
+            return self._chain_solve(key, ends, adopt, comp, short, needed)
 
     def _retry_due(self, key):
         """BNE_ROADSHAPE=profile (P3c, Codex review of P3b): a chain published while its joint profile read short (a
@@ -9318,7 +9230,7 @@ class BridgeProfiles:
         with self.lock:
             return key in self.done
 
-    def _chain_solve(self, key, ends, adopt, comp_out, short):
+    def _chain_solve(self, key, ends, adopt, comp_out, short, needed=()):
         """_chain_of's work (comp_out: the chain's parts, for its caller; short: the solve's revisit scope, whose
         faults so far are noted with the parts in the same hold of the lock that publishes them)."""
         pool, ground, loaded = {}, {}, set()
@@ -9359,6 +9271,12 @@ class BridgeProfiles:
                         return got
             except Exception as ex:         # (solved here rather than not at all)
                 log.debug("chain %s from its owner: %s: %s", key, type(ex).__name__, ex)
+        mine = {k for k in comp if block is None or self._block_of_xy(pool[k][1]) == block}
+        if needed and block is not None:
+            # An adopter can only take the complete chain. This window will
+            # publish its own block; other requested parts must already exist.
+            if any(k not in mine and not self._has(k) for k in needed):
+                return None
         tl = self.__dict__.setdefault("_obs_tl", threading.local())
         tl.measured = set()
         reqs = {} if (roadshape.PROFILE and self.STRUCTURES) else None     # (v2 P3a's shadow: what the solve asked)
@@ -9383,7 +9301,6 @@ class BridgeProfiles:
             fresh = ck is not None and ck not in self.trusses
         # the first solve of a part is kept, and what goes with it, unless this one saw more of it (a window's solve:
         # only its block's pieces, each piece's from its own block's window)
-        mine = {k for k in comp if block is None or self._block_of_xy(pool[k][1]) == block}
         keep = {k: (pool[k][0], pool[k][1], z, pool[k][2]) for k, z in zip(comp, zs)
                 if k in mine and (before[k] is None or len(pool[k][1]) > before_n[k])}
         own = None if key in mine else (pool[key][0], pool[key][1], zs[comp.index(key)], pool[key][2])
@@ -9549,7 +9466,8 @@ class BridgeProfiles:
         frame. False when owner's solve did not cover comp's parts. short: the adopting solve's revisit scope: what
         it and the owner's solve read short is noted with each part as it is taken in (the same hold of the lock)."""
         first = min(comp)
-        if owner._chain_of(first, self._ends_ll(pool[first][1]), adopt=False) is None:
+        needed = comp if self.STRUCTURES and DECK_K_SPEED else ()
+        if owner._chain_of(first, self._ends_ll(pool[first][1]), adopt=False, needed=needed) is None:
             return False
         import geotiles
         with owner.lock:

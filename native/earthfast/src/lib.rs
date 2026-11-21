@@ -6709,6 +6709,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hash01_test, m)?)?;
     m.add_function(wrap_pyfunction!(hash01, m)?)?;
     m.add_function(wrap_pyfunction!(chaingraph::chain_graph, m)?)?;
+    m.add_function(wrap_pyfunction!(chaingraph::deck_paths, m)?)?;
+    m.add_function(wrap_pyfunction!(chaingraph::deck_constraints, m)?)?;
     m.add_function(wrap_pyfunction!(building_walls, m)?)?;
     m.add_function(wrap_pyfunction!(float_predictor_f32, m)?)?;
     m.add_function(wrap_pyfunction!(segment_crossings, m)?)?;
@@ -7473,6 +7475,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // walls_rays32 for the buildings beside them; grading BNE_BATTER, road revamp v2 P1a). 495 and 496 are other
     // branches'
     m.add_function(wrap_pyfunction!(batter_apply_vw, m)?)?;
+    m.add_function(wrap_pyfunction!(batter::batter_window, m)?)?;
     m.add_function(wrap_pyfunction!(batter_combine, m)?)?;
     // 503: batter_apply_vw, batter_combine (the vanilla slopes' heights and today's weight apart: today's grading made
     // only where its weight is not 0; each bin's segments met nearest first, so a point in a core stops within its
@@ -7606,6 +7609,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
-    m.add("VERSION", 571)?;
+    m.add("VERSION", 574)?;
     Ok(())
 }

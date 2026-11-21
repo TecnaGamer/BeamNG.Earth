@@ -7351,8 +7351,6 @@ class _Planner:
         # (the pieces of one road a cell edge cut apart meet at one height too, WELD_ON; a side road starts at the
         # main's painted edge, not in its middle, TRIM_SIDE_MOUTHS_ON)
         out = (plans, merge_plan_set(plans))
-        if BATTER_ON and out[1].n and not self._batter_of(out[1]):
-            return out          # (made from a stand-in's buildings or short of its ground: not kept)
         with self.lock:
             stages = self.__dict__.get("_road_stages", {})
             # (not while a cell's fetch failed: it is asked again; the roads' plans alone: a cell's road stage is its
@@ -7402,6 +7400,31 @@ class _Planner:
         PIN_STATS["field_s"] += time.perf_counter() - t1
         PIN_STATS["pinned"] += 1
         return np.asarray(got, np.float64)
+
+    def _batter_window(self, pack, x, y):
+        """Slope data for the query, taken from the fully welded and trimmed set.
+        Hold the most recent window per pack. A short DEM or wall read is retried."""
+        import fast
+        from types import SimpleNamespace
+
+        # Nearby deck stations reuse a window. Rounding only expands the search.
+        bounds = tuple(float(v) for v in (np.floor(np.min(x) / 64) * 64, np.floor(np.min(y) / 64) * 64,
+                                           np.ceil(np.max(x) / 64) * 64, np.ceil(np.max(y) / 64) * 64))
+        cached = getattr(pack, "_batter_window", None)
+        if cached is not None and cached[0] == bounds:
+            return cached[1]
+        fast.require(574, "batter_window")
+        rows, nb = fast._ef.batter_window(pack.a, pack.b, pack.h, pack.of, pack.nb, bounds,
+                                          max(BATTER_R_MAX, T_MAX + BATTER_OLD_FADE_M, BATTER_CORE_BLEND_M))
+        local = SimpleNamespace(nb=nb)
+        for name in ("a", "b", "za", "zb", "h", "rh", "ba", "bb", "rk", "rid", "ab", "st", "cut", "of",
+                     "probe_half", "width_delta"):
+            values = getattr(pack, name, None)
+            if values is not None:
+                setattr(local, name, values[rows])
+        if not len(rows) or self._batter_of(local):
+            pack._batter_window = (bounds, local)
+        return local
 
     def _batter_of(self, pack):
         """pack.bt: the vanilla slopes' params of a plan set's segments (batter_params) from the plans' ground (elev)
@@ -7562,7 +7585,8 @@ class _Planner:
                 base = np.asarray(got, np.float64).reshape(shape)
         if not graded:
             return base
-        out = grade_points(e, n, base.ravel(), pack, lift) if plans else np.array(base.ravel(), np.float64, copy=True)
+        batter = self._batter_window(pack, e, n) if BATTER_ON and pack.n else None
+        out = grade_points(e, n, base.ravel(), pack, lift, batter) if plans else np.array(base.ravel(), np.float64, copy=True)
         if racedig.ON:      # (the raceways by their joins where they meet, the band by its sampled line: racedig)
             race = None
             band = self._raceway_band(e, n, base.ravel(), lat.ravel(), lon.ravel())
@@ -8511,7 +8535,7 @@ class PlanPack:
         return got
 
 
-def grade_points(px, py, base, plans, lift=0.0):
+def grade_points(px, py, base, plans, lift=0.0, batter=None):
     """base at the points (px, py) graded under the plans (see the module doc; a list or a PlanPack of them), by the
     Rust loop (native/earthfast grade_points: a Python loop per segment was the server's largest CPU cost while driving,
     2026-10-12). Pure."""
@@ -8522,7 +8546,8 @@ def grade_points(px, py, base, plans, lift=0.0):
     if not len(px):
         return out
     pack = plans if isinstance(plans, PlanPack) else PlanPack(plans)
-    bt = getattr(pack, "bt", None) if BATTER_ON else None
+    slopes = pack if batter is None else batter
+    bt = getattr(slopes, "bt", None) if BATTER_ON else None
     if bt is None or not len(pack.h):
         return _grade_points_today(px, py, base, pack, lift, out)
     import fast
@@ -8536,10 +8561,10 @@ def grade_points(px, py, base, plans, lift=0.0):
     f64 = np.float64
     v, w = fast._ef.batter_apply_vw(
         np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64),
-        pack.a, pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.ba, pack.bb, bt[0], bt[1], bt[2], pack.nb,
+        slopes.a, slopes.b, slopes.za, slopes.zb, slopes.h, slopes.rh, slopes.ba, slopes.bb, bt[0], bt[1], bt[2], slopes.nb,
         (float(BATTER_L0_M), float(BATTER_CREST_M), float(BATTER_STRIP_LO), float(BATTER_STRIP_UP),
          float(BATTER_CLOSE_T), float(BATTER_CLOSE_K), float(BATTER_SMOOTH_K), float(BATTER_CORE_BLEND_M),
-         float(T_MAX), float(BATTER_OLD_FADE_M), float(lift), float(BATTER_BIN_M)), getattr(pack, "width_delta", None))
+         float(T_MAX), float(BATTER_OLD_FADE_M), float(lift), float(BATTER_BIN_M)), getattr(slopes, "width_delta", None))
     out = v
     need = w > 0.0
     sub = np.flatnonzero(need)

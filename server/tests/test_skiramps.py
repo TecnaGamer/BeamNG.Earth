@@ -2,7 +2,7 @@
 by default, and what it changes.
 
 - BNE_FAST_DECK_ENDS: a motorway's branched deck chain is solved along a line a car drives, never a U through its two
-  carriageways (roads.deck_curve fast, _turns_back).
+  carriageways (roads.deck_curve fast).
 - BNE_FAST_DECK_GROUND: a ramp beside a motorway's road is no twin of the motorway's abutment, which is never raised:
   its fill keeps clear of the motorway (grading._Planner._end_lift_calc).
 - BNE_FAST_GAP: a motorway's profile by a deck end reads its own line across the elevation's opening (grading.gap_fill).
@@ -69,22 +69,34 @@ class FastDeckEnds(unittest.TestCase):
         s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(lines[0], axis=0).T))]
         self.assertGreaterEqual(float(np.interp(120.0, s, new[0])), 8.35 - 0.05)
 
-    def test_turns_back(self):
-        lines, _g, _c = self.chain()
-        self.assertTrue(roads._turns_back(lines, [(0, False), (1, False)]))
-        self.assertFalse(roads._turns_back(lines, [(0, False), (2, False)]))
-        self.assertFalse(roads._turns_back(lines, [(2, True), (0, True)]))
-
     def test_right_angle_joints(self):
-        # (a joint at 90 degrees is no turn back, nor one a hair under it; past it, either way round, it is; the sign
-        # read with dnp.dot, the same on every CPU)
+        # Two long arms and one short continuation. Either direction through
+        # the long arms wins on length until the angle exceeds 90 degrees.
         a = line(0.0, 50.0)
+        c = line(50.0, 55.0)
         for ang, back in ((90.0, False), (89.9, False), (90.1, True), (135.0, True), (45.0, False)):
-            t = np.radians(ang)                     # (the turn at the joint)
+            t = np.radians(ang)
             b = np.c_[50.0 + np.linspace(0.0, 40.0, 11) * np.cos(t), np.linspace(0.0, 40.0, 11) * np.sin(t)]
-            for path, lines in (([(0, False), (1, False)], [a, b]), ([(1, True), (0, True)], [a, b]),
-                                ([(0, False), (1, True)], [a, b[::-1]])):
-                self.assertEqual(roads._turns_back(lines, path), back, (ang, path))
+            for lines, priority in (([a, b, c], 0), ([b[::-1], a[::-1], c], 1), ([a, b[::-1], c], 0)):
+                nodes, edges, _ = roads._curve_graph(lines, None)
+                path = roads._deck_paths(lines, nodes, edges, {priority: 100.}, True)[0]
+                self.assertEqual({k for k, _ in path} == {0, 1}, not back, (ang, path))
+
+    def test_equal_distance_paths_keep_heap_and_edge_order(self):
+        # Equal-length routes through a diamond. The smaller node reaches
+        # the far joint first, even when its outgoing edge comes later.
+        edges = [(0, 1), (1, 3), (1, 2), (3, 4), (2, 4), (4, 5)]
+        edges = [(a, b, np.array([0., 1.])) for a, b in edges]
+        self.assertEqual(roads._deck_paths([], range(6), edges, {}, False)[0],
+                         [(0, False), (2, False), (4, False), (5, False)])
+
+    def test_closed_branch_uses_fallback_before_sampling_terrain(self):
+        # A loop attached at just one joint cannot be fitted as an open branch.
+        lines = [line(0, 50), line(50, 100), line(50, 75, 0, 25),
+                 line(75, 25, 25), line(25, 50, 25, 0)]
+        ground = mock.Mock(side_effect=AssertionError("unusable profile sampled terrain"))
+        self.assertIsNone(roads.deck_curve(lines, ground, fast=True))
+        ground.assert_not_called()
 
     def test_one_line_unchanged(self):
         ln = line(0.0, 320.0)
