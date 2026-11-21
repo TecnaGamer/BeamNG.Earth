@@ -41,7 +41,7 @@ class KerbRuleTest(unittest.TestCase):
         self.assertEqual(roads.kerb_roll(spec(), "US", walled_row=30.0, town_front=0.1), 1.0, "front yards")
 
 
-@unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= sidewalks.V2_NATIVE, "earthfast 502")
+@unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= sidewalks.V2_NATIVE, f"earthfast {sidewalks.V2_NATIVE}")
 class MeshTest(unittest.TestCase):
     def setUp(self):
         p = mock.patch.object(sidewalks, "V2", True)
@@ -63,6 +63,12 @@ class MeshTest(unittest.TestCase):
         """z of the drawn mesh's highest point within 0.12 m of the curb line (y = 6 - 1.25) at x."""
         near = (np.abs(P[:, 0] - x) < 0.3) & (P[:, 1] > 4.75 - 0.01) & (P[:, 1] < 4.75 + 0.35)
         return P[near, 2].max()
+
+    def test_explicit_walk_surface_wins_over_inferred_brick(self):
+        (_, _, _, inferred), _ = self.build(self.walk(brick=True))
+        (_, _, _, tagged), _ = self.build(self.walk(brick=True, town_mat=1))
+        self.assertIn(sidewalks.BRICK, inferred)
+        self.assertNotIn(sidewalks.BRICK, tagged)
 
     def test_per_vertex_reveal(self):
         hv = np.linspace(0.08, 0.20, 41)
@@ -92,7 +98,7 @@ class MeshTest(unittest.TestCase):
         self.assertAlmostEqual(float(P[:, 2].min()), min(top - 0.5, -sidewalks.SINK), places=6)
 
 
-@unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= sidewalks.V2_NATIVE, "earthfast 502")
+@unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= sidewalks.V2_NATIVE, f"earthfast {sidewalks.V2_NATIVE}")
 class ProfileTest(unittest.TestCase):
     def setUp(self):
         p = mock.patch.object(sidewalks, "V2", True)
@@ -104,7 +110,7 @@ class ProfileTest(unittest.TestCase):
         return walks
 
     def test_reveal_in_range_without_steps(self):
-        # a bumpy road edge (+-6 cm every few metres) on a slope: the walk smooth, its reveal kept to 0.08-0.20
+        # a bumpy road edge (+-6 cm every few metres) on a slope: the walk smooth, its reveal kept to 0.10-0.16
         def ground(x, y):
             return 0.02 * x + 0.06 * np.sin(x * 1.7) + 0.03 * (y - 4.75)
         w = {"pts": straight(201, 100.0), "side": 1, "caps": (True, True), "ramps": [], "w": 2.5, "roll": 0.0}
@@ -112,7 +118,8 @@ class ProfileTest(unittest.TestCase):
         hv = w["hv"]
         self.assertEqual(len(hv), len(w["pts"]))
         self.assertTrue((hv >= sidewalks.REVEAL_MIN - 1e-12).all() and (hv <= sidewalks.REVEAL_MAX + 1e-12).all())
-        self.assertGreater(float(np.ptp(hv)), 0.05, "the reveal varies along the street")
+        self.assertGreater(float(np.ptp(hv)), (sidewalks.REVEAL_MAX - sidewalks.REVEAL_MIN) / 2,
+                           "the reveal uses at least half the available range on this bumpy street")
         s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(w["pts"][:, :2], axis=0).T))]
         top = w["pts"][:, 2] + hv
         self.assertLess(float(np.max(np.abs(np.diff(top)) / np.maximum(np.diff(s), 1e-3))), 0.1, "no steps")
@@ -131,7 +138,7 @@ class ProfileTest(unittest.TestCase):
 
 
 class BentSeamTest(unittest.TestCase):
-    @unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= sidewalks.V2_NATIVE, "earthfast 502")
+    @unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= sidewalks.V2_NATIVE, f"earthfast {sidewalks.V2_NATIVE}")
     def test_pieces_meeting_on_a_bend_share_their_curb_point_and_reveal(self):
         # a run bending 30 degrees at a tile border: each tile's piece ends on the bend; with the whole run's mitre
         # there (build_tile's end_n) both put the curb, and so the reveal's probes, at one point
@@ -160,7 +167,7 @@ class BentSeamTest(unittest.TestCase):
 
 
 class DrivewayTest(unittest.TestCase):
-    @unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= sidewalks.V2_NATIVE, "earthfast 502")
+    @unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= sidewalks.V2_NATIVE, f"earthfast {sidewalks.V2_NATIVE}")
     def test_crossings_along_a_run(self):
         run = straight()
         lines = [(np.array([[10.0, 0.0], [10.0, 20.0]]), 1.6), (np.array([[30.0, 0.0], [31.0, 3.0]]), 1.5)]
@@ -173,7 +180,7 @@ class DrivewayTest(unittest.TestCase):
         self.assertEqual([(round(a, 9), round(b, 9)) for a, b in roads.drives_on(run[5:], run, got)], [(3.4, 6.6)])
 
 
-@unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= sidewalks.V2_NATIVE, "earthfast 502")
+@unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= sidewalks.V2_NATIVE, f"earthfast {sidewalks.V2_NATIVE}")
 class CornerTest(unittest.TestCase):
     def corners(self, v2):
         a = np.column_stack([np.linspace(-60, 0, 31), np.zeros(31), np.zeros(31)])
@@ -181,6 +188,22 @@ class CornerTest(unittest.TestCase):
         rows = [("a", spec(), a, -100.0), ("b", spec(), b, -100.0)]
         with mock.patch.object(sidewalks, "V2", v2):
             return junctions.find(rows, roads.has_sidewalks, None)[0]
+
+    def test_crosswalks_on_a_short_block(self):
+        def crossings(span):
+            lines = [("west", [(-110, 0), (0, 0)]), ("block", [(0, 0), (span, 0)]),
+                     ("east", [(span, 0), (110, 0)])]
+            for i, x in enumerate((0, span)):
+                for y in (-100, 100):
+                    lines.append((f"side{i}_{y}", [(x, 0), (x, y)]))
+            rows = [(fid, spec(), np.column_stack((xy, np.zeros(len(xy)))), -100.) for fid, xy in lines]
+            with mock.patch.object(sidewalks, "V2", True):
+                marks = junctions.find(rows, roads.has_sidewalks, None)[2]
+            return [cw for cw in marks if not cw.get("stop") and abs(cw["a"][0] - cw["b"][0]) < .1
+                    and 0 < cw["a"][0] < span]
+
+        self.assertEqual(len(crossings(28)), 1)  # 3.5 m centre to centre, only 0.5 m between painted bands
+        self.assertEqual(len(crossings(32)), 2)
 
     def test_vanilla_radius_and_steps(self):
         old, new = self.corners(False), self.corners(True)
@@ -195,6 +218,89 @@ class CornerTest(unittest.TestCase):
         self.assertAlmostEqual(r_old, junctions.RADII["residential"], delta=0.1)
         self.assertAlmostEqual(r_new, junctions.RADII_V2["residential"], delta=0.1)
         self.assertLess(step, 1.15 * sidewalks.ARC_STEP_M, "about ARC_STEP_M a segment (whole segments a turn)")
+
+
+@unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= 561, "earthfast 561")
+class DistrictTest(unittest.TestCase):
+    def test_frontage_follows_wall_but_stops_at_drive(self):
+        wall = np.array([[1., 4.], [39., 5.9], [39., 12.], [1., 12.]])
+        curb = np.array([[0., 0., 0.], [40., 0., 0.]])
+        outward = np.array([[0., 1.], [0., 1.]])
+        profile = fast._ef.TownFrontage([(wall, 1, True)]).profile(
+            curb, outward, 2.5, [(17., 20.)], (False, False))
+        s, widths = np.asarray(profile).T
+        for x in (5., 30.):
+            self.assertAlmostEqual(np.interp(x / 40, s, widths), 4 + (x - 1) * .05)
+        self.assertEqual(np.interp(18. / 40, s, widths), 2.5)
+        with mock.patch.object(sidewalks, "V2", True):
+            b = sidewalks.Builder((0., 0., 0.), collision=True)
+            b.add_walk({"pts": curb + [0., 1.25, 0.], "w": 2.5, "caps": (True, True), "side": 1,
+                        "front_widths": profile}, 2.5)
+            for mesh in (b.arrays(), b.col.arrays()):
+                self.assertGreater(mesh[0][:, 1].max(), 5.8)
+                self.assertLessEqual(mesh[0][:, 1].max(), 5.901)
+
+    def test_mapped_square_hole_and_road_exclusion(self):
+        import frontage_geometry
+        def box(x0, y0, x1, y1):
+            return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], np.float64)
+        coverage = frontage_geometry.Coverage((0., 0., 20., 20.))
+        coverage.reserve(box(0, 0, 2, 20))
+        xy, t, m, edges = fast._ef.town_paving((0., 0., 20., 20.),
+            [(box(0, 0, 20, 20), [box(4, 4, 8, 8)], sidewalks.BRICK)], coverage._c)
+        a, b, c = xy[t].transpose(1, 0, 2)
+        cross = (b-a)[:, 0] * (c-a)[:, 1] - (b-a)[:, 1] * (c-a)[:, 0]
+        self.assertAlmostEqual(cross.sum() / 2, 344.)
+        self.assertTrue((cross > 0).all())
+        self.assertTrue(edges)
+        pts = np.column_stack([xy, np.full(len(xy), 2.)])
+        drawn = fast._ef.town_area_mesh(pts, t, m, edges, (0., 0., 0.))
+        self.assertAlmostEqual(drawn[0][:, 2].max(), 2.15)
+        self.assertAlmostEqual(drawn[0][:, 2].min(), 1.90)
+        self.assertEqual(set(drawn[3]), {0, sidewalks.BRICK})
+
+    def test_return_uses_the_branch_cross_section(self):
+        for c in CornerTest().corners(True):
+            for end, outer in ((0, -1), (-1, 0)):
+                delta = np.asarray(c["outer"][outer])[:2] - c["arc"][end, :2]
+                np.testing.assert_allclose(c["inward"][end], delta / np.linalg.norm(delta), atol=1e-12)
+
+    def test_return_follows_the_actual_gutter(self):
+        import townwalk
+        run = {"fid": "r", "pts": np.array([[-12., 1.25, 0.], [0., 1.25, 0.]]),
+               "w": 2.5, "side": 1, "j": (False, True)}
+        corner = {"arc": np.array([[0., .8, 0.], [3., .5, 0.], [6., -4., 0.]]),
+                  "outer": [[8., -4., 0.], [8., 3.3, 0.], [0., 3.3, 0.]],
+                  "inward": np.array([[0., 1.], [.5, .85], [1., 0.]]),
+                  "road_sides": (("r", 1), ("s", 1))}
+        sections = townwalk.junction_sections([corner], [run])
+        np.testing.assert_allclose(corner["arc"][0], [0., 0., 0.], atol=1e-12)
+        np.testing.assert_allclose(corner["outer"][-1], [0., 2.5, 0.], atol=1e-12)
+        np.testing.assert_allclose(sections["r", 1][0][1], [0., 1.], atol=1e-12)
+
+    def test_island_in_a_plaza_hole(self):
+        import frontage_geometry
+        def box(lo, hi):
+            return np.array([[lo, lo], [hi, lo], [hi, hi], [lo, hi]], np.float64)
+        bounds = (0., 0., 20., 20.)
+        rows = [(box(0, 20), [box(4, 16)], sidewalks.TOWN_PAVERS), (box(8, 12), [], sidewalks.BRICK)]
+        xy, tri, m, _ = fast._ef.town_paving(bounds, rows, frontage_geometry.Coverage(bounds)._c)
+        a, b, c = xy[tri].transpose(1, 0, 2)
+        area = ((b - a)[:, 0] * (c - a)[:, 1] - (b - a)[:, 1] * (c - a)[:, 0]) / 2
+        self.assertAlmostEqual(area[np.asarray(m) == sidewalks.BRICK].sum(), 16.)
+        self.assertAlmostEqual(area.sum(), 272.)
+
+    def test_wear_continues_in_next_tile(self):
+        parent = np.array([[0., 0.], [2000., 0.]])
+        full = fast._ef.town_marks(parent, parent, "high-street", 1)
+        self.assertTrue(full)
+        a, b, k, _, _ = full[0]
+        cut = (a + b) * 1000.
+        left = fast._ef.town_marks(parent, np.array([[0., 0.], [cut, 0.]]), "high-street", 1)
+        right = fast._ef.town_marks(parent, np.array([[cut, 0.], [2000., 0.]]), "high-street", 1)
+        before = next(r for r in left if r[2] == k and r[1] == 1.)
+        after = next(r for r in right if r[2] == k and r[0] == 0.)
+        self.assertAlmostEqual(before[4], after[3], places=10)
 
 
 if __name__ == "__main__":

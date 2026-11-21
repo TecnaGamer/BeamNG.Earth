@@ -17,8 +17,8 @@
 -- Robustness (docs/ROADMAP.md "Robustness: no server, lost server, lost internet" 1-3): the
 -- connection banner (banner.lua) says what is wrong with the world server, the edge guard
 -- (edgeguard.lua) holds the car on the last physics block while the server cannot move it (never
--- while the server is healthy), and hello / pose name the session folders whose files the far
--- tiles still use (roads.allHeldSessions), so a restarted server keeps them (server/README.md).
+-- while the server is healthy), and hello / pose name the session folders still in use by terrain,
+-- roads and far tiles so a restarted server keeps their files (server/README.md).
 --
 -- World logic is active in our level (levels/beamng_earth) from the start, and in any other
 -- level once the player teleports (for testing). Console helpers:
@@ -1202,11 +1202,13 @@ function M.netCosts() return M._netq.cost end      -- {type = {n, ms, max}}: pro
 function M.netBacklog() return #M._netq.q - M._netq.head + 1 + (net.decodeBacklog and net.decodeBacklog() or 0) end  -- (+ those not decoded yet)
 if net.setUrgent then net.setUrgent(M._netq.urgent) end  -- (net.lua decodes these at once while other payloads wait to be decoded)
 
+M._terrainFiles = require('beamngEarth/terrainfiles')
+
 local function onMessage(msg)
   local t = msg.type
   if t == '_connected' then
     if not net.isCurrent(msg) then return end -- a queued event of an already-replaced transport cannot start a snapshot
-    -- sessions: the session folders our far tiles still use (a restarted server keeps them)
+    -- A restarted server keeps the session folders our terrain, roads and far tiles still use.
     -- slotsHeld: the pooled shape slots our objects hold, if the server is the one that sent them (a reconnect)
     local leaseSession, leaseId = net.lease()
     local snapshotSession = leaseSession or farfield.session()
@@ -1223,8 +1225,9 @@ local function onMessage(msg)
     -- its version, and the app tells the player when it is not its own; none in the dev tree)
     release = M.releaseVersion(),
       waterguard = sea.GUARD_VERSION,
+      terrainFiles = 1, terrainHeld = M._terrainFiles.snapshot(st, M._netq, leaseSession, terrain),
       streamLease = 1, leaseSession = leaseSession, leaseId = leaseId,
-      sessions = roads.allHeldSessions(), slotSession = snapshotSession, slotsHeld = held, held = anchors, vegFlat = true,
+      sessions = M._terrainFiles.sessions(roads.allHeldSessions()), slotSession = snapshotSession, slotsHeld = held, held = anchors, vegFlat = true,
       geoTiles = require('beamngEarth/geotile').Z,
       -- (geotiles: vegetation in the global tiles' frames: trees.lua)
       roadGeo = roads.ROAD_GEO,        -- (road tiles as geotiles too: roads.lua)
@@ -1464,6 +1467,7 @@ local function onMessage(msg)
     local p = st.pending
     if p and msg.requestId == p.requestId and not p.ready then p.stage, p.progressAt = msg.stage, st.clock end
   elseif t == 'anchor_ready' then
+    M._terrainFiles.received(msg)
     local p = st.pending
     if not p or msg.requestId ~= p.requestId then return end -- stale answer
     if p.importAt then return end       -- duplicate ready while retrying the same files
@@ -1496,6 +1500,7 @@ local function onMessage(msg)
   elseif t == 'terrain_ready_set' then   -- blocks built already (follow.preferReady): this anchor's only
     follow.setReady(msg.anchorId == st.anchorId and msg.centres or {})
   elseif t == 'terrain_ready' then
+    M._terrainFiles.received(msg)
     local p = st.terrainPending
     if not p or msg.requestId ~= p.requestId or msg.anchorId ~= st.anchorId then return end -- stale
     if msg.size ~= terrain.SIZE or msg.cx ~= p.cx or msg.cy ~= p.cy then
@@ -1507,6 +1512,7 @@ local function onMessage(msg)
     if p.sentAt then st.terrainLatency = st.clock - p.sentAt; pcall(M._psum.mod.block, st.terrainLatency) end
     st.terrainErrorAt = nil
   elseif t == 'terrain_refresh' then
+    M._terrainFiles.received(msg)
     -- the graded block in place of a teleport's provisional one (server make_provisional; the user, 2026-10-22:
     -- "place the car as soon as possible"): swapped in while that block is still ours, else dropped (the block
     -- moved on: its replacements are built graded anyway)
@@ -2029,7 +2035,7 @@ local function updateWorld(dt)
       view = st.viewFrame and true or nil,       -- (the 3D map's view frame: server Conn.map_view)
       map = (rawget(_G, 'beamngEarth_map3d') and beamngEarth_map3d.isActive()) and true or nil,   -- (Conn.map_open)
       held = (farfield.session() == st.sessionId) and farfield.heldAnchors() or {},
-      sessions = roads.allHeldSessions(),
+      sessions = M._terrainFiles.sessions(roads.allHeldSessions()),
       slotsGone = slotsGoneNow(), -- pooled shape slots let go (server/matslots.py)
       foci = poseFoci(),          -- other vehicles' collision islands (collisionfoci.lua; earthd parse_foci)
       -- the edge guard holds the car for its ground: the server takes every core meanwhile (earthd hold_boost)
@@ -2925,6 +2931,12 @@ function M.checkMapView()
 end
 
 local function onUpdate(dtReal, dtSim)
+  -- The previous frame has finished using its messages and applying the TerrainBlock.
+  M._terrainReleaseIn = (M._terrainReleaseIn or 0) - (dtReal or 0)
+  if M._terrainReleaseIn <= 0 then
+    M._terrainReleaseIn = 0.5
+    M._terrainFiles.release(st, net, terrain)
+  end
   M.checkMapView()
   dtReal = dtReal or 0
   local frameMs0 = frameTimer and frameTimer:stopAndReset() or dtReal * 1000
@@ -3443,7 +3455,6 @@ local function onExtensionUnloaded()
   require('beamngEarth/minimaproads').unhook()
   levelinfo.unhookSpawnPois()
   groundcover.enginePatch(false)
-  net.close()
   farfield.clear()
   M._swapTeardown()     -- (a generation swap under way: its hold released, nothing of it left)
   M._restartTeardown()  -- (a world server restart's hold released)
@@ -3452,6 +3463,8 @@ local function onExtensionUnloaded()
   trees.clear()
   ambience.clear()
   terrain.delete()
+  if lastHello and lastHello.terrainFiles == 1 then net.send({ type = 'terrain_release', unloaded = true }) end
+  net.close()
   -- M1h: the level stays loaded; give it back its sky and view distance
   horizon.restoreSky()
   if st.visibleDistance and horizon.setVisibleDistance(VISIBLE_DISTANCE) then st.visibleDistance = nil end
@@ -3641,7 +3654,7 @@ function M.status()
     cells = crossover.cells(), blockSize = blockSize, anchorLatency = st.anchorLatency,
     terrainLatency = st.terrainLatency, horizon = horizonOn, farRadius = farRadius,
     visibleDistance = st.visibleDistance or VISIBLE_DISTANCE, banner = banner.current().id, guard = st.guard.mode,
-    sessions = roads.allHeldSessions(), tileSession = farfield.session(), sea = sea.status(), trees = trees.status(), ambience = ambience.status(),
+    sessions = M._terrainFiles.sessions(roads.allHeldSessions()), tileSession = farfield.session(), sea = sea.status(), trees = trees.status(), ambience = ambience.status(),
     trafficAdaptive = navgraph.trafficStatus(), pacer = M._pacer.stats() })
 end
 

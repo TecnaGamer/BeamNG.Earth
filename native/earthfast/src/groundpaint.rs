@@ -255,6 +255,22 @@ pub(crate) fn noise_hash(ix: i64, iy: i64, seed: u64) -> f64 {
     (h >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
 }
 
+#[inline]
+pub(crate) fn value_noise(x: f64, y: f64, seed: u64) -> f64 {
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = (x - x0, y - y0);
+    let fx = fx * fx * (3.0 - 2.0 * fx);
+    let fy = fy * fy * (3.0 - 2.0 * fy);
+    let (ix, iy) = (x0 as i64, y0 as i64);
+    let a = noise_hash(ix, iy, seed);
+    let b = noise_hash(ix + 1, iy, seed);
+    let c = noise_hash(ix, iy + 1, seed);
+    let d = noise_hash(ix + 1, iy + 1, seed);
+    let top = (b - a) * fx + a;
+    let bot = (d - c) * fx + c;
+    (bot - top) * fy + top
+}
+
 /// surface._value_noises: smooth value noise in [-1, 1] at the points (x, y) (lattice units, flat arrays of one
 /// length) for each seed, one array per seed. The Python's arithmetic in its order (smoothstep fx * fx * (3 - 2 fx),
 /// top = (b - a) fx + a, bot = (d - c) fx + c, (bot - top) fy + top): the same values bit for bit.
@@ -275,18 +291,7 @@ pub fn value_noises<'py>(py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyRe
                 for (k, o) in row.iter_mut().enumerate() {
                     let i = part * PART + k;
                     let (xi, yi) = (x[i], y[i]);
-                    let (x0, y0) = (xi.floor(), yi.floor());
-                    let (fx, fy) = (xi - x0, yi - y0);
-                    let fx = fx * fx * (3.0 - 2.0 * fx);
-                    let fy = fy * fy * (3.0 - 2.0 * fy);
-                    let (ix, iy) = (x0 as i64, y0 as i64);
-                    let a = noise_hash(ix, iy, s);
-                    let b = noise_hash(ix + 1, iy, s);
-                    let c = noise_hash(ix, iy + 1, s);
-                    let d = noise_hash(ix + 1, iy + 1, s);
-                    let top = (b - a) * fx + a;
-                    let bot = (d - c) * fx + c;
-                    *o = (bot - top) * fy + top;
+                    *o = value_noise(xi, yi, s);
                 }
             });
             out

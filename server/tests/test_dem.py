@@ -14,6 +14,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dem as demmod  # noqa: E402
 
 
+class TerrariumDecodeTest(unittest.TestCase):
+    def test_truncated_lossless_webp_is_rejected(self):
+        # A one-pixel sea-level tile. Its odd VP8L chunk requires a final RIFF pad.
+        data = bytes.fromhex("524946461c000000574542505650384c0f0000002f000000000710058cfe0722a2ff0100")
+        self.assertEqual(demmod.decode_terrarium(data, 1).item(), 0.0)
+        with self.assertRaises(OSError):
+            demmod.decode_terrarium(data[:-1], 1)
+
+
 class FlakyDem(demmod.Dem):
     """No network: the first load of every tile fails, later loads succeed."""
 

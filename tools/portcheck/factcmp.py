@@ -19,15 +19,47 @@ def main(argv=None):
     ap.add_argument("--places", default="")
     ap.add_argument("--show", type=int, default=20)
     a = ap.parse_args(argv)
+    with pcommon.comparing(a.a, a.b):
+        return compare(a)
+
+
+def compare(a):
     rep = pcommon.Report("facts", a.show)
     names = [n for n in a.places.split(",") if n] or None
-    for name in names or sorted({n for r in (a.a, a.b) for n in _ls(os.path.join(r, "facts"))}):
+    frozen = pcommon.corpus()["places"]
+    for name in pcommon.comparison_places(a.a, a.b, "facts", names):
+        indexes = []
+        empty = []
+        for root in (a.a, a.b):
+            folder = os.path.join(root, "plans", name)
+            path = os.path.join(folder, "index.json")
+            if not os.path.isfile(path):
+                rep.item(f"{root}/{name}", ["missing plan index for fact coverage"])
+                continue
+            index = pcommon.read_json(path)
+            indexes.append(index)
+            errors = pcommon.coverage_errors(index, frozen[name]["plan_cells"] if name in frozen else None)
+            counts = index.get("road_features", {})
+            if not errors:
+                errors.extend(pcommon.missing_fact_cells(index["cells"], counts, os.path.join(root, "facts", name)))
+            for cell in index.get("cells", []):
+                if not os.path.isfile(os.path.join(folder, cell.replace("/", "_") + ".npz")):
+                    errors.append(f"{cell}: plan file missing")
+            if errors:
+                rep.item(f"{root}/{name}", errors[:5])
+            empty.append(not errors and bool(counts) and all(n == 0 for n in counts.values()))
+        if len(indexes) == 2:
+            for field in ("cells", "versions", "facts_format", "road_features"):
+                if field == "road_features" and not all(field in index for index in indexes):
+                    continue  # old manifests still record demanded cells and plan completeness
+                if indexes[0].get(field) != indexes[1].get(field):
+                    rep.item(name, [f"different {field}"])
+        if empty == [True, True] and all(os.path.isdir(os.path.join(root, "facts", name))
+                                         and not os.listdir(os.path.join(root, "facts", name)) for root in (a.a, a.b)):
+            rep.item(name + " verified empty", [])
+            continue
         pcommon.compare_trees(a.a, a.b, os.path.join("facts", name), rep)
     return rep.finish()
-
-
-def _ls(d):
-    return os.listdir(d) if os.path.isdir(d) else []
 
 
 if __name__ == "__main__":

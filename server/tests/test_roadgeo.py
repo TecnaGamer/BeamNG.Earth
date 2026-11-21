@@ -35,8 +35,9 @@ import grading  # noqa: E402
 import roads  # noqa: E402
 
 LAT, LON = 39.2834, -76.5934
-CACHE = os.path.expanduser("~/.cache/beamng-earth")
-HAVE_DATA = os.path.isdir(os.path.join(CACHE, "mapdata")) and os.environ.get("BNGE_ROADGEO_REAL", "1") != "0"
+from geo_test_cache import SOURCE, work_cache
+
+HAVE_DATA = os.path.isdir(os.path.join(SOURCE, "mapdata")) and os.environ.get("BNGE_ROADGEO_REAL", "1") != "0"
 
 
 def east(lat, lon, km):
@@ -273,9 +274,10 @@ class RealDataTest(unittest.TestCase):
             lon_b = LON + 15000.0 / (111320.0 * math.cos(math.radians(LAT)))
             outs = []
             for i, (alat, alon) in enumerate(((LAT, LON), (LAT, lon_b))):
-                r = subprocess.run([sys.executable, os.path.join(here, "roadgeo_content.py"), os.path.join(tmp, str(i)),
-                                    str(LAT), str(LON), str(alat), str(alon)], capture_output=True, text=True,
-                                   timeout=900)
+                with work_cache() as cache:
+                    r = subprocess.run([sys.executable, os.path.join(here, "roadgeo_content.py"), os.path.join(tmp, str(i)),
+                                        str(LAT), str(LON), str(alat), str(alon)], env=dict(os.environ, BNGE_GEO_WORK_CACHE=cache), capture_output=True, text=True,
+                                       timeout=900)
                 self.assertEqual(r.returncode, 0, r.stderr[-2000:])
                 outs.append(r.stdout)
             self.assertTrue(outs[0].strip(), "content written")
@@ -293,7 +295,10 @@ class RealDataTest(unittest.TestCase):
         self.addCleanup(setattr, revisit, "CACHE_DIR", revisit.CACHE_DIR)      # (_State points it at CACHE)
         self.addCleanup(setattr, bw, "_s", getattr(bw, "_s", None))
         revisit.ON = False
-        bw._s = bw._State(CACHE, True, True, True, True, True, True, True)
+        copy = work_cache()
+        cache = copy.__enter__()
+        self.addCleanup(copy.__exit__, None, None, None)
+        bw._s = bw._State(cache, True, True, True, True, True, True, True)
         out = tempfile.mkdtemp(prefix="roadgeo_")
         try:
             f = geodesy.EnuFrame(LAT, LON)

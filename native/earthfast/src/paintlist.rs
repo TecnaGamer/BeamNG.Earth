@@ -14,6 +14,7 @@
 use numpy::ndarray::{Array2, Array3, ArrayView2};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray3, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::prelude::*;
+use std::sync::Arc;
 
 type Poly = Vec<[f64; 2]>;
 
@@ -237,15 +238,16 @@ fn polys_from(xy: &PyReadonlyArray2<'_, f64>, off: &PyReadonlyArray1<'_, i64>) -
 /// Polygons in the anchor frame's metres (east, north): roundabout footprints, parking lots, a golf layer, corner pads,
 /// gas station pads (paintlist.py), as concatenated points and offsets.
 #[pyclass(module = "earthfast", frozen)]
+#[derive(Clone)]
 pub struct PaintPolys {
-    polys: Vec<Poly>,
+    polys: Arc<[Poly]>,
 }
 
 #[pymethods]
 impl PaintPolys {
     #[new]
     fn new(xy: PyReadonlyArray2<'_, f64>, off: PyReadonlyArray1<'_, i64>) -> PyResult<Self> {
-        Ok(PaintPolys { polys: polys_from(&xy, &off)? })
+        Ok(PaintPolys { polys: polys_from(&xy, &off)?.into() })
     }
 
     fn __len__(&self) -> usize {
@@ -257,7 +259,12 @@ impl PaintPolys {
 /// vertices in metres, the tapered half widths per vertex, its box for the square's first test) and the ramp gores'
 /// paved wedges.
 #[pyclass(module = "earthfast", frozen)]
+#[derive(Clone)]
 pub struct PaintRoads {
+    data: Arc<RoadGeometry>,
+}
+
+struct RoadGeometry {
     v: Vec<[f64; 2]>,           // ring vertices
     hp: Vec<f64>,               // per vertex: tapered width / 2 + edge (m), NaN on a ring without tapers
     ring_off: Vec<usize>,       // ring k: v[ring_off[k]..ring_off[k + 1]]
@@ -309,7 +316,7 @@ impl PaintRoads {
         let goff = gore_off.as_array();
         let gores = gores.into_iter().enumerate()
             .map(|(k, p)| (p, ghw.slice(numpy::ndarray::s![goff[k] as usize..goff[k + 1] as usize]).to_vec())).collect();
-        Ok(PaintRoads {
+        Ok(PaintRoads { data: Arc::new(RoadGeometry {
             v: (0..va.nrows()).map(|i| [va[[i, 0]], va[[i, 1]]]).collect(),
             hp: hpa.to_vec(),
             ring_off,
@@ -321,7 +328,7 @@ impl PaintRoads {
             feat_m: feat_m.as_array().to_vec(),
             feat_hwm: feat_hwm.as_array().to_vec(),
             gores,
-        })
+        }) })
     }
 
     /// surface._road_segments of a w x h photo over [x0, x0 + size]²: (segs (m, 4), half widths (m,), kind (m,), road
@@ -359,14 +366,14 @@ impl PaintRoads {
         let mut nroad = 0i64;
         let mut c: Vec<f64> = Vec::new();
         let mut r: Vec<f64> = Vec::new();
-        for f in 0..self.feat_m.len() {
-            let (b, m) = (self.feat_box[f], self.feat_m[f]);
+        for f in 0..self.data.feat_m.len() {
+            let (b, m) = (self.data.feat_box[f], self.data.feat_m[f]);
             if b[1] < x0 - m || b[0] > x0 + size + m || b[3] < y0 - m || b[2] > y0 + size + m {
                 continue;
             }
-            let hw = self.feat_hwm[f] * px_m;
-            for k in self.feat_ring[f]..self.feat_ring[f + 1] {
-                let pts = &self.v[self.ring_off[k]..self.ring_off[k + 1]];
+            let hw = self.data.feat_hwm[f] * px_m;
+            for k in self.data.feat_ring[f]..self.data.feat_ring[f + 1] {
+                let pts = &self.data.v[self.data.ring_off[k]..self.data.ring_off[k + 1]];
                 if pts.len() < 2 {
                     continue;
                 }
@@ -381,13 +388,13 @@ impl PaintRoads {
                 if cmax < -hw || cmin > wf + hw || rmax < -hw || rmin > hf + hw {
                     continue;
                 }
-                let hp = &self.hp[self.ring_off[k]..self.ring_off[k + 1]];
+                let hp = &self.data.hp[self.data.ring_off[k]..self.data.ring_off[k + 1]];
                 for i in 0..pts.len() - 1 {
                     out.segs.push([c[i], r[i], c[i + 1], r[i + 1]]);
-                    out.hw.push(if self.ring_taper[k] { (hp[i] * px_m + hp[i + 1] * px_m) / 2.0 } else { hw });
-                    out.kind.push(self.ring_kind[k]);
+                    out.hw.push(if self.data.ring_taper[k] { (hp[i] * px_m + hp[i + 1] * px_m) / 2.0 } else { hw });
+                    out.kind.push(self.data.ring_kind[k]);
                     out.road.push(nroad);
-                    out.ghost.push(self.ring_ghost[k]);
+                    out.ghost.push(self.data.ring_ghost[k]);
                 }
             }
             nroad += 1;
@@ -396,7 +403,7 @@ impl PaintRoads {
         // took those of the roads within 300 m of the square, each gore that reaches it among them): one that cannot
         // touch the photo (its line's box grown by its widest half width and the antialiased pixel, line_cover's
         // pad) is left out, as no pixel of it would be painted
-        for (mid, hw) in &self.gores {
+        for (mid, hw) in &self.data.gores {
             let pad = hw.iter().fold(0f64, |a, &v| a.max(v)) * px_m + 1.0;
             let (mut cmin, mut cmax, mut rmin, mut rmax) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
             for p in mid {
@@ -430,9 +437,10 @@ const PAVED_KIND: u8 = 4;
 /// the dirt roads' ground parts kept clear of furrows (_dirt_road_mask: their width + both paint edges + both clear
 /// strips, m).
 #[pyclass(module = "earthfast", frozen)]
+#[derive(Clone)]
 pub struct PaintFields {
-    fields: Vec<(Poly, [f64; 5])>,
-    dirt: Vec<(Poly, f64)>,
+    fields: Arc<[(Poly, [f64; 5])]>,
+    dirt: Arc<[(Poly, f64)]>,
 }
 
 #[pymethods]
@@ -462,6 +470,7 @@ impl PaintFields {
 /// surface's paint constants (paintlist.style): the road kinds' colours (k, 4) and tone rows (k, 9) in
 /// PHOTO_ROAD_RGBA's order, and the scalars (paintlist.STYLE_KEYS' order).
 #[pyclass(module = "earthfast", frozen)]
+#[derive(Clone)]
 pub struct PaintStyle {
     colors: Array2<f32>,
     tone: Array2<f32>,
@@ -560,7 +569,7 @@ fn step_fields(img: &mut Array3<u8>, sq: &Sq, f: &PaintFields, st: &PaintStyle) 
     let mix = st.c[S_FARM_MIX];
     let keep = (1.0 - mix) as f32;
     let soil: [f32; 3] = [0, 1, 2].map(|k| st.c[S_FARM_SOIL + k] as f32 * mix as f32);
-    for (poly, prm) in &f.fields {
+    for (poly, prm) in f.fields.iter() {
         let (pts, inside) = sq.px(poly, px_x, px_y);
         if !inside {
             continue;
@@ -636,7 +645,7 @@ fn step_fields(img: &mut Array3<u8>, sq: &Sq, f: &PaintFields, st: &PaintStyle) 
 fn dirt_mask(sq: &Sq, f: &PaintFields, px_x: f64, px_y: f64) -> Option<Vec<u8>> {
     let (w, h) = (sq.w, sq.h);
     let mut out: Option<Vec<u8>> = None;
-    for (line, wm) in &f.dirt {
+    for (line, wm) in f.dirt.iter() {
         if line.len() < 2 {
             continue;
         }
@@ -670,7 +679,7 @@ fn step_golf(img: &mut Array3<u8>, sq: &Sq, st: &PaintStyle, py_polys: &[Option<
         }
         let mut mask = vec![0u8; w * h];
         let mut n = 0;
-        for p in &layer.polys {
+        for p in layer.polys.iter() {
             let (pts, inside) = sq.px(p, px_x, px_y);
             if !inside {
                 continue;
@@ -703,7 +712,7 @@ fn step_pads(img: &mut Array3<u8>, sq: &Sq, polys: &PaintPolys, st: &PaintStyle)
     let (w, h) = (sq.w, sq.h);
     let (px_x, px_y) = (w as f64 / sq.size, h as f64 / sq.size);
     let mut cr: Vec<(Vec<f64>, Vec<f64>)> = Vec::new();
-    for p in &polys.polys {
+    for p in polys.polys.iter() {
         let (pts, inside) = sq.px(p, px_x, px_y);
         if inside {
             cr.push((pts.iter().map(|q| q.0).collect(), pts.iter().map(|q| q.1).collect()));
@@ -812,7 +821,7 @@ fn step_corners(img: &mut Array3<u8>, before: &Array3<u8>, sq: &Sq, polys: &Pain
     let op = st.colors[[pk, 3]];
     let top = sq.top();
     let floor_div = |a: i64, b: i64| a.div_euclid(b);
-    for p in &polys.polys {
+    for p in polys.polys.iter() {
         if p.is_empty() {
             continue;
         }
@@ -911,57 +920,90 @@ pub fn paint_photo<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, x0: f64
                         fields: Option<PyRef<'py, PaintFields>>, golf: Option<Vec<Option<PyRef<'py, PaintPolys>>>>,
                         lots: Option<PyRef<'py, PaintPolys>>, pads: Option<PyRef<'py, PaintPolys>>, has_roads: bool,
                         simple: bool, pavement: Option<Vec<(usize, PyReadonlyArray2<'py, u8>)>>) -> PyResult<Bound<'py, PyArray3<u8>>> {
-    let src = rgb.as_array();
-    if src.ndim() != 3 || src.shape()[2] != 3 || !(size > 0.0) {
-        return Err(pyo3::exceptions::PyValueError::new_err("paint_photo: rgb (h, w, 3), size > 0"));
+    let layers = PaintLayers::new(x0, y0, size, style, roads, islands, corners, fields, golf, lots, pads,
+                                  has_roads, simple, pavement)?;
+    layers.paint(py, rgb)
+}
+
+/// Shared cell geometry and the masks for a square. The paint can travel with a native photo
+/// through shade, rasterisation and DDS encoding without exporting intermediate RGB.
+#[pyclass(frozen, module = "earthfast")]
+pub struct PaintLayers {
+    area: (f64, f64, f64),
+    style: PaintStyle,
+    roads: Option<PaintRoads>,
+    islands: Option<PaintPolys>,
+    corners: Option<PaintPolys>,
+    fields: Option<PaintFields>,
+    golf: Vec<Option<PaintPolys>>,
+    lots: Option<PaintPolys>,
+    pads: Option<PaintPolys>,
+    has_roads: bool,
+    simple: bool,
+    pavement: Vec<(usize, Array2<u8>)>,
+}
+
+#[pymethods]
+impl PaintLayers {
+    #[new]
+    #[pyo3(signature = (x0, y0, size, style, roads=None, islands=None, corners=None, fields=None, golf=None,
+                        lots=None, pads=None, has_roads=false, simple=false, pavement=None))]
+    fn new<'py>(x0: f64, y0: f64, size: f64, style: PyRef<'py, PaintStyle>, roads: Option<PyRef<'py, PaintRoads>>,
+                islands: Option<PyRef<'py, PaintPolys>>, corners: Option<PyRef<'py, PaintPolys>>,
+                fields: Option<PyRef<'py, PaintFields>>, golf: Option<Vec<Option<PyRef<'py, PaintPolys>>>>,
+                lots: Option<PyRef<'py, PaintPolys>>, pads: Option<PyRef<'py, PaintPolys>>, has_roads: bool,
+                simple: bool, pavement: Option<Vec<(usize, PyReadonlyArray2<'py, u8>)>>) -> PyResult<Self> {
+        if !(size > 0.) || golf.as_ref().is_some_and(|g| g.len() > 4) {
+            return Err(pyo3::exceptions::PyValueError::new_err("paint: invalid size or golf layers"));
+        }
+        let golf = golf.unwrap_or_default().iter().map(|p| p.as_deref().cloned()).collect();
+        let pavement = pavement.unwrap_or_default().iter().map(|(k,m)| (*k, m.as_array().to_owned())).collect();
+        Ok(Self { area: (x0,y0,size), style: (*style).clone(), roads: roads.as_deref().cloned(),
+                  islands: islands.as_deref().cloned(), corners: corners.as_deref().cloned(),
+                  fields: fields.as_deref().cloned(), golf, lots: lots.as_deref().cloned(), pads: pads.as_deref().cloned(),
+                  has_roads, simple, pavement })
     }
-    let sq = Sq { x0, y0, size, w: src.shape()[1], h: src.shape()[0] };
-    let st: &PaintStyle = &style;
-    let (rd, isl, cor, fl, lt, pd) = (roads.as_deref(), islands.as_deref(), corners.as_deref(), fields.as_deref(),
-                                      lots.as_deref(), pads.as_deref());
-    let gl: Vec<Option<&PaintPolys>> = golf.as_ref().map(|g| g.iter().map(|x| x.as_deref()).collect()).unwrap_or_default();
-    if gl.len() > 4 {
-        return Err(pyo3::exceptions::PyValueError::new_err("paint_photo: four golf layers at most"));
+
+    fn paint<'py>(&self, py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>) -> PyResult<Bound<'py, PyArray3<u8>>> {
+        let a = rgb.as_array();
+        self.validate(a.dim())?;
+        Ok(py.detach(|| self.apply(a.to_owned())).into_pyarray(py))
     }
-    let coverage: Vec<_> = pavement.iter().flatten().map(|(k, m)| (*k, m.as_array())).collect();
-    if coverage.iter().any(|(k, m)| *k >= st.colors.nrows() || m.dim() != (sq.h, sq.w)) {
-        return Err(pyo3::exceptions::PyValueError::new_err("paint_photo: invalid pavement mask"));
+}
+
+impl PaintLayers {
+    pub(crate) fn validate(&self, (h,w,c): (usize,usize,usize)) -> PyResult<()> {
+        if c != 3 || self.pavement.iter().any(|(k,m)| *k >= self.style.colors.nrows() || m.dim() != (h,w)) {
+            return Err(pyo3::exceptions::PyValueError::new_err("paint: invalid RGB or pavement mask"));
+        }
+        Ok(())
     }
-    let mut img = src.to_owned();
-    let out = py.detach(move || {
-        if sq.w == 0 || sq.h == 0 {
-            return img;
+
+    pub(crate) fn apply(&self, mut img: Array3<u8>) -> Array3<u8> {
+        let (x0,y0,size) = self.area;
+        let (h,w,_) = img.dim();
+        let sq = Sq { x0, y0, size, w, h };
+        let st = &self.style;
+        if img.is_empty() { return img; }
+        if !self.simple {
+            if let Some(f) = &self.fields { step_fields(&mut img, &sq, f, st); }
+            let golf: Vec<_> = self.golf.iter().map(Option::as_ref).collect();
+            step_golf(&mut img, &sq, st, &golf);
+            if let Some(p) = &self.lots { step_pads(&mut img, &sq, p, st); }
+            if let Some(p) = &self.pads { step_pads(&mut img, &sq, p, st); }
         }
-        if !simple {
-            if let Some(f) = fl {
-                step_fields(&mut img, &sq, f, st);
-            }
-            step_golf(&mut img, &sq, st, &gl);
-            if let Some(l) = lt {
-                step_pads(&mut img, &sq, l, st);
-            }
-            if let Some(p) = pd {
-                step_pads(&mut img, &sq, p, st);
-            }
+        if !self.has_roads { return img; }
+        if !self.simple {
+            if let Some(p) = &self.islands { step_islands(&mut img, &sq, p, st); }
         }
-        if !has_roads {
-            return img;
+        let before = (!self.simple && self.corners.is_some()).then(|| img.clone());
+        if let Some(r) = &self.roads {
+            let masks: Vec<_> = self.pavement.iter().map(|(k,m)| (*k,m.view())).collect();
+            step_roads(&mut img, &sq, r, st, &masks);
         }
-        if !simple {
-            if let Some(p) = isl {
-                step_islands(&mut img, &sq, p, st);
-            }
-        }
-        let filled = if simple { None } else { Some(img.clone()) };
-        if let Some(r) = rd {
-            step_roads(&mut img, &sq, r, st, &coverage);
-        }
-        if let (Some(p), Some(before)) = (cor, filled.as_ref()) {
-            step_corners(&mut img, before, &sq, p, st);
-        }
+        if let (Some(p), Some(before)) = (&self.corners, before) { step_corners(&mut img, &before, &sq, p, st); }
         img
-    });
-    Ok(out.into_pyarray(py))
+    }
 }
 
 /// Tests: Pillow's polygon fill (ImageDraw.polygon(xy, fill=255) on a w x h "L" image) and wide lines (ImageDraw.line(xy,
@@ -984,6 +1026,7 @@ pub fn pil_raster<'py>(py: Python<'py>, w: usize, h: usize, xy: PyReadonlyArray2
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PaintStyle>()?;
+    m.add_class::<PaintLayers>()?;
     m.add_class::<PaintRoads>()?;
     m.add_class::<PaintPolys>()?;
     m.add_class::<PaintFields>()?;

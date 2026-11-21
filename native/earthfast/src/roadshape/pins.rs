@@ -88,7 +88,16 @@ pub fn field_core(pts: &[[f64; 2]], z: &[f64], pins: &[Pin], prm: &[f64]) -> Vec
                 continue;
             }
             let wl = if best <= q.half { 1.0 } else { smooth(1.0 - (best - q.half) / taper) };
-            let dh = (z[v] - bh).abs();
+            // The robust solve publishes a target surface. The first-stage
+            // terrain can have a step between two sampled pin heights. Keep
+            // plausible crossfall away from the centre, and place the centre
+            // at its target even between stations. Compare like lift datums.
+            let residual = z[v] + prm.get(3).copied().unwrap_or(0.) - bh;
+            if prm.len() == 4 {
+                let crossfall = 0.08 * best;
+                bdz += residual.clamp(-crossfall, crossfall) - residual;
+            }
+            let dh = residual.abs();
             let wg = if dh <= gate0 { 1.0 } else { smooth(1.0 - (dh - gate0) / (gate1 - gate0)) };
             let w = wl * wg * bw.max(0.0).min(1.0);
             if w > 0.0 {
@@ -136,7 +145,7 @@ pub fn profile_pin_field<'py>(py: Python<'py>, pxy: PyReadonlyArray2<'py, f64>, 
     if pxy.ncols() != 2 || qxy.ncols() != 2 || pz.len() != pxy.nrows() || !check_off(&qoff, qxy.nrows())
         || qhalf.len() + 1 != qoff.len() || qdz.len() != qxy.nrows() || qh.len() != qxy.nrows() || qw.len() != qxy.nrows()
         || qs.len() != qxy.nrows()
-        || params.len() != PIN_PARAMS || !(params[0] > 0.0) || !(params[2] > params[1]) {
+        || !(PIN_PARAMS..=PIN_PARAMS + 1).contains(&params.len()) || !(params[0] > 0.0) || !(params[2] > params[1]) {
         return Err(PyValueError::new_err("profile_pin_field: bad shapes"));
     }
     let pts: Vec<[f64; 2]> = (0..pxy.nrows()).map(|k| [pxy[[k, 0]], pxy[[k, 1]]]).collect();

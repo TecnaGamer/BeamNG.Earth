@@ -30,13 +30,6 @@ import roads  # noqa: E402
 from lanesections import LANE_MAX, PROFILE  # noqa: E402,F401
 from test_roadlanes import highway  # noqa: E402
 
-_MOUTH = {}                         # (feature, end) -> on a structure: both sides' _structure_mouth
-
-
-def _structure_mouth(f, i, end):
-    return _MOUTH.get((id(f), i, end), False)
-
-
 # ---- the Python version (before earthfast 383), verbatim ----
 
 STEP_M = 4.0
@@ -539,10 +532,10 @@ def random_layer(rng):
         pa[i] = p
     f.attrs[railtags.LANE_PARTS] = pa
     f.rules["connectors"] = rules([(i, f"c{i}a", 0, 0) for i in range(n)] + [(i, f"c{i}b", 1, 1) for i in range(n)])
-    for i in range(n):
-        for end in (0, -1):
-            if rng.random() < 0.15:
-                _MOUTH[(id(f), i, end)] = True
+    f.rules["flags"] = rules([
+        (i, "is_bridge", start, end)
+        for i in range(n) for start, end in ((0., 0.25), (0.75, 1.)) if rng.random() < 0.15
+    ])
     return f
 
 
@@ -589,13 +582,6 @@ def same_layer(g, w, what):
 
 
 class LaneSplitParityTest(unittest.TestCase):
-    def setUp(self):
-        self._mouth = lanesections._structure_mouth
-        lanesections._structure_mouth = _structure_mouth
-
-    def tearDown(self):
-        lanesections._structure_mouth = self._mouth
-
     def test_random_layers(self):
         rng = random.Random(int(os.environ.get("LANESPLIT_SEED", "383")))
         sections = 0

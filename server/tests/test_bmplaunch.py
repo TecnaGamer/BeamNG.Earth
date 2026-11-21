@@ -135,21 +135,19 @@ class LinuxBuild(unittest.TestCase):
                 self.assertIsNone(bmplaunch.build_linux(d, "BeamNG.Earth/test", say=said.append))
         self.assertIn("podman or docker", said[0])
 
+    @unittest.skipIf(bmplaunch.IS_WIN, "Linux launcher discovery")
     def test_system_too_old(self):
         class R:
             stdout = ""
             stderr = "./BeamMP-Launcher: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found"
-        if bmplaunch.IS_WIN:
-            return
         self.assertIn("GLIBC_2.38", bmplaunch.system_too_old("x", run=lambda *a, **k: R()))
         R.stderr = "Usage: BeamMP-Launcher [options]"
         self.assertIsNone(bmplaunch.system_too_old("x", run=lambda *a, **k: R()))
 
 
 class RenamedAside(unittest.TestCase):
+    @unittest.skipIf(bmplaunch.IS_WIN, "Linux launcher discovery")
     def test_backup_folders_ignored(self):
-        if bmplaunch.IS_WIN:
-            return
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as data:
             for d in ("BeamMP-Launcher.bak-165632", "BeamMP-Launcher-2.8.1", "BeamMP-Launcher-old"):
                 os.makedirs(os.path.join(home, d, "bin"))
@@ -167,9 +165,8 @@ class ElsewhereInHome(unittest.TestCase):
         os.chmod(p, 0o755)
         return p
 
+    @unittest.skipIf(bmplaunch.IS_WIN, "Linux launcher discovery")
     def test_one_folder_down(self):
-        if bmplaunch.IS_WIN:
-            return
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as data:
             games = self.exe(home, "Games", "BeamMP-Launcher")
             share = self.exe(home, ".local", "share", "beammp-launcher", "build")

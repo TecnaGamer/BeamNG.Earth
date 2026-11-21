@@ -147,6 +147,7 @@ struct Ctx<'a> {
     rows: &'a [Vec<(usize, usize)>],
     prm: &'a [f64],
     tab: &'a [f64],
+    divided_crossings: bool,
 }
 
 impl Ctx<'_> {
@@ -472,6 +473,24 @@ fn stations_json(st: &[(&str, f64)]) -> String {
 
 fn flags_json(f: &[&str]) -> String { f.iter().map(|v| format!("\"{}\"", v)).collect::<Vec<_>>().join(",") }
 
+/// Crossing traffic at a stroke's end. A divided street can have only one-way
+/// arms, including at a T. Parallel arms still describe a merge or split.
+fn at_grade_end(c: &Ctx, p: &Path, reach: f64) -> bool {
+    if p.len() > reach { return false; }
+    let Some(node) = p.pieces.last().and_then(|part| part.end_node) else { return false; };
+    let rows = &c.rows[node];
+    if rows.iter().any(|&(g, _)| c.segs[g].dir == 0 && c.segs[g].cls > 0) { return true; }
+    if !c.divided_crossings { return false; }
+    let arms = arms_of(c.segs, rows);
+    if arms.len() < 3 { return false; }
+    let (_, tangent) = p.at(p.len());
+    arms.iter().any(|&(g, v, f)| {
+        let other = if f { v + 1 } else { v - 1 };
+        unit(sub(c.segs[g].pts[other], c.segs[g].pts[v]))
+            .is_some_and(|u| dot(u, tangent).abs() < super::forks::CROSS_COS)
+    })
+}
+
 /// The fork event at node n (module doc), or None.
 fn fork_event(c: &Ctx, n: usize) -> Option<String> {
     let (arms, ti, mi, bi, diverge) = fork_roles(c, n)?;
@@ -515,16 +534,10 @@ fn fork_event(c: &Ctx, n: usize) -> Option<String> {
     let head = head_json(node, kind, right, region, kmh, [lt, lm, lb0], w, [&st.fid, &sm.fid, &sb.fid]);
     // at grade: a slip lane of a junction zone (forks.rs), no record
     let motorway = |s: &Seg| s.cls == 1 && !s.link;
-    if !(motorway(st) && motorway(sm)) {
-        for p in [&pt_, &pm_, &pb_] {
-            if p.len() <= prm[P_AT_GRADE] {
-                if let Some(e) = p.pieces.last().and_then(|pc| pc.end_node) {
-                    if c.rows[e].iter().any(|&(g, _)| c.segs[g].dir == 0 && c.segs[g].cls > 0) {
-                        return Some(format!("{},\"flags\":[\"at_grade\"]}}", head));
-                    }
-                }
-            }
-        }
+    let street = !(motorway(st) && motorway(sm));
+    let junction_reach = prm[P_AT_GRADE];
+    if street && [&pt_, &pm_, &pb_].iter().any(|p| at_grade_end(c, p, junction_reach)) {
+        return Some(format!("{},\"flags\":[\"at_grade\"]}}", head));
     }
     // the near through edge's offset from the through path's line (its first piece's placement), the gore's offset
     let lo = left_off(&sm.place, lm_e, w);
@@ -709,6 +722,12 @@ fn fork_event(c: &Ctx, n: usize) -> Option<String> {
         let b = if t1 < main.hi() { t1 } else { main.hi() };
         (s_n, { let v = b + mg; if v > main.hi() { main.hi() } else { v } })
     };
+    // A designed turn lane can reach a surface intersection hundreds of metres from the
+    // fork node. Test the actual painted interval before cutting the street's own markings.
+    if street && c.divided_crossings && (at_grade_end(c, main.up, junction_reach - lo_s)
+                                     || at_grade_end(c, main.dn, junction_reach + hi_s)) {
+        return Some(format!("{},\"flags\":[\"at_grade\"]}}", head));
+    }
     let rows = rows_json(&main, &an, right, &strips, lo_s, hi_s, prm[P_OUT], prm[P_SHIFT], &mut flags);
     // the branch's line past the nose (its own ribbon from there): its mapped points
     let mut bl = String::new();
@@ -1149,13 +1168,14 @@ pub fn lane_connectors(
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (xy, off, fid, cls, link, dir, lanes, lanes_fw, lanes_bw, kmh, lane_w, turn, turn_bw,
-                    place, region, seg_home, con_id, con_seg, con_vtx, con_home, params, table, events_only=false))]
+                    place, region, seg_home, con_id, con_seg, con_vtx, con_home, params, table, events_only=false, divided_crossings=false))]
 pub fn lane_graph<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: Vec<i64>, fid: Vec<String>,
                        cls: Vec<i64>, link: Vec<bool>, dir: Vec<i64>, lanes: Vec<i64>, lanes_fw: Vec<i64>,
                        lanes_bw: Vec<i64>, kmh: Vec<f64>, lane_w: Vec<f64>, turn: Vec<String>, turn_bw: Vec<String>,
                        place: Vec<String>, region: Vec<i64>, seg_home: Vec<bool>,
                        con_id: Vec<String>, con_seg: Vec<i64>, con_vtx: Vec<i64>, con_home: Vec<bool>,
-                       params: PyReadonlyArray1<'py, f64>, table: PyReadonlyArray1<'py, f64>, events_only: bool) -> PyResult<String> {
+                       params: PyReadonlyArray1<'py, f64>, table: PyReadonlyArray1<'py, f64>, events_only: bool,
+                       divided_crossings: bool) -> PyResult<String> {
     let (xy, prm, tab) = (xy.as_array(), params.as_array().to_vec(), table.as_array().to_vec());
     let ns = off.len().saturating_sub(1);
     let regions = tab.len() / T_N;
@@ -1206,7 +1226,7 @@ pub fn lane_graph<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: Vec
     }
     for s in segs.iter_mut() { s.nodes.sort(); s.nodes.dedup_by(|a, b| a.0 == b.0); }
     let out = py.detach(|| {
-        let c = Ctx { segs: &segs, rows: &node_rows, prm: &prm, tab: &tab };
+        let c = Ctx { segs: &segs, rows: &node_rows, prm: &prm, tab: &tab, divided_crossings };
         let mut ev: Vec<String> = Vec::new();
         for n in 0..node_id.len() {
             if !node_home[n] { continue; }
