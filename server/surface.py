@@ -1437,9 +1437,8 @@ def write_masks(idx, out_dir, stem, south_first=False):
     names = mask_names(stem)
     for i, name in enumerate(names):
         path = os.path.join(out_dir, name)
-        tmp = staging.tmp_for(path)
-        Image.fromarray(fast._ef.block_mask(idx, i), "L").save(tmp, format="PNG", compress_level=1)
-        staging.replace(tmp, path)
+        with staging.staged_write(path) as tmp:
+            Image.fromarray(fast._ef.block_mask(idx, i), "L").save(tmp, format="PNG", compress_level=1)
     return names
 
 

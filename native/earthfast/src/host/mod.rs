@@ -16,6 +16,7 @@ pub mod frame;
 mod merge;
 mod matslots;
 mod leases;
+mod blockfiles;
 mod credits;
 mod shapes;
 mod staging;
@@ -687,6 +688,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     renewal::register(m)?;
     matslots::register(m)?;
     leases::register(m)?;
+    m.add_class::<blockfiles::BlockFiles>()?;
     credits::register(m)?;
     m.add_function(wrap_pyfunction!(shapes::prepare_shapes, m)?)?;
     m.add_function(wrap_pyfunction!(shapes::prepare_shape_files, m)?)?;

@@ -294,13 +294,12 @@ def write_png(path, u, q=Q_DEFAULT):
     fast.require(564, "terrain height quantization")
     qgrid = fast._ef.block_quantize(np.asarray(u, np.float64), q, z_base)
     img = Image.fromarray(np.ascontiguousarray(qgrid[::-1]))   # flip: row 0 = north (max gy)
-    tmp = staging.tmp_for(path)
     # Deflate level 1: 1.2 MB in 29 ms here, level 0 2.1 MB in 55 ms (1024², 2026-11-04). The game decodes it only
     # when it imports a block (an anchor's first, or when the .ter swap cannot be used: terrain.lua swap); level 0
     # imported ~7 ms faster (43 vs 50 ms) when every commit imported, now a few per session. The rest of the time it
     # was ~0.3 GB of SSD writes in a warm 8 min drive at 150 mph.
-    img.save(tmp, format="PNG", compress_level=1)
-    staging.replace(tmp, path)
+    with staging.staged_write(path) as tmp:
+        img.save(tmp, format="PNG", compress_level=1)
     return q, z_base, max_height, qgrid
 
 
@@ -317,10 +316,9 @@ def write_ter(path, qgrid, idx, materials, source_ids=None):
     reloadCollision (docs/research/2026-10-12-engine-limits-and-worldgen.md §7), against ~30 ms of
     importMaps + reloadCollision and a ~20 ms physics frame."""
     fast.require(564, "terrain file")
-    tmp = staging.tmp_for(path)
-    fast._ef.block_write_ter(tmp, np.asarray(qgrid, np.uint16), None if idx is None else np.asarray(idx, np.uint8),
-                             materials, source_ids)
-    staging.replace(tmp, path)
+    with staging.staged_write(path) as tmp:
+        fast._ef.block_write_ter(tmp, np.asarray(qgrid, np.uint16), None if idx is None else np.asarray(idx, np.uint8),
+                                 materials, source_ids)
 
 
 def heights(qgrid, z_base, max_height):
@@ -357,6 +355,6 @@ def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEF
         keep["u"] = u
         keep["qgrid"] = qgrid
     gz = height_at(qgrid, z_base, max_height, cx, cy, *ground_at) if ground_at else None
-    return {"cx": cx, "cy": cy, "zBase": z_base, "maxHeight": max_height, "q": q,
+    return {"heightmap": os.path.basename(path), "cx": cx, "cy": cy, "zBase": z_base, "maxHeight": max_height, "q": q,
             "groundZ": None if gz is None else round(gz, 3),
             "minU": float(u.min()), "maxU": float(u.max())}

@@ -28,4 +28,5 @@ class Lease:
     slots: dict = field(default_factory=dict)
     anchors: set = field(default_factory=set)
     sessions: set = field(default_factory=set)
+    terrain_pinned: bool = False   # a disconnected game may still be drawing or awaiting this revision
     detached_at: float = None       # (time.monotonic of its last connection's close; None while connected)
