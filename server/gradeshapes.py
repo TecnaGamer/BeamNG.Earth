@@ -828,7 +828,7 @@ def _ramp_reaches(net, seeds, rel, dig, clock=None):
                 lay.done.setdefault(jj, []).append((s_ - JOIN_M, s_ + JOIN_M))
                 for toward_end in ways:
                     tb = _tangent(net.lines[jj], net.s[jj], s_) * (1.0 if toward_end else -1.0)
-                    lay.ramp_from(jj, s_, toward_end, z0, float(surface @ tb), branch=True)
+                    lay.ramp_from(jj, s_, toward_end, z0, float(surface[0] * tb[0] + surface[1] * tb[1]), branch=True)
             n += 1
         for rp in lay.ramps:
             for m_, (lo, hi) in _stretches(rp[4], rp[9]).items():
