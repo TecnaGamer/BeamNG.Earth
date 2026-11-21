@@ -80,6 +80,10 @@ undisturbed 280 s). Along the way (one run each): 800 s, 584 s after the problem
 `near`, 530 s with the 563 kernel, 491 s with the caps' prefilter. The metrics (junctions, seams, grades, ground,
 corridors) are the same in every one of them, place by place (`2026-11-19-vsolve-cpu.fin_on.json`: the second on run).
 
+After dev's 560 merge (the next cells' roads in each solve, `_vsolve_context`), one run on: 517 s (Tokyo 366 s).
+Then the caps under decks on a 32 m grid of the decks' segments (`grading.caps_under`) and a solve's joins asked at
+once (`_Segments.near_many`): 490 s (Tokyo 336 s), the same metrics place by place.
+
 ## What is left
 
 The RFC's condition is not met: the solve still costs about 0.9 of the passes again. What is left, from the
