@@ -548,6 +548,37 @@ class ServerTest(ServerHarness):
             self.assertIn(key, s.hm)
         s.connections = set()
 
+    @mock.patch.object(earthd, "HM_CACHE", 4)
+    def test_eviction_drops_the_blocks_the_mod_never_had_first(self):
+        """Daytona laps (2026-11-19): ~30 prefetched guesses a lap beside the ~10 blocks the mod asked for pushed those
+        out before the car was back on them. The guesses go first, then the used ones, least recently used first."""
+        s = self.server
+        s.hm.clear()
+        s.hm_committed.clear()
+        s.hm_sent.clear()
+        used = [(1, 0.0, 0.0), (1, 128.0, 0.0), (1, 256.0, 0.0)]
+        for key in used:
+            s.hm[key] = {}
+            s.hm_sent.append(key)
+        guesses = [(1, 0.0, 512.0), (1, 0.0, 640.0), (1, 0.0, 768.0)]
+        for key in guesses:
+            s.hm[key] = {}
+        s.hm_committed.append(used[-1])
+        s.evict_heightmaps(fresh=guesses[-1])
+        self.assertEqual(set(s.hm), {used[0], used[1], used[2], guesses[-1]})
+        self.assertIn(used[0], s.hm_sent.ever)
+        self.assertNotIn(guesses[0], s.hm_sent.ever)
+        s.hm[(1, 0.0, 896.0)] = {}           # (one more: the last guess goes, no longer the fresh one)
+        s.evict_heightmaps(fresh=(1, 0.0, 896.0))
+        self.assertEqual(set(s.hm), set(used) | {(1, 0.0, 896.0)})
+        s.hm_sent.append((1, 0.0, 896.0))    # (the mod has it: now the least recently used it had goes, never protected)
+        s.hm[(1, 0.0, 1024.0)] = {}
+        s.evict_heightmaps(fresh=(1, 0.0, 1024.0))
+        self.assertEqual(set(s.hm), {used[1], used[2], (1, 0.0, 896.0), (1, 0.0, 1024.0)})
+        self.assertNotIn(used[0], s.hm_sent.ever)
+        s.hm.clear()
+        s.removes_flush()
+
     def test_a_slow_terrain_request_is_logged_and_still_answered(self):
         c = self.c
         self.hello()
@@ -595,9 +626,9 @@ class ServerTest(ServerHarness):
         async def run():
             conn = self.conn()
             conn.active = 1
-            conn._retire([(1, "0_0_0")])
+            conn.far.retire_at((1, "0_0_0"), time.monotonic())
             used = self.server.in_use()
-            conn.retired[(1, "0_0_0")] -= 61.0
+            conn.far.retire_at((1, "0_0_0"), conn.retired[(1, "0_0_0")] - 61.0)
             return used, self.server.in_use()
         self.hello()
         used, later = asyncio.run_coroutine_threadsafe(run(), self.loop).result(10)

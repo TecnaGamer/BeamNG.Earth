@@ -218,6 +218,22 @@ class RoadWearTest(unittest.TestCase):
 V2_MATS = {"bne_wear_var_01", "bne_wear_var_02", "bne_wear_tread2", "bne_wear_patchstrip"}
 
 
+class WearMaterialsTest(unittest.TestCase):
+    def test_wear_takes_shadows(self):
+        """The wear materials write no depth (translucentZWrite false); without translucentRecvShadows the forward pass
+        lit them as in full sun, bright streaks over shaded asphalt (the user's report 111; in-game A/B 2026-11-19: on,
+        they darken with the asphalt in shade)."""
+        import json
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
+                            "beamng_earth", "art", "shapes", "beamngEarth", "roadwear.materials.json")
+        with open(path) as f:
+            mats = json.load(f)
+        self.assertTrue(mats)
+        for name, m in mats.items():
+            with self.subTest(name=name):
+                self.assertTrue(m.get("translucentRecvShadows"))
+
+
 class SurfaceV2Test(unittest.TestCase):
     """The road revamp v2's surface overlays (BNE_SURFACE_V2: roadwear.surface_chunks, earthfast.surface_plan; the
     road mesh's lifts, ground clearance and draw order: roadmesh.SURFACE_V2)."""
@@ -257,6 +273,21 @@ class SurfaceV2Test(unittest.TestCase):
                 self.assertTrue(4.0 <= c["w"] <= 5.0 and 5.0 <= c["fend_m"] <= 20.0 and c["layer"] == "wear", c)
         patches = len([c for c in ch if c["m"] == "bne_wear_patchstrip"]) / (L / 1000)
         self.assertTrue(5 <= patches <= 11, patches)      # about 8 a km
+
+    def test_v2_leaves_out_the_old_lane_strips(self):
+        """With the v2 overlays the full-lane strips (polish, sealed, cracks) are left out even with BNE_WEAR_STRIPS=on
+        (they lay over the v2 wear and patch strips 0.2 mm apart); the manhole covers stay."""
+        rd = [("c", spec(surf="concrete", lanes=4, cls="motorway", width=16.0), line(128, -500, 128, 800), 0.0),
+              ("a", spec(lanes=2), line(-500, 128, 800, 128), 0.0)]
+        from unittest import mock
+        with mock.patch.object(roadwear, "STRIPS_ON", True):
+            got = kinds(plan(rd))
+            with mock.patch.object(roadwear, "SURFACE_V2", False):
+                old = kinds(plan(rd))
+        self.assertTrue({"bne_wear_sealed", "bne_wear_cracks"} & set(old), old)     # (drawn without v2)
+        self.assertFalse({"bne_wear_tread", "bne_wear_sealed", "bne_wear_cracks"} & set(got), got)
+        self.assertIn("bne_wear_tread2", got)
+        self.assertEqual("bne_spot_manhole" in got, "bne_spot_manhole" in old)
 
     def test_variation_runs_through_junctions(self):
         """The variation strips run on across a crossing road's carriageway (the stock maps'); the wear stops."""

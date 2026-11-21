@@ -125,7 +125,7 @@ class SelectionTest(unittest.TestCase):
         u, _ = ff.select(600.0, 0.0, both)
         # Moving the block only changes tiles in the union of both footprints, and only
         # between L0 and coarser levels there.
-        adds, removes = ff.diff(a, b)
+        adds, removes = [k for k in b if k not in a], [k for k in a if k not in b]
         for k in adds + removes:
             self.assertTrue(any(ff.overlaps(ff.tile_of(k).bbox, x) for x in both), k)
         self.assertLess(len(adds) + len(removes), 30)

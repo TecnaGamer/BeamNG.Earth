@@ -390,6 +390,8 @@ def all_source_id(here):
 NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_SEND_M", "BNE_ROADS_DROP_M",
                 "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M", "BNE_NETSTATS_PROC", "BNE_LIDAR_GAPS_WAIT",
                 "BNE_TELEMETRY",
+                "BNE_ROADSHAPE_DEBUG",      # (v2 P2a's fork records written beside the build: nothing built reads them)
+                "BNE_ROADSURF_V3_DEBUG",    # (v3 S1's lane graphs written beside the build: nothing built reads them)
                 # (which process makes a cell's plans and road stage: the same plans, earthd.Server.plan_first,
                 # plancache's stage_*)
                 "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE",
@@ -440,15 +442,34 @@ def keyed_env(k):
 # ends, banked with a banked road (roadshape.py; the plans keep a banked road's bank onto such a deck); BNE_DECK_SKEW
 # 1: its skew part (on with decks unless off). BNE_ROADSHAPE 2: which decks are simple is one rule for the deck and
 # the plans (roadshape.part_simple: bounded, from the map round the structure), never the chain's group.
+# BNE_ROADSHAPE 3 (P2b, sheet): an exit off a bridge one deck with its road (roadshape.deck_sheets: the union slab, the
+# branch pinned to the through deck's heights, no junction pad at the fork); sheet's tiles were decks' before.
+# BNE_ROADSHAPE 4 (P2c, sheet): the union ends where the heights part when the edges' split fails the height tests;
+# the split vertex from the fork's record alone (not the tile's lane shifts); a fork's pad kept for an arm not in it.
+# BNE_ROADSHAPE 5 (P3b, profile): the joint profile BUILT (roadshape.profile_built: deck heights from the solve, the
+# plans' second stage pinned from its approaches, grading._Planner._pinned); sheet and decks unchanged.
+# BNE_ROADSHAPE 6 (P3c, profile): the pins read every 0.25 m off the abutments, shared by distance and along the road;
+# an approach reaching another deck end within 2 anchors one member; the steep-road C1 tolerance (earthfast 523).
+# BNE_ROADSHAPE 7 (sheet): a branch's road surface on an exit union's slab drawn roadmesh.NOSLAB_LIFT over its through
+# road's (the union's chunks from the fork's record, "noslab"; revampfix).
+# BNE_ROADSHAPE 8 (P3d, profile): the solve holds twin decks, deck ends at one junction across OSM levels and the ground
+# under the chain's decks (earthfast 534); coplanar decks running along each other drawn as one surface
+# (roadmesh.trim_overlaps coplanar). Sheet and decks unchanged.
+# BNE_ROADSHAPE 9 (P3e, profile): a deck over another along it held as twins are, a twin run held whole once seeded
+# (earthfast 536); the coplanar trim on one seam, where both surfaces meet, past chunk ends inside a part
+# (deck_trim_coplanar); a branch's surface in its union laid on the through deck's; union decks' rows unsimplified.
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 2, "BNE_DECK_SKEW": 1}
+                   "BNE_ROADSHAPE": 9, "BNE_DECK_SKEW": 1}
 
 
 def keyed_value(k, v):
     """The text a set build switch k = v is hashed as (code_key, switches_key, bakepack.switches): k=v, its
     SWITCH_VERSIONS version after it when it has one."""
-    n = SWITCH_VERSIONS.get(k)
+    # The surface generation includes the supporting deck and its parapet outline.
+    n = 5 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
+    if (k, v) == ("BNE_ROADSHAPE", "profile") and os.environ.get("BNE_ROADSURF_V3") == "surface":
+        n = 10
     return f"{k}={v}" if n is None else f"{k}={v}@v{n}"
 
 

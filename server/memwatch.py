@@ -12,7 +12,8 @@ step (fast.ram_watch), which answers:
   - "rotate": the pool holding the largest process gets fresh processes (pools.RespawningPool.rotate: its jobs finish
     in the old ones, which then exit and give everything back);
   - "ok" / "wait": nothing now.
-While the server is over 90 % of the limit no far-tile burst processes start (budget.OVER, pools.ElasticPool). The
+While the server is over the limit no far-tile burst processes start (budget.OVER, pools.ElasticPool), nor while
+the room left under it is less than the burst's processes need (budget.ROOM_MB, at the pool's biggest process). The
 limit can change while the server runs (set_setting, the settings page); the process counts and the caches' sizes
 follow it from the next start. Python here is the glue: reading the processes' memory and acting; the rules are native.
 """
@@ -29,7 +30,7 @@ import fast
 log = logging.getLogger("earthd.memwatch")
 
 CHECK_S = float(os.environ.get("BNGE_MEMWATCH_S", "") or 5.0)
-LOG_EVERY_S = 300.0         # a summary line in the log this often
+LOG_EVERY_S = float(os.environ.get("BNGE_MEMWATCH_LOG_S", "") or 300.0)   # a summary line in the log this often
 # A shed request goes to the processes holding more than this times an equal share of the limit: a shed costs a worker
 # its warm caches (map data cells read again: +17-47 % a road tile, 2026-11-04), so the small ones keep theirs
 SHED_SHARE = 1.25
@@ -95,6 +96,34 @@ def measure():
         if mb is not None:
             mbs[pid] = mb
     return mbs, sum(mbs.values())
+
+
+def by_pool(mbs, pools):
+    """Where the server's memory is (the log's summary and shed lines): "main 3700, block 2 x 1500 = 3000, ..." (MB;
+    biggest first): the main process, each pool's processes (pools: [RespawningPool]), and the rest ("other": far-tile
+    burst processes, pools not registered)."""
+    seen, rows = set(), []
+    me = os.getpid()
+    if me in mbs:
+        rows.append(("main", [mbs[me]]))
+        seen.add(me)
+    named = {}
+    for p in pools:
+        try:
+            pids = list((getattr(p._pool, "_processes", None) or {}).keys())
+        except Exception:
+            pids = []
+        got = [mbs[pid] for pid in pids if pid in mbs and pid not in seen]
+        seen.update(pids)
+        if got:
+            named.setdefault(str(getattr(p, "name", "pool")), []).extend(got)
+    rows += sorted(named.items())
+    rest = [mb for pid, mb in mbs.items() if pid not in seen]
+    if rest:
+        rows.append(("other", rest))
+    rows.sort(key=lambda r: -sum(r[1]))
+    return ", ".join(f"{n} {v[0]:.0f}" if len(v) == 1 else f"{n} {len(v)} x {max(v):.0f} max = {sum(v):.0f}"
+                     for n, v in rows)
 
 
 def _avail_mb():
@@ -221,12 +250,26 @@ class _Watch:
             self.too_low_said = False
             log.info("memory: the server back under its limit (%.0f MB of %.0f)", total, eff)
         budget.OVER = bool(limit) and total >= eff     # (over the limit itself: no far-tile burst processes)
+        # (and the room a burst needs, pools.ElasticPool: 7 far-tile processes of ~0.7 GB each started at 21-22 GB of a
+        # 24 GB limit took the server to 27.3 GB, sheds and replacements after it; Daytona session 2026-11-19)
+        budget.ROOM_MB = (eff - total) if limit else None
+        sizes = {}
+        for p in pools:
+            try:
+                pids = list((getattr(p._pool, "_processes", None) or {}).keys())
+            except Exception:
+                pids = []
+            big = max([mbs.get(pid, 0.0) for pid in pids] or [0.0])
+            name = str(getattr(p, "name", ""))
+            if big > 0 and name:
+                sizes[name] = max(sizes.get(name, 0.0), big)
+        budget.POOL_MB = sizes
         if action == "shed":
             self.last_shed = now
             share = SHED_SHARE * eff / max(1, len(mbs))    # (the biggest processes: a shed costs a worker its warm caches)
             budget.shed_ask(share)
-            log.info("memory: the server at %.0f MB of %.0f (%d processes): caches dropped where over %.0f MB",
-                     total, eff, len(mbs), share)
+            log.info("memory: the server at %.0f MB of %.0f (%d processes): caches dropped where over %.0f MB (%s)",
+                     total, eff, len(mbs), share, by_pool(mbs, pools))
         elif action == "rotate":
             self.last_rotate = now
             p = pools[idx]
@@ -242,8 +285,9 @@ class _Watch:
         if now - self.last_log >= LOG_EVERY_S:
             self.last_log = now
             log.info("memory: the server at %.0f MB of %.0f (%d processes, peak %.0f, %s available; %d sheds, %d "
-                     "replacements so far)", total, eff, len(mbs), _state["peak"],
-                     f"{avail:.0f} MB" if avail >= 0 else "unknown", _state["sheds"], _state["rotations"])
+                     "replacements so far): %s", total, eff, len(mbs), _state["peak"],
+                     f"{avail:.0f} MB" if avail >= 0 else "unknown", _state["sheds"], _state["rotations"],
+                     by_pool(mbs, pools))
         return action
 
 
