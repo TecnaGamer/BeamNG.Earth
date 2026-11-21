@@ -114,7 +114,7 @@ def plans_format():
     import roadshape
     profile = ".s4v3" if roadshape.SURFACE_PROFILE else ""
     return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + profile + (".gg1" if grading.GUARD_ON else "") + ds \
-        + (".vs2" if vsolve.SOLO else ".vs1" if vsolve.ON else "") + (".bv3" if grading.BATTER_ON else "")
+        + (".vs2" if vsolve.SOLO else ".vs1" + vsolve.SKIP_TAG if vsolve.ON else "") + (".bv3" if grading.BATTER_ON else "")
 
 
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's

@@ -29,6 +29,7 @@ key (plancache.plans_format). On by default (the RFC's step 4) where the native 
 off, as before, on an older build. BNE_VSOLVE=off: the passes alone, and off it costs nothing.
 Pure: the same plans in give the same heights out.
 """
+import hashlib
 import logging
 import os
 import time
@@ -58,6 +59,15 @@ MODE = (os.environ.get("BNE_VSOLVE") or "").strip().lower() or _default_mode()
 SOLO = MODE == "solo"               # (an experiment: the solve's heights, from the rules alone: the passes it replaces
                                     # skipped, docs/research/2026-11-17-vsolve-solo.md)
 ON = MODE == "on" or SOLO           # (the solve's heights used)
+# The passes on mode skips: skipped one by one, these changed nothing the solve keeps on the baseline places and
+# nothing in test_drivability (docs/research/2026-11-21-vsolve-skip.md). Where the solve finds no heights, every pass
+# runs again from the profiles before them (grading, as solo mode). BNE_VSOLVE_SKIP: another list ("none": none)
+_SKIP_DEFAULT = "snap_dips,cw_ends"
+SKIP = frozenset(s for s in (os.environ.get("BNE_VSOLVE_SKIP") or _SKIP_DEFAULT).split(",")
+                 if s and s != "none") if ON and not SOLO else frozenset()
+# (the plans' key: .k1 the default list, a list of its own its own tag; plancache)
+SKIP_TAG = "" if not SKIP else ".k1" if SKIP == frozenset(_SKIP_DEFAULT.split(",")) else (
+    ".k" + hashlib.sha1(",".join(sorted(SKIP)).encode()).hexdigest()[:6])
 SHADOW = MODE == "shadow" or ON     # (the solve run, beside the passes or in their place)
 
 JOIN_M = 1.0            # m: a road's end this close to another road's centre line meets it there (grademetrics.JUNCTION_R_M)

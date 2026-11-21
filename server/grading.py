@@ -2940,10 +2940,15 @@ class _Planner:
             solo = vsolvemod.SOLO and z_before is not None
             # (the passes and the rules before the solve, as one call: solo mode runs it again with every pass
             # where the solve finds no heights, from the profiles as they were before it: the RFC's fallback)
-            snap = [(f, _plan_copy(p)) for f, p in plans] if solo else None
+            # (on mode: the passes vsolve.SKIP names skipped, the same fallback)
+            skip = z_before is not None and (solo or bool(vsolvemod.SKIP))
+            snap = [(f, _plan_copy(p)) for f, p in plans] if skip else None
 
-            def passes(solo):
-                if NEIGHBOUR_ON and plans and self._coarse(key) and not solo:
+            def passes(skip):
+                def off(name):        # (solo: every pass the solve replaces; on: vsolve.SKIP's)
+                    return skip and (solo or name in vsolvemod.SKIP)
+
+                if NEIGHBOUR_ON and plans and self._coarse(key) and not off("neighbours"):
                     try:
                         r = 2.0 * NEIGHBOUR_TREND_SIGMA_M
                         couple_neighbours([p for _f, p in plans], pspecs,
@@ -2952,14 +2957,14 @@ class _Planner:
                         _caught(e)
                         log.debug("grading: neighbours of %s: %s: %s", key, type(e).__name__, e)
                 pad_nodes = None
-                if JUNCTION_SNAP_ON and plans and not solo:
+                if JUNCTION_SNAP_ON and plans and not off("snap"):
                     try:
                         snap_junctions([p for _f, p in plans], pspecs)
                         pad_nodes = junction_pads([p for _f, p in plans], pspecs)
                     except Exception as e:      # blended as before rather than no grading
                         _caught(e)
                         log.debug("grading: junctions of %s: %s: %s", key, type(e).__name__, e)
-                if COARSE_EASE_ON and plans and not solo:
+                if COARSE_EASE_ON and plans and not off("coarse"):
                     try:
                         self._ease_coarse(key, plans, pspecs)
                     except Exception as e:      # as they were rather than no grading
@@ -2987,13 +2992,13 @@ class _Planner:
                 # before the passes, a road raised onto its bridge's approach got a dip at its ground under a deck 10 m
                 # from its own deck's end, 7.8 m over it: a 160 % grade in Lagos)
                 z_under = [np.array(p.z, np.float64) for _f, p in plans] if z_before is not None else None
-                if UNDER_ON and plans and not solo:
+                if UNDER_ON and plans and not off("under"):
                     try:
                         self._lower_underpasses(key, plans)
                     except Exception as e:      # as the data has it rather than no grading
                         _caught(e)
                         log.debug("grading: underpasses of %s: %s: %s", key, type(e).__name__, e)
-                if JUNCTION_SNAP_ON and plans and (APPROACH_ON or UNDER_ON) and not solo:
+                if JUNCTION_SNAP_ON and plans and (APPROACH_ON or UNDER_ON) and not off("snap_dips"):
                     # the side roads again, at their roads' heights after the approaches' lifts and the underpasses' dips
                     # (snapped before them, every alley along Baltimore's Haven Street stood up to 3.5 m over the street
                     # the dip had lowered: a hump at each, the user 2026-10-28)
@@ -3003,7 +3008,7 @@ class _Planner:
                     except Exception as e:
                         _caught(e)
                         log.debug("grading: junctions after the dips of %s: %s: %s", key, type(e).__name__, e)
-                if SEAMS_ON and CW_ON and plans and not solo:
+                if SEAMS_ON and CW_ON and plans and not off("cw_ends"):
                     try:            # the deck's height at each carriageway road's abutment end, whatever the passes did to it
                         if self._pin_cw_ends(plans, pspecs) and JUNCTION_SNAP_ON:
                             snap_junctions([p for _f, p in plans], pspecs)      # (the side roads meet it again)
@@ -3012,7 +3017,7 @@ class _Planner:
                         log.debug("grading: carriageway ends of %s: %s: %s", key, type(e).__name__, e)
                 with self.lock:
                     ctx = self.__dict__.setdefault("_ramp_ctx", {}).pop(str(key), None) if APPROACH_ON and plans else None
-                if ctx and not solo:    # (the raised junctions' roads on ramps no steeper than RAMP_GRADE, after every snap)
+                if ctx and not off("ramp"):    # (the raised junctions' roads on ramps no steeper than RAMP_GRADE, after every snap)
                     log.debug("grading: ramp envelope of %s: %d raised, %d held", key, len(ctx[0]), len(ctx[1]))
                     try:
                         # (its floor no higher than the plans now: the dips under the decks and the snaps after the first
@@ -3024,7 +3029,7 @@ class _Planner:
                     except Exception as e:
                         _caught(e)
                         log.debug("grading: ramp envelope of %s: %s: %s", key, type(e).__name__, e)
-                if GUARD_ON and plans and not solo:
+                if GUARD_ON and plans and not off("guard"):
                     try:            # the finished plans under the grade ceilings and the window rule (grade_guard)
                         st = grade_guard([p for _f, p in plans], pspecs, bases,
                                          [i for i, (f, _p) in enumerate(plans) if TUNNEL_TAG in f])
@@ -3034,25 +3039,25 @@ class _Planner:
                     except Exception as e:      # the plans as the passes left them rather than no grading
                         _caught(e)
                         log.debug("grading: grade guard of %s: %s: %s", key, type(e).__name__, e)
-                if CORRIDOR_ON and plans and not solo:
+                if CORRIDOR_ON and plans and not off("corridors"):
                     try:            # roads side by side at one height (before the welds and snaps that join them again)
                         share_corridors(plans, pspecs, self._decks_near(key) if CORRIDOR_UNDER_ON else ())
                     except Exception as e:      # each on its own rather than no grading
                         _caught(e)
                         log.debug("grading: corridors of %s: %s: %s", key, type(e).__name__, e)
-                if WELD_ON and plans and not solo:
+                if WELD_ON and plans and not off("weld"):
                     try:            # one road planned in pieces meets itself at one height (a dip across a junction)
                         weld_continuations(plans, pspecs)
                     except Exception as e:      # the pieces as planned rather than no grading
                         _caught(e)
                         log.debug("grading: welded continuations of %s: %s: %s", key, type(e).__name__, e)
-                if JUNCTION_SNAP_ON and plans and not solo:
+                if JUNCTION_SNAP_ON and plans and not off("snap_weld"):
                     try:            # the side roads meet the welded main again, at its new height (no step at the mouth)
                         snap_junctions([p for _f, p in plans], pspecs)
                     except Exception as e:      # the welded heights alone rather than no grading
                         _caught(e)
                         log.debug("grading: junctions after welding of %s: %s: %s", key, type(e).__name__, e)
-                if _st.ABUT and APPROACH_ON and plans and not solo:
+                if _st.ABUT and APPROACH_ON and plans and not off("struct_ends"):
                     try:            # one abutment height per structure end (BNE_DECK_STRUCT=abut), after every pass that moves ends
                         if self._pin_struct_ends(plans, pspecs) and JUNCTION_SNAP_ON:
                             snap_junctions([p for _f, p in plans], pspecs)      # (the side roads meet it again)
@@ -3061,7 +3066,7 @@ class _Planner:
                         log.debug("grading: structure ends of %s: %s: %s", key, type(e).__name__, e)
                 return z_prelift, z_lift, z_under
 
-            z_prelift, z_lift, z_under = passes(solo)
+            z_prelift, z_lift, z_under = passes(skip)
             if z_before is not None and plans:
                 info = None
                 try:            # the one solve beside the passes: measured only, their plans kept (vsolve)
@@ -3069,10 +3074,10 @@ class _Planner:
                     info = self._vsolve_shadow(key, plans, pspecs, z_before, z_under, (z_prelift, z_lift), ctx)
                 except Exception as e:
                     log.warning("vsolve: shadow solve of %s: %s: %s", key, type(e).__name__, e)
-                if solo and (info is None or info.get("fallback")):
+                if skip and (info is None or info.get("fallback")):
                     # (no heights from the solve, its rows infeasible or an error: the passes' plans, made from the
                     # profiles as they were before any rule, as without BNE_VSOLVE)
-                    log.warning("vsolve: %s: no solve in solo mode: the passes' plans", key)
+                    log.warning("vsolve: %s: no solve with passes skipped: the passes' plans", key)
                     plans[:] = [(f, _plan_copy(p)) for f, p in snap]
                     passes(False)
             if plans:

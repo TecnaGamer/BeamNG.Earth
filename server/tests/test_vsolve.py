@@ -254,7 +254,13 @@ class OnTest(unittest.TestCase):
         import plancache
         with unittest.mock.patch.object(vsolve, "ON", False):
             off = plancache.plans_format()
-        self.assertEqual(plancache.plans_format(), off + ".vs1")
+        with unittest.mock.patch.object(vsolve, "SKIP_TAG", ""):
+            self.assertEqual(plancache.plans_format(), off + ".vs1")
+        with unittest.mock.patch.object(vsolve, "SKIP_TAG", ".k1"):     # (the passes it skips: plans of their own)
+            self.assertEqual(plancache.plans_format(), off + ".vs1.k1")
+
+    def test_it_skips_the_passes_it_was_measured_without(self):
+        self.assertEqual(sorted(vsolve._SKIP_DEFAULT.split(",")), ["cw_ends", "snap_dips"])
 
     def test_a_dip_comes_back_to_its_ground_without_ringing(self):
         """A road under a motorway bridge dips, and is back on its ground past the ramp, no higher: bending and the
@@ -379,8 +385,16 @@ class SoloTest(unittest.TestCase):
         with unittest.mock.patch.object(vsolve, "solve", side_effect=RuntimeError("no solve")), \
                 self.assertLogs("earthd.grading", "WARNING") as cm:
             solo = self.heights(ON=True, SHADOW=True, SOLO=True)
-        self.assertTrue(any("no solve in solo mode" in m for m in cm.output))
+        self.assertTrue(any("no solve with passes skipped" in m for m in cm.output))
         np.testing.assert_array_equal(solo, passes)
+
+    def test_on_mode_s_skipped_passes_come_back_without_a_solve(self):
+        passes = self.heights(ON=False, SHADOW=False, SOLO=False, SKIP=frozenset())
+        with unittest.mock.patch.object(vsolve, "solve", side_effect=RuntimeError("no solve")), \
+                self.assertLogs("earthd.grading", "WARNING") as cm:
+            on = self.heights(ON=True, SHADOW=True, SOLO=False, SKIP=frozenset({"snap_dips", "cw_ends", "snap"}))
+        self.assertTrue(any("no solve with passes skipped" in m for m in cm.output))
+        np.testing.assert_array_equal(on, passes)
 
     def test_with_one_the_dip_is_the_solve_s(self):
         solo = self.heights(ON=True, SHADOW=True, SOLO=True)
