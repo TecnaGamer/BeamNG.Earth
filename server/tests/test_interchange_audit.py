@@ -284,8 +284,8 @@ def _two_interchanges(link_m):
 
 
 def test_two_interchanges_joined_only_by_a_ground_road_are_two_systems_and_both_pass():
-    # (an interchange ends where its roads come back to the ground: the road between is a boundary held at the ground, of
-    # any length, not a way on to the next structure)
+    # (short decks, held at their ground, have no ramp: where their roads are back on the ground is the end of each, and
+    # the road between is a boundary held at the ground, of any length, not a way on to the next structure)
     for link_m in (60.0, 250.0, 450.0, 2000.0):
         net, systems, audits = _audit(_two_interchanges(link_m))
         assert len(systems) == 2 and all(len(s["seeds"]) == 1 for s in systems), link_m
@@ -299,6 +299,43 @@ def test_a_road_dug_under_a_deck_between_the_ends_is_no_ground_node():
     net, systems, audits = _audit(m)
     assert len(systems) == 3, "d3 is a system of its own (it digs the link under it)"
     assert not _finds(audits, 4, "merged_over_a_ground_node")
+
+
+def _long_overpasses(link_m):
+    """Two long viaducts, each over its motorway, the first's north end and the second's south end on one road on the
+    ground of link_m. Long enough to rise for the motorway: a ramp then, where a short deck is held at its ground."""
+    y1 = 250.0 + link_m
+    return [_ground("m1", _line(-800, 0, 800, 0, 200), "motorway"),
+            _deck("d1", _line(0, -250, 0, 250, 60)),
+            _ground("s1", _line(0, -900, 0, -250)),
+            _ground("link", _line(0, 250, 0, y1, 30)),
+            _ground("m2", _line(-800, y1 + 250, 800, y1 + 250, 200), "motorway"),
+            _deck("d2", _line(0, y1, 0, y1 + 500, 60)),
+            _ground("n2", _line(0, y1 + 700, 0, y1 + 1200))]
+
+
+def _interchanges(members):
+    net, found = gs.find_interchanges(members)
+    return [(sorted(str(net.m[i].key[0]) for i in f.sysm["seeds"]),
+             sorted(sorted(str(net.m[i].key[0]) for i in p.sysm["seeds"]) for p in f.parts)) for f in found]
+
+
+def test_viaducts_whose_ramps_meet_on_a_road_are_one_interchange_of_two_systems():
+    # (an interchange ends where its road is back on the ground: the ramps of two viaducts 60 m apart on one road meet,
+    # the road is not on the ground between them. Each stays a system of its own, solved as it is)
+    assert _interchanges(_long_overpasses(60.0)) == [(["d1", "d2"], [["d1"], ["d2"]])]
+    net, systems = gs.find_systems(_long_overpasses(60.0))
+    assert sorted(str(net.m[i].key[0]) for s in systems for i in s["seeds"]) == ["d1", "d2"] and len(systems) == 2
+
+
+def test_viaducts_whose_ramps_are_back_on_the_ground_before_they_meet_are_two_interchanges():
+    assert _interchanges(_long_overpasses(2000.0)) == [(["d1"], []), (["d2"], [])]
+
+
+def test_what_a_ramp_reaches_does_not_depend_on_the_order_of_the_members():
+    for link_m in (60.0, 2000.0):
+        m = _long_overpasses(link_m)
+        assert _interchanges(m) == _interchanges(m[::-1]), link_m
 
 
 # ---- naming ----

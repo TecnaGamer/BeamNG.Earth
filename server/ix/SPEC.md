@@ -115,6 +115,10 @@ one system, then its embankments. Every other thread and process waits for the l
 (`PlanCache.shape_store`: lat / lon and heights, no frame). A holder that is gone hands the lock over; an abandoned one
 gives it back. `pipeline.region` is the region's own find, the owner calls and the merge of their profiles.
 
-An interchange ends where its roads come back to the ground: a road on the ground between two structures' ends joins no
-interchanges (`find_interchanges` unites structures only through their joints, crossings and shared dips), the structure's
-end is a boundary held at the ground there.
+An interchange ends where its roads come back to the ground, which is the end of a ramp, not the end of a structure. A
+road leaving a deck belongs to the interchange as far as the deck's ramp reaches (`gradeshapes._ramp_reaches`, from the
+pieces alone, before anything is solved: the ramp the embankment step lays, `_Ramper`, from the height the structure needs
+and the roads' grade and curve laws, through the junctions it meets). Structures that join, cross or dig one road are one
+system; systems whose ramps run along one stretch of a road are one interchange (`Interchange.parts`): one extent, one key,
+one owner, which solves each system as it is and lays the embankments of all at once, so where two ramps meet on a road
+one lays what the other does. A road on the ground beyond the reaches is a boundary held at its own ground.

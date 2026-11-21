@@ -7,6 +7,7 @@ lock round them) has a single place to wrap: interchange() runs it for the owner
 interchange's lock round it, once for the run. Each step logs one line (step, key, size, seconds, ok or why it failed)
 and region() one more per region, at LOG_LEVEL."""
 import dataclasses
+import hashlib
 import logging
 import os
 import time
@@ -72,7 +73,7 @@ def _heights_why(zs, diag):
 
 def system(planner, net, ix, fixed_z, hk, clock):
     """One interchange's steps, in order, each timed on its own: paths, extent, order, terrain (the pieces' samples and
-    the ground there), datum, heights (the solve). ix: gradeshapes.Interchange, the whole one (owner.grow). Its key is
+    the ground there), datum, heights (the solve). ix: gradeshapes.Interchange, one system of the whole one (owner.grow). Its key is
     the owner's (owner.key_of: its roads and its place, the same from every region), the scope of all its artifacts.
     Returns (pcs, smp, zs, diag, ground, heights key): zs None when there is no answer."""
     import xproc
@@ -122,25 +123,34 @@ def system(planner, net, ix, fixed_z, hk, clock):
 
 
 def interchange(planner, net, ix, others, hk, clock):
-    """One whole interchange's steps and what they give the roads (the owner's, owner.made): system(), then its
-    embankments and profiles. ({road feature id: [(xy (m, 2), z (m,), mode)]}, None), or ({}, why) where there is no
-    answer. others: the net's other interchanges' systems (the pieces its ramps stop at)."""
-    sysm = ix.sysm
+    """One whole interchange's steps and what they give the roads (the owner's, owner.made): system() of each of its systems
+    (the structures that make one among themselves), then the embankments and profiles of all of them at once. ({road
+    feature id: [(xy (m, 2), z (m,), mode)]}, None), or ({}, why) where no system has an answer. others: the net's other
+    interchanges' systems (the pieces its ramps stop at)."""
     fixed_z = s2_extent.make_fixed(planner, net)
-    pcs, smp, zs, diag, ground, heights_key = system(planner, net, ix, fixed_z, hk, clock)
-    if zs is None:              # (no answer: the interchange as it is, and why in the log; no stand-in)
-        why = _heights_why(zs, diag)
-        log.error("grading: SHAPES infeasible system in region %s: %d pieces, %d crossings, %d ends; %s; members %s",
-                  hk, len(pcs), len(sysm["crossings"]), len(sysm["ends"]),
-                  diag.get("qp_error") or ", ".join("%s %s" % (k, diag[k]) for k in sorted(diag)
-                                                    if k not in ("converged", "feasible")),
-                  ", ".join(sorted({str(net.m[i].key[0])[:8] + ":" + net.m[i].kind for i in sysm["seeds"]}))[:600])
+    solved, shapes, keys, why = [], [], [], None
+    for part in ix.parts or (ix,):
+        sysm = part.sysm
+        pcs, smp, zs, diag, ground, heights_key = system(planner, net, part, fixed_z, hk, clock)
+        if zs is None:          # (no answer: the system as it is, and why in the log; no stand-in)
+            why = why or _heights_why(zs, diag)
+            log.error("grading: SHAPES infeasible system in region %s: %d pieces, %d crossings, %d ends; %s; members %s",
+                      hk, len(pcs), len(sysm["crossings"]), len(sysm["ends"]),
+                      diag.get("qp_error") or ", ".join("%s %s" % (k, diag[k]) for k in sorted(diag)
+                                                        if k not in ("converged", "feasible")),
+                      ", ".join(sorted({str(net.m[i].key[0])[:8] + ":" + net.m[i].kind for i in sysm["seeds"]}))[:600])
+            continue
+        if os.environ.get("BNE_SHAPES_DEBUG"):
+            planner._shape_debug(net, sysm, pcs, smp, zs, ground, fixed_z, diag)
+        solved.append(sysm)
+        shapes.append((pcs, smp, zs))
+        keys.append(heights_key)
+    if not solved:
         return {}, why
-    if os.environ.get("BNE_SHAPES_DEBUG"):
-        planner._shape_debug(net, sysm, pcs, smp, zs, ground, fixed_z, diag)
-    prof, region = s6_heights.region_of(planner, net, [sysm], [(pcs, smp, zs)], "interchange:%s" % heights_key,
+    heights_key = keys[0] if len(keys) == 1 else hashlib.sha256("|".join(keys).encode()).hexdigest()
+    prof, region = s6_heights.region_of(planner, net, solved, shapes, "interchange:%s" % heights_key,
                                         [_gsh.pieces(net, o) for o in others])
-    _put(region, (heights_key,), [heights_key.encode()])
+    _put(region, tuple(keys), [heights_key.encode()])
     return prof, None
 
 

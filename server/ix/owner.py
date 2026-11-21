@@ -195,8 +195,13 @@ def grow(planner, net, ix, cid, pt, adopt=True):
         if more <= ids:
             break
         ids, cur_net, cur = more, nxt_net, nxt
-    whole = _gsh.Interchange(nxt.sysm, read_s + nxt.paths_s, find_s - nxt.paths_s)
-    return key_of(planner, nxt_net, nxt.sysm), nxt_net, whole, [x.sysm for x in found if x is not nxt]
+    # (what the finding cost is the first system's: the steps of each system carry the seconds of its own)
+    parts = tuple(p._replace(paths_s=p.paths_s + (read_s if k == 0 else 0.0),
+                             extent_s=p.extent_s + (find_s - nxt.paths_s if k == 0 else 0.0))
+                  for k, p in enumerate(nxt.parts))
+    whole = _gsh.Interchange(nxt.sysm, read_s + nxt.paths_s, find_s - nxt.paths_s, parts)
+    return (key_of(planner, nxt_net, nxt.sysm), nxt_net, whole,
+            [p.sysm for x in found if x is not nxt for p in (x.parts or (x,))])
 
 
 # ---- the solution, in a planner's frame and as stored ----

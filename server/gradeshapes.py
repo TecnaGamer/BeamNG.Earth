@@ -80,7 +80,7 @@ RAIL_DECK_DEPTH_M = 1.68
 COVER_M = 1.0               # m of structure over an underpass's headroom (the roof under a road or track at grade)
 TUNNEL_MAX_M = 300.0        # m: a longer road tunnel is a tunnel network of its own (tunnels.py), not an underpass
 CONNECT_M = 400.0           # m: a road on the ground this short between two structures' ends is named by the audits (it joins
-#                             nothing: find_interchanges)
+#                             nothing: an interchange takes in a road as far as its ramps reach, _ramp_reaches)
 RAMP_MAX_M = 600.0          # m: the longest embankment or cut followed along a road
 DIP_MARGIN_M = 3.0          # m past the upper part's edge a road going under holds its dip before its cut ramps up
 FOOT_STEP_M = 1.0           # m between the points of a crossing's footprint (under_pairs)
@@ -637,27 +637,32 @@ def _over(mi, mj):
     return "i" if a > b else "j"
 
 
-Interchange = namedtuple("Interchange", "sysm paths_s extent_s")
+Interchange = namedtuple("Interchange", "sysm paths_s extent_s parts", defaults=((),))
 # sysm: the system (find_systems' record); paths_s: the seconds spent finding the relations of its members (the joints
-# and crossings with what is near them), extent_s: those closing it (what merged its seeds, its dips, its record)
+# and crossings with what is near them), extent_s: those closing it (what merged its seeds, its dips, its record).
+# parts: where the structures' ramps meet the interchange is several systems (each a record of its own, as find_systems
+# gives them), sysm then only what names it (its seeds, dips, crossings and ends together) and each part its own; empty:
+# the interchange is the one system
 
 
 def find_systems(members, reader=None, trace=None):
     """The interchanges among members: [System], each closed, in a deterministic order. See find_interchanges."""
     net, found = find_interchanges(members, reader, trace)
-    return net, [x.sysm for x in found]
+    return net, [p.sysm for x in found for p in (x.parts or (x,))]
 
 
 def find_interchanges(members, reader=None, trace=None, want=None):
     """(net, [Interchange]): the interchanges among members, each closed, in a deterministic order, each with the seconds
-    its relations and its closing took (a merge's or a dip's seconds go to the interchange they ended up in). want(net,
+    its relations and its closing took (a merge's or a dip's seconds go to the interchange they ended up in). An interchange
+    is the systems whose ramps meet (_ramp_reaches; Interchange.parts), each system the structures that join, cross or dig
+    one road among themselves. want(net,
     seeds) -> bool: whether an interchange is asked for; one that is not is found (it may merge others) but not closed.
     reader(net) -> (ground, fixed): the
     elevation the cost of a move is read from (_Verdicts); None, flat ground. trace (a dict, the audit's: interchange_audit):
     filled with what merged the seeds, [(a, b, why, detail)] in the order they were united (why "relation": a join or a
     crossing of two seeds, detail (kind, s on a, s on b); "dip": two seeds over one road they dig, detail None), with the
-    seeds; nothing else about the answer. A road on the ground between two structures' ends joins no interchanges: an
-    interchange ends where its roads come back to the ground."""
+    seeds; nothing else about the answer. "ramp": two seeds whose ramps meet on a road on the ground (detail the road): they
+    stay systems of their own, in one interchange."""
     net = Net(members)
     n = len(members)
     if trace is not None:
@@ -707,9 +712,10 @@ def find_interchanges(members, reader=None, trace=None, want=None):
         ra, rb = root(a), root(b)
         if ra != rb:
             par[max(ra, rb, key=lambda x: str(members[x].key))] = min(ra, rb, key=lambda x: str(members[x].key))
-    # (structures meet one another: a joint or a crossing. A road on the ground between two structures' ends does not join
-    # them: it is at its ground, and an interchange ends where its roads come back to it, each structure's end a boundary
-    # held at the ground there, the road no further followed to the next structure)
+    # (structures meet one another: a joint or a crossing. A road leaving a structure belongs to the interchange as far as
+    # its ramp reaches (_ramp_reaches, below): an interchange ends where that road is back on its ground, which is not
+    # where the structure's end is. A road on the ground beyond the reach is a boundary held at its own ground, not
+    # followed on to the next structure)
     for i in seeds:
         for j, kind, si, sj, q in rel[i]:
             if j in par:
@@ -721,16 +727,140 @@ def find_interchanges(members, reader=None, trace=None, want=None):
     groups = {}
     for i in seeds:
         groups.setdefault(root(i), []).append(i)
+    # (the systems are those the structures make among themselves; an interchange is the systems whose ramps meet. Each
+    # system is solved as it is, by the one that owns the interchange, and the interchange's embankments are laid at once:
+    # where two ramps meet on a road one lays what the other does, and the pairing of ramps toward each other is theirs)
+    cpar = {r: r for r in groups}
+
+    def croot(r):
+        while cpar[r] != r:
+            cpar[r] = cpar[cpar[r]]
+            r = cpar[r]
+        return r
+    for a, b, j in _ramp_reaches(net, seeds, rel, dig, t_dip):
+        if trace is not None:
+            trace["merges"].append((a, b, "ramp", j))
+        ra, rb = croot(root(a)), croot(root(b))
+        if ra != rb:
+            cpar[max(ra, rb, key=lambda x: str(members[x].key))] = min(ra, rb, key=lambda x: str(members[x].key))
+    cgroups = {}
+    for r in groups:
+        cgroups.setdefault(croot(r), []).append(r)
     found = []
-    for r in sorted(groups, key=lambda x: str(members[x].key)):
-        t0 = time.perf_counter()
-        seeds_r = sorted(groups[r], key=lambda x: str(members[x].key))
-        if want is not None and not want(net, seeds_r):
+    for c in sorted(cgroups, key=lambda x: str(members[x].key)):
+        seeds_c = sorted((i for r in cgroups[c] for i in groups[r]), key=lambda x: str(members[x].key))
+        if want is not None and not want(net, seeds_c):
             continue
-        sysm = _system(net, seeds_r, rel, dig)
-        found.append(Interchange(sysm, sum(t_rel[i] for i in seeds_r),
-                                 time.perf_counter() - t0 + sum(t_dip.get(i, 0.0) for i in seeds_r)))
+        parts = []
+        for r in sorted(cgroups[c], key=lambda x: str(members[x].key)):
+            t0 = time.perf_counter()
+            seeds_r = sorted(groups[r], key=lambda x: str(members[x].key))
+            parts.append(Interchange(_system(net, seeds_r, rel, dig), sum(t_rel[i] for i in seeds_r),
+                                     time.perf_counter() - t0 + sum(t_dip.get(i, 0.0) for i in seeds_r)))
+        if len(parts) == 1:
+            found.append(parts[0])
+            continue
+        whole = dict(seeds=seeds_c, dips=[d for p in parts for d in p.sysm["dips"]],
+                     crossings=[x for p in parts for x in p.sysm["crossings"]],
+                     ends=[e for p in parts for e in p.sysm["ends"]])
+        found.append(Interchange(whole, sum(p.paths_s for p in parts), sum(p.extent_s for p in parts), tuple(parts)))
     return net, found
+
+
+def _ramp_reaches(net, seeds, rel, dig, clock=None):
+    """[(seed, seed, road)] of the structures whose ramps meet on a road on the ground. An interchange ends where its road
+    is back on its ground, which is the end of the ramp, not the end of the structure: from each end of a deck that rises
+    for a road under it, onto a road on the ground, the ramps it may leave by, laid as the embankment step lays them
+    (_Ramper: the road's grade and curve laws, through the junctions they meet) over the stretches of the roads they run
+    along: an embankment from the height the structure needs (clearance_need: the headroom and its depth) falling away at
+    the deck's grade, and a cut from the ground at that grade, the end standing anywhere between. What the solve picks is
+    not known before it is made, so both are followed, as far as either goes. A structure that digs the road under it, or
+    that rises for nothing, has no ramp. Two structures whose ramps run along one stretch of a road are one interchange
+    (the road is not on its ground between them, and the ramps meeting there are laid together). clock: {seed: seconds},
+    to each seed the seconds spent for it added."""
+    members = net.m
+    ground = dig.read()[0]
+
+    def ground_of(x):
+        return np.zeros(len(x["mem"])) if ground is None else np.asarray(ground(x["xy"]), np.float64)
+
+    rise = {}               # (deck, 0 its start | 1 its end) -> how far over its ground the structure's end stands
+    for i in seeds:
+        mi = members[i]
+        if mi.kind != "deck" or dig.digs(i):
+            continue
+        for j, kind, si, sj, q in rel[i]:
+            if kind != "cross" or _over(mi, members[j]) != "i":
+                continue
+            if dig.lift(i, si, j, sj, q) <= 0.0:
+                continue        # (a deck that does not rise for the road under it stands on its ground)
+            ends = dig.run(i, si)
+            for dist, end in zip(ends[0], ends[1]):
+                if end is not None and math.isfinite(dist):
+                    rise[end] = max(rise.get(end, 0.0), clearance_need(net, i, j, q))
+    pieced = {int(i): [(0.0, float(net.L[i]))] for i in seeds}
+    spans = {}
+    for i in seeds:
+        mi = members[i]
+        if mi.kind != "deck":
+            continue
+        t0 = time.perf_counter()
+        lay = _Ramper(net, ground_of, pieced)
+        for j, kind, si, sj, q in rel[i]:
+            mj = members[j]
+            if kind != "join" or mj.kind != "ground" or min(si, net.L[i] - si) > JOIN_M:
+                continue
+            over = rise.get((i, int(si > net.L[i] / 2)))
+            if over is None:
+                continue
+            if min(sj, net.L[j] - sj) > JOIN_M and any(
+                    k2 == "join" and j2 != i and members[j2].kind in ("deck", "rail_deck") and abs(s2 - si) < 1.0
+                    for j2, k2, s2, _t, _q in rel[i]):
+                continue        # (the bridge goes on past this end over the road's middle: no end onto it)
+            for sign_, over_ in ((1.0, over), (-1.0, 0.0)):
+                lay.ramp_from(j, sj, sj < net.L[j] / 2, None, -deck_grade(mi), over=over_, sign=sign_)
+        n0, n = len(lay.ramps), 0
+        while n < len(lay.ramps):
+            rp = lay.ramps[n]
+            if n >= n0:
+                lay.cover(rp[4], rp[9])
+            for jj, s_, ways, z0, surface in _junction_roads(net, rp, lay.done, pieced):
+                lay.done.setdefault(jj, []).append((s_ - JOIN_M, s_ + JOIN_M))
+                for toward_end in ways:
+                    tb = _tangent(net.lines[jj], net.s[jj], s_) * (1.0 if toward_end else -1.0)
+                    lay.ramp_from(jj, s_, toward_end, z0, float(surface @ tb), branch=True)
+            n += 1
+        for rp in lay.ramps:
+            for m_, (lo, hi) in _stretches(rp[4], rp[9]).items():
+                spans.setdefault(m_, []).append((lo, hi, i))
+        if clock is not None:
+            clock[i] = clock.get(i, 0.0) + time.perf_counter() - t0
+    out = []
+    for m_, lst in spans.items():
+        lst.sort()
+        hi, who = lst[0][1], lst[0][2]
+        for lo_, b_, i in lst[1:]:
+            if lo_ <= hi + JOIN_M:
+                if i != who:
+                    out.append((min(i, who), max(i, who), m_))
+                if b_ > hi:
+                    hi, who = b_, i
+            else:
+                hi, who = b_, i
+    return out
+
+
+def _stretches(x, ks):
+    """{member: (s from, s to)} the stretches of the members a ramp's first ks samples run along (its joints included: the
+    stretch runs to the end of a member the ramp enters by)."""
+    k = max(1, min(int(ks), len(x["xy"])))
+    mem, ms = np.asarray(x["mem"])[:k], np.asarray(x["ms"])[:k]
+    out = {}
+    for j_ in np.unique(mem).tolist():
+        sv = list(ms[mem == j_])
+        sv += [s0_ for kk, jj, s0_ in x.get("joints", ()) if jj == j_ and kk < k]
+        out[int(j_)] = (float(min(sv)), float(max(sv)))
+    return out
 
 
 def _dip_half(net, u, su, d, sd, q=None):
@@ -762,7 +892,7 @@ class _Verdicts:
 
     def __init__(self, net, rel, droot, reader):
         self.net, self.rel, self.droot, self.reader = net, rel, droot, reader
-        self.memo, self.chain_memo = {}, {}
+        self.memo, self.chain_memo, self.lacks = {}, {}, {}
         self._read = None
         self._links = None
 
@@ -868,7 +998,15 @@ class _Verdicts:
                     lack = need - (self.natural(u, su, ground) - float(zd))
                     who = findground.leaves(lower, findground.BRIDGE, lack, *args)
             got = self.memo[key] = "down" if who == "lower" else "up" if lack > 0.0 else "none"
+            self.lacks[key] = lack if got == "up" else 0.0
         return got
+
+    def lift(self, u, su, d, sd, q):
+        """How far deck u at su must rise over its natural height to clear road d at sd (crossing): the lack the verdict
+        was read on; 0 where it does not rise."""
+        if self.crossing(u, su, d, sd, q) != "up":
+            return 0.0
+        return self.lacks[(u, round(float(su), 3), d, round(float(sd), 3))]
 
     def digs(self, i):
         """Whether deck i's chain is held at its natural height with the roads under it dug: where the map has a road under
@@ -1788,49 +1926,38 @@ def _junction_roads(net, rp, done, pieced):
     return sorted(out, key=lambda o: str(net.m[o[0]].key))
 
 
-def embankments(net, systems, shapes, ground_along, beside=()):
-    """The roads' heights round the shapes: per member, [(s (m,), z (m,), mode)] with mode "fill" (the plan rises to
-    it: an embankment), "cut" (the plan goes down to it) or "set" (the plan takes it: a road between two shapes whose
-    ramps meet before the ground does, lerped). shapes: per system (pieces, samples, heights);
-    ground_along(member, s) -> ground heights. beside: the pieces (pieces()) of other systems of net that are not among
-    systems (solved elsewhere, as interchanges are, each by its owner): what the shapes hold of the roads there is theirs
-    too, so no ramp of these runs on through it."""
-    ramps = []              # (first member, s0, direction +1/-1, z0, samples, z, touch index, sign, ground, split index,
-    #                          leaving grade)
-    out = {}
-    started = []            # (member, direction, s0, sign, z0): the ends already left by a ramp
-    pieced = {}                 # (member: the stretches [(s from, s to)] of the shapes' pieces)
-    for _pcs in [sh[0] for sh in shapes] + list(beside):
-        for pc in _pcs:
-            for j, a, b in pc["segs"]:
-                pieced.setdefault(int(j), []).append((min(a, b), max(a, b)))
-    done = {j: list(v) for j, v in pieced.items()}     # (the stretches set: the shapes' pieces first, then every
-    #                                                     ramp's as it is laid — a road's own ramp through a junction
-    #                                                     is its height there, not another's)
+class _Ramper:
+    """The ramps off the ends of shapes, laid one at a time: embankments' (from the solved shapes' ends and what they reach)
+    and the reach's (_ramp_reaches: from the height the laws ask of an end, before anything is solved), one laying for
+    both. ramps: (first member, s0, direction +1/-1, z0, samples, z, touch index, sign, ground, split index, leaving
+    grade) of each laid; started: (member, direction, s0, sign, z0) of the ends a ramp has left; pieced: {member: [(s
+    from, s to)]} the shapes' pieces (decks, dips); done: {member: [(s from, s to)]} the stretches set (the shapes' pieces
+    first, then every ramp's as it is laid: a road's own ramp through a junction is its height there, not another's).
+    ground_of(samples) -> the ground's heights at them."""
 
-    def cover(x, ks):
+    def __init__(self, net, ground_of, pieced):
+        self.net, self.ground_of, self.pieced = net, ground_of, pieced
+        self.ramps, self.started = [], []
+        self.done = {j: list(v) for j, v in pieced.items()}
+
+    def cover(self, x, ks):
         """done: the stretches of the members a ramp's first ks samples run along."""
-        k = max(1, min(int(ks), len(x["xy"])))
-        mem, ms = np.asarray(x["mem"])[:k], np.asarray(x["ms"])[:k]
-        for j_ in np.unique(mem).tolist():
-            sv = list(ms[mem == j_])
-            # (the joint the ramp enters the member by: its stretch runs to that end of the member, else a junction a
-            # step short of the first sample reads as unset and the road it runs along gets a ramp of its own over the
-            # same stretch, level where the deck's left at its grade: the two a step apart along it)
-            sv += [s0_ for kk, jj, s0_ in x.get("joints", ()) if jj == j_ and kk < k]
-            done.setdefault(int(j_), []).append((float(min(sv)), float(max(sv))))
+        for j_, ab in _stretches(x, ks).items():
+            self.done.setdefault(j_, []).append(ab)
 
-    def ramp_from(j, s0, toward_end, z0, g_along, branch=False):
-        """The ramp from height z0 on member j at arc length s0 away from there (toward j's end if toward_end),
-        leaving at grade g_along; branch: it is a junction's, off a ramp's."""
+    def ramp_from(self, j, s0, toward_end, z0, g_along, branch=False, over=0.0, sign=None):
+        """The ramp from height z0 (None: over its own ground by over) on member j at arc length s0 away from there (toward
+        j's end if toward_end), leaving at grade g_along; branch: it is a junction's, off a ramp's. sign: +1 an embankment,
+        -1 a cut (None: by z0 against the ground there)."""
+        net, started, pieced, done = self.net, self.started, self.pieced, self.done
         segs = _onward(net, j, s0, toward_end)
         x = sample(net, [dict(segs=segs)])[0]
         mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"])
-        gr = np.empty(len(mem))
-        for m_ in np.unique(mem):               # (each member's ground in one read, not a read a sample)
-            sel = mem == m_
-            gr[sel] = ground_along(int(m_), ms[sel])
-        sign = 1.0 if z0 >= gr[0] else -1.0
+        gr = self.ground_of(x)
+        if z0 is None:
+            z0 = float(gr[0]) + over
+        if sign is None:
+            sign = 1.0 if z0 >= gr[0] else -1.0
         d_ = 1 if toward_end else -1
         g_max, rad = max_grade(net.m[j]), curve_radius(net.m[j])
         z, k = ramp(z0, g_along, sign, g_max, rad, x["d"] - x["d"][0], gr)
@@ -1869,9 +1996,36 @@ def embankments(net, systems, shapes, ground_along, beside=()):
                 if stop:
                     ks = min(ks, i)
                     break
-        ramps.append((j, s0, d_, z0, x, z, k, sign, gr, ks, g_along))
+        self.ramps.append((j, s0, d_, z0, x, z, k, sign, gr, ks, g_along))
         if not branch:
-            cover(x, ks)
+            self.cover(x, ks)
+
+
+def embankments(net, systems, shapes, ground_along, beside=()):
+    """The roads' heights round the shapes: per member, [(s (m,), z (m,), mode)] with mode "fill" (the plan rises to
+    it: an embankment), "cut" (the plan goes down to it) or "set" (the plan takes it: a road between two shapes whose
+    ramps meet before the ground does, lerped). shapes: per system (pieces, samples, heights);
+    ground_along(member, s) -> ground heights. beside: the pieces (pieces()) of other systems of net that are not among
+    systems (solved elsewhere, as interchanges are, each by its owner): what the shapes hold of the roads there is theirs
+    too, so no ramp of these runs on through it."""
+    out = {}
+    pieced = {}                 # (member: the stretches [(s from, s to)] of the shapes' pieces)
+    for _pcs in [sh[0] for sh in shapes] + list(beside):
+        for pc in _pcs:
+            for j, a, b in pc["segs"]:
+                pieced.setdefault(int(j), []).append((min(a, b), max(a, b)))
+
+    def ground_of(x):
+        """The ground under a ramp's samples (each member's in one read, not a read a sample)."""
+        mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"])
+        gr = np.empty(len(mem))
+        for m_ in np.unique(mem):
+            sel = mem == m_
+            gr[sel] = ground_along(int(m_), ms[sel])
+        return gr
+
+    lay = _Ramper(net, ground_of, pieced)
+    ramps, done, cover, ramp_from = lay.ramps, lay.done, lay.cover, lay.ramp_from
 
     for sysm, (pcs, smp, zs) in zip(systems, shapes):
         def shape_z(i, s_):
