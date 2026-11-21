@@ -160,6 +160,7 @@ impl StreamLeases {
             if !lease.getattr("slots")?.is_truthy()?
                 && !anchors.is_truthy()?
                 && !sessions.is_truthy()?
+                && !lease.getattr("terrain_pinned")?.is_truthy()?
             {
                 self.entries
                     .bind(py)
@@ -174,6 +175,7 @@ impl StreamLeases {
         let gone = PyList::empty(py);
         for l in entries.values() {
             if l.getattr("connection")?.is_none()
+                && !l.getattr("terrain_pinned")?.is_truthy()?
                 && l.getattr("detached_at")?
                     .extract::<Option<f64>>()?
                     .is_some_and(|t| now - t >= grace)

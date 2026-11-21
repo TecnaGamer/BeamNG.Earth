@@ -467,7 +467,9 @@ def keyed_value(k, v):
     """The text a set build switch k = v is hashed as (code_key, switches_key, bakepack.switches): k=v, its
     SWITCH_VERSIONS version after it when it has one."""
     # The surface generation includes the supporting deck and its parapet outline.
-    n = 5 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
+    n = 7 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
+    if k in ("BNE_SIDEWALK_V2", "BNE_SURFACE_V2") and v.strip().lower() in ("on", "1", "yes", "true"):
+        n = 2
     if (k, v) == ("BNE_ROADSHAPE", "profile") and os.environ.get("BNE_ROADSURF_V3") == "surface":
         n = 10 if os.environ.get("BNE_PROFILE_ROBUST") == "0" else 11
     return f"{k}={v}" if n is None else f"{k}={v}@v{n}"

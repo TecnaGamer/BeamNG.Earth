@@ -343,7 +343,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
                             add(footpaths, c, r, walk.width / 2 + .15)
                 continue
             seen.add(fid)
-            if pavement is not None and specs[i].cls in roadsurf3.V3_CLASSES and specs[i].kind == "paved":
+            if pavement is not None and roadsurf3.replaces_ground_paint(specs[i]):
                 continue
             # (all of it off the grid, with room for everything drawn beside it: no sample of it is painted)
             m = (specs[i].width + 2 * AISLE_STALLS_M + 2 * (specs[i].walk + square) + 2 * VERGE_M
@@ -553,7 +553,7 @@ def _gore_fills(frame, feats_list, box, urban_fn=None, widths=None, quick=False,
         for i in range(len(feats)):
             sp = specs[i]
             fid = str(feats.ids[i])
-            if omit_v3 and sp is not None and sp.cls in roadsurf3.V3_CLASSES and sp.kind == "paved":
+            if omit_v3 and sp is not None and roadsurf3.replaces_ground_paint(sp):
                 continue
             if sp is None or fid in seen or not sp.oneway or sp.kind != "paved" or \
                     (sp.cls not in markings.GORE_MAJOR and not sp.link):
@@ -1437,9 +1437,8 @@ def write_masks(idx, out_dir, stem, south_first=False):
     names = mask_names(stem)
     for i, name in enumerate(names):
         path = os.path.join(out_dir, name)
-        tmp = staging.tmp_for(path)
-        Image.fromarray(fast._ef.block_mask(idx, i), "L").save(tmp, format="PNG", compress_level=1)
-        staging.replace(tmp, path)
+        with staging.staged_write(path) as tmp:
+            Image.fromarray(fast._ef.block_mask(idx, i), "L").save(tmp, format="PNG", compress_level=1)
     return names
 
 

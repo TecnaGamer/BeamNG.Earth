@@ -229,6 +229,7 @@ struct Out {
 
 struct Ctx<'a> {
     bl: &'a Blockers,
+    fit_to_road: bool,
     bx: [f64; 4],
 }
 
@@ -659,7 +660,7 @@ pub fn wear_plan<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyR
     let work = p.nrows() * 64;
     let out = crate::release(py, work, move || {
         let bl = Blockers::new(&lines, &block, ex);
-        let ctx = Ctx { bl: &bl, bx: bxa };
+        let ctx = Ctx { bl: &bl, bx: bxa, fit_to_road: false };
         let mut out = Out { off: vec![0], ..Default::default() };
         if tier > 0 {
             for r in 0..nr {
@@ -720,20 +721,22 @@ fn emit_strip2(ctx: &Ctx, pts: &mut Vec<[f64; 4]>, off: &mut Vec<i64>, attrs: &m
     }
     if x1 < ctx.bx[0] - pad || x0 > ctx.bx[2] + pad || y1 < ctx.bx[1] - pad || y0 > ctx.bx[3] + pad { return; }
     let dense = densify(&path);
-    let ok: Vec<bool> = dense.iter()
-        .map(|q| ctx.in_box(q[0], q[1], pad) && !(cut && ctx.bl.blocked(r, q[0], q[1]))).collect();
-    let mut i = 0;
-    while i < dense.len() {
-        if !ok[i] { i += 1; continue; }
-        let mut j = i;
-        while j + 1 < dense.len() && ok[j + 1] { j += 1; }
-        if j > i && dense[j][3] - dense[i][3] >= min_m {
-            let run = simplify(&dense[i..=j]);
+    // Station each strip between physical obstructions before clipping it to a tile.
+    // A crossing creates a visible end that needs a fade. A tile boundary only clips
+    // the draw buffer and must preserve the same stations as the neighbouring tile.
+    for clear in dense.split(|q| cut && ctx.bl.blocked(r, q[0], q[1])) {
+        if clear.len() < 2 { continue; }
+        let (start, length) = if ctx.fit_to_road && cut {
+            (clear[0][3], clear[clear.len() - 1][3] - clear[0][3])
+        } else { (0.0, slen) };
+        for visible in clear.split(|q| !ctx.in_box(q[0], q[1], pad)) {
+            if visible.len() < 2 || visible[visible.len() - 1][3] - visible[0][3] < min_m { continue; }
+            let mut run = simplify(visible);
+            for q in &mut run { q[3] -= start; }
             pts.extend_from_slice(&run);
             off.push(pts.len() as i64);
-            attrs.push([kind as f64, width, tl, slen, -1.0, fend]);
+            attrs.push([kind as f64, width, tl, length, -1.0, fend]);
         }
-        i = j + 1;
     }
 }
 
@@ -785,12 +788,15 @@ fn road_surface(ctx: &Ctx, pts: &mut Vec<[f64; 4]>, off: &mut Vec<i64>, attrs: &
     }
     // tyre wear: a strip on each lane's centre in runs (tertiary roads and up)
     if tier >= 1 && traffic >= 0.4 && !aisle {
+        // One tyre-wear decal describes one lane. Stock-width strips on narrow city
+        // lanes otherwise overlap their neighbours and darken the asphalt twice.
+        let tread_width = if ctx.fit_to_road && a[A_URBAN] > 0.5 && cls != CLS_MOTORWAY { lw } else { drive };
         for k in 0..lanes {
             let mut rng = Rng::new(seed, 0x2100 + k as u64);
             let mut s = rng.range(-40.0, 30.0);
             while s < len {
                 let run = rng.range(TREAD_RUN.0, TREAD_RUN.1);
-                let w = rng.range(TREAD_W.0, TREAD_W.1).min(drive);
+                let w = rng.range(TREAD_W.0, TREAD_W.1).min(tread_width);
                 let fend = rng.range(TREAD_FADE.0, TREAD_FADE.1);
                 let gap = rng.range(10.0, 30.0 + 120.0 * (1.0 - traffic));
                 let (s0, s1) = (s.max(0.0), (s + run).min(len));
@@ -836,10 +842,11 @@ fn road_surface(ctx: &Ctx, pts: &mut Vec<[f64; 4]>, off: &mut Vec<i64>, attrs: &
 /// columns, tier). Returns (points (M, 4) x y z and the distance along its piece, offsets (P + 1,), per piece (P, 6):
 /// kind, width, texture length, the whole piece's length, -1, end fade m (-1: none)).
 #[pyfunction]
+#[pyo3(signature = (pts, off, attrs, excl, bx, tier, fit_to_road=false))]
 #[allow(clippy::type_complexity)]
 pub fn surface_plan<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
                          attrs: PyReadonlyArray2<'py, f64>, excl: PyReadonlyArray2<'py, i64>,
-                         bx: PyReadonlyArray1<'py, f64>, tier: i64)
+                         bx: PyReadonlyArray1<'py, f64>, tier: i64, fit_to_road: bool)
                          -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray2<f64>>)> {
     let (p, o, a, e, b) = (pts.as_array(), off.as_array(), attrs.as_array(), excl.as_array(), bx.as_array());
     let nr = o.len().saturating_sub(1);
@@ -862,7 +869,7 @@ pub fn surface_plan<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: 
     let work = p.nrows() * 64;
     let (op, oo, oa) = crate::release(py, work, move || {
         let bl = Blockers::new(&lines, &block, ex);
-        let ctx = Ctx { bl: &bl, bx: bxa };
+        let ctx = Ctx { bl: &bl, bx: bxa, fit_to_road };
         let (mut op, mut oo, mut oa) = (Vec::new(), vec![0i64], Vec::new());
         if tier > 0 {
             for r in 0..nr {
@@ -921,7 +928,7 @@ mod tests {
 
     fn surface(ln: &Line, a: &[f64], bx: [f64; 4], tier: i64) -> (Vec<[f64; 4]>, Vec<i64>, Vec<[f64; 6]>) {
         let bl = Blockers::new(std::slice::from_ref(ln), &[a[A_BLOCK]], HashSet::new());
-        let ctx = Ctx { bl: &bl, bx };
+        let ctx = Ctx { bl: &bl, bx, fit_to_road: true };
         let (mut p, mut o, mut at) = (Vec::new(), vec![0i64], Vec::new());
         road_surface(&ctx, &mut p, &mut o, &mut at, 0, ln, a, tier);
         (p, o, at)

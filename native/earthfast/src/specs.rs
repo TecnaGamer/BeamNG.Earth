@@ -575,6 +575,7 @@ struct Prm {
     dual_gap1: f64,
     dual_share: f64,
     dual_cos: f64,
+    street_dual_overlap: bool,
     mountain_on: bool,
     mountain_switchbacks: f64,
     mountain_span: f64,
@@ -599,6 +600,7 @@ impl Prm {
             urban_beside_share: g("URBAN_BESIDE_SHARE")?,
             urban_both_share: g("URBAN_BOTH_SHARE")?, dual_gap0: g("DUAL_GAP_M0")?, dual_gap1: g("DUAL_GAP_M1")?,
             dual_share: g("DUAL_SHARE")?, dual_cos: g("DUAL_COS")?, mountain_on: g("MOUNTAIN_ON")? != 0.0,
+            street_dual_overlap: p.get("STREET_DUAL_OVERLAP").copied().unwrap_or(0.0) != 0.0,
             mountain_switchbacks: g("MOUNTAIN_SWITCHBACKS")?, mountain_span: g("MOUNTAIN_SPAN_M")?,
             mountain_turn: g("MOUNTAIN_TURN_DEG")?, mountain_road: g("MOUNTAIN_ROAD_M")?,
             mountain_max_lanes: g("MOUNTAIN_MAX_LANES")?, se_town_kmh: g("SE_TOWN_MAX_KMH")?, edge_m: g("EDGE_M")?,
@@ -832,12 +834,13 @@ fn dual(l: &Layer, rules: &RoadRules, prm: &Prm, specs: &mut [Option<Sp>], europ
         let view = |t: usize| ArrayView2::from_shape((xy[t].len() / 2, 2), &xy[t][..]).unwrap();
         for (ti, &i) in idx.iter().enumerate() {
             let si = input[i].as_ref().unwrap();
+            let street = prm.street_dual_overlap && si.urban && si.oneway && rules.has(si.cls, F_TRUNK);
             let mut best: Option<(f64, usize, f64)> = None;      // (side, j, gap)
             for (tj, &j) in idx.iter().enumerate() {
                 if i == j {
                     continue;
                 }
-                let (share, side) = dual_side_core(view(ti), view(tj), prm.dual_gap0, prm.dual_gap1, prm.dual_cos);
+                let (share, side) = dual_side_core(view(ti), view(tj), prm.dual_gap0, prm.dual_gap1, prm.dual_cos, street);
                 if share >= prm.dual_share && side.abs() > 0.5 {
                     let sj = input[j].as_ref().unwrap();
                     if european && rules.has(si.cls, F_TERTIARY) && !(si.oneway && sj.oneway) && l.eu_country[i] {

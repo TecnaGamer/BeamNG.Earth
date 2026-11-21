@@ -224,13 +224,23 @@ def find(roads_list, is_oneway=lambda spec: bool(getattr(spec, "oneway", False))
         if not ccw:
             poly = poly[::-1]
         z = float(np.mean(np.concatenate([edges[k][2][:, 2] for k, _ in cyc])))
-        ring = _island_ring(poly, [(edges[k][2][:, :2], edges[k][1].width / 2.0) for k, _ in cyc], z)
+        sides = [(edges[k][2][:, :2], edges[k][1].width / 2.0) for k, _ in cyc]
+        slip_triangle = len(cyc) == 3 and any(getattr(edges[k][1], "link", False) for k, _ in cyc)
+        ring = _island_ring(poly, sides, z, plain=not is_roundabout, slip_triangle=slip_triangle)
         found.append({"poly": poly, "inner": inner, "ring": ring, "round": is_roundabout})
     # A roundabout's island wins over entry teardrops that reuse its ring edges (those left four short curb
     # scraps and no central island at Chavagnes-en-Paillers).
     ring_roads = {fid for f in found if f.get("round") for fid in f["inner"]}
     if ring_roads:
         found = [f for f in found if f.get("round") or not (set(f["inner"]) & ring_roads)]
+    import sidewalks
+    if sidewalks.V2:
+        bands = sorted((f for f in found if not f["round"] and f["ring"] is not None), key=lambda f: len(f["inner"]))
+        if len(bands) > 1:
+            fast.require(570, "duplicate_island_bands")
+            for i in fast._ef.duplicate_island_bands([f["ring"] for f in bands], ISLAND_BAND_M / 2):
+                # Retain the original cycle's facing-road exclusions.
+                bands[i]["ring"] = None
     return found
 
 
@@ -278,21 +288,42 @@ def _seg_dist(pts, p):
     return float(np.min(dnp.hypot(*(q - p).T)))
 
 
-def _island_ring(poly, roads_hw, z):
+def _island_ring(poly, roads_hw, z, plain=True, slip_triangle=False):
     """The island's curb line (k, 3) counter-clockwise: from the loop's centre along RAYS rays, the last point
     still clear of every bounding road's carriageway (its centreline +- half width). None for a sliver.
     Ray-traced instead of offsetting each road (offsets spiked where roads meet at sharp angles)."""
+    import sidewalks
     c = poly.mean(0)
-    if not _inside(poly, c) or any(_seg_dist(pts, c) <= hw for pts, hw in roads_hw):
+    # On a three-arm slip island an unevenly sampled centreline can put this
+    # starting point on the far side of its curved slip road. The band search
+    # finds the clear interior before tracing the kerb.
+    if plain and sidewalks.V2 and slip_triangle:
+        # Give a densely sampled curve the same weight as a straight boundary.
+        fast.require(235, "ring_centroid")
+        centroid = fast._ef.ring_centroid(np.ascontiguousarray(poly))
+        if centroid is not None:
+            c = np.asarray(centroid)
+    elif not _inside(poly, c) or any(_seg_dist(pts, c) <= hw for pts, hw in roads_hw):
         return None
     rmax = float(np.max(dnp.hypot(*(poly - c).T)))
-    import fast
-    return _ring_finish(fast.island_ring_rays(poly, roads_hw, c, RAYS, RAY_STEP_M, rmax), z)
+    if plain and sidewalks.V2:
+        fast.require(570, "island_band_ring")
+        segments, widths = fast.segments(roads_hw)
+        # Leave a quarter metre inside the band at a rounded nose so the inner
+        # edge still has a radius after the 8 cm line simplification.
+        ring = fast._ef.island_band_ring(np.ascontiguousarray(poly), segments, widths, *c, RAYS, RAY_STEP_M,
+                                         rmax, ISLAND_BAND_M + .25)
+        return _lift_ring(ring, z)
+    return _ring_finish(fast.island_ring_rays(poly, roads_hw, c, RAYS, RAY_STEP_M, rmax, refine=sidewalks.V2), z)
 
 
 def _ring_finish(ring, z):
     # a light smoothing (the rays' steps), the curb keeps its shape
     ring = (np.roll(ring, 1, 0) + 2 * ring + np.roll(ring, -1, 0)) / 4.0
+    return _lift_ring(ring, z)
+
+
+def _lift_ring(ring, z):
     if abs(_area(ring)) < MIN_INSET_AREA_M2:
         return None
     return np.column_stack([ring, np.full(len(ring), z)])

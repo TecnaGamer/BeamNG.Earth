@@ -378,7 +378,7 @@ def _empty(elem):
     return (0, elem, b"")
 
 
-def _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors):
+def _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors, split_drawn=False):
     """Compute shading on the whole surface, then marshal its bounded meshes. T is sorted by TM."""
     if T.min() < 0 or T.max() >= len(P):
         raise CdaeError("triangle index outside positions")
@@ -406,7 +406,12 @@ def _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors):
         return [_mesh_body(V, NN, TV, UV2, TG, C, idx, TM, nmat)]
     bodies = []
     start = 0
-    for vertices, local in mesh_parts(idx, len(V)):
+    # The junction writer numbers each split draw in source-winding first-use order.
+    # Restore draw winding after renumbering to keep its existing serialized output.
+    partition_tris = idx[:, ::-1] if split_drawn else idx
+    for vertices, local in mesh_parts(partition_tris, len(V), VERTS_MAX):
+        if split_drawn:
+            local = local[:, ::-1]
         stop = start + len(local)
         bodies.append(_mesh_body(V[vertices], NN[vertices], TV[vertices], None if UV2 is None else UV2[vertices],
                                  TG[vertices], None if C is None else C[vertices], local, TM[start:stop], nmat))
@@ -464,7 +469,7 @@ LOD_TOP_SIZE = 2.0          # px: the size of the one (or the last, coarsest) de
 @profile_step('Native shape encoding')
 def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2=None,
            tangent_uvs=None, object_name="tile", tri_materials=None, colors=None, collision_only=False, lods=None,
-           collisions=None, close=False, open_tris=None, packed=None, parts=None):
+           collisions=None, close=False, open_tris=None, packed=None, parts=None, split_drawn=False):
     """Shape bytes for one static mesh, laid out exactly as the engine writes a compiled
     Collada file with the same geometry.
 
@@ -498,12 +503,14 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     parts: further drawn meshes beside this one, [dict of positions, tris and optional uvs / tri_materials / colors,
     the same material list], each its own object ("<object_name>2", "<object_name>3", ...) in the one drawn detail:
     a shape whose vertices are past the engine's 16-bit indices (VERTS_MAX: each mesh's own index buffer) as several
-    meshes under it. Not with collision_only, lods or collisions."""
+    meshes under it. All meshes split after closing and shading. split_drawn preserves the junction road
+    writer's first-use vertex order in an oversized primary mesh.
+    Neither option supports collision_only, lods or collisions."""
     if collision_only:
         object_name = "Colmesh"
         lods = None
     parts = list(parts or ())
-    if parts and (collision_only or lods or collisions):
+    if (parts or split_drawn) and (collision_only or lods or collisions):
         raise CdaeError("parts: not with collision_only, lods or collisions")
     materials = [material] if isinstance(material, str) else list(material)
     if tri_materials is not None and len(materials) > 1:
@@ -541,7 +548,7 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
         parts = [_closed_lod(d, close) for d in parts]
     P = np.asarray(positions, np.float64).reshape(-1, 3)
     T, TM = _sorted_tris(tris, tri_materials, nmat)
-    levels = [_mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors)]
+    levels = [_mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors, split_drawn)]
 
     def detail(d):
         P = np.asarray(d["positions"], np.float64).reshape(-1, 3)

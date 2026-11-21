@@ -217,6 +217,32 @@ class SplitCollisionTest(unittest.TestCase):
 
 
 class DrawnPartsTest(unittest.TestCase):
+    def test_oversized_draw_preserves_every_triangle_and_vertex_channel(self):
+        from unittest.mock import patch
+        p = np.array([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [1., 1., 1.], [2., 1., 0.]])
+        t = np.array([[0, 1, 2], [2, 1, 3], [3, 1, 4]])
+        kwargs = dict(material=["paint", "asphalt"], tri_materials=[1, 0, 0], uvs=p[:, :2],
+                      tangent_uvs=p[:, 1:], uvs2=p[:, :2] / 2, colors=np.arange(20, dtype=np.uint8).reshape(-1, 4))
+        whole = cdae.decode(cdae.encode(p, t, **kwargs))
+        with patch.object(cdae, "VERTS_MAX", 3):
+            split = cdae.decode(cdae.encode(p, t, split_drawn=True, **kwargs))
+        self.assertEqual(whole["bounds"], split["bounds"])
+        self.assertEqual(len(split["meshes"]), 3)
+        def expanded(shape):
+            attrs, materials = [], []
+            for mesh in shape["meshes"]:
+                a = cdae.mesh_arrays(mesh)
+                rgba = np.frombuffer(mesh["colors"][2], np.uint8).reshape(-1, 4)
+                vertex = np.column_stack([a[k] for k in ("verts", "norms", "tangents", "tverts", "tverts2")] + [rgba])
+                attrs.append(vertex[a["indices"]])
+                for _, count, mat in a["primitives"]:
+                    materials.extend([mat] * (count // 3))
+            return np.concatenate(attrs), materials
+        expected, mats = expanded(whole)
+        actual, split_mats = expanded(split)
+        np.testing.assert_array_equal(actual, expected)
+        self.assertEqual(split_mats, mats)
+
     def test_parts_are_objects_of_the_one_detail(self):
         """parts=: further drawn meshes, each its own object ("<name>2", ...) with one mesh in the one detail: a shape
         past the engine's 16-bit indices as several meshes under them (the far building packs, 2026-11-14)."""

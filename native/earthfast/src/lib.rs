@@ -7,6 +7,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 use crate::dm::Dm;
 mod dm;
+mod island_kerb;
 mod deckreach;
 mod demsample;
 mod demtiles;
@@ -30,6 +31,7 @@ mod gravity;
 mod polyproject;
 mod lanesections;
 mod s3url;
+mod netfetch;
 mod countrymap;
 mod carriageway_solver;
 mod carriageways;
@@ -253,9 +255,9 @@ fn to_segs(segs: &PyReadonlyArray2<f64>) -> Vec<[f64; 4]> {
 
 /// islands._island_ring's ray march: from (cx, cy) along `rays` evenly spaced directions, in steps of `step` up to
 /// rmax, the last point inside poly and clear of every segment's half width. Returns (rays, 2).
-#[pyfunction]
+#[pyfunction(signature = (poly, segs, hw, cx, cy, rays, step, rmax, refine=false))]
 fn island_ring_rays<'py>(py: Python<'py>, poly: PyReadonlyArray2<'py, f64>, segs: PyReadonlyArray2<'py, f64>,
-                         hw: PyReadonlyArray1<'py, f64>, cx: f64, cy: f64, rays: usize, step: f64, rmax: f64)
+                         hw: PyReadonlyArray1<'py, f64>, cx: f64, cy: f64, rays: usize, step: f64, rmax: f64, refine: bool)
                          -> Bound<'py, PyArray2<f64>> {
     let p = poly.as_array();
     let px: Vec<f64> = p.column(0).to_vec();
@@ -263,24 +265,43 @@ fn island_ring_rays<'py>(py: Python<'py>, poly: PyReadonlyArray2<'py, f64>, segs
     let s = to_segs(&segs);
     let h = hw.as_slice().unwrap().to_vec();
     let out = release(py, px.len() * s.len().max(1), || {
-        let mut out = Vec::with_capacity(rays * 2);
-        for k in 0..rays {
-            let a = 2.0 * std::f64::consts::PI * (k as f64) / (rays as f64);
-            let (ux, uy) = (a.dcos(), a.dsin());
-            let mut r = 0.0;
-            while r < rmax {
-                let (qx, qy) = (cx + ux * (r + step), cy + uy * (r + step));
-                if !inside(&px, &pys, qx, qy) || near_any(&s, &h, qx, qy) {
-                    break;
-                }
-                r += step;
-            }
-            out.push(cx + ux * r);
-            out.push(cy + uy * r);
-        }
-        out
+        island_kerb::Boundary { x: &px, y: &pys, segments: &s, half: &h }.rays([cx, cy], rays, step, rmax, refine)
     });
-    numpy::ndarray::Array2::from_shape_vec((rays, 2), out).unwrap().into_pyarray(py)
+    numpy::ndarray::Array2::from_shape_vec((rays, 2), out.into_iter().flatten().collect()).unwrap().into_pyarray(py)
+}
+
+/// A plain traffic island's outer kerb, traced from the inside of its band.
+#[pyfunction]
+fn island_band_ring<'py>(py: Python<'py>, poly: PyReadonlyArray2<'py, f64>, segs: PyReadonlyArray2<'py, f64>,
+                         hw: PyReadonlyArray1<'py, f64>, cx: f64, cy: f64, rays: usize, step: f64,
+                         rmax: f64, radius: f64) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let p = poly.as_array();
+    if p.ncols() != 2 || p.nrows() < 3 || segs.as_array().ncols() != 4
+        || segs.as_array().nrows() != hw.as_array().len() || hw.as_array().is_empty() || rays < 3
+        || !(step.is_finite() && step > 0.0 && rmax.is_finite() && rmax > 0.0
+             && radius.is_finite() && radius > 0.0) {
+        return Err(pyo3::exceptions::PyValueError::new_err("invalid island polygon, carriageways or band dimensions"));
+    }
+    let (x, y) = (p.column(0).to_vec(), p.column(1).to_vec());
+    let s = to_segs(&segs);
+    let h = hw.as_array().to_vec();
+    let out = py.detach(|| island_kerb::Boundary { x: &x, y: &y, segments: &s, half: &h }
+                        .band([cx, cy], rays, step, rmax, radius));
+    Ok(numpy::ndarray::Array2::from_shape_vec((out.len(), 2), out.into_iter().flatten().collect()).unwrap().into_pyarray(py))
+}
+
+/// Indices of later kerbs that follow an earlier outline within the tolerance.
+#[pyfunction]
+fn duplicate_island_bands(py: Python<'_>, rings: Vec<PyReadonlyArray2<'_, f64>>, tolerance: f64) -> PyResult<Vec<usize>> {
+    let mut paths = Vec::with_capacity(rings.len());
+    for ring in rings {
+        let r = ring.as_array();
+        if r.ncols() < 2 || r.nrows() < 3 || !(tolerance.is_finite() && tolerance > 0.0) {
+            return Err(pyo3::exceptions::PyValueError::new_err("invalid island kerb or tolerance"));
+        }
+        paths.push(r.rows().into_iter().map(|p| [p[0], p[1]]).collect());
+    }
+    Ok(py.detach(|| island_kerb::duplicate_bands(&paths, tolerance)))
 }
 
 /// Point-in-polygon for many points: pts (n, 2) -> bool (n,).
@@ -339,12 +360,12 @@ fn clear_of(segs: PyReadonlyArray2<f64>, half: PyReadonlyArray1<f64>, owner: PyR
 #[pyfunction]
 fn dual_side(a: PyReadonlyArray2<f64>, b: PyReadonlyArray2<f64>, gap_min: f64, gap_max: f64, cos_par: f64)
              -> (f64, f64) {
-    dual_side_core(a.as_array(), b.as_array(), gap_min, gap_max, cos_par)
+    dual_side_core(a.as_array(), b.as_array(), gap_min, gap_max, cos_par, false)
 }
 
 /// dual_side on views (roads' spec kernels call it in Rust).
 pub(crate) fn dual_side_core(a: numpy::ndarray::ArrayView2<f64>, b: numpy::ndarray::ArrayView2<f64>, gap_min: f64,
-                             gap_max: f64, cos_par: f64) -> (f64, f64) {
+                             gap_max: f64, cos_par: f64, require_overlap: bool) -> (f64, f64) {
     let ka = a.nrows();
     let kb = b.nrows();
     if ka < 2 || kb < 2 {
@@ -394,8 +415,10 @@ pub(crate) fn dual_side_core(a: numpy::ndarray::ArrayView2<f64>, b: numpy::ndarr
         let lk = len[k].max(1e-9);
         let (tax, tay) = (seg[k][0] / lk, seg[k][1] / lk);
         let (mut best, mut bj, mut nx, mut ny) = (f64::INFINITY, 0usize, 0.0, 0.0);
+        let mut beyond_end = false;
         for j in 0..mb {
-            let f = (((qx - b[[j, 0]]) * bs[j][0] + (qy - b[[j, 1]]) * bs[j][1]) / bl2[j]).clamp(0.0, 1.0);
+            let projection = ((qx - b[[j, 0]]) * bs[j][0] + (qy - b[[j, 1]]) * bs[j][1]) / bl2[j];
+            let f = projection.clamp(0.0, 1.0);
             let (px, py) = (b[[j, 0]] + bs[j][0] * f, b[[j, 1]] + bs[j][1] * f);
             let d = (px - qx).dhypot(py - qy);    // (as np.hypot: ties at a shared vertex pick the same segment)
             if d < best {
@@ -403,12 +426,15 @@ pub(crate) fn dual_side_core(a: numpy::ndarray::ArrayView2<f64>, b: numpy::ndarr
                 bj = j;
                 nx = px;
                 ny = py;
+                beyond_end = (j == 0 && projection < 0.0) || (j + 1 == mb && projection > 1.0);
             }
         }
         let bn = bl2[bj].sqrt();
         let (tbx, tby) = (bs[bj][0] / bn, bs[bj][1] / bn);
         let par = (tax * tbx + tay * tby).abs() >= cos_par;
-        if best >= gap_min && best <= gap_max && par {
+        // The continuation of a street can be parallel and within gap_max of its end.
+        // A sample beyond that endpoint has no carriageway alongside it.
+        if best >= gap_min && best <= gap_max && par && !(require_overlap && beyond_end) {
             ok_n += 1;
             let (vx, vy) = (nx - qx, ny - qy);
             let c = tax * vy - tay * vx;
@@ -778,6 +804,38 @@ fn first_use<'py>(py: Python<'py>, tris: PyReadonlyArray2<'py, i64>, nverts: usi
         (order, idx)
     });
     (order.into_pyarray(py), numpy::ndarray::Array2::from_shape_vec((m, 3), idx).unwrap().into_pyarray(py))
+}
+
+/// End triangle (exclusive) of each draw object in an ordered index buffer. Shared
+/// vertices count once per object, including when they occur twice in one triangle.
+#[pyfunction]
+fn mesh_part_ends(tris: PyReadonlyArray2<i64>, nverts: usize, limit: usize) -> PyResult<Vec<usize>> {
+    let t = tris.as_array();
+    if t.ncols() != 3 || limit < 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err("expected triangles and room for three vertices"));
+    }
+    let mut seen = vec![usize::MAX; nverts];
+    let mut ends = Vec::new();
+    let mut count = 0;
+    for (i, row) in t.rows().into_iter().enumerate() {
+        let vs = [row[0] as usize, row[1] as usize, row[2] as usize];
+        if vs.iter().any(|&v| v >= nverts) {
+            return Err(pyo3::exceptions::PyValueError::new_err("vertex index outside mesh"));
+        }
+        let added = vs.iter().enumerate().filter(|&(j, &v)| seen[v] != ends.len() && !vs[..j].contains(&v)).count();
+        if count + added > limit {
+            ends.push(i);
+            count = 0;
+        }
+        for v in vs {
+            if seen[v] != ends.len() {
+                seen[v] = ends.len();
+                count += 1;
+            }
+        }
+    }
+    if t.nrows() > 0 { ends.push(t.nrows()); }
+    Ok(ends)
 }
 
 /// railways._blocked: which points (xy (k, 2), bed heights z (k,)) lie on a crossing road at grade: per road (its
@@ -6531,6 +6589,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_face, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_town_face, m)?)?;
     m.add_function(wrap_pyfunction!(island_ring_rays, m)?)?;
+    m.add_function(wrap_pyfunction!(island_band_ring, m)?)?;
+    m.add_function(wrap_pyfunction!(duplicate_island_bands, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::dsm_ground, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::dem_ground, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::fill_holes, m)?)?;
@@ -6660,6 +6720,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(meshparts::mesh_parts, m)?)?;
     m.add_function(wrap_pyfunction!(meshparts::mesh_slots, m)?)?;
     m.add("MESH_VERTICES_MAX", meshparts::MAX_VERTICES)?;
+    m.add_function(wrap_pyfunction!(mesh_part_ends, m)?)?;
     m.add_function(wrap_pyfunction!(near_crossers, m)?)?;
     m.add_function(wrap_pyfunction!(clip_polyline, m)?)?;
     m.add_function(wrap_pyfunction!(gpu_name, m)?)?;
@@ -7162,6 +7223,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // colour from Sentinel-2 and the map's regions instead of a 1 m aerial photo; server/genground.py)
     genground::register(m)?;
     host::register(m)?;
+    netfetch::register(m)?;
     // 307: gen_ground(..., gr, gc): its sampling lattices on the global texel grid, the caller's square with a halo
     // (Codex review of 306: overlapping blocks drew the same ground in other colours)
     // 308: generated ground stage 2: gg_regions(..., line, line_kind, ...) and the surface / pattern kinds,
@@ -7454,6 +7516,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(railindex::surface_rail_samples, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::grade::surface_grade_sections, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::lane_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_slab_solid, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_slab_rows, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_ramp_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_surface_groups, m)?)?;
@@ -7547,6 +7610,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
-    m.add("VERSION", 572)?;
+    m.add("VERSION", 575)?;
     Ok(())
 }
