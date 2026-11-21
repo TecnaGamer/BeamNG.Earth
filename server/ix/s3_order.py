@@ -6,7 +6,7 @@ import gradeshapes as _gsh
 
 from . import artifacts, cache
 
-FORMAT = 1
+FORMAT = 2
 LAWS = (("gradeshapes", ["HEADROOM_M", "RAIL_HEADROOM_M", "HEADROOM_MARGIN_M", "CLEAR_PATH_M", "DECK_MIN_DEPTH_M",
                          "DECK_FULL_DEPTH_M", "DECK_SPAN_RATIO", "RAIL_DECK_DEPTH_M", "COVER_M"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
@@ -37,16 +37,17 @@ def levels(net, members, edges):
     return lv, [artifacts.Finding(STEP, "fail", "order_cycle", "the crossings of %s loop (a road over itself)" % names)]
 
 
-def run(planner, net, sysm, system, scope):
+def run(planner, net, sysm, loc, system, scope):
     """The Order artifact of one system: today's crossings (their under_pairs and clearance_need), the members' signs
-    and levels."""
-    crossings = [artifacts.Crossing(int(c["u"]), float(c["su"]), int(c["d"]), float(c["sd"]),
+    and levels, the members numbered as the system's Paths' (loc)."""
+    crossings = [artifacts.Crossing(loc[int(c["u"])], float(c["su"]), loc[int(c["d"])], float(c["sd"]),
                                      np.asarray(c["q"], np.float64),
                                      float(_gsh.clearance_need(net, c["u"], c["d"], c["q"])),
                                      np.asarray(c["under"], np.float64).reshape(-1, 2))
                  for c in sysm["crossings"]]
-    members = sorted(set(int(i) for i in sysm["seeds"]) | {c.u for c in crossings} | {c.d for c in crossings})
+    members = sorted(set(int(i) for i in sysm["seeds"]) | {int(c["u"]) for c in sysm["crossings"]} |
+                     {int(c["d"]) for c in sysm["crossings"]})
     lv, findings = levels(net, members, [(int(c["u"]), int(c["d"])) for c in sysm["crossings"]])
     return artifacts.Order(artifacts.Meta(STEP, FORMAT, "", (), LAWS_DIGEST, scope), system, crossings,
-                           {str(i): SIGN[net.m[i].kind] for i in members},
-                           {str(i): int(lv[i]) for i in members}, findings)
+                           {str(loc[i]): SIGN[net.m[i].kind] for i in members},
+                           {str(loc[i]): int(lv[i]) for i in members}, findings)

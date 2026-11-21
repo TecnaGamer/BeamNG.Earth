@@ -3,17 +3,18 @@ verdicts came with the system (gradeshapes' _Verdicts through find_systems); the
 that was weighed and taken."""
 from . import artifacts, cache
 
-FORMAT = 1
+FORMAT = 2
 LAWS = (("gradeshapes", ["DIP_MARGIN_M", "STEP_M", "W_DIP", "W_HOLD"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 5
 
 
-def run(planner, net, sysm, system, scope):
-    """The Datum artifact of one system: today's verdicts (moves, dips, the held decks) as one option."""
+def run(planner, net, sysm, loc, system, scope):
+    """The Datum artifact of one system: today's verdicts (moves, dips, the held decks) as one option, the members
+    numbered as the system's Paths' (loc)."""
     moves = tuple(str(c["moves"]) for c in sysm["crossings"])
-    dips = tuple((int(d), float(a), float(b)) for d, a, b in sysm["dips"])
-    held = tuple(sorted(int(i) for i in sysm["seeds"] if getattr(net.m[i], "held", False)))
+    dips = tuple((loc[int(d)], float(a), float(b)) for d, a, b in sysm["dips"])
+    held = tuple(sorted(loc[int(i)] for i in sysm["seeds"] if getattr(net.m[i], "held", False)))
     option = artifacts.Option(moves, None, None, "today's verdicts")
     return artifacts.Datum(artifacts.Meta(STEP, FORMAT, "", (), LAWS_DIGEST, scope), system, moves, dips, held,
                            [option])

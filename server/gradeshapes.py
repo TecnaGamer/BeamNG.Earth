@@ -44,6 +44,7 @@ import heapq
 import math
 import os
 import threading
+import time
 from collections import OrderedDict, namedtuple
 
 import numpy as np
@@ -218,8 +219,14 @@ def at_s(line, s, sq):
     return np.array([dnp.interp(sq, s, line[:, 0]), dnp.interp(sq, s, line[:, 1])])
 
 
+GRID_MIN_M, GRID_MAX_M = 32.0, 256.0    # m: the bounds of the index's cell (twice the members' median box side between)
+GRID_LONG_CELLS = 64                    # a member whose box spans more cells than this is kept in a list every query reads
+NEAR_CHUNK_M = 64.0                     # m of a line near_along asks the grid about at a time
+
+
 class Net:
-    """The members' geometry, made once: lines, arc lengths, boxes."""
+    """The members' geometry, made once: lines, arc lengths, boxes, and (built on the first near()) a grid over the
+    boxes."""
 
     def __init__(self, members):
         self.m = members
@@ -227,12 +234,65 @@ class Net:
         self.s = [arclen(l_) for l_ in self.lines]
         self.L = [float(s[-1]) for s in self.s]
         self.box = np.array([np.r_[l_.min(0), l_.max(0)] for l_ in self.lines]) if members else np.zeros((0, 4))
+        self._grid = None
+
+    def _index(self):
+        """(cell side, {(ix, iy): [member ...]}, [long members]): every member in the grid cells its box covers (a box
+        covering more than GRID_LONG_CELLS cells, a long road, in the list instead: it is checked on every query)."""
+        bx = self.box
+        side = float(np.clip(2.0 * np.median(np.maximum(bx[:, 2] - bx[:, 0], bx[:, 3] - bx[:, 1])), GRID_MIN_M,
+                             GRID_MAX_M)) if len(bx) else GRID_MIN_M
+        cells, long_ = {}, []
+        c0 = np.floor(bx[:, :2] / side).astype(np.int64)
+        c1 = np.floor(bx[:, 2:] / side).astype(np.int64)
+        for i in range(len(bx)):
+            (x0, y0), (x1, y1) = c0[i].tolist(), c1[i].tolist()
+            if (x1 - x0 + 1) * (y1 - y0 + 1) > GRID_LONG_CELLS:
+                long_.append(i)
+                continue
+            for x in range(x0, x1 + 1):
+                for y in range(y0, y1 + 1):
+                    cells.setdefault((x, y), []).append(i)
+        self._grid = (side, cells, long_)
+        return self._grid
+
+    def _near_box(self, lo, hi, pad):
+        """The members (ascending, an array) whose boxes come within pad of the box lo..hi. The grid only narrows what
+        the boxes are compared on (a member sharing no cell with the box grown by pad is not within it); the comparison
+        is the whole answer."""
+        bx = self.box
+        side, cells, long_ = self._grid or self._index()
+        x0, y0 = (int(v) for v in np.floor((lo - pad) / side))
+        x1, y1 = (int(v) for v in np.floor((hi + pad) / side))
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > len(bx):         # (a query over more cells than members: all of them)
+            cand = np.arange(len(bx))
+        else:
+            got = set(long_)
+            for x in range(x0, x1 + 1):
+                for y in range(y0, y1 + 1):
+                    got.update(cells.get((x, y), ()))
+            cand = np.array(sorted(got), np.int64)
+        c = bx[cand]
+        hit = (c[:, 0] <= hi[0] + pad) & (c[:, 2] >= lo[0] - pad) & (c[:, 1] <= hi[1] + pad) & (c[:, 3] >= lo[1] - pad)
+        return cand[hit]
 
     def near(self, i, pad):
+        """The members other than i whose boxes come within pad of i's, in index order."""
         b = self.box[i]
-        bx = self.box
-        return [int(j) for j in np.flatnonzero((bx[:, 0] <= b[2] + pad) & (bx[:, 2] >= b[0] - pad) &
-                                              (bx[:, 1] <= b[3] + pad) & (bx[:, 3] >= b[1] - pad)) if j != i]
+        return [int(j) for j in self._near_box(b[:2], b[2:], pad) if j != i]
+
+    def near_along(self, i, pad):
+        """The members other than i with a part of their box within pad of a part of i's line, in index order: the line cut
+        every NEAR_CHUNK_M m, the members whose boxes come within pad of a piece's own box. A subset of near(i, pad) with
+        every member that has a segment within pad of a segment of i: a long road's box holds a city, its line only what
+        it passes."""
+        line, s = self.lines[i], self.s[i]
+        k = np.floor(s / NEAR_CHUNK_M).astype(np.int64)
+        starts = np.r_[0, np.flatnonzero(np.diff(k)) + 1]
+        ends = np.r_[starts[1:], len(line) - 1]
+        got = np.unique(np.concatenate([self._near_box(line[a:e + 1].min(0), line[a:e + 1].max(0), pad)
+                                        for a, e in zip(starts.tolist(), ends.tolist())]))
+        return [int(j) for j in got if j != i]
 
 
 def _is_seed(net, i):
@@ -272,7 +332,7 @@ def _relations(net, i):
     """Member i's joints and crossings with the members near it: [(j, "join"|"cross", s on i, s on j, q)]. Each
     pair's from a cache by the two members' keys and lines (a region grown cell by cell meets the same pairs again)."""
     out = []
-    for j in net.near(i, JOIN_M + 0.5):
+    for j in net.near_along(i, JOIN_M + 0.5):
         if len(net.lines[j]) < 2:
             continue
         key = (_line_id(net, i), _line_id(net, j))
@@ -576,8 +636,22 @@ def _over(mi, mj):
     return "i" if a > b else "j"
 
 
+Interchange = namedtuple("Interchange", "sysm paths_s extent_s")
+# sysm: the system (find_systems' record); paths_s: the seconds spent finding the relations of its members (the joints
+# and crossings with what is near them), extent_s: those closing it (what merged its seeds, its dips, its record)
+
+
 def find_systems(members, reader=None, trace=None):
-    """The interchanges among members: [System], each closed, in a deterministic order. reader(net) -> (ground, fixed): the
+    """The interchanges among members: [System], each closed, in a deterministic order. See find_interchanges."""
+    net, found = find_interchanges(members, reader, trace)
+    return net, [x.sysm for x in found]
+
+
+def find_interchanges(members, reader=None, trace=None, want=None):
+    """(net, [Interchange]): the interchanges among members, each closed, in a deterministic order, each with the seconds
+    its relations and its closing took (a merge's or a dip's seconds go to the interchange they ended up in). want(net,
+    seeds) -> bool: whether an interchange is asked for; one that is not is found (it may merge others) but not closed.
+    reader(net) -> (ground, fixed): the
     elevation the cost of a move is read from (_Verdicts); None, flat ground. trace (a dict, the audit's: interchange_audit):
     filled with what merged the seeds, [(a, b, why, detail)] in the order they were united (why "relation": a join or a
     crossing of two seeds, detail (kind, s on a, s on b); "ramp": a road on the ground between two seeds' ends, detail the
@@ -587,7 +661,12 @@ def find_systems(members, reader=None, trace=None):
     if trace is not None:
         trace["seeds"], trace["merges"] = [], []
     cand = [i for i in range(n) if _is_seed(net, i) and len(net.lines[i]) >= 2]
-    rel = {i: [r_ for r_ in _relations(net, i) if not _tunnel_network(net, r_[0])] for i in cand}
+    t_rel = {}
+    rel = {}
+    for i in cand:
+        t0 = time.perf_counter()
+        rel[i] = [r_ for r_ in _relations(net, i) if not _tunnel_network(net, r_[0])]
+        t_rel[i] = time.perf_counter() - t0
     # a deck chain is part of an interchange only if one of its decks crosses a road, a track or a tunnel (over or
     # under): a bridge over a river or a valley alone is the bridges' own (roads.py), not a grade separation's
     crosses = {i for i in cand if any(kind == "cross" and _over(members[i], members[j]) is not None
@@ -607,8 +686,9 @@ def find_systems(members, reader=None, trace=None):
     seeds = [i for i in cand if (i in dpar and droot(i) in live) or (i not in dpar and i in crosses)]
     if not seeds:
         return net, []
+    seed_set = set(seeds)
     for i in seeds:
-        rel[i] = [r_ for r_ in rel[i] if r_[0] in set(seeds) or not _is_seed(net, r_[0])]
+        rel[i] = [r_ for r_ in rel[i] if r_[0] in seed_set or not _is_seed(net, r_[0])]
     if trace is not None:
         trace["seeds"] = list(seeds)
     par = {i: i for i in seeds}
@@ -638,15 +718,22 @@ def find_systems(members, reader=None, trace=None):
             for i in ss[1:]:
                 unite(ss[0], i, "ramp", j)
     dig = _Verdicts(net, rel, droot, reader)
-    for a, b in _shared_dips(net, seeds, rel, dig):
+    t_dip = {}
+    for a, b in _shared_dips(net, seeds, rel, dig, t_dip):
         unite(a, b, "dip")
     groups = {}
     for i in seeds:
         groups.setdefault(root(i), []).append(i)
-    systems = []
+    found = []
     for r in sorted(groups, key=lambda x: str(members[x].key)):
-        systems.append(_system(net, sorted(groups[r], key=lambda x: str(members[x].key)), rel, dig))
-    return net, systems
+        t0 = time.perf_counter()
+        seeds_r = sorted(groups[r], key=lambda x: str(members[x].key))
+        if want is not None and not want(net, seeds_r):
+            continue
+        sysm = _system(net, seeds_r, rel, dig)
+        found.append(Interchange(sysm, sum(t_rel[i] for i in seeds_r),
+                                 time.perf_counter() - t0 + sum(t_dip.get(i, 0.0) for i in seeds_r)))
+    return net, found
 
 
 def _dip_half(net, u, su, d, sd, q=None):
@@ -810,12 +897,13 @@ class _Verdicts:
         return "down" if self.digs(u) or self.crossing(u, su, d, sd, q) == "down" else "up"
 
 
-def _shared_dips(net, seeds, rel, dig):
+def _shared_dips(net, seeds, rel, dig, clock=None):
     """Pairs of seeds over one road on the ground within its dip under one of them: [(a, b)]. A road dug under one
     structure (a short rail deck, a short deck) is that low under the other too: two systems solved apart had it at
     its ground under one and dug under the other. Perth's Tonkin Highway: a trunk road dug 7 m under the railway in the
     median and, 6 m on, a motorway deck lifted 7.3 m over its ground, its carriageway and the track's fill raised into
-    the trains. The road is followed through its joints, as the dip's piece is."""
+    the trains. The road is followed through its joints, as the dip's piece is. clock: {seed: seconds}, to each seed
+    the seconds of the pairs looked at for it added."""
     members = net.m
     under = {}              # ground member -> [(seed over it, s on the seed, s on it, the crossing)]
     for i in seeds:
@@ -828,8 +916,11 @@ def _shared_dips(net, seeds, rel, dig):
     far = max(_dip_half(net, i, si, j, sj, qq) for j, ls in under.items() for i, si, sj, qq in ls)
     for d, lst in under.items():
         for u, su, sd, qd in lst:
+            t0 = time.perf_counter()
             mu = members[u]
             if not (mu.kind == "deck" and dig.moves(u, su, d, sd, qd) == "down"):
+                if clock is not None:
+                    clock[u] = clock.get(u, 0.0) + time.perf_counter() - t0
                 continue        # (this crossing does not dig the road)
             w = _dip_half(net, u, su, d, sd, qd)
             reach = w + far
@@ -845,6 +936,8 @@ def _shared_dips(net, seeds, rel, dig):
                     digs = mi.kind == "deck" and dig.moves(i, si, j, sj, qi) == "down"
                     if along <= w + (_dip_half(net, i, si, j, sj, qi) if digs else 0.0):
                         out.append((u, i))
+            if clock is not None:
+                clock[u] = clock.get(u, 0.0) + time.perf_counter() - t0
     return out
 
 
