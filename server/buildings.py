@@ -1474,7 +1474,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     retail_front = bool(attrs.get("_retail_front"))
     if retail_front:
         shop, plain, house, row = True, False, False, False
-        wall = BRICK_WALL if fm == "brick" else wall or PANEL
+        wall = "bne_brick_red" if fm == "brick" else wall or f"{PANEL}|0"
         facade = wall
     fc = parse_color(attrs.get("facade_color"))
     if fc is not None and not attrs.get("bridge_part"):
@@ -1751,7 +1751,7 @@ def _retail_glazing(m, ring, front, ground, eave, mat_idx, lite, offsets=None):
                      ground+.22, .169, .648, .405, .901)
         if centers and not lite:
             center = left+axis*(start+opening/2)+outward*.27
-            _box(m, center, axis, opening/2+.12, .34, top, min(top+.22,eave), mat_idx[METALWALL])
+            _box(m, center, axis, opening/2+.12, .34, top, min(top+.22,eave), mat_idx[f"{METALWALL}|0"])
 
 
 # Night windows, each its own brightness (the user, 2026-11-08: "the brightness of windows should be randomized at
@@ -3052,7 +3052,11 @@ def build(specs_and_ground, lite=False):
             _bld.bld_lid(m, np.asarray(ring, np.float64), float(z0), None, True, mat_idx[spec.facade])
         _roof(m, spec, ring, z_eave, mat_idx, lite)
         if spec.roof == "flat" and not spec.plain and spec.floors <= 6 and not lite:
-            _cornice(m, spec, ring, z_eave, mat_idx)
+            if spec.retail_front:
+                _bld.bld_cornice(m, np.asarray(ring,np.float64), float(z_eave), mat_idx[spec.wall],
+                                 .10, .14, .08)
+            else:
+                _cornice(m, spec, ring, z_eave, mat_idx)
         if not lite and not spec.holes:               # (roof clutter scattered over a yard would float)
             _clutter(m, spec, ring, z_eave, mat_idx)
         if spec.steeple:
@@ -5332,11 +5336,11 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             if (storefronts and key is not None and not bparts
                     and not (a.get("has_parts") is not None and a["has_parts"][i])
                     and str(at.get("subtype") or "").lower() in {"", "commercial"}
-                    and len(parts) == len(parts[0]) == len(pieces) == 1 and mh == 0 and not edge
-                    and not (float(at.get("num_floors") or 0) > 2) and not (float(at.get("height") or 0) > 14)):
+                    and len(parts) == len(parts[0]) == len(pieces) == 1 and mh == 0 and not edge):
+                venue_only = float(at.get("num_floors") or 0) > 2 or float(at.get("height") or 0) > 14
                 at["_storefront"] = (str(key), str(at.get("name") or ""), str(at.get("facade_material") or ""),
                                      str(at.get("subtype") or "").lower(),
-                                     str(a["src_record"][i]) if a.get("src_record") is not None else "")
+                                     str(a["src_record"][i]) if a.get("src_record") is not None else "", venue_only)
             at0, mh0 = at, mh
             for ring in kept:           # (a long one on varied ground: its pieces, each on its own ground)
                 at, mh = at0, mh0
@@ -6352,7 +6356,8 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
             la, lo, _ = frame.enu_to_geodetic(
                 np.array([c["xy"][0]]), np.array([c["xy"][1]]), np.zeros(1)
             )
-            gz = float(np.asarray(ground(la, lo), np.float64)[0])
+            gz = (float(c["storefront_ground"]) if c.get("storefront_ground") is not None else
+                  float(np.asarray(ground(la, lo), np.float64)[0]))
             tilt = surf = None
             if is_bridge:
                 # the road over it is the model's: its deck traced (threedmr.bridge_deck_surface, in the frame

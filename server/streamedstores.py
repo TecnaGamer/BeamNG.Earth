@@ -61,6 +61,9 @@ class LocalSign(NamedTuple):
 
 SIGN_STYLES = {
     "smoke_shop": "tobacco", "tobacco": "tobacco", "tobacco_shop": "tobacco",
+    "bank": "bank", "bank_or_credit_union": "bank", "credit_union": "bank", "financial_service": "bank",
+    "bar": "venue", "pub": "venue", "music_venue": "venue", "nightlife_venue": "venue",
+    "nightclub": "venue", "dance_club": "venue", "bar_and_grill_restaurant": "venue",
     "vape_shop": "tobacco", "car_wash": "wash", "carwash": "wash",
     "fuel": "fuel", "gas_station": "fuel", "fueling_station": "fuel",
     "convenience_store": "market", "grocery_store": "market",
@@ -198,7 +201,7 @@ def suite_directory(layers, center, anchor):
     return rows if 2 <= len(rows) <= 8 else ()
 
 
-def exterior_frontages(layers, coords, ring, label, neighbors):
+def exterior_frontages(layers, coords, ring, label, neighbors, inside_only=False):
     """A high-confidence shop pin just outside one unambiguous wall can identify a tenant bay."""
     from buildings import retail_bays
     scale = np.array([111320*dmath.cos(dmath.radians(coords[0,1])), 111132])
@@ -230,9 +233,9 @@ def exterior_frontages(layers, coords, ring, label, neighbors):
             along = np.clip(np.sum(offsets*axes,axis=1),0,widths)
             distances = np.linalg.norm(offsets-along[:,None]*axes,axis=1)
             wall, second = distances.argsort()[:2]
-            if distances[wall]>3.25 or distances[second]<distances[wall]+1.5 or widths[wall]<5:
+            if distances[wall]>(7.0 if inside_only else 3.25) or distances[second]<distances[wall]+1.5 or widths[wall]<5:
                 continue
-            if contains_points(ring,point[None])[0]:
+            if bool(contains_points(ring,point[None])[0]) != inside_only:
                 continue
             # Reject nearby competing footprints, including ones that enclose the pin.
             if any(np.all(point >= lower) and np.all(point <= upper)
@@ -429,6 +432,9 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
         ):
             continue
         _, label, material, subtype, *sources = spec.storefront
+        venue_only = len(sources) > 1 and sources[1]
+        if venue_only and not local_enabled:
+            continue
         kind = str(spec.cls or "").lower()
         name = chain(label, kind == "cinema")
         mall = kind in MALL_CLASSES or (kind in {"", "commercial", "retail", "shop"} and label.casefold().endswith((" mall", " outlets")))
@@ -437,9 +443,13 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
         if subtype == "commercial" and label.casefold().endswith("restaurant"):
             categories.add("restaurant")
         fallback = local_sign(label, categories) if local_enabled else None
-        if kind not in COMMERCIAL and not (local_enabled and kind in SIGN_STYLES) and not generic_host and not spec.retail_front and not (name and not kind):
+        # Some commercial footprints carry only a name or a surveyed low flat roof.
+        # Probe place records before accepting these hosts; an untyped outline alone proves nothing.
+        probe = local_enabled and kind in {"", "office", "commercial"} and (
+            bool(label) or (spec.roof == "flat" and 2.8 <= spec.height <= 7 and not spec.fr_house))
+        if not venue_only and not probe and kind not in COMMERCIAL and not (local_enabled and kind in SIGN_STYLES) and not generic_host and not spec.retail_front and not (name and not kind):
             continue
-        if label and not name and not generic_host and not fallback:
+        if not venue_only and label and not name and not generic_host and not fallback and not probe:
             continue
         ring = np.asarray(spec.ring)[:, :2]
         if len(ring) > 96 or np.any(np.ptp(ring, axis=0) > 250):
@@ -467,10 +477,40 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
             doors = mapped_doors(sources[0], coords) if sources and (spec.retail_front or name or mall) else ()
             if spec.retail_front and doors:
                 spec.retail_doors = entrance_offsets(coords, ring, doors)
-            if generic_host or not name:
+            if venue_only:
+                if mall or kind not in {"", "commercial", "retail", "shop", "bar", "pub", "music_venue"}:
+                    continue
+                if layers is None:
+                    layers = list(businesses(md, keys))
+                candidates = {t for t, _ in mapped_tenants(layers, coords, local=True)
+                              if isinstance(t, LocalSign) and t.style == "venue"
+                              and (not label or t.name.casefold() == label.casefold())}
+                if len(candidates) != 1:
+                    continue
+                name = candidates.pop()
+            elif generic_host or not name:
                 if layers is None:
                     layers = list(businesses(md, keys))
                 tenants = mapped_tenants(layers, coords, anchor=name, local=local_enabled)
+                if probe and not generic_host and not spec.retail_front and not name:
+                    if label:
+                        matches_label = [t for t,_ in tenants if isinstance(t,LocalSign)
+                                         and t.name.casefold() == label.casefold()]
+                        if len(matches_label) != 1 or len(tenants) != 1:
+                            continue
+                        fallback = matches_label[0]
+                    elif len(tenants)==1 and isinstance(tenants[0][0],LocalSign) and tenants[0][0].style in {"bank","wash"}:
+                        name = tenants[0][0]
+                    else:
+                        distinct = {t for t,_ in tenants if t}
+                        if spec.windows is not False or len(distinct)<2:
+                            continue
+                        exterior = exterior_frontages(layers,coords,ring,"",(),inside_only=True)
+                        if not exterior:
+                            continue
+                        spec.retail_front = spec.shop = True
+                        spec.plain = False
+                        spec.floors, spec.floor_h = 1, spec.height
                 if spec.retail_front and local_enabled and not name and not doors and not tenants:
                     nearby = (np.all(upper_bounds >= ring.min(0)-3.25,axis=1)
                               & np.all(lower_bounds <= ring.max(0)+3.25,axis=1))
@@ -513,8 +553,8 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     observed = (spec.retail_doors or {}).get(wall)
                     if observed:
                         along = float(np.clip(min(observed, key=lambda x: abs(x-along)), opening*.45, length-opening*.45))
-                    delta = (coords[(wall+1) % len(ring)]-coords[wall])/length
-                    center = coords[wall]+along*delta
+                    wall_step = (coords[(wall+1) % len(ring)]-coords[wall])/length
+                    center = coords[wall]+along*wall_step
                     half = min(opening*.45, 3.5)*(panel[1]-panel[0])/length
                     panel = np.array([center-half, center+half])
                     signed_wall = wall
@@ -545,9 +585,9 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     if spec.height < 2.8:
                         continue
                     options["local_panel"] = (brand.style, round(min(4.2, spec.height - .2), 1))
-                    if signed_wall is not None or exterior:
+                    if brand.style != "venue" and (signed_wall is not None or exterior):
                         options["local_panel"] = (brand.style, round(spec.height+.65, 2), "raised")
-                    if (signed_wall is not None or exterior) and layers:
+                    if brand.style != "venue" and (signed_wall is not None or exterior) and layers:
                         directory = suite_directory(layers,geometry.mean(0),brand.name)
                         if directory:
                             options["local_panel"] += (directory,)
@@ -573,6 +613,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     "latlon": (entry["lat"], entry["lon"]),
                     "local": local,
                     "source": "local",
+                    "storefront_ground": ground_max if heading is None else None,
                     "storefront_host": tuple(centre + origin) if heading is not None else None,
                 }
         except (OSError, ValueError, RuntimeError) as error:

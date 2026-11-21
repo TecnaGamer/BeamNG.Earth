@@ -276,6 +276,51 @@ class StreamedStoresTest(unittest.TestCase):
                 self.assertAlmostEqual(np.ptp(mesh[0][:,2]),8.55,places=2)
                 self.assertFalse(generate(45.))
 
+    def test_multistory_venue_sign_preserves_host_and_requires_one_identity(self):
+        frame = geodesy.EnuFrame(40., -83.)
+        with (tempfile.TemporaryDirectory() as cache,
+              patch.dict(os.environ, BNE_STOREFRONTS="1", BNE_LOCAL_BUSINESS_SIGNS="1"),
+              patch("threedmr.region_ids", return_value=[]),
+              patch("buildings.road_lines", return_value=[np.array([[0.,15.],[256.,15.]])])):
+            for names in (["Lantern Hall"], ["Lantern Hall", "Side Stage"]):
+                md = tile(frame, "", names, "retail")
+                layers = md.cell(None).layers
+                layers["buildings"].attrs.update(height=np.array([15.]), num_floors=np.array([4]))
+                layers["places"].attrs["basic_category"] = np.array(["music_venue"] * len(names))
+                entries = buildings.road_tile_items(frame, 0, 0, md, lambda a,b: np.zeros(np.shape(a)),
+                                                    cache_dir=cache)[1]
+                if len(names) == 1:
+                    sign, = entries
+                    self.assertIsNone(sign["storefront_host"])
+                    self.assertEqual(sign["local"]["title"], names[0])
+                    vertices = threedmr.load_local_model(cache, sign["local"])[0]
+                    self.assertGreater(np.ptp(vertices[:, 1]), 1.)
+                    self.assertLess(np.max(vertices[:, 2]), 5.)
+                else:
+                    self.assertFalse(entries)
+
+    def test_identified_service_business_on_unclassified_building(self):
+        frame = geodesy.EnuFrame(40.,-83.)
+        for label,kind,category,taxonomy in (
+                ("Hill Credit Union", "", "bank_or_credit_union","credit_union"),
+                ("Main Bank", "office", "bank_or_credit_union","bank"),
+                ("", "", "automotive_service","car_wash")):
+            name = label or "River Wash"
+            md = tile(frame,label,[name],kind,subtype="")
+            layers = md.cell(None).layers
+            layers["places"].attrs.update(basic_category=np.array([category]),taxonomy=np.array([taxonomy]))
+            layers["buildings"].attrs.update(height=np.array([4.7]),roof_shape=np.array(["flat"]))
+            with (self.subTest(name=name),tempfile.TemporaryDirectory() as cache,
+                  patch.dict(os.environ,BNE_STOREFRONTS="1",BNE_LOCAL_BUSINESS_SIGNS="1"),
+                  patch("threedmr.region_ids",return_value=[]),
+                  patch("buildings.road_lines",return_value=[np.array([[0.,15.],[256.,15.]])])):
+                def generate():
+                    return buildings.road_tile_items(frame,0,0,md,lambda a,b: np.zeros(np.shape(a)),cache_dir=cache)[1]
+                entry, = generate()
+                self.assertEqual(entry["local"]["title"],name)
+                layers["places"].attrs.update(basic_category=np.array(["atm"]),taxonomy=np.array(["atm"]))
+                self.assertFalse(generate())
+
     def test_independent_mall_tenant_door_or_outdoor_promenade(self):
         import streamedstores
         frame = geodesy.EnuFrame(40., -83.)

@@ -152,6 +152,7 @@ def export_store(path, match, observations, out, *, entrance_direction=None, loc
             left, right = -half_span, half_span
             bottom = top - tall
             if raised:
+                offset = normal * .48
                 # The exposed top, sides and rear give the parapet sign depth from the road.
                 back = -normal*.35
                 corners = [left, left+back, right+back, right]
@@ -160,6 +161,19 @@ def export_store(path, match, observations, out, *, entrance_direction=None, loc
                 mesh([(*corners[k],top) for k in (0,1,2,0,2,3)], 2)
             mesh([(*left,bottom), (*right,bottom), (*right,top), (*left,bottom), (*right,top), (*left,top)],
                  texture(art), [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
+            if style == "venue" and top >= 3.4:
+                reach = min(1.45, span * .35)
+                blade_height = min(.64, reach / 2)
+                blade_art = texture(whole_store.local_sign_image(name, style, reach / blade_height))
+                root = left + axis * .12
+                tip = root + normal * reach
+                for side in (-1, 1):
+                    a, b = (tip, root) if side == 1 else (root, tip)
+                    a, b = a + axis * side * .06, b + axis * side * .06
+                    mesh([(*a,top-blade_height), (*b,top-blade_height), (*b,top),
+                          (*a,top-blade_height), (*b,top), (*a,top)], blade_art,
+                         [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
+                wall(tip - axis * .06, tip + axis * .06, top-blade_height, top, 2)
             if len(raised) == 2:
                 rows = raised[1]
                 board = whole_store.directory_image(rows)

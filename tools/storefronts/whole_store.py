@@ -578,7 +578,7 @@ def local_sign_image(name, style, aspect):
     short = re.sub(r"\s*[-–—]\s*(?:seafood restaurant|restaurant|grocery store|gas station|car wash|smoke shop)$",
                    "", name, flags=re.IGNORECASE).rstrip(" ®™")
     name = short or name
-    colors = {"tobacco": ("#302435", "#d6a860"), "wash": ("#144558", "#76ded8"),
+    colors = {"venue": ("#512537", "#ffbd62"), "bank": ("#243a52", "#baaa7a"), "tobacco": ("#302435", "#d6a860"), "wash": ("#144558", "#76ded8"),
               "fuel": ("#263545", "#f4ab54"), "market": ("#254335", "#d1c69c"),
               "shop": ("#303941", "#c8b99f")}
     base, accent = colors[style]
