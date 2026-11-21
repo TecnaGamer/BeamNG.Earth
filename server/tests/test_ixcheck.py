@@ -457,6 +457,14 @@ def test_c6_grade():
     assert "0.250" in got[-1].text
 
 
+def test_c6_a_decision_given_up_excuses_its_crossings_clearance():
+    h = solved_heights(pieces=[deck_piece(1, -40.0, z=3.0), deck_piece(4, 0.0, z=3.0), dip_piece()])
+    gone = dataclasses.replace(h, diag={"relaxed": [dict(kind="layer", amount=5.0, at=[[4, 20.0], [0, 40.0]],
+                                                        text="decision D2 over R given up")]})
+    got = c6_heights.check(gone, solved_parents(heights=gone))
+    assert [f.code for f in got if f.level == "fail"] == [] and "relaxed_layer" in [f.code for f in got]
+
+
 # ---- end to end: scan over a saved run -----------------------------------------------------------------------------
 
 

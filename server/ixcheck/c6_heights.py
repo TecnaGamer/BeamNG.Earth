@@ -82,13 +82,14 @@ def check(art, parents):
 def _eased(art, key):
     """(notes, {frozenset((member, member)): m a clearance between the two was eased by}, {member: m a clearance bound on one
     member (a road the shape does not move) was eased by}, {members whose grade law was eased}): what the solve relaxed
-    (diag["relaxed"]: kind, amount, at, text), counted as relaxations, never as failures, in notes of their own."""
+    (diag["relaxed"]: kind, amount, at, text), counted as relaxations, never as failures, in notes of their own. A decision
+    given up (kind "layer") is a clearance eased by all of it."""
     notes, pair, single, grade = [], {}, {}, set()
     for r in art.diag.get("relaxed") or ():
         at = tuple((int(m), float(s)) for m, s in r.get("at", ()))
         notes.append(_f(art, "note", "relaxed_" + str(r.get("kind")), "%s (%.3f)" % (r.get("text", ""), float(r.get("amount", 0.0))),
                         at))
-        if r.get("kind") == "clearance":
+        if r.get("kind") in ("clearance", "layer"):
             members = sorted({m for m, _s in at})
             if len(members) == 2:
                 k = frozenset(members)
