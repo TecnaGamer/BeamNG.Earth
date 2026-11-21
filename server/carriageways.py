@@ -199,7 +199,10 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     """Profiles of coupled chains; the Rust kernel owns the numerical solve and releases the GIL.
 
     chains: dicts with t/w (n,), grade, K, optional lo/hi (n,), lam, step, length.
-    couplings: (chain a, sample i, chain b, sample j, "eq" or "ge", value).
+    couplings: (chain a, sample i, chain b, sample j, "eq", "ge" or "le", value[, penalty]): the gap z_a - z_b equal,
+    at least or at most value; chain b None: the row on z_a alone (a bound, soft where the chain's lo / hi are hard;
+    not "eq"). A penalty above 0 makes the row soft, broken where the hard rows leave no room, at that cost per metre
+    ("le", b None, penalties: earthfast 373; diagnostics' soft_*).
     Negative sample indices address a chain's end as in NumPy. Optional diagnostics receives
     convergence, budget and measured constraint residuals. The returned profiles retain input order.
     """
@@ -219,17 +222,24 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     parameters = np.asarray([(float(c["grade"]), float(c["K"]), float(c.get("lam", LAMBDA)),
                               float(c.get("step", STEP_M)), float(c.get("length", LENGTH_BIAS)))
                              for c in chains], np.float64).reshape(-1, 5)
-    cp = list(couplings)
-    if any(kind not in ("eq", "ge") for _a, _i, _b, _j, kind, _v in cp):
-        raise ValueError("carriageway coupling kind must be eq or ge")
-    rows = np.asarray([(a, i, b, j, int(kind == "ge")) for a, i, b, j, kind, _v in cp], np.int64).reshape(-1, 5)
-    values = np.asarray([v for _a, _i, _b, _j, _kind, v in cp], np.float64)
+    cp = [tuple(c) if len(c) == 7 else (*c, 0.0) for c in couplings]
+    kinds = {"eq": 0, "ge": 1, "le": 2}
+    if any(kind not in kinds or (b is None and kind == "eq") for _a, _i, b, _j, kind, _v, _p in cp):
+        raise ValueError("carriageway coupling kind must be eq, ge or le (eq between two samples)")
+    rows = np.asarray([(a, i, -1 if b is None else b, 0 if b is None else j, kinds[kind])
+                       for a, i, b, j, kind, _v, _p in cp], np.int64).reshape(-1, 5)
+    values = np.asarray([v for _a, _i, _b, _j, _kind, v, _p in cp], np.float64)
+    penalty = np.asarray([p for *_r, p in cp], np.float64)
+    soft = {}
+    if (penalty > 0).any() or (rows[:, 4] == 2).any() or (rows[:, 2] == -1).any():
+        fast.require(561, "carriageway_profiles' soft, upper and one-sample couplings")
+        soft["coupling_penalty"] = penalty
     budget = float(deadline) - time.monotonic() if deadline is not None else BUDGET_S
     if np.isnan(budget):
         raise ValueError("carriageway deadline must not be NaN")
     budget = max(0.0, budget)
     z, info = fast._ef.carriageway_profiles(pack(target), pack(weights_), pack(lower), pack(upper), offsets,
-                                           parameters, rows, values, rounds, budget)
+                                           parameters, rows, values, rounds, budget, **soft)
     if diagnostics is not None:
         diagnostics.update(info)
     if not info["converged"] or not info["feasible"]:
