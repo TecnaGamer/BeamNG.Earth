@@ -146,27 +146,35 @@ def sign_endpoints(location, height, facing, nearby_roads):
     return np.array([location-half, location+half])
 
 
-def parking_frontage(coords, point, parking):
+def parking_frontage(coords, point, parking, *, entrances=(), walks=()):
     """Estimate a short sign panel on a wall supported by both a tenant point and parking in front."""
-    if not len(parking):
+    if not (len(parking) or len(entrances) or len(walks)):
         return None
     scale = np.array([111320 * np.cos(np.radians(point[1])), 111132])
     ring = (coords - point) * scale
     edges = np.roll(ring, -1, axis=0) - ring
     widths = np.linalg.norm(edges, axis=1)
-    along = np.clip(-np.sum(ring * edges, axis=1) / widths**2, 0, 1)
+    along = np.clip(-np.sum(ring * edges, axis=1) / np.maximum(widths**2, 1e-12), 0, 1)
     closest = ring + along[:, None] * edges
     distances = np.linalg.norm(closest, axis=1)
     first, second = distances.argsort()[:2]
     if distances[first] > 15 or distances[second] < distances[first] + 5:
         return None
+    if widths[first] < 6:
+        return None
     axis = edges[first] / widths[first]
     if np.sum(ring[:, 0] * edges[:, 1] - ring[:, 1] * edges[:, 0]) < 0:
         axis = -axis
     normal = np.array([axis[1], -axis[0]])
-    ahead = (parking - point) * scale - closest[first]
-    depth = ahead @ normal
-    if not np.any((depth > 2) & (depth < 45) & (np.abs(ahead @ axis) < 20)):
+    def supports(points, minimum, maximum, lateral):
+        if not len(points):
+            return False
+        ahead = (np.asarray(points)-point)*scale-closest[first]
+        depth = ahead @ normal
+        return np.any((depth >= minimum) & (depth <= maximum) & (np.abs(ahead @ axis) <= lateral))
+
+    if not (supports(parking,2.,45.,20.) or supports(entrances,-1.5,1.5,4.)
+            or supports(walks,1.,16.,8.)):
         return None
     half = min(10., min(along[first], 1-along[first]) * widths[first] - 1)
     if half < 3:

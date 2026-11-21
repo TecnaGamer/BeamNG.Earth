@@ -133,15 +133,18 @@ def export_store(path, match, observations, out, *, entrance_direction=None, loc
                      art, [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
         elif local_panel:
             style, top, *raised = local_panel
-            if style == "mall_anchor":
+            if style.startswith("mall_"):
                 half_span = axis * min(width*.46, 7.5)
             elif raised:
                 half_span = axis * width/2
             span = 2 * np.linalg.norm(half_span)
             tall = min(1.25, span / 4)
-            if style == "mall_anchor":
+            if style.startswith("mall_"):
                 tall = min(2.35, span/4)
-                art = whole_store.sign_image(name, span/tall, tall)
+                if style == "mall_brand" and name in whole_store.SIGN_COLORS:
+                    art = whole_store.sign_image(name, span/tall, tall)
+                else:
+                    art = whole_store.local_sign_image(name, "shop" if style == "mall_brand" else style[5:], span/tall)
             else:
                 art = whole_store.local_sign_image(name, style, span / tall)
             # A narrow fascia support also locates the model's ground plane for the game writer.

@@ -276,6 +276,43 @@ class StreamedStoresTest(unittest.TestCase):
                 self.assertAlmostEqual(np.ptp(mesh[0][:,2]),8.55,places=2)
                 self.assertFalse(generate(45.))
 
+    def test_independent_mall_tenant_door_or_outdoor_promenade(self):
+        import streamedstores
+        frame = geodesy.EnuFrame(40., -83.)
+        md = tile(frame, "Station Outlets", ["Oak Kitchen"], "retail")
+        layers = md.cell(None).layers
+        layers["buildings"].attrs["src_record"] = np.array(["w44@1"])
+        layers["buildings"].attrs["height"] = np.array([8.])
+        layers["places"].attrs["basic_category"] = np.array(["restaurant"])
+        lat,lon,_ = frame.enu_to_geodetic(50.,33.,0.)
+        layers["places"].lonlat[:] = [lon,lat]
+        def generate(walk, entrance):
+            def lines(*args, **kwargs):
+                if kwargs.get("only_sub"):
+                    return []
+                if kwargs.get("classes") == {"pedestrian","footway"}:
+                    return [walk] if walk is not None else []
+                return []  # An outdoor mall can be served entirely by pedestrian paths here.
+            with (tempfile.TemporaryDirectory() as cache,
+                  patch.dict(os.environ,BNE_STOREFRONTS="1",BNE_LOCAL_BUSINESS_SIGNS="1"),
+                  patch("threedmr.region_ids",return_value=[]),
+                  patch.object(streamedstores,"entrance_index",return_value={"w44":entrance}),
+                  patch("buildings.road_lines",side_effect=lines)):
+                entries = buildings.road_tile_items(frame,0,0,md,lambda a,b: np.zeros(np.shape(a)),cache_dir=cache)[1]
+                for row in entries:
+                    self.assertIsNone(row["storefront_host"])
+                    self.assertEqual(row["local"]["title"],"Oak Kitchen")
+                    verts = threedmr.load_local_model(cache,row["local"])[0]
+                    self.assertAlmostEqual(np.ptp(verts[:,2]),7.55,places=2)
+                return len(entries)
+        self.assertEqual(generate(None,[]),0)
+        self.assertEqual(generate(np.array([[0.,34.],[100.,34.]]),[]),0)
+        self.assertEqual(generate(np.array([[0.,25.],[100.,25.]]),[]),1)
+        lat,lon,_ = frame.enu_to_geodetic(50.,30.,0.)
+        self.assertEqual(generate(None,[(lon,lat,1)]),1)
+        lat,lon,_ = frame.enu_to_geodetic(70.,30.,0.)
+        self.assertEqual(generate(None,[(lon,lat,1)]),0)
+
     def test_named_retail_host_requires_tenant_frontage(self):
         frame = geodesy.EnuFrame(40., -83.)
         aisle = np.array([[50., 15.], [50., 20.]])

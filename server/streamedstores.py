@@ -45,7 +45,6 @@ COMMERCIAL = SPECIFIC | {"commercial", "retail", "shop"}
 LOG = logging.getLogger("earthd.storefronts")
 
 
-MALL_ANCHORS = {"Macy's", "Dick's Sporting Goods", "Target", "The Cheesecake Factory"}
 MALL_CLASSES = {"mall", "shopping_mall", "shopping_center", "outlet_mall"}
 
 MIN_BUSINESS_CONFIDENCE = 0.75
@@ -249,12 +248,22 @@ def exterior_frontages(layers, coords, ring, label, neighbors):
     return [next(iter(matches.values())) for matches in bays.values() if len(matches)==1]
 
 
-def tenant_panels(tenants, ring, parking):
+def tenant_panels(tenants, ring, parking, entrances=(), walks=()):
     """Leave room for all mapped tenants, including businesses without a brand model."""
     for i, (name, point) in enumerate(tenants):
         if not name:
             continue
-        panel = parking_frontage(ring, point, parking)
+        approaches = []
+        if len(walks):
+            # A long straight promenade may have no vertices beside this tenant.
+            scale = np.array([111320*dmath.cos(dmath.radians(point[1])), 111132])
+            start = (walks[:,0]-point)*scale
+            delta = (walks[:,1]-walks[:,0])*scale
+            along = np.clip(-np.sum(start*delta,axis=1)/np.maximum(np.sum(delta*delta,axis=1),1e-12),0,1)
+            near = start+along[:,None]*delta
+            candidates = point + near[np.sum(near*near,axis=1) <= 32**2]/scale
+            approaches = candidates[~contains_points(ring,candidates)] if len(candidates) else []
+        panel = parking_frontage(ring, point, parking, entrances=entrances, walks=approaches)
         if panel is None:
             continue
         scale = np.array([111320 * dmath.cos(dmath.radians(point[1])), 111132])
@@ -397,18 +406,15 @@ def parking_direction(ring, aisles):
     return None
 
 
-def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()):
-    if not roads:
-        return
-    starts = np.concatenate([line[:-1] for line in roads])
-    ends = np.concatenate([line[1:] for line in roads])
+def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=(), load_walks=None):
+    starts = np.concatenate([line[:-1] for line in roads]) if roads else np.empty((0,2))
+    ends = np.concatenate([line[1:] for line in roads]) if roads else np.empty((0,2))
     delta = ends - starts
     length2 = np.maximum(np.sum(delta * delta, axis=1), 1e-12)
-    if not len(starts):
-        return
     layers = None
     local_enabled = os.environ.get("BNE_LOCAL_BUSINESS_SIGNS") == "1"
     parking_points = None
+    walk_segments = None
     cache = Path(cache_dir) / "threedmr_cache" / "storefronts"
     if local_enabled:
         lower_bounds = np.array([host.ring.min(0)[:2]-3.25 for host,_,_ in items])
@@ -443,24 +449,22 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
         if any(np.all((c["xy"] >= lower) & (c["xy"] <= upper)) for c in existing
                if not (c.get("local") or {}).get("storefront_pylon")):
             continue
-        offset = (
-            starts
-            + np.clip(np.sum((centre - starts) * delta, axis=1) / length2, 0, 1)[
-                :, None
-            ]
-            * delta
-            - centre
-        )
-        facing = offset[np.argmin(np.sum(offset * offset, axis=1))]
-        if not 1 <= dnp.norm(facing) <= 150 + np.max(dnp.norm(ring - centre, axis=1)):
-            continue
+        facing = None
+        if not mall:
+            if not len(starts):
+                continue
+            closest = np.clip(np.sum((centre-starts)*delta,axis=1)/length2,0,1)
+            offset = starts+closest[:,None]*delta-centre
+            facing = offset[np.argmin(np.sum(offset*offset,axis=1))]
+            if not 1 <= dnp.norm(facing) <= 150 + np.max(dnp.norm(ring-centre,axis=1)):
+                continue
         ll = frame.enu_to_geodetic(
             ring[:, 0] + origin[0], ring[:, 1] + origin[1], np.zeros(len(ring))
         )
         coords = np.column_stack((ll[1], ll[0]))
         try:
             exterior = []
-            doors = mapped_doors(sources[0], coords) if sources and (spec.retail_front or name) else ()
+            doors = mapped_doors(sources[0], coords) if sources and (spec.retail_front or name or mall) else ()
             if spec.retail_front and doors:
                 spec.retail_doors = entrance_offsets(coords, ring, doors)
             if generic_host or not name:
@@ -482,7 +486,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     name = fallback
                 elif not name and len(tenants) == 1 and (not label or isinstance(tenants[0][0], LocalSign) and not generic_host):
                     name = tenants[0][0]
-                if not name and not exterior and not (generic_host and tenants and len(aisles)):
+                if not name and not exterior and not (generic_host and tenants and (len(aisles) or mall and (doors or load_walks))):
                     continue
             if name and sources and not doors and not spec.retail_front:
                 doors = mapped_doors(sources[0], coords)
@@ -491,7 +495,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                 parking = parking_direction(ring, aisles)
                 if parking is not None:
                     entrance_bearing = round(dmath.degrees(dmath.atan2(parking[1], parking[0])))
-            bearing = round(dmath.degrees(dmath.atan2(facing[1], facing[0])))
+            bearing = round(dmath.degrees(dmath.atan2(facing[1], facing[0]))) if facing is not None else None
             signed_wall = None
             if exterior:
                 matches = [(sign,panel,None,None) for sign,panel,_,_ in exterior]
@@ -518,19 +522,25 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
             elif name:
                 matches = [(name, coords, bearing, material)]
             else:
-                if parking_points is None:
+                if parking_points is None and len(aisles):
                     xy = np.concatenate(aisles) + origin
                     lat, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
                     parking_points = np.column_stack((lon, lat))
-                panels = list(tenant_panels(tenants, coords, parking_points))
+                if mall and load_walks and walk_segments is None:
+                    lines = [line for line in load_walks() if len(line)>1]
+                    walk_segments = []
+                    if lines:
+                        xy = np.concatenate([np.stack((l[:-1],l[1:]),axis=1) for l in lines]).reshape(-1,2)+origin
+                        lat,lon,_ = frame.enu_to_geodetic(xy[:,0],xy[:,1],np.zeros(len(xy)))
+                        walk_segments = np.column_stack((lon,lat)).reshape(-1,2,2)
+                panels = list(tenant_panels(tenants,coords,parking_points if parking_points is not None else (),
+                                            doors if mall else (), walk_segments if mall and walk_segments is not None else ()))
                 if spec.retail_front and not spec.retail_doors:
                     centers = [panel.mean(0) for _,panel in panels]
                     spec.retail_doors = entrance_offsets(coords, ring, centers)
                 matches = ((brand, panel, None, None) for brand, panel in panels)
             for index,(brand, geometry, heading, finish) in enumerate(matches):
                 options = {}
-                if (mall and brand in MALL_ANCHORS and spec.height >= 5.0):
-                    options["local_panel"] = ("mall_anchor", round(min(spec.height-.45, 9.), 2))
                 if isinstance(brand, LocalSign):
                     if spec.height < 2.8:
                         continue
@@ -542,6 +552,10 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                         if directory:
                             options["local_panel"] += (directory,)
                     brand = brand.name
+                if mall:
+                    # An exterior sign is justified by the wall evidence, independently of the brand.
+                    style = options.get("local_panel", ("brand",))[0]
+                    options["local_panel"] = ("mall_"+style, round(min(spec.height-.45,9.),2))
                 entry = cached_entry(cache, brand, geometry, heading, finish, doors=doors, entrance_bearing=entrance_bearing, **options)
                 if signed_wall is not None:
                     spec.front = signed_wall
