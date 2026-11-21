@@ -43,16 +43,10 @@ impl SegGrid {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], wall: &[bool], rh: &[f64], key: &[i64],
-                     abut: &[[bool; 2]],
-                     cos_ang: f64, bank_s: f64, gap_m: f64, max_diff: f64, abut_hold: f64, wreq: f64, w0: f64,
-                     lam: f64, equal_hold: i64) -> (Vec<f64>, Vec<bool>) {
+/// The grid (16 m cells) over the segments of the plans ok keeps, and their widest half width; None: none, or absurd
+/// extents.
+fn seg_grid(xy: &[[f64; 2]], off: &[usize], rh: &[f64], ok: impl Fn(usize) -> bool) -> Option<(SegGrid, f64)> {
     let n = off.len() - 1;
-    let mut zout = z.to_vec();
-    let mut changed = vec![false; n];
-    let ok = |j: usize| key[j] >= 0 && off[j + 1] - off[j] >= 2 && rh[j].is_finite();
-    // the grid
     let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     let mut max_rh = 0.0f64;
     for j in 0..n {
@@ -70,13 +64,13 @@ pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], wall: &[bool], r
         }
     }
     if !x0.is_finite() {
-        return (zout, changed);
+        return None;
     }
     let cell = 16.0f64;
     let nx = (((x1 - x0) / cell).floor() as usize) + 1;
     let ny = (((y1 - y0) / cell).floor() as usize) + 1;
     if nx.saturating_mul(ny) > 50_000_000 {
-        return (zout, changed); // (absurd extents: nothing rather than a huge grid)
+        return None; // (absurd extents: nothing rather than a huge grid)
     }
     let mut g = SegGrid { x0, y0, cell, nx, ny, cells: vec![Vec::new(); nx * ny], segs: Vec::new() };
     for j in 0..n {
@@ -99,6 +93,100 @@ pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], wall: &[bool], r
             }
         }
     }
+    Some((g, max_rh))
+}
+
+/// Per other plan than j with a segment in the grid cells within reach of (px, py), its nearest segment: (distance,
+/// segment, t) in best, the plans in seen, in the order met (mark: scratch per plan, usize::MAX between calls).
+#[allow(clippy::too_many_arguments)]
+fn nearest_each(g: &SegGrid, xy: &[[f64; 2]], off: &[usize], j: usize, px: f64, py: f64, reach: f64,
+                best: &mut Vec<(f64, usize, f64)>, seen: &mut Vec<usize>, mark: &mut [usize]) {
+    let ka = g.key(px - reach, py - reach);
+    let kb = g.key(px + reach, py + reach);
+    best.clear();
+    for &k in seen.iter() {
+        mark[k] = usize::MAX;
+    }
+    seen.clear();
+    for cx in ka.0.max(0)..=kb.0.min(g.nx as i64 - 1) {
+        for cy in ka.1.max(0)..=kb.1.min(g.ny as i64 - 1) {
+            for &id in &g.cells[cy as usize * g.nx + cx as usize] {
+                let sg = &g.segs[id as usize];
+                if sg.plan == j {
+                    continue;
+                }
+                let q = &xy[off[sg.plan]..off[sg.plan + 1]];
+                let (qa, qb) = (q[sg.i], q[sg.i + 1]);
+                let (dx, dy) = (qb[0] - qa[0], qb[1] - qa[1]);
+                let ll = (dx * dx + dy * dy).max(1e-12);
+                let t = (((px - qa[0]) * dx + (py - qa[1]) * dy) / ll).clamp(0.0, 1.0);
+                let d = (qa[0] + dx * t - px).dhypot(qa[1] + dy * t - py);
+                let slot = mark[sg.plan];
+                if slot == usize::MAX {
+                    mark[sg.plan] = best.len();
+                    seen.push(sg.plan);
+                    best.push((d, sg.i, t));
+                } else if d < best[slot].0 || (d == best[slot].0 && sg.i < best[slot].1) {
+                    best[slot] = (d, sg.i, t);
+                }
+            }
+        }
+    }
+}
+
+/// The unit direction of plan p (its vertices) at vertex i (np.gradient: central, one-sided at the ends); None where
+/// it has none.
+fn direction(p: &[[f64; 2]], i: usize) -> Option<(f64, f64)> {
+    let m = p.len();
+    let (a, b) = if i == 0 { (0, 1) } else if i == m - 1 { (m - 2, m - 1) } else { (i - 1, i + 1) };
+    let (tx, ty) = (p[b][0] - p[a][0], p[b][1] - p[a][1]);
+    let tl = tx.dhypot(ty);
+    if tl < 1e-9 {
+        return None;
+    }
+    Some((tx / tl, ty / tl))
+}
+
+/// Arc length along plan p's vertices.
+fn arc(p: &[[f64; 2]]) -> Vec<f64> {
+    let m = p.len();
+    let mut s = vec![0.0f64; m];
+    for k in 1..m {
+        s[k] = s[k - 1] + (p[k][0] - p[k - 1][0]).dhypot(p[k][1] - p[k - 1][1]);
+    }
+    s
+}
+
+/// Is plan k's nearest segment si (at t) to a vertex of a plan running beside it: not past k's end, the gap between
+/// the carriageways (gap: distance less the two half widths) at most gap_m, k not walled there, and k's segment
+/// within ang of the vertex's direction (tx, ty)?
+#[allow(clippy::too_many_arguments)]
+fn beside(xy: &[[f64; 2]], off: &[usize], wall: &[bool], k: usize, si: usize, t: f64, gap: f64, gap_m: f64,
+          tx: f64, ty: f64, cos_ang: f64) -> bool {
+    let q = &xy[off[k]..off[k + 1]];
+    let nseg = q.len() - 1;
+    // (not past the other's end: its end the nearest point, this one beyond it)
+    if (si == 0 && t <= 0.0) || (si == nseg - 1 && t >= 1.0) {
+        return false;
+    }
+    if gap > gap_m || wall[off[k] + si] || wall[off[k] + si + 1] {
+        return false; // (the other in a cutting there: Porte Maillot's ramps beside the walled trench)
+    }
+    let (dx, dy) = (q[si + 1][0] - q[si][0], q[si + 1][1] - q[si][1]);
+    let dl = dx.dhypot(dy);
+    !(dl < 1e-9 || ((tx * dx + ty * dy) / dl).abs() < cos_ang)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], wall: &[bool], rh: &[f64], key: &[i64],
+                     abut: &[[bool; 2]],
+                     cos_ang: f64, bank_s: f64, gap_m: f64, max_diff: f64, abut_hold: f64, wreq: f64, w0: f64,
+                     lam: f64, equal_hold: i64) -> (Vec<f64>, Vec<bool>) {
+    let n = off.len() - 1;
+    let mut zout = z.to_vec();
+    let mut changed = vec![false; n];
+    let ok = |j: usize| key[j] >= 0 && off[j + 1] - off[j] >= 2 && rh[j].is_finite();
+    let Some((g, max_rh)) = seg_grid(xy, off, rh, ok) else { return (zout, changed) };
     // per plan: the corrections asked, then the spline
     let mut best: Vec<(f64, usize, f64)> = Vec::new(); // per other plan near a vertex: (distance, segment, t)
     let mut seen: Vec<usize> = Vec::new();
@@ -113,10 +201,7 @@ pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], wall: &[bool], r
         }
         let p = &xy[o..o + m];
         let zp = &z[o..o + m];
-        let mut s = vec![0.0f64; m];
-        for k in 1..m {
-            s[k] = s[k - 1] + (p[k][0] - p[k - 1][0]).dhypot(p[k][1] - p[k - 1][1]);
-        }
+        let s = arc(p);
         let last = s[m - 1];
         let mut up = vec![0.0f64; m];
         let mut dn = vec![0.0f64; m];
@@ -130,62 +215,14 @@ pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], wall: &[bool], r
             if (abut[j][0] && s[i] <= abut_hold) || (abut[j][1] && s[i] >= last - abut_hold) || wall[o + i] {
                 continue;       // (held, or a cutting's wall beside it: two levels, not one pavement)
             }
-            // the direction (np.gradient: central, one-sided at the ends)
-            let (a, b) = if i == 0 { (0, 1) } else if i == m - 1 { (m - 2, m - 1) } else { (i - 1, i + 1) };
-            let (tx, ty) = (p[b][0] - p[a][0], p[b][1] - p[a][1]);
-            let tl = tx.dhypot(ty);
-            if tl < 1e-9 {
-                continue;
-            }
-            let (tx, ty) = (tx / tl, ty / tl);
+            let Some((tx, ty)) = direction(p, i) else { continue };
             // the other plans' nearest segments within reach
-            let ka = g.key(px - reach, py - reach);
-            let kb = g.key(px + reach, py + reach);
-            best.clear();
-            for &k in &seen {
-                mark[k] = usize::MAX;
-            }
-            seen.clear();
-            for cx in ka.0.max(0)..=kb.0.min(g.nx as i64 - 1) {
-                for cy in ka.1.max(0)..=kb.1.min(g.ny as i64 - 1) {
-                    for &id in &g.cells[cy as usize * g.nx + cx as usize] {
-                        let sg = &g.segs[id as usize];
-                        if sg.plan == j {
-                            continue;
-                        }
-                        let q = &xy[off[sg.plan]..off[sg.plan + 1]];
-                        let (qa, qb) = (q[sg.i], q[sg.i + 1]);
-                        let (dx, dy) = (qb[0] - qa[0], qb[1] - qa[1]);
-                        let ll = (dx * dx + dy * dy).max(1e-12);
-                        let t = (((px - qa[0]) * dx + (py - qa[1]) * dy) / ll).clamp(0.0, 1.0);
-                        let d = (qa[0] + dx * t - px).dhypot(qa[1] + dy * t - py);
-                        let slot = mark[sg.plan];
-                        if slot == usize::MAX {
-                            mark[sg.plan] = best.len();
-                            seen.push(sg.plan);
-                            best.push((d, sg.i, t));
-                        } else if d < best[slot].0 || (d == best[slot].0 && sg.i < best[slot].1) {
-                            best[slot] = (d, sg.i, t);
-                        }
-                    }
-                }
-            }
+            nearest_each(&g, xy, off, j, px, py, reach, &mut best, &mut seen, &mut mark);
             for (bi, &k) in seen.iter().enumerate() {
                 let (d, si, t) = best[bi];
-                let q = &xy[off[k]..off[k + 1]];
                 let zq = &z[off[k]..off[k + 1]];
-                let nseg = q.len() - 1;
-                // (not past the other's end: its end the nearest point, this one beyond it)
-                if (si == 0 && t <= 0.0) || (si == nseg - 1 && t >= 1.0) {
-                    continue;
-                }
                 let gap = d - rh[k] - rh[j];
-                if gap > gap_m || wall[off[k] + si] || wall[off[k] + si + 1] {
-                    continue;   // (the other in a cutting there: Porte Maillot's ramps beside the walled trench)
-                }
-                let (dx, dy) = (q[si + 1][0] - q[si][0], q[si + 1][1] - q[si][1]);
-                let dl = dx.dhypot(dy);
-                if dl < 1e-9 || ((tx * dx + ty * dy) / dl).abs() < cos_ang {
+                if !beside(xy, off, wall, k, si, t, gap, gap_m, tx, ty, cos_ang) {
                     continue;
                 }
                 let zk = zq[si] + (zq[si + 1] - zq[si]) * t;
@@ -363,6 +400,91 @@ pub fn plan_share_corridors<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>
     Ok((zo.into_pyarray(py), ch.into_pyarray(py)))
 }
 
+/// grading's one vertical solve (server/vsolve.py): corridor_core's pairs, its geometry alone. Per vertex i of an
+/// eligible plan j (key at least 0, a half width, at least three vertices; not within abut_hold of its own bridge
+/// end, not beside a cutting's wall), each other eligible plan k running beside it there: (j, i, k, si, t, gap), si
+/// and t its nearest point (segment, fraction), gap between the carriageways' edges (m; below 0 where the pavements
+/// overlap). Who holds and how far the heights may differ are the caller's.
+#[allow(clippy::too_many_arguments)]
+pub fn pairs_core(xy: &[[f64; 2]], off: &[usize], wall: &[bool], rh: &[f64], key: &[i64], abut: &[[bool; 2]],
+                  cos_ang: f64, gap_m: f64, abut_hold: f64) -> Vec<(usize, usize, usize, usize, f64, f64)> {
+    let n = off.len() - 1;
+    let mut out = Vec::new();
+    let ok = |j: usize| key[j] >= 0 && off[j + 1] - off[j] >= 2 && rh[j].is_finite();
+    let Some((g, max_rh)) = seg_grid(xy, off, rh, ok) else { return out };
+    let mut best: Vec<(f64, usize, f64)> = Vec::new();
+    let mut seen: Vec<usize> = Vec::new();
+    let mut mark = vec![usize::MAX; n];
+    for j in 0..n {
+        if !ok(j) {
+            continue;
+        }
+        let (o, m) = (off[j], off[j + 1] - off[j]);
+        if m < 3 {
+            continue;
+        }
+        let p = &xy[o..o + m];
+        let s = arc(p);
+        let last = s[m - 1];
+        let reach = rh[j] + max_rh + gap_m;
+        for i in 0..m {
+            let (px, py) = (p[i][0], p[i][1]);
+            if !(px.is_finite() && py.is_finite()) {
+                continue;
+            }
+            if (abut[j][0] && s[i] <= abut_hold) || (abut[j][1] && s[i] >= last - abut_hold) || wall[o + i] {
+                continue;
+            }
+            let Some((tx, ty)) = direction(p, i) else { continue };
+            nearest_each(&g, xy, off, j, px, py, reach, &mut best, &mut seen, &mut mark);
+            for (bi, &k) in seen.iter().enumerate() {
+                let (d, si, t) = best[bi];
+                let gap = d - rh[k] - rh[j];
+                if beside(xy, off, wall, k, si, t, gap, gap_m, tx, ty, cos_ang) {
+                    out.push((j, i, k, si, t, gap));
+                }
+            }
+        }
+    }
+    out
+}
+
+type PairArrays<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>,
+                        Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);
+
+/// pairs_core (above) for Python: the arrays as plan_share_corridors' (no heights); returns (j, i, k, si) int64 and
+/// (t, gap) float64 arrays, one entry per pair, in plan j's then vertex i's order.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn plan_corridor_pairs<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
+                                wall: PyReadonlyArray1<'py, bool>, rh: PyReadonlyArray1<'py, f64>,
+                                key: PyReadonlyArray1<'py, i64>, abut: PyReadonlyArray2<'py, bool>, ang_deg: f64,
+                                gap_m: f64, abut_hold: f64) -> PyResult<PairArrays<'py>> {
+    let (a, o, rh, key, ab) = (xy.as_array(), off.as_array(), rh.as_array(), key.as_array(), abut.as_array());
+    let wv: Vec<bool> = wall.as_array().iter().copied().collect();
+    let n = if o.is_empty() { 0 } else { o.len() - 1 };
+    if a.ncols() < 2 || o.is_empty() || o[0] != 0 || o[o.len() - 1] as usize != a.nrows()
+        || (1..o.len()).any(|i| o[i] < o[i - 1]) || wv.len() != a.nrows() || rh.len() != n || key.len() != n
+        || ab.nrows() != n || ab.ncols() != 2 {
+        return Err(PyValueError::new_err("plan_corridor_pairs: mismatched plan arrays"));
+    }
+    let xyv: Vec<[f64; 2]> = (0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]]]).collect();
+    let offv: Vec<usize> = o.iter().map(|&v| v as usize).collect();
+    let rhv: Vec<f64> = rh.iter().copied().collect();
+    let keyv: Vec<i64> = key.iter().copied().collect();
+    let abv: Vec<[bool; 2]> = (0..n).map(|j| [ab[[j, 0]], ab[[j, 1]]]).collect();
+    let cos_ang = ang_deg.to_radians().dcos();
+    let pr = py.detach(|| pairs_core(&xyv, &offv, &wv, &rhv, &keyv, &abv, cos_ang, gap_m, abut_hold));
+    let j: Vec<i64> = pr.iter().map(|r| r.0 as i64).collect();
+    let i: Vec<i64> = pr.iter().map(|r| r.1 as i64).collect();
+    let k: Vec<i64> = pr.iter().map(|r| r.2 as i64).collect();
+    let si: Vec<i64> = pr.iter().map(|r| r.3 as i64).collect();
+    let t: Vec<f64> = pr.iter().map(|r| r.4).collect();
+    let gap: Vec<f64> = pr.iter().map(|r| r.5).collect();
+    Ok((j.into_pyarray(py), i.into_pyarray(py), k.into_pyarray(py), si.into_pyarray(py), t.into_pyarray(py),
+        gap.into_pyarray(py)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,5 +539,30 @@ mod tests {
         assert!((zo[i0] - zo[i1]).abs() < 0.8, "{} vs {}", zo[i0], zo[i1]);
         assert!((zo[i0] - z[i0]).abs() < 1e-12);
         assert!(zo[60] == z[60] && zo[119] == z[119], "the ends hold");
+    }
+
+    #[test]
+    fn fork_pairs_are_the_overlap() {
+        // the fork above, flat: the branches' vertices near the fork are beside each other, the far ends not
+        let mut xy = Vec::new();
+        let mut off = vec![0usize];
+        for sgn in [1.0f64, -1.0] {
+            let a = (5.0f64 * sgn).to_radians();
+            for i in 0..60 {
+                let s = i as f64 * 2.0;
+                xy.push([s * a.dcos(), s * a.dsin()]);
+            }
+            off.push(xy.len());
+        }
+        let pr = pairs_core(&xy, &off, &vec![false; xy.len()], &[7.0, 7.0], &[5, 5], &[[false, false]; 2],
+                            45f64.to_radians().dcos(), 6.0, 25.0);
+        for &(j, i, k, _si, _t, gap) in &pr {
+            assert!(j != k && gap <= 6.0, "{j} {i} {k} {gap}");
+        }
+        // vertex 20 of branch 0 (40 m out): the other branch, its pavements overlapping (gap ~ 40 sin 10 - 14 < 0)
+        let at = pr.iter().find(|r| r.0 == 0 && r.1 == 20).expect("vertex 20 beside");
+        assert!(at.2 == 1 && at.5 < 0.0, "{at:?}");
+        // the far end (118 m out: 20.5 m apart, a 6.5 m gap) is not
+        assert!(!pr.iter().any(|r| r.0 == 0 && r.1 == 59));
     }
 }

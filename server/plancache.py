@@ -104,16 +104,17 @@ def plans_format():
     # plans are thrown away)
     import revisit
     import structures
+    import vsolve
     # (the vanilla slopes, off by default, grade other ground from the same plans: their own key too, BATTER_ON; bv2:
     # their corridors loosened behind a plan's open ends, earthfast 522; bv3: an end's continuation from PlanPack's nb,
     # not the pack's next segment, earthfast 531;
     # BNE_DECK_STRUCT=abut, RS S2b part 2a: the plans give a structure's twins one abutment height per end, keyed by
-    # the switch's version, so its plans never mix with anyone else's)
+    # the switch's version, so its plans never mix with anyone else's; and the one vertical solve's: BNE_VSOLVE)
     ds = f".ds{revisit.SWITCH_VERSIONS['BNE_DECK_STRUCT']}" if structures.ABUT else ""
     import roadshape
     profile = ".s4v3" if roadshape.SURFACE_PROFILE else ""
     return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + profile + (".gg1" if grading.GUARD_ON else "") + ds \
-        + (".bv3" if grading.BATTER_ON else "")
+        + (".vs2" if vsolve.SOLO else ".vs1" if vsolve.ON else "") + (".bv3" if grading.BATTER_ON else "")
 
 
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
