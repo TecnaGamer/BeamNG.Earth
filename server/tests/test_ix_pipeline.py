@@ -390,6 +390,83 @@ class CancelTest(unittest.TestCase):
                 prof_of(overpass(), lambda p, h, k: pipeline.region(p, h, k), "cancel2")
 
 
+class PerInterchangeTest(unittest.TestCase):
+    """Steps 1 and 2 are one interchange's: its members are what it names and reaches, never a ground road's pair with
+    another, numbered by key, and every later artifact of the interchange uses that numbering."""
+
+    def run_overpass(self, hk="pi"):
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(cache, "ROOT", tmp):
+                self.assertTrue(prof_of(overpass(), lambda p, h, k: pipeline.region(p, h, k), hk))
+            from ixcheck import load
+            return load.scan(tmp)
+
+    def test_the_paths_and_extent_are_the_interchange_s_own(self):
+        scanned = self.run_overpass()
+        paths, extents = scanned["steps"][1], scanned["steps"][2]
+        self.assertEqual(len(paths), len(extents))
+        self.assertTrue(paths)
+        for p, e in zip(paths, extents):
+            self.assertTrue(p.meta.scope.startswith("system:"))
+            self.assertEqual(p.meta.scope, e.meta.scope)
+            self.assertEqual(len(e.systems), 1)
+            keys = [m.key for m in p.members]
+            self.assertEqual(keys, sorted(keys), "numbered by key")
+            kinds = [m.kind for m in p.members]
+            for r in list(p.joins) + list(p.crossings):
+                self.assertTrue(kinds[r.a] in artifacts.STRUCTURES or kinds[r.b] in artifacts.STRUCTURES,
+                                "a ground road's pair with another is no relation of an interchange")
+            for i in e.systems[0].seeds:
+                self.assertIn(kinds[i], artifacts.STRUCTURES)
+
+    def test_the_heights_use_the_paths_numbering(self):
+        scanned = self.run_overpass()
+        for h in scanned["steps"][6]:
+            if getattr(h, "pieces", None) is None:
+                continue
+            paths = [a for a in scanned["steps"][1] if a.meta.scope == h.meta.scope][0]
+            for pc in h.pieces:
+                self.assertTrue(0 <= pc.main < len(paths.members))
+                self.assertTrue(((np.asarray(pc.mem) >= 0) & (np.asarray(pc.mem) < len(paths.members))).all())
+
+    def test_two_regions_find_the_same_interchange_with_the_same_artifacts(self):
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            for tmp, hk in ((a, "one"), (b, "two")):
+                with unittest.mock.patch.object(cache, "ROOT", tmp):
+                    prof_of(overpass(), lambda p, h, k: pipeline.region(p, h, k), hk)
+            names = {}
+            for tmp in (a, b):
+                names[tmp] = {os.path.relpath(f, tmp) for f in glob.glob(os.path.join(tmp, "s[1-5]", "*", "*.npz"))}
+            self.assertEqual(names[a], names[b], "steps 1-5 of an interchange do not depend on the region")
+            self.assertTrue(names[a])
+
+
+class FindInterchangesTest(unittest.TestCase):
+    """find_systems is find_interchanges' systems; the seconds are the interchange's own."""
+
+    def test_same_systems_and_seconds(self):
+        feats = overpass()
+        home = mapcells.cell_of(LAT, LON)
+        planner = grading.PlanStore(FakeMD(feats), flat_elev).planner_of_cell(home)
+        members = []
+        with unittest.mock.patch.object(grading, "SHAPES_ON", True):
+            for k in mapcells.cells_for_bbox(LAT - 0.01, LON - 0.01, LAT + 0.01, LON + 0.01):
+                members += planner._shape_members(k)
+        members = _gsh.one_road(members)
+        net, systems = _gsh.find_systems(members)
+        net2, found = _gsh.find_interchanges(members)
+        self.assertTrue(found)
+        self.assertEqual(len(systems), len(found))
+        for s, x in zip(systems, found):
+            self.assertEqual(s["seeds"], x.sysm["seeds"])
+            self.assertTrue(x.paths_s >= 0.0 and x.extent_s > 0.0)
+        net3, none = _gsh.find_interchanges(members, want=lambda n_, seeds: False)
+        self.assertEqual(none, [], "an interchange not asked for is not closed")
+        net4, some = _gsh.find_interchanges(members, want=lambda n_, seeds: True)
+        for a, b in zip(found, some):
+            self.assertEqual(a.sysm["seeds"], b.sysm["seeds"])
+
+
 class ChecksPassTest(unittest.TestCase):
     """The independent checks read a real run's cache and find no fail: the artifacts the pipeline writes are what
     ixcheck reads (the levels' direction, the parents' chain, the keys)."""

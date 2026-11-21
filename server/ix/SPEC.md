@@ -30,7 +30,7 @@ Empty, apart from a docstring that points to `artifacts.py` and this spec.
 
 ### `server/ix/s1_paths.py` … `s6_heights.py`
 Each module has:
-- `FORMAT = 1`;
+- `FORMAT`: an integer, up with each change of what the step writes;
 - `LAWS`: the constants it reads, as `(module name, [names])` for `laws_digest`;
 - a `run(...)` function that builds its artifact from today's code and returns it **and** the live objects the next
   step needs. The next steps keep using gradeshapes' own `net` / `sysm` / `pcs` / `smp` objects, so behaviour is
@@ -38,33 +38,42 @@ Each module has:
 
 | module | wraps | run returns |
 |---|---|---|
-| s1_paths | the member loading loop up to `members = _gsh.one_road(...)`, then `gradeshapes.Net(members)` relations (`_relations`) | `(Paths, members)` |
-| s2_extent | `_gsh.find_systems(...)` and the region growth loop (the `while True`) | `(Extent, net, mine)` (mine: the systems this region solves) |
+| s1_paths | one interchange's members (what it names, what its structures are near, what its pieces are followed through; numbered by key) and the relations of its structures with them (`_relations`; never a ground road's pair with another). Also the cells' members' reading into the region (`load`, `members_of`) | `Paths` |
+| s2_extent | the region growth loop with `_gsh.find_interchanges(...)`; per interchange its `System` (seeds, joins, boundary, box) in the Paths' numbering | `find`: `(net, mine, loaded, members)` (mine: the interchanges this region solves); `run`: `Extent` |
 | s3_order | per sysm: `sysm["crossings"]` → `Crossing` (need from `gradeshapes.clearance_need(net, u, d, q)` as `_system` / `shape_problem` use it); sign from member kind; level: a longest-path layering of "d below u" over the system's members (0 for ground members); a cycle gives a `Finding("order_cycle")`, never an exception | `Order` |
-| s4_terrain | `ground = [self._ground_line(x["xy"]) for x in smp]` (the solve's own ground); trust = 1.0 where finite, else 0 | `(Terrain, ground)` |
+| s4_terrain | `ground = [self._ground_line(x["xy"]) for x in smp]` (the ground the solve reads: of a system already solved, the one its answer was solved on); trust = 1.0 where finite, else 0 | `(Terrain, ground)` |
 | s5_datum | `c["moves"]`, `sysm["dips"]`, the held decks (`net.m[i].held`) | `Datum` with `options=[Option(moves, None, None, "today's verdicts")]` |
-| s6_heights | `pcs = _gsh.pieces`, `smp = _gsh.sample`, `zs = _gsh.solve_shape(...)` with today's cache and wait logic **unchanged**; the region's `embankments` + `prof` assembly | per system `Heights`, and `Region` for the region |
+| s6_heights | `smp = _gsh.sample`, `zs = _gsh.solve_shape(...)` with today's cache and wait logic **unchanged**; the region's `embankments` + `prof` assembly | per system `Heights`, and `Region` for the region |
+
+One interchange is one scope, `system:<system_key>`, for all six steps, and one numbering of its members: its Paths'
+(by key). Every record of it that names a member (Extent, Order, Datum, Heights) uses it, so the same interchange is
+the same artifacts from every region that finds it.
 
 ### `server/ix/pipeline.py`
 `region(planner, home, hk) -> prof`: **exactly** what `_shape_region_calc(home, hk)` returns, built by calling
-s1…s6 in order.
+s1…s6 in order for each interchange the region finds.
 - When `cache.ROOT` is set, it puts every artifact.
-- Keys:
-  - s1 / s2: scope `region:<home>`, inputs the members' bytes;
-  - s3–s6: scope `system:<system_key>`, inputs the samples' xy bytes (as `_shape_sys_key` does).
-- **Reading back:** in this PR the pipeline never reads artifacts back to skip generation. It writes only. Reading
-  comes when a step is replaced.
+- Keys: scope `system:<system_key>`; inputs: the Paths' members' bytes (steps 1, 2), the system's key (3), the
+  samples' xy bytes (as `_shape_sys_key` does: steps 4-6). The parents' keys chain them: paths, extent, order,
+  terrain, datum, heights. The region's profiles (`Region`) are the one region-scoped artifact.
+- **Reading back:** the pipeline never reads artifacts back to skip generation. It writes only. Reading comes when a
+  step is replaced.
 - Logging: keep today's `log.warning("grading: SHAPES pid ...")` line and `log.error(... infeasible ...)` lines
-  verbatim. Added, at INFO, one line per step and one per region:
-  - `ix step: <step> key <key[:12]> pieces N crossings N <seconds> s ok @ <region>[ system <system key>]`, with
-    `failed: <why>` in place of `ok` when the step found nothing it could pass: no heights (the kernel's own words:
-    infeasible, timed out, not converged, its error) for `heights`, a level cycle for `order`. `paths` and `extent` run
-    once per region (pieces: members, resp. systems); `order`, `terrain`, `datum` and `heights` once per system (pieces,
-    crossings: the system's). `heights` counts the solve, which runs before the steps that read its ground.
-  - `ix region: <region> systems N <seconds> s, steps paths a s, extent b s, order c s, terrain d s, datum e s,
-    heights f s`: the totals of the region's step lines.
-- One system's steps are `pipeline.system()`, the one place that runs them: a lock round a system wraps that call.
-- `xproc.check_cancel()` runs at each round of the region growth and before each system, as the old body did.
+  verbatim. Added, at `LOG_LEVEL` (WARNING: what the eval builds' view.log keeps), one line per step per interchange
+  and one per region:
+  - `ix step: <step> key <key[:12]> pieces N crossings N <seconds> s ok @ <region> system <system key>`, with
+    `failed: <why>` in place of `ok` (and at WARNING whatever `LOG_LEVEL`) when the step found nothing it could pass:
+    no heights (the kernel's own words: infeasible, timed out, not converged, its error) for `heights`, a level cycle
+    for `order`. Pieces and crossings are the interchange's (`paths`: its members and their crossings). The seconds of
+    `paths` and `extent` are the interchange's share of finding it (`find_interchanges`: the relations of its members,
+    its merges, dips and record) and of making the artifact; `terrain` is the pieces' samples and the ground there;
+    `heights` is the solve.
+  - `ix region: <region> systems N <seconds> s, load a s, scan b s, steps paths c s, extent d s, order e s, terrain f s,
+    datum g s, heights h s`: the totals of the region's step lines, and the region's own: `load` (the cells' members
+    and `one_road`), `scan` (the net and the members that belong to no interchange).
+- One interchange's steps are `pipeline.system()`, the one place that runs them: a lock round an interchange wraps
+  that call.
+- `xproc.check_cancel()` runs at each round of the region growth and before each interchange, as the old body did.
 
 ### `server/grading.py`
 - `_Planner._shape_region_calc` becomes `return ix_pipeline.region(self, home, hk)`.

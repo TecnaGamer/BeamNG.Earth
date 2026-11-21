@@ -12,7 +12,7 @@ from . import artifacts, cache, s4_terrain
 
 log = logging.getLogger("earthd.grading")
 
-FORMAT = 1
+FORMAT = 2
 LAWS = (("gradeshapes", ["STEP_M", "DECK_MAX_GRADE", "DECK_AIR_M", "SOFT_M", "DIP_MARGIN_M", "RAMP_MAX_M", "W_END",
                          "W_HOLD", "W_DIP", "W_SMOOTH", "W_STIFF", "W_JOIN"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
@@ -24,15 +24,15 @@ def _solve_lock():
     return grading._SHAPE_SOLVE_LOCK
 
 
-def problem(planner, net, sysm):
-    """(pcs, smp, ck): the system's pieces, their samples and the solve cache's key."""
-    pcs = _gsh.pieces(net, sysm)
+def samples(planner, net, sysm, pcs):
+    """(smp, ck): the system's pieces' samples and the solve cache's key."""
     smp = _gsh.sample(net, pcs)
-    return pcs, smp, planner._shape_sys_key(net, sysm, smp)
+    return smp, planner._shape_sys_key(net, sysm, smp)
 
 
-def solve(planner, net, sysm, pcs, smp, ck, fixed_z):
-    """(ground, zs, diag) of one system: today's cache and wait logic, unchanged."""
+def solve(planner, net, sysm, pcs, smp, ck, fixed_z, ground):
+    """(ground, zs, diag) of one system: today's cache and wait logic, unchanged. ground: what the terrain step read
+    at the samples; an answer already in the cache brings its own."""
     done = planner.__dict__.setdefault("_shape_solved", {})    # (this grading's: its ground, its frame)
     solving = planner.__dict__.setdefault("_shape_solving", {})
     diag = {}
@@ -53,7 +53,6 @@ def solve(planner, net, sysm, pcs, smp, ck, fixed_z):
         ground, zs, diag = hit
     else:
         try:
-            ground = s4_terrain.ground_of(planner, smp)
             zs = _gsh.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diag)
             with _solve_lock():
                 if len(done) >= 4096:
@@ -79,13 +78,20 @@ def _plain(diag):
     return out
 
 
-def run(planner, net, sysm, pcs, smp, zs, diag, system, scope):
-    """The Heights artifact of one system's solve (solved False: no answer, the system left as it is)."""
+def run(planner, net, sysm, loc, pcs, smp, zs, diag, system, scope):
+    """The Heights artifact of one system's solve (solved False: no answer, the system left as it is), the members
+    numbered as the system's Paths' (loc)."""
     solved = zs is not None
+    lut = np.full(len(net.m), -1, np.int64)
+    for g, n in loc.items():
+        lut[g] = n
     pieces = []
     for pc, x, z in zip(pcs, smp, zs if solved else [None] * len(pcs)):
-        pieces.append(artifacts.Piece(pc["kind"], int(pc["main"]), np.asarray(x["xy"], np.float64),
-                                      np.asarray(x["d"], np.float64), np.asarray(x["mem"], np.int64),
+        mem = lut[np.asarray(x["mem"], np.int64)]
+        if (mem < 0).any():
+            raise AssertionError("a sample of the system's pieces is on a member its Paths do not hold")
+        pieces.append(artifacts.Piece(pc["kind"], int(loc[int(pc["main"])]), np.asarray(x["xy"], np.float64),
+                                      np.asarray(x["d"], np.float64), mem,
                                       np.asarray(x["ms"], np.float64),
                                       np.full(len(x["xy"]), np.nan) if z is None else np.asarray(z, np.float64)))
     return artifacts.Heights(artifacts.Meta(STEP, FORMAT, "", (), LAWS_DIGEST, scope), system, pieces, solved,

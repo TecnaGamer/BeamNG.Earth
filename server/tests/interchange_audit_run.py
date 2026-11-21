@@ -250,7 +250,7 @@ def capture(planner, home, solve=False, region_calc=None):
     function that plans the region (a caller that wrapped the planner's own). Returns (net, systems, audits, namer, trace)."""
     held = {}
     per = {}
-    real_find, real_solve = gs.find_systems, gs.solve_shape
+    real_find, real_solve = gs.find_interchanges, gs.solve_shape
     loaded = set()
     shape_members = planner._shape_members
 
@@ -270,14 +270,15 @@ def capture(planner, home, solve=False, region_calc=None):
                 return True
         return False
 
-    def find(members, reader=None, trace=None):
-        tr = {}
-        net, systems = real_find(members, reader, tr)
+    def find(members, reader=None, trace=None, want=None):
+        tr = {}                 # (every interchange: want is not asked, the audit reads those round the region too)
+        net, found = real_find(members, reader, tr)
+        systems = [x.sysm for x in found]
         held.update(net=net, systems=systems, trace=tr, meta=PlannerMeta(planner, net, loaded),
                     namer=None, rels={})
         held["namer"] = ia.Namer(net, frame_ll(planner.frame), held["meta"], at_edge, held["meta"].endinfo)
         per.clear()
-        return net, systems
+        return net, found
 
     def audit(net, sysm, pcs, smp, ground, fixed_z, diagnostics=None):
         held["fixed"] = fixed_z
@@ -289,7 +290,7 @@ def capture(planner, home, solve=False, region_calc=None):
             per[n][3]["stats"]["kernel"] = dict(solved=got is not None, status=diag.get("status"),
                                                  qp_error=diag.get("qp_error"))
         return None
-    with mock.patch.object(gs, "find_systems", find), mock.patch.object(gs, "solve_shape", audit):
+    with mock.patch.object(gs, "find_interchanges", find), mock.patch.object(gs, "solve_shape", audit):
         (region_calc or planner._shape_region_calc)(home, str(home))
     net, systems = held["net"], held["systems"]
     # (the systems round the region the planner did not solve: the same steps, on the same ground and fixed heights)

@@ -31,16 +31,16 @@ class DeckUnderRoadIdTest(unittest.TestCase):
         import interchanges
         from interchange_audit_run import planner_of
         cls.found = []
-        real = gs.find_systems
+        real = gs.find_interchanges
 
-        def spy(members, mk):
-            net, systems = real(members, mk)
-            cls.found.append((net, systems))
-            return net, systems
+        def spy(members, mk, trace=None, want=None):
+            net, found = real(members, mk, trace, want)
+            cls.found.append((net, [x.sysm for x in found]))
+            return net, found
         rep = interchanges.load("popoli_ss17_underpass")
         with unittest.mock.patch.object(revisit, "ON", False), \
                 unittest.mock.patch.object(grading, "SHAPES_ON", True), \
-                unittest.mock.patch.object(gs, "find_systems", spy):
+                unittest.mock.patch.object(gs, "find_interchanges", spy):
             cls.pl = planner_of(rep)
             cls.home = mapcells.cell_of(*AT)
             cls.pl._shape_region(cls.home)

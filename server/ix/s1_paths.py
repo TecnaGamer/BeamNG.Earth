@@ -1,13 +1,15 @@
-"""Step 1 (SPEC.md): the region's members after one_road, and how they meet and cross (gradeshapes' relations), as
-the Paths artifact. The live objects stay gradeshapes' own: the later steps keep using them, so behaviour is
-byte-identical."""
+"""Step 1 (SPEC.md): one interchange's members and how they meet and cross (gradeshapes' relations), as the Paths
+artifact. Its members are its structures, the roads and tracks on the ground they reach, and what its pieces are
+followed through: the same from every region that finds it, numbered by their keys, so the member numbers of every
+later artifact of the interchange are these. The live objects stay gradeshapes' own: the later steps keep using
+them, so behaviour is byte-identical. Also here: reading the map cells' members into the region (load, members_of)."""
 import numpy as np
 
 import gradeshapes as _gsh
 
 from . import artifacts, cache
 
-FORMAT = 1
+FORMAT = 3
 LAWS = (("gradeshapes", ["JOIN_M", "CROSS_END_M", "MERGE_DEG"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 1
@@ -43,16 +45,43 @@ def member_of(m):
                             None if m.nodes is None else tuple(sorted(str(n) for n in m.nodes)))
 
 
-def run(planner, net, scope):
-    """The Paths artifact of net's members and their relations (each pair once, from its lower index's side)."""
+def local_of(net, sysm, pcs):
+    """{member of net: its number in the interchange's Paths}: every member the interchange names (its seeds, crossings,
+    joins, ends and dips), what its structures are near (their relations: the ground roads they reach) and what its
+    pieces are followed through; numbered by key, then by place in net."""
+    names = set(int(i) for i in sysm["seeds"])
+    for c in sysm["crossings"]:
+        names |= {int(c["u"]), int(c["d"])}
+    for a, _sa, b, _sb in list(sysm["joins"]) + list(sysm["ends"]):
+        names |= {int(a), int(b)}
+    names |= {int(d) for d, _a, _b in sysm["dips"]}
+    for pc in pcs:
+        names |= {int(j) for j, _s0, _s1 in pc["segs"]}
+    for i in sorted(names):
+        if net.m[i].kind in _gsh.STRUCTURES:
+            names |= {int(j) for j, *_r in _gsh._relations(net, i)}
+    return {g: n for n, g in enumerate(sorted(names, key=lambda i: (str(net.m[i].key), i)))}
+
+
+def run(net, loc, scope):
+    """The Paths artifact of one interchange: its members (loc, from local_of) and the relations of its structures with
+    them. Never a ground road's with another's: those are a ground road's own meeting, not what an interchange is made
+    of, and most of the pairs of a city. Each pair once, the lower member first; the lists ordered by member and
+    position."""
+    members = sorted(loc, key=loc.get)
     joins, crossings = [], []
-    for i in range(len(net.m)):
+    for i in members:
+        if net.m[i].kind not in _gsh.STRUCTURES:
+            continue
         for j, kind, si, sj, q in _gsh._relations(net, i):
-            if j < i:
-                continue            # (a pair's relations are made from both members' sides; kept from the lower's)
+            if j not in loc or (loc[j] < loc[i] and net.m[j].kind in _gsh.STRUCTURES):
+                continue            # (two structures' pair is kept from the lower's side)
+            a, sa, b, sb = (loc[i], si, loc[j], sj) if loc[i] < loc[j] else (loc[j], sj, loc[i], si)
             if kind == "join":
-                joins.append(artifacts.Join(i, float(si), j, float(sj)))
+                joins.append(artifacts.Join(a, float(sa), b, float(sb)))
             else:
-                crossings.append(artifacts.PlanCrossing(i, float(si), j, float(sj), np.asarray(q, np.float64)))
+                crossings.append(artifacts.PlanCrossing(a, float(sa), b, float(sb), np.asarray(q, np.float64)))
+    joins.sort(key=lambda r_: (r_.a, r_.b, r_.sa, r_.sb))
+    crossings.sort(key=lambda r_: (r_.a, r_.b, r_.sa, r_.sb))
     return artifacts.Paths(artifacts.Meta(STEP, FORMAT, "", (), LAWS_DIGEST, scope),
-                           [member_of(m) for m in net.m], joins, crossings)
+                           [member_of(net.m[i]) for i in members], joins, crossings)

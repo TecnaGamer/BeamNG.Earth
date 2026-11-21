@@ -1,4 +1,4 @@
-"""Step 2 (SPEC.md): the region's systems (gradeshapes.find_systems) and the region growth loop, as the Extent
+"""Step 2 (SPEC.md): one interchange (gradeshapes.find_interchanges, found in the region growth loop) as the Extent
 artifact. make_fixed is the planner's fixed_z maker (it needs the planner: the rails' tops, the ground lines)."""
 import time
 
@@ -9,7 +9,7 @@ import gradeshapes as _gsh
 
 from . import artifacts, cache, s1_paths
 
-FORMAT = 1
+FORMAT = 2
 LAWS = (("gradeshapes", ["TUNNEL_MAX_M", "CONNECT_M"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 2
@@ -46,20 +46,30 @@ def make_fixed(planner, net):
     return fixed_z
 
 
-def system_of(net, sysm):
-    """One system as data: its key, seeds, joins, boundary (its ends on the roads on the ground) and box."""
+def run(net, sysm, loc, system, scope):
+    """The Extent artifact of one interchange: its key, seeds, joins, boundary (its ends on the roads on the ground) and
+    box, its members numbered as its Paths' (loc). No home: an interchange is the same from every region."""
     pts = np.concatenate([net.lines[i] for i in sysm["seeds"]])
-    return artifacts.System(_gsh.system_key(net, sysm), tuple(int(i) for i in sysm["seeds"]),
-                            tuple(artifacts.Join(int(a), float(sa), int(b), float(sb)) for a, sa, b, sb in sysm["joins"]),
-                            tuple(artifacts.Boundary(int(a), float(sa), int(b), float(sb))
-                                  for a, sa, b, sb in sysm["ends"]),
-                            tuple(float(v) for v in np.r_[pts.min(0), pts.max(0)]))
+    one = artifacts.System(system, tuple(loc[int(i)] for i in sysm["seeds"]),
+                           tuple(artifacts.Join(loc[int(a)], float(sa), loc[int(b)], float(sb))
+                                 for a, sa, b, sb in sysm["joins"]),
+                           tuple(artifacts.Boundary(loc[int(a)], float(sa), loc[int(b)], float(sb))
+                                 for a, sa, b, sb in sysm["ends"]),
+                           tuple(float(v) for v in np.r_[pts.min(0), pts.max(0)]))
+    return artifacts.Extent(artifacts.Meta(STEP, FORMAT, "", (), LAWS_DIGEST, scope), "", [one])
 
 
-def run(planner, hk, h_lo, h_hi, box_lo, box_hi, cap_lo, cap_hi, clock=None):
-    """find_systems and the region growth loop, as _shape_region_calc ran them: (Extent, net, mine, loaded, members).
-    mine is the systems this region solves (those reaching its home box), in solve order. clock (a dict): the seconds
-    of the members' reading (step 1) and of find_systems (step 2) are added to its "paths" and "extent"."""
+def _reaches(net, seeds, h_lo, h_hi):
+    """Whether an interchange's seeds reach the home box h_lo..h_hi."""
+    pts = np.concatenate([net.lines[i] for i in seeds])
+    return not ((pts.max(0) < h_lo).any() or (pts.min(0) > h_hi).any())
+
+
+def find(planner, hk, h_lo, h_hi, box_lo, box_hi, cap_lo, cap_hi, clock=None):
+    """The region growth loop and gradeshapes' find_interchanges, as _shape_region_calc ran find_systems:
+    (net, mine, loaded, members). mine is the interchanges this region solves (those reaching its home box), in solve
+    order. clock (a dict): the seconds of the cells' members' reading and one_road are added to its "load", those of
+    finding the interchanges to its "find"."""
     import xproc
     clock = {} if clock is None else clock
     byk, loaded = {}, set()
@@ -69,17 +79,19 @@ def run(planner, hk, h_lo, h_hi, box_lo, box_hi, cap_lo, cap_hi, clock=None):
         s1_paths.load(planner, box_lo, box_hi, byk, loaded)
         members = s1_paths.members_of(byk, box_lo, box_hi)
         t1 = time.perf_counter()
-        net, systems = _gsh.find_systems(members, lambda net_: (planner._ground_line, make_fixed(planner, net_)))
-        clock["paths"] = clock.get("paths", 0.0) + t1 - t0
-        clock["extent"] = clock.get("extent", 0.0) + time.perf_counter() - t1
+        net, found = _gsh.find_interchanges(members, lambda net_: (planner._ground_line, make_fixed(planner, net_)),
+                                            want=lambda net_, seeds: _reaches(net_, seeds, h_lo, h_hi))
+        clock["load"] = clock.get("load", 0.0) + t1 - t0
+        clock["find"] = clock.get("find", 0.0) + time.perf_counter() - t1
         mine = []
         n_lo, n_hi = box_lo.copy(), box_hi.copy()
-        for sysm in systems:
+        for ix in found:
+            sysm = ix.sysm
             pts = np.concatenate([net.lines[i] for i in sysm["seeds"]])
             b_lo, b_hi = pts.min(0), pts.max(0)
             if (b_hi < h_lo).any() or (b_lo > h_hi).any():
                 continue
-            mine.append(sysm)
+            mine.append(ix)
             if (b_lo < box_lo + 100.0).any() or (b_hi > box_hi - 100.0).any():     # (open: follow it)
                 n_lo = np.minimum(n_lo, b_lo - 300.0)
                 n_hi = np.maximum(n_hi, b_hi + 300.0)
@@ -87,6 +99,4 @@ def run(planner, hk, h_lo, h_hi, box_lo, box_hi, cap_lo, cap_hi, clock=None):
         if (n_lo >= box_lo).all() and (n_hi <= box_hi).all():
             break
         box_lo, box_hi = n_lo, n_hi
-    extent = artifacts.Extent(artifacts.Meta(STEP, FORMAT, "", (), LAWS_DIGEST, "region:%s" % hk), str(hk),
-                              [system_of(net, sysm) for sysm in mine])
-    return extent, net, mine, loaded, members
+    return net, mine, loaded, members
