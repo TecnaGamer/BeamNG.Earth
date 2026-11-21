@@ -75,6 +75,10 @@ PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARE
               "BNE_BATTER", "BNE_ROADSHAPE", "BNE_SIDEWALK_V2", "BNE_ROADSURF_V3")
 # Experimental switches the planning does not read that are still NOT on the list, and why (each keeps its keys)
 NOT_LISTED = {
+    "BNE_STANDALONE_PATHS": "changes path surfaces and vegetation cells",
+    "BNE_PEDESTRIAN_LIGHTING": "selects direct-source lighting road cells and changes generated props",
+    "BNE_HALF_STREET_LAMPS": "changes generated lamp assemblies and distant lamp tiles",
+    "BNE_STRICT_LIGHTING": "selects direct-source lighting road cells",
     "BNE_SURFACE_V2": "road tiles' surface overlays and marking lift only (roadmesh / roadwear, revamp v2 P1c); comes with the Revamped roads setting, whose other switches the plans read, so it stays keyed with it",
     "BNE_GEN_GROUND": "its gated code (the base photo with other arguments: genground.render, blockworker.base_photo, "
                       "earthd.Server._base_in) stores into the server's own state and drives the photo pipeline whose "

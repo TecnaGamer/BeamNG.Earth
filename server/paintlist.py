@@ -497,6 +497,19 @@ def _build_roads(s, g, omit_v3=False):
         copies = roadsmod.copies_of(feats_list)
         placement = roadsmod.placement_context(feats_list, urban_fn, widths)
 
+        import standalonepaths
+        for _, xy, width, kind in standalonepaths.parts(frame, g, feats_list, urban_fn, widths):
+            v.append(xy)
+            hp.append(np.full(len(xy), np.nan))
+            ring_off.append(ring_off[-1] + len(xy))
+            ring_kind.append(kinds.index(kind))
+            ring_taper.append(False)
+            ring_ghost.append(False)
+            feat_ring.append(len(ring_kind))
+            feat_box.append([xy[:, 0].min(), xy[:, 0].max(), xy[:, 1].min(), xy[:, 1].max()])
+            feat_m.append(width / 2)
+            feat_hwm.append(width / 2)
+
         def taper_of(f):
             return roadsmod.road_tapers(f, urban_fn, widths)
         for feats in feats_list:

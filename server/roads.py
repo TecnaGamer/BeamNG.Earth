@@ -111,7 +111,7 @@ GRAVEL = {"gravel", "fine_gravel", "compacted", "pebblestone", "wbm", "laterite"
 # ... and the values that do mean "no hard surface": an unrecognised one is not one of these (the class decides)
 UNPAVED = {"unpaved", "ground", "dirt", "earth", "mud", "grass", "grass_paver", "sand", "soil",
            # the rock family: a rough, unpaved surface, never a marked asphalt street (gridmap v2's Rock is a
-           # TerrainMaterial — a heightfield shader, not a surface a decal can carry: 2026-10-22)
+           # TerrainMaterial â€” a heightfield shader, not a surface a decal can carry: 2026-10-22)
            "rock", "rocky", "bedrock",
            # more of OSM's recognised unpaved values, which an unrecognised value must not outrank
            "clay", "shells", "woodchips"}
@@ -291,7 +291,7 @@ WALK_STEP_M = 1.0               # m the ground under a sidewalk may lie off the 
                                 # a drop is there and the sidewalk stops (it was draped up a wall, Munich's McGraw-Graben)
 NEAR_M = 40.0                   # roads this far outside the tile still cut its sidewalks / lines
 # Carriageway = driving width + parking lanes on city streets or paved edge strips on rural roads
-# (docs/research/2026-10-11-official-road-study.md §2: rural paved surface = AI width + 2-2.5 m;
+# (docs/research/2026-10-11-official-road-study.md Â§2: rural paved surface = AI width + 2-2.5 m;
 # West Coast USA's plain streets 12.5 m for 8 m of driving: ~2.3 m of parking each side). A width
 # rule, where Overture has one, is the carriageway already.
 PARKING_M = 2.3
@@ -1957,7 +1957,7 @@ def surface_kind(cls, surface):
 
     The value's base token decides: OSM writes the detail after a colon (`cobblestone:flattened`,
     `paving_stones:30`, `sett:pattern`) and more than one value after a semicolon, and matched whole they all fell
-    through to "dirt", which is drawn with gravel's own material (LOOK) and painted DIRT: İzmir's sett streets read
+    through to "dirt", which is drawn with gravel's own material (LOOK) and painted DIRT: Ä°zmir's sett streets read
     as gravel tracks (2026-10-22). Interlocking pavers have their own names in the map. A value not understood at
     all is the class's own surface, not dirt: an unknown tag must not turn a residential street into a track.
     Generic "unpaved" on a road cars use is a gravel road far more often than a dirt track (the mapped unpaved roads
@@ -2468,9 +2468,9 @@ TAPER_M = (15.0, 90.0)          # m: a taper's length at the least and most ...
 TAPER_SHARE = 0.45              # ... and at most this share of the road's length (a taper at each end)
 TAPER_MIN_DW = 0.4              # m of width change that tapers
 TAPER_MAX_TURN = 35.0           # degrees between two roads' directions at a joint: one going on as the other
-# Speed tapers (the road revamp's R1, 2026-11-16; plan §2.3): a taper as long as the standards ask at the road's design
-# speed (earthfast tapers::speed_taper_m: MUTCD's W·V·min(V/155, 0.62), at least the length that keeps the quintic
-# shape's lateral acceleration at 0.5 m/s², 20-400 m; a 3.6 m lane 54 m at 30 km/h, 125 m at 70, 268 m at 120 km/h,
+# Speed tapers (the road revamp's R1, 2026-11-16; plan Â§2.3): a taper as long as the standards ask at the road's design
+# speed (earthfast tapers::speed_taper_m: MUTCD's WÂ·VÂ·min(V/155, 0.62), at least the length that keeps the quintic
+# shape's lateral acceleration at 0.5 m/sÂ˛, 20-400 m; a 3.6 m lane 54 m at 30 km/h, 125 m at 70, 268 m at 120 km/h,
 # against 43 m at any speed before), its width change on its own side (half at a joint of two roads, all of it at a
 # deck's end), TAPER_SHARE of the road at most; the distance measured along the road, not in a straight line from the
 # joint, and the width eased by the quintic smootherstep (curvature continuous at both ends); the graded core widened
@@ -4128,7 +4128,7 @@ def entrance_flares(feats, specs, tapers=None):
     return out
 
 
-SE_TOWN_MAX_KMH = 70.0      # Trafikförordningen 3 kap. 17 §: 50 km/h in a built-up area, 70 outside; so a road of 70 or
+SE_TOWN_MAX_KMH = 70.0      # TrafikfĂ¶rordningen 3 kap. 17 Â§: 50 km/h in a built-up area, 70 outside; so a road of 70 or
                             # more is no town street, whatever stands beside it (a 100 km/h primary read as town)
 # Rural roads with no surface in the map: gravel where the tagged ones mostly are. km paved / unpaved of the tagged ones
 # in seven samples of 8 km round, Boras to Norrbotten, OpenStreetMap through Overture, 2026-11-02: unclassified 97 / 748,
@@ -4467,7 +4467,7 @@ def _bridge_specs(feats, want="bridge", ground_fallback=None):
     d = _road_rules().bridge_specs(inp["geo"], inp["cols"], inp["built"], has, gmed, gdir, _flow_fn(feats, inp),
                                    _spec_prm())
     out = _specs_of(d, inp, _marking_states(feats))
-    import germanroads          # (Germany's surveyed widths on decks and in tunnels too: a 6.5 m Kreisstraße's
+    import germanroads          # (Germany's surveyed widths on decks and in tunnels too: a 6.5 m KreisstraĂźe's
     return germanroads.adjust_specs(feats, out)     # bridge stayed at its class's 8 m, stepping at both ends)
 
 
@@ -5261,7 +5261,7 @@ DECK_CURVE_KMIN = 260.0 # m per unit grade change at least: under 2 % of grade c
 DECK_ROAD_HALF = 8.0    # m either side of a crossing road's centreline the clearance is held
 DECK_CURVE_STEP = 1.0   # m, the profile's working grid
 DECK_DESIGN_GRADE = 0.05  # a deck climbs to (and leaves) what it must clear at this grade (DECK_MAX_GRADE at most)
-# Deck vertical limits by speed (the road revamp's R1e, 2026-11-17; plan §2.6): a deck's crest curve as long as its
+# Deck vertical limits by speed (the road revamp's R1e, 2026-11-17; plan Â§2.6): a deck's crest curve as long as its
 # road's design speed asks (AASHTO's crest K: R = 100 K, 1,050 m at 60 km/h, 2,530 m at 80, 9,390 m at 120: earthfast
 # deck_crest_radii, the design speed as the speed tapers take it), then half that, before today's DECK_CURVE_K
 # ladder (1,500 m down to 100 m): the first of the longer curves that holds the clearance as today's best does (within
@@ -6136,7 +6136,7 @@ MAJOR_LOW_H = 5.0       # m: ... on a major road (CONCRETE_WALL_CLASSES: road tu
 # TUNNEL_ROAD_REACH_M of its ends is covered, its carriageway and TUNNEL_ROAD_CLEAR_M past it (along the tunnel: / the
 # sine of the crossing angle, at least TUNNEL_ROAD_MIN_SIN). On lidar each carriageway of a divided motorway over an
 # underpass is its own embankment: the arch under one was 8 m long under 13 m of lanes, its mouths and terrain holes
-# in them (GitHub #450, the A-7 near Málaga).
+# in them (GitHub #450, the A-7 near MĂˇlaga).
 TUNNEL_ROAD_CLEAR_M = 2.0
 TUNNEL_ROAD_MIN_SIN = 0.35
 TUNNEL_ROAD_REACH_M = 15.0
@@ -6844,7 +6844,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
         plan = None                     # (the map's lanes do not widen it: as the count's, too narrow a road has none)
     if plan is not None:
         # the map's lanes: each line where its lanes meet (OpenStreetMap lanes:forward / backward / both_ways,
-        # overtaking, change:lanes; research §5)
+        # overtaking, change:lanes; research Â§5)
         pat = st.lane_motorway if motorway else (st.lane_urban if urban else st.lane_rural)
         cpat = st.centre_urban if urban else st.centre_rural
         d = (st.double_gap + lw_) / 2
@@ -6870,7 +6870,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
             elif role == "twltl":           # solid on the through side, broken on the turn lane's (MUTCD 3B.05)
                 mark("centre", st.centre, lw_, at(off + how * d))
                 mark("centre", st.centre, lw_, at(off - how * d), cpat)
-            elif how == "double" or (sweden and lanes >= 4 and how is None):     # (TSFS 2010:171 2 kap. 17 §)
+            elif how == "double" or (sweden and lanes >= 4 and how is None):     # (TSFS 2010:171 2 kap. 17 Â§)
                 if st.warning and w < markings.WARNING_BELOW_M:
                     mark("centre", st.centre, lw_, at(off), st.warning)
                 elif st.centre == "line_yellow" or sweden or st is markings.STYLES.get("GB"):
@@ -6928,7 +6928,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
             else st.edge
         epat = None if wide or barrier else st.edge_pattern
         travel_left = 1 if getattr(spec, "dir", 0) >= 0 else -1      # (dir < 0: one way against the line)
-        # (VGU 2024 table 12.5, mötesfri väg: left 0.30 m, right 0.20 m: a 2+1 road's carriageway, by its one or two lanes)
+        # (VGU 2024 table 12.5, mĂ¶tesfri vĂ¤g: left 0.30 m, right 0.20 m: a 2+1 road's carriageway, by its one or two lanes)
         pair = sweden and spec.oneway and not motorway and not urban and (spec.lanes or 3) <= 2
         for side in (1, -1):
             inset = max(EDGE_LINE["inset"], edge_margin(spec, side)) if highway_shoulders(spec) else EDGE_LINE["inset"]
@@ -7854,7 +7854,7 @@ DECK_SPAN_RATIO = 22.0  # a deck is its main span / this deep (girder bridges ru
 
 
 # Level spacing from real clearance and deck depth (the road revamp's R1, 2026-11-16, decision D10 "real-world
-# spacing"; plan §2.6): a deck's road over the road under it by that road's clearance C (motorway / trunk 5.0 m, other
+# spacing"; plan Â§2.6): a deck's road over the road under it by that road's clearance C (motorway / trunk 5.0 m, other
 # roads 4.7, service / track 4.0, foot and cycle ways 2.7, a railway 6.5: electrified or unknown) + the deck's depth
 # D (0.045 of its main span, 0.7-4.0 m: a precast girder's ratio; the mesh draws the same depth) + LEVEL_MARGIN_M, not
 # 6.0 m of headroom + 0.15 m + a depth of 0.9-2.2 m (8.35 m a level with the full depth): a stack's levels ~1-2 m
@@ -9737,7 +9737,7 @@ def tunnel_sections(s, g, open_cover=None, full_cover=None, min_m=SECTION_MIN_M,
 
 def _short_piece(s, gc, f, k, oc, fc, pinned):
     """_shallow_full_low, a pinned piece (a part of a tunnel network: pinned) shorter than the shortest section with
-    all of it under the hill covered: a stretch of the tube, not an open road on the hill's top (Tromsø's roundabouts
+    all of it under the hill covered: a stretch of the tube, not an open road on the hill's top (TromsĂ¸'s roundabouts
     inside the mountain come as 2-30 m pieces). Pure."""
     cv = gc - f
     if pinned and len(k) and not k.any() and (cv >= oc).all():
@@ -9985,7 +9985,7 @@ class TunnelProfiles(BridgeProfiles):
         where the tunnel goes on inside the hill: a joint with another part of it, or a closed end
         (earthfast.tunnel_chain_nodes over the whole network, on the raw ground alone, so every process gets the
         same). A part's ends at the ground were joints too: a tunnel split anywhere climbed out of the hill to the
-        split (GitHub #1160 #1161; Tromsø's roundabouts inside the mountain drawn on its top, GitHub #490 too). Also
+        split (GitHub #1160 #1161; TromsĂ¸'s roundabouts inside the mountain drawn on its top, GitHub #490 too). Also
         kept as geodetic heights per part (part_pins: the grading's). Nothing for a part alone (CHAIN_PINS off: none)."""
         keys = [k for k in sorted(comp) if len(pool[k][1]) >= 2]
         out = {}
@@ -9996,7 +9996,7 @@ class TunnelProfiles(BridgeProfiles):
         import fast
         fast.require(248, "tunnel_chain_nodes")
         gfn = self._raw_ground if self.raw is not None else self._ground
-        nk = _EndJoin(CHAIN_JOIN_M)     # (wider than the chain's own 0.5 m: Tromsø's roundabout pieces end ~1 m apart)
+        nk = _EndJoin(CHAIN_JOIN_M)     # (wider than the chain's own 0.5 m: TromsĂ¸'s roundabout pieces end ~1 m apart)
         ea, eb, starts, ss, gs, ends_xy = [], [], [0], [], [], {}
         sls, srs = [], []
         for k in keys:
@@ -11086,7 +11086,7 @@ HOLE_JOIN_M = 3.0           # m: a road with an end this near a tunnel part's en
 def spare_carriageways(mask, parts, cells, frame, cx, cy, square):
     """mask with the hole samples inside the carriageway of a ground road that is not the tunnel's (another feature, not
     an approach joined at a mouth) filled again: a portal's opening reaching into a road beside or over it left a hole in
-    its lanes (GitHub #450, the A-7 near Málaga, a 2 m drop at the edge of a carriageway beside an underpass's mouth)."""
+    its lanes (GitHub #450, the A-7 near MĂˇlaga, a 2 m drop at the edge of a carriageway beside an underpass's mouth)."""
     import fast
     own = {str(p[0]).split("#")[0] for p in parts}
     ends = np.array([np.asarray(p[2], np.float64)[k, :2] for p in parts for k in (0, -1) if len(p[2])], np.float64)
@@ -11935,7 +11935,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
 
 TWIN_SHARE = 0.8        # a tunnel part beside another for this share of its length (their tubes overlapping) ...
 TWIN_DZ_M = 2.0         # ... with its floor within this of the other's: twin tubes, one tube round both (GitHub #84:
-                        # the Route des Tamarins' two carriageways 9.5 m apart on Réunion, each an 11 m road in its own
+                        # the Route des Tamarins' two carriageways 9.5 m apart on RĂ©union, each an 11 m road in its own
                         # tube, the tubes through each other's walls and portals)
 TWIN_STEP_M = 10.0
 TWIN_JOIN_M = 1.0       # m: parts with ends this near, heading away from there opposite ways, are one tube going on
@@ -12302,7 +12302,7 @@ DECK_CONTEXT_M = 24.0   # m around a tile its bridges' decks are passed as conte
 
 def _deck_look(spec):
     """A bridge deck's look: the concrete of a `surface=concrete` street (it stays concrete over the bridge) or of a
-    motorway's or trunk road's (DECK_CONCRETE_CLASSES), else asphalt — and asphalt for rock/grass surfaces, whose ground mask cannot be painted on a deck at all."""
+    motorway's or trunk road's (DECK_CONCRETE_CLASSES), else asphalt â€” and asphalt for rock/grass surfaces, whose ground mask cannot be painted on a deck at all."""
     if not terrain_surface(spec) and spec.kind == "paved" and spec.surf == "concrete":
         return CONCRETE
     if DECK_CONCRETE_ON and spec.kind == "paved" and spec.cls in DECK_CONCRETE_CLASSES:
@@ -13929,7 +13929,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
                sign_obstacles=None, roadside_jobs=None, towns=None, mapped_poles=None, de_on=False, de_routes=(),
-               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, sheet_marks=None, v3=None):
+               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, sheet_marks=None, v3=None, lamp_coverage=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -14071,7 +14071,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 for c in split(densify(simplify(piece))):
                     if len(c) >= 2:
                         cover_out.append(_chunk(look_of(spec), spec.width, c))
-    # no smooth ribbon over rough ground — but only where the ground layer will paint it (--surface on); with the
+    # no smooth ribbon over rough ground â€” but only where the ground layer will paint it (--surface on); with the
     # surface pass off there is no ROCK/GRASS mask, and the road would otherwise vanish entirely
     rough = (lambda sp: terrain_paint and terrain_surface(sp) is not None)     # noqa: E731
     strip_ends = _strip_open_ends(roads, rings, seen, near, rough) if DIRT_STRIPS else {}
@@ -14686,15 +14686,22 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         rail_beds = railxing.rail_obstacles(frame, cells, own_box)
         if sign_obstacles is not None:
             sign_obstacles.ground = ground
+        import lightingranges
+        spans = {}
+        if lamp_coverage is not None or furniture.strict_lighting():
+            for fid, (f, i, _) in seen.items():
+                span = lightingranges.ranges(f, i, frame)
+                if span is not None:
+                    spans[fid] = span
         props.extend(furniture.place(roads, walks, own_box, wires=wires, town=bool(town), left_hand=left_hand,
                                      decks=[(p, h) for p, h, _depth in traffic_decks], clearance=clearance,
                                      signals=signals, buried=buried, region=lamp_region, country=country,
                                      priority=priority, ground=ground, development=development,
                                      pole_profile=pole_profile, pole_frame=frame, sign_obstacles=sign_obstacles,
-                                     defer_gore=detailed_signs, mapped_poles=mapped_poles, mapped_lamps=mapped_lamps,
+                                     defer_gore=detailed_signs, lamp_coverage=lamp_coverage, light_ranges=spans, mapped_poles=mapped_poles, mapped_lamps=mapped_lamps,
                                      obstacles=rail_beds,
                                      de_on=de_on, de_ctx=de_ctx, de_ctl=de_ctl,
-                                     lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
+                                     lighting={fid: furniture.way_lighting(f, i, direct=lamp_coverage is not None)
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
     if props is not None and walks is not None and isl and roundabouts.enabled():     # what grows on an island's planting
         def _island_ground(xy):

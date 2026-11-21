@@ -83,8 +83,14 @@ def tile_props(frame, tx, ty, md, elev, lamps=None):
     bld_rings = _Once(lambda: _building_rings(frame, blds))
     placed, skip, boxes = [], set(), []
     mapped = [] if lamps is not None else None
+    import pedestrianlighting
+    enhanced = pedestrianlighting.enabled()
+    if mapped is not None and enhanced:
+        nearby = roads.cells_of_tile(frame, tx, ty, margin=LAMP_NEAR_M)
+        for feats, rows in _layer(md, nearby, "infrastructure"):
+            _street_lamps(frame, feats, rows, (x0-LAMP_NEAR_M, y0-LAMP_NEAR_M, x1+LAMP_NEAR_M, y1+LAMP_NEAR_M), mapped)
     for feats, rows in infra:
-        if mapped is not None:
+        if mapped is not None and not enhanced:
             _street_lamps(frame, feats, rows, (x0 - LAMP_NEAR_M, y0 - LAMP_NEAR_M, x1 + LAMP_NEAR_M, y1 + LAMP_NEAR_M),
                           mapped)
         _towers(frame, feats, rows, (x0, y0, x1, y1), placed)
@@ -139,6 +145,8 @@ MAPPED_LAMP_MODELS = {
 }
 # lamp_road_yaw's kinds: an arm along the model's +x, along its -y (the straight mast), a double arm across the road
 LAMP_ARM_KIND = {"streetlight_straight_mast": 1, "streetlight_double_arm": 2}
+LAMP_EDGE_PRIORITY_M = 3.0
+LAMP_ADJACENT_ROAD_M = 10.0  # maximum pole to carriageway centreline for roadside path priority
 LAMP_ROAD_M = 80.0
 LAMP_NEAR_M = 40.0              # m round the tile whose lamps also tell its roads they have mapped ones (furniture.place)
 LAMP_ROAD_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary", "residential", "unclassified", "service",
@@ -214,22 +222,41 @@ def _aim_lamps(lamps, lines_fn):
     aim = [p for p in lamps if p["group"] != "streetlight_high_mast"]
     if not aim:
         return
-    line_pts, off, level = lines_fn()
-    if len(off) < 2:
+    surfaces, carriageways, edges = lines_fn()
+    if len(surfaces[1]) < 2:
         return
     import fast
     fast.require(199, "mapped street lamps")
-    yaw = fast._ef.lamp_road_yaw(np.array([[p["x"], p["y"]] for p in aim], np.float64),
-                                 np.array([p["layer"] for p in aim], np.float64),
-                                 np.array([p["arm"] for p in aim], np.int64), line_pts, off, level, LAMP_ROAD_M)
+    xy = np.array([[p["x"], p["y"]] for p in aim], np.float64)
+    layers = np.array([p["layer"] for p in aim], np.float64)
+    arms = np.array([p["arm"] for p in aim], np.int64)
+    yaw = fast._ef.lamp_road_yaw(xy, layers, arms, *surfaces, LAMP_ROAD_M)
+    if edges and len(carriageways[1]) > 1:
+        roadside = fast._ef.lamp_road_yaw(xy, layers, arms, *carriageways, LAMP_ADJACENT_ROAD_M)
+        # The common case already faces the street. Only ambiguous heads
+        # need the width-group distance checks.
+        todo = np.flatnonzero(np.isfinite(roadside) & (yaw != roadside))
+        for width, lines in edges.items():
+            if not len(todo):
+                break
+            close = np.isfinite(fast._ef.lamp_road_yaw(
+                xy[todo], layers[todo], arms[todo], *lines, LAMP_EDGE_PRIORITY_M + width / 2))
+            yaw[todo[close]] = roadside[todo[close]]
+            todo = todo[~close]
     for p, y in zip(aim, yaw.tolist()):
         if math.isfinite(y):
             p["yaw"] = y
 
 
 def _lamp_roads(frame, layers, near=None):
-    """(points (m, 2), offsets (k + 1), layer (k,) NaN: none) of the drivable centrelines (no footways, no tunnels)
-    whose boxes meet near (x0, y0, x1, y1; None: all), in a stable order (their ids, then their ends)."""
+    """Pack nearby surfaces, carriageways and width groups for layer-aware lamp aiming."""
+    import pedestrianlighting
+    import standalonepaths
+    import roads
+    classes = LAMP_ROAD_CLASSES
+    enhanced = pedestrianlighting.enabled()
+    if enhanced:
+        classes = classes | {"footway", "cycleway", "path", "pedestrian"}
     result = []
     for feats, rows in layers:
         def make():
@@ -240,7 +267,7 @@ def _lamp_roads(frame, layers, near=None):
             for line, i in zip(lines, at):
                 tags = _tags_of(feats, i)
                 kind = tags.get("highway") or (str(cls[i]) if cls is not None else "")
-                if kind not in LAMP_ROAD_CLASSES or tags.get("tunnel") in ("yes", "building_passage"):
+                if kind not in classes or tags.get("tunnel") in ("yes", "building_passage"):
                     continue
                 level = tags.get("layer")
                 if level is None and table is not None:
@@ -251,11 +278,20 @@ def _lamp_roads(frame, layers, near=None):
                     level = float(level) if level is not None else math.nan
                 except (ValueError, TypeError):
                     level = math.nan
-                found.append((str(feats.ids[i]), line, level))
+                width = None
+                if kind in standalonepaths.WIDTH:
+                    width = roads.mapped_osm_width(feats, i, .4, 12.) or roads.mapped_rule_width(feats, i)
+                    if width is None or not .4 <= width <= 12.:
+                        width = standalonepaths.WIDTH[kind]
+                road_width = None
+                if width is None and enhanced:
+                    mapped = roads.mapped_osm_width(feats, i, .4, 40.) or roads.mapped_rule_width(feats, i)
+                    road_width = roads.carriageway(kind, "paved", False, mapped)
+                found.append((str(feats.ids[i]), line, level, width, road_width))
                 indices.append(i)
                 boxes.append((*line.min(0), *line.max(0)))
             return found, np.asarray(indices, np.int64), np.asarray(boxes, np.float64).reshape(-1, 4)
-        found, indices, boxes = _memo(feats, "lamp_roads", frame, make)
+        found, indices, boxes = _memo(feats, "lamp_surfaces" if enhanced else "lamp_roads", frame, make)
         pick = _picked(feats, rows, indices)
         keep = np.ones(len(found), bool) if pick is None else np.asarray(pick, bool)
         if near is not None and len(found):
@@ -263,6 +299,18 @@ def _lamp_roads(frame, layers, near=None):
                      & (boxes[:, 1] <= near[3]))
         result.extend(found[k] for k in np.flatnonzero(keep).tolist())
     result.sort(key=lambda r: (r[0], tuple(r[1][0]), tuple(r[1][-1])))
+    surfaces = _lamp_arrays(result)
+    if not any(r[3] is not None for r in result):
+        return surfaces, surfaces, {}
+    edges = {}
+    for row in result:
+        width = row[3] if row[3] is not None else row[4]
+        edges.setdefault(width, []).append(row)
+    return surfaces, _lamp_arrays([r for r in result if r[3] is None]), {
+        width: _lamp_arrays(rows) for width, rows in edges.items()}
+
+
+def _lamp_arrays(result):
     off = np.zeros(len(result) + 1, np.int64)
     if result:
         off[1:] = np.cumsum([len(r[1]) for r in result])
@@ -506,7 +554,7 @@ def _centres(frame, feats, rows, least=1):
 
 
 def _local_offset(yaw_deg, ox, oy):
-    """World offset of local (ox, oy) at yaw (trees.lua: local +x turns toward yaw, +y is +x rotated 90° CCW)."""
+    """World offset of local (ox, oy) at yaw (trees.lua: local +x turns toward yaw, +y is +x rotated 90Ä‚â€šĂ‚Â° CCW)."""
     t = math.radians(yaw_deg)
     c, s = dmath.cos(t), dmath.sin(t)
     return ox * c + oy * -s, ox * s + oy * c

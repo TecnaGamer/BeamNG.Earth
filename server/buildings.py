@@ -5702,6 +5702,9 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
     tile chunk dicts, draped by roadmesh) from each detached house's front to the road's edge."""
     if not lines:
         return []
+    import standalonepaths
+    infer_drives = drives is not None and standalonepaths.enabled()
+    local_streets, service_lines = [], []
     segs, smain, shalf, sminor = [], [], [], []
     for ln in lines:
         pts, half = ln[0], ln[1]
@@ -5709,6 +5712,11 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
         p = np.asarray(pts, np.float64)
         if len(p) >= 2:
             segs.append(np.concatenate([p[:-1], p[1:]], 1))
+            if infer_drives:
+                cls = ln[2] if len(ln) > 2 else None
+                local_streets.extend([cls in {"residential", "living_street", "unclassified", "tertiary"}] * (len(p) - 1))
+                if cls == "service":
+                    service_lines.append(p)
             smain.append(np.full(len(p) - 1, bool(main)))
             shalf.append(np.full(len(p) - 1, float(half)))
             sminor.append(np.full(len(p) - 1, len(ln) > 2 and ln[2] in BACK_ROAD_CLASSES))
@@ -5803,7 +5811,11 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
         # brick row houses (an eastern city's): white marble steps up to the door
         if narrow and spec.band == BAND_BRICK and spec.roof == "flat" and _hash01(spec.seed, "stoop") < STOOP_SHARE:
             spec.stoop = (edge, Le * f)
-        if drives is not None and spec.wall and Le >= 7.0:
+        stock_drive = drives is not None and spec.wall and Le >= 7.0
+        house_drive = (infer_drives and not stock_drive and spec.cls in {"house", "detached", "bungalow"}
+                       and Le >= 7.0 and local_streets[kseg] and DK[edge] - SHALF[kseg] <= 14.)
+        made_drive = False
+        if stock_drive or house_drive:
             # the driveway beside the door, straight out to the road's edge
             g = 0.82 if f <= 0.5 else 0.18
             p0 = a + d * (Le * g) + out * 0.2
@@ -5815,11 +5827,13 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
                 p1 = q + v / dl * (SHALF[kseg] + 0.1)
                 n = max(2, int(dl // 4.0) + 1)
                 pts = [p0 + (p1 - p0) * (j / (n - 1)) for j in range(n)]
-                drives.append({"m": DRIVEWAY["m"], "w": DRIVEWAY_W, "tl": DRIVEWAY["tl"], "p": DRIVEWAY["p"],
-                               "n": [[round(float(pp[0]), 3), round(float(pp[1]), 3), 0.0] for pp in pts]})
+                if stock_drive or _free_house_drive(spec, ring, p0, p1, service_lines, others):
+                    drives.append({"m": DRIVEWAY["m"], "w": DRIVEWAY_W, "tl": DRIVEWAY["tl"], "p": DRIVEWAY["p"],
+                                   "n": [[round(float(pp[0]), 3), round(float(pp[1]), 3), 0.0] for pp in pts]})
+                    made_drive = True
         if infer_fences and spec.roof != "flat" and not narrow and _hash01(spec.seed, "fence") < FENCE_SHARE:
             rows.extend(_front_fence(spec, a, d, Le, f, A[kseg], D[kseg], L2[kseg], SHALF[kseg], gmin,
-                                     drives is not None and spec.wall and Le >= 7.0, (A, B, SHALF)))
+                                     stock_drive or made_drive, (A, B, SHALF)))
         p = a + d * (Le * f) + out * DOOR_OUT_M
         gd = door_ground(spec, edge, Le * f, gmax) if spec.stoop else gmax     # a stoop's door: over its own ground
         base = gd + (STOOP_H if spec.stoop else 0.0) + (PORCH_DECK_M if spec.porch else 0.0)   # (the deck / stoop)
@@ -5838,6 +5852,27 @@ WALL_SIGNS = {"logistics": ("wallsign_logistics", 10.8, 5.8, True), "rentabox": 
               "lemon": ("wallsign_lemon", 11.5, 3.6, True), "burger": ("wallsign_turboburger", 5.8, 2.4, False)}
 WALL_SIGN_SHARE = 0.6
 RESTAURANT_CLASSES = {"restaurant", "fast_food", "cafe"}
+
+
+def _free_house_drive(spec, ring, start, end, service_lines, others):
+    """Prefer an existing service way by the house. Skip an inferred strip through a neighbouring building."""
+    low, high = ring.min(axis=0) - 5., ring.max(axis=0) + 5.
+    for line in service_lines:
+        overlaps = ((np.maximum(line[:-1], line[1:]) >= low).all(1)
+                    & (np.minimum(line[:-1], line[1:]) <= high).all(1))
+        if overlaps.any():
+            return False
+    direction = end - start
+    side = np.array([-direction[1], direction[0]]) * (DRIVEWAY_W / (2 * np.linalg.norm(direction)))
+    strip = np.array([start - side, end - side, end + side, start + side])
+    edges = [np.vstack((strip, strip[0]))]
+    low, high = strip.min(axis=0), strip.max(axis=0)
+    for other, footprint in others:
+        if other is spec or (footprint.max(axis=0) < low).any() or (footprint.min(axis=0) > high).any():
+            continue
+        if any(_inside(strip, p) for p in footprint) or _inside(footprint, start) or road_through(footprint, edges, .25):
+            return False
+    return True
 
 
 def _sign_in_open(rows, spec, d, out, others):
@@ -7010,8 +7045,11 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
     import fast
     if not built:
         return []
+    stride = furniture.lamp_stride()
     table = furniture.lamp_spacing(region)
     hw = "na" if furniture._na(region) else None
+    span_by_line = []
+    import lightingranges
     pts, off, spacing, phase, side, lit_any = [], [0], [], [], [], []
     for f in road_layers:
         if f is None or len(f.kind) == 0:
@@ -7024,6 +7062,11 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
             sp = specs[i]
             if sp is None:
                 continue
+            spans = None
+            if furniture.strict_lighting():
+                spans = lightingranges.ranges(f, i, frame)
+                if not (spans.has_yes if spans else furniture.way_lighting(f, i) == "yes"):
+                    continue
             highway = sp.cls in furniture.HIGHWAY_CLASSES
             if highway and not furniture.highway_lit(region, sp.link, True):
                 continue
@@ -7052,9 +7095,10 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
                 for every, sd, shift in rules:
                     pts.append(xy)
                     off.append(off[-1] + len(xy))
-                    spacing.append(every)
+                    spacing.append(every * stride)
                     phase.append(ph0 * every + shift)
                     side.append(sd * reach)
+                    span_by_line.append(spans)
                     lit_any.append(bool(highway and sp.link))
     if not pts:
         return []
@@ -7066,6 +7110,9 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
         return []
     keep = [k for k in range(len(st)) if lit_any[int(st[k, 2])]
             or (int((st[k, 0] - x0) // sq), int((st[k, 1] - y0) // sq)) in built]
+    if any(span_by_line):
+        keep = [k for k in keep if span_by_line[int(st[k, 2])] is None
+                or span_by_line[int(st[k, 2])].at(st[k, :2]) == "yes"]
     st = st[keep]
     if own is not None and len(st):
         st = st[np.asarray(own.owns(st[:, 0], st[:, 1]), bool)]

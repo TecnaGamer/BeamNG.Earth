@@ -1781,6 +1781,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         import designs
         de_nodes = designs.reads_here(True, frame, designs.tile_reach(box, skin_margin))
     nodes = secrossings.read(_s.md, frame, near_cells) if secrossings.wanted(country, de_nodes) else None
+    import pedestrianlighting
+    near_lamps = [] if pedestrianlighting.enabled() else None
     clearance = [] if buildings else None      # (build_tile's RoadClearance, PR #629: the powerlines' too)
     roadside_jobs = []                  # sign placement after the rendered barriers and driveways
     drives = []
@@ -1819,8 +1821,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  driveways_out=mapped_drives,
                                  signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes,
                                  development=developmentmod.for_tile(_s.md, frame, tx, ty),
-                                 clearance_out=clearance, towns=towns, de_on=de_junctions, de_routes=de_routes,
+                                 clearance_out=clearance, lamp_coverage=near_lamps, towns=towns, de_on=de_junctions, de_routes=de_routes,
                                  # (the mapped utility poles mappedpoles.tile_poles draws: no guessed ones along them)
+                                 mapped_lamps=mapped_lamps,
                                  mapped_poles=(mappedpoles.road_points(_s.md, frame, tx, ty, pole_profile)
                                                if props is not None else None),
                                  wear=wear if isinstance(wear, dict) else roadwear.tier_of(wear),
@@ -2116,8 +2119,17 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     radar_props, P.speed_traps = radars.tile_rows(frame, box, _s.md, elev, _s.widths, urban)
     if radar_props:
         props = (props or []) + radar_props
+    import standalonepaths
+    path_parts = None
+    if items is not None and pedestrianlighting.enabled():
+        path_parts = standalonepaths.parts(frame, box, cells, urban, _s.widths, lighting=True)
+        props.extend(pedestrianlighting.tile_rows(frame, box, cells, urban, _s.widths,
+            _s.md, cell_keys, drawn, props, mapped_lamps, rings, clearance[0] if clearance else None,
+            near_roads, near_lamps, poleprofiles.lamp_country_selector(pole_profile, frame),
+            path_parts=path_parts))
     import racedig                  # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
     racedig.tile_clear(frame, cells, props, wires, elev, _s.md)
+    props = standalonepaths.finish_props(props, frame, box, cells, urban, _s.widths, path_parts=path_parts)
     P.signs = signs
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.custom, P.custom_entries = _custom, _entries

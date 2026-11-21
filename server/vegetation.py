@@ -285,6 +285,9 @@ class Vegetation:
         self.dem = None                 # (set by the server: rocks on bare ground by slope, ROCK_SLOPE)
         self.surface = self.widths = None   # (set by the server: the roads' drawn widths, roads.road_specs)
         self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
+        import standalonepaths
+        if self.dir and standalonepaths.enabled():
+            self.dir = os.path.join(self.dir, "standalone-paths-v5")  # individual trees use their trunk position
         self._mem = OrderedDict()
         self._lock = threading.Lock()
         self._cell_locks = {}
@@ -400,7 +403,16 @@ class Vegetation:
 
     def _path(self, x, y):
         rel = getattr(self.md, "release", "x")
-        return os.path.join(self.dir, str(rel), str(x), f"{y}.npz") if self.dir else None
+        # The wider promenade fits inside this one level-14 cell. Rebuild its opted-in plants.
+        name = f"{y}.npz"
+        if (x, y) == (8988, 5281):
+            import standalonepaths
+            if standalonepaths.enabled():
+                name = f"{y}-charzykowy-promenada-4m.npz"
+        import pedestrianlighting
+        if pedestrianlighting.enabled():
+            name = name[:-4] + "-lighting-v3.npz"
+        return os.path.join(self.dir, str(rel), str(x), name) if self.dir else None
 
     def _load(self, x, y):
         p = self._path(x, y)
@@ -588,6 +600,28 @@ class Vegetation:
         if vines.any():             # (the vines' own canopy read as bushes all over a vineyard: its rows stand there)
             keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
             tree, lcls = tree.take(keep), lcls[keep]
+        import standalonepaths
+        import pedestrianlighting
+        path_blockers = []
+        if standalonepaths.enabled() or pedestrianlighting.enabled():
+            import geodesy
+            path_frame = geodesy.EnuFrame((lat0 + lat1) / 2, (lon0 + lon1) / 2)
+            e, n, _ = path_frame.geodetic_to_enu(np.array([lat0, lat1]), np.array([lon0, lon1]), 0.)
+            box = (min(e), min(n), max(e), max(n))
+            parts = standalonepaths.parts(path_frame, box, road_cells, getattr(self.surface, "urban", None),
+                                          self.widths, lighting=pedestrianlighting.enabled())
+            if standalonepaths.enabled():
+                path_blockers = [(xy, width / 2) for _, xy, width, _ in parts]
+            if pedestrianlighting.enabled():
+                keys = mapcells.cells_for_bbox(lat0, lon0, lat1, lon1)
+                sites = list(pedestrianlighting.path_sites(parts, road_cells, box, path_frame, self.md))
+                sites.extend(pedestrianlighting.area_sites(path_frame, box, self.md, keys))
+                # A short segment models the post footprint in the existing plant exclusion pass.
+                path_blockers.extend((np.array([[px-.15, py], [px+.15, py]]), .35)
+                                     for _, px, py, _, _ in sites)
+            if path_blockers:
+                keep = _off_paths(tree, path_frame, path_blockers)
+                tree, lcls = tree.take(keep), lcls[keep]
         # (a clump moved off a road stays in this cell and off its buildings, water and decks: ClumpRoads)
         tree = clumps(tree, lcls, (lat0 + lat1) / 2,
                       roads=ClumpRoads(clump_roads, chm, blocked, (ex0, ey0, ex1, ey1)))
@@ -598,7 +632,8 @@ class Vegetation:
         hedges = farm_foliage(lu, chm, blocked, bounds)
         rows = vineyard_items(lu, chm, blocked, bounds)
         bales = bale_items(lu, chm, blocked, bounds)
-        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
+        items = _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
+        return items.take(_off_paths(items, path_frame, path_blockers)) if path_blockers else items
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
@@ -783,6 +818,21 @@ FARM_BUSH_ALONG = 6.0
 FARM_BUSH_POLY = 500
 FARM_BUSH_CELL = 2000
 FARM_MIN_M2 = 800.0
+
+
+def _off_paths(items, frame, blockers):
+    """Keep trunks and low vegetation off paths, allowing individual tree crowns to overhang."""
+    import standalonepaths
+    e, n, _ = frame.geodetic_to_enu(items.lat, items.lon, 0.)
+    # A far clump represents several trunks spread over its footprint, not one
+    # trunk at its centre. Its individual near trees are tested separately.
+    single_tree = (items.kind == KIND_TREE) & ~np.isin(items.group, CLUMP_GROUPS)
+    radius = np.where(single_tree, 0.0, items.radius)
+    import pathfootprints
+    for group in np.unique(items.group[~single_tree]):
+        sel = (~single_tree) & (items.group == group)
+        radius[sel] = pathfootprints.radii(GROUPS[int(group)], items.height[sel], radius[sel])
+    return standalonepaths.keep_outside(np.column_stack((e, n)), blockers, radius)
 
 
 def _keep_off_mask(items, mask, chm):

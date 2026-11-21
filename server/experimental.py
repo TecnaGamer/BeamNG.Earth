@@ -49,6 +49,10 @@ FEATURES = (
                        # bridge decks; beats the sheet decks at all five probe sites, 0 m of parapet in a carriageway)
                        "BNE_ROADSURF_V3": "surface"}, None),
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
+    ("standalonePaths", {"BNE_STANDALONE_PATHS": "on"}, None),
+    ("halfStreetLamps", {"BNE_HALF_STREET_LAMPS": "on"}, None),
+    ("osmPedestrianLighting", {"BNE_PEDESTRIAN_LIGHTING": "on"}, None),
+    ("strictOsmLighting", {"BNE_STRICT_LIGHTING": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
     ("expEntranceFlares", {"BNE_ENTRANCE_FLARES": "on"}, None),           # roads.flares_enabled
     ("expPriorityStops", {"BNE_PRIORITY_STOPS": "on"}, None),             # furniture.PRIORITY_STOPS
