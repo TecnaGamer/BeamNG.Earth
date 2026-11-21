@@ -1509,7 +1509,7 @@
   }
  },
  "silistra_936": {
-  "steps": 12,
+  "steps": 2,
   "parts": {
    "bridge:172cc679-28d9-4c7c-b779-32bd1cd8c038": {
     "step_m": 0.0301,
@@ -1517,7 +1517,7 @@
     "lift_g": 0.3277
    },
    "ground:dd02ab9e-6321-43dd-9523-40866914991f": {
-    "step_m": 3.4428,
+    "step_m": 0.1594,
     "grade": 0.0,
     "lift_g": 0.0
    }
