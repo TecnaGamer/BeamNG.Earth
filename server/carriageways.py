@@ -33,12 +33,15 @@ not feasible. This module only assembles its inputs and reports measured converg
 import logging
 import math
 import os
+import threading
 import time
 
 import numpy as np
 import dnp
 
 log = logging.getLogger("earthd.grading")
+PROBE = threading.local()   # .on: this thread's solves are probes (a search for the least easing of a law: ix/relax.py): their
+#                             misses are not logged, the answer's are
 
 STEP_M = 4.0            # m between profile samples
 MIN_SEGMENT_M = 0.5     # m: the least spacing a chain's own `ds` gives a segment (two samples closer than this, one point
@@ -60,6 +63,10 @@ ROUNDS = 150            # sparse QP iterations at most
 # s one region's solves may take at most: exhaustion is reported and the region is not persisted. A worker past
 # earthd's road-tile timeout (300 s) is restarted, its work lost, and the tile built again from the start.
 BUDGET_S = float(os.environ.get("BNE_CW_BUDGET_S", "30"))
+# a system whose laws contradict is solved again with what contradicts eased (ix/relax.py): the harder problem (the interior point
+# gets slow where the feasible set is thin), so its budget is its own
+BUDGET_RELAXED_S = float(os.environ.get("BNE_CW_BUDGET_RELAXED_S", "150"))
+RELAXED_ROUNDS = 4 * ROUNDS     # (its iterations too: 5444 roads' 173 where the same laws, not contradicting, take under 60)
 TOUCH_M = 0.75          # m: parts whose ends are this close are joined
 COUPLE_M = 2.5          # m: a chain's end this close to another chain meets it and is held to its height (a slip road's
                         # end lies up to ~2 m short of the node its overpass starts at: it stayed at the ground beside a
@@ -262,7 +269,7 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
                                            **({} if spacing is None else {"spacing": spacing}))
     if diagnostics is not None:
         diagnostics.update(info)
-    if not info["converged"] or not info["feasible"]:
+    if (not info["converged"] or not info["feasible"]) and not getattr(PROBE, "on", False):
         log.warning("carriageways: %d chains, %d couplings: %s, %d iterations, converged=%s feasible=%s budget=%s; "
                     "grade excess %.6f, curve excess %.6f, bounds %.3f/%.3f m, junction %.3f m, clearance %.3f m",
                     len(chains), len(cp), info["status"], info["rounds"], info["converged"], info["feasible"], info["timed_out"],

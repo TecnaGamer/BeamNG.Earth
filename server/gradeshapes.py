@@ -1575,6 +1575,23 @@ def _deck_targets(net, sysm, pc, t, natural):
     return natural, w
 
 
+def _tunnel_mouths(net, sysm, i):
+    """(start, end): whether deck i's start / end is where it goes into a tunnel (a join with a tunnel member at that end). A
+    bridge that becomes a tunnel along one road lands on the ground at the mouth as it does at any end on the ground: no
+    void under it there to keep its girders out of (its floor over the ground it spans is for the span, not for the road's
+    way into the hill). It weighs nothing there (the tunnel's own height is the joint's), but its girders' floor must not hold
+    it up over the tunnel's ceiling, the ground."""
+    out = [False, False]
+    for a, sa, b, sb in sysm["joins"]:
+        for m_, s_, o in ((a, sa, b), (b, sb, a)):
+            if m_ == i and net.m[o].kind == "tunnel":
+                if s_ <= JOIN_M:
+                    out[0] = True
+                if net.L[i] - s_ <= JOIN_M:
+                    out[1] = True
+    return out
+
+
 def _abutments(t, natural, depth, at_start, at_end):
     """Bool per sample of a deck: in an abutment, the stretch from either end where its natural height stays within
     the girders' depth of the ground (over it by up to depth + DECK_AIR_M, or under by the air): the deck lies on the
@@ -1659,6 +1676,7 @@ def _stacked(net, sysm, pcs, smp):
     decks = [p for p, pc in enumerate(pcs) if pc["kind"] == "deck"]
     out = []
     along = None
+    gone = sysm.get("order", {}).get("gone", ())    # (pairs whose order the order step gave up: ix/s3_order.py)
     for q in decks:                         # (the upper)
         mu = pcs[q]["main"]
         xu = np.asarray(smp[q]["xy"], np.float64)
@@ -1670,7 +1688,7 @@ def _stacked(net, sysm, pcs, smp):
         lo_u, hi_u = xu.min(0) - half, xu.max(0) + half
         for p in decks:                     # (the lower)
             md = pcs[p]["main"]
-            if p == q or _over(net.m[mu], net.m[md]) != "i":
+            if p == q or _over(net.m[mu], net.m[md]) != "i" or frozenset((mu, md)) in gone:
                 continue
             xd = np.asarray(smp[p]["xy"], np.float64)
             near = np.flatnonzero(((xd >= lo_u) & (xd <= hi_u)).all(1))
@@ -1717,7 +1735,9 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
             # that road's cut, the crossing's clearance its floor: _over_dips)
             if pc["main"] not in sysm["digs"]:
                 depth = deck_depth(net.L[pc["main"]])
-                inner = ~_abutments(t, target, depth, w[0] > 0.0, w[-1] > 0.0) & ~_over_dips(net, pcs, smp, x)
+                mouth = _tunnel_mouths(net, sysm, pc["main"])
+                inner = (~_abutments(t, target, depth, w[0] > 0.0 or mouth[0], w[-1] > 0.0 or mouth[1])
+                         & ~_over_dips(net, pcs, smp, x))
                 lo = np.where(inner, t + depth + DECK_AIR_M, -np.inf)
         else:
             target, w = t.copy(), np.full(n, W_DIP)
@@ -1814,6 +1834,38 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
     chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z)
     info = {}
     zs = _cw.solve(chains, cps, diagnostics=info)
+    if not info.get("feasible", True) and not info.get("timed_out"):
+        # (laws that cannot all hold: not the interchange left as it is. What contradicts is eased by the least it takes, in
+        # the order the laws are given up (ix/relax.py), and said so: the answer's diagnostics name each)
+        import ix.relax as _relax
+        trace = {}
+        chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace)
+        first = {k: info[k] for k in ("status", "grade_excess", "curve_excess", "lower_shortfall_m", "upper_excess_m",
+                                      "junction_gap_m", "clearance_shortfall_m") if k in info}
+        chains, cps, done, touched = _relax.relax(net, pcs, smp, chains, cps, trace)
+
+        def feasible(ch, cp):
+            probe = {}
+            _cw.PROBE.on = True
+            try:
+                _cw.solve(ch, cp, diagnostics=probe)
+            finally:
+                _cw.PROBE.on = False
+            return bool(probe.get("feasible"))
+        # (the vertical curves are no difference of two heights, so the graph does not see them: where the laws were eased the
+        # curve law of those roads is looked at next, on the few roads round them, before the whole is solved; then, if the
+        # whole still has no heights, on more of them. Each solve of eased laws is the harder problem: its budget is its own)
+        for hops in (2, 4, 8, len(chains)):
+            eased, more = _relax.ease_curves(net, pcs, chains, cps, touched, feasible, hops)
+            info = {}
+            zs = _cw.solve(eased, cps, rounds=_cw.RELAXED_ROUNDS, deadline=time.monotonic() + _cw.BUDGET_RELAXED_S,
+                           diagnostics=info)
+            if info.get("feasible", True) or info.get("timed_out"):
+                break
+        done = list(done) + more
+        info["relaxed"] = [dict(kind=r.kind, amount=round(float(r.amount), 6), at=[[int(m), round(float(s), 3)] for m, s in r.at],
+                                text=r.text) for r in done]
+        info["first"] = first
     if diagnostics is not None:
         diagnostics.update(info)
     if not info.get("converged") or not info.get("feasible"):

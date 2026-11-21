@@ -50,12 +50,14 @@ def _samples_bytes(system_id, net, smp):
     return out
 
 
-def _line(clock, step, key, pieces, crossings, seconds, why, where):
+def _line(clock, step, key, pieces, crossings, seconds, why, where, note=""):
     """One step's line, its seconds added to the region's totals (clock): 'ix step: <step> key <key> pieces N crossings
-    N <seconds> s ok' or '... failed: <why>', then where it ran (the region and the interchange)."""
+    N <seconds> s ok' or '... failed: <why>', then where it ran (the region and the interchange). note: what the step
+    gave up or eased and still has an answer ('ok (<note>)'), at WARNING: it is said wherever the run keeps its log."""
     clock[step] = clock.get(step, 0.0) + seconds
-    log.log(logging.WARNING if why is not None else LOG_LEVEL, "ix step: %s key %s pieces %d crossings %d %.2f s %s @ %s",
-            step, key[:12], pieces, crossings, seconds, "ok" if why is None else "failed: " + why, where)
+    log.log(logging.WARNING if why is not None or note else LOG_LEVEL, "ix step: %s key %s pieces %d crossings %d %.2f s %s @ %s",
+            step, key[:12], pieces, crossings, seconds, ("ok" + (" (%s)" % note if note else "")) if why is None
+            else "failed: " + why, where)
 
 
 def _heights_why(zs, diag):
@@ -100,8 +102,13 @@ def system(planner, net, ix, fixed_z, hk, clock):
     order, order_key = _put(s3_order.run(planner, net, sysm, loc, system_id, scope), (extent_key,),
                             [system_id.encode()])
     bad = [f for f in order.findings if f.level == "fail"]
+    gave = [f for f in order.findings if f.code == "order_dropped"]
+    deferred = [f for f in order.findings if f.code == "order_deferred"]
     _line(clock, "order", order_key, len(pcs), n_x, time.perf_counter() - t0,
-          "; ".join("%s: %s" % (f.code, f.text) for f in bad) if bad else None, where)
+          "; ".join("%s: %s" % (f.code, f.text) for f in bad) if bad else None, where,
+          ", ".join(x for x in ("%d decisions given up" % len(gave) if gave else "",
+                                "%d loops left to the heights" % len(deferred) if deferred else "") if x))
+    n_x = len(sysm["crossings"])        # (the ones that stand)
 
     t0 = time.perf_counter()
     smp = _gsh.sample(net, pcs)
@@ -118,7 +125,9 @@ def system(planner, net, ix, fixed_z, hk, clock):
     zs, diag = s6_heights.solve(net, sysm, pcs, smp, fixed_z, ground)
     _heights, heights_key = _put(s6_heights.run(planner, net, sysm, loc, pcs, smp, zs, diag, system_id, scope),
                                  (datum_key,), inputs)
-    _line(clock, "heights", heights_key, len(pcs), n_x, time.perf_counter() - t0, _heights_why(zs, diag), where)
+    _line(clock, "heights", heights_key, len(pcs), n_x, time.perf_counter() - t0, _heights_why(zs, diag), where,
+          s6_heights.relax_text(diag))
+    clock["relaxed"] = clock.get("relaxed", 0) + len(s6_heights.relaxed_of(diag))     # (owner.made: the interchange's share)
     return pcs, smp, zs, diag, ground, heights_key
 
 
@@ -188,9 +197,11 @@ def region(planner, home, hk):
         for fid, items in found[ik]["roads"].items():
             prof.setdefault(fid, []).extend(items)
     failed = sum(1 for g in found.values() if g["failed"])
-    log.warning("grading: SHAPES pid %d region %s: %d cells, %d members, %d systems (%d interchanges, %d infeasible, "
-                "left as they are), %d roads graded, find %.2f s, solve %.2f s", os.getpid(), hk, len(loaded),
-                len(members), len(mine), len(found), failed, len(prof), t1 - t0, t_owner)
+    relaxed = sum(int(g.get("relaxed", 0)) for g in found.values())
+    log.warning("grading: SHAPES pid %d region %s: %d cells, %d members, %d systems (%d interchanges, %d with no answer from "
+                "the solver, left as they are, %d relaxations: laws eased by the least that closes them), %d roads graded, "
+                "find %.2f s, solve %.2f s", os.getpid(), hk, len(loaded), len(members), len(mine), len(found), failed,
+                relaxed, len(prof), t1 - t0, t_owner)
     log.log(LOG_LEVEL, "ix region: %s systems %d %.2f s, load %.2f s, scan %.2f s, steps %s, interchanges %.2f s", hk,
             len(mine), time.perf_counter() - t0, clock.get("load", 0.0), clock.get("scan", 0.0),
             ", ".join("%s %.2f s" % (k, clock.get(k, 0.0)) for k in STEPS), t_owner)

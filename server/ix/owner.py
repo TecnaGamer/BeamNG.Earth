@@ -41,7 +41,7 @@ INDEX = {}                  # road canonical id -> [(interchange key, lat / lon 
 KEPT = 512                  # solutions kept (per planner, per process)
 EXTENTS = {}                # interchange key -> its extent record: {"box": (lat0, lon0, lat1, lon1) of its seeds, "keys": the
 #                             member keys of its seeds, all its systems'} (the growth's: the reach, computed once, is in it)
-FIELDS = ("key", "failed", "pieces", "crossings", "owner", "pid", "secs")
+FIELDS = ("key", "failed", "pieces", "crossings", "owner", "pid", "secs", "relaxed")
 
 
 class GiveWay(Exception):
@@ -414,7 +414,7 @@ def unpack(planner, meta, lat, lon, z):
     for r in meta["roads"]:
         roads.setdefault(r["fid"], []).append((xy[k:k + r["n"]], np.array(z[k:k + r["n"]]), r["mode"]))
         k += r["n"]
-    got = {key: meta[key] for key in FIELDS}
+    got = {key: meta.get(key, 0 if key == "relaxed" else None) for key in FIELDS}     # (relaxed: from a store before it)
     got["roads"] = roads
     return got
 
@@ -481,7 +481,8 @@ def interchange(planner, net, ix, hk, clock):
                     ik[:12], got["owner"], got["pieces"], got["crossings"], hk,
                     ("solved here, pid %d, %.1f s" % (os.getpid(), secs)) if mine else
                     ("waited %.1f s for pid %s, which solved it in %.1f s" % (secs, got["pid"], got["secs"])),
-                    ("; no solution: %s" % got["failed"]) if got["failed"] else "")
+                    (("; no solution: %s" % got["failed"]) if got["failed"] else "")
+                    + ("; %d relaxed" % got["relaxed"] if got.get("relaxed") else ""))
     return got
 
 
@@ -493,9 +494,10 @@ def made(planner, ik, hk, clock, net, ix, others):
     from . import pipeline
     t0 = time.perf_counter()
     pieces, crossings = _gsh.system_size(net, ix.sysm)
+    r0 = clock.get("relaxed", 0)
     with revisit.scope() as b:
         roads, why = pipeline.interchange(planner, net, ix, others, hk, clock)
-    got = dict(key=ik, roads=roads, failed=why, pieces=pieces, crossings=crossings,
+    got = dict(key=ik, roads=roads, failed=why, pieces=pieces, crossings=crossings, relaxed=clock.get("relaxed", 0) - r0,
                owner=str(owner_cell(planner, net, ix.sysm)), pid=os.getpid(), secs=round(time.perf_counter() - t0, 3))
     sh = planner.shared
     packed = pack(planner, got)
