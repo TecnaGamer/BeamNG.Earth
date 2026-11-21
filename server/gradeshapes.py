@@ -651,13 +651,14 @@ def find_systems(members, reader=None, trace=None):
     return net, [p.sysm for x in found for p in (x.parts or (x,))]
 
 
-def find_interchanges(members, reader=None, trace=None, want=None):
+def find_interchanges(members, reader=None, trace=None, want=None, skip=None):
     """(net, [Interchange]): the interchanges among members, each closed, in a deterministic order, each with the seconds
     its relations and its closing took (a merge's or a dip's seconds go to the interchange they ended up in). An interchange
     is the systems whose ramps meet (_ramp_reaches; Interchange.parts), each system the structures that join, cross or dig
     one road among themselves. want(net,
     seeds) -> bool: whether an interchange is asked for; one that is not is found (it may merge others) but not closed.
-    reader(net) -> (ground, fixed): the
+    skip(net, i) -> bool: member i is a piece of an interchange already solved: it is not a seed here, nor scanned for
+    relations (it stays a member: what others cross). reader(net) -> (ground, fixed): the
     elevation the cost of a move is read from (_Verdicts); None, flat ground. trace (a dict, the audit's: interchange_audit):
     filled with what merged the seeds, [(a, b, why, detail)] in the order they were united (why "relation": a join or a
     crossing of two seeds, detail (kind, s on a, s on b); "dip": two seeds over one road they dig, detail None), with the
@@ -667,7 +668,7 @@ def find_interchanges(members, reader=None, trace=None, want=None):
     n = len(members)
     if trace is not None:
         trace["seeds"], trace["merges"] = [], []
-    cand = [i for i in range(n) if _is_seed(net, i) and len(net.lines[i]) >= 2]
+    cand = [i for i in range(n) if _is_seed(net, i) and len(net.lines[i]) >= 2 and not (skip is not None and skip(net, i))]
     t_rel = {}
     rel = {}
     for i in cand:

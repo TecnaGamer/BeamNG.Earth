@@ -171,11 +171,14 @@ def region(planner, home, hk):
     # (the region's own work, before any interchange's steps: its cells' members read, the interchanges found as its box
     # holds them. Each interchange's share of the finding is in its paths and extent lines; what is left is the region's:
     # the net, and the members that belong to no interchange)
-    net, mine, loaded, members = s2_extent.find(planner, h_lo, h_hi, clock)
+    taken = {}
+    net, mine, loaded, members = s2_extent.find(planner, h_lo, h_hi, clock, taken)
     clock["scan"] = clock.pop("find", 0.0) - sum(ix.paths_s + ix.extent_s for ix in mine)
     t1 = time.perf_counter()
 
     found = {}
+    for ik in sorted(taken):    # (the interchanges already solved: their solutions are read, nothing of them found again)
+        found[ik] = owner.have(planner, ik)
     for ix in mine:
         got = owner.interchange(planner, net, ix, hk, clock)
         found[got["key"]] = got

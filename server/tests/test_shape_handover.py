@@ -33,8 +33,8 @@ class DeckUnderRoadIdTest(unittest.TestCase):
         cls.found = []
         real = gs.find_interchanges
 
-        def spy(members, mk, trace=None, want=None):
-            net, found = real(members, mk, trace, want)
+        def spy(members, mk, trace=None, want=None, skip=None):
+            net, found = real(members, mk, trace, want, skip)
             cls.found.append((net, [x.sysm for x in found]))
             return net, found
         rep = interchanges.load("popoli_ss17_underpass")

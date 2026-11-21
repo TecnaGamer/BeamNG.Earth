@@ -115,6 +115,14 @@ one system, then its embankments. Every other thread and process waits for the l
 (`PlanCache.shape_store`: lat / lon and heights, no frame). A holder that is gone hands the lock over; an abandoned one
 gives it back. `pipeline.region` is the region's own find, the owner calls and the merge of their profiles.
 
+The growth is claimed too (`owner.grow`, claim `ext` on the road a growth starts from): the first to reach a piece of an
+interchange grows it once and stores an index from every member road to its key, and its whole extent (`index_add`); a
+region reaching any piece finds the key there, or waits for the growth running. Two growths that reach each other's
+pieces are one interchange: the one from the lower road id grows it, the other raises `GiveWay`, which releases its claim
+before it waits (so the claims wait only on lower ids, never in a circle, and no growth holds two). A holder that is gone
+hands the claim over and a cancelled one keeps what it stored, as for the solve. A region does not scan the pieces of an
+interchange already solved (`owner.skipper`: the index names its key and the solution is kept): it reads the solution.
+
 An interchange ends where its roads come back to the ground, which is the end of a ramp, not the end of a structure. A
 road leaving a deck belongs to the interchange as far as the deck's ramp reaches (`gradeshapes._ramp_reaches`, from the
 pieces alone, before anything is solved: the ramp the embankment step lays, `_Ramper`, from the height the structure needs

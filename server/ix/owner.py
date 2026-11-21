@@ -3,7 +3,12 @@ and every region and process solved the pieces it found (one system of about 1,3
 regions, a build of 729 s taking 15025 s). Now the region's piece is only the way in:
 
 - grow() follows it, through its joins and crossings, to the whole interchange whatever box it is found in, so every
-  region reaches the same members and the same key (gradeshapes.interchange_key);
+  region reaches the same members and the same key (gradeshapes.interchange_key). It is done once: the first to reach a
+  piece of the interchange takes the claim on that piece (once, "ext"), and the index it stores names every member piece
+  (index_add: road id to key). Whoever reaches ANY piece of it finds the key there, or waits for the growth running. Two
+  growths that reach each other's pieces are one interchange: the one that started from the lower road id grows it, the
+  other gives way (GiveWay: its claim released, then it waits for the lower one's result, holding no lock), so the
+  claims wait only on lower ids and never in a circle;
 - the cell holding the interchange's centre is its owner (owner_cell); its solution is made once, by the process that
   takes the key's lock (plancache.PlanCache.shape_claim), and every other thread and process reaching the key waits for
   it and reads it. A holder that is gone hands the lock to the next waiter: there is no wait after which an interchange is
@@ -34,7 +39,17 @@ PROCESS = OrderedDict()     # interchange key -> its solution as stored (pack): 
 #                             something it is not in the run's store; with no run store it is the only one
 INDEX = {}                  # road canonical id -> [(interchange key, lat / lon box of its seeds)]: this process's
 KEPT = 512                  # solutions kept (per planner, per process)
+EXTENT = "~"                # (the index's name of an interchange's whole extent: this and its key)
 FIELDS = ("key", "failed", "pieces", "crossings", "owner", "pid", "secs")
+
+
+class GiveWay(Exception):
+    """A growth reached a piece (cid) of its interchange that a growth from a lower road id is running from: it is that
+    one's to grow. Raised out of the claim, so it is given back before the wait."""
+
+    def __init__(self, cid):
+        super().__init__(cid)
+        self.cid = cid
 
 
 def version():
@@ -78,6 +93,28 @@ def once(planner, kind, name, have, work):
             with LOCK:
                 FLIGHTS.pop(flight, None)
             ev.set()
+
+
+def name_of(planner, cid):
+    """The name a growth from road cid claims: the index's file name of it (shared), else the id."""
+    sh = planner.shared
+    return sh.shape_member_name(cid) if sh is not None and hasattr(sh, "shape_member_name") else cid
+
+
+def growing(planner, cid):
+    """Whether a growth from road cid is running now (in this process or another)."""
+    name = name_of(planner, cid)
+    with LOCK:
+        if ("ext", name) in FLIGHTS:
+            return True
+    sh = planner.shared
+    return sh is not None and hasattr(sh, "shape_busy") and sh.shape_busy("ext", name)
+
+
+def wait_for(planner, other, cid, pt):
+    """Until the growth running from road `other` has ended: the key of the piece cid at pt is known then (the index), or
+    the growth is gone (its holder died: nothing to read, the caller grows). Holds no claim while it waits."""
+    once(planner, "ext", name_of(planner, other), lambda: known_key(planner, cid, pt), lambda: None)
 
 
 # ---- the whole interchange ----
@@ -137,6 +174,20 @@ def probe(planner, net, sysm, cid):
     return float(la[0]), float(lo[0])
 
 
+def points(planner, net, sysm):
+    """{canonical id: (lat, lon)} of a point on each seed road of the system (what tells which of a road's interchanges
+    it is: the index's boxes)."""
+    seeds = list(sysm["seeds"])
+    if not seeds:
+        return {}
+    mid = np.array([net.lines[i][len(net.lines[i]) // 2] for i in seeds])
+    la, lo, _ = planner.frame.enu_to_geodetic(mid[:, 0], mid[:, 1], 0.0)
+    out = {}
+    for i, a, b in zip(seeds, la, lo):
+        out.setdefault(_gsh.canonical_id(net.m[i]), (float(a), float(b)))
+    return out
+
+
 def index_add(planner, ik, net, sysm):
     """Interchange ik's seeds' roads into the process's index and the run's: each road's box over its seeds (lat, lon)."""
     boxes = {}
@@ -146,6 +197,9 @@ def index_add(planner, ik, net, sysm):
         cid = _gsh.canonical_id(net.m[i])
         old = boxes.get(cid)
         boxes[cid] = b if old is None else (min(old[0], b[0]), min(old[1], b[1]), max(old[2], b[2]), max(old[3], b[3]))
+    # (and the interchange's whole extent, under its key: what a solve in a process that did not grow it starts from)
+    allb = list(boxes.values())
+    boxes[EXTENT + ik] = (min(b[0] for b in allb), min(b[1] for b in allb), max(b[2] for b in allb), max(b[3] for b in allb))
     with LOCK:
         if len(INDEX) > 50000:
             INDEX.clear()
@@ -156,29 +210,52 @@ def index_add(planner, ik, net, sysm):
         sh.shape_index_store(ik, boxes)
 
 
-def grow(planner, net, ix, cid, pt, adopt=True):
+def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
     """(key, net, Interchange, the net's other systems) of the whole interchange the one found (ix, in net: a piece of it,
     as some region's box holds it) is part of: the members within SHAPES_PAD_M of its seeds (what a ramp reaches) found
     again as interchanges, the one holding the road cid taken, and so on until it takes in nothing more. Whichever piece it
     starts from, the end is the same set of roads and the same last box (an interchange taking in nothing at its own box's
     size is closed, and every interchange has one such set), so every region finds the same key. adopt: the run's index is
-    looked at between rounds, and an interchange another process has found meanwhile is taken as it is ((key, None, None,
-    None)). The Interchange returned carries the seconds this took (its paths: the members read, its relations; its
-    extent: the finding), for the steps' lines."""
+    looked at for every piece the growth takes in, before the next round: an interchange another process has found
+    meanwhile is taken as it is ((key, None, None, None)), and one a growth from a lower road id is running on is that
+    growth's (GiveWay). hint: the interchange's whole extent (lat0, lon0, lat1, lon1: the index's), found already: its one
+    round is the last, not the growth again. The Interchange returned carries the seconds this took (its paths: the members
+    read, its relations; its extent: the finding), for the steps' lines."""
     import grading
     import xproc
     ids = _gsh.system_ids(net, ix.sysm)
     cur_net, cur = net, ix
     byk, loaded = {}, set()
     read_s = find_s = 0.0
+    checked = {cid}
+    box = None
+    if hint is not None:
+        e, n, _ = planner.frame.geodetic_to_enu(np.array([hint[0], hint[0], hint[2], hint[2]]),
+                                                np.array([hint[1], hint[3], hint[1], hint[3]]), 0.0)
+        box = (np.array([np.min(e), np.min(n)]), np.array([np.max(e), np.max(n)]))
     while True:
         xproc.check_cancel()
         if adopt:
             known = known_key(planner, cid, pt)
             if known is not None:
                 return known, None, None, None
-        seeds = np.concatenate([cur_net.lines[i] for i in cur.sysm["seeds"]])
-        lo, hi = seeds.min(0) - grading.SHAPES_PAD_M, seeds.max(0) + grading.SHAPES_PAD_M
+            fresh = ids - checked
+            if fresh:
+                pts = points(planner, cur_net, cur.sysm)
+                for c in sorted(fresh):
+                    if c not in pts:
+                        continue        # (a road dug under it: the index holds seeds)
+                    got = known_key(planner, c, pts[c])
+                    if got is not None:
+                        return got, None, None, None
+                    if c < cid and growing(planner, c):
+                        raise GiveWay(c)
+                checked |= fresh
+        if box is not None:
+            lo, hi = box[0] - grading.SHAPES_PAD_M, box[1] + grading.SHAPES_PAD_M
+        else:
+            seeds = np.concatenate([cur_net.lines[i] for i in cur.sysm["seeds"]])
+            lo, hi = seeds.min(0) - grading.SHAPES_PAD_M, seeds.max(0) + grading.SHAPES_PAD_M
         t0 = time.perf_counter()
         s1_paths.load(planner, lo, hi, byk, loaded)
         members = s1_paths.members_of(byk, lo, hi)
@@ -188,9 +265,14 @@ def grow(planner, net, ix, cid, pt, adopt=True):
         find_s += time.perf_counter() - t1
         nxt = next((x for x in found if cid in {_gsh.canonical_id(nxt_net.m[i]) for i in x.sysm["seeds"]}), None)
         if nxt is None:         # (its seeds are not seeds in the wider find: the interchange as it was)
+            if box is not None:
+                box = None      # (the stored extent did not give it: grown as without)
+                continue
             log.error("grading: SHAPES interchange: road %s no longer a seed of the interchange round it", cid)
             nxt_net, nxt, found = cur_net, cur, [cur]
             break
+        if box is not None:
+            break               # (the whole extent was read: nothing to grow)
         more = _gsh.system_ids(nxt_net, nxt.sysm)
         if more <= ids:
             break
@@ -202,6 +284,46 @@ def grow(planner, net, ix, cid, pt, adopt=True):
     whole = _gsh.Interchange(nxt.sysm, read_s + nxt.paths_s, find_s - nxt.paths_s, parts)
     return (key_of(planner, nxt_net, nxt.sysm), nxt_net, whole,
             [p.sysm for x in found if x is not nxt for p in (x.parts or (x,))])
+
+
+def extent_of(planner, ik):
+    """The whole extent (lat0, lon0, lat1, lon1) the index holds for interchange ik, or None."""
+    with LOCK:
+        ents = INDEX.get(EXTENT + ik)
+    sh = planner.shared
+    if not ents and sh is not None and hasattr(sh, "shape_index"):
+        ents = sh.shape_index(EXTENT + ik)
+        if ents:
+            with LOCK:
+                INDEX[EXTENT + ik] = ents
+    return next((box for k, box in ents or () if k == ik), None)
+
+
+def skipper(planner, taken, h_lo, h_hi):
+    """skip(net, i) -> bool for the region's find (gradeshapes.find_interchanges): member i is a piece of an interchange
+    already solved (the index names its key, the solution is here or in the run's store), so it is not scanned again, nor
+    is its interchange found: its solution is read. taken {key: True} gets the key of each such interchange that has a piece
+    in the home box h_lo..h_hi (the region's roads it grades)."""
+    memo = {}
+
+    def skip(net, i):
+        m = net.m[i]
+        line = net.lines[i]
+        cid = _gsh.canonical_id(m)
+        p = line[len(line) // 2]
+        la, lo, _ = planner.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
+        ik = known_key(planner, cid, (float(la[0]), float(lo[0])))
+        if ik is None:
+            return False
+        if ik not in memo:
+            memo[ik] = have(planner, ik) is not None
+        if not memo[ik]:
+            return False
+        bx = net.box[i]
+        if not ((bx[2:] < h_lo).any() or (bx[:2] > h_hi).any()):
+            taken[ik] = True
+        return True
+    return skip
 
 
 # ---- the solution, in a planner's frame and as stored ----
@@ -293,15 +415,17 @@ def interchange(planner, net, ix, hk, clock):
     def solution(ik, ctx):
         def solve():
             c = ctx
-            if c is None:       # (the extent was found by another process or thread: found here for the solve)
-                _ik, n2, i2, others = grow(planner, net, ix, cid, pt, adopt=False)
+            if c is None:       # (the extent was found by another process or thread: read from the index for the solve)
+                _ik, n2, i2, others = grow(planner, net, ix, cid, pt, adopt=False, hint=extent_of(planner, ik))
                 c = (n2, i2, others)
             return made(planner, ik, hk, clock, *c)
         return once(planner, "sol", ik, lambda: have(planner, ik), solve)
-    ik = known_key(planner, cid, pt)
     got = mine = None
-    if ik is None:
-        name = sh.shape_member_name(cid) if sh is not None and hasattr(sh, "shape_member_name") else cid
+    while True:
+        ik = known_key(planner, cid, pt)
+        if ik is not None:
+            break
+        name = name_of(planner, cid)
 
         def known():
             found = known_key(planner, cid, pt)
@@ -316,7 +440,12 @@ def interchange(planner, net, ix, hk, clock):
                 return ik_, None, False
             index_add(planner, ik_, n2, i2.sysm)
             return (ik_,) + solution(ik_, (n2, i2, others))
-        (ik, got, mine), _ = once(planner, "ext", name, known, grown)
+        try:
+            (ik, got, mine), _ = once(planner, "ext", name, known, grown)
+        except GiveWay as g:
+            wait_for(planner, g.cid, cid, pt)
+            continue
+        break
     if got is None:
         got, mine = solution(ik, None)
     xproc.check_cancel()

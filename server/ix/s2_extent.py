@@ -65,12 +65,14 @@ def _reaches(net, seeds, h_lo, h_hi):
     return not ((pts.max(0) < h_lo).any() or (pts.min(0) > h_hi).any())
 
 
-def find(planner, h_lo, h_hi, clock=None):
+def find(planner, h_lo, h_hi, clock=None, taken=None):
     """The region's own find: (net, mine, loaded, members). The cells' members in the home box h_lo..h_hi (and 200 m round
     it), and gradeshapes' find_interchanges among them: mine are the interchanges reaching the home box, as that box holds
     them (a box cuts one anywhere: the owner, ix/owner.py, follows each whole), in solve order. clock (a dict): the seconds
     of the cells' members' reading and one_road are added to its "load", those of finding the interchanges to its
-    "find"."""
+    "find". taken (a dict): given, the pieces of interchanges already solved (the index names their key, the solution is
+    kept: owner.skipper) are not scanned nor found again, and the key of each that has a piece in the home box is put in
+    it: its solution is read, not its interchange followed."""
     import xproc
     clock = {} if clock is None else clock
     xproc.check_cancel()        # (a place a teleport left: its interchanges not found and solved for it)
@@ -80,8 +82,10 @@ def find(planner, h_lo, h_hi, clock=None):
     s1_paths.load(planner, box_lo, box_hi, byk, loaded)
     members = s1_paths.members_of(byk, box_lo, box_hi)
     t1 = time.perf_counter()
+    from . import owner
+    skip = None if taken is None else owner.skipper(planner, taken, h_lo, h_hi)
     net, mine = _gsh.find_interchanges(members, lambda net_: (planner._ground_line, make_fixed(planner, net_)),
-                                       want=lambda net_, seeds: _reaches(net_, seeds, h_lo, h_hi))
+                                       want=lambda net_, seeds: _reaches(net_, seeds, h_lo, h_hi), skip=skip)
     clock["load"] = clock.get("load", 0.0) + t1 - t0
     clock["find"] = clock.get("find", 0.0) + time.perf_counter() - t1
     return net, mine, loaded, members

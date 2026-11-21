@@ -322,6 +322,87 @@ class NoWaitBudgetTest(unittest.TestCase):
             sh.shape_release("sol", "ab" * 10)
 
 
+class GrowthOnceTest(unittest.TestCase):
+    """The growth of an interchange is claimed like its solve: whoever reaches any piece of it finds the key, or waits for
+    the growth running, and two growths that reach each other are one, the lower road id's."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_region_reaching_a_solved_interchange_reads_it_without_finding_it(self):
+        cache = os.path.join(self.dir, "cache")
+        pl, home = planner(cache)
+        first = pl._shape_region_calc(home, "a")
+        lon0, lat0, lon1, lat1 = (float(v) for v in home.bounds())
+        ce, cn, _ = pl.frame.geodetic_to_enu(np.array([lat0, lat0, lat1, lat1]), np.array([lon0, lon1, lon0, lon1]), 0.0)
+        h_lo = np.array([np.min(ce), np.min(cn)]) - grading.SHAPES_PAD_M
+        h_hi = np.array([np.max(ce), np.max(cn)]) + grading.SHAPES_PAD_M
+        taken = {}
+        scanned = []
+        real = gs._relations
+        with unittest.mock.patch.object(gs, "_relations", lambda net, i: scanned.append(i) or real(net, i)):
+            net, mine, _loaded, _members = s2_extent.find(pl, h_lo, h_hi, None, taken)
+        self.assertEqual(mine, [], "its pieces are not found again")
+        self.assertEqual(scanned, [], "nor scanned")
+        self.assertEqual(len(taken), 1)
+        got = owner.have(pl, next(iter(taken)))
+        self.assertEqual(heights({fid: items for fid, items in got["roads"].items()}), heights(first))
+
+    def test_every_seed_road_of_an_interchange_is_in_the_index_with_its_extent(self):
+        pl, home = planner(os.path.join(self.dir, "cache"))
+        net, mine, _m, _l = local(pl, home)
+        ik, n2, i2 = whole(pl, net, mine[0])
+        owner.index_add(pl, ik, n2, i2.sysm)
+        pts = owner.points(pl, n2, i2.sysm)
+        self.assertTrue(pts)
+        for cid, pt in pts.items():
+            self.assertEqual(owner.known_key(pl, cid, pt), ik)
+        box = owner.extent_of(pl, ik)
+        self.assertIsNotNone(box)
+        again = owner.grow(pl, net, mine[0], sorted(pts)[0], pts[sorted(pts)[0]], adopt=False, hint=box)
+        self.assertEqual(again[0], ik, "the stored extent gives the same interchange in its one round")
+
+    def test_a_growth_that_reaches_a_piece_a_lower_growth_runs_from_gives_way(self):
+        pl, home = planner()
+        net, mine, _m, _l = local(pl, home)
+        ix = mine[0]
+        cid = sorted({gs.canonical_id(net.m[i]) for i in ix.sysm["seeds"]})[0]
+        pt = owner.probe(pl, net, ix.sysm, cid)
+        real_ids = gs.system_ids
+        pts = owner.points(pl, net, ix.sysm)
+        with unittest.mock.patch.object(gs, "system_ids", lambda n_, s_: real_ids(n_, s_) | {"000"}),                 unittest.mock.patch.object(owner, "points", lambda *a: dict(pts, **{"000": pt})),                 unittest.mock.patch.object(owner, "growing", lambda p_, c_: c_ == "000"):
+            with self.assertRaises(owner.GiveWay) as g:
+                owner.grow(pl, net, ix, cid, pt)
+        self.assertEqual(g.exception.cid, "000")
+        # (a piece above its own id is the other's to give way: this growth goes on)
+        with unittest.mock.patch.object(gs, "system_ids", lambda n_, s_: real_ids(n_, s_) | {"zzz"}),                 unittest.mock.patch.object(owner, "points", lambda *a: dict(pts, **{"zzz": pt})),                 unittest.mock.patch.object(owner, "growing", lambda p_, c_: True):
+            got = owner.grow(pl, net, ix, cid, pt)
+        self.assertIsNotNone(got[1])
+
+    def test_a_growth_that_gave_way_waits_holding_no_claim_and_then_reads_or_grows(self):
+        cache = os.path.join(self.dir, "cache")
+        pl, home = planner(cache)
+        net, mine, _m, _l = local(pl, home)
+        real = owner.grow
+        calls = []
+
+        def grow(*a, **k):
+            calls.append(1)
+            if len(calls) == 1:
+                raise owner.GiveWay("000")     # (its holder is gone: nothing to wait for)
+            return real(*a, **k)
+        with unittest.mock.patch.object(owner, "grow", grow):
+            got = owner.interchange(pl, net, mine[0], "r", {})
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(got["failed"])
+        self.assertEqual(owner.FLIGHTS, {})
+        self.assertEqual(locks(cache), [], "no claim kept")
+
+
 class FlagOffTest(unittest.TestCase):
     """BNE_SHAPES off: nothing of the owner's machinery is asked for."""
 
