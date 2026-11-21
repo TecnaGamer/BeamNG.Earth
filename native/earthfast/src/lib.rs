@@ -7207,6 +7207,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 509: the fork's 305-309 above merged onto 508
     // 510: RailNode.group(g) -> (keys, heights): railprofile._find_near reads a group's points (its nearest ones
     // where no key matched, the fork's Popoli fix on the ported node)
-    m.add("VERSION", 510)?;
+    // 511: the fork's 307 (a piece of a feature is dropped under a share of it, at most 1 m of it: roads.part_floor,
+    // MIN_PART_M; a share of a 24 km road was 24 m, its 23 m bridge dropped and its range left a hole in the road) merged
+    // on 510: gradesep_layer_rows takes min_part_m, LevelLayer.rules' parameters a 21st, lidar_lines' a 4th, road_specs'
+    // constants "MIN_PART_M"; bridge_level_spans (and level_spans) take absorb_part: a bridge's level fragments under a
+    // share of the road are absorbed into their neighbour as before, only a range under the floor is dropped
+    m.add("VERSION", 511)?;
     Ok(())
 }

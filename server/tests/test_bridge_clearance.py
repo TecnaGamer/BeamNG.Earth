@@ -188,6 +188,55 @@ class TwinLiftTest(TestCase):
         self.assertAlmostEqual(float(out[0][-1]), float(out[2][0]), delta=0.5)     # (the parts still meet)
 
 
+class JointWeldTest(TestCase):
+    """A way that changes level (the K5 line at Daikoku Junction, level 2 then 3): the part of one level is lifted to the
+    deck of its level beside it and the other part is not, so the joint they share opened a step of 0.9-2.1 m."""
+
+    def parts(self, partner_z):
+        xa = np.arange(-60.0, 0.1, 4.0)
+        xb = np.arange(0.0, 60.1, 4.0)
+        a = np.c_[xa, np.zeros(len(xa))]
+        b = np.c_[xb, np.zeros(len(xb))]
+        c = np.c_[xb, np.full(len(xb), 7.0)]                    # a deck of the second part's level beside it
+        zs = [np.full(len(xa), 10.0), np.full(len(xb), 10.0), np.full(len(xb), partner_z)]
+        return [a, b, c], zs, [8.0, 8.0, 8.0], [2.0, 3.0, 3.0]
+
+    def test_parts_sharing_a_joint_meet_at_one_height(self):
+        for partner_z in (11.0, 13.0):
+            lines, zs, widths, levels = self.parts(partner_z)
+            out = roads._merge_overlaps(lines, zs, widths, levels)
+            self.assertLess(abs(float(out[0][-1] - out[1][0])), 0.05, f"partner at {partner_z}")
+            self.assertGreaterEqual(float(out[1].min()), 10.0 - 1e-6)
+            self.assertGreaterEqual(float(out[0].min()), 10.0 - 1e-6, "never lowered")
+            old = roads.MERGE_WELD_ON
+            roads.MERGE_WELD_ON = False
+            try:
+                before = roads._merge_overlaps(lines, zs, widths, levels)
+            finally:
+                roads.MERGE_WELD_ON = old
+            grade = np.abs(np.diff(out[0])) / 4.0
+            self.assertLess(float(grade.max()), float((np.abs(np.diff(before[0])) / 4.0).max()) + 0.035,
+                            "the raise is run out along the part")
+
+    def test_off(self):
+        old = roads.MERGE_WELD_ON
+        try:
+            roads.MERGE_WELD_ON = False
+            lines, zs, widths, levels = self.parts(11.0)
+            out = roads._merge_overlaps(lines, zs, widths, levels)
+        finally:
+            roads.MERGE_WELD_ON = old
+        self.assertGreater(abs(float(out[0][-1] - out[1][0])), 0.1, "(the step it is for)")
+
+    def test_an_abutment_keeps_its_height(self):
+        # a joint a ground road goes on from is an abutment: held at the ground, never welded to the other part's end
+        lines, zs, widths, levels = self.parts(13.0)
+        pins = [np.array([0.0, 0.0])]
+        out = roads._merge_overlaps(lines, zs, widths, levels, pins=pins)
+        self.assertAlmostEqual(float(out[0][-1]), 10.0, places=6)
+        self.assertAlmostEqual(float(out[1][0]), 10.0, places=6)
+
+
 class SemiApproachIntegrationTest(TestCase):
     def test_approach_and_generated_deck_clear_the_law_headroom(self):
         fixture = approaches.OverpassIntegrationTest("test_deck_clears_the_lanes")

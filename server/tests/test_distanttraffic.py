@@ -371,6 +371,8 @@ class StreamingTest(unittest.IsolatedAsyncioTestCase):
             return None
 
         tr.on_pose(conn, 1, 0, 0, asyncio.get_running_loop(), build, frame=frame)
+        await tr._warm              # (its pool's threads started off the loop first: the pass comes with the next pose)
+        tr.on_pose(conn, 1, 0, 0, asyncio.get_running_loop(), build, frame=frame)
         while tr.building:
             await asyncio.sleep(0.01)
         inner = {(x, y) for x, y, _ in geotiles.tiles_near(frame, 0, 0, dt.FAR_SKIP_M, dt.Z)}
@@ -398,6 +400,8 @@ class StreamingTest(unittest.IsolatedAsyncioTestCase):
                 return dt.write(folder, "/temp/traffic", data)
 
             loop = asyncio.get_running_loop()
+            tr.on_pose(conn, 1, 0, 0, loop, build, frame=frame)
+            await tr._warm          # (its pool's threads started off the loop first: the pass comes with the next pose)
             tr.on_pose(conn, 1, 0, 0, loop, build, frame=frame)
             for _ in range(100):
                 if messages:

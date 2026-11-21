@@ -84,7 +84,8 @@ def cell_pieces(feats, frame):
     for i in np.flatnonzero(ok).tolist():
         if feats.kind[i] != mapgeom.LINE:
             continue
-        pieces = [(a, b) for a, b, k in ranges[i] if k == "bridge" and b - a > roads.MIN_PART]
+        floor = roads.part_floor(feats, i, ranges[i])       # (a share of a long road is metres: its short bridge is a deck)
+        pieces = [(a, b) for a, b, k in ranges[i] if k == "bridge" and b - a > floor]
         if not pieces:
             continue
         fid = str(feats.ids[i])

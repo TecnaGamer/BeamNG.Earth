@@ -569,8 +569,9 @@ def road_underpasses(frame, cells, box, reach=REACH_M, classes=None):
             missing = []
             if tagged:          # (the map's tunnels first: most features have none)
                 effective = [(a, b) for a, b, kind in roads.raw_level_ranges(feats, i) if kind == "tunnel"]
+                floor = roads.part_floor(feats, i)
                 missing = [(a, b, kind) for a, b, kind in tagged
-                           if not any(c <= a + roads.MIN_PART and d >= b - roads.MIN_PART for c, d in effective)]
+                           if not any(c <= a + floor and d >= b - floor for c, d in effective)]
             if missing:
                 if ground_specs is None:
                     ground_specs = roads.road_specs(feats)
@@ -3384,7 +3385,7 @@ def tile_decks(frame, tx, ty, cells, ground, far_ground=None, load=None, bed_ele
 
 
 def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, load=None,
-              bed_elev=None, _drop=frozenset(), furniture=None, under=None, records=None):
+              bed_elev=None, _drop=frozenset(), furniture=None, under=None, records=None, tracks_out=None):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
     ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
@@ -3397,7 +3398,9 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     Quay footbridge, GitHub #1071); the track's profile still runs over it.
     load (a roads layer by cell key) and bed_elev (the grader's DEM): the beds from railprofile's lattice, the same in
     every tile (railprofile.py). records: crossing_records of the same arguments (BNE_RAIL_ROAD_FIT: made here when not
-    given; the caller hands the same ones to rails.tile_chunks for the crossing decks)."""
+    given; the caller hands the same ones to rails.tile_chunks for the crossing decks). tracks_out: a list that gets (feature
+    id, class, "ground" | "bridge" | "tunnel", xy, bed z) of every track part the mesh draws, the bed as it was finally laid
+    (flush with the road at a level crossing): what the clearance check (clearance.py) stands its wagons on."""
     cells = list(cells)
     box = roads.tile_bbox(tx, ty)
     rec = None
@@ -3617,7 +3620,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                 _drop = _drop | {keep[n]}
             return tile_mesh(frame, tx, ty, cells, ground, sign_style, far_ground, return_decks=return_decks,
                              load=load, bed_elev=bed_elev, _drop=_drop, furniture=furniture, under=under,
-                             records=rec)
+                             records=rec, tracks_out=tracks_out)
         if rec is not None:
             rec["kept"] = frozenset()
         return (None, decks) if return_decks else None
@@ -3625,6 +3628,9 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         rec["kept"] = frozenset(keep)
     if furniture is not None:
         furniture += rows
+    if tracks_out is not None:
+        tracks_out.extend((fid, cls, kind, xy, np.asarray(zb, np.float64))
+                          for (fid, cls, kind, xy), zb, gone in zip(rails, finals, carried) if not gone)
     return (out, decks) if return_decks else out
 
 

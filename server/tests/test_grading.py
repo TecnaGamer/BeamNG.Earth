@@ -1384,6 +1384,30 @@ class UnderpassTest(unittest.TestCase):
         with unittest.mock.patch.object(grading, "UNDER_NODE_M", 0.5),                 unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False):     # (they would ease the bug's step)
             self.assertGreater(grade()[0], 0.3, "(0.5 m: a step, the bug)")
 
+    def _long_deck_z(self, cross_y, length=500.0):
+        """The height of a residential road crossing under a `length` m motorway deck (no carriageway profile) at
+        cross_y m along it, with the motorway's own ground road either side; the ground is flat at 10 m."""
+        f = features([[(-300, cross_y), (300, cross_y)], [(0, 0), (0, length)], [(0, -260), (0, 0)],
+                      [(0, length), (0, length + 260)]], ["residential", "motorway", "motorway", "motorway"],
+                     flags=[(1, "is_bridge")])
+        g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0]), np.array([float(cross_y)]), 0.0)
+        return float(g.apply(la, lo, np.full(1, 10.0))[0])
+
+    def test_a_road_near_the_end_of_a_long_deck_dips(self):
+        """A road crossing under a deck longer than UNDER_MAX_BRIDGE_M (a viaduct, a long ramp) near one of its ends:
+        the deck there is no higher than it climbs from the abutment, so the road kept its ground under a ceiling a
+        truck did not fit (Popoli's SS17 ramps under the A25's viaduct, Boston's Storrow Drive ramps under the Bowker
+        Overpass: reference trucks in the deck). It dips as under a short one, by the climb from that end alone; in
+        the long deck's middle it is left as it was; BNE_UNDERPASS_LONG=off (UNDER_LONG_ON): as before."""
+        for y in (90.0, 410.0):             # (near either end of the 500 m deck)
+            with self.subTest(y=y):
+                self.assertLess(self._long_deck_z(y), 10.0 - 2.0, "(under the deck's end, dug)")
+                with unittest.mock.patch.object(grading, "UNDER_LONG_ON", False):
+                    self.assertAlmostEqual(self._long_deck_z(y), 10.0, delta=0.1, msg="(off: no dip, the bug)")
+        self.assertAlmostEqual(self._long_deck_z(250.0), 10.0, delta=0.1,
+                               msg="the middle of a long deck is not modelled")
+
     def test_merge_span_chains(self):
         a = np.array([[0.0, 0.0], [10.0, 0.0]])
         b = np.array([[20.0, 0.0], [10.0, 0.0]])          # (reversed: its end meets a's end)

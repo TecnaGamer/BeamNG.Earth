@@ -70,15 +70,41 @@ def chain(rng):
 
 class DeckMergeTest(unittest.TestCase):
     def test_merge_overlaps_matches_numpy(self):
+        # (the pair rounds: the weld of the parts at a joint that follows them is not in the oracle, MERGE_WELD_ON)
         rng = np.random.default_rng(20261108)
         merged = 0
+        old = roads.MERGE_WELD_ON
+        roads.MERGE_WELD_ON = False
+        try:
+            for case in range(400):
+                lines, zs, widths, levels, pins, _ = chain(rng)
+                want = ref._merge_overlaps(lines, zs, widths, levels, pins=pins)
+                got = roads._merge_overlaps(lines, zs, widths, levels, pins=pins)
+                self.assertTrue(same(want, got), f"case {case}")
+                merged += want is not zs
+        finally:
+            roads.MERGE_WELD_ON = old
+        self.assertGreater(merged, 200)         # (most cases have related pairs)
+
+    def test_merge_overlaps_weld_is_safe_on_any_chain(self):
+        # (with the weld: no error on NaN / inf heights, never lowered, ends of abutments kept, a result for every part)
+        rng = np.random.default_rng(20261117)
         for case in range(400):
             lines, zs, widths, levels, pins, _ = chain(rng)
-            want = ref._merge_overlaps(lines, zs, widths, levels, pins=pins)
+            off = roads.MERGE_WELD_ON
+            roads.MERGE_WELD_ON = False
+            try:
+                base = roads._merge_overlaps(lines, zs, widths, levels, pins=pins)
+            finally:
+                roads.MERGE_WELD_ON = off
             got = roads._merge_overlaps(lines, zs, widths, levels, pins=pins)
-            self.assertTrue(same(want, got), f"case {case}")
-            merged += want is not zs
-        self.assertGreater(merged, 200)         # (most cases have related pairs)
+            self.assertEqual(len(got), len(zs), f"case {case}")
+            for x, y in zip(base, got):
+                x, y = np.asarray(x), np.asarray(y)
+                self.assertEqual(x.shape, y.shape, f"case {case}")
+                fin = np.isfinite(x) & np.isfinite(y)
+                self.assertTrue((y[fin] >= x[fin] - 1e-9).all(), f"case {case}: the weld only raises")
+                self.assertTrue((np.isfinite(x) == np.isfinite(y)).all(), f"case {case}: finite where it was")
 
     def test_ground_pins_match_numpy(self):
         rng = np.random.default_rng(7)

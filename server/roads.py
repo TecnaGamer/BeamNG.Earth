@@ -755,7 +755,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 32     # 32: upstream dev's 31 and the fork's 27 merged, 2026-11-19; 27: a track's tunnel judged short or long by its whole run, through the segments the map splits it into at its switches (railways.tunnel_run_m, gradesep 4: Birmingham's lines under the Bullring, 450 m in tunnel in 6-55 m pieces, laid on the ground and bridged by Worcester Street), 2026-11-17; 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads || upstream dev's numbering: 31: small machine-learned outlines (sheds, garages) kept where OSM maps a house within 20 m (osmml.py, 2026-11-19); 30: the street walls without the machine-learned building outlines OSM's buildings make stale (osmml.py: an ML outline where OSM maps a cell's buildings, or overlapping an OSM one, left out of the buildings layer; Fells Point's demolished rowhouses on vacant lots, the user 2026-11-18): the widths of town streets between buildings (_wall_capped, _laned_walled), 2026-11-18; 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 33     # 33: a piece of a long road under a share of its length is no longer dropped, at most 1 m of it is (roads.MIN_PART_M, part_floor: a share of a 24 km road was 24 m, so its 23 m bridge had no deck while its range was cut out of the ground, a hole of raw terrain in the road; two shorter bridges of it were lost the same way), 2026-11-21; 32: 32: upstream dev's 31 and the fork's 27 merged, 2026-11-19; 27: a track's tunnel judged short or long by its whole run, through the segments the map splits it into at its switches (railways.tunnel_run_m, gradesep 4: Birmingham's lines under the Bullring, 450 m in tunnel in 6-55 m pieces, laid on the ground and bridged by Worcester Street), 2026-11-17; 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads || upstream dev's numbering: 31: small machine-learned outlines (sheds, garages) kept where OSM maps a house within 20 m (osmml.py, 2026-11-19); 30: the street walls without the machine-learned building outlines OSM's buildings make stale (osmml.py: an ML outline where OSM maps a cell's buildings, or overlapping an OSM one, left out of the buildings layer; Fells Point's demolished rowhouses on vacant lots, the user 2026-11-18): the widths of town streets between buildings (_wall_capped, _laned_walled), 2026-11-18; 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -1064,7 +1064,8 @@ def _level_prm():
     return np.array([float(SKEW_ON), SKEW_MARGIN_M, SKEW_SLOPE_M, SKEW_MAX_M, SKEW_MIN_SIN, GAP_JOIN_M,
                      float(GAP_DECK_ON), GAP_DECK_M, GAP_JUNCTION_M, GAP_JOIN_M, PORTAL_DECK_M, MIN_PART,
                      TUNNEL_PORTAL_CLEAR_M, TUNNEL_ROAD_MIN_SIN, TUNNEL_PORTAL_REACH_M, TUNNEL_PORTAL_GROW_M,
-                     TUNNEL_PORTAL_END_M, TUNNEL_PORTAL_SHRINK_M, TUNNEL_PORTAL_MIN_M, float(LIDAR_GAPS_ON)], np.float64)
+                     TUNNEL_PORTAL_END_M, TUNNEL_PORTAL_SHRINK_M, TUNNEL_PORTAL_MIN_M, float(LIDAR_GAPS_ON), MIN_PART_M],
+                    np.float64)
 
 
 def _spec_widths(feats, specs):
@@ -1255,7 +1256,7 @@ def lidar_gap_candidates(feats):
     off, rng, kinds = _ranges_flat([rules.get(i, ()) for i in range(n)])
     sk, sw = _structure_widths(feats, list(rules))
     cf, co, pts, half = _level_layer(feats)[0].lidar_lines(off, rng, kinds, have, sk, sw, *_level_rows(feats),
-                                                           np.array([MIN_PART, LIDAR_GAP_TOUCH_M, LIDAR_GAP_REACH_M]))
+                                                           np.array([MIN_PART, LIDAR_GAP_TOUCH_M, LIDAR_GAP_REACH_M, MIN_PART_M]))
     co = co.tolist()
     got = [(str(feats.ids[f]), pts[co[c]:co[c + 1]], float(half[c])) for c, f in enumerate(cf.tolist())]
     feats.__dict__["_lidar_gap_candidates"] = got
@@ -1620,7 +1621,18 @@ def sub_polylines(rings, pieces, whole=True, rows_only=False):
     return out
 
 
-MIN_PART = 1e-3     # parts shorter than this share of a segment are dropped
+MIN_PART = 1e-3     # parts shorter than this share of a segment are dropped ...
+MIN_PART_M = 1.0    # ... and at most this many metres of it: a share of a 24 km road was 24 m (the Fuji Subaru Line's 23 m
+#                     bridge was dropped, no deck, and its range was still cut out of the ground: a hole in the road)
+
+
+def part_floor(feats, i, rngs=None):
+    """The share of feature i under which a piece of it is dropped: MIN_PART, at most MIN_PART_M metres of it (the
+    same in every kernel: earthfast levels.rs part_floor). rngs: its ranges, if the caller has them; none: whatever
+    the length, the piece is the whole feature (the length is not measured)."""
+    if rngs is not None and not len(rngs):
+        return MIN_PART
+    return min(MIN_PART, MIN_PART_M / max(_feature_length_m(feats, i), 1.0))
 
 
 def height_limit_lines(feats, on_bridges=True):
@@ -1658,26 +1670,27 @@ def _parts_by_level(feats, i, want):
     return list(got)
 
 
-def ground_ranges(rngs):
-    """The on-ground (start, end) fractions of a feature with level_ranges rngs."""
+def ground_ranges(rngs, floor=MIN_PART):
+    """The on-ground (start, end) fractions of a feature with level_ranges rngs; floor: part_floor of the feature."""
     pieces, at = [], 0.0
     for a, b, _ in rngs:
-        if a - at > MIN_PART:
+        if a - at > floor:
             pieces.append((at, a))
         at = max(at, b)
-    if 1.0 - at > MIN_PART:
+    if 1.0 - at > floor:
         pieces.append((at, 1.0))
     return pieces
 
 
 def _parts_by_level_new(feats, i, want, rngs=None):
     rngs = level_ranges(feats, i) if rngs is None else rngs
+    floor = part_floor(feats, i, rngs)
     if want == "ground":
-        pieces = ground_ranges(rngs)
+        pieces = ground_ranges(rngs, floor)
     elif want == "bridge":
         pieces = [(a, b) for a, b, _ in _bridge_level_spans(feats, i, rngs)]
     else:
-        pieces = [(a, b) for a, b, k in rngs if k == want and b - a > MIN_PART]
+        pieces = [(a, b) for a, b, k in rngs if k == want and b - a > floor]
     rings = [ring for part in feats.parts(i) for ring in part if len(ring) >= 2]
     return [r for r in sub_polylines(rings, pieces) if len(r) >= 2]
 
@@ -1694,13 +1707,14 @@ def _part_keys_new(feats, i, want, rngs=None):
     ranges to take (level_ranges' by default), as _parts_by_level_new's."""
     rngs = level_ranges(feats, i) if rngs is None else rngs
     raw = raw_level_ranges(feats, i)
+    floor = part_floor(feats, i, rngs)
     if want == "ground":
-        pieces, rawp = ground_ranges(rngs), ground_ranges(raw)
+        pieces, rawp = ground_ranges(rngs, floor), ground_ranges(raw, floor)
     elif want == "bridge":
         pieces = [(a, b) for a, b, _ in _bridge_level_spans(feats, i, rngs)]
         rawp = [(a, b) for a, b, k in raw if k == want]
     else:
-        pieces = [(a, b) for a, b, k in rngs if k == want and b - a > MIN_PART]
+        pieces = [(a, b) for a, b, k in rngs if k == want and b - a > floor]
         rawp = [(a, b) for a, b, k in raw if k == want]
     bases = []
     for a, b in pieces:
@@ -1764,7 +1778,7 @@ def _bridge_level_spans(feats, i, rngs=None):
     spans, lv = fast._ef.bridge_level_spans(
         np.asarray([(a, b) for a, b, k in rngs if k == "bridge"], np.float64).reshape(-1, 2),
         np.asarray([t.start[j] for j in rows], np.float64), np.asarray([t.end[j] for j in rows], np.float64),
-        [str(t.value[j]) for j in rows], MIN_PART)
+        [str(t.value[j]) for j in rows], part_floor(feats, i, rngs), MIN_PART)
     got = [(float(a), float(b), float(v)) for (a, b), v in zip(spans, lv)]
     memo[key] = got
     return got
@@ -3793,7 +3807,7 @@ def _osm_widths(feats, lo, hi):
 
 def _spec_prm():
     """The spec kernels' thresholds, read at each call (tests change them)."""
-    return {"MIN_PART": MIN_PART, "URBAN_SAMPLE_M": URBAN_SAMPLE_M, "URBAN_SHARE": URBAN_SHARE,
+    return {"MIN_PART": MIN_PART, "MIN_PART_M": MIN_PART_M, "URBAN_SAMPLE_M": URBAN_SAMPLE_M, "URBAN_SHARE": URBAN_SHARE,
             "URBAN_BESIDE_M": URBAN_BESIDE_M, "URBAN_HIGHWAY_BESIDE_M": URBAN_HIGHWAY_BESIDE_M,
             "URBAN_BESIDE_SHARE": URBAN_BESIDE_SHARE,
             "URBAN_BOTH_SHARE": URBAN_BOTH_SHARE, "DUAL_GAP_M0": DUAL_GAP_M[0], "DUAL_GAP_M1": DUAL_GAP_M[1],
@@ -4590,6 +4604,8 @@ def _end_joins(lines, halves, ground_lines):
 # that end at the other deck's height where they differ by more than END_ON_STEP_M (earthfast.deck_end_on).
 END_ON_MARGIN_M = 0.5
 END_ON_STEP_M = 0.3
+END_ON_ITER_ON = os.environ.get("BNE_END_ON_ITER", "on") != "off"
+END_ON_PASSES = 6           # solves with the ends held at most (each from the parents' heights of the one before; the stacked-deck case settles at the sixth)
 # a bridge's loose end over water with no road going on (a ferry's linkspan, a pier: BridgeProfiles._landing_ground)
 LANDING_ON = os.environ.get("BNE_LANDING", "on") != "off"
 LANDING_FREEBOARD_M = 2.0   # m over the sea such an end is held at (a ferry's car deck, a pier's top: about level with its quay)
@@ -4630,11 +4646,23 @@ TIE_MEASURED_M = 0.5        # m: a part whose heights a source measured (roadz: 
                             # pulled measured ramps by I-395 1.6 and 4.9 m off the lidar's
 
 
-def _tie_beside(lines, zs, specs, measured=None):
+# ... and only to a part of its own level: two decks of a viaduct one over the other 3 m apart in plan (Daikoku Junction's
+# K5 line, levels 2 and 3) are both within a ramp's reach, and the tie took the other level's deck for its road: the
+# upper ramp dropped 5 m, the lower one rose 5 m (and the lower mainline itself 5 m, tied to the wider upper one), and
+# the slabs were cut where they met
+TIE_LEVELS_ON = os.environ.get("BNE_TIE_LEVELS", "on") != "off"
+# ... unless its end is a node of that part, where the map joins them whatever their layer tags say: a ramp tagged one
+# level and its road another at the node they share is still its road's branch (Boston's Bowker ramps lost their tie and
+# stepped onto Storrow Drive's decks). A deck over or under another shares no node with it.
+TIE_NODE_M = 0.5
+
+
+def _tie_beside(lines, zs, specs, measured=None, levels=None):
     """zs with each branch (a ramp, else the narrower part) that leaves or joins another part (its end on that part's
     deck) held at
     that part's height while their slabs are joined (TIE_*), eased into its own profile after. lines: (k, >= 2) per
-    part, zs: heights per point, specs: their Specs. Pure."""
+    part, zs: heights per point, specs: their Specs, levels: theirs (a part is tied to a part of its own level only).
+    Pure."""
     zs = [np.asarray(z, np.float64).copy() for z in zs]
     pts = [np.asarray(ln, np.float64)[:, :2] for ln in lines]
     n = len(pts)
@@ -4677,8 +4705,11 @@ def _tie_beside(lines, zs, specs, measured=None):
                 # (its end on the other's deck: at its end, or a few metres off it, where the map starts a ramp beside
                 # its road rather than on its joint: I-95 northbound by the Middle Branch, 2.2 m off, their slabs
                 # overlapping 0.2 m apart in height)
-                if project(j, p[None])[0] > wj / 2 + 1.0:
+                d_end = project(j, p[None])[0]
+                if d_end > wj / 2 + 1.0:
                     continue
+                if levels is not None and TIE_LEVELS_ON and levels[j] != levels[i]                         and float(dnp.hypot(*(pts[j] - p).T).min()) > TIE_NODE_M:
+                    continue                            # (another level: the deck over or under it, not its road)
                 branch = (getattr(specs[i], "link", False) and not getattr(specs[j], "link", False)) or \
                     (getattr(specs[i], "link", False) == getattr(specs[j], "link", False) and wi < wj - 0.5)
                 if not branch:
@@ -4687,8 +4718,10 @@ def _tie_beside(lines, zs, specs, measured=None):
                 a = 15.0 if e == 0 else arcs[i][-1] - 15.0
                 q = np.array([dnp.interp(a, arcs[i], pts[i][:, 0]), dnp.interp(a, arcs[i], pts[i][:, 1])])
                 d, _ = project(j, q[None])
-                if best is None or d < best[0]:
-                    best = (d, j, wj)
+                # (the one its end lies on first, then the one it runs beside)
+                key = (0 if d_end <= wj / 2 else 1, d)
+                if best is None or key < best[0]:
+                    best = (key, j, wj)
             if best is None:
                 continue
             _, j, wj = best
@@ -4838,6 +4871,13 @@ def _merge_overlaps(lines, zs, widths, levels, rounds=3, pins=None):
             if deg[b] == 1:
                 new[i][-1] = zs[i][-1]
         zs = new
+    if MERGE_WELD_ON:
+        # a joint's parts each pulled toward the decks beside THEM (a way that changes level: the part of one level
+        # lifted to its twin, the other not) end at different heights: each joint at its parts' highest end, the raise
+        # run out along each part (_weld). A joint a ground road goes on from stays an abutment.
+        ids = [(a if deg[a] > 1 else len(nodes) + 2 * k, b if deg[b] > 1 else len(nodes) + 2 * k + 1, es)
+               for k, (a, b, es) in enumerate(edges[:n])]
+        zs = _weld(ids, zs)
     out = []
     for i, z in enumerate(zs):                  # re-smoothed, ends kept
         s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(lines[i][:, :2], axis=0).T))]
@@ -4851,6 +4891,7 @@ DUAL_DECK_M = 30.0      # m: parts of one level parallel within this are one dec
 # (_merge_overlaps here, _tie_beside after), the input of the joint height solve (BridgeProfiles._raw_solve). Never set
 # off the switch path.
 _NO_MERGE = threading.local()
+MERGE_WELD_ON = os.environ.get("BNE_MERGE_WELD", "on") != "off"      # the parts at a joint at one height after the merge
 
 
 def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, levels=None, widths=None, pins=None,
@@ -5356,6 +5397,14 @@ def curve_profile(s, g, req, z0, zL, g0=0.0, gL=0.0, max_grade=None, lift=None, 
     cap = np.minimum(np.minimum(z0 + max_grade * s, zL + max_grade * (L - s)),
                      np.inf if cap is None else cap)        # (and under a junction at grade's own cap)
     line = z0 + (zL - z0) * s / max(L, 1e-9)    # never under the straight line between the abutments
+    # (a ramp: abutments further apart in height than DECK_STEEP_GRADE over the length (a deck mapped across a gully
+    # between two hillsides, the Fuji Subaru Line's 23 m bridge, 5 m between its ends: its road met it 1.0 m under a
+    # 1.4 m hump by the high end and a 2.5 m step at the low one). The grade caps stood under the straight line between
+    # the abutments, under the high end's own height, and the curve, its ends held, humped the deck. Where the curve
+    # leaves that line by RAMP_DEV_M or more: the caps never under the line and the taut line over what it must clear,
+    # _ramp. A chord steeper than RAMP_MAX_GRADE is bad data and a milder ramp's curve, rounding to the approaches, is
+    # kept (the A20's 16 m, 16 % bridge near Rostock: the straight line is a kink at each end))
+    ramp = RAMP_ON and DECK_STEEP_GRADE * L < abs(zL - z0) <= RAMP_MAX_GRADE * L
     # the straight line between the abutments, or one parabola over it rising at most CHORD_KINK more steeply out of
     # each abutment, when that clears everything (the requirements within CHORD_TOL: they carry 0.21 m of margin;
     # the ground itself, which it may rest on) and meets both approaches within CHORD_KINK. The curve's floor stood
@@ -5392,8 +5441,47 @@ def curve_profile(s, g, req, z0, zL, g0=0.0, gL=0.0, max_grade=None, lift=None, 
                 log.debug("deck curve: R %.0f m (design speed's crest %.0f m)", r, crest_r)
                 best = (None, z)
                 break
-    z = best[1].copy()
-    return _lift_smooth(s, z, floor)                # the abutments stay on the approach road
+    z = _lift_smooth(s, best[1].copy(), floor)      # the abutments stay on the approach road
+    if ramp and float(np.max(np.abs(z - line))) >= RAMP_DEV_M:
+        wr = np.minimum(np.maximum(req, line), np.maximum(cap, line))
+        need = np.maximum(wr, floor)
+        need[0], need[-1] = z0, zL
+        return _ramp(s, need, step)
+    return z
+
+
+RAMP_ON = os.environ.get("BNE_DECK_RAMP", "on") != "off"
+RAMP_MAX_GRADE = 0.30   # a chord steeper than this (bad data: a tunnel mouth's 8.7 m deck over a 7.4 m drop, Paris) is no ramp: as before
+RAMP_DEV_M = 0.5        # m a ramp's curve may leave the straight line between its abutments before the ramp's line replaces it
+RAMP_ROUND_M = 8.0      # m: the moving average a ramp deck's crests are rounded by (_ramp)
+
+
+def _ramp(s, need, step):
+    """A ramp deck's heights (curve_profile: abutments further apart in height than DECK_STEEP_GRADE over the length): the
+    least concave majorant of need (m per grid point: the straight line between the abutments, the ground under it, the
+    clearances the grade caps let it reach; the ends are the abutments), the string pulled taut between the ends over
+    its points, its crests rounded over RAMP_ROUND_M and never under need. No vertical curves out to the approaches'
+    grades (moving averages of a line that steep put a 0.6 m hump by the high end and a step at the low one) and no
+    lift spread along it (_lift_smooth runs 1 m out over 40 m). Pure."""
+    n = len(s)
+    hull = []
+    for i in range(n):
+        while len(hull) >= 2:
+            a, b = hull[-2], hull[-1]
+            # b under the chord a-i: not on the majorant
+            if (need[b] - need[a]) * (s[i] - s[a]) <= (need[i] - need[a]) * (s[b] - s[a]):
+                hull.pop()
+            else:
+                break
+        hull.append(i)
+    z = dnp.interp(s, s[hull], need[hull])
+    r = int(round(RAMP_ROUND_M / 2.0 / max(step, 1e-9)))
+    if r >= 1 and n > 2 * r:
+        ext = np.r_[2 * z[0] - z[r:0:-1], z, 2 * z[-1] - z[-2:-r - 2:-1]]
+        sm = dnp.convolve(ext, np.ones(2 * r + 1) / (2 * r + 1), mode="valid")
+        z = np.maximum(sm, need)
+    z[0], z[-1] = need[0], need[-1]
+    return z
 
 
 def _tents(s, z, grade):
@@ -9049,34 +9137,43 @@ class BridgeProfiles:
         zs = solve(base)
         # a free end standing on another deck: solved again with it at that deck's height as drawn (measured too:
         # _observed) (_end_ons)
+        # (each held end read from the parent's heights of the solve before it, and the solve with the ends held moves
+        # the parent: Daikoku Junction's service road stood on a deck 13.7 m up, the parent then rose to 20.7 m, a
+        # 6.8 m step and the deck trimmed to 2.7 m with its parapet in the truck's lane. Repeated with each end at its
+        # parent's heights of the last solve, END_ON_PASSES at most, until every end is within END_ON_STEP_M of it.)
         over = {}
         ons = self._end_ons_of(lines, [pool[c][0].width / 2 for c in comp], levels, ground)
         final = self._observed(comp, pool, lines, zs, pins=pins) if ons else zs
-        for k, at, j, arc in ons:
-            lj = np.asarray(lines[j], np.float64)[:, :2]
-            sj = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(lj, axis=0).T))]
-            zt = float(dnp.interp(arc, sj, np.asarray(final[j], np.float64)))
-            if np.isfinite(zt) and abs(zt - float(final[k][at])) > END_ON_STEP_M:
-                q = np.asarray(lines[k], np.float64)[at, :2]
-                over[(float(q[0]), float(q[1]))] = zt
-        if over:
+        for _ in range(END_ON_PASSES if END_ON_ITER_ON else 1):
+            moved = False
+            for k, at, j, arc in ons:
+                lj = np.asarray(lines[j], np.float64)[:, :2]
+                sj = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(lj, axis=0).T))]
+                zt = float(dnp.interp(arc, sj, np.asarray(final[j], np.float64)))
+                if np.isfinite(zt) and abs(zt - float(final[k][at])) > END_ON_STEP_M:
+                    q = np.asarray(lines[k], np.float64)[at, :2]
+                    over[(float(q[0]), float(q[1]))] = zt
+                    moved = True
+            if not moved:
+                break
             keys_ = np.array(list(over), np.float64)
             vals = np.array(list(over.values()), np.float64)
 
-            def ground_on(xy):
+            def ground_on(xy, keys_=keys_, vals=vals):
                 z = np.asarray(base(xy), np.float64)
                 xy = np.asarray(xy, np.float64).reshape(-1, 2)
                 for (px, py), zt in zip(keys_, vals):
                     z = np.where((np.abs(xy[:, 0] - px) < 1e-6) & (np.abs(xy[:, 1] - py) < 1e-6), zt, z)
                 return z
             zs = solve(ground_on)
+            final = self._observed(comp, pool, lines, zs, pins=pins)
         deficits = _clearance_deficits(lines, zs, [r[:3] for r in required + rails], depth)
         if deficits:
             # (debug: a city has hundreds of such bridges, each solved again in every process and tile; as a warning it
             # filled players' consoles, GitHub #391, TGForever Discord 2026-10-28)
             log.debug("bridge clearance below %.1f m target: %s; abutment/grade or map constraints prevent full headroom",
                       MIN_BRIDGE_HEADROOM_M, [(comp[i], round(h, 2)) for i, h in deficits[:3]])
-        out = final if (ons and not over) else self._observed(comp, pool, lines, zs, pins=pins)
+        out = final if ons else self._observed(comp, pool, lines, zs, pins=pins)
         hook = DECK_Z_HOOK
         if hook is not None:
             # (a carriageway's deck: the height its roads and decks were solved for together, grading's
@@ -9541,7 +9638,7 @@ class BridgeProfiles:
         tl.measured = set()
         zs = self._solve(comp, pool, ground)
         zs = _tie_beside([pool[k][1] for k in comp], zs, [pool[k][0] for k in comp],     # (ramps beside their road)
-                         [k in tl.measured for k in comp])
+                         [k in tl.measured for k in comp], [pool[k][3] for k in comp])
         # STAGED until every read the chain depends on is done: the parts' piers (_precommit: the ground under them)
         # and the chain's structure (_structure: the cells round it) can still read something short, and a part
         # published before them was taken by a reader or an adopter in another thread as complete (review,

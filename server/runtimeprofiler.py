@@ -346,6 +346,17 @@ class ThreadPoolExecutor(_ThreadPoolExecutor):
             return fut
         return collector.submit(super().submit, self._thread_name_prefix, fn, args, kwargs)
 
+    def prestart(self):
+        """Every worker thread started now, in the calling thread (never the event loop): a later submit finds an idle
+        worker and starts none. The pool starts its threads one per submit, and Thread.start waits until the new thread
+        has run: a trees pass of 64 submits after a teleport, on busy cores at below-normal priority, waited ~45 ms per
+        start, a 2.5 s event-loop stall (2026-11-16)."""
+        gate = threading.Event()
+        futs = [_ThreadPoolExecutor.submit(self, gate.wait) for _ in range(self._max_workers)]
+        gate.set()
+        for f in futs:
+            f.result()
+
 
 async def stream(server):
     """Only live subscribers enable collection. Queue RPCs stay off the event loop."""

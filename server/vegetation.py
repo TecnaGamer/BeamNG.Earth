@@ -1755,6 +1755,7 @@ class Tracker:
         # blocked on the road processes, which re-plan every road cell for a new anchor: after a rebase at 90 mph
         # not one tree tile came for minutes (2026-10-17, salt flats)
         self.pool = None
+        self._warm = None           # (the pool's threads being started off the loop: _pool_ready)
         self.futs = {}
         # geo: keys are geotiles (geotiles.Z, the global grid): what was sent stays sent across anchors (the mod
         # re-places it at a rebase, geotile.lua), the tiles near a point found by their quads in the anchor's world
@@ -1810,9 +1811,8 @@ class Tracker:
             for f in self.futs.values():
                 f.cancel()                  # the old anchor's that have not started
             self.aid, self.sent, self.building, self.futs = aid, set(), set(), {}
-        if self.pool is None:
-            from runtimeprofiler import ThreadPoolExecutor
-            self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-tile")
+        if not self._pool_ready(loop, f"{self.kind}-tile"):
+            return
         spots = [(x, y)] + ([tuple(view)] if view else [])
         skip = {k for p in spots for k in roadsmod.tiles_near(*p, self.skip_m)} if self.skip_m else ()
         if self.inner is not None:          # (the skyline: not where the far buildings' groups are)
@@ -1851,6 +1851,19 @@ class Tracker:
             self.sent.discard(k)
             conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": f"{k[0]}_{k[1]}"})
 
+    def _pool_ready(self, loop, name):
+        """The tracker's own pool (per_pose threads), made on its first pass with every thread started in the loop's
+        default executor, off the event loop (runtimeprofiler's prestart): False until they are, the pass left to the next
+        pose a few tens of ms later. Started one per submit on the loop, a teleport's first trees pass of 64 stalled the
+        event loop 2.5 s (2026-11-16). (A stand-in loop of the tests: no warming, ready at once.)"""
+        import asyncio
+        if self.pool is None:
+            from runtimeprofiler import ThreadPoolExecutor
+            self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=name)
+            if isinstance(loop, asyncio.AbstractEventLoop):
+                self._warm = loop.run_in_executor(None, self.pool.prestart)
+        return self._warm is None or self._warm.done()
+
     def _on_pose_geo(self, conn, aid, x, y, loop, build, view, foci, frame, tree=None):
         """on_pose for geotiles: the same rules (send_m, drop_m, the camera's, other cars' foci; group_z's whole groups,
         inner's tiles left out), the tiles' quads in the anchor's world (frame: its EnuFrame); an anchor change keeps
@@ -1861,9 +1874,8 @@ class Tracker:
         if aid != self.aid:
             self.aid, self.frame = aid, frame
             self._quads = {k: v for k, v in self._quads.items() if k[0] == aid}
-        if self.pool is None:
-            from runtimeprofiler import ThreadPoolExecutor
-            self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-geo")
+        if not self._pool_ready(loop, f"{self.kind}-geo"):
+            return
         z = self.z or geotiles.Z
         spots = [(x, y)] + ([tuple(view)] if view else [])
         # (a pose that changes nothing this tracker goes by: no pass; the car, the camera and the other cars' foci

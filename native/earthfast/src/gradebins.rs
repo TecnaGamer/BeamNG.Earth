@@ -45,10 +45,9 @@ pub const STEEP: u8 = 1;
 /// blend it stepped down to the section's held carriageway at its edge (Kennedybruecke in Vienna: a bus lane over the
 /// open "Unterfahrung" stepped 1.2 m, GitHub #1169).
 pub const OPEN_TUNNEL: u8 = 2;
-/// ... and a section of a tunnel covered elsewhere, held in the open (Plan.tunnel_section: a trench by its portals).
-/// Past its painted edge a road running beside it keeps its own ground whatever the rank gap: a street along the top of
-/// the trench is on the ground beside it, not on the trench's floor. A road crossing it still eases onto it (the cross
-/// fade in pair1), and on its carriageway a lower road gives way as before
+/// ... and any tunnel part's section held in the open (Plan.tunnel_section: a trench, covered or not). Past its painted
+/// edge a road running beside it keeps its own ground, whatever the rank gap: a street along the top of a trench is
+/// on the ground beside it, not on the trench's floor. A road crossing it still eases onto it (the cross fade below)
 pub const TUNNEL: u8 = 4;
 /// the steepest a segment's line is carried on past its end (extrap): steeper than any road's grade; a steeper
 /// segment (a step held in a plan over a few cm) is carried on at this
@@ -144,7 +143,7 @@ pub struct Pt {
     // second-highest rank there (equal to hrank when another road of its rank is at the point, so its carriageway
     // is not held over that one's)
     hdeep: f64, hrank: i64, hrank2: i64, hid: i64, hz: f64, hyield: f64, hcar: bool, hdx: f64, hdy: f64,
-    // (rank) that road is a tunnel's open section (OPEN_TUNNEL), a covered tunnel's section in the open (TUNNEL)
+    // (rank) that road is a tunnel's open section (OPEN_TUNNEL), a tunnel's section in the open, covered or not (TUNNEL)
     hopen: bool, htun: bool,
     // the highest rank of a plan leading onto a bridge (abut) whose carriageway holds the point within ARANK_NEAR_M of
     // its abutment, and that plan's height there: a road of no higher rank standing more than ARANK_DZ_M off it does
@@ -561,9 +560,9 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
         // (a tunnel's open section only: a road crossing it, mapped over the tunnel, eases onto it whatever the class
         // gap; one running beside it, a street along the top of its trench, keeps its own ground: a residential street
         // over the A23's cover beside its portal stepped 1.2 m at the cover's edge, eased down to the open section)
-        // (and past the painted edge of a covered tunnel's section in the open, a trench, the same for a road within
-        // the rank gap: a primary along the top of a trunk's trench in Barcelona was eased 1-3.5 m down toward its
-        // floor, its lanes tilted and the trucks on it into the ground at the kerb, TUNNEL)
+        // A tunnel's section in the open, covered or not, the same past its painted edge for a road within the rank gap:
+        // a street running along the top of the trench was eased 2-3 m down onto its floor, its kerb and the trucks
+        // on it into the trench's wall (TUNNEL)
         let cross = if ranked && (!st.htun || st.hcar) { 1.0 } else {
             let c = ((g.abx * st.hdx + g.aby * st.hdy) / g.len.max(1e-9)).abs();
             1.0 - smooth((c - 0.5) / (0.866 - 0.5))

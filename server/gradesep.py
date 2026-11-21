@@ -213,12 +213,12 @@ def _layer_rows(f):
             for i in np.flatnonzero(subs == "rail").tolist():
                 if railways.drawn(f, i) is not None:
                     kinds[i], halves[i] = 1, RAIL_HALF_M
-            fast.require(189, "gradesep_layer_rows")
+            fast.require(307, "gradesep_layer_rows")
             toff, trng, tkind = roads._tag_flat(f)
             poff, pk, pa, pb = fast._ef.gradesep_layer_rows(
                 kinds, toff, trng, tkind, np.ascontiguousarray(f.lonlat, np.float64).reshape(-1, 2),
                 np.ascontiguousarray(f.coord_off, np.int64), np.ascontiguousarray(f.ring_off, np.int64),
-                np.ascontiguousarray(f.part_off, np.int64), roads.MIN_PART, railways.SHORT_TUNNEL_M)
+                np.ascontiguousarray(f.part_off, np.int64), roads.MIN_PART, roads.MIN_PART_M, railways.SHORT_TUNNEL_M)
             # (a railway's tunnel is short along the line, not on its segment: railways.tunnel_run_m, the railways'
             # own test; the kernel measures the segment's range alone, and a road over the tracks under the Bullring,
             # 450 m of tunnel in 7-55 m segments, got a bridge over each)

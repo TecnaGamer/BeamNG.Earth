@@ -70,6 +70,26 @@ class CurveProfile(unittest.TestCase):
         self.assertLessEqual(np.max(np.abs(np.diff(z) / 0.5)), roads.DECK_MAX_GRADE + 1e-3)
         self.assertLess(kink(z, 0.5), 0.02)
 
+    def test_ramp_between_hillsides_meets_its_ends(self):
+        # a 23 m deck across a gully, its ends 5 m apart in height (the Fuji Subaru Line's, 21 %): the grade caps stood under
+        # the straight line between the abutments and the curve humped the high end by 1.4 m and stepped 2.5 m onto the low
+        # one, the road under the trucks 1 m off the deck's end
+        ln = line(0, 23.0, step=2.875)
+        x = np.arange(0.0, 23.0 + 1e-9, 0.25)
+        # the fill under the high end (a shelf falling at 8 %, then the gully's floor), up to the low end
+        ground = np.interp(x, [0.0, 9.0, 9.1, 22.0, 23.0], [5.0, 4.3, 0.0, 0.7, 0.9])
+
+        def g(xy):
+            return np.interp(xy[:, 0], x, ground)
+        zs = roads.deck_curve([ln], g, crossings=[(0, 0.0, 5.0), (0, 23.0, 0.9)])
+        s, z = resample([ln], zs, step=0.25)
+        self.assertAlmostEqual(zs[0][0], 5.0, places=6)
+        self.assertAlmostEqual(zs[0][-1], 0.9, places=6)
+        self.assertLessEqual(z.max(), 5.0 + 1e-6)                      # no hump over the high abutment
+        self.assertTrue(np.all(np.diff(z) <= 0.05))                    # falling all along
+        self.assertTrue(np.all(z[1:] >= g(np.c_[s, np.zeros(len(s))])[1:] + roads.DECK_CLEAR - 0.06))
+        self.assertLess(np.max(np.abs(np.diff(z) / 0.25)), roads.RAMP_MAX_GRADE + 0.1)
+
     def test_never_below_ground(self):
         ln = line(0, 200)
 

@@ -547,22 +547,27 @@ def _warm_loop():
                     # (the cells other processes are planning now are looked at again: no pose may come to say so)
                     # ... nor that this process's block is built: the cells left are planned here then)
                     _s.cv.wait(WARM_RECHECK_S if _FIRST[0] > 0 or any(not g.planned(k) for g, k in _s.want) else None)
-            aid, out_dir = getattr(_s, "warm_of", (None, None))
-        import pools
-        # (its own check: the process's job-wide one is another anchor's job's, or none)
-        xproc.set_thread_cancel((lambda a=aid, o=out_dir: abandoned(o, a)) if out_dir is not None else (lambda: False))
-        try:
-            t0 = time.perf_counter()
-            job[0].warm(job[1])
-            log.debug("road plans ahead: %s in %.2f s", job[1], time.perf_counter() - t0)
-        except pools.Abandoned:         # (a teleport left the anchor: its cells are not wanted now)
-            log.debug("road plans ahead for %s: given up, a teleport left anchor %s", job[1], aid)
-            with _s.cv:
-                _s.want = [w for w in _s.want if w[1] != job[1]]
-        except Exception:
-            log.exception("road plans ahead for %s", job[1])
-            with _s.cv:
-                _s.want = [w for w in _s.want if w[1] != job[1]]
+        _warm_one(job)
+
+
+def _warm_one(job):
+    """Plan one cell ahead (job: (grader, cell key)). A cell that fails, or that a teleport left (pools.Abandoned: its plans no
+    longer wanted, quietly: a traceback was read as a fault while driving), is dropped from the wanted."""
+    import pools
+    aid, out_dir = getattr(_s, "warm_of", (None, None))
+    # (its own check: the process's job-wide one is another anchor's job's, or none)
+    xproc.set_thread_cancel((lambda a=aid, o=out_dir: abandoned(o, a)) if out_dir is not None else (lambda: False))
+    try:
+        t0 = time.perf_counter()
+        job[0].warm(job[1])
+        log.debug("road plans ahead: %s in %.2f s", job[1], time.perf_counter() - t0)
+        return
+    except pools.Abandoned:         # (a teleport left the anchor: its cells are not wanted now)
+        log.debug("road plans ahead for %s: given up, a teleport left anchor %s", job[1], aid)
+    except Exception:
+        log.exception("road plans ahead for %s", job[1])
+    with _s.cv:
+        _s.want = [w for w in _s.want if w[1] != job[1]]
 
 
 
@@ -1497,12 +1502,13 @@ def _dem_warm(frame, box, zoom):
 @profile_step('Road tile assembly')
 def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
                 q, rkey, centre, skin_margin=0.0, walks_raw=None, cache_dir=None, out_dir=None, vfs_dir=None, pole_profile=None,
-                de_junctions=False, towns_on=False, wear=None):
+                de_junctions=False, towns_on=False, wear=None, aid=None):
     """A road tile's parts in frame: tile (tx, ty) of an anchor, or a geotiles.GeoBox (its own frame, no anchor in
     it). g: the frame's grading.Grader view (None: no grading); q: the height quantum the sidewalks' curbs are put on
     (None: the ground as it is: a geotile's content); rkey: the railways' ground cache key; centre (lat, lon): the
     place's (the brick pavement's region). skin_margin, walks_raw: roads.build_tile's (a geotile's skin pieces).
-    out_dir, vfs_dir: where the town signs' faces are written (town_signs; None: no town signs)."""
+    out_dir, vfs_dir: where the town signs' faces are written (town_signs; None: no town signs). aid: the anchor's id
+    (the clearance log's lines name it; None for a geotile)."""
     import parking as parkingmod
     import rails as railsmod
     import roadmesh as roadmeshmod
@@ -1679,6 +1685,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.town_faces = town_faces
     mark("build_tile")
     import railways
+    rail_tracks = []                # (the tracks drawn, with their beds: the clearance check's wagons stand on them)
     rail_rec = rail_early = None    # (BNE_RAIL_ROAD_FIT: one record of the level crossings, the track made first from it,
     if railways.RAIL_ROAD_FIT:      # the decks here for the parts it drew)
         _rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
@@ -1692,7 +1699,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         rail_early = railways.tile_mesh(frame, tx, ty, _rcells, _rground, far_ground=_rfar, return_decks=True,
                                         load=cell_fn, bed_elev=_rbed, furniture=rail_early_props,
                                         under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
-                                               if _bridge_fps else None), records=rail_rec)
+                                               if _bridge_fps else None), records=rail_rec,
+                                        tracks_out=rail_tracks)
     chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban,      # railway and tram tracks on the ground
                                    records=rail_rec)
     mark("rails")
@@ -1758,6 +1766,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     # Share the bridge mesh's exact parapet geometry with the tile builder.
     # (the junction pads on the bridges round the tile: their decks' parapets stop at them; the tile draws its own:
     # roads.deck_pads)
+    pad_parts = []                  # (the bridges' parts with their lateral shifts: the clearance check's decks too)
     try:
         pad_parts = list(bridges.parts(cells, (box[0] - 40, box[1] - 40, box[2] + 40, box[3] + 40)))
         pad_parts = roadsmod.shifted_parts(pad_parts, roadsmod.deck_shift_fn(frame, cells, urban, _s.widths, left_hand))
@@ -1851,7 +1860,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     else:
         P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground,
                                    far_ground=rfar, return_decks=True, load=cell_fn, bed_elev=rbed,
-                                   furniture=rail_props, under=runder, records=rail_rec)
+                                   furniture=rail_props, under=runder, records=rail_rec,
+                                   tracks_out=rail_tracks)
     if rail_props:
         props = (props or []) + rail_props
     mark("railways")
@@ -1970,7 +1980,31 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.bus_col = _station_collision(frame, box, elev, getattr(_s, "md", None)) if buildings else None
     P.turbines = turbine_rows
     P.scene = _scene
+    P.roads, P.deck_parts, P.rail_tracks = near_roads, pad_parts, rail_tracks
+    _clearance_log(P, frame, tx, ty, box, cells, tunnels, q, aid)
+    mark("clearance")
     return P
+
+
+def _clearance_log(P, frame, tx, ty, box, cells, tunnels, q, aid):
+    """The clearance log's check of a finished road tile (clearance.py): reference trucks and wagons stood on its roads, decks,
+    tunnels and tracks, what the terrain or the other meshes put in their bodies one line each in the server's log.
+    Here, where the tile's plans, its meshes and the neighbouring tiles' ground are all at hand, and in the worker that builds
+    the tile: off the event loop. It only logs: nothing the tile is made of changes."""
+    import clearance
+    if not clearance.enabled():
+        return
+    import railways
+    import roadmesh as roadmeshmod
+    import roads as roadsmod
+
+    def build():
+        tparts = list(tunnels.parts(cells, box)) if tunnels is not None else []
+        lines = clearance.tile_lines(P.roads, P.deck_parts, tparts, P.rail_tracks, railways.RAIL_TOP_M)
+        meshes = clearance.tile_meshes(P.origin, deck=P.dmesh, tunnel=P.tmesh, rail=P.rmesh)
+        return (lines, lambda x, y: roadsmod.box_owns(box, x, y),
+                lambda x, y: roadmeshmod.drawn_ground(frame, P.drawn, np.c_[x, y], q), meshes)
+    clearance.run(build, frame, tx.key if hasattr(tx, "key") else f"{tx}_{ty}", aid)
 
 
 def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
@@ -1984,7 +2018,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     P = _tile_parts(mark, frame, (tx, ty), zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region,
                     country, q, (aid, lat, lon), (lat, lon),
                     pole_profile=pole_profile, cache_dir=os.path.dirname(out_dir), out_dir=out_dir, vfs_dir=vfs_dir,
-                    de_junctions=de_junctions, towns_on=towns_on, wear=wear)
+                    de_junctions=de_junctions, towns_on=towns_on, wear=wear, aid=aid)
     mesh = roadmeshmod.build(frame, P.chunks, P.elev, P.origin, lift, clip=P.box, follow=True, q=q, drawn=P.drawn,
                              context=P.ctx)
     mark("mesh")
