@@ -767,7 +767,9 @@ end
 -- centerline of an undivided carriageway and its outer edges are candidates (never same-direction lane separators).
 function M.rumbleLineAt(x, y, z)
   local r = closestRoad(x, y, z)
-  if not r or not r.rumble or r.dist > 20 or r.halfWidth < 2 then return nil end
+  -- Wheel-contact probes should stay within this road's footprint; the old 20 m gate could match a nearby
+  -- eligible road while the tyre was on a different surface and make the cue appear offset from the line.
+  if not r or not r.rumble or r.dist > math.max(3, r.halfWidth + 1.5) or r.halfWidth < 2 then return nil end
   return { lateral = r.lateral, halfWidth = r.halfWidth, oneWay = r.oneWay, edgeKey = r.edgeKey }
 end
 local oncomingTurn = false

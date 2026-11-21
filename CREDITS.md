@@ -147,6 +147,10 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
 | LiDAR HD | IGN France | buildings, canopy heights | Etalab Open Licence 2.0 | "IGN - LiDAR HD" | planned |
 | Mapillary street-level imagery | Mapillary (Meta) | tuning the city generator against real photos | CC BY-SA 4.0, free API token | "Street-level imagery: Mapillary" | planned (reference) |
 
+## Audio assets
+
+- `mod/beamng_earth/levels/beamng_earth/art/sound/rumble_strip.ogg`: user-created rumble-strip recording supplied by ProxyFirewall202; converted to mono OGG and cross-faded for in-game looping.
+
 ## Software and libraries
 
 | Software | Used for | Licence | Status |
