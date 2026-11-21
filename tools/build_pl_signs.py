@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 
+import npyfirst  # noqa: F401
 import numpy as np
 from PIL import Image, ImageDraw
 import resvg_py

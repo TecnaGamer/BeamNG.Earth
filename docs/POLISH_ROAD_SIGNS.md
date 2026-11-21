@@ -1,6 +1,6 @@
 # Polish road signs
 
-Enable **Experimental → Road signs** in BeamNG. To add surveyed signs, paste your own client access token into **Mapillary access token** and choose **Save token**. Choose **Use road rules only** to clear the profile token and use generated positions. Restart the world server after changing the mode or token.
+Enable **Experimental → Road signs** in BeamNG. To add surveyed signs, paste your own client access token into **Mapillary access token** and choose **Save token**. Choose **Disable Mapillary** to clear the profile token and use generated positions. Restart the world server after changing the mode or token.
 
 The masked field saves to the local game profile. The launcher command `BeamNG.Earth.exe --configure-mapillary` can also set the profile token. A profile choice takes precedence over `MAPILLARY_ACCESS_TOKEN` and tokens saved by older launchers. Live requests use Mapillary's authorization header.
 

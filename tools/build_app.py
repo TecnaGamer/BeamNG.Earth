@@ -179,6 +179,7 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'usgs3dep_index.json.gz')}{SEP}.",     # (roadz.LIDAR_INDEX_PATH)
            # the highway signs' lettering metrics and US state outlines (exitsigns.GLYPHS, signstates.DATA)
            "--add-data", f"{os.path.join(server, 'sign_glyphs.json')}{SEP}.",
+           "--add-data", f"{os.path.join(ROOT, 'tools', 'sign_art', 'pl', 'sources.json')}{SEP}tools/sign_art/pl",
            "--add-data", f"{os.path.join(ROOT, 'tools', 'sign_art', 'pl')}{SEP}sign_art/pl",
            "--add-data", f"{os.path.join(server, 'search_categories.json')}{SEP}.",     # (geocode.CATEGORIES)
            "--add-data", f"{os.path.join(server, 'sign_states.geojson')}{SEP}.",

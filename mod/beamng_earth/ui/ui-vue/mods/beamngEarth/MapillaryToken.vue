@@ -5,7 +5,7 @@
         autocomplete="off" spellcheck="false" placeholder="Paste a client access token"
         @focus="typing(true)" @blur="typing(false)" @keydown.enter.stop.prevent="save(entry)" />
       <BngButton :accent="ACCENTS.main" :disabled="busy || !entry.trim()" @click="save(entry)">Save token</BngButton>
-      <BngButton :accent="ACCENTS.outlined" :disabled="busy || mode === 'rules'" @click="save('')">Use road rules only</BngButton>
+      <BngButton :accent="ACCENTS.outlined" :disabled="busy || mode === 'rules'" @click="save('')">Disable Mapillary</BngButton>
     </div>
     <div role="status">{{ message || hints[mode] }}</div>
     <BngButton v-if="changed && status.restart?.restartable && !status.restart.busy" :accent="ACCENTS.outlined"
@@ -26,7 +26,7 @@ const message = ref("")
 const hints = {
   default: "Optional. A token set in the launcher or environment also works.",
   saved: "A token is saved for this game profile.",
-  rules: "This profile uses road rules only.",
+  rules: "Mapillary is disabled for this profile.",
 }
 onMounted(() => engineLua("beamngEarth_settings and beamngEarth_settings.uiMapillaryStatus()", value => {
   if (!changed.value && Object.hasOwn(hints, value)) mode.value = value

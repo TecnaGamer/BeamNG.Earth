@@ -154,8 +154,8 @@ import {
   confirmClearCache, askClearCache, usePath, sendPath, pathNote, typing, applyDevPreset,
 } from "./earthSettingsStore.js"
 import { CONTRIBUTORS } from "./contributors.js"
-import EarthAddons from "./EarthAddons.vue"
 import MapillaryToken from "./MapillaryToken.vue"
+import EarthAddons from "./EarthAddons.vue"
 
 const props = defineProps({
   page: { type: String, default: "Graphics" },     // the page's name (settingsSchema's)
