@@ -424,7 +424,27 @@ def far_settled(far):
     return far.done and not far.groups and not far.has_work()
 
 
+def heights_match_block(h64, h32, block64, block32, quantum):
+    # A block can use a coarser quantum than the anchor. At each vertex the distance
+    # to the nearest block lattice point is the only legitimate rounding error.
+    rounding = np.abs(h64 - np.rint(h64 / quantum) * quantum)
+    return (np.all(np.abs(h64 - block64) <= rounding + 1e-9)
+            and np.all(np.abs(h32 - block32) <= rounding + 1e-3))
+
+
 class DriveSettleTest(unittest.TestCase):
+    def test_exact_vertices_on_the_block_lattice(self):
+        q = 1 / 32
+        h = np.array([0., q / 2, 2 * q])
+        block = np.array([0., q, 2 * q])
+        self.assertTrue(heights_match_block(h, h, block, block, q))
+        shifted = block.copy()
+        shifted[-1] += q
+        self.assertFalse(heights_match_block(h, h, shifted, shifted, q))
+        self.assertFalse(heights_match_block(h, h, block, shifted, q))
+        shifted[-1] = np.nan
+        self.assertFalse(heights_match_block(h, h, shifted, block, q))
+
     def test_lossy_rebase_waits_for_last_crossover(self):
         from test_modsim import python_far_trace
 
@@ -839,16 +859,8 @@ class DriveBase(unittest.TestCase):
                 gx0, gy0 = ref[2]
                 # the tile's cell (i, j) is far-lattice square (gx0 / FAR_ST + i, gy0 / FAR_ST + j): same split when
                 # those are even
-                # (one block height step at most is tolerated: under the parallel gate's load the first block's far
-                # tiles were built from grading one step off the committed block's, 1/32 m on every tile of it, in
-                # about half of the 2026-11-09 gates; drive-test-l2-flake. It is still counted in l2_q1.)
-                qstep = blk[4] / 65536.0 if blk[4] else 0.0
-                if 1e-9 < d64 <= qstep + 1e-9 and d32 <= qstep + 1e-3 and not (gx0 % (2 * FAR_ST) or gy0 % (2 * FAR_ST)) \
-                        and tris_ok:
-                    stats["l2_q1"] = stats.get("l2_q1", 0) + 1
-                elif d64 > 1e-9 or d32 > 1e-3 or gx0 % (2 * FAR_ST) or gy0 % (2 * FAR_ST) or not tris_ok:
-                    # (with the block's own height step: one that did not fit the anchor's takes the next coarser one,
-                    # heightmap.block_params, and its far tiles then differ by up to half that step; drive-test-l2-flake)
+                same = heights_match_block(h64, h32, ref[0], ref[1], blk[4] / 65536)
+                if not (same and tris_ok) or gx0 % (2 * FAR_ST) or gy0 % (2 * FAR_ST):
                     stats["l2_bad"].append((i.key, d64, d32, (gx0, gy0), "block q 1/%g" % (65536 / blk[4])))
             # the visible surface between vertices against the engine's bilinear collision (E7):
             # random points in the current-anchor exact tile under the player

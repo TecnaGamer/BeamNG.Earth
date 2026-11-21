@@ -137,7 +137,7 @@ class Kernel(unittest.TestCase):
         st = {s["piece"]: s for s in got["status"]}
         self.assertTrue(st[1]["kept"])
         self.assertIn("weld_lo:piece", st[1]["flags"])
-        self.assertLess(float(sum(areas(got))), 160.0 * 9.0 + 1.0)      # (0 .. 160 m once)
+        self.assertAlmostEqual(float(sum(areas(got))), 160.0 * 9.0, delta=1.0)      # (0 .. 160 m once)
 
     def test_structure_trims(self):
         rows, t = piece(kinds=(1, 1))
