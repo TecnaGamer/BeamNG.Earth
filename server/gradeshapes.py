@@ -1034,6 +1034,50 @@ def system_key(net, sysm):
     return h.hexdigest()[:20]
 
 
+KEY_DEG = 1.0e-4            # deg (about 11 m): the grid an interchange's centre is placed on in its key
+
+
+def canonical_id(m):
+    """A member's id the same from every region and every planning frame: its map feature's id and its kind. The keys
+    members carry hold the middle of the line in the planner's own frame (a deck's, a tunnel's) or its ends' (a track's),
+    different by metres from one frame to the next; a road's several parts of one kind share this id, which is all an
+    interchange's identity needs (which roads and tracks it is made of)."""
+    k = m.key
+    if isinstance(k, tuple) and k and k[0] == "rail" and len(k) > 2:
+        return "%s:%s" % (m.kind, k[2])
+    return "%s:%s" % (m.kind, k[0] if isinstance(k, tuple) else k)
+
+
+def system_ids(net, sysm):
+    """The canonical ids (canonical_id) of a system's seeds and of the roads it digs under its crossings, as a set: what
+    makes it the interchange it is, found from whichever region and cut however its box cut it."""
+    return {canonical_id(net.m[i]) for i in sysm["seeds"]} | {canonical_id(net.m[d]) for d, _a, _b in sysm["dips"]}
+
+
+def interchange_key(ids, centre, version="", cut=""):
+    """An interchange's key: the hash of its sorted member ids (canonical_id), of where its centre is (lat, lon, to
+    KEY_DEG: a road's parts over two places are two interchanges of the same roads, and its centre, found from the whole
+    system whatever region found it, is the same to far less than that) and of the version of what a solve of it is made
+    from (the plans' format: a solve made by other rules is another interchange's). cut: the tile that bounded it when the
+    whole of it was too wide to follow (grading's owner: "" when it was followed whole)."""
+    h = hashlib.sha1(str(version).encode("utf-8") + b"\0" + str(cut).encode("utf-8"))
+    h.update(b"\0%d,%d" % (round(centre[0] / KEY_DEG), round(centre[1] / KEY_DEG)))
+    for i in sorted(ids):
+        h.update(b"\0" + i.encode("utf-8"))
+    return h.hexdigest()
+
+
+def system_centre(net, sysm):
+    """The middle of a system's seeds' bounding box (frame ENU): the point whose map cell owns the interchange."""
+    pts = np.concatenate([net.lines[i] for i in sysm["seeds"]])
+    return (pts.min(0) + pts.max(0)) / 2.0
+
+
+def system_size(net, sysm):
+    """(pieces, crossings) of a system: its decks and the roads dug under it, and its crossings."""
+    return (sum(1 for i in sysm["seeds"] if net.m[i].kind == "deck") + len(sysm["dips"]), len(sysm["crossings"]))
+
+
 # ---- paths: a road followed through its joints (a roundabout's ring, a street split at its junctions) ----
 
 ROADS = ("ground", "tunnel")
@@ -1748,17 +1792,19 @@ def _junction_roads(net, rp, done, pieced):
     return sorted(out, key=lambda o: str(net.m[o[0]].key))
 
 
-def embankments(net, systems, shapes, ground_along):
+def embankments(net, systems, shapes, ground_along, beside=()):
     """The roads' heights round the shapes: per member, [(s (m,), z (m,), mode)] with mode "fill" (the plan rises to
     it: an embankment), "cut" (the plan goes down to it) or "set" (the plan takes it: a road between two shapes whose
     ramps meet before the ground does, lerped). shapes: per system (pieces, samples, heights);
-    ground_along(member, s) -> ground heights."""
+    ground_along(member, s) -> ground heights. beside: the pieces (pieces()) of other systems of net that are not among
+    systems (solved elsewhere, as interchanges are, each by its owner): what the shapes hold of the roads there is theirs
+    too, so no ramp of these runs on through it."""
     ramps = []              # (first member, s0, direction +1/-1, z0, samples, z, touch index, sign, ground, split index,
     #                          leaving grade)
     out = {}
     started = []            # (member, direction, s0, sign, z0): the ends already left by a ramp
     pieced = {}                 # (member: the stretches [(s from, s to)] of the shapes' pieces)
-    for _pcs, _smp, _zs in shapes:
+    for _pcs in [sh[0] for sh in shapes] + list(beside):
         for pc in _pcs:
             for j, a, b in pc["segs"]:
                 pieced.setdefault(int(j), []).append((min(a, b), max(a, b)))

@@ -44,7 +44,7 @@ class DeckUnderRoadIdTest(unittest.TestCase):
             cls.pl = planner_of(rep)
             cls.home = mapcells.cell_of(*AT)
             cls.pl._shape_region(cls.home)
-            cls.net, cls.systems = cls.found[-1]       # (the home region's: later lookups solve their own regions)
+            cls.finds = list(cls.found)     # (the region's own find, then each interchange's whole)
             # (the decks as the roads build them: the map's own feature, before one_road kept its sections; the A25
             # has many bridges, these are the ones over the streets)
             e, n, _ = cls.pl.frame.geodetic_to_enu(np.array([AT[0]]), np.array([AT[1]]), 0.0)
@@ -70,9 +70,8 @@ class DeckUnderRoadIdTest(unittest.TestCase):
             self.assertEqual(set(modes), {"deck"})
 
     def test_the_decks_clear_the_streets_under_them(self):
-        net, systems = self.net, self.systems
         n = 0
-        for s in systems:
+        for net, s in ((n_, s_) for n_, systems in self.finds for s_ in systems):
             for c in s["crossings"]:
                 u = str(net.m[c["u"]].key[0]).partition("~lanes")[0]
                 if u not in self.lines or net.m[c["d"]].kind != "ground":

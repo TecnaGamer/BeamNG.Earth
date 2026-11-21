@@ -19,11 +19,25 @@ import dnp  # noqa: E402
 import grading  # noqa: E402
 import gradeshapes as _gsh  # noqa: E402
 import mapcells  # noqa: E402
-from ix import artifacts, cache, pipeline  # noqa: E402
+from ix import artifacts, cache, owner, pipeline  # noqa: E402
 from test_approaches import features, flat_elev, overpass  # noqa: E402
 from test_grading import FakeMD, LAT, LON  # noqa: E402
 
-from grading import SHAPES_CAP_M, SHAPES_PAD_M, _SHAPE_SOLVE_LOCK, log  # noqa: E402
+from grading import SHAPES_PAD_M, log  # noqa: E402
+
+# (the old body's own: the farthest it followed a system from the cell, its solve tables' lock, its solve cache's key)
+SHAPES_CAP_M = 4000.0
+_SHAPE_SOLVE_LOCK = threading.Lock()
+
+
+def _shape_sys_key(net, sysm, smp):
+    import hashlib
+    h = hashlib.sha1(_gsh.system_key(net, sysm).encode())
+    for x in smp:
+        h.update(np.round(np.asarray(x["xy"], np.float64), 3).tobytes())
+        for i in np.unique(x["mem"]).tolist():
+            h.update(repr(net.m[i].key).encode() + repr((net.m[i].kind, getattr(net.m[i], "level", None))).encode())
+    return h.hexdigest()
 
 
 def underpass():
@@ -114,7 +128,7 @@ def _shape_region_calc_ref(planner, home, hk):
         xproc.check_cancel()        # (... nor its next system: a left city's 40 s solves held the road tiles)
         pcs = _gsh.pieces(net, sysm)
         smp = _gsh.sample(net, pcs)
-        ck = planner._shape_sys_key(net, sysm, smp)
+        ck = _shape_sys_key(net, sysm, smp)
         cache = planner.__dict__.setdefault("_shape_solved", {})   # (this grading's: its ground, its frame)
         solving = planner.__dict__.setdefault("_shape_solving", {})
         diag = {}
@@ -273,6 +287,8 @@ class DeterminismTest(unittest.TestCase):
     """Two runs produce the same artifact keys and bytes."""
 
     def run_once(self, tmp):
+        for table in (owner.PROCESS, owner.INDEX):      # (the first run's interchange is not the second's to read)
+            table.clear()
         with unittest.mock.patch.object(cache, "ROOT", tmp):
             prof = prof_of(overpass(), lambda p, h, k: p._shape_region_calc(h, k), "det")
         out = {}
@@ -333,8 +349,8 @@ class TimingLinesTest(unittest.TestCase):
         pat = re.compile(r"^ix step: (\w+) key ([0-9a-f]{12}) pieces (\d+) crossings (\d+) (\d+\.\d\d) s (ok|failed: .+) @ \S+")
         self.assertTrue(all(pat.match(ln) for ln in step), step)
         names = [pat.match(ln).group(1) for ln in step]
-        self.assertEqual(names[:2], ["paths", "extent"])
-        self.assertEqual(names[2:6], ["order", "terrain", "datum", "heights"])
+        # (the region's own, then the interchange's: its extent (its paths only for the cache), then its one system's steps)
+        self.assertEqual(names, ["paths", "extent", "extent", "order", "terrain", "datum", "heights"])
         self.assertTrue(all(" ok " in ln for ln in step), step)
         region = [ln for ln in lines if ln.startswith("ix region: ")]
         self.assertEqual(len(region), 1)

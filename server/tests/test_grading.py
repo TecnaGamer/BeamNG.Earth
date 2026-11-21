@@ -2100,6 +2100,8 @@ class ShapeSolvedOnceTest(unittest.TestCase):
             systems = len(calls)
             self.assertGreaterEqual(systems, 1, "the overpass is a system")
             del calls[:]
+            from ix import owner
+            owner.PROCESS.clear()      # (the process's own copy of what the first one solved)
             two = made()
             out = [None, None]
 
