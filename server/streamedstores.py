@@ -61,7 +61,7 @@ class LocalSign(NamedTuple):
 
 SIGN_STYLES = {
     "smoke_shop": "tobacco", "tobacco": "tobacco", "tobacco_shop": "tobacco",
-    "bank": "bank", "bank_or_credit_union": "bank", "credit_union": "bank", "financial_service": "bank",
+    "bank": "bank", "bank_or_credit_union": "bank", "credit_union": "bank",
     "bar": "venue", "pub": "venue", "music_venue": "venue", "nightlife_venue": "venue",
     "nightclub": "venue", "dance_club": "venue", "bar_and_grill_restaurant": "venue",
     "vape_shop": "tobacco", "car_wash": "wash", "carwash": "wash",
@@ -75,6 +75,8 @@ def local_sign(label, categories):
         return None
     name = " ".join(label.split())
     if not 2 <= len(name) <= 80 or not name.isprintable():
+        return None
+    if "atm" in categories or name.casefold().endswith(" atm"):
         return None
     for category, style in SIGN_STYLES.items():
         if category in categories:
@@ -105,25 +107,44 @@ def approach_panel(ring, coords, facing, doors):
     return panel if winding == 1 else panel[::-1]
 
 
+class TradingPlace(NamedTuple):
+    name: str
+    categories: frozenset
+    point: np.ndarray
+    address: str
+
+
+def trading_places(layers, lo, hi):
+    """Business evidence shared by frontage matching and suite directories."""
+    for features, rows, points in layers:
+        attrs = features.attrs
+        if "name" not in attrs or "confidence" not in attrs:
+            continue
+        near = np.flatnonzero(np.all((points >= lo) & (points <= hi), axis=1))
+        for j in near:
+            i = rows[j]
+            if not qualifies_business(attrs["confidence"][i]):
+                continue
+            if "operating_status" in attrs and str(attrs["operating_status"][i]).casefold() in {"closed", "permanently_closed"}:
+                continue
+            categories = frozenset(attrs[key][i] for key in ("basic_category", "taxonomy") if key in attrs)
+            address = attrs["street_address"][i] if "street_address" in attrs else ""
+            yield TradingPlace(str(attrs["name"][i] or "").strip(), categories, points[j], str(address or ""))
+
+
 def mapped_mall(layers, coords, label):
     """A mall POI must corroborate the host name as well as lie within the footprint."""
     words = " ".join(re.findall(r"[^\W_]+", label.casefold()))
     if not words:
         return False
     lo, hi = coords.min(0), coords.max(0)
-    for f, rows, points in layers:
-        near = np.flatnonzero(np.all((points >= lo) & (points <= hi), axis=1))
-        for j in near:
-            i = rows[j]
-            def value(key):
-                return f.attrs[key][i] if key in f.attrs else None
-            if not {value("basic_category"), value("taxonomy")} & MALL_CLASSES:
-                continue
-            title = " ".join(re.findall(r"[^\W_]+", str(value("name") or "").casefold()))
-            if (f" {words} " in f" {title} " and qualifies_business(value("confidence"))
-                    and value("operating_status") not in {"closed", "permanently_closed"}
-                    and contains_points(coords, points[j:j+1])[0]):
-                return True
+    for place in trading_places(layers, lo, hi):
+        if not place.categories & MALL_CLASSES:
+            continue
+        title = " ".join(re.findall(r"[^\W_]+", place.name.casefold()))
+        if (f" {words} " in f" {title} "
+                and contains_points(coords, place.point[None])[0]):
+            return True
     return False
 
 
@@ -190,22 +211,17 @@ def named_frontage(layers, coords, label):
     lo, hi = coords.min(0)-pad, coords.max(0)+pad
     edges = (np.roll(coords,-1,axis=0)-coords)*scale
     lengths2 = np.maximum(np.sum(edges*edges,axis=1), 1e-9)
-    for features, rows, points in layers:
-        for j in np.flatnonzero(np.all((points >= lo) & (points <= hi),axis=1)):
-            i = rows[j]
-            def value(field):
-                return features.attrs[field][i] if field in features.attrs else None
-            if (words(value("name")) != key or not qualifies_business(value("confidence"))
-                    or value("operating_status") in {"closed", "permanently_closed"}):
-                continue
-            sign = local_sign(value("name"), {value("basic_category"),value("taxonomy")})
-            if not sign:
-                continue
-            offsets = (points[j]-coords)*scale
-            fractions = np.clip(np.sum(offsets*edges,axis=1)/lengths2,0,1)
-            if (contains_points(coords,points[j:j+1])[0]
-                    or np.min(np.linalg.norm(offsets-fractions[:,None]*edges,axis=1)) <= 8):
-                return sign
+    for place in trading_places(layers, lo, hi):
+        if words(place.name) != key:
+            continue
+        sign = local_sign(place.name, place.categories)
+        if not sign:
+            continue
+        offsets = (place.point-coords)*scale
+        fractions = np.clip(np.sum(offsets*edges,axis=1)/lengths2,0,1)
+        if (contains_points(coords,place.point[None])[0]
+                or np.min(np.linalg.norm(offsets-fractions[:,None]*edges,axis=1)) <= 8):
+            return sign
     return None
 
 
@@ -276,30 +292,21 @@ def suite_directory(layers, center, anchor):
     """List known ground-level retail tenants at one numbered address. Suite IDs are labels only."""
     scale = np.array([111320*dmath.cos(dmath.radians(center[1])), 111132])
     anchors, entries = set(), {}
-    for feats, rows, points in layers:
-        attrs = feats.attrs
-        if not {"street_address","name","confidence"} <= attrs.keys():
+    addressed = (layer for layer in layers if "street_address" in layer[0].attrs)
+    for place in trading_places(addressed, center-50/scale, center+50/scale):
+        addr = SUITE_ADDRESS.fullmatch(place.address.strip())
+        name = place.name
+        if not addr or not name or len(name)>80 or not name.isprintable():
             continue
-        for j in np.flatnonzero(np.all(np.abs((points-center)*scale) <= 50,axis=1)):
-            i = rows[j]
-            def value(key):
-                return attrs[key][i] if key in attrs else None
-            addr = SUITE_ADDRESS.fullmatch(str(value("street_address") or "").strip())
-            if (not addr or not qualifies_business(value("confidence"))
-                    or value("operating_status") in {"closed","permanently_closed"}):
-                continue
-            name = str(value("name") or "").strip()
-            if not name or len(name)>80 or not name.isprintable():
-                continue
-            words = addr[1].casefold().replace(".","").split()
-            words[-1] = STREET_SUFFIX.get(words[-1], words[-1])
-            key = tuple(words)
-            unit = addr[2].upper()
-            if name.casefold() == anchor.casefold() and np.linalg.norm((points[j]-center)*scale)<=15:
-                anchors.add((key,unit))
-            elif not local_sign(name,{value("basic_category"),value("taxonomy")}):
-                continue
-            entries.setdefault(key,{}).setdefault(unit,{})[name.casefold()] = name
+        words = addr[1].casefold().replace(".","").split()
+        words[-1] = STREET_SUFFIX.get(words[-1], words[-1])
+        key = tuple(words)
+        unit = addr[2].upper()
+        if name.casefold() == anchor.casefold() and np.linalg.norm((place.point-center)*scale)<=15:
+            anchors.add((key,unit))
+        elif not local_sign(name,place.categories):
+            continue
+        entries.setdefault(key,{}).setdefault(unit,{})[name.casefold()] = name
     if len(anchors)!=1:
         return ()
     key,unit = next(iter(anchors))
@@ -320,43 +327,36 @@ def exterior_frontages(layers, coords, ring, label, neighbors, inside_only=False
     widths = np.linalg.norm(edges,axis=1)
     axes = edges / np.maximum(widths[:,None],1e-9)
     bays = {}
-    for feats, rows, points in layers:
-        near = np.flatnonzero(np.all((points >= lo) & (points <= hi),axis=1))
-        for j in near:
-            i = rows[j]
-            def attr(key):
-                return feats.attrs[key][i] if key in feats.attrs else None
-            if not qualifies_business(attr("confidence")) or attr("operating_status") in {"permanently_closed","closed"}:
+    for place in trading_places(layers, lo, hi):
+        sign = local_sign(place.name, place.categories)
+        if not sign:
+            continue
+        if label:
+            # The building label may include a trademark and a descriptive suffix.
+            base = label.replace("\u2122", "").replace("\u00ae", "").casefold()
+            trading = sign.name.casefold()
+            if base != trading and not (base.startswith(trading) and base[len(trading):].lstrip().startswith(("-", "\u2013", "\u2014"))):
                 continue
-            sign = local_sign(attr("name"), {attr("basic_category"),attr("taxonomy")})
-            if not sign:
-                continue
-            if label:
-                # The building label may include a trademark and a descriptive suffix.
-                base = label.replace("\u2122", "").replace("\u00ae", "").casefold()
-                trading = sign.name.casefold()
-                if base != trading and not (base.startswith(trading) and base[len(trading):].lstrip().startswith(("-", "\u2013", "\u2014"))):
-                    continue
-            point = ring[0]+(points[j]-coords[0])*scale
-            offsets = point-ring
-            along = np.clip(np.sum(offsets*axes,axis=1),0,widths)
-            distances = np.linalg.norm(offsets-along[:,None]*axes,axis=1)
-            wall, second = distances.argsort()[:2]
-            if distances[wall]>(7.0 if inside_only else 3.25) or distances[second]<distances[wall]+1.5 or widths[wall]<5:
-                continue
-            if bool(contains_points(ring,point[None])[0]) != inside_only:
-                continue
-            # Reject nearby competing footprints, including ones that enclose the pin.
-            if any(np.all(point >= lower) and np.all(point <= upper)
-                   for lower,upper in neighbors):
-                continue
-            margin,count,pier,opening = retail_bays(widths[wall])
-            bay = int(np.clip(round((along[wall]-margin-opening/2)/(opening+pier)),0,count-1))
-            center = margin+bay*(opening+pier)+opening/2
-            delta = (coords[(wall+1)%len(ring)]-coords[wall])/widths[wall]
-            midpoint = coords[wall]+center*delta
-            half = min(3.5,opening*.45)*delta
-            bays.setdefault((wall,bay), {})[sign.name.casefold()] = (sign,np.array([midpoint-half,midpoint+half]),wall,center)
+        point = ring[0]+(place.point-coords[0])*scale
+        offsets = point-ring
+        along = np.clip(np.sum(offsets*axes,axis=1),0,widths)
+        distances = np.linalg.norm(offsets-along[:,None]*axes,axis=1)
+        wall, second = distances.argsort()[:2]
+        if distances[wall]>(7.0 if inside_only else 3.25) or distances[second]<distances[wall]+1.5 or widths[wall]<5:
+            continue
+        if bool(contains_points(ring,point[None])[0]) != inside_only:
+            continue
+        # Reject nearby competing footprints, including ones that enclose the pin.
+        if any(np.all(point >= lower) and np.all(point <= upper)
+               for lower,upper in neighbors):
+            continue
+        margin,count,pier,opening = retail_bays(widths[wall])
+        bay = int(np.clip(round((along[wall]-margin-opening/2)/(opening+pier)),0,count-1))
+        center = margin+bay*(opening+pier)+opening/2
+        delta = (coords[(wall+1)%len(ring)]-coords[wall])/widths[wall]
+        midpoint = coords[wall]+center*delta
+        half = min(3.5,opening*.45)*delta
+        bays.setdefault((wall,bay), {})[sign.name.casefold()] = (sign,np.array([midpoint-half,midpoint+half]),wall,center)
     return [next(iter(matches.values())) for matches in bays.values() if len(matches)==1]
 
 
@@ -450,34 +450,27 @@ def confirmed_mall_panels(layers, coords, names, doors=()):
     ring = (coords-coords[0])*scale
     winding = np.sum(ring[:,0]*edges[:,1]-ring[:,1]*edges[:,0])
     matches = {}
-    for f,rows,points in layers:
-        for j in np.flatnonzero(np.all((points >= lo) & (points <= hi),axis=1)):
-            i = rows[j]
-            def value(key):
-                return f.attrs[key][i] if key in f.attrs else None
-            label = str(value("name") or "").strip()
-            documented = label.casefold() in names
-            brand = chain(label) or local_sign(label, {value("basic_category"), value("taxonomy")})
-            if not documented and (not doors or not brand or not any(
-                    np.linalg.norm((points[j]-door)*scale)<=2 for door in doors)):
-                continue
-            if (not qualifies_business(value("confidence"))
-                    or value("operating_status") in {"closed","permanently_closed"}):
-                continue
-            offsets = (points[j]-coords)*scale
-            along = np.clip(np.sum(offsets*axes,axis=1),0,widths)
-            distances = np.linalg.norm(offsets-along[:,None]*axes,axis=1)
-            wall, second = distances.argsort()[:2]
-            # Near a corner, require the perpendicular projection to land inside the edge.
-            if (distances[wall]>8 or distances[second]-distances[wall]<.75
-                    or min(along[wall],widths[wall]-along[wall])<1.5 or widths[wall]<8):
-                continue
-            half = min(5., widths[wall]/2-1.)
-            center = np.clip(along[wall],half+1,widths[wall]-half-1)
-            bounds = center+np.array([-half,half])
-            panel = coords[wall]+bounds[:,None]*axes[wall]/scale
-            brand = brand or LocalSign(label,"shop")
-            matches.setdefault(label.casefold(),{})[wall] = brand, panel if winding>0 else panel[::-1]
+    for place in trading_places(layers, lo, hi):
+        label = place.name
+        documented = label.casefold() in names
+        brand = chain(label) or local_sign(label, place.categories)
+        if not documented and (not doors or not brand or not any(
+                np.linalg.norm((place.point-door)*scale)<=2 for door in doors)):
+            continue
+        offsets = (place.point-coords)*scale
+        along = np.clip(np.sum(offsets*axes,axis=1),0,widths)
+        distances = np.linalg.norm(offsets-along[:,None]*axes,axis=1)
+        wall, second = distances.argsort()[:2]
+        # Near a corner, require the perpendicular projection to land inside the edge.
+        if (distances[wall]>8 or distances[second]-distances[wall]<.75
+                or min(along[wall],widths[wall]-along[wall])<1.5 or widths[wall]<8):
+            continue
+        half = min(5., widths[wall]/2-1.)
+        center = np.clip(along[wall],half+1,widths[wall]-half-1)
+        bounds = center+np.array([-half,half])
+        panel = coords[wall]+bounds[:,None]*axes[wall]/scale
+        brand = brand or LocalSign(label,"shop")
+        matches.setdefault(label.casefold(),{})[wall] = brand, panel if winding>0 else panel[::-1]
     candidates = [next(iter(m.values())) for m in matches.values() if len(m)==1]
     return [(name,p) for name,p in candidates if all(other==name or
             np.linalg.norm((q.mean(0)-p.mean(0))*scale)>11 for other,q in candidates)]
@@ -651,9 +644,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
     parking_points = None
     walk_segments = None
     cache = Path(cache_dir) / "threedmr_cache" / "storefronts"
-    if local_enabled:
-        lower_bounds = np.array([host.ring.min(0)[:2]-3.25 for host,_,_ in items])
-        upper_bounds = np.array([host.ring.max(0)[:2]+3.25 for host,_,_ in items])
+    lower_bounds = upper_bounds = None
     for item_index,(spec, ground_min, ground_max) in enumerate(items):
         if (
             not spec.storefront
@@ -763,6 +754,9 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                         spec.plain = False
                         spec.floors, spec.floor_h = 1, spec.height
                 if spec.retail_front and local_enabled and not name and not doors and not tenants:
+                    if lower_bounds is None:
+                        lower_bounds = np.array([host.ring.min(0)[:2]-3.25 for host,_,_ in items])
+                        upper_bounds = np.array([host.ring.max(0)[:2]+3.25 for host,_,_ in items])
                     nearby = (np.all(upper_bounds >= ring.min(0)-3.25,axis=1)
                               & np.all(lower_bounds <= ring.max(0)+3.25,axis=1))
                     nearby[item_index] = False

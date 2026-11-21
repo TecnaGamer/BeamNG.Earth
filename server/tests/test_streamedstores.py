@@ -396,6 +396,12 @@ class StreamedStoresTest(unittest.TestCase):
                 else:
                     self.assertFalse(entries)
 
+    def test_local_bank_requires_a_branch_category(self):
+        from streamedstores import local_sign
+        self.assertIsNone(local_sign("Central Bank ATM", {"bank_or_credit_union"}))
+        self.assertIsNone(local_sign("North Insurance", {"financial_service","insurance_agency"}))
+        self.assertEqual(local_sign("River Credit Union", {"financial_service","credit_union"}).style, "bank")
+
     def test_identified_service_business_on_unclassified_building(self):
         frame = geodesy.EnuFrame(40.,-83.)
         for label,kind,category,taxonomy in (
