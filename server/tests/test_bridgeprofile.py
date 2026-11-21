@@ -171,6 +171,21 @@ class CurveProfile(unittest.TestCase):
         self.assertFalse(np.allclose(leg[0], new[0]))
 
 
+class EndStep(unittest.TestCase):
+
+    def test_a_short_first_segment_is_measured_over_the_run(self):
+        # (a part whose map line starts 0.59 m before its next vertex: 1 m over that segment alone was a 170 % "step"
+        # and chose the whole Shuto chain's profile; over END_STEP_RUN_M it is the end's grade)
+        ln = np.c_[np.r_[0.0, 0.59, np.arange(4.0, 41.0, 4.0)], np.zeros(12)]
+        z = np.r_[0.0, 1.0, np.full(10, 1.0)]
+        self.assertAlmostEqual(roads._end_step([ln], [z]), 1.0 / roads.END_STEP_RUN_M, places=6)
+        # (a real step at the end stays one: 3 m up within the run)
+        self.assertGreater(roads._end_step([ln], [np.r_[0.0, 3.0, np.full(10, 3.0)]]), roads.DECK_STEEP_GRADE)
+        # (a joint, another part's end within 0.75 m, is no free end)
+        other = np.c_[np.r_[-10.0, 0.0], np.zeros(2)]
+        self.assertAlmostEqual(roads._end_step([ln, other], [z, np.zeros(2)]), 0.0, places=6)
+
+
 class PinnedGeometry(unittest.TestCase):
     """A pinned junction beside a separate uphill deck, 0.7 m east.
 

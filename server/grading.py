@@ -26,6 +26,7 @@ GradedDem(dem, grader) is a drop-in for dem.Dem where only sample() is graded; u
 and the levels <= 0 tiles only (coarser tiles sink under the block and cover far more ground).
 """
 from runtimeprofiler import step as profile_step
+import copy
 import itertools
 import logging
 import math
@@ -46,6 +47,7 @@ import railways as railwaysmod
 import roads as roadsmod
 import roadshape
 import seatiles
+import vsolve as vsolvemod
 
 log = logging.getLogger("earthd.grading")
 
@@ -544,6 +546,15 @@ UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
 # (plan_roads) and its underpass depth (_under_ground) alike: never raised (a real dip under a bridge stays). Not on the
 # coarse models (their smeared embankments are wider than that: UNDER_RUN_*).
 UNDER_DECK_ON = os.environ.get("BNE_UNDER_DECK_GROUND", "on") != "off"
+VSOLVE_DECK_PAD_M = 50.0     # m past the shadow solve's reach its caps' decks are read from (vsolve: a deck over its margin)
+VSOLVE_RINGS_KEEP = 64      # cells whose placed road rings the shadow solve's context keeps (_vsolve_cell_rings)
+VSOLVE_CONTEXT_M = 150.0    # m past a cell's box the next cells' roads are in its shadow solve too, unkept: its own roads
+                            # reach CLIP_MARGIN_M past it, but a road of the next cell's alone was in none of its
+                            # problem, and an end its junction there lifts 1.2 m was held at its profile: Rio's 0.79 m
+                            # seam. Over the widest spread (vsolve.SPREAD_M) a change there has died out at the box
+VSOLVE_JOINT_M = 1.0        # m between two decks' ends that make one joint (_vsolve_caps: no abutment there)
+VSOLVE_DIP_TOUCH_M = 0.01   # m: a sample the underpass rule lowered this much is in its dip: the shadow solve keeps it,
+                            # and its road a spread (vsolve.SPREAD_M) either side, no higher than before the rule
 UNDER_DECK_SIDE_M = 15.0    # m past a deck's side the road's ground is read (Assaku's hump: 6-13 m past its decks)
 # ... and an overpass's abutment lift reads the road under the same way (bridge_lifts' half, _end_lift_raw): an
 # elevation holding the deck over a cut read the motorway at the deck's height and asked 6.7-8.5 m (GitHub #1077, #1086)
@@ -922,6 +933,17 @@ class Plan:
         self.widen = None               # (n,) m its core and carriageway are wider each side there (hairpin_cores) or None
         pad = half + T_MAX
         self.bbox = (xy[:, 0].min() - pad, xy[:, 1].min() - pad, xy[:, 0].max() + pad, xy[:, 1].max() + pad)
+
+
+def _plan_copy(p):
+    """A copy of Plan p whose heights and per-vertex arrays are its own (BNE_VSOLVE=solo's fallback: the passes again
+    from the plans as they were). Pure."""
+    q = copy.copy(p)
+    for name in ("z", "bank", "widen", "cut"):
+        v = getattr(q, name, None)
+        if v is not None:
+            setattr(q, name, np.array(v, np.float64))
+    return q
 
 
 def clip_polyline(xy, box):
@@ -2911,113 +2933,148 @@ class _Planner:
                     pclip.append(cl)
                     pparts.append((fid, part[1], part[0]))
             bases = [np.array(p.z, np.float64) for _f, p in plans] if GUARD_ON else None
-            if NEIGHBOUR_ON and plans and self._coarse(key):
-                try:
-                    r = 2.0 * NEIGHBOUR_TREND_SIGMA_M
-                    couple_neighbours([p for _f, p in plans], pspecs,
-                                      lambda xy: field_heights(self.frame, self.elev, xy, r, NEIGHBOUR_TREND_SIGMA_M))
-                except Exception as e:      # each road on its own rather than no grading
-                    _caught(e)
-                    log.debug("grading: neighbours of %s: %s: %s", key, type(e).__name__, e)
-            pad_nodes = None
-            if JUNCTION_SNAP_ON and plans:
-                try:
-                    snap_junctions([p for _f, p in plans], pspecs)
-                    pad_nodes = junction_pads([p for _f, p in plans], pspecs)
-                except Exception as e:      # blended as before rather than no grading
-                    _caught(e)
-                    log.debug("grading: junctions of %s: %s: %s", key, type(e).__name__, e)
-            if COARSE_EASE_ON and plans:
-                try:
-                    self._ease_coarse(key, plans, pspecs)
-                except Exception as e:      # as they were rather than no grading
-                    _caught(e)
-                    log.debug("grading: coarse easing of %s: %s: %s", key, type(e).__name__, e)
-            if APPROACH_ON and plans:
-                try:
-                    self._lift_approaches(key, plans, pspecs)
-                except Exception as e:      # ungraded approaches rather than no grading
-                    _caught(e)
-                    log.debug("grading: approaches of %s: %s: %s", key, type(e).__name__, e)
-            # (the carriageways' profiles before the dips: a motorway under another road's low deck still dips)
-            if CW_ON and plans:
-                try:
-                    self._apply_carriageways(plans, pspecs)
-                except Exception as e:      # as they were rather than no grading
-                    _caught(e)
-                    log.debug("grading: carriageways of %s: %s: %s", key, type(e).__name__, e)
-            if UNDER_ON and plans:
-                try:
-                    self._lower_underpasses(key, plans)
-                except Exception as e:      # as the data has it rather than no grading
-                    _caught(e)
-                    log.debug("grading: underpasses of %s: %s: %s", key, type(e).__name__, e)
-            if JUNCTION_SNAP_ON and plans and (APPROACH_ON or UNDER_ON):
-                # the side roads again, at their roads' heights after the approaches' lifts and the underpasses' dips
-                # (snapped before them, every alley along Baltimore's Haven Street stood up to 3.5 m over the street
-                # the dip had lowered: a hump at each, the user 2026-10-28)
-                try:
-                    snap_junctions([p for _f, p in plans], pspecs)
-                    junction_pads([p for _f, p in plans], pspecs, pad_nodes)
+            # (the profiles before the passes: the shadow solve's targets, docs/VERTICAL_SOLVER_RFC.md step 2)
+            z_before = [np.array(p.z, np.float64) for _f, p in plans] if vsolvemod.SHADOW else None
+            # (BNE_VSOLVE=solo: the passes the solve replaces skipped, the rules it takes its rows from kept: the
+            # approaches' lifts, the carriageways, the underpass rule in the solve's own margin)
+            solo = vsolvemod.SOLO and z_before is not None
+            # (the passes and the rules before the solve, as one call: solo mode runs it again with every pass
+            # where the solve finds no heights, from the profiles as they were before it: the RFC's fallback)
+            snap = [(f, _plan_copy(p)) for f, p in plans] if solo else None
+
+            def passes(solo):
+                if NEIGHBOUR_ON and plans and self._coarse(key) and not solo:
+                    try:
+                        r = 2.0 * NEIGHBOUR_TREND_SIGMA_M
+                        couple_neighbours([p for _f, p in plans], pspecs,
+                                          lambda xy: field_heights(self.frame, self.elev, xy, r, NEIGHBOUR_TREND_SIGMA_M))
+                    except Exception as e:      # each road on its own rather than no grading
+                        _caught(e)
+                        log.debug("grading: neighbours of %s: %s: %s", key, type(e).__name__, e)
+                pad_nodes = None
+                if JUNCTION_SNAP_ON and plans and not solo:
+                    try:
+                        snap_junctions([p for _f, p in plans], pspecs)
+                        pad_nodes = junction_pads([p for _f, p in plans], pspecs)
+                    except Exception as e:      # blended as before rather than no grading
+                        _caught(e)
+                        log.debug("grading: junctions of %s: %s: %s", key, type(e).__name__, e)
+                if COARSE_EASE_ON and plans and not solo:
+                    try:
+                        self._ease_coarse(key, plans, pspecs)
+                    except Exception as e:      # as they were rather than no grading
+                        _caught(e)
+                        log.debug("grading: coarse easing of %s: %s: %s", key, type(e).__name__, e)
+                # (the approaches' lifts as the rule makes them: the shadow's floors. Without them the solve left a road
+                # leading onto a Tokyo deck on its ground, 1.3 m under the ramp the passes gave it and 1.07 m under the
+                # deck beside it)
+                z_prelift = [np.array(p.z, np.float64) for _f, p in plans] if z_before is not None else None
+                if APPROACH_ON and plans:
+                    try:
+                        self._lift_approaches(key, plans, pspecs)
+                    except Exception as e:      # ungraded approaches rather than no grading
+                        _caught(e)
+                        log.debug("grading: approaches of %s: %s: %s", key, type(e).__name__, e)
+                z_lift = [np.array(p.z, np.float64) for _f, p in plans] if z_before is not None else None
+                # (the carriageways' profiles before the dips: a motorway under another road's low deck still dips)
+                if CW_ON and plans:
+                    try:
+                        self._apply_carriageways(plans, pspecs)
+                    except Exception as e:      # as they were rather than no grading
+                        _caught(e)
+                        log.debug("grading: carriageways of %s: %s: %s", key, type(e).__name__, e)
+                # (the heights the underpass rule sees: the shadow's dips are its decision on them. Taken on the profile
+                # before the passes, a road raised onto its bridge's approach got a dip at its ground under a deck 10 m
+                # from its own deck's end, 7.8 m over it: a 160 % grade in Lagos)
+                z_under = [np.array(p.z, np.float64) for _f, p in plans] if z_before is not None else None
+                if UNDER_ON and plans and not solo:
+                    try:
+                        self._lower_underpasses(key, plans)
+                    except Exception as e:      # as the data has it rather than no grading
+                        _caught(e)
+                        log.debug("grading: underpasses of %s: %s: %s", key, type(e).__name__, e)
+                if JUNCTION_SNAP_ON and plans and (APPROACH_ON or UNDER_ON) and not solo:
+                    # the side roads again, at their roads' heights after the approaches' lifts and the underpasses' dips
+                    # (snapped before them, every alley along Baltimore's Haven Street stood up to 3.5 m over the street
+                    # the dip had lowered: a hump at each, the user 2026-10-28)
+                    try:
+                        snap_junctions([p for _f, p in plans], pspecs)
+                        junction_pads([p for _f, p in plans], pspecs, pad_nodes)
+                    except Exception as e:
+                        _caught(e)
+                        log.debug("grading: junctions after the dips of %s: %s: %s", key, type(e).__name__, e)
+                if SEAMS_ON and CW_ON and plans and not solo:
+                    try:            # the deck's height at each carriageway road's abutment end, whatever the passes did to it
+                        if self._pin_cw_ends(plans, pspecs) and JUNCTION_SNAP_ON:
+                            snap_junctions([p for _f, p in plans], pspecs)      # (the side roads meet it again)
+                    except Exception as e:      # the plans as the passes left them rather than no grading
+                        _caught(e)
+                        log.debug("grading: carriageway ends of %s: %s: %s", key, type(e).__name__, e)
+                with self.lock:
+                    ctx = self.__dict__.setdefault("_ramp_ctx", {}).pop(str(key), None) if APPROACH_ON and plans else None
+                if ctx and not solo:    # (the raised junctions' roads on ramps no steeper than RAMP_GRADE, after every snap)
+                    log.debug("grading: ramp envelope of %s: %d raised, %d held", key, len(ctx[0]), len(ctx[1]))
+                    try:
+                        # (its floor no higher than the plans now: the dips under the decks and the snaps after the first
+                        # envelope lowered roads, and the floor taken before them stood a dipped slip road back up to its
+                        # undipped height, 6.9 m over the dipped trunk it leaves at its gore: Sao Paulo's 23 de Maio under
+                        # the Radial Leste-Oeste, GitHub #1329)
+                        ctx = (ctx[0], ctx[1], _floor_now(ctx[2], plans) if RAMP_FLOOR_NOW else ctx[2])
+                        ramp_envelope(plans, pspecs, *ctx)
+                    except Exception as e:
+                        _caught(e)
+                        log.debug("grading: ramp envelope of %s: %s: %s", key, type(e).__name__, e)
+                if GUARD_ON and plans and not solo:
+                    try:            # the finished plans under the grade ceilings and the window rule (grade_guard)
+                        st = grade_guard([p for _f, p in plans], pspecs, bases,
+                                         [i for i, (f, _p) in enumerate(plans) if TUNNEL_TAG in f])
+                        if st is not None and st[4] > 0:
+                            log.info("grading: grade guard %s: %d edges still over their ceiling, worst %.1f m", key,
+                                     int(st[4]), float(st[5]))
+                    except Exception as e:      # the plans as the passes left them rather than no grading
+                        _caught(e)
+                        log.debug("grading: grade guard of %s: %s: %s", key, type(e).__name__, e)
+                if CORRIDOR_ON and plans and not solo:
+                    try:            # roads side by side at one height (before the welds and snaps that join them again)
+                        share_corridors(plans, pspecs, self._decks_near(key) if CORRIDOR_UNDER_ON else ())
+                    except Exception as e:      # each on its own rather than no grading
+                        _caught(e)
+                        log.debug("grading: corridors of %s: %s: %s", key, type(e).__name__, e)
+                if WELD_ON and plans and not solo:
+                    try:            # one road planned in pieces meets itself at one height (a dip across a junction)
+                        weld_continuations(plans, pspecs)
+                    except Exception as e:      # the pieces as planned rather than no grading
+                        _caught(e)
+                        log.debug("grading: welded continuations of %s: %s: %s", key, type(e).__name__, e)
+                if JUNCTION_SNAP_ON and plans and not solo:
+                    try:            # the side roads meet the welded main again, at its new height (no step at the mouth)
+                        snap_junctions([p for _f, p in plans], pspecs)
+                    except Exception as e:      # the welded heights alone rather than no grading
+                        _caught(e)
+                        log.debug("grading: junctions after welding of %s: %s: %s", key, type(e).__name__, e)
+                if _st.ABUT and APPROACH_ON and plans and not solo:
+                    try:            # one abutment height per structure end (BNE_DECK_STRUCT=abut), after every pass that moves ends
+                        if self._pin_struct_ends(plans, pspecs) and JUNCTION_SNAP_ON:
+                            snap_junctions([p for _f, p in plans], pspecs)      # (the side roads meet it again)
+                    except Exception as e:      # the plans as the passes left them rather than no grading
+                        _caught(e)
+                        log.debug("grading: structure ends of %s: %s: %s", key, type(e).__name__, e)
+                return z_prelift, z_lift, z_under
+
+            z_prelift, z_lift, z_under = passes(solo)
+            if z_before is not None and plans:
+                info = None
+                try:            # the one solve beside the passes: measured only, their plans kept (vsolve)
+                    ctx = self._vsolve_context(key, set(ids))
+                    info = self._vsolve_shadow(key, plans, pspecs, z_before, z_under, (z_prelift, z_lift), ctx)
                 except Exception as e:
-                    _caught(e)
-                    log.debug("grading: junctions after the dips of %s: %s: %s", key, type(e).__name__, e)
-            if SEAMS_ON and CW_ON and plans:
-                try:            # the deck's height at each carriageway road's abutment end, whatever the passes did to it
-                    if self._pin_cw_ends(plans, pspecs) and JUNCTION_SNAP_ON:
-                        snap_junctions([p for _f, p in plans], pspecs)      # (the side roads meet it again)
-                except Exception as e:      # the plans as the passes left them rather than no grading
-                    _caught(e)
-                    log.debug("grading: carriageway ends of %s: %s: %s", key, type(e).__name__, e)
-            with self.lock:
-                ctx = self.__dict__.setdefault("_ramp_ctx", {}).pop(str(key), None) if APPROACH_ON and plans else None
-            if ctx:                 # (the raised junctions' roads on ramps no steeper than RAMP_GRADE, after every snap)
-                log.debug("grading: ramp envelope of %s: %d raised, %d held", key, len(ctx[0]), len(ctx[1]))
-                try:
-                    # (its floor no higher than the plans now: the dips under the decks and the snaps after the first
-                    # envelope lowered roads, and the floor taken before them stood a dipped slip road back up to its
-                    # undipped height, 6.9 m over the dipped trunk it leaves at its gore: Sao Paulo's 23 de Maio under
-                    # the Radial Leste-Oeste, GitHub #1329)
-                    ctx = (ctx[0], ctx[1], _floor_now(ctx[2], plans) if RAMP_FLOOR_NOW else ctx[2])
-                    ramp_envelope(plans, pspecs, *ctx)
-                except Exception as e:
-                    _caught(e)
-                    log.debug("grading: ramp envelope of %s: %s: %s", key, type(e).__name__, e)
-            if GUARD_ON and plans:
-                try:            # the finished plans under the grade ceilings and the window rule (grade_guard)
-                    st = grade_guard([p for _f, p in plans], pspecs, bases,
-                                     [i for i, (f, _p) in enumerate(plans) if TUNNEL_TAG in f])
-                    if st is not None and st[4] > 0:
-                        log.info("grading: grade guard %s: %d edges still over their ceiling, worst %.1f m", key,
-                                 int(st[4]), float(st[5]))
-                except Exception as e:      # the plans as the passes left them rather than no grading
-                    _caught(e)
-                    log.debug("grading: grade guard of %s: %s: %s", key, type(e).__name__, e)
-            if CORRIDOR_ON and plans:
-                try:            # roads side by side at one height (before the welds and snaps that join them again)
-                    share_corridors(plans, pspecs, self._decks_near(key) if CORRIDOR_UNDER_ON else ())
-                except Exception as e:      # each on its own rather than no grading
-                    _caught(e)
-                    log.debug("grading: corridors of %s: %s: %s", key, type(e).__name__, e)
-            if WELD_ON and plans:
-                try:            # one road planned in pieces meets itself at one height (a dip across a junction)
-                    weld_continuations(plans, pspecs)
-                except Exception as e:      # the pieces as planned rather than no grading
-                    _caught(e)
-                    log.debug("grading: welded continuations of %s: %s: %s", key, type(e).__name__, e)
-            if JUNCTION_SNAP_ON and plans:
-                try:            # the side roads meet the welded main again, at its new height (no step at the mouth)
-                    snap_junctions([p for _f, p in plans], pspecs)
-                except Exception as e:      # the welded heights alone rather than no grading
-                    _caught(e)
-                    log.debug("grading: junctions after welding of %s: %s: %s", key, type(e).__name__, e)
-            if _st.ABUT and APPROACH_ON and plans:
-                try:            # one abutment height per structure end (BNE_DECK_STRUCT=abut), after every pass that moves ends
-                    if self._pin_struct_ends(plans, pspecs) and JUNCTION_SNAP_ON:
-                        snap_junctions([p for _f, p in plans], pspecs)      # (the side roads meet it again)
-                except Exception as e:      # the plans as the passes left them rather than no grading
-                    _caught(e)
-                    log.debug("grading: structure ends of %s: %s: %s", key, type(e).__name__, e)
+                    log.warning("vsolve: shadow solve of %s: %s: %s", key, type(e).__name__, e)
+                if solo and (info is None or info.get("fallback")):
+                    # (no heights from the solve, its rows infeasible or an error: the passes' plans, made from the
+                    # profiles as they were before any rule, as without BNE_VSOLVE)
+                    log.warning("vsolve: %s: no solve in solo mode: the passes' plans", key)
+                    plans[:] = [(f, _plan_copy(p)) for f, p in snap]
+                    passes(False)
             if plans:
                 try:            # a pass road's widened hairpins (roads.HAIRPIN_*): its core wider round each
                     hairpin_cores(plans, pspecs, self.frame)
@@ -3105,6 +3162,289 @@ class _Planner:
         else:
             keeps = []
         return feats, plans, keeps
+
+    def _vsolve_context(self, key, own_ids):
+        """[(fid, Plan, spec, lifted)] of the next cells' graded ground roads within VSOLVE_CONTEXT_M of cell key's box
+        that are none of its own (own_ids), each planned as its own cell plans it (_make_cell_roads: its pieces,
+        abutments, chains, observations and decks, that cell's: the same profile), lifted: its heights after that
+        cell's approach rule (_lift_approaches, APPROACH_ON; None: not run): the shadow solve's context, in its problem
+        and none of its output."""
+        box = self._clip_box(key, VSOLVE_CONTEXT_M)
+        if box is None:
+            return []
+        f64 = np.float64
+        cla, clo, _ = self.frame.enu_to_geodetic(np.array([box[0], box[2]] * 2), np.array([box[1]] * 2 + [box[3]] * 2), 0.0)
+        cla, clo = np.asarray(cla, f64), np.asarray(clo, f64)
+        keys = sorted(set(mapcells.cells_for_bbox(float(cla.min()), float(clo.min()), float(cla.max()),
+                                                  float(clo.max()))) - {key}, key=str)
+        out, seen = [], set(own_ids)
+        for k in keys:
+            try:
+                got = self._vsolve_cell_rings(k)
+                if got is None:
+                    continue
+                feats, specs, roads = got
+                clip = self._clip_box(k)
+                parts, ids, rings = [], [], []
+                for i, fid, pieces in roads:
+                    if fid in seen:
+                        continue
+                    near = [((e >= box[0]) & (e <= box[2]) & (n >= box[1]) & (n <= box[3])).any()
+                            for _ring, e, n in pieces]
+                    if not any(near):
+                        continue
+                    seen.add(fid)
+                    for (ring, _e, _n), nr in zip(pieces, near):
+                        if nr:
+                            for r in self._near_cell(ring, clip):
+                                parts.append((r, specs[i]))
+                                ids.append(fid)
+                                rings.append(roadsmod.is_ring(feats, i))
+                if not parts:
+                    continue
+                abut = None
+                if ABUT_FILL_ON or APPROACH_ON:
+                    pe = np.array([[r[0], r[-1]] for r, _sp in parts], f64).reshape(-1, 2)
+                    e, n, _ = self.frame.geodetic_to_enu(pe[:, 1], pe[:, 0], 0.0)
+                    abut = self._abut_ends(k, np.stack([np.asarray(e), np.asarray(n)], axis=1)).reshape(-1, 2)
+                ext = pins = None
+                if CHAIN_ON:
+                    self._chain_cands(k, feats, specs)
+                    ext = self._extensions(parts, ids)
+                    pins = self._pins(parts, ids, ext, k)
+                got = []
+                for fid, part, p in zip(ids, parts, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
+                                                               coarse=COARSE_EASE_ON and self._coarse(k),
+                                                               obs=self._obs(k), decks=self._decks_near(k), rings=rings)):
+                    if p is not None:
+                        p.rid = road_id(fid)
+                        got.append((fid, p, part[1]))
+                lifted = [None] * len(got)
+                if APPROACH_ON and got:
+                    # (the approach rule as that cell runs it: its floors in this cell's solve too. Without them a
+                    # junction a floor raised 0.9 m in the cell that owns the approach stood on its profile in the
+                    # next cell's, and a road from it stepped 0.43 m at the seam between them, Lauterbrunnen)
+                    try:
+                        cps = [(f, _plan_copy(p)) for f, p, _s in got]
+                        self._lift_approaches(k, cps, [s for _f, _p, s in got], keep=False)
+                        lifted = [np.array(q.z, np.float64) if len(q.z) == len(p.z) else None
+                                  for (_f, q), (_g, p, _s) in zip(cps, got)]
+                    except Exception as e:      # (their profiles alone rather than no context)
+                        _caught(e)
+                        log.debug("vsolve: context lifts of %s: %s: %s", k, type(e).__name__, e)
+                out.extend((f, p, s, z) for (f, p, s), z in zip(got, lifted))
+            except Exception as e:      # (that cell's roads out of the context rather than no shadow solve)
+                _caught(e)
+                log.debug("vsolve: context roads of %s: %s: %s", k, type(e).__name__, e)
+        return out
+
+    def _vsolve_cell_rings(self, k):
+        """(feats, specs, [(i, fid, [(lon/lat ring as placed, east, north)])]) of cell k's graded ground roads, or None
+        (no roads): _vsolve_context's, kept per cell (VSOLVE_RINGS_KEEP of them). Every next cell's context placed all
+        of k's roads again to find those near its box: 36,510 rings in a Fells Point run, 3 of its context's 20 s."""
+        memo = self.__dict__.setdefault("_vsolve_rings", {})
+        with self.lock:
+            got = memo.get(str(k))
+        if got is not None:
+            return got[0]
+        f64 = np.float64
+        feats = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+        out = None
+        if feats is not None and len(feats):
+            specs = roadsmod.road_specs(feats, None, self.widths)
+            placement = roadsmod.placement_context([feats], None, self.widths)
+            roads = []
+            for i in range(len(feats)):
+                if specs[i] is None or specs[i].cls in UNGRADED:
+                    continue
+                pieces = []
+                for ring in roadsmod.ground_parts(feats, i):
+                    ring = np.asarray(placement.ring(self.frame, feats, i, ring, specs[i]), f64)
+                    e, n, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+                    pieces.append((ring, np.asarray(e, f64), np.asarray(n, f64)))
+                roads.append((i, str(feats.ids[i]), pieces))
+            out = (feats, specs, roads)
+        with self.lock:
+            memo[str(k)] = (out,)
+            while len(memo) > VSOLVE_RINGS_KEEP:
+                memo.pop(next(iter(memo)))
+        return out
+
+    def _vsolve_shadow(self, key, plans, pspecs, z_before, z_under=None, lifts=None, context=()):
+        """The cell's ground roads solved in one problem (vsolve.solve) from their profiles before the passes, with the
+        passes' discrete outputs as its inputs (the decks' heights at their abutments, the dips under decks: the
+        underpass rule's on z_under, the heights it sees in the passes, z_before's without; the approaches' lifts,
+        lifts: the heights before and after _lift_approaches); kept, trimmed to the cell as its plans are, in
+        self._vsolve[str(key)] = ([(fid, Plan)], info). The plans themselves untouched. context: _vsolve_context's, in
+        the problem at their profiles (no pass ran on them), with their own cells' approach lifts as floors, and none
+        of the output."""
+        import copy
+        own_n = len(pspecs)
+        given = plans                   # (the caller's: its own roads' heights replaced there under vsolve.ON)
+        if context:
+            zc = [np.array(c[1].z, np.float64) for c in context]
+            zl = [zc[i] if len(c) < 4 or c[3] is None else c[3] for i, c in enumerate(context)]
+            plans = list(plans[:own_n]) + [(c[0], c[1]) for c in context]
+            pspecs = list(pspecs) + [c[2] for c in context]
+            z_before = list(z_before[:own_n]) + zc
+            z_under = None if z_under is None else list(z_under[:own_n]) + zl    # (the rule after the lifts, as in
+            # the passes: under them a context road's floor was capped at its profile)
+            if lifts is not None and lifts[0] is not None:
+                lifts = (list(lifts[0][:own_n]) + zc, list(lifts[1][:own_n]) + zl)
+        n = len(pspecs)
+        ground = [p for _f, p in plans[:n]]
+        own = self._clip_box(key, 0.0)
+        ceilings = [guard_limits(sp, p)[0] for sp, p in zip(pspecs, ground)]
+        ranks = [road_rank(sp) for sp in pspecs]
+        dips = [None] * n
+        seen = z_before if z_under is None else z_under
+        rule_z = [np.asarray(z, np.float64) for z in seen[:n]]     # (the heights the underpass rule leaves)
+        if UNDER_ON:            # (the dips as the passes' rule makes them, but over the whole solve: its margin too. The
+            # passes make them to UNDER_NEAR_M past the box only; taken from them, a cell's own dip spread over the
+            # edge into a neighbour that had none there: 6.6 m seam steps in Tokyo)
+            under = [(fid, Plan(p.xy, np.array(z, np.float64), p.half, p.abut, p.cut, p.road_half))
+                     for (fid, p), z in zip(plans[:n], seen[:n])]
+            for (_f, p), (_g, q) in zip(plans[:n], under):
+                q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+            self._lower_underpasses(key, under, near=CLIP_MARGIN_M + VERTEX_STEP)
+            rule_z = [np.asarray(q.z, np.float64) for _f, q in under]
+            for i, ((_f, q), z) in enumerate(zip(under, seen[:n])):
+                low = np.asarray(q.z, np.float64) <= np.asarray(z, np.float64) - vsolvemod.DIP_M
+                if low.any():
+                    dips[i] = np.where(low, np.asarray(q.z, np.float64), np.nan)
+        floors = [None] * n
+        if lifts is not None and lifts[0] is not None:
+            # (where the approach rule raised a road: at least that high, but no higher than the underpass rule after
+            # it left it, nor the passes where they went lower. A lift the dip under a deck took back, ramp_envelope
+            # raised again in the passes, onto the deck: as a floor it was over the dip, every floor the solve broke
+            # in Rio, Athens and Tokyo, by up to 8 m)
+            for i, (a, b, r, p) in enumerate(zip(lifts[0][:n], lifts[1][:n], rule_z, ground)):
+                up = b - a >= vsolvemod.DIP_M
+                if up.any():    # (a context road's plan is its profile, no pass's heights: its lift alone)
+                    top = np.asarray(p.z, np.float64) if i < own_n else b
+                    floors[i] = np.where(up, np.minimum(np.minimum(b, r), top), np.nan)
+        pins = []
+        if own is not None:     # (a piece's end past the cell's box: cut there, held at its profile, as the next cell holds it)
+            x0, y0, x1, y1 = own
+            for i, p in enumerate(ground):
+                for e in (0, len(p.xy) - 1):
+                    x, y = float(p.xy[e, 0]), float(p.xy[e, 1])
+                    if x < x0 - 1.0 or x > x1 + 1.0 or y < y0 - 1.0 or y > y1 + 1.0:
+                        # (at the underpass rule's dip where it has one there: held at the profile over a dip's
+                        # bound, the end could hold neither, and Tokyo's cells went infeasible. On an approach's
+                        # floor where it has one: held at its profile 5 m under the ramp the lift made toward a deck
+                        # past the box, the smoothing between them stood a Tokyo street 8 m over its ground)
+                        h = float(z_before[i][e])
+                        if floors[i] is not None and np.isfinite(floors[i][e]):
+                            h = max(h, float(floors[i][e]))
+                        if dips[i] is not None and np.isfinite(dips[i][e]):
+                            h = min(h, float(dips[i][e]))
+                        pins.append((i, e, h))
+        # (under a deck, no higher than the rule left it over the whole solve, nor than the passes did where they went
+        # lower: a later pass lowered a road under Rio's 205 m deck by 0.66 m that the rule left, and capped at the
+        # rule's alone the solve stood it there again, 2.3 m under the deck where the passes left 2.8. The passes'
+        # heights: the shadow's; without them (the RFC's step 4) clearance rows on the decks' own heights)
+        caps = self._vsolve_caps(key, ground, [np.minimum(r, np.asarray(p.z, np.float64)) for r, p in zip(rule_z, ground)])
+        for i, (r, z) in enumerate(zip(rule_z, seen[:n])):
+            # (where the underpass rule lowered a road at all, no higher than it was before: bending and the hold alone
+            # ring like a beam on a spring bed, and a dip came back up 0.16 to 0.44 m over its profile past its ramp,
+            # test_grading's underpass cases. A tension term (critically damped) left the ramp's foot 0.3 to 1.1 m low)
+            z = np.asarray(z, np.float64)
+            low = r < z - VSOLVE_DIP_TOUCH_M
+            if low.any():   # (and a spread past the ramp's foot: the motorway under a held overpass rang 0.44 m past it)
+                xy = np.asarray(ground[i].xy, np.float64)[:, :2]
+                sa = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+                reach = vsolvemod.SPREAD_M.get(vsolvemod._cls(pspecs[i]), vsolvemod.SPREAD_OTHER_M)
+                sl = sa[low]
+                near = np.abs(sa[:, None] - sl[None, :]).min(axis=1) <= reach
+                c = np.where(near, z, np.nan)
+                caps[i] = c if caps[i] is None else np.fmin(caps[i], c)
+                # (and past the ramp's foot, where the rule left it, no lower than it left it: smoothed over its
+                # class's spread, the motorway under a held overpass came back up 120 m past the ramp's foot, still
+                # 0.11 m low 250 m from the deck, and a street dipped between its junctions 0.2 m past them,
+                # test_grading's underpass cases in on mode). No higher than the passes, as the caps: at the rule's
+                # height over a junction the dip under a deck took down, Vienna's Südtiroler Platz service road stood
+                # 5 m over it)
+                fl = np.where(near & ~low, np.minimum(r, np.asarray(ground[i].z, np.float64)), np.nan)
+                floors[i] = fl if floors[i] is None else np.fmax(floors[i], fl)
+        corridors = None
+        if vsolvemod.CORRIDOR_ROWS_ON:  # (roads side by side at one height: share_corridors' rule, as rows)
+            corridors = corridor_pairs(plans[:n], pspecs, ramps=False)
+        zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips, caps=caps, floors=floors,
+                                   corridors=corridors, joints=not (UNDER_RUN_ON and self._coarse(key)))
+        if zs is None:          # (no feasible solve: the passes' heights, as the RFC's fallback; counted in info)
+            zs = [np.array(p.z, np.float64) for p in ground]
+        quad = self._clip_quad(key) if own is not None else None
+        kept = []
+        for (fid, p), z in zip(plans[:own_n], zs[:own_n]):
+            q = copy.copy(p)
+            q.z = z
+            if own is None:
+                kept.append((fid, q))
+            else:
+                kept.extend((fid, r) for r in trim_plan(q, own if quad is None else quad))
+        if vsolvemod.ON and not info["fallback"]:
+            for i in range(own_n):      # (the RFC's step 3: the solve's heights, its plans' all else the passes')
+                fid, p = given[i]
+                q = copy.copy(p)
+                q.z = np.asarray(zs[i], np.float64).copy()
+                given[i] = (fid, q)
+        info["pins"] = len(pins)
+        info["context"] = len(context)
+        info["dips"] = int(sum(int(np.isfinite(d).sum()) for d in dips if d is not None))
+        info["caps"] = int(sum(int(np.isfinite(c).sum()) for c in caps if c is not None))
+        info["floors"] = int(sum(int(np.isfinite(c).sum()) for c in floors if c is not None))
+        (log.warning if info["fallback"] else log.info)(
+            "vsolve: %s: %d roads, %d unknowns, %d joins, %d pins, %d dip rows, %d caps and %d floors (%d broken, the "
+            "most by %.2f m), %d corridor rows (%d broken, the most by %.2f m): %s%s in %.2f s", key, n, info["n"],
+            info["joins"], info["pins"], info["dips"], info["caps"], info["floors"], info["clear_broken"],
+            info["clear_excess_m"], info["corridor_rows"], info["corridor_broken"], info["corridor_excess_m"],
+            info.get("status"),
+            " (the passes' heights kept: %s)" % ", ".join(info.get("culprit") or ["?"]) if info["fallback"] else
+            " (%d grade rows broken, the most by %.2f m%s)" % (
+                info["grade_broken"], info["grade_excess_m"],
+                "" if not info.get("grade_worst") else ": %s at %.0f %% over %.0f %%, x %.1f y %.1f" % (
+                    plans[info["grade_worst"]["plan"]][0], 100 * info["grade_worst"]["grade"],
+                    100 * info["grade_worst"]["ceiling"], info["grade_worst"]["x"], info["grade_worst"]["y"]))
+            if info["grade_broken"] else "", info["elapsed_s"])
+        if not vsolvemod.ON:        # (the shadow's, for grade_metrics; on, the plans are the solve's: nothing kept beside)
+            with self.lock:
+                self.__dict__.setdefault("_vsolve", {})[str(key)] = (kept, info)
+        return info
+
+    def _vsolve_caps(self, key, ground, heights, near=CLIP_MARGIN_M + VERTEX_STEP):
+        """Per plan of ground (or None) the most its heights may be in the shadow solve (NaN elsewhere): heights, where it
+        runs under a road or rail deck (its surface under the deck's: within both half widths of the deck's line; past
+        APPROACH_MIN_CROSS_M of its abutments: nearer, a junction at grade or the road's own deck; its joints with
+        other decks are no abutments). A road beside a deck's line by more than the deck's half width alone was not
+        capped, and raised 2.7 m by the solve under the Shuto's viaduct its fill lifted the deck's ground."""
+        f64 = np.float64
+        box = self._clip_box(key, near)
+        if box is None or not ground:
+            return [None] * len(ground)
+        lo, hi = np.array(box[:2]) - VSOLVE_DECK_PAD_M, np.array(box[2:]) + VSOLVE_DECK_PAD_M
+        cla, clo, _ = self.frame.enu_to_geodetic(np.array([lo[0], hi[0]] * 2), np.array([lo[1]] * 2 + [hi[1]] * 2), 0.0)
+        cla, clo = np.asarray(cla, f64), np.asarray(clo, f64)
+        keys = sorted(set(mapcells.cells_for_bbox(float(cla.min()), float(clo.min()), float(cla.max()),
+                                                  float(clo.max()))) | {key}, key=str)
+        decks, seen = [], set()
+        for k in keys:
+            c = self._cell_enu(k)
+            lines = [(ln, float(h)) for ln, h in zip(c["bridges"], c.get("bridge_half") or ()) if h > 0]
+            lines += [(ln, float(railwaysmod.DECK_HALF_M)) for ln in c.get("rail_bridges", ())]
+            for ln, h in lines:
+                ln = np.asarray(ln, f64)[:, :2]
+                sig = (len(ln), *np.round(ln[[0, -1]], 2).ravel().tolist())     # (a deck in several cells: once)
+                if len(ln) >= 2 and sig not in seen:
+                    seen.add(sig)
+                    decks.append((ln, h))
+        if not decks:
+            return [None] * len(ground)
+        # (a deck's end another deck goes on from is a joint, not an abutment: a viaduct is mapped in parts, and with
+        # every part's ends left out, a junction under one of the Shuto's joints was raised 2.7 m by the solve, which
+        # stood its 76-part chain up to 25 m off, Tokyo's low decks 72 -> 139 with BNE_VSOLVE=on)
+        return caps_under(decks, [np.asarray(p.xy, f64)[:, :2] for p in ground], [float(p.half) for p in ground],
+                          heights)
 
     @_marked("_chain_memo", lambda self, key, feats=None, specs=None: key)
     def _chain_cands(self, key, feats=None, specs=None):
@@ -3668,13 +4008,15 @@ class _Planner:
         for j, p in enumerate(ps):
             p.z = np.asarray(out[off[j]:off[j + 1]], np.float64)
 
-    def _lift_approaches(self, key, plans, specs):
+    def _lift_approaches(self, key, plans, specs, keep=True):
         """Raise, in place, the plans of the roads leading onto overpasses (APPROACH_ON). A road is raised where one of
         its ends is a bridge's abutment that must go up for the deck to clear the road under it (_end_lift); the raise
         falls off along the road (approach_add) and never comes nearer another road than its fill slope allows. Only
         what the plan's own line and the map around its ends say counts, the same in every cell that plans it (a long
         road is planned in each cell it passes; two cells raising the same road differently drew the road under a
-        raised ground, 2026-10-20 I-20 in Greene County, AL). Major roads (APPROACH_SKIP) are never raised."""
+        raised ground, 2026-10-20 I-20 in Greene County, AL). Major roads (APPROACH_SKIP) are never raised. keep: the
+        ramps' context kept for the cell's last ramp_envelope (_plan_cell); not for the shadow solve's context, whose
+        plans are copies of another cell's."""
         # every plan end at once: near the cell, and on a bridge end of its own cell (most touch none)
         pe = np.array([[p.xy[0][:2], p.xy[-1][:2]] for _f, p in plans], np.float64).reshape(-1, 2)
         ok = np.repeat([s is not None for s in specs], 2)       # (a motorway's or trunk's: over water only, below)
@@ -3767,8 +4109,9 @@ class _Planner:
                             or (i in freeway_approach and np.abs(before[i] - floor[i]).max() > 0.05))]
             if changed:             # (now, and once more after the junctions' last snap and the decks' pins: _plan_cell)
                 ramp_envelope(plans, specs, changed, held, floor)
-                with self.lock:
-                    self.__dict__.setdefault("_ramp_ctx", {})[str(key)] = (changed, held, floor)
+                if keep:
+                    with self.lock:
+                        self.__dict__.setdefault("_ramp_ctx", {})[str(key)] = (changed, held, floor)
 
     def _raise_junctions(self, plans, specs, touch):
         """The roads leaving a junction that a short approach (JUNCTION_STUB_M) runs into from a raised abutment, raised
@@ -4038,7 +4381,7 @@ class _Planner:
             self._marks_seen("_junction_memo", k)
             return memo[k]
 
-    def _lower_underpasses(self, key, plans):
+    def _lower_underpasses(self, key, plans, near=UNDER_NEAR_M):
         """Lower, in place, the plans that cross under a short never-raised overpass (UNDER_*), and the roads joined
         to them (underpass_offsets), only within the cell's box (each plan is trimmed to it after). Solved on every
         ground road and span within UNDER_REACH_M of the box, from whichever cells they lie in, each road whole, its
@@ -4046,7 +4389,7 @@ class _Planner:
         lay only in the next cell was pinned there by one cell and lowered 3.5 m by the other; their copies met as a
         step on US-101 by Los Angeles' Union Station, 2026-10-27.)"""
         f64 = np.float64
-        box = self._clip_box(key, UNDER_NEAR_M)
+        box = self._clip_box(key, near)     # (near: past the box the dips are made to; the shadow solve's, its margin)
         if box is None:
             return
         xys = [np.asarray(p.xy, f64)[:, :2] for _fid, p in plans]
@@ -6318,7 +6661,7 @@ class _Planner:
     def _struct_end_calc(self, e0):
         import fast
         import structures
-        fast.require(505, "structure_abutments")     # (493 on its branch: merged as 505)
+        fast.require(513, "structure_abutments")     # (493 on its branch: merged as 505)
         parts, read = {}, set()
 
         def run(keys, h=None, need=None):
@@ -8187,6 +8530,128 @@ class Grader:
         return out
 
 
+def _deck_joints(decks):
+    """Per deck its two ends (2 * j, 2 * j + 1): True where another deck's end is within VSOLVE_JOINT_M (a joint, not
+    an abutment: a viaduct is mapped in parts). decks [(line (m, 2), half)]. Pure."""
+    f64 = np.float64
+    ends = np.array([ln[e] for ln, _h in decks for e in (0, -1)], f64).reshape(-1, 2)
+    joined = np.zeros(len(ends), bool)
+    idx = np.arange(len(ends))
+    for c in range(0, len(ends), 512):      # (each end's row as ends - ends[i]: the same bits as one by one)
+        i = idx[c:c + 512]
+        d = dnp.hypot(ends[None, :, 0] - ends[i, None, 0], ends[None, :, 1] - ends[i, None, 1])
+        d[np.arange(len(i)), i ^ 1] = np.inf    # (its own other end)
+        d[np.arange(len(i)), i] = np.inf
+        joined[i] = (d <= VSOLVE_JOINT_M).any(axis=1)
+    return joined
+
+
+def caps_under(decks, xys, halves, heights, cell=32.0):
+    """Per plan (its samples xys[i] (n, 2), half width halves[i]) heights[i] where it runs under a deck of decks
+    [(line (m, 2), half h)] (within h + its half of the deck's line, its nearest point past APPROACH_MIN_CROSS_M of
+    the deck's abutment ends, _deck_joints' joints none), NaN elsewhere; None where nowhere. Each sample against only
+    the deck segments a grid of `cell` m finds within reach (every segment within h + half of it among them: the
+    nearest, ties to the first in the deck's order, as over all of them): the same bits as caps_under_scalar, which
+    took 104 of Tokyo's 366 s in its own lines (every plan against every deck its box met). Pure."""
+    f64 = np.float64
+    n_p = len(xys)
+    if not decks or not n_p:
+        return [None] * n_p
+    joined = _deck_joints(decks)
+    A, AB, LAB, CS, DJ, LT = [], [], [], [], [], []
+    for j, (ln, _h) in enumerate(decks):
+        a, ab = ln[:-1], np.diff(ln, axis=0)
+        lab = np.maximum(dnp.hypot(*ab.T), 1e-9)
+        A.append(a)
+        AB.append(ab)
+        LAB.append(lab)
+        CS.append(np.r_[0.0, np.cumsum(lab)][:-1])
+        DJ.append(np.full(len(a), j, np.int64))
+        LT.append(lab.sum())
+    A, AB, LAB, CS, DJ = (np.concatenate(v) for v in (A, AB, LAB, CS, DJ))
+    LT = np.array(LT, f64)
+    H = np.array([h for _ln, h in decks], f64)
+    sizes = np.array([len(x) for x in xys], np.int64)
+    Q = np.concatenate([np.asarray(x, f64).reshape(-1, 2) for x in xys])
+    W = np.repeat(np.asarray(halves, f64), sizes)
+    under = np.zeros(len(Q), bool)
+    if len(Q) and len(A):
+        # (each segment in the grid's cells its box widened by its deck's h and the widest half meets)
+        reach = H[DJ] + float(W.max()) + 1e-6
+        blo, bhi = np.minimum(A, A + AB), np.maximum(A, A + AB)
+        c0 = np.floor((blo - reach[:, None]) / cell).astype(np.int64)
+        c1 = np.floor((bhi + reach[:, None]) / cell).astype(np.int64)
+        nx, ny = c1[:, 0] - c0[:, 0] + 1, c1[:, 1] - c0[:, 1] + 1
+        cnt = nx * ny
+        seg = np.repeat(np.arange(len(A)), cnt)
+        off = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+        gkey = (c0[seg, 0] + off % nx[seg]) * 1_000_003 + (c0[seg, 1] + off // nx[seg])
+        o = np.lexsort((seg, gkey))
+        gkey, seg = gkey[o], seg[o]
+        qc = np.floor(Q / cell).astype(np.int64)
+        qkey = qc[:, 0] * 1_000_003 + qc[:, 1]
+        lo_ = np.searchsorted(gkey, qkey, "left")
+        m = np.searchsorted(gkey, qkey, "right") - lo_
+        si = np.repeat(np.arange(len(Q)), m)
+        sk = seg[np.repeat(lo_, m) + (np.arange(int(m.sum())) - np.repeat(np.cumsum(m) - m, m))]
+        # (the segment's box widened by its deck's h and this sample's own half: every segment within h + half of the
+        # sample is among those kept)
+        r_ = H[DJ[sk]] + W[si] + 1e-6
+        k_ = ((Q[si, 0] >= blo[sk, 0] - r_) & (Q[si, 0] <= bhi[sk, 0] + r_)
+              & (Q[si, 1] >= blo[sk, 1] - r_) & (Q[si, 1] <= bhi[sk, 1] + r_))
+        si, sk = si[k_], sk[k_]
+        if len(si):
+            q, a, ab, lab = Q[si], A[sk], AB[sk], LAB[sk]
+            t = np.clip(((q - a) * ab).sum(1) / (lab * lab), 0.0, 1.0)
+            dist = dnp.hypot(*(a + t[:, None] * ab - q).T)
+            dj = DJ[sk]
+            # (per sample and deck its nearest segment, the first of equals: sorted by sample, deck, distance, segment)
+            o = np.lexsort((sk, dist, dj, si))
+            si, sk, dj, t, dist = si[o], sk[o], dj[o], t[o], dist[o]
+            first = np.r_[True, (si[1:] != si[:-1]) | (dj[1:] != dj[:-1])]
+            si, sk, dj, t, dist = si[first], sk[first], dj[first], t[first], dist[first]
+            at = CS[sk] + t * LAB[sk]
+            ok = (dist <= H[dj] + W[si]) & ((at > APPROACH_MIN_CROSS_M) | joined[2 * dj]) & (
+                (at < LT[dj] - APPROACH_MIN_CROSS_M) | joined[2 * dj + 1])
+            under[si[ok]] = True
+    out, s0 = [], 0
+    for i in range(n_p):
+        u = under[s0:s0 + sizes[i]]
+        s0 += int(sizes[i])
+        out.append(np.where(u, np.asarray(heights[i], f64), np.nan) if u.any() else None)
+    return out
+
+
+def caps_under_scalar(decks, xys, halves, heights):
+    """caps_under's reference (the tests'): each plan against each deck whose box meets its own, all its samples."""
+    f64 = np.float64
+    if not decks or not xys:
+        return [None] * len(xys)
+    joined = _deck_joints(decks)
+    dbox = np.array([(*(ln.min(0) - h), *(ln.max(0) + h)) for ln, h in decks], f64)
+    out = []
+    for xy, w, hz in zip(xys, halves, heights):
+        xy = np.asarray(xy, f64)
+        w = float(w)
+        under = np.zeros(len(xy), bool)
+        pl, ph = xy.min(0) - w, xy.max(0) + w
+        for j in np.flatnonzero((dbox[:, 0] <= ph[0]) & (dbox[:, 2] >= pl[0]) & (dbox[:, 1] <= ph[1])
+                                & (dbox[:, 3] >= pl[1])).tolist():
+            ln, h = decks[j]
+            q = xy
+            a, ab = ln[:-1], np.diff(ln, axis=0)
+            lab = np.maximum(dnp.hypot(*ab.T), 1e-9)
+            t = np.clip(((q[:, None, :] - a[None]) * ab[None]).sum(2) / (lab * lab)[None], 0.0, 1.0)
+            dist = dnp.hypot(*(a[None] + t[..., None] * ab[None] - q[:, None, :]).transpose(2, 0, 1))
+            k = np.argmin(dist, axis=1)
+            ri = np.arange(len(q))
+            at = np.r_[0.0, np.cumsum(lab)][:-1][k] + t[ri, k] * lab[k]
+            under |= (dist[ri, k] <= h + w) & ((at > APPROACH_MIN_CROSS_M) | joined[2 * j]) & (
+                (at < lab.sum() - APPROACH_MIN_CROSS_M) | joined[2 * j + 1])
+        out.append(np.where(under, np.asarray(hz, f64), np.nan) if under.any() else None)
+    return out
+
+
 def trim_plan(p, box):
     """The pieces of Plan p within box (x0, y0, x1, y1), or a convex polygon (k, 2): cut at its edges (earthfast.clip_segments), heights and
     cuttings with them; an end not at p's own end leads onto no bridge. [Plan]."""
@@ -9676,6 +10141,39 @@ def share_corridors(plans, specs, decks=()):
     for i in idx:
         plans[i] = (plans[i][0], _replan(ps[i], ps[i].xy, zn[off[i]:off[i + 1]].copy(), cut=True))
     return len(idx)
+
+
+def corridor_pairs(plans, specs, ramps=True):
+    """share_corridors' pairs (above), for the one vertical solve's corridor rows (vsolve.CORRIDOR_ROWS_ON): per
+    vertex i of a plan j, each plan k running beside it there (k's nearest segment si at t, the gap between the
+    carriageways) of those whose heights may differ (two through roads keep their own: share_corridors' keys), as
+    arrays (j, i, k, si, t, gap, key j, key k: who follows whom, as in the pass); ramps False: none where k is within
+    CORRIDOR_ABUT_HOLD_M of its own bridge end, as the pass holds j there (the solve's rows: a Fells Point slip road
+    beside a road's ramp onto its bridge followed it up 1 m, under that bridge's deck a cap took it down again 12 m on,
+    and the cells either side of it, a cap in one and not the other, stepped 0.37 m at their seam); None without the
+    kernel's plan_corridor_pairs (earthfast 562) or with fewer than two plans in it. plans [(fid, Plan)], specs their Specs. Pure."""
+    import fast
+    if len(plans) < 2 or getattr(fast, "_ef", None) is None or not hasattr(fast._ef, "plan_corridor_pairs"):
+        return None
+    ps = [p for _f, p in plans]
+    key = np.array([_corridor_key(p, sp, f) for (f, p), sp in zip(plans, specs)], np.int64)
+    if (key >= 0).sum() < 2:
+        return None
+    xy, off, _z = _plan_lines(ps)
+    rh = np.array([float(p.road_half) for p in ps], np.float64)
+    abut = np.array([p.abut for p in ps], bool).reshape(-1, 2)
+    wall = np.concatenate([_wall_vertices(p) for p in ps])
+    j, i, k, si, tt, gap = fast._ef.plan_corridor_pairs(xy, off, wall, rh, key, abut, float(CORRIDOR_ANG_DEG),
+                                                        float(CORRIDOR_GAP_M), float(CORRIDOR_ABUT_HOLD_M))
+    keep = ~((key[j] >= CORRIDOR_THROUGH) & (key[k] >= CORRIDOR_THROUGH))
+    if not ramps and abut.any() and len(k):
+        lines = [np.asarray(p.xy, np.float64)[:, :2] for p in ps]
+        sa = [np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(q, axis=0).T))] for q in lines]
+        sk = np.array([sa[a][s] + u * (sa[a][s + 1] - sa[a][s]) for a, s, u in
+                       zip(k.tolist(), si.tolist(), tt.tolist())], np.float64)
+        lk = np.array([sa[a][-1] for a in k.tolist()], np.float64)
+        keep &= ~((abut[k, 0] & (sk <= CORRIDOR_ABUT_HOLD_M)) | (abut[k, 1] & (sk >= lk - CORRIDOR_ABUT_HOLD_M)))
+    return tuple(np.asarray(a)[keep] for a in (j, i, k, si, tt, gap, key[j], key[k]))
 
 
 def _raised_under(xy, dz, decks):

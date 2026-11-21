@@ -6921,6 +6921,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 234: corridor::plan_share_corridors (grading.share_corridors: roads whose carriageways touch or overlap side by
     // side agree in height there, a smoothing spline along each; GitHub #1043, #1045)
     m.add_function(wrap_pyfunction!(corridor::plan_share_corridors, m)?)?;
+    m.add_function(wrap_pyfunction!(corridor::plan_corridor_pairs, m)?)?;
     // 235: roadsmooth.smooth's layer steps (road_connector_pins, road_smooth_rebuild, road_smooth_fractions: its
     // Python round the line kernels was most of the smoothing's CPU)
     m.add_function(wrap_pyfunction!(roadsmooth::road_connector_pins, m)?)?;
@@ -7452,6 +7453,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 552: try598 with 549 (codex-port2 rail crossings) and 550 (v3 S2b) merged
     // 556: merged
     // 558: merged
-    m.add("VERSION", 560)?;
+    // 561 (first numbered 373, then 404, 442, 471, 481, 487, 489, 504 and 512 on the vsolve branch): carriageway_profiles(
+    // ..., coupling_penalty): soft couplings, one slack each at an exact L1 penalty (the one vertical solve's grade
+    // rows, server/vsolve.py); "le" couplings and one-sample couplings (b None)
+    // 562 (first 472, then 482, 488, 490, 505 and 513): corridor::plan_corridor_pairs (the one vertical solve's corridor
+    // rows: share_corridors' pairs, their geometry alone)
+    // 563 (first 506, then 514): carriageway_profiles takes a chain grade of +inf and a K of 0: no grade or curvature
+    // rows (the one vertical solve's chains, vsolve._LOOSE)
+    m.add("VERSION", 563)?;
     Ok(())
 }

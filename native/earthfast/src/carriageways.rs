@@ -6,6 +6,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 #[pyfunction]
+#[pyo3(signature = (target, weight, lower, upper, offsets, parameters, coupling_rows, coupling_values, rounds,
+                    budget_s, coupling_penalty=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn carriageway_profiles<'py>(
     py: Python<'py>,
@@ -19,6 +21,7 @@ pub fn carriageway_profiles<'py>(
     coupling_values: PyReadonlyArray1<'py, f64>,
     rounds: usize,
     budget_s: f64,
+    coupling_penalty: Option<PyReadonlyArray1<'py, f64>>,
 ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyDict>)> {
     let bad = |message: &str| PyValueError::new_err(message.to_owned());
     if rounds == 0 || budget_s.is_nan() || budget_s < 0. {
@@ -34,6 +37,11 @@ pub fn carriageway_profiles<'py>(
     let params = parameters.as_array();
     let rows = coupling_rows.as_array();
     let values = coupling_values.as_slice()?;
+    // (0 or none: a hard coupling, as before 306; above: soft, the cost per metre it is broken by)
+    let penalty = match &coupling_penalty {
+        Some(p) => p.as_slice()?.to_vec(),
+        None => vec![0.; values.len()],
+    };
     let n = target.len();
     if weight.len() != n
         || lower.len() != n
@@ -46,6 +54,7 @@ pub fn carriageway_profiles<'py>(
         || params.nrows() + 1 != offsets.len()
         || rows.ncols() != 5
         || rows.nrows() != values.len()
+        || penalty.len() != values.len()
     {
         return Err(bad("inconsistent carriageway array shapes or offsets"));
     }
@@ -65,9 +74,12 @@ pub fn carriageway_profiles<'py>(
     }
     let mut parameters = Vec::with_capacity(params.nrows());
     for row in params.rows() {
-        if row.iter().any(|v| !v.is_finite())
+        // (563: a grade of +inf and a K of 0 are no bound at all, no rows: the one vertical solve's chains, whose
+        // grade and curvature are its own rows; 40 m bounds never reached were 4 rows a sample in its KKT system)
+        if row.iter().any(|v| v.is_nan())
+            || row.iter().skip(1).any(|v| !v.is_finite())
             || row[0] < 0.
-            || row[1] <= 0.
+            || row[1] < 0.
             || row[2] < 0.
             || row[3] <= 0.
             || row[4] < 0.
@@ -98,14 +110,23 @@ pub fn carriageway_profiles<'py>(
     };
     let mut couplings = Vec::with_capacity(values.len());
     for (i, row) in rows.rows().into_iter().enumerate() {
-        if !(0..=1).contains(&row[4]) || !values[i].is_finite() {
+        // (kind 0: equal, 1: gap >= value, 2: gap <= value (306); chain b -1: the row on sample a alone (306), not
+        // an equality)
+        if !(0..=2).contains(&row[4])
+            || !values[i].is_finite()
+            || !penalty[i].is_finite()
+            || penalty[i] < 0.
+            || (row[2] == -1 && row[4] == 0)
+        {
             return Err(bad("invalid carriageway coupling"));
         }
         couplings.push(Coupling {
             a: sample(row[0], row[1])?,
-            b: sample(row[2], row[3])?,
-            inequality: row[4] == 1,
-            value: if row[4] == 1 { values[i] } else { 0. },
+            b: if row[2] == -1 { None } else { Some(sample(row[2], row[3])?) },
+            inequality: row[4] != 0,
+            upper: row[4] == 2,
+            value: if row[4] != 0 { values[i] } else { 0. },
+            penalty: penalty[i],
         });
     }
     let problem = Problem {
@@ -138,6 +159,9 @@ pub fn carriageway_profiles<'py>(
     diagnostics.set_item("upper_excess_m", d.upper_excess)?;
     diagnostics.set_item("junction_gap_m", d.junction_gap)?;
     diagnostics.set_item("clearance_shortfall_m", d.clearance_shortfall)?;
+    diagnostics.set_item("soft_excess_m", d.soft_excess)?;
+    diagnostics.set_item("soft_broken", d.soft_broken)?;
+    diagnostics.set_item("soft_sum_m", d.soft_sum)?;
     diagnostics.set_item("elapsed_s", d.elapsed_s)?;
     Ok((z.into_pyarray(py), diagnostics))
 }
