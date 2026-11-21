@@ -30,7 +30,7 @@ class PrestartTest(unittest.TestCase):
             self.assertFalse(t._pool_ready(loop, "veg-geo"))       # (just made: its threads start in the default executor)
             await t._warm
             self.assertTrue(t._pool_ready(loop, "veg-geo"))
-            self.assertEqual(len(t.pool._threads), 6)
+            self.assertEqual(t.pool._pool.threads(), 6)    # (the host's PyJobs workers: runtimeprofiler.TileJobs)
             t.pool.shutdown()
         asyncio.run(run())
 
