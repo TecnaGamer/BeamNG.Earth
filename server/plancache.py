@@ -104,7 +104,9 @@ def plans_format():
     # plans are thrown away)
     import revisit
     import structures
-    # (the vanilla slopes, off by default, grade other ground from the same plans: their own key too, BATTER_ON;
+    # (the vanilla slopes, off by default, grade other ground from the same plans: their own key too, BATTER_ON; bv2:
+    # their corridors loosened behind a plan's open ends, earthfast 522; bv3: an end's continuation from PlanPack's nb,
+    # not the pack's next segment, earthfast 531;
     # BNE_DECK_STRUCT=abut, RS S2b part 2a: the plans give a structure's twins one abutment height per end, keyed by
     # the switch's version, so its plans never mix with anyone else's)
     ds = f".ds{revisit.SWITCH_VERSIONS['BNE_DECK_STRUCT']}" if structures.ABUT else ""
@@ -116,8 +118,10 @@ def plans_format():
     shapes = ""
     if grading.SHAPES_ON:
         shapes = ".sh2" + ("" if grading.ROAD_LAWS_ON else "l0") + ("" if grading.FLANKS_ON else "f0")
-    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + (".gg1" if grading.GUARD_ON else "") + ds \
-        + (".bv1" if grading.BATTER_ON else "") + shapes
+    import roadshape
+    profile = ".s4v3" if roadshape.SURFACE_PROFILE else ""
+    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + profile + (".gg1" if grading.GUARD_ON else "") + ds \
+        + (".bv3" if grading.BATTER_ON else "") + shapes
 
 
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
@@ -199,6 +203,7 @@ class PlanCache:
             pl.rid, pl.max_wall = m["rid"], m["max_wall"]
             pl.rank = int(m.get("rank", -1))
             pl.steep = bool(m.get("steep", False))
+            pl.surface_width = bool(m.get("surface_width", False))
             pl.open_tunnel = bool(m.get("open_tunnel", False))
             pl.tunnel_section = bool(m.get("tunnel_section", False))
             pl.bank = next(banks) if m.get("bank") else None
@@ -379,6 +384,7 @@ class PlanCache:
                            "bank": getattr(p, "bank", None) is not None, "steep": bool(getattr(p, "steep", False)),
                            "open_tunnel": bool(getattr(p, "open_tunnel", False)),
                            "tunnel_section": bool(getattr(p, "tunnel_section", False)),
+                           **({"surface_width": True} if getattr(p, "surface_width", False) else {}),
                            "widen": getattr(p, "widen", None) is not None}
                           for fid, p in plans],
                 "keeps": [float(hw) for _xy, hw in keeps], "covers": [float(w) for _xy, w in covers],
@@ -588,6 +594,7 @@ class PlanCache:
                            "rid": int(p.rid), "rank": int(getattr(p, "rank", -1)),
                            "max_wall": float(p.max_wall), "cut": p.cut is not None,
                            "bank": getattr(p, "bank", None) is not None, "steep": bool(getattr(p, "steep", False)),
+                           **({"surface_width": True} if getattr(p, "surface_width", False) else {}),
                            "widen": getattr(p, "widen", None) is not None}
                           for fid, p in plans],
                 "keeps": [float(hw) for _xy, hw in keeps], "short": bool(short), "decks": decks}
@@ -631,6 +638,7 @@ class PlanCache:
                 pl.rid, pl.max_wall = m["rid"], m["max_wall"]
                 pl.rank = int(m.get("rank", -1))
                 pl.steep = bool(m.get("steep", False))
+                pl.surface_width = bool(m.get("surface_width", False))
                 pl.bank = next(banks) if m.get("bank") else None
                 if m.get("widen"):
                     set_widen(pl, next(widens))

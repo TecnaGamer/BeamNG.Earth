@@ -178,16 +178,10 @@ _coverage = {"index": None, "at": -1e18, "lock": threading.Lock()}
 
 def coverage_index(doc):
     """{(x, y) of a z6 tile: the deepest zoom Mapterhorn has under it} from its download_urls.json. Pure."""
-    out = {}
-    for it in doc.get("items", ()):
-        name = str(it.get("name", ""))
-        parts = name.split(".")[0].split("-")
-        if len(parts) == 3 and parts[0] == str(COVERAGE_ZOOM):
-            try:
-                out[(int(parts[1]), int(parts[2]))] = int(it["max_zoom"])
-            except (KeyError, TypeError, ValueError):
-                continue
-    return out
+    fast.require(565, "Mapterhorn coverage index")
+    return fast._ef.dem_coverage(doc.get("items", ()), COVERAGE_ZOOM)
+
+
 AWS = dict(name="aws-terrarium", ext="png", size=256,
            url="https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png")
 # Raw tiles whose disk write failed (a full disk: OSError 28) kept in memory instead, up to this many bytes per process,
@@ -253,16 +247,20 @@ def zoom_for(lat, pixel_m, max_zoom=MAX_ZOOM):
 
 
 def decode_terrarium(data, size):
-    """float32 heights of a Terrarium tile (Rust: no RGB copy, no float temporaries; ~2/3 of a tile's decode, and
-    the worker processes each decode the DEM tiles they read)."""
+    """Decode an AWS Terrarium or Mapterhorn tile into float32 elevations."""
+    fast.require(565, "DEM tile decode")
+    return fast._ef.dem_decode(bytes(data), size, _read_image)
+
+
+def _read_image(data, size):
+    """Pillow codec for nonstandard image modes, malformed inputs and resampling."""
     im = Image.open(io.BytesIO(data))
     if im.mode not in ("RGB", "RGBA"):
         im = im.convert("RGB")
     if im.size != (size, size):
         log.warning("unexpected DEM tile size %s (expected %d), resampling", im.size, size)
         im = im.resize((size, size), Image.BILINEAR)
-    fast.require(1, "decode_terrarium")
-    return fast._ef.terrarium_heights(np.ascontiguousarray(np.asarray(im)))
+    return np.ascontiguousarray(np.asarray(im))
 
 
 HOLE_FILL_M = 600.0          # lidar holes up to ~2x this wide filled (a coarse tile's are whole city blocks: a
@@ -272,10 +270,8 @@ HOLE_FILL_MAX_PX = 24        # Rotterdam district read 67 % zeros at z9-z11, ~1 
 
 def hole_px(z, y):
     """fill_holes' rounds for tile row y at zoom z: HOLE_FILL_M in its pixels, 2 .. HOLE_FILL_MAX_PX."""
-    n = 2 ** z
-    lat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
-    px = 40075016.686 * dmath.cos(math.radians(lat)) / n / TILE
-    return int(min(HOLE_FILL_MAX_PX, max(2, round(HOLE_FILL_M / px))))
+    fast.require(565, "DEM hole radius")
+    return fast._ef.dem_hole_px(z, y, TILE, HOLE_FILL_M, HOLE_FILL_MAX_PX)
 
 
 def fill_holes(a, k=HOLE_FILL_MAX_PX):
@@ -288,29 +284,10 @@ def fill_holes(a, k=HOLE_FILL_MAX_PX):
     return fast._ef.fill_holes(np.ascontiguousarray(a, np.float32), int(k))
 
 
-def _resize(a, size):
-    if a.shape[0] == size:
-        return a
-    return np.asarray(Image.fromarray(a, mode="F").resize((size, size), Image.BILINEAR))
-
-
 def _tile_xy(lat, lon, z):
     """Web-Mercator tile (x, y) holding (lat, lon) at zoom z."""
-    n = 2 ** z
-    x = int((lon + 180.0) / 360.0 * n) % n
-    y = int((1.0 - dmath.asinh(dmath.tan(math.radians(max(-MAX_LAT, min(MAX_LAT, lat))))) / math.pi) / 2.0 * n)
-    return x, max(0, min(n - 1, y))
-
-
-def _gauss2(a, sigma):
-    """A separable Gaussian blur of a small 2-D grid (edges held), pure numpy."""
-    r = max(1, int(round(3 * sigma)))
-    k = dnp.exp(-0.5 * dnp.sq(np.arange(-r, r + 1) / sigma))
-    k /= k.sum()
-    p = np.pad(a, ((r, r), (0, 0)), mode="edge")
-    a = sum(k[i] * p[i:i + a.shape[0]] for i in range(2 * r + 1))
-    p = np.pad(a, ((0, 0), (r, r)), mode="edge")
-    return sum(k[i] * p[:, i:i + a.shape[1]] for i in range(2 * r + 1))
+    fast.require(565, "DEM tile coordinates")
+    return fast._ef.dem_xy(lat, lon, z, MAX_LAT)
 
 
 def _stale(marks):
@@ -469,46 +446,9 @@ class Dem:
     def _shift_to(self, key, a, plat, plon, ph):
         """Tile key's heights a shifted by the smoothed offset between them and ground points (plat, plon, ph): a
         new array, or a itself where there is too little to go on or the shift is under a quarter metre."""
-        z, x, y = key
-        n = 2 ** z
-        if len(ph) < 16:
-            return a
-        # the tile's own heights at the lidar points (bilinear on its pixel grid)
-        fx = ((plon + 180.0) / 360.0 * n - x) * TILE - 0.5
-        fy = ((1 - dnp.arcsinh(dnp.tan(np.radians(plat))) / math.pi) / 2 * n - y) * TILE - 0.5
-        x0_ = np.clip(np.floor(fx).astype(np.int64), 0, TILE - 2)
-        y0_ = np.clip(np.floor(fy).astype(np.int64), 0, TILE - 2)
-        u = np.clip(fx - x0_, 0, 1)
-        v = np.clip(fy - y0_, 0, 1)
-        base = ((a[y0_, x0_] * (1 - u) + a[y0_, x0_ + 1] * u) * (1 - v)
-                + (a[y0_ + 1, x0_] * (1 - u) + a[y0_ + 1, x0_ + 1] * u) * v)
-        keep = (a[y0_, x0_] != 0.0) & (a[y0_ + 1, x0_ + 1] != 0.0)          # not the sea
-        # binned on the BIAS_GRID grid: the mean offset per cell, then smoothed
-        g = BIAS_GRID
-        gi = np.clip(((fy + 0.5) / TILE * g).astype(np.int64), 0, g - 1)
-        gj = np.clip(((fx + 0.5) / TILE * g).astype(np.int64), 0, g - 1)
-        d = np.zeros((g, g))
-        wgt = np.zeros((g, g))
-        np.add.at(d, (gi[keep], gj[keep]), (base - ph)[keep])
-        np.add.at(wgt, (gi[keep], gj[keep]), 1.0)
-        d = np.where(wgt > 0, d / np.maximum(wgt, 1), 0.0)
-        wgt = (wgt > 0).astype(np.float64)
-        if wgt.sum() < 4:
-            return a
-        sd, sw = _gauss2(d * wgt, BIAS_SMOOTH), _gauss2(wgt, BIAS_SMOOTH)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            off = np.where(sw > 1e-6, sd / sw, 0.0) * np.clip(sw / max(sw.max(), 1e-6) * 2.0, 0.0, 1.0)
-        # the offset field on the tile's pixels (bilinear between the grid cells' centres)
-        pix = (np.arange(TILE) + 0.5) / TILE * g - 0.5
-        i0 = np.clip(np.floor(pix).astype(np.int64), 0, g - 2)
-        f = np.clip(pix - i0, 0.0, 1.0)
-        o_r = off[i0] * (1 - f)[:, None] + off[i0 + 1] * f[:, None]
-        field = o_r[:, i0] * (1 - f)[None, :] + o_r[:, i0 + 1] * f[None, :]
-        if np.abs(field).max() < 0.25:
-            return a
-        out = (a - field).astype(np.float32)
-        out[a == 0.0] = 0.0                          # the sea stays the sea
-        return out
+        fast.require(565, "regional DEM bias field")
+        out = fast._ef.dem_bias(key, a, plat, plon, np.asarray(ph, np.float64), BIAS_GRID, BIAS_SMOOTH)
+        return a if out is None else out
 
     def _canada_fine(self, key, a):
         z, x, y = key
@@ -569,15 +509,9 @@ class Dem:
     def _blend(self, key, a, h, ok):
         """Tile key's heights a with lidar heights h put in where ok, their edges feathered into a over
         HRDEM_FEATHER_M (a new array; a itself where there are none off its sea)."""
-        z, x, y = key
-        ok = ok & (a != 0.0)                # Mapterhorn's sea reads exactly 0: it stays the sea
-        if not ok.any():
-            return a
-        n = 2 ** z
-        lat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
-        px = 40075016.686 * dmath.cos(math.radians(lat)) / n / TILE
-        w = hrdemmod.feather(ok, min(HRDEM_FEATHER_MAX_PX, max(2, round(HRDEM_FEATHER_M / px))))
-        return (a * (1.0 - w) + h * w).astype(np.float32)
+        fast.require(565, "regional DEM blending")
+        out = fast._ef.dem_blend(key, a, h, ok, HRDEM_FEATHER_M, HRDEM_FEATHER_MAX_PX)
+        return a if out is None else out
 
     def polar(self):
         """The polar caps' DEM (made on first use)."""
@@ -651,11 +585,7 @@ class Dem:
         idx = self._coverage()
         if idx is None:
             return False
-        n = 2 ** COVERAGE_ZOOM
-        lat = max(-MAX_LAT, min(MAX_LAT, float(lat)))
-        x = int((float(lon) + 180.0) / 360.0 * n) % n
-        y = int((1.0 - dmath.asinh(dmath.tan(math.radians(lat))) / math.pi) / 2.0 * n)
-        if idx.get((x, max(0, min(n - 1, y))), GLOBAL_ZOOM) > GLOBAL_ZOOM:
+        if idx.get(_tile_xy(lat, lon, COVERAGE_ZOOM), GLOBAL_ZOOM) > GLOBAL_ZOOM:
             return False
         if (self.lidarbc is not None or HRDEM_NEAR) and hrdemmod.in_bounds(GLOBAL_ZOOM, *_tile_xy(lat, lon, GLOBAL_ZOOM)):
             return False
@@ -669,11 +599,8 @@ class Dem:
 
     def _listed(self, z, x, y):
         """False when Mapterhorn's file list says it has no tile (z, x, y) (z > GLOBAL_ZOOM); True otherwise."""
-        idx = self._coverage()
-        if idx is None:
-            return True
-        d = z - COVERAGE_ZOOM
-        return z <= idx.get((x >> d, y >> d), GLOBAL_ZOOM)
+        fast.require(565, "Mapterhorn file depth")
+        return fast._ef.dem_listed(self._coverage(), z, x, y, COVERAGE_ZOOM, GLOBAL_ZOOM)
 
     def _download(self, src, z, x, y, kind="demand"):
         """Raw tile bytes from disk cache or network; None for a (cached) 404. Raises
@@ -1174,18 +1101,8 @@ class Dem:
 
     def _aws_tile(self, z, x, y):
         """Fallback for Mapterhorn tile (z, x, y), built from AWS z+1 (max 15)."""
-        za = min(MAX_ZOOM, z + 1)
-        n = 2 ** (za - z)
-        s = AWS["size"]
-        mosaic = np.zeros((n * s, n * s), np.float32)
-        found = False
-        for j in range(n):
-            for i in range(n):
-                data = self._download(AWS, za, x * n + i, y * n + j)
-                if data is not None:
-                    mosaic[j * s:(j + 1) * s, i * s:(i + 1) * s] = self._decode(AWS, za, x * n + i, y * n + j, data)
-                    found = True
-        return _resize(mosaic, TILE) if found else None
+        fast.require(565, "AWS Terrarium mosaic")
+        return fast._ef.dem_aws(self, AWS, (z, x, y), MAX_ZOOM, TILE)
 
     # --- the decoded mirror (MIRROR_MB) ----------------------------------------------------------
     def _mirror_path(self, key):
@@ -1360,65 +1277,8 @@ class Dem:
         return self._hongkong(key, self._canada(key, self._make_tile0(key)))
 
     def _make_tile0(self, key):
-        z, x, y = key
-        # (a z16 tile's z15 parent is asked only once the z16 tile is found missing (_from_ancestor below): it was
-        # downloaded ahead alongside every z16 tile, used or not, a z15 request for every 4 z16 tiles of a lidar area
-        # that has them; where the file list has no z16 the z16 asks nothing and the parent comes at once)
-        try:
-            data = self._download(MAPTERHORN, z, x, y)
-            a = None if data is None else self._decode(MAPTERHORN, z, x, y, data)
-        except netfetch.FetchError as e:
-            # Mapterhorn cannot be asked (circuit open, rate limited, failing): the same tile from AWS,
-            # as it is (with AWS bathymetry: a failure says nothing about where the sea is).
-            self._count("mapterhorn:failover")
-            self._partial()
-            if z > MAX_ZOOM:            # (AWS stops at z15: its tile upsampled)
-                a = self._from_ancestor(z, x, y, MAX_ZOOM)
-                self.served[key] = MAPTERHORN["name"]
-                return a
-            try:
-                a = self._aws_tile(z, x, y)
-            except netfetch.FetchError as e2:
-                raise DemUnavailable(f"DEM tile {z}/{x}/{y}: Mapterhorn: {e}; AWS: {e2}") from None
-            self.served[key] = None if a is None else AWS["name"]
-            return np.zeros((TILE, TILE), np.float32) if a is None else a
-        if a is not None:
-            self.served[key] = MAPTERHORN["name"]
-            if self.ground_filter:
-                if z == GLOBAL_ZOOM:
-                    lidar = self._lidar(x, y)
-                    a = fill_holes(a, hole_px(z, y)) if lidar else self._ground12(x, y, a)
-                elif z > GLOBAL_ZOOM:
-                    a = fill_holes(a, hole_px(z, y))        # lidar: no ground under buildings
-                else:
-                    d = GLOBAL_ZOOM - z                     # a coarse tile over lidar: its holes too
-                    if self._lidar((x << d) + (1 << d) // 2, (y << d) + (1 << d) // 2):
-                        a = fill_holes(a, hole_px(z, y))
-            return a
-        if z > MAX_ZOOM:                # (no lidar this deep here: the z15 tile upsampled)
-            a = self._from_ancestor(z, x, y, MAX_ZOOM)
-            self.served[key] = MAPTERHORN["name"]
-            return a
-        if self.ground_filter and z > GLOBAL_ZOOM:
-            # deeper than the lidar goes here (Rotterdam: AHN to z14, z15 404): its deepest tile upsampled; no
-            # lidar at all: the surface model's ground, upsampled. z12 under lidar gave 19 m steps and 0.5 m stairs
-            # on city roads (Pleinweg's grade 1.5 % from z12, 0.4 % from z14; 2026-10-21)
-            az = self._deepest_lidar(z, x, y)
-            a = self._from_ancestor(z, x, y, az) if az else self._from_ground12(z, x, y)
-            self.served[key] = MAPTERHORN["name"]
-            return a
-        try:
-            a = self._aws_tile(z, x, y)
-        except netfetch.FetchError as e:
-            raise DemUnavailable(f"DEM tile {z}/{x}/{y}: AWS: {e}") from None
-        self.served[key] = None if a is None else AWS["name"]
-        if a is None:
-            return np.zeros((TILE, TILE), np.float32)
-        if z <= GLOBAL_ZOOM:
-            # Mapterhorn is complete on land at these zooms, so a 404 here is
-            # open ocean. Drop AWS bathymetry: the sea surface is what we draw.
-            a = np.maximum(a, 0.0)
-        return a
+        fast.require(565, "DEM source selection")
+        return fast._ef.dem_source(self, sys.modules[__name__], key)
 
     # --- the ground under the surface model ------------------------------
     def _lidar(self, x, y):
@@ -1426,34 +1286,27 @@ class Dem:
         its z13 children (diagonal): yes when either is there (404s are remembered). A child already on disk answers
         without a request; otherwise they are asked one after the other, the second only when the first is missing
         (both were downloaded at once before, the second wasted wherever the first was there: the same answer)."""
-        kids = ((GLOBAL_ZOOM + 1, 2 * x, 2 * y), (GLOBAL_ZOOM + 1, 2 * x + 1, 2 * y + 1))
-        for k in kids:
-            if os.path.exists(self._path(MAPTERHORN, *k)) and self._download(MAPTERHORN, *k) is not None:
-                return True
-        if self.archives is not None:
-            # (the children the cache knows nothing of answered by the regional archive's directories, no tile read:
-            # the endpoint's answer; a 404 remembered for a child it lacks, as the endpoint's would be)
-            name = MAPTERHORN["name"]
-            ask = [k for k in kids if self._listed(*k) and not self._known_miss(*k)]
-            try:
-                there = self.archives.exists(ask) if ask else {}
-            except netfetch.Deferred:
-                there = None
-            if there is not None and len(there) == len(ask):
-                gone = [((name,) + k, os.path.join(self.cache_dir, name, str(k[0]), str(k[1]), f"{k[2]}.404"))
-                        for k in ask if not there[k]]
-                if gone:
-                    self._remember_miss(gone)
-                for k in ask:
-                    self._note(MAPTERHORN, k[0], "index")
-                return any(there.values())
-        for k in kids:
-            try:
-                if self._download(MAPTERHORN, *k) is not None:
-                    return True
-            except netfetch.FetchError:
-                self._partial()
-        return False
+        fast.require(565, "Mapterhorn lidar probes")
+        return fast._ef.dem_lidar(self, sys.modules[__name__], x, y)
+
+    def _archive_lidar(self, kids):
+        # (the children the cache knows nothing of answered by the regional archive's directories, no tile read:
+        # the endpoint's answer; a 404 remembered for a child it lacks, as the endpoint's would be)
+        name = MAPTERHORN["name"]
+        ask = [k for k in kids if self._listed(*k) and not self._known_miss(*k)]
+        try:
+            there = self.archives.exists(ask) if ask else {}
+        except netfetch.Deferred:
+            there = None
+        if there is not None and len(there) == len(ask):
+            gone = [((name,) + k, os.path.join(self.cache_dir, name, str(k[0]), str(k[1]), f"{k[2]}.404"))
+                    for k in ask if not there[k]]
+            if gone:
+                self._remember_miss(gone)
+            for k in ask:
+                self._note(MAPTERHORN, k[0], "index")
+            return any(there.values())
+        return None
 
     def _known_miss(self, z, x, y):
         """Is Mapterhorn tile (z, x, y) a 404 the cache remembers (as _download reads it)?"""
@@ -1511,16 +1364,8 @@ class Dem:
     def _deepest_lidar(self, z, x, y):
         """The deepest zoom between GLOBAL_ZOOM + 1 and z - 1 at which Mapterhorn has the ancestor of tile (z, x, y)
         (national lidar), else None (404s are remembered, so a miss is asked once per tile)."""
-        self._wait(self._ahead([(az, x >> (z - az), y >> (z - az)) for az in range(z - 1, GLOBAL_ZOOM, -1)]))
-        for az in range(z - 1, GLOBAL_ZOOM, -1):
-            d = z - az
-            try:
-                if self._download(MAPTERHORN, az, x >> d, y >> d) is not None:
-                    return az
-            except netfetch.FetchError:
-                self._partial()
-                return None
-        return None
+        fast.require(565, "Mapterhorn ancestor probes")
+        return fast._ef.dem_deepest(self, MAPTERHORN, netfetch.FetchError, z, x, y, GLOBAL_ZOOM)
 
     def _from_ground12(self, z, x, y):
         """Tile (z, x, y), z > 12, bilinear from its z12 ancestor's ground (edges held at the ancestor's)."""
@@ -1551,18 +1396,8 @@ class Dem:
                     self._lru_put(key, anc, marks)
             else:
                 self._partial()     # (the descendant made from it is a stand-in too: never mirrored)
-        k = 2 ** d
-        i = (np.arange(TILE) + 0.5) / k - 0.5
-        u = np.clip((x - ax * k) * TILE / k + i, 0, TILE - 1)
-        v = np.clip((y - ay * k) * TILE / k + i, 0, TILE - 1)
-        u0 = np.minimum(np.floor(u).astype(np.int64), TILE - 2)
-        v0 = np.minimum(np.floor(v).astype(np.int64), TILE - 2)
-        fu, fv = (u - u0)[None, :], (v - v0)[:, None]
-        a00 = anc[np.ix_(v0, u0)]
-        a01 = anc[np.ix_(v0, u0 + 1)]
-        a10 = anc[np.ix_(v0 + 1, u0)]
-        a11 = anc[np.ix_(v0 + 1, u0 + 1)]
-        return ((a00 * (1 - fu) + a01 * fu) * (1 - fv) + (a10 * (1 - fu) + a11 * fu) * fv).astype(np.float32)
+        fast.require(565, "DEM ancestor resampling")
+        return fast._ef.dem_ancestor(anc, d, x, y)
 
     @contextlib.contextmanager
     def urgent(self):

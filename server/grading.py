@@ -147,6 +147,15 @@ PLAN_THREADS = 4            # cells planned at once (_plan_missing)
 PLAN_SETS_MAX = 16          # cell sets whose merged plans are kept (Grader._plan_set; ~1 MB each in a town), as many
 #                             of the sets without the tunnels' own roads (_over_tunnel_ground's _over_sets: up to ~16 MB
 #                             more per planner in a town with a tunnel)
+# BNE_ROADSHAPE=profile (road revamp v2 P3b): the graded ground's pinned second stage (_Planner._pin_field).
+# PROFILE_PINS(planner, lat0, lon0, lat1, lon1, pad_m) -> the joint profile's approach pins [(lat (n,), lon (n,),
+# dz (n,), height today (n,), half width, fade (n,), share (n,))] coming within pad_m of that box, sorted by content (blockworker
+# sets it: the process's bridge chains, solved on the first stage); None: no second stage (every mode but profile).
+# Grader.apply grades by the second stage unless pinned=False.
+PROFILE_PINS = None
+PIN_TAPER_M = 12.0          # m (T_MAX) past an approach's road edge its change fades out over (the plans' own)
+PIN_GATE_M = (1.0, 3.0)     # m: a point this far from the approach's height today keeps its change in full / none
+PIN_STATS = {"calls": 0, "pinned": 0, "pins_s": 0.0, "field_s": 0.0}      # (measurements: _pin_field's calls, seconds)
 SPREAD_CELLS = 16           # plans(): more map cells in the points' bbox: only the cells around the points
 T_MIN, T_MAX = 5.0, 12.0    # m, transition back to the natural ground (5: roads close together meet gently)
 SLOPE_RUN = 2.0             # transition = SLOPE_RUN x the height difference (1:2 slope)
@@ -176,8 +185,8 @@ GRADE_BIN_M = float(os.environ.get("BNE_GRADE_BIN_M", "8"))    # m, the fine bin
 # the ground is the natural one clamped to each road side's corridor (a near-level strip, a rounded crest, then a
 # constant batter out to the daylight line), a pure function of position. Off by default (BNE_BATTER=vanilla, a switch
 # of its own: not in Revamped roads before the user has looked at it in game); on, it is a plans format tag
-# (plancache.plans_format: ".bv1"), so no cache mixes the two.
-BATTER_ON = os.environ.get("BNE_BATTER", "off") == "vanilla"
+# (plancache.plans_format: ".bv3"), so no cache mixes the two.
+BATTER_ON = os.environ.get("BNE_BATTER", "off") == "vanilla" or roadshape.SURFACE_PROFILE
 BATTER_L0_M = 1.0           # m of near-level strip past a core's edge (the core: carriageway + shoulder, 1 m+) ...
 BATTER_STRIP_LO = 0.04      # ... the ground there at most this much per m under the road's height ...
 BATTER_STRIP_UP = 0.02      # ... and this much over it
@@ -1012,7 +1021,7 @@ class Plan:
     """One road's grading: vertices (n, 2) in the frame's ENU metres, their target heights, core half width; abut: does
     it lead onto a bridge at its (first, last) vertex (grade_points)."""
     __slots__ = ("xy", "z", "half", "bbox", "abut", "cut", "road_half", "rid", "rank", "max_wall", "bank", "steep",
-                 "widen", "open_tunnel", "tunnel_section")
+                 "widen", "open_tunnel", "tunnel_section", "surface_width")
 
     def __init__(self, xy, z, half, abut=(False, False), cut=None, road_half=None):
         self.xy, self.z, self.half, self.abut = xy, z, float(half), (bool(abut[0]), bool(abut[1]))
@@ -1027,6 +1036,7 @@ class Plan:
         self.steep = False              # a mountain pass road's: steep sides (STEEP_RUN, roads._mountain_roads)
         self.open_tunnel = False        # a tunnel part's open section: a lower road crossing it eases onto it (_plan_flags)
         self.tunnel_section = False     # a covered tunnel's section in the open: a road beside it keeps its ground
+        self.surface_width = False       # width sampled on a welded pavement outline
         self.widen = None               # (n,) m its core and carriageway are wider each side there (hairpin_cores) or None
         pad = half + T_MAX
         self.bbox = (xy[:, 0].min() - pad, xy[:, 1].min() - pad, xy[:, 0].max() + pad, xy[:, 1].max() + pad)
@@ -1804,6 +1814,7 @@ def _replan(p, xy, z, abut=None, cut=False):
     q.steep = bool(getattr(p, "steep", False))
     q.open_tunnel = bool(getattr(p, "open_tunnel", False))
     q.tunnel_section = bool(getattr(p, "tunnel_section", False))
+    q.surface_width = getattr(p, "surface_width", False)
     set_widen(q, getattr(p, "widen", None))
     return q
 
@@ -3454,6 +3465,14 @@ class _Planner:
             # through the Stelvio's asphalt, GitHub #108's 2.5 m step at a bridge end in Meppen, 2026-10-21)
             own = self._clip_box(key, 0.0)
             sub = feats.attrs.get("subtype")
+            if roadshape.SURFACE_PROFILE:
+                import countrybounds
+                import roadsurf3
+                try:
+                    roadsurf3.grade_plans(self, own, plans, pspecs, countrybounds.bundled().at(*key.center()))
+                except Exception as e:
+                    _caught(e)
+                    log.warning("surface grading of %s: %s", key, e)
             if RAIL_GRADE_ON and own is not None and sub is not None and (np.asarray(sub).astype(str) == "rail").any():
                 try:            # the railways' bed lines (railways.grade_plans): cuttings and embankments for the track
                     import railways     # (the cells around only where this one has a line: their fetches cost)
@@ -8501,8 +8520,6 @@ class _Planner:
         # (the pieces of one road a cell edge cut apart meet at one height too, WELD_ON; a side road starts at the
         # main's painted edge, not in its middle, TRIM_SIDE_MOUTHS_ON)
         out = (plans, merge_plan_set(plans))
-        if BATTER_ON and out[1].n and not self._batter_of(out[1]):
-            return out          # (made from a stand-in's buildings or short of its ground: not kept)
         with self.lock:
             stages = self.__dict__.get("_road_stages", {})
             # (not while a cell's fetch failed: it is asked again; the roads' plans alone: a cell's road stage is its
@@ -8513,6 +8530,70 @@ class _Planner:
                     memo.pop(next(iter(memo)))
                 memo[mk] = out
         return out
+
+    def _pin_field(self, lat, lon, e, n, z, lift=ROAD_LIFT):
+        """The second stage's change at the points (BNE_ROADSHAPE=profile, road revamp v2 P3b), or None: the joint
+        profile's approach ground (roadshape._built's pins: each approach member's knots, the solve's change, today's
+        height, its road's half width) as earthfast.profile_pin_field lays it over the first stage's graded heights z:
+        on an approach's line its solved height exactly, tapering to nothing over T_MAX past its road's edge, a point
+        at another level kept (PIN_GATE_M). PROFILE_PINS gives the pins within reach of the points (solving the bridge
+        chains there on the first stage). A point's change reads only pins within that reach of it: the same heights
+        whichever query asked. (The pins on the plans' own heights did not hold: where two plans blend at an approach
+        the graded ground moved 0.16 m down where the solve asked 0.77 m up, Fort Pitt.)"""
+        import fast
+        import roadshape
+        t0 = time.perf_counter()
+        if e is None:
+            e, n, _ = self.frame.geodetic_to_enu(lat, lon, 0.0)
+        pad = PIN_TAPER_M + roadshape.PIN_HALF_MAX_M + 1.0
+        pins = PROFILE_PINS(self, float(lat.min()), float(lon.min()), float(lat.max()), float(lon.max()), pad)
+        t1 = time.perf_counter()
+        PIN_STATS["calls"] += 1
+        PIN_STATS["pins_s"] += t1 - t0      # (the chains' solves it asked included)
+        if not pins:
+            return None
+        fast.require(562 if roadshape.ROBUST_PROFILE else roadshape.PIN_KERNEL, "profile_pin_field")
+        qxy, qoff = [], [0]
+        for p in pins:
+            x, y, _ = self.frame.geodetic_to_enu(p[0], p[1], 0.0)
+            qxy.append(np.stack([np.asarray(x, np.float64), np.asarray(y, np.float64)], axis=1))
+            qoff.append(qoff[-1] + len(p[0]))
+        got = fast._ef.profile_pin_field(
+            np.ascontiguousarray(np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)),
+            np.ascontiguousarray(z, np.float64), np.ascontiguousarray(np.concatenate(qxy)), qoff,
+            np.ascontiguousarray(np.concatenate([p[2] for p in pins]), np.float64),
+            np.ascontiguousarray(np.concatenate([p[3] for p in pins]), np.float64),
+            np.ascontiguousarray(np.concatenate([p[5] for p in pins]), np.float64),
+            np.ascontiguousarray(np.concatenate([p[6] for p in pins]), np.float64), [float(p[4]) for p in pins],
+            [PIN_TAPER_M, *PIN_GATE_M] + ([ROAD_LIFT - lift] if roadshape.ROBUST_PROFILE else []))
+        PIN_STATS["field_s"] += time.perf_counter() - t1
+        PIN_STATS["pinned"] += 1
+        return np.asarray(got, np.float64)
+
+    def _batter_window(self, pack, x, y):
+        """Slope data for the query, taken from the fully welded and trimmed set.
+        Hold the most recent window per pack. A short DEM or wall read is retried."""
+        import fast
+        from types import SimpleNamespace
+
+        # Nearby deck stations reuse a window. Rounding only expands the search.
+        bounds = tuple(float(v) for v in (np.floor(np.min(x) / 64) * 64, np.floor(np.min(y) / 64) * 64,
+                                           np.ceil(np.max(x) / 64) * 64, np.ceil(np.max(y) / 64) * 64))
+        cached = getattr(pack, "_batter_window", None)
+        if cached is not None and cached[0] == bounds:
+            return cached[1]
+        fast.require(574, "batter_window")
+        rows, nb = fast._ef.batter_window(pack.a, pack.b, pack.h, pack.of, pack.nb, bounds,
+                                          max(BATTER_R_MAX, T_MAX + BATTER_OLD_FADE_M, BATTER_CORE_BLEND_M))
+        local = SimpleNamespace(nb=nb)
+        for name in ("a", "b", "za", "zb", "h", "rh", "ba", "bb", "rk", "rid", "ab", "st", "cut", "of",
+                     "probe_half", "width_delta"):
+            values = getattr(pack, name, None)
+            if values is not None:
+                setattr(local, name, values[rows])
+        if not len(rows) or self._batter_of(local):
+            pack._batter_window = (bounds, local)
+        return local
 
     def _batter_of(self, pack):
         """pack.bt: the vanilla slopes' params of a plan set's segments (batter_params) from the plans' ground (elev)
@@ -8634,7 +8715,7 @@ class _Planner:
         return out
 
     @profile_step('Road grading')
-    def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False):
+    def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False, pinned=False):
         """base (the ungraded heights at the points) graded under the roads. Same shape as base.
         lift: m added under the roads (tapering with the grading's weight): the physics block and the
         road mesh use ROAD_LIFT, the visible ground tiles 0, so the road mesh lies exactly on the
@@ -8673,7 +8754,8 @@ class _Planner:
                 base = np.asarray(got, np.float64).reshape(shape)
         if not graded:
             return base
-        out = grade_points(e, n, base.ravel(), pack, lift) if plans else np.array(base.ravel(), np.float64, copy=True)
+        batter = self._batter_window(pack, e, n) if BATTER_ON and pack.n else None
+        out = grade_points(e, n, base.ravel(), pack, lift, batter) if plans else np.array(base.ravel(), np.float64, copy=True)
         if racedig.ON:      # (the raceways by their joins where they meet, the band by its sampled line: racedig)
             race = None
             band = self._raceway_band(e, n, base.ravel(), lat.ravel(), lon.ravel())
@@ -8708,6 +8790,13 @@ class _Planner:
                 # Porte Maillot stepped 2.5 m there from its full grading to the other roads', test_drivability)
                 out[keep] = np.maximum(out[keep], self._over_tunnel_ground(keys, e[keep], n[keep], base.ravel()[keep],
                                                                           lift))
+        if pinned and PROFILE_PINS is not None and not roads_only and not planned_only:
+            # (BNE_ROADSHAPE=profile, P3b: the second stage, the joint profile's approach ground: _pin_field)
+            d = self._pin_field(lat.ravel(), lon.ravel(), e, n, out, lift)
+            if d is not None:
+                if keep is not None:
+                    d[keep] = 0.0
+                out = out + d
         return out.reshape(shape)
 
     def _over_tunnel_ground(self, keys, e, n, base, lift):
@@ -9100,6 +9189,7 @@ def mapped_plan(p, fn):
     q.steep = getattr(p, "steep", False)
     q.open_tunnel = getattr(p, "open_tunnel", False)
     q.tunnel_section = getattr(p, "tunnel_section", False)
+    q.surface_width = getattr(p, "surface_width", False)
     set_widen(q, getattr(p, "widen", None))
     return q
 
@@ -9391,20 +9481,24 @@ class Grader:
                 pl._cell_plans(k)
 
     @profile_step('Road grading')
-    def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False):
-        """_Planner.apply by the points' regions (the anchor plays no part). Same shape as base."""
+    def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False, pinned=None):
+        """_Planner.apply by the points' regions (the anchor plays no part). Same shape as base. pinned (None: whenever
+        PROFILE_PINS is set): the plans' second stage, with the joint profile's approach pins (BNE_ROADSHAPE=profile,
+        _Planner._pinned); False: the first stage alone (the bridge chains' own ground: their solve reads it)."""
         lat = np.asarray(lat, np.float64)
         lon = np.asarray(lon, np.float64)
         base = np.asarray(base, np.float64)
         if base.size == 0:
             return base
+        if pinned is None:
+            pinned = PROFILE_PINS is not None
         parts = self.store.planners_of(lat, lon)
         if len(parts) == 1:
-            return parts[0][0].apply(lat, lon, base, lift, roads_only, planned_only)
+            return parts[0][0].apply(lat, lon, base, lift, roads_only, planned_only, pinned)
         la, lo, b = lat.ravel(), lon.ravel(), base.ravel()
         out = np.array(b, np.float64, copy=True)
         for pl, idx in parts:
-            out[idx] = pl.apply(la[idx], lo[idx], b[idx], lift, roads_only, planned_only)
+            out[idx] = pl.apply(la[idx], lo[idx], b[idx], lift, roads_only, planned_only, pinned)
         return out.reshape(base.shape)
 
     def road_band(self, lat, lon, reach, planned_only=False):
@@ -9516,6 +9610,7 @@ def trim_plan(p, box):
             q.steep = getattr(p, "steep", False)
             q.open_tunnel = getattr(p, "open_tunnel", False)
             q.tunnel_section = getattr(p, "tunnel_section", False)
+            q.surface_width = getattr(p, "surface_width", False)
             set_widen(q, pw)
             out.append(q)
         i = j + 1
@@ -9657,7 +9752,7 @@ def merge_plan_set(plans):
     plans): weld_continuations (WELD_ON; a failure logged, the plans left as they were), trim_side_mouths
     (TRIM_SIDE_MOUTHS_ON), each with the plans' own ranks, on plans (a plain [Plan], in place); returns PlanPack(plans)."""
     import fast
-    fast.require(305, "plan_merge")     # (217: the trimmed plans' banks / widens; 283: the plans' flags, _plan_flags; 305: TUNNEL)
+    fast.require(581, "plan_merge")     # (217: the trimmed plans' banks / widens; 283: the plans' flags, _plan_flags; 305: TUNNEL; 560: surface widths)
     f64 = np.float64
     xy, off, z = _plan_lines(plans)
     wds = [getattr(p, "widen", None) for p in plans]
@@ -9693,7 +9788,7 @@ def merge_plan_set(plans):
     return pack
 
 
-PLAN_STEEP, PLAN_OPEN_TUNNEL, PLAN_TUNNEL = 1, 2, 4     # (earthfast gradebins STEEP / OPEN_TUNNEL / TUNNEL)
+PLAN_STEEP, PLAN_OPEN_TUNNEL, PLAN_TUNNEL, PLAN_SURFACE_WIDTH = 1, 2, 4, 8     # (earthfast gradebins STEEP / OPEN_TUNNEL / TUNNEL; planset SURFACE_WIDTH)
 
 
 def _plan_flags(plans):
@@ -9703,7 +9798,8 @@ def _plan_flags(plans):
     a road running beside it keeps its ground past its painted edge)."""
     return np.array([(PLAN_STEEP if getattr(p, "steep", False) else 0)
                      | (PLAN_OPEN_TUNNEL if getattr(p, "open_tunnel", False) else 0)
-                     | (PLAN_TUNNEL if getattr(p, "tunnel_section", False) else 0) for p in plans], np.uint8)
+                     | (PLAN_TUNNEL if getattr(p, "tunnel_section", False) else 0)
+                     | (PLAN_SURFACE_WIDTH if getattr(p, "surface_width", False) else 0) for p in plans], np.uint8)
 
 
 def _per_plan(vs, width=None):
@@ -9743,13 +9839,15 @@ class PlanPack:
       end abutment within ABUT_NEAR_M, NaN if none, through the plans it goes on into too (the piece a map cell's edge
       cut a few metres short of an abutment; Codex's review of PR #920, GitHub #909): the ground past the abutment
       falls away at ABUT_UNDER_GRADE (grade_points);
-    - a plan widened in places (Plan.widen): each segment by the more of its ends'.
+    - a plan widened in places (Plan.widen): each segment by the more of its ends', with width_delta for welded outlines.
     Its arrays: a, b (segments, 2), za, zb, ba, bb, h, rh, rid, rk, ab, abd (segments, 2), cut (segments, 6), st, lk;
-    box (plans, 4); of: each segment's plan; s0 (plans + 1,): each plan's first segment."""
+    box (plans, 4); of: each segment's plan; s0 (plans + 1,): each plan's first segment; nb (segments, 2): each
+    segment end's continuation (-1 none, else 2 k + j: segment k's end j lies there; its own plan's next segment, or at
+    a plan's end the only plan it goes on into, as lk), batter.rs's end caps'."""
 
     def __init__(self, plans):
         import fast
-        fast.require(305, "plan_pack")     # (283: the plans' flags, _plan_flags; 305: the TUNNEL flag)
+        fast.require(581, "plan_pack")     # (283: the plans' flags, _plan_flags; 305: the TUNNEL flag; 560: surface widths)
         f64 = np.float64
         xy, off, z = _plan_lines(plans)
         rids = [getattr(p, "rid", -1) for p in plans]
@@ -9792,7 +9890,7 @@ class PlanPack:
         return got
 
 
-def grade_points(px, py, base, plans, lift=0.0):
+def grade_points(px, py, base, plans, lift=0.0, batter=None):
     """base at the points (px, py) graded under the plans (see the module doc; a list or a PlanPack of them), by the
     Rust loop (native/earthfast grade_points: a Python loop per segment was the server's largest CPU cost while driving,
     2026-10-12). Pure."""
@@ -9803,21 +9901,25 @@ def grade_points(px, py, base, plans, lift=0.0):
     if not len(px):
         return out
     pack = plans if isinstance(plans, PlanPack) else PlanPack(plans)
-    bt = getattr(pack, "bt", None) if BATTER_ON else None
+    slopes = pack if batter is None else batter
+    bt = getattr(slopes, "bt", None) if BATTER_ON else None
     if bt is None or not len(pack.h):
         return _grade_points_today(px, py, base, pack, lift, out)
     import fast
     # (batter.rs: the vanilla slopes, every segment within its reach; 503: the corridors' heights v and today's weight w
     # apart, so today's grading is made only at the points whose weight is not 0, the cores and the sides that keep
     # it: each point's today's height is its own whatever other points a call holds, gradebins)
-    fast.require(503, "batter_apply_vw")
+    # (522: a corridor loosened behind an end its plan does not carry it on past, batter.rs cap_loosen; 531: each end's
+    # continuation from the pack (nb: its own plan's next segment, the one plan it goes on into), not inferred from the
+    # pack's order and coincident points)
+    fast.require(560, "batter_apply_vw")
     f64 = np.float64
     v, w = fast._ef.batter_apply_vw(
         np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64),
-        pack.a, pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.ba, pack.bb, bt[0], bt[1], bt[2],
+        slopes.a, slopes.b, slopes.za, slopes.zb, slopes.h, slopes.rh, slopes.ba, slopes.bb, bt[0], bt[1], bt[2], slopes.nb,
         (float(BATTER_L0_M), float(BATTER_CREST_M), float(BATTER_STRIP_LO), float(BATTER_STRIP_UP),
          float(BATTER_CLOSE_T), float(BATTER_CLOSE_K), float(BATTER_SMOOTH_K), float(BATTER_CORE_BLEND_M),
-         float(T_MAX), float(BATTER_OLD_FADE_M), float(lift), float(BATTER_BIN_M)))
+         float(T_MAX), float(BATTER_OLD_FADE_M), float(lift), float(BATTER_BIN_M)), getattr(slopes, "width_delta", None))
     out = v
     need = w > 0.0
     sub = np.flatnonzero(need)
@@ -9957,10 +10059,11 @@ def batter_params(pack, elev_xy, walls_rays=None, memo=None, info=None):
     bld = np.full((ns, 2), np.inf)
     todo = np.arange(ns)
     keys = None
+    probe_half = getattr(pack, "probe_half", pack.h)
     if memo is not None and ns:
         # (a segment's probes and rays are a pure function of its a, b and h: batter_probes; their reads each point's
         # and ray's own, the same in any batch)
-        keys = BatterMemo.keys_of(pack.a, pack.b, pack.h)
+        keys = BatterMemo.keys_of(pack.a, pack.b, probe_half)
         hit, vals = memo.find(keys)
         if info is not None:
             info["hits"] = int(hit.sum())
@@ -9970,7 +10073,7 @@ def batter_params(pack, elev_xy, walls_rays=None, memo=None, info=None):
         todo = np.flatnonzero(~hit)
     if len(todo):
         a_t, b_t, h_t = (np.ascontiguousarray(pack.a[todo], f64), np.ascontiguousarray(pack.b[todo], f64),
-                         np.ascontiguousarray(pack.h[todo], f64))
+                         np.ascontiguousarray(probe_half[todo], f64))
         pts, org, dirs = fast._ef.batter_probes(a_t, b_t, h_t, offs)
         nat[todo] = np.asarray(elev_xy(pts[:, 0], pts[:, 1]), f64).reshape(len(todo), k2)
         if walls_rays is not None:
@@ -10016,7 +10119,7 @@ def _grade_points_today(px, py, base, pack, lift, out, box=None):
         keep = pack.seg_keep(x0, y0, x1, y1)
         if keep is None:
             return out
-        fast.require(308, "grade_points_binned")    # (gradebins.rs; under_deck: 306, TUNNEL: 307)
+        fast.require(581, "grade_points_binned")    # (gradebins.rs; under_deck: 306, TUNNEL: 307, surface widths: 560)
         return fast._ef.grade_points_binned(
             np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64), pack.a,
             pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.rid, pack.rk, pack.ab, pack.cut, pack.ba, pack.bb, pack.st,
@@ -10025,13 +10128,16 @@ def _grade_points_today(px, py, base, pack, lift, out, box=None):
             float(WALL_AHEAD_M), bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
             float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(RANK_SIDE_FADE_M),
             float(RANK_HEIGHT_FADE_M), float(ABUT_UNDER_GRADE), np.ascontiguousarray(pack.abd, f64), keep,
-            float(GRADE_BIN_M))
+            float(GRADE_BIN_M), getattr(pack, "width_delta", None))
     # every segment of the plans near the points: ends, end heights, reach (core half width + T_MAX)
     got = pack.near(x0, y0, x1, y1)
     if got is None:
         return out
     A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK, ABD = got
-    fast.require(308, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
+    delta = getattr(pack, "width_delta", None)
+    if delta is not None and len(A) != len(delta):
+        delta = delta[pack.seg_keep(x0, y0, x1, y1).astype(bool)]
+    fast.require(581, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
                                              # legs blend over each other's bands: 133, a pass road's core
                                              # given way to whole: 134, no carriageway past an abutment end: 169,
                                              # a lower road over a higher one's core, easing onto it: 181,
@@ -10045,7 +10151,7 @@ def _grade_points_today(px, py, base, pack, lift, out, box=None):
                                  bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
                                  float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(RANK_SIDE_FADE_M),
                                  float(RANK_HEIGHT_FADE_M), float(ABUT_UNDER_GRADE),
-                                 np.ascontiguousarray(ABD, f64))
+                                 np.ascontiguousarray(ABD, f64), delta)
 
 
 def _line_boxes(lines):

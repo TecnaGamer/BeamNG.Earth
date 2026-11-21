@@ -29,6 +29,8 @@ import numpy as np
 import dmath
 import dnp
 
+import fast
+import hrdem
 import bcproj
 import cog as cogmod
 import rangeread
@@ -151,12 +153,7 @@ class LidarBC:
         Network failures raise netfetch.FetchError."""
         if not self.covers(z, x, y):
             return None
-        n = 2 ** z
-        i = (np.arange(size) + 0.5) / size
-        lon1 = (x + i) / n * 360.0 - 180.0
-        lat1 = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1 - 2 * (y + i) / n))))
-        lat = np.broadcast_to(lat1[:, None], (size, size))
-        lon = np.broadcast_to(lon1[None, :], (size, size))
+        lat, lon = hrdem.tile_lat_lon(z, x, y, size)
         got = self.sample(lat, lon)
         with self._lock:
             self.stats["tiles"] += 1
@@ -176,78 +173,30 @@ class LidarBC:
         sparse grid's points may come from a tiled file's overview with pixels up to this size (the older flights
         have 2x / 4x ones: a point then reads a 2 or 4 m tile, not a 1 MB one of 1 m pixels)."""
         keys, epsg, box, year, _ = self._index()
-        lat = np.asarray(lat, np.float64)
-        lon = np.asarray(lon, np.float64)
-        shape = np.broadcast(lat, lon).shape
-        out = np.zeros(shape, np.float32)
-        ok = np.zeros(shape, bool)
-        cands = []
-        proj = {}
-        # the points' lat / lon box's border (40 points), projected first: CRSs without a file near skip the full grid
-        la0, la1 = float(lat.min()), float(lat.max())
-        lo0, lo1 = float(lon.min()), float(lon.max())
-        t = np.linspace(0.0, 1.0, 10)
-        blat = np.concatenate([la0 + (la1 - la0) * t, la0 + (la1 - la0) * t, np.full(10, la0), np.full(10, la1)])
-        blon = np.concatenate([np.full(10, lo0), np.full(10, lo1), lo0 + (lo1 - lo0) * t, lo0 + (lo1 - lo0) * t])
-        for code in np.unique(epsg):
-            code = int(code)
-            if not bcproj.supported(code):
-                continue
-            bx, by = bcproj.forward(code, blat, blon)
-            near = ((epsg == code) & (box[:, 0] < bx.max() + 50) & (box[:, 2] > bx.min() - 50)
-                    & (box[:, 1] < by.max() + 50) & (box[:, 3] > by.min() - 50))
-            if not near.any():
-                continue
-            px, py = bcproj.forward_grid(code, np.broadcast_to(lat, shape), np.broadcast_to(lon, shape))
-            px, py = np.broadcast_to(px, shape), np.broadcast_to(py, shape)
-            proj[code] = (px, py)
-            x0, x1, y0, y1 = px.min(), px.max(), py.min(), py.max()
-            sel = np.nonzero((epsg == code) & (box[:, 0] < x1) & (box[:, 2] > x0) & (box[:, 1] < y1)
-                             & (box[:, 3] > y0))[0]
-            cands.extend(int(j) for j in sel)
-        if not cands:
+        fast.require(565, "LidarBC sample")
+        lat, lon = np.broadcast_arrays(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+        return fast._ef.bc_sample(lat, lon, keys, epsg, box, year, bcproj, self._read_points, files,
+                                  WIDE_M, max_strip_m, coarse_m)
+
+    def _overview(self, key, c, coarse_m):
+        if coarse_m is None or c.stripped or c.sx >= coarse_m:
+            return c
+        for lv in range(int(dmath.log2(coarse_m / c.sx)), 0, -1):
+            overview = self._cog(key, lv)
+            if overview is not None:
+                return overview
+        return c if c.tile_w * c.tile_h * 4 <= SPARSE_TILE_MAX else None
+
+    def _read_points(self, key, x, y, skip_strips, coarse_m):
+        c = self._cog(key)
+        if c is None or (skip_strips and c.stripped):
             return None
-        # newest flight first; within a flight the small tiles before a whole sheet's file (cheaper to read)
-        cands.sort(key=lambda j: (-year[j], box[j, 2] - box[j, 0] > WIDE_M, keys[j]))
-        for j in cands:
-            px, py = proj[int(epsg[j])]
-            b = box[j]
-            m = ~ok & (px >= b[0]) & (px <= b[2]) & (py >= b[1]) & (py <= b[3])
-            if not m.any():
-                continue
-            if max_strip_m is not None and b[2] - b[0] > max_strip_m:
-                c = self._cog(keys[j])
-                if c is None or c.stripped:
-                    continue
-            else:
-                c = self._cog(keys[j])
-            if c is None:
-                continue
-            if coarse_m is not None and not c.stripped and c.sx < coarse_m:
-                co = None
-                for lv in range(int(dmath.log2(coarse_m / c.sx)), 0, -1):
-                    co = self._cog(keys[j], lv)
-                    if co is not None:
-                        break
-                if co is None and c.tile_w * c.tile_h * 4 > SPARSE_TILE_MAX:
-                    continue            # (no overview: a sparse point would read a whole ~1 MB tile of 1 m pixels)
-                c = co or c
-            col, row = c.pixel_of(px[m], py[m])
-            v, good = c.sample_bilinear(col - 0.5, row - 0.5)
-            good &= v > NODATA_LIMIT
-            if not good.any():
-                continue
-            idx = np.nonzero(m)
-            gi = tuple(a[good] for a in idx)
-            out[gi] = v[good]
-            ok[gi] = True
-            if files is not None:
-                files.append(keys[j])
-            if ok.all():
-                break
-        if not ok.any():
+        c = self._overview(key, c, coarse_m)
+        if c is None:
             return None
-        return out, ok
+        col, row = c.pixel_of(x, y)
+        v, good = c.sample_bilinear(col - 0.5, row - 0.5)
+        return np.asarray(v, np.float32), good & (v > NODATA_LIMIT)
 
 
 def canopy(dem, dsm, lat, lon, files=None):
@@ -275,24 +224,8 @@ def despike(h, ok, spike_m=SPIKE_M, cap_m=TREE_CAP_M):
     tree measured on the coast: the Carmanah Giant, ~95 m) also to the median. Grids only (2-D); pure."""
     if h.ndim != 2 or min(h.shape) < 3:
         return np.minimum(h, cap_m)
-    p = np.pad(np.where(ok, h, np.nan), 1, mode="edge")
-    n = np.stack([p[1 + dy:p.shape[0] - 1 + dy, 1 + dx:p.shape[1] - 1 + dx]
-                  for dy in (-1, 0, 1) for dx in (-1, 0, 1)])
-    import warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)       # (all-nodata neighbourhoods)
-        med = np.nanmedian(n, axis=0)
-    med = np.where(np.isfinite(med), med, h)
-    bad = ((h - med) > spike_m) | (h > cap_m)
-    out = np.where(bad, np.minimum(med, cap_m), h)
-    return out.astype(np.float32)
-
-
-def _affine(src, dst):
-    """Least-squares affine map from src points (n, 2) to dst (n, 2): a function of (m, 2) arrays."""
-    A = np.column_stack([src, np.ones(len(src))])
-    coef, *_ = dnp.lstsq(A, dst, rcond=None)
-    return lambda p: dnp.matmul(np.column_stack([p, np.ones(len(p))]), coef)
+    fast.require(565, "LidarBC canopy filter")
+    return fast._ef.dem_despike(h if h.dtype == np.float32 else np.asarray(h, np.float64), ok, spike_m, cap_m)
 
 
 def sparse(lb, box, step_m=64.0, coarse_m=None):
@@ -303,59 +236,5 @@ def sparse(lb, box, step_m=64.0, coarse_m=None):
     (the caller averages). Returns (lat, lon, height) arrays, possibly empty. The files' rows to lat / lon: an affine
     fit of the projection over the box (sub-metre over a few km)."""
     keys, epsg, bxs, year, _ = lb._index()
-    s, w, n, e = box
-    g = np.linspace(0.0, 1.0, 9)
-    LA, LO = np.meshgrid(s + (n - s) * g, w + (e - w) * g, indexing="ij")
-    lats, lons, hs = [], [], []
-    order = sorted(range(len(keys)), key=lambda j: (-year[j], keys[j]))
-    fits = {}
-    for code in np.unique(epsg):
-        code = int(code)
-        if not bcproj.supported(code):
-            continue
-        X, Y = bcproj.forward(code, LA, LO)
-        fits[code] = (float(X.min()), float(Y.min()), float(X.max()), float(Y.max()),
-                      _affine(np.column_stack([X.ravel(), Y.ravel()]), np.column_stack([LA.ravel(), LO.ravel()])),
-                      _affine(np.column_stack([LA.ravel(), LO.ravel()]), np.column_stack([X.ravel(), Y.ravel()])))
-    for j in order:
-        code = int(epsg[j])
-        if code not in fits:
-            continue
-        x0, y0, x1, y1, to_ll, _ = fits[code]
-        b = bxs[j]
-        if b[0] > x1 or b[2] < x0 or b[1] > y1 or b[3] < y0:
-            continue
-        c = lb._cog(keys[j])
-        if c is None:
-            continue
-        if not c.stripped and coarse_m is not None and c.sx < coarse_m:
-            co = None
-            for lv in range(int(dmath.log2(coarse_m / c.sx)), 0, -1):
-                co = lb._cog(keys[j], lv)
-                if co is not None:
-                    break
-            if co is None and c.tile_w * c.tile_h * 4 > SPARSE_TILE_MAX:
-                continue
-            c = co or c
-        # the file's rows and columns inside the box (pixel corners at integers)
-        cx0, ry1 = c.pixel_of(max(x0, b[0]), max(y0, b[1]))
-        cx1, ry0 = c.pixel_of(min(x1, b[2]), min(y1, b[3]))
-        rs = np.arange(math.ceil(float(ry0) / (step_m / c.sy)) * (step_m / c.sy), float(ry1), step_m / c.sy)
-        cs = np.arange(float(cx0), float(cx1), step_m / 2 / c.sx)
-        if len(rs) == 0 or len(cs) == 0:
-            continue
-        R, C = np.meshgrid(np.floor(rs) + 0.5, np.floor(cs) + 0.5, indexing="ij")
-        v, ok = c.sample_nearest(C.ravel(), R.ravel())
-        ok &= v > NODATA_LIMIT
-        if not ok.any():
-            continue
-        X = c.x0 + C.ravel()[ok] * c.sx
-        Y = c.y0 - R.ravel()[ok] * c.sy
-        ll = to_ll(np.column_stack([X, Y]))
-        inb = (ll[:, 0] >= s) & (ll[:, 0] <= n) & (ll[:, 1] >= w) & (ll[:, 1] <= e)
-        lats.append(ll[inb, 0])
-        lons.append(ll[inb, 1])
-        hs.append(v[ok][inb])
-    if not lats:
-        return np.zeros(0), np.zeros(0), np.zeros(0, np.float32)
-    return np.concatenate(lats), np.concatenate(lons), np.concatenate(hs)
+    fast.require(565, "sparse LidarBC survey rows")
+    return fast._ef.bc_sparse(lb, box, step_m, coarse_m, keys, epsg, bxs, year, bcproj, dnp.lstsq, NODATA_LIMIT)

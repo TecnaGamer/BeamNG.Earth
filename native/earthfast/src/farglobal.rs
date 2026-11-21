@@ -461,8 +461,13 @@ pub fn far_box_cover(quads: PyReadonlyArray2<'_, f64>, x0: f64, y0: f64, x1: f64
 #[pyfunction]
 pub fn far_overlap_pairs(py: Python<'_>, polys: Vec<Vec<f64>>, side: Vec<u8>, min_area: f64, rel: f64)
                          -> Vec<(usize, usize)> {
+    py.detach(|| overlap_pairs(&polys, &side, min_area, rel))
+}
+
+/// far_overlap_pairs without the GIL hand-over (the far state machine's swap groups, host/farstate.rs).
+pub fn overlap_pairs(polys: &[Vec<f64>], side: &[u8], min_area: f64, rel: f64) -> Vec<(usize, usize)> {
     let ps: Vec<Vec<P2>> = polys.iter().map(|v| v.chunks(2).map(|c| [c[0], c[1]]).collect()).collect();
-    py.detach(|| {
+    {
         let bbs: Vec<[f64; 4]> = ps.iter().map(|p| bbox(p)).collect();
         let areas: Vec<f64> = ps.iter().map(|p| poly_area(p).abs()).collect();
         let mut order: Vec<usize> = (0..ps.len()).collect();
@@ -484,7 +489,7 @@ pub fn far_overlap_pairs(py: Python<'_>, polys: Vec<Vec<f64>>, side: Vec<u8>, mi
         }
         out.sort_unstable();
         out
-    })
+    }
 }
 
 // --- meshes ----------------------------------------------------------------------------------------------------------

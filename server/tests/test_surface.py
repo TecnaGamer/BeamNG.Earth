@@ -516,7 +516,7 @@ class ServerSurfaceTest(unittest.TestCase):
         s = self.make(surface=self.NorthGrass())
         a = s.new_anchor(LAT, LON)
         info = s.make_heightmap(a, 0.0, 0.0, None)
-        self.assertEqual(info["layers"], sf.mask_names(s.hm_name((a.id, 0.0, 0.0))[:-4]))
+        self.assertEqual(info["layers"], sf.mask_names(info["heightmap"][:-4]))
         self.assertTrue(info["surfaceComplete"])
         grass = np.array(Image.open(os.path.join(s.out_dir, info["layers"][sf.GRASS])))
         dirt = np.array(Image.open(os.path.join(s.out_dir, info["layers"][sf.DIRT])))
@@ -530,6 +530,74 @@ class ServerSurfaceTest(unittest.TestCase):
         self.assertEqual(info["mats"], [sf.GRASS, sf.DIRT])
         self.assertEqual(msg["layers"], [f"{s.vfs_dir}/{info['layers'][i]}" for i in (sf.GRASS, sf.DIRT)])
         self.assertEqual(msg["materials"], [list(sf.MATERIALS[i]) for i in (sf.GRASS, sf.DIRT)])
+
+    def test_late_provisional_cannot_replace_graded_files(self):
+        import asyncio
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        from pathlib import Path
+
+        started, release = threading.Event(), threading.Event()
+        provisional = threading.local()
+
+        class Surface(self.NorthGrass):
+            def classes(self, lat, lon):
+                classes, ready = super().classes(lat, lon)
+                return (classes[::-1] if getattr(provisional, "active", False) else classes), ready
+
+        s = self.make(surface=Surface())
+        a = s.new_anchor(LAT, LON)
+        key = (a.id, 128., 0.)
+        s.anchor_q(a)
+        sample = s.dem.sample
+
+        def heights(*args):
+            z = sample(*args)
+            if getattr(provisional, "active", False):
+                started.set()
+                if not release.wait(30):
+                    raise TimeoutError("graded worker never released provisional")
+                return z + 1
+            return z
+        s.dem.sample = heights
+
+        def stand_in():
+            provisional.active = True
+            return s.make_provisional_follow(a, *key[1:])
+
+        c = earthd.Connection.__new__(earthd.Connection)
+        c.s = s
+
+        def files(msg):
+            names = [msg["heightmap"], msg["ter"], *msg["layers"]]
+            return {n: Path(s.out_dir, os.path.basename(n)).read_bytes() for n in names}
+
+        with ThreadPoolExecutor(1) as pool:
+            late = pool.submit(stand_in)
+            try:
+                self.assertTrue(started.wait(30))
+                graded = asyncio.run(s.terrain(a, *key[1:]))
+                first = files(c.terrain_msg(key, graded))
+            finally:
+                release.set()
+            stand = files(c.terrain_msg(key, late.result()))
+        asyncio.run(s.terrain(a, 256., 0.))
+        returned = asyncio.run(s.terrain(a, *key[1:]))
+        again = files(c.terrain_msg(key, returned))
+        self.assertEqual([n for n in first if first[n] != again[n]], [], "graded files changed on return")
+        with Image.open(os.path.join(s.out_dir, returned["heightmap"])) as im:
+            png = np.asarray(im)[::-1]
+        with open(os.path.join(s.out_dir, returned["ter"]), "rb") as terrain:
+            version, size = struct.unpack("<BI", terrain.read(5))
+            self.assertEqual((version, size), (heightmap.TER_VERSION, png.shape[0]))
+            native = np.frombuffer(terrain.read(size * size * 2), "<u2").reshape(size, size)
+            materials = np.frombuffer(terrain.read(size * size), np.uint8).reshape(size, size)
+        np.testing.assert_array_equal(native, png)
+        solid = materials != heightmap.TER_HOLE  # the terrain cuts holes after the import masks are painted
+        for slot, material in enumerate(returned["mats"]):
+            with Image.open(os.path.join(s.out_dir, returned["layers"][material])) as mask:
+                np.testing.assert_array_equal(np.asarray(mask)[::-1][solid], (materials[solid] == slot) * 255)
+        self.assertTrue(first.keys().isdisjoint(stand), "each build owns all its files")
 
     def test_default_server_sends_no_layers(self):
         s = self.make()

@@ -171,6 +171,25 @@ class BedHeightsTest(unittest.TestCase):
             for (_f, _c, _k, xy), (zb, zg) in zip(rails, got):
                 self.assertTrue(same(zb, ref_bed_heights(np.asarray(ground(xy), np.float64))))
 
+    def test_profile_native_edges(self):
+        """railways.profile in Rust (earthfast 525, railprof): a ground part of fewer than 3 points nothing lifts keeps
+        the ground array itself as its bed (the Python's), a kind or class that is no str is none of the kinds and
+        has GRADE, a part of no points is refused, and a deck between two ground parts ends on their beds."""
+        flat = lambda xy: np.full(len(xy), 4.0)     # noqa: E731
+        short = np.array([[0.0, 0.0], [2.0, 0.0]])
+        out = railways.profile([("a", None, "ground", short), ("b", 7, 3, np.array([[2.0, 0.0], [9.0, 0.0]]))], flat)
+        self.assertIs(out[0][0], out[0][1])
+        self.assertTrue(same(out[1][0], np.full(2, 4.0)) and out[1][0] is not out[1][1])
+        with self.assertRaises(ValueError):
+            railways.profile([("a", "rail", "ground", np.zeros((0, 2)))], flat)
+        s = np.arange(0.0, 40.1, railways.STEP_M)
+        line = lambda x0: np.column_stack((x0 + s, np.zeros_like(s)))     # noqa: E731
+        rails = [("g1", "rail", "ground", line(-40.0)), ("d", "rail", "bridge", line(0.0)),
+                 ("g2", "rail", "ground", line(40.0))]
+        prof = railways.profile(rails, lambda xy: np.where(np.abs(xy[:, 0] - 20.0) < 15.0, -6.0, 4.0))
+        self.assertAlmostEqual(float(prof[1][0][0]), float(prof[0][0][-1]), places=9)
+        self.assertAlmostEqual(float(prof[1][0][-1]), float(prof[2][0][0]), places=9)
+
 
 if __name__ == "__main__":
     unittest.main()

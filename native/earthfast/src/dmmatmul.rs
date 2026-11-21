@@ -189,6 +189,38 @@ fn pairwise<T: Fl, const TRACK: bool, F: FnMut(usize) -> T>(v: &mut F, lo: usize
     }
 }
 
+/// dnp.dot of two 1-D float64 vectors of one length k, in dm_matmul's order for them ((1, k) @ (k, 1): k is the only
+/// axis past 1, so the k > 8 sum is the pairwise one): k <= 8 the products left to right from the first, k > 8
+/// 0.0 + numpy's pairwise sum; k == 0: 0.0. NaNs as dm_matmul's. (buildings._area2 in bldmesh.rs, r2a19.)
+pub(crate) fn dot1(a: &[f64], b: &[f64]) -> f64 {
+    let k = a.len().min(b.len());
+    if k == 0 {
+        return 0.0;
+    }
+    if k <= 8 {
+        let mut s = mu(a[0], b[0]);
+        for q in 1..k {
+            s = ad(s, mu(a[q], b[q]));
+        }
+        s
+    } else {
+        let mut fl = 0u8;
+        let mut prod = |q: usize| mu(a[q], b[q]);
+        let ps = pairwise::<f64, false, _>(&mut prod, 0, k, 0, &mut fl);
+        ad(0.0, ps)
+    }
+}
+
+/// Pairwise reduction of one contiguous float32 vector (NumPy's add.reduce).
+pub(crate) fn sum1_f32(n: usize, mut value: impl FnMut(usize) -> f32) -> f32 {
+    ad(0.0, pairwise::<f32, false, _>(&mut value, 0, n, 0, &mut 0))
+}
+
+pub(crate) fn dot1_f32(n: usize, product: impl FnMut(usize) -> f32) -> f32 {
+    if n <= 8 { return (0..n).map(product).reduce(ad).unwrap_or(0.0); }
+    sum1_f32(n, product)
+}
+
 /// The Python's k > 8 order: is k the inner loop of np.add.reduce(A' * B', axis=-2)? dims: the products' shape (C
 /// order: S.., n, k, m); sa / sb: A' = a[.., :, :, None] and B' = b[.., None, :, :] as numpy's iterator holds them
 /// broadcast to dims (byte strides, 0 where the operand's axis is 1 or missing).

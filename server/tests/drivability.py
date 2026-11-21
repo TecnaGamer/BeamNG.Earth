@@ -30,6 +30,7 @@ get worse and no part may become bad, and an improvement must be written back (-
 again. The fixtures never change, so a part's id names the same road in every run.
 """
 import argparse
+import hashlib
 import json
 import math
 from concurrent.futures import ProcessPoolExecutor
@@ -211,15 +212,25 @@ class Report:
 
     def __init__(self):
         self.steps, self.parts = 0, {}
+        self.tracks = []
 
     def add(self, where, xy, z, inside, centre):
         """A profile: z at xy (1 m apart) along a wheel track (centre: the centre line), inside: which samples lie
         within RADIUS_M."""
+        if np.any(inside):
+            if not np.isfinite(z[inside]).all():
+                raise ValueError(f"non-finite wheel track on {where}")
+            samples = np.column_stack((xy[inside], z[inside])).astype("<f8", copy=False)
+            self.tracks.append((where["surface"], where["part"], where["class"], bool(centre),
+                                hashlib.sha256(samples.tobytes()).hexdigest()))
         for name, (limit, _tol, fn, on) in METRICS.items():
             if (on == "centre" and not centre) or (fn is not _step and where["class"] not in SPEED_MS):
                 continue
             values, first = fn(z, where["class"])       # (empty when the profile is shorter than the metric's window)
-            values = np.where(inside[first:first + len(values)] & np.isfinite(values), values, 0.0)
+            sampled = inside[first:first + len(values)]
+            if not np.isfinite(values[sampled]).all():
+                raise ValueError(f"non-finite {name} on {where}")
+            values = np.where(sampled, values, 0.0)
             if not len(values):
                 continue
             if fn is _step:
@@ -235,7 +246,10 @@ class Report:
         for key, part in sorted(self.parts.items()):
             if any(part.get(m, 0.0) > limit for m, (limit, *_r) in METRICS.items()):
                 bad[key] = {k: round(v, 4) if isinstance(v, float) else v for k, v in part.items()}
-        return {"steps": self.steps, "parts": bad}
+        if not self.tracks:
+            raise ValueError("site had no sampled wheel tracks")
+        signature = hashlib.sha256(json.dumps(sorted(self.tracks)).encode()).hexdigest()
+        return {"steps": self.steps, "parts": bad, "tracks": signature}
 
 
 def _resample(xy):

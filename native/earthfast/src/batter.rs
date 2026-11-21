@@ -324,7 +324,10 @@ pub fn params(za: ArrayView1<f64>, zb: ArrayView1<f64>, rk: ArrayView1<i64>, rid
 #[derive(Clone, Copy)]
 struct Seg {
     ax: f64, ay: f64, abx: f64, aby: f64, l2: f64, len: f64, za: f64, zb: f64, h: f64, rh: f64, ba: f64, bb: f64,
-    banked: bool, m: [[f64; 2]; 2], r: [[f64; 2]; 2], old: [f64; 2], reach: f64, reach2: f64,  // (m, r: [side][end])
+    width_delta: f64, banked: bool, m: [[f64; 2]; 2], r: [[f64; 2]; 2], old: [f64; 2], reach: f64, reach2: f64,  // (m, r: [side][end])
+    // (per end, then side: the unit direction out of the segment its end cap measures how far behind that end a point
+    // lies (cap_loosen); the neighbour's own along the plan where it goes on with that side's corridor)
+    cap: [[[f64; 2]; 2]; 2],
     // (its middle and the square of a radius past which no point is within its reach: half its length + the reach,
     // with a margin far over any rounding of either distance)
     mx: f64, my: f64, rc2: f64,
@@ -333,9 +336,13 @@ struct Seg {
 /// The segments' arrays (grading.PlanPack's) and each side's params (m, r: (n, 4) as params gives them).
 pub struct Segs<'a> {
     pub a: ArrayView2<'a, f64>, pub b: ArrayView2<'a, f64>, pub za: ArrayView1<'a, f64>, pub zb: ArrayView1<'a, f64>,
+    pub width_delta: Option<ArrayView1<'a, f64>>,
     pub h: ArrayView1<'a, f64>, pub rh: ArrayView1<'a, f64>, pub ba: ArrayView1<'a, f64>,
     pub bb: ArrayView1<'a, f64>, pub m: ArrayView2<'a, f64>, pub r: ArrayView2<'a, f64>,
     pub fl: ArrayView2<'a, u8>,
+    // (each segment end's continuation (segments, 2: its a's, its b's): -1 none, else 2 k + j, segment k's end j (0 its
+    // a, 1 its b) lying there; PlanPack's nb, from its plans and its validated links between them, never inferred here)
+    pub nb: ArrayView2<'a, i64>,
 }
 
 fn prep(s: &Segs, i: usize, p: &ApplyPrm) -> Seg {
@@ -348,11 +355,40 @@ fn prep(s: &Segs, i: usize, p: &ApplyPrm) -> Seg {
     let old_r = if old[0] > 0.0 || old[1] > 0.0 { p.old_reach + p.old_fade } else { 0.0 };
     let reach = s.h[i] + r[0][0].max(r[0][1]).max(r[1][0]).max(r[1][1]).max(old_r).max(p.core_blend);
     let len = l2.sqrt();
+    let (ux, uy) = if len > 1e-9 { (abx / len, aby / len) } else { (0.0, 0.0) };
+    // (each end's neighbour along the plan: the segment PlanPack says it goes on into there (nb: the next segment of
+    // its own plan, or the one plan its end carries straight on into); a side it carries on with is not today's there.
+    // Not from the pack's order or coincident points: an unrelated plan's end there is no continuation, Codex)
+    let n = s.h.len();
+    let mut cap = [[[-ux, -uy]; 2], [[ux, uy]; 2]];
+    #[allow(clippy::needless_range_loop)]
+    for e in 0..2usize {
+        let v = s.nb[[i, e]];
+        if v < 0 || (v >> 1) as usize >= n {
+            continue;
+        }
+        let (k, j) = ((v >> 1) as usize, (v & 1) as usize);
+        // (away from the joint along k: from its end j to its other end; its sides as ours where it runs our way)
+        let (nx, ny) = (s.b[[k, 0]] - s.a[[k, 0]], s.b[[k, 1]] - s.a[[k, 1]]);
+        let nl = (nx * nx + ny * ny).sqrt();
+        if nl <= 1e-9 {
+            continue;
+        }
+        let sg = if j == 0 { 1.0 } else { -1.0 };
+        let swap = j == e;
+        for (side, c) in cap[e].iter_mut().enumerate() {
+            let ks = if swap { 1 - side } else { side };
+            if s.fl[[k, ks]] & OLD == 0 {
+                *c = [sg * nx / nl, sg * ny / nl];
+            }
+        }
+    }
     let rc = 0.5 * len + reach;
     let rc = rc + 1e-6 * (1.0 + rc);
     Seg {
+        width_delta: s.width_delta.as_ref().map_or(0.0, |d| d[i]),
         ax, ay, abx, aby, l2, len, za: s.za[i], zb: s.zb[i], h: s.h[i], rh: s.rh[i], ba: s.ba[i],
-        bb: s.bb[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0, m, r, old, reach, reach2: reach * reach,
+        bb: s.bb[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0, m, r, old, reach, reach2: reach * reach, cap,
         mx: ax + 0.5 * abx, my: ay + 0.5 * aby, rc2: rc * rc,
     }
 }
@@ -391,7 +427,8 @@ fn pair_eval(g: &Seg, x: f64, y: f64, p: &ApplyPrm) -> Option<Pv> {
     }
     let cross = if g.l2 > 1e-12 { (qy * g.abx - qx * g.aby) / g.len } else { 0.0 };
     let d = d2.sqrt();
-    let x_out = d - g.h;
+    let inset = crate::gradebins::taper_inset(g.width_delta, t);
+    let x_out = d - (g.h - inset);
     let mut v = Pv { wc: 0.0, wo: 0.0, cor: false, lo: 0.0, lo_off: 0.0, up: 0.0, up_off: 0.0 };
     // inside the core and core_blend past it: today's
     if x_out < p.core_blend {
@@ -422,7 +459,7 @@ fn pair_eval(g: &Seg, x: f64, y: f64, p: &ApplyPrm) -> Option<Pv> {
         z += grade * over.clamp(-EXT_M, EXT_M);
     }
     if g.banked && g.l2 > 1e-12 {   // (a banked curve: its edge's height, as gradebins' target)
-        z += (g.ba + (g.bb - g.ba) * t) * cross.clamp(-g.rh, g.rh);
+        z += (g.ba + (g.bb - g.ba) * t) * cross.clamp(-(g.rh - inset), g.rh - inset);
     }
     let xs = x_out.min(p.l0);
     let mut f = m * shape(x_out - p.l0, p.crest);
@@ -434,6 +471,13 @@ fn pair_eval(g: &Seg, x: f64, y: f64, p: &ApplyPrm) -> Option<Pv> {
     // the corridor never stops at once where the cap meets that side, past today's fade: Codex review of ff9d2c55)
     if old > 0.0 {
         f += OLD_LOOSEN_M * old / (1.0 - old);
+    }
+    // (behind an end its plan does not carry its corridor on past (the plan's end, or a neighbour whose side keeps
+    // today's grading: a bridge's abutment metres), loosened by how far behind: its probes read the ground beside it
+    // only, and the corridor swept round its end cap cut a 14 m trench with walls behind the Stelvio's deck end at
+    // Premadio and stood a 24 m fill in the valley past a plan's end, each closing at its reach as a wall)
+    if tu != t {
+        f += cap_loosen(g, x, y, tu > 1.0, wl);
     }
     v.lo_off = p.s_lo * xs + f;
     v.up_off = p.s_up * xs + f;
@@ -471,6 +515,37 @@ fn take(st: &mut St, v: &Pv, si: u32) {
 const CONFLICT_K: f64 = 1.0;
 /// m a corridor is loosened by at a side mix half today's (old / (1 - old) times this)
 const OLD_LOOSEN_M: f64 = 4.0;
+/// m per m behind an end its plan does not carry its corridor on past (cap_loosen), on from ...
+const CAP_K: f64 = 1.0;
+/// ... a rounded start over this many metres (no crease at the end's line)
+const CAP_ROUND_M: f64 = 6.0;
+
+/// How much a segment's corridor is loosened at (x, y) in its end cap (past_b: b's, else a's): CAP_K per metre the
+/// point lies behind that end (the less of behind its own end's line and) along the direction its plan goes on in (the neighbour's, where the plan goes on with that
+/// side's corridor: nothing in the wedge outside a bend, where the point is past the neighbour's end too, and only
+/// metres beside the neighbour, whose own corridor binds there), rounded in over CAP_ROUND_M; each side's mixed by wl
+/// as side_mr mixes them. Behind the end of a plan, or of a run that a neighbour's today's side ends, every segment's
+/// cap is loosened at least as much as the last one's: the ground there rises (falls) to the natural at m + CAP_K at
+/// most instead of closing at the reach.
+#[inline(always)]
+fn cap_loosen(g: &Seg, x: f64, y: f64, past_b: bool, wl: f64) -> f64 {
+    let (e, ox, oy) = if past_b { (1, g.ax + g.abx, g.ay + g.aby) } else { (0, g.ax, g.ay) };
+    let (qx, qy) = (x - ox, y - oy);
+    // (and no more than behind its own end's line: nothing on that line, the corridor beside the segment carried on
+    // continuously into its cap)
+    let sg = if past_b { 1.0 } else { -1.0 };
+    let own = if g.len > 1e-9 { sg * (qx * g.abx + qy * g.aby) / g.len } else { 0.0 };
+    let side = |s: usize| shape((qx * g.cap[e][s][0] + qy * g.cap[e][s][1]).min(own).max(0.0), CAP_ROUND_M);
+    let l = if g.old[0] > 0.0 {
+        side(1)
+    } else if g.old[1] > 0.0 {
+        side(0)
+    } else {
+        wl * side(0) + (1.0 - wl) * side(1)
+    };
+    CAP_K * l
+}
+
 /// m a segment's line is carried on past its ends (the corridor's height there) ...
 const EXT_M: f64 = 4.0;
 /// ... at this grade at most (gradebins' EXTRAP_MAX_GRADE: a few cm long segment holding a step)
@@ -754,4 +829,54 @@ pub fn apply(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, g0
              p: &ApplyPrm) -> Vec<f64> {
     let (v, w) = apply_vw(px, py, base, s, p);
     (0..px.len()).map(|i| combine(v[i], w[i], g0[i])).collect()
+}
+
+
+/// The segments needed for a query's batter parameters, in original pack order.
+/// A point can only see a corridor within half width + reach of its segment. Keep
+/// whole plans for the along-plan closing, opening and dilation. Each candidate's
+/// end caps also read the OLD flags on its two linked segments, even across plans.
+#[pyo3::pyfunction]
+pub fn batter_window<'py>(
+    py: pyo3::Python<'py>,
+    a: numpy::PyReadonlyArray2<'py, f64>, b: numpy::PyReadonlyArray2<'py, f64>,
+    h: numpy::PyReadonlyArray1<'py, f64>, of: numpy::PyReadonlyArray1<'py, i64>,
+    nb: numpy::PyReadonlyArray2<'py, i64>, bounds: (f64, f64, f64, f64), reach: f64,
+) -> pyo3::PyResult<(pyo3::Bound<'py, numpy::PyArray1<i64>>, pyo3::Bound<'py, numpy::PyArray2<i64>>)> {
+    use numpy::{ndarray::Array2, IntoPyArray};
+    use pyo3::exceptions::PyValueError;
+    let (a, b, h, of, nb) = (a.as_array(), b.as_array(), h.as_array(), of.as_array(), nb.as_array());
+    let n = h.len();
+    if a.dim() != (n, 2) || b.dim() != (n, 2) || nb.dim() != (n, 2) || of.len() != n
+        || of.iter().any(|&p| p < 0 || p as usize >= n)
+        || nb.iter().any(|&e| e < -1 || e >= 2 * n as i64) {
+        return Err(PyValueError::new_err("batter_window: invalid segment arrays or links"));
+    }
+    let mut keep_plan = vec![false; n];
+    for i in 0..n {
+        let pad = h[i] + reach + 1e-6; // same outward margin as apply_vw's bin search
+        if a[[i, 0]].max(b[[i, 0]]) + pad < bounds.0 || a[[i, 0]].min(b[[i, 0]]) - pad > bounds.2
+            || a[[i, 1]].max(b[[i, 1]]) + pad < bounds.1 || a[[i, 1]].min(b[[i, 1]]) - pad > bounds.3 {
+            continue;
+        }
+        keep_plan[of[i] as usize] = true;
+        for end in nb.row(i) {
+            if *end >= 0 {
+                keep_plan[of[(*end / 2) as usize] as usize] = true;
+            }
+        }
+    }
+    let mut ids = Vec::new();
+    let mut local = vec![-1i64; n];
+    for i in 0..n {
+        if keep_plan[of[i] as usize] {
+            local[i] = ids.len() as i64;
+            ids.push(i as i64);
+        }
+    }
+    let links = Array2::from_shape_fn((ids.len(), 2), |(i, e)| {
+        let end = nb[[ids[i] as usize, e]];
+        if end < 0 || local[(end / 2) as usize] < 0 { -1 } else { 2 * local[(end / 2) as usize] + end % 2 }
+    });
+    Ok((ids.into_pyarray(py), links.into_pyarray(py)))
 }

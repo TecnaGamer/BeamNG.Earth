@@ -70,7 +70,7 @@ class EndToEndTest(unittest.TestCase):
         aid = a1["anchorId"]
         print(f"\n  anchor_ready in {time.monotonic() - t0:.2f} s: zBase={t['zBase']} "
               f"maxHeight={t['maxHeight']} q=1/{round(1 / t['q'])} groundZ={a1['groundZ']}", file=sys.stderr)
-        self.assertEqual(t["heightmap"], f"/temp/beamngEarth/{sid}/hm_{aid}_0_0.png")
+        self.assertRegex(t["heightmap"], rf"^/temp/beamngEarth/{sid}/hm_{aid}_0_0_\d+\.png$")
         self.assertEqual((t["cx"], t["cy"], t["size"], t["squareSize"]), (0.0, 0.0, 2048, heightmap.SQUARE))   # terrain mode: 2 km
         self.assertEqual(t["maxHeight"], 65536 * t["q"])
         with Image.open(self.fs(t["heightmap"])) as im:
@@ -132,7 +132,7 @@ class EndToEndTest(unittest.TestCase):
         print(f"  terrain_ready in {time.monotonic() - t0:.2f} s", file=sys.stderr)
         self.assertEqual((tr["requestId"], tr["anchorId"], tr["cx"], tr["cy"], tr["size"]), (2, aid, 512.0, 0.0, 2048))
         self.assertEqual((tr["q"], tr["squareSize"]), (t["q"], heightmap.SQUARE))
-        self.assertEqual(tr["heightmap"], f"/temp/beamngEarth/{sid}/hm_{aid}_512_0.png")
+        self.assertRegex(tr["heightmap"], rf"^/temp/beamngEarth/{sid}/hm_{aid}_512_0_\d+\.png$")
         with Image.open(self.fs(tr["heightmap"])) as im:
             self.assertEqual(im.size, (2048, 2048))     # terrain mode: its 2 km block at 1 m
             q2 = np.asarray(im).astype(np.int64)[::-1]

@@ -434,7 +434,8 @@ class ChainTest(unittest.TestCase):
         pol = netfetch.with_policy(FAST, "basemap.nationalmap.gov", rate=1e-6, burst=60.0)
         im = FakeNet(self.tmp.name, serve, tone=0.0, policies=pol)
         b = im.fetcher.host("basemap.nationalmap.gov").bucket
-        b.tokens = 29.0                                  # below half: no prefetch
+        for _ in range(31):                              # 29 of 60 left: below the prefetch reserve
+            self.assertTrue(b.try_take())
         f = g.EnuFrame(LAT0, LON0)
         im.prefetch(f, 0.0, 0.0, 256.0, 64)
         time.sleep(0.2)
@@ -1220,7 +1221,7 @@ class LazyStateTest(unittest.TestCase):
         missindex.record([im._paths(src, z, tx, ty)[1] for tx, ty in kids], t=time.time() - ttl - 3600)
         missindex.reset_memo()
         br = im.fetcher.host("apps.geo.fpac.usda.gov").breaker
-        br.state, br.open_until = "open", im.fetcher.clock() + 600       # (USDA's host down: its breaker open)
+        br.trip(600.0)
         t0 = time.time()
         st = im._child_state(src, z, *kids[0])
         self.assertEqual(st[0], "none")
@@ -1250,7 +1251,7 @@ class LazyStateTest(unittest.TestCase):
         missindex.record([im._paths(src, z, tx, ty)[1] for tx, ty in kids], t=time.time() - ttl - 3600)
         missindex.reset_memo()
         br = im.fetcher.host("apps.geo.fpac.usda.gov").breaker
-        br.state, br.open_until = "open", im.fetcher.clock() + 600       # (USDA's host down: its breaker open)
+        br.trip(600.0)
         t0 = time.time()
         tx, ty = kids[0]
         mt = maptiles.MapTiles(im)
@@ -1259,7 +1260,10 @@ class LazyStateTest(unittest.TestCase):
         self.assertFalse(final, "a stand-in: the preferred source may come back")
         self.assertAlmostEqual(until, t0 + imagery.UNAVAILABLE_RETRY_S, delta=60)
         self.assertFalse(self.exports("naipusda"), "not asked while down")
-        br.state, br.open_until = "closed", 0.0                        # (the host is back)
+        from unittest import mock
+        with mock.patch.object(br, "clock", return_value=br.open_until):
+            self.assertEqual(br.allow()[:2], (True, True))
+            self.assertTrue(br.success())
         _, name, final, until = mt.tile(z, tx, ty)
         self.assertEqual((name, final, until), ("naipusda", True, None), "asked again: its photo is the tile")
         self.assertTrue(self.exports("naipusda"))

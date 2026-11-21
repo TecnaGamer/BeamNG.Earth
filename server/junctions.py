@@ -125,10 +125,10 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
       traffic comes in, across its whole driving width, a single lane's across all of it), curb ramps on both sidewalks
       (on a bulb: the corner piece's), the road's markings cut beyond it."""
     fast.require(266, "junctions find (one-way stop lines)")
-    from sidewalks import CURB_W, V2, V2_NATIVE, ARC_STEP_M
+    from sidewalks import CURB_W, V2, ARC_STEP_M
     v2 = V2 and not pavement                # (the curbless corners keep their radii and steps: roadcorners.py)
     if v2:
-        fast.require(V2_NATIVE, "junctions find (sidewalks v2's curb returns)")
+        fast.require(570, "junctions_find")
     radii, radius = (RADII_V2, RADIUS_V2) if v2 else (RADII, RADIUS)
     n = len(roads)
     if n == 0:
@@ -181,7 +181,7 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
         fw_rank, walks, None if walk_w is None else float(walk_w), float(parking_m), bool(pavement),
         None if pavement_bounds is None else tuple(float(v) for v in pavement_bounds),
         _consts(float(CURB_W)) + ([float(ARC_STEP_M)] if v2 else []),
-        [float(v) for v in RADIUS_TRIES], float(CROSSWALK["w"]), float(STOP_LINE["w"]), bool(left_hand))
+        [float(v) for v in RADIUS_TRIES], float(CROSSWALK["w"]), float(STOP_LINE["w"]), bool(left_hand), separate_crossings=v2)
     return tuple(out)
 
 
