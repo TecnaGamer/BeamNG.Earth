@@ -83,4 +83,3 @@ class PolishPolesTest(unittest.TestCase):
                           props, wires, None, everywhere=True, clearance=clearance)
         self.assertEqual([r[1:3] for r in props], [[50., 10.]])
         self.assertEqual(wires, [])
-

@@ -244,6 +244,11 @@ def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
     built its decks, and an exception here lost the whole road tile (a viaduct never arrived). The rows are added
     only once the whole layout succeeded, never half a line's towers."""
     if md is None:
+        import roads
+        box = roads.tile_bbox(tx, ty)
+        extent = polishpoles.bounds(frame, box, 1.)
+        if extent:
+            _standalone(frame, box, elev, polishpoles.Supports(frame, extent, []), props, clearance)
         return
     got_props, got_wires = [], []
     try:
@@ -511,15 +516,20 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
         if len(got):
             ends = np.vstack([ends, got])
     if evidence is not None:
-        from geotiles import box_owns
-        for key in sorted(evidence.standalone - evidence.drawn):
-            x, y, tower = evidence.points[key]
-            if box_owns(box, x, y):
-                z = ground_at(frame, elev)(np.array([x]), np.array([y]))[0]
-                row = tower_row(G_PYLON if tower else G_POLE, PYLON_H if tower else POLE_H, x, y, z, 0.)
-                if clearance is None or clearance.clear(row):
-                    props.append(row)
+        _standalone(frame, box, elev, evidence, props, clearance)
     _yards(frame, elev, subs, ends, (x0, y0, x1, y1), props)
+
+
+def _standalone(frame, box, elev, evidence, props, clearance):
+    from geotiles import box_owns
+    points = [evidence.points[key] for key in sorted(evidence.standalone - evidence.drawn)]
+    owned = [(x, y, tower) for x, y, tower in points if box_owns(box, x, y)]
+    if owned:
+        x, y, _ = np.asarray(owned).T
+        for (px, py, tower), z in zip(owned, ground_at(frame, elev)(x, y)):
+            row = tower_row(G_PYLON if tower else G_POLE, PYLON_H if tower else POLE_H, px, py, z, 0.)
+            if clearance is None or clearance.clear(row):
+                props.append(row)
 
 
 def _placed(frame, md, ll, clear_m, box):

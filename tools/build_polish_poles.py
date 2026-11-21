@@ -69,4 +69,3 @@ def build(poles, border, *mapillary_exports):
 
 if __name__ == "__main__":
     build(*sys.argv[1:])
-
