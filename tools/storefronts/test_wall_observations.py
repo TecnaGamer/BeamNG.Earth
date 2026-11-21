@@ -222,7 +222,7 @@ def test_storefront_signs():
     assert len(marks) == len(set(marks))
     assert set(marks).union(brand_signs.LETTERING).issubset(CHAINS)
     assert brand_signs.LETTERING["Freddy's Frozen Custard & Steakburgers"] == "Freddy\u2019s"
-    for name in ("Apple Store", "Best Buy", "Domino's", "Freddy's Frozen Custard & Steakburgers"):
+    for name in ("Apple Store", "Best Buy", "Burger King", "Domino's", "Freddy's Frozen Custard & Steakburgers"):
         for aspect in (1, 4.5):
             pixels = np.asarray(sign_image(name, aspect))
             assert pixels.shape == (200, int(200 * aspect), 3)

@@ -127,6 +127,30 @@ def symbol_and_name(symbol, label, font_path, width, height_m, surface, ink):
     return canvas
 
 
+def burger_king(font_path):
+    """A compact two-line restaurant badge that retains its proportions on wide fascias."""
+    paper, bun, ink = "#fff1db", "#f5a122", "#c62b20"
+    badge = Image.new("RGB", (220, 200), paper)
+    pen = ImageDraw.Draw(badge)
+    pen.polygon(curve((21, 51), [
+        ((22, -9), (195, -9), (199, 51)),
+        ((153, 47), (65, 47), (21, 51)),
+    ]), fill=bun)
+    pen.polygon(curve((19, 154), [
+        ((70, 157), (151, 157), (201, 154)),
+        ((192, 205), (28, 205), (19, 154)),
+    ]), fill=bun)
+    font = ImageFont.truetype(font_path, 92)
+    for label, top, width, height in (("BURGER", 54, 194, 43), ("KING", 101, 186, 49)):
+        left, upper, right, lower = font.getbbox(label)
+        mask = Image.new("L", (right-left, lower-upper))
+        ImageDraw.Draw(mask).text((-left, -upper), label, font=font, fill=255)
+        mask = mask.resize((width, height), Image.Resampling.LANCZOS)
+        x = (badge.width-width)//2
+        badge.paste(ink, (x, top, x+width, top+height), mask)
+    return badge
+
+
 # Catalog keys stay the same across the matcher, facade, tenant and roadside paths.
 SYMBOL_ONLY = {"Apple Store": (apple, "#34383a", "#f9faf8")}
 SCRIPT_MARKS = {"Freddy's Frozen Custard & Steakburgers": (freddys, "#fff4df", "#af1d2d")}
@@ -144,7 +168,9 @@ def artwork(name, width, font_path, height_m, surface):
         img = Image.new("RGB", (width, 200), paper)
         centered_mark(img, mask(), ink)
         return img
-    if name == "Best Buy":
+    if name == "Burger King":
+        master = burger_king(font_path)
+    elif name == "Best Buy":
         master = Image.new("RGB", (340,200), "#174579")
         d = ImageDraw.Draw(master)
         font = ImageFont.truetype(font_path, 99)
