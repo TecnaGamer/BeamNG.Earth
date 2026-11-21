@@ -189,6 +189,47 @@ class BuildFaults(unittest.TestCase):
         self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "off"), "BNE_ROADSURF_V3=off")
         self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "surface"), "BNE_ROADSURF_V3=surface@v5")
 
+    def test_old_generations_cannot_supply_closed_slabs(self):
+        from unittest.mock import patch
+        import lanegraph
+        import shells
+        from test_ground_rules import _keys
+
+        with patch.object(shells, "ON", False), patch.object(lanegraph, "MODE", "off"):
+            default = _keys()
+        for closed, mode in [(True, "off"), (False, "surface")]:
+            with patch.object(shells, "ON", closed), patch.object(lanegraph, "MODE", mode):
+                content, skin, fixed_content_skin, rules = _keys()
+                self.assertNotEqual(content, default[0])
+                self.assertNotEqual(skin, default[1])
+                self.assertEqual((fixed_content_skin, rules), default[2:])
+
+    def test_equal_deck_bounds_with_different_geometry_replace_the_collider(self):
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import blockworker
+        import geotiles
+        import lanegraph
+        import shells
+
+        tile = geotiles.geobox(*geotiles.tile_of(45.56515, -62.64587))
+        vertices = np.array([[0., 0., 0.], [5., 0., 0.], [5., 2., 0.], [0., 2., 0.]])
+        parts = SimpleNamespace(chunks=[], ctx=[], walks_raw=[], bld=None, props=[], wires=[], park=[],
+                                tmesh=None, fuel=[], rmesh=None, guardrail_rows=[], garage_sound=[], wells=[])
+        with tempfile.TemporaryDirectory() as directory, patch.object(blockworker, "_geo_inputs", {}):
+            def write(indices):
+                parts.dmesh = (vertices, np.array(indices), vertices[:, :2], ["asphalt"], np.zeros(2, np.int64))
+                return blockworker._write_geo_content(directory, "/test", tile, parts)[2]["h"]
+
+            for closed, surface in [(False, "surface"), (True, "off")]:
+                with self.subTest(closed=closed, surface=surface), patch.object(shells, "ON", closed), \
+                        patch.object(lanegraph, "MODE", surface):
+                    first = write([[0, 1, 2], [0, 2, 3]])
+                    second = write([[0, 1, 3], [1, 2, 3]])
+                    self.assertNotEqual(first, second)
+                    self.assertEqual(second, write([[0, 1, 3], [1, 2, 3]]))
+
     def test_fallback_marks_the_active_tile_short(self):
         from unittest.mock import patch
         import revisit

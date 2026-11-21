@@ -2061,19 +2061,19 @@ class Imagery:
         return out
 
     @profile_step('Imagery render')
-    def render(self, frame, x0, y0, size, px, pending=None, gutter=False):
+    def render(self, frame, x0, y0, size, px, pending=None, gutter=False, **output):
         """_render(); texels from a lazy source (NAIP) then take their large-scale colour from the rest of
         the chain (match_colours): NAIP's detail, USGS's colours, so the block's photo meets the far tiles
         around it (USGS, colour-matched and de-shadowed) without a seam (in-game 2026-10-13, Annapolis: the
         NAIP block was a darker, greener square, its water much darker)."""
-        return self.render_where(self.square(frame, x0, y0, size, px, gutter), px, pending)
+        return self.render_where(self.square(frame, x0, y0, size, px, gutter), px, pending, **output)
 
     @profile_step('Imagery render')
-    def render_merc(self, z, x, y, px, pending=None):
+    def render_merc(self, z, x, y, px, pending=None, **output):
         """render() of Web-Mercator tile (z, x, y) with a gutter(px) border: px x px, the tile itself covering texels
         g .. px - g on both axes (gutter_uv of its Mercator position), row 0 north (the far field's global tiles,
         farfield.GTile: the same texture for every anchor)."""
-        return self.render_where(MercSquare(z, x, y, px), px, pending)
+        return self.render_where(MercSquare(z, x, y, px), px, pending, **output)
 
     @profile_step('Imagery render')
     def far_photo(self, where, px, pending=None):
@@ -2115,7 +2115,7 @@ class Imagery:
 
     @profile_step('Imagery source assembly')
     def render_where(self, where, px, pending=None, far=False):
-        """render() of a square (EnuSquare, MercSquare)."""
+        """Render an EnuSquare or MercSquare. With far=True, retain the native canvas for the DDS writer."""
         rgb, used = self._render(where, px, pending, keep_canvas=True)
         if any(s.lazy and s.name in used for s in self.chain) and not all(s.lazy for s in self.chain):
             # the reference only gives the colour above MATCH_SIGMA_M: rendered and matched at MATCH_DOWN times
@@ -2286,6 +2286,19 @@ class Imagery:
         if self.colormatch is not None:
             self.colormatch.close()
         self.pool.shutdown(wait=False, cancel_futures=True)
+
+
+_FAR_RENDERERS = (Imagery.render, Imagery.render_merc)
+_RENDER_WHERE = Imagery.render_where
+
+
+def render_far(render, *args, **kwargs):
+    """Call the provider's public renderer. Only the built-in methods can defer shading and DDS encoding
+    on the native canvas. An override (including one calling super()) gets its usual RGB and source counts."""
+    if getattr(render, "__func__", None) in _FAR_RENDERERS and \
+            getattr(render.__self__.render_where, "__func__", None) is _RENDER_WHERE:
+        kwargs["far"] = True
+    return render(*args, **kwargs)
 
 
 class HostPools:

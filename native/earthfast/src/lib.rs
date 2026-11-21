@@ -9,6 +9,11 @@ use crate::dm::Dm;
 mod dm;
 mod deckreach;
 mod demsample;
+mod demtiles;
+mod dembias;
+mod regionaldem;
+mod lidarbc;
+mod polardem;
 mod dmmatmul;
 mod devctx;
 mod reach;
@@ -25,6 +30,7 @@ mod gravity;
 mod polyproject;
 mod lanesections;
 mod s3url;
+mod netfetch;
 mod countrymap;
 mod carriageway_solver;
 mod carriageways;
@@ -4364,6 +4370,10 @@ fn bilinear_tiles<'py>(
     Ok(out.into_pyarray(py))
 }
 
+fn terrarium_value(r: u8, g: u8, b: u8) -> f32 {
+    r as f32 * 256.0 + g as f32 + b as f32 / 256.0 - 32768.0
+}
+
 /// dem.decode_terrarium's arithmetic on the decoded image (h, w, 3|4 uint8): R * 256 + G + B / 256 - 32768 in float32,
 /// in numpy's order, without the RGB conversion and float temporaries.
 #[pyfunction]
@@ -4371,7 +4381,7 @@ fn terrarium_heights<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bo
     let a = img.as_array();
     let out = py.detach(|| {
         numpy::ndarray::Array2::from_shape_fn((a.shape()[0], a.shape()[1]), |(y, x)| {
-            a[[y, x, 0]] as f32 * 256.0f32 + a[[y, x, 1]] as f32 + a[[y, x, 2]] as f32 / 256.0f32 - 32768.0f32
+            terrarium_value(a[[y,x,0]], a[[y,x,1]], a[[y,x,2]])
         })
     });
     out.into_pyarray(py)
@@ -6522,6 +6532,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_town_face, m)?)?;
     m.add_function(wrap_pyfunction!(island_ring_rays, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::dsm_ground, m)?)?;
+    m.add_function(wrap_pyfunction!(dsm::dem_ground, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::fill_holes, m)?)?;
     m.add_function(wrap_pyfunction!(roadgeom::dedupe_polyline, m)?)?;
     m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_line, m)?)?;
@@ -7044,6 +7055,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // the dm_<fn> scalars for server/dnp.py / dmath.py: Windows and Linux plan the same roads, GitHub #1169)
     dm::register(m)?;
     demsample::register(m)?;
+    demtiles::register(m)?;
+    m.add_function(wrap_pyfunction!(dembias::dem_bias, m)?)?;
+    regionaldem::register(m)?;
+    m.add_function(wrap_pyfunction!(lidarbc::bc_sample, m)?)?;
+    m.add_function(wrap_pyfunction!(lidarbc::bc_sparse, m)?)?;
+    polardem::register(m)?;
         // 264: 262 (deterministic maths) and 263 (stationgeom) in one module
     // 266: bldclear::footprint_twins (the same building mapped twice: one of the two outlines left out, London's
     // reports 2026-11-12); junctions_find's one-way / single-lane arms' stop lines (London reports 3, 8, 9)
@@ -7142,6 +7159,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // colour from Sentinel-2 and the map's regions instead of a 1 m aerial photo; server/genground.py)
     genground::register(m)?;
     host::register(m)?;
+    netfetch::register(m)?;
     // 307: gen_ground(..., gr, gc): its sampling lattices on the global texel grid, the caller's square with a halo
     // (Codex review of 306: overlapping blocks drew the same ground in other colours)
     // 308: generated ground stage 2: gg_regions(..., line, line_kind, ...) and the surface / pattern kinds,
@@ -7434,6 +7452,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(railindex::surface_rail_samples, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::grade::surface_grade_sections, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::lane_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_slab_solid, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_slab_rows, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_ramp_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_surface_groups, m)?)?;
@@ -7527,6 +7546,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
-    m.add("VERSION", 569)?;
+    m.add("VERSION", 570)?;
     Ok(())
 }
