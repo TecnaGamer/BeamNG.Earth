@@ -1154,7 +1154,7 @@ class _Holder:
 
     def wait(self):
         try:
-            self.p.wait(10)
+            self.p.wait(120)
         finally:
             self.p.stdout.close()
 
@@ -1174,12 +1174,31 @@ class LockTest(unittest.TestCase):
         self.lock = os.path.join(self.dir, "x.lock")
 
     def tearDown(self):
+        # (a failed test must not leave its locks to the next: holds_none() and the heartbeat's put-off retries are
+        # this process's, shared by every test)
+        with xproc._HELD_LOCK:
+            for table in (xproc._HELD, xproc._PENDING):
+                for lk in [k for k in table if k.startswith(self.dir)]:
+                    del table[lk]
+        getattr(xproc._MINE, "held", set()).clear()
+        xproc.set_cancel(None)
         shutil.rmtree(self.dir, ignore_errors=True)
+
+    def take(self, lock, kind="demand"):
+        """xproc.take, tried again until it says yes (up to 60 s): another test's heartbeat retry or another process
+        sharing the guard file (256 shards) may have the guard for a moment, which says "not now"."""
+        end = time.monotonic() + 60.0
+        while True:
+            if xproc.take(lock, kind):
+                return True
+            if time.monotonic() > end:
+                return False
+            time.sleep(0.02)
 
     def test_release_tries_again_while_the_file_is_open_elsewhere(self):
         # Windows: a lock another process has open cannot be removed (WinError 32); a release that gave up at once left
         # the lock behind and every process after it waited (GitHub #435)
-        self.assertTrue(xproc.take(self.lock))
+        self.assertTrue(self.take(self.lock))
         real, calls = os.remove, []
 
         def busy(path):
@@ -1200,9 +1219,9 @@ class LockTest(unittest.TestCase):
         with open(self.lock, "w") as f:
             f.write(f"{xproc.KIND_RANK['demand']} 0 {p.pid}")
         t0 = time.monotonic()
-        got, mine = xproc.once(self.lock, lambda: None, 5.0, "demand")
+        got, mine = xproc.once(self.lock, lambda: None, 60.0, "demand")
         self.assertEqual((got, mine), (None, True), "taken over")
-        self.assertLess(time.monotonic() - t0, 1.0)
+        self.assertLess(time.monotonic() - t0, 30.0, "not waited out to wait_s")
         xproc.release(self.lock)
 
     def test_a_holder_that_dies_while_waited_for_is_noticed(self):
@@ -1217,11 +1236,11 @@ class LockTest(unittest.TestCase):
             f.write(f"{xproc.KIND_RANK['demand']} 0 {p.pid}")
         t0 = time.monotonic()
         try:
-            got, mine = xproc.once(self.lock, lambda: None, 20.0, "demand")
+            got, mine = xproc.once(self.lock, lambda: None, 60.0, "demand")
         finally:
             reaper.join()
         self.assertEqual((got, mine), (None, True), "taken over")
-        self.assertLess(time.monotonic() - t0, 0.6 + xproc.ALIVE_RECHECK_S + 1.0)
+        self.assertLess(time.monotonic() - t0, 30.0, "noticed, not waited out to wait_s")
         xproc.release(self.lock)
 
     def test_alive(self):
@@ -1231,11 +1250,11 @@ class LockTest(unittest.TestCase):
     def test_a_held_lock_is_kept_fresh(self):
         # a holder still at work: its lock never STALE_S old (a London cell planned for 2+ minutes on a busy PC had its
         # claim taken over by every process waiting for it, 2026-11-13); a released one is no longer touched
-        self.assertTrue(xproc.take(self.lock))
+        self.assertTrue(self.take(self.lock))
         old = time.time() - xproc.STALE_S - 5
         os.utime(self.lock, (old, old))
         xproc._touch_held()
-        self.assertLess(time.time() - os.path.getmtime(self.lock), 5.0)
+        self.assertLess(time.time() - os.path.getmtime(self.lock), 30.0)
         self.assertFalse(xproc.take(self.lock), "not stale: held")
         xproc.release(self.lock)
         with open(self.lock, "w") as f:      # (a lock left behind: a failed release on Windows)
@@ -1243,68 +1262,99 @@ class LockTest(unittest.TestCase):
         os.utime(self.lock, (old, old))
         xproc._touch_held()
         self.assertGreater(time.time() - os.path.getmtime(self.lock), xproc.STALE_S, "not touched once released")
-        self.assertTrue(xproc.take(self.lock), "taken over")
+        self.assertTrue(self.take(self.lock), "taken over")
         xproc.release(self.lock)
 
     def test_a_slow_live_holder_is_waited_for_past_stale_s(self):
         # another process holding a lock longer than STALE_S while it works: waited for, its result read, not done
         # here beside it (before: taken over at STALE_S, then the holder's own release removed the taker's lock)
-        h, ready = self.holder(1.5)
+        h, ready = self.holder(None)
         try:
-            with mock.patch.object(xproc, "STALE_S", 0.5):
-                got, mine = xproc.once(self.lock, ready, 10.0, "demand")
+            with mock.patch.object(xproc, "STALE_S", 1.5):
+                got, mine = xproc.once(self.lock, self.finish_after(h, ready, 2.2), 60.0, "demand")
         finally:
+            h.go()
             h.wait()
         self.assertEqual((got, mine), ("done", False), "the holder's result, waited for")
         self.assertFalse(os.path.exists(self.lock))
 
     def holder(self, seconds, heartbeat=0.1):
-        """(_Holder, ready): a process holding self.lock for seconds (touching it every heartbeat s), then writing the
-        result file ready() reads."""
+        """(_Holder, ready): a process holding self.lock (touching it every heartbeat s) for seconds, or until h.go()
+        (seconds None: only that; a safety stop after 120 s), then writing the result file ready() reads (made whole
+        by a rename: never read half written)."""
         result = os.path.join(self.dir, "result")
-        code = ("import os, sys, time; sys.path.insert(0, %r); import xproc; xproc.HEARTBEAT_S = %r; "
-                "assert xproc.take(%r); print(os.getpid(), flush=True); time.sleep(%r); "
-                "f = open(%r, 'w', encoding='utf-8'); f.write('done'); f.close(); xproc.release(%r)"
-                ) % (os.path.dirname(xproc.__file__), heartbeat, self.lock, seconds, result, self.lock)
-        return _Holder(code), (lambda: _read(result))
+        go = self.go_file = os.path.join(self.dir, "go")
+        code = ("import os, sys, time; sys.path.insert(0, %r); import xproc; xproc.HEARTBEAT_S = %r\n"
+                "end = time.monotonic() + 30\n"
+                "while not xproc.take(%r):\n"
+                "    assert time.monotonic() < end, 'the lock never had'\n"
+                "    time.sleep(0.02)\n"
+                "print(os.getpid(), flush=True)\n"
+                "stop = time.monotonic() + (%r if %r is not None else 120.0)\n"
+                "while time.monotonic() < stop and (%r is not None or not os.path.exists(%r)):\n"
+                "    time.sleep(0.01)\n"
+                "f = open(%r + '.tmp', 'w', encoding='utf-8'); f.write('done'); f.close(); os.replace(%r + '.tmp', %r)\n"
+                "xproc.release(%r)\n"
+                ) % (os.path.dirname(xproc.__file__), heartbeat, self.lock, seconds, seconds, seconds, go,
+                     result, result, result, self.lock)
+        h = _Holder(code)
+        h.go = lambda: open(go, "w").close()
+        return h, (lambda: _read(result))
+
+    @staticmethod
+    def finish_after(h, ready, after_s, when=lambda: True):
+        """ready(), letting the holder finish once the wait has gone on for after_s and when() is true: it is still
+        at work whatever the machine's load (a sleep of the holder's own could run out before the waiter looked)."""
+        t0 = time.monotonic()
+
+        def r():
+            if time.monotonic() - t0 > after_s and when():
+                h.go()
+            return ready()
+        return r
 
     def test_a_working_holder_is_waited_for_past_wait_s(self):
         # live_s: a holder still at work is waited for by a thread holding no lock (London's cells planned again by
         # every process that stopped waiting at WAIT_S, 2026-11-13)
-        h, ready = self.holder(1.2)
+        h, ready = self.holder(None)
         try:
-            got, mine = xproc.once(self.lock, ready, 0.3, "demand", live_s=10.0)
+            got, mine = xproc.once(self.lock, self.finish_after(h, ready, 0.8), 0.3, "demand", live_s=60.0)
         finally:
+            h.go()
             h.wait()
         self.assertEqual((got, mine), ("done", False))
 
     def test_a_waiter_holding_a_lock_keeps_wait_s(self):
         # (a thread holding a lock of its own could close a circle of waits: wait_s as before)
-        h, ready = self.holder(2.0)
+        h, ready = self.holder(None)            # (at work until told: never done before the wait ends)
         other = os.path.join(self.dir, "other.lock")
         try:
-            self.assertTrue(xproc.take(other))
+            self.assertTrue(self.take(other))
             self.assertFalse(xproc.holds_none())
             t0 = time.monotonic()
-            got, mine = xproc.once(self.lock, ready, 0.3, "demand", live_s=10.0)
+            got, mine = xproc.once(self.lock, ready, 0.3, "demand", live_s=60.0)
             self.assertEqual((got, mine), (None, False))
-            self.assertLess(time.monotonic() - t0, 1.5)
+            self.assertLess(time.monotonic() - t0, 30.0, "wait_s, not live_s")
+            self.assertIsNone(ready(), "the holder still at work when the wait ended")
         finally:
             xproc.release(other)
+            h.go()
             h.wait()
         self.assertTrue(xproc.holds_none())
 
     def test_a_holder_without_heartbeat_keeps_wait_s(self):
         # (a lock not touched lately: its holder not known to be at work)
-        h, ready = self.holder(2.0, heartbeat=60.0)
+        h, ready = self.holder(None, heartbeat=600.0)
         try:
             with mock.patch.object(xproc, "LIVE_FRESH_S", 0.2):
                 time.sleep(0.3)
                 t0 = time.monotonic()
-                got, mine = xproc.once(self.lock, ready, 0.3, "demand", live_s=10.0)
+                got, mine = xproc.once(self.lock, ready, 0.3, "demand", live_s=60.0)
             self.assertEqual((got, mine), (None, False))
-            self.assertLess(time.monotonic() - t0, 1.5)
+            self.assertLess(time.monotonic() - t0, 30.0, "wait_s, not live_s")
+            self.assertIsNone(ready(), "the holder still at work when the wait ended")
         finally:
+            h.go()
             h.wait()
 
     def test_release_leaves_another_live_holders_lock(self):
@@ -1312,7 +1362,7 @@ class LockTest(unittest.TestCase):
         import subprocess
         p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         try:
-            self.assertTrue(xproc.take(self.lock))
+            self.assertTrue(self.take(self.lock))
             with open(self.lock, "w") as f:         # (taken over: another process's, another token)
                 f.write(f"{xproc.KIND_RANK['demand']} 0 {p.pid} theirs")
             xproc.release(self.lock)
@@ -1367,10 +1417,10 @@ class LockTest(unittest.TestCase):
         with mock.patch.object(xproc, "alive", slow_alive):
             b = threading.Thread(target=lambda: got.setdefault("B", xproc.break_dead(self.lock, "t0")), name="B")
             b.start()
-            self.assertTrue(inside.wait(5))
+            self.assertTrue(inside.wait(60))
             got["A"] = xproc.break_dead(self.lock, "t0")        # (waits for B's step)
-            got["planner"] = xproc.take(self.lock)
-            b.join(5)
+            got["planner"] = self.take(self.lock)
+            b.join(60)
         self.assertEqual(got, {"B": True, "A": False, "planner": True})
         with xproc._HELD_LOCK:
             mine = xproc._HELD.get(self.lock)
@@ -1382,7 +1432,7 @@ class LockTest(unittest.TestCase):
         # Windows: a release whose remove fails while a waiter has the lock open retries; meanwhile a process taking
         # the lock over as stale waits for the guard, so the retry never removes that process's new lock
         import threading
-        self.assertTrue(xproc.take(self.lock))
+        self.assertTrue(self.take(self.lock))
         real, calls, racer = os.remove, [], {}
 
         def busy(path):
@@ -1399,7 +1449,7 @@ class LockTest(unittest.TestCase):
             real(path)
         with mock.patch.object(xproc.os, "remove", busy):
             xproc.release(self.lock)
-            racer["t"].join(5)
+            racer["t"].join(60)
         self.assertEqual(racer["took"], True)
         self.assertEqual(len(calls), 3)
         with xproc._HELD_LOCK:
@@ -1409,11 +1459,14 @@ class LockTest(unittest.TestCase):
         xproc.release(self.lock)
 
     def test_a_long_live_wait_is_logged(self):
-        h, ready = self.holder(1.0)
+        h, ready = self.holder(None)
         try:
             with mock.patch.object(xproc, "LIVE_WARN_S", 0.4), self.assertLogs("earthd.xproc", "WARNING") as cm:
-                got, mine = xproc.once(self.lock, ready, 0.2, "demand", live_s=10.0, live_note="cell 14/1/2's plans")
+                # (the holder finishes once the warning is logged: never before it, however slow the machine)
+                got, mine = xproc.once(self.lock, self.finish_after(h, ready, 0.0, lambda: bool(cm.records)), 0.2,
+                                       "demand", live_s=60.0, live_note="cell 14/1/2's plans")
         finally:
+            h.go()
             h.wait()
         self.assertEqual((got, mine), ("done", False))
         self.assertIn("cell 14/1/2's plans", cm.output[0])
@@ -1428,7 +1481,10 @@ class LockTest(unittest.TestCase):
         def __enter__(self):
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
-            assert xproc._try_lock(self.fd), "the guard free at the start"
+            end = time.monotonic() + 60.0       # (another test's put-off retry or process may have it for a moment)
+            while not xproc._try_lock(self.fd):
+                assert time.monotonic() < end, "the guard free at the start"
+                time.sleep(0.02)
             return self
 
         def __exit__(self, *exc):
@@ -1451,20 +1507,20 @@ class LockTest(unittest.TestCase):
             t0 = time.monotonic()
             self.assertFalse(xproc.take(self.lock), "stale, but its guard busy: not taken")
             self.assertFalse(xproc.break_dead(self.lock, "t0"), "dead, but its guard busy: not broken")
-            self.assertLess(time.monotonic() - t0, 1.5)
+            self.assertLess(time.monotonic() - t0, 4.0, "bounded (GUARD_WAIT_S 0.2 each; unpatched 5 s each)")
             self.assertEqual(self.snapshot(), before, "nothing changed")
-        self.assertTrue(xproc.take(self.lock), "the guard free: the stale lock taken over")
+        self.assertTrue(self.take(self.lock), "the guard free: the stale lock taken over")
         xproc.release(self.lock)
 
     def test_a_release_with_its_guard_busy_is_put_off(self):
         # release cannot have the guard: the lock stays, no longer kept fresh (it goes stale, and is a dead holder's
         # once this process is gone), and is removed when the guard comes free
-        self.assertTrue(xproc.take(self.lock))
+        self.assertTrue(self.take(self.lock))
         token = xproc._token(self.lock)
         with mock.patch.object(xproc, "GUARD_WAIT_S", 0.2), self._GuardHeld(self.lock):
             t0 = time.monotonic()
             xproc.release(self.lock)
-            self.assertLess(time.monotonic() - t0, 1.5)
+            self.assertLess(time.monotonic() - t0, 4.0, "bounded (GUARD_WAIT_S 0.2; unpatched 5 s)")
             self.assertEqual(xproc._token(self.lock), token, "left as it was")
             old = time.time() - 30
             os.utime(self.lock, (old, old))
@@ -1472,7 +1528,7 @@ class LockTest(unittest.TestCase):
             self.assertLess(os.stat(self.lock).st_mtime, time.time() - 20, "not kept fresh")
             xproc._retry_pending()
             self.assertTrue(os.path.exists(self.lock), "the guard still busy: still there")
-        end = time.monotonic() + 5.0
+        end = time.monotonic() + 60.0
         while os.path.exists(self.lock) and time.monotonic() < end:
             xproc._retry_pending()
             time.sleep(0.05)
@@ -1498,7 +1554,7 @@ class LockTest(unittest.TestCase):
             t0 = time.monotonic()
             self.assertFalse(xproc.take(self.lock))
             self.assertFalse(xproc.break_dead(self.lock, "t0"))
-            self.assertLess(time.monotonic() - t0, 1.5)
+            self.assertLess(time.monotonic() - t0, 4.0, "bounded (GUARD_WAIT_S 0.2 each; unpatched 5 s each)")
         self.assertGreater(fake.calls, 2, "polled, not blocked")
         self.assertEqual(self.snapshot(), before, "nothing changed")
 
@@ -1510,16 +1566,16 @@ class LockTest(unittest.TestCase):
         with mock.patch.object(xproc, "GUARD_WAIT_S", 0.2), self._GuardHeld(self.lock):
             t0 = time.monotonic()
             self.assertEqual(xproc.once(self.lock, lambda: None, 0.5, "demand"), (None, False))
-            self.assertLess(time.monotonic() - t0, 2.0)
+            self.assertLess(time.monotonic() - t0, 4.0, "ends at its own deadline (unpatched guard wait: 5 s)")
             t0 = time.monotonic()
             self.assertEqual(roadz._await_part(self.lock, os.path.join(self.dir, "part"), 0.5), (None, False))
-            self.assertLess(time.monotonic() - t0, 2.0)
+            self.assertLess(time.monotonic() - t0, 4.0, "ends at its own deadline (unpatched guard wait: 5 s)")
             xproc.set_cancel(lambda: True)
             try:
                 t0 = time.monotonic()
                 with self.assertRaises(pools.Abandoned):
                     xproc.once(self.lock, lambda: None, 30.0, "demand")
-                self.assertLess(time.monotonic() - t0, 2.0)
+                self.assertLess(time.monotonic() - t0, 4.0, "ends at its own deadline (unpatched guard wait: 5 s)")
             finally:
                 xproc.set_cancel(None)
         self.assertFalse(os.path.exists(self.lock), "no lock made without its guard")
@@ -1541,16 +1597,16 @@ class LockTest(unittest.TestCase):
             with mock.patch.object(xproc, "GUARD_WAIT_S", 0.2), self._GuardHeld(self.lock):
                 t0 = time.monotonic()
                 self.assertEqual(xproc.once(self.lock, lambda: None, 0.5, "demand"), (None, False))
-                self.assertLess(time.monotonic() - t0, 2.5)
+                self.assertLess(time.monotonic() - t0, 4.0, "ends at its own deadline (unpatched guard wait: 5 s)")
                 t0 = time.monotonic()
                 self.assertEqual(roadz._await_part(self.lock, os.path.join(self.dir, "part"), 0.5), (None, False))
-                self.assertLess(time.monotonic() - t0, 2.5)
+                self.assertLess(time.monotonic() - t0, 4.0, "ends at its own deadline (unpatched guard wait: 5 s)")
                 xproc.set_cancel(lambda: True)
                 try:
                     t0 = time.monotonic()
                     with self.assertRaises(pools.Abandoned):
                         xproc.once(self.lock, lambda: None, 30.0, "demand")
-                    self.assertLess(time.monotonic() - t0, 2.5)
+                    self.assertLess(time.monotonic() - t0, 4.0, "ends at its own deadline (unpatched guard wait: 5 s)")
                 finally:
                     xproc.set_cancel(None)
             self.assertEqual(self.snapshot(), before, "nothing changed without its guard")
@@ -1564,38 +1620,43 @@ class LockTest(unittest.TestCase):
         held = {}
         try:
             for lk in locks:
-                self.assertTrue(xproc.take(lk))
+                self.assertTrue(self.take(lk))
             for lk in locks:
                 path = xproc._guard_path(lk)
                 if path not in held:
                     os.makedirs(os.path.dirname(path), exist_ok=True)
                     fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
-                    if not xproc._try_lock(fd):
-                        os.close(fd)
-                        self.fail("a guard busy at the start")
+                    end = time.monotonic() + 60.0   # (another test's put-off retry or process may have it a moment)
+                    while not xproc._try_lock(fd):
+                        if time.monotonic() > end:
+                            os.close(fd)
+                            self.fail("a guard busy at the start")
+                        time.sleep(0.02)
                     held[path] = fd
             with mock.patch.object(xproc, "GUARD_WAIT_S", 0.01):
                 for lk in locks:
                     xproc.release(lk)
             with xproc._HELD_LOCK:
                 self.assertTrue(all(lk in xproc._PENDING for lk in locks), "all put off")
-            if xproc._guard_path(active) in held:
-                active = os.path.join(self.dir, "active2.lock")      # (its own guard free: not needed by a touch)
-            self.assertTrue(xproc.take(active))
+            n = 0
+            while xproc._guard_path(active) in held:        # (one whose own guard is free: not needed by a touch)
+                n += 1
+                active = os.path.join(self.dir, f"active{n}.lock")
+            self.assertTrue(self.take(active))
             for _ in range(3):
                 old = time.time() - 30
                 os.utime(active, (old, old))
                 xproc._NEXT_TOUCH[0] = 0.0          # (a touch due)
                 t0 = time.monotonic()
                 xproc._beat()
-                self.assertLess(time.monotonic() - t0, xproc.PENDING_BATCH_S + 0.5, "a beat bounded")
-                self.assertGreater(os.stat(active).st_mtime, time.time() - 5, "the held lock touched")
+                self.assertLess(time.monotonic() - t0, xproc.PENDING_BATCH_S + 4.0, "a beat bounded")
+                self.assertGreater(os.stat(active).st_mtime, time.time() - 20, "the held lock touched")
             with xproc._HELD_LOCK:
                 self.assertTrue(all(lk in xproc._PENDING for lk in locks), "still put off: guards busy")
         finally:
             for fd in held.values():
                 os.close(fd)
-        end = time.monotonic() + 5.0
+        end = time.monotonic() + 60.0
         while any(os.path.exists(lk) for lk in locks) and time.monotonic() < end:
             xproc._beat()
             time.sleep(0.05)

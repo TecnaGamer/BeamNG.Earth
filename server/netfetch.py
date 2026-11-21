@@ -53,7 +53,6 @@ import ssl
 import threading
 import weakref
 import time
-from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 import base64
@@ -595,6 +594,10 @@ class BadResponse(FetchFailed):
     """A 200 that is not the data (an HTML error page from a tile host)."""
 
 
+class TooLarge(BadResponse):
+    """A body past the caller's max_bytes (Fetcher.get), on the wire or decoded: not read further, not asked again."""
+
+
 @dataclass
 class Response:
     status: int
@@ -643,79 +646,50 @@ class TokenBucket:
     """rate tokens/s up to burst, refilled on read. take() waits (demand), try_take() does not."""
 
     def __init__(self, rate, burst, clock=time.monotonic, sleep=time.sleep):
-        self.rate, self.burst = float(rate), float(burst)
+        import fast
+        fast.require(566, "netfetch admission")
         self.clock, self.sleep = clock, sleep
-        self.tokens = float(burst)
-        self.t = clock()
-        self.paused_until = None
+        self._bucket = fast._ef.NetBucket(rate, burst, clock())
         self.lock = threading.Lock()
 
-    def _refill(self, now):
-        if self.paused_until is not None:
-            if now < self.paused_until:
-                return
-            self.t, self.paused_until = max(self.t, self.paused_until), None
-        if now > self.t:
-            self.tokens = min(self.burst, self.tokens + (now - self.t) * self.rate)
-            self.t = now
+    @property
+    def rate(self):
+        return self._bucket.rate
 
     def level(self):
         with self.lock:
-            self._refill(self.clock())
-            return self.tokens
-
-    def _wait(self, now, floor=0.0):
-        """Seconds until one token (and floor more) is available (lock held)."""
-        self._refill(now)
-        need = 1.0 + floor
-        if self.paused_until is not None:
-            return self.paused_until - now + max(0.0, need - self.tokens) / self.rate
-        return 0.0 if self.tokens >= need - TOKEN_EPS else (need - self.tokens) / self.rate
+            return self._bucket.level(self.clock())
 
     def take(self, timeout=None, floor=0.0):
         """Take one token, sleeping until there is one; False (nothing taken) if that would take
         longer than timeout seconds, or the bucket is paused (a Retry-After, also while waiting: the
         host's breaker is open for as long, so the caller fails over instead of sleeping it out). floor: tokens that
         must stay in the bucket (demand leaves URGENT_TOKENS to urgent requests)."""
-        floor = min(float(floor), max(0.0, self.burst - 1.0))
         deadline = None if timeout is None else self.clock() + timeout
         while True:
             with self.lock:
-                now = self.clock()
-                wait = self._wait(now, floor)
-                if self.paused_until is not None:
-                    return False
-                if wait <= 0.0:
-                    self.tokens -= 1.0
-                    return True
-            if deadline is not None and now + wait > deadline:
-                return False
+                wait = self._bucket.take(self.clock(), deadline, floor)
+            if wait is None or wait == 0.0:
+                return wait is not None
             self.sleep(wait)
 
     def wait_time(self):
         with self.lock:
-            return self._wait(self.clock())
+            return self._bucket.wait_time(self.clock(), 0.0)
 
     def try_take(self, reserve=0.0):
         """Take one token now if the bucket holds more than reserve x burst (and at least one)."""
         with self.lock:
-            self._refill(self.clock())
-            if self.paused_until is None and self.tokens >= 1.0 - TOKEN_EPS and self.tokens > reserve * self.burst:
-                self.tokens -= 1.0
-                return True
-            return False
+            return self._bucket.try_take(self.clock(), reserve)
 
     def pause(self, until):
         """No tokens until `until` (clock time); the bucket is emptied."""
         with self.lock:
-            self._refill(self.clock())
-            self.tokens = 0.0
-            self.paused_until = max(until, self.paused_until or until)
+            self._bucket.pause(self.clock(), until)
 
     def set_rate(self, rate):
         with self.lock:
-            self._refill(self.clock())
-            self.rate = float(rate)
+            self._bucket.set_rate(self.clock(), rate)
 
 
 # --- circuit breaker ---------------------------------------------------------------------------
@@ -725,95 +699,65 @@ class CircuitBreaker:
     re-opens it for twice as long (up to max_open)."""
 
     def __init__(self, threshold=5, window=30.0, open_s=30.0, max_open=900.0, clock=time.monotonic):
-        self.threshold, self.window = threshold, window
-        self.base_open, self.max_open = open_s, max_open
-        self.open_s = open_s
+        import fast
+        fast.require(566, "netfetch circuit breaker")
+        self._breaker = fast._ef.NetBreaker(threshold, window, open_s, max_open)
         self.clock = clock
-        self.state = "closed"
-        self.failures = deque()
-        self.open_until = 0.0
-        self.probing = False
-        self.trips = 0
         self.lock = threading.Lock()
+
+    @property
+    def open_s(self):
+        return self._breaker.open_s
+
+    @property
+    def open_until(self):
+        return self._breaker.open_until
+
+    @property
+    def state(self):
+        return self._breaker.state
+
+    @property
+    def trips(self):
+        return self._breaker.trips
+
+    def is_open(self):
+        """Not closed: open, or half-open and not yet proven."""
+        with self.lock:
+            return self._breaker.is_open()
+
+    def release_probe(self):
+        """The probe ended without a verdict (dropped before the network): the next request probes."""
+        with self.lock:
+            self._breaker.release_probe()
+
+    def success(self):
+        """True if this closed the breaker. A success while open is a request that started before it
+        opened (a late answer after a Retry-After): only the probe may close it."""
+        with self.lock:
+            return self._breaker.success()
 
     def allow(self):
         """(allowed, is_probe, seconds until it may be asked again)."""
         with self.lock:
-            now = self.clock()
-            if self.state == "closed":
-                return True, False, 0.0
-            if self.state == "open":
-                if now < self.open_until:
-                    return False, False, self.open_until - now
-                self.state = "half-open"
-            if self.probing:
-                return False, False, 1.0
-            self.probing = True
-            return True, True, 0.0
+            return self._breaker.allow(self.clock())
 
     def may_try(self):
         """Would a request be let through now (allow()): closed, or its open time over with no probe out. An open
         breaker closes only through a request's probe, so a caller waiting for is_open() to clear would wait for
         ever when nothing else asks the host."""
         with self.lock:
-            if self.state == "closed":
-                return True
-            if self.state == "open" and self.clock() < self.open_until:
-                return False
-            return not self.probing
-
-    def is_open(self):
-        """Not closed: open, or half-open and not yet proven."""
-        with self.lock:
-            return self.state != "closed"
-
-    def release_probe(self):
-        """The probe ended without a verdict (dropped before the network): the next request probes."""
-        with self.lock:
-            self.probing = False
-
-    def success(self):
-        """True if this closed the breaker. A success while open is a request that started before it
-        opened (a late answer after a Retry-After): only the probe may close it."""
-        with self.lock:
-            if self.state == "open":
-                return False
-            self.failures.clear()
-            self.probing = False
-            if self.state == "closed":
-                return False
-            self.state, self.open_s = "closed", self.base_open
-            return True
+            return self._breaker.may_try(self.clock())
 
     def failure(self):
         """True if this opened the breaker."""
         with self.lock:
-            now = self.clock()
-            if self.state == "half-open":
-                self.open_s = min(self.max_open, self.open_s * 2)
-                self._open(now, self.open_s)
-                return True
-            if self.state == "open":
-                return False            # a request that started before it opened
-            self.failures.append(now)
-            while self.failures and now - self.failures[0] > self.window:
-                self.failures.popleft()
-            if len(self.failures) >= self.threshold:
-                self._open(now, self.open_s)
-                return True
-            return False
+            return self._breaker.failure(self.clock())
 
     def trip(self, seconds):
         """Open now for `seconds` (a Retry-After)."""
         with self.lock:
-            self._open(self.clock(), seconds)
-
-    def _open(self, now, seconds):
-        was_open = self.state == "open"
-        self.open_until = max(now + seconds, self.open_until) if was_open else now + seconds
-        self.state, self.probing = "open", False
-        self.failures.clear()
-        self.trips += 1
+            self._breaker.trip(self.clock(), seconds)
 
 
 # --- transport ---------------------------------------------------------------------------------
@@ -1058,8 +1002,15 @@ class HttpsTransport:
                                 headers.get("Range"))
                     conn.close()
                     return r.status, rh, b""
-                body = r.read()
+                cap = getattr(_body_cap, "n", None)
+                body = r.read() if cap is None else r.read(cap + 1)     # (Fetcher.get's max_bytes: one byte past)
+                if cap is not None and len(body) <= cap and r.length:
+                    # (a bounded read ends short at EOF without IncompleteRead: the declared length not met)
+                    raise http.client.IncompleteRead(body, r.length)
                 out = r.status, rh, body
+                if cap is not None and not r.isclosed():    # (the rest not read: the connection is not given back)
+                    conn.close()
+                    return out
             except (http.client.HTTPException, OSError):
                 conn.close()
                 if not reused:          # a fresh connection failed: that is the attempt's result (the
@@ -1075,27 +1026,32 @@ class HttpsTransport:
 
 GZIP_MAX_BYTES = 256 * 1024 * 1024    # a gzip answer decoded to more than this is a failed attempt (a gzip bomb)
 _ENCODED = ("content-encoding", "content-length")     # (describe the bytes on the wire, not the decoded body)
+_body_cap = threading.local()   # n: the bytes past which the transport stops reading a body (Fetcher.get max_bytes)
 
 
-def _gunzip(rh, body):
+class _GzipTooLarge(OSError):
+    """_gunzip: the body decodes past its limit."""
+
+
+def _gunzip(rh, body, limit=GZIP_MAX_BYTES):
     """(headers, body) decoded when the answer says Content-Encoding: gzip (a request of ours that asked for it), else
-    as they came. Every member of a multi-member stream (RFC 1952) is decoded. A broken or truncated stream, or one that
-    decodes past GZIP_MAX_BYTES in all, raises OSError (a failed attempt, retried as one)."""
+    as they came. Every member of a multi-member stream (RFC 1952) is decoded. A broken or truncated stream raises
+    OSError (a failed attempt, retried as one); one that decodes past limit bytes in all _GzipTooLarge (an OSError)."""
     rh = rh or {}
     if not body or rh.get("content-encoding", "").strip().lower() != "gzip":
         return rh, body
     out, rest = [], body
-    room = GZIP_MAX_BYTES
+    room = limit
     while rest:
         if room <= 0:       # (max_length 0 would mean no limit)
-            raise OSError(f"gzip body decodes past {GZIP_MAX_BYTES >> 20} MB")
+            raise _GzipTooLarge(f"gzip body decodes past {limit} bytes")
         d = zlib.decompressobj(16 + zlib.MAX_WBITS)
         try:
             part = d.decompress(rest, room)
         except zlib.error as e:
             raise OSError(f"bad gzip body: {e}") from None
         if d.unconsumed_tail:
-            raise OSError(f"gzip body decodes past {GZIP_MAX_BYTES >> 20} MB")
+            raise _GzipTooLarge(f"gzip body decodes past {limit} bytes")
         if not d.eof:
             raise OSError("bad gzip body: truncated")
         out.append(part)
@@ -1173,9 +1129,9 @@ class Host:
         self.day = dict.fromkeys(COUNTERS, 0)       # this UTC day (persisted)
         self.total = dict.fromkeys(COUNTERS, 0)     # this process's lifetime (telemetry.py sums every process's)
         self.minute = dict.fromkeys(COUNTERS, 0)    # since the last summary
-        self.warned = 0.0                           # wall time of the 80 % budget warning (0 = none)
-        self.warned_over = 0.0                      # ... and of the last over-budget one
-        self.half_rate = False
+        import fast
+        self.budget = fast._ef.NetBudget(policy.daily_budget, policy.daily_hard,
+                                        PREDOWNLOAD_SHARE, BUDGET_WARN, BUDGET_REPEAT_S)
 
 
 # --- every process's totals, for telemetry.py -------------------------------------------------------------------------
@@ -1284,44 +1240,6 @@ SHARED_ENV = "BNGE_NET_SHARED"
 SHARED_DIR = os.environ.get(SHARED_ENV) or None
 SHARED_POLL_S = 0.02                # s between tries for a request slot another process holds
 GATE_LOG = os.environ.get("BNGE_GATE_LOG") or None      # (measuring: a line per gate admission that waited)
-_SHARED_FMT = "<3d"                 # the gate file: tokens, their time (monotonic), blocked until (monotonic)
-_SHARED_SIZE = 24
-IS_WIN = os.name == "nt"
-
-
-def _flock(fd, blocking=True):
-    """An exclusive lock on fd's file (byte 0 on Windows); True when held. Released by the system when the process
-    ends, so a dead process never holds a gate."""
-    if IS_WIN:
-        import msvcrt
-        while True:
-            try:
-                os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                return True
-            except OSError:
-                if not blocking:
-                    return False
-                time.sleep(SHARED_POLL_S)
-    import fcntl
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-        return True
-    except BlockingIOError:
-        return False
-
-
-def _funlock(fd):
-    try:
-        if IS_WIN:
-            import msvcrt
-            os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    except OSError:
-        pass
 
 
 class SharedGate:
@@ -1340,52 +1258,25 @@ class SharedGate:
         os.makedirs(d, exist_ok=True)
         self.path = os.path.join(d, safe + ".gate")
         self.slots = [os.path.join(d, f"{safe}.{i}.slot") for i in range(self.max_conc)]
+        import fast
+        fast.require(566, "netfetch shared gate")
+        self._gate = fast._ef.NetGate(self.path, self.slots, self.rate, self.burst)
 
-    def _state(self, fn):
-        """fn(tokens, t, blocked, now) -> (tokens, t, blocked, result) under the gate's lock; result."""
-        import struct
-        fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
-        try:
-            _flock(fd)
-            try:
-                os.lseek(fd, 0, os.SEEK_SET)
-                raw = os.read(fd, _SHARED_SIZE)
-                now = self.clock()
-                if len(raw) == _SHARED_SIZE:
-                    tokens, t, blocked = struct.unpack(_SHARED_FMT, raw)
-                    if t > now + 1.0:           # (written before a restart of the clock: the machine's reboot)
-                        tokens, t, blocked = self.burst, now, 0.0
-                else:
-                    tokens, t, blocked = self.burst, now, 0.0
-                tokens = min(self.burst, tokens + max(0.0, now - t) * self.rate)
-                tokens, t, blocked, res = fn(tokens, max(t, now), blocked, now)
-                os.lseek(fd, 0, os.SEEK_SET)
-                os.write(fd, struct.pack(_SHARED_FMT, tokens, t, blocked))
-                return res
-            finally:
-                _funlock(fd)
-        finally:
-            os.close(fd)
+    def _state(self, max_wait):
+        return self._gate.take(self.clock, max_wait)
 
     def blocked(self):
-        """Seconds the host is blocked for (another process's Retry-After or open breaker), 0 when not."""
-        return self._state(lambda tk, t, b, now: (tk, t, b, max(0.0, b - now)))
+        return self._gate.blocked(self.clock)
 
     def block(self, seconds):
-        """The host blocked for every process for seconds (at least: a longer block stands)."""
-        self._state(lambda tk, t, b, now: (tk, t, max(b, now + float(seconds)), None))
+        self._gate.block(self.clock, seconds)
 
     def _slot(self, wait_s):
-        """A request slot (its open fd, locked), or None when none came free within wait_s."""
         deadline = self.clock() + max(0.0, wait_s)
         while True:
-            for p in self.slots:
-                fd = os.open(p, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
-                if _flock(fd, blocking=False):
-                    return fd
-                os.close(fd)
-            if self.clock() >= deadline:
-                return None
+            slot = self._gate.slot()
+            if slot is not None or self.clock() >= deadline:
+                return slot
             self.sleep(SHARED_POLL_S)
 
     def acquire(self, kind, max_wait, url=None, host=None):
@@ -1404,17 +1295,8 @@ class SharedGate:
                 raise RateLimited(f"{host}: no free request slot within {max_wait:.0f} s (shared)", url, host)
             raise Deferred(f"{host}: busy (shared), {kind} dropped", url, host)
 
-        def take(tk, t, blocked, now):
-            if blocked > now:
-                return tk, t, blocked, ("blocked", blocked - now)
-            if tk >= 1.0 - TOKEN_EPS:
-                return tk - 1.0, t, blocked, ("go", 0.0)
-            need = (1.0 - tk) / self.rate
-            if not wait or need > max_wait:
-                return tk, t, blocked, ("full", need)
-            return tk - 1.0, t, blocked, ("go", need)    # (reserved: the debt is paid by the refill while it sleeps)
         try:
-            what, s = self._state(take)
+            what, s = self._state(max_wait if wait else None)
             if what == "blocked":
                 raise HostUnavailable(f"{host}: unavailable for {s:.0f} s (another process's answer)", url, host,
                                       retry_after=s)
@@ -1438,13 +1320,8 @@ class SharedGate:
 
     @staticmethod
     def release(fd):
-        if fd is None:
-            return
-        _funlock(fd)
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        if fd is not None:
+            fd.release()
 
 
 _GATES = {}
@@ -1586,36 +1463,23 @@ class Fetcher:
             return h.day["requests"] / h.policy.daily_budget
 
     def _check_budget(self, h, url, kind):
-        p = h.policy
+        now = self.wall() if h.policy.daily_budget is not None else 0.0
         with self._lock:
             used = h.day["requests"]
-        if p.daily_hard is not None and used >= p.daily_hard:
-            self._bump(h, "budget")
-            raise BudgetExceeded(f"{h.name}: daily limit of {p.daily_hard} requests reached", url, h.name)
-        if kind == "predownload" and p.daily_hard is not None and used >= PREDOWNLOAD_SHARE * p.daily_hard:
-            raise BudgetExceeded(f"{h.name}: past {round(100 * PREDOWNLOAD_SHARE)} % of the daily limit (downloads "
-                                 "ahead)", url, h.name)
-        if p.daily_budget is None:
-            return
-        now = self.wall()
-        if used >= p.daily_budget:
-            if not h.half_rate:
-                h.half_rate = True
-                h.bucket.set_rate(p.rate / 2)
-            if not h.warned_over or now - h.warned_over >= BUDGET_REPEAT_S:
-                h.warned = h.warned_over = now
-                log.warning("net: %s: %d requests today, over the daily budget of %d: half rate, demand only",
-                            h.name, used, p.daily_budget)
-        elif used >= BUDGET_WARN * p.daily_budget and not h.warned:
-            h.warned = now
+            halve, warning, refusal = h.budget.check(used, kind, now)
+            if halve:
+                h.bucket.set_rate(h.policy.rate / 2)
+        if warning == "over":
+            log.warning("net: %s: %d requests today, over the daily budget of %d: half rate, demand only",
+                        h.name, used, h.policy.daily_budget)
+        elif warning == "near":
             log.warning("net: %s: %d requests today, %d %% of the daily budget of %d: no more prefetch",
-                        h.name, used, round(100 * BUDGET_WARN), p.daily_budget)
-        if kind == "predownload" and used >= PREDOWNLOAD_SHARE * p.daily_budget:
-            raise BudgetExceeded(f"{h.name}: past {round(100 * PREDOWNLOAD_SHARE)} % of the daily budget (downloads "
-                                 "ahead)", url, h.name)
-        if kind not in ("demand", "urgent") and used >= BUDGET_WARN * p.daily_budget:
-            self._bump(h, "budget")
-            raise BudgetExceeded(f"{h.name}: past {round(100 * BUDGET_WARN)} % of the daily budget", url, h.name)
+                        h.name, used, round(100 * BUDGET_WARN), h.policy.daily_budget)
+        if refusal is not None:
+            message, count = refusal
+            if count:
+                self._bump(h, "budget")
+            raise BudgetExceeded(f"{h.name}: {message}", url, h.name)
 
     def allow(self, host, kind="prefetch"):
         """Would a request of this kind be admitted now (without taking anything)?"""
@@ -1710,20 +1574,22 @@ class Fetcher:
         with self._rng_lock:
             return self.rng.uniform(0.0, min(p.max_delay, p.base_delay * 2 ** attempt))
 
-    def get(self, url, *, kind="demand", headers=None, lane=None):
+    def get(self, url, *, kind="demand", headers=None, lane=None, max_bytes=None):
         """GET url under its host's policy: a Response with status 2xx, or one of the errors above. lane: a name of
         its own (its own rate bucket, breaker and day's count under the host's policy): one kind of request whose
-        failures must not shut another out (the status bar's town lookups and the map's search, GitHub #350)."""
+        failures must not shut another out (the status bar's town lookups and the map's search, GitHub #350).
+        max_bytes: a body longer than this, on the wire or decoded, raises TooLarge (no more than one byte past it is
+        read; a small document from a host we do not control: the switch file)."""
         if kind != "predownload":
-            return self._get(url, kind, headers, lane)
+            return self._get(url, kind, headers, lane, max_bytes)
         prev = getattr(_quiet, "on", False)
         _quiet.on = True        # (its failures mark no build incomplete: revisit.fault)
         try:
-            return self._get(url, kind, headers, lane)
+            return self._get(url, kind, headers, lane, max_bytes)
         finally:
             _quiet.on = prev
 
-    def _get(self, url, kind, headers, lane):
+    def _get(self, url, kind, headers, lane, max_bytes=None):
         h, probe = self._admit(url, kind, lane)
         p = h.policy
         attempts = 1 if probe else max(1, p.max_attempts)
@@ -1756,12 +1622,29 @@ class Fetcher:
                     netstate.begin(h.name)  # (the loading line's "downloading" part, across the server's processes)
                     body = wire = None        # (wire: as it came, before _gunzip; what the counters count)
                     try:
-                        status, rh, body = ioprofiler.request(
-                            self.transport, url, hd,
-                            p.timeout if p.connect_timeout is None else (p.connect_timeout, p.timeout))
+                        _body_cap.n = max_bytes
+                        try:
+                            status, rh, body = ioprofiler.request(
+                                self.transport, url, hd,
+                                p.timeout if p.connect_timeout is None else (p.connect_timeout, p.timeout))
+                        finally:
+                            _body_cap.n = None
                         wire = body
+                        if max_bytes is not None and len(wire or b"") > max_bytes:
+                            raise TooLarge(f"{url}: body past {max_bytes} bytes", url, h.name, status=status)
                         if gz:
-                            rh, body = _gunzip(rh, body)
+                            rh, body = _gunzip(rh, body, GZIP_MAX_BYTES if max_bytes is None else max_bytes)
+                    except TooLarge:
+                        self._count(h, "errors")
+                        raise
+                    except _GzipTooLarge as e:
+                        self._count(h, "errors")
+                        if max_bytes is None:       # (a gzip bomb: a failed attempt, as before)
+                            self._failed(h, gate)
+                            probe = False
+                            err = FetchFailed(f"{url}: {type(e).__name__}: {e}", url, h.name)
+                            continue
+                        raise TooLarge(f"{url}: {e}", url, h.name, status=status) from None
                     except (http.client.HTTPException, OSError) as e:
                         self._count(h, "errors")
                         self._failed(h, gate)
@@ -1955,9 +1838,7 @@ class Fetcher:
             self._date, self._loaded = d, {}
             for h in self._hosts.values():
                 h.day = dict.fromkeys(COUNTERS, 0)
-                h.warned = h.warned_over = 0.0
-                if h.half_rate:
-                    h.half_rate = False
+                if h.budget.reset():
                     h.bucket.set_rate(h.policy.rate)
 
     def _stats_path(self, date):

@@ -367,8 +367,9 @@ class Reader(pmtiles.Reader):
     """The layers of ARCHIVES per cell from the BNWT archives under base (BASE_URL), as their sources give them;
     Unavailable when an archive cannot answer."""
 
-    def __init__(self, raw_dir, fetcher, release=overture.RELEASE, base=None):
+    def __init__(self, raw_dir, fetcher, release=None, base=None):
         fast.require(NATIVE, "bnwt")
+        release = release or overture.effective()
         self.base = BASE_URL if base is None else base.rstrip("/")
         self.root = os.path.join(raw_dir, "bnwt")
         self.fetcher, self.release = fetcher, release
@@ -681,7 +682,7 @@ def main(argv=None):
     for p in (r, i):
         p.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
         p.add_argument("--url", default=BASE_URL, help="base URL (default: BNGE_BNWT_URL)")
-        p.add_argument("--release", default=overture.RELEASE)
+        p.add_argument("--release", default=None, help="default: overture.effective()")
     a = ap.parse_args(argv)
     if not a.url:
         ap.error("no base URL (--url or BNGE_BNWT_URL)")

@@ -7,17 +7,18 @@ nearby road's name alone is not evidence for a highway carriageway's count.
 import numpy as np
 import dnp
 
+import fast
+
 HIGHWAYS = {"motorway", "trunk"}
 MAX_LANES = 12
+_ef_lanes = fast.native(456, "roadlanes")
 
 
 def count(value, minimum=1):
-    """A whole lane count, not a prefix of a list, fraction or conditional tag."""
-    try:
-        n = float(value)
-        return int(n) if np.isfinite(n) and n.is_integer() and minimum <= n <= MAX_LANES else None
-    except (TypeError, ValueError):
-        return None
+    """A whole lane count, not a prefix of a list, fraction or conditional tag: float(value) (None where it raises
+    TypeError / ValueError) finite, whole and minimum..MAX_LANES, as an int; else None (earthfast
+    lanesjoin::lane_count; minimum an int)."""
+    return _ef_lanes.lane_count(value, minimum)
 
 
 def rule(feats, name, i):
@@ -77,32 +78,26 @@ def invalidate(feats):
         feats.__dict__.pop(key, None)
 
 
-def _project(line, points):
-    delta = np.diff(line, axis=0)
-    length = np.maximum(dnp.norm(delta, axis=1), 1e-9)
-    t = np.clip(((points[:, None] - line[None, :-1]) * delta).sum(2) / (length * length), 0., 1.)
-    q = line[None, :-1] + t[:, :, None] * delta
-    dist = dnp.norm(points[:, None] - q, axis=2)
-    k = dist.argmin(1)
-    return dist[np.arange(len(points)), k], delta[k] / length[k, None]
+def _direction(feats, i):
+    """The one-way sign of road i (0: two-way), as join's geometry match reads it."""
+    d = rule(feats, "oneway", i)
+    return 0 if d is None else int(np.sign(d))
 
 
 def join(feats, tags, ids, geometry=None):
     """Keep highway evidence separate from osmtags' legacy named-street fallback. geometry() -> {way id: (k, 2)
     lon/lat} of the tagged highways (osmtags.OsmTags.highway_geometry), asked only when a motorway / trunk's own way
     id is not among the tags (replaced since the Overture release): its count from a way along the same line.
-    geometry(need): need, the lon/lat boxes (lon0, lat0, lon1, lat1) of those highways."""
+    geometry(need): need, the lon/lat boxes (lon0, lat0, lon1, lat1) of those highways. The attrs lane_count,
+    lane_source and lane_osm_way (earthfast lanesjoin: lanes_need, then lanes_join's OSM counts and geometry match).
+    Input contract (R2a): feats.attrs an exact dict of contract columns, tags osm_tags' exact dict of int way ids ->
+    exact dicts ("_coords" a float64 (k, 2) array), ids an exact list of len(feats) ints / None, finite lon / lat;
+    anything else TypeError."""
     n = len(feats)
+    hw = sorted(HIGHWAYS)
+    off = (feats.part_off, feats.ring_off, feats.coord_off, feats.lonlat)
     if geometry is not None:
-        classes_ = feats.attrs.get("class", [""] * n)
-        need = []           # (lon0, lat0, lon1, lat1) of each highway whose own way is not among the tags
-        for i in range(n):
-            if classes_[i] in HIGHWAYS and ids[i] not in tags:
-                parts = feats.parts(i)
-                if len(parts) == 1 and len(parts[0]) == 1 and len(parts[0][0]) >= 2:
-                    ll = np.asarray(parts[0][0], np.float64)
-                    need.append((float(ll[:, 0].min()), float(ll[:, 1].min()), float(ll[:, 0].max()),
-                                 float(ll[:, 1].max())))
+        need = _ef_lanes.lanes_need(feats.attrs, tags, ids, n, *off, hw)
         if need:
             try:
                 for wid, p in (geometry(need) or {}).items():
@@ -111,63 +106,8 @@ def join(feats, tags, ids, geometry=None):
             except Exception as e:      # (the counts from the ways' own ids only)
                 import logging
                 logging.getLogger("earthd.roadlanes").warning("highway geometry: %s: %s", type(e).__name__, e)
-    counts = np.array([count(v) or np.nan for v in feats.attrs.get("osm_lanes", [None] * n)])
-    sources = ["osm-way" if np.isfinite(v) else "" for v in counts]
-    matched = np.array([w or 0 for w in ids], dtype=np.int64)
-    classes = feats.attrs.get("class", [""] * n)
-    origin = feats.lonlat[0] if len(feats.lonlat) else np.zeros(2)
-    scale = np.array([111320. * dnp.cos(np.radians(origin[1])), 110574.])
-    candidates = []
-    for wid, tag in tags.items():
-        p, lanes, cls = tag.get("_coords"), count(tag.get("lanes")), (tag.get("lane_hw") or tag.get("_highway") or "")
-        if lanes is None or p is None or len(p) < 2 or cls.removesuffix("_link") not in HIGHWAYS:
-            continue
-        p = (np.asarray(p) - origin) * scale
-        p = p[np.r_[True, dnp.norm(np.diff(p, axis=0), axis=1) > .01]]
-        if len(p) < 2:
-            continue
-        ow = str(tag.get("osm_oneway", ""))
-        direction = -1 if ow == "-1" else 1 if ow in ("yes", "1", "true") else 0
-        candidates.append((wid, lanes, cls.removesuffix("_link"), cls.endswith("_link"), direction,
-                           p, p.min(0) - 6., p.max(0) + 6.))
-    for i in range(n):
-        if classes[i] not in HIGHWAYS:
-            continue
-        counts[i] = count(tags.get(ids[i], {}).get("lanes")) or np.nan
-        sources[i] = "osm-way" if np.isfinite(counts[i]) else ""
-        if sources[i] or not candidates:
-            continue
-        parts = feats.parts(i)
-        if len(parts) != 1 or len(parts[0]) != 1:
-            continue
-        line = (parts[0][0] - origin) * scale
-        if len(line) < 2:
-            continue
-        line = line[np.r_[True, dnp.norm(np.diff(line, axis=0), axis=1) > .01]]
-        if len(line) < 2:
-            continue
-        s = np.r_[0., np.cumsum(dnp.norm(np.diff(line, axis=0), axis=1))]
-        samples = np.column_stack([np.interp(np.linspace(0., s[-1], 9), s, line[:, d]) for d in (0, 1)])
-        _, tangent = _project(line, samples)
-        direction = rule(feats, "oneway", i)
-        direction = 0 if direction is None else int(np.sign(direction))
-        matches = []
-        for wid, lanes, cls, link, od, p, lo, hi in candidates:
-            if (cls != classes[i] or link != is_link(feats, i) or bool(od) != bool(direction)
-                    or np.any(samples < lo) or np.any(samples > hi)):
-                continue
-            distance, heading = _project(p, samples)
-            alignment = (tangent * heading).sum(1)
-            alignment = alignment * direction * od if direction else np.abs(alignment)
-            if distance.max() <= 6. and distance.mean() <= 3. and alignment.min() >= .9:
-                matches.append((float(distance.mean()), wid, lanes))
-        matches.sort()
-        if matches and not any(m[2] != matches[0][2] and m[0] < matches[0][0] + 1. for m in matches[1:]):
-            _, matched[i], counts[i] = matches[0]
-            sources[i] = "osm-geometry"
-    feats.attrs["lane_count"] = counts
-    feats.attrs["lane_source"] = np.array(sources, dtype="<U16")
-    feats.attrs["lane_osm_way"] = matched
+    _ef_lanes.lanes_join(feats.attrs, tags, ids, n, *off, hw, lambda i: _direction(feats, i),
+                         lambda i: is_link(feats, i))
     invalidate(feats)
 
 

@@ -9,6 +9,7 @@ A sample is sand when it is bare, or grassland with bare land within GRASS_BARE_
 OPEN_WATER_M across: a stream's bank keeps its grass) lies within SHORE_M. Pure functions of the land cover, numpy only.
 """
 import numpy as np
+import fast
 import dnp
 
 BARE, GRASS, WATER = 60, 30, 80
@@ -51,29 +52,14 @@ def sand_points(classes, sample):
     return out
 
 
-def _box_sum(m, r, edge=False):
-    """Sum of m (2D) over the (2r + 1)^2 box round each cell (cells outside count 0, or as the nearest edge cell)."""
-    a = np.pad(m.astype(np.int32), ((r + 1, r), (r + 1, r)), mode="edge" if edge else "constant")
-    c = a.cumsum(0).cumsum(1)
-    return c[2 * r + 1:, 2 * r + 1:] - c[:-2 * r - 1, 2 * r + 1:] - c[2 * r + 1:, :-2 * r - 1] + c[:-2 * r - 1, :-2 * r - 1]
+def grid_distances():
+    return OPEN_WATER_M, SHORE_M, GRASS_BARE_M
 
 
 def sand_grid(classes, square):
-    """bool grid: sand by the rule above on a land-cover grid (2D, `square` m between samples; box neighbourhoods:
-    the grid's own approximation of the point test). Water beyond the grid is not seen."""
+    """Sand where bare or grassy land meets a sufficiently wide body of water."""
     classes = np.asarray(classes)
-    if classes.ndim != 2 or min(classes.shape) < 2:
+    if classes.ndim != 2:
         return np.zeros(classes.shape, bool)
-    cand = (classes == BARE) | (classes == GRASS)
-    if not cand.any():
-        return np.zeros(classes.shape, bool)
-    water = classes == WATER
-    if not water.any():
-        return np.zeros(classes.shape, bool)
-    r_open = max(1, int(round(OPEN_WATER_M / 2 / square)))
-    n_open = dnp.sq(2 * r_open + 1)
-    core = _box_sum(water, r_open, edge=True) >= n_open     # water OPEN_WATER_M across round it (the sea
-    # running on past the grid's edge)
-    shore = _box_sum(core, max(1, int(round((SHORE_M + OPEN_WATER_M / 2) / square)))) > 0
-    near_bare = _box_sum(classes == BARE, max(1, int(round(GRASS_BARE_M / square)))) > 0
-    return shore & ((classes == BARE) | ((classes == GRASS) & near_bare))
+    fast.require(564, "sandy shores")
+    return fast._ef.landcover_sand(np.asarray(classes, np.uint8), square, grid_distances())

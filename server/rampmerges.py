@@ -21,7 +21,7 @@ _cache = roadlayoutcache.LayoutCache(max_entries=12, max_bytes=24 * 1024 * 1024)
 
 def sample(line, at):
     s = roadmarkings.arc(line)
-    return np.column_stack([np.interp(np.atleast_1d(at), s, line[:, d]) for d in range(3)])
+    return np.column_stack([dnp.interp(np.atleast_1d(at), s, line[:, d]) for d in range(3)])
 
 
 def project(line, points):
@@ -91,7 +91,7 @@ def _main_edge(path, ids, mains, entry, side, geometry=None):
 
 def _at_edge(edge, stations):
     at, points = edge
-    return np.column_stack([np.interp(stations, at, points[:, d]) for d in range(3)])
+    return np.column_stack([dnp.interp(stations, at, points[:, d]) for d in range(3)])
 
 
 def _supported(points, rows, pavement=None, clearance=.2):
@@ -101,7 +101,7 @@ def _supported(points, rows, pavement=None, clearance=.2):
         axis, widths = pavement(fid, sp, line) if pavement else (line, sp.width)
         at, near, _, _, distance = project(axis, points)
         widths = np.asarray(widths)
-        half = widths/2 if widths.ndim == 0 else np.interp(at, roadmarkings.arc(axis), widths)/2
+        half = widths/2 if widths.ndim == 0 else dnp.interp(at, roadmarkings.arc(axis), widths)/2
         fits |= (distance <= half-clearance) & (np.abs(points[:, 2]-near[:, 2]) <= HEIGHT)
     return fits
 
@@ -212,7 +212,7 @@ def _extend(plan, main, station, mains, neighbours, geometry=None, pavement=None
     original_at = project(path, plan['guide'])[0]
     original = at >= old_start
     for d in range(3):
-        guide[original, d] = np.interp(at[original], original_at, plan['guide'][:, d])
+        guide[original, d] = dnp.interp(at[original], original_at, plan['guide'][:, d])
     guide[-1] = plan['guide'][-1]
     t = (at-start) / (end-start)
     span = plan['span'][-1] * t*t*(2-t)
@@ -269,7 +269,7 @@ def _pavement_split(main, station, mains, entry, away, side, width):
     previous = None
     for start in np.arange(0., length, REACH):
         at = np.linspace(start, min(start + REACH, length), int(min(REACH, length-start)/STEP)+2)
-        points = np.column_stack([np.interp(at, source_station, inner[:, d]) for d in range(3)])
+        points = np.column_stack([dnp.interp(at, source_station, inner[:, d]) for d in range(3)])
         s, near, _, lateral, _ = project(path, points)
         gap = lateral * side - main[1].width / 2
         valid = (s >= 0.) & (s <= roadmarkings.arc(path)[-1]) & (np.abs(points[:, 2]-near[:, 2]) <= HEIGHT)
@@ -357,7 +357,7 @@ def plans(rows, terminals=None, geometry=None, pavement=None):
                 outer_edge, inner_edge = outer_edge[::-1], inner_edge[::-1]
             def boundary(line, stations):
                 station = project(away, line)[0]
-                return np.column_stack([np.interp(stations, station, line[:, d]) for d in range(3)])
+                return np.column_stack([dnp.interp(stations, station, line[:, d]) for d in range(3)])
             inner_distance = project(path, boundary(inner_edge, at))[3] * side
             outer_distance = project(path, boundary(outer_edge, at))[3] * side
             separated = np.flatnonzero(inner_distance >= edge_distance)
@@ -370,8 +370,8 @@ def plans(rows, terminals=None, geometry=None, pavement=None):
             if ms[end] > roadmarkings.arc(path)[-1] or np.max(np.abs(rp[:end+1, 2]-near[:end+1, 2])) > HEIGHT:
                 continue
             # Exact full-width boundary and zero-width taper tip, independent of sampling/tile edges.
-            far = float(np.interp(0., inner_distance[:end+1] - edge_distance[:end+1], at[:end+1]))
-            tip = float(np.interp(0., outer_distance[:end+1] - edge_distance[:end+1], at[:end+1]))
+            far = float(dnp.interp(0., inner_distance[:end+1] - edge_distance[:end+1], at[:end+1]))
+            tip = float(dnp.interp(0., outer_distance[:end+1] - edge_distance[:end+1], at[:end+1]))
             if far - tip < 4.:
                 continue
             ra = np.linspace(tip, far, max(3, int(np.ceil(far-tip)) + 1))

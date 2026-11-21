@@ -19,6 +19,15 @@ import fast
 import dnp
 
 ON = os.environ.get("BNE_PORTALS", "1") != "0"
+# BNE_TUNNEL_ROAD_OVER (the Revamped roads setting, off by default): a road crossing over a mouth keeps its surface:
+# the headwall's top under each column a crossing road covers no higher than that road (fit's "cap", capped()), not a
+# parapet standing across its lanes (the user's report 72, 2026-11-17: Atlanta Motor Speedway's infield tunnel, the
+# service road passing over its south mouth half blocked by the headwall and its soil top, 0.5-1 m over the road)
+ROAD_OVER_ON = os.environ.get("BNE_TUNNEL_ROAD_OVER", "off") == "on"
+WALL_IN = (0.3,)            # (ROAD_OVER_ON) m inside the mouth's plane the headwall's own footprint is read for roads
+LINTEL_MIN = 0.3            # m of headwall over the crown at least under a crossing road (a road nearer the crown than
+                            # this: the lintel stands this over it, capped()'s short; the tube's own height is the
+                            # tunnel solve's, roads.TunnelProfiles' bore fit)
 VERSION = 259               # earthfast's portal kernels
 FACE_IN = (1.0, 3.0, 5.0)   # m inside the mouth's plane the ground behind the headwall is read (the highest of them:
                             # the grading flattens the approach a few metres into the mapped mouth, the hill's face
@@ -89,6 +98,16 @@ def _others(roads, cells, frame, parts):
     return lines
 
 
+def _crossing(xy, p, t):
+    """Does the line xy cross the tube's axis t (unit) at more than 45 degrees where it passes nearest p?"""
+    a, b = xy[:-1], xy[1:]
+    d = b - a
+    tt = np.clip(((p - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
+    j = int(np.argmin(dnp.hypot(*(a + tt[:, None] * d - p).T)))
+    u = d[j] / max(float(dnp.hypot(*d[j])), 1e-9)
+    return abs(float(u[0] * t[0] + u[1] * t[1])) < 0.7071
+
+
 def _through(lines, p, reach):
     """The indices of the lines passing within reach of p: the mouth's own carriageways (the tunnel's parts, its
     approach, a twin's two roads): not kept off."""
@@ -153,8 +172,15 @@ def fit(roads, tunnels, cells, chunks, parts):
                     lp = [p + ul * sg * (hw + reach + 0.5) + out * s for s in ws]
                     ok = all(oth.clear(q, None, ROAD_GAP) for q in lp)
                 wing_ok.append(ok)
+            # (ROAD_OVER_ON: which of the headwall's ground samples lie on another road's carriageway, a road crossing
+            # over the mouth among them: one through it at more than 45 degrees to the tube, not its own approach)
+            over = None
+            if ROAD_OVER_ON:
+                cross = fast.Others([ln for ln in others if ln[0] not in own or _crossing(ln[2], p, t)])
+                over = np.array([[not cross.clear(p + ul * x - out * s_in, None, 0.0) for x in fx]
+                                 for s_in in WALL_IN + FACE_IN], bool)
             ends.append({"p": p, "ul": ul, "out": out, "fx": fx, "sides": sides, "wing_ok": wing_ok, "at": at,
-                         "i0": sum(len(q) for q in pts), "look": look})
+                         "i0": sum(len(q) for q in pts), "look": look, "over": over})
             for s_in in FACE_IN:
                 pts.append(p[None] + ul[None] * fx[:, None] - out[None] * s_in)
             for sg, reach in zip((1.0, -1.0), sides):
@@ -162,6 +188,10 @@ def fit(roads, tunnels, cells, chunks, parts):
             pts.append(p[None] + out[None] * ws[:, None])
             pts.append((p - out * RISE_IN)[None])
             pts.append(np.array([p + ul * sg * (hw + SIDES_OFF) + out * s for sg in (1.0, -1.0) for s in SIDES_OUT]))
+            if over is not None:    # (the wall's footprint rows, last: the default build's samples as they were)
+                ends[-1]["iw"] = sum(len(q) for q in pts)
+                for s_in in WALL_IN:
+                    pts.append(p[None] + ul[None] * fx[:, None] - out[None] * s_in)
         try:
             g = np.asarray(tunnels._ground(np.vstack(pts)), np.float64)
         except Exception:               # (no ground at hand: the plain structure, the tube as it was)
@@ -175,7 +205,16 @@ def fit(roads, tunnels, cells, chunks, parts):
                 continue
             i, nx, nw = en["i0"], len(en["fx"]), len(WING_S)
             zf = float(z[en["at"]])
-            face = np.max([g[i + q * nx:i + (q + 1) * nx] for q in range(len(FACE_IN))], axis=0) - zf
+            rows = [g[i + q * nx:i + (q + 1) * nx] for q in range(len(FACE_IN))]
+            face = np.max(rows, axis=0) - zf
+            # (ROAD_OVER_ON: per column the lowest of a crossing road's samples over the floor: the wall's top there no
+            # higher, whatever higher bank stands behind it; Codex review of 80e9b3da)
+            cap = None
+            if en["over"] is not None and en["over"].any():
+                iw = en["iw"]
+                wall = [g[iw + q * nx:iw + (q + 1) * nx] for q in range(len(WALL_IN))]
+                rd = np.where(en["over"], np.asarray(wall + rows), np.inf).min(axis=0) - zf
+                cap = [round(float(v), 2) if np.isfinite(v) else None for v in rd]
             # the hill's face over the axis: how far in the graded approach goes on before it (a hood reaches out of
             # the face to the mouth: Laerdal's stands ~5 m out of its slope)
             setback = 0.0
@@ -188,7 +227,7 @@ def fit(roads, tunnels, cells, chunks, parts):
             i += 3 * nw
             sd = g[i + 1:i + 5] - zf
             # (the approach's sides over the road out there: the lower side's, the deeper of its two stations)
-            rz_s = np.interp(SIDES_OUT, WING_S, rz)
+            rz_s = dnp.interp(SIDES_OUT, WING_S, rz)
             sides_h = min(float((sd[:2] - rz_s).max()), float((sd[2:] - rz_s).max()))
             # how far the hill over the tube climbs over the approach's sides (a bore into a slope: metres; a box under
             # a street level with its trough's walls: none). Over the mouth's own face ground it read nothing once
@@ -200,6 +239,8 @@ def fit(roads, tunnels, cells, chunks, parts):
                          "wl": r2(wl) if en["wing_ok"][0] else None, "wr": r2(wr) if en["wing_ok"][1] else None,
                          "rz": r2(rz), "sl": round(en["sides"][0], 2), "sr": round(en["sides"][1], 2),
                          "sb": round(setback, 2) if st in (0, 2) else 0.0})
+            if cap is not None:         # (only then: the default build's fits as they were)
+                fits[-1]["cap"] = cap
         if any(f is not None for f in fits):
             c["fit"] = fits
     return chunks
@@ -209,6 +250,29 @@ def _look(fitd, low):
     return 3 if low else int(fitd["st"])
 
 
+def capped(fitd, th, low=False):
+    """(face ground (fx,), top_min, short): fitd's headwall ground and its look's top_min with a crossing road's cap
+    (fit's "cap", BNE_TUNNEL_ROAD_OVER) taken in: the ground under each capped column the road's less the parapet, so
+    the wall's top there is the road's, and top_min no more than the road's height over the crown at the opening's
+    columns, LINTEL_MIN at least (short: a road nearer the crown than that, the lintel standing over it)."""
+    lk = LOOKS[_look(fitd, low)]
+    fg = np.asarray(fitd["fg"], np.float64)
+    tmin = float(lk[5])
+    cap = fitd.get("cap")
+    if not cap:
+        return fg, tmin, False
+    cv = np.array([np.inf if v is None else float(v) for v in cap], np.float64)
+    # (one column further each way: the mesh kernel's top takes its breakpoints between the samples and drops a sample
+    # near one, interpolating past a lone capped column; Codex review of b68ade87)
+    cv = np.minimum(cv, np.minimum(np.r_[cv[1:], np.inf], np.r_[np.inf, cv[:-1]]))
+    fg = np.minimum(fg, cv - float(lk[4]))
+    on = np.isfinite(cv)
+    if not on.any():
+        return fg, tmin, False
+    room = float(cv[on].min()) - th
+    return fg, max(LINTEL_MIN, min(tmin, room)), room < LINTEL_MIN
+
+
 def parapet(fitd, low=False):
     return LOOKS[_look(fitd, low)][4]
 
@@ -216,8 +280,9 @@ def parapet(fitd, low=False):
 def crown_top(fitd, th, low=False):
     """The headwall's top over the floor at the opening's middle (earthfast.portal's headwall_top there)."""
     lk = LOOKS[_look(fitd, low)]
-    g = float(np.interp(0.0, fitd["fx"], fitd["fg"]))
-    return min(max(g + lk[4], th + lk[5]), th + lk[6])
+    fg, tmin, _short = capped(fitd, th, low)
+    g = float(dnp.interp(0.0, fitd["fx"], fg))
+    return min(max(g + lk[4], th + tmin), th + lk[6])
 
 
 def prm(st, th, hw, side_l, side_r, uv_m):
@@ -247,11 +312,12 @@ def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), lo
     wl = np.asarray(fitd["wl"], np.float64) if fitd.get("wl") is not None and not walls_near[0] else none
     wr = np.asarray(fitd["wr"], np.float64) if fitd.get("wr") is not None and not walls_near[1] else none
     pr = prm(st, th, hw, float(fitd["sl"]), float(fitd["sr"]), uv_m)
+    fg, pr[8], _short = capped(fitd, th, low)       # (a crossing road's cap: BNE_TUNNEL_ROAD_OVER)
     pr[2] += sb
     pr = np.r_[pr, sb]          # (inner_from: the tube's own walls are the hood's inside up to the mouth)
     return fast._ef.portal_mesh([float(v) for v in p], [float(v) for v in ul], [float(v) for v in out], pr,
                                 np.ascontiguousarray(sec, np.float64), np.asarray(fitd["fx"], np.float64),
-                                np.asarray(fitd["fg"], np.float64), ws, wl, wr, np.asarray(fitd["rz"], np.float64))
+                                np.ascontiguousarray(fg, np.float64), ws, wl, wr, np.asarray(fitd["rz"], np.float64))
 
 
 def cover(mid, left, z, ground, hw, th, caps, uv_m, soil_uv_m, sec=None):

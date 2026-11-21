@@ -4,24 +4,10 @@
 
 use numpy::{IntoPyArray, PyArray1};
 use pyo3::basic::CompareOp;
-use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
 use pyo3::prelude::*;
 
 use super::countries::np_index;
-use super::pyobj::unpack;
-
-/// What a generator expression's body raised, as the generator raises it: a StopIteration becomes RuntimeError
-/// ("generator raised StopIteration", its cause the StopIteration: PEP 479); anything else as it was.
-fn in_generator<T>(py: Python<'_>, r: PyResult<T>) -> PyResult<T> {
-    match r {
-        Err(e) if e.is_instance_of::<PyStopIteration>(py) => {
-            let re = PyRuntimeError::new_err("generator raised StopIteration");
-            re.set_cause(py, Some(e));
-            Err(re)
-        }
-        other => other,
-    }
-}
+use super::pyobj::{in_generator, unpack};
 
 /// The mask _bridge_specs read (n bools): for each road i of elig, in order, has[i] = any(k == want for _, _, k in
 /// lv[i]): lv[i] and its iterator asked first, outside the generator (a dict's KeyError, a list's IndexError or

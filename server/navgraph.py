@@ -41,6 +41,12 @@ URBAN_MPH_CAP = {"primary": 35, "secondary": 35, "tertiary": 30}   # in town (sp
 # the km/h countries' rural defaults for the fast classes (Europe's 120-130 motorways: Bavaria's A9, unmapped, was
 # driven at the US 65 mph, 2026-10-15)
 KMH_DEFAULT = {"motorway": 120, "trunk": 100, "primary": 80, "secondary": 70}
+# The other classes' defaults where km/h are posted: the mph default in km/h to the nearest 10 (kmh_default), and in town
+# URBAN_KMH_CAP (the 50 km/h most km/h countries' towns have by law). The mph defaults themselves read in km/h were limits
+# no country posts: a tertiary's 35 mph a 55 km/h sign by Nuerburg's Hauptstrasse where its mapped 50 ended, an urban
+# primary's 35 mph cap 55 too (the player's report KK25CFD8, 2026-11-18: "there is no 55 in Germany")
+URBAN_KMH_CAP = {"primary": 50, "secondary": 50, "tertiary": 50}
+KMH_STEP = 10
 # Sweden's limits by law where no sign says otherwise, whatever the class: 50 km/h in a built-up area, 70 outside it
 # (bashastighet, Trafikförordningen 1998:1276 3 kap. 17 §), 110 on a motorway (9 kap. 1 §). Slower classes as above.
 SE_ROADS = {"trunk", "primary", "secondary", "tertiary", "unclassified", "residential"}
@@ -244,12 +250,23 @@ def road_mph(feats, i, spec, mph=True, at=0.5, country=None, de_on=False):
         return 110.0 / 1.609344
     if country == "SE" and spec.cls in SE_ROADS:
         return (50.0 if spec.urban else 70.0) / 1.609344
+    if not mph:
+        return kmh_default(spec.cls, spec.urban) / 1.609344
     v = DRIVE[spec.cls][1]
-    if not mph and spec.cls in KMH_DEFAULT:
-        v = KMH_DEFAULT[spec.cls] / 1.609344
     if spec.urban and spec.cls in URBAN_MPH_CAP:
         v = min(v, URBAN_MPH_CAP[spec.cls])
     return float(v)
+
+
+def kmh_default(cls, urban):
+    """The default limit (km/h) of a road class where km/h are posted and nothing is mapped: KMH_DEFAULT's, else the
+    class's mph default in km/h to the nearest KMH_STEP; in town at most URBAN_KMH_CAP. Pure."""
+    kmh = KMH_DEFAULT.get(cls)
+    if kmh is None:
+        kmh = max(KMH_STEP, int(DRIVE[cls][1] * 1.609344 / KMH_STEP + 0.5) * KMH_STEP)
+    if urban and cls in URBAN_KMH_CAP:
+        kmh = min(kmh, URBAN_KMH_CAP[cls])
+    return float(kmh)
 
 
 def _rdp(p, tol):
@@ -642,7 +659,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         marks[sj] = f"s{fid}_{int(round(sj * 10))}d"
                         full.append(sj)
             full.append(order[-1])
-            xy = np.stack([np.interp(full, s, p[:, 0]), np.interp(full, s, p[:, 1])], 1)
+            xy = np.stack([dnp.interp(full, s, p[:, 0]), dnp.interp(full, s, p[:, 1])], 1)
             deck_xy = xy.copy()
             if placement.on:            # (the AI's lanes where the road tiles draw a placed carriageway's)
                 la_, lo_, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
@@ -681,7 +698,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             profile = _speed_profile(xy, w, direction != 0, urban=bool(getattr(spec, "urban", True)))
             # (a pass road's widened hairpins: its half width there, roads.hairpin_extra on its whole line)
             hx = roads.hairpin_extra(frame, spec, np.asarray(p, np.float64)[:, :2])
-            hxm = np.zeros(len(full)) if hx is None else np.interp(full, s, hx)
+            hxm = np.zeros(len(full)) if hx is None else dnp.interp(full, s, hx)
             # this road's approaches at its two ends (the graph node next to the junction, whether traffic comes in)
             for end in (0, -1):
                 j, nb = (0, 1) if end == 0 else (len(names) - 1, len(names) - 2)
@@ -706,7 +723,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         lo_, hi_ = max(full[j], t0 * L), min(full[j + 1], t1 * L)
                         if hi_ > lo_:
                             arc = [lo_, (lo_ + hi_) / 2, hi_]
-                            checks.extend(zip(np.interp(arc, s, p[:, 0]), np.interp(arc, s, p[:, 1])))
+                            checks.extend(zip(dnp.interp(arc, s, p[:, 0]), dnp.interp(arc, s, p[:, 1])))
                     if open_tunnels and _open_floor_of(open_tunnels, fid, checks):
                         for nm_, _q in ends_in:
                             open_node[nm_] = fid

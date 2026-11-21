@@ -156,6 +156,8 @@ function M.info()
   local out = { mod = st ~= nil, terrain = tb ~= nil, physicsRunning = physicsRunning() }
   if st then
     out.anchorId, out.block, out.blockSize, out.nearVisual = st.anchorId, st.block, st.blockSize or 1024, st.nearVisual
+    local live = beamngEarth_core._state and beamngEarth_core._state().blockMsg
+    out.heightmap = live and live.heightmap
     out.session = st.session
   end
   if veh then

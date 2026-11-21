@@ -101,14 +101,25 @@ def _countries():
     return sorted(COUNTRIES)
 
 
+_LOOKUP = []        # [(the earthfast module, its CountryLookup)]: made once per module
+
+
+def _lookup():
+    """earthfast's CountryLookup of the supported territories, made once (for the module loaded: a stand-in module is
+    asked its version again)."""
+    import fast
+    if not _LOOKUP or _LOOKUP[0][0] is not fast._ef:
+        fast.require(451, "CountryLookup")
+        _LOOKUP[:] = [(fast._ef, fast._ef.CountryLookup(lambda: _border_path(), _countries()))]
+    return _LOOKUP[0][1]
+
+
 def country_for(lon, lat):
     """The supported territory (europeinfra.COUNTRIES) at a point, else None: none south of 25 N or between 168 W and
     33 W (the territories and the eastern end of Russia), else countrybounds' code there (earthfast
-    roadnet::countries; the border data asked only for a point past that box test)."""
-    import fast
-    fast.require(391, "europe_countries")
-    return fast._ef.europe_countries(_border_path, np.array([lon], np.float64), np.array([lat], np.float64),
-                                     _countries())[0]
+    roadnet::countries::CountryLookup; the border data asked only for a point past that box test). Input contract
+    (R2a): lon / lat numbers (int, float, numpy scalars); text TypeError."""
+    return _lookup().at(lon, lat)
 
 
 def road_countries(feats, mask):

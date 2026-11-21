@@ -1,6 +1,6 @@
 """Level spacing from real clearance and deck depth (roads.LEVEL_SPACING, BNE_LEVEL_SPACING; the road revamp's R1,
-2026-11-16, decision D10): a deck's road stands over the road under it by that road's clearance (motorway 5.0 m,
-other roads 4.7, service 4.0, paths 2.7, rail 6.5) + the deck's depth (0.045 of its span, 0.7-4.0 m) + 0.1 m, not the
+2026-11-16, decision D10): a deck's road stands over the road under it by that road's clearance (motorway, trunk,
+primary 4.9 m, other roads 4.5, service 4.0, paths 2.5, rail 6.0: the clearance study 2026-11-17) + the deck's depth (0.045 of its span, 0.7-4.0 m) + 0.1 m, not the
 flat 6.15 m + 0.9-2.2 m; off, as before."""
 import sys
 import unittest
@@ -32,12 +32,12 @@ class LevelSpacingTest(unittest.TestCase):
 
     def test_clearance_by_the_road_under(self):
         with mock.patch.object(roads, "LEVEL_SPACING", True):
-            self.assertAlmostEqual(roads.deck_road_clear(1.5, ["motorway"]), 5.0 + 1.5 + 0.1)
-            self.assertAlmostEqual(roads.deck_road_clear(1.5, ["residential"]), 4.7 + 1.5 + 0.1)
+            self.assertAlmostEqual(roads.deck_road_clear(1.5, ["motorway"]), 4.9 + 1.5 + 0.1)
+            self.assertAlmostEqual(roads.deck_road_clear(1.5, ["residential"]), 4.5 + 1.5 + 0.1)
             self.assertAlmostEqual(roads.deck_road_clear(1.5, ["service", "footway"]), 4.0 + 1.5 + 0.1)
-            self.assertAlmostEqual(roads.deck_road_clear(1.5, ["footway"]), 2.7 + 1.5 + 0.1)
-            self.assertAlmostEqual(roads.deck_road_clear(1.5, ["rail"]), 6.5 + 1.5 + 0.1)
-            self.assertAlmostEqual(roads.deck_road_clear(1.5), 5.0 + 1.5 + 0.1, msg="unknown: the most demanding")
+            self.assertAlmostEqual(roads.deck_road_clear(1.5, ["footway"]), 2.5 + 1.5 + 0.1)
+            self.assertAlmostEqual(roads.deck_road_clear(1.5, ["rail"]), 6.0 + 1.5 + 0.1)
+            self.assertAlmostEqual(roads.deck_road_clear(1.5), 4.9 + 1.5 + 0.1, msg="unknown: the most demanding")
             self.assertAlmostEqual(roads.deck_depth(10.0), 0.7)
             self.assertAlmostEqual(roads.deck_depth(40.0), 1.8)
             self.assertAlmostEqual(roads.deck_depth(200.0), 4.0)

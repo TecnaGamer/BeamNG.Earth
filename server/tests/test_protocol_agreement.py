@@ -177,7 +177,7 @@ GRAVITY_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "egm2008_n36.np
 # levels down to -2 (mesh mode); a textured tile's shape is its material name's pooled file (matslots.py)
 # (geotiles phase 3b: a piece's key has a _c<z>_<x>_<y> suffix, a global tile's file is far_0_m<z>_<x>_<y>)
 SHAPE_RE = r"^/temp/beamngEarth/[^/]+/(far_\d+_(-?\d+_-?\d+_-?\d+(_c\d+_\d+_\d+)?|m\d+_\d+_\d+)|slot_\d{5})\.cdae$"
-HM_RE = r"^/temp/beamngEarth/[^/]+/hm_\d+_-?\d+_-?\d+\.png$"
+HM_RE = r"^/temp/beamngEarth/[^/]+/hm_\d+_-?\d+_-?\d+_\d+\.png$"
 
 
 def code_only(text, mark):
@@ -223,7 +223,7 @@ def mod_sends():
     (core hands them net.send)."""
     out = {}
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
-                              "addons.lua", "api.lua"), r"net(?:'\))?\.send\(\{"),
+                              "addons.lua", "api.lua", "terrainfiles.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua", "spaceclouds.lua", "globe.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{"),
                            (("reportsend.lua",), r"\bnet\(\)\.send\(\{")):
@@ -240,7 +240,7 @@ def mod_reads():
     """Fields the mod reads from server messages: msg.X / p.msg.X / tr.X (terrain) in its Lua."""
     out = set()
     for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "credits.lua", "roads.lua", "mpsession.lua",
-                 "addons.lua", "api.lua", "reportsend.lua"):
+                 "addons.lua", "api.lua", "reportsend.lua", "terrainfiles.lua"):
         text = code_only((LUA / name).read_text(encoding="utf-8"), "--")
         out |= set(re.findall(r"\bmsg\.(\w+)", text))
         out |= {"terrain." + f for f in re.findall(r"\btr\.(\w+)", text)}
@@ -309,13 +309,13 @@ class SessionsAgreementTest(test_server.ServerHarness):
         for kind in ("hello", "pose"):
             t = next(lua_tables(core, m.end() - 1) for m in re.finditer(r"net\.send\(\{", core)
                      if f"type = '{kind}'" in lua_tables(core, m.end() - 1))
-            self.assertIn("sessions = roads.allHeldSessions()", t, kind)
+            self.assertIn("sessions = M._terrainFiles.sessions(roads.allHeldSessions())", t, kind)
         # (the far field's folders and the road tiles' kept across a server restart: their buildings, 2026-10-31)
         self.assertIn("require('beamngEarth/farfield').heldSessions(), M.heldSessions()", roads_lua)
         self.assertIn("'^/temp/beamngEarth/([^/]+)/'", far)
         self.assertEqual(self.server.vfs_dir, f"/temp/beamngEarth/{self.server.sid}")
         self.assertEqual(modsim.folder_of(self.server.vfs_dir + "/far_1_0_0_0.cdae"), self.server.sid)
-        self.assertEqual(modsim.folder_of(self.server.hm_vfs((1, 0, 0))), self.server.sid)
+        self.assertEqual(modsim.folder_of(self.server.vfs_dir + "/" + self.server.block_names((1, 0, 0))[0]), self.server.sid)
         self.assertIsNone(modsim.folder_of("/levels/beamng_earth/x.cdae"))
         self.assertIn("sessions", server_reads())
 

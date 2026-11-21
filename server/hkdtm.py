@@ -33,6 +33,7 @@ import os
 import threading
 
 import numpy as np
+import fast
 import dnp
 
 import hklidar
@@ -44,18 +45,13 @@ MIN_ZOOM = 15               # the near terrain (dem.FINE_MIN_ZOOM); the far ring
 INDEX_ZOOM = 14             # the sheet index asked per tile of this zoom (~2.3 km, ~15 sheets)
 TO_EGM2008_M = -0.42        # HKPD height to EGM2008 height (above)
 TILE = 512
+LATTICE = 16                # pixels between the points that tell whether a sheet has pixels in a tile (tile)
 
 # HK1980 Grid (EPSG:2326) on the International 1924 ellipsoid
 _A, _F = 6378388.0, 1 / 297.0
-_E2 = _F * (2 - _F)
-_E = math.sqrt(_E2)
 _LAT0 = math.radians(22 + 18 / 60 + 43.68 / 3600)
 _LON0 = math.radians(114 + 10 / 60 + 42.80 / 3600)
-_FE, _FN = 836694.05, 819069.80
 # WGS 84 to HK1980: the inverse of EPSG:1825 (HK1980 to WGS 84, coordinate frame: X' = T + (1 + s) R X)
-_WA, _WF = 6378137.0, 1 / 298.257223563
-_WE2 = _WF * (2 - _WF)
-_T = np.array([-162.619, -276.959, -161.764])
 _RX, _RY, _RZ = (math.radians(v / 3600) for v in (-0.067753, 2.243648, 1.158828))
 _R_INV = dnp.inv((1 - 1.094246e-6) * np.array([[1, _RZ, -_RY], [-_RZ, 1, _RX], [_RY, -_RX, 1]]))
 # Transverse Mercator by Krueger's series to n^4 (EPSG Guidance Note 7-2)
@@ -67,39 +63,11 @@ _H = (_N / 2 - 2 * (_N * _N) / 3 + 5 * dnp.power(_N, 3) / 16 + 41 * dnp.power(_N
       49561 * dnp.power(_N, 4) / 161280)
 
 
-def _tm(phi, dlam):
-    """(northing from the equator, easting from the central meridian), m, of HK1980 latitude phi, longitude dlam
-    from the central meridian (radians)."""
-    s = dnp.sin(phi)
-    t = dnp.sinh(dnp.arctanh(s) - _E * dnp.arctanh(_E * s))
-    xi = dnp.arctan2(t, dnp.cos(dlam))
-    eta = dnp.arctanh(dnp.sin(dlam) / np.sqrt(1 + t * t))
-    n, e = xi, eta
-    for j, h in enumerate(_H, 1):
-        n = n + h * dnp.sin(2 * j * xi) * dnp.cosh(2 * j * eta)
-        e = e + h * dnp.cos(2 * j * xi) * dnp.sinh(2 * j * eta)
-    return _B * n, _B * e
-
-
-_M0 = float(_tm(np.float64(_LAT0), 0.0)[0])
-
-
 def grid(lat, lon):
     """HK1980 Grid easting, northing (m) of WGS 84 lat / lon (degrees; arrays)."""
-    phi, lam = np.radians(np.asarray(lat, np.float64)), np.radians(np.asarray(lon, np.float64))
-    shape = np.broadcast(phi, lam).shape
-    phi, lam = np.broadcast_to(phi, shape).ravel(), np.broadcast_to(lam, shape).ravel()
-    nu = _WA / np.sqrt(1 - _WE2 * dnp.sq(dnp.sin(phi)))
-    xyz = np.stack([nu * dnp.cos(phi) * dnp.cos(lam), nu * dnp.cos(phi) * dnp.sin(lam), nu * (1 - _WE2) * dnp.sin(phi)])
-    x, y, z = dnp.matmul(_R_INV, xyz - _T[:, None])
-    lam = dnp.arctan2(y, x)
-    p = dnp.hypot(x, y)
-    phi = dnp.arctan2(z, p * (1 - _E2))
-    for _ in range(4):
-        nu = _A / np.sqrt(1 - _E2 * dnp.sq(dnp.sin(phi)))
-        phi = dnp.arctan2(z + _E2 * nu * dnp.sin(phi), p)
-    n, e = _tm(phi, lam - _LON0)
-    return (_FE + e).reshape(shape), (_FN + n - _M0).reshape(shape)
+    fast.require(565, "HK1980 Grid")
+    lat, lon = np.broadcast_arrays(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    return fast._ef.dem_hk_grid(lat, lon, _R_INV, _H, _B, (_LAT0, _LON0))
 
 
 def covers(z, x, y):
@@ -231,6 +199,30 @@ class HkDtm:
             self._fetch_later(name, url)
         return got
 
+    def _asked(self, meeting, lat, lon):
+        """The sheets [(name, url)] the tile asks for and this run does not read, when it reads none of meeting (the
+        index's sheets meeting the tile's box, in order) and each of them with no lattice pixel is gone (.404); else
+        None: the tile is read in full. A sheet holding a lattice pixel (a coarse part of the tile's, the only part
+        projected here) certainly has pixels in the full loop too."""
+        if not meeting:
+            return []
+        at = np.append(np.arange(0, lat.shape[0] - 1, LATTICE), lat.shape[0] - 1)
+        ex, ny = grid(lat[np.ix_(at, at)], lon[np.ix_(at, at)])
+        taken = np.zeros(ex.shape, bool)
+        asked = []
+        for name, url, (x0, y0, x1, y1) in meeting:
+            m = (ex >= x0) & (ex < x1) & (ny >= y0) & (ny < y1) & ~taken
+            taken |= m
+            if os.path.exists(self.sheets.path("dtm", name) + ".404"):
+                continue
+            if not m.any():
+                return None
+            asked.append((name, url))
+        for name, _url in asked:
+            if self._decide("dtm_" + name, os.path.exists(self.sheets.path("dtm", name))):
+                return None
+        return asked
+
     def tile(self, z, x, y, size=TILE):
         """(heights float32 [size, size] above EGM2008, valid bool, short) on dem.py's tile (z, x, y): short when this
         run goes without a sheet (or the index) it has, read from the next run on. No network: the downloads it asks
@@ -240,31 +232,24 @@ class HkDtm:
         if not covers(z, x, y) or not self.sheets.root:
             return h, ok, False
         lat, lon = hrdem.tile_lat_lon(z, x, y, size)
-        ex, ny = grid(lat, lon)
-        box = (float(ex.min()), float(ny.min()), float(ex.max()), float(ny.max()))
+        box = _box(np.r_[lat[0], lat[-1], lat[:, 0], lat[:, -1]], np.r_[lon[0], lon[-1], lon[:, 0], lon[:, -1]])
         d = z - INDEX_ZOOM
         chunk = (INDEX_ZOOM, x >> d, y >> d)
         idx = self._index(chunk)
         short = idx is None
         if short:
             self._want(chunk, box)
-        taken = np.zeros((size, size), bool)
-        for name, url, (x0, y0, x1, y1) in idx or ():
-            if not (x0 < box[2] and box[0] < x1 and y0 < box[3] and box[1] < y1):
-                continue
-            m = (ex >= x0) & (ex < x1) & (ny >= y0) & (ny < y1) & ~taken
-            if not m.any():
-                continue
-            taken |= m
-            s = self._sheet(name, url)
-            if s is None:
-                short = True
-            if not s:
-                continue
-            v = s.bilinear(ex[m], ny[m])
-            good = np.isfinite(v)
-            h[m] = np.where(good, v + TO_EGM2008_M, 0.0)
-            ok[m] = good
+        meeting = [(n, u, b) for n, u, b in idx or ()
+                   if b[0] < box[2] and box[0] < b[2] and b[1] < box[3] and box[1] < b[3]]
+        asked = self._asked(meeting, lat, lon)
+        if asked is None:
+            fast.require(565, "Hong Kong lidar sheets")
+            h, ok, missing = fast._ef.dem_hk_sheets(*grid(lat, lon), meeting, self._sheet, TO_EGM2008_M)
+            short = short or missing
+        else:
+            for name, url in asked:
+                self._fetch_later(name, url)
+            short = short or bool(asked)
         with self._lock:
             self.stats["tiles"] += 1
             self.stats["short"] += short

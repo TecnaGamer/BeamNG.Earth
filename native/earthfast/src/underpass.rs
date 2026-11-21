@@ -109,7 +109,10 @@ enum Req {
 /// - At a junction of 3+ lines (no loose end within jflat + jfade, no crossing within jflat + jfade + flat): every
 ///   line there takes the deepest drop within jflat of it, blended back over jfade (smoothstep).
 /// The queries (qxy, qline) are points on those lines: each is placed at the nearest point of its line.
-/// prm: [flat, grade, max_grade, max_drop, jflat, jfade, tol]. Pure and deterministic for a given input order.
+/// prm: [flat, grade, max_grade, max_drop, jflat, jfade, tol]. req may carry a 4th column: that dip's own grade in
+/// place of grade (at most grade, at least depth * grade / max_drop; 0 or NaN: grade); a joined dip on its own grade
+/// ends before the nearest junction it reaches (never shorter than at grade). Pure and deterministic for a given input
+/// order.
 #[pyfunction]
 pub fn underpass_offsets<'py>(
     py: Python<'py>,
@@ -183,7 +186,12 @@ pub fn underpass_offsets<'py>(
         }
         let (a, b) = ends[part];
         let ll = len[part];
-        let run = depth * PI / grade;
+        // (a 4th column: this dip's own ramp grade, gentler than grade for a fast road (grading.UNDER_SPEED), never so
+        // gentle that its ramp outruns max_drop's at grade: every dip still ends within max_run)
+        let own = req.shape()[1] > 3 && req[[r, 3]] > 0.0;
+        let run0 = depth * PI / grade;
+        let grade = if own { req[[r, 3]].min(grade).max(depth * grade / max_drop) } else { grade };
+        let mut run = depth * PI / grade;
         let limit = (flat + run + 1.0).max(jreach + 1.0);
         dijkstra(&adj, &[(a, sc), (b, ll - sc)], limit, &mut buf, &mut touched);
         let mut dist = HashMap::with_capacity(touched.len());
@@ -226,6 +234,14 @@ pub fn underpass_offsets<'py>(
                 reqs.push(Req::Alone { sc, depth: d, r0, r1 });
             }
             continue;
+        }
+        if own {
+            // (a longer ramp ends jflat before the nearest junction (3+ lines) it would reach, never shorter than the dip at
+            // grade had: the roads joining there get no more of it than before. Run on through a junction, a trunk's
+            // 1 m dip, 52 -> 208 m long, put a drop on a slip road 75 m on, blended back over jfade: a crest on it)
+            #[allow(clippy::iter_over_hash_type, clippy::disallowed_methods)] // (a minimum: the order does not matter)
+            let jd = dist.iter().filter(|(n, _)| degree[**n] > 2).map(|(_, d)| *d).fold(f64::INFINITY, f64::min);
+            run = run.min((jd - flat - jflat).max(run0));      // (and clear of its common drop's reach)
         }
         let mut lines: Vec<usize> = vec![part];
         #[allow(clippy::iter_over_hash_type)] // hash order: the lines are sorted and deduplicated after

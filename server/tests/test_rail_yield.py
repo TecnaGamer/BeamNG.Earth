@@ -155,11 +155,11 @@ class RailYieldTest(unittest.TestCase):
         old = grading.RAIL_YIELD_ON
         grading.RAIL_YIELD_ON = False
         try:
-            (pxy, _pz), = grading.rail_yield_pieces(xy, z, [road], railways.GRADE_HALF_M)
+            (pxy, pz), = grading.rail_yield_pieces(xy, z, [road], railways.GRADE_HALF_M)
         finally:
             grading.RAIL_YIELD_ON = old
-        self.assertIs(pxy, pxy)
-        self.assertEqual(len(pxy), len(xy))
+        np.testing.assert_array_equal(pxy, xy)
+        np.testing.assert_array_equal(pz, z)
 
 
 if __name__ == "__main__":

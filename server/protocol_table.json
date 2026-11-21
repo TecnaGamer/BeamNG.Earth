@@ -9,6 +9,7 @@
     "cx": {"type": "num"},
     "cy": {"type": "num"},
     "heightmap": {"type": "str"},
+    "terrainTicket": {"type": "int", "optional": true, "doc": "ownership of this terrain delivery until the mod releases it"},
     "size": {"type": "int"},
     "squareSize": {"type": "num"},
     "zBase": {"type": "num"},
@@ -30,7 +31,7 @@
  },
  "mod_to_server": {
   "hello": {
-   "doc": "sessions: the session folders whose files the mod's objects still use (farfield.heldSessions; a restarted server keeps an earlier run's folder named here, docs/ROADMAP.md \"Robustness\" 3)",
+   "doc": "sessions: the session folders whose files the mod's objects still use (terrain deliveries, far tiles and road tiles; a restarted server keeps each earlier session still named here, docs/ROADMAP.md \"Robustness\" 3)",
    "fields": {
     "protocol": {"type": "int"},
     "format": {"type": "int"},
@@ -41,6 +42,8 @@
     "slotSession": {"type": "str", "optional": true, "doc": "a reconnect: the pooled far-tile slots [[slot, serial], ...] the mod's objects hold for that session"},
     "slotsHeld": {"type": ["list", "dict"], "optional": true},
     "streamLease": {"type": "int", "optional": true},
+    "terrainHeld": {"type": ["list", "dict"], "optional": true, "doc": "complete surviving ticket snapshot on reconnect"},
+    "terrainFiles": {"type": "int", "optional": true},
     "leaseId": {"type": "str", "optional": true},
     "leaseSession": {"type": "str", "optional": true},
     "held": {"type": ["list", "dict"], "optional": true},
@@ -88,6 +91,13 @@
     "anchorId": {"type": "int"},
     "cx": {"type": "num"},
     "cy": {"type": "num"}
+   }
+  },
+  "terrain_release": {
+   "doc": "return terrain delivery tickets, or all of them after the extension destroyed its TerrainBlock",
+   "fields": {
+    "tickets": {"type": "list", "optional": true},
+    "unloaded": {"type": "bool", "optional": true}
    }
   },
   "commit_terrain": {
@@ -518,7 +528,8 @@
   "share_info": {
    "fields": {
     "code": {"type": "str"},
-    "weight": {"type": "num", "doc": "BeamMP sharing v2: our share code for the poses"}
+    "weight": {"type": "num", "doc": "BeamMP sharing v2: our share code for the poses"},
+    "overtureRelease": {"type": "str", "optional": true, "doc": "2026-11-18: this server's Overture release: the poses carry it (rel), the plugin passes it in bngeAnchors, players of another release are told (mpsession.releaseNote)"}
    }
   },
   "share_out": {
@@ -756,11 +767,13 @@
     "privacyRegion": {"type": "str"},
     "telemetryConsent": {"type": "int", "doc": "the welcome page's telemetry defaults"},
     "streamLease": {"type": "int", "optional": true},
+    "terrainFiles": {"type": "int", "optional": true},
     "leaseId": {"type": "str", "optional": true},
     "memoryTier": {"type": "str", "optional": true},
     "memoryNote": {"type": "str", "optional": true, "doc": "low-memory machines only (budget.TIER lean / emergency)"},
     "startSettings": {"type": "dict", "optional": true, "doc": "the start-time values of the settings read only at a start (srvrestart.start_view: {id: value}) and whether a supervisor starts the server again (srvrestart.ENV): the settings page's restart button"},
     "restartable": {"type": "bool", "optional": true},
+    "overtureRelease": {"type": "str", "optional": true, "doc": "2026-11-18: the Overture release this server reads (overture.effective: its supervisor's pick for the app session, overturepick.Pick); the mod pins its level's world to the live connection's and holds on another or none (releasepin.lua)"},
     "startFixed": {"type": ["list", "dict"], "optional": true, "doc": "... the ids set by hand there (never pending: srvrestart.lua)"},
     "farFormat": {"type": "str"},
     "material": {"type": "str"},

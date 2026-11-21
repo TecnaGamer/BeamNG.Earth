@@ -5,7 +5,7 @@
 use numpy::ndarray::Dimension;
 use numpy::{Element, PyReadonlyArray, PyUntypedArray, PyUntypedArrayMethods};
 use pyo3::prelude::*;
-use pyo3::types::{PyFloat, PyList, PyString};
+use pyo3::types::{PyDict, PyFloat, PyList, PyString};
 use pyo3::Borrowed;
 
 /// col.tolist() (a numpy array's elements as Python objects, a list's own), None for no column.
@@ -21,17 +21,19 @@ pub fn items<'py>(col: Option<&Bound<'py, PyAny>>) -> PyResult<Option<Vec<Bound<
     Ok(Some(list.iter().collect()))
 }
 
-/// str(v).
+/// str(v) (an exact str read as it is; a subclass, which may override __str__, through str(): Codex on bc34313f).
 pub fn py_str(v: &Bound<'_, PyAny>) -> PyResult<String> {
-    if let Ok(s) = v.cast::<PyString>() {
+    if let Ok(s) = v.cast_exact::<PyString>() {
         return Ok(s.to_str()?.to_owned());
     }
     Ok(v.str()?.to_str()?.to_owned())
 }
 
-/// float(v): Some(value), None where Python raised TypeError or ValueError (not a number); any other error raised.
+/// float(v): Some(value), None where Python raised TypeError or ValueError (not a number); any other error raised. An
+/// exact float read as it is; anything else, a float subclass too (an overridden __float__, one that raises), through
+/// float() (Codex on bc34313f).
 pub fn py_float(v: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
-    if let Ok(f) = v.cast::<PyFloat>() {
+    if let Ok(f) = v.cast_exact::<PyFloat>() {
         return Ok(Some(f.value()));
     }
     let py = v.py();
@@ -43,9 +45,9 @@ pub fn py_float(v: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
     }
 }
 
-/// float(v), every error raised.
+/// float(v), every error raised (an exact float read as it is, anything else through float()).
 pub fn py_float_strict(v: &Bound<'_, PyAny>) -> PyResult<f64> {
-    if let Ok(f) = v.cast::<PyFloat>() {
+    if let Ok(f) = v.cast_exact::<PyFloat>() {
         return Ok(f.value());
     }
     v.py().get_type::<PyFloat>().call1((v,))?.extract::<f64>()
@@ -132,4 +134,149 @@ impl<'py, T: Element, D: Dimension> std::ops::Deref for CArr<'py, T, D> {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
+}
+
+/// What a generator expression's body raised, as the generator raises it: a StopIteration becomes RuntimeError
+/// ("generator raised StopIteration", its cause the StopIteration: PEP 479); anything else as it was.
+pub fn in_generator<T>(py: Python<'_>, r: PyResult<T>) -> PyResult<T> {
+    match r {
+        Err(e) if e.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) => {
+            let re = pyo3::exceptions::PyRuntimeError::new_err("generator raised StopIteration");
+            re.set_cause(py, Some(e));
+            Err(re)
+        }
+        other => other,
+    }
+}
+
+/// The R2a input contract (the road revamp's port of the spec glue; roadnet's module notes): a kernel that takes a
+/// road layer's columns takes them as the pipeline makes them, and refuses anything else with a TypeError before it
+/// reads a row, rather than following every object protocol a Python value could override. A column is None, an exact
+/// list or tuple, or an exact 1-D numpy.ndarray of a number, text or bytes dtype ("biufUS") or of objects ("O"); each
+/// item of a list, tuple or object array is None, an exact bool / int / float / str, or an exact numpy scalar (bool_,
+/// int8 .. uint64, float16 .. float64, str_, bytes_). Subclasses, proxies and other objects are refused.
+pub struct Contract<'py> {
+    ndarray: Bound<'py, pyo3::types::PyType>,
+    scalars: Vec<Bound<'py, pyo3::types::PyType>>,
+}
+
+impl<'py> Contract<'py> {
+    pub fn new(py: Python<'py>) -> PyResult<Self> {
+        let np = py.import("numpy")?;
+        let mut scalars = Vec::new();
+        for t in ["bool_", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float16",
+                  "float32", "float64", "str_", "bytes_"] {
+            scalars.push(np.getattr(t)?.cast_into::<pyo3::types::PyType>()?);
+        }
+        Ok(Contract { ndarray: np.getattr("ndarray")?.cast_into::<pyo3::types::PyType>()?, scalars })
+    }
+
+    /// Whether v is one of the contract's scalars.
+    pub fn scalar(&self, v: &Bound<'py, PyAny>) -> bool {
+        v.is_none() || v.is_exact_instance_of::<pyo3::types::PyBool>() || v.is_exact_instance_of::<pyo3::types::PyInt>()
+            || v.is_exact_instance_of::<PyFloat>() || v.is_exact_instance_of::<PyString>()
+            || self.scalars.iter().any(|t| v.get_type().is(t))
+    }
+
+    fn refuse(what: &str, got: &Bound<'py, PyAny>) -> PyErr {
+        let name = got.get_type().name().map(|s| s.to_string()).unwrap_or_else(|_| "?".to_owned());
+        pyo3::exceptions::PyTypeError::new_err(format!(
+            "{what}: a {name} is outside the road layer contract (None, an exact list / tuple or 1-D numpy array of \
+             numbers, text or objects whose items are None, bool, int, float, str or numpy scalars)"))
+    }
+
+    /// The rows of a list, tuple or 1-D numpy array of objects (None for a number / text array: no item to check), or
+    /// a TypeError.
+    fn rows(&self, col: &Bound<'py, PyAny>, what: &str, objects_only: bool) -> PyResult<Option<Vec<Bound<'py, PyAny>>>> {
+        if let Ok(l) = col.cast_exact::<PyList>() {
+            return Ok(Some(l.iter().collect()));
+        }
+        if let Ok(t) = col.cast_exact::<pyo3::types::PyTuple>() {
+            return Ok(Some(t.iter().collect()));
+        }
+        if col.get_type().is(&self.ndarray) {
+            use numpy::{PyArrayDescrMethods, PyUntypedArrayMethods};
+            let a = col.cast::<PyUntypedArray>()?;
+            let kind = a.dtype().kind() as char;
+            if a.ndim() == 1 && kind == 'O' {
+                return Ok(Some(col.call_method0("tolist")?.cast_into::<PyList>()?.iter().collect()));
+            }
+            if a.ndim() == 1 && !objects_only && "biufUS".contains(kind) {
+                return Ok(None);
+            }
+        }
+        Err(Self::refuse(what, col))
+    }
+
+    /// A column of the contract (None too), else TypeError.
+    pub fn column(&self, col: &Bound<'py, PyAny>, what: &str) -> PyResult<()> {
+        if col.is_none() {
+            return Ok(());
+        }
+        for v in self.rows(col, what, false)?.unwrap_or_default() {
+            if !self.scalar(&v) {
+                return Err(Self::refuse(what, &v));
+            }
+        }
+        Ok(())
+    }
+
+    /// An exact dict whose keys are exact str and values the contract's scalars, else TypeError.
+    fn tags(&self, d: &Bound<'py, PyAny>, what: &str) -> PyResult<()> {
+        let d = d.cast_exact::<PyDict>().map_err(|_| Self::refuse(what, d))?;
+        for (k, v) in d.iter() {
+            if !k.is_exact_instance_of::<PyString>() {
+                return Err(Self::refuse(what, &k));
+            }
+            if !self.scalar(&v) {
+                return Err(Self::refuse(what, &v));
+            }
+        }
+        Ok(())
+    }
+
+    /// The lane parts column (LANE_PARTS): None, or a list / tuple / 1-D object array whose rows are None, a scalar, an
+    /// exact dict (not read), or an exact list / tuple of parts; a part None, a scalar, an exact dict (not read), or an
+    /// exact list / tuple of scalars and exact dicts of str keys and scalar values. Else TypeError.
+    pub fn parts(&self, col: &Bound<'py, PyAny>, what: &str) -> PyResult<()> {
+        if col.is_none() {
+            return Ok(());
+        }
+        let seq = |v: &Bound<'py, PyAny>| v.is_exact_instance_of::<PyList>() || v.is_exact_instance_of::<pyo3::types::PyTuple>();
+        for row in self.rows(col, what, true)?.unwrap_or_default() {
+            if self.scalar(&row) || row.is_exact_instance_of::<PyDict>() {
+                continue;
+            }
+            if !seq(&row) {
+                return Err(Self::refuse(what, &row));
+            }
+            for p in row.try_iter()? {
+                let p = p?;
+                if self.scalar(&p) || p.is_exact_instance_of::<PyDict>() {
+                    continue;
+                }
+                if !seq(&p) {
+                    return Err(Self::refuse(what, &p));
+                }
+                for x in p.try_iter()? {
+                    let x = x?;
+                    if x.is_exact_instance_of::<PyDict>() {
+                        self.tags(&x, what)?;
+                    } else if !self.scalar(&x) {
+                        return Err(Self::refuse(what, &x));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A str the contract allows, as text to compare with ASCII keys: str(v) with a lone surrogate replaced (U+FFFD:
+/// such a text equals no ASCII key either way).
+pub fn key_str(v: &Bound<'_, PyAny>) -> PyResult<String> {
+    if let Ok(s) = v.cast_exact::<PyString>() {
+        return Ok(s.to_string_lossy().into_owned());
+    }
+    Ok(v.str()?.to_string_lossy().into_owned())
 }

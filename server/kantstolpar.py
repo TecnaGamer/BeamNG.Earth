@@ -41,7 +41,7 @@ def stations(xy):
     s = np.arange(0.0, cum[-1], TIGHT_M)
     if len(s) < 2:
         return np.zeros((0, 2)), np.zeros((0, 2))
-    p = np.c_[np.interp(s, cum, xy[:, 0]), np.interp(s, cum, xy[:, 1])]
+    p = np.c_[dnp.interp(s, cum, xy[:, 0]), dnp.interp(s, cum, xy[:, 1])]
     d = np.diff(np.vstack([p, xy[-1:]]), axis=0)
     t = d / np.maximum(dnp.hypot(*d.T), 1e-9)[:, None]
     turn = np.abs(dnp.arctan2(t[:-1, 0] * t[1:, 1] - t[:-1, 1] * t[1:, 0], (t[:-1] * t[1:]).sum(1)))

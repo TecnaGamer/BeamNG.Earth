@@ -64,6 +64,7 @@ local f = {}
 for _, kv in ipairs(roads.fieldsFor({ m = 'road_asphalt_2lane', tl = 11, p = 20 })) do f[kv[1]] = kv[2] end
 T.check(f.material == 'road_asphalt_2lane' and f.textureLength == '11' and f.renderPriority == '20', 'material, texture length, priority')
 T.check(f.drivability == '-1' and f.overObjects == 'false', 'not in the navgraph; drawn on the terrain')
+T.check(tonumber(f.decalBias) >= 0 and tonumber(f.decalBias) <= 0.05, 'decalBias in the stock maps\' range (0-0.05)')
 
 -- a tile: queued, then made one chunk per governor unit
 T.check(roads.onTile({ anchorId = 1, key = '0_0', path = '/t/a.json', n = 2 }, 1) == true, 'tile accepted')

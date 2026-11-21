@@ -279,6 +279,13 @@ M.OPAQUE = { 'road_asphalt_2lane', 'italy_cobblestone' }
 -- itself. The decks' slabs, the curbs and the sidewalks keep theirs.
 M.NO_SHADOW = { 'road_asphalt_2lane', 'italy_cobblestone', 'm_gm_concrete_plain' }
 
+function M.loadWalkMaterials(walk)
+  if type(walk) == 'table' and walk.townBrick and not M.townBrickLoaded then
+    loadJsonMaterialsFile('/levels/east_coast_usa/art/shapes/buildings/main.materials.json')
+    M.townBrickLoaded = true
+  end
+end
+
 local function loadMaterials()
   if loadedMaterials then return end
   for _, f in ipairs(M.MATERIAL_FILES) do loadJsonMaterialsFile(f) end
@@ -544,12 +551,17 @@ local function switchAnchor(aid)
   walkQ = keep
 end
 
+-- The DecalRoads' depth bias: in the stock maps' range (0 to 0.05: West Coast USA 0.05 on its lines and wear, Italy
+-- 0.0015 on every decal; the vanilla roads study 2026-11-19); it was 0.1 (2026-10-11, from when the asphalt itself was
+-- a DecalRoad over coarse ground tiles), twice the stock maps' largest.
+M.DECAL_BIAS = '0.05'
+
 -- Pure: the DecalRoad fields of a chunk (name, value), in order.
 function M.fieldsFor(chunk)
   return {
     { 'material', chunk.m }, { 'textureLength', tostring(chunk.tl or 10) },
     { 'renderPriority', tostring(chunk.p or 20) }, { 'drivability', '-1' }, { 'improvedSpline', 'true' },
-    { 'overObjects', 'false' }, { 'distanceFade', M.FADE }, { 'decalBias', '0.1' },
+    { 'overObjects', 'false' }, { 'distanceFade', M.FADE }, { 'decalBias', M.DECAL_BIAS },
   }
 end
 
@@ -1120,6 +1132,7 @@ function M.onSkin(msg, currentAnchor)
   t.skin = { anchor = msg.anchorId, anchorObj = anchorObj, pending = 0,
     pivot = { tonumber(pv[1]) or t.cx or 0, tonumber(pv[2]) or t.cy or 0, tonumber(pv[3]) or 0 }, q = tonumber(data.q) or 0 }
   local road = type(data.road) == 'table' and data.road.shape and type(data.road.pos) == 'table' and data.road
+  M.loadWalkMaterials(data.walk)
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   for _, what in ipairs(M.SKIN_WHATS) do
     local w = data[what]
@@ -1500,6 +1513,7 @@ function M.onTile(msg, currentAnchor, a)
     lastError = 'unreadable road tile ' .. tostring(msg.path)
     return false
   end
+  M.loadWalkMaterials(data.walk)
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
   for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail', 'rail2', 'rail3',
@@ -3105,6 +3119,7 @@ function M.reset()
   for n, d in pairs(slotDropped) do slotsGone[#slotsGone + 1] = { n, d[1], d[2] } end
   objSlot, slotLive, slotDropped = {}, {}, {}
   tiles, createQ, deleteQ, walkQ, anchorId, loadedMaterials = {}, {}, {}, {}, nil, false
+  M.townBrickLoaded = false
   far, farQ, farSeen = {}, {}, {}
   held, parked, newColliders, swapQuiet = {}, {}, {}, nil     -- (walkQ entries of objects gone with the level)
   collisionDirty, deletesDirty, dirtyAt, extBoxes, farDeletes = false, false, {}, {}, {}

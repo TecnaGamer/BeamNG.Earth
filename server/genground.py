@@ -1490,40 +1490,22 @@ def render_far(imagery, frame, x0, y0, size, px, md, surface, widths=None, pendi
     i0, i1 = int(np.floor(x0 / FAR_SQ_M)), int(np.floor((x0 + size) / FAR_SQ_M - 1e-9))
     j0, j1 = int(np.floor(y0 / FAR_SQ_M)), int(np.floor((y0 + size) / FAR_SQ_M - 1e-9))
     n = int(round(FAR_SQ_M / ts))
-    mos = np.zeros(((j1 - j0 + 1) * n, (i1 - i0 + 1) * n, 3), np.uint8)
-    mosc = mos.copy()
-    fade = True
+    squares = []
     used_all = {}
     for j in range(j0, j1 + 1):
         for i in range(i0, i1 + 1):
             rgb, used, complete, pend, crgb = _far_square(imagery, frame, i, j, ts, md, surface, widths, veg, share)
-            r0 = (j1 - j) * n       # (row 0: the north)
-            mos[r0:r0 + n, (i - i0) * n:(i - i0 + 1) * n] = rgb
-            if crgb is None:
-                fade = False
-            else:
-                mosc[r0:r0 + n, (i - i0) * n:(i - i0 + 1) * n] = crgb
+            squares.append((rgb, crgb))
             for s, v in (used or {}).items():
                 used_all[s] = used_all.get(s, 0) + v
             if pending is not None:
                 pending.update(pend)
             if not complete:
                 revisit.fault()
-    # bilinear at the tile's texel centres, in the mosaic's texel units (texel centres at k + 0.5)
-    X0, Y1 = i0 * FAR_SQ_M, (j1 + 1) * FAR_SQ_M
-    k = (np.arange(px) + 0.5) * t
-    u = np.clip((x0 + k - X0) / ts - 0.5, 0.0, mos.shape[1] - 1.0)
-    v = np.clip((Y1 - (y0 + size - k)) / ts - 0.5, 0.0, mos.shape[0] - 1.0)
-    ua, va = np.floor(u).astype(np.int64), np.floor(v).astype(np.int64)
-    ub, vb = np.minimum(ua + 1, mos.shape[1] - 1), np.minimum(va + 1, mos.shape[0] - 1)
-    fu, fv = (u - ua)[None, :, None], (v - va)[:, None, None]
-    def cut(mm):
-        m = mm.astype(np.float32)
-        top = m[va][:, ua] * (1 - fu) + m[va][:, ub] * fu
-        bot = m[vb][:, ua] * (1 - fu) + m[vb][:, ub] * fu
-        return np.ascontiguousarray(np.clip(np.rint(top * (1 - fv) + bot * fv), 0, 255).astype(np.uint8))
-    out = cut(mos)
-    _fade_tl.last = (out, cut(mosc), t) if fade else None
+    fast.require(559, "cut_ground")
+    out, canopy = fast._ef.cut_ground(squares, i1 - i0 + 1, j1 - j0 + 1, n, px, x0, y0, size,
+                                      i0 * FAR_SQ_M, (j1 + 1) * FAR_SQ_M, ts)
+    _fade_tl.last = (out, canopy, t) if canopy is not None else None
     scale = px * px / max(1, sum(used_all.values()))
     return out, {s: int(v * scale) for s, v in used_all.items()}
 
@@ -1539,13 +1521,8 @@ def clear_fade():
 def fade_weights(t, levels):
     """The forest floor's weight in each of a texture's mips (level k: texel t * 2^k m): 1 to FADE_NEAR_M, 0 from
     FADE_FAR_M, linear in log2 between (dmath)."""
-    import dmath
-    out = []
-    span = dmath.log2(FADE_FAR_M / FADE_NEAR_M)
-    for k in range(levels):
-        w = t * (1 << k)
-        out.append(min(1.0, max(0.0, dmath.log2(FADE_FAR_M / w) / span)) if w > 0 else 1.0)
-    return out
+    fast.require(559, "fade_weights")
+    return fast._ef.fade_weights(t, levels, FADE_NEAR_M, FADE_FAR_M)
 
 
 def fade_mix(a, c, s):
@@ -1556,7 +1533,8 @@ def fade_mix(a, c, s):
         return a
     if q <= 0:
         return c
-    return ((c.astype(np.uint32) * (256 - q) + a.astype(np.uint32) * q + 128) >> 8).astype(np.uint8)
+    fast.require(559, "photo_mix")
+    return fast._ef.photo_mix(a, c, q)
 
 
 def keep_painted(before, after, canopy):
@@ -1564,12 +1542,9 @@ def keep_painted(before, after, canopy):
     painted): the texels it changed as it painted them, the rest the canopy's. None stays None."""
     if canopy is None:
         return None
-    before, after = np.asarray(before, np.uint8), np.asarray(after, np.uint8)
-    ne = before != after
-    painted = ne[:, :, 0] | ne[:, :, 1] | ne[:, :, 2]     # (any(axis=2) took 2.5x as long at 2048²)
-    out = np.array(canopy, np.uint8, copy=True)
-    np.copyto(out, after, where=painted[:, :, None])
-    return out
+    fast.require(559, "photo_keep_painted")
+    return fast._ef.photo_keep_painted(np.asarray(before, np.uint8), np.asarray(after, np.uint8),
+                                      np.asarray(canopy, np.uint8))
 
 
 # The block's base (detail mode) fades like the far tiles (bc7.dds fade, terraincache.base_entry): its mips by their

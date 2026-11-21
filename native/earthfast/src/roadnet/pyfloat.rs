@@ -43,7 +43,7 @@ fn lon_of(x: f64, n: f64) -> f64 {
 }
 
 /// mapcells.tile_xy of one point (np.radians: x * (pi / 180), Rust's to_radians).
-fn tile_xy(lat: f64, lon: f64, n: f64) -> (f64, f64) {
+pub(crate) fn tile_xy(lat: f64, lon: f64, n: f64) -> (f64, f64) {
     let lat = if lat < -MAX_LAT { -MAX_LAT } else if lat > MAX_LAT { MAX_LAT } else { lat };
     let x = (lon / 360.0 + 0.5) * n;
     let y = (0.5 - lat.to_radians().dtan().dasinh() / (2.0 * std::f64::consts::PI)) * n;

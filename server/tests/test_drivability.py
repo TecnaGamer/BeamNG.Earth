@@ -5,6 +5,8 @@ import unittest
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).parent))
 import drivability as dv  # noqa: E402
 
@@ -46,7 +48,7 @@ class DrivabilityTest(unittest.TestCase):
 
     def test_no_site_gets_worse(self):
         baseline = dv.load_baseline()
-        for name, result in zip(dv.SITES, dv.measure_all(dv.SITES)):
+        for name, result in zip(dv.SITES, dv.measure_all(dv.SITES), strict=True):
             with self.subTest(name):
                 self.assertIn(name, baseline, f"{name} has no baseline: {UPDATE.format(name)}")
                 worse, better = compare(result, baseline[name])
@@ -76,8 +78,7 @@ class IndependenceTest(unittest.TestCase):
             runs = [(name, v, pool.submit(dv.measure, name, **v)) for name, v in cases]
             for name, variant, run in runs:
                 with self.subTest(name, **{k: str(x) for k, x in variant.items()}):
-                    worse, better = compare(run.result(), dv.baseline_entry(pinned[name].result()))
-                    self.assertFalse(worse + better, f"{name} with {variant}:\n  " + "\n  ".join(worse + better))
+                    self.assertEqual(run.result(), pinned[name].result())
 
 
 class ScoreTest(unittest.TestCase):
@@ -87,6 +88,24 @@ class ScoreTest(unittest.TestCase):
 
     def test_drivable_is_zero(self):
         self.assertEqual(dv.score({"parts": {}}), 0)
+
+
+class TrackTest(unittest.TestCase):
+    def test_empty_invalid_and_subthreshold_tracks(self):
+        xy = np.column_stack((np.arange(4), np.zeros(4)))
+        inside = np.ones(4, dtype=bool)
+        where = {"surface": "road", "part": "r", "class": "residential"}
+        def sample(z):
+            report = dv.Report()
+            report.add(where, xy, np.asarray(z), inside, centre=True)
+            return report.result()
+        with self.assertRaises(ValueError):
+            dv.Report().result()
+        with self.assertRaises(ValueError):
+            sample([0., 0., np.nan, 0.])
+        a, b = sample([0., 0., 0., 0.]), sample([0., 1e-12, 0., 0.])
+        self.assertEqual(a["parts"], b["parts"])
+        self.assertNotEqual(a["tracks"], b["tracks"])
 
 
 class CompareTest(unittest.TestCase):

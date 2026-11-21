@@ -57,6 +57,20 @@ class LaneSections(unittest.TestCase):
                 self.assertEqual(actual["edges"], expected["edges"])
                 self.assertEqual(actual["nodes"], expected["nodes"])
 
+    def test_tile_does_not_repeat_unsplit_copy_from_neighbour_cell(self):
+        # (a road whole in one cell and split in its neighbours: as both copies, each one's lines were cut where the
+        # other ran and the tile drew nothing of it; I-576, 2026-11-17)
+        sections = lanesections.split(merged(), FRAME)
+        expected = roads.build_tile(FRAME, 1, -1, [sections], flat)
+        self.assertTrue(expected)
+        for cells in ([merged(), sections], [sections, merged()]):
+            with self.subTest(original_first=cells[1] is sections):
+                actual = roads.build_tile(FRAME, 1, -1, cells, flat)
+                self.assertEqual(len(actual), len(expected))
+                for a, e in zip(actual, expected):
+                    self.assertEqual(a["m"], e["m"])
+                    np.testing.assert_allclose(np.asarray(a["n"], float), np.asarray(e["n"], float))
+
     def test_graph_keeps_original_when_section_coverage_is_incomplete(self):
         for case in ("missing", "gap", "clipped"):
             with self.subTest(case=case):

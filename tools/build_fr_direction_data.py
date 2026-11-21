@@ -8,6 +8,10 @@ import argparse,gzip,json,math,hashlib,sys
 from pathlib import Path
 from collections import Counter
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'server'))
+try:        # (first: numpy's AVX-512 kernels held back before anything imports numpy, tools/npyfirst.py)
+    import npyfirst  # noqa: E402,F401
+except ImportError:     # (loaded by its path into another process, a test: that process's entry point guards)
+    pass
 import countrybounds
 
 CAR={'primary','secondary','tertiary','unclassified','residential','living_street',

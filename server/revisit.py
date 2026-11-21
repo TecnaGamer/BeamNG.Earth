@@ -390,6 +390,8 @@ def all_source_id(here):
 NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_SEND_M", "BNE_ROADS_DROP_M",
                 "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M", "BNE_NETSTATS_PROC", "BNE_LIDAR_GAPS_WAIT",
                 "BNE_TELEMETRY",
+                "BNE_ROADSHAPE_DEBUG",      # (v2 P2a's fork records written beside the build: nothing built reads them)
+                "BNE_ROADSURF_V3_DEBUG",    # (v3 S1's lane graphs written beside the build: nothing built reads them)
                 # (which process makes a cell's plans and road stage: the same plans, earthd.Server.plan_first,
                 # plancache's stage_*)
                 "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE",
@@ -409,6 +411,68 @@ OUTPUT_ENV = ("BNGE_ONEWAY_JOINS", "BNGE_ROADS_IN_GROUND")
 def keyed_env(k):
     """Is environment variable k part of the build switches' hash (code_key, switches_key)?"""
     return (k.startswith("BNE_") and k not in NOT_SWITCHES) or k in OUTPUT_ENV
+
+
+# A switch whose meaning changed after it could have been run (on dev, by a tester, in a pack): its value is keyed with
+# this version, so the plans, facts, packs and shares made under its old meaning miss rather than mix with the new ones
+# at their seams. Only where it is set: the default namespace (the switch unset) keeps its keys. BNE_LEVEL_SPACING 2:
+# the clearance study's class table (4.9 / 4.5 / 4.0 / 2.5 / 6.0 m) and its use by the underpass dips and the measured
+# decks (2026-11-17); 3: its approach fills ask the chain's railways their own clearance (Codex round 3); 4: the
+# deck, its approach fills and the dips under it ask one target, the whole chain's; 5: one target per crossing, its
+# own road's class (roads.crossing_clear), for the deck, its approach fills, the dip under it and a stack's lower part
+# (2026-11-18). The
+# ski-ramp switches at their Codex review meanings (2026-11-17): BNE_FAST_DECK_GROUND 2 (a fast deck beside a ramp
+# caps its fill too), BNE_UNDER_SPEED 2 (motorways and trunks only, a joined dip ending before its junction),
+# BNE_FAST_GAP 4 (each landing's own approach on the map's own lines, its samples taken by their road, round 5), 5
+# (its samples taken by their own ground piece, never behind the deck end: the self-run reviews of round 5).
+# BNE_RACEWAY_DIG 2: the joins (a raceway ending on another gives way to it), the band on the sampled lines, the
+# rounded dug floor (2026-11-17). BNE_DIRT_BUMP / BNE_DIRT_BANK 2 (Rough dirt roads): their random numbers from
+# earthfast.DirtNoise (integer splitmix64, the same on every platform), no longer numpy's Generator (2026-11-18).
+# BNE_DECK_STRUCT 1: the road revamp's structures (track RS) at step S1, shadow only (structures.py: a JSON per chain,
+# no output change); each later step bumps it. 2 (S2a): the chain closure holds every pair that could be one structure
+# (structures.touch, 6 m: more parts can share a chain solve), unique members, OSM layer levels, the JSON only from the
+# published solve, written in the background. 3 (S2a fix): the closure's halo reaches the widest deck the kernels take
+# from either side (structures.HALF_MAX_M, half widths capped there), its cells budgeted apart from the chain's own
+# (roads.CHAIN_HALO_CELLS): other chains and window caps. 4 (S2b part 1): chain discovery as a fixpoint of the complete
+# local set (roads.BridgeProfiles._closure: other chains and window decisions), window solves publish only pieces of
+# capped chains, the JSON carries the joint heights (earthfast.structure_heights). 5 (S2b part 2a): BNE_DECK_STRUCT=abut,
+# the plans give the decks of one structure side by side one abutment height per common end (grading._pin_struct_ends,
+# earthfast.structure_abutments; plancache.plans_format ".ds5"); shadow unchanged. BNE_LEVEL_SPACING 5: one clearance per crossing from its own road's class.
+# BNE_ROADSHAPE 1 (road revamp v2 P1b, decks): a simple structure's decks on the road's smooth line, skewed and buried
+# ends, banked with a banked road (roadshape.py; the plans keep a banked road's bank onto such a deck); BNE_DECK_SKEW
+# 1: its skew part (on with decks unless off). BNE_ROADSHAPE 2: which decks are simple is one rule for the deck and
+# the plans (roadshape.part_simple: bounded, from the map round the structure), never the chain's group.
+# BNE_ROADSHAPE 3 (P2b, sheet): an exit off a bridge one deck with its road (roadshape.deck_sheets: the union slab, the
+# branch pinned to the through deck's heights, no junction pad at the fork); sheet's tiles were decks' before.
+# BNE_ROADSHAPE 4 (P2c, sheet): the union ends where the heights part when the edges' split fails the height tests;
+# the split vertex from the fork's record alone (not the tile's lane shifts); a fork's pad kept for an arm not in it.
+# BNE_ROADSHAPE 5 (P3b, profile): the joint profile BUILT (roadshape.profile_built: deck heights from the solve, the
+# plans' second stage pinned from its approaches, grading._Planner._pinned); sheet and decks unchanged.
+# BNE_ROADSHAPE 6 (P3c, profile): the pins read every 0.25 m off the abutments, shared by distance and along the road;
+# an approach reaching another deck end within 2 anchors one member; the steep-road C1 tolerance (earthfast 523).
+# BNE_ROADSHAPE 7 (sheet): a branch's road surface on an exit union's slab drawn roadmesh.NOSLAB_LIFT over its through
+# road's (the union's chunks from the fork's record, "noslab"; revampfix).
+# BNE_ROADSHAPE 8 (P3d, profile): the solve holds twin decks, deck ends at one junction across OSM levels and the ground
+# under the chain's decks (earthfast 534); coplanar decks running along each other drawn as one surface
+# (roadmesh.trim_overlaps coplanar). Sheet and decks unchanged.
+# BNE_ROADSHAPE 9 (P3e, profile): a deck over another along it held as twins are, a twin run held whole once seeded
+# (earthfast 536); the coplanar trim on one seam, where both surfaces meet, past chunk ends inside a part
+# (deck_trim_coplanar); a branch's surface in its union laid on the through deck's; union decks' rows unsimplified.
+SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
+                   "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
+                   "BNE_ROADSHAPE": 9, "BNE_DECK_SKEW": 1}
+
+
+def keyed_value(k, v):
+    """The text a set build switch k = v is hashed as (code_key, switches_key, bakepack.switches): k=v, its
+    SWITCH_VERSIONS version after it when it has one."""
+    # The surface generation includes the supporting deck and its parapet outline.
+    n = 7 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
+    if k in ("BNE_SIDEWALK_V2", "BNE_SURFACE_V2") and v.strip().lower() in ("on", "1", "yes", "true"):
+        n = 2
+    if (k, v) == ("BNE_ROADSHAPE", "profile") and os.environ.get("BNE_ROADSURF_V3") == "surface":
+        n = 10 if os.environ.get("BNE_PROFILE_ROBUST") == "0" else 11
+    return f"{k}={v}" if n is None else f"{k}={v}@v{n}"
 
 
 def code_key():
@@ -433,7 +497,7 @@ def code_key():
             h.update(got)
             for k in sorted(os.environ):                # (the build switches: BNE_*, OUTPUT_ENV)
                 if keyed_env(k):
-                    h.update(f"{k}={os.environ[k]}".encode())
+                    h.update(keyed_value(k, os.environ[k]).encode())
             import heightmap        # (the lighter ground's 2 m squares: road tiles drape on its lattice; 1 m keys as before)
             if heightmap.SQUARE != 1.0:
                 h.update(f"square={heightmap.SQUARE:g}".encode())
@@ -484,9 +548,9 @@ def _switch_keys():
             full, plans = hashlib.sha1(), hashlib.sha1()
             for k in sorted(os.environ):
                 if keyed_env(k):
-                    full.update(f"{k}={os.environ[k]}".encode())
+                    full.update(keyed_value(k, os.environ[k]).encode())
                     if k not in PLAN_NEUTRAL:
-                        plans.update(f"{k}={os.environ[k]}".encode())
+                        plans.update(keyed_value(k, os.environ[k]).encode())
             _switches.extend((full.hexdigest()[:16], plans.hexdigest()[:16]))
         return _switches[0], _switches[-1]
 
@@ -562,7 +626,7 @@ GENS_KEPT = 6               # generations kept in the file
 GENS_FILE = "generations.json"
 # (the kinds read so: a geotile's road content, an anchor's skin of it, a geotile's trees, an anchor's sign tile, a
 # block's photo, a terrain block. Not the far field's: nothing builds those behind a session yet)
-READ_FORMAT = {"roadsg": 1, "rskin": 1, "vegg": 1, "signs": 1, "basephoto": 1, "block": 1}
+READ_FORMAT = {"roadsg": 2, "rskin": 2, "vegg": 1, "signs": 1, "basephoto": 1, "block": 1}
 STALE_KINDS = frozenset(READ_FORMAT) - {"block"}
 ALTS_KEPT = 50000
 _alts = {}                  # current key -> [(generation id, that generation's key)] (key() in a stale scope)

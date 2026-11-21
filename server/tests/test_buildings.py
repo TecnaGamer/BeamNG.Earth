@@ -476,12 +476,11 @@ class FarIndexLimitTest(unittest.TestCase):
                  for i in range(2900)]
         (opened,) = bld._sky_mesh(items)
         self.assertLessEqual(len(opened[0]), bld.MAX_MESH_VERTS)
-        with mock.patch.object(shells, "ON", True), mock.patch.dict(bld.over_limit, {"buildings": 0}):
+        with mock.patch.object(shells, "ON", True):
             meshes = bld._sky_mesh(items)
             self.assertIsNotNone(meshes)
             self.assertGreater(sum(len(m[0]) for m in meshes), 65535, "(the case: past the indices once closed)")
             self.assertTrue(all(len(m[0]) <= 65535 for m in meshes), [len(m[0]) for m in meshes])
-            self.assertEqual(bld.over_limit["buildings"], 0)
             self.assertEqual(sum(len(m[2]) for m in meshes), len(shells.close(
                 *[np.asarray(a) for a in (opened[0], opened[2], opened[3])], (opened[1], opened[5]), skirt=False)[1]))
 
@@ -494,12 +493,12 @@ class FarIndexLimitTest(unittest.TestCase):
             bld.far_tile(None, 0, 0, None, None, d, "/x", "a")
             self.check(os.path.join(d, "bldfar_a_0_0.cdae"), items)
 
-    def test_a_building_past_the_indices_is_left_out(self):
+    def test_building_larger_than_group_budget_kept(self):
         items = _dense_items(3)
-        n1 = len(bld.build(items[:1], lite=True)[0])
-        with mock.patch.object(bld, "VERTS_MAX", n1 - 1), mock.patch.dict(bld.over_limit, {"buildings": 0}):
-            self.assertEqual(bld.build_parts(items, lite=True), [])
-            self.assertEqual(bld.over_limit["buildings"], 3)
+        with mock.patch.object(bld, "VERTS_MAX", 3):
+            parts = bld.build_parts(items, lite=True, max_verts=3)
+        self.assertEqual(len(parts), len(items))
+        self.assertEqual(sum(len(m[2]) for m in parts), len(bld.build(items, lite=True)[2]))
 
 
 class PackStyleTest(unittest.TestCase):
@@ -1925,6 +1924,24 @@ class RoadLinesTest(unittest.TestCase):
         self.assertTrue(bld._ml_false(ring, [], [], lines), "a lorry-sized outline on its lanes: not a building")
         self.assertEqual(len(lines.half), len(lines), "a half-width per line")
 
+    def test_a_machine_learned_outline_on_a_racetrack_is_not_a_building(self):
+        """Laguna Seca under the Perimeter Road's bridge (the player's report R04KNWVC): Microsoft's 49 x 12 m outline
+        along the track (its lanes and the pit wall's shadow) stood as a 5.5 m building across it. The ML test's lines
+        (ML_ROAD_CLASSES) hold the raceway; the public roads' (roads_xy: lifts, sites, passages) do not."""
+        from test_roads import FRAME, features
+        f = features([[(-100, 128), (356, 128)]], ["raceway"])
+        self.assertEqual(bld.road_lines(FRAME, [f], 0.0, 0.0), [], "a racetrack is no public road")
+        lines = bld.road_lines(FRAME, [f], 0.0, 0.0, classes=bld.ML_ROAD_CLASSES)
+        self.assertEqual(len(lines), 1)
+        strip = np.array([[48.7, 125.2], [48.7, 137.5], [24.3, 137.0], [-0.2, 136.5], [-0.2, 125.0], [19.0, 125.5],
+                          [18.5, 133.2], [47.7, 133.6]], np.float64)
+        self.assertTrue(bld._ml_false(strip, [], [], lines))
+        house = np.array([[20, 150], [32, 150], [32, 160], [20, 160]], np.float64)
+        self.assertFalse(bld._ml_false(house, [], [], lines), "a hut beside the track stays")
+        # the road tiles' and the far tiles' buildings ask with them
+        src = Path(bld.__file__).read_text(encoding="utf-8")
+        self.assertEqual(src.count("classes=ML_ROAD_CLASSES"), 2)
+
     def test_lines_carry_the_drawn_half_width(self):
         """road_lines' half-widths are road_specs' width / 2 (a 26 m carriageway: 13 m), and the I-280 lorry's outline
         7 m off its centre line is left out with them (ML_ROAD_EDGE_M)."""
@@ -2748,7 +2765,7 @@ class RoadPassageTest(unittest.TestCase):
         self.assertEqual(bld.road_lines(FRAME, [f], 0.0, 0.0, classes={"residential"}), [])
 
 
-class MappedRoofTest(unittest.TestCase):
+class MappedRoofAttributesTest(unittest.TestCase):
     """Research 2026-11-10: Overture's half_hipped, mapped roof heights, roof:orientation and roof:direction."""
 
     def test_overtures_half_hipped_is_drawn(self):
@@ -2988,6 +3005,63 @@ class SkeletonGableTest(unittest.TestCase):
         P = np.asarray(m.P).reshape(-1, 3)
         self.assertAlmostEqual(P[:, 2].max(), 9.0, delta=0.05)
         self.assertAlmostEqual(P[:, 2].min(), 6.0, delta=1e-6)          # (gables stand on the walls: no eaves)
+
+
+class SkeletonValidTest(unittest.TestCase):
+    def test_a_footprint_the_skeleton_gets_wrong_keeps_a_house_sized_roof(self):
+        """Eifel 50.2430,6.9358 (the player's report W545TFKJ): a house's outline cut at a carriageway's edge, its LoD2
+        roof gabled 6.3 m on its 7.05 m height: the skeleton rose 18 km (an event of near-parallel edges far off) and the
+        walls were cut to 2.5 m under it. The skeleton fails now (a node over its distance to the walls): the house's
+        heightfield roof, its walls and roof the house's."""
+        ring = np.array([[18.9178692467, 0.0452073521], [20.6767692372, 1.7992849494], [21.8247669715, 0.2728416349],
+                         [24.5034039463, 2.5625249972], [22.9727422795, 4.0889654141], [28.712666233, 9.8131666211],
+                         [22.9726911617, 15.9189168255], [13.1434547151, 6.1166355389]])
+        self.assertLess(bld.skeleton_rise(ring), 10.0)          # (12,157 m before: 0, failed)
+        s = bld.plan(ring, {"class": "house", "height": 7.0488, "roof_shape": "gabled", "roof_height": 6.3}, 0,
+                     50.243, 6.9358)
+        got = bld.build([(s, 400.0, 400.5)])
+        P = np.asarray(got[0])
+        self.assertLess(P[:, 2].max() - 400.0, 15.0)
+        self.assertFalse(s.skel, "the heightfield roof, not the failed skeleton")
+
+
+class OnBridgeOverWaterTest(unittest.TestCase):
+    def test_a_building_mapped_on_a_bridge_over_a_river_is_left_out(self):
+        """Blackfriars station (the player's report BEF94SAA): OSM's building, layer 1, along the railway bridge across
+        the Thames, drawn from the water up as a 300 m block. A layer 1 footprint mostly over water is left out; its part
+        on land, one at ground level over the water (a moored ship's, a pier's tests are their own) and a part mapped with
+        its own bottom up (the platforms' canopy) stay."""
+        river = np.array([[-500.0, -300.0], [500.0, -300.0], [500.0, -40.0], [-500.0, -40.0]])
+        water = [(river, [])]
+        on_bridge = np.array([[-100.0, -315.0], [-54.0, -315.0], [-54.0, 30.0], [-100.0, 30.0]])
+        on_land = np.array([[-77.0, 4.0], [-46.0, 4.0], [-46.0, 62.0], [-77.0, 62.0]])
+        self.assertTrue(bld.on_bridge_over_water(on_bridge, 1.0, water))
+        self.assertFalse(bld.on_bridge_over_water(on_bridge, 0.0, water), "at ground level: as before")
+        self.assertFalse(bld.on_bridge_over_water(on_bridge, np.nan, water), "no level mapped: as before")
+        self.assertFalse(bld.on_bridge_over_water(on_land, 1.0, water))
+        self.assertFalse(bld.on_bridge_over_water(on_bridge, 1.0, water, 9.0), "a canopy 9 m up")
+        self.assertFalse(bld.on_bridge_over_water(on_bridge, 1.0, None))
+
+    def test_tile_buildings_leave_out_the_station_but_keep_a_bridge_support(self):
+        """In tile_buildings: the layer 1 footprint over the river goes, the same footprint on a mapped bridge support
+        (a Tower Bridge tower: support_rings) stays (Codex's review)."""
+        import geodesy
+        f = geodesy.EnuFrame(51.51, -0.10)
+
+        def ll(x, y, w, d):
+            e = np.array([x, x + w, x + w, x, x]); n = np.array([y, y, y + d, y + d, y])
+            la, lo, _ = f.enu_to_geodetic(e, n, 0.0)
+            return np.stack([lo, la], 1)
+        river = np.array([[-50.0, 40.0], [300.0, 40.0], [300.0, 200.0], [-50.0, 200.0]])
+        flat = lambda la, lo: np.zeros(np.shape(la))
+        b = Feats(["S", "L"], [ll(20, 60, 40, 120), ll(150, 10, 20, 20)],
+                  **{"class": ["train_station", ""], "height": [15.0, 9.0], "level": [1.0, 1.0]})
+        items = bld.tile_buildings(f, 0, 0, 256, 256, [b], flat, water_xy=[(river, [])])
+        self.assertEqual(len(items), 1, "the station over the river left out, the one on land kept")
+        support = np.array([[10.0, 50.0], [70.0, 50.0], [70.0, 190.0], [10.0, 190.0]])
+        items = bld.tile_buildings(f, 0, 0, 256, 256, [b], flat, water_xy=[(river, [])],
+                                   supports=[(support, "grey")])
+        self.assertEqual(len(items), 2, "a bridge's own support stays")
 
 
 class RoofPhotoTest(unittest.TestCase):

@@ -147,31 +147,14 @@ def shoulder(x):
 
 
 # --- filters ----------------------------------------------------------------------------------
-_CNT = {}
-
-
 def box(a, r):
     """Mean over a (2r+1)^2 box, edge-normalised (the window is cut at the array border): one
     integral image, edge-replicated so the four corner reads are plain slices."""
     a = np.asarray(a, np.float32)
     if r <= 0:
         return a
-    n, m = a.shape
-    S = np.zeros((n + 1 + 2 * r, m + 1 + 2 * r), np.float64)
-    core = S[r + 1:r + 1 + n, r + 1:r + 1 + m]
-    np.cumsum(a, axis=0, out=core)
-    np.cumsum(core, axis=1, out=core)
-    S[r + 1 + n:, :] = S[r + n, :]
-    S[:, r + 1 + m:] = S[:, r + m:r + m + 1]
-    k = 2 * r + 1
-    tot = S[k:k + n, k:k + m] - S[:n, k:k + m] - S[k:k + n, :m] + S[:n, :m]
-    key = (n, m, r)
-    inv = _CNT.get(key)
-    if inv is None:
-        cr = np.minimum(np.arange(n) + r + 1, n) - np.maximum(np.arange(n) - r, 0)
-        cc = np.minimum(np.arange(m) + r + 1, m) - np.maximum(np.arange(m) - r, 0)
-        inv = _CNT[key] = 1.0 / np.outer(cr, cc)
-    return (tot * inv).astype(np.float32)
+    fast.require(563, "shadow_box")
+    return fast._ef.shadow_box(a, r)
 
 
 def guided(I, p, r, eps):
@@ -196,10 +179,8 @@ def down(a, f):
 # --- terrain ----------------------------------------------------------------------------------
 def normals(h, res):
     """Unit normals (E, N, Up) of a north-up grid (row 0 = north)."""
-    gy, gx = np.gradient(h.astype(np.float64), res)
-    nx, ny = -gx, gy
-    n = np.sqrt(nx * nx + ny * ny + 1.0)
-    return (nx / n).astype(np.float32), (ny / n).astype(np.float32), (1.0 / n).astype(np.float32)
+    fast.require(563, "shadow_normals")
+    return fast._ef.shadow_normals(np.asarray(h, np.float64), res)
 
 
 def lambert(nrm, az, el):
@@ -215,23 +196,9 @@ def horizon_tan(hpad, res, pad, n, az, max_dist=PAD_M, dmax=None, growth=1.04):
     (pad, pad) of the padded grid hpad. Steps grow geometrically from one cell; the march stops
     at max_dist, at the pad, or at dmax (beyond it nothing can rise above the sun). A fixed
     direction makes every step one shift of the whole grid: four slices, no gather."""
-    best = np.full((n, n), -1e9, np.float32)
-    s, c = dmath.sin(math.radians(az)), dmath.cos(math.radians(az))
-    stop = min(max_dist, (pad - 1.5) * res, max_dist if dmax is None else dmax)
-    d = res
-    # Rust (earthfast.horizon_steps): no full-grid temporaries; paced between batches
-    fast.require(1, "horizon_tan")
-    hp = np.ascontiguousarray(hpad, np.float32)
-    steps = []
-    while d <= stop:
-        dy, dx = -c * d / res, s * d / res
-        iy, ix = math.floor(dy), math.floor(dx)
-        steps.append((iy, ix, dy - iy, dx - ix, d))
-        d = max(d + res, d * growth)
-    for i in range(0, len(steps), HORIZON_BATCH):
-        pacer.pace()
-        fast._ef.horizon_steps(hp, best, pad, np.asarray(steps[i:i + HORIZON_BATCH], np.float64))
-    return best
+    fast.require(563, "shadow_horizon")
+    return fast._ef.shadow_horizon(np.ascontiguousarray(hpad, np.float32), res, pad, n, az,
+                                   max_dist if dmax is None else min(max_dist, dmax), growth, HORIZON_BATCH, pacer.pace)
 
 
 def march_limit(hpad, h, el):
@@ -267,29 +234,14 @@ def score_grid(hpad, L, res, pad, azs, els):
     Lc = (L - L.mean()).ravel()
     Lv = float((Lc * Lc).sum()) + 1e-12
     dark = (L < otsu(L)).ravel()
-    nd = int(dark.sum())
+    fast.require(563, "sun_scores")
     R2 = np.zeros((len(azs), len(els)))
     MCC = np.zeros_like(R2)
     dmax = march_limit(hpad, h, min(els))
     for i, az in enumerate(azs):
-        ht = horizon_tan(hpad, res, pad, n, az, dmax=dmax).ravel()
-        a = (nx * dmath.sin(math.radians(az)) + ny * dmath.cos(math.radians(az))).ravel()
-        for j, el in enumerate(els):
-            pacer.pace()
-            lit = ht < dmath.tan(math.radians(el))
-            dirc = np.maximum(0.0, a * dmath.cos(math.radians(el)) + nz.ravel() * dmath.sin(math.radians(el))) * lit
-            dc = dirc - dirc.mean()
-            cov = float(dnp.matmul(dc, Lc))
-            var = float(dnp.matmul(dc, dc)) + 1e-12
-            r = cov / math.sqrt(var * Lv)
-            R2[i, j] = r * abs(r)
-            sh = ~lit | (dirc < 0.15)
-            tp = int((sh & dark).sum())
-            ns = int(sh.sum())
-            fp, fn = ns - tp, nd - tp
-            tn = sh.size - tp - fp - fn
-            den = math.sqrt(float(tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
-            MCC[i, j] = (tp * tn - fp * fn) / den if den > 0 else 0.0
+        ht = horizon_tan(hpad, res, pad, n, az, dmax=dmax)
+        a = nx * dmath.sin(math.radians(az)) + ny * dmath.cos(math.radians(az))
+        R2[i], MCC[i] = fast._ef.sun_scores(a, nz, ht, Lc, dark, Lv, els, pacer.pace)
     return R2, MCC
 
 
