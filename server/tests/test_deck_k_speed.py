@@ -34,6 +34,24 @@ def overpass(L=900.0, step=4.0):
 
 
 class DeckKSpeedTest(unittest.TestCase):
+    def test_ground_reuse_preserves_batches_and_retries_short_reads(self):
+        import revisit
+        calls = []
+
+        def read(xy):
+            calls.append(xy.copy())
+            if len(calls) == 1:
+                revisit.fault(here=True)
+            return xy[:, 0] + len(calls)
+
+        sample = roads._profile_ground_cache(read)
+        points = np.array([[1., 0.], [3., 0.]])
+        np.testing.assert_array_equal(sample(points), [2., 4.])
+        sample(points)[:] = 0
+        np.testing.assert_array_equal(sample(points.copy()), [3., 5.])
+        np.testing.assert_array_equal(sample(points[::-1]), [6., 4.])
+        self.assertEqual(len(calls), 3)
+
     def test_off_by_default(self):
         self.assertFalse(roads.DECK_K_SPEED)
 

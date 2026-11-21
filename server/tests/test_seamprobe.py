@@ -46,10 +46,6 @@ CUT_REACH_M = 3.0       # m past a cut piece's half width its cut line is looked
 PAD_M = 40.0            # m round a tile its pads are made (earthd's road tile)
 SQUARE_WEDGE = 1e-4     # degrees two square ends of one cut may differ (2.7 before roads._cut_ends: the docstring)
 WEDGE_GRADE = 0.15      # the steepest deck grade (seamcheck): a wedge's xy offset times this is its height offset
-# Mismatches seen and reported, not fixed here: (place, seam, text in it) -> why. (None left: the slab's reach past its
-# road, worked out per drawn chunk, saw only its own tile's side of a cut, 2 mm to 1.1 m steps and a nose bending a
-# parapet off the cut; now along each deck part's whole line, roads._deck_reach / earthfast deck_reach.)
-KNOWN = {}
 
 
 def load(name):
@@ -288,18 +284,9 @@ def seam_problems(name, ta, tb, axis, at, lo, hi):
     return [(name, w, t) for w, t in bad]
 
 
-def check(test, found):
-    """found [(place, seam, text)] against KNOWN: no new mismatch, no known one gone (fixed: drop it from KNOWN)."""
-    new = [f"{p} {w}: {t}" for p, w, t in found if not any(p == kp and w == kw and kt in t for kp, kw, kt in KNOWN)]
-    gone = [k for k in KNOWN if not any(p == k[0] and w == k[1] and k[2] in t for p, w, t in found)]
-    test.assertEqual(new, [], "seam mismatches")
-    test.assertEqual(gone, [], "KNOWN mismatches no longer seen: drop them from KNOWN")
-
-
 @unittest.skipUnless(HAVE, "earthfast.deck_sheets missing")
 class SeamProbe(unittest.TestCase):
     maxDiff = None
-    built = {}
 
     def setUp(self):
         old = roadshape.SHEET, roadshape.SHEET_WINDOW_M, roadshape.PROFILE_BUILT
@@ -333,7 +320,7 @@ class SeamProbe(unittest.TestCase):
                 found += seam_problems(name, built[a], built[b], axis, at, lo, hi)
         self.assertGreater(cuts, 10, "too few decks cross the checked seams")
         self.assertGreater(shared, 10, "too few forks seen from both sides of a seam")
-        check(self, found)
+        self.assertEqual(found, [], "seam mismatches")
 
     def test_tile_same_from_any_window_and_order(self):
         for name, parts, ground, tiles in self.places():

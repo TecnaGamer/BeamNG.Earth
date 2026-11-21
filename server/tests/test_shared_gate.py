@@ -3,6 +3,7 @@ across the server's processes, not each process alone (2026-11-13 review of the 
 processes each had md6in's whole 1 request/s, and none saw another's Retry-After)."""
 import multiprocessing
 import os
+import struct
 import sys
 import tempfile
 import time
@@ -118,6 +119,29 @@ class SharedGateTest(unittest.TestCase):
         finally:
             nf.SharedGate.release(slot)
         nf.SharedGate.release(g3.acquire("prefetch", 1.0, URL, HOST)[0])     # (free again)
+
+    def test_existing_gate_record_reserves_debt_and_keeps_its_clock(self):
+        # The machines' workers share this on-disk record, including a reservation made before its token exists.
+        now = [1000.25]
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        gate = nf.SharedGate(self.tmp.name, HOST, policy(2.0), clock=lambda: now[0], sleep=sleep)
+        path = Path(self.tmp.name, HOST + ".gate")
+        path.write_bytes(struct.pack("<3d", 0.25, 1000.0, 0.0))
+        slot, waited = gate.acquire("demand", 1.0, URL, HOST)
+        try:
+            self.assertEqual(waited, 0.125)
+            self.assertEqual(path.read_bytes(), struct.pack("<3d", -0.25, 1000.25, 0.0))
+        finally:
+            gate.release(slot)
+        gate.block(30.0)
+        self.assertEqual(path.read_bytes(), struct.pack("<3d", 0.0, 1000.375, 1030.375))
+        # A timestamp from before reboot resets both the block and the debt.
+        now[0] = 10.0
+        self.assertEqual(gate.blocked(), 0.0)
+        self.assertEqual(path.read_bytes(), struct.pack("<3d", 1.0, 10.0, 0.0))
 
     def test_a_gate_that_fails_never_keeps_this_process_s_slot(self):
         # (review of 172d8032: the local slot was given back only for a FetchError; an OSError from the gate's files,

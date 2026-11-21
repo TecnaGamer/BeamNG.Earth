@@ -84,6 +84,8 @@ type PieceKey = (i32, i64, i64, u32, i64, i64);
 /// The selection's part of a connection's far state.
 #[derive(Default)]
 pub struct SelSt {
+    /// Exact-level parent boxes on the driving path, also used to order their builds.
+    pub driving: Vec<[f64; 4]>,
     pub refined: BTreeSet<Node>,
     pub node_changed: BTreeMap<Node, f64>,
     /// bumped whenever Python sets the desired tiles or the refined nodes (the last selection's result replaced)
@@ -153,6 +155,31 @@ fn iget(m: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
 fn contig<'py>(a: &Bound<'py, PyAny>) -> PyResult<PyReadonlyArray2<'py, f64>> {
     let np = a.py().import("numpy")?;
     np.call_method1("ascontiguousarray", (a, np.getattr("float64")?))?.extract()
+}
+
+/// Request whole swap groups along the car's path. At 30 m/s the usual 150 m exact ring
+/// allows only five seconds for *all* siblings to build, import and replace their parent.
+const DRIVE_LEAD_S: f64 = 12.0;
+const DRIVE_LEAD_MAX_M: f64 = 512.0;
+
+fn driving_boxes((x, y): (f64, f64), (vx, vy): (f64, f64), parent: f64, exact_radius: f64) -> Vec<[f64; 4]> {
+    let speed = vx.dhypot(vy);
+    let lead = (speed * DRIVE_LEAD_S).min(DRIVE_LEAD_MAX_M);
+    if !speed.is_finite() || exact_radius <= 0.0 || lead <= exact_radius {
+        return Vec::new();
+    }
+    let (ex, ey) = (x + (vx / speed) * lead, y + (vy / speed) * lead);
+    let cells = |a: f64, b: f64| (a.min(b) / parent).floor() as i64..=(a.max(b) / parent).floor() as i64;
+    let mut boxes = Vec::new();
+    for i in cells(x, ex) {
+        for j in cells(y, ey) {
+            if crate::clearance::seg_cell(x, y, ex, ey, i, j, parent) {
+                let (left, bottom) = (i as f64 * parent, j as f64 * parent);
+                boxes.push([left, bottom, left + parent, bottom + parent]);
+            }
+        }
+    }
+    boxes
 }
 
 fn level_size(ff: &Bound<'_, PyModule>, level: i64) -> PyResult<f64> {
@@ -925,6 +952,18 @@ impl FarState {
         let high = eye.is_some_and(|e| e > c.gf("MAP_HIGH_EYE_M").unwrap_or(f64::INFINITY));
         let eye_h = self.eye_clear(&c)?;
         let (fx, fy) = c.focus()?;
+        let radii = radii_of(&s.getattr("near_radii")?)?;
+        let mut forced_level = iget(s, "forced_level")? as i32;
+        let mut driving = Vec::new();
+        if !ramp && !map_on && s.getattr("near_visual")?.eq("mesh")? && conn.getattr("view_at")?.is_none() {
+            let exact_radius = radii.iter().find(|(l, _)| *l == min_level).map_or(0.0, |(_, r)| *r);
+            if !global || eye_h < exact_radius {
+                driving = driving_boxes((fx, fy), conn.getattr("vel")?.extract()?,
+                                        level_size(&c.ff, i64::from(min_level + 1))?, exact_radius);
+                forced.extend(driving.iter().map(|&[x0, y0, x1, y1]| (x0, y0, x1, y1)));
+                forced_level = min_level;
+            }
+        }
         let cone = if global { c.map_cone(&anchor.getattr("id")?)? } else { None };
         // _far_unchanged's inputs
         let pend = if gate {
@@ -976,8 +1015,8 @@ impl FarState {
         };
         let a = SelIn {
             px: fx, py: fy, forced, prev, hold, ks, h: fget(s, "hysteresis")?, radius, max_level, min_level,
-            radii: radii_of(&s.getattr("near_radii")?)?, disc: ext.disc.unwrap_or(false), horizon: ext.horizon,
-            forced_level: iget(s, "forced_level")? as i32, view, eye_h: 0.0, cone: None,
+            radii, disc: ext.disc.unwrap_or(false), horizon: ext.horizon,
+            forced_level, view, eye_h: 0.0, cone: None,
         };
         let mut out = Out::default();
         let mut seen = Vec::new();
@@ -1057,6 +1096,7 @@ impl FarState {
         conn.getattr("__dict__")?.set_item("_desired", &dict)?;
         {
             let mut st = self.lock(py)?;
+            st.sel.driving = driving;
             st.sel.refined = refined;
             let mut m = OMap::new();
             for r in recs {

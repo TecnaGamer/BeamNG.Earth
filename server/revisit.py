@@ -467,9 +467,11 @@ def keyed_value(k, v):
     """The text a set build switch k = v is hashed as (code_key, switches_key, bakepack.switches): k=v, its
     SWITCH_VERSIONS version after it when it has one."""
     # The surface generation includes the supporting deck and its parapet outline.
-    n = 5 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
+    n = 7 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
+    if k in ("BNE_SIDEWALK_V2", "BNE_SURFACE_V2") and v.strip().lower() in ("on", "1", "yes", "true"):
+        n = 2
     if (k, v) == ("BNE_ROADSHAPE", "profile") and os.environ.get("BNE_ROADSURF_V3") == "surface":
-        n = 10
+        n = 10 if os.environ.get("BNE_PROFILE_ROBUST") == "0" else 11
     return f"{k}={v}" if n is None else f"{k}={v}@v{n}"
 
 
@@ -624,7 +626,7 @@ GENS_KEPT = 6               # generations kept in the file
 GENS_FILE = "generations.json"
 # (the kinds read so: a geotile's road content, an anchor's skin of it, a geotile's trees, an anchor's sign tile, a
 # block's photo, a terrain block. Not the far field's: nothing builds those behind a session yet)
-READ_FORMAT = {"roadsg": 1, "rskin": 1, "vegg": 1, "signs": 1, "basephoto": 1, "block": 1}
+READ_FORMAT = {"roadsg": 2, "rskin": 2, "vegg": 1, "signs": 1, "basephoto": 1, "block": 1}
 STALE_KINDS = frozenset(READ_FORMAT) - {"block"}
 ALTS_KEPT = 50000
 _alts = {}                  # current key -> [(generation id, that generation's key)] (key() in a stale scope)

@@ -1255,11 +1255,11 @@ class SeaCarver:
         """z (DEM heights at the points) with the beds of the sea, the lakes and the rivers carved in (a
         negative depth: a stream's bank, kept no higher than its level plus that)."""
         d, lv = self.water(lat, lon)
-        cut = (d != 0) & np.isfinite(lv)
-        if not cut.any():
-            return z
-        z = np.asarray(z, np.float64)
-        return np.where(cut, np.minimum(z, np.where(cut, lv, 0.0) - d), z)
+        import fast
+        fast.require(564, "terrain water beds")
+        heights = np.broadcast_to(np.asarray(z, np.float64), d.shape)
+        carved = fast._ef.block_carve(heights.ravel(), d.ravel(), lv.ravel())
+        return z if carved is None else carved.reshape(d.shape)
 
     def lake_at(self, lat, lon, wait=True, known=False):
         """The level of the lakes (still water above sea level) at the points: NaN on land, at sea, away

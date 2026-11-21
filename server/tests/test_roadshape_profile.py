@@ -156,6 +156,27 @@ class Solve(unittest.TestCase):
         self.assertLess(report[-1], 1.)
         np.testing.assert_array_equal(heights, args[2])
 
+    def test_conflicting_portal_pin_and_floor(self):
+        deck = knots(0., 100.)
+        xy, off = flat([deck])
+        args = (xy, off, np.zeros(len(xy)), np.full(len(xy), np.nan), [1], [5.], [1.], [5.],
+                [3], [], [0, 0, 1], [0., 6., 0., 10.], sprm(), [], True)
+        heights, report, _ = EF.profile_solve(*args)
+        self.assertEqual(report[0], 0)
+        self.assertLessEqual(np.max(np.abs(np.diff(heights)) / 2.), sprm()[12] + sprm()[13] + 1e-6)
+        self.assertLessEqual(np.max(np.abs(np.diff(heights, n=2)) / 4.), .002501)
+        rows = np.asarray(report[17:]).reshape(-1, 10)
+        self.assertEqual(set(rows[:, 0]), {0, 3})
+        np.testing.assert_allclose(rows[:, 6], np.abs(rows[:, 4] - rows[:, 5]))
+        self.assertTrue((rows[:, 7] > 0).all())
+        self.assertEqual((heights, report), EF.profile_solve(*args)[:2])
+
+    def test_t_junction_and_separated_road_at_interior_vertex(self):
+        deck = [[[0., 0., 10.], [50., 0., 10.]]]
+        road = [[[0., -20.], [0., 0.], [0., 20.]]]
+        crossings = [(0, 0, 0., 0., 10.), (0, 0, 0., 0., 4.)]
+        self.assertEqual(EF.surface_road_floors(deck, road, crossings), [False, True])
+
     def test_surface_orders_ambiguous_bridge_crossing_by_level(self):
         lower = knots(-60., 60.)
         upper = lower[:, ::-1].copy()
@@ -167,6 +188,29 @@ class Solve(unittest.TestCase):
             self.assertEqual(report[0], 0)
             dz = h[off[1] + len(upper) // 2] - h[len(lower) // 2]
             self.assertGreaterEqual(expected_sign * dz, 5.)
+
+    def test_observed_traffic_below_a_deck_retains_its_headroom(self):
+        first, second = knots(0., 40.), knots(40., 80.)
+        xy, off = flat([first, second])
+        z = np.repeat([12., 0.], len(first))
+        args = (xy, off, z, np.full(len(z), np.nan), [1, 0], [5., 5.], [1., 0.], [8., 8.],
+                [0, 0], [0, 1, 1, 0, 1], [1, 0, 1], [0., 38., 0., 11.], sprm(), [], True)
+        # The lower road is at 3 m. The adjoining approach carries a contradictory 0 m pin.
+        h, report, _ = EF.profile_solve(*args, (["approach"], [("lower-road", 8.)]), 4.5)
+        self.assertEqual(report[0], 0)
+        self.assertGreaterEqual(h[len(first) - 2] - 3., 4.5 - 1e-6)
+        self.assertAlmostEqual(h[off[1] - 1], h[off[1]], places=6)
+        self.assertAlmostEqual(h[off[1] - 1] - h[off[1] - 2], h[off[1] + 1] - h[off[1]], places=6)
+
+    def test_transverse_interior_crossing_with_equal_sampled_heights(self):
+        first = knots(-60., 60.)
+        xy, off = flat([first, first[:, ::-1].copy()])
+        z = np.full(len(xy), 10.)
+        h, report, _ = EF.profile_solve(xy, off, z, z, [1, 1], [5., 5.], [3., 2.], [5., 5.],
+                                       [3, 3], [], [], [], sprm(), [], True)
+        self.assertEqual(report[0], 0)
+        mid = len(first) // 2
+        self.assertGreaterEqual(h[mid] - h[off[1] + mid], 4.5 - 1e-6)
 
     def test_surface_nose_after_branch_deck(self):
         main = knots(0., 100.)

@@ -123,6 +123,30 @@ class ChainShortTest(unittest.TestCase):
         self.assertTrue(first.complete and second.complete)
         self.assertEqual(st.__dict__.get("short", {}), {})
 
+    def test_capped_owner_fits_only_when_it_can_supply_the_adopter(self):
+        store = _Store()
+        first, other = ("f", 0), ("other", 0)
+
+        def resolve(key, pool, ground, loaded, grow=True):
+            if grow:
+                raise roads._Capped()
+            spec, xy, lon, level, count = pool[first]
+            pool[other] = spec, xy + [100., 0.], lon, level, count
+            return [first, other]
+
+        store._resolve = resolve
+        store._window = lambda block: []
+        store._canon_load = lambda *args, **kw: None
+        store._block_of_ll = lambda ll: (0, 0)
+        store._block_of_xy = lambda xy: (int(xy[0, 0] >= 100), 0)
+        self.assertIsNone(store._chain_of(first, ENDS, adopt=False, needed=[first, other]))
+        self.assertEqual(store.solves, 0)
+        # The other block already published its part. This fit supplies the
+        # missing part, so the entire result is available to the adopter.
+        store.done[other] = (types.SimpleNamespace(width=7.), np.array([[100., 0.], [110., 0.]]), np.zeros(2), 0.)
+        self.assertIsNotNone(store._chain_of(first, ENDS, adopt=False, needed=[first, other]))
+        self.assertEqual(store.solves, 1)
+
     def test_a_short_solve_adopted_from_its_owner_is_short_here_too(self):
         owner = _Store("plain")
         owner.frame = types.SimpleNamespace()
@@ -256,10 +280,10 @@ class ChainShortTest(unittest.TestCase):
         waiting, go_on = threading.Event(), threading.Event()
         real_owner_chain = owner._chain_of
 
-        def owner_chain(key, ends, adopt=True):         # (the adopter waits here for its owner)
+        def owner_chain(key, ends, adopt=True, needed=()):         # (the adopter waits here for its owner)
             waiting.set()
             self.assertTrue(go_on.wait(10))
-            return real_owner_chain(key, ends, adopt)
+            return real_owner_chain(key, ends, adopt, needed)
         owner._chain_of = owner_chain
         # the adopter's thread has an owner; the local publisher's solves here
         mine.owner_of = lambda me, comp, pool: owner if threading.current_thread().name == "adopter" else None

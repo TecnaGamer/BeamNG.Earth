@@ -1566,7 +1566,8 @@ impl FarState {
             let cone = cone.unwrap_or_default();
             let mut pr: Vec<(u8, f64, Arc<TRec>)> = todo.into_iter().map(|t| {
                 let d = crate::view_distance(t.bbox, fx, fy, &cone, self.cfg.view_penalty);
-                let cls = if (t.level == 0 || t.level == forced_level) && gate.iter().any(|b| overlaps(&t.bbox, b)) {
+                let block = (t.level == 0 || t.level == forced_level) && gate.iter().any(|b| overlaps(&t.bbox, b));
+                let cls = if block || st.sel.driving.iter().any(|b| overlaps(&t.bbox, b)) {
                     0
                 } else if started.contains(&t.key) {
                     1

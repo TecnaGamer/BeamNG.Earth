@@ -75,7 +75,6 @@ class GradeMatchTest(unittest.TestCase):
     difference goes half to each approach, the lower end up, the higher down."""
 
     def planner(self, z0, z1, length=17.0, cls="secondary", chain=False):
-        import mapcells
         g = object.__new__(grading._Planner)
         import threading
         g.lock = threading.Lock()
@@ -84,12 +83,11 @@ class GradeMatchTest(unittest.TestCase):
         bridge = np.array([[0.0, 0.0], [length, 0.0]])
         g._cell_enu = lambda k, ground=True: {"ends": bridge, "end_of": [0, 0], "bridges": [bridge],
                                                 "bridge_cls": [cls]}
-        la, lo, _ = g.frame.enu_to_geodetic(bridge[:, 0], bridge[:, 1], 0.0)
-        zs = {0: z0, 1: z1}
+        # The bridge runs east. Its banks have distinct longitudes.
+        _, lo, _ = g.frame.enu_to_geodetic(bridge[:, 0], bridge[:, 1], 0.0)
 
-        def elev(a, b):
-            a = np.asarray(a, np.float64)
-            return np.where(np.abs(a - la[0]) < np.abs(a - la[1]), z0, z1) if abs(la[0] - la[1]) > 0 else np.full(a.shape, z0)
+        def elev(lat, lon):
+            return np.where(np.abs(lon - lo[0]) < np.abs(lon - lo[1]), z0, z1)
         g.elev = elev
         return g
 
@@ -97,8 +95,8 @@ class GradeMatchTest(unittest.TestCase):
         g = self.planner(398.1, 401.3)
         a = g._grade_match(np.array([0.0, 0.0]))
         b = g._grade_match(np.array([17.0, 0.0]))
-        if a is None or b is None:
-            self.skipTest("the stub's elevation does not tell the ends apart")
+        self.assertIsNotNone(a)
+        self.assertIsNotNone(b)
         self.assertGreater(a, 0.5)
         self.assertLess(b, -0.5)
         self.assertAlmostEqual(a, -b, places=6)

@@ -29,7 +29,7 @@ def fake_server(tmp, px=64):
         mapdata=None, road_widths=None, surface=None, cache_dir=os.path.join(tmp, "cache"),
         user_dir=os.path.join(tmp, "user"), vfs_dir="/temp/beamngEarth/s1",
         out_dir=os.path.join(tmp, "user", "temp", "beamngEarth", "s1"), base_pending={}, base_stale=set(),
-        base_lock=threading.Lock(), recent_full=[], hm_name=lambda key: "hm_%d_%g_%g.ter" % key,
+        base_lock=threading.Lock(), recent_full=[],
         hm_stem=lambda key: "hm_%d_%g_%g" % key,
         _photo_data_cached=lambda anchor, x0, y0, size: True, base_ready=lambda anchor, cx, cy: True)
     for name in ("base_revisit_key", "_base_pack_path", "_base_revisited", "_base_keep", "base_name", "_base_kept"):

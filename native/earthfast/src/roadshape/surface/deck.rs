@@ -709,3 +709,58 @@ pub fn deck_event_rows<'py>(
     }
     Ok(out.into_pyarray(py))
 }
+
+/// A constant-thickness slab under a triangulated driving surface. A cap across
+/// the outline alone can take a chord above the road in a vertical sag. Copy
+/// each top triangle to the underside and add walls only on the welded outline.
+#[pyfunction]
+pub fn deck_slab_solid<'py>(
+    py: Python<'py>,
+    points: PyReadonlyArray2<'py, f64>,
+    triangles: PyReadonlyArray2<'py, i64>,
+    uv: PyReadonlyArray2<'py, f64>,
+    boundary: Vec<Vec<usize>>,
+    depth: f64,
+) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>)> {
+    let (p, t, uv) = (points.as_array(), triangles.as_array(), uv.as_array());
+    let n = p.nrows();
+    if p.ncols() != 3 || t.ncols() != 3 || uv.dim() != (n, 2)
+        || !depth.is_finite() || depth <= 0.0
+        || t.iter().any(|&i| i < 0 || i as usize >= n)
+        || boundary.iter().any(|ring| ring.len() < 3 || ring.iter().any(|&i| i >= n))
+    {
+        return Err(PyValueError::new_err("invalid deck slab geometry"));
+    }
+    let mut xyz = Vec::new();
+    let mut tex = Vec::new();
+    let mut vertex = |i: usize, drop: f64| {
+        xyz.extend([p[[i, 0]], p[[i, 1]], p[[i, 2]] - drop]);
+        tex.extend([uv[[i, 0]], uv[[i, 1]]]);
+    };
+    for drop in [0.0, depth] {
+        for i in 0..n {
+            vertex(i, drop);
+        }
+    }
+    let mut faces: Vec<i64> = t.iter().copied().collect();
+    for row in t.rows() {
+        faces.extend([row[2] + n as i64, row[1] + n as i64, row[0] + n as i64]);
+    }
+    // Separate wall vertices preserve the hard normals on the driving surface.
+    let mut base = 2 * n as i64;
+    for ring in boundary {
+        let len = ring.len() as i64;
+        for drop in [0.0, depth] {
+            for &i in &ring {
+                vertex(i, drop);
+            }
+        }
+        for i in 0..len {
+            let a = base + i;
+            let b = base + (i + 1) % len;
+            faces.extend([b, a, a + len, b, a + len, b + len]);
+        }
+        base += 2 * len;
+    }
+    Ok((xyz.into_pyarray(py), faces.into_pyarray(py), tex.into_pyarray(py)))
+}

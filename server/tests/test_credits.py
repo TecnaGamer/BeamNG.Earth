@@ -651,20 +651,42 @@ class FeatureSourcesTest(unittest.TestCase):
             folder.mkdir()
             p = folder / "info_56789.json"
 
+            # Reproduce a filesystem tick shared by several directory and file changes.
+            stamp = folder.stat().st_mtime_ns
+
+            def write_info(text):
+                p.write_text(text)
+                os.utime(p, ns=(stamp, stamp))
+                os.utime(folder, ns=(stamp, stamp))
+
             def locate(path, cache, model_id):
                 return tuple(json.loads(Path(path).read_text()))
 
             with mock.patch.object(threedmr, "_credit_position", side_effect=locate) as resolve:
                 self.assertFalse(threedmr.credited_near(39, -76, 50, root))
-                p.write_text("[")
+                write_info("[")
                 self.assertFalse(threedmr.credited_near(39, -76, 50, root))
-                p.write_text("[39, -76]")
+                write_info("[39, -76]")
                 self.assertTrue(threedmr.credited_near(39, -76, 0, root))
                 n = resolve.call_count
                 self.assertFalse(threedmr.credited_near(41, -76, 50, root))
                 self.assertEqual(resolve.call_count, n)
+                (folder / "info_56790.json").write_text("[42, -76]")
+                os.utime(folder, ns=(stamp, stamp))
+                self.assertTrue(threedmr.credited_near(42, -76, 0, root))
+                self.assertEqual(resolve.call_count, n + 1)
+                write_info("[41, -76]")
+                self.assertFalse(threedmr.credited_near(39, -76, 0, root))
+                self.assertTrue(threedmr.credited_near(41, -76, 0, root))
+                self.assertEqual(resolve.call_count, n + 2)
+                write_info("[")
+                self.assertFalse(threedmr.credited_near(41, -76, 0, root))
+                write_info("[39, -76]")
+                self.assertTrue(threedmr.credited_near(39, -76, 0, root))
                 p.unlink()
+                os.utime(folder, ns=(stamp, stamp))
                 self.assertFalse(threedmr.credited_near(39, -76, 50, root))
+                self.assertTrue(threedmr.credited_near(42, -76, 0, root))
 
     def test_leaf_off_share_is_no_source(self):
         ids = credits.tile_sources(None, (0, 0, 1, 1), None, None, {"usgs": 5, "leafon": 5})

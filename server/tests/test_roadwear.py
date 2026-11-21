@@ -274,6 +274,19 @@ class SurfaceV2Test(unittest.TestCase):
         patches = len([c for c in ch if c["m"] == "bne_wear_patchstrip"]) / (L / 1000)
         self.assertTrue(5 <= patches <= 11, patches)      # about 8 a km
 
+    def test_city_tyre_wear_stays_inside_its_lane(self):
+        for cls, urban in (("primary", True), ("primary", False), ("motorway", True)):
+            with self.subTest(cls=cls, urban=urban):
+                street = spec(cls=cls, urban=urban, lanes=3, width=10.2, oneway=True)
+                drive, lanes = roads.lane_layout(street)
+                rd = [("street", street, line(0, 128, 1200, 128), 0.0)]
+                widths = [c["w"] for c in plan(rd, box=(-10, 0, 1210, 256)) if c["m"] == "bne_wear_tread2"]
+                self.assertTrue(widths)
+                if cls == "primary" and urban:
+                    self.assertEqual(set(widths), {round(drive / lanes, 2)})
+                else:
+                    self.assertTrue(all(4.0 <= w <= 5.0 for w in widths))
+
     def test_v2_leaves_out_the_old_lane_strips(self):
         """With the v2 overlays the full-lane strips (polish, sealed, cracks) are left out even with BNE_WEAR_STRIPS=on
         (they lay over the v2 wear and patch strips 0.2 mm apart); the manhole covers stay."""
@@ -305,14 +318,45 @@ class SurfaceV2Test(unittest.TestCase):
             x = np.asarray(c["n"])[:, 0]
             self.assertFalse(x.min() < 124 and x.max() > 132, "the wear stops at the crossing carriageway")
 
+    def test_crossing_cut_fades_but_a_tile_clip_keeps_its_station(self):
+        a = ("a", spec(lanes=2, width=7.4), line(-500, 128, 800, 128), 0.0)
+        b = ("b", spec(lanes=2, width=7.4), line(128, -500, 128, 800), 0.0)
+        full = plan([a, b], box=(-500, -500, 800, 800))
+        clipped = plan([a, b], box=(95, 112, 110, 144))
+        def tread(chunks):
+            return [c for c in chunks if c["m"] == "bne_wear_tread2"
+                    and abs(c["n"][0][1] - 128) < 4 and abs(c["n"][-1][1] - 128) < 4]
+        at_crossing = [c for c in tread(full) if any(abs(p[0] - 128) < 8 for p in (c["n"][0], c["n"][-1]))]
+        self.assertTrue(at_crossing)
+        for c in at_crossing:
+            self.assertEqual(c["s0"], 0.0)
+            self.assertEqual(c["s1"], c["slen"])
+        partial = [c for c in tread(clipped) if c["s0"] > 0.01 or c["s1"] < c["slen"] - 0.01]
+        self.assertTrue(partial)
+        for c in partial:
+            ref = next(v for v in tread(full) if (v["w"], v["fend_m"]) == (c["w"], c["fend_m"]))
+            self.assertEqual(c["slen"], ref["slen"])
+            self.assertAlmostEqual(c["s0"], c["n"][0][0] - ref["n"][0][0], delta=.003)
+
     def test_same_pieces_in_two_tiles(self):
         rd = [("x", spec(lanes=2, cls="secondary"), line(-1000, 300, 1500, 300), 0.0)]
         a = [c for c in plan(rd, box=(0, 172, 256, 428)) if c["m"] in V2_MATS]
         b = [c for c in plan(rd, box=(200, 172, 456, 428)) if c["m"] in V2_MATS]
-        key = lambda c: (c["m"], c["w"], c["tl"], c["slen"], c.get("fend_m"))     # noqa: E731
-        common = {key(c) for c in a if np.asarray(c["n"])[:, 0].max() > 205} & {key(c) for c in b}
-        self.assertTrue(common)
-        self.assertEqual(plan(rd, box=(0, 172, 256, 428)), plan(rd, box=(0, 172, 256, 428)))
+        def overlap(chunks):
+            pieces = []
+            for c in chunks:
+                points = np.asarray(c["n"])
+                lo, hi = max(200., points[0, 0]), min(256., points[-1, 0])
+                if hi <= lo:
+                    continue
+                # This fixture runs due east. The two clipped chunks must draw the same
+                # span, width and texture at the same station on the underlying piece.
+                pieces.append((c["m"], lo, hi, points[0, 1], c["w"], c["tl"], c["slen"],
+                               round(c["s0"] + lo - points[0, 0], 3), c["fend_m"]))
+            return sorted(pieces)
+        shared = overlap(a)
+        self.assertTrue(shared)
+        self.assertEqual(shared, overlap(b))
 
     def test_clear_keeps_a_corner_on_a_flat_cells_edge_beside_a_step(self):
         """follow_ground's clear: a corner on the edge a flat cell shares with a step cell (a wall the lattice draws as

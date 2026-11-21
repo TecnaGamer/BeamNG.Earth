@@ -11,6 +11,7 @@ replace() is the atomic rename into the game's folder; a destination folder that
 (GitHub #27: a player's session folder under temp/beamngEarth was gone, and every terrain write after it failed).
 """
 import asyncio
+from contextlib import contextmanager
 import logging
 import os
 import threading
@@ -53,6 +54,23 @@ def _rename(tmp, path, cached):
 
 def replace(tmp, path):
     _rename(tmp, path, False)
+
+
+@contextmanager
+def staged_write(path):
+    """Publish a completed write or remove just this writer's private temporary file."""
+    tmp = tmp_for(path)
+    try:
+        yield tmp
+        replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.warning("staging could not remove %s after a failed write: %s", tmp, exc)
+        raise
 
 
 def replace_cached(tmp, path):
