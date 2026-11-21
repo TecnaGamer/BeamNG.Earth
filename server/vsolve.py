@@ -69,9 +69,11 @@ JOIN_REACH_M = 3.0      # m past a road's carriageway edge an end no road comes 
                         # JOIN_END_M, still meets it, at its nearest point (grading.JUNCTION_REACH_M, the passes' snap:
                         # Silistra's track ended 1.6 m off the next one's centre line, so the solve held it at its
                         # profile, 3.4 m over the other where the dip under the bridge took that one down). -inf: none
-REACH_ON = os.environ.get("BNE_VSOLVE_REACH", "off") == "on"   # the reach in the solve's joins: off by default. On, it
-                        # took Silistra's 3.4 m step away (drivability 5.8 -> 1.4), but Tokyo's cells joined ends
-                        # differently: 4 seams over 30 cm (up to 1.87 m, 0 without), with the limits below as well
+REACH_ON = os.environ.get("BNE_VSOLVE_REACH", "on") != "off"   # the reach in the solve's joins: on by default
+                        # for the ends of REACH_CLASSES' roads (BNE_VSOLVE_REACH=off: none). It takes Silistra's 3.4 m
+                        # step away (drivability 5.8 -> 1.4). For every road it made others worse: Lauterbrunnen a
+                        # 0.56 m seam, drivability 1281.5 -> 1296.7 (docs/research/2026-11-21-vsolve-reach.md)
+REACH_CLASSES = frozenset(s for s in os.environ.get("BNE_VSOLVE_REACH_CLASSES", "track").split(",") if s)
 JOIN_REACH_DZ_M = 0.5   # m: ... only an end whose profile is this near that road's there (more: likely two levels; at
                         # any difference up to JOIN_DZ_M, Tokyo's cells joined ends differently, 4 seams up to 1.87 m);
                         # and never an end cut at the cell's box, which is no end of its road
@@ -285,7 +287,7 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
     if "nodes" in drop:
         node_list = []
     elif node_list is None:
-        node_list = _nodes_of(plans, xys, z0, pins)
+        node_list = _nodes_of(plans, xys, z0, pins, specs)
     in_node = {k for m in node_list for k in m}
     held = {}
     for (a, i, h) in pins:
@@ -384,9 +386,14 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
     return chains, couplings, n_joins
 
 
-def _nodes_of(plans, xys, z0, pins):
-    """nodes(...) of plans (their xys, profiles z0) whose pinned ends are cut at the box."""
-    return nodes(xys, z0, halves=_halves(plans), cut={(a, i) for a, i, _h in pins})
+def _nodes_of(plans, xys, z0, pins, specs=None):
+    """nodes(...) of plans (their xys, profiles z0) whose pinned ends are cut at the box; the reach only from the ends
+    of roads of REACH_CLASSES (specs: the plans' Specs; None: every road's)."""
+    cut = {(a, i) for a, i, _h in pins}
+    if REACH_ON and REACH_CLASSES and specs is not None:
+        cut |= {(a, i) for a, sp in enumerate(specs) if _cls(sp) not in REACH_CLASSES
+                for i in ((0, len(xys[a]) - 1) if len(xys[a]) else ())}
+    return nodes(xys, z0, halves=_halves(plans), cut=cut)
 
 
 def solve(plans, specs, z0, ceilings, ranks, pins=(), dips=None, budget=BUDGET_S, caps=None, floors=None,
@@ -414,7 +421,7 @@ def solve(plans, specs, z0, ceilings, ranks, pins=(), dips=None, budget=BUDGET_S
     # (the junctions and each plan's steps and ceiling once: the same in every round, 12.5 s of a Fells Point run's 16 in
     # building the problems were the junctions found again each round)
     node_list = _nodes_of(plans, [np.asarray(p.xy, np.float64)[:, :2] for p in plans],
-                          [np.asarray(z, np.float64) for z in z0], pins)
+                          [np.asarray(z, np.float64) for z in z0], pins, specs)
     pre = {}
     if joints:
         caps = _joint_caps(plans, z0, dips, caps, pins, node_list=node_list)

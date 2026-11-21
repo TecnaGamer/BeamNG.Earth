@@ -212,6 +212,19 @@ class JoinTest(unittest.TestCase):
         node = vsolve.nodes([a, b], z0, halves=[1.75, 1.75])
         self.assertEqual([sorted(m) for m in node], [[(0, 50), (1, 0)]])
 
+    def test_the_reach_is_a_track_s_alone(self):
+        # (on by default for tracks only, REACH_CLASSES: for every road, Lauterbrunnen got a 0.56 m seam and Vienna's
+        # interchanges lost 15 points of drivability; Silistra's track gained 4.4)
+        a = plan(np.c_[S, np.zeros_like(S)], np.zeros(len(S)))
+        b = plan(np.c_[np.full(len(S), 100.0), S + 2.0], np.zeros(len(S)))
+        a.road_half = b.road_half = 1.75
+        z0 = [np.zeros(len(S)), np.zeros(len(S))]
+        xys = [a.xy, b.xy]
+        with unittest.mock.patch.object(vsolve, "REACH_ON", True),                 unittest.mock.patch.object(vsolve, "REACH_CLASSES", frozenset({"track"})):
+            got = vsolve._nodes_of([a, b], xys, z0, (), [spec("residential"), spec("track")])
+            self.assertEqual([sorted(m) for m in got], [[(0, 50), (1, 0)]])
+            self.assertEqual(vsolve._nodes_of([a, b], xys, z0, (), [spec("track"), spec("residential")]), [])
+
     def test_a_junction_by_a_dip_is_capped_at_it(self):
         # (the underpass rule's flat junction: Vienna's Südtiroler Platz junction stood 0.27 m over the dip 4 m on)
         a = plan(np.c_[S, np.zeros_like(S)], np.zeros(len(S)))
