@@ -3,7 +3,8 @@
 import hashlib
 import json
 import logging
-import math
+import dmath
+import dnp
 import struct
 import sys
 from pathlib import Path
@@ -98,15 +99,16 @@ def tenant_panels(tenants, ring, parking):
         panel = parking_frontage(ring, point, parking)
         if panel is None:
             continue
-        scale = np.array([111320 * np.cos(np.radians(point[1])), 111132])
+        scale = np.array([111320 * dmath.cos(dmath.radians(point[1])), 111132])
         start, end = panel * scale
-        axis = (end - start) / np.linalg.norm(end - start)
+        length = dnp.norm(end - start)
+        axis = (end - start) / length
         for j, (_, other) in enumerate(tenants):
             if j == i:
                 continue
             offset = other * scale - start
-            along = np.clip(offset @ axis, 0, np.linalg.norm(end - start))
-            if np.linalg.norm(offset - along * axis) < 15:
+            along = np.clip(dnp.dot(offset, axis), 0, length)
+            if dnp.norm(offset - along * axis) < 15:
                 break
         else:
             yield name, panel
@@ -128,7 +130,7 @@ def cached_entry(cache, name, coords, bearing, material, sign_height=None):
                 and entry.get("branded_storefront") is True
                 and bool(entry.get("storefront_overlay")) == (bearing is None)
                 and bool(entry.get("storefront_pylon")) == (sign_height is not None)
-                and all(isinstance(entry.get(k), (int, float)) and math.isfinite(entry[k]) for k in ("lat", "lon"))):
+                and all(isinstance(entry.get(k), (int, float)) and dmath.isfinite(entry[k]) for k in ("lat", "lon"))):
             with mesh.open("rb") as stream:
                 size = mesh.stat().st_size
                 if 28 <= size < 2**32 and stream.read(12) == struct.pack("<4sII", b"glTF", 2, size):
@@ -139,8 +141,8 @@ def cached_entry(cache, name, coords, bearing, material, sign_height=None):
     cache.mkdir(parents=True, exist_ok=True)
     direction = None
     if bearing is not None:
-        angle = math.radians(bearing)
-        direction = np.array([math.cos(angle), math.sin(angle)])
+        angle = dmath.radians(bearing)
+        direction = np.array([dmath.cos(angle), dmath.sin(angle)])
     match = (name, ident, coords, direction, [], material)
     if sign_height is not None:
         match += (sign_height,)
@@ -156,7 +158,7 @@ def parking_direction(ring, aisles):
     if len(aisles) < 2:
         return None
     edges = np.roll(ring, -1, axis=0) - ring
-    widths = np.linalg.norm(edges, axis=1)
+    widths = dnp.norm(edges, axis=1)
     axes = edges / np.maximum(widths[:, None], 1e-9)
     normals = np.column_stack((axes[:, 1], -axes[:, 0]))
     if np.sum(ring[:, 0] * edges[:, 1] - ring[:, 1] * edges[:, 0]) < 0:
@@ -222,7 +224,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
             - centre
         )
         facing = offset[np.argmin(np.sum(offset * offset, axis=1))]
-        if not 1 <= np.linalg.norm(facing) <= 150 + np.max(np.linalg.norm(ring - centre, axis=1)):
+        if not 1 <= dnp.norm(facing) <= 150 + np.max(dnp.norm(ring - centre, axis=1)):
             continue
         ll = frame.enu_to_geodetic(
             ring[:, 0] + origin[0], ring[:, 1] + origin[1], np.zeros(len(ring))
@@ -244,7 +246,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                 parking = parking_direction(ring, aisles)
                 if parking is not None:
                     facing = parking
-            bearing = round(math.degrees(math.atan2(facing[1], facing[0])))
+            bearing = round(dmath.degrees(dmath.atan2(facing[1], facing[0])))
             if name:
                 matches = [(name, coords, bearing, material)]
             else:

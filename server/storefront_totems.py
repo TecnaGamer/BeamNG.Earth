@@ -5,6 +5,7 @@ from bisect import bisect_left
 from functools import lru_cache
 from pathlib import Path
 
+import dmath
 import numpy as np
 
 from geotiles import box_owns
@@ -35,7 +36,7 @@ def matches(keys, frame, box, streets, existing):
             if not box_owns(box, x, y):
                 continue
             if any((c.get("local") or {}).get("storefront_pylon") and
-                   np.hypot(x-c["xy"][0], y-c["xy"][1]) < 1. for c in existing):
+                   dmath.hypot(x-c["xy"][0], y-c["xy"][1]) < 1. for c in existing):
                 continue
             name = chain(label)
             if name is None:
