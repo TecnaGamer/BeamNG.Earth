@@ -39,7 +39,8 @@ PROCESS = OrderedDict()     # interchange key -> its solution as stored (pack): 
 #                             something it is not in the run's store; with no run store it is the only one
 INDEX = {}                  # road canonical id -> [(interchange key, lat / lon box of its seeds)]: this process's
 KEPT = 512                  # solutions kept (per planner, per process)
-EXTENT = "~"                # (the index's name of an interchange's whole extent: this and its key)
+EXTENTS = {}                # interchange key -> its extent record: {"box": (lat0, lon0, lat1, lon1) of its seeds, "keys": the
+#                             member keys of its seeds, all its systems'} (the growth's: the reach, computed once, is in it)
 FIELDS = ("key", "failed", "pieces", "crossings", "owner", "pid", "secs")
 
 
@@ -197,9 +198,6 @@ def index_add(planner, ik, net, sysm):
         cid = _gsh.canonical_id(net.m[i])
         old = boxes.get(cid)
         boxes[cid] = b if old is None else (min(old[0], b[0]), min(old[1], b[1]), max(old[2], b[2]), max(old[3], b[3]))
-    # (and the interchange's whole extent, under its key: what a solve in a process that did not grow it starts from)
-    allb = list(boxes.values())
-    boxes[EXTENT + ik] = (min(b[0] for b in allb), min(b[1] for b in allb), max(b[2] for b in allb), max(b[3] for b in allb))
     with LOCK:
         if len(INDEX) > 50000:
             INDEX.clear()
@@ -218,8 +216,8 @@ def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
     size is closed, and every interchange has one such set), so every region finds the same key. adopt: the run's index is
     looked at for every piece the growth takes in, before the next round: an interchange another process has found
     meanwhile is taken as it is ((key, None, None, None)), and one a growth from a lower road id is running on is that
-    growth's (GiveWay). hint: the interchange's whole extent (lat0, lon0, lat1, lon1: the index's), found already: its one
-    round is the last, not the growth again. The Interchange returned carries the seconds this took (its paths: the members
+    growth's (GiveWay). hint: the interchange's extent record (extent_of), found already: its one round, with the reaches
+    as the growth stored them, is the last, not the growth again. A growth's rounds scan only the members they add (gradeshapes.Scan). The Interchange returned carries the seconds this took (its paths: the members
     read, its relations; its extent: the finding), for the steps' lines."""
     import grading
     import xproc
@@ -229,10 +227,13 @@ def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
     read_s = find_s = 0.0
     checked = {cid}
     box = None
+    reach = True
+    scan = _gsh.Scan()
     if hint is not None:
-        e, n, _ = planner.frame.geodetic_to_enu(np.array([hint[0], hint[0], hint[2], hint[2]]),
-                                                np.array([hint[1], hint[3], hint[1], hint[3]]), 0.0)
+        b = hint["box"]
+        e, n, _ = planner.frame.geodetic_to_enu(np.array([b[0], b[0], b[2], b[2]]), np.array([b[1], b[3], b[1], b[3]]), 0.0)
         box = (np.array([np.min(e), np.min(n)]), np.array([np.max(e), np.max(n)]))
+        reach = [set(hint["keys"])]
     while True:
         xproc.check_cancel()
         if adopt:
@@ -260,13 +261,14 @@ def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
         s1_paths.load(planner, lo, hi, byk, loaded)
         members = s1_paths.members_of(byk, lo, hi)
         t1 = time.perf_counter()
-        nxt_net, found = _gsh.find_interchanges(members, lambda n_: (planner._ground_line, s2_extent.make_fixed(planner, n_)))
+        nxt_net, found = _gsh.find_interchanges(members, lambda n_: (planner._ground_line, s2_extent.make_fixed(planner, n_)),
+                                                scan=scan, reach=reach)
         read_s += t1 - t0
         find_s += time.perf_counter() - t1
         nxt = next((x for x in found if cid in {_gsh.canonical_id(nxt_net.m[i]) for i in x.sysm["seeds"]}), None)
         if nxt is None:         # (its seeds are not seeds in the wider find: the interchange as it was)
             if box is not None:
-                box = None      # (the stored extent did not give it: grown as without)
+                box, reach = None, True     # (the stored extent did not give it: grown as without)
                 continue
             log.error("grading: SHAPES interchange: road %s no longer a seed of the interchange round it", cid)
             nxt_net, nxt, found = cur_net, cur, [cur]
@@ -286,17 +288,36 @@ def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
             [p.sysm for x in found if x is not nxt for p in (x.parts or (x,))])
 
 
-def extent_of(planner, ik):
-    """The whole extent (lat0, lon0, lat1, lon1) the index holds for interchange ik, or None."""
+def extent_add(planner, ik, net, sysm):
+    """Interchange ik's extent stored, with the growth's one computation of its ramps' reaches (the member keys of its seeds:
+    they are one interchange): what a solve in a process that did not grow it starts from, in one round."""
+    boxes = []
+    for i in sysm["seeds"]:
+        la, lo, _ = planner.frame.enu_to_geodetic(net.lines[i][:, 0], net.lines[i][:, 1], 0.0)
+        boxes.append((float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo))))
+    rec = {"box": [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)],
+           "keys": sorted(str(net.m[i].key) for i in sysm["seeds"])}
     with LOCK:
-        ents = INDEX.get(EXTENT + ik)
+        EXTENTS[ik] = rec
+        if len(EXTENTS) > 50000:
+            EXTENTS.clear()
+            EXTENTS[ik] = rec
     sh = planner.shared
-    if not ents and sh is not None and hasattr(sh, "shape_index"):
-        ents = sh.shape_index(EXTENT + ik)
-        if ents:
+    if sh is not None and hasattr(sh, "shape_extent_store"):
+        sh.shape_extent_store(ik, rec)
+
+
+def extent_of(planner, ik):
+    """The extent record of interchange ik (extent_add: this process's, or the run's), or None."""
+    with LOCK:
+        rec = EXTENTS.get(ik)
+    sh = planner.shared
+    if rec is None and sh is not None and hasattr(sh, "shape_extent_load"):
+        rec = sh.shape_extent_load(ik)
+        if rec is not None:
             with LOCK:
-                INDEX[EXTENT + ik] = ents
-    return next((box for k, box in ents or () if k == ik), None)
+                EXTENTS[ik] = rec
+    return rec
 
 
 def skipper(planner, taken, h_lo, h_hi):
@@ -439,6 +460,7 @@ def interchange(planner, net, ix, hk, clock):
             if n2 is None:
                 return ik_, None, False
             index_add(planner, ik_, n2, i2.sysm)
+            extent_add(planner, ik_, n2, i2.sysm)
             return (ik_,) + solution(ik_, (n2, i2, others))
         try:
             (ik, got, mine), _ = once(planner, "ext", name, known, grown)

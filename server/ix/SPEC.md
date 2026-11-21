@@ -122,6 +122,11 @@ pieces are one interchange: the one from the lower road id grows it, the other r
 before it waits (so the claims wait only on lower ids, never in a circle, and no growth holds two). A holder that is gone
 hands the claim over and a cancelled one keeps what it stored, as for the solve. A region does not scan the pieces of an
 interchange already solved (`owner.skipper`: the index names its key and the solution is kept): it reads the solution.
+The ramps' reaches (`gradeshapes._ramp_reaches`) are computed only inside that one growth and stored with the extent
+(`owner.extent_add`: the box and the member keys of the interchange's seeds, which are one interchange): a region's find
+(`find_interchanges(reach=False)`) finds the systems alone, and a solver that did not grow starts from the stored extent, in
+one round, with the stored reaches. A growth's rounds scan only the members they add (`gradeshapes.Scan`: each against its
+neighbours through the net's grid; the relations of the members of earlier rounds are kept).
 
 An interchange ends where its roads come back to the ground, which is the end of a ramp, not the end of a structure. A
 road leaving a deck belongs to the interchange as far as the deck's ramp reaches (`gradeshapes._ramp_reaches`, from the

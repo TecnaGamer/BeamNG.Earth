@@ -70,7 +70,7 @@ def find(planner, h_lo, h_hi, clock=None, taken=None):
     it), and gradeshapes' find_interchanges among them: mine are the interchanges reaching the home box, as that box holds
     them (a box cuts one anywhere: the owner, ix/owner.py, follows each whole), in solve order. clock (a dict): the seconds
     of the cells' members' reading and one_road are added to its "load", those of finding the interchanges to its
-    "find". taken (a dict): given, the pieces of interchanges already solved (the index names their key, the solution is
+    "find". The systems alone, no ramp's reach (the interchange's one growth computes it, owner.grow). taken (a dict): given, the pieces of interchanges already solved (the index names their key, the solution is
     kept: owner.skipper) are not scanned nor found again, and the key of each that has a piece in the home box is put in
     it: its solution is read, not its interchange followed."""
     import xproc
@@ -85,7 +85,7 @@ def find(planner, h_lo, h_hi, clock=None, taken=None):
     from . import owner
     skip = None if taken is None else owner.skipper(planner, taken, h_lo, h_hi)
     net, mine = _gsh.find_interchanges(members, lambda net_: (planner._ground_line, make_fixed(planner, net_)),
-                                       want=lambda net_, seeds: _reaches(net_, seeds, h_lo, h_hi), skip=skip)
+                                       want=lambda net_, seeds: _reaches(net_, seeds, h_lo, h_hi), skip=skip, reach=False)
     clock["load"] = clock.get("load", 0.0) + t1 - t0
     clock["find"] = clock.get("find", 0.0) + time.perf_counter() - t1
     return net, mine, loaded, members

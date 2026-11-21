@@ -761,6 +761,28 @@ class PlanCache:
             return False
         return True
 
+    def shape_extent_store(self, ik, rec):
+        """Interchange ik's extent record (its box and the keys of its seeds: ix/owner.py), for the run's other processes."""
+        p = os.path.join(os.path.dirname(self._shape_path("ext", ik)), ik + ".extent.json")
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(rec, fh)
+            os.replace(tmp, p)
+        except (OSError, ValueError, TypeError):
+            return False
+        return True
+
+    def shape_extent_load(self, ik):
+        """The extent record of interchange ik, or None."""
+        p = os.path.join(os.path.dirname(self._shape_path("ext", ik)), ik + ".extent.json")
+        try:
+            with open(p, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return None
+
     def shape_index(self, cid):
         """[(interchange key, (lat0, lon0, lat1, lon1))] of the interchanges the road cid (a canonical id) is a member
         of: the box of its parts in each (a road's parts of one kind are in more than one interchange where it passes

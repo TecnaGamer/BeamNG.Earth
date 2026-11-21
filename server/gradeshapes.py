@@ -329,6 +329,18 @@ def _line_id(net, i):
     return got
 
 
+def _pair(net, i, j):
+    """Member i's relations with member j, from a cache by the two members' keys and lines."""
+    key = (_line_id(net, i), _line_id(net, j))
+    got = _PAIR_REL.get(key)
+    if got is None:
+        got = _pair_relations(net, i, j)
+        if len(_PAIR_REL) >= _PAIR_REL_MAX:
+            _PAIR_REL.clear()
+        _PAIR_REL[key] = got
+    return got
+
+
 def _relations(net, i):
     """Member i's joints and crossings with the members near it: [(j, "join"|"cross", s on i, s on j, q)]. Each
     pair's from a cache by the two members' keys and lines (a region grown cell by cell meets the same pairs again)."""
@@ -336,15 +348,43 @@ def _relations(net, i):
     for j in net.near_along(i, JOIN_M + 0.5):
         if len(net.lines[j]) < 2:
             continue
-        key = (_line_id(net, i), _line_id(net, j))
-        got = _PAIR_REL.get(key)
-        if got is None:
-            got = _pair_relations(net, i, j)
-            if len(_PAIR_REL) >= _PAIR_REL_MAX:
-                _PAIR_REL.clear()
-            _PAIR_REL[key] = got
-        out.extend((j,) + r_ for r_ in got)
+        out.extend((j,) + r_ for r_ in _pair(net, i, j))
     return out
+
+
+class Scan:
+    """The relations of the structures with the members near them, kept across the rounds of one growth (find_interchanges
+    scan=): a round scans only the members it adds, each against its neighbours through the net's grid, and the relations
+    of the members of the rounds before are the ones kept. {line id: {line id: relations}} for the structures' side (a
+    member's relations with a neighbour: _pair), and `scanned`: the members each round scanned (the count of them)."""
+
+    def __init__(self):
+        self.pairs = {}
+        self.scanned = []
+
+    def add(self, net):
+        """This round's net: every member not seen before scanned against its neighbours."""
+        ids = [_line_id(net, i) for i in range(len(net.m))]
+        new = [i for i, k in enumerate(ids) if k not in self.pairs and len(net.lines[i]) >= 2]
+        for i in new:
+            self.pairs[ids[i]] = {}
+        for i in new:
+            seed_i = _is_seed(net, i)
+            for j in net.near_along(i, JOIN_M + 0.5):
+                if len(net.lines[j]) < 2:
+                    continue
+                if seed_i:
+                    self.pairs[ids[i]][ids[j]] = _pair(net, i, j)
+                if _is_seed(net, j):
+                    self.pairs.setdefault(ids[j], {})[ids[i]] = _pair(net, j, i)
+        self.scanned.append(len(new))
+        self.ids = ids
+        self.at = {k: j for j, k in enumerate(ids)}
+
+    def relations(self, net, i):
+        """_relations(net, i) from what the rounds kept: in index order of the neighbours, the same list."""
+        got = sorted((self.at[k], rels) for k, rels in self.pairs.get(self.ids[i], {}).items() if k in self.at)
+        return [(j,) + r_ for j, rels in got for r_ in rels]
 
 
 def _tangent(line, s, sq):
@@ -651,14 +691,18 @@ def find_systems(members, reader=None, trace=None):
     return net, [p.sysm for x in found for p in (x.parts or (x,))]
 
 
-def find_interchanges(members, reader=None, trace=None, want=None, skip=None):
+def find_interchanges(members, reader=None, trace=None, want=None, skip=None, scan=None, reach=True):
     """(net, [Interchange]): the interchanges among members, each closed, in a deterministic order, each with the seconds
     its relations and its closing took (a merge's or a dip's seconds go to the interchange they ended up in). An interchange
     is the systems whose ramps meet (_ramp_reaches; Interchange.parts), each system the structures that join, cross or dig
     one road among themselves. want(net,
     seeds) -> bool: whether an interchange is asked for; one that is not is found (it may merge others) but not closed.
     skip(net, i) -> bool: member i is a piece of an interchange already solved: it is not a seed here, nor scanned for
-    relations (it stays a member: what others cross). reader(net) -> (ground, fixed): the
+    relations (it stays a member: what others cross). scan (a Scan): the relations are those kept by the rounds before (this round's net scanned into it: only the members
+    it adds are scanned). reach: True, the ramps' reaches are computed (_ramp_reaches: the interchange's one growth, whose
+    result is stored with its extent); False, none: the systems alone, as a region's find needs them; a list of sets of
+    member keys (str), the reaches as that growth stored them: the seeds of a set are one interchange. reader(net) ->
+    (ground, fixed): the
     elevation the cost of a move is read from (_Verdicts); None, flat ground. trace (a dict, the audit's: interchange_audit):
     filled with what merged the seeds, [(a, b, why, detail)] in the order they were united (why "relation": a join or a
     crossing of two seeds, detail (kind, s on a, s on b); "dip": two seeds over one road they dig, detail None), with the
@@ -671,10 +715,15 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None):
     cand = [i for i in range(n) if _is_seed(net, i) and len(net.lines[i]) >= 2 and not (skip is not None and skip(net, i))]
     t_rel = {}
     rel = {}
+    if scan is not None:
+        t0 = time.perf_counter()
+        scan.add(net)
+        t_scan = time.perf_counter() - t0
     for i in cand:
         t0 = time.perf_counter()
-        rel[i] = [r_ for r_ in _relations(net, i) if not _tunnel_network(net, r_[0])]
-        t_rel[i] = time.perf_counter() - t0
+        rel[i] = [r_ for r_ in (_relations(net, i) if scan is None else scan.relations(net, i))
+                  if not _tunnel_network(net, r_[0])]
+        t_rel[i] = time.perf_counter() - t0 + (t_scan / len(cand) if scan is not None else 0.0)
     # a deck chain is part of an interchange only if one of its decks crosses a road, a track or a tunnel (over or
     # under): a bridge over a river or a valley alone is the bridges' own (roads.py), not a grade separation's
     crosses = {i for i in cand if any(kind == "cross" and _over(members[i], members[j]) is not None
@@ -738,7 +787,16 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None):
             cpar[r] = cpar[cpar[r]]
             r = cpar[r]
         return r
-    for a, b, j in _ramp_reaches(net, seeds, rel, dig, t_dip):
+    if reach is True:
+        reaches = _ramp_reaches(net, seeds, rel, dig, t_dip)
+    elif not reach:
+        reaches = []
+    else:
+        reaches = []
+        for grp in reach:
+            ss = sorted((i for i in seeds if str(members[i].key) in grp), key=lambda x: str(members[x].key))
+            reaches += [(ss[0], i, -1) for i in ss[1:]]
+    for a, b, j in reaches:
         if trace is not None:
             trace["merges"].append((a, b, "ramp", j))
         ra, rb = croot(root(a)), croot(root(b))

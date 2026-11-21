@@ -270,9 +270,9 @@ def capture(planner, home, solve=False, region_calc=None):
                 return True
         return False
 
-    def find(members, reader=None, trace=None, want=None, skip=None):
+    def find(members, reader=None, trace=None, want=None, skip=None, scan=None, reach=True):
         if held:        # (a later find: an interchange followed whole from the region's piece of it, not the region's)
-            return real_find(members, reader, trace, want, skip)
+            return real_find(members, reader, trace, want, skip, scan, reach)
         tr = {}                 # (every interchange: want is not asked, the audit reads those round the region too)
         net, found = real_find(members, reader, tr)
         systems = [x.sysm for x in found]

@@ -104,6 +104,27 @@ def _child(cache_dir, out, solve_log, start, pause, die):
         json.dump(heights(got), fh)
 
 
+def _reach_child(cache_dir, out, reach_log, start):
+    """A process asking for the overpass's heights from every cell round it: each computation of a ramp's reach it makes
+    is written to reach_log (its pid)."""
+    real = gs._ramp_reaches
+
+    def reach(*a, **k):
+        with open(reach_log, "a") as fh:
+            fh.write("%d\n" % os.getpid())
+        return real(*a, **k)
+    gs._ramp_reaches = reach
+    pl, home = planner(cache_dir)
+    start.wait(60.0)
+    got = {}
+    for dx in (-1, 0, 1):
+        other = mapcells.CellKey(home.z, home.x + dx, home.y)
+        for fid, items in pl._shape_region_calc(other, "r%d" % dx).items():
+            got[fid] = items
+    with open(out, "w") as fh:
+        json.dump(heights(got), fh)
+
+
 class OwnerKeyTest(unittest.TestCase):
     """The interchange's key and its owner cell are the same from every cell that reaches it."""
 
@@ -401,6 +422,84 @@ class GrowthOnceTest(unittest.TestCase):
         self.assertFalse(got["failed"])
         self.assertEqual(owner.FLIGHTS, {})
         self.assertEqual(locks(cache), [], "no claim kept")
+
+
+class ReachOnceTest(unittest.TestCase):
+    """The ramps' reaches are computed by the one growth of an interchange, once, and stored with its extent: no region's
+    find and no solver computes them again."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_regions_find_computes_no_reach(self):
+        pl, home = planner()
+        calls = []
+        real = gs._ramp_reaches
+        with unittest.mock.patch.object(gs, "_ramp_reaches", lambda *a, **k: calls.append(1) or real(*a, **k)):
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    local(pl, mapcells.CellKey(home.z, home.x + dx, home.y + dy))
+        self.assertEqual(calls, [], "the finds of nine regions")
+
+    def test_regions_of_planners_in_one_process_compute_it_once_and_the_solver_reads_the_extent(self):
+        cache = os.path.join(self.dir, "cache")
+        calls = []
+        real = gs._ramp_reaches
+        one, home = planner(cache)
+        with unittest.mock.patch.object(gs, "_ramp_reaches", lambda *a, **k: calls.append(1) or real(*a, **k)):
+            for dx in (-1, 0, 1):
+                one._shape_region_calc(mapcells.CellKey(home.z, home.x + dx, home.y), "a%d" % dx)
+            grown = len(calls)
+            self.assertGreaterEqual(grown, 1, "the growth computes it")
+            two, _ = planner(cache)
+            for dx in (-1, 0, 1):
+                two._shape_region_calc(mapcells.CellKey(home.z, home.x + dx, home.y), "b%d" % dx)
+            self.assertEqual(len(calls), grown, "no region of the second planner computed it")
+            # (a solver that did not grow: it starts from the stored extent, the reaches as stored)
+            net, mine, _m, _l = local(two, home)
+            ik = owner.known_key(two, sorted({gs.canonical_id(net.m[i]) for i in mine[0].sysm["seeds"]})[0],
+                                 owner.probe(two, net, mine[0].sysm, sorted({gs.canonical_id(net.m[i])
+                                                                              for i in mine[0].sysm["seeds"]})[0]))
+            rec = owner.extent_of(two, ik)
+            self.assertTrue(rec and rec["keys"])
+            cid = sorted({gs.canonical_id(net.m[i]) for i in mine[0].sysm["seeds"]})[0]
+            again = owner.grow(two, net, mine[0], cid, owner.probe(two, net, mine[0].sysm, cid), adopt=False, hint=rec)
+            self.assertEqual(again[0], ik)
+            self.assertEqual(len(calls), grown, "the extent's reaches used, none computed")
+
+    def test_processes_asking_for_every_cell_compute_it_once_between_them(self):
+        # (the baseline: one process's growth of the interchange)
+        alone = os.path.join(self.dir, "alone.txt")
+        ctx = multiprocessing.get_context("spawn")
+        start = ctx.Event()
+        p = ctx.Process(target=_reach_child, args=(os.path.join(self.dir, "c0"), os.path.join(self.dir, "o0.json"), alone, start))
+        p.start()
+        start.set()
+        p.join(240.0)
+        self.assertEqual(p.exitcode, 0)
+        base = len(open(alone).read().split())
+        self.assertGreaterEqual(base, 1)
+        log = os.path.join(self.dir, "reach.txt")
+        start = ctx.Event()
+        outs = [os.path.join(self.dir, "out%d.json" % n) for n in range(3)]
+        cache = os.path.join(self.dir, "c1")
+        procs = [ctx.Process(target=_reach_child, args=(cache, o, log, start)) for o in outs]
+        for p in procs:
+            p.start()
+        time.sleep(0.5)
+        start.set()
+        for p in procs:
+            p.join(240.0)
+            self.assertEqual(p.exitcode, 0)
+        self.assertEqual(len(open(log).read().split()), base, "three processes, the one growth's computations")
+        res = [json.load(open(o)) for o in outs]
+        self.assertEqual(res[0], res[1])
+        self.assertEqual(res[0], res[2])
+        self.assertEqual(locks(cache), [])
 
 
 class FlagOffTest(unittest.TestCase):

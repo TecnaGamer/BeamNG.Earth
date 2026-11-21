@@ -338,6 +338,27 @@ def test_what_a_ramp_reaches_does_not_depend_on_the_order_of_the_members():
         assert _interchanges(m) == _interchanges(m[::-1]), link_m
 
 
+def test_a_round_scans_only_the_members_it_adds_and_finds_what_a_full_scan_finds():
+    # (a growth's rounds: the cells added in a round bring their members, each scanned against its neighbours through the
+    # grid; the relations of the members of the rounds before are kept)
+    members = _long_overpasses(60.0)
+    first = [m for m in members if m.key[0] in ("m1", "d1", "s1", "link")]
+    second = first + [m for m in members if m.key[0] not in ("m1", "d1", "s1", "link")]
+    seen = []
+    real = gs.Net.near_along
+    scan = gs.Scan()
+    with mock.patch.object(gs.Net, "near_along", lambda self, i, pad: seen.append(len(self.m)) or real(self, i, pad)):
+        gs.find_interchanges(first, scan=scan)
+        round_one = len(seen)
+        net_b, found_b = gs.find_interchanges(second, scan=scan)
+        round_two = len(seen) - round_one
+    assert scan.scanned == [len(first), len(second) - len(first)], scan.scanned
+    assert round_one == len(first) and round_two == len(second) - len(first), (round_one, round_two)
+    net_a, found_a = gs.find_interchanges(second)
+    assert [sorted(str(net_a.m[i].key) for i in x.sysm["seeds"]) for x in found_a] ==         [sorted(str(net_b.m[i].key) for i in x.sysm["seeds"]) for x in found_b]
+    assert repr([x.sysm for x in found_a]) == repr([x.sysm for x in found_b])
+
+
 # ---- naming ----
 
 def test_a_finding_names_the_feature_its_osm_way_class_level_and_place():
