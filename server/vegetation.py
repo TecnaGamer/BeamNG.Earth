@@ -411,7 +411,7 @@ class Vegetation:
                 name = f"{y}-charzykowy-promenada-4m.npz"
         import pedestrianlighting
         if pedestrianlighting.enabled():
-            name = name[:-4] + "-lighting-v2.npz"
+            name = name[:-4] + "-lighting-v3.npz"
         return os.path.join(self.dir, str(rel), str(x), name) if self.dir else None
 
     def _load(self, x, y):
@@ -614,7 +614,7 @@ class Vegetation:
                 path_blockers = [(xy, width / 2) for _, xy, width, _ in parts]
             if pedestrianlighting.enabled():
                 keys = mapcells.cells_for_bbox(lat0, lon0, lat1, lon1)
-                sites = list(pedestrianlighting.path_sites(parts, road_cells, box, path_frame))
+                sites = list(pedestrianlighting.path_sites(parts, road_cells, box, path_frame, self.md))
                 sites.extend(pedestrianlighting.area_sites(path_frame, box, self.md, keys))
                 # A short segment models the post footprint in the existing plant exclusion pass.
                 path_blockers.extend((np.array([[px-.15, py], [px+.15, py]]), .35)

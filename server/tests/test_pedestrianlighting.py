@@ -71,6 +71,24 @@ class LightingTest(unittest.TestCase):
                 self.assertTrue(lamps)
                 self.assertTrue(all(spans.at(np.array(r[1:3])) == "yes" for r in lamps))
 
+    def test_shore_side_is_dry_and_faces_the_path_in_either_direction(self):
+        points = box(0, -30, 300, 40)
+        ring = np.array([[lon, lat] for x, y in points for lat, lon, _ in [FRAME.enu_to_geodetic(x, y, 0)]])
+        lake = mapgeom.build("water", np.array(["lake"]), [(mapgeom.POLYGON, [[ring]])])
+        lake.attrs["subtype"] = np.array(["lake"])
+        md = FakeMD({"water": lake})
+        bounds = (-110, -60, 110, 30)
+        for start, end in [(-100, 100), (100, -100)]:
+            f = features([[(start, 0), (end, 0)]], ["pedestrian"], widths=[(0, 4.)])
+            f.attrs["osm_way_lit"] = np.array(["yes"])
+            rows = self.rows(f, bounds, md=md)
+            self.assertTrue(rows)
+            for post, lens in zip(rows[::3], rows[1::3]):
+                self.assertAlmostEqual(post[2], -2.75, delta=.05)
+                self.assertGreater(lens[2], post[2])
+            split = self.rows(f, (-110,-60,0,30), md=md) + self.rows(f,(0,-60,110,30),md=md)
+            self.assertCountEqual(rows, split)
+
     def test_prom_routes_clearance_orientation_and_profiles(self):
         for kind in ("cycleway", "pedestrian", "footway", "path"):
             rows = self.rows(self.route(kind))

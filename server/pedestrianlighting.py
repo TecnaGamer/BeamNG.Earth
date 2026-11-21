@@ -64,7 +64,47 @@ def stations(xy, spacing, phase, box):
             yield k, j, xy[j] + (k*spacing + phase-chain[j])*direction, direction
 
 
-def path_sites(parts, cells, box, frame):
+# Look across the path on both sides. A shoreline ahead of a path ending at a
+# beach does not select a verge. Distances include the station halo at tile seams.
+SHORE_REACH = 80.
+SHORE_PROBES = np.array([2., 4., 8., 12., 18., 25., 35., 50., 65., SHORE_REACH])
+
+
+def lake_side(frame, md, centres, normals):
+    """Side of the first lake water across each path, +1 for its normal, -1 opposite."""
+    probes = centres[:, None, None, :] + normals[:, None, None, :] * (
+        np.array([1., -1.])[None, :, None, None] * SHORE_PROBES[None, None, :, None])
+    points = probes.reshape(-1, 2)
+    wet = np.zeros(len(points), bool)
+    low, high = points.min(0), points.max(0)
+    lat, lon, _ = frame.enu_to_geodetic(np.array([low[0], low[0], high[0], high[0]]),
+                                        np.array([low[1], high[1], low[1], high[1]]), 0.)
+    keys = mapcells.cells_for_points(lat, lon)
+    for cell in mapcells.load_cells(md, keys, ("water",)):
+        f = cell.layers.get("water")
+        if f is None or "subtype" not in f.attrs:
+            continue
+        boxes = f.boxes(frame)
+        near = np.all(boxes[:, :2] <= high, axis=1) & np.all(boxes[:, 2:] >= low, axis=1)
+        lakes = np.isin(f.attrs["subtype"], ("lake", "reservoir"))
+        for i in np.flatnonzero(near & lakes & (f.kind == mapgeom.POLYGON)):
+            for part in f.parts(i):
+                if not part or len(part[0]) < 3:
+                    continue
+                outer, *holes = mapgeom.enu_rings(f, frame, part)
+                idx = np.flatnonzero(~wet & np.all(points >= outer.min(0), axis=1)
+                                     & np.all(points <= outer.max(0), axis=1))
+                if not len(idx):
+                    continue
+                inside = np.asarray(fast._ef.points_inside(outer, points[idx]), bool)
+                for hole in holes:
+                    inside &= ~np.asarray(fast._ef.points_inside(hole, points[idx]), bool)
+                wet[idx[inside]] = True
+    distances = np.where(wet.reshape(probes.shape[:-1]), SHORE_PROBES, np.inf).min(axis=2)
+    return np.where(distances[:, 1] < distances[:, 0], -1, 1)
+
+
+def path_sites(parts, cells, box, frame, md=None):
     wanted = {fid for fid, _, _, _ in parts}
     profiles = {}
     for f in cells:
@@ -77,6 +117,7 @@ def path_sites(parts, cells, box, frame):
             lit = spans.has_yes if spans is not None else f.attrs["osm_way_lit"][i] == "yes"
             if lit:
                 profiles[fid] = str(f.attrs["class"][i]), spans
+    pending = []
     for fid, xy, width, _ in parts:
         if fid not in profiles:
             continue
@@ -86,8 +127,15 @@ def path_sites(parts, cells, box, frame):
         for k, _, (x,y), (dx,dy) in stations(xy, spacing, phase, box):
             if spans is not None and spans.at(np.array([x, y])) != "yes":
                 continue
-            offset = width / 2 + .75
-            yield (0, fid, k), x - dy * offset, y + dx * offset, furniture._yaw(dy, -dx), kind
+            pending.append(((0, fid, k), (x, y), (-dy, dx), width / 2 + .75, kind))
+    if not pending:
+        return
+    centres = np.array([site[1] for site in pending])
+    normals = np.array([site[2] for site in pending])
+    if md is not None:
+        normals *= lake_side(frame, md, centres, normals)[:, None]
+    for (key, centre, _, offset, kind), normal in zip(pending, normals):
+        yield key, *(centre + normal * offset), furniture._yaw(*-normal), kind
 
 
 def area_kind(tags):
@@ -151,7 +199,7 @@ def area_sites(frame, box, md, keys, exclusions=None):
 def tile_rows(frame, box, cells, urban, widths, md, keys, elev, props, mapped, rings,
               clearance, road_rows, near_lamps, country_at):
     parts = standalonepaths.parts(frame, box, cells, urban, widths, lighting=True)
-    candidates = list(path_sites(parts, cells, box, frame))
+    candidates = list(path_sites(parts, cells, box, frame, md))
     exclusions = []
     candidates.extend(area_sites(frame, box, md, keys, exclusions))
     candidates = [c for c in candidates if box[0]-20 <= c[1] <= box[2]+20 and box[1]-20 <= c[2] <= box[3]+20]
