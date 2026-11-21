@@ -141,9 +141,9 @@ M.SCHEMA = {
   -- them, so a change holds from the next start of BeamNG.Earth. Nothing here applies them in the game itself
   expNlRoadSigns = { kind = 'bool', default = false, label = 'Dutch road signs' },
   expEuScenery = { kind = 'bool', default = false, label = 'French and European road scenery' },
+  expDropRails = { kind = 'bool', default = false, label = 'Guard rails at drops' },
   osmPedestrianLighting = { kind = 'bool', default = false, label = 'OSM Pedestrian and Recreational Lighting' },
   strictOsmLighting = { kind = 'bool', default = false, label = 'Strict OSM Lighting' },
-  expDropRails = { kind = 'bool', default = false, label = 'Guard rails at drops' },
   expEntranceFlares = { kind = 'bool', default = false, label = 'Widened entrances' },
   expPriorityStops = { kind = 'bool', default = false, label = 'Right of way by road class' },
   expRoadBumps = { kind = 'bool', default = false, label = 'Bumpy road surfaces' },
