@@ -1219,6 +1219,7 @@ class Server:
         self.sid = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
         self.user_dir = user_dir           # the game's user folder (detail mode fills its terrain texture cache)
         self.cache_dir = cache_dir         # (here already: _scan_sessions moves old sessions into its trash)
+        self.pack_cleanup = terraincache.PackCleanup(user_dir, cache_dir)
         root = self.root = os.path.join(user_dir, "temp", "beamngEarth")
         self.cdae_root = os.path.join(user_dir, *CDAE_ROOT)
         # earlier runs' session folders a game may still show: sid -> monotonic time found / released
@@ -1663,6 +1664,8 @@ class Server:
                          "shows its tiles", sid, age / 60)
         if no_game:
             self._wipe_leaked_packs_once()
+            for path in self.pack_cleanup.pending():
+                self._remove_file(path)
         self.trash_thread = self._empty_trash()
 
     def _base_cache_files(self, sid):
@@ -1677,14 +1680,14 @@ class Server:
                 p = os.path.join(terraincache.cache_dir(self.user_dir), key + ".dds")
                 if os.path.exists(p):
                     out.append(p)
+        self.pack_cleanup.remember(out)
         return out
 
     def _remove_base(self, name):
         """A base photo name in out_dir gone with its packed copies in the game's terrain texture cache (whichever size it
         was made at). A replaced stand-in or earlier refresh lost only its photo, its 5.6-22 MB pack stayed for good:
         one a block at speed, 165 GB in the cache of a test PC by 2026-11-03."""
-        for p in self._base_paths(name):
-            self._remove(p)
+        self._remove_files(self._base_paths(name))
 
     def _base_paths(self, name):
         """_remove_base's files."""
@@ -1731,7 +1734,7 @@ class Server:
         folder and deleted (later: only moved, the trash thread deletes them). For when no game watches the folder
         (the start); a running game's sessions go file by file (_session_paths, queue_delete)."""
         for path in self._base_cache_files(sid):
-            self._remove(path)
+            self._remove_file(path)
         for d in (os.path.join(self.root, sid), os.path.join(self.cdae_root, sid.lower())):
             self._rmtree_outside(d, later=later)
 
@@ -1835,13 +1838,12 @@ class Server:
     def release_session(self, sid):
         """An adopted session the game no longer uses: its files go through the rate-limited delete
         queue (the game loaded them, P9), the marker and the folders last."""
-        if self.orphans.pop(sid, None) is None:
+        if sid not in self.orphans:
             return
-        d = os.path.join(self.root, sid)
-        cd = os.path.join(self.cdae_root, sid.lower())
-        files = sorted(glob.glob(os.path.join(d, "*")) + glob.glob(os.path.join(cd, "*")))
+        files = self._session_paths(sid)
+        self.orphans.pop(sid)
         log.info("session %s released by the game: deleting its %d files", sid, len(files))
-        self.queue_delete(files + [os.path.join(d, SESSION_MARKER), d, cd])
+        self.queue_delete(files)
 
     def sweep_sessions(self, remove=True):
         """Every SESSION_SWEEP_S (main_async, via sweep_sessions_async): touch our own marker and the
@@ -1880,6 +1882,8 @@ class Server:
         gone = self.sweep_sessions(remove=False)
         for sid in gone:
             self.queue_delete(await asyncio.to_thread(self._session_paths, sid))
+        queued = {p for p, _ in self.delete_queue}
+        self.queue_delete(p for p in await asyncio.to_thread(self.pack_cleanup.pending) if p not in queued)
         return gone
 
     def expire_leases(self, now=None):
@@ -1940,6 +1944,17 @@ class Server:
             except OSError:
                 pass
 
+    def _remove_file(self, path):
+        if self.pack_cleanup.owns(path):
+            self.pack_cleanup.remove(path)
+        else:
+            self._remove(path)
+
+    def _remove_files(self, paths):
+        self.pack_cleanup.remember(paths)
+        for path in paths:
+            self._remove_file(path)
+
     def delete_gap(self):
         """Seconds until the next queued delete: delete_interval, or shorter for a long queue
         (up to delete_max_rate files/s, see DELETE_DRAIN_S)."""
@@ -1960,7 +1975,7 @@ class Server:
 
             def work():
                 if not ck():
-                    self._remove(path)
+                    self._remove_file(path)
             return work
         if ck is None or (ck not in self.tiles and ck not in self.tile_inflight):
             def work():
@@ -1969,7 +1984,7 @@ class Server:
                 if os.path.isdir(path):     # a released session's folder, queued after its files
                     shutil.rmtree(path, ignore_errors=True)
                 else:
-                    self._remove(path)
+                    self._remove_file(path)
             return work
         return None
 
@@ -5736,8 +5751,7 @@ class Server:
         def work():
             if keep is not None and keep():
                 return
-            for p in paths:
-                self._remove(p)
+            self._remove_files(paths)
         pool = getattr(self, "_remove_pool", None)
         if pool is None:
             pool = self._remove_pool = ThreadPoolExecutor(1, thread_name_prefix="remove")

@@ -20,7 +20,9 @@ base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value) writes that cache file for
 mips, as the game's own: DXGI 99, bc7.py), after the photo itself exists. Returns its path.
 """
 import os
+import re
 import struct
+import tempfile
 
 import numpy as np
 import staging
@@ -87,6 +89,80 @@ def base_key(base_vfs, ao_vfs):
 
 def cache_dir(user_dir):
     return os.path.join(user_dir, "temp", "art", "terrainmaterialcache")
+
+
+class PackCleanup:
+    """Retired Earth packs, recorded before their source photos disappear.
+
+    Markers outside the game's watched folder survive a crash. One marker per pack avoids a shared
+    read/modify/write index when servers overlap; the namespace keeps different game user folders apart.
+    """
+    NAME = re.compile(r"[0-9a-f]{16}\.dds", re.IGNORECASE)
+
+    def __init__(self, user_dir, download_cache):
+        self.directory = os.path.abspath(cache_dir(user_dir))
+        key = f"{xxh64(os.path.normcase(self.directory).encode()):016x}"
+        self.markers = os.path.join(download_cache, "terrain-pack-deletes", key)
+
+    def owns(self, path):
+        return (os.path.normcase(os.path.abspath(os.path.dirname(path))) == os.path.normcase(self.directory)
+                and self.NAME.fullmatch(os.path.basename(path)) is not None)
+
+    def remember(self, paths):
+        """Record known retired packs first; a write failure must not discard their source photos."""
+        paths = [p for p in paths if self.owns(p) and os.path.exists(p)]
+        if paths:
+            os.makedirs(self.markers, exist_ok=True)
+            for path in paths:
+                try:
+                    stamp = self._stamp(path)
+                except FileNotFoundError:
+                    continue
+                tmp = None
+                try:
+                    with tempfile.NamedTemporaryFile(mode="w", dir=self.markers, delete=False) as f:
+                        tmp = f.name
+                        f.write(stamp)
+                    os.replace(tmp, os.path.join(self.markers, os.path.basename(path)))
+                finally:
+                    if tmp is not None:
+                        self._forget(tmp)
+
+    @staticmethod
+    def _stamp(path):
+        st = os.stat(path)
+        return f"{st.st_dev}:{st.st_ino}:{st.st_mtime_ns}:{st.st_size}"
+
+    @staticmethod
+    def _forget(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    def remove(self, path):
+        """One attempt; a locked pack keeps its marker for the next paced sweep or server start."""
+        marker = os.path.join(self.markers, os.path.basename(path))
+        try:
+            with open(marker) as f:
+                stamp = f.read()
+            # The same block can be built again under the same name while a failed deletion waits. Its new pack
+            # must stay. A duplicate queued retry after a successful removal likewise has no marker anymore.
+            if self._stamp(path) == stamp:
+                os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return
+        self._forget(marker)
+
+    def pending(self):
+        try:
+            with os.scandir(self.markers) as entries:
+                return [os.path.join(self.directory, e.name) for e in entries
+                        if e.is_file() and self.NAME.fullmatch(e.name)]
+        except FileNotFoundError:
+            return []
 
 
 def stored_png(rgb):

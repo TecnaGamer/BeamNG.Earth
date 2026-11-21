@@ -798,3 +798,170 @@ class TerrainCacheGoesWithItsSessionTest(unittest.TestCase):
             self.addCleanup(s.tile_pool.shutdown)
             self.addCleanup(s.hm_pool.shutdown)
             self.assertEqual(sorted(os.listdir(cdir)), ["0123456789abcdef.dds"])
+
+
+class RetiredTerrainPacksTest(unittest.TestCase):
+    def setUp(self):
+        import terraincache
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        self.root = self.tmp.name
+        with mock.patch.object(earthd, "game_running", lambda: True):
+            self.s = earthd.Server(self.root, os.path.join(self.root, "cache"), imagery=None)
+        self.addCleanup(self.s.tile_pool.shutdown)
+        self.addCleanup(self.s.hm_pool.shutdown)
+        self.addCleanup(self.s.removes_flush)
+        self.sid = "20260101-000000-abcd"
+        self.names = ("hm_1_0_0_base.jpg", "hm_1_0_0_base_q.png", "hm_1_0_0_base_r2.jpg")
+        self.d, _ = make_session(self.root, self.sid, 100, files=self.names)
+        self.s.orphans[self.sid] = time.monotonic()
+        self.packs = []
+        cdir = terraincache.cache_dir(self.root)
+        os.makedirs(cdir, exist_ok=True)
+        for name in self.names:
+            for size in earthd.BASE_SIZES:
+                path = os.path.join(cdir, terraincache.base_key(
+                    f"/temp/beamngEarth/{self.sid}/{name}", earthd.base_ao_vfs(size)) + ".dds")
+                Path(path).write_bytes(b"retired pack")
+                self.packs.append(path)
+        self.other = os.path.join(cdir, "0123456789abcdef.dds")
+        Path(self.other).write_bytes(b"unrelated stock pack")
+
+    def lock(self, path):
+        """Use a real sharing lock on Windows, and the same unlink failure on other runners."""
+        import contextlib
+
+        @contextlib.contextmanager
+        def held():
+            if os.name == "nt":
+                import ctypes
+                from ctypes import wintypes
+                create = ctypes.windll.kernel32.CreateFileW
+                create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                   wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+                create.restype = wintypes.HANDLE
+                close = ctypes.windll.kernel32.CloseHandle
+                close.argtypes = [wintypes.HANDLE]
+                close.restype = wintypes.BOOL
+                handle = create(path, 0x80000000, 3, None, 3, 0, None)  # read, share read/write but not delete
+                if handle == wintypes.HANDLE(-1).value:
+                    raise ctypes.WinError()
+                try:
+                    yield
+                finally:
+                    close(handle)
+            else:
+                remove = os.remove
+
+                def guarded(p, *args, **kwargs):
+                    if p == path:
+                        raise PermissionError("pack still open")
+                    return remove(p, *args, **kwargs)
+                with mock.patch.object(os, "remove", guarded):
+                    yield
+        return held()
+
+    def test_released_session_removes_all_sizes_and_photo_variants(self):
+        self.s.release_session(self.sid)
+        self.assertFalse(os.path.exists(self.d))
+        self.assertFalse(any(os.path.exists(p) for p in self.packs))
+        self.assertEqual(self.s.pack_cleanup.pending(), [])
+        self.assertTrue(os.path.exists(self.other))
+
+    def test_locked_pack_survives_source_deletion_and_retries_after_restart(self):
+        import terraincache
+        pack = self.packs[0]
+        with self.lock(pack):
+            self.s.release_session(self.sid)
+            self.assertFalse(os.path.exists(self.d))
+            self.assertTrue(os.path.exists(pack))
+            self.assertEqual(self.s.pack_cleanup.pending(), [pack])
+        restored = terraincache.PackCleanup(self.root, self.s.cache_dir)
+        self.assertEqual(restored.pending(), [pack])
+        restored.remove(pack)
+        self.assertFalse(os.path.exists(pack))
+        self.assertEqual(restored.pending(), [])
+        self.assertTrue(os.path.exists(self.other))
+
+    def test_startup_retries_packs_without_source_photos(self):
+        pack = self.packs[0]
+        with self.lock(pack):
+            self.s.release_session(self.sid)
+        with mock.patch.object(earthd, "game_running", lambda: False):
+            self.s._scan_sessions()
+        self.assertFalse(os.path.exists(pack))
+        self.assertTrue(os.path.exists(self.other))
+
+    def test_periodic_retry_uses_the_paced_queue(self):
+        pack = self.packs[0]
+        with self.lock(pack):
+            self.s.release_session(self.sid)
+        self.s.delete_interval = 0.005
+
+        async def run():
+            await self.s.sweep_sessions_async()
+            self.assertTrue(os.path.exists(pack), "queued, not deleted on the event loop")
+            for _ in range(200):
+                if not self.s._deleting:
+                    break
+                await asyncio.sleep(0.005)
+            self.assertFalse(os.path.exists(pack))
+        asyncio.run(run())
+        self.assertEqual(self.s.pack_cleanup.pending(), [])
+
+    def test_rebuilt_pack_is_preserved_by_delayed_retry(self):
+        pack = self.packs[0]
+        self.s.pack_cleanup.remember([pack])
+        replacement = pack + ".replacement"
+        Path(replacement).write_bytes(b"new pack used by a rebuilt block")
+        os.replace(replacement, pack)
+        self.s._remove_file(pack)
+        self.assertEqual(Path(pack).read_bytes(), b"new pack used by a rebuilt block")
+        self.assertEqual(self.s.pack_cleanup.pending(), [])
+
+    def test_duplicate_retry_does_not_delete_a_new_pack(self):
+        pack = self.packs[0]
+        self.s.pack_cleanup.remember([pack])
+        self.s._remove_file(pack)
+        Path(pack).write_bytes(b"rebuilt after removal")
+        self.s._remove_file(pack)
+        self.assertEqual(Path(pack).read_bytes(), b"rebuilt after removal")
+
+    def test_kept_removal_does_not_schedule_active_packs(self):
+        self.s.remove_off_loop(self.packs, keep=lambda: True).result()
+        self.assertEqual(self.s.pack_cleanup.pending(), [])
+        self.assertTrue(all(os.path.exists(p) for p in self.packs))
+
+    def test_marker_write_failure_keeps_sources_and_session_tracking(self):
+        with mock.patch.object(self.s.pack_cleanup, "remember", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.s.release_session(self.sid)
+        self.assertIn(self.sid, self.s.orphans)
+        self.assertTrue(all(os.path.exists(os.path.join(self.d, n)) for n in self.names))
+        self.assertTrue(all(os.path.exists(p) for p in self.packs))
+
+    def test_current_photo_retirement_uses_the_same_retry(self):
+        import terraincache
+        name = "hm_2_0_0_base.jpg"
+        photo = Path(self.s.out_dir) / name
+        photo.touch()
+        pack = os.path.join(terraincache.cache_dir(self.root), terraincache.base_key(
+            f"{self.s.vfs_dir}/{name}", earthd.BASE_AO_VFS) + ".dds")
+        Path(pack).write_bytes(b"current session pack")
+        with self.lock(pack):
+            self.s._remove_base(name)
+        self.assertFalse(photo.exists())
+        self.assertEqual(self.s.pack_cleanup.pending(), [pack])
+        self.s._remove_file(pack)
+        self.assertFalse(os.path.exists(pack))
+
+    def test_user_folders_have_separate_pending_lists(self):
+        import terraincache
+        self.s.pack_cleanup.remember([self.packs[0]])
+        other = terraincache.PackCleanup(os.path.join(self.root, "other-user"), self.s.cache_dir)
+        self.assertEqual(other.pending(), [])
+        self.assertNotEqual(other.markers, self.s.pack_cleanup.markers)
+
+    def test_unrelated_files_are_not_recorded(self):
+        self.s.pack_cleanup.remember([__file__, self.s.out_dir])
+        self.assertEqual(self.s.pack_cleanup.pending(), [])
