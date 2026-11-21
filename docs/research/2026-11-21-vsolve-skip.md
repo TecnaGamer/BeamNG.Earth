@@ -35,3 +35,22 @@ profiles before the passes and every pass run again (`grading`'s fallback). The 
 
 The others stay: each makes something worse when skipped. `ramp`, `snap_weld`, `weld` and `under` by little; they are
 the next to look at, with the solve given what they do.
+
+## Where the rest of on mode's CPU is
+
+A CPU-time profile of Tokyo in on mode with this skip (`time.thread_time`, every planner thread; 452 s under the
+profiler):
+
+| part | CPU |
+|---|---:|
+| the passes, all of them | 81 s |
+| of which the underpass rule (`_lower_underpasses`, run in the passes and again in the shadow: 36 s for both) | ~18 s |
+| of which the approaches' lifts (kept: the solve's floors) | most of the rest |
+| of which `ramp_envelope`, `weld_continuations`, `share_corridors`, the snaps | under 6 s together |
+| the solve's context (`_vsolve_context`: the next cells' roads planned as their cells plan them) | 78 s |
+| of which `_pins` → `_stronger_zs` (the stronger roads those roads end on, planned) | 42 s |
+| the solve (`vsolve.solve`: problem 19 s, joins 12 s, the kernel's carriageway solve 32 s) | 71 s |
+
+So skipping the four passes left would save under 6 s, and it changes plans (above): they reach the solve through
+its caps and floors, which are no higher than the passes' heights (`_vsolve_shadow`). Taking them out means caps from
+the decks' own heights (the RFC's clearance rows), not a skip. The CPU is in the context's planning and the solve.
