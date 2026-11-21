@@ -411,10 +411,27 @@ TRIM_ALONG_COS = dmath.cos(math.radians(TRIM_ALONG_DEG))
 # made by the cut would stand in the carriageway: Codex P3d)
 COP_TOL_M = 0.03
 
+# A deck going on from another's end (the straightest at that joint, both ways: one road's pieces, split where its lanes
+# change or its way ends) is one deck to the trim. Measured to the other's end, a piece of the same climbing road a
+# few metres on stood TRIM_DZ apart "beside" it: I-75 over Nancy Creek, Atlanta (33.8531,-84.4314) had notches up to
+# 6 m deep cut into its slab either side of each joint (the user, 2026-11-21: "gaps and walls poking out into the
+# bridge"). TRIM_CHAIN_JOIN_M: ends this close (and within TRIM_DZ[0] in height) join.
+TRIM_CHAIN_ON = os.environ.get("BNE_TRIM_CHAIN", "on") != "off"
+TRIM_CHAIN_JOIN_M = 1.0
+TRIM_CHAIN_TAN_M = 3.0              # m in from an end its direction is read over
+
 # Short, connected bridge forks need a common two-dimensional surface. Three independently sloped, flat-width
 # ribbons can start at one height and still overlap by tens of centimetres a few metres later. Keep the longitudinal
 # solver's profiles; reconcile their shared footprint here, using one triangulated grid for skin and collision.
 JUNCTION_MAX_PART_M = 60.0
+# A part to JUNCTION_LONG_MAX_M long is one of a junction's too where roads marks it ("jlong": a crossing on a deck,
+# roads._elevated_joint), its junction's box then up to JUNCTION_LONG_CLUSTER_MAX_M: a long ramp crossing a road's deck
+# at grade was no part of the junction's surface, its slab flat across its width over the road's climbing one. At Akers
+# Mill Rd over I-75, Atlanta (33.8864,-84.4580), the I-75 express-lane ramps' 120-165 m decks crossing it stood 0.2-0.3 m
+# steps across all its lanes and 0.3-0.75 m ledges between the ramps side by side (the user, 2026-11-21: "edges poke out
+# and make it bumpy"); with them in it, none over 0.1 m. BNE_JUNCTION_LONG_MAX_M=0: none.
+JUNCTION_LONG_MAX_M = float(os.environ.get("BNE_JUNCTION_LONG_MAX_M", "180"))
+JUNCTION_LONG_CLUSTER_MAX_M = 300.0
 JUNCTION_MAX_BRANCHES = 8
 JUNCTION_CELL_M = 2.0
 JUNCTION_JOIN_M = 0.75
@@ -590,7 +607,8 @@ def _junction_surfaces(chunks, context=()):
             by_fid[c['fid']] = (key, c, p)
     import fast
     fast.require(241, "junction_groups")
-    kept = [(c, p) for _fid, (key, c, p) in sorted(by_fid.items()) if key[0] <= JUNCTION_MAX_PART_M]
+    kept = [(c, p) for _fid, (key, c, p) in sorted(by_fid.items())
+            if key[0] <= JUNCTION_MAX_PART_M or (c.get('jlong') and key[0] <= JUNCTION_LONG_MAX_M)]
     if not kept:
         return {}
     ends, plen, half, skip, bbox = [], [], [], [], []
@@ -599,12 +617,15 @@ def _junction_surfaces(chunks, context=()):
             d = r[:2] - q[:2]
             d = d / max(float(dnp.hypot(*d)), 1e-9)
             ends.append([q[0], q[1], q[2], d[0], d[1]])
-        plen.append(float(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum()))
+        plen.append(min(float(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum()), JUNCTION_MAX_PART_M)
+                    if c.get('jlong') else float(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum()))
         half.append(float(c['w']) / 2)
         skip.append(1 if c.get('jskip') else 0)
         bbox.append([*p[:, :2].min(0), *p[:, :2].max(0)])
     prm = np.array([JUNCTION_JOIN_M, JUNCTION_JOIN_Z_M, JUNCTION_MAX_PART_M, JUNCTION_MAX_BRANCHES,
-                    1.0 if JUNCTION_CLUSTER_ON else 0.0, JUNCTION_CLUSTER_MAX_PARTS, JUNCTION_CLUSTER_MAX_M], np.float64)
+                    1.0 if JUNCTION_CLUSTER_ON else 0.0, JUNCTION_CLUSTER_MAX_PARTS,
+                    JUNCTION_LONG_CLUSTER_MAX_M if any(c.get('jlong') for c, _p in kept) else JUNCTION_CLUSTER_MAX_M],
+                   np.float64)
     _grp, _field, fields, members, pins = fast._ef.junction_groups(
         np.ascontiguousarray(ends, np.float64), np.asarray(plen, np.float64), np.asarray(half, np.float64),
         np.asarray(skip, np.int64), np.ascontiguousarray(bbox, np.float64), prm)
@@ -770,6 +791,55 @@ def _pad_without_ground(p, t, uv, material, origin, ground, centre):
     return p[used], inverse.reshape(-1, 3), uv[used], material
 
 
+def _chain_owners(lefts, rights, zs, oid):
+    """The owner ids oid (one per ribbon: left / right edges (k, 2), heights (k,)) with each ribbon going on from
+    another's end made one owner with it: ends within TRIM_CHAIN_JOIN_M and TRIM_DZ[0], their directions within
+    TRIM_ALONG_DEG of straight on, each the other's straightest there (at a fork the branch keeps its own: its gore is
+    still trimmed). Pure."""
+    ends = []                                   # (ribbon, xy, outward unit direction, z)
+    for k, (l, r, z) in enumerate(zip(lefts, rights, zs)):
+        if len(l) < 2:
+            continue
+        m = (np.asarray(l, np.float64) + np.asarray(r, np.float64)) / 2
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(m, axis=0).T))]
+        if s[-1] < 1e-6:
+            continue
+        for at, inner in ((0, min(int(np.searchsorted(s, TRIM_CHAIN_TAN_M)), len(m) - 1)),
+                          (len(m) - 1, max(int(np.searchsorted(s, s[-1] - TRIM_CHAIN_TAN_M)) - 1, 0))):
+            t = m[at] - m[inner]
+            n = float(dnp.hypot(*t))
+            if n > 1e-6:
+                ends.append((k, m[at], t / n, float(z[at])))
+    if len(ends) < 2:
+        return oid
+    xy = np.array([e[1] for e in ends])
+    tg = np.array([e[2] for e in ends])
+    ez = np.array([e[3] for e in ends])
+    rib = np.array([e[0] for e in ends])
+    own = np.asarray(oid)[rib]
+    d = dnp.hypot(xy[:, None, 0] - xy[None, :, 0], xy[:, None, 1] - xy[None, :, 1])
+    straight = -(tg[:, None, 0] * tg[None, :, 0] + tg[:, None, 1] * tg[None, :, 1])    # (1: straight on, end into end)
+    ok = ((d < TRIM_CHAIN_JOIN_M) & (np.abs(ez[:, None] - ez[None, :]) < TRIM_DZ[0]) & (straight > TRIM_ALONG_COS) &
+          (own[:, None] != own[None, :]))
+    if not ok.any():
+        return oid
+    score = np.where(ok, straight, -np.inf)
+    best = score.argmax(1)
+    parent = {}
+
+    def find(a):
+        while parent.get(a, a) != a:
+            a = parent[a]
+        return a
+    for i in np.flatnonzero(ok.any(1)):
+        j = int(best[i])
+        if best[j] == i and i < j:
+            a, b = find(int(own[i])), find(int(own[j]))
+            if a != b:
+                parent[max(a, b)] = min(a, b)
+    return [find(o) for o in oid]
+
+
 def trim_overlaps(rb, context=(), shared=None, coplanar=False):
     """The deck ribbons rb ([(ribbon, chunk)]: ribbons()' (left, right, v, m, layer, z) of "fixed" decks) with each
     edge pulled in where another deck (rb's or the context's, the decks around the tile: the same trim in every tile)
@@ -812,6 +882,8 @@ def trim_overlaps(rb, context=(), shared=None, coplanar=False):
         lens.append(len(lefts[-1]))
     if not targets:
         return list(rb)
+    if TRIM_CHAIN_ON:
+        oid = _chain_owners(lefts, rights, zs, oid)
     args = (np.ascontiguousarray(np.concatenate(lefts)), np.ascontiguousarray(np.concatenate(rights)),
             np.ascontiguousarray(np.concatenate(zs)), np.r_[0, np.cumsum(lens)].astype(np.int64),
             np.array(oid, np.int64), np.array(gid, np.int64), np.array(sh, bool), np.array(targets, np.int64))
@@ -943,8 +1015,8 @@ def _reach_past(c, box):
     1.5 x its width: a ribbon's square end on a road crossing the seam at a slant left a triangle of the road
     uncovered on each side once both tiles were cut exactly at the edge (the E6 in Norway, 50 degrees). Pure."""
     pts = np.asarray(c["n"] if c.get("n") is not None else (), np.float64)
-    if len(pts) < 2:
-        return c
+    if len(pts) < 2 or c.get("skin"):       # (a deck's surface past the tile (roads.DECK_SEAM_ON): its ends are the
+        return c                            # deck's own or past the reach the tile draws; carried on, it stood in the air)
     x0, y0, x1, y1 = box
     out_ = lambda p: p[0] < x0 or p[0] > x1 or p[1] < y0 or p[1] > y1     # noqa: E731
     reach = 1.5 * float(c["w"])
@@ -1309,7 +1381,7 @@ def _overlays_on_decks(rbc):
     deck). Ribbons on the ground and decks' own surfaces as they were."""
     base = {}
     for r, c in rbc:
-        if r[5] is not None and r[4] == "base" and c.get("deck"):
+        if r[5] is not None and r[4] == "base" and (c.get("deck") or c.get("skin")):
             mid = (np.asarray(r[0]) + np.asarray(r[1])) * 0.5
             hw = dnp.hypot(*(np.asarray(r[0]) - np.asarray(r[1])).T) * 0.5
             entry = (np.c_[mid, np.asarray(r[5], np.float64)], hw)
@@ -2112,6 +2184,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     medians = _median_gaps([(r, c) for r, c in rb],
                            [(r, c) for r, c in zip(ribbons(list(context)), context) if r[5] is not None],
                            skip={n for n, (_r, c) in enumerate(rb) if c.get("rch")})
+    others = _deck_others(rb, ribbon_pairs(list(context))) if NOSE_CLAMP_ON else []
     tops = {}               # slab depth -> the indices of its pieces' tops in P (_slabs_from_tops)
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
         active_field = junctions.get(c.get('fid'))
@@ -2125,8 +2198,12 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         covered[n] = (covered[n][0] | cl, covered[n][1] | cr_)
         # the slab's edges, past the road's (to the middle of a median beside another deck; to a point at a gore nose),
         # changing no faster than REACH_SLOPE along it; over an exit's union (P2b) to its outer edge
-        el = left + u * _sheet_max(rl, sl)[:, None]
-        er = right - u * _sheet_max(rr, sr)[:, None]
+        ext_l, ext_r = _sheet_max(rl, sl), _sheet_max(rr, sr)
+        if NOSE_CLAMP_ON:
+            ext_l = _clamp_reach(ext_l, left, u, z, c.get("fid"), others, wide)
+            ext_r = _clamp_reach(ext_r, right, -u, z, c.get("fid"), others, wide)
+        el = left + u * ext_l[:, None]
+        er = right - u * ext_r[:, None]
         zl = active_field.at(el) if active_field is not None else z
         zr = active_field.at(er) if active_field is not None else z
         bk = _bank_rows(c, k) if active_field is None else None
@@ -2695,6 +2772,80 @@ def _reach(wide, ext):
     return np.where(ext < 0.0, ext, np.maximum(wide, ext))
 
 
+# A slab's reach past its road (a median's fill, a nose: _smooth_reach only ever widens it along the edge) stops at another
+# deck's carriageway it would run into at another height (NOSE_CLAMP_DZ up to TRIM_DZ[1] apart): at Akers Mill Rd over
+# I-75, Atlanta (33.8864,-84.4580), the junction deck's nose ran 12 m out over the express-lane ramp's end, 0.3 m over
+# its lanes (the user, 2026-11-21: "edges poke out and make it bumpy or a sharp edge").
+NOSE_CLAMP_ON = os.environ.get("BNE_NOSE_CLAMP", "on") != "off"
+NOSE_CLAMP_DZ = 0.1
+
+
+def _deck_others(rb, context=()):
+    """[(fid, centre line (k, 2), half width (k,), z (k,))] of the deck ribbons rb and context ([(ribbon, chunk)]) for
+    _clamp_reach."""
+    out = []
+    for (left, right, v, m, layer, z), c in list(rb) + list(context):
+        if z is None or len(left) < 2 or c.get("tunnel"):
+            continue
+        left, right = np.asarray(left, np.float64)[:, :2], np.asarray(right, np.float64)[:, :2]
+        out.append((c.get("fid"), (left + right) / 2, dnp.hypot(*(left - right).T) / 2, np.asarray(z, np.float64)))
+    return out
+
+
+def _inside_ribbon(p, mid, hw, z):
+    """Per point p (k, 2): is it on the ribbon (centre line mid (m, 2), half width hw (m,)) - beside a piece of it, not
+    past its square ends - and the ribbon's height there (nan off it)."""
+    a, b = mid[:-1], mid[1:]
+    d = b - a
+    l2 = np.maximum((d * d).sum(1), 1e-12)
+    t = ((p[:, None, :] - a[None]) * d[None]).sum(2) / l2[None]
+    tc = np.clip(t, 0.0, 1.0)
+    q = a[None] + tc[..., None] * d[None]
+    dist = dnp.hypot(*(p[:, None, :] - q).transpose(2, 0, 1))
+    j = np.argmin(dist, 1)
+    k = np.arange(len(p))
+    tt, tj = t[k, j], tc[k, j]
+    past = ((j == 0) & (tt < -1e-6)) | ((j == len(d) - 1) & (tt > 1 + 1e-6))
+    h = hw[j] + tj * (hw[np.minimum(j + 1, len(hw) - 1)] - hw[j])
+    zz = z[j] + tj * (z[np.minimum(j + 1, len(z) - 1)] - z[j])
+    on = ~past & (dist[k, j] <= h)
+    return on, np.where(on, zz, np.nan)
+
+
+def _clamp_reach(ext, base, out, z, fid, others, wide):
+    """ext (per edge point the slab's reach past its road, base (k, 2) the road's edge, out (k, 2) the unit direction
+    out of it) cut back where its end would stand on another deck's carriageway (others: _deck_others) at another
+    height (NOSE_CLAMP_DZ .. TRIM_DZ[1] off this deck's z), to that carriageway's edge, never under wide. Pure."""
+    ext = np.asarray(ext, np.float64).copy()
+    z = np.asarray(z, np.float64)
+    todo = np.flatnonzero(ext > wide + 1e-6)
+    if not len(todo) or not others:
+        return ext
+    lo_ = np.full(len(todo), float(wide))
+    hi_ = ext[todo].copy()
+
+    def blocked(e):
+        p = base[todo] + out[todo] * e[:, None]
+        hit = np.zeros(len(todo), bool)
+        for ofid, mid, hw, oz in others:
+            if ofid == fid:
+                continue
+            on, zz = _inside_ribbon(p, mid, hw, oz)
+            dz = np.abs(zz - z[todo])
+            hit |= on & (dz >= NOSE_CLAMP_DZ) & (dz < TRIM_DZ[1])
+        return hit
+    bad = blocked(hi_)
+    if not bad.any():
+        return ext
+    for _ in range(10):                         # (bisect the reach of the blocked points back to the edge it meets)
+        mid_ = (lo_ + hi_) / 2
+        b = blocked(mid_)
+        hi_ = np.where(bad & b, mid_, hi_)
+        lo_ = np.where(bad & ~b, mid_, lo_)
+    ext[todo[bad]] = lo_[bad]
+    return ext
+
+
 def _smooth_reach(ext, edge):
     """ext (per edge point the slab's reach past the road) with no change steeper than REACH_SLOPE along the edge
     (k, 2): only ever more (a fill ends in a wedge instead of a square end), never less (no hole). The fill to a
@@ -2878,6 +3029,7 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
     medians = _median_gaps([(r, c) for r, c in rb],
                            [(r, c) for r, c in zip(ribbons(list(context)), context) if r[5] is not None],
                            skip={n for n, (_r, c) in enumerate(rb) if c.get("rch")})
+    others = _deck_others(rb, ribbon_pairs(list(context))) if NOSE_CLAMP_ON else []
     out = face_runs
     for n, ((left, right, v, _m, _layer, z), c) in enumerate(rb):
         if c.get("surface_ref") or c.get("tunnel"):       # deck() draws the tunnel floor without parapets
@@ -2895,8 +3047,12 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
             import roads as _roads
             covered[n] = (covered[n][0] | _roads.pad_inside(pads, left, z=z),
                           covered[n][1] | _roads.pad_inside(pads, right, z=z))
-        el = left + u * _sheet_max(rl, sl)[:, None]
-        er = right - u * _sheet_max(rr, sr)[:, None]
+        ext_l, ext_r = _sheet_max(rl, sl), _sheet_max(rr, sr)
+        if NOSE_CLAMP_ON:
+            ext_l = _clamp_reach(ext_l, left, u, z, c.get("fid"), others, wide)
+            ext_r = _clamp_reach(ext_r, right, -u, z, c.get("fid"), others, wide)
+        el = left + u * ext_l[:, None]
+        er = right - u * ext_r[:, None]
         k = len(z)
         for sgn, edge, inner, cov, nz in ((1, el, left, covered[n][0], nose[0]),
                                           (-1, er, right, covered[n][1], nose[1])):

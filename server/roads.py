@@ -7112,6 +7112,47 @@ def clip_polyline(pts, x0, y0, x1, y1):
     return [out[starts[i]:starts[i + 1]].copy() for i in range(len(starts) - 1)]
 
 
+def _beyond_box(pts, box, pad):
+    """The pieces of a polyline (k, D >= 2, xy first) outside the box (x0, y0, x1, y1) but inside it grown by pad,
+    each cut exactly where it crosses either box's edge. Pure."""
+    x0, y0, x1, y1 = box
+    out = []
+    for piece in clip_polyline(pts, x0 - pad, y0 - pad, x1 + pad, y1 + pad):
+        P = np.asarray(piece, np.float64)
+        run = []
+        for a, b in zip(P[:-1], P[1:]):
+            d = b - a
+            t0, t1 = 0.0, 1.0                   # (Liang-Barsky: the segment's part inside the box)
+            for p, q in ((-d[0], a[0] - x0), (d[0], x1 - a[0]), (-d[1], a[1] - y0), (d[1], y1 - a[1])):
+                if abs(p) < 1e-12:
+                    if q < 0:
+                        t0, t1 = 1.0, 0.0
+                        break
+                    continue
+                r = q / p
+                if p < 0:
+                    t0 = max(t0, r)
+                else:
+                    t1 = min(t1, r)
+            if t0 >= t1:                        # (all outside)
+                if not run:
+                    run.append(a)
+                run.append(b)
+                continue
+            if t0 > 1e-9:                       # (outside up to where it enters)
+                if not run:
+                    run.append(a)
+                run.append(a + d * t0)
+            if run:
+                out.append(np.array(run))
+                run = []
+            if t1 < 1.0 - 1e-9:                 # (outside again from where it leaves)
+                run = [a + d * t1, b]
+        if run:
+            out.append(np.array(run))
+    return [p for p in out if len(p) >= 2 and dnp.hypot(*(p[-1, :2] - p[0, :2])) > 1e-3]
+
+
 def simplify(pts, tol=None, ztol=None):
     """Ramer-Douglas-Peucker on the xy of a polyline (k, D). ztol (D >= 3): a point is also kept where its height is
     more than this off the line between the kept ones (a deck drawn at its own heights: on xy alone a straight bridge
@@ -12273,12 +12314,13 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
         else:
             got = [(fid, spec, np.c_[xy, z], lon) for fid, spec, xy, z, lon in bridges.parts(cells, near)
                    if np.isfinite(z).all()]
-        if any(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum() <= roadmesh.JUNCTION_MAX_PART_M
+        long_cross = _long_crossing(got, bridges._ground)
+        if long_cross or any(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum() <= roadmesh.JUNCTION_MAX_PART_M
                for _fid, _sp, p, _lon in got):
             # A short branch can meet its fork outside the usual parapet context. Both tiles need all incident
             # complete profiles, even the tile holding only that branch's far abutment. parts() adds NEAR_M.
             # (BNE_ROADSHAPE=sheet: not widened for the forks, whose input is read apart: _sheet_window_parts)
-            reach = 3 * roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
+            reach = 3 * (roadmesh.JUNCTION_LONG_MAX_M if long_cross else roadmesh.JUNCTION_MAX_PART_M) + DECK_CONTEXT_M
             margin = max(0.0, reach - NEAR_M)
             x0, y0, x1, y1 = exact
             cell_fn = getattr(bridges, 'cell_fn', None)
@@ -12440,6 +12482,60 @@ def _corner_look(point, roads):
 
 
 DECK_JOIN_M = 1.0       # m: deck parts' ends this close go on one from the other (no parapet end there)
+# A deck's road surface across a tile seam: a tile drew a deck's surface where its centre line is (clipped to the
+# tile), the slab whole, and the road mesh is cut exactly at the tile's edge; where a wide deck ran near a seam the
+# half of it over the seam had no road surface, its plain slab top showing (I-75 over Nancy Creek, Atlanta
+# 33.8531,-84.4314: a 26 m deck at 14 degrees to a seam, up to 10 m of it bare; the user, 2026-11-21, "missing road
+# textures"). On: the part of a deck's centre line just outside the tile (within its half width + DECK_SEAM_PAD_M) is
+# drawn as its surface alone ("skin": no slab, no parapets; the road mesh cuts it at the edge), and the line is
+# simplified whole before it is clipped, so each tile's surface lies on the same heights as the slab its neighbour drew.
+# A deck part longer than roadmesh.JUNCTION_MAX_PART_M (to JUNCTION_LONG_MAX_M) is one of its junction's common surface
+# only at a crossing on the deck: JUNCTION_CROSS_ENDS or more part ends at the joint (two roads through it), standing
+# JUNCTION_LONG_LIFT_M or more over the ground (the I-75 express-lane ramps crossing Akers Mill Rd's deck, Atlanta).
+# A ramp joining a road (three ends) keeps its own deck and the joint's pad: Cumberland Blvd over I-75, its 90-110 m
+# carriageways in its ramps' junction, lost the pad that meets the ground roads and an edge rose 0.34 m.
+JUNCTION_LONG_LIFT_M = 3.0
+JUNCTION_CROSS_ENDS = 4
+
+
+def _long_crossing(parts, ground_fn):
+    """Is any of the bridge parts [(fid, spec, pts (k, 3), lon)] longer than roadmesh.JUNCTION_MAX_PART_M (to
+    JUNCTION_LONG_MAX_M) one of a crossing's on a deck (_elevated_joint)? Its tile then reads the decks round it as far
+    as such a junction reaches."""
+    import roadmesh
+    if roadmesh.JUNCTION_LONG_MAX_M <= roadmesh.JUNCTION_MAX_PART_M:
+        return False
+    ends = [(i, e, np.asarray(p[2], np.float64)[e, :2]) for i, p in enumerate(parts) if len(p[2]) >= 2 for e in (0, -1)]
+    for i, (_fid, _spec, pts, _lon) in enumerate(parts):
+        pts = np.asarray(pts, np.float64)
+        if len(pts) < 2:
+            continue
+        length = dnp.norm(np.diff(pts[:, :2], axis=0), axis=1).sum()
+        if roadmesh.JUNCTION_MAX_PART_M < length <= roadmesh.JUNCTION_LONG_MAX_M and _elevated_joint(i, pts, ends,
+                                                                                                    ground_fn):
+            return True
+    return False
+
+
+def _elevated_joint(i, pts, ends, ground_fn):
+    """Is an end of deck part i (pts (k, 3); ends: [(part, end, xy)] of every part) a crossing on a deck: a joint of
+    JUNCTION_CROSS_ENDS or more part ends (within roadmesh.JUNCTION_JOIN_M) standing JUNCTION_LONG_LIFT_M or more over
+    the ground (ground_fn(xy) -> heights)?"""
+    import roadmesh
+    if ground_fn is None:
+        return False
+    for e in (0, -1):
+        q = pts[e, :2]
+        if sum(dnp.hypot(*(q - q2)) < roadmesh.JUNCTION_JOIN_M for _j, _e, q2 in ends) < JUNCTION_CROSS_ENDS:
+            continue
+        g = np.asarray(ground_fn(pts[[e], :2]), np.float64).reshape(-1)
+        if len(g) and np.isfinite(g[0]) and pts[e, 2] - g[0] >= JUNCTION_LONG_LIFT_M:
+            return True
+    return False
+
+
+DECK_SEAM_ON = os.environ.get("BNE_DECK_SEAM", "on") != "off"
+DECK_SEAM_PAD_M = 1.0
 ABUT_GROUND_M = 1.0     # a deck part's end within this of the ground under it is an abutment (roadmesh.deck: its
                         # parapets ramp down there to the approach)
 
@@ -13526,14 +13622,18 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
     counts = {}
     for fid, _sp, _pts, _lon in decks:
         counts[fid] = counts.get(fid, 0) + 1
-    joint_profiles, joint_excluded = {}, set()
+    joint_profiles, joint_excluded, joint_long = {}, set(), set()
     for i, (fid, spec, pts, _lon) in enumerate(decks):
         pts = np.asarray(pts, np.float64)
         if shapes is not None and shapes[i] is not None:
             continue                            # (a shaped deck: its own rows, no junction surface)
-        if (counts[fid] != 1 or
-                dnp.norm(np.diff(pts[:, :2], axis=0), axis=1).sum() > roadmesh.JUNCTION_MAX_PART_M):
+        length = dnp.norm(np.diff(pts[:, :2], axis=0), axis=1).sum()
+        if counts[fid] != 1 or length > max(roadmesh.JUNCTION_MAX_PART_M, roadmesh.JUNCTION_LONG_MAX_M):
             continue
+        if length > roadmesh.JUNCTION_MAX_PART_M:
+            if not _elevated_joint(i, pts, ends, ground_fn):
+                continue
+            joint_long.add(fid)
         joint_profiles[fid] = np.round(pts[:, :3], 3).tolist()
         ws = width_of(fid, pts) if width_of else None
         if (walks.get(fid) or not np.allclose(shifted[i], pts, rtol=0, atol=1e-6) or
@@ -13556,7 +13656,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         if any(dnp.norm(p[:2] - q[:2]) <= roadmesh.JUNCTION_JOIN_M and
                abs(p[2] - q[2]) <= roadmesh.JUNCTION_JOIN_Z_M for p in ends for q in blocked_ends):
             joint_excluded.add(fid)
-    junction_margin = 3 * roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
+    junction_margin = 3 * (roadmesh.JUNCTION_LONG_MAX_M if joint_long else roadmesh.JUNCTION_MAX_PART_M) + DECK_CONTEXT_M
     junction_box = (x0 - junction_margin, y0 - junction_margin, x1 + junction_margin, y1 + junction_margin)
     for i, (fid, spec, pts, lon) in enumerate(decks):
         pts = shifted[i]
@@ -13577,6 +13677,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                         _part_ends(ch, frame_line)
                     if fid in joint_profiles:
                         ch['jn'] = joint_profiles[fid]
+                        if fid in joint_long:
+                            ch['jlong'] = True
                         ch['jskip'] = fid in joint_excluded
                     ws = width_of(fid, c) if width_of else None
                     if ws is not None:          # (tapering into another deck: roadmesh.ribbons' "ws")
@@ -13620,6 +13722,18 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                 tilted.append((look, w, line))
             lines = tilted
         for look, w, line in lines:
+            if DECK_SEAM_ON:
+                if look.get("deck") and fid not in joint_profiles:
+                    skin = {k: v for k, v in look.items() if k != "deck"}
+                    for piece in _beyond_box(line, exact, w / 2 + DECK_SEAM_PAD_M):
+                        for c in split(densify(piece)):
+                            if len(c) >= 2:
+                                ch = _chunk(skin, w, c)
+                                ch.update(fixed=True, fid=fid, skin=True)
+                                ws = width_of(fid, c) if width_of else None
+                                if ws is not None:
+                                    ch["ws"] = [round(float(x + w - spec.width), 3) for x in ws]
+                                out.append(ch)
             for piece in [q for p0 in clip_polyline(line, *exact)
                           for q in (_sheet_pieces(p0, line, sheet.get(i)) if look.get("deck") else (p0,))]:
                 for c in split((densify(piece) if i in unioned else _deck_rows(piece, shp))
@@ -13639,6 +13753,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                             ch["deck"] = True
                             if fid in joint_profiles:
                                 ch['jn'] = joint_profiles[fid]
+                                if fid in joint_long:
+                                    ch['jlong'] = True
                                 ch['jskip'] = fid in joint_excluded
                             ch["fid"] = fid             # (roadmesh.deck: no parapet between parts side by side)
                             ws = width_of(fid, c) if width_of else None

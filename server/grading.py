@@ -353,6 +353,17 @@ APPROACH_MIN_LIFT = 0.5     # m: less is left as it is
 APPROACH_MIN_RUN = 30.0     # m: the shortest ramp
 APPROACH_MAX_RUN = 320.0    # m: the longest ramp
 APPROACH_TOUCH_M = 2.5      # m: a road whose end is this close to an abutment leads onto the bridge
+# A road onto a bridge the National Bridge Inventory dates after the elevation survey (roads.built_after_survey) runs on
+# the ground from before it was built; where its last STALE_NEAR_M dip under its own line from STALE_NEAR_M to
+# STALE_FAR_M out (the old ground of the works: the ramp's fill was not there yet), it is filled up to that line, at most
+# STALE_MAX_M, fading out to STALE_FAR_M; the deck's end, pinned to it, comes up with it. Roswell Rd's exit ramp off
+# I-285, Atlanta (33.9116,-84.3773, built 2022 over the 2018 lidar's ground): 9 % down into the bridge, then 5 % up the
+# deck, a 3.3 g dip (the user, 2026-11-21: "a super sharp incline ... smoothen the transition").
+STALE_END_ON = os.environ.get("BNE_STALE_END", "on") != "off"
+STALE_NEAR_M = 50.0
+STALE_FAR_M = 120.0
+STALE_MAX_M = 4.0
+STALE_MAX_GRADE = 0.08      # the line itself no steeper than this (else no fill)
 APPROACH_MIN_CROSS_M = 6.0  # m: a road crossing a deck closer than this to its end is a junction at grade (not
                             # under it)
 RAIL_MIN_CROSS_M = 2.0      # m: ... and under a rail deck over a road with a height limit (a track's bridge over a
@@ -3825,6 +3836,15 @@ class _Planner:
                           len(others))
                 if a is not None:
                     add = a if add is None else np.maximum(add, a)
+            if STALE_END_ON:
+                for at_end in (False, True):
+                    if not touch[i, int(at_end)] or not self._stale_bridge_at(p.xy[-1] if at_end else p.xy[0]):
+                        continue
+                    sa = stale_end_fill(p.xy, np.asarray(p.z, np.float64) + (0.0 if add is None else add), at_end)
+                    if sa is not None:
+                        log.debug("grading: approach %s onto a bridge built after the survey: filled %.1f m", fid,
+                                  float(sa.max()))
+                        add = sa if add is None else add + sa
             if add is not None:
                 np_ = Plan(p.xy, p.z + add, p.half, p.abut, p.cut, p.road_half)
                 np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
@@ -5262,6 +5282,34 @@ class _Planner:
             d = dnp.hypot(pe[js, None, 0] - ends[None, :, 0], pe[js, None, 1] - ends[None, :, 1])
             touch[js] = (d <= APPROACH_TOUCH_M).any(axis=1)
         return touch
+
+    def _stale_bridge_at(self, xy):
+        """Is the road end xy the abutment of a bridge built after the elevation survey (roads.built_after_survey, the US
+        inventory)? Cached per bridge line."""
+        la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0]]), np.array([xy[1]]), 0.0)
+        c = self._cell_enu(mapcells.cell_of(float(la[0]), float(lo[0])), ground=False)
+        ends = c["ends"]
+        if not len(ends):
+            return False
+        d = dnp.hypot(ends[:, 0] - xy[0], ends[:, 1] - xy[1])
+        k = int(np.argmin(d))
+        if d[k] > APPROACH_TOUCH_M:
+            return False
+        line = np.asarray(c["bridges"][c["end_of"][k]], np.float64)
+        key = (round(float(line[0, 0]), 1), round(float(line[0, 1]), 1), round(float(line[-1, 0]), 1),
+               round(float(line[-1, 1]), 1))
+        with self.lock:
+            memo = self.__dict__.setdefault("_stale_memo", {})
+            if key in memo:
+                return memo[key]
+        try:
+            got = bool(roadsmod.built_after_survey(self.frame, line))
+        except Exception as e:      # (no inventory or survey index: as before)
+            _caught(e)
+            got = False
+        with self.lock:
+            memo[key] = got
+        return got
 
     def _end_raised(self, xy):
         """m the abutment at bridge end xy is raised by its approach ramps (_lift_approaches: the most any road leading
@@ -10153,6 +10201,41 @@ def weld_continuations(plans, specs=None):
 
 TRIM_SIDE_MOUTHS_ON = os.environ.get("BNE_TRIM_SIDE_MOUTHS", "on") != "off"
 TRIM_RAMP_M = 20.0          # m from the main's painted edge a trimmed side road eases to its own profile
+
+
+def stale_end_fill(xy, z, at_end):
+    """m added along a road (xy (k, 2+), its profile z (k,)) so its last STALE_NEAR_M into the bridge end (at_end: its
+    last point, else its first) runs on the straight line of its profile from STALE_NEAR_M to STALE_FAR_M out, never
+    lowered, at most STALE_MAX_M, fading to nothing at STALE_FAR_M; None where it does not dip APPROACH_MIN_LIFT under
+    that line at the end, the road is too short to read it, or the line rises toward the bridge or falls to it steeper
+    than STALE_MAX_GRADE. Pure."""
+    xy = np.asarray(xy, np.float64)[:, :2]
+    z = np.asarray(z, np.float64)
+    if len(xy) < 3:
+        return None
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+    s = s[-1] - s if at_end else s              # (m from the bridge end)
+    far = (s >= STALE_NEAR_M) & (s <= STALE_FAR_M)
+    if far.sum() < 4 or s.max() < STALE_NEAR_M + 20.0:
+        return None
+    sf, zf = s[far], z[far]
+    n = float(len(sf))
+    ms, mz = float(sf.sum()) / n, float(zf.sum()) / n
+    var = float(((sf - ms) * (sf - ms)).sum())
+    if var < 1e-9:
+        return None
+    b = float(((sf - ms) * (zf - mz)).sum()) / var
+    # (a road going down to the bridge only, the fill under its own line from further out: one rising to the bridge's end
+    # over a hill's brow took it 4 m over the brow, the deck behind it 12 % -> 18 %, GA-400 at I-285 (33.9264,-84.3572))
+    if b < 0.0 or b > STALE_MAX_GRADE:
+        return None
+    line = mz + b * (s - ms)
+    w = np.clip((STALE_FAR_M - s) / (STALE_FAR_M - STALE_NEAR_M), 0.0, 1.0)
+    add = np.minimum(np.maximum(line - z, 0.0), STALE_MAX_M) * w
+    end = int(np.argmin(s))
+    if add[end] < APPROACH_MIN_LIFT:
+        return None
+    return add
 
 
 def approach_add(xy, at_end, lift, half, others=(), side_run=None, grade=None, fill_z=None):
