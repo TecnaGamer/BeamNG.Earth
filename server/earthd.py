@@ -1844,39 +1844,61 @@ class Server:
         log.info("session %s released by the game: deleting its %d files", sid, len(files))
         self.queue_delete(files + [os.path.join(d, SESSION_MARKER), d, cd])
 
-    def sweep_sessions(self, remove=True):
-        """Every SESSION_SWEEP_S (main_async, via sweep_sessions_async): touch our own marker and the
-        claimed sessions' every SESSION_HEARTBEAT_S (a later server sees them in use), and delete the
-        orphans nobody claimed for orphan_s whose markers are as old (one a live server touches is in
-        use). Returns the deleted session ids; remove=False leaves their folders to the caller."""
-        now, wall = time.monotonic(), time.time()
+    def _session_sweep_snapshot(self):
+        now = time.monotonic()
         claimed = self.claimed_sessions()
+        heartbeat = []
         if now - self.heartbeat_at >= SESSION_HEARTBEAT_S:
             self.heartbeat_at = now
-            for sid in [self.sid, *sorted(claimed)]:
-                self._touch(sid)
-        gone = []
-        for sid, since in sorted(self.orphans.items()):
-            if sid in claimed or now - since < self.orphan_s:
-                continue
+            heartbeat = [self.sid, *sorted(claimed)]
+        candidates = [(sid, since) for sid, since in sorted(self.orphans.items())
+                      if sid not in claimed and now - since >= self.orphan_s]
+        return heartbeat, candidates, self.orphan_s
+
+    def _session_sweep_files(self, heartbeat, candidates, grace, list_files=True):
+        """Touch heartbeats before checking orphan markers. The caller owns the claim state."""
+        for sid in heartbeat:
+            self._touch(sid)
+
+        def idle(sid):
+            marker = os.path.join(self.root, sid, SESSION_MARKER)
             try:
-                idle = wall - os.path.getmtime(os.path.join(self.root, sid, SESSION_MARKER))
+                return time.time() - os.path.getmtime(marker) >= grace
             except OSError:
-                idle = math.inf
-            if idle < self.orphan_s:
+                return True
+
+        expired = []
+        for sid, since in candidates:
+            if idle(sid):
+                paths = self._session_paths(sid) if list_files else None
+                expired.append((sid, since, paths))
+        if list_files:
+            # A different server can renew any marker while a large folder is being listed.
+            expired = [entry for entry in expired if idle(entry[0])]
+        return expired
+
+    def _finish_session_sweep(self, expired):
+        # A game can reconnect or disconnect during the I/O. A new claim or a new grace
+        # invalidates that scan. Transfer ownership to the paced queue in the same loop turn.
+        claimed = self.claimed_sessions()
+        gone = []
+        for sid, since, paths in expired:
+            if sid in claimed or self.orphans.get(sid) != since:
                 continue
             del self.orphans[sid]
             log.info("session %s of an earlier run: no game claimed it, deleting it file by file", sid)
-            if remove:
-                self.queue_delete(self._session_paths(sid))
+            if paths is not None:
+                self.queue_delete(paths)
             gone.append(sid)
         return gone
 
+    def sweep_sessions(self, remove=True):
+        """Sweep synchronously for offline callers. With remove=False the caller removes the folders."""
+        expired = self._session_sweep_files(*self._session_sweep_snapshot(), list_files=remove)
+        return self._finish_session_sweep(expired)
+
     async def sweep_sessions_async(self):
-        """sweep_sessions on the event loop (its state is the loop's): each session's files listed in a worker thread
-        (a whole session is ~11k files, the streaming must not wait) and deleted through the rate-limited queue, as a
-        released session's are: a game is running, and its file watcher took a whole session moved out of the user
-        folder at once as an 8.6 s frame (2026-11-02)."""
+        """Scan the filesystem off the event loop and enqueue expired sessions in order on the loop."""
         # A lost socket may belong to a minimized or paused game. Only a complete reconnect
         # snapshot or an exited game releases its terrain. The launch-time process hint is stale here.
         cutoff = time.monotonic() - LEASE_GRACE_S
@@ -1888,10 +1910,11 @@ class Server:
                     self.remove_revision_files(self.block_files.close(lease.token))
                     lease.terrain_pinned = False
         self.expire_leases()
-        gone = self.sweep_sessions(remove=False)
-        for sid in gone:
-            self.queue_delete(await asyncio.to_thread(self._session_paths, sid))
-        return gone
+        heartbeat, candidates, grace = self._session_sweep_snapshot()
+        if not heartbeat and not candidates:
+            return []
+        expired = await asyncio.to_thread(self._session_sweep_files, heartbeat, candidates, grace)
+        return self._finish_session_sweep(expired)
 
     def expire_leases(self, now=None):
         """Release the stream leases of games gone longer than LEASE_GRACE_S (event loop, sweep_sessions_async):
