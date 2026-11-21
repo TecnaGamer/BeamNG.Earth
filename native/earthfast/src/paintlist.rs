@@ -875,16 +875,23 @@ fn step_corners(img: &mut Array3<u8>, before: &Array3<u8>, sq: &Sq, polys: &Pain
 }
 
 /// photo_roads' carriageways: the square's segments painted in the photo's own tone.
-fn step_roads(img: &mut Array3<u8>, sq: &Sq, rd: &PaintRoads, st: &PaintStyle) {
+fn step_roads(img: &mut Array3<u8>, sq: &Sq, rd: &PaintRoads, st: &PaintStyle,
+              pavement: &[(usize, ArrayView2<'_, u8>)]) {
     let s = rd.cut(sq.x0, sq.y0, sq.size, sq.w, sq.h);
-    if s.kind.is_empty() {
+    if s.kind.is_empty() && pavement.is_empty() {
         return;
     }
     let k = st.colors.nrows();
-    let cov = crate::roadtone::line_cover(sq.h, sq.w, k, s.kind.len(), |q| {
+    let mut cov = crate::roadtone::line_cover(sq.h, sq.w, k, s.kind.len(), |q| {
         let g = s.segs[q];
         (g[0], g[1], g[2], g[3], s.hw[q], s.kind[q])
     });
+    for (kind, mask) in pavement {
+        let start = kind * sq.w * sq.h;
+        for (p, &value) in cov[start..start + sq.w * sq.h].iter_mut().zip(mask.iter()) {
+            *p = p.max(value as f32 / 255.0);
+        }
+    }
     let (luma, sat, green) = st.tone_args();
     *img = crate::roadtone::tone_paint(img.view(), &cov, k, st.colors.view(), st.tone.view(), st.radius(sq.w, sq.size),
                                        luma, sat, green);
@@ -896,14 +903,14 @@ fn step_roads(img: &mut Array3<u8>, sq: &Sq, rd: &PaintRoads, st: &PaintStyle) {
 /// A part that is None is left out. Returns a new array.
 #[pyfunction]
 #[pyo3(signature = (rgb, x0, y0, size, style, roads=None, islands=None, corners=None, fields=None, golf=None,
-                    lots=None, pads=None, has_roads=false, simple=false))]
+                    lots=None, pads=None, has_roads=false, simple=false, pavement=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn paint_photo<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, x0: f64, y0: f64, size: f64,
                         style: PyRef<'py, PaintStyle>, roads: Option<PyRef<'py, PaintRoads>>,
                         islands: Option<PyRef<'py, PaintPolys>>, corners: Option<PyRef<'py, PaintPolys>>,
                         fields: Option<PyRef<'py, PaintFields>>, golf: Option<Vec<Option<PyRef<'py, PaintPolys>>>>,
                         lots: Option<PyRef<'py, PaintPolys>>, pads: Option<PyRef<'py, PaintPolys>>, has_roads: bool,
-                        simple: bool) -> PyResult<Bound<'py, PyArray3<u8>>> {
+                        simple: bool, pavement: Option<Vec<(usize, PyReadonlyArray2<'py, u8>)>>) -> PyResult<Bound<'py, PyArray3<u8>>> {
     let src = rgb.as_array();
     if src.ndim() != 3 || src.shape()[2] != 3 || !(size > 0.0) {
         return Err(pyo3::exceptions::PyValueError::new_err("paint_photo: rgb (h, w, 3), size > 0"));
@@ -915,6 +922,10 @@ pub fn paint_photo<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, x0: f64
     let gl: Vec<Option<&PaintPolys>> = golf.as_ref().map(|g| g.iter().map(|x| x.as_deref()).collect()).unwrap_or_default();
     if gl.len() > 4 {
         return Err(pyo3::exceptions::PyValueError::new_err("paint_photo: four golf layers at most"));
+    }
+    let coverage: Vec<_> = pavement.iter().flatten().map(|(k, m)| (*k, m.as_array())).collect();
+    if coverage.iter().any(|(k, m)| *k >= st.colors.nrows() || m.dim() != (sq.h, sq.w)) {
+        return Err(pyo3::exceptions::PyValueError::new_err("paint_photo: invalid pavement mask"));
     }
     let mut img = src.to_owned();
     let out = py.detach(move || {
@@ -943,7 +954,7 @@ pub fn paint_photo<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, x0: f64
         }
         let filled = if simple { None } else { Some(img.clone()) };
         if let Some(r) = rd {
-            step_roads(&mut img, &sq, r, st);
+            step_roads(&mut img, &sq, r, st, &coverage);
         }
         if let (Some(p), Some(before)) = (cor, filled.as_ref()) {
             step_corners(&mut img, before, &sq, p, st);

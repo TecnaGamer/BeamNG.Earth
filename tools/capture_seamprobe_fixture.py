@@ -9,7 +9,9 @@ derived caches there) and writes server/tests/fixtures/seamprobe_NAME.npz:
   * the ground the decks' abutments and pads read (BridgeProfiles._ground: graded, ROAD_LIFT) on a GROUND_STEP_M grid
     over the parts' box plus GROUND_PAD_M, as whole centimetres (row steps int16).
 These are the sheet code's inputs (roads._deck_chunks, deck_pads, roadmesh.deck), not its output: the test builds the
-tiles from them. Run it with BNE_ROADSHAPE=sheet (the switch the test turns on).
+tiles from them. Run it with BNE_ROADSHAPE=sheet (the switch the test turns on). With BNE_ROADSHAPE=profile (road
+revamp v2 P3e) the parts are at their chains' joint profile and the fixture also keeps "profiled": the ids of the parts
+BridgeProfiles.profiled_ids gives (the test's profile class builds the tiles as BNE_ROADSHAPE=profile does).
 """
 import argparse
 import logging
@@ -81,13 +83,19 @@ def main():
     if steps.size and np.abs(steps).max() >= 32000:
         sys.exit("ground steps do not fit int16")
     out = ROOT / "server" / "tests" / "fixtures" / f"seamprobe_{a.name}.npz"
+    import roadshape
+    prof = {}
+    if roadshape.PROFILE_BUILT:
+        got = getattr(br, "profiled_ids", None)
+        ids = sorted(str(f) for f in (got() if got is not None else ()) or ())
+        prof["profiled"] = np.array(ids if ids else [""])
     np.savez_compressed(
         out, fid=np.array([p[0] for p in parts]),
         spec=np.array([repr({k: plain(v) for k, v in p[1]._asdict().items()}) for p in parts]),
         n=np.array([len(p[2]) for p in parts], np.int32), xyz=np.concatenate([p[2] for p in parts]),
         lon=np.array([p[3] for p in parts]), place=np.array([a.lat, a.lon, a.r]),
         ground_origin=np.array([gx[0], gy[0], GROUND_STEP_M]), ground_first=q[:, 0].astype(np.int32),
-        ground_steps=steps.astype(np.int16))
+        ground_steps=steps.astype(np.int16), **prof)
     print(out, os.path.getsize(out), "bytes,", len(parts), "parts, ground", X.shape)
 
 

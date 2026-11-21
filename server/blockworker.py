@@ -913,7 +913,7 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
             before = idx
             idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
                                          _s.surface.urban, None if provisional else _s.widths, _open_tunnels(g, keep),
-                                         quick=provisional)
+                                         quick=provisional, v3=(frame, _s.surface))
             if not (idx != before).any():   # (drawn roads over it, none painted: Discord's gravel mountain roads)
                 import roads as roadsmod
                 la0, la1 = float(np.min(keep["lat"])), float(np.max(keep["lat"]))
@@ -1798,8 +1798,14 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     import roadshape
     if roadshape.SHEET and roadshape.DEBUG:     # (v2 P2a: the cells' fork records beside the build, a debug aid only)
         roadshape.shadow_forks(cell_keys, cell_fn, _s.cache_dir)
+    import lanegraph
+    if lanegraph.SHADOW and lanegraph.DEBUG:    # (v3 S1: the cells' lane graphs beside the build, a debug aid only)
+        lanegraph.shadow_lanes(cell_keys, cell_fn, _s.cache_dir)
+    import roadsurf3
+    v3 = {"cell_fn": cell_fn} if roadsurf3.ON else None
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  sign_obstacles=sign_obstacles, sheet_marks=sheet_marks,
+                                 v3=v3,
                                  # (the stations' made-up driveways: no sidewalk across them; nor along a square's
                                  # street-side parking rows, streetparking.plaza_bay_cuts)
                                  walk_cuts=fuel_cuts + (streetparking.plaza_bay_cuts(frame, tx, ty, _s.md)
@@ -1821,6 +1827,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                                if props is not None else None),
                                  wear=wear if isinstance(wear, dict) else roadwear.tier_of(wear),
                                  cover_fn=getattr(getattr(_s, "surface", None), "classes", None))
+    P.surface_short = bool(v3 and v3.get("short"))
     P.town_faces = town_faces
     mark("build_tile")
     import railways
@@ -2306,6 +2313,9 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         text = json.dumps(data, separators=(",", ":"), sort_keys=True)
         _write_bytes(os.path.join(out_dir, names["json"]), text.encode("utf-8"))
         inputs = {"chunks": P.chunks, "ctx": P.ctx, "walks": P.walks_raw, "h": h}
+        if getattr(P, "surface_short", False):
+            # A skin may be built later, in another process. Carry the content fault with its inputs.
+            inputs["surface_short"] = True
         _write_bytes(os.path.join(out_dir, names["inputs"]), pickle.dumps(inputs, protocol=4))
         sig = _file_sig(os.path.join(out_dir, names["inputs"]))
         with _geo_lock:
@@ -2524,23 +2534,33 @@ def _skin_inputs(key, out_dir, content):
     again, which writes the file). None when there are none."""
     import pickle
     p = os.path.join(out_dir, geo_names(key)["inputs"])
-    sig = _file_sig(p)
-    with _geo_lock:
-        got = _geo_inputs.get(key)
-    if got is not None and sig is not None and got[0] == sig:
-        return got[1]
-    if sig is None:
+    def read():
+        sig = _file_sig(p)
+        if sig is None:
+            return None
+        with _geo_lock:
+            cached = _geo_inputs.get(key)
+        if cached is not None and cached[0] == sig:
+            return cached[1]
+        try:
+            with open(p, "rb") as f:
+                st = os.fstat(f.fileno())
+                got = pickle.load(f)
+        except (OSError, EOFError, pickle.UnpicklingError):
+            return None
+        with _geo_lock:
+            _geo_inputs[key] = ((st.st_mtime_ns, st.st_size, st.st_ino), got)
+            while len(_geo_inputs) > GEO_INPUTS_KEPT:
+                _geo_inputs.pop(next(iter(_geo_inputs)))
+        return got
+
+    got = read()
+    if (got is None and _file_sig(p) is None) or (got is not None and got.get("surface_short")):
         content()
-    try:
-        with open(p, "rb") as f:
-            st = os.fstat(f.fileno())
-            got = pickle.load(f)
-    except (OSError, EOFError, pickle.UnpicklingError):
-        return None
-    with _geo_lock:
-        _geo_inputs[key] = ((st.st_mtime_ns, st.st_size, st.st_ino), got)
-        while len(_geo_inputs) > GEO_INPUTS_KEPT:
-            _geo_inputs.pop(next(iter(_geo_inputs)))
+        got = read()
+    if got is not None and got.get("surface_short"):
+        import revisit
+        revisit.fault()
     return got
 
 
@@ -2568,6 +2588,12 @@ def _map_chunks(src, dst, chunks):
             pts.append(np.c_[a[:, :2], a[:, 2] if a.shape[1] > 2 else np.zeros(len(a))])
             idx.append((k, "poly", len(a), a.shape[1]))
     out = [dict(c) for c in chunks]
+    for k, c in enumerate(chunks):
+        if "deck_z" in c:
+            xyz = geotiles.world_map(src, dst, np.c_[c["xy"], c["deck_z"]])
+            out[k]["xy"], out[k]["deck_z"] = xyz[:, :2], xyz[:, 2]
+        elif c.get("tri"):
+            out[k]["xy"] = geotiles.world_xy_map(src, dst, c["xy"])
     if not pts:
         return out
     m = geotiles.world_map(src, dst, np.concatenate(pts))
@@ -2782,7 +2808,7 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
         data["road"] = {"shape": f"{vfs_dir}/{names['road']}", "pos": list(origin)}
     elif chunks:                    # (no mesh: the mod's DecalRoads, as an anchor tile's)
         data["chunks"] = [dict(c, n=np.asarray(c["n"]).tolist()) if c.get("n") is not None else c
-                          for c in chunks if not c.get("tube_only")]
+                          for c in chunks if not c.get("tube_only") and not c.get("tri")]
     walks = _map_walks(tile.frame, frame, inputs.get("walks") or []) if sidewalks else []
     if walks:
         def walk_ground(x, y):
@@ -2894,6 +2920,8 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
         near = _geo_near(gx, gy, lat, lon)
 
         def build_content():
+            if out["content"] is not None:
+                return out["content"]
             import buildings as buildingsmod
             with buildingsmod.urgent_photos(near):      # (the tiles round the car: their roof photos first)
                 return _geo_content(gx, gy, gzoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried,

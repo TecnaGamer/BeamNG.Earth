@@ -94,6 +94,30 @@ class StagingTest(unittest.TestCase):
             staging.os.replace = real
             staging.REPLACE_WAITS = old_waits
 
+    def test_loop_rename_runs_on_io_thread_before_return(self):
+        import asyncio
+        import threading
+        from unittest import mock
+
+        threads = []
+        rename = os.replace
+
+        def record(src, dst):
+            threads.append(threading.get_ident())
+            rename(src, dst)
+
+        async def run(dst):
+            tmp = staging.tmp_for(dst)
+            Path(tmp).write_bytes(b"complete")
+            with mock.patch.object(os, "replace", record):
+                staging.replace(tmp, dst)
+            self.assertEqual(Path(dst).read_bytes(), b"complete")
+            self.assertEqual(len(threads), 1)
+            self.assertNotEqual(threads[0], threading.get_ident())
+
+        with tempfile.TemporaryDirectory() as root:
+            asyncio.run(run(os.path.join(root, "tile.cdae")))
+
     def test_game_file_held_for_a_moment(self):
         """Windows: a file in the game's folder the game (or a virus scanner) has open cannot be replaced for a moment;
         a block's surface mask failed the whole block (PermissionError, 2026-11-13). Tried again, then the error."""

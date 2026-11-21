@@ -72,7 +72,7 @@ PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARE
               "BNE_RAIL_SEAM_NATURAL",
               "BNE_SPEED_TAPERS",
               # (road revamp v2 in the Revamped roads setting, 2026-11-19)
-              "BNE_BATTER", "BNE_ROADSHAPE", "BNE_SIDEWALK_V2")
+              "BNE_BATTER", "BNE_ROADSHAPE", "BNE_SIDEWALK_V2", "BNE_ROADSURF_V3")
 # Experimental switches the planning does not read that are still NOT on the list, and why (each keeps its keys)
 NOT_LISTED = {
     "BNE_SURFACE_V2": "road tiles' surface overlays and marking lift only (roadmesh / roadwear, revamp v2 P1c); comes with the Revamped roads setting, whose other switches the plans read, so it stays keyed with it",

@@ -145,6 +145,30 @@ class WatchTest(unittest.TestCase):
         memwatch._state.clear()
         memwatch._state.update(self.saved[0])
         budget.OVER, budget.LOW_FREE_GB, budget.LIMIT_MB = self.saved[1:]
+        budget.ROOM_MB, budget.POOL_MB = None, {}
+
+    def test_a_burst_starts_only_where_it_fits(self):
+        """Daytona session 2026-11-19: 7 far-tile burst processes (~0.7 GB each) started at 21-22 GB of a 24 GB limit
+        took the server to 27.3 GB. The watchdog leaves the room and each pool's process size for the burst's check
+        (pools.burst_fits), and the summary says where the memory is (by_pool)."""
+        import pools
+        far = _Pool([11, 12])
+        far.name = "far tile"
+        road = _Pool([13])
+        road.name = "road tile"
+        mbs = {1: 900, 11: 600, 12: 700, 13: 1000}
+        self.assertEqual(self.w.step(mbs, 3200, 8000, [far, road]), "ok")
+        self.assertEqual((budget.ROOM_MB, budget.POOL_MB), (800.0, {"far tile": 700, "road tile": 1000}))
+        self.assertTrue(pools.burst_fits("far tile", 1))
+        self.assertFalse(pools.burst_fits("far tile", 2), "two more of 700 MB: not in 800 MB")
+        self.assertTrue(pools.burst_fits("bldfar", 7), "a pool not measured yet: as before")
+        line = memwatch.by_pool(mbs, [far, road])
+        self.assertEqual(line, "far tile 2 x 700 max = 1300, road tile 1000, other 900")   # (pid 1: not this process)
+        self.assertEqual(memwatch.by_pool({os.getpid(): 1500, 13: 1000}, [road]), "main 1500, road tile 1000")
+        memwatch._state["limit"] = 0.0
+        self.w.step(mbs, 3200, 8000, [far, road])
+        self.assertIsNone(budget.ROOM_MB)
+        self.assertTrue(pools.burst_fits("far tile", 7), "no limit: no check")
 
     def test_under_soft_nothing(self):
         a, b = _Pool([11]), _Pool([12])

@@ -218,6 +218,22 @@ class RoadWearTest(unittest.TestCase):
 V2_MATS = {"bne_wear_var_01", "bne_wear_var_02", "bne_wear_tread2", "bne_wear_patchstrip"}
 
 
+class WearMaterialsTest(unittest.TestCase):
+    def test_wear_takes_shadows(self):
+        """The wear materials write no depth (translucentZWrite false); without translucentRecvShadows the forward pass
+        lit them as in full sun, bright streaks over shaded asphalt (the user's report 111; in-game A/B 2026-11-19: on,
+        they darken with the asphalt in shade)."""
+        import json
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
+                            "beamng_earth", "art", "shapes", "beamngEarth", "roadwear.materials.json")
+        with open(path) as f:
+            mats = json.load(f)
+        self.assertTrue(mats)
+        for name, m in mats.items():
+            with self.subTest(name=name):
+                self.assertTrue(m.get("translucentRecvShadows"))
+
+
 class SurfaceV2Test(unittest.TestCase):
     """The road revamp v2's surface overlays (BNE_SURFACE_V2: roadwear.surface_chunks, earthfast.surface_plan; the
     road mesh's lifts, ground clearance and draw order: roadmesh.SURFACE_V2)."""

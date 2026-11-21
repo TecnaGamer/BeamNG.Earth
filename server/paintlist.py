@@ -475,7 +475,7 @@ def clear():
         _SETS.clear()
 
 
-def _build_roads(s, g):
+def _build_roads(s, g, omit_v3=False):
     """surface._road_segments' per-feature work for the cells' features that can reach a square of group g (x0, y0, x1,
     y1: the squares' bounds rounded out to BOUNDS_ROUND_M, group(); earthfast.PaintRoads): each feature once (its first
     copy in the cells' order, whether in the group or not, as the per-square loop's), its ground parts placed
@@ -485,6 +485,7 @@ def _build_roads(s, g):
     leaves out fails every square's of the group (the square lies inside it): the same segments, in the same order and
     with the same road numbers, as the per-square loop's. (Whole cells were made at first: a far square of 1-2 km
     across the corner of a cell set of four Manhattan cells made all four's roads for it.)"""
+    import roadsurf3
     import surface as sf
 
     def build():
@@ -508,6 +509,8 @@ def _build_roads(s, g):
                 fid = str(ids[i])
                 sp = specs[i]
                 if sp is None or fid in seen or sp.kind not in sf.PHOTO_ROAD_RGBA:
+                    continue
+                if omit_v3 and sp.cls in roadsurf3.V3_CLASSES and sp.kind == "paved":
                     continue
                 kname = "concrete" if sp.kind == "paved" and sp.surf == "concrete" else sp.kind
                 seen.add(fid)
@@ -538,7 +541,7 @@ def _build_roads(s, g):
                 feat_box.append(box[i])
                 feat_m.append(sp.width / 2)
                 feat_hwm.append(sp.width / 2 + sf.PHOTO_ROAD_EDGE_M)
-        gores = sf._gore_fills(frame, feats_list, (g[0] - 300, g[1] - 300, g[2] + 300, g[3] + 300), urban_fn, widths)
+        gores = sf._gore_fills(frame, feats_list, (g[0] - 300, g[1] - 300, g[2] + 300, g[3] + 300), urban_fn, widths, omit_v3=omit_v3)
         gore_rings = [np.asarray(mid, np.float64)[:, :2] for _, mid in gores]
         gore_hw = [np.asarray(hw_, np.float64) for hw_, _ in gores]
         goff = np.zeros(len(gores) + 1, np.int64)
@@ -645,7 +648,7 @@ def _build_fields(s):
 ALL = frozenset(("fields", "golf", "lots", "pads", "roads"))
 
 
-def paint(rgb, frame, x0, y0, size, roads, lots=(), urban=None, widths=None, pads=(), simple=False, steps=ALL):
+def paint(rgb, frame, x0, y0, size, roads, lots=(), urban=None, widths=None, pads=(), simple=False, steps=ALL, pavement=None):
     """surface.paint_square's paint of the photo rgb (h x w x 3, row 0 north, over [x0, x0 + size]² of frame) with
     the road Features roads and the lot Features lots of its cells and the pads [(lat, lon)], in one native call
     (earthfast.paint_photo); steps: the parts painted (surface's photo_* helpers each paint one). A new array."""
@@ -667,7 +670,12 @@ def paint(rgb, frame, x0, y0, size, roads, lots=(), urban=None, widths=None, pad
     has_roads = bool(roads) and "roads" in steps
     if has_roads:
         g = group(x0, y0, size)
-        kw["roads"] = s.part(("roads",) + g, lambda: _build_roads(v, g))
+        omit_v3 = pavement is not None
+        kw["roads"] = s.part(("other_roads" if omit_v3 else "roads",) + g, lambda: _build_roads(v, g, omit_v3))
+        if omit_v3:
+            import surface as sf
+            kinds = list(sf.PHOTO_ROAD_RGBA)
+            kw["pavement"] = [(kinds.index(k), mask) for k, mask in zip(("paved", "concrete"), pavement)]
         if not simple:
             kw["islands"] = s.part(("islands",) + g, lambda: _build_islands(v, g))
             kw["corners"] = s.corners(x0, y0, size, roads)
@@ -675,10 +683,10 @@ def paint(rgb, frame, x0, y0, size, roads, lots=(), urban=None, widths=None, pad
                                 has_roads=has_roads, simple=bool(simple), **kw)
 
 
-def road_segments(frame, x0, y0, size, w, h, roads, urban=None, widths=None):
+def road_segments(frame, x0, y0, size, w, h, roads, urban=None, widths=None, omit_v3=False):
     """surface._road_segments from the cells' kept carriageways: (segs, hws, kind, road, curbless) or None."""
     s = cell_set(frame, list(roads or ()), (), urban, widths)
     v = s.view(roads, ())
     g = group(x0, y0, size)
-    return s.part(("roads",) + g, lambda: _build_roads(v, g)).segments(float(x0), float(y0), float(size), int(w),
-                                                                       int(h))
+    part = s.part(("other_roads" if omit_v3 else "roads",) + g, lambda: _build_roads(v, g, omit_v3))
+    return part.segments(float(x0), float(y0), float(size), int(w), int(h))

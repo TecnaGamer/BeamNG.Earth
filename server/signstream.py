@@ -8,7 +8,8 @@ for tests), elsewhere no sign data is asked for. The speed-limit signs (speedsig
 each region's style) are built everywhere. On German Autobahnen the German guide signs (deautobahn.py, field autobahn:
 the RWBA chain at every exit, Kreuz and Dreieck from the sign text mapped in OpenStreetMap) where Germany's shards
 carry it."""
-from runtimeprofiler import ThreadPoolExecutor
+from runtimeprofiler import TileJobs
+import fast
 import json
 import logging
 import os
@@ -264,35 +265,14 @@ class Tracker:
     def on_pose(self, conn, aid, x, y, loop, build, ready, version=None):
         """ready: the road tiles the mod has (roads.Tracker.sent); version: the sign data's build known now
         (SignTags.known(): no network): a new one rebuilds the tiles sent."""
-        if self.closed:
-            return
-        if version != self.version:         # (None -> a build too: the tiles sent before had no sign data)
-            self.refresh()
-            self.version = version
-        if aid != self.aid:
-            # Keep running old jobs in the bounded queue until they finish; callbacks
-            # discard their results. Repeated teleports cannot grow an executor backlog.
-            self.aid = aid
-            self.sent.clear()
-            self.stale.clear()
-            self.retry.clear()
-        self.wanted = set(ready)
-        # Readiness gates the first build, not the lifetime of visible signs.
-        # A road retry/refresh temporarily loses readiness; keep its signs until
-        # the player leaves, with the same unloading margin as the roads.
-        self.wanted.update(k for k in self.sent if roads.tile_distance(*k, x, y) <= roads.DROP_M)
-        for key in self.sent - self.wanted:
+        fast.require(551, "sign_tiles")
+        jobs, drops = fast._ef.sign_tiles(self, aid, (x, y), ready, version, roads.TILE, roads.DROP_M,
+                                          WORKERS, time.monotonic())
+        for key in drops:
             conn.send({'type': 'roads_drop', 'anchorId': aid, 'key': f's{key[0]}_{key[1]}'})
-        self.sent.intersection_update(self.wanted)
-        self.stale.intersection_update(self.wanted)
-        self.retry = {k: t for k, t in self.retry.items() if k in self.wanted}
-        now = time.monotonic()
-        want = [k for k in self.wanted if (k not in self.sent or k in self.stale)
-                and (aid, k) not in self.jobs and self.retry.get(k, 0.) <= now]
-        want.sort(key=lambda k: roads.tile_distance(*k, x, y))
-        if want and self.pool is None:
-            self.pool = ThreadPoolExecutor(WORKERS, thread_name_prefix='highway-signs')
-        for key in want[:max(0, WORKERS - len(self.jobs))]:
+        if jobs and self.pool is None:
+            self.pool = TileJobs(WORKERS, 'highway-signs')
+        for key in jobs:
             future = loop.run_in_executor(self.pool, build, aid, *key)
             self.jobs[aid, key] = future
             future.add_done_callback(lambda f, a=aid, k=key, r=self.revision: self._built(conn, a, k, r, f))
@@ -304,22 +284,13 @@ class Tracker:
         try:
             result = future.result()
         except Exception:
-            if not self.closed and aid == self.aid and key in self.wanted:
-                self.retry[key] = time.monotonic() + 10.
+            if fast._ef.sign_result(self, aid, key, revision, True, None, time.monotonic()):
                 log.warning('Highway signs %s unavailable; road tile retained', key, exc_info=True)
             return
-        if self.closed or aid != self.aid or key not in self.wanted:
-            return
-        if revision != self.revision:
-            self.stale.add(key)
-            return
-        if result is None:
-            self.retry[key] = time.monotonic() + 10.
+        n = result[1] if result is not None else None
+        if not fast._ef.sign_result(self, aid, key, revision, False, n, time.monotonic()):
             return
         path, n = result
-        if n == 0 and key not in self.stale:    # (nothing to show, none shown before: no message)
-            self.sent.add(key)
-            return
         data = staging.inline_json(conn.s.out_dir, path)
         message = {'type': 'roads_tile', 'anchorId': aid, 'key': f's{key[0]}_{key[1]}',
                    'path': path, 'n': n}
