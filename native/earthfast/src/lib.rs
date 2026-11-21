@@ -126,6 +126,7 @@ mod stageshare;
 mod classgrid;
 mod frontage;
 mod furnstations;
+mod delineators;
 mod stationgeom;
 mod busstation;
 mod railpiers;
@@ -6916,6 +6917,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(devctx::dev_pois, m)?)?;
     m.add_class::<devctx::DevContext>()?;
     m.add_function(wrap_pyfunction!(furnstations::furniture_stations, m)?)?;
+    m.add_function(wrap_pyfunction!(delineators::delineator_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(delineators::delineator_curvature, m)?)?;
     // 188: devctx (development.py's Context whole: dev_building_bits / dev_land_bits / dev_pois, the labels of a
     // Features in one call; DevContext, the tile's raster and its batched samples); furnstations::furniture_stations
     // (furniture._stations: a sidewalk run's stations with their k arc lengths, one call per run)
@@ -7621,6 +7624,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
-    m.add("VERSION", 581)?;
+    m.add("VERSION", 582)?;
     Ok(())
 }
