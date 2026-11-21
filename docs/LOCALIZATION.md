@@ -26,7 +26,7 @@ The language picker covers the 13 official BeamNG.drive interface variants. The 
 | 中文（简体） | `zh-Hans` | `zh_Hans` |
 | 中文（繁體） | `zh-Hant` | `zh_Hant` |
 
-English and Polish cover the full shared catalog. The eleven newer catalogs cover common interface labels, map and navigation actions, notifications and selected launcher messages. These initial translations were prepared with AI assistance and need community language review, especially for regional wording, specialist terminology and layout. Longer help, configuration and diagnostic messages often still fall back to English. The validator reports the exact coverage and missing keys for each language.
+All 13 languages cover the full shared catalog. The eleven newer catalogs were prepared with AI assistance and need community language review, especially for regional wording, specialist terminology and layout. The validator reports the exact coverage and missing keys for each language.
 
 Language IDs are matched case-insensitively and accept both hyphens and underscores. The manifest also records aliases. For example, `es-MX` selects `es-419`, `pt` selects `pt-BR`, `zh-CN` selects `zh-Hans`, and `zh-TW` or `zh-HK` selects `zh-Hant`. The unqualified `es` defaults to `es-ES`, and `zh` defaults to `zh-Hans`.
 
