@@ -127,15 +127,15 @@ def mapped_mall(layers, coords, label):
     return False
 
 
-def mall_identity_panel(coords, walks, occupied):
-    """Place one mall name by a mapped approach that ends at a broad exterior wall."""
+def mall_entrance_panels(coords, walks, occupied):
+    """Select separated entrances where mapped approaches meet broad exterior walls."""
     if not len(walks):
-        return None
+        return []
     scale = np.array([111320*dmath.cos(dmath.radians(coords[0,1])), 111132])
     lo, hi = coords.min(0)-2/scale, coords.max(0)+2/scale
     walks = np.asarray(walks)
     near = np.any(np.all((walks >= lo) & (walks <= hi),axis=2),axis=1)
-    best = None
+    candidates = []
     for start,end in walks[near]:
         for door, approach in ((start,end),(end,start)):
             distance = np.linalg.norm((approach-door)*scale)
@@ -153,9 +153,22 @@ def mall_identity_panel(coords, walks, occupied):
             if np.linalg.norm((center-door)*scale)>2:
                 continue
             width = np.linalg.norm((panel[1]-panel[0])*scale)
-            if best is None or width>best[0]:
-                best = width,panel
-    return None if best is None else best[1]
+            candidates.append((width,center,panel))
+    selected = []
+    for _,center,panel in sorted(candidates,key=lambda c: (-c[0], *c[1])):
+        if all(np.linalg.norm((center-p.mean(0))*scale) >= 55 for p in selected):
+            selected.append(panel)
+        if len(selected) == 4:
+            break
+    return selected
+
+
+def mall_directory(tenants, center):
+    """Nearest distinct catalogued retail tenants with qualified records inside the mall."""
+    scale = np.array([111320*dmath.cos(dmath.radians(center[1])), 111132])
+    nearby = sorted((np.linalg.norm((pt-center)*scale),name) for name,pt in tenants if isinstance(name,str))
+    return tuple(dict.fromkeys(name for _,name in nearby))[:5]
+
 
 
 def named_frontage(layers, coords, label):
@@ -676,10 +689,9 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                         walk_segments = np.column_stack((lon,lat)).reshape(-1,2,2)
                 panels = list(tenant_panels(tenants,coords,parking_points if parking_points is not None else (),
                                             doors if mall else (), walk_segments if mall and walk_segments is not None else ()))
-                if mall and label and walk_segments is not None and local_enabled:
-                    identity = mall_identity_panel(coords, walk_segments, panels)
-                    if identity is not None:
-                        panels.append((LocalSign(label, "shop"), identity))
+                if mall and label and spec.height >= 5.5 and walk_segments is not None and local_enabled:
+                    panels.extend((LocalSign(label, "entrance"), p)
+                                  for p in mall_entrance_panels(coords, walk_segments, panels))
                 if spec.retail_front and not spec.retail_doors:
                     centers = [panel.mean(0) for _,panel in panels]
                     spec.retail_doors = entrance_offsets(coords, ring, centers)
@@ -704,6 +716,8 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     # An exterior sign is justified by the wall evidence, independently of the brand.
                     style = options.get("local_panel", ("brand",))[0]
                     options["local_panel"] = ("mall_"+style, round(min(spec.height-.45,9.),2))
+                    if style == "entrance":
+                        options["local_panel"] += (mall_directory(tenants, geometry.mean(0)),)
                 entry = cached_entry(cache, brand, geometry, heading, finish, doors=doors, entrance_bearing=entrance_bearing, **options)
                 if signed_wall is not None:
                     spec.front = signed_wall

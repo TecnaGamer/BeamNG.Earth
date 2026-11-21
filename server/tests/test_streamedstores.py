@@ -288,10 +288,23 @@ class StreamedStoresTest(unittest.TestCase):
         self.assertFalse(stores.mapped_mall(layers,coords,"River Crossing"))
         lat,lon,_ = frame.enu_to_geodetic(np.array([52.,52.]),np.array([30.,15.]),np.zeros(2))
         walk = np.column_stack((lon,lat))[None]
-        panel = stores.mall_identity_panel(coords,walk,[])
+        panel, = stores.mall_entrance_panels(coords,walk,[])
         self.assertIsNotNone(panel)
-        self.assertIsNone(stores.mall_identity_panel(coords,walk,[("Existing tenant",panel)]))
-        self.assertIsNone(stores.mall_identity_panel(coords,[],[]))
+        self.assertFalse(stores.mall_entrance_panels(coords,walk,[("Existing tenant",panel)]))
+        self.assertFalse(stores.mall_entrance_panels(coords,[],[]))
+
+    def test_mall_entrances_are_separate_and_directories_deduplicate(self):
+        import streamedstores as stores
+        frame = geodesy.EnuFrame(40., -83.)
+        def coords(rows):
+            xy = np.array(rows)
+            lat,lon,_ = frame.enu_to_geodetic(xy[:,0],xy[:,1],np.zeros(len(xy)))
+            return np.column_stack((lon,lat))
+        ring = coords([(0,0),(200,0),(200,100),(0,100)])
+        walks = [coords([(x,0),(x,-12)]) for x in (20,22,150)]
+        self.assertEqual(len(stores.mall_entrance_panels(ring,walks,[])), 2)
+        tenants = [("Target",ring[0]),("Target",ring[1]),("Old Navy",ring[2]),(None,ring[3])]
+        self.assertEqual(stores.mall_directory(tenants,ring[0]), ("Target","Old Navy"))
 
     def test_named_venue_with_offset_business_pin(self):
         import streamedstores

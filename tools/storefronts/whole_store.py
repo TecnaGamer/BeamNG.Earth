@@ -299,7 +299,7 @@ def elevation(
         if not observed_brick:
             for x in np.arange(3.6, width, 4.8):
                 rect(x, base, x + 0.045, height, "#998f82")
-        if name != "Uniqlo":
+        if name in ACCENTS and name != "Uniqlo":
             rect(0, height * 0.77, width, height * 0.80, ACCENTS[name])
     if name in {"The Home Depot", "Lowe's"}:
         paint = "#dc671e" if name == "The Home Depot" else "#174b85"
