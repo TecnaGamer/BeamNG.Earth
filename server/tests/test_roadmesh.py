@@ -97,6 +97,21 @@ class RoadMeshTest(unittest.TestCase):
         self.assertLessEqual(np.diff(np.unique(np.round(base[:, 0], 3))).max(), roadmesh.DRAPE_STEP + 1e-6)
         self.assertTrue(set(np.unique(UV[:, 0])) <= {0.0, 1.0}, "u across the width")
 
+    def test_skipped_cluster_wear_preserves_ground_strip_fade(self):
+        from types import SimpleNamespace
+
+        wear = dict(chunk("bne_wear_patch", 1., [(0, 0, 10), (20, 0, 10)]), fixed=True, fid="deck")
+        strip = dict(chunk("bne_dirt_gravel", 5., [(0, 20, 0), (20, 20, 0)]), slen=20., fends=(0, 1))
+        origin = (0., 0., 0.)
+        with patch.object(roadmesh, "SURFACE_V2", True), patch.object(
+                roadmesh, "_junction_surfaces", return_value={"deck": SimpleNamespace(cluster=True)}):
+            self.assertIsNone(roadmesh.build(FRAME, [wear], slope, origin))
+            expected = roadmesh.build(FRAME, [strip], slope, origin)
+            actual = roadmesh.build(FRAME, [wear, strip], slope, origin)
+            for a, b in zip(actual, expected, strict=True):
+                np.testing.assert_array_equal(a, b)
+            self.assertGreater(np.ptp(actual[5][:, 1]), 0.)
+
     def test_writes_one_primitive_per_material(self):
         chunks = [chunk("road_asphalt_2lane", 6.0, [(0, 0, 0), (30, 0, 0)]),
                   chunk("gutter1", 0.5, [(0, 3, 0), (30, 3, 0)]),

@@ -1571,7 +1571,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     k0 = nverts = 0
     # (the ground ribbons' lengths along and end distances to the deck ends, one call each as above)
     runs = _ground_runs([r for r, _c in rbc if r[5] is None and len(r[0]) >= 2], ab_pts) if len(deck_abuts) else None
-    for ri, ((left, right, v, m, layer, fz), c) in enumerate(rbc):
+    for (left, right, v, m, layer, fz), c in rbc:
         k = len(left)
         if fz is None:
             cur_lift = np.full(k, lift)
@@ -1645,7 +1645,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         T.append(tri)
         M.append(np.full(len(tri), mi))
         TL.append(np.full(len(tri), np.nan if fz is not None else LIFT[layer] + lift))
-        RI.append(np.full(len(tri), ri))
+        RI.append(np.full(len(tri), len(rpar)))  # only emitted ribbons have a fade parameter row
         RW.append(np.full(len(tri), str(c.get("fid", "")).startswith("osm-raceway-")))
         ends = c.get("fends") or (1, 1)
         rpar.append((fu, float(c.get("tl") or 10.0), tu, float(slen) if slen else np.nan,
@@ -1681,6 +1681,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         RI.append(np.full(len(fan), -1))
         RW.append(np.zeros(len(fan), bool))
         nverts += k
+    if not P:               # every ribbon was suppressed cluster wear
+        return None
     P, T, UV, M = np.concatenate(P), np.concatenate(T), np.concatenate(UV), np.concatenate(M)
     TL, RI, RW = np.concatenate(TL), np.concatenate(RI), np.concatenate(RW)
     tid = np.arange(len(T))
