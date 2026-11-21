@@ -5,7 +5,6 @@ Usage: python tools/storefronts/index_totems.py server/data/storefront_totems.cs
 import argparse
 import csv
 import json
-import math
 import re
 import sys
 import urllib.parse
@@ -13,7 +12,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "server"))
-from store_match import chain
+from store_match import chain, sign_bearing
 
 
 QUERY = """PREFIX osmkey: <https://www.openstreetmap.org/wiki/Key:>
@@ -40,10 +39,10 @@ def write_index(data, target):
             continue
         try:
             height = float(tags.get("height", 6))
-            direction = float(tags["dir"].split(";")[0]) if "dir" in tags else None
         except ValueError:
             continue
-        if 2 <= height <= 20 and (direction is None or math.isfinite(direction)):
+        if 2 <= height <= 20:
+            direction = sign_bearing(tags.get("dir"))
             rows[node[1]] = (lat, lon, node[1], label, height, direction)
     with target.open("w", newline="", encoding="utf8") as file:
         writer = csv.writer(file, lineterminator="\n")

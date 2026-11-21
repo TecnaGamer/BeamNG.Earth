@@ -55,7 +55,7 @@ import staging
 
 log = logging.getLogger("earthd.threedmr")
 
-STOREFRONT_VERSION = 13  # Shared by generated model filenames and tile revisit keys.
+STOREFRONT_VERSION = 14  # Shared by generated model filenames and tile revisit keys.
 TAG_KEY = "3dmr"
 API_URL = "https://3dmr.eu/api/model/{}"
 SEARCH_URL = "https://3dmr.eu/api/search/{lat:.6f}/{lon:.6f}/{range_m}"

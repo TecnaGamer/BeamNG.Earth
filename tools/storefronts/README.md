@@ -1,5 +1,16 @@
 # Generate storefront models
 
+![Twelve examples from the storefront catalog](catalog/overview.jpg)
+
+[Browse all 250 exported models by name](catalog/README.md).
+
+| Map evidence | What appears in the world |
+| --- | --- |
+| Supported standalone store | A building fitted to the mapped outline with the brand's materials, entrance and signs. |
+| Tenant with a clear, parking-facing exterior wall | A facade panel and canopy on its part of the existing building. |
+| Recognized freestanding sign node | A separate two-sided sign at the mapped position, even across a tile boundary from the store. |
+| Mapped material or a supplied brick observation | Material applied to the building or observed wall. The offline importer accepts photo observations. |
+
 The catalog covers 250 chains across restaurants, groceries, pharmacies, home improvement,
 discount stores, specialty retail and cinemas. New brands share building designs sized to
 the mapped footprint. Examples include In-N-Out Burger, Whataburger, Trader Joe's, Best Buy,
@@ -26,7 +37,7 @@ Inspect the pack or use the game's threedmr_cache directory as the output to ins
 
 ## Generate stores as you drive
 
-Set `BNE_STOREFRONTS=1` in the server environment to enable storefront discovery on near road tiles in a source checkout. There is no city list or extract to prepare. A supported chain name on a low standalone commercial footprint can identify the store directly. For an unnamed commercial footprint, including one mapped only as retail or commercial, the server checks the places layer for a single business inside with confidence of at least 0.8. On an unnamed retail building with multiple tenants, a supported business can receive a ground-floor panel and entrance canopy when one exterior wall is distinctly closest, a mapped parking aisle faces it, and other mapped tenants are clear of the panel. The shared host stays in place. Fuel-category places are excluded from supermarket matching. For standalone retail buildings, multiple parking aisles facing one broad wall can identify the customer approach. Otherwise a nearby road supplies the approximate direction. Large stores with paired entrances can carry a name sign above each entrance. Detailed standalone models can carry a second wall sign on the public approach while keeping the main sign over a mapped entrance. A raised two-sided sign on wider approach walls makes the name legible along the street. Tenant panels use a separate name band above the glazing. In an OSM extract, a named or branded advertising totem can also generate a freestanding two-sided sign at its mapped position, using its height and orientation when available. Installed custom models take priority.
+Set `BNE_STOREFRONTS=1` before starting the server to enable storefront discovery on near road tiles. The feature branch includes the generator, sign data, and fonts in the source ZIP and frozen player builds. The offline photo and index-building tools run from a source checkout. There is no city list or extract to prepare. A supported chain name on a low standalone commercial footprint can identify the store directly. For an unnamed commercial footprint, including one mapped only as retail or commercial, the server checks the places layer for a single business inside with confidence of at least 0.8. On a shared retail building, including a named plaza, a supported business can receive a ground-floor panel and entrance canopy when one exterior wall is distinctly closest, a mapped parking aisle faces it, and other mapped tenants are clear of the panel. The shared host stays in place. Fuel-category places are excluded from supermarket matching. For standalone retail buildings, multiple parking aisles facing one broad wall can identify the customer approach. Otherwise a nearby road supplies the approximate direction. Large stores with paired entrances can carry a name sign above each entrance. Detailed standalone models can carry a second wall sign on the public approach while keeping the main sign over a mapped entrance. A raised two-sided sign on wider approach walls makes the name legible along the street. Tenant panels use a separate name band above the glazing. In an OSM extract, a named or branded advertising totem can also generate a freestanding two-sided sign at its mapped position, using its height and orientation when available. Installed custom models take priority.
 
 Generated meshes are reused from `threedmr_cache/storefronts`. Data coverage varies by location. The streaming path uses mapped wall material. The offline workflow below also accepts photo observations.
 

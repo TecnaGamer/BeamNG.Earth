@@ -32,6 +32,17 @@ FILES = ["install.py", "modtextures.py", "start.py", "launcher.py", "bmplaunch.p
          "beammp/MODERNIZATION.md"]
 TREES = ["mod/beamng_earth", "mod/texture_sources", "server"]     # (the DDS made from texture_sources at install)
 TOOLS = ["tools/reports.py", "tools/sketchfab_assets.py"]  # no stored credentials
+# The live generator imports these modules from tools/storefronts on demand. Keep the
+# same relative layout in source archives and frozen apps so the renderer finds its fonts.
+STOREFRONT_RUNTIME = [
+    "tools/storefronts/" + name for name in (
+        "build_stores.py", "brand_signs.py", "chain_profiles.py", "entrance_designs.py",
+        "restaurant.py", "store_match.py", "storefront_art.py", "whole_store.py",
+    )
+] + [
+    "tools/fonts/DejaVuSans-Bold.ttf", "tools/fonts/DejaVu-LICENSE.txt",
+    "tools/fonts/D-DIN-Bold.otf", "tools/fonts/D-DIN-OFL.txt",
+]
 SKIP_DIRS = {"__pycache__", "tests", ".git", "backups", "probes", "research", ".venv", "dist"}
 SKIP_EXT = {".pyc", ".pyo", ".log", ".swp"}
 EXECUTABLE = {"run_server.sh", "install.py", "start.py"}
@@ -44,7 +55,7 @@ def version():
 
 def collect():
     out = []
-    for rel in FILES + TOOLS:
+    for rel in FILES + TOOLS + STOREFRONT_RUNTIME:
         if not os.path.isfile(os.path.join(ROOT, rel)):
             sys.exit(f"missing: {rel}")
         out.append(rel)

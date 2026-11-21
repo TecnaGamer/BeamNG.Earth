@@ -4,17 +4,21 @@ import hashlib
 import json
 import logging
 import math
+import struct
 import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 import numpy as np
 
+import revisit
+
 from threedmr import STOREFRONT_VERSION
 from gasstations import GAS_CATEGORIES
 from polygon import contains_points
 
-TOOLS = Path(__file__).resolve().parents[1] / "tools" / "storefronts"
+ROOT = Path(getattr(sys, "_MEIPASS", None) or Path(__file__).resolve().parents[1])
+TOOLS = ROOT / "tools" / "storefronts"
 if str(TOOLS) not in sys.path:
     sys.path.append(str(TOOLS))
 from build_stores import export_store
@@ -49,7 +53,7 @@ def businesses(md, keys):
         yield f, rows, f.lonlat[f.coord_off[f.ring_off[f.part_off[rows]]]]
 
 
-def mapped_tenants(layers, ring):
+def mapped_tenants(layers, ring, anchor=None):
     lo, hi = ring.min(0), ring.max(0)
     tenants = {}
     for f, rows, points in layers:
@@ -73,6 +77,11 @@ def mapped_tenants(layers, ring):
                 or chain(value("brand_name"))
                 or chain(value("name"), "movie_theater" in categories)
             )
+            if anchor and not name and (
+                "atm" in categories or str(value("name") or "").strip().casefold() in {"atm", "pharmacy"}
+            ):
+                # Generic services inside an identified store are not separate retail frontages.
+                continue
             confidence = value("confidence")
             if categories & GAS_CATEGORIES or "drive_in_theater" in categories:
                 name = None
@@ -113,8 +122,20 @@ def cached_entry(cache, name, coords, bearing, material, sign_height=None):
     ident = hashlib.sha256(signature).hexdigest()[:24]
     meta = cache / f"store_{ident}.json"
     mesh = cache / f"store_{ident}.glb"
-    if meta.is_file() and mesh.is_file():
-        return json.loads(meta.read_text())
+    try:
+        entry = json.loads(meta.read_text(encoding="utf8"))
+        if (isinstance(entry, dict) and entry.get("file") == mesh.name and entry.get("title") == name
+                and entry.get("branded_storefront") is True
+                and bool(entry.get("storefront_overlay")) == (bearing is None)
+                and bool(entry.get("storefront_pylon")) == (sign_height is not None)
+                and all(isinstance(entry.get(k), (int, float)) and math.isfinite(entry[k]) for k in ("lat", "lon"))):
+            with mesh.open("rb") as stream:
+                size = mesh.stat().st_size
+                if 28 <= size < 2**32 and stream.read(12) == struct.pack("<4sII", b"glTF", 2, size):
+                    return entry
+    except (FileNotFoundError, ValueError):
+        # A partial pair, truncated download, or damaged manifest can be rebuilt from the map.
+        pass
     cache.mkdir(parents=True, exist_ok=True)
     direction = None
     if bearing is not None:
@@ -179,10 +200,10 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
         _, label, material, subtype = spec.storefront
         kind = str(spec.cls or "").lower()
         name = chain(label, kind == "cinema")
-        if label:
-            if not name or (kind and kind not in COMMERCIAL):
-                continue
-        elif kind not in COMMERCIAL and not (not kind and subtype == "commercial"):
+        generic_host = kind in {"retail", "commercial", "shop"} or (not kind and subtype == "commercial")
+        if kind not in COMMERCIAL and not generic_host and not (name and not kind):
+            continue
+        if label and not name and not generic_host:
             continue
         ring = np.asarray(spec.ring)[:, :2]
         if len(ring) > 96 or np.any(np.ptp(ring, axis=0) > 250):
@@ -208,13 +229,16 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
         )
         coords = np.column_stack((ll[1], ll[0]))
         try:
-            if not name:
+            if generic_host or not name:
                 if layers is None:
                     layers = list(businesses(md, keys))
-                tenants = mapped_tenants(layers, coords)
-                if len(tenants) == 1:
+                tenants = mapped_tenants(layers, coords, anchor=name)
+                if name and any(brand != name for brand, _ in tenants):
+                    # A retail host may carry its anchor's name but also contain independent stores.
+                    name = None
+                elif not label and len(tenants) == 1:
                     name = tenants[0][0]
-                if not name and not (len(tenants) > 1 and kind == "retail" and len(aisles)):
+                if not name and not (generic_host and tenants and len(aisles)):
                     continue
             if kind in {"retail", "supermarket", "department_store", "hypermarket", "wholesale"}:
                 parking = parking_direction(ring, aisles)
@@ -242,6 +266,8 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     "storefront_host": tuple(centre + origin) if heading is not None else None,
                 }
         except (OSError, ValueError, RuntimeError) as error:
+            if isinstance(error, OSError):
+                revisit.fault()
             LOG.warning(
                 "Could not generate storefront for %s: %s", spec.storefront[0], error
             )
@@ -254,6 +280,8 @@ def pylons(keys, frame, box, streets, existing, cache_dir):
         try:
             entry = cached_entry(cache, name, coords, None, None, sign_height=height)
         except (OSError, ValueError, RuntimeError) as error:
+            if isinstance(error, OSError):
+                revisit.fault()
             LOG.warning("Could not generate mapped storefront sign %s: %s", node, error)
             continue
         yield {"id": "osm_storefront_totem_" + node, "xy": xy, "latlon": latlon,

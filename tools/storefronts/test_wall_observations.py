@@ -205,6 +205,17 @@ def test_fitted_entrances_and_shared_wall_exports():
             assert entry["storefront_overlay"] and np.ptp(vertices[:,1]) <= 1.1, name
 
 
+def test_sign_bearing():
+    from store_match import sign_bearing
+    assert sign_bearing("SSE;NNW") == 157.5
+    assert sign_bearing("310;130") == 310.
+    assert sign_bearing("0") == sign_bearing(0) == 0.
+    assert sign_bearing("forward; sw") == 225.
+    assert sign_bearing("backward") is None
+    assert sign_bearing("NaN") is None
+    assert sign_bearing(None) is None
+
+
 def test_storefront_signs():
     def sign(aspect, height, surface):
         return np.asarray(sign_image("Domino's", aspect, height, surface))
@@ -235,6 +246,7 @@ def test_storefront_signs():
 
 if __name__ == "__main__":
     test_storefront_signs()
+    test_sign_bearing()
     test_fitted_entrances_and_shared_wall_exports()
     test_signature_shapes_stay_on_standalone_buildings()
     test_street_sign_when_entrance_faces_parking()

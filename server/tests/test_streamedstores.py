@@ -96,6 +96,24 @@ class StreamedStoresTest(unittest.TestCase):
             places.lonlat[1] = places.lonlat[0]
             self.assertFalse(generate())
 
+    def test_named_retail_host_requires_tenant_frontage(self):
+        frame = geodesy.EnuFrame(40., -83.)
+        aisle = np.array([[50., 15.], [50., 20.]])
+        for host, labels in (("Town Square", ["Kroger"]), ("Walmart", ["Kroger", "Walmart"]),
+                             ("Town Square", ["Kroger", "Other shop"])):
+            with (self.subTest(host=host, labels=labels), tempfile.TemporaryDirectory() as cache,
+                  patch.dict(os.environ, BNE_STOREFRONTS="1"), patch("threedmr.region_ids", return_value=[]),
+                  patch("buildings.road_lines", return_value=[aisle])):
+                md = tile(frame, host, labels, "retail")
+                points = md.cell(None).layers["places"].lonlat
+                lat, lon, _ = frame.enu_to_geodetic(np.array([50., 72.]), np.array([33., 55.]), np.zeros(2))
+                points[:] = np.column_stack((lon, lat))[:len(points)]
+                _, generated = buildings.road_tile_items(frame, 0, 0, md, lambda a,b: np.zeros(np.shape(a)),
+                                                         cache_dir=cache)
+                self.assertEqual([m["local"]["title"] for m in generated], ["Kroger"])
+                self.assertTrue(generated[0]["local"]["storefront_overlay"])
+                self.assertIsNone(generated[0]["storefront_host"])
+
     def test_mapped_pylon_owns_one_tile_and_survives_a_revisit(self):
         import streamedstores
         import storefront_totems
@@ -109,6 +127,10 @@ class StreamedStoresTest(unittest.TestCase):
               patch("buildings.road_lines", return_value=[np.array([[0., 15.], [256., 15.]])])):
             def generate(tx=0):
                 return buildings.road_tile_items(frame, tx, 0, md, lambda a,b: np.zeros(np.shape(a)), cache_dir=cache)[1]
+            with (patch.object(streamedstores, "export_store", side_effect=OSError("temporary disk failure")),
+                  patch("revisit.fault") as fault):
+                self.assertFalse(generate())
+                self.assertEqual(fault.call_count, 2)
             sign, building = generate()
             self.assertEqual(sign["id"], "osm_storefront_totem_12345")
             self.assertTrue(sign["local"]["storefront_pylon"])
@@ -116,6 +138,12 @@ class StreamedStoresTest(unittest.TestCase):
             verts = threedmr.load_local_model(cache, sign["local"])[0]
             self.assertAlmostEqual(float(np.ptp(verts[:, 2])), 12.)
             self.assertGreater(np.ptp(verts[:, 1]), np.ptp(verts[:, 0]))
+            root = Path(cache) / "threedmr_cache"
+            (root / building["local"]["file"]).with_suffix(".json").write_text("{")
+            (root / sign["local"]["file"]).write_bytes(b"glTF")
+            regenerated = generate()
+            self.assertEqual([m["local"] for m in regenerated], [sign["local"], building["local"]])
+            self.assertGreater(len(threedmr.load_local_model(cache, sign["local"])[2]), 0)
             with patch.object(streamedstores, "export_store", side_effect=AssertionError("cache miss")):
                 self.assertEqual(generate()[0]["local"], sign["local"])
             self.assertFalse(any(item["id"] == sign["id"] for item in generate(1)))

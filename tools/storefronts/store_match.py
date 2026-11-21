@@ -102,6 +102,26 @@ def brand(tags):
                     return name
 
 
+COMPASS_BEARINGS = {point: i * 22.5 for i, point in enumerate(
+    "N NNE NE ENE E ESE SE SSE S SSW SW WSW W WNW NW NNW".split()
+)}
+
+
+def sign_bearing(value):
+    """Read a mapped sign's facing. Either face orients a two-sided sign."""
+    for face in str(value).upper().split(";"):
+        face = face.strip()
+        if face in COMPASS_BEARINGS:
+            return COMPASS_BEARINGS[face]
+        try:
+            bearing = float(face)
+        except ValueError:
+            continue
+        if np.isfinite(bearing):
+            return bearing % 360
+    return None
+
+
 def sign_endpoints(location, height, facing, nearby_roads):
     """Return lon/lat panel endpoints. Roads are metre offsets from the mapped sign."""
     if facing is None:
@@ -217,7 +237,6 @@ def matches(path):
             continue
         try:
             height = float(props.get("height", 6))
-            facing = float(props["direction"]) if "direction" in props else None
         except ValueError:
             continue
         if not 2 <= height <= 20:
@@ -225,7 +244,7 @@ def matches(path):
         location = np.array(point(node))
         scale = np.array([111320*np.cos(np.radians(location[1])), 111132])
         roads = ((road-location)*scale for lines in address_roads.values() for road in lines)
-        endpoints = sign_endpoints(location, height, facing, roads)
+        endpoints = sign_endpoints(location, height, sign_bearing(props.get("direction")), roads)
         if endpoints is not None:
             yield (name, "totem_" + node.get("id"), endpoints, None, [], None, height)
 
