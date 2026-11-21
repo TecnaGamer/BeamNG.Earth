@@ -4,13 +4,13 @@ decks in S3). Rust kernel: earthfast.lane_surface (native/earthfast/src/roadshap
 rules); the lane graph is S1's (lanegraph.py).
 
 Switch BNE_ROADSURF_V3=surface (lanegraph.MODE; keyed like every BNE_* build switch, revisit.switches_key): in each road
-tile the motorway / trunk roads' GROUND parts (no bridge or tunnel) are drawn as a mesh (BNGE_ROADS_IN_GROUND's paint
-stays under it), each lane event of S1's (a diverge, merge, add or drop) as a piece of lane strips sharing their rows,
+tile the motorway / trunk roads' GROUND parts (no bridge or tunnel) have a continuous pavement footprint. Urban roads
+painted into the terrain use that pavement directly. The other parts draw a mesh, each lane event of S1's (a diverge, merge, add or drop) as a piece of lane strips sharing their rows,
 welded to the roads on shared rows; the road tile's own lines and overlays inside a piece are cut out (cut_lines) and the
 piece's markings drawn from its boundaries: edge lines, lane lines (through-lane dashes go on past an exit), the exit /
 auxiliary dashes of the added lane (the country's pattern, EXIT_DASH), the gore's channelizing lines and chevrons (US,
 Canada) or hatching. With BNE_SURFACE_V2 the pieces get the variation overlay on their own triangles and the edge blends
-on their outer edges. Heights: today's (the mesh is draped on the graded ground as every ground road surface). Ground pieces end at structures. roadsurf3_decks uses the same lane mesh on supported bridge profiles.
+on their outer edges. Heights: today's (the mesh is draped on the graded ground as every ground road surface). Ground pieces end at structures and leave crossing traffic to the junction painter. roadsurf3_decks uses the same lane mesh on supported bridge profiles.
 
 Each tile reads the home cells of events that reach it and the neighbours that may trim those events. Each home
 graph records its actual input cells, including distant copies of long segments. The per-process cache validates
@@ -459,6 +459,57 @@ def grade_plans(planner, box, plans, specs, country):
         grading.set_widen(plan, widen)
 
 
+def street_pavement(spec):
+    """The mapped cross section of a paved urban arterial, including turn-lane tapers and median gaps."""
+    return spec.kind == "paved" and spec.cls == "trunk" and spec.urban
+
+
+def _painted_street_surface(spec):
+    """Kerbed surface streets can extend beyond the urban land-cover polygon.
+    Their ground painter already owns the pavement, including any V3 triangles.
+    """
+    if spec.kind != "paved" or spec.cls != "trunk":
+        return False
+    import roads
+    return spec.urban or roads.has_sidewalks(spec) or (
+        roads.has_median(spec) and spec.kmh is not None and roads._arterial(spec))
+
+
+def _signalled_link_owners(frame, got, signal_fn):
+    """Ordinary ground trunk links which meet a mapped traffic signal. Read both original
+    ends, even when the painted tile contains only the middle of the link."""
+    import fast
+    import furniture
+    candidates = []
+    keys = set()
+    for owner in np.unique(got["mesh"]["owner"]):
+        if owner >= 0:
+            continue
+        i = -1 - int(owner)
+        spec = got["roads"][i][1]
+        if spec.cls != "trunk" or not spec.link or _painted_street_surface(spec):
+            continue
+        offsets = got["inputs"]["r_off"]
+        ends = got["inputs"]["rxy"][[offsets[i], offsets[i + 1] - 1]]
+        reach = furniture.SIGNAL_NEAR_M + spec.width / 2
+        for x, y in ends:
+            keys.update(_cells_of(frame, (x - reach, y - reach, x + reach, y + reach)))
+        candidates.append((owner, ends, reach))
+    if not keys:
+        return set()
+    signals = signal_fn(sorted(keys))
+    if signals is None or not len(signals):
+        return set()
+    signals = np.ascontiguousarray(signals, np.float64)
+    fast.require(0, "points_near_segments")
+    return {owner for owner, ends, reach in candidates
+            if np.asarray(fast._ef.points_near_segments(ends, signals, signals, np.full(len(signals), reach))).any()}
+
+
+def replaces_ground_paint(spec):
+    return spec.kind == "paved" and spec.cls in V3_CLASSES and not street_pavement(spec)
+
+
 def paint_geometry(surface, frame, box, widths, pending=None):
     """Ground triangles for the terrain painter. Use its cached map cells and queue
     missing ones through Surface, as for the other layers of a terrain block."""
@@ -485,9 +536,14 @@ def paint_geometry(surface, frame, box, widths, pending=None):
         if got is None:
             return None
         mesh = got["mesh"]
-        concrete = [sp.surf == "concrete" for _, sp in got["pieces"]] + [
-            sp.surf == "concrete" for _, sp in reversed(got["roads"])]
-        return mesh["v"], mesh["tri"], np.asarray(concrete, np.uint8)[mesh["owner"]]
+        # Urban trunk roads already paint their mapped joint tapers, corner fills, sidewalk
+        # margins and median gaps. Only an actual lane event adds coverage to those streets.
+        # Negative owner IDs index ordinary roads from the end of the same lookup tables.
+        specs = [sp for _, sp in got["pieces"]] + [sp for _, sp in reversed(got["roads"])]
+        owner = mesh["owner"]
+        concrete = np.array([sp.surf == "concrete" for sp in specs], np.uint8)
+        keep = (owner >= 0) | np.array([not street_pavement(sp) for sp in specs], bool)[owner]
+        return mesh["v"], mesh["tri"][keep], concrete[owner[keep]]
     except Exception as ex:
         import logging
         revisit.fault()
@@ -574,16 +630,17 @@ def _inside_any(q, polys):
 
 
 def apply(frame, box, chunks, cell_fn, urban_fn=None, widths=None, left_hand=False, country=None, lon=None,
-          surface_v2=False, log=None, build_memo=None):
+          surface_v2=False, log=None, build_memo=None, terrain_pavement=False, signal_fn=None):
     """BNE_ROADSURF_V3=surface in a road tile (roads.build_tile, before the dashes are cut): chunks with the v3 ground
     surface added (its mesh as "tri" chunks, its markings and overlays as chunks) and the tile's own lines and overlays
     inside its pieces cut out. box: the tile's own box. Never raises: on a fault the chunks as they were (logged)."""
     try:
         got = tile_surface(frame, box, cell_fn, urban_fn, widths, left_hand, country, build_memo=build_memo)
         if got is not None:
+            links = _signalled_link_owners(frame, got, signal_fn) if terrain_pavement and signal_fn else ()
             draw = [c for c in chunks if "_v3_fallback" not in c]
             return cut_chunks(draw, got["cut"], got["cut_wide"], _is_edge) + surface_chunks(
-                got, box, country, lon, surface_v2)
+                got, box, country, lon, surface_v2, terrain_pavement, links)
     except Exception as ex:
         import revisit
         revisit.fault()
@@ -600,7 +657,7 @@ def _is_edge(c):
         c.get("layer") == "edge"
 
 
-def surface_chunks(got, box, country=None, lon=None, surface_v2=False):
+def surface_chunks(got, box, country=None, lon=None, surface_v2=False, terrain_pavement=False, signalled_links=()):
     """The road mesh chunks of tile_surface's result: one "tri" chunk per owner material (draped, as the ground
     roads), the markings (dashed ones with their phase from the piece's station 0), and with surface_v2 the variation
     overlay on the pieces' lanes and the edge blends on their outer edges."""
@@ -621,7 +678,14 @@ def surface_chunks(got, box, country=None, lon=None, surface_v2=False):
             groups.setdefault((look["m"], float(look["tl"]), int(look["p"])), []).append(int(o))
         for (mat, tl, p), os_ in sorted(groups.items()):
             sel = np.isin(owner, os_)
-            out.append(_tri_chunk(v, uv, tri[sel], mat, tl, p, "base"))
+            # The terrain painter consumes this same urban pavement footprint. A second
+            # opaque, independently draped skin can cover the paint at a crowned junction.
+            base = os_
+            if terrain_pavement:
+                base = [o for o in os_ if o not in signalled_links and not _painted_street_surface(spec_of(o))]
+            if base:
+                base_sel = sel if len(base) == len(os_) else np.isin(owner, base)
+                out.append(_tri_chunk(v, uv, tri[base_sel], mat, tl, p, "base"))
             if surface_v2:
                 lanes = sel & (owner >= 0) & np.isin(kind, (1, 3, 4))
                 if lanes.any():

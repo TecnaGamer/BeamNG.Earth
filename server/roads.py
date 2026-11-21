@@ -3791,10 +3791,12 @@ def _osm_widths(feats, lo, hi):
 
 def _spec_prm():
     """The spec kernels' thresholds, read at each call (tests change them)."""
+    import lanegraph
     return {"MIN_PART": MIN_PART, "URBAN_SAMPLE_M": URBAN_SAMPLE_M, "URBAN_SHARE": URBAN_SHARE,
             "URBAN_BESIDE_M": URBAN_BESIDE_M, "URBAN_HIGHWAY_BESIDE_M": URBAN_HIGHWAY_BESIDE_M,
             "URBAN_BESIDE_SHARE": URBAN_BESIDE_SHARE,
             "URBAN_BOTH_SHARE": URBAN_BOTH_SHARE, "DUAL_GAP_M0": DUAL_GAP_M[0], "DUAL_GAP_M1": DUAL_GAP_M[1],
+            "STREET_DUAL_OVERLAP": float(lanegraph.MODE == "surface"),
             "DUAL_SHARE": DUAL_SHARE, "DUAL_COS": dmath.cos(math.radians(DUAL_ANGLE_DEG)),
             "MOUNTAIN_ON": float(MOUNTAIN_ON), "MOUNTAIN_SWITCHBACKS": float(MOUNTAIN_SWITCHBACKS),
             "MOUNTAIN_SPAN_M": MOUNTAIN_SPAN_M, "MOUNTAIN_TURN_DEG": MOUNTAIN_TURN_DEG,
@@ -14628,7 +14630,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 tags = streetfront.tags_of(feats, index)
                 for sd, name in ((1, "left"), (-1, "right")):
                     raw = tags.get(f"sidewalk:{name}:surface") or tags.get("sidewalk:both:surface") or tags.get("sidewalk:surface")
-                    side_materials[fid, sd] = fast._ef.town_slab(str(raw or ""), str(spec.surf or spec.kind), brick_region)
+                    material = fast._ef.town_slab(str(raw or ""), str(spec.surf or spec.kind), brick_region)
+                    # An unmapped ordinary slab is a fallback. Leave room for the
+                    # building pass to recognise a brick frontage on this street.
+                    if raw or material != 1 or not brick_region:
+                        side_materials[fid, sd] = material
             for wk in walks:
                 if "corner" in wk and not wk.get("surface"):
                     mats = [side_materials.get(key, 1) for key in wk["corner"].get("road_sides", ())]
@@ -14644,8 +14650,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             detached = footway is not None and footway.setback > 0.
             v2_extra = {}
             if v2_walks and not detached and not rn.get("mapped"):
-                if not rn.get("median"):
-                    v2_extra["town_mat"] = side_materials.get((fid, side), 1)
+                if not rn.get("median") and (fid, side) in side_materials:
+                    v2_extra["town_mat"] = side_materials[fid, side]
                 v2_extra["roll"] = 0.0 if rn.get("median") else kerb_of(fid)
                 v2_extra["minor"] = fid in seen and seen[fid][2] is not None and seen[fid][2].cls in DRIVE_CLASSES
                 # (the curb line of the whole run: the drives' stations along it, a piece's bent ends' mitres)
@@ -14934,7 +14940,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         with revisit.scope() as surface_build:
             chunks = roadsurf3.apply(frame, own_box, chunks, v3["cell_fn"], urban_fn, widths, left_hand, line_country,
                                      float(frame.lon0), SURFACE_V2, log=logging.getLogger("earthd.roadsurf3"),
-                                     build_memo=v3.pop("lane_memo"))
+                                     build_memo=v3.pop("lane_memo"), terrain_pavement=ROADS_IN_GROUND and terrain_paint,
+                                     signal_fn=v3.get("signal_fn"))
         v3["short"] = v3.get("deck_short", False) or not surface_build.kept_until()[0]
     return roadmarkings.paint(chunks)
 

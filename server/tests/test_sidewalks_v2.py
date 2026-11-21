@@ -64,6 +64,12 @@ class MeshTest(unittest.TestCase):
         near = (np.abs(P[:, 0] - x) < 0.3) & (P[:, 1] > 4.75 - 0.01) & (P[:, 1] < 4.75 + 0.35)
         return P[near, 2].max()
 
+    def test_explicit_walk_surface_wins_over_inferred_brick(self):
+        (_, _, _, inferred), _ = self.build(self.walk(brick=True))
+        (_, _, _, tagged), _ = self.build(self.walk(brick=True, town_mat=1))
+        self.assertIn(sidewalks.BRICK, inferred)
+        self.assertNotIn(sidewalks.BRICK, tagged)
+
     def test_per_vertex_reveal(self):
         hv = np.linspace(0.08, 0.20, 41)
         (P, T, UV, M), _ = self.build(self.walk(hv=hv, drop=np.full(41, 0.2)))
@@ -182,6 +188,22 @@ class CornerTest(unittest.TestCase):
         rows = [("a", spec(), a, -100.0), ("b", spec(), b, -100.0)]
         with mock.patch.object(sidewalks, "V2", v2):
             return junctions.find(rows, roads.has_sidewalks, None)[0]
+
+    def test_crosswalks_on_a_short_block(self):
+        def crossings(span):
+            lines = [("west", [(-110, 0), (0, 0)]), ("block", [(0, 0), (span, 0)]),
+                     ("east", [(span, 0), (110, 0)])]
+            for i, x in enumerate((0, span)):
+                for y in (-100, 100):
+                    lines.append((f"side{i}_{y}", [(x, 0), (x, y)]))
+            rows = [(fid, spec(), np.column_stack((xy, np.zeros(len(xy)))), -100.) for fid, xy in lines]
+            with mock.patch.object(sidewalks, "V2", True):
+                marks = junctions.find(rows, roads.has_sidewalks, None)[2]
+            return [cw for cw in marks if not cw.get("stop") and abs(cw["a"][0] - cw["b"][0]) < .1
+                    and 0 < cw["a"][0] < span]
+
+        self.assertEqual(len(crossings(28)), 1)  # 3.5 m centre to centre, only 0.5 m between painted bands
+        self.assertEqual(len(crossings(32)), 2)
 
     def test_vanilla_radius_and_steps(self):
         old, new = self.corners(False), self.corners(True)

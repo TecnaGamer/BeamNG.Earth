@@ -377,7 +377,7 @@ def _empty(elem):
     return (0, elem, b"")
 
 
-def _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors):
+def _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors, extra=None):
     """One standard mesh's body bytes (after its type) and its (lo, hi) bounds; T sorted by TM."""
     N = face_normal_sum(P, T) if normals is None else np.asarray(normals, np.float64).reshape(-1, 3)
     UV = np.zeros((len(P), 2)) if uvs is None else np.asarray(uvs, np.float64).reshape(-1, 2)
@@ -395,6 +395,24 @@ def _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors):
     TV = np.stack([UV32[:, 0], np.float32(1.0) - UV32[:, 1]], 1)     # flipped in float32, as the engine does
     TTV = np.stack([TUV[order, 0], 1.0 - TUV[order, 1]], 1)
     TG = tangents(V.astype(np.float64), TTV, NN.astype(np.float64), idx).astype(np.float32)
+    UV2 = None if uvs2 is None else np.asarray(uvs2, np.float64).reshape(-1, 2)[order]
+    rgba = None if colors is None else np.asarray(colors, np.uint8).reshape(-1, 4)[order]
+    if len(V) > VERTS_MAX and extra is not None:
+        # Partition the finished, material-sorted draw buffer, after computing the
+        # shading and shell across its seams. Each object has its own 16-bit indices.
+        fast.require(570, "mesh_part_ends")
+        ends = fast._ef.mesh_part_ends(idx, len(V), VERTS_MAX)
+        bodies = []
+        for start, end in zip([0] + ends[:-1], ends):
+            used, local = fast._ef.first_use(np.ascontiguousarray(idx[start:end, ::-1]), len(V))
+            bodies.append(_mesh_body(V[used], NN[used], TV[used], TG[used], None if UV2 is None else UV2[used],
+                                     None if rgba is None else rgba[used], local, TM[start:end], nmat))
+        extra.extend(bodies[1:])
+        return bodies[0]
+    return _mesh_body(V, NN, TV, TG, UV2, rgba, idx, TM, nmat)
+
+
+def _mesh_body(V, NN, TV, TG, UV2, rgba, idx, TM, nmat):
     nv = len(V)
     ntri = len(idx)
     if nv > VERTS_MAX:          # (its triangles join far-apart vertices in the game: split it, encode's parts)
@@ -410,15 +428,13 @@ def _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors):
     for v in (0, 1, 1, -1, [float(x) for x in lo] + [float(x) for x in hi], [float(x) for x in center],
               mesh_radius):     # standard mesh, frames, matFrames, parent
         _pack(out, v)
-    UV2 = None if uvs2 is None else np.asarray(uvs2, np.float64).reshape(-1, 2)
     mesh_vecs = {
         "verts": _vec(V.astype("<f4").tobytes(), nv, 12),
         "tverts": _vec(TV.astype("<f4").tobytes(), nv, 8),
         "tverts2": _empty(8) if UV2 is None else _vec(
-            np.stack([UV2[order, 0].astype(np.float32),
-                      np.float32(1.0) - UV2[order, 1].astype(np.float32)], 1).astype("<f4").tobytes(), nv, 8),
-        "colors": _empty(4) if colors is None else _vec(
-            np.asarray(colors, np.uint8).reshape(-1, 4)[order].tobytes(), nv, 4),
+            np.stack([UV2[:, 0].astype(np.float32),
+                      np.float32(1.0) - UV2[:, 1].astype(np.float32)], 1).astype("<f4").tobytes(), nv, 8),
+        "colors": _empty(4) if rgba is None else _vec(rgba.tobytes(), nv, 4),
         "norms": _vec(NN.astype("<f4").tobytes(), nv, 12),
         "primitives": _primitives(TM, nmat),
         "indices": _vec(idx.astype("<u4").tobytes(), ntri * 3, 4),
@@ -452,7 +468,7 @@ LOD_TOP_SIZE = 2.0          # px: the size of the one (or the last, coarsest) de
 @profile_step('Native shape encoding')
 def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2=None,
            tangent_uvs=None, object_name="tile", tri_materials=None, colors=None, collision_only=False, lods=None,
-           collisions=None, close=False, open_tris=None, packed=None, parts=None):
+           collisions=None, close=False, open_tris=None, packed=None, parts=None, split_drawn=False):
     """Shape bytes for one static mesh, laid out exactly as the engine writes a compiled
     Collada file with the same geometry.
 
@@ -486,12 +502,13 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     parts: further drawn meshes beside this one, [dict of positions, tris and optional uvs / tri_materials / colors,
     the same material list], each its own object ("<object_name>2", "<object_name>3", ...) in the one drawn detail:
     a shape whose vertices are past the engine's 16-bit indices (VERTS_MAX: each mesh's own index buffer) as several
-    meshes under it. Not with collision_only, lods or collisions."""
+    meshes under it. split_drawn partitions an oversized primary mesh automatically after closing and shading.
+    Neither option supports collision_only, lods or collisions."""
     if collision_only:
         object_name = "Colmesh"
         lods = None
     parts = list(parts or ())
-    if parts and (collision_only or lods or collisions):
+    if (parts or split_drawn) and (collision_only or lods or collisions):
         raise CdaeError("parts: not with collision_only, lods or collisions")
     materials = [material] if isinstance(material, str) else list(material)
     if tri_materials is not None and len(materials) > 1:
@@ -529,9 +546,13 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
         parts = [_closed_lod(d, close) for d in parts]
     P = np.asarray(positions, np.float64).reshape(-1, 3)
     T, TM = _sorted_tris(tris, tri_materials, nmat)
-    body0, lo, hi, ntri = _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors)
+    extra = [] if split_drawn else None
+    body0, lo, hi, ntri = _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors, extra)
     levels = [(None, body0, ntri)]
     drawn = []                  # parts: the further drawn objects' (body, triangles)
+    for body, lop, hip, ntp in extra or ():
+        lo, hi = np.minimum(lo, lop), np.maximum(hi, hip)
+        drawn.append((body, ntp))
     for d in parts:
         Pp = np.asarray(d["positions"], np.float64).reshape(-1, 3)
         Tp, TMp = _sorted_tris(d["tris"], d.get("tri_materials"), nmat)

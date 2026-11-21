@@ -184,10 +184,53 @@ class Cuts(unittest.TestCase):
 
 
 class BuildFaults(unittest.TestCase):
+    def test_terrain_pavement_only_replaces_urban_paved_bases(self):
+        import roads
+        city = roads.Spec(9., "paved", True, "trunk", False)
+        signs = np.array([-1, -2])
+        got = {"pieces": [], "roads": [(None, city), (None, city._replace(urban=False))],
+               "lines": [], "kept": [], "outlines": [],
+               "mesh": {"v": np.array([[0., 0.], [2., 0.], [0., 2.], [2., 2.]]),
+                        "tri": np.array([[0, 1, 2], [1, 3, 2]]), "uv": np.zeros((4, 2)),
+                        "owner": signs, "kind": np.ones(2)}}
+        box = (-10, -10, 10, 10)
+        def base(painted):
+            return np.concatenate([c["xy"][c["T"]] for c in roadsurf3.surface_chunks(
+                got, box, "CA", 0., terrain_pavement=painted) if c["layer"] == "base"])
+        self.assertEqual(len(base(False)), 2)
+        np.testing.assert_array_equal(base(True), base(False)[1:])
+
+    def test_kerbed_street_beyond_urban_land_cover_uses_terrain(self):
+        import roads
+        divided = roads.Spec(10., "paved", False, "trunk", True)._replace(kmh=70., median=20.)
+        slip = divided._replace(kmh=None, median=None, link=True, sides=(-1,))
+        for spec in (divided, slip):
+            self.assertTrue(roadsurf3._painted_street_surface(spec))
+            self.assertTrue(roadsurf3.replaces_ground_paint(spec))
+        for spec in (divided._replace(kmh=100.), divided._replace(median=80.), slip._replace(sides=()),
+                     divided._replace(cls="motorway")):
+            self.assertFalse(roadsurf3._painted_street_surface(spec))
+
+    def test_mapped_signal_at_far_link_end_uses_painted_pavement(self):
+        import geodesy
+        import roads
+        link = roads.Spec(10., "paved", False, "trunk", True)._replace(link=True, sides=())
+        specs = [link, link, link._replace(cls="motorway")]
+        lines = np.array([[0., 0.], [1000., 0.], [0., 60.], [1000., 60.], [0., 0.], [1000., 0.]])
+        got = {"roads": list(enumerate(specs)), "mesh": {"owner": np.array([-1, -2, -3, 0])},
+               "inputs": {"r_off": np.array([0, 2, 4, 6]), "rxy": lines}}
+        frame = geodesy.EnuFrame(45., -90.)
+        far_cells = roadsurf3._cells_of(frame, (970., -30., 1030., 30.))
+        def mapped(keys):
+            self.assertTrue(set(far_cells).issubset(keys))
+            return np.array([[1000., 7.]])
+        self.assertEqual(roadsurf3._signalled_link_owners(frame, got, mapped), {-1})
+        self.assertFalse(roadsurf3._signalled_link_owners(frame, got, lambda _: None))
+
     def test_surface_cache_generation(self):
         import revisit
         self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "off"), "BNE_ROADSURF_V3=off")
-        self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "surface"), "BNE_ROADSURF_V3=surface@v5")
+        self.assertEqual(revisit.keyed_value("BNE_ROADSURF_V3", "surface"), "BNE_ROADSURF_V3=surface@v7")
 
     def test_fallback_marks_the_active_tile_short(self):
         from unittest.mock import patch
@@ -334,24 +377,29 @@ class SurfacePartition(unittest.TestCase):
         from test_roads import FRAME, features
         import surface as sf
 
-        # Move the whole surface north. All three painters must remove the old asphalt.
-        roads = features([[(-32., 0.), (32., 0.)]], ["motorway"])
-        surface = FakeSurface([roads], [], [])
-        surface.md = object()
+        # Move an event north of the mapped line. A motorway adopts its reconstructed
+        # surface. A city trunk also keeps its ordinary, tapered carriageway underneath.
         xy = np.array([[-32., 12.], [32., 12.], [32., 20.], [-32., 20.]])
         geom = xy, np.array([[0, 1, 2], [0, 2, 3]], np.int64), np.zeros(2, np.uint8)
         photo = np.full((64, 64, 3), [20, 110, 30], np.uint8)
         north, east = np.mgrid[-32.:32., -32.:32.]
         lat, lon, _ = FRAME.enu_to_geodetic(east, north, 0.)
         idx = np.full((64, 64), sf.GRASS, np.uint8)
-        with patch.object(roadsurf3, "ON", True), patch.object(roadsurf3, "paint_geometry", return_value=geom):
-            painted = sf.paint_square(photo, FRAME, -32, -32, 64, surface, simple=True)
-            mask = sf.road_mask(FRAME, -32, -32, 64, 64, surface, corners=False)
-            mat = sf.paint_roads(idx, lat, lon, [roads], 1., v3=(FRAME, surface))
-        self.assertEqual((mask[16, 32], mask[32, 32]), (255, 0))
-        self.assertFalse(np.array_equal(painted[16, 32], photo[16, 32]))
-        np.testing.assert_array_equal(painted[32, 32], photo[32, 32])
-        self.assertEqual((mat[48, 32], mat[32, 32]), (sf.ASPHALT, sf.GRASS))
+        for cls, retained in (("motorway", False), ("trunk", True)):
+            with self.subTest(cls=cls):
+                roads = features([[(-32., 0.), (32., 0.)]], [cls])
+                surface = FakeSurface([roads], [], [])
+                surface.md = object()
+                surface.urban = lambda lat, lon: np.ones_like(lat, bool)
+                with patch.object(roadsurf3, "ON", True), patch.object(roadsurf3, "paint_geometry", return_value=geom):
+                    painted = sf.paint_square(photo, FRAME, -32, -32, 64, surface, simple=True)
+                    mask = sf.road_mask(FRAME, -32, -32, 64, 64, surface, corners=False)
+                    mat = sf.paint_roads(idx, lat, lon, [roads], 1., surface.urban, v3=(FRAME, surface))
+                self.assertEqual(mask[16, 32], 255)
+                self.assertEqual(mask[32, 32], 255 if retained else 0)
+                self.assertFalse(np.array_equal(painted[16, 32], photo[16, 32]))
+                self.assertEqual(np.array_equal(painted[32, 32], photo[32, 32]), not retained)
+                self.assertEqual((mat[48, 32], mat[32, 32]), (sf.ASPHALT, sf.ASPHALT if retained else sf.GRASS))
 
 
 if __name__ == "__main__":
