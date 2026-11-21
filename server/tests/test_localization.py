@@ -19,7 +19,7 @@ spec.loader.exec_module(check_locales)
 class LocalizationTests(unittest.TestCase):
     def test_launcher_uses_polish_and_falls_back_to_english(self):
         self.assertEqual(Translator("pl_PL.UTF-8").t("launcher.label.worldServer"), "Serwer świata")
-        self.assertEqual(Translator("fr-CA").t("launcher.label.worldServer"), "World server")
+        self.assertEqual(Translator("sv-SE").t("launcher.label.worldServer"), "World server")
         self.assertEqual(Translator("pl").t("launcher.update.downloaded", version="1.2.3"),
                          "Pobrano BeamNG.Earth 1.2.3")
 
@@ -46,6 +46,34 @@ class LocalizationTests(unittest.TestCase):
                 patch("ctypes.windll", Mock(kernel32=kernel), create=True):
             self.assertEqual(Translator(_system_locale()).language, "pl-PL")
         kernel.GetUserDefaultLocaleName.assert_not_called()
+
+    def test_shipped_game_ids_and_native_catalogs_cover_all_official_languages(self):
+        manifest = json.loads((check_locales.CATALOGS / "catalogs.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(manifest), 13)
+        for tag, meta in manifest.items():
+            with self.subTest(tag=tag, game=meta["gameLocale"]):
+                self.assertEqual(Translator(meta["gameLocale"]).language, tag)
+                self.assertEqual(Translator(meta["gameLocale"].lower().replace("_", "-")).language, tag)
+        for alias, tag in (("es_MX", "es-419"), ("pt", "pt-BR"),
+                           ("fr_CA", "fr-FR"), ("zh_TW", "zh-Hant"), ("zh_CN", "zh-Hans")):
+            self.assertEqual(Translator(alias).language, tag)
+        issues = []
+        self.assertEqual(check_locales.host_report(manifest, issues),
+                         {meta["gameLocale"]: 22 for meta in manifest.values()})
+        self.assertEqual(issues, [])
+
+    def test_partial_regional_catalog_falls_back_to_english_instead_of_sibling(self):
+        with tempfile.TemporaryDirectory() as target:
+            root = Path(target)
+            for filename, contents in {
+                "catalogs.json": {"en": {}, "pt-BR": {"aliases": ["pt"]}, "pt-PT": {}},
+                "en.json": {"launcher.test": "English"},
+                "pt-BR.json": {"launcher.test": "Brazilian Portuguese"},
+                "pt-PT.json": {},
+            }.items():
+                (root / filename).write_text(json.dumps(contents), encoding="utf-8")
+            self.assertEqual(Translator("pt", root).t("launcher.test"), "Brazilian Portuguese")
+            self.assertEqual(Translator("pt_PT", root).t("launcher.test"), "English")
 
     def test_duplicate_locale_registrations_are_reported(self):
         with tempfile.TemporaryDirectory() as target:

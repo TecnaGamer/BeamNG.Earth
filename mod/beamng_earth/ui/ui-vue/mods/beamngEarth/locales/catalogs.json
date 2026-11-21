@@ -1,4 +1,18 @@
 {
-  "en": { "name": "English", "direction": "ltr" },
-  "pl-PL": { "name": "Polski", "direction": "ltr", "aliases": ["pl"] }
+  "en": { "name": "English", "direction": "ltr", "gameLocale": "en-US" },
+  "de-DE": { "name": "Deutsch (Deutschland)", "direction": "ltr", "gameLocale": "de_DE", "aliases": ["de"] },
+  "es-ES": { "name": "Español (España)", "direction": "ltr", "gameLocale": "es_ES", "aliases": ["es"] },
+  "es-419": {
+    "name": "Español (Latinoamérica)", "direction": "ltr", "gameLocale": "es_419",
+    "aliases": ["es-AR", "es-BO", "es-CL", "es-CO", "es-CR", "es-CU", "es-DO", "es-EC", "es-GT", "es-HN", "es-MX", "es-NI", "es-PA", "es-PE", "es-PR", "es-PY", "es-SV", "es-US", "es-UY", "es-VE"]
+  },
+  "fr-FR": { "name": "Français (France)", "direction": "ltr", "gameLocale": "fr_FR", "aliases": ["fr"] },
+  "ja-JP": { "name": "日本語 (日本)", "direction": "ltr", "gameLocale": "ja_JP", "aliases": ["ja"] },
+  "ko-KR": { "name": "한국어 (대한민국)", "direction": "ltr", "gameLocale": "ko_KR", "aliases": ["ko"] },
+  "pl-PL": { "name": "Polski", "direction": "ltr", "gameLocale": "pl_PL", "aliases": ["pl"] },
+  "pt-BR": { "name": "Português (Brasil)", "direction": "ltr", "gameLocale": "pt_BR", "aliases": ["pt"] },
+  "pt-PT": { "name": "Português (Portugal)", "direction": "ltr", "gameLocale": "pt_PT" },
+  "ru-RU": { "name": "Русский (Россия)", "direction": "ltr", "gameLocale": "ru_RU", "aliases": ["ru"] },
+  "zh-Hans": { "name": "中文（简体）", "direction": "ltr", "gameLocale": "zh_Hans", "aliases": ["zh", "zh-CN", "zh-SG", "zh-MY", "zh-CHS"] },
+  "zh-Hant": { "name": "中文（繁體）", "direction": "ltr", "gameLocale": "zh_Hant", "aliases": ["zh-TW", "zh-HK", "zh-MO", "zh-CHT"] }
 }

@@ -75,7 +75,8 @@ local function refresh()
   local tag = normalize(choice == 'auto' and game or choice)
   chain = {}
   while tag ~= '' do
-    add(tags[tag])
+    local match = tags[tag]
+    if match and (#chain == 0 or normalize(match) == tag) then add(match) end
     tag = tag:match('^(.*)%-[^%-]+$') or ''
   end
   add('en')
@@ -143,15 +144,26 @@ local function signature(value)
   return table.concat(names, ',')
 end
 
--- Cardinal rules for the languages with plural messages on the Lua side.
+-- Cardinal rules for the shipped locales. Counts passed by the HUD are numbers,
+-- so the million category applies only to exact, nonzero integer multiples.
 local function plural(tag, count)
   if type(count) ~= 'number' or count ~= count or math.abs(count) == math.huge then return 'other' end
+  tag = normalize(tag)
+  local language = tag:match('^[a-z]+')
+  if language == 'ja' or language == 'ko' or language == 'zh' then return 'other' end
   local n = math.abs(count)
-  if n == 1 then return 'one' end
-  if n == math.floor(n) and (normalize(tag):match('^pl%-') or normalize(tag) == 'pl') then
+  local integer = n == math.floor(n)
+  if language == 'ru' and integer then
+    local digit, lastTwo = n % 10, n % 100
+    if digit == 1 and lastTwo ~= 11 then return 'one' end
+    return digit >= 2 and digit <= 4 and (lastTwo < 12 or lastTwo > 14) and 'few' or 'many'
+  end
+  if n == 1 or (n < 2 and (language == 'fr' or tag == 'pt-br' or tag == 'pt')) then return 'one' end
+  if language == 'pl' and integer then
     local digit, lastTwo = n % 10, n % 100
     return digit >= 2 and digit <= 4 and (lastTwo < 12 or lastTwo > 14) and 'few' or 'many'
   end
+  if n > 0 and n % 1000000 == 0 and (language == 'es' or language == 'fr' or language == 'pt') then return 'many' end
   return 'other'
 end
 

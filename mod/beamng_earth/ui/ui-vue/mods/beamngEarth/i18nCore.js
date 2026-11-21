@@ -38,8 +38,11 @@ export function localeChain(tag, manifest) {
   const chain = new Set()
   const parts = normalizeLocale(tag).split("-")
   while (parts.length) {
-    const locale = index.get(parts.join("-"))
-    if (locale) chain.add(locale)
+    const part = parts.join("-")
+    const locale = index.get(part)
+    // A default alias can select a language, but cannot supply another
+    // region's missing text. Only a registered parent can do that.
+    if (locale && (!chain.size || normalizeLocale(locale) === part)) chain.add(locale)
     parts.pop()
   }
   chain.add("en")

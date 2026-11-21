@@ -1,10 +1,34 @@
 # BeamNG.Earth localization
 
-Choose **Interface → Interface language** from the BeamNG.Earth settings page. **Automatic (game language)** follows BeamNG.drive. The list is built from the installed catalogs. English and Polish are included.
+Choose **Interface → Interface language** from the BeamNG.Earth settings page. **Automatic (game language)** follows BeamNG.drive. You can also choose a language manually. The list is built from the installed catalogs.
 
 The in-game preference lives in `settings/beamngEarth-language.json` in the current BeamNG user folder. The mod saves it separately from graphics, world, and server settings. Changing it updates the mod's open Vue views, the pause menu buttons, and Lua messages as they are redrawn. An already displayed game confirmation dialog retains the text with which it opened. The host game's HUD app library and key bindings follow the game's language. Route metadata is presented to BeamNG when the routes register.
 
 The launcher selects a language at process startup. Use `--language pl-PL` or `BNE_LANGUAGE=pl-PL` to override the operating system locale. `--language` takes priority over the environment variable. Server logs, command-line flags, protocol values and third-party content use their original conventions.
+
+## Supported languages
+
+The language picker covers the 13 official BeamNG.drive interface variants. The game locale IDs below match the translation folders shipped with BeamNG.drive 0.40.6. [Steam language list](https://store.steampowered.com/app/284160/BeamNGdrive/)
+
+| Display name | BeamNG.Earth catalog | BeamNG.drive locale |
+| --- | --- | --- |
+| English | `en` | `en-US` |
+| Deutsch (Deutschland) | `de-DE` | `de_DE` |
+| Español (España) | `es-ES` | `es_ES` |
+| Español (Latinoamérica) | `es-419` | `es_419` |
+| Français (France) | `fr-FR` | `fr_FR` |
+| 日本語 (日本) | `ja-JP` | `ja_JP` |
+| 한국어 (대한민국) | `ko-KR` | `ko_KR` |
+| Polski | `pl-PL` | `pl_PL` |
+| Português (Brasil) | `pt-BR` | `pt_BR` |
+| Português (Portugal) | `pt-PT` | `pt_PT` |
+| Русский (Россия) | `ru-RU` | `ru_RU` |
+| 中文（简体） | `zh-Hans` | `zh_Hans` |
+| 中文（繁體） | `zh-Hant` | `zh_Hant` |
+
+English and Polish cover the full shared catalog. The eleven newer catalogs cover common interface labels, map and navigation actions, notifications and selected launcher messages. These initial translations were prepared with AI assistance and need community language review, especially for regional wording, specialist terminology and layout. Longer help, configuration and diagnostic messages often still fall back to English. The validator reports the exact coverage and missing keys for each language.
+
+Language IDs are matched case-insensitively and accept both hyphens and underscores. The manifest also records aliases. For example, `es-MX` selects `es-419`, `pt` selects `pt-BR`, `zh-CN` selects `zh-Hans`, and `zh-TW` or `zh-HK` selects `zh-Hant`. The unqualified `es` defaults to `es-ES`, and `zh` defaults to `zh-Hans`.
 
 ## Update a translation
 
@@ -21,10 +45,10 @@ Labels in the host game's HUD app library and input binding screen have their ow
 
 1. Add a file named for the locale, such as `pt-BR.json`.
 2. Register it in `catalogs.json` with its name in that language and its direction (`ltr` or `rtl`). Declare an optional alias for an engine locale that should use that translation. For example, the supported alias `pl` resolves to `pl-PL`. A separate general-purpose `pl` catalog can take over that alias in the future.
-3. Copy only the entries you can translate. The player can already select the language with a partial file.
-4. For translations of the HUD library and controls, also add a game-owned catalog using the locale ID recognized by your BeamNG.drive installation.
+3. Add the entries you can translate. A partial file is enough to make the language selectable.
+4. For the HUD library and controls, put a complete game-owned catalog in the corresponding game locale folder and record its exact folder name in the manifest's `gameLocale` field.
 
-The sequence is regional locale, progressively less specific locales, and English. Locale matching accepts the hyphens and underscores used by the UI, with case-insensitive matching. Invalid text or incompatible placeholders fall through to the next catalog. Vue uses the selected language for display numbers and dates, with the source message's language for numbers embedded in a fallback message. Place names, coordinates, configuration keys, action IDs and values on the wire are separate from the messages. Game display settings still select the available metric or imperial units. Catalog metadata sets text direction at feature roots. A future RTL translation needs layout and input testing.
+The sequence is the selected catalog, any explicitly registered parent catalog, and English. Generic aliases select a default variant when the requested locale has no match. An explicit regional or script selection keeps its own wording, with English filling its gaps when no parent catalog exists. For example, a missing Traditional Chinese message falls back to English. Invalid text or incompatible placeholders also fall through to the next catalog. Vue uses the selected language for display numbers and dates, with the source message's language for numbers embedded in a fallback message. Place names, coordinates, configuration keys, action IDs and values on the wire are separate from the messages. Game display settings still select the available metric or imperial units. Catalog metadata sets text direction at feature roots. A future RTL translation needs layout and input testing.
 
 The UI shares in-flight catalog reads and caches successful results for the mounted mod. A timed-out or invalid response can be retried on the next locale selection after a short cooldown. If English is temporarily unavailable, localizable labels show a placeholder until English is readable again. Remounting reads the catalog from the current copy of the mod.
 
@@ -51,7 +75,7 @@ Plural messages are JSON objects keyed by cardinal category. Include `other` and
 }
 ```
 
-Pass `count` as a number. Vue uses `Intl.PluralRules` with the locale that supplied the message. Lua implements the shipped English and Polish cardinal rules. If a future language needs other categories for Lua-owned messages, extend that function and the tests. The launcher uses scalar messages.
+Pass `count` as a number. Vue uses `Intl.PluralRules` with the locale that supplied the message. Lua handles the cardinal categories of the shipped locales, including Russian forms, regional Portuguese rules and the single form used in Japanese, Korean and Chinese. If a future language needs other categories for Lua-owned messages, extend that function and the tests. The launcher uses scalar messages.
 
 ## Validate and inspect coverage
 
@@ -65,7 +89,7 @@ python tools/run_lua_tests.py test_i18n
 python server/tests/test_localization.py
 ```
 
-The report compares every registered catalog with English and flags malformed JSON, duplicate keys, invalid value types, placeholder and plural mismatches, unknown keys and missing or unused references. Keep translation references as literal keys or in explicit lookup tables so the validator can find them. Coverage is by catalog entry. It measures the keys in the catalog and depends on the inventory of strings brought into the system. Partial locales pass unless marked required with `--require`. The quality gate requires Polish coverage.
+The report compares every registered catalog with English and flags malformed JSON, duplicate keys, invalid value types, placeholder and plural mismatches, unknown keys and missing or unused references. It also checks each declared game catalog against this mod's HUD and input binding metadata. Keep translation references as literal keys or in explicit lookup tables so the validator can find them. Coverage is by catalog entry. It measures the keys in the catalog and depends on the inventory of strings brought into the system. Partial locales pass unless marked required with `--require`. The quality gate requires Polish coverage.
 
 For live diagnostics, run `window.beamngEarthLocalization()` in BeamNG.drive's UI JavaScript console. It reports the detected game language, preference, active catalog, coverage, missing keys, fallback lookups observed after diagnostics were enabled, and validation messages. For the Lua side, run `dump(require('beamngEarth/i18n').report())` in the game engine Lua console. Both diagnostics deduplicate warnings. The console tools avoid adding a persistent developer panel to the HUD.
 

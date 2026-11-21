@@ -16,7 +16,7 @@ test("bundled Polish, aliases, Unicode, switching and regional formatting", () =
   assert.equal(ui.t("settings.language.label"), "Język interfejsu")
   assert.equal(ui.number(1.5, 1), "1,5")
   assert.match(ui.date("2026-11-19"), /19.*lis.*2026/)
-  ui.select("fr-CA")
+  ui.select("sv-SE")
   assert.equal(ui.t("settings.language.label"), "Interface language")
   assert.equal(ui.number(1.5, 1), "1.5")
   ui.select("pl")
@@ -63,6 +63,48 @@ test("all bundled Polish messages load without fallback", () => {
   assert.deepEqual(ui.report().issues, [])
   assert.deepEqual(ui.report().missing, [])
   assert.equal(ui.report().coverage, 1)
+})
+
+const gameLocales = {
+  en: "en-US", "de-DE": "de_DE", "es-ES": "es_ES", "es-419": "es_419",
+  "fr-FR": "fr_FR", "ja-JP": "ja_JP", "ko-KR": "ko_KR", "pl-PL": "pl_PL",
+  "pt-BR": "pt_BR", "pt-PT": "pt_PT", "ru-RU": "ru_RU",
+  "zh-Hans": "zh_Hans", "zh-Hant": "zh_Hant",
+}
+
+test("all bundled game IDs resolve to their catalogs and have matching native metadata", () => {
+  assert.deepEqual(Object.keys(manifest).sort(), Object.keys(gameLocales).sort())
+  const native = folder => JSON.parse(readFileSync(
+    new URL("../beamng_earth/locales/translations/" + folder + "/beamngEarth.translations.json", import.meta.url), "utf8"))
+  const nativeKeys = Object.keys(native("en-US")).sort()
+  const ui = createTranslator(manifest, en)
+  for (const [tag, game] of Object.entries(gameLocales)) {
+    assert.equal(manifest[tag].gameLocale, game)
+    for (const variant of [game, game.toLowerCase().replaceAll("_", "-")]) {
+      assert.deepEqual(localeChain(variant, manifest), tag === "en" ? ["en"] : [tag, "en"], variant)
+    }
+    assert.deepEqual(Object.keys(native(game)).sort(), nativeKeys)
+    const catalog = read(tag)
+    assert.ok(ui.load(tag, catalog))
+    ui.select(game)
+    assert.equal(ui.t("settings.language.label"), catalog["settings.language.label"])
+  }
+  for (const [tag, expected] of Object.entries({
+    "es-MX": "es-419", es: "es-ES", pt: "pt-BR",
+    "zh-CN": "zh-Hans", "zh_HK": "zh-Hant", "zh_TW": "zh-Hant", zh: "zh-Hans", "fr_CA": "fr-FR",
+  })) assert.deepEqual(localeChain(tag, manifest), [expected, "en"])
+  assert.deepEqual(ui.report().issues, [])
+})
+
+test("regional defaults never fill missing messages from a sibling catalog", () => {
+  const ui = createTranslator(manifest, { "test.key": "English" })
+  for (const [sibling, selection] of [
+    ["es-ES", "es_MX"], ["pt-BR", "pt_PT"], ["zh-Hans", "zh_Hant"], ["zh-Hans", "zh-HK"],
+  ]) {
+    ui.load(sibling, { "test.key": "Sibling" })
+    ui.select(selection)
+    assert.equal(ui.t("test.key"), "English", selection)
+  }
 })
 
 let runtimeId = 0
@@ -113,6 +155,22 @@ function runtime(t, { fetchCatalog, bridge, catalogsManifest = manifest } = {}) 
 }
 
 const response = entries => ({ ok: true, json: async () => entries })
+
+test("the in-game selector lists all 13 catalogs and can override automatic language detection", async t => {
+  const host = runtime(t, { fetchCatalog: locale => response(read(locale)) })
+  const ui = await host.copy()
+  assert.deepEqual(ui.languageOptions.value.map(option => option.value).sort(), Object.keys(gameLocales).sort())
+  for (const [tag, game] of Object.entries(gameLocales)) {
+    await ui.setGameLocale(game)
+    assert.equal(ui.localizationReport().active, tag, game)
+    assert.equal(ui.t("settings.language.label"), read(tag)["settings.language.label"])
+  }
+  await ui.chooseLanguage("pt-PT")
+  await ui.setGameLocale("es_419")
+  assert.equal(ui.localizationReport().active, "pt-PT")
+  await ui.chooseLanguage("auto")
+  assert.equal(ui.localizationReport().active, "es-419")
+})
 
 test("separately evaluated UI modules share the preference and one request per catalog", async t => {
   const host = runtime(t)

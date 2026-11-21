@@ -61,4 +61,49 @@ messages['en.json'] = english
 clock = clock + 3
 missingBase.gameLanguageChanged()
 assert(missingBase.t('greeting', { name = 'Łódź' }) == 'Cześć Łódź')
+
+local regional = {
+  {'de-DE', 'de_DE', {}, {[0] = 'other', [1] = 'one', [2] = 'other'}},
+  {'es-ES', 'es_ES', {'es'}, {[0] = 'other', [1] = 'one', [1000000] = 'many'}},
+  {'es-419', 'es_MX', {'es-MX'}, {[0] = 'other', [1] = 'one', [1000000] = 'many'}},
+  {'fr-FR', 'fr_FR', {'fr'}, {[0] = 'one', [1.5] = 'one', [2] = 'other', [1000000] = 'many'}},
+  {'pt-BR', 'pt_BR', {'pt'}, {[0] = 'one', [1.5] = 'one', [2] = 'other', [1000000] = 'many'}},
+  {'pt-PT', 'pt_PT', {}, {[0] = 'other', [1] = 'one', [1.5] = 'other', [1000000] = 'many'}},
+  {'ru-RU', 'ru_RU', {'ru'}, {[0] = 'many', [1] = 'one', [2] = 'few', [5] = 'many', [11] = 'many',
+    [12] = 'many', [21] = 'one', [-22] = 'few', [1.5] = 'other'}},
+  {'ja-JP', 'ja_JP', {'ja'}, {[0] = 'other', [1] = 'other', [2] = 'other'}},
+  {'ko-KR', 'ko_KR', {'ko'}, {[0] = 'other', [1] = 'other', [2] = 'other'}},
+  {'zh-Hans', 'zh_Hans', {'zh', 'zh-CN'}, {[0] = 'other', [1] = 'other', [2] = 'other'}},
+  {'zh-Hant', 'zh_TW', {'zh-TW'}, {[0] = 'other', [1] = 'other', [2] = 'other'}},
+}
+for _, case in ipairs(regional) do
+  local tag, _, aliases, counts = unpack(case)
+  local forms = {}
+  for _, form in pairs(counts) do forms[form] = '{count}/' .. form end
+  forms.other = '{count}/other'
+  messages['catalogs.json'][tag] = {name = tag, aliases = aliases}
+  messages[tag .. '.json'] = {files = forms}
+end
+messages['es-ES.json'].base = 'Sibling'
+messages['pt-BR.json'].base = 'Sibling'
+messages['zh-Hans.json'].base = 'Sibling'
+
+local multilingual = dofile('../beamng_earth/lua/ge/extensions/beamngEarth/i18n.lua')
+assert(multilingual.setPreference('auto'))
+for _, case in ipairs(regional) do
+  local tag, gameTag, _, counts = unpack(case)
+  game = gameTag
+  multilingual.gameLanguageChanged()
+  assert(multilingual.language() == tag, gameTag)
+  for count, form in pairs(counts) do
+    assert(multilingual.t('files', {count = count}) == count .. '/' .. form, tag .. '/' .. count)
+  end
+  if tag == 'es-419' or tag == 'pt-PT' or tag == 'zh-Hant' then
+    assert(multilingual.t('base') == 'English', tag)
+  end
+end
+assert(multilingual.setPreference('pt-PT'))
+game = 'zh_Hans'
+multilingual.gameLanguageChanged()
+assert(multilingual.language() == 'pt-PT')
 print('test_i18n: preference, regional fallback, plural rules and catalog recovery passed')

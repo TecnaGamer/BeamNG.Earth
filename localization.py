@@ -67,8 +67,9 @@ class Translator:
         chain = []
         parts = _tag(language).split("-")
         while parts:
-            match = tags.get("-".join(parts))
-            if match and match not in chain:
+            part = "-".join(parts)
+            match = tags.get(part)
+            if match and (not chain or _tag(match) == part):
                 chain.append(match)
             parts.pop()
         if "en" not in chain:

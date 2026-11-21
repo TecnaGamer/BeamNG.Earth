@@ -11,9 +11,21 @@ MOD = ROOT / "mod/beamng_earth"
 CATALOGS = MOD / "ui/ui-vue/mods/beamngEarth/locales"
 KEY = r"[a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+"
 TAG = re.compile(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*")
+GAME_LOCALE = re.compile(r"[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*")
 PARAM = re.compile(r"\{([a-zA-Z][a-zA-Z0-9_]*)\}")
 FORMS = set("zero one two few many other".split())
-REQUIRED_FORMS = {"en": {"one", "other"}, "pl": {"one", "few", "many", "other"}}
+REQUIRED_FORMS = {
+    "de": {"one", "other"},
+    "en": {"one", "other"},
+    "es": {"one", "many", "other"},
+    "fr": {"one", "many", "other"},
+    "ja": {"other"},
+    "ko": {"other"},
+    "pl": {"one", "few", "many", "other"},
+    "pt": {"one", "many", "other"},
+    "ru": {"one", "few", "many", "other"},
+    "zh": {"other"},
+}
 
 
 def unique_object(pairs):
@@ -49,9 +61,11 @@ def validate(value, locale):
         return ("text", signature(value))
     if not isinstance(value, dict):
         raise ValueError("expected text or a plural object")
-    required = REQUIRED_FORMS.get(locale.split("-")[0].lower(), {"other"})
-    if not required <= value.keys() or not value.keys() <= FORMS:
-        raise ValueError(f"invalid plural forms, expected at least {', '.join(sorted(required))}")
+    expected_forms = REQUIRED_FORMS.get(locale.split("-")[0].lower())
+    if expected_forms is not None and value.keys() != expected_forms:
+        raise ValueError(f"invalid plural forms, expected {', '.join(sorted(expected_forms))}")
+    if "other" not in value or not value.keys() <= FORMS:
+        raise ValueError("invalid plural forms or missing other")
     params = signature(value["other"])
     if "count" not in params or any(signature(text) != params for text in value.values()):
         raise ValueError("all plural forms must have the same placeholders, including {count}")
@@ -73,20 +87,37 @@ def references(base):
     return known, explicit
 
 
-def host_report(issues):
+def host_report(manifest, issues):
     root = MOD / "locales/translations"
-    english = read_object(root / "en-US/beamngEarth.translations.json", issues)
-    polish = read_object(root / "pl_PL/beamngEarth.translations.json", issues)
+    filename = "beamngEarth.translations.json"
     metadata = [read_object(path, issues) for path in MOD.glob("ui/modules/apps/BeamNGEarth*/app.json")]
     actions = read_object(MOD / "lua/ge/extensions/core/input/actions/beamngEarth.json", issues)
     expected = {item.get(field) for item in metadata for field in ("name", "description")}
     expected |= {item.get(field) for item in actions.values() if isinstance(item, dict) for field in ("title", "desc")}
-    for key in expected | english.keys() | polish.keys():
-        if not isinstance(key, str) or not key.startswith("beamngEarth.") or key not in expected:
-            issues.append(f"invalid or unused game-owned message: {key}")
-        elif not all(isinstance(catalog.get(key), str) and catalog[key].strip() for catalog in (english, polish)):
-            issues.append(f"incomplete game-owned message: {key}")
-    return {"en-US": len(english), "pl_PL": len(polish)}
+    coverage, seen = {}, set()
+    for tag, meta in manifest.items():
+        folder = meta.get("gameLocale") if isinstance(meta, dict) else None
+        if folder is None:
+            continue
+        if not isinstance(folder, str) or not GAME_LOCALE.fullmatch(folder) or folder.casefold() in seen:
+            issues.append(f"{tag}: invalid or duplicate gameLocale: {folder!r}")
+            continue
+        seen.add(folder.casefold())
+        path = root / folder / filename
+        catalog = read_object(path, issues)
+        valid = 0
+        for key in expected | catalog.keys():
+            if not isinstance(key, str) or not key.startswith("beamngEarth.") or key not in expected:
+                issues.append(f"{folder}: invalid or unused game-owned message: {key}")
+            elif not isinstance(catalog.get(key), str) or not catalog[key].strip():
+                issues.append(f"{folder}: incomplete game-owned message: {key}")
+            else:
+                valid += 1
+        coverage[folder] = valid
+    for path in root.glob(f"*/{filename}"):
+        if path.parent.name not in coverage:
+            issues.append(f"unregistered game-owned catalog: {path.parent.name}/{filename}")
+    return coverage
 
 
 def report(directory=CATALOGS, required=()):
@@ -157,7 +188,7 @@ def report(directory=CATALOGS, required=()):
             issues.append(f"{tag}: {len(missing)} required messages missing")
     for tag in sorted(set(required) - registered):
         issues.append(f"{tag}: required locale is not registered")
-    host = host_report(issues) if directory == CATALOGS else {}
+    host = host_report(manifest, issues) if directory == CATALOGS else {}
     return {"locales": coverage, "game_metadata": host, "issues": sorted(set(issues))}
 
 
