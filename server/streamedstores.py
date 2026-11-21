@@ -5,6 +5,7 @@ import csv
 from functools import lru_cache
 import json
 import logging
+import re
 import os
 from typing import NamedTuple
 import dmath
@@ -143,6 +144,49 @@ def mapped_tenants(layers, ring, anchor=None, local=False):
             trusted = confidence is not None and float(confidence) >= 0.8
             tenants[str(f.ids[i])] = (name if trusted else None, points[j])
     return list(tenants.values())
+
+
+SUITE_ADDRESS = re.compile(r"^([0-9]+[a-z]?\s+.+?)[ ,]+(?:suite|ste\.?|unit|#)\s*([a-z0-9-]+)$", re.I)
+STREET_SUFFIX = {"drive":"dr", "street":"st", "avenue":"ave", "road":"rd",
+                 "boulevard":"blvd", "lane":"ln", "court":"ct"}
+
+
+def suite_directory(layers, center, anchor):
+    """List known ground-level retail tenants at one numbered address. Suite IDs are labels only."""
+    scale = np.array([111320*dmath.cos(dmath.radians(center[1])), 111132])
+    anchors, entries = set(), {}
+    for feats, rows, points in layers:
+        attrs = feats.attrs
+        if not {"street_address","name","confidence"} <= attrs.keys():
+            continue
+        for j in np.flatnonzero(np.all(np.abs((points-center)*scale) <= 50,axis=1)):
+            i = rows[j]
+            def value(key):
+                return attrs[key][i] if key in attrs else None
+            addr = SUITE_ADDRESS.fullmatch(str(value("street_address") or "").strip())
+            if (not addr or not float(value("confidence") or 0) >= .9
+                    or value("operating_status") in {"closed","permanently_closed"}):
+                continue
+            name = str(value("name") or "").strip()
+            if not name or len(name)>80 or not name.isprintable():
+                continue
+            words = addr[1].casefold().replace(".","").split()
+            words[-1] = STREET_SUFFIX.get(words[-1], words[-1])
+            key = tuple(words)
+            unit = addr[2].upper()
+            if name.casefold() == anchor.casefold() and np.linalg.norm((points[j]-center)*scale)<=15:
+                anchors.add((key,unit))
+            elif not local_sign(name,{value("basic_category"),value("taxonomy")}):
+                continue
+            entries.setdefault(key,{}).setdefault(unit,{})[name.casefold()] = name
+    if len(anchors)!=1:
+        return ()
+    key,unit = next(iter(anchors))
+    tenants = entries[key]
+    if len(tenants[unit])!=1:
+        return ()
+    rows = tuple((u,next(iter(names.values()))) for u,names in sorted(tenants.items()) if len(names)==1)
+    return rows if 2 <= len(rows) <= 8 else ()
 
 
 def exterior_frontages(layers, coords, ring, label, neighbors):
@@ -478,6 +522,10 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     options["local_panel"] = (brand.style, round(min(4.2, spec.height - .2), 1))
                     if signed_wall is not None or exterior:
                         options["local_panel"] = (brand.style, round(spec.height+.65, 2), "raised")
+                    if (signed_wall is not None or exterior) and layers:
+                        directory = suite_directory(layers,geometry.mean(0),brand.name)
+                        if directory:
+                            options["local_panel"] += (directory,)
                     brand = brand.name
                 entry = cached_entry(cache, brand, geometry, heading, finish, doors=doors, entrance_bearing=entrance_bearing, **options)
                 if signed_wall is not None:

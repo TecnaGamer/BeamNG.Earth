@@ -151,6 +151,16 @@ def export_store(path, match, observations, out, *, entrance_direction=None, loc
                 mesh([(*corners[k],top) for k in (0,1,2,0,2,3)], 2)
             mesh([(*left,bottom), (*right,bottom), (*right,top), (*left,bottom), (*right,top), (*left,top)],
                  texture(art), [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
+            if len(raised) == 2:
+                rows = raised[1]
+                board = whole_store.directory_image(rows)
+                # Place the shared directory near eye level, beside the entrance.
+                hi = min(2.1, bottom-.15)
+                lo = hi-.70
+                right = half_span + normal*.015
+                left = right-axis*min(1.4,span*.42)
+                mesh([(*left,lo), (*right,lo), (*right,hi), (*left,lo), (*right,hi), (*left,hi)],
+                     texture(board), [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
         elif tenant_sign:
             # Ground-floor glazing and an independent fascia with lettering readable across parking.
             panel_width = 2 * np.linalg.norm(half_span)

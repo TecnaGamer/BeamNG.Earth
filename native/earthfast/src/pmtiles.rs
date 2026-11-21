@@ -1155,6 +1155,8 @@ fn text_col(layer: &str, col: &str, p: &Props, src: Option<&J>, sources: &J, hei
             }
         }
         "taxonomy" => p.json("taxonomy").get("primary").and_then(jstr),
+        "street_address" => p.json("addresses").as_array().and_then(|a| a.first())
+            .and_then(|address| address.get("freeform")).and_then(jstr),
         "brand_wikidata" => p.json("brand").get("wikidata").and_then(jstr),
         "brand_name" => p.json("brand").get("names").and_then(|n| n.get("primary")).and_then(jstr),
         "tags" => p.s("source_tags"),

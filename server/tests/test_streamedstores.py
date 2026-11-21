@@ -152,6 +152,25 @@ class StreamedStoresTest(unittest.TestCase):
         points[2] = [5.5/scale[0],-1./scale[1]]
         self.assertEqual(names(),["East"])
 
+    def test_suite_directory_requires_one_address_and_distinct_tenants(self):
+        from streamedstores import suite_directory, cached_entry
+        center = np.array([-80.,35.])
+        coords = center+np.array([[0.,0.],[.00010,0.],[.00012,0.]])
+        attrs = {"street_address":["101 Oak Dr., Ste. B","101 Oak Drive Suite A","110 Oak Dr #C"],
+                 "name":["Anchor","Oak Tea","Other"],"confidence":[.99]*3,"basic_category":["cafe"]*3}
+        layers = [(SimpleNamespace(attrs=attrs),np.arange(3),coords)]
+        directory = suite_directory(layers,center,"Anchor")
+        self.assertEqual(directory,(("A","Oak Tea"),("B","Anchor")))
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)/"threedmr_cache"/"storefronts"
+            entry = cached_entry(cache,"Anchor",coords[:2],None,None,local_panel=("shop",5.4,"raised",directory))
+            model = threedmr.load_local_model(tmp,dict(entry,file="storefronts/"+entry["file"]))
+            self.assertEqual(len(model[2]),14)
+        attrs["street_address"][2] = "101 Oak Dr Unit A"
+        self.assertFalse(suite_directory(layers,center,"Anchor"))
+        del attrs["street_address"]
+        self.assertFalse(suite_directory(layers,center,"Anchor"))
+
     def test_catalog_matches_typed_cinemas_and_restaurant_aliases(self):
         from streamedstores import chain
         from store_match import brand

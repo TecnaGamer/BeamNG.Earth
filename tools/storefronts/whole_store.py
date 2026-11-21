@@ -556,6 +556,21 @@ SIGN_COLORS["AMC Theatres"] = ("#282427", "#ed364a")
 SIGN_FONT = Path(__file__).resolve().parents[1] / "fonts" / "DejaVuSans-Bold.ttf"
 
 
+def directory_image(rows):
+    image = Image.new("RGB",(512,256),"#263338")
+    draw = ImageDraw.Draw(image)
+    draw.text((16,8),"DIRECTORY",font=ImageFont.truetype(SIGN_FONT,28),fill="white")
+    line = (image.height-52)//len(rows)
+    for i,(unit,name) in enumerate(rows):
+        y = 50+i*line
+        draw.line((16,y-2,496,y-2),fill="#829194")
+        label = f"{unit}   {name}"
+        font = ImageFont.truetype(SIGN_FONT,min(line-5,38))
+        size = max(1, int(font.size*min(1,478/max(1,font.getlength(label)))))
+        draw.text((16,y+2),label,font=ImageFont.truetype(SIGN_FONT,size),fill="white")
+    return image
+
+
 def local_sign_image(name, style, aspect):
     # Map listings sometimes append a category after a dash. Preserve the full
     # listing in metadata and give the trading name the readable sign area.
