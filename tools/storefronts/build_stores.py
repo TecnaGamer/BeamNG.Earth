@@ -145,7 +145,9 @@ def export_store(path, match, observations, out, *, entrance_direction=None, loc
             tall = min(1.25, span / 4)
             if style.startswith("mall_"):
                 tall = min(2.35, span/4)
-                if style == "mall_brand" and name in whole_store.SIGN_COLORS:
+                if style == "mall_banner":
+                    art = whole_store.tenant_banner(name, span/tall, tall)
+                elif style == "mall_brand" and name in whole_store.SIGN_COLORS:
                     art = whole_store.sign_image(name, span/tall, tall)
                 else:
                     art = whole_store.local_sign_image(name, "shop" if style in {"mall_brand","mall_entrance"} else style[5:], span/tall)

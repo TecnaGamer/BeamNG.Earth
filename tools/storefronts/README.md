@@ -94,3 +94,5 @@ business option enables named independent retailers and restaurants. Interior an
 receive no exterior sign from this rule. The existing mall building remains in place.
 
 Mall exterior signage can also use a qualified tenant pin within two metres of an explicitly mapped customer door. For operator-documented exterior access, `server/data/mall_exterior_access.csv` pairs an OSM building way with the tenant listing name and a source URL. Include only a tenant-specific exterior entrance. A recommended shared mall entry is insufficient. Each record still needs a current qualifying place pin on a distinguishable wall.
+
+With local business signs enabled, malls estimate frontage in view of parking aisles and outdoor walks. The generator budgets one visible retail identity per 38 m there, up to 18 on the shared shell. Existing tenant signs count first. Spare bays can advertise nearby mapped retail tenants on Inside the Mall panels. Confidence and proximity rank the candidates, and entrances reserve their own space.

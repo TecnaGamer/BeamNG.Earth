@@ -136,24 +136,30 @@ def mall_entrance_panels(coords, walks, occupied):
     walks = np.asarray(walks)
     near = np.any(np.all((walks >= lo) & (walks <= hi),axis=2),axis=1)
     candidates = []
-    for start,end in walks[near]:
-        for door, approach in ((start,end),(end,start)):
-            distance = np.linalg.norm((approach-door)*scale)
-            if distance < 2:
-                continue
-            outside = door + (approach-door)*min(1., 8./distance)
-            if contains_points(coords,outside[None])[0]:
-                continue
-            panel = parking_frontage(coords,door,(),walks=[outside])
+    approaches = np.concatenate((walks[near],walks[near,::-1]))
+    doors = approaches[:,0]
+    vectors = approaches[:,1]-doors
+    lengths = np.linalg.norm(vectors*scale,axis=1)
+    outside = doors+vectors*np.minimum(1.,8./np.maximum(lengths,1e-9))[:,None]
+    valid = (lengths>=2) & ~contains_points(coords,outside)
+    # An entrance panel has to be within two metres of the door. Reject distant walkway
+    # endpoints in batches before doing the full wall and sight-line calculation.
+    walls = (coords-coords[0])*scale
+    ends = np.roll(walls,-1,axis=0)
+    low,high = np.minimum(walls,ends)-2,np.maximum(walls,ends)+2
+    for batch in np.array_split(np.flatnonzero(valid), max(1,(int(valid.sum())+63)//64)):
+        xy = ((doors[batch]-coords[0])*scale)[:,None,:]
+        close = np.any(np.all((xy>=low)&(xy<=high),axis=2),axis=1)
+        for j in batch[close]:
+            panel = parking_frontage(coords,doors[j],(),walks=[outside[j]])
             if panel is None:
                 continue
             center = panel.mean(0)
+            if np.linalg.norm((center-doors[j])*scale)>2:
+                continue
             if any(np.linalg.norm((center-p.mean(0))*scale)<22 for _,p in occupied):
                 continue
-            if np.linalg.norm((center-door)*scale)>2:
-                continue
-            width = np.linalg.norm((panel[1]-panel[0])*scale)
-            candidates.append((width,center,panel))
+            candidates.append((np.linalg.norm((panel[1]-panel[0])*scale),center,panel))
     selected = []
     for _,center,panel in sorted(candidates,key=lambda c: (-c[0], *c[1])):
         if all(np.linalg.norm((center-p.mean(0))*scale) >= 55 for p in selected):
@@ -217,7 +223,7 @@ def businesses(md, keys):
         yield f, rows, f.lonlat[f.coord_off[f.ring_off[f.part_off[rows]]]]
 
 
-def mapped_tenants(layers, ring, anchor=None, local=False):
+def mapped_tenants(layers, ring, anchor=None, local=False, retail_candidates=None):
     lo, hi = ring.min(0), ring.max(0)
     tenants = {}
     for f, rows, points in layers:
@@ -252,6 +258,11 @@ def mapped_tenants(layers, ring, anchor=None, local=False):
             if local and not name and "drive_in_theater" not in categories:
                 name = local_sign(value("name"), categories)
             trusted = qualifies_business(confidence)
+            if retail_candidates is not None and trusted and any(
+                    str(c).endswith("_store") or c in {"shopping", "retail"} for c in categories):
+                title = name.name if isinstance(name, LocalSign) else name or value("name")
+                if isinstance(title,str) and 2 <= len(title.strip()) <= 80:
+                    retail_candidates.append((title.strip(),points[j],float(confidence)))
             tenants[str(f.ids[i])] = (name if trusted else None, points[j])
     return list(tenants.values())
 
@@ -361,6 +372,69 @@ def exterior_access_index():
     except OSError as error:
         LOG.warning("Mall exterior access data unavailable: %s", error)
     return index
+
+
+def mall_tenant_banners(coords, candidates, occupied, parking, walks):
+    """Estimate visible frontage in metres and fill open bays with nearby indoor retail identities."""
+    if not candidates:
+        return []
+    scale = np.array([111320*dmath.cos(dmath.radians(coords[0,1])),111132])
+    ring = (coords-coords[0])*scale
+    samples = []
+    if parking is not None and len(parking):
+        samples.append(np.asarray(parking))
+    if walks is not None and len(walks):
+        samples.extend((walks[:,0],walks.mean(axis=1),walks[:,1]))
+    if not samples:
+        return []
+    access = np.unique(np.concatenate(samples),axis=0)
+    pad = 50/scale
+    access = access[np.all((access>=coords.min(0)-pad)&(access<=coords.max(0)+pad),axis=1)]
+    access = (access[~contains_points(coords,access)]-coords[0])*scale
+    edges = np.roll(ring,-1,axis=0)-ring
+    winding = np.sign(np.sum(ring[:,0]*edges[:,1]-ring[:,1]*edges[:,0]))
+    slots, visible = [], 0.
+    for start,edge in zip(ring,edges):
+        length = np.linalg.norm(edge)
+        if length < 10:
+            continue
+        axis = edge/length
+        normal = winding*np.array([axis[1],-axis[0]])
+        ahead = (access-start)@normal
+        along = (access[(ahead>=1)&(ahead<=45)]-start)@axis
+        bays = max(1, int(length//12))
+        for bay in range(bays):
+            center = (bay+.5)*length/bays
+            if np.any(abs(along-center)<=10):
+                slots.append((start+axis*center,axis*winding,min(5.,length/bays*.43)))
+                visible += length/bays
+    def title(n):
+        return (n.name if isinstance(n,LocalSign) else n).casefold()
+    used = {title(n) for n,_ in occupied if not isinstance(n,LocalSign) or n.style!="entrance"}
+    needed = min(18,int(visible//38))-len(used)
+    if needed<=0 or not slots:
+        return []
+    centers = np.array([c for c,_,_ in slots])
+    blocked = np.zeros(len(slots),dtype=bool)
+    for _,p in occupied:
+        blocked |= np.linalg.norm(centers-(p.mean(0)-coords[0])*scale,axis=1)<19
+    ranked = []
+    for name,pt,confidence in candidates:
+        distance = np.linalg.norm(centers-(pt-coords[0])*scale,axis=1)
+        for k in np.flatnonzero((distance<=min(45.,distance.min()+8))&~blocked):
+            ranked.append((confidence < .95, distance[k]/45 + (1-confidence)*2, name.casefold(), int(k), name))
+    extra = []
+    for _,_,key,k,name in sorted(ranked):
+        if key in used or blocked[k]:
+            continue
+        c,axis,half = slots[k]
+        panel = coords[0]+(c+np.array([-half,half])[:,None]*axis)/scale
+        extra.append((LocalSign(name,"banner"),panel))
+        used.add(key)
+        blocked |= np.linalg.norm(centers-c,axis=1)<19
+        if len(extra)>=needed:
+            break
+    return extra
 
 
 def confirmed_mall_panels(layers, coords, names, doors=()):
@@ -667,7 +741,8 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
             elif generic_host or not name:
                 if layers is None:
                     layers = list(businesses(md, keys))
-                tenants = mapped_tenants(layers, coords, anchor=name, local=local_enabled)
+                retail_candidates = [] if mall and local_enabled else None
+                tenants = mapped_tenants(layers, coords, anchor=name, local=local_enabled, retail_candidates=retail_candidates)
                 if probe and not generic_host and not spec.retail_front and not name:
                     if label:
                         matches_label = [t for t,_ in tenants if isinstance(t,LocalSign)
@@ -763,6 +838,8 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                 if mall and label and spec.height >= 5.5 and walk_segments is not None and local_enabled:
                     panels.extend((LocalSign(label, "entrance"), p)
                                   for p in mall_entrance_panels(coords, walk_segments, panels))
+                if mall and local_enabled:
+                    panels.extend(mall_tenant_banners(coords,retail_candidates,panels,parking_points,walk_segments))
                 if spec.retail_front and not spec.retail_doors:
                     centers = [panel.mean(0) for _,panel in panels]
                     spec.retail_doors = entrance_offsets(coords, ring, centers)

@@ -556,6 +556,19 @@ SIGN_COLORS["AMC Theatres"] = ("#282427", "#ed364a")
 SIGN_FONT = Path(__file__).resolve().parents[1] / "fonts" / "DejaVuSans-Bold.ttf"
 
 
+def tenant_banner(name, aspect, height):
+    """A mall advertising panel distinguishes an indoor tenant from a dedicated external entrance."""
+    art = (sign_image(name, aspect*1.3, height) if name in SIGN_COLORS
+           else local_sign_image(name, "shop", aspect*1.3))
+    footer = max(18,round(art.width/aspect)-art.height)
+    image = Image.new("RGB",(art.width,art.height+footer),"#253139")
+    image.paste(art,(0,0))
+    ImageDraw.Draw(image).text((image.width/2,art.height+footer/2),"INSIDE THE MALL",
+                               font=ImageFont.truetype(SIGN_FONT,max(9,int(footer*.66))),
+                               fill="white",anchor="mm")
+    return image
+
+
 def directory_image(rows):
     image = Image.new("RGB",(512,256),"#263338")
     draw = ImageDraw.Draw(image)

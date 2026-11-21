@@ -338,6 +338,20 @@ class StreamedStoresTest(unittest.TestCase):
         layer.attrs["operating_status"] = np.array(["closed"])
         self.assertFalse(panels(29.,documented=True,entrance=True))
 
+    def test_mall_banners_rank_visible_tenants_and_respect_existing_signs(self):
+        import streamedstores as stores
+        scale = np.array([111320.,111132.])
+        ring = np.array([[0.,0.],[200.,0.],[200.,100.],[0.,100.]])/scale
+        parking = np.array([(x,-12.) for x in range(0,201,8)])/scale
+        candidates = [(n,np.array([x,y])/scale,c) for n,x,y,c in (
+            ("Lake Books",80,5,.99),("Lake Books",82,3,.99),("Older Listing",80,3,.82),
+            ("Back Wall",90,95,.99),("Anchor",40,5,.99))]
+        occupied = [("Anchor",np.array([[35.,0.],[45.,0.]])/scale)]
+        extra = stores.mall_tenant_banners(ring,candidates,occupied,parking,[])
+        self.assertEqual([n.name for n,_ in extra],["Lake Books"])
+        self.assertTrue(np.allclose(extra[0][1][:,1],0))
+        self.assertFalse(stores.mall_tenant_banners(ring,candidates,occupied,[],[]))
+
     def test_named_venue_with_offset_business_pin(self):
         import streamedstores
         frame = geodesy.EnuFrame(40., -83.)
