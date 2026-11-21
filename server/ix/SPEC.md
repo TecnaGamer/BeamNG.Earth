@@ -103,3 +103,15 @@ Written by a separate worker, out of scope here.
   unstable `argsort` in new server code. Use `dnp` / `dmath`.
 - No location-specific code. No issue numbers in comments. Comments are short and say why.
 - Never wrap pytest in `timeout`. `pytest -n 3` at most. Kill only your own processes.
+
+## The owner of an interchange (`ix/owner.py`)
+
+A region no longer solves the systems its box holds: each is a piece of an interchange, which `owner.grow` follows to the
+whole (the members within `SHAPES_PAD_M` of its seeds, found again as systems, until it takes in nothing more), so every
+region reaches the same members and the same key (`gradeshapes.interchange_key`: the sorted canonical ids of its roads,
+its centre, the plans format). The cell holding its centre is its owner. The interchange is solved once, by whoever takes
+its lock (`plancache.PlanCache.shape_claim`, `xproc.once` without a wait budget), by `pipeline.interchange`: the steps of its
+one system, then its embankments. Every other thread and process waits for the lock and reads the stored solution
+(`PlanCache.shape_store`: lat / lon and heights, no frame). A holder that is gone hands the lock over; an abandoned one
+gives it back. One too wide to follow whole is followed as far as the tile of the asking cell (`owner.TILE_UP`), and its key
+names the tile. `pipeline.region` is the region's own find, the owner calls and the merge of their profiles.

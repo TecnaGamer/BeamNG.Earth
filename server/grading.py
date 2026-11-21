@@ -402,7 +402,6 @@ _gsh.DECK_MAX_GRADE = roadsmod.DECK_MAX_GRADE
 _gsh.RAIL_DECK_DEPTH_M = railwaysmod.RAIL_TOP_M + railwaysmod.DECK_D - railwaysmod.BALLAST_H
 import ix.pipeline as ix_pipeline      # the interchange pipeline skeleton (ix/SPEC.md): _shape_region_calc is its region()
 SHAPES_PAD_M = 800.0        # m round a cell its systems and their ramps are read from (a ramp is at most RAMP_MAX_M)
-SHAPES_CAP_M = 4000.0       # m: the farthest a system is followed from the cell
 SHAPES_NEAR_M = 3.0         # m: a plan vertex this near a shape's or a ramp's line takes its height
 SHAPES_ALONG_M = 2.0 * _gsh.STEP_M    # m of a line either side of a point: of a road's pieces within reach, the one this
                             # stretch of the line runs along gives the point its height (two sample steps: the chords
@@ -2763,9 +2762,6 @@ def shape_reach(xy, z, zs, modes, grade, ground, ends=None):
 SHAPE_REACH_OFF_M = _gsh.OFF_GROUND_M     # m: a plan this far under (over) its ground past a shape's fill (cut) is off it there
 
 
-_SHAPE_SOLVE_LOCK = threading.Lock()    # (every planner's shapes solved / solving tables: short holds)
-
-
 class _Planner:
     """The road plans of one planning region (geotiles.PLAN_Z), in its frame, per map cell, made once (worker threads;
     it fetches the road cells it lacks). store: the PlanStore it belongs to (its other regions, its settings)."""
@@ -5082,17 +5078,6 @@ class _Planner:
                 raw = dnp.interp(np.arange(n), np.flatnonzero(ok), raw[ok])
             out[r] = smooth_profile(median_profile(raw, _gsh.STEP_M, 12.0), _gsh.STEP_M, 6.0) if n >= 5 else raw
         return out
-
-    @staticmethod
-    def _shape_sys_key(net, sysm, smp):
-        """A system's solve's identity: its parts and its samples (the same samples: the same ground, laws and
-        answer, from whichever region found it)."""
-        h = hashlib.sha1(_gsh.system_key(net, sysm).encode())
-        for x in smp:
-            h.update(np.round(np.asarray(x["xy"], np.float64), 3).tobytes())
-            for i in np.unique(x["mem"]).tolist():
-                h.update(repr(net.m[i].key).encode() + repr((net.m[i].kind, getattr(net.m[i], "level", None))).encode())
-        return h.hexdigest()
 
     def _shape_region_calc(self, home, hk):
         """The ix pipeline's region() (the s1..s6 steps, ix/SPEC.md): the same {road feature id: [(xy, z, mode)]}."""
