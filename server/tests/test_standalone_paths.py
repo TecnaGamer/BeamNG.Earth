@@ -288,9 +288,14 @@ class StandalonePathsTest(unittest.TestCase):
                                     fixtures.flat, country='PL', keys=['cell'])
         f = features([[(0, 0), (100, 0)]], ['pedestrian'], widths=[(0, 4.)])
         self.assertEqual(len(rows), 3)
-        kept = paths.finish_props(rows, FRAME, (-10, -10, 110, 110), [f])
+        box = (-10, -10, 110, 110)
+        kept = paths.finish_props(rows, FRAME, box, [f])
         self.assertEqual(len(kept), 1)
         self.assertGreater(kept[0][2], 7.)
+        path_parts = paths.parts(FRAME, box, [f])
+        with patch.object(paths, "parts") as recompute:
+            self.assertEqual(paths.finish_props(rows, FRAME, box, [f], path_parts=path_parts), kept)
+            recompute.assert_not_called()
 
     def test_structural_and_overhead_objects_are_preserved(self):
         f = features([[(0, 0), (100, 0)]], ['cycleway'], widths=[(0, 4.)])
