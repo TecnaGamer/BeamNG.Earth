@@ -79,6 +79,7 @@ mod deautobahn;
 mod speedsigns;
 mod roadsigns;
 mod townsigns_de;
+mod streetsigns;
 mod dirsigns;
 mod dirsigns_face;
 mod cachemap;
@@ -7625,5 +7626,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
     m.add("VERSION", 583)?;
+    // 584 (on 583; written as 223 on 222): street-name signs on the traffic signals' mast arms (streetsigns.rs;
+    // server/streetsigns.py)
+    m.add_function(wrap_pyfunction!(streetsigns::street_sign_signals, m)?)?;
+    m.add_function(wrap_pyfunction!(streetsigns::street_sign_cross, m)?)?;
+    m.add_function(wrap_pyfunction!(streetsigns::street_sign_abbrev, m)?)?;
+    m.add_function(wrap_pyfunction!(streetsigns::street_sign_mesh, m)?)?;
+    m.add("VERSION", 584)?;
     Ok(())
 }

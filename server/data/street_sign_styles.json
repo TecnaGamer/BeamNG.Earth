@@ -1,0 +1,18 @@
+{
+  "_": "Street-name signs by country (streetsigns.py). countries: ISO code -> style; a country not listed has none. mount: where the sign stands (streetsigns.MOUNTS: signal_arm, a blade on the traffic signal's mast arm naming the cross street). bg / border: signmesh.COLOUR names; ink: white or black; case: upper or as_mapped; abbrev: a key of abbrev; height_m, text_m (glyph scale), width_m [min, max]. abbrev: per language, dirs (a first or trailing direction word), first (the first word), last (the last word); words matched in lower case.",
+  "countries": {
+    "US": {"mount": "signal_arm", "bg": "green", "border": "white", "ink": "white", "case": "upper", "abbrev": "en",
+           "height_m": 0.46, "text_m": 0.26, "width_m": [1.0, 2.9]}
+  },
+  "abbrev": {
+    "en": {
+      "dirs": {"north": "N", "south": "S", "east": "E", "west": "W", "northeast": "NE", "northwest": "NW",
+               "southeast": "SE", "southwest": "SW"},
+      "first": {},
+      "last": {"street": "ST", "avenue": "AVE", "road": "RD", "boulevard": "BLVD", "drive": "DR", "lane": "LN",
+               "court": "CT", "place": "PL", "terrace": "TER", "parkway": "PKWY", "highway": "HWY", "square": "SQ",
+               "expressway": "EXPY", "freeway": "FWY", "circle": "CIR", "alley": "ALY", "way": "WAY", "trail": "TRL",
+               "turnpike": "TPKE"}
+    }
+  }
+}
