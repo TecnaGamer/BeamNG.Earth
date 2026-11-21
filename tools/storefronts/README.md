@@ -54,3 +54,5 @@ python -m unittest discover -s server/tests -p test_buildings.py -k CustomModelS
 ### Street-facing signs
 
 Keep the canonical chain name for map matching and exported metadata. Add a display name to `brand_signs.LETTERING` when the storefront usually shows a shorter name or distinctive casing. Use `brand_signs.artwork` for symbols and stacked marks. Check the mark at square and wide aspect ratios and on a driver-height render before adding it to a brand profile. Individual locations may use other sign variants.
+
+For a brand that uses both a symbol and a name, `symbol_and_name` chooses a horizontal or stacked layout using the available width and height. The estimated physical letter height determines whether the full mark fits. The current roadside and facade thresholds are tuning values. Projecting signs for these brands use the standalone symbol. Apple and Freddy's keep their respective symbol and script treatments.

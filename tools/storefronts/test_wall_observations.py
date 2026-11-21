@@ -206,6 +206,18 @@ def test_fitted_entrances_and_shared_wall_exports():
 
 
 def test_storefront_signs():
+    def sign(aspect, height, surface):
+        return np.asarray(sign_image("Domino's", aspect, height, surface))
+
+    # A horizontal lockup puts the red tile left of center. A stacked one centers it.
+    for aspect, expected_left in ((4.5, True), (1., False)):
+        panel = sign(aspect, 1.2, "facade")
+        red = (panel[:, :, 0] > 140) & (panel[:, :, 1] < 65)
+        assert (np.where(red)[1].mean() < panel.shape[1] * .4) == expected_left
+        assert not np.array_equal(panel, sign(aspect, 1.2, "projecting"))
+    compact = sign(2.4, .1, "roadside")
+    assert np.array_equal(compact, sign(2.4, 1.2, "projecting"))
+    assert not np.array_equal(compact, sign(2.4, 1.2, "roadside"))
     assert set(LETTERING).issubset(CHAINS)
     assert LETTERING["Freddy's Frozen Custard & Steakburgers"] == "Freddy\u2019s"
     for name in ("Apple Store", "Best Buy", "Domino's", "Freddy's Frozen Custard & Steakburgers"):

@@ -123,7 +123,7 @@ def export_store(path, match, observations, out):
                 for left, right in zip(corners, corners[1:] + corners[:1]):
                     wall(left, right, lo, hi, material)
                 mesh([(*corners[j], hi) for j in (0,1,2,0,2,3)], material)
-            art = texture(whole_store.sign_image(name, width / (top-bottom)))
+            art = texture(whole_store.sign_image(name, width / (top-bottom), top-bottom, "roadside"))
             for side in (-1, 1):
                 left = -side * axis * width/2 + normal * side * .19
                 right = side * axis * width/2 + normal * side * .19
@@ -144,7 +144,7 @@ def export_store(path, match, observations, out):
                 (0., 3.1, whole_store.elevation(name, panel_width, 3.1, [panel_width / 2], [], [])),
                 (3.1, 3.1 + min(2.5, panel_width / 4), None),
             ):
-                art = image if image is not None else whole_store.sign_image(name, panel_width / (top-bottom))
+                art = image if image is not None else whole_store.sign_image(name, panel_width / (top-bottom), top-bottom)
                 a1, b1 = -half_span, half_span
                 points = [(*a1,bottom), (*b1,bottom), (*b1,top), (*a1,bottom), (*b1,top), (*a1,top)]
                 mesh(points, texture(art), [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])

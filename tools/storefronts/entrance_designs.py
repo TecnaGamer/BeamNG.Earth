@@ -219,5 +219,5 @@ def draw(profile, span, height, vertex, mesh, texture, sign, symbol_only=False):
     x=sign_width/2
     lo,hi=sign_z-sign_h/2,sign_z+sign_h/2
     corners=[vertex(-x,sign_depth,lo),vertex(x,sign_depth,lo),vertex(x,sign_depth,hi),vertex(-x,sign_depth,hi)]
-    mesh([corners[i] for i in (0,1,2,0,2,3)], texture(sign(sign_width/sign_h)),
+    mesh([corners[i] for i in (0,1,2,0,2,3)], texture(sign(sign_width/sign_h, sign_h)),
          [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])

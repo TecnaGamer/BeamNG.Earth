@@ -81,8 +81,56 @@ def centered_mark(canvas, mask, color):
                          (canvas.width-mask.width)//2+mask.width,(canvas.height-mask.height)//2+mask.height), mask)
 
 
-def artwork(name, width, font_path):
+def domino_tile():
+    tile = Image.new("RGB", (88, 176), "#f7f6f0")
+    d = ImageDraw.Draw(tile)
+    d.rectangle((2,2,85,85), fill="#bd2335")
+    d.rectangle((2,90,85,173), fill="#17649a")
+    for x,y in ((44,44),(24,112),(64,150)):
+        d.ellipse((x-8,y-8,x+8,y+8), fill="#ffffff")
+    return tile.rotate(-42, Image.Resampling.BICUBIC, expand=True, fillcolor="#f7f6f0")
+
+
+def symbol_and_name(symbol, label, font_path, width, height_m, surface, ink):
+    """Fit a horizontal or stacked mark, with a symbol fallback for small panels."""
+    paper = symbol.getpixel((0, 0))
+    font = ImageFont.truetype(font_path, 112)
+    box = font.getbbox(label)
+    word = Image.new("RGB", (box[2]-box[0], box[3]-box[1]), paper)
+    ImageDraw.Draw(word).text((-box[0], -box[1]), label, font=font, fill=ink)
+    gap = 14
+    candidates = [
+        ((symbol.width + gap + word.width, max(symbol.height, word.height)), False),
+        ((max(symbol.width, word.width), symbol.height + gap + word.height), True),
+    ]
+    def fit(size):
+        return min(width * .94 / size[0], 184 / size[1])
+
+    size, stacked = max(candidates, key=lambda choice: fit(choice[0]))
+    # Estimated letter height on the actual panel. Roadside signs are read from farther away.
+    minimum = .22 if surface == "roadside" else .14
+    if surface == "projecting" or word.height * fit(size) * height_m / 200 < minimum:
+        master = symbol
+    else:
+        master = Image.new("RGB", size, paper)
+        if stacked:
+            master.paste(symbol, ((size[0]-symbol.width)//2, 0))
+            master.paste(word, ((size[0]-word.width)//2, symbol.height+gap))
+        else:
+            master.paste(symbol, (0, (size[1]-symbol.height)//2))
+            master.paste(word, (symbol.width+gap, (size[1]-word.height)//2))
+    scale = fit(master.size)
+    art = master.resize((max(1, round(master.width*scale)), max(1, round(master.height*scale))),
+                        Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (width, 200), paper)
+    canvas.paste(art, ((width-art.width)//2, (200-art.height)//2))
+    return canvas
+
+
+def artwork(name, width, font_path, height_m, surface):
     """Return custom artwork when the storefront uses a symbol or a distinctive lockup."""
+    if name == "Domino's":
+        return symbol_and_name(domino_tile(), "Domino's", font_path, width, height_m, surface, "#17649a")
     if name == "Apple Store":
         img = Image.new("RGB", (width,200), "#34383a")
         centered_mark(img, apple(), "#f9faf8")
@@ -99,14 +147,6 @@ def artwork(name, width, font_path):
         d.text((22,89), "BUY", font=font, fill="white", anchor="lt")
         d.polygon([(246,152),(260,138),(316,138),(316,171),(260,171)], fill="#ffda30")
         d.ellipse((255,152,259,156),fill="#174579")
-    elif name == "Domino's":
-        tile = Image.new("RGB", (88, 176), "#f7f6f0")
-        d = ImageDraw.Draw(tile)
-        d.rectangle((2,2,85,85), fill="#bd2335")
-        d.rectangle((2,90,85,173), fill="#17649a")
-        for x,y in ((44,44),(24,112),(64,150)):
-            d.ellipse((x-8,y-8,x+8,y+8), fill="#ffffff")
-        master = tile.rotate(-42, Image.Resampling.BICUBIC, expand=True, fillcolor="#f7f6f0")
     else:
         return None
     factor = min(width*.96/master.width, 196/master.height)

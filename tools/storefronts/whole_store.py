@@ -469,7 +469,7 @@ def elevation(
     return img
 
 
-def sign_image(name, aspect=4.5):
+def sign_image(name, aspect=4.5, height_m=1., surface="facade"):
     colors = {
         "McDonald's": ("#ac2825", "#ffcc32"),
         "Chick-fil-A": ("#ede6d7", "#ad2039"),
@@ -495,7 +495,7 @@ def sign_image(name, aspect=4.5):
     img = Image.new("RGB", (width, 200), bg)
     d = ImageDraw.Draw(img)
     face = Path(__file__).resolve().parents[1] / "fonts" / "DejaVuSans-Bold.ttf"
-    custom = brand_signs.artwork(name, width, face)
+    custom = brand_signs.artwork(name, width, face, height_m, surface)
     if custom is not None:
         return custom
     lettering = brand_signs.LETTERING.get(name, name)
@@ -717,7 +717,7 @@ def build(
         for center, span in fitted:
             def vertex(x, depth, z):
                 return (*(ring[i] + axes[i]*(center+x) + normals[i]*depth), z)
-            entrance_designs.draw(design, span, height, vertex, mesh, texture, lambda aspect: sign_image(name, aspect),
+            entrance_designs.draw(design, span, height, vertex, mesh, texture, lambda aspect, h: sign_image(name, aspect, h),
                                       symbol_only=name == "Apple Store")
         public = bool(door) or (restaurant and normals[i] @ normals[front] >= -0.15)
         dining = (
@@ -789,7 +789,7 @@ def build(
             span = min(width*.8, 9.)
             lo = (width-span)/2
             face(lo, lo+span, .12, height-.83, height-.12,
-                 texture(sign_image(name, span/.71)), True)
+                 texture(sign_image(name, span/.71, .71)), True)
         lodge = name == "Bass Pro Shops" and i == front and len(door) == 1
         if lodge:
             center = door[0]
@@ -966,7 +966,7 @@ def build(
                 0.78,
                 sign_mid - sign_half_height,
                 sign_mid + sign_half_height,
-                texture(sign_image(name, sign_width / (2 * sign_half_height))),
+                texture(sign_image(name, sign_width / (2 * sign_half_height), 2 * sign_half_height)),
                 True,
             )
             block(left - 0.08, left + span + 0.08, 0.84, top - 0.1, top + 0.03, 2)
@@ -979,7 +979,7 @@ def build(
             along = width * .19
             block(along - .09, along + .09, reach, bottom - .12, bottom + .08, 2)
             anchor = ring[i] + axes[i] * along
-            art = texture(sign_image(name, reach / (top - bottom)))
+            art = texture(sign_image(name, reach / (top - bottom), top - bottom, "projecting"))
             for side in (-1, 1):
                 base = anchor + side * .085 * axes[i]
                 inner, outer = base + .12 * normals[i], base + (reach + .12) * normals[i]
@@ -992,7 +992,7 @@ def build(
             depth = min(2.8, span * .18)
             block(left, left + span, depth, 3.6, 5.15, 2)
             face(left, left + span, depth + .02, 3.64, 5.1,
-                 texture(sign_image(name, span / 1.46)), True)
+                 texture(sign_image(name, span / 1.46, 1.46)), True)
             for side in (left - 1.6, left + span + .4):
                 if side > 0 and side + 1.2 < width:
                     block(side, side + 1.2, .16, .85, 2.55, 2)
@@ -1004,7 +1004,7 @@ def build(
             left = (width - sign_width) / 2
             top = height - 0.24
             face(left, left + sign_width, 0.12, top - sign_height, top,
-                 texture(sign_image(name, sign_width / sign_height)), True)
+                 texture(sign_image(name, sign_width / sign_height, sign_height)), True)
         painting = elevation(
             name,
             width,
@@ -1126,7 +1126,7 @@ def build(
                     if sign_height > .65:
                         top = height - .55
                         face(center - sign_width / 2, center + sign_width / 2, .69,
-                             top - sign_height, top, texture(sign_image(name, sign_width / sign_height)), True)
+                             top - sign_height, top, texture(sign_image(name, sign_width / sign_height, sign_height)), True)
 
         if restaurant:
             for x in dining:
