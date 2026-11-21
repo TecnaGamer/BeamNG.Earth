@@ -392,6 +392,7 @@ _gsh.DECK_MIN_DEPTH_M, _gsh.DECK_FULL_DEPTH_M = roadsmod.DECK_MIN_DEPTH, roadsmo
 _gsh.DECK_SPAN_RATIO = roadsmod.DECK_SPAN_RATIO
 _gsh.DECK_MAX_GRADE = roadsmod.DECK_MAX_GRADE
 _gsh.RAIL_DECK_DEPTH_M = railwaysmod.RAIL_TOP_M + railwaysmod.DECK_D - railwaysmod.BALLAST_H
+import ix.pipeline as ix_pipeline      # the interchange pipeline skeleton (ix/SPEC.md): _shape_region_calc is its region()
 SHAPES_PAD_M = 800.0        # m round a cell its systems and their ramps are read from (a ramp is at most RAMP_MAX_M)
 SHAPES_CAP_M = 4000.0       # m: the farthest a system is followed from the cell
 SHAPES_NEAR_M = 3.0         # m: a plan vertex this near a shape's or a ramp's line takes its height
@@ -5064,151 +5065,8 @@ class _Planner:
         return h.hexdigest()
 
     def _shape_region_calc(self, home, hk):
-        import xproc
-        t0 = time.perf_counter()
-        lon0, lat0, lon1, lat1 = (float(v) for v in home.bounds())
-        ce, cn, _ = self.frame.geodetic_to_enu(np.array([lat0, lat0, lat1, lat1]), np.array([lon0, lon1, lon0, lon1]),
-                                               0.0)
-        h_lo = np.array([np.min(ce), np.min(cn)]) - SHAPES_PAD_M
-        h_hi = np.array([np.max(ce), np.max(cn)]) + SHAPES_PAD_M
-        box_lo, box_hi = h_lo - 200.0, h_hi + 200.0
-        cap_lo, cap_hi = h_lo - SHAPES_CAP_M, h_hi + SHAPES_CAP_M
-
-        def make_fixed(net):
-            rail_tops = {}
-
-            def fixed_z(i, s_):
-                if np.ndim(s_):                 # (many: the ground read once for all, _ground_lines)
-                    sv_ = np.asarray(s_, np.float64)
-                    if net.m[i].kind in ("rail", "rail_deck"):
-                        return np.array([np.nan if z is None else z
-                                         for z in self._rail_tops(net, i, sv_.tolist(), rail_tops)])
-                    sv = np.clip(sv_[:, None] + np.linspace(-24.0, 24.0, 13)[None], 0.0, net.L[i])
-                    xy = np.stack([dnp.interp(sv, net.s[i], net.lines[i][:, 0]),
-                                   dnp.interp(sv, net.s[i], net.lines[i][:, 1])], axis=2)
-                    return self._ground_lines(xy)[:, 6]
-                m = net.m[i]
-                if m.kind in ("rail", "rail_deck"):     # (a track, on its deck or on the ground: its rails' top over the
-                    # bed the railways lay and draw it on, never a height of the shapes' own: its deck's mapped ends' ground,
-                    # down the slopes of the street's cutting under it, stood Compiegne's 7 m rail bridge 2.8 m under its
-                    # track, the street was dug that much too deep and the track's fill beside it stood 10.5 m tall)
-                    return self._rail_tops(net, i, [float(s_)], rail_tops)[0]   # (None: the railways lay none of it, no
-                    #                                                               track there to clear)
-                q = _gsh.at_s(net.lines[i], net.s[i], s_)
-                sv = np.clip(np.linspace(s_ - 24.0, s_ + 24.0, 13), 0.0, net.L[i])
-                xy = np.stack([dnp.interp(sv, net.s[i], net.lines[i][:, 0]),
-                               dnp.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
-                return float(self._ground_line(xy)[6]) if len(xy) else None
-
-            return fixed_z
-
-        byk, loaded = {}, set()
-        while True:
-            xproc.check_cancel()        # (a place a teleport left: its systems not found and solved for it)
-            cla, clo, _ = self.frame.enu_to_geodetic(np.array([box_lo[0], box_hi[0], box_lo[0], box_hi[0]]),
-                                                     np.array([box_lo[1], box_lo[1], box_hi[1], box_hi[1]]), 0.0)
-            keys = sorted(set(mapcells.cells_for_bbox(float(np.min(cla)), float(np.min(clo)), float(np.max(cla)),
-                                                      float(np.max(clo)))) - loaded, key=str)
-            for k in keys:
-                loaded.add(k)
-                for m in self._shape_members(k):
-                    old = byk.get(m.key)
-                    if old is None or len(m.line) > len(old.line):
-                        byk[m.key] = m
-            members = _gsh.one_road([byk[q] for q in sorted(byk, key=str)
-                                     if ((byk[q].line >= box_lo) & (byk[q].line <= box_hi)).all(1).any()])
-            net, systems = _gsh.find_systems(members, lambda net_: (self._ground_line, make_fixed(net_)))
-            mine = []
-            n_lo, n_hi = box_lo.copy(), box_hi.copy()
-            for sysm in systems:
-                pts = np.concatenate([net.lines[i] for i in sysm["seeds"]])
-                b_lo, b_hi = pts.min(0), pts.max(0)
-                if (b_hi < h_lo).any() or (b_lo > h_hi).any():
-                    continue
-                mine.append(sysm)
-                if (b_lo < box_lo + 100.0).any() or (b_hi > box_hi - 100.0).any():     # (open: follow it)
-                    n_lo = np.minimum(n_lo, b_lo - 300.0)
-                    n_hi = np.maximum(n_hi, b_hi + 300.0)
-            n_lo, n_hi = np.maximum(n_lo, cap_lo), np.minimum(n_hi, cap_hi)
-            if (n_lo >= box_lo).all() and (n_hi <= box_hi).all():
-                break
-            box_lo, box_hi = n_lo, n_hi
-        t1 = time.perf_counter()
-
-        fixed_z = make_fixed(net)
-
-        shapes, failed, solved = [], 0, []
-        for sysm in mine:
-            xproc.check_cancel()        # (... nor its next system: a left city's 40 s solves held the road tiles)
-            pcs = _gsh.pieces(net, sysm)
-            smp = _gsh.sample(net, pcs)
-            ck = self._shape_sys_key(net, sysm, smp)
-            cache = self.__dict__.setdefault("_shape_solved", {})   # (this grading's: its ground, its frame)
-            solving = self.__dict__.setdefault("_shape_solving", {})
-            diag = {}
-            # (one thread solves a system, the others asking for it meanwhile wait for its answer: the regions round a
-            # system are planned on as many threads, each found the cache empty and solved the same system at the same
-            # time, Brunau's 4 regions 4 times, 6 of the 8 s of its solves)
-            while True:
-                with _SHAPE_SOLVE_LOCK:
-                    hit = cache.get(ck)
-                    ev = None if hit is not None else solving.get(ck)
-                    if hit is None and ev is None:
-                        ev = solving[ck] = threading.Event()
-                        break
-                if hit is not None:
-                    break
-                ev.wait()
-            if hit is not None:
-                ground, zs, diag = hit
-            else:
-                try:
-                    ground = [self._ground_line(x["xy"]) for x in smp]
-                    zs = _gsh.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diag)
-                    with _SHAPE_SOLVE_LOCK:
-                        if len(cache) >= 4096:
-                            cache.clear()
-                        cache[ck] = (ground, zs, diag)
-                finally:
-                    with _SHAPE_SOLVE_LOCK:
-                        solving.pop(ck, None)
-                    ev.set()
-            if zs is None:          # (no answer: the system as it is, and why in the log; no stand-in)
-                failed += 1
-                log.error("grading: SHAPES infeasible system in region %s: %d pieces, %d crossings, %d ends; %s; "
-                          "members %s", home, len(pcs), len(sysm["crossings"]), len(sysm["ends"]),
-                          diag.get("qp_error") or ", ".join("%s %s" % (k, diag[k]) for k in sorted(diag)
-                                                            if k not in ("converged", "feasible")),
-                          ", ".join(sorted({str(net.m[i].key[0])[:8] + ":" + net.m[i].kind for i in sysm["seeds"]}))[:600])
-                continue
-            solved.append(sysm)
-            shapes.append((pcs, smp, zs))
-            if os.environ.get("BNE_SHAPES_DEBUG"):
-                self._shape_debug(net, sysm, pcs, smp, zs, ground, fixed_z, diag)
-
-        def ground_along(i, sv):
-            xy = np.stack([dnp.interp(sv, net.s[i], net.lines[i][:, 0]), dnp.interp(sv, net.s[i], net.lines[i][:, 1])],
-                          axis=1)
-            return self._ground_line(xy)
-        emb = _gsh.embankments(net, solved, shapes, ground_along)
-        prof = {}
-        for (pcs, smp, zs) in shapes:
-            for pc, x, z in zip(pcs, smp, zs):
-                if pc["kind"] == "deck":
-                    prof.setdefault(str(net.m[pc["main"]].key[0]), []).append((x["xy"], np.asarray(z, np.float64),
-                                                                                "deck"))
-        for j, lst in emb.items():
-            m = net.m[j]
-            if m.kind not in ("ground", "tunnel"):
-                continue
-            for sv, z, mode in lst:
-                xy = np.stack([dnp.interp(sv, net.s[j], net.lines[j][:, 0]),
-                               dnp.interp(sv, net.s[j], net.lines[j][:, 1])], axis=1)
-                prof.setdefault(str(m.key[0]), []).append((xy, np.asarray(z, np.float64), mode))
-        log.warning("grading: SHAPES pid %d region %s: %d cells, %d members, %d systems (%d infeasible, left as they are), %d roads "
-                    "graded, find %.2f s, solve %.2f s", os.getpid(), hk, len(loaded), len(members), len(mine), failed,
-                    len(prof), t1 - t0, time.perf_counter() - t1)
-        return prof
+        """The ix pipeline's region() (the s1..s6 steps, ix/SPEC.md): the same {road feature id: [(xy, z, mode)]}."""
+        return ix_pipeline.region(self, home, hk)
 
     def _shape_debug(self, net, sysm, pcs, smp, zs, ground, fixed_z, diag):
         """BNE_SHAPES_DEBUG: one system's parts, crossings and heights in the log (SHAPEDBG lines)."""
