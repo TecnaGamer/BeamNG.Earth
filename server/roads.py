@@ -8264,6 +8264,42 @@ def fast_crossing_ground(lines, ground_lines):
     return [int(g) for _pi, g, _arc, _x, _y in fast._ef.segment_crossings_lists(_lines64(lines), _lines64(ground_lines))]
 
 
+def _grid_keys(x0, y0, x1, y1, side):
+    """The cells of a grid (side m a side) that boxes x0..x1, y0..y1 (arrays) cover: (index of the box, the cell as one
+    int64) for each."""
+    cx0, cy0 = np.floor(x0 / side).astype(np.int64), np.floor(y0 / side).astype(np.int64)
+    w = np.floor(x1 / side).astype(np.int64) - cx0 + 1
+    h = np.floor(y1 / side).astype(np.int64) - cy0 + 1
+    n = w * h
+    box = np.repeat(np.arange(len(n)), n)
+    k = np.arange(int(n.sum())) - np.repeat(np.cumsum(n) - n, n)
+    cx, cy = cx0[box] + k % w[box], cy0[box] + k // w[box]
+    return box, (cx + (1 << 30)) * (1 << 31) + (cy + (1 << 30))
+
+
+FLOAT_GUARD_M = 1e-6    # m: the boxes of _pieces_near_parts are this much wider (an intersection the kernel finds in floats may
+#                         lie a hair outside the boxes of its two segments)
+
+
+def _pieces_near_parts(parts, pieces):
+    """The indices (ascending) of the pieces that can cross a part: those whose box shares a grid cell with the box of one
+    of a part's segments. Two segments cross only where their boxes meet, so every piece left out crosses no part. The
+    kernel tests a piece against every segment of each part whose whole box it meets: a long viaduct's box holds a
+    city's roads, and every one of them was tested against every segment of it (78 % of the time of a rail bed's lattice
+    node, Yan'an's elevated tracks)."""
+    segs = [np.asarray(p_, np.float64)[:, :2] for p_ in parts if len(p_) > 1]
+    if not segs or not pieces:
+        return np.zeros(0, np.int64)
+    a, b = np.concatenate([q[:-1] for q in segs]), np.concatenate([q[1:] for q in segs])
+    lo, hi = np.minimum(a, b) - FLOAT_GUARD_M, np.maximum(a, b) + FLOAT_GUARD_M
+    box = np.array([[q[:, 0].min(), q[:, 1].min(), q[:, 0].max(), q[:, 1].max()] for q in pieces], np.float64)
+    side = max(float(np.median(np.maximum(box[:, 2] - box[:, 0], box[:, 3] - box[:, 1]))), 1.0)
+    _i, segment_cells = _grid_keys(lo[:, 0], lo[:, 1], hi[:, 0], hi[:, 1], side)
+    index, cells = _grid_keys(box[:, 0] - FLOAT_GUARD_M, box[:, 1] - FLOAT_GUARD_M, box[:, 2] + FLOAT_GUARD_M,
+                              box[:, 3] + FLOAT_GUARD_M, side)
+    return np.unique(index[np.isin(cells, np.unique(segment_cells))])
+
+
 def _crossings_by(lines, ground_lines):
     """_crossings for each of ground_lines apart, in one kernel call: [[(part index, arc m, point xy)] per ground line],
     each list as _crossings(lines, [that line]) gives it. Pure.
@@ -8289,7 +8325,12 @@ def _crossings_by(lines, ground_lines):
         for a in range(0, len(ln) - 1, CROSSINGS_CHUNK):
             pieces.append(ln[a:a + CROSSINGS_CHUNK + 1])
             owner.append(g)
-    for pi, c, arc, x, y in fast._ef.segment_crossings_lists(_lines64(lines), pieces):
+    parts = _lines64(lines)
+    near = _pieces_near_parts(parts, pieces)
+    pieces, owner = [pieces[k] for k in near.tolist()], [owner[k] for k in near.tolist()]
+    if not pieces:
+        return out
+    for pi, c, arc, x, y in fast._ef.segment_crossings_lists(parts, pieces):
         out[owner[c]].append((pi, arc, np.array([x, y])))
     return out
 

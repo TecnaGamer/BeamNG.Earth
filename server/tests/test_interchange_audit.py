@@ -283,47 +283,80 @@ def _two_interchanges(link_m):
             _ground("n2", _line(0, y1 + 60, 0, y1 + 700))]
 
 
-def test_two_interchanges_merged_through_one_link_have_a_ground_node_between_them():
-    net, systems, audits = _audit(_two_interchanges(250.0))
-    assert len(systems) == 1 and len(systems[0]["seeds"]) == 2, "find_systems joins them through the road between (CONNECT_M)"
-    s4 = audits[0]["steps"][4]
-    assert not s4["ok"]
-    f = _finds(audits, 4, "merged_over_a_ground_node")
-    assert len(f) == 1 and f[0].refs[2]["earth"] == "link"
-    assert {r["earth"] for r in f[0].refs[:2]} == {"d1", "d2"}
-    assert s4["stats"]["components_if_reset"] == 2 and s4["stats"]["ground_nodes"] == 1
-    assert "250 m on the ground" in f[0].text or "on the ground between their ends" in f[0].text
-
-
-def test_a_longer_link_leaves_two_systems_and_both_pass():
-    net, systems, audits = _audit(_two_interchanges(450.0))
-    assert len(systems) == 2
-    assert all(a["steps"][4]["ok"] for a in audits)
+def test_two_interchanges_joined_only_by_a_ground_road_are_two_systems_and_both_pass():
+    # (short decks, held at their ground, have no ramp: where their roads are back on the ground is the end of each, and
+    # the road between is a boundary held at the ground, of any length, not a way on to the next structure)
+    for link_m in (60.0, 250.0, 450.0, 2000.0):
+        net, systems, audits = _audit(_two_interchanges(link_m))
+        assert len(systems) == 2 and all(len(s["seeds"]) == 1 for s in systems), link_m
+        assert all(a["steps"][4]["ok"] for a in audits), link_m
+        assert not _finds(audits, 4, "merged_over_a_ground_node")
 
 
 def test_a_road_dug_under_a_deck_between_the_ends_is_no_ground_node():
     # (the link goes under a third deck: its ground is not free)
     m = _two_interchanges(250.0) + [_deck("d3", _line(-25, 150, 25, 150, 8), "tertiary")]
     net, systems, audits = _audit(m)
-    assert len(systems) == 2, "d3 is a system of its own (it digs the link under it)"
+    assert len(systems) == 3, "d3 is a system of its own (it digs the link under it)"
     assert not _finds(audits, 4, "merged_over_a_ground_node")
 
 
-def test_an_oversized_system_names_the_chain_that_merged_it():
-    m = _two_interchanges(250.0)
-    y2 = 30.0 + 250.0 + 60.0 + 250.0
-    m += [_ground("link2", _line(0, 340, 0, y2, 30)),
-          _deck("d3", _line(0, y2, 0, y2 + 60, 13)), _ground("m3", _line(-800, y2 + 30, 800, y2 + 30, 200), "motorway"),
-          _ground("n3", _line(0, y2 + 60, 0, y2 + 700))]
-    m = [x for x in m if x.key[0] != "n2"]
-    with mock.patch.object(ia, "OVERSIZE_PIECES", 2):
-        net, systems, audits = _audit(m)
-    assert len(systems) == 1 and len(systems[0]["seeds"]) == 3
-    s4 = audits[0]["steps"][4]
-    assert not s4["ok"] and s4["stats"]["oversized"]
-    links = _finds(audits, 4, "merging_link")
-    assert {f.refs[-1]["earth"] for f in links} == {"link", "link2"}, [f.text for f in links]
-    assert len(s4["chain"]) == 2 and all("ramp road" in t for t in s4["chain"])
+def _long_overpasses(link_m):
+    """Two long viaducts, each over its motorway, the first's north end and the second's south end on one road on the
+    ground of link_m. Long enough to rise for the motorway: a ramp then, where a short deck is held at its ground."""
+    y1 = 250.0 + link_m
+    return [_ground("m1", _line(-800, 0, 800, 0, 200), "motorway"),
+            _deck("d1", _line(0, -250, 0, 250, 60)),
+            _ground("s1", _line(0, -900, 0, -250)),
+            _ground("link", _line(0, 250, 0, y1, 30)),
+            _ground("m2", _line(-800, y1 + 250, 800, y1 + 250, 200), "motorway"),
+            _deck("d2", _line(0, y1, 0, y1 + 500, 60)),
+            _ground("n2", _line(0, y1 + 700, 0, y1 + 1200))]
+
+
+def _interchanges(members):
+    net, found = gs.find_interchanges(members)
+    return [(sorted(str(net.m[i].key[0]) for i in f.sysm["seeds"]),
+             sorted(sorted(str(net.m[i].key[0]) for i in p.sysm["seeds"]) for p in f.parts)) for f in found]
+
+
+def test_viaducts_whose_ramps_meet_on_a_road_are_one_interchange_of_two_systems():
+    # (an interchange ends where its road is back on the ground: the ramps of two viaducts 60 m apart on one road meet,
+    # the road is not on the ground between them. Each stays a system of its own, solved as it is)
+    assert _interchanges(_long_overpasses(60.0)) == [(["d1", "d2"], [["d1"], ["d2"]])]
+    net, systems = gs.find_systems(_long_overpasses(60.0))
+    assert sorted(str(net.m[i].key[0]) for s in systems for i in s["seeds"]) == ["d1", "d2"] and len(systems) == 2
+
+
+def test_viaducts_whose_ramps_are_back_on_the_ground_before_they_meet_are_two_interchanges():
+    assert _interchanges(_long_overpasses(2000.0)) == [(["d1"], []), (["d2"], [])]
+
+
+def test_what_a_ramp_reaches_does_not_depend_on_the_order_of_the_members():
+    for link_m in (60.0, 2000.0):
+        m = _long_overpasses(link_m)
+        assert _interchanges(m) == _interchanges(m[::-1]), link_m
+
+
+def test_a_round_scans_only_the_members_it_adds_and_finds_what_a_full_scan_finds():
+    # (a growth's rounds: the cells added in a round bring their members, each scanned against its neighbours through the
+    # grid; the relations of the members of the rounds before are kept)
+    members = _long_overpasses(60.0)
+    first = [m for m in members if m.key[0] in ("m1", "d1", "s1", "link")]
+    second = first + [m for m in members if m.key[0] not in ("m1", "d1", "s1", "link")]
+    seen = []
+    real = gs.Net.near_along
+    scan = gs.Scan()
+    with mock.patch.object(gs.Net, "near_along", lambda self, i, pad: seen.append(len(self.m)) or real(self, i, pad)):
+        gs.find_interchanges(first, scan=scan)
+        round_one = len(seen)
+        net_b, found_b = gs.find_interchanges(second, scan=scan)
+        round_two = len(seen) - round_one
+    assert scan.scanned == [len(first), len(second) - len(first)], scan.scanned
+    assert round_one == len(first) and round_two == len(second) - len(first), (round_one, round_two)
+    net_a, found_a = gs.find_interchanges(second)
+    assert [sorted(str(net_a.m[i].key) for i in x.sysm["seeds"]) for x in found_a] ==         [sorted(str(net_b.m[i].key) for i in x.sysm["seeds"]) for x in found_b]
+    assert repr([x.sysm for x in found_a]) == repr([x.sysm for x in found_b])
 
 
 # ---- naming ----

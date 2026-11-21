@@ -103,3 +103,35 @@ Written by a separate worker, out of scope here.
   unstable `argsort` in new server code. Use `dnp` / `dmath`.
 - No location-specific code. No issue numbers in comments. Comments are short and say why.
 - Never wrap pytest in `timeout`. `pytest -n 3` at most. Kill only your own processes.
+
+## The owner of an interchange (`ix/owner.py`)
+
+A region no longer solves the systems its box holds: each is a piece of an interchange, which `owner.grow` follows to the
+whole (the members within `SHAPES_PAD_M` of its seeds, found again as systems, until it takes in nothing more), so every
+region reaches the same members and the same key (`gradeshapes.interchange_key`: the sorted canonical ids of its roads,
+its centre, the plans format). The cell holding its centre is its owner. The interchange is solved once, by whoever takes
+its lock (`plancache.PlanCache.shape_claim`, `xproc.once` without a wait budget), by `pipeline.interchange`: the steps of its
+one system, then its embankments. Every other thread and process waits for the lock and reads the stored solution
+(`PlanCache.shape_store`: lat / lon and heights, no frame). A holder that is gone hands the lock over; an abandoned one
+gives it back. `pipeline.region` is the region's own find, the owner calls and the merge of their profiles.
+
+The growth is claimed too (`owner.grow`, claim `ext` on the road a growth starts from): the first to reach a piece of an
+interchange grows it once and stores an index from every member road to its key, and its whole extent (`index_add`); a
+region reaching any piece finds the key there, or waits for the growth running. Two growths that reach each other's
+pieces are one interchange: the one from the lower road id grows it, the other raises `GiveWay`, which releases its claim
+before it waits (so the claims wait only on lower ids, never in a circle, and no growth holds two). A holder that is gone
+hands the claim over and a cancelled one keeps what it stored, as for the solve. A region does not scan the pieces of an
+interchange already solved (`owner.skipper`: the index names its key and the solution is kept): it reads the solution.
+The ramps' reaches (`gradeshapes._ramp_reaches`) are computed only inside that one growth and stored with the extent
+(`owner.extent_add`: the box and the member keys of the interchange's seeds, which are one interchange): a region's find
+(`find_interchanges(reach=False)`) finds the systems alone, and a solver that did not grow starts from the stored extent, in
+one round, with the stored reaches. A growth's rounds scan only the members they add (`gradeshapes.Scan`: each against its
+neighbours through the net's grid; the relations of the members of earlier rounds are kept).
+
+An interchange ends where its roads come back to the ground, which is the end of a ramp, not the end of a structure. A
+road leaving a deck belongs to the interchange as far as the deck's ramp reaches (`gradeshapes._ramp_reaches`, from the
+pieces alone, before anything is solved: the ramp the embankment step lays, `_Ramper`, from the height the structure needs
+and the roads' grade and curve laws, through the junctions it meets). Structures that join, cross or dig one road are one
+system; systems whose ramps run along one stretch of a road are one interchange (`Interchange.parts`): one extent, one key,
+one owner, which solves each system as it is and lays the embankments of all at once, so where two ramps meet on a road
+one lays what the other does. A road on the ground beyond the reaches is a boundary held at its own ground.

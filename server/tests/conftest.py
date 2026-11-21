@@ -31,3 +31,12 @@ def _no_browser(monkeypatch):
     monkeypatch.setattr(os, "startfile", _no_page, raising=False)
     for name in ("open", "open_new", "open_new_tab"):
         monkeypatch.setattr(webbrowser, name, _no_page)
+
+
+@pytest.fixture(autouse=True)
+def _no_interchanges_remembered():
+    """What the process remembers of interchanges (ix/owner.py: their solutions, their index) is cleared before each test:
+    a test that asks for one meets it solved by an earlier test otherwise."""
+    from ix import owner
+    for table in (owner.PROCESS, owner.INDEX, owner.FLIGHTS):
+        table.clear()

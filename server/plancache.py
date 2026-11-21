@@ -16,6 +16,7 @@ favoured as itself (xproc.once). Old runs' folders go at server start (prune).
 """
 import logging
 import json
+import math
 import hashlib
 import io
 import os
@@ -709,6 +710,122 @@ class PlanCache:
 
     def region_release(self, tag, home):
         xproc.release(self._region_path(tag, home) + ".lock")
+
+    # ---- interchanges (grading._Planner._interchange): solved once a run by the process that takes the interchange's
+    # lock, read by every other process, which waits for it ----
+    # Two kinds of file, by the interchange key (gradeshapes.interchange_key): "sol", the solution (the heights the
+    # interchange's roads take, as lat / lon / z: no planner's frame in them) and "ext", an index from a member's
+    # canonical id to the key of the interchange it is part of (what a region that found only a piece of the interchange
+    # reads to know the whole one). A lock is taken for a solution and for the growth of an extent; a waiter waits for
+    # the holder as long as it lives (xproc.once: never a budget), and takes the lock over when the holder is gone.
+
+    def _shape_path(self, kind, name):
+        return os.path.join(self.dir, "shapes", kind, name[:2], name + (".npz" if kind == "sol" else ".ik"))
+
+    @staticmethod
+    def shape_member_name(cid):
+        """The index's file name of a member's canonical id."""
+        return hashlib.sha1(cid.encode("utf-8")).hexdigest()
+
+    def shape_claim(self, kind, name, ready):
+        """Before making what ready() reads ("sol" the interchange name's solution, "ext" the index of the member name):
+        (answer, False) when ready() gave it, at once or after waiting for the process making it; (None, True) when this
+        process makes it now (call shape_release after it is stored: the holder's death or release lets the next waiter
+        make it). Waits as long as the holder lives."""
+        return xproc.once(self._shape_path(kind, name) + ".lock", ready, math.inf, patient=True)
+
+    def shape_release(self, kind, name):
+        xproc.release(self._shape_path(kind, name) + ".lock")
+
+    def shape_busy(self, kind, name):
+        return os.path.exists(self._shape_path(kind, name) + ".lock")
+
+    def shape_load(self, ik):
+        """(meta, lat, lon, z) of interchange ik's stored solution, or None (not there, or damaged: made again)."""
+        p = self._shape_path("sol", ik)
+        if not os.path.exists(p):
+            return None
+        try:
+            with np.load(p, allow_pickle=False) as f:
+                meta = json.loads(bytes(f["meta"]).decode("utf-8"))
+                return meta, np.array(f["lat"]), np.array(f["lon"]), np.array(f["z"])
+        except (OSError, ValueError, KeyError, TypeError, EOFError, zipfile.BadZipFile):
+            return None
+
+    def shape_store(self, ik, meta, lat, lon, z):
+        """Interchange ik's solution kept for the run's other processes (one file, replaced whole: a reader never sees
+        half of it). False when it could not be written."""
+        arrays = {"meta": np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8),
+                  "lat": np.asarray(lat, np.float64), "lon": np.asarray(lon, np.float64),
+                  "z": np.asarray(z, np.float64)}
+        try:
+            p = self._shape_path("sol", ik)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "wb") as fh:
+                np.savez(fh, **arrays)
+            os.replace(tmp, p)
+        except (OSError, ValueError, TypeError):
+            return False
+        return True
+
+    def shape_extent_store(self, ik, rec):
+        """Interchange ik's extent record (its box and the keys of its seeds: ix/owner.py), for the run's other processes."""
+        p = os.path.join(os.path.dirname(self._shape_path("ext", ik)), ik + ".extent.json")
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(rec, fh)
+            os.replace(tmp, p)
+        except (OSError, ValueError, TypeError):
+            return False
+        return True
+
+    def shape_extent_load(self, ik):
+        """The extent record of interchange ik, or None."""
+        p = os.path.join(os.path.dirname(self._shape_path("ext", ik)), ik + ".extent.json")
+        try:
+            with open(p, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return None
+
+    def shape_index(self, cid):
+        """[(interchange key, (lat0, lon0, lat1, lon1))] of the interchanges the road cid (a canonical id) is a member
+        of: the box of its parts in each (a road's parts of one kind are in more than one interchange where it passes
+        over several). Empty: none known yet."""
+        name = self.shape_member_name(cid)
+        d = os.path.dirname(self._shape_path("ext", name))
+        out = []
+        try:
+            names = [n for n in os.listdir(d) if n.startswith(name + "_") and n.endswith(".ik")]
+        except OSError:
+            return out
+        for n in sorted(names):
+            try:
+                with open(os.path.join(d, n), encoding="utf-8") as fh:
+                    t = fh.read().split()
+                out.append((t[0], tuple(float(v) for v in t[1:5])))
+            except (OSError, ValueError, IndexError):
+                continue
+        return out
+
+    def shape_index_store(self, ik, boxes):
+        """The index of interchange ik's members: boxes {canonical id: (lat0, lon0, lat1, lon1)}, one file each (named by
+        the id and the key: the interchanges of one road never write the same file)."""
+        for cid, box in sorted(boxes.items()):
+            name = self.shape_member_name(cid)
+            p = self._shape_path("ext", name)[:-len(".ik")] + "_" + ik[:24] + ".ik"
+            try:
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write("%s %.7f %.7f %.7f %.7f" % ((ik,) + tuple(box)))
+                os.replace(tmp, p)
+            except OSError:
+                return False
+        return True
 
 
 def _newest(d, depth=2):
