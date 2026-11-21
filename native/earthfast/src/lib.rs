@@ -176,6 +176,7 @@ mod landcover;
 mod roadsurf;
 mod levelways;
 mod meshtrim;
+mod meshparts;
 mod shelterfit;
 mod tilecuts;
 mod bldclear;
@@ -6656,6 +6657,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(road_through, m)?)?;
     m.add_function(wrap_pyfunction!(face_normal_sum, m)?)?;
     m.add_function(wrap_pyfunction!(first_use, m)?)?;
+    m.add_function(wrap_pyfunction!(meshparts::mesh_parts, m)?)?;
+    m.add_function(wrap_pyfunction!(meshparts::mesh_slots, m)?)?;
+    m.add("MESH_VERTICES_MAX", meshparts::MAX_VERTICES)?;
     m.add_function(wrap_pyfunction!(near_crossers, m)?)?;
     m.add_function(wrap_pyfunction!(clip_polyline, m)?)?;
     m.add_function(wrap_pyfunction!(gpu_name, m)?)?;
@@ -7543,6 +7547,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
-    m.add("VERSION", 565)?;
+    m.add("VERSION", 572)?;
     Ok(())
 }

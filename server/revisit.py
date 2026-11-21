@@ -624,7 +624,7 @@ GENS_KEPT = 6               # generations kept in the file
 GENS_FILE = "generations.json"
 # (the kinds read so: a geotile's road content, an anchor's skin of it, a geotile's trees, an anchor's sign tile, a
 # block's photo, a terrain block. Not the far field's: nothing builds those behind a session yet)
-READ_FORMAT = {"roadsg": 1, "rskin": 1, "vegg": 1, "signs": 1, "basephoto": 1, "block": 1}
+READ_FORMAT = {"roadsg": 2, "rskin": 2, "vegg": 1, "signs": 1, "basephoto": 1, "block": 1}
 STALE_KINDS = frozenset(READ_FORMAT) - {"block"}
 ALTS_KEPT = 50000
 _alts = {}                  # current key -> [(generation id, that generation's key)] (key() in a stale scope)
