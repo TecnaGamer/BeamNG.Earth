@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 570 # the newest kernel signature the server calls (earthd checks it at start) ...
+MIN_VERSION = 571 # the newest kernel signature the server calls (earthd checks it at start) ...
 if os.environ.get("BNE_BATTER", "off") == "vanilla":
     # ... with the vanilla slopes on (grading.BATTER_ON: batter_apply_vw, 503) too: never below the default (it was
     # set to 503 outright, which let a 505 binary start in that mode and fail at the first sidewalk, Codex r2a18)
@@ -73,12 +73,12 @@ def segments(lines_hw):
     return np.ascontiguousarray(np.vstack(segs)), np.ascontiguousarray(np.concatenate(hws))
 
 
-def island_ring_rays(poly, lines_hw, c, rays, step, rmax):
+def island_ring_rays(poly, lines_hw, c, rays, step, rmax, refine=False):
     """(rays, 2): the island's curb ring by rays from c, stopped by the polygon and the roads."""
-    require(1, "island_ring_rays")
+    require(570, "island_ring_rays")
     segs, hw = segments(lines_hw)
     return _ef.island_ring_rays(np.ascontiguousarray(poly[:, :2], np.float64), segs, hw, float(c[0]), float(c[1]),
-                                int(rays), float(step), float(rmax))
+                                int(rays), float(step), float(rmax), bool(refine))
 
 
 class Others:

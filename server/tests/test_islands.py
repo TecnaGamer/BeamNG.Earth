@@ -17,6 +17,88 @@ def arc(r, a0, a1, n=12, cx=0.0, cy=0.0):
 
 
 class IslandTest(unittest.TestCase):
+    def test_ray_precision_at_asymmetric_island_kerb(self):
+        import fast
+        poly = np.array([[-20., -20.], [20., -20.], [20., 20.], [-20., 20.]])
+        road = [(np.array([[-8., 1.36], [8., 1.36]]), 1.)]
+        def ring(refine):
+            return fast.island_ring_rays(poly, road, np.zeros(2), 72, .2, 30., refine=refine)
+        coarse, fine = ring(False), ring(True)
+        # Five adjacent spokes end at the same straight kerb, 36 cm from the origin.
+        np.testing.assert_allclose(fine[16:21, 1], .36, atol=.0008, rtol=0.)
+        self.assertLess(coarse[18, 1], .21)
+
+    def test_band_fits_the_nose_of_a_channelised_turn(self):
+        from unittest.mock import patch
+        import sidewalks
+        # Unevenly sampled road centrelines put the mean close to the lower
+        # carriageway. Both edges of the 1.2 m band must still turn at its nose.
+        a, b, c = np.array([[0., 0.], [44., 0.], [4., 22.]])
+        poly = np.vstack([np.linspace(a, b, 11, endpoint=False), b, c])
+        roads_hw = [(np.stack([a, b]), 1.5), (np.stack([b, c]), 2.), (np.stack([c, a]), 2.)]
+        with patch.object(sidewalks, "V2", True):
+            ring = islands._island_ring(poly, roads_hw, 0.)
+        self.assert_simple_band(ring)
+
+    def test_kerb_with_a_small_but_nonempty_interior(self):
+        from unittest.mock import patch
+        import sidewalks
+        poly = np.array([[0., 0.], [25., 0.], [0., 12.]])
+        bounds = [(poly[[i, (i + 1) % 3]], 2.75) for i in range(3)]
+        with patch.object(sidewalks, "V2", True):
+            ring = islands._island_ring(poly, bounds, 0., slip_triangle=True)
+        self.assert_simple_band(ring)
+
+    def assert_simple_band(self, ring):
+        import sidewalks
+        self.assertIsNotNone(ring)
+        ring = np.roll(ring, -int(np.lexsort((ring[:, 1], ring[:, 0]))[0]), axis=0)
+        band = roads.offset_polyline(np.vstack([ring[-1:], ring, ring[:2]]), islands.ISLAND_BAND_M / 2)[1:-1]
+        band = roads.densify(roads.simplify(band, tol=.08), spacing=3.)
+        curb, out = sidewalks.run_geometry(band, 1, islands.ISLAND_BAND_M)
+        def cross(v, w):
+            return v[0] * w[1] - v[1] * w[0]
+
+        for edge in (band[:, :2], curb[:, :2], curb[:, :2] + islands.ISLAND_BAND_M * out):
+            for i, (p, q) in enumerate(zip(edge, edge[1:])):
+                for r, t in zip(edge[i+2:], edge[i+3:]):
+                    side = cross(q-p, r-p) * cross(q-p, t-p)
+                    other = cross(t-r, p-r) * cross(t-r, q-r)
+                    self.assertFalse(side < -1e-10 and other < -1e-10, (i, p, q, r, t))
+
+    def test_slip_island_with_an_initial_point_inside_a_lane(self):
+        from unittest.mock import patch
+        import sidewalks
+        a, b, c = np.array([[0., 0.], [44., 0.], [4., 22.]])
+        poly = np.vstack([np.linspace(a, b, 11, endpoint=False), b, c])
+        bounds = [(np.stack([a, b]), 4.), (np.stack([b, c]), 2.), (np.stack([c, a]), 2.)]
+        with patch.object(sidewalks, "V2", True):
+            self.assertIsNone(islands._island_ring(poly, bounds, 0.))
+            ring = islands._island_ring(poly, bounds, 0., slip_triangle=True)
+            self.assertIsNotNone(ring)
+            for p in ring[:, :2]:
+                self.assertGreater(min(islands._seg_dist(line, p) - half for line, half in bounds), -.1)
+
+    def test_curved_slip_recovers_the_island_with_dense_map_vertices(self):
+        from unittest.mock import patch
+        import sidewalks
+        t = np.linspace(0., 1., 25)
+        curve = np.column_stack([36. * (1. - t) ** 2, 24. * t ** 2])
+        poly = np.vstack([curve, [0., 0.]])
+        bounds = [(curve, 2.), (poly[-2:], 3.), (poly[[-1, 0]], 4.)]
+        self.assertFalse(islands._inside(poly, poly.mean(0)))
+        with patch.object(sidewalks, "V2", True):
+            self.assertIsNotNone(islands._island_ring(poly, bounds, 0., slip_triangle=True))
+
+    def test_two_cycles_may_trace_one_physical_kerb(self):
+        import fast
+        square = np.array([[0., 0.], [10., 0.], [10., 10.], [0., 10.]])
+        resampled = np.insert(square, 1, [5., 0.2], axis=0)
+        separate = square + [0., 12.]
+        different = square.copy()
+        different[2] = [8., 7.]
+        self.assertEqual(fast._ef.duplicate_island_bands([square, separate, resampled, different], .6), [2])
+
     def test_splitter_marker_faces_each_incoming_lane(self):
         ow = roads.Spec(3., "paved", True, "tertiary", True, 2.5, 1)
         road = [

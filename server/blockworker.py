@@ -1783,7 +1783,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     if lanegraph.SHADOW and lanegraph.DEBUG:    # (v3 S1: the cells' lane graphs beside the build, a debug aid only)
         lanegraph.shadow_lanes(cell_keys, cell_fn, _s.cache_dir)
     import roadsurf3
-    v3 = {"cell_fn": cell_fn} if roadsurf3.ON else None
+    v3 = None
+    if roadsurf3.ON:
+        v3 = {"cell_fn": cell_fn, "signal_fn": lambda keys: furniture.signals_for(_s.md, frame, keys)}
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  sign_obstacles=sign_obstacles, sheet_marks=sheet_marks,
                                  v3=v3,

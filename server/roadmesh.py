@@ -3419,5 +3419,6 @@ def write(path, mesh, close=True):
     colors = None if uvs2 is None else np.full((len(P), 4), 255, np.uint8)
     over = np.array([overlay_material(m) for m in mats], bool) if len(mats) else np.zeros(0, bool)
     open_tris = over[np.asarray(M, np.int64)] if over.any() and M is not None else None
+    import roadsurf3
     return cdae.write(path, P, T, uvs=UV, uvs2=uvs2, material=mats, tri_materials=M, object_name="road", open_tris=open_tris,
-                      colors=colors, close=close)   # (close "under": a tunnel's tubes, whose mouths are the way in)
+                      colors=colors, close=close, split_drawn=SURFACE_V2 or roadsurf3.ON)

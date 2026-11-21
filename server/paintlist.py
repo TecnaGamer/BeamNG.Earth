@@ -510,7 +510,7 @@ def _build_roads(s, g, omit_v3=False):
                 sp = specs[i]
                 if sp is None or fid in seen or sp.kind not in sf.PHOTO_ROAD_RGBA:
                     continue
-                if omit_v3 and sp.cls in roadsurf3.V3_CLASSES and sp.kind == "paved":
+                if omit_v3 and roadsurf3.replaces_ground_paint(sp):
                     continue
                 kname = "concrete" if sp.kind == "paved" and sp.surf == "concrete" else sp.kind
                 seen.add(fid)

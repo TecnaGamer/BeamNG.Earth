@@ -73,7 +73,7 @@ const P_AT_GRADE: usize = 23;
 const NPARAMS: usize = 24;
 
 const NOSE_HOLD_M: f64 = 20.0;    // m of branch the lines stay clearly apart before the noses' scan stops
-const CROSS_COS: f64 = 0.7071067811865476;    // cos 45 deg: an arm leaving a junction more across than this crosses
+pub(super) const CROSS_COS: f64 = 0.7071067811865476;    // cos 45 deg: an arm leaving a junction more across than this crosses
 const MAX_PIECES: usize = 64;       // pieces of one arm's walk at most (a loop of continuations)
 const CLS_TRUNK: i64 = 2;           // class codes (roadshape.FORK_CLASSES): 1 motorway, 2 trunk, 3.. lower; 0 none
 
