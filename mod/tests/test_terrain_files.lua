@@ -1,5 +1,5 @@
 -- luajit mod/tests/test_terrain_files.lua
-package.path = 'mod/beamng_earth/lua/ge/extensions/?.lua;' .. package.path
+package.path = (arg[0]:match('^(.*)[/\\]') or '.') .. '/../beamng_earth/lua/ge/extensions/?.lua;' .. package.path
 local files = require('beamngEarth/terrainfiles')
 local st, bound, released = {}, nil, {}
 local net = {isReady = function() return true end, lease = function() return 'a' end,
