@@ -66,7 +66,7 @@ def local_sign(label, categories):
     for category, style in SIGN_STYLES.items():
         if category in categories:
             return LocalSign(name, style)
-    if categories & (SPECIFIC | {"shop", "retail"}):
+    if categories & (SPECIFIC | {"shop", "retail", "sporting_goods_store"}):
         return LocalSign(name, "shop")
     return None
 
@@ -143,6 +143,56 @@ def mapped_tenants(layers, ring, anchor=None, local=False):
             trusted = confidence is not None and float(confidence) >= 0.8
             tenants[str(f.ids[i])] = (name if trusted else None, points[j])
     return list(tenants.values())
+
+
+def exterior_frontages(layers, coords, ring, label, neighbors):
+    """A high-confidence shop pin just outside one unambiguous wall can identify a tenant bay."""
+    from buildings import retail_bays
+    scale = np.array([111320*dmath.cos(dmath.radians(coords[0,1])), 111132])
+    pad = 3.25/np.maximum(scale, 1.)
+    lo, hi = coords.min(0)-pad, coords.max(0)+pad
+    edges = np.roll(ring,-1,axis=0)-ring
+    widths = np.linalg.norm(edges,axis=1)
+    axes = edges / np.maximum(widths[:,None],1e-9)
+    bays = {}
+    for feats, rows, points in layers:
+        near = np.flatnonzero(np.all((points >= lo) & (points <= hi),axis=1))
+        for j in near:
+            i = rows[j]
+            def attr(key):
+                return feats.attrs[key][i] if key in feats.attrs else None
+            if not float(attr("confidence") or 0) >= .9 or attr("operating_status") in {"permanently_closed","closed"}:
+                continue
+            sign = local_sign(attr("name"), {attr("basic_category"),attr("taxonomy")})
+            if not sign:
+                continue
+            if label:
+                # The building label may include a trademark and a descriptive suffix.
+                base = label.replace("\u2122", "").replace("\u00ae", "").casefold()
+                trading = sign.name.casefold()
+                if base != trading and not (base.startswith(trading) and base[len(trading):].lstrip().startswith(("-", "\u2013", "\u2014"))):
+                    continue
+            point = ring[0]+(points[j]-coords[0])*scale
+            offsets = point-ring
+            along = np.clip(np.sum(offsets*axes,axis=1),0,widths)
+            distances = np.linalg.norm(offsets-along[:,None]*axes,axis=1)
+            wall, second = distances.argsort()[:2]
+            if distances[wall]>3.25 or distances[second]<distances[wall]+1.5 or widths[wall]<5:
+                continue
+            if contains_points(ring,point[None])[0]:
+                continue
+            # Reject nearby competing footprints, including ones that enclose the pin.
+            if any(np.all(point >= lower) and np.all(point <= upper)
+                   for lower,upper in neighbors):
+                continue
+            margin,count,pier,opening = retail_bays(widths[wall])
+            bay = int(np.clip(round((along[wall]-margin-opening/2)/(opening+pier)),0,count-1))
+            center = margin+bay*(opening+pier)+opening/2
+            delta = (coords[(wall+1)%len(ring)]-coords[wall])/widths[wall]
+            midpoint = coords[wall]+center*delta
+            half = min(3.5,opening*.45)*delta
+            bays.setdefault((wall,bay), {})[sign.name.casefold()] = (sign,np.array([midpoint-half,midpoint+half]),wall,center)
+    return [next(iter(matches.values())) for matches in bays.values() if len(matches)==1]
 
 
 def tenant_panels(tenants, ring, parking):
@@ -306,7 +356,10 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
     local_enabled = os.environ.get("BNE_LOCAL_BUSINESS_SIGNS") == "1"
     parking_points = None
     cache = Path(cache_dir) / "threedmr_cache" / "storefronts"
-    for spec, ground_min, ground_max in items:
+    if local_enabled:
+        lower_bounds = np.array([host.ring.min(0)[:2]-3.25 for host,_,_ in items])
+        upper_bounds = np.array([host.ring.max(0)[:2]+3.25 for host,_,_ in items])
+    for item_index,(spec, ground_min, ground_max) in enumerate(items):
         if (
             not spec.storefront
             or spec.min_h
@@ -351,6 +404,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
         )
         coords = np.column_stack((ll[1], ll[0]))
         try:
+            exterior = []
             doors = mapped_doors(sources[0], coords) if sources and (spec.retail_front or name) else ()
             if spec.retail_front and doors:
                 spec.retail_doors = entrance_offsets(coords, ring, doors)
@@ -358,6 +412,12 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                 if layers is None:
                     layers = list(businesses(md, keys))
                 tenants = mapped_tenants(layers, coords, anchor=name, local=local_enabled)
+                if spec.retail_front and local_enabled and not name and not doors and not tenants:
+                    nearby = (np.all(upper_bounds >= ring.min(0)-3.25,axis=1)
+                              & np.all(lower_bounds <= ring.max(0)+3.25,axis=1))
+                    nearby[item_index] = False
+                    neighbors = list(zip(lower_bounds[nearby],upper_bounds[nearby]))
+                    exterior = exterior_frontages(layers,coords,ring,label,neighbors)
                 if name and any(brand != name for brand, _ in tenants):
                     # A retail host may carry its anchor's name but also contain independent stores.
                     name = None
@@ -365,7 +425,7 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     name = fallback
                 elif not name and len(tenants) == 1 and (not label or isinstance(tenants[0][0], LocalSign) and not generic_host):
                     name = tenants[0][0]
-                if not name and not (generic_host and tenants and len(aisles)):
+                if not name and not exterior and not (generic_host and tenants and len(aisles)):
                     continue
             if name and sources and not doors and not spec.retail_front:
                 doors = mapped_doors(sources[0], coords)
@@ -376,7 +436,9 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     entrance_bearing = round(dmath.degrees(dmath.atan2(parking[1], parking[0])))
             bearing = round(dmath.degrees(dmath.atan2(facing[1], facing[0])))
             signed_wall = None
-            if isinstance(name, LocalSign):
+            if exterior:
+                matches = [(sign,panel,None,None) for sign,panel,_,_ in exterior]
+            elif isinstance(name, LocalSign):
                 panel = approach_panel(ring, coords, facing, doors)
                 if panel is None:
                     continue
@@ -408,18 +470,24 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     centers = [panel.mean(0) for _,panel in panels]
                     spec.retail_doors = entrance_offsets(coords, ring, centers)
                 matches = ((brand, panel, None, None) for brand, panel in panels)
-            for brand, geometry, heading, finish in matches:
+            for index,(brand, geometry, heading, finish) in enumerate(matches):
                 options = {}
                 if isinstance(brand, LocalSign):
                     if spec.height < 2.8:
                         continue
                     options["local_panel"] = (brand.style, round(min(4.2, spec.height - .2), 1))
-                    if signed_wall is not None:
+                    if signed_wall is not None or exterior:
                         options["local_panel"] = (brand.style, round(spec.height+.65, 2), "raised")
                     brand = brand.name
                 entry = cached_entry(cache, brand, geometry, heading, finish, doors=doors, entrance_bearing=entrance_bearing, **options)
                 if signed_wall is not None:
                     spec.front = signed_wall
+                if exterior:
+                    _,_,wall,along = exterior[index]
+                    if index == 0:
+                        spec.retail_doors = {}
+                    spec.retail_doors.setdefault(wall,[]).append(along)
+                    spec.front = wall
                 local = dict(entry, file="storefronts/" + entry["file"])
                 x, y, _ = frame.geodetic_to_enu(entry["lat"], entry["lon"], 0.0)
                 yield {

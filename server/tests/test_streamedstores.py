@@ -137,6 +137,21 @@ class StreamedStoresTest(unittest.TestCase):
                 glass = triangles[materials == buildings.MATERIALS.index(buildings.LOBBY)]
                 self.assertEqual(sum(points[t,2].min() == 0 for t in glass),8)
 
+    def test_exterior_shops_claim_distinct_bays_only(self):
+        from streamedstores import exterior_frontages
+        ring = np.array([[0.,0.],[30.,0.],[30.,12.],[0.,12.]])
+        scale = [111320.,111132.]
+        points = np.array([[5.,-1.],[24.,-2.],[15.,-6.],[0.,-.5]])/scale
+        attrs = {"name": ["West","East","Across","Corner"], "confidence": [1.]*4,
+                 "basic_category": ["sporting_goods_store"]*4}
+        layers = [(SimpleNamespace(attrs=attrs),np.arange(4),points)]
+        def names(neighbors=()):
+            return [s.name for s,_,_,_ in exterior_frontages(layers,ring/scale,ring,"",neighbors)]
+        self.assertEqual(names(),["West","East"])
+        self.assertEqual(names([(np.array([20.,-4.]),np.array([28.,-1.]))]),["West"])
+        points[2] = [5.5/scale[0],-1./scale[1]]
+        self.assertEqual(names(),["East"])
+
     def test_catalog_matches_typed_cinemas_and_restaurant_aliases(self):
         from streamedstores import chain
         from store_match import brand
