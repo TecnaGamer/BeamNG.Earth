@@ -1,0 +1,209 @@
+{
+  "bne_barrier_metal": {
+    "name": "bne_barrier_metal",
+    "mapTo": "bne_barrier_metal",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.23,
+          0.25,
+          0.25,
+          1
+        ],
+        "metallicFactor": 0.65,
+        "roughnessFactor": 0.65,
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      }
+    ]
+  },
+  "bne_barrier_hedge": {
+    "name": "bne_barrier_hedge",
+    "mapTo": "bne_barrier_hedge",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tree/cypress/t_cypress_leaves/t_cypress_leaves_b.color.dds",
+        "normalMap": "/assets/materials/tree/cypress/t_cypress_leaves/t_cypress_leaves_nm.normal.dds",
+        "roughnessMap": "/assets/materials/tree/cypress/t_cypress_leaves/t_cypress_leaves_r.data.dds",
+        "baseColorFactor": [
+          0.65,
+          0.75,
+          0.6,
+          1
+        ],
+        "metallicFactor": 0,
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      }
+    ]
+  },
+  "bne_wall_neutral": {
+    "name": "bne_wall_neutral",
+    "mapTo": "bne_wall_neutral",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/plaster/m_stucco_white/t_stucco_white_b.color.png",
+        "normalMap": "/assets/materials/tileable/plaster/m_stucco_white/t_stucco_white_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/plaster/m_stucco_white/t_stucco_white_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/plaster/m_stucco_white/t_stucco_white_ao.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.68,
+          0.67,
+          0.64,
+          1
+        ],
+        "vertColor": false,
+        "roughnessFactor": 0.95
+      },
+      {
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      }
+    ],
+    "translucent": false,
+    "groundType": "CONCRETE"
+  },
+  "bne_boundary_wood": {
+    "name": "bne_boundary_wood",
+    "mapTo": "bne_boundary_wood",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/wood/weatherboards/t_weatherboards_b.color.png",
+        "normalMap": "/assets/materials/tileable/wood/weatherboards/t_weatherboards_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/wood/weatherboards/t_weatherboards_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/wood/weatherboards/t_weatherboards_ao.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      }
+    ],
+    "translucent": false
+  },
+  "bne_wall_brick": {
+    "name": "bne_wall_brick",
+    "mapTo": "bne_wall_brick",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/brick/brick_plain/t_bricks_red_01_b.color.png",
+        "normalMap": "/assets/materials/tileable/brick/brick_plain/t_bricks_red_01_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/brick/brick_plain/t_bricks_red_01_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/brick/brick_plain/t_bricks_red_01_ao.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      }
+    ],
+    "translucent": false
+  },
+  "bne_wall_stone": {
+    "name": "bne_wall_stone",
+    "mapTo": "bne_wall_stone",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/brick/stone_brick_irregular/t_stone_brick_irregular_b.color.png",
+        "normalMap": "/assets/materials/tileable/brick/stone_brick_irregular/t_stone_brick_irregular_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/brick/stone_brick_irregular/t_stone_brick_irregular_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/brick/stone_brick_irregular/t_stone_brick_irregular_ao.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      },
+      {
+        "vertColor": false
+      }
+    ],
+    "translucent": false
+  },
+  "bne_barrier_mesh": {
+    "name": "bne_barrier_mesh",
+    "mapTo": "bne_barrier_mesh",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 40,
+    "doubleSided": true,
+    "groundType": "METAL",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/metal/chainlink/t_chainlink_fence_b.color.png",
+        "normalMap": "/assets/materials/tileable/metal/chainlink/t_chainlink_fence_nm.normal.png",
+        "opacityMap": "/assets/materials/tileable/metal/chainlink/t_chainlink_fence_o.data.png",
+        "roughnessFactor": 0.6,
+        "metallicFactor": 1
+      }
+    ]
+  }
+}
