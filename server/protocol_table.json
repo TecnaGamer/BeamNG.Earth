@@ -31,7 +31,7 @@
  },
  "mod_to_server": {
   "hello": {
-   "doc": "sessions: the session folders whose files the mod's objects still use (farfield.heldSessions; a restarted server keeps an earlier run's folder named here, docs/ROADMAP.md \"Robustness\" 3)",
+   "doc": "sessions: the session folders whose files the mod's objects still use (terrain deliveries, far tiles and road tiles; a restarted server keeps each earlier session still named here, docs/ROADMAP.md \"Robustness\" 3)",
    "fields": {
     "protocol": {"type": "int"},
     "format": {"type": "int"},

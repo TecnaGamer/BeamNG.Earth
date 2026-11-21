@@ -7651,6 +7651,7 @@ class Connection:
         self.closing = False
         self.active = None              # committed anchor id
         self.block = None               # farfield.Block of the committed terrain
+        self.confirmed_terrain = None   # last commit_terrain on this transport (commit_anchor can be view-only)
         self.pending_block = None       # the last prepare_terrain of the active anchor
         self.terrain_wait = 0           # prepare_terrain requests being built (roads.Tracker: the ground first)
         self.pending_at = None          # when the pending block was asked (on_pose: the catch-up boost)
@@ -8826,6 +8827,7 @@ class Connection:
         self.nav.close()
         self.nav = navgraphmod.Tracker()
         self.active = None              # (far tiles in flight land unwanted: not desired, skipped)
+        self.confirmed_terrain = None
         self.far.forget()
         self.desired = {}
         self.refined, self.node_changed = set(), {}
@@ -9848,8 +9850,7 @@ class Connection:
                 key = (aid, cx, cy)
                 log.info("terrain_ready %s after %.0f ms (provisional: the graded block follows)", key,
                          (time.perf_counter() - t0) * 1000)
-                self._answered(aid, cx, cy)
-                self.send({"type": "terrain_ready", "requestId": req, "anchorId": aid, **self.terrain_msg(key, prov)})
+                self._send_terrain_ready(req, key, prov)
                 self.note_provisional(anchor, key, prov)
                 return
             try:
@@ -9873,14 +9874,18 @@ class Connection:
         key = (aid, cx, cy)
         self.s.hm_sent.append(key)
         log.info("terrain_ready %s after %.0f ms", key, (time.perf_counter() - t0) * 1000)
-        self._answered(aid, cx, cy)
-        self.send({"type": "terrain_ready", "requestId": req, "anchorId": aid, **self.terrain_msg(key, info)})
+        self._send_terrain_ready(req, key, info)
 
-    def _answered(self, aid, cx, cy):
-        """The pending block's terrain_ready went: from now on its commit is the mod's to make (the player reaching
-        its commit distance, its far tiles going live), which more server cores do not hasten (behind)."""
+    def _send_terrain_ready(self, req, key, info):
+        aid, cx, cy = key
+        self.send({"type": "terrain_ready", "requestId": req, "anchorId": aid, **self.terrain_msg(key, info)})
         if aid == self.active and self.pending_block == self.s.layout.block_at(cx, cy):
             self.pending_answered = True
+        # The mod has one pending follow. Asking for another invalidates the old requestId even
+        # while the car stays put. Reconcile after issuing the hold so a late reply cannot re-pin it.
+        current = self.confirmed_terrain
+        if current and current[0] == self.active and not getattr(self, "terrain_files", False):
+            self.release_legacy_terrain(current)
 
     async def provisional_follow(self, anchor, cx, cy, job):
         """A follow block's provisional stand-in (PROVISIONAL_FOLLOW_S): None when the graded block came in time (or
@@ -10171,7 +10176,8 @@ class Connection:
             else:
                 log.warning("commit_terrain for anchor %r (active %r) ignored", aid, self.active)
                 return
-        self.release_legacy_terrain((aid, int(cx), int(cy)))
+        self.confirmed_terrain = (aid, int(cx), int(cy))
+        self.release_legacy_terrain(self.confirmed_terrain)
         if self.block == self.s.layout.block_at(cx, cy):
             return
         # Far-tile keys do not depend on the block; only the forced L0 area moves.

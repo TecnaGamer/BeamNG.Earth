@@ -91,6 +91,27 @@ class TerrainFilesTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(p.exists() for p in files + current))
         self.assertTrue(all(p.exists() for p in wanted))
 
+    def test_superseded_follow_reply_finishing_last_does_not_repin_its_files(self):
+        c = self.game()
+        c.active, c.swap_token, c.terrain_files = 1, None, False
+        self.s.layout.grid = 128
+        self.s.layout.block_at = lambda cx, cy: SimpleNamespace(cx=cx, cy=cy)
+        c.block = self.s.layout.block_at(0, 0)
+        c.pending_block = self.s.layout.block_at(256, 0)
+        c.send = lambda msg: None
+        current, installed = self.revision(0)
+        late, obsolete = self.revision(1)
+        next_block, pending = self.revision(2)
+        c.terrain_msg((1, 0, 0), current)
+        c.commit_terrain(dict(anchorId=1, cx=0, cy=0))
+        c._send_terrain_ready(22, (1, 256, 0), next_block)
+        c._send_terrain_ready(21, (1, 128, 0), late)
+        for rev in (current, late, next_block):
+            self.s.retire_terrain(earthd.block_files(rev))
+        self.s.removes_flush()
+        self.assertFalse(any(p.exists() for p in obsolete))
+        self.assertTrue(all(p.exists() for p in installed + pending))
+
     def test_worker_error_after_publishing_some_files_collects_only_its_revision(self):
         s, key = self.s, (1, 0, 0)
         old, current = self.revision(1)
