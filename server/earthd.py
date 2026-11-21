@@ -743,9 +743,8 @@ class FollowRule:
 
     def mode(self, vx, vy):
         """(lead, reach, prepare-test ahead s) for this velocity."""
-        if vx * vx + vy * vy > self.fast_v * self.fast_v:
-            return self.fast_lead, self.fast_reach, self.fast_ahead
-        return self.lead, self.reach, 0.0
+        fast.require(578, "terrain follow mode")
+        return fast._ef.follow_mode(self, (vx, vy))
 
 
 # By the block's width in metres (heightmap.grid): docs/V1_4_SPEC.md §3.5 (M4): the 1 km block (collidable
@@ -978,18 +977,8 @@ def predict_centre(px, py, vx, vy, lead, reach=FOLLOW_REACH, grid=heightmap.GRID
                    min_lead_v=2.0):
     """snap256(p + v*lead) (M4: the block's grid), the lead at least min_lead metres while moving (follow.lua's
     MIN_LEAD), clamped so p stays within `reach` of the centre on both axes."""
-    lx, ly = vx * lead, vy * lead
-    v2 = vx * vx + vy * vy
-    if min_lead > 0 and v2 > min_lead_v * min_lead_v and lx * lx + ly * ly < min_lead * min_lead:
-        k = min_lead / math.sqrt(v2)
-        lx, ly = vx * k, vy * k
-    out = []
-    for p, d in ((px, lx), (py, ly)):
-        c = heightmap.snap(p + d, grid)
-        lo = math.ceil((p - reach) / grid) * grid
-        hi = math.floor((p + reach) / grid) * grid
-        out.append(float(min(max(c, lo), hi)) + 0.0)
-    return tuple(out)
+    fast.require(578, "terrain follow centre")
+    return fast._ef.follow_centre((px, py), (vx, vy), lead, reach, grid, min_lead, min_lead_v)
 
 
 def predict_request(px, py, vx, vy, cx, cy, rule=FOLLOW_RULES[2048.0], at=None):
@@ -998,44 +987,16 @@ def predict_request(px, py, vx, vy, cx, cy, rule=FOLLOW_RULES[2048.0], at=None):
     mod's own target rule there. (Spec 4 suggests snap256(p + v*6 s); predicting the mod's
     exact request instead avoids builds that are never asked for.) rule: the block size's
     follow table; in its fast mode the box test is on the point v * fast_ahead ahead."""
-    lead, reach, ahead = rule.mode(vx, vy)
-    v2 = vx * vx + vy * vy
-    if (rule.min_lead > 0 and rule.min_lead_v * rule.min_lead_v < v2 and v2 * lead * lead < rule.min_lead * rule.min_lead
-            and (cx - px) * vx + (cy - py) * vy > 0
-            and max(abs(px - cx), abs(py - cy)) <= rule.min_lead + rule.grid):
-        # (follow.lua centreAhead: the centre just committed is ahead; the next request once the player is past it)
-        t0 = ((cx - px) * vx + (cy - py) * vy) / v2 + FRAME_S
-        px, py = px + vx * t0, py + vy * t0
-    qx, qy = px + vx * ahead, py + vy * ahead
-    t = 0.0
-    if max(abs(qx - cx), abs(qy - cy)) <= rule.prepare:
-        exits = [((c + math.copysign(rule.prepare, v)) - q) / v
-                 for q, v, c in ((qx, vx, cx), (qy, vy, cy)) if abs(v) > 0.5]
-        t = min(exits) + FRAME_S if exits else 0.0
-    if at is not None:          # (the player where it asks: READY_STEPS, Connection.maybe_prefetch)
-        at.append((px + vx * t, py + vy * t))
-    return predict_centre(px + vx * t, py + vy * t, vx, vy, lead, reach, rule.grid, rule.min_lead, rule.min_lead_v)
+    fast.require(578, "terrain follow request")
+    return fast._ef.follow_request(rule, (px, py), (vx, vy), (cx, cy), FRAME_S, at)
 
 
 def predict_chain(px, py, vx, vy, cx, cy, rule, n, at=None):
     """The next n centres the mod will ask for (predict_request, chained): after each, the player where its path passes
     nearest that centre, the next request from there. Fewer when the chain stops (no move, a repeat). at: a dict
     filled with each centre's request point (the player where it asks)."""
-    out = []
-    v2 = vx * vx + vy * vy
-    if v2 < 1.0:
-        return out
-    for _ in range(n):
-        where = []
-        c = predict_request(px, py, vx, vy, cx, cy, rule, where)
-        if c == (cx, cy) or c in out:
-            break
-        out.append(c)
-        if at is not None:
-            at[c] = where[0]
-        t = max(0.0, ((c[0] - px) * vx + (c[1] - py) * vy) / v2)
-        px, py, (cx, cy) = px + vx * t, py + vy * t, c
-    return out
+    fast.require(578, "terrain follow chain")
+    return fast._ef.follow_chain(rule, (px, py), (vx, vy), (cx, cy), n, FRAME_S, at)
 
 
 # A fast player on their GPS route: the blocks ahead predicted along it, not along a straight line (predict_chain): at
@@ -1052,41 +1013,10 @@ def predict_route_chain(xy, px, py, vx, vy, cx, cy, rule, n, at=None):
     """The next n centres the mod will ask for while the player at (px, py) moving (vx, vy) drives along the route
     polyline xy ((k, 2) in the anchor frame), or None when the player is not on it (ROUTE_NEAR_M, ROUTE_ALIGN). The
     mod's rule (predict_request) tried every ROUTE_STEP_M along the route with the route's own heading there."""
-    sp = math.hypot(vx, vy)
-    if sp < 1.0 or xy is None or len(xy) < 2:
-        return None
-    a, b = xy[:-1], xy[1:]
-    d = b - a
-    ln2 = np.maximum((d * d).sum(1), 1e-9)
-    t = np.clip(((px - a[:, 0]) * d[:, 0] + (py - a[:, 1]) * d[:, 1]) / ln2, 0.0, 1.0)
-    q = a + d * t[:, None]
-    dist = dnp.hypot(q[:, 0] - px, q[:, 1] - py)
-    j = int(np.argmin(dist))
-    seg = float(np.sqrt(ln2[j]))
-    if dist[j] > ROUTE_NEAR_M or ((d[j, 0] * vx + d[j, 1] * vy) / (seg * sp)) < ROUTE_ALIGN:
-        return None
-    reach = min(ROUTE_AHEAD_MAX_M, sp * ROUTE_AHEAD_S)
-    out, gone, x, y, k = [], 0.0, float(q[j, 0]), float(q[j, 1]), j
-    while gone < reach and k < len(d) and len(out) < n:
-        ux, uy = d[k, 0] / math.sqrt(ln2[k]), d[k, 1] / math.sqrt(ln2[k])
-        bx, by = float(b[k, 0]), float(b[k, 1])
-        left = math.hypot(bx - x, by - y)
-        step = min(ROUTE_STEP_M, left)
-        if left <= 1e-6:
-            k += 1
-            continue
-        x, y, gone = x + ux * step, y + uy * step, gone + step
-        lvx, lvy = ux * sp, uy * sp
-        _lead, _reach, ahead = rule.mode(lvx, lvy)
-        if max(abs(x + lvx * ahead - cx), abs(y + lvy * ahead - cy)) > rule.prepare:
-            where = []
-            c = predict_request(x, y, lvx, lvy, cx, cy, rule, where)
-            if c != (cx, cy) and c not in out:
-                out.append(c)
-                if at is not None:
-                    at[c] = where[0]
-                cx, cy = c
-    return out
+    fast.require(578, "terrain route prediction")
+    route = None if xy is None or len(xy) < 2 else np.asarray(xy, np.float64)
+    return fast._ef.follow_route(rule, route, (px, py), (vx, vy), (cx, cy), n, FRAME_S,
+                                 (ROUTE_NEAR_M, ROUTE_ALIGN, ROUTE_STEP_M, ROUTE_AHEAD_S, ROUTE_AHEAD_MAX_M), at)
 
 
 def _num(msg, name, default=None):
@@ -4501,55 +4431,16 @@ class Server:
         """A provisional block built again (Connection.prov_refresh: its road cells came after it): blockworker.build
         provisional in the photo process (the lane make_provisional uses), no photo of its own (the one shown stays);
         its info. Without block processes, here."""
-        key = (anchor.id, cx, cy)
-        t0 = time.perf_counter()
-        pool = self.photo_pool or (self.block_pools[LANE_PREFETCH][0] if self.block_pools else None)
-        if pool is not None:
-            with self.writing_block(key) as names:
-                info = pool.submit(blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom,
-                                   self.anchor_q(anchor), cx, cy, self.layout.block, self.out_dir,
-                                   *names, provisional=True).result()
-                info.pop("started", None)
-                info.pop("finished", None)
-        else:
-            info = self._make_heightmap_here(anchor, cx, cy, None, t0, self.anchor_q(anchor), None, provisional=True)
-        info.pop("base", None)
-        info["seconds"] = time.perf_counter() - t0
-        info["zoom"] = anchor.hm_zoom
-        log.info("provisional block %s built again with its roads in %.2f s (%s)", key, info["seconds"],
-                 " ".join(f"{k} {v:.2f}" for k, v in info.get("stages", {}).items()))
-        return info
+        fast.require(578, "provisional terrain repaint")
+        return fast._ef.provisional_rebuild(self, anchor, (cx, cy), LANE_PREFETCH, blockworker.build, log)
 
     def make_provisional_follow(self, anchor, cx, cy):
         """A follow block's provisional stand-in (Connection.provisional_follow) in a worker process (blockworker.build
         provisional: the DEM's ground, no road plans, sea floor or tunnels, the cached roads painted), its stand-in
         photo started beside it (at most STANDIN_WAIT_S; else none, the photo later). Built here (make_provisional) it
         took 11-33 s of a first visit beside the rest of this process's work (nyc_speed.py --cold, 2026-11-02)."""
-        pool = self.photo_pool or (self.block_pools[LANE_PREFETCH][0] if self.block_pools else None)
-        if pool is None:
-            return self.make_provisional(anchor, cx, cy, None)
-        t0 = time.perf_counter()
-        key = (anchor.id, cx, cy)
-        early = (self.quick_early.submit(self._stand_in, anchor, cx, cy)
-                 if self.near_visual == "detail" and self.imagery is not None else None)
-        with self.writing_block(key) as names:
-            info = pool.submit(blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, self.anchor_q(anchor),
-                               cx, cy, self.layout.block, self.out_dir, *names,
-                               provisional=True).result()
-            info.pop("started", None)
-            info.pop("finished", None)
-            if early is not None:
-                try:
-                    info["base"] = early.result(timeout=STANDIN_WAIT_S)
-                except Exception:
-                    info["base"] = None
-                if not info.get("base"):
-                    self.quick_pool.submit(self._quick_later, anchor, cx, cy)
-            info["seconds"] = time.perf_counter() - t0
-            info["zoom"] = anchor.hm_zoom
-            log.info("provisional block %s in %.2f s in a worker (%s)", key, info["seconds"],
-                     " ".join(f"{k} {v:.2f}" for k, v in info.get("stages", {}).items()))
-            return info
+        fast.require(578, "provisional block worker")
+        return fast._ef.provisional_build(self, anchor, (cx, cy), LANE_PREFETCH, blockworker.build, STANDIN_WAIT_S, log)
 
     def make_provisional(self, anchor, cx, cy, progress, ground_at=(0.0, 0.0)):
         """Worker thread: a teleport's first block before its road plans (the user, 2026-10-22: "place the car as
@@ -4558,53 +4449,23 @@ class Server:
         cached land cover and the photo. The graded block replaces it when it is built (Connection.refine_first:
         terrain_refresh). Not kept in hm (the graded one is the block of its key), nor in anchor.chunks. ground_at: the
         point its groundZ is for (the car's spot)."""
-        t0 = time.perf_counter()
-        # (the anchor's height quantum, its survey's DEM reads at the urgent priority as the block's own: queued behind
-        # the teleport's other downloads, the survey (+-15 km of DEM z10, 0.1-0.6 s alone cold) was 3.6 s of a fresh
-        # Spokane's 5.2 s first block, 2026-11-11. A quantum of the block's own instead (block_params) made the far
-        # tiles over it two steps off the graded block, test_integration_drive's l2 check)
-        urgent = getattr(self.dem, "urgent", None)     # (test DEMs have no lane)
-        with urgent() if urgent is not None else contextlib.nullcontext():
-            q = self.anchor_q(anchor)
-        base = None
-        if self.near_visual == "detail" and self.imagery is not None:
-            # (here, not in a block process: the other lane's process can still be busy with the old place's block,
-            # and the photo waited 16 s behind it on a Deck, 2026-10-23)
-            base = self.urgent_base_pool.submit(self._base_photo, anchor, cx, cy, None, True, True)
-            anchor.first_base = ((cx, cy), base)
-        pool = self.photo_pool or (self.block_pools[LANE_PREFETCH][0] if self.block_pools else None)
-        if pool is not None and PROVISIONAL_ELSEWHERE:
-            # in a block process: here it took 13-21 s at fresh dense places beside this interpreter's other work (its
-            # roadPaint above all), 3.9 s for the same block in a fresh process (.claude/work/rust_port_plan.md 1a,
-            # 2026-11-07); the follow blocks' stand-ins went there before (make_provisional_follow)
-            key = (anchor.id, cx, cy)
-            if base is not None and getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V:
-                # (its stand-in photo too, made here beside the heights (the photo process builds them): the block goes
-                # with it when its photo is not done PROVISIONAL_BASE_WAIT_S after the heights, the photo swapped in
-                # when done; it waited for the photo, 2 of a 2.9 s first block in Lower Manhattan, 2026-11-11)
-                self.quick_futs[key] = self.quick_early.submit(
-                    self._quick_once, anchor, cx, cy, lambda: self.write_quick_base(anchor, cx, cy))
-            ts = time.time()
-            with self.writing_block(key) as names:
-                info = pool.submit(blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
-                                   self.layout.block, self.out_dir, *names,
-                                   provisional=True, ground_at=tuple(ground_at)).result()
-                started, finished = info.pop("started", None), info.pop("finished", None)
-                if started is not None and finished is not None:    # (where a first block's seconds go)
-                    info.setdefault("stages", {}).update(queue=max(0.0, started - ts), work=max(0.0, finished - started),
-                                                         back=max(0.0, time.time() - finished))
-                info = self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=True,
-                                              base_wait=PROVISIONAL_BASE_WAIT_S, ground=True)
-                log.info("provisional block %s in %.2f s in a worker (%s)", key, time.perf_counter() - t0,
-                         " ".join(f"{k} {v:.2f}" for k, v in info.get("stages", {}).items()))
-                return info
-        urgent = getattr(self.dem, "urgent", None)     # (test DEMs have no lane)
-        with urgent() if urgent is not None else contextlib.nullcontext():
-            info = self._make_heightmap_here(anchor, cx, cy, progress, t0, q, base, provisional=True,
-                                             ground_at=ground_at, ground=True)
-        log.info("provisional block %s in %.2f s (%s)", (anchor.id, cx, cy), time.perf_counter() - t0,
-                 " ".join(f"{k} {v:.2f}" for k, v in info.get("stages", {}).items()))
-        return info
+        fast.require(578, "first provisional block")
+        def urgent():
+            lane = getattr(self.dem, "urgent", None)
+            return lane() if lane is not None else contextlib.nullcontext()
+
+        def quantum():
+            with urgent():
+                return self.anchor_q(anchor)
+
+        def local(t0, q, base):
+            with urgent():
+                return self._make_heightmap_here(anchor, cx, cy, progress, t0, q, base, provisional=True,
+                                                 ground_at=ground_at, ground=True)
+
+        return fast._ef.provisional_first(
+            self, anchor, (cx, cy), ground_at, quantum, local, lambda: self.write_quick_base(anchor, cx, cy),
+            blockworker.build, LANE_PREFETCH, (PROVISIONAL_ELSEWHERE, QUICK_SYNC_MAX_V, PROVISIONAL_BASE_WAIT_S), log)
 
     def _make_heightmap_here(self, anchor, cx, cy, progress, t0, q, base=None, provisional=False, ground_at=(0.0, 0.0),
                              ground=False):
@@ -5337,35 +5198,8 @@ class Server:
         waits for it (QUICK_SHARE_WAIT_S at most), one after takes the file made. The early stand-in, the provisional
         block's, the finished block's and _quick_later each made their own: up to 5 of one block, two at once, ~100
         stand-ins at 2-9 s for 26 blocks of a 6 min drive (nyc_speed.py --cold, 2026-11-02)."""
-        key = (anchor.id, cx, cy)
-        with self.quick_lock:
-            name = self.quick_made.get(key)
-            if name and os.path.exists(os.path.join(self.out_dir, name)):
-                return name
-            fut = self.quick_running.get(key)
-            mine = fut is None
-            if mine:
-                fut = self.quick_running[key] = concurrent.futures.Future()
-        if not mine:
-            try:
-                return fut.result(timeout=QUICK_SHARE_WAIT_S)
-            except Exception:
-                return None
-        try:
-            name = make()
-        except BaseException as e:
-            fut.set_exception(e)
-            raise
-        else:
-            fut.set_result(name)
-            return name
-        finally:
-            with self.quick_lock:
-                self.quick_running.pop(key, None)
-                if fut.done() and not fut.exception() and fut.result():
-                    if len(self.quick_made) >= QUICK_MADE_KEPT:
-                        self.quick_made.clear()
-                    self.quick_made[key] = fut.result()
+        fast.require(578, "shared stand-in photo")
+        return fast._ef.standin_once(self, (anchor.id, cx, cy), make, QUICK_SHARE_WAIT_S, QUICK_MADE_KEPT)
 
     def _quick_elsewhere(self, anchor, cx, cy, lane, pool=None):
         """write_quick_base in the block's own lane process (idle once its heights are built: blockworker.base_photo
@@ -7529,6 +7363,17 @@ def terrain_tickets(value):
     return None
 
 
+def provisional_cells_ready(s, anchor, key):
+    """Whether the map provider has the road and surface layers underneath this block."""
+    half = s.layout.block * heightmap.SQUARE / 2
+    la, lo, _ = anchor.frame.enu_to_geodetic(np.array([key[1] - half, key[1] + half]),
+                                             np.array([key[2] - half, key[2] + half]), 0.0)
+    cells = mapcells.cells_for_bbox(float(np.min(la)), float(np.min(lo)), float(np.max(la)),
+                                    float(np.max(lo)))
+    return all(s.mapdata.has(k, "roads") and (s.surface is None or s.mapdata.has(k, "landcover"))
+               for k in cells)
+
+
 def block_files(info):
     """The height, terrain and all mask files owned exclusively by this build. Photos have a separate lifetime."""
     return [n for n in (info.get("heightmap"), info.get("ter"), *(info.get("layers") or ())) if n]
@@ -9476,20 +9321,9 @@ class Connection:
         return progress
 
     def terrain_msg(self, key, info):
-        out = {"cx": key[1], "cy": key[2], "heightmap": f"{self.s.vfs_dir}/{info['heightmap']}",
-               "size": self.s.layout.block, "squareSize": heightmap.SQUARE, "zBase": info["zBase"], "maxHeight": info["maxHeight"],
-               "q": info["q"]}
-        if info.get("layers"):      # --surface on: one mask per material, MATERIALS order
-            # only the .ter's own materials, in its order (surface.write_ter; all of them for an older block)
-            use = info.get("mats") or range(len(surfacemod.MATERIALS))
-            out["layers"] = [f"{self.s.vfs_dir}/{info['layers'][i]}" for i in use]
-            out["materials"] = [list(surfacemod.MATERIALS[i]) for i in use]
-        if info.get("base"):        # detail mode: the base photo over the block's world size
-            out["base"] = f"{self.s.vfs_dir}/{info['base']}"
-            self.s.note_base(key, info["base"])
-            out["baseSize"] = self.s.layout.block * heightmap.SQUARE
-        if info.get("ter"):         # the same block as the engine's terrain file (swapped in, no import)
-            out["ter"] = f"{self.s.vfs_dir}/{info['ter']}"
+        fast.require(578, "terrain message")
+        out = fast._ef.terrain_message(self, key, info, heightmap.SQUARE, surfacemod.MATERIALS)
+
         lease = getattr(self, "lease", None)
         if lease is not None and not self.closing and not getattr(self, "terrain_unloaded", False) and lease.connection is self:
             paths = [os.path.join(self.s.out_dir, n) for n in block_files(info)]
@@ -9841,25 +9675,12 @@ class Connection:
             asyncio.get_running_loop().call_later(PROVISIONAL_KEEP_S, self.s.remove_revision_files, paths)
 
     async def prepare_terrain(self, msg):
+        fast.require(578, "terrain preparation")
         req = msg.get("requestId")
-        try:
-            aid = msg["anchorId"]
-            anchor = self.s.anchors[aid]
-            cx, cy = self.s.snap(_num(msg, "cx")), self.s.snap(_num(msg, "cy"))
-        except (KeyError, TypeError, ValueError) as e:
-            self.send({"type": "terrain_error", "requestId": req, "anchorId": msg.get("anchorId"),
-                       "error": f"invalid request: {type(e).__name__} {e}"})
+        request = fast._ef.terrain_start(self, msg, _num, log)
+        if request is None:
             return
-        if aid == self.active and self.s.layout.block_at(cx, cy) != self.block:
-            # The pending block's L0 tiles stream first, so the commit never waits (§2.3).
-            self.pending_block = self.s.layout.block_at(cx, cy)
-            self.pending_at = time.monotonic()
-            self.pending_answered = False
-            t1 = time.perf_counter()
-            self.update_far()
-            dt = time.perf_counter() - t1
-            if dt > 0.1:
-                (log.info if dt > 0.5 else log.debug)("terrain request %s: update_far %.2f s", (aid, cx, cy), dt)
+        aid, anchor, cx, cy = request
         gate = getattr(anchor, "swap_gate", None)
         if gate is not None:            # (a generation swap is being staged: no other block until it is committed)
             await gate.wait()
@@ -9869,12 +9690,8 @@ class Connection:
             job = asyncio.ensure_future(self.s.terrain(anchor, cx, cy))
             prov = await self.provisional_follow(anchor, cx, cy, job)
             if prov is not None:
-                self.terrain_wait -= 1
-                key = (aid, cx, cy)
-                log.info("terrain_ready %s after %.0f ms (provisional: the graded block follows)", key,
-                         (time.perf_counter() - t0) * 1000)
-                self._send_terrain_ready(req, key, prov)
-                self.note_provisional(anchor, key, prov)
+                fast._ef.terrain_ready(self, req, aid, (cx, cy), prov, True, log, t0)
+                self.note_provisional(anchor, (aid, cx, cy), prov)
                 return
             try:
                 info = await asyncio.wait_for(asyncio.shield(job), TERRAIN_STUCK_S)
@@ -9885,40 +9702,22 @@ class Connection:
                             self.s.hm_stage.get((aid, cx, cy), "a heightmap worker"))
                 info = await job
         except Exception as e:
-            self.terrain_wait -= 1
-            log.exception("terrain request %s failed", req)
-            self.send({"type": "terrain_error", "requestId": req, "anchorId": aid,
-                       "error": f"{type(e).__name__}: {e}"})
-            if aid == self.active and self.pending_block == self.s.layout.block_at(cx, cy):
-                self.pending_block = None   # the mod will not commit it: stop forcing L0 there
-                self.update_far()
+            fast._ef.terrain_failed(self, req, aid, (cx, cy), e, log)
             return
-        self.terrain_wait -= 1
-        key = (aid, cx, cy)
-        self.s.hm_sent.append(key)
-        log.info("terrain_ready %s after %.0f ms", key, (time.perf_counter() - t0) * 1000)
-        self._send_terrain_ready(req, key, info)
+        fast._ef.terrain_ready(self, req, aid, (cx, cy), info, False, log, t0)
 
     def _send_terrain_ready(self, req, key, info):
-        aid, cx, cy = key
-        self.send({"type": "terrain_ready", "requestId": req, "anchorId": aid, **self.terrain_msg(key, info)})
-        if aid == self.active and self.pending_block == self.s.layout.block_at(cx, cy):
-            self.pending_answered = True
-        # The mod has one pending follow. Asking for another invalidates the old requestId even
-        # while the car stays put. Reconcile after issuing the hold so a late reply cannot re-pin it.
-        current = self.confirmed_terrain
-        if current and current[0] == self.active and not getattr(self, "terrain_files", False):
-            self.release_legacy_terrain(current)
+        fast.require(578, "terrain ready delivery")
+        fast._ef.terrain_deliver(self, req, key, info)
 
     async def provisional_follow(self, anchor, cx, cy, job):
         """A follow block's provisional stand-in (PROVISIONAL_FOLLOW_S): None when the graded block came in time (or
         provisional blocks are off), else the provisional block's info, the graded one sent as terrain_refresh when
         built (refine_follow). One provisional build per block (Server.prov_info)."""
         s = self.s
-        if PROVISIONAL_FOLLOW_S <= 0 or not PROVISIONAL_FIRST or not s.grading or anchor.id != self.active:
+        fast.require(578, "provisional follow")
+        if not fast._ef.provisional_eligible(self, anchor, PROVISIONAL_FOLLOW_S, PROVISIONAL_FIRST):
             return None
-        if getattr(anchor, "stale", ()) or getattr(anchor, "stale_why", None):
-            return None                 # (shown from an older version: no ungraded ground under its road skins)
         key = (anchor.id, cx, cy)
         info = s.prov_info.get(key)     # (asked again: its provisional block at once)
         wait, planned, t_check = 0.0, False, time.perf_counter()
@@ -9935,24 +9734,16 @@ class Connection:
             done, _ = await asyncio.wait({job, pf}, timeout=PROVISIONAL_FOLLOW_S, return_when=asyncio.FIRST_COMPLETED)
             if job in done:
                 return None
-            planned = True
-            if pf in done:
-                try:
-                    planned = pf.result()
-                except Exception:
-                    pass
-            else:
+            planned, wait = fast._ef.provisional_wait(pf, pf in done, PROVISIONAL_FOLLOW_S, time.perf_counter() - t_check)
+            if pf not in done:
                 def slow_check(f, key=key, t=t_check):
                     log.info("block %s: its plan check took %.1f s (a planner busy)", key, time.perf_counter() - t)
                 pf.add_done_callback(slow_check)
-            if planned:
-                wait = max(0.0, PROVISIONAL_FOLLOW_S - (time.perf_counter() - t_check))
         done, _ = await asyncio.wait({job}, timeout=wait)
         if done:
             return None
-        pf = s.hm_proc.get(key) if info is None and planned else None
-        left = PROVISIONAL_RUNNING_S - (time.perf_counter() - t_check)
-        if pf is not None and pf.running() and left > 0:
+        left = fast._ef.provisional_running(s, key, info, planned, PROVISIONAL_RUNNING_S, time.perf_counter() - t_check)
+        if left > 0:
             # (planned and building already: a provisional block beside it took the CPU it needed, finished after it,
             # 150 mph down Midtown on a warm cache 2026-11-02; only if it runs long, a first visit's map data)
             done, _ = await asyncio.wait({job}, timeout=left)
@@ -10191,21 +9982,8 @@ class Connection:
         lease.terrain_pinned = self.s.block_files.holds(lease.token)
 
     def commit_terrain(self, msg):
-        aid = msg.get("anchorId")
-        cx, cy = self.s.snap(_num(msg, "cx")), self.s.snap(_num(msg, "cy"))
-        if aid != self.active:
-            if aid in self.s.anchors and (self.active is None or aid > self.active):
-                self.commit_anchor(aid)
-            else:
-                log.warning("commit_terrain for anchor %r (active %r) ignored", aid, self.active)
-                return
-        self.confirmed_terrain = (aid, int(cx), int(cy))
-        self.release_legacy_terrain(self.confirmed_terrain)
-        if self.block == self.s.layout.block_at(cx, cy):
-            return
-        # Far-tile keys do not depend on the block; only the forced L0 area moves.
-        self._set_block(aid, cx, cy)
-        self.update_far()
+        fast.require(578, "terrain commit")
+        fast._ef.terrain_commit(self, msg, _num, log)
 
     def slots_gone(self, gone):
         """pose.slotsGone [[slot, serial], ...]: the mod's objects (or never-spawned instances) of those far_tile
@@ -10240,47 +10018,9 @@ class Connection:
             self.sea_tiles(aid, x, y)
 
     def _pose_blocks(self, aid):
-        self.predicted_block = None
-        tree = self.tree = self.reach_tree(aid) if aid == self.active else None
-        self.tree_led = False           # (the blocks predicted along the tree: Server.block_unwanted)
-        # The mod asks for its next terrain relative to the block it will have committed by
-        # then: the pending one if it asked already (it commits that one first), else the
-        # committed one. Predicting from the committed block while a request is pending built
-        # terrains nobody asks for whenever the heading changed.
-        base = self.pending_block or self.block
-        if base is not None and self.following:
-            px, py = self.focus
-            rule = self.s.follow
-            ahead = rule.mode(*self.vel)[2]         # M4 fast mode: the mod tests a point ahead
-            qx, qy = px + self.vel[0] * ahead, py + self.vel[1] * ahead
-            at = self.predicted_at = {}     # (centre -> the player where the mod asks for it: maybe_prefetch)
-            if max(abs(qx - base.cx), abs(qy - base.cy)) >= rule.prefetch_start:
-                where = []
-                c = predict_request(px, py, *self.vel, base.cx, base.cy, rule, where)
-                if c != (base.cx, base.cy) and self.s.layout.block_at(*c) != self.block:
-                    self.predicted_block = self.s.layout.block_at(*c)
-                    at[c] = where[0]
-            self.predicted_chain = []
-            if math.hypot(*self.vel) > FAST_BASE_V:
-                route_at = {}
-                cs = predict_route_chain(self.route_xy(aid), px, py, *self.vel, base.cx, base.cy, rule,
-                                         PREFETCH_CHAIN + 1, route_at)
-                if not cs and tree is not None and len(tree.mpp) >= 2:
-                    # (no GPS route: along the time-to-reach tree's most probable path, the road's curves and the
-                    # junctions' likeliest ways, not a straight line: block_unwanted drops what it no longer leads to)
-                    route_at = {}
-                    cs = predict_route_chain(tree.mpp_xy(), px, py, *self.vel, base.cx, base.cy, rule,
-                                             PREFETCH_CHAIN + 1, route_at)
-                    self.tree_led = bool(cs)
-                if cs:              # (on the GPS route: along it; its first is the next block, as predicted_block)
-                    at.update(route_at)
-                    if self.predicted_block is not None:
-                        self.predicted_block = self.s.layout.block_at(*cs[0])
-                    cs = cs[1:]
-                else:
-                    cs = predict_chain(px, py, *self.vel, base.cx, base.cy, rule, PREFETCH_CHAIN, at)
-                self.predicted_chain = [self.s.layout.block_at(*c) for c in cs]
-        return tree
+        fast.require(578, "terrain pose prediction")
+        return fast._ef.follow_pose(self, aid, FRAME_S, FAST_BASE_V, PREFETCH_CHAIN,
+                                    (ROUTE_NEAR_M, ROUTE_ALIGN, ROUTE_STEP_M, ROUTE_AHEAD_S, ROUTE_AHEAD_MAX_M))
 
     def _pose_refresh(self, aid, tree):
         self.maybe_prefetch()
@@ -10767,22 +10507,14 @@ class Connection:
     def note_provisional(self, anchor, key, info):
         """A provisional block sent (the first after a teleport, or a follow block): kept for prov_refresh when it was
         built before its road or land cover cells were on disk."""
-        if not L0_REFRESH or self.s.mapdata is None or not info:
-            return
-        if info.get("roadsComplete") is False or info.get("surfaceComplete") is False:
-            entry = self.prov_live.setdefault(key, {"files": set(), "since": time.monotonic()})
-            entry["files"].update(block_files(info))
-            self.prov_last = key
-            log.info("provisional block %s sent before its map cells (roads %s, surface %s): built again when they "
-                     "come", key, info.get("roadsComplete"), info.get("surfaceComplete"))
+        fast.require(578, "provisional terrain sent")
+        fast._ef.provisional_sent(self, key, info, L0_REFRESH, block_files, log)
 
     def graded_sent(self, key):
         """The graded block went for key: no provisional refresh after it (one being built is dropped); the files
         its provisional builds wrote, for deletion after the game has had time to switch."""
-        e = self.prov_live.pop(key, None)
-        if e is None:
-            return []
-        return sorted(e["files"])
+        fast.require(578, "graded terrain sent")
+        return fast._ef.provisional_graded(self, key)
 
     def prov_refresh(self, aid, now=None):
         """A provisional block sent before its road / land cover cells were on disk (note_provisional), the graded
@@ -10790,35 +10522,8 @@ class Connection:
         l0roads.py), once those cells are here, and sent as terrain_refresh (the mod swaps it in while that block is
         its own or pending). Once per block, one at a time; a cold teleport's first block had bare ground under its
         roads until the graded block 60-120 s later (Pittsburgh, 2026-11-11)."""
-        s = self.s
-        if self.prov_busy or not self.prov_live or s.mapdata is None:
-            return
-        now = time.monotonic() if now is None else now
-        for key, e in list(self.prov_live.items()):
-            if key[0] != aid or now - e["since"] > L0_REFRESH_MAX_S:
-                self.prov_live.pop(key, None)
-                # A repaint may still be returned from the follow cache until its refiner finishes.
-                s.retire_terrain(sorted(e["files"].difference(block_files(s.prov_info.get(key) or {}))))
-                continue
-            if e.get("refreshed"):
-                continue
-            if key not in list(s.hm_committed)[-1:] and key != self.prov_last:
-                continue                            # (a block the car has left: the mod would drop it)
-            anchor = s.anchors.get(aid)
-            if anchor is None:
-                return
-            half = s.layout.block * heightmap.SQUARE / 2
-            la, lo, _ = anchor.frame.enu_to_geodetic(np.array([key[1] - half, key[1] + half]),
-                                                     np.array([key[2] - half, key[2] + half]), 0.0)
-            cells = mapcells.cells_for_bbox(float(np.min(la)), float(np.min(lo)), float(np.max(la)),
-                                            float(np.max(lo)))
-            if not all(s.mapdata.has(k, "roads") and (s.surface is None or s.mapdata.has(k, "landcover"))
-                       for k in cells):
-                continue                            # (not here yet: asked again at the next pose)
-            self.prov_busy = True
-            e["refreshed"] = True
-            self.spawn(self._prov_refresh_run(anchor, key, e))
-            return
+        fast.require(578, "provisional refresh readiness")
+        fast._ef.provisional_refresh(self, aid, now, L0_REFRESH_MAX_S, block_files, provisional_cells_ready)
 
     async def _prov_refresh_run(self, anchor, key, e):
         s = self.s
@@ -10862,17 +10567,8 @@ class Connection:
             log.info("provisional block %s built again but not sent (%s)", key,
                      "no longer current" if self.prov_live.get(key) is not e else "its photo is gone")
             return
-        if base:
-            info["base"] = base
-        s.retire_terrain(sorted(e["files"]))
-        e["files"].clear()
-        e["files"].update(block_files(info))
-        if key in s.prov_info:          # (a follow block asked again gets this one)
-            s.prov_info[key] = info
-        log.info("provisional block %s sent again with its roads, %.1f s after it was first sent (L0 roads: %s "
-                 "samples in %.0f ms)", key, time.monotonic() - e["since"], int(info.get("stages", {}).get("l0Samples", 0)),
-                 1000 * info.get("stages", {}).get("l0roads", 0.0))
-        self.send({"type": "terrain_refresh", "anchorId": key[0], **self.terrain_msg(key, info)})
+        fast.require(578, "provisional refresh delivery")
+        fast._ef.provisional_publish(self, key, e, info, base, block_files, log)
 
     def pads_refresh(self, aid, now=None):
         """The block in use built again (terrain_refresh, as refine_first) when gas station pads came in after it was
@@ -11131,15 +10827,8 @@ class Connection:
         """'terrain_ready_set' {anchorId, centres}: the blocks of the active anchor built already, within READY_SET_M of
         the player (the mod asks for one of them instead of its own target when it is close: follow.preferReady), when
         that set changed."""
-        aid = self.active
-        if aid is None or not self.s.fast or not getattr(self, "ready_set", False):   # (at speed: there the guesses
-            return                                                                  # miss; a mod that takes it)
-        px, py = self.focus
-        cs = sorted((cx, cy) for (a, cx, cy) in list(self.s.hm) if a == aid
-                    and max(abs(cx - px), abs(cy - py)) <= READY_SET_M)
-        if cs != getattr(self, "ready_sent", None):
-            self.ready_sent = cs
-            self.send({"type": "terrain_ready_set", "anchorId": aid, "centres": [[float(cx), float(cy)] for cx, cy in cs]})
+        fast.require(578, "terrain ready set")
+        fast._ef.terrain_ready_set(self, READY_SET_M)
 
     def maybe_prefetch(self):
         """Speculatively build the terrain the mod is about to ask for: the predicted block, and a fast player's chain
@@ -11187,19 +10876,8 @@ class Connection:
         preferReady: within READY_STEPS grid steps of its target, the player within reach of it where it asks)? Then b
         is not built: each pose's prediction a grid step off the last built another block, 55 built for 24 asked for
         at 150 mph down Midtown (nyc_speed.py 2026-11-02)."""
-        if where is None:
-            return False
-        rule = self.s.follow
-        _lead, reach, _ahead = rule.mode(*self.vel)
-        lim = READY_STEPS * rule.grid
-        cur = (self.block.cx, self.block.cy) if self.block is not None else None
-        keys = [k for k in list(self.s.hm) + list(self.s.hm_inflight) + list(busy) if k[0] == anchor.id]
-        for _a, kx, ky in keys:
-            if (kx, ky) == (b.cx, b.cy) or (kx, ky) == cur:
-                continue
-            if max(abs(kx - b.cx), abs(ky - b.cy)) <= lim and max(abs(where[0] - kx), abs(where[1] - ky)) <= reach:
-                return True
-        return False
+        fast.require(578, "terrain ready block selection")
+        return fast._ef.terrain_ready_near(self, anchor, b, where, busy, READY_STEPS)
 
     # --- far field ----------------------------------------------------------
 
