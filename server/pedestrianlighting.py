@@ -199,15 +199,16 @@ def area_sites(frame, box, md, keys, exclusions=None):
 
 
 def tile_rows(frame, box, cells, urban, widths, md, keys, elev, props, mapped, rings,
-              clearance, road_rows, near_lamps, country_at):
-    parts = standalonepaths.parts(frame, box, cells, urban, widths, lighting=True)
-    candidates = list(path_sites(parts, cells, box, frame, md))
+              clearance, road_rows, near_lamps, country_at, *, path_parts=None):
+    if path_parts is None:
+        path_parts = standalonepaths.parts(frame, box, cells, urban, widths, lighting=True)
+    candidates = list(path_sites(path_parts, cells, box, frame, md))
     exclusions = []
     candidates.extend(area_sites(frame, box, md, keys, exclusions))
     candidates = [c for c in candidates if box[0]-20 <= c[1] <= box[2]+20 and box[1]-20 <= c[2] <= box[3]+20]
     if not candidates:
         return []
-    paths = [(xy, width/2) for _,xy,width,_ in parts]
+    paths = [(xy, width / 2) for _, xy, width, _ in path_parts]
     # Include the mapped sidewalk on both sides in the footprint exclusion.
     for _, sp, line, _ in road_rows:
         walk = max((w.setback+w.width for _,w in sp.street.walks()), default=0.) if sp.street else sp.walk

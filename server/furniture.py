@@ -1581,11 +1581,10 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 run = []
                 continue
             if not poles:                   # buried lines: lamp posts, their arms over the road
-                if k % stride:
+                if k % stride or not drawn or not site_open(fid, p, q):
                     continue
-                if drawn and site_open(fid, p, q):
-                    record_site(q)
-                if inside and drawn and site_open(fid, p, q):
+                record_site(q)
+                if inside:
                     h = (HIGHWAY_LAMP_H["na" if _na(region) else None] if highway and not spec.link
                          else LAMP_H[G_LAMP])
                     group = G_LAMP

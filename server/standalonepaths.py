@@ -143,11 +143,13 @@ def clear_props(rows, blockers):
     return [row for row, ok in zip(rows, keep) if ok]
 
 
-def finish_props(rows, frame, box, cells, urban=None, widths=None):
+def finish_props(rows, frame, box, cells, urban=None, widths=None, *, path_parts=None):
     """The final generation gate, after every source has contributed its scenery."""
     if not rows or not enabled():
         return rows
-    blockers = [(xy, width / 2) for _, xy, width, _ in parts(frame, box, cells, urban, widths)]
+    if path_parts is None:
+        path_parts = parts(frame, box, cells, urban, widths)
+    blockers = [(xy, width / 2) for _, xy, width, _ in path_parts]
     return clear_props(rows, blockers)
 
 
