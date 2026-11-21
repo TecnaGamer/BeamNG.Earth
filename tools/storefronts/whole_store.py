@@ -143,6 +143,10 @@ DESIGN_GLAZING = {
     "glazed_shed": (11.,.15,4.1,4.),
     "cinema_lobby": PUBLIC_GLAZING["cinema"],
     "glass": (12., .12, 4.9, 5.),
+    "grid_showroom": (10., .18, 4.45, 4.8),
+    "screen_showroom": (6.8, .22, 3.9, 3.6),
+    "masonry_hall": (7., .5, 3.7, 3.2),
+    "timber_portal": (10., .24, 4.3, 4.),
     "cube_gallery": (12., .12, 4.9, 5.),
 }
 CAFE_GLAZING.update({name: DESIGN_GLAZING[design.form] for name, design in entrance_designs.DESIGNS.items()})

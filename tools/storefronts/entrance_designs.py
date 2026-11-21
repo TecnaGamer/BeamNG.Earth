@@ -43,8 +43,8 @@ DESIGNS = {
     "Sprouts Farmers Market": Entrance("market", "#49673e", "#c7b28a", 22),
     "The Fresh Market": Entrance("market", "#435343", "#ab9b78", 17),
     "Fresh Thyme Market": Entrance("market", "#637b4d", "#b09972", 18),
-    "Whole Foods Market": Entrance("market", "#345c49", "#897559", 20),
-    "Wegmans": Entrance("market", "#726049", "#9d8564", 24),
+    "Whole Foods Market": Entrance("timber_portal", "#916c4b", "#384a43", 22),
+    "Wegmans": Entrance("masonry_hall", "#955f4e", "#e3d6b5", 24),
     "Dutch Bros Coffee": Entrance("wing", "#23578a", "#d9e6e6", 9),
     "Scooter's Coffee": Entrance("wing", "#aa3635", "#483d37", 8),
     "Biggby Coffee": Entrance("wing", "#c46a31", "#433d36", 9),
@@ -64,9 +64,9 @@ DESIGNS = {
     "Hollister": Entrance("shuttered_porch", "#5d5446", "#996149", 14),
     "Uniqlo": Entrance("cube_gallery", "#ecece7", "#777d7e", 25),
     "AMC Theatres": Entrance("cinema_lobby", "#bda78c", "#932a36", 32),
-    "Apple Store": Entrance("glass", "#bdbfbb", "#626962", 23),
-    "Crate & Barrel": Entrance("glass", "#ddd8cb", "#494a46", 20),
-    "Lululemon": Entrance("glass", "#bdb6a9", "#52504a", 17),
+    "Apple Store": Entrance("glass", "#34383a", "#626962", 23),
+    "Crate & Barrel": Entrance("grid_showroom", "#eeeae2", "#373a39", 20),
+    "Lululemon": Entrance("screen_showroom", "#ba9470", "#51473e", 17),
 }
 
 
@@ -246,6 +246,28 @@ def draw(profile, span, height, vertex, mesh, texture, sign, symbol_only=False):
         sign_h = min(2.2,span*.13)
         sign_width = min(half,sign_h*2.6)
         sign_z,sign_depth = (high+low)*.5-sign_h*.57,.65
+    elif form == "masonry_hall":
+        spring = height-.45
+        ridge = spring + min(3.4,span*.16)
+        prism([(-half,spring),(half,spring),(0,ridge)],.02,reach,field)
+        for edge in (-half,half):
+            prism([(edge,spring),(0,ridge),(0,ridge+.25),(edge,spring+.25)],.02,reach+.12,trim)
+            pier = edge*.87
+            box(pier-.38,pier+.38,.02,reach,0,spring,field)
+            box(pier-.49,pier+.49,.02,reach+.08,0,1.15,"#b4a793")
+        sign_h = min(2.,span*.10)
+        sign_width = min(span*.65,sign_h*4.5)
+        sign_z,sign_depth = spring+.35,reach+.16
+        box(-sign_width*.52,sign_width*.52,.02,reach+.13,sign_z-sign_h*.54,sign_z+sign_h*.54,field)
+    elif form == "timber_portal":
+        sign_h = min(2.2,span*.13)
+        sign_width = min(span*.81,sign_h*5.6)
+        sign_z,sign_depth = max(height,3.9+sign_h*.5),reach+.04
+        top = sign_z+sign_h*.64
+        box(-half,half,.04,reach,sign_z-sign_h*.6,top,field)
+        for edge in (-half+.32,half-.32):
+            box(edge-.30,edge+.30,.04,reach,0,top,field)
+        box(-half,half,.03,reach+.18,top,top+.14,trim)
     elif form in {"fanlight", "gabled_market", "arched_glass"}:
         # Set a radial window into the crown above the door, sized to its clear frontage.
         base = max(3.5, height-.65)
@@ -357,25 +379,38 @@ def draw(profile, span, height, vertex, mesh, texture, sign, symbol_only=False):
             box(-h,h,.03,reach-i*.15,z-.38,z+.40,field)
             box(-h,h,.03,reach-i*.15+.04,z+.28,z+.40,trim)
         sign_z,sign_depth=eave+.67,reach+.05
-    else:  # Market hall or glazed showroom: glazing is painted onto this wall behind the frame.
-        high=height+(.95 if form=="market" else .35)
+    elif form in {"glass","grid_showroom","screen_showroom"}:
+        sign_h = min(2.25,span*.17)
+        sign_width = min(span*.78,sign_h*5)
+        if symbol_only:
+            sign_width = sign_h
+        high = max(height+.3,3.65+sign_h)
+        low = high-sign_h-.30
+        box(-half,half,.02,reach,low,high,field)
+        sign_z,sign_depth = (low+high)/2,reach+.025
+        for x in (-half+.17,half-.17):
+            post(x,low,trim,.28)
+        if form == "screen_showroom":
+            # Space the fins outside the badge so they never cross the lettering.
+            for x in np.arange(-half+.2,half-.12,.42):
+                if abs(x) > sign_width/2+.2:
+                    box(x-.06,x+.06,reach,reach+.13,low,high,trim)
+        elif form == "grid_showroom":
+            for side in (-1,1):
+                for x in np.arange(3.5,half-.45,2.2):
+                    box(side*x-.05,side*x+.05,.02,.24,.15,low,trim)
+            box(-half,half,.02,.25,2.62,2.72,trim)
+    elif form == "market":
+        high = height+.95
         for x in (-half+.25,half-.25):
             post(x,high,trim,.45)
         box(-half,half,.02,reach,high-.39,high,field)
-        if form=="market":
-            ridge=high+min(2.0,span*.12)
-            prism([(-half,high),(half,high),(0,ridge)],.03,reach-.08,"#708987")
-            for side in (-1,1):
-                prism([(0,ridge),(side*half,high),(side*half,high+.15),(0,ridge+.15)],.03,reach,trim)
-            sign_z=high+.32
-        else:
-            box(-half,half,.02,reach,3.38,3.54,trim)
-            sign_z,sign_depth=high-.70,.14
+        ridge=high+min(2.0,span*.12)
+        prism([(-half,high),(half,high),(0,ridge)],.03,reach-.08,"#708987")
+        for side in (-1,1):
+            prism([(0,ridge),(side*half,high),(side*half,high+.15),(0,ridge+.15)],.03,reach,trim)
+        sign_z=high+.32
 
-    if symbol_only:
-        sign_h = min(2.1, height*.33, span*.31)
-        sign_width = sign_h
-        sign_z = height - sign_h*.60
     x=sign_width/2
     lo,hi=sign_z-sign_h/2,sign_z+sign_h/2
     corners=[vertex(sign_center-x,sign_depth,lo),vertex(sign_center+x,sign_depth,lo),

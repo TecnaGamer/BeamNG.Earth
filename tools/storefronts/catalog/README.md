@@ -4,7 +4,7 @@ All 250 supported chains, rendered from generated GLBs on sample footprints. Eac
 
 ![Twelve storefront examples](overview.jpg)
 
-[Cinema lobby comparison](amc-comparison.jpg) · [Six storefronts before and after the architecture pass](architecture-comparison.jpg) · [Grocery and apparel comparison](grocery-apparel.jpg) · [Uniqlo from driver height](uniqlo-comparison.jpg)
+[Cinema lobby comparison](amc-comparison.jpg) · [Six storefronts before and after the architecture pass](architecture-comparison.jpg) · [Grocery and apparel comparison](grocery-apparel.jpg) · [Uniqlo from driver height](uniqlo-comparison.jpg) · [Five storefronts from the road](approach-comparison.jpg)
 
 | Entries | Catalog sheet |
 | --- | --- |
