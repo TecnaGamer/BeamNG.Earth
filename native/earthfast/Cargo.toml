@@ -91,6 +91,8 @@ codegen-units = 16
 incremental = true
 
 [target.'cfg(windows)'.dependencies]
+# SharedGate locks byte zero, like the workers using msvcrt.locking. Already in Cargo.lock.
+windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem", "Win32_System_IO"] }
 pyo3 = { version = "0.30", features = ["generate-import-lib"] }   # links python3.dll without a Python install (cross builds)
 
 [patch.crates-io]

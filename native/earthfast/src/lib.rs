@@ -30,6 +30,7 @@ mod gravity;
 mod polyproject;
 mod lanesections;
 mod s3url;
+mod netfetch;
 mod countrymap;
 mod carriageway_solver;
 mod carriageways;
@@ -7158,6 +7159,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // colour from Sentinel-2 and the map's regions instead of a 1 m aerial photo; server/genground.py)
     genground::register(m)?;
     host::register(m)?;
+    netfetch::register(m)?;
     // 307: gen_ground(..., gr, gc): its sampling lattices on the global texel grid, the caller's square with a halo
     // (Codex review of 306: overlapping blocks drew the same ground in other colours)
     // 308: generated ground stage 2: gg_regions(..., line, line_kind, ...) and the surface / pattern kinds,
@@ -7544,6 +7546,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
-    m.add("VERSION", 568)?;
+    m.add("VERSION", 569)?;
     Ok(())
 }
