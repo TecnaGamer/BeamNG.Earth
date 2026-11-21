@@ -718,7 +718,7 @@ class LeakedPacksTest(unittest.TestCase):
             a = s.new_anchor(46.86, -113.98)
             s.anchors[a.id] = a
             key = (a.id, 0.0, 0.0)
-            path = os.path.join(s.out_dir, s.hm_name(key))
+            path = os.path.join(s.out_dir, s.base_name(key))
             with open(path, "w") as f:
                 f.write("old")
             s.hm[key] = {"base": s.base_name(key)}

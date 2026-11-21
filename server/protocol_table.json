@@ -9,6 +9,7 @@
     "cx": {"type": "num"},
     "cy": {"type": "num"},
     "heightmap": {"type": "str"},
+    "terrainTicket": {"type": "int", "optional": true, "doc": "ownership of this terrain delivery until the mod releases it"},
     "size": {"type": "int"},
     "squareSize": {"type": "num"},
     "zBase": {"type": "num"},
@@ -41,6 +42,8 @@
     "slotSession": {"type": "str", "optional": true, "doc": "a reconnect: the pooled far-tile slots [[slot, serial], ...] the mod's objects hold for that session"},
     "slotsHeld": {"type": ["list", "dict"], "optional": true},
     "streamLease": {"type": "int", "optional": true},
+    "terrainHeld": {"type": ["list", "dict"], "optional": true, "doc": "complete surviving ticket snapshot on reconnect"},
+    "terrainFiles": {"type": "int", "optional": true},
     "leaseId": {"type": "str", "optional": true},
     "leaseSession": {"type": "str", "optional": true},
     "held": {"type": ["list", "dict"], "optional": true},
@@ -88,6 +91,13 @@
     "anchorId": {"type": "int"},
     "cx": {"type": "num"},
     "cy": {"type": "num"}
+   }
+  },
+  "terrain_release": {
+   "doc": "return terrain delivery tickets, or all of them after the extension destroyed its TerrainBlock",
+   "fields": {
+    "tickets": {"type": "list", "optional": true},
+    "unloaded": {"type": "bool", "optional": true}
    }
   },
   "commit_terrain": {
@@ -757,6 +767,7 @@
     "privacyRegion": {"type": "str"},
     "telemetryConsent": {"type": "int", "doc": "the welcome page's telemetry defaults"},
     "streamLease": {"type": "int", "optional": true},
+    "terrainFiles": {"type": "int", "optional": true},
     "leaseId": {"type": "str", "optional": true},
     "memoryTier": {"type": "str", "optional": true},
     "memoryNote": {"type": "str", "optional": true, "doc": "low-memory machines only (budget.TIER lean / emergency)"},

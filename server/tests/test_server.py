@@ -286,7 +286,7 @@ class ServerTest(ServerHarness):
         aid = a1["anchorId"]
         h = self.check_terrain(a1["terrain"], 0.0, 0.0)
         self.assertEqual(a1["terrain"]["q"], 1 / 128)     # 600 m relief over the survey, under 512 m in a block (survey_q on block-sized windows, 2026-11-12)
-        self.assertEqual(a1["terrain"]["heightmap"], f"/temp/beamngEarth/{self.server.sid}/hm_{aid}_0_0.png")
+        self.assertRegex(a1["terrain"]["heightmap"], rf"^/temp/beamngEarth/{self.server.sid}/hm_{aid}_0_0_\d+\.png$")
         self.assertAlmostEqual(a1["groundZ"], h[1024, 1024], delta=0.001)   # sample (1024, 1024) = (0, 0)
 
         c.send({"type": "commit_anchor", "anchorId": aid})
@@ -371,11 +371,11 @@ class ServerTest(ServerHarness):
 
         # --- prefetch: driving east at 30 m/s from x = 900 predicts a block at 1024 ---
         self.pose(aid, 900, 0, vx=30)
-        path = os.path.join(self.server.out_dir, f"hm_{aid}_1024_0.png")
+        key = (aid, 1024., 0.)
         end = time.monotonic() + 30
-        while not os.path.exists(path) and time.monotonic() < end:
+        while key not in self.server.hm and time.monotonic() < end:
             time.sleep(0.02)
-        self.assertTrue(os.path.exists(path), "prefetch did not build the predicted terrain")
+        self.assertIn(key, self.server.hm, "prefetch did not build the predicted terrain")
         time.sleep(0.2)
         t0 = time.monotonic()
         c.send({"type": "prepare_terrain", "requestId": 6, "anchorId": aid, "cx": 1024, "cy": 0})
@@ -659,18 +659,20 @@ class ServerTest(ServerHarness):
         a = self.prepare_anchor(1, LAT, LON)
         aid = a["anchorId"]
         c.send({"type": "commit_anchor", "anchorId": aid})
+        heights = {0: os.path.basename(a["terrain"]["heightmap"])}
         for n, cx in enumerate(range(256, 256 * 10, 256)):
             c.send({"type": "prepare_terrain", "requestId": 10 + n, "anchorId": aid, "cx": cx, "cy": 0})
             m, _ = c.until(lambda m: m["type"] == "terrain_ready" and m["requestId"] == 10 + n, timeout=60)
+            heights[cx] = os.path.basename(m["heightmap"])
             if n == 2:
                 c.send({"type": "commit_terrain", "anchorId": aid, "cx": cx, "cy": 0})
         time.sleep(0.2)
         files = sorted(os.path.basename(p) for p in glob.glob(os.path.join(self.server.out_dir, "hm_*.png")))
         self.assertLessEqual(len(files), earthd.HM_CACHE, files)
         # Never deleted: the committed terrain, the two before it, the last two handed out.
-        for name in (f"hm_{aid}_0_0.png", f"hm_{aid}_768_0.png", f"hm_{aid}_2048_0.png", f"hm_{aid}_2304_0.png"):
-            self.assertIn(name, files)
-        self.assertNotIn(f"hm_{aid}_256_0.png", files)
+        for cx in (0, 768, 2048, 2304):
+            self.assertIn(heights[cx], files)
+        self.assertNotIn(heights[256], files)
         # Unknown anchor / missing fields -> terrain_error; the connection stays up.
         c.send({"type": "prepare_terrain", "requestId": 99, "anchorId": 42, "cx": 0, "cy": 0})
         m, _ = c.until(lambda m: m["type"] == "terrain_error", timeout=10)
