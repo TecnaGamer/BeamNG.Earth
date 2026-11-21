@@ -1698,6 +1698,15 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
         _retail_glazing(m, ring, spec.front, z_eave-spec.height, z_eave, mat_idx, lite)
 
 
+def retail_bays(length):
+    """Dimensions shared by the window openings and the entrance sign above them."""
+    margin = min(1.1, length*.09)
+    span = length - 2*margin
+    bays = max(1, round(span/8.5))
+    pier = .85
+    return margin, bays, pier, (span-(bays-1)*pier)/bays
+
+
 def _retail_glazing(m, ring, front, ground, eave, mat_idx, lite):
     """Group ground-floor glazing into openings separated by the host wall finish."""
     a, b = ring[front], ring[(front+1) % len(ring)]
@@ -1706,15 +1715,11 @@ def _retail_glazing(m, ring, front, ground, eave, mat_idx, lite):
         return
     axis = (b-a)/length
     outward = np.array([axis[1], -axis[0]])
-    margin = min(1.1, length*.09)
+    margin, bays, pier, opening = retail_bays(length)
     left = a + axis*margin + outward*.05
     top = min(ground+3.15, eave-.55)
     # The lower atlas row contains two distinct entry doors. Sample one only at
     # the entrance; use the upper display glass elsewhere so doors never tile.
-    span = length - 2*margin
-    bays = max(1, round(span/8.5))
-    pier = .85
-    opening = (span-(bays-1)*pier)/bays
     def pane(start, end, sill, u0, v0, u1, v1):
         p, q = left+axis*start, left+axis*end
         m.quad((*p, sill), (*q, sill), (*q, top), (*p, top),
@@ -5893,6 +5898,8 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
             continue
         _, a, d, Le, out, edge, on_main, kseg = best
         if spec.windows is False:
+            if spec.retail_front and spec.front is not None:
+                continue  # The named frontage already shares its wall with the entrance sign.
             spec.front = edge                   # a big box: its storefront faces the road
             if spec.retail_front and spec.storefront[1]:
                 continue

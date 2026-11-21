@@ -354,10 +354,23 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                 if parking is not None:
                     entrance_bearing = round(dmath.degrees(dmath.atan2(parking[1], parking[0])))
             bearing = round(dmath.degrees(dmath.atan2(facing[1], facing[0])))
+            signed_wall = None
             if isinstance(name, LocalSign):
                 panel = approach_panel(ring, coords, facing, doors)
                 if panel is None:
                     continue
+                if spec.retail_front and label and fallback == name:
+                    from buildings import retail_bays
+                    ends = [int(np.argmin(np.linalg.norm(coords-pt, axis=1))) for pt in panel]
+                    wall = ends[0] if (ends[0]+1) % len(ring) == ends[1] else ends[1]
+                    length = float(np.linalg.norm(ring[ends[1]]-ring[ends[0]]))
+                    margin, bays, pier, opening = retail_bays(length)
+                    along = margin + ((bays-1)//2)*(opening+pier) + opening/2
+                    delta = (coords[(wall+1) % len(ring)]-coords[wall])/length
+                    center = coords[wall]+along*delta
+                    half = min(opening*.45, 3.5)*(panel[1]-panel[0])/length
+                    panel = np.array([center-half, center+half])
+                    signed_wall = wall
                 matches = [(name, panel, None, None)]
             elif name:
                 matches = [(name, coords, bearing, material)]
@@ -373,8 +386,12 @@ def models(items, existing, frame, origin, roads, md, keys, cache_dir, aisles=()
                     if spec.height < 2.8:
                         continue
                     options["local_panel"] = (brand.style, round(min(4.2, spec.height - .2), 1))
+                    if signed_wall is not None:
+                        options["local_panel"] = (brand.style, round(spec.height+.65, 2), "raised")
                     brand = brand.name
                 entry = cached_entry(cache, brand, geometry, heading, finish, doors=doors, entrance_bearing=entrance_bearing, **options)
+                if signed_wall is not None:
+                    spec.front = signed_wall
                 local = dict(entry, file="storefronts/" + entry["file"])
                 x, y, _ = frame.geodetic_to_enu(entry["lat"], entry["lon"], 0.0)
                 yield {

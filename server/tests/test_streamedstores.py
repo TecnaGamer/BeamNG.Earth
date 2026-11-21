@@ -99,6 +99,24 @@ class StreamedStoresTest(unittest.TestCase):
                 with patch.dict(os.environ, BNE_LOCAL_BUSINESS_SIGNS="0"):
                     self.assertFalse(generate())
 
+    def test_named_retail_sign_spans_parapet_and_keeps_selected_wall(self):
+        frame = geodesy.EnuFrame(40., -83.)
+        md = tile(frame, "Olive Books", [], "retail")
+        with (tempfile.TemporaryDirectory() as cache,
+              patch.dict(os.environ, BNE_STOREFRONTS="1", BNE_LOCAL_BUSINESS_SIGNS="1"),
+              patch("threedmr.region_ids", return_value=[]),
+              patch("buildings.road_lines", return_value=[np.array([[0.,15.],[256.,15.]])])):
+            items, entries = buildings.road_tile_items(frame, 0, 0, md, lambda a,b: np.zeros(np.shape(a)),
+                                                       cache_dir=cache)
+            spec = items[0][0]
+            front = spec.front
+            self.assertIsNotNone(front)
+            buildings.doors(items, [(np.array([[0.,75.],[256.,75.]]),3.)],0,0)
+            self.assertEqual(spec.front, front)
+            vertices, _, triangles, *_ = threedmr.load_local_model(cache, entries[0]["local"])
+            self.assertEqual(len(triangles), 12)
+            self.assertAlmostEqual(np.ptp(vertices[:,2]), spec.height+.65, places=2)
+
     def test_catalog_matches_typed_cinemas_and_restaurant_aliases(self):
         from streamedstores import chain
         from store_match import brand

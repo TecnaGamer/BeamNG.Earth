@@ -557,6 +557,12 @@ SIGN_FONT = Path(__file__).resolve().parents[1] / "fonts" / "DejaVuSans-Bold.ttf
 
 
 def local_sign_image(name, style, aspect):
+    # Map listings sometimes append a category after a dash. Preserve the full
+    # listing in metadata and give the trading name the readable sign area.
+    import re
+    short = re.sub(r"\s*[-–—]\s*(?:seafood restaurant|restaurant|grocery store|gas station|car wash|smoke shop)$",
+                   "", name, flags=re.IGNORECASE).rstrip(" ®™")
+    name = short or name
     colors = {"tobacco": ("#302435", "#d6a860"), "wash": ("#144558", "#76ded8"),
               "fuel": ("#263545", "#f4ab54"), "market": ("#254335", "#d1c69c"),
               "shop": ("#303941", "#c8b99f")}

@@ -132,7 +132,9 @@ def export_store(path, match, observations, out, *, entrance_direction=None, loc
                 mesh([(*left,bottom), (*right,bottom), (*right,top), (*left,bottom), (*right,top), (*left,top)],
                      art, [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
         elif local_panel:
-            style, top = local_panel
+            style, top, *raised = local_panel
+            if raised:
+                half_span = axis * width/2
             span = 2 * np.linalg.norm(half_span)
             tall = min(1.25, span / 4)
             art = whole_store.local_sign_image(name, style, span / tall)
@@ -140,6 +142,13 @@ def export_store(path, match, observations, out, *, entrance_direction=None, loc
             wall(-half_span, -half_span + axis * .08, 0, top, 2)
             left, right = -half_span, half_span
             bottom = top - tall
+            if raised:
+                # The exposed top, sides and rear give the parapet sign depth from the road.
+                back = -normal*.35
+                corners = [left, left+back, right+back, right]
+                for i in range(3):
+                    wall(corners[i], corners[i+1], bottom, top, 2)
+                mesh([(*corners[k],top) for k in (0,1,2,0,2,3)], 2)
             mesh([(*left,bottom), (*right,bottom), (*right,top), (*left,bottom), (*right,top), (*left,top)],
                  texture(art), [(0,1),(1,1),(1,0),(0,1),(1,0),(0,0)])
         elif tenant_sign:
