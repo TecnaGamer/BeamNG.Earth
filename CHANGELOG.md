@@ -147,6 +147,7 @@ Works with BeamNG.drive 0.40.5.
   30 s to 2 s, tunnel sides 3.9 s to 0.75 s, stations 55.6 s to 44.4 s) (PR #1283, #1315 and #1314, crunchdomo).
 
 ### New
+- **Rumble-strip audio** now uses a recorded CC0 road sample, fades in, loops while a tyre remains on the marking, and fades out after leaving it. Detection uses each tyre's road-contact point and positional audio comes from the touching tyre(s), improving line alignment and cabin audibility.
 - **Epic Games and no-Steam launch** (new; please tell us how it goes): on Windows the app now finds BeamNG.drive
   installed from the Epic Games Store, and it can start the game without Steam on Windows and Linux (`--launch direct`, kept for later
   starts; it uses the same user folder, so your mods and settings stay put). With several copies installed it asks

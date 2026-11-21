@@ -3042,6 +3042,14 @@ function M.checkMapView()
   applyHorizon()
 end
 
+-- Player-vehicle VM callback for rumble.lua's per-wheel contact sensor. The vehicle VM sends only
+-- its player car's contact points; all road matching and audio playback stay in the GE VM.
+function M.rumbleSensorData(vehicleId, positions)
+  local rumble = package.loaded['beamngEarth/rumble']
+  if not (rumble and rumble.receiveWheelPositions) then return false end
+  return rumble.receiveWheelPositions(vehicleId, positions)
+end
+
 local function onUpdate(dtReal, dtSim)
   -- The previous frame has finished using its messages and applying the TerrainBlock.
   M._terrainReleaseIn = (M._terrainReleaseIn or 0) - (dtReal or 0)
