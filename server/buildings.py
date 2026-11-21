@@ -1688,12 +1688,37 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
         bool(spec.plain), int(band[0]), int(band[1]), [int(g) for g in good], int(spec.floors), float(spec.floor_h),
         bool(spec.shop), int(door[0]) if door else -1, float(door[1]) if door else 0.0, spec.roof == "flat",
         float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
-        int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS, vary,
+        int(spec.front) if spec.front is not None and not spec.retail_front else -1, bool(lite), _WALL_CONSTS, vary,
         WIN_CELLS if spec.wall else [],
         [-1] if hole else [int(e) for e in (spec.street or ())],    # (a shop's ground floor on its street walls: doors())
         LOBBY_BAND if lobby else None)
     if len(mid):
         m.quads(P, UV, mid, mats)
+    if spec.retail_front and not hole and spec.front is not None:
+        _retail_glazing(m, ring, spec.front, z_eave-spec.height, z_eave, mat_idx, lite)
+
+
+def _retail_glazing(m, ring, front, ground, eave, mat_idx, lite):
+    """A continuous ground-floor display with a recessed-looking head beneath the fascia."""
+    a, b = ring[front], ring[(front+1) % len(ring)]
+    length = float(np.linalg.norm(b-a))
+    if length < 3:
+        return
+    axis = (b-a)/length
+    outward = np.array([axis[1], -axis[0]])
+    margin = min(1.1, length*.09)
+    left = a + axis*margin + outward*.05
+    right = b - axis*margin + outward*.05
+    top = min(ground+3.15, eave-.55)
+    # The corporate glass texture has three full-height bays per repeat. Keep each pane
+    # about three metres wide and crop only its ground-floor row.
+    repeats = max(1, round((length-2*margin)/9))
+    v0, v1, _ = LOBBY_BAND
+    m.quad((*left, ground), (*right, ground), (*right, top), (*left, top),
+           (0., v0), (repeats, v0), (repeats, v1), (0., v1), mat_idx[LOBBY])
+    if not lite:
+        _box(m, (left+right)/2+outward*.27, axis, (length-2*margin)/2+.12, .34,
+             top, min(top+.22, eave), mat_idx[METALWALL])
 
 
 # Night windows, each its own brightness (the user, 2026-11-08: "the brightness of windows should be randomized at

@@ -58,6 +58,21 @@ class StreamedStoresTest(unittest.TestCase):
                                       ([13,0], unit, {0}), ([12,0], dict(unit,num_floors=2), {0})]:
             self.assertEqual(buildings._retail_frontages([ring,ring+shift],[shop,attrs]), expected)
 
+    def test_retail_glass_is_one_ground_floor_band_at_both_detail_levels(self):
+        ring = np.array([[0.,0.], [31.,0.], [31.,16.], [0.,16.]])
+        spec = buildings.plan(ring, {"class": "retail", "_retail_front": True,
+                                     "height": 5.2, "num_floors": 1, "roof_shape": "flat"},
+                              0, 40., -83.)
+        spec.retail_front, spec.front = True, 0
+        for lite in (False, True):
+            mesh = buildings.Mesh()
+            buildings._walls(mesh, spec, ring, -1., spec.height, buildings._Looks(spec.seed), lite)
+            points, uv, triangles, materials, _ = mesh.arrays()
+            glass = triangles[materials == buildings.MATERIALS.index(buildings.LOBBY)]
+            self.assertEqual(len(glass), 2)
+            np.testing.assert_allclose(np.ptp(points[glass].reshape(-1,3),axis=0), [28.8,0.,3.15])
+            self.assertFalse(np.any(materials == buildings.MATERIALS.index(buildings.SHOP)))
+
     def test_optional_local_sign_uses_mapped_name_and_keeps_host(self):
         frame = geodesy.EnuFrame(40., -83.)
         for category, name in (("car_wash", "River Wash"), ("smoke_shop", "Northside Smoke"),
