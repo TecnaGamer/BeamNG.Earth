@@ -111,7 +111,11 @@ def tasks_per_child():
 # (apply()); 0 while the RAM is unknown and the setting Auto (no limit, the desktop sizes, as before).
 SETTING_ENV = "BNGE_MAX_RAM_GB"
 LIMIT_MB = 0.0
-OVER = False                # (memwatch.py: the server over 90 % of its limit; no far-tile burst processes start)
+OVER = False                # (memwatch.py: the server over its limit; no far-tile burst processes start)
+# (memwatch.py, each check: MB left under the limit in force, None without one; and {pool name: its biggest process's
+# MB}. A pool's burst starts only when it fits: pools.ElasticPool._within_base)
+ROOM_MB = None
+POOL_MB = {}
 
 
 def setting_gb():

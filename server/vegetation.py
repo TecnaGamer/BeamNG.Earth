@@ -1768,21 +1768,6 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, rows, flat=False, geo=None):
     return f"{vfs_dir}/{name}", rows.n if isinstance(rows, JsonRows) else len(rows)
 
 
-def _squares_near(x, y, m, size):
-    """(i, j) of the size x size squares of the grid whose nearest point is within m of (x, y): a disc (Euclidean, as
-    roads.tiles_near; 2026-10-28, it was the square)."""
-    i0, i1 = math.floor((x - m) / size), math.floor((x + m) / size)
-    j0, j1 = math.floor((y - m) / size), math.floor((y + m) / size)
-    out = []
-    for i in range(i0, i1 + 1):
-        dx = max(i * size - x, x - (i + 1) * size, 0.0)
-        for j in range(j0, j1 + 1):
-            dy = max(j * size - y, y - (j + 1) * size, 0.0)
-            if dx * dx + dy * dy <= m * m:
-                out.append((i, j))
-    return out
-
-
 class Tracker:
     """Per connection: which tiles of a kind the mod has (as roads.Tracker): vegetation tiles by default
     (messages veg_tile / veg_drop); the far buildings use one too (buildings.FAR_*)."""
@@ -1815,14 +1800,13 @@ class Tracker:
         # not wanted (the skyline: where the far buildings' squares are, those being its own tiles))
         self.z, self.group_z = z, group_z
         self.frame = None
-        self._quads = {}            # (anchor id, key) -> its quad in that anchor's world
         self.rebuilt = 0            # tiles built again for a key sent before (diagnostics: 0 with geo)
         self.ever = set() if rebuild_history else None
         # (geotiles: redo_all, the tiles sent asked for again, sent again only where their file changed; digests: the
         # sent files' digests are kept for that, earthd's stale mode turns it on)
         self.redo, self.sent_h, self.digests = set(), {}, False
         self.epoch = 0              # (drop_all: a build started before it lands unwanted)
-        self._gate = None           # (_on_pose_geo: the last pass's inputs, TRACK_MOVE_M)
+        self._gate = None           # last geotile pass's inputs, for the TRACK_MOVE_M gate
 
     def redo_all(self):
         """Every geotile sent is asked for again (earthd Connection.stale_run's swap: they may be an older version's);
@@ -1844,8 +1828,8 @@ class Tracker:
 
     def progress(self):
         """(done, wanted) of the tiles round the car at the last pose (done: sent to the mod); (0, 0) before one."""
-        car = getattr(self, "car", ())
-        return sum(1 for k in car if k in self.sent), len(car)
+        fast.require(551, "tracker_progress")
+        return fast._ef.tracker_progress(getattr(self, "car", ()), self.sent, None, None, None, None, None)
 
     def on_pose(self, conn, aid, x, y, loop, build, view=None, foci=(), frame=None, tree=None):
         """As roads.Tracker.on_pose: the tiles within send_m of the car (x, y) and of the camera when it is away
@@ -1853,170 +1837,54 @@ class Tracker:
         whose trees collide: the tiles within r + 128 m of each, after the car's and camera's, kept within r + 256 m.
         tree: the car's time-to-reach tree (reach.Tree; geotiles only): the car's tiles in its order
         (reach.order_geotiles: right round the car, then along the way it goes) instead of nearest first."""
-        import roads as roadsmod
+        from runtimeprofiler import TileJobs
+        import geotiles
+        fast.require(551, "scenery tile tracker")
+        if self.geo and frame is None:
+            return
+        if aid != self.aid:
+            if self.geo:
+                self.frame = frame
+            else:
+                for f in self.futs.values():
+                    f.cancel()
+                self.sent, self.building, self.futs = set(), set(), {}
+            self.aid = aid
+        if self.pool is None:
+            self.pool = TileJobs(self.per_pose, f"{self.kind}-{'geo' if self.geo else 'tile'}")
+        view = tuple(view) if view else None
+        start = functools.partial(self._start, conn, loop, build)
         if self.geo:
-            return self._on_pose_geo(conn, aid, x, y, loop, build, view, foci, frame, tree)
-        if aid != self.aid:
-            for f in self.futs.values():
-                f.cancel()                  # the old anchor's that have not started
-            self.aid, self.sent, self.building, self.futs = aid, set(), set(), {}
-        if self.pool is None:
-            from runtimeprofiler import ThreadPoolExecutor
-            self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-tile")
-        spots = [(x, y)] + ([tuple(view)] if view else [])
-        skip = {k for p in spots for k in roadsmod.tiles_near(*p, self.skip_m)} if self.skip_m else ()
-        if self.inner is not None:          # (the skyline: not where the far buildings' groups are)
-            skip = {k for p in spots for k in self._near(*p, self.inner[0], unit=self.unit, group=self.inner[1])}
-        car = set(self._near(x, y, self.send_m))
-        self.car = car - set(skip)          # (progress: the loading line's tiles)
-        seen = set(self._near(*view, self.send_m)) - car if view else set()
-        others = set()
-        for f in foci:
-            others.update(self._near(f[0], f[1], min(self.send_m, f[2] + roadsmod.TILE / 2)))
-        others -= car | seen
-        want = [k for k in car | seen | others if k not in self.sent and k not in self.building and k not in skip]
-        if self.unit == 1:
-            car_key = roadsmod.view_key(conn, aid, x, y)
-            cam_key = roadsmod.view_key(conn, aid, *view) if seen else None
-        else:                               # (keys in larger squares: nearest first)
-            car_key = lambda k: self._dist(k, x, y)     # noqa: E731
-            cam_key = (lambda k: self._dist(k, *view)) if seen else None    # noqa: E731
+            z = self.z or geotiles.Z
+            fast._ef.scenery_geo(self, aid, frame, (x, y), view, foci, tree, z, time.monotonic(),
+                                 TRACK_MAX_S, TRACK_MOVE_M, start,
+                                 functools.partial(self._drop_geo, conn, z))
+        else:
+            fast._ef.anchor_tiles(self, conn, aid, (x, y), view, foci, None, False, 0., start, None)
 
-        def focus_d(k):
-            return min(self._dist(k, f[0], f[1]) for f in foci)
-        want.sort(key=lambda k: (2, focus_d(k)) if k in others else (1, cam_key(k)) if k in seen else (0, car_key(k)))
-        # at most per_pose in flight: each waits in a thread of the loop's shared executor, and a teleport's
-        # hundreds (one per pose, uncapped) held every thread while the road tiles under the car waited for one
-        # (Sinaia 2026-10-15: bare ground for minutes)
-        for tx, ty in want[:max(0, self.per_pose - len(self.building))]:
-            self.building.add((tx, ty))
-            # (the tile's file read in the worker, not on the event loop: staging.build_inline; the build's own
-            # arguments as before)
-            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
-                                    False)
-            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, job, aid, tx, ty)
-            fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
-        for k in [k for k in list(self.sent) if all(self._dist(k, *p) > self.drop_m for p in spots)
-                  and all(self._dist(k, f[0], f[1]) > f[2] + roadsmod.TILE for f in foci)]:
-            self.sent.discard(k)
-            conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": f"{k[0]}_{k[1]}"})
+    def _start(self, conn, loop, build, key):
+        out_dir = getattr(getattr(conn, "s", None), "out_dir", None)
+        digest = self.geo and (self.digests or key in self.redo)
+        job = functools.partial(staging.build_inline, build, out_dir, digest)
+        if hasattr(getattr(conn, "s", None), "matslots") and self.kind in ("bldfar", "bldsky", "brfar", "bldpack", "bldhz"):
+            job = functools.partial(staging.prepare_shapes, conn.s, self.kind, self.geo, self.aid, key, job)
+        args = key if self.geo else (self.aid, *key)
+        self.building.add(key)
+        fut = self.futs[key] = loop.run_in_executor(self.pool, job, *args)
+        if self.geo:
+            fut.add_done_callback(lambda f, e=self.epoch: self._built_geo(conn, key, f, e))
+        else:
+            fut.add_done_callback(lambda f, a=self.aid: self._built(conn, a, key, f))
 
-    def _on_pose_geo(self, conn, aid, x, y, loop, build, view, foci, frame, tree=None):
-        """on_pose for geotiles: the same rules (send_m, drop_m, the camera's, other cars' foci; group_z's whole groups,
-        inner's tiles left out), the tiles' quads in the anchor's world (frame: its EnuFrame); an anchor change keeps
-        what was sent and in flight."""
+    def _drop_geo(self, conn, z, key):
         import geotiles
-        if frame is None:
-            return
-        if aid != self.aid:
-            self.aid, self.frame = aid, frame
-            self._quads = {k: v for k, v in self._quads.items() if k[0] == aid}
-        if self.pool is None:
-            from runtimeprofiler import ThreadPoolExecutor
-            self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-geo")
-        z = self.z or geotiles.Z
-        spots = [(x, y)] + ([tuple(view)] if view else [])
-        # (a pose that changes nothing this tracker goes by: no pass; the car, the camera and the other cars' foci
-        # within TRACK_MOVE_M of the last pass's, nothing sent, built or asked again since, at most TRACK_MAX_S ago)
-        now = time.monotonic()
-
-        def gate_key():
-            return (aid, id(frame), view is None, len(foci), id(tree), self.send_m, self.drop_m, self.inner,
-                    self.group_z, z, len(self.sent), len(self.building), len(self.redo), self.epoch, self.per_pose)
-        cont = [float(v) for p in spots for v in p[:2]] + [float(v) for f in foci for v in f[:3]]
-        last = getattr(self, "_gate", None)
-        if last is not None and last[0] == gate_key() and now - last[2] < TRACK_MAX_S and len(cont) == len(last[1]) \
-                and all(abs(a - b) <= TRACK_MOVE_M for a, b in zip(cont, last[1])) \
-                and not (last[3] and len(self.building) < self.per_pose):
-            return
-
-        def near(px, py, r):
-            """Keys within r of (px, py), nearest first (each tile by its own quad)."""
-            if self.group_z is None:
-                return [(a, b) for a, b, _d in geotiles.tiles_near(frame, px, py, r, z)]
-            keys = [c for a, b, _d in geotiles.tiles_near(frame, px, py, r, self.group_z)
-                    for c in geotiles.children(a, b, self.group_z, z)]
-            if not keys:
-                return keys
-            d = geotiles.dists(self.frame, keys, z, [(px, py)])[:, 0].tolist()     # (_geo_dist(own=True) of each)
-            return [k for _d, k in sorted(zip(d, keys))]
-        skip = set()
-        if self.inner is not None:
-            for p in spots:
-                skip.update((a, b) for a, b, _d in geotiles.tiles_near(frame, p[0], p[1], self.inner[0], z))
-        car = [k for k in near(x, y, self.send_m) if k not in skip]
-        if tree is not None and car:
-            import reach
-            try:
-                car = reach.order_geotiles(tree, frame, car, x, y, z)
-            except Exception as e:      # (nearest first, as before)
-                log.debug("%s geotiles in the tree's order: %s: %s", self.kind, type(e).__name__, e)
-        self.car = set(car)
-        seen = [k for k in near(*view, self.send_m) if k not in skip] if view else []
-        others = []
-        for f in foci:
-            others += [k for k in near(f[0], f[1], min(self.send_m, f[2] + 128.0)) if k not in skip]
-        order, done = [], set()
-        for k in car + seen + others:           # (nearest first)
-            if k not in done:
-                done.add(k)
-                order.append(k)
-        self.redo &= self.sent
-        want = [k for k in order if (k not in self.sent or k in self.redo) and k not in self.building]
-        n_go = max(0, self.per_pose - len(self.building))
-        more = len(want) > n_go             # (left for a later pass: the gate lets that one through)
-        for gx, gy in want[:n_go]:
-            self.building.add((gx, gy))
-            # (the tile's file read in the worker, not on the event loop: staging.build_inline)
-            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
-                                    self.digests or (gx, gy) in self.redo)
-            fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, job, gx, gy)
-            fut.add_done_callback(lambda f, k=(gx, gy), e=self.epoch: self._built_geo(conn, k, f, e))
-        for k in self._far_sent(spots, foci):
-            self.sent.discard(k)
-            self.sent_h.pop(k, None)
-            conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": geotiles.key(*k, z)})
-            gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
-            if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
-                gone(self.kind, k, geotiles.key(*k, z))
-        self._gate = (gate_key(), cont, now, more)
-
-    def _far_sent(self, spots, foci):
-        """The sent tiles farther than drop_m from every spot and than its reach + 256 m from every focus (_geo_dist
-        of each pair, by group when group_z): one batch call (earthfast.geo_tiles_dist; tile by tile from Python they
-        were whole seconds of a busy event loop, 2026-11-07)."""
-        import geotiles
-        sent = list(self.sent)
-        if not sent:
-            return []
-        z = self.z or geotiles.Z
-        keys, kz = sent, z
-        if self.group_z is not None:
-            keys, kz = [geotiles.parent(k[0], k[1], z, self.group_z) for k in sent], self.group_z
-        pts = [tuple(p[:2]) for p in spots] + [(f[0], f[1]) for f in foci]
-        if not pts:
-            return sent
-        d = geotiles.dists(self.frame, keys, kz, pts)
-        far = np.ones(len(sent), bool)
-        if spots:
-            far &= (d[:, :len(spots)] > self.drop_m).all(axis=1)
-        if foci:
-            far &= (d[:, len(spots):] > np.asarray([f[2] + 256.0 for f in foci], np.float64)).all(axis=1)
-        return [k for k, f in zip(sent, far.tolist()) if f]
-
-    def _geo_dist(self, k, x, y, own=False):
-        """m from (x, y) to geotile k's quad in the anchor's world (to its group's, group_z, unless own)."""
-        import geotiles
-        z = self.z or geotiles.Z
-        if self.group_z is not None and not own:
-            k, z = geotiles.parent(k[0], k[1], z, self.group_z), self.group_z
-        ck = (self.aid, z, k)
-        q = self._quads.get(ck)
-        if q is None:
-            q = self._quads[ck] = geotiles.quad(self.frame, k[0], k[1], z)
-            if len(self._quads) > 20000:
-                self._quads.clear()
-        return geotiles.quad_dist(q, x, y)
+        self.sent.discard(key)
+        self.sent_h.pop(key, None)
+        name = geotiles.key(*key, z)
+        conn.send({"type": f"{self.kind}_drop", "anchorId": self.aid, "key": name})
+        gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
+        if callable(gone):
+            gone(self.kind, key, name)
 
     def drop_all(self, conn):
         """Every geotile sent dropped (a drop message each) and the builds in flight left unwanted (their results are
@@ -2055,25 +1923,17 @@ class Tracker:
             return
         path, n, frame, pivot = res[:4]
         shapes = res[4] if len(res) > 4 else None       # (the far geotiles': {what: shape file}, pooled paths below)
-        again = key in self.redo
-        self.redo.discard(key)
-        if self.digests or again:
-            h = pre.digest if pre is not None else None
-            if h is None:
-                try:
-                    import hashlib
-                    with open(os.path.join(conn.s.out_dir, os.path.basename(path)), "rb") as f:
-                        h = hashlib.sha1(f.read()).digest()
-                except (OSError, AttributeError):
-                    pass
-            if again and h is not None and self.sent_h.get(key) == h and key in self.sent:
-                return                  # (the same tile as the one the mod has)
-            self.sent_h[key] = h
-        if self.ever is not None:
-            if key in self.ever:
-                self.rebuilt += 1
-            self.ever.add(key)
-        self.sent.add(key)
+        h = pre.digest if pre is not None else None
+        if h is None and (self.digests or key in self.redo):
+            try:
+                import hashlib
+                with open(os.path.join(conn.s.out_dir, os.path.basename(path)), "rb") as f:
+                    h = hashlib.sha1(f.read()).digest()
+            except (OSError, AttributeError):
+                pass
+        fast.require(551, "scenery_result")
+        if not fast._ef.scenery_result(self, key, h):
+            return
         m = {"type": f"{self.kind}_tile", "anchorId": self.aid, "key": geotiles.key(*key, self.z or geotiles.Z),
              "path": path, "n": n, "frame": [float(frame[0]), float(frame[1])], "pivot": float(pivot)}
         s = getattr(conn, "s", None)
@@ -2081,7 +1941,7 @@ class Tracker:
         data = pre.data if pre is not None else staging.inline_json(out_dir, path) if out_dir else None
         if data is not None:
             m["data"] = data
-        pool = getattr(s, "pool_shapes", None)
+        pool = pre.pool if pre and pre.prepared is not None else getattr(s, "pool_shapes", None)
         if shapes and pool is not None:
             slots = pool(conn, shapes)
             if slots:
@@ -2091,25 +1951,14 @@ class Tracker:
     def _near(self, x, y, m, unit=None, group=None):
         """Keys (tiles, or unit x unit squares of tiles) whose square, or whose group's square, comes within m."""
         import roads as roadsmod
-        unit = self.unit if unit is None else unit
-        group = self.group if group is None else group
-        if group:                           # (whole groups of `group` tiles; keys in `unit` squares)
-            gs = roadsmod.TILE * group
-            per = group // unit
-            return [(gx * per + i, gy * per + j) for gx, gy in _squares_near(x, y, m, gs)
-                    for i in range(per) for j in range(per)]
-        if unit == 1:
-            return roadsmod.tiles_near(x, y, m)
-        return _squares_near(x, y, m, roadsmod.TILE * unit)
+        fast.require(551, "tracker_near")
+        return fast._ef.tracker_near(x, y, m, roadsmod.TILE, self.unit if unit is None else unit,
+                                     self.group if group is None else group)
 
     def _dist(self, k, x, y):
-        """m (Euclidean, as _near) from (x, y) to key k's square, or to its group's (the far buildings under the
-        skyline)."""
         import roads as roadsmod
-        size = roadsmod.TILE * (self.group or self.unit)
-        per = (self.group // self.unit) if self.group else 1
-        x0, y0 = (k[0] // per) * size, (k[1] // per) * size
-        return roadsmod.box_gap(x0, y0, x0 + size, y0 + size, x, y)
+        fast.require(551, "tracker_distance")
+        return fast._ef.tracker_distance(k, x, y, roadsmod.TILE, self.unit, self.group)
 
     def _built(self, conn, aid, key, fut):
         if aid != self.aid:                 # (an old anchor's: the same key may be in flight for the new one)
@@ -2135,7 +1984,7 @@ class Tracker:
         data = pre.data if pre is not None else staging.inline_json(out_dir, path) if out_dir else None
         if data is not None:                # (the game need not open the file: staging.inline_json)
             m["data"] = data
-        pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
+        pool = pre.pool if pre and pre.prepared is not None else getattr(getattr(conn, "s", None), "pool_shapes", None)
         if self.kind in ("bldfar", "bldsky", "brfar", "bldpack") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
             slots = pool(conn, {"shape": f"{self.kind}_{aid}_{key[0]}_{key[1]}.cdae"})
             if slots:

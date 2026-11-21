@@ -31,8 +31,10 @@ _US = Style(centre="line_yellow", w=0.12, w_motorway=0.15, edge=0.12, edge_motor
             # edge lines on arterials (MUTCD 3B.10: rural arterials 20 ft and wider); local and collector roads mostly
             # have none (PEMA 6-inch aerials, Lancaster County, 2026-10-28: tertiary roads with a centre line only)
             edge_classes=frozenset({"motorway", "trunk", "primary", "secondary"}), ladder=True)
-_CA = _US._replace(centre_rural=(3.0, 6.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 6.0), lane_urban=(3.0, 6.0),
-                   lane_motorway=(3.0, 6.0))
+# Canada: centre lines 3 / 6 m; lane lines 3 / 9 m (Ontario's Hwy 417 measured 2.7 / 9.7 m on the aerials, the
+# real-lane-changes-exits study 2026-11-19; was 3 / 6)
+_CA = _US._replace(centre_rural=(3.0, 6.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 9.0),
+                   lane_motorway=(3.0, 9.0))
 _GB = Style(centre="line_white", w=0.10, w_motorway=0.15, edge=0.15, edge_motorway=0.20,
             centre_rural=(3.0, 6.0), centre_urban=(2.0, 4.0), lane_rural=(2.0, 7.0), lane_urban=(1.0, 5.0),
             lane_motorway=(2.0, 7.0), left_edge=None, double_centre_urban=False, double_gap=0.175, min_centre_m=5.5)

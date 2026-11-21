@@ -44,7 +44,10 @@ FEATURES = (
                        # (P1b) and exits off bridges as one deck with their road (P2b, "sheet": builds on P1b's decks),
                        # the surface overlay layer with lifted markings (P1c) and the new sidewalks (P1d)
                        "BNE_BATTER": "vanilla", "BNE_ROADSHAPE": "sheet", "BNE_SURFACE_V2": "on",
-                       "BNE_SIDEWALK_V2": "on"}, None),
+                       "BNE_SIDEWALK_V2": "on",
+                       # road surface v3 (2026-11-20: one continuous lane surface for motorways/trunks and their
+                       # bridge decks; beats the sheet decks at all five probe sites, 0 m of parapet in a carriageway)
+                       "BNE_ROADSURF_V3": "surface"}, None),
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
     ("standalonePaths", {"BNE_STANDALONE_PATHS": "on"}, None),
     ("halfStreetLamps", {"BNE_HALF_STREET_LAMPS": "on"}, None),

@@ -14,7 +14,22 @@
 //! order read, per connection; connections are independent.
 pub mod frame;
 mod merge;
+mod matslots;
+mod leases;
+mod credits;
+mod shapes;
+mod staging;
+mod restore;
+mod restore_tiles;
+mod renewal;
+mod pose;
+mod pose_view;
+pub mod farstate;
+pub mod msgs;
+pub mod pyjob;
+pub mod pyjson;
 mod record;
+mod trackers;
 mod wire;
 
 use std::io::Write;
@@ -660,5 +675,26 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Wire>()?;
     m.add_function(wrap_pyfunction!(host_hold_gil, m)?)?;
     m.add_function(wrap_pyfunction!(host_read_recording, m)?)?;
+    // phase 2a: pyjson, the PyJob executor, the messages made in Rust
+    m.add_function(wrap_pyfunction!(pyjson::encode_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(pyjson::pyjson_dumps, m)?)?;
+    m.add_function(wrap_pyfunction!(pyjson::pyjson_dumps_j, m)?)?;
+    m.add_function(wrap_pyfunction!(pyjson::pyjson_round, m)?)?;
+    pyjob::register(m)?;
+    msgs::register(m)?;
+    farstate::register(m)?;
+    trackers::register(m)?;
+    renewal::register(m)?;
+    matslots::register(m)?;
+    leases::register(m)?;
+    credits::register(m)?;
+    m.add_function(wrap_pyfunction!(shapes::prepare_shapes, m)?)?;
+    m.add_function(wrap_pyfunction!(shapes::prepare_shape_files, m)?)?;
+    staging::register(m)?;
+    restore::register(m)?;
+    m.add_function(wrap_pyfunction!(pose::connection_pose, m)?)?;
+    m.add_function(wrap_pyfunction!(pose_view::pose_camera, m)?)?;
+    m.add_function(wrap_pyfunction!(pose_view::pose_eye, m)?)?;
+    m.add_function(wrap_pyfunction!(pose_view::pose_foci, m)?)?;
     Ok(())
 }
