@@ -193,11 +193,17 @@ struct Me {
     prio: i64,
     pid: u32,
     start: u64,
+    #[cfg(test)]
+    now_ms: Option<u64>, // uptime at which this asker looks at the claim
 }
 
 impl Me {
     fn new(rank: i64, prio: i64, pid: u32) -> Me {
-        Me { rank, prio, pid, start: process_start(pid).unwrap_or(0) }
+        Me {
+            rank, prio, pid, start: process_start(pid).unwrap_or(0),
+            #[cfg(test)]
+            now_ms: None,
+        }
     }
 }
 
@@ -246,7 +252,10 @@ fn look_locked(path: &str, me: Me, repair: bool, bad: &mut Option<Sig>) -> (i32,
         }
     }
     let claim = claim_path(path);
+    #[cfg(not(test))]
     let now = uptime_ms();
+    #[cfg(test)]
+    let now = me.now_ms.unwrap_or_else(uptime_ms);
     if let Some(h) = holder(&claim) {
         let gone = expired(&h, now) || !holder_alive(&h);
         if !gone {
@@ -559,6 +568,12 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::*;
 
+    impl Me {
+        fn at(self, now_ms: u64) -> Self {
+            Self { now_ms: Some(now_ms), ..self }
+        }
+    }
+
     fn tmp(name: &str) -> String {
         let d = std::env::temp_dir().join(format!("stageshare_{}_{name}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
@@ -602,38 +617,30 @@ mod tests {
     #[test]
     fn claims() {
         let path = tmp("claims");
-        let me = Me::new(1, 0, std::process::id());
+        let me = Me::new(1, 0, std::process::id()).at(0);
         assert!(me.start != 0 || !cfg!(any(target_os = "linux", windows)));
         let (st, token) = look(&path, me, false, &mut None);
         assert_eq!(st, MINE);
         assert_ne!(token, 0);
         // (this process's other thread: held)
         assert_eq!(look(&path, me, false, &mut None), (HELD, 0));
-        // (another live process as urgent: held; a less urgent holder: unlocked. pid 1 is alive on Linux)
-        if let Some(start) = process_start(1) {
-            let other = Holder { rank: 1, prio: 3, pid: 1, start, token: 77, born: uptime_ms() };
-            fs::write(claim_path(&path), other.text()).unwrap();
-            assert_eq!(look(&path, Me { prio: 3, ..me }, false, &mut None).0, HELD);
-            assert_eq!(look(&path, me, false, &mut None).0, UNLOCKED);
-            // (pid 1 as another process than the one that took the claim, a reused pid: gone, taken over)
-            if start != 0 {
-                fs::write(claim_path(&path), Holder { start: start + 12345, ..other }.text()).unwrap();
-                assert_eq!(look(&path, me, false, &mut None).0, MINE);
-            }
-            // (a live holder past its lease: taken over)
-            fs::write(claim_path(&path), Holder { born: uptime_ms().saturating_sub(LEASE_MS + 1000), ..other }.text()).unwrap();
-            assert_eq!(look(&path, Me { prio: 3, ..me }, false, &mut None).0, MINE);
-        }
-        // (this process's own pid in a claim of an earlier process, its start another: not "this process", taken over;
-        // and its own claim past the lease is taken over too, the same-process answer comes after the expiry)
+        // Only the holder's liveness is queried. Use our real process for it and a distinct asker identity.
+        let live = Holder { rank: 1, prio: 3, pid: me.pid, start: me.start, token: 77, born: 0 };
+        let peer = Me { pid: 0, start: 0, prio: 3, ..me };
+        fs::write(claim_path(&path), live.text()).unwrap();
+        assert_eq!(look(&path, peer.at(LEASE_MS), false, &mut None).0, HELD);
+        assert_eq!(look(&path, Me { prio: 0, ..peer }.at(LEASE_MS), false, &mut None).0, UNLOCKED);
+        assert_eq!(look(&path, peer.at(LEASE_MS + 1), false, &mut None).0, MINE);
+        // A reused pid no longer owns the claim, even when it is the asker's own pid.
         if me.start != 0 {
-            let old = Holder { rank: 1, prio: 0, pid: me.pid, start: me.start + 1, token: 5, born: uptime_ms() };
-            fs::write(claim_path(&path), old.text()).unwrap();
-            assert_eq!(look(&path, me, false, &mut None).0, MINE);
+            for asker in [peer, me] {
+                fs::write(claim_path(&path), Holder { start: me.start + 1, ..live }.text()).unwrap();
+                assert_eq!(look(&path, asker, false, &mut None).0, MINE);
+            }
         }
-        let own_old = Holder { rank: 1, prio: 0, pid: me.pid, start: me.start, token: 6, born: uptime_ms().saturating_sub(LEASE_MS + 1) };
-        fs::write(claim_path(&path), own_old.text()).unwrap();
-        assert_eq!(look(&path, me, false, &mut None).0, MINE);
+        // Even this process's own claim can be taken over after its lease.
+        fs::write(claim_path(&path), live.text()).unwrap();
+        assert_eq!(look(&path, me.at(LEASE_MS + 1), false, &mut None).0, MINE);
         // (a holder that is gone: taken over; a claim not written whole: taken)
         fs::write(claim_path(&path), "1 0 4000000000 1 9 0").unwrap();
         assert_eq!(look(&path, me, false, &mut None).0, MINE);
@@ -653,13 +660,13 @@ mod tests {
     #[test]
     fn only_the_owner_releases_and_publishes() {
         let path = tmp("owner");
-        let me = Me::new(1, 0, std::process::id());
-        let (_, old) = look(&path, me, false, &mut None);
-        // (the claim taken over by another owner while the first still works: a holder past its lease)
-        let mut h = holder(&claim_path(&path)).unwrap();
-        h.born = uptime_ms().saturating_sub(LEASE_MS + 1);
-        fs::write(claim_path(&path), h.text()).unwrap();
-        let (st, new) = look(&path, me, false, &mut None);
+        let me = Me::new(1, 0, std::process::id()).at(0);
+        let (st, old) = look(&path, me, false, &mut None);
+        assert_eq!(st, MINE);
+        assert_ne!(old, 0);
+        // The first owner is still working when its lease runs out.
+        assert_eq!(look(&path, me.at(LEASE_MS), false, &mut None), (HELD, 0));
+        let (st, new) = look(&path, me.at(LEASE_MS + 1), false, &mut None);
         assert_eq!(st, MINE);
         assert_ne!(old, new);
         // (the first owner's late result and release change nothing of its successor's)
