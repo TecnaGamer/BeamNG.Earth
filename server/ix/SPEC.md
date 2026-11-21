@@ -118,3 +118,27 @@ gives it back. `pipeline.region` is the region's own find, the owner calls and t
 An interchange ends where its roads come back to the ground: a road on the ground between two structures' ends joins no
 interchanges (`find_interchanges` unites structures only through their joints, crossings and shared dips), the structure's
 end is a boundary held at the ground there.
+
+## The order and the heights of an interchange (`ix/s3_order.py`, `ix/relax.py`, `ix/diffgraph.py`)
+
+**Order.** A crossing's over / under is decided from the evidence, strongest first: the structure (the members' kinds: a bridge
+is over what it spans, a tunnel under what is over it), then the relative layer of the two roads where they cross
+(`gradeshapes._over`); never a section's layer on its own. Each decision alone is consistent, but a road is continuous: its
+sections meet at one height at their joins, and a layer that changes along a carriageway puts it under a road at one crossing
+and over it a section later. The order step finds those as negative cycles of the difference constraints of the interchange's
+crossings (upper at least `need` over lower), joins (one height) and the grade law along each member between those points, all
+heights free (`diffgraph`: the same graph the heights step uses). Each is resolved by giving up the weakest evidence in it: a
+decision from layers alone (smallest layer difference first) before one from the structure; a structure decision is never
+given up there (a loop of them only is `order_deferred`: the heights step eases the clearance). Every decision given up is an
+`order_dropped` note of the Order artifact with its reason, and is no longer in `sysm["crossings"]` (settled in place) nor
+held by `gradeshapes._stacked`. Deterministic and independent of the input's order: crossings and joins are taken in the order
+of their roads' keys.
+
+**Heights.** `solve_shape` no longer gives up an interchange whose laws cannot all hold: the laws that are differences of two
+heights are a graph whose negative cycles are the contradictions, and each is eased by the least that closes it (plus a
+millimetre of room), in the order the laws are given up: a deck's mapped bound (its floor over the ground it spans, a road going
+under's ceiling), then the grade law (one factor over the roads of the cycle), then a clearance; a join never. Each
+relaxation is in the Heights artifact (`diag["relaxed"]`, a `relaxed_<kind>` note each) and in the step's log line. A deck's end
+that goes into a tunnel lands on the ground at the mouth (no floor over the span there): the bridge that becomes a tunnel along
+one road is not forbidden. `ixcheck` counts relaxations (`relaxed_*` notes) apart from failures, and checks the order's
+consistency under the joins (`weld_cycle`).

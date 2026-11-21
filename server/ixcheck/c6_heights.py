@@ -34,6 +34,9 @@ def check(art, parents):
             out.append(_f(art, "fail", "heights_nan", "piece %d (%s) has %d non-finite heights"
                           % (p, key(int(pc.main)), n), ((int(pc.main), float(pc.ms[0]) if len(pc.ms) else 0.0),)))
 
+    eased = _eased(art, key)
+    out += eased[0]
+
     if order is not None:
         for c in order.crossings:
             zu = _at(zs, art, c.u, c.su)
@@ -48,7 +51,8 @@ def check(art, parents):
             if zl is None or not np.isfinite(zu) or not np.isfinite(zl):
                 continue
             gap = zu - zl
-            if gap < c.need - CLEAR_SLACK:
+            allowed = eased[1].get(frozenset((c.u, c.d)), 0.0) + eased[2].get(c.u, 0.0) + eased[2].get(c.d, 0.0)
+            if gap < c.need - CLEAR_SLACK - allowed:
                 out.append(_f(art, "fail", "clearance", "crossing of %s over %s: %.2f m over %.2f, %.2f m short of "
                               "the %.2f m asked" % (key(c.u), key(c.d), zu, zl, (c.need - CLEAR_SLACK) - gap, c.need),
                               ((c.u, c.su), (c.d, c.sd))))
@@ -71,8 +75,29 @@ def check(art, parents):
             out.append(_f(art, "note", "boundary_off", "boundary of %s at s=%.1f: %.2f m over its ground there"
                           % (key(b.i), b.si, z - g), ((b.i, b.si), (b.j, b.sj))))
 
-    out += _grades(art, zs, ms, key)
+    out += _grades(art, zs, ms, key, eased[3])
     return out
+
+
+def _eased(art, key):
+    """(notes, {frozenset((member, member)): m a clearance between the two was eased by}, {member: m a clearance bound on one
+    member (a road the shape does not move) was eased by}, {members whose grade law was eased}): what the solve relaxed
+    (diag["relaxed"]: kind, amount, at, text), counted as relaxations, never as failures, in notes of their own."""
+    notes, pair, single, grade = [], {}, {}, set()
+    for r in art.diag.get("relaxed") or ():
+        at = tuple((int(m), float(s)) for m, s in r.get("at", ()))
+        notes.append(_f(art, "note", "relaxed_" + str(r.get("kind")), "%s (%.3f)" % (r.get("text", ""), float(r.get("amount", 0.0))),
+                        at))
+        if r.get("kind") == "clearance":
+            members = sorted({m for m, _s in at})
+            if len(members) == 2:
+                k = frozenset(members)
+                pair[k] = max(pair.get(k, 0.0), float(r["amount"]))
+            for m in members if len(members) == 1 else ():
+                single[m] = max(single.get(m, 0.0), float(r["amount"]))
+        elif r.get("kind") == "grade":
+            grade |= {m for m, _s in at}
+    return notes, pair, single, grade
 
 
 def _f(art, level, code, text, where=()):
@@ -127,13 +152,14 @@ def _at(vals, art, mem, s):
     return float(v[a] + (v[b] - v[a]) * ((s - float(ms_[j])) / den))
 
 
-def _grades(art, zs, ms, key):
-    """A note per piece whose heights climb steeper between neighbour samples than its member's law allows."""
+def _grades(art, zs, ms, key, eased=frozenset()):
+    """A note per piece whose heights climb steeper between neighbour samples than its member's law allows (not one whose
+    law the solve eased: that is a relaxation, noted as such)."""
     out = []
     gm = [GRADE_RAIL if m.kind in ("rail", "rail_deck") else GRADE_ROAD for m in ms]
     for p, pc in enumerate(art.pieces):
         z = zs[p]
-        if len(pc.d) < 2 or not np.isfinite(z).all():
+        if len(pc.d) < 2 or not np.isfinite(z).all() or int(pc.main) in eased:
             continue
         dd = np.diff(np.asarray(pc.d, np.float64))
         dz = np.abs(np.diff(z))

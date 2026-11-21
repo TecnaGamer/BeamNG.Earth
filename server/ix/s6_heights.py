@@ -11,7 +11,7 @@ from . import artifacts, cache, s4_terrain
 
 log = logging.getLogger("earthd.grading")
 
-FORMAT = 2
+FORMAT = 3
 LAWS = (("gradeshapes", ["STEP_M", "DECK_MAX_GRADE", "DECK_AIR_M", "SOFT_M", "DIP_MARGIN_M", "RAMP_MAX_M", "W_END",
                          "W_HOLD", "W_DIP", "W_SMOOTH", "W_STIFF", "W_JOIN"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
@@ -26,17 +26,51 @@ def solve(net, sysm, pcs, smp, fixed_z, ground):
     return zs, diag
 
 
+def _plain_value(v):
+    """v as plain data (np scalars unwrapped, lists and dicts of plain values kept, anything else as its str)."""
+    if isinstance(v, np.generic):
+        v = v.item()
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    if isinstance(v, (list, tuple)):
+        return [_plain_value(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _plain_value(x) for k, x in v.items()}
+    return str(v)
+
+
 def _plain(diag):
-    """The solver's diagnostics as plain values (np scalars unwrapped, anything else as its str). A wall-clock time is
-    not solver state: dropped, or no two runs would give the same bytes."""
-    out = {}
-    for k, v in diag.items():
-        if str(k) == "elapsed_s":
-            continue
-        if isinstance(v, np.generic):
-            v = v.item()
-        out[str(k)] = v if v is None or isinstance(v, (str, int, float, bool)) else str(v)
-    return out
+    """The solver's diagnostics as plain values. A wall-clock time is not solver state: dropped, or no two runs would give
+    the same bytes."""
+    return {str(k): _plain_value(v) for k, v in diag.items() if str(k) != "elapsed_s"}
+
+
+def relaxed_of(diag):
+    """[dict(kind, amount, at, text)] of what the solve eased (gradeshapes.solve_shape: diag["relaxed"]), in the order it
+    was found; the members in net's numbers."""
+    return list(diag.get("relaxed") or ())
+
+
+def relax_text(diag):
+    """One line of what the solve eased, for the step's log line: '' where nothing was, else the count and each kind's
+    total (clearance and floors in m, a grade law as the largest factor it was eased by)."""
+    got = relaxed_of(diag)
+    if not got:
+        return ""
+    parts = {}
+    for r in got:
+        parts.setdefault(r["kind"], []).append(r)
+    out = []
+    for kind in sorted(parts):
+        rs = parts[kind]
+        if kind == "grade":
+            out.append("grade x%d (up to +%.2f%% of slope)" % (len(rs), 100.0 * max(r["amount"] for r in rs)))
+        elif kind == "curve":
+            out.append("curve x%d (radius divided by up to %.2f)" % (len(rs), max(r["amount"] for r in rs)))
+        else:
+            out.append("%s x%d (%.2f m at most, %.2f m in all)" % (kind, len(rs), max(r["amount"] for r in rs),
+                                                                   sum(r["amount"] for r in rs)))
+    return "%d eased: %s" % (len(got), "; ".join(out))
 
 
 def run(planner, net, sysm, loc, pcs, smp, zs, diag, system, scope):
@@ -55,8 +89,14 @@ def run(planner, net, sysm, loc, pcs, smp, zs, diag, system, scope):
                                       np.asarray(x["d"], np.float64), mem,
                                       np.asarray(x["ms"], np.float64),
                                       np.full(len(x["xy"]), np.nan) if z is None else np.asarray(z, np.float64)))
+    plain = _plain(diag)
+    findings = []
+    for r in relaxed_of(plain):
+        at = tuple((int(loc[int(m)]), float(s_)) for m, s_ in r["at"] if int(m) in loc)
+        findings.append(artifacts.Finding(STEP, "note", "relaxed_" + r["kind"], r["text"], at))
+        r["at"] = [[int(loc[int(m)]), float(s_)] for m, s_ in r["at"] if int(m) in loc]
     return artifacts.Heights(artifacts.Meta(STEP, FORMAT, "", (), LAWS_DIGEST, scope), system, pieces, solved,
-                             _plain(diag))
+                             plain, findings)
 
 
 def region_of(planner, net, solved, shapes, scope, beside=()):
