@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 
 import numpy as np
+import mapgeom
 from polygon import contains_points
 
 
@@ -67,27 +68,52 @@ def survey_points(extent, points):
     return band[(band[:, 1] >= west*1e7) & (band[:, 1] <= east*1e7), ::-1] / 1e7
 
 
+def _osm_supports(layer):
+    """Keep the active OSM support coordinates on the decoded infrastructure cell."""
+    cached = getattr(layer, "_pl_osm_supports", None)
+    if cached is not None:
+        return cached
+    import mappedpoles
+
+    classes = layer.attrs["class"]
+    tags_column = layer.attrs.get("tags")
+    candidates = (layer.kind == mapgeom.POINT) & np.isin(classes, ("power_pole", "utility_pole", "power_tower"))
+    locations, towers = [], []
+    for i in np.flatnonzero(candidates):
+        cls = classes[i]
+        tags = mappedpoles._tags(tags_column[i]) if tags_column is not None else {}
+        if not mappedpoles._active(tags) or (cls == "utility_pole" and tags.get("utility") != "power"):
+            continue
+        lon, lat = layer.parts(i)[0][0][0]
+        if inside(lat, lon):
+            locations.append((lon, lat))
+            towers.append(cls == "power_tower")
+    cached = np.asarray(locations, dtype=np.float64).reshape(-1, 2), np.asarray(towers, dtype=bool)
+    layer._pl_osm_supports = cached
+    return cached
+
+
 class Supports:
     """Tile-local evidence. OSM point geometry takes precedence in overlapping surveys."""
 
     def __init__(self, frame, extent, layers):
-        import mappedpoles
         self.frame = frame
         self.survey = set()
         self.drawn = set()
         self.points = {}
         self.buckets = {}
         self.standalone = set()
+        south, west, north, east = extent
         for layer in layers:
-            classes = layer.attrs["class"]
-            for i in np.flatnonzero((layer.kind == 1) & np.isin(classes, ["power_pole", "utility_pole", "power_tower"])):
-                cls = str(classes[i])
-                tags = mappedpoles._tags(layer.attrs["tags"][i]) if "tags" in layer.attrs else {}
-                if not mappedpoles._active(tags) or (cls == "utility_pole" and tags.get("utility") != "power"):
-                    continue
-                lon, lat = layer.parts(i)[0][0][0]
-                if extent[0] <= lat <= extent[2] and extent[1] <= lon <= extent[3] and inside(lat, lon):
-                    self.add(lon, lat, cls == "power_tower", cls == "power_tower")
+            locations, towers = _osm_supports(layer)
+            lon, lat = locations.T
+            selected = (south <= lat) & (lat <= north) & (west <= lon) & (lon <= east)
+            if not selected.any():
+                continue
+            lon, lat = lon[selected], lat[selected]
+            x, y, _ = frame.geodetic_to_enu(lat, lon, 0.)
+            for lo, la, tower, px, py in zip(lon, lat, towers[selected], x, y):
+                self.add(lo, la, bool(tower), bool(tower), xy=(px, py))
         for tower, survey in zip((True, False), _data()[3:]):
             # Merge across sources only. Two surveyed poles may stand side by side.
             additions = [(lon, lat) for lon, lat in survey_points(extent, survey)
@@ -96,8 +122,11 @@ class Supports:
                 self.add(lon, lat, tower, True)
                 self.survey.add((lon, lat))
 
-    def add(self, lon, lat, tower, standalone):
-        x, y, _ = self.frame.geodetic_to_enu(lat, lon, 0.)
+    def add(self, lon, lat, tower, standalone, *, xy=None):
+        if xy is None:
+            x, y, _ = self.frame.geodetic_to_enu(lat, lon, 0.)
+        else:
+            x, y = xy
         key = (float(lon), float(lat))
         self.points[key] = (x, y, tower)
         self.buckets.setdefault((math.floor(x/10), math.floor(y/10)), []).append(key)
