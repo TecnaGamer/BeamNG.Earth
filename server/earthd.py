@@ -8811,7 +8811,7 @@ class Connection:
             self.closing = True
             self.route_dl_version += 1          # (a running route_download stops: no one to show its bar to)
             self.s.connections.discard(self)
-            resume_low = getattr(self.s.road_pool, "resume_low", None)
+            resume_low = getattr(getattr(self.s, "road_pool", None), "resume_low", None)
             if resume_low is not None:
                 resume_low(("hw", id(self)))
             if not self.s.stream_leases.detach(self):
@@ -10452,9 +10452,10 @@ class Connection:
             if source is not None and self.signs_on:      # (after the roads: signs only for road tiles sent)
                 self.signs.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_signs_tile,
                                    ready, version=source.tags.known())
-        if self.s.road_pool is not None:
-            pause_low = getattr(self.s.road_pool, "pause_low", None)
-            resume_low = getattr(self.s.road_pool, "resume_low", None)
+        rp = getattr(self.s, "road_pool", None)
+        if rp is not None:
+            pause_low = getattr(rp, "pause_low", None)
+            resume_low = getattr(rp, "resume_low", None)
             if pause_low is not None and resume_low is not None:
                 roads_busy = bool(getattr(self.roads, "deck_first", None) or getattr(self.roads, "building", None))
                 if fast_drv and (ground_wait or roads_busy):
