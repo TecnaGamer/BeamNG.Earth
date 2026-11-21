@@ -138,6 +138,9 @@ DESIGN_GLAZING = {
     "streamline": (7.2, .55, 2.8, 4.5), "step": (5., .70, 3.1, 0),
     "hat_roof": (5.2, .65, 2.8, 3.6), "tile_canopy": (5.2, .60, 2.65, 4.2),
     "awning_tower": (5., .55, 2.65, 3.6), "shed_lobby": (8., .16, 3.1, 0),
+    "fanlight": (7.,.3,3.45,3.), "gabled_market": (6.,.4,3.45,3.),
+    "arched_glass": (8.,.15,3.65,4.), "shuttered_porch": (3.8,.5,2.85,2.),
+    "glazed_shed": (11.,.15,4.1,4.),
     "cinema_lobby": PUBLIC_GLAZING["cinema"],
     "glass": (12., .12, 4.9, 5.),
 }
@@ -458,6 +461,23 @@ def elevation(
             2.65 if restaurant else 3.45,
             True,
         )
+    if name in {"Old Navy", "Uniqlo", "Hollister"}:
+        # Fit display windows beside the doors, including on a single tenant panel.
+        for x in entries:
+            for side in (-1,1):
+                boundary = x if side < 0 else width-x
+                adjacent = [side*(other-x)/2 for other in entries if side*(other-x) > 0]
+                side_room = min(boundary, 9., *adjacent) - 3.15
+                if side_room < 1.15:
+                    continue
+                mid = x + side*(3.15 + side_room/2)
+                if name == "Hollister":
+                    glass(mid,side_room*.68,.5,min(2.85,height),False)
+                    shutter = mid + side*side_room*.425
+                    for z in np.arange(.52,min(2.8,height)-.1,.16):
+                        rect(shutter-side_room*.07,z,shutter+side_room*.07,z+.12,"#63594b")
+                else:
+                    glass(mid,side_room-.12,.12,min(3.65,height),False)
     if name in {"Kroger", "Ace Hardware", "Target"}:
         for x in entries:
             for offset in (-4.9, 4.9):

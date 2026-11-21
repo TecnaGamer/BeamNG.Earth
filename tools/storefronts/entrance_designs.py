@@ -57,6 +57,12 @@ DESIGNS = {
     "Advance Auto Parts": Entrance("step", "#a62e2d", "#e7bb40", 16),
     "O'Reilly Auto Parts": Entrance("step", "#276442", "#dfd9bd", 18),
     "Harbor Freight Tools": Entrance("step", "#9e302c", "#494744", 21),
+    "Publix": Entrance("fanlight", "#eee2c7", "#efece0", 22),
+    "Harris Teeter": Entrance("gabled_market", "#986955", "#e4dcc7", 24),
+    "Lidl": Entrance("glazed_shed", "#485764", "#cbd1cf", 27),
+    "Old Navy": Entrance("arched_glass", "#28445b", "#547589", 19),
+    "Hollister": Entrance("shuttered_porch", "#5d5446", "#996149", 14),
+    "Uniqlo": Entrance("glass", "#f0eee9", "#777d7e", 20),
     "AMC Theatres": Entrance("cinema_lobby", "#bda78c", "#932a36", 32),
     "Apple Store": Entrance("glass", "#bdbfbb", "#626962", 23),
     "Crate & Barrel": Entrance("glass", "#ddd8cb", "#494a46", 20),
@@ -221,18 +227,54 @@ def draw(profile, span, height, vertex, mesh, texture, sign, symbol_only=False):
         sign_h = min(2.60 if tiled else 1.55,tower*.80)
         sign_width = tower*1.85
         sign_z,sign_depth = crown-sign_h*.60,.90
-    elif form == "shed_lobby":
+    elif form in {"shed_lobby","glazed_shed"}:
         # Timber rainscreen above a glazed vestibule under an asymmetric shed roof.
         low, high = height+.18, height+min(2.15,span*.13)
         prism([(-half,3.1),(half,3.1),(half,high),(-half,low)],.04,.58,field)
-        for z in np.arange(3.38,low,.34):
-            box(-half,half,.58,.60,z,z+.033,"#4c392f")
+        if form == "shed_lobby":
+            for z in np.arange(3.38,low,.34):
+                box(-half,half,.58,.60,z,z+.033,"#4c392f")
+        else:
+            for x in np.linspace(-half,half,9):
+                top = low+(high-low)*(x+half)/span
+                box(x-.04,x+.04,.58,.62,3.1,top,trim)
+            box(-half,half,.58,.62,4.05,4.14,trim)
         prism([(-half,low),(half,high),(half,high+.27),(-half,low+.27)],.02,reach,trim)
         for x in (-half+.22,half-.22):
             post(x,low if x < 0 else high,trim,.25)
         sign_h = min(2.2,span*.13)
         sign_width = min(half,sign_h*2.6)
         sign_z,sign_depth = (high+low)*.5-sign_h*.57,.65
+    elif form in {"fanlight", "gabled_market", "arched_glass"}:
+        # Set a radial window into the crown above the door, sized to its clear frontage.
+        base = max(3.5, height-.65)
+        rise = min(3.3,half*.33)
+        radius = half*.74
+        arch = [(radius*cos(a),base+rise*sin(a)) for a in np.linspace(0,pi,13)]
+        if form == "gabled_market":
+            prism([(-half,base),(half,base),(0,base+rise+1.1)],.02,.47,field)
+            for edge in (-half,half):
+                prism([(edge,base),(0,base+rise+1.1),(0,base+rise+1.32),(edge,base+.22)],.03,.59,trim)
+        else:
+            box(-half,half,.02,.48,base-.85,base+.32,field)
+            prism([(x,z+.32) for x,z in arch],.02,.48,field)
+        surface([(x,.62,z) for x,z in arch],"#456571")
+        for x,z in arch[2:-2:2]:
+            surface([(-.045,.64,base),(.045,.64,base),(x+.055,.64,z),(x-.055,.64,z)],trim)
+        for x in (-half+.27,half-.27):
+            box(x-.25,x+.25,.02,.85,0,base+.2,field)
+        box(-half,half,.03,reach,3.16,3.43,trim)
+        sign_h = min(1.65,span*.10)
+        sign_width = min(span*.82,sign_h*5.3)
+        sign_z,sign_depth = base-sign_h*.5,.72
+    elif form == "shuttered_porch":
+        ridge = eave+min(1.9, half*.28)
+        prism([(-half,eave),(half,eave),(0,ridge)],.02,reach-.12,field)
+        for edge in (-half,half):
+            prism([(edge,eave),(0,ridge),(0,ridge+.2),(edge,eave+.2)],.02,reach,trim)
+            post(edge*.92,eave+.04,field,.24)
+        sign_z,sign_depth=eave-.15,reach+.04
+        box(-sign_width*.54,sign_width*.54,reach-.18,reach,sign_z-sign_h*.55,sign_z+sign_h*.55,field)
     elif form == "cinema_lobby":
         # A high arched clerestory breaks up the flat roofline of the auditorium block.
         spring = max(5.7, height + .35)
