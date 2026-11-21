@@ -7606,6 +7606,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
-    m.add("VERSION", 571)?;
+    m.add("VERSION", 576)?;
     Ok(())
 }
