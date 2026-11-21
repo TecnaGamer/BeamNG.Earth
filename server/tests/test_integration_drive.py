@@ -117,7 +117,7 @@ import heightmap  # noqa: E402
 import imagery  # noqa: E402
 import modsim  # noqa: E402
 from modsim import CORE, GOV, LATTICE, REBASE, cheb  # noqa: E402
-from netclient import Client, stop_server  # noqa: E402
+from netclient import Client, FarState, stop_server  # noqa: E402
 
 LAT, LON = 36.5785, -118.2923
 SPEED = 30.0
@@ -416,6 +416,41 @@ def block_heights(blk, x0, y0, n):
     q = g[gy0:gy0 + last:FAR_ST, gx0:gx0 + last:FAR_ST]
     f = np.float32
     return zb + q * (mh / 65536), f(zb) + q.astype(f) * f(mh / 65536), (gx0, gy0)
+
+
+def far_settled(far):
+    # has_work() is the governor's budget signal. A running crossover needs
+    # more frames even when there is nothing left to import, reveal or delete.
+    return far.done and not far.groups and not far.has_work()
+
+
+class DriveSettleTest(unittest.TestCase):
+    def test_lossy_rebase_waits_for_last_crossover(self):
+        from test_modsim import python_far_trace
+
+        # One visible outer tile and one unshown add at the switch. The mod marks
+        # anchor 1 lossy and defers its remove until the new ground has settled.
+        state = {}
+        python_far_trace([
+            "N mesh", "A 1 0 0 0", "T 1 6_5_4 6 81920 65536 0 1 -",
+            "S 1 1 - - 1 6_5_4 0", *(["F"] * 60),
+            "T 1 0_1_2 0 256 512 0 1 -", "A 2 1 0 0",
+            "T 2 0_0_0 0 0 0 0 1 -", "S 2 2 - - 1 0_0_0 0", "R 1 6_5_4", "D 2",
+        ], state)
+        far, gov = state["far"], state["gov"]
+        saw_crossover = False
+        for _ in range(120):
+            gov.begin_frame(far.has_work(), 1000 / 60)
+            far.update(gov, 1 / 60, None)
+            if far.active_groups and not far.has_work():
+                saw_crossover = True
+                self.assertTrue(far.old)
+                self.assertFalse(far_settled(far))
+            if far_settled(far):
+                break
+        self.assertTrue(saw_crossover)
+        self.assertTrue(far_settled(far))
+        self.assertFalse(far.old)
 
 
 class DriveBase(unittest.TestCase):
@@ -965,7 +1000,7 @@ class DriveBase(unittest.TestCase):
             """The driver: velocity for this frame, and the phase transitions."""
             if st["phase"] == "stand":
                 player["v"] = [0.0, 0.0]
-                if stats["far_done"] and far.done and not far.has_work() and not far.old:
+                if far_settled(far) and not far.old:
                     st["phase"] = "drive"
                     stats["loaded"] = True
                     stats["initial"] = {"tiles": stats["far_done"][0][0], "sim": clock["sim"],
@@ -1050,8 +1085,9 @@ class DriveBase(unittest.TestCase):
             frame()
         drive1 = {"tiles": stats["tiles"], "frame": clock["frame"]}
         # stopped: wait until the current anchor's set is done and the server is quiet
-        while not (far.done and not far.has_work() and time.monotonic() - st["quiet_wall"] > 1.0):
-            self.assertLess(time.monotonic() - st["stop_wall"], 120, "no final far_done")
+        while not (far_settled(far) and time.monotonic() - st["quiet_wall"] > 1.0):
+            self.assertLess(time.monotonic() - st["stop_wall"], 120,
+                            f"far field still settling: done={far.done}, groups={len(far.groups)}, old={len(far.old)}")
             frame()
             if busy_msgs(c.log) != st["log_n"]:
                 st["log_n"], st["quiet_wall"] = busy_msgs(c.log), time.monotonic()
@@ -1172,6 +1208,7 @@ class DriveBase(unittest.TestCase):
               f"for {len(stats['terrain'])} terrain-follow + {stats['prepare_anchor'] + 1} anchor requests "
               f"(never asked for: {unasked})\n"
               f"  late tiles (other anchor) {far.counters['late_tiles']}, superseded {stats['superseded_tiles']}, "
+              f"previous-anchor tiles left {len(far.old)}, "
               f"unknown removes {len(far.unknown_removes)}, bad swaps {len(stats.get('bad_swaps', []))}, "
               f"server log issues {len(bad)}", file=sys.stderr)
         bl = np.array(stats["bilinear"]) if stats["bilinear"] else np.zeros(1)
@@ -1200,6 +1237,15 @@ class DriveBase(unittest.TestCase):
         self.assertEqual(stats["late_terrain"], 0, "terrain_ready after the commit threshold")
         self.assertEqual(stats["rebases"], 1)
         self.assertEqual(stats["prepare_anchor"], 1, "one prepare_anchor per rebase")
+        # The renderer can drop old tiles itself. Independently require their explicit
+        # retirement on the wire by the new anchor's far_done, even on a lossy switch.
+        wire = FarState()
+        for msg in c.log:
+            if msg["type"] in ("far_tile", "far_swap", "far_remove"):
+                wire.apply([msg])
+            elif msg["type"] == "far_done" and msg["anchorId"] == st["anchor"]:
+                self.assertFalse({ck for ck in wire.tiles if ck[0] != st["anchor"]})
+                self.assertEqual(len(wire.keys(st["anchor"])), msg["count"])
         # the prefetch predicts the mod's requests: each terrain is built once, and only a straight-line
         # prediction that the bend or the final stop overtook is never asked for (512 blocks' 5 s lead since
         # 2026-10-15: a prediction further ahead, a few more of those; their 256 m minimum lead since 2026-10-23: up to

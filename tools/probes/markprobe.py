@@ -25,9 +25,13 @@ import logging
 import os
 import sys
 
-import numpy as np
+SERVER = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server"))
+if SERVER not in sys.path:
+    sys.path.insert(0, SERVER)      # (the server's modules: this probe lives in tools/probes/)
 
-import dnp
+import numpy as np  # noqa: E402
+
+import dnp  # noqa: E402
 
 RASTER_M = 0.25         # m between the raster's samples (dz and coverage)
 CELL_M = 2.0            # m: the triangle lookup's buckets
@@ -141,11 +145,15 @@ def tile_metrics(P, T, mats, M, layer_of_mat, box, ground, roads, decks=()):
     # wall or kerb the lattice draws as teeth; follow_ground holds the surfaces down there on purpose)
     import roadmesh as rm
     c = rm.GRID_M
-    i0, j0 = int(np.ceil(box[0] / c)), int(np.ceil(box[1] / c))
-    nxs = np.arange(i0, int(np.floor(box[2] / c)) + 1) * c
-    nys = np.arange(j0, int(np.floor(box[3] / c)) + 1) * c
+    # (the lattice over every cell the box meets, its edges between lattice lines too: a cell straddling the box's
+    # edge had no step class and its samples were all left out, Codex review of revampfix2; the node samples only
+    # the nodes in the box, nin)
+    i0, j0 = int(np.floor(box[0] / c)), int(np.floor(box[1] / c))
+    nxs = np.arange(i0, int(np.ceil(box[2] / c)) + 1) * c
+    nys = np.arange(j0, int(np.ceil(box[3] / c)) + 1) * c
     ngx, ngy = np.meshgrid(nxs, nys)
     nodes = np.c_[ngx.ravel(), ngy.ravel()]
+    nin = (nodes[:, 0] >= box[0]) & (nodes[:, 0] <= box[2]) & (nodes[:, 1] >= box[1]) & (nodes[:, 1] <= box[3])
     nz = ground(nodes).reshape(ngx.shape)
     q4 = np.stack([nz[:-1, :-1], nz[:-1, 1:], nz[1:, :-1], nz[1:, 1:]])
     step = ~(np.nanmax(q4, 0) - np.nanmin(q4, 0) <= rm.FOLLOW_STEP_M)
@@ -167,6 +175,27 @@ def tile_metrics(P, T, mats, M, layer_of_mat, box, ground, roads, decks=()):
         st = np.ones(len(xy), bool)
         st[inside] = step[cj[inside], ci[inside]]
         return deck[j, i] | st
+
+    def tri_step(tri_xy):
+        """(triangles,) bool: a triangle (triangles, 3, 2) lies wholly in one step cell (its corners within that cell's
+        closed square): a node or an edge crossing of it, on that cell's corner or edge, is the held-down surface's (a
+        node is the corner of four cells: by its own cell alone, the pieces held down in a step cell beside it counted
+        as under the ground, all 159 of the Stelvio's, revampfix). Not by its centroid's cell: a triangle reaching
+        out of a step cell (the legacy drape keeps some whole across cells) is answerable for its samples outside it,
+        each by its own cell (Codex review of revampfix)."""
+        cen = tri_xy.mean(1)
+        fx = np.floor(cen[:, 0] / c)
+        fy = np.floor(cen[:, 1] / c)
+        tol = 1e-6 * c
+        within = ((tri_xy[:, :, 0] >= (fx * c)[:, None] - tol) & (tri_xy[:, :, 0] <= ((fx + 1) * c)[:, None] + tol)
+                  & (tri_xy[:, :, 1] >= (fy * c)[:, None] - tol)
+                  & (tri_xy[:, :, 1] <= ((fy + 1) * c)[:, None] + tol)).all(1)
+        cx = fx.astype(np.int64) - i0
+        cy = fy.astype(np.int64) - j0
+        inside = within & (cx >= 0) & (cy >= 0) & (cx < step.shape[1]) & (cy < step.shape[0])
+        st = np.zeros(len(tri_xy), bool)
+        st[inside] = step[cy[inside], cx[inside]]
+        return st
     otri_idx = np.flatnonzero(over)
     if not len(otri_idx):
         return out
@@ -204,9 +233,11 @@ def tile_metrics(P, T, mats, M, layer_of_mat, box, ground, roads, decks=()):
         samples.setdefault(L, []).append(vd[m])
     # the terrain's lattice nodes under an overlay face (its creases inside an overlay triangle)
     api, ati, az = lookup(otri, nodes)
+    keep = nin[api]
+    api, ati, az = api[keep], ati[keep], az[keep]
     if len(api):
         nd = az - nz.ravel()[api]
-        ndeck = on_deck(nodes[api])
+        ndeck = on_deck(nodes[api]) | tri_step(otri[ati, :, :2])
         for L in sorted(set(olay[ati].tolist())):
             m = (olay[ati] == L) & np.isfinite(nd) & (np.abs(nd) <= LEVEL_DZ) & ~ndeck
             samples.setdefault(L, []).append(nd[m])
@@ -214,6 +245,7 @@ def tile_metrics(P, T, mats, M, layer_of_mat, box, ground, roads, decks=()):
     # y - x = k c): with the vertices and the nodes, every place the gap between two triangulated surfaces can be least
     E = np.concatenate([otri[:, [0, 1]], otri[:, [1, 2]], otri[:, [2, 0]]])
     el = np.concatenate([olay, olay, olay])
+    est = np.tile(tri_step(otri[:, :, :2]), 3)
     for nx_, ny_ in ((1.0, 0.0), (0.0, 1.0), (-1.0, 1.0)):
         da = E[:, 0, 0] * nx_ + E[:, 0, 1] * ny_
         db = E[:, 1, 0] * nx_ + E[:, 1, 1] * ny_
@@ -231,7 +263,7 @@ def tile_metrics(P, T, mats, M, layer_of_mat, box, ground, roads, decks=()):
         p = E[idx, 0] + f[:, None] * (E[idx, 1] - E[idx, 0])
         inb = (p[:, 0] >= box[0]) & (p[:, 0] <= box[2]) & (p[:, 1] >= box[1]) & (p[:, 1] <= box[3])
         xd = p[:, 2] - ground(p[:, :2])
-        good = inb & np.isfinite(xd) & (np.abs(xd) <= LEVEL_DZ) & ~on_deck(p[:, :2])
+        good = inb & np.isfinite(xd) & (np.abs(xd) <= LEVEL_DZ) & ~on_deck(p[:, :2]) & ~est[idx]
         for L in sorted(set(el[idx].tolist())):
             samples.setdefault(L, []).append(xd[good & (el[idx] == L)])
     out["dz"] = {L: np.concatenate(v) for L, v in samples.items()}
@@ -383,7 +415,7 @@ def main():
     ap.add_argument("--json", help="write the result here (deterministic)")
     ap.add_argument("--server", help="probe this server/ checkout instead of the one beside this file")
     a = ap.parse_args()
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = SERVER
     if a.server:
         srv = os.path.realpath(a.server)
         sys.path[:] = [srv] + [p for p in sys.path if os.path.realpath(p or ".") != here]

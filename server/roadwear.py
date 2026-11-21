@@ -87,6 +87,12 @@ MATERIALS = tuple(sorted({v["m"] for v in LOOKS.values()}
 # BNE_WEAR_STRIPS=on draws them (for reworking the materials); the spots and crack lines stay.
 STRIPS_ON = os.environ.get("BNE_WEAR_STRIPS", "off").strip().lower() == "on"
 STRIP_KINDS = (K_TREAD, K_SEALED, K_CRACKS, K_MANHOLE)   # (the manhole covers too: bright white discs in game)
+# With the v2 surface overlays (SURFACE_V2) the full-lane strips are left out even with BNE_WEAR_STRIPS=on: the v2
+# lane-centre wear replaces the polish, its variation and repair patch strips the sealed and crack networks. Drawn
+# too, the sealed / crack strips lay over the v2 pieces on the same lanes 0.2 mm apart (Revamped roads + Wear strips,
+# 2026-11-19: +1,030 m2 of overlays within 1 mm of another's at Fells Point, 380 m2 at the Queensboro Bridge, 20 more
+# samples under the ground at the Stelvio, markprobe): two wear layers on one lane. The manhole covers stay.
+V2_REPLACES = (K_TREAD, K_SEALED, K_CRACKS)
 
 
 def _grid(cols, rows):
@@ -270,7 +276,7 @@ def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=(), leaves
     for k in range(len(A)):
         kind, width, tl, slen, cell = A[k]
         kind = int(kind)
-        if kind in STRIP_KINDS and not STRIPS_ON or SURFACE_V2 and kind == K_TREAD:
+        if kind in STRIP_KINDS and not STRIPS_ON or SURFACE_V2 and kind in V2_REPLACES:
             continue
         look = LOOKS[kind]
         q = P[O[k]:O[k + 1]]

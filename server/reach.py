@@ -172,11 +172,6 @@ def horizon_s(speed):
     return min(max(HORIZON_S, HORIZON_MIN_M / v), HORIZON_MAX_M / v)
 
 
-def priority(eta, p):
-    """A place's priority key (s): its ETA, a less likely branch's later (eta / p ** GAMMA)."""
-    return eta / dnp.power(max(p, P_MIN), GAMMA)
-
-
 def side_speed(speed):
     """m/s a tile's gap off the road counts at (order_key): as roads.SIDE_PENALTY (a quarter of the car's speed), at
     most V_SIDE (at speed the sides later still)."""
@@ -186,12 +181,8 @@ def side_speed(speed):
 def order_key(eta, p, gap, speed, build_s):
     """A fast car's tile's place in the build order (s, smaller first): eta (s) the car reaches it in with chance p,
     gap (m) it lies off the road; build_s the time a build takes now. See V_SIDE / WINDOW_M / LATE_KEEP."""
-    key = priority(eta, p) + gap / side_speed(speed)
-    win = WINDOW_M / max(speed, 1.0)
-    left = (eta + win - max(build_s, eta)) / win
-    if left < LATE_KEEP:
-        key += LATE_S * (2.0 if left <= 0.0 else 1.0)
-    return key
+    fast.require(551, "road_eta_rank")
+    return fast._ef.road_eta_rank(eta, p, gap, speed, build_s, (P_MIN, GAMMA, V_SIDE, WINDOW_M, LATE_KEEP, LATE_S))
 
 
 ORDER_NEAR_M = 128.0        # m: order_geotiles' tiles this close to the car first (roads.INSURE_M)
@@ -209,17 +200,8 @@ def order_geotiles(tree, frame, keys, x, y, z=None):
         return keys
     z = geotiles.Z if z is None else int(z)
     tk = tree.geotile_keys(frame, ORDER_CORRIDOR_M, z=z, horizon=horizon_s(tree.speed))
-    d = geotiles.dists(frame, keys, z, [(x, y)])[:, 0].tolist()
-
-    def key(i):
-        k, dk = keys[i], d[i]
-        if dk <= ORDER_NEAR_M:
-            return (0, dk)
-        got = tk.get(tuple(k))
-        if got is not None:
-            return (1, got[0])
-        return (2, dk)
-    return [keys[i] for i in sorted(range(len(keys)), key=key)]
+    fast.require(551, "detail_order")
+    return fast._ef.detail_order(frame, keys, z, (x, y), tk, ORDER_NEAR_M)
 
 
 def _ranges(arrays, n):
@@ -344,7 +326,7 @@ class Tree:
 
     def geotile_keys(self, frame, corridor_m, z=None, p_want=P_WANT, horizon=None):
         """{(gx, gy): (priority s, wanted, eta s, chance, gap m)} of the zoom-z geotiles within corridor_m of the tree's
-        points: the smallest priority() + gap / side_speed of the points near each (gap: the point's distance to the
+        points: the smallest probability-adjusted ETA + gap / side_speed of the points near each (gap: its distance to the
         tile) and that point's eta, chance and gap; wanted when a point with a chance of p_want or more (and an ETA
         within horizon) reaches it. Kept per (frame, z, corridor, ...) for this tree."""
         import geotiles

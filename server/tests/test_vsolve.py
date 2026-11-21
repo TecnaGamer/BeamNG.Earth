@@ -25,7 +25,7 @@ def spec(cls):
 
 def have_kernel():
     try:
-        fast.require(512, "carriageway_profiles' soft couplings")
+        fast.require(561, "carriageway_profiles' soft couplings")
         return True
     except Exception:
         return False
@@ -213,7 +213,7 @@ class OnTest(unittest.TestCase):
 
 def have_pairs():
     try:
-        fast.require(513, "plan_corridor_pairs")
+        fast.require(562, "plan_corridor_pairs")
         return True
     except Exception:
         return False
