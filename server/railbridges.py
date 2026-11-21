@@ -47,7 +47,7 @@ def resample(xy, step=STEP_M):
     if s[-1] < 1e-6:
         return xy[:1]
     t = np.append(np.arange(0.0, s[-1], step), s[-1])
-    return np.c_[np.interp(t, s, xy[:, 0]), np.interp(t, s, xy[:, 1])]
+    return np.c_[dnp.interp(t, s, xy[:, 0]), dnp.interp(t, s, xy[:, 1])]
 
 
 def _normals(line):
@@ -74,7 +74,7 @@ def deck_height(frame, elev, st, link):
     s = _arc(path)
     pts = []
     for _k, arc in link.crosses:
-        pts.append([np.interp(arc, s, path[:, 0]), np.interp(arc, s, path[:, 1])])
+        pts.append([dnp.interp(arc, s, path[:, 0]), dnp.interp(arc, s, path[:, 1])])
     if not pts:
         pts = [path[len(path) // 2]]
     return float(bm.ground(frame, elev, np.asarray(pts)).max()) + RAIL_TOP_M + CLEAR_M + DECK_D
@@ -125,8 +125,8 @@ def _rail(mesh, line, z, w, ends=(True, True)):
             bm.walls(mesh, STEEL[0], STEEL[1], ring, zr + lo, zr + hi)
         if len(line) >= 2:
             for at in np.arange(0.0, s[-1] + 1e-6, POST_STEP_M):
-                p = np.array([np.interp(at, s, e[:, 0]), np.interp(at, s, e[:, 1])])
-                _post(mesh, p, float(np.interp(at, s, z)), float(np.interp(at, s, z)) + HAND_H_M)
+                p = np.array([dnp.interp(at, s, e[:, 0]), dnp.interp(at, s, e[:, 1])])
+                _post(mesh, p, float(dnp.interp(at, s, z)), float(dnp.interp(at, s, z)) + HAND_H_M)
 
 
 def _stair(mesh, frame, elev, top_xy, dirs, z_top, w, collide=False, z_end=None, fill_to=None):
@@ -165,8 +165,8 @@ def _stair(mesh, frame, elev, top_xy, dirs, z_top, w, collide=False, z_end=None,
     for i in range(n):
         a, b = i * tread, (i + 1) * tread
         za = z_top + (i + 1) * rise / n                              # the tread's height: the step i away from the start
-        pa = np.array([np.interp(a, sl, line[:, 0]), np.interp(a, sl, line[:, 1])])
-        pb = np.array([np.interp(b, sl, line[:, 0]), np.interp(b, sl, line[:, 1])])
+        pa = np.array([dnp.interp(a, sl, line[:, 0]), dnp.interp(a, sl, line[:, 1])])
+        pb = np.array([dnp.interp(b, sl, line[:, 0]), dnp.interp(b, sl, line[:, 1])])
         pm = (pa + pb) / 2.0
         d = pb - pa
         dl = float(dnp.hypot(*d))
@@ -195,7 +195,7 @@ def _piers(mesh, frame, elev, st, path, z_deck, w, s_from, s_to):
                 a = at + sg * d
                 if a < s_from + 2.0 or a > s_to - 2.0:
                     continue
-                p = np.array([np.interp(a, s, path[:, 0]), np.interp(a, s, path[:, 1])])
+                p = np.array([dnp.interp(a, s, path[:, 0]), dnp.interp(a, s, path[:, 1])])
                 if min(bs.dist_to_path(xy, p) for _t, xy in st.tracks) >= PIER_TRACK_M:
                     best = (a, p)
                     break

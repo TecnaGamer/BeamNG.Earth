@@ -170,7 +170,7 @@ class RequestTest(unittest.TestCase):
         self.assertEqual(weather.fetch(*BALTIMORE, net=net), fixture("baltimore"))
         url, headers, timeout = seen[0]
         self.assertEqual(url, weather.url(*BALTIMORE))
-        self.assertEqual(headers, {"User-Agent": netfetch.USER_AGENT})
+        self.assertEqual(headers, {"User-Agent": netfetch.USER_AGENT, "Accept-Encoding": "gzip"})   # (the host's policy)
         self.assertEqual(timeout, weather.TIMEOUT_S)
         self.assertEqual(net.snapshot()["api.open-meteo.com"]["requests"], 1)
 

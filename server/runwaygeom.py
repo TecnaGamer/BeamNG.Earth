@@ -226,7 +226,7 @@ class Plan:
         return self.geom.key
 
     def profile(self, s):
-        return np.interp(s, self.s, self.z)
+        return dnp.interp(s, self.s, self.z)
 
     def extension(self, s):
         """The profile's continuation beyond the ends (0 on the runway): the end grades go on into the

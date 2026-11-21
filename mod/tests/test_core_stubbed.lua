@@ -156,6 +156,7 @@ end
 -- the session
 
 local core = require('beamngEarth/core')
+T.check(not core.autodriveReady(), 'Autodrive waits for a connected session and committed block')
 local gps = require('beamngEarth/gps')
 local gpsUpdate, gpsFrames = gps.update, {}
 gps.update = function(anchor, player)
@@ -228,7 +229,7 @@ local function warned(pat)
   for _, w in ipairs(warnings) do if w:match(pat) then return true end end
   return false
 end
-serverSend({ type = 'hello', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's1', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's1', farFormat = 'cdae',
   material = 'bngEarthFar_v3', nearVisual = 'terrain', attribution = 'Imagery: test credits; Elevation: test' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == 1 end), 'auto-teleport requested in our level')
 do -- the level start's teleport is the first recent place (places.lua; no file API here: memory only)
@@ -327,9 +328,21 @@ veh.pos = vec3(301, 0, 1200)
 T.check(pumpUntil(function() return #received('prepare_terrain') == 1 end, 5), 'prepare_terrain past 300 m')
 local pt = received('prepare_terrain')[1]
 T.check(pt.anchorId == 1 and pt.cx == 256 and pt.cy == 0, 'target = snap256(player + 4 s * v) = (256, 0)')
+frames(101) -- a real pending request passes the five-second health threshold
+T.check(not core.serverHealthy(), 'late terrain prefetch still marks normal server health unhealthy')
+T.check(core.autodriveReady(), 'late prefetch leaves the existing block usable by Autodrive')
+T.check(core._state().guard.mode ~= 'hold' and calls.importMaps == imports,
+  'the existing terrain stays loaded and the distant edge guard does not hold')
+serverSend({ type = 'terrain_error', requestId = pt.requestId, error = 'fixture terrain failure' })
+frames(1)
+T.check(not core.autodriveReady(), 'an actual terrain error still holds Autodrive')
+T.check(pumpUntil(function() return last('prepare_terrain').requestId ~= pt.requestId end, 120),
+  'terrain error is retried through the normal request lifecycle')
+pt = last('prepare_terrain')
 serverSend({ type = 'terrain_ready', requestId = pt.requestId, anchorId = 1, cx = 256, cy = 0,
   heightmap = '/temp/beamngEarth/s1/hm_1_256_0.png', size = 1024, squareSize = SQ, zBase = 1110, maxHeight = 1024, q = 1 / 64 })
 frames(40)
+T.check(core.autodriveReady(), 'a successful terrain reply clears the error hold')
 T.check(calls.importMaps == imports, 'ready but below 450 m: no commit yet')
 local farBefore = {}
 for _, o in ipairs(S.liveOf('TSStatic')) do farBefore[o.id] = o:getPosition() end
@@ -544,6 +557,7 @@ serverSend({ type = 'far_tile', anchorId = 4, key = '1_1_0', shape = '/temp/beam
 server.failErr = 'connection reset by peer'
 T.check(pumpUntil(function() return calls.createObject_TSStatic == before + 1 end, 50), 'final frame decoded before close')
 T.check(pumpUntil(function() return #received('hello') == connects + 1 end, 100), 'reconnected after reset')
+T.check(not core.autodriveReady(), 'a new transport awaiting its session still holds Autodrive')
 
 -- the (restarted) server says hello again: re-register the SAME origin under a new anchorId,
 -- terrain where terrain-follow would put it; nothing in the world moves
@@ -554,18 +568,21 @@ veh.vel = vec3(20, 0, 0)
 frames(2)
 local movesBefore, setOrig = calls.setClusterPosRelRot, calls.setOriginalTransform
 T.check(tb.renderEnabled == nil and (calls.setRenderEnabled or 0) == 0, 'terrain mode: the block is drawn, render flag never touched')
-T.check(tb.fields.castShadows == '0', 'the block casts no shadows (no shadow-map redraw at its moves)')
+T.check(tb.fields.castShadows == '1', 'the block casts its shadows (the settings\' terrainShadows, default on: the far tiles cast theirs)')
+T.check(require('beamngEarth/terrain').setCastShadows(false) == false and tb.fields.castShadows == '0', 'terrainShadows off: none')
+require('beamngEarth/terrain').setCastShadows(true)
 T.check(farfield.nearVisual() == 'terrain', 'terrain near visual')
 local roadsMod = require('beamngEarth/roads')
 local roadClears, realClear = 0, roadsMod.clear
 roadsMod.clear = function(...) roadClears = roadClears + 1; return realClear(...) end
-serverSend({ type = 'hello', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's2', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's2', farFormat = 'cdae',
   material = 'bngEarthFar_v9', nearVisual = 'mesh' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == nAnchor + 1 end, 10), 'resync requested on hello')
+T.check(not core.autodriveReady(), 'an outstanding resync still holds Autodrive')
 T.check(roadClears == 1, 'a new server session: the old session\'s road tiles cleared')
 roadsMod.clear = realClear
 T.check(tb.renderEnabled == false and farfield.nearVisual() == 'mesh', 'hello nearVisual = mesh: block render disabled, far field in mesh mode')
-T.check(tb.fields.castShadows == '0', 'mesh mode: still no shadows')
+T.check(tb.fields.castShadows == '0', 'mesh mode: no shadows (the block is not drawn)')
 T.check(warned('material mismatch: server bngEarthFar_v9, mod bngEarthFar_v3'), 'hello: a different far-tile material is reported')
 log = stubLog
 local rs = last('prepare_anchor')
@@ -682,13 +699,13 @@ local function said(pat)
   for _, w in ipairs(infos) do if w:match(pat) then return true end end
   return false
 end
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's3',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's3',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(2)
 T.check(crossover.cells() == 64 and crossover.defaultErr(0) == 1, 'hello.cells 64: crossover.defaultErr from it')
 T.check(farfield.stats().exactLevel == -1, 'hello.cells 64: the exact level (exactMiss metric) is L-1')
 T.check(not said('Format mismatch'), 'FORMAT 4 accepted')
-serverSend({ type = 'hello', protocol = 4, format = 5, serverVersion = '0.4.0', sessionId = 's4', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 5, serverVersion = '0.4.0', sessionId = 's4', farFormat = 'cdae',
   material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(2)
 T.check(said('Format mismatch: server 5, mod 3/4'), 'an unknown format is reported')
@@ -701,7 +718,7 @@ local lattice = require('beamngEarth/lattice')
 local rebase = require('beamngEarth/rebase')
 veh.vel = vec3(0, 0, 0)
 local nA = #received('prepare_anchor')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, blockSize = 512, serverVersion = '0.4.0', sessionId = 's5',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, blockSize = 512, serverVersion = '0.4.0', sessionId = 's5',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == nA + 1 end, 10), '512: resync requested on hello')
 T.check(lattice.N == 512 and lattice.HALF == 512 and follow.GRID == 128 and follow.REACH == 260 and follow.PREPARE_DIST == 128
@@ -748,7 +765,7 @@ T.check(calls.importMaps == impFlat + 1 and tb.lastImport.path:match('beamngEart
 T.check(tb.lastImport.maps[1].path:match('beamngEarth_layer_512%.png$') ~= nil and tb.pos.x == -512 and tb.pos.y == -512,
   '512: flat block 1024 m centred on the origin')
 -- a server without hello.blockSize: back to the v1.3.1 block
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(lattice.N == 1024 and follow.GRID == 256 and follow.REACH == 420 and rebase.STALE_DIST == 450,
@@ -767,7 +784,7 @@ T.check(scenetree.theLevelInfo.visibleDistance == 100000 and sky.atmoPlanetRadiu
 serverSend({ type = 'status', text = 'x', backlog = 0, radius = 300000 })
 frames(3)
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and postApplies == 0, 'status.radius without hello.horizon: ignored')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's7', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(sky.atmoPlanetRadius == 6371, 'hello.horizon: sky planet radius 6371 km')
@@ -795,12 +812,12 @@ T.check(sky.atmoPlanetRadius == 6371, 'level start in horizon mode: planet radiu
 T.near(scenetree.theLevelInfo.visibleDistance, 440000, 1e-6, 'level start: visibleDistance from the known radius')
 -- a server without horizon: the level's values back
 local pa = postApplies
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's8',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's8',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(sky.atmoPlanetRadius == 6360, 'no hello.horizon: the level\'s sky planet radius back')
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and postApplies == pa + 1, 'no hello.horizon: 100 km back, with postApply')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's9', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 serverSend({ type = 'status', text = 'x', backlog = 0, radius = 500000 })
@@ -820,7 +837,7 @@ beamngEarth_weather = { onGravity = function(m) gotGravity = m end, clearGravity
 serverSend({ type = 'gravity', v = 1, g = 9.7867, lat = 36.58, lon = -118.29, h = 4400, source = 'egm2008' })
 frames(2)
 T.check(gotGravity and gotGravity.g == 9.7867 and gotGravity.source == 'egm2008', 'gravity message handed to beamngEarth_weather')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's10', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(cleared == 1, 'hello: the previous session\'s gravity cleared')
@@ -855,7 +872,7 @@ T.check(#drawnCredits == 0, 'credits: hidden while the pause menu is open')
 core.onUiChangedState('play', 'menu')
 frames(1)
 T.check(#drawnCredits == 1, 'credits: back after the pause menu')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's11', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', attribution = 'Elevation: s11' })
 drawnCredits = {}
 frames(3)
@@ -936,7 +953,7 @@ end
 local function sentCaches() return received('cache') end
 local nCache = #sentCaches()
 beamngEarth_settings = { cacheCapGb = function() return 50 end }
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's12', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(#sentCaches() == nCache + 1 and sentCaches()[nCache + 1].capGb == 50, 'hello: the page\'s cache cap sent')
@@ -982,7 +999,7 @@ do
     session = function(id, available) seen.id, seen.available = id, available end,
     reset = function() seen = {} end,
     hasWork = function() return false end, update = function() end, onTeleport = function() end }
-  serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, sessionId = 'traffic-reload',
+  serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, sessionId = 'traffic-reload',
     streamLease = 1, leaseId = 'game-owner',
     farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', trafficVisuals = 2 })
   frames(3)
@@ -1035,6 +1052,18 @@ do
   local a, b, c = core.safeSpot(5, 5, function() return 7 end)
   T.check(a == 5 and b == 5 and c == 7, 'safeSpot: ground under the spot: the spot itself')
   T.check(core.safeSpot(0, 0, function() return nil end) == nil, 'safeSpot: no ground anywhere near: nil')
+end
+-- a ready block without its photo waits (the gate, until the hard commit distance) while the block in use shows one
+do
+  local core = require('beamngEarth/core')
+  local shown = '/temp/beamngEarth/s2/hm_6_768_-128_base.jpg'
+  T.check(not core.photoGateOpen({ cx = 896, cy = -128 }, shown, 'detail'), 'photo gate: no photo, one shown: waits')
+  T.check(not core.photoGateOpen({ base = false }, shown, 'detail'), 'photo gate: base false: waits')
+  T.check(core.photoGateOpen({ base = '/temp/beamngEarth/s2/hm_6_896_-128_base_q.jpg' }, shown, 'detail'),
+    'photo gate: a stand-in photo is a photo')
+  T.check(core.photoGateOpen({ base = false }, nil, 'detail'), 'photo gate: nothing shown either: no reason to wait')
+  T.check(core.photoGateOpen({ base = false }, shown, 'terrain'), 'photo gate: only in detail mode')
+  T.check(core.photoGateOpen(nil, shown, 'detail'), 'photo gate: no message: open')
 end
 -- a block's refreshed base photo (block_base) waits while the car is fast and comes once it is slower (core.applyBaseLater)
 do
@@ -1104,7 +1133,7 @@ do -- a computer with too little memory (the server's emergency tier): one warni
     end
     if oldGh and oldGh.trigger then return oldGh.trigger(name, data) end
   end }
-  local hello = { type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's5',
+  local hello = { type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's5',
     farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', memoryTier = 'emergency',
     memoryNote = 'This computer has 4 GB of memory.' }
   serverSend(hello)
@@ -1114,7 +1143,7 @@ do -- a computer with too little memory (the server's emergency tier): one warni
   serverSend(hello)
   core.onUpdate(0.05, 0.05)
   T.check(#toasts == 1, 'the same server session: not again')
-  serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
+  serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
     farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', memoryTier = 'lean', memoryNote = 'x' })
   core.onUpdate(0.05, 0.05)
   T.check(#toasts == 1, 'the lean tier: no toast (the app window says it)')
@@ -1122,7 +1151,7 @@ do -- a computer with too little memory (the server's emergency tier): one warni
 end
 -- the settings page's "Restart world server": the hello comes at the main menu, a level starts (and ends) after it;
 -- the server's start-time settings and its restart capability outlive both (the user, 2026-11-15: no button)
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's99r',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's99r',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', restartable = true,
   startSettings = { groundGrid = '1', expAiTunnels = false }, startFixed = { 'serverCores' } })
 for _ = 1, 3 do core.onUpdate(0.05, 0.05) end

@@ -500,6 +500,8 @@ fn raw_tile(ckey: &str, z: u8, x: i64, y: i64, bytes: &[u8]) -> Result<Arc<Vec<u
             c.2 += r.len();
         }
         while c.2 > RAW_BYTES && c.0.len() > 1 {
+            // (hash order: the LRU entry evicted, by distinct ticks; a cache, not an output)
+            #[allow(clippy::disallowed_methods)]
             let old = c.0.iter().min_by_key(|(_, v)| v.1).map(|(k, _)| k.clone()).unwrap();
             if let Some((b, _)) = c.0.remove(&old) {
                 c.2 -= b.len();
@@ -818,7 +820,7 @@ fn link(pieces: &[Piece], close: bool) -> (Vec<(Vec<P>, bool, bool)>, Vec<P>) {
                 continue;
             }
             let s = pieces[j].pts[0];
-            let d = ((e[0] - s[0]).powi(2) + (e[1] - s[1]).powi(2)).sqrt();
+            let d = ((e[0] - s[0]).sq() + (e[1] - s[1]).sq()).sqrt();
             if d <= JOIN_TOL {
                 pairs.push((d, i, j));
             }
@@ -1482,7 +1484,7 @@ fn junction_vertices(lines: &mut [Vec<Vec<P>>], p: &Props, conns: &HashMap<Strin
                 let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
                 let ll = dx * dx + dy * dy;
                 let t = if ll > 0.0 { (((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / ll).clamp(0.0, 1.0) } else { 0.0 };
-                let d = ((a[0] + t * dx - q[0]).powi(2) + (a[1] + t * dy - q[1]).powi(2)).sqrt();
+                let d = ((a[0] + t * dx - q[0]).sq() + (a[1] + t * dy - q[1]).sq()).sqrt();
                 let c = (d, pi, k, t);
                 if best_any.map_or(true, |b| d < b.0) {
                     best_any = Some(c);
@@ -1536,7 +1538,7 @@ fn line_anchors(lines: &[Vec<Vec<P>>], p: &Props, conns: &HashMap<String, P>, tz
     }
     let mut cum = vec![0.0f64];
     for w in pts.windows(2) {
-        cum.push(cum.last().unwrap() + ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt());
+        cum.push(cum.last().unwrap() + ((w[1][0] - w[0][0]).sq() + (w[1][1] - w[0][1]).sq()).sqrt());
     }
     let total = *cum.last().unwrap();
     if total <= 0.0 {

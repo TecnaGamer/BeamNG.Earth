@@ -148,11 +148,12 @@ def _raw_path(p):
 
 class _Blocks:
     """One plane of a block-stored raster (_open_raw) read as the 2-D array it was: a[j, i] for integer (arrays of)
-    indices, .shape, np.asarray(a) for all of it (cell_shores)."""
-    __slots__ = ("idx", "data", "shape", "dtype")
+    indices, .shape, np.asarray(a) for all of it (cell_shores); .raw, the slots' RAW_DTYPE records as bytes, one
+    object for a raster's three planes (SeaCarver.water's lookup: earthfast.sea_cell_lookup)."""
+    __slots__ = ("idx", "data", "shape", "dtype", "raw")
 
-    def __init__(self, idx, data, shape):
-        self.idx, self.data, self.shape, self.dtype = idx, data, shape, data.dtype
+    def __init__(self, idx, data, shape, raw):
+        self.idx, self.data, self.shape, self.dtype, self.raw = idx, data, shape, data.dtype, raw
 
     def __getitem__(self, key):
         j, i = key
@@ -165,47 +166,56 @@ class _Blocks:
         return a if dtype is None else a.astype(dtype)
 
 
+_NAN_BITS = int(np.array(np.nan, np.float32).view(np.uint32))
+
+
 def _pack(r):
-    """A raster's planes by RAW_BLOCK_PX blocks: (the index of the cell's blocks, the blocks with water after the land
-    block they all share, the raster's px), as the file holds them (_write_raw) and a process keeps them (_packed)."""
-    b = RAW_BLOCK_PX
-    if isinstance(r[0], _Blocks):       # (kept by its blocks already)
-        data = np.zeros(r[0].data.shape, RAW_DTYPE)
-        data["depth"], data["level"], data["outline"] = r[0].data, r[1].data, r[2].data
-        return r[0].idx, data, r[0].shape[0]
+    """(index, slots, raster px) of a raster (depth, level, outline) stored by RAW_BLOCK_PX blocks: the blocks holding
+    anything but land (depth +0.0, level NaN, outline False: slot 0) each in a slot of their own. Bit for bit: a block
+    with a -0.0 depth or another NaN is kept in a slot of its own, so the blocks read back exactly what r held."""
     n = r[0].shape[0]
+    b = RAW_BLOCK_PX
     m = -(-n // b)
     full = np.zeros((m * b, m * b), RAW_DTYPE)
     full["level"] = np.nan
     full["depth"][:n, :n], full["level"][:n, :n], full["outline"][:n, :n] = r[0], r[1], r[2]
     blocks = full.reshape(m, b, m, b).transpose(0, 2, 1, 3)        # (m, m, b, b)
-    used = ((blocks["depth"] != 0) | np.isfinite(blocks["level"]) | blocks["outline"]).any(axis=(2, 3))
+    used = ((blocks["depth"].view(np.uint32) != 0) | (blocks["level"].view(np.uint32) != _NAN_BITS)
+            | blocks["outline"]).any(axis=(2, 3))
     idx = np.zeros((m, m), "<i4")
     idx[used] = np.arange(1, int(used.sum()) + 1)
     land = np.zeros((1, b, b), RAW_DTYPE)                          # (slot 0: land)
     land["level"] = np.nan
-    return idx, np.concatenate([land, blocks[used]]), n
+    return idx, np.ascontiguousarray(np.concatenate([land, blocks[used]])), n
 
 
-def _packed(r):
-    """A raster as a process keeps it (SeaCarver._mem, _land): by its blocks with water (_Blocks planes, each lookup
-    the pixels the whole raster gave), not the whole of it. A whole one was 9.4 MB a cell, a tenth of its blocks
-    holding any water inland, 24 of them in each of the server's ~10 processes that look at the water: 80-145 MB of
-    a worker a motorway drive left with ~500 MB after its caches were dropped (2026-11-17)."""
-    if r is None or isinstance(r[0], _Blocks):
+def _planes(idx, data, n):
+    """The (depth, level, outline) _Blocks of a raster's slots data ((slots, RAW_BLOCK_PX, RAW_BLOCK_PX) RAW_DTYPE)."""
+    raw = data.reshape(-1).view(np.uint8)
+    return tuple(_Blocks(idx, data[f], (n, n), raw) for f in ("depth", "level", "outline"))
+
+
+def _in_blocks(r):
+    """A raster kept in a process's memory (SeaCarver._mem) as its blocks (_Blocks, as the memory-mapped copy reads):
+    a decoded cell was ~9.4 MB of full planes in every process that read it, ~3-10 % of its blocks holding any water
+    (a road process round the A7 kept ~108 MB of them after 25 tiles, 2026-11-16). r as it is when it is not a
+    square raster of plain arrays."""
+    if (r is None or not all(isinstance(a, np.ndarray) and a.shape == r[0].shape for a in r) or r[0].ndim != 2
+            or r[0].shape[0] != r[0].shape[1]):
         return r
     idx, data, n = _pack(r)
-    return tuple(_Blocks(idx, np.ascontiguousarray(data[f]), (n, n)) for f in ("depth", "level", "outline"))
+    return _planes(idx, data, n)
 
 
 def _write_raw(raw, r):
     if not raw:
         return
     idx, data, n = _pack(r)
-    b, m = RAW_BLOCK_PX, idx.shape[0]
+    b = RAW_BLOCK_PX
+    m = idx.shape[0]
     head = np.array([RAW_MAGIC, b, m, len(data), n], "<i4")
     buf = np.concatenate([head.view(np.uint8), idx.view(np.uint8).ravel(),
-                          np.ascontiguousarray(data).view(np.uint8).ravel()])
+                          data.view(np.uint8).ravel()])
     tmp = f"{raw}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         os.makedirs(os.path.dirname(raw), exist_ok=True)
@@ -220,19 +230,30 @@ def _write_raw(raw, r):
             pass
 
 
+def _npz_raster(f):
+    """The raster of a cell file (None: no water); ValueError (damaged: built again) for planes under 2 x 2 px or unlike
+    one another (water()'s lookup reads 2 x 2 pixels: _lookup)."""
+    if not f["any"]:
+        return None
+    r = (f["depth"].astype(np.float32) / 100.0, f["level"].astype(np.float32), f["outline"].astype(bool))
+    if r[0].ndim != 2 or min(r[0].shape) < 2 or any(a.shape != r[0].shape for a in r):
+        raise ValueError(f"not a raster: {[a.shape for a in r]}")
+    return r
+
+
 def _open_raw(raw):
     buf = np.asarray(np.load(raw, mmap_mode="r", allow_pickle=False))   # (a plain view: np.memmap's per-slice hooks)
     if buf.dtype != np.uint8 or buf.ndim != 1 or len(buf) < 4 * RAW_HEAD:
         raise ValueError(f"not a raster: {buf.dtype} {buf.shape}")
     magic, b, m, k, n = (int(v) for v in buf[:4 * RAW_HEAD].view("<i4"))
     off = 4 * (RAW_HEAD + m * m)
-    if magic != RAW_MAGIC or b != RAW_BLOCK_PX or len(buf) != off + k * b * b * RAW_DTYPE.itemsize or not 0 < n <= m * b:
+    if magic != RAW_MAGIC or b != RAW_BLOCK_PX or len(buf) != off + k * b * b * RAW_DTYPE.itemsize or not 2 <= n <= m * b:
         raise ValueError(f"not a raster: {magic:#x} {b} {m} {k} {n}")
     idx = np.array(buf[4 * RAW_HEAD:off].view("<i4").reshape(m, m))     # (small: read in, not mapped)
     if idx.min() < 0 or idx.max() >= k:
         raise ValueError("raster index out of range")
     data = buf[off:].view(RAW_DTYPE).reshape(k, b, b)
-    return tuple(_Blocks(idx, data[f], (n, n)) for f in ("depth", "level", "outline"))
+    return _planes(idx, data, n)
 
 
 def _merc(lat, lon, z=PX_ZOOM):
@@ -341,12 +362,24 @@ def _cells_of(cx, cy):
 FETCH_THREADS = 8       # water cells fetched at once (water(), _build)
 
 
-def _near_sea(level, i0, j0):
-    """Whether any lookup's 2 x 2 pixels (corner i0, j0) hold the sea's level: the only pixels the bathymetry changes
-    (a lake at sea level keeps LAKE_NOT_SEA_M off it; the shore's spread level counts too, which only waits more)."""
-    q = [level[j0 + a, i0 + b] for a in (0, 1) for b in (0, 1)]
-    with np.errstate(invalid="ignore"):
-        return bool(np.any([np.abs(v - SEA_E) < LAKE_NOT_SEA_M / 2 for v in q]))
+def _lookup(r, pts, kx, ky, out, near):
+    """SeaCarver.water's lookup in cell (kx, ky) of raster r for the points pts (flat mx, my, cx, cy) there: the floor
+    depth bilinear, the level of the nearest pixel, written into out (flat d, lv); earthfast.sea_cell_lookup. near (r
+    without the sea's bathymetry): False, nothing written, when any point's 2 x 2 pixels hold the sea's level, the only
+    pixels the bathymetry changes (a lake at sea level keeps LAKE_NOT_SEA_M off it; the shore's spread level counts
+    too, which only waits more)."""
+    import fast
+    fast.require(495, "sea_cell_lookup")
+    depth, level = r[0], r[1]
+    if isinstance(depth, _Blocks) and isinstance(level, _Blocks) and depth.raw is level.raw:
+        idx, raw, bh, bw = depth.idx, depth.raw, RAW_BLOCK_PX, RAW_BLOCK_PX
+    else:                               # (plain float32 planes: one block)
+        recs = np.zeros((1,) + np.shape(depth), RAW_DTYPE)
+        recs["depth"][0], recs["level"][0] = depth, level
+        idx, raw, bh, bw = np.zeros((1, 1), "<i4"), recs.reshape(-1).view(np.uint8), *np.shape(depth)
+    h, w = np.shape(depth)
+    return fast._ef.sea_cell_lookup(*pts, kx, ky, float(kx * CELL_PX), float(ky * CELL_PX), idx, raw, bh, bw, h, w,
+                                    near, SEA_E, LAKE_NOT_SEA_M / 2, *out)
 
 
 def _short(hit):
@@ -525,13 +558,12 @@ class SeaCarver:
                 log.debug("sea: %s: %s", raw, e)
         if p and os.path.exists(p):
             # (a damaged file, empty or cut short after a crash: removed and built again, staging.read_npz)
-            got = staging.read_npz(p, lambda f: ((f["depth"].astype(np.float32) / 100.0, f["level"].astype(np.float32),
-                                                  f["outline"].astype(bool)) if f["any"] else None,), "sea cell")
+            got = staging.read_npz(p, lambda f: (_npz_raster(f),), "sea cell")
             if got is not None:
-                r = _packed(got[0])
+                r = got[0]
                 if r is not None:       # (outside the read: its raw copy failing to write is no damaged cell file)
                     self._second_use(x, y, raw, r)
-                return r, True
+                return _in_blocks(r), True
         r = self._build(x, y, with_bathy)
         complete = r is None or r[3]
         if r is not None:
@@ -546,10 +578,9 @@ class SeaCarver:
                     np.savez_compressed(fh, any=True, depth=np.round(r[0] * 100.0).astype(np.int16), level=r[1],
                                         outline=r[2])
             staging.replace_cached(tmp, p)
-            r = _packed(r)
             if r is not None:
                 self._second_use(x, y, raw, r)
-        return _packed(r), complete
+        return _in_blocks(r), complete
 
     def _second_use(self, x, y, raw, r):
         """The uncompressed raster (memory-mapped, shared) written only once this process needs the cell a second time
@@ -874,8 +905,8 @@ class SeaCarver:
                             if t[-1] <= 0:
                                 continue
                             u = np.arange(0.0, t[-1], 0.5)
-                            ii = np.floor(np.interp(u, t, q[:, 0])).astype(np.int64)
-                            jj = np.floor(np.interp(u, t, q[:, 1])).astype(np.int64)
+                            ii = np.floor(dnp.interp(u, t, q[:, 0])).astype(np.int64)
+                            jj = np.floor(dnp.interp(u, t, q[:, 1])).astype(np.int64)
                             ok = (ii >= 0) & (ii < n) & (jj >= 0) & (jj < n)
                             out[jj[ok], ii[ok]] = True
         return out
@@ -892,7 +923,7 @@ class SeaCarver:
         if s[-1] <= 0:
             return []
         t = np.linspace(0.0, s[-1], max(2, int(math.ceil(s[-1] / LINE_STEP_PX)) + 1))
-        q = np.stack([np.interp(t, s, pts[:, 0]), np.interp(t, s, pts[:, 1])], -1)
+        q = np.stack([dnp.interp(t, s, pts[:, 0]), dnp.interp(t, s, pts[:, 1])], -1)
         # only the samples whose channel and bank can reach the raster, and one either side (their segments): each
         # sample's level is its own; the whole river's were read for every raster, a long river's ~20,000 at a time
         # (~300 km2 of DEM for one road tile on a first visit to rural Pennsylvania, 2026-10-27)
@@ -1175,6 +1206,8 @@ class SeaCarver:
         mx, my = _merc(lat, lon)
         cx = np.floor(mx / CELL_PX).astype(np.int64)
         cy = np.floor(my / CELL_PX).astype(np.int64)
+        pts = tuple(np.ascontiguousarray(a.reshape(-1)) for a in (mx, my, cx, cy))
+        out = (d.reshape(-1), lv.reshape(-1))      # (views: written in place)
         later = []
         if wait:
             # the cells not at hand built side by side, their water cells fetched side by side first (one after
@@ -1185,7 +1218,6 @@ class SeaCarver:
                     list(ex.map(lambda k: self._water((mapcells.ZOOM, k[0], k[1])), need))
                     list(ex.map(lambda k: self.land_raster(*k), need))
         for kx, ky in _cells_of(cx, cy):
-            sel = (cx == kx) & (cy == ky)
             if wait:
                 r, full = self.land_raster(int(kx), int(ky))
             elif self.ready(int(kx), int(ky)):
@@ -1195,30 +1227,20 @@ class SeaCarver:
                     r = self._land.get((int(kx), int(ky)))
                 if r is None:
                     later.append((int(kx), int(ky)))
-                    known[sel] = False
+                    known[(cx == kx) & (cy == ky)] = False
                     continue
                 full = False
             if r is None:
                 continue
-            fx = mx[sel] - kx * CELL_PX + 0.5      # raster coords: pixel centres at i + 0.5 - 1
-            fy = my[sel] - ky * CELL_PX + 0.5
-            i0 = np.clip(np.floor(fx).astype(np.int64), 0, r[0].shape[1] - 2)
-            j0 = np.clip(np.floor(fy).astype(np.int64), 0, r[0].shape[0] - 2)
-            tx, ty = np.clip(fx - i0, 0, 1), np.clip(fy - j0, 0, 1)
-            if not full and _near_sea(r[1], i0, j0):
+            if not _lookup(r, pts, int(kx), int(ky), out, not full):
                 if not wait:                        # (by the sea: not at hand until its bathymetry is in)
                     later.append((int(kx), int(ky)))
-                    known[sel] = False
+                    known[(cx == kx) & (cy == ky)] = False
                     continue
                 r = self.raster(int(kx), int(ky))   # (a point by the sea: its floor waits for the bathymetry)
                 if r is None:
                     continue
-            rd, rl = r[0], r[1]
-            d[sel] = ((rd[j0, i0] * (1 - tx) + rd[j0, i0 + 1] * tx) * (1 - ty)
-                      + (rd[j0 + 1, i0] * (1 - tx) + rd[j0 + 1, i0 + 1] * tx) * ty)
-            ni = np.clip(np.floor(fx + 0.5).astype(np.int64), 0, rl.shape[1] - 1)
-            nj = np.clip(np.floor(fy + 0.5).astype(np.int64), 0, rl.shape[0] - 1)
-            lv[sel] = rl[nj, ni]
+                _lookup(r, pts, int(kx), int(ky), out, False)
         if later:
             import revisit
             revisit.fault()                 # (left out: nothing built now is kept)

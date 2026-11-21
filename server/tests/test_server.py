@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cdae  # noqa: E402
 import earthd  # noqa: E402
+import protocol  # noqa: E402
 import farpvs  # noqa: E402
 import revisitpack  # noqa: E402
 import farfield as ff  # noqa: E402
@@ -116,10 +117,10 @@ class ServerHarness(unittest.TestCase):
         self.thread.start()
 
         async def start():
-            return await asyncio.start_server(
+            return await protocol.start_server(
                 lambda r, w: earthd.Connection(self.server, r, w).run(), "127.0.0.1", 0)
         self.srv = asyncio.run_coroutine_threadsafe(start(), self.loop).result(10)
-        self.c = Client(self.srv.sockets[0].getsockname()[1])
+        self.c = Client(protocol.listen_port(self.srv))
 
     def tearDown(self):
         self.c.close()
@@ -621,6 +622,36 @@ class ServerTest(ServerHarness):
             s.connections = set()
             s.hm.clear()
             s.removes_flush()
+    @mock.patch.object(earthd, "HM_CACHE", 4)
+    def test_eviction_drops_the_blocks_the_mod_never_had_first(self):
+        """Daytona laps (2026-11-19): ~30 prefetched guesses a lap beside the ~10 blocks the mod asked for pushed those
+        out before the car was back on them. The guesses go first, then the used ones, least recently used first."""
+        s = self.server
+        s.hm.clear()
+        s.hm_committed.clear()
+        s.hm_sent.clear()
+        used = [(1, 0.0, 0.0), (1, 128.0, 0.0), (1, 256.0, 0.0)]
+        for key in used:
+            s.hm[key] = {}
+            s.hm_sent.append(key)
+        guesses = [(1, 0.0, 512.0), (1, 0.0, 640.0), (1, 0.0, 768.0)]
+        for key in guesses:
+            s.hm[key] = {}
+        s.hm_committed.append(used[-1])
+        s.evict_heightmaps(fresh=guesses[-1])
+        self.assertEqual(set(s.hm), {used[0], used[1], used[2], guesses[-1]})
+        self.assertIn(used[0], s.hm_sent.ever)
+        self.assertNotIn(guesses[0], s.hm_sent.ever)
+        s.hm[(1, 0.0, 896.0)] = {}           # (one more: the last guess goes, no longer the fresh one)
+        s.evict_heightmaps(fresh=(1, 0.0, 896.0))
+        self.assertEqual(set(s.hm), set(used) | {(1, 0.0, 896.0)})
+        s.hm_sent.append((1, 0.0, 896.0))    # (the mod has it: now the least recently used it had goes, never protected)
+        s.hm[(1, 0.0, 1024.0)] = {}
+        s.evict_heightmaps(fresh=(1, 0.0, 1024.0))
+        self.assertEqual(set(s.hm), {used[1], used[2], (1, 0.0, 896.0), (1, 0.0, 1024.0)})
+        self.assertNotIn(used[0], s.hm_sent.ever)
+        s.hm.clear()
+        s.removes_flush()
 
     def test_a_slow_terrain_request_is_logged_and_still_answered(self):
         c = self.c
@@ -669,9 +700,9 @@ class ServerTest(ServerHarness):
         async def run():
             conn = self.conn()
             conn.active = 1
-            conn._retire([(1, "0_0_0")])
+            conn.far.retire_at((1, "0_0_0"), time.monotonic())
             used = self.server.in_use()
-            conn.retired[(1, "0_0_0")] -= 61.0
+            conn.far.retire_at((1, "0_0_0"), conn.retired[(1, "0_0_0")] - 61.0)
             return used, self.server.in_use()
         self.hello()
         used, later = asyncio.run_coroutine_threadsafe(run(), self.loop).result(10)
@@ -849,7 +880,7 @@ class MeshServerTest(ServerHarness):
                 self.assertEqual(px, earthd.TEX_NEAR if m["level"] <= -1 else earthd.TEX_FAR)
             else:
                 self.assertEqual(px, 512 if m["level"] >= 2 else 256)
-            self.assertEqual((w, h, mips, fourcc), (px, px, int(math.log2(px)) + 1, b"DXT1"))
+            self.assertEqual((w, h, mips, fourcc), (px, px, int(math.log2(px)) + 1, b"DX10" if imagery.FAR_SRGB else b"DXT1"))
             shape = cdae.read(self.fs(m["shape"]))
             self.assertEqual(shape["materials"][0]["name"], m["material"])
             self.assertEqual(shape["meshes"][0]["tverts2"][0], shape["meshes"][0]["verts"][0])

@@ -113,7 +113,11 @@ def tasks_per_child():
 # (apply()); 0 while the RAM is unknown and the setting Auto (no limit, the desktop sizes, as before).
 SETTING_ENV = "BNGE_MAX_RAM_GB"
 LIMIT_MB = 0.0
-OVER = False                # (memwatch.py: the server over 90 % of its limit; no far-tile burst processes start)
+OVER = False                # (memwatch.py: the server over its limit; no far-tile burst processes start)
+# (memwatch.py, each check: MB left under the limit in force, None without one; and {pool name: its biggest process's
+# MB}. A pool's burst starts only when it fits: pools.ElasticPool._within_base)
+ROOM_MB = None
+POOL_MB = {}
 
 
 def setting_gb():
@@ -446,7 +450,10 @@ def apply(is_small=None):
             import dem
             import mapdata
             dem.MEM_TILES = min(dem.MEM_TILES, sizes[0])
-            mapdata.MEM_MB = min(mapdata.MEM_MB, sizes[1])
+            mapdata.MEM_MB = sizes[1]       # (the limit's: 384 at the 24 GB cap, above the module's 256)
+        import dem
+        if dem.MIRROR_ZSTD:     # (a packed mirror's tiles are each process's own: dem.PACKED_MEM_TILES)
+            dem.MEM_TILES = min(dem.MEM_TILES, dem.PACKED_MEM_TILES)
     if os.environ.get("BNGE_DEM_MEM_TILES"):        # (A/B: decoded DEM tiles kept per process)
         import dem
         dem.MEM_TILES = int(os.environ["BNGE_DEM_MEM_TILES"])

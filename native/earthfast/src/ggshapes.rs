@@ -45,8 +45,25 @@ pub fn gg_fill_lines(py: Python<'_>, mut out: PyReadwriteArray2<'_, u32>, xy: Py
                 }
                 let (dx, dy) = (bx - ax, by - ay);
                 let len2 = dx * dx + dy * dy;
+                let len = len2.sqrt();
                 for r in r0..=r1 as usize {
-                    for c in c0..=c1 as usize {
+                    // (stage 3) the row's texels within hw of the segment's line, not its whole box (a long diagonal
+                    // visited its bounding rectangle): every point within hw of the segment is within hw of its line,
+                    // so this interval (a texel wider each side) holds all of them; the exact test below decides
+                    let (mut ca, mut cb) = (c0, c1 as usize);
+                    if dy.abs() * 8.0 > len && len > 0.0 {
+                        let yc = r as f64 + 0.5;
+                        let xc = ax + (yc - ay) * dx / dy;
+                        let half = hw * len / dy.abs();
+                        let lo = (xc - half - 0.5).floor() - 1.0;
+                        let hi = (xc + half - 0.5).ceil() + 1.0;
+                        if hi < c0 as f64 || lo > c1 {
+                            continue;
+                        }
+                        ca = ca.max(lo.max(0.0) as usize);
+                        cb = cb.min(hi.max(0.0) as usize);
+                    }
+                    for c in ca..=cb {
                         let (px, py_) = (c as f64 + 0.5, r as f64 + 0.5);
                         let t = if len2 > 0.0 { (((px - ax) * dx + (py_ - ay) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
                         let (ex, ey) = (ax + t * dx - px, ay + t * dy - py_);

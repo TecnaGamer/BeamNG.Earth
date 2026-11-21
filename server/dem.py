@@ -87,14 +87,40 @@ MIRROR_MB = _mirror_mb()
 # default since 2026-11-13: the plain .npy were 1.1-3.1 GB of a cold visit's 4.8-7.9 GB of disk writes, from ~0.15 GB
 # of WebP (expo baseline 2026-11-12). BNGE_DEM_MIRROR_ZSTD=0: the .npy (memory-mapped) as before.
 MIRROR_ZSTD = os.environ.get("BNGE_DEM_MIRROR_ZSTD", "1") != "0"
+# Decoded tiles kept per process with the packed mirror (budget.apply: a desktop's MEM_TILES at most this). Packed, a
+# tile in memory is the process's own 1 MB, no longer pages every process shares, and one read back from the mirror
+# costs ~0.5 ms (its 115 KB in the system's file cache, shared). A 24 GB machine's desktop size (429) filled in every
+# road, block, late and far-tile process: 25 road tiles round the A7 or Berlin each touched 545+ tiles; at 256 the
+# extra reads cost no measurable build time and every output stayed byte-identical (CT 115, 2026-11-16).
+PACKED_MEM_TILES = 256
 if MIRROR_ZSTD:
     fast.require(146, "the packed DEM mirror (f32_pack)")
 CLAIM_WAIT_S, CLAIM_POLL_S, CLAIM_STALE_S = 0.5, 0.01, 30.0     # (Dem._load_tile: another process making a tile)
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_MAX_AGE_S = 30 * 86400
+SHORT_RETRY_S = 30.0        # s a stand-in tile (made while a download failed) is kept in memory before it is made again
 DECODED_VERSION = 4          # 2: tiles past the lidar's depth upsampled from its deepest tile, not z12; its holes
                              # filled (fill_holes); 3: Canada's HRDEM lidar (hrdem.py) from z13 down; 4: LidarBC,
                              # and z12 / z13 shifted to its ground (BIAS_*)
+# The mirror's own generation (its folder: decoded/v<DECODED_VERSION>m<MIRROR_GEN>), apart from DECODED_VERSION, which is
+# in the format-keyed caches' identity (mapdata.dem_identity: raising it plans every player's cells again). 2
+# (2026-11-18): before, a tile upsampled from a stand-in ancestor kept in memory (a Mapterhorn tile that failed, AWS's
+# in its place) could be written to the mirror as Mapterhorn's and read back as complete for 30 days; the older folder
+# is not read and goes first when the mirror is cut back (oldest written first). The cost: each tile is decoded again
+# once when next read (~10 ms CPU against ~0.7 ms to read it back; the 8-place corpus's 12,103 mirrored tiles ~120
+# CPU-s, ~15 s a place; a full 3 GB mirror ~20,000 tiles, ~200 CPU-s spread over the visits that read them) and written
+# again (~150 KB a tile).
+MIRROR_GEN = 2
+# The elevation's identity in the format-keyed caches (mapdata.dem_identity: road plans, cell facts, the road tiles and
+# the shared decisions' version key), pinned per app release (the user, 2026-11-16, the road revamp's decision D5: "Pin
+# per app release"): the plans made on one release's elevation are kept until a release changes what the ground
+# reads, and are never mixed with plans made on another. Raise it in the release whose elevation changes: a new source
+# read (a lidar, a DEM), a source's pinned build moved (the Mapterhorn CDN packs' release, the regional archives'
+# bindings), a filter or bias rule. The decoding (DECODED_VERSION) and the measured road heights (roadz.VERSION) are in
+# the key on their own; the BNE_* elevation switches (BNE_DEM_ZOOM, BNE_HRDEM...) through revisit.switches_key. What
+# the public Mapterhorn endpoint changes between releases is not followed (D5a): it reaches the plans with the next
+# release that raises this.
+ELEVATION_ID = 1
 MAX_ZOOM = 15               # AWS stops at z15 (the far field's zooms: zoom_for's default cap)
 # The near terrain and the road profiles read Mapterhorn's lidar one zoom deeper where it has it (the user, 2026-10-21:
 # "the terrain data gets smoothed ... sharper terrain features get lost": z16 is ~0.8 m a pixel at 48 N, z15 ~1.6 m, the
@@ -296,6 +322,20 @@ def _gauss2(a, sigma):
     return sum(k[i] * p[:, i:i + a.shape[1]] for i in range(2 * r + 1))
 
 
+def _stale(marks):
+    """A kept stand-in tile's time to be made again (Dem._lru_short's marks, SHORT_RETRY_S)."""
+    return marks is not None and time.monotonic() - marks[2] > SHORT_RETRY_S
+
+
+def _replay(marks):
+    """A kept tile's marks (Dem._load_marked) said again in the reading thread: its builds are short too."""
+    if marks:
+        if marks[0]:
+            revisit.fault(here=True)
+        if marks[1]:
+            revisit.fault(lidar=True)
+
+
 class Dem:
     disk = cachemod.NONE    # the server's cache.Cache (last use per file, the size cap); set by earthd
     ground_filter = True    # surface-model areas: buildings out, deeper zooms from that ground (see above)
@@ -317,6 +357,11 @@ class Dem:
         self._local = threading.local()
         self.mem_tiles = MEM_TILES if mem_tiles is None else mem_tiles
         self._lru = OrderedDict()       # (z, x, y) -> float32 [TILE, TILE]
+        # (z, x, y) -> (faults, lidar rule faults, when made) of a tile in _lru made while something it read failed (a
+        # stand-in for a download that failed): whoever reads the kept copy is short of it too (_replay; only its first
+        # readers were told: a cell planned later from the kept stand-in counted as complete), and it is made again
+        # after SHORT_RETRY_S (kept, it stood in for the session: no read of it was ever complete again)
+        self._lru_short = {}
         self._inflight = {}             # (z, x, y) -> Future
         self._lock = threading.Lock()
         self.stats = Counter()          # updated from fetch threads; read via stats_snapshot()
@@ -372,6 +417,7 @@ class Dem:
         """Drop the decoded tiles kept in memory (budget.maybe_shed)."""
         with self._lock:
             self._lru.clear()
+            self._lru_short.clear()
     def _canada(self, key, a):
         """Tile key's heights a with Canada's lidar terrain (hrdem.py) put in where it has data (z13 and deeper)."""
         z, x, y = key
@@ -620,7 +666,7 @@ class Dem:
         y = int((1.0 - dmath.asinh(dmath.tan(math.radians(lat))) / math.pi) / 2.0 * n)
         if idx.get((x, max(0, min(n - 1, y))), GLOBAL_ZOOM) > GLOBAL_ZOOM:
             return False
-        if (self.lidarbc is not None or HRDEM_NEAR) and hrdemmod.covers(GLOBAL_ZOOM, *_tile_xy(lat, lon, GLOBAL_ZOOM)):
+        if (self.lidarbc is not None or HRDEM_NEAR) and hrdemmod.in_bounds(GLOBAL_ZOOM, *_tile_xy(lat, lon, GLOBAL_ZOOM)):
             return False
         return True
 
@@ -1158,8 +1204,9 @@ class Dem:
         # its bias, BNE_HRDEM_NEAR's whole HRDEM. Their tiles apart: off, the mirror's tiles as before)
         hk += ("b" if getattr(self, "lidarbc", None) is not None else "") + \
             ("n" if getattr(self, "hrdem_near", HRDEM_NEAR) else "")
-        return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}", f"g{int(self.ground_filter)}{hk}", str(z),
-                            str(x), f"{y}{'.f32z' if MIRROR_ZSTD else '.npy'}")
+        return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}m{MIRROR_GEN}",
+                            f"g{int(self.ground_filter)}{hk}", str(z), str(x),
+                            f"{y}{'.f32z' if MIRROR_ZSTD else '.npy'}")
 
     def _mirror_get(self, key, readback=False):
         """A tile from the decoded mirror (a read-only view of its memory map), or None. readback: _mirror_put's
@@ -1252,8 +1299,11 @@ class Dem:
                 break
 
     def _partial(self):
-        """This load used a stand-in (a failed fetch): its tile is not mirrored."""
+        """This load used a stand-in (a failed fetch): its tile is not mirrored, and the builds reading it are short
+        (revisit.fault: a source whose failure is no failed download, a lidar sheet that raised OSError, said nothing
+        before, and the stand-in went into the LRU unmarked)."""
         self._local.partial = True
+        revisit.fault(here=True)
 
     def _load_tile(self, key):
         """A decoded tile: from the mirror, else made (_make_tile) and, when it is all Mapterhorn's data as it will
@@ -1492,12 +1542,24 @@ class Dem:
         key = (z0, ax, ay)
         with self._lock:
             anc = self._lru.get(key)
-        if anc is None:
-            anc = self._load_tile(key)      # (in this thread: a pool worker waiting on the pool could deadlock)
-            with self._lock:
-                self._lru[key] = anc
-                while len(self._lru) > self.mem_tiles:
-                    self._lru.popitem(last=False)
+            marks = self._lru_short.get(key)
+            if anc is not None and _stale(marks):
+                anc = None
+        if anc is not None:
+            _replay(marks)
+            if marks:           # (an ancestor kept short: the tile made from it is a stand-in too, never mirrored)
+                self._partial()
+        else:
+            # (in this thread: a pool worker waiting on the pool could deadlock). It owns no future of the key, so it
+            # publishes a complete tile only: a stand-in stays this descendant's (its faults are this reader's, and the
+            # descendant is partial: _load_tile), not put in the LRU, where tiles() would hand it out ahead of the
+            # owner's healthy load still pending
+            anc, marks = self._load_marked(key)
+            if marks is None:
+                with self._lock:
+                    self._lru_put(key, anc, marks)
+            else:
+                self._partial()     # (the descendant made from it is a stand-in too: never mirrored)
         k = 2 ** d
         i = (np.arange(TILE) + 0.5) / k - 0.5
         u = np.clip((x - ax * k) * TILE / k + i, 0, TILE - 1)
@@ -1536,7 +1598,7 @@ class Dem:
                 cold = [k for k in keys if k[0] >= mtarchive.MIN_ZOOM and k not in self._lru and k not in self._inflight]
             if cold:
                 self._archive_batch(cold, "demand")
-        out, futs, new = {}, {}, []
+        out, futs, new, short = {}, {}, [], []
         urgent = getattr(self._local, "urgent", False)
         pool = self.urgent_pool if urgent else self.pool
         caller = self._caller()
@@ -1545,15 +1607,18 @@ class Dem:
             log.debug("dem urgent: %d tiles %s", len(keys), dict(zs))
         with self._lock:
             for k in keys:
-                if k in self._lru:
+                if k in self._lru and not _stale(self._lru_short.get(k)):
                     self._lru.move_to_end(k)
                     out[k] = self._lru[k]
+                    short.append(self._lru_short.get(k))
                 elif k in self._inflight and not (urgent and not self._inflight[k].running()
                                                   and not self._inflight[k].done()):
                     futs[k] = self._inflight[k]
                 else:
-                    futs[k] = self._inflight[k] = pool.submit(self._as, caller, self._load_tile, k)
+                    futs[k] = self._inflight[k] = pool.submit(self._as, caller, self._load_marked, k)
                     new.append(k)
+        for marks in short:     # (kept copies made short of something: this reader is too)
+            _replay(marks)
         # Outside the lock: the callback runs at once if the future is already done.
         for k in new:
             futs[k].add_done_callback(lambda f, k=k: self._finish(k, f))
@@ -1562,7 +1627,7 @@ class Dem:
             progress(done, len(keys))
         for k, fut in futs.items():
             with waits.waiting("elevation"):
-                out[k] = fut.result()
+                out[k] = fut.result()[0]        # (its faults are this reader's: revisit.bind)
             done += 1
             if progress:
                 progress(done, len(keys))
@@ -1572,12 +1637,40 @@ class Dem:
         """Move a finished load from _inflight into the LRU (failures are dropped,
         so the next request retries instead of reusing a stale exception)."""
         with self._lock:
-            if self._inflight.get(key) is fut:
+            # (the load that owns the key publishes whatever it made; one an urgent reload took the key over from
+            # (superseded) publishes only a complete tile: its stand-in, finishing later, went over the newer answer,
+            # while its complete tile still replaces a stand-in the urgent one put in, _lru_put never the reverse)
+            owner = self._inflight.get(key) is fut
+            if owner:
                 del self._inflight[key]
             if not fut.cancelled() and fut.exception() is None:
-                self._lru[key] = fut.result()
-                while len(self._lru) > self.mem_tiles:
-                    self._lru.popitem(last=False)
+                a, marks = fut.result()
+                if owner or marks is None:
+                    self._lru_put(key, a, marks)
+
+    def _lru_put(self, key, a, marks):
+        """With self._lock held: tile key's heights a into the LRU, with marks (_load_marked's) kept beside it. A
+        stand-in (marks) never replaces a complete entry already there (a retry that failed again while another
+        thread's load of the same tile succeeded, _from_ancestor's inline load): the complete one stays."""
+        if marks is not None and key in self._lru and key not in self._lru_short:
+            self._lru.move_to_end(key)
+            return
+        self._lru[key] = a
+        self._lru.move_to_end(key)
+        if marks is None:
+            self._lru_short.pop(key, None)
+        else:
+            self._lru_short[key] = marks
+        while len(self._lru) > self.mem_tiles:
+            self._lru_short.pop(self._lru.popitem(last=False)[0], None)
+
+    def _load_marked(self, key):
+        """(_load_tile(key), its marks): (faults, lidar rule faults) when making it read something short (a stand-in
+        for a failed download), else None. Its faults reach this thread's builds as they happen (its own scope is
+        inside theirs)."""
+        with revisit.scope() as made:
+            a = self._load_tile(key)
+        return a, ((made.n, made.lidar, time.monotonic()) if made.n or made.lidar else None)
 
     def block_max(self, z, x, y, block):
         """Highest elevation in every block x block pixel square of tile (z, x, y): a (TILE / block)²
@@ -1591,58 +1684,36 @@ class Dem:
     def sample(self, lat, lon, zoom, progress=None):
         """Bilinear elevation (m) at arbitrary lat/lon arrays from zoom-level tiles. Points from polardem.FROM_LAT
         (84.9 deg) on (Mapterhorn's heights stop short of 85, Web Mercator at 85.05) come from the Copernicus DEM
-        (polardem.py; 0 m on the Arctic Ocean)."""
+        (polardem.py; 0 m on the Arctic Ocean). earthfast.dem_sample does the work (pixel coordinates, the box of
+        tiles or its groups, the tiles the bilinear reads: only those are asked, the bilinear on them in place); this
+        keeps the tile store and the polar DEM."""
         if zoom > max(MAX_ZOOM, FINE_ZOOM):
             raise ValueError(f"zoom {zoom} > {max(MAX_ZOOM, FINE_ZOOM)}")
         lat = np.asarray(lat, dtype=np.float64)
         lon = np.asarray(lon, dtype=np.float64)
-        shape = np.broadcast(lat, lon).shape
-        lat, lon = np.broadcast_to(lat, shape).ravel(), np.broadcast_to(lon, shape).ravel()
-        out = np.zeros(lat.shape, np.float64)
-        valid = np.abs(lat) < polardem.FROM_LAT
-        if not valid.all():                 # the polar caps: the Copernicus DEM (polardem.py)
-            px = 40075016.686 * dmath.cos(math.radians(MAX_LAT)) / (TILE * 2 ** zoom)
-            try:
-                out[~valid] = self.polar().sample(lat[~valid], lon[~valid], px)
-            except (netfetch.FetchError, OSError, ValueError) as e:
-                log.warning("polar DEM unavailable (%s): sea level there", e)
-        if not valid.any():
-            return out.reshape(shape)
-        lat, lon = lat[valid], lon[valid]
-        n = 2 ** zoom
-        w = n * TILE
-        # Global pixel coordinates; pixel centres sit at +0.5.
-        fx = (lon / 360.0 + 0.5) * w
-        fx -= w * np.round((fx - fx[0]) / w)    # unwrap across the antimeridian
-        fx -= 0.5
-        fy = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * w - 0.5
-        tx0, tx1 = int(math.floor(fx.min())) // TILE, int(math.floor(fx.max()) + 1) // TILE
-        ty0 = max(0, int(math.floor(fy.min())) // TILE)
-        ty1 = min(n - 1, int(math.floor(fy.max()) + 1) // TILE)
-        nx, ny = tx1 - tx0 + 1, ty1 - ty0 + 1
-        sparse = False
-        if SPARSE_MIN_TILES < nx * ny <= MAX_TILES_PER_SAMPLE:
-            # points along a line (a road's profile) in a large box: the whole box's tiles were fetched, decoded and
-            # copied into one mosaic (I-80 over the salt flats: a road tile's grading took minutes, 2026-10-17)
-            tid = (np.floor(fx).astype(np.int64) // TILE - tx0) * ny + (np.floor(fy).astype(np.int64) // TILE - ty0)
-            sparse = nx * ny > SPARSE_RATIO * len(np.unique(tid))
-        if nx * ny > MAX_TILES_PER_SAMPLE or sparse:
-            # spread-out points (all the roads of a cell with a long highway, 2026-10-12: every road tile of
-            # a session failed on one 53 x 82 box): sample groups of nearby tiles separately (the same values)
-            g = SPARSE_GROUP if sparse else max(1, int(math.isqrt(MAX_TILES_PER_SAMPLE)) - 1)
-            gx = (np.floor(fx).astype(np.int64) // TILE) // g
-            gy = (np.floor(fy).astype(np.int64) // TILE) // g
-            sub = np.zeros(len(lat), np.float64)
-            for key in np.unique(np.stack([gx, gy], 1), axis=0):
-                m = (gx == key[0]) & (gy == key[1])
-                sub[m] = self.sample(lat[m], lon[m], zoom, progress)
-            out[valid] = sub
-            return out.reshape(shape)
-        keys = [(zoom, tx % n, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1)]     # (row-major)
+        if lat.shape == lon.shape:
+            shape = lat.shape
+            lat, lon = lat.ravel(), lon.ravel()
+        else:
+            shape = np.broadcast(lat, lon).shape
+            lat, lon = np.broadcast_to(lat, shape).ravel(), np.broadcast_to(lon, shape).ravel()
+        fast.require(484, "dem_sample")
+        return fast._ef.dem_sample(lat, lon, zoom, TILE, polardem.FROM_LAT, MAX_TILES_PER_SAMPLE, SPARSE_MIN_TILES,
+                                   SPARSE_RATIO, SPARSE_GROUP, lambda keys: self._sample_tiles(keys, progress),
+                                   lambda la, lo: self._polar_heights(la, lo, zoom)).reshape(shape)
+
+    def _sample_tiles(self, keys, progress):
+        """(dem_sample's fetch) the float32 heights of tiles keys (a list of (z, x, y)), in their order."""
         got = self.tiles(keys, progress)
-        fx -= tx0 * TILE
-        fy -= ty0 * TILE
-        # (sampled from the tiles in place: a mosaic of them copied on every call cost ~2 s per 16 city road tiles)
-        fast.require(76, "bilinear_tiles")
-        out[valid] = fast._ef.bilinear_tiles([np.asarray(got[k], np.float32) for k in keys], nx, TILE, fx, fy)
-        return out.reshape(shape)
+        return [np.asarray(got[k], np.float32) for k in keys]
+
+    def _polar_heights(self, lat, lon, zoom):
+        """(dem_sample's polar) heights at points past polardem.FROM_LAT, None when the polar DEM can't be had."""
+        px = 40075016.686 * dmath.cos(math.radians(MAX_LAT)) / (TILE * 2 ** zoom)
+        try:
+            out = np.zeros(lat.shape, np.float64)
+            out[np.ones(lat.shape, bool)] = self.polar().sample(lat, lon, px)     # (numpy's assignment rules, as before)
+            return out
+        except (netfetch.FetchError, OSError, ValueError) as e:
+            log.warning("polar DEM unavailable (%s): sea level there", e)
+            return None

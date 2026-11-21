@@ -194,19 +194,19 @@ def area_tags(lat0, lon0, lat1, lon1):
 
 def candidates(feats, vals=None):
     """bool (n,): feats' roads the photo may judge: CANDIDATE_CLASSES, no surface value, no mapped lane count or good
-    smoothness (a mapper who added those looked at a paved road: roads' regional rule leaves them paved too)."""
+    smoothness (a mapper who added those looked at a paved road: roads' regional rule leaves them paved too; earthfast
+    roadnet::verdicts)."""
+    import fast
     import roads as roadsmod
     n = len(feats)
     cls = feats.attrs.get("class")
     if cls is None or not n:
         return np.zeros(n, bool)
-    vals = roadsmod._map_surface_values(feats) if vals is None else vals
-    out = np.fromiter((str(c) in CANDIDATE_CLASSES and v is None for c, v in zip(cls.tolist(), vals)), bool, n)
-    lanes = roadsmod._osm_values(feats, "lanes", *roadsmod.OSM_LANES)
-    sm = feats.attrs.get("osm_smoothness")
-    good = np.zeros(n, bool) if sm is None else np.fromiter(
-        (str(v).strip().lower() in roadsmod.GOOD_SMOOTHNESS for v in sm.tolist()), bool, n)
-    return out & np.isnan(lanes) & ~good
+    fast.require(392, "roadsurf_candidates")
+    return fast._ef.roadsurf_candidates(
+        n, cls, roadsmod._map_surface_values(feats) if vals is None else vals,
+        lambda: roadsmod._osm_values(feats, "lanes", *roadsmod.OSM_LANES), feats.attrs.get("osm_smoothness"),
+        sorted(CANDIDATE_CLASSES), sorted(roadsmod.GOOD_SMOOTHNESS))
 
 
 _store_seen = []        # [bool]: the store's folder was there at this process's first look (made later: no verdict of
@@ -231,16 +231,13 @@ def layer_verdicts(feats, vals=None):
     if not _store_exists():         # (no verdict anywhere yet: nothing to look up, the layer's candidates not listed)
         feats.__dict__["_roadsurf"] = {}
         return {}
+    import fast
     import roads as roadsmod
-    out = {}
-    cand = candidates(feats, vals)
-    if cand.any():
-        homes = roadsmod._home_cells(feats)
-        ids = feats.ids
-        for i in np.flatnonzero(cand).tolist():
-            v = entry(homes[i]).get(str(ids[i]))
-            if v:
-                out[i] = v
+    fast.require(392, "roadsurf_lookup")
+    # (each candidate's verdict in its home cell's entry: earthfast roadnet::verdicts; the cells asked for only when a
+    # road is a candidate)
+    out = fast._ef.roadsurf_lookup(np.ascontiguousarray(candidates(feats, vals), bool),
+                                   lambda: roadsmod._home_cells(feats), feats.ids, entry)
     feats.__dict__["_roadsurf"] = out
     return out
 

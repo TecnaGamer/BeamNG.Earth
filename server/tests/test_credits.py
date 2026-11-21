@@ -642,6 +642,30 @@ class FeatureSourcesTest(unittest.TestCase):
         text = (Path(__file__).resolve().parents[2] / "CREDITS.md").read_text()
         self.assertIn(f'"3D models: {credits.full_label("model:3dmr")}"', text)
 
+    def test_position_index_tracks_add_remove_and_incomplete_files(self):
+        import threedmr
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(threedmr, "enabled", return_value=True):
+            folder = Path(root, "threedmr_cache")
+            folder.mkdir()
+            p = folder / "info_56789.json"
+
+            def locate(path, cache, model_id):
+                return tuple(json.loads(Path(path).read_text()))
+
+            with mock.patch.object(threedmr, "_credit_position", side_effect=locate) as resolve:
+                self.assertFalse(threedmr.credited_near(39, -76, 50, root))
+                p.write_text("[")
+                self.assertFalse(threedmr.credited_near(39, -76, 50, root))
+                p.write_text("[39, -76]")
+                self.assertTrue(threedmr.credited_near(39, -76, 0, root))
+                n = resolve.call_count
+                self.assertFalse(threedmr.credited_near(41, -76, 50, root))
+                self.assertEqual(resolve.call_count, n)
+                p.unlink()
+                self.assertFalse(threedmr.credited_near(39, -76, 50, root))
+
     def test_leaf_off_share_is_no_source(self):
         ids = credits.tile_sources(None, (0, 0, 1, 1), None, None, {"usgs": 5, "leafon": 5})
         self.assertEqual(ids, frozenset({"img:usgs"}))

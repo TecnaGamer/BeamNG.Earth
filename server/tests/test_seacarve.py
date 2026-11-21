@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import geodesy  # noqa: E402
 import mapcells  # noqa: E402
 import seacarve  # noqa: E402
+import staging  # noqa: E402
 
 LAT0, LON0 = 39.28, -76.59
 SEA_LAT = 39.27         # the "sea": every point south of this latitude in the test's area
@@ -178,20 +179,6 @@ class SeaCarveTest(unittest.TestCase):
                 j, i = rng.integers(0, n, 3000), rng.integers(0, n, 3000)
                 np.testing.assert_array_equal(a[j, i], b[j, i])
             self.assertEqual(float(got[1][1025, 1025]), 0.0)
-            # a process keeps a cell the same way (_packed): the same pixels, a fraction of the memory, and the file
-            # written from it is the file written from the whole raster
-            kept = seacarve._packed((depth, level, outline))
-            for a, b in zip(kept, (depth, level, outline)):
-                self.assertEqual((a.shape, a.dtype), (b.shape, b.dtype))
-                np.testing.assert_array_equal(np.asarray(a), b)
-                np.testing.assert_array_equal(a[j, i], b[j, i])
-            self.assertLess(sum(a.data.nbytes for a in kept) + kept[0].idx.nbytes,
-                            0.15 * sum(b.nbytes for b in (depth, level, outline)))
-            self.assertIs(seacarve._packed(kept), kept)
-            p2 = os.path.join(d, "k.rawb.npy")
-            seacarve._write_raw(p2, kept)
-            with open(p, "rb") as f1, open(p2, "rb") as f2:
-                self.assertEqual(f1.read(), f2.read())
             del got, a             # the loop variable also owns a mapped view; Windows cannot truncate it alive
             gc.collect()
             with open(p, "r+b") as fh:          # damaged: not read (the npz serves, and the copy is written again)
@@ -199,6 +186,70 @@ class SeaCarveTest(unittest.TestCase):
                 fh.truncate()
             with self.assertRaises((ValueError, OSError)):   # Windows mmap rejects a truncated mapping with OSError
                 seacarve._open_raw(p)
+            # a raster under 2 x 2 px (water()'s lookup reads 2 x 2 pixels): damaged, the raw copy and the npz alike
+            one = (np.ones((1, 1), np.float32),) * 2 + (np.zeros((1, 1), bool),)
+            q = os.path.join(d, "one.rawb.npy")
+            seacarve._write_raw(q, one)
+            with self.assertRaises(ValueError):
+                seacarve._open_raw(q)
+            z = os.path.join(d, "one.npz")
+            np.savez_compressed(z, any=True, depth=np.ones((1, 1), np.int16), level=one[1], outline=one[2])
+            self.assertIsNone(staging.read_npz(z, lambda f: (seacarve._npz_raster(f),)))
+            self.assertFalse(os.path.exists(z))
+
+    def test_rasters_in_memory_as_blocks_bit_for_bit(self):
+        """A cell decoded in a process is kept as its blocks (_in_blocks), not three full planes: the land blocks share
+        one slot, and what is read back is the raster bit for bit, a -0.0 depth or another NaN in a land block too."""
+        n = 1026
+        rng = np.random.default_rng(5)
+        depth = np.zeros((n, n), np.float32)
+        level = np.full((n, n), np.nan, np.float32)
+        outline = np.zeros((n, n), bool)
+        depth[100:140, 600:700] = rng.random((40, 100), np.float32) * 3
+        level[98:142, 598:702] = 212.3
+        depth[900, 5] = -0.0                                                # (a rounded -0.0: not land's +0.0)
+        level[7, 900] = np.array(0x7fc00001, np.uint32).view(np.float32)   # (another NaN)
+        got = seacarve._in_blocks((depth, level, outline))
+        self.assertTrue(all(isinstance(a, seacarve._Blocks) for a in got))
+        self.assertLess(got[0].data.base.nbytes, 0.1 * n * n * seacarve.RAW_DTYPE.itemsize)
+        for a, b in zip(got, (depth, level, outline)):
+            self.assertEqual(a.shape, (n, n))
+            whole = np.asarray(a)
+            self.assertEqual(whole.dtype, b.dtype)
+            self.assertEqual(whole.tobytes(), b.tobytes())
+            j, i = rng.integers(0, n, 3000), rng.integers(0, n, 3000)
+            self.assertEqual(a[j, i].tobytes(), b[j, i].tobytes())
+        self.assertIsNone(seacarve._in_blocks(None))
+        odd = (np.zeros((3, 4), np.float32),) * 3                          # (not a square raster: as it is)
+        self.assertIs(seacarve._in_blocks(odd), odd)
+
+    def test_lookup_from_the_blocks(self):
+        """water()'s cell lookup (earthfast.sea_cell_lookup) reads the block-stored raster: the depth bilinear across a
+        block edge and the raster's last pixels (clamped past it), the nearest pixel's level, only the cell's points
+        written; plain planes give the same; by the sea a raster without its bathymetry writes nothing (False)."""
+        n, b, c = 1026, seacarve.RAW_BLOCK_PX, seacarve.CELL_PX
+        jj, ii = np.mgrid[0:n, 0:n].astype(np.float32)
+        depth = (ii * 0.25 + jj * 0.5).astype(np.float32)
+        level = np.full((n, n), 30.0, np.float32)
+        level[:, 2 * b:] = 40.0
+        r = seacarve._in_blocks((depth, level, np.zeros((n, n), bool)))
+        kx, ky = 70, 90
+        fx = np.array([b - 0.25, 2 * b + 0.5, n + 3.0, 10.0])          # raster coords: pixel i's centre at i + 0.5
+        fy = np.array([b + 0.75, 5.5, n + 3.0, 10.0])
+        mx, my = fx + kx * c - 0.5, fy + ky * c - 0.5
+        cx = np.array([kx, kx, kx, kx + 1], np.int64)
+        cy = np.full(4, ky, np.int64)
+        for planes in (r, (depth, level)):
+            d, lv = np.full(4, -1, np.float32), np.full(4, -1, np.float32)
+            self.assertTrue(seacarve._lookup(planes, (mx, my, cx, cy), kx, ky, (d, lv), False))
+            want = [fx[0] * 0.25 + fy[0] * 0.5, fx[1] * 0.25 + fy[1] * 0.5, (n - 1) * 0.75, -1]   # (exact in f32)
+            self.assertEqual(d.tolist(), np.float32(want).tolist())
+            self.assertEqual(lv.tolist(), [30.0, 40.0, 40.0, -1])
+        sea = (depth, np.where(ii > 50, np.float32(seacarve.SEA_E), np.float32(30.0)).astype(np.float32))
+        d = np.full(4, -1, np.float32)
+        self.assertFalse(seacarve._lookup(seacarve._in_blocks(sea + (np.zeros((n, n), bool),)), (mx, my, cx, cy),
+                                          kx, ky, (d, d.copy()), True))
+        self.assertEqual(d.tolist(), [-1] * 4)
 
     def test_raw_copy_and_older_cells(self):
         """Read back memory-mapped (the raw copy) and from a cell cached before the raw copies (converted): the

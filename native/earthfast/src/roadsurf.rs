@@ -222,6 +222,7 @@ pub fn road_photo_surface<'py>(py: Python<'py>, root: String, zoom: u32, lonlat:
                 s += step;
             }
         }
+        #[allow(clippy::disallowed_methods)] // hash order: a count
         let read = tiles.values().filter(|t| matches!(t, Tile::Rgb(_))).count();
         let mut feats = vec![[f32::NAN; 9]; r];
         let mut fs: Vec<Option<[f32; NF]>> = vec![None; r];
@@ -284,7 +285,7 @@ pub fn road_photo_surface<'py>(py: Python<'py>, root: String, zoom: u32, lonlat:
         refs[12..16].copy_from_slice(&su);
         // (squared distance in the kind's spreads, and the log-likelihood's normalising term)
         let d2 = |f: &[f32; NF], mu: &[f32; NF], sd: &[f32; NF]| -> f32 {
-            (0..NF).map(|c| ((f[c] - mu[c]) / sd[c]).powi(2)).sum::<f32>()
+            (0..NF).map(|c| ((f[c] - mu[c]) / sd[c]).sq()).sum::<f32>()
         };
         let lnorm = |sd: &[f32; NF]| -> f32 { (0..NF).map(|c| 2.0 * sd[c].dln()).sum::<f32>() };
         let (np_, nu_) = (lnorm(&sp), lnorm(&su));
@@ -296,8 +297,8 @@ pub fn road_photo_surface<'py>(py: Python<'py>, root: String, zoom: u32, lonlat:
             // a road that does not stand out from vegetation-like verges: a field track, not a paved road
             let (vl, vs, ve) = (feats[i][6], feats[i][7], feats[i][8]);
             if vl.is_finite() && vl >= verge_l && f[0] >= verge_l && (vs >= verge_sat || ve >= verge_exg) {
-                let dv = (((f[0] - vl) / scale[0]).powi(2) + ((f[1] - vs) / scale[1]).powi(2)
-                    + ((f[2] - ve) / scale[2]).powi(2)).sqrt();
+                let dv = (((f[0] - vl) / scale[0]).sq() + ((f[1] - vs) / scale[1]).sq()
+                    + ((f[2] - ve) / scale[2]).sq()).sqrt();
                 if dv < vis_min {
                     verdict[i] = 2;
                     continue;

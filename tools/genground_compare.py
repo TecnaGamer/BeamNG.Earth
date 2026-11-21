@@ -41,9 +41,28 @@ import mapdata as mapdatamod  # noqa: E402
 import netfetch  # noqa: E402
 import surface as surfacemod  # noqa: E402
 
+# the kinds map's colours, one per genground kind (KIND_NAMES' order; stage 2's surfaces and patterns each their own)
 KIND_RGB = np.array([(0, 0, 0), (20, 80, 20), (110, 130, 60), (120, 200, 90), (220, 200, 90), (200, 120, 120),
                      (190, 170, 140), (250, 250, 250), (40, 90, 200), (60, 160, 150), (150, 240, 120),
-                     (90, 90, 90), (200, 40, 40)], np.uint8)
+                     (90, 90, 90), (200, 40, 40),
+                     (170, 160, 140),   # gravel
+                     (200, 170, 120),   # path
+                     (180, 70, 50),     # brick
+                     (210, 200, 185),   # pavers
+                     (235, 235, 225),   # concrete
+                     (60, 170, 60),     # turf
+                     (0, 220, 120),     # artificial turf
+                     (230, 110, 40),    # clay
+                     (200, 40, 120),    # tartan
+                     (0, 200, 255),     # pool
+                     (120, 100, 0),     # orchard
+                     (140, 0, 140),     # vineyard
+                     (255, 140, 200),   # allotment
+                     (180, 255, 255),   # greenhouse
+                     (100, 100, 160),   # cemetery
+                     (60, 120, 160)],   # court
+                    np.uint8)
+assert len(KIND_RGB) == len(genground.KIND_NAMES)
 LAYERS = ("roads", "buildings", "water", "land_use", "infrastructure", "landcover", "canopy")
 
 
@@ -104,6 +123,9 @@ def main():
     ap.add_argument("--cache", default=os.path.expanduser("~/bnge-tests/genground/cache"))
     ap.add_argument("--no-truth", action="store_true")
     ap.add_argument("--label", default="gen", help="this generator's column and file names")
+    ap.add_argument("--no-trees", dest="trees", action="store_false", help="as a server with --trees off")
+    ap.add_argument("--no-shade", dest="shade", action="store_false",
+                    help="(stage 5) the generator without taking the capture sun's shadows out (the before column)")
     ap.add_argument("--season", default="off", help="the generator's season grade (earthd --season: auto, fall, ...)")
     ap.add_argument("--also", nargs="*", default=[], help="earlier columns' finished images to show too (by label)")
     ap.add_argument("--truth-source", default="auto", help="tools/ortho_hi.py's SOURCE (naip: one export request; "
@@ -158,18 +180,45 @@ def main():
     # tiles on disk, the cells in memory)
     s2 = results["s2"]
     im = imagerymod.Imagery(os.path.join(a.cache, "imagery"), genground.chain(full), fetcher=f, season_mode=a.season)
+    veg = None
+    if a.trees:                 # (the game's trees, as the server's: its cells built here first, into the scratch cache)
+        import vegetation as vegetationmod
+        veg = vegetationmod.Vegetation(md, a.cache)
+        veg.surface = sf
+        t0 = time.perf_counter()
+        hx0_, _hy, hs_, _hp, _h = genground.halo_square(x0, x0, size, px)
+        la_, lo_, _ = frame.enu_to_geodetic(np.array([hx0_ - 20, hx0_ + hs_ + 20]),
+                                             np.array([hx0_ - 20, hx0_ + hs_ + 20]), 0.0)
+        for k in mapcells.cells_for_bbox(float(la_.min()), float(lo_.min()), float(la_.max()), float(lo_.max())):
+            veg.cell(k)
+        stats["trees_build_s"] = round(time.perf_counter() - t0, 1)
+    dem = None
+    if a.shade:                 # (stage 5: the ground's heights for the terrain's shadows, fetched here first)
+        import dem as demmod
+        dem = demmod.Dem(os.path.join(a.cache, "dem"), fetcher=f)
+        t0 = time.perf_counter()
+        e = genground.SHADE_PAD_M + genground.HALO_M + 2600.0       # (and the data cells' fits round the block)
+        la_, lo_, _ = frame.enu_to_geodetic(np.array([x0 - e, x0 + size + e]), np.array([x0 - e, x0 + size + e]), 0.0)
+        dem.prefetch(genground._dem_keys(la_, lo_))
+        e2 = genground.HALO_M + 2600.0
+        im.fetch_needed(frame, x0 - e2, x0 - e2, size + 2 * e2, int((size + 2 * e2) / genground.FIT_RES_B))
+        stats["shade_prefetch_s"] = round(time.perf_counter() - t0, 1)
+    else:
+        genground.shade = lambda rgb, *args, **kw: (rgb, args[6])
     times = []
     for _ in range(3):
         c0, w0 = time.process_time(), time.perf_counter()
         pend = set()
-        gen, _used = genground.render(im, frame, x0, x0, size, px, md, sf, None, pend)
+        gen, _used = genground.render(im, frame, x0, x0, size, px, md, sf, None, pend, veg, dem)
         times.append((time.perf_counter() - w0, time.process_time() - c0))
     hx0, _hy0, hsize, hpx, h = genground.halo_square(x0, x0, size, px)
     c0, w0 = time.process_time(), time.perf_counter()
-    kind, region, canopy, complete = genground.inputs(frame, hx0, hx0, hsize, hpx, md, sf)[:4]
+    kind, region, canopy, complete = genground.inputs(frame, hx0, hx0, hsize, hpx, md, sf, None, veg)[:4]
     stats["gen_inputs_wall_ms"] = round(1000 * (time.perf_counter() - w0), 1)
     stats["gen_inputs_cpu_ms"] = round(1000 * (time.process_time() - c0), 1)
-    again, _ = genground.render(im, frame, x0, x0, size, px, md, sf, None, set())
+    again, _ = genground.render(im, frame, x0, x0, size, px, md, sf, None, set(), veg, dem)
+    stats["shade_fits"] = [v[3] for v in genground._fits.values()]
+    stats["pending"] = sorted(str(p) for p in pend)
     im.close()
     stats["deterministic_rerun"] = bool(np.array_equal(again, gen))
     stats["complete"] = bool(complete) and not pend

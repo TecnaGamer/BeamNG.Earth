@@ -314,7 +314,7 @@ collector = Collector()
 atexit.register(collector.close)
 
 
-class ThreadPoolExecutor(_ThreadPoolExecutor):
+class _ProfiledSubmit:
     def submit(self, fn, /, *args, **kwargs):
         # (the revisit cache's build scopes: a task's faults count for the build that submitted it and for whoever takes
         # its result, not for every build of the process: revisit.task)
@@ -335,7 +335,7 @@ class ThreadPoolExecutor(_ThreadPoolExecutor):
                    "submitted": time.perf_counter(), "stage": "queued"}
             _emit(ctx, "submitted", row)
             try:
-                fut = super().submit(_run, parent["queue"], parent["session"], job_id, fn, args, kwargs, parent["rootId"], parent.get('ioConfig'))
+                fut = self._submit_job(_run, parent["queue"], parent["session"], job_id, fn, args, kwargs, parent["rootId"], parent.get('ioConfig'))
             except BaseException:
                 _emit(ctx, "notice", {"doneAt": time.perf_counter(), "outcome": "error"})
                 raise
@@ -344,7 +344,24 @@ class ThreadPoolExecutor(_ThreadPoolExecutor):
                       "outcome": "cancelled" if f.cancelled() else ("error" if f.exception() else "ok")})
             fut.add_done_callback(done)
             return fut
-        return collector.submit(super().submit, self._thread_name_prefix, fn, args, kwargs)
+        return collector.submit(self._submit_job, self._thread_name_prefix, fn, args, kwargs)
+
+
+class ThreadPoolExecutor(_ProfiledSubmit, _ThreadPoolExecutor):
+    _submit_job = _ThreadPoolExecutor.submit
+
+
+class TileJobs(_ProfiledSubmit):
+    """The host's PyJob workers with the same profiler and revisit scopes as other tile builders."""
+    def __init__(self, size, thread_name_prefix):
+        import fast
+        fast.require(551, "tile tracker PyJobs")
+        self._thread_name_prefix = thread_name_prefix
+        self._pool = fast._ef.PyJobs(size, thread_name_prefix)
+        self._submit_job = self._pool.submit
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        self._pool.shutdown(wait=wait, cancel_futures=cancel_futures)
 
 
 async def stream(server):

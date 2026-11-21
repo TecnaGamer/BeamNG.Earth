@@ -31,8 +31,10 @@ _US = Style(centre="line_yellow", w=0.12, w_motorway=0.15, edge=0.12, edge_motor
             # edge lines on arterials (MUTCD 3B.10: rural arterials 20 ft and wider); local and collector roads mostly
             # have none (PEMA 6-inch aerials, Lancaster County, 2026-10-28: tertiary roads with a centre line only)
             edge_classes=frozenset({"motorway", "trunk", "primary", "secondary"}), ladder=True)
-_CA = _US._replace(centre_rural=(3.0, 6.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 6.0), lane_urban=(3.0, 6.0),
-                   lane_motorway=(3.0, 6.0))
+# Canada: centre lines 3 / 6 m; lane lines 3 / 9 m (Ontario's Hwy 417 measured 2.7 / 9.7 m on the aerials, the
+# real-lane-changes-exits study 2026-11-19; was 3 / 6)
+_CA = _US._replace(centre_rural=(3.0, 6.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 9.0),
+                   lane_motorway=(3.0, 9.0))
 _GB = Style(centre="line_white", w=0.10, w_motorway=0.15, edge=0.15, edge_motorway=0.20,
             centre_rural=(3.0, 6.0), centre_urban=(2.0, 4.0), lane_rural=(2.0, 7.0), lane_urban=(1.0, 5.0),
             lane_motorway=(2.0, 7.0), left_edge=None, double_centre_urban=False, double_gap=0.175, min_centre_m=5.5)
@@ -68,10 +70,13 @@ _WHITE = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.15, edge_mot
                centre_rural=(6.0, 12.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 9.0),
                lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
 _YELLOW = _WHITE._replace(centre="line_yellow")
+# Norway: the line next to oncoming traffic is yellow on a divided road too (the left edge of each carriageway, both
+# sides of a median barrier: E6 at Vist, Mapillary 871850046696980; the user's report, 2026-11-17)
+_NO = _YELLOW._replace(left_edge="line_yellow")
 
 STYLES = {"US": _US, "CA": _CA, "GB": _GB, "IE": _GB, "IM": _GB, "JE": _GB, "GG": _GB, "DE": _DE, "AT": _DE,
           "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _AU,
-          "SE": _SE}
+          "SE": _SE, "NO": _NO}
 # where centre lines are yellow (outside the US and Canada): the Americas, Norway, Finland, South Korea, China, Taiwan,
 # Thailand (research table 4.4)
 YELLOW_CENTRE = {"MX", "GT", "BZ", "HN", "SV", "NI", "CR", "PA", "CU", "DO", "HT", "PR", "JM", "BS", "TT", "CO", "VE",
@@ -233,7 +238,7 @@ def _resample(pts, step):
     if s[-1] < step:
         return pts.copy(), s
     t = np.arange(0.0, s[-1], step)
-    return np.stack([np.interp(t, s, pts[:, c]) for c in range(3)], 1), t
+    return np.stack([dnp.interp(t, s, pts[:, c]) for c in range(3)], 1), t
 
 
 def gores(roads_):
@@ -333,8 +338,8 @@ Z341_W, Z341_DASH, Z341_GAP = 0.50, 0.50, 0.25
 def _way_in(line, s, at, spec, left_hand):
     """(point on the centreline, unit vector of the way in, unit vector to its kerb, (lo, hi) m along that from the
     centreline of the half of the road coming in) at m along an arm's centreline line (s: its stations)."""
-    c = np.array([np.interp(at, s, line[:, k]) for k in range(3)])
-    q = np.array([np.interp(at + 1.0, s, line[:, k]) for k in range(2)])
+    c = np.array([dnp.interp(at, s, line[:, k]) for k in range(3)])
+    q = np.array([dnp.interp(at + 1.0, s, line[:, k]) for k in range(2)])
     t = (c[:2] - q) / max(float(dnp.hypot(*(c[:2] - q))), 1e-6)
     n = np.array([t[1], -t[0]]) * (-1.0 if left_hand else 1.0)
     half = spec.width / 2
@@ -368,7 +373,7 @@ def stop_lines(arms, crosswalks, mapped=None, left_hand=False, w=M13_W):
         if s[-1] < 1.0:
             continue
         st = np.arange(0.0, min(s[-1], M14_LOOK_M), 1.0)
-        along = np.stack([np.interp(st, s, line[:, k]) for k in range(3)], 1)
+        along = np.stack([dnp.interp(st, s, line[:, k]) for k in range(3)], 1)
         at = wide + M14_KERB_M
         if mapped is not None and len(mapped):      # (within half the arm: further up it is the next junction's)
             d = dnp.hypot(along[:, None, 0] - mapped[:, 0], along[:, None, 1] - mapped[:, 1])
@@ -426,7 +431,7 @@ def give_way_lines(arms, crosswalks, left_hand=False):
         if s[-1] < 1.0:
             continue
         st = np.arange(0.0, min(s[-1], M14_LOOK_M), 1.0)
-        along = np.stack([np.interp(st, s, line[:, k]) for k in range(3)], 1)
+        along = np.stack([dnp.interp(st, s, line[:, k]) for k in range(3)], 1)
         at = wide + M14_KERB_M
         for j, cw in enumerate(crosswalks):
             d = dnp.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)

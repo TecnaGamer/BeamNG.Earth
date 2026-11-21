@@ -140,7 +140,7 @@ def road_points(frame, lines, step=LOW_ROAD_STEP_M):
     k = np.floor(length / step).astype(np.int64) + 1          # (samples per line: 0, step, ... <= length)
     off = np.r_[0, np.cumsum(k)[:-1]]
     at = (np.arange(int(k.sum())) - np.repeat(off, k)) * step + np.repeat(base, k)
-    return np.c_[np.interp(at, g, q[:, 0]), np.interp(at, g, q[:, 1])]
+    return np.c_[dnp.interp(at, g, q[:, 0]), dnp.interp(at, g, q[:, 1])]
 
 
 def low_points(frame, x, y, pts, ground_at, sea_at, raw=None, radius=LOW_ROAD_RADIUS_M):

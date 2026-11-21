@@ -125,7 +125,8 @@ class LeadTest(unittest.TestCase):
     def test_no_lead_no_way(self):
         tr = vegetation.Tracker(per_pose=4, geo=True)
         pose(tr, 0.0, 0.0, (85.0, 0.0))
-        self.assertLessEqual(max(dist(k, 0.0, 0.0) for k in tr.rank), tr.send_m + 1.0)
+        self.assertTrue(tr.car)         # (earthfast's own pass: the disc round the car, its tiles started nearest first)
+        self.assertLessEqual(max(dist(k, 0.0, 0.0) for k in tr.car | tr.building), tr.send_m + 1.0)
         tr.close()
 
 

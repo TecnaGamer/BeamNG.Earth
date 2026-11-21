@@ -740,6 +740,16 @@ EXTRA_IDLE_S = float(os.environ.get("BNGE_POOL_EXTRA_IDLE_S", "") or 60.0)
 REAP_CHECK_S = 5.0
 
 
+def burst_fits(name, n):
+    """Is there room under the server's memory limit for n more processes of pool name (budget.ROOM_MB, POOL_MB: the
+    watchdog's last check; each as big as the pool's biggest one)? True without a limit or before a check."""
+    import budget
+    room, mb = budget.ROOM_MB, budget.POOL_MB.get(name)
+    if room is None or not mb:
+        return True
+    return room >= n * mb
+
+
 class ElasticPool:
     """A RespawningPool of `base` processes kept for the session and, beside it, up to `extra` more started when every
     base process has a job and stopped again once they idle for EXTRA_IDLE_S: the far-tile pool's 10 processes (the 3D
@@ -781,6 +791,10 @@ class ElasticPool:
         if not self.extra_n or self.base.inflight < self.base_n or self._within_base():
             return self.base.submit(fn, *args, **kwargs)
         with self._lock:            # (the reaper stops them under it: never a submit to a pool shut down)
+            if self.extra is None and not burst_fits(self.name, self.extra_n):
+                # (nor a burst that would take the server over its memory limit: its processes as big as the base's;
+                # checked here, under the lock the reaper detaches them with)
+                return self.base.submit(fn, *args, **kwargs)
             if self.extra is None:
                 self.extra = RespawningPool(self.name, self.extra_n, *self._args, **self._kwargs)
                 self.extra_starts += 1

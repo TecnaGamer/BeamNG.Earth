@@ -30,6 +30,24 @@ ON = os.environ.get("BNE_RAILTAGS", "on") != "off"
 SHARD_ZOOM = 7
 SHARD_RETRY_S = 600             # a shard that could not be had: asked again after this long (not by every tile meanwhile)
 COLUMNS = ("railway", "gauge", "electrified", "service", "usage", "highway")    # (highway: a rail trail, railways.drawn)
+# Tags read only with BNE_RAIL_LIFECYCLE (railways.heritage: a heritage line keeps its level crossings; road revamp
+# R1h): joined (attrs osm_<tag>) and part of the shared decisions' shard slices (decisions._shard_slice) only then, so
+# with the switch off a shard carrying them changes neither the cached road layers nor the decisions' digests.
+LIFECYCLE_ON = os.environ.get("BNE_RAIL_LIFECYCLE", "off") == "on"     # (railways.RAIL_LIFECYCLE's switch)
+LIFECYCLE_TAGS = ("railway:preserved",)
+
+
+def rail_columns():
+    """The OSM tags RailTags.join adds as attrs (osm_<tag>): COLUMNS, and LIFECYCLE_TAGS with BNE_RAIL_LIFECYCLE."""
+    return COLUMNS + LIFECYCLE_TAGS if LIFECYCLE_ON else COLUMNS
+
+
+def slice_tags(t):
+    """A way's tags t as the shared decisions' slices read them (decisions._shard_slice): without LIFECYCLE_TAGS
+    unless BNE_RAIL_LIFECYCLE is on."""
+    if LIFECYCLE_ON or not isinstance(t, dict) or not any(k in t for k in LIFECYCLE_TAGS):
+        return t
+    return {k: v for k, v in t.items() if k not in LIFECYCLE_TAGS}
 
 
 _WAY_ID = re.compile(r"^w(\d+)")
@@ -317,13 +335,14 @@ class RailTags(Shards):
             return False
         ways = sh.get("ways", {})
         rec = feats.attrs.get("src_record")
-        cols = {c: np.full(len(feats), None, object) for c in COLUMNS}
+        columns = rail_columns()
+        cols = {c: np.full(len(feats), None, object) for c in columns}
         found = _tags_of(ways, [way_id(str(rec[i])) or "" for i in rail]) if rec is not None else []
         for i, t in zip(rail, found):
             if t:
-                for c in COLUMNS:
+                for c in columns:
                     cols[c][i] = t.get(c)
-        for c in COLUMNS:
+        for c in columns:
             feats.attrs["osm_" + c] = cols[c]
         lon0, lat0, lon1, lat1 = (float(v) for v in key.bounds())
         pad = 0.002
