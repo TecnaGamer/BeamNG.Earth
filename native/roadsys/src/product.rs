@@ -29,6 +29,8 @@ pub const PIECE_FORMAT: u64 = 2;       // 2 (M2): the profiles of QP_FORMAT 2, w
 pub const HALO_M: f64 = 920.0;
 pub const NEAR_M: f64 = 60.0;
 pub const PROF_HALO_M: f64 = 30.0;
+/// m round a tile its strokes' knots take the profile squares' heights (the rows it meshes; farther knots its own)
+pub const FIELD_REACH_M: f64 = 300.0;
 
 /// FNV-1a 64 of a segment's whole record (its identity in the read lists' keys).
 pub fn seg_digest(s: &Seg) -> u64 {
@@ -269,12 +271,14 @@ pub fn build_f(place: &Place, quad: [[f64; 2]; 4], id: (i32, i32), frame: u64, g
     if let Some((z_of, fkey)) = field {
         // every needed stroke's knots from the squares where they hold it (their Tier B and Tier A), else its own
         let (mut pts, mut tans, mut feats, mut at): (Vec<P2>, Vec<P2>, Vec<String>, Vec<(usize, usize)>) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let near = grow(bxf, FIELD_REACH_M);
         for si in 0..ns {
             if !need[si] || pr.z[si].is_empty() { continue; }
             let st = &net.strokes[si];
             for i in 0..pr.z[si].len() {
                 let s = (i as f64 * pr.h[si]).min(st.len());
                 let (p, t) = st.line.at(s);
+                if p[0] < near[0] || p[0] > near[2] || p[1] < near[1] || p[1] > near[3] { continue; }
                 let part = st.parts.iter().find(|q| s >= q.s0 - 1e-6 && s <= q.s1 + 1e-6).unwrap_or(&st.parts[0]);
                 pts.push(p);
                 tans.push(t);

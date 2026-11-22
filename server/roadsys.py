@@ -10,15 +10,17 @@ product declares and hands them over.
       from its own window's cells), the planar partition, markings, the tile's canonical bytes, checks and keys). One log line per tile and <cache>/roadsys/shadow-<format>/<frame>/<tile>.json; nothing the
       player sees reads them (revisit.UNKEYED_VALUES: no key holds the switch at off or shadow).
 
-  heights (M2): today's deck builder and grading take the one profile per carriageway: every whole bridge chain the
-      road tiles' stores solve (roads.BridgeProfiles._chain_solve) is handed here (chain_heights): its read list
-      (earthfast.roadsys_heights_reads, asked again until nothing is missing: the vertical components holding its
-      decks, whole, their floors' lower roads and snap trunks), then the profiles (earthfast.roadsys_heights): its
-      decks' heights per vertex (in place of deck_profile + _tie_beside, as BNE_ROADSHAPE=profile's P3b) and the
-      components' ground runs as terrain targets (grading.PROFILE_PINS: the plans' second stage over their first,
-      blockworker._profile_pins). A chain with a deck on no structure stroke, or read short, keeps today's heights
-      (recorded in STATS; short: the build not kept, solved again later). It changes what is built: a build switch
-      (revisit.keyed_env; the plans' format suffix, plancache.plans_format).
+  heights (M2): today's deck builder and grading take the one profile per carriageway, solved per profile square
+      (native/roadsys square.rs: a fixed 2 km grid of the region frame; each square from the map cells of its own
+      window, the square + 1.1 km, and the ground there alone; the squares blended by a smoothstep partition of
+      unity): every whole bridge chain the road tiles' stores solve (roads.BridgeProfiles._chain_solve) takes its
+      decks' heights per vertex from the blend on each deck's own map feature (chain_heights; in place of
+      deck_profile + _tie_beside, as BNE_ROADSHAPE=profile's P3b), and grading's second stage takes the squares' terrain
+      targets over its first (pins_near, grading.PROFILE_PINS through blockworker._profile_pins: by square, no chain
+      asked, so a point's target is the same whichever query asks). A deck vertex on no structure of its feature, or a
+      square read short: today's heights, the build not kept. Squares are memoised when read complete and kept in the
+      revisit cache (kind "rssq", DISK). It changes what is built: a build switch (revisit.keyed_env, UNKEYED_VALUES;
+      the plans' format suffix, plancache.plans_format).
 
 Frames: every product is built in the ENU frame of its region (the z8 Web-Mercator tile holding the geotile's
 centre; ~120-160 km), so a component built for two neighbouring tiles is built in one frame, from one read list.
@@ -266,8 +268,7 @@ def build_tile(gx, gy, md, dem, cells_cache=None, country=None, dump=None):
     # (M2: the profiles from the profile squares round the tile's read, no vertical component read; their own cells)
     ts = time.perf_counter()
     s0 = dict(STATS)
-    allb = np.asarray(boxes, np.float64).reshape(-1, 4)
-    rbox = [float(allb[:, 0].min()), float(allb[:, 1].min()), float(allb[:, 2].max()), float(allb[:, 3].max())]
+    rbox = [box[0] - FIELD_REACH_M, box[1] - FIELD_REACH_M, box[2] + FIELD_REACH_M, box[3] + FIELD_REACH_M]
     sqs = _squares_for(fid, frame, rbox, cc, ground_ll)
     if any(q is None for q in sqs):
         raise RuntimeError("a profile square not at hand")
@@ -369,6 +370,7 @@ _cells_of = {}              # (one _Cells per cell function: a store's roads lay
 # (markings play no part in the heights: any style)
 _STYLE = ("white", "", 0.12, 0.15, 0.15, 0.2, (3.0, 9.0), (3.0, 9.0), (3.0, 9.0), False)
 SQUARE_M = 2000.0           # native/roadsys square.rs SQUARE_M
+FIELD_REACH_M = 300.0       # m round a shadow tile its knots take the squares' heights (product.rs FIELD_REACH_M)
 CLIP_PAD_M = 5.0            # m past a query's reach its targets' lines are kept (pins_near)
 
 
