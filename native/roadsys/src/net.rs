@@ -51,6 +51,9 @@ const NOSE_HOLD_M: f64 = 20.0;
 const MAX_PIECES: usize = 64;
 const CLS_TRUNK: i64 = 2;
 const CROSS_COS: f64 = 0.7071067811865476;
+/// m a floor adds under the clearance (M2: the deck today's builder draws: its slab and girders, roads.DECK_FULL_DEPTH
+/// 2.2 m, + roads.LEVEL_MARGIN_M; M3's kits will bring each deck's own depth)
+pub const DECK_FULL_M: f64 = 2.3;
 const MPH: f64 = 1.609344;
 
 pub const K_LANE: u8 = 0;
@@ -1359,7 +1362,7 @@ fn crossings(net: &mut Net) {
                     "CA" => 5.0, "DE" => 4.7, "FR" => 4.75, "GB" => 5.03, "JP" => 4.5,
                     _ => if lo_st.cls >= 1 && lo_st.cls <= 2 { 4.9 } else { 4.4 },
                 };
-                let floor = if lo_sup.kind == SUP_TUNNEL { 8.0 } else { clear + 1.2 };
+                let floor = if lo_sup.kind == SUP_TUNNEL { 8.0 } else { clear + DECK_FULL_M };
                 let stacked = lo_sup.kind == SUP_STRUCT;
                 out.push(Crossing { a: sa, sa: s_a, b: sb, sb: s_b, p, upper: up, floor, along: false, stacked });
             }
@@ -1416,7 +1419,7 @@ fn crossings(net: &mut Net) {
                         "CA" => 5.0, "DE" => 4.7, "FR" => 4.75, "GB" => 5.03, "JP" => 4.5,
                         _ => if lo_st.cls >= 1 && lo_st.cls <= 2 { 4.9 } else { 4.4 },
                     };
-                    let floor = if lo_sup.kind == SUP_TUNNEL { 8.0 } else { clear + 1.2 };
+                    let floor = if lo_sup.kind == SUP_TUNNEL { 8.0 } else { clear + DECK_FULL_M };
                     let (a, b2, s1, s2) = if sa < sb { (sa, sb, s, s_b) } else { (sb, sa, s_b, s) };
                     out.push(Crossing { a, sa: s1, b: b2, sb: s2, p, upper: sa, floor, along: true, stacked: lo_sup.kind == SUP_STRUCT });
                     along += 1;

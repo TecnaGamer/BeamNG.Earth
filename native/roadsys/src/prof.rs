@@ -36,7 +36,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub const H_M: f64 = 5.0;
-pub const QP_FORMAT: u64 = 2;            // 2 (M2): split components, feasible floors, measured decks, the chord
+pub const QP_FORMAT: u64 = 4;            // 2 (M2): split components, feasible floors, measured decks, the chord
 const ROUNDS: usize = 12;
 const W_PIN: f64 = 1e7;
 const W_COUPLE: f64 = 1e9;          // (M2) couplings over every other term: a nose, joint or deck node never parts
@@ -48,14 +48,18 @@ const A_MAX: f64 = 0.3;
 const DECK_OVER_GROUND: f64 = 1.5;
 const TUNNEL_COVER: f64 = 8.0;
 const END_FREE_M: f64 = 15.0;
-const DECK_DEPTH: f64 = 1.2;        // net.rs crossings' floor: clearance + this
-const STACK_DEPTH: f64 = 0.6;       // a double deck's upper slab over the lower deck's clearance
+const DECK_DEPTH: f64 = crate::net::DECK_FULL_M;   // net.rs crossings' floor: clearance + this
+// (a double deck's upper deck over the lower deck's clearance: today's builder draws it with its full depth too, M2;
+// a stacked kit's thinner slab comes with M3)
+const STACK_DEPTH: f64 = crate::net::DECK_FULL_M;
 const FLOOR_SLACK: f64 = 0.05;
 const DIG_MAX: f64 = 2.0;
 const OBS_W: f64 = 1.0;
 const W_CHORD: f64 = 0.05;          // a deck knot's pull toward its approaches' chord (per m: a ground knot's 1)
 const CHORD_OUT_M: f64 = 10.0;
-const UNDER_OBS_M: f64 = 25.0;      // m round a stroke's crossing under a structure its measurements are left out             // a measured deck knot's weight (per m: a ground knot's)           // m a ground road may dip under its ground (an underpass's cut)      // m a relaxed floor keeps under what the grades reach
+const UNDER_OBS_M: f64 = 25.0;
+const UNDER_FILL_M: f64 = 4.0;      // m past a structure's half width its crossed road's ground is lined across
+const UNDER_FILL_DZ: f64 = 0.3;     // m a ground point stands over that line to be taken for the structure      // m round a stroke's crossing under a structure its measurements are left out             // a measured deck knot's weight (per m: a ground knot's)           // m a ground road may dip under its ground (an underpass's cut)      // m a relaxed floor keeps under what the grades reach
 pub const CAP_KM: f64 = 40.0;
 const STORE_MAX: usize = 4096;
 
@@ -230,6 +234,13 @@ fn grade_limit(net: &Net, si: usize) -> f64 {
     if st.cls == 1 && !link { 0.05 } else if st.cls == 2 && !link { 0.06 } else if link { 0.07 } else { 0.10 }
 }
 
+/// The cost of moving a stroke, by class (motorway 10, trunk 6, primary and ramps 2, the rest 1).
+fn class_weight(net: &Net, si: usize) -> f64 {
+    let st = &net.strokes[si];
+    let link = st.parts.iter().any(|p| net.segs[net.edges[p.edge].seg].link);
+    if link { 2.0 } else { match st.cls { 1 => 10.0, 2 => 6.0, 3 => 2.0, _ => 1.0 } }
+}
+
 /// The approach reach of a stroke: 2 x the vertical curve that takes its class's grade at the comfort limit.
 pub fn reach_m(net: &Net, si: usize) -> f64 {
     let v = (net.strokes[si].kmh / 3.6).max(5.0);
@@ -372,22 +383,25 @@ fn add_spans(net: &Net, spans: &[Span], h: &[f64], g: &[Vec<f64>], ob: &[Vec<f64
         let lam = ls * ls * ls * ls;
         let m = gs.len();
         let var = |i: usize| sp.base + (i - sp.i0);
+        // (M2: the whole stroke's objective by its class, so its own shape (Tier A) is the same and moving it within a
+        // component costs this much more: freeways stay down and the cross street rises, design G3)
+        let cw = class_weight(net, sp.si);
         for i in sp.i0..=sp.i1 {
             let s = (i as f64 * hh).min(st.len());
             let sup = st.support_at(s);
-            let w = if sup.kind == SUP_GROUND { hh } else { 1e-4 * hh };
+            let w = cw * if sup.kind == SUP_GROUND { hh } else { 1e-4 * hh };
             qp.trip.push((var(i), var(i), w));
             qp.rhs[var(i)] += w * gs[i];
             // (M2: a deck knot pulled lightly toward the chord between its approaches' grounds: on a long deck with
             // nothing measured the curvature alone carried the approach ramps on into a 4-5 m hump, Seal Beach)
             if sup.kind == SUP_STRUCT {
                 let c = chord(st, sup, hh, gs, s);
-                qp.trip.push((var(i), var(i), W_CHORD * hh));
-                qp.rhs[var(i)] += W_CHORD * hh * c;
+                qp.trip.push((var(i), var(i), cw * W_CHORD * hh));
+                qp.rhs[var(i)] += cw * W_CHORD * hh * c;
             }
             // (M2: a measured deck height, a soft target with a ground knot's weight)
             if sup.kind == SUP_STRUCT {
-                if let Some(&o) = ob[sp.si].get(i) { if o.is_finite() { qp.trip.push((var(i), var(i), OBS_W * hh)); qp.rhs[var(i)] += OBS_W * hh * o; } }
+                if let Some(&o) = ob[sp.si].get(i) { if o.is_finite() { qp.trip.push((var(i), var(i), cw * OBS_W * hh)); qp.rhs[var(i)] += cw * OBS_W * hh * o; } }
             }
             // (M2: a ground road dips at most DIG_MAX under its ground: a floor out of reach is relaxed, not dug)
             if sup.kind == SUP_GROUND {
@@ -403,7 +417,7 @@ fn add_spans(net: &Net, spans: &[Span], h: &[f64], g: &[Vec<f64>], ob: &[Vec<f64
                 qp.cons.push(Ineq { f: mklin(&[(var(i), 1.0)]), bound: gs[i] - TUNNEL_COVER, ge: false, w: W_SIDE, kind: 3, orig: f64::NAN });
             }
         }
-        let c = lam / (hh * hh * hh);
+        let c = cw * lam / (hh * hh * hh);
         for i in (sp.i0 + 1)..sp.i1 {
             let f = mklin(&[(var(i - 1), 1.0), (var(i), -2.0), (var(i + 1), 1.0)]);
             add_sq(&mut qp.trip, &mut qp.rhs, &f, 0.0, c);
@@ -801,6 +815,37 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
     let mut g: Vec<Vec<f64>> = vec![Vec::new(); ns];
     let mut k = 0;
     for si in 0..ns { if want(si) { g[si] = gz[k..k + nk[si]].to_vec(); k += nk[si]; } }
+    // (M2) a ground road's ground under a structure crossing over it: where the DEM rises over the line across the
+    // structure's width (a surface model holding the deck itself: Canada's HRDEM, Copernicus), that line (today's
+    // grading takes such bridges out of the ground too: DECK_GROUND)
+    let mut offs_u = Vec::new();
+    let mut under_iv: BTreeMap<usize, Vec<(f64, f64)>> = BTreeMap::new();
+    for c in &net.crossings {
+        let (up, us, lo, ls) = if c.upper == c.a { (c.a, c.sa, c.b, c.sb) } else { (c.b, c.sb, c.a, c.sa) };
+        if !want(lo) || g[lo].is_empty() || net.strokes[up].support_at(us).kind != SUP_STRUCT { continue; }
+        if net.strokes[lo].support_at(ls).kind != SUP_GROUND { continue; }
+        net.strokes[up].offsets(us, &mut offs_u);
+        let hw = if offs_u.is_empty() { 5.0 } else { offs_u[0].max(-offs_u[offs_u.len() - 1]) };
+        under_iv.entry(lo).or_default().push((ls - hw - UNDER_FILL_M, ls + hw + UNDER_FILL_M));
+    }
+    // (the crossed ranges of one road merged first: three ramps over one street, each range's ends under the next deck)
+    for (lo, mut iv) in under_iv {
+        iv.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let mut merged: Vec<(f64, f64)> = Vec::new();
+        for x in iv { if let Some(l) = merged.last_mut() { if x.0 <= l.1 { if x.1 > l.1 { l.1 = x.1; } continue; } } merged.push(x); }
+        let m = g[lo].len();
+        let hl = h[lo];
+        for (a, b) in merged {
+            let i0 = ((a / hl).floor().max(0.0) as usize).min(m - 1);
+            let i1 = ((b / hl).ceil() as usize).min(m - 1);
+            if i1 < i0 + 2 { continue; }
+            let (za, zb) = (g[lo][i0], g[lo][i1]);
+            for i in (i0 + 1)..i1 {
+                let line = za + (zb - za) * ((i - i0) as f64 / (i1 - i0) as f64);
+                if g[lo][i] > line + UNDER_FILL_DZ { g[lo][i] = line; }
+            }
+        }
+    }
     let mut ob: Vec<Vec<f64>> = vec![Vec::new(); ns];
     if let Some(f) = obs_of {
         let mut runs: Vec<ObsRun> = Vec::new();

@@ -243,7 +243,8 @@ fn boundary_order(net: &Net, nodes: &[usize], arms: &[(f64, usize, bool)], inter
     }
     for v in items.values_mut() { v.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap().then((x.1, x.2).cmp(&(y.1, y.2)))); }
     let _ = nodes;
-    let k0 = (0..arms.len()).min_by_key(|&k| (net.strokes[arms[k].1].uid, arms[k].2)).unwrap();
+    // (no arm leaves the cluster: a closed loop, or a read cut round it: nothing to order, recorded as a fallback)
+    let Some(k0) = (0..arms.len()).min_by_key(|&k| (net.strokes[arms[k].1].uid, arms[k].2)) else { return (arms.to_vec(), true) };
     let node0 = leave(arms[k0].1, arms[k0].2).1;
     let mut at = (node0, items[&node0].iter().position(|x| x.3 == It::Arm(k0)).unwrap());
     let mut order = vec![k0];

@@ -453,7 +453,8 @@ def square(fid, frame, sq, cell_fn, ground_ll=None):
             disk = DISK_FN()
         if disk is not None and b.complete:
             import hashlib
-            name = "sq%d_%d_%d_%s" % (FORMAT, sq[0], sq[1], hashlib.sha256(repr((fid, stamps, mk[3])).encode()).hexdigest()[:24])
+            name = "sq%d.%d_%d_%d_%s" % (FORMAT, int(getattr(fast._ef, "VERSION", 0)), sq[0], sq[1],
+                                          hashlib.sha256(repr((fid, stamps, mk[3])).encode()).hexdigest()[:24])
             try:
                 data = disk[0](name)
                 if data is not None:
