@@ -38,6 +38,11 @@ _CA = _US._replace(centre_rural=(3.0, 6.0), centre_urban=(3.0, 6.0), lane_rural=
 _GB = Style(centre="line_white", w=0.10, w_motorway=0.15, edge=0.15, edge_motorway=0.20,
             centre_rural=(3.0, 6.0), centre_urban=(2.0, 4.0), lane_rural=(2.0, 7.0), lane_urban=(1.0, 5.0),
             lane_motorway=(2.0, 7.0), left_edge=None, double_centre_urban=False, double_gap=0.175, min_centre_m=5.5)
+# Hong Kong: the Transport Department's Transport Planning and Design Manual, Volume 3 chapter 5 (August 2026 edition),
+# section 5.4.2. Lane lines as Britain's: RM 1101 1 / 5 m under 70 km/h, RM 1102 2 / 7 m at 70 km/h or more (table
+# 5.4.2.1). One centre line, RM 1103 3 / 5 m (table 5.4.2.2). Every line 100 mm, the continuous edge line too (RM 1109,
+# table 5.4.2.7). The double white lines' sizes are in its figures only: Britain's gap stays.
+_HK = _GB._replace(w_motorway=0.10, edge=0.10, edge_motorway=0.10, centre_rural=(3.0, 5.0), centre_urban=(3.0, 5.0))
 _DE = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.12, edge_motorway=0.30,
             centre_rural=(6.0, 12.0), centre_urban=(3.0, 6.0), lane_rural=(6.0, 12.0), lane_urban=(3.0, 6.0),
             lane_motorway=(6.0, 12.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
@@ -76,7 +81,7 @@ _NO = _YELLOW._replace(left_edge="line_yellow")
 
 STYLES = {"US": _US, "CA": _CA, "GB": _GB, "IE": _GB, "IM": _GB, "JE": _GB, "GG": _GB, "DE": _DE, "AT": _DE,
           "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _AU,
-          "SE": _SE, "NO": _NO}
+          "SE": _SE, "NO": _NO, "HK": _HK}
 # where centre lines are yellow (outside the US and Canada): the Americas, Norway, Finland, South Korea, China, Taiwan,
 # Thailand (research table 4.4)
 YELLOW_CENTRE = {"MX", "GT", "BZ", "HN", "SV", "NI", "CR", "PA", "CU", "DO", "HT", "PR", "JM", "BS", "TT", "CO", "VE",
