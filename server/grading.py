@@ -78,6 +78,25 @@ CLASS_SIGMA_M = {"secondary": 25.0, "tertiary": 20.0, "unclassified": 16.0, "res
 # over a road is a spike a few samples wide, and the Gaussian spread it into a hump in the road under (GitHub #271, an
 # 8.5 m spike near Thetford: a 3.2 m hump). Slopes, crests and steps longer than the window stay.
 MEDIAN_M = float(os.environ.get("BNE_GRADE_MEDIAN", "24"))
+# Roads that follow the land (the user, 2026-11-21: "hills and dips are too flattened"): the smoothing above was sized
+# for the coarse and noisy elevation models; on lidar (USGS 3DEP and the national lidar models: a bare-earth surface
+# already smooth along a road) it took the road's real crests and dips out with the noise. A Gaussian of sigma s keeps
+# exp(-2 pi^2 s^2 / L^2) of a crest-to-crest wave L long: at 20 m (a tertiary road) a 100 m dip kept 45 % of its depth,
+# at 40 m (a primary road) a 200 m one 45 %; at FOLLOW_CLASS_SIGMA_M's 9 and 14 m, 85 % and 90 %. Motorways and trunks
+# keep SIGMA_MAJOR_M (built to long, gentle grades). The median shrinks to FOLLOW_MEDIAN_M so a crest or dip at least
+# half that long stays. One switch for every caller (the chains', the pins', l0roads' profile_sigma): pieces of one
+# road planned in other calls still smooth alike. On the coarse global model the roads ride more of its noise: a
+# switch for lidar places. BNE_ROAD_FOLLOW=on (the settings page's "Roads follow the land").
+FOLLOW_ON = os.environ.get("BNE_ROAD_FOLLOW", "off") == "on"
+# (first cut 14 / 11 / 9 / 8 / 7 / 6 m and a 12 m median; the user on Bakers Ridge Road, Morgantown, a rough residential
+# street: "roads still feel a little flattened", 2026-11-21. The plan's 4 m vertices and the physics block's 2 m lattice
+# take nothing much shorter than ~8 m to the tyres either way.)
+FOLLOW_CLASS_SIGMA_M = {"primary": 12.0, "secondary": 9.0, "tertiary": 6.0, "unclassified": 5.0,
+                        "residential": 4.0, "service": 4.0, "living_street": 4.0}
+FOLLOW_LINK_SIGMA_M = 8.0   # a slip road's (SIGMA_M otherwise)
+FOLLOW_MEDIAN_M = 8.0
+if FOLLOW_ON:
+    MEDIAN_M = min(MEDIAN_M, FOLLOW_MEDIAN_M)
 DIRT_MEDIAN_M = 10.0        # (tracks keep their small real bumps)
 RAIL_GRADE_ON = os.environ.get("BNE_RAIL_GRADE", "1") != "0"    # the ground laid to the railways' bed (railways.py)
 RAIL_TAG = "rail:"
@@ -1306,9 +1325,12 @@ def profile_sigma(spec, coarse=False):
             # minor dirt roads rode the elevation data's metre noise: IRI 1.5-2.3 against 0.6-1.2, Norfolk, Latvia)
             return max(SIGMA_M, CLASS_SIGMA_M.get(spec.cls, SIGMA_M))
         return DIRT_SIGMA_MINOR_M        # a track keeps more of the ground's own shape
-    if spec.cls in MAJOR_CLASSES and not getattr(spec, "link", False):
+    link = getattr(spec, "link", False)
+    if FOLLOW_ON and spec.cls not in ("motorway", "trunk"):
+        return FOLLOW_LINK_SIGMA_M if link else FOLLOW_CLASS_SIGMA_M.get(spec.cls, FOLLOW_CLASS_SIGMA_M["service"])
+    if spec.cls in MAJOR_CLASSES and not link:
         return max(SIGMA_M, SIGMA_MAJOR_M)
-    return max(SIGMA_M, CLASS_SIGMA_M.get(spec.cls, SIGMA_M)) if not getattr(spec, "link", False) else SIGMA_M
+    return max(SIGMA_M, CLASS_SIGMA_M.get(spec.cls, SIGMA_M)) if not link else SIGMA_M
 
 
 # strength of a minor dirt road's damage (1: as below). Off by default: its 3-4 cm potholes every ~5 m across the

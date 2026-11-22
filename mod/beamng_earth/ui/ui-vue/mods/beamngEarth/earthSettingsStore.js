@@ -116,6 +116,8 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expTerrainBumps", type: "bool", default: false, name: "Rougher land off the roads", desc: "Experimental. Small bumps in the open land away from the roads, so fields and verges are not perfectly smooth. Costs some world building time.",
         note: RESTART_NOTE },
+      { id: "expRoadFollow", type: "bool", default: false, name: "Roads follow the land", desc: "Experimental. Roads keep more of the real hills and dips in the ground under them instead of being smoothed flat. Best where the elevation comes from lidar (most of the US and much of Europe); on the coarse global elevation roads get bumpier. Motorways and trunk roads are unchanged.",
+        note: RESTART_NOTE },
       { id: "expCliffWalls", type: "bool", default: false, name: "Rock faces in deep road cuts", desc: "Experimental. Where a country road runs through a deep cutting, the sides become rock faces instead of dry-stone walls.",
         note: RESTART_NOTE },
       { id: "expTunnelLids", type: "bool", default: false, name: "Ground over shallow tunnels", desc: "Experimental. Puts back the ground or deck the elevation data leaves out over short tunnels under a road (cut-and-cover underpasses), so the road on top does not dip into a pit. Costs some world building time.",
