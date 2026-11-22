@@ -5038,17 +5038,8 @@ def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, width
     # level, so a ramp under the upper deck rose with it and lifted it again each round (the Morrison Bridge 21 ->
     # 41 m over the Willamette, 2026-10-19)
     for _ in range(1 if bridge_profile_mode() == "curve" else 4):
-        extra = []
         # (LEVEL_SPACING: the clearance of the lower part's own road, level_clear; else `clear`)
-        for i, j, si, sj in over:
-            if levels[i] == levels[j]:
-                continue
-            hi, lo, sh, sl = (i, j, si, sj) if levels[i] > levels[j] else (j, i, sj, si)
-            extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])),
-                          None if level_clear is None else level_clear[lo], levels[hi]))
-        for hi, sh, lo, sl in stacks:               # a deck over another along it (an upper roadway)
-            extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])),
-                          None if level_clear is None else level_clear[lo], levels[hi]))
+        extra = _stack_extra(over, stacks, levels, arcs, zs, level_clear)
         if not extra:
             break
         new = deck_profile_once(lines, ground_fn, list(crossings) + extra, clear, grade, lift, n_road=n_road,
@@ -5058,6 +5049,14 @@ def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, width
             break
         zs = new
     zs = _merge_overlaps(lines, zs, widths, levels, pins=pins) if widths is not None and not _no_merge() else zs
+    if STACK_RECHECK and widths is not None and not _no_merge() and over and \
+            _stack_short(over, levels, arcs, zs, clear, STACK_RECHECK_M, level_clear):
+        # (the merge raised a lower deck to the one beside it after its upper was solved over it: once more from there)
+        extra = _stack_extra(over, stacks, levels, arcs, zs, level_clear)
+        if extra:
+            zs = deck_profile_once(lines, ground_fn, list(crossings) + extra, clear, grade, lift, n_road=n_road,
+                                   levels=levels, pins=pins, crest=crest, fast=fast)
+            zs = _merge_overlaps(lines, zs, widths, levels, pins=pins)
     return _ease(lines, zs, ground_fn, lift) if bridge_profile_mode() == "curve" else zs
 
 
@@ -5065,7 +5064,63 @@ def _no_merge():
     return getattr(_NO_MERGE, "on", False)
 
 
+def _stack_extra(over, stacks, levels, arcs, zs, level_clear=None):
+    """deck_profile's requirements of the upper decks over the lower at their crossings (over) and along their stacks,
+    from the heights zs: (upper part, arc, the lower's height there, its clearance (level_clear's for the lower, else
+    None: deck_profile's `clear`), the upper's level). Pure."""
+    extra = []
+    for i, j, si, sj in over:
+        if levels[i] == levels[j]:
+            # (the map's same layer for two decks crossing already SAME_LEVEL_APART_M apart: not a junction, one
+            # over the other. The GA-400 / I-285 flyover e33ee9a3 and the ramp 3e166703 under it, both layer 2,
+            # had no clearance asked: 4.1 m under its girders where the inventory gives 6.5, 2026-11-21)
+            if SAME_LEVEL_APART_M is None:
+                continue
+            zi, zj = float(dnp.interp(si, arcs[i], zs[i])), float(dnp.interp(sj, arcs[j], zs[j]))
+            if not (np.isfinite(zi) and np.isfinite(zj)) or abs(zi - zj) < SAME_LEVEL_APART_M:
+                continue
+            hi, lo, sh, sl = (i, j, si, sj) if zi > zj else (j, i, sj, si)
+            extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])), None if level_clear is None else level_clear[lo], levels[hi]))
+            continue
+        hi, lo, sh, sl = (i, j, si, sj) if levels[i] > levels[j] else (j, i, sj, si)
+        extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])), None if level_clear is None else level_clear[lo], levels[hi]))
+    for hi, sh, lo, sl in stacks:               # a deck over another along it (an upper roadway)
+        extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])), None if level_clear is None else level_clear[lo], levels[hi]))
+    return extra
+
+
 STACK_STEP_M = 16.0     # m between the points where an upper deck must clear the one under it (_deck_stacks)
+# curve mode solves the decks' crossings in one round (more lifted the Morrison Bridge every round, see deck_profile);
+# where that round left an upper deck STACK_RECHECK_M or more short of its clearance over the lower (the lower rose in
+# it), one more round from the heights it gave. The GA-400 / I-285 flyover e33ee9a3 over the ramp 3e166703: 1.3 m
+# short, 4.1 m under its girders where the inventory gives 6.5 (2026-11-21). BNE_STACK_RECHECK=off: one round.
+STACK_RECHECK = os.environ.get("BNE_STACK_RECHECK", "on") != "off"
+STACK_RECHECK_M = 0.3
+
+
+def _stack_short(over, levels, arcs, zs, clear, tol, level_clear=None):
+    """Does an upper deck of a crossing (over: (i, j, arc on i, arc on j)) stand tol or more short of clear over the
+    lower (a higher level; the same level SAME_LEVEL_APART_M apart: the higher)? Pure."""
+    for i, j, si, sj in over:
+        zi, zj = float(np.interp(si, arcs[i], zs[i])), float(np.interp(sj, arcs[j], zs[j]))
+        if not (np.isfinite(zi) and np.isfinite(zj)):
+            continue
+        if levels[i] == levels[j]:
+            if SAME_LEVEL_APART_M is None or abs(zi - zj) < SAME_LEVEL_APART_M:
+                continue
+            up, lo = max(zi, zj), min(zi, zj)
+        else:
+            up, lo = (zi, zj) if levels[i] > levels[j] else (zj, zi)
+        need = clear
+        if level_clear is not None:
+            k = (j if zi > zj else i) if levels[i] == levels[j] else (j if levels[i] > levels[j] else i)
+            need = clear if level_clear[k] is None else level_clear[k]
+        if up - lo < need - tol:
+            return True
+    return False
+# Two decks the map gives the same level crossing this far apart or more (deck_profile's first solve): one over the
+# other, the upper asked its clearance over the lower as across levels. BNE_SAME_LEVEL_APART=off: never.
+SAME_LEVEL_APART_M = None if os.environ.get("BNE_SAME_LEVEL_APART", "on") == "off" else 3.0
 
 
 def _deck_stacks(lines, levels, widths, step=STACK_STEP_M):
