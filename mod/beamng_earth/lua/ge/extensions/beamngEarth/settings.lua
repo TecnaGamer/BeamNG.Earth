@@ -142,6 +142,7 @@ M.SCHEMA = {
   expPriorityStops = { kind = 'bool', default = false, label = 'Right of way by road class' },
   expRoadBumps = { kind = 'bool', default = false, label = 'Bumpy road surfaces' },
   expRoughDirt = { kind = 'bool', default = false, label = 'Rough dirt roads' },
+  expRuralBank = { kind = 'bool', default = false, label = 'Banked country roads' },
   expWearStrips = { kind = 'bool', default = false, label = 'Tyre polish, crack networks and manholes' },
   expGradeGuard = { kind = 'bool', default = false, label = 'Road steepness limit' },
   expPhotoSurface = { kind = 'bool', default = false, label = 'Road surface from aerial photos' },
@@ -230,7 +231,7 @@ M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 't
   'creditsCorner', 'creditsSize', 'mainMenuTile', 'cacheCapGb', 'routeDownload', 'routeAvoidHighways', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
   'devMapKm',
   -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)
-  'expNlRoadSigns', 'expRoadRevamp', 'expSurfaceOverlay', 'expNewSidewalks', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
+  'expNlRoadSigns', 'expRoadRevamp', 'expSurfaceOverlay', 'expNewSidewalks', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt', 'expRuralBank',
   'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
   'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
   'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }

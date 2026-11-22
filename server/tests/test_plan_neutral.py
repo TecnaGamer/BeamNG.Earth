@@ -71,6 +71,8 @@ PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARE
               "BNE_DECK_K_SPEED", "BNE_RACEWAY_DIG", "BNE_FAST_DECK_ENDS", "BNE_FAST_GAP", "BNE_FAST_DECK_GROUND", "BNE_RAIL_LIFECYCLE",
               "BNE_RAIL_SEAM_NATURAL",
               "BNE_SPEED_TAPERS",
+              # (grading.RURAL_BANK_ON: the plans' cross slopes)
+              "BNE_RURAL_BANK",
               # (road revamp v2 in the Revamped roads setting, 2026-11-19)
               "BNE_BATTER", "BNE_ROADSHAPE", "BNE_SIDEWALK_V2", "BNE_ROADSURF_V3")
 # Experimental switches the planning does not read that are still NOT on the list, and why (each keeps its keys)

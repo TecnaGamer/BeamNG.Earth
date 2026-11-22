@@ -108,6 +108,8 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expRoughDirt", type: "bool", default: false, name: "Rough dirt roads", desc: "Experimental. Minor dirt roads get potholes and worn, leaning surfaces for a rally feel. Can feel like a motocross track at speed.",
         note: RESTART_NOTE },
+      { id: "expRuralBank", type: "bool", default: false, name: "Banked country roads", desc: "Experimental. Country roads below trunk roads take the sideways tilt of the real road, read from lidar elevation: banked where the real bend is banked, level where it is level, up to 8 %. Where there is no lidar, main roads lean gently into their bends and back roads stay level. Town streets, slip roads, mountain pass roads, roundabouts and bridges stay level across.",
+        note: RESTART_NOTE },
       { id: "expWearStrips", type: "bool", default: false, name: "Tyre polish, crack networks and manholes", desc: "Experimental. Extra road wear decals: polished tyre tracks, sealed and alligator crack networks across the lanes and manhole covers. They can look too bright for now. Needs Road surface detail at Full.",
         note: RESTART_NOTE },
       { id: "expGradeGuard", type: "bool", default: false, name: "Road steepness limit", desc: "Experimental. Caps how steep each class of road may be (unless the ground itself is that steep), smoothing out spikes the elevation data puts in roads. Changes the height of every road.",
