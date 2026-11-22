@@ -151,6 +151,15 @@ DEFAULT_CACHE = os.path.expanduser("~/.cache/beamng-earth")
 DEFERRED = (netfetch.Deferred, netfetch.PolicyDenied, netfetch.BudgetExceeded, netfetch.HostUnavailable,
             netfetch.RateLimited)
 
+
+def executor_closed(e):
+    """Did a thread pool refuse e's work because it was shut down? At a process's exit concurrent.futures stops every
+    pool's workers while the builds still running finish: their next submit fails with this (gate 293, a builder
+    process ending with layer builds on its threads). Not a source's failure: an optional source's "go on without it"
+    would store the cell without it for good."""
+    return isinstance(e, RuntimeError) and str(e).startswith("cannot schedule new futures")
+
+
 # Provenance per source (sources + licences for the credits overlay; exact wordings in CREDITS.md).
 WORLDCOVER = {
     "id": "esa-worldcover", "name": "ESA WorldCover 10 m 2021 v200", "release": maprasters.WORLDCOVER_RELEASE,
@@ -973,7 +982,7 @@ class MapData:
         except osmtagshards.NotInUse:
             return False                # (none published, or off)
         except Exception as e:
-            if isinstance(e, DEFERRED) and kind not in ("demand", "urgent"):
+            if (isinstance(e, DEFERRED) and kind not in ("demand", "urgent")) or executor_closed(e):
                 raise
             shards.down(e)
             return False
@@ -1023,6 +1032,8 @@ class MapData:
             log.warning("mapdata: OSM road tags of %s: the host is busy (%s); the roads go on without them", key, kind)
             return {}, []
         except Exception as e:          # optional: the roads go on with their guesses
+            if executor_closed(e):
+                raise                   # (not a source's failure: the roads would be stored without their tags)
             log.warning("mapdata: OSM road tags of %s: %s: %s", key, type(e).__name__, e)
             return {}, []
 

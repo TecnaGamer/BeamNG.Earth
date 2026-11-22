@@ -601,9 +601,9 @@ class NoSeamTest(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(c.dir, str(rk[0]), f"{rk[1]}.none")))
             key = (U, 16, rk[0] * 4 + 1, rk[1] * 4 + 2)
             t = im.tiles([key])[key]
-            t0 = time.perf_counter()
+            t0 = time.thread_time()             # (CPU time: a preempted wall-clock 5 ms measured the machine's load)
             self.assertEqual(c.apply(key, t.rgb, im), (None, True))
-            self.assertLess(time.perf_counter() - t0, 0.005)
+            self.assertLess(time.thread_time() - t0, 0.005)
             frame = geodesy.EnuFrame(*lonlat(w, *w.P))
             got, used = im.render(frame, *imagery.gutter_square(-300.0, -300.0, 600.0, 256), 256)
             im.close()
@@ -920,9 +920,12 @@ class FieldScaleTest(unittest.TestCase):
                 mg = (lambda ty=ty, tx=tx: pad[ty * 256:ty * 256 + 256 + 2 * M, tx * 256:tx * 256 + 256 + 2 * M])
                 best = math.inf
                 for _ in range(3 if timing is not None else 1):
-                    t0 = time.perf_counter()
+                    # (this thread's CPU time: apply is numpy in the calling thread. Wall time measured the machine's
+                    # load: a median of 11.6 ms in the mini PC lane, 6 here, and a 44 ms max beside a CPU burner where
+                    # the thread's own time stayed 3.5 ms)
+                    t0 = time.thread_time()
                     r = self.F.apply(t, 16, tx, ty, 12, mg)
-                    best = min(best, time.perf_counter() - t0)
+                    best = min(best, time.thread_time() - t0)
                 if timing is not None:
                     has_band = (self.F.sid[self.F.pb + ty * 64:self.F.pb + ty * 64 + 64,
                                            self.F.pb + tx * 64:self.F.pb + tx * 64 + 64] >= 0).any()
@@ -976,8 +979,9 @@ class FieldScaleTest(unittest.TestCase):
             self.assertLessEqual(int(np.percentile(diff[off_line], 99)), 3, z)
 
     def test_per_tile_cost(self):
-        """§7 test 9 (loose): < 10 ms per 256 px tile (the median; any one tile < 25 ms: the max alone failed every
-        gate's loaded parallel pass at ~10.8 ms with medians of 7.9 / 3.6, 2026-11-05), unchanged tiles ~0."""
+        """§7 test 9 (loose): < 10 ms of CPU per 256 px tile (the median; any one tile < 25 ms), unchanged tiles ~0.
+        CPU time of the applying thread, not wall time: wall time failed the gates' loaded parallel passes (a max of
+        ~10.8 ms with medians of 7.9 / 3.6, 2026-11-05; a median of 11.6 ms in the mini PC lane)."""
         t = {}
         self.apply16(t)
         ms = {k: 1000 * float(np.max(v)) for k, v in t.items()}

@@ -11,6 +11,7 @@ import math
 import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -536,27 +537,52 @@ class SessionCreditsTest(test_server.ServerHarness):
         self.assertEqual(later[-1]["farIds"], ["img:eox2023", "dem:mapterhorn"])
 
     def test_throttle_in_session(self):
-        """Many swaps and poses: messages at least one interval apart (server send times)."""
-        sent = []
-        conn_send = earthd.Connection.send
+        """Many swaps and poses: at most one credits check per interval (server clock), the pokes in between folded into
+        the scheduled check, and every message sent by a check: messages at least one interval apart."""
+        # (by the throttle's own decisions, not by how many messages a stretch of wall time saw: under the gates'
+        # SCHED_IDLE load the tiles of 3 s of poses were shown too late for a second message, gates 291 and 294)
+        clock = self.server.credits.clock
+        checks, pokes, sent, in_check = [], [], [], []
+        poke, check, conn_send = credits.Tracker.poke, credits.Tracker.check, earthd.Connection.send
+
+        def poke_w(tr, conn):
+            pokes.append(tr.timer is not None or clock() - tr.last_check < self.INTERVAL)   # early: to be folded
+            poke(tr, conn)
+
+        def check_w(tr, conn):
+            in_check.append(True)
+            try:
+                check(tr, conn)
+            finally:
+                in_check.pop()
+            checks.append(tr.last_check)
 
         def send(conn, msg):
             if msg.get("type") == "credits":
-                sent.append(self.server.credits.clock())
+                sent.append((clock(), bool(in_check)))
             conn_send(conn, msg)
-        earthd.Connection.send = send
+        credits.Tracker.poke, credits.Tracker.check, earthd.Connection.send = poke_w, check_w, send
+        self.addCleanup(setattr, credits.Tracker, "poke", poke)
+        self.addCleanup(setattr, credits.Tracker, "check", check)
         self.addCleanup(setattr, earthd.Connection, "send", conn_send)
         c = self.c
         self.hello()
         aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
         c.send({"type": "commit_anchor", "anchorId": aid})
-        for i in range(30):                         # 10 poses a second, the tiles swapping under the car
+        end = time.monotonic() + 120                # (a hang guard only)
+        i = 0
+        # 10 poses a second, the tiles swapping under the car, until the throttle has folded pokes into a few checks
+        while i < 30 or not (len(checks) >= 4 and sum(pokes) >= 8 and sent):
+            self.assertLess(time.monotonic(), end, (len(checks), sum(pokes), len(sent)))
             self.pose(aid, i * 60.0, 0, vx=600)
             c.drain(0.1)
+            i += 1
         c.drain(3 * self.INTERVAL)
-        self.assertGreaterEqual(len(sent), 2)
-        gaps = [b - a for a, b in zip(sent, sent[1:])]
+        self.assertTrue(all(by_check for _, by_check in sent), "credits sent outside a throttled check")
+        gaps = [b - a for a, b in zip(checks, checks[1:])]
         self.assertGreaterEqual(min(gaps), self.INTERVAL * 0.95, gaps)
+        gaps = [b - a for (a, _), (b, _) in zip(sent, sent[1:])]
+        self.assertGreaterEqual(min(gaps, default=self.INTERVAL), self.INTERVAL * 0.95, gaps)
 
 
 class DefaultServerTest(test_server.ServerHarness):
