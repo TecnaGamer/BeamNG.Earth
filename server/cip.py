@@ -59,17 +59,19 @@ CONTENT = 1
 ZOOM = 14
 ARCHIVE = "cells"
 PART_MB = 32               # a part's data at most: a CDN edge caches it whole on the first read
-LEVEL = 19
+LEVEL = 17                 # zstd: the size of 19 (within 1 %) at 2-3x its encode speed (a dense Manhattan cell: 0.24 s)
 ON = os.environ.get("BNE_V2_CIP", "off").strip().lower() == "on"
 BASE_URL = (os.environ.get("BNE_V2_CIP_URL") or "").strip().rstrip("/")
 BUILD = (os.environ.get("BNE_V2_CIP_BUILD") or "").strip()
 WEEKLY = ("osmtags", "rails", "lanes", "stations")   # data builds a build pins (inputs()["data"])
-# section order in a cell: what most reads want first (a partial decode stops at the end of the section asked for)
-ORDER = ("m:roads", "m:connectors", "m:road_routes", "m:water", "m:land_use", "m:infrastructure", "m:buildings",
+# section order in a cell: what most reads want first (a partial decode stops at the end of the section asked for); the
+# connectors before the roads, whose connector references are coded as indexes into them (cip.rs 'X')
+ORDER = ("m:connectors", "m:roads", "m:road_routes", "m:water", "m:land_use", "m:infrastructure", "m:buildings",
          "m:building_parts", "m:town_areas", "m:town_points", "m:hoods", "t:rail", "t:lanes", "t:stations", "z:lidar",
          "z:lidar.gaps", "z:lidar-nogaps", "z:hk3", "z:ign", "z:nvdb", "f:osmfuel", "f:picnic", "m:landcover",
          "m:places", "m:canopy")
 ROADZ_SRCS = ("lidar", "lidar-nogaps", "hk3", "ign", "nvdb")
+LANE = "cip"                # netfetch's lane of the build's host (its policy: the CDN's, given up quickly)
 
 
 def enabled():
@@ -163,7 +165,9 @@ def cell_sections(cell):
 
 # --- the archive ---------------------------------------------------------------------------------------------------------
 class Archive(bnwt.Archive):
-    """A build's cell archive (bnwt.Archive's index, parts and tile cache; its own names and checks)."""
+    """A build's cell archive (bnwt.Archive's index, parts and tile cache; its own names, lane and checks)."""
+
+    LANE = LANE
 
     def __init__(self, reader, name=ARCHIVE):
         self.r, self.name = reader, name
@@ -236,7 +240,7 @@ class Reader(bnwt.Reader):
                 with open(lp, "rb") as f:
                     b = f.read()
             else:
-                b = self.fetcher.get(rel, kind=kind, lane=bnwt.LANE).body
+                b = self.fetcher.get(rel, kind=kind, lane=LANE).body
             got = json.loads(b)
             build = str(got["build"])
         except Exception as e:      # (any: the sources as before)
@@ -319,8 +323,19 @@ class Reader(bnwt.Reader):
                 self._dec.popitem(last=False)
         return got
 
+    def built_layers(self):
+        """The map layers the build holds (its index's "layers"; the others are read from their sources by design,
+        no fallback: the planet build leaves the rasters out), or None (every layer)."""
+        m = self.manifest()
+        got = (m or {}).get("layers")
+        return None if got is None else set(got)
+
     def section(self, key, name, kind="demand"):
         """One section of cell key, or None (the cell or the section not in the build)."""
+        if name.startswith("m:"):
+            lays = self.built_layers()
+            if lays is not None and name[2:].split(".", 1)[0] not in lays:
+                return None
         s = self.sections(key, kind)
         if s is None:
             return None
@@ -368,7 +383,7 @@ class Reader(bnwt.Reader):
                         with open(lp, "rb") as f:
                             b = f.read()
                     else:
-                        b = self.fetcher.get(url, kind=kind, lane=bnwt.LANE).body
+                        b = self.fetcher.get(url, kind=kind, lane=LANE).body
                 except (OSError, netfetch.FetchError):
                     return None
                 if hashlib.sha256(b).hexdigest() != m["airports"].get(name):

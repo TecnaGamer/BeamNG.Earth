@@ -26,6 +26,11 @@
 //! - 'F' '<f8' values that are all exact float32s: float32 byte planes;
 //! - 'I' integers (any signed / unsigned width; bool) as a zig-zag integer stream; 'J' a non-decreasing 1-D integer
 //!   array as its first differences (offsets);
+//! - 'D' attr.cx / attr.cy that are their features' bbox centres ((min + max) / 2 of the section's own geometry, made
+//!   again at decoding), the few that are not as exceptions;
+//! - 'V' a UUID column with repeats: its distinct UUIDs (16 bytes) and a code each; 'X' a rule's value column
+//!   "rule.<layer>.value" as references into an earlier section "m:<layer>"'s ids (a road's connectors: the cell's
+//!   connectors section, which comes before the roads), the UUIDs not there after them;
 //! - 'R' anything else: raw byte planes of the items.
 //!
 //! Integer stream and byte planes are BNWT's (bnwt.rs): u32 n, u8 width, the planes (zstd finds the structure).
@@ -294,28 +299,227 @@ fn get_uuid_dict(r: &mut R, n: usize, width: usize) -> Result<Vec<u8>, String> {
     if codes.len() != n || width < 36 || codes.iter().any(|&c| c < 0 || c as usize > k) {
         return Err("uuid codes do not match".into());
     }
-    let hex = b"0123456789abcdef";
     let mut out = vec![0u8; n * width * 4];
     for (i, &c) in codes.iter().enumerate() {
-        if c == 0 {
-            continue;
-        }
-        let u = &raw[(c as usize - 1) * 16..(c as usize) * 16];
-        let mut pos = 0;
-        for (bi, &byte) in u.iter().enumerate() {
-            if matches!(bi, 4 | 6 | 8 | 10) {
-                out[(i * width + pos) * 4] = b'-';
-                pos += 1;
-            }
-            out[(i * width + pos) * 4] = hex[(byte >> 4) as usize];
-            out[(i * width + pos + 1) * 4] = hex[(byte & 15) as usize];
-            pos += 2;
+        if c != 0 {
+            uuid_ucs4(&raw[(c as usize - 1) * 16..(c as usize) * 16], &mut out, i, width);
         }
     }
     Ok(out)
 }
 
-fn put_array(w: &mut W, a: &Arr, bounds: &[f64; 4]) -> Result<(), String> {
+/// Row i of a UCS-4 column (width characters) set to the canonical text of a 16-byte UUID.
+fn uuid_ucs4(u: &[u8], out: &mut [u8], i: usize, width: usize) {
+    let hex = b"0123456789abcdef";
+    let mut pos = 0;
+    for (bi, &byte) in u.iter().enumerate() {
+        if matches!(bi, 4 | 6 | 8 | 10) {
+            out[(i * width + pos) * 4] = b'-';
+            pos += 1;
+        }
+        out[(i * width + pos) * 4] = hex[(byte >> 4) as usize];
+        out[(i * width + pos + 1) * 4] = hex[(byte & 15) as usize];
+        pos += 2;
+    }
+}
+
+fn uuid_bytes(s: &str) -> [u8; 16] {
+    let hex: Vec<u8> = s.bytes().filter(|&c| c != b'-').collect();
+    let mut out = [0u8; 16];
+    for (k, o) in out.iter_mut().enumerate() {
+        *o = crate::bnwt::hexval(hex[2 * k]) << 4 | crate::bnwt::hexval(hex[2 * k + 1]);
+    }
+    out
+}
+
+// ------------------------------------------------------------------------------------------------ context codings
+/// What an array may be coded against: the arrays before it in its section, and the sections before its own.
+pub struct Ctx<'a> {
+    pub own: &'a [Arr],
+    pub cell: &'a [(String, &'a [Arr])],
+}
+
+fn find<'a>(arrs: &'a [Arr], name: &str) -> Option<&'a Arr> {
+    arrs.iter().find(|a| a.name == name)
+}
+
+fn i64s(a: &Arr) -> Option<Vec<i64>> {
+    if a.dtype != "<i8" || a.shape.len() != 1 {
+        return None;
+    }
+    Some(a.data.chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect())
+}
+
+/// The bbox centres ((min + max) / 2, as numpy makes them) of every feature's coordinates on one axis, from the
+/// section's geometry arrays; None where a feature has no coordinate or a NaN (or the geometry is not there).
+fn centres(own: &[Arr], n: usize, axis: usize) -> Option<Vec<Option<f64>>> {
+    let po = i64s(find(own, "part_off")?)?;
+    let ro = i64s(find(own, "ring_off")?)?;
+    let co = i64s(find(own, "coord_off")?)?;
+    let ll = find(own, "lonlat")?;
+    if ll.dtype != "<f8" || ll.shape.len() != 2 || ll.shape[1] != 2 || po.len() != n + 1 {
+        return None;
+    }
+    let v = f64s(&ll.data);
+    let m = v.len() / 2;
+    let at = |o: &[i64], i: i64| -> Option<i64> { o.get(usize::try_from(i).ok()?).copied() };
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let c0 = at(&co, at(&ro, po[i])?)?;
+        let c1 = at(&co, at(&ro, po[i + 1])?)?;
+        let (c0, c1) = (usize::try_from(c0).ok()?, usize::try_from(c1).ok()?);
+        if c1 > m || c0 >= c1 {
+            out.push(None);
+            continue;
+        }
+        let xs = (c0..c1).map(|k| v[2 * k + axis]);
+        if (c0..c1).any(|k| v[2 * k + axis].is_nan()) {
+            out.push(None);
+            continue;
+        }
+        let (mn, mx) = xs.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| (a.min(x), b.max(x)));
+        out.push(Some((mn + mx) / 2.0));
+    }
+    Some(out)
+}
+
+/// 'D': attr.cx / attr.cy that are their features' bbox centres (all but a few: those as exceptions, own bits).
+fn put_centres(w: &mut W, a: &Arr, ctx: &Ctx) -> Result<bool, String> {
+    let axis = match a.name.as_str() {
+        "attr.cx" => 0,
+        "attr.cy" => 1,
+        _ => return Ok(false),
+    };
+    if a.dtype != "<f8" || a.shape.len() != 1 {
+        return Ok(false);
+    }
+    let v = f64s(&a.data);
+    let Some(c) = centres(ctx.own, v.len(), axis) else { return Ok(false) };
+    let exc: Vec<usize> = (0..v.len()).filter(|&i| c[i].map(|x| x.to_bits()) != Some(v[i].to_bits())).collect();
+    if v.is_empty() || exc.len() * 8 > v.len() {
+        return Ok(false);
+    }
+    w.u8(b'D');
+    w.u8(axis as u8);
+    let mut last = 0i64;
+    let d: Vec<i64> = exc.iter().map(|&i| {
+        let dv = i as i64 - last;
+        last = i as i64;
+        dv
+    }).collect();
+    put_ints(w, &d);
+    let bits: Vec<u8> = exc.iter().flat_map(|&i| v[i].to_le_bytes()).collect();
+    put_raw(w, 8, &bits)?;
+    Ok(true)
+}
+
+fn get_centres(r: &mut R, n: usize, own: &[Arr]) -> Result<Vec<u8>, String> {
+    let axis = r.u8()? as usize;
+    let d = get_ints(r)?;
+    let (_, bits) = get_raw(r)?;
+    if axis > 1 || bits.len() != 8 * d.len() {
+        return Err("centre exceptions do not match".into());
+    }
+    let c = centres(own, n, axis).ok_or("bbox centres without their geometry")?;
+    let mut out: Vec<f64> = c.iter().map(|x| x.unwrap_or(0.0)).collect();
+    let mut at = 0i64;
+    for (j, &dv) in d.iter().enumerate() {
+        at += dv;
+        let i = usize::try_from(at).map_err(|_| "centre exception out of range")?;
+        if i >= n {
+            return Err("centre exception out of range".into());
+        }
+        out[i] = f64::from_le_bytes(bits[8 * j..8 * j + 8].try_into().unwrap());
+    }
+    Ok(out.iter().flat_map(|x| x.to_le_bytes()).collect())
+}
+
+/// The referenced section of a rule's value column: "rule.<layer>.value" names an earlier "m:<layer>" section whose
+/// "ids" it mostly holds (a road's connector references: the cell's connectors).
+fn ref_section(name: &str) -> Option<String> {
+    let rest = name.strip_prefix("rule.")?.strip_suffix(".value")?;
+    Some(format!("m:{rest}"))
+}
+
+/// 'X': a UUID column as references into an earlier section's ids (k + 1: its k-th id; -(j + 1): the j-th of the
+/// UUIDs not there, 16 bytes each; 0: empty).
+fn put_refs(w: &mut W, a: &Arr, vals: &[String], ctx: &Ctx) -> Result<bool, String> {
+    let Some(sec) = ref_section(&a.name) else { return Ok(false) };
+    let Some((_, arrs)) = ctx.cell.iter().find(|(n, _)| n == &sec || n.split('.').next() == Some(sec.as_str()))
+        else { return Ok(false) };
+    let Some(ids) = find(arrs, "ids") else { return Ok(false) };
+    let Some((kind, item, _)) = dtype_info(&ids.dtype) else { return Ok(false) };
+    if kind != 'U' || item < 4 {
+        return Ok(false);
+    }
+    let Some(table) = texts(&ids.data, item / 4) else { return Ok(false) };
+    let mut at: HashMap<&str, i64> = HashMap::with_capacity(table.len());
+    for (k, s) in table.iter().enumerate() {
+        at.entry(s.as_str()).or_insert(k as i64 + 1);
+    }
+    let mut codes = Vec::with_capacity(vals.len());
+    let mut rest: Vec<&str> = Vec::new();
+    let mut hits = 0usize;
+    for s in vals {
+        if s.is_empty() {
+            codes.push(0);
+        } else if let Some(&k) = at.get(s.as_str()) {
+            hits += 1;
+            codes.push(k);
+        } else if crate::bnwt::is_uuid(s) {
+            rest.push(s);
+            codes.push(-(rest.len() as i64));
+        } else {
+            return Ok(false);
+        }
+    }
+    if hits * 2 < vals.len() {
+        return Ok(false);
+    }
+    let sec_name = ctx.cell.iter().find(|(n, _)| n == &sec || n.split('.').next() == Some(sec.as_str())).unwrap().0.clone();
+    w.u8(b'X');
+    w.str8(&sec_name)?;
+    put_ints(w, &codes);
+    w.u32(rest.len() as u32);
+    for s in rest {
+        w.0.extend_from_slice(&uuid_bytes(s));
+    }
+    Ok(true)
+}
+
+fn get_refs(r: &mut R, n: usize, width: usize, refs: &mut dyn FnMut(&str) -> Result<Vec<String>, String>)
+            -> Result<Vec<u8>, String> {
+    let sec = r.str8()?;
+    let codes = get_ints(r)?;
+    let k = r.u32()? as usize;
+    let rest = r.take(k.checked_mul(16).ok_or("reference residue too long")?)?;
+    let table = refs(&sec)?;
+    if codes.len() != n {
+        return Err("reference codes do not match".into());
+    }
+    let mut out = vec![0u8; n * width * 4];
+    for (i, &c) in codes.iter().enumerate() {
+        if c > 0 {
+            let s = table.get(c as usize - 1).ok_or("reference out of range")?;
+            let cs: Vec<char> = s.chars().collect();
+            if cs.len() > width {
+                return Err("reference wider than its column".into());
+            }
+            for (j, ch) in cs.iter().enumerate() {
+                out[(i * width + j) * 4..(i * width + j) * 4 + 4].copy_from_slice(&(*ch as u32).to_le_bytes());
+            }
+        } else if c < 0 {
+            let j = (-c) as usize - 1;
+            if j >= k || width < 36 {
+                return Err("reference residue out of range".into());
+            }
+            uuid_ucs4(&rest[16 * j..16 * j + 16], &mut out, i, width);
+        }
+    }
+    Ok(out)
+}
+
+fn put_array(w: &mut W, a: &Arr, bounds: &[f64; 4], ctx: &Ctx) -> Result<(), String> {
     let (kind, item, little) = dtype_info(&a.dtype).ok_or_else(|| format!("{}: dtype {}", a.name, a.dtype))?;
     let n = count(&a.shape).ok_or_else(|| format!("{}: shape", a.name))?;
     if n.checked_mul(item) != Some(a.data.len()) {
@@ -345,6 +549,9 @@ fn put_array(w: &mut W, a: &Arr, bounds: &[f64; 4]) -> Result<(), String> {
             let width = item / 4;
             if width > 0 {
                 if let Some(vals) = texts(&a.data, width) {
+                    if width >= 36 && put_refs(w, a, &vals, ctx)? {
+                        return Ok(());
+                    }
                     if width >= 36 && put_uuid_dict(w, &vals) {
                         return Ok(());
                     }
@@ -356,6 +563,9 @@ fn put_array(w: &mut W, a: &Arr, bounds: &[f64; 4]) -> Result<(), String> {
             raw(w)
         }
         'f' if item == 8 => {
+            if put_centres(w, a, ctx)? {
+                return Ok(());
+            }
             let v = f64s(&a.data);
             let pairs = a.shape.len() == 2 && a.shape[1] == 2 && a.name.ends_with("lonlat");
             if pairs {
@@ -398,7 +608,8 @@ fn put_array(w: &mut W, a: &Arr, bounds: &[f64; 4]) -> Result<(), String> {
     }
 }
 
-fn get_array(r: &mut R, bounds: &[f64; 4]) -> Result<Arr, String> {
+fn get_array(r: &mut R, bounds: &[f64; 4], own: &[Arr], refs: &mut dyn FnMut(&str) -> Result<Vec<String>, String>)
+             -> Result<Arr, String> {
     let name = r.str8()?;
     let dtype = r.str8()?;
     let nd = r.u8()? as usize;
@@ -426,6 +637,8 @@ fn get_array(r: &mut R, bounds: &[f64; 4]) -> Result<Arr, String> {
             t.ucs4
         }
         b'V' => get_uuid_dict(r, n, item / 4)?,
+        b'X' => get_refs(r, n, item / 4, refs)?,
+        b'D' => get_centres(r, n, own)?,
         b'C' | b'G' => get_grid(r, n, bounds)?.iter().flat_map(|x| x.to_le_bytes()).collect(),
         b'F' => {
             let (_, b) = get_raw(r)?;
@@ -450,24 +663,26 @@ fn get_array(r: &mut R, bounds: &[f64; 4]) -> Result<Arr, String> {
     Ok(Arr { name, dtype, shape, data })
 }
 
-fn encode_arrays(arrs: &[Arr], bounds: &[f64; 4]) -> Result<Vec<u8>, String> {
+fn encode_arrays(arrs: &[Arr], bounds: &[f64; 4], cell: &[(String, &[Arr])]) -> Result<Vec<u8>, String> {
     if arrs.len() > 65535 {
         return Err("too many arrays".into());
     }
     let mut w = W(Vec::new());
     w.u16(arrs.len() as u16);
-    for a in arrs {
-        put_array(&mut w, a, bounds)?;
+    for (i, a) in arrs.iter().enumerate() {
+        put_array(&mut w, a, bounds, &Ctx { own: &arrs[..i], cell })?;
     }
     Ok(w.0)
 }
 
-fn decode_arrays(b: &[u8], bounds: &[f64; 4]) -> Result<Vec<Arr>, String> {
+fn decode_arrays(b: &[u8], bounds: &[f64; 4], refs: &mut dyn FnMut(&str) -> Result<Vec<String>, String>)
+                 -> Result<Vec<Arr>, String> {
     let mut r = R { b, i: 0 };
     let n = r.u16()? as usize;
-    let mut out = Vec::with_capacity(n);
+    let mut out: Vec<Arr> = Vec::with_capacity(n);
     for _ in 0..n {
-        out.push(get_array(&mut r, bounds)?);
+        let a = get_array(&mut r, bounds, &out, refs)?;
+        out.push(a);
     }
     if r.i != b.len() {
         return Err(format!("{} bytes left after the arrays", b.len() - r.i));
@@ -514,9 +729,14 @@ pub fn encode_cell(secs: &[(String, Sec)], bounds: &[f64; 4], level: i32) -> Res
     }
     let mut raw = Vec::new();
     let mut dir = Vec::new();
+    let mut before: Vec<(String, &[Arr])> = Vec::new();
     for (name, s) in secs {
         let (codec, b) = match s {
-            Sec::Arrays(a) => (b'A', encode_arrays(a, bounds)?),
+            Sec::Arrays(a) => {
+                let got = encode_arrays(a, bounds, &before)?;
+                before.push((name.clone(), a.as_slice()));
+                (b'A', got)
+            }
             Sec::Blob(b) => (b'B', b.clone()),
         };
         if raw.len() + b.len() > u32::MAX as usize {
@@ -555,9 +775,32 @@ pub fn decode_sections(t: &[u8], names: Option<&[String]>, bounds: &[f64; 4]) ->
     let upto = want.iter().map(|s| (s.2 + s.3) as usize).max().unwrap_or(0);
     let raw = if upto > 0 { raw_upto(t, &h, upto)? } else { Vec::new() };
     let mut out = Vec::with_capacity(want.len());
+    let mut ids: HashMap<String, Vec<String>> = HashMap::new();
     for (name, codec, off, len) in want {
         let b = &raw[*off as usize..(*off + *len) as usize];
-        out.push((name.clone(), if *codec == b'A' { Sec::Arrays(decode_arrays(b, bounds)?) } else { Sec::Blob(b.to_vec()) }));
+        let sec = if *codec == b'A' {
+            let mut refs = |sec: &str| -> Result<Vec<String>, String> {
+                if let Some(v) = ids.get(sec) {
+                    return Ok(v.clone());
+                }
+                // (a section before this one, in the part of the frame already decoded)
+                let (_, c, o, l) = h.secs.iter().find(|s| s.0 == sec).ok_or("referenced section missing")?;
+                if *c != b'A' || (*o + *l) as usize > raw.len() || *o >= *off {
+                    return Err("referenced section after its reference".into());
+                }
+                let arrs = decode_arrays(&raw[*o as usize..(*o + *l) as usize], bounds,
+                                         &mut |_s: &str| Err("references nest".into()))?;
+                let a = find(&arrs, "ids").ok_or("referenced section without ids")?;
+                let (_, item, _) = dtype_info(&a.dtype).ok_or("referenced ids dtype")?;
+                let v = texts(&a.data, item / 4).ok_or("referenced ids not text")?;
+                ids.insert(sec.to_string(), v.clone());
+                Ok(v)
+            };
+            Sec::Arrays(decode_arrays(b, bounds, &mut refs)?)
+        } else {
+            Sec::Blob(b.to_vec())
+        };
+        out.push((name.clone(), sec));
     }
     Ok(out)
 }
@@ -690,18 +933,41 @@ mod tests {
             arr("empty", "<i8", &[0], vec![]),
             arr("grid", "|u1", &[2, 3], vec![1, 2, 3, 4, 5, 6]),
         ]))];
+        secs.insert(0, ("m:connectors".to_string(), Sec::Arrays(vec![
+            arr("ids", "<U36", &[2], ucs4(&["0a1b2c3d-0000-4000-8000-00000000000a",
+                                            "ffffffff-0000-4000-8000-00000000000b"], 36)),
+        ])));
+        secs[1].0 = "m:roads.9".to_string();
+        if let Sec::Arrays(a) = &mut secs[1].1 {
+            a.push(arr("rule.connectors.value", "<U36", &[4], ucs4(&["0a1b2c3d-0000-4000-8000-00000000000a", "",
+                "eeeeeeee-0000-4000-8000-00000000000c", "ffffffff-0000-4000-8000-00000000000b"], 36)));
+            let po = [0i64, 1, 2, 3, 4];
+            let ro = [0i64, 1, 2, 3, 4];
+            let co = [0i64, 1, 2, 3, 4];
+            a.push(arr("part_off", "<i8", &[5], po.iter().flat_map(|x| x.to_le_bytes()).collect()));
+            a.push(arr("ring_off", "<i8", &[5], ro.iter().flat_map(|x| x.to_le_bytes()).collect()));
+            a.push(arr("coord_off", "<i8", &[5], co.iter().flat_map(|x| x.to_le_bytes()).collect()));
+            let cx: Vec<f64> = ll.chunks(2).map(|p| (p[0] + p[0]) / 2.0).collect();
+            a.push(arr("attr.cx", "<f8", &[4], cx.iter().flat_map(|x| x.to_le_bytes()).collect()));
+        }
         secs.push(("lidar".to_string(), Sec::Blob(b"answers".to_vec())));
         let cell = encode_cell(&secs, &b, 19).unwrap();
         let back = decode_sections(&cell, None, &b).unwrap();
-        assert_eq!(back.len(), 2);
-        let (Sec::Arrays(x), Sec::Arrays(y)) = (&secs[0].1, &back[0].1) else { panic!() };
+        assert_eq!(back.len(), 3);
+        let roads_only = decode_sections(&cell, Some(&["m:roads.9".to_string()]), &b).unwrap();
+        assert_eq!(roads_only.len(), 1);
+        let (Sec::Arrays(x), Sec::Arrays(y)) = (&secs[1].1, &back[1].1) else { panic!() };
+        let Sec::Arrays(z) = &roads_only[0].1 else { panic!() };
+        for (a, c) in x.iter().zip(z) {
+            assert_eq!(a.data, c.data, "{}", a.name);
+        }
         for (a, c) in x.iter().zip(y) {
             assert_eq!(a.name, c.name);
             assert_eq!(a.dtype, c.dtype);
             assert_eq!(a.shape, c.shape);
             assert_eq!(a.data, c.data, "{}", a.name);
         }
-        let Sec::Blob(bl) = &back[1].1 else { panic!() };
+        let Sec::Blob(bl) = &back[2].1 else { panic!() };
         assert_eq!(bl, b"answers");
         let only = decode_sections(&cell, Some(&["lidar".to_string()]), &b).unwrap();
         assert_eq!(only.len(), 1);

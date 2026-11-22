@@ -58,6 +58,9 @@ VECTOR = ("roads", "connectors", "buildings", "water", "land_use", "infrastructu
           "road_routes", "town_areas", "town_points", "hoods")
 RASTER = ("landcover", "canopy")
 DEFAULT_LAYERS = VECTOR + RASTER
+# the planet build's: the rasters stay on their sources (WorldCover / the canopy model: ~2 / ~100-200 kB a land cell, a
+# planet of ~109 M land cells would be ~0.2 / several TB for ~1-4 MB of a cold visit's downloads)
+WORLD_LAYERS = VECTOR
 
 
 def cells_around(lat, lon, r):
@@ -97,6 +100,10 @@ class Builder:
         self.md = bw._s.md
         self.release = self.md.release
         self.stats = {}
+        self.partial = True
+        self.lidar = "have"
+        self.only = None            # {cell: layers} (--cellset), None: self.layers for every cell
+        self.lidar_cells = None     # the cells whose lidar is measured (--cellset's "lidar"), None: every one wanting it
 
     # --- data builds ---------------------------------------------------------------------------------------------
     def data_builds(self):
@@ -136,7 +143,7 @@ class Builder:
         md = self.md
         secs, lacks = {}, []
         roads = None
-        for layer in self.layers:
+        for layer in (self.only.get(key, ()) if self.only is not None else self.layers):
             try:
                 name, arrays = self.layer(key, layer)
             except Exception as e:
@@ -159,8 +166,9 @@ class Builder:
                                        ensure_ascii=False).encode("utf-8")
         import roadz
         rz = roadz.PROVIDER
-        if rz is not None:
-            if self.online and rz.lidar_wanted(key) and roads is not None:
+        if rz is not None and self.lidar != "skip":
+            if self.lidar == "measure" and rz.lidar_wanted(key) and roads is not None \
+                    and (self.lidar_cells is None or key in self.lidar_cells):
                 for src in rz.lidar_sources(key):
                     try:
                         rz.lines(src, key)
@@ -271,68 +279,62 @@ def rects_of(cells):
     return [tuple(r) for r in out]
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--cache", required=True, help="the builder's source cache (never the player's)")
-    ap.add_argument("--out", required=True)
-    g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--around", help="lat,lon,metres")
-    g.add_argument("--cells", help="z/x/y,z/x/y,...")
-    g.add_argument("--cached", action="store_true", help="every cell the cache holds a map layer of")
-    ap.add_argument("--online", action="store_true", help="fetch the sources (else the cache alone)")
-    ap.add_argument("--layers", default=",".join(DEFAULT_LAYERS))
-    ap.add_argument("--release", default=None, help="the Overture release (default: the server's)")
-    ap.add_argument("--part-mb", type=float, default=cip.PART_MB)
-    ap.add_argument("--no-verify", action="store_true")
-    ap.add_argument("--stats", action="store_true", help="per-section sizes (slower: every section compressed alone)")
-    ap.add_argument("--airports", default=None, help="the OurAirports folder to pin (default: the cache's current)")
-    a = ap.parse_args(argv)
-    import pcommon
-    pcommon.check_cache(a.cache)
-    fast.require(cip.NATIVE, "build_cip")
-    import logging
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
-    b = Builder(a.cache, a.online, tuple(x for x in a.layers.split(",") if x), a.release)
-    if a.around:
-        lat, lon, r = (float(v) for v in a.around.split(","))
-        cells = cells_around(lat, lon, r)
-    elif a.cells:
-        cells = [mapcells.parse(c) for c in a.cells.split(",") if c]
-    else:
-        cells = cached_cells(a.cache)
-    cells = sorted(set(cells), key=lambda k: fast._ef.pmt_tile_id(14, k.x, k.y))
-    inputs = {"code": cip.code_inputs(b.release), "data": b.data_builds()}
-    build = cip.build_id(inputs)
-    outdir = os.path.join(a.out, f"cip{cip.FORMAT}", b.release, build)
-    os.makedirs(outdir, exist_ok=True)
+# --- world builds (a CI matrix: tools/build_bnwt's units, shards, parts and records) ---------------------------------------
+_B = {}
+
+
+def _unit_init(cache, online, layers, release, lidar, partial):
+    _B["b"] = b = Builder(cache, online, layers, release)
+    b.lidar, b.partial = lidar, partial
+
+
+def build_unit(args):
+    """One z10 unit's part files (every cell of the unit inside the rects, empty ones too: a reader falls back to the
+    sources only where the build has no cell). Returns (unit, cells, bytes, lacking, seconds)."""
     import build_bnwt
-    meta = {"format": "cip", "version": cip.FORMAT, "release": b.release, "build": build}
-    rects = rects_of(cells)
-    pw = build_bnwt.PartWriter(outdir, cip.ARCHIVE, meta, rects, int(a.part_mb * 1e6))
-    stats, lacking, t0 = {}, {}, time.perf_counter()
-    cpu0 = time.process_time()
-    total = 0
-    for i, key in enumerate(cells):
-        secs, lacks = b.cell(key)
-        for s, why in lacks:
-            lacking.setdefault(s, []).append(f"{key}: {why}")
-        cb = b.encode(key, secs, verify=not a.no_verify, stats=False)
-        if a.stats:
-            section_stats(key, secs, cb, stats)
-        stats.setdefault("_cells", {})[str(key)] = len(cb)
-        total += len(cb)
-        pw.add(fast._ef.pmt_tile_id(14, key.x, key.y), cb, False)
-        if sys.stderr.isatty() or i % 25 == 0:
-            print(f"\r{i + 1}/{len(cells)} cells, {total / 1e6:.1f} MB", end="", file=sys.stderr)
-    print(file=sys.stderr)
-    parts = pw.finish()
-    index = dict(meta, archive=cip.ARCHIVE, inputs=inputs, coverage=[list(r) for r in rects], parts=parts,
-                 cells=len(cells), contents=pw.contents)
-    ap_dir = a.airports
+    unit, rects, parts, verify = args
+    b = _B["b"]
+    t0 = time.perf_counter()
+    uz, ux, uy = unit
+    sh = cip.ZOOM - uz
+    cells = sorted({(fast._ef.pmt_tile_id(cip.ZOOM, x, y), x, y) for x0, y0, x1, y1 in rects
+                    for x in range(max(x0, ux << sh), min(x1, ((ux + 1) << sh) - 1) + 1)
+                    for y in range(max(y0, uy << sh), min(y1, ((uy + 1) << sh) - 1) + 1)})
+    base = os.path.join(parts, f"{uz}_{ux}_{uy}")
+    ids, lens, ind, lacking = [], [], [], {}
+    tmp = f"{base}.bin.{os.getpid()}.tmp"
+    with open(tmp, "wb") as f:
+        for tid, x, y in cells:
+            key = mapcells.CellKey(cip.ZOOM, x, y)
+            secs, lacks = b.cell(key)
+            if lacks and not b.partial:
+                raise RuntimeError(f"{key}: lacks {lacks[:3]}")     # (a world build never ships a source's failure)
+            for sec, _why in lacks:
+                lacking[sec] = lacking.get(sec, 0) + 1
+            cb = b.encode(key, secs, verify=verify)
+            f.write(cb)
+            ids.append(tid)
+            lens.append(len(cb))
+            ind.append(0)
+    os.replace(tmp, base + ".bin")
+    itmp = f"{base}.idx.{os.getpid()}.tmp"
+    with open(itmp, "wb") as f:
+        np.save(f, np.array([ids, lens, ind], np.uint64).reshape(3, -1))
+    os.replace(itmp, base + ".idx")
+    del build_bnwt
+    return unit, len(ids), int(sum(lens)), lacking, time.perf_counter() - t0
+
+
+def write_index(outdir, meta, inputs, rects, plist, cells, contents, cache, airports_dir, layers=None):
+    index = dict(meta, archive=cip.ARCHIVE, inputs=inputs, coverage=[list(r) for r in rects], parts=plist,
+                 cells=cells, contents=contents)
+    if layers is not None:          # (the map layers the build holds; readers take the others from their sources)
+        index["layers"] = sorted(set(layers))
+    ap_dir = airports_dir
     if ap_dir is None:
         try:
-            with open(os.path.join(a.cache, "airports", "ourairports", "current.json"), encoding="utf-8") as fh:
-                ap_dir = os.path.join(a.cache, "airports", "ourairports", json.load(fh)["gen"])
+            with open(os.path.join(cache, "airports", "ourairports", "current.json"), encoding="utf-8") as fh:
+                ap_dir = os.path.join(cache, "airports", "ourairports", json.load(fh)["gen"])
         except (OSError, ValueError, KeyError):
             ap_dir = None
     if ap_dir and all(os.path.exists(os.path.join(ap_dir, n)) for n in ("airports.csv", "runways.csv")):
@@ -346,10 +348,109 @@ def main(argv=None):
         index["airports"] = rec
     with open(os.path.join(outdir, f"{cip.ARCHIVE}.index.json"), "w", encoding="utf-8") as fh:
         json.dump(index, fh, sort_keys=True, separators=(",", ":"))
-    with open(os.path.join(a.out, f"cip{cip.FORMAT}", b.release, "latest.json"), "w", encoding="utf-8") as fh:
-        json.dump({"build": build}, fh, sort_keys=True)
+    with open(os.path.join(os.path.dirname(outdir), "latest.json"), "w", encoding="utf-8") as fh:
+        json.dump({"build": meta["build"]}, fh, sort_keys=True)
     with open(os.path.join(outdir, "ATTRIBUTION.txt"), "w", encoding="utf-8") as fh:
         fh.write(attribution())
+    return index
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--cache", required=True, help="the builder's source cache (never the player's)")
+    ap.add_argument("--out", required=True)
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--around", help="lat,lon,metres")
+    g.add_argument("--cells", help="z/x/y,z/x/y,...")
+    g.add_argument("--cached", action="store_true", help="every cell the cache holds a map layer of")
+    g.add_argument("--cellset", help='a JSON {"cells": {"14/x/y": [layers]}}: those cells, each with its layers only '
+                                     '(a recorded visit\'s footprint)')
+    g.add_argument("--world", action="store_true", help="every cell any Overture source file reaches (z10 units)")
+    g.add_argument("--inputs-only", action="store_true", help="print the build's id and inputs, build nothing")
+    ap.add_argument("--online", action="store_true", help="fetch the sources (else the cache alone)")
+    ap.add_argument("--lidar", default=None, choices=("measure", "have", "skip"),
+                    help="the lidar answers: measured here for the cells that want one (default with --online), the "
+                         "cache's (default offline), or none (players read the lidar themselves)")
+    ap.add_argument("--layers", default=None, help="comma-separated (default: every map layer; --world: the vector "
+                                                   "layers, WORLD_LAYERS)")
+    ap.add_argument("--release", default=None, help="the Overture release (default: the server's)")
+    ap.add_argument("--part-mb", type=float, default=cip.PART_MB)
+    ap.add_argument("--no-verify", action="store_true")
+    ap.add_argument("--stats", action="store_true", help="per-section sizes (slower: every section compressed alone)")
+    ap.add_argument("--airports", default=None, help="the OurAirports folder to pin (default: the cache's current)")
+    ap.add_argument("--partial", action="store_true", help="world: keep a cell a source failed for (its section left "
+                                                           "out: readers read that source); default: the shard fails")
+    ap.add_argument("--jobs", type=int, default=1, help="world: build processes")
+    ap.add_argument("--unit-zoom", type=int, default=10)
+    ap.add_argument("--work", help="world: units' parts folder (default OUT/.work)")
+    ap.add_argument("--shard", help="world: I/N, the I-th of N contiguous runs of the units (Hilbert order)")
+    ap.add_argument("--shard-parts", action="store_true", help="with --shard: the shard's own parts and its record")
+    ap.add_argument("--assemble", action="store_true", help="world: the index from the parts (or --from-shards)")
+    ap.add_argument("--from-shards", type=int, metavar="N", help="with --assemble: from the N shards' records")
+    a = ap.parse_args(argv)
+    import pcommon
+    pcommon.check_cache(a.cache)
+    fast.require(cip.NATIVE, "build_cip")
+    import logging
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    layers = tuple(x for x in (a.layers or ",".join(WORLD_LAYERS if a.world else DEFAULT_LAYERS)).split(",") if x)
+    b = Builder(a.cache, a.online, layers, a.release)
+    b.partial = a.partial
+    b.lidar = a.lidar or ("measure" if a.online else "have")
+    if a.cellset:
+        with open(a.cellset, encoding="utf-8") as fh:
+            built = sorted({ly for v in json.load(fh)["cells"].values() for ly in v})
+    else:
+        built = sorted(layers)
+    inputs = {"code": cip.code_inputs(b.release),
+              "data": dict(b.data_builds(), lidar=b.lidar, zstd=cip.LEVEL, layers=built)}
+    build = cip.build_id(inputs)
+    if a.inputs_only:
+        print(json.dumps({"build": build, "inputs": inputs}, sort_keys=True))
+        return 0
+    outdir = os.path.join(a.out, f"cip{cip.FORMAT}", b.release, build)
+    os.makedirs(outdir, exist_ok=True)
+    import build_bnwt
+    meta = {"format": "cip", "version": cip.FORMAT, "release": b.release, "build": build}
+    if a.world:
+        return world(a, b, inputs, build, outdir, meta, layers, build_bnwt)
+    if a.around:
+        lat, lon, r = (float(v) for v in a.around.split(","))
+        cells = cells_around(lat, lon, r)
+    elif a.cells:
+        cells = [mapcells.parse(c) for c in a.cells.split(",") if c]
+    elif a.cellset:
+        with open(a.cellset, encoding="utf-8") as fh:
+            got = json.load(fh)
+        only = {mapcells.parse(c): tuple(v) for c, v in got["cells"].items()}
+        cells = list(only)
+        b.only = only
+        if "lidar" in got:              # (the visit's lidar cells: measured there only)
+            b.lidar_cells = {mapcells.parse(c) for c in got["lidar"]}
+    else:
+        cells = cached_cells(a.cache)
+    cells = sorted(set(cells), key=lambda k: fast._ef.pmt_tile_id(14, k.x, k.y))
+    rects = rects_of(cells)
+    pw = build_bnwt.PartWriter(outdir, cip.ARCHIVE, meta, rects, int(a.part_mb * 1e6))
+    stats, lacking, t0 = {}, {}, time.perf_counter()
+    cpu0 = time.process_time()
+    total = 0
+    for i, key in enumerate(cells):
+        secs, lacks = b.cell(key)
+        for s, why in lacks:
+            lacking.setdefault(s, []).append(f"{key}: {why}")
+        cb = b.encode(key, secs, verify=not a.no_verify)
+        if a.stats:
+            section_stats(key, secs, cb, stats)
+        stats.setdefault("_cells", {})[str(key)] = len(cb)
+        total += len(cb)
+        pw.add(fast._ef.pmt_tile_id(14, key.x, key.y), cb, False)
+        if sys.stderr.isatty() or i % 25 == 0:
+            print(f"\r{i + 1}/{len(cells)} cells, {total / 1e6:.1f} MB", end="", file=sys.stderr)
+    print(file=sys.stderr)
+    parts = pw.finish()
+    write_index(outdir, meta, inputs, rects, parts, len(cells), pw.contents, a.cache, a.airports,
+                sorted({ly for v in b.only.values() for ly in v}) if b.only is not None else layers)
     stats["_total"] = dict(cells=len(cells), bytes=total, stored=sum(p["bytes"] for p in parts), parts=len(parts),
                            wall_s=round(time.perf_counter() - t0, 2), cpu_s=round(time.process_time() - cpu0, 2),
                            lacking={k: len(v) for k, v in lacking.items()})
@@ -358,6 +459,92 @@ def main(argv=None):
     for k, v in sorted(lacking.items()):
         print(f"lacking {k}: {len(v)} cells, e.g. {v[0]}", file=sys.stderr)
     print(json.dumps(dict(build=build, out=outdir, **stats["_total"])))
+    return 0
+
+
+def world(a, b, inputs, build, outdir, meta, layers, build_bnwt):
+    """The planet in z10 units (build_bnwt's plan, shards, parts and records; see .github/workflows/cip.yml)."""
+    import multiprocessing as mp
+    raw_dir = os.path.join(a.cache, "mapdata", "raw")
+    N_ = 1 << cip.ZOOM
+    rects = [(0, 0, N_ - 1, N_ - 1)]
+    units = set()
+    for arch in ("transportation", "buildings", "base"):        # (every cell any Overture layer reaches)
+        units.update(build_bnwt.world_units(b.release, arch, a.unit_zoom, raw_dir))
+    units = sorted(units, key=build_bnwt.unit_range)
+    work = os.path.join(a.work or os.path.join(a.out, ".work"), b.release, build)
+    parts = os.path.join(work, "parts")
+    os.makedirs(parts, exist_ok=True)
+    plan = {"build": build, "inputs": inputs, "unit_zoom": a.unit_zoom, "layers": list(layers), "world": True}
+    pf = os.path.join(work, "plan.json")
+    if os.path.exists(pf):
+        with open(pf, encoding="utf-8") as fh:
+            if json.load(fh) != json.loads(json.dumps(plan)):
+                raise SystemExit(f"{pf} is another build; use another --work")
+    else:
+        with open(pf, "w", encoding="utf-8") as fh:
+            json.dump(plan, fh, sort_keys=True)
+    name = cip.ARCHIVE
+    mine = units
+    sn = si = None
+    if a.shard:
+        si, sn = (int(v) for v in a.shard.split("/"))
+        mine = units[si * len(units) // sn:(si + 1) * len(units) // sn]
+        rec_path = build_bnwt.shard_record(outdir, name, sn, si)
+        if a.shard_parts and os.path.exists(rec_path):
+            print(f"shard {a.shard}: done before ({rec_path})", file=sys.stderr)
+            return 0
+    if a.assemble and a.from_shards:
+        plist, n, contents = build_bnwt.shards_assembled(outdir, name, a.from_shards, plan,
+                                                         argparse.ArgumentParser())
+        write_index(outdir, dict(meta, shards=a.from_shards), inputs, rects, plist, n, contents, a.cache, a.airports,
+                    layers)
+        print(json.dumps({"build": build, "parts": len(plist), "cells": n}))
+        return 0
+    todo = [u for u in mine if not os.path.exists(os.path.join(parts, f"{u[0]}_{u[1]}_{u[2]}.idx"))]
+    if a.assemble and todo:
+        raise SystemExit(f"{len(todo)} units not built yet")
+    t0 = time.perf_counter()
+    shown, done, cells, nbytes, lack = 0.0, 0, 0, 0, {}
+    jobs = [(u, rects, parts, not a.no_verify) for u in todo]
+    if a.jobs <= 1:
+        _B["b"] = b
+        results = map(build_unit, jobs)
+        pool = None
+    else:
+        pool = mp.get_context("spawn").Pool(a.jobs, _unit_init, (a.cache, a.online, layers, b.release, b.lidar,
+                                                                  b.partial))
+        results = pool.imap_unordered(build_unit, jobs)
+    for _u, nc, nb, lk, _s in results:
+        done, cells, nbytes = done + 1, cells + nc, nbytes + nb
+        for k, v in lk.items():
+            lack[k] = lack.get(k, 0) + v
+        el = time.perf_counter() - t0
+        if el - shown >= 60 or done == len(todo):
+            shown = el
+            print(f"{done}/{len(todo)} units, {cells} cells, {nbytes / 1e6:.1f} MB, {el:.0f} s", file=sys.stderr,
+                  flush=True)
+    if pool is not None:
+        pool.close()
+        pool.join()
+    if a.shard and a.shard_parts:
+        plist, n, contents = build_bnwt.write_archive(mine, parts, outdir, f"{name}.s{sn}-{si:04d}",
+                                                      dict(meta, shard=[si, sn]), rects, int(a.part_mb * 1e6))
+        rec = {"shard": si, "of": sn, "plan": plan, "units": len(mine), "parts": plist, "tiles": n,
+               "contents": contents, "lacking": lack}
+        os.makedirs(os.path.dirname(rec_path), exist_ok=True)
+        with open(rec_path + ".tmp", "w", encoding="utf-8") as fh:
+            json.dump(rec, fh, sort_keys=True, separators=(",", ":"))
+        os.replace(rec_path + ".tmp", rec_path)
+        print(json.dumps({"shard": a.shard, "units": len(mine), "cells": cells, "bytes": nbytes, "parts": len(plist),
+                          "lacking": lack, "seconds": round(time.perf_counter() - t0, 1)}))
+        return 0
+    if a.shard:
+        print(json.dumps({"shard": a.shard, "units": len(mine), "cells": cells, "bytes": nbytes, "lacking": lack}))
+        return 0
+    plist, n, contents = build_bnwt.write_archive(units, parts, outdir, name, meta, rects, int(a.part_mb * 1e6))
+    write_index(outdir, meta, inputs, rects, plist, n, contents, a.cache, a.airports, layers)
+    print(json.dumps({"build": build, "parts": len(plist), "cells": n, "bytes": sum(p["bytes"] for p in plist)}))
     return 0
 
 

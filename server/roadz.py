@@ -1708,7 +1708,7 @@ class RoadZ:
                     continue                # (decided already: _decide reads it)
                 if pre:
                     f = self._path(src, key)
-                    if f and os.path.exists(f):
+                    if f and (os.path.exists(f) or self._cip_fill(src, key, f)):     # (or its CIP cell's: CIP on)
                         if src == "lidar" and lidarz.enabled():
                             # (a kept CDN cell is checked first, lidarz.kept_ok: its DEM reads may download tiles and a
                             # dropped one asks the CDN again, so on a thread with the same wait as a CDN read, the rule

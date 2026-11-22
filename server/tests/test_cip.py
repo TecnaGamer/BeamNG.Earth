@@ -62,6 +62,29 @@ class Codec(unittest.TestCase):
         only = cip.decode_cell(KEY, cell, ["f:osmfuel"])
         self.assertEqual(list(only), ["f:osmfuel"])
 
+    def test_context_codings(self):
+        """Connector references coded against the cell's connectors (which come first), bbox centres made again from
+        the geometry: both give the arrays back exactly, also when the roads alone are decoded."""
+        lon0, lat0, lon1, lat1 = KEY.bounds()
+        ids = [f"{i:08x}-0000-4000-8000-{i:012x}" for i in range(1, 6)]
+        conn = {"ids": mg.text_column(ids), "attr.cx": np.array([0.5] * 5)}
+        f = mg.build("roads", mg.text_column(ids[:3]), [
+            (mg.LINE, [[np.array([[lon0, lat0], [-76.59, 39.284]])]]),
+            (mg.LINE, [[np.array([[-76.591, 39.2841], [-76.5912, 39.2849], [-76.59, 39.2843]])]]),
+            (mg.POINT, [[np.array([[-76.5901, 39.28456]])]])])
+        roads = f.to_arrays("")
+        ll, co = roads["lonlat"], roads["coord_off"]
+        cx = np.array([(ll[co[i]:co[i + 1], 0].min() + ll[co[i]:co[i + 1], 0].max()) / 2 for i in range(3)])
+        cx[1] = 1.25                                        # (an exception)
+        roads["attr.cx"] = cx
+        roads["rule.connectors.value"] = mg.text_column([ids[0], ids[4], "", "ffffffff-0000-4000-8000-0000000000ff"])
+        cell = cip.encode_cell(KEY, {"m:roads.9": roads, "m:connectors": conn})
+        for names in (None, ["m:roads.9"]):
+            back = cip.decode_cell(KEY, cell, names)["m:roads.9"]
+            for k, v in roads.items():
+                self.assertEqual(np.asarray(v).tobytes(), back[k].tobytes(), k)
+                self.assertEqual(np.asarray(v).dtype, back[k].dtype, k)
+
     def test_deterministic_and_cell_free(self):
         a = sample_arrays()
         b1 = cip.encode_cell(KEY, {"m:x": a})

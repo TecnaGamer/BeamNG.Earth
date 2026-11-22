@@ -436,6 +436,12 @@ if _BNWT_HOST:
     # a host that does not answer is given up quickly: 2 s to connect, 2 tries)
     POLICIES[_BNWT_HOST + "#bnwt"] = replace(POLICIES.get(_BNWT_HOST, POLICIES[_CDN_HOST]), connect_timeout=2.0,
                                              timeout=10.0, max_attempts=2, base_delay=0.25)
+# Architecture v2's compact per-cell inputs (cip.py, BNE_V2_CIP=on: the CDN's cip<N>/, or BNE_V2_CIP_URL): a lane of
+# their own like the BNWT archives' (the sources are the fallback), the CDN's rate (a cold place reads its ring at once)
+_CIP_URL = (os.environ.get("BNE_V2_CIP_URL") or "").strip()
+_CIP_HOST = (urlsplit(_CIP_URL).hostname or "") if _CIP_URL.startswith(("http://", "https://")) else _CDN_HOST
+POLICIES[_CIP_HOST + "#cip"] = replace(POLICIES.get(_CIP_HOST, POLICIES[_CDN_HOST]), connect_timeout=2.0,
+                                       timeout=15.0, max_attempts=2, base_delay=0.25)
 # The shared decision archives (decisions.py: the CDN's dec/, or BNGE_DECISIONS_URL): a lane of their own, given up
 # quickly like the BNWT archives' (the server plans the cell itself when they do not answer)
 _DEC_URL = (os.environ.get("BNGE_DECISIONS_URL") or "").strip()
