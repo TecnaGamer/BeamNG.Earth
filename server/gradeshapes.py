@@ -173,12 +173,16 @@ def deck_depth(span):
     return float(np.clip(float(span) / DECK_SPAN_RATIO, DECK_MIN_DEPTH_M, DECK_FULL_DEPTH_M))
 
 
+def structure_depth(net, u):
+    """m of structure under the road of upper part u: a deck's depth for its span, a rail deck's, an underpass's roof."""
+    mu = net.m[u]
+    return deck_depth(net.L[u]) if mu.kind == "deck" else RAIL_DECK_DEPTH_M if mu.kind == "rail_deck" else COVER_M
+
+
 def clearance_need(net, u, d, q=None):
     """How far the road on upper part u stands over lower part d where they cross (at q): the headroom d needs there
-    and u's structure (a deck's depth for its span, an underpass's roof)."""
-    mu = net.m[u]
-    struct = deck_depth(net.L[u]) if mu.kind == "deck" else RAIL_DECK_DEPTH_M if mu.kind == "rail_deck" else COVER_M
-    return headroom(net.m[d], q) + struct
+    and u's structure (structure_depth)."""
+    return headroom(net.m[d], q) + structure_depth(net, u)
 
 
 def arclen(line):
@@ -1771,6 +1775,7 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
     # (the clearance wherever the road runs under the upper part, under_pairs: its whole carriageway under the deck's)
     clear, fz, clear_by = {}, {}, {}
     bound = {} if trace is not None else None
+    crossing = []           # (the audit's trace: each crossing's upper part and the clearance it asks)
 
     def fixed(i, sv):
         new = [s_ for s_ in sv.tolist() if (i, s_) not in fz]
@@ -1780,6 +1785,7 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
         return np.array([fz[(i, s_)] for s_ in sv.tolist()])
     for ci, c in enumerate(sysm["crossings"]):
         need = clearance_need(net, c["u"], c["d"], c["q"])
+        crossing.append((c["u"], need))
         uv = np.array([p_[0] for p_ in c["under"]])
         dv = np.array([p_[1] for p_ in c["under"]])
         xp, xa, xb, xt = _vars(pcs, smp, c["u"], uv)
@@ -1825,7 +1831,7 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
         cps.append((q, kq, p, kp, "ge", need))
         why.append(("stacked",))
     if trace is not None:
-        trace["cp"], trace["bound"] = why, bound
+        trace["cp"], trace["bound"], trace["crossing"] = why, bound, crossing
     return chains, cps
 
 

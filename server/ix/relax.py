@@ -70,6 +70,7 @@ class Problem:
         self.grade0 = [float(ch["grade"]) for ch in chains]
         self.lam = [1.0] * len(chains)
         bound = trace["bound"] or {}
+        self.bound, self.cross = bound, trace.get("crossing") or []
         for c, ch in enumerate(chains):
             m = len(ch["t"])
             ds = None if ch.get("ds") is None else np.asarray(ch["ds"], np.float64)
@@ -192,12 +193,29 @@ class Problem:
                 return changed + self._ease(sorted({k for k in cyc if klass[k] == kind}), short)
         raise ValueError("a loop short %.3f m has nothing left to give way, the grade law at what a vehicle drives" % short)
 
+    def _room(self, k):
+        """m the constraint k can be eased by: a clearance, no more than the headroom it asks over the structure's own depth
+        (further, the road under stands in the girders and the slab of the road over it: a road through a deck is never
+        drivable); a bound that is no clearance's, any."""
+        kind, *rest = self.ref[k]
+        if kind == "cp":
+            a, i = self.cps[rest[0]][:2]
+            return max(-self.g.ew[k] - _gsh.structure_depth(self.net, int(self.smp[a]["mem"][i])), 0.0)
+        if self.klass[k] != CLEARANCE:
+            return math.inf
+        c, s = rest
+        src = self.bound[(c, s, "lo" if kind == "floor" else "hi")]
+        upper, need = self.cross[src[1]]
+        if kind == "floor":
+            upper = int(self.smp[c]["mem"][s])      # (the piece's own road is the upper one over a road the shape does not move)
+        return max(need - _gsh.structure_depth(self.net, upper) - self.eased.get(k, 0.0), 0.0)
+
     def _ease(self, edges, short):
-        """Edges eased by short in all, equally, an edge that holds less than its share (a clearance is eased to nothing, no
-        further: a road under a road is not through it) eased by what it holds and the rest shared by the others. The edges
+        """Edges eased by short in all, equally, an edge that holds less than its share (a clearance is eased to the depth of
+        the structure over it, no further: _room) eased by what it holds and the rest shared by the others. The edges
         eased."""
         g = self.g
-        room = {k: (-g.ew[k] if self.ref[k][0] == "cp" else math.inf) for k in edges}
+        room = {k: self._room(k) for k in edges}
         left = sorted(edges, key=lambda k: (room[k], k))
         got = {}
         while left and short > 1e-12:

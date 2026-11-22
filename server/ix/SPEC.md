@@ -143,8 +143,9 @@ is over what it spans, a tunnel under what is over it), then the relative layer 
 (`gradeshapes._over`); never a section's layer on its own. Each decision alone is consistent, but a road is continuous: its
 sections meet at one height at their joins, and a layer that changes along a carriageway puts it under a road at one crossing
 and over it a section later. The order step finds those as negative cycles of the difference constraints of the interchange's
-crossings (upper at least `need` over lower), joins (one height) and the grade law along each member between those points, all
-heights free (`diffgraph`: the same graph the heights step uses). Each is resolved by giving up the weakest evidence in it: a
+crossings (upper at least `need` over lower), joins (one height) and the steepest grade a vehicle drives along each member
+between those points (`gradelaw.DRIVABLE_GRADE`, the mod's own limit: the heights step eases a road's grade law to it before it
+gives up anything that keeps a vehicle off a deck), all heights free (`diffgraph`: the same graph the heights step uses). Each is resolved by giving up the weakest evidence in it: a
 decision from layers alone (smallest layer difference first) before one from the structure; a structure decision is never
 given up there (a loop of them only is `order_deferred`: the heights step eases the clearance). Every decision given up is an
 `order_dropped` note of the Order artifact with its reason, and is no longer in `sysm["crossings"]` (settled in place) nor
@@ -153,9 +154,14 @@ of their roads' keys.
 
 **Heights.** `solve_shape` no longer gives up an interchange whose laws cannot all hold: the laws that are differences of two
 heights are a graph whose negative cycles are the contradictions, and each is eased by the least that closes it (plus a
-millimetre of room), in the order the laws are given up: a deck's mapped bound (its floor over the ground it spans, a road going
-under's ceiling), then the grade law (one factor over the roads of the cycle), then a clearance; a join never. Each
-relaxation is in the Heights artifact (`diag["relaxed"]`, a `relaxed_<kind>` note each) and in the step's log line. A deck's end
-that goes into a tunnel lands on the ground at the mouth (no floor over the span there): the bridge that becomes a tunnel along
-one road is not forbidden. `ixcheck` counts relaxations (`relaxed_*` notes) apart from failures, and checks the order's
-consistency under the joins (`weld_cycle`).
+millimetre of room), in the order the laws are given up, which is the order of what a vehicle can still do: first the grade law
+(one factor over the roads of the cycle, no road past the steepest grade a vehicle drives, `gradelaw.DRIVABLE_GRADE`, the mod's
+`navgraph.lua` MAX_GRADE: a steeper road is drivable, a road through a deck never is); the vertical curve law, which is no
+difference of two heights and so is eased from the kernel's answer (`relax.ease_curves`), to the tightest curve the laws give any
+road (`gradeshapes.R_MIN_ROAD_M`) and no tighter; then, only where those have given all they can, a decision from the layers alone
+(given up whole, smallest layer difference first), a deck's mapped bound (its floor over the ground it spans, a road going
+under's ceiling), and a clearance; a join never. The first attempt's miss is no log line of its own (the answer's diagnostics keep
+it as `first`): the last solve's is. Each relaxation is in the Heights artifact (`diag["relaxed"]`, a `relaxed_<kind>` note each)
+and in the step's log line. A deck's end that goes into a tunnel lands on the ground at the mouth (no floor over the span there):
+the bridge that becomes a tunnel along one road is not forbidden. `ixcheck` counts relaxations (`relaxed_*` notes) apart from
+failures, and checks the order's consistency under the joins (`weld_cycle`).

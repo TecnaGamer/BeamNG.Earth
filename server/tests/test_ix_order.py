@@ -405,6 +405,36 @@ def test_the_relaxations_are_in_the_artifact_and_the_step_line():
     assert records and records[0][0] >= logging.WARNING and "ok (3 eased: grade x3" in records[0][1]
 
 
+def test_a_clearance_is_eased_no_further_than_the_structure_over_the_road():
+    # (a road under a deck is eased to the deck's own depth over it and no further: past that the road stands in the girders)
+    net, pcs, smp, chains, cps = two_chains(need=40.0)
+    p = relax.Problem(net, pcs, smp, chains, cps, dict(bound={}))
+    edge = [k for k in range(len(p.klass)) if p.klass[k] == relax.CLEARANCE][0]
+    assert abs(p._room(edge) - (40.0 - gs.structure_depth(net, 0))) < 1e-9
+    assert gs.clearance_need(net, 0, 1) == gs.headroom(net.m[1]) + gs.structure_depth(net, 0)
+
+
+def test_a_first_attempt_that_is_relaxed_is_not_logged_as_a_miss(caplog):
+    import logging
+    import carriageways
+    net, pcs, smp, chains, cps = two_chains(need=8.0)
+    with caplog.at_level(logging.WARNING, logger="earthd.grading"):
+        info = {}
+        carriageways.solve(chains, cps, diagnostics=info, quiet=True)
+        assert not info["feasible"] and not caplog.records
+        carriageways.report(len(chains), len(cps), info)
+        assert len(caplog.records) == 1 and "feasible=False" in caplog.records[0].getMessage()
+        caplog.clear()
+        # (the whole flow: the system is relaxed, solved, and the log has no line of a miss)
+        net, systems = find(flipping_road(20.0, 30.0))
+        sysm = systems[0]
+        pcs = gs.pieces(net, sysm)
+        smp = gs.sample(net, pcs)
+        diag = {}
+        assert gs.solve_shape(net, sysm, pcs, smp, [zero(x["xy"]) for x in smp], fixed(net, zero), diag) is not None
+        assert diag["first"]["status"] == "PrimalInfeasible" and not caplog.records
+
+
 def test_what_a_vehicle_drives_is_the_mods_limit():
     import re
     import gradelaw
