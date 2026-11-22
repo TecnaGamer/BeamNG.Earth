@@ -5102,7 +5102,7 @@ def _stack_short(over, levels, arcs, zs, clear, tol, level_clear=None):
     """Does an upper deck of a crossing (over: (i, j, arc on i, arc on j)) stand tol or more short of clear over the
     lower (a higher level; the same level SAME_LEVEL_APART_M apart: the higher)? Pure."""
     for i, j, si, sj in over:
-        zi, zj = float(np.interp(si, arcs[i], zs[i])), float(np.interp(sj, arcs[j], zs[j]))
+        zi, zj = float(dnp.interp(si, arcs[i], zs[i])), float(dnp.interp(sj, arcs[j], zs[j]))
         if not (np.isfinite(zi) and np.isfinite(zj)):
             continue
         if levels[i] == levels[j]:

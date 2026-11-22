@@ -7542,7 +7542,7 @@ class _Planner:
         t = np.arange(0.0, min(float(s[-1]), BUILT_FLOOR_REACH_M) + 1e-9, 2.0)
         if len(t) < 2:
             return 0.0
-        p = np.c_[np.interp(t, s, b[:, 0]), np.interp(t, s, b[:, 1])]
+        p = np.c_[dnp.interp(t, s, b[:, 0]), dnp.interp(t, s, b[:, 1])]
         try:
             g = np.asarray(z_at(p), np.float64).reshape(-1)
         except Exception as e:      # (no lift rather than none of the grading)
@@ -9370,7 +9370,7 @@ def chain_off_ground(line, chain, end, z_at):
                 if dnp.hypot(*(q[0] - pt)) <= CHAIN_JOIN_M:
                     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(q, axis=0).T))]
                     t = np.arange(0.0, min(CHAIN_GROUND_REACH_M, float(s[-1])) + 1e-9, 1.0)
-                    at.append(np.c_[np.interp(t, s, q[:, 0]), np.interp(t, s, q[:, 1])])
+                    at.append(np.c_[dnp.interp(t, s, q[:, 0]), dnp.interp(t, s, q[:, 1])])
         z = np.asarray(z_at(np.concatenate([np.asarray(pt, np.float64)[None]] + at)), np.float64)
         ok = bool(np.isfinite(z).all() and z[0] >= z_end - CHAIN_GROUND_TOL_M
                   and float(z[1:].min() if len(z) > 1 else z[0]) >= z[0] - CHAIN_GROUND_DROP_M)
@@ -9782,7 +9782,7 @@ def _stack_capped(pts, z_raw, z, decks):
         m_ = (s >= a_) & (s <= b_)
         if not m_.any():
             return True
-        edge = min(float(np.interp(a_, s, z_raw)), float(np.interp(b_, s, z_raw)))
+        edge = min(float(dnp.interp(a_, s, z_raw)), float(dnp.interp(b_, s, z_raw)))
         return float(z_raw[m_].min()) >= edge - UNDER_STACK_PLATEAU_DROP_M
     for lo, hi, di in iv[1:]:
         if lo <= cur[1] + UNDER_STACK_GAP_M or (lo <= cur[1] + UNDER_STACK_PLATEAU_GAP_M and plateau(cur[1], lo)):
@@ -9799,7 +9799,7 @@ def _stack_capped(pts, z_raw, z, decks):
         s0, s1 = lo - UNDER_DECK_SIDE_M, hi + UNDER_DECK_SIDE_M
         if s0 < 0.0 or s1 > s[-1]:
             continue                    # (the run's far ground beyond this stretch: left as it is)
-        z0, z1 = float(np.interp(s0, s, z_raw)), float(np.interp(s1, s, z_raw))
+        z0, z1 = float(dnp.interp(s0, s, z_raw)), float(dnp.interp(s1, s, z_raw))
         m = (s >= s0) & (s <= s1)
         line = z0 + (z1 - z0) * (s[m] - s0) / (s1 - s0)
         cur_z = np.asarray(z if out is None else out, np.float64)
@@ -10547,7 +10547,7 @@ def built_others(xy, at_end, half, others):
             near_any = True
             v = ab[j]
             c = abs(float(u[0] * v[0] + u[1] * v[1])) / max(float(dnp.hypot(*u)) * float(dnp.hypot(*v)), 1e-12)
-            if math.degrees(math.acos(min(1.0, c))) > BUILT_ALONG_DEG:
+            if math.degrees(dmath.acos(min(1.0, c))) > BUILT_ALONG_DEG:
                 along = False
                 break
         if not (near_any and along):
@@ -10594,10 +10594,10 @@ def freeway_grade_cap(xy, z, grade, fill_ok=None, pinned=(True, True)):
         # the envelope's corners rounded: a moving mean over FREEWAY_GRADE_CURVE_M (no steeper, its grade changes
         # spread into vertical curves; the corners alone were 4-8 g at speed on GA-400), faded out at a held end
         t = np.arange(0.0, L + 1e-9, 2.0)
-        mt = np.interp(t, s, m)
+        mt = dnp.interp(t, s, m)
         k = max(3, int(round(FREEWAY_GRADE_CURVE_M / 2.0)) | 1)
         pad = np.r_[np.full(k // 2, mt[0]), mt, np.full(k // 2, mt[-1])]
-        sm = np.interp(s, t, np.convolve(pad, np.ones(k) / k, mode="valid"))
+        sm = dnp.interp(s, t, dnp.convolve(pad, np.ones(k) / k, mode="valid"))
         w = np.ones(n)
         if pinned[0]:
             w = np.minimum(w, np.clip(s / FREEWAY_GRADE_CURVE_M, 0.0, 1.0))
@@ -10625,7 +10625,7 @@ def _cross_angle(line, arc, road, pt):
     j = int(np.argmin(dnp.hypot(*(a + t[:, None] * ab - pt).T)))
     v = ab[j]
     c = abs(float(u[0] * v[0] + u[1] * v[1])) / max(float(dnp.hypot(*u)) * float(dnp.hypot(*v)), 1e-12)
-    return math.degrees(math.acos(min(1.0, c)))
+    return math.degrees(dmath.acos(min(1.0, c)))
 
 
 def stale_end_fill(xy, z, at_end):

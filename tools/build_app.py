@@ -165,6 +165,7 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(ROOT, 'docs', 'STABILITY_VALIDATION.md')}{SEP}docs",
            "--add-data", f"{os.path.join(server, 'bridges_us.npz')}{SEP}.",     # (bridgetypes.DB_PATH: beside the modules)
            "--add-data", f"{os.path.join(server, 'bridges_wd.npz')}{SEP}.",     # (bridgetypes.WD_PATH)
+           "--add-data", f"{os.path.join(server, 'bridges_built_us.npz')}{SEP}.",     # (roads.built_after_survey)
            "--add-data", f"{os.path.join(server, 'koppen_1991_2020_0p1.png')}{SEP}.",  # (climate.PATH)
            "--add-data", f"{os.path.join(server, 'oil_wells.npz')}{SEP}.",  # (oilwells.PATH)
            "--add-data", f"{os.path.join(server, 'wind_turbine_phase1.json')}{SEP}.",  # (windturbines.DATA_PATH)
