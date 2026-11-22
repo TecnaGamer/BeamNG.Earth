@@ -758,7 +758,7 @@ def _span_clip(rails, tunnels, near=None):
 # ground part's points from a bridge end on are made bridge while they are within the road's half width (+
 # END_CLEAR_SIDE_M) + FOOT_MAX_M + STEP_M of a car road the bridge crosses, END_CLEAR_MAX_M at most.
 # BNE_RAIL_END_CLEAR=off: as mapped.
-END_CLEAR_ON = os.environ.get("BNE_RAIL_END_CLEAR", "on") != "off"
+END_CLEAR_ON = os.environ.get("BNE_RAIL_END_CLEAR", "off") == "on"  # (off by default until it keeps every drivability benchmark part as good: test_drivability)
 END_CLEAR_SIDE_M = 1.0
 END_CLEAR_MAX_M = 30.0
 END_CLEAR_JOIN_M = 0.5      # m: a ground part's end this near a bridge part's end of the same line goes on from it

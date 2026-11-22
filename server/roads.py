@@ -679,7 +679,7 @@ def _rule_many(feats, idx):
 # lanes: the motorway's edge stood 4-6 m over the street dug under it (2.65 m steps, the user's report 2026-11-19).
 # A copy's bridge range takes the reach the segment's copies in the cells it reaches found for it too (their own
 # _skew_decks, laid on this copy: map_ranges), never into a range of another kind. BNE_SKEW_ELSEWHERE=off: as before.
-SKEW_ELSEWHERE_ON = os.environ.get("BNE_SKEW_ELSEWHERE", "on") != "off"
+SKEW_ELSEWHERE_ON = os.environ.get("BNE_SKEW_ELSEWHERE", "off") == "on"  # (off by default until it keeps every drivability benchmark part as good: test_drivability)
 SKEW_ELSEWHERE_MIN_M = HOME_MAP_TOL_M   # m a range grows at least (less: the copies' own extents laid on each other, a
                                         # Connector deck's end 0.3 m on stepped its neighbours' joints, 3.5 -> 6.0 g)
 

@@ -103,7 +103,7 @@ class ClearBridgeEndsTest(unittest.TestCase):
         self.assertLessEqual(railways._arc(added)[-1], railways.END_CLEAR_MAX_M + railways.STEP_M + 1e-6)
 
     def test_off_switch(self):
-        self.assertTrue(railways.END_CLEAR_ON)
+        self.assertFalse(railways.END_CLEAR_ON)        # (off by default until test_drivability holds with it)
 
 
 if __name__ == "__main__":

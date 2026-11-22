@@ -450,7 +450,7 @@ BUILT_FLOOR_TOL_M = 0.3
 # plan that is (the ground it was laid on: an interchange rebuilt over an older survey, I-285 dropping 3 m in 12 m into the
 # hollow under GA-400's old bridge, a C-D lane climbing 25 % up the hill its works cut, 2026-11-21) is brought under it
 # with its ends held (freeway_grade_cap). BNE_FREEWAY_GRADE=off: as graded.
-FREEWAY_GRADE_ON = os.environ.get("BNE_FREEWAY_GRADE", "on") != "off"
+FREEWAY_GRADE_ON = os.environ.get("BNE_FREEWAY_GRADE", "off") == "on"  # (off by default until it keeps every drivability benchmark part as good: test_drivability)
 FREEWAY_GRADE_CLASSES = ("motorway", "trunk")
 FREEWAY_MAX_GRADE = 0.07
 FREEWAY_LINK_MAX_GRADE = 0.09
@@ -804,7 +804,7 @@ FAST_GAP_FITS = 4
 # slope the map line runs up, not a grade to keep (a ramp up a cut's side onto a junction on Cumberland Boulevard's
 # bridge at the Cobb Cloverleaf, Atlanta: its 27 % run extended over the junction's level last 14 m stood its end 4.6 m
 # over the ground, the junction's decks humped 2-4 m on it, 2026-11-19). BNE_ABUT_FILL_MAX_GRADE=off: any grade.
-_afg = os.environ.get("BNE_ABUT_FILL_MAX_GRADE", "0.12")
+_afg = os.environ.get("BNE_ABUT_FILL_MAX_GRADE", "off")     # (0.12 tried: off until test_drivability holds)
 ABUT_FILL_MAX_GRADE = None if _afg == "off" else float(_afg)
 # A road's last metres into a tunnel's portal: the DEM (and the lidar) there read the cutting's retaining wall, the
 # portal's headwall or the road over the mouth, not the road going in (I-75 northbound's ramp to I-285 eastbound under
@@ -813,7 +813,7 @@ ABUT_FILL_MAX_GRADE = None if _afg == "off" else float(_afg)
 # PORTAL_LIP_M of a portal end are held to the road's own line from PORTAL_LIP_M to PORTAL_LIP_M + PORTAL_REF_M out
 # (a least-squares line, extended in), PORTAL_LIP_TOL_M over it at most, when the end stands PORTAL_LIP_MIN_M over it.
 # BNE_PORTAL_LIP=off: as read.
-PORTAL_LIP_ON = os.environ.get("BNE_PORTAL_LIP", "on") != "off"
+PORTAL_LIP_ON = os.environ.get("BNE_PORTAL_LIP", "off") == "on"  # (off by default until it keeps every drivability benchmark part as good: test_drivability)
 PORTAL_LIP_M = 10.0
 PORTAL_REF_M = 25.0
 PORTAL_LIP_TOL_M = 0.3
@@ -862,7 +862,7 @@ SEAM_MATCH_MAX_M = 4.0      # ... at most this each (bad data: rather a steep de
 # end at the gore held down by the Connector, its far end raised 4.1 m for Leonard Tate Street under it, the 33 m deck
 # climbing 1.15 m: a 3.7 m wall onto the road on (18 g, 2026-11-19). The higher approach is lowered (never under its
 # own ground) to what the deck reaches, eased out along it at SEAM_GRADE like _pin_cw_ends.
-SPAN_ENDS_ON = os.environ.get("BNE_SPAN_ENDS", "on") != "off"
+SPAN_ENDS_ON = os.environ.get("BNE_SPAN_ENDS", "off") == "on"  # (off by default until it keeps every drivability benchmark part as good: test_drivability)
 SPAN_ENDS_TOL_M = 0.3       # m more than the deck's climb left as it is
 # An abutment's lift counts the roads under every part of its bridge chain (bridge_chain), but not past a joint on the
 # ground: a junction on a bridge's end fill whose turning paths the map tags bridge (Cumberland Boulevard over I-75 at
@@ -872,7 +872,7 @@ SPAN_ENDS_TOL_M = 0.3       # m more than the deck's climb left as it is
 # taken out, _elev_decked) stands within CHAIN_GROUND_TOL_M of the abutment's own and falls no more than
 # CHAIN_GROUND_DROP_M along each part within CHAIN_GROUND_REACH_M of it: a pier joint over a valley or a road stands
 # lower. BNE_CHAIN_GROUND=off: the whole chain as before.
-CHAIN_GROUND_ON = os.environ.get("BNE_CHAIN_GROUND", "on") != "off"
+CHAIN_GROUND_ON = os.environ.get("BNE_CHAIN_GROUND", "off") == "on"  # (off by default until it keeps every drivability benchmark part as good: test_drivability)
 CHAIN_GROUND_TOL_M = 1.0
 CHAIN_GROUND_DROP_M = 0.6
 CHAIN_GROUND_REACH_M = 4.0
