@@ -101,6 +101,16 @@ mod's `trees.prewarmSaved`, 211 saved shapes warmed at one spot). The 2026-11-05
 texkeep ran without it: its dump has only the grass patch's watcher thread (texkeep's own watcher was not running),
 and texkeep was opt-in then.
 
+**texkeep also keeps the Steam Deck's GPU from faulting (2026-11-22, BeamNG 0.40.6).** Without it the engine's
+terrain material rebuild after a block swap, with Forest items added and removed meanwhile, ends in an amdgpu page
+fault in the game's Render thread (`[gfxhub] page fault ... BeamNGMa ... Render`, client TCP: the texture units reading
+memory that is gone) and a GPU reset. Deck soaks of the V0 prototype's sequence (Bonneville, 1024² swaps every ~2 s,
+Forest adds / removes, streams at 300 / 500 mph): texkeep and terfast off, 2 of 2 runs faulted (after 177 s / in the
+second loop; the V0 prototype's 3 of 4 faults on 0.40.6 ran without both, since neither applied); texkeep off and
+terfast on, faulted after 90 s; texkeep on (with or without terfast): 4 runs of 13-28 min (85 min in all), no fault.
+`-nogfxgpudriven` does not help there: the Linux executable has no such switch (only the Windows build parses the
+`-nogfx*` options), the GPU-cull registry is the same with it.
+
 Steam Deck, 2026-11-13, the same drive with terfast on: 995 kept-pack hits to 51 loads; the frame after a swap
 50.5 -> 25.9 ms (its Render 35.6 -> 13.0 ms), the rebuild's main-thread CPU 23.6 -> 1.5 ms (perf), the swap's two
 frames over the ordinary frame 49 -> 20 ms, the worst frame per swap 67 -> 53 ms (max 221 -> 55).
