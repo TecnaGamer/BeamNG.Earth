@@ -106,8 +106,8 @@ terrain material rebuild after a block swap, with Forest items added and removed
 fault in the game's Render thread (`[gfxhub] page fault ... BeamNGMa ... Render`, client TCP: the texture units reading
 memory that is gone) and a GPU reset. Deck soaks of the V0 prototype's sequence (Bonneville, 1024² swaps every ~2 s,
 Forest adds / removes, streams at 300 / 500 mph): texkeep and terfast off, 2 of 2 runs faulted (after 177 s / in the
-second loop; the V0 prototype's 3 of 4 faults on 0.40.6 ran without both, since neither applied); texkeep off and
-terfast on, faulted after 90 s; texkeep on (with or without terfast): 4 runs of 13-28 min (85 min in all), no fault.
+second loop, then the same point again; the V0 prototype's 3 of 4 faults on 0.40.6 ran without both, since neither applied); texkeep off and
+terfast on, faulted after 90 s; texkeep on (with or without terfast): 4 runs of 13-28 min (97 min in all), no fault.
 `-nogfxgpudriven` does not help there: the Linux executable has no such switch (only the Windows build parses the
 `-nogfx*` options), the GPU-cull registry is the same with it.
 
