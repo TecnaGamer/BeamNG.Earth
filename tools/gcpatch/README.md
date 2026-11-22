@@ -59,7 +59,9 @@ for the hole scan): the same box, radius, layer mask and hole flag, bit for bit.
   keeps the height scale at another offset and reaches the TerrainFile through another field of the resource's
   holder; the cell layout is the same.
 - The stock code runs outside the BeamNG.Earth level, and for any input the fast path does not expect.
-- `BNGEARTH_TERFAST_CHECK=1`: both run and the status file counts differences. Checked 2026-11-13: Steam Deck, a
+- `BNGEARTH_TERFAST_CHECK=1`: both run and the status file counts differences, per kind (bounds, layers, holes; the hole
+  flag compared right after the stock loop, through a stub in place of the call that follows it;
+  `BNGEARTH_TERFAST_CHECKLOG=1` logs the first 40 differing leaves to `temp/beamngEarth_terfast_check.log`). Checked 2026-11-13: Steam Deck, a
   Baltimore drive (1,696 leaf cells' bounds and holes, 4,304 layer scans) 0 differences; Windows test PC, 31 swaps of
   1024² blocks (7,936 cells) 0 differences. `win/test_terfast.sh` runs the Windows code on Linux on stand-in cells
   against the loops written out sample by sample; `server/tests/test_enginepatch_terfast.py` covers the search and

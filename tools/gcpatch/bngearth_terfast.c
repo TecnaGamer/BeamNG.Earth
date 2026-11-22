@@ -90,11 +90,13 @@ static uintptr_t g_get_transform;                // SceneObject::getTransform (t
 static cell_fn g_stock_bounds, g_stock_mats, g_mats_tail;
 static xform_fn g_xform;
 static atomic_int g_on, g_check;
-static atomic_ullong st_bounds, st_mats, st_holes, st_stock, st_diff, st_diff_b, st_diff_m, st_diff_h, st_pend_lost;
+static atomic_ullong st_bounds, st_mats, st_holes, st_stock, st_diff, st_diff_b, st_diff_m, st_diff_h, st_pend_lost,
+    st_holes_checked, st_diff_h_fast;
 static char g_found[256];                       // how the targets were found (the status line)
 static uintptr_t g_vb_after, g_vb_stock;        // where the hole scan's stub goes on: past the loop / into the stock loop
 static float g_step_k;
 static void *g_pending_cell;                    // (check mode, main thread: the leaf whose stock hole flag is compared next)
+static const void *g_pending_file;
 static int g_pending_flag;                      // (what the fast path would leave: the flag before | found)
 
 static inline uint32_t rd32(const void *p, size_t off) { uint32_t v; memcpy(&v, (const char *)p + off, 4); return v; }
@@ -128,7 +130,8 @@ uintptr_t bnge_terfast_holes(void *cell, const void *file) {
     if (size > 0x40) return g_vb_after;                 // (the engine skips the scan too)
     void *block;
     uint32_t n;
-    if (!atomic_load_explicit(&g_on, memory_order_relaxed) || !file || cell_file(cell, &block, &n) != file) {
+    if (!atomic_load_explicit(&g_on, memory_order_relaxed) || !file || g_step_k != 0.015625f ||
+        cell_file(cell, &block, &n) != file) {
         atomic_fetch_add_explicit(&st_stock, 1, memory_order_relaxed);
         return g_vb_stock;
     }
@@ -156,6 +159,7 @@ uintptr_t bnge_terfast_holes(void *cell, const void *file) {
     if (atomic_load_explicit(&g_check, memory_order_relaxed)) {     // the stock loop runs; compared at the leaf's bounds
         if (g_pending_cell) atomic_fetch_add_explicit(&st_pend_lost, 1, memory_order_relaxed);
         g_pending_cell = cell;
+        g_pending_file = file;
         g_pending_flag = found || *((unsigned char *)cell + CELL_HOLES) != 0;
         return g_vb_stock;
     }
@@ -163,14 +167,46 @@ uintptr_t bnge_terfast_holes(void *cell, const void *file) {
     return g_vb_after;
 }
 
-static void fast_bounds(void *cell) {
-    if (g_pending_cell == cell) {               // (check mode: the stock hole scan of this leaf has run)
-        if ((*((unsigned char *)cell + CELL_HOLES) != 0) != g_pending_flag) {
-            atomic_fetch_add_explicit(&st_diff, 1, memory_order_relaxed);
-            atomic_fetch_add_explicit(&st_diff_h, 1, memory_order_relaxed);
+// (check mode) The stock hole loop has just run for `cell`: its flag against what the row scan found. Called from the
+// check stub put in place of _updateVertexBuffer's call right after the loop (VB_AFTER), only with BNGEARTH_TERFAST_CHECK.
+void bnge_terfast_vbcheck(void *cell) {
+    if (!cell || g_pending_cell != cell) return;
+    int stock = *((unsigned char *)cell + CELL_HOLES) != 0;
+    atomic_fetch_add_explicit(&st_holes_checked, 1, memory_order_relaxed);
+    if (stock != g_pending_flag) {
+        atomic_fetch_add_explicit(&st_diff, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&st_diff_h, 1, memory_order_relaxed);
+        if (g_pending_flag) atomic_fetch_add_explicit(&st_diff_h_fast, 1, memory_order_relaxed);
+        static int logged;
+        if (logged < 40 && getenv("BNGEARTH_TERFAST_CHECKLOG")) {     // (what the two scans saw)
+            logged++;
+            char path[512];
+            bnge_temp_path(path, sizeof path, "beamngEarth_terfast_check.log");
+            FILE *f = fopen(path, "a");
+            if (f) {
+                const void *file = g_pending_file;
+                uint32_t n = rd32(file, FILE_SIZE), size = rd32(cell, CELL_SIZE);
+                int32_t x0 = (int32_t)rd32(cell, CELL_X), y0 = (int32_t)rd32(cell, CELL_Y);
+                const uint8_t *layers = rdp(file, FILE_LAYERS);
+                fprintf(f, "cell %p x0 %d y0 %d size %u n %u stock %d fast %d holes:", cell, x0, y0, size, n, stock,
+                        g_pending_flag);
+                int k = 0;
+                for (int j = -2; j <= 66 && k < 12; j++)
+                    for (int i = -2; i <= 66 && k < 12; i++) {
+                        long xx = ((long)x0 + i) % (long)n, yy = ((long)y0 + j) % (long)n;
+                        if (xx < 0) xx += n;
+                        if (yy < 0) yy += n;
+                        if (layers[(size_t)yy * n + (size_t)xx] == 0xff) { fprintf(f, " (%d,%d)", i, j); k++; }
+                    }
+                fprintf(f, "\n");
+                fclose(f);
+            }
         }
-        g_pending_cell = NULL;
     }
+    g_pending_cell = NULL;
+}
+
+static void fast_bounds(void *cell) {
     void *block;
     uint32_t n;
     const void *file = atomic_load_explicit(&g_on, memory_order_relaxed) ? cell_file(cell, &block, &n) : NULL;
@@ -300,6 +336,7 @@ static int hook(uintptr_t fn, const unsigned char *entry, unsigned char *tramp, 
 //        mov r11, VB_AFTER; jmp r11
 static int hook_holes(const struct tf_targets *t) {
     unsigned char *site = (unsigned char *)t->vb_scan;
+    g_step_k = t->step_k;                           // (the loop's 1 / 64, checked by tf_locate)
     unsigned char *stub = bnge_near_page((uintptr_t)site);
     if (!stub) return 0;
     unsigned char *p = stub;
@@ -317,8 +354,39 @@ static int hook_holes(const struct tf_targets *t) {
     *p++ = 0x49; *p++ = 0xbb;
     memcpy(p, &after, 8); p += 8;
     *p++ = 0x41; *p++ = 0xff; *p++ = 0xe3;
+    // check mode: the call right after the loop (VB_AFTER: call rel32, a function taking no arguments: the loop has
+    // used every argument register) goes through a stub that compares the stock flag first (bnge_terfast_vbcheck)
+    unsigned char *after_call = (unsigned char *)after;
+    uintptr_t call_target = 0;
+    if (atomic_load(&g_check) && after_call[0] == 0xe8) {
+        int32_t r0;
+        memcpy(&r0, after_call + 1, 4);
+        call_target = (uintptr_t)(after_call + 5) + (intptr_t)r0;
+        uintptr_t chk = (uintptr_t)bnge_terfast_vbcheck;
+        p = stub + 96;
+        static const unsigned char C[] = {0x50, 0x51, 0x52, 0x56, 0x57, 0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53,
+                                          0x48, 0x83, 0xec, 0x10, 0x48, 0x89, 0xdf, 0x48, 0xb8};   // (9 pushes after the
+                                                                                                    // call: rsp 16-aligned)
+        memcpy(p, C, sizeof C); p += sizeof C;
+        memcpy(p, &chk, 8); p += 8;
+        static const unsigned char D[] = {0xff, 0xd0, 0x48, 0x83, 0xc4, 0x10, 0x41, 0x5b, 0x41, 0x5a, 0x41, 0x59, 0x41,
+                                          0x58, 0x5f, 0x5e, 0x5a, 0x59, 0x58, 0x49, 0xbb};
+        memcpy(p, D, sizeof D); p += sizeof D;
+        memcpy(p, &call_target, 8); p += 8;
+        *p++ = 0x41; *p++ = 0xff; *p++ = 0xe3;      // jmp r11
+    }
     long pagesz = sysconf(_SC_PAGESIZE);
     if (mprotect(stub, (size_t)pagesz, PROT_READ | PROT_EXEC) != 0) return 0;
+    if (call_target) {
+        uintptr_t pg = (uintptr_t)after_call & ~(uintptr_t)(pagesz - 1);
+        size_t ln = (size_t)(((uintptr_t)after_call + 5 - pg + pagesz - 1) & ~(uintptr_t)(pagesz - 1));
+        if (mprotect((void *)pg, ln, PROT_READ | PROT_WRITE | PROT_EXEC) == 0) {
+            int32_t rc = (int32_t)((intptr_t)(stub + 96) - (intptr_t)(after_call + 5));
+            memcpy(after_call + 1, &rc, 4);
+            __sync_synchronize();
+            mprotect((void *)pg, ln, PROT_READ | PROT_EXEC);
+        }
+    }
     g_vb_after = after;
     g_vb_stock = (uintptr_t)(stub + 32);
     uintptr_t page = (uintptr_t)site & ~(uintptr_t)(pagesz - 1);
@@ -365,9 +433,10 @@ static void *watch_flag(void *arg) {
                 atomic_load(&st_bounds), atomic_load(&st_mats), atomic_load(&st_holes), atomic_load(&st_stock), g_found);
             if (atomic_load(&g_check)) {
                 size_t l = strlen(msg);
-                snprintf(msg + l, sizeof msg - l, "; check: %llu differences (bounds %llu, layers %llu, holes %llu; "
-                         "hole checks not paired %llu)", atomic_load(&st_diff), atomic_load(&st_diff_b),
-                         atomic_load(&st_diff_m), atomic_load(&st_diff_h), atomic_load(&st_pend_lost));
+                snprintf(msg + l, sizeof msg - l, "; check: %llu differences (bounds %llu, layers %llu, holes %llu of "
+                         "%llu checked, %llu of them found only by the fast scan; hole checks not paired %llu)",
+                         atomic_load(&st_diff), atomic_load(&st_diff_b), atomic_load(&st_diff_m), atomic_load(&st_diff_h),
+                         atomic_load(&st_holes_checked), atomic_load(&st_diff_h_fast), atomic_load(&st_pend_lost));
             }
             report(msg);
             on = want; shown = done; ticks = 0;
