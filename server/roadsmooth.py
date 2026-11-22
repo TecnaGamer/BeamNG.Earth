@@ -243,14 +243,20 @@ def smooth(feats, frame):
                 a, b = int(a_all[i]), int(b_all[i])
                 if b - a >= 2:
                     ends.append((i, feats.en[a], feats.en[b - 1]))
-        for i in other.tolist():
-            a, b = int(a_all[i]), int(b_all[i])
-            pins = (pinned_vertices(feats.en[a:b], [e for j, p, q in ends if j != i for e in (p, q)])
-                    if ends and rail[i] else [])
-            got = smooth_pinned(feats.en[a:b], float(radius[i]), pins) if pins else smooth_line(feats.en[a:b],
-                                                                                                float(radius[i]))
-            if got is not None:
-                changed.append((i,) + tuple(got))
+        # (one kernel call for all of them: pinned_vertices + smooth_pinned / smooth_line per line, the same
+        # arithmetic; in Python every rail end against every rail line cost a Montreal road tile 27 s of its
+        # neighbours' decodes, 2026-11-21)
+        fast.require(594, "road_smooth_pinned_many")
+        e_own = np.asarray([j for j, _p, _q in ends for _ in (0, 1)], np.int64)
+        e_pts = np.asarray([e for _j, p, q in ends for e in (p, q)], np.float64).reshape(-1, 2)
+        ch, c_pts, c_po, c_old, c_new, c_ko = fast._ef.road_smooth_pinned_many(
+            np.ascontiguousarray(feats.en, np.float64), np.ascontiguousarray(a_all[other], np.int64),
+            np.ascontiguousarray(b_all[other], np.int64), np.ascontiguousarray(radius[other], np.float64),
+            np.ascontiguousarray(other, np.int64), np.ascontiguousarray(rail[other] & bool(ends), bool),
+            np.ascontiguousarray(e_pts, np.float64), e_own, float(SWITCH_PIN_M), PARAMS)
+        for c, j in enumerate(ch.tolist()):
+            changed.append((int(other[j]), c_pts[c_po[c]:c_po[c + 1]], c_old[c_ko[c]:c_ko[c + 1]],
+                            c_new[c_ko[c]:c_ko[c + 1]]))
     lines = np.flatnonzero(g2)
     if len(lines):
         # (one kernel call for all of them. OpenStreetMap's raceways and busways carry no connectors: their joins

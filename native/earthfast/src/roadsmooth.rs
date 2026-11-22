@@ -1127,3 +1127,176 @@ mod tests {
         }
     }
 }
+
+// ---- the lines rounded one at a time, with their switch pins (roadsmooth.smooth's "other" lines, kernel 594) -------
+//
+// roadsmooth.smooth rounds the lines outside the G2 batch (the railways under BNE_RAIL_CURVES=on; every road line under
+// BNE_ROAD_G2=off) one at a time, and a railway keeps the vertices beside another rail line's end lying on it (a switch:
+// pinned_vertices). In Python that was every rail end against every rail line, through scalar numpy calls: 27 s of a
+// Montreal road tile's 46 s went to decoding its neighbours' roads layers so (2026-11-21, road waits). The same
+// arithmetic here, in the same order: the same points, the same pins, bit for bit.
+
+/// roadsmooth.pinned_vertices: the interior vertex indices of line xy to keep: both ends of every piece that an end p
+/// (of the other rail lines) lies within pin_m of, but for an end within pin_m of the line's own ends. Sorted, unique.
+pub fn switch_pins(xy: &[Pt], ends: &[Pt], pin_m: f64) -> Vec<usize> {
+    let k = xy.len();
+    if k < 3 || ends.is_empty() {
+        return Vec::new();
+    }
+    // (a box of the line, widened: an end farther than pin_m + 1 m from it in x or y is no closer than pin_m to any
+    // piece, so the arithmetic below is skipped for it; a NaN anywhere: no box, every end tried)
+    let mut bx = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    let mut finite = true;
+    for p in xy {
+        if !(p[0].is_finite() && p[1].is_finite()) {
+            finite = false;
+            break;
+        }
+        bx = [bx[0].min(p[0]), bx[1].min(p[1]), bx[2].max(p[0]), bx[3].max(p[1])];
+    }
+    let pad = pin_m + 1.0;
+    let mut pins: Vec<usize> = Vec::new();
+    for &p in ends {
+        if finite && p[0].is_finite() && p[1].is_finite()
+            && (p[0] < bx[0] - pad || p[0] > bx[2] + pad || p[1] < bx[1] - pad || p[1] > bx[3] + pad) {
+            continue;
+        }
+        // min(float(hypot(p - xy[0])), float(hypot(p - xy[-1]))) < pin_m: Python's min keeps the first unless the
+        // second is smaller (a NaN first stays)
+        let d0 = (p[0] - xy[0][0]).dhypot(p[1] - xy[0][1]);
+        let d1 = (p[0] - xy[k - 1][0]).dhypot(p[1] - xy[k - 1][1]);
+        let m = if d1 < d0 { d1 } else { d0 };
+        if m < pin_m {
+            continue;
+        }
+        for s in 0..k - 1 {
+            let (a, b) = (xy[s], xy[s + 1]);
+            let ab = [b[0] - a[0], b[1] - a[1]];
+            let den = ab[0] * ab[0] + ab[1] * ab[1];
+            let den = if den.is_nan() { den } else { den.max(1e-12) };     // (np.maximum keeps a NaN)
+            let t = ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / den;
+            let t = if t.is_nan() { t } else { t.max(0.0).min(1.0) };     // (np.clip keeps a NaN)
+            let d = ((a[0] + t * ab[0]) - p[0]).dhypot((a[1] + t * ab[1]) - p[1]);
+            if d < pin_m {
+                for v in [s, s + 1] {
+                    if v > 0 && v < k - 1 {
+                        pins.push(v);
+                    }
+                }
+            }
+        }
+    }
+    pins.sort_unstable();
+    pins.dedup();
+    pins
+}
+
+/// roadsmooth.smooth_pinned: smooth_core of xy with the vertices at pins (interior, sorted, unique) kept: each piece
+/// between them (and the ends) rounded alone. None when nothing changes.
+pub fn smooth_pinned(xy: &[Pt], radius: f64, pins: &[usize], p: &Params) -> Option<(Vec<Pt>, Vec<f64>, Vec<f64>)> {
+    let mut cuts = Vec::with_capacity(pins.len() + 2);
+    cuts.push(0usize);
+    cuts.extend_from_slice(pins);
+    cuts.push(xy.len() - 1);
+    let (mut pts, mut old_s, mut new_s): (Vec<Pt>, Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut o_off, mut n_off) = (0.0f64, 0.0f64);
+    let mut any = false;
+    for w in cuts.windows(2) {
+        let seg = &xy[w[0]..=w[1]];
+        let got = if seg.len() >= 3 { smooth_core(seg, radius, p) } else { None };
+        let (sp, so, sn) = match got {
+            Some(g) => {
+                any = true;
+                g
+            }
+            None => {
+                let d = cum_len(seg);
+                (seg.to_vec(), d.clone(), d)
+            }
+        };
+        let first = if pts.is_empty() { 0 } else { 1 };
+        pts.extend_from_slice(&sp[first..]);
+        old_s.extend(so[first..].iter().map(|v| v + o_off));
+        new_s.extend(sn[first..].iter().map(|v| v + n_off));
+        o_off += *so.last().unwrap();
+        n_off += *sn.last().unwrap();
+    }
+    if any { Some((pts, old_s, new_s)) } else { None }
+}
+
+type ManyOut<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>,
+                     Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>);
+
+/// roadsmooth.smooth's lines rounded one at a time: en (N, 2) the layer's points; line j is en[a[j]..b[j]], rounded
+/// with radius[j]; pinned[j]: it keeps its switch pins against the ends (m, 2) of the other rail lines, owner (m,)
+/// each end's line (a feature index, compared with feat[j]). Returns (changed (c,): the lines j that changed, in
+/// order; points (P, 2), p_off (c + 1); old (K,), new (K,) distances, k_off (c + 1)).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn road_smooth_pinned_many<'py>(
+    py: Python<'py>,
+    en: PyReadonlyArray2<'py, f64>,
+    a: PyReadonlyArray1<'py, i64>,
+    b: PyReadonlyArray1<'py, i64>,
+    radius: PyReadonlyArray1<'py, f64>,
+    feat: PyReadonlyArray1<'py, i64>,
+    pinned: PyReadonlyArray1<'py, bool>,
+    ends: PyReadonlyArray2<'py, f64>,
+    owner: PyReadonlyArray1<'py, i64>,
+    pin_m: f64,
+    params: PyReadonlyArray1<'py, f64>,
+) -> PyResult<ManyOut<'py>> {
+    let bad = |m: &str| pyo3::exceptions::PyValueError::new_err(m.to_string());
+    let (en, a, b, radius, feat, pinned, ends, owner) = (en.as_array(), a.as_array(), b.as_array(), radius.as_array(),
+                                                         feat.as_array(), pinned.as_array(), ends.as_array(),
+                                                         owner.as_array());
+    let ps = params.as_slice().map_err(|_| bad("params must be contiguous"))?;
+    let p = Params::from_slice(ps).ok_or_else(|| bad("params needs 8 values"))?;
+    let n = a.len();
+    if b.len() != n || radius.len() != n || feat.len() != n || pinned.len() != n {
+        return Err(bad("a, b, radius, feat, pinned must have one value per line"));
+    }
+    if en.ndim() != 2 || en.shape()[1] < 2 || ends.ndim() != 2 || (ends.shape()[0] > 0 && ends.shape()[1] < 2)
+        || owner.len() != ends.shape()[0] {
+        return Err(bad("en (N, 2), ends (m, 2), owner (m,)"));
+    }
+    let rows = en.shape()[0] as i64;
+    for j in 0..n {
+        if a[j] < 0 || b[j] < a[j] || b[j] > rows {
+            return Err(bad("bad line range"));
+        }
+    }
+    let all_ends: Vec<(i64, Pt)> = (0..ends.shape()[0]).map(|i| (owner[i], [ends[[i, 0]], ends[[i, 1]]])).collect();
+    let lines: Vec<Vec<Pt>> = (0..n).map(|j| (a[j] as usize..b[j] as usize).map(|i| [en[[i, 0]], en[[i, 1]]]).collect())
+        .collect();
+    let rad: Vec<f64> = radius.iter().copied().collect();
+    let fe: Vec<i64> = feat.iter().copied().collect();
+    let pn: Vec<bool> = pinned.iter().copied().collect();
+    let got: Vec<Option<(Vec<Pt>, Vec<f64>, Vec<f64>)>> = py.detach(|| {
+        (0..n).map(|j| {
+            let pins = if pn[j] && !all_ends.is_empty() {
+                let others: Vec<Pt> = all_ends.iter().filter(|(o, _)| *o != fe[j]).map(|(_, q)| *q).collect();
+                switch_pins(&lines[j], &others, pin_m)
+            } else {
+                Vec::new()
+            };
+            if pins.is_empty() { smooth_core(&lines[j], rad[j], &p) } else { smooth_pinned(&lines[j], rad[j], &pins, &p) }
+        }).collect()
+    });
+    let (mut changed, mut pts, mut p_off, mut old_s, mut new_s, mut k_off) =
+        (Vec::new(), Vec::new(), vec![0i64], Vec::new(), Vec::new(), vec![0i64]);
+    for (j, g) in got.into_iter().enumerate() {
+        if let Some((sp, so, sn)) = g {
+            changed.push(j as i64);
+            pts.extend(sp.into_iter().flatten());
+            p_off.push((pts.len() / 2) as i64);
+            old_s.extend(so);
+            new_s.extend(sn);
+            k_off.push(old_s.len() as i64);
+        }
+    }
+    let m = pts.len() / 2;
+    Ok((Array1::from_vec(changed).into_pyarray(py), Array2::from_shape_vec((m, 2), pts).expect("points").into_pyarray(py),
+        Array1::from_vec(p_off).into_pyarray(py), Array1::from_vec(old_s).into_pyarray(py),
+        Array1::from_vec(new_s).into_pyarray(py), Array1::from_vec(k_off).into_pyarray(py)))
+}

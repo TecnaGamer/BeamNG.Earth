@@ -7047,6 +7047,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 235: roadsmooth.smooth's layer steps (road_connector_pins, road_smooth_rebuild, road_smooth_fractions: its
     // Python round the line kernels was most of the smoothing's CPU)
     m.add_function(wrap_pyfunction!(roadsmooth::road_connector_pins, m)?)?;
+    // 594: roadsmooth.smooth's lines rounded one at a time with their switch pins, in one call (road waits)
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_pinned_many, m)?)?;
     m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_rebuild, m)?)?;
     m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_fractions, m)?)?;
     // (and lanesections.split's new layer: lane_split_coords / lane_split_rules)
@@ -7630,6 +7632,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     railmesh::register(m)?;
     railstations::register(m)?;
     catenary::register(m)?;
-    m.add("VERSION", 588)?;
+    m.add("VERSION", 594)?;
     Ok(())
 }
