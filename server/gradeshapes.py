@@ -1819,8 +1819,9 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None, pin_tracks=F
     ("stacked",)) and "bound" ({(piece, sample, "lo" | "hi"): (the bound, the crossing's index)} of the bounds a crossing
     with a road the shape does not move set). pin_tracks: the crossings read every track as the heights the railways lay (fixed_z,
     as a road on the ground under a deck is read), never as unknowns: the problem as it was when a track was no member of the
-    shape (the track's own chain is then drawn to its bed and moves by the little its grade and curve laws ask of the bed's
-    own noise; _solve_shape_qp asks it first)."""
+    shape (the track's own chain is then drawn to its bed, free of anything else: its window ends are not held either, a short
+    window's bed is the railways' own and may be steeper than the track's grade at its two ends, and the roads' problem would
+    have no heights for it; _solve_shape_qp asks it first)."""
     chains = []
     is_track = np.array([pc["kind"] == "track" for pc in pcs], bool)
     natural = _natural_lines(net, sysm, pcs, smp, ground)
@@ -1857,8 +1858,8 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None, pin_tracks=F
             top = _track_tops(x, fixed)
             ok = np.isfinite(top)
             target, w = np.where(ok, top, t), np.where(ok, W_TRACK, 0.0)
-            for k in (0, n - 1):
-                if ok[k]:
+            for k in (() if pin_tracks else (0, n - 1)):      # (held, the crossings read the tracks: no law of a track's own may
+                if ok[k]:                                     # contradict the roads', the problem is as it was without them)
                     lo[k] = hi[k] = top[k]
         else:
             target, w = t.copy(), np.full(n, W_DIP)

@@ -55,10 +55,12 @@ a window round each crossing, wide enough for the track to leave its bed and com
 drawn to the bed the railways lay (its top, read by terrain) at a weight, `gradeshapes.W_TRACK`, derived from the laws:
 findground costs a move by the run of its ramp, lack / grade; a road moves at best at the steepest grade the laws allow
 (`gradelaw.road_grade`, a link), a track at `railways.GRADE`, so a track costs that ratio times a road's dip to move. It is
-held at the bed at both ends of its window, where the railways' own bed goes on.
+held at the bed at both ends of its window, where the railways' own bed goes on (when the tracks are free to move: see below).
 
 The solve asks the interchange first with the tracks held (`pin_tracks`): the crossings read a track at the bed, as they read a
-road on the ground under a deck, never as unknowns; this is the problem as it was before tracks were members, and a track
+road on the ground under a deck, never as unknowns, and the track's own chain, drawn to the bed, is held at nothing (a short
+window's bed may be steeper at its two ends than the track's grade, and the roads' problem would have no heights for it); this
+is the problem as it was before tracks were members, and a track
 nothing needs to move stays at its bed (the Heights hold it there: the answer for it is the bed, not its chain, drawn to the
 bed and held to its laws, which the bed's own noise does not meet exactly) and the diagnostics say `tracks_moved: false`. Only
 if that has no heights, the crossings solve for the tracks too, each at its weight, `tracks_moved: true`, and only then relaxation

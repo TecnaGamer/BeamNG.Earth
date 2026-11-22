@@ -69,9 +69,10 @@ def test_pinned_the_crossings_read_the_track_and_free_they_solve_for_it():
     free, fcp = gs.shape_problem(net, sysm, pcs, smp, ground, _fixed(net))
     assert not [c for c in pcp if k in (c[0], c[2])]                 # (no coupling asks the track's unknowns)
     assert [c for c in fcp if k in (c[0], c[2]) and c[4] == "ge"]
-    for ch in (pinned[k], free[k]):                                  # (held at the ends of its window, drawn to its bed between)
-        assert set(np.flatnonzero(ch["lo"] == ch["hi"]).tolist()) == {0, n - 1}
+    for ch in (pinned[k], free[k]):                                  # (drawn to its bed all along)
         assert (ch["t"] == 0.5).all() and (ch["w"] == gs.W_TRACK).all()
+    assert not (pinned[k]["lo"] == pinned[k]["hi"]).any()            # (the problem as it was: no law of the track's own in it)
+    assert set(np.flatnonzero(free[k]["lo"] == free[k]["hi"]).tolist()) == {0, n - 1}      # (free: held at its window's ends)
     # (the road under it is held under its top, read where the crossing is)
     tunnel = [q for q, pc in enumerate(pcs) if pc["kind"] == "dip" or net.m[pc["main"]].kind == "tunnel"][0]
     assert np.isfinite(pinned[tunnel]["hi"]).any()
