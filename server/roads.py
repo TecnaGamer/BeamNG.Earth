@@ -28,6 +28,7 @@ import hashlib
 import os
 import threading
 import time
+import types
 from collections import OrderedDict, namedtuple
 
 import numpy as np
