@@ -13,13 +13,18 @@
 // first instruction to a stub near the game's code) and the flag set from a row scan with the engine's own
 // coordinate arithmetic.
 //
-// Exact build only: both functions (whole) and the two engine functions the replacements call are compared by hash at
-// startup; on any difference nothing is patched and <user>/temp/beamngEarth_terfast.txt says so. The entry of each
-// function (after its endbr64) is replaced by a 14-byte jump before the game's code runs; the displaced instructions
-// (position independent) live in a trampoline, so the stock function stays callable: it runs outside the BeamNG.Earth
-// level (the level flag), for any input the fast path does not expect, and for BNGEARTH_TERFAST_CHECK=1, which runs
-// both and counts differences in the status file. Off: BNGEARTH_TERFAST_OFF=1.
+// Found by code, not by address (2026-11-22, after BeamNG 0.40.6 moved data the old exact-address check had pinned):
+// the three functions, the two engine functions the replacements call and getTransform are matched against masked
+// whole-function signatures (bngearth_sigs.h, made by mksigs.py: every byte but rip displacements and calls / jumps
+// out of the function), each exactly once, and the constants they load are checked (+-FLT_MAX, 0.5, 1 / 64). The
+// structure offsets the replacements read are all inside those functions' code, so a build that changed any of them
+// does not match: on any difference nothing is patched and <user>/temp/beamngEarth_terfast.txt says "not applied:
+// another game build (why; build id)". The entry of each function (after its endbr64) is replaced by a 14-byte jump before the game's code runs; the
+// displaced instructions (position independent) live in a trampoline, so the stock function stays callable: it runs
+// outside the BeamNG.Earth level (the level flag), for any input the fast path does not expect, and for
+// BNGEARTH_TERFAST_CHECK=1, which runs both and counts differences in the status file. Off: BNGEARTH_TERFAST_OFF=1.
 #include "bngearth_common.h"
+#include "bngearth_sigs.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <sys/mman.h>
@@ -28,31 +33,32 @@
 #define TAG "bngearth-terfast"
 #define STATUS_FILE "beamngEarth_terfast.txt"
 
-// BeamNG.drive 0.40.4 Linux (BinLinux/BeamNG.drive.x64 sha256 4fa0771d463ab31f..., the 2026-11-06 build): vaddrs
-#define FN_BOUNDS 0x1735dc0UL       // TerrCell::_updateBounds()
-#define FN_BOUNDS_LEN 784
-#define FN_BOUNDS_HASH 0x688389e2581ddf6dULL
-#define FN_MATS 0x1735c00UL         // TerrCell::_updateMaterials()
-#define FN_MATS_LEN 448
-#define FN_MATS_HASH 0xc9167855df1b6175ULL
-#define FN_XFORM 0x12b00d0UL        // (cell + 0x74: its world box / OBB, const MatrixF *, const Box3F *)
-#define FN_XFORM_HASH 0x4090fa4293264356ULL
-#define FN_MATS_TAIL 0x1733c30UL    // (cell): after the mask, for cells with a vertex buffer slot
-#define FN_MATS_TAIL_HASH 0x91776d6d5c9e59b9ULL
-#define FN_VB 0x1734b30UL           // TerrCell::_updateVertexBuffer()
-#define FN_VB_LEN 2624
-#define FN_VB_HASH 0x25953ffe82c2346aULL
-#define VB_SCAN 0x1734c55UL         // mov eax, [rbx + 0x28]; cmp eax, 0x40; ja VB_AFTER: the hole scan (rbx cell, r13 file)
-#define VB_SCAN_BODY 0x1734c61UL    // its loop (eax = the cell's size)
-#define VB_AFTER 0x1734d72UL
-#define VB_STEP_K 0x35a8810UL       // float 1 / 64
-#define CELL_HOLES 0x34             // u8: the leaf holds a hole sample (layer 255)
-#define FN_GET_TRANSFORM 0x80cd80UL // SceneObject::getTransform: lea rax, [rdi + 0x130]
-#define HEAD_HASH_LEN 48
+// The engine functions, found by their masked whole-function signatures (bngearth_sigs.h, mksigs.py; reference:
+// BeamNG.drive 0.40.6 Linux, the 2026-11-19 executable; the 2026-11-06 one had the same code at the same addresses).
+// Offsets inside a matched function (its bytes equal the signature's there, the instruction lengths with them):
+#define B_INIT_LO_DISP 0x1f, 0x23       // bounds: mov rdx, [rip] (box max y z: -FLT_MAX x2)
+#define B_INIT_HI_DISP 0x26, 0x2a       // bounds: movaps xmm0, [rip] (box min x y z, max x: FLT_MAX x3, -FLT_MAX)
+#define B_HALF_DISP 0x284, 0x288        // bounds: mulss xmm0, [rip] (0.5: radius = length / 2)
+#define B_GETXF_DISP 0x28b, 0x28f       // bounds: lea rdx, [rip] (SceneObject::getTransform, devirtualised)
+#define B_XFORM_REL 0x2d6, 0x2da        // bounds: jmp <the world box> (tail call)
+#define M_TAIL_REL 0x17c, 0x180         // mats: jmp <tail> (cells with a vertex buffer slot)
+#define VB_SCAN_OFF 0x125               // vb: mov eax, [rbx + 0x28]; cmp eax, 0x40; ja VB_AFTER: the hole scan (rbx cell, r13 file)
+#define VB_BODY_OFF 0x131               // vb: its loop (eax = the cell's size)
+#define VB_AFTER_OFF 0x242
+#define VB_STEP_DISP 0x148, 0x14c       // vb: the loop's float 1 / 64
 #define ENTRY_SKIP 4                // endbr64
 #define ENTRY_LEN 14                // the displaced instructions (whole, position independent)
 static const unsigned char ENTRY_BOUNDS[ENTRY_LEN] = {0x55, 0x48, 0x8d, 0x77, 0x5c, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55};
 static const unsigned char ENTRY_MATS[ENTRY_LEN] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x49, 0x89, 0xfc, 0x53};
+static const unsigned char VB_SITE[12] = {0x8b, 0x43, 0x28, 0x83, 0xf8, 0x40, 0x0f, 0x87, 0x11, 0x01, 0x00, 0x00};
+
+// Where everything is in this build (tf_locate).
+struct tf_targets {
+    uintptr_t bounds, mats, xform, mats_tail, vb, get_transform, vb_scan, vb_body, vb_after;
+    float step_k;
+};
+
+#define CELL_HOLES 0x34             // u8: the leaf holds a hole sample (layer 255)
 
 // TerrCell
 #define CELL_X 0x20                 // u32: the cell's first sample
@@ -80,11 +86,12 @@ typedef void (*cell_fn)(void *cell);
 typedef void (*xform_fn)(void *world, const void *matrix, const void *box);
 typedef const void *(*transform_fn)(void *block);
 
-static uintptr_t g_base;
+static uintptr_t g_get_transform;                // SceneObject::getTransform (the devirtualised case)
 static cell_fn g_stock_bounds, g_stock_mats, g_mats_tail;
 static xform_fn g_xform;
 static atomic_int g_on, g_check;
 static atomic_ullong st_bounds, st_mats, st_holes, st_stock, st_diff;
+static char g_found[256];                       // how the targets were found (the status line)
 static uintptr_t g_vb_after, g_vb_stock;        // where the hole scan's stub goes on: past the loop / into the stock loop
 static float g_step_k;
 static void *g_pending_cell;                    // (check mode, main thread: the leaf whose stock hole flag is compared next)
@@ -213,7 +220,7 @@ static void fast_bounds(void *cell) {
     memcpy((char *)cell + CELL_RADIUS, &radius, 4);
     void **vtbl = rdp(block, 0);
     transform_fn get = (transform_fn)vtbl[BLOCK_VTBL_TRANSFORM / 8];
-    const void *matrix = (uintptr_t)get == g_base + FN_GET_TRANSFORM ? (const char *)block + BLOCK_MATRIX : get(block);
+    const void *matrix = (uintptr_t)get == g_get_transform ? (const char *)block + BLOCK_MATRIX : get(block);
     g_xform((char *)cell + CELL_WORLD, matrix, (char *)cell + CELL_BOX);
     atomic_fetch_add_explicit(&st_bounds, 1, memory_order_relaxed);
 }
@@ -255,13 +262,8 @@ static void fast_mats(void *cell) {
     if ((int32_t)rd32(cell, CELL_VB) != -1) g_mats_tail(cell);
 }
 
-static uint64_t fnv(const unsigned char *p, size_t n) {
-    uint64_t h = 0xcbf29ce484222325ULL;
-    for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 0x100000001b3ULL;
-    return h;
-}
-
 static void report(const char *msg) { bnge_report(TAG, STATUS_FILE, msg); }
+static void report_sticky(const char *msg) { bnge_report_sticky(TAG, STATUS_FILE, msg); }
 
 // jmp [rip + 0]; <target>
 static void write_jump(unsigned char *at, uintptr_t target) {
@@ -288,18 +290,12 @@ static int hook(uintptr_t fn, const unsigned char *entry, unsigned char *tramp, 
 //   +0   mov rdi, rbx; mov rsi, r13; mov rax, bnge_terfast_holes; call rax; jmp rax
 //   +32  (the stock loop again) mov eax, [rbx + 0x28]; cmp eax, 0x40; ja +13; mov r11, VB_SCAN_BODY; jmp r11;
 //        mov r11, VB_AFTER; jmp r11
-static void hook_holes(const struct bnge_main *m) {
-    static const unsigned char SITE[12] = {0x8b, 0x43, 0x28, 0x83, 0xf8, 0x40, 0x0f, 0x87, 0x11, 0x01, 0x00, 0x00};
-    if (!bnge_mapped(m, FN_VB, FN_VB_LEN, PF_X) || !bnge_mapped(m, VB_STEP_K, 4, PF_R) ||
-        fnv((unsigned char *)(m->base + FN_VB), FN_VB_LEN) != FN_VB_HASH ||
-        memcmp((void *)(m->base + VB_SCAN), SITE, sizeof SITE) != 0) return;
-    memcpy(&g_step_k, (void *)(m->base + VB_STEP_K), 4);
-    if (g_step_k != 0.015625f) return;
-    unsigned char *site = (unsigned char *)(m->base + VB_SCAN);
+static int hook_holes(const struct tf_targets *t) {
+    unsigned char *site = (unsigned char *)t->vb_scan;
     unsigned char *stub = bnge_near_page((uintptr_t)site);
-    if (!stub) return;
+    if (!stub) return 0;
     unsigned char *p = stub;
-    uintptr_t fn = (uintptr_t)bnge_terfast_holes, body = m->base + VB_SCAN_BODY, after = m->base + VB_AFTER;
+    uintptr_t fn = (uintptr_t)bnge_terfast_holes, body = t->vb_body, after = t->vb_after;
     static const unsigned char A[] = {0x48, 0x89, 0xdf, 0x4c, 0x89, 0xee, 0x48, 0xb8};
     memcpy(p, A, sizeof A); p += sizeof A;
     memcpy(p, &fn, 8); p += 8;
@@ -314,36 +310,51 @@ static void hook_holes(const struct bnge_main *m) {
     memcpy(p, &after, 8); p += 8;
     *p++ = 0x41; *p++ = 0xff; *p++ = 0xe3;
     long pagesz = sysconf(_SC_PAGESIZE);
-    if (mprotect(stub, (size_t)pagesz, PROT_READ | PROT_EXEC) != 0) return;
+    if (mprotect(stub, (size_t)pagesz, PROT_READ | PROT_EXEC) != 0) return 0;
     g_vb_after = after;
     g_vb_stock = (uintptr_t)(stub + 32);
     uintptr_t page = (uintptr_t)site & ~(uintptr_t)(pagesz - 1);
     size_t len = (size_t)(((uintptr_t)site + 5 - page + pagesz - 1) & ~(uintptr_t)(pagesz - 1));
-    if (mprotect((void *)page, len, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) return;
+    if (mprotect((void *)page, len, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) return 0;
     int32_t rel = (int32_t)((intptr_t)stub - (intptr_t)(site + 5));
     site[0] = 0xe9;
     memcpy(site + 1, &rel, 4);
     __sync_synchronize();
     mprotect((void *)page, len, PROT_READ | PROT_EXEC);
+    return 1;
 }
 
 static void *watch_flag(void *arg) {
     (void)arg;
     char flag[512];
     bnge_temp_path(flag, sizeof flag, BNGE_LEVEL_FLAG);
-    int on = -1;
+    // BNGEARTH_TERFAST_CTL=1 (A/B tests in one session, tools: the V0 runner): <user>/temp/beamngearth_terfast_ctl
+    // starting with '0' keeps the stock scans in the level too
+    char ctl[512];
+    bnge_temp_path(ctl, sizeof ctl, "beamngearth_terfast_ctl");
+    const char *ce = getenv("BNGEARTH_TERFAST_CTL");
+    int use_ctl = ce && *ce && strcmp(ce, "0");
+    int on = -1, held = 0;
     unsigned long long shown = ~0ULL;
     int ticks = 0;
     for (;;) {
         int want = access(flag, F_OK) == 0;
+        if (want && use_ctl) {
+            FILE *f = fopen(ctl, "r");
+            int c = f ? fgetc(f) : EOF;
+            if (f) fclose(f);
+            held = c == '0';
+            if (held) want = 0;
+        }
         atomic_store(&g_on, want);
         unsigned long long done = atomic_load(&st_bounds) + atomic_load(&st_mats) + atomic_load(&st_holes);
         // the status file: at every level change, and every ~5 s while cells are being scanned
         if (want != on || (done != shown && ++ticks >= 20)) {
-            char msg[256];
-            snprintf(msg, sizeof msg, "%s: cell scans fast %llu bounds / %llu layers / %llu holes, stock %llu%s", want ?
-                "applied (BeamNG.Earth level)" : "ready (stock outside the BeamNG.Earth level)",
-                atomic_load(&st_bounds), atomic_load(&st_mats), atomic_load(&st_holes), atomic_load(&st_stock), "");
+            char msg[512];
+            snprintf(msg, sizeof msg, "%s: cell scans fast %llu bounds / %llu layers / %llu holes, stock %llu (%s)", want ?
+                "applied (BeamNG.Earth level)" : held ? "ready (held stock by BNGEARTH_TERFAST_CTL)" :
+                "ready (stock outside the BeamNG.Earth level)",
+                atomic_load(&st_bounds), atomic_load(&st_mats), atomic_load(&st_holes), atomic_load(&st_stock), g_found);
             if (atomic_load(&g_check)) {
                 size_t l = strlen(msg);
                 snprintf(msg + l, sizeof msg - l, "; check: %llu differences", atomic_load(&st_diff));
@@ -357,36 +368,91 @@ static void *watch_flag(void *arg) {
     return NULL;
 }
 
+
+static const char *found_once(const struct bnge_main *m, const struct bnge_sig *s, uintptr_t *at, char *why, size_t n) {
+    int k = bnge_sig_find(m, s, at);
+    if (k == 1) return NULL;
+    snprintf(why, n, "%s: %d matches of its code", s->name, k);
+    return why;
+}
+
+// NULL when every function and constant is as the patch expects, else why not (the status file says it).
+static int is_code(const struct bnge_main *m, uintptr_t a, size_t n) { return bnge_mapped(m, a - m->base, n, PF_X); }
+
+static const char *tf_locate(const struct bnge_main *m, struct tf_targets *t, char *why, size_t n) {
+    memset(t, 0, sizeof *t);
+    if (found_once(m, &tf_bounds, &t->bounds, why, n) || found_once(m, &tf_mats, &t->mats, why, n) ||
+        found_once(m, &tf_vb, &t->vb, why, n)) return why;
+    t->xform = bnge_rel_target(t->bounds, B_XFORM_REL);
+    t->get_transform = bnge_rel_target(t->bounds, B_GETXF_DISP);
+    t->mats_tail = bnge_rel_target(t->mats, M_TAIL_REL);
+    if (!is_code(m, t->xform, tf_xform.len) || !bnge_sig_at(&tf_xform, (const unsigned char *)t->xform))
+        return "the world box function (the bounds' tail call) differs";
+    if (!is_code(m, t->get_transform, tf_get_transform.len) ||
+        !bnge_sig_at(&tf_get_transform, (const unsigned char *)t->get_transform))
+        return "SceneObject::getTransform differs";
+    if (!is_code(m, t->mats_tail, tf_mats_tail.len) || !bnge_sig_at(&tf_mats_tail, (const unsigned char *)t->mats_tail))
+        return "the layer scan's tail call differs";
+    // the constants the replacements reproduce: the box's start (+-FLT_MAX), the radius' 0.5, the hole scan's 1 / 64
+    uintptr_t lo = bnge_rel_target(t->bounds, B_INIT_LO_DISP), hi = bnge_rel_target(t->bounds, B_INIT_HI_DISP);
+    uintptr_t half = bnge_rel_target(t->bounds, B_HALF_DISP), step = bnge_rel_target(t->vb, VB_STEP_DISP);
+    if (!bnge_mapped(m, lo - m->base, 8, PF_R) || !bnge_mapped(m, hi - m->base, 16, PF_R) ||
+        !bnge_mapped(m, half - m->base, 4, PF_R) || !bnge_mapped(m, step - m->base, 4, PF_R))
+        return "a constant of the cell functions is not mapped";
+    const float big = 3.4028234663852886e+38f;
+    float init[6], h;
+    memcpy(init, (const void *)hi, 16);
+    memcpy(init + 4, (const void *)lo, 8);
+    memcpy(&h, (const void *)half, 4);
+    memcpy(&t->step_k, (const void *)step, 4);
+    if (init[0] != big || init[1] != big || init[2] != big || init[3] != -big || init[4] != -big || init[5] != -big)
+        return "the cell box's start values differ";
+    if (h != 0.5f || t->step_k != 0.015625f) return "a constant of the cell functions differs";
+    if (memcmp((const void *)(t->bounds + ENTRY_SKIP), ENTRY_BOUNDS, ENTRY_LEN) != 0 ||
+        memcmp((const void *)(t->mats + ENTRY_SKIP), ENTRY_MATS, ENTRY_LEN) != 0)
+        return "a function's entry differs";
+    t->vb_scan = t->vb + VB_SCAN_OFF;
+    t->vb_body = t->vb + VB_BODY_OFF;
+    t->vb_after = t->vb + VB_AFTER_OFF;
+    if (memcmp((const void *)t->vb_scan, VB_SITE, sizeof VB_SITE) != 0) return "the hole scan differs";
+    return NULL;
+}
+
+#ifndef BNGE_SIGTEST
 __attribute__((constructor)) static void bngearth_terfast(void) {
     if (!bnge_is_main_game()) return;
-    if (getenv("BNGEARTH_TERFAST_OFF")) { report("off (BNGEARTH_TERFAST_OFF set)"); return; }
+    if (getenv("BNGEARTH_TERFAST_OFF")) { report_sticky("off (BNGEARTH_TERFAST_OFF set)"); return; }
     struct bnge_main m;
     bnge_find_main(&m);
-    if (!m.seen) { report("not applied: the game's code was not found"); return; }
-    if (!bnge_mapped(&m, FN_BOUNDS, FN_BOUNDS_LEN, PF_X) || !bnge_mapped(&m, FN_MATS, FN_MATS_LEN, PF_X) ||
-        !bnge_mapped(&m, FN_XFORM, HEAD_HASH_LEN, PF_X) || !bnge_mapped(&m, FN_MATS_TAIL, HEAD_HASH_LEN, PF_X) ||
-        !bnge_mapped(&m, FN_GET_TRANSFORM, 8, PF_X) ||
-        fnv((unsigned char *)(m.base + FN_BOUNDS), FN_BOUNDS_LEN) != FN_BOUNDS_HASH ||
-        fnv((unsigned char *)(m.base + FN_MATS), FN_MATS_LEN) != FN_MATS_HASH ||
-        fnv((unsigned char *)(m.base + FN_XFORM), HEAD_HASH_LEN) != FN_XFORM_HASH ||
-        fnv((unsigned char *)(m.base + FN_MATS_TAIL), HEAD_HASH_LEN) != FN_MATS_TAIL_HASH) {
-        report("not applied: another game build (the terrain cell functions differ)");
+    if (!m.seen) { report_sticky("not applied: the game's code was not found"); return; }
+    char why[160], msg[400], build[48];
+    bnge_build_id(build, sizeof build);
+    struct tf_targets t;
+    if (tf_locate(&m, &t, why, sizeof why)) {
+        snprintf(msg, sizeof msg, "not applied: another game build (%s; build id %s); stock", why, build);
+        report_sticky(msg);
         return;
     }
     unsigned char *tramp = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (tramp == MAP_FAILED) { report("not applied: no memory for the trampolines"); return; }
-    g_base = m.base;
-    g_xform = (xform_fn)(m.base + FN_XFORM);
-    g_mats_tail = (cell_fn)(m.base + FN_MATS_TAIL);
+    if (tramp == MAP_FAILED) { report_sticky("not applied: no memory for the trampolines"); return; }
+    g_get_transform = t.get_transform;
+    g_xform = (xform_fn)t.xform;
+    g_mats_tail = (cell_fn)t.mats_tail;
     g_stock_bounds = (cell_fn)tramp;
     g_stock_mats = (cell_fn)(tramp + 64);
     atomic_store(&g_check, getenv("BNGEARTH_TERFAST_CHECK") != NULL);
     // (the flag off until the watcher sees the level: the replacements run the stock functions meanwhile)
-    if (!hook(m.base + FN_BOUNDS, ENTRY_BOUNDS, tramp, fast_bounds)) { report("not applied: the bounds entry could not be patched"); return; }
-    if (!hook(m.base + FN_MATS, ENTRY_MATS, tramp + 64, fast_mats)) { report("half applied: the layer scan's entry could not be patched"); }
+    if (!hook(t.bounds, ENTRY_BOUNDS, tramp, fast_bounds)) { report_sticky("not applied: the bounds entry could not be patched"); return; }
+    int mats_ok = hook(t.mats, ENTRY_MATS, tramp + 64, fast_mats);
     mprotect(tramp, 4096, PROT_READ | PROT_EXEC);
-    hook_holes(&m);
-    pthread_t t;
-    if (pthread_create(&t, NULL, watch_flag, NULL) != 0) { report("installed, but no thread for the level flag: stock"); return; }
-    pthread_detach(t);
+    int holes_ok = hook_holes(&t);
+    snprintf(g_found, sizeof g_found, "found by signature: bounds %#lx, layers %#lx, holes %#lx; build id %s%s%s",
+             (unsigned long)(t.bounds - m.base), (unsigned long)(t.mats - m.base), (unsigned long)(t.vb_scan - m.base), build,
+             mats_ok ? "" : "; HALF APPLIED: the layer scan's entry could not be patched",
+             holes_ok ? "" : "; the hole scan could not be patched");
+    report(mats_ok ? "installed (stock until the BeamNG.Earth level starts)" : "half applied: the layer scan's entry could not be patched");
+    pthread_t th;
+    if (pthread_create(&th, NULL, watch_flag, NULL) != 0) { report_sticky("not applied: no thread for the level flag (stock)"); return; }
+    pthread_detach(th);
 }
+#endif

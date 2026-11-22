@@ -2868,6 +2868,13 @@ function M.heldReason()
 end
 function M._psum.frame(ms, hrec)
   local ps = M._psum
+  -- the engine patches' status files, read once a few seconds after our level started (enginepatches.lua: a warning
+  -- when one is not applied, and the setup's enginePatches); nothing once read
+  if not ps.epDone and st.clock >= (ps.epAt or 0) then
+    ps.epAt = st.clock + 1
+    local okE, d = pcall(M._enginepatches.tick, os.time(), M._epWarn)
+    ps.epDone = not okE or d
+  end
   local kb = collectgarbage('count')
   local gc = ps.kb ~= nil and kb < ps.kb - 1024          -- (the heap fell a MB or more since the last frame: a sweep)
   ps.kb = kb
@@ -2890,12 +2897,12 @@ function M._psum.frame(ms, hrec)
   ps.sampleAt = st.clock + 1
   local okS, smp = pcall(ps.sample)
   if okS then ps.mod.sample(st.clock, smp) end
-  if not ps.setupSent then
+  if not ps.setupSent and not M._enginepatches.pending() then
     local rep = rawget(_G, 'beamngEarth_report')
     local okH, hw = pcall(function() return rep and rep.collectHardware and rep.collectHardware() end)
     local S = rawget(_G, 'beamngEarth_settings')
     if okH and hw then
-      local okU, setup = pcall(ps.mod.setup, hw, S and S.get)
+      local okU, setup = pcall(ps.mod.setup, hw, S and S.get, M._enginepatches.states())
       if okU then net.send({ type = 'perf_setup', setup = setup }); ps.setupSent = true end
     end
   end
@@ -3264,6 +3271,13 @@ end
 -- visible. Hook order relative to core_camera does not matter here; this only measures.
 M._devbuild = require('beamngEarth/devbuild')    -- the development build's notice (a field: the 200-local limit)
 M._pacer = require('beamngEarth/framepacer')    -- even frame pacing (fields: the main chunk's 200-local limit)
+M._enginepatches = require('beamngEarth/enginepatches')   -- the engine patches' states (warned once when not applied)
+function M._epWarn(title, text)
+  local gh = rawget(_G, 'guihooks')
+  if gh and gh.trigger then
+    pcall(gh.trigger, 'toastrMsg', { type = 'warning', title = title, msg = text, config = { timeOut = 30000 } })
+  end
+end
 M._gcpace = require('beamngEarth/gcpace')       -- Lua garbage collection pacing (onUpdate)
 M._paceClock = stopwatch.clock()
 local function onPreRender(dtReal, dtSim)
@@ -3339,6 +3353,8 @@ local function onLevelStart()
   -- the pause-menu settings page it is a compact HUD, hidden unless the settings show it.
   ui.visible = st.inOurLevel and not settings.hudHiddenAtStart()
   groundcover.enginePatch(st.inOurLevel)
+  if st.inOurLevel then M._enginepatches.levelStart(os.time()) else M._enginepatches.levelEnd() end
+  M._psum.epDone, M._psum.epAt = false, 0
   M._gcpace.reset()               -- (the level's load ran full collections of its own: estimate afresh)
   if not st.inOurLevel then return end
   -- the player's traffic / parked cars choice, before freeroam spawns them on a map without our roads yet

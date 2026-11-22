@@ -393,20 +393,21 @@ class DirectStartAdoptsOptionsTest(unittest.TestCase):
                 mock.patch.object(launcher, "gcpatch_lib", return_value=None), \
                 mock.patch.object(launcher, "steam_runtime", return_value=None), \
                 mock.patch.object(launcher.subprocess, "Popen", popen), \
-                mock.patch.dict(os.environ, {"BNGE_GAME_ARGS": ""}):
+                mock.patch.dict(os.environ, {"BNGE_GAME_ARGS": "", "BNGEARTH_GPU_DRIVEN": ""}):
             launcher.start_game(False, user_dir=user_dir, steam_args=steam_args)
         argv, env = calls[0]
         return argv, env
 
     def test_env_and_options_reach_the_game(self):
         argv, env = self.run_start(({"DRI_PRIME": "1"}, [], ["-forcecloud"]))
-        self.assertEqual(argv, ["/g/BeamNG/BinLinux/BeamNG.drive.x64", "-forcecloud"])
+        # (-nogfxgpudriven: launcher.gpu_driven_args, the native Linux game's default)
+        self.assertEqual(argv, ["/g/BeamNG/BinLinux/BeamNG.drive.x64", "-nogfxgpudriven", "-forcecloud"])
         self.assertEqual(env["DRI_PRIME"], "1")
         self.assertEqual(env["SteamAppId"], launcher.APP_ID)
 
     def test_wrapper_wraps_the_game(self):
         argv, env = self.run_start(({}, ["gamemoderun"], []))
-        self.assertEqual(argv, ["gamemoderun", "/g/BeamNG/BinLinux/BeamNG.drive.x64"])
+        self.assertEqual(argv, ["gamemoderun", "/g/BeamNG/BinLinux/BeamNG.drive.x64", "-nogfxgpudriven"])
 
     @unittest.skipIf(os.name == "nt", "the Linux start: POSIX paths (Windows CI turns /u into \\u)")
     def test_userpath_reaches_the_game(self):
