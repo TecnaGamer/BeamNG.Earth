@@ -204,3 +204,28 @@ def test_a_join_in_the_middle_of_a_deck_is_a_sample_of_it():
         have = [pc for pc, x in zip(pcs, smp) if pc["main"] == m]
         assert have and min(abs(float(a) - s_) for x in smp for a, mm in zip(x["ms"], x["mem"]) if int(mm) == m) < 1e-9
     assert all((np.diff(x["d"]) > 0).all() for x in smp)
+
+
+def test_the_hook_gives_the_railways_the_bed_an_interchange_solved_under_a_part_and_nothing_elsewhere(monkeypatch):
+    import grading
+    from test_roads import FRAME
+    xy = np.stack([np.linspace(0.0, 20.0, 11), np.zeros(11)], axis=1)
+
+    class Planner:
+        frame = FRAME
+
+        def _shape_at(self, line, pts, fid, modes):
+            assert modes == ("track",)
+            z = np.where(np.asarray(pts)[:, 0] < 10.0, 12.5, np.nan) if fid == "rail:T" else np.full(len(pts), np.nan)
+            return z, [None] * len(z)
+
+    class Store:
+        def planners_of(self, lat, lon):
+            return [(Planner(), None)]
+    monkeypatch.setattr(grading, "_ACTIVE_STORE", Store())
+    monkeypatch.setattr(grading, "SHAPES_ON", True)
+    got = grading._track_z_hook(FRAME, [("T", "standard_gauge", "ground", xy), ("U", "standard_gauge", "ground", xy)])
+    assert got[1] is None                                        # (no solved profile of U: the railways' own bed)
+    assert np.allclose(got[0][xy[:, 0] < 10.0], 12.5, atol=1.0) and np.isnan(got[0][xy[:, 0] >= 10.0]).all()
+    monkeypatch.setattr(grading, "SHAPES_ON", False)
+    assert grading._track_z_hook(FRAME, [("T", "standard_gauge", "ground", xy)]) is None
