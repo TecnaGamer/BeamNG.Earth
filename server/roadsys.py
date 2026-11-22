@@ -26,6 +26,17 @@ product declares and hands them over.
       a drop held back by the floors the part holds (native/roadsys endmatch.rs); the terrain targets change the plans'
       ground only where a floor digs the road under a structure (pins_near), fading back to the plans' own.
 
+  structures (M3 structures): heights, and the deck ends' hand-over (native/roadsys handover.rs; bridgerewrite/DESIGN.md
+      6.2): at every ground end of a deck (a deck part's end no other deck part nor tunnel goes on from, where a ground
+      part of a road begins: the map's own topology) the physics ground under the deck's first metres is lowered
+      (handover_drop: from 1.5 lattice squares past the end, DROP_M, within the deck's width, never on another ground
+      road's surface), by every evaluator of the physics ground (roads.block_arch_raise: the terrain blocks, the skins,
+      the content's drawn ground), each point by the ends read from the 3 x 3 map cells round its own cell (a declared
+      read: the same ends whoever asks); and the deck's exact variant for each anchor (always made: content parts "ho",
+      earthfast road_exact) is rebuilt round those ends on that anchor's lattice (handover_deck: the deck's top meets
+      the terrain on the terrain's own quantised nodes, 0 mm; its parts at ground level over the approach cleared; the
+      end's mismatch faded out over 6 m). Keyed as heights is (its own value, revisit.keyed_value; plans ".rss").
+
 Frames: every product is built in the ENU frame of its region (the z8 Web-Mercator tile holding the geotile's
 centre; ~120-160 km), so a component built for two neighbouring tiles is built in one frame, from one read list.
 The frame's identity is in every key."""
@@ -42,9 +53,11 @@ log = logging.getLogger("earthd.roadsys")
 
 MODE = os.environ.get("BNE_ROADSYS", "off").strip().lower()
 SHADOW = MODE == "shadow"
-HEIGHTS = MODE == "heights"
+STRUCTURES = MODE == "structures"       # (M3 structures: heights and the deck ends' hand-over, below)
+HEIGHTS = MODE in ("heights", "structures")
 FORMAT = 2                  # the shadow records' JSON (their folder name; 2: M2's profiles, whole components read)
 HEIGHTS_KERNEL = 602        # earthfast.roadsys_heights_reads / roadsys_heights
+STRUCTURES_KERNEL = 603     # earthfast.RoadsysEnds / roadsys_handover_zone, road_exact's "ho" parts
 
 FRAME_Z = 8                 # the region frames' Web-Mercator zoom
 CUT = (4000.0, 2000.0)       # strokes cut at a joint past every line of this grid (m, offset): net.rs Opts
@@ -857,3 +870,192 @@ def pins_near(la0, lo0, la1, lo1, pad_m, cell_fn, today_ll, ground_ll=None):
             continue
         pins.append((pla, plo, np.round(dz, 4), np.round(t, 4), half, w, share))
     return roadshape.pins_near([{"pins": pins}], la0, lo0, la1, lo1, pad_m)
+
+
+# ------------------------------------------------------------------------- M3 structures: the deck ends' hand-over
+
+HANDOVER_CELLS_KEPT = 64        # RoadsysEnds kept per process (per frame and centre cell)
+_ends_memo = {}
+_ends_lock = threading.Lock()
+HANDOVER_STATS = {"ends_built": 0, "ends_hits": 0, "points": 0, "dropped": 0, "zones": 0, "zone_errors": 0}
+
+
+def _end_rows(feats):
+    """One cell's road parts for the hand-over (memoised on the cell's features): [(kind, fid, part no., lon / lat
+    (n, 2), half width)] by the map's own tags (roads.tag_level_ranges: the structure ends as mapped, never the deck
+    builder's lengthened or inferred ranges, which the map calls ground): kind "b" a tagged bridge part that a deck of
+    the deck builder's covers (roads.bridge_parts; its half width roads.bridge_specs': the deck builder's), "g" a
+    tagged ground part (its half width road_specs' plain one: no urban or measured widths, the same in every process),
+    "t" a tunnel part."""
+    got = feats.__dict__.get("_roadsys_end_rows")
+    if got is not None:
+        return got
+    import roads
+    out = []
+    if feats is not None and len(feats):
+        bs = roads.bridge_specs(feats)
+        gs = roads.road_specs(feats)
+        for i in range(len(feats)):
+            fid = str(feats.ids[i])
+            sp = gs[i] if gs[i] is not None else bs[i]
+            if sp is None:
+                continue
+            tags = roads.tag_level_ranges(feats, i)
+            if bs[i] is not None:
+                decks = [np.asarray(r, np.float64)[:, :2] for r in roads.bridge_parts(feats, i)]
+                for j, ring in enumerate(roads._parts_by_level_new(feats, i, "bridge", rngs=tags)):
+                    ll = np.asarray(ring, np.float64)[:, :2]
+                    if decks and _overlaps(ll, decks):
+                        out.append(("b", fid, j, ll, float(bs[i].width) / 2))
+            for j, ring in enumerate(roads._parts_by_level_new(feats, i, "ground", rngs=tags)):
+                out.append(("g", fid, j, np.asarray(ring, np.float64)[:, :2], float(sp.width) / 2))
+            for j, ring in enumerate(roads.tunnel_parts(feats, i)):
+                out.append(("t", fid, j, np.asarray(ring, np.float64)[:, :2], 0.0))
+    feats.__dict__["_roadsys_end_rows"] = out
+    return out
+
+
+def _overlaps(ll, parts):
+    """Does lon / lat polyline ll share a stretch with one of parts (a vertex of either within ~1 m of the other's
+    line, in degrees scaled to metres)?"""
+    import dmath
+    import math
+    k = dmath.cos(math.radians(float(ll[0, 1])))
+
+    def near(a, b):
+        ax, ay = a[:, 0] * k * 111320.0, a[:, 1] * 111320.0
+        bx, by = b[:, 0] * k * 111320.0, b[:, 1] * 111320.0
+        for x, y in zip(ax, ay):
+            dx, dy = bx[1:] - bx[:-1], by[1:] - by[:-1]
+            l2 = dx * dx + dy * dy
+            u = np.clip(np.where(l2 > 0, ((x - bx[:-1]) * dx + (y - by[:-1]) * dy) / np.where(l2 > 0, l2, 1.0), 0.0), 0.0, 1.0)
+            ex, ey = bx[:-1] + u * dx - x, by[:-1] + u * dy - y
+            d2 = ex * ex + ey * ey
+            if len(d2) and float(d2.min()) < 1.0:
+                return True
+        return False
+    return any(len(p) >= 2 and len(ll) >= 2 and (near(p, ll) or near(ll, p)) for p in parts)
+
+
+def _frame_key(frame):
+    return (type(frame).__name__, float(frame.lat0), float(frame.lon0))
+
+
+def _ends_from(frame, cell_fn, keys, reg):
+    """earthfast.RoadsysEnds of the road parts of map cells keys (in frame) coming within the frame box reg; None when
+    a cell cannot be read."""
+    import fast
+    import heightmap
+    fast.require(STRUCTURES_KERNEL, "the deck ends' hand-over")
+    rows = {}
+    for k in keys:
+        try:
+            feats = cell_fn(k)
+        except Exception as ex:             # (no ends rather than no ground: nothing built with it kept)
+            log.debug("roadsys hand-over: cell %s: %s: %s", k, type(ex).__name__, ex)
+            import revisit
+            revisit.fault()
+            return None
+        if feats is None or not len(feats):
+            continue
+        for kind, fid, j, ll, hw in _end_rows(feats):
+            rows.setdefault((kind, fid, j), (ll, hw))     # (a feature in several cells: once)
+    br, gr, tu = [], [], []
+    for (kind, fid, j) in sorted(rows):
+        ll, hw = rows[(kind, fid, j)]
+        if len(ll) < 2:
+            continue
+        e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
+        xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))), np.float64)
+        if xy[:, 0].max() < reg[0] or xy[:, 0].min() > reg[2] or xy[:, 1].max() < reg[1] or xy[:, 1].min() > reg[3]:
+            continue
+        if kind == "b":
+            br.append((xy, hw))
+        elif kind == "g":
+            gr.append((xy, hw))
+        else:
+            tu.append(xy)
+    return fast._ef.RoadsysEnds(br, gr, tu, float(heightmap.SQUARE))
+
+
+def ends_of_cell(frame, cell_fn, key):
+    """earthfast.RoadsysEnds of the deck ends that may lower the ground in map cell key (in frame): read from the 3 x 3
+    cells round it (an end reaches handover.REACH_M + its half width, well inside one cell's neighbours), so a point's
+    drop is the same whichever caller asks. None when a cell cannot be read (no drop: nothing kept, revisit.fault)."""
+    import heightmap
+    import mapcells
+    mk = (_frame_key(frame), str(key), float(heightmap.SQUARE))
+    with _ends_lock:
+        got = _ends_memo.get(mk)
+        if got is not None:
+            HANDOVER_STATS["ends_hits"] += 1
+            return got
+    n = 1 << key.z
+    keys = [mapcells.CellKey(key.z, (key.x + dx) % n, key.y + dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1)
+            if 0 <= key.y + dy < n]
+    # the region the centre cell's points can be reached from (its bounds + 60 m), in the frame
+    la0, lo0, la1, lo1 = _cell_bounds(key)
+    bx, by, _ = frame.geodetic_to_enu(np.array([la0, la0, la1, la1]), np.array([lo0, lo1, lo0, lo1]), np.zeros(4))
+    reg = (float(np.min(bx)) - 60.0, float(np.min(by)) - 60.0, float(np.max(bx)) + 60.0, float(np.max(by)) + 60.0)
+    got = _ends_from(frame, cell_fn, keys, reg)
+    if got is None:
+        return None
+    with _ends_lock:
+        HANDOVER_STATS["ends_built"] += 1
+        _ends_memo[mk] = got
+        while len(_ends_memo) > HANDOVER_CELLS_KEPT:
+            _ends_memo.pop(next(iter(_ends_memo)))
+    return got
+
+
+HANDOVER_BACK_M = 40.0          # m round a deck shape's box its hand-over's lattice may reach (handover.rs BACK_M + some)
+
+
+def ends_for_box(frame, cell_fn, box):
+    """earthfast.RoadsysEnds of the deck ends round a frame box (a deck shape's hand-over: the zone's geometry; the
+    drops themselves always from handover_drop), from the cells within 60 m of it. None when a cell cannot be read."""
+    import mapcells
+    x0, y0, x1, y1 = box
+    reg = (x0 - 60.0, y0 - 60.0, x1 + 60.0, y1 + 60.0)
+    la, lo, _ = frame.enu_to_geodetic(np.array([reg[0], reg[2], reg[2], reg[0]]), np.array([reg[1], reg[1], reg[3], reg[3]]),
+                                      np.zeros(4))
+    keys = mapcells.cells_for_bbox(float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)))
+    return _ends_from(frame, cell_fn, keys, reg)
+
+
+def _cell_bounds(key):
+    """(lat0, lon0, lat1, lon1) of a map cell (mapcells.CellKey.bounds)."""
+    lon0, lat0, lon1, lat1 = key.bounds()
+    return lat0, lon0, lat1, lon1
+
+
+def handover_drop(frame, cell_fn, la, lo):
+    """m the physics ground at the points (la, lo) is lowered by under the first metres of the decks' ground ends
+    (BNE_ROADSYS=structures; 0 elsewhere, and everywhere in any other mode), the points in frame (each by the ends of
+    its own map cell's neighbourhood: ends_of_cell)."""
+    la = np.asarray(la, np.float64)
+    shape = la.shape
+    out = np.zeros(la.size)
+    if not STRUCTURES or not la.size:
+        return out.reshape(shape)
+    import mapcells
+    la = la.ravel()
+    lo = np.asarray(lo, np.float64).ravel()
+    e, n, _u = frame.geodetic_to_enu(la, lo, 0.0)
+    e = np.ascontiguousarray(np.asarray(e, np.float64).ravel())
+    n = np.ascontiguousarray(np.asarray(n, np.float64).ravel())
+    ok = np.isfinite(la) & np.isfinite(lo)
+    keys = mapcells.cells_of(np.where(ok, la, 0.0), np.where(ok, lo, 0.0))
+    groups = {}
+    for i, k in enumerate(keys):
+        if ok[i]:
+            groups.setdefault(k, []).append(i)
+    for k in sorted(groups, key=str):
+        ends = ends_of_cell(frame, cell_fn, k)
+        if ends is None or not ends.count():
+            continue
+        idx = np.asarray(groups[k], np.int64)
+        out[idx] = ends.drops(np.ascontiguousarray(e[idx]), np.ascontiguousarray(n[idx]))
+    HANDOVER_STATS["points"] += int(la.size)
+    HANDOVER_STATS["dropped"] += int((out > 0).sum())
+    return out.reshape(shape)

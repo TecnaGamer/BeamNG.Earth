@@ -586,12 +586,20 @@ pub(super) fn road_exact<'py>(
         {
             continue;
         }
+        let pivot = part.call_method1("get", ("pivot", 0.))?;
+        // (BNE_ROADSYS=structures, 603: a deck whose ends hand over to the anchor's own terrain lattice is never shown
+        // as its base shape: its variant for this anchor, whatever the placement's error)
+        if part.get_item("ho")?.is_some_and(|v| v.is_truthy().unwrap_or(false)) {
+            let m = PyDict::new(py);
+            m.set_item("pivot", pivot)?;
+            make.set_item(what, m)?;
+            continue;
+        }
         let tol = if part.get_item("col")?.is_some_and(|v| v.is_truthy().unwrap_or(false)) {
             tol_col
         } else {
             tol_render
         };
-        let pivot = part.call_method1("get", ("pivot", 0.))?;
         let piv = [0., 0., pivot.extract()?];
         let relief: f64 = part.call_method1("get", ("relief", 0.))?.extract()?;
         let (rb, _, cb) = placement_of(&tile, &target, piv);

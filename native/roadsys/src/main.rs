@@ -112,6 +112,18 @@ fn main() {
         println!("{} {:016x} {:016x}", name, out.key, geom::fnv(&bytes));
         return;
     }
+    if args.len() == 3 && args[1] == "handover" {
+        // (M3 structures) a zone input file (BNGE_HANDOVER_DUMP's .rsho): its output's FNV-1a 64 and counts
+        let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(2) });
+        match roadsys::handover::run_input(&b) {
+            Ok((drops, out, st)) => {
+                let bytes = roadsys::handover::output_bytes(&drops, &out);
+                println!("handover {:016x} {} {} {}", roadsys::geom::fnv(&bytes), out.t.len(), st.squares_h, st.squares_z);
+                return;
+            }
+            Err(e) => { eprintln!("{}", e); std::process::exit(1) }
+        }
+    }
     if args.len() == 4 && args[1] == "audit" {
         // the M0 audit (tools/widecorpus/checks.py): IN.bin -> OUT.json
         let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(1) });

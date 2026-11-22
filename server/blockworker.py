@@ -2328,6 +2328,11 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         lean = "bldcol" in parts
         for what, info in parts.items():
             info["col"] = what in GEO_COLLIDING or (what.startswith("bld") and not lean)
+        import roadsys
+        if roadsys.STRUCTURES and "deck" in parts:
+            # (its ends hand over to each anchor's own terrain lattice: always its variant for the anchor, never the base
+            # shape; earthfast road_exact, roads.geo_exact_auto)
+            parts["deck"]["ho"] = True
         data["key"] = tile.key
         _scene = getattr(P, "scene", None)
         if _scene is not None:      # buildings, footprint share (perfsummary.lua; [0, 0] too: known empty, not unknown)
@@ -2885,10 +2890,12 @@ def geo_stats():
     return dict(_geo_stats)
 
 
-def _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, parts):
+def _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, parts, zoom=None, q=None):
     """Exact variants of geotile (gx, gy)'s parts for anchor aid (parts: {what: {pivot}}): each shape's vertices moved
     by s (z - pivot) (earthfast.cdae_shear; s = R^T c of geotiles.placement at the pivot), so the mod's rigid
-    placement there lands them where the exact world map does. {what: vfs path of rx_<aid>_<key>_<what>.cdae}."""
+    placement there lands them where the exact world map does. {what: vfs path of rx_<aid>_<key>_<what>.cdae}.
+    BNE_ROADSYS=structures: the deck's rebuilt round its ground ends on the anchor's terrain lattice (_deck_handover;
+    zoom: the anchor's DEM zoom, q its height quantum)."""
     import fast
     import geotiles
     fast.require(geotiles.NEED_CONTENT, "cdae_shear")
@@ -2912,11 +2919,140 @@ def _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, parts):
         s = dnp.matmul(r.T, c)
         with open(src, "rb") as f:
             blob = fast._ef.cdae_shear(f.read(), float(e["pos"][2]), float(s[0]), float(s[1]), float(s[2]), piv)
+        import roadsys
+        if what == "deck" and roadsys.STRUCTURES and zoom is not None and q:
+            try:
+                blob = _deck_handover(blob, e["pos"], tile, frame, piv, aid, lat, lon, zoom, q) or blob
+            except Exception as ex:     # (the sheared deck as it was rather than none: logged, counted)
+                log.warning("deck hand-over: geotile %s anchor %s: %s: %s", tile.key, aid, type(ex).__name__, ex)
+                roadsys.HANDOVER_STATS["zone_errors"] += 1
         name = f"rx_{aid}_{tile.key}_{what}.cdae"
         _write_bytes(os.path.join(out_dir, name), blob)
         out[what] = f"{vfs_dir}/{name}"
         _geo_stats["exact"] += 1
     return out
+
+
+def _anchor_drawn(aid, lat, lon, zoom, box):
+    """(frame, drawn, cell_fn) of anchor aid: drawn(la, lo) its physics ground (geodetic m) as its terrain blocks and
+    skins have it (_build's gen, _geo_skin_build's drawn: the DEM at its zoom, the sea, its grading, the arches' raise
+    over the anchor-frame box and the deck ends' drop)."""
+    import roads as roadsmod
+    frame = geodesy.EnuFrame(lat, lon)
+    g, _ = _s.anchor(aid, lat, lon)
+
+    def elev(la, lo):
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
+        return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
+    tunnels = tunnel_profiles(aid, frame, elev, g)
+    cell_fn = lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
+
+    def drawn(la, lo):
+        return roadsmod.block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo), box)
+    return frame, drawn, cell_fn
+
+
+HANDOVER_GRID_MAX = 400_000     # lattice nodes one deck's hand-over may read (beyond: the sheared deck as it was)
+
+
+def _deck_handover(blob, pos, tile, frame, piv, aid, lat, lon, zoom, q):
+    """The deck's exact variant (blob: its sheared shape) rebuilt round its ground ends on anchor aid's terrain lattice
+    (BNE_ROADSYS=structures, native/roadsys handover.rs zone): the lattice nodes round each end (roadsys.ends_for_box)
+    read as the anchor's terrain blocks read them (heightmap.surface over its drawn ground, quantised by q; their drop,
+    roadsys.handover_drop, from the same points), the shape placed rigidly in the anchor's world as the mod places it
+    (geotiles.placement), rebuilt there and placed back. Returns the new shape's bytes, or None (no ground end near it,
+    a shape it does not take)."""
+    import cdae
+    import fast
+    import geotiles
+    import heightmap
+    import roadmesh as roadmeshmod
+    import roads as roadsmod
+    import roadsys
+    import roadsurf3
+    fast.require(roadsys.STRUCTURES_KERNEL, "the deck ends' hand-over")
+    shape = cdae.decode(blob)
+    meshes = [m for m in shape["meshes"] if m.get("type") == 0]
+    names = [m["name"] for m in shape["materials"]]
+    if not meshes or roadmeshmod.DECK_TOP not in names:
+        return None
+    P, UV, T, M = [], [], [], []
+    nv = 0
+    for m in meshes:
+        a = cdae.mesh_arrays(m)
+        v = np.asarray(a["verts"], np.float64)
+        tv = np.asarray(a["tverts"], np.float64)
+        if len(tv) != len(v):
+            return None
+        idx = np.asarray(a["indices"], np.int64)
+        for start, count, flags in np.asarray(a["primitives"]).reshape(-1, 3):
+            tri = idx[start:start + count].reshape(-1, 3)[:, ::-1]      # (stored clockwise: cdae's convention)
+            T.append(tri + nv)
+            M.append(np.full(len(tri), int(flags) & cdae.PRIM_MATERIAL_MASK, np.int64))
+        P.append(v)
+        UV.append(np.column_stack((tv[:, 0], 1.0 - tv[:, 1])))
+        nv += len(v)
+    P, UV = np.vstack(P), np.vstack(UV)
+    T, M = np.vstack(T), np.concatenate(M)
+    rot, off, _c = geotiles.placement(tile.frame, frame, (0.0, 0.0, piv))
+    W = dnp.matmul(P + np.asarray(pos, np.float64), rot.T) + off
+    x0, y0 = float(W[:, 0].min()), float(W[:, 1].min())
+    x1, y1 = float(W[:, 0].max()), float(W[:, 1].max())
+    fr, drawn, cell_fn = _anchor_drawn(aid, lat, lon, zoom, (x0 - 60.0, y0 - 60.0, x1 + 60.0, y1 + 60.0))
+    ends = roadsys.ends_for_box(fr, cell_fn, (x0, y0, x1, y1))
+    if ends is None or not ends.count():
+        return None
+    s = float(heightmap.SQUARE)
+    boxes = [b for b in ends.boxes(2.0 * s) if b[2] >= x0 and b[0] <= x1 and b[3] >= y0 and b[1] <= y1]
+    if not boxes:
+        return None
+    gx0 = max(min(b[0] for b in boxes), x0 - roadsys.HANDOVER_BACK_M)
+    gy0 = max(min(b[1] for b in boxes), y0 - roadsys.HANDOVER_BACK_M)
+    gx1 = min(max(b[2] for b in boxes), x1 + roadsys.HANDOVER_BACK_M)
+    gy1 = min(max(b[3] for b in boxes), y1 + roadsys.HANDOVER_BACK_M)
+    i0, j0 = int(np.floor(gx0 / s)), int(np.floor(gy0 / s))
+    nx, ny = int(np.floor(gx1 / s)) - i0 + 2, int(np.floor(gy1 / s)) - j0 + 2
+    if nx <= 1 or ny <= 1 or nx * ny > HANDOVER_GRID_MAX:
+        return None
+    zg = np.full((ny, nx), np.nan)
+    dg = np.full((ny, nx), np.nan)
+    for b in boxes:
+        a0, a1 = max(int(np.floor(b[0] / s)) - i0, 0), min(int(np.floor(b[2] / s)) + 1 - i0, nx - 1)
+        b0, b1 = max(int(np.floor(b[1] / s)) - j0, 0), min(int(np.floor(b[3] / s)) + 1 - j0, ny - 1)
+        if a1 < a0 or b1 < b0:
+            continue
+        keep = {}
+        xs = heightmap.lattice_coords(i0 + a0, a1 - a0 + 1)
+        ys = heightmap.lattice_coords(j0 + b0, b1 - b0 + 1)
+        _el, u = heightmap.surface(fr, drawn, xs, ys, keep)
+        zq = np.rint(np.asarray(u, np.float64) * (1.0 / q)) * q
+        dr = roadsys.handover_drop(fr, cell_fn, keep["lat"], keep["lon"])
+        zg[b0:b1 + 1, a0:a1 + 1] = zq
+        dg[b0:b1 + 1, a0:a1 + 1] = np.asarray(dr, np.float64).reshape(zq.shape)
+    top = names.index(roadmeshmod.DECK_TOP)
+    if os.environ.get("BNGE_HANDOVER_DUMP"):    # (probes: the zone's whole input, for `roadsys handover` elsewhere)
+        with open(os.path.join(os.environ["BNGE_HANDOVER_DUMP"], f"ho_{aid}_{tile.key}.rsho"), "wb") as f:
+            f.write(fast._ef.roadsys_handover_input(
+                ends, np.ascontiguousarray(W), np.ascontiguousarray(UV), np.ascontiguousarray(T), np.ascontiguousarray(M),
+                top, i0, j0, s, np.ascontiguousarray(zg), np.ascontiguousarray(dg), float(roadmeshmod.DECK_TOP_TILE_M)))
+    p2, uv2, t2, m2, stats = fast._ef.roadsys_handover_zone(
+        ends, np.ascontiguousarray(W), np.ascontiguousarray(UV), np.ascontiguousarray(T), np.ascontiguousarray(M), top,
+        i0, j0, s, np.ascontiguousarray(zg), np.ascontiguousarray(dg), float(roadmeshmod.DECK_TOP_TILE_M))
+    import json
+    st = json.loads(stats)
+    roadsys.HANDOVER_STATS["zones"] += int(st.get("squares_h", 0) > 0)
+    if not st.get("squares_h"):
+        return None
+    log.debug("deck hand-over: geotile %s anchor %s: %s", tile.key, aid, stats)
+    if os.environ.get("BNGE_HANDOVER_DUMP"):    # (probes: the ends, the lattice's drops and the zone's counts)
+        with open(os.path.join(os.environ["BNGE_HANDOVER_DUMP"], f"ho_{aid}_{tile.key}.json"), "w") as f:
+            f.write(json.dumps({"ends": ends.points(), "stats": st, "i0": i0, "j0": j0, "s": s,
+                                "drop": np.nan_to_num(dg, nan=-1.0).round(3).tolist(),
+                                "z": np.nan_to_num(zg, nan=-1.0).round(4).tolist()}))
+    back = dnp.matmul(np.asarray(p2, np.float64) - off, rot) - np.asarray(pos, np.float64)
+    return cdae.encode(back, np.asarray(t2, np.int64), uvs=np.asarray(uv2, np.float64), material=names,
+                       tri_materials=np.asarray(m2, np.int64), object_name="road", unaligned=True,
+                       split_drawn=roadmeshmod.SURFACE_V2 or roadsurf3.ON)
 
 
 URGENT_PHOTO_M = 500.0      # a road geotile whose centre is this near its anchor's place: its roof photo fetched urgent
@@ -2983,7 +3119,7 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
             info = out["content"][2] if out["content"] is not None else {}
             exact = roadsmod.geo_exact_auto(geotiles.frame(gx, gy), geodesy.EnuFrame(lat, lon), info.get("parts"))
         if exact:
-            out["exact"] = _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, exact)
+            out["exact"] = _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, exact, zoom, q)
         out["time"] = {"content_s": t1 - t0, "content_cpu": c1 - c0, "skin_s": t2 - t1, "skin_cpu": c2 - c1,
                        "exact_s": time.perf_counter() - t2}
         return out

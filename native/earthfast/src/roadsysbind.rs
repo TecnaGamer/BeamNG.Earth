@@ -382,6 +382,115 @@ pub fn roadsys_audit(py: Python<'_>, data: &[u8]) -> PyResult<String> {
     py.detach(move || roadsys::audit::run(&d)).map_err(PyValueError::new_err)
 }
 
+
+// ------------------------------------------------------------------------- M3 structures: deck ends' hand-over
+
+fn lines2(name: &str, v: &[(PyReadonlyArray2<'_, f64>, f64)]) -> PyResult<Vec<roadsys::handover::Part>> {
+    let mut out = Vec::with_capacity(v.len());
+    for (p, hw) in v {
+        let a = p.as_array();
+        if a.ncols() != 2 { return Err(PyValueError::new_err(format!("{name}: points must be (n, 2)"))); }
+        out.push(roadsys::handover::Part { pts: (0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]]]).collect(), hw: *hw });
+    }
+    Ok(out)
+}
+
+/// (M3, BNE_ROADSYS=structures) The ground ends of the deck parts round a place in one frame (native/roadsys
+/// handover.rs): bridges [(line (n, 2), half width)], grounds the same (every ground part of a road), tunnels [line];
+/// s the terrain lattice's square. drops(x, y): the m every evaluator of the physics ground lowers it by there.
+#[pyclass(frozen)]
+pub struct RoadsysEnds { ends: roadsys::handover::Ends, src: (Vec<roadsys::handover::Part>, Vec<roadsys::handover::Part>, Vec<Vec<[f64; 2]>>) }
+
+#[pymethods]
+impl RoadsysEnds {
+    #[new]
+    fn new(bridges: Vec<(PyReadonlyArray2<'_, f64>, f64)>, grounds: Vec<(PyReadonlyArray2<'_, f64>, f64)>,
+           tunnels: Vec<PyReadonlyArray2<'_, f64>>, s: f64) -> PyResult<Self> {
+        let b = lines2("RoadsysEnds bridges", &bridges)?;
+        let g = lines2("RoadsysEnds grounds", &grounds)?;
+        let mut t = Vec::with_capacity(tunnels.len());
+        for p in &tunnels {
+            let a = p.as_array();
+            if a.ncols() != 2 { return Err(PyValueError::new_err("RoadsysEnds tunnels: points must be (n, 2)")); }
+            t.push((0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]]]).collect::<Vec<_>>());
+        }
+        if !(s > 0.0) { return Err(PyValueError::new_err("RoadsysEnds: the lattice square must be > 0")); }
+        let ends = roadsys::handover::Ends::new(&b, g.clone(), &t, s);
+        Ok(RoadsysEnds { ends, src: (b, g, t) })
+    }
+    fn count(&self) -> usize { self.ends.ends.len() }
+    /// [(x, y)] of each end's point (tests, probes).
+    fn points(&self) -> Vec<(f64, f64)> { self.ends.ends.iter().map(|e| (e.p[0], e.p[1])).collect() }
+    fn boxes(&self, grow: f64) -> Vec<[f64; 4]> { self.ends.boxes(grow) }
+    fn drops<'py>(&self, py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyReadonlyArray1<'py, f64>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let (x, y) = (x.as_slice()?.to_vec(), y.as_slice()?.to_vec());
+        if x.len() != y.len() { return Err(PyValueError::new_err("RoadsysEnds.drops: x and y differ in length")); }
+        let e = &self.ends;
+        let out = py.detach(move || x.iter().zip(y.iter()).map(|(&a, &b)| if a.is_finite() && b.is_finite() { e.drop_at(a, b) } else { 0.0 }).collect::<Vec<f64>>());
+        Ok(PyArray1::from_vec(py, out))
+    }
+}
+
+fn zone_args(p: &PyReadonlyArray2<'_, f64>, uv: &PyReadonlyArray2<'_, f64>, t: &PyReadonlyArray2<'_, i64>, m: &PyReadonlyArray1<'_, i64>,
+             i0: i64, j0: i64, s: f64, z: &PyReadonlyArray2<'_, f64>, drop: &PyReadonlyArray2<'_, f64>, tile_uv: f64)
+             -> PyResult<(roadsys::handover::Soup, roadsys::handover::Grid)> {
+    let (pa, ua, ta, ma, za, da) = (p.as_array(), uv.as_array(), t.as_array(), m.as_slice()?, z.as_array(), drop.as_array());
+    if pa.ncols() != 3 || ua.ncols() != 2 || ua.nrows() != pa.nrows() || ta.ncols() != 3 || ta.nrows() != ma.len()
+        || za.dim() != da.dim() || !(s > 0.0) || !(tile_uv > 0.0) {
+        return Err(PyValueError::new_err("roadsys_handover_zone: inconsistent arrays"));
+    }
+    let n = pa.nrows() as i64;
+    let mut soup = roadsys::handover::Soup::default();
+    for i in 0..pa.nrows() { soup.p.push([pa[[i, 0]], pa[[i, 1]], pa[[i, 2]]]); soup.uv.push([ua[[i, 0]], ua[[i, 1]]]); }
+    for k in 0..ta.nrows() {
+        let tr = [ta[[k, 0]], ta[[k, 1]], ta[[k, 2]]];
+        if tr.iter().any(|&v| v < 0 || v >= n) || ma[k] < 0 { return Err(PyValueError::new_err("roadsys_handover_zone: a triangle index out of range")); }
+        soup.t.push([tr[0] as u32, tr[1] as u32, tr[2] as u32]);
+        soup.m.push(ma[k] as u32);
+    }
+    let (ny, nx) = za.dim();
+    let mut g = roadsys::handover::Grid { i0, j0, nx, ny, s, z: Vec::with_capacity(nx * ny), drop: Vec::with_capacity(nx * ny) };
+    for b in 0..ny { for a in 0..nx { g.z.push(za[[b, a]]); g.drop.push(da[[b, a]]); } }
+    Ok((soup, g))
+}
+
+/// (M3) roadsys_handover_zone's whole input as one file's bytes (native/roadsys handover.rs encode_input: the CLI's
+/// `roadsys handover IN` runs it again, on Linux and on Windows, for the byte comparison).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn roadsys_handover_input<'py>(py: Python<'py>, ends: PyRef<'py, RoadsysEnds>, p: PyReadonlyArray2<'py, f64>, uv: PyReadonlyArray2<'py, f64>,
+                                   t: PyReadonlyArray2<'py, i64>, m: PyReadonlyArray1<'py, i64>, top: u32, i0: i64, j0: i64, s: f64,
+                                   z: PyReadonlyArray2<'py, f64>, drop: PyReadonlyArray2<'py, f64>, tile_uv: f64) -> PyResult<Bound<'py, PyBytes>> {
+    let (soup, g) = zone_args(&p, &uv, &t, &m, i0, j0, s, &z, &drop, tile_uv)?;
+    let (b, gr, tu) = &ends.src;
+    Ok(PyBytes::new(py, &roadsys::handover::encode_input(b, gr, tu, &soup, top, &g, tile_uv)))
+}
+
+/// (M3) A deck's shape rebuilt round its ground ends on one anchor's terrain lattice (handover.rs zone): positions
+/// (n, 3) and uvs (n, 2) in the anchor's world, triangles (m, 3), their materials (m,), the top's material; the lattice
+/// from node (i0, j0) at square s, its quantised heights z and drops (ny, nx); tile_uv m per texture repeat of the
+/// zone's polygons. Returns (positions, uvs, triangles, materials, stats JSON).
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn roadsys_handover_zone<'py>(py: Python<'py>, ends: PyRef<'py, RoadsysEnds>, p: PyReadonlyArray2<'py, f64>, uv: PyReadonlyArray2<'py, f64>,
+                                  t: PyReadonlyArray2<'py, i64>, m: PyReadonlyArray1<'py, i64>, top: u32, i0: i64, j0: i64, s: f64,
+                                  z: PyReadonlyArray2<'py, f64>, drop: PyReadonlyArray2<'py, f64>, tile_uv: f64)
+                                  -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>, String)> {
+    let (soup, g) = zone_args(&p, &uv, &t, &m, i0, j0, s, &z, &drop, tile_uv)?;
+    let e = &ends.ends;
+    let (out, st) = py.detach(move || roadsys::handover::zone(&soup, top, e, &g, tile_uv));
+    let np_ = out.p.len();
+    let mut pp = numpy::ndarray::Array2::<f64>::zeros((np_, 3));
+    let mut uu = numpy::ndarray::Array2::<f64>::zeros((np_, 2));
+    for (i, v) in out.p.iter().enumerate() { for c in 0..3 { pp[[i, c]] = v[c]; } uu[[i, 0]] = out.uv[i][0]; uu[[i, 1]] = out.uv[i][1]; }
+    let mut tt = numpy::ndarray::Array2::<i64>::zeros((out.t.len(), 3));
+    for (k, tr) in out.t.iter().enumerate() { for c in 0..3 { tt[[k, c]] = tr[c] as i64; } }
+    let mm: Vec<i64> = out.m.iter().map(|&v| v as i64).collect();
+    let js = format!("{{\"ends\":{},\"ends_kept\":{},\"squares_u\":{},\"squares_h\":{},\"squares_z\":{},\"cleared\":{},\"replaced\":{},\"zone_tris\":{},\"split\":{},\"max_mismatch_mm\":{:.1}}}",
+                     st.ends, st.ends_kept, st.squares_u, st.squares_h, st.squares_z, st.cleared, st.replaced, st.zone_tris, st.split, st.max_mismatch_mm);
+    Ok((PyArray2::from_owned_array(py, pp), PyArray2::from_owned_array(py, uu), PyArray2::from_owned_array(py, tt), PyArray1::from_vec(py, mm), js))
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RoadsysSegments>()?;
     m.add_function(wrap_pyfunction!(roadsys_reads, m)?)?;
@@ -396,5 +505,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadsys_floor_points, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_clear, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_audit, m)?)?;
+    m.add_class::<RoadsysEnds>()?;
+    m.add_function(wrap_pyfunction!(roadsys_handover_zone, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_handover_input, m)?)?;
     Ok(())
 }
