@@ -5,6 +5,8 @@ ground is the one whose move costs less earth, by its own grade).
 AASHTO's design grades for a speed (4 % at 120 km/h to 15 % at 20; a link at least 6 %), a little more generous for a
 game (GAME_GRADE_PLUS: AASHTO's are for a loaded truck); a path 12 %. A track's is railways.GRADE (the caller's: this
 module has no railways). Pure."""
+import functools
+
 import numpy as np
 
 import dnp
@@ -30,6 +32,7 @@ def speed(cls, kmh=None):
     return DEFAULT_KMH.get(base(cls), 40)
 
 
+@functools.lru_cache(maxsize=4096)       # (a few hundred (class, limit) pairs: a rail bed node asks for every road of its window)
 def road_grade(cls, kmh=None):
     """The steepest grade a road of class cls (limit kmh, or its class's) may hold."""
     if cls in PATHS:

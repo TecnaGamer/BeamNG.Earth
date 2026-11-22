@@ -181,14 +181,31 @@ def test_c2_no_boundary():
     assert [f.code for f in got] == ["no_boundary"]
 
 
-def test_c2_oversized_system():
-    ms = [member("E%d" % i, [(float(i), 0.0), (float(i), 10.0)], kind="deck", level=1.0) for i in range(61)]
-    paths = artifacts.Paths(meta(1, "big"), ms, [], [])
+def test_c2_a_system_of_many_seeds_tied_together_is_no_fault():
+    ms = [member("E%d" % i, [(float(i), 0.0), (float(i), 10.0)], kind="deck", level=1.0) for i in range(90)]
+    joins = [artifacts.Join(i, 10.0, i + 1, 0.0) for i in range(89)]
+    paths = artifacts.Paths(meta(1, "big"), ms, joins, [])
     ext = artifacts.Extent(meta(2, "big2", ("big",)), "cell:0:0",
-                           [artifacts.System("BIG", tuple(range(61)), (), (), (0.0, 0.0, 60.0, 10.0))])
+                           [artifacts.System("BIG", tuple(range(90)), (), (), (0.0, 0.0, 90.0, 10.0))])
+    assert fails(c2_extent, ext, {1: paths}) == []
+
+
+def test_c2_disconnected_system():
+    ms = [member("E%d" % i, [(float(i), 0.0), (float(i), 10.0)], kind="deck", level=1.0) for i in range(4)]
+    joins = [artifacts.Join(0, 10.0, 1, 0.0), artifacts.Join(2, 10.0, 3, 0.0)]
+    paths = artifacts.Paths(meta(1, "two"), ms, joins, [])
+    ext = artifacts.Extent(meta(2, "two2", ("two",)), "cell:0:0",
+                           [artifacts.System("TWO", (0, 1, 2, 3), (), (), (0.0, 0.0, 4.0, 10.0))])
     got = fails(c2_extent, ext, {1: paths})
-    assert [f.code for f in got] == ["oversized_system"]
-    assert "E0" in got[0].text and "E60" in got[0].text
+    assert [f.code for f in got] == ["disconnected_system"]
+    assert "E0" in got[0].text and "E2" in got[0].text
+    # a road both meet ties them
+    ms2 = ms + [member("G", [(-5.0, 5.0), (9.0, 5.0)], kind="ground", level=0.0)]
+    cross = [artifacts.PlanCrossing(1, 5.0, 4, 6.0, np.array([1.0, 5.0])), artifacts.PlanCrossing(3, 5.0, 4, 8.0, np.array([3.0, 5.0]))]
+    paths = artifacts.Paths(meta(1, "tied"), ms2, joins, cross)
+    ext = artifacts.Extent(meta(2, "tied2", ("tied",)), "cell:0:0",
+                           [artifacts.System("TWO", (0, 1, 2, 3), (), (), (0.0, 0.0, 4.0, 10.0))])
+    assert fails(c2_extent, ext, {1: paths}) == []
 
 
 def test_c2_bad_boundary():

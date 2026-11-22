@@ -50,7 +50,9 @@ Each has `check(art, parents) -> [artifacts.Finding]`, where parents is a dict o
 - `bad_boundary`: every boundary's `(j, sj)` is a ground or rail member, and its point is within `JOIN_M` of
   `(i, si)`'s.
 - `no_boundary` (note): a system with no boundary.
-- `oversized_system`: a system with more than 60 seeds. A `fail` that names its members.
+- `disconnected_system`: a system's seeds are one group under the Paths' joins and crossings (a road both meet ties
+  them too). A `fail` that names a few members of each group. The number of seeds is no fault (a downtown's elevated
+  mesh has dozens, one solve); the step time limits guard the cost.
 - `bad_box`: the box contains every seed line.
 
 **c3 (Order, parents Paths and Extent):**
