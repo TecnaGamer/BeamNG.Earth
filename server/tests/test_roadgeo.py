@@ -184,6 +184,30 @@ class ExactVariantTest(unittest.TestCase):
         self.assertEqual(sorted(far), ["bld", "bldcol"])       # (60 x 2.35e-3 = 14 cm; 20 x 2.35e-3 = 4.7 cm)
 
 
+class BusyRoadDriveTest(unittest.TestCase):
+    def test_forward_cells_keep_a_worker_during_terrain_builds(self):
+        # Start at the geographic cell centre, facing east at 130 mph. All
+        # nearby cells except one off the street have already reached the mod.
+        gx, gy = geotiles.tile_of(LAT, LON)
+        frame = geodesy.EnuFrame(*geotiles.centre(gx, gy))
+        tracker = roads.GeoTracker()
+        nearby = {(x, y) for x, y, _ in geotiles.tiles_near(frame, 0., 0., roads.SEND_M)}
+        tracker.sent = nearby - {(gx, gy + 1)}
+        tracker.skins = tracker.sent.copy()
+        tracker.need = {(k, 1): {} for k in tracker.sent}
+        started = []
+        def start(key, *_):
+            started.append(key)
+            tracker.building.add(key)
+        fast._ef.road_geo(tracker, None, 1, frame, (0., 0.), (58., 0.), None, (), None, True, 1.,
+                          start, lambda: None, lambda key: None)
+        self.assertTrue(started)
+        self.assertNotIn(started[0], nearby)
+        self.assertEqual(started[0][1], gy)
+        self.assertGreater(started[0][0], gx)
+        self.assertLessEqual(len(started), roads.BUILD_PER_POSE)
+
+
 class GeoTrackerRebaseTest(unittest.TestCase):
     """A scripted 15 km rebase (the mod's poses round one place, first from an anchor 15 km west, then from one at it):
     no content is built again, a skin for each tile round the car."""

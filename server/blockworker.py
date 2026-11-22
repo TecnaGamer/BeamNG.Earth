@@ -3882,7 +3882,7 @@ def _base_veg():
 
 
 def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,
-               quick=False, trees=False, canopy=False):
+               quick=False, trees=False, canopy=False, allow_none=False):
     """earthd.Server.write_base here, for a server without its imagery analyses (a small machine): the block's base
     photo from the imagery tiles on disk, its building footprints filled and its cliffs as rock, written to path
     (PNG) and packed into the game's terrain texture cache (cache: terraincache.base_entry's arguments but the rgb).
@@ -3890,9 +3890,8 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     server renders it, fetching what is missing). In the server process it ran 2 s alone but 8-11 s next to the
     rest of the world's threads on a Steam Deck (one interpreter lock), and the next block waited for it. fuel_pads:
     the gas station pads around it (_take_pads). px: the imagery's render size, out_px: the photo's (enlarged before
-    the roads are painted in: earthd.BASE_PX). quick: earthd.Server.write_quick_base's stand-in (the imagery and the
-    roads at px, then enlarged; no roofs' mask, road ghosts or rock): the main process's ran 5-6 s beside the rest of
-    its threads at 185 mph (2026-10-31), here ~1 s. With the generated ground on, the packed copy fades its forest
+    the roads are painted in: earthd.BASE_PX). quick: earthd.Server.write_quick_base's stand-in (imagery alone
+    at px, then enlarged). With the generated ground on, the packed copy fades its forest
     floor out through the mips (earthd.Server.write_base); canopy: its canopy version (or None) returned too, a
     fourth element."""
     _take_pads(fuel_pads)
@@ -3925,15 +3924,14 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
             rgb, used = im.render(frame, x0, y0, size, px, pending)
     except imagerymod.ImageryError:
         return None
+    if used.get("none") and (quick or not allow_none):
+        # (texels no imagery source covered: the renderer's brown fill. No stand-in then (the mod shows the far
+        # ground's photo); a full one is refused BASE_NONE_TRIES times, "none" telling the server why)
+        return None if quick else "none"
     rgb = np.asarray(rgb, np.uint8)
     if quick:
         import surface as surfacemod
-        if roadsmod.ROADS_IN_GROUND:
-            try:
-                rgb = surfacemod.paint_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths,
-                                              simple=True)
-            except Exception as e:      # the stand-in stays as it is
-                log.debug("quick base photo: roads: %s", e)
+        # The stand-in is a single imagery pass. Road painting follows on the full base.
         rgb = np.array(surfacemod.enlarge(rgb, out_px or px), np.uint8)
         tmp = staging.tmp_for(path)
         with open(tmp, "wb") as f:

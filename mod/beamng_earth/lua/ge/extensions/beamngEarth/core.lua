@@ -385,7 +385,7 @@ end
 -- The server's .ter (terrain.swap) is taken whenever the block exists: ~12 ms, no collision rebuild
 -- (the third result is then true; teleports and rebases rebuild it anyway), and it carries the edge
 -- holes (heightmap.write_ter). The first import of a session takes the .ter right after it too.
-local function loadBlock(tr)
+local function loadBlock(tr, aid)
   local x, y = follow.blockOrigin(tr.cx, tr.cy)
   local sq = tonumber(tr.squareSize) or follow.SQUARE_SIZE
   if math.abs(sq - follow.SQUARE_SIZE) > 1e-9 then
@@ -397,14 +397,24 @@ local function loadBlock(tr)
   local layers = (type(tr.layers) == 'table' and type(tr.materials) == 'table')
     and { masks = tr.layers, materials = tr.materials } or nil -- server --surface on (surface.py)
   if layers then groundcover.ensure() end
-  -- detail mode: the block's aerial photo as its base colour (server write_base); else the level's
-  -- (false: detail mode without a photo -> the level's flat base; nil: other modes, untouched)
+  -- A photo-less detail block still supplies collision. Leave the photographed
+  -- far tiles at their real height until this block has a readable base.
   local base = nil
-  if nearVisual == 'detail' then base = type(tr.base) == 'string' and tr.base or false end
+  if nearVisual == 'detail' then
+    if type(tr.base) == 'string' and FS:fileExists(tr.base) then
+      base = tr.base
+    elseif aid == st.anchorId and st.anchorSession == st.sessionId and st.block and
+        st.block.cx == tr.cx and st.block.cy == tr.cy and not st.photoMissing then
+      base = terrain.base()  -- a same-place regrade can keep the correctly aligned photograph
+      if base and not FS:fileExists(base) then base = nil end
+    end
+  end
   local ter = M.TER_SWAP and type(tr.ter) == 'string'
   if ter and terrain.swap(tr.ter, sq, maxH, x, y, tr.zBase, layers, base, tonumber(tr.baseSize)) then
+    st.blockLoads = (st.blockLoads or 0) + 1      -- (M.groundSerial)
     roads.terrainSwapped()      -- its collision follows by itself next frame: no other rebuild meanwhile
     groundcover.afterBlockChange()
+    M._blockPhotoInstalled(base)
     st.blockMsg = tr            -- (the block in use, as it was sent: a generation swap's rollback installs it again)
     return true, nil, true
   end
@@ -414,7 +424,11 @@ local function loadBlock(tr)
   end
   -- every block import / move drops all the grass on it; rebuild it before this frame is drawn
   groundcover.afterBlockChange()
-  if ok then st.blockMsg = tr end   -- (as above: every terrain install leaves the snapshot a rollback needs)
+  if ok then
+    st.blockLoads = (st.blockLoads or 0) + 1
+    M._blockPhotoInstalled(base)
+    st.blockMsg = tr
+  end
   return ok, err
 end
 
@@ -558,7 +572,7 @@ local function commitTeleport(msg)
   if st.viewFrame then M._leaveViewFrame() end   -- (the 3D map's Drive here: the car is placed in the new frame)
   local sw = stopwatch.new()
   local ok
-  if tr then ok, err = loadBlock(tr) end
+  if tr then ok, err = loadBlock(tr, msg.anchorId) end
   -- a new place: grass made fresh (with tools/gcpatch the engine keeps it across block moves)
   if ok then groundcover.rebuild() end
   if not ok then
@@ -637,7 +651,7 @@ local function finishRebase()
   st.recouple = rebase.recoupleStart(rb.couplings, st.clock)   -- (trailers hitched again: rebase.lua)
   local ok, err = true, nil
   if tr then
-    ok, err = loadBlock(tr)
+    ok, err = loadBlock(tr, msg.anchorId)
     -- the world shifts under the grass: made fresh (with tools/gcpatch the engine would keep it)
     groundcover.rebuild()
   end
@@ -868,7 +882,7 @@ local frameTimer = hptimer and hptimer() or nil
 
 local function commitTerrain(msg, quiet)
   local sw = stopwatch.new()
-  local ok, err, swapped = loadBlock(msg)
+  local ok, err, swapped = loadBlock(msg, msg.anchorId)
   if not ok then
     setStatus('Terrain-follow import failed: ' .. tostring(err))
     if not quiet then st.terrainRetryAt = st.clock + follow.RETRY_S end
@@ -1597,16 +1611,19 @@ local function onMessage(msg)
         -- car slows: M.applyBaseLater)
         -- (only a photo replacing another: a block taken without one (the level's flat brown base, its photo not
         -- ready at speed) takes its first at once; deferred, the ground stayed brown until the car slowed down)
-        local pl = st.player
-        if pl and (pl.speed or 0) > M.BASE_LATER_MS and terrain.base() ~= nil then
+        local pl, shown = st.player, terrain.base()
+        -- A cold teleport can have a slope-coloured ground stand-in before its first aerial.
+        if pl and (pl.speed or 0) > M.BASE_LATER_MS and not st.photoMissing and shown and not shown:match('_base_g%d+%.') then
           M._baseLater = { anchorId = msg.anchorId, cx = msg.cx, cy = msg.cy, base = msg.base, size = tonumber(msg.baseSize) }
         else
           M._baseLater = nil
-          terrain.setBase(msg.base, tonumber(msg.baseSize))
-          st.baseRefreshes = (st.baseRefreshes or 0) + 1
+          if terrain.setBase(msg.base, tonumber(msg.baseSize)) then
+            M._blockPhotoInstalled(msg.base)
+            st.baseRefreshes = (st.baseRefreshes or 0) + 1
+          end
         end
       end
-      if tp and tp.msg and tp.msg.cx == msg.cx and tp.msg.cy == msg.cy then tp.msg.base = msg.base end
+      if tp and tp.msg and tp.msg.cx == msg.cx and tp.msg.cy == msg.cy then tp.msg.base, tp.msg.baseSize = msg.base, msg.baseSize end
     end
   elseif t == 'deck_spans' then
     -- the bridges round the car (server deckspans.py): the deck guard slows the car before one whose tile is late
@@ -1852,6 +1869,10 @@ M.dropHoldState = function() return dropHold end      -- (tests, tools)
 -- before allowing teleport. gray out the button"). Never for good: a teleport whose ground failed and waits to be
 -- asked again (teleportRetry) lets another place be asked, and one the server has not answered in GO_WAIT_MAX_S too.
 M.GO_WAIT_MAX_S = 120
+-- Changes whenever the collidable ground may have: a block installed or a collision rebuild (new road tiles, decks,
+-- buildings). gps.lua sets its route line's heights again then.
+function M.groundSerial() return (st.blockLoads or 0) + roads.reloads() end
+
 function M.groundReady()
   if st.teleportRetry then return true end
   local p = st.pending
@@ -2147,7 +2168,7 @@ local function updateWorld(dt)
   -- detail mode: and a block that came without its photo is not taken while the one in use shows one (M.photoGateOpen)
   local gate = b and function(ncx, ncy)
     local tp = st.terrainPending
-    return farfield.uncoverReady(b.cx, b.cy, ncx, ncy) and M.photoGateOpen(tp and tp.msg, terrain.base(), nearVisual)
+    return farfield.uncoverReady(b.cx, b.cy, ncx, ncy) and M.photoGateOpen(tp and tp.msg, not st.photoMissing and terrain.base() or nil, nearVisual)
   end
   local fa, tx, ty, preferred = follow.decide(pl.x, pl.y, pl.vx, pl.vy, b and b.cx, b and b.cy, st.terrainPending,
     st.clock, st.terrainRetryAt, gate, st.terrainLatency)
@@ -3574,10 +3595,23 @@ end
 -- 'detail' (the mesh layout with the block drawn: aerial photo base, surface textures; 2026-10-12) or
 -- 'terrain' (v1.2; anything else). Set by the server's hello; callable from the console to test.
 local rawView = false
+function M._groundRender()
+  local tiles = rawView or (nearVisual == 'detail' and st.photoMissing == true)
+  farfield.setRawView(tiles)
+  terrain.setRenderEnabled(nearVisual == 'terrain' or (nearVisual == 'detail' and not tiles))
+end
+
+function M._blockPhotoInstalled(base)
+  if nearVisual ~= 'detail' then return end
+  st.photoMissing = base == nil
+  M._baseLater = nil
+  M._groundRender()
+end
+
 function M.setNearVisual(mode)
   nearVisual = (mode == 'mesh' or mode == 'detail') and mode or 'terrain'
-  terrain.setRenderEnabled(nearVisual == 'terrain' or (nearVisual == 'detail' and not rawView))
   farfield.setNearVisual(nearVisual)
+  M._groundRender()
   return nearVisual
 end
 
@@ -3586,8 +3620,7 @@ end
 -- under the block are loaded anyway (hidden or sunk). Returns the state.
 function M.setRawView(on)
   rawView = on and true or false
-  farfield.setRawView(rawView)
-  terrain.setRenderEnabled(nearVisual == 'terrain' or (nearVisual == 'detail' and not rawView))
+  M._groundRender()
   return rawView
 end
 

@@ -518,6 +518,7 @@ do
   local p = vec3(0, 0, 0)
   local east = { x = 1, y = 0 }
   T.check(roads.radiusToward(p, 1500, 100, 1400, east) == 1400, 'ahead of a fast car: the full reach')
+  T.check(roads.radiusToward(p, 900, 500, 1400, east) == roads.COLLIDE_M[1], 'a distant side street inside the forward cone stays parked')
   T.check(roads.radiusToward(p, -1500, 0, 1400, east) == roads.COLLIDE_M[1], 'behind it: the minimum')
   T.check(roads.radiusToward(p, 0, 1500, 1400, east) == roads.COLLIDE_M[1], 'beside it: the minimum')
   T.check(roads.radiusToward(p, -100, 50, 1400, east) == 1400, 'its own tile: the full reach')

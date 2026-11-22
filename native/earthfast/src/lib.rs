@@ -7630,6 +7630,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     railmesh::register(m)?;
     railstations::register(m)?;
     catenary::register(m)?;
-    m.add("VERSION", 584)?;
+    m.add("VERSION", 588)?;
     Ok(())
 }

@@ -15255,7 +15255,7 @@ class GeoTracker:
             if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
                 gone("roads", k, geotiles.key(*k))
 
-        fast.require(551, "road_geo")
+        fast.require(588, "road_geo")
         velocity = (float(vel[0]), float(vel[1])) if vel else (0., 0.)
         fast._ef.road_geo(self, conn, aid, frame, (x, y), velocity, tuple(view) if view else None, foci, tree,
                           ground_busy, now, start, stuck, drop_tile)
