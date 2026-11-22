@@ -9352,9 +9352,67 @@ class Connection:
                 self.loop.call_soon_threadsafe(self.status, f"Elevation tiles {done}/{total}")
         return progress
 
+    def far_cover(self, key, info):
+        """{far key: m} for the terrain message's `cover`: the exact sink (farfield.cover_sink) of every far tile sent
+        under this anchor that lies across the block's edge, against this block's own heights, which the mod uses
+        whenever it installs the block (farfield.lua 'partial'; without one it sinks such a tile by its error bound).
+        A hard commit does not wait for the far field to split them, and a coarse tile sunk by its error stood through
+        the block's road cuts (the user, 2026-11-21: "im driving through the old lod terrain sometimes with the solid
+        ground being under it"). Empty in mesh mode (the block is not drawn) and without such tiles (the usual case:
+        the commit gate waits for their split). The block's heights come from its .ter, else its PNG (~5 / ~20 ms)."""
+        if getattr(self.s, "near_visual", None) not in BLOCK_DRAWN or key[0] != getattr(self, "active", None):
+            return {}
+        try:
+            return self._far_cover(key, info)
+        except Exception:               # (never the block's delivery: the mod falls back to the error bound)
+            log.exception("far cover of block %s", key)
+            return {}
+
+    def _far_cover(self, key, info):
+        aid, cx, cy = key[0], float(key[1]), float(key[2])
+        half = heightmap.half_extent(self.s.layout.block)
+        bx0, by0, bx1, by1 = cx - half, cy - half, cx + half, cy + half
+        e = 0.01
+        cands = []
+        for k, t in self.sent.items():
+            if not isinstance(t, farfield.Tile):
+                continue
+            x0, y0, x1, y1 = t.bbox
+            if not (x0 < bx1 - e and bx0 + e < x1 and y0 < by1 - e and by0 + e < y1):
+                continue        # (not over the block)
+            if x0 >= bx0 - e and y0 >= by0 - e and x1 <= bx1 + e and y1 <= by1 + e:
+                continue        # (inside it: hidden or under its floor, the mod's own rule)
+            ti = self.s.tiles.get(self.s.far_ck(aid, k))
+            if ti is not None and ti.grid is not None:
+                cands.append((k, t.bbox, ti.grid))
+        if not cands:
+            return {}
+        n = self.s.layout.block
+        hm = None
+        try:
+            ter = info.get("ter")
+            if ter:
+                q = np.memmap(os.path.join(self.s.out_dir, ter), dtype="<u2", mode="r", offset=5, shape=(n, n))
+            else:
+                with Image.open(os.path.join(self.s.out_dir, info["heightmap"])) as im:
+                    q = np.asarray(im).astype(np.uint16)[::-1]
+            hm = float(info["zBase"]) + q * (float(info["maxHeight"]) / 65536)
+        except (OSError, KeyError, ValueError) as ex:
+            log.warning("far cover of block %s: no heights (%s)", key, ex)
+            return {}
+        out = {}
+        for k, bb, grid in cands:
+            s = farfield.cover_sink(grid, bb, hm, bx0, by0, heightmap.SQUARE)
+            if s is not None:
+                out[k] = math.ceil(s * 100) / 100
+        return out
+
     def terrain_msg(self, key, info):
         fast.require(578, "terrain message")
         out = fast._ef.terrain_message(self, key, info, heightmap.SQUARE, surfacemod.MATERIALS)
+        cover = self.far_cover(key, info)
+        if cover:
+            out["cover"] = cover
 
         lease = getattr(self, "lease", None)
         if lease is not None and not self.closing and not getattr(self, "terrain_unloaded", False) and lease.connection is self:

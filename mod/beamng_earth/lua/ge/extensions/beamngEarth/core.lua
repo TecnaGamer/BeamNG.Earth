@@ -592,7 +592,8 @@ local function commitTeleport(msg)
     pcall(require('beamngEarth/globe').transform, xf, msg.anchorId)
     keepOld = true
   end
-  farfield.switchAnchor(msg.anchorId, keepOld, { cx = tr.cx, cy = tr.cy }, st.sessionId, newA)
+  farfield.switchAnchor(msg.anchorId, keepOld, { cx = tr.cx, cy = tr.cy, zBase = tr.zBase, cover = tr.cover }, st.sessionId,
+    newA)
   st.loadingUntil = st.clock + LOADING_AFTER_TELEPORT_S
   st.teleportAt = st.clock         -- (the loading cover past loadingUntil: M._loadCover)
   st.placeFrames = PLACE_DELAY_FRAMES
@@ -674,7 +675,8 @@ local function finishRebase()
   navgraph.transform(xf, msg.anchorId)    -- (the AI's road graph too: applied again at once, the AI planning afresh)
   -- a resync with a restarted server keeps the previous session's tiles the same way (st.sessionId
   -- is the new session's): they go once the new session's tiles cover them
-  farfield.switchAnchor(msg.anchorId, true, tr and { cx = tr.cx, cy = tr.cy } or false, st.sessionId, rb.newAnchor)
+  farfield.switchAnchor(msg.anchorId, true, tr and { cx = tr.cx, cy = tr.cy, zBase = tr.zBase, cover = tr.cover } or false,
+    st.sessionId, rb.newAnchor)
   -- (the 3D map's own camera is placed by latitude / longitude: nothing of it to shift)
   local cs = viewMove and { points = 0, triples = 0, viaDebug = true }
     or camshift.shift(xf, rb.playerOld[1], rb.playerOld[2], rb.playerOld[3])
@@ -894,7 +896,7 @@ local function commitTerrain(msg, quiet)
     roads.collisionRebuilt()      -- the sidewalks made so far collide now too
   end
   local tColl = sw()
-  farfield.onBlockCommit(msg.cx, msg.cy)
+  farfield.onBlockCommit(msg.cx, msg.cy, msg)   -- (each far tile against this block: its zBase, cover)
   local ls = swapped and terrain.lastSwap or nil
   local c = { load = tLoad, coll = tColl - tLoad, cover = sw() - tColl, f = {}, swap = swapped or nil,
     ter = ls and ls.apply or nil,   -- the .ter load alone (ms)
@@ -3595,8 +3597,15 @@ end
 -- 'detail' (the mesh layout with the block drawn: aerial photo base, surface textures; 2026-10-12) or
 -- 'terrain' (v1.2; anything else). Set by the server's hello; callable from the console to test.
 local rawView = false
+-- Detail mode, a block without its photo (a provisional block at speed, its photo later: block_base): true showed the
+-- far tiles at their own height as the ground instead of the block's flat base (7fd80cff, "far-field ground instead of
+-- brown"), but they are not the ground the car drives on: L-1 tiles 4 m apart, graded where a provisional block is not,
+-- coarse ones not split yet; the car drove through them (the user, 2026-11-21: "im driving through the old lod terrain
+-- sometimes with the solid ground being under it"). false: the block is drawn (its flat base until the photo comes) and
+-- the far tiles under it covered as with a photo.
+M.PHOTOLESS_FAR_GROUND = false
 function M._groundRender()
-  local tiles = rawView or (nearVisual == 'detail' and st.photoMissing == true)
+  local tiles = rawView or (nearVisual == 'detail' and st.photoMissing == true and M.PHOTOLESS_FAR_GROUND)
   farfield.setRawView(tiles)
   terrain.setRenderEnabled(nearVisual == 'terrain' or (nearVisual == 'detail' and not tiles))
 end

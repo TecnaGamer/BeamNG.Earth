@@ -447,7 +447,8 @@ class ConstantsTest(unittest.TestCase):
                 # the SW corner of a block on its grid is an even lattice index (Torque diagonal parity)
                 self.assertEqual((t["GRID"] - t["HALF"]) / heightmap.SQUARE % 2, 0)
         self.assertEqual(modsim.XO["CELLS"], ff.V131.cells)             # without hello.cells (FORMAT 3)
-        self.assertLess(modsim.FAR["EDGE_BAND"], ff.BASE)                   # the edge ring is one L0 tile deep
+        # the strip past the collidable width lies inside the N/E ring of covered tiles, its under-floor (farfield.lua 'edge')
+        self.assertLess(2 * heightmap.half_extent(ff.TERRAIN_BLOCK) - heightmap.valid(ff.TERRAIN_BLOCK), ff.BASE)
 
     def test_exact_level(self):
         """The mod's exactMiss metric (farfield.lua, V1_4_SPEC 3.0 M0): the exact level is the finest
