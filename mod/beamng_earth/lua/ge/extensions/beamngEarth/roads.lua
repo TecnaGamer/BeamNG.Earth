@@ -197,6 +197,8 @@ local reloadWaits = 0
 local newColliders = {}    -- { id, walkQ entry } of the colliders made since the last reloadCollision
 local extBoxes = {}        -- boxes { x0, y0, z0, x1, y1, z1 } round other modules' colliders made since the last rebuild
                            -- (M.requestCollision)
+local lateCells = {}       -- ... and points due only within hardReach (M.requestLate: trees made solid far ahead), by
+local lateN = 0            -- LATE_CELL_M cell ("gx_gy" -> { x0, y0 }); lateN: how many cells
 local farDeletes = {}      -- ids of colliders dropped far from the car or behind it (updateCollideRange): their deletion
                            -- waits for any later rebuild (deletesDirty), never a prompt one
 local CUSTOM_MATERIALS_PATH = '/levels/beamng_earth/art/shapes/beamngEarth/three_dmr.materials.json'
@@ -2796,13 +2798,16 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     if swapQuiet.frames <= 0 and swapQuiet.since() >= M.SWAP_QUIET_MS then swapQuiet = nil end
   end
   local urgent = collisionDirty and (holdActive or M.extDue(extGap(), lastSpeed, sinceReload()) or M.urgentColliders()
-      or (#extBoxes > 0 and M.focusDue(extGap))) and sinceReload() > M.URGENT_GAP_S * 1000
+      or (#extBoxes > 0 and M.focusDue(extGap)) or M.lateUrgent()) and sinceReload() > M.URGENT_GAP_S * 1000
   local due = not swapQuiet and ((collisionDirty and sinceReload() > M.RELOAD_EVERY_S * 1000) or urgent
       or (deletesDirty and sinceReload() > M.RELOAD_DELETES_S * 1000))
   if due and not urgent and M.deferWhileRolling(lastSpeed, sinceReload()) then due = false end
   -- (NEED: a fast car's pending colliders wait for their deadline, not for RELOAD_EVERY_S; what else set the flag
   -- (trees, props, deletes near the car) keeps the timer)
   if due and not urgent and M.NEED and lastSpeed >= M.FAST_MS and M.onlyColliderDirt(dirtySrc) then due = false end
+  -- (only late colliders since the last rebuild, below FAST_MS: each is due by its own distance, M.lateUrgent; no
+  -- RELOAD_EVERY_S. At speed the timer stays: trees.lua's SOLID_LEAD_S counts on it, the late deadline is the backstop)
+  if due and not urgent and lastSpeed < M.FAST_MS and M.onlyLateDirt(dirtySrc) then due = false end
   if due and not holdActive and reloadWaits < M.RELOAD_WAIT_FRAMES and gov.roomFor and not gov:roomFor(M.RELOAD_ROOM_MS) then
     reloadWaits = reloadWaits + 1
     due = false
@@ -2824,6 +2829,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     require('beamngEarth/perfsummary').note('collision')
     lastReloadAt, reloads = now(), reloads + 1
     collisionDirty, deletesDirty, sinceReload, extBoxes = false, false, stopwatch.new(), {}
+    M.clearLate()
     if swapWait and not swapState.reloaded then swapState.reloaded, swapState.frames = true, 0 end
     if swapBack and not swapBack.reloaded then swapBack.reloaded, swapBack.frames = true, 0 end
     local ms = now() - t0
@@ -2972,6 +2978,10 @@ logReload = function(why)
   local e = { at = os.clock(), why = why, v = math.floor(lastSpeed * 10 + 0.5) / 10, n = #newColliders, kinds = kinds,
     gap = gap < math.huge and math.floor(gap) or -1, reach = math.floor(M.needReach(lastSpeed)), src = dirtySrc,
     walkQ = #walkQ, parked = #parked, held = #held }
+  local okE, ext = pcall(extGap)                -- (the nearest of other modules' boxes, and of the late cells)
+  e.ext = okE and ext and math.floor(ext) or -1
+  local okL, late = pcall(M._lateGap)
+  e.late = okL and late and math.floor(late) or -1
   dirtySrc = {}
   reloadLog[#reloadLog + 1] = e
   if #reloadLog > M.RELOAD_LOG then table.remove(reloadLog, 1) end
@@ -3111,6 +3121,16 @@ function M.boxGap2(b, x, y)
   local dx = math.max(b[1] - x, 0, x - b[4])
   local dy = math.max(b[2] - y, 0, y - b[5])
   return math.sqrt(dx * dx + dy * dy)
+end
+
+-- Pure: did only late colliders (M.requestLate) set the flag? src: { source = n }
+function M.onlyLateDirt(src)
+  local any = false
+  for k in pairs(src or {}) do
+    if k ~= 'requestLate' then return false end
+    any = true
+  end
+  return any
 end
 
 -- Pure: did only made colliders (markTileCollider, their promotion near the car) set the flag? src: { source = n }
@@ -3292,6 +3312,42 @@ function M.requestCollision(box)
     extBoxes[#extBoxes + 1] = { box[1], box[2], 0, box[4], box[5], 0 }
   end
 end
+-- Colliders made far ahead that may wait for any rebuild, but no longer than the car's coming within hardReach of them
+-- (no NEED_GAP_S wait, whatever the rolling deferral ROLL_DEFER_S holds back): trees.lua's items made solid at their
+-- reach radius (REACH). pts: { x1, y1, x2, y2, ... }, kept by LATE_CELL_M cell (a cell's square counts as near as its
+-- nearest point: a box round a pass's items spanned the road ahead and came due at once). Taken by any rebuild.
+M.LATE_CELL_M = 16
+function M.requestLate(pts)
+  markDirty('requestLate')
+  local c = M.LATE_CELL_M
+  for i = 1, #pts - 1, 2 do
+    local gx, gy = math.floor(pts[i] / c), math.floor(pts[i + 1] / c)
+    local k = gx .. '_' .. gy
+    if not lateCells[k] then lateCells[k] = { gx * c, gy * c }; lateN = lateN + 1 end
+  end
+end
+-- The distance (m) from the car to the nearest late cell (nil: none; 0: no car).
+local function lateGap()
+  if lateN == 0 then return nil end
+  local p = playerNow()
+  if not p then return 0 end
+  local best, c = math.huge, M.LATE_CELL_M
+  for _, q in pairs(lateCells) do
+    local dx = math.max(q[1] - p.x, 0, p.x - (q[1] + c))
+    local dy = math.max(q[2] - p.y, 0, p.y - (q[2] + c))
+    local d = dx * dx + dy * dy
+    if d < best then best = d end
+  end
+  return math.sqrt(best)
+end
+M._lateGap = lateGap
+-- Pure: are late colliders dist m from the car due now (speed v m/s)?
+function M.lateDue(dist, v)
+  return dist ~= nil and dist <= M.hardReach(v)
+end
+-- Are late colliders due for the player's car now? (update's urgent test) / every one gone (a rebuild made them solid)
+function M.lateUrgent() return lateN > 0 and M.lateDue(lateGap(), lastSpeed) end
+function M.clearLate() lateCells, lateN = {}, 0 end
 -- The distance (m) from p (default: the car) to the nearest of those boxes (nil: none; 0: no car). (cutoff: unused)
 extGap = function(_, p)
   if #extBoxes == 0 then return nil end
@@ -3329,6 +3385,7 @@ function M.collisionRebuilt()
   local removed = noteNewColliders()
   lastReloadAt, reloads = now(), reloads + 1
   collisionDirty, deletesDirty, sinceReload, extBoxes = removed > 0, false, stopwatch.new(), {}
+  M.clearLate()
   -- (a generation swap committed in this frame, before the terrain's own rebuild: its skins' collision is in it)
   if swapState and swapState.committed and not swapState.reloaded then swapState.reloaded, swapState.frames = true, 0 end
   if swapBack and not swapBack.reloaded then swapBack.reloaded, swapBack.frames = true, 0 end
@@ -3421,6 +3478,7 @@ function M.reset()
   far, farQ, farSeen = {}, {}, {}
   held, parked, newColliders, swapQuiet = {}, {}, {}, nil     -- (walkQ entries of objects gone with the level)
   collisionDirty, deletesDirty, dirtyAt, extBoxes, farDeletes = false, false, {}, {}, {}
+  M.clearLate()
   behindState.dir, behindState.slowMs, behindState.x = nil, 0, nil
 end
 
