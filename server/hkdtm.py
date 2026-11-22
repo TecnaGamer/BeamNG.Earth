@@ -33,6 +33,7 @@ import os
 import threading
 
 import numpy as np
+import fast
 import dnp
 
 import hklidar
@@ -48,15 +49,9 @@ LATTICE = 16                # pixels between the points that tell whether a shee
 
 # HK1980 Grid (EPSG:2326) on the International 1924 ellipsoid
 _A, _F = 6378388.0, 1 / 297.0
-_E2 = _F * (2 - _F)
-_E = math.sqrt(_E2)
 _LAT0 = math.radians(22 + 18 / 60 + 43.68 / 3600)
 _LON0 = math.radians(114 + 10 / 60 + 42.80 / 3600)
-_FE, _FN = 836694.05, 819069.80
 # WGS 84 to HK1980: the inverse of EPSG:1825 (HK1980 to WGS 84, coordinate frame: X' = T + (1 + s) R X)
-_WA, _WF = 6378137.0, 1 / 298.257223563
-_WE2 = _WF * (2 - _WF)
-_T = np.array([-162.619, -276.959, -161.764])
 _RX, _RY, _RZ = (math.radians(v / 3600) for v in (-0.067753, 2.243648, 1.158828))
 _R_INV = dnp.inv((1 - 1.094246e-6) * np.array([[1, _RZ, -_RY], [-_RZ, 1, _RX], [_RY, -_RX, 1]]))
 # Transverse Mercator by Krueger's series to n^4 (EPSG Guidance Note 7-2)
@@ -68,39 +63,11 @@ _H = (_N / 2 - 2 * (_N * _N) / 3 + 5 * dnp.power(_N, 3) / 16 + 41 * dnp.power(_N
       49561 * dnp.power(_N, 4) / 161280)
 
 
-def _tm(phi, dlam):
-    """(northing from the equator, easting from the central meridian), m, of HK1980 latitude phi, longitude dlam
-    from the central meridian (radians)."""
-    s = dnp.sin(phi)
-    t = dnp.sinh(dnp.arctanh(s) - _E * dnp.arctanh(_E * s))
-    xi = dnp.arctan2(t, dnp.cos(dlam))
-    eta = dnp.arctanh(dnp.sin(dlam) / np.sqrt(1 + t * t))
-    n, e = xi, eta
-    for j, h in enumerate(_H, 1):
-        n = n + h * dnp.sin(2 * j * xi) * dnp.cosh(2 * j * eta)
-        e = e + h * dnp.cos(2 * j * xi) * dnp.sinh(2 * j * eta)
-    return _B * n, _B * e
-
-
-_M0 = float(_tm(np.float64(_LAT0), 0.0)[0])
-
-
 def grid(lat, lon):
     """HK1980 Grid easting, northing (m) of WGS 84 lat / lon (degrees; arrays)."""
-    phi, lam = np.radians(np.asarray(lat, np.float64)), np.radians(np.asarray(lon, np.float64))
-    shape = np.broadcast(phi, lam).shape
-    phi, lam = np.broadcast_to(phi, shape).ravel(), np.broadcast_to(lam, shape).ravel()
-    nu = _WA / np.sqrt(1 - _WE2 * dnp.sq(dnp.sin(phi)))
-    xyz = np.stack([nu * dnp.cos(phi) * dnp.cos(lam), nu * dnp.cos(phi) * dnp.sin(lam), nu * (1 - _WE2) * dnp.sin(phi)])
-    x, y, z = dnp.matmul(_R_INV, xyz - _T[:, None])
-    lam = dnp.arctan2(y, x)
-    p = dnp.hypot(x, y)
-    phi = dnp.arctan2(z, p * (1 - _E2))
-    for _ in range(4):
-        nu = _A / np.sqrt(1 - _E2 * dnp.sq(dnp.sin(phi)))
-        phi = dnp.arctan2(z + _E2 * nu * dnp.sin(phi), p)
-    n, e = _tm(phi, lam - _LON0)
-    return (_FE + e).reshape(shape), (_FN + n - _M0).reshape(shape)
+    fast.require(565, "HK1980 Grid")
+    lat, lon = np.broadcast_arrays(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    return fast._ef.dem_hk_grid(lat, lon, _R_INV, _H, _B, (_LAT0, _LON0))
 
 
 def covers(z, x, y):
@@ -276,27 +243,13 @@ class HkDtm:
                    if b[0] < box[2] and box[0] < b[2] and b[1] < box[3] and box[1] < b[3]]
         asked = self._asked(meeting, lat, lon)
         if asked is None:
-            ex, ny = grid(lat, lon)
+            fast.require(565, "Hong Kong lidar sheets")
+            h, ok, missing = fast._ef.dem_hk_sheets(*grid(lat, lon), meeting, self._sheet, TO_EGM2008_M)
+            short = short or missing
         else:
             for name, url in asked:
                 self._fetch_later(name, url)
             short = short or bool(asked)
-            meeting = []                    # (the tile reads no sheet)
-        taken = np.zeros((size, size), bool)
-        for name, url, (x0, y0, x1, y1) in meeting:
-            m = (ex >= x0) & (ex < x1) & (ny >= y0) & (ny < y1) & ~taken
-            if not m.any():
-                continue
-            taken |= m
-            s = self._sheet(name, url)
-            if s is None:
-                short = True
-            if not s:
-                continue
-            v = s.bilinear(ex[m], ny[m])
-            good = np.isfinite(v)
-            h[m] = np.where(good, v + TO_EGM2008_M, 0.0)
-            ok[m] = good
         with self._lock:
             self.stats["tiles"] += 1
             self.stats["short"] += short

@@ -218,6 +218,22 @@ class RoadWearTest(unittest.TestCase):
 V2_MATS = {"bne_wear_var_01", "bne_wear_var_02", "bne_wear_tread2", "bne_wear_patchstrip"}
 
 
+class WearMaterialsTest(unittest.TestCase):
+    def test_wear_takes_shadows(self):
+        """The wear materials write no depth (translucentZWrite false); without translucentRecvShadows the forward pass
+        lit them as in full sun, bright streaks over shaded asphalt (the user's report 111; in-game A/B 2026-11-19: on,
+        they darken with the asphalt in shade)."""
+        import json
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
+                            "beamng_earth", "art", "shapes", "beamngEarth", "roadwear.materials.json")
+        with open(path) as f:
+            mats = json.load(f)
+        self.assertTrue(mats)
+        for name, m in mats.items():
+            with self.subTest(name=name):
+                self.assertTrue(m.get("translucentRecvShadows"))
+
+
 class SurfaceV2Test(unittest.TestCase):
     """The road revamp v2's surface overlays (BNE_SURFACE_V2: roadwear.surface_chunks, earthfast.surface_plan; the
     road mesh's lifts, ground clearance and draw order: roadmesh.SURFACE_V2)."""
@@ -258,6 +274,34 @@ class SurfaceV2Test(unittest.TestCase):
         patches = len([c for c in ch if c["m"] == "bne_wear_patchstrip"]) / (L / 1000)
         self.assertTrue(5 <= patches <= 11, patches)      # about 8 a km
 
+    def test_city_tyre_wear_stays_inside_its_lane(self):
+        for cls, urban in (("primary", True), ("primary", False), ("motorway", True)):
+            with self.subTest(cls=cls, urban=urban):
+                street = spec(cls=cls, urban=urban, lanes=3, width=10.2, oneway=True)
+                drive, lanes = roads.lane_layout(street)
+                rd = [("street", street, line(0, 128, 1200, 128), 0.0)]
+                widths = [c["w"] for c in plan(rd, box=(-10, 0, 1210, 256)) if c["m"] == "bne_wear_tread2"]
+                self.assertTrue(widths)
+                if cls == "primary" and urban:
+                    self.assertEqual(set(widths), {round(drive / lanes, 2)})
+                else:
+                    self.assertTrue(all(4.0 <= w <= 5.0 for w in widths))
+
+    def test_v2_leaves_out_the_old_lane_strips(self):
+        """With the v2 overlays the full-lane strips (polish, sealed, cracks) are left out even with BNE_WEAR_STRIPS=on
+        (they lay over the v2 wear and patch strips 0.2 mm apart); the manhole covers stay."""
+        rd = [("c", spec(surf="concrete", lanes=4, cls="motorway", width=16.0), line(128, -500, 128, 800), 0.0),
+              ("a", spec(lanes=2), line(-500, 128, 800, 128), 0.0)]
+        from unittest import mock
+        with mock.patch.object(roadwear, "STRIPS_ON", True):
+            got = kinds(plan(rd))
+            with mock.patch.object(roadwear, "SURFACE_V2", False):
+                old = kinds(plan(rd))
+        self.assertTrue({"bne_wear_sealed", "bne_wear_cracks"} & set(old), old)     # (drawn without v2)
+        self.assertFalse({"bne_wear_tread", "bne_wear_sealed", "bne_wear_cracks"} & set(got), got)
+        self.assertIn("bne_wear_tread2", got)
+        self.assertEqual("bne_spot_manhole" in got, "bne_spot_manhole" in old)
+
     def test_variation_runs_through_junctions(self):
         """The variation strips run on across a crossing road's carriageway (the stock maps'); the wear stops."""
         a = ("a", spec(lanes=2, width=7.4), line(-500, 128, 800, 128), 0.0)
@@ -274,14 +318,45 @@ class SurfaceV2Test(unittest.TestCase):
             x = np.asarray(c["n"])[:, 0]
             self.assertFalse(x.min() < 124 and x.max() > 132, "the wear stops at the crossing carriageway")
 
+    def test_crossing_cut_fades_but_a_tile_clip_keeps_its_station(self):
+        a = ("a", spec(lanes=2, width=7.4), line(-500, 128, 800, 128), 0.0)
+        b = ("b", spec(lanes=2, width=7.4), line(128, -500, 128, 800), 0.0)
+        full = plan([a, b], box=(-500, -500, 800, 800))
+        clipped = plan([a, b], box=(95, 112, 110, 144))
+        def tread(chunks):
+            return [c for c in chunks if c["m"] == "bne_wear_tread2"
+                    and abs(c["n"][0][1] - 128) < 4 and abs(c["n"][-1][1] - 128) < 4]
+        at_crossing = [c for c in tread(full) if any(abs(p[0] - 128) < 8 for p in (c["n"][0], c["n"][-1]))]
+        self.assertTrue(at_crossing)
+        for c in at_crossing:
+            self.assertEqual(c["s0"], 0.0)
+            self.assertEqual(c["s1"], c["slen"])
+        partial = [c for c in tread(clipped) if c["s0"] > 0.01 or c["s1"] < c["slen"] - 0.01]
+        self.assertTrue(partial)
+        for c in partial:
+            ref = next(v for v in tread(full) if (v["w"], v["fend_m"]) == (c["w"], c["fend_m"]))
+            self.assertEqual(c["slen"], ref["slen"])
+            self.assertAlmostEqual(c["s0"], c["n"][0][0] - ref["n"][0][0], delta=.003)
+
     def test_same_pieces_in_two_tiles(self):
         rd = [("x", spec(lanes=2, cls="secondary"), line(-1000, 300, 1500, 300), 0.0)]
         a = [c for c in plan(rd, box=(0, 172, 256, 428)) if c["m"] in V2_MATS]
         b = [c for c in plan(rd, box=(200, 172, 456, 428)) if c["m"] in V2_MATS]
-        key = lambda c: (c["m"], c["w"], c["tl"], c["slen"], c.get("fend_m"))     # noqa: E731
-        common = {key(c) for c in a if np.asarray(c["n"])[:, 0].max() > 205} & {key(c) for c in b}
-        self.assertTrue(common)
-        self.assertEqual(plan(rd, box=(0, 172, 256, 428)), plan(rd, box=(0, 172, 256, 428)))
+        def overlap(chunks):
+            pieces = []
+            for c in chunks:
+                points = np.asarray(c["n"])
+                lo, hi = max(200., points[0, 0]), min(256., points[-1, 0])
+                if hi <= lo:
+                    continue
+                # This fixture runs due east. The two clipped chunks must draw the same
+                # span, width and texture at the same station on the underlying piece.
+                pieces.append((c["m"], lo, hi, points[0, 1], c["w"], c["tl"], c["slen"],
+                               round(c["s0"] + lo - points[0, 0], 3), c["fend_m"]))
+            return sorted(pieces)
+        shared = overlap(a)
+        self.assertTrue(shared)
+        self.assertEqual(shared, overlap(b))
 
     def test_clear_keeps_a_corner_on_a_flat_cells_edge_beside_a_step(self):
         """follow_ground's clear: a corner on the edge a flat cell shares with a step cell (a wall the lattice draws as
@@ -333,6 +408,76 @@ class SurfaceV2Test(unittest.TestCase):
         for v in on_edge:
             f = (v[0] - a[0]) / (b[0] - a[0])
             self.assertAlmostEqual(float(v[2]), float(a[2] + f * (b[2] - a[2])), delta=1e-9)
+
+    def test_refine_halves_instead_of_cutting(self):
+        """follow_ground's refine (the v2 overlays): a triangle the tolerance would cut along the terrain is halved
+        first; far fewer pieces, the same area, the ground still at most clear over it everywhere and its float no
+        more than the tolerance past the cut's; the same output twice; refine 0 as without it."""
+        n = 12
+        gx, gy = np.meshgrid(np.arange(n + 1.0), np.arange(n + 1.0))
+        grid = np.round((0.04 * np.sin(gx / 1.7) * np.cos(gy / 2.3) + 0.02 * gx) * 512) / 512   # (rolling, 1/512 m)
+        P = np.array([[1.0, 1.0], [11.0, 1.4], [10.6, 6.0], [1.3, 5.2]])
+        T = np.array([[0, 1, 2], [0, 2, 3]])
+        UV = P / 10.0
+        kw = dict(tol=0.008, cell=1.0, clear=0.003)
+        cut = roadmesh.follow_ground(P, UV, T, grid, 0, 0, **kw)
+        ref = roadmesh.follow_ground(P, UV, T, grid, 0, 0, refine=10, **kw)
+        for a, b in zip(cut, roadmesh.follow_ground(P, UV, T, grid, 0, 0, refine=0, **kw)):
+            np.testing.assert_array_equal(a, b)
+        for a, b in zip(ref, roadmesh.follow_ground(P, UV, T, grid, 0, 0, refine=10, **kw)):
+            np.testing.assert_array_equal(a, b)
+        self.assertLess(len(ref[2]), len(cut[2]) / 2, (len(ref[2]), len(cut[2])))
+
+        def area(V, Tr):
+            t = V[Tr][:, :, :2]
+            a, b = t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]
+            return float(np.abs(a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]).sum() / 2)
+
+        self.assertAlmostEqual(area(ref[0], ref[2]), area(cut[0], cut[2]), places=6)
+
+        def ground(xy):
+            i, j = np.floor(xy[:, 0]).astype(int), np.floor(xy[:, 1]).astype(int)
+            fx, fy = xy[:, 0] - i, xy[:, 1] - j
+            a, b, c, d = grid[j, i], grid[j, i + 1], grid[j + 1, i], grid[j + 1, i + 1]
+            return np.where(fy > fx, a + fy * (c - a) + fx * (d - c), a + fx * (b - a) + fy * (d - b))
+
+        w = np.random.default_rng(3).dirichlet((1, 1, 1), 400)
+
+        def dz(V, Tr):
+            p = np.einsum("kj,tjc->tkc", w, V[Tr]).reshape(-1, 3)
+            return p[:, 2] - ground(p[:, :2])
+        dc, dr = dz(cut[0], cut[2]), dz(ref[0], ref[2])
+        self.assertGreaterEqual(float(dr.min()), -kw["clear"] - 1e-9)
+        # (a whole triangle's float: the tolerance below its plane, and a raise of at most tol - clear: as before)
+        self.assertLessEqual(float(dr.max()), float(dc.max()) + 2 * kw["tol"] - kw["clear"] + 1e-9)
+        self.assertEqual(set(ref[3].tolist()), {0, 1})
+
+    def test_refine_leaves_no_corner_on_a_neighbours_side(self):
+        """follow_ground's refine: a side one triangle halved is split in its neighbour too (the input's two
+        triangles share a side as copies of its points, as the tile clip leaves them), so every corner lying on
+        another triangle's side is that side's own height there after the raises (halved next to whole, the two
+        parted vertically by up to the tolerance: Codex review)."""
+        n = 14
+        gx, gy = np.meshgrid(np.arange(n + 1.0), np.arange(n + 1.0))
+        grid = 0.05 * np.sin(gx / 2.1) * np.cos(gy / 1.9) + 0.01 * gy           # (smooth: no cut left)
+        P = np.array([[1.0, 1.0], [12.0, 2.0], [6.0, 7.0], [6.0, 7.0], [12.0, 2.0], [13.0, 12.0]])
+        T = np.array([[0, 1, 2], [3, 4, 5]])
+        V, _uv, Tr, src = roadmesh.follow_ground(P, P / 10.0, T, grid, 0, 0, tol=0.004, cell=1.0, clear=0.002,
+                                                 refine=10)
+        self.assertGreater(len(Tr), 8)
+        bad = 0
+        for t in Tr:
+            for e in range(3):
+                a, b = V[t[e]], V[t[(e + 1) % 3]]
+                ab = b[:2] - a[:2]
+                L2 = float(ab @ ab)
+                f = ((V[:, :2] - a[:2]) @ ab) / L2
+                off = np.abs((V[:, 0] - a[0]) * ab[1] - (V[:, 1] - a[1]) * ab[0]) / np.sqrt(L2)
+                on = (f > 1e-6) & (f < 1 - 1e-6) & (off < 1e-7)
+                if on.any():
+                    zl = a[2] + f[on] * (b[2] - a[2])
+                    bad += int((np.abs(V[on, 2] - zl) > 1e-9).sum())
+        self.assertEqual(bad, 0)
 
     def test_overlays_clear_the_bumpy_ground(self):
         """Every overlay keeps MARK_MIN_M over the drawn ground (the terrain's own triangles, where the asphalt is

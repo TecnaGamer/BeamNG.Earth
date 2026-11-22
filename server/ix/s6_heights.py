@@ -1,7 +1,6 @@
-"""Step 6 (SPEC.md): the pieces, their samples and the solve (today's cache and wait logic, unchanged), and the
-region's embankments and profiles, as the Heights and Region artifacts."""
+"""Step 6 (SPEC.md): the pieces' samples and the solve, and the embankments and profiles, as the Heights and Region
+artifacts. An interchange is solved once for the run (ix/owner.py: its owner), so there is no solve cache here."""
 import logging
-import threading
 
 import numpy as np
 
@@ -12,70 +11,66 @@ from . import artifacts, cache, s4_terrain
 
 log = logging.getLogger("earthd.grading")
 
-FORMAT = 2
+FORMAT = 3
 LAWS = (("gradeshapes", ["STEP_M", "DECK_MAX_GRADE", "DECK_AIR_M", "SOFT_M", "DIP_MARGIN_M", "RAMP_MAX_M", "W_END",
                          "W_HOLD", "W_DIP", "W_SMOOTH", "W_STIFF", "W_JOIN"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 6
 
 
-def _solve_lock():
-    import grading      # (imported here: grading imports this package first; the lock is every planner's one)
-    return grading._SHAPE_SOLVE_LOCK
-
-
-def samples(planner, net, sysm, pcs):
-    """(smp, ck): the system's pieces' samples and the solve cache's key."""
-    smp = _gsh.sample(net, pcs)
-    return smp, planner._shape_sys_key(net, sysm, smp)
-
-
-def solve(planner, net, sysm, pcs, smp, ck, fixed_z, ground):
-    """(ground, zs, diag) of one system: today's cache and wait logic, unchanged. ground: what the terrain step read
-    at the samples; an answer already in the cache brings its own."""
-    done = planner.__dict__.setdefault("_shape_solved", {})    # (this grading's: its ground, its frame)
-    solving = planner.__dict__.setdefault("_shape_solving", {})
+def solve(net, sysm, pcs, smp, fixed_z, ground):
+    """(zs, diag) of one system: the heights of its pieces' samples (zs None: no answer) and the solver's account.
+    ground: what the terrain step read at the samples."""
     diag = {}
-    # (one thread solves a system, the others asking for it meanwhile wait for its answer: the regions round a
-    # system are planned on as many threads, each found the cache empty and solved the same system at the same
-    # time, Brunau's 4 regions 4 times, 6 of the 8 s of its solves)
-    while True:
-        with _solve_lock():
-            hit = done.get(ck)
-            ev = None if hit is not None else solving.get(ck)
-            if hit is None and ev is None:
-                ev = solving[ck] = threading.Event()
-                break
-        if hit is not None:
-            break
-        ev.wait()
-    if hit is not None:
-        ground, zs, diag = hit
-    else:
-        try:
-            zs = _gsh.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diag)
-            with _solve_lock():
-                if len(done) >= 4096:
-                    done.clear()
-                done[ck] = (ground, zs, diag)
-        finally:
-            with _solve_lock():
-                solving.pop(ck, None)
-            ev.set()
-    return ground, zs, diag
+    zs = _gsh.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diag)
+    return zs, diag
+
+
+def _plain_value(v):
+    """v as plain data (np scalars unwrapped, lists and dicts of plain values kept, anything else as its str)."""
+    if isinstance(v, np.generic):
+        v = v.item()
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    if isinstance(v, (list, tuple)):
+        return [_plain_value(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _plain_value(x) for k, x in v.items()}
+    return str(v)
 
 
 def _plain(diag):
-    """The solver's diagnostics as plain values (np scalars unwrapped, anything else as its str). A wall-clock time is
-    not solver state: dropped, or no two runs would give the same bytes."""
-    out = {}
-    for k, v in diag.items():
-        if str(k) == "elapsed_s":
-            continue
-        if isinstance(v, np.generic):
-            v = v.item()
-        out[str(k)] = v if v is None or isinstance(v, (str, int, float, bool)) else str(v)
-    return out
+    """The solver's diagnostics as plain values. A wall-clock time is not solver state: dropped, or no two runs would give
+    the same bytes."""
+    return {str(k): _plain_value(v) for k, v in diag.items() if str(k) != "elapsed_s"}
+
+
+def relaxed_of(diag):
+    """[dict(kind, amount, at, text)] of what the solve eased (gradeshapes.solve_shape: diag["relaxed"]), in the order it
+    was found; the members in net's numbers."""
+    return list(diag.get("relaxed") or ())
+
+
+def relax_text(diag):
+    """One line of what the solve eased, for the step's log line: '' where nothing was, else the count and each kind's
+    total (clearance and floors in m, a grade law as the largest factor it was eased by)."""
+    got = relaxed_of(diag)
+    if not got:
+        return ""
+    parts = {}
+    for r in got:
+        parts.setdefault(r["kind"], []).append(r)
+    out = []
+    for kind in sorted(parts):
+        rs = parts[kind]
+        if kind == "grade":
+            out.append("grade x%d (up to +%.2f%% of slope)" % (len(rs), 100.0 * max(r["amount"] for r in rs)))
+        elif kind == "curve":
+            out.append("curve x%d (radius divided by up to %.2f)" % (len(rs), max(r["amount"] for r in rs)))
+        else:
+            out.append("%s x%d (%.2f m at most, %.2f m in all)" % (kind, len(rs), max(r["amount"] for r in rs),
+                                                                   sum(r["amount"] for r in rs)))
+    return "%d eased: %s" % (len(got), "; ".join(out))
 
 
 def run(planner, net, sysm, loc, pcs, smp, zs, diag, system, scope):
@@ -94,18 +89,26 @@ def run(planner, net, sysm, loc, pcs, smp, zs, diag, system, scope):
                                       np.asarray(x["d"], np.float64), mem,
                                       np.asarray(x["ms"], np.float64),
                                       np.full(len(x["xy"]), np.nan) if z is None else np.asarray(z, np.float64)))
+    plain = _plain(diag)
+    findings = []
+    for r in relaxed_of(plain):
+        at = tuple((int(loc[int(m)]), float(s_)) for m, s_ in r["at"] if int(m) in loc)
+        findings.append(artifacts.Finding(STEP, "note", "relaxed_" + r["kind"], r["text"], at))
+        r["at"] = [[int(loc[int(m)]), float(s_)] for m, s_ in r["at"] if int(m) in loc]
     return artifacts.Heights(artifacts.Meta(STEP, FORMAT, "", (), LAWS_DIGEST, scope), system, pieces, solved,
-                             _plain(diag))
+                             plain, findings)
 
 
-def region_of(planner, net, solved, shapes, hk):
-    """(prof, Region): the region's embankments and the roads' profiles -- what _shape_region returned, as data."""
+def region_of(planner, net, solved, shapes, scope, beside=()):
+    """(prof, Region): the embankments and the roads' profiles of the solved systems (their shapes: pieces, samples and
+    heights each) -- what _shape_region returned, as data. beside: the pieces of the net's other systems, which the
+    ramps of these stop at. scope: what the artifact is of (a region, an interchange)."""
     def ground_along(i, sv):
         xy = np.stack([dnp.interp(sv, net.s[i], net.lines[i][:, 0]), dnp.interp(sv, net.s[i], net.lines[i][:, 1])],
                       axis=1)
         return planner._ground_line(xy)
 
-    emb = _gsh.embankments(net, solved, shapes, ground_along)
+    emb = _gsh.embankments(net, solved, shapes, ground_along, beside)
     prof = {}
     for (pcs, smp, zs) in shapes:
         for pc, x, z in zip(pcs, smp, zs):
@@ -120,7 +123,7 @@ def region_of(planner, net, solved, shapes, hk):
             xy = np.stack([dnp.interp(sv, net.s[j], net.lines[j][:, 0]),
                            dnp.interp(sv, net.s[j], net.lines[j][:, 1])], axis=1)
             prof.setdefault(str(m.key[0]), []).append((xy, np.asarray(z, np.float64), mode))
-    region = artifacts.Region(artifacts.Meta(STEP, FORMAT, "", (), LAWS_DIGEST, "region:%s" % hk), str(hk),
+    region = artifacts.Region(artifacts.Meta(STEP, FORMAT, "", (), LAWS_DIGEST, scope), str(scope),
                               [artifacts.Profile(str(fid), np.asarray(xy, np.float64), np.asarray(z, np.float64),
                                                  str(mode))
                                for fid, lst in prof.items() for (xy, z, mode) in lst])

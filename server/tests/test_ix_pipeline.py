@@ -19,11 +19,25 @@ import dnp  # noqa: E402
 import grading  # noqa: E402
 import gradeshapes as _gsh  # noqa: E402
 import mapcells  # noqa: E402
-from ix import artifacts, cache, pipeline  # noqa: E402
+from ix import artifacts, cache, owner, pipeline  # noqa: E402
 from test_approaches import features, flat_elev, overpass  # noqa: E402
 from test_grading import FakeMD, LAT, LON  # noqa: E402
 
-from grading import SHAPES_CAP_M, SHAPES_PAD_M, _SHAPE_SOLVE_LOCK, log  # noqa: E402
+from grading import SHAPES_PAD_M, log  # noqa: E402
+
+# (the old body's own: the farthest it followed a system from the cell, its solve tables' lock, its solve cache's key)
+SHAPES_CAP_M = 4000.0
+_SHAPE_SOLVE_LOCK = threading.Lock()
+
+
+def _shape_sys_key(net, sysm, smp):
+    import hashlib
+    h = hashlib.sha1(_gsh.system_key(net, sysm).encode())
+    for x in smp:
+        h.update(np.round(np.asarray(x["xy"], np.float64), 3).tobytes())
+        for i in np.unique(x["mem"]).tolist():
+            h.update(repr(net.m[i].key).encode() + repr((net.m[i].kind, getattr(net.m[i], "level", None))).encode())
+    return h.hexdigest()
 
 
 def underpass():
@@ -114,7 +128,7 @@ def _shape_region_calc_ref(planner, home, hk):
         xproc.check_cancel()        # (... nor its next system: a left city's 40 s solves held the road tiles)
         pcs = _gsh.pieces(net, sysm)
         smp = _gsh.sample(net, pcs)
-        ck = planner._shape_sys_key(net, sysm, smp)
+        ck = _shape_sys_key(net, sysm, smp)
         cache = planner.__dict__.setdefault("_shape_solved", {})   # (this grading's: its ground, its frame)
         solving = planner.__dict__.setdefault("_shape_solving", {})
         diag = {}
@@ -177,7 +191,7 @@ def _shape_region_calc_ref(planner, home, hk):
             xy = np.stack([dnp.interp(sv, net.s[j], net.lines[j][:, 0]),
                            dnp.interp(sv, net.s[j], net.lines[j][:, 1])], axis=1)
             prof.setdefault(str(m.key[0]), []).append((xy, np.asarray(z, np.float64), mode))
-    log.warning("grading: SHAPES pid %d region %s: %d cells, %d members, %d systems (%d infeasible, left as they are), %d roads "
+    log.warning("grading: SHAPES pid %d region %s: %d cells, %d members, %d systems (%d with no answer from the solver, left as they are), %d roads "
                 "graded, find %.2f s, solve %.2f s", os.getpid(), hk, len(loaded), len(members), len(mine), failed,
                 len(prof), t1 - t0, time.perf_counter() - t1)
     return prof
@@ -273,6 +287,8 @@ class DeterminismTest(unittest.TestCase):
     """Two runs produce the same artifact keys and bytes."""
 
     def run_once(self, tmp):
+        for table in (owner.PROCESS, owner.INDEX):      # (the first run's interchange is not the second's to read)
+            table.clear()
         with unittest.mock.patch.object(cache, "ROOT", tmp):
             prof = prof_of(overpass(), lambda p, h, k: p._shape_region_calc(h, k), "det")
         out = {}
@@ -330,11 +346,10 @@ class TimingLinesTest(unittest.TestCase):
         import re
         lines = self.region_lines(overpass())
         step = [ln for ln in lines if ln.startswith("ix step: ")]
-        pat = re.compile(r"^ix step: (\w+) key ([0-9a-f]{12}) pieces (\d+) crossings (\d+) (\d+\.\d\d) s (ok|failed: .+) @ \S+")
+        pat = re.compile(r"^ix step: (\w+) key ([0-9a-f]{12}) pieces (\d+) crossings (\d+) (\d+\.\d\d) s (ok( \(.+\))?|failed: .+) @ \S+")
         self.assertTrue(all(pat.match(ln) for ln in step), step)
         names = [pat.match(ln).group(1) for ln in step]
-        self.assertEqual(names[:2], ["paths", "extent"])
-        self.assertEqual(names[2:6], ["order", "terrain", "datum", "heights"])
+        self.assertEqual(names, list(pipeline.STEPS))
         self.assertTrue(all(" ok " in ln for ln in step), step)
         region = [ln for ln in lines if ln.startswith("ix region: ")]
         self.assertEqual(len(region), 1)
@@ -342,14 +357,29 @@ class TimingLinesTest(unittest.TestCase):
             self.assertIn("%s " % n, region[0])
 
     def test_a_system_with_no_answer_is_named_in_its_heights_line(self):
+        # (laws that cannot all hold are eased by the least, never the interchange given up: ix/relax.py. What is left with no
+        # answer is a solver that cannot give one: no kernel, a time out)
         def no_answer(net, sysm, pcs, smp, ground, fixed_z, diag=None):
-            diag.update({"converged": False, "feasible": False, "status": "stuck", "rounds": 7})
+            diag.update({"converged": False, "feasible": True, "status": "MaxTime", "timed_out": True, "rounds": 7})
             return None
         with unittest.mock.patch.object(_gsh, "solve_shape", no_answer):
             lines = self.region_lines(overpass())
         heights = [ln for ln in lines if ln.startswith("ix step: heights ")]
         self.assertEqual(len(heights), 1)
-        self.assertIn("failed: infeasible (rounds 7, status stuck)", heights[0])
+        self.assertIn("failed: timed out (rounds 7, status MaxTime", heights[0])
+
+    def test_what_a_step_eased_is_in_its_line(self):
+        def eased(net, sysm, pcs, smp, ground, fixed_z, diag=None):
+            zs = [np.zeros(len(x["xy"])) for x in smp]
+            diag.update({"converged": True, "feasible": True, "relaxed": [
+                dict(kind="grade", amount=0.03, at=[[0, 0.0]], text="grade law eased"),
+                dict(kind="clearance", amount=1.5, at=[[0, 0.0], [1, 0.0]], text="a clearance")]})
+            return zs
+        with unittest.mock.patch.object(_gsh, "solve_shape", eased):
+            lines = self.region_lines(overpass())
+        heights = [ln for ln in lines if ln.startswith("ix step: heights ")]
+        self.assertEqual(len(heights), 1)
+        self.assertIn(" ok (2 eased: clearance x1 (1.50 m at most, 1.50 m in all); grade x1 (up to +3.00% of slope)) @ ", heights[0])
 
     def test_a_level_cycle_is_named_in_its_order_line(self):
         from ix import s3_order, artifacts
@@ -432,6 +462,8 @@ class PerInterchangeTest(unittest.TestCase):
     def test_two_regions_find_the_same_interchange_with_the_same_artifacts(self):
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
             for tmp, hk in ((a, "one"), (b, "two")):
+                for table in (owner.PROCESS, owner.INDEX):      # (a region of a process of its own: the first's interchange is
+                    table.clear()                               # not the second's to read)
                 with unittest.mock.patch.object(cache, "ROOT", tmp):
                     prof_of(overpass(), lambda p, h, k: pipeline.region(p, h, k), hk)
             names = {}

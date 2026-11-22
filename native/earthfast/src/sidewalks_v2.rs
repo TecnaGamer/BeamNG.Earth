@@ -107,12 +107,17 @@ fn resample(s: &[f64], s2: &[f64], v: &[f64]) -> Vec<f64> {
 
 impl Mesh {
     #[allow(clippy::too_many_arguments)]
-    fn sections_v2(curb: &[[f64; 3]], out: &[[f64; 2]], w: f64, hv: &[f64], hr: &[f64], roll: &[f64], drop: &[f64],
+    fn sections_v2(curb: &[[f64; 3]], out: &[[f64; 2]], widths: &[f64], base_width: f64, hv: &[f64], hr: &[f64], roll: &[f64], drop: &[f64],
                    origin: [f64; 3]) -> (Vec<Vec<[f64; 3]>>, Vec<Vec<[f64; 2]>>) {
         let mut ring = Vec::with_capacity(curb.len());
         let mut prof = Vec::with_capacity(curb.len());
         for (i, c) in curb.iter().enumerate() {
-            let pr = profile_v2(hv[i], w, hr[i], roll[i], drop[i]);
+            let w = widths[i];
+            let mut pr = profile_v2(hv[i], w, hr[i], roll[i], drop[i]);
+            if (w - base_width).abs() > 1e-5 {
+                // At a facade the toe sits directly under the slab edge.
+                pr[7][0] = w;
+            }
             ring.push(pr.iter().map(|q| [c[0] + out[i][0] * q[0] - origin[0], c[1] + out[i][1] * q[0] - origin[1],
                                          c[2] + q[1] - origin[2]]).collect());
             prof.push(pr.to_vec());
@@ -123,7 +128,7 @@ impl Mesh {
     /// A v2 run: per-vertex reveal hv, back drop, rolled share; ramps (s0, s1, kind).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn run_v2(&mut self, curb0: &[[f64; 3]], out0: &[[f64; 2]], w: f64, hv0: &[f64], drop0: &[f64], roll0: &[f64],
-              caps: (bool, bool), ramps: &[(f64, f64, i64)], slab: i64, lean: bool, origin: [f64; 3]) {
+              caps: (bool, bool), ramps: &[(f64, f64, i64)], slab: i64, lean: bool, origin: [f64; 3], frontage: &[(f64,f64)], marks: &[[f64;5]]) {
         if curb0.len() < 2 {
             return;
         }
@@ -131,8 +136,20 @@ impl Mesh {
         let mut out = out0.to_vec();
         let (mut hv, mut drop, mut roll) = (hv0.to_vec(), drop0.to_vec(), roll0.to_vec());
         let mut s = arclen(&curb);
-        if !ramps.is_empty() {
-            let s2 = refine_v2(&s, ramps, 0.5, 1.0);
+        let length = *s.last().unwrap();
+        let mut widths = vec![w; curb.len()];
+        if !ramps.is_empty() || !frontage.is_empty() {
+            let mut s2 = refine_v2(&s, ramps, 0.5, 1.0);
+            widths = if frontage.is_empty() {
+                vec![w; s2.len()]
+            } else {
+                let stations: Vec<_> = frontage.iter().map(|p| p.0 * length).collect();
+                let values: Vec<_> = frontage.iter().map(|p| p.1).collect();
+                s2.extend_from_slice(&stations);
+                s2.sort_by(f64::total_cmp);
+                s2.dedup();
+                resample(&stations, &s2, &values)
+            };
             let col = |c: usize| -> Vec<f64> { curb.iter().map(|p| p[c]).collect() };
             let (cx, cy, cz) = (col(0), col(1), col(2));
             let ox: Vec<f64> = out.iter().map(|p| p[0]).collect();
@@ -147,7 +164,8 @@ impl Mesh {
         let (mut hr, mut tac_low) = curb_heights_v2(&s, ramps, &hv);
         if lean {
             let pts: Vec<Vec<f64>> = (0..curb.len()).map(|i| vec![curb[i][0], curb[i][1], curb[i][2], hr[i], hv[i],
-                if drop[i].is_finite() { drop[i] } else { 0.0 }, 0.1 * roll[i]]).collect();
+                if drop[i].is_finite() { drop[i] } else { 0.0 }, 0.1 * roll[i], widths[i],
+                curb[i][0] + widths[i] * out[i][0], curb[i][1] + widths[i] * out[i][1]]).collect();
             let keep = simplify(&pts, LEAN_TOL_M);
             curb = keep.iter().map(|&i| curb[i]).collect();
             out = keep.iter().map(|&i| out[i]).collect();
@@ -156,10 +174,11 @@ impl Mesh {
             hv = keep.iter().map(|&i| hv[i]).collect();
             drop = keep.iter().map(|&i| drop[i]).collect();
             roll = keep.iter().map(|&i| roll[i]).collect();
+            widths = keep.iter().map(|&i| widths[i]).collect();
             tac_low = keep.iter().map(|&i| tac_low[i]).collect();
         }
         let k = curb.len();
-        let (mut ring, mut prof) = Mesh::sections_v2(&curb, &out, w, &hv, &hr, &roll, &drop, origin);
+        let (mut ring, mut prof) = Mesh::sections_v2(&curb, &out, &widths, w, &hv, &hr, &roll, &drop, origin);
         if lean {
             ring = ring.iter().map(|r| LEAN.iter().map(|&j| r[j]).collect()).collect();
             prof = prof.iter().map(|r| LEAN.iter().map(|&j| r[j]).collect()).collect();
@@ -170,6 +189,32 @@ impl Mesh {
                 Some((0..k - 1).map(|i| tac_low[i] || tac_low[i + 1]).collect())
             } else { None };
             self.strips(&ring, &prof, &out, &s, &strips(), tac.as_deref(), slab);
+            for &[start, end, kind, u0, u1] in marks {
+                let (a,b)=(start*length,end*length);
+                if b-a < 1e-4 || ramps.iter().any(|&(lo,hi,_)| lo-1.0 < b && hi+1.0 > a) { continue; }
+                let mut stations = vec![a];
+                stations.extend(s.iter().copied().filter(|&v| v>a && v<b));
+                stations.push(b);
+                let base = self.p.len() as i64;
+                for v in stations {
+                    let j=s.partition_point(|&x|x<=v).clamp(1,s.len()-1);
+                    let t=((v-s[j-1])/(s[j]-s[j-1]).max(1e-9)).clamp(0.,1.);
+                    for (k,f) in [0.24,0.72].into_iter().enumerate() {
+                        let row=|i:usize,c:usize| ring[i][3][c]+f*(ring[i][6][c]-ring[i][3][c]);
+                        let mut p=[0.;3];
+                        for (c,x) in p.iter_mut().enumerate(){*x=row(j-1,c)+t*(row(j,c)-row(j-1,c));}
+                        p[2]+=0.006;
+                        self.p.push(p);
+                        self.uv.push([u0+(v-a)/(b-a)*(u1-u0),k as f64]);
+                    }
+                }
+                for j in (base..self.p.len() as i64-2).step_by(2) {
+                    for tri in [[j,j+1,j+2],[j+1,j+3,j+2]] {
+                        self.t.push(orient(tri,&self.p,[0.,0.,1.]));
+                        self.m.push(21+kind as i64);
+                    }
+                }
+            }
         }
         for (end, sgn, cap) in [(0usize, -1.0f64, caps.0), (k - 1, 1.0, caps.1)] {
             if !cap {
@@ -198,7 +243,7 @@ impl Mesh {
     /// A v2 corner: outer points at their absolute slab top, otoe the ground under each (NaN: v1's drop).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn corner_v2(&mut self, arc0: &[[f64; 3]], inward0: &[[f64; 2]], outer: &[[f64; 3]], otoe: &[f64], hv0: &[f64],
-                 roll0: &[f64], ramps: &[(f64, f64, i64)], lean: bool, origin: [f64; 3]) {
+                 roll0: &[f64], ramps: &[(f64, f64, i64)], lean: bool, origin: [f64; 3], slab: i64) {
         if arc0.is_empty() {
             return;
         }
@@ -236,22 +281,35 @@ impl Mesh {
         }
         let k = arc.len();
         let nan = vec![f64::NAN; k];
-        let (ring, prof) = Mesh::sections_v2(&arc, &inward, 2.5, &hv, &hr, &roll, &nan, origin);
+        let (ring, prof) = Mesh::sections_v2(&arc, &inward, &vec![2.5; k], 2.5, &hv, &hr, &roll, &nan, origin);
         if lean {
-            self.strips(&ring, &prof, &inward, &s, &[(0, 3, 0, 0.0, 0.0)], None, 1);
+            self.strips(&ring, &prof, &inward, &s, &[(0, 2, 0, 0.0, 0.0)], None, 1);
         } else {
             let cs: Vec<(usize, usize, i64, f64, f64)> = strips()[..3].to_vec();
             self.strips(&ring, &prof, &inward, &s, &cs, None, 1);
         }
-        let mut poly: Vec<[f64; 3]> = ring.iter().map(|r| r[3]).collect();
+        let lip = if lean { 2 } else { 3 };
+        let mut poly: Vec<[f64; 3]> = ring.iter().map(|r| r[lip]).collect();
         let out: Vec<[f64; 3]> = outer.iter().map(|o| [o[0] - origin[0], o[1] - origin[1], o[2] - origin[2]]).collect();
+        let seam = |i:usize, q:[f64;3]| {
+            let w=(q[0]+origin[0]-arc[i][0]).dhypot(q[1]+origin[1]-arc[i][1]);
+            let profile=profile_v2(hv[i],w,hr[i],roll[i],f64::NAN);
+            let idx:&[usize]=if lean {&[5]} else {&[4,5]};
+            idx.iter().map(|&j|{
+                let [x,z]=profile[j];
+                [arc[i][0]+inward[i][0]*x-origin[0],arc[i][1]+inward[i][1]*x-origin[1],arc[i][2]+z-origin[2]]
+            }).collect::<Vec<_>>()
+        };
+        if let Some(q)=out.first(){poly.extend(seam(k-1,*q));}
+        let first_outer=poly.len();
         poly.extend(out.iter().copied());
+        if let Some(q)=out.last(){poly.extend(seam(0,*q).into_iter().rev());}
         let uv: Vec<[f64; 2]> = poly.iter().map(|q| [q[0] / SLAB_REPEAT_M, q[1] / (SLAB_REPEAT_M / 4.0)]).collect();
         let local = poly.clone();
         let base = self.add(poly.clone(), uv);
         let m = poly.len();
         let fan: Vec<[i64; 3]> = if out.len() == 3 {
-            let o = k + 1;
+            let o = first_outer + 1;
             (0..m).filter(|&a| a != o && (a + 1) % m != o).map(|a| [o as i64, a as i64, ((a + 1) % m) as i64]).collect()
         } else {
             let xy: Vec<(f64, f64)> = poly.iter().map(|q| (q[0], q[1])).collect();
@@ -268,7 +326,7 @@ impl Mesh {
         for t in &fan {
             let tt = orient(*t, &local, [0.0, 0.0, 1.0]);
             self.t.push([tt[0] + base, tt[1] + base, tt[2] + base]);
-            self.m.push(1);
+            self.m.push(slab);
         }
         let (mut cx, mut cy) = (0.0, 0.0);
         for q in &poly {
@@ -286,18 +344,27 @@ impl Mesh {
                 fallback
             }
         };
+        let xy: Vec<_> = out.iter().map(|q| [q[0], q[1]]).collect();
+        let mut normals = normals_2d(&xy);
+        for (j, n) in normals.iter_mut().enumerate() {
+            let q = xy[j];
+            if n[0] * (q[0] - c[0]) + n[1] * (q[1] - c[1]) < 0.0 {
+                *n = [-n[0], -n[1]];
+            }
+        }
+        if normals.len() >= 2 {
+            normals[0] = inward[k - 1];
+            *normals.last_mut().unwrap() = inward[0];
+        }
+        let toe = |j: usize| {
+            let q = out[j];
+            let drop = drop_at(j);
+            [q[0] + normals[j][0] * BACK_RUN * drop, q[1] + normals[j][1] * BACK_RUN * drop, q[2] - drop]
+        };
         for (j, w2) in out.windows(2).enumerate() {
             let (a, b) = (w2[0], w2[1]);
-            let t = [b[0] - a[0], b[1] - a[1]];
-            let l = t[0].dhypot(t[1]).max(1e-9);
-            let mut nrm = [t[1] / l, -t[0] / l];
             let mid = [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])];
-            if nrm[0] * (mid[0] - c[0]) + nrm[1] * (mid[1] - c[1]) < 0.0 {
-                nrm = [-nrm[0], -nrm[1]];
-            }
-            let (da, db) = (drop_at(j), drop_at(j + 1));
-            let p = vec![a, b, [b[0] + nrm[0] * BACK_RUN * db, b[1] + nrm[1] * BACK_RUN * db, b[2] - db],
-                         [a[0] + nrm[0] * BACK_RUN * da, a[1] + nrm[1] * BACK_RUN * da, a[2] - da]];
+            let p = vec![a, b, toe(j + 1), toe(j)];
             let len = (b[0] - a[0]).dhypot(b[1] - a[1]) / CURB_REPEAT_M;
             let uv = vec![[0.0, v_light_low()], [len, v_light_low()], [len, v_band_low()], [0.0, v_band_low()]];
             let want = [mid[0] - c[0], mid[1] - c[1], 0.0];
@@ -324,13 +391,27 @@ pub fn sidewalk_mesh2<'py>(py: Python<'py>, kind: PyReadonlyArray1<'py, i64>, pt
                            w: PyReadonlyArray1<'py, f64>, caps: PyReadonlyArray2<'py, bool>,
                            slab: PyReadonlyArray1<'py, i64>, hv: PyReadonlyArray1<'py, f64>,
                            drop: PyReadonlyArray1<'py, f64>, roll: PyReadonlyArray1<'py, f64>,
-                           otoe: PyReadonlyArray1<'py, f64>, origin: (f64, f64, f64), collision: bool)
+                           otoe: PyReadonlyArray1<'py, f64>, origin: (f64, f64, f64), collision: bool,
+                           frontages: Option<Vec<Vec<(f64,f64)>>>,
+                           marks: Option<Vec<Vec<[f64;5]>>>)
                            -> PyResult<(MeshOut<'py>, MeshOut<'py>)> {
     let (kind, pts, dirs, off) = (kind.as_array(), pts.as_array(), dirs.as_array(), off.as_array());
     let (outer, ooff, ramps, roff) = (outer.as_array(), ooff.as_array(), ramps.as_array(), roff.as_array());
     let (w, caps, slab) = (w.as_array(), caps.as_array(), slab.as_array());
     let (hv, drop, roll, otoe) = (hv.as_array(), drop.as_array(), roll.as_array(), otoe.as_array());
     let n = kind.len();
+    if let Some(rows) = &frontages {
+        if rows.len() != n || rows.iter().any(|r| r.iter().any(|&(t,w)|
+            !(0.0..=1.0).contains(&t) || !w.is_finite() || w < 0.4) || r.windows(2).any(|p| p[0].0 >= p[1].0)) {
+            return Err(PyValueError::new_err("invalid sidewalk frontage profile"));
+        }
+    }
+    if let Some(ref rows)=marks {
+        if rows.len()!=n || rows.iter().flatten().any(|r| !r.iter().all(|v|v.is_finite()) ||
+                r[0]<0. || r[1]>1. || r[1]<r[0] || !(0.0..=2.0).contains(&r[2])) {
+            return Err(PyValueError::new_err("invalid sidewalk marks"));
+        }
+    }
     let np_ = pts.nrows();
     let ok_off = |o: &numpy::ndarray::ArrayView1<'_, i64>, total: usize| -> bool {
         o.len() == n + 1 && o[0] == 0 && o[n] >= 0 && o[n] as usize == total
@@ -356,18 +437,19 @@ pub fn sidewalk_mesh2<'py>(py: Python<'py>, kind: PyReadonlyArray1<'py, i64>, pt
         if kind[i] == 0 {
             let drop_i: Vec<f64> = (a..b).map(|j| drop[j]).collect();
             let c = (caps[[i, 0]], caps[[i, 1]]);
+            let widths = frontages.as_ref().map_or(&[][..], |rows| rows[i].as_slice());
             if collision {
-                lean.run_v2(&p, &d, w[i], &hv_i, &drop_i, &roll_i, c, &rr, 1, true, o);
+                lean.run_v2(&p, &d, w[i], &hv_i, &drop_i, &roll_i, c, &rr, 1, true, o, widths, &[]);
             }
-            full.run_v2(&p, &d, w[i], &hv_i, &drop_i, &roll_i, c, &rr, slab[i], false, o);
+            full.run_v2(&p, &d, w[i], &hv_i, &drop_i, &roll_i, c, &rr, slab[i], false, o, widths, marks.as_ref().map_or(&[][..], |rows| rows[i].as_slice()));
         } else {
             let (oa, ob) = (ooff[i] as usize, ooff[i + 1] as usize);
             let ou = pts3(&outer, oa..ob);
             let ot: Vec<f64> = (oa..ob).map(|j| otoe[j]).collect();
             if collision {
-                lean.corner_v2(&p, &d, &ou, &ot, &hv_i, &roll_i, &rr, true, o);
+                lean.corner_v2(&p, &d, &ou, &ot, &hv_i, &roll_i, &rr, true, o, 0);
             }
-            full.corner_v2(&p, &d, &ou, &ot, &hv_i, &roll_i, &rr, false, o);
+            full.corner_v2(&p, &d, &ou, &ot, &hv_i, &roll_i, &rr, false, o, slab[i]);
         }
     }
     Ok((mesh_out(py, full), mesh_out(py, lean)))
@@ -573,7 +655,7 @@ mod tests {
         let mut m = Mesh::default();
         let curb: Vec<[f64; 3]> = (0..5).map(|i| [i as f64 * 2.0, 0.0, 1.0]).collect();
         let out = vec![[0.0, 1.0]; 5];
-        m.run_v2(&curb, &out, 2.5, &[0.15; 5], &[f64::NAN; 5], &[0.0; 5], (true, true), &[], 1, false, [0.0; 3]);
+        m.run_v2(&curb, &out, 2.5, &[0.15; 5], &[f64::NAN; 5], &[0.0; 5], (true, true), &[], 1, false, [0.0; 3], &[], &[]);
         assert_eq!(m.p.len(), 7 * 2 * 5 + 2 * 8);
         assert_eq!(m.t.len(), 7 * 2 * 4 + 2 * 6);
     }

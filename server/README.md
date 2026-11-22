@@ -60,7 +60,7 @@ python3 server/earthd.py --port 47613 --user-dir ~/.local/share/BeamNG/BeamNG.dr
 | `--geo-tiles` | `on` | Origin-independent content (`geotiles.py`, earthfast `geotiles.rs`): with a mod whose hello has `geoTiles: 17`, the vegetation comes in the tiles of a global Web-Mercator zoom-17 grid (~240 m at 39 deg, key `g17_<x>_<y>`), each in its own frame (`veg_tile` carries `frame: [lat, lon]` of its centre and `pivot`, m); the mod places a tile into its anchor's world (`geotile.lua`) and keeps it across rebases, so a rebase sends no tree tile again. With road processes (`--road-processes` > 0) and a mod whose hello also has `roadGeo: 1`, the road tiles are geotiles too: their content (buildings, decks, tunnels, rails, wires, street furniture, guard rails, parking, gas stations, pump jacks, sound) built once in the tile's own frame (revisit kind `roadsg`, no anchor in its key; `roads_tile` with `frame`, `h` its content hash, each part's `pivot` and `relief`), the draped surfaces (road mesh, plazas, sidewalks) a skin per anchor (`roads_skin`, cut exactly at the tile's quad), a tall part that rigid placement would leave off by more than 3 cm (colliders) / 10 cm sent as its exact variant for that anchor (`roads_exact`); a rebase sends skins only (`roads.GeoTracker`, `blockworker.roads_geo`). With the far buildings' process too and a mod whose hello has `farGeo: 1`, the far buildings, the skyline and the far bridges are geotiles (`blockworker.far_geo`, revisit kinds `bldfar` / `bldsky` / `brfar` with no anchor in the key): the far buildings in the road geotiles' own zoom-17 grid (a far tile holds exactly the buildings the road geotile of its key holds; the mod hides it once that one's are made: each building shown once at the near / far seam), sent as whole zoom-15 squares (4 x 4: `buildings.SKY_UNIT`); the skyline in those zoom-15 squares (shown while not all 16 far tiles of its square are in); the far bridges' jobs per zoom-15 square, their slabs a piece per road geotile (earthfast `bridge_slabs`; hidden where that road geotile shows its own deck and road mesh); their street lamps grouped per road geotile key in its frame. Each is placed rigidly at its pivot (render-only: no skin, no exact variant) and kept across rebases: a rebase sends no far content again. `off`: the anchor's 256 m tiles, as before (A/B). |
 | `--grading` | `on` | Ground graded under roads (`grading.py`): smooth along the road, flat across the carriageway and a 1 m shoulder, 1:2 slopes back to the natural ground; in the physics block, the level -1 / 0 mesh tiles and the road heights alike. Needs `--roads on`. |
 | `--block-process` | `on` | The terrain-follow and prefetch physics blocks build in two processes of their own (`blockworker.py`: one for the mod's requests, one for the prefetch), off this process's interpreter lock, each with its own DEM reader, road plans (looked up ahead of the player), street widths and 128 m height chunks over the same disk caches. A block that moved one step reuses 7/8 of its heights. `off`: built in this process's threads. In-game 2026-10-12 this took a 58 m/s drive from falling off the block after 0.5 km to 10 km without a fall. |
-| `--surface` | `on` | Ground models under the physics block (`surface.py`, ROADMAP v1.5): every 2 m sample gets a material from the ESA WorldCover class under it (asphalt for built-up, grass, dusty / loose dirt, snow, mud, dirt) and rock where steeper than 35°; one 0/255 mask per material is written next to the heightmap (`hm_<a>_<cx>_<cy>_m<i>.png`) and named in `terrain.layers` / `terrain.materials`. Land cover comes from the map-data cache (`<cache>/mapdata/`), prefetched 3 km around the player; a block never waits for it (an uncached cell reads as dirt until the next block). |
+| `--surface` | `on` | Ground models under the physics block (`surface.py`, ROADMAP v1.5): every 2 m sample gets a material from the ESA WorldCover class under it (asphalt for built-up, grass, dusty / loose dirt, snow, mud, dirt) and rock where steeper than 35°; one 0/255 mask per material is written next to the heightmap (`hm_<a>_<cx>_<cy>_<revision>_m<i>.png`) and named in `terrain.layers` / `terrain.materials`. Land cover comes from the map-data cache (`<cache>/mapdata/`), prefetched 3 km around the player; a block never waits for it (an uncached cell reads as dirt until the next block). |
 | `--credits` | `on` | Data credits for the mod's on-screen overlay (`credits.py`; `credits` messages, see below): the imagery / elevation / weather sources of the tiles within 2 km of the player and of the far field (with `--colormatch s2`, a texture the seam feather corrected also names the S2 references), sent on change, at most once a second. `off`: no message (the mod shows `hello.attribution`). `Server()` has none |
 | `-v` | off | Debug logging, with the event loop's stalls over 0.25 s and the main thread's stack at that moment ("event loop stalled") |
 
@@ -209,7 +209,7 @@ See [global turbine report](../docs/research/2026-11-01-wind-turbine-global.md) 
 
 ## Terrain block (§1, §12 P1)
 
-- `hm_<anchorId>_<cx>_<cy>.png`: 1024² 16-bit grayscale, row 0 = north, `squareSize` = 2.0.
+- `hm_<anchorId>_<cx>_<cy>_<revision>.png`: 1024² 16-bit grayscale, row 0 = north, `squareSize` = 2.0.
   Sample (gx, gy) is at (cx − 1024 + 2·gx, cy − 1024 + 2·gy), computed as integer lattice index × 2.0,
   so every sample is an even-metre point of the anchor frame and a 256 m move is exactly 128 samples.
   Row/column 1023 hold real DEM data. Physics covers (N − 1)·s = 2046 m: [cx − 1024, cx + 1022]; the
@@ -221,12 +221,15 @@ See [global turbine report](../docs/research/2026-11-01-wind-turbine-global.md) 
   Mt Whitney data). Q is chosen once per anchor from a ±15 km relief survey at DEM z10: the smallest of
   {1/256, 1/128, 1/64, 1/32, 1/16} m whose range 65535·Q covers 1.1 × relief + 72 m. A block whose
   relief does not fit uses the next coarser Q (for that block only).
-- Heightmaps are generated once per (anchorId, cx, cy) on two worker threads and kept in an LRU
-  (6 entries). Eviction deletes the file but never touches the current terrain, the two committed
-  before it, the last two handed to the mod, the terrain just built, or the first terrain of an
-  anchor no connection has committed yet. (Protecting every recent anchor's first terrain made the
-  protected set larger than the cache after a rebase, so each new prefetch was deleted as soon as it
-  was built and rebuilt on every pose; found by the integration drive.)
+- The server caches up to 48 graded blocks (16 or 32 on smaller memory tiers). Each delivery to a mod
+  advertising `terrainFiles = 1` includes a `terrainTicket`. Evicting or replacing a revision retires
+  its height PNG, terrain file and every layer mask. The server deletes them after every recipient has
+  returned its ticket in `terrain_release`. The mod keeps installed, deferred, pending and rollback
+  revisions, including the file still bound to the engine's TerrainBlock. A reconnect reports the
+  surviving tickets in `hello.terrainHeld`. A Windows sharing violation leaves the file queued for retry.
+  Older mods have one pending follow request. The server keeps candidate revisions at their confirmed
+  centre and pending centre. A replacement follow request invalidates the earlier request ID, even
+  if the car stays on its current block. Prepared future anchors and swap rollback keep their holds.
 - Prefetch: on each pose ≥ 200 m (Chebyshev) from the block centre, the server predicts the mod's
   next `prepare_terrain` (`predict_request`, REACH = 420 m as in `follow.lua`), builds it in the
   background and forces L0 over it. While a request is pending the prediction starts from the

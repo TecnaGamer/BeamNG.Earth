@@ -85,6 +85,10 @@ class PreparationTest(unittest.TestCase):
             (d / "hm_3_512_-256.png").write_bytes(b"x")
             local, vfs = m4_probes.heightmap_path(tmp, info())
             self.assertEqual((local, vfs), (d / "hm_3_512_-256.png", "/temp/beamngEarth/s1/hm_3_512_-256.png"))
+            revision = d / "hm_3_512_-256_7.png"
+            revision.write_bytes(b"y")
+            live = "/temp/beamngEarth/s1/" + revision.name
+            self.assertEqual(m4_probes.heightmap_path(tmp, info(heightmap=live)), (revision, live))
             with self.assertRaises(SystemExit):
                 m4_probes.heightmap_path(tmp, info(anchorId=4))
 

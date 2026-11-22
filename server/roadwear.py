@@ -68,7 +68,7 @@ LOOKS = {
 # variation (the stock AsphaltRoad_variation textures: faint mottling and streaks, 5-24 % opaque) in 5-9 m strips about
 # 50 m long, 10 m end fades, texture length about 100 m, running on through the junction mouths; tyre wear (the stock
 # tread_marks_worn at its stock tint and opacity: ours at full brightness and opacity were the "very bright" bands of
-# 2026-11-11) 4-5 m wide on the lane centres in 40-60 m runs with 5-20 m fades, in place of K_TREAD; repair patch strips
+# 2026-11-11) up to 4-5 m wide on the lane centres, capped at one lane on urban surface streets in 40-60 m runs with 5-20 m fades, in place of K_TREAD; repair patch strips
 # (the stock road_patches1 strip) about 8 a km, 15-40 m long, half of them with a joint line across each end. Their
 # materials (roadwear.materials.json) write no depth: roadmesh.v2_rank orders them.
 SURFACE_V2 = os.environ.get("BNE_SURFACE_V2", "off").strip().lower() in ("on", "1", "yes", "true")
@@ -87,6 +87,12 @@ MATERIALS = tuple(sorted({v["m"] for v in LOOKS.values()}
 # BNE_WEAR_STRIPS=on draws them (for reworking the materials); the spots and crack lines stay.
 STRIPS_ON = os.environ.get("BNE_WEAR_STRIPS", "off").strip().lower() == "on"
 STRIP_KINDS = (K_TREAD, K_SEALED, K_CRACKS, K_MANHOLE)   # (the manhole covers too: bright white discs in game)
+# With the v2 surface overlays (SURFACE_V2) the full-lane strips are left out even with BNE_WEAR_STRIPS=on: the v2
+# lane-centre wear replaces the polish, its variation and repair patch strips the sealed and crack networks. Drawn
+# too, the sealed / crack strips lay over the v2 pieces on the same lanes 0.2 mm apart (Revamped roads + Wear strips,
+# 2026-11-19: +1,030 m2 of overlays within 1 mm of another's at Fells Point, 380 m2 at the Queensboro Bridge, 20 more
+# samples under the ground at the Stelvio, markprobe): two wear layers on one lane. The manhole covers stay.
+V2_REPLACES = (K_TREAD, K_SEALED, K_CRACKS)
 
 
 def _grid(cols, rows):
@@ -270,7 +276,7 @@ def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=(), leaves
     for k in range(len(A)):
         kind, width, tl, slen, cell = A[k]
         kind = int(kind)
-        if kind in STRIP_KINDS and not STRIPS_ON or SURFACE_V2 and kind == K_TREAD:
+        if kind in STRIP_KINDS and not STRIPS_ON or SURFACE_V2 and kind in V2_REPLACES:
             continue
         look = LOOKS[kind]
         q = P[O[k]:O[k + 1]]
@@ -301,11 +307,11 @@ def surface_chunks(pts, off, rows, excl, box, tier):
     """The v2 surface pieces (SURFACE_V2: earthfast.surface_plan) as road mesh chunks; tile_chunks's arrays (the roads'
     centre lines, offsets, attrs rows, excluded pairs), box and tier. Each strip carries its end fade ("fend_m")."""
     import fast
-    fast.require(499, "surface_plan")
+    fast.require(570, "surface_plan")
     P, O, A = fast._ef.surface_plan(np.ascontiguousarray(np.concatenate(pts)), np.asarray(off, np.int64),
                                     np.ascontiguousarray(np.asarray(rows, np.float64).reshape(-1, NA)),
                                     np.asarray(excl, np.int64).reshape(-1, 2),
-                                    np.asarray(box, np.float64)[:4], int(tier))
+                                    np.asarray(box, np.float64)[:4], int(tier), fit_to_road=True)
     out = []
     for k in range(len(A)):
         kind, width, tl, slen, _cell, fend = A[k]

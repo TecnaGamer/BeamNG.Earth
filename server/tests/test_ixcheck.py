@@ -227,6 +227,65 @@ def test_c3_bad_need():
     assert "bad_need" in codes(c3_order, o, {1: net_paths()})
 
 
+# ---- check 3 under the joins: crossings, joins and the grade law must have heights --------------------------------
+
+
+def road_of_two(levels):
+    """Three roads of two decks each, the second joined to the first at 60 m: A1 A2, B1 B2, C1 C2 (members 0..5)."""
+    ms = []
+    for k, y in zip("ABC", (0.0, 300.0, 600.0)):
+        ms += [member(k + "1", [(0.0, y), (60.0, y)], kind="deck", level=levels[0]),
+                member(k + "2", [(60.0, y), (120.0, y)], kind="deck", level=levels[1])]
+    return artifacts.Paths(meta(1, "w1"), ms, [], [])
+
+
+def weld_parents():
+    joins = tuple(artifacts.Join(2 * k, 60.0, 2 * k + 1, 0.0) for k in range(3))
+    sysm = artifacts.System("SY", tuple(range(6)), joins, (), (0.0, 0.0, 120.0, 600.0))
+    return {1: road_of_two((3.0, 1.0)), 2: artifacts.Extent(meta(2, "w2", ("w1",)), "cell:0:0", [sysm])}
+
+
+def weld_order(pairs, sign):
+    xs = [artifacts.Crossing(u, 55.0, d, 5.0, np.zeros(2), 5.0, np.zeros((0, 2))) for u, d in pairs]
+    return artifacts.Order(meta(3, "w3"), "SY", xs, {str(i): v for i, v in enumerate(sign)},
+                           {str(i): len(sign) - i for i in range(len(sign))})
+
+
+def test_c3_weld_cycle_with_layer_decisions_fails():
+    # A1 over B2, B1 over C2, C1 over A2, the three roads each one road joined at 60 m: a loop of layer decisions
+    o = weld_order([(0, 3), (2, 5), (4, 1)], [1] * 6)
+    got = [f for f in c3_order.check(o, weld_parents()) if f.code == "weld_cycle"]
+    assert [f.level for f in got] == ["fail"]
+    assert "A1" in got[0].text and "layers alone" in got[0].text
+
+
+def test_c3_weld_cycle_of_the_structure_alone_is_a_note():
+    o = weld_order([(0, 3), (2, 5), (4, 1)], [1, -1, 1, -1, 1, -1])
+    got = [f for f in c3_order.check(o, weld_parents()) if f.code == "weld_cycle"]
+    assert [f.level for f in got] == ["note"]
+
+
+def test_c3_two_decisions_that_hold_with_the_joins_are_clean():
+    o = weld_order([(0, 3), (2, 5)], [1] * 6)
+    assert [f for f in c3_order.check(o, weld_parents()) if f.code == "weld_cycle"] == []
+
+
+# ---- check 6: relaxations are counted apart from failures -----------------------------------------------------------
+
+
+def test_c6_a_clearance_short_by_what_was_eased_is_a_relaxation_not_a_failure():
+    h = solved_heights(pieces=[deck_piece(1, -40.0, z=3.0), deck_piece(4, 0.0, z=3.0), dip_piece()])
+    assert "clearance" in [f.code for f in fails(c6_heights, h, solved_parents(heights=h))]
+    eased = dataclasses.replace(h, diag={"relaxed": [dict(kind="clearance", amount=2.5, at=[[4, 20.0], [0, 40.0]],
+                                                         text="clearance of D2 over R")]})
+    got = c6_heights.check(eased, solved_parents(heights=eased))
+    assert [f.code for f in got if f.level == "fail"] == []
+    assert [f.code for f in got if f.code.startswith("relaxed_")] == ["relaxed_clearance"]
+    short = dataclasses.replace(h, diag={"relaxed": [dict(kind="clearance", amount=1.0, at=[[4, 20.0], [0, 40.0]],
+                                                         text="clearance of D2 over R")]})
+    assert "clearance" in [f.code for f in fails(c6_heights, short, solved_parents(heights=short))]
+
+
 # ---- a solved system: two decks joined over a road that dips under them --------------------------------------------
 
 
@@ -396,6 +455,14 @@ def test_c6_grade():
     got = notes(c6_heights, h, solved_parents(heights=h))
     assert [f.code for f in got] == ["boundary_off", "boundary_off", "grade"]
     assert "0.250" in got[-1].text
+
+
+def test_c6_a_decision_given_up_excuses_its_crossings_clearance():
+    h = solved_heights(pieces=[deck_piece(1, -40.0, z=3.0), deck_piece(4, 0.0, z=3.0), dip_piece()])
+    gone = dataclasses.replace(h, diag={"relaxed": [dict(kind="layer", amount=5.0, at=[[4, 20.0], [0, 40.0]],
+                                                        text="decision D2 over R given up")]})
+    got = c6_heights.check(gone, solved_parents(heights=gone))
+    assert [f.code for f in got if f.level == "fail"] == [] and "relaxed_layer" in [f.code for f in got]
 
 
 # ---- end to end: scan over a saved run -----------------------------------------------------------------------------

@@ -226,14 +226,26 @@ fn clean(s: Option<String>, max: usize) -> String {
     s.unwrap_or_default().chars().filter(|c| !c.is_control()).take(max).collect::<String>().trim().to_string()
 }
 
-/// The announcing server's address: the peer, or the first X-Forwarded-For hop when the peer is a local proxy.
+thread_local! {
+    /// Set on the threads serving the Cloudflare Tunnel listener (BNGE_TUNNEL_ADDR) only.
+    static TUNNEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The announcing server's address: the peer, or, when the peer is a local proxy, the client address it reports.
+/// Requests from the Cloudflare Tunnel (cloudflared on this machine, its own loopback listener BNGE_TUNNEL_ADDR;
+/// 2026-11-20: no port forwarding needed) use CF-Connecting-IP, which Cloudflare sets itself (X-Forwarded-For through
+/// Cloudflare starts with whatever the client sent: a spoofed first hop would dodge the per-IP limits). The main
+/// listener (behind Caddy) never trusts CF-Connecting-IP, which a client could send through Caddy, and uses Caddy's
+/// X-Forwarded-For, written from the real peer.
 fn client_ip(req: &Request) -> Option<IpAddr> {
     let peer = req.remote_addr()?.ip();
     if peer.is_loopback() {
-        for h in req.headers() {
-            if h.field.equiv("X-Forwarded-For") {
-                return h.value.as_str().split(',').next()?.trim().parse().ok();
-            }
+        let name = if TUNNEL.with(|t| t.get()) { "CF-Connecting-IP" } else { "X-Forwarded-For" };
+        if let Some(h) = req.headers().iter().find(|h| h.field.equiv(name)) {
+            return h.value.as_str().split(',').next()?.trim().parse().ok();
+        }
+        if TUNNEL.with(|t| t.get()) {
+            return None;            // (a tunnel request without Cloudflare's header: refused, never counted as 127.0.0.1)
         }
     }
     Some(peer)
@@ -380,10 +392,20 @@ fn main() {
     }
     let slots = Arc::new(Slots::default());
     let mut workers = Vec::new();
-    for _ in 0..WORKERS {
-        let (server, st, geo, token) = (server.clone(), state.clone(), geo.clone(), token.clone());
+    // the Cloudflare Tunnel's own listener (loopback only), when BNGE_TUNNEL_ADDR is set: same handlers, client
+    // addresses from CF-Connecting-IP (client_ip)
+    let mut listeners = vec![(server.clone(), false)];
+    if let Ok(taddr) = std::env::var("BNGE_TUNNEL_ADDR") {
+        let t: std::net::SocketAddr = taddr.parse().expect("BNGE_TUNNEL_ADDR: ip:port");
+        assert!(t.ip().is_loopback(), "BNGE_TUNNEL_ADDR must be a loopback address");
+        listeners.push((Arc::new(Server::http(t).expect("listen tunnel")), true));
+        eprintln!("bnge-serverlist tunnel listener on {taddr}");
+    }
+    for (server, tunnel) in listeners.into_iter().flat_map(|l| std::iter::repeat_n(l, WORKERS)) {
+        let (st, geo, token) = (state.clone(), geo.clone(), token.clone());
         let (reps, slots) = (reps.clone(), slots.clone());
         workers.push(std::thread::spawn(move || loop {
+            TUNNEL.with(|t| t.set(tunnel));
             let mut req = match server.recv() {
                 Ok(r) => r,
                 Err(_) => continue,
@@ -455,7 +477,9 @@ fn upload(req: Request, reps: Arc<Mutex<reports::Reports>>, slots: Arc<Slots>, g
         let _ = req.respond(json(503, "{\"error\":\"busy, try again later\"}".into()));
         return;
     };
+    let tunnel = TUNNEL.with(|t| t.get());
     std::thread::spawn(move || {
+        TUNNEL.with(|t| t.set(tunnel));
         let mut req = req;
         let unix_now = || SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let err = |code: u16, why: &str| json(code, format!("{{\"error\":\"{why}\"}}"));

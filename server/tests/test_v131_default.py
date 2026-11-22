@@ -136,7 +136,7 @@ def compute(server_dir):
                 old = math.floor(zb / 64.0) * 64.0
                 shift = int(round((zb - old) / info["q"]))
                 info = dict(info, zBase=old)
-            out["heightmap"] = {k: _r(v) for k, v in sorted(info.items()) if k != "seconds"}
+            out["heightmap"] = {k: _r(v) for k, v in sorted(info.items()) if k not in ("seconds", "heightmap")}
             from PIL import Image
             with Image.open(p) as im:
                 px = np.asarray(im)[sub - 1::sub, ::sub]

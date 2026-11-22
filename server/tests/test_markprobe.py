@@ -6,6 +6,7 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools", "probes"))
 import markprobe  # noqa: E402
 
 
@@ -50,6 +51,42 @@ class TileMetricsTest(unittest.TestCase):
         box = (0.0, 0.0, 8.0, 8.0)
         ground = lambda xy: np.where(np.abs(xy[:, 0] - 4.0) < 1e-9, 0.01, 0.0)     # noqa: E731
         P = np.array([[1, 2.2, .003], [7, 2.3, .003], [7, 2.8, .003]], np.float64)   # (no node inside: y 2.2-2.8)
+        r = markprobe.tile_metrics(P, np.array([[0, 1, 2]]), ["line_white"], np.array([0]), {"line_white": "mark"},
+                                   box, ground, [])
+        self.assertAlmostEqual(markprobe.summarize(r["dz"]["mark"])["min_mm"], -7.0, places=3)
+
+    def test_a_buried_crossing_beside_a_step_cell(self):
+        """A triangle whose centroid lies in a step cell (a wall at x 4.5, its cells x 4-5) but reaching into the
+        level cell beside it: its edge crossing in that cell (the diagonal y - x = -1 on a ridge, 7 mm over the
+        overlay) is counted; only a triangle wholly inside a step cell answers for none (Codex review of revampfix)."""
+        import roadmesh as rm
+        if rm.GRID_M != 1.0:
+            self.skipTest("a 1 m lattice")
+        box = (0.0, 0.0, 8.0, 8.0)
+
+        def ground(xy):
+            xy = np.asarray(xy, np.float64)
+            g = np.where(np.abs(xy[:, 1] - xy[:, 0] + 1.0) < 1e-9, 0.01, 0.0)
+            return np.where(xy[:, 0] >= 4.5, 1.0, g)
+        P = np.array([[3.2, 2.5, .003], [4.9, 2.3, .003], [4.9, 2.8, .003]], np.float64)
+        r = markprobe.tile_metrics(P, np.array([[0, 1, 2]]), ["line_white"], np.array([0]), {"line_white": "mark"},
+                                   box, ground, [])
+        self.assertAlmostEqual(markprobe.summarize(r["dz"]["mark"])["min_mm"], -7.0, places=3)
+        # wholly inside the step cell (x 4.05-4.45): its crossings there are the held-down surface's
+        P2 = np.array([[4.05, 2.1, .003], [4.45, 2.1, .003], [4.05, 2.9, .003]], np.float64)
+        r2 = markprobe.tile_metrics(P2, np.array([[0, 1, 2]]), ["line_white"], np.array([0]),
+                                    {"line_white": "mark"}, box, ground, [])
+        self.assertEqual(len(r2["dz"].get("mark", [])), 0)
+
+    def test_a_buried_crossing_at_an_unaligned_tile_edge(self):
+        """A box whose edges fall between lattice lines (x, y 0.5 .. 8.5): the level cell straddling its edge is
+        classed too, and a buried crossing in its part inside the box counted (Codex review of revampfix2)."""
+        import roadmesh as rm
+        if rm.GRID_M != 1.0:
+            self.skipTest("a 1 m lattice")
+        box = (0.5, 0.5, 8.5, 8.5)
+        ground = lambda xy: np.where(np.abs(xy[:, 1] - xy[:, 0]) < 1e-9, 0.01, 0.0)     # noqa: E731
+        P = np.array([[0.55, 0.75, .003], [0.95, 0.6, .003], [0.9, 0.97, .003]], np.float64)
         r = markprobe.tile_metrics(P, np.array([[0, 1, 2]]), ["line_white"], np.array([0]), {"line_white": "mark"},
                                    box, ground, [])
         self.assertAlmostEqual(markprobe.summarize(r["dz"]["mark"])["min_mm"], -7.0, places=3)
