@@ -66,6 +66,32 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
+-- ... and within a near tile only the items within reachRadius of the car collide, each by its own distance (REACH,
+-- 2026-11-22): a tile counted near by its nearest point made all its items solid, out to ~560 m from the car (3 x 3 to
+-- 4 x 4 tiles round it). The guarantee stays: every item within SOLID_M (SOLID_LEAD_S of driving at speed) collides,
+-- as every item of a tile within SOLID_M did; the overshoot of the tiles' squares goes. An item stays solid to
+-- reachRadius + REACH_HYST_M, and none behind the moving car by its own position (BEHIND_M, BEHIND_HYST_M). A near
+-- tile's rows are looked at again once the car moved REACH_STEP_M (REACH_STEP_S of driving at speed), the radius
+-- changed that much or the kept heading turned. Every item made solid below roads.FAST_MS is sent in a box
+-- (roads.requestCollision: due by the NEED rule as the car comes): with all of them made solid at the radius, a
+-- rebuild with no deadline could wait ROLL_DEFER_S while the car rolls, and a car at 10 m/s covers the 200 m in 20 s.
+-- Tiles solid for another player's car keep every item solid (SOLID_M, as before).
+-- Measured 2026-11-22 (in-game probe, ~/bnge-tests/treecol): a reload's physics build is ~0.19 ms per 1,000 collision
+-- triangles on a Steam Deck, ~0.05 on the Windows test PC; a stock tree has 19-90. Baltimore downtown: ~460 solid
+-- items (~11k triangles, ~0.3 ms of a 7 ms Windows build); Green Ridge forest (Deck, car standing): 3,181 solid items,
+-- 152k triangles, 21 ms a rebuild -> REACH 1,857, 85k, 13-15 ms.
+M.REACH = true
+M.rowsTotal = 0
+M.SOLID_LEAD_S = 8
+M.REACH_STEP_M = 15
+M.REACH_STEP_S = 1.0
+M.REACH_HYST_M = 25       -- an item's own hysteresis (the rescan step at least)
+M.REACH_DIR_COS = 0.94     -- ... or the kept heading turned ~20 degrees (or came or went)
+-- The radius (m) within which an item collides with the car at speed v (m/s): SOLID_M, or SOLID_LEAD_S of driving.
+-- (8 s: a rebuild that waits for RELOAD_EVERY_S (roads.lua, 6 s) at speed still comes 2 s before the car does.)
+function M.reachRadius(v)
+  return math.max(M.SOLID_M, (v or 0) * M.SOLID_LEAD_S)
+end
 -- ... but not behind a moving car (roads.lua BEHIND, its kept heading): a tile whose near edge is BEHIND_M or more behind
 -- it along the heading gets no solid items, and one solid already loses them BEHIND_HYST_M farther (2026-11-14, a Steam
 -- Deck 45 mph Fells Point drive: ~800 of ~1,250 solid trees and props were behind the car, a quarter of every
@@ -1706,6 +1732,15 @@ function M.update(anchorId, player, view, frameMs, fill)
   -- groups' caps (GROUP_MAX_M), so a door / hydrant / sign shows seconds ahead at any speed, not 120-200 m out
   local leadM, lhx, lhy = 0, 0, 0
   local psp = player.speed or 0
+  local reachR = M.REACH and M.reachRadius(psp) or M.SOLID_M      -- (the car's radius for solid tiles / items)
+  local reachStep = math.max(M.REACH_STEP_M, psp * M.REACH_STEP_S)
+  -- (the boxes round solid items made, roads.requestCollision: within CLOSE_M, or roads.needReach at speed; with REACH
+  -- every one below roads.FAST_MS, where a rebuild without a deadline may wait ROLL_DEFER_S while the car rolls)
+  local fastMs = okR and type(roadsM) == 'table' and roadsM.FAST_MS or 25
+  local boxAll = M.REACH and psp < fastMs
+  local boxR = math.max(M.CLOSE_M, okR and type(roadsM) == 'table' and roadsM.needReach and M.REACH
+    and roadsM.needReach(psp) or 0)
+  local boxR2 = boxR * boxR
   if M.PROP_LEAD_S > 0 and psp > M.PROP_LEAD_MIN_MS and psp < 150 then
     leadM = math.min(M.PROP_LEAD_MAX_M, psp * M.PROP_LEAD_S)
     lhx, lhy = (player.vx or 0) / psp, (player.vy or 0) / psp
@@ -1724,14 +1759,33 @@ function M.update(anchorId, player, view, frameMs, fill)
         capD = math.max(0, dist - leadM)
       end
       local band = groupBand(t, capD)
-      local nearD = dCar <= M.SOLID_M or (t.near and dCar <= M.SOLID_M + M.SOLID_HYST_M)
+      local nearD = dCar <= reachR or (t.near and dCar <= reachR + M.SOLID_HYST_M)
       local isBehind = nearD and behind(t)
       -- (a tile within SOLID_M kept from solid only by BEHIND: its items made solid again are all sent with a box,
       -- however far, until it leaves SOLID_M: the car turned back to it)
       if isBehind then t.restore = true elseif not nearD then t.restore = nil end
       local mine = nearD and not isBehind
-      local near = mine or nearFocus(t) or false
+      local focusNear = nearFocus(t)
+      local near = mine or focusNear or false
       t.byFocus = (near and not mine) or nil      -- (solid for another player's car only: every item sent with a box)
+      -- REACH: the car's own near tiles pick their solid items by distance (t.reach: the car, the radius and the
+      -- heading their last pass used); every item of a tile near another player's car stays solid
+      local reach = M.REACH and mine and not focusNear or false
+      if reach ~= (t.reach ~= nil) then
+        t.reach = reach and {} or nil
+        if near == t.near then t.pending = true end
+      elseif reach and not t.pending then
+        local k = t.reach
+        local moved = k.x and (math.abs(player.x - k.x) + math.abs(player.y - k.y)) or math.huge
+        local dirChanged = (bdir == nil) ~= (k.dx == nil)
+          or (bdir and (bdir.x * k.dx + bdir.y * k.dy) < M.REACH_DIR_COS)
+        if moved >= reachStep or math.abs(reachR - (k.r or 0)) >= reachStep or dirChanged then
+          -- (a tile wholly within the radius, the heading unset then and now, has every item solid already)
+          local far = math.sqrt((math.abs(player.x - t.cx) + (t.half or 128)) ^ 2
+            + (math.abs(player.y - t.cy) + (t.half or 128)) ^ 2)
+          if bdir or k.dx or not k.all or far > reachR then t.pending = true end
+        end
+      end
       if t.moved or want ~= t.shown or band ~= t.band or near ~= t.near or t.pending then
         nOrder = nOrder + 1
         oKeys[nOrder], oD[nOrder] = key, dist
@@ -1762,7 +1816,8 @@ function M.update(anchorId, player, view, frameMs, fill)
   local madeBoxes, cb = nil, nil            -- (boxes { x0, y0, x1, y1 } round the solid items made, one a tile)
   local rowsScanned = 0
   local function finish()
-    M.lastRows = rowsScanned                -- (diagnostics)
+    M.lastRows = rowsScanned                -- (diagnostics; rowsTotal: every pass's so far)
+    M.rowsTotal = M.rowsTotal + rowsScanned
     if nearMade then
       local ok, roads = pcall(require, 'beamngEarth/roads')
       if ok and roads.requestCollision then
@@ -1810,6 +1865,14 @@ function M.update(anchorId, player, view, frameMs, fill)
       local from = scan and scan.want == want and scan.band == band and scan.near == near and scan.from or 1
       t.scan = nil
       local f, s, names = t.f, t.s, t.groups or GROUPS
+      -- REACH: an item of the car's own near tile is solid within reachR of it (REACH_HYST_M more once solid), not
+      -- behind it; rOn2 nil: every item of a near tile (another player's car, or REACH off)
+      local rOn2, rOff2, behindOn, behindOff, rpl = nil, nil, nil, nil, nil
+      if near and t.reach then
+        rOn2, rOff2 = reachR * reachR, (reachR + math.max(M.REACH_HYST_M, reachStep)) ^ 2
+        behindOn, behindOff = -M.BEHIND_M, -(M.BEHIND_M + M.BEHIND_HYST_M)
+        rpl = t.geo and (t.madePl or t.pl) or nil
+      end
       rowsScanned = rowsScanned + math.max(0, t.n - from + 1)
       local skipped = nil
       for i = from, t.n do
@@ -1851,6 +1914,14 @@ function M.update(anchorId, player, view, frameMs, fill)
         -- something (townsigns.lua: a tree in front of a town sign); no call at all when nothing hides (every row)
         if g and (M.suppress or next(M.hiders)) and hidden(g, f[b + F_X], f[b + F_Y], t.anchor, t, f[b + F_Z]) then r = 2 end
         local solid = near and not M.NO_COLLIDE[g or '']
+        if solid and rOn2 and r < want then
+          local x, y = f[b + F_X], f[b + F_Y]
+          if rpl then x, y = geotile.apply(rpl, x, y, f[b + F_Z]) end
+          local dx, dy = x - player.x, y - player.y
+          local was = t.solid[i] == true
+          solid = dx * dx + dy * dy <= (was and rOff2 or rOn2)
+          if solid and bdir and dx * bdir.x + dy * bdir.y < (was and behindOff or behindOn) then solid = false end
+        end
         if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid) then
           local sh, sc = shapeOf(t, i)
           if budget <= 0 then stop(t, i, skipped, want, band, near); return end
@@ -1865,8 +1936,8 @@ function M.update(anchorId, player, view, frameMs, fill)
             if solid then
               nearMade = true
               local x, y = itemPos and itemPos.x, itemPos and itemPos.y   -- (where makeItem put it)
-              if t.made[i] and x and (t.restore or t.byFocus
-                  or (x - player.x) ^ 2 + (y - player.y) ^ 2 <= M.CLOSE_M * M.CLOSE_M) then
+              if t.made[i] and x and (t.restore or t.byFocus or (t.reach and boxAll)
+                  or (x - player.x) ^ 2 + (y - player.y) ^ 2 <= boxR2) then
                 if not cb then
                   cb = { x, y, x, y }
                   madeBoxes = madeBoxes or {}
@@ -1896,6 +1967,12 @@ function M.update(anchorId, player, view, frameMs, fill)
         end
       end
       t.shown = want
+      if t.reach then         -- (REACH: what this pass measured from; all: every item within the radius, no heading)
+        local far = math.sqrt((math.abs(player.x - t.cx) + (t.half or 128)) ^ 2
+          + (math.abs(player.y - t.cy) + (t.half or 128)) ^ 2)
+        t.reach = { x = player.x, y = player.y, r = reachR, dx = bdir and bdir.x, dy = bdir and bdir.y,
+          all = not bdir and far <= reachR }
+      end
       t.band = band
       t.near = near
       if skipped then t.pending = true; t.scan = { from = skipped, want = want, band = band, near = near }; dirty = true end
@@ -1995,6 +2072,43 @@ function M.keepupMissing(px, py, r)
                 reason = t.flush and 'flush' or (t.moved and 'moved') or (t.pending and 'pending') or '' }
             end
           end
+        end
+      end
+    end
+  end
+  return out
+end
+
+-- Diagnostics (probes, tools): the solid items made now, by group, and the tiles with work left. Walks every tile.
+function M.solidStats()
+  local solid, byGroup, pending = 0, {}, 0
+  for li = 1, #tileList do
+    local t = tiles[tileList[li]]
+    if t.pending then pending = pending + 1 end
+    local names = t.groups or GROUPS
+    for i in pairs(t.solid) do
+      solid = solid + 1
+      local g = names[t.f[(i - 1) * t.s + F_GROUP] + 1] or '?'
+      byGroup[g] = (byGroup[g] or 0) + 1
+    end
+  end
+  return { solid = solid, byGroup = byGroup, pending = pending, live = liveItems, tiles = #tileList }
+end
+
+-- Diagnostics: the items made within r of (px, py), where they were made: { x, y, z, solid, group }.
+function M.itemsNear(px, py, r)
+  local out = {}
+  for li = 1, #tileList do
+    local t = tiles[tileList[li]]
+    local h = t.half or 128
+    if math.abs(px - t.cx) <= r + h and math.abs(py - t.cy) <= r + h then
+      local names, pl = t.groups or GROUPS, t.geo and (t.madePl or t.pl) or nil
+      for i in pairs(t.made) do
+        local b = (i - 1) * t.s
+        local x, y, z = t.f[b + F_X], t.f[b + F_Y], t.f[b + F_Z]
+        if pl then x, y, z = geotile.apply(pl, x, y, z) end
+        if (x - px) ^ 2 + (y - py) ^ 2 <= r * r then
+          out[#out + 1] = { x = x, y = y, z = z, solid = t.solid[i] == true, group = names[t.f[b + F_GROUP] + 1] or '?' }
         end
       end
     end

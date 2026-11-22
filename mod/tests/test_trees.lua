@@ -111,6 +111,9 @@ trees.update(1, { x = 50, y = 600 })
 T.check(count() == 60, 'middle distance: 60 %')
 
 -- only near tiles collide: their items are re-made of solid types when the tile comes near, and of non-solid ones
+-- (the tile rule alone here, REACH off: a near tile's items all collide; REACH's per-item radius is tested below)
+T.check(trees.REACH == true and trees.SOLID_LEAD_S == 8, 'REACH on by default')
+trees.REACH = false
 -- once it is beyond SOLID_M + SOLID_HYST_M
 local function solidCount()
   local n = 0
@@ -182,6 +185,90 @@ do
   T.check(solidCount() == count() and type(b) == 'table' and b[2] == 10, "solid for another player's car: a box")
   trees.setFoci({})
   package.loaded['beamngEarth/roads'] = realRoads
+  trees.update(1, { x = 50, y = 50 })
+end
+
+trees.REACH = true
+
+-- REACH (2026-11-22): within a near tile only the items within reachRadius (SOLID_M; SOLID_LEAD_S of driving at speed)
+-- of the car collide, each by its own distance, SOLID_HYST_M more once solid, none behind the moving car by its own
+-- position; a near tile's rows are looked at again only once the car moved REACH_STEP_M (or the radius or heading
+-- changed); a tile near another player's car keeps every item solid
+do
+  trees.onDrop({ anchorId = 1, key = '0_0' })
+  trees.update(1, { x = 50, y = 50 })
+  T.check(count() == 0, '(reach: the old tile gone)')
+  files['/t/reach.json'] = '{ groups = {}, items = { {0, 128, 10, 5, 0, 1, 12, 0.1}, {0, 128, 200, 5, 0, 1, 12, 0.2}, '
+    .. '{0, 128, 250, 5, 0, 1, 12, 0.3} } }'
+  trees.onTile({ anchorId = 1, key = '0_0', path = '/t/reach.json', n = 3 }, 1)
+  local function solidAt()      -- the y of the solid items, sorted
+    local ys = {}
+    for it in pairs(items) do
+      if it.d and it.d.fields and it.d.fields.collidable == '1' then ys[#ys + 1] = it.m.p.y end
+    end
+    table.sort(ys)
+    return table.concat(ys, ',')
+  end
+  local realRoads = package.loaded['beamngEarth/roads']
+  local dir, reqs = nil, {}
+  package.loaded['beamngEarth/roads'] = {
+    behindDir = function() return dir end,
+    behindBy = function(p, d, cx, cy, half)
+      return -((cx - p.x) * d.x + (cy - p.y) * d.y) - half * (math.abs(d.x) + math.abs(d.y))
+    end,
+    requestCollision = function(d) reqs[#reqs + 1] = d or false end }
+  T.check(trees.reachRadius(0) == trees.SOLID_M and trees.reachRadius(40) == 320, 'reach radius: SOLID_M, 8 s at speed')
+  trees.update(1, { x = 128, y = 420, speed = 0 })
+  T.check(count() == 3 and solidAt() == '250', 'reach: the tile near (164 m), only its item 170 m off solid (' .. solidAt() .. ')')
+  reqs = {}
+  trees.update(1, { x = 128, y = 395, speed = 0 })
+  T.check(solidAt() == '200,250' and type(reqs[#reqs]) == 'table' and reqs[#reqs][2] == 200,
+    'reach: 25 m on, the one 195 m off solid too, boxed (below FAST_MS a rebuild with no deadline may wait)')
+  local rows = trees.lastRows
+  trees.update(1, { x = 128, y = 388, speed = 0 })
+  T.check(trees.lastRows == 0 and solidAt() == '200,250', 'reach: 7 m on (< REACH_STEP_M): rows not looked at again')
+  trees.update(1, { x = 128, y = 420, speed = 0 })
+  T.check(solidAt() == '200,250', 'reach: back to 220 m: still solid (REACH_HYST_M)')
+  trees.update(1, { x = 128, y = 470, speed = 0 })
+  T.check(solidAt() == '250', 'reach: 270 m: not solid any more, the 220 m one kept')
+  reqs = {}
+  trees.update(1, { x = 128, y = 476, speed = 40 })   -- (a pass needs RECHECK_M of moving or RECHECK_S)
+  T.check(solidAt() == '200,250', 'reach at 40 m/s: 320 m (SOLID_LEAD_S), the 276 m one solid again')
+  T.check(#reqs > 0 and reqs[#reqs] == false, 'reach at speed: made solid 276 m off, no box (rides the next rebuild)')
+  trees.update(1, { x = 128, y = 482, speed = 70 })
+  T.check(solidAt() == '10,200,250', 'reach at 70 m/s: 560 m, every item')
+  -- heading away from the items (+y): every item behind the car by more than BEHIND_M: none solid
+  dir = { x = 0, y = 1 }
+  trees.update(1, { x = 128, y = 320, speed = 20 })
+  T.check(solidAt() == '', 'reach: heading away, items behind by their own position: none (' .. solidAt() .. ')')
+  dir = { x = 0, y = -1 }
+  reqs = {}
+  trees.update(1, { x = 128, y = 310, speed = 20 })
+  T.check(solidAt() == '200,250' and type(reqs[#reqs]) == 'table', 'reach: heading towards them: solid (the near ones boxed)')
+  dir = nil
+  -- an item level with the car beside it (BEHIND counts along the heading only)
+  dir = { x = 1, y = 0 }
+  trees.update(1, { x = 128, y = 330, speed = 20 })
+  T.check(solidAt() == '200,250', 'reach: heading across, items beside the car: solid')
+  dir = nil
+  -- another player's car near the tile: every item solid (the tile rule), the active car far
+  trees.setFoci({ { x = 128, y = 300, r = 320, trees = true } })
+  local view = { x = 128, y = 300 }      -- (the camera there: every item shown)
+  trees.update(1, { x = 128, y = 2000, speed = 0 }, view)
+  T.check(solidAt() == '10,200,250', "reach: near another player's car: every item solid (" .. solidAt() .. ')')
+  trees.setFoci({})
+  trees.update(1, { x = 128, y = 2006, speed = 0 }, view)
+  T.check(count() == 3 and solidAt() == '', 'reach: both far: none')
+  -- standing still: a pass that changes nothing looks at no rows
+  trees.update(1, { x = 128, y = 420, speed = 0 })
+  local m0, r0 = trees.made, trees.removed
+  trees.update(1, { x = 128, y = 427, speed = 0 })     -- (a pass: RECHECK_M; no rows: under REACH_STEP_M)
+  T.check(trees.made == m0 and trees.removed == r0 and trees.lastRows == 0, 'reach: standing: nothing re-made, no rows')
+  package.loaded['beamngEarth/roads'] = realRoads
+  trees.onDrop({ anchorId = 1, key = '0_0' })
+  trees.update(1, { x = 50, y = 50 })
+  T.check(count() == 0, '(reach: tile dropped)')
+  trees.onTile({ anchorId = 1, key = '0_0', path = '/t/v.json', n = 100 }, 1)
   trees.update(1, { x = 50, y = 50 })
 end
 
