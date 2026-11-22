@@ -112,8 +112,7 @@ T.check(count() == 60, 'middle distance: 60 %')
 
 -- only near tiles collide: their items are re-made of solid types when the tile comes near, and of non-solid ones
 -- (the tile rule alone here, REACH off: a near tile's items all collide; REACH's per-item radius is tested below)
-T.check(trees.REACH == true and trees.SOLID_LEAD_S == 8, 'REACH on by default')
-trees.REACH = false
+T.check(trees.REACH == false and trees.SOLID_LEAD_S == 8, 'REACH off by default')
 -- once it is beyond SOLID_M + SOLID_HYST_M
 local function solidCount()
   local n = 0
@@ -288,6 +287,7 @@ do
   trees.onTile({ anchorId = 1, key = '0_0', path = '/t/v.json', n = 100 }, 1)
   trees.update(1, { x = 50, y = 50 })
 end
+trees.REACH = false
 
 trees.onDrop({ anchorId = 1, key = '0_0' })
 trees.update(1, { x = 50, y = 50 })

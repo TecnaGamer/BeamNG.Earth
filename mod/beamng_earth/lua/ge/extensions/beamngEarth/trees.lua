@@ -83,7 +83,13 @@ M.SOLID_HYST_M = 50
 -- triangles on a Steam Deck, ~0.05 on the Windows test PC; a stock tree has 19-90. Baltimore downtown: ~460 solid
 -- items (~11k triangles, ~0.3 ms of a 7 ms Windows build); Green Ridge forest (Deck, car standing): 3,181 solid items,
 -- 152k triangles, 21 ms a rebuild -> REACH 1,857, 85k, 13-15 ms.
-M.REACH = true
+-- OFF by default (2026-11-22 drives, Baltimore -> Druid Hill Park, ~25-35 mph): REACH cut the solid items 3-4x
+-- (Windows median 1,030 -> 260, Deck 612 -> 168) but needs the late points to stay safe, and they made the rebuilds
+-- 5.0 -> 8.7 a minute (Windows) / 4.9 -> 8.2 (Deck). In town a rebuild's cost is not the trees (~2 ms of ~20 on the
+-- Deck, ~0.3 of ~8 on Windows) and on Windows every rebuild while new shapes load stalls 100-300 ms whatever it holds,
+-- so the extra rebuilds cost more than the triangles saved. A dense forest is where it pays (Deck 20 -> 12-15 ms a
+-- rebuild): see ~/bnge-tests/treecol and the commit message before switching it on.
+M.REACH = false
 M.rowsTotal = 0
 M.SOLID_LEAD_S = 8
 M.REACH_STEP_M = 15
