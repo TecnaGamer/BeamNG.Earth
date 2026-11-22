@@ -2,6 +2,7 @@
 earlier steps promised (the checks carried forward)."""
 import numpy as np
 
+import dnp
 from ix import artifacts
 
 GRADE_ROAD = 0.08   # a road's samples never climb steeper between neighbours (fixed here, as the spec has it)
@@ -39,16 +40,15 @@ def check(art, parents):
 
     if order is not None:
         for c in order.crossings:
+            # (a member the shape does not move is read where the solve asked it: Terrain.fixed, the heights the problem was
+            # made from; a crossing of two such, or one the terrain holds nothing of, was no constraint of the solve)
             zu = _at(zs, art, c.u, c.su)
             if zu is None:
-                continue
+                zu = _fixed_at(terrain, c.u, c.su)
             zl = _at(zs, art, c.d, c.sd)
-            if zl is None and terrain is not None:
-                zl = _at(terrain.ground, art, c.d, c.sd)   # the lower member's own ground, where a piece holds it
-            if zl is None and terrain is not None:
-                zl = _at(terrain.ground, art, c.u, c.su)   # else the ground at the crossing, read on the upper's own
-                #                                               piece: the ground the lower road sits on there
-            if zl is None or not np.isfinite(zu) or not np.isfinite(zl):
+            if zl is None:
+                zl = _fixed_at(terrain, c.d, c.sd)
+            if zu is None or zl is None or not np.isfinite(zu) or not np.isfinite(zl):
                 continue
             gap = zu - zl
             allowed = eased[1].get(frozenset((c.u, c.d)), 0.0) + eased[2].get(c.u, 0.0) + eased[2].get(c.d, 0.0)
@@ -77,6 +77,18 @@ def check(art, parents):
 
     out += _grades(art, zs, ms, key, eased[3])
     return out
+
+
+def _fixed_at(terrain, mem, s):
+    """The height Terrain.fixed holds of member mem at arc s (along its read arcs), or None."""
+    for f in (terrain.fixed if terrain is not None else ()):
+        if int(f.member) != mem:
+            continue
+        sv, zv = np.asarray(f.s, np.float64), np.asarray(f.z, np.float64)
+        ok = np.isfinite(zv)
+        if ok.any() and float(sv[ok].min()) - 1e-6 <= s <= float(sv[ok].max()) + 1e-6:
+            return float(dnp.interp(s, sv[ok], zv[ok]))
+    return None
 
 
 def _eased(art, key):

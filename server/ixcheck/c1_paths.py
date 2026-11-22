@@ -48,7 +48,18 @@ def _broken(art, ms, lines):
 
 
 def _hangs(art, ms, lines):
+    """A structure's end either meets another member (its line within a join) and the artifact says so (a join, or the
+    crossing of the pair at that end: unrelated_end, a fail: the paths missed what the lines show), or meets nothing
+    (hanging_end, a note: the map ends it there, a ramp's end at its gore, a gap in the way; the structure's own embankment
+    lands it, nothing here to join)."""
     out = []
+    near = {}
+    for r in art.joins:
+        near.setdefault(r.a, []).append(r.sa)
+        near.setdefault(r.b, []).append(r.sb)
+    for r in art.crossings:
+        near.setdefault(r.a, []).append(r.sa)
+        near.setdefault(r.b, []).append(r.sb)
     for i, m in enumerate(ms):
         if m.kind not in artifacts.STRUCTURES or not len(lines[i]):
             continue
@@ -62,9 +73,13 @@ def _hangs(art, ms, lines):
                 if d < best:
                     best, other = d, str(ms[j].key)
             if best > geom.JOIN_M:
-                out.append(_f(art, "fail", "hanging_end",
+                out.append(_f(art, "note", "hanging_end",
                               "member %s ends in the air at s=%.1f: %.1f m from %s, a join is %s m"
                               % (m.key, s, best, other, geom.JOIN_M), ((i, s),)))
+            elif not any(abs(v - s) <= geom.SAME_S_M for v in near.get(i, ())):
+                out.append(_f(art, "fail", "unrelated_end",
+                              "member %s ends at s=%.1f %.1f m from %s, a join, and the paths name no join or crossing "
+                              "there" % (m.key, s, best, other), ((i, s),)))
     return out
 
 
@@ -93,9 +108,10 @@ def _crossings(art, ms, lines):
             continue
         pa, pb = geom.at_s(lines[pc.a], pc.sa), geom.at_s(lines[pc.b], pc.sb)
         d, dq = geom.dist(pa, pb), geom.dist(pa, np.asarray(pc.q, np.float64))
-        if max(d, dq) > geom.CROSS_M:
+        tol = geom.crossing_tol(lines[pc.a], pc.sa, lines[pc.b], pc.sb)
+        if max(d, dq) > tol:
             out.append(_f(art, "fail", "bad_crossing",
                           "crossing of %s at s=%.1f and %s at s=%.1f: the points %.1f m apart, q %.1f m off, "
-                          "the agreement is %s m" % (ms[pc.a].key, pc.sa, ms[pc.b].key, pc.sb, d, dq, geom.CROSS_M),
+                          "the agreement is %s m" % (ms[pc.a].key, pc.sa, ms[pc.b].key, pc.sb, d, dq, tol),
                           ((pc.a, pc.sa), (pc.b, pc.sb))))
     return out

@@ -75,7 +75,7 @@ def net_paths():
           member("D", [(0.0, -40.0), (0.0, 40.0)], kind="deck", level=1.0),
           member("S", [(0.0, -70.0), (0.0, -40.0)]),
           member("N", [(0.0, 40.0), (0.0, 70.0)])]
-    return artifacts.Paths(meta(1, "k1"), ms, [artifacts.Join(1, 0.0, 2, 30.0)],
+    return artifacts.Paths(meta(1, "k1"), ms, [artifacts.Join(1, 0.0, 2, 30.0), artifacts.Join(1, 80.0, 3, 0.0)],
                            [artifacts.PlanCrossing(1, 40.0, 0, 40.0, np.zeros(2))])
 
 
@@ -115,18 +115,42 @@ def test_c1_broken_member():
     assert "broken_member" in codes(c1_paths, paths)
 
 
-def test_c1_hanging_end():
+def test_c1_hanging_end_is_a_note():
+    # (the map's own end: a deck's end 6 m from the road it should meet; nothing in the pipeline can join it)
     paths = net_paths()
-    paths.members[3] = member("N", [(6.0, 40.0), (6.0, 70.0)])     # the deck's end no longer meets anything
-    got = fails(c1_paths, paths)
+    paths.members[3] = member("N", [(6.0, 40.0), (6.0, 70.0)])
+    paths = dataclasses.replace(paths, joins=paths.joins[:1])
+    assert not fails(c1_paths, paths)
+    got = notes(c1_paths, paths)
     assert [f.code for f in got] == ["hanging_end"]
     assert "D" in got[0].text and "6.0 m" in got[0].text
+
+
+def test_c1_unrelated_end():
+    # (the deck's end lies on N and the paths name no join there: what the lines show and the artifact does not)
+    paths = dataclasses.replace(net_paths(), joins=net_paths().joins[:1])
+    got = fails(c1_paths, paths)
+    assert [f.code for f in got] == ["unrelated_end"]
+    assert "D" in got[0].text and "s=80.0" in got[0].text
+
+
+def test_c1_a_crossing_at_an_end_agrees_within_a_join():
+    # (a ground road's end 1.4 m from a deck's end is an end's relation: its two points are within a join of each other,
+    # as the pipeline finds them; a crossing in the middle of both lines is held to half a metre)
+    paths = net_paths()
+    ms = list(paths.members)
+    ms[3] = member("N", [(1.4, 40.0), (1.4, 70.0)])
+    near = dataclasses.replace(paths, members=ms, crossings=[artifacts.PlanCrossing(1, 80.0, 3, 0.0, np.array([1.4, 40.0]))])
+    assert not [f for f in fails(c1_paths, near) if f.code == "bad_crossing"]
+    mid = dataclasses.replace(paths, crossings=[artifacts.PlanCrossing(1, 40.0, 0, 40.0, np.array([0.0, 0.0])),
+                                                artifacts.PlanCrossing(1, 30.0, 0, 38.6, np.array([0.0, -10.0]))])
+    assert [f.code for f in fails(c1_paths, mid)] == ["bad_crossing"]
 
 
 def test_c1_bad_join():
     paths = net_paths()
     paths = dataclasses.replace(paths, joins=[artifacts.Join(1, 10.0, 2, 30.0)])
-    assert [f.code for f in fails(c1_paths, paths)] == ["bad_join"]
+    assert "bad_join" in [f.code for f in fails(c1_paths, paths)]
 
 
 def test_c1_bad_crossing():
@@ -295,7 +319,9 @@ def solved_paths():
           member("S", [(0.0, -70.0), (0.0, -40.0)]),
           member("N", [(0.0, 40.0), (0.0, 70.0)]),
           member("D2", [(0.0, 0.0), (0.0, 40.0)], kind="deck", level=1.0)]
-    return artifacts.Paths(meta(1, "s1"), ms, [], [])
+    return artifacts.Paths(meta(1, "s1"), ms, [artifacts.Join(1, 0.0, 2, 30.0), artifacts.Join(1, 40.0, 4, 0.0),
+                                               artifacts.Join(4, 40.0, 3, 0.0)],
+                           [artifacts.PlanCrossing(4, 20.0, 0, 40.0, np.array([0.0, 20.0]))])
 
 
 def solved_extent():
@@ -330,9 +356,10 @@ def solved_heights(pieces=None, solved=True):
     return artifacts.Heights(meta(6, "s6", ("s3", "s5", "s4", "s2", "s1")), "SY", pieces, solved, {})
 
 
-def solved_terrain(ground=None):
+def solved_terrain(ground=None, fixed=()):
     ground = ground if ground is not None else [np.full(11, 10.0), np.full(11, 10.0), np.full(6, 0.0)]
-    return artifacts.Terrain(meta(4, "s4", ("s6", "s3")), "SY", ground, [np.ones(len(g)) for g in ground])
+    return artifacts.Terrain(meta(4, "s4", ("s6", "s3")), "SY", ground, [np.ones(len(g)) for g in ground],
+                             fixed=list(fixed))
 
 
 def solved_datum():
@@ -425,13 +452,19 @@ def test_c6_clearance():
     assert "D2" in text and "R" in text and "1.95 m short" in text
 
 
-def test_c6_clearance_from_ground():
-    # no dip piece: the lower surface is the ground under the crossing, from Terrain
+def test_c6_clearance_from_the_heights_the_terrain_read():
+    # no dip piece: the lower surface is the height the terrain step read of the road the shape does not move (not the
+    # ground on the deck's own samples: the road's ground is read along the road, smoothed, and is what the solve held the
+    # deck over)
     h = solved_heights(pieces=[deck_piece(1, -40.0), deck_piece(4, 0.0, z=3.0)])
-    t = solved_terrain(ground=[np.full(11, 10.0), np.full(11, 10.0)])
+    fixed = [artifacts.Fixed(0, np.array([38.0, 40.0, 42.0]), np.array([10.0, 10.0, 10.0]))]
+    t = solved_terrain(ground=[np.full(11, 2.0), np.full(11, 2.0)], fixed=fixed)
     got = fails(c6_heights, h, solved_parents(heights=h, terrain=t))
     text = next(f.text for f in got if f.code == "clearance")
     assert "11.95 m short" in text
+    # (a crossing the terrain read nothing of was no constraint of the solve: nothing to hold it to)
+    t = solved_terrain(ground=[np.full(11, 10.0), np.full(11, 10.0)])
+    assert not [f for f in fails(c6_heights, h, solved_parents(heights=h, terrain=t)) if f.code == "clearance"]
 
 
 def test_c6_joint_step():

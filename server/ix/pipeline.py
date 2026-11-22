@@ -113,7 +113,7 @@ def system(planner, net, ix, fixed_z, hk, clock):
     t0 = time.perf_counter()
     smp = _gsh.sample(net, pcs)
     inputs = _samples_bytes(system_id, net, smp)
-    terrain, ground = s4_terrain.run(planner, smp, system_id, scope)
+    terrain, ground, table = s4_terrain.run(planner, net, sysm, pcs, smp, loc, fixed_z, system_id, scope)
     terrain, terrain_key = _put(terrain, (order_key,), inputs)
     _line(clock, "terrain", terrain_key, len(pcs), n_x, time.perf_counter() - t0, None, where)
 
@@ -122,7 +122,7 @@ def system(planner, net, ix, fixed_z, hk, clock):
     _line(clock, "datum", datum_key, len(pcs), n_x, time.perf_counter() - t0, None, where)
 
     t0 = time.perf_counter()
-    zs, diag = s6_heights.solve(net, sysm, pcs, smp, fixed_z, ground)
+    zs, diag = s6_heights.solve(net, sysm, pcs, smp, s4_terrain.lookup(table), ground)
     _heights, heights_key = _put(s6_heights.run(planner, net, sysm, loc, pcs, smp, zs, diag, system_id, scope),
                                  (datum_key,), inputs)
     _line(clock, "heights", heights_key, len(pcs), n_x, time.perf_counter() - t0, _heights_why(zs, diag), where,

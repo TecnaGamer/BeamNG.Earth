@@ -1716,6 +1716,27 @@ def _stacked(net, sysm, pcs, smp):
     return out
 
 
+def _crossing_vars(pcs, smp, c):
+    """What the problem asks of crossing c's footprint (under_pairs): the arcs on its upper and lower member, and the
+    unknowns of the pieces there (_vars of each; piece -1: the member's height is not the shape's)."""
+    uv = np.array([p_[0] for p_ in c["under"]])
+    dv = np.array([p_[1] for p_ in c["under"]])
+    return uv, dv, _vars(pcs, smp, c["u"], uv), _vars(pcs, smp, c["d"], dv)
+
+
+def fixed_reads(sysm, pcs, smp):
+    """{member: ascending arcs}: where the problem reads the height of a member the shape does not move (a road on the
+    ground under a deck, a deck or a track over a road that goes under): shape_problem's `fixed`, asked at exactly these.
+    The terrain step reads them once (ix/s4_terrain.py); the problem is then made from what it read."""
+    out = {}
+    for c in sysm["crossings"]:
+        uv, dv, (xp, _xa, _xb, _xt), (yp, _ya, _yb, _yt) = _crossing_vars(pcs, smp, c)
+        for member, sv, m in ((c["d"], dv, (xp >= 0) & (yp < 0)), (c["u"], uv, (xp < 0) & (yp >= 0))):
+            if m.any():
+                out.setdefault(int(member), set()).update(np.unique(sv[m]).tolist())
+    return {i: np.array(sorted(v), np.float64) for i, v in sorted(out.items())}
+
+
 def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
     """The system's constraints as the kernel is given them: (chains, couplings) of carriageways.solve (a chain per
     piece: its target, weights, floor and ceiling per sample, grade, curve, step; the couplings: joints, overlaps,
@@ -1786,10 +1807,7 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
     for ci, c in enumerate(sysm["crossings"]):
         need = clearance_need(net, c["u"], c["d"], c["q"])
         crossing.append((c["u"], need))
-        uv = np.array([p_[0] for p_ in c["under"]])
-        dv = np.array([p_[1] for p_ in c["under"]])
-        xp, xa, xb, xt = _vars(pcs, smp, c["u"], uv)
-        yp, ya, yb, yt = _vars(pcs, smp, c["d"], dv)
+        uv, dv, (xp, xa, xb, xt), (yp, ya, yb, yt) = _crossing_vars(pcs, smp, c)
         both = (xp >= 0) & (yp >= 0)
         for kx, mx in _weighted(xa, xb, xt):
             for ky, my in _weighted(ya, yb, yt):

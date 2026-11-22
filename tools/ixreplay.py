@@ -20,8 +20,9 @@ It writes, in --out:
                       (the paths' and the extent's share of finding the interchanges), embank the region's embankments
   ixcheck.json        what ixcheck found (python -m ixcheck.run ix)
 and prints the table of each interchange (pieces, crossings, seconds per step, the step limits it is over), then the region's
-pieces and crossings and the ixcheck counts. --system KEY_PREFIX solves only the interchanges whose key starts with it
-(the others are found, as the region does, and not solved).
+pieces and crossings and the ixcheck counts. --system KEY_PREFIX solves only the interchanges one of whose parts' keys starts with it, --crossings LO-HI only those
+with that many crossings (the others are found and grown, as the region does, and not solved). A code change can change
+an interchange's key and extent: a key from an older eval's log is a hint of where to look, not a promise.
 """
 import argparse
 import contextlib
@@ -198,6 +199,7 @@ def main(argv=None):
     ap.add_argument("--ladder", help="an eval's output folder: print its interchanges by tier of crossings and stop")
     ap.add_argument("--ring", type=int, default=0, help="cells round the point's cell run as well")
     ap.add_argument("--system", help="solve only the interchanges whose key starts with this")
+    ap.add_argument("--crossings", help="LO-HI: solve only the interchanges with that many crossings (a tier)")
     ap.add_argument("--out", default="ix-replay")
     ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "beamng-earth"))
     ap.add_argument("--no-profile", action="store_true")
@@ -241,14 +243,20 @@ def main(argv=None):
         prof.wrap(s6_heights, "run", "heights")
         prof.wrap(s6_heights, "region_of", "embank")
 
-    if a.system:           # (the interchanges found and not wanted are given back as they are, the region finds them all)
-        real = owner.interchange
+    skipped = []
+    lo_x, hi_x = (int(v) for v in a.crossings.split("-")) if a.crossings else (0, 10 ** 9)
+    if a.system or a.crossings:   # (every interchange of the region is found and grown as the region does; only the wanted are solved)
+        real = owner.made
 
-        def only(planner, net, ix, hk, clock):
-            if not owner.key_of(planner, net, ix.sysm).startswith(a.system):
-                return {"key": owner.key_of(planner, net, ix.sysm), "roads": {}, "failed": False, "relaxed": 0}
-            return real(planner, net, ix, hk, clock)
-        owner.interchange = only
+        def only(planner, ik, hk, clock, net, ix, others):
+            keys = [owner.key_of(planner, net, p.sysm) for p in (ix.parts or (ix,))]
+            n_x = gsh.system_size(net, ix.sysm)[1]
+            if (a.system and not any(k_.startswith(a.system) for k_ in keys)) or not lo_x <= n_x <= hi_x:
+                skipped.append("%s(%d)" % (keys[0][:8], n_x))
+                return {"key": ik, "roads": {}, "failed": None, "pieces": 0, "crossings": 0, "relaxed": 0, "owner": "-",
+                        "pid": os.getpid(), "secs": 0.0}
+            return real(planner, ik, hk, clock, net, ix, others)
+        owner.made = only
 
     t0 = time.perf_counter()
     state = blockworker._State(a.cache, True, True, True, True, True, airports=False, sea=False)
@@ -276,6 +284,21 @@ def main(argv=None):
                        region_lines=handler.regions, warnings=handler.other[:50],
                        profiles={k: v.splitlines()[:25] for k, v in tops.items() if v}), f, indent=1)
 
+    fails, mix = {}, {}
+    checked = None
+    if not a.no_check:
+        from ixcheck import load, run
+        scanned = load.scan(ix_dir)
+        checked = run.check_all(scanned)
+        for art, fs in checked:
+            sy = art.meta.scope.split(":", 1)[-1]
+            fails[sy] = fails.get(sy, 0) + sum(1 for x in fs if x.level == "fail")
+            if art.meta.step == 1:
+                kinds = {}
+                for m in art.members:
+                    kinds[m.kind] = kinds.get(m.kind, 0) + 1
+                short = {"ground": "g", "deck": "d", "tunnel": "t", "rail": "r", "rail_deck": "rd"}
+                mix[sy] = " ".join("%s%d" % (short.get(k_, k_), n) for k_, n in sorted(kinds.items()))
     # the table: one row per interchange
     rows = {}
     for s in handler.steps:
@@ -286,23 +309,25 @@ def main(argv=None):
         if not s["status"].startswith("ok"):
             r["bad"].append("%s %s" % (s["step"], s["status"][:60]))
     print("junction %s at %.5f, %.5f; map state %.1f s; regions %s" % (a.junction, at[0], at[1], t_state, regions))
-    print("%-10s %6s %9s  %s  over" % ("interchange", "pieces", "crossings", "  ".join("%8s" % s[:8] for s in STEPS)))
+    print("%-10s %6s %9s  %s  fails  members" % ("interchange", "pieces", "crossings", "  ".join("%8s" % s[:8] for s in STEPS)))
     for r in sorted(rows.values(), key=lambda r: (r["crossings"], r["system"])):
         over = [s for s in STEPS if r["t"].get(s, 0.0) > LIMITS_S[s]]
-        print("%-10s %6d %9d  %s  %s%s" % (r["system"][:10], r["pieces"], r["crossings"],
-                                           "  ".join("%8.2f" % r["t"].get(s, 0.0) for s in STEPS), ",".join(over),
-                                           "  " + "; ".join(r["bad"]) if r["bad"] else ""))
+        sy = next((k_ for k_ in mix if k_.startswith(r["system"]) or r["system"].startswith(k_)), r["system"])
+        print("%-10s %6d %9d  %s  %5s  %s %s%s" % (r["system"][:10], r["pieces"], r["crossings"],
+                                                   "  ".join("%8.2f" % r["t"].get(s, 0.0) for s in STEPS),
+                                                   fails.get(sy, "-"), mix.get(sy, ""),
+                                                   "OVER " + ",".join(over) if over else "",
+                                                   "  " + "; ".join(r["bad"]) if r["bad"] else ""))
     for r in handler.regions:
         print("region %s: %d systems %.2f s (load %.2f, scan %.2f)" % (r["region"], r["systems"], r["seconds"], r["load"], r["scan"]))
+    if (a.system or a.crossings) and not rows:
+        print("no interchange of the region is wanted (%s %s); it has %s" % (a.system or "", a.crossings or "", " ".join(skipped)))
     print("region: %d interchanges, %d pieces, %d crossings" % (len(rows), sum(r["pieces"] for r in rows.values()),
                                                                sum(r["crossings"] for r in rows.values())))
     for w in handler.other[:10]:
         print("warning:", w[:200])
 
-    if not a.no_check:
-        from ixcheck import load, run
-        scanned = load.scan(ix_dir)
-        checked = run.check_all(scanned)
+    if checked is not None:
         lines, fail_lines, counts = run.report(checked)
         print("\n".join(lines))
         print("fails (first 20):\n" + ("\n".join(fail_lines) if fail_lines else "  none"))
