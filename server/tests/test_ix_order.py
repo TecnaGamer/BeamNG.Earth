@@ -149,7 +149,7 @@ def test_the_dropped_decisions_are_in_the_artifact():
 
 # ---- the heights step ----
 
-def test_a_layer_decision_the_order_step_did_not_see_is_given_up_by_the_heights():
+def test_a_contradiction_a_vehicle_can_drive_is_eased_in_grade_and_no_decision_is_given_up():
     net, systems = find(flipping_road())
     sysm = systems[0]            # (the order step not run: the contradicting decisions both stand)
     pcs = gs.pieces(net, sysm)
@@ -158,8 +158,43 @@ def test_a_layer_decision_the_order_step_did_not_see_is_given_up_by_the_heights(
     zs = gs.solve_shape(net, sysm, pcs, smp, [zero(x["xy"]) for x in smp], fixed(net, zero), diag)
     assert zs is not None, diag
     done = diag["relaxed"]
-    assert [r["kind"] for r in done] == ["layer"] and "layers alone" in done[0]["text"]
+    # (12.7 m of climb in 130 m is a grade of 10 %: steeper than the class's law, a grade every vehicle drives: the road
+    # climbs it, and no road is put through another)
+    assert {r["kind"] for r in done} == {"grade"}, done
+    assert all(0.06 < float(r["text"].split(" to ")[1].split("%")[0]) / 100.0 <= relax.DRIVABLE for r in done)
     assert diag["feasible"] and diag["converged"]
+
+
+def two_decks(need, level_a=1, level_b=2, grade=0.06):
+    """two_chains' problem of two decks of one kind (a clearance between them is a decision of the layers alone)."""
+    net, pcs, smp, chains, cps = two_chains(need=need, grade=grade)
+    net = gs.Net([deck("A", line(0, 0, 40, 0, 11), level_a), deck("B", line(40, 0, 80, 0, 11), level_b)])
+    return net, pcs, smp, chains, cps
+
+
+def test_a_decision_of_the_layers_is_given_up_after_the_grade_has_given_all_a_vehicle_drives():
+    # (a climb the grade law can make: the grade eased, the decision kept)
+    net, pcs, smp, chains, cps = two_decks(need=20.0)
+    done = relax.Problem(net, pcs, smp, chains, cps, dict(bound={})).relax()
+    assert {r.kind for r in done} == {"grade"}
+    # (more than a vehicle drives: the grade at what it drives, then the decision, whole)
+    net, pcs, smp, chains, cps = two_decks(need=40.0)
+    p = relax.Problem(net, pcs, smp, chains, cps, dict(bound={}))
+    done = p.relax()
+    assert sorted(r.kind for r in done) == ["grade", "grade", "layer"]
+    assert all(abs(r.amount + 0.06 - relax.DRIVABLE) < 1e-9 for r in done if r.kind == "grade")
+    ch, cp = p.eased_problem()
+    assert not [c for c in cp if c[4] == "ge"]
+
+
+def test_a_loop_of_decisions_alone_gives_up_the_weakest_and_no_grade_is_touched():
+    net = gs.Net([deck("A", line(0, 0, 40, 0, 11), 1), deck("B", line(0, 5, 40, 5, 11), 3)])
+    _, pcs, smp, chains, _cps = two_chains()
+    # (A over B, and B over A, the same place: no grade can close it; the lesser difference of layers is the weaker)
+    cps = [(0, 5, 1, 5, "ge", 3.0), (1, 5, 0, 5, "ge", 3.0)]
+    p = relax.Problem(net, pcs, smp, chains, cps, dict(bound={}))
+    done = p.relax()
+    assert [r.kind for r in done] == ["layer"] and not p.eased
 
 
 def test_an_infeasible_climb_is_relaxed_by_the_least_grade_excess():
@@ -248,13 +283,17 @@ def test_the_weakest_law_in_a_contradiction_gives_way_first():
     assert [r.kind for r in done] == ["grade", "grade"]
     f = done[0].amount / 0.06 + 1.0
     assert abs(f - (8.0 + relax.SLACK_M) / (0.06 * 80.0)) < 1e-6          # (the least: 8 m over 80 m of road)
-    # (more than the steepest grade the laws give any road makes up: the grade law to that, and the clearance for the rest)
+    # (more than the grade law gives but less than a vehicle drives: still the grade, no road is put through the other)
     net, pcs, smp, chains, cps = two_chains(need=20.0)
     done = relax.Problem(net, pcs, smp, chains, cps, dict(bound={})).relax()
+    assert [r.kind for r in done] == ["grade", "grade"]
+    # (more than a vehicle drives: the grade at what it drives, and the clearance for the rest)
+    net, pcs, smp, chains, cps = two_chains(need=40.0)
+    done = relax.Problem(net, pcs, smp, chains, cps, dict(bound={})).relax()
     assert sorted(r.kind for r in done) == ["clearance", "grade", "grade"]
-    assert all(abs(r.amount + 0.06 - relax.STEEPEST) < 1e-9 for r in done if r.kind == "grade")
+    assert all(abs(r.amount + 0.06 - relax.DRIVABLE) < 1e-9 for r in done if r.kind == "grade")
     gave = next(r.amount for r in done if r.kind == "clearance")
-    assert abs(gave - (20.0 + relax.SLACK_M - relax.STEEPEST * 80.0)) < 1e-6
+    assert abs(gave - (40.0 + relax.SLACK_M - relax.DRIVABLE * 80.0)) < 1e-6
     # (a floor with a clearance: the floor first, the clearance kept whole)
     net, pcs, smp, chains, cps = two_chains(lo=10.0, hi=0.0, need=3.0)
     done = relax.Problem(net, pcs, smp, chains, cps, dict(bound={})).relax()
@@ -262,12 +301,12 @@ def test_the_weakest_law_in_a_contradiction_gives_way_first():
 
 
 def test_the_curve_law_gives_way_last_by_the_least_factor():
-    # (a deck that must pass 8 m over its two ends: the grade (0.5) allows it, a vertical curve of the radius asked does not)
+    # (a deck that must pass 3 m over its two ends: the grade (0.5) allows it, a vertical curve of the radius asked does not)
     import carriageways
     net, pcs, smp, chains, cps = two_chains()
     pcs, smp, chains, cps = pcs[:1], smp[:1], chains[:1], []
     chains[0].update(grade=0.5, K=200.0)
-    chains[0]["lo"][5] = 8.0
+    chains[0]["lo"][5] = 3.0
     chains[0]["hi"][0] = chains[0]["hi"][10] = 0.0
 
     def feasible(ch, cp):
@@ -281,6 +320,33 @@ def test_the_curve_law_gives_way_last_by_the_least_factor():
     mu = done[0].amount
     again = [dict(chains[0], K=chains[0]["K"] / (mu / 1.05))]
     assert not feasible(again, cps)                                     # (to within 5 %: the least)
+
+
+def test_the_curve_law_is_not_eased_past_the_tightest_curve_the_laws_give_a_road():
+    # (a deck that must pass 8 m over its two ends: no vertical curve of 60 m radius makes it, the curves are not the cause)
+    import carriageways
+    net, pcs, smp, chains, cps = two_chains()
+    pcs, smp, chains, cps = pcs[:1], smp[:1], chains[:1], []
+    chains[0].update(grade=0.5, K=200.0)
+    chains[0]["lo"][5] = 8.0
+    chains[0]["hi"][0] = chains[0]["hi"][10] = 0.0
+
+    def feasible(ch, cp):
+        info = {}
+        carriageways.solve(ch, cp, diagnostics=info)
+        return bool(info["feasible"])
+    try:
+        relax.ease_curves(net, pcs, chains, cps, set(), feasible)
+    except ValueError as e:
+        assert "tightest the laws give a road" in str(e)
+    else:
+        raise AssertionError("eased past the floor")
+    floor = relax.curve_floor(net, pcs[0])
+    assert floor == gs.R_MIN_ROAD_M / 100.0
+    chains[0]["K"] = 200.0
+    chains[0]["lo"][5] = 3.0
+    out, done = relax.ease_curves(net, pcs, chains, cps, set(), feasible)
+    assert out[0]["K"] >= floor and done[0].amount > 1.0
 
 
 def test_the_relaxation_is_deterministic():
@@ -312,10 +378,10 @@ def test_the_relaxations_are_in_the_artifact_and_the_step_line():
     zs = gs.solve_shape(net, sysm, pcs, smp, [zero(x["xy"]) for x in smp], fixed(net, zero), diag)
     loc = {g: n for n, g in enumerate(range(len(net.m)))}
     art = s6_heights.run(None, net, sysm, loc, pcs, smp, zs, diag, "sys", "system:sys")
-    assert art.solved and [f.code for f in art.findings] == ["relaxed_layer"]
-    assert art.diag["relaxed"][0]["kind"] == "layer" and art.diag["first"]["status"] == "PrimalInfeasible"
+    assert art.solved and {f.code for f in art.findings} == {"relaxed_grade"}
+    assert art.diag["relaxed"][0]["kind"] == "grade" and art.diag["first"]["status"] == "PrimalInfeasible"
     text = s6_heights.relax_text(diag)
-    assert text.startswith("1 eased: layer x1")
+    assert text.startswith("%d eased: grade x%d" % (len(diag["relaxed"]), len(diag["relaxed"])))
     records = []
 
     class Grab(logging.Handler):
@@ -327,4 +393,14 @@ def test_the_relaxations_are_in_the_artifact_and_the_step_line():
         pipeline._line({}, "heights", "ab" * 20, 3, 2, 0.5, None, "r system s", text)
     finally:
         pipeline.log.removeHandler(h)
-    assert records and records[0][0] >= logging.WARNING and "ok (1 eased: layer x1" in records[0][1]
+    assert records and records[0][0] >= logging.WARNING and "ok (3 eased: grade x3" in records[0][1]
+
+
+def test_what_a_vehicle_drives_is_the_mods_limit():
+    import re
+    import gradelaw
+    lua = os.path.join(os.path.dirname(os.path.dirname(HERE)), "mod", "beamng_earth", "lua", "ge", "extensions", "beamngEarth",
+                       "navgraph.lua")
+    with open(lua, encoding="utf-8") as f:
+        got = re.search(r"^M\.MAX_GRADE\s*=\s*([0-9.]+)", f.read(), re.M)
+    assert got and float(got.group(1)) == gradelaw.DRIVABLE_GRADE == relax.DRIVABLE
