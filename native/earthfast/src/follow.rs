@@ -292,11 +292,21 @@ fn follow_pose<'py>(
     let p: Point = c.getattr("focus")?.extract()?;
     let v: Point = c.getattr("vel")?.extract()?;
     let q = offset(p, v, rule.mode(v).2);
+    let speed = crate::py_hypot(v.0, v.1);
+    let photos =
+        speed >= 25. && s.getattr("near_visual")?.eq("detail")? && !s.getattr("imagery")?.is_none();
+    let photo_request = photos.then(|| rule.request(p, v, centre, frame_s));
+    // A first photo can take a whole block crossing. Predict from the point where
+    // the mod will request it, even when the car is still behind the current centre.
+    let photo_due =
+        photo_request.is_some_and(|(_, asked)| norm2(relative(asked, p)) <= (speed * 14.).powi(2));
     let layout = s.getattr("layout")?;
     let at = PyDict::new(py);
     c.setattr("predicted_at", &at)?;
-    if sup(relative(q, centre)) >= follow.getattr("prefetch_start")?.extract::<f64>()? {
-        let (next, asked) = rule.request(p, v, centre, frame_s);
+    if photo_due
+        || sup(relative(q, centre)) >= follow.getattr("prefetch_start")?.extract::<f64>()?
+    {
+        let (next, asked) = photo_request.unwrap_or_else(|| rule.request(p, v, centre, frame_s));
         if next != centre
             && !layout
                 .call_method1("block_at", next)?
@@ -307,7 +317,12 @@ fn follow_pose<'py>(
         }
     }
     c.setattr("predicted_chain", PyList::empty(py))?;
-    if crate::py_hypot(v.0, v.1) > fast_speed {
+    if speed > fast_speed || photo_due {
+        let chain = if speed > fast_speed {
+            chain
+        } else {
+            chain.min(2)
+        };
         let along = |xy: Bound<'py, PyAny>| -> PyResult<_> {
             let where_ = PyDict::new(py);
             let points = if xy.is_none() {
@@ -351,7 +366,85 @@ fn follow_pose<'py>(
     Ok(tree)
 }
 
+/// A fast car can leave before a full photo of the committed block finishes.
+/// Only refine blocks already built, one per refresh pass on the existing pool.
+#[pyfunction]
+fn photo_refresh_key<'py>(
+    c: &Bound<'py, PyAny>,
+    aid: i64,
+    anchor: &Bound<'py, PyAny>,
+    now: f64,
+) -> PyResult<Option<(i64, f64, f64)>> {
+    type Key = (i64, f64, f64);
+    let s = c.getattr("s")?;
+    let hm = s.getattr("hm")?;
+    let stale = s.getattr("base_stale")?;
+    let skipped = s.getattr("base_skipped")?;
+    let mut keys = Vec::new();
+    for name in ["hm_committed", "hm_sent"] {
+        let history = s.getattr(name)?;
+        if history.len()? > 0 {
+            keys.push(history.get_item(-1)?.extract::<Key>()?);
+        }
+    }
+    let v: Point = c.getattr("vel")?.extract()?;
+    if norm2(v) >= 25. * 25. {
+        let p: Point = c.getattr("focus")?.extract()?;
+        let predicted = c.getattr("predicted_block")?;
+        let chain = c.getattr("predicted_chain")?;
+        let mut ahead = vec![predicted];
+        for b in chain.try_iter()? {
+            ahead.push(b?);
+        }
+        // Serve a missing current photo first. With a stand-in already installed,
+        // give the next block its final photo before committing it.
+        let mut insert = 0;
+        for k in &keys {
+            let info = hm.call_method1("get", (*k,))?;
+            if !info.is_none() && !info.call_method1("get", ("base",))?.is_truthy()? {
+                insert += 1;
+            } else {
+                break;
+            }
+        }
+        for b in ahead {
+            if b.is_none() {
+                continue;
+            }
+            let xy = (b.getattr("cx")?.extract()?, b.getattr("cy")?.extract()?);
+            let rel = relative(xy, p);
+            let k = (aid, xy.0, xy.1);
+            if dot(rel, v) > 0.
+                && norm2(rel) <= norm2(v) * 14. * 14.
+                && skipped.contains(k)?
+                && !keys.contains(&k)
+            {
+                keys.insert(insert, k);
+                insert += 1;
+            }
+        }
+    }
+    for k in keys {
+        if k.0 == aid
+            && stale.contains(k)?
+            && hm.contains(k)?
+            && hm
+                .get_item(k)?
+                .call_method1("get", ("baseRetryAt", 0.))?
+                .extract::<f64>()?
+                <= now
+            && (skipped.contains(k)?
+                || s.call_method1("base_ready", (anchor, k.1, k.2))?
+                    .is_truthy()?)
+        {
+            return Ok(Some(k));
+        }
+    }
+    Ok(None)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(photo_refresh_key, m)?)?;
     m.add_function(wrap_pyfunction!(follow_pose, m)?)?;
     m.add_function(wrap_pyfunction!(follow_mode, m)?)?;
     m.add_function(wrap_pyfunction!(follow_centre, m)?)?;

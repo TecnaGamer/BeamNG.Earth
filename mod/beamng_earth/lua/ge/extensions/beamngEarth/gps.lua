@@ -244,6 +244,7 @@ function M.routePosition(xs, ys, cum, px, py, vx, vy, sPrev, i0, i1)
 end
 
 local lineKey = nil      -- (setLineArrows: the route-line arrows' key; nil while the planner's arrows are up)
+local lineGround = nil   -- (... and the ground it was set on: core.groundSerial)
 local function clearArrows()
   local gm = rawget(_G, 'core_groundMarkers')
   if gm and gm.setPath then pcall(gm.setPath, nil) end
@@ -1054,6 +1055,11 @@ end
 -- path is a dense line along the route (heights from the ground below), set again every LINE_REBUILD_M; the planner
 -- only trims it as the car passes. Also used whenever none of the route ahead is on the local graph. Not with
 -- autodrive (the AI drives the graph's path).
+-- The line's heights come from rays onto the collision loaded when it was set: a bridge deck or road tile that arrives
+-- later (or a new terrain block) left the arrows on the old ground (in the river under a late deck, flat past the
+-- block's edge) until the car had driven another LINE_REBUILD_M (the user at 130 mph, 2026-11-21: "the gps route also
+-- struggles to keep up"). The line is set again when the ground changed (core.groundSerial: a collision rebuild or a
+-- block commit), at most every CHECK_S like every other update.
 M.LINE_MPS = 25         -- (56 mph)
 M.LINE_M = 1500         -- m of route ahead
 M.LINE_STEP_M = 15
@@ -1062,7 +1068,9 @@ local function setLineArrows(e, s0, z0)
   local gm = rawget(_G, 'core_groundMarkers')
   if not gm or not gm.setPath or not gm.routePlanner then return false end
   local key = 'L' .. tostring(route and route.version) .. ':' .. math.floor(s0 / M.LINE_REBUILD_M)
-  if key == lineKey and gm.endWP then return true end
+  local c = core()
+  local ground = c and c.groundSerial and c.groundSerial() or 0
+  if key == lineKey and ground == lineGround and gm.endWP then return true end
   local pts = M.routeSlice(e, s0, s0 + M.LINE_M, M.LINE_STEP_M)
   if #pts < 2 then return false end
   local ray = rawget(_G, 'castRayStatic')
@@ -1088,7 +1096,8 @@ local function setLineArrows(e, s0, z0)
   M.addRest(rp, total - math.min(s0 + M.LINE_M, total))
   gm.endWP = { path[#path] }
   if gm.sendToApp then pcall(gm.sendToApp) end        -- (the minimap's and the navigation app's route line)
-  lineKey, routedTo = key, nil
+  if key == lineKey then M.lineRefreshes = (M.lineRefreshes or 0) + 1 end
+  lineKey, lineGround, routedTo = key, ground, nil
   M.lineSets = (M.lineSets or 0) + 1
   return true
 end

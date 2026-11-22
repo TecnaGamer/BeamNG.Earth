@@ -197,6 +197,70 @@ class DetailQuickPhotoTest(ServerHarness):
         self.assertTrue(asked)
 
 
+class PhotoAheadTest(unittest.TestCase):
+    def test_missing_source_pixels_never_become_a_photo(self):
+        from types import SimpleNamespace as NS
+        from collections import deque
+        # The source counts always sum to the requested pixel count, including brown fill.
+        def render(frame, x0, y0, size, px, pending):
+            return np.zeros((px, px, 3), np.uint8), {"usgs": px * px - 1, "none": 1}
+
+        anchor = NS(id=1, frame=geodesy.EnuFrame(LAT, LON))
+        s = NS(layout=LAYOUT, imagery=NS(render=render), deshadow=None, base_stale=set(),
+               base_px=256, base_lock=threading.Lock(), recent_full=deque(), _photo_data_cached=lambda *_: False)
+        self.assertIsNone(earthd.Server.write_quick_base(s, anchor, 0., 0.))
+        self.assertIsNone(earthd.Server.write_base(s, anchor, 0., 0., quick=True))
+        self.assertIn((1, 0., 0.), s.base_stale)
+        with patch.object(earthd.blockworker, "_imagery", return_value=s.imagery):
+            self.assertIsNone(earthd.blockworker.base_photo(LAT, LON, 0., 0., 1024., 256, {}, False,
+                                                           16, "", (), quick=True))
+
+    def test_lasting_hole_is_taken_after_retries(self):
+        # A source with no tile there ever: refused BASE_NONE_TRIES times (the far ground meanwhile), then taken
+        # as before, never rendered again every few seconds for good.
+        from types import SimpleNamespace as NS
+        s, key = NS(base_stale=set()), (1, 0., 0.)
+        for _ in range(earthd.BASE_NONE_TRIES):
+            self.assertFalse(earthd.Server._none_ok(s, key))
+            self.assertTrue(earthd.Server._refuse_none(s, key))
+            self.assertIn(key, s.base_stale)
+        self.assertTrue(earthd.Server._none_ok(s, key))
+        self.assertFalse(earthd.Server._refuse_none(s, key))
+        self.assertFalse(earthd.Server._none_ok(s, (1, 1024., 0.)), "counted per block")
+
+        def render(frame, x0, y0, size, px, pending):
+            return np.zeros((px, px, 3), np.uint8), {"usgs": px * px - 1, "none": 1}
+        im = NS(render=render)
+        with patch.object(earthd.blockworker, "_imagery", return_value=im):
+            args = (LAT, LON, 0., 0., 1024., 256, {}, False, 16, "", ())
+            self.assertEqual(earthd.blockworker.base_photo(*args), "none", "the server told why")
+            self.assertIsNone(earthd.blockworker.base_photo(*args, quick=True, allow_none=True),
+                              "a stand-in never shows the brown fill")
+
+    def test_refinement_before_arrival(self):
+        from collections import deque
+        from types import SimpleNamespace as NS
+        from earthd import fast
+        here, ahead, behind = (1, 0., 0.), (1, 640., 0.), (1, -300., 0.)
+        s = NS(hm_committed=deque([here]), hm_sent=deque([here]), hm={k: {"base": "quick"} for k in
+               (here, ahead, behind)}, base_stale={here, ahead, behind}, base_skipped={here, ahead, behind})
+        c = NS(s=s, vel=(58., 0.), focus=(0., 0.), predicted_block=NS(cx=-300., cy=0.),
+               predicted_chain=[NS(cx=640., cy=0.)])
+        def select():
+            return fast._ef.photo_refresh_key(c, 1, None, 100.)
+        self.assertEqual(select(), ahead)
+        s.hm[ahead]["baseRetryAt"] = 105.
+        self.assertEqual(select(), here)
+        del s.hm[ahead]["baseRetryAt"]
+        s.hm[here]["base"] = None
+        self.assertEqual(select(), here)
+        s.hm[here]["base"] = "quick"
+        c.vel = (27., 0.)    # The distant block is now outside the time horizon.
+        self.assertEqual(select(), here)
+        c.vel = (-58., 0.)
+        self.assertEqual(select(), behind)
+
+
 class DetailFastPhotoLaterTest(ServerHarness):
     """A fast player (earthd FAST_BASE_V): a block whose photo is slow goes without it, the photo follows (block_base)
     and later answers for the block carry it."""

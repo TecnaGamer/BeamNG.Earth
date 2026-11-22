@@ -237,4 +237,46 @@ do
   T.check(roads.debugFar()[roads.farGeoKey('P', P2)] == nil, 'the pack dropped')
   T.check(roads.farGeoHidden(h2f, P2) == true, 'the horizon piece still hidden: near and far tiles cover the square')
 end
+-- Drive through a partially covered square with a one-import frame and no
+-- background visibility visits. The 15 missing siblings can stay missing.
+do
+  local k = keysOf(SK)[1]
+  local fc = centreOf(k)
+  car.x, car.y = A:geodeticToWorld(fc[1], fc[2], 0)
+  roads.onFarTile(farMsg(SK, centreOf(SK), pdata), 1, 'P')
+  roads.onFarTile(farMsg(SK, centreOf(SK), sdata), 1, true)
+  roads.onFarTile(farMsg(k, fc, { shape = '/s/lod.cdae', pos = {0,0,0} }), 1)
+  run(1, A)
+  local cell, pack, sky = objsWith('lod.cdae')[1], objsWith('bp_' .. SK)[1], objsWith('bs_' .. SK)[1]
+  T.check(cell and not cell.hidden and pack and not pack.hidden, 'the far cell and incomplete pack have arrived')
+  roads.FAR_CHECKS_PER_FRAME = 0
+  local tile = { bld = {shape = '/s/near1.cdae', pos = {0,0,0}}, bld2 = {shape = '/s/near2.cdae', pos = {0,0,0}} }
+  roads.onTile({anchorId = 1, key = k, frame = fc, data = tile}, 1, A)
+  local budget = 1
+  local g = { try = function() return budget > 0 end, charge = function() budget = budget - 1 end, chargeMotion = function() end }
+  roads.update(g, 1, car, nil, A)
+  T.check(#objsWith('near1.cdae') + #objsWith('near2.cdae') == 1, 'only one near mesh imported this frame')
+  T.check(cell.hidden and pack.hidden and (not sky or sky.hidden), 'no far buildings in the first partial near frame')
+  roads.onDrop({anchorId = 1, key = k})
+  roads.FAR_CHECKS_PER_FRAME = 80
+  roads.update(g, 1, car, nil, A)
+  T.check(cell.hidden and pack.hidden, 'near object queued for deletion still owns its square')
+  roads.update(gov, 1, car, nil, A)
+  T.check(cell.hidden and pack.hidden, 'the replacement has a short release hysteresis')
+  run(1, A)
+  T.check(not cell.hidden and not pack.hidden, 'the far buildings are available again after near release')
+  roads.onFarDrop({anchorId = 1, key = SK}, 'P')
+  run(1, A)
+  sky = objsWith('bs_' .. SK)[1]
+  T.check(sky and not sky.hidden, 'the skyline is visible without the pack')
+  roads.FAR_CHECKS_PER_FRAME = 0
+  roads.onTile({anchorId = 1, key = k, frame = fc, data = tile}, 1, A)
+  roads.update(gov, 1, car, nil, A)
+  T.check(sky.hidden, 'the first near building hides a visible skyline in its creation frame')
+  roads.LAZY_FAR_PARTS = false
+  roads.onFarTile(farMsg(SK, centreOf(SK), pdata), 1, 'P')
+  roads.update(gov, 1, car, nil, A)
+  T.check(objsWith('bp_' .. SK)[1].hidden, 'a late pack is hidden in its first frame')
+
+end
 T.done('test_farpack')

@@ -365,6 +365,8 @@ T.check(not colObj.hidden and colObj.pos.z == 1100 - 1.0, 'edge ring tile under 
 local gcmod = require('beamngEarth/groundcover')
 local gcOrig, gcAt = gcmod.afterBlockChange, {}
 gcmod.afterBlockChange = function() gcAt[#gcAt + 1] = calls.importMaps; return gcOrig() end
+T.check(tb.renderEnabled == nil and (calls.setRenderEnabled or 0) == 0, 'terrain mode: the block is drawn, render flag never touched')
+core.setNearVisual('detail')  -- its ready block has no base photo
 T.check(pumpUntil(function() return calls.importMaps == imports + 1 end, 100), 'terrain-follow commit once the strip is live')
 T.check(#gcAt == 1 and gcAt[1] == imports + 1, 'grass rebuild requested once, right after the import')
 gcmod.afterBlockChange = gcOrig
@@ -377,6 +379,17 @@ ct = last('commit_terrain')
 T.check(ct.anchorId == 1 and ct.cx == 256 and ct.cy == 0, 'commit_terrain sent')
 T.check(calls.setClusterPosRelRot == clusterMoves and veh.pos.x == 451, 'terrain-follow does not move vehicles')
 for id, p in pairs(farBefore) do T.check(objects[id].pos.x == p.x, 'terrain-follow does not move far tiles') end
+T.check(not tb.renderEnabled and farfield.rawView(), 'missing base: collision moved but far tiles draw the ground')
+veh.vel = vec3(58, 0, 0)
+serverSend({ type = 'block_base', anchorId = 1, cx = 0, cy = 0, base = '/old.jpg', baseSize = 2048 })
+frames(2)
+T.check(not tb.renderEnabled, 'late photo of the previous block leaves the far tiles visible')
+serverSend({ type = 'block_base', anchorId = 1, cx = 256, cy = 0, base = '/current.jpg', baseSize = 2048 })
+frames(2)
+T.check(tb.renderEnabled and not farfield.rawView() and require('beamngEarth/terrain').base() == '/current.jpg',
+  'first photo replaces the far ground even at 130 mph')
+veh.vel = vec3(0, 0, 0)
+core.setNearVisual('terrain')
 -- stale / foreign answers are ignored
 serverSend({ type = 'terrain_ready', requestId = 999, anchorId = 1, cx = 0, cy = 0, heightmap = '/x.png', size = 1024 })
 frames(5)
@@ -567,7 +580,6 @@ veh.pos = vec3(700, 30, 1200)
 veh.vel = vec3(20, 0, 0)
 frames(2)
 local movesBefore, setOrig = calls.setClusterPosRelRot, calls.setOriginalTransform
-T.check(tb.renderEnabled == nil and (calls.setRenderEnabled or 0) == 0, 'terrain mode: the block is drawn, render flag never touched')
 T.check(tb.fields.castShadows == '1', 'the block casts its shadows (the settings\' terrainShadows, default on: the far tiles cast theirs)')
 T.check(require('beamngEarth/terrain').setCastShadows(false) == false and tb.fields.castShadows == '0', 'terrainShadows off: none')
 require('beamngEarth/terrain').setCastShadows(true)
