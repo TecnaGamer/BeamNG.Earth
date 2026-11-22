@@ -382,6 +382,7 @@ class PoleTest(unittest.TestCase):
         self.assertEqual(furniture.buried_share("US"), 0.0)
         self.assertEqual(furniture.buried_share(None), 0.0)
         self.assertEqual(furniture.buried_share("ch"), 0.86)   # GitHub #911: rural Switzerland mostly cabled
+        self.assertEqual(furniture.buried_share("hk"), 0.92)   # the government map: poles along 8 % of the streets
         rows = furniture.place([road("c", "tertiary", False)], [], (0, 0, 256, 256), wires=[], buried=1.0)
         self.assertNotIn(furniture.G_POLE, [x[0] for x in rows])
         roads_ = [road(f"r{k}", "tertiary", False) for k in range(200)]
