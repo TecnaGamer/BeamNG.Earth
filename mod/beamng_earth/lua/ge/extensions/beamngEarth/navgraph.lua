@@ -692,6 +692,13 @@ function M.speedProfileAt(x, y, z)
   return { target = r.speedLimit, posted = r.posted, rough = r.rough, distance = r.dist }
 end
 
+-- The current streamed road edge for prioritizing proxy-to-real traffic handoffs.
+function M.roadContextAt(x, y, z)
+  local r = closestRoad(x, y, z)
+  if not r or r.dist > 35 then return nil end
+  return r
+end
+
 -- Lane-departure strip metadata for the rumble audio. The server only marks selected country/road classes; only the
 -- centerline of an undivided carriageway and its outer edges are candidates (never same-direction lane separators).
 function M.rumbleLineAt(x, y, z)
@@ -908,6 +915,7 @@ end
 -- level-start configurator's (Disabled / Parked only / Normal / Police; freeroam's spawningOptionsHelper), taken at
 -- mission start by M.takeChoice. Off by default; the radial menu's traffic entries work at any time as on stock maps.
 M.choice = { traffic = false, parked = false, police = false, trafficAmount = -1, parkedAmount = -1 }
+local proxyOnly = false
 
 -- Pure on its argument: the choice in freeroam's spawning options `o`, which are then set to disabled: freeroam would
 -- spawn at camera-ready, before our first road graph is in the map; we start them once it is.
@@ -1007,10 +1015,36 @@ local function regionalGroup()
 end
 
 local function setupTraffic(gt, c)
-  local okG, group = pcall(regionalGroup)
-  local ok, err = pcall(gt.setupTraffic, c.trafficAmount ~= 0 and c.trafficAmount or -1,
-    { police = c.police, vehGroup = okG and group or nil })
+  local amount = c.trafficAmount ~= 0 and c.trafficAmount or -1
+  local options = { police = c.police }
+  if proxyOnly then
+    -- Keep the traffic system alive for BeamNG.Earth's reserved handoff pool, but do not spawn
+    -- ordinary moving traffic. One dormant base slot is needed by BeamNG's traffic state machine.
+    amount, options.activeAmount, options.police = 1, 0, false
+  else
+    local okG, group = pcall(regionalGroup)
+    options.vehGroup = okG and group or nil
+  end
+  local ok, err = pcall(gt.setupTraffic, amount, options)
   if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
+end
+
+function M.setProxyOnly(v)
+  v = v == true
+  if proxyOnly == v then return true end
+  proxyOnly = v
+  local gt = gameplay_traffic
+  if not (started and gt and gt.getState and gt.getState() == 'on') then return true end
+  if proxyOnly then
+    if gt.setActiveAmount then pcall(gt.setActiveAmount, 0) end
+  elseif M.choice.traffic then
+    -- Rebuild with the player's saved traffic choice when proxy-only mode is switched off.
+    setupTraffic(gt, M.choice)
+  elseif gt.setActiveAmount then
+    -- Another extension can start BeamNG traffic even though Freeroam's saved choice was disabled.
+    pcall(gt.setActiveAmount, 0)
+  end
+  return true
 end
 
 local function startTraffic()
@@ -1092,13 +1126,18 @@ local function updateAdaptive(now)
   if now - adaptive.lastCheck < M.ADAPTIVE_CHECK_S then return end
   adaptive.lastCheck = now
   local gt = gameplay_traffic
-  if not (started and M.choice.traffic and gt and gt.getState and gt.getState() == 'on' and gt.setActiveAmount) then
+  if not (started and gt and gt.getState and gt.getState() == 'on' and gt.setActiveAmount) then
     return
   end
   if heldActive ~= nil or respawnAll or next(protectedTraffic) ~= nil then return end
   local vars = gt.getTrafficVars and gt.getTrafficVars() or {}
   local cur = tonumber(vars.activeAmount)
   if cur == nil then return end
+  if proxyOnly or not M.choice.traffic then
+    if cur ~= 0 then pcall(gt.setActiveAmount, 0) end
+    adaptive.seen, adaptive.paused = 0, true
+    return
+  end
   if not M.ADAPTIVE then
     if adaptive.touched and cur == adaptive.seen and adaptive.base ~= nil and not adaptive.paused then
       pcall(gt.setActiveAmount, adaptive.base)               -- (off again: the player's amount back)
@@ -1169,6 +1208,32 @@ function M.transform(xf, anchorId)
 end
 
 function M.currentGraph() return graph end      -- (tests)
+-- The render-only local traffic reads the same live signal controllers as the stock AI.
+function M.flowSignalStates()
+  local out, ts = {}, signalsSystem()
+  if not graph or not ts or not ts.getSignalByName then return out end
+  for _, junction in ipairs(graph.signals or {}) do
+    if junction.kind == 'signal' then
+      for i, approach in ipairs(junction.app or {}) do
+        local key = tostring(junction.j) .. ':' .. tostring(approach[1])
+        local name = 'bne_' .. tostring(junction.j) .. '_' .. tostring(i)
+        local ok, signal = pcall(ts.getSignalByName, name)
+        local state = 'red'
+        if ok and signal and signal.getState then
+          local got, value = pcall(signal.getState, signal)
+          if got and type(value) == 'string' then
+            value = string.lower(value)
+            if value:find('green', 1, true) then state = 'green'
+            elseif value:find('yellow', 1, true) or value:find('amber', 1, true) then state = 'yellow'
+            elseif value:find('red', 1, true) then state = 'red' end
+          end
+        end
+        out[key] = state
+      end
+    end
+  end
+  return out
+end
 function M._startTraffic() return startTraffic() end    -- (tests: the level start's traffic, by hand)
 function M._cuts() return cuts end      -- (probes: the clip's cut nodes)
 
@@ -1246,6 +1311,15 @@ function M.spawnVelocityCommand(target)
     threshold, target, target)
 end
 
+-- A proxy donor inherits the proxy's current m/s speed as both its launch velocity and AI speed cap.
+-- This keeps it from immediately accelerating to the road's full legal limit after the visual handoff.
+function M.proxyVelocityCommand(target)
+  target = tonumber(target)
+  local launch = M.spawnVelocityCommand(target)
+  if not launch then return nil end
+  return string.format('ai.setSpeedMode("limit"); ai.setSpeed(%.3f); %s', target, launch)
+end
+
 -- Pure: the speed (m/s) a respawned car is launched at on an edge with this limit (m/s), its heading's cosine with the
 -- edge's direction (in -> out; negative: against it), the edge one-way, a junction within LAUNCH_JUNCTION_M; or nil.
 function M.launchSpeed(limit, cosine, oneWay, nearJunction)
@@ -1315,7 +1389,9 @@ local function launchRespawned(now)
     if type(t) == 'table' and t.isAi ~= false then
       local rc = tonumber(t.respawnCount)
       if rc and launchCount[id] and rc > launchCount[id] then
-        launchWait[id] = { readyAt = nil, expires = now + M.LAUNCH_TIMEOUT_S }
+        local previous = launchWait[id]
+        launchWait[id] = { readyAt = nil, expires = now + M.LAUNCH_TIMEOUT_S,
+          targetSpeed = previous and previous.targetSpeed }
       end
       launchCount[id] = rc
       local w = launchWait[id]
@@ -1324,7 +1400,17 @@ local function launchRespawned(now)
           w.readyAt = w.readyAt or (now + M.LAUNCH_DELAY_S)
           if now >= w.readyAt then
             launchWait[id] = nil
-            local ok, err = pcall(launch, id)
+            local ok, err = pcall(function()
+              local targetSpeed = w.targetSpeed
+              local cmd = targetSpeed and M.proxyVelocityCommand(targetSpeed)
+              local o = cmd and getObjectByID(id)
+              if o then
+                o:queueLuaCommand(cmd)
+                stats.launches = (stats.launches or 0) + 1
+              else
+                launch(id)
+              end
+            end)
             if not ok then log('W', 'beamngEarth', 'navgraph launch: ' .. tostring(err)) end
           end
         elseif now >= w.expires then
@@ -1336,6 +1422,20 @@ local function launchRespawned(now)
   for id in pairs(launchCount) do
     if data[id] == nil then launchCount[id], launchWait[id] = nil, nil end
   end
+end
+
+-- A traffic car respawned by the proxy handoff is not necessarily observed as a count change if it was the first
+-- scan of the session. Seed the same delayed, road-aligned launch path used for ordinary traffic respawns.
+function M.noteTrafficRespawn(id, targetSpeed)
+  local gt = gameplay_traffic
+  local data = gt and gt.getTrafficData and gt.getTrafficData()
+  local t = data and data[id]
+  local rc = t and tonumber(t.respawnCount)
+  if not rc then return false end
+  launchCount[id] = rc - 1
+  launchWait[id] = { readyAt = nil, expires = os.clock() + M.LAUNCH_TIMEOUT_S,
+    targetSpeed = tonumber(targetSpeed) }
+  return true
 end
 
 -- Overtaking on multi-lane highways (overtake.lua): the traffic cars and the player's car while it autodrives.

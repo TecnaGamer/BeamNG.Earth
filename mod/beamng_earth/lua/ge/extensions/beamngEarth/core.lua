@@ -4041,6 +4041,11 @@ M.onExtensionLoaded = onExtensionLoaded
 M.onExtensionUnloaded = onExtensionUnloaded
 
 M._trafficvisuals = require('beamngEarth/trafficvisuals')
+-- Two dormant, stock-config traffic vehicles guarantee a physics donor when a proxy approaches the near zone.
+-- They are appended to BeamNG's traffic pool, activated only for a handoff, and returned dormant when recycled.
+M.onTrafficSpecialVehiclesProviders = function()
+  pcall(M._trafficvisuals.registerDonorProvider)
+end
 M._addons = require('beamngEarth/addons')       -- the Add-ons page's game side (a field: the 200-local limit)
 
 -- Another copy of the mod mounted under this code (a BeamMP server's copy replacing the player's when they join, theirs
