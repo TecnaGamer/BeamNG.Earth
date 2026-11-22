@@ -1,0 +1,12 @@
+[package]
+name = "roadsys"
+version = "0.1.0"
+edition = "2021"
+description = "PT3 prototype (road surface + bridge rewrite, BNE_ROADSYS): lane graph, planar partition, one profile per carriageway, markings. Not wired into the product."
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+debug = false
+codegen-units = 1
