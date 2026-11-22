@@ -148,6 +148,21 @@ class ServerHarness(unittest.TestCase):
     def conn(self):
         return next(iter(self.server.connections))
 
+    def record_dispatch(self):
+        """[tile key] in the order the server starts their builds (Server.tile, on the event loop): its scheduling
+        decision. The send order is the builds' completion order, and under load one worker descheduled in a build lets
+        the others finish any number of later tiles first (gate 303: an under-block corner tile sent after 3 tiles
+        outside the block; a slack of tile_workers - 1 positions assumed every build took as long)."""
+        s, order, tile = self.server, [], self.server.tile
+
+        def spy(anchor, t, *a, **kw):
+            ck = s.far_ck(anchor.id, t.key)
+            if ck not in s.tiles and ck not in s.tile_inflight and ck not in s.renewing:
+                order.append(t.key)
+            return tile(anchor, t, *a, **kw)
+        s.tile = spy
+        return order
+
     def fs(self, vfs):
         self.assertTrue(vfs.startswith(f"/temp/beamngEarth/{self.server.sid}/"))
         return os.path.join(self.tmp.name, vfs.lstrip("/"))
@@ -289,6 +304,10 @@ class ServerTest(ServerHarness):
         self.assertRegex(a1["terrain"]["heightmap"], rf"^/temp/beamngEarth/{self.server.sid}/hm_{aid}_0_0_\d+\.png$")
         self.assertAlmostEqual(a1["groundZ"], h[1024, 1024], delta=0.001)   # sample (1024, 1024) = (0, 0)
 
+        dispatched = self.record_dispatch()
+        # (the camera before the commits: the builds started before the mod's first pose go by distance alone, and how
+        # many there are depends on the machine's load; MeshServerTest.start)
+        self.pose(aid, 0, 0)                # (a pose of a prepared, newer anchor commits it: connection_pose)
         c.send({"type": "commit_anchor", "anchorId": aid})
         c.send({"type": "commit_terrain", "anchorId": aid, "cx": 0, "cy": 0})
         self.pose(aid, 0, 0)
@@ -308,21 +327,19 @@ class ServerTest(ServerHarness):
         self.check_cover(far, aid, 0, 0, [(0, 0)])
         # The initial set is one-sided groups (nothing to replace).
         self.assertTrue(all(not s["remove"] for s in far.swaps))
-        # The 64 L0 tiles under the committed (2 km) block come first, then nearest-first.
+        # The 64 L0 tiles under the committed (2 km) block are built first, then nearest-first (the order the builds
+        # start in: record_dispatch; each built once).
+        dispatched = list(dispatched)       # (the initial set's)
+        self.assertEqual(sorted(dispatched), sorted(want))
         under = [m for m in tiles if overlaps(ff.tile_of(m["key"]).bbox, ff.Block(0, 0, self.block).bbox)]
-        # Builds run tile_workers at a time, so the last of them may finish after a tile that
-        # started alongside it (seen under CPU load): allow that much slack.
-        first = {m["key"] for m in tiles[:64 + self.server.tile_workers - 1]}
-        self.assertEqual(len(under), 64)
-        self.assertLessEqual({m["key"] for m in under}, first)
-        # The other tiles nearest first, up to the same completion-order jitter. The block tiles
-        # are left out: the slack above lets a corner one (1086 m away) arrive after position
-        # 64, ahead of the 1024 m ring outside the block (a flaky failure under CPU load when
-        # this took tiles[64:]).
         under_keys = {m["key"] for m in under}
+        self.assertEqual(len(under), 64)
+        self.assertEqual(set(dispatched[:64]), under_keys)
+        # The other tiles nearest first, up to tile_workers positions (the selection's own groups and ties). The block
+        # tiles are left out: a corner one (1086 m away) is farther than the 1024 m ring outside the block.
         # (view-weighted, 2026-10-16: the poses' camera looks north from 8 m behind the player)
         cone = ff.view_cone({"x": 0, "y": -8, "fx": 0, "fy": 1, "fovDeg": 60})
-        rest = [ff.view_distance(want[m["key"]], cone, 0, 0) for m in tiles if m["key"] not in under_keys]
+        rest = [ff.view_distance(want[k], cone, 0, 0) for k in dispatched if k not in under_keys]
         ds = sorted(rest)
         slack = self.server.tile_workers
         late = [i for i in range(len(rest)) if rest[i] > ds[min(i + slack, len(ds) - 1)]]
@@ -788,6 +805,7 @@ class MeshServerTest(ServerHarness):
         far = FarState()
         self.hello()
         aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
+        self.dispatched = self.record_dispatch()
         if cam_first:
             self.pose(aid, x, y)        # (a pose of a prepared, newer anchor commits it: connection_pose)
         self.c.send({"type": "commit_anchor", "anchorId": aid})
@@ -818,15 +836,18 @@ class MeshServerTest(ServerHarness):
         self.check_swaps(seen, aid)
         self.check_cover(far, aid, 0, 0, [])
         self.assertFalse([m for m in tiles if "sink" in m])
-        # nearest first (view-weighted: the poses' camera looks north from 8 m behind the player), up to the
-        # builds' completion-order jitter
+        # nearest first (view-weighted: the poses' camera looks north from 8 m behind the player), by the order the
+        # builds start in (record_dispatch: the sends are in completion order, any number apart under load), up to
+        # tile_workers positions
+        dispatched = list(self.dispatched)  # (the initial set's)
+        self.assertEqual(sorted(dispatched), sorted(want))
         cone = ff.view_cone({"x": 0, "y": -8, "fx": 0, "fy": 1, "fovDeg": 60})
         vd = sorted(ff.view_distance(ff.tile_of(k), cone, 0, 0) for k in want)
         slack = self.server.tile_workers
-        ranks = [sum(1 for v in vd if v < ff.view_distance(ff.tile_of(m["key"]), cone, 0, 0)) for m in tiles[:8]]
-        self.assertTrue(all(ff.view_distance(ff.tile_of(m["key"]), cone, 0, 0) <= vd[8 + slack] for m in tiles[:8]),
-                        f"the first 8 sent ranked {ranks} by view distance (slack {slack})")
-        self.assertEqual(tiles[0]["level"], ex)
+        ranks = [sum(1 for v in vd if v < ff.view_distance(ff.tile_of(k), cone, 0, 0)) for k in dispatched[:8]]
+        self.assertTrue(all(ff.view_distance(ff.tile_of(k), cone, 0, 0) <= vd[8 + slack] for k in dispatched[:8]),
+                        f"the first 8 built ranked {ranks} by view distance (slack {slack})")
+        self.assertEqual(ff.tile_of(dispatched[0]).level, ex)
         # textures: DXT1 with mips, the layout's size per level (32 cells: TEX_NEAR for the two
         # finest levels, TEX_FAR beyond; 64: 256 px to L1, 512 from L2); shapes name the material
         # and have the layout's triangle count (8704 with 64 cells) up to L0
