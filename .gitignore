@@ -38,5 +38,6 @@ dist/
 native/earthfast/target/
 build/
 native/serverlist/target/
+native/roadsys/target/
 server/earthfast.FAST-BUILD-do-not-commit
 *.prof

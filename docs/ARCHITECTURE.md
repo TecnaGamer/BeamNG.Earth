@@ -1813,3 +1813,26 @@ distances), ours (60+ miles) showed it as soft distance. In our level the far bl
 player's preset resets it); the near blur and the player's settings stay theirs; the stock parameters return when
 the level ends. LOD research: docs/research/2026-10-14-lod-research.md (also: linear-light sharpened mip chains,
 `imagery.mip_arrays`; gentler far-tree rings, the engine billboards far trees itself).
+
+## Road surface + bridge rewrite: BNE_ROADSYS (M0 harness, M1 shadow; 2026-11-22)
+
+The approved rewrite (bridgerewrite/DESIGN.md: one road sheet, one profile per carriageway, one owner per drivable
+point) lives in `native/roadsys`, a crate of its own linked into earthfast (`roadsys_*` functions, `src/roadsysbind.rs`)
+and built as a CLI for the harnesses. `BNE_ROADSYS` = off (default: nothing runs, the server is byte-identical) |
+shadow (M1). It is a developer switch, not on the settings page, and in `revisit.NOT_SWITCHES` while shadow changes
+nothing the player sees; each later stage that changes output leaves that list in the commit that does.
+
+- **M0, the audit** (`audit.rs`, `tools/widecorpus/checks.py`): double owners, envelope intrusions, blocked openings,
+  piers in faces, parapets in the carriageway, hand-over lips, clearance against the floors, T-cracks and folds, on
+  any built road scene (today's output in the wide corpus; the shadow product later), with hold thresholds in
+  `compare.py`. `run.py --extra FILE` adds places kept outside Git (the bridge study's sites).
+- **M1, the shadow product** (`server/roadsys.py`, `product.rs`): each built road geotile is built again in one
+  background thread. Its read list is the product's own (the strokes reaching the tile, their junction clusters' arms,
+  snap trunks, capping neighbours and vertical components, each whole, with the lane graph's 920 m reach), asked
+  again until no map cell is missing, so it depends on the map data alone, never on visit order. Built in the ENU frame
+  of the tile's z8 region. Strokes are cut at plain joints past a 4 km grid (net.rs `Opts`). Profiles: Tier A per
+  stroke, Tier B sections reaching 2 x L_vc past each structure, crossing, deck node, nose and joint, components
+  capped at 40 km; every solve keyed by its whole assembled problem and reused only for that problem. Per tile: a log
+  line and `<cache>/roadsys/shadow-1/<frame>/<tile>.json` (timings, read list, network / profile / surface stats,
+  checks, seam hashes, the pieces' keys). `tools/roadsys_shadow.py` runs it over a box (orders, cold, dumps for
+  `roadsys tile` under Wine).

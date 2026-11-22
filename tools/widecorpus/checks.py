@@ -320,7 +320,56 @@ def lane_metrics(source, quad, terrain, tops, soffits, floors):
     return counts
 
 
-def measure(p, directory, scanner):
+# The M0 audit (native/roadsys/src/audit.rs: double owners, envelope intrusions, blocked openings, piers in faces,
+# parapets in the carriageway, hand-over lips, clearance against the floors, T-cracks, folds): its kinds and flags.
+AUDIT_KINDS = {"road": 0, "walk": 1, "walkcol": 2, "deck": 3, "tunnel": 4, "barrier": 5, "buscol": 6}
+AUDIT_LEVELS = {"ground": 0, "bridge": 1, "tunnel": 2}
+
+
+def audit_kind(what):
+    if what in AUDIT_KINDS:
+        return AUDIT_KINDS[what]
+    return 8 if what.startswith("railcol") else 7 if what.startswith("rail") else 9
+
+
+def audit_input(path, quad, terrain, entries, lines):
+    """The audit's input blob (audit.rs): the tile quad, the physics terrain, every emitted mesh as
+    (kind, collides, [(flags, triangles)]) and the source map's lines."""
+    import struct
+    q = np.asarray(quad, dtype=float).reshape(4, 2)
+    n = len(terrain.z)
+    with open(path, "wb") as f:
+        f.write(b"RSAUDIT1")
+        f.write(q.astype("<f8").tobytes())
+        f.write(struct.pack("<Iqq", n, int(terrain.origin[0]), int(terrain.origin[1])))
+        f.write(np.ascontiguousarray(terrain.z, dtype="<f4").tobytes())
+        f.write(np.ascontiguousarray(terrain.mat == 255, dtype="u1").tobytes())
+        f.write(struct.pack("<I", len(entries)))
+        for kind, collides, groups_ in entries:
+            total = sum(len(t) for _flags, t in groups_)
+            f.write(struct.pack("<BBI", kind, 1 if collides else 0, total))
+            for flags, tri in groups_:
+                rows = np.zeros(len(tri), dtype=[("f", "u1"), ("p", "<f8", (9,))])
+                rows["f"] = flags
+                rows["p"] = np.asarray(tri, dtype=float).reshape(-1, 9)
+                f.write(rows.tobytes())
+        f.write(struct.pack("<I", len(lines)))
+        for road in lines:
+            xy = np.asarray(road["xy"], dtype="<f8").reshape(-1, 2)
+            f.write(struct.pack("<BdI", AUDIT_LEVELS.get(road["level"], 0), float(road["width"]), len(xy)))
+            f.write(xy.tobytes())
+
+
+def audit(directory, quad, terrain, entries, lines, auditor):
+    if auditor is None:
+        return {}
+    src, out = directory / "audit.bin", directory / "audit.json"
+    audit_input(src, quad, terrain, entries, lines)
+    subprocess.run([str(auditor), "audit", str(src), str(out)], check=True)
+    return read(out)
+
+
+def measure(p, directory, scanner, auditor=None):
     frame = geodesy.EnuFrame(p["lat"],p["lon"])
     tiles = {}
     for tile in read(directory/"tiles.json"):
@@ -334,6 +383,7 @@ def measure(p, directory, scanner):
         markings = defaultdict(list)
         bases = []
         src = geotiles.frame(*geotiles.parse(key)[1:])
+        entries = []
         for file, src_frame in ((f"rg_{key}.json", src), (f"rs_1_{key}.json",None)):
             data = read(directory/file)
             for what, entry in data.items():
@@ -343,7 +393,13 @@ def measure(p, directory, scanner):
                     continue
                 collision = what!="road" and not (what=="walk" and "walkcol" in data) and not (
                     what.startswith("rail") and not what.startswith("railcol") and "railcol" in data)
+                audited = []
+                entries.append((audit_kind(what), collision, audited))
                 for mat, tri in groups(directory,entry,frame,src_frame,tile["exact"].get(what)):
+                    audited.append(((1 if mat==roadmesh.DECK_TOP else 0) | (2 if mat==roadmesh.DECK_SIDE else 0) |
+                                    (4 if mat=="curbs" else 0) |
+                                    (8 if ctx["layers"].get(mat)=="mark" or mat.startswith(("line_","crossing")) else 0),
+                                    tri))
                     if not what.endswith("col") and not what.startswith("railcol"):
                         metrics["triangles"] += len(tri)
                         metrics["draw_calls"] += 1
@@ -387,6 +443,7 @@ def measure(p, directory, scanner):
             metrics["visual_base_overlap_m2"]=sum(float(line.split()[4]) for line in scanned.splitlines()
                                                     if line.startswith("overlap "))
         metrics.update(lane_metrics(ctx["lines"],quad,terrain,tops,soffits,floors))
+        metrics.update(audit(directory, quad, terrain, entries, ctx["lines"], auditor))
         metrics["source_faults"] = tile.get("source_faults",0)
         metrics["lidar_waits"] = tile.get("lidar_waits",0)
         tiles[key] = dict(metrics={k:round(float(v),6) for k,v in metrics.items()},

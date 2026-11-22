@@ -7,6 +7,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 use crate::dm::Dm;
 mod dm;
+mod roadsysbind;
 mod island_kerb;
 mod deckreach;
 mod demsample;
@@ -7634,6 +7635,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     railmesh::register(m)?;
     railstations::register(m)?;
     catenary::register(m)?;
-    m.add("VERSION", 597)?;
+    // 596: the road surface + bridge rewrite's shadow product and M0 audit (native/roadsys; BNE_ROADSYS=shadow)
+    roadsysbind::register(m)?;
+    m.add("VERSION", 598)?;
     Ok(())
 }

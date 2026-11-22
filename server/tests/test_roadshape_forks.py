@@ -257,3 +257,22 @@ class ForkTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WholeOrSectionsTest(unittest.TestCase):
+    """roadshape.whole_or_sections (2026-11-22): a window holding a road both whole (one cell's copy, unsplit) and as
+    its lane sections (another cell's, split by lanesections.split) keeps one of the two, never both: the sections
+    where they cover the road, else the road whole. Found in four dense boxes by the road rewrite's PT3."""
+
+    def test_covering_sections_replace_the_road(self):
+        chosen = [("14/1/1", "r|0"), ("14/1/2", "r~lanes000000000-400000000|0"),
+                  ("14/1/2", "r~lanes400000000-1000000000|0"), ("14/1/1", "other|0")]
+        self.assertEqual(roadshape.whole_or_sections(chosen), chosen[1:])
+
+    def test_partial_sections_give_way_to_the_road(self):
+        chosen = [("14/1/1", "r|0"), ("14/1/2", "r~lanes000000000-400000000|0"), ("14/1/1", "other|0")]
+        self.assertEqual(roadshape.whole_or_sections(chosen), [chosen[0], chosen[2]])
+
+    def test_untouched_without_both(self):
+        chosen = [("14/1/2", "r~lanes000000000-400000000|0"), ("14/1/1", "q|0"), ("14/1/1", "q|1")]
+        self.assertEqual(roadshape.whole_or_sections(chosen), chosen)

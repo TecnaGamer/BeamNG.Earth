@@ -392,6 +392,9 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 "BNE_TELEMETRY",
                 "BNE_ROADSHAPE_DEBUG",      # (v2 P2a's fork records written beside the build: nothing built reads them)
                 "BNE_ROADSURF_V3_DEBUG",    # (v3 S1's lane graphs written beside the build: nothing built reads them)
+                "BNE_ROADSYS",              # (shadow, the road rewrite's M1: built again in the background and logged;
+                                            # nothing built or delivered reads it. Its later stages change output:
+                                            # they leave this list, keyed as build switches, in the commit that does)
                 # (which process makes a cell's plans and road stage: the same plans, earthd.Server.plan_first,
                 # plancache's stage_*)
                 "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE",
@@ -461,16 +464,18 @@ def keyed_env(k):
 # BNE_ROADSHAPE 9 (P3e, profile): a deck over another along it held as twins are, a twin run held whole once seeded
 # (earthfast 536); the coplanar trim on one seam, where both surfaces meet, past chunk ends inside a part
 # (deck_trim_coplanar); a branch's surface in its union laid on the through deck's; union decks' rows unsimplified.
+# BNE_ROADSHAPE 10 and BNE_ROADSURF_V3=surface 8 (2026-11-22): the fork records' and the v3 lane graph's segment
+# windows never hold a road both whole and as its lane sections (roadshape.whole_or_sections).
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 9, "BNE_DECK_SKEW": 1}
+                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1}
 
 
 def keyed_value(k, v):
     """The text a set build switch k = v is hashed as (code_key, switches_key, bakepack.switches): k=v, its
     SWITCH_VERSIONS version after it when it has one."""
     # The surface generation includes the supporting deck and its parapet outline.
-    n = 7 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
+    n = 8 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
     if k in ("BNE_SIDEWALK_V2", "BNE_SURFACE_V2") and v.strip().lower() in ("on", "1", "yes", "true"):
         n = 2
     if (k, v) == ("BNE_ROADSHAPE", "profile") and os.environ.get("BNE_ROADSURF_V3") == "surface":

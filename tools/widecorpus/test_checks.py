@@ -38,6 +38,33 @@ class MeshChecks(unittest.TestCase):
                 area=sum(float(x.split()[4]) for x in text.splitlines() if x.startswith("overlap "))
                 self.assertAlmostEqual(area,expected)
 
+    def test_m0_audit_reads_the_scene(self):
+        """The M0 audit (native/roadsys audit.rs) through checks.audit_input: a pad 3 cm under the ground road is a
+        double owner with the terrain, a barrier across the lane a parapet in the carriageway."""
+        import os
+        import shutil
+        from checks import audit
+        from common import ROOT, TREE
+        if not shutil.which("cargo"):
+            self.skipTest("cargo needed for the audit binary")
+        target = ROOT / "bin/roadsys-target"
+        subprocess.run(["cargo", "build", "--release", "--quiet", "-j", "2", "--bin", "roadsys"],
+                       cwd=TREE / "native/roadsys", check=True, env={**os.environ, "CARGO_TARGET_DIR": str(target)})
+        terrain = Terrain.__new__(Terrain)
+        terrain.origin = np.array([-40, -40])
+        terrain.z = np.full((81, 81), 10.)
+        terrain.mat = np.zeros((81, 81), int)
+        quad = [[-30, -30], [30, -30], [30, 30], [-30, 30]]
+        pad = [[[-10, -4, 9.97], [10, -4, 9.97], [10, 4, 9.97]], [[-10, -4, 9.97], [10, 4, 9.97], [-10, 4, 9.97]]]
+        wall = [[[20.1, -5, 9.9], [20.1, 5, 9.9], [20.1, 5, 11.]], [[20.1, -5, 9.9], [20.1, 5, 11.], [20.1, -5, 11.]]]
+        entries = [(3, True, [(0, np.array(pad))]), (5, True, [(0, np.array(wall))])]
+        lines = [dict(level="ground", width=8., xy=[[-40., 0.], [40., 0.]])]
+        with tempfile.TemporaryDirectory() as temp:
+            got = audit(Path(temp), quad, terrain, entries, lines, target / "release/roadsys")
+        self.assertTrue(100 < got["double_owner_terrain_m2"] < 200, got)
+        self.assertTrue(3 <= got["parapet_in_cw_m"] <= 8, got)
+        self.assertNotIn("handover_lip_over_5mm", {k for k, v in got.items() if v})
+
     def test_terrain_parity_and_holes(self):
         terrain = Terrain.__new__(Terrain)
         terrain.origin = np.zeros(2)
