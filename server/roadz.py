@@ -738,6 +738,7 @@ class RoadZ:
         self._lock = threading.Lock()
         self._cell_locks = {}
         self.sheets = hklidar.at(cache_dir, fetcher)     # (Hong Kong's LiDAR sheets: the terrain reads them too)
+        dedom.configure(cache_dir, fetcher)             # (Germany's deck shards: their manifest pinned in the cache)
         self.stats = {"cells": 0, "requests": 0, "bytes": 0, "seconds": 0.0}     # (built here, not read from disk)
         self._raw = OrderedDict()           # (dataset, node) -> its .laz bytes (_node_bytes; RAW_NODES_MB kept)
         self._raw_bytes = 0

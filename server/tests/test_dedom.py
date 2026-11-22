@@ -92,6 +92,88 @@ class ShardTest(unittest.TestCase):
         self.assertEqual(len(got[0]), 0)
 
 
+
+class ManifestTest(unittest.TestCase):
+    """The shards read through the dataset's manifest (pagesdata.Manifest): from its "data" host when it names one,
+    else beside it; none published (404): no samples; unreachable: the cell is built again later."""
+
+    PAGES = "https://pages.test/data"
+
+    def setUp(self):
+        self.addCleanup(self.reset)
+        self.reset()
+        self.shard = dedom.encode(np.array([51.001, 51.002]), np.array([7.001, 7.002]), np.array([60.0, 61.0]),
+                                  np.array([50.0, np.nan]))
+        self.asked = []
+        p = mock.patch.object(dedom.pagesdata, "PAGES", self.PAGES)
+        p.start()
+        self.addCleanup(p.stop)
+
+    @staticmethod
+    def reset():
+        dedom._state.update(cache=None, fetcher=None, pages=None)
+        dedom._shards.clear()
+
+    def serve(self, files):
+        import netfetch
+
+        def fetch(u):
+            self.asked.append(u)
+            got = files.get(u)
+            if isinstance(got, Exception):
+                raise got
+            if got is None:
+                raise netfetch.NotFound(u)
+            return got
+        return fetch
+
+    def manifest(self, **kw):
+        import json
+        return json.dumps(dict({"built": "2026-11-22", "shards": 1}, **kw)).encode()
+
+    def test_shards_from_the_data_host(self):
+        x, y = dedom.tile_of(51.001, 7.001)
+        data = "https://tiles.test/data/dedecks/2026_11_22-abc"
+        fetch = self.serve({f"{self.PAGES}/dedecks/manifest.json": self.manifest(data=data),
+                            f"{data}/{x}/{y}.npz": self.shard})
+        la, lo, dom, dgm = dedom.points(fetch, 51.0, 7.0, 51.01, 7.01)
+        self.assertEqual(len(la), 2)
+        self.assertEqual(sorted(dom.tolist()), [60.0, 61.0])
+        self.assertIn(f"{data}/{x}/{y}.npz", self.asked)
+        self.assertFalse([u for u in self.asked if u.startswith(self.PAGES) and u.endswith(".npz")])
+
+    def test_shards_beside_the_manifest_without_a_data_host(self):
+        x, y = dedom.tile_of(51.001, 7.001)
+        fetch = self.serve({f"{self.PAGES}/dedecks/manifest.json": self.manifest(),
+                            f"{self.PAGES}/dedecks/{x}/{y}.npz": self.shard})
+        self.assertEqual(len(dedom.points(fetch, 51.0, 7.0, 51.01, 7.01)[0]), 2)
+
+    def test_not_published_no_samples(self):
+        fetch = self.serve({})
+        self.assertEqual(len(dedom.points(fetch, 51.0, 7.0, 51.01, 7.01)[0]), 0)
+        self.assertEqual(self.asked, [f"{self.PAGES}/dedecks/manifest.json"])     # (no shard asked for)
+
+    def test_manifest_unreachable_raises(self):
+        import netfetch
+        fetch = self.serve({f"{self.PAGES}/dedecks/manifest.json": netfetch.FetchFailed("504")})
+        with self.assertRaises(netfetch.FetchError):
+            dedom.points(fetch, 51.0, 7.0, 51.01, 7.01)
+        self.assertEqual(dedom._shards, {})         # (nothing kept: the cell is built again later)
+
+    def test_the_manifest_pinned_on_disk(self):
+        x, y = dedom.tile_of(51.001, 7.001)
+        files = {f"{self.PAGES}/dedecks/manifest.json": self.manifest(),
+                 f"{self.PAGES}/dedecks/{x}/{y}.npz": self.shard}
+
+        class Fetcher:
+            def get(_self, u, kind="demand", **_k):
+                return mock.Mock(body=self.serve(files)(u))
+        with tempfile.TemporaryDirectory() as d:
+            dedom.configure(d, Fetcher())
+            self.assertEqual(len(dedom.points(self.serve(files), 51.0, 7.0, 51.01, 7.01)[0]), 2)
+            self.assertTrue(os.path.exists(os.path.join(d, "pagesdata", "dedecks", "manifest.json")))
+            self.reset()
+
 @unittest.skipUnless(NATIVE, "earthfast with the lidar kernels")
 class CellTest(unittest.TestCase):
     """A 120 m bridge over a road in a cell of NRW: the surface model's deck 6.3 m over flat ground at 50 m (the DGM

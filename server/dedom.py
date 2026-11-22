@@ -3,9 +3,12 @@ models (DGM, decks removed) read as height samples along each bridge, for roadz.
 gap / approach measuring, the stacked-deck guard in roads.BridgeProfiles._observed).
 
 The samples are made once, offline (tools/build_de_decks.py, on the build machine: never by a player's game, GitHub
-#1079), and served as shards of a z10 tile like the other German data: <PAGES>/dedecks/<x>/<y>.npz, each sample's
-position, its DOM height and (every DGM_EVERY-th) its DGM height. The game reads only the shards; BNE_DE_DECKS_DIR
-reads a local folder of them instead.
+#1079), and served as shards of a z10 tile like the other German data: dedecks/<x>/<y>.npz, each sample's position,
+its DOM height and (every DGM_EVERY-th) its DGM height. The game reads only the shards, through the dataset's manifest
+<PAGES>/dedecks/manifest.json (pagesdata.Manifest: pinned on disk, fetched once): the shards come from the host its
+"data" names (the data repo's workflow puts them on the tile host only: ~645 MB would push the Pages site past its
+1 GB limit), else beside the manifest. No manifest published (404): no samples, the inference stands.
+BNE_DE_DECKS_DIR reads a local folder of shards instead.
 
 Overture and OSM give a bridge's order (layer) but no height, and the inference assumed 6 m of clearance; Germany's
 standard is 4.70 m. Where a state serves its DOM and DGM as an open WCS (a subset of any box, no key), every road
@@ -21,6 +24,7 @@ import io
 import math
 import os
 import threading
+import types
 import zipfile
 from collections import OrderedDict
 
@@ -28,6 +32,7 @@ import numpy as np
 
 import dmath
 import dnp
+import pagesdata
 
 SAMPLE_M = 1.0              # m between a deck's samples, along and across (the DOMs' own 1 m grid)
 PAD_M = 2.0                 # m the box of a request reaches past its samples
@@ -36,6 +41,7 @@ ZOOM = 10                   # the shards' tiles (~25 km)
 DGM_EVERY = 4               # every this many samples keep their DGM height (the datum needs a few thousand a cell)
 NO_Z = -(1 << 31)           # a shard's height for none (cm)
 LOCAL_ENV = "BNE_DE_DECKS_DIR"
+NAME = "dedecks"            # the dataset's folder on the data site (its manifest.json; the shards beside or on "data")
 
 # The states whose surface model is open: a box round each (south, west, north, east; the game reads the shards there,
 # a point in the box but outside the state finds none), its UTM zone (EPSG 25832 / 25833 = zone 32 / 33), the credit
@@ -203,6 +209,60 @@ def grid_along(xy, half, step=SAMPLE_M):
 # ---- the shards ----
 _lock = threading.Lock()
 _shards = OrderedDict()     # (x, y) -> decoded
+_state = {"cache": None, "fetcher": None, "pages": None}
+
+
+def configure(cache_dir, fetcher):
+    """The server's cache folder and fetcher (roadz.RoadZ: MapData's) for the dataset's manifest, pinned in
+    <cache_dir>/pagesdata/dedecks. The first fetcher given is kept; without one the manifest is read through the
+    fetch a caller of points() passes."""
+    with _lock:
+        if _state["fetcher"] is None and fetcher is not None:
+            _state["cache"], _state["fetcher"], _state["pages"] = cache_dir, fetcher, None
+            _shards.clear()
+
+
+class _Via:
+    """pagesdata's fetcher (.get(url, kind).body) over a caller's fetch(url) -> bytes (roadz's lane and stats)."""
+
+    def __init__(self, fetch):
+        self._fetch = fetch
+
+    def get(self, url, kind="demand", **_kw):
+        return types.SimpleNamespace(body=self._fetch(url))
+
+
+def _changed():
+    """Another build is in use (called under the Manifest's lock): the shards decoded before are not it."""
+    with _lock:
+        _shards.clear()
+
+
+def manifest(fetch=None):
+    """The dataset's pagesdata.Manifest, made on the first ask. Once one is in use this run keeps it (recheck=False:
+    every cell measured in a run reads the same build)."""
+    with _lock:
+        got = _state["pages"]
+        if got is None:
+            fx = _state["fetcher"] or (_Via(fetch) if fetch is not None else None)
+            got = _state["pages"] = pagesdata.Manifest(_state["cache"], fx, NAME, retry_s=pagesdata.RETRY_S,
+                                                       recheck=False, on_change=_changed)
+        return got
+
+
+def _remote(fetch, x, y):
+    """Tile (x, y)'s shard bytes (b"": none there) of the build the manifest names, from its "data" host else beside
+    it (pagesdata.fetch_data); raises when the manifest or the shard cannot be had (not a 404)."""
+    import netfetch
+    pages = manifest(fetch)
+    if pages.current() is None:
+        if pages.missing:
+            return b""              # (not published: no samples, the inference stands)
+        raise netfetch.FetchFailed(f"{NAME}: no manifest reachable")
+    try:
+        return pagesdata.fetch_data(_Via(fetch), pages.data, pages.base, f"{x}/{y}.npz")
+    except netfetch.NotFound:
+        return b""
 
 
 def tile_of(lat, lon, zoom=ZOOM):
@@ -248,8 +308,9 @@ def decode(body):
 
 
 def shard(fetch, x, y):
-    """Tile (x, y)'s samples ({} none there). fetch(url) -> bytes, raising netfetch.NotFound where the site has none
-    (anything else it raises goes to the caller: the cell is then built again later)."""
+    """Tile (x, y)'s samples ({} none there). fetch(url) -> bytes, raising netfetch.NotFound where the host has none
+    (anything else it raises goes to the caller, and a manifest that cannot be had raises: the cell is then built
+    again later). The shard's file is the manifest's build's (_remote)."""
     with _lock:
         got = _shards.get((x, y))
     if got is not None:
@@ -262,12 +323,7 @@ def shard(fetch, x, y):
             with open(p, "rb") as fh:
                 body = fh.read()
     else:
-        import netfetch
-        import railtags
-        try:
-            body = fetch(f"{railtags.PAGES}/dedecks/{x}/{y}.npz")
-        except netfetch.NotFound:
-            body = b""
+        body = _remote(fetch, x, y)
     got = decode(body)
     with _lock:
         _shards[(x, y)] = got
