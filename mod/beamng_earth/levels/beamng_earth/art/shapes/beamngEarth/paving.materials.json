@@ -1,0 +1,29 @@
+{
+  "bne_yellow_paving": {
+    "name": "bne_yellow_paving",
+    "mapTo": "bne_yellow_paving",
+    "class": "Material",
+    "persistentId": "b1e0d002-0001-4a11-9c01-0000000000b9",
+    "Stages": [
+      {
+        "colorMap": "/assets/materials/tileable/stone/italy_cobblestone/italy_cobblestone_d.dds",
+        "detailNormalMapStrength": 0.5,
+        "detailScale": [0.4, 0.4],
+        "diffuseColor": [1.0, 0.80, 0.38, 1],
+        "normalMap": "/assets/materials/tileable/stone/italy_cobblestone/italy_cobblestone_n.dds",
+        "specular": [0.996078, 0.996078, 0.996078, 1],
+        "specularMap": "/assets/materials/tileable/stone/italy_cobblestone/italy_cobblestone_s.dds",
+        "specularPower": 19,
+        "useAnisotropic": true,
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "COBBLESTONE",
+    "materialTag0": "beamng",
+    "specularStrength0": "0.490196",
+    "translucentBlendOp": "None"
+  }
+}

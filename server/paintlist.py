@@ -512,7 +512,7 @@ def _build_roads(s, g, omit_v3=False):
                     continue
                 if omit_v3 and roadsurf3.replaces_ground_paint(sp):
                     continue
-                kname = "concrete" if sp.kind == "paved" and sp.surf == "concrete" else sp.kind
+                kname = sf.photo_kind(sp)     # (concrete, Sofia's yellow paving: surface.photo_kind)
                 seen.add(fid)
                 m = sp.width / 2
                 if box[i, 1] < g[0] - m or box[i, 0] > g[2] + m or box[i, 3] < g[1] - m or box[i, 2] > g[3] + m:

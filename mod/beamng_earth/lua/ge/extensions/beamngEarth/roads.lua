@@ -40,6 +40,7 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json',  -- buildings (server/buildings.py)
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/dirtroad.materials.json',   -- dirt / gravel strips (roads.DIRT_LOOK)
+  '/levels/beamng_earth/art/shapes/beamngEarth/paving.materials.json',     -- Sofia's yellow paving (roads.YELLOW_PAVING)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadwear.materials.json',   -- road wear and spots (server roadwear.py)
   -- highway signs (server/signstream.py: exit and overhead panels, mile markers, merge warnings)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit.materials.json',
@@ -272,12 +273,12 @@ end
 -- drawn first, always, and the translucent lines, crossings and gutters over it.
 -- The dirt and gravel strips stay translucent (dirtroad.materials.json, from PR #455): an opacity map on their second
 -- uv fades their sides and open ends into the ground; the server lists them first in a road mesh, the lines over them.
-M.OPAQUE = { 'road_asphalt_2lane', 'italy_cobblestone' }
+M.OPAQUE = { 'road_asphalt_2lane', 'italy_cobblestone', 'bne_yellow_paving' }
 -- The opaque road surfaces cast no sun shadow (from Madderose's PR #41). Translucent, as the stock decal materials are,
 -- they drew none; made opaque (above) they joined the shadow pass: every road tile's mesh drawn into each shadow
 -- cascade every frame (the tiles are dynamic TSStatics, no cached shadow map), for a shadow that fell under the road
 -- itself. The decks' slabs, the curbs and the sidewalks keep theirs.
-M.NO_SHADOW = { 'road_asphalt_2lane', 'italy_cobblestone', 'm_gm_concrete_plain' }
+M.NO_SHADOW = { 'road_asphalt_2lane', 'italy_cobblestone', 'm_gm_concrete_plain', 'bne_yellow_paving' }
 
 function M.loadWalkMaterials(walk)
   if type(walk) == 'table' and walk.townBrick and not M.townBrickLoaded then

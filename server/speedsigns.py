@@ -32,7 +32,11 @@ RANK = {"motorway": 7, "trunk": 6, "primary": 5, "secondary": 4, "tertiary": 3, 
 MARGIN_M = 900.0                # the roads this far round a tile: its junctions and the nearby signs that thin it out
 REPEAT_M = (1609.344, 3218.688)  # a reminder about every mile in town and every two out of it (PR #363's 2 miles)
 CELL_FRAMES = 4                 # anchors a cell keeps its rows for
-STYLE_MUTCD, STYLE_VIENNA, STYLE_CANADA, STYLE_SWEDEN = 0, 1, 2, 3     # (the kernels draw STYLE_SWEDEN as STYLE_VIENNA)
+STYLE_MUTCD, STYLE_VIENNA, STYLE_CANADA, STYLE_SWEDEN, STYLE_BULGARIA = 0, 1, 2, 3, 4
+# (the kernels draw STYLE_SWEDEN and STYLE_BULGARIA as STYLE_VIENNA: Bulgaria's В26 is the Vienna sign, a white disc,
+# a red ring and black figures, Наредба № РД-02-21-1 от 2023 чл. 66 (1) and annex 3; its own face only carries the
+# country to navgraph.road_mph, whose legal defaults the signs show)
+FACE_COUNTRY = {STYLE_SWEDEN: "SE", STYLE_BULGARIA: "BG"}
 # speed_sign_mesh's material indices: white, red, metal, lettering, black (exit.materials.json's)
 MATERIALS = ['bne_exit_white', 'bne_guide_red', 'bne_exit_metal', 'bne_guide_letters_black', 'bne_guide_black']
 # C31 (sweden_mesh): Transportstyrelsen's artwork of the sign, tools/build_swedish_signs.py's sheet of 4 x 4 cells of
@@ -65,10 +69,11 @@ def posted(mph_value, mph=True, face=STYLE_VIENNA):
 
 
 def style(country, us):
-    """The sign face: MUTCD where a US state is (signstates), Canada's Rb-1, Sweden's C31, else the Vienna's."""
+    """The sign face: MUTCD where a US state is (signstates), Canada's Rb-1, Sweden's C31, Bulgaria's В26 (drawn as
+    the Vienna's), else the Vienna's."""
     if us:
         return STYLE_MUTCD
-    return {"CA": STYLE_CANADA, "SE": STYLE_SWEDEN}.get((country or "").upper(), STYLE_VIENNA)
+    return {"CA": STYLE_CANADA, "SE": STYLE_SWEDEN, "BG": STYLE_BULGARIA}.get((country or "").upper(), STYLE_VIENNA)
 
 
 def _limits(feats, i, spec, mph, face):
@@ -82,7 +87,7 @@ def _limits(feats, i, spec, mph, face):
                     cuts.add(round(f, 6))
     cuts = sorted(cuts) + [1.0]
     out = []
-    country = "SE" if face == STYLE_SWEDEN else None
+    country = FACE_COUNTRY.get(face)
     for a, b in zip(cuts[:-1], cuts[1:]):
         v = posted(navgraph.road_mph(feats, i, spec, mph, at=(a + b) / 2, country=country), mph, face)
         if not out or out[-1][1] != v:
@@ -225,7 +230,7 @@ def place(frame, box, context, left_hand=False, mph=True, face=STYLE_VIENNA):
 
 
 def _kernel_style(face):
-    return STYLE_VIENNA if face == STYLE_SWEDEN else int(face)
+    return STYLE_VIENNA if face in FACE_COUNTRY else int(face)
 
 
 @lru_cache(maxsize=1)

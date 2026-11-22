@@ -179,6 +179,8 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'usgs3dep_index.json.gz')}{SEP}.",     # (roadz.LIDAR_INDEX_PATH)
            # the highway signs' lettering metrics and US state outlines (exitsigns.GLYPHS, signstates.DATA)
            "--add-data", f"{os.path.join(server, 'sign_glyphs.json')}{SEP}.",
+           "--add-data", f"{os.path.join(server, 'bg_sign_glyphs.json')}{SEP}.",     # (bgsigns: Д11 / Д12 lettering)
+           "--add-data", f"{os.path.join(server, 'bg_yellow_paving.json')}{SEP}.",   # (bgpaving: Sofia's yellow paving)
            "--add-data", f"{os.path.join(server, 'search_categories.json')}{SEP}.",     # (geocode.CATEGORIES)
            "--add-data", f"{os.path.join(server, 'sign_states.geojson')}{SEP}.",
            # server/data/ (billboardsource.PATH: the mapped billboards; missing from 1.8.0's exe, a warning per worker)

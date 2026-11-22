@@ -505,5 +505,32 @@
     "alphaTest": true,
     "alphaRef": 64,
     "translucent": false
+  },
+  "bne_bg_letters_black": {
+    "name": "bne_bg_letters_black",
+    "mapTo": "bne_bg_letters_black",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.008,
+          0.009,
+          0.01,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/roadside/bg_letters_o.data.dds",
+        "opacityFactor": 1.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "alphaTest": true,
+    "alphaRef": 64,
+    "translucent": false
   }
 }

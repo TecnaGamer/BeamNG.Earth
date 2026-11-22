@@ -17,6 +17,7 @@ import time
 
 import numpy as np
 
+import bgsigns
 import highwaysigns
 import mergesigns
 import roadmesh
@@ -90,6 +91,9 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
     german = _german(source, frame, tx, ty)
     autobahn = _autobahn(md, frame, tx, ty, elev, context, left_hand) if german else None
     speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us), dej, towns)
+    if str(country or '').upper() in bgsigns.COUNTRIES:      # (Bulgaria's С7, and its Д11 / Д12 unless the town signs
+        # (townentry, Settings > World > Town signs) are on: they sign the same town edges)
+        speeds = bgsigns.merge(speeds, _bulgaria(md, frame, tx, ty, elev, context, decks, left_hand, towns is None))
     dir_mesh, dir_faces = (_dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, aid,
                                  autobahn=german) if dirs else (None, {}))
     rsign_mesh = _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country) if rsigns else None
@@ -122,6 +126,23 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
 
 
 _warned = -float('inf')
+_bg_warned = -float('inf')
+
+
+def _bulgaria(md, frame, tx, ty, elev, context, decks, left_hand, town_signs=True):
+    """bgsigns.build_tile, or None: optional scenery never stops the other signs. town_signs: the Д11 / Д12 too (not
+    while townentry's town signs are on)."""
+    global _bg_warned
+    try:
+        box = roads.tile_bbox(tx, ty)
+        return bgsigns.build_tile(frame, box, elev, bgsigns.roads_near(frame, box, context, left_hand),
+                                  context.urban, bgsigns.places(md) if town_signs else None, decks)
+    except Exception as error:
+        now = time.monotonic()
+        if now - _bg_warned >= 60.:
+            _bg_warned = now
+            log.warning('Bulgarian signs unavailable; roads continue: %s: %s', type(error).__name__, error)
+        return None
 
 
 def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=False, towns=None):

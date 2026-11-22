@@ -473,8 +473,13 @@ def _corner_mask(feats_list, urban_fn, widths, lonlat_bounds, to_px, shape, grow
 # concrete (a paved road the map says is concrete: surface=concrete / concrete:plates / concrete:lanes): the pale grey
 # of a concrete motorway in the aerials (NAIP, 2026-11-12: I-405 at Sepulveda Pass luma 170-179, I-35E Dallas 162-184,
 # Houston's Katy Freeway 183-200, against Santa Monica Boulevard's asphalt 130-146)
+# yellow_paving: Sofia's yellow bricks (bgpaving.py, a cobble road's Spec.surf: photo_kind), ochre. With the carriageways in
+# the ground their colour is this paint (the cobble layer adds grain): the yellow mesh material (roads.YELLOW_PAVING) is
+# drawn only with BNGE_ROADS_IN_GROUND=0, and the streets were grey cobbles in game (2026-11-05). After paved: the
+# native paint (paintlist.rs PAVED_KIND) expects paved as the fifth kind, and the last kind over a pixel wins, so the
+# yellow bricks run on through a boulevard's junctions with asphalt streets (asphalt wins over every other kind).
 PHOTO_ROAD_RGBA = {"dirt": (112, 92, 68, 0.70), "gravel": (188, 182, 168, 0.5), "cobble": (128, 125, 120, 0.9),
-                   "concrete": (172, 170, 164, 1.0), "paved": (95, 95, 94, 1.0)}
+                   "concrete": (172, 170, 164, 1.0), "paved": (95, 95, 94, 1.0), "yellow_paving": (178, 150, 72, 0.9)}
 # The painted roads in the photo's own tone (earthfast.paint_lines_toned; the user, 2026-11-11: "look into other ways to
 # get the ground collor, and material to be right" -> "start with 1"): a kind's colour at a pixel is the mean of the
 # photo's pavement under it within PHOTO_TONE_RADIUS_M (markings over the sample luma, shadow under it, greenery and
@@ -499,10 +504,23 @@ PHOTO_ROAD_TONE = {"dirt": (70.0, 150.0, 0.45, 0.6, 12.0, 0.0, 0.0, 0.0, 0.0),
                    "gravel": (110.0, 190.0, 0.30, 0.6, 12.0, 0.0, 0.0, 0.0, 0.0),
                    "cobble": (80.0, 150.0, 0.22, 0.75, 12.0, 0.0, 0.0, 0.0, 0.0),
                    "concrete": (70.0, 205.0, 0.12, 0.8, 12.0, 215.0, 0.0, 0.0, 0.0),
-                   "paved": (55.0, 135.0, 0.14, 0.75, 12.0, 215.0, 150.0, 205.0, 0.11)}
+                   "paved": (55.0, 135.0, 0.14, 0.75, 12.0, 215.0, 150.0, 205.0, 0.11),
+                   # (yellow paving: the photo's bricks may stay ochre, saturation up to 0.45, and the flat ochre keeps
+                   # more of the say than cobble's grey does: the yellow must read as yellow)
+                   "yellow_paving": (80.0, 170.0, 0.45, 0.4, 12.0, 0.0, 0.0, 0.0, 0.0)}
 PHOTO_ROADS_MAX_TEXEL = 2.0     # m per texel: coarser far tiles keep the photo's own roads (far, under a pixel wide)
 PHOTO_ROAD_EDGE_M = 0.2         # m the photo's asphalt reaches past the drawn edge, under the edge decal's inner sliver (its
                                 # antialiased rim left a pale hair between the edge line and the decal)
+
+
+def photo_kind(spec):
+    """spec's PHOTO_ROAD_RGBA key: its kind, "concrete" for a paved road the map says is concrete, "yellow_paving" for
+    Sofia's yellow bricks (roads.YELLOW_SURF)."""
+    if spec.kind == "paved" and spec.surf == "concrete":
+        return "concrete"
+    if spec.kind == "cobble" and spec.surf == roadsmod.YELLOW_SURF:
+        return "yellow_paving"
+    return spec.kind
 
 
 def _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn=None, widths=None, roads_of=None, omit_v3=False):
@@ -991,7 +1009,7 @@ def _square_pads(frame, x0, y0, size, surface):
 # (farfield.NEAR_MASK_PX; the GPU has room, the CPU less, the user 2026-10-22); the mod's material gives the masked
 # part a second layer of the stock asphalt (its colour, grain and bumps, world-locked; satmat.lua), the rest the photo.
 ROAD_MASK_MAX_TEXEL = 1.0       # m per texel of the mask
-ROAD_MASK_KINDS = ("paved", "cobble", "concrete")
+ROAD_MASK_KINDS = ("paved", "cobble", "concrete", "yellow_paving")
 
 
 def road_mask_name(texture):

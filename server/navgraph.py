@@ -47,9 +47,12 @@ KMH_DEFAULT = {"motorway": 120, "trunk": 100, "primary": 80, "secondary": 70}
 # primary's 35 mph cap 55 too (the player's report KK25CFD8, 2026-11-18: "there is no 55 in Germany")
 URBAN_KMH_CAP = {"primary": 50, "secondary": 50, "tertiary": 50}
 KMH_STEP = 10
-# Sweden's limits by law where no sign says otherwise, whatever the class: 50 km/h in a built-up area, 70 outside it
-# (bashastighet, Trafikförordningen 1998:1276 3 kap. 17 §), 110 on a motorway (9 kap. 1 §). Slower classes as above.
-SE_ROADS = {"trunk", "primary", "secondary", "tertiary", "unclassified", "residential"}
+# Limits by law where no sign says otherwise, whatever the class: (built-up area, outside it, motorway) km/h, on
+# LEGAL_ROADS (slower classes as above). Sweden: 50 / 70 (bashastighet, Trafikförordningen 1998:1276 3 kap. 17 §), 110 on a
+# motorway (9 kap. 1 §). Bulgaria: 50 / 90 / 140 for cars (Закон за движението по пътищата чл. 21 (1), as amended by ДВ
+# 64/2025); its 120 on an expressway (скоростен път) is not here: Overture's classes do not tell one from a trunk road.
+LEGAL_KMH = {"SE": (50.0, 70.0, 110.0), "BG": (50.0, 90.0, 140.0)}
+LEGAL_ROADS = {"trunk", "primary", "secondary", "tertiary", "unclassified", "residential"}
 MPH = 0.44704
 LANE_W_M = 3.3
 SIMPLIFY_M = 0.6            # a shape point is kept where the chord would be off by more than this
@@ -246,10 +249,11 @@ def road_mph(feats, i, spec, mph=True, at=0.5, country=None, de_on=False):
             return float(US_MOTORWAY_MPH[state][1 if spec.urban and city else 0])
     if country == "US" and not spec.urban and spec.cls in US_RURAL_MPH and not getattr(spec, "link", False):
         return float(US_RURAL_MPH[spec.cls])
-    if country == "SE" and spec.cls == "motorway":
-        return 110.0 / 1.609344
-    if country == "SE" and spec.cls in SE_ROADS:
-        return (50.0 if spec.urban else 70.0) / 1.609344
+    legal = LEGAL_KMH.get(country)
+    if legal is not None and spec.cls == "motorway":
+        return legal[2] / 1.609344
+    if legal is not None and spec.cls in LEGAL_ROADS:
+        return (legal[0] if spec.urban else legal[1]) / 1.609344
     if not mph:
         return kmh_default(spec.cls, spec.urban) / 1.609344
     v = DRIVE[spec.cls][1]

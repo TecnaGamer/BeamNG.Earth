@@ -62,6 +62,8 @@ def materials():
     # the highway signs' (signstream.py)
     out |= set(exitsigns.GUIDE_MATERIALS) | set(milemarkers.MATERIALS) | set(mergesigns.MATERIALS)
     out |= set(speedsigns.MATERIALS)
+    import bgsigns
+    out |= set(bgsigns.MATERIALS)               # (Bulgaria's С7 and Д11 / Д12, in the speed signs' mesh)
     for mod in (roads, roadmesh, junctions, airportgrade):
         for name, v in vars(mod).items():
             if name.isupper():
