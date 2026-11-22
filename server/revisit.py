@@ -392,9 +392,6 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 "BNE_TELEMETRY",
                 "BNE_ROADSHAPE_DEBUG",      # (v2 P2a's fork records written beside the build: nothing built reads them)
                 "BNE_ROADSURF_V3_DEBUG",    # (v3 S1's lane graphs written beside the build: nothing built reads them)
-                "BNE_ROADSYS",              # (shadow, the road rewrite's M1: built again in the background and logged;
-                                            # nothing built or delivered reads it. Its later stages change output:
-                                            # they leave this list, keyed as build switches, in the commit that does)
                 # (which process makes a cell's plans and road stage: the same plans, earthd.Server.plan_first,
                 # plancache's stage_*)
                 "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE",
@@ -414,8 +411,17 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
 OUTPUT_ENV = ("BNGE_ONEWAY_JOINS", "BNGE_ROADS_IN_GROUND")
 
 
+# A switch keyed by its value: BNE_ROADSYS (the road rewrite) at off or shadow (M1: built again in the background and
+# logged; nothing built or delivered reads it) changes no output and is no build switch; at heights (M2: today's deck
+# builder and grading take its one profile per carriageway) and every later stage it is one (the tiles', plans' and
+# facts' keys: switches_key, plans_switches_key; its version in SWITCH_VERSIONS).
+UNKEYED_VALUES = {"BNE_ROADSYS": ("", "off", "shadow")}
+
+
 def keyed_env(k):
     """Is environment variable k part of the build switches' hash (code_key, switches_key)?"""
+    if k in UNKEYED_VALUES:
+        return os.environ.get(k, "").strip().lower() not in UNKEYED_VALUES[k]
     return (k.startswith("BNE_") and k not in NOT_SWITCHES) or k in OUTPUT_ENV
 
 
@@ -466,9 +472,11 @@ def keyed_env(k):
 # (deck_trim_coplanar); a branch's surface in its union laid on the through deck's; union decks' rows unsimplified.
 # BNE_ROADSHAPE 10 and BNE_ROADSURF_V3=surface 8 (2026-11-22): the fork records' and the v3 lane graph's segment
 # windows never hold a road both whole and as its lane sections (roadshape.whole_or_sections).
+# BNE_ROADSYS 1 (heights, M2, 2026-11-22): the one profile per carriageway in today's decks and as the plans' terrain
+# targets (roads.BridgeProfiles._chain_solve, roadsys.chain_heights; earthfast 600).
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1}
+                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 1}
 
 
 def keyed_value(k, v):

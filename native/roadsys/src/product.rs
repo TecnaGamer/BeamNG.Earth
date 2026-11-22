@@ -25,7 +25,7 @@ use crate::tile;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-pub const PIECE_FORMAT: u64 = 1;
+pub const PIECE_FORMAT: u64 = 2;       // 2 (M2): the profiles of QP_FORMAT 2, whole components read
 pub const HALO_M: f64 = 920.0;
 pub const NEAR_M: f64 = 60.0;
 pub const PROF_HALO_M: f64 = 30.0;
@@ -99,7 +99,10 @@ pub fn stroke_boxes(line: &[P2], halo: f64) -> Vec<[f64; 4]> {
 /// profiles solved).
 pub struct Deps { pub d: Vec<bool>, pub full: Vec<bool>, pub prog: Vec<bool>, pub prof: Vec<bool> }
 
-pub fn deps(net: &Net, lay: &part::Layout, plan: &prof::Plan, d: &[bool]) -> Deps {
+pub fn deps(net: &Net, lay: &part::Layout, plan: &prof::Plan, d: &[bool]) -> Deps { deps_f(net, lay, plan, d, false) }
+
+/// deps(); field: the profiles come from the profile squares (square.rs), so no component is read: prof stays empty.
+pub fn deps_f(net: &Net, lay: &part::Layout, plan: &prof::Plan, d: &[bool], field: bool) -> Deps {
     let ns = net.strokes.len();
     let mut ends: Vec<Vec<usize>> = vec![Vec::new(); net.nodes.len()];
     for (si, st) in net.strokes.iter().enumerate() { ends[st.n0].push(si); ends[st.n1].push(si); }
@@ -145,18 +148,24 @@ pub fn deps(net: &Net, lay: &part::Layout, plan: &prof::Plan, d: &[bool]) -> Dep
     }
     snaps(&mut full);
     for si in 0..ns { if full[si] { prog[si] = false; } }
+    if field {
+        let base: Vec<bool> = (0..ns).map(|si| full[si] || prog[si]).collect();
+        for si in 0..ns { if base[si] { for &o in &net.strokes[si].cap_nbrs { if !full[o] { prog[o] = true; } } } }
+        return Deps { d: d.to_vec(), full, prog, prof: vec![false; ns] };
+    }
     let base: Vec<bool> = (0..ns).map(|si| full[si] || prog[si]).collect();
     for si in 0..ns { if base[si] { for &o in &net.strokes[si].cap_nbrs { if !full[o] { prog[o] = true; } } } }
     // vertical components: every member of a component with a section of a full stroke, their crossing partners'
     // components, and the snap trunks of all of them (Tier A pins)
+    // (whole components, before their split: the split is a rule on all of a component, prof::split_components)
     let comps_of = |set: &[bool]| -> BTreeSet<usize> {
         let mut c = BTreeSet::new();
-        for si in 0..ns { if set[si] { for &k in &plan.sec_of[si] { c.insert(plan.root[k]); } } }
+        for si in 0..ns { if set[si] { for &k in &plan.sec_of[si] { c.insert(plan.full_root[k]); } } }
         c
     };
     let mut pr = full.clone();
     let cs = comps_of(&pr);
-    for (k, sec) in plan.secs.iter().enumerate() { if cs.contains(&plan.root[k]) { pr[sec.si] = true; } }
+    for (k, sec) in plan.secs.iter().enumerate() { if cs.contains(&plan.full_root[k]) { pr[sec.si] = true; } }
     // a floor whose coupling the cap left out is enforced against the lower road's Tier A: that road too
     let mut partners = Vec::new();
     for (k, c) in plan.cpl.iter().enumerate() {
@@ -180,14 +189,17 @@ pub fn delivered(net: &Net, bx: [f64; 4]) -> Vec<bool> {
 pub struct Reads { pub boxes: Vec<[f64; 4]>, pub fids: Vec<String>, pub counts: [usize; 4], pub cpu: f64 }
 
 /// The read list of the tile whose box (in the frame) is bx, from the segments read so far.
-pub fn reads(place: &Place, bx: [f64; 4], opts: Opts) -> Reads {
+pub fn reads(place: &Place, bx: [f64; 4], opts: Opts) -> Reads { reads_f(place, bx, opts, false) }
+
+/// reads() with the profiles from the squares (deps_f field): the tile's lane graph alone.
+pub fn reads_f(place: &Place, bx: [f64; 4], opts: Opts, field: bool) -> Reads {
     let t0 = crate::cpu_now();
     let order: Vec<usize> = (0..place.segs.len()).collect();
     let mut net = net::build_opts(place, &order, opts);
     let lay = part::layout(&mut net);
     let plan = prof::plan(&net, None);
     let d = delivered(&net, bx);
-    let dp = deps(&net, &lay, &plan, &d);
+    let dp = deps_f(&net, &lay, &plan, &d, field);
     let mut boxes = Vec::new();
     let mut fids: BTreeSet<String> = BTreeSet::new();
     let mut counts = [0usize; 4];
@@ -228,6 +240,17 @@ fn hex(v: u64) -> String { format!("{:016x}", v) }
 /// frame, counter-clockwise; id: its label in the bytes; frame: the frame's identity (in every key); g_of: ground
 /// heights at points.
 pub fn build(place: &Place, quad: [[f64; 2]; 4], id: (i32, i32), frame: u64, g_of: &dyn Fn(&[P2]) -> Vec<f64>, opts: Opts) -> Out {
+    build_f(place, quad, id, frame, g_of, None, opts)
+}
+
+/// The profile squares' field for a tile: (z_of(points, tangents, map features) -> heights, NaN where no square holds
+/// the road; the digest of the squares it reads).
+pub type Field<'a> = (&'a (dyn Fn(&[P2], &[P2], &[String]) -> Vec<f64> + Sync), u64);
+
+/// build() with its profiles from the squares where they hold the road (every stroke with a Tier B section), the
+/// rest its own Tier A (reads_f: no component read).
+pub fn build_f(place: &Place, quad: [[f64; 2]; 4], id: (i32, i32), frame: u64, g_of: &dyn Fn(&[P2]) -> Vec<f64>,
+               field: Option<Field>, opts: Opts) -> Out {
     let t0 = crate::cpu_now();
     let order: Vec<usize> = (0..place.segs.len()).collect();
     let mut net = net::build_opts(place, &order, opts);
@@ -238,11 +261,32 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], id: (i32, i32), frame: u64, g_o
     let q = tile::Quad { c: [mm2(quad[0]), mm2(quad[1]), mm2(quad[2]), mm2(quad[3])] };
     let bxf = bbox_of(&quad);
     let d = delivered(&net, bxf);
-    let dp = deps(&net, &lay, &plan, &d);
+    let dp = deps_f(&net, &lay, &plan, &d, field.is_some());
     let ns = net.strokes.len();
     let need: Vec<bool> = (0..ns).map(|si| dp.full[si] || dp.prof[si]).collect();
     let t3 = crate::cpu_now();
-    let pr = prof::solve(&net, g_of, Some(&need));
+    let mut pr = prof::solve(&net, g_of, Some(&need));
+    if let Some((z_of, fkey)) = field {
+        // every needed stroke's knots from the squares where they hold it (their Tier B and Tier A), else its own
+        let (mut pts, mut tans, mut feats, mut at): (Vec<P2>, Vec<P2>, Vec<String>, Vec<(usize, usize)>) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for si in 0..ns {
+            if !need[si] || pr.z[si].is_empty() { continue; }
+            let st = &net.strokes[si];
+            for i in 0..pr.z[si].len() {
+                let s = (i as f64 * pr.h[si]).min(st.len());
+                let (p, t) = st.line.at(s);
+                let part = st.parts.iter().find(|q| s >= q.s0 - 1e-6 && s <= q.s1 + 1e-6).unwrap_or(&st.parts[0]);
+                pts.push(p);
+                tans.push(t);
+                feats.push(crate::square::feature_of(&net.segs[net.edges[part.edge].seg].fid).to_string());
+                at.push((si, i));
+            }
+        }
+        let z = z_of(&pts, &tans, &feats);
+        let mut from: BTreeSet<usize> = BTreeSet::new();
+        for (k, &(si, i)) in at.iter().enumerate() { if z.get(k).map(|v| v.is_finite()).unwrap_or(false) { pr.z[si][i] = z[k]; from.insert(si); } }
+        for si in from { pr.keys[si] = net::uid_of("field", &[pr.keys[si], fkey]); }
+    }
     let t4 = crate::cpu_now();
     let built = part::mesh(&net, &lay, &pr, Some(&d));
     let t5 = crate::cpu_now();
@@ -264,7 +308,7 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], id: (i32, i32), frame: u64, g_o
         if !d[si] || net.strokes[si].absorbed { continue; }
         let mut one = vec![false; ns];
         one[si] = true;
-        let ds = deps(&net, &lay, &plan, &one);
+        let ds = deps_f(&net, &lay, &plan, &one, field.is_some());
         let mut bxs: Vec<[f64; 4]> = Vec::new();
         let mut pk: Vec<u64> = Vec::new();
         for o in 0..ns {

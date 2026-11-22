@@ -112,8 +112,12 @@ def plans_format():
     ds = f".ds{revisit.SWITCH_VERSIONS['BNE_DECK_STRUCT']}" if structures.ABUT else ""
     import roadshape
     profile = ".s4v3" if roadshape.SURFACE_PROFILE else ""
+    # (BNE_ROADSYS=heights, the road rewrite's M2: the plans' second stage from its terrain targets, the decks from its
+    # profiles: keyed by the switch too, its own suffix as the other plan-changing modes have)
+    import roadsys
+    rs = f".rsh{revisit.SWITCH_VERSIONS['BNE_ROADSYS']}" if roadsys.HEIGHTS else ""
     return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + profile + (".gg1" if grading.GUARD_ON else "") + ds \
-        + (".bv3" if grading.BATTER_ON else "")
+        + (".bv3" if grading.BATTER_ON else "") + rs
 
 
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's

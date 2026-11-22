@@ -2,7 +2,8 @@
 //! G2 support + crossings (net.rs), G3 one profile per carriageway (prof.rs), G4 planar partition (part.rs), markings
 //! (mark.rs), G5-lite derived products (derive.rs), G6 tiles (tile.rs), the sheet's own checks (check.rs), the M0
 //! audit of any built road scene (audit.rs: today's output and the shadow product alike) and the shadow product
-//! (product.rs: per-component builds with declared read lists).
+//! (product.rs: per-component builds with declared read lists) and M2's profile squares for today's deck builder and
+//! grading (square.rs, BNE_ROADSYS=heights).
 //!
 //! Pure Rust, no dependencies: IEEE + - * / and sqrt only (no FMA, no libm), integer-mm topology, BTreeMap only.
 pub mod audit;
@@ -15,6 +16,7 @@ pub mod net;
 pub mod part;
 pub mod prof;
 pub mod product;
+pub mod square;
 pub mod tile;
 
 /// Thread CPU seconds (timings only: nothing built reads them).

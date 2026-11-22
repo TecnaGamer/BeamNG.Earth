@@ -44,6 +44,7 @@ import roadmesh
 import roadsurf
 import roadsmooth
 import roadshape
+import roadsys
 import staging
 import structures
 
@@ -9361,6 +9362,31 @@ class BridgeProfiles:
                     shaped[k] = (v[0], xy, z.view(_SurfaceHeights) if roadshape.SURFACE_PROFILE else z, v[3])
         elif roadshape.SURFACE_PROFILE and reqs is not None and keep and not getattr(self, "PROFILE_OFF", False):
             roadshape.profile_skipped("window" if block is not None else "partial chain")
+        # (BNE_ROADSYS=heights, the road rewrite's M2: a whole chain's decks at the one profile per carriageway, solved
+        # here from its read list (roadsys.chain_heights: the vertical components holding its decks), in place of
+        # deck_profile + _tie_beside; its components' ground runs go to the plans' second stage as terrain targets
+        # (grading.PROFILE_PINS), as P3b's pins do. A deck on no structure stroke: today's heights, the chain's every part)
+        if (roadsys.HEIGHTS and prof is None and self.STRUCTURES and block is None and comp and len(keep) == len(comp)
+                and not getattr(self, "PROFILE_OFF", False)):
+            n0 = short.n
+            try:
+                prof = roadsys.chain_heights(self, list(comp), {k: shaped[k] for k in comp})
+                prof_short = short.n > n0
+            except Exception as ex:
+                prof_short = True
+                with roadsys._memo_lock:
+                    roadsys.STATS["error"] += 1
+                log.debug("chain %s: roadsys heights: %s: %s", key, type(ex).__name__, ex)
+                import revisit
+                revisit.fault(here=True)        # (today's heights here, the profile's elsewhere: not kept)
+                prof = None
+            if prof is not None and any(k not in prof["deck_z"] or len(prof["deck_z"][k]) != len(shaped[k][1])
+                                        or not np.isfinite(prof["deck_z"][k]).all() for k in comp):
+                prof = None
+            if prof is not None:
+                for k in comp:
+                    v = shaped[k]
+                    shaped[k] = (v[0], v[1], np.asarray(prof["deck_z"][k], np.float64), v[3])
         pre = {k: self._precommit(k, shaped[k], ground) for k in keep}
         beams = tpiers = None
         # (BNE_DECK_STRUCT=shadow, road revamp RS: the chain's structure groups as a JSON, from what this solve read

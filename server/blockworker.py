@@ -949,10 +949,9 @@ def _chain_store(name, cls, elev, setup=None):
     BNE_ROADSHAPE=profile (P3b): the road bridges' stores take the plans' FIRST stage (_elev_stage1), whoever asks: the
     second stage is pinned from their solves (_profile_pins)."""
     import roads as roadsmod
-    import roadshape
-    if roadshape.PROFILE_BUILT and name in ("bridges", "nav_bridges") and elev is not None:
+    if _joint_built() and name in ("bridges", "nav_bridges") and elev is not None:
         elev = _elev_stage1
-    elif roadshape.PROFILE_BUILT and cls is roadsmod.BridgeProfiles:
+    elif _joint_built() and cls is roadsmod.BridgeProfiles:
         # (the far tiles' stores, on the raw ground: today's heights, no joint profile; they take the road tiles'
         # chains where solved, ChainView prefer)
         inner = setup
@@ -1070,13 +1069,35 @@ def _bridge_parts_of(feats):
     return out
 
 
+def _joint_built():
+    """Do the road bridges' decks take a joint profile built into them, its terrain targets the plans' second stage
+    (BNE_ROADSHAPE=profile's P3b, or BNE_ROADSYS=heights: the road rewrite's M2)?"""
+    import roadshape
+    import roadsys
+    return roadshape.PROFILE_BUILT or roadsys.HEIGHTS
+
+
+def _roads_cell(key):
+    """Map cell key's roads layer (the road profile squares' reads: the bridge stores' own cell function's)."""
+    return _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+
+
 def _profile_pins(planner, la0, lo0, la1, lo1, pad):
-    """grading.PROFILE_PINS (BNE_ROADSHAPE=profile, P3b): the approach pins of the bridge chains whose parts come within
-    pad + roadshape.PIN_REACH_M of the box, each chain solved (or taken) in this process's bridge store on the plans'
-    first stage, the pins within pad of the box (roadshape.pins_near: sorted by content)."""
+    """grading.PROFILE_PINS (BNE_ROADSHAPE=profile, P3b; BNE_ROADSYS=heights, M2): the approach pins of the bridge
+    chains whose parts come within pad + roadshape.PIN_REACH_M of the box (heights: roadsys.pins_near), each chain solved (or taken) in this process's bridge
+    store on the plans' first stage, the pins within pad of the box (roadshape.pins_near: sorted by content)."""
     import mapcells
     import roads as roadsmod
     import roadshape
+    import roadsys
+    if roadsys.HEIGHTS and not roadshape.PROFILE_BUILT:
+        # (BNE_ROADSYS=heights: the profile squares' terrain targets, by square: no chain is asked)
+        try:
+            return roadsys.pins_near(la0, lo0, la1, lo1, pad, _roads_cell, _elev_stage1)
+        except (netfetch.FetchError, demmod.DemUnavailable):     # (short, not kept)
+            import revisit
+            revisit.fault()
+            return []
     cs = _chain_store("bridges", roadsmod.BridgeProfiles, _elev_stage1, _bridge_setup)
     reach = pad + roadshape.PIN_REACH_M + 10.0
     dla = reach / 110574.0
@@ -1121,8 +1142,7 @@ def _bridges(aid, frame, elev):
     once whatever the anchor: roads.ChainStore)."""
     import roads as roadsmod
     view = roadsmod.ChainView(_chain_store("bridges", roadsmod.BridgeProfiles, elev, _bridge_setup), frame)
-    import roadshape
-    if elev is not None and roadshape.PROFILE_BUILT:
+    if elev is not None and _joint_built():
         view.elev = elev        # (its ground: the caller's, the second stage, not its store's first: the abutments')
     return view
 
@@ -4303,7 +4323,29 @@ base_photo = _accounted(base_photo)
 navgraph = _accounted(navgraph)
 
 
-# (BNE_ROADSHAPE=profile, P3b: the plans' second stage pinned from this process's bridge chains)
+# (BNE_ROADSHAPE=profile, P3b, or BNE_ROADSYS=heights, M2: the plans' second stage pinned from this process's bridge
+# chains; M2's profiles on the plans' own ground, plan_elev)
 import roadshape as _roadshape  # noqa: E402
-if _roadshape.PROFILE_BUILT:
+import roadsys as _roadsys  # noqa: E402
+if _joint_built():
     gradingmod.PROFILE_PINS = _profile_pins
+def _square_disk():
+    """roadsys.DISK: the profile squares kept in the revisit cache (kind "rssq", keyed by the code, the switches and
+    the map data's versions; the square's own name holds its region, square and cells' revisions)."""
+    import revisit
+    if not revisit.ON or getattr(_s, "cache_dir", None) is None:
+        return None
+
+    def load(name):
+        k = revisit.key("rssq", name, _md_versions())
+        got = revisit.load(_s.cache_dir, "rssq", k)
+        return None if got is None else got[0].get("sq")
+
+    def save(name, data):
+        revisit.store(_s.cache_dir, "rssq", revisit.key("rssq", name, _md_versions()), {"sq": data})
+    return load, save
+
+
+if _roadsys.HEIGHTS:
+    _roadsys.GROUND = plan_elev
+    _roadsys.DISK_FN = _square_disk
