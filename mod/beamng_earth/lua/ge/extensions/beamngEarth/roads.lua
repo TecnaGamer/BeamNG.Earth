@@ -2805,8 +2805,9 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   -- (NEED: a fast car's pending colliders wait for their deadline, not for RELOAD_EVERY_S; what else set the flag
   -- (trees, props, deletes near the car) keeps the timer)
   if due and not urgent and M.NEED and lastSpeed >= M.FAST_MS and M.onlyColliderDirt(dirtySrc) then due = false end
-  -- (only late colliders since the last rebuild: each is due by its own distance, M.lateUrgent; no RELOAD_EVERY_S)
-  if due and not urgent and M.onlyLateDirt(dirtySrc) then due = false end
+  -- (only late colliders since the last rebuild, below FAST_MS: each is due by its own distance, M.lateUrgent; no
+  -- RELOAD_EVERY_S. At speed the timer stays: trees.lua's SOLID_LEAD_S counts on it, the late deadline is the backstop)
+  if due and not urgent and lastSpeed < M.FAST_MS and M.onlyLateDirt(dirtySrc) then due = false end
   if due and not holdActive and reloadWaits < M.RELOAD_WAIT_FRAMES and gov.roomFor and not gov:roomFor(M.RELOAD_ROOM_MS) then
     reloadWaits = reloadWaits + 1
     due = false
