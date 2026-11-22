@@ -70,6 +70,7 @@ Each has `check(art, parents) -> [artifacts.Finding]`, where parents is a dict o
 - `bad_dip`: every dip window's member is the lower member of a "down" crossing of the system. Recompute it from
   Order, not from the dips themselves.
 - `bad_chosen`: `chosen` indexes `options`.
+- `bad_track`: every track window's member is a rail or rail deck member, and a member of a crossing of the Order.
 
 **c6 (Heights, parents Order, Datum, Terrain, and Paths through Extent):**
 - `no_heights` (note): the system is not solved. Name the members.
@@ -77,7 +78,7 @@ Each has `check(art, parents) -> [artifacts.Finding]`, where parents is a dict o
 - `clearance` (carried from 3): at every crossing, the upper surface minus the lower is at least `need - 0.05`. The
   upper surface is the z of the piece whose samples cover `(u, su)`; the lower is the piece covering `(d, sd)` if
   there is one, else the height Terrain.fixed holds of that member there (what the solve read of a member the shape does not
-  move: the ground along the road, a track's top); neither held, nothing was asked of the crossing. A `fail` that names the two keys and the metres short.
+  move: the ground along the road, a track's top); neither held, nothing was asked of the crossing; a member Terrain.fixed holds NaN of there (the railways lay no track at that arc) has none to clear, and the crossing is skipped. A `fail` that names the two keys and the metres short.
   Interpolate z along a piece by its `d`, finding the sample by `mem` / `ms`.
 - `joint_step` (carried from 1): at every Join inside the system where both members are in pieces, the two heights
   differ by at most 0.05 m.

@@ -43,6 +43,12 @@ def make_fixed(planner, net):
                        dnp.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
         return float(planner._ground_line(xy)[6]) if len(xy) else None
 
+    def prefetch(asks):
+        """The rails' tops of {member: arcs} read at once (the terrain step's: one read of the railways for every track of the
+        interchange, not one for each question)."""
+        planner._rail_tops_many(net, {i: sv for i, sv in asks.items() if net.m[i].kind in ("rail", "rail_deck")}, rail_tops)
+
+    fixed_z.prefetch = prefetch
     return fixed_z
 
 

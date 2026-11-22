@@ -57,6 +57,7 @@ import gradelaw
 import railways
 
 STEP_M = 4.0                # m between a deck's or a dip's samples
+CUT_MIN_M = 0.05            # m: a join's arc this near a sample is that sample
 SEGMENT_STEP_ON = os.environ.get("BNE_SEGMENT_STEP", "1").strip().lower() not in ("0", "off", "no", "false")
 JOIN_M = 2.5                # m: two parts' ends (or an end and another's line) this close meet there
 CROSS_END_M = 2.0           # m: a crossing this near either part's end is a joint, not a separation
@@ -94,6 +95,13 @@ CLEAR_PATH_M = 3.0          # m: a path's headroom (no vehicle on it)
 W_END = 1.0                 # a system end's embankment (per m, squared)
 W_HOLD = 100.0              # a short deck chain (a road dug under it) at its ground
 W_DIP = 0.5                 # a road's dip under its crossing
+RAILS = ("rail", "rail_deck")
+# A track held at the bed the railways lay (its distance from it, per sample, squared). What moving a way costs is the earth,
+# and findground's law has it as the run of its ramp, lack / grade (findground.dip_run): a way that may climb only at a
+# track's grade runs longer for the same move than any road, by the ratio of their grades. The cheapest way to move is the
+# steepest road the laws allow (gradelaw: a link in a village, 17 %), a track's grade is railways.GRADE: so a track costs
+# that ratio times a road's dip to move, the least it can cost, and it moves only where nothing cheaper closes the conflict.
+W_TRACK = W_DIP * gradelaw.road_grade("service", 20) / railways.GRADE
 W_SMOOTH = 0.2
 W_STIFF = 3.0e3             # a deck's line (per sample, squared: its bends), see _solve_shape_qp
 W_JOIN = 300.0
@@ -1219,9 +1227,31 @@ def _system(net, seeds, rel, dig):
             else:
                 cur.append([a, b])
         dips += [(d, float(a), float(b)) for a, b in cur]
+    # the tracks the interchange crosses: a track is a member of it as a road going under is, solved with the roads, held at the
+    # bed the railways lay (W_TRACK) over a window: the stretch under each crossing and what a track needs to leave its bed and
+    # come back to it at its grade and curve
+    twin = {}
+    for c in crossings:
+        for m_, k_ in ((c["u"], 0), (c["d"], 1)):
+            if members[m_].kind not in RAILS:
+                continue
+            g = max_grade(members[m_])
+            w = clearance_need(net, c["u"], c["d"], c["q"]) / g + curve_radius(members[m_]) * g + DIP_MARGIN_M
+            sv = [p_[k_] for p_ in c["under"]]
+            twin.setdefault(m_, []).append((min(sv) - w, max(sv) + w))
+    tracks = []
+    for m_ in sorted(twin, key=lambda i: str(members[i].key)):
+        rs = sorted(twin[m_])
+        cur = [list(rs[0])]
+        for a, b in rs[1:]:
+            if a <= cur[-1][1] + STEP_M:
+                cur[-1][1] = max(cur[-1][1], b)
+            else:
+                cur.append([a, b])
+        tracks += [(m_, float(a), float(b)) for a, b in cur]
     digs = {i for i in seeds if members[i].kind == "deck" and dig.digs(i)}     # (the decks held at their ground)
     free = {i: dig.free(i) for i in seeds if members[i].kind == "deck"}        # (their structures' ends: rule 1)
-    return dict(seeds=seeds, joins=joins, crossings=crossings, ends=ends, dips=dips, digs=digs, free=free)
+    return dict(seeds=seeds, joins=joins, crossings=crossings, ends=ends, dips=dips, tracks=tracks, digs=digs, free=free)
 
 
 def system_key(net, sysm):
@@ -1272,7 +1302,8 @@ def system_centre(net, sysm):
 
 def system_size(net, sysm):
     """(pieces, crossings) of a system: its decks and the roads dug under it, and its crossings."""
-    return (sum(1 for i in sysm["seeds"] if net.m[i].kind == "deck") + len(sysm["dips"]), len(sysm["crossings"]))
+    return (sum(1 for i in sysm["seeds"] if net.m[i].kind == "deck") + len(sysm["dips"]) + len(sysm.get("tracks", ())),
+            len(sysm["crossings"]))
 
 
 # ---- paths: a road followed through its joints (a roundabout's ring, a street split at its junctions) ----
@@ -1366,6 +1397,17 @@ def pieces(net, sysm):
             out.append(dict(kind="deck", main=i, segs=[(i, 0.0, net.L[i])]))
     for d, a, b in sysm["dips"]:
         out.append(dict(kind="dip", main=d, segs=path_of(net, d, a, b)))
+    for t, a, b in sysm.get("tracks", ()):
+        out.append(dict(kind="track", main=t, segs=path_of(net, t, a, b)))
+    # (the arcs where another member joins each member: a join is held at one height, so it is a sample of the piece it falls in,
+    # not held at the nearer of two samples that are up to half a step off it, STEP_M / 2 of grade each way: 0.05-0.11 m of
+    # step between two decks at a T-join on Barcelona's trench)
+    cuts = {}
+    for i, si, j, sj in sysm["joins"]:
+        cuts.setdefault(int(i), set()).add(float(si))
+        cuts.setdefault(int(j), set()).add(float(sj))
+    for pc in out:
+        pc["cuts"] = {int(m): sorted(cuts[int(m)]) for m, _a, _b in pc["segs"] if int(m) in cuts}
     return out
 
 
@@ -1379,6 +1421,12 @@ def sample(net, pcs):
         for n, (j, s0, s1) in enumerate(pc["segs"]):
             k = max(2, int(math.ceil(abs(s1 - s0) / STEP_M)) + 1)
             sv = np.linspace(s0, s1, k)
+            lo_, hi_ = min(s0, s1), max(s0, s1)
+            extra = [a_ for a_ in pc.get("cuts", {}).get(int(j), ()) if lo_ + CUT_MIN_M < a_ < hi_ - CUT_MIN_M]
+            if extra:
+                up = np.sort(np.r_[sv, extra])
+                up = up[np.r_[True, np.diff(up) > CUT_MIN_M]]       # (none twice: one within CUT_MIN_M of another is it)
+                sv = up if s1 >= s0 else up[::-1]
             if n:
                 sv = sv[1:]                  # (the joint once: its sample the last part's, and this one's at s0)
                 joints.append((count - 1, j, float(s0)))
@@ -1729,23 +1777,54 @@ def fixed_reads(sysm, pcs, smp):
     ground under a deck, a deck or a track over a road that goes under): shape_problem's `fixed`, asked at exactly these.
     The terrain step reads them once (ix/s4_terrain.py); the problem is then made from what it read."""
     out = {}
+    tracks = {int(pc["main"]) for pc in pcs if pc["kind"] == "track"}
     for c in sysm["crossings"]:
         uv, dv, (xp, _xa, _xb, _xt), (yp, _ya, _yb, _yt) = _crossing_vars(pcs, smp, c)
         for member, sv, m in ((c["d"], dv, (xp >= 0) & (yp < 0)), (c["u"], uv, (xp < 0) & (yp >= 0))):
             if m.any():
                 out.setdefault(int(member), set()).update(np.unique(sv[m]).tolist())
+        for member, sv in ((c["d"], dv), (c["u"], uv)):     # (a track is read where a crossing asks it, when the tracks are held)
+            if int(member) in tracks and len(sv):
+                out.setdefault(int(member), set()).update(np.unique(sv).tolist())
+    for pc, x in zip(pcs, smp):         # (a track piece is drawn to the bed the railways lay, at each of its samples)
+        if pc["kind"] == "track":
+            mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"], np.float64)
+            for i in np.unique(mem).tolist():
+                out.setdefault(int(i), set()).update(ms[mem == i].tolist())
     return {i: np.array(sorted(v), np.float64) for i, v in sorted(out.items())}
 
 
-def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
+def _track_tops(x, fixed):
+    """The rails' top the railways lay at the samples x of a track piece (NaN where they lay none)."""
+    top = np.full(len(x["ms"]), np.nan)
+    mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"], np.float64)
+    for i in np.unique(mem).tolist():
+        sel = mem == i
+        top[sel] = fixed(int(i), ms[sel])
+    return top
+
+
+def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None, pin_tracks=False):
     """The system's constraints as the kernel is given them: (chains, couplings) of carriageways.solve (a chain per
     piece: its target, weights, floor and ceiling per sample, grade, curve, step; the couplings: joints, overlaps,
     clearances). trace (a dict, the audit's: interchange_audit): filled with where each constraint came from, "cp"
     (one per coupling: ("join", index in sysm["joins"]), ("overlap",), ("clear", index in sysm["crossings"]),
     ("stacked",)) and "bound" ({(piece, sample, "lo" | "hi"): (the bound, the crossing's index)} of the bounds a crossing
-    with a road the shape does not move set)."""
+    with a road the shape does not move set). pin_tracks: the crossings read every track as the heights the railways lay (fixed_z,
+    as a road on the ground under a deck is read), never as unknowns: the problem as it was when a track was no member of the
+    shape (the track's own chain is then drawn to its bed and moves by the little its grade and curve laws ask of the bed's
+    own noise; _solve_shape_qp asks it first)."""
     chains = []
+    is_track = np.array([pc["kind"] == "track" for pc in pcs], bool)
     natural = _natural_lines(net, sysm, pcs, smp, ground)
+    clear, fz, clear_by = {}, {}, {}
+
+    def fixed(i, sv):
+        new = [s_ for s_ in sv.tolist() if (i, s_) not in fz]
+        if new:
+            for s_, z_ in zip(new, np.asarray(fixed_z(i, np.array(new)), np.float64).tolist()):
+                fz[(i, s_)] = z_
+        return np.array([fz[(i, s_)] for s_ in sv.tolist()])
     for p, (pc, x, t) in enumerate(zip(pcs, smp, ground)):
         t = np.asarray(t, np.float64)
         n = len(t)
@@ -1764,6 +1843,16 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
                 inner = (~_abutments(t, target, depth, w[0] > 0.0 or mouth[0], w[-1] > 0.0 or mouth[1])
                          & ~_over_dips(net, pcs, smp, x))
                 lo = np.where(inner, t + depth + DECK_AIR_M, -np.inf)
+        elif pc["kind"] == "track":
+            # (a track held at the bed the railways lay, its rails' top over it: the weight is what moving it costs against a
+            # road's (W_TRACK). Held there at both ends of its window: the track outside it is the railways' own, and the
+            # two must meet. Where the railways lay no bed (a stub they leave out) there is no track to hold)
+            top = _track_tops(x, fixed)
+            ok = np.isfinite(top)
+            target, w = np.where(ok, top, t), np.where(ok, W_TRACK, 0.0)
+            for k in (0, n - 1):
+                if ok[k]:
+                    lo[k] = hi[k] = top[k]
         else:
             target, w = t.copy(), np.full(n, W_DIP)
             hi = t.copy()                                   # (a road going under never rises over its ground)
@@ -1794,20 +1883,15 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
         cps.append((p, a, q, b, "eq", 0.0))
         why.append(("overlap",))
     # (the clearance wherever the road runs under the upper part, under_pairs: its whole carriageway under the deck's)
-    clear, fz, clear_by = {}, {}, {}
     bound = {} if trace is not None else None
     crossing = []           # (the audit's trace: each crossing's upper part and the clearance it asks)
-
-    def fixed(i, sv):
-        new = [s_ for s_ in sv.tolist() if (i, s_) not in fz]
-        if new:
-            for s_, z_ in zip(new, np.asarray(fixed_z(i, np.array(new)), np.float64).tolist()):
-                fz[(i, s_)] = z_
-        return np.array([fz[(i, s_)] for s_ in sv.tolist()])
     for ci, c in enumerate(sysm["crossings"]):
         need = clearance_need(net, c["u"], c["d"], c["q"])
         crossing.append((c["u"], need))
         uv, dv, (xp, xa, xb, xt), (yp, ya, yb, yt) = _crossing_vars(pcs, smp, c)
+        if pin_tracks:          # (a track is read where a crossing asks it, not solved for)
+            xp = np.where((xp >= 0) & is_track[np.maximum(xp, 0)], -1, xp)
+            yp = np.where((yp >= 0) & is_track[np.maximum(yp, 0)], -1, yp)
         both = (xp >= 0) & (yp >= 0)
         for kx, mx in _weighted(xa, xb, xt):
             for ky, my in _weighted(ya, yb, yt):
@@ -1855,16 +1939,26 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
 
 def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
     import carriageways as _cw
-    chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z)
-    info = {}
-    zs = _cw.solve(chains, cps, diagnostics=info, quiet=True)
+    # (a track keeps its bed wherever the interchange has heights with it there; only if it has none the tracks are free to
+    # move, each at what it costs: W_TRACK, the least of the laws' costs of a move that closes the conflict)
+    pin = any(pc["kind"] == "track" for pc in pcs)
+    while True:
+        chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z, pin_tracks=pin)
+        info = {}
+        zs = _cw.solve(chains, cps, diagnostics=info, quiet=True)
+        if pin and not info.get("feasible", True) and not info.get("timed_out"):
+            pin = False
+            continue
+        break
+    if diagnostics is not None and any(pc["kind"] == "track" for pc in pcs):
+        diagnostics["tracks_moved"] = not pin
     if not info.get("feasible", True) and not info.get("timed_out"):
         # (laws that cannot all hold: not the interchange left as it is. What contradicts is eased by the least it takes, in
         # the order the laws are given up (ix/relax.py), and said so: the answer's diagnostics name each. The first attempt's
         # miss is the answer's `first`, not a log line of its own: the line of the answer is the last solve's)
         import ix.relax as _relax
         trace = {}
-        chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace)
+        chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace, pin_tracks=pin)
         first = {k: info[k] for k in ("status", "grade_excess", "curve_excess", "lower_shortfall_m", "upper_excess_m",
                                       "junction_gap_m", "clearance_shortfall_m") if k in info}
         chains, cps, done, touched = _relax.relax(net, pcs, smp, chains, cps, trace)
@@ -1892,6 +1986,14 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
         diagnostics.update(info)
     if not info.get("converged") or not info.get("feasible"):
         return None
+    if pin:
+        # (a track that stays is at the bed the railways lay, as the roads were solved against: its chain, drawn to the bed and
+        # held to its laws, is not the answer. Where the railways lay none the chain stands)
+        zs = list(zs)
+        for p, (pc, x) in enumerate(zip(pcs, smp)):
+            if pc["kind"] == "track":
+                top = _track_tops(x, lambda i, sv: np.asarray(fixed_z(int(i), sv), np.float64))
+                zs[p] = np.where(np.isfinite(top), top, np.asarray(zs[p], np.float64))
     return [np.asarray(z, np.float64) for z in zs]
 
 

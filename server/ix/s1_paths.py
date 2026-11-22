@@ -55,6 +55,7 @@ def local_of(net, sysm, pcs):
     for a, _sa, b, _sb in list(sysm["joins"]) + list(sysm["ends"]):
         names |= {int(a), int(b)}
     names |= {int(d) for d, _a, _b in sysm["dips"]}
+    names |= {int(t) for t, _a, _b in sysm.get("tracks", ())}
     for pc in pcs:
         names |= {int(j) for j, _s0, _s1 in pc["segs"]}
     for i in sorted(names):

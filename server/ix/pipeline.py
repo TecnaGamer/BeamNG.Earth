@@ -137,7 +137,7 @@ def interchange(planner, net, ix, others, hk, clock):
     feature id: [(xy (m, 2), z (m,), mode)]}, None), or ({}, why) where no system has an answer. others: the net's other
     interchanges' systems (the pieces its ramps stop at)."""
     fixed_z = s2_extent.make_fixed(planner, net)
-    solved, shapes, keys, why = [], [], [], None
+    solved, shapes, keys, moved, why = [], [], [], [], None
     for part in ix.parts or (ix,):
         sysm = part.sysm
         pcs, smp, zs, diag, ground, heights_key = system(planner, net, part, fixed_z, hk, clock)
@@ -154,11 +154,12 @@ def interchange(planner, net, ix, others, hk, clock):
         solved.append(sysm)
         shapes.append((pcs, smp, zs))
         keys.append(heights_key)
+        moved.append(bool(diag.get("tracks_moved")))
     if not solved:
         return {}, why
     heights_key = keys[0] if len(keys) == 1 else hashlib.sha256("|".join(keys).encode()).hexdigest()
     prof, region = s6_heights.region_of(planner, net, solved, shapes, "interchange:%s" % heights_key,
-                                        [_gsh.pieces(net, o) for o in others])
+                                        [_gsh.pieces(net, o) for o in others], moved)
     _put(region, tuple(keys), [heights_key.encode()])
     return prof, None
 

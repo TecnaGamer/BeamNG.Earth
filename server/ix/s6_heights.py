@@ -6,6 +6,7 @@ import numpy as np
 
 import dnp
 import gradeshapes as _gsh
+import railways
 
 from . import artifacts, cache, s4_terrain
 
@@ -13,7 +14,7 @@ log = logging.getLogger("earthd.grading")
 
 FORMAT = 4
 LAWS = (("gradeshapes", ["STEP_M", "DECK_MAX_GRADE", "DECK_AIR_M", "SOFT_M", "DIP_MARGIN_M", "RAMP_MAX_M", "W_END",
-                         "W_HOLD", "W_DIP", "W_SMOOTH", "W_STIFF", "W_JOIN", "R_MIN_ROAD_M", "R_MIN_RAIL_M"]),
+                         "W_HOLD", "W_DIP", "W_TRACK", "W_SMOOTH", "W_STIFF", "W_JOIN", "R_MIN_ROAD_M", "R_MIN_RAIL_M"]),
         ("gradelaw", ["GAME_GRADE_PLUS"]))
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 6
@@ -100,10 +101,13 @@ def run(planner, net, sysm, loc, pcs, smp, zs, diag, system, scope):
                              plain, findings)
 
 
-def region_of(planner, net, solved, shapes, scope, beside=()):
+def region_of(planner, net, solved, shapes, scope, beside=(), moved=()):
     """(prof, Region): the embankments and the roads' profiles of the solved systems (their shapes: pieces, samples and
     heights each) -- what _shape_region returned, as data. beside: the pieces of the net's other systems, which the
-    ramps of these stop at. scope: what the artifact is of (a region, an interchange)."""
+    ramps of these stop at. scope: what the artifact is of (a region, an interchange). moved: of each of the solved
+    systems, whether its tracks were moved off the beds the railways lay (the solve had no heights with them there): the
+    tracks of those are in the profiles, "rail:<feature id>" in mode "track", at their bed (the rails' top less
+    RAIL_TOP_M), for the railways to draw (railways.TRACK_Z_HOOK); a track that stayed is the railways' own."""
     def ground_along(i, sv):
         xy = np.stack([dnp.interp(sv, net.s[i], net.lines[i][:, 0]), dnp.interp(sv, net.s[i], net.lines[i][:, 1])],
                       axis=1)
@@ -111,11 +115,14 @@ def region_of(planner, net, solved, shapes, scope, beside=()):
 
     emb = _gsh.embankments(net, solved, shapes, ground_along, beside)
     prof = {}
-    for (pcs, smp, zs) in shapes:
+    for n, (pcs, smp, zs) in enumerate(shapes):
         for pc, x, z in zip(pcs, smp, zs):
             if pc["kind"] == "deck":
                 prof.setdefault(str(net.m[pc["main"]].key[0]), []).append((x["xy"], np.asarray(z, np.float64),
                                                                            "deck"))
+            elif pc["kind"] == "track" and n < len(moved) and moved[n]:
+                prof.setdefault("rail:" + str(net.m[pc["main"]].key[2]), []).append(
+                    (x["xy"], np.asarray(z, np.float64) - railways.RAIL_TOP_M, "track"))
     for j, lst in emb.items():
         m = net.m[j]
         if m.kind not in ("ground", "tunnel"):

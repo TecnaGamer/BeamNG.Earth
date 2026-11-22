@@ -17,6 +17,7 @@ import math
 import re
 
 import os
+import threading
 
 import numpy as np
 import dmath
@@ -216,7 +217,46 @@ def _flushed(frame, cells, box, rails, prof, ground, tunnels):
     return out
 
 
+TRACK_Z_HOOK = None     # grading sets it (BNE_SHAPES): hook(frame, rails) -> [bed (k,) or None] per part: the bed an interchange's
+#                         solve gave the track (NaN where it gave none), in frame's heights. The tile draws what was solved.
+_OWN = threading.local()
+
+
+class own_beds:
+    """With this, the beds are the railways' own: no interchange's solve read back. The interchange's own steps read them so
+    (the solve is made from the bed the railways lay; reading its answer back there would ask the solve it is making)."""
+
+    def __enter__(self):
+        _OWN.depth = getattr(_OWN, "depth", 0) + 1
+
+    def __exit__(self, *a):
+        _OWN.depth -= 1
+
+
+def _read_back(frame, rails, out):
+    """out ([(bed, ground)] per part) with the beds an interchange's solve gave tracks (TRACK_Z_HOOK) in place of the
+    railways' own where it gave them."""
+    hook = TRACK_Z_HOOK
+    if hook is None or getattr(_OWN, "depth", 0) or not rails:
+        return out
+    got = hook(frame, rails)
+    if not got:
+        return out
+    res = []
+    for (zb, zg), z in zip(out, got):
+        if z is not None:
+            z = np.asarray(z, np.float64)
+            zb = np.where(np.isfinite(z), z, np.asarray(zb, np.float64))
+        res.append((zb, zg))
+    return res
+
+
 def _beds(frame, rails, ground, underpasses, load=None, elev=None, raw=None):
+    """_beds_own, with the beds a solved interchange gave its tracks read back (_read_back)."""
+    return _read_back(frame, rails, _beds_own(frame, rails, ground, underpasses, load, elev, raw))
+
+
+def _beds_own(frame, rails, ground, underpasses, load=None, elev=None, raw=None):
     """railways.profile of rails, its beds from railprofile's lattice of node profiles (the same bed in every tile and
     grading cell: plan 035) where load (key -> roads layer) and elev (the grader's DEM) are given; railways.profile's own
     where not, for a tram and for a point no node has. raw: ground(xy) -> the DEM's heights as they are (the grader's,

@@ -5050,6 +5050,69 @@ class _Planner:
                 tops[(i, v)] = (z + railwaysmod.RAIL_TOP_M) if np.isfinite(z) else None
         return [tops[(i, v)] for v in sv]
 
+    def _rail_tops_many(self, net, asks, tops):
+        """_rail_tops of several members at once: asks {member i: arc lengths}, the answers put in tops ({(i, s): top}).
+        The railways of the questions are made once for each cluster of them, not once for each window cell of each
+        question (_track_bed): the windows the questions lie in whose reaches meet (railways.GRADE_REACH_M round each: the
+        parts they take are the same ones) are one cluster, and the railways are taken round its box (railways.track_beds: a lattice of beds, 0.5 s a window, 4.7 s of the terrain of an 11-piece interchange at
+        Yokohama), every point of it then read of those parts at once (bed_at)."""
+        pts, keys = [], []
+        for i, sv in sorted(asks.items()):
+            new = [v for v in dict.fromkeys(float(v) for v in sv) if (i, v) not in tops]
+            if not new:
+                continue
+            nv = np.array(new, np.float64)
+            pts.append(np.stack([dnp.interp(nv, net.s[i], net.lines[i][:, 0]),
+                                 dnp.interp(nv, net.s[i], net.lines[i][:, 1])], axis=1))
+            keys += [(i, v, net.m[i].key[2]) for v in new]
+        if not pts:
+            return
+        xy = np.concatenate(pts)
+        cell = float(RAIL_WINDOW_M)
+        cx, cy = np.floor(xy[:, 0] / cell).astype(np.int64), np.floor(xy[:, 1] / cell).astype(np.int64)
+        cells = sorted(set(zip(cx.tolist(), cy.tolist())))
+        have = set(cells)
+        label = {}
+        reach = int(np.ceil(2.0 * railwaysmod.GRADE_REACH_M / cell))      # (windows whose reaches meet)
+        for c0 in cells:
+            if c0 in label:
+                continue
+            label[c0] = c0
+            stack = [c0]
+            while stack:
+                a, b = stack.pop()
+                for da in range(-reach, reach + 1):
+                    for db in range(-reach, reach + 1):
+                        n_ = (a + da, b + db)
+                        if n_ in have and n_ not in label:
+                            label[n_] = c0
+                            stack.append(n_)
+        z = np.full(len(xy), np.nan)
+        far = np.ones(len(xy), bool)
+        cluster = np.array([label[c] for c in zip(cx.tolist(), cy.tolist())], np.int64).reshape(-1, 2)
+        for c0 in sorted(set(label.values())):
+            mine = [c for c, l_ in label.items() if l_ == c0]
+            box = (min(c[0] for c in mine) * cell, min(c[1] for c in mine) * cell,
+                   (max(c[0] for c in mine) + 1) * cell, (max(c[1] for c in mine) + 1) * cell)
+            here = np.flatnonzero((cluster[:, 0] == c0[0]) & (cluster[:, 1] == c0[1]))
+            rails, beds = self._track_beds_in(box)
+            for fid in sorted({keys[k][2] for k in here.tolist()}, key=str):
+                sel = np.array([k for k in here.tolist() if keys[k][2] == fid])
+                zz, d = railwaysmod.bed_at(rails, beds, xy[sel], fid, distance=True)
+                ok = d <= RAIL_SAFE_M
+                z[sel[ok]] = zz[ok]
+                far[sel[ok]] = False
+        if far.any():
+            # (a point with no part near: the railways round the box of those points, as _track_bed does for the others)
+            idx = np.flatnonzero(far)
+            box = (float(xy[idx, 0].min()), float(xy[idx, 1].min()), float(xy[idx, 0].max()), float(xy[idx, 1].max()))
+            rails, beds = self._track_beds_in(box)
+            for fid in sorted({keys[k][2] for k in idx.tolist()}, key=str):
+                sel = np.array([k for k in idx.tolist() if keys[k][2] == fid])
+                z[sel] = railwaysmod.bed_at(rails, beds, xy[sel], fid)
+        for (i, v, _f), zb in zip(keys, z.tolist()):
+            tops[(i, v)] = (zb + railwaysmod.RAIL_TOP_M) if np.isfinite(zb) else None
+
     def _track_beds_window(self, key):
         """(rails, beds) of the railways near window cell key (ix, iy) (RAIL_WINDOW_M a side), made once and kept for
         the planner (the last RAIL_WINDOWS_KEPT): railways.track_beds' parts and their beds, to read with
@@ -5076,8 +5139,9 @@ class _Planner:
         with railways.bed_at."""
         def load(k):
             return self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
-        rails, beds, _worn = railwaysmod.track_beds(self.frame, [load(k) for k in railwaysmod.cells_near(self.frame, box)],
-                                                    box, self.elev, load=load)
+        with railwaysmod.own_beds():        # (the interchange's solve is made from the beds the railways lay, never from a
+            rails, beds, _worn = railwaysmod.track_beds(          # solve's answer: it would ask the one it is making)
+                self.frame, [load(k) for k in railwaysmod.cells_near(self.frame, box)], box, self.elev, load=load)
         return rails, beds
 
     def _ground_lines(self, xys):
@@ -9284,6 +9348,39 @@ def _deck_z_hook(frame, lines, fids=None):
 
 if CW_ON or SHAPES_ON:
     roadsmod.DECK_Z_HOOK = _deck_z_hook
+
+
+def _track_z_hook(frame, rails):
+    """railways.TRACK_Z_HOOK: per rail part of rails ([(fid, class, kind, xy (k, 2))] in frame), the bed (frame up m) an
+    interchange's solve gave its track (the profile "rail:<fid>" of its shapes: the rails' top less RAIL_TOP_M), NaN where
+    it gave none, or None for a part with none of it."""
+    store = _ACTIVE_STORE
+    if store is None or not SHAPES_ON:
+        return None
+    out = []
+    for fid, _cls, _kind, xy in rails:
+        xy = np.asarray(xy, np.float64)[:, :2]
+        if len(xy) < 2:
+            out.append(None)
+            continue
+        la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        pl, _idx = store.planners_of(la[len(la) // 2:len(la) // 2 + 1], lo[len(lo) // 2:len(lo) // 2 + 1])[0]
+        e, n, _ = pl.frame.geodetic_to_enu(la, lo, 0.0)
+        pxy = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
+        z, _m = pl._shape_at(pxy, pxy, "rail:" + str(fid), ("track",))
+        ok = np.isfinite(z)
+        if not ok.any():
+            out.append(None)
+            continue
+        zz = np.full(len(z), np.nan)
+        zz[ok] = np.asarray(frame.geodetic_to_enu(la[ok], lo[ok], z[ok])[2], np.float64)
+        out.append(zz)
+    return out if any(o is not None for o in out) else None
+
+
+if SHAPES_ON:
+    railwaysmod.TRACK_Z_HOOK = _track_z_hook
 
 
 def _tunnel_z_hook(frame, lines, fids):

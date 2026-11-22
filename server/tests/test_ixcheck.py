@@ -467,6 +467,16 @@ def test_c6_clearance_from_the_heights_the_terrain_read():
     assert not [f for f in fails(c6_heights, h, solved_parents(heights=h, terrain=t)) if f.code == "clearance"]
 
 
+def test_c6_a_track_the_railways_lay_none_of_is_no_clearance():
+    # (Terrain.fixed holds NaN where the railways lay no track: the solve asked nothing of the crossing, the piece's own height
+    # there is a free unknown's, not a track's)
+    h = solved_heights(pieces=[deck_piece(1, -40.0), deck_piece(4, 0.0, z=10.0), dip_piece(z=9.0)])
+    assert [f for f in fails(c6_heights, h, solved_parents(heights=h)) if f.code == "clearance"]
+    fixed = [artifacts.Fixed(0, np.array([38.0, 40.0, 42.0]), np.array([np.nan, np.nan, np.nan]))]
+    t = solved_terrain(fixed=fixed)
+    assert not [f for f in fails(c6_heights, h, solved_parents(heights=h, terrain=t)) if f.code == "clearance"]
+
+
 def test_c6_joint_step():
     h = solved_heights(pieces=[deck_piece(1, -40.0), deck_piece(4, 0.0, z=10.2), dip_piece()])
     got = fails(c6_heights, h, solved_parents(heights=h))

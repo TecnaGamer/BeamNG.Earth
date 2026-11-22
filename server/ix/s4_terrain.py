@@ -8,7 +8,7 @@ import gradeshapes as _gsh
 
 from . import artifacts, cache
 
-FORMAT = 3
+FORMAT = 4
 LAWS = (("gradeshapes", ["STEP_M"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 4
@@ -23,7 +23,11 @@ def read_fixed(net, sysm, pcs, smp, fixed_z):
     """{(member of net, arc): height}: fixed_z (the planner's: the ground along the road, a track's top) asked at every arc
     the problem reads (gradeshapes.fixed_reads); NaN where it is not known."""
     table = {}
-    for i, sv in _gsh.fixed_reads(sysm, pcs, smp).items():
+    reads = _gsh.fixed_reads(sysm, pcs, smp)
+    prefetch = getattr(fixed_z, "prefetch", None)
+    if prefetch is not None:        # (the railways read once for all the tracks' arcs)
+        prefetch({i: sv.tolist() for i, sv in reads.items()})
+    for i, sv in reads.items():
         zs = np.asarray(fixed_z(i, sv), np.float64)
         for s_, z_ in zip(sv.tolist(), zs.tolist()):
             table[(i, s_)] = z_

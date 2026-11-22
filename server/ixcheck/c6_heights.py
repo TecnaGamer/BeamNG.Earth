@@ -8,6 +8,7 @@ from ix import artifacts
 GRADE_ROAD = 0.08   # a road's samples never climb steeper between neighbours (fixed here, as the spec has it)
 GRADE_RAIL = 0.05   # a track's
 JOINT_M = 0.05      # m: the two heights at a joint of the pieces
+STEP_M = 4.0        # m: the samples' spacing (gradeshapes.STEP_M, fixed here as the spec has it)
 CLEAR_SLACK = 0.05  # m: the clearance may fall this short of the need without a failure
 
 
@@ -42,6 +43,8 @@ def check(art, parents):
         for c in order.crossings:
             # (a member the shape does not move is read where the solve asked it: Terrain.fixed, the heights the problem was
             # made from; a crossing of two such, or one the terrain holds nothing of, was no constraint of the solve)
+            if _unlaid(terrain, c.u, c.su) or _unlaid(terrain, c.d, c.sd):
+                continue            # (the railways lay no track there: there is none to clear, and the solve asked nothing)
             zu = _at(zs, art, c.u, c.su)
             if zu is None:
                 zu = _fixed_at(terrain, c.u, c.su)
@@ -77,6 +80,18 @@ def check(art, parents):
 
     out += _grades(art, zs, ms, key, eased[3])
     return out
+
+
+def _unlaid(terrain, mem, s):
+    """Whether Terrain.fixed holds no height of member mem at arc s (the nearest arc it read, within STEP_M of s, is NaN: a
+    track the railways lay none of)."""
+    for f in (terrain.fixed if terrain is not None else ()):
+        if int(f.member) != mem or not len(f.s):
+            continue
+        sv, zv = np.asarray(f.s, np.float64), np.asarray(f.z, np.float64)
+        k = int(np.argmin(np.abs(sv - s)))
+        return abs(float(sv[k]) - s) <= STEP_M and not np.isfinite(zv[k])
+    return False
 
 
 def _fixed_at(terrain, mem, s):

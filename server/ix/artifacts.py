@@ -25,7 +25,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 
 import numpy as np
 
-SCHEMA = 2          # this module's record layout; a change bumps it (and every step's cache key with it)
+SCHEMA = 3          # this module's record layout; a change bumps it (and every step's cache key with it)
 
 KINDS = ("ground", "deck", "tunnel", "rail", "rail_deck")
 STRUCTURES = ("deck", "tunnel", "rail_deck")
@@ -201,6 +201,8 @@ class Datum:
     options: list                   # [Option] weighed (the skeleton's adapter: the one chosen)
     chosen: int = 0
     findings: list = field(default_factory=list)
+    tracks: tuple = ()              # ((member, a, b), ...) the track windows the solve holds at the railways' bed and may move
+    #                                 where nothing else closes a conflict (gradeshapes' sysm["tracks"])
 
 
 # ---- step 6 ----------------------------------------------------------------------------------------------------

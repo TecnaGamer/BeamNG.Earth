@@ -26,6 +26,14 @@ def check(art, parents):
             if d not in downs:
                 out.append(_f(art, "fail", "bad_dip", "a dip window on %s, the lower member of no down crossing"
                               % key(d), ((d, float(a)), (d, float(b)))))
+        crossed = {c.d for c in o.crossings} | {c.u for c in o.crossings}
+        for t, a, b in art.tracks:
+            if ms and not (0 <= t < len(ms) and ms[t].kind in ("rail", "rail_deck")):
+                out.append(_f(art, "fail", "bad_track", "a track window on %s, which is not a track" % key(t),
+                              ((t, float(a)), (t, float(b)))))
+            elif t not in crossed:
+                out.append(_f(art, "fail", "bad_track", "a track window on %s, a member of no crossing" % key(t),
+                              ((t, float(a)), (t, float(b)))))
     if not (0 <= art.chosen < len(art.options)):
         out.append(_f(art, "fail", "bad_chosen", "chosen option %d of %d" % (art.chosen, len(art.options))))
     return out
