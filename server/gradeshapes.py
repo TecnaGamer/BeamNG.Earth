@@ -1954,7 +1954,11 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
         chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z, pin_tracks=pin)
         info = {}
         xproc.check_cancel()
-        zs = _cw.solve(chains, cps, diagnostics=info)
+        _cw.PROBE.on = pin          # (the tracks held is a try: its miss is not the answer's, the tracks are freed next)
+        try:
+            zs = _cw.solve(chains, cps, diagnostics=info)
+        finally:
+            _cw.PROBE.on = False
         xproc.check_cancel()
         if pin and not info.get("feasible", True) and not info.get("timed_out"):
             pin = False
@@ -1990,14 +1994,13 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
             info = {}
             xproc.check_cancel()
             zs = _cw.solve(eased, cps, rounds=_cw.RELAXED_ROUNDS, deadline=time.monotonic() + _cw.BUDGET_RELAXED_S,
-                           diagnostics=info, quiet=True)
+                           diagnostics=info)
             if info.get("feasible", True) or info.get("timed_out"):
                 break
         done = list(done) + more
         info["relaxed"] = [dict(kind=r.kind, amount=round(float(r.amount), 6), at=[[int(m), round(float(s), 3)] for m, s in r.at],
                                 text=r.text) for r in done]
         info["first"] = first
-    _cw.report(len(chains), len(cps), info)
     if diagnostics is not None:
         diagnostics.update(info)
     if not info.get("converged") or not info.get("feasible"):

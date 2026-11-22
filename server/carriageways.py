@@ -33,12 +33,15 @@ not feasible. This module only assembles its inputs and reports measured converg
 import logging
 import math
 import os
+import threading
 import time
 
 import numpy as np
 import dnp
 
 log = logging.getLogger("earthd.grading")
+PROBE = threading.local()   # .on: this thread's solves are probes (a search for the least easing of a law: ix/relax.py): their
+#                             misses are not logged, the answer's are
 
 STEP_M = 4.0            # m between profile samples
 MIN_SEGMENT_M = 0.5     # m: the least spacing a chain's own `ds` gives a segment (two samples closer than this, one point
@@ -201,18 +204,7 @@ def weights(br, from_end, trust=TRUST_M):
     return np.where(br, 0.0, w)
 
 
-def report(n_chains, n_couplings, info):
-    """The log line of a solve that has no heights (not converged, or the laws contradict); nothing of one that has."""
-    if info["converged"] and info["feasible"]:
-        return
-    log.warning("carriageways: %d chains, %d couplings: %s, %d iterations, converged=%s feasible=%s budget=%s; "
-                "grade excess %.6f, curve excess %.6f, bounds %.3f/%.3f m, junction %.3f m, clearance %.3f m",
-                n_chains, n_couplings, info["status"], info["rounds"], info["converged"], info["feasible"], info["timed_out"],
-                info["grade_excess"], info["curve_excess"], info["lower_shortfall_m"], info["upper_excess_m"],
-                info["junction_gap_m"], info["clearance_shortfall_m"])
-
-
-def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None, quiet=False):
+def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     """Profiles of coupled chains; the Rust kernel owns the numerical solve and releases the GIL.
 
     chains: dicts with t/w (n,), grade, K, optional lo/hi (n,), lam, step, length, and optionally ds (n - 1,): the distance
@@ -222,8 +214,7 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None, 
     or (a, i, b, j, kind, value, chain c, sample k, alpha): the same of z_a - (1 - alpha) z_b - alpha z_c (b's height
     moved alpha of the way to c's: a road's height where another leaves it; roadlaws' landings).
     Negative sample indices address a chain's end as in NumPy. Optional diagnostics receives
-    convergence, budget and measured constraint residuals. The returned profiles retain input order. quiet: a miss is not
-    logged (a probe, or a first attempt whose caller eases what contradicts: ix/relax.py; the caller logs the answer's, report).
+    convergence, budget and measured constraint residuals. The returned profiles retain input order.
     """
     import fast
     cp = list(couplings)
@@ -282,6 +273,10 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None, 
                                            **({} if spacing is None else {"spacing": spacing}))
     if diagnostics is not None:
         diagnostics.update(info)
-    if not quiet:
-        report(len(chains), len(cp), info)
+    if (not info["converged"] or not info["feasible"]) and not getattr(PROBE, "on", False):
+        log.warning("carriageways: %d chains, %d couplings: %s, %d iterations, converged=%s feasible=%s budget=%s; "
+                    "grade excess %.6f, curve excess %.6f, bounds %.3f/%.3f m, junction %.3f m, clearance %.3f m",
+                    len(chains), len(cp), info["status"], info["rounds"], info["converged"], info["feasible"], info["timed_out"],
+                    info["grade_excess"], info["curve_excess"], info["lower_shortfall_m"], info["upper_excess_m"],
+                    info["junction_gap_m"], info["clearance_shortfall_m"])
     return [z[a:b] for a, b in zip(offsets[:-1], offsets[1:])]

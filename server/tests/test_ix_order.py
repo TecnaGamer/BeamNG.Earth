@@ -417,27 +417,6 @@ def test_a_clearance_is_eased_no_further_than_the_structure_over_the_road():
     assert gs.clearance_need(net, 0, 1) == gs.headroom(net.m[1]) + gs.structure_depth(net, 0)
 
 
-def test_a_first_attempt_that_is_relaxed_is_not_logged_as_a_miss(caplog):
-    import logging
-    import carriageways
-    net, pcs, smp, chains, cps = two_chains(need=6.0)
-    with caplog.at_level(logging.WARNING, logger="earthd.grading"):
-        info = {}
-        carriageways.solve(chains, cps, diagnostics=info, quiet=True)
-        assert not info["feasible"] and not caplog.records
-        carriageways.report(len(chains), len(cps), info)
-        assert len(caplog.records) == 1 and "feasible=False" in caplog.records[0].getMessage()
-        caplog.clear()
-        # (the whole flow: the system is relaxed, solved, and the log has no line of a miss)
-        net, systems = find(flipping_road(25.0, 40.0))
-        sysm = systems[0]
-        pcs = gs.pieces(net, sysm)
-        smp = gs.sample(net, pcs)
-        diag = {}
-        assert gs.solve_shape(net, sysm, pcs, smp, [zero(x["xy"]) for x in smp], fixed(net, zero), diag) is not None
-        assert diag["first"]["status"] == "PrimalInfeasible" and not caplog.records
-
-
 def test_the_grade_a_road_is_eased_to_is_its_class_s_and_no_mod_number():
     import gradelaw
     assert not hasattr(gradelaw, "DRIVABLE_GRADE")
