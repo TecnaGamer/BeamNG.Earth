@@ -14120,9 +14120,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         return (expanded_walk, deck_shift_fn(frame, source_cells, urban_fn, widths, left_hand),
                 deck_width_fn(frame, source_cells))
 
+    bridge_out = []                             # (BNE_ROADSYS=surface: today's deck chunks its faces stand in for)
     for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells, deck_walk, deck_shift, deck_width,
                              bridge_context, context_m=context_m if traffic_context else None,
                              left_hand=left_hand, country=country, sheet_marks=sheet_marks, surface=v3 if v3_on else None):
+        bridge_out.append(ch)
         if ch.get("deck"):
             decks_near.append(ch)
             traffic_decks.append(_deck_clearance(ch))
@@ -14130,6 +14132,17 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             chunks.append(ch)
         elif deck_context is not None:          # the decks around the tile (roadmesh.deck's parapet test)
             deck_context.append(ch)
+    if roadsys.SURFACE and bridges is not None and bridge_out:
+        # (M4: the decks drawn from the road system's own faces; today's deck chunks of those features stay for the
+        # tile's other users, drawn by neither the road mesh nor the deck mesh)
+        got = roadsys.deck_faces(frame, (x0, y0, x1, y1), bridges, cells, country)
+        if got is not None:
+            face_chunks, covered = got
+            for ch in bridge_out:
+                f = ch.get("fid")
+                if (f is not None and roadsys.feature(f) in covered) or (f is None and not ch.get("tunnel")):
+                    ch["rs_hide"] = True
+            chunks.extend(face_chunks)
     if tunnels is not None:                     # TunnelProfiles: road surfaces and lines through tunnels
         tch = _tunnel_chunks(tunnels, cells, (x0, y0, x1, y1), terrain_paint)
         chunks.extend(tch)

@@ -627,7 +627,7 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
             prev_row = Some((s, p, pts_row.clone()));
             let sup = st.support_at(s);
             let zc = prof.at(si, s);
-            let cf = crossfall(st, s, &off, sup.kind);
+            let cf = if net.opts.flat_struct && sup.kind == SUP_STRUCT { vec![0.0; off.len()] } else { crossfall(st, s, &off, sup.kind) };
             let mut b: Vec<u32> = Vec::with_capacity(off.len());
             prev_xy = None;
             let first = ri == 0;

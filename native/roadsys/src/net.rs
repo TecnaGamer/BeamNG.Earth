@@ -300,9 +300,11 @@ pub struct NetStats {
 /// 0: never), so a motorway's lane program and Tier A profile read a bounded stretch (the read list of a product is
 /// its component's, never the whole road's); cut_offset: the grid's lines at offset + k * cut_grid.
 #[derive(Clone, Copy, Debug)]
-pub struct Opts { pub cut_grid: f64, pub cut_offset: f64 }
+/// flat_struct (M4, deck.rs): no crossfall on structure faces (today's decks are flat across: the terrain and the
+/// hand-over were made for them).
+pub struct Opts { pub cut_grid: f64, pub cut_offset: f64, pub flat_struct: bool }
 
-impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0 } } }
+impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0, flat_struct: false } } }
 
 pub struct Net {
     pub opts: Opts,

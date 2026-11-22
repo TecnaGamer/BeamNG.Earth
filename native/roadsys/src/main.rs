@@ -79,7 +79,7 @@ fn main() {
             used.set(true);
             t.ground.clone()
         };
-        let out = product::build(&t.place, t.quad, t.id, t.frame, &g, net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1 });
+        let out = product::build(&t.place, t.quad, t.id, t.frame, &g, net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, ..Default::default() });
         std::fs::create_dir_all(&args[3]).ok();
         let name = format!("{}_{}", t.id.0, t.id.1);
         std::fs::write(format!("{}/{}.json", args[3], name), &out.json).ok();
@@ -102,7 +102,7 @@ fn main() {
             let mut k = ng.get();
             runs.iter().map(|r| { let n = r.pts.len(); let v = if k + n <= t.ground.len() { t.ground[k..k + n].to_vec() } else { vec![f64::NAN; n] }; k += n; v }).collect()
         };
-        let out = square::solve_obs(&t.place, (t.id.0 as i64, t.id.1 as i64), &g, Some(&o), net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1 });
+        let out = square::solve_obs(&t.place, (t.id.0 as i64, t.id.1 as i64), &g, Some(&o), net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, ..Default::default() });
         std::fs::create_dir_all(&args[3]).ok();
         let name = format!("{}_{}", t.id.0, t.id.1);
         let bytes = out.to_bytes();
@@ -121,6 +121,14 @@ fn main() {
                 println!("handover {:016x} {} {} {}", roadsys::geom::fnv(&bytes), out.t.len(), st.squares_h, st.squares_z);
                 return;
             }
+            Err(e) => { eprintln!("{}", e); std::process::exit(1) }
+        }
+    }
+    if args.len() == 3 && args[1] == "decks" {
+        // (M4 surface) a decks input file (ROADSYS_DECK_DUMP's .rsdk): its output's FNV-1a 64 and counts
+        let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(2) });
+        match roadsys::deck::run_input(&b) {
+            Ok((bytes, o)) => { println!("decks {:016x} {} {} {}", roadsys::geom::fnv(&bytes), o.t.len(), o.runs.len(), o.mt.len()); return; }
             Err(e) => { eprintln!("{}", e); std::process::exit(1) }
         }
     }

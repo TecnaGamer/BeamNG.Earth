@@ -7640,13 +7640,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 596: the road surface + bridge rewrite's shadow product and M0 audit (native/roadsys; BNE_ROADSYS=shadow); 600: M2's
     // heights squares (RoadsysSquare, roadsys_square, roadsys_blend; BNE_ROADSYS=heights); 603: M3's structures
     // (RoadsysEnds, roadsys_handover_zone: the deck ends' hand-over on the anchor's lattice, BNE_ROADSYS=structures;
-    // road_exact's always-exact parts, "ho")
+    // road_exact's always-exact parts, "ho"); 606: M4's surface decks (roadsys_decks: decks from the road system's own
+    // structure faces, BNE_ROADSYS=surface)
     roadsysbind::register(m)?;
     // 599: unalign::collider_unalign (colliders off the axis-aligned lattice, cdae.COLLIDER_UNALIGN_M)
     unalign::register(m)?;
     // 604 (603 and 605 kept for other branches): cip (architecture v2's compact per-cell inputs: the lossless cell
     // codec of named arrays and blobs; cip_encode_cell, cip_cell_info, cip_decode; server/cip.py, tools/build_cip.py)
     cip::register(m)?;
-    m.add("VERSION", 606)?;
+    m.add("VERSION", 607)?;
+    m.add("VERSION", 607)?;
     Ok(())
 }

@@ -125,7 +125,7 @@ impl RoadsysSegments {
     fn counts(&self) -> (usize, usize, usize, usize) { (self.place.segs.len(), self.dropped.0, self.dropped.1, self.dropped.2) }
 }
 
-fn opts(cut: (f64, f64)) -> roadsys::net::Opts { roadsys::net::Opts { cut_grid: cut.0, cut_offset: cut.1 } }
+fn opts(cut: (f64, f64)) -> roadsys::net::Opts { roadsys::net::Opts { cut_grid: cut.0, cut_offset: cut.1, ..Default::default() } }
 
 /// The tile's read list from the segments read so far: (boxes in the frame to read, segment ids whose every copy
 /// must be read, [delivered, full, program, profile] stroke counts, cpu s).
@@ -491,7 +491,75 @@ pub fn roadsys_handover_zone<'py>(py: Python<'py>, ends: PyRef<'py, RoadsysEnds>
     Ok((PyArray2::from_owned_array(py, pp), PyArray2::from_owned_array(py, uu), PyArray2::from_owned_array(py, tt), PyArray1::from_vec(py, mm), js))
 }
 
+// ------------------------------------------------------------------------------- M4 surface: decks from the faces
+
+/// (M4, BNE_ROADSYS=surface) A tile's decks from the road system's own structure faces (native/roadsys deck.rs), in
+/// the tile's own frame: segs from a complete read (roadsys_reads with field = true; boxes its converged boxes), quad
+/// the tile's corners, ground(e, n) -> heights, lines [(map feature, points (n, 3))] today's deck heights. Returns
+/// (positions (n, 3), triangles (m, 3), kinds (m,), feature index (m,; -1 none), depths (m,), features,
+/// runs [(points (k, 3), outward normals (k, 2), closed, feature index)], marking positions (j, 3), marking triangles,
+/// marking colours (0 white, 1 yellow), fallback features, stats JSON).
+#[pyfunction]
+/// dump: a file to write the build's whole input to (deck::encode_input), for `roadsys decks` on another platform.
+#[pyo3(signature = (segs, quad, ground, lines, cut = (4000.0, 2000.0), boxes = None, dump = None))]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub fn roadsys_decks<'py>(py: Python<'py>, segs: PyRef<'py, RoadsysSegments>, quad: [[f64; 2]; 4], ground: Bound<'py, PyAny>,
+                          lines: Vec<(String, PyReadonlyArray2<'py, f64>)>, cut: (f64, f64), boxes: Option<Vec<[f64; 4]>>,
+                          dump: Option<String>)
+                          -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>,
+                                       Bound<'py, PyArray1<f64>>, Vec<String>, Vec<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, bool, i64)>,
+                                       Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>, Vec<String>, String)> {
+    let kept;
+    let place = match &boxes {
+        None => &segs.place,
+        Some(bx) => {
+            kept = Place { segs: segs.place.segs.iter().filter(|s| roadsys::product::seg_in(s, bx)).cloned().collect(), ..segs.place.clone_meta() };
+            &kept
+        }
+    };
+    let mut dl = Vec::with_capacity(lines.len());
+    for (f, p) in &lines {
+        let a = p.as_array();
+        if a.ncols() != 3 { return Err(PyValueError::new_err("roadsys_decks: a deck line's points must be (n, 3)")); }
+        dl.push(roadsys::deck::DeckLine { feat: f.clone(), p: (0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]], a[[i, 2]]]).collect() });
+    }
+    let ground = ground.unbind();
+    let err: std::sync::Mutex<Option<PyErr>> = std::sync::Mutex::new(None);
+    let asked: std::sync::Mutex<Vec<f64>> = std::sync::Mutex::new(Vec::new());
+    let g_of = |pts: &[[f64; 2]]| -> Vec<f64> {
+        Python::attach(|py| -> Vec<f64> {
+            let e = PyArray1::from_vec(py, pts.iter().map(|p| p[0]).collect());
+            let n = PyArray1::from_vec(py, pts.iter().map(|p| p[1]).collect());
+            match ground.bind(py).call1((e, n)).and_then(|r| r.extract::<Vec<f64>>()) {
+                Ok(v) if v.len() == pts.len() => { asked.lock().unwrap().extend_from_slice(&v); v }
+                Ok(_) => { *err.lock().unwrap() = Some(PyValueError::new_err("roadsys_decks: ground returned another number of heights")); vec![0.0; pts.len()] }
+                Err(e) => { *err.lock().unwrap() = Some(e); vec![0.0; pts.len()] }
+            }
+        })
+    };
+    let o = py.detach(|| roadsys::deck::build(place, quad, &g_of, &dl, opts(cut)));
+    if let Some(e) = err.lock().unwrap().take() { return Err(e); }
+    if let Some(path) = dump {
+        let b = roadsys::deck::encode_input(place, quad, cut, &asked.lock().unwrap(), &dl);
+        std::fs::write(&path, b).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
+    }
+    let a3 = |v: &[[f64; 3]]| { let mut a = numpy::ndarray::Array2::<f64>::zeros((v.len(), 3)); for (i, q) in v.iter().enumerate() { for c in 0..3 { a[[i, c]] = q[c]; } } a };
+    let t3 = |v: &[[u32; 3]]| { let mut a = numpy::ndarray::Array2::<i64>::zeros((v.len(), 3)); for (i, q) in v.iter().enumerate() { for c in 0..3 { a[[i, c]] = q[c] as i64; } } a };
+    let mut runs = Vec::with_capacity(o.runs.len());
+    for r in &o.runs {
+        let mut n = numpy::ndarray::Array2::<f64>::zeros((r.out.len(), 2));
+        for (i, q) in r.out.iter().enumerate() { n[[i, 0]] = q[0]; n[[i, 1]] = q[1]; }
+        runs.push((PyArray2::from_owned_array(py, a3(&r.p)), PyArray2::from_owned_array(py, n), r.closed, r.feat as i64));
+    }
+    Ok((PyArray2::from_owned_array(py, a3(&o.v)), PyArray2::from_owned_array(py, t3(&o.t)),
+        PyArray1::from_vec(py, o.kind.iter().map(|&k| k as i64).collect()), PyArray1::from_vec(py, o.feat.iter().map(|&k| k as i64).collect()),
+        PyArray1::from_vec(py, o.depth.clone()), o.feats.clone(), runs,
+        PyArray2::from_owned_array(py, a3(&o.mv)), PyArray2::from_owned_array(py, t3(&o.mt)),
+        PyArray1::from_vec(py, o.mc.iter().map(|&k| k as i64).collect()), o.fallback.clone(), o.json.clone()))
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(roadsys_decks, m)?)?;
     m.add_class::<RoadsysSegments>()?;
     m.add_function(wrap_pyfunction!(roadsys_reads, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_build, m)?)?;
