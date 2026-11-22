@@ -1174,6 +1174,11 @@ class TrackerTest(unittest.TestCase):
         class Pinned(roads.Tracker):
             build_s = property(lambda self: 0.05, lambda self, v: None)
         tr = Pinned()
+        # Builds run on BUILD_PER_POSE worker threads and the fake records a build when a worker runs it, so the
+        # order recorded was the workers' race under load (gate 311: (0, 1) first). One worker runs them in the
+        # order the tracker dispatched them, which is what this test checks.
+        import runtimeprofiler
+        tr.pool = runtimeprofiler.TileJobs(1, "roads-tile-test")
         built = []
 
         def build(aid, tx, ty):
