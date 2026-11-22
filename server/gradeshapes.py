@@ -719,7 +719,10 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
         t0 = time.perf_counter()
         scan.add(net)
         t_scan = time.perf_counter() - t0
-    for i in cand:
+    import xproc
+    for k_, i in enumerate(cand):
+        if not k_ % 32:
+            xproc.check_cancel()        # (the growth's step time limit, ix/limits.py, and a place a teleport left)
         t0 = time.perf_counter()
         rel[i] = [r_ for r_ in (_relations(net, i) if scan is None else scan.relations(net, i))
                   if not _tunnel_network(net, r_[0])]
@@ -1532,8 +1535,12 @@ def solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics=None):
     if os.environ.get("BNE_STAGED", "").strip().lower() in ("1", "on", "yes", "true"):
         import staged_heights
         return staged_heights.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics)
+    import pools
+    import xproc
     try:
         return _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics)
+    except (xproc.TimeLimit, pools.Abandoned):      # (the step's time limit, or a place a teleport left: not "no answer")
+        raise
     except Exception as e:      # (no kernel, or it failed)
         if diagnostics is not None:
             diagnostics["qp_error"] = f"{type(e).__name__}: {e}"
@@ -1831,9 +1838,12 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
 
 def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
     import carriageways as _cw
+    import xproc
     chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z)
     info = {}
+    xproc.check_cancel()
     zs = _cw.solve(chains, cps, diagnostics=info)
+    xproc.check_cancel()
     if not info.get("feasible", True) and not info.get("timed_out"):
         # (laws that cannot all hold: not the interchange left as it is. What contradicts is eased by the least it takes, in
         # the order the laws are given up (ix/relax.py), and said so: the answer's diagnostics name each)
@@ -1846,6 +1856,7 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
 
         def feasible(ch, cp):
             probe = {}
+            xproc.check_cancel()        # (each trial solve: the step's time limit, ix/limits.py)
             _cw.PROBE.on = True
             try:
                 _cw.solve(ch, cp, diagnostics=probe)
@@ -1858,6 +1869,7 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
         for hops in (2, 4, 8, len(chains)):
             eased, more = _relax.ease_curves(net, pcs, chains, cps, touched, feasible, hops)
             info = {}
+            xproc.check_cancel()
             zs = _cw.solve(eased, cps, rounds=_cw.RELAXED_ROUNDS, deadline=time.monotonic() + _cw.BUDGET_RELAXED_S,
                            diagnostics=info)
             if info.get("feasible", True) or info.get("timed_out"):

@@ -27,7 +27,7 @@ import numpy as np
 
 import gradeshapes as _gsh
 
-from . import s1_paths, s2_extent
+from . import limits, s1_paths, s2_extent
 
 log = logging.getLogger("earthd.grading")
 
@@ -42,6 +42,9 @@ KEPT = 512                  # solutions kept (per planner, per process)
 EXTENTS = {}                # interchange key -> its extent record: {"box": (lat0, lon0, lat1, lon1) of its seeds, "keys": the
 #                             member keys of its seeds, all its systems'} (the growth's: the reach, computed once, is in it)
 FIELDS = ("key", "failed", "pieces", "crossings", "owner", "pid", "secs", "relaxed")
+LIMITED = {}                # interchange key (or ("road", id) of a growth) -> its failure, where a step went past its time limit
+#                             (ix/limits.py): this process does not make it again for every region that reaches it, and the
+#                             run's store never has it: another process tries it once
 
 
 class GiveWay(Exception):
@@ -258,11 +261,13 @@ def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
             seeds = np.concatenate([cur_net.lines[i] for i in cur.sysm["seeds"]])
             lo, hi = seeds.min(0) - grading.SHAPES_PAD_M, seeds.max(0) + grading.SHAPES_PAD_M
         t0 = time.perf_counter()
-        s1_paths.load(planner, lo, hi, byk, loaded)
-        members = s1_paths.members_of(byk, lo, hi)
+        with limits.scope("paths", read_s):         # (the steps' time limits count the growth: its reading is the paths')
+            s1_paths.load(planner, lo, hi, byk, loaded)
+            members = s1_paths.members_of(byk, lo, hi)
         t1 = time.perf_counter()
-        nxt_net, found = _gsh.find_interchanges(members, lambda n_: (planner._ground_line, s2_extent.make_fixed(planner, n_)),
-                                                scan=scan, reach=reach)
+        with limits.scope("extent", find_s):        # (and its finding the extent's)
+            nxt_net, found = _gsh.find_interchanges(members, lambda n_: (planner._ground_line, s2_extent.make_fixed(planner, n_)),
+                                                    scan=scan, reach=reach)
         read_s += t1 - t0
         find_s += time.perf_counter() - t1
         nxt = next((x for x in found if cid in {_gsh.canonical_id(nxt_net.m[i]) for i in x.sysm["seeds"]}), None)
@@ -422,6 +427,31 @@ def unpack(planner, meta, lat, lon, z):
 # ---- one interchange, asked for by a region ----
 
 def interchange(planner, net, ix, hk, clock):
+    """_interchange, where a step of the interchange's growth that goes past its time limit (ix/limits.py: the paths and
+    extent steps are its growth's) gives the failure, not the solution: nothing is stored, no claim is kept (once releases
+    them as the exception leaves), and the process does not grow it again for every region that reaches it."""
+    import xproc
+    sysm = ix.sysm
+    cid = sorted({_gsh.canonical_id(net.m[i]) for i in sysm["seeds"]})[0]
+    if ("road", cid) in LIMITED:
+        return LIMITED[("road", cid)]
+    try:
+        return _interchange(planner, net, ix, hk, clock)
+    except xproc.TimeLimit as e:
+        text = "the growth of the interchange of road %s ran past its %s limit of %g s: stopped, nothing of it stored" % (
+            cid, e.what, e.secs)
+        limits.record("growth:%s" % cid, e.what, e.secs, e.secs, text)
+        log.warning("ix step: %s key - failed: time limit %g s @ %s growth from road %s", e.what, e.secs, hk, cid)
+        log.error("grading: SHAPES infeasible system in region %s: %d crossings, %d ends; %s; members %s", hk,
+                  len(sysm["crossings"]), len(sysm["ends"]), limits.reason(e.what, e.secs),
+                  ", ".join(sorted({str(net.m[i].key[0])[:8] + ":" + net.m[i].kind for i in sysm["seeds"]}))[:600])
+        got = dict(key="limit:%s" % cid, roads={}, failed=limits.reason(e.what, e.secs), pieces=0, crossings=0, relaxed=0,
+                   owner="", pid=os.getpid(), secs=0.0)
+        LIMITED[("road", cid)] = got
+        return got
+
+
+def _interchange(planner, net, ix, hk, clock):
     """The solution of the interchange ix (gradeshapes.Interchange of net, found in region hk's box) is part of: {"key",
     "roads" ({road feature id: [(xy, z, mode)]}), "failed" (None, or why it has none), "pieces", "crossings", "owner"
     (the cell holding its centre), "pid" and "secs" of the process that solved it}. Made once for the run: by the process
@@ -435,6 +465,8 @@ def interchange(planner, net, ix, hk, clock):
 
     def solution(ik, ctx):
         def solve():
+            if ik in LIMITED:           # (made past its limit before, by this process: not again for every region)
+                return LIMITED[ik]
             c = ctx
             if c is None:       # (the extent was found by another process or thread: read from the index for the solve)
                 _ik, n2, i2, others = grow(planner, net, ix, cid, pt, adopt=False, hint=extent_of(planner, ik))
@@ -499,6 +531,9 @@ def made(planner, ik, hk, clock, net, ix, others):
         roads, why = pipeline.interchange(planner, net, ix, others, hk, clock)
     got = dict(key=ik, roads=roads, failed=why, pieces=pieces, crossings=crossings, relaxed=clock.get("relaxed", 0) - r0,
                owner=str(owner_cell(planner, net, ix.sysm)), pid=os.getpid(), secs=round(time.perf_counter() - t0, 3))
+    if limits.is_limit(why):    # (a step ran past its time limit: not stored, not kept, nothing in its place: no answer, the
+        LIMITED[ik] = got       # claim is given back when this returns; the process does not try it again for each region)
+        return got
     sh = planner.shared
     packed = pack(planner, got)
     if sh is not None and hasattr(sh, "shape_store") and b.complete:
