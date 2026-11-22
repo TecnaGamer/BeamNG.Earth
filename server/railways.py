@@ -17,6 +17,7 @@ import math
 import re
 
 import os
+import threading
 
 import numpy as np
 import dmath
@@ -216,7 +217,46 @@ def _flushed(frame, cells, box, rails, prof, ground, tunnels):
     return out
 
 
+TRACK_Z_HOOK = None     # grading sets it (BNE_SHAPES): hook(frame, rails) -> [bed (k,) or None] per part: the bed an interchange's
+#                         solve gave the track (NaN where it gave none), in frame's heights. The tile draws what was solved.
+_OWN = threading.local()
+
+
+class own_beds:
+    """With this, the beds are the railways' own: no interchange's solve read back. The interchange's own steps read them so
+    (the solve is made from the bed the railways lay; reading its answer back there would ask the solve it is making)."""
+
+    def __enter__(self):
+        _OWN.depth = getattr(_OWN, "depth", 0) + 1
+
+    def __exit__(self, *a):
+        _OWN.depth -= 1
+
+
+def _read_back(frame, rails, out):
+    """out ([(bed, ground)] per part) with the beds an interchange's solve gave tracks (TRACK_Z_HOOK) in place of the
+    railways' own where it gave them."""
+    hook = TRACK_Z_HOOK
+    if hook is None or getattr(_OWN, "depth", 0) or not rails:
+        return out
+    got = hook(frame, rails)
+    if not got:
+        return out
+    res = []
+    for (zb, zg), z in zip(out, got):
+        if z is not None:
+            z = np.asarray(z, np.float64)
+            zb = np.where(np.isfinite(z), z, np.asarray(zb, np.float64))
+        res.append((zb, zg))
+    return res
+
+
 def _beds(frame, rails, ground, underpasses, load=None, elev=None, raw=None):
+    """_beds_own, with the beds a solved interchange gave its tracks read back (_read_back)."""
+    return _read_back(frame, rails, _beds_own(frame, rails, ground, underpasses, load, elev, raw))
+
+
+def _beds_own(frame, rails, ground, underpasses, load=None, elev=None, raw=None):
     """railways.profile of rails, its beds from railprofile's lattice of node profiles (the same bed in every tile and
     grading cell: plan 035) where load (key -> roads layer) and elev (the grader's DEM) are given; railways.profile's own
     where not, for a tram and for a point no node has. raw: ground(xy) -> the DEM's heights as they are (the grader's,
@@ -1346,18 +1386,45 @@ def bed_heights_many(zs):
 
 
 def _envelope(s, req, grade=GRADE):
-    """max over k of req[k] - grade * |s - s[k]|: the lowest line over every req that climbs at most grade."""
-    out = np.array(req, np.float64).tolist()    # (Python floats: the same arithmetic, 5x faster than numpy's scalars)
-    rise = (grade * np.diff(np.asarray(s)[:len(out)])).tolist()
-    for k in range(1, len(rise) + 1):           # forward then backward pass (s ascending)
-        v = out[k - 1] - rise[k - 1]
-        if v > out[k]:                          # (max(out[k], v): out[k] on a tie or a NaN)
-            out[k] = v
-    for k in range(len(rise) - 1, -1, -1):
-        v = out[k + 1] - rise[k]
-        if v > out[k]:
-            out[k] = v
-    return np.array(out, np.float64)
+    """max over k of req[k] - grade * |s - s[k]|: the lowest line over every req that climbs at most grade. A forward then
+    a backward pass (s ascending), each point raised to the one before it less its rise where that is higher (max(req[k],
+    v): req[k] on a tie or a NaN); only the points a pass raises are visited, and where a pass raises one it goes on to the
+    next, so a line within its grade is two vector comparisons, and the values are the ones the pass over every point gave
+    (the same subtractions in the same order, in Python floats)."""
+    out = np.array(req, np.float64)
+    return _raise_to_grade(out, grade * np.diff(np.asarray(s)[:len(out)]))
+
+
+def _raise_to_grade(out, rise):
+    """_envelope's passes over out (float64, raised in place and returned) with the rises between its points given
+    (grade * diff of the arc: a caller laying many requirements over one line makes them once)."""
+    m = len(rise)
+    if not m:
+        return out
+    cells, step = memoryview(out), memoryview(rise)     # (Python floats read and written in place)
+    done = 0
+    for k in (np.flatnonzero(out[:m] - rise > out[1:m + 1]) + 1).tolist():
+        if k <= done:                           # (reached by the run before it)
+            continue
+        while k <= m:
+            v = cells[k - 1] - step[k - 1]
+            if not v > cells[k]:
+                break
+            cells[k] = v
+            k += 1
+        done = k
+    done = m
+    for k in np.flatnonzero(out[1:m + 1] - rise > out[:m])[::-1].tolist():
+        if k >= done:
+            continue
+        while k >= 0:
+            v = cells[k + 1] - step[k]
+            if not v > cells[k]:
+                break
+            cells[k] = v
+            k -= 1
+        done = k
+    return out
 
 
 DECK_RAISE_MAX_M = 15.0   # m a bridge deck may rise over the straight chord between its ends to clear high
@@ -1462,15 +1529,14 @@ def _switch_split(rails):
     if len(struct) < 2:
         return None
     boxes = {n: (rails[n][3].min(0) - SWITCH_JOIN_M, rails[n][3].max(0) + SWITCH_JOIN_M) for n in struct}
+    box_lo, box_hi = np.array([boxes[m][0] for m in struct]), np.array([boxes[m][1] for m in struct])
     cuts = {}                                   # through part -> {(segment, along): (segment, along, point)}
     for n in struct:
         xy = rails[n][3]
         for end in (xy[0], xy[-1]):
-            for m in struct:
+            # (the parts whose box holds the end, in the order of struct: one comparison of all the boxes)
+            for m in (struct[i] for i in np.flatnonzero(~((end < box_lo) | (end > box_hi)).any(1)).tolist()):
                 if m == n:
-                    continue
-                lo, hi = boxes[m]
-                if (end < lo).any() or (end > hi).any():
                     continue
                 q = rails[m][3]
                 if min(float(dnp.hypot(*(q[0] - end))), float(dnp.hypot(*(q[-1] - end)))) <= SWITCH_JOIN_M:
@@ -1527,16 +1593,24 @@ def _switch_split(rails):
     return parts, owner
 
 
-def _structure_run(rails, edges, ends, n, sc):
-    """(m from arc sc of structure part n along the structure to its nearest end each way (toward the part's start, its
-    end; inf where it goes on with no end), the structure being the bridge and tunnel parts joined end to end): an end is
-    a node a ground track ends at, or where no other structure part goes on. The bridge's own run, findground's cost
-    law: what of a rise its length climbs at the track's grade before an approach has to."""
+def _structure_at(rails, edges):
+    """{node: the structure parts (bridge, tunnel) that end at it} of profile's chain graph (_structure_run's)."""
     at = {}
     for k, (_c, _cls, kind, _xy) in enumerate(rails):
         if kind in ("bridge", "tunnel") and edges[k][0] != edges[k][1]:
             at.setdefault(edges[k][0], []).append(k)
             at.setdefault(edges[k][1], []).append(k)
+    return at
+
+
+def _structure_run(rails, edges, ends, n, sc, at=None):
+    """(m from arc sc of structure part n along the structure to its nearest end each way (toward the part's start, its
+    end; inf where it goes on with no end), the structure being the bridge and tunnel parts joined end to end): an end is
+    a node a ground track ends at, or where no other structure part goes on. The bridge's own run, findground's cost
+    law: what of a rise its length climbs at the track's grade before an approach has to. at: _structure_at's of rails
+    and edges, made here when not given (a caller with many crossings makes it once)."""
+    if at is None:
+        at = _structure_at(rails, edges)
     out = []
     for first, d0 in ((edges[n][0], float(sc)), (edges[n][1], float(edges[n][2][-1] - sc))):
         best, heap, seen = math.inf, [(d0, first, n)], set()
@@ -1637,6 +1711,7 @@ def _profile(rails, ground, underpasses=()):
             ends.setdefault(a, []).append(zb[n][0])
             ends.setdefault(b, []).append(zb[n][-1])
     seeds = {}                                  # node -> the deck's height at it
+    struct_at = _structure_at(rails, edges)
     inner = _inner_nodes(rails, edges, zgs, ends, level)
     for n, ((_, cls, kind, xy), (a, b, _)) in enumerate(zip(rails, edges)):
         if kind == "tunnel":                    # (straight between its portals' beds, whatever the hill above it)
@@ -1655,6 +1730,7 @@ def _profile(rails, ground, underpasses=()):
         zb_ = max(zb_, level[b][0]) if b in level and b not in inner else zb_
         sx = _arc(xy)
         zb[n] = deck_heights(sx, g, za, zb_)
+        rise = None                             # (the deck's rises between samples, for each crossing over it)
         for c in over_part.get(n, ()):
             over, t = crossings[c][2][n]
             z0, z1 = mouth_z[c]
@@ -1664,13 +1740,15 @@ def _profile(rails, ground, underpasses=()):
                 # findground: the lack is what the bed falls short by, the run the bridge has to its structure's ends
                 lack = want - zb[n][over]
                 k = int(np.argmax(lack))
-                ends_m = _structure_run(rails, edges, ends, n, float(np.mean(sx[over])))     # (the road's own crossing)
+                ends_m = _structure_run(rails, edges, ends, n, float(np.mean(sx[over])), struct_at)     # (the road's own crossing)
                 if min(ends_m) >= AT_GRADE_END_M and findground.leaves(findground.GROUND, findground.BRIDGE, float(lack[k]), ends_m,
                                                                        GRADE, crossings[c][4]) != "upper":
                     continue
             req = zb[n].copy()
             req[over] = np.maximum(req[over], want)
-            zb[n] = _envelope(sx, req)
+            if rise is None:
+                rise = GRADE * np.diff(sx)
+            zb[n] = _raise_to_grade(req, rise)
         for node, h in ((a, zb[n][0]), (b, zb[n][-1])):
             seeds[node] = max(seeds.get(node, -np.inf), float(h))
     if seeds and STEPLESS_ON:

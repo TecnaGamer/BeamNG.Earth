@@ -36,21 +36,27 @@ Each has `check(art, parents) -> [artifacts.Finding]`, where parents is a dict o
 **c1 (Paths):**
 - `duplicate_member`: no two members share a key.
 - `broken_member`: no member's line has fewer than 2 points or a zero-length segment.
-- `hanging_end`: every structure member's end (deck, tunnel, rail_deck) lies within `JOIN_M = 2.5` of another member's
-  line. A `fail` with the member key and the nearest member's distance.
+- `hanging_end` (note): a structure member's end (deck, tunnel, rail_deck) with no other member's line within
+  `JOIN_M = 2.5`: the map ends it there (a ramp's end at its gore, a gap in a way), nothing in the pipeline can join it.
+- `unrelated_end`: a structure member's end with another member's line within `JOIN_M` must be at a join or a crossing
+  of the Paths (within a metre of arc: gradeshapes finds a joint once from both its parts' ends). A `fail` with the member
+  key and the nearest member's distance: what the lines show and the artifact does not.
 - `bad_join`: every Join's `(a, sa)` and `(b, sb)` points coincide within `JOIN_M`, recomputed with `geom.at_s`.
-- `bad_crossing`: every PlanCrossing's two points coincide within 0.5 m and with `q`, recomputed.
+- `bad_crossing`: every PlanCrossing's two points coincide within 0.5 m and with `q`, recomputed; within `JOIN_M` where
+  either is at the end of its member (an end's relation: the end's own point is within a join of the other's line).
 
 **c2 (Extent, parent Paths):**
 - `bad_seed`: every seed is a structure member.
 - `bad_boundary`: every boundary's `(j, sj)` is a ground or rail member, and its point is within `JOIN_M` of
   `(i, si)`'s.
 - `no_boundary` (note): a system with no boundary.
-- `oversized_system`: a system with more than 60 seeds. A `fail` that names its members.
+- `disconnected_system`: a system's seeds are one group under the Paths' joins and crossings (a road both meet ties
+  them too). A `fail` that names a few members of each group. The number of seeds is no fault (a downtown's elevated
+  mesh has dozens, one solve); the step time limits guard the cost.
 - `bad_box`: the box contains every seed line.
 
 **c3 (Order, parents Paths and Extent):**
-- `bad_crossing`: every crossing's `u` and `d` points coincide within 0.5 m (`geom.at_s`) and with `q`.
+- `bad_crossing`: every crossing's `u` and `d` points coincide within 0.5 m (`geom.at_s`) and with `q` (within `JOIN_M` where either is at its member's end).
 - `order_cycle`: the relation "d below u" over the members has no cycle. A `fail` that names the loop's member keys.
 - `bad_level`: `level[u] > level[d]` at every crossing.
 - `bad_sign`: the sign matches the member kind (deck / rail_deck +1, tunnel -1, ground / rail 0).
@@ -66,13 +72,15 @@ Each has `check(art, parents) -> [artifacts.Finding]`, where parents is a dict o
 - `bad_dip`: every dip window's member is the lower member of a "down" crossing of the system. Recompute it from
   Order, not from the dips themselves.
 - `bad_chosen`: `chosen` indexes `options`.
+- `bad_track`: every track window's member is a rail or rail deck member, and a member of a crossing of the Order.
 
 **c6 (Heights, parents Order, Datum, Terrain, and Paths through Extent):**
 - `no_heights` (note): the system is not solved. Name the members.
 - `heights_nan`: non-finite z in a solved piece.
 - `clearance` (carried from 3): at every crossing, the upper surface minus the lower is at least `need - 0.05`. The
   upper surface is the z of the piece whose samples cover `(u, su)`; the lower is the piece covering `(d, sd)` if
-  there is one, else the lower member's ground from Terrain. A `fail` that names the two keys and the metres short.
+  there is one, else the height Terrain.fixed holds of that member there (what the solve read of a member the shape does not
+  move: the ground along the road, a track's top); neither held, nothing was asked of the crossing; a member Terrain.fixed holds NaN of there (the railways lay no track at that arc) has none to clear, and the crossing is skipped. A `fail` that names the two keys and the metres short.
   Interpolate z along a piece by its `d`, finding the sample by `mem` / `ms`.
 - `joint_step` (carried from 1): at every Join inside the system where both members are in pieces, the two heights
   differ by at most 0.05 m.

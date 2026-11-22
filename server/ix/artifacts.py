@@ -25,7 +25,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 
 import numpy as np
 
-SCHEMA = 1          # this module's record layout; a change bumps it (and every step's cache key with it)
+SCHEMA = 3          # this module's record layout; a change bumps it (and every step's cache key with it)
 
 KINDS = ("ground", "deck", "tunnel", "rail", "rail_deck")
 STRUCTURES = ("deck", "tunnel", "rail_deck")
@@ -157,14 +157,25 @@ class Order:
 # ---- step 4 ----------------------------------------------------------------------------------------------------
 
 @dataclass(frozen=True)
+class Fixed:
+    """The height of a member the shape does not move (a road on the ground under a deck, a track), read where the solve
+    asks it: member (the Paths' number), s (m,) ascending arcs on it, z (m,) its heights there (NaN: not known)."""
+    member: int
+    s: np.ndarray
+    z: np.ndarray
+
+
+@dataclass(frozen=True)
 class Terrain:
     """The ground the solve reads: per piece of the system (step 6's pieces, in order), the ground at each sample (m,)
-    and its trust (m,) in [0, 1] (1: trusted; the skeleton's adapter writes 1 where the ground is finite)."""
+    and its trust (m,) in [0, 1] (1: trusted; the skeleton's adapter writes 1 where the ground is finite); and the
+    heights of the members the shape does not move at the arcs the solve asks (fixed, by member)."""
     meta: Meta
     system: str
     ground: list                    # [(m,) float64 per piece]
     trust: list                     # [(m,) float64 per piece]
     findings: list = field(default_factory=list)
+    fixed: list = field(default_factory=list)       # [Fixed] by member
 
 
 # ---- step 5 ----------------------------------------------------------------------------------------------------
@@ -190,6 +201,8 @@ class Datum:
     options: list                   # [Option] weighed (the skeleton's adapter: the one chosen)
     chosen: int = 0
     findings: list = field(default_factory=list)
+    tracks: tuple = ()              # ((member, a, b), ...) the track windows the solve holds at the railways' bed and may move
+    #                                 where nothing else closes a conflict (gradeshapes' sysm["tracks"])
 
 
 # ---- step 6 ----------------------------------------------------------------------------------------------------
@@ -250,7 +263,7 @@ class Region:
 
 
 RECORDS = {c.__name__: c for c in (Meta, Finding, Member, Join, PlanCrossing, Paths, Boundary, System, Extent,
-                                   Crossing, Order, Terrain, Option, Datum, Piece, Heights, Limit, Profile, Region)}
+                                   Crossing, Order, Fixed, Terrain, Option, Datum, Piece, Heights, Limit, Profile, Region)}
 
 
 def _enc(x, arrays):

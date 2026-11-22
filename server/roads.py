@@ -8282,6 +8282,14 @@ FLOAT_GUARD_M = 1e-6    # m: the boxes of _pieces_near_parts are this much wider
 #                         lie a hair outside the boxes of its two segments)
 
 
+def _piece_boxes(pieces):
+    """(k, 4) x0, y0, x1, y1 of each of the k polylines (arrays with a point at least, x and y their first two columns), all
+    in one pass over the points: a call of min and of max per piece was 39 000 of a rail bed node's calls."""
+    xy = np.concatenate([np.asarray(q, np.float64)[:, :2] for q in pieces])
+    at = np.cumsum([0] + [len(q) for q in pieces[:-1]])
+    return np.c_[np.minimum.reduceat(xy, at, axis=0), np.maximum.reduceat(xy, at, axis=0)]
+
+
 def _pieces_near_parts(parts, pieces):
     """The indices (ascending) of the pieces that can cross a part: those whose box shares a grid cell with the box of one
     of a part's segments. Two segments cross only where their boxes meet, so every piece left out crosses no part. The
@@ -8293,7 +8301,7 @@ def _pieces_near_parts(parts, pieces):
         return np.zeros(0, np.int64)
     a, b = np.concatenate([q[:-1] for q in segs]), np.concatenate([q[1:] for q in segs])
     lo, hi = np.minimum(a, b) - FLOAT_GUARD_M, np.maximum(a, b) + FLOAT_GUARD_M
-    box = np.array([[q[:, 0].min(), q[:, 1].min(), q[:, 0].max(), q[:, 1].max()] for q in pieces], np.float64)
+    box = _piece_boxes(pieces)
     side = max(float(np.median(np.maximum(box[:, 2] - box[:, 0], box[:, 3] - box[:, 1]))), 1.0)
     _i, segment_cells = _grid_keys(lo[:, 0], lo[:, 1], hi[:, 0], hi[:, 1], side)
     index, cells = _grid_keys(box[:, 0] - FLOAT_GUARD_M, box[:, 1] - FLOAT_GUARD_M, box[:, 2] + FLOAT_GUARD_M,

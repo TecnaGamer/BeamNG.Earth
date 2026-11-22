@@ -30,10 +30,11 @@ def check(art, parents):
             continue
         pa, pb = geom.at_s(lines[c.u], c.su), geom.at_s(lines[c.d], c.sd)
         d, dq = geom.dist(pa, pb), geom.dist(pa, np.asarray(c.q, np.float64))
-        if max(d, dq) > geom.CROSS_M:
+        tol = geom.crossing_tol(lines[c.u], c.su, lines[c.d], c.sd)
+        if max(d, dq) > tol:
             out.append(_f(art, "fail", "bad_crossing",
                           "crossing of %s at s=%.1f and %s at s=%.1f: the points %.1f m apart, q %.1f m off, the "
-                          "agreement is %s m" % (_key(ms, c.u), c.su, _key(ms, c.d), c.sd, d, dq, geom.CROSS_M),
+                          "agreement is %s m" % (_key(ms, c.u), c.su, _key(ms, c.d), c.sd, d, dq, tol),
                           ((c.u, c.su), (c.d, c.sd))))
         lu, ld = art.level.get(str(c.u)), art.level.get(str(c.d))
         if lu is None or ld is None or not lu > ld:

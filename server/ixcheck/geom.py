@@ -5,6 +5,9 @@ import numpy as np
 import dnp
 
 JOIN_M = 2.5    # m: ends this close meet (the join law's tolerance)
+SAME_S_M = 1.0  # m of arc: a relation at an end is at the end (gradeshapes folds a joint found from both its parts' ends)
+END_M = 2.0     # m of arc: a relation this near either member's end is an end's (an end on the other's line, within JOIN_M of it),
+#                 not a crossing of the two lines
 CROSS_M = 0.5   # m: a recomputed crossing's two points, and their agreement with q
 
 
@@ -87,3 +90,10 @@ def crossings(a, b):
                 out.append((float(sa[i] + t * (sa[i + 1] - sa[i])), float(sb[j] + u * (sb[j + 1] - sb[j])),
                             p + r * t))
     return sorted(out, key=lambda x: (x[0], x[1]))
+
+
+def crossing_tol(la, sa, lb, sb):
+    """How far apart the two points of a relation (at sa on line la, at sb on lb) and its q may be: CROSS_M where the lines
+    cross in the middle of both; JOIN_M where one is at its end (the end's own point is within a join of the other's line)."""
+    ends = min(sa, float(arclen(la)[-1]) - sa, sb, float(arclen(lb)[-1]) - sb)
+    return JOIN_M if ends < END_M else CROSS_M

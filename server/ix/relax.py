@@ -5,16 +5,22 @@ curves, the clearances, the joins, and a floor and ceiling per sample. When they
 heights. The laws that are differences of two heights (all but the curves) are a graph (diffgraph), whose negative cycles are
 the contradictions; each is named and eased here, one at a time, in the order the laws are given up:
 
-  0. a decision from the layers alone (two members of one kind, one over the other by the map's layer tags: the order step's
+  1. the grade law: a road is steeper than its class for a stretch (a game's, not a design code's) and every vehicle takes
+     it, up to the steepest grade a road of its class may be built (gradeshapes.max_grade: the class's design grade by speed,
+     where a deck's own law is lower). A steeper road or a tighter curve is drivable; a road through a deck never is, so nothing
+     that keeps a vehicle off a deck gives way until the grade and the curves (below) have given all they can;
+  2. a decision from the layers alone (two members of one kind, one over the other by the map's layer tags: the order step's
      weakest evidence, ix/s3_order.py, whose loops it can see only with the ground free): given up whole, the least layer
      difference first, as the order step does;
-  1. a deck's mapped bound: its floor over the ground it spans (a girder's depth and the air under it) and a road going
+  3. a deck's mapped bound: its floor over the ground it spans (a girder's depth and the air under it) and a road going
      under's ceiling (it never rises over its ground). They come from the map's kinds and the elevation: an estimate, and
      where the road really goes under the ground (a bridge that becomes a tunnel along one road) the one that is wrong;
-  2. the grade law (and, if the curves alone are still too much, the vertical curve): a road can be steeper than its class
-     for a stretch (a game's, not a design code's), and every vehicle can take it;
-  3. a clearance: a vehicle must pass under (kept before the grade law, which a vehicle can still climb);
-  4. a join: two ends of one road are one height (never given up: they are the roads' topology).
+  4. a clearance: a vehicle must pass under;
+  5. a join: two ends of one road are one height (never given up: they are the roads' topology).
+
+The vertical curves are no difference of two heights: the graph does not see them, and a loop it finds is no curves' (they only
+add to what it holds). They are eased by the kernel's own answer (ease_curves), whatever the graph's loops asked of 2 to 4,
+down to the tightest curve the laws give any road (gradeshapes.R_MIN_ROAD_M: a path's and a service road's) and no tighter.
 
 The cycle is eased by the least that closes it (its shortfall and a millimetre of room, so that the feasible set is more than
 a point), within the weakest class it holds: the bounds and the clearances equally over the cycle's constraints, the grade
@@ -22,22 +28,21 @@ law of every road of the cycle by one factor (a road's law is one number: the ke
 reached stay for the cycles after it. What was eased, and by how much, is returned for the artifact and the log: nothing is
 eased silently.
 
-The vertical curves are not differences. What is left after the graph is eased and still has no heights (the curves with the
-rest) is eased in the last step, the curve law (ease_curves): the radius of the roads whose other laws were eased (or, where none
-was, of all) divided by the least factor that gives the region round them heights, found on that region alone (a few roads
-coupled to them, solved in a moment) and checked on the whole."""
+The vertical curve law (ease_curves) is eased where the curves are what is left to contradict: the radius of the roads whose
+other laws were eased (or, where none was, of all) divided by the least factor that gives the region round them heights, found
+on that region alone (a few roads coupled to them, solved in a moment) and checked on the whole, no road's radius under the
+floor. If they are at it and the whole still has none, the loop is not the curves': it says so and nothing is built from it."""
 import math
 from collections import namedtuple
 
 import numpy as np
 
-import gradelaw
 import gradeshapes as _gsh
 
 from . import diffgraph
 
-LAYER, BOUND, GRADE, CLEARANCE, JOIN = 0, 1, 2, 3, 4    # (given up in this order: a join is never)
-STEEPEST = gradelaw.road_grade("residential", 20)   # the steepest grade the grade law gives any road (a 20 km/h road's)
+LAYER, BOUND, GRADE, CLEARANCE, JOIN = 0, 1, 2, 3, 4    # (the kinds of constraint; JOIN is never given up)
+GIVEN_UP = (GRADE, LAYER, BOUND, CLEARANCE)             # (in this order: a vehicle can drive what the first gives)
 SLACK_M = 0.001         # m of room past what closes a cycle (the feasible set is not one point: a solver's interior)
 MIN_SEGMENT_M = 0.5     # carriageways.MIN_SEGMENT_M: the least run a segment's own spacing gives
 
@@ -61,8 +66,10 @@ class Problem:
         self.decision, self.of_decision = {}, {}    # a layer decision -> its edges; an edge -> its decision
         self.grade_edges = {}                       # chain -> [(edge, its base weight)]
         self.grade0 = [float(ch["grade"]) for ch in chains]
+        self.cap = [_gsh.max_grade(net.m[int(pc["main"])]) for pc in pcs]   # the steepest its road's class may be built
         self.lam = [1.0] * len(chains)
         bound = trace["bound"] or {}
+        self.bound, self.cross = bound, trace.get("crossing") or []
         for c, ch in enumerate(chains):
             m = len(ch["t"])
             ds = None if ch.get("ds") is None else np.asarray(ch["ds"], np.float64)
@@ -160,38 +167,54 @@ class Problem:
     def _yield(self, cyc):
         g, klass = self.g, self.klass
         short = -math.fsum(g.ew[k] for k in cyc) + SLACK_M
-        weakest = min((klass[k] for k in cyc if klass[k] != JOIN), default=None)
-        if weakest is None:
+        present = {klass[k] for k in cyc if klass[k] != JOIN}
+        if not present:
             raise ValueError("a loop of joins alone is short %.3f m: nothing in it can give way" % short)
         changed = []
-        if weakest == LAYER:
-            edges = [k for k in cyc if klass[k] == LAYER]
-            k = min(edges, key=lambda k: (self.weak[k], k))
-            all_ = self.decision[self.of_decision[k]]
-            self.dropped[k] = -g.ew[k]
-            for e in all_:
-                g.ew[e] = math.inf
-                if e != k:
-                    self.dropped.setdefault(e, None)
-            return list(all_)
-        if weakest == BOUND:
-            changed += self._ease(sorted({k for k in cyc if klass[k] == BOUND}), short)
-            return changed
-        if weakest == GRADE:
-            short -= self._ease_grade(cyc, short, changed)
-        if short > 1e-9:     # (what the grade law cannot give, up to the steepest grade the laws know: the clearance)
-            edges = sorted({k for k in cyc if klass[k] == CLEARANCE})
-            if not edges:
-                raise ValueError("a loop short %.3f m has no clearance to give way, the grade law at its steepest" % short)
-            changed += self._ease(edges, short)
-        return changed
+        for kind in GIVEN_UP:
+            if kind not in present:
+                continue
+            if kind == GRADE:
+                short -= self._ease_grade(cyc, short, changed)
+                if short <= 1e-9:
+                    return changed
+            elif kind == LAYER:
+                edges = [k for k in cyc if klass[k] == LAYER]
+                k = min(edges, key=lambda k: (self.weak[k], k))
+                all_ = self.decision[self.of_decision[k]]
+                self.dropped[k] = -g.ew[k]
+                for e in all_:
+                    g.ew[e] = math.inf
+                    if e != k:
+                        self.dropped.setdefault(e, None)
+                return changed + list(all_)
+            else:
+                return changed + self._ease(sorted({k for k in cyc if klass[k] == kind}), short)
+        raise ValueError("a loop short %.3f m has nothing left to give way, the grade law at the steepest its class may be built" % short)
+
+    def _room(self, k):
+        """m the constraint k can be eased by: a clearance, no more than the headroom it asks over the structure's own depth
+        (further, the road under stands in the girders and the slab of the road over it: a road through a deck is never
+        drivable); a bound that is no clearance's, any."""
+        kind, *rest = self.ref[k]
+        if kind == "cp":
+            a, i = self.cps[rest[0]][:2]
+            return max(-self.g.ew[k] - _gsh.structure_depth(self.net, int(self.smp[a]["mem"][i])), 0.0)
+        if self.klass[k] != CLEARANCE:
+            return math.inf
+        c, s = rest
+        src = self.bound[(c, s, "lo" if kind == "floor" else "hi")]
+        upper, need = self.cross[src[1]]
+        if kind == "floor":
+            upper = int(self.smp[c]["mem"][s])      # (the piece's own road is the upper one over a road the shape does not move)
+        return max(need - _gsh.structure_depth(self.net, upper) - self.eased.get(k, 0.0), 0.0)
 
     def _ease(self, edges, short):
-        """Edges eased by short in all, equally, an edge that holds less than its share (a clearance is eased to nothing, no
-        further: a road under a road is not through it) eased by what it holds and the rest shared by the others. The edges
+        """Edges eased by short in all, equally, an edge that holds less than its share (a clearance is eased to the depth of
+        the structure over it, no further: _room) eased by what it holds and the rest shared by the others. The edges
         eased."""
         g = self.g
-        room = {k: (-g.ew[k] if self.ref[k][0] == "cp" else math.inf) for k in edges}
+        room = {k: self._room(k) for k in edges}
         left = sorted(edges, key=lambda k: (room[k], k))
         got = {}
         while left and short > 1e-12:
@@ -215,13 +238,13 @@ class Problem:
 
     def _ease_grade(self, cyc, short, changed):
         """The grade law of the cycle's roads eased by one factor, the least that makes up the shortfall, and no road past the
-        steepest grade the laws give any road (STEEPEST: a 20 km/h road's): a vehicle that cannot climb it does not climb
-        it more for a clearance. The shortfall it made up (less than short where the cap held); changed gets the edges."""
+        steepest grade its class may be built (gradeshapes.max_grade of the piece's road). The shortfall it made up (less than short where the cap held); changed
+        gets the edges."""
         g = self.g
         own = [k for k in cyc if self.klass[k] == GRADE]
         allowed = math.fsum(g.ew[k] for k in own)
         chains = sorted({self.ref[k][1] for k in own})
-        room = min(max(STEEPEST / self.grade0[c], 1.0) / self.lam[c] for c in chains)
+        room = min(max(self.cap[c] / self.grade0[c], 1.0) / self.lam[c] for c in chains)
         f = min(1.0 + short / allowed, room)
         if f <= 1.0:
             return 0.0
@@ -314,15 +337,22 @@ def relax(net, pcs, smp, chains, cps, trace):
 
 
 CURVE_STEPS = 7         # halvings of the factor's bracket (a ratio of 2 to 1 + 1 %): the curve law is eased to 1 % of the least
-CURVE_MAX = 2.0 ** 20   # the factor past which the curves are no part of what contradicts
+
+
+def curve_floor(net, pc):
+    """K (the kernel's: the radius over 100, m) of the tightest vertical curve the laws give the piece's road: any road's
+    (R_MIN_ROAD_M), a track's (R_MIN_RAIL_M)."""
+    rail = net.m[pc["main"]].kind in ("rail", "rail_deck")
+    return (_gsh.R_MIN_RAIL_M if rail else _gsh.R_MIN_ROAD_M) / 100.0
 
 
 def ease_curves(net, pcs, chains, cps, touched, feasible, hops=2):
     """(chains, [Relaxed]): the vertical curve law eased where the curves are what is left to contradict. feasible(chains,
     couplings) -> whether the kernel gives them heights. The radius of the chains in touched (where the other laws were eased:
     these roads are at the limit of what they can do; all of them where none was) is divided by the least factor that gives
-    the chains within hops couplings of them heights (found on those alone: a few roads, solved in a moment). The caller
-    checks the whole and asks again with more hops where it still has none. Nothing is changed where the curves hold."""
+    the chains within hops couplings of them heights (found on those alone: a few roads, solved in a moment), none past
+    curve_floor. The caller checks the whole and asks again with more hops where it still has none. Nothing is changed where
+    the curves hold; ValueError where they are at their floor and the chains still have none (the curves are not the cause)."""
     n = len(chains)
     near = [set() for _ in range(n)]
     for cp in cps:
@@ -339,18 +369,21 @@ def ease_curves(net, pcs, chains, cps, touched, feasible, hops=2):
     order = sorted(region)
     idx = {c: i for i, c in enumerate(order)}
     sub_cps = [(idx[cp[0]], cp[1], idx[cp[2]], cp[3]) + tuple(cp[4:]) for cp in cps if cp[0] in region and cp[2] in region]
+    floor = {c: min(chains[c]["K"], curve_floor(net, pcs[c])) for c in ease}
+    most = max(chains[c]["K"] / floor[c] for c in ease)          # (the factor past which every radius is at its floor)
+
+    def radius(c, mu):
+        return max(chains[c]["K"] / mu, floor[c]) if c in easeset else chains[c]["K"]
 
     def scaled(mu):
-        return [dict(chains[c], K=chains[c]["K"] / (mu if c in easeset else 1.0)) for c in order]
+        return [dict(chains[c], K=radius(c, mu)) for c in order]
     mu = 1.0
     if not feasible(scaled(1.0), sub_cps):
-        hi = 2.0
-        while not feasible(scaled(hi), sub_cps):
-            hi *= 2.0
-            if hi > CURVE_MAX:
-                raise ValueError("the curves are not what contradicts %d roads and the %d round them: the radius divided by %g "
-                                 "still has no heights" % (len(ease), len(region) - len(ease), CURVE_MAX))
-        lo = hi / 2.0 if hi > 2.0 else 1.0
+        if most <= 1.0 or not feasible(scaled(most), sub_cps):
+            raise ValueError("the curves are not what contradicts %d roads and the %d round them: their radius at the "
+                             "tightest the laws give a road (%g m) still has no heights" % (
+                                 len(ease), len(region) - len(ease), _gsh.R_MIN_ROAD_M))
+        lo, hi = 1.0, most
         for _ in range(CURVE_STEPS):
             mid = math.sqrt(lo * hi)
             if feasible(scaled(mid), sub_cps):
@@ -359,10 +392,13 @@ def ease_curves(net, pcs, chains, cps, touched, feasible, hops=2):
                 lo = mid
         mu = hi
     out = [dict(ch) for ch in chains]
+    done = []
     if mu > 1.0:
         for c in ease:
-            out[c]["K"] = chains[c]["K"] / mu
-    done = [Relaxed("curve", mu, ((int(pcs[c]["main"]), 0.0),), "vertical curve law of the %s piece of %s eased: radius divided by "
-                    "%.2f" % (pcs[c]["kind"], str(net.m[pcs[c]["main"]].key[0])[:8] + ":" + net.m[pcs[c]["main"]].kind, mu))
-            for c in ease] if mu > 1.0 else []
+            out[c]["K"] = radius(c, mu)
+            if out[c]["K"] < chains[c]["K"]:
+                done.append(Relaxed("curve", chains[c]["K"] / out[c]["K"], ((int(pcs[c]["main"]), 0.0),),
+                                    "vertical curve law of the %s piece of %s eased: radius divided by %.2f" % (
+                                        pcs[c]["kind"], str(net.m[pcs[c]["main"]].key[0])[:8] + ":" + net.m[pcs[c]["main"]].kind,
+                                        chains[c]["K"] / out[c]["K"])))
     return out, done

@@ -41,13 +41,39 @@ Each module has:
 | s1_paths | one interchange's members (what it names, what its structures are near, what its pieces are followed through; numbered by key) and the relations of its structures with them (`_relations`; never a ground road's pair with another). Also the cells' members' reading into the region (`load`, `members_of`) | `Paths` |
 | s2_extent | the region growth loop with `_gsh.find_interchanges(...)`; per interchange its `System` (seeds, joins, boundary, box) in the Paths' numbering | `find`: `(net, mine, loaded, members)` (mine: the interchanges this region solves); `run`: `Extent` |
 | s3_order | per sysm: `sysm["crossings"]` → `Crossing` (need from `gradeshapes.clearance_need(net, u, d, q)` as `_system` / `shape_problem` use it); sign from member kind; level: a longest-path layering of "d below u" over the system's members (0 for ground members); a cycle gives a `Finding("order_cycle")`, never an exception | `Order` |
-| s4_terrain | `ground = [self._ground_line(x["xy"]) for x in smp]` (the ground the solve reads: of a system already solved, the one its answer was solved on); trust = 1.0 where finite, else 0 | `(Terrain, ground)` |
-| s5_datum | `c["moves"]`, `sysm["dips"]`, the held decks (`net.m[i].held`) | `Datum` with `options=[Option(moves, None, None, "today's verdicts")]` |
+| s4_terrain | `ground = [self._ground_line(x["xy"]) for x in smp]` (the ground the solve reads: of a system already solved, the one its answer was solved on); trust = 1.0 where finite, else 0. And the heights of the members the shape does not move (a road on the ground under a deck, a track), read once at the arcs the problem asks (`gradeshapes.fixed_reads`, `Terrain.fixed`): the heights step is made from these and reads nothing. A track's top is the railways' bed (`railways.track_beds`: a lattice of beds, the costly read) plus `RAIL_TOP_M`; all the interchange's tracks are read at once, the railways taken round each cluster of the windows the questions lie in (`planner._rail_tops_many`, through `fixed_z.prefetch`), not once for each 64 m window of each question | `(Terrain, ground, table)` |
+| s5_datum | `c["moves"]`, `sysm["dips"]`, `sysm["tracks"]` (the track windows), the held decks (`net.m[i].held`) | `Datum` with `options=[Option(moves, None, None, "today's verdicts")]` |
 | s6_heights | `smp = _gsh.sample`, `zs = _gsh.solve_shape(...)` with today's cache and wait logic **unchanged**; the region's `embankments` + `prof` assembly | per system `Heights`, and `Region` for the region |
 
 One interchange is one scope, `system:<system_key>`, for all six steps, and one numbering of its members: its Paths'
 (by key). Every record of it that names a member (Extent, Order, Datum, Heights) uses it, so the same interchange is
 the same artifacts from every region that finds it.
+
+### Tracks are members of the shape
+A track (a rail or rail deck member) that an interchange crosses is a piece of its shape (`kind "track"`, `sysm["tracks"]`:
+a window round each crossing, wide enough for the track to leave its bed and come back at its grade and curve). Its chain is
+drawn to the bed the railways lay (its top, read by terrain) at a weight, `gradeshapes.W_TRACK`, derived from the laws:
+findground costs a move by the run of its ramp, lack / grade; a road moves at best at the steepest grade the laws allow
+(`gradelaw.road_grade`, a link), a track at `railways.GRADE`, so a track costs that ratio times a road's dip to move. It is
+held at the bed at both ends of its window, where the railways' own bed goes on (when the tracks are free to move: see below).
+
+The solve asks the interchange first with the tracks held (`pin_tracks`): the crossings read a track at the bed, as they read a
+road on the ground under a deck, never as unknowns, and the track's own chain, drawn to the bed, is held at nothing (a short
+window's bed may be steeper at its two ends than the track's grade, and the roads' problem would have no heights for it); this
+is the problem as it was before tracks were members, and a track
+nothing needs to move stays at its bed (the Heights hold it there: the answer for it is the bed, not its chain, drawn to the
+bed and held to its laws, which the bed's own noise does not meet exactly) and the diagnostics say `tracks_moved: false`. Only
+if that has no heights, the crossings solve for the tracks too, each at its weight, `tracks_moved: true`, and only then relaxation
+of the road laws is looked at. Where the railways lay no bed (a stub they leave out) there is no track: terrain reads NaN, the
+crossing asks nothing.
+
+The profiles of the moved tracks are in the region's, `"rail:<feature id>"`, mode `"track"`, at their bed (the rails' top less
+`RAIL_TOP_M`); the railways read them back (`railways.TRACK_Z_HOOK`, in `railways._beds`: the tile, the grader's plans and the
+crossing records draw what was solved), except inside the interchange's own steps (`railways.own_beds()`: the solve is made from
+the railways' own bed, not from its answer). A track that stayed is the railways' own.
+
+A join between two members is a sample of the piece it falls in (`pieces()`' `cuts`): a join is held at one height, and held at
+the nearer of two samples half a step off it, two decks at a T-join stood 0.05-0.11 m apart.
 
 ### `server/ix/pipeline.py`
 `region(planner, home, hk) -> prof`: **exactly** what `_shape_region_calc(home, hk)` returns, built by calling
@@ -153,8 +179,9 @@ is over what it spans, a tunnel under what is over it), then the relative layer 
 (`gradeshapes._over`); never a section's layer on its own. Each decision alone is consistent, but a road is continuous: its
 sections meet at one height at their joins, and a layer that changes along a carriageway puts it under a road at one crossing
 and over it a section later. The order step finds those as negative cycles of the difference constraints of the interchange's
-crossings (upper at least `need` over lower), joins (one height) and the grade law along each member between those points, all
-heights free (`diffgraph`: the same graph the heights step uses). Each is resolved by giving up the weakest evidence in it: a
+crossings (upper at least `need` over lower), joins (one height) and the steepest grade its class may be built along each member
+between those points (`gradeshapes.max_grade`: the heights step eases a road's grade law to it before it
+gives up anything that keeps a vehicle off a deck), all heights free (`diffgraph`: the same graph the heights step uses). Each is resolved by giving up the weakest evidence in it: a
 decision from layers alone (smallest layer difference first) before one from the structure; a structure decision is never
 given up there (a loop of them only is `order_deferred`: the heights step eases the clearance). Every decision given up is an
 `order_dropped` note of the Order artifact with its reason, and is no longer in `sysm["crossings"]` (settled in place) nor
@@ -163,9 +190,14 @@ of their roads' keys.
 
 **Heights.** `solve_shape` no longer gives up an interchange whose laws cannot all hold: the laws that are differences of two
 heights are a graph whose negative cycles are the contradictions, and each is eased by the least that closes it (plus a
-millimetre of room), in the order the laws are given up: a deck's mapped bound (its floor over the ground it spans, a road going
-under's ceiling), then the grade law (one factor over the roads of the cycle), then a clearance; a join never. Each
-relaxation is in the Heights artifact (`diag["relaxed"]`, a `relaxed_<kind>` note each) and in the step's log line. A deck's end
-that goes into a tunnel lands on the ground at the mouth (no floor over the span there): the bridge that becomes a tunnel along
-one road is not forbidden. `ixcheck` counts relaxations (`relaxed_*` notes) apart from failures, and checks the order's
-consistency under the joins (`weld_cycle`).
+millimetre of room), in the order the laws are given up, which is the order of what a vehicle can still do: first the grade law
+(one factor over the roads of the cycle, no road past the steepest grade its class may be built, `gradeshapes.max_grade`: the class's design
+grade by speed, where a deck's own law, `deck_grade`, is lower; a steeper road is drivable, a road through a deck never is); the vertical curve law, which is no
+difference of two heights and so is eased from the kernel's answer (`relax.ease_curves`), to the tightest curve the laws give any
+road (`gradeshapes.R_MIN_ROAD_M`) and no tighter; then, only where those have given all they can, a decision from the layers alone
+(given up whole, smallest layer difference first), a deck's mapped bound (its floor over the ground it spans, a road going
+under's ceiling), and a clearance; a join never. The first attempt's miss is no log line of its own (the answer's diagnostics keep
+it as `first`): the last solve's is. Each relaxation is in the Heights artifact (`diag["relaxed"]`, a `relaxed_<kind>` note each)
+and in the step's log line. A deck's end that goes into a tunnel lands on the ground at the mouth (no floor over the span there):
+the bridge that becomes a tunnel along one road is not forbidden. `ixcheck` counts relaxations (`relaxed_*` notes) apart from
+failures, and checks the order's consistency under the joins (`weld_cycle`).

@@ -4,8 +4,6 @@ import numpy as np
 from ix import artifacts
 from ixcheck import geom
 
-MAX_SEEDS = 60    # a system with more seeds is two interchanges or more, not one solve
-
 
 def check(art, parents):
     if not isinstance(art, artifacts.Extent):
@@ -15,7 +13,7 @@ def check(art, parents):
     ms = paths.members if paths is not None else []
     lines = [np.asarray(m.line, np.float64) for m in ms]
     for sysm in art.systems:
-        out += _seeds(art, sysm, ms, lines)
+        out += _seeds(art, sysm, ms, lines, paths)
         out += _boundary(art, sysm, ms, lines)
     return out
 
@@ -24,7 +22,7 @@ def _f(art, level, code, text, where=()):
     return artifacts.Finding(art.meta.step, level, code, text, where)
 
 
-def _seeds(art, sysm, ms, lines):
+def _seeds(art, sysm, ms, lines, paths):
     out = []
     for i in sysm.seeds:
         if not (0 <= i < len(ms)):
@@ -32,14 +30,42 @@ def _seeds(art, sysm, ms, lines):
         elif ms[i].kind not in artifacts.STRUCTURES:
             out.append(_f(art, "fail", "bad_seed", "system %s seeds %s, a %s, not a structure"
                           % (sysm.key, ms[i].key, ms[i].kind), ((i, 0.0),)))
-    if len(sysm.seeds) > MAX_SEEDS:
-        keys = ", ".join(str(ms[i].key) for i in sysm.seeds if 0 <= i < len(ms))
-        out.append(_f(art, "fail", "oversized_system", "system %s has %d seeds: %s"
-                      % (sysm.key, len(sysm.seeds), keys[:400]), tuple((i, 0.0) for i in sysm.seeds)))
+    out += _connected(art, sysm, ms, paths)
     if not len(sysm.boundary):
         out.append(_f(art, "note", "no_boundary", "system %s meets no road on the ground" % sysm.key))
     out += _box(art, sysm, ms, lines)
     return out
+
+
+def _connected(art, sysm, ms, paths):
+    """A system is one interchange: its seeds are tied together by the Paths' joins and crossings (through a road they
+    both meet, if not to each other). Seeds with no such tie are two systems the Extent made one. How many seeds a
+    system has is no fault: a downtown's elevated roads are one mesh of dozens, tied by hundreds of crossings, and solve
+    in seconds; the step time limits guard the cost."""
+    seeds = [i for i in sysm.seeds if 0 <= i < len(ms)]
+    if len(seeds) < 2 or paths is None:
+        return []
+    want = set(seeds)
+    par = {}
+
+    def root(i):
+        par.setdefault(i, i)
+        while par[i] != i:
+            par[i] = par[par[i]]
+            i = par[i]
+        return i
+    for r in list(paths.joins) + list(paths.crossings):
+        if r.a in want or r.b in want:
+            par[root(r.a)] = root(r.b)
+    groups = {}
+    for i in seeds:
+        groups.setdefault(root(i), []).append(i)
+    if len(groups) < 2:
+        return []
+    named = "; ".join(", ".join(str(ms[i].key) for i in g[:3]) + (" ..." if len(g) > 3 else "")
+                      for g in sorted(groups.values(), key=lambda g: g[0]))
+    return [_f(art, "fail", "disconnected_system", "system %s is %d groups of seeds no join or crossing ties together: %s"
+               % (sysm.key, len(groups), named[:400]), tuple((i, 0.0) for g in groups.values() for i in g[:1]))]
 
 
 def _box(art, sysm, ms, lines):

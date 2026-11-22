@@ -127,7 +127,7 @@ def system(planner, net, ix, fixed_z, hk, clock):
         with limits.scope("terrain"):
             smp = _gsh.sample(net, pcs)
             inputs = _samples_bytes(system_id, net, smp)
-            terrain, ground = s4_terrain.run(planner, smp, system_id, scope)
+            terrain, ground, table = s4_terrain.run(planner, net, sysm, pcs, smp, loc, fixed_z, system_id, scope)
             terrain, terrain_key = _put(terrain, (order_key,), inputs)
         _line(clock, "terrain", terrain_key, len(pcs), n_x, time.perf_counter() - cur["t0"], None, where)
         cur["keys"] = [terrain_key]
@@ -140,7 +140,7 @@ def system(planner, net, ix, fixed_z, hk, clock):
 
         begin("heights")
         with limits.scope("heights"):
-            zs, diag = s6_heights.solve(net, sysm, pcs, smp, fixed_z, ground)
+            zs, diag = s6_heights.solve(net, sysm, pcs, smp, s4_terrain.lookup(table), ground)
             _heights, heights_key = _put(s6_heights.run(planner, net, sysm, loc, pcs, smp, zs, diag, system_id, scope),
                                          (datum_key,), inputs)
         _line(clock, "heights", heights_key, len(pcs), n_x, time.perf_counter() - cur["t0"], _heights_why(zs, diag), where,
@@ -161,7 +161,7 @@ def interchange(planner, net, ix, others, hk, clock):
     feature id: [(xy (m, 2), z (m,), mode)]}, None), or ({}, why) where no system has an answer. others: the net's other
     interchanges' systems (the pieces its ramps stop at)."""
     fixed_z = s2_extent.make_fixed(planner, net)
-    solved, shapes, keys, why = [], [], [], None
+    solved, shapes, keys, moved, why = [], [], [], [], None
     for part in ix.parts or (ix,):
         sysm = part.sysm
         try:
@@ -184,11 +184,12 @@ def interchange(planner, net, ix, others, hk, clock):
         solved.append(sysm)
         shapes.append((pcs, smp, zs))
         keys.append(heights_key)
+        moved.append(bool(diag.get("tracks_moved")))
     if not solved:
         return {}, why
     heights_key = keys[0] if len(keys) == 1 else hashlib.sha256("|".join(keys).encode()).hexdigest()
     prof, region = s6_heights.region_of(planner, net, solved, shapes, "interchange:%s" % heights_key,
-                                        [_gsh.pieces(net, o) for o in others])
+                                        [_gsh.pieces(net, o) for o in others], moved)
     _put(region, tuple(keys), [heights_key.encode()])
     return prof, None
 
