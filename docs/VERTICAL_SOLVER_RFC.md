@@ -1,5 +1,7 @@
 # RFC: one vertical solver for the graded roads
 
+> **Status (2026-11-22):** step 1 (these grade metrics, no plan change) is merged. The solver itself is superseded by the approved road system rewrite (`BNE_ROADSYS`, one vertical profile per carriageway component over ground and structure; see docs/ARCHITECTURE.md). Its lessons (star ties per node, one-sided corridor bands, deck-part joints are not abutments, cap width = deck half width + road half width, floors past dip ramps, soft L1 grade ceilings) are carried into that design, and these metrics feed its quality checks.
+
 Status: proposal, 2026-11-16 (zolaski333). Nothing here is implemented; step 1 below is the first PR it asks for.
 
 ## The problem
