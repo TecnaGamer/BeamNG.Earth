@@ -50,6 +50,7 @@ import staging
 import surface as surfacemod
 import terraincache
 import townentry as townsignsmod      # (PR #597; townsigns.py is PR #505's town boards)
+import pools
 import xproc
 
 log = logging.getLogger("earthd.blockworker")
@@ -538,6 +539,8 @@ def _warm_next(want, read_only):
 
 
 def _warm_loop():
+    # (its own cancel check: the process-wide one is the running job's, of a place a teleport may have left)
+    xproc.set_thread_cancel(lambda: False)
     while True:
         with _s.cv:
             job = None
@@ -554,6 +557,10 @@ def _warm_loop():
             t0 = time.perf_counter()
             job[0].warm(job[1])
             log.debug("road plans ahead: %s in %.2f s", job[1], time.perf_counter() - t0)
+        except pools.Abandoned:
+            log.debug("road plans ahead for %s: abandoned (a teleport left its place)", job[1])
+            with _s.cv:
+                _s.want = [w for w in _s.want if w[1] != job[1]]
         except Exception:
             log.exception("road plans ahead for %s", job[1])
             with _s.cv:

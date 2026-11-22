@@ -342,6 +342,14 @@ def set_cancel(check):
         _cancel_proc[0] = check
 
 
+def set_thread_cancel(check):
+    """This thread's own cancel check only, never the process's: a thread that serves no job (blockworker's road plans
+    ahead) must not see the running job's "a teleport left its place" check, or it gives up the new place's cells
+    (2026-11-22 Fells Point: every plan ahead raised Abandoned while a Bonneville job ran in the process, and no road
+    tile came for 4 minutes). check() true raises pools.Abandoned; a check returning False shields the thread."""
+    _cancel.check = check
+
+
 def _cancelled():
     check = getattr(_cancel, "check", None) or _cancel_proc[0]
     return check is not None and check()
