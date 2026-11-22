@@ -988,6 +988,21 @@ do
   roads.collisionRebuilt()                                      -- (another rebuild first: the terrain commit's)
   for _ = 1, 80 do upd7() end
   T.check(S.calls.reloadCollision == r0 + 1, 'late points made solid by another rebuild: none of their own')
+  T.check(roads.onlyLateDirt({ requestLate = 2 }) and not roads.onlyLateDirt({ requestLate = 1, request = 1 })
+    and not roads.onlyLateDirt({}), 'onlyLateDirt')
+  -- only late points since the last rebuild, the car standing: no RELOAD_EVERY_S rebuild for them (each is due by its
+  -- own distance); a bare request with them: the timer as before
+  roads.RELOAD_EVERY_S = 0
+  car.v = vec3(0, 0, 0)
+  for _ = 1, 80 do upd7() end
+  r0 = S.calls.reloadCollision
+  roads.requestLate({ 500, 120 })                               -- (260 m off)
+  for _ = 1, 80 do upd7() end
+  T.check(S.calls.reloadCollision == r0, 'late points only: no timed rebuild')
+  roads.requestCollision()
+  for _ = 1, 80 do upd7() end
+  T.check(S.calls.reloadCollision == r0 + 1, 'with a bare request: the timed rebuild')
+  roads.RELOAD_EVERY_S = 1e9
   roads.RELOAD_EVERY_S = every
   roads.COLLIDE_CHECK_S, roads.BEHIND_JUMP_M = check, jump
   getPlayerVehicle = nil

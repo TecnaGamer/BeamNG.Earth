@@ -1814,7 +1814,7 @@ function M.update(anchorId, player, view, frameMs, fill)
   if M.NEAR_URGENT_MS > 0 and nOrder > 0 and oD[oSort[1] % ORDER_SLOTS] <= M.NEAR_URGENT_M then
     limit = math.max(limit, M.NEAR_URGENT_MS)
   end
-  local nearMade = false
+  local nearMade, nearBare = false, false   -- (solid items made; ... some with no box or late point: the next rebuild)
   local madeBoxes, cb = nil, nil            -- (boxes { x0, y0, x1, y1 } round the solid items made, one a tile)
   local lateMade = nil                      -- (... and the REACH items made solid farther out: { x1, y1, ... }, roads.requestLate)
   local rowsScanned = 0
@@ -1824,11 +1824,13 @@ function M.update(anchorId, player, view, frameMs, fill)
     if nearMade then
       local ok, roads = pcall(require, 'beamngEarth/roads')
       if ok and roads.requestCollision then
-        roads.requestCollision()
+        -- (REACH: every item made solid has a box or a late point, each due by its own distance; no bare request,
+        -- which would start the RELOAD_EVERY_S timer for them as well)
+        if nearBare or not roads.requestLate then roads.requestCollision() end
         for _, b in ipairs(madeBoxes or {}) do roads.requestCollision({ b[1], b[2], 0, b[3], b[4], 0 }) end
         if lateMade and roads.requestLate then roads.requestLate(lateMade) end
       end
-      nearMade, madeBoxes, cb, lateMade = false, nil, nil, nil
+      nearMade, nearBare, madeBoxes, cb, lateMade = false, false, nil, nil, nil
     end
   end
   -- a pass over a tile's rows stopped (its frame's time or items, or no Forest yet): the next pass for the same targets
@@ -1960,7 +1962,7 @@ function M.update(anchorId, player, view, frameMs, fill)
                 lateMade = lateMade or {}
                 lateMade[#lateMade + 1] = x
                 lateMade[#lateMade + 1] = y
-              end
+              else nearBare = true end
             end
             budget = budget - 1
             if elapsed() > limit then stop(t, i + 1, skipped, want, band, near); return end

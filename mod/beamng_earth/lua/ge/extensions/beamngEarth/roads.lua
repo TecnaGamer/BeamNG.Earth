@@ -2805,6 +2805,8 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   -- (NEED: a fast car's pending colliders wait for their deadline, not for RELOAD_EVERY_S; what else set the flag
   -- (trees, props, deletes near the car) keeps the timer)
   if due and not urgent and M.NEED and lastSpeed >= M.FAST_MS and M.onlyColliderDirt(dirtySrc) then due = false end
+  -- (only late colliders since the last rebuild: each is due by its own distance, M.lateUrgent; no RELOAD_EVERY_S)
+  if due and not urgent and M.onlyLateDirt(dirtySrc) then due = false end
   if due and not holdActive and reloadWaits < M.RELOAD_WAIT_FRAMES and gov.roomFor and not gov:roomFor(M.RELOAD_ROOM_MS) then
     reloadWaits = reloadWaits + 1
     due = false
@@ -3118,6 +3120,16 @@ function M.boxGap2(b, x, y)
   local dx = math.max(b[1] - x, 0, x - b[4])
   local dy = math.max(b[2] - y, 0, y - b[5])
   return math.sqrt(dx * dx + dy * dy)
+end
+
+-- Pure: did only late colliders (M.requestLate) set the flag? src: { source = n }
+function M.onlyLateDirt(src)
+  local any = false
+  for k in pairs(src or {}) do
+    if k ~= 'requestLate' then return false end
+    any = true
+  end
+  return any
 end
 
 -- Pure: did only made colliders (markTileCollider, their promotion near the car) set the flag? src: { source = n }

@@ -237,6 +237,11 @@ do
   trees.update(1, { x = 128, y = 476, speed = 40 })   -- (a pass needs RECHECK_M of moving or RECHECK_S)
   T.check(solidAt() == '200,250', 'reach at 40 m/s: 320 m (SOLID_LEAD_S), the 276 m one solid again')
   T.check(#reqs > 0 and type(reqs[#reqs]) == 'table' and reqs[#reqs].late == true, 'reach at speed: made solid 276 m off, a late point')
+  do
+    local bare = false
+    for _, q in ipairs(reqs) do if q == false then bare = true end end
+    T.check(not bare, 'reach: no bare request (every item made solid has its own deadline)')
+  end
   trees.update(1, { x = 128, y = 482, speed = 70 })
   T.check(solidAt() == '10,200,250', 'reach at 70 m/s: 560 m, every item')
   -- heading away from the items (+y): every item behind the car by more than BEHIND_M: none solid
