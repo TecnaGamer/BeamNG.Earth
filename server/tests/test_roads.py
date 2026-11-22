@@ -1168,7 +1168,12 @@ class TrackerTest(unittest.TestCase):
 
     def test_at_speed_the_path_ahead_is_built_and_kept(self):
         conn = FakeConn()
-        tr = roads.Tracker()
+        # The tracker ranks by its measured build time (an average of wall-clock builds): under load the fake's
+        # instant builds measured long and the car's own tile ranked after the next one (gate 304, the mini PC's
+        # lane: (1, 0) first). This test is about the path order, so the estimate is pinned (updates ignored).
+        class Pinned(roads.Tracker):
+            build_s = property(lambda self: 0.05, lambda self, v: None)
+        tr = Pinned()
         built = []
 
         def build(aid, tx, ty):

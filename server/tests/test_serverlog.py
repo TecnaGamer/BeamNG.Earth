@@ -66,7 +66,9 @@ class ServerLogTest(unittest.TestCase):
             return peak
 
         peak = asyncio.run(drive())
-        self.assertLess(peak, 0.050)
+        # The guarded failure is a 3 s write blocking the loop; 0.5 s still catches it. 50 ms measured the machine:
+        # 63 ms on the mini PC lane with 600 tests beside it (gate 304).
+        self.assertLess(peak, 0.5)
         serverlog.shutdown()
         self.assertEqual(stream.getvalue().splitlines(), ["first", "second"])
         self.assertFalse(listener.is_alive())
