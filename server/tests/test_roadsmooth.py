@@ -400,6 +400,60 @@ class SmoothFeaturesTest(unittest.TestCase):
 class KernelParityTest(unittest.TestCase):
     """The Rust kernel gives what the NumPy original gave, on random lines of every kind of bend."""
 
+    def test_one_kernel_call_rounds_the_rails_as_the_per_line_loop_did(self):
+        """road_smooth_pinned_many (kernel 594) against the Python it replaced (pinned_vertices + smooth_pinned /
+        smooth_line, line by line): the same lines changed, the same points and distances, bit for bit; yards of
+        lines with switches (ends on other lines, within and beyond SWITCH_PIN_M, at their ends), duplicate points,
+        a NaN line, a line of two points."""
+        import fast
+        rng = np.random.default_rng(594)
+        for case in range(40):
+            nl = int(rng.integers(1, 30))
+            lines = []
+            for _ in range(nl):
+                k = int(rng.integers(2, 25))
+                ang = np.cumsum(rng.normal(0.0, rng.choice([0.02, 0.1, 0.4]), k))
+                xy = np.cumsum(np.c_[np.cos(ang), np.sin(ang)] * rng.choice([3.0, 12.0, 40.0]), axis=0)
+                xy += rng.uniform(-80.0, 80.0, 2)
+                lines.append(xy)
+            for j in range(1, nl):              # branches: an end on (or near) another line's piece
+                if rng.random() < 0.6:
+                    o = lines[int(rng.integers(0, j))]
+                    s = int(rng.integers(0, len(o) - 1))
+                    t = rng.random()
+                    p = o[s] + t * (o[s + 1] - o[s]) + rng.normal(0.0, rng.choice([0.1, 0.6, 1.2]), 2)
+                    lines[j][0 if rng.random() < 0.5 else -1] = p
+            if case % 9 == 3:
+                lines[0][len(lines[0]) // 2] = lines[0][len(lines[0]) // 2 - 1]     # a duplicate vertex
+            if case % 13 == 5:
+                lines[-1][0, 0] = np.nan
+            en = np.ascontiguousarray(np.concatenate(lines), np.float64)
+            off = np.r_[0, np.cumsum([len(x) for x in lines])].astype(np.int64)
+            a, b = off[:-1], off[1:]
+            radius = rng.choice([80.0, 250.0], nl)
+            rail = rng.random(nl) < 0.85
+            feat = np.arange(nl, dtype=np.int64) * 3 + 1
+            ends = [(int(feat[i]), en[a[i]], en[b[i] - 1]) for i in range(nl) if rail[i] and b[i] - a[i] >= 2]
+            want = []
+            for i in range(nl):
+                xy = en[a[i]:b[i]]
+                pins = (roadsmooth.pinned_vertices(xy, [e for j, p, q in ends if j != feat[i] for e in (p, q)])
+                        if ends and rail[i] else [])
+                got = roadsmooth.smooth_pinned(xy, float(radius[i]), pins) if pins else \
+                    roadsmooth.smooth_line(xy, float(radius[i]))
+                if got is not None:
+                    want.append((i,) + tuple(np.asarray(g) for g in got))
+            e_own = np.asarray([j for j, _p, _q in ends for _ in (0, 1)], np.int64)
+            e_pts = np.asarray([e for _j, p, q in ends for e in (p, q)], np.float64).reshape(-1, 2)
+            ch, pts, po, old, new, ko = fast._ef.road_smooth_pinned_many(
+                en, a, b, radius, feat, rail & bool(ends), e_pts, e_own, float(roadsmooth.SWITCH_PIN_M),
+                roadsmooth.PARAMS)
+            self.assertEqual(ch.tolist(), [w[0] for w in want], case)
+            for c, w in enumerate(want):
+                for x, y in ((pts[po[c]:po[c + 1]], w[1]), (old[ko[c]:ko[c + 1]], w[2]), (new[ko[c]:ko[c + 1]], w[3])):
+                    self.assertEqual(x.shape, y.shape, case)
+                    self.assertEqual(x.tobytes(), np.ascontiguousarray(y, np.float64).tobytes(), case)
+
     def test_random_lines(self):
         rng = np.random.default_rng(7)
         for n in range(300):

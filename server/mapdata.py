@@ -151,6 +151,15 @@ DEFAULT_CACHE = os.path.expanduser("~/.cache/beamng-earth")
 DEFERRED = (netfetch.Deferred, netfetch.PolicyDenied, netfetch.BudgetExceeded, netfetch.HostUnavailable,
             netfetch.RateLimited)
 
+
+def executor_closed(e):
+    """Did a thread pool refuse e's work because it was shut down? At a process's exit concurrent.futures stops every
+    pool's workers while the builds still running finish: their next submit fails with this (gate 293, a builder
+    process ending with layer builds on its threads). Not a source's failure: an optional source's "go on without it"
+    would store the cell without it for good."""
+    return isinstance(e, RuntimeError) and str(e).startswith("cannot schedule new futures")
+
+
 # Provenance per source (sources + licences for the credits overlay; exact wordings in CREDITS.md).
 WORLDCOVER = {
     "id": "esa-worldcover", "name": "ESA WorldCover 10 m 2021 v200", "release": maprasters.WORLDCOVER_RELEASE,
@@ -520,6 +529,38 @@ class MapData:
         import roadlayercache
         return roadlayercache.load(self._dec_dir(key, layer), dec, lambda c: self._dec_stamp(layer, c))
 
+    # --- what a product made from decoded roads layers (roadsurf3's lane graphs) keys and checks its reads by ----------
+    def roads_product_dir(self, key, name):
+        """The folder of a product of cell key's roads layer (beside its mirror, pruned with it: prune_mirror), or None
+        without a mirror."""
+        if MIRROR_MB <= 0:
+            return None
+        return self._mirror_dir(self.path(_key(key), "roads")) + "." + name
+
+    def roads_stamp(self, cell):
+        """The stamp now of cell's (its string) roads layer file (its size and time), or None (not there)."""
+        return self._dec_stamp("roads", cell)
+
+    def roads_complete(self, key, feats):
+        """Could cell key's decoded roads layer feats be kept as a product's input: its file there (not a parquet
+        stand-in) and the tag data its decode asked for joined and read (as _dec_store asks before it keeps a
+        decode)?"""
+        key = _key(key)
+        if feats is None or feats.__dict__.get("_bnge_fallback") or self._dec_stamp("roads", str(key)) is None:
+            return False
+        n = len(feats)
+        sub = feats.attrs.get("subtype") if n else None
+        asked = {"rail_tags": bool(n) and sub is not None and bool((np.asarray(sub).astype(str) == "rail").any()),
+                 "lane_tags": bool(n)}
+        for name, mark in (("rail_tags", "_rails_built"), ("lane_tags", "_lanes_built")):
+            t = getattr(self, name, None)
+            if t is None or not asked[name]:
+                continue
+            v = t.version()
+            if v is not None and (feats.__dict__.get(mark) != v or not self._tags_read(name, key)):
+                return False
+        return True
+
     def _tags_read(self, name, key):
         """Is the tag data's (rail_tags / lane_tags) shard of cell key read (in its memory: a shard that could not be
         had is passed over without an error for SHARD_RETRY_S, and the layer joined meanwhile lacks its tags)?"""
@@ -550,11 +591,12 @@ class MapData:
                     return
             stamps.append((cell, stamp))
         d = self._dec_dir(key, layer)
-        if roadlayercache.has(d, dec):      # (another process kept it while this one made it: a first visit's
-            return                          # processes read the same cells at once)
-        size = roadlayercache.store(d, dec, f, sorted(set(stamps)))
-        if size:
-            self._mirror_note(size)
+        if roadlayercache.has(d, dec) or roadlayercache.pending(d, dec):
+            return              # (another process kept it while this one made it: a first visit's processes read the
+            #                     same cells at once; or this one's write of it is queued)
+        # (written on roadlayercache's writer thread: the tiles waiting for this decode get it before the pack and the
+        # files are written, 2026-11-21)
+        roadlayercache.store_later(d, dec, f, sorted(set(stamps)), self._mirror_note)
 
     def _lane_sections(self, key, layer, kind, frame, f, ctx=None):
         """The roads layer with its merged highways' lane sections split out (lanesections.split, from PR #880 by
@@ -940,7 +982,7 @@ class MapData:
         except osmtagshards.NotInUse:
             return False                # (none published, or off)
         except Exception as e:
-            if isinstance(e, DEFERRED) and kind not in ("demand", "urgent"):
+            if (isinstance(e, DEFERRED) and kind not in ("demand", "urgent")) or executor_closed(e):
                 raise
             shards.down(e)
             return False
@@ -990,6 +1032,8 @@ class MapData:
             log.warning("mapdata: OSM road tags of %s: the host is busy (%s); the roads go on without them", key, kind)
             return {}, []
         except Exception as e:          # optional: the roads go on with their guesses
+            if executor_closed(e):
+                raise                   # (not a source's failure: the roads would be stored without their tags)
             log.warning("mapdata: OSM road tags of %s: %s: %s", key, type(e).__name__, e)
             return {}, []
 

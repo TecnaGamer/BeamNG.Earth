@@ -33,6 +33,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.104"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -193,6 +197,13 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "web-time",
+]
+
+[[package]]
+name = "cmake"
+version = "0.1.58"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -426,11 +437,14 @@ dependencies = [
  "pollster",
  "pulldown-cmark",
  "pyo3",
+ "roadsys",
  "serde",
  "serde_json",
  "sha2",
  "texture-compressor",
+ "turbojpeg-sys",
  "wgpu",
+ "windows-sys",
  "zstd",
  "zune-jpeg",
 ]
@@ -1274,6 +1288,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
+name = "roadsys"
+version = "0.1.0"
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1571,6 +1589,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
+]
+
+[[package]]
+name = "turbojpeg-sys"
+version = "1.2.0"
+dependencies = [
+ "anyhow",
+ "cmake",
+ "libc",
 ]
 
 [[package]]

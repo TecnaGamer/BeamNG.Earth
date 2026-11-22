@@ -472,7 +472,7 @@ def mapped(rec, mp):
 # taken from the copy of the cell of its first point (the same copy whichever cells were read first), in a frame at the
 # cell's centre. Nothing built reads them: shadow_forks writes them as JSON beside the build; forkprobe.py checks them.
 FORK_VERSION = 513          # earthfast.fork_records
-FORKS_FORMAT = 2            # the records' JSON (shadow_forks' folder name)
+FORKS_FORMAT = 3            # the records' JSON (shadow_forks' folder name; 3: whole_or_sections)
 FORK_REACH_M = 400.0        # m along every arm from the node (the design's window: inputs within 400 m)
 FORK_DIR_M = 20.0           # m of an arm its direction is read over
 FORK_DEG = 40.0             # a fork's two arms turn at most this from the trunk (more: a junction)
@@ -590,7 +590,39 @@ def _segments_round(key, cell_fn, memo, rings, cell_segments, read_cells=None, i
     if read_cells is not None:
         read_cells.extend(keys)
     copies = {str(k): read(k) for k in keys}
-    return {pid: copies[c][0][pid] for c, pid in window.choose({c: pair[1] for c, pair in copies.items()})}
+    chosen = whole_or_sections(window.choose({c: pair[1] for c, pair in copies.items()}))
+    return {pid: copies[c][0][pid] for c, pid in chosen}
+
+
+def whole_or_sections(chosen):
+    """The window's (cell, part id) choices without a road read both whole and as its lane sections ("<road>~lanes
+    <a>-<b>", lanesections.split): one cell's copy of a merged highway can be split where another cell's is not (their
+    lane tags differ), and the choice is made per id, so both were kept and the road was there twice (found by the
+    road rewrite's PT3, 2026-11-22: 2-8 roads in each of four dense boxes). Its sections where they cover all of it,
+    else the whole road (lanesections.replaced_roads' rule). Every cell a section's copy lies in lies in the road's own
+    copy's cells, which the window reads, so every window that holds the road decides the same."""
+    sids = {pid.split("|", 1)[0] for _c, pid in chosen}
+    sections = {}
+    for sid in sids:
+        road, sep, span = sid.partition("~lanes")
+        if sep and road in sids:
+            a, _d, b = span.partition("-")
+            if a.isdigit() and b.isdigit():
+                sections.setdefault(road, []).append((int(a), int(b), sid))
+    if not sections:
+        return chosen
+    drop = set()
+    for road, spans in sections.items():
+        end = 0
+        for a, b, _sid in sorted(spans):
+            if a > end:
+                break
+            end = max(end, b)
+        if end >= 1000000000:
+            drop.add(road)
+        else:
+            drop.update(sid for _a, _b, sid in spans)
+    return [(c, pid) for c, pid in chosen if pid.split("|", 1)[0] not in drop]
 
 
 def cell_forks(key, cell_fn, memo=None):
@@ -843,6 +875,7 @@ def anchor_m(spec):
 # are not solved (P3's lattice cuts, later): today's. BNE_ROADSHAPE_SHADOW=1 keeps P3a's shadow (nothing built).
 PROFILE_BUILT = PROFILE and os.environ.get("BNE_ROADSHAPE_SHADOW", "") not in ("1", "on", "true")
 SURFACE_PROFILE = PROFILE_BUILT and os.environ.get("BNE_ROADSURF_V3") == "surface"
+ROBUST_PROFILE = SURFACE_PROFILE and os.environ.get("BNE_PROFILE_ROBUST") != "0"
 PIN_FULL_M = 150.0          # m from an abutment along its approach the solve's change is pinned in full ...
 PIN_REACH_M = 200.0         # ... faded out to nothing here (the solve's weight toward today's is full from PROF_D1_M)
 PIN_MIN_DZ_M = 0.001        # m: an approach moved less than this nowhere is not pinned
@@ -1091,7 +1124,7 @@ def _knots(xy, step):
     return np.stack([dnp.interp(t, s, xy[:, 0]), dnp.interp(t, s, xy[:, 1])], axis=1), t, s
 
 
-def _ground_lines(store, decks):
+def _ground_lines(store, decks, with_ids=False):
     """The ground road lines within reach of the decks' ends (each feature's longest copy over the cells read; sorted
     by content: (first point, last point, vertices) to 1 mm)."""
     import mapcells
@@ -1116,10 +1149,13 @@ def _ground_lines(store, decks):
                 old = best.get(kk)
                 if old is None or (L, ln.tobytes()) > (old[0], old[1].tobytes()):
                     best[kk] = (L, ln)
-    out = [v[1] for v in best.values()]
-    out.sort(key=lambda ln: (round(float(ln[0, 0]), 3), round(float(ln[0, 1]), 3), round(float(ln[-1, 0]), 3),
-                             round(float(ln[-1, 1]), 3), len(ln)))
-    return out
+    def sort_key(k):
+        ln = best[k][1]
+        return (round(float(ln[0, 0]), 3), round(float(ln[0, 1]), 3), round(float(ln[-1, 0]), 3),
+                round(float(ln[-1, 1]), 3), len(ln))
+    ordered = sorted(best, key=sort_key)
+    out = [best[k][1] for k in ordered]
+    return (out, [k[0] for k in ordered]) if with_ids else out
 
 
 def _cell_ground(store, key):
@@ -1202,13 +1238,31 @@ def _surface_forks(store, keys, decks, dz, specs):
     return sorted(set(out))
 
 
+def _profile_rail_heads(store, lines, crossings, indices, ids):
+    """Rail-head elevations in the chain frame where the rail mesh has a lattice height."""
+    import fast
+    import railprofile
+    import railways
+    elev = getattr(store, "profile_bed_elev", None)
+    if elev is None or not railprofile.ENABLED:
+        return {}
+    fast.require(562, "surface_rail_samples")
+    samples = fast._ef.surface_rail_samples(lines, [(i, c[2]) for i, c in zip(indices, crossings)], railways.STEP_M)
+    rails = [(ids[i], "rail", "ground", np.array([a, b])) for i, (a, b, _) in zip(indices, samples)]
+    frame = store.frame
+    key = ("beds", round(float(frame.lat0), 7), round(float(frame.lon0), 7))
+    beds = railprofile.beds(frame, key, store.cell_fn, railways.point_ground(frame, elev), rails)
+    return {j: float(z[0] + t * (z[1] - z[0]) + railways.RAIL_TOP_M)
+            for j, ((_, _, t), z) in enumerate(zip(samples, beds)) if np.isfinite(z).all()}
+
+
 def profile_chain(store, comp, parts, ground, reqs, short=False):
     """One chain's shadow profile record (a dict), or None (no deck). parts: {key: (spec, xy, z, lon, level)} as
     published (the level: the chain pool's)."""
     import time
     import fast
     import roads as roadsmod
-    fast.require(560 if SURFACE_PROFILE else PROFILE_KERNEL, "profile_solve")
+    fast.require(562 if ROBUST_PROFILE else 560 if SURFACE_PROFILE else PROFILE_KERNEL, "profile_solve")
     ef = fast._ef
     keys, seen = [], set()
     for k in comp:          # (one deck kept twice under two part keys, a copy per cell: once, the first key's)
@@ -1231,13 +1285,18 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
         on_surface = any(sp.kind == "paved" and sp.cls in roadsurf3.V3_CLASSES for sp in specs)
     decks = [np.asarray(parts[k][1], np.float64)[:, :2] for k in keys]
     dz = [np.asarray(parts[k][2], np.float64) for k in keys]
-    gl = _ground_lines(store, decks)
+    membership = []
+    if on_surface and ROBUST_PROFILE:
+        gl, ground_ids = _ground_lines(store, decks, with_ids=True)
+        membership = [([k[0] for k in keys], ground_ids)]
+    else:
+        gl = _ground_lines(store, decks)
     dxy, doff = _flat(decks)
     gxy, goff = _flat(gl) if gl else (np.zeros((0, 2)), [0])
     half = [float(sp.width) / 2 for sp in specs]
     anc = [anchor_m(sp) for sp in specs]
     prm = [PROF_JOIN_M, PROF_DIR_M, dmath.cos(math.radians(PROF_ON_DEG)), PROF_STEP_M, float(PROF_MAX_PTS)]
-    axy, aoff, ameta, joins, ends = ef.profile_members(dxy, doff, half, anc, gxy, goff, prm)
+    axy, aoff, ameta, joins, ends = ef.profile_members(dxy, doff, half, anc, gxy, goff, prm, *membership)
     t1 = time.perf_counter()
     nd = len(keys)
     axy = np.asarray(axy, np.float64).reshape(-1, 2)
@@ -1289,23 +1348,37 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
             jn += [m, 1, int(to) // 2, int(to) % 2, 1]
         else:
             pins += [m, 1, 2 if reach == 0 else 1]     # (an anchor: z and z'; a stop short (a junction): z)
-    floors, fmeta = [], []
+    floors, fmeta, sources = [], [], []
+    removed = []
     if reqs and reqs.get("req"):
         lines = reqs["lines"]
         clear = float(reqs["clear"])
         idx = {k: i for i, k in enumerate(keys)}
         mask = ()
-        if on_surface and reqs.get("road_crossings"):
+        ground_ids = []
+        rail_ids = []
+        rail_heads = {}
+        if (on_surface or ROBUST_PROFILE) and reqs.get("road_crossings"):
             gl, cr, road_z, gi = reqs["road_crossings"]
             if gi is None:
                 gi = roadsmod.fast_crossing_ground(lines, gl)
             mask = ef.surface_road_floors(
                 [np.c_[np.asarray(ln)[[0, -1], :2], np.asarray(parts[k][2])[[0, -1]]] for k, ln in zip(comp, lines)],
-                [np.asarray(g)[[0, -1], :2] for g in gl],
+                [np.asarray(g)[:, :2] if ROBUST_PROFILE else np.asarray(g)[[0, -1], :2] for g in gl],
                 [(c[0], g, *c[2], z) for c, g, z in zip(cr, gi, road_z)])
+            if ROBUST_PROFILE:
+                ground_ids = [reqs["floor_ids"][i] for i in gi] if "floor_ids" in reqs else []
+        if ROBUST_PROFILE and reqs.get("rail_crossings"):
+            _, rl, rcr, ri, ids = reqs["rail_crossings"]
+            rail_ids = [ids[i] for i in ri]
+            if on_surface:
+                rail_heads = _profile_rail_heads(store, rl, rcr, ri, ids)
         for n, r in enumerate(reqs["req"]):
             if n < len(mask) and not mask[n]:
-                continue
+                if ROBUST_PROFILE and ground_ids:
+                    removed.append((ground_ids[n], str(comp[int(r[0])]), float(r[1])))
+                if on_surface:
+                    continue
             k = comp[int(r[0])] if int(r[0]) < len(comp) else None
             if k not in idx:
                 continue
@@ -1313,8 +1386,18 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
             s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
             p = (float(dnp.interp(float(r[1]), s, ln[:, 0])), float(dnp.interp(float(r[1]), s, ln[:, 1])))
             c = float(r[3]) if len(r) > 3 and r[3] is not None else clear
-            floors += [float(idx[k]), p[0], p[1], float(r[2]) + c]
-            fmeta.append((idx[k], p[0], p[1], float(r[2]), c))     # (the probes': the surface under, the clearance)
+            lower = float(r[2])
+            if ROBUST_PROFILE:
+                j = n - len(mask)
+                if j < 0:
+                    sources.append(("road", ground_ids[n] if ground_ids else None, lower))
+                elif j < len(rail_ids):
+                    sources.append(("rail", rail_ids[j], lower))
+                    lower = rail_heads.get(j, lower)
+                else:
+                    sources.append(("water", None, lower))
+            floors += [float(idx[k]), p[0], p[1], lower + c]
+            fmeta.append((idx[k], p[0], p[1], lower, c))     # (the probes': the surface under, the clearance)
     sprm = [PROF_LAMBDA, PROF_W_G, PROF_D0_M, PROF_D1_M, PROF_EPS_W, PROF_MU, PROF_SPLIT_GAP_M, PROF_SHEET_DZ_M,
             dmath.cos(math.radians(PROF_SHEET_DEG)), PROF_SHEET_REACH_M, PROF_AT_GRADE_M, PROF_DECK_GROUND_M,
             PROF_MAX_GRADE, PROF_GRADE_ADD, PROF_MARGIN, float(PROF_ROUNDS), PROF_ACTIVE_TOL, PROF_RELEASE_TOL,
@@ -1322,8 +1405,28 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
     surface = []
     if on_surface:
         surface = [_surface_forks(store, keys, decks, dz, specs)]
-    zsol, report, tried = ef.profile_solve(allxy, koff, kz_all, np.ascontiguousarray(kg_all), deck, half + [0.0] * len(ameta),
+        if ROBUST_PROFILE:
+            # A road represented by a ground member contributes a relative
+            # floor: its own height can change in this QP.
+            approach_ids = [keys[int(a[0])][0] for a in ameta]
+            ground_floors = [((fid or "") if kind == "road" else "", row[4])
+                             for (kind, fid, _), row in zip(sources, fmeta)]
+            deck_depth = roadsmod.DECK_FULL_DEPTH if depth is None else float(depth)
+            surface.extend((True, (approach_ids, ground_floors), deck_depth + 2.3))
+    elif ROBUST_PROFILE:
+        surface = [None, True]
+    approach_half = [half[int(a[0])] for a in ameta] if on_surface and ROBUST_PROFILE else [0.0] * len(ameta)
+    zsol, report, tried = ef.profile_solve(allxy, koff, kz_all, np.ascontiguousarray(kg_all), deck, half + approach_half,
                                     level, under, abut, jn, pins, floors, sprm, *surface)
+    # S4c appends fixed-width observation records after the S4b summary.
+    audit = {}
+    if ROBUST_PROFILE and report[0] == 0:
+        audit["deck_depth_m"] = roadsmod.DECK_FULL_DEPTH if depth is None else float(depth)
+        audit["surface_floors"] = on_surface
+        audit["floor_sources"] = sources
+        audit["attachments"] = removed
+        audit["relaxations"] = [report[i:i + 10] for i in range(17, len(report), 10)]
+        report = report[:17]
     t3 = time.perf_counter()
     la, lo, _ = store.frame.enu_to_geodetic(allxy[:, 0], allxy[:, 1], 0.0)
     status = _STATUS[int(report[0])] if 0 <= int(report[0]) < len(_STATUS) else "solver"
@@ -1352,4 +1455,4 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
             "report": [round(float(v), 4) for v in report], "joins": [jn[i:i + 5] for i in range(0, len(jn), 5)],
             "pins": [pins[i:i + 3] for i in range(0, len(pins), 3)], "floors": len(floors) // 4,
             "members": members, "timing": {"members_s": t1 - t0, "sample_s": t2 - t1, "solve_s": t3 - t2},
-            "_built": built, "_floors": fmeta}
+            "_built": built, "_floors": fmeta, **audit}

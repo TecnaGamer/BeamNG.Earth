@@ -44,8 +44,8 @@ _ef = fast.native(508, "sidewalks._normals_2d")
 #   plaza: no skirt diving under the road, no gap over lower ground); the walks sampled every WALK_GROUND_M and kept
 #   where the ground's or the reveal's shape needs (roads.WALK_V2_TOL_M).
 V2 = os.environ.get("BNE_SIDEWALK_V2", "off").strip().lower() in ("on", "1", "yes", "true")
-V2_NATIVE = 502
-REVEAL_MIN, REVEAL_MAX = 0.08, 0.20     # m: a vertical kerb's reveal over the road
+V2_NATIVE = 561
+REVEAL_MIN, REVEAL_MAX = 0.10, 0.16     # m: a vertical kerb's reveal over the road
 ROLLED_H, ROLLED_MAX = 0.09, 0.10       # m: a rolled kerb's nominal and largest reveal (lowest: REVEAL_MIN)
 ARC_STEP_M = 0.6                        # m per segment of a v2 curb return (vanilla 0.55-0.65 m)
 DRIVE_MERGE_M = 2.0                     # m: driveways closer than this share one lowered kerb (their flares meet)
@@ -74,6 +74,13 @@ PLANT_REPEAT_M = (3.0, 3.0, 2.0, 3.0)    # m per repeat of each planting texture
 EU_SLAB = {"asphalt": 5, "brick": 3,
            **{name: i for i, name in enumerate(EU_SURFACES, len(MATERIALS) - len(EU_SURFACES))}}
 BRICK = 3
+TOWN_PAVERS, TOWN_SETT = len(MATERIALS), len(MATERIALS) + 1
+TOWN_MATERIALS = (*MATERIALS[:3], "eca_bld_bricks_dark", *MATERIALS[4:], "italy_sidewalk_tiles", "italy_cobblestone",
+                  "road_crack", "m_dirty_ground", "repair1_west_coast_usa", "m_gm_concrete_plain",
+                  "road_asphalt_2lane", "m_dirt_road")
+TOWN_FOOTWAY = {"asphalt": TOWN_MATERIALS.index("road_asphalt_2lane"),
+                "light_asphalt": TOWN_MATERIALS.index("road_asphalt_2lane"),
+                "gravel": TOWN_MATERIALS.index("m_dirt_road")}
 BRICK_REPEAT_M = 1.2        # m per repeat of the brick paver texture
 
 # curbs sheet (1024 x 512, 8 bands of 64 px; Collada v up, so band 0 is v in [7/8, 1]):
@@ -188,7 +195,7 @@ def _soft_parts(p):
     """Keep the native sweep in the middle and sample its free ends more closely."""
     kind, curb, out, _, ramps, w, h, caps, slab, europe, mat, surface, taper = p[:13]
     v2 = p[13] if len(p) > 13 else None
-    if not taper or not any(caps):
+    if not taper or not any(caps) or (v2 and (v2.get("front_widths") or v2.get("marks"))):
         return p, []
     stations = np.r_[0., np.cumsum(dnp.hypot(*np.diff(curb[:, :2], axis=0).T))]
     length = stations[-1]
@@ -281,12 +288,18 @@ class Builder:
         self.ground = ground
         self.pieces = []            # (kind 0 run / 1 corner, points (k, 3), dirs (k, 2), outer (m, 3), ramps, w, h, caps,
         self._built = None          # slab, europe, mat, surface, taper); the Rust meshes once built (full, lean)
+        self.areas = []
+        self.materials = TOWN_MATERIALS if V2 else MATERIALS
         self.discs = []             # island plantings (add_disc)
         self.col = _Lean(self) if collision else None
 
     def add_walk(self, walk, default_width):
         """Render a walk record from roads.build_tile in either tile pipeline (PR #505: a European walk's own surface,
         kerb height and soft ends; an island's planting disc and slab material as before)."""
+        if "town" in walk:
+            self.areas.append(walk["town"])
+            self._built = None
+            return
         if "disc" in walk:
             d = walk["disc"]
             self.add_disc(d["ring"], d["apex"], d["mat"], d["h"], d["dome"])
@@ -295,10 +308,13 @@ class Builder:
 
         h = walk.get("height", walk.get("h", CURB_H))
         style = {"h": h, "europe": walk.get("europe", False), "surface": walk.get("surface")}
+        town_mat = walk.get("town_mat", 1) if V2 else 1
+        if V2 and style["surface"]:
+            town_mat = TOWN_FOOTWAY.get(style["surface"]) or _ef.town_slab(style["surface"], "", False)
         if "corner" in walk:
             c = walk["corner"]
             ramps = c.get("ramps", ()) if h > LOW_EDGE_HEIGHT else ()
-            self.add_corner(c["arc"], c["inward"], c["outer"], ramps=ramps, **style)
+            self.add_corner(c["arc"], c["inward"], c["outer"], ramps=ramps, mat=town_mat if town_mat != 1 else 0, **style)
             if V2:
                 otoe = c.get("otoe")
                 if otoe is not None and style["europe"] and len(otoe) == 3 and len(c["outer"]) == 3:
@@ -307,10 +323,10 @@ class Builder:
             return
         width = walk.get("w", default_width)
         curb, out = run_geometry(walk["pts"], walk["side"], width, walk.get("end_n") if V2 else None)
-        slab = BRICK if walk.get("brick") and style["surface"] is None else 1
+        slab = BRICK if town_mat != 1 or (walk.get("brick") and style["surface"] is None and "town_mat" not in walk) else 1
         ramps = walk.get("ramps", ()) if h > LOW_EDGE_HEIGHT else ()
         self.add_run(curb, out, width, caps=walk["caps"], ramps=ramps, slab=slab, taper=style["europe"],
-                     mat=int(walk.get("mat", 0)), **style)
+                     mat=int(walk.get("mat", 0)) or (town_mat if town_mat != 1 else 0), **style)
         if V2 and len(curb) >= 2:
             k = len(curb)
             roll = walk.get("roll", 0.0)
@@ -319,7 +335,7 @@ class Builder:
             drives = sorted(walk.get("drives", ())) if lowered else []
             self._v2_last({"hv": walk.get("hv"), "drop": walk.get("drop"),
                            "roll": np.broadcast_to(np.asarray(roll, np.float64), (k,)) if np.ndim(roll) == 0 else roll,
-                           "drives": drives})
+                           "drives": drives, "marks": walk.get("marks", ()), "front_widths": walk.get("front_widths", ())})
 
     def _v2_last(self, v2):
         """Attach sidewalks v2's per-vertex data to the piece just added (its 14th field)."""
@@ -341,7 +357,7 @@ class Builder:
                             bool(taper)))
         self._built = None
 
-    def add_corner(self, arc, inward, outer, h=CURB_H, ramps=(), europe=False, surface=None):
+    def add_corner(self, arc, inward, outer, h=CURB_H, ramps=(), europe=False, surface=None, mat=0):
         """A corner piece: the curb along the polyline arc (k, 3) (a curb return, with the straight
         runs and tapers of curb extensions; inward: unit vectors toward the sidewalk), the slab from
         the curb top to the outer corner points [(x, y, z) ...] (from the second sidewalk's end round
@@ -354,7 +370,7 @@ class Builder:
             outer = np.vstack((outer[0], (outer[0] + outer[1]) / 2, outer[1:]))
         self.pieces.append((1, np.asarray(arc, np.float64)[:, :3], np.asarray(inward, np.float64)[:, :2],
                             outer, list(ramps), 2.5, float(h), (False, False),
-                            1, bool(europe), 0, surface, False))
+                            BRICK if mat else 1, bool(europe), mat, surface, False))
         self._built = None
 
     def add_disc(self, ring, apex, mat, h, dome):
@@ -385,7 +401,7 @@ class Builder:
                 np.concatenate([p[2] for p in parts]), np.concatenate([p[3] for p in parts]))
 
     def empty(self):
-        return not self.pieces and not self.discs
+        return not self.pieces and not self.discs and not self.areas
 
     def _native(self, ps):
         """Unmodified 1.7.2 native geometry, for a batch of pieces with one palette."""
@@ -459,7 +475,9 @@ class Builder:
             np.ascontiguousarray(np.array(rows, np.float64).reshape(-1, 3)), np.array(roff, np.int64),
             np.array(ws, np.float64), np.array(caps, bool).reshape(-1, 2), np.array(slabs, np.int64),
             cat(hvs, (0,)), cat(drops, (0,)), cat(rolls, (0,)), cat(otoes, (0,)),
-            tuple(float(v) for v in self.origin), self.col is not None)
+            tuple(float(v) for v in self.origin), self.col is not None,
+            [((p[13] if len(p) > 13 else None) or {}).get("front_widths", ()) for p in ps],
+            [((p[13] if len(p) > 13 else None) or {}).get("marks", ()) for p in ps])
 
     @staticmethod
     def _join(meshes):
@@ -487,7 +505,7 @@ class Builder:
                 drawn, collision = self._native2(pieces) if V2 else self._native(pieces)
                 if tips:
                     drawn, collision = self._with_tips(drawn, collision, tips)
-                if european:
+                if european and not V2:
                     P, T, UV, M = drawn
                     UV = UV.copy()
                     # Tactile UVs stay intact. The continuous surfaces repeat
@@ -514,7 +532,14 @@ class Builder:
             if disc is not None:
                 full.append(disc)
                 lean.append(disc[:3] + (np.zeros(len(disc[3]), np.int64),))
+            for a in self.areas:
+                area = _ef.town_area_mesh(a["pts"], a["tri"], a["mat"], a["edges"], self.origin)
+                full.append(area)
+                lean.append((*area[:3], np.zeros(len(area[3]), np.int64)))
             self._built = self._join(full), self._join(lean)
+            if V2:
+                fast.require(561, "weld district sidewalks")
+                self._built = tuple(_ef.town_weld(*mesh, collision, self.origin) for mesh, collision in zip(self._built, (False, True)))
         return self._built
 
     def _with_tips(self, drawn, collision, tips):
@@ -538,7 +563,7 @@ class Builder:
 
     def write(self, path):
         P, T, UV, M = self.arrays()
-        return cdae.write(path, P, T, uvs=UV, material=list(MATERIALS), tri_materials=M, object_name="walk")
+        return cdae.write(path, P, T, uvs=UV, material=list(self.materials), tri_materials=M, object_name="walk")
 
     def write_collision(self, path):
         """The lean collision mesh (Builder(collision=True)) as a never-drawn collision shape."""
@@ -576,10 +601,19 @@ def run_geometry(walk_line, side, w, ends=None):
     return curb, out
 
 
+def fitted_edges(walk):
+    curb, direction = run_geometry(walk["pts"], walk["side"], walk["w"], walk.get("end_n"))
+    fast.require(561, "fitted sidewalk outline")
+    return _ef.town_outline(curb, direction, walk["front_widths"])
+
+
 def _slab_edges(walk):
     if "corner" in walk:
         corner = walk["corner"]
         return np.asarray(corner["arc"])[:, :2], np.asarray(corner["outer"])[::-1, :2]
+    if walk.get("front_widths"):
+        a, b = fitted_edges(walk)
+        return a[:, :2], b[:, :2]
     curb, out = run_geometry(walk["pts"], walk.get("side", 1), walk["w"])
     return curb[:, :2], curb[:, :2] + walk["w"] * out
 

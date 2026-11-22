@@ -43,6 +43,34 @@ class Batter(unittest.TestCase):
         px = np.full_like(ys, x)
         return grading.grade_points(px, ys, ground(px, ys), pack)
 
+    def test_window_keeps_plan_smoothing_and_linked_end_caps(self):
+        # Ends on different plans continue one road. The far end of the last
+        # linked plan is beyond the query window and still supplies probe rows.
+        from types import SimpleNamespace
+
+        plans = [road(x=(-200, 64)), road(x=(64, 112)), road(x=(112, 400)),
+                 road(y0=40, z=3), road(y0=2000, z=-5)]
+        def ground(x, y):
+            return .2 * y + .015 * x
+        full = packed(plans, ground)
+        reads = []
+        def prepare(local):
+            reads.append(len(local.h))
+            local.bt = grading.batter_params(local, ground)
+            return True
+        planner = SimpleNamespace(_batter_of=prepare)
+        x = np.linspace(-28., 12., 81)
+        y = np.linspace(-35., 37., 81)
+        local = grading._Planner._batter_window(planner, full, x, y)
+        self.assertLess(reads[0], len(full.h))
+        self.assertIn(400., local.b[:, 0])
+        self.assertNotIn(2000., local.b[:, 1])
+        got = grading.grade_points(x, y, ground(x, y), full, .02, local)
+        expected = grading.grade_points(x, y, ground(x, y), full, .02)
+        np.testing.assert_array_equal(got.view(np.uint64), expected.view(np.uint64))
+        self.assertIs(grading._Planner._batter_window(planner, full, x, y), local)
+        self.assertEqual(len(reads), 1)
+
     def test_side_slope_profile(self):
         # a road across a 0.3 side slope: a cut on +y, a fill on -y; the stock maps' strip, crest and 1:2 batter
         def ground(x, y):

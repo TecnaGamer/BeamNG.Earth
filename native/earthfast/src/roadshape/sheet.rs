@@ -554,16 +554,22 @@ mod tests {
 
     #[test]
     fn heights_apart_are_no_union() {
-        // the ramp climbing 10 m over its 300 m: 3.9 m above the deck at the split (over DZ_MAX): no record; a short
-        // ramp ending 1 m off the deck's height inside the union: no record either (no room to blend back)
+        // At the edge split (x = 117 m) the ramp is already 3.9 m higher. Only its first 0.5 m of climb is shared.
         let t = part(vec![[0.0, 0.0], [300.0, 0.0]], 10.0, 7.0, 1, 0);
         let mut b = part(vec![[0.0, 0.0], [300.0, 30.0]], 10.0, 3.5, 1, 1);
         b.line.z = vec![10.0, 20.0];
-        assert!(fork_of(&[t, b], 1, 0, &prm()).is_none());
-        let t = part(vec![[0.0, 0.0], [300.0, 0.0]], 10.0, 7.0, 1, 0);
-        let mut b = part(vec![[0.0, 0.0], [40.0, 2.0]], 10.0, 3.5, 1, 1);
-        b.line.z = vec![10.0, 11.0];
-        assert!(fork_of(&[t, b], 1, 0, &prm()).is_none());
+        let mut parts = [t, b];
+        let r = fork_of(&parts, 1, 0, &prm()).expect("the decks share the start of the ramp");
+        assert!((r.1[2] - 15.0).abs() < 1e-9);
+        assert!((r.1[11] + 0.5).abs() < 1e-9);
+
+        // At 2 m offset the short ramp never clears the deck. At 12 m it does, but even the earlier
+        // height split leaves only about 10 m to blend back 0.5 m at a maximum grade of 3%.
+        for offset in [2.0, 12.0] {
+            parts[1] = part(vec![[0.0, 0.0], [40.0, offset]], 10.0, 3.5, 1, 1);
+            parts[1].line.z = vec![10.0, 11.0];
+            assert!(fork_of(&parts, 1, 0, &prm()).is_none(), "offset {offset}");
+        }
     }
 
     #[test]

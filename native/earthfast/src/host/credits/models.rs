@@ -1,9 +1,7 @@
-//! Corrected, offline positions of the cache's info files. Directory changes refresh
-//! membership. A partially written info is retried even if the directory mtime stands still.
+//! Corrected, offline positions of the cache's current info files.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::SystemTime;
 
 use crate::dm::Dm;
 use pyo3::prelude::*;
@@ -18,58 +16,71 @@ struct ModelPositions {
 
 #[derive(Default)]
 struct ModelIndex {
-    modified: Option<SystemTime>,
-    by_name: BTreeMap<String, (f64, f64)>,
+    by_name: BTreeMap<String, CachedPosition>,
     by_lat: Vec<(f64, f64)>,
 }
 
+struct CachedPosition {
+    seen: bool,
+    info: Vec<u8>,
+    point: (f64, f64),
+}
+
 impl ModelIndex {
-    fn refresh(
-        &mut self,
-        directory: &Path,
-        stamp: Option<SystemTime>,
-        resolve: &Bound<'_, PyAny>,
-        cache: &Path,
-    ) -> bool {
-        let Ok(entries) = directory.read_dir() else {
-            self.modified = None;
-            return false;
-        };
-        let mut complete = true;
-        let mut positions = Vec::new();
-        for entry in entries {
-            let Ok(entry) = entry else {
-                complete = false;
-                continue;
-            };
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else { continue };
-            if !name.starts_with("info_") || !name.ends_with(".json") {
-                continue;
-            }
-            let point = match self.by_name.get(name) {
-                Some(&p) => p,
-                None => {
-                    // model_position also knows the shipped overrides, survey fixes and cached OSM rings.
-                    let Ok(pos) = resolve
-                        .call1((entry.path(), cache, &name[5..name.len() - 5]))
-                        .and_then(|v| v.extract::<(f64, f64)>())
-                    else {
-                        complete = false;
+    fn refresh(&mut self, directory: &Path, resolve: &Bound<'_, PyAny>, cache: &Path) {
+        for cached in self.by_name.values_mut() {
+            cached.seen = false;
+        }
+        let mut changed = false;
+        if let Ok(entries) = directory.read_dir() {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else { continue };
+                let Some(id) = name
+                    .strip_prefix("info_")
+                    .and_then(|s| s.strip_suffix(".json"))
+                else {
+                    continue;
+                };
+                // These small info records can be rewritten with the same size and timestamp.
+                let path = entry.path();
+                let Ok(info) = std::fs::read(&path) else {
+                    continue;
+                };
+                if let Some(cached) = self.by_name.get_mut(name) {
+                    if cached.info == info {
+                        cached.seen = true;
                         continue;
-                    };
-                    self.by_name.insert(name.to_owned(), pos);
-                    pos
+                    }
                 }
-            };
-            if point.0.is_finite() && point.1.is_finite() {
-                positions.push(point);
+                // The resolver also applies shipped overrides, survey fixes and cached OSM rings.
+                // Leave incomplete records uncached so the next query retries them.
+                if let Ok(point) = resolve
+                    .call1((path, cache, id))
+                    .and_then(|v| v.extract::<(f64, f64)>())
+                {
+                    if point.0.is_finite() && point.1.is_finite() {
+                        self.by_name.insert(
+                            name.to_owned(),
+                            CachedPosition {
+                                seen: true,
+                                info,
+                                point,
+                            },
+                        );
+                        changed = true;
+                    }
+                }
             }
         }
-        positions.sort_by(|a, b| a.0.total_cmp(&b.0));
-        self.by_lat = positions;
-        self.modified = if complete { stamp } else { None };
-        true
+        let before = self.by_name.len();
+        self.by_name.retain(|_, cached| cached.seen);
+        if changed || self.by_name.len() != before {
+            self.by_lat.clear();
+            self.by_lat
+                .extend(self.by_name.values().map(|entry| entry.point));
+            self.by_lat.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
     }
 
     fn near(&self, lat: f64, lon: f64, radius: f64) -> bool {
@@ -109,10 +120,6 @@ pub(super) fn credited_model_near(
         }
     };
     let mut state = index.get().index.lock_py_attached(py).unwrap();
-    let stamp = dir.metadata().and_then(|md| md.modified()).ok();
-    if (stamp.is_none() || stamp != state.modified) && !state.refresh(&dir, stamp, resolve, &cache)
-    {
-        return Ok(false);
-    }
+    state.refresh(&dir, resolve, &cache);
     Ok(state.near(lat, lon, radius))
 }

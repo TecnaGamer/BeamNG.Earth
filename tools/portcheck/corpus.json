@@ -3,20 +3,28 @@
  "version": 1,
  "places": {
   "fells_point": {"lat": 39.2834, "lon": -76.5934, "plan_half_m": 600, "view_m": 3000, "settle_s": 20,
+                  "plan_cells": ["14/4705/6244", "14/4706/6244", "14/4705/6245", "14/4706/6245"],
                   "why": "the test city: rowhouse streets, Thames Street's cobbles, piers and the harbour (sea), parking, sidewalks, traffic signals"},
   "manhattan_penn": {"lat": 40.7506, "lon": -73.9935, "plan_half_m": 500, "view_m": 3000, "settle_s": 20,
+                     "plan_cells": ["14/4824/6157", "14/4824/6158"],
                      "why": "Penn Station / Midtown: the densest roads, buildings and rail (tunnels under the station, the High Line's decks), the cold-NYC benchmark"},
   "vienna_s1_rautenweg": {"lat": 48.26004, "lon": 16.47572, "plan_half_m": 600, "view_m": 3000, "settle_s": 20,
+                          "plan_cells": ["14/8941/5677", "14/8942/5677"],
                           "why": "S1 under Rautenweg: an underpass the DEM shows open, grade separations, level ranges across glibc versions (FACTS_FORMAT 17 / 19)"},
   "stelvio": {"lat": 46.529, "lon": 10.453, "plan_half_m": 800, "view_m": 4000, "settle_s": 20,
+              "plan_cells": ["14/8667/5793", "14/8668/5793", "14/8667/5794", "14/8668/5794"],
               "why": "the Stelvio pass: switchbacks (Spec.mountain), steep grading, parapets, high relief"},
   "phoenix_i10": {"lat": 33.46211, "lon": -112.2580, "plan_half_m": 800, "view_m": 4000, "settle_s": 20,
+                  "plan_cells": ["14/3082/6573", "14/3083/6573", "14/3082/6574", "14/3083/6574"],
                   "why": "I-10 in Phoenix: a motorway with ramps, stack interchanges and medians, desert flat ground (the high-speed runs' road)"},
   "zermatt": {"lat": 46.0207, "lon": 7.7491, "plan_half_m": 600, "view_m": 4000, "settle_s": 20,
+              "plan_cells": ["14/8544/5827", "14/8545/5827"],
               "why": "an Alpine town in a deep valley: tunnels, rail, steep relief, European road rules"},
   "tromso": {"lat": 69.6489, "lon": 18.9560, "plan_half_m": 600, "view_m": 3000, "settle_s": 20,
+             "plan_cells": ["14/9054/3712", "14/9055/3712", "14/9054/3713", "14/9055/3713"],
              "why": "69.6 N: a high-latitude frame (cells shrink with cos(lat)), sea, a long bridge and road tunnels, Nordic rules"},
   "laramie": {"lat": 41.3110, "lon": -105.5940, "plan_half_m": 600, "view_m": 3000, "settle_s": 20,
+              "plan_cells": ["14/3385/6123", "14/3386/6123", "14/3385/6124", "14/3386/6124"],
               "why": "a small high-plains town: a grid of streets, the rail yard and its crossings, sparse buildings, gravel roads"}
  }
 }

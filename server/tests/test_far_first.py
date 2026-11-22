@@ -28,6 +28,36 @@ class _Writer:
         return ("127.0.0.1", 0)
 
 
+class MeshDriveSelectionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_whole_upcoming_swap_precedes_nearer_side_tile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = earthd.Server(tmp, os.path.join(tmp, "cache"), near_visual="mesh", cells=64, horizon=False)
+            self.addCleanup(s.hm_pool.shutdown)
+            self.addCleanup(s.tile_pool.shutdown)
+            c = earthd.Connection(s, None, _Writer())
+            a = s.new_anchor(LAT, LON)
+            s.anchors[a.id] = a
+            c.active, c.focus = a.id, (32.0, 96.0)
+            c.update_far(gate=True)
+            self.assertIn("0_1_0", c.desired)  # east edge in 224 m, outside the 150 m exact ring
+            side = "-1_0_-1"
+            self.assertIn(side, c.desired)
+            c.shown = {c.ck(k): t.bbox for k, t in c.desired.items() if k != side}
+
+            c.vel = (30.0, 0.0)
+            c.update_far(gate=True)
+            east = {f"-1_{i}_{j}" for i in (2, 3) for j in (0, 1)}
+            self.assertEqual({t.key for t in c.queue[:4]}, east)
+            self.assertIn(side, {t.key for t in c.queue[4:]})
+            self.assertIn("0_-2_0", c.desired)
+
+            # Changing direction at the same spot must invalidate the pose selection gate.
+            c.vel = (-30.0, 0.0)
+            c.update_far(gate=True)
+            self.assertNotIn("0_-2_0", c.desired)
+            self.assertTrue({f"-1_{i}_{j}" for i in (-4, -3) for j in (0, 1)} <= c.desired.keys())
+
+
 class FarFirstTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

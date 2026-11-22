@@ -234,6 +234,107 @@ class SessionAdoptionTest(unittest.TestCase):
         self.assertGreater(len(set(seen)), 2, f"one file at a time: {seen[:20]}")
         self.assertEqual(self.s.orphans, {})
 
+    def test_slow_sweep_markers_leave_the_loop_responsive(self):
+        self.s.heartbeat_at -= earthd.SESSION_HEARTBEAT_S
+        self.s.orphan_s = 30
+        for sid in self.s.orphans:
+            self.s.orphans[sid] -= 1000
+        calls = []
+
+        async def run():
+            loop = asyncio.get_running_loop()
+
+            def slow(fn):
+                def io(path):
+                    # Only the event loop can unblock this fake filesystem call.
+                    tick = threading.Event()
+                    loop.call_soon_threadsafe(tick.set)
+                    self.assertTrue(tick.wait(3), f"{fn.__name__} blocked the event loop")
+                    calls.append((fn.__name__, Path(path).parent.name))
+                    return fn(path)
+                return io
+
+            queue = mock.Mock()
+            with mock.patch.object(os, "utime", slow(os.utime)), \
+                    mock.patch.object(os.path, "getmtime", slow(os.path.getmtime)), \
+                    mock.patch.object(self.s, "queue_delete", queue):
+                gone = await self.s.sweep_sessions_async()
+            self.assertEqual(gone, [Path(self.a[0]).name, Path(self.b[0]).name])
+            self.assertEqual([call.args[0] for call in queue.call_args_list],
+                             [self.s._session_paths(sid) for sid in gone])
+
+        asyncio.run(run())
+        self.assertEqual(calls[0], ("utime", self.s.sid))
+        for folder in (self.a[0], self.b[0]):
+            self.assertIn(("getmtime", Path(folder).name), calls)
+
+    def test_grace_restart_in_the_same_clock_tick_is_seen(self):
+        # Windows' monotonic clock ticks every ~15.6 ms: a disconnect in the same tick as the sweep's snapshot must
+        # still change the stored grace start, or the sweep deletes a folder whose grace just restarted.
+        sid_a = Path(self.a[0]).name
+        c = self.conn()
+        self.s.claim_sessions(c, [sid_a])
+        since = self.s.orphans[sid_a]
+        self.s.connections.remove(c)
+        with mock.patch("earthd.time.monotonic", return_value=since):
+            self.s.drop_claims(c)
+        self.assertNotEqual(self.s.orphans[sid_a], since)
+        self.assertEqual(self.s._finish_session_sweep([(sid_a, since, [])]), [])
+        self.assertIn(sid_a, self.s.orphans)
+
+    def test_sweep_rechecks_ownership_after_listing(self):
+        self.s.orphan_s = 0  # even a fresh marker qualifies: only the new claim / grace can protect the files
+        sid_a, sid_b = Path(self.a[0]).name, Path(self.b[0]).name
+        c = self.conn()
+        listing = self.s._session_paths
+
+        async def run():
+            loop = asyncio.get_running_loop()
+            listed, resume = asyncio.Event(), threading.Event()
+
+            def paused(sid):
+                paths = listing(sid)
+                if sid == sid_b:
+                    loop.call_soon_threadsafe(listed.set)
+                    self.assertTrue(resume.wait(5), "listing blocked the event loop")
+                return paths
+
+            with mock.patch.object(self.s, "_session_paths", paused), \
+                    mock.patch.object(self.s, "queue_delete") as queue:
+                sweep = asyncio.create_task(self.s.sweep_sessions_async())
+                try:
+                    await asyncio.wait_for(listed.wait(), 5)
+                    # One game disconnects, restarting its grace. Another keeps its claim.
+                    self.s.claim_sessions(c, [sid_a])
+                    self.s.connections.remove(c)
+                    self.s.drop_claims(c)
+                    self.s.claim_sessions(self.conn(), [sid_b])
+                finally:
+                    resume.set()
+                self.assertEqual(await sweep, [])
+                queue.assert_not_called()
+            self.assertEqual(set(self.s.orphans), {sid_a, sid_b})
+
+        asyncio.run(run())
+
+    def test_sweep_keeps_marker_renewed_by_another_server_during_listing(self):
+        self.s.orphan_s = 30
+        for sid in self.s.orphans:
+            self.s.orphans[sid] -= 1000
+        sid_a, sid_b = Path(self.a[0]).name, Path(self.b[0]).name
+        listing = self.s._session_paths
+
+        def renew_while_listing(sid):
+            if sid == sid_b:
+                os.utime(Path(self.a[0]) / earthd.SESSION_MARKER)
+            return listing(sid)
+
+        with mock.patch.object(self.s, "_session_paths", renew_while_listing), \
+                mock.patch.object(self.s, "queue_delete") as queue:
+            self.assertEqual(asyncio.run(self.s.sweep_sessions_async()), [sid_b])
+        queue.assert_called_once_with(listing(sid_b))
+        self.assertEqual(set(self.s.orphans), {sid_a})
+
     def test_no_game_at_start_every_earlier_session_goes(self):
         """No game running at the start (the launcher starts the server first): every earlier session goes now, moved
         out of the user folder at once (no file watcher sees it), deleted by the trash thread; none kept as an orphan."""
@@ -718,7 +819,7 @@ class LeakedPacksTest(unittest.TestCase):
             a = s.new_anchor(46.86, -113.98)
             s.anchors[a.id] = a
             key = (a.id, 0.0, 0.0)
-            path = os.path.join(s.out_dir, s.hm_name(key))
+            path = os.path.join(s.out_dir, s.base_name(key))
             with open(path, "w") as f:
                 f.write("old")
             s.hm[key] = {"base": s.base_name(key)}

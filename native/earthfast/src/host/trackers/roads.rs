@@ -159,6 +159,9 @@ fn pyset<'py>(obj: &Obj<'py>) -> PyResult<Bound<'py, PySet>> {
         .cast_into()?)
 }
 
+const BUSY_ROUTE_S: f64 = 18.;
+const ROADSIDE_M: f64 = 25.;
+
 struct RoadOrder<'a, 'py> {
     h: &'a Horizon,
     f: TileFrame,
@@ -167,6 +170,7 @@ struct RoadOrder<'a, 'py> {
     v: Point,
     s: f64,
     build_s: f64,
+    busy_route: bool,
     max_lead: f64,
     side_penalty: f64,
     insure: f64,
@@ -181,7 +185,7 @@ struct RoadOrder<'a, 'py> {
 impl RoadOrder<'_, '_> {
     fn rank(&self, key: &Obj<'_>) -> PyResult<(i32, f64)> {
         if self.deck.contains(key)? {
-            return Ok((-1, 0.));
+            return Ok((-2, 0.));
         }
         let Some(d) = self.car.get_item(key)? else {
             return if let Some(d) = self.seen.get_item(key)? {
@@ -203,6 +207,9 @@ impl RoadOrder<'_, '_> {
         }
         let k: Key = key.extract()?;
         let q = self.f.quad(self.z, k);
+        if self.busy_route && quad_dist(&q, self.p.0, self.p.1) <= ROADSIDE_M {
+            return Ok((-1, 0.));
+        }
         let score = |eta: f64, p: f64, gap: f64| -> PyResult<f64> {
             Ok(scenery::road_eta_rank(eta, p, gap, self.s, self.build_s, self.eta_params) * self.s)
         };
@@ -214,14 +221,11 @@ impl RoadOrder<'_, '_> {
                 }
             }
             if let Some(got) = tree.get_item(key)? {
-                return Ok((
-                    0,
-                    score(
-                        got.get_item(2)?.extract()?,
-                        got.get_item(3)?.extract()?,
-                        got.get_item(4)?.extract()?,
-                    )?,
-                ));
+                let eta = got.get_item(2)?.extract()?;
+                let chance = got.get_item(3)?.extract()?;
+                let gap = got.get_item(4)?.extract()?;
+                let imminent = self.busy_route && got.get_item(1)?.is_truthy()? && eta <= BUSY_ROUTE_S && gap <= ROADSIDE_M;
+                return Ok((if imminent { -1 } else { 0 }, score(eta, chance, gap)?));
             }
         }
         let dx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4. - self.p.0;
@@ -240,7 +244,22 @@ impl RoadOrder<'_, '_> {
         } else {
             along.max(0.) + (side - self.h.corridor).max(0.) * self.side_penalty
         };
-        Ok((0, rank))
+        // With four outstanding builds, a cheap nearby tile off the road can
+        // otherwise take the last worker ahead of the tile the car is entering.
+        let mut tier = 0;
+        if self.busy_route && self.tree.is_none() && along >= -self.h.tile / 2. && along <= self.s * BUSY_ROUTE_S {
+            let mut left = f64::INFINITY;
+            let mut right = f64::NEG_INFINITY;
+            for corner in &q {
+                let cross = ((corner[0] - self.p.0) * self.v.1 - (corner[1] - self.p.1) * self.v.0) / self.s;
+                left = left.min(cross);
+                right = right.max(cross);
+            }
+            if left <= ROADSIDE_M && right >= -ROADSIDE_M {
+                tier = -1;
+            }
+        }
+        Ok((tier, rank))
     }
 }
 
@@ -326,9 +345,32 @@ pub(super) fn road_geo(
         tr.setattr("wanted_at", keep)?;
     }
     let eligible = if ground_busy {
-        PySet::new(py, geo.within(p, h.send)?.into_iter().map(|(a, b, _)| (a, b)))?
+        let close = PySet::new(py, geo.within(p, h.send)?.into_iter().map(|(a, b, _)| (a, b)))?;
+        // Terrain work can last several block crossings. Keep the imminent part of the
+        // car's predicted route eligible without admitting distant view or spectator tiles.
+        let lead = h.lead.min(s * BUSY_ROUTE_S);
+        if s >= h.fast && lead > h.send {
+            for (key, distance) in car.iter() {
+                if distance.extract::<f64>()? <= lead {
+                    close.add(key)?;
+                }
+            }
+        }
+        close
     } else {
         wanted.clone()
+    };
+    // The bridges the mod's deck guard waits on (at most deckspans.WAIT_KEYS, ~900 m ahead): eligible even when
+    // terrain work narrows the rest or the predicted corridor misses them, so a deck is never left out of the build.
+    let deck = tr
+        .getattr("deck_first")
+        .ok()
+        .filter(|d| !d.is_none())
+        .unwrap_or(PyTuple::empty(py).into_any());
+    let eligible = if deck.is_truthy()? {
+        eligible.call_method1("union", (&deck,))?.cast_into::<PySet>()?
+    } else {
+        eligible
     };
     let sent = set(tr, "sent")?;
     let building = set(tr, "building")?;
@@ -357,15 +399,12 @@ pub(super) fn road_geo(
         v,
         s,
         build_s,
+        busy_route: ground_busy && s >= h.fast,
         max_lead: roads.getattr("LEAD_MAX_M")?.extract()?,
         side_penalty: roads.getattr("SIDE_PENALTY")?.extract()?,
         insure: roads.getattr("INSURE_M")?.extract()?,
         late: reach.getattr("LATE_S")?.extract()?,
-        deck: tr
-            .getattr("deck_first")
-            .ok()
-            .filter(|d| !d.is_none())
-            .unwrap_or(PyTuple::empty(py).into_any()),
+        deck,
         car,
         seen,
         others,
@@ -437,7 +476,9 @@ pub(super) fn road_geo(
             }
             make
         };
-        jobs.push((order.rank(&k)?, k, content, skin, make));
+        let rank = order.rank(&k)?;
+        let tie = if order.busy_route { k.extract::<Key>()? } else { (0, 0) };
+        jobs.push(((rank, tie), k, content, skin, make));
     }
     jobs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let limit: usize = roads.getattr("BUILD_PER_POSE")?.extract()?;

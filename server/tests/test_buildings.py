@@ -476,12 +476,11 @@ class FarIndexLimitTest(unittest.TestCase):
                  for i in range(2900)]
         (opened,) = bld._sky_mesh(items)
         self.assertLessEqual(len(opened[0]), bld.MAX_MESH_VERTS)
-        with mock.patch.object(shells, "ON", True), mock.patch.dict(bld.over_limit, {"buildings": 0}):
+        with mock.patch.object(shells, "ON", True):
             meshes = bld._sky_mesh(items)
             self.assertIsNotNone(meshes)
             self.assertGreater(sum(len(m[0]) for m in meshes), 65535, "(the case: past the indices once closed)")
             self.assertTrue(all(len(m[0]) <= 65535 for m in meshes), [len(m[0]) for m in meshes])
-            self.assertEqual(bld.over_limit["buildings"], 0)
             self.assertEqual(sum(len(m[2]) for m in meshes), len(shells.close(
                 *[np.asarray(a) for a in (opened[0], opened[2], opened[3])], (opened[1], opened[5]), skirt=False)[1]))
 
@@ -494,12 +493,12 @@ class FarIndexLimitTest(unittest.TestCase):
             bld.far_tile(None, 0, 0, None, None, d, "/x", "a")
             self.check(os.path.join(d, "bldfar_a_0_0.cdae"), items)
 
-    def test_a_building_past_the_indices_is_left_out(self):
+    def test_building_larger_than_group_budget_kept(self):
         items = _dense_items(3)
-        n1 = len(bld.build(items[:1], lite=True)[0])
-        with mock.patch.object(bld, "VERTS_MAX", n1 - 1), mock.patch.dict(bld.over_limit, {"buildings": 0}):
-            self.assertEqual(bld.build_parts(items, lite=True), [])
-            self.assertEqual(bld.over_limit["buildings"], 3)
+        with mock.patch.object(bld, "VERTS_MAX", 3):
+            parts = bld.build_parts(items, lite=True, max_verts=3)
+        self.assertEqual(len(parts), len(items))
+        self.assertEqual(sum(len(m[2]) for m in parts), len(bld.build(items, lite=True)[2]))
 
 
 class PackStyleTest(unittest.TestCase):
@@ -2766,7 +2765,7 @@ class RoadPassageTest(unittest.TestCase):
         self.assertEqual(bld.road_lines(FRAME, [f], 0.0, 0.0, classes={"residential"}), [])
 
 
-class MappedRoofTest(unittest.TestCase):
+class MappedRoofAttributesTest(unittest.TestCase):
     """Research 2026-11-10: Overture's half_hipped, mapped roof heights, roof:orientation and roof:direction."""
 
     def test_overtures_half_hipped_is_drawn(self):

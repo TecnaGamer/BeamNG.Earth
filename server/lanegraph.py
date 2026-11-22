@@ -24,8 +24,8 @@ MODE = os.environ.get("BNE_ROADSURF_V3", "off")
 SHADOW = MODE == "shadow"
 DEBUG = os.environ.get("BNE_ROADSURF_V3_DEBUG", "") in ("1", "on", "true")
 
-LANES_VERSION = 538         # earthfast.lane_graph
-LANES_FORMAT = 1            # the records' JSON (shadow_lanes' folder name)
+LANES_VERSION = 570         # earthfast.lane_graph
+LANES_FORMAT = 2            # the records' JSON (shadow_lanes' folder name; 2: roadshape.whole_or_sections)
 LANE_REACH_M = 900.0        # m along every stroke from an event's node (inputs within it: an auxiliary lane's 750 m
                             # to the next exit and the walk past it)
 LANE_DIR_M = 20.0           # m an arm's direction is read over (forks.rs's FORK_DIR_M)
@@ -168,11 +168,12 @@ def cell_lanes(key, cell_fn, memo=None, read_cells=None, events_only=False):
     off = np.r_[0, np.cumsum([len(ll) for ll in lines])].tolist()
     col = lambda name: [segs[f][name] for f in fids]   # noqa: E731
     home, con_id, con_seg, con_vtx, con_home = fast._ef.lane_connectors(ll_all, off, col("cons"), key.bounds())
+    fast.require(LANES_VERSION, "lane_graph")
     got = fast._ef.lane_graph(
         xy, off, fids, col("cls"), col("link"), col("dir"),
         col("lanes"), col("lfw"), col("lbw"), col("kmh"), col("lane_w"), col("turn"), col("turn_bw"), col("place"),
         col("region"), home, con_id, con_seg, con_vtx, con_home, LANE_PARAMS,
-        np.ascontiguousarray(TAPER_TABLE.reshape(-1)), events_only)
+        np.ascontiguousarray(TAPER_TABLE.reshape(-1)), events_only, divided_crossings=(MODE == "surface"))
     out = json.loads(got)
     out["frame"] = [lat0, lon0]
     out["cell"] = str(key)

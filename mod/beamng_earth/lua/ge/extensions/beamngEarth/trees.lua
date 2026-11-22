@@ -1736,7 +1736,15 @@ function M.update(anchorId, player, view, frameMs, fill)
         nOrder = nOrder + 1
         oKeys[nOrder], oD[nOrder] = key, dist
         oWant[nOrder], oBand[nOrder], oNear[nOrder], oCapD[nOrder] = want, band, near, capD
-        oSort[nOrder] = M.orderKey(dist, nOrder)
+        local priority = dist
+        if not view and t.furn and psp >= 25 and leadM > 0 then
+          local dx, dy = t.cx - player.x, t.cy - player.y
+          local side = math.abs(dx * lhy - dy * lhx)
+          if dx * lhx + dy * lhy >= 0 and side <= (t.half or 128) then
+            priority = math.max(0, dist - leadM)
+          end
+        end
+        oSort[nOrder] = M.orderKey(priority, nOrder)
       end
     end
     ::continue::

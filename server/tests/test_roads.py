@@ -1168,7 +1168,12 @@ class TrackerTest(unittest.TestCase):
 
     def test_at_speed_the_path_ahead_is_built_and_kept(self):
         conn = FakeConn()
-        tr = roads.Tracker()
+        # The tracker ranks by its measured build time (an average of wall-clock builds): under load the fake's
+        # instant builds measured long and the car's own tile ranked after the next one (gate 304, the mini PC's
+        # lane: (1, 0) first). This test is about the path order, so the estimate is pinned (updates ignored).
+        class Pinned(roads.Tracker):
+            build_s = property(lambda self: 0.05, lambda self, v: None)
+        tr = Pinned()
         built = []
 
         def build(aid, tx, ty):
@@ -1588,6 +1593,21 @@ class NamelessCarriagewaysTest(unittest.TestCase):
 
 
 class MedianTest(unittest.TestCase):
+    def test_v3_measures_a_divided_street_across_its_overlapping_length(self):
+        import lanegraph
+        # A three-lane approach and its short continuation meet end to end.
+        # The opposing carriageway follows the approach on the other side of the median.
+        f = features([[(46, 1), (8, .2), (0, 0)], [(0, 0), (-18, 0)], [(-18, -26), (86, -26)]],
+                     ["trunk"] * 3)
+        f.attrs["name"] = np.array(["Avenue"] * 3, dtype=object)
+        sp = roads.Spec(11.4, "paved", True, "trunk", True, 2.5, 1, 70., lanes=3)
+        with mock.patch.object(lanegraph, "MODE", "off"):
+            self.assertLess(roads.dual_carriageways(f, [sp] * 3)[0].width, 5.)
+        with mock.patch.object(lanegraph, "MODE", "surface"):
+            result = roads.dual_carriageways(f, [sp] * 3)[0]
+            self.assertEqual(result.width, sp.width)
+            self.assertGreater(result.median, 25.)
+
     def test_divided_road_has_a_median(self):
         # report #48 (Boston Street): the carriageways' inner sides a curbed band and lawn, not two sidewalks
         sp = roads.Spec(7.0, "paved", True, "secondary", True, 2.5, 1, None, None, 19.0)

@@ -247,10 +247,14 @@ mod tests {
     #[test]
     fn a_road_beside_caps_it() {
         let xy = line(41, 5.0);
-        let beside: Vec<[f64; 2]> = vec![[0.0, 8.0], [200.0, 8.0]];
-        let a = approach_add_core(&xy, false, 6.0, 4.0, &[(&beside, 3.0)], 2.0, None, 0.5, 0.05, 30.0, 320.0, 1.0, 0.1,
-                                  None).unwrap();
-        assert!(a[0] <= 0.0 + 1e-9, "8 m off, 4 + 3 + 1 m of it taken: nothing left for the slope");
+        let ramp = |offset| {
+            let beside = [[0.0, offset], [200.0, offset]];
+            approach_add_core(&xy, false, 6.0, 4.0, &[(&beside, 3.0)], 2.0, None, 0.5, 0.05, 30.0, 320.0, 1.0, 0.1, None)
+        };
+        assert!(ramp(8.0).is_none(), "the half widths and gap use all 8 m along the entire ramp");
+        let a = ramp(10.0).expect("2 m left for a 2:1 fill slope");
+        assert!((a[0] - 1.0).abs() < 1e-9);
+        assert!(a.iter().all(|&v| v <= 1.0 + 1e-9));
     }
 
     #[test]
@@ -295,7 +299,12 @@ mod tests {
         let flat_line = under_deck_reach_core(35.0, 37.0, 96.0, 26.0, 42.0, 0.05, 20.0, false);
         let climbed = under_deck_reach_core(35.0, 37.0, 96.0, 26.0, 42.0, 0.05, 20.0, true);
         assert!((flat_line - (35.0 + 2.0 * 26.0 / 96.0)).abs() < 1e-9);
-        assert!(climbed > flat_line);
+        assert_eq!(climbed, flat_line); // at 26 m the climb reaches only 35.30 m
+        // Level ends: the nearer end limits each corridor's lowest point, 36 m from that end.
+        for (lo, hi) in [(36.0, 56.0), (40.0, 60.0)] {
+            let climbed = under_deck_reach_core(35.0, 35.0, 96.0, lo, hi, 0.05, 20.0, true);
+            assert!((climbed - 35.8).abs() < 1e-9);
+        }
         // a short deck: within the flat run of both ends, the straight line
         assert!((under_deck_reach_core(35.0, 35.0, 30.0, 10.0, 20.0, 0.05, 20.0, true) - 35.0).abs() < 1e-9);
     }

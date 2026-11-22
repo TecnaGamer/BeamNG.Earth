@@ -34,17 +34,26 @@ farfield.setNearVisual('detail')
 T.check(farfield.nearVisual() == 'detail', 'detail mode accepted')
 farfield.switchAnchor(1, false, { cx = 0, cy = 0 })
 farfield.onBlockCommit(0, 0)                         -- 512² block: cover box [-512, 512]²
-local interior, edge, outside, straddle = key(-1, -1, -1), key(-1, -4, 0), key(-1, 4, 0), key(0, 1, 1)
+local interior, edge, outside, straddle = key(-1, -1, -1), key(-1, 3, 0), key(-1, 4, 0), key(0, 1, 1)
+local west = key(-1, -4, 1)
 farfield.onTile(tile(1, -1, -1, -1, { sink = 0.4 }))  -- [-128, 0]²: interior
-farfield.onTile(tile(1, -1, -4, 0, { sink = 0.6 }))   -- [-512, -384] x [0, 128]: edge ring
+farfield.onTile(tile(1, -1, 3, 0, { sink = 0.6 }))    -- [384, 512] x [0, 128]: E edge ring (the strip's under-floor)
+farfield.onTile(tile(1, -1, -4, 1, { sink = 0.6 }))   -- [-512, -384] x [128, 256]: W edge ring (all block ground)
 farfield.onTile(tile(1, -1, 4, 0, { sink = 0.5 }))    -- [512, 640]: just outside
 step()
-farfield.onSwap({ type = 'far_swap', anchorId = 1, id = 1, add = { interior, edge, outside }, remove = {} })
+farfield.onSwap({ type = 'far_swap', anchorId = 1, id = 1, add = { interior, edge, outside, west }, remove = {} })
 step(30)
+T.check(obj(west).hidden, 'W edge ring L-1 tile: hidden like the interior')
 T.check(obj(interior).hidden, 'interior L-1 tile under the drawn block: hidden')
 T.check(visible(obj(edge)) and math.abs(obj(edge).pos.z - (50 - 0.6)) < 1e-9, 'edge ring L-1 tile: shown, sunk by its sink')
 T.check(visible(obj(outside)) and obj(outside).pos.z == 50, 'tile outside the block: true height')
-T.check(farfield.stats().covered == 2, 'two covered tiles')
+T.check(farfield.stats().covered == 3, 'three covered tiles')
+-- the block's floor (zBase) known: the under-floor's top under every sample of the block
+S.BOX_TOP = 3
+farfield.onBlockCommit(0, 0, { zBase = 40 })
+T.near(obj(edge).pos.z, 40 - farfield.FLOOR_MARGIN - 3, 1e-9, 'E edge ring tile: its top under the block floor')
+farfield.onBlockCommit(0, 0)
+S.BOX_TOP = nil
 
 -- raw view: the tiles are the ground again, at their true heights, at once; and back
 T.check(farfield.setRawView(true) == true, 'raw view on')
@@ -61,7 +70,7 @@ T.check(obj(interior).hidden and math.abs(obj(edge).pos.z - (50 - 0.6)) < 1e-9, 
 T.check(not farfield.uncoverReady(0, 0, 128, 0), 'gate closed: the uncovered column is not all live')
 local ids = {}
 for j = -4, 3 do
-  if j ~= 0 then farfield.onTile(tile(1, -1, -4, j, { sink = 0.3 })); ids[#ids + 1] = key(-1, -4, j) end
+  if j ~= 1 then farfield.onTile(tile(1, -1, -4, j, { sink = 0.3 })); ids[#ids + 1] = key(-1, -4, j) end
 end
 step()
 farfield.onSwap({ type = 'far_swap', anchorId = 1, id = 2, add = ids, remove = {} })

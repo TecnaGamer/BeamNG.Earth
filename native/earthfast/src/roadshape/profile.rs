@@ -62,6 +62,9 @@ use pyo3::prelude::*;
 
 use crate::structures::heights::{factor_cost, ldl_solve, rcm, BUDGET};
 
+#[path = "profile_qp.rs"]
+mod profile_qp;
+
 pub const S_SOLVED: i64 = 0;
 pub const S_PINNED: i64 = 1;
 pub const S_INFEASIBLE: i64 = 2;
@@ -233,7 +236,9 @@ pub struct MembersOut {
 }
 
 /// profile_members' work (pure)
-pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], ground: &[Vec<[f64; 2]>], prm: &[f64])
+type SourceIds = (Vec<String>, Vec<String>);
+
+pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], ground: &[Vec<[f64; 2]>], prm: &[f64], source: Option<&SourceIds>)
     -> MembersOut {
     let (join_m, dir_m, cos_on, step, max_pts) = (prm[0], prm[1], prm[2], prm[3], prm[4] as usize);
     let ds: Vec<Vec<f64>> = decks.iter().map(|l| arcs(l)).collect();
@@ -354,7 +359,7 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
                 ends.push([d as i64, e as i64, 0]);
                 continue;
             }
-            if end_on[d][e] {
+            if end_on[d][e] && source.is_none() {
                 ends.push([d as i64, e as i64, 3]);
                 continue;
             }
@@ -379,7 +384,8 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
                     for gy in cy - 1..=cy + 1 {
                         if let Some(v) = grid.get(&(gx, gy)) {
                             for &(g, ge) in v {
-                                if used.contains(&g) {
+                                if used.contains(&g) || (first.is_none() && end_on[d][e] &&
+                                    source.is_some_and(|(decks, ground)| decks[d] != ground[g])) {
                                     continue;
                                 }
                                 let q = if ge == 0 { ground[g][0] } else { ground[g][ground[g].len() - 1] };
@@ -449,7 +455,7 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
                 }
             }
             if path.len() < 2 || len < step {
-                ends.push([d as i64, e as i64, if joined[d][e] { 2 } else { 0 }]);
+                ends.push([d as i64, e as i64, if end_on[d][e] { 3 } else if joined[d][e] { 2 } else { 0 }]);
                 continue;
             }
             let ps = arcs(&path);
@@ -518,18 +524,20 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
 /// kind)).
 #[pyfunction]
 #[allow(clippy::type_complexity)]
+#[pyo3(signature = (dxy, doff, half, anchor, gxy, goff, params, source=None))]
 pub fn profile_members<'py>(_py: Python<'py>, dxy: PyReadonlyArray2<'py, f64>, doff: Vec<i64>, half: Vec<f64>,
-                            anchor: Vec<f64>, gxy: PyReadonlyArray2<'py, f64>, goff: Vec<i64>, params: Vec<f64>)
+                            anchor: Vec<f64>, gxy: PyReadonlyArray2<'py, f64>, goff: Vec<i64>, params: Vec<f64>, source: Option<SourceIds>)
                             -> PyResult<(Vec<f64>, Vec<i64>, Vec<i64>, Vec<i64>, Vec<i64>)> {
     let (dxy, gxy) = (dxy.as_array(), gxy.as_array());
     let nd = doff.len().saturating_sub(1);
     if dxy.ncols() != 2 || gxy.ncols() != 2 || !check_off(&doff, dxy.nrows()) || !check_off(&goff, gxy.nrows())
+        || source.as_ref().is_some_and(|(d, g)| d.len() != nd || g.len()+1 != goff.len())
         || half.len() != nd || anchor.len() != nd || params.len() != MEMBER_PARAMS {
         return Err(PyValueError::new_err("profile_members: bad shapes"));
     }
     let decks = lines_of(&dxy, &doff);
     let ground = lines_of(&gxy, &goff);
-    let out = members_core(&decks, &half, &anchor, &ground, &params);
+    let out = members_core(&decks, &half, &anchor, &ground, &params, source.as_ref());
     let mut axy = Vec::new();
     let mut aoff = vec![0i64];
     let mut ameta = Vec::new();
@@ -663,17 +671,26 @@ fn bearing(m: &Member, node: [f64; 2]) -> Option<usize> {
     (d2(ends[e], node) <= 0.75 * 0.75).then_some(e)
 }
 
-/// A ground way ending at a deck bearing at the same height is its approach.
+/// Supply the ground endpoints for the legacy check, or the full vertices for
+/// S4c. An interior vertex must coincide with the deck bearing itself: a line
+/// merely passing under its end remains a crossing.
 #[pyfunction]
-pub fn surface_road_floors(decks: Vec<[[f64; 3]; 2]>, ground: Vec<[[f64; 2]; 2]>,
+pub fn surface_road_floors(decks: Vec<[[f64; 3]; 2]>, ground: Vec<Vec<[f64; 2]>>,
                            crossings: Vec<(usize, usize, f64, f64, f64)>) -> PyResult<Vec<bool>> {
     crossings.into_iter().map(|(d, g, x, y, z)| {
         let (Some(deck), Some(road)) = (decks.get(d), ground.get(g)) else {
             return Err(PyValueError::new_err("surface_road_floors: unknown part"));
         };
         let p = [x, y];
-        let bearing = deck.iter().any(|q| d2([q[0], q[1]], p) <= 0.75 * 0.75 && (q[2] - z).abs() < STACK_MIN_M);
-        Ok(!(bearing && road.iter().any(|&q| d2(q, p) <= 0.75 * 0.75)))
+        let attached = deck.iter().any(|q| {
+            let end = [q[0], q[1]];
+            if d2(end, p) > 0.75 * 0.75 || (q[2] - z).abs() >= STACK_MIN_M { return false; }
+            road.iter().enumerate().any(|(i, &v)| {
+                if i == 0 || i + 1 == road.len() { d2(v, p) <= 0.75 * 0.75 }
+                else { d2(v, p) < 0.05 * 0.05 && d2(end, v) < 0.05 * 0.05 }
+            })
+        });
+        Ok(!attached)
     }).collect()
 }
 
@@ -729,9 +746,11 @@ fn fork_arm(ms: &[Member], through: &ThroughJoins, first: (usize, usize), reach:
     path
 }
 
+type GroundFloors = (Vec<String>, Vec<(String, f64)>);
+
 /// floors: (member, x, y, floor m).
 fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(usize, [f64; 2], f64)], prm: &[f64],
-              surface: Option<&[SurfaceFork]>)
+              surface: Option<&[SurfaceFork]>, robust: bool, ground_floors: Option<&GroundFloors>, traffic_gap: f64)
     -> SolveOut {
     let (lambda, w_g, d0, d1, eps_w, mu) = (prm[0], prm[1], prm[2], prm[3], prm[4], prm[5]);
     let (split_gap, sheet_dz, cos_sheet, sheet_reach, at_grade, deck_ground) = (prm[6], prm[7], prm[8], prm[9], prm[10], prm[11]);
@@ -822,7 +841,7 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
     let mut held: BTreeSet<usize> = BTreeSet::new();
     let mut pinned_end: Vec<[bool; 2]> = vec![[false; 2]; ms.len()];
     let mut work: u64 = 0;
-    if surface.is_some() {
+    if surface.is_some() || robust {
         rep.extend([0.0, 0.0]); // required surface equalities; events ending before their nose
     }
     let mut through = ThroughJoins::new();
@@ -1151,6 +1170,44 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
             unions += 2;
         }
     }
+    if robust {
+        // Separate approach walks may use the same ground line and then fork.
+        // The terrain can publish just one height on that shared surface. Seed
+        // the pairing on a common run, then follow it until the pavements part.
+        for b in 0..ms.len() {
+            if ms[b].deck { continue; }
+            for a in 0..b {
+                if ms[a].deck { continue; }
+                let reach = ms[a].half + ms[b].half;
+                let (ba, bb) = (boxes[a], boxes[b]);
+                if bb[0] > ba[2] + reach || ba[0] > bb[2] + reach ||
+                   bb[1] > ba[3] + reach || ba[1] > bb[3] + reach { continue; }
+                work += ms[a].xy.len() as u64 * ms[b].xy.len() as u64;
+                if work > BUDGET.work {
+                    rep[0] = S_BUDGET as f64;
+                    return fallback(S_BUDGET, rep);
+                }
+                let mut run = Vec::new();
+                let mut shared = 0.;
+                for (k, &p) in ms[b].xy.iter().enumerate() {
+                    let (dd,t) = nearest(&ms[a].xy, &ms[a].s, p);
+                    let h = if k > 0 { ms[b].s[k] - ms[b].s[k-1] } else { 0. };
+                    let len = *ms[a].s.last().unwrap();
+                    if dd < 0.05 * 0.05 && t > 0. && t < len { shared += h; }
+                    run.push((k,t,dd));
+                }
+                if shared < 10. { continue; }
+                for (k,t,dd) in run {
+                    if dd >= reach * reach || t <= 0. || t >= *ms[a].s.last().unwrap() { continue; }
+                    let mut terms = vec![(base[b] + k, 1.)];
+                    lin_at(&base, &ms[a], a, t, -1., &mut terms);
+                    eqs.push(Lin { terms, r: 0. });
+                    eq_group.push(unions);
+                }
+                unions += 1;
+            }
+        }
+    }
     rep[4] = sheet_pairs as f64;
     rep[13] = twin_pairs as f64;
     if work > BUDGET.work {
@@ -1183,6 +1240,7 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
     }
     // inequalities: floors (never worse than today's), deck over ground, deck over deck
     let mut ineq: Vec<Lin> = Vec::new();
+    let mut traffic_order = Vec::new();
     let mut ineq_kind: Vec<u8> = Vec::new();        // (0 a crossing floor, 1 deck over ground, 2 deck over deck)
     let abut_dist = |m: &Member, t: f64| -> f64 {
         let l = m.s[m.s.len() - 1];
@@ -1195,8 +1253,9 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
         }
         d
     };
-    let ceiling = surface.map(|_| pinned_ceiling(ms, &base, &pin_terms, n, max_grade, grade_add, margin));
-    for &(m, p, f) in floors {
+    let ceiling = surface.filter(|_| !robust).map(|_| pinned_ceiling(ms, &base, &pin_terms, n, max_grade, grade_add, margin));
+    let approaches: Vec<_> = ms.iter().enumerate().filter(|(_, m)| !m.deck).collect();
+    for (fi, &(m, p, f)) in floors.iter().enumerate() {
         if m >= ms.len() || !ms[m].deck {
             continue;
         }
@@ -1208,6 +1267,34 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
         let r = if surface.is_some() { f + margin } else { f.min(z_at(&ms[m], t)) };
         let mut terms = Vec::new();
         lin_at(&base, &ms[m], m, t, 1.0, &mut terms);
+        if let Some((ids, sources)) = ground_floors {
+            let (id, clearance) = &sources[fi];
+            let mut found = None;
+            let mut best = 0.25 * 0.25;
+            for ((mi, approach), parent) in approaches.iter().zip(ids) {
+                if id.is_empty() || parent != id { continue; }
+                let (d, s) = nearest(&approach.xy, &approach.s, p);
+                if d < best && s > 0.25 && s < approach.s.last().unwrap() - 0.25 {
+                    best = d;
+                    found = Some((*mi, *approach, s));
+                }
+            }
+            if let Some((mi, approach, s)) = found {
+                lin_at(&base, approach, mi, s, -1., &mut terms);
+                ineq.push(Lin { terms, r: clearance + margin + APPROACH_PAD_M });
+                ineq_kind.push(5);
+                continue;
+            }
+            if !id.is_empty() {
+                // A separate ground road supplies an absolute lower surface.
+                // Keep its order. Preserve observed passable headroom up to a
+                // car plus the depth of the upper deck, even when the full
+                // clearance observation competes with pins or parallel decks.
+                let lower = f - clearance;
+                let gap = (z_at(&ms[m], t) - lower).max(0.02).min(traffic_gap).min(*clearance);
+                traffic_order.push(Lin { terms: terms.clone(), r: lower + gap });
+            }
+        }
         if let Some(bound) = &ceiling {
             let highest: f64 = terms.iter().map(|&(i, w)| w * bound[i]).sum();
             if highest + 1e-6 < f {
@@ -1291,7 +1378,12 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
                     continue;
                 }
                 let (za, zb) = (z_at(a, ta), z_at(b, tb));
-                if (za - zb).abs() < STACK_MIN_M {
+                let interior = |m: &Member, t: f64| t.min(m.s.last().unwrap() - t) >= at_grade;
+                let mapped_crossing = robust && a.deck && b.deck && a.level != b.level
+                    && interior(a, ta) && interior(b, tb)
+                    && dot(unit([a.xy[ka+1][0]-a.xy[ka][0], a.xy[ka+1][1]-a.xy[ka][1]]),
+                           unit([b.xy[kb+1][0]-b.xy[kb][0], b.xy[kb+1][1]-b.xy[kb][1]])).abs() < cos_sheet;
+                if (za - zb).abs() < STACK_MIN_M && !mapped_crossing {
                     continue;       // (level with each other today: a junction at grade, nothing to clear)
                 }
                 // When neither profile has established the crossing clearance, use mapped deck
@@ -1331,6 +1423,7 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
     // the pattern (every term that may enter: the order is fixed for every round)
     let mut adj: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
     let mut link = |t: &[(usize, f64)]| {
+        if robust { return; }
         for &(i, _) in t {
             for &(j, _) in t {
                 if i != j {
@@ -1372,12 +1465,13 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
         link(&l.terms);
     }
     let adjv: Vec<Vec<usize>> = adj.into_iter().map(|s| s.into_iter().collect()).collect();
-    let order = rcm(&adjv);
+    let order = if robust { (0..n).collect() } else { rcm(&adjv) };
     let mut pos = vec![0usize; n];
     for (p, &v) in order.iter().enumerate() {
         pos[v] = p;
     }
-    let Some((bytes, flops)) = factor_cost(&adjv, &pos) else {
+    let cost = if robust { Some((0, 0)) } else { factor_cost(&adjv, &pos) };
+    let Some((bytes, flops)) = cost else {
         rep[0] = S_BUDGET as f64;
         return fallback(S_BUDGET, rep);
     };
@@ -1437,6 +1531,10 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
         let cc = 2.0 / (ha + hb);
         let t = [(ia_in, cc / ha), (ia, -cc / ha - cc / hb), (ib_in, cc / hb)];
         add_term(&mut rows0, &mut rhs0, &pos, &t, 0.0, lambda * (ha + hb) / 2.0);
+    }
+    if robust {
+        return profile_qp::solve(ms, &base, rows0, rhs0, &eqs, &eq_group, &c1_terms,
+                                 &pin_terms, &ineq, &ineq_kind, &traffic_order, traffic_gap, max_grade, grade_add, rep);
     }
     for l in pin_terms.iter() {
         add_term(&mut rows0, &mut rhs0, &pos, &l.terms, l.r, mu);
@@ -1765,11 +1863,11 @@ fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: &[(u
 /// coupling residual, unmet, flops]).
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (kxy, koff, kz, kg, deck, half, level, under, abut, joins, pins, floors, params, surface=None))]
+#[pyo3(signature = (kxy, koff, kz, kg, deck, half, level, under, abut, joins, pins, floors, params, surface=None, robust=false, ground_floors=None, traffic_gap=4.5))]
 pub fn profile_solve<'py>(py: Python<'py>, kxy: PyReadonlyArray2<'py, f64>, koff: Vec<i64>,
                           kz: PyReadonlyArray1<'py, f64>, kg: PyReadonlyArray1<'py, f64>, deck: Vec<i64>,
                           half: Vec<f64>, level: Vec<f64>, under: Vec<f64>, abut: Vec<i64>, joins: Vec<i64>,
-                          pins: Vec<i64>, floors: Vec<f64>, params: Vec<f64>, surface: Option<Vec<SurfaceFork>>)
+                          pins: Vec<i64>, floors: Vec<f64>, params: Vec<f64>, surface: Option<Vec<SurfaceFork>>, robust: bool, ground_floors: Option<GroundFloors>, traffic_gap: f64)
                           -> PyResult<(Vec<f64>, Vec<f64>, Vec<f64>)> {
     let (kxy, kz, kg) = (kxy.as_array(), kz.as_array(), kg.as_array());
     let nm = koff.len().saturating_sub(1);
@@ -1779,6 +1877,10 @@ pub fn profile_solve<'py>(py: Python<'py>, kxy: PyReadonlyArray2<'py, f64>, koff
         || pins.len() % 3 != 0 || floors.len() % 4 != 0 || (params.len() != SOLVE_PARAMS && params.len() != SOLVE_PARAMS + 4)
         || (0..nm).any(|i| koff[i + 1] - koff[i] < 2) {
         return Err(PyValueError::new_err("profile_solve: bad shapes"));
+    }
+    if !traffic_gap.is_finite() || traffic_gap < 0.02 || ground_floors.as_ref().is_some_and(|(ids, floors_meta)| !robust || ids.len() != deck.iter().filter(|&&d| d == 0).count()
+        || floors_meta.len() != floors.len()/4 || floors.chunks_exact(4).any(|c| c[0] < 0.)) {
+        return Err(PyValueError::new_err("profile_solve: invalid ground floors"));
     }
     if surface.as_deref().unwrap_or_default().iter().any(|&(t, a, b, x, y, reach)| {
         t < -1 || t >= nm as i64 || a >= nm || b >= nm || a == b || deck[a] == 0 || deck[b] == 0
@@ -1801,14 +1903,14 @@ pub fn profile_solve<'py>(py: Python<'py>, kxy: PyReadonlyArray2<'py, f64>, koff
     let fl: Vec<(usize, [f64; 2], f64)> = floors.chunks(4).filter(|c| c[0] >= 0.0)
         .map(|c| (c[0] as usize, [c[1], c[2]], c[3])).collect();
     let out = py.detach(|| {
-        let out = solve_core(&ms, &jn, &pn, &fl, &params, surface.as_deref());
+        let out = solve_core(&ms, &jn, &pn, &fl, &params, surface.as_deref(), robust, ground_floors.as_ref(), traffic_gap);
         // (P3e: the additions ([18], [19]) over the budget: solved again without them, P3d's couplings alone, never a
         // fallback the baseline would not take; Codex P3e)
         if out.status == S_BUDGET && params.len() > SOLVE_PARAMS && (params[18] != 0.0 || params[19] != 0.0) {
             let mut p2 = params.clone();
             p2[18] = 0.0;
             p2[19] = 0.0;
-            return solve_core(&ms, &jn, &pn, &fl, &p2, surface.as_deref());
+            return solve_core(&ms, &jn, &pn, &fl, &p2, surface.as_deref(), robust, ground_floors.as_ref(), traffic_gap);
         }
         out
     });
@@ -1840,7 +1942,7 @@ mod tests {
         let ms = vec![dk, a0, a1];
         let joins = vec![[1, 0, 0, 0, 1], [2, 0, 0, 1, 1]];
         let pins = vec![[1, 1, 2], [2, 1, 2]];
-        let out = solve_core(&ms, &joins, &pins, &[], &prm(), None);
+        let out = solve_core(&ms, &joins, &pins, &[], &prm(), None, false, None, 4.5);
         assert_eq!(out.status, S_SOLVED);
         let n0 = ms[0].xy.len();
         let n1 = ms[1].xy.len();
@@ -1850,7 +1952,7 @@ mod tests {
         let dd = (z[1] - z[0]) - (z[0] - z[n0 + 1]);
         assert!(dd.abs() < 0.02, "{}", dd);
         // the same twice
-        let again = solve_core(&ms, &joins, &pins, &[], &prm(), None);
+        let again = solve_core(&ms, &joins, &pins, &[], &prm(), None, false, None, 4.5);
         assert_eq!(out.z, again.z);
     }
 
@@ -1863,7 +1965,7 @@ mod tests {
         let joins = vec![[1, 0, 0, 0, 1], [2, 0, 0, 1, 1]];
         let pins = vec![[1, 1, 2], [2, 1, 2]];
         let floors = vec![(0usize, [50.0, 0.0], 5.5)];
-        let out = solve_core(&ms, &joins, &pins, &floors, &prm(), None);
+        let out = solve_core(&ms, &joins, &pins, &floors, &prm(), None, false, None, 4.5);
         assert_eq!(out.status, S_SOLVED);
         assert!(out.z[25] >= 5.5 - 0.02, "{}", out.z[25]);
     }
@@ -1880,7 +1982,7 @@ mod tests {
         b.half = 5.0;
         let ms = vec![a, b];
         let pins = vec![[0, 0, 1], [0, 1, 1]];
-        let out = solve_core(&ms, &[], &pins, &[], &prm(), None);
+        let out = solve_core(&ms, &[], &pins, &[], &prm(), None, false, None, 4.5);
         assert_eq!(out.status, S_SOLVED);
         assert!(out.report[13] > 0.0);
         let n = ms[0].xy.len();
@@ -1894,7 +1996,7 @@ mod tests {
         let decks = vec![vec![[0.0, 0.0], [100.0, 0.0]]];
         let ground = vec![vec![[100.0, 0.0], [150.0, 0.0]], vec![[150.0, 0.0], [400.0, 0.0]],
                           vec![[150.0, 0.0], [150.0, 100.0]], vec![[-300.0, 0.0], [0.0, 0.0]]];
-        let out = members_core(&decks, &[5.0], &[200.0], &ground, &[1.0, 10.0, 0.766, 2.0, 100000.0]);
+        let out = members_core(&decks, &[5.0], &[200.0], &ground, &[1.0, 10.0, 0.766, 2.0, 100000.0], None);
         assert_eq!(out.approaches.len(), 2);
         for a in &out.approaches {
             let s = arcs(&a.xy);

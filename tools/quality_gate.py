@@ -19,6 +19,7 @@ MODULES = (
     "test_netfetch", "test_mapdata", "test_rangeread", "test_grading", "test_roadz", "test_roadz_inputs",
     "test_road_seams", "test_drivability", "test_determinism", "test_npyguard", "test_roadgeo", "test_fast", "test_restart",
     "test_revisit", "test_revisit_side", "test_revisitpack", "test_plancache", "test_bake_formats", "test_chunkcache", "test_pools",
+    "test_plan_neutral", "test_seamprobe", "test_ground_rules",
     "test_prefetch_chain", "test_demand", "test_roadwidth", "test_roadcorners",
     "test_sketchfab_assets", "test_subsea_tunnels", "test_tunnels",
     "test_host_package", "test_carriageway_solver",
@@ -26,7 +27,7 @@ MODULES = (
     "test_rail_crossing_assets",
     "test_native_stress",
     "test_bridge_level_spans",
-    "test_host_package", "test_container",
+    "test_container",
     "test_designs", "test_de_signs", "test_germany", "test_lane_rules", "test_regionaldata", "test_bdtopo",
 )
 
@@ -39,6 +40,8 @@ def main():
     if args.par < 1 or args.timeout < 1:
         ap.error("--par and --timeout must be positive")
     # Optional cached-world tests must not silently change the CI workload on a developer's machine.
+    os.environ.pop("BNGE_UPDATE_GOLDEN", None)
+    os.environ["BNGE_QUALITY_GATE"] = "1"
     os.environ["BNGE_ROADGEO_REAL"] = "0"
     # Fail before tests instead of accepting skipped native/data-provider coverage.
     sys.path.insert(0, str(ROOT / "server"))

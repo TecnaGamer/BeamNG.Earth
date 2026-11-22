@@ -231,6 +231,48 @@ def wants_restart(code):
     return code == EXIT_CODE
 
 
+def _stop_name(pid):
+    return rf"Local\BeamNGEarth-stop-{pid}"
+
+
+def wait_parent_or_stop(parent):
+    """Windows parent watcher. Wait for the parent handle (0) or our named stop event (1)."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateEventW.restype = wintypes.HANDLE
+    k32.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    k32.WaitForMultipleObjects.restype = wintypes.DWORD
+    k32.WaitForMultipleObjects.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE),
+                                          wintypes.BOOL, wintypes.DWORD]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    stop = k32.CreateEventW(None, True, False, _stop_name(os.getpid()))
+    handles = (wintypes.HANDLE * 2)(parent, stop)
+    try:
+        return k32.WaitForMultipleObjects(2 if stop else 1, handles, False, 0xFFFFFFFF)
+    finally:
+        if stop:
+            k32.CloseHandle(stop)
+
+
+def request_stop(pid):
+    """Windows TerminateProcess skips exit hooks. Wake the owned process's parent watcher to drain and exit."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenEventW.restype = wintypes.HANDLE
+    k32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    k32.SetEvent.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = k32.OpenEventW(0x0002, False, _stop_name(pid))  # EVENT_MODIFY_STATE
+    if not handle:
+        return False
+    try:
+        return bool(k32.SetEvent(handle))
+    finally:
+        k32.CloseHandle(handle)
+
+
 def stop_children(log=None, join_s=CHILD_JOIN_S):
     """This process's worker processes ended (terminated, then killed): none may keep the port or the shared memory
     for the next server. Returns how many there were."""
@@ -238,7 +280,8 @@ def stop_children(log=None, join_s=CHILD_JOIN_S):
     kids = multiprocessing.active_children()
     for p in kids:
         try:
-            p.terminate()
+            if os.name != "nt" or not request_stop(p.pid):
+                p.terminate()
         except Exception:
             pass
     for p in kids:
@@ -252,6 +295,18 @@ def stop_children(log=None, join_s=CHILD_JOIN_S):
     if log is not None and kids:
         log.info("restart: %d worker processes stopped", len(kids))
     return len(kids)
+
+
+def drain_before_kill(join_s):
+    """Give both the local listener and worker processes time to flush before forced tree cleanup."""
+    import threading
+    import serverlog
+    drain = threading.Thread(target=serverlog.shutdown, name="log-drain", daemon=True)
+    drain.start()
+    try:
+        stop_children(join_s=join_s)
+    finally:
+        drain.join(join_s)
 
 
 def finish(log=None):
@@ -289,7 +344,7 @@ def finish_soon(hard_s=HARD_EXIT_S):
     def guard():
         time.sleep(hard_s)
         try:
-            stop_children(None, join_s=1.0)
+            drain_before_kill(join_s=1.0)
         finally:
             os._exit(EXIT_CODE)
     threading.Thread(target=guard, name="restart-guard", daemon=True).start()
