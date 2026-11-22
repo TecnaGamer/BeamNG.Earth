@@ -138,26 +138,5 @@ class KeepSaying(unittest.TestCase):
                 self.assertIn("not applied: x", f.read())
 
 
-class GpuDrivenDefault(unittest.TestCase):
-    def test_linux_default_and_switches(self):
-        old_win, old_env = launcher.IS_WIN, os.environ.pop("BNGEARTH_GPU_DRIVEN", None)
-        try:
-            launcher.IS_WIN = False
-            self.assertEqual(launcher.gpu_driven_args("native"), ["-nogfxgpudriven"])
-            self.assertEqual(launcher.gpu_driven_args("proton"), [])          # (the Windows build: its own renderer)
-            os.environ["BNGEARTH_GPU_DRIVEN"] = "1"
-            self.assertEqual(launcher.gpu_driven_args("native"), [])
-            os.environ["BNGEARTH_GPU_DRIVEN"] = "0"
-            self.assertEqual(launcher.gpu_driven_args("native"), ["-nogfxgpudriven"])
-            launcher.IS_WIN = True
-            os.environ.pop("BNGEARTH_GPU_DRIVEN")
-            self.assertEqual(launcher.gpu_driven_args("native"), [])
-        finally:
-            launcher.IS_WIN = old_win
-            os.environ.pop("BNGEARTH_GPU_DRIVEN", None)
-            if old_env is not None:
-                os.environ["BNGEARTH_GPU_DRIVEN"] = old_env
-
-
 if __name__ == "__main__":
     unittest.main()

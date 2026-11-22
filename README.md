@@ -472,9 +472,6 @@ connection (the map is downloaded while you play).
      its instructions, so a game update that leaves those functions as they were keeps them; a patch that does not
      apply (a game update changed its code) is named in the launcher's window and in a warning in the game, and the
      game runs without it.
-   - **Linux, native game:** also started with `-nogfxgpudriven` (BeamNG's GPU-driven rendering off: on a Steam Deck
-     it crashed the graphics driver after terrain block swaps with trees coming and going). `--gpu-driven` (or
-     `BNGEARTH_GPU_DRIVEN=1`) leaves it on.
    - **Linux, Windows build under Proton:** the AppImage sees the Proton setting and starts that build through
      Steam (the server runs natively). The `.exe` also works inside the game's Proton prefix (for example with
      protontricks' launcher).

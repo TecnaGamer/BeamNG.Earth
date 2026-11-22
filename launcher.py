@@ -1509,20 +1509,6 @@ def split_launch_options(line):
     return env, wrapper, post.split()
 
 
-# BeamNG 0.40's GPU-driven rendering path (the engine's GPU culling registry) on Linux / Vulkan: on the Steam Deck 3 of 4
-# runs of terrain block swaps with Forest adds and removes ended in an amdgpu page fault in the Render thread, the one
-# with -nogfxgpudriven survived the same sequence (2026-11-22; the soak: tools/gcpatch/README.md "GPU-driven"). So the
-# native Linux game starts with the engine's own switch for it, unless BNGEARTH_GPU_DRIVEN=1 or --gpu-driven.
-GPU_DRIVEN_OFF = "-nogfxgpudriven"
-
-
-def gpu_driven_args(build="native"):
-    """The game options for the GPU-driven path: [GPU_DRIVEN_OFF] for the native Linux game (Vulkan), else none."""
-    if IS_WIN or build == "proton" or os.environ.get("BNGEARTH_GPU_DRIVEN", "") not in ("", "0"):
-        return []
-    return [GPU_DRIVEN_OFF]
-
-
 def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({}, [], []), meanwhile=None,
                launch=None):
     """Start the game; returns a Popen when this process started it directly, else None (through Steam).
@@ -1543,7 +1529,6 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
     wrapper = os.environ.get("BNGE_GAME_WRAPPER", "").split() + list(wrapper or [])
     win_args = ["-gfx", GFX_ARG.get(gfx, gfx)] if gfx else []
     extra = os.environ.get("BNGE_GAME_ARGS", "").split()     # (tests: e.g. "-bngetest car,damage")
-    extra += [a for a in gpu_driven_args(build) if a not in extra]
     win_args += extra
     if launch is not None and launch.mode == "direct":
         return direct_start(launch, use_gcpatch, win_args if IS_WIN else extra, user_dir, steam_args, wrapper,
@@ -2342,9 +2327,6 @@ def main():
     ap.add_argument("--no-game", action="store_true", help="only the server (start the game yourself)")
     ap.add_argument("--no-gcpatch", action="store_true",
                     help="the game without the engine patches (Linux: the preload library; Windows: enginepatch.py)")
-    ap.add_argument("--gpu-driven", action="store_true",
-                    help="Linux: leave the game's GPU-driven rendering on (by default it starts with -nogfxgpudriven; "
-                         "also BNGEARTH_GPU_DRIVEN=1)")
     ap.add_argument("--keep-mod", action="store_true", help="leave the game's copy of the mod as it is")
     ap.add_argument("--no-beammp", action="store_true",
                     help="do not start BeamMP (multiplayer) with the game (bmplaunch.py)")
@@ -2387,8 +2369,6 @@ def main():
                     help="do not ask GitHub for a newer BeamNG.Earth before the game starts")
     ap.add_argument("extra", nargs=argparse.REMAINDER, help="after --: more options for the server")
     args = ap.parse_args()
-    if args.gpu_driven:
-        os.environ["BNGEARTH_GPU_DRIVEN"] = "1"     # (gpu_driven_args; a terminal the launcher reopens itself in keeps it)
     if IS_WIN:
         windows_console()
     elif not (sys.stdout and sys.stdout.isatty()):
