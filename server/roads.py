@@ -9384,9 +9384,13 @@ class BridgeProfiles:
                                         or not np.isfinite(prof["deck_z"][k]).all() for k in comp):
                 prof = None
             if prof is not None:
+                dd = self.__dict__.setdefault("depth", {})
                 for k in comp:
                     v = shaped[k]
                     shaped[k] = (v[0], v[1], np.asarray(prof["deck_z"][k], np.float64), v[3])
+                    # (M3: drawn with the depth its floors were solved with: its structure's, roadsys._deck_depth)
+                    if prof.get("depth", {}).get(k) is not None:
+                        dd[k] = float(prof["depth"][k])
         pre = {k: self._precommit(k, shaped[k], ground) for k in keep}
         beams = tpiers = None
         # (BNE_DECK_STRUCT=shadow, road revamp RS: the chain's structure groups as a JSON, from what this solve read

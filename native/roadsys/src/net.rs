@@ -51,9 +51,13 @@ const NOSE_HOLD_M: f64 = 20.0;
 const MAX_PIECES: usize = 64;
 const CLS_TRUNK: i64 = 2;
 const CROSS_COS: f64 = 0.7071067811865476;
+const ALONG_NEAR_M: f64 = 60.0;   // (M3) m from a lower road's own structure at the upper's level within which no along floor holds
+const SHALLOW_SIN: f64 = 0.5735764363510461;   // (M3) sin 35 deg: a crossing this shallow may be two decks side by side
 /// m a floor adds under the clearance (M2: the deck today's builder draws: its slab and girders, roads.DECK_FULL_DEPTH
 /// 2.2 m, + roads.LEVEL_MARGIN_M; M3's kits will bring each deck's own depth)
 pub const DECK_FULL_M: f64 = 2.3;
+pub const LEVEL_MARGIN_M: f64 = 0.1;
+pub const TODAY_HEADROOM_M: f64 = 6.15;  // (roads.MIN_BRIDGE_HEADROOM_M 6.0 + BRIDGE_HEADROOM_MARGIN_M 0.15)    // (roads.LEVEL_MARGIN_M)
 const MPH: f64 = 1.609344;
 
 pub const K_LANE: u8 = 0;
@@ -111,7 +115,7 @@ impl Slot {
 pub struct Part { pub edge: usize, pub fwd: bool, pub s0: f64, pub s1: f64 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Sup { pub s0: f64, pub s1: f64, pub kind: u8, pub sid: u32, pub level: f64 }
+pub struct Sup { pub s0: f64, pub s1: f64, pub kind: u8, pub sid: u32, pub level: f64, pub depth: f64 }
 
 /// A branch stroke's first (or last) row taken from a trunk stroke's row: trunk slots [k0, k1] at station s (their
 /// left boundary of k0 to the right boundary of k1) are this stroke's boundaries from its first lane-ward one.
@@ -151,7 +155,7 @@ impl Stroke {
     pub fn len(&self) -> f64 { self.line.len() }
     pub fn support_at(&self, s: f64) -> Sup {
         for u in &self.sup { if s >= u.s0 && s <= u.s1 { return *u; } }
-        Sup { s0: 0.0, s1: self.len(), kind: SUP_GROUND, sid: 0, level: 0.0 }
+        Sup { s0: 0.0, s1: self.len(), kind: SUP_GROUND, sid: 0, level: 0.0, depth: 0.0 }
     }
     /// The row frame at station s (PT3 change 3, no folds on tight curves): the point on the mapped line, the unit
     /// left normal of the line smoothed over +-W (W = the carriageway's half width, 4..15 m: a polyline corner turns
@@ -992,14 +996,14 @@ fn strokes(net: &mut Net) {
                 if b2 - a2 < 0.5 { continue; }
                 let (x0, x1) = (to_st(a2), to_st(b2));
                 let (lo, hi) = if x0 < x1 { (x0, x1) } else { (x1, x0) };
-                sup.push(Sup { s0: lo, s1: hi, kind: k, sid: 0, level: level_at((a2 + b2) / 2.0) });
+                sup.push(Sup { s0: lo, s1: hi, kind: k, sid: 0, level: level_at((a2 + b2) / 2.0), depth: if k == SUP_STRUCT { s.depth } else { 0.0 } });
             }
         }
         sup.sort_by(|a, b| a.s0.partial_cmp(&b.s0).unwrap());
         let mut merged: Vec<Sup> = Vec::new();
         for u in sup {
             if let Some(m) = merged.last_mut() {
-                if m.kind == u.kind && u.s0 <= m.s1 + 1.0 { if u.s1 > m.s1 { m.s1 = u.s1; } continue; }
+                if m.kind == u.kind && u.s0 <= m.s1 + 1.0 { if u.s1 > m.s1 { m.s1 = u.s1; } if u.depth > m.depth { m.depth = u.depth; } continue; }
             }
             merged.push(u);
         }
@@ -1315,6 +1319,23 @@ fn build_slots(net: &mut Net, si: usize) -> SlotsOut {
     (out_slots, al, ar, rwin, stations, dense, snaps_out)
 }
 
+/// m of clearance under a structure over a road of class cls in country: today's deck builder's headroom
+/// (roads.MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M), not lower than the country's unsigned clearance (M2 took
+/// the country's alone: decks 1.2-1.8 m lower than today's over the same abutments, whose fills then stood under the
+/// deck ends as blocked openings until the hand-over strips (M3) end each deck on its ground; the table stays for then).
+pub fn clearance(country: &str, cls: i64) -> f64 {
+    let real = match country {
+        "CA" => 5.0, "DE" => 4.7, "FR" => 4.75, "GB" => 5.03, "JP" => 4.5,
+        _ => if cls >= 1 && cls <= 2 { 4.9 } else { 4.4 },
+    };
+    if real > TODAY_HEADROOM_M { real } else { TODAY_HEADROOM_M }
+}
+
+/// m a floor adds under the clearance for a structure: the depth the deck builder draws under it (its segments' own,
+/// Seg.depth: the inventory's main span or the part's geometry, roads.deck_depth) + LEVEL_MARGIN_M; DECK_FULL_M when
+/// not known (M3; M2 took DECK_FULL_M everywhere).
+pub fn deck_under(u: Sup) -> f64 { if u.kind == SUP_STRUCT && u.depth > 0.0 { u.depth + LEVEL_MARGIN_M } else { DECK_FULL_M } }
+
 /// The crossing graph: every pair of strokes crossing in plan without a shared node, with which is above and its
 /// floor (clearance of the lower by country and class + deck depth).
 fn crossings(net: &mut Net) {
@@ -1357,12 +1378,35 @@ fn crossings(net: &mut Net) {
                 let Some(up) = upper else { unbridged += 1; continue; };
                 let lo = if up == sa { sb } else { sa };
                 let lo_sup = if up == sa { ub } else { ua };
+                // (M3: two carriageways meeting at a shallow angle where the lower one's own structure, at the upper's
+                // level or above, begins within the stretch their paved areas overlap: both are on the deck there (a
+                // ramp's deck merging beside the main deck, its bridge tag 2 m short of the crossing), not a grade
+                // separation: no floor. A 7.3 m floor between them sank Ottawa 417's ramp 4 m under its ground.)
+                if lo_sup.kind == SUP_GROUND {
+                    let (da, db) = (sub(la.p[ka + 1], la.p[ka]), sub(lb.p[kb + 1], lb.p[kb]));
+                    let (na, nb) = (norm(da), norm(db));
+                    let sin = if na > 1e-9 && nb > 1e-9 { absf(cross(da, db)) / (na * nb) } else { 1.0 };
+                    if sin < SHALLOW_SIN {
+                        let (s_up, s_lo) = if up == sa { (s_a, s_b) } else { (s_b, s_a) };
+                        let mut off = Vec::new();
+                        net.strokes[up].offsets(s_up, &mut off);
+                        let hu = if off.is_empty() { 3.5 } else { off[0].max(-off[off.len() - 1]) };
+                        net.strokes[lo].offsets(s_lo, &mut off);
+                        let hl = if off.is_empty() { 3.5 } else { off[0].max(-off[off.len() - 1]) };
+                        let reach = (hu + hl) / sin.max(0.05) + 5.0;
+                        let up_lvl = net.strokes[up].support_at(s_up).level;
+                        let beside = net.strokes[lo].sup.iter().any(|u| u.kind == SUP_STRUCT && u.level >= up_lvl
+                            && s_lo >= u.s0 - reach && s_lo <= u.s1 + reach);
+                        if beside { unbridged += 1; continue; }
+                    }
+                }
                 let lo_st = &net.strokes[lo];
-                let clear = match country.as_str() {
-                    "CA" => 5.0, "DE" => 4.7, "FR" => 4.75, "GB" => 5.03, "JP" => 4.5,
-                    _ => if lo_st.cls >= 1 && lo_st.cls <= 2 { 4.9 } else { 4.4 },
-                };
-                let floor = if lo_sup.kind == SUP_TUNNEL { 8.0 } else { clear + DECK_FULL_M };
+                let clear = clearance(&country, lo_st.cls);
+                // (M3: nothing held over a tunnel: today's tunnels own their heights and cover (TunnelProfiles); an 8 m
+                // cover floor lifted a speedway's deck over its infield tunnel 12 m)
+                if lo_sup.kind == SUP_TUNNEL { unbridged += 1; continue; }
+                let up_sup = if up == sa { ua } else { ub };
+                let floor = if lo_sup.kind == SUP_TUNNEL { 8.0 } else { clear + deck_under(up_sup) };
                 let stacked = lo_sup.kind == SUP_STRUCT;
                 out.push(Crossing { a: sa, sa: s_a, b: sb, sb: s_b, p, upper: up, floor, along: false, stacked });
             }
@@ -1409,17 +1453,24 @@ fn crossings(net: &mut Net) {
                         if ea + eb - d < 0.5 * (2.0 * ea).min(2.0 * eb).max(2.0) { continue; }
                         let ub = net.strokes[sb].support_at(s_b);
                         if ub.kind == SUP_STRUCT && ub.level >= u.level { continue; }
+                        if ub.kind == SUP_TUNNEL { continue; }
+                        // (M3: over another deck only when its line lies over that deck's pavement, a double deck;
+                        // twin viaducts side by side at two OSM layers were held 8.45 m apart, Baltimore's I-95 decks
+                        // measured at one height lifted 18 m)
+                        if ub.kind == SUP_STRUCT && d >= eb { continue; }
+                        // (M3: nor where the lower road's own structure at this level or above begins or ends within
+                        // ALONG_NEAR_M: a ramp's deck beside the main deck, its bridge tag a few metres short, is on a
+                        // deck too; the 7.3 m floor sank Ottawa 417's ramp 4 m under its ground)
+                        if net.strokes[sb].sup.iter().any(|w| w.kind == SUP_STRUCT && w.level >= u.level
+                            && s_b >= w.s0 - ALONG_NEAR_M && s_b <= w.s1 + ALONG_NEAR_M) { continue; }
                         if best.map(|x| d < x.0).unwrap_or(true) { best = Some((d, sb, s_b)); }
                     }
                 }}
                 if let Some((_d, sb, s_b)) = best {
                     let lo_st = &net.strokes[sb];
                     let lo_sup = lo_st.support_at(s_b);
-                    let clear = match country.as_str() {
-                        "CA" => 5.0, "DE" => 4.7, "FR" => 4.75, "GB" => 5.03, "JP" => 4.5,
-                        _ => if lo_st.cls >= 1 && lo_st.cls <= 2 { 4.9 } else { 4.4 },
-                    };
-                    let floor = if lo_sup.kind == SUP_TUNNEL { 8.0 } else { clear + DECK_FULL_M };
+                    let clear = clearance(&country, lo_st.cls);
+                    let floor = if lo_sup.kind == SUP_TUNNEL { 8.0 } else { clear + deck_under(*u) };
                     let (a, b2, s1, s2) = if sa < sb { (sa, sb, s, s_b) } else { (sb, sa, s_b, s) };
                     out.push(Crossing { a, sa: s1, b: b2, sb: s2, p, upper: sa, floor, along: true, stacked: lo_sup.kind == SUP_STRUCT });
                     along += 1;

@@ -25,7 +25,7 @@ use crate::prof;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-pub const SQ_FORMAT: u64 = 1;
+pub const SQ_FORMAT: u64 = 2;    // 2 (M3)
 pub const SQUARE_M: f64 = 2000.0;
 pub const BAND_M: f64 = 250.0;
 pub const MARGIN_M: f64 = 850.0;
@@ -43,6 +43,8 @@ const PIN_END_IN_M: f64 = 0.05;
 const SHARE_REACH_M: f64 = 200.0;
 const SHARE_DROP: f64 = 0.9;
 const HALF_MAX_M: f64 = 15.0;
+const HAND_MIN_M: f64 = 40.0;           // (M3) the reach round a structure end / floor over which the profile's ground
+const HAND_MAX_M: f64 = 200.0;          // goes back to the plans' own: half the approach reach, within these
 const TUNNEL_FADE_M: f64 = 120.0;       // m past a tunnel portal its section's targets fade in (today's tunnels own
                                         // their portals' heights: TunnelProfiles)
 
@@ -105,9 +107,13 @@ pub struct SqStroke {
     pub z: Vec<f64>,
     pub half: Vec<f64>,
     pub feats: Vec<(f64, f64, String)>,      // (s0, s1, map feature) of its parts
-    pub sup: Vec<(f64, f64, u8)>,           // non-ground intervals
+    pub sup: Vec<(f64, f64, u8, f64)>,      // non-ground intervals (with a structure's drawn depth, M3)
     pub secs: Vec<(f64, f64, bool, bool, f64)>,   // Tier B sections: (s0, s1, free at s0, free at s1, fade length)
     pub anchors: Vec<f64>,                  // structure ends and floors (the shares' anchors)
+    pub hand: Vec<f64>,                     // (M3) where the profile owns the ground: structure ends, floors it is the upper road of
+    pub lows: Vec<f64>,                     // (M3) floors it is the lower road of (the ground there only dug)
+    pub hand_m: f64,                        // (M3) m from those over which the ground goes back to the plans' own
+    pub floors: Vec<f64>,                   // (M3) stations of the floors it is the upper road of (chain_heights' holds)
 }
 
 impl SqStroke {
@@ -126,6 +132,9 @@ impl SqStroke {
     }
     fn on_structure(&self, s: f64) -> bool {
         self.sup.iter().any(|u| u.2 == SUP_STRUCT && s >= u.0 - SUP_TOL_M && s <= u.1 + SUP_TOL_M)
+    }
+    fn depth_at(&self, s: f64) -> Option<f64> {
+        self.sup.iter().filter(|u| u.2 == SUP_STRUCT && s >= u.0 - SUP_TOL_M && s <= u.1 + SUP_TOL_M).map(|u| u.3).next()
     }
     /// (station, offset) of q on the kept knots' polyline (nearest; ties the first) and the tangent there.
     fn project(&self, q: P2) -> (f64, f64, P2) {
@@ -194,6 +203,43 @@ impl Square {
         best.map(|b| b.2)
     }
 
+    /// (M3) The drawn depth (m) of the structure of map feature `feat` under q (as `sample` with deck: the nearest
+    /// such structure within MATCH_M, ties by uid; the full depth where its segments gave none); None: no such structure.
+    pub fn sample_depth(&self, q: P2, t: Option<P2>, feat: &str) -> Option<f64> {
+        let mut best: Option<(f64, u64, f64)> = None;
+        for k in self.near(q, MATCH_M) {
+            let st = &self.strokes[k];
+            let (s, d, ts) = st.project(q);
+            if d > MATCH_M { continue; }
+            if !st.feats.iter().any(|f| f.2 == feat && s >= f.0 - FEAT_TOL_M && s <= f.1 + FEAT_TOL_M) { continue; }
+            let Some(dp) = st.depth_at(s) else { continue };
+            if let Some(t) = t { if absf(dot(t, ts)) < MATCH_COS { continue; } }
+            if best.map(|b| (d, st.uid) < (b.0, b.1)).unwrap_or(true) { best = Some((d, st.uid, dp)); }
+        }
+        best.map(|b| b.2)
+    }
+
+    /// (M3) The floors it holds over other roads inside a box: (point, its map feature) of every station where a stroke
+    /// of it is the upper road of a crossing, in stroke order.
+    pub fn floor_points(&self, b: [f64; 4]) -> Vec<(P2, String)> {
+        let mut out = Vec::new();
+        for st in &self.strokes {
+            if st.s.len() < 2 { continue; }
+            let (s0, s1) = (st.s[0], st.s[st.s.len() - 1]);
+            for &x in &st.floors {
+                if x < s0 || x > s1 { continue; }
+                let n = st.s.len();
+                let k = st.s.partition_point(|&v| v <= x).saturating_sub(1).min(n - 2);
+                let l = st.s[k + 1] - st.s[k];
+                let u = if l > 0.0 { clampf((x - st.s[k]) / l, 0.0, 1.0) } else { 0.0 };
+                let p = lerp(st.pts[k], st.pts[k + 1], u);
+                if p[0] < b[0] || p[0] > b[2] || p[1] < b[1] || p[1] > b[3] { continue; }
+                if let Some(f) = st.feature_at(x) { out.push((p, f.to_string())); }
+            }
+        }
+        out
+    }
+
     // ------------------------------------------------------------------------------- (de)serialisation, own format
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -215,11 +261,18 @@ impl Square {
             u(&mut b, st.feats.len() as u64);
             for (a, c, n) in &st.feats { f(&mut b, *a); f(&mut b, *c); u(&mut b, n.len() as u64); b.extend_from_slice(n.as_bytes()); }
             u(&mut b, st.sup.len() as u64);
-            for (a, c, k) in &st.sup { f(&mut b, *a); f(&mut b, *c); u(&mut b, *k as u64); }
+            for (a, c, k, dp) in &st.sup { f(&mut b, *a); f(&mut b, *c); u(&mut b, *k as u64); f(&mut b, *dp); }
             u(&mut b, st.secs.len() as u64);
             for (a, c, f0, f1, fl) in &st.secs { f(&mut b, *a); f(&mut b, *c); u(&mut b, *f0 as u64 | ((*f1 as u64) << 1)); f(&mut b, *fl); }
             u(&mut b, st.anchors.len() as u64);
             for a in &st.anchors { f(&mut b, *a); }
+            u(&mut b, st.hand.len() as u64);
+            for a in &st.hand { f(&mut b, *a); }
+            u(&mut b, st.lows.len() as u64);
+            for a in &st.lows { f(&mut b, *a); }
+            f(&mut b, st.hand_m);
+            u(&mut b, st.floors.len() as u64);
+            for a in &st.floors { f(&mut b, *a); }
         }
         let h = fnv(&b);
         u(&mut b, h);
@@ -270,11 +323,21 @@ impl Square {
             let n = rd(&mut pos)? as usize;
             for _ in 0..n { let (a, c) = (fl(&mut pos)?, fl(&mut pos)?); let l = rd(&mut pos)? as usize; let s = String::from_utf8(take(&mut pos, l)?).map_err(|e| e.to_string())?; st.feats.push((a, c, s)); }
             let n = rd(&mut pos)? as usize;
-            for _ in 0..n { let (a, c) = (fl(&mut pos)?, fl(&mut pos)?); st.sup.push((a, c, rd(&mut pos)? as u8)); }
+            for _ in 0..n { let (a, c) = (fl(&mut pos)?, fl(&mut pos)?); let k = rd(&mut pos)? as u8; st.sup.push((a, c, k, fl(&mut pos)?)); }
             let n = rd(&mut pos)? as usize;
             for _ in 0..n { let (a, c) = (fl(&mut pos)?, fl(&mut pos)?); let b = rd(&mut pos)?; st.secs.push((a, c, b & 1 != 0, b & 2 != 0, fl(&mut pos)?)); }
             let n = rd(&mut pos)? as usize;
             for _ in 0..n { st.anchors.push(fl(&mut pos)?); }
+            let n = rd(&mut pos)? as usize;
+            if n > 100_000_000 { return Err("roadsys square: size".into()); }
+            for _ in 0..n { st.hand.push(fl(&mut pos)?); }
+            let n = rd(&mut pos)? as usize;
+            if n > 100_000_000 { return Err("roadsys square: size".into()); }
+            for _ in 0..n { st.lows.push(fl(&mut pos)?); }
+            st.hand_m = fl(&mut pos)?;
+            let n = rd(&mut pos)? as usize;
+            if n > 100_000_000 { return Err("roadsys square: size".into()); }
+            for _ in 0..n { st.floors.push(fl(&mut pos)?); }
             sqr.strokes.push(st);
         }
         if pos != body.len() { return Err("roadsys square: trailing bytes".into()); }
@@ -353,8 +416,19 @@ pub fn solve_obs(place: &Place, sq: (i64, i64), g_of: &dyn Fn(&[P2]) -> Vec<f64>
                     if norm(sub(p, [f[0], f[1]])) > f[2] && std::env::var("ROADSYS_DEBUG_UID").map(|u| u != format!("{:x}", st.uid) || i % 10 != 0).unwrap_or(true) { continue; }
                     eprintln!("near stroke {} uid {:x} cls {} kmh {} s {:.0} sup {} lvl {} g {:.2} ob {:.2} a {:.2} z {:.2} sec {:?}", si, st.uid, st.cls, st.kmh, s, st.support_at(s).kind, st.support_at(s).level,
                               pr.g[si][i], pr.ob[si].get(i).copied().unwrap_or(f64::NAN), pr.tier_a[si][i], pr.z[si][i], pr.sections[si].iter().find(|x| s >= x.0 && s <= x.1));
+                    if std::env::var("ROADSYS_DEBUG_SNAP").is_ok() { eprintln!("   n0 {} n1 {} len {:.0} snap0 {:?} snap1 {:?} cut {:.1} {:.1}", st.n0, st.n1, st.len(), st.snap0.map(|x| (x.trunk, x.s, x.joint)), st.snap1.map(|x| (x.trunk, x.s, x.joint)), st.cut0, st.cut1); }
                 }
             }
+        }
+    }
+    if let Ok(v) = std::env::var("ROADSYS_DEBUG_NODE") {
+        let nn: usize = v.parse().unwrap_or(usize::MAX);
+        for (si, st) in net.strokes.iter().enumerate() {
+            if st.n0 != nn && st.n1 != nn { continue; }
+            let zz = if pr.z[si].is_empty() { (f64::NAN, f64::NAN) } else { (pr.z[si][0], pr.z[si][pr.z[si].len() - 1]) };
+            let ta = if pr.tier_a[si].is_empty() { (f64::NAN, f64::NAN) } else { (pr.tier_a[si][0], pr.tier_a[si][pr.tier_a[si].len() - 1]) };
+            eprintln!("node {} stroke {} uid {:x} cls {} len {:.0} n0 {} n1 {} need {} sup {:?} z {:?} a {:?} secs {:?} snaps {:?} {:?} p0 {:?} p1 {:?}", nn, si, st.uid, st.cls, st.len(), st.n0, st.n1, nd[si],
+                      st.sup.iter().map(|u| (u.s0 as i64, u.s1 as i64, u.kind, u.level)).collect::<Vec<_>>(), zz, ta, pr.sections[si], st.snap0.map(|x| (x.trunk, x.s as i64)), st.snap1.map(|x| (x.trunk, x.s as i64)), st.line.at(0.0).0, st.line.at(st.len()).0);
         }
     }
     let mut out = Square { sq, ..Default::default() };
@@ -381,7 +455,7 @@ pub fn solve_obs(place: &Place, sq: (i64, i64), g_of: &dyn Fn(&[P2]) -> Vec<f64>
             let fid = &net.segs[net.edges[p.edge].seg].fid;
             ss.feats.push((p.s0, p.s1, feature_of(fid).to_string()));
         }
-        for u in &st.sup { if u.kind != SUP_GROUND { ss.sup.push((u.s0, u.s1, u.kind)); } }
+        for u in &st.sup { if u.kind != SUP_GROUND { ss.sup.push((u.s0, u.s1, u.kind, if u.kind == SUP_STRUCT { net::deck_under(*u) - net::LEVEL_MARGIN_M } else { 0.0 })); } }
         let reach = prof::reach_m(&net, si);
         let fade = clampf(0.5 * reach, 30.0, 150.0);
         for &(s0, s1, cid) in &pr.sections[si] {
@@ -392,6 +466,26 @@ pub fn solve_obs(place: &Place, sq: (i64, i64), g_of: &dyn Fn(&[P2]) -> Vec<f64>
         for u in &st.sup { if u.kind != SUP_GROUND { ss.anchors.push(u.s0); ss.anchors.push(u.s1); } }
         for c in &net.crossings { if c.a == si { ss.anchors.push(c.sa); } if c.b == si { ss.anchors.push(c.sb); } }
         ss.anchors.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // (M3) the ground the profile owns: round its structures' ends and the floors it is the upper road of; round
+        // the floors it is the lower road of only its digs; elsewhere the plans' own (pins, pins_near)
+        for u in &st.sup { if u.kind == SUP_STRUCT { ss.hand.push(u.s0); ss.hand.push(u.s1); } }
+        // (and its ends at a node where another stroke's structure ends: the deck end it hands over to)
+        for (start, node) in [(true, st.n0), (false, st.n1)] {
+            let deck_there = ends[node].iter().any(|&o| o != si && {
+                let so = &net.strokes[o];
+                let e = if so.n0 == node { 0.0 } else { so.len() };
+                so.sup.iter().any(|u| u.kind == SUP_STRUCT && e >= u.s0 - SUP_TOL_M && e <= u.s1 + SUP_TOL_M)
+            });
+            if deck_there { ss.hand.push(if start { 0.0 } else { len }); }
+        }
+        for c in &net.crossings {
+            let (sa_, sb_) = (if c.a == si { Some(c.sa) } else { None }, if c.b == si { Some(c.sb) } else { None });
+            for x in [sa_, sb_].into_iter().flatten() { if c.upper == si { ss.hand.push(x); ss.floors.push(x); } else { ss.lows.push(x); } }
+        }
+        ss.floors.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        ss.hand.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        ss.lows.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        ss.hand_m = clampf(0.5 * reach, HAND_MIN_M, HAND_MAX_M);
         out.strokes.push(ss);
     }
     out.strokes.sort_by(|a, b| a.uid.cmp(&b.uid).then(a.s.first().partial_cmp(&b.s.first()).unwrap()));
@@ -452,10 +546,10 @@ pub fn solve_obs(place: &Place, sq: (i64, i64), g_of: &dyn Fn(&[P2]) -> Vec<f64>
     let ps = &pr.stats;
     let _ = write!(out.json,
         "{{\"format\":{},\"sq\":[{},{}],\"key\":\"{:016x}\",\"segments\":{},\"strokes\":{},\"need\":{},\"kept\":{},\"steps\":{},\"step_max_m\":{:.3},\"step_at\":[{:.0},{:.0}],\
-         \"profile\":{{\"tier_a\":{},\"components\":{},\"sections\":{},\"knots\":{},\"biggest_km\":{:.2},\"cap_cuts\":{},\"solves\":{},\"reused\":{},\"factor_fail\":{},\"floors\":{},\"floors_met\":{},\"floors_relaxed\":{},\"floor_relax_max_m\":{:.3},\"stacked\":{},\"floor_short_max_m\":{:.3},\"grade_viol\":{},\"comfort_viol\":{},\"couple_max_mm\":{:.2}}}}}",
+         \"profile\":{{\"tier_a\":{},\"components\":{},\"sections\":{},\"knots\":{},\"biggest_km\":{:.2},\"cap_cuts\":{},\"solves\":{},\"reused\":{},\"factor_fail\":{},\"floors\":{},\"floors_met\":{},\"floors_relaxed\":{},\"floors_measured_out\":{},\"floor_relax_max_m\":{:.3},\"stacked\":{},\"floor_short_max_m\":{:.3},\"grade_viol\":{},\"comfort_viol\":{},\"couple_max_mm\":{:.2}}}}}",
         SQ_FORMAT, sq.0, sq.1, h, place.segs.len(), net.strokes.len(), nd.iter().filter(|&&x| x).count(), out.strokes.len(), steps, step_max, step_at[0], step_at[1],
         ps.tier_a, ps.components, ps.sections, ps.knots, ps.biggest_component_km, ps.cap_cuts, ps.solves, ps.reused, ps.factor_fail,
-        ps.crossings, ps.floors_met, ps.floors_relaxed, ps.floor_relax_max_m, ps.stacked, ps.floor_short_max_m, ps.grade_viol, ps.comfort_viol, ps.couple_max_mm);
+        ps.crossings, ps.floors_met, ps.floors_relaxed, ps.floors_measured_out, ps.floor_relax_max_m, ps.stacked, ps.floor_short_max_m, ps.grade_viol, ps.comfort_viol, ps.couple_max_mm);
     let _ = write!(out.cpu_json, "{{\"network\":{:.3},\"profile\":{:.3},\"keep\":{:.3},\"total\":{:.3}}}",
                    (t1 - t0) * 1e3, (t2 - t1) * 1e3, (t3 - t2) * 1e3, (t3 - t0) * 1e3);
     out
@@ -472,7 +566,8 @@ pub fn blend(squares: &BTreeMap<(i64, i64), &Square>, q: P2, t: Option<P2>, feat
     if sw > 0.0 { Some(sz / sw) } else { None }
 }
 
-pub struct PinRaw { pub feat: String, pub pts: Vec<P2>, pub tan: Vec<P2>, pub w: Vec<f64>, pub share: Vec<f64>, pub half: f64 }
+pub struct PinRaw { pub feat: String, pub pts: Vec<P2>, pub tan: Vec<P2>, pub w: Vec<f64>, pub share: Vec<f64>, pub half: f64,
+                   pub hand: Vec<f64>, pub low: Vec<f64> }
 
 /// The square's terrain targets (see the module's comment): the ground runs of its Tier B sections whose stations lie
 /// in the square (and the first one past it on either side: neighbours' lines meet), each run cut where its map feature
@@ -486,6 +581,8 @@ pub fn pins(sqr: &Square) -> Vec<PinRaw> {
         let (smin, smax) = (st.s[0], st.s[st.s.len() - 1]);
         let tunnels: Vec<(f64, f64)> = st.sup.iter().filter(|u| u.2 == SUP_TUNNEL).map(|u| (u.0, u.1)).collect();
         let near = |s: f64| -> f64 { st.anchors.iter().fold(f64::INFINITY, |m, &x| m.min(absf(s - x))) };
+        let hand_w = |s: f64| -> f64 { let d = st.hand.iter().fold(f64::INFINITY, |m, &x| m.min(absf(s - x))); if d.is_finite() { smooth(1.0 - d / st.hand_m.max(1.0)) } else { 0.0 } };
+        let low_w = |s: f64| -> f64 { let d = st.lows.iter().fold(f64::INFINITY, |m, &x| m.min(absf(s - x))); if d.is_finite() { smooth(1.0 - d / st.hand_m.max(1.0)) } else { 0.0 } };
         let line_at = |s: f64| -> (P2, P2) {
             let n = st.s.len();
             let k = st.s.partition_point(|&x| x <= s).saturating_sub(1).min(n - 2);
@@ -539,10 +636,14 @@ pub fn pins(sqr: &Square) -> Vec<PinRaw> {
                     let wf = if df.is_finite() { smooth(df / fade) } else { 1.0 };
                     let dt = tunnels.iter().fold(f64::INFINITY, |m, &(a, b)| m.min(if s < a { a - s } else if s > b { s - b } else { 0.0 }));
                     let wt = if dt.is_finite() { smooth(dt / TUNNEL_FADE_M) } else { 1.0 };
-                    let c = cur.get_or_insert_with(|| PinRaw { feat: feat.clone(), pts: Vec::new(), tan: Vec::new(), w: Vec::new(), share: Vec::new(), half: 0.0 });
+                    let c = cur.get_or_insert_with(|| PinRaw { feat: feat.clone(), pts: Vec::new(), tan: Vec::new(), w: Vec::new(), share: Vec::new(), half: 0.0, hand: Vec::new(), low: Vec::new() });
+                    c.hand.push(hand_w(s));
+                    c.low.push(low_w(s));
                     c.pts.push(p);
                     c.tan.push(t);
-                    c.w.push(wf * wt);
+                    // (never faded at the deck end it hands over to, M3: a section's free end there left the approach 1 m
+                    // over the deck's end, Springfield)
+                    c.w.push(wf.max(hand_w(s)) * wt);
                     c.share.push(1.0 - SHARE_DROP * near(s).min(SHARE_REACH_M) / SHARE_REACH_M);
                     let hw = half_at(s);
                     if hw > c.half { c.half = hw; }
@@ -604,6 +705,57 @@ mod tests {
         assert_eq!(back.sample([-300.0, 0.0], Some([0.0, 1.0]), "m", true), Some(z));
         assert!(a.sample([-300.0, 0.0], Some([0.0, 1.0]), "a", true).is_none());
         assert!(!pins(&a).is_empty());
+    }
+
+    fn crossings_between(p: &Place, a: &str, b: &str) -> usize {
+        let order: Vec<usize> = (0..p.segs.len()).collect();
+        let n = net::build_opts(p, &order, Opts::default());
+        let has = |si: usize, f: &str| n.strokes[si].parts.iter().any(|q| feature_of(&n.segs[n.edges[q.edge].seg].fid) == f);
+        n.crossings.iter().filter(|c| (has(c.a, a) && has(c.b, b)) || (has(c.a, b) && has(c.b, a))).count()
+    }
+
+    /// (M3) A ramp crossing a deck at a shallow angle where its own deck begins 3 m on is beside it, not under it; a
+    /// street under the deck keeps its floor; nothing is held over a tunnel.
+    #[test]
+    fn decks_side_by_side_and_tunnels_take_no_floor() {
+        let mut segs = vec![
+            seg("m|0", &[[-300.0, 0.0], [300.0, 0.0]], 1, 1, 100.0, &[], Some((1.0 / 3.0, 2.0 / 3.0))),
+            // (crosses y = 0 at x = -40 at ~6 deg, its own deck from x = -37 on)
+            seg("r|0", &[[-340.0, -31.5], [-37.0, 0.3], [60.0, 10.5]], 1, 1, 100.0, &[], Some((0.758, 1.0))),
+            seg("s|0", &[[0.0, -300.0], [0.0, 300.0]], 4, 0, 50.0, &[], None),
+        ];
+        let p = Place { segs: segs.clone(), ..Default::default() };
+        assert_eq!(crossings_between(&p, "m", "r"), 0, "beside the deck");
+        assert!(crossings_between(&p, "m", "s") >= 1, "the street under the deck");
+        segs[2].tunnel = vec![(0.4, 0.6)];
+        segs[2].level = vec![(0.4, 0.6, -1.0)];
+        let p = Place { segs, ..Default::default() };
+        assert_eq!(crossings_between(&p, "m", "s"), 0, "over a tunnel");
+    }
+
+    /// (M3) Two viaducts side by side at two OSM levels take no floor between them; one over the other's pavement does.
+    #[test]
+    fn a_deck_beside_another_is_not_over_it() {
+        let twin = |dy: f64| {
+            let mut a = seg("u|0", &[[-300.0, 0.0], [300.0, 0.0]], 1, 1, 100.0, &[], Some((0.1, 0.9)));
+            a.level = vec![(0.1, 0.9, 2.0)];
+            let b = seg("l|0", &[[-300.0, dy], [300.0, dy]], 1, 1, 100.0, &[], Some((0.1, 0.9)));
+            Place { segs: vec![a, b], ..Default::default() }
+        };
+        assert_eq!(crossings_between(&twin(9.0), "u", "l"), 0, "side by side");
+        assert!(crossings_between(&twin(0.5), "u", "l") > 10, "a double deck");
+    }
+
+    /// (M3) A floor takes the structure's drawn depth (+ LEVEL_MARGIN_M) and today's headroom.
+    #[test]
+    fn a_floor_is_todays_headroom_and_the_decks_depth() {
+        let mut m = seg("m|0", &[[-300.0, 0.0], [300.0, 0.0]], 1, 1, 100.0, &[], Some((1.0 / 3.0, 2.0 / 3.0)));
+        m.depth = 1.2;
+        let p = Place { segs: vec![m, seg("s|0", &[[0.0, -300.0], [0.0, 300.0]], 4, 0, 50.0, &[], None)], ..Default::default() };
+        let order: Vec<usize> = (0..p.segs.len()).collect();
+        let n = net::build_opts(&p, &order, Opts::default());
+        let c = n.crossings.iter().find(|c| !c.along).expect("a crossing");
+        assert!(absf(c.floor - (net::TODAY_HEADROOM_M + 1.2 + net::LEVEL_MARGIN_M)) < 1e-9, "{}", c.floor);
     }
 
     #[test]

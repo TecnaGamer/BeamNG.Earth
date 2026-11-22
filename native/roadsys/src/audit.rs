@@ -395,6 +395,7 @@ pub fn audit(sc: &Scene) -> Metrics {
         if n_own >= 2 {
             m.add("double_owner_m2", area);
             if terrain_own { m.add("double_owner_terrain_m2", area); } else { m.add("double_owner_collider_m2", area); }
+            if std::env::var("ROADSYS_AUDIT_DUMP").is_ok() { eprintln!("DO {:.1} {:.1} lvl {} ter {} zt {:.2} drive {:.2} n {}", x, y, s.level, terrain_own, zt, drive, n_own); }
         }
         // the envelope above: colliding faces in (drive + 5 cm, drive + 4.5 m]
         let (lo, hi) = (drive + OWN, drive + ENVELOPE);
@@ -448,6 +449,7 @@ pub fn audit(sc: &Scene) -> Metrics {
             let gap = over_min - drive;
             if gap < 2.5 { m.add("opening_blocked_m2", area); }
             if gap < 4.25 { m.add("clearance_short_cells", 1.0); }
+            if gap < 4.25 && std::env::var("ROADSYS_AUDIT_DUMP").is_ok() { eprintln!("CS {:.1} {:.1} gap {:.2} drive {:.2} top {:.2}", x, y, gap, drive, top_above); }
             if top_above.is_finite() {
                 let rr = top_above - drive;
                 r2r.push(rr);

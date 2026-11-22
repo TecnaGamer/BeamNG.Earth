@@ -55,7 +55,7 @@ impl RoadsysSegments {
                 pave: nums[[i, 0]], drive: nums[[i, 1]], kmh: nums[[i, 2]], lane_w: nums[[i, 3]],
                 inferred: ints[[i, 0]], urban: ints[[i, 1]] != 0, cls: ints[[i, 2]], link: ints[[i, 3]] != 0, dir: ints[[i, 4]],
                 lanes: ints[[i, 5]], lfw: ints[[i, 6]], lbw: ints[[i, 7]], region: ints[[i, 8]],
-                pts: p, cons: Vec::new(), bridge: Vec::new(), tunnel: Vec::new(), level: Vec::new(),
+                pts: p, cons: Vec::new(), bridge: Vec::new(), tunnel: Vec::new(), level: Vec::new(), depth: 0.0,
             });
         }
         for k in 0..con_id.len() {
@@ -66,7 +66,7 @@ impl RoadsysSegments {
             let s = rng_seg[k] as usize;
             if s >= n { continue; }
             let (a, b, kind, v) = (rng[[k, 0]], rng[[k, 1]], rng[[k, 2]], rng[[k, 3]]);
-            match kind as i64 { 0 => segs[s].bridge.push((a, b)), 1 => segs[s].tunnel.push((a, b)), _ => segs[s].level.push((a, b, v)) }
+            match kind as i64 { 0 => segs[s].bridge.push((a, b)), 1 => segs[s].tunnel.push((a, b)), 3 => { if v > segs[s].depth { segs[s].depth = v; } }, _ => segs[s].level.push((a, b, v)) }
         }
         // one copy per segment: a row's id is "<segment>|<its first point>" and the point differs between two cells'
         // copies, so copies are grouped by the segment's own id (roadshape.SegmentCell's sid), the cell whose copy has
@@ -221,16 +221,18 @@ impl RoadsysSquare {
     fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> { PyBytes::new(py, &self.sq.to_bytes()) }
     /// (JSON stats, key, (i, j), JSON cpu ms of its solve: empty for one read from bytes)
     fn info(&self) -> (String, u64, (i64, i64), String) { (self.sq.json.clone(), self.sq.key, self.sq.sq, self.sq.cpu_json.clone()) }
-    /// Its terrain targets (square.rs pins): [(map feature, points (n, 2), tangents (n, 2), fade, share, half width)],
-    /// heights left to roadsys_blend.
+    /// Its terrain targets (square.rs pins): [(map feature, points (n, 2), tangents (n, 2), fade, share, half width,
+    /// hand (n,), low (n,))], heights left to roadsys_blend. hand: 1 where the profile owns the ground (round a structure
+    /// end, a floor over it) falling to 0 away; low: the same round a floor under a structure (there the ground is only
+    /// dug) (M3).
     #[allow(clippy::type_complexity)]
-    fn pins<'py>(&self, py: Python<'py>) -> PyResult<Vec<(String, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, f64)>> {
+    fn pins<'py>(&self, py: Python<'py>) -> PyResult<Vec<(String, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, f64, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)>> {
         let mut out = Vec::new();
         for p in roadsys::square::pins(&self.sq) {
             let n = p.pts.len();
             let a = PyArray1::from_vec(py, p.pts.iter().flat_map(|q| [q[0], q[1]]).collect()).reshape([n, 2])?;
             let t = PyArray1::from_vec(py, p.tan.iter().flat_map(|q| [q[0], q[1]]).collect()).reshape([n, 2])?;
-            out.push((p.feat, a, t, PyArray1::from_vec(py, p.w), PyArray1::from_vec(py, p.share), p.half));
+            out.push((p.feat, a, t, PyArray1::from_vec(py, p.w), PyArray1::from_vec(py, p.share), p.half, PyArray1::from_vec(py, p.hand), PyArray1::from_vec(py, p.low)));
         }
         Ok(out)
     }
@@ -322,6 +324,53 @@ pub fn roadsys_blend<'py>(py: Python<'py>, squares: Vec<PyRef<'py, RoadsysSquare
     Ok(PyArray1::from_vec(py, out))
 }
 
+/// (M3) The drawn depth (m) of the structure of map feature feats[i] under each point (square.rs sample_depth: the
+/// first square in the weights' order that holds it): NaN where none does; the full depth (2.2 m) where its segments
+/// gave none.
+#[pyfunction]
+pub fn roadsys_deck_depth<'py>(py: Python<'py>, squares: Vec<PyRef<'py, RoadsysSquare>>, pts: PyReadonlyArray2<'py, f64>,
+                               tans: PyReadonlyArray2<'py, f64>, feats: Vec<String>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let (p, t) = (pts.as_array(), tans.as_array());
+    if p.ncols() != 2 || t.ncols() != 2 || t.nrows() != p.nrows() || feats.len() != p.nrows() {
+        return Err(PyValueError::new_err("roadsys_deck_depth: inconsistent columns"));
+    }
+    let mut m: BTreeMap<(i64, i64), &roadsys::square::Square> = BTreeMap::new();
+    for s in &squares { m.insert(s.sq.sq, &s.sq); }
+    let out: Vec<f64> = (0..p.nrows()).map(|i| {
+        let q = [p[[i, 0]], p[[i, 1]]];
+        let tv = [t[[i, 0]], t[[i, 1]]];
+        let tt = if tv[0] == 0.0 && tv[1] == 0.0 { None } else { Some(tv) };
+        roadsys::square::weights(q).iter().find_map(|(k, _w)| m.get(k).and_then(|s| s.sample_depth(q, tt, &feats[i]))).unwrap_or(f64::NAN)
+    }).collect();
+    Ok(PyArray1::from_vec(py, out))
+}
+
+/// (M3) A bridge chain's lifts onto its abutments' ground (native/roadsys endmatch.rs): parts [(points (n, 2), heights
+/// (n,))], ends [(ground just past its first end, past its last end)] (NaN: not read) -> the lift per part vertex.
+#[pyfunction]
+#[pyo3(signature = (parts, ends, lift_max, drop_max = None, holds = None))]
+pub fn roadsys_end_lifts<'py>(py: Python<'py>, parts: Vec<(PyReadonlyArray2<'py, f64>, PyReadonlyArray1<'py, f64>)>,
+                              ends: Vec<(f64, f64)>, lift_max: f64, drop_max: Option<f64>, holds: Option<Vec<Vec<f64>>>) -> PyResult<Vec<Bound<'py, PyArray1<f64>>>> {
+    if ends.len() != parts.len() { return Err(PyValueError::new_err("roadsys_end_lifts: one ends pair per part")); }
+    let mut pp = Vec::with_capacity(parts.len());
+    for (p, z) in &parts {
+        let (p, z) = (p.as_array(), z.as_slice()?);
+        if p.ncols() != 2 || p.nrows() != z.len() { return Err(PyValueError::new_err("roadsys_end_lifts: inconsistent part")); }
+        pp.push(((0..p.nrows()).map(|i| [p[[i, 0]], p[[i, 1]]]).collect::<Vec<_>>(), z.to_vec()));
+    }
+    let got = roadsys::endmatch::lifts_held(&pp, &ends, lift_max, drop_max.unwrap_or(0.0), &holds.unwrap_or_else(|| vec![Vec::new(); pp.len()]));
+    Ok(got.into_iter().map(|v| PyArray1::from_vec(py, v)).collect())
+}
+
+/// (M3) The floors the squares hold over other roads inside a box: [(x, y, map feature)] (square.rs floor_points),
+/// each square's own, in square then stroke order (duplicates between squares kept: the caller matches by distance).
+#[pyfunction]
+pub fn roadsys_floor_points(squares: Vec<PyRef<'_, RoadsysSquare>>, bbox: [f64; 4]) -> Vec<(f64, f64, String)> {
+    let mut out = Vec::new();
+    for s in &squares { for (p, f) in s.sq.floor_points(bbox) { out.push((p[0], p[1], f)); } }
+    out
+}
+
 /// The process's profile solve store emptied (tests: a cold process's results).
 #[pyfunction]
 pub fn roadsys_clear() { roadsys::prof::store_clear(); }
@@ -342,6 +391,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadsys_squares_of_box, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_square, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_blend, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_deck_depth, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_end_lifts, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_floor_points, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_clear, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_audit, m)?)?;
     Ok(())
