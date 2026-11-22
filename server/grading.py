@@ -5090,7 +5090,9 @@ class _Planner:
         z = np.full(len(xy), np.nan)
         far = np.ones(len(xy), bool)
         cluster = np.array([label[c] for c in zip(cx.tolist(), cy.tolist())], np.int64).reshape(-1, 2)
+        import xproc
         for c0 in sorted(set(label.values())):
+            xproc.check_cancel()            # (a cluster at a time: the step's time limit, ix/limits.py)
             mine = [c for c, l_ in label.items() if l_ == c0]
             box = (min(c[0] for c in mine) * cell, min(c[1] for c in mine) * cell,
                    (max(c[0] for c in mine) + 1) * cell, (max(c[1] for c in mine) + 1) * cell)

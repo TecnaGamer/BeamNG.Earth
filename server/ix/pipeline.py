@@ -16,7 +16,7 @@ import numpy as np
 
 import gradeshapes as _gsh
 
-from . import cache, owner, s1_paths, s2_extent, s3_order, s4_terrain, s5_datum, s6_heights
+from . import cache, limits, owner, s1_paths, s2_extent, s3_order, s4_terrain, s5_datum, s6_heights
 
 log = logging.getLogger("earthd.grading")
 
@@ -77,7 +77,8 @@ def system(planner, net, ix, fixed_z, hk, clock):
     """One interchange's steps, in order, each timed on its own: paths, extent, order, terrain (the pieces' samples and
     the ground there), datum, heights (the solve). ix: gradeshapes.Interchange, one system of the whole one (owner.grow). Its key is
     the owner's (owner.key_of: its roads and its place, the same from every region), the scope of all its artifacts.
-    Returns (pcs, smp, zs, diag, ground, heights key): zs None when there is no answer."""
+    Returns (pcs, smp, zs, diag, ground, heights key): zs None when there is no answer. Each step has its wall-clock limit
+    (ix/limits.py): one that runs past it stops (its line says 'failed: time limit N s'), and limits.StepLimit is raised."""
     import xproc
     xproc.check_cancel()        # (a place a teleport left: not its next interchange either, a left city's 40 s solves
     #                              held the road tiles)
@@ -86,47 +87,70 @@ def system(planner, net, ix, fixed_z, hk, clock):
     scope = "system:%s" % system_id
     where = "%s system %s" % (hk, system_id)
     n_x = len(sysm["crossings"])
+    cur = {"step": "paths", "t0": time.perf_counter(), "used": ix.paths_s, "keys": [], "pieces": 0}
 
-    t0 = time.perf_counter()
-    pcs = _gsh.pieces(net, sysm)
-    loc = s1_paths.local_of(net, sysm, pcs)
-    members = _members_bytes([net.m[g] for g in sorted(loc, key=loc.get)])
-    paths, paths_key = _put(s1_paths.run(net, loc, scope), (), members)
-    _line(clock, "paths", paths_key, len(paths.members), len(paths.crossings), ix.paths_s + time.perf_counter() - t0,
-          None, where)
-    t0 = time.perf_counter()
-    extent, extent_key = _put(s2_extent.run(net, sysm, loc, system_id, scope), (paths_key,), members)
-    _line(clock, "extent", extent_key, len(sysm["seeds"]), n_x, ix.extent_s + time.perf_counter() - t0, None, where)
+    def begin(step, used=0.0):
+        cur.update(step=step, t0=time.perf_counter(), used=used)
 
-    t0 = time.perf_counter()
-    order, order_key = _put(s3_order.run(planner, net, sysm, loc, system_id, scope), (extent_key,),
-                            [system_id.encode()])
-    bad = [f for f in order.findings if f.level == "fail"]
-    gave = [f for f in order.findings if f.code == "order_dropped"]
-    deferred = [f for f in order.findings if f.code == "order_deferred"]
-    _line(clock, "order", order_key, len(pcs), n_x, time.perf_counter() - t0,
-          "; ".join("%s: %s" % (f.code, f.text) for f in bad) if bad else None, where,
-          ", ".join(x for x in ("%d decisions given up" % len(gave) if gave else "",
-                                "%d loops left to the heights" % len(deferred) if deferred else "") if x))
-    n_x = len(sysm["crossings"])        # (the ones that stand)
+    try:
+        begin("paths", ix.paths_s)
+        with limits.scope("paths", ix.paths_s):
+            pcs = _gsh.pieces(net, sysm)
+            cur["pieces"] = len(pcs)
+            loc = s1_paths.local_of(net, sysm, pcs)
+            members = _members_bytes([net.m[g] for g in sorted(loc, key=loc.get)])
+            paths, paths_key = _put(s1_paths.run(net, loc, scope), (), members)
+        _line(clock, "paths", paths_key, len(paths.members), len(paths.crossings),
+              ix.paths_s + time.perf_counter() - cur["t0"], None, where)
+        cur["keys"] = [paths_key]
+        begin("extent", ix.extent_s)
+        with limits.scope("extent", ix.extent_s):
+            extent, extent_key = _put(s2_extent.run(net, sysm, loc, system_id, scope), (paths_key,), members)
+        _line(clock, "extent", extent_key, len(sysm["seeds"]), n_x, ix.extent_s + time.perf_counter() - cur["t0"], None, where)
+        cur["keys"] = [extent_key]
 
-    t0 = time.perf_counter()
-    smp = _gsh.sample(net, pcs)
-    inputs = _samples_bytes(system_id, net, smp)
-    terrain, ground, table = s4_terrain.run(planner, net, sysm, pcs, smp, loc, fixed_z, system_id, scope)
-    terrain, terrain_key = _put(terrain, (order_key,), inputs)
-    _line(clock, "terrain", terrain_key, len(pcs), n_x, time.perf_counter() - t0, None, where)
+        begin("order")
+        with limits.scope("order"):
+            order, order_key = _put(s3_order.run(planner, net, sysm, loc, system_id, scope), (extent_key,),
+                                    [system_id.encode()])
+        bad = [f for f in order.findings if f.level == "fail"]
+        gave = [f for f in order.findings if f.code == "order_dropped"]
+        deferred = [f for f in order.findings if f.code == "order_deferred"]
+        _line(clock, "order", order_key, len(pcs), n_x, time.perf_counter() - cur["t0"],
+              "; ".join("%s: %s" % (f.code, f.text) for f in bad) if bad else None, where,
+              ", ".join(x for x in ("%d decisions given up" % len(gave) if gave else "",
+                                    "%d loops left to the heights" % len(deferred) if deferred else "") if x))
+        cur["keys"] = [order_key]
+        n_x = len(sysm["crossings"])        # (the ones that stand)
 
-    t0 = time.perf_counter()
-    datum, datum_key = _put(s5_datum.run(planner, net, sysm, loc, system_id, scope), (terrain_key,), inputs)
-    _line(clock, "datum", datum_key, len(pcs), n_x, time.perf_counter() - t0, None, where)
+        begin("terrain")
+        with limits.scope("terrain"):
+            smp = _gsh.sample(net, pcs)
+            inputs = _samples_bytes(system_id, net, smp)
+            terrain, ground, table = s4_terrain.run(planner, net, sysm, pcs, smp, loc, fixed_z, system_id, scope)
+            terrain, terrain_key = _put(terrain, (order_key,), inputs)
+        _line(clock, "terrain", terrain_key, len(pcs), n_x, time.perf_counter() - cur["t0"], None, where)
+        cur["keys"] = [terrain_key]
 
-    t0 = time.perf_counter()
-    zs, diag = s6_heights.solve(net, sysm, pcs, smp, s4_terrain.lookup(table), ground)
-    _heights, heights_key = _put(s6_heights.run(planner, net, sysm, loc, pcs, smp, zs, diag, system_id, scope),
-                                 (datum_key,), inputs)
-    _line(clock, "heights", heights_key, len(pcs), n_x, time.perf_counter() - t0, _heights_why(zs, diag), where,
-          s6_heights.relax_text(diag))
+        begin("datum")
+        with limits.scope("datum"):
+            datum, datum_key = _put(s5_datum.run(planner, net, sysm, loc, system_id, scope), (terrain_key,), inputs)
+        _line(clock, "datum", datum_key, len(pcs), n_x, time.perf_counter() - cur["t0"], None, where)
+        cur["keys"] = [datum_key]
+
+        begin("heights")
+        with limits.scope("heights"):
+            zs, diag = s6_heights.solve(net, sysm, pcs, smp, s4_terrain.lookup(table), ground)
+            _heights, heights_key = _put(s6_heights.run(planner, net, sysm, loc, pcs, smp, zs, diag, system_id, scope),
+                                         (datum_key,), inputs)
+        _line(clock, "heights", heights_key, len(pcs), n_x, time.perf_counter() - cur["t0"], _heights_why(zs, diag), where,
+              s6_heights.relax_text(diag))
+    except xproc.TimeLimit as e:
+        took = cur["used"] + time.perf_counter() - cur["t0"]
+        text = "step %s of system %s ran past its limit of %g s (%.0f s): stopped, the interchange is left as it is and "                "not stored" % (e.what, system_id, e.secs, took)
+        limits.record(system_id, e.what, e.secs, took, text, cur["keys"])
+        _line(clock, e.what, "-", cur["pieces"], n_x, took, "time limit %g s" % e.secs, where)
+        raise limits.StepLimit(e.what, e.secs, took, text) from None
     clock["relaxed"] = clock.get("relaxed", 0) + len(s6_heights.relaxed_of(diag))     # (owner.made: the interchange's share)
     return pcs, smp, zs, diag, ground, heights_key
 
@@ -140,7 +164,13 @@ def interchange(planner, net, ix, others, hk, clock):
     solved, shapes, keys, moved, why = [], [], [], [], None
     for part in ix.parts or (ix,):
         sysm = part.sysm
-        pcs, smp, zs, diag, ground, heights_key = system(planner, net, part, fixed_z, hk, clock)
+        try:
+            pcs, smp, zs, diag, ground, heights_key = system(planner, net, part, fixed_z, hk, clock)
+        except limits.StepLimit as e:       # (a step ran past its limit: the interchange has no answer, and is not stored)
+            log.error("grading: SHAPES infeasible system in region %s: %d crossings, %d ends; %s; members %s", hk,
+                      len(sysm["crossings"]), len(sysm["ends"]), e.why,
+                      ", ".join(sorted({str(net.m[i].key[0])[:8] + ":" + net.m[i].kind for i in sysm["seeds"]}))[:600])
+            return {}, e.why
         if zs is None:          # (no answer: the system as it is, and why in the log; no stand-in)
             why = why or _heights_why(zs, diag)
             log.error("grading: SHAPES infeasible system in region %s: %d pieces, %d crossings, %d ends; %s; members %s",

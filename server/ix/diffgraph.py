@@ -93,6 +93,8 @@ class Graph:
     def _take(self, pred, yield_, queue, inq):
         """A cycle among the predecessors, if there is one: a contradiction goes to yield_ and the tails of the edges it
         changed are looked at again; the cycle's predecessors are forgotten (the labels stay)."""
+        import xproc
+        xproc.check_cancel()        # (the step's time limit, ix/limits.py: a relaxation that goes on and on stops here)
         cyc = self._cycle(pred)
         if cyc is None:
             return

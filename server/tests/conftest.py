@@ -12,11 +12,16 @@ tests/test_colormatch.py -k gpu`). Every xdist worker that imported test_colorma
 driver (its skipUnless(fast.gpu()) runs at collection; bc7 and colormatch encode there too), and with it OBS's Vulkan
 layer was loaded. Two workers of a suite stopped by a timeout on 2026-11-18 were left orphaned with a device open and
 stuck in their exit for 13 hours holding 10.4 GB, memory Windows could not give back without a reboot; the evals
-that ran meanwhile died of "memory allocation of N bytes failed"."""
+that ran meanwhile died of "memory allocation of N bytes failed".
+
+Every test has a time limit (bnge_timeouts.py): one that hangs fails with every thread's stack, and the run goes on."""
 import os
 import webbrowser
 
 import pytest
+
+from bnge_timeouts import (pytest_configure, pytest_runtest_logreport,       # noqa: F401  (the hooks)
+                           pytest_runtest_protocol)
 
 if os.environ.get("BNGE_TEST_GPU") != "1":
     os.environ["BNGE_GPU"] = "0"

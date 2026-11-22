@@ -731,7 +731,10 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
         t0 = time.perf_counter()
         scan.add(net)
         t_scan = time.perf_counter() - t0
-    for i in cand:
+    import xproc
+    for k_, i in enumerate(cand):
+        if not k_ % 32:
+            xproc.check_cancel()        # (the growth's step time limit, ix/limits.py, and a place a teleport left)
         t0 = time.perf_counter()
         rel[i] = [r_ for r_ in (_relations(net, i) if scan is None else scan.relations(net, i))
                   if not _tunnel_network(net, r_[0])]
@@ -1584,8 +1587,12 @@ def solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics=None):
     if os.environ.get("BNE_STAGED", "").strip().lower() in ("1", "on", "yes", "true"):
         import staged_heights
         return staged_heights.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics)
+    import pools
+    import xproc
     try:
         return _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics)
+    except (xproc.TimeLimit, pools.Abandoned):      # (the step's time limit, or a place a teleport left: not "no answer")
+        raise
     except Exception as e:      # (no kernel, or it failed)
         if diagnostics is not None:
             diagnostics["qp_error"] = f"{type(e).__name__}: {e}"
@@ -1939,13 +1946,16 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None, pin_tracks=F
 
 def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
     import carriageways as _cw
+    import xproc
     # (a track keeps its bed wherever the interchange has heights with it there; only if it has none the tracks are free to
     # move, each at what it costs: W_TRACK, the least of the laws' costs of a move that closes the conflict)
     pin = any(pc["kind"] == "track" for pc in pcs)
     while True:
         chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z, pin_tracks=pin)
         info = {}
-        zs = _cw.solve(chains, cps, diagnostics=info, quiet=True)
+        xproc.check_cancel()
+        zs = _cw.solve(chains, cps, diagnostics=info)
+        xproc.check_cancel()
         if pin and not info.get("feasible", True) and not info.get("timed_out"):
             pin = False
             continue
@@ -1965,7 +1975,12 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
 
         def feasible(ch, cp):
             probe = {}
-            _cw.solve(ch, cp, diagnostics=probe, quiet=True)
+            xproc.check_cancel()        # (each trial solve: the step's time limit, ix/limits.py)
+            _cw.PROBE.on = True
+            try:
+                _cw.solve(ch, cp, diagnostics=probe)
+            finally:
+                _cw.PROBE.on = False
             return bool(probe.get("feasible"))
         # (the vertical curves are no difference of two heights, so the graph does not see them: where the laws were eased the
         # curve law of those roads is looked at next, on the few roads round them, before the whole is solved; then, if the
@@ -1973,6 +1988,7 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
         for hops in (2, 4, 8, len(chains)):
             eased, more = _relax.ease_curves(net, pcs, chains, cps, touched, feasible, hops)
             info = {}
+            xproc.check_cancel()
             zs = _cw.solve(eased, cps, rounds=_cw.RELAXED_ROUNDS, deadline=time.monotonic() + _cw.BUDGET_RELAXED_S,
                            diagnostics=info, quiet=True)
             if info.get("feasible", True) or info.get("timed_out"):

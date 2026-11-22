@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 
+from ix import artifacts
 from ixcheck import c1_paths, c2_extent, c3_order, c4_terrain, c5_datum, c6_heights, load
 
 CHECKS = {1: c1_paths, 2: c2_extent, 3: c3_order, 4: c4_terrain, 5: c5_datum, 6: c6_heights}
@@ -26,8 +27,14 @@ def check_all(scanned):
             parents = load.parents_of(art, scanned)
             if step == 4 and art.meta.key in solved_on:
                 parents[6] = solved_on[art.meta.key]
-            out.append((art, mod.check(art, parents)))
+            out.append((art, mod.check(art, parents) + _limits(art)))
     return out
+
+
+def _limits(art):
+    """What the pipeline itself recorded of a step that went past its time limit (ix/limits.py; its artifact is a Limit, no
+    check reads it): the finding is the check's too."""
+    return [f for f in getattr(art, "findings", ()) if f.code == "time_limit"] if isinstance(art, artifacts.Limit) else []
 
 
 def report(rows):

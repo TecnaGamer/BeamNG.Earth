@@ -231,6 +231,19 @@ class Heights:
 
 
 @dataclass(frozen=True)
+class Limit:
+    """A step that went past its time limit (ix/limits.py) and was stopped: the step has no artifact of its own, this is its
+    record (ixcheck reports its finding). system: the interchange's key, or what the growth that never reached one started
+    from; step: its name; limit_s / took_s: what it was given and what it had taken."""
+    meta: Meta
+    system: str
+    step: str
+    limit_s: float
+    took_s: float
+    findings: list = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class Profile:
     """One road's profile the grader takes (grading._apply_shapes' input): member key, xy (m, 2), z (m,), mode "deck",
     "fill", "cut" or "set"."""
@@ -250,7 +263,7 @@ class Region:
 
 
 RECORDS = {c.__name__: c for c in (Meta, Finding, Member, Join, PlanCrossing, Paths, Boundary, System, Extent,
-                                   Crossing, Order, Fixed, Terrain, Option, Datum, Piece, Heights, Profile, Region)}
+                                   Crossing, Order, Fixed, Terrain, Option, Datum, Piece, Heights, Limit, Profile, Region)}
 
 
 def _enc(x, arrays):
