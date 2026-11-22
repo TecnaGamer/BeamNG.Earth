@@ -7636,10 +7636,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     railmesh::register(m)?;
     railstations::register(m)?;
     catenary::register(m)?;
-    // 596: the road surface + bridge rewrite's shadow product and M0 audit (native/roadsys; BNE_ROADSYS=shadow)
+    // 596: the road surface + bridge rewrite's shadow product and M0 audit (native/roadsys; BNE_ROADSYS=shadow); 600: M2's
+    // heights squares (RoadsysSquare, roadsys_square, roadsys_blend; BNE_ROADSYS=heights)
     roadsysbind::register(m)?;
     // 599: unalign::collider_unalign (colliders off the axis-aligned lattice, cdae.COLLIDER_UNALIGN_M)
     unalign::register(m)?;
-    m.add("VERSION", 599)?;
+    m.add("VERSION", 600)?;
     Ok(())
 }

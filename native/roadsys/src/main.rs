@@ -87,6 +87,31 @@ fn main() {
         println!("{} {:016x} {}", name, out.hash, used.get());
         return;
     }
+    if args.len() == 4 && args[1] == "square" {
+        // a profile square's dumped input (roadsys_square dump=) solved again: OUTDIR/<i>_<j>.json and .sq
+        let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(1) });
+        let t = io::read_tile(&b).unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
+        // (the recorded ground heights, then the measured deck heights run by run)
+        let ng = std::cell::Cell::new(0usize);
+        let g = |pts: &[geom::P2]| -> Vec<f64> {
+            if pts.len() > t.ground.len() { eprintln!("ground: {} points asked, {} recorded", pts.len(), t.ground.len()); std::process::exit(1); }
+            ng.set(pts.len());
+            t.ground[..pts.len()].to_vec()
+        };
+        let o = |runs: &[prof::ObsRun]| -> Vec<Vec<f64>> {
+            let mut k = ng.get();
+            runs.iter().map(|r| { let n = r.pts.len(); let v = if k + n <= t.ground.len() { t.ground[k..k + n].to_vec() } else { vec![f64::NAN; n] }; k += n; v }).collect()
+        };
+        let out = square::solve_obs(&t.place, (t.id.0 as i64, t.id.1 as i64), &g, Some(&o), net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1 });
+        std::fs::create_dir_all(&args[3]).ok();
+        let name = format!("{}_{}", t.id.0, t.id.1);
+        let bytes = out.to_bytes();
+        std::fs::write(format!("{}/{}.json", args[3], name), &out.json).ok();
+        std::fs::write(format!("{}/{}.cpu.json", args[3], name), &out.cpu_json).ok();
+        std::fs::write(format!("{}/{}.sq", args[3], name), &bytes).ok();
+        println!("{} {:016x} {:016x}", name, out.key, geom::fnv(&bytes));
+        return;
+    }
     if args.len() == 4 && args[1] == "audit" {
         // the M0 audit (tools/widecorpus/checks.py): IN.bin -> OUT.json
         let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(1) });

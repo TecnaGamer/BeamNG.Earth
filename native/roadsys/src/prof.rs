@@ -36,9 +36,10 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub const H_M: f64 = 5.0;
-pub const QP_FORMAT: u64 = 1;
+pub const QP_FORMAT: u64 = 4;            // 2 (M2): split components, feasible floors, measured decks, the chord
 const ROUNDS: usize = 12;
 const W_PIN: f64 = 1e7;
+const W_COUPLE: f64 = 1e9;          // (M2) couplings over every other term: a nose, joint or deck node never parts
 const W_FLOOR: f64 = 1e6;
 const W_GRADE: f64 = 1e5;
 const W_COMFORT: f64 = 1e5;
@@ -47,6 +48,18 @@ const A_MAX: f64 = 0.3;
 const DECK_OVER_GROUND: f64 = 1.5;
 const TUNNEL_COVER: f64 = 8.0;
 const END_FREE_M: f64 = 15.0;
+const DECK_DEPTH: f64 = crate::net::DECK_FULL_M;   // net.rs crossings' floor: clearance + this
+// (a double deck's upper deck over the lower deck's clearance: today's builder draws it with its full depth too, M2;
+// a stacked kit's thinner slab comes with M3)
+const STACK_DEPTH: f64 = crate::net::DECK_FULL_M;
+const FLOOR_SLACK: f64 = 0.05;
+const DIG_MAX: f64 = 2.0;
+const OBS_W: f64 = 1.0;
+const W_CHORD: f64 = 0.05;          // a deck knot's pull toward its approaches' chord (per m: a ground knot's 1)
+const CHORD_OUT_M: f64 = 10.0;
+const UNDER_OBS_M: f64 = 25.0;
+const UNDER_FILL_M: f64 = 4.0;      // m past a structure's half width its crossed road's ground is lined across
+const UNDER_FILL_DZ: f64 = 0.3;     // m a ground point stands over that line to be taken for the structure      // m round a stroke's crossing under a structure its measurements are left out             // a measured deck knot's weight (per m: a ground knot's)           // m a ground road may dip under its ground (an underpass's cut)      // m a relaxed floor keeps under what the grades reach
 pub const CAP_KM: f64 = 40.0;
 const STORE_MAX: usize = 4096;
 
@@ -66,6 +79,9 @@ pub struct ProfStats {
     pub crossings: usize,
     pub floors_met: usize,
     pub floor_short_max_m: f64,
+    pub floors_relaxed: usize,          // floors the grade limits cannot reach from the sections' held ends
+    pub floor_relax_max_m: f64,
+    pub stacked: usize,                 // floors of a double deck (the lower deck's clearance + STACK_DEPTH)
     pub grade_viol: usize,
     pub comfort_viol: usize,
     pub couple_max_mm: f64,
@@ -81,6 +97,9 @@ pub struct Profiles {
     pub keys: Vec<u64>,               // stroke -> the key of its profile (its Tier A, mixed with its components')
     pub sections: Vec<Vec<(f64, f64, usize)>>,   // stroke -> (s0, s1, component)
     pub stats: ProfStats,
+    pub g: Vec<Vec<f64>>,             // (diagnostics) stroke -> the ground at its knots
+    pub ob: Vec<Vec<f64>>,            // (diagnostics) stroke -> the measured deck heights at its knots (NaN: none)
+    pub tier_a: Vec<Vec<f64>>,        // (diagnostics) stroke -> its Tier A profile
 }
 
 impl Profiles {
@@ -107,7 +126,7 @@ impl Lin {
 }
 
 /// An inequality lo <= form (or form <= hi), with weight.
-struct Ineq { f: Lin, bound: f64, ge: bool, w: f64, kind: u8 }
+struct Ineq { f: Lin, bound: f64, ge: bool, w: f64, kind: u8, orig: f64 }
 
 fn lin_at(base: usize, nk: usize, h: f64, s: f64, sign: f64, t: &mut Vec<(usize, f64)>) {
     let f = clampf(s / h, 0.0, (nk - 1) as f64);
@@ -215,6 +234,13 @@ fn grade_limit(net: &Net, si: usize) -> f64 {
     if st.cls == 1 && !link { 0.05 } else if st.cls == 2 && !link { 0.06 } else if link { 0.07 } else { 0.10 }
 }
 
+/// The cost of moving a stroke, by class (motorway 10, trunk 6, primary and ramps 2, the rest 1).
+fn class_weight(net: &Net, si: usize) -> f64 {
+    let st = &net.strokes[si];
+    let link = st.parts.iter().any(|p| net.segs[net.edges[p.edge].seg].link);
+    if link { 2.0 } else { match st.cls { 1 => 10.0, 2 => 6.0, 3 => 2.0, _ => 1.0 } }
+}
+
 /// The approach reach of a stroke: 2 x the vertical curve that takes its class's grade at the comfort limit.
 pub fn reach_m(net: &Net, si: usize) -> f64 {
     let v = (net.strokes[si].kmh / 3.6).max(5.0);
@@ -316,6 +342,8 @@ impl Qp {
                 1 => if short > 0.005 * H_M { stats.grade_viol += 1; },
                 2 => if short > 0.5 * absf(c.bound) + 0.002 { stats.comfort_viol += 1; },
                 4 => {
+                    // (against the true floor: a relaxed one is counted apart, floors_relaxed)
+                    let short = if c.orig.is_nan() { short } else { c.orig - v };
                     stats.crossings += 1;
                     if short <= 0.05 { stats.floors_met += 1; }
                     if short > stats.floor_short_max_m { stats.floor_short_max_m = short; }
@@ -330,8 +358,21 @@ impl Qp {
 #[derive(Clone, Copy)]
 struct Span { si: usize, i0: usize, i1: usize, base: usize }
 
+/// The ground's chord under a structure interval at station s: linear between the ground at its two ends.
+fn chord(st: &crate::net::Stroke, sup: crate::net::Sup, h: f64, gs: &[f64], s: f64) -> f64 {
+    let m = gs.len();
+    let at = |x: f64| -> f64 { let f = clampf(x / h, 0.0, (m - 1) as f64); let i = (f as usize).min(m.saturating_sub(2)); let u = f - i as f64;
+                               if m < 2 { gs[0] } else { gs[i] * (1.0 - u) + gs[i + 1] * u } };
+    let (a, b) = (sup.s0.max(0.0), sup.s1.min(st.len()));
+    // (anchored on the approach ground CHORD_OUT_M outside each end: the DEM at a structure end is often the ground
+    // below already, where the map's range was lengthened over a road under it)
+    let (za, zb) = (at((a - CHORD_OUT_M).max(0.0)), at((b + CHORD_OUT_M).min(st.len())));
+    if b - a <= 1e-6 { return za; }
+    za + (zb - za) * clampf((s - a) / (b - a), 0.0, 1.0)
+}
+
 /// The objective and limits of stroke spans: DEM following, smoothing, grade, comfort, deck over ground, tunnel cover.
-fn add_spans(net: &Net, spans: &[Span], h: &[f64], g: &[Vec<f64>], qp: &mut Qp) {
+fn add_spans(net: &Net, spans: &[Span], h: &[f64], g: &[Vec<f64>], ob: &[Vec<f64>], qp: &mut Qp) {
     for sp in spans {
         let st = &net.strokes[sp.si];
         let (hh, gs) = (h[sp.si], &g[sp.si]);
@@ -342,40 +383,63 @@ fn add_spans(net: &Net, spans: &[Span], h: &[f64], g: &[Vec<f64>], qp: &mut Qp) 
         let lam = ls * ls * ls * ls;
         let m = gs.len();
         let var = |i: usize| sp.base + (i - sp.i0);
+        // (M2: the whole stroke's objective by its class, so its own shape (Tier A) is the same and moving it within a
+        // component costs this much more: freeways stay down and the cross street rises, design G3)
+        let cw = class_weight(net, sp.si);
         for i in sp.i0..=sp.i1 {
             let s = (i as f64 * hh).min(st.len());
             let sup = st.support_at(s);
-            let w = if sup.kind == SUP_GROUND { hh } else { 1e-4 * hh };
+            let w = cw * if sup.kind == SUP_GROUND { hh } else { 1e-4 * hh };
             qp.trip.push((var(i), var(i), w));
             qp.rhs[var(i)] += w * gs[i];
+            // (M2: a deck knot pulled lightly toward the chord between its approaches' grounds: on a long deck with
+            // nothing measured the curvature alone carried the approach ramps on into a 4-5 m hump, Seal Beach)
+            if sup.kind == SUP_STRUCT {
+                let c = chord(st, sup, hh, gs, s);
+                qp.trip.push((var(i), var(i), cw * W_CHORD * hh));
+                qp.rhs[var(i)] += cw * W_CHORD * hh * c;
+            }
+            // (M2: a measured deck height, a soft target with a ground knot's weight)
+            if sup.kind == SUP_STRUCT {
+                if let Some(&o) = ob[sp.si].get(i) { if o.is_finite() { qp.trip.push((var(i), var(i), cw * OBS_W * hh)); qp.rhs[var(i)] += cw * OBS_W * hh * o; } }
+            }
+            // (M2: a ground road dips at most DIG_MAX under its ground: a floor out of reach is relaxed, not dug)
+            if sup.kind == SUP_GROUND {
+                qp.cons.push(Ineq { f: mklin(&[(var(i), 1.0)]), bound: gs[i] - DIG_MAX, ge: true, w: W_SIDE, kind: 3, orig: f64::NAN });
+            }
             let far = s > sup.s0 + END_FREE_M && s < sup.s1 - END_FREE_M;
-            if sup.kind == SUP_STRUCT && far {
-                qp.cons.push(Ineq { f: mklin(&[(var(i), 1.0)]), bound: gs[i] + DECK_OVER_GROUND, ge: true, w: W_SIDE, kind: 3 });
+            // (M2: only where the ground lies under the chord between the structure's two end grounds by more than
+            // the clearance: a surface model holding the bridge itself, Copernicus' DSM, lifted every deck over it)
+            if sup.kind == SUP_STRUCT && far && gs[i] + DECK_OVER_GROUND < chord(st, sup, hh, gs, s) {
+                qp.cons.push(Ineq { f: mklin(&[(var(i), 1.0)]), bound: gs[i] + DECK_OVER_GROUND, ge: true, w: W_SIDE, kind: 3, orig: f64::NAN });
             }
             if sup.kind == SUP_TUNNEL && far {
-                qp.cons.push(Ineq { f: mklin(&[(var(i), 1.0)]), bound: gs[i] - TUNNEL_COVER, ge: false, w: W_SIDE, kind: 3 });
+                qp.cons.push(Ineq { f: mklin(&[(var(i), 1.0)]), bound: gs[i] - TUNNEL_COVER, ge: false, w: W_SIDE, kind: 3, orig: f64::NAN });
             }
         }
-        let c = lam / (hh * hh * hh);
+        let c = cw * lam / (hh * hh * hh);
         for i in (sp.i0 + 1)..sp.i1 {
             let f = mklin(&[(var(i - 1), 1.0), (var(i), -2.0), (var(i + 1), 1.0)]);
             add_sq(&mut qp.trip, &mut qp.rhs, &f, 0.0, c);
         }
+        let measured = |i: usize| -> bool { ob[sp.si].get(i).map(|v| v.is_finite()).unwrap_or(false) };
         for i in sp.i0..sp.i1 {
+            if measured(i) && measured(i + 1) { continue; }     // (M2: a measured deck's own grade)
             // the DEM's own grade over +-4 knots where steeper than the class limit (+10 %)
             let (a, b) = (i.saturating_sub(4), (i + 5).min(m - 1));
             let dg = absf(gs[b] - gs[a]) / (((b - a) as f64) * hh).max(1e-6);
             let sup = st.support_at(i as f64 * hh);
             let lim = if sup.kind == SUP_GROUND && dg * 1.1 > gl { dg * 1.1 } else { gl };
             let f = mklin(&[(var(i + 1), 1.0), (var(i), -1.0)]);
-            qp.cons.push(Ineq { f: f.clone(), bound: lim * hh, ge: false, w: W_GRADE, kind: 1 });
-            qp.cons.push(Ineq { f, bound: -lim * hh, ge: true, w: W_GRADE, kind: 1 });
+            qp.cons.push(Ineq { f: f.clone(), bound: lim * hh, ge: false, w: W_GRADE, kind: 1, orig: f64::NAN });
+            qp.cons.push(Ineq { f, bound: -lim * hh, ge: true, w: W_GRADE, kind: 1, orig: f64::NAN });
         }
         for i in (sp.i0 + 1)..sp.i1 {
+            if measured(i - 1) && measured(i) && measured(i + 1) { continue; }   // (M2: a measured deck's own curves)
             let f = mklin(&[(var(i - 1), 1.0), (var(i), -2.0), (var(i + 1), 1.0)]);
             let b = kappa * hh * hh;
-            qp.cons.push(Ineq { f: f.clone(), bound: b, ge: false, w: W_COMFORT, kind: 2 });
-            qp.cons.push(Ineq { f, bound: -b, ge: true, w: W_COMFORT, kind: 2 });
+            qp.cons.push(Ineq { f: f.clone(), bound: b, ge: false, w: W_COMFORT, kind: 2, orig: f64::NAN });
+            qp.cons.push(Ineq { f, bound: -b, ge: true, w: W_COMFORT, kind: 2, orig: f64::NAN });
         }
     }
 }
@@ -421,6 +485,7 @@ pub struct Plan {
     pub cpl: Vec<Cpl>,
     pub joined: Vec<bool>,
     pub root: Vec<usize>,
+    pub full_root: Vec<usize>,      // section -> its component before any split (reads take all of it)
     pub ends: Vec<Vec<(usize, bool)>>,
     pub deck_node: Vec<bool>,
     pub cap_cuts: usize,
@@ -432,7 +497,111 @@ impl Plan {
     }
 }
 
-pub fn plan(net: &Net, need: Option<&[bool]>) -> Plan {
+/// The split of every full component over CAP_KM (bridgerewrite/DESIGN.md G3, M2): a data-only rule on the component
+/// itself. Unbreakable couplings (noses, joints, deck-level nodes) are contracted first; a part over the cap is ordered
+/// breadth-first from its smallest section along its couplings (neighbours in index order) and cut where the fewest
+/// breakable couplings cross between the prefix and the rest, each side at least a fifth of the part (else a
+/// twentieth; ties: the more even split, then the shorter prefix); the cut couplings stay out (a cut floor is held
+/// against the lower road's Tier A, a cut node at the node's own ground). Again on every resulting part until all fit
+/// or a part is one unbreakable group (kept whole, recorded). Returns (joined per coupling, couplings cut).
+fn split_components(secs: &[Sec], cpl: &[Cpl], full_root: &[usize], unbreakable: &[bool]) -> (Vec<bool>, usize) {
+    let nsec = secs.len();
+    let mut joined = vec![true; cpl.len()];
+    let mut cuts = 0usize;
+    let km: Vec<f64> = secs.iter().map(|x| (x.s1 - x.s0) / 1000.0).collect();
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..nsec { groups.entry(full_root[i]).or_default().push(i); }
+    let mut of_group: BTreeMap<usize, Vec<usize>> = BTreeMap::new();     // root -> couplings
+    for (k, c) in cpl.iter().enumerate() { of_group.entry(full_root[c.a]).or_default().push(k); }
+    for (root, mem) in &groups {
+        let total: f64 = mem.iter().map(|&i| km[i]).sum();
+        if total <= CAP_KM { continue; }
+        let ks = of_group.get(root).cloned().unwrap_or_default();
+        // super-nodes: sections joined by unbreakable couplings
+        let mut sp: Vec<usize> = (0..nsec).collect();
+        for &k in &ks {
+            if !unbreakable[k] { continue; }
+            let (ra, rb) = (find(&mut sp, cpl[k].a), find(&mut sp, cpl[k].b));
+            if ra != rb { let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) }; sp[hi] = lo; }
+        }
+        let sup_of: BTreeMap<usize, usize> = mem.iter().map(|&i| (i, find(&mut sp, i))).collect();
+        let mut sup_km: BTreeMap<usize, f64> = BTreeMap::new();
+        for &i in mem { *sup_km.entry(sup_of[&i]).or_insert(0.0) += km[i]; }
+        let mut work: Vec<Vec<usize>> = vec![sup_km.keys().copied().collect()];
+        while let Some(part) = work.pop() {
+            let pkm: f64 = part.iter().map(|v| sup_km[v]).sum();
+            if pkm <= CAP_KM || part.len() < 2 { continue; }
+            let inpart: std::collections::BTreeSet<usize> = part.iter().copied().collect();
+            // breakable couplings still joined inside the part, as super-node edges
+            let mut adj: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new();
+            for &k in &ks {
+                if unbreakable[k] || !joined[k] { continue; }
+                let (a, b) = (sup_of[&cpl[k].a], sup_of[&cpl[k].b]);
+                if a == b || !inpart.contains(&a) || !inpart.contains(&b) { continue; }
+                adj.entry(a).or_default().push((b, k));
+                adj.entry(b).or_default().push((a, k));
+            }
+            for v in adj.values_mut() { v.sort(); }
+            // breadth-first order from the smallest super-node (then the smallest unvisited)
+            let mut order: Vec<usize> = Vec::with_capacity(part.len());
+            let mut seen: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+            for &s0 in &part {
+                if seen.contains(&s0) { continue; }
+                seen.insert(s0);
+                let mut q = std::collections::VecDeque::new();
+                q.push_back(s0);
+                while let Some(v) = q.pop_front() {
+                    order.push(v);
+                    if let Some(nb) = adj.get(&v) { for &(w, _) in nb { if seen.insert(w) { q.push_back(w); } } }
+                }
+            }
+            let pos: BTreeMap<usize, usize> = order.iter().enumerate().map(|(i, &v)| (v, i)).collect();
+            // sweep: cut count between order[..t] and the rest
+            let mut best: Option<(usize, i64, usize)> = None;      // (cut count, imbalance mm, t)
+            for pass in 0..2 {
+                let min_side = if pass == 0 { 0.2 } else { 0.05 } * pkm;
+                let mut cut = 0i64;
+                let mut acc = 0.0;
+                for t in 1..order.len() {
+                    let v = order[t - 1];
+                    acc += sup_km[&v];
+                    if let Some(nb) = adj.get(&v) { for &(w, _) in nb { if pos[&w] < t - 1 { cut -= 1; } else { cut += 1; } } }
+                    if acc < min_side || pkm - acc < min_side { continue; }
+                    let cand = (cut.max(0) as usize, ((2.0 * acc - pkm).abs() * 1e6).round() as i64, t);
+                    if best.map(|b| cand < b).unwrap_or(true) { best = Some(cand); }
+                }
+                if best.is_some() { break; }
+            }
+            let Some((_, _, t)) = best else { continue };
+            for (v, nb) in &adj {
+                if pos[v] >= t { continue; }
+                for &(w, k) in nb { if pos[&w] >= t && joined[k] { joined[k] = false; cuts += 1; } }
+            }
+            // the parts left: connected through what stays joined
+            let mut pp: BTreeMap<usize, usize> = part.iter().map(|&v| (v, v)).collect();
+            fn f2(p: &mut BTreeMap<usize, usize>, x: usize) -> usize { let mut r = x; while p[&r] != r { r = p[&r]; } r }
+            for (v, nb) in &adj {
+                for &(w, k) in nb {
+                    if !joined[k] { continue; }
+                    let (ra, rb) = (f2(&mut pp, *v), f2(&mut pp, w));
+                    if ra != rb { let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) }; pp.insert(hi, lo); }
+                }
+            }
+            let mut sub: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+            for &v in &part { let r = f2(&mut pp, v); sub.entry(r).or_default().push(v); }
+            if sub.len() < 2 { continue; }
+            for (_r, p) in sub.into_iter().rev() { work.push(p); }
+        }
+    }
+    (joined, cuts)
+}
+
+pub fn plan(net: &Net, need: Option<&[bool]>) -> Plan { plan_w(net, need, None) }
+
+/// plan() with the sections cut to a window (heights' squares, square.rs): each section keeps its runs of knots inside
+/// the box (min x, min y, max x, max y); a cut end is an inner end (held to Tier A, height and slope) and a coupling
+/// outside the window holds nothing.
+pub fn plan_w(net: &Net, need: Option<&[bool]>, window: Option<[f64; 4]>) -> Plan {
     let ns = net.strokes.len();
     let want = |si: usize| need.map(|v| v[si]).unwrap_or(true);
     let (h, nk, _pts) = knot_points(net, Some(&vec![false; ns]));
@@ -513,6 +682,26 @@ pub fn plan(net: &Net, need: Option<&[bool]>) -> Plan {
             sec[si].push(if a { (-1.0, reach[si]) } else { (len - reach[si], len + 1.0) });
         }
     }
+    // (M2) a nose or joint inside a trunk's secondary section reaches into the snapped stroke too, and one inside the
+    // branch's reaches into its trunk: no nose left with one side solved and the other at Tier A (0.36 m, Newark)
+    {
+        let mut add: Vec<(usize, (f64, f64))> = Vec::new();
+        for (si, st) in net.strokes.iter().enumerate() {
+            if !want(si) { continue; }
+            for (start, sn) in [(true, st.snap0), (false, st.snap1)] {
+                let Some(sn) = sn else { continue };
+                if !want(sn.trunk) { continue; }
+                let s = snap_station(si, start);
+                let tr = inside(&prim[sn.trunk], sn.s) || inside(&sec[sn.trunk], sn.s);
+                let br = inside(&prim[si], s) || inside(&sec[si], s);
+                if tr && !br {
+                    add.push((si, if start { (-1.0, s + reach[si]) } else { (s - reach[si], net.strokes[si].len() + 1.0) }));
+                }
+                if br && !tr { add.push((sn.trunk, (sn.s - reach[sn.trunk], sn.s + reach[sn.trunk]))); }
+            }
+        }
+        for (si, x) in add { sec[si].push(x); }
+    }
     // sections as knot ranges; ids in stroke order
     let mut secs: Vec<Sec> = Vec::new();
     let mut sec_of: Vec<Vec<usize>> = vec![Vec::new(); ns];
@@ -527,9 +716,24 @@ pub fn plan(net: &Net, need: Option<&[bool]>) -> Plan {
         for (s0, s1, secondary) in all {
             let i0 = ((s0 / h[si]).floor() as usize).min(nk[si] - 1);
             let i1 = ((s1 / h[si]).ceil() as usize).min(nk[si] - 1);
-            if i1 < i0 + 2 { continue; }
-            sec_of[si].push(secs.len());
-            secs.push(Sec { si, i0, i1, s0: i0 as f64 * h[si], s1: (i1 as f64 * h[si]).min(len), secondary });
+            if i1 < i0 + 1 { continue; }      // (M2: a short arm too, two knots: every arm of a node can join)
+            let mut runs: Vec<(usize, usize)> = Vec::new();
+            match window {
+                None => runs.push((i0, i1)),
+                Some(w) => {
+                    let inside = |i: usize| { let p = net.strokes[si].line.at((i as f64 * h[si]).min(len)).0; p[0] >= w[0] && p[0] <= w[2] && p[1] >= w[1] && p[1] <= w[3] };
+                    let mut a: Option<usize> = None;
+                    for i in i0..=i1 {
+                        if inside(i) { if a.is_none() { a = Some(i); } }
+                        else if let Some(x) = a.take() { if i - 1 >= x + 1 { runs.push((x, i - 1)); } }
+                    }
+                    if let Some(x) = a { if i1 >= x + 1 { runs.push((x, i1)); } }
+                }
+            }
+            for (a, b) in runs {
+                sec_of[si].push(secs.len());
+                secs.push(Sec { si, i0: a, i1: b, s0: a as f64 * h[si], s1: (b as f64 * h[si]).min(len), secondary });
+            }
         }
     }
     let sec_at = |si: usize, s: f64| -> Option<usize> {
@@ -545,6 +749,9 @@ pub fn plan(net: &Net, need: Option<&[bool]>) -> Plan {
     for n in 0..net.nodes.len() {
         if ends[n].len() < 2 { continue; }
         let e: Vec<(usize, bool)> = ends[n].iter().copied().filter(|&(si, a)| want(si) && sec_at(si, if a { 0.0 } else { net.strokes[si].len() }).is_some()).collect();
+        // (M2: a node moves only with all its arms: one arm left out, every one there is held at the node's ground;
+        // a node with some arms in a component and one at Tier A stepped up to 6 m, Newark)
+        if e.len() < ends[n].len() { continue; }
         for k in 1..e.len() {
             let sa = sec_at(e[0].0, if e[0].1 { 0.0 } else { net.strokes[e[0].0].len() }).unwrap();
             let sb = sec_at(e[k].0, if e[k].1 { 0.0 } else { net.strokes[e[k].0].len() }).unwrap();
@@ -563,23 +770,44 @@ pub fn plan(net: &Net, need: Option<&[bool]>) -> Plan {
     }
     cpl.sort_by(|x, y| x.key.cmp(&y.key));
     let nsec = secs.len();
+    // full components: every coupling united (the split rule's input: a function of the component alone, never of
+    // what else a read holds)
+    let mut fpar: Vec<usize> = (0..nsec).collect();
+    for c in &cpl {
+        let (ra, rb) = (find(&mut fpar, c.a), find(&mut fpar, c.b));
+        if ra != rb { let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) }; fpar[hi] = lo; }
+    }
+    let full_root: Vec<usize> = (0..nsec).map(|i| find(&mut fpar, i)).collect();
+    // never cut: a nose or joint (the branch's row is the trunk's there) and a deck-level node (no common ground
+    // height holds both sides)
+    let unbreakable: Vec<bool> = cpl.iter().map(|c| c.what == 2 || (c.what == 1 && deck_node[c.idx])).collect();
+    let (joined, cuts) = split_components(&secs, &cpl, &full_root, &unbreakable);
+    cap_cuts += cuts;
     let mut par: Vec<usize> = (0..nsec).collect();
-    let mut km: Vec<f64> = secs.iter().map(|x| (x.s1 - x.s0) / 1000.0).collect();
-    let mut joined = vec![false; cpl.len()];
     for (k, c) in cpl.iter().enumerate() {
+        if !joined[k] { continue; }
         let (ra, rb) = (find(&mut par, c.a), find(&mut par, c.b));
-        if ra == rb { joined[k] = true; continue; }
-        if km[ra] + km[rb] > CAP_KM { cap_cuts += 1; continue; }
-        let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
-        par[hi] = lo;
-        km[lo] += km[hi];
-        joined[k] = true;
+        if ra != rb { let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) }; par[hi] = lo; }
     }
     let root: Vec<usize> = (0..nsec).map(|i| find(&mut par, i)).collect();
-    Plan { h, nk, secs, sec_of, cpl, joined, root, ends, deck_node, cap_cuts }
+    Plan { h, nk, secs, sec_of, cpl, joined, root, full_root, ends, deck_node, cap_cuts }
 }
 
-pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>) -> Profiles {
+pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>) -> Profiles { solve_w(net, g_of, need, None) }
+
+/// solve() with the Tier B sections cut to a window (plan_w).
+pub fn solve_w(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>, window: Option<[f64; 4]>) -> Profiles {
+    solve_obs(net, g_of, None, need, window)
+}
+
+/// A structure run of a stroke for the measurements: its knots' points, the road's half width, its level.
+pub struct ObsRun { pub si: usize, pub i0: usize, pub pts: Vec<P2>, pub half: f64, pub level: f64 }
+
+/// solve_w with measured deck heights (M2): obs_of(runs) gives per run the measured road surface height at each of
+/// its knots (NaN: none; roadz's lidar, BD TOPO, NVDB as today's deck builder reads them), a soft target of a ground
+/// knot's weight on those structure knots (OBS_W): the floors, grades and comfort stay as they are.
+pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dyn Fn(&[ObsRun]) -> Vec<Vec<f64>>>,
+                 need: Option<&[bool]>, window: Option<[f64; 4]>) -> Profiles {
     let ns = net.strokes.len();
     let want = |si: usize| need.map(|v| v[si]).unwrap_or(true);
     let (h, nk, pts) = knot_points(net, need);
@@ -587,6 +815,73 @@ pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>)
     let mut g: Vec<Vec<f64>> = vec![Vec::new(); ns];
     let mut k = 0;
     for si in 0..ns { if want(si) { g[si] = gz[k..k + nk[si]].to_vec(); k += nk[si]; } }
+    // (M2) a ground road's ground under a structure crossing over it: where the DEM rises over the line across the
+    // structure's width (a surface model holding the deck itself: Canada's HRDEM, Copernicus), that line (today's
+    // grading takes such bridges out of the ground too: DECK_GROUND)
+    let mut offs_u = Vec::new();
+    let mut under_iv: BTreeMap<usize, Vec<(f64, f64)>> = BTreeMap::new();
+    for c in &net.crossings {
+        let (up, us, lo, ls) = if c.upper == c.a { (c.a, c.sa, c.b, c.sb) } else { (c.b, c.sb, c.a, c.sa) };
+        if !want(lo) || g[lo].is_empty() || net.strokes[up].support_at(us).kind != SUP_STRUCT { continue; }
+        if net.strokes[lo].support_at(ls).kind != SUP_GROUND { continue; }
+        net.strokes[up].offsets(us, &mut offs_u);
+        let hw = if offs_u.is_empty() { 5.0 } else { offs_u[0].max(-offs_u[offs_u.len() - 1]) };
+        under_iv.entry(lo).or_default().push((ls - hw - UNDER_FILL_M, ls + hw + UNDER_FILL_M));
+    }
+    // (the crossed ranges of one road merged first: three ramps over one street, each range's ends under the next deck)
+    for (lo, mut iv) in under_iv {
+        iv.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let mut merged: Vec<(f64, f64)> = Vec::new();
+        for x in iv { if let Some(l) = merged.last_mut() { if x.0 <= l.1 { if x.1 > l.1 { l.1 = x.1; } continue; } } merged.push(x); }
+        let m = g[lo].len();
+        let hl = h[lo];
+        for (a, b) in merged {
+            let i0 = ((a / hl).floor().max(0.0) as usize).min(m - 1);
+            let i1 = ((b / hl).ceil() as usize).min(m - 1);
+            if i1 < i0 + 2 { continue; }
+            let (za, zb) = (g[lo][i0], g[lo][i1]);
+            for i in (i0 + 1)..i1 {
+                let line = za + (zb - za) * ((i - i0) as f64 / (i1 - i0) as f64);
+                if g[lo][i] > line + UNDER_FILL_DZ { g[lo][i] = line; }
+            }
+        }
+    }
+    let mut ob: Vec<Vec<f64>> = vec![Vec::new(); ns];
+    if let Some(f) = obs_of {
+        let mut runs: Vec<ObsRun> = Vec::new();
+        let mut offs = Vec::new();
+        // (not under another structure: a measurement there is the upper deck's top, as today's _covered_by_higher)
+        let mut under: Vec<Vec<f64>> = vec![Vec::new(); ns];
+        for c in &net.crossings {
+            let lo = if c.upper == c.a { c.b } else { c.a };
+            let ls = if c.upper == c.a { c.sb } else { c.sa };
+            if net.strokes[c.upper].support_at(if c.upper == c.a { c.sa } else { c.sb }).kind == SUP_STRUCT
+                && net.strokes[lo].support_at(ls).kind == SUP_STRUCT { under[lo].push(ls); }
+        }
+        for si in 0..ns {
+            if !want(si) { continue; }
+            let st = &net.strokes[si];
+            for u in st.sup.iter().filter(|u| u.kind == SUP_STRUCT) {
+                let i0 = (u.s0 / h[si]).ceil() as usize;
+                let i1 = ((u.s1 / h[si]).floor() as usize).min(nk[si] - 1);
+                if i1 < i0 + 1 { continue; }
+                let mut r = ObsRun { si, i0, pts: Vec::new(), half: 0.0, level: u.level };
+                for i in i0..=i1 { r.pts.push(st.line.at((i as f64 * h[si]).min(st.len())).0); }
+                st.offsets(0.5 * (u.s0 + u.s1), &mut offs);
+                r.half = if offs.is_empty() { 3.5 } else { offs[0].max(-offs[offs.len() - 1]) };
+                runs.push(r);
+            }
+        }
+        let got = f(&runs);
+        for (r, z) in runs.iter().zip(got.iter()) {
+            if z.len() != r.pts.len() { continue; }
+            if ob[r.si].is_empty() { ob[r.si] = vec![f64::NAN; nk[r.si]]; }
+            for (j, &v) in z.iter().enumerate() {
+                let s = (r.i0 + j) as f64 * h[r.si];
+                if v.is_finite() && !under[r.si].iter().any(|&x| absf(x - s) <= UNDER_OBS_M) { ob[r.si][r.i0 + j] = v; }
+            }
+        }
+    }
     let node_z: Vec<f64> = gz[k..].to_vec();
     let mut stats = ProfStats::default();
     let mut ends: Vec<Vec<(usize, bool)>> = vec![Vec::new(); net.nodes.len()];
@@ -616,7 +911,7 @@ pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>)
         let st = &net.strokes[si];
         let m = nk[si];
         let mut qp = Qp { n: m, trip: Vec::new(), rhs: vec![0.0; m], cons: Vec::new(), guess: g[si].clone() };
-        add_spans(net, &[Span { si, i0: 0, i1: m - 1, base: 0 }], &h, &g, &mut qp);
+        add_spans(net, &[Span { si, i0: 0, i1: m - 1, base: 0 }], &h, &g, &ob, &mut qp);
         for (start, node) in [(true, st.n0), (false, st.n1)] {
             let kv = if start { 0 } else { m - 1 };
             let snap = if start { st.snap0 } else { st.snap1 };
@@ -642,7 +937,7 @@ pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>)
     }
     let tier_a = z.clone();
     // ---- Tier B sections (the approach rule): plan(), then one solve per component
-    let pl = plan(net, need);
+    let pl = plan_w(net, need, window);
     stats.cap_cuts = pl.cap_cuts;
     stats.sections = pl.secs.iter().filter(|x| !x.secondary).count();
     stats.secondary = pl.secs.iter().filter(|x| x.secondary).count();
@@ -672,7 +967,7 @@ pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>)
         let mut guess = vec![0.0; n];
         for sp in &spans { for i in sp.i0..=sp.i1 { guess[sp.base + i - sp.i0] = tier_a[sp.si][i]; } }
         let mut qp = Qp { n, trip: Vec::new(), rhs: vec![0.0; n], cons: Vec::new(), guess };
-        add_spans(net, &spans, &h, &g, &mut qp);
+        add_spans(net, &spans, &h, &g, &ob, &mut qp);
         // stations where a coupling of this component holds a span (no Tier A pin within 3 knots of them)
         let mut held: Vec<(usize, f64)> = Vec::new();
         for (k, c) in cpl.iter().enumerate() {
@@ -693,8 +988,9 @@ pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>)
             let m = nk[sp.si];
             let st = &net.strokes[sp.si];
             for (at_lo, i_end) in [(true, sp.i0), (false, sp.i1)] {
-                if is_held(sp.si, (i_end as f64 * h[sp.si]).min(st.len())) { continue; }
+                let held = is_held(sp.si, (i_end as f64 * h[sp.si]).min(st.len()));
                 let stroke_end = if at_lo { sp.i0 == 0 } else { sp.i1 == m - 1 };
+                if !stroke_end && held { continue; }
                 if stroke_end {
                     let node = if at_lo { st.n0 } else { st.n1 };
                     let start = at_lo;
@@ -703,9 +999,13 @@ pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>)
                     });
                     let snapped = if start { st.snap0.is_some() } else { st.snap1.is_some() };
                     if coupled {
+                        if held { continue; }
                         if pin_node(node) { add_sq(&mut qp.trip, &mut qp.rhs, &mklin(&[(var_of(sp.si, i_end).unwrap(), 1.0)]), node_z[node], 10.0 * h[sp.si]); }
                         continue;
                     }
+                    // (M2: a node end not coupled to all its arms is held at Tier A whatever else holds it here: the arms
+                    // left out stay there; only a snapped end's own nose or joint may hold it instead)
+                    if snapped && held { continue; }
                     if snapped || pin_node(node) || ends[node].len() >= 2 {
                         add_sq(&mut qp.trip, &mut qp.rhs, &mklin(&[(var_of(sp.si, i_end).unwrap(), 1.0)]), tier_a[sp.si][i_end], W_PIN);
                     }
@@ -719,6 +1019,7 @@ pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>)
         }
         // couplings inside the component; floors (one-sided against the lower road's Tier A where it stays out)
         let mut couples: Vec<Lin> = Vec::new();
+        let mut couple_dbg: Vec<String> = Vec::new();
         let mut floor_dbg: Vec<(usize, String)> = Vec::new();
         for (k, c) in cpl.iter().enumerate() {
             let in_a = root[c.a] == root[mem[0]];
@@ -736,20 +1037,48 @@ pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>)
                     let spu = spans.iter().find(|sp| sp.si == up && sp.i0 == secs[su].i0).copied().unwrap();
                     lin_sec(&spu, h[up], us, 1.0, &mut t);
                     let mut bound = cr.floor;
-                    if lo_in && joined[k] {
+                    if cr.stacked { bound -= DECK_DEPTH - STACK_DEPTH; stats.stacked += 1; }
+                    let true_floor = bound;
+                    // feasibility (M2): the most the grades can open between the two from their sections' held ends
+                    // (the upper climbing from each end at its class limit, the lower falling from each of its own);
+                    // a floor past it is relaxed to it and recorded (an unreachable floor fought the pins: ramps)
+                    let ach_hi = { let (i0, i1) = (spu.i0, spu.i1); let gl = grade_limit(net, up);
+                        let (a, b) = (tier_a[up][i0] + gl * (us - i0 as f64 * h[up]).max(0.0), tier_a[up][i1] + gl * (i1 as f64 * h[up] - us).max(0.0));
+                        if a < b { a } else { b } };
+                    let joint = lo_in && joined[k];
+                    let lo_floor;
+                    if joint {
                         let sl = sec_at(lo, ls_).unwrap();
                         let spl = spans.iter().find(|sp| sp.si == lo && sp.i0 == secs[sl].i0).copied().unwrap();
                         lin_sec(&spl, h[lo], ls_, -1.0, &mut t);
+                        let gl = grade_limit(net, lo);
+                        let (a, b) = (tier_a[lo][spl.i0] - gl * (ls_ - spl.i0 as f64 * h[lo]).max(0.0), tier_a[lo][spl.i1] - gl * (spl.i1 as f64 * h[lo] - ls_).max(0.0));
+                        let mut lf = if a > b { a } else { b };
+                        if net.strokes[lo].support_at(ls_).kind == SUP_GROUND {
+                            let gd = at_knots(&g[lo], h[lo], ls_) - DIG_MAX;
+                            if gd > lf { lf = gd; }
+                        }
+                        lo_floor = lf;
                     } else {
                         if tier_a[lo].is_empty() { continue; }      // (the lower road is not built here)
-                        bound += at_knots(&tier_a[lo], h[lo], ls_);
+                        lo_floor = at_knots(&tier_a[lo], h[lo], ls_);
+                        bound += lo_floor;
+                    }
+                    let reach = ach_hi - lo_floor - FLOOR_SLACK;
+                    let mut orig = f64::NAN;
+                    if true_floor > reach {
+                        let r = true_floor - reach.max(0.0);
+                        stats.floors_relaxed += 1;
+                        if r > stats.floor_relax_max_m { stats.floor_relax_max_m = r; }
+                        orig = bound;
+                        bound -= r;
                     }
                     if debug_floors {
                         let (su, sl) = (net.strokes[up].support_at(us), net.strokes[lo].support_at(ls_));
                         floor_dbg.push((qp.cons.len(), format!("up cls {} sup {} kmh {} s {:.0}/{:.0} | lo cls {} sup {} s {:.0}/{:.0} | floor {:.2} joined {} lo_in {} p {:.0},{:.0}",
                             net.strokes[up].cls, su.kind, net.strokes[up].kmh, us, net.strokes[up].len(), net.strokes[lo].cls, sl.kind, ls_, net.strokes[lo].len(), cr.floor, joined[k], lo_in, cr.p[0], cr.p[1])));
                     }
-                    qp.cons.push(Ineq { f: mklin(&t), bound, ge: true, w: W_FLOOR, kind: 4 });
+                    qp.cons.push(Ineq { f: mklin(&t), bound, ge: true, w: W_FLOOR, kind: 4, orig });
                 }
                 _ if !(in_a && in_b && joined[k]) => {}
                 1 => {
@@ -758,7 +1087,7 @@ pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>)
                     let (k0, k1) = (&e[0], e.iter().find(|x| net.strokes[x.0].uid == c.key.2 && x.1 as i64 == c.key.4).unwrap());
                     let va = var_of(k0.0, if k0.1 { 0 } else { nk[k0.0] - 1 });
                     let vb = var_of(k1.0, if k1.1 { 0 } else { nk[k1.0] - 1 });
-                    if let (Some(va), Some(vb)) = (va, vb) { couples.push(mklin(&[(va, 1.0), (vb, -1.0)])); }
+                    if let (Some(va), Some(vb)) = (va, vb) { couples.push(mklin(&[(va, 1.0), (vb, -1.0)])); couple_dbg.push(format!("node {} at {:?} deck {}", nd, net.nodes[nd].p, deck_node[nd])); }
                 }
                 _ => {
                     let (si, start) = (c.idx / 2, c.idx % 2 == 1);
@@ -771,10 +1100,11 @@ pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>)
                     lin_sec(&spa, h[si], snap_station(si, start), 1.0, &mut t);
                     lin_sec(&spb, h[sn.trunk], sn.s, -1.0, &mut t);
                     couples.push(mklin(&t));
+                    couple_dbg.push(format!("nose branch {} trunk {} at {:?} joint {}", si, sn.trunk, net.strokes[si].line.at(snap_station(si, start)).0, sn.joint));
                 }
             }
         }
-        for f in &couples { add_sq(&mut qp.trip, &mut qp.rhs, f, 0.0, W_PIN); }
+        for f in &couples { add_sq(&mut qp.trip, &mut qp.rhs, f, 0.0, W_COUPLE); }
         let (zz, key) = qp.solve(&mut stats);
         qp.check(&zz, &mut stats);
         for (k, msg) in &floor_dbg {
@@ -782,7 +1112,11 @@ pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>)
             let short = c.bound - c.f.val(&zz);
             if short > 0.05 { eprintln!("floor short {:.2} | {}", short, msg); }
         }
-        for f in &couples { let e = absf(f.val(&zz)) * 1000.0; if e > stats.couple_max_mm { stats.couple_max_mm = e; } }
+        for (ci, f) in couples.iter().enumerate() {
+            let e = absf(f.val(&zz)) * 1000.0;
+            if e > stats.couple_max_mm { stats.couple_max_mm = e; }
+            if e > 100.0 && debug_floors { eprintln!("coupling {} off {:.0} mm: {:?}", ci, e, &couple_dbg[ci]); }
+        }
         stats.knots += n;
         let dt = crate::cpu_now() - t0;
         for sp in &spans {
@@ -793,7 +1127,7 @@ pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>)
             comp_cpu[sp.si] += dt;
         }
     }
-    Profiles { h, z, comp_of, comp_cpu, keys, sections, stats }
+    Profiles { h, z, comp_of, comp_cpu, keys, sections, stats, g, ob, tier_a }
 }
 
 fn at_knots(z: &[f64], h: f64, s: f64) -> f64 {

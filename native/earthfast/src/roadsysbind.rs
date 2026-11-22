@@ -2,7 +2,7 @@
 //! read's segment table (RoadsysSegments), asks for the tile's read list (roadsys_reads) until nothing is missing,
 //! then builds the tile's shadow product (roadsys_build); tools/widecorpus/checks.py's audit (roadsys_audit) runs the
 //! same M0 checks the CLI does. All maths in native/roadsys (no platform maths, no FMA, BTreeMap only).
-use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -130,11 +130,12 @@ fn opts(cut: (f64, f64)) -> roadsys::net::Opts { roadsys::net::Opts { cut_grid: 
 /// The tile's read list from the segments read so far: (boxes in the frame to read, segment ids whose every copy
 /// must be read, [delivered, full, program, profile] stroke counts, cpu s).
 #[pyfunction]
-#[pyo3(signature = (segs, bbox, cut = (4000.0, 2000.0)))]
-pub fn roadsys_reads(py: Python<'_>, segs: PyRef<'_, RoadsysSegments>, bbox: [f64; 4], cut: (f64, f64))
+/// field: the tile's profiles come from the profile squares (roadsys_build's field): no vertical component is read.
+#[pyo3(signature = (segs, bbox, cut = (4000.0, 2000.0), field = false))]
+pub fn roadsys_reads(py: Python<'_>, segs: PyRef<'_, RoadsysSegments>, bbox: [f64; 4], cut: (f64, f64), field: bool)
                      -> (Vec<[f64; 4]>, Vec<String>, [usize; 4], f64) {
     let place = &segs.place;
-    let r = py.detach(|| roadsys::product::reads(place, bbox, opts(cut)));
+    let r = py.detach(|| roadsys::product::reads_f(place, bbox, opts(cut), field));
     (r.boxes, r.fids, r.counts, r.cpu)
 }
 
@@ -146,11 +147,13 @@ pub fn roadsys_reads(py: Python<'_>, segs: PyRef<'_, RoadsysSegments>, bbox: [f6
 #[pyfunction]
 /// boxes: the converged read list's boxes (roadsys_reads): only the segments meeting one are built (the rest of the
 /// cells read is in no piece's read list; the same bytes either way).
-#[pyo3(signature = (segs, quad, id, frame, ground, cut = (4000.0, 2000.0), dump = None, boxes = None))]
+/// field: (z_of(points (n, 2), tangents (n, 2), map features) -> heights (NaN: no square holds it), its key): the
+/// profiles from the profile squares where they hold the road (M2).
+#[pyo3(signature = (segs, quad, id, frame, ground, cut = (4000.0, 2000.0), dump = None, boxes = None, field = None))]
 #[allow(clippy::too_many_arguments)]
 pub fn roadsys_build<'py>(py: Python<'py>, segs: PyRef<'py, RoadsysSegments>, quad: [[f64; 2]; 4], id: (i32, i32), frame: u64,
-                          ground: Bound<'py, PyAny>, cut: (f64, f64), dump: Option<String>, boxes: Option<Vec<[f64; 4]>>)
-                          -> PyResult<(String, Bound<'py, PyBytes>)> {
+                          ground: Bound<'py, PyAny>, cut: (f64, f64), dump: Option<String>, boxes: Option<Vec<[f64; 4]>>,
+                          field: Option<(Bound<'py, PyAny>, u64)>) -> PyResult<(String, Bound<'py, PyBytes>)> {
     let kept;
     let place = match &boxes {
         None => &segs.place,
@@ -174,13 +177,149 @@ pub fn roadsys_build<'py>(py: Python<'py>, segs: PyRef<'py, RoadsysSegments>, qu
             }
         })
     };
-    let out = py.detach(|| roadsys::product::build(place, quad, id, frame, &g_of, opts(cut)));
+    let fkey = field.as_ref().map(|f| f.1).unwrap_or(0);
+    let ffn = field.map(|f| f.0.unbind());
+    let z_of = |pts: &[[f64; 2]], tans: &[[f64; 2]], feats: &[String]| -> Vec<f64> {
+        let Some(f) = &ffn else { return vec![f64::NAN; pts.len()] };
+        Python::attach(|py| -> Vec<f64> {
+            let n = pts.len();
+            let p = PyArray1::from_vec(py, pts.iter().flat_map(|q| [q[0], q[1]]).collect()).reshape([n, 2]);
+            let t = PyArray1::from_vec(py, tans.iter().flat_map(|q| [q[0], q[1]]).collect()).reshape([n, 2]);
+            let got = match (p, t) {
+                (Ok(p), Ok(t)) => f.bind(py).call1((p, t, feats.to_vec())).and_then(|r| r.extract::<Vec<f64>>()),
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            };
+            match got {
+                Ok(v) if v.len() == n => v,
+                Ok(_) => { *err.lock().unwrap() = Some(PyValueError::new_err("roadsys_build: field returned another number of heights")); vec![f64::NAN; n] }
+                Err(e) => { *err.lock().unwrap() = Some(e); vec![f64::NAN; n] }
+            }
+        })
+    };
+    let fld: Option<roadsys::product::Field> = if ffn.is_some() { Some((&z_of, fkey)) } else { None };
+    let out = py.detach(|| roadsys::product::build_f(place, quad, id, frame, &g_of, fld, opts(cut)));
     if let Some(e) = err.lock().unwrap().take() { return Err(e); }
     if let Some(path) = dump {
         let t = roadsys::io::TileInput { place: place.clone(), quad, id, frame, cut, ground: asked.lock().unwrap().clone() };
         std::fs::write(&path, roadsys::io::write_tile(&t)).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
     }
     Ok((out.json, PyBytes::new(py, &out.bytes)))
+}
+
+/// BNE_ROADSYS=heights (M2): a profile square (native/roadsys square.rs): the one profile per carriageway of the
+/// strokes with a Tier B section in one square of the region frame's grid, solved from its window's map alone.
+#[pyclass(frozen)]
+pub struct RoadsysSquare { sq: roadsys::square::Square }
+
+#[pymethods]
+impl RoadsysSquare {
+    /// The square back from its bytes (to_bytes; a checksum and the format are checked).
+    #[staticmethod]
+    fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        roadsys::square::Square::from_bytes(data).map(|sq| RoadsysSquare { sq }).map_err(PyValueError::new_err)
+    }
+    fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> { PyBytes::new(py, &self.sq.to_bytes()) }
+    /// (JSON stats, key, (i, j), JSON cpu ms of its solve: empty for one read from bytes)
+    fn info(&self) -> (String, u64, (i64, i64), String) { (self.sq.json.clone(), self.sq.key, self.sq.sq, self.sq.cpu_json.clone()) }
+    /// Its terrain targets (square.rs pins): [(map feature, points (n, 2), tangents (n, 2), fade, share, half width)],
+    /// heights left to roadsys_blend.
+    #[allow(clippy::type_complexity)]
+    fn pins<'py>(&self, py: Python<'py>) -> PyResult<Vec<(String, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, f64)>> {
+        let mut out = Vec::new();
+        for p in roadsys::square::pins(&self.sq) {
+            let n = p.pts.len();
+            let a = PyArray1::from_vec(py, p.pts.iter().flat_map(|q| [q[0], q[1]]).collect()).reshape([n, 2])?;
+            let t = PyArray1::from_vec(py, p.tan.iter().flat_map(|q| [q[0], q[1]]).collect()).reshape([n, 2])?;
+            out.push((p.feat, a, t, PyArray1::from_vec(py, p.w), PyArray1::from_vec(py, p.share), p.half));
+        }
+        Ok(out)
+    }
+}
+
+/// The square's window (its read box in the region frame) and the squares whose weight reaches a box.
+#[pyfunction]
+pub fn roadsys_square_window(sq: (i64, i64)) -> [f64; 4] { roadsys::square::window(sq) }
+
+#[pyfunction]
+pub fn roadsys_squares_of_box(bbox: [f64; 4]) -> Vec<(i64, i64)> { roadsys::square::squares_of_box(bbox) }
+
+/// A square solved from its window's segments: ground(e, n) -> heights (float64, the frame) is called once with every
+/// knot point. boxes: only the segments meeting one are built (default: the window).
+#[pyfunction]
+/// obs(runs) -> heights: the measured deck heights per structure run [(points (n, 2), half width, level)], an array
+/// per run (NaN: none), or None.
+#[pyo3(signature = (segs, sq, ground, cut = (4000.0, 2000.0), dump = None, obs = None))]
+#[allow(clippy::too_many_arguments)]
+pub fn roadsys_square(py: Python<'_>, segs: PyRef<'_, RoadsysSegments>, sq: (i64, i64), ground: Bound<'_, PyAny>,
+                      cut: (f64, f64), dump: Option<String>, obs: Option<Bound<'_, PyAny>>) -> PyResult<RoadsysSquare> {
+    let win = roadsys::square::window(sq);
+    let place = Place { segs: segs.place.segs.iter().filter(|s| roadsys::product::seg_in(s, &[win])).cloned().collect(), ..segs.place.clone_meta() };
+    let ground = ground.unbind();
+    let err: std::sync::Mutex<Option<PyErr>> = std::sync::Mutex::new(None);
+    let asked: std::sync::Mutex<Vec<f64>> = std::sync::Mutex::new(Vec::new());
+    let g_of = |pts: &[[f64; 2]]| -> Vec<f64> {
+        Python::attach(|py| -> Vec<f64> {
+            let e = PyArray1::from_vec(py, pts.iter().map(|p| p[0]).collect());
+            let n = PyArray1::from_vec(py, pts.iter().map(|p| p[1]).collect());
+            match ground.bind(py).call1((e, n)).and_then(|r| r.extract::<Vec<f64>>()) {
+                Ok(v) if v.len() == pts.len() && v.iter().all(|x| x.is_finite()) => { asked.lock().unwrap().extend_from_slice(&v); v }
+                Ok(_) => { *err.lock().unwrap() = Some(PyValueError::new_err("roadsys_square: ground returned another number of heights, or a non-finite one")); vec![0.0; pts.len()] }
+                Err(e) => { *err.lock().unwrap() = Some(e); vec![0.0; pts.len()] }
+            }
+        })
+    };
+    let obs = obs.map(|o| o.unbind());
+    let seen: std::sync::Mutex<Vec<f64>> = std::sync::Mutex::new(Vec::new());
+    let o_of = |runs: &[roadsys::prof::ObsRun]| -> Vec<Vec<f64>> {
+        let Some(ob) = &obs else { return runs.iter().map(|r| vec![f64::NAN; r.pts.len()]).collect() };
+        Python::attach(|py| -> Vec<Vec<f64>> {
+            let mut args = Vec::with_capacity(runs.len());
+            for r in runs {
+                let n = r.pts.len();
+                let a = PyArray1::from_vec(py, r.pts.iter().flat_map(|q| [q[0], q[1]]).collect());
+                match a.reshape([n, 2]) { Ok(a) => args.push((a, r.half, r.level)), Err(e) => { *err.lock().unwrap() = Some(e); return Vec::new(); } }
+            }
+            match ob.bind(py).call1((args,)).and_then(|r| r.extract::<Vec<Vec<f64>>>()) {
+                Ok(v) if v.len() == runs.len() && v.iter().zip(runs).all(|(a, r)| a.len() == r.pts.len()) => {
+                    let mut sn = seen.lock().unwrap();
+                    for a in &v { sn.extend_from_slice(a); }
+                    v
+                }
+                Ok(_) => { *err.lock().unwrap() = Some(PyValueError::new_err("roadsys_square: obs returned other shapes")); Vec::new() }
+                Err(e) => { *err.lock().unwrap() = Some(e); Vec::new() }
+            }
+        })
+    };
+    let out = py.detach(|| roadsys::square::solve_obs(&place, sq, &g_of, Some(&o_of), opts(cut)));
+    if let Some(e) = err.lock().unwrap().take() { return Err(e); }
+    if let Some(path) = dump {
+        asked.lock().unwrap().extend_from_slice(&seen.lock().unwrap());
+        // (the square's whole input, for `roadsys square` on another platform: the determinism test)
+        let t = roadsys::io::TileInput { place: place.clone(), quad: [[0.0; 2]; 4], id: (sq.0 as i32, sq.1 as i32), frame: 0, cut,
+                                         ground: asked.lock().unwrap().clone() };
+        std::fs::write(&path, roadsys::io::write_tile(&t)).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
+    }
+    Ok(RoadsysSquare { sq: out })
+}
+
+/// The blended heights at points (n, 2) with tangents (n, 2) (zero rows: none) on map features feats (one per point)
+/// over the squares given (square.rs blend; deck: on a structure of that feature): NaN where no square answers.
+#[pyfunction]
+pub fn roadsys_blend<'py>(py: Python<'py>, squares: Vec<PyRef<'py, RoadsysSquare>>, pts: PyReadonlyArray2<'py, f64>,
+                          tans: PyReadonlyArray2<'py, f64>, feats: Vec<String>, deck: bool) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let (p, t) = (pts.as_array(), tans.as_array());
+    if p.ncols() != 2 || t.ncols() != 2 || t.nrows() != p.nrows() || feats.len() != p.nrows() {
+        return Err(PyValueError::new_err("roadsys_blend: inconsistent columns"));
+    }
+    let mut m: BTreeMap<(i64, i64), &roadsys::square::Square> = BTreeMap::new();
+    for s in &squares { m.insert(s.sq.sq, &s.sq); }
+    let out: Vec<f64> = (0..p.nrows()).map(|i| {
+        let q = [p[[i, 0]], p[[i, 1]]];
+        let tv = [t[[i, 0]], t[[i, 1]]];
+        let tt = if tv[0] == 0.0 && tv[1] == 0.0 { None } else { Some(tv) };
+        roadsys::square::blend(&m, q, tt, &feats[i], deck).unwrap_or(f64::NAN)
+    }).collect();
+    Ok(PyArray1::from_vec(py, out))
 }
 
 /// The process's profile solve store emptied (tests: a cold process's results).
@@ -198,6 +337,11 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RoadsysSegments>()?;
     m.add_function(wrap_pyfunction!(roadsys_reads, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_build, m)?)?;
+    m.add_class::<RoadsysSquare>()?;
+    m.add_function(wrap_pyfunction!(roadsys_square_window, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_squares_of_box, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_square, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_blend, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_clear, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_audit, m)?)?;
     Ok(())
