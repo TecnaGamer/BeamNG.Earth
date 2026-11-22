@@ -12981,11 +12981,13 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
             else:
                 ordinary.append(i)
 
+        camber = _camber_partners(got, walks, shift_of)         # (over all the window's parts: a share of them is drawn below)
+
         def chunks_for(indices, cuts=None):
             return _deck_chunks([got[i] for i in indices], exact, bridges._ground, depth, walks, shift_of,
                                 width_of, context_m, marks_of=marks_of, shapes=[shapes[i] for i in indices]
                                 if shapes is not None else None, sheet_wide=wide, sheet_marks=sheet_marks,
-                                profiled=pf, surface_cuts=cuts)
+                                profiled=pf, surface_cuts=cuts, camber=[camber[i] for i in indices])
         for indices, cuts in by_group.values():
             face_chunks.extend(chunks_for(indices, cuts))
         return chunks_for(ordinary) + face_chunks
@@ -14081,8 +14083,74 @@ def _cut_ends(ch, line, box):
         ch[f"ct{e}"] = [round(float(nrm[0]), 6), round(float(nrm[1]), 6)]
 
 
+def _camber_partners(decks, walks=None, shift_of=None):
+    """Per deck part of decks [(fid, spec, pts (k, 3), lon)]: the fids of the longer parts it joins at one of its own ends
+    (an end row of each within JUNCTION_JOIN_M in plan, their heights there within JUNCTION_JOIN_Z_M), the longest
+    first: roadmesh.camber_joints' partners, read from the whole parts (their ends, their lengths), so they are the same
+    in every tile whatever of the part a tile's window cuts. Pure."""
+    walks = walks or {}
+    n = len(decks)
+    lines, half, length = [], [], []
+    for fid, spec, pts, _lon in decks:
+        pts = np.asarray(pts, np.float64)
+        sh = shift_of(fid, pts) if shift_of else None
+        pts = offset_polyline(pts, sh) if sh is not None else pts
+        dw, dc = _deck_frame(spec, walks.get(fid))
+        line = offset_polyline(pts, dc) if dc else pts
+        lines.append(line)
+        half.append(dw / 2)
+        length.append(float(dnp.hypot(*np.diff(line[:, :2], axis=0).T).sum()) if len(line) > 1 else 0.0)
+    rows, owner, zs, hw = [], [], [], []
+    for i, line in enumerate(lines):
+        if len(line) < 2:
+            continue
+        for e, (p, q) in ((0, (line[0], line[1])), (1, (line[-1], line[-2]))):
+            t = (q - p)[:2] if e == 0 else (p - q)[:2]
+            norm = float(dnp.hypot(*t))
+            if norm <= 1e-9:
+                continue
+            nv = np.array([-t[1], t[0]]) / norm * half[i]
+            rows.append((p[:2] + nv, p[:2] - nv))
+            owner.append(i)
+            zs.append(float(p[2]))
+            hw.append(half[i])
+    out = [[] for _ in range(n)]
+    if not rows:
+        return out
+    mid = np.array([(a + b) / 2 for a, b in rows])
+    hw, zs = np.asarray(hw), np.asarray(zs)
+    reach = 2 * float(hw.max()) + roadmesh.JUNCTION_JOIN_M      # (a grid of this side: a joint's ends are in one cell or its next)
+    cell = np.floor(mid / reach).astype(np.int64)
+    grid = {}
+    for p in range(len(rows)):
+        grid.setdefault((int(cell[p, 0]), int(cell[p, 1])), []).append(p)
+    found = [set() for _ in range(n)]
+    for p in range(len(rows)):
+        cx, cy = int(cell[p, 0]), int(cell[p, 1])
+        for gx in (cx - 1, cx, cx + 1):
+            for gy in (cy - 1, cy, cy + 1):
+                for q in grid.get((gx, gy), ()):
+                    a, b = owner[p], owner[q]
+                    if a == b or length[b] <= length[a] or decks[a][0] == decks[b][0]:
+                        continue
+                    if abs(zs[p] - zs[q]) > roadmesh.JUNCTION_JOIN_Z_M:
+                        continue
+                    if float(dnp.hypot(*(mid[p] - mid[q]))) > hw[p] + hw[q] + roadmesh.JUNCTION_JOIN_M:
+                        continue
+                    if roadmesh._seg_gap(rows[p][0], rows[p][1], rows[q][0], rows[q][1]) <= roadmesh.JUNCTION_JOIN_M:
+                        found[a].add(b)
+    for a in range(n):
+        seen = []
+        for b in sorted(found[a], key=lambda j: (-length[j], str(decks[j][0]))):
+            if decks[b][0] not in seen:
+                seen.append(decks[b][0])
+        out[a] = seen
+    return out
+
+
 def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of=None, width_of=None, context_m=None,
-                 marks_of=None, shapes=None, sheet_wide=None, sheet_marks=None, profiled=None, surface_cuts=None):
+                 marks_of=None, shapes=None, sheet_wide=None, sheet_marks=None, profiled=None, surface_cuts=None,
+                 camber=None):
     """Deck + line chunks of bridge parts [(fid, spec, pts (k, 3), lon)] clipped to the box `exact`, and their decks
     within context_m (default DECK_CONTEXT_M) as "ctx" chunks (not drawn: build_tile's caller hands them to roadmesh.deck).
     ground_fn(xy) -> heights: a part's ends on the ground are its abutments (each deck chunk's "abut" points: the
@@ -14092,7 +14160,9 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
     deck its roadshape shape or None: a shaped deck's rows kept to the chord rule, its ends skewed and buried
     (_deck_shape_ends), no junction surface. sheet_marks (BNE_ROADSHAPE=sheet): a list that gets the forks' nodes round
     the tile, deck_pads' skip (_sheet_marks). profiled (BNE_ROADSHAPE=profile, P3b): the part ids at their chain's
-    joint profile (its sheet couplings held there: no tile-time pins)."""
+    joint profile (its sheet couplings held there: no tile-time pins). camber: per deck part the fids of the longer parts it
+    joins (_camber_partners over all the parts of the window: the caller's, when it hands this a share of them); each
+    chunk carries them as "cj" (roadmesh.camber_joints)."""
     import rampmerges, roadmarkings
     def geometry(fid, spec, pts):
         sh = shift_of(fid, pts) if shift_of else None
@@ -14104,6 +14174,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         sheet_recs, decks = _sheet_plan(decks, walks, shapes, sheet_wide, sheet_marks, profiled)
     layouts = [] if surface_cuts is not None else rampmerges.plans(decks, geometry=geometry, pavement=geometry)
     walks = walks or {}
+    if camber is None:
+        camber = _camber_partners(decks, walks, shift_of)
     out = []
     abut = {}
     ends = [(i, e, np.asarray(pts, np.float64)[e, :2]) for i, (_, _, pts, _) in enumerate(decks) if len(pts) >= 2
@@ -14177,7 +14249,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
             for c in split(densify(piece) if i in unioned else _deck_rows(piece, shp)):
                 if len(c) >= 2:
                     ch = _chunk({**_deck_look(spec), "deck": True}, dw, c)
-                    ch.update(fixed=True, deck=True, fid=fid, ctx=True, tdir=_travel(spec))
+                    ch.update(fixed=True, deck=True, fid=fid, ctx=True, tdir=_travel(spec), cj=list(camber[i]))
                     _sheet_tag(ch, frame_line, sheet.get(i))
                     if shp is not None:
                         ch["kr"] = True
@@ -14250,6 +14322,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                                 ch['jn'] = joint_profiles[fid]
                                 ch['jskip'] = fid in joint_excluded
                             ch["fid"] = fid             # (roadmesh.deck: no parapet between parts side by side)
+                            ch["cj"] = list(camber[i])
                             ws = width_of(fid, c) if width_of else None
                             if ws is not None:          # (tapering into another deck: roadmesh.ribbons' "ws")
                                 ch["ws"] = [round(float(x + w - spec.width), 3) for x in ws]

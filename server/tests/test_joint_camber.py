@@ -11,6 +11,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import fast  # noqa: E402
 import roadmesh  # noqa: E402
+import roads  # noqa: E402
 
 GRADE = 0.024
 
@@ -79,6 +80,42 @@ class JointCamberTest(unittest.TestCase):
         far = chunk("far", [(s[0] + 30.0, s[1], s[2]) for s in short["n"]], 18.0)
         got = roadmesh.camber_joints([(r, c) for r, c in roadmesh.ribbon_pairs([long_, far])])
         for (r, _c), (r0, _c0) in zip(got, roadmesh.ribbon_pairs([long_, far])):
+            np.testing.assert_array_equal(r[5], r0[5])
+
+
+@unittest.skipUnless(fast.AVAILABLE, "earthfast")
+class WholeNetJointsTest(unittest.TestCase):
+    """Which decks a deck joins is a fact of the road net, not of a tile's window (seamprobe: a deck cut by a tile's edge
+    was moved on one side of the cut and not on the other, a 0.14 m step across it)."""
+
+    def test_the_joints_are_read_from_the_whole_parts(self):
+        spec = type("S", (), {"width": 24.0})()
+        d = np.array([-0.3, -0.954])
+        long_ = ("long", spec, np.array([(x, 0.0, 20.0 + GRADE * x) for x in (-50.0, -25.0, 0.0)]), 0.0)
+        short = ("short", type("S", (), {"width": 18.0})(), np.array([(*(d * s), 20.0) for s in (0.0, 14.0)]), 0.0)
+        far = ("far", spec, np.array([(x + 30.0, 40.0, 20.0) for x in (-10.0, 0.0)]), 0.0)
+        got = roads._camber_partners([long_, short, far])
+        self.assertEqual(got, [[], ["long"], []], "the short deck joins the long one at its end; nothing joins far")
+
+    def test_a_deck_cut_by_a_window_still_takes_its_partners_top(self):
+        long_, short = deck_chunks()
+        # (a window that cuts the long deck to 12 m of it, shorter than the short deck's 14 m: judged by the pieces,
+        # the long one would be the one that moves)
+        cut = chunk("long", [(x, 0.0, 20.0 + GRADE * x) for x in (-12.0, 0.0)], 24.0)
+        cut["cj"], short["cj"] = [], ["long"]
+        for xy in ((-5.0, -10.0), (-3.0, -4.0)):
+            heights = tops([cut, short], xy)
+            self.assertLessEqual(float(np.abs(heights - (20.0 + GRADE * xy[0])).max()), 0.02)
+
+    def test_decks_with_cut_ends_side_by_side_do_not_join(self):
+        """Two decks side by side whose cut ends (a tile's edge) meet are no joint: a chunk that knows its joints (none)
+        is not moved by what the window's pieces look like."""
+        a = chunk("a", [(-30.0, 0.0, 20.0), (0.0, 0.0, 20.0)], 10.0)
+        b = chunk("b", [(-20.0, 0.0, 20.1), (0.0, 0.0, 20.1)], 10.0)
+        b["n"] = [[-10.0, 3.0, 20.1], [0.0, 3.0, 20.1]]
+        a["cj"], b["cj"] = [], []
+        pairs = roadmesh.ribbon_pairs([a, b])
+        for (r, _c), (r0, _c0) in zip(roadmesh.camber_joints(pairs), pairs):
             np.testing.assert_array_equal(r[5], r0[5])
 
 

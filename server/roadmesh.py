@@ -947,7 +947,14 @@ def camber_joints(rb, context=(), shared=None):
     fan of their own beside it, a step along the seam. Past the overlap the rows ease back to their own heights over
     JUNCTION_PIN_R_M of the deck's length. The longer deck is left as it is, and a deck on a junction field (shared:
     by fid) is, as its partner's surface. What lies on a moved deck (its sidewalks and markings: ribbons of its fid that
-    are no deck) moves with its top. The context (the decks around the tile) supplies partners. Pure."""
+    are no deck) moves with its top. The context (the decks around the tile) supplies partners.
+
+    Which decks a deck joins, and which is the longer, is a fact of the road net, not of a tile's window: a chunk from
+    roads._deck_chunks carries "cj", the fids of the longer whole parts that meet its part's own ends at a joint
+    (roads._camber_partners, read from the whole parts, the same in every tile), and the deck takes its top from those
+    (a piece of a part the window cut, a piece in the context, whichever of them lie over it). So a deck cut by a tile
+    edge is moved by the same joint, in the same way, on both sides of the cut. A chunk without "cj" (a list of ribbons
+    not made by the tile build) is judged by the ends and lengths of the ribbons given. Pure."""
     shared = shared or {}
     items = list(rb) + list(context)
 
@@ -976,7 +983,7 @@ def camber_joints(rb, context=(), shared=None):
     partners = {}                       # target index -> the longer decks it meets at a joint
     for p, q in zip(*np.nonzero(near)):
         (a, ea), (b, eb) = ends_of[p], ends_of[q]
-        if a >= len(rb) or a == b or length[b] <= length[a]:
+        if a >= len(rb) or a == b or length[b] <= length[a] or items[a][1].get("cj") is not None:
             continue
         ca, cb = items[a][1], items[b][1]
         if ca.get("fid") is not None and ca.get("fid") == cb.get("fid"):
@@ -989,9 +996,21 @@ def camber_joints(rb, context=(), shared=None):
         if _seg_gap(np.asarray(ra[0][ea], np.float64), np.asarray(ra[1][ea], np.float64),
                     np.asarray(rb_[0][eb], np.float64), np.asarray(rb_[1][eb], np.float64)) <= JUNCTION_JOIN_M:
             partners.setdefault(a, set()).add(b)
+    by_fid = {}
+    for n, (_r, c) in enumerate(items):
+        if ok[n]:
+            by_fid.setdefault(c.get("fid"), []).append(n)
+    for a in range(len(rb)):            # (a deck that came with its joints: roads._camber_partners, the whole parts' ends)
+        cj = items[a][1].get("cj")
+        if cj is None or not ok[a] or items[a][1].get("fid") in shared:
+            continue
+        got = [b for f in cj for b in by_fid.get(f, ()) if b != a]
+        if got:
+            partners[a] = got           # (in the order the deck's joints gave: the longest part first)
     out = list(rb)
     moved = {}
     for a, bs in partners.items():
+        bs = bs if isinstance(bs, list) else sorted(bs, key=lambda i: -length[i])
         r, c = items[a]
         left, right, z = (np.asarray(r[0], np.float64), np.asarray(r[1], np.float64),
                           np.asarray(r[5], np.float64).reshape(-1))
@@ -1002,7 +1021,7 @@ def camber_joints(rb, context=(), shared=None):
         own_bk = _bank_rows(c, k)
         own_bk = np.zeros(k) if own_bk is None else own_bk
         best, zc, bkc = np.zeros(k), z.copy(), own_bk.copy()
-        for b in sorted(bs, key=lambda i: -length[i]):
+        for b in bs:
             rb_, cb = items[b]
             bl, br, bz = (np.asarray(rb_[0], np.float64), np.asarray(rb_[1], np.float64),
                           np.asarray(rb_[5], np.float64).reshape(-1))
