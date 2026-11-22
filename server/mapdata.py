@@ -67,6 +67,7 @@ import mapcells
 import mapgeom
 import maprasters
 import bnwt
+import cip
 import netfetch
 import osmml
 import overture
@@ -397,6 +398,9 @@ class MapData:
         # our prebaked input tiles (bnwt.py, BNGE_BNWT_URL) for the layers they hold: the cell its source gives, bit for
         # bit (same file, same keys), one range read for a block of cells
         self.bnwt = bnwt.Reader(self.raw_dir, self.fetcher, release) if bnwt.enabled() else None
+        # architecture v2's compact per-cell inputs (cip.py, BNE_V2_CIP=on): a cell's layers, its OSM tags joined, as the
+        # sources give them, one range read a cell; the sources below stay every section's fallback
+        self.cip = cip.reader(cache_dir, self.fetcher, release)
         import picnicsource            # (OSM picnic tables: Overture's picnic_table class is unpopulated)
         self.picnic_osm = picnicsource.Source(self.overture, self.fetcher)
         import billboardsource         # (OSM billboards: Overture does not keep advertising=billboard)
@@ -494,9 +498,8 @@ class MapData:
         import roadlayercache
         if not roadlayercache.ON or MIRROR_MB <= 0:
             return None, {}
-        try:
-            stamp = self._stamp(self.path(key, layer))
-        except OSError:
+        stamp = self._dec_stamp(layer, str(key))
+        if stamp is None:
             return None, {}
         import lanesections
         import railtags
@@ -518,12 +521,21 @@ class MapData:
             return None, vers
 
     def _dec_stamp(self, layer, cell):
-        """The stamp now of cell's (its string) layer file, or None."""
+        """The stamp now of cell's (its string) layer file, or None. A layer read from its CIP cell (no file: cip.py)
+        has its build's: "cip <build> <cell>" (a build never changes)."""
         try:
             z, x, y = (int(v) for v in cell.split("/"))
-            return self._stamp(self.path(mapcells.CellKey(z, x, y), layer))
-        except (OSError, ValueError):
+            key = mapcells.CellKey(z, x, y)
+        except ValueError:
             return None
+        try:
+            return self._stamp(self.path(key, layer))
+        except OSError:
+            pass
+        r = getattr(self, "cip", None)
+        if r is not None and r.has_section(key, f"m:{self.layer_name(layer)}"):
+            return f"cip {r.build} {key}"
+        return None
 
     def _dec_load(self, key, layer, dec):
         import roadlayercache
@@ -569,6 +581,8 @@ class MapData:
         shards = getattr(t, "shards", None)
         if shards is None:
             return False
+        if getattr(t, "cip_pin", None) is not None and t.cip_pin()[1] and t.cip_read(key):   # (its CIP slice)
+            return True
         shift = key.z - railtags.SHARD_ZOOM
         return (key.x >> shift, key.y >> shift) in shards
 
@@ -752,6 +766,12 @@ class MapData:
         """Does this layer come from Overture's tiles (pmtiles.py; BNGE_MAP_SOURCE)?"""
         return getattr(self, "pmtiles", None) is not None and layer in pmtiles.LAYERS
 
+    @staticmethod
+    def layer_name(layer):
+        """A layer's name with its own version (LAYER_VERSIONS: "roads.9"), as its cache folder and CIP section."""
+        lv = LAYER_VERSIONS.get(layer)
+        return layer if lv is None else f"{layer}.{lv}"
+
     def path(self, key, layer, parquet=False):
         """The cell layer's file. A layer from Overture's tiles has a folder of its own (overture-pmt<FORMAT>): the
         parquet cells (parquet=True: where the parquet path keeps them) are never read for it, nor written over."""
@@ -784,8 +804,12 @@ class MapData:
 
     # --- one layer -------------------------------------------------------------------------------
     def has(self, key, layer):
-        """True when the layer's file exists (not read: cheap enough for the event loop)."""
-        return os.path.exists(self.path(key, layer))
+        """True when the layer's file exists, or its CIP cell is on disk with it (not read: cheap enough for the event
+        loop)."""
+        if os.path.exists(self.path(key, layer)):
+            return True
+        r = getattr(self, "cip", None)
+        return r is not None and r.has_section(_key(key), f"m:{self.layer_name(layer)}")
 
     def layer_provenance(self, key, layer, wait=False):
         """The provenance dict of a cached layer file, None when it is not cached (or has none, or, wait false, not
@@ -796,6 +820,8 @@ class MapData:
         memo = self.__dict__.setdefault("_prov_memo", {})
         if path in memo:
             return memo[path]
+        if getattr(self, "cip", None) is not None:      # (a cell file not built yet is read from its CIP cell)
+            self.__dict__.setdefault("_prov_keys", {})[path] = (_key(key), layer)
         if not wait:
             # (a first read, or a file not built yet, off the event loop: on a busy hard disk opening the cell took
             # 5.2 s of the loop, GitHub #1054; the caller asks again a second later)
@@ -813,6 +839,14 @@ class MapData:
                 if "provenance" in z.files:
                     p = json.loads(str(z["provenance"]))
         except FileNotFoundError:
+            kl = self.__dict__.get("_prov_keys", {}).get(path)
+            r = getattr(self, "cip", None)
+            if kl is not None and r is not None and r.has_section(kl[0], f"m:{self.layer_name(kl[1])}"):
+                got = cip.layer_arrays(r, kl[0], self.layer_name(kl[1]), "background")    # (on disk: no fetch)
+                if got is not None and "provenance" in got:
+                    p = json.loads(str(got["provenance"]))
+                    memo[path] = p
+                    return p
             self.__dict__.setdefault("_prov_miss", {})[path] = time.monotonic()
             return None                 # (not remembered: it may be built later)
         except Exception:
@@ -875,7 +909,12 @@ class MapData:
         staging.replace_cached(tmp, path)
 
     def _build(self, key, layer, kind):
-        """(content arrays, provenance record or None) of one layer, from the sources."""
+        """(content arrays, provenance record or None) of one layer, from the sources (or their CIP cell: the same
+        arrays)."""
+        if getattr(self, "cip", None) is not None:
+            got = cip.layer_arrays(self.cip, key, self.layer_name(layer), kind)
+            if got is not None:
+                return got
         if layer in VECTOR_LAYERS:
             # the roads' OpenStreetMap tags are read alongside Overture's (each half a fresh cell's wait)
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
@@ -1050,7 +1089,9 @@ class MapData:
             with open(self.osm_fuel_path(key), encoding="utf-8") as f:
                 rows = json.load(f)
         except (OSError, ValueError):
-            return None
+            rows = cip.side_json(getattr(self, "cip", None), "f:osmfuel", _key(key))   # (the build's rows: CIP on)
+            if rows is None:
+                return None
         for r in rows:
             r["bbox"] = tuple(r["bbox"])
         return rows
@@ -1123,6 +1164,12 @@ class MapData:
         arrays = self._load(path)
         if arrays is not None:
             return self._mirrored(key, layer, path, arrays), True
+        if getattr(self, "cip", None) is not None:
+            # (CIP on: the cell's arrays from its CIP cell as they are, ~ms; no cell file, no mirror: the CIP cell is
+            # the copy on disk)
+            got = cip.layer_arrays(self.cip, key, self.layer_name(layer), kind)
+            if got is not None:
+                return got, True
         with self._key_lock(key, layer):
             # another thread, or another of the server's processes (xproc), built it meanwhile
             arrays, mine = xproc.once(path + ".lock", lambda: self._load(path), BUILD_WAIT_S, kind)
@@ -1565,11 +1612,20 @@ class MapData:
         neighbouring tiles in one range read) before they are built cell by cell. No-op without the tiles source.
         Returns the tiles asked for."""
         n, done = 0, set()
+        if getattr(self, "cip", None) is not None:
+            # (the ring's CIP cells as the few byte ranges they are; a layer its cell lacks is built from its source)
+            try:
+                got = self.cip.prefetch({_key(k) for k, ly in needs if not self.has(_key(k), ly)}, kind)
+                n += len(got)
+                done = {(_key(k), ly) for k, ly in needs if (14, _key(k).x, _key(k).y) in got}
+            except Exception as e:
+                log.debug("mapdata: CIP prefetch: %s: %s", type(e).__name__, e)
         if getattr(self, "bnwt", None) is not None:
             todo = [(_key(k), ly) for k, ly in needs if ly in bnwt.LAYERS and not self.has(_key(k), ly)
                     and bnwt.ARCHIVES[bnwt.ARCHIVE_OF[ly]]["source"] == bnwt.source_of(ly, MapData._pmt(self, ly))]
+            todo = [t for t in todo if t not in done]
             try:
-                done = self.bnwt.prefetch(todo, kind) if todo else set()
+                done = done | (self.bnwt.prefetch(todo, kind) if todo else set())
                 n += len(done)
             except Exception as e:          # (the cells' own builds read their sources then)
                 log.debug("mapdata: prebaked tiles prefetch: %s: %s", type(e).__name__, e)

@@ -399,7 +399,11 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 "BNE_STALE_REVISIT", "BNE_STALE_DAYS",
                 # (where the home cells' lane graphs and the decoded roads layers are kept and when they are written:
                 # the same graphs and layers either way, roadsurf3.LANES_DISK, roadlayercache.ASYNC)
-                "BNE_LANES_DISK", "BNE_ROADS_DEC_ASYNC")
+                "BNE_LANES_DISK", "BNE_ROADS_DEC_ASYNC",
+                # (where a cell's inputs are read from: its CIP cell holds the arrays its sources give, bit for bit,
+                # cip.py; the weekly data builds a CIP build pins are keyed as such, MapData.versions(). Proof: the
+                # portcheck corpus's plans and facts and the sessions' tiles identical with it on and the sources gone)
+                "BNE_V2_CIP", "BNE_V2_CIP_URL", "BNE_V2_CIP_BUILD")
 
 
 # BNGE_* settings that change what is built (the road revamp's R1 audit, 2026-11-16): keyed like the build switches

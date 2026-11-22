@@ -194,6 +194,7 @@ mod shelterfit;
 mod tilecuts;
 mod bldclear;
 mod bnwt;
+mod cip;
 mod aerialcov;
 mod decisions;
 mod lidarz;
@@ -7643,6 +7644,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     roadsysbind::register(m)?;
     // 599: unalign::collider_unalign (colliders off the axis-aligned lattice, cdae.COLLIDER_UNALIGN_M)
     unalign::register(m)?;
-    m.add("VERSION", 605)?;
+    // 604 (603 and 605 kept for other branches): cip (architecture v2's compact per-cell inputs: the lossless cell
+    // codec of named arrays and blobs; cip_encode_cell, cip_cell_info, cip_decode; server/cip.py, tools/build_cip.py)
+    cip::register(m)?;
+    m.add("VERSION", 606)?;
     Ok(())
 }

@@ -771,6 +771,12 @@ class Store:
         os.replace(tmp, self.pointer_path)
 
     def _download(self, name, kind):
+        import cip
+        r = cip.any_reader()
+        got = r.airports(kind or "demand") if r is not None else None
+        if got is not None:             # (the CIP build's snapshot, from the tile host: the same for every player)
+            body = got[FILES.index(name)]
+            return body, len(body), None
         r = self.fetcher.get(self.base_url + name, kind=kind, headers={"Accept-Encoding": "gzip"})
         body = r.body
         if (r.headers.get("content-encoding") or "").lower() == "gzip" or body[:2] == b"\x1f\x8b":
