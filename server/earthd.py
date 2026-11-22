@@ -1765,8 +1765,16 @@ class Server:
         now = time.monotonic()
         for sid in conn.sessions - others:
             if sid in self.orphans:
-                self.orphans[sid] = now
+                self._restart_grace(sid, now)
         conn.sessions = set()
+
+    def _restart_grace(self, sid, now):
+        """A session's grace starts again at `now`. The stored value always changes, so a sweep that read the old one
+        sees the restart (_finish_session_sweep compares them): Windows' monotonic clock ticks every ~15.6 ms, and a
+        restart in the same tick as the sweep's snapshot left the value equal and the folder was deleted
+        (test_sweep_rechecks_ownership_after_listing, Windows CI, gate 297)."""
+        prev = self.orphans.get(sid)
+        self.orphans[sid] = now if prev is None or now > prev else math.nextafter(prev, math.inf)
 
     def release_session(self, sid):
         """An adopted session the game no longer uses: its files go through the rate-limited delete
@@ -1866,7 +1874,7 @@ class Server:
             self.slots_let_go(set(lease.slots))
             for sid in lease.sessions - others:
                 if sid in self.orphans:
-                    self.orphans[sid] = now
+                    self._restart_grace(sid, now)
         return len(gone)
 
     def snap(self, v):
