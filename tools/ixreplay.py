@@ -6,6 +6,7 @@
     python tools/ixreplay.py --anchor 42.17,13.83 --at 42.1743,13.8243 --out ix-out [--ring 1]
     python tools/ixreplay.py --junction yokohama --region 14/14500/6460 --system 39a6e5ec   (the region an eval's view.log names)
     python tools/ixreplay.py --ladder C:/Users/loren/earth-evals/rr/integration/all24   (the interchanges of an eval's logs, by tier)
+    python tools/ixreplay.py --report ix-out-tiny ix-out-small   (the replays' steps.json together: the table and the scaling fit)
 
 The map data comes from the cache an eval used (Earth's cache, offline: nothing is fetched; --cache), the junction from
 tools/junctions.json of the eval tree (--junctions) or --anchor / --at. The region of the junction's point (the cell the
@@ -188,6 +189,51 @@ def ladder(folder):
     return rows
 
 
+FLOOR_S = 0.01      # s: the clock's step in the step lines (two decimals): a step under it is not read as a size's cost
+
+
+def fit(points):
+    """(b, a) of t = a * n^b by least squares on the logs over the points (n, t) with n >= 1 and t over the floor; None
+    when fewer than three points, or one size only, remain."""
+    import numpy as np
+    pts = [(n, t) for n, t in points if n >= 1 and t > FLOOR_S]
+    if len(pts) < 3 or len({n for n, _t in pts}) < 2:
+        return None
+    x, y = np.log([n for n, _t in pts]), np.log([t for _n, t in pts])
+    b = float(((x - x.mean()) * (y - y.mean())).sum() / ((x - x.mean()) ** 2).sum())
+    return b, float(np.exp(y.mean() - b * x.mean()))
+
+
+def report(folders):
+    """Every interchange of the steps.json files under folders (the last run of a system key kept), its steps' seconds; each
+    step's seconds fitted against the crossings and against the pieces."""
+    rows = {}
+    for folder in folders:
+        for dirpath, _dirs, files in os.walk(folder):
+            if "steps.json" not in files:
+                continue
+            with open(os.path.join(dirpath, "steps.json"), encoding="utf-8") as f:
+                doc = json.load(f)
+            for s in doc["steps"]:
+                r = rows.setdefault(s["system"], dict(system=s["system"], junction=doc.get("junction"), pieces=0, crossings=0, t={}))
+                r["pieces"], r["crossings"] = max(r["pieces"], s["pieces"]), max(r["crossings"], s["crossings"])
+                r["t"][s["step"]] = s["seconds"]
+    L = sorted(rows.values(), key=lambda r: (r["crossings"], r["system"]))
+    print("%-10s %-26s %6s %9s  %s" % ("interchange", "junction", "pieces", "crossings", "  ".join("%8s" % s[:8] for s in STEPS)))
+    for r in L:
+        print("%-10s %-26s %6d %9d  %s" % (r["system"][:10], (r["junction"] or "")[:26], r["pieces"], r["crossings"],
+                                           "  ".join("%8.2f" % r["t"].get(s, 0.0) for s in STEPS)))
+    print("\n%d interchanges; t = a * n^b, b by step (n: crossings | pieces); the limit of each step in s" % len(L))
+    for st in STEPS:
+        out = []
+        for key in ("crossings", "pieces"):
+            got = fit([(r[key], r["t"].get(st, 0.0)) for r in L])
+            out.append("b=%.2f a=%.4f" % (got[1] and got[0], got[1]) if got else "no fit")
+        worst = max(L, key=lambda r: r["t"].get(st, 0.0)) if L else None
+        print("  %-8s %-28s | %-28s  max %.2f s (limit %g)%s" % (st, out[0], out[1], worst["t"].get(st, 0.0) if worst else 0.0,
+              LIMITS_S[st], "  OVER" if worst and worst["t"].get(st, 0.0) > LIMITS_S[st] else ""))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--junction", help="a name of the junctions file")
@@ -196,6 +242,8 @@ def main(argv=None):
     ap.add_argument("--aid", default=9)
     ap.add_argument("--at", type=pair)
     ap.add_argument("--region", help="the cell to run, z/x/y (an eval's 'ix step' line names it), instead of the point's")
+    ap.add_argument("--report", nargs="+", help="folders of replays: every steps.json under them, as one table, with each step's "
+                    "time fitted as a * n^b over the interchanges' crossings and pieces (b: the exponent)")
     ap.add_argument("--ladder", help="an eval's output folder: print its interchanges by tier of crossings and stop")
     ap.add_argument("--ring", type=int, default=0, help="cells round the point's cell run as well")
     ap.add_argument("--system", help="solve only the interchanges whose key starts with this")
@@ -207,6 +255,9 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.ladder:
         ladder(a.ladder)
+        return 0
+    if a.report:
+        report(a.report)
         return 0
 
     os.environ.update(BNE_SHAPES="1", BNGE_PLANCACHE="off", BNGE_BLOCKCACHE="off")
