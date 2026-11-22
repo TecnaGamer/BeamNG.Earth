@@ -173,12 +173,16 @@ def deck_depth(span):
     return float(np.clip(float(span) / DECK_SPAN_RATIO, DECK_MIN_DEPTH_M, DECK_FULL_DEPTH_M))
 
 
+def structure_depth(net, u):
+    """m of structure under the road of upper part u: a deck's depth for its span, a rail deck's, an underpass's roof."""
+    mu = net.m[u]
+    return deck_depth(net.L[u]) if mu.kind == "deck" else RAIL_DECK_DEPTH_M if mu.kind == "rail_deck" else COVER_M
+
+
 def clearance_need(net, u, d, q=None):
     """How far the road on upper part u stands over lower part d where they cross (at q): the headroom d needs there
-    and u's structure (a deck's depth for its span, an underpass's roof)."""
-    mu = net.m[u]
-    struct = deck_depth(net.L[u]) if mu.kind == "deck" else RAIL_DECK_DEPTH_M if mu.kind == "rail_deck" else COVER_M
-    return headroom(net.m[d], q) + struct
+    and u's structure (structure_depth)."""
+    return headroom(net.m[d], q) + structure_depth(net, u)
 
 
 def arclen(line):
@@ -1771,6 +1775,7 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
     # (the clearance wherever the road runs under the upper part, under_pairs: its whole carriageway under the deck's)
     clear, fz, clear_by = {}, {}, {}
     bound = {} if trace is not None else None
+    crossing = []           # (the audit's trace: each crossing's upper part and the clearance it asks)
 
     def fixed(i, sv):
         new = [s_ for s_ in sv.tolist() if (i, s_) not in fz]
@@ -1780,6 +1785,7 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
         return np.array([fz[(i, s_)] for s_ in sv.tolist()])
     for ci, c in enumerate(sysm["crossings"]):
         need = clearance_need(net, c["u"], c["d"], c["q"])
+        crossing.append((c["u"], need))
         uv = np.array([p_[0] for p_ in c["under"]])
         dv = np.array([p_[1] for p_ in c["under"]])
         xp, xa, xb, xt = _vars(pcs, smp, c["u"], uv)
@@ -1825,7 +1831,7 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
         cps.append((q, kq, p, kp, "ge", need))
         why.append(("stacked",))
     if trace is not None:
-        trace["cp"], trace["bound"] = why, bound
+        trace["cp"], trace["bound"], trace["crossing"] = why, bound, crossing
     return chains, cps
 
 
@@ -1833,10 +1839,11 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
     import carriageways as _cw
     chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z)
     info = {}
-    zs = _cw.solve(chains, cps, diagnostics=info)
+    zs = _cw.solve(chains, cps, diagnostics=info, quiet=True)
     if not info.get("feasible", True) and not info.get("timed_out"):
         # (laws that cannot all hold: not the interchange left as it is. What contradicts is eased by the least it takes, in
-        # the order the laws are given up (ix/relax.py), and said so: the answer's diagnostics name each)
+        # the order the laws are given up (ix/relax.py), and said so: the answer's diagnostics name each. The first attempt's
+        # miss is the answer's `first`, not a log line of its own: the line of the answer is the last solve's)
         import ix.relax as _relax
         trace = {}
         chains, cps = shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace)
@@ -1846,11 +1853,7 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
 
         def feasible(ch, cp):
             probe = {}
-            _cw.PROBE.on = True
-            try:
-                _cw.solve(ch, cp, diagnostics=probe)
-            finally:
-                _cw.PROBE.on = False
+            _cw.solve(ch, cp, diagnostics=probe, quiet=True)
             return bool(probe.get("feasible"))
         # (the vertical curves are no difference of two heights, so the graph does not see them: where the laws were eased the
         # curve law of those roads is looked at next, on the few roads round them, before the whole is solved; then, if the
@@ -1859,13 +1862,14 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
             eased, more = _relax.ease_curves(net, pcs, chains, cps, touched, feasible, hops)
             info = {}
             zs = _cw.solve(eased, cps, rounds=_cw.RELAXED_ROUNDS, deadline=time.monotonic() + _cw.BUDGET_RELAXED_S,
-                           diagnostics=info)
+                           diagnostics=info, quiet=True)
             if info.get("feasible", True) or info.get("timed_out"):
                 break
         done = list(done) + more
         info["relaxed"] = [dict(kind=r.kind, amount=round(float(r.amount), 6), at=[[int(m), round(float(s), 3)] for m, s in r.at],
                                 text=r.text) for r in done]
         info["first"] = first
+    _cw.report(len(chains), len(cps), info)
     if diagnostics is not None:
         diagnostics.update(info)
     if not info.get("converged") or not info.get("feasible"):
