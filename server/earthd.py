@@ -121,6 +121,7 @@ import places as placesmod  # noqa: E402
 import runtimeprofiler
 import streamleases
 import pools as poolsmod  # noqa: E402
+import v2host  # noqa: E402
 import memwatch as memwatchmod  # noqa: E402
 import serverlog  # noqa: E402
 import srvrestart as srvrestartmod  # noqa: E402
@@ -709,6 +710,14 @@ def sharing_machine():
     # Off by default for now (2026-11-13): reviews found a shared stage can carry another process's fallback deck
     # corrections into kept plans; on again once that fix (share-fix) is in. BNE_STAGE_SHARE=on turns it on.
     return False
+
+
+def v2_pool(name, n, cls, lane=None, **kwargs):
+    """A worker process pool of n processes: pools.RespawningPool, or with BNE_V2_HOST (v2host.py) a pools.SlotPool
+    whose jobs the Rust scheduler starts by class and deadline (cls: its lane's own class; lane: the lane's name)."""
+    if not v2host.ON:
+        return poolsmod.RespawningPool(name, n, **kwargs)
+    return poolsmod.SlotPool(v2host.sched(), name, n, cls=cls, lane=lane or name, **kwargs)
 
 
 def prefetch_procs():
@@ -1429,6 +1438,8 @@ class Server:
         self.quick_lock = threading.Lock()  # (_quick_once: a block's stand-in made once)
         self.quick_made, self.quick_running = {}, {}
         self.quick_futs = {}            # (aid, cx, cy) -> a requested block's stand-in photo started with it (fast)
+        if v2host.ON:                   # (architecture v2 V1: the build threads as lanes of the Rust scheduler)
+            Server._v2_lanes(self)
         self.photo_pool = None          # requested blocks' photos and stand-ins (main(): PHOTO_PROCESS_MIN_CPUS)
         self.recent_full = collections.deque(maxlen=RECENT_FULL)  # (aid, cx, cy, rgb, canopy or None): last photos
         self.base_lock = threading.Lock()
@@ -3939,6 +3950,9 @@ class Server:
             return False
         fut = bp[LANE_PREFETCH][0].submit(blockworker.plan_cell, at[0], at[1], at[2],
                                           (int(key[0]), int(key[1]), int(key[2])))
+        sched = v2host.active()
+        if sched is not None:       # (BNE_V2_HOST: no slot held meanwhile; the plan inherits this job's urgency)
+            return bool(sched.wait(fut, PLAN_ELSEWHERE_S))
         return bool(fut.result(timeout=PLAN_ELSEWHERE_S))
 
     def plan_first(self, anchor, cx, cy):
@@ -4163,6 +4177,10 @@ class Server:
         with _ABANDON_LOCK:
             self.abandoned.update(add)
             self.abandoned.difference_update(remove)
+            io = getattr(self, "v2_io", None)
+            if io is not None:          # (BNE_V2_HOST: written by a scheduler job, never on the event loop)
+                io.submit(Server.write_abandoned, self)
+                return True
             return self.write_abandoned()      # (the lock is re-entrant)
 
     def write_abandoned(self):
@@ -4288,6 +4306,24 @@ class Server:
         la, lo = geotiles.centre(gx, gy)
         x, y, _ = frame.geodetic_to_enu(la, lo, 0.0)
         return Server.left_behind(self, aid, float(x), float(y), 150.0)
+
+    def _v2_lanes(self):
+        """BNE_V2_HOST (v2host.py): the server's own build pools as executors of the Rust scheduler's lanes, each at
+        its class (P0: requested blocks, an anchor's first block, provisional ground; P1: prefetched blocks and the
+        urgent photos; P2: the other photos), the job's anchor its first argument (a teleport drops its queued jobs
+        and stops its running ones). A heightmap thread waiting on its block process holds no slot (result_running)."""
+        s = v2host.sched()
+        hm, req = s.lane("heightmap", HM_THREADS), s.lane("heightmap-req", HM_REQUEST_THREADS)
+        self.hm_pool = s.executor(hm, v2host.P1, None, 0)
+        self.hm_req_pool = s.executor(req, v2host.P0, None, 0)
+        self.hm_first_pool = s.executor(req, v2host.P0, None, 0)       # (an anchor's first block: terrain(progress))
+        self.base_pool = s.executor(s.lane("base-photo", HM_THREADS, True), v2host.P2, None, 0)
+        self.urgent_base_pool = s.executor(s.lane("base-urgent", 2), v2host.P1, None, 0)
+        self.prov_pool = s.executor(s.lane("provisional", 2), v2host.P0, None, 0)
+        # (each pool its own lane, as its own threads were: a job waiting for another's never takes that one's slot)
+        self.quick_pool = s.executor(s.lane("quick-base", 1, True), v2host.P2, None, 0)
+        self.quick_early = s.executor(s.lane("quick-early", 2, True), v2host.P1, None, 0)
+        self.v2_io = s.executor(s.lane("server-io", 1), v2host.P0)    # (file writes never on the event loop)
 
     def make_heightmap(self, anchor, cx, cy, progress, lane=LANE_REQUEST, queued_at=None):
         """Worker thread: build and write one 1024² terrain. The follow / prefetch blocks (no progress
@@ -5599,6 +5635,8 @@ class Server:
         if fut is None:
             loop = asyncio.get_running_loop()
             pool = self.hm_req_pool if lane == LANE_REQUEST and progress is None and self.block_pools else self.hm_pool
+            if progress is not None and getattr(self, "hm_first_pool", None) is not None:
+                pool = self.hm_first_pool       # (BNE_V2_HOST: an anchor's first block at P0)
             removing = self.hm_removing.pop(key, None)
             if removing is not None and not removing.done():
                 # (its evicted files still being removed, under the names this build writes: after them; in the
@@ -9084,6 +9122,9 @@ class Connection:
         elif kind == "commit_terrain":
             self.commit_terrain(msg)
         elif kind == "pose":
+            sched = v2host.active()
+            if sched is not None:       # (BNE_V2_HOST: the CPU target follows the game's frame time)
+                sched.note_frame(msg.get("frameMs"), msg.get("frameMaxMs"), bool(msg.get("guardHold")))
             self.on_pose(msg)
         elif kind == "map_tiles":               # the in-game map's tiles, as files (the UI cannot fetch http)
             self.spawn(self.map_tiles(msg))
@@ -9576,6 +9617,12 @@ class Connection:
         self.abandoned_from = (getattr(self, "abandoned_from", None) or []) + [aid]
         with self.s.warm_cv:
             self.s.warm_want = []
+        sched = v2host.active()
+        if sched is not None:           # (BNE_V2_HOST: its scheduler jobs dropped or stopped at once)
+            dropped, flagged = sched.cancel_place(int(aid))
+            log.info("teleport: anchor %d's queued work dropped (scheduler: %d queued jobs dropped, %d running "
+                     "stopped)", aid, dropped, flagged)
+            return
         log.info("teleport: anchor %d's queued work dropped", aid)
 
     def unabandon_old(self):
@@ -9584,6 +9631,9 @@ class Connection:
         if aids:
             Server.set_abandoned(self.s, remove=aids)
             self.abandoned_from = None
+            sched = v2host.active()
+            for aid in aids if sched is not None else ():
+                sched.uncancel_place(int(aid))
 
     async def prepare_anchor(self, msg):
         """Every first-ground preparation has progress and a terminal reply, including setup/finalization errors."""
@@ -11515,8 +11565,10 @@ async def main_async(args, restart=None):
             # new thread to run, and a loaded machine stalled the loop 3.4 s there at a first visit's first pose
             # (2026-11-04; blockworker._read_warm skips the empty list)
             warm_q.put_nowait((None, 0.0, 0.0, []))
-            block_pools.append((poolsmod.RespawningPool(
-                "block", prefetch_procs() if lane == LANE_PREFETCH else 1, mp_context=ctx, initializer=blockworker.init,
+            block_pools.append((v2_pool(
+                "block", prefetch_procs() if lane == LANE_PREFETCH else 1,
+                v2host.P1 if lane == LANE_PREFETCH else v2host.P0, "block-ahead" if lane == LANE_PREFETCH else "block-req",
+                mp_context=ctx, initializer=blockworker.init,
                 initargs=(args.cache_dir, args.offline, args.roads == "on",
                           args.grading == "on" and args.roads == "on",
                           args.road_widths == "on" and args.roads == "on", args.surface == "on", warm_q,
@@ -11552,8 +11604,8 @@ async def main_async(args, restart=None):
             log.warning("airports: no runway grading (%s)", e)
     road_pool = None
     if ctx is not None and args.roads == "on" and args.road_processes > 0:
-        road_pool = poolsmod.RespawningPool(      # road tiles (blockworker.roads_tile)
-            "road tile", args.road_processes, mp_context=ctx, initializer=blockworker.init,
+        road_pool = v2_pool(      # road tiles (blockworker.roads_tile)
+            "road tile", args.road_processes, v2host.P1, mp_context=ctx, initializer=blockworker.init,
             hung_s=ROAD_TILE_TIMEOUT_S + ROAD_HUNG_EXTRA_S,
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
                       args.surface == "on", None, logging.getLogger().level,
@@ -11657,7 +11709,8 @@ async def main_async(args, restart=None):
                         "server", server.root)
     server.photo_pool = photo_pool
     # the whole server held to its RAM limit (memwatch.py: caches dropped, a pool's processes replaced)
-    memwatchmod.register(*[p for p, _q in block_pools], photo_pool, far_pool, road_pool, far_bld_pool)
+    memwatchmod.register(*[m for p in [p for p, _q in block_pools] + [photo_pool, far_pool, road_pool, far_bld_pool]
+                           for m in (poolsmod.members(p) if isinstance(p, poolsmod.SlotPool) else [p])])
     memwatchmod.start()
     server.boost_cpus = (cpupin.boosted(server.server_cpus, server.game_cpus)
                          if getattr(args, "load_boost", "on") == "on" else None)
@@ -11677,6 +11730,9 @@ async def main_async(args, restart=None):
                 hl = server.host.summary()
                 if hl:
                     log.info("%s", hl)
+            sl = v2host.summary()           # (BNE_V2_HOST: the scheduler's lateness per class, its CPU target)
+            if sl:
+                log.info("%s", sl)
             for c in list(server.connections):     # a host that came back while nobody posed
                 c.refresh_status()
             if server.degraded and not server.imagery_down():

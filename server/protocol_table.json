@@ -136,7 +136,9 @@
     "slotsGone": {"type": ["list", "dict"], "optional": true, "doc": "pooled far-tile slots whose far_tile's object is gone: [[slot, serial], ...] (matslots.py)"},
     "foci": {"type": ["list", "dict"], "optional": true, "doc": "other vehicles' collision foci [{x, y, r, trees}] (collisionfoci.lua; earthd parse_foci)"},
     "guardHold": {"type": "bool", "optional": true, "doc": "the edge guard holds the car for its ground (earthd Connection.hold_boost: every core meanwhile)"},
-    "deckWait": {"type": ["list", "dict"], "optional": true, "doc": "the road geotiles the deck guard slows the car for (a bridge's, not in yet): built first (deckspans.py)"}
+    "deckWait": {"type": ["list", "dict"], "optional": true, "doc": "the road geotiles the deck guard slows the car for (a bridge's, not in yet): built first (deckspans.py)"},
+    "frameMs": {"type": "num", "optional": true, "doc": "2026-11-22 (architecture v2 V1, additive): the mean wall time of the game's frames since the last pose (governor.lua frameWindow): BNE_V2_HOST's scheduler lowers its CPU target when it rises over the game's own baseline (sched.rs Adapt)"},
+    "frameMaxMs": {"type": "num", "optional": true, "doc": "... and the longest of them"}
    }
   },
   "cache": {

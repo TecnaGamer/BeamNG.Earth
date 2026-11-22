@@ -19,7 +19,9 @@ HEADER = struct.Struct("<I")
 MAX_FRAME = 16 * 1024 * 1024
 # the game connection in Rust (earthfast.Host) instead of asyncio's: off by default until proven (the Rust port's
 # phase 1; byte-identical sessions, tools/portcheck/msgcmp.py)
-HOST = os.environ.get("BNGE_HOST", "off").strip().lower() == "on"
+# (BNE_V2_HOST, architecture v2 V1: on with it, the scheduler's host)
+HOST = os.environ.get("BNGE_HOST", "off").strip().lower() == "on" or \
+    os.environ.get("BNE_V2_HOST", "").strip().lower() in ("on", "1", "true")
 # 1b: consecutive poses merged while they wait for a busy loop (the later pose, slotsGone joined); off for A/B
 HOST_MERGE = os.environ.get("BNGE_HOST_MERGE", "on").strip().lower() != "off"
 # 1c (developers): every frame the game sends recorded into this folder (tools/hostreplay.py plays it again);
