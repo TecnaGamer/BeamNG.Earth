@@ -359,13 +359,16 @@ end
 serverSend({ type = 'far_swap', anchorId = 1, id = 2, add = col, remove = {}, dIn = 0, dOut = 0 })
 T.check(pumpUntil(function() return farfield._tile('0_-4_0') ~= nil end, 300), 'covered L0 tiles swapped in')
 local colObj = objects[farfield._tile('0_-4_0').id]
-T.check(not colObj.hidden and colObj.pos.z == 1100 - 1.0, 'edge ring tile under the block: shown, sunk by its sink')
+T.check(colObj.hidden, 'W edge ring tile under the block: hidden (all block ground)')
+local neObj = objects[farfield._tile('0_-4_3').id]
+T.check(not neObj.hidden and neObj.pos.z <= 1100 - 1.0, 'NW corner tile (N strip under-floor): shown, sunk at least by its sink')
 -- every block import drops the grass on the block: loadBlock asks for its rebuild right after the
 -- import, in the same call (groundcover.lua, docs/ARCHITECTURE.md "Ground surfaces")
 local gcmod = require('beamngEarth/groundcover')
 local gcOrig, gcAt = gcmod.afterBlockChange, {}
 gcmod.afterBlockChange = function() gcAt[#gcAt + 1] = calls.importMaps; return gcOrig() end
 T.check(tb.renderEnabled == nil and (calls.setRenderEnabled or 0) == 0, 'terrain mode: the block is drawn, render flag never touched')
+core.PHOTOLESS_FAR_GROUND = true  -- (the opt-in far ground under a photo-less block; off by default: checked below)
 core.setNearVisual('detail')  -- its ready block has no base photo
 T.check(pumpUntil(function() return calls.importMaps == imports + 1 end, 100), 'terrain-follow commit once the strip is live')
 T.check(#gcAt == 1 and gcAt[1] == imports + 1, 'grass rebuild requested once, right after the import')
@@ -388,6 +391,10 @@ serverSend({ type = 'block_base', anchorId = 1, cx = 256, cy = 0, base = '/curre
 frames(2)
 T.check(tb.renderEnabled and not farfield.rawView() and require('beamngEarth/terrain').base() == '/current.jpg',
   'first photo replaces the far ground even at 130 mph')
+core.PHOTOLESS_FAR_GROUND = false
+core._blockPhotoInstalled(nil)
+T.check(tb.renderEnabled and not farfield.rawView(), 'by default a photo-less block is drawn, its far tiles covered')
+core._blockPhotoInstalled('/current.jpg')
 veh.vel = vec3(0, 0, 0)
 core.setNearVisual('terrain')
 -- stale / foreign answers are ignored

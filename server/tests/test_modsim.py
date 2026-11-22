@@ -345,7 +345,7 @@ def _python_far_trace(lines, final, far, gov, out, keys, cam, wall, frame, folde
                 if inst is not None and inst.loaded and not far.hidden(inst):
                     hv, nv = h(k + ",", hv), nv + 1
             fr = far.frame
-            covered = sum(1 for i in far.live.values() if i.cover != "none")
+            covered = sum(1 for i in far.live.values() if not far.visible_cover(i.cover))
             st = [frame, f"{gov.b:.9f}", fr["units"], len(far.live), covered,
                   sum(1 for i in far.pending.values() if i.loaded), far.n_queued,
                   sum(1 for g in far.groups if g.state == "wait"), far.active_groups, len(far.old), len(far.doomed),

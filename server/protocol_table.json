@@ -19,7 +19,8 @@
     "materials": {"type": "list", "optional": true, "doc": "--surface on (surface.py)"},
     "base": {"type": "str", "optional": true},
     "baseSize": {"type": "num", "optional": true, "doc": "--near-visual detail: the block's photo"},
-    "ter": {"type": "str", "optional": true, "doc": "the block as a .ter (swapped in, no import)"}
+    "ter": {"type": "str", "optional": true, "doc": "the block as a .ter (swapped in, no import)"},
+    "cover": {"type": "dict", "optional": true, "doc": "{far key: m}: the exact sink of each far tile across the block's edge against this block (Connection.far_cover; farfield.lua 'partial')"}
    }
   }
  },

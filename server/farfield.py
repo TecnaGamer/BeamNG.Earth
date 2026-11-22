@@ -1082,6 +1082,47 @@ def write_tile(path, frame, dem, tile, zoom, q=None, ref_zoom=None, fmt="cdae", 
     return built
 
 
+COVER_MARGIN = 0.5          # m: a partial tile's top this far under the block's surface (cover_sink), for the engine's
+# terrain triangles between the samples and its distant LOD
+
+
+def cover_sink(grid, tbbox, heights, bx0, by0, square, margin=COVER_MARGIN):
+    """How far (m, >= margin) a far tile must sink to lie under a terrain block everywhere they overlap: the exact cover
+    sink of a tile across the block's edge (farfield.lua 'partial', the terrain message's `cover`; the user, 2026-11-21:
+    "im driving through the old lod terrain sometimes with the solid ground being under it"), against the block's own
+    samples, not the tile's lattice. grid: the tile's [j, i] absolute vertex heights; tbbox its footprint; heights: the
+    block's [gy, gx] sample heights (gy = north, sample (gx, gy) at (bx0 + gx * square, by0 + gy * square)). The tile's
+    surface at each sample in the overlap is bounded by its cell's bilinear height + |z00 - z10 - z01 + z11| / 4, above
+    either diagonal's triangles (and an adaptive mesh's, whose diagonals run through the grid points). None: no
+    overlap. Only +, *, abs and max: the same on every machine."""
+    g = np.asarray(grid, np.float64)
+    n = g.shape[0] - 1
+    tx0, ty0, tx1, ty1 = tbbox
+    sp = (tx1 - tx0) / n
+    N = heights.shape[0]
+    gx0 = max(0, int(math.ceil((tx0 - bx0) / square - 1e-9)))
+    gx1 = min(N - 1, int(math.floor((tx1 - bx0) / square + 1e-9)))
+    gy0 = max(0, int(math.ceil((ty0 - by0) / square - 1e-9)))
+    gy1 = min(N - 1, int(math.floor((ty1 - by0) / square + 1e-9)))
+    if gx0 > gx1 or gy0 > gy1:
+        return None
+    u = ((bx0 + np.arange(gx0, gx1 + 1) * square) - tx0) / sp
+    i = np.clip(np.floor(u).astype(np.int64), 0, n - 1)
+    fu = u - i
+    worst = -math.inf
+    for r0 in range(gy0, gy1 + 1, 128):          # (rows in chunks: a coarse tile over the whole 1 km block is 1M samples)
+        r1 = min(gy1 + 1, r0 + 128)
+        v = ((by0 + np.arange(r0, r1) * square) - ty0) / sp
+        j = np.clip(np.floor(v).astype(np.int64), 0, n - 1)
+        fv = (v - j)[:, None]
+        z00, z10 = g[j[:, None], i[None, :]], g[j[:, None], i[None, :] + 1]
+        z01, z11 = g[j[:, None] + 1, i[None, :]], g[j[:, None] + 1, i[None, :] + 1]
+        bil = z00 * (1 - fu) * (1 - fv) + z10 * fu * (1 - fv) + z01 * (1 - fu) * fv + z11 * fu * fv
+        top = bil + np.abs(z00 - z10 - z01 + z11) * 0.25
+        worst = max(worst, float((top - heights[r0:r1, gx0:gx1 + 1]).max()))
+    return max(0.0, worst) + margin
+
+
 def group_deltas(group_tiles):
     """(dIn, dOut) of a swap group: how far the new surface rises above the old one at most,
     and how far the old one lies above the new one, evaluated on the finest vertex grid of the
