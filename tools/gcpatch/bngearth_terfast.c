@@ -90,12 +90,12 @@ static uintptr_t g_get_transform;                // SceneObject::getTransform (t
 static cell_fn g_stock_bounds, g_stock_mats, g_mats_tail;
 static xform_fn g_xform;
 static atomic_int g_on, g_check;
-static atomic_ullong st_bounds, st_mats, st_holes, st_stock, st_diff;
+static atomic_ullong st_bounds, st_mats, st_holes, st_stock, st_diff, st_diff_b, st_diff_m, st_diff_h, st_pend_lost;
 static char g_found[256];                       // how the targets were found (the status line)
 static uintptr_t g_vb_after, g_vb_stock;        // where the hole scan's stub goes on: past the loop / into the stock loop
 static float g_step_k;
 static void *g_pending_cell;                    // (check mode, main thread: the leaf whose stock hole flag is compared next)
-static int g_pending_flag;
+static int g_pending_flag;                      // (what the fast path would leave: the flag before | found)
 
 static inline uint32_t rd32(const void *p, size_t off) { uint32_t v; memcpy(&v, (const char *)p + off, 4); return v; }
 static inline float rdf(const void *p, size_t off) { float v; memcpy(&v, (const char *)p + off, 4); return v; }
@@ -154,8 +154,9 @@ uintptr_t bnge_terfast_holes(void *cell, const void *file) {
     }
     atomic_fetch_add_explicit(&st_holes, 1, memory_order_relaxed);
     if (atomic_load_explicit(&g_check, memory_order_relaxed)) {     // the stock loop runs; compared at the leaf's bounds
+        if (g_pending_cell) atomic_fetch_add_explicit(&st_pend_lost, 1, memory_order_relaxed);
         g_pending_cell = cell;
-        g_pending_flag = found;
+        g_pending_flag = found || *((unsigned char *)cell + CELL_HOLES) != 0;
         return g_vb_stock;
     }
     if (found) *((unsigned char *)cell + CELL_HOLES) = 1;
@@ -164,8 +165,10 @@ uintptr_t bnge_terfast_holes(void *cell, const void *file) {
 
 static void fast_bounds(void *cell) {
     if (g_pending_cell == cell) {               // (check mode: the stock hole scan of this leaf has run)
-        if ((*((unsigned char *)cell + CELL_HOLES) != 0) != g_pending_flag)
+        if ((*((unsigned char *)cell + CELL_HOLES) != 0) != g_pending_flag) {
             atomic_fetch_add_explicit(&st_diff, 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&st_diff_h, 1, memory_order_relaxed);
+        }
         g_pending_cell = NULL;
     }
     void *block;
@@ -211,8 +214,10 @@ static void fast_bounds(void *cell) {
         g_stock_bounds(cell);
         float rr;
         memcpy(&rr, (char *)cell + CELL_RADIUS, 4);
-        if (memcmp((char *)cell + CELL_BOX, box, sizeof box) != 0 || memcmp(&rr, &radius, 4) != 0)
+        if (memcmp((char *)cell + CELL_BOX, box, sizeof box) != 0 || memcmp(&rr, &radius, 4) != 0) {
             atomic_fetch_add_explicit(&st_diff, 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&st_diff_b, 1, memory_order_relaxed);
+        }
         atomic_fetch_add_explicit(&st_bounds, 1, memory_order_relaxed);
         return;
     }
@@ -253,7 +258,10 @@ static void fast_mats(void *cell) {
         g_stock_mats(cell);              // (with its tail call)
         uint64_t got;
         memcpy(&got, (char *)cell + CELL_MASK, 8);
-        if (got != mask) atomic_fetch_add_explicit(&st_diff, 1, memory_order_relaxed);
+        if (got != mask) {
+            atomic_fetch_add_explicit(&st_diff, 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&st_diff_m, 1, memory_order_relaxed);
+        }
         atomic_fetch_add_explicit(&st_mats, 1, memory_order_relaxed);
         return;
     }
@@ -357,7 +365,9 @@ static void *watch_flag(void *arg) {
                 atomic_load(&st_bounds), atomic_load(&st_mats), atomic_load(&st_holes), atomic_load(&st_stock), g_found);
             if (atomic_load(&g_check)) {
                 size_t l = strlen(msg);
-                snprintf(msg + l, sizeof msg - l, "; check: %llu differences", atomic_load(&st_diff));
+                snprintf(msg + l, sizeof msg - l, "; check: %llu differences (bounds %llu, layers %llu, holes %llu; "
+                         "hole checks not paired %llu)", atomic_load(&st_diff), atomic_load(&st_diff_b),
+                         atomic_load(&st_diff_m), atomic_load(&st_diff_h), atomic_load(&st_pend_lost));
             }
             report(msg);
             on = want; shown = done; ticks = 0;

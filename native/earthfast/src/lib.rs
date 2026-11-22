@@ -7,6 +7,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 use crate::dm::Dm;
 mod dm;
+mod unalign;
 mod island_kerb;
 mod deckreach;
 mod demsample;
@@ -7632,6 +7633,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     railmesh::register(m)?;
     railstations::register(m)?;
     catenary::register(m)?;
-    m.add("VERSION", 594)?;
+    // 595: unalign::collider_unalign (colliders off the axis-aligned lattice, cdae.COLLIDER_UNALIGN_M)
+    unalign::register(m)?;
+    m.add("VERSION", 595)?;
     Ok(())
 }

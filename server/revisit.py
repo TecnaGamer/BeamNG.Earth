@@ -574,6 +574,7 @@ PLAN_NEUTRAL = {
     "BNE_ROADSIGNS": "roadsigns.ON: the sign tiles' road signs (signstream), never the roads layer, plans or facts",
     "BNE_NL_ROADSIGNS": "roadsigns.NL_ON: the Dutch sign system in the sign tiles (roadsigns.system), as above",
     "BNE_WATERTIGHT": "shells.ON: closed collision / building / deck meshes (cdae, buildings, roadmesh): tiles only",
+    "BNE_COLLIDER_UNALIGN_M": "cdae.COLLIDER_UNALIGN_M: colliders' vertices off the lattice when written: tiles only",
     "BNE_CATENARY": "catenary.ENABLED: masts and wires in the road tiles (blockworker), nothing planned",
     "BNE_WEAR_STRIPS": "roadwear.STRIPS_ON: the wear strips drawn on the road tiles' surface",
     "BNE_AI_TUNNELS": "navgraph.AI_TUNNELS: the AI graph through tunnels (navgraph reads the plans, never writes them)",

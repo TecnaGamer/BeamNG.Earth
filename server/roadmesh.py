@@ -3412,10 +3412,12 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
     return nv
 
 
-def write(path, mesh, close=True):
+def write(path, mesh, close=True, collider=False):
     """mesh: build's (positions, tris, uvs, materials, tri material) and, with a dirt or gravel strip in it, its fade
     uv: the second uv, in the vertex format that also carries a colour (white: the strips' materials leave vertColor
-    off, and the others in the mesh ignore it or multiply by 1)."""
+    off, and the others in the mesh ignore it or multiply by 1). collider: the drawn mesh is its own collider (the
+    mod's "Visible Mesh Final": decks, tunnels, median barriers): moved off the axis-aligned lattice (cdae.unalign; a
+    straight N-S / E-W deck's rows are a degenerate input for the Windows collision build, 8k triangles ~200 ms)."""
     P, T, UV, mats, M = mesh[:5]
     uvs2 = mesh[5] if len(mesh) > 5 else None
     colors = None if uvs2 is None else np.full((len(P), 4), 255, np.uint8)
@@ -3423,4 +3425,4 @@ def write(path, mesh, close=True):
     open_tris = over[np.asarray(M, np.int64)] if over.any() and M is not None else None
     import roadsurf3
     return cdae.write(path, P, T, uvs=UV, uvs2=uvs2, material=mats, tri_materials=M, object_name="road", open_tris=open_tris,
-                      colors=colors, close=close, split_drawn=SURFACE_V2 or roadsurf3.ON)
+                      colors=colors, close=close, split_drawn=SURFACE_V2 or roadsurf3.ON, unaligned=bool(collider))
