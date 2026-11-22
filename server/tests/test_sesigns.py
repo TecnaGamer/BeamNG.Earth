@@ -157,7 +157,7 @@ class SeparationTest(unittest.TestCase):
 
 class SpanishTest(unittest.TestCase):
     def main(self, cls="trunk", kmh=100.0, urban=False):
-        return way("m", north(-1000, 1000), PLAIN, spec(11.0, cls, False, kmh, 2, urban=urban))
+        return way("m", north(-1000, 1000), SPLIT, spec(11.0, cls, False, kmh, 3, urban=urban))
 
     def loop(self):
         """A one-way link off the right of a road going north, back round to cross it."""
@@ -180,6 +180,67 @@ class SpanishTest(unittest.TestCase):
     def test_a_plain_slip_road_is_not(self):
         xy = np.c_[np.linspace(0, 60, 9), np.linspace(0, 40, 9)]
         self.assertEqual(sesigns.spanish([self.main(), way("l", xy, {}, spec(6.0, "trunk", True, 50.0, 1, True))]), [])
+
+    def test_matching_loop_on_an_ordinary_road_has_no_f2(self):
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        for tags, lanes in ((PLAIN, 2), ({}, None), ({"lanes": "3"}, 3),
+                            ({**SPLIT, "turn:lanes:forward": "left|through"}, 3),
+                            ({"lanes:forward": "2", "lanes:backward": "2"}, 4)):
+            with self.subTest(tags=tags):
+                main = way("m", north(-1000, 1000), tags, spec(lanes=lanes))
+                self.assertEqual(sesigns.spanish([main, link]), [])
+                self.assertEqual(of(sesigns.all_signs([main, link]), "se_f2"), [])
+
+    def test_a_short_three_lane_pocket_is_not_a_2_plus_1_section(self):
+        main = way("m", north(-50, 50), SPLIT)
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        self.assertEqual(sesigns.spanish([main, link]), [])
+
+    def test_a_1_plus_1_connector_between_sections_still_gets_f2(self):
+        main = way("m", north(-400, 400), PLAIN, spec(lanes=2))
+        ways = [main, way("before", north(-1000, -400), SPLIT),
+                way("after", north(400, 1000), SPLIT),
+                way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))]
+        self.assertIs(sesigns.spanish(ways)[0][1], main)
+        self.assertEqual(len(of(sesigns.all_signs(ways), "se_f2")), 1)
+
+    def test_paired_carriageways_need_a_confirmed_2_plus_1_split(self):
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        for lanes, opposite, expected in ((2, 1, 1), (1, 2, 1), (1, 1, 0), (2, 2, 0),
+                                          (None, 1, 0), (2, None, 0)):
+            with self.subTest(lanes=lanes, opposite=opposite):
+                main = way("m", north(-1000, 1000), {}, spec(8, oneway=True, lanes=lanes))
+                other = way("other", north(1000, -1000, -7), {}, spec(4, oneway=True, lanes=opposite))
+                self.assertEqual(len(sesigns.spanish([main, other, link])), expected)
+
+    def test_unrelated_carriageway_does_not_confirm_a_2_plus_1_road(self):
+        main = way("m", north(-1000, 1000), {}, spec(8, oneway=True, lanes=2))
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        for xy in (north(-1000, 1000, -7), north(1000, -1000, -50), north(1000, -1000, 7),
+                   np.array([[-1000, 0], [1000, 0]]), north(50, -50, -7)):
+            with self.subTest(xy=xy.tolist()):
+                other = way("other", xy, {}, spec(4, oneway=True, lanes=1))
+                self.assertEqual(sesigns.spanish([main, other, link]), [])
+
+    def test_a_2_plus_1_road_split_round_the_junctions_island_still_gets_f2(self):
+        """Rv 27 south of Borås: short one-lane one-ways with no lane tags at the junction, a section 236 m on."""
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        for start, expected in ((-300, 1), (-500, 0)):
+            with self.subTest(section_ends_at=start):
+                main = way("m", north(-150, 150), {}, spec(4.5, oneway=True, lanes=1))
+                section = way("s", north(start - 700, start), SPLIT)
+                self.assertEqual(len(sesigns.spanish([main, section, link])), expected)
+
+    def test_an_island_needs_a_section_of_its_own_class(self):
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        main = way("m", north(-150, 150), {}, spec(4.5, oneway=True, lanes=1))
+        section = way("s", north(-1000, -300), SPLIT, spec(cls="primary"))
+        self.assertEqual(sesigns.spanish([main, section, link]), [])
+
+    def test_an_unpaired_one_way_is_not_a_2_plus_1_road(self):
+        main = way("m", north(-1000, 1000), {}, spec(8, oneway=True, lanes=2))
+        link = way("l", self.loop(), {}, spec(6.0, "trunk", True, 50.0, 1, True))
+        self.assertEqual(sesigns.spanish([main, link]), [])
 
     def test_a_service_road_is_not(self):
         self.assertEqual(sesigns.spanish([self.main(), way("l", self.loop(), {}, spec(6.0, "service", True, 30.0, 1))]), [])
