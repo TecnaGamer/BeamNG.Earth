@@ -182,6 +182,7 @@ mod layerfold;
 mod terrainblock;
 mod blockgrid;
 mod blockphoto;
+mod farstandin;
 mod landcover;
 mod roadsurf;
 mod levelways;
@@ -7623,6 +7624,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(blockphoto::block_base_photo, m)?)?;
     m.add_function(wrap_pyfunction!(blockphoto::block_rgba, m)?)?;
     m.add_class::<blockphoto::BlockPhotoOverlap>()?;
+    m.add_function(wrap_pyfunction!(farstandin::far_standin, m)?)?;   // 597
     m.add_function(wrap_pyfunction!(landcover::landcover_samples, m)?)?;
     m.add_function(wrap_pyfunction!(blockgrid::block_cached_grid, m)?)?;
     m.add_function(wrap_pyfunction!(terrainblock::block_params, m)?)?;
@@ -7632,6 +7634,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     railmesh::register(m)?;
     railstations::register(m)?;
     catenary::register(m)?;
-    m.add("VERSION", 594)?;
+    m.add("VERSION", 597)?;
     Ok(())
 }

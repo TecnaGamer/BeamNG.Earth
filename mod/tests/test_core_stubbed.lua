@@ -369,6 +369,14 @@ local gcOrig, gcAt = gcmod.afterBlockChange, {}
 gcmod.afterBlockChange = function() gcAt[#gcAt + 1] = calls.importMaps; return gcOrig() end
 T.check(tb.renderEnabled == nil and (calls.setRenderEnabled or 0) == 0, 'terrain mode: the block is drawn, render flag never touched')
 core.PHOTOLESS_FAR_GROUND = true  -- (the opt-in far ground under a photo-less block; off by default: checked below)
+-- (the block before's photo still on the block's material: a photo-less block elsewhere must not keep it, drawn where
+-- the block has moved)
+local terrainmod = require('beamngEarth/terrain')
+local blockMat = scenetree.findObject(terrainmod.MATERIAL)
+if not blockMat then
+  blockMat = S.newObject('TerrainMaterial'); blockMat.name = terrainmod.MATERIAL; objects[blockMat.id] = blockMat
+end
+blockMat:setField('baseColorBaseTex', 0, '/before.jpg')
 core.setNearVisual('detail')  -- its ready block has no base photo
 T.check(pumpUntil(function() return calls.importMaps == imports + 1 end, 100), 'terrain-follow commit once the strip is live')
 T.check(#gcAt == 1 and gcAt[1] == imports + 1, 'grass rebuild requested once, right after the import')
@@ -383,6 +391,8 @@ T.check(ct.anchorId == 1 and ct.cx == 256 and ct.cy == 0, 'commit_terrain sent')
 T.check(calls.setClusterPosRelRot == clusterMoves and veh.pos.x == 451, 'terrain-follow does not move vehicles')
 for id, p in pairs(farBefore) do T.check(objects[id].pos.x == p.x, 'terrain-follow does not move far tiles') end
 T.check(not tb.renderEnabled and farfield.rawView(), 'missing base: collision moved but far tiles draw the ground')
+T.check(blockMat:getField('baseColorBaseTex') == terrainmod.LEVEL_BASE.tex and terrainmod.base() == nil,
+  "missing base: the level's flat base, not the block before's photo where the block has moved")
 veh.vel = vec3(58, 0, 0)
 serverSend({ type = 'block_base', anchorId = 1, cx = 0, cy = 0, base = '/old.jpg', baseSize = 2048 })
 frames(2)

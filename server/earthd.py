@@ -375,6 +375,14 @@ RECENT_FULL = 2                 # full ground photos kept for the stand-ins' ove
 QUICK_SHARE_WAIT_S = 30.0       # Server._quick_once: a caller waits this long for the stand-in being made
 QUICK_MADE_KEPT = 256           # blocks whose stand-in file names _quick_once remembers
 QUICK_BASE_PX = 256             # a block's stand-in photo (write_quick_base): the imagery alone, 4 m texels on a 1 km block
+# A block's stand-in photo drawn from the far tiles' textures on disk first (write_quick_base, earthfast.far_standin):
+# the ground the far field showed there, on the block's own geometry, no imagery tile read or fetched. Made in the photo
+# process, the stand-in queued behind full photos waiting on their downloads (a NJ drive 2026-11-21: p50 3.3 s, p90 14 s
+# after its block was asked for) and blocks came without one: the level's flat brown base, or with
+# PHOTOLESS_FAR_GROUND the far tiles at their own height over the drivable block (the user, 2026-11-21: "im driving
+# through the old lod terrain sometimes with the solid ground being under it"). BNE_FAR_STANDIN=off: as before.
+FAR_STANDIN = os.environ.get("BNE_FAR_STANDIN", "on") != "off"
+FAR_STANDIN_MIN_SHARE = 0.9     # _stand_in takes the far textures alone when they cover this much (the rest filled round)
 # A full photo with texels no imagery source covered (the renderer's brown fill, "none") is refused this many times per
 # block (base_refresh tries again, the far ground's photo shown meanwhile), then taken as it is: a source with a lasting
 # hole (no tile there, ever) would otherwise render the block's 4096² photo again every few seconds for good
@@ -5051,7 +5059,7 @@ class Server:
                 info["stages"]["baseQuick"] = time.perf_counter() - t1
             if not base.done() and not quick and early is None and getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V \
                     and self.imagery is not None:     # (an early one tried: not again here, _quick_later)
-                quick = self._quick_once(anchor, cx, cy, lambda: (
+                quick = self._quick_once(anchor, cx, cy, lambda: self._far_quick(anchor, cx, cy) or (
                     self._quick_elsewhere(anchor, cx, cy, lane) if lane == LANE_REQUEST else None)
                     or self.write_quick_base(anchor, cx, cy))
                 info["stages"]["baseQuick"] = time.perf_counter() - t1
@@ -5111,7 +5119,7 @@ class Server:
                 info.setdefault("stages", {})["standIn"] = time.perf_counter() - t1
             elif getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V:
                 # (in the block's own process when it can: just done with its heights; here it took 2-6 s, 2026-10-31)
-                info["base"] = self._quick_once(anchor, cx, cy, lambda: (
+                info["base"] = self._quick_once(anchor, cx, cy, lambda: self._far_quick(anchor, cx, cy) or (
                     self._quick_elsewhere(anchor, cx, cy, lane) if lane is not None else None)
                     or self.write_quick_base(anchor, cx, cy))
             else:
@@ -5136,7 +5144,8 @@ class Server:
         info = self.hm.get(key)
         if info is not None and info.get("base"):
             return                              # (its own photo came while this waited its turn)
-        name = self._quick_once(anchor, cx, cy, lambda: self._quick_elsewhere(anchor, cx, cy, LANE_PREFETCH)
+        name = self._quick_once(anchor, cx, cy, lambda: self._far_quick(anchor, cx, cy)
+                                or self._quick_elsewhere(anchor, cx, cy, LANE_PREFETCH)
                                 or self.write_quick_base(anchor, cx, cy))
         conns = [c for c in list(self.connections) if getattr(c, "loop", None) is not None]
         if not name or not conns:
@@ -5204,11 +5213,44 @@ class Server:
         return self.hm_stem(key) + "_base_q" + terraincache.PHOTO_EXT
 
     def _stand_in(self, anchor, cx, cy):
-        """A requested block's stand-in photo made beside its heights (fast): in the prefetch lane's process, else
-        here; its file name or None."""
-        return self._quick_once(anchor, cx, cy, lambda: self._quick_elsewhere(anchor, cx, cy, LANE_PREFETCH,
-                                                                              self.photo_pool)
+        """A requested block's stand-in photo made beside its heights (fast): from the far tiles' textures here when
+        they cover the block (_far_quick), else in the prefetch lane's process, else here; its file name or None."""
+        return self._quick_once(anchor, cx, cy, lambda: self._far_quick(anchor, cx, cy)
+                                or self._quick_elsewhere(anchor, cx, cy, LANE_PREFETCH, self.photo_pool)
                                 or self.write_quick_base(anchor, cx, cy))
+
+    def _far_quick(self, anchor, cx, cy):
+        """write_quick_base from the last photos' overlap and the far tiles' textures alone (no imagery tile read or
+        fetched: ~0.2-1 s here), or None when they cover less than FAR_STANDIN_MIN_SHARE of the block."""
+        if not FAR_STANDIN or self.near_visual != "detail" or self.imagery is None:
+            return None
+        return self.write_quick_base(anchor, cx, cy, far_only=True)
+
+    def far_standin_tiles(self, anchor, x0, y0, size):
+        """The far tiles' textures over the square [x0, x0 + size]² of anchor's frame, coarsest first (the finer drawn
+        over them): [(DDS path, footprint x0, y0, size)] for earthfast.far_standin. The anchor's own tiles (a global
+        tile's texture is a Mercator square of another frame)."""
+        x1, y1 = x0 + size, y0 + size
+        items, tiles = [], getattr(self, "tiles", None) or {}     # (a test's stand-in server may have none)
+        for _ in range(3):              # (the event loop adds and evicts tiles meanwhile)
+            try:
+                items = list(tiles.items())
+                break
+            except RuntimeError:
+                continue
+        rows = []
+        for ck, info in items:
+            t = getattr(info, "tile", None)
+            if ck[0] != anchor.id or not getattr(info, "texture", None) or t is None or isinstance(t, farfield.GTile):
+                continue
+            node = t.base if isinstance(t, farfield.Piece) else t
+            bx0, by0, bx1, by1 = node.bbox
+            if bx1 <= x0 or bx0 >= x1 or by1 <= y0 or by0 >= y1:
+                continue
+            rows.append((-node.size, str(ck[1]), os.path.join(self.out_dir, info.texture), float(bx0), float(by0),
+                         float(node.size)))
+        rows.sort()
+        return [r[2:] for r in rows]
 
     def _quick_once(self, anchor, cx, cy, make):
         """make() (a block's stand-in photo: its file name or None) once per block: a caller while it is being made
@@ -5287,11 +5329,14 @@ class Server:
         log.info("ground stand-in photo %s in %.2f s (its imagery not on disk)", key, time.perf_counter() - t0)
         return name
 
-    def write_quick_base(self, anchor, cx, cy):
-        """A block's stand-in photo while its own is drawn: the aerial imagery alone at QUICK_BASE_PX (no roofs, painted
-        roads or rock), packed for the game like the photo. A block sent without its photo showed the level's flat
-        green base until the photo came (GitHub #548: at ~155 mph the outback flashed between red desert and green).
-        The file name, or None."""
+    def write_quick_base(self, anchor, cx, cy, far_only=False):
+        """A block's stand-in photo while its own is drawn: the last full photos' overlap, then the far tiles' textures
+        on disk (far_standin_tiles: what the far field showed there, often sharper than the imagery pass), then the
+        aerial imagery alone at QUICK_BASE_PX (no roofs, painted roads or rock) where they have none, packed for the
+        game like the photo. A block sent without its photo showed the level's flat green base until the photo came
+        (GitHub #548: at ~155 mph the outback flashed between red desert and green). far_only: no imagery pass (no
+        imagery read or download); None unless the overlap and the far textures cover FAR_STANDIN_MIN_SHARE of it.
+        The file name, or None. Never final: a stand-in's name (quick_base_name), its own photo comes after it."""
         size = self.layout.block * heightmap.SQUARE
         x0, y0 = cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M
         key = (anchor.id, cx, cy)
@@ -5309,17 +5354,36 @@ class Server:
             fill = None
             if not overlap.complete:
                 tq.append(("overlap", time.perf_counter()))
-                with (self.deshadow.no_wait() if self.deshadow is not None else contextlib.nullcontext()):
-                    small, used = self.imagery.render(anchor.frame, x0, y0, size, QUICK_BASE_PX, set())
-                tq.append(("imagery", time.perf_counter()))
-                if not used or used.get("none"):
-                    # Missing source pixels are the renderer's brown fill. The mod can
-                    # show the textured far field until the whole footprint is available.
+                far, far_n, tiles = None, 0, []
+                if FAR_STANDIN:
+                    fast.require(597, "far tile stand-in")
+                    tiles = self.far_standin_tiles(anchor, x0, y0, size)
+                    if tiles:
+                        # (at the photo's own size: the engine refuses another, "dont have required size of 4096-4096")
+                        far, far_n = fast._ef.far_standin(tiles, x0, y0, size, n)
+                    tq.append((f"far({len(tiles)} tiles, {far_n / (n * n):.0%})", time.perf_counter()))
+                # (the share of the block neither the overlap nor the far textures cover)
+                bare = (1.0 - overlap.share) * (1.0 - far_n / (n * n))
+                if far_n == n * n or (far_only and far_n and bare <= 1.0 - FAR_STANDIN_MIN_SHARE):
+                    fill = far              # (holes filled from round them: far_standin)
+                elif far_only:
                     return None
-                small = np.asarray(small, np.uint8)
-                # (at the photo's own size: the engine refuses another, "dont have required size of 4096-4096")
-                fill = surfacemod.enlarge(small, n)
-                tq.append(("enlarge", time.perf_counter()))
+                else:
+                    with (self.deshadow.no_wait() if self.deshadow is not None else contextlib.nullcontext()):
+                        small, used = self.imagery.render(anchor.frame, x0, y0, size, QUICK_BASE_PX, set())
+                    tq.append(("imagery", time.perf_counter()))
+                    if not used or used.get("none"):
+                        # Missing source pixels are the renderer's brown fill: the far textures' alone then (their
+                        # holes filled from round them), else none
+                        if not far_n:
+                            return None
+                        fill = far
+                    else:
+                        small = np.asarray(small, np.uint8)
+                        fill = surfacemod.enlarge(small, n)
+                        tq.append(("enlarge", time.perf_counter()))
+                        if far_n:           # (the far textures' texels over the imagery pass where they have them)
+                            fill, _ = fast._ef.far_standin(tiles, x0, y0, size, n, np.ascontiguousarray(fill, np.uint8))
             rgb, canopy = overlap.paste(fill)
             tq.append(("paste", time.perf_counter()))
             name = self.quick_base_name(key)
@@ -5332,16 +5396,19 @@ class Server:
             args = (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), rgb, BASE_AO)
             if canopy is not None and genground.ON:
                 args += ((canopy, size / n),)
+            # (the CPU's BC7 encode on a block process's core: ~1 s here beside the rest; not an early stand-in, which
+            # its block waits for: there it queued behind that process's blocks)
             pool = self.block_pools[LANE_PREFETCH][0] if (URGENT_ELSEWHERE and self.block_pools and
-                                                          not bc7.gpu_ok()) else None
-            if pool is not None:        # (the CPU's BC7 encode on a block process's core: ~1 s here beside the rest)
+                                                          not bc7.gpu_ok() and not far_only) else None
+            if pool is not None:
                 pool.submit(blockworker.base_entry, *args).result()
             else:
                 terraincache.base_entry(*args)
             tq.append(("cache", time.perf_counter()))
-            if tq[-1][1] - tq[0][1] > 1.0:
-                log.info("quick base photo %s in %.2f s: %s (%d px)", key, tq[-1][1] - tq[0][1],
-                         " ".join(f"{k} {b - a:.2f}" for (_, a), (k, b) in zip(tq, tq[1:])), n)
+            if tq[-1][1] - tq[0][1] > 1.0 or far_only:
+                log.info("quick base photo %s in %.2f s: %s (%d px)%s", key, tq[-1][1] - tq[0][1],
+                         " ".join(f"{k} {b - a:.2f}" for (_, a), (k, b) in zip(tq, tq[1:])), n,
+                         " from the far tiles" if far_only else "")
             return name
         except Exception as e:      # the flat base then, as before
             log.info("quick base photo %s: %s", key, e)

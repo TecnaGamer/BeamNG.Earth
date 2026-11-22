@@ -397,16 +397,19 @@ local function loadBlock(tr, aid)
   local layers = (type(tr.layers) == 'table' and type(tr.materials) == 'table')
     and { masks = tr.layers, materials = tr.materials } or nil -- server --surface on (surface.py)
   if layers then groundcover.ensure() end
-  -- A photo-less detail block still supplies collision. Leave the photographed
-  -- far tiles at their real height until this block has a readable base.
+  -- Detail mode: the block's photo (server write_base; or its stand-in, write_quick_base: the far tiles' textures of
+  -- its ground), else the level's flat base (false). nil (left as it was) kept the block before's photo on the
+  -- materials, drawn on this block where it had moved: the ground of 128 m or more away, its painted roads beside the
+  -- real ones, since photo-less blocks are drawn again (PHOTOLESS_FAR_GROUND).
   local base = nil
   if nearVisual == 'detail' then
+    base = false
     if type(tr.base) == 'string' and FS:fileExists(tr.base) then
       base = tr.base
     elseif aid == st.anchorId and st.anchorSession == st.sessionId and st.block and
         st.block.cx == tr.cx and st.block.cy == tr.cy and not st.photoMissing then
-      base = terrain.base()  -- a same-place regrade can keep the correctly aligned photograph
-      if base and not FS:fileExists(base) then base = nil end
+      base = terrain.base() or false  -- a same-place regrade can keep the correctly aligned photograph
+      if base and not FS:fileExists(base) then base = false end
     end
   end
   local ter = M.TER_SWAP and type(tr.ter) == 'string'
@@ -3610,9 +3613,9 @@ function M._groundRender()
   terrain.setRenderEnabled(nearVisual == 'terrain' or (nearVisual == 'detail' and not tiles))
 end
 
-function M._blockPhotoInstalled(base)
+function M._blockPhotoInstalled(base)   -- (base: the photo's path; nil or false: the level's flat base)
   if nearVisual ~= 'detail' then return end
-  st.photoMissing = base == nil
+  st.photoMissing = not base
   M._baseLater = nil
   M._groundRender()
 end
