@@ -14,11 +14,6 @@ DEFAULT_KMH = {"motorway": 110, "trunk": 90, "primary": 70, "secondary": 60, "te
                "unclassified": 50, "service": 20, "living_street": 15, "road": 40, "track": 20}
 LINK_KMH = 60               # km/h of a link (a ramp, a slip road) with no limit mapped: not its road's (110 on a motorway's)
 GAME_GRADE_PLUS = 0.02
-# The steepest grade a vehicle can drive at all, as against the steepest the laws give a road to hold: the mod's navgraph leaves
-# a link steeper than this out of the graph (mod navgraph.lua MAX_GRADE: no car drives it, the AI circled under one for ever; the
-# steepest real streets are 0.37, San Francisco's). A road may be eased to it where its laws contradict (ix/relax.py) and no
-# further; test_gradelaw keeps this the mod's number.
-DRIVABLE_GRADE = 0.45
 
 
 def base(cls):

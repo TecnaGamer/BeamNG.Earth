@@ -9,7 +9,7 @@ sections meet at one height (the joins), and a layer that changes along a carria
 puts it under a road at one crossing and over it a section later. Those decisions cannot all hold: the crossings, the
 joins and the grade between them close a loop that needs a negative rise. They are found here, as negative cycles of the
 difference constraints of the system's crossings (z_over - z_under >= clearance), joins (equal heights) and the steepest grade
-a vehicle drives along each member between those points (gradelaw.DRIVABLE_GRADE: the heights step eases a road's grade law to
+its class may be built along each member between those points (gradeshapes.max_grade: the heights step eases a road's grade law to
 it before it gives up anything that keeps a vehicle off a deck, so a loop that only the class's own law closes is no
 contradiction), the heights left free (the ground's too: the elevation is the heights step's), and each
 is resolved by giving up the weakest evidence in it: a decision from layers alone, the smallest layer difference first,
@@ -20,7 +20,6 @@ import math
 
 import numpy as np
 
-import gradelaw
 import gradeshapes as _gsh
 
 from . import artifacts, cache, diffgraph
@@ -28,7 +27,7 @@ from . import artifacts, cache, diffgraph
 FORMAT = 4
 LAWS = (("gradeshapes", ["HEADROOM_M", "RAIL_HEADROOM_M", "HEADROOM_MARGIN_M", "CLEAR_PATH_M", "DECK_MIN_DEPTH_M",
                          "DECK_FULL_DEPTH_M", "DECK_SPAN_RATIO", "RAIL_DECK_DEPTH_M", "COVER_M", "DECK_MAX_GRADE",
-                         "JOIN_M"]), ("gradelaw", ["DRIVABLE_GRADE"]))
+                         "JOIN_M"]), ("gradelaw", ["GAME_GRADE_PLUS"]))
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 3
 
@@ -58,9 +57,9 @@ def levels(net, members, edges):
 
 
 def _law(m):
-    """The steepest grade member m's heights can be asked to hold: what a vehicle drives (a road's law is eased to it by the
-    heights step before anything that keeps a vehicle off a deck gives way); a track's its own (its heights are the railways')."""
-    return _gsh.max_grade(m) if m.kind in ("rail", "rail_deck") else gradelaw.DRIVABLE_GRADE
+    """The steepest grade member m's heights can be asked to hold: its class's (a road's law is eased to it by the heights
+    step before anything that keeps a vehicle off a deck gives way)."""
+    return _gsh.max_grade(m)
 
 
 def evidence(net, c):

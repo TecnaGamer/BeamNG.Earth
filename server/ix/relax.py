@@ -6,9 +6,9 @@ heights. The laws that are differences of two heights (all but the curves) are a
 the contradictions; each is named and eased here, one at a time, in the order the laws are given up:
 
   1. the grade law: a road is steeper than its class for a stretch (a game's, not a design code's) and every vehicle takes
-     it, up to the steepest grade a vehicle can drive at all (gradelaw.DRIVABLE_GRADE, the mod's own limit: no car drives a
-     link steeper). A steeper road or a tighter curve is drivable; a road through a deck never is, so nothing that keeps a
-     vehicle off a deck gives way until the grade and the curves (below) have given all they can;
+     it, up to the steepest grade a road of its class may be built (gradeshapes.max_grade: the class's design grade by speed,
+     where a deck's own law is lower). A steeper road or a tighter curve is drivable; a road through a deck never is, so nothing
+     that keeps a vehicle off a deck gives way until the grade and the curves (below) have given all they can;
   2. a decision from the layers alone (two members of one kind, one over the other by the map's layer tags: the order step's
      weakest evidence, ix/s3_order.py, whose loops it can see only with the ground free): given up whole, the least layer
      difference first, as the order step does;
@@ -37,14 +37,12 @@ from collections import namedtuple
 
 import numpy as np
 
-import gradelaw
 import gradeshapes as _gsh
 
 from . import diffgraph
 
 LAYER, BOUND, GRADE, CLEARANCE, JOIN = 0, 1, 2, 3, 4    # (the kinds of constraint; JOIN is never given up)
 GIVEN_UP = (GRADE, LAYER, BOUND, CLEARANCE)             # (in this order: a vehicle can drive what the first gives)
-DRIVABLE = gradelaw.DRIVABLE_GRADE                      # the steepest grade a vehicle drives at all
 SLACK_M = 0.001         # m of room past what closes a cycle (the feasible set is not one point: a solver's interior)
 MIN_SEGMENT_M = 0.5     # carriageways.MIN_SEGMENT_M: the least run a segment's own spacing gives
 
@@ -68,6 +66,7 @@ class Problem:
         self.decision, self.of_decision = {}, {}    # a layer decision -> its edges; an edge -> its decision
         self.grade_edges = {}                       # chain -> [(edge, its base weight)]
         self.grade0 = [float(ch["grade"]) for ch in chains]
+        self.cap = [_gsh.max_grade(net.m[int(pc["main"])]) for pc in pcs]   # the steepest its road's class may be built
         self.lam = [1.0] * len(chains)
         bound = trace["bound"] or {}
         self.bound, self.cross = bound, trace.get("crossing") or []
@@ -191,7 +190,7 @@ class Problem:
                 return changed + list(all_)
             else:
                 return changed + self._ease(sorted({k for k in cyc if klass[k] == kind}), short)
-        raise ValueError("a loop short %.3f m has nothing left to give way, the grade law at what a vehicle drives" % short)
+        raise ValueError("a loop short %.3f m has nothing left to give way, the grade law at the steepest its class may be built" % short)
 
     def _room(self, k):
         """m the constraint k can be eased by: a clearance, no more than the headroom it asks over the structure's own depth
@@ -239,13 +238,13 @@ class Problem:
 
     def _ease_grade(self, cyc, short, changed):
         """The grade law of the cycle's roads eased by one factor, the least that makes up the shortfall, and no road past the
-        steepest grade a vehicle drives (DRIVABLE). The shortfall it made up (less than short where the cap held); changed
+        steepest grade its class may be built (gradeshapes.max_grade of the piece's road). The shortfall it made up (less than short where the cap held); changed
         gets the edges."""
         g = self.g
         own = [k for k in cyc if self.klass[k] == GRADE]
         allowed = math.fsum(g.ew[k] for k in own)
         chains = sorted({self.ref[k][1] for k in own})
-        room = min(max(DRIVABLE / self.grade0[c], 1.0) / self.lam[c] for c in chains)
+        room = min(max(self.cap[c] / self.grade0[c], 1.0) / self.lam[c] for c in chains)
         f = min(1.0 + short / allowed, room)
         if f <= 1.0:
             return 0.0

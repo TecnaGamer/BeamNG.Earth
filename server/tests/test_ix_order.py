@@ -14,6 +14,9 @@ from gradeshapes import Member  # noqa: E402
 from ix import diffgraph, relax, s3_order  # noqa: E402
 
 
+CAP = gs.max_grade(Member("x", np.zeros((2, 2)), "deck", "secondary", 60, 1, 5.0, None))   # (the steepest a secondary may be built)
+
+
 def line(x0, y0, x1, y1, n=13):
     return np.stack([np.linspace(x0, x1, n), np.linspace(y0, y1, n)], axis=1)
 
@@ -84,8 +87,8 @@ def test_a_negative_cycle_is_eased_and_the_labels_hold():
 def flipping_road(near=2.5, arm=8.0):
     """R is one road: R1 (layer 1) then R2 (layer 3) joined at its middle; A (layer 2) passes under R2 and over R1 round
     a short U: over R1 where R is layer 1, under R2 where it is layer 3, the two crossings 2 x near apart along R, A's U
-    arm m long: 12.7 m of clearance to climb between them, in 2 x near of R and 2 x (near + arm) of A: more than a vehicle
-    drives at near = 2.5, arm = 8, a climb it can make at near = 20, arm = 30."""
+    arm m long: 12.7 m of clearance to climb between them, in 2 x near of R and 2 x (near + arm) of A: more than its class may be built
+    drives at near = 2.5, arm = 8, a climb it can make at near = 25, arm = 40."""
     return [deck("R1", line(-100, 0, 0, 0), 1), deck("R2", line(0, 0, 100, 0), 3),
             deck("A", [(-near, -100), (-near, arm), (near, arm), (near, -100)], 2)]
 
@@ -107,7 +110,7 @@ def test_a_layer_flip_along_a_continuous_road_gives_up_one_layer_decision():
 
 def test_a_loop_a_vehicle_can_drive_is_no_contradiction():
     # (the class's own grade law (6 %) cannot make 12.7 m in 40 m, a vehicle's (45 %) can: nothing is given up in the order)
-    net, systems = find(flipping_road(20.0, 30.0))
+    net, systems = find(flipping_road(25.0, 40.0))
     kept, dropped, deferred = s3_order.decide(net, systems[0])
     assert len(kept) == 2 and not dropped and not deferred
 
@@ -159,7 +162,7 @@ def test_the_dropped_decisions_are_in_the_artifact():
 # ---- the heights step ----
 
 def test_a_contradiction_a_vehicle_can_drive_is_eased_in_grade_and_no_decision_is_given_up():
-    net, systems = find(flipping_road(20.0, 30.0))
+    net, systems = find(flipping_road(25.0, 40.0))
     sysm = systems[0]            # (the order step not run: the contradicting decisions both stand)
     pcs = gs.pieces(net, sysm)
     smp = gs.sample(net, pcs)
@@ -170,7 +173,7 @@ def test_a_contradiction_a_vehicle_can_drive_is_eased_in_grade_and_no_decision_i
     # (12.7 m of climb in 130 m is a grade of 10 %: steeper than the class's law, a grade every vehicle drives: the road
     # climbs it, and no road is put through another)
     assert {r["kind"] for r in done} == {"grade"}, done
-    assert all(0.06 < float(r["text"].split(" to ")[1].split("%")[0]) / 100.0 <= relax.DRIVABLE for r in done)
+    assert all(0.06 < float(r["text"].split(" to ")[1].split("%")[0]) / 100.0 <= CAP for r in done)
     assert diag["feasible"] and diag["converged"]
 
 
@@ -183,15 +186,15 @@ def two_decks(need, level_a=1, level_b=2, grade=0.06):
 
 def test_a_decision_of_the_layers_is_given_up_after_the_grade_has_given_all_a_vehicle_drives():
     # (a climb the grade law can make: the grade eased, the decision kept)
-    net, pcs, smp, chains, cps = two_decks(need=20.0)
+    net, pcs, smp, chains, cps = two_decks(need=7.0)
     done = relax.Problem(net, pcs, smp, chains, cps, dict(bound={})).relax()
     assert {r.kind for r in done} == {"grade"}
-    # (more than a vehicle drives: the grade at what it drives, then the decision, whole)
-    net, pcs, smp, chains, cps = two_decks(need=40.0)
+    # (more than its class may be built: the grade at what it drives, then the decision, whole)
+    net, pcs, smp, chains, cps = two_decks(need=12.0)
     p = relax.Problem(net, pcs, smp, chains, cps, dict(bound={}))
     done = p.relax()
     assert sorted(r.kind for r in done) == ["grade", "grade", "layer"]
-    assert all(abs(r.amount + 0.06 - relax.DRIVABLE) < 1e-9 for r in done if r.kind == "grade")
+    assert all(abs(r.amount + 0.06 - CAP) < 1e-9 for r in done if r.kind == "grade")
     ch, cp = p.eased_problem()
     assert not [c for c in cp if c[4] == "ge"]
 
@@ -208,13 +211,13 @@ def test_a_loop_of_decisions_alone_gives_up_the_weakest_and_no_grade_is_touched(
 
 def test_an_infeasible_climb_is_relaxed_by_the_least_grade_excess():
     import carriageways
-    net, pcs, smp, chains, cps = two_chains(need=8.0)
+    net, pcs, smp, chains, cps = two_chains(need=6.0)
     p = relax.Problem(net, pcs, smp, chains, cps, dict(bound={}))
     done = p.relax()
     factors = {round(r.amount / 0.06 + 1.0, 6) for r in done}
     assert {r.kind for r in done} == {"grade"} and len(factors) == 1
     f = max(r.amount for r in done) / 0.06 + 1.0
-    assert abs(f - (8.0 + relax.SLACK_M) / (0.06 * 80.0)) < 1e-6
+    assert abs(f - (6.0 + relax.SLACK_M) / (0.06 * 80.0)) < 1e-6
     # (the kernel agrees: the eased laws have heights, the laws eased by a hair less still contradict)
     for under, feasible in ((0.97, False), (1.0, True)):
         ch, cp = p.eased_problem()
@@ -286,23 +289,23 @@ def test_the_weakest_law_in_a_contradiction_gives_way_first():
     assert sorted(r.kind for r in done) == ["ceiling", "floor"]
     assert all(abs(r.amount - 5.0005) < 1e-3 for r in done)
     # (a clearance over the length of two pieces, past what the grade allows: the grade law, before the clearance)
-    net, pcs, smp, chains, cps = two_chains(need=8.0)
+    net, pcs, smp, chains, cps = two_chains(need=6.0)
     p = relax.Problem(net, pcs, smp, chains, cps, dict(bound={}))
     done = p.relax()
     assert [r.kind for r in done] == ["grade", "grade"]
     f = done[0].amount / 0.06 + 1.0
-    assert abs(f - (8.0 + relax.SLACK_M) / (0.06 * 80.0)) < 1e-6          # (the least: 8 m over 80 m of road)
-    # (more than the grade law gives but less than a vehicle drives: still the grade, no road is put through the other)
-    net, pcs, smp, chains, cps = two_chains(need=20.0)
+    assert abs(f - (6.0 + relax.SLACK_M) / (0.06 * 80.0)) < 1e-6          # (the least: 6 m over 80 m of road)
+    # (more than the grade law gives but less than its class may be built: still the grade, no road is put through the other)
+    net, pcs, smp, chains, cps = two_chains(need=7.0)
     done = relax.Problem(net, pcs, smp, chains, cps, dict(bound={})).relax()
     assert [r.kind for r in done] == ["grade", "grade"]
-    # (more than a vehicle drives: the grade at what it drives, and the clearance for the rest)
-    net, pcs, smp, chains, cps = two_chains(need=40.0)
+    # (more than its class may be built: the grade at what it drives, and the clearance for the rest)
+    net, pcs, smp, chains, cps = two_chains(need=12.0)
     done = relax.Problem(net, pcs, smp, chains, cps, dict(bound={})).relax()
     assert sorted(r.kind for r in done) == ["clearance", "grade", "grade"]
-    assert all(abs(r.amount + 0.06 - relax.DRIVABLE) < 1e-9 for r in done if r.kind == "grade")
+    assert all(abs(r.amount + 0.06 - CAP) < 1e-9 for r in done if r.kind == "grade")
     gave = next(r.amount for r in done if r.kind == "clearance")
-    assert abs(gave - (40.0 + relax.SLACK_M - relax.DRIVABLE * 80.0)) < 1e-6
+    assert abs(gave - (12.0 + relax.SLACK_M - CAP * 80.0)) < 1e-6
     # (a floor with a clearance: the floor first, the clearance kept whole)
     net, pcs, smp, chains, cps = two_chains(lo=10.0, hi=0.0, need=3.0)
     done = relax.Problem(net, pcs, smp, chains, cps, dict(bound={})).relax()
@@ -361,7 +364,7 @@ def test_the_curve_law_is_not_eased_past_the_tightest_curve_the_laws_give_a_road
 def test_the_relaxation_is_deterministic():
     runs = []
     for _ in range(2):
-        net, systems = find(flipping_road(20.0, 30.0))
+        net, systems = find(flipping_road(25.0, 40.0))
         sysm = systems[0]
         pcs = gs.pieces(net, sysm)
         smp = gs.sample(net, pcs)
@@ -379,7 +382,7 @@ def test_no_pieces_no_relaxation():
 def test_the_relaxations_are_in_the_artifact_and_the_step_line():
     import logging
     from ix import pipeline, s6_heights
-    net, systems = find(flipping_road(20.0, 30.0))
+    net, systems = find(flipping_road(25.0, 40.0))
     sysm = systems[0]
     pcs = gs.pieces(net, sysm)
     smp = gs.sample(net, pcs)
@@ -417,7 +420,7 @@ def test_a_clearance_is_eased_no_further_than_the_structure_over_the_road():
 def test_a_first_attempt_that_is_relaxed_is_not_logged_as_a_miss(caplog):
     import logging
     import carriageways
-    net, pcs, smp, chains, cps = two_chains(need=8.0)
+    net, pcs, smp, chains, cps = two_chains(need=6.0)
     with caplog.at_level(logging.WARNING, logger="earthd.grading"):
         info = {}
         carriageways.solve(chains, cps, diagnostics=info, quiet=True)
@@ -426,7 +429,7 @@ def test_a_first_attempt_that_is_relaxed_is_not_logged_as_a_miss(caplog):
         assert len(caplog.records) == 1 and "feasible=False" in caplog.records[0].getMessage()
         caplog.clear()
         # (the whole flow: the system is relaxed, solved, and the log has no line of a miss)
-        net, systems = find(flipping_road(20.0, 30.0))
+        net, systems = find(flipping_road(25.0, 40.0))
         sysm = systems[0]
         pcs = gs.pieces(net, sysm)
         smp = gs.sample(net, pcs)
@@ -435,11 +438,7 @@ def test_a_first_attempt_that_is_relaxed_is_not_logged_as_a_miss(caplog):
         assert diag["first"]["status"] == "PrimalInfeasible" and not caplog.records
 
 
-def test_what_a_vehicle_drives_is_the_mods_limit():
-    import re
+def test_the_grade_a_road_is_eased_to_is_its_class_s_and_no_mod_number():
     import gradelaw
-    lua = os.path.join(os.path.dirname(os.path.dirname(HERE)), "mod", "beamng_earth", "lua", "ge", "extensions", "beamngEarth",
-                       "navgraph.lua")
-    with open(lua, encoding="utf-8") as f:
-        got = re.search(r"^M\.MAX_GRADE\s*=\s*([0-9.]+)", f.read(), re.M)
-    assert got and float(got.group(1)) == gradelaw.DRIVABLE_GRADE == relax.DRIVABLE
+    assert not hasattr(gradelaw, "DRIVABLE_GRADE")
+    assert gs.max_grade(Member("m", np.zeros((2, 2)), "ground", "motorway", 110, 0, 5.0, None)) < CAP < 0.2

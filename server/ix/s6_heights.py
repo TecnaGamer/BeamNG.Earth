@@ -14,7 +14,7 @@ log = logging.getLogger("earthd.grading")
 FORMAT = 4
 LAWS = (("gradeshapes", ["STEP_M", "DECK_MAX_GRADE", "DECK_AIR_M", "SOFT_M", "DIP_MARGIN_M", "RAMP_MAX_M", "W_END",
                          "W_HOLD", "W_DIP", "W_SMOOTH", "W_STIFF", "W_JOIN", "R_MIN_ROAD_M", "R_MIN_RAIL_M"]),
-        ("gradelaw", ["DRIVABLE_GRADE"]))
+        ("gradelaw", ["GAME_GRADE_PLUS"]))
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 6
 
