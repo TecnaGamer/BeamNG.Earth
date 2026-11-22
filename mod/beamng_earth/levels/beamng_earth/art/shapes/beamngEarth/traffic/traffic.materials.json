@@ -34,5 +34,761 @@
     "translucentZWrite": false,
     "castShadows": false,
     "doubleSided": true
+  },
+  "proxy_body_white": {
+    "name": "proxy_body_white",
+    "mapTo": "proxy_body_white",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.86,
+          0.86,
+          0.84,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_body_black": {
+    "name": "proxy_body_black",
+    "mapTo": "proxy_body_black",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.05,
+          0.05,
+          0.06,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_body_silver": {
+    "name": "proxy_body_silver",
+    "mapTo": "proxy_body_silver",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.63,
+          0.65,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_body_grey": {
+    "name": "proxy_body_grey",
+    "mapTo": "proxy_body_grey",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.33,
+          0.34,
+          0.36,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_body_blue": {
+    "name": "proxy_body_blue",
+    "mapTo": "proxy_body_blue",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.1,
+          0.17,
+          0.35,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_body_red": {
+    "name": "proxy_body_red",
+    "mapTo": "proxy_body_red",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.55,
+          0.07,
+          0.06,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_body_beige": {
+    "name": "proxy_body_beige",
+    "mapTo": "proxy_body_beige",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.7,
+          0.64,
+          0.52,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_body_green": {
+    "name": "proxy_body_green",
+    "mapTo": "proxy_body_green",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.12,
+          0.24,
+          0.16,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_tire": {
+    "name": "proxy_tire",
+    "mapTo": "proxy_tire",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.035,
+          0.04,
+          0.045,
+          1
+        ],
+        "roughnessFactor": 0.92
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_pickup_body_white": {
+    "name": "proxy_pickup_body_white",
+    "mapTo": "proxy_pickup_body_white",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.86,
+          0.86,
+          0.84,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_pickup_body_black": {
+    "name": "proxy_pickup_body_black",
+    "mapTo": "proxy_pickup_body_black",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.05,
+          0.05,
+          0.06,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_pickup_body_silver": {
+    "name": "proxy_pickup_body_silver",
+    "mapTo": "proxy_pickup_body_silver",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.63,
+          0.65,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_pickup_body_grey": {
+    "name": "proxy_pickup_body_grey",
+    "mapTo": "proxy_pickup_body_grey",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.33,
+          0.34,
+          0.36,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_pickup_body_blue": {
+    "name": "proxy_pickup_body_blue",
+    "mapTo": "proxy_pickup_body_blue",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.1,
+          0.17,
+          0.35,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_pickup_body_red": {
+    "name": "proxy_pickup_body_red",
+    "mapTo": "proxy_pickup_body_red",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.55,
+          0.07,
+          0.06,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_pickup_body_beige": {
+    "name": "proxy_pickup_body_beige",
+    "mapTo": "proxy_pickup_body_beige",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.7,
+          0.64,
+          0.52,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_pickup_body_green": {
+    "name": "proxy_pickup_body_green",
+    "mapTo": "proxy_pickup_body_green",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.12,
+          0.24,
+          0.16,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_suv_body_white": {
+    "name": "proxy_suv_body_white",
+    "mapTo": "proxy_suv_body_white",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.86,
+          0.86,
+          0.84,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_suv_body_black": {
+    "name": "proxy_suv_body_black",
+    "mapTo": "proxy_suv_body_black",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.05,
+          0.05,
+          0.06,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_suv_body_silver": {
+    "name": "proxy_suv_body_silver",
+    "mapTo": "proxy_suv_body_silver",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.63,
+          0.65,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_suv_body_grey": {
+    "name": "proxy_suv_body_grey",
+    "mapTo": "proxy_suv_body_grey",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.33,
+          0.34,
+          0.36,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_suv_body_blue": {
+    "name": "proxy_suv_body_blue",
+    "mapTo": "proxy_suv_body_blue",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.1,
+          0.17,
+          0.35,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_suv_body_red": {
+    "name": "proxy_suv_body_red",
+    "mapTo": "proxy_suv_body_red",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.55,
+          0.07,
+          0.06,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_suv_body_beige": {
+    "name": "proxy_suv_body_beige",
+    "mapTo": "proxy_suv_body_beige",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.7,
+          0.64,
+          0.52,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_suv_body_green": {
+    "name": "proxy_suv_body_green",
+    "mapTo": "proxy_suv_body_green",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.12,
+          0.24,
+          0.16,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_van_body_white": {
+    "name": "proxy_van_body_white",
+    "mapTo": "proxy_van_body_white",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.86,
+          0.86,
+          0.84,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_van_body_black": {
+    "name": "proxy_van_body_black",
+    "mapTo": "proxy_van_body_black",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.05,
+          0.05,
+          0.06,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_van_body_silver": {
+    "name": "proxy_van_body_silver",
+    "mapTo": "proxy_van_body_silver",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.63,
+          0.65,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_van_body_grey": {
+    "name": "proxy_van_body_grey",
+    "mapTo": "proxy_van_body_grey",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.33,
+          0.34,
+          0.36,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_van_body_blue": {
+    "name": "proxy_van_body_blue",
+    "mapTo": "proxy_van_body_blue",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.1,
+          0.17,
+          0.35,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_van_body_red": {
+    "name": "proxy_van_body_red",
+    "mapTo": "proxy_van_body_red",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.55,
+          0.07,
+          0.06,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_van_body_beige": {
+    "name": "proxy_van_body_beige",
+    "mapTo": "proxy_van_body_beige",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.7,
+          0.64,
+          0.52,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "proxy_van_body_green": {
+    "name": "proxy_van_body_green",
+    "mapTo": "proxy_van_body_green",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.12,
+          0.24,
+          0.16,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0.45,
+        "clearCoatFactor": 0.5,
+        "clearCoatRoughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
   }
 }
