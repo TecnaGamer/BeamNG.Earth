@@ -10981,7 +10981,21 @@ def tunnel_floor_at(parts, x, y):
 
 def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
     """arch_raise for ground heights at the points (la, lo) of a block in the anchor-frame box (x0, y0, x1, y1),
-    the tunnels from the map cells under it. z as it was when the cells are not at hand."""
+    the tunnels from the map cells under it. z as it was when the cells are not at hand. BNE_ROADSYS=structures: then
+    the ground under the decks' ground ends lowered (roadsys.handover_drop: every evaluator of the physics ground is
+    one of this function's callers, so the blocks, the skins and the decks' hand-over agree node for node)."""
+    z = _block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box)
+    if roadsys.STRUCTURES:
+        try:
+            z = np.asarray(z, np.float64) - roadsys.handover_drop(frame, cell_fn, la, lo)
+        except Exception as ex:     # no drop rather than no ground (nothing built with it kept)
+            (log.debug if isinstance(ex, OSError) else log.warning)("deck ends' hand-over: %s: %s", type(ex).__name__, ex)
+            import revisit
+            revisit.fault()
+    return z
+
+
+def _block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
     try:
         x0, y0, x1, y1 = box
         cla, clo, _ = frame.enu_to_geodetic(np.array([x0, x1]), np.array([y0, y1]), np.zeros(2))
@@ -15440,11 +15454,15 @@ def _unwrap(res):
 
 def geo_exact_auto(tile_frame, frame, parts):
     """{what: {pivot}} of a fresh content's parts (parts: {what: {pivot, relief, col}}) whose base shape placed rigidly
-    in frame's world would be off by more than their tolerance (EXACT_TOL_COL_M colliding, EXACT_TOL_M else)."""
+    in frame's world would be off by more than their tolerance (EXACT_TOL_COL_M colliding, EXACT_TOL_M else), and
+    every part marked "ho" (BNE_ROADSYS=structures: the deck, rebuilt round its ends on the anchor's lattice)."""
     import geotiles
     out = {}
     for what, part in (parts or {}).items():
         piv = float(part.get("pivot", 0.0))
+        if part.get("ho"):          # (BNE_ROADSYS=structures: a deck handing over to the anchor's own lattice, always)
+            out[what] = {"pivot": piv}
+            continue
         _r, _t, c = geotiles.placement(tile_frame, frame, (0.0, 0.0, piv))
         tol = EXACT_TOL_COL_M if part.get("col") else EXACT_TOL_M
         if float(part.get("relief", 0.0)) * float(dnp.hypot(c[0], c[1])) > tol:

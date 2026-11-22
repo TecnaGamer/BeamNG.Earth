@@ -477,6 +477,10 @@ def keyed_env(k):
 # BNE_ROADSYS 2 (heights, M3, 2026-11-22): crossings beside a deck no floor, a branch past its nose on its trunk, the
 # active set's releases, floors with today's headroom and the deck's own drawn depth (drawn so too), terrain targets
 # only round deck ends and floors, chains lifted onto their abutments' approach fills (earthfast 602).
+# BNE_ROADSYS=structures 1 (M3 structures, 2026-11-22): heights, the ground under the decks' ground ends dropped and
+# the decks' exact variants rebuilt round them on each anchor's lattice (earthfast 603); keyed as "2s1" (heights'
+# version and its own).
+ROADSYS_STRUCTURES_VERSION = 1
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
                    "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 2}
@@ -487,6 +491,8 @@ def keyed_value(k, v):
     SWITCH_VERSIONS version after it when it has one."""
     # The surface generation includes the supporting deck and its parapet outline.
     n = 8 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
+    if k == "BNE_ROADSYS" and v.strip().lower() == "structures":
+        n = f"{n}s{ROADSYS_STRUCTURES_VERSION}"     # (heights' meaning and its own: either moves its keys)
     if k in ("BNE_SIDEWALK_V2", "BNE_SURFACE_V2") and v.strip().lower() in ("on", "1", "yes", "true"):
         n = 2
     if (k, v) == ("BNE_ROADSHAPE", "profile") and os.environ.get("BNE_ROADSURF_V3") == "surface":

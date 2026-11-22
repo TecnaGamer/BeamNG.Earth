@@ -421,5 +421,146 @@ class SwitchTest(unittest.TestCase):
         self.assertIn("if roadsys.SHADOW:", src[i - 200:i])
 
 
+def _ends(bridges, grounds, tunnels=(), s=1.0):
+    return fast._ef.RoadsysEnds([(np.asarray(p, np.float64), hw) for p, hw in bridges],
+                                [(np.asarray(p, np.float64), hw) for p, hw in grounds],
+                                [np.asarray(p, np.float64) for p in tunnels], s)
+
+
+def _deck(x0, x1, hw, z, step=2.0):
+    """A flat deck top (material 1) from x0 to x1, |y - 0.2| <= hw, in rows of step m: (p, uv, t, m)."""
+    P, T = [], []
+    x = x0
+    while x < x1 - 1e-9:
+        xn = min(x + step, x1)
+        b = len(P)
+        P += [[x, 0.2 - hw, z], [xn, 0.2 - hw, z], [xn, 0.2 + hw, z], [x, 0.2 + hw, z]]
+        T += [[b, b + 1, b + 2], [b, b + 2, b + 3]]
+        x = xn
+    P = np.asarray(P, np.float64)
+    return P, np.zeros((len(P), 2)), np.asarray(T, np.int64), np.ones(len(T), np.int64)
+
+
+@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 603, "earthfast 603 (roadsys structures, M3) required")
+class StructuresTest(unittest.TestCase):
+    """BNE_ROADSYS=structures (M3): heights plus the deck ends' hand-over; keyed apart from heights; the ground's drop a
+    function of the map's parts alone (any order, any copies, any batch); the deck's top meets the terrain's own nodes."""
+
+    def test_structures_is_heights_and_more(self):
+        import roadsys
+        with mock.patch.dict(os.environ, {"BNE_ROADSYS": "structures"}):
+            importlib.reload(roadsys)
+            self.assertTrue(roadsys.HEIGHTS and roadsys.STRUCTURES)
+            self.assertFalse(roadsys.SHADOW)
+        with mock.patch.dict(os.environ, {"BNE_ROADSYS": "heights"}):
+            importlib.reload(roadsys)
+            self.assertTrue(roadsys.HEIGHTS)
+            self.assertFalse(roadsys.STRUCTURES)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("BNE_ROADSYS", None)
+            importlib.reload(roadsys)
+            self.assertFalse(roadsys.STRUCTURES)
+            self.assertEqual(roadsys.handover_drop(None, None, np.zeros(3), np.zeros(3)).tolist(), [0.0] * 3)
+        importlib.reload(roadsys)
+
+    def test_keyed_apart_from_heights(self):
+        h = revisit.keyed_value("BNE_ROADSYS", "heights")
+        st = revisit.keyed_value("BNE_ROADSYS", "structures")
+        self.assertNotEqual(h, st)
+        self.assertIn(f"s{revisit.ROADSYS_STRUCTURES_VERSION}", st)
+        self.assertIn(f"@v{revisit.SWITCH_VERSIONS['BNE_ROADSYS']}", st, "heights' meaning moves it too")
+        keys = {}
+        for v in ("heights", "structures"):
+            with mock.patch.dict(os.environ, {"BNE_ROADSYS": v}):
+                revisit._switches.clear()
+                keys[v] = (revisit.switches_key(), revisit.plans_switches_key())
+        revisit._switches.clear()
+        self.assertNotEqual(keys["heights"][0], keys["structures"][0])
+        self.assertNotEqual(keys["heights"][1], keys["structures"][1])
+
+    def test_every_ground_evaluator_drops_alike(self):
+        """roads.block_arch_raise (the blocks', the skins' and the content's drawn ground) is the one place the drop is
+        applied; the exact deck reads its nodes through heightmap.surface and the same drop."""
+        src = (HERE / "roads.py").read_text(encoding="utf-8")
+        i = src.index("def block_arch_raise(")
+        self.assertIn("roadsys.handover_drop(frame, cell_fn, la, lo)", src[i:i + 1500])
+        bw = (HERE / "blockworker.py").read_text(encoding="utf-8")
+        for caller in ("def gen(la, lo):", "def drawn(la, lo):"):
+            j = bw.index(caller)
+            self.assertIn("block_arch_raise(", bw[j:j + 400])
+        j = bw.index("def _deck_handover(")
+        body = bw[j:j + 6000]
+        self.assertIn("heightmap.surface(fr, drawn, xs, ys, keep)", body)
+        self.assertIn('roadsys.handover_drop(fr, cell_fn, keep["lat"], keep["lon"])', body)
+        self.assertIn("np.rint(np.asarray(u, np.float64) * (1.0 / q)) * q", body)
+
+    def test_ends_are_the_maps_alone(self):
+        deck = ([[0.3, 0.2], [60.0, 0.2]], 4.0)
+        app = ([[-40.0, 0.2], [0.3, 0.2]], 4.0)
+        far = ([[60.0, 0.2], [90.0, 0.2]], 4.0)     # (the far end goes on as another deck: no ground end)
+        other = ([[4.0, -30.0], [4.0, 30.0]], 0.4)  # (a road crossing under it keeps its ground)
+        section = ([[0.3, 0.2], [30.0, 0.2]], 4.0)  # (a copy of the deck from its end: the same end)
+        x = np.linspace(-5, 30, 141)
+        y = np.concatenate([np.zeros(141), np.full(141, 3.9), np.full(141, 4.6)])
+        x = np.tile(x, 3)
+        a = _ends([deck, far], [app, other])
+        b = _ends([far, deck, section, deck], [other, app, app])
+        self.assertEqual(a.count(), 1)
+        da, db = a.drops(x, y), b.drops(x, y)
+        self.assertEqual(da.tobytes(), db.tobytes())
+        # one point at a time: the same values (no batch effects)
+        one = np.array([a.drops(np.array([u]), np.array([v]))[0] for u, v in zip(x, y)])
+        self.assertEqual(one.tobytes(), da.tobytes())
+        self.assertTrue((da[(x < 1.5) & (y == 0)] == 0).all())
+        self.assertTrue((da[(x > 2) & (x < 5) & (abs(x - 4) > 1.0) & (y == 0)] > 0).all())
+        self.assertTrue((da[(abs(x - 4) < 0.8) & (y == 0)] == 0).all(), "the crossing road's surface keeps its ground")
+        self.assertTrue((da[(x > 9) & (y == 0)] == 0).all(), "only the hand-over's metres")
+        self.assertTrue((da[y == 4.6] == 0).all(), "beside the deck")
+
+    def test_the_deck_meets_the_terrains_own_nodes(self):
+        """The zone's free edges toward the approach lie on lattice edges at the terrain's quantised node heights (a 0 mm
+        lip) though the deck stood 3 cm over its ground; its slab past the end cleared; the same bytes twice."""
+        ends = _ends([([[0.3, 0.2], [60.0, 0.2]], 4.0)], [([[-40.0, 0.2], [0.3, 0.2]], 4.0)])
+        i0, j0, n = -45, -20, 90
+        xs, ys = np.meshgrid((i0 + np.arange(n)).astype(float), (j0 + np.arange(n)).astype(float))
+        drop = ends.drops(xs.ravel(), ys.ravel()).reshape(n, n)
+        q = 1.0 / 64
+        z = np.rint((10.0 + 0.01 * xs) / q) * q - drop
+        P, UV, T, M = _deck(0.3, 40.0, 4.45, 0.0)
+        P[:, 2] = 10.03 + 0.01 * P[:, 0]
+        P2, UV2, T2, M2 = _deck(-5.0, 0.3, 4.45, 0.0)
+        P2[:, 2] = 10.02 + 0.01 * P2[:, 0]
+        P = np.vstack([P, P2]); UV = np.vstack([UV, UV2]); T = np.vstack([T, T2 + len(P) - len(P2)]); M = np.concatenate([M, M2])
+        out = fast._ef.roadsys_handover_zone(ends, P, UV, T, M, 1, i0, j0, 1.0, z, drop, 4.0)
+        again = fast._ef.roadsys_handover_zone(ends, P, UV, T, M, 1, i0, j0, 1.0, z, drop, 4.0)
+        for a, b in zip(out[:4], again[:4]):
+            self.assertEqual(np.asarray(a).tobytes(), np.asarray(b).tobytes())
+        p, t = np.asarray(out[0]), np.asarray(out[2])
+        self.assertFalse(((p[:, 0] < 0) & (p[:, 2] < 11)).any(), "the slab past the end is cleared")
+        edges = {}
+        for tri in t:
+            for k in range(3):
+                a, b = tuple(np.round(p[tri[k]] * 1000).astype(int)), tuple(np.round(p[tri[(k + 1) % 3]] * 1000).astype(int))
+                if a != b:
+                    key = (min(a, b), max(a, b))
+                    edges[key] = edges.get(key, 0) + 1
+        free = [(np.array(a) / 1000, np.array(b) / 1000) for (a, b), c in edges.items() if c == 1]
+        near = [(a, b) for a, b in free if max(a[0], b[0]) < 3.0 and abs((a[1] + b[1]) / 2 - 0.2) < 3.0]
+        self.assertTrue(near)
+        ter = lambda x: np.rint((10.0 + 0.01 * x) / q) * q   # noqa: E731
+        for a, b in near:
+            self.assertTrue(a[0] == round(a[0]) and b[0] == round(b[0]) or a[1] == round(a[1]) and b[1] == round(b[1]))
+            self.assertAlmostEqual(a[2], ter(a[0]), places=3)
+            self.assertAlmostEqual(b[2], ter(b[0]), places=3)
+
+    def test_exact_always_for_a_handing_over_deck(self):
+        import geotiles
+        import roads
+        tf = geotiles.frame(*geotiles.parse("g17_22540_52454")[1:])
+        got = roads.geo_exact_auto(tf, tf, {"deck": {"pivot": 3.0, "relief": 0.0, "col": True, "ho": True},
+                                            "bld": {"pivot": 3.0, "relief": 0.0}})
+        self.assertEqual(got, {"deck": {"pivot": 3.0}})
+
+
 if __name__ == "__main__":
     unittest.main()

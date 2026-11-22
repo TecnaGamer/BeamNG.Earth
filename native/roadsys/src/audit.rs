@@ -435,6 +435,10 @@ pub fn audit(sc: &Scene) -> Metrics {
         }
         if intr {
             m.add("envelope_intrusion_m2", area);
+            if std::env::var("ROADSYS_AUDIT_DUMP").is_ok() {
+                let ks: Vec<usize> = (0..10).filter(|&k| intr_kind[k]).collect();
+                eprintln!("EN {:.1} {:.1} lvl {} drive {:.2} kinds {:?}", x, y, s.level, drive, ks);
+            }
             for (kind, name) in [(KIND_BARRIER, "envelope_intrusion_barrier_m2"), (KIND_DECK, "envelope_intrusion_deck_m2"),
                                  (KIND_WALK, "envelope_intrusion_walk_m2"), (KIND_WALKCOL, "envelope_intrusion_walk_m2"),
                                  (KIND_TUNNEL, "envelope_intrusion_tunnel_m2"), (KIND_RAIL, "envelope_intrusion_rail_m2"),
@@ -465,7 +469,10 @@ pub fn audit(sc: &Scene) -> Metrics {
                 let Some((zl, zh)) = clip_z(t, x - e, y - e, x + e, y + e) else { continue };
                 if zl <= drive + 1.0 && zh >= drive + 2.0 && zh > drive - 0.3 { pier = true; break; }
             }
-            if pier { m.add("pier_in_face_m2", area); }
+            if pier {
+                m.add("pier_in_face_m2", area);
+                if std::env::var("ROADSYS_AUDIT_DUMP").is_ok() { eprintln!("PI {:.1} {:.1} drive {:.2} over {:.2}", x, y, drive, over_min); }
+            }
         }
     }
     if !r2r.is_empty() {
