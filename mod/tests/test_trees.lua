@@ -216,14 +216,16 @@ do
     behindBy = function(p, d, cx, cy, half)
       return -((cx - p.x) * d.x + (cy - p.y) * d.y) - half * (math.abs(d.x) + math.abs(d.y))
     end,
-    requestCollision = function(d, late) reqs[#reqs + 1] = d and { d[1], d[2], d[3], d[4], d[5], d[6], late = late } or false end }
+    requestCollision = function(d) reqs[#reqs + 1] = d or false end,
+    requestLate = function(pts) reqs[#reqs + 1] = { late = true, pts = pts } end }
   T.check(trees.reachRadius(0) == trees.SOLID_M and trees.reachRadius(40) == 320, 'reach radius: SOLID_M, 8 s at speed')
   trees.update(1, { x = 128, y = 420, speed = 0 })
   T.check(count() == 3 and solidAt() == '250', 'reach: the tile near (164 m), only its item 170 m off solid (' .. solidAt() .. ')')
   reqs = {}
   trees.update(1, { x = 128, y = 395, speed = 0 })
-  T.check(solidAt() == '200,250' and type(reqs[#reqs]) == 'table' and reqs[#reqs].late == true and reqs[#reqs][2] == 200,
-    'reach: 25 m on, the one 195 m off solid too, in a late box (due within hardReach if no rebuild came first)')
+  T.check(solidAt() == '200,250' and type(reqs[#reqs]) == 'table' and reqs[#reqs].late == true
+    and #reqs[#reqs].pts == 2 and reqs[#reqs].pts[2] == 200,
+    'reach: 25 m on, the one 195 m off solid too, sent as a late point (due within hardReach if no rebuild came first)')
   local rows = trees.lastRows
   trees.update(1, { x = 128, y = 388, speed = 0 })
   T.check(trees.lastRows == 0 and solidAt() == '200,250', 'reach: 7 m on (< REACH_STEP_M): rows not looked at again')
@@ -234,13 +236,22 @@ do
   reqs = {}
   trees.update(1, { x = 128, y = 476, speed = 40 })   -- (a pass needs RECHECK_M of moving or RECHECK_S)
   T.check(solidAt() == '200,250', 'reach at 40 m/s: 320 m (SOLID_LEAD_S), the 276 m one solid again')
-  T.check(#reqs > 0 and type(reqs[#reqs]) == 'table' and reqs[#reqs].late == true, 'reach at speed: made solid 276 m off, a late box')
+  T.check(#reqs > 0 and type(reqs[#reqs]) == 'table' and reqs[#reqs].late == true, 'reach at speed: made solid 276 m off, a late point')
   trees.update(1, { x = 128, y = 482, speed = 70 })
   T.check(solidAt() == '10,200,250', 'reach at 70 m/s: 560 m, every item')
   -- heading away from the items (+y): every item behind the car by more than BEHIND_M: none solid
   dir = { x = 0, y = 1 }
   trees.update(1, { x = 128, y = 320, speed = 20 })
   T.check(solidAt() == '', 'reach: heading away, items behind by their own position: none (' .. solidAt() .. ')')
+  -- the tile not behind (its near edge 19 m behind the car), its items 25 and 75 m behind it: by their own position
+  trees.update(1, { x = 128, y = 275, speed = 20 })
+  T.check(solidAt() == '', 'reach: the tile level with the car, its items behind it by their own position: none')
+  trees.REACH_BEHIND = false
+  trees.update(1, { x = 153, y = 275, speed = 20 })
+  T.check(solidAt() == '200,250', 'reach, REACH_BEHIND off: behind by their own position, solid (the tile is not behind)')
+  trees.REACH_BEHIND = true
+  trees.update(1, { x = 128, y = 305, speed = 20 })     -- (55 m behind: past BEHIND_M + BEHIND_HYST_M)
+  T.check(solidAt() == '', '(REACH_BEHIND on again: none)')
   dir = { x = 0, y = -1 }
   reqs = {}
   trees.update(1, { x = 128, y = 310, speed = 20 })
