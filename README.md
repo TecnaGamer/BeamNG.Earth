@@ -468,7 +468,10 @@ connection (the map is downloaded while you play).
    - **Linux, native game:** started with the engine patches (`tools/gcpatch`: grass kept across block moves,
      steady game speed (dtsmooth: no catch-up burst after a hitch), shorter ground block swaps (terfast), lighter
      frames after a swap (texkeep: unchanged ground textures kept)) already applied, no Steam launch options needed.
-     On Windows the launcher applies dtsmooth and terfast to the running game.
+     On Windows the launcher applies dtsmooth and terfast to the running game. The patches find the engine's code by
+     its instructions, so a game update that leaves those functions as they were keeps them; a patch that does not
+     apply (a game update changed its code) is named in the launcher's window and in a warning in the game, and the
+     game runs without it.
    - **Linux, Windows build under Proton:** the AppImage sees the Proton setting and starts that build through
      Steam (the server runs natively). The `.exe` also works inside the game's Proton prefix (for example with
      protontricks' launcher).

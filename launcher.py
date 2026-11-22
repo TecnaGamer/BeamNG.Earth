@@ -1733,6 +1733,64 @@ def watch_game_log(user_dir, since):
     threading.Thread(target=run, name="watch-game-log", daemon=True).start()
 
 
+# The engine patches' status files (tools/gcpatch: Linux; enginepatch.py / enginepatch_terfast.py: Windows), one line
+# "<unix time> ...: <state>" each, written at the game's start and again whenever the BeamNG.Earth level starts. A patch
+# that does not apply (a game update it does not recognise: BeamNG 0.40.6 dropped terfast and texkeep unseen, 2026-11-22)
+# is said here as a problem, not left in a file nobody reads; the mod says it in the game too (enginepatches.lua).
+ENGINE_PATCHES = {"gcpatch": "grass kept across terrain block moves", "texkeep": "faster ground texture updates",
+                  "terfast": "faster terrain block swaps", "dtsmooth": "steady game speed"}
+PATCH_WATCH_S = 600         # s after the game's start the status files are watched (Windows: the attach waits for the game)
+
+
+def patch_state(text, since=None):
+    """(state, message) of a status file's text: "on", "off", "failed" or "none" (no line, or one from before since);
+    the same rules as the mod's enginepatches.classify."""
+    line = (text or "").splitlines()[0] if (text or "").strip() else ""
+    head, sep, msg = line.partition(":")
+    try:
+        t = int(head.split()[0])
+    except (ValueError, IndexError):
+        return "none", None
+    msg = msg.strip()
+    if not sep or (since is not None and t < since - 3):
+        return "none", None
+    low = msg.lower()
+    if any(k in low for k in ("half applied", "not applied", "could not be patched", "no thread")) or \
+            low.startswith("stopped"):
+        return "failed", msg
+    if low.startswith("off"):
+        return "off", msg
+    if low.startswith(("applied", "ready", "stock", "installed", "already applied")):
+        return "on", msg
+    return "failed", msg
+
+
+def watch_patch_status(user_dir, since, names=tuple(ENGINE_PATCHES)):
+    """In the background: each engine patch's first status line of this game start; a failed one is a problem."""
+    def run():
+        left, t0 = set(names), time.time()
+        while left and time.time() - t0 < PATCH_WATCH_S:
+            time.sleep(2)
+            for name in sorted(left):
+                try:
+                    with open(os.path.join(user_dir, "temp", f"beamngEarth_{name}.txt"), errors="replace") as f:
+                        state, msg = patch_state(f.read(), since)
+                except OSError:
+                    continue
+                if state == "none":
+                    continue
+                left.discard(name)
+                if state == "failed":
+                    problem(f"Engine patch {name} ({ENGINE_PATCHES[name]}) is NOT applied: {msg}",
+                            "The game runs without it (it still works; this part can be slower). This BeamNG.drive "
+                            "version is probably newer than this BeamNG.Earth: an update of BeamNG.Earth brings it "
+                            "back. (Status: temp/beamngEarth_%s.txt in the game's user folder.)" % name)
+                else:
+                    row("Engine patch", f"{name}: {state}")
+
+    threading.Thread(target=run, name="watch-patch-status", daemon=True).start()
+
+
 def game_launcher_running():
     """Windows: BeamNG's own launcher (BeamNG.drive.exe, its renderer / launch options window) is open: the game is
     starting, however long the player takes there."""
@@ -2751,8 +2809,12 @@ def run(args):
             if wine:
                 say("(under Wine / Proton: on Linux the AppImage runs the server natively, faster)")
             clear_level_flag(user_dir)
+            started_at = time.time()
             proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir, steam_args,
                               meanwhile=follow_server if early else None, launch=launch)
+            if user_dir and not args.no_gcpatch:
+                # (Linux: the preload library's four; Windows: the launcher's two, attached below)
+                watch_patch_status(user_dir, started_at, ("dtsmooth", "terfast") if IS_WIN else tuple(ENGINE_PATCHES))
         if IS_WIN and not args.no_gcpatch:
             # the Windows game's engine patches, written into its memory once it runs (enginepatch.py: dtsmooth; off
             # with BNGEARTH_DTSMOOTH_WIN=0 or BNGEARTH_DTSMOOTH_OFF=1)

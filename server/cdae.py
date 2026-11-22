@@ -463,13 +463,34 @@ def _sorted_tris(tris, tri_materials, nmat):
     return T[np.argsort(TM, kind="stable")], np.sort(TM, kind="stable")
 
 
+# Colliders off the axis-aligned lattice (native unalign.rs, 2026-11-22): BeamNG's Windows collision build degenerates on
+# a regular axis-aligned grid of triangles (an 8k-triangle grid 145-171 ms a reloadCollision, 32k 1.1-1.4 s; the same
+# grid jittered +-5 cm or turned: 4 ms), and several of our colliders are such grids (terrain patches, station walk
+# zones, town paving, 3dmr bridge slabs along N-S / E-W). Every vertex of a collision mesh moves horizontally by a hash
+# of its own position (at most this much each axis, z unchanged): coincident vertices move together (closed meshes and
+# seams in one frame stay exact), the surface at a point moves by at most this times its slope. 0: off. Measured on the
+# Windows test PC (0.40.5, 2026-11-22, a wavy 8k / 32k grid): 141-168 / 1195-1221 ms -> 5 / 11-12 ms at 0.5 mm, the same
+# at 2 mm and 1 cm; a deck-like axis-aligned strip (5 columns, 2 m rows) 195-207 / 911-924 ms -> 5-9 / 10-12 ms at 2 mm.
+COLLIDER_UNALIGN_M = float(os.environ.get("BNE_COLLIDER_UNALIGN_M", "") or 0.001)
+UNALIGN_NATIVE = 595
+
+
+def unalign(positions):
+    """positions (n, 3) of a collider moved off the lattice (COLLIDER_UNALIGN_M), float32; as given when off."""
+    if not COLLIDER_UNALIGN_M:
+        return positions
+    fast.require(UNALIGN_NATIVE, "collider_unalign")
+    return fast._ef.collider_unalign(np.ascontiguousarray(np.asarray(positions, np.float64).reshape(-1, 3)),
+                                     COLLIDER_UNALIGN_M)
+
+
 LOD_TOP_SIZE = 2.0          # px: the size of the one (or the last, coarsest) detail level, as the engine's own files
 
 
 @profile_step('Native shape encoding')
 def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2=None,
            tangent_uvs=None, object_name="tile", tri_materials=None, colors=None, collision_only=False, lods=None,
-           collisions=None, close=False, open_tris=None, packed=None, parts=None, split_drawn=False):
+           collisions=None, close=False, open_tris=None, packed=None, parts=None, split_drawn=False, unaligned=None):
     """Shape bytes for one static mesh, laid out exactly as the engine writes a compiled
     Collada file with the same geometry.
 
@@ -505,7 +526,9 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     a shape whose vertices are past the engine's 16-bit indices (VERTS_MAX: each mesh's own index buffer) as several
     meshes under it. All meshes split after closing and shading. split_drawn preserves the junction road
     writer's first-use vertex order in an oversized primary mesh.
-    Neither option supports collision_only, lods or collisions."""
+    Neither option supports collision_only, lods or collisions.
+    unaligned: the mesh moved off the axis-aligned lattice (unalign: a collider); None = for collision_only and every
+    collisions mesh (a drawn mesh used as its own collider, "Visible Mesh Final", passes True)."""
     if collision_only:
         object_name = "Colmesh"
         lods = None
@@ -546,6 +569,10 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
         collisions = [_closed(Pc, Tc, TMc, None, None, None, None, None, close)[:3]
                       for Pc, Tc, TMc in collisions] if collisions else collisions
         parts = [_closed_lod(d, close) for d in parts]
+    if unaligned or (unaligned is None and collision_only):
+        positions = unalign(positions)
+    if collisions and unaligned is not False:
+        collisions = [(unalign(Pc), Tc, TMc) for Pc, Tc, TMc in collisions]
     P = np.asarray(positions, np.float64).reshape(-1, 3)
     T, TM = _sorted_tris(tris, tri_materials, nmat)
     levels = [_mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors, split_drawn)]

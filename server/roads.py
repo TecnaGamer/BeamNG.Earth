@@ -15542,12 +15542,12 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     if deck_mesh is not None:
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"deck_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), deck_mesh)
+        roadmesh.write(os.path.join(out_dir, shape), deck_mesh, collider=True)
         data["deck"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if tunnel_mesh is not None:     # roadmesh.tunnel: the tubes and portals (colliding)
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"tunnel_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh, close="under")
+        roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh, close="under", collider=True)
         data["tunnel"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if guardrail_rows:              # mapped guard rails and the median barriers (guardrails / medians): Forest rows
         import guardrails
@@ -15594,7 +15594,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         import medianbarriers
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = shape_files(aid, tx, ty)["barrier"]
-        roadmesh.write(os.path.join(out_dir, shape), barrier_mesh)
+        roadmesh.write(os.path.join(out_dir, shape), barrier_mesh, collider=True)
         data["barrier"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
         boxes["barrier"] = medianbarriers.collider_boxes(barrier_chunks)
     if bus_col is not None and bus_col[0] is not None:     # the bus stations' lean collision (busstationmesh.collision)

@@ -131,12 +131,17 @@ def main():
     shape = [ln for ln in text.splitlines() if ("Unable to load" in ln or "invalid detail" in ln.lower())
              and "/temp/beamngEarth/" in ln]
     check(res, not shape, "shape files load", "no load errors" if not shape else f"{len(shape)}: {shape[0][:140]}")
-    gc = os.path.join(a.user_dir, "temp", "beamngEarth_gcpatch.txt")
-    try:
-        gtxt = open(gc).read().strip()
-    except OSError:
-        gtxt = "no status file (Windows, or not started by the launcher)"
-    check(res, "applied" in gtxt, "gcpatch (Linux grass patch)", gtxt[:120], warn=True)
+    # every engine patch (tools/gcpatch on Linux, enginepatch*.py on Windows): after a game update a patch that no longer
+    # finds its code says "not applied: another game build (...)" (0.40.6 dropped terfast and texkeep that way)
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    import launcher
+    for name, what in launcher.ENGINE_PATCHES.items():
+        try:
+            ptxt = open(os.path.join(a.user_dir, "temp", f"beamngEarth_{name}.txt")).read().strip()
+        except OSError:
+            ptxt = "no status file (not started by the launcher, or a Linux-only patch on Windows)"
+        state, _ = launcher.patch_state(ptxt)
+        check(res, state == "on", f"engine patch {name} ({what})", ptxt[:160], warn=state != "failed")
     print(f"\n{res.count('PASS')} pass, {res.count('WARN')} warn, {res.count('FAIL')} fail")
     return 1 if "FAIL" in res else 0
 
