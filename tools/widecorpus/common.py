@@ -53,10 +53,14 @@ def save(path, value):
         temp.unlink(missing_ok=True)
 
 
-def places(ids=None, public_only=False):
+def places(ids=None, public_only=False, extra=()):
+    """The catalogue's places, the private ones unless public_only, and those of every extra file (JSON arrays kept
+    outside Git, such as the bridge study's sites: tools/widecorpus/run.py --extra)."""
     data = read(HERE / "places.json")
     if not public_only and PRIVATE.exists():
         data += read(PRIVATE)
+    for path in extra:
+        data += read(Path(path))
     by_id = {}
     for p in data:
         key = p["id"]

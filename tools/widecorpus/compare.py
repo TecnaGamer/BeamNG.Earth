@@ -16,14 +16,22 @@ UNITS = {"inLane": .25, "kerb_in_lane_lips": .25, "step4": 1, "deck_end_steps_5c
          "outline_crossings": 1, "acute_corners": 4, "tiny_edges": 10, "marking_fragments": 4,
          "kerb_high_faces": 20, "kerb_overhang_faces": 5, "surface_gap_over_10cm": 30,
          "surface_buried_2cm": 30, "in_lane_overlap_m2": 2, "visual_base_overlap_m2": 5, "grade_over_15pct": 5,
-         "bank_jump_5pct": 5, "ride_50mph_over_0.5g": 5, "step3": 5, "gapCandidate": 5}
+         "bank_jump_5pct": 5, "ride_50mph_over_0.5g": 5, "step3": 5, "gapCandidate": 5,
+         # the M0 audit (native/roadsys audit.rs; bridgerewrite/DESIGN.md section 10): m^2 of 0.5 m lane cells, metres,
+         # 0.25 m edge samples, counts
+         "double_owner_m2": 1, "envelope_intrusion_m2": 1, "opening_blocked_m2": 1, "pier_in_face_m2": 1,
+         "parapet_in_cw_m": 1, "handover_lip_over_5mm": 4, "clearance_short_cells": 8, "clearance_excess_cells": 40,
+         "tcracks_collider": 1, "tcracks_road": 5, "folds_in_lane": 5}
 REVIEW_LIMIT = {"inLane": 1, "kerb_in_lane_lips": 1, "deck_end_steps_5cm": 1, "step4": 2,
                 "outline_crossings": 1, "drive_hole_samples": 3, "clearance_under_4m": 3,
                 "missing_pavement_samples": 5, "ride_50mph_over_0.5g": 5, "grade_over_15pct": 5,
                 "bank_jump_5pct": 5, "in_lane_overlap_m2": 1, "visual_base_overlap_m2": 3,
                 "kerb_overhang_faces": 3, "kerb_high_faces": 5, "marking_fragments": 10,
                 "acute_corners": 25, "tiny_edges": 25, "surface_gap_over_10cm": 100,
-                "surface_buried_2cm": 100}
+                "surface_buried_2cm": 100,
+                # drivability classes (D1, D2, D4, D8, D16): one new instance holds the change
+                "double_owner_m2": 1, "envelope_intrusion_m2": 1, "opening_blocked_m2": 1, "pier_in_face_m2": 1,
+                "parapet_in_cw_m": 1, "handover_lip_over_5mm": 1, "tcracks_collider": 1}
 # These fields are emitted even when the measured count is zero. Other sparse mesh counts
 # can legitimately be absent, e.g. when there are no bridge ends on a tile.
 TILE_FIELDS = {"marking_fragments", "source_faults", "lidar_waits"}
@@ -340,7 +348,7 @@ def matching_sheets(run,result):
             examined=result["complete"]+len(result.get("build_failures",{}))
             if plan["population"]!=[examined,result["expected"]] or ids!=worst_places(result,len(ids)):
                 continue
-        anchors=places(",".join(ids))
+        anchors=places(",".join(ids), extra=manifest.get("extra", ()))
         if all((e["shots"][0]["lat"],e["shots"][0]["lon"])==(p["lat"],p["lon"]) for e,p in zip(plan["entries"],anchors)):
             yield index
 
@@ -363,7 +371,7 @@ def historical(run, baseline, manifest):
             or old["configs"] != manifest["configs"]):
         raise ValueError("reference and candidate must have the same places, radius and configurations")
     reports = {}
-    ps = places(",".join(manifest["places"]))
+    ps = places(",".join(manifest["places"]), extra=manifest.get("extra", ()))
     for label, env in manifest["configs"].items():
         rows, missing = [], {}
         for p in ps:
@@ -424,7 +432,7 @@ if __name__=="__main__":
         results=list(reports.values())
     else:
         try:
-            expected=places(",".join(m["places"]))
+            expected=places(",".join(m["places"]), extra=m.get("extra", ()))
         except (KeyError,ValueError,OSError) as exc:
             ap.error(f"manifest place data unavailable: {exc}")
         result=ranking(run,expected,m["configs"],m["code"],m["radius"])

@@ -183,7 +183,7 @@ def place_run(p, radius, configs, run, code, warm_only=False):
                             subprocess.run(["cp", "-a", "--reflink=auto", seed / part, cache], check=True)
                     build_process(p, cache, work / "tiles", radius, env, True, out / (label + ".log"))
                     from checks import measure
-                    tiles = measure(p, work / "tiles", ROOT / "bin/scan")
+                    tiles = measure(p, work / "tiles", ROOT / "bin/scan", ROOT / "bin/roadsys")
                     save(result, dict(id=pid, identity=digest([identity, env]), snapshot=token,
                                       code=code, env=env, tiles=tiles))
         (out / "error.txt").unlink(missing_ok=True)
@@ -201,6 +201,8 @@ def place_run(p, radius, configs, run, code, warm_only=False):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--places", help="comma-separated place IDs")
+    ap.add_argument("--extra", type=Path, action="append", default=[],
+                    help="a JSON array of more places kept outside Git (the bridge study's sites), as places.json")
     ap.add_argument("--public-only", action="store_true")
     ap.add_argument("--radius", type=int, default=30)
     ap.add_argument("--jobs", type=int, default=2)
@@ -227,7 +229,7 @@ def main():
         if old.is_dir():
             shutil.rmtree(old)
     run = ROOT / "runs" / args.run
-    ps = places(args.places, args.public_only)
+    ps = places(args.places, args.public_only, args.extra)
     coordinates=[(p["lat"],p["lon"]) for p in ps]
     if len(set(coordinates))!=len(ps):
         ap.error("duplicate coordinates in selection")
@@ -239,6 +241,11 @@ def main():
         configs["revamped"] = REVAMPED
     if not args.warm_only:
         subprocess.run(["c++", "-O2", "-std=c++17", "-ffp-contract=off", HERE / "scan.cpp", "-o", ROOT / "bin/scan"], check=True)
+        # The M0 audit (native/roadsys, audit.rs): this tree's crate, built apart from the shipped module
+        target = ROOT / "bin/roadsys-target"
+        subprocess.run(["cargo", "build", "--release", "--quiet", "-j", "2", "--bin", "roadsys"],
+                       cwd=TREE / "native/roadsys", check=True, env={**os.environ, "CARGO_TARGET_DIR": str(target)})
+        shutil.copy2(target / "release/roadsys", ROOT / "bin/roadsys")
     stop = threading.Event()
     (CACHE / "seeds").mkdir(exist_ok=True)
     if trim() >= LIMIT_BYTES:
@@ -261,7 +268,8 @@ def main():
     ps = [group[i] for i in range(max(map(len,strata.values()))) for group in strata.values() if i<len(group)]
     run.mkdir(parents=True, exist_ok=True)
     if not args.warm_only:
-        save(run / "manifest.json", dict(code=code, radius=args.radius, configs=configs, places=[p["id"] for p in ps]))
+        save(run / "manifest.json", dict(code=code, radius=args.radius, configs=configs, places=[p["id"] for p in ps],
+                                         **({"extra": [str(x.resolve()) for x in args.extra]} if args.extra else {})))
     with ThreadPoolExecutor(args.jobs) as pool:
         pending = {pool.submit(place_run,p,args.radius,configs,run,code,args.warm_only):p for p in ps}
         ok = []
