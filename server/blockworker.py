@@ -2942,6 +2942,9 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
         if content:
             out["content"] = build_content()
             out["stages"]["content"] = last_tile_stages()
+            import roadsys
+            if roadsys.SHADOW:      # (BNE_ROADSYS=shadow: the new road product built again in the background)
+                roadsys.enqueue(gx, gy, _s.md, _s.dem, _s.cache_dir, country)
         t1, c1 = time.perf_counter(), time.process_time()
         if skin:
             import geotiles

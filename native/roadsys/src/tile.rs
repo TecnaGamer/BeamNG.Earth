@@ -153,3 +153,131 @@ pub fn buckets(v: &[[i64; 3]], t: &[[u32; 3]], x0: f64, y0: f64, size: f64, nx: 
     }
     out
 }
+
+/// A convex tile given by its corners in mm (counter-clockwise): each side's cut line is defined by its two corners
+/// in lexicographic order, so the neighbour sharing that side cuts along the very same line and makes the very same
+/// seam vertices (the tiles' corners come from their lat / lon corners, one conversion for both).
+pub struct Quad { pub c: [[i64; 2]; 4] }
+
+impl Quad {
+    fn side(&self, k: usize) -> ([i64; 2], [i64; 2], i128) {
+        let (a, b) = (self.c[k], self.c[(k + 1) % 4]);
+        let (p, q) = if a <= b { (a, b) } else { (b, a) };
+        // the sign of orient(p, q, x) on the tile's side: the opposite corner's
+        let o = self.c[(k + 2) % 4];
+        let sgn = orient(p, q, o).signum();
+        (p, q, sgn)
+    }
+    pub fn bbox(&self) -> [i64; 4] {
+        let xs = self.c.iter().map(|c| c[0]);
+        let ys = self.c.iter().map(|c| c[1]);
+        [xs.clone().min().unwrap(), ys.clone().min().unwrap(), xs.max().unwrap(), ys.max().unwrap()]
+    }
+    pub fn contains(&self, p: [i64; 2]) -> bool {
+        (0..4).all(|k| { let (a, b, sg) = self.side(k); let o = orient(a, b, p); o == 0 || o.signum() == sg })
+    }
+}
+
+fn cut_line(p: V3, q: V3, a: [i64; 2], b: [i64; 2]) -> V3 {
+    let (u, v) = if p < q { (p, q) } else { (q, p) };
+    let d = [(b[0] - a[0]) as f64, (b[1] - a[1]) as f64];
+    let fu = d[0] * (u[1] - a[1]) as f64 - d[1] * (u[0] - a[0]) as f64;
+    let fv = d[0] * (v[1] - a[1]) as f64 - d[1] * (v[0] - a[0]) as f64;
+    let t = fu / (fu - fv);
+    [(u[0] as f64 + t * (v[0] - u[0]) as f64).round() as i64, (u[1] as f64 + t * (v[1] - u[1]) as f64).round() as i64,
+     (u[2] as f64 + t * (v[2] - u[2]) as f64).round() as i64]
+}
+
+/// The mesh's triangles `tris` (and the markings' `mtris`) clipped to quad: canonical bytes as tile(), the triangles
+/// in the order of their piece labels (then their order in the mesh), so the bytes do not depend on the build's
+/// stroke numbering; sides: the seam edges on each of the quad's four sides.
+pub fn tile_quad(mesh: &Mesh, tris: &[u32], marks: &Marks, mtris: &[u32], q: &Quad, id: (i32, i32)) -> TileOut {
+    let t0 = crate::cpu_now();
+    let mut sides: [Vec<(V3, V3)>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    let mut w = W { v: Default::default(), vl: Vec::new(), t: Vec::new(), tags: Vec::new() };
+    let bb = q.bbox();
+    let sd: Vec<([i64; 2], [i64; 2], i128)> = (0..4).map(|k| q.side(k)).collect();
+    let mut poly: Vec<V3> = Vec::with_capacity(12);
+    let mut tmp: Vec<V3> = Vec::with_capacity(12);
+    let mut clip_emit = |p: [V3; 3], tag: [u8; 8], w: &mut W, sides: &mut [Vec<(V3, V3)>; 4], track: bool| {
+        poly.clear();
+        poly.extend_from_slice(&p);
+        for &(a, b, sg) in &sd {
+            tmp.clear();
+            let n = poly.len();
+            let inside = |x: V3| { let o = orient(a, b, [x[0], x[1]]); o == 0 || o.signum() == sg };
+            for i in 0..n {
+                let (u, v) = (poly[i], poly[(i + 1) % n]);
+                let (iu, iv) = (inside(u), inside(v));
+                if iu { tmp.push(u); }
+                let ou = orient(a, b, [u[0], u[1]]);
+                let ov = orient(a, b, [v[0], v[1]]);
+                if iu != iv && ou != 0 && ov != 0 { tmp.push(cut_line(u, v, a, b)); }
+            }
+            std::mem::swap(&mut poly, &mut tmp);
+            if poly.len() < 3 { return; }
+        }
+        let mut ps: Vec<V3> = Vec::with_capacity(poly.len());
+        for &x in poly.iter() { if ps.last() != Some(&x) { ps.push(x); } }
+        while ps.len() > 1 && ps.first() == ps.last() { ps.pop(); }
+        if ps.len() < 3 { return; }
+        for i in 1..ps.len() - 1 {
+            let (a, b, c) = (ps[0], ps[i], ps[i + 1]);
+            if orient([a[0], a[1]], [b[0], b[1]], [c[0], c[1]]) == 0 { continue; }
+            let t = [w.vid(a), w.vid(b), w.vid(c)];
+            w.t.push(t);
+            w.tags.push(tag);
+        }
+        if track {
+            for i in 0..ps.len() {
+                let (u, v) = (ps[i], ps[(i + 1) % ps.len()]);
+                let e = if u < v { (u, v) } else { (v, u) };
+                for (k, &(a, b, _)) in sd.iter().enumerate() {
+                    if orient(a, b, [u[0], u[1]]) == 0 && orient(a, b, [v[0], v[1]]) == 0 { sides[k].push(e); }
+                }
+            }
+        }
+    };
+    let mut order: Vec<u32> = tris.to_vec();
+    order.sort_by_key(|&ti| (mesh.tag[ti as usize].piece, ti));
+    for &ti in &order {
+        let t = mesh.t[ti as usize];
+        let g: Tag = mesh.tag[ti as usize];
+        let p = [mesh.v[t[0] as usize], mesh.v[t[1] as usize], mesh.v[t[2] as usize]];
+        let (x0, x1) = (p.iter().map(|v| v[0]).min().unwrap(), p.iter().map(|v| v[0]).max().unwrap());
+        let (y0, y1) = (p.iter().map(|v| v[1]).min().unwrap(), p.iter().map(|v| v[1]).max().unwrap());
+        if x1 < bb[0] || x0 > bb[2] || y1 < bb[1] || y0 > bb[3] { continue; }
+        let tag = { let mut b = [0u8; 8]; b[0] = g.kind; b[1] = g.sup; b[2..6].copy_from_slice(&g.piece.to_le_bytes()); b[6..8].copy_from_slice(&g.slot.to_le_bytes()); b };
+        clip_emit(p, tag, &mut w, &mut sides, true);
+    }
+    let nt = w.t.len();
+    let mut morder: Vec<u32> = mtris.to_vec();
+    morder.sort_by_key(|&ti| (marks.piece[ti as usize], ti));
+    for &ti in &morder {
+        let t = marks.t[ti as usize];
+        let p = [marks.v[t[0] as usize], marks.v[t[1] as usize], marks.v[t[2] as usize]];
+        let (x0, x1) = (p.iter().map(|v| v[0]).min().unwrap(), p.iter().map(|v| v[0]).max().unwrap());
+        let (y0, y1) = (p.iter().map(|v| v[1]).min().unwrap(), p.iter().map(|v| v[1]).max().unwrap());
+        if x1 < bb[0] || x0 > bb[2] || y1 < bb[1] || y0 > bb[3] { continue; }
+        let tag = { let mut b = [0u8; 8]; b[0] = 10 + marks.colour[ti as usize]; b[2..6].copy_from_slice(&marks.piece[ti as usize].to_le_bytes()); b };
+        clip_emit(p, tag, &mut w, &mut sides, false);
+    }
+    let mut bytes = Vec::with_capacity(16 + w.vl.len() * 12 + w.t.len() * 20);
+    bytes.extend_from_slice(&id.0.to_le_bytes());
+    bytes.extend_from_slice(&id.1.to_le_bytes());
+    bytes.extend_from_slice(&(w.vl.len() as u32).to_le_bytes());
+    for p in &w.vl {
+        bytes.extend_from_slice(&((p[0] - bb[0]) as i32).to_le_bytes());
+        bytes.extend_from_slice(&((p[1] - bb[1]) as i32).to_le_bytes());
+        bytes.extend_from_slice(&(p[2] as i32).to_le_bytes());
+    }
+    bytes.extend_from_slice(&(w.t.len() as u32).to_le_bytes());
+    for (t, g) in w.t.iter().zip(&w.tags) {
+        for &v in t { bytes.extend_from_slice(&v.to_le_bytes()); }
+        bytes.extend_from_slice(g);
+    }
+    let hash = fnv(&bytes);
+    for s in sides.iter_mut() { s.sort(); s.dedup(); }
+    let cpu = crate::cpu_now() - t0;
+    TileOut { i: id.0, j: id.1, hash, tris: nt, verts: w.vl.len(), mark_tris: w.t.len() - nt, bytes, sides, cpu }
+}

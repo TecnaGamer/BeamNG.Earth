@@ -84,6 +84,14 @@ pub struct Place {
     pub dem: Dem,
 }
 
+impl Place {
+    /// Everything but the segments (a place read from a subset of them).
+    pub fn clone_meta(&self) -> Place {
+        Place { name: self.name.clone(), lat: self.lat, lon: self.lon, core: self.core, halo: self.halo,
+                country: self.country.clone(), style: self.style.clone(), segs: Vec::new(), dem: Dem::default() }
+    }
+}
+
 struct R<'a> { b: &'a [u8], i: usize }
 
 impl R<'_> {
@@ -145,4 +153,91 @@ pub fn read(path: &str) -> Result<Place, String> {
     for _ in 0..n * n { z.push(r.f32()); }
     p.dem = Dem { n, step, x0, z };
     Ok(p)
+}
+
+// ------------------------------------------------------------------- a tile build's inputs (replay across platforms)
+
+struct Wr(Vec<u8>);
+impl Wr {
+    fn u8(&mut self, v: u8) { self.0.push(v); }
+    fn u32(&mut self, v: u32) { self.0.extend_from_slice(&v.to_le_bytes()); }
+    fn i64(&mut self, v: i64) { self.0.extend_from_slice(&v.to_le_bytes()); }
+    fn f64(&mut self, v: f64) { self.0.extend_from_slice(&v.to_le_bytes()); }
+    fn s(&mut self, v: &str) { self.u32(v.len() as u32); self.0.extend_from_slice(v.as_bytes()); }
+}
+
+/// A shadow tile build's whole input (product::build): the segments, the style, the quad, the label, the frame, the
+/// cut grid and the ground heights the build asked for (in its order): "RSTILE01" + fields, little-endian. The CLI
+/// (`roadsys tile`) builds it again on any platform: the same bytes are the determinism test.
+pub struct TileInput { pub place: Place, pub quad: [[f64; 2]; 4], pub id: (i32, i32), pub frame: u64, pub cut: (f64, f64), pub ground: Vec<f64> }
+
+pub fn write_tile(t: &TileInput) -> Vec<u8> {
+    let mut w = Wr(Vec::new());
+    w.0.extend_from_slice(b"RSTILE01");
+    let st = &t.place.style;
+    w.s(&st.centre); w.s(&st.left_edge);
+    for v in [st.w, st.w_motorway, st.edge, st.edge_motorway, st.centre_urban.0, st.centre_urban.1, st.lane_urban.0,
+              st.lane_urban.1, st.lane_motorway.0, st.lane_motorway.1] { w.f64(v); }
+    w.u8(st.double_centre as u8);
+    w.s(&t.place.country);
+    w.u32(t.place.segs.len() as u32);
+    for s in &t.place.segs {
+        for v in [&s.fid, &s.code, &s.cls_s, &s.turn, &s.turn_bw, &s.place] { w.s(v); }
+        for v in [s.pave, s.drive, s.kmh, s.lane_w] { w.f64(v); }
+        for v in [s.inferred, s.urban as i64, s.cls, s.link as i64, s.dir, s.lanes, s.lfw, s.lbw, s.region] { w.i64(v); }
+        w.u32(s.pts.len() as u32);
+        for p in &s.pts { w.f64(p[0]); w.f64(p[1]); }
+        w.u32(s.cons.len() as u32);
+        for (c, v) in &s.cons { w.s(c); w.u32(*v as u32); }
+        w.u32(s.bridge.len() as u32);
+        for &(a, b) in &s.bridge { w.f64(a); w.f64(b); }
+        w.u32(s.tunnel.len() as u32);
+        for &(a, b) in &s.tunnel { w.f64(a); w.f64(b); }
+        w.u32(s.level.len() as u32);
+        for &(a, b, v) in &s.level { w.f64(a); w.f64(b); w.f64(v); }
+    }
+    for q in &t.quad { w.f64(q[0]); w.f64(q[1]); }
+    w.i64(t.id.0 as i64); w.i64(t.id.1 as i64);
+    w.0.extend_from_slice(&t.frame.to_le_bytes());
+    w.f64(t.cut.0); w.f64(t.cut.1);
+    w.u32(t.ground.len() as u32);
+    for &v in &t.ground { w.f64(v); }
+    w.0
+}
+
+pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
+    let mut r = R { b, i: 0 };
+    if b.len() < 8 || r.take(8) != b"RSTILE01" { return Err("not a roadsys tile input".into()); }
+    let mut st = Style { centre: r.s(), left_edge: r.s(), ..Default::default() };
+    st.w = r.f64(); st.w_motorway = r.f64(); st.edge = r.f64(); st.edge_motorway = r.f64();
+    st.centre_urban = (r.f64(), r.f64()); st.lane_urban = (r.f64(), r.f64()); st.lane_motorway = (r.f64(), r.f64());
+    st.double_centre = r.u8() != 0;
+    let country = r.s();
+    let n = r.u32() as usize;
+    let mut segs = Vec::with_capacity(n);
+    for _ in 0..n {
+        let mut s = Seg { fid: r.s(), code: r.s(), cls_s: r.s(), turn: r.s(), turn_bw: r.s(), place: r.s(), ..Default::default() };
+        s.pave = r.f64(); s.drive = r.f64(); s.kmh = r.f64(); s.lane_w = r.f64();
+        s.inferred = r.i64(); s.urban = r.i64() != 0; s.cls = r.i64(); s.link = r.i64() != 0; s.dir = r.i64();
+        s.lanes = r.i64(); s.lfw = r.i64(); s.lbw = r.i64(); s.region = r.i64();
+        let np = r.u32() as usize;
+        for _ in 0..np { let x = r.f64(); let y = r.f64(); s.pts.push([x, y]); }
+        let nc = r.u32() as usize;
+        for _ in 0..nc { let c = r.s(); let v = r.u32() as usize; s.cons.push((c, v)); }
+        let nb = r.u32() as usize;
+        for _ in 0..nb { s.bridge.push((r.f64(), r.f64())); }
+        let nt = r.u32() as usize;
+        for _ in 0..nt { s.tunnel.push((r.f64(), r.f64())); }
+        let nl = r.u32() as usize;
+        for _ in 0..nl { s.level.push((r.f64(), r.f64(), r.f64())); }
+        segs.push(s);
+    }
+    let mut quad = [[0.0; 2]; 4];
+    for q in quad.iter_mut() { q[0] = r.f64(); q[1] = r.f64(); }
+    let id = (r.i64() as i32, r.i64() as i32);
+    let frame = u64::from_le_bytes(r.take(8).try_into().unwrap());
+    let cut = (r.f64(), r.f64());
+    let ng = r.u32() as usize;
+    let ground = (0..ng).map(|_| r.f64()).collect();
+    Ok(TileInput { place: Place { country, style: st, segs, ..Default::default() }, quad, id, frame, cut, ground })
 }

@@ -42,10 +42,14 @@ fn tri_pts(m: &Mesh, t: [u32; 3]) -> [P2; 3] {
 }
 
 pub fn run(net: &Net, m: &Mesh, core: f64, tiles: &[TileOut], nx: i32) -> Checks {
+    run_in(net, m, &|p: P2| p[0] >= -core && p[0] <= core && p[1] >= -core && p[1] <= core, None, tiles, nx)
+}
+
+/// The checks of the faces whose positions `inside` holds (only the strokes `sel` marks are sampled for holes).
+pub fn run_in(net: &Net, m: &Mesh, inside: &dyn Fn(P2) -> bool, sel: Option<&[bool]>, tiles: &[TileOut], nx: i32) -> Checks {
     let mut c = Checks::default();
-    let ns = net.strokes.len() as u32;
+    let _ns = net.strokes.len() as u32;
     const CELL: f64 = 8.0;
-    let inside = |p: P2| p[0] >= -core && p[0] <= core && p[1] >= -core && p[1] <= core;
     let mut grid: BTreeMap<(i64, i64), Vec<u32>> = BTreeMap::new();
     let mut bb: Vec<[f64; 4]> = Vec::with_capacity(m.t.len());
     let mut zc: Vec<f64> = Vec::with_capacity(m.t.len());
@@ -96,7 +100,7 @@ pub fn run(net: &Net, m: &Mesh, core: f64, tiles: &[TileOut], nx: i32) -> Checks
                 c.overlap_pairs += 1;
                 c.overlap_m2 += ar;
                 if gi.kind == K_LANE || gj.kind == K_LANE { c.overlap_lane_m2 += ar; }
-                let (zi, zj) = (gi.piece >= ns, gj.piece >= ns);
+                let (zi, zj) = (gi.piece & 0x8000_0000 != 0, gj.piece & 0x8000_0000 != 0);
                 let cause = if gi.piece == gj.piece { c.overlap_fold_m2 += ar; c.overlap_same_piece_pairs += 1; "same_piece" }
                     else if !zi && !zj { c.overlap_strip_strip_m2 += ar; "strip_strip" }
                     else if zi && zj { c.overlap_zone_zone_m2 += ar; "zone_zone" } else { c.overlap_zone_strip_m2 += ar; "zone_strip" };
@@ -105,7 +109,8 @@ pub fn run(net: &Net, m: &Mesh, core: f64, tiles: &[TileOut], nx: i32) -> Checks
         }
     }
     // holes: mapped centrelines (every 2 m, ground and structure, not tunnels) covered by some face
-    for st in &net.strokes {
+    for (si, st) in net.strokes.iter().enumerate() {
+        if let Some(v) = sel { if !v[si] { continue; } }
         let len = st.len();
         let mut s = 1.0;
         while s < len - 1.0 {

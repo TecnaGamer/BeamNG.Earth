@@ -113,9 +113,10 @@ pub struct Sup { pub s0: f64, pub s1: f64, pub kind: u8, pub sid: u32, pub level
 /// A branch stroke's first (or last) row taken from a trunk stroke's row: trunk slots [k0, k1] at station s (their
 /// left boundary of k0 to the right boundary of k1) are this stroke's boundaries from its first lane-ward one.
 #[derive(Clone, Copy, Debug)]
-pub struct Snap { pub trunk: usize, pub s: f64, pub k0: usize, pub k1: usize, pub tb: f64 }
+pub struct Snap { pub trunk: usize, pub s: f64, pub k0: usize, pub k1: usize, pub tb: f64, pub joint: bool }
 
 pub struct Stroke {
+    pub uid: u64,                  // stable id: its first part's segment and vertex (never its index in a build)
     pub parts: Vec<Part>,
     pub line: Line,
     pub n0: usize,
@@ -139,6 +140,8 @@ pub struct Stroke {
     pub cut1: f64,
     pub absorbed: bool,
     pub lane_scale: Vec<(f64, f64)>,   // (station, factor): lane widths from the measured gap to a parallel carriageway
+    pub cap_nbrs: Vec<usize>,          // the parallel carriageways whose gap capped it (part.rs caps): its read list
+    pub reach: f64,                    // m round it its lane program reads (the lane graph's walks; product.rs halos)
 }
 
 impl Stroke {
@@ -147,6 +150,45 @@ impl Stroke {
         for u in &self.sup { if s >= u.s0 && s <= u.s1 { return *u; } }
         Sup { s0: 0.0, s1: self.len(), kind: SUP_GROUND, sid: 0, level: 0.0 }
     }
+    /// The row frame at station s (PT3 change 3, no folds on tight curves): the point on the mapped line, the unit
+    /// left normal of the line smoothed over +-W (W = the carriageway's half width, 4..15 m: a polyline corner turns
+    /// the rows over 2 W instead of at one vertex) and the smoothed line's signed curvature (+ turning left).
+    pub fn row_frame(&self, s: f64, half_w: f64) -> (P2, P2, f64) {
+        let len = self.len();
+        let w = clampf(half_w, 4.0, 15.0);
+        let (p, t0) = self.line.at(s);
+        let (a, _) = self.line.at((s - w).max(0.0));
+        let (b, _) = self.line.at((s + w).min(len));
+        let t = unit(sub(b, a)).unwrap_or(t0);
+        let k = match (unit(sub(p, a)), unit(sub(b, p))) {
+            (Some(u), Some(v)) => { let d = norm(sub(b, a)); if d > 1e-6 { 2.0 * cross(u, v) / d } else { 0.0 } }
+            _ => 0.0,
+        };
+        (p, [-t[1], t[0]], k)
+    }
+
+    /// The row at station s for offsets off: (point, normal) of the smoothed frame and the offsets used, those on
+    /// the inner side of a curve held to 0.9 of its radius (none passes the curve's centre) and kept in order.
+    pub fn row_offsets(&self, s: f64, off: &[f64], ts: &mut Vec<f64>) -> (P2, P2) {
+        let hw = off.first().copied().unwrap_or(0.0).max(-off.last().copied().unwrap_or(0.0));
+        let (p, n, k) = self.row_frame(s, hw);
+        let lim = if absf(k) > 1e-9 { 0.9 / absf(k) } else { f64::INFINITY };
+        ts.clear();
+        ts.extend_from_slice(off);
+        if k > 0.0 { for t in ts.iter_mut() { if *t > lim { *t = lim; } } }
+        if k < 0.0 { for t in ts.iter_mut() { if *t < -lim { *t = -lim; } } }
+        order_offsets(off, ts);
+        (p, n)
+    }
+
+    /// The row's boundary points at station s (row_offsets).
+    pub fn row_points(&self, s: f64, off: &[f64], out: &mut Vec<P2>) {
+        let mut ts = Vec::new();
+        let (p, n) = self.row_offsets(s, off, &mut ts);
+        out.clear();
+        for &t in &ts { out.push(add(p, scale(n, t))); }
+    }
+
     /// Boundary offsets t_0 >= t_1 >= ... >= t_S (m, + left of the stroke) at station s.
     pub fn offsets(&self, s: f64, out: &mut Vec<f64>) {
         out.clear();
@@ -191,6 +233,15 @@ impl Stroke {
     }
 }
 
+/// Offsets ts (moved toward the line from orig) put back in order t_0 >= t_1 >= ...: a boundary pulled in on the
+/// left pulls the ones inside it along (lanes narrow from the outside, never cross); likewise on the right.
+pub fn order_offsets(orig: &[f64], ts: &mut [f64]) {
+    let n = ts.len();
+    let left = |i: usize| orig[i] > 0.0;
+    for i in 1..n { if left(i) && ts[i] > ts[i - 1] { ts[i] = ts[i - 1]; } }
+    for i in (0..n.saturating_sub(1)).rev() { if !left(i) && ts[i] < ts[i + 1] { ts[i] = ts[i + 1]; } }
+}
+
 pub struct Fork {
     pub node: usize,
     pub trunk: (usize, bool),
@@ -231,10 +282,23 @@ pub struct NetStats {
     pub unbridged: usize,
     pub nose_beyond: usize,
     pub along: usize,
+    pub cuts: usize,
+    pub cut_unjoined: usize,
 }
 
+/// Build options. cut_grid: strokes are cut at a node past each line of a fixed grid of this size (m, in the frame;
+/// 0: never), so a motorway's lane program and Tier A profile read a bounded stretch (the read list of a product is
+/// its component's, never the whole road's); cut_offset: the grid's lines at offset + k * cut_grid.
+#[derive(Clone, Copy, Debug)]
+pub struct Opts { pub cut_grid: f64, pub cut_offset: f64 }
+
+impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0 } } }
+
 pub struct Net {
+    pub opts: Opts,
     pub segs: Vec<Seg>,
+    pub node_ids: Vec<String>,          // node -> connector id (synthetic ends: "~<fid>#0" / "#1")
+    pub cut: Vec<bool>,                 // node -> a stroke cut (Opts.cut_grid)
     pub region: Vec<usize>,
     pub edges: Vec<Edge>,
     pub nodes: Vec<Node>,
@@ -309,6 +373,7 @@ fn mutcd_m(w: f64, kmh: f64) -> f64 {
 fn speed_share(kmh: f64) -> f64 { clampf(kmh / 80.0, 0.5, 1.0) }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct Piece { edge: usize, fwd: bool, s0: f64, s1: f64, end_node: Option<usize> }
 
 struct Path { line: Line, pieces: Vec<Piece> }
@@ -353,6 +418,7 @@ impl Net {
     fn arm_flow(&self, a: (usize, bool)) -> i64 { flow_of(self.seg_of_edge(a.0), a.1) }
 
     /// The arm's other node.
+    #[allow(dead_code)]
     fn arm_far(&self, a: (usize, bool)) -> usize { let e = &self.edges[a.0]; if a.1 { e.nb } else { e.na } }
 
     /// The points of arm a leaving its node (along its edge, then on along its segment's points).
@@ -659,10 +725,24 @@ fn seg_ranges(s: &Seg) -> (Vec<(f64, f64, u8)>, Vec<(f64, f64, f64)>) {
     (out, lv)
 }
 
-pub fn build(place: &Place, input_order: &[usize]) -> Net {
-    // canonical order: by fid, whatever the input order (determinism: the reversed-input test)
+pub fn build(place: &Place, input_order: &[usize]) -> Net { build_opts(place, input_order, Opts::default()) }
+
+/// FNV-1a 64 of a string and integers (stable ids).
+pub fn uid_of(s: &str, ints: &[u64]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in s.as_bytes() { h ^= b as u64; h = h.wrapping_mul(0x100000001b3); }
+    for v in ints { for b in v.to_le_bytes() { h ^= b as u64; h = h.wrapping_mul(0x100000001b3); } }
+    h
+}
+
+/// A stroke's piece label in the tile bytes (31 bits; zones carry the top bit).
+pub fn piece_of(uid: u64) -> u32 { ((uid ^ (uid >> 32)) as u32) & 0x7fff_ffff }
+
+pub fn build_opts(place: &Place, input_order: &[usize], opts: Opts) -> Net {
+    // canonical order: by fid, whatever the input order (determinism: the reversed-input test); one copy per fid
     let mut idx: Vec<usize> = input_order.to_vec();
-    idx.sort_by(|&a, &b| place.segs[a].fid.cmp(&place.segs[b].fid));
+    idx.sort_by(|&a, &b| place.segs[a].fid.cmp(&place.segs[b].fid).then(a.cmp(&b)));
+    idx.dedup_by(|a, b| place.segs[*a].fid == place.segs[*b].fid);
     // a road split into lane sections ("<id>~lanesA-B", lanesections.split) is read from its sections only (a cell
     // copy can still hold the unsplit road)
     let parents: std::collections::BTreeSet<String> = idx.iter().filter_map(|&i| place.segs[i].fid.split_once("~lanes").map(|x| x.0.to_string())).collect();
@@ -673,10 +753,10 @@ pub fn build(place: &Place, input_order: &[usize]) -> Net {
     }).collect();
     // nodes: connector ids (sorted), plus synthetic ends
     let mut ids: Vec<String> = Vec::new();
-    for (g, s) in segs.iter().enumerate() {
+    for s in segs.iter() {
         for (c, _v) in &s.cons { ids.push(c.clone()); }
-        ids.push(format!("~{}#0", g));
-        ids.push(format!("~{}#1", g));
+        ids.push(format!("~{}#0", s.fid));
+        ids.push(format!("~{}#1", s.fid));
     }
     ids.sort();
     ids.dedup();
@@ -688,8 +768,8 @@ pub fn build(place: &Place, input_order: &[usize]) -> Net {
         let mut vs: Vec<(usize, usize)> = s.cons.iter().filter(|(_, v)| *v < s.pts.len()).map(|(c, v)| (*v, node_of(c))).collect();
         vs.sort();
         vs.dedup_by(|a, b| a.0 == b.0);
-        if vs.first().map(|x| x.0) != Some(0) { vs.insert(0, (0, node_of(&format!("~{}#0", g)))); }
-        if vs.last().map(|x| x.0) != Some(s.pts.len() - 1) { vs.push((s.pts.len() - 1, node_of(&format!("~{}#1", g)))); }
+        if vs.first().map(|x| x.0) != Some(0) { vs.insert(0, (0, node_of(&format!("~{}#0", s.fid)))); }
+        if vs.last().map(|x| x.0) != Some(s.pts.len() - 1) { vs.push((s.pts.len() - 1, node_of(&format!("~{}#1", s.fid)))); }
         for &(v, n) in &vs {
             if !node_set[n] { nodes[n].p = s.pts[v]; node_set[n] = true; }
         }
@@ -706,8 +786,9 @@ pub fn build(place: &Place, input_order: &[usize]) -> Net {
         }
     }
     let nn = nodes.len();
-    let mut net = Net { segs, region, edges, nodes, forks: Vec::new(), fork_at: vec![None; nn], strokes: Vec::new(),
-                        edge_stroke: Vec::new(), crossings: Vec::new(), stats: NetStats::default() };
+    let mut net = Net { opts, segs, node_ids: ids.clone(), cut: vec![false; nn], region, edges, nodes, forks: Vec::new(),
+                        fork_at: vec![None; nn], strokes: Vec::new(), edge_stroke: Vec::new(), crossings: Vec::new(),
+                        stats: NetStats::default() };
     net.stats.segs = net.segs.len();
     net.stats.nodes = net.nodes.iter().filter(|n| !n.arms.is_empty()).count();
     net.stats.edges = net.edges.len();
@@ -723,15 +804,84 @@ pub fn build(place: &Place, input_order: &[usize]) -> Net {
         }
     }
     net.stats.forks = net.forks.len();
+    if opts.cut_grid > 0.0 { cut_nodes(&mut net, opts); }
     strokes(&mut net);
     lanes(&mut net);
+    joints(&mut net);
     crossings(&mut net);
     net.stats.strokes = net.strokes.len();
     net
 }
 
+/// Stroke cuts (Opts.cut_grid): an edge whose end nodes lie in different squares of the grid is cut at one of its
+/// ends, a plain joint of two arms of one carriageway (no fork, the same lanes, widths and placement on both
+/// sides, not on a structure or in a tunnel), the one with the smaller connector id when both qualify. Data only:
+/// the same nodes whatever the build's window.
+fn cut_nodes(net: &mut Net, opts: Opts) {
+    let sq = |p: P2| (((p[0] + opts.cut_offset) / opts.cut_grid).floor() as i64, ((p[1] + opts.cut_offset) / opts.cut_grid).floor() as i64);
+    let on_structure = |net: &Net, e: usize, v: usize| -> bool {
+        let s = net.seg_of_edge(e);
+        let l = Line::new(s.pts.clone());
+        let len = l.len().max(1e-9);
+        let f = l.s[v] / len;
+        s.bridge.iter().chain(s.tunnel.iter()).any(|&(a, b)| f >= a - 1e-6 && f <= b + 1e-6)
+    };
+    let qualifies = |net: &Net, n: usize| -> bool {
+        let arms = &net.nodes[n].arms;
+        if arms.len() != 2 || net.fork_at[n].is_some() { return false; }
+        let (a, b) = (arms[0], arms[1]);
+        if a.0 == b.0 { return false; }
+        let (sa, sb) = (net.seg_of_edge(a.0), net.seg_of_edge(b.0));
+        let same = sa.cls == sb.cls && sa.link == sb.link && sa.lanes == sb.lanes && sa.lfw == sb.lfw && sa.lbw == sb.lbw
+            && sa.place == sb.place && sa.lane_w == sb.lane_w && sa.turn == sb.turn && sa.turn_bw == sb.turn_bw
+            && (sa.dir == 0) == (sb.dir == 0) && sa.pave == sb.pave && sa.drive == sb.drive && sa.urban == sb.urban;
+        if !same { return false; }
+        for &(e, fwd) in arms {
+            let ed = &net.edges[e];
+            if on_structure(net, e, if fwd { ed.va } else { ed.vb }) { return false; }
+        }
+        joined(net, n, a) == Some(b)
+    };
+    let mut cut = vec![false; net.nodes.len()];
+    for e in 0..net.edges.len() {
+        let (na, nb) = (net.edges[e].na, net.edges[e].nb);
+        if sq(net.nodes[na].p) == sq(net.nodes[nb].p) { continue; }
+        let (qa, qb) = (qualifies(net, na), qualifies(net, nb));
+        let pick = match (qa, qb) { (true, true) => Some(na.min(nb)), (true, false) => Some(na), (false, true) => Some(nb), _ => None };
+        if let Some(n) = pick { cut[n] = true; }
+    }
+    net.stats.cuts = cut.iter().filter(|&&c| c).count();
+    net.cut = cut;
+}
+
+/// The strokes meeting at a cut node continue each other: the later one's first (or last) row is the earlier one's
+/// (a joint snap, as a fork's branch takes the trunk's row), so the cut leaves no seam and no zone. Strokes of
+/// opposite orientation there keep their own rows and get a zone (counted).
+fn joints(net: &mut Net) {
+    let mut at: Vec<Vec<(usize, bool)>> = vec![Vec::new(); net.nodes.len()];
+    for (si, st) in net.strokes.iter().enumerate() {
+        if net.cut[st.n0] { at[st.n0].push((si, true)); }
+        if net.cut[st.n1] { at[st.n1].push((si, false)); }
+    }
+    for n in 0..net.nodes.len() {
+        if at[n].len() != 2 { continue; }
+        let ((a, a_start), (b, b_start)) = (at[n][0], at[n][1]);
+        if a == b || a_start == b_start { net.stats.cut_unjoined += 1; continue; }
+        // the one ending at the node is the trunk; the one starting there takes its last row as its first
+        let (tr, br) = if !a_start { (a, b) } else { (b, a) };
+        let k1 = net.strokes[tr].slots.len().saturating_sub(1);
+        if net.strokes[br].snap0.is_some() || net.strokes[br].slots.len() != net.strokes[tr].slots.len() {
+            net.stats.cut_unjoined += 1;
+            continue;
+        }
+        let s = net.strokes[tr].len();
+        net.strokes[br].snap0 = Some(Snap { trunk: tr, s, k0: 0, k1, tb: 0.0, joint: true });
+    }
+}
+
 /// The arm joined to arm `a` (arriving at node n along it, as an arm of n) by the stroke rule, if any.
 fn joined(net: &Net, n: usize, a: (usize, bool)) -> Option<(usize, bool)> {
+    if net.cut[n] { return None; }
     let arms = &net.nodes[n].arms;
     if let Some(fi) = net.fork_at[n] {
         let f = &net.forks[fi];
@@ -847,13 +997,15 @@ fn strokes(net: &mut Net) {
             }
             merged.push(u);
         }
-        for (k, m) in merged.iter_mut().enumerate() { m.sid = (sid as u32) * 64 + k as u32 + 1; }
+
         let lht = TAPER[region][T_LHT] > 0.5;
+        let uid = uid_of(&seg.fid, &[net.edges[first.edge].va as u64, first.fwd as u64]);
+        for (k, m) in merged.iter_mut().enumerate() { m.sid = piece_of(uid_of("sup", &[uid, k as u64])); }
         net.strokes.push(Stroke {
-            parts: ps, line, n0, n1, oneway: seg.dir != 0, lht, slots: Vec::new(), anchor_l: Prog::default(),
+            uid, parts: ps, line, n0, n1, oneway: seg.dir != 0, lht, slots: Vec::new(), anchor_l: Prog::default(),
             anchor_r: Prog::default(), right_windows: Vec::new(), stations: Vec::new(), dense: Vec::new(), sup: merged,
             cls, cls_s: seg.cls_s.clone(), kmh: if kmh > 0.0 { kmh } else { 50.0 }, region, snap0: None, snap1: None,
-            cut0: 0.0, cut1: 0.0, absorbed: false, lane_scale: Vec::new(),
+            cut0: 0.0, cut1: 0.0, absorbed: false, lane_scale: Vec::new(), cap_nbrs: Vec::new(), reach: 0.0,
         });
     }
     for s in &net.strokes {
@@ -884,6 +1036,20 @@ fn lanes(net: &mut Net) {
     }
     for (b, at_start, sn) in snaps {
         if at_start { net.strokes[b].snap0 = Some(sn); } else { net.strokes[b].snap1 = Some(sn); }
+    }
+    // each stroke's program reach: a node of it that the fork rules test walks REACH_M (+ the arms' DIR_M) along the
+    // map; a lane count change walks FEED_M for a feeding fork; else its own parts and the arms at its nodes
+    for si in 0..ns {
+        let st = &net.strokes[si];
+        let mut nodes: Vec<usize> = vec![st.n0, st.n1];
+        for p in &st.parts { let e = &net.edges[p.edge]; nodes.push(e.na); nodes.push(e.nb); }
+        let fork = nodes.iter().any(|&n| net.nodes[n].arms.len() == 3 && net.fork_roles(n).is_some());
+        let mut change = false;
+        for w in st.parts.windows(2) {
+            let (a, b) = (net.seg_of_edge(w[0].edge), net.seg_of_edge(w[1].edge));
+            if a.lanes != b.lanes || a.lfw != b.lfw || a.lbw != b.lbw || a.turn != b.turn || a.turn_bw != b.turn_bw { change = true; }
+        }
+        net.strokes[si].reach = if fork { REACH_M + DIR_M } else if change { FEED_M + DIR_M } else { 3.0 * DIR_M };
     }
 }
 
@@ -1020,7 +1186,7 @@ fn build_slots(net: &mut Net, si: usize) -> SlotsOut {
                 // the branch's first row: branch lanes + the old outer shoulder (right) / old shoulder + lanes (left)
                 let (k0, k1) = if right { (branch[0], old_sh) } else { (old_sh, *branch.last().unwrap()) };
                 if s_n < len - 0.5 {
-                    snaps_out.push((bstroke, true, Snap { trunk: si, s: s_n, k0, k1, tb: tb_n }));
+                    snaps_out.push((bstroke, true, Snap { trunk: si, s: s_n, k0, k1, tb: tb_n, joint: false }));
                 } else { net.stats.nose_beyond += 1; }
                 g.cur = through;
             } else {
@@ -1053,7 +1219,7 @@ fn build_slots(net: &mut Net, si: usize) -> SlotsOut {
                     lsh_cur = sh2;
                 }
                 let (k0, k1) = if right { (branch[0], sh2) } else { (sh2, *branch.last().unwrap()) };
-                if s_n > 0.5 { snaps_out.push((bstroke, false, Snap { trunk: si, s: s_n, k0, k1, tb: tb_n })); } else { net.stats.nose_beyond += 1; }
+                if s_n > 0.5 { snaps_out.push((bstroke, false, Snap { trunk: si, s: s_n, k0, k1, tb: tb_n, joint: false })); } else { net.stats.nose_beyond += 1; }
                 // after the node: lt lanes; the branch lanes it carries go on, the rest taper out
                 let lt = lanes_of_part(net, &pb, true).max(1) as usize;
                 let keep = if lt > lm { (lt - lm).min(lb) } else { 0 };

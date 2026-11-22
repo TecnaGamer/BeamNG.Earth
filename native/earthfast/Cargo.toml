@@ -10,6 +10,9 @@ name = "earthfast"
 crate-type = ["cdylib"]
 
 [dependencies]
+# The road surface + bridge rewrite (BNE_ROADSYS): the lane graph, profiles, partition, product and M0 audit kernels, a
+# crate of this repo (no dependencies of its own)
+roadsys = { path = "../roadsys" }
 pyo3 = { version = "0.30", features = ["extension-module", "abi3-py310"] }
 numpy = "0.30"
 # GPU compute (gpu.rs): the per-pixel image work moved off the CPU when a GPU is there (Vulkan / DX12 / Metal)

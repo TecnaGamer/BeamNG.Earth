@@ -30,10 +30,14 @@ pub struct PartStats {
     pub absorbed: usize,
     pub zone_fallback_straight: usize,
     pub zone_fallback_hull: usize,
+    pub zone_union: usize,
+    pub zone_union_fail: usize,
+    pub arm_order_fallback: usize,
     pub zone_fail: usize,
     pub snap_ok: usize,
     pub snap_mismatch: usize,
     pub folds: usize,
+    pub fold_guard: usize,
     pub twin_capped: usize,
     pub twin_lane_overlap: usize,
     pub rows: usize,
@@ -65,13 +69,12 @@ fn arm_edges(st: &Stroke, start: bool, dmax: f64, off: &mut Vec<f64>) -> (Vec<P2
     let mut l = Vec::new();
     let mut r = Vec::new();
     let mut d = 0.0;
+    let mut q: Vec<P2> = Vec::new();
     loop {
         let s = if start { d } else { len - d };
-        let (p, n, m) = st.line.frame(s);
         st.offsets(s, off);
-        let (t0, ts) = (off[0], *off.last().unwrap());
-        let pl = add(p, scale(n, t0 * m));
-        let pr = add(p, scale(n, ts * m));
+        st.row_points(s, off, &mut q);
+        let (pl, pr) = (q[0], *q.last().unwrap());
         if start { l.push(pl); r.push(pr); } else { l.push(pr); r.push(pl); }
         if d >= dmax { break; }
         d = (d + 2.0).min(dmax);
@@ -121,6 +124,10 @@ fn caps(net: &mut Net, stats: &mut PartStats) {
         else { let k = (0..n).rev().find(|&k| st.slots[k].kind != K_SHOULDER).unwrap_or(n - 1); -off[k + 1] }
     };
     let mut caps_out: Vec<(usize, usize, Vec<(f64, f64)>)> = Vec::new();
+    let mut nbrs_out: Vec<Vec<usize>> = vec![Vec::new(); net.strokes.len()];
+    // (PT3 change 5) the measured gap caps parallel carriageways on any support (a collector on the ground beside a
+    // motorway deck); only a pair stacked one above the other (a crossing floor between them) is left alone
+    let stacked: std::collections::BTreeSet<(usize, usize)> = net.crossings.iter().map(|c| (c.a.min(c.b), c.a.max(c.b))).collect();
     let mut offa = Vec::new();
     let mut offb = Vec::new();
     for (si, a) in net.strokes.iter().enumerate() {
@@ -159,7 +166,7 @@ fn caps(net: &mut Net, stats: &mut PartStats) {
                     let tb = scale(ab, 1.0 / l2.sqrt());
                     if absf(dot(tb, t)) < 0.85 { continue; }
                     let sb = b.line.s[kj] + (b.line.s[kj + 1] - b.line.s[kj]) * u;
-                    if b.support_at(sb).kind != sup_a { continue; }
+                    if b.support_at(sb).kind != sup_a && stacked.contains(&(si.min(sj), si.max(sj))) { continue; }
                     let side = if dot(v, nrm) > 0.0 { 0 } else { 1 };
                     if best[side].map(|x| dd < x.0).unwrap_or(true) { best[side] = Some((dd, sj, sb)); }
                 }
@@ -171,6 +178,7 @@ fn caps(net: &mut Net, stats: &mut PartStats) {
                 let sh_a = a.slots[ka].prog.at(s).max(0.0);
                 let mut cap = sh_a;
                 if let Some((dd, sj, sb)) = best[side] {
+                    nbrs_out[si].push(sj);
                     let b = &net.strokes[sj];
                     b.offsets(sb, &mut offb);
                     let (pb, tbv) = b.line.at(sb);
@@ -199,6 +207,85 @@ fn caps(net: &mut Net, stats: &mut PartStats) {
         if any_s { caps_out.push((si, usize::MAX, scl)); }
     }
     for (si, k, c) in caps_out { if k == usize::MAX { net.strokes[si].lane_scale = c; } else { net.strokes[si].slots[k].cap = c; } }
+    for (si, mut v) in nbrs_out.into_iter().enumerate() { v.sort(); v.dedup(); net.strokes[si].cap_nbrs = v; }
+}
+
+/// The cluster's arms (stroke ends) in counter-clockwise order along the boundary of the cluster: at every node its
+/// arms and its internal strokes (absorbed, joining two of the cluster's nodes) sorted by their leaving direction;
+/// from the arm with the smallest stable id, the next item counter-clockwise at the node: an arm is the next arm, an
+/// internal stroke is followed to its other node (and the walk goes on after it there). Arms the walk misses (an
+/// island inside a loop of internal strokes) follow by their angle about the centre (recorded).
+fn boundary_order(net: &Net, nodes: &[usize], arms: &[(f64, usize, bool)], internal: &[usize]) -> (Vec<(f64, usize, bool)>, bool) {
+    if arms.len() <= 2 && internal.is_empty() {
+        let mut v = arms.to_vec();
+        v.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap().then((net.strokes[x.1].uid, x.2).cmp(&(net.strokes[y.1].uid, y.2))));
+        return (rotate_min(net, v), false);
+    }
+    #[derive(Clone, Copy, PartialEq)]
+    enum It { Arm(usize), Int(usize, bool) }
+    let leave = |si: usize, start: bool| -> (P2, usize) {
+        let st = &net.strokes[si];
+        let node = if start { st.n0 } else { st.n1 };
+        let d = if start { 6.0f64.min(st.len()) } else { (st.len() - 6.0).max(0.0) };
+        let (p, _) = st.line.at(d);
+        (sub(p, net.nodes[node].p), node)
+    };
+    let mut items: std::collections::BTreeMap<usize, Vec<(f64, u64, u8, It)>> = std::collections::BTreeMap::new();
+    for (k, &(_, si, a)) in arms.iter().enumerate() {
+        let (d, node) = leave(si, a);
+        items.entry(node).or_default().push((pseudo_angle(d), net.strokes[si].uid, a as u8, It::Arm(k)));
+    }
+    for &si in internal {
+        for start in [true, false] {
+            let (d, node) = leave(si, start);
+            items.entry(node).or_default().push((pseudo_angle(d), net.strokes[si].uid, 2 + start as u8, It::Int(si, start)));
+        }
+    }
+    for v in items.values_mut() { v.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap().then((x.1, x.2).cmp(&(y.1, y.2)))); }
+    let _ = nodes;
+    let k0 = (0..arms.len()).min_by_key(|&k| (net.strokes[arms[k].1].uid, arms[k].2)).unwrap();
+    let node0 = leave(arms[k0].1, arms[k0].2).1;
+    let mut at = (node0, items[&node0].iter().position(|x| x.3 == It::Arm(k0)).unwrap());
+    let mut order = vec![k0];
+    let total: usize = items.values().map(|v| v.len()).sum();
+    let mut seen = vec![false; arms.len()];
+    seen[k0] = true;
+    for _ in 0..4 * total + 4 {
+        let list = &items[&at.0];
+        let i = (at.1 + 1) % list.len();
+        match list[i].3 {
+            It::Arm(k) => {
+                if k == k0 { break; }
+                if !seen[k] { seen[k] = true; order.push(k); }
+                at = (at.0, i);
+            }
+            It::Int(si, start) => {
+                let st = &net.strokes[si];
+                let other = if start { st.n1 } else { st.n0 };
+                let Some(ol) = items.get(&other) else { break };
+                let Some(j) = ol.iter().position(|x| x.3 == It::Int(si, !start)) else { break };
+                at = (other, j);
+            }
+        }
+    }
+    let mut out: Vec<(f64, usize, bool)> = order.iter().map(|&k| arms[k]).collect();
+    let missed: Vec<(f64, usize, bool)> = (0..arms.len()).filter(|&k| !seen[k]).map(|k| arms[k]).collect();
+    let fell = !missed.is_empty();
+    if fell {
+        // insert each missed arm after the walked arm that precedes it by angle about the centre
+        for a in missed {
+            let pos = out.iter().position(|x| x.0 > a.0).unwrap_or(out.len());
+            out.insert(pos, a);
+        }
+    }
+    (out, fell)
+}
+
+fn rotate_min(net: &Net, mut v: Vec<(f64, usize, bool)>) -> Vec<(f64, usize, bool)> {
+    if v.is_empty() { return v; }
+    let k = (0..v.len()).min_by_key(|&k| (net.strokes[v[k].1].uid, v[k].2)).unwrap();
+    v.rotate_left(k);
+    v
 }
 
 pub fn layout(net: &mut Net) -> Layout {
@@ -221,6 +308,8 @@ pub fn layout(net: &mut Net) -> Layout {
     // junction nodes: >= 2 stroke ends, not a fork event (a fork's branch end is its snap)
     let is_junction = |n: usize, ends: &Vec<Vec<(usize, bool)>>| -> bool {
         if net.fork_at[n].is_some() { return false; }
+        // a cut joint (net.rs joints): the strokes continue each other through the node, no zone
+        if net.cut[n] && ends[n].iter().any(|&(si, a)| a && net.strokes[si].snap0.map(|x| x.joint).unwrap_or(false)) { return false; }
         let e: Vec<&(usize, bool)> = ends[n].iter().filter(|&&(si, a)| {
             let st = &net.strokes[si];
             !(a && st.snap0.is_some() && false) && !(!a && st.snap1.is_some() && false)
@@ -270,7 +359,13 @@ pub fn layout(net: &mut Net) -> Layout {
                     arms.push((pseudo_angle(dir), si, a));
                 }
             }
-            arms.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap().then((x.1, x.2).cmp(&(y.1, y.2))));
+            // (PT3 change 4) the arms in the order of a walk round the cluster's boundary, not by their angle about
+            // the cluster's centre (an elongated cluster's arms sorted about its centroid interleave)
+            let internal: Vec<usize> = { let mut v: Vec<usize> = nodes.iter().flat_map(|&n| ends[n].iter().map(|x| x.0))
+                .filter(|&si| absorbed[si] && nodes.contains(&net.strokes[si].n0) && nodes.contains(&net.strokes[si].n1)).collect(); v.sort(); v.dedup(); v };
+            let (walked, fell_back) = boundary_order(net, nodes, &arms, &internal);
+            if fell_back { stats.arm_order_fallback += 1; }
+            arms = walked;
             let m = arms.len();
             let edges: Vec<(Vec<P2>, Vec<P2>)> = arms.iter().map(|&(_, si, a)| arm_edges(&net.strokes[si], a, 60.0, &mut off)).collect();
             let mut xs: Vec<Option<P2>> = vec![None; m];
@@ -298,10 +393,10 @@ pub fn layout(net: &mut Net) -> Layout {
                         let st = &net.strokes[si];
                         let d = want[k].min(st.len());
                         let sst = if a { d } else { st.len() - d };
-                        let (p, n, mt) = st.line.frame(sst);
                         st.offsets(sst, &mut off);
-                        let pl = add(p, scale(n, off[0] * mt));
-                        let pr = add(p, scale(n, off[off.len() - 1] * mt));
+                        let mut q: Vec<P2> = Vec::new();
+                        st.row_points(sst, &off, &mut q);
+                        let (pl, pr) = (q[0], *q.last().unwrap());
                         if a { (pr, pl) } else { (pl, pr) }     // (leaving-right, leaving-left)
                     }).collect();
                     for k in 0..m {
@@ -382,6 +477,7 @@ pub fn layout(net: &mut Net) -> Layout {
         for at_start in [true, false] {
             let sn = if at_start { net.strokes[si].snap0 } else { net.strokes[si].snap1 };
             let Some(sn) = sn else { continue };
+            if sn.joint { continue; }
             let right_side_trunk = sn.k1 + 1 == net.strokes[sn.trunk].slots.len()
                 || net.strokes[sn.trunk].slots[sn.k1].kind == K_SHOULDER;
             let st = &mut net.strokes[si];
@@ -457,19 +553,34 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
     let mut off = Vec::new();
     // pass 1: rows (vertices) of every stroke, branches after their trunks (snaps read the trunk's rows)
     let mut order: Vec<usize> = (0..ns).collect();
-    let depth = |si: usize| { let mut d = 0; let mut c = si; for _ in 0..8 { let st = &net.strokes[c]; match st.snap0.or(st.snap1) { Some(s) => { d += 1; c = s.trunk; } None => break } } d };
+    // (both ends' snaps: a branch's nose and a cut joint; at most 8 deep, a loop of snaps stops there)
+    fn depth_of(net: &Net, si: usize, d: usize) -> usize {
+        if d >= 8 { return d; }
+        let st = &net.strokes[si];
+        let mut best = d;
+        for sn in [st.snap0, st.snap1].into_iter().flatten() { best = best.max(depth_of(net, sn.trunk, d + 1)); }
+        best
+    }
+    let depth = |si: usize| depth_of(net, si, 0);
     order.sort_by_key(|&si| (depth(si), si));
     let want = |si: usize| -> bool {
         match sel { None => true, Some(v) => v[si] }
     };
     // the strokes a selected stroke snaps to are needed too
     let mut need = vec![false; ns];
-    for si in 0..ns { if want(si) { let mut c = si; need[c] = true; for _ in 0..8 { let st = &net.strokes[c]; match st.snap0.or(st.snap1) { Some(s) => { c = s.trunk; need[c] = true; } None => break } } } }
+    fn mark_need(net: &Net, si: usize, need: &mut Vec<bool>, d: usize) {
+        if need[si] && d > 0 { return; }
+        need[si] = true;
+        if d >= 8 { return; }
+        let st = &net.strokes[si];
+        for sn in [st.snap0, st.snap1].into_iter().flatten() { mark_need(net, sn.trunk, need, d + 1); }
+    }
+    for si in 0..ns { if want(si) { mark_need(net, si, &mut need, 0); } }
     // zones need their arms' rows
     let mut zone_want = vec![false; lay.arms.len()];
     for (c, arms) in lay.arms.iter().enumerate() {
         if arms.len() < 2 { continue; }
-        if sel.is_none() || arms.iter().any(|a| want(a.stroke)) { zone_want[c] = true; for a in arms { need[a.stroke] = true; } }
+        if sel.is_none() || arms.iter().any(|a| want(a.stroke)) { zone_want[c] = true; for a in arms { mark_need(net, a.stroke, &mut need, 0); } }
     }
     for &si in &order {
         if !need[si] { continue; }
@@ -479,6 +590,8 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
         let stn = stations(st);
         let mut prev_xy: Option<[i64; 2]>;
         let mut snap_delta: Vec<(f64, f64)> = Vec::new();
+        let mut prev_row: Option<(f64, P2, Vec<P2>)> = None;     // (station, line point, boundary points)
+        let mut ts: Vec<f64> = Vec::new();
         let snap_rows = |sn: &Snap, rows: &Vec<Vec<Row>>| -> Option<Vec<u32>> {
             let tr = &rows[sn.trunk];
             let r = tr.iter().find(|r| absf(r.s - sn.s) < 0.01)?;
@@ -487,8 +600,30 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
             Some(v)
         };
         for (ri, &s) in stn.iter().enumerate() {
-            let (p, n, mt) = st.line.frame(s);
             st.offsets(s, &mut off);
+            let (p, n) = st.row_offsets(s, &off, &mut ts);
+            // fold guard (PT3 change 3): a boundary that would not advance past the previous row's (a wide ramp's
+            // inner edge on a tight curve) is pulled toward the line until it does; the ones inside it follow
+            if let Some((s0, p0, q0)) = &prev_row {
+                if q0.len() == ts.len() {
+                    if let Some(tg) = unit(sub(p, *p0)) {
+                        let need = 0.02 * (s - s0);
+                        let mut moved = false;
+                        for j in 0..ts.len() {
+                            if absf(ts[j]) < 0.5 { continue; }
+                            let base = dot(sub(p, q0[j]), tg);
+                            let gain = ts[j] * dot(n, tg);
+                            if base + gain >= need { continue; }
+                            let f = if gain < -1e-12 { clampf((need - base) / gain, 0.0, 1.0) } else { 0.0 };
+                            ts[j] *= f;
+                            moved = true;
+                        }
+                        if moved { stats.fold_guard += 1; order_offsets(&off, &mut ts); }
+                    }
+                }
+            }
+            let pts_row: Vec<P2> = ts.iter().map(|&t| add(p, scale(n, t))).collect();
+            prev_row = Some((s, p, pts_row.clone()));
             let sup = st.support_at(s);
             let zc = prof.at(si, s);
             let cf = crossfall(st, s, &off, sup.kind);
@@ -499,8 +634,8 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
             let snap = if first { st.snap0 } else if last { st.snap1 } else { None };
             let snapped = snap.and_then(|sn| snap_rows(&sn, &rows));
             let mut own: Vec<(P2, f64)> = Vec::new();
-            for (k, &t) in off.iter().enumerate() {
-                let mut q = add(p, scale(n, t * mt));
+            for (k, _t) in off.iter().enumerate() {
+                let mut q = pts_row[k];
                 // blend away a snap's offset over the first / last 20 m
                 if !snap_delta.is_empty() && st.snap0.is_some() {
                     let u = (s - st.cut0) / 20.0;
@@ -517,11 +652,12 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
                         if let Some(v) = snap_rows(&sn, &rows) {
                             let mut own_d: Vec<P2> = Vec::new();
                             // the own row at the end
-                            let (pe, ne, me) = st.line.frame(bend);
                             let mut oe = Vec::new();
                             st.offsets(bend, &mut oe);
+                            let mut qe: Vec<P2> = Vec::new();
+                            st.row_points(bend, &oe, &mut qe);
                             let mut ded: Vec<[i64; 2]> = Vec::new();
-                            for &t in &oe { let q = mm2(add(pe, scale(ne, t * me))); if ded.last() != Some(&q) { ded.push(q); } }
+                            for &q in &qe { let q = mm2(q); if ded.last() != Some(&q) { ded.push(q); } }
                             if ded.len() == v.len() {
                                 for (k, &vi) in v.iter().enumerate() {
                                     let tv = m.v[vi as usize];
@@ -530,8 +666,8 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
                                 // map own boundaries to deduped index
                                 let mut di = 0usize;
                                 let mut lastq: Option<[i64; 2]> = None;
-                                for (k, &t) in oe.iter().enumerate() {
-                                    let q = mm2(add(pe, scale(ne, t * me)));
+                                for (k, &q) in qe.iter().enumerate() {
+                                    let q = mm2(q);
                                     if lastq.is_some() && lastq != Some(q) { di += 1; }
                                     lastq = Some(q);
                                     let f = 1.0 - quintic(u);
@@ -580,7 +716,7 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
                 for (k, sl) in st.slots.iter().enumerate() {
                     if !(ra.s >= sl.alive.0 - 1e-9 && rb.s <= sl.alive.1 + 1e-9) { continue; }
                     let (a, bb, c, d) = (ra.b[k], ra.b[k + 1], rb.b[k + 1], rb.b[k]);
-                    let tag = Tag { kind: sl.kind, sup: sup.kind, piece: si as u32, slot: k as u16, sid: if sup.kind == SUP_GROUND { 0 } else { sup.sid } };
+                    let tag = Tag { kind: sl.kind, sup: sup.kind, piece: piece_of(st.uid), slot: k as u16, sid: if sup.kind == SUP_GROUND { 0 } else { sup.sid } };
                     for tri in [[bb, c, d], [bb, d, a]] {
                         if tri[0] == tri[1] || tri[1] == tri[2] || tri[0] == tri[2] { continue; }
                         let pv = |i: u32| { let v = m.v[i as usize]; [v[0], v[1]] };
@@ -601,7 +737,8 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
     for (c, arms) in lay.arms.iter().enumerate() {
         if !zone_want[c] { continue; }
         let t0 = crate::cpu_now();
-        let piece = (ns + c) as u32;
+        let piece = zone_label(net, &lay.clusters[c]);
+        let _ = ns;
         zone_piece[c] = piece;
         let mut ring: Vec<u32> = Vec::new();
         let mut ok_rows = true;
@@ -664,10 +801,17 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
         match tris {
             Some(ts) => { for t in ts { m.t.push(t); m.tag.push(tag); } }
             None => {
-                // recorded fallback: a fan of the ring's convex hull (may overlap; counted by the checks)
-                stats.zone_fallback_hull += 1;
-                let hull = hull(&m, &full);
-                if hull.len() >= 3 { for i in 1..hull.len() - 1 { m.t.push([hull[0], hull[i], hull[i + 1]]); m.tag.push(tag); } }
+                // (PT3 change 4) a ring that is not simple: the union it covers (non-zero winding), triangulated
+                // face by face of its arrangement; a face that cannot be triangulated is recorded, never filled
+                // by a hull
+                match triangulate_union(&mut m, &full) {
+                    Ok((ts, failed)) => {
+                        stats.zone_union += 1;
+                        if failed > 0 { stats.zone_union_fail += 1; }
+                        for t in ts { m.t.push(t); m.tag.push(tag); }
+                    }
+                    Err(()) => { stats.zone_union_fail += 1; stats.zone_fail += 1; }
+                }
             }
         }
         zone_cpu[c] = crate::cpu_now() - t0;
@@ -675,6 +819,142 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
     stats.tris = m.t.len();
     stats.verts = m.v.len();
     Built { mesh: m, rows, stats, stroke_cpu, zone_cpu, zone_piece }
+}
+
+/// A zone's piece label: the top bit and a hash of its cluster's connector ids (stable whatever the build).
+fn zone_label(net: &Net, nodes: &[usize]) -> u32 {
+    let mut ids: Vec<&str> = nodes.iter().map(|&n| net.node_ids[n].as_str()).collect();
+    ids.sort();
+    0x8000_0000 | piece_of(uid_of(&ids.join("|"), &[]))
+}
+
+/// The triangles covering the union of a closed ring that crosses itself (non-zero winding): the ring's edges split
+/// at every crossing (new vertices at the crossings, z interpolated), the faces of that arrangement traced (each
+/// on the left of its half-edges), every bounded face whose interior the ring winds round ear-clipped. Returns the
+/// triangles and the number of faces that could not be triangulated (recorded by the caller).
+fn triangulate_union(m: &mut Mesh, ring: &[u32]) -> Result<(Vec<[u32; 3]>, usize), ()> {
+    let n = ring.len();
+    if n < 3 { return Err(()); }
+    let pt = |m: &Mesh, i: u32| { let v = m.v[i as usize]; [v[0], v[1]] };
+    // vertex ids by position (a repeated position is one vertex)
+    let mut by_pos: std::collections::BTreeMap<[i64; 2], u32> = std::collections::BTreeMap::new();
+    let mut rv: Vec<u32> = Vec::with_capacity(n);
+    for &i in ring { let p = pt(m, i); let id = *by_pos.entry(p).or_insert(i); rv.push(id); }
+    // split points per ring edge: (param, vertex)
+    let mut cuts: Vec<Vec<(f64, u32)>> = vec![Vec::new(); n];
+    for i in 0..n {
+        let (a, b) = (pt(m, rv[i]), pt(m, rv[(i + 1) % n]));
+        if a == b { continue; }
+        for j in (i + 1)..n {
+            let (c, d) = (pt(m, rv[j]), pt(m, rv[(j + 1) % n]));
+            if c == d { continue; }
+            if j == i + 1 || (i == 0 && j == n - 1) { continue; }
+            if !iseg_cross(a, b, c, d) { continue; }
+            let (r, sv) = ([(b[0] - a[0]) as f64, (b[1] - a[1]) as f64], [(d[0] - c[0]) as f64, (d[1] - c[1]) as f64]);
+            let den = r[0] * sv[1] - r[1] * sv[0];
+            let qp = [(c[0] - a[0]) as f64, (c[1] - a[1]) as f64];
+            let add_cut = |m: &mut Mesh, e: usize, u: f64, p: [i64; 2], cuts: &mut Vec<Vec<(f64, u32)>>, by_pos: &mut std::collections::BTreeMap<[i64; 2], u32>, ea: u32, eb: u32| {
+                let id = match by_pos.get(&p) { Some(&id) => id, None => {
+                    let (za, zb) = (m.v[ea as usize][2] as f64, m.v[eb as usize][2] as f64);
+                    m.v.push([p[0], p[1], (za + (zb - za) * u).round() as i64]);
+                    let id = (m.v.len() - 1) as u32;
+                    by_pos.insert(p, id);
+                    id
+                } };
+                cuts[e].push((u, id));
+            };
+            if den.abs() > 0.0 {
+                let u = (qp[0] * sv[1] - qp[1] * sv[0]) / den;
+                let v = (qp[0] * r[1] - qp[1] * r[0]) / den;
+                let p = [(a[0] as f64 + r[0] * u).round() as i64, (a[1] as f64 + r[1] * u).round() as i64];
+                add_cut(m, i, clampf(u, 0.0, 1.0), p, &mut cuts, &mut by_pos, rv[i], rv[(i + 1) % n]);
+                add_cut(m, j, clampf(v, 0.0, 1.0), p, &mut cuts, &mut by_pos, rv[j], rv[(j + 1) % n]);
+            } else {
+                // collinear overlap: each edge split at the other's ends lying on it
+                let l2 = r[0] * r[0] + r[1] * r[1];
+                let k2 = sv[0] * sv[0] + sv[1] * sv[1];
+                for (p, e, base, dir, ll, ea, eb) in [(c, i, a, r, l2, rv[i], rv[(i + 1) % n]), (d, i, a, r, l2, rv[i], rv[(i + 1) % n]),
+                                                     (a, j, c, sv, k2, rv[j], rv[(j + 1) % n]), (b, j, c, sv, k2, rv[j], rv[(j + 1) % n])] {
+                    let u = ((p[0] - base[0]) as f64 * dir[0] + (p[1] - base[1]) as f64 * dir[1]) / ll;
+                    if u > 0.0 && u < 1.0 { add_cut(m, e, u, p, &mut cuts, &mut by_pos, ea, eb); }
+                }
+            }
+        }
+    }
+    // the arrangement's undirected edges
+    let mut adj: std::collections::BTreeMap<u32, Vec<u32>> = std::collections::BTreeMap::new();
+    let mut edges: std::collections::BTreeSet<(u32, u32)> = std::collections::BTreeSet::new();
+    let mut ring_pts: Vec<[i64; 2]> = Vec::with_capacity(n);
+    for i in 0..n {
+        ring_pts.push(pt(m, rv[i]));
+        let mut c = cuts[i].clone();
+        c.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap().then(x.1.cmp(&y.1)));
+        let mut chain = vec![rv[i]];
+        for (_u, id) in c { if *chain.last().unwrap() != id { chain.push(id); } }
+        let end = rv[(i + 1) % n];
+        if *chain.last().unwrap() != end { chain.push(end); }
+        for w in chain.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            if a == b || pt(m, a) == pt(m, b) { continue; }
+            let k = if a < b { (a, b) } else { (b, a) };
+            if edges.insert(k) { adj.entry(a).or_default().push(b); adj.entry(b).or_default().push(a); }
+        }
+    }
+    // neighbours in counter-clockwise order (exact: half-plane, then cross product)
+    for (&v, list) in adj.iter_mut() {
+        let o = pt(m, v);
+        let half = |p: [i64; 2]| { let (dx, dy) = (p[0] - o[0], p[1] - o[1]); if dy > 0 || (dy == 0 && dx > 0) { 0 } else { 1 } };
+        list.sort_by(|&x, &y| {
+            let (px, py) = (pt(m, x), pt(m, y));
+            let (hx, hy) = (half(px), half(py));
+            if hx != hy { return hx.cmp(&hy); }
+            let c = orient(o, px, py);
+            if c > 0 { std::cmp::Ordering::Less } else if c < 0 { std::cmp::Ordering::Greater } else { x.cmp(&y) }
+        });
+    }
+    // faces on the left of their half-edges: next of (u, v) is (v, w), w the neighbour of v just clockwise of u
+    let mut used: std::collections::BTreeSet<(u32, u32)> = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    let mut failed = 0usize;
+    let half_edges: Vec<(u32, u32)> = edges.iter().flat_map(|&(a, b)| [(a, b), (b, a)]).collect();
+    for &(u0, v0) in &half_edges {
+        if used.contains(&(u0, v0)) { continue; }
+        let mut face: Vec<u32> = Vec::new();
+        let (mut u, mut v) = (u0, v0);
+        let mut ok = true;
+        for _ in 0..(2 * half_edges.len() + 2) {
+            used.insert((u, v));
+            face.push(u);
+            let list = &adj[&v];
+            let k = list.iter().position(|&x| x == u).unwrap();
+            let w = list[(k + list.len() - 1) % list.len()];
+            u = v;
+            v = w;
+            if (u, v) == (u0, v0) { break; }
+            if used.contains(&(u, v)) { ok = false; break; }
+        }
+        if !ok || face.len() < 3 { continue; }
+        // bounded faces are counter-clockwise
+        let mut a2: i128 = 0;
+        for i in 0..face.len() { let (p, q) = (pt(m, face[i]), pt(m, face[(i + 1) % face.len()])); a2 += p[0] as i128 * q[1] as i128 - q[0] as i128 * p[1] as i128; }
+        if a2 <= 0 { continue; }
+        let tris = if ring_simple(m, &face) { triangulate(m, &face) } else { None };
+        let Some(tris) = tris else { failed += 1; continue };
+        if tris.is_empty() { continue; }
+        // the ring's winding round an interior point (3 x the first triangle's centroid, exact)
+        let t = tris[0];
+        let c3 = { let (a, b, c) = (pt(m, t[0]), pt(m, t[1]), pt(m, t[2])); [a[0] + b[0] + c[0], a[1] + b[1] + c[1]] };
+        let mut wn = 0i64;
+        for i in 0..n {
+            let (a, b) = (ring_pts[i], ring_pts[(i + 1) % n]);
+            let (a3, b3) = ([3 * a[0], 3 * a[1]], [3 * b[0], 3 * b[1]]);
+            if a3[1] <= c3[1] {
+                if b3[1] > c3[1] && orient(a3, b3, c3) > 0 { wn += 1; }
+            } else if b3[1] <= c3[1] && orient(a3, b3, c3) < 0 { wn -= 1; }
+        }
+        if wn != 0 { out.extend(tris); }
+    }
+    Ok((out, failed))
 }
 
 fn ring_simple(m: &Mesh, r: &[u32]) -> bool {
@@ -760,6 +1040,7 @@ fn legalise(points: &[[i64; 2]], tris: &mut [[usize; 3]], nring: usize) {
     }
 }
 
+#[allow(dead_code)]
 fn hull(m: &Mesh, r: &[u32]) -> Vec<u32> {
     let mut v: Vec<(i64, i64, u32)> = r.iter().map(|&i| { let p = m.v[i as usize]; (p[0], p[1], i) }).collect();
     v.sort();

@@ -45,7 +45,9 @@ fn ribbon(out: &mut Marks, mesh: &Mesh, rows: &[Row], k: usize, ra: usize, rb: u
     let (s_lo, s_hi) = (rows[ra].s, rows[rb].s);
     let mut ivs: Vec<(f64, f64)> = Vec::new();
     match dash {
+        // (a pattern without length is a solid line: never a loop over every dash of the station range)
         None => ivs.push((s_lo, s_hi)),
+        Some((d, g)) if !(d > 0.05 && d + g > 0.1) || !((s_hi - s_lo) / (d + g) < 1e6) => ivs.push((s_lo, s_hi)),
         Some((d, g)) => {
             let p = d + g;
             let k0 = (s_lo / p).floor() as i64;
@@ -128,22 +130,22 @@ pub fn marks(net: &Net, mesh: &Mesh, rows: &[Vec<Row>], style: &Style, sel: Opti
                 if let Some(kd) = kd {
                     let col = colour(style, kd);
                     match kd {
-                        Kind::Lane => ribbon(&mut out, mesh, rs, k, r0, r1, 0.0, w, Some(if mw { style.lane_motorway } else { style.lane_urban }), col, si as u32),
+                        Kind::Lane => ribbon(&mut out, mesh, rs, k, r0, r1, 0.0, w, Some(if mw { style.lane_motorway } else { style.lane_urban }), col, piece_of(st.uid)),
                         Kind::Centre => {
                             if style.double_centre {
                                 let g = 0.12;
-                                ribbon(&mut out, mesh, rs, k, r0, r1, (w + g) / 2.0, w, None, col, si as u32);
-                                ribbon(&mut out, mesh, rs, k, r0, r1, -(w + g) / 2.0, w, None, col, si as u32);
+                                ribbon(&mut out, mesh, rs, k, r0, r1, (w + g) / 2.0, w, None, col, piece_of(st.uid));
+                                ribbon(&mut out, mesh, rs, k, r0, r1, -(w + g) / 2.0, w, None, col, piece_of(st.uid));
                             } else {
-                                ribbon(&mut out, mesh, rs, k, r0, r1, 0.0, w, Some(style.centre_urban), col, si as u32);
+                                ribbon(&mut out, mesh, rs, k, r0, r1, 0.0, w, Some(style.centre_urban), col, piece_of(st.uid));
                             }
                         }
                         Kind::Edge | Kind::EdgeLeft => {
                             let ew = if mw { style.edge_motorway } else { style.edge };
                             let inward = if l.kind == K_SHOULDER { -ew / 2.0 } else { ew / 2.0 };
-                            ribbon(&mut out, mesh, rs, k, r0, r1, inward, ew, None, col, si as u32);
+                            ribbon(&mut out, mesh, rs, k, r0, r1, inward, ew, None, col, piece_of(st.uid));
                         }
-                        Kind::Gore => ribbon(&mut out, mesh, rs, k, r0, r1, 0.0, style.edge.max(0.15), None, col, si as u32),
+                        Kind::Gore => ribbon(&mut out, mesh, rs, k, r0, r1, 0.0, style.edge.max(0.15), None, col, piece_of(st.uid)),
                     }
                 }
                 r0 = r1;

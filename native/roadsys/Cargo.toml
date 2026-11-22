@@ -2,7 +2,15 @@
 name = "roadsys"
 version = "0.1.0"
 edition = "2021"
-description = "PT3 prototype (road surface + bridge rewrite, BNE_ROADSYS): lane graph, planar partition, one profile per carriageway, markings. Not wired into the product."
+description = "The road surface + bridge rewrite (BNE_ROADSYS): lane graph, planar partition, one profile per carriageway, markings, the M0 audit. A library linked into earthfast, and a CLI (the PT3 runner, the wide corpus audit)."
+
+[lib]
+name = "roadsys"
+path = "src/lib.rs"
+
+[[bin]]
+name = "roadsys"
+path = "src/main.rs"
 
 [dependencies]
 

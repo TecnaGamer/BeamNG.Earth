@@ -1,39 +1,14 @@
-//! roadsys: PT3 prototype of the road surface + bridge rewrite (bridgerewrite/DESIGN.md section 12, PT3). Not wired
-//! into the product. Kernels: G1 lane graph (net.rs), G2 support + crossings (net.rs), G3 one profile per carriageway
-//! (prof.rs), G4 planar partition (part.rs), markings (mark.rs), G6 tiles (tile.rs), checks (check.rs).
+//! roadsys CLI: the PT3 prototype runner over exported place files, and the M0 audit (tools/widecorpus/checks.py).
 //!
 //!   roadsys PLACE.bin OUTDIR [--reverse] [--repeat N] [--cold] [--cold-repeat N] [--halo M] [--tag NAME]
+//!   roadsys audit IN.bin OUT.json
 //!
-//! Writes OUTDIR/<name><tag>.json (timings, stats, checks, tile hashes), OUTDIR/<name><tag>.tiles (every tile's
-//! canonical bytes), OUTDIR/<name><tag>.plan (the place's faces and markings for the plan views).
-mod check;
-mod derive;
-mod geom;
-mod io;
-mod mark;
-mod net;
-mod part;
-mod prof;
-mod tile;
+//! Place mode writes OUTDIR/<name><tag>.json (timings, stats, checks, tile hashes), OUTDIR/<name><tag>.tiles (every
+//! tile's canonical bytes), OUTDIR/<name><tag>.plan (the place's faces and markings for the plan views).
+use roadsys::*;
+use roadsys::cpu_now;
 
 use std::fmt::Write as _;
-
-#[cfg(target_os = "linux")]
-pub fn cpu_now() -> f64 {
-    #[repr(C)]
-    struct Ts { s: i64, ns: i64 }
-    extern "C" { fn clock_gettime(clk: i32, tp: *mut Ts) -> i32; }
-    let mut t = Ts { s: 0, ns: 0 };
-    unsafe { clock_gettime(3, &mut t); }    // CLOCK_THREAD_CPUTIME_ID
-    t.s as f64 + t.ns as f64 * 1e-9
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn cpu_now() -> f64 {
-    use std::sync::OnceLock;
-    static T0: OnceLock<std::time::Instant> = OnceLock::new();
-    T0.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()
-}
 
 const TILE_M: f64 = 256.0;
 
@@ -73,7 +48,8 @@ fn run_all(place: &io::Place, order: &[usize], sel_box: Option<[f64; 4]>) -> Run
     let t2 = cpu_now();
     let sel: Option<Vec<bool>> = sel_box.map(|b| net.strokes.iter().map(|st| st.line.p.iter().any(|p| p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3])
         || st.line.p.windows(2).any(|w| seg_box(w[0], w[1], b))).collect());
-    let prof = prof::solve(&net, &place.dem, sel.as_deref());
+    let dem = &place.dem;
+    let prof = prof::solve(&net, &|pts: &[geom::P2]| pts.iter().map(|p| dem.at(*p)).collect(), sel.as_deref());
     let t3 = cpu_now();
     let built = part::mesh(&net, &lay, &prof, sel.as_deref());
     let t4 = cpu_now();
@@ -93,6 +69,33 @@ fn seg_box(a: geom::P2, b: geom::P2, bx: [f64; 4]) -> bool {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() == 4 && args[1] == "tile" {
+        // a shadow tile's dumped input (ROADSYS_DUMP in the server) built again: OUTDIR/<tile>.json and .bin
+        let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(1) });
+        let t = io::read_tile(&b).unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
+        let used = std::cell::Cell::new(false);
+        let g = |pts: &[geom::P2]| -> Vec<f64> {
+            if pts.len() != t.ground.len() { eprintln!("ground: {} points asked, {} recorded", pts.len(), t.ground.len()); std::process::exit(1); }
+            used.set(true);
+            t.ground.clone()
+        };
+        let out = product::build(&t.place, t.quad, t.id, t.frame, &g, net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1 });
+        std::fs::create_dir_all(&args[3]).ok();
+        let name = format!("{}_{}", t.id.0, t.id.1);
+        std::fs::write(format!("{}/{}.json", args[3], name), &out.json).ok();
+        std::fs::write(format!("{}/{}.bin", args[3], name), &out.bytes).ok();
+        println!("{} {:016x} {}", name, out.hash, used.get());
+        return;
+    }
+    if args.len() == 4 && args[1] == "audit" {
+        // the M0 audit (tools/widecorpus/checks.py): IN.bin -> OUT.json
+        let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(1) });
+        match audit::run(&b) {
+            Ok(j) => { std::fs::write(&args[3], j).unwrap_or_else(|e| { eprintln!("{}: {}", args[3], e); std::process::exit(1) }); }
+            Err(e) => { eprintln!("{}", e); std::process::exit(1); }
+        }
+        return;
+    }
     if args.len() < 3 { eprintln!("usage: roadsys PLACE.bin OUTDIR [--reverse] [--repeat N] [--cold] [--cold-repeat N] [--halo M] [--tag NAME]"); std::process::exit(2); }
     let place = io::read(&args[1]).unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
     let outdir = &args[2];
