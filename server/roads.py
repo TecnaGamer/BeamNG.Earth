@@ -664,9 +664,103 @@ def _rule_many(feats, idx):
     miss = [i for i in idx if i not in memo]
     if miss:
         raw = _raw_memo(feats)
-        for i, r in zip(miss, _level_steps(feats, miss, [raw[i] for i in miss], _STEP_SKEW | _STEP_GAPS)):
+        got = _level_steps(feats, miss, [raw[i] for i in miss], _STEP_SKEW | _STEP_GAPS)
+        if SKEW_ELSEWHERE_ON:
+            got = _skew_elsewhere(feats, miss, got)
+        for i, r in zip(miss, got):
             memo.setdefault(i, r)
     return [memo[i] for i in idx]
+
+
+# A long segment's copy in each cell lengthens its bridge ranges (_skew_decks) over the roads crossing under them in that
+# cell only, and every copy takes its home copy's ranges (level_ranges): a crossing road in another cell of the segment
+# was never spanned. I-285's 1.2 km segment over Peachtree Dunwoody Road (Atlanta, 33.9135 N 84.3524 W) is at home in
+# the cell west of the street's; its 21 m deck met the street at 44 deg and ended square, 17 m short across its south
+# lanes: the motorway's edge stood 4-6 m over the street dug under it (2.65 m steps, the user's report 2026-11-19).
+# A copy's bridge range takes the reach the segment's copies in the cells it reaches found for it too (their own
+# _skew_decks, laid on this copy: map_ranges), never into a range of another kind. BNE_SKEW_ELSEWHERE=off: as before.
+SKEW_ELSEWHERE_ON = os.environ.get("BNE_SKEW_ELSEWHERE", "off") == "on"  # (off by default until it keeps every drivability benchmark part as good: test_drivability)
+SKEW_ELSEWHERE_MIN_M = HOME_MAP_TOL_M   # m a range grows at least (less: the copies' own extents laid on each other, a
+                                        # Connector deck's end 0.3 m on stepped its neighbours' joints, 3.5 -> 6.0 g)
+
+
+def _skew_elsewhere(feats, idx, rules):
+    """rules (the rule ranges of features idx) with each bridge range lengthened to the reach the copies of its feature
+    in the neighbour cells it reaches give it (SKEW_ELSEWHERE_*). Pure given the neighbours' layers."""
+    me = feats.__dict__.get("_bnge_cell")
+    hook = feats.__dict__.get("_bnge_neighbours")
+    if me is None or hook is None or not len(idx):
+        return rules
+    cb = _cell_bounds(feats)
+    boxes = _feature_boxes(feats)
+    cand = []
+    for k, i in enumerate(idx):
+        if not any(r[2] == "bridge" for r in rules[k]):
+            continue
+        b = boxes[i]
+        if not np.isfinite(b).all():
+            continue
+        if cb is not None and cb[0] <= b[0] and b[2] <= cb[2] and cb[1] <= b[1] and b[3] <= cb[3]:
+            continue                    # (it stays in this cell)
+        cand.append(k)
+    if not cand:
+        return rules
+    import revisit
+    want = _cells_reached(hook, boxes[np.asarray([idx[k] for k in cand], np.int64)])
+    try:
+        near = [f for f in _near_layers(hook, want) if f is not None and f.__dict__.get("_bnge_cell")]
+    except Exception as e:              # (not kept: made again with them)
+        log.debug("skew elsewhere: neighbours: %s: %s", type(e).__name__, e)
+        revisit.fault()
+        return rules
+    out = list(rules)
+    for k in cand:
+        i = idx[k]
+        mine = _single_ring(feats, i)
+        if mine is None:
+            continue
+        lon0, lat0, lon1, lat1 = (float(v) for v in boxes[i])
+        fid = feats.ids[i]
+        reach = []
+        for other in near:
+            if other.__dict__["_bnge_cell"][0] == me[0]:
+                continue
+            ob = _cell_bounds(other)
+            if ob is not None and (lon1 < ob[0] or lon0 > ob[2] or lat1 < ob[1] or lat0 > ob[3]):
+                continue
+            pos = other.__dict__.get("_id_pos")
+            if pos is None:
+                pos = other.__dict__["_id_pos"] = {f: j for j, f in enumerate(other.ids.tolist())}
+            j = pos.get(fid)
+            if j is None:
+                continue
+            theirs = _level_steps(other, [j], [_raw_memo(other)[j]], _STEP_SKEW)[0]
+            ring = _single_ring(other, j)
+            if ring is None:
+                continue
+            reach.extend((a, b) for a, b, kind in map_ranges(ring, mine, theirs) if kind == "bridge")
+        if reach:
+            out[k] = _lengthen_bridges(rules[k], reach, SKEW_ELSEWHERE_MIN_M / max(_ring_metric(mine)[5][-1], 1e-9))
+    return out
+
+
+def _lengthen_bridges(rngs, reach, least=0.0):
+    """Sorted level ranges rngs with each bridge range grown to every (a, b) of reach overlapping it, an end only by
+    more than least (a fraction), never into the range before or after it. Pure."""
+    rngs = sorted(rngs)
+    out = []
+    for n, (a, b, kind) in enumerate(rngs):
+        if kind == "bridge":
+            lo, hi = a, b
+            for c, d in reach:
+                if c <= b and d >= a:
+                    lo, hi = min(lo, c), max(hi, d)
+            prev = out[-1][1] if out else 0.0
+            nxt = rngs[n + 1][0] if n + 1 < len(rngs) else 1.0
+            lo, hi = (lo if a - lo > least else a), (hi if hi - b > least else b)
+            a, b = max(lo, prev, 0.0), min(hi, nxt, 1.0)
+        out.append((a, b, kind))
+    return out
 
 
 def raw_level_ranges(feats, i):
@@ -753,7 +847,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 31     # 31: small machine-learned outlines (sheds, garages) kept where OSM maps a house within 20 m (osmml.py, 2026-11-19); 30: the street walls without the machine-learned building outlines OSM's buildings make stale (osmml.py: an ML outline where OSM maps a cell's buildings, or overlapping an OSM one, left out of the buildings layer; Fells Point's demolished rowhouses on vacant lots, the user 2026-11-18): the widths of town streets between buildings (_wall_capped, _laned_walled), 2026-11-18; 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 32     # 32: a long segment's bridge ranges lengthened over the roads crossing under them in every cell it reaches, not only its home cell's (_skew_elsewhere: I-285 over Peachtree Dunwoody Road, Atlanta, a 4-6 m edge into the street under it), 2026-11-19; 31: small machine-learned outlines (sheds, garages) kept where OSM maps a house within 20 m (osmml.py, 2026-11-19); 30: the street walls without the machine-learned building outlines OSM's buildings make stale (osmml.py: an ML outline where OSM maps a cell's buildings, or overlapping an OSM one, left out of the buildings layer; Fells Point's demolished rowhouses on vacant lots, the user 2026-11-18): the widths of town streets between buildings (_wall_capped, _laned_walled), 2026-11-18; 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -4944,17 +5038,8 @@ def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, width
     # level, so a ramp under the upper deck rose with it and lifted it again each round (the Morrison Bridge 21 ->
     # 41 m over the Willamette, 2026-10-19)
     for _ in range(1 if bridge_profile_mode() == "curve" else 4):
-        extra = []
         # (LEVEL_SPACING: the clearance of the lower part's own road, level_clear; else `clear`)
-        for i, j, si, sj in over:
-            if levels[i] == levels[j]:
-                continue
-            hi, lo, sh, sl = (i, j, si, sj) if levels[i] > levels[j] else (j, i, sj, si)
-            extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])),
-                          None if level_clear is None else level_clear[lo], levels[hi]))
-        for hi, sh, lo, sl in stacks:               # a deck over another along it (an upper roadway)
-            extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])),
-                          None if level_clear is None else level_clear[lo], levels[hi]))
+        extra = _stack_extra(over, stacks, levels, arcs, zs, level_clear)
         if not extra:
             break
         new = deck_profile_once(lines, ground_fn, list(crossings) + extra, clear, grade, lift, n_road=n_road,
@@ -4964,6 +5049,14 @@ def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, width
             break
         zs = new
     zs = _merge_overlaps(lines, zs, widths, levels, pins=pins) if widths is not None and not _no_merge() else zs
+    if STACK_RECHECK and widths is not None and not _no_merge() and over and \
+            _stack_short(over, levels, arcs, zs, clear, STACK_RECHECK_M, level_clear):
+        # (the merge raised a lower deck to the one beside it after its upper was solved over it: once more from there)
+        extra = _stack_extra(over, stacks, levels, arcs, zs, level_clear)
+        if extra:
+            zs = deck_profile_once(lines, ground_fn, list(crossings) + extra, clear, grade, lift, n_road=n_road,
+                                   levels=levels, pins=pins, crest=crest, fast=fast)
+            zs = _merge_overlaps(lines, zs, widths, levels, pins=pins)
     return _ease(lines, zs, ground_fn, lift) if bridge_profile_mode() == "curve" else zs
 
 
@@ -4971,7 +5064,63 @@ def _no_merge():
     return getattr(_NO_MERGE, "on", False)
 
 
+def _stack_extra(over, stacks, levels, arcs, zs, level_clear=None):
+    """deck_profile's requirements of the upper decks over the lower at their crossings (over) and along their stacks,
+    from the heights zs: (upper part, arc, the lower's height there, its clearance (level_clear's for the lower, else
+    None: deck_profile's `clear`), the upper's level). Pure."""
+    extra = []
+    for i, j, si, sj in over:
+        if levels[i] == levels[j]:
+            # (the map's same layer for two decks crossing already SAME_LEVEL_APART_M apart: not a junction, one
+            # over the other. The GA-400 / I-285 flyover e33ee9a3 and the ramp 3e166703 under it, both layer 2,
+            # had no clearance asked: 4.1 m under its girders where the inventory gives 6.5, 2026-11-21)
+            if SAME_LEVEL_APART_M is None:
+                continue
+            zi, zj = float(dnp.interp(si, arcs[i], zs[i])), float(dnp.interp(sj, arcs[j], zs[j]))
+            if not (np.isfinite(zi) and np.isfinite(zj)) or abs(zi - zj) < SAME_LEVEL_APART_M:
+                continue
+            hi, lo, sh, sl = (i, j, si, sj) if zi > zj else (j, i, sj, si)
+            extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])), None if level_clear is None else level_clear[lo], levels[hi]))
+            continue
+        hi, lo, sh, sl = (i, j, si, sj) if levels[i] > levels[j] else (j, i, sj, si)
+        extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])), None if level_clear is None else level_clear[lo], levels[hi]))
+    for hi, sh, lo, sl in stacks:               # a deck over another along it (an upper roadway)
+        extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])), None if level_clear is None else level_clear[lo], levels[hi]))
+    return extra
+
+
 STACK_STEP_M = 16.0     # m between the points where an upper deck must clear the one under it (_deck_stacks)
+# curve mode solves the decks' crossings in one round (more lifted the Morrison Bridge every round, see deck_profile);
+# where that round left an upper deck STACK_RECHECK_M or more short of its clearance over the lower (the lower rose in
+# it), one more round from the heights it gave. The GA-400 / I-285 flyover e33ee9a3 over the ramp 3e166703: 1.3 m
+# short, 4.1 m under its girders where the inventory gives 6.5 (2026-11-21). BNE_STACK_RECHECK=off: one round.
+STACK_RECHECK = os.environ.get("BNE_STACK_RECHECK", "on") != "off"
+STACK_RECHECK_M = 0.3
+
+
+def _stack_short(over, levels, arcs, zs, clear, tol, level_clear=None):
+    """Does an upper deck of a crossing (over: (i, j, arc on i, arc on j)) stand tol or more short of clear over the
+    lower (a higher level; the same level SAME_LEVEL_APART_M apart: the higher)? Pure."""
+    for i, j, si, sj in over:
+        zi, zj = float(dnp.interp(si, arcs[i], zs[i])), float(dnp.interp(sj, arcs[j], zs[j]))
+        if not (np.isfinite(zi) and np.isfinite(zj)):
+            continue
+        if levels[i] == levels[j]:
+            if SAME_LEVEL_APART_M is None or abs(zi - zj) < SAME_LEVEL_APART_M:
+                continue
+            up, lo = max(zi, zj), min(zi, zj)
+        else:
+            up, lo = (zi, zj) if levels[i] > levels[j] else (zj, zi)
+        need = clear
+        if level_clear is not None:
+            k = (j if zi > zj else i) if levels[i] == levels[j] else (j if levels[i] > levels[j] else i)
+            need = clear if level_clear[k] is None else level_clear[k]
+        if up - lo < need - tol:
+            return True
+    return False
+# Two decks the map gives the same level crossing this far apart or more (deck_profile's first solve): one over the
+# other, the upper asked its clearance over the lower as across levels. BNE_SAME_LEVEL_APART=off: never.
+SAME_LEVEL_APART_M = None if os.environ.get("BNE_SAME_LEVEL_APART", "on") == "off" else 3.0
 
 
 def _deck_stacks(lines, levels, widths, step=STACK_STEP_M):
@@ -7018,6 +7167,47 @@ def clip_polyline(pts, x0, y0, x1, y1):
     return [out[starts[i]:starts[i + 1]].copy() for i in range(len(starts) - 1)]
 
 
+def _beyond_box(pts, box, pad):
+    """The pieces of a polyline (k, D >= 2, xy first) outside the box (x0, y0, x1, y1) but inside it grown by pad,
+    each cut exactly where it crosses either box's edge. Pure."""
+    x0, y0, x1, y1 = box
+    out = []
+    for piece in clip_polyline(pts, x0 - pad, y0 - pad, x1 + pad, y1 + pad):
+        P = np.asarray(piece, np.float64)
+        run = []
+        for a, b in zip(P[:-1], P[1:]):
+            d = b - a
+            t0, t1 = 0.0, 1.0                   # (Liang-Barsky: the segment's part inside the box)
+            for p, q in ((-d[0], a[0] - x0), (d[0], x1 - a[0]), (-d[1], a[1] - y0), (d[1], y1 - a[1])):
+                if abs(p) < 1e-12:
+                    if q < 0:
+                        t0, t1 = 1.0, 0.0
+                        break
+                    continue
+                r = q / p
+                if p < 0:
+                    t0 = max(t0, r)
+                else:
+                    t1 = min(t1, r)
+            if t0 >= t1:                        # (all outside)
+                if not run:
+                    run.append(a)
+                run.append(b)
+                continue
+            if t0 > 1e-9:                       # (outside up to where it enters)
+                if not run:
+                    run.append(a)
+                run.append(a + d * t0)
+            if run:
+                out.append(np.array(run))
+                run = []
+            if t1 < 1.0 - 1e-9:                 # (outside again from where it leaves)
+                run = [a + d * t1, b]
+        if run:
+            out.append(np.array(run))
+    return [p for p in out if len(p) >= 2 and dnp.hypot(*(p[-1, :2] - p[0, :2])) > 1e-3]
+
+
 def simplify(pts, tol=None, ztol=None):
     """Ramer-Douglas-Peucker on the xy of a polyline (k, D). ztol (D >= 3): a point is also kept where its height is
     more than this off the line between the kept ones (a deck drawn at its own heights: on xy alone a straight bridge
@@ -8102,6 +8292,78 @@ OBS_BLEND_DG = 0.04     # a measured deck eased onto its joints' heights changes
 OBS_BLEND_MIN_M = 10.0  # m, the shortest easing
 OBS_NO_DECK_M = 2.0     # m: a measured deck at most this far over the ground under it ...
 OBS_STALE_M = 3.5       # ... where the solve stands this much higher is a measurement from before the bridge (kept out)
+# ... or both read at this percentile of the stations the source measured (either reading telling it: the highest alone
+# kept a ramp in Atlanta's Gulch whose stale measured ends then moved its neighbours' joints 1-2 m), not only their
+# highest: a GA-400 / I-285 flyover
+# (Atlanta, 33.9117 N 84.3563 W) built after Georgia's 2018 lidar was flown "measured" on the ground under it, 0.3-1.3 m
+# over it but 2.2 m over one dip, so taken: the deck lay 17 m under its solve and the ground rose 5 m through its end,
+# 24 g (2026-11-19). BNE_OBS_STALE_Q=off: the highest, as before.
+_osq = os.environ.get("BNE_OBS_STALE_Q", "75")
+OBS_STALE_Q = None if _osq == "off" else float(_osq)
+# A US lidar survey flown before the bridge was built or rebuilt measured the ground or the old structure there, not its
+# deck: the National Bridge Inventory's year (bridges_built_us.npz, tools/build_bridge_built_db.py: the later of items
+# 27 and 106) of the record matching a deck part (its point within OBS_BUILT_NEAR_M of the part's line, the best by
+# distance and length as bridgetypes.matches) OBS_BUILT_AFTER_Y or more years after the newest survey covering it: the
+# part keeps the solve. Atlanta's GA-400 / I-285 interchange, rebuilt 2020-2023 under Georgia's 2018 survey: its flyovers "measured"
+# on the construction site's ground, 9-24 g where the ground rose through them (2026-11-19). BNE_OBS_BUILT=off: none.
+OBS_BUILT_ON = os.environ.get("BNE_OBS_BUILT", "on") != "off"
+OBS_BUILT_NEAR_M = 25.0
+OBS_BUILT_AFTER_Y = 2       # years after the survey at least: the inventory's year is a project's end, its deck often
+                            # standing before (Mount Vernon Highway over GA-400, 2019, lay on Georgia's 2018 lidar to 0.04 m)
+OBS_BUILT_LEN_M = 150.0     # m of score per factor e of length mismatch (bridgetypes.MATCH_LEN_M)
+_BUILT_DB = None
+
+
+def _built_db():
+    global _BUILT_DB
+    if _BUILT_DB is None:
+        try:
+            d = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridges_built_us.npz"))
+            _BUILT_DB = {k: d[k] for k in d.files}
+        except OSError:
+            _BUILT_DB = {"lat": np.zeros(0, np.float32)}
+    return _BUILT_DB
+
+
+def built_after_survey(frame, xy):
+    """Whether the NBI record matching deck line xy (k, 2+) was built or rebuilt in or after the newest US lidar
+    survey's year there (OBS_BUILT_*). Pure given the inventory and the survey index."""
+    import roadz
+    db = _built_db()
+    if not len(db["lat"]) or len(xy) < 2:
+        return False
+    xy = np.asarray(xy, np.float64)[:, :2]
+    c = xy.mean(0)
+    la, lo, _ = frame.enu_to_geodetic(np.array([c[0]]), np.array([c[1]]), 0.0)
+    la, lo = float(la[0]), float(lo[0])
+    reach = float(dnp.hypot(*(xy.max(0) - xy.min(0)))) / 2 + OBS_BUILT_NEAR_M
+    dlat = reach / 110540.0
+    lat = db["lat"]
+    i0, i1 = np.searchsorted(lat, la - dlat), np.searchsorted(lat, la + dlat)
+    if i0 >= i1:
+        return False
+    idx = np.arange(i0, i1)
+    e, n, _ = frame.geodetic_to_enu(lat[idx].astype(np.float64), db["lon"][idx].astype(np.float64), 0.0)
+    q = np.c_[np.ravel(e), np.ravel(n)]
+    a, b = xy[:-1], xy[1:]
+    ab = b - a
+    L = float(dnp.hypot(*ab.T).sum())
+    best = None
+    for k, p in zip(idx, q):
+        t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-9), 0, 1)
+        d = float(np.min(dnp.hypot(*(a + t[:, None] * ab - p).T)))
+        if d > OBS_BUILT_NEAR_M:
+            continue
+        rl = float(db["length"][k])
+        sc = d + OBS_BUILT_LEN_M * (abs(dmath.log(max(rl, 5.0) / max(L, 5.0))) if rl > 0 else 1.0)
+        if best is None or sc < best[0]:
+            best = (sc, int(db["built"][k]))
+    if best is None:
+        return False
+    yr = roadz.lidar_year(la, lo)
+    return yr is not None and best[1] >= yr + OBS_BUILT_AFTER_Y
+
+
 OBS_MAX_GRADE = 0.14    # a measured deck steeper than this after the easing (2 m steps) keeps the inference
 OBS_END_MAX_M = float(os.environ.get("BNE_OBS_END_MAX", "inf"))  # m a measured deck's end may lie off the graded road at
                         # its abutment, else the inference (inf: always eased onto it; 4 m made Springfield worse)
@@ -8823,10 +9085,11 @@ class BridgeProfiles:
         prov = roadz.PROVIDER
         if prov is None or not prov.enabled or not lines:
             return zs
-        obs = []
+        obs, obs_ok = [], []    # (obs_ok: the stations the source measured, the rest are its ends carried flat)
         for k, ln in zip(comp, lines):
             xy = np.asarray(ln, np.float64)[:, :2]
             got = None
+            ok = None
             try:
                 spec = pool[k][0]
                 nm = pool[k][5] if len(pool[k]) > 5 else ""
@@ -8848,7 +9111,14 @@ class BridgeProfiles:
                     got = np.asarray(self.frame.geodetic_to_enu(la, lo, zf)[2], np.float64)
             except Exception as ex:             # the inference rather than no bridge
                 log.debug("observed deck %s: %s: %s", k, type(ex).__name__, ex)
+                got = None
             obs.append(got)
+            obs_ok.append(ok if got is not None else None)
+        if OBS_BUILT_ON and level > 0:
+            for i, (o, ln) in enumerate(zip(obs, lines)):
+                if o is not None and built_after_survey(self.frame, ln):    # (the US lidar only: the inventory)
+                    log.debug("observed deck %s: built after the lidar survey, the solve kept", comp[i])
+                    obs[i] = None
         if all(o is None for o in obs):
             return zs
         nk = _EndJoin()
@@ -8893,7 +9163,14 @@ class BridgeProfiles:
                 if not np.isfinite(g).any():
                     continue
                 over_o, over_z = float(np.nanmax(o - g)), float(np.nanmax(z - g))
-                if over_o < OBS_NO_DECK_M and over_z - over_o > OBS_STALE_M:
+                stale = over_o < OBS_NO_DECK_M and over_z - over_o > OBS_STALE_M
+                if not stale and OBS_STALE_Q is not None and obs_ok[i] is not None and len(obs_ok[i]) == len(o):
+                    m = np.asarray(obs_ok[i], bool) & np.isfinite(g)
+                    if m.sum() >= 3:            # (over the stations it measured: one dip under it is not its height)
+                        over_o = float(np.percentile((o - g)[m], OBS_STALE_Q))
+                        over_z = float(np.percentile((z - g)[m], OBS_STALE_Q))
+                        stale = over_o < OBS_NO_DECK_M and over_z - over_o > OBS_STALE_M
+                if stale:
                     log.debug("observed deck %s: %.1f m over the ground, the solve %.1f m: from before the bridge, "
                               "the solve kept", comp[i], over_o, over_z)
                     obs[i] = None
@@ -12092,12 +12369,13 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
         else:
             got = [(fid, spec, np.c_[xy, z], lon) for fid, spec, xy, z, lon in bridges.parts(cells, near)
                    if np.isfinite(z).all()]
-        if any(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum() <= roadmesh.JUNCTION_MAX_PART_M
+        long_cross = _long_crossing(got, bridges._ground)
+        if long_cross or any(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum() <= roadmesh.JUNCTION_MAX_PART_M
                for _fid, _sp, p, _lon in got):
             # A short branch can meet its fork outside the usual parapet context. Both tiles need all incident
             # complete profiles, even the tile holding only that branch's far abutment. parts() adds NEAR_M.
             # (BNE_ROADSHAPE=sheet: not widened for the forks, whose input is read apart: _sheet_window_parts)
-            reach = 3 * roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
+            reach = 3 * (roadmesh.JUNCTION_LONG_MAX_M if long_cross else roadmesh.JUNCTION_MAX_PART_M) + DECK_CONTEXT_M
             margin = max(0.0, reach - NEAR_M)
             x0, y0, x1, y1 = exact
             cell_fn = getattr(bridges, 'cell_fn', None)
@@ -12239,7 +12517,7 @@ DECK_CONTEXT_M = 24.0   # m around a tile its bridges' decks are passed as conte
 def _deck_look(spec):
     """A bridge deck's look: the concrete of a `surface=concrete` street (it stays concrete over the bridge) or of a
     motorway's or trunk road's (DECK_CONCRETE_CLASSES), else asphalt — and asphalt for rock/grass surfaces, whose ground mask cannot be painted on a deck at all."""
-    if not terrain_surface(spec) and spec.kind == "paved" and spec.surf == "concrete":
+    if DECK_SURFACE_CONCRETE_ON and not terrain_surface(spec) and spec.kind == "paved" and spec.surf == "concrete":
         return CONCRETE
     if DECK_CONCRETE_ON and spec.kind == "paved" and spec.cls in DECK_CONCRETE_CLASSES:
         return DECK_CONCRETE
@@ -12259,6 +12537,60 @@ def _corner_look(point, roads):
 
 
 DECK_JOIN_M = 1.0       # m: deck parts' ends this close go on one from the other (no parapet end there)
+# A deck's road surface across a tile seam: a tile drew a deck's surface where its centre line is (clipped to the
+# tile), the slab whole, and the road mesh is cut exactly at the tile's edge; where a wide deck ran near a seam the
+# half of it over the seam had no road surface, its plain slab top showing (I-75 over Nancy Creek, Atlanta
+# 33.8531,-84.4314: a 26 m deck at 14 degrees to a seam, up to 10 m of it bare; the user, 2026-11-21, "missing road
+# textures"). On: the part of a deck's centre line just outside the tile (within its half width + DECK_SEAM_PAD_M) is
+# drawn as its surface alone ("skin": no slab, no parapets; the road mesh cuts it at the edge), and the line is
+# simplified whole before it is clipped, so each tile's surface lies on the same heights as the slab its neighbour drew.
+# A deck part longer than roadmesh.JUNCTION_MAX_PART_M (to JUNCTION_LONG_MAX_M) is one of its junction's common surface
+# only at a crossing on the deck: JUNCTION_CROSS_ENDS or more part ends at the joint (two roads through it), standing
+# JUNCTION_LONG_LIFT_M or more over the ground (the I-75 express-lane ramps crossing Akers Mill Rd's deck, Atlanta).
+# A ramp joining a road (three ends) keeps its own deck and the joint's pad: Cumberland Blvd over I-75, its 90-110 m
+# carriageways in its ramps' junction, lost the pad that meets the ground roads and an edge rose 0.34 m.
+JUNCTION_LONG_LIFT_M = 3.0
+JUNCTION_CROSS_ENDS = 4
+
+
+def _long_crossing(parts, ground_fn):
+    """Is any of the bridge parts [(fid, spec, pts (k, 3), lon)] longer than roadmesh.JUNCTION_MAX_PART_M (to
+    JUNCTION_LONG_MAX_M) one of a crossing's on a deck (_elevated_joint)? Its tile then reads the decks round it as far
+    as such a junction reaches."""
+    import roadmesh
+    if roadmesh.JUNCTION_LONG_MAX_M <= roadmesh.JUNCTION_MAX_PART_M:
+        return False
+    ends = [(i, e, np.asarray(p[2], np.float64)[e, :2]) for i, p in enumerate(parts) if len(p[2]) >= 2 for e in (0, -1)]
+    for i, (_fid, _spec, pts, _lon) in enumerate(parts):
+        pts = np.asarray(pts, np.float64)
+        if len(pts) < 2:
+            continue
+        length = dnp.norm(np.diff(pts[:, :2], axis=0), axis=1).sum()
+        if roadmesh.JUNCTION_MAX_PART_M < length <= roadmesh.JUNCTION_LONG_MAX_M and _elevated_joint(i, pts, ends,
+                                                                                                    ground_fn):
+            return True
+    return False
+
+
+def _elevated_joint(i, pts, ends, ground_fn):
+    """Is an end of deck part i (pts (k, 3); ends: [(part, end, xy)] of every part) a crossing on a deck: a joint of
+    JUNCTION_CROSS_ENDS or more part ends (within roadmesh.JUNCTION_JOIN_M) standing JUNCTION_LONG_LIFT_M or more over
+    the ground (ground_fn(xy) -> heights)?"""
+    import roadmesh
+    if ground_fn is None:
+        return False
+    for e in (0, -1):
+        q = pts[e, :2]
+        if sum(dnp.hypot(*(q - q2)) < roadmesh.JUNCTION_JOIN_M for _j, _e, q2 in ends) < JUNCTION_CROSS_ENDS:
+            continue
+        g = np.asarray(ground_fn(pts[[e], :2]), np.float64).reshape(-1)
+        if len(g) and np.isfinite(g[0]) and pts[e, 2] - g[0] >= JUNCTION_LONG_LIFT_M:
+            return True
+    return False
+
+
+DECK_SEAM_ON = os.environ.get("BNE_DECK_SEAM", "on") != "off"
+DECK_SEAM_PAD_M = 1.0
 ABUT_GROUND_M = 1.0     # a deck part's end within this of the ground under it is an abutment (roadmesh.deck: its
                         # parapets ramp down there to the approach)
 
@@ -12676,6 +13008,12 @@ DECK_WALK_LIFT_M = 0.03         # m the strip is drawn over the deck (no z fight
 # deck pale concrete; the user, 2026-10-31: "the entire real bridge is concrete ... concrete shoulders [alone] don't
 # look good or realistic")
 DECK_CONCRETE_CLASSES = {"motorway", "trunk"}
+# A bridge tagged surface=concrete (most US road bridges are: OSM's mappers tag the deck's own surface) was drawn with
+# gridmap v2's plain concrete, no tining, no joints, between asphalt approaches: the user read Roswell Road's bridge over
+# I-285 and Akers Mill Road's over I-75 (Atlanta) as "missing road texture" (2026-11-21), as the motorway decks' concrete
+# was read on 2026-10-31. A deck takes the road's asphalt; a concrete street on the ground keeps its concrete.
+# BNE_DECK_SURFACE_CONCRETE=on: a concrete-tagged deck in concrete, as before.
+DECK_SURFACE_CONCRETE_ON = os.environ.get("BNE_DECK_SURFACE_CONCRETE", "off") == "on"
 # the stock highway concrete (West Coast USA's road_concrete: tined, jointed; its square tile two lanes wide), the
 # texture once per DECK_CONCRETE_TILE_M across ("tu") and as long along; the plain slab concrete looked like paving slabs
 DECK_CONCRETE_TILE_M = 7.3
@@ -13339,14 +13677,18 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
     counts = {}
     for fid, _sp, _pts, _lon in decks:
         counts[fid] = counts.get(fid, 0) + 1
-    joint_profiles, joint_excluded = {}, set()
+    joint_profiles, joint_excluded, joint_long = {}, set(), set()
     for i, (fid, spec, pts, _lon) in enumerate(decks):
         pts = np.asarray(pts, np.float64)
         if shapes is not None and shapes[i] is not None:
             continue                            # (a shaped deck: its own rows, no junction surface)
-        if (counts[fid] != 1 or
-                dnp.norm(np.diff(pts[:, :2], axis=0), axis=1).sum() > roadmesh.JUNCTION_MAX_PART_M):
+        length = dnp.norm(np.diff(pts[:, :2], axis=0), axis=1).sum()
+        if counts[fid] != 1 or length > max(roadmesh.JUNCTION_MAX_PART_M, roadmesh.JUNCTION_LONG_MAX_M):
             continue
+        if length > roadmesh.JUNCTION_MAX_PART_M:
+            if not _elevated_joint(i, pts, ends, ground_fn):
+                continue
+            joint_long.add(fid)
         joint_profiles[fid] = np.round(pts[:, :3], 3).tolist()
         ws = width_of(fid, pts) if width_of else None
         if (walks.get(fid) or not np.allclose(shifted[i], pts, rtol=0, atol=1e-6) or
@@ -13369,7 +13711,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         if any(dnp.norm(p[:2] - q[:2]) <= roadmesh.JUNCTION_JOIN_M and
                abs(p[2] - q[2]) <= roadmesh.JUNCTION_JOIN_Z_M for p in ends for q in blocked_ends):
             joint_excluded.add(fid)
-    junction_margin = 3 * roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
+    junction_margin = 3 * (roadmesh.JUNCTION_LONG_MAX_M if joint_long else roadmesh.JUNCTION_MAX_PART_M) + DECK_CONTEXT_M
     junction_box = (x0 - junction_margin, y0 - junction_margin, x1 + junction_margin, y1 + junction_margin)
     for i, (fid, spec, pts, lon) in enumerate(decks):
         pts = shifted[i]
@@ -13390,6 +13732,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                         _part_ends(ch, frame_line)
                     if fid in joint_profiles:
                         ch['jn'] = joint_profiles[fid]
+                        if fid in joint_long:
+                            ch['jlong'] = True
                         ch['jskip'] = fid in joint_excluded
                     ws = width_of(fid, c) if width_of else None
                     if ws is not None:          # (tapering into another deck: roadmesh.ribbons' "ws")
@@ -13433,6 +13777,18 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                 tilted.append((look, w, line))
             lines = tilted
         for look, w, line in lines:
+            if DECK_SEAM_ON:
+                if look.get("deck") and fid not in joint_profiles:
+                    skin = {k: v for k, v in look.items() if k != "deck"}
+                    for piece in _beyond_box(line, exact, w / 2 + DECK_SEAM_PAD_M):
+                        for c in split(densify(piece)):
+                            if len(c) >= 2:
+                                ch = _chunk(skin, w, c)
+                                ch.update(fixed=True, fid=fid, skin=True)
+                                ws = width_of(fid, c) if width_of else None
+                                if ws is not None:
+                                    ch["ws"] = [round(float(x + w - spec.width), 3) for x in ws]
+                                out.append(ch)
             for piece in [q for p0 in clip_polyline(line, *exact)
                           for q in (_sheet_pieces(p0, line, sheet.get(i)) if look.get("deck") else (p0,))]:
                 for c in split((densify(piece) if i in unioned else _deck_rows(piece, shp))
@@ -13452,6 +13808,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                             ch["deck"] = True
                             if fid in joint_profiles:
                                 ch['jn'] = joint_profiles[fid]
+                                if fid in joint_long:
+                                    ch['jlong'] = True
                                 ch['jskip'] = fid in joint_excluded
                             ch["fid"] = fid             # (roadmesh.deck: no parapet between parts side by side)
                             ws = width_of(fid, c) if width_of else None

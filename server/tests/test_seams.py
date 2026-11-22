@@ -197,7 +197,8 @@ class GradeMatchBankEndTest(unittest.TestCase):
         from unittest import mock
         g = self.planner(hill)
         line = np.array([[0.0, 0.0], [16.0, 0.0]])
-        self.assertGreater(g._end_filled(line, False), hill(np.array([16.0]))[0] + 1.0)     # (the bare fill: over the top)
+        with mock.patch.object(grading, "ABUT_FILL_MAX_GRADE", None):   # (the bare fill, the slope rule aside: over the top)
+            self.assertGreater(g._end_filled(line, False), hill(np.array([16.0]))[0] + 1.0)
         self.assertAlmostEqual(g._end_filled(line, False, past=True), 195.0, places=3)
         a = g._grade_match(np.array([0.0, 0.0]))
         b = g._grade_match(np.array([16.0, 0.0]))
