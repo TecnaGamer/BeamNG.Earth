@@ -250,6 +250,40 @@ class TeleportWhileBusyTest(unittest.TestCase):
             s.shutdown()
 
 
+@unittest.skipUnless(HAVE, "earthfast with the v2 scheduler")
+class WarmBoardTest(unittest.TestCase):
+    """The block lanes' plans-ahead list as a file of the latest list: no lock shared with the processes (a
+    multiprocessing queue's reader lock stays held for good by a process killed in its get())."""
+
+    def test_the_latest_list_and_nothing_twice(self):
+        import tempfile
+        import mapcells
+        old = v2host._sched
+        v2host._sched = make()
+        v2host._warm_io = None
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                b = v2host.WarmBoard(os.path.join(d, "warm-0.json"))
+                self.assertEqual(v2host.read_warm(b.path, None), (None, None), "nothing yet")
+                b.put_nowait((3, 1.5, 2.5, [mapcells.CellKey(14, 1, 2)], False))
+                b.put_nowait((3, 1.5, 2.5, [mapcells.CellKey(14, 5, 6), mapcells.CellKey(14, 5, 7)], True))
+                end = time.monotonic() + 5
+                got, seen = None, None
+                while got is None and time.monotonic() < end:
+                    got, seen = v2host.read_warm(b.path, None)
+                    time.sleep(0.01)
+                while v2host._sched.running() or v2host._sched.pending():
+                    time.sleep(0.01)
+                got, seen = v2host.read_warm(b.path, None)
+                self.assertEqual(got, (3, 1.5, 2.5, [(14, 5, 6), (14, 5, 7)], [True]), "the latest")
+                self.assertIsInstance(got[3][0], mapcells.CellKey)
+                self.assertEqual(v2host.read_warm(b.path, seen), (None, seen), "unchanged: nothing")
+                self.assertEqual([n for n in os.listdir(d) if n.endswith(".tmp")], [])
+        finally:
+            v2host._sched.shutdown()
+            v2host._sched, v2host._warm_io = old, None
+
+
 class OffTest(unittest.TestCase):
     """The switch off: nothing of the scheduler is made or asked."""
 

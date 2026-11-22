@@ -492,6 +492,8 @@ _FIRST = [0]                # a first block's cells being planned in this proces
 
 
 def _read_warm(warm_q):
+    if isinstance(warm_q, str):     # (BNE_V2_HOST: the latest list in a file, v2host.WarmBoard)
+        return _read_warm_board(warm_q)
     while True:
         try:
             aid, lat, lon, keys, *rest = warm_q.get()
@@ -502,16 +504,37 @@ def _read_warm(warm_q):
                 aid, lat, lon, keys, *rest = warm_q.get_nowait()
         except queue.Empty:
             pass
-        if not keys:            # (earthd.main's first item: it starts the queue's feeder thread early)
-            continue
-        g, _ = _s.anchor(aid, lat, lon)
-        if g is None:
-            continue
-        with _s.cv:
-            _s.want = [(g, k) for k in keys]
-            # (earthd.Server.warm_roads: this process only reads them while it builds a block, _warm_loop)
-            _s.warm_read_only = bool(rest and rest[0])
-            _s.cv.notify()
+        _take_warm(aid, lat, lon, keys, rest)
+
+
+def _take_warm(aid, lat, lon, keys, rest):
+    """The latest list of cells to plan ahead (earthd.Server.warm_roads) for _warm_loop."""
+    if not keys:            # (earthd.main's first item: it starts the queue's feeder thread early)
+        return
+    g, _ = _s.anchor(aid, lat, lon)
+    if g is None:
+        return
+    with _s.cv:
+        _s.want = [(g, k) for k in keys]
+        # (earthd.Server.warm_roads: this process only reads them while it builds a block, _warm_loop)
+        _s.warm_read_only = bool(rest and rest[0])
+        _s.cv.notify()
+
+
+WARM_POLL_S = 0.1           # s between the looks at v2host.WarmBoard's file
+
+
+def _read_warm_board(path):
+    """_read_warm under BNE_V2_HOST: the list read again whenever its file changes. No lock is shared between the
+    processes (a multiprocessing queue's reader lock, held by a process waiting in get(), stays held for good when that
+    process is killed: pools.SlotPool preempts block processes)."""
+    import v2host
+    seen = None
+    while True:
+        time.sleep(WARM_POLL_S)
+        got, seen = v2host.read_warm(path, seen)
+        if got is not None:
+            _take_warm(*got)
 
 
 def _warm_next(want, read_only):

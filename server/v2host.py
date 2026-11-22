@@ -8,7 +8,10 @@ Off (the default) nothing here is used: today's executors and worker pools, byte
 in the Rust.
 """
 import contextlib
+import json
 import os
+import threading
+import time
 
 ON = os.environ.get("BNE_V2_HOST", "").strip().lower() in ("on", "1", "true")
 
@@ -90,3 +93,81 @@ def summary():
     base = st["baseMs"]
     return (f"v2 sched: target {st['target']} (frame base {'-' if base is None else f'{base:.1f} ms'}, cpu pressure "
             f"{st['psi']:.0f} %); " + "; ".join(parts))
+
+
+_warm_io = None
+
+
+def _warm_executor():
+    """One slot at P1 (never the urgent one): the boards' writes in order."""
+    global _warm_io
+    if _warm_io is None:
+        s = _sched or sched()
+        _warm_io = s.executor(s.lane("warm-io", 1, False, False), P1)
+    return _warm_io
+
+
+class WarmBoard:
+    """BNE_V2_HOST: the road cells a block lane's processes plan ahead (earthd.Server.warm_roads: put_nowait, as the
+    multiprocessing queue it replaces) as one file holding the latest list (only the latest matters), written by a
+    scheduler job and renamed over; the processes look at it every blockworker.WARM_POLL_S. No lock is shared with
+    them: a block process preempted (killed) while waiting in the queue's get() held its reader lock for good, and the
+    lane's other and next processes never read a list again."""
+
+    def __init__(self, path):
+        self.path = path
+        self._lock = threading.Lock()
+        self._latest, self._pending, self._seq = None, False, 0
+
+    def put_nowait(self, item):
+        with self._lock:
+            self._latest = item
+            if self._pending:
+                return
+            self._pending = True
+        _warm_executor().submit(self._write)
+
+    def _write(self):
+        with self._lock:
+            item, self._latest, self._pending = self._latest, None, False
+            self._seq += 1
+            seq = self._seq
+        if item is None:
+            return
+        aid, lat, lon, keys, *rest = item
+        data = json.dumps({"seq": seq, "aid": None if aid is None else int(aid), "lat": float(lat), "lon": float(lon),
+                           "keys": [[int(v) for v in k] for k in keys], "readOnly": bool(rest and rest[0])})
+        tmp = f"{self.path}.{seq}.tmp"
+        for i in range(5):          # (Windows: a reader's open file holds the rename off a moment)
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(data)
+                os.replace(tmp, self.path)
+                return
+            except OSError:
+                time.sleep(0.005 * (i + 1))
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def read_warm(path, seen):
+    """(a block process) WarmBoard's list when its file changed since seen (its last (mtime, size)): ((aid, lat, lon,
+    keys, [read_only]), seen), else (None, seen). A file being replaced is read next time."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None, seen
+    mark = (st.st_mtime_ns, st.st_size)
+    if mark == seen:
+        return None, seen
+    try:
+        with open(path, "rb") as f:
+            d = json.loads(f.read().decode("utf-8"))
+        import mapcells
+        keys = [mapcells.CellKey(int(k[0]), int(k[1]), int(k[2])) for k in d["keys"]]
+        got = (d["aid"], float(d["lat"]), float(d["lon"]), keys, [bool(d.get("readOnly"))])
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return None, seen
+    return got, mark

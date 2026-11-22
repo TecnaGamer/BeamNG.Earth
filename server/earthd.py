@@ -712,6 +712,20 @@ def sharing_machine():
     return False
 
 
+def v2_warm_dir():
+    """BNE_V2_HOST: this server's folder for the block lanes' WarmBoard files (system temp, removed at exit)."""
+    global _V2_WARM_DIR
+    if _V2_WARM_DIR is None:
+        import atexit
+        import tempfile
+        _V2_WARM_DIR = tempfile.mkdtemp(prefix="bnge-warm-")
+        atexit.register(shutil.rmtree, _V2_WARM_DIR, True)
+    return _V2_WARM_DIR
+
+
+_V2_WARM_DIR = None
+
+
 def v2_pool(name, n, cls, lane=None, **kwargs):
     """A worker process pool of n processes: pools.RespawningPool, or with BNE_V2_HOST (v2host.py) a pools.SlotPool
     whose jobs the Rust scheduler starts by class and deadline (cls: its lane's own class; lane: the lane's name)."""
@@ -11564,18 +11578,22 @@ async def main_async(args, restart=None):
                 # Server.block_shared, submit_low)
                 block_pools.append(block_pools[0])
                 continue
-            warm_q = ctx.Queue(maxsize=64)
-            # its feeder thread started now, not at the first warm_roads on the event loop: Thread.start waits for the
-            # new thread to run, and a loaded machine stalled the loop 3.4 s there at a first visit's first pose
-            # (2026-11-04; blockworker._read_warm skips the empty list)
-            warm_q.put_nowait((None, 0.0, 0.0, []))
+            if v2host.ON:           # (BNE_V2_HOST: a file of the latest list, no lock a preempted process could hold)
+                warm_q = v2host.WarmBoard(os.path.join(v2_warm_dir(), f"warm-{lane}.json"))
+            else:
+                warm_q = ctx.Queue(maxsize=64)
+                # its feeder thread started now, not at the first warm_roads on the event loop: Thread.start waits for
+                # the new thread to run, and a loaded machine stalled the loop 3.4 s there at a first visit's first pose
+                # (2026-11-04; blockworker._read_warm skips the empty list)
+                warm_q.put_nowait((None, 0.0, 0.0, []))
             block_pools.append((v2_pool(
                 "block", prefetch_procs() if lane == LANE_PREFETCH else 1,
                 v2host.P1 if lane == LANE_PREFETCH else v2host.P0, "block-ahead" if lane == LANE_PREFETCH else "block-req",
                 mp_context=ctx, initializer=blockworker.init,
                 initargs=(args.cache_dir, args.offline, args.roads == "on",
                           args.grading == "on" and args.roads == "on",
-                          args.road_widths == "on" and args.roads == "on", args.surface == "on", warm_q,
+                          args.road_widths == "on" and args.roads == "on", args.surface == "on",
+                          warm_q.path if isinstance(warm_q, v2host.WarmBoard) else warm_q,
                           logging.getLogger().level, args.airports == "on", args.sea == "on", 0,
                           roadsmod.ROADS_IN_GROUND, args.gas_stations == "on" and args.roads == "on")), warm_q))
         if args.near_visual == "detail" and photo_process():
