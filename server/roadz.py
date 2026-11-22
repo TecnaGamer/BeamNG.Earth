@@ -757,9 +757,33 @@ class RoadZ:
         return bool(self.lidar_sources(key))
 
     def lidar_on_disk(self, key):
-        """Is this cell's LiDAR kept on disk already? No network."""
+        """Is this cell's LiDAR kept on disk already (or in its CIP cell: written out now)? No network."""
         k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
-        return all(p and os.path.exists(p) for p in (self._path(s, k) for s in self.lidar_sources(k)))
+        return all(p and (os.path.exists(p) or self._cip_fill(s, k, p))
+                   for p, s in ((self._path(s, k), s) for s in self.lidar_sources(k)))
+
+    def _cip_fill(self, src, key, p):
+        """Cell key's answer file of source src written from its CIP cell (cip.py: the builder's own measurement of
+        the same inputs, the same arrays), when CIP is on and the build has it. True when written."""
+        import cip
+        r = cip.any_reader()
+        if r is None or not p:
+            return False
+        got = cip.roadz_files(r, os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(p)))), key)
+        if got is None:
+            return False
+        npz, gaps = got
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        if gaps is not None:            # (the gaps first: lines() reads them beside the lines)
+            tmp = f"{p}.gaps.json.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(gaps)
+            os.replace(tmp, p + ".gaps.json")
+        tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(npz)
+        os.replace(tmp, p)
+        return True
 
     def _path(self, src, key):
         import roads
@@ -787,7 +811,7 @@ class RoadZ:
             if got is not None:
                 return got
             p = self._path(src, key)
-            if p and os.path.exists(p):
+            if p and (os.path.exists(p) or self._cip_fill(src, key, p)):
                 try:
                     got = Lines.load(p)
                     if src == "lidar":      # (its elevated ground stretches: written before the lines)

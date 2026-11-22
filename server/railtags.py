@@ -226,16 +226,38 @@ class Shards:
         with self.lock:
             self.shards.clear()
 
+    # (architecture v2's CIP cells, cip.py: the build's slice of this dataset per cell, its weekly build pinned)
+    CIP_SECTION = None          # the cell section of this dataset's slices ("t:rail", "t:lanes"); None: not in CIP
+    CIP_DATA = None             # its name in a CIP build's data builds (cip.WEEKLY: "rails", "lanes")
+
+    def cip_pin(self):
+        """(CIP reader, the dataset build the CIP build pinned) when CIP is on and its build slices this dataset, else
+        (None, None). The pinned build is the one in use, for every cell (its cache keys: versions())."""
+        if self.CIP_SECTION is None:
+            return None, None
+        import cip
+        r = cip.any_reader()
+        if r is None:
+            return None, None
+        pin = r.data_builds().get(self.CIP_DATA)
+        return (r, pin) if pin else (None, None)
+
     def known(self):
         """The build in use as far as known without asking the network (versions(): every tile's cache key); before
         this run has asked for it, the last build pinned on disk. (None until the manifest came: the tiles built in
         a run's first minutes had other keys than the same tiles built later, in the revisit cache: a warm drive
         rebuilt and stored again ~1.5 GB of far tiles, 2026-11-04.)"""
+        _, pin = self.cip_pin()
+        if pin:
+            return pin
         return self.manifest.built if not ON else self.manifest.known(PIN_RECHECK_S)
 
     def version(self):
         """The build in use ("built" of its manifest), or None (none reachable yet). The pinned/refresh policy is
-        pagesdata.Manifest.current's (the night of 1.9.0: see pagesdata)."""
+        pagesdata.Manifest.current's (the night of 1.9.0: see pagesdata). CIP on: the build its cells' slices are of."""
+        _, pin = self.cip_pin()
+        if pin:
+            return pin
         if not ON or self.fetcher is None:
             return None
         return self.manifest.build()
@@ -307,12 +329,87 @@ class Shards:
         return got
 
     def of_cell(self, key):
-        """The shard holding map cell key."""
+        """The shard holding map cell key. CIP on: the cell's slice of it (what a join of the cell reads: its ways'
+        tags, its rules, the nodes in the joins' pad, in the shard's order), or, the cell not in the CIP build, the
+        shard when the manifest's build is the pinned one (else None: unreachable, joined again later)."""
+        r, pin = self.cip_pin()
+        if pin:
+            got = self._cip_slice(r, key)
+            if got is not None:
+                return got
+            if self.manifest.build() != pin:
+                return None
         shift = key.z - SHARD_ZOOM
         return self.shard(key.x >> shift, key.y >> shift)
 
+    def _cip_slice(self, r, key):
+        import cip
+        k = ("cip", str(key))
+        with self.lock:
+            got = self.shards.get(k)
+        if got is not None:
+            return got
+        sl = cip.side_json(r, self.CIP_SECTION, key)
+        if sl is None:
+            return None
+        got = shard_of_slice(sl)
+        with self.lock:
+            self.shards[k] = got
+            self.shards[("cipcell", key.z, key.x, key.y)] = True
+        return got
+
+    def cip_read(self, key):
+        """Was cell key's CIP slice read (mapdata._tags_read's question for the CIP cells)?"""
+        with self.lock:
+            return ("cipcell", key.z, key.x, key.y) in self.shards
+
+
+PAD = 0.002                 # degrees: the joins' nodes round a cell
+
+
+def cell_slice(sh, key, ids):
+    """The slice of shard sh a join of cell key reads (cip.py's t: sections; shard_of_slice reads it back): the ways
+    of ids (the cell's roads' way ids, decisions.ids_of) with their tags, the road rules of those, the nodes within the
+    joins' pad of the cell, each in the shard's own order. JSON-ready."""
+    ways = sh.get("ways") or {}
+    found = _tags_of(ways, list(ids))
+    out = {"kind": "Ways" if isinstance(ways, Ways) else "dict",
+           "ways": [[i, t] for i, t in zip(ids, found) if t is not None]}
+    if isinstance(ways, Ways):          # (in the shard's order: ids ascending)
+        out["ways"].sort(key=lambda w: int(w[0]))
+    rs = sh.get("rules")
+    if isinstance(rs, dict):
+        rs = Rules(rs)
+    if isinstance(rs, Rules):
+        want = np.array(sorted({int(i) for i in ids if str(i).isdigit()}), np.int64)
+        rules = {}
+        for k, (at, idx, values) in rs.keys.items():
+            m = np.isin(at, want)
+            by = {}
+            for v_i, wid in zip(idx[m].tolist(), at[m].tolist()):
+                by.setdefault(v_i, []).append(wid)
+            rules[k] = {values[v_i]: np.diff(np.array(by[v_i], np.int64), prepend=0).tolist()
+                        for v_i in sorted(by)}
+        out["rules"] = rules
+    lon0, lat0, lon1, lat1 = (float(v) for v in key.bounds())
+    out["nodes"] = [list(nd) for nd in sh.get("nodes") or ()
+                    if lon0 - PAD <= nd[1] <= lon1 + PAD and lat0 - PAD <= nd[2] <= lat1 + PAD]
+    return out
+
+
+def shard_of_slice(sl):
+    """A shard dict from a cell_slice (its ways a Ways when the shard's were, its rules Rules)."""
+    ways = {str(i): t for i, t in sl.get("ways") or ()}
+    got = {"ways": Ways(ways) if sl.get("kind") == "Ways" else ways,
+           "nodes": list(sl.get("nodes") or ())}
+    if "rules" in sl:
+        got["rules"] = Rules(sl["rules"])
+    return got
+
 
 class RailTags(Shards):
+    CIP_SECTION, CIP_DATA = "t:rail", "rails"
+
     def __init__(self, cache_dir, fetcher):
         super().__init__(cache_dir, fetcher, "rail")
 
@@ -430,6 +527,8 @@ def lane_attr(key):
 
 
 class LaneTags(Shards):
+    CIP_SECTION, CIP_DATA = "t:lanes", "lanes"
+
     def __init__(self, cache_dir, fetcher):
         super().__init__(cache_dir, fetcher, "lanes")
 
