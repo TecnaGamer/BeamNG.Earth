@@ -314,6 +314,46 @@ class FakeLayers:
         return b"tile", True, None
 
 
+class HeldLayers:
+    """MapTiles.layer_tile that holds each build until release(key) / release_all(); counts builds running at once."""
+
+    def __init__(self):
+        self.cv = threading.Condition()
+        self.building = []          # keys in layer_tile, in the order they started
+        self.released = set()
+        self.all = False
+        self.peak = 0
+
+    def layer_tile(self, layer, z, x, y):
+        key = (layer, z, x, y)
+        with self.cv:
+            self.building.append(key)
+            self.peak = max(self.peak, len(self.building))
+            self.cv.notify_all()
+            self.cv.wait_for(lambda: self.all or key in self.released, 60)
+            self.building.remove(key)
+            self.cv.notify_all()
+        return b"tile", True, None
+
+    def building_keys(self):
+        with self.cv:
+            return list(self.building)
+
+    def wait_building(self, n, timeout=30):
+        with self.cv:
+            return self.cv.wait_for(lambda: len(self.building) >= n, timeout)
+
+    def release(self, key):
+        with self.cv:
+            self.released.add(key)
+            self.cv.notify_all()
+
+    def release_all(self):
+        with self.cv:
+            self.all = True
+            self.cv.notify_all()
+
+
 class TileFilesTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
@@ -331,24 +371,34 @@ class TileFilesTest(unittest.TestCase):
             self.assertTrue(self.cv.wait_for(lambda: len(self.done) >= n, timeout), self.done)
 
     def test_concurrent_and_each_said_at_once(self):
-        # 12 tiles taking 0.2 s each: one by one (the old map_tiles) the first was said after all 12, 2.4 s
-        fake = FakeLayers(delay=0.2)
+        # 12 tiles: one by one (the old map_tiles) the first was said after all 12 were built. Measured by order, not by
+        # the clock (gate 293: "first tile after 4.17 s" of 0.2 s sleeps, the test process starved under SCHED_IDLE):
+        # every build is held until the test lets it go, so a tile said only at the end, or built one at a time, waits
+        # here for good.
+        fake = HeldLayers()
         tf = maptiles.TileFiles(fake, self.root, self.ready, workers=6)
         self.addCleanup(tf.close)
+        self.addCleanup(fake.release_all)
         keys = [("sat", 12, x, 1561) for x in range(1170, 1182)]
-        t0 = time.monotonic()
         tf.request(keys)
-        self.wait_for(12)
-        first, last = self.done[0][2] - t0, self.done[-1][2] - t0
-        self.assertLess(first, 0.35, f"first tile after {first:.2f} s")
-        self.assertLess(last, 1.0, f"all 12 after {last:.2f} s")
+        self.assertTrue(fake.wait_building(6), f"6 workers, building at once: {fake.peak}")
+        self.assertEqual(fake.peak, 6, "never more builds at once than workers")
+        self.assertEqual(tf.pending(), (6, 6))
+        first = fake.building_keys()[0]
+        fake.release(first)
+        self.wait_for(1, timeout=30)
+        self.assertEqual(self.done[0][:2], (first, True), "the first tile done is said at once")
+        self.assertEqual(len(self.done), 1, "the others are still being built (held)")
+        self.assertTrue(fake.wait_building(6), "a freed worker takes the next queued tile")
+        self.assertEqual(fake.peak, 6)
+        fake.release_all()
+        self.wait_for(12, timeout=30)
+        self.assertEqual(sorted(k for k, _, _ in self.done), sorted(keys))
         self.assertTrue(all(ok for _, ok, _ in self.done))
         for k in keys:
             with open(maptiles.tile_path(self.root, *k), "rb") as f:
                 self.assertEqual(f.read(), b"tile")
         self.assertEqual(tf.pending(), (0, 0))
-        print(f"\nTileFiles: 12 tiles of 0.2 s, first said after {first:.2f} s, all after {last:.2f} s "
-              f"(one by one: 2.4 s, said at the end)")
 
     def test_newest_request_first_older_dropped(self):
         gate = threading.Event()

@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from concurrent import futures
 from dataclasses import replace
 from pathlib import Path
@@ -86,13 +87,33 @@ class FakeNet(imagery.Imagery):
         self.serve = serve
 
 
-class ReprojectionTest(unittest.TestCase):
+class ImageryCase(unittest.TestCase):
+    """A temporary cache folder, removed after every Imagery the test made has stopped writing in it (close(wait=True)):
+    their prefetches and warm threads still wrote tiles when it went (gate 293, "Directory not empty")."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self._made = []
+        init = imagery.Imagery.__init__
+        made = self._made
+
+        def tracked(im, *a, **kw):
+            made.append(im)
+            init(im, *a, **kw)
+        patch = mock.patch.object(imagery.Imagery, "__init__", tracked)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def stop_imagery(self):
+        while self._made:
+            self._made.pop().close(wait=True)
 
     def tearDown(self):
+        self.stop_imagery()
         self.tmp.cleanup()
 
+
+class ReprojectionTest(ImageryCase):
     def landmark_server(self, lat, lon):
         """Tiles with a 3 x 3 white mark centred on the pixel that contains (lat, lon)."""
         def serve(name, z, x, y):
@@ -152,13 +173,7 @@ class ReprojectionTest(unittest.TestCase):
         self.assertEqual(imagery.zoom_for(0.0, 0.01), 19)
 
 
-class ChainTest(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
+class ChainTest(ImageryCase):
     @staticmethod
     def colour(name):
         return {"usgs": (200, 30, 30), "eox2023": (30, 200, 30), "eox2016": (30, 30, 200)}[name]
@@ -551,7 +566,7 @@ class ChainTest(unittest.TestCase):
         time.sleep(0.3)
         self.assertFalse(im.requests, "a plain prefetch past the budget: nothing")
         im.prefetch(f, 0.0, 0.0, 256.0, 64, soon=True)
-        time.sleep(0.3)
+        self.stop_imagery()                 # (its fetches done, not 0.3 s of a loaded machine)
         self.assertTrue(im.requests and all(r[0] == "eox2023" for r in im.requests))
 
     def test_parse_chain_and_attribution(self):
@@ -605,17 +620,14 @@ class ExportTransport:
         return status, {}, body
 
 
-class ExportImageryTest(unittest.TestCase):
+class ExportImageryTest(ImageryCase):
     """The NAIP source: one exportImage per 4 x 4 tiles split on disk, lazy (a render never waits for it:
     USGS until its tiles are on disk), black areas count as missing, warm() fetches ahead."""
     LAT, LON = 39.2834, -76.5934        # Fells Point (the USGS probes say "covered" in the fakes)
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        super().setUp()
         self.frame = g.EnuFrame(self.LAT, self.LON)
-
-    def tearDown(self):
-        self.tmp.cleanup()
 
     @staticmethod
     def child_colour(x, y):
@@ -656,6 +668,7 @@ class ExportImageryTest(unittest.TestCase):
         self.assertEqual(set(used), {"naip"})
         raw, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
         self.assertTrue((rgb == raw).all())
+        self.stop_imagery()
         self.tmp.cleanup()              # (a cache of its own: the first one remembers the reference's misses)
         self.tmp = tempfile.TemporaryDirectory()
         im2 = self.make()               # (a reference with data: matched, as before)
@@ -1116,20 +1129,20 @@ def bc1_decode(data, w, h):
     return img[:h, :w]
 
 
-class LazyStateTest(unittest.TestCase):
+class LazyStateTest(ImageryCase):
     """imagery.lazy_state / fetch_lazy (the roofs' photo, buildings.roof_photo_final): each lazy tile decided by itself
     (on disk, or known to hold nothing), not by its export parent's last child; an evicted tile and an expired miss
     asked again; the expiry of the "nothing there" answers that decide."""
     LAT, LON = 39.2834, -76.5934
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        super().setUp()
         self.frame = g.EnuFrame(self.LAT, self.LON)
         missindex.reset_memo()
 
     def tearDown(self):
         missindex.reset_memo()
-        self.tmp.cleanup()
+        super().tearDown()
 
     def make(self, usda_black=lambda i, j: False, naip_black=lambda i, j: False):
         """naipusda then naip (both lazy exports, 4 x 4 tiles a parent) then usgs; usda_black(i, j) / naip_black: the
@@ -1351,6 +1364,7 @@ class LazyStateTest(unittest.TestCase):
             self.assertTrue(all(s == "none" and abs(e - (recent + ttl)) < 2 for s, e in st), st)
         finally:
             self.tmp = keep
+            self.stop_imagery()
             im2_dir.cleanup()
 
 

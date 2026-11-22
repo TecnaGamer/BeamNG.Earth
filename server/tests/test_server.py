@@ -377,11 +377,22 @@ class ServerTest(ServerHarness):
             time.sleep(0.02)
         self.assertIn(key, self.server.hm, "prefetch did not build the predicted terrain")
         time.sleep(0.2)
-        t0 = time.monotonic()
+        # Served from the cache: no build of that block again, the prefetched file sent (a reply time limit of 0.15 s
+        # measured the machine's load: 0.18 s with the interpreter contended).
+        cached = self.server.hm[key]["heightmap"]
+        built = []
+        make = self.server.make_heightmap
+
+        def counted(anchor, cx, cy, *a, **kw):
+            built.append((anchor.id, cx, cy))
+            return make(anchor, cx, cy, *a, **kw)
+        self.server.make_heightmap = counted
         c.send({"type": "prepare_terrain", "requestId": 6, "anchorId": aid, "cx": 1024, "cy": 0})
         tr, seen = c.until(lambda m: m["type"] == "terrain_ready", timeout=30)
+        self.server.make_heightmap = make
         self.assertEqual((tr["requestId"], tr["cx"]), (6, 1024.0))
-        self.assertLess(time.monotonic() - t0, 0.15)            # served from the cache
+        self.assertNotIn(key, built)
+        self.assertEqual(os.path.basename(tr["heightmap"]), cached)
         far.apply(seen)
         if not [m for m in seen if m["type"] == "far_done"] or self.conn().dirty:
             self.stream_until_done(far, aid)
@@ -430,13 +441,26 @@ class ServerTest(ServerHarness):
         self.pose(aid2, 0, 0, held={})                      # empty Lua table: may encode as {}
         # Deleted gradually, not in one burst (a burst stalled the game ~300 ms, in-game 2026-10-10):
         # once deletion has started there are still files left for a while.
-        # (delete_interval 2 ms: on Windows ~16 ms, its event loop's timer resolution)
-        end = time.monotonic() + 5 + 0.02 * before
+        # (delete_interval 2 ms: on Windows ~16 ms, its event loop's timer resolution; the pacing itself is
+        # DeleteQueueTest's)
+        # Waited for until the server says its part is done: the old anchor pruned (a prune waits while one of its
+        # builds runs) and the paced queue drained. A wall-clock limit measured the machine's load instead: under the
+        # gate's idle-priority lanes the loop, the delete thread and the builds took >20 ms per file of hops between
+        # them (gates 295, 298: 659 files left after 18 s while the queue was still draining).
+        s = self.server
+
+        async def drained():        # (on the loop: prune() forgets the anchor and queues its files in one callback)
+            return aid not in s.anchors and not s.delete_queue and not s._deleting
+
+        def server_done():
+            return asyncio.run_coroutine_threadsafe(drained(), self.loop).result(60)
+        end = time.monotonic() + 300
         partial = False
         while time.monotonic() < end:
+            done = server_done()        # (read before the listing: a file listed after it is a file the server left)
             n = len(glob.glob(os.path.join(self.server.out_dir, f"far_{aid}_*")))
             partial |= 0 < n < before
-            if n == 0:
+            if n == 0 or done:
                 break
             time.sleep(0.01)
         self.assertTrue(partial, "old tile files were deleted all at once")
@@ -758,10 +782,14 @@ class MeshServerTest(ServerHarness):
     near_visual = "mesh"
     with_imagery = True
 
-    def start(self, x=0.0, y=0.0):
+    def start(self, x=0.0, y=0.0, cam_first=False):
+        """cam_first: a pose (its camera) before the commits. The mod sends it a frame after them; the builds the server
+        starts meanwhile go by distance alone (it has no view cone yet), and how many depends on the machine's load."""
         far = FarState()
         self.hello()
         aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
+        if cam_first:
+            self.pose(aid, x, y)        # (a pose of a prepared, newer anchor commits it: connection_pose)
         self.c.send({"type": "commit_anchor", "anchorId": aid})
         self.c.send({"type": "commit_terrain", "anchorId": aid, "cx": 0, "cy": 0})
         self.pose(aid, x, y)
@@ -771,7 +799,9 @@ class MeshServerTest(ServerHarness):
 
     def test_session(self):
         c = self.c
-        far, aid, done, seen, dt = self.start()
+        # (the camera before the first build: under the gate's load up to a worker round of tiles was started before
+        # the mod's first pose and sent first, ranked [0, 0, 0, 16, ...] by view distance, gates 295 and 298)
+        far, aid, done, seen, dt = self.start(cam_first=True)
         stats = self.server.level_stats
         print(f"\n  mesh initial set: {done['count']} tiles in {dt:.2f} s (synthetic DEM + imagery); "
               "per level build/texture ms: " + ", ".join(

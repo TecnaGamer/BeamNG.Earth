@@ -659,6 +659,7 @@ class Imagery:
         self._warm_want = []                # warm(): lazy tiles ahead of the player, nearest first
         self._warm_cv = threading.Condition()
         self._warm_thread = None
+        self._closed = False                # close(wait=True): the warm thread returns
         self._far_warm = {}                 # far_warm(): tag -> (priority, frame, x0, y0, size, px, done callback)
         self._far_keys = {}                 # ... tag -> (its item, its lazy keys, [any fetched]) (the warm thread's)
         self._inflight = {}
@@ -1744,6 +1745,8 @@ class Imagery:
         done, want = set(), None    # keys of this list found done: not looked at on disk again at every wake
         while True:
             with self._warm_cv:
+                if self._closed:
+                    return
                 if self._warm_want is not want:     # a new list (the player moved on): looked at afresh
                     done, want = set(), self._warm_want
             # (the disk looked at outside the lock: warm(), on the server's event loop, waits for it, and 28 of the 40
@@ -1766,7 +1769,7 @@ class Imagery:
                     key = far[1]
             if key is None:
                 with self._warm_cv:
-                    if self._warm_want is want and not self._far_warm:
+                    if self._warm_want is want and not self._far_warm and not self._closed:
                         self._warm_cv.wait()
                 continue
             src, z, x, y = key
@@ -2280,7 +2283,19 @@ class Imagery:
             used["deshadow"] = relit
         return (canvas if keep_canvas else canvas.take_rgb()), used
 
-    def close(self):
+    def close(self, wait=False):
+        """Stop fetching: the fetches queued are dropped. wait: instead the warm thread stops and every fetch already
+        queued (urgent and fetch_later's too) is done before this returns: nothing writes in cache_dir after (a
+        test's folder removed right after, gate 293: "Directory not empty" with a prefetch still writing)."""
+        if wait:
+            with self._warm_cv:
+                self._closed = True
+                self._warm_cv.notify_all()
+            if self._warm_thread is not None:
+                self._warm_thread.join()
+            for pool in (self._later_pool, self.urgent_pool, self.pool):     # (fetch_later's batches use the pool)
+                if pool is not None:
+                    pool.shutdown(wait=True)
         if self.deshadow is not None:
             self.deshadow.close()
         if self.colormatch is not None:
