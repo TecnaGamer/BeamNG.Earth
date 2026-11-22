@@ -10847,7 +10847,7 @@ class Connection:
             try:
                 def cell_water(key):    # a cell's water lines if its map data is at hand (else built meanwhile)
                     md = sea.md
-                    if not os.path.exists(md.path(mapdatamod._key(key), "water")):
+                    if not md.has(mapdatamod._key(key), "water"):       # (its file, or its CIP cell, at hand)
                         missing[0] = True
                         sea.warm([(key.x, key.y)])
                         return None
@@ -10864,7 +10864,7 @@ class Connection:
                     la1, lo1, _ = frame.enu_to_geodetic(x + r, y + r, 0.0)
                     try:
                         every = mapcells.cells_for_bbox(float(la0), float(lo0), float(la1), float(lo1), max_cells=256)
-                        keys = tuple(key for key in every if os.path.exists(md.path(mapdatamod._key(key), "roads")))
+                        keys = tuple(key for key in every if md.has(mapdatamod._key(key), "roads"))
                         if len(keys) < len(every):
                             missing[0] = True
                         memo = getattr(self, "_river_clear", None)   # (anchor, cells) -> clearance: built once
@@ -10901,7 +10901,7 @@ class Connection:
                     la1, lo1, _ = frame.enu_to_geodetic(x + r, y + r, 0.0)
                     try:
                         every = mapcells.cells_for_bbox(float(la0), float(lo0), float(la1), float(lo1), max_cells=256)
-                        keys = tuple(key for key in every if os.path.exists(md.path(mapdatamod._key(key), "roads")))
+                        keys = tuple(key for key in every if md.has(mapdatamod._key(key), "roads"))
                         if len(keys) < len(every):
                             missing[0] = True
                         # a cell's road points every LOW_ROAD_STEP_M and the raw DEM there, made once per cell for the

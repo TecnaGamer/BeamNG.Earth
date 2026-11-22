@@ -71,6 +71,8 @@ ORDER = ("m:connectors", "m:roads", "m:road_routes", "m:water", "m:land_use", "m
          "z:lidar.gaps", "z:lidar-nogaps", "z:hk3", "z:ign", "z:nvdb", "f:osmfuel", "f:picnic", "m:landcover",
          "m:places", "m:canopy")
 ROADZ_SRCS = ("lidar", "lidar-nogaps", "hk3", "ign", "nvdb")
+DECODED_MB = 96            # decoded sections kept per process (MapData keeps its own decoded layers: these are the
+                           # side reads, slices, lidar answers, rows, and layers between their reads)
 LANE = "cip"                # netfetch's lane of the build's host (its policy: the CDN's, given up quickly)
 
 
@@ -222,9 +224,13 @@ class Reader(bnwt.Reader):
         self.stats = dict(cells=0, fallbacks=0, decode_s=0.0, sections=0)
         self._inflight = {}
         self._down = None
-        self._dec = pmtiles.OrderedDict()   # cell -> decoded sections (a few cells: a road tile reads ~4)
+        self._dec = pmtiles.OrderedDict()   # (cell, section) -> decoded section (DECODED_MB)
+        self._dec_sizes = {}
+        self._dec_bytes = 0
+        self._decoding = {}                 # (cell, section) -> Event of the decode under way
         self._dec_lock = threading.Lock()
         self._noted = set()
+        self._heads = {}                    # cell -> its tile's section names (has_section)
 
     def _resolve(self, kind):
         """The build in use (BNE_V2_CIP_BUILD, else latest.json of the release), or Unavailable."""
@@ -289,15 +295,81 @@ class Reader(bnwt.Reader):
             self.mem_put((arch.name, k), b)
         return b
 
-    def sections(self, key, kind="demand"):
-        """{name: section} of cell key (decoded once, a few cells kept), or None: not in the build (the sources)."""
+    def names(self, key, kind="demand"):
+        """The section names of cell key's tile (fetched if need be), or None: not in the build."""
         key = mapcells.check(key)
         ck = str(key)
+        got = self._heads.get(ck)
+        if got is not None:
+            return got
+        try:
+            b = self._cell_bytes(key, kind)
+            got = frozenset(n for n, _c, _l in fast._ef.cip_cell_info(b)[1]) if b else frozenset()
+        except (bnwt.Unavailable, netfetch.FetchError, ValueError) as e:
+            self._note(key, f"{type(e).__name__}: {e}")
+            return None
+        self._heads[ck] = got
+        return got
+
+    def one(self, key, name, kind="demand"):
+        """Section name of cell key alone, decoded (the frame only as far as its end; DECODED_MB of sections kept, one
+        decode of each at a time), or None: not in the build."""
+        key = mapcells.check(key)
+        k = (str(key), name)
         with self._dec_lock:
-            got = self._dec.get(ck)
+            got = self._dec.get(k)
             if got is not None:
-                self._dec.move_to_end(ck)
+                self._dec.move_to_end(k)
                 return got
+            ev = self._decoding.get(k)
+            mine = ev is None
+            if mine:
+                ev = self._decoding[k] = threading.Event()
+        if not mine:
+            ev.wait(60.0)
+            with self._dec_lock:
+                got = self._dec.get(k)
+            if got is not None:
+                return got
+        try:
+            names = self.names(key, kind)
+            if names is None or name not in names:
+                return None
+            b = self._cell_bytes(key, kind)
+            t0 = time.perf_counter()
+            got = decode_cell(key, b, [name]).get(name)
+            self.stats["decode_s"] += time.perf_counter() - t0
+            self.stats["cells"] += 1
+            if got is not None:
+                n = len(got) if isinstance(got, bytes) else sum(a.nbytes for a in got.values())
+                with self._dec_lock:
+                    self._dec[k] = got
+                    self._dec_bytes += n
+                    self._dec_sizes[k] = n
+                    while self._dec_bytes > DECODED_MB * 1e6 and len(self._dec) > 1:
+                        old, _ = self._dec.popitem(last=False)
+                        self._dec_bytes -= self._dec_sizes.pop(old, 0)
+            return got
+        except ValueError as e:         # (a damaged cell file: dropped, the sources this time)
+            log.warning("cip %s: damaged (%s): from the sources", key, e)
+            self._heads.pop(str(key), None)
+            try:
+                os.remove(self.archive()._tile_path(ZOOM, key.x, key.y))
+            except (OSError, bnwt.Unavailable):
+                pass
+            return None
+        except (bnwt.Unavailable, netfetch.FetchError) as e:
+            self._note(key, f"{type(e).__name__}: {e}")
+            return None
+        finally:
+            if mine:
+                with self._dec_lock:
+                    self._decoding.pop(k, None)
+                ev.set()
+
+    def sections(self, key, kind="demand"):
+        """{name: section} of cell key (every section decoded, not kept), or None: not in the build (the sources)."""
+        key = mapcells.check(key)
         try:
             b = self._cell_bytes(key, kind)
             t0 = time.perf_counter()
@@ -317,11 +389,35 @@ class Reader(bnwt.Reader):
                 pass
             return None
         self.stats["cells"] += 1
-        with self._dec_lock:
-            self._dec[ck] = got
-            while len(self._dec) > 12:
-                self._dec.popitem(last=False)
         return got
+
+    def has_section(self, key, name):
+        """Is section name of cell key's tile on disk already (no network, no decode: its head only; for MapData.has,
+        which the event loop asks)? False when the build is not open yet, the cell not fetched or not in it."""
+        with self._lock:
+            arch = self._arch.get(ARCHIVE)
+        if arch is None or arch.meta is None or key.z != ZOOM or not arch.covers_xy((ZOOM, key.x, key.y)):
+            return False
+        if name.startswith("m:"):
+            lays = self.built_layers()
+            if lays is not None and name[2:].split(".", 1)[0] not in lays:
+                return False
+        ck = str(key)
+        got = self._heads.get(ck)
+        if got is None:
+            try:
+                with open(arch._tile_path(ZOOM, key.x, key.y), "rb") as fh:
+                    b = fh.read(4096)
+            except OSError:
+                return False
+            try:
+                got = frozenset(n for n, _c, _l in fast._ef.cip_cell_info(b)[1]) if b else frozenset()
+            except ValueError:
+                return False
+            if len(self._heads) > 65536:
+                self._heads.clear()
+            self._heads[ck] = got
+        return name in got
 
     def built_layers(self):
         """The map layers the build holds (its index's "layers"; the others are read from their sources by design,
@@ -336,10 +432,7 @@ class Reader(bnwt.Reader):
             lays = self.built_layers()
             if lays is not None and name[2:].split(".", 1)[0] not in lays:
                 return None
-        s = self.sections(key, kind)
-        if s is None:
-            return None
-        got = s.get(name)
+        got = self.one(key, name, kind)
         if got is None:
             self.stats["fallbacks"] += 1
             self._note(key, f"no {name}")
@@ -429,19 +522,17 @@ def roadz_files(r, src, key):
     name), or None (not in the build)."""
     if r is None:
         return None
-    s = r.sections(key, "demand")
-    if s is None or f"z:{src}" not in s:
+    arrs = r.one(key, f"z:{src}")
+    if arrs is None:
         return None
     buf = io.BytesIO()
-    np.savez(buf, **s[f"z:{src}"])
-    return buf.getvalue(), s.get(f"z:{src}.gaps")
+    np.savez(buf, **arrs)
+    return buf.getvalue(), r.one(key, f"z:{src}.gaps")
 
 
 def side_json(r, name, key):
     """The decoded JSON of section f:<name> / t:<name> of cell key, or None (not in the build)."""
     if r is None:
         return None
-    s = r.sections(key, "demand")
-    if s is None or name not in s:
-        return None
-    return json.loads(s[name].decode("utf-8"))
+    got = r.one(key, name)
+    return None if got is None else json.loads(got.decode("utf-8"))

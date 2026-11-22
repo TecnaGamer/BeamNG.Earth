@@ -498,9 +498,8 @@ class MapData:
         import roadlayercache
         if not roadlayercache.ON or MIRROR_MB <= 0:
             return None, {}
-        try:
-            stamp = self._stamp(self.path(key, layer))
-        except OSError:
+        stamp = self._dec_stamp(layer, str(key))
+        if stamp is None:
             return None, {}
         import lanesections
         import railtags
@@ -522,12 +521,21 @@ class MapData:
             return None, vers
 
     def _dec_stamp(self, layer, cell):
-        """The stamp now of cell's (its string) layer file, or None."""
+        """The stamp now of cell's (its string) layer file, or None. A layer read from its CIP cell (no file: cip.py)
+        has its build's: "cip <build> <cell>" (a build never changes)."""
         try:
             z, x, y = (int(v) for v in cell.split("/"))
-            return self._stamp(self.path(mapcells.CellKey(z, x, y), layer))
-        except (OSError, ValueError):
+            key = mapcells.CellKey(z, x, y)
+        except ValueError:
             return None
+        try:
+            return self._stamp(self.path(key, layer))
+        except OSError:
+            pass
+        r = getattr(self, "cip", None)
+        if r is not None and r.has_section(key, f"m:{self.layer_name(layer)}"):
+            return f"cip {r.build} {key}"
+        return None
 
     def _dec_load(self, key, layer, dec):
         import roadlayercache
@@ -796,8 +804,12 @@ class MapData:
 
     # --- one layer -------------------------------------------------------------------------------
     def has(self, key, layer):
-        """True when the layer's file exists (not read: cheap enough for the event loop)."""
-        return os.path.exists(self.path(key, layer))
+        """True when the layer's file exists, or its CIP cell is on disk with it (not read: cheap enough for the event
+        loop)."""
+        if os.path.exists(self.path(key, layer)):
+            return True
+        r = getattr(self, "cip", None)
+        return r is not None and r.has_section(_key(key), f"m:{self.layer_name(layer)}")
 
     def layer_provenance(self, key, layer, wait=False):
         """The provenance dict of a cached layer file, None when it is not cached (or has none, or, wait false, not
@@ -808,6 +820,8 @@ class MapData:
         memo = self.__dict__.setdefault("_prov_memo", {})
         if path in memo:
             return memo[path]
+        if getattr(self, "cip", None) is not None:      # (a cell file not built yet is read from its CIP cell)
+            self.__dict__.setdefault("_prov_keys", {})[path] = (_key(key), layer)
         if not wait:
             # (a first read, or a file not built yet, off the event loop: on a busy hard disk opening the cell took
             # 5.2 s of the loop, GitHub #1054; the caller asks again a second later)
@@ -825,6 +839,14 @@ class MapData:
                 if "provenance" in z.files:
                     p = json.loads(str(z["provenance"]))
         except FileNotFoundError:
+            kl = self.__dict__.get("_prov_keys", {}).get(path)
+            r = getattr(self, "cip", None)
+            if kl is not None and r is not None and r.has_section(kl[0], f"m:{self.layer_name(kl[1])}"):
+                got = cip.layer_arrays(r, kl[0], self.layer_name(kl[1]), "background")    # (on disk: no fetch)
+                if got is not None and "provenance" in got:
+                    p = json.loads(str(got["provenance"]))
+                    memo[path] = p
+                    return p
             self.__dict__.setdefault("_prov_miss", {})[path] = time.monotonic()
             return None                 # (not remembered: it may be built later)
         except Exception:
@@ -1142,6 +1164,12 @@ class MapData:
         arrays = self._load(path)
         if arrays is not None:
             return self._mirrored(key, layer, path, arrays), True
+        if getattr(self, "cip", None) is not None:
+            # (CIP on: the cell's arrays from its CIP cell as they are, ~ms; no cell file, no mirror: the CIP cell is
+            # the copy on disk)
+            got = cip.layer_arrays(self.cip, key, self.layer_name(layer), kind)
+            if got is not None:
+                return got, True
         with self._key_lock(key, layer):
             # another thread, or another of the server's processes (xproc), built it meanwhile
             arrays, mine = xproc.once(path + ".lock", lambda: self._load(path), BUILD_WAIT_S, kind)

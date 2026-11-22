@@ -183,6 +183,29 @@ class Archive(unittest.TestCase):
         self.assertIsNone(cip.layer_arrays(r, mapcells.CellKey(14, 1, 1), "roads.9"))   # (outside its coverage)
         self.assertEqual(cip.side_json(r, "t:rail", KEY), {"ways": []})
 
+    def test_mapdata_reads_the_build(self):
+        """MapData._build gives a layer's cell file arrays from the build (no source asked), has() sees a fetched cell's
+        section, and a layer the build does not hold is left to its source."""
+        import mapdata
+        import netfetch
+        a = sample_arrays()
+        lc = {"data": np.arange(16, dtype=np.uint8).reshape(4, 4), "meta": np.array("{}"), "provenance": np.array("null")}
+        release, _ = self._build({KEY: {"m:roads.9": a, "m:landcover": lc}})
+        r = cip.Reader(os.path.join(self.tmp, "cache", "mapdata", "raw"), netfetch.Fetcher(offline=True), release,
+                       base=os.path.join(self.tmp, "out"))
+        st = type("M", (), {})()
+        st.cip = r
+        st.layer_name = mapdata.MapData.layer_name
+        st.path = lambda key, layer: os.path.join(self.tmp, "none.npz")
+        self.assertFalse(mapdata.MapData.has(st, KEY, "roads"))           # (not fetched yet)
+        got = mapdata.MapData._build(st, KEY, "roads", "demand")
+        self.assertEqual(list(got), list(a))
+        for k in a:
+            self.assertEqual(got[k].tobytes(), a[k].tobytes(), k)
+        self.assertTrue(mapdata.MapData.has(st, KEY, "roads"))
+        self.assertEqual(mapdata.MapData._build(st, KEY, "landcover", "demand")["data"].tobytes(), lc["data"].tobytes())
+        self.assertFalse(mapdata.MapData.has(st, KEY, "places"))
+
     def test_other_code_is_refused(self):
         import netfetch
         code = dict(cip.code_inputs("2026-10-21.0"), pipeline=-1)

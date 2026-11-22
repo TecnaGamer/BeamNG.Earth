@@ -268,6 +268,26 @@ decision blocks (see below).
 - **Size:** roughly 200 GB per world release (estimate). Not edge-cached, so every read is an R2 read.
 - **Status:** players use it only with `BNGE_BNWT_URL=https://tiles.tgforever.net`.
 
+### Compact per-cell inputs (CIP): `cip<FORMAT>/<release>/<build>/`
+
+- **What:** architecture v2's per-cell inputs (`server/cip.py`): one file per zoom-14 cell with everything the
+  client's map data reads for it, as the client itself would make it: every Overture layer's cell file (OpenStreetMap's
+  road tags joined), the weekly rail and lane shards' slice the cell's roads read, the 3DEP lidar road heights' answers
+  (US), OpenStreetMap's fuel and picnic rows; and per build the OurAirports snapshot. Lossless (native codec
+  `cip.rs`), so plans, facts and tiles built from it are the ones the sources give. A dense Manhattan cell is about
+  1 MB; the 290 cells a cold Manhattan visit reads are about 90 MB (today: ~920 MB of map inputs, 700 MB of it lidar
+  point clouds).
+- **Files:** `cells.index.json` (the build's inputs: the code-made part a client must match, the weekly data builds it
+  pinned; coverage; parts), the parts `cells.pNNN.pmtiles` (PMTiles v3, at most 32 MB each so the edge caches a part
+  whole), `airports.csv.gz`, `runways.csv.gz`, `ATTRIBUTION.txt`, `_build/` records; and
+  `cip<FORMAT>/<release>/latest.json` (`{"build": ...}`, written **last**: what clients read first).
+- **Built by:** `tools/build_cip.py --world` from a **pinned** BeamNG.Earth release tag or commit, in the data repo's
+  `cip` workflow (after `bnwt`: the builder reads Overture through the release's BNWT archives).
+- **How often:** monthly (after the BNWT build), plus by hand.
+- **Size:** roughly 250-330 GB per world release (estimate from samples; vector layers only, the rasters stay on
+  their sources).
+- **Status:** not published yet; players use it only with `BNE_V2_CIP=on`.
+
 ### Signed decision archives: `dec/d<FORMAT>/<vkey>/`
 
 Pre-computed road plans and cell facts for popular places, for exactly one server version. See
@@ -563,6 +583,8 @@ launcher or `run_server.sh` / `run_server.bat`. With the launcher you can also p
 | `BNGE_DEM_CDN` | the switch file | a Mapterhorn release to read from the CDN (e.g. `0.0.13`), or `off` |
 | `BNGE_S2_MAX_ZOOM`, `BNGE_S2_MAX_LAT` | the switch file | the Sentinel-2 packs' finest zoom (12 to 14) and per-zoom latitude limits (`14:50`); normally set from the switch |
 | `BNGE_BNWT_URL` | unset (off) | where the BNWT archives are: `https://...`, `file://...` or a folder. Set it to `https://tiles.tgforever.net` to use the project's. |
+| `BNE_V2_CIP` | `off` | `on`: read the [compact per-cell inputs](#compact-per-cell-inputs-cip-cipformatreleasebuild) first; every cell or section a build lacks comes from its source as before |
+| `BNE_V2_CIP_URL`, `BNE_V2_CIP_BUILD` | `<BNGE_CDN_BASE>`; `latest.json`'s | where the CIP builds are (`https://...`, `file://...` or a folder) and which build |
 | `BNGE_DECISIONS` | the switch file | `on` / `off`: use the decision archives whatever the switch says |
 | `BNGE_DECISIONS_URL` | `<BNGE_CDN_BASE>/dec` | where the decision archives are |
 | `BNGE_DECISIONS_PUBKEY` | the compiled `TRUSTED` keys | ed25519 public keys (hex, comma-separated) to accept **instead of** the compiled ones |
