@@ -2053,6 +2053,7 @@ local function updateWorld(dt)
   if st.poseTimer >= POSE_INTERVAL and net.isReady() and anchorKnown() and not st.rebasing then
     st.poseTimer = 0
     local c = st.cam
+    local fMean, fMax = gov:frameWindow()     -- (the frames since the last pose: the server's CPU share follows them)
     -- held: previous anchors of this server's session only (the far field's older sessions' anchor
     -- ids are another server's); sessions: every session folder in use
     net.send({ type = 'pose', anchorId = st.anchorId, x = pl.x, y = pl.y, z = pl.z, vx = pl.vx, vy = pl.vy,
@@ -2068,6 +2069,8 @@ local function updateWorld(dt)
       -- built first, deckWait)
       guardHold = (st.guard.mode == 'hold' or M._deckguard.waiting(st.deck)) or nil,
       deckWait = M._deckguard.waitKeys(st.deck),
+      frameMs = fMean and math.floor(fMean * 10 + 0.5) / 10 or nil,
+      frameMaxMs = fMax and math.floor(fMax * 10 + 0.5) / 10 or nil,
       cam = c and { x = c.x, y = c.y, z = c.z, fx = c.fx, fy = c.fy, fz = c.fz, fovDeg = c.fovDeg, h = c.h } or nil })
   end
 

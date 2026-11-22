@@ -7643,6 +7643,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     roadsysbind::register(m)?;
     // 599: unalign::collider_unalign (colliders off the axis-aligned lattice, cdae.COLLIDER_UNALIGN_M)
     unalign::register(m)?;
-    m.add("VERSION", 603)?;
+    m.add("VERSION", 605)?;
     Ok(())
 }
