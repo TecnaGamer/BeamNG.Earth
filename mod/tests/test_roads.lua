@@ -965,6 +965,29 @@ do
   T.check(not roads.extDue(nil, 20, 1e6) and not roads.extDue(roads.needReach(20) + 1, 20, 1e6)
     and roads.extDue(roads.hardReach(20), 20, 0) and not roads.extDue(roads.hardReach(20) + 1, 20, 0)
     and roads.extDue(roads.hardReach(20) + 1, 20, roads.NEED_GAP_S * 1000), 'extDue: the NEED rule of the roads\' colliders')
+  -- a late box (trees.lua REACH: items made solid far ahead): due only once the car is within hardReach, and gone with
+  -- any rebuild before that
+  T.check(not roads.lateDue(nil, 20) and roads.lateDue(roads.hardReach(20), 20) and not roads.lateDue(roads.hardReach(20) + 1, 20),
+    'lateDue: within hardReach')
+  for _ = 1, 80 do upd7() end
+  r0 = S.calls.reloadCollision
+  car.pos, car.v = vec3(128, 128, 0.5), vec3(20, 0, 0)
+  upd7()
+  roads.requestCollision({ 278, 100, 0, 290, 140, 0 }, true)    -- (150 m ahead)
+  for _ = 1, 80 do upd7() end
+  T.check(S.calls.reloadCollision == r0, 'late box 150 m ahead: not yet')
+  car.pos = vec3(218, 128, 0.5)                                 -- (60 m: within needReach, beyond hardReach)
+  for _ = 1, 80 do upd7() end
+  T.check(S.calls.reloadCollision == r0, 'late box 60 m ahead: still not (a NEED box would be due)')
+  car.pos = vec3(240, 128, 0.5)                                 -- (38 m)
+  upd7()
+  T.check(S.calls.reloadCollision == r0 + 1, '... rebuilt once the car is within hardReach of it')
+  for _ = 1, 80 do upd7() end
+  T.check(S.calls.reloadCollision == r0 + 1, '... once: the rebuild took the late box with it')
+  roads.requestCollision({ 278, 100, 0, 290, 140, 0 }, true)
+  roads.collisionRebuilt()                                      -- (another rebuild first: the terrain commit's)
+  for _ = 1, 80 do upd7() end
+  T.check(S.calls.reloadCollision == r0 + 1, 'late box made solid by another rebuild: none of its own')
   roads.RELOAD_EVERY_S = every
   roads.COLLIDE_CHECK_S, roads.BEHIND_JUMP_M = check, jump
   getPlayerVehicle = nil

@@ -72,9 +72,12 @@ M.SOLID_HYST_M = 50
 -- as every item of a tile within SOLID_M did; the overshoot of the tiles' squares goes. An item stays solid to
 -- reachRadius + REACH_HYST_M, and none behind the moving car by its own position (BEHIND_M, BEHIND_HYST_M). A near
 -- tile's rows are looked at again once the car moved REACH_STEP_M (REACH_STEP_S of driving at speed), the radius
--- changed that much or the kept heading turned. Every item made solid below roads.FAST_MS is sent in a box
--- (roads.requestCollision: due by the NEED rule as the car comes): with all of them made solid at the radius, a
--- rebuild with no deadline could wait ROLL_DEFER_S while the car rolls, and a car at 10 m/s covers the 200 m in 20 s.
+-- changed that much or the kept heading turned. Items made solid within CLOSE_M or roads.needReach are sent in a box
+-- (due by the NEED rule); those farther out in a late box (roads.requestCollision(box, true): due only once the car is
+-- within roads.hardReach, ~3 s off, if no rebuild came before), as a rebuild without a deadline may wait ROLL_DEFER_S
+-- while the car rolls (on open ground at 15 m/s the tile rule's first rebuild after a tree turned solid came 43 m
+-- before it). A NEED-rule box for every one (due within needReach) made 64 rebuilds instead of 22 on a 4.5 min
+-- Baltimore drive at ~30 mph (Windows, in-game probe 2026-11-22), each a 100-170 ms stall there while streaming.
 -- Tiles solid for another player's car keep every item solid (SOLID_M, as before).
 -- Measured 2026-11-22 (in-game probe, ~/bnge-tests/treecol): a reload's physics build is ~0.19 ms per 1,000 collision
 -- triangles on a Steam Deck, ~0.05 on the Windows test PC; a stock tree has 19-90. Baltimore downtown: ~460 solid
@@ -1734,10 +1737,8 @@ function M.update(anchorId, player, view, frameMs, fill)
   local psp = player.speed or 0
   local reachR = M.REACH and M.reachRadius(psp) or M.SOLID_M      -- (the car's radius for solid tiles / items)
   local reachStep = math.max(M.REACH_STEP_M, psp * M.REACH_STEP_S)
-  -- (the boxes round solid items made, roads.requestCollision: within CLOSE_M, or roads.needReach at speed; with REACH
-  -- every one below roads.FAST_MS, where a rebuild without a deadline may wait ROLL_DEFER_S while the car rolls)
-  local fastMs = okR and type(roadsM) == 'table' and roadsM.FAST_MS or 25
-  local boxAll = M.REACH and psp < fastMs
+  -- (the boxes round solid items made, roads.requestCollision: within CLOSE_M; with REACH within roads.needReach too,
+  -- which at speed is farther: an item made solid that late is due by the NEED rule, not the next rebuild)
   local boxR = math.max(M.CLOSE_M, okR and type(roadsM) == 'table' and roadsM.needReach and M.REACH
     and roadsM.needReach(psp) or 0)
   local boxR2 = boxR * boxR
@@ -1814,6 +1815,7 @@ function M.update(anchorId, player, view, frameMs, fill)
   end
   local nearMade = false
   local madeBoxes, cb = nil, nil            -- (boxes { x0, y0, x1, y1 } round the solid items made, one a tile)
+  local lateMade, lcb = nil, nil            -- (... the REACH items made solid farther out: roads' late boxes)
   local rowsScanned = 0
   local function finish()
     M.lastRows = rowsScanned                -- (diagnostics; rowsTotal: every pass's so far)
@@ -1823,8 +1825,9 @@ function M.update(anchorId, player, view, frameMs, fill)
       if ok and roads.requestCollision then
         roads.requestCollision()
         for _, b in ipairs(madeBoxes or {}) do roads.requestCollision({ b[1], b[2], 0, b[3], b[4], 0 }) end
+        for _, b in ipairs(lateMade or {}) do roads.requestCollision({ b[1], b[2], 0, b[3], b[4], 0 }, true) end
       end
-      nearMade, madeBoxes, cb = false, nil, nil
+      nearMade, madeBoxes, cb, lateMade, lcb = false, nil, nil, nil, nil
     end
   end
   -- a pass over a tile's rows stopped (its frame's time or items, or no Forest yet): the next pass for the same targets
@@ -1849,7 +1852,7 @@ function M.update(anchorId, player, view, frameMs, fill)
     local dist = oD[at]
     local want, band, near = oWant[at], oBand[at], oNear[at]
     local capDist = oCapD[at] or dist
-    t, fd, cb = tiles[oKeys[at]], nil, nil
+    t, fd, cb, lcb = tiles[oKeys[at]], nil, nil, nil
     if t.moved then
       -- a moved geotile: its items made again at its placement (the first loop, next pass). Near, it must collide;
       -- far, the engine draws its items' distant impostors without the Forest's transform: a rebase's 767 m shift
@@ -1936,7 +1939,7 @@ function M.update(anchorId, player, view, frameMs, fill)
             if solid then
               nearMade = true
               local x, y = itemPos and itemPos.x, itemPos and itemPos.y   -- (where makeItem put it)
-              if t.made[i] and x and (t.restore or t.byFocus or (t.reach and boxAll)
+              if t.made[i] and x and (t.restore or t.byFocus
                   or (x - player.x) ^ 2 + (y - player.y) ^ 2 <= boxR2) then
                 if not cb then
                   cb = { x, y, x, y }
@@ -1947,6 +1950,19 @@ function M.update(anchorId, player, view, frameMs, fill)
                   if y < cb[2] then cb[2] = y end
                   if x > cb[3] then cb[3] = x end
                   if y > cb[4] then cb[4] = y end
+                end
+              elseif t.made[i] and x and t.reach then
+                -- (REACH: due once the car is within roads.hardReach of it, if no rebuild came before: a rebuild
+                -- without a deadline may wait ROLL_DEFER_S while the car rolls, longer than the 200 m take)
+                if not lcb then
+                  lcb = { x, y, x, y }
+                  lateMade = lateMade or {}
+                  lateMade[#lateMade + 1] = lcb
+                else
+                  if x < lcb[1] then lcb[1] = x end
+                  if y < lcb[2] then lcb[2] = y end
+                  if x > lcb[3] then lcb[3] = x end
+                  if y > lcb[4] then lcb[4] = y end
                 end
               end
             end
