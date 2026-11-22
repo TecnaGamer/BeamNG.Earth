@@ -22,7 +22,7 @@ import time
 
 import numpy as np
 
-log = logging.getLogger("roadsys")
+log = logging.getLogger("earthd.roadsys")
 
 MODE = os.environ.get("BNE_ROADSYS", "off").strip().lower()
 SHADOW = MODE == "shadow"
