@@ -81,18 +81,20 @@ def test_a_negative_cycle_is_eased_and_the_labels_hold():
 
 # ---- the order step ----
 
-def flipping_road():
+def flipping_road(near=2.5, arm=8.0):
     """R is one road: R1 (layer 1) then R2 (layer 3) joined at its middle; A (layer 2) passes under R2 and over R1 round
-    a short U: over R1 where R is layer 1, under R2 where it is layer 3, the two crossings 40 m apart along R."""
+    a short U: over R1 where R is layer 1, under R2 where it is layer 3, the two crossings 2 x near apart along R, A's U
+    arm m long: 12.7 m of clearance to climb between them, in 2 x near of R and 2 x (near + arm) of A: more than a vehicle
+    drives at near = 2.5, arm = 8, a climb it can make at near = 20, arm = 30."""
     return [deck("R1", line(-100, 0, 0, 0), 1), deck("R2", line(0, 0, 100, 0), 3),
-            deck("A", [(-20, -100), (-20, 30), (20, 30), (20, -100)], 2)]
+            deck("A", [(-near, -100), (-near, arm), (near, arm), (near, -100)], 2)]
 
 
 def test_a_layer_flip_along_a_continuous_road_gives_up_one_layer_decision():
     net, systems = find(flipping_road())
     assert len(systems) == 1
     kept, dropped, deferred = s3_order.decide(net, systems[0])
-    assert len(systems[0]["crossings"]) == 2 and len(kept) == 1 and len(dropped) == 1 and not deferred
+    assert len(systems[0]["crossings"]) == 3 and len(kept) == 2 and len(dropped) == 1 and not deferred
     assert "layers" in dropped[0][1] and "joins" in dropped[0][1]
     # (what stands holds with the joins: the system has heights, nothing eased)
     s3_order.settle(net, systems[0])
@@ -101,6 +103,13 @@ def test_a_layer_flip_along_a_continuous_road_gives_up_one_layer_decision():
     diag = {}
     zs = gs.solve_shape(net, systems[0], pcs, smp, [zero(x["xy"]) for x in smp], fixed(net, zero), diag)
     assert zs is not None and not diag.get("relaxed")
+
+
+def test_a_loop_a_vehicle_can_drive_is_no_contradiction():
+    # (the class's own grade law (6 %) cannot make 12.7 m in 40 m, a vehicle's (45 %) can: nothing is given up in the order)
+    net, systems = find(flipping_road(20.0, 30.0))
+    kept, dropped, deferred = s3_order.decide(net, systems[0])
+    assert len(kept) == 2 and not dropped and not deferred
 
 
 def test_a_three_road_cycle_gives_up_exactly_one_decision():
@@ -144,13 +153,13 @@ def test_the_dropped_decisions_are_in_the_artifact():
     loc = {g: n for n, g in enumerate(range(len(net.m)))}
     art = s3_order.run(None, net, systems[0], loc, "sys", "system:sys")
     notes = [f for f in art.findings if f.code == "order_dropped"]
-    assert len(notes) == 1 and len(art.crossings) == 1 and not [f for f in art.findings if f.level == "fail"]
+    assert len(notes) == 1 and len(art.crossings) == 2 and not [f for f in art.findings if f.level == "fail"]
 
 
 # ---- the heights step ----
 
 def test_a_contradiction_a_vehicle_can_drive_is_eased_in_grade_and_no_decision_is_given_up():
-    net, systems = find(flipping_road())
+    net, systems = find(flipping_road(20.0, 30.0))
     sysm = systems[0]            # (the order step not run: the contradicting decisions both stand)
     pcs = gs.pieces(net, sysm)
     smp = gs.sample(net, pcs)
@@ -352,7 +361,7 @@ def test_the_curve_law_is_not_eased_past_the_tightest_curve_the_laws_give_a_road
 def test_the_relaxation_is_deterministic():
     runs = []
     for _ in range(2):
-        net, systems = find(flipping_road())
+        net, systems = find(flipping_road(20.0, 30.0))
         sysm = systems[0]
         pcs = gs.pieces(net, sysm)
         smp = gs.sample(net, pcs)
@@ -370,7 +379,7 @@ def test_no_pieces_no_relaxation():
 def test_the_relaxations_are_in_the_artifact_and_the_step_line():
     import logging
     from ix import pipeline, s6_heights
-    net, systems = find(flipping_road())
+    net, systems = find(flipping_road(20.0, 30.0))
     sysm = systems[0]
     pcs = gs.pieces(net, sysm)
     smp = gs.sample(net, pcs)
