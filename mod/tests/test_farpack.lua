@@ -122,6 +122,7 @@ local pdata2 = {}
 for k, v in pairs(pdata) do pdata2[k] = v end
 pdata2.h, pdata2.shape = 'p2', '/s/bp2_' .. PK .. '.cdae'
 roads.onFarTile(farMsg(PK, { slat, slon }, pdata2), 1, 'P')
+roads.onFarDrop({ anchorId = 1, key = SK }, true)     -- (no skyline to show either)
 for _, k in ipairs(keys) do roads.onFarDrop({ anchorId = 1, key = k }) end
 local fk = roads.debugFar()[roads.farGeoKey('F', K)]
 T.check(fk ~= nil and fk.dropWait ~= nil, 'a far tile\'s drop waits while its square\'s pack is not made')
@@ -178,9 +179,12 @@ for _, k in ipairs(keys) do
   if k == K then d.shape, d.pos, d.pivot, d.h = '/s/bf_' .. K .. '.cdae', { -118, -118, 0 }, 25, 'f4' end
   roads.onFarTile(farMsg(k, d.frame, d), 1)
 end
-T.check(roads.farGeoHidden(debugSky(), nil) == true, 'the skyline hands over: hidden once all 16 far tiles seen')
-T.check(roads.farGeoHidden(hf, SK) == false, 'a far mesh still to make: the piece stays though the skyline hides')
+T.check(roads.farGeoHidden(debugSky(), nil) == false, 'the skyline stays while a far mesh of its square is to make')
+T.check(roads.farGeoHidden(hf, SK) == true, 'the piece stays hidden under the shown skyline')
 for _ = 1, 3 do run(1, A) end
+T.check(roads.farGeoHidden(debugSky(), nil) == true, 'the skyline hands over once all 16 far tiles are made')
+T.check(objsWith('bf_' .. K)[1].hidden == false and debugSky() and objsWith('bs_' .. SK)[1].hidden == true,
+  'the far mesh shown, the skyline hidden: one LOD at a time')
 T.check(roads.farGeoHidden(hf, SK) == true, 'all far meshes made: the piece hides')
 for _, k in ipairs(keys) do roads.onFarDrop({ anchorId = 1, key = k }) end
 roads.onFarDrop({ anchorId = 1, key = SK }, true)
@@ -248,7 +252,8 @@ do
   roads.onFarTile(farMsg(k, fc, { shape = '/s/lod.cdae', pos = {0,0,0} }), 1)
   run(1, A)
   local cell, pack, sky = objsWith('lod.cdae')[1], objsWith('bp_' .. SK)[1], objsWith('bs_' .. SK)[1]
-  T.check(cell and not cell.hidden and pack and not pack.hidden, 'the far cell and incomplete pack have arrived')
+  T.check(cell and cell.hidden and pack and not pack.hidden,
+    'the far cell made hidden under its incomplete pack (never both drawn)')
   roads.FAR_CHECKS_PER_FRAME = 0
   local tile = { bld = {shape = '/s/near1.cdae', pos = {0,0,0}}, bld2 = {shape = '/s/near2.cdae', pos = {0,0,0}} }
   roads.onTile({anchorId = 1, key = k, frame = fc, data = tile}, 1, A)
@@ -257,14 +262,16 @@ do
   roads.update(g, 1, car, nil, A)
   T.check(#objsWith('near1.cdae') + #objsWith('near2.cdae') == 1, 'only one near mesh imported this frame')
   T.check(cell.hidden and pack.hidden and (not sky or sky.hidden), 'no far buildings in the first partial near frame')
+  local near1 = objsWith('near1.cdae')[1] or objsWith('near2.cdae')[1]
   roads.onDrop({anchorId = 1, key = k})
-  roads.FAR_CHECKS_PER_FRAME = 80
+  T.check(roads.retiringCount() == 1 and near1 and not near1.hidden, 'the dropped tile\'s buildings stay drawn')
+  budget = 1
   roads.update(g, 1, car, nil, A)
-  T.check(cell.hidden and pack.hidden, 'near object queued for deletion still owns its square')
-  roads.update(gov, 1, car, nil, A)
-  T.check(cell.hidden and pack.hidden, 'the replacement has a short release hysteresis')
+  T.check(near1.hidden and not pack.hidden and cell.hidden and roads.retiringCount() == 0,
+    'its far LOD made: the near shape hidden and the pack shown in the same frame (no hole, no hysteresis)')
+  roads.FAR_CHECKS_PER_FRAME = 80
   run(1, A)
-  T.check(not cell.hidden and not pack.hidden, 'the far buildings are available again after near release')
+  T.check(cell.hidden and not pack.hidden, 'after near release the incomplete pack is back, its far cell under it')
   roads.onFarDrop({anchorId = 1, key = SK}, 'P')
   run(1, A)
   sky = objsWith('bs_' .. SK)[1]

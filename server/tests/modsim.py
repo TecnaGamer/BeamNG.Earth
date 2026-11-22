@@ -827,7 +827,7 @@ class FarField:
         was_visible = inst.cover == "none" and not self.hidden(inst)
         inst.cover = c
         inst.cover_hide = self.cover_target_hide(inst, c)
-        if animate and was_visible and c != "none":
+        if animate and was_visible and c != "none" and XO["COVER_SINK_S"] > 0:
             inst.anim_end = self.clock + XO["COVER_SINK_S"]
             self.moving.add(inst)
         else:
@@ -1037,6 +1037,8 @@ class FarField:
                 mode = "instant"
             elif not vis:
                 mode = "instant"
+            elif XO["CROSS"] == 0:
+                mode = "instant"                    # crossover.CROSS = 0: in view too, no two LODs drawn together
             elif self.active_groups >= XO["MAX_GROUPS"]:
                 if nearest <= XO["NEAR_POP_M"]:
                     self.counters["cap_waits"] += 1
