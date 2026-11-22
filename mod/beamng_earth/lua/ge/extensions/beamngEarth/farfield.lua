@@ -16,9 +16,11 @@
 --   far_swap {anchorId, id, add = [keys], remove = [keys], dIn?, dOut?}
 --     One LOD change. It runs once every add is loaded, never earlier ("no removal before the
 --     replacement is loaded", so never a hole), and groups that share a key run in arrival order.
---     It runs as a C2 vertical crossover (crossover.lua) whenever any of it is in view, at any
---     distance (v1.3 D: no "beyond 30 km instant" rule), else as an instant swap (C1). At the
---     transition cap a group in view within NEAR_POP_M waits for a free slot instead of popping.
+--     It runs as an instant swap (C1): the removed tiles hide in the frame the added ones show, so
+--     two LODs of the same ground are never drawn together (crossover.CROSS = 0, 2026-11-21). With
+--     CROSS = 1 it runs as a C2 vertical crossover (crossover.lua) whenever any of it is in view, at
+--     any distance (v1.3 D), and at the transition cap a group in view within NEAR_POP_M waits for
+--     a free slot instead of popping.
 --     dIn >= max(new - old), dOut >= max(old - new) are the server's measured amplitudes; without
 --     them (or for a one-sided group) the bound 1.2 * (err_new + err_old) + 0.2 m is used.
 --   far_remove {anchorId, key}  a prefetch eviction, or a previous anchor's tile after a rebase:
@@ -53,7 +55,8 @@
 --         covers the 2 m N/E strip past the block's collidable width (lattice.lua);
 --       interior: hidden.
 --     onBlockCommit runs in the commit frame (the governor's heavy slot): newly uncovered tiles come
---     back at their true height at once; newly covered ones sink over 0.3 s (then hide if interior).
+--     back at their true height at once; newly covered ones drop to their cover state at once too
+--     (crossover.COVER_SINK_S = 0; with a positive value they sink over it, then hide if interior).
 --   'detail' (2026-10-12): the mesh layout ('mesh' below) with the TerrainBlock drawn as the near ground
 --     (aerial photo base colour, terrain.lua): tiles under it are covered as in 'terrain' mode, against
 --     the 512² block (the server forces L-1 under it, so tile edges meet its 128 m-grid edges). The dev
@@ -630,7 +633,7 @@ local function applyCover(inst, animate)
   local fromOff, wasVisible = coverOffNow(inst), (visibleCover(inst.cover) and not inst.hidden)
   inst.cover = c
   inst.coverOff, inst.coverHide = coverTarget(inst, c)
-  if animate and wasVisible and c ~= 'none' then
+  if animate and wasVisible and c ~= 'none' and crossover.COVER_SINK_S > 0 then
     inst.coverAnim = { from = fromOff, t0 = clock, dur = crossover.COVER_SINK_S }
     moving[inst] = true
   else
@@ -847,6 +850,8 @@ local function startGroup(g, cam)
       mode = 'instant' -- nothing visible to cross over with (first fill)
     elseif not vis then
       mode = 'instant' -- C1: off-screen
+    elseif crossover.CROSS == 0 then
+      mode = 'instant' -- C1 in view too: the old tiles hide in the frame the new ones show (crossover.CROSS)
     elseif activeGroups >= crossover.MAX_GROUPS then
       if nearest <= crossover.NEAR_POP_M then
         counters.capWaits = counters.capWaits + 1

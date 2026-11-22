@@ -450,6 +450,10 @@ class DriveSettleTest(unittest.TestCase):
 
         # One visible outer tile and one unshown add at the switch. The mod marks
         # anchor 1 lossy and defers its remove until the new ground has settled.
+        # (with the C2 crossover, off by default since 2026-11-21: crossover.CROSS)
+        cross = modsim.XO["CROSS"]
+        modsim.XO["CROSS"] = 1
+        self.addCleanup(modsim.XO.__setitem__, "CROSS", cross)
         state = {}
         python_far_trace([
             "N mesh", "A 1 0 0 0", "T 1 6_5_4 6 81920 65536 0 1 -",
@@ -545,7 +549,15 @@ class DriveBase(unittest.TestCase):
                  "l2_checked": 0, "l2_bad": [], "l2_d64": 0.0, "l2_d32": 0.0, "under_not_l2": [],
                  "mat_bad": [], "max_mats": 0, "budget_over": [], "bilinear": [], "bilinear_over": [],
                  "max_unit_ms": 0.0, "objects_max": 0, "edge_min": math.inf, "edge_min_at": None,
-                 "terrain_latency": None, "anchor_latency": None}
+                 "terrain_latency": None, "anchor_latency": None,
+                 # LOD overlap (2026-11-21): frames that draw two LODs of the same ground (a running crossover's old
+                 # and new tiles, a covered tile sinking over the block), group-frames, cover-frames
+                 "overlap_frames": 0, "xo_group_frames": 0, "cover_frames": 0}
+        # BNGE_DRIVE_CROSS=1: the far field as before 2026-11-21 (C2 crossovers in view, the 0.3 s cover sink)
+        if os.environ.get("BNGE_DRIVE_CROSS") == "1":
+            xo = (modsim.XO["CROSS"], modsim.XO["COVER_SINK_S"])
+            modsim.XO["CROSS"], modsim.XO["COVER_SINK_S"] = 1, 0.3
+            self.addCleanup(lambda: modsim.XO.update(CROSS=xo[0], COVER_SINK_S=xo[1]))
         exact_grids = {}                             # (anchorId, key, shape) -> float64 vertex heights
         rng = np.random.default_rng(1234)
         textures = {}                                # material name -> local texture path
@@ -1058,6 +1070,11 @@ class DriveBase(unittest.TestCase):
                 mu0 = gov.max_unit()
                 far.update(gov, dt, camera())
                 far_units, imports, est = far.frame["units"], far.frame["imports"], far.frame["est"]
+                covers = sum(1 for i in list(far.moving) if i.grp is None and far.animating(i))
+                if far.active_groups or covers:
+                    stats["overlap_frames"] += 1
+                stats["xo_group_frames"] += far.active_groups
+                stats["cover_frames"] += covers
                 stats["objects_max"] = max(stats["objects_max"], far.objects())
                 # (e) the frame's budget: every unit was granted while frame_spent + est <= b + max unit;
                 # the last one may overshoot by its cost's excess over its estimate (64 cells: costs
@@ -1222,7 +1239,12 @@ class DriveBase(unittest.TestCase):
               f"  late tiles (other anchor) {far.counters['late_tiles']}, superseded {stats['superseded_tiles']}, "
               f"previous-anchor tiles left {len(far.old)}, "
               f"unknown removes {len(far.unknown_removes)}, bad swaps {len(stats.get('bad_swaps', []))}, "
-              f"server log issues {len(bad)}", file=sys.stderr)
+              f"server log issues {len(bad)}\n"
+              f"  LOD overlap: frames drawing two LODs of the same ground {stats['overlap_frames']} of "
+              f"{clock['frame']}; crossovers {far.counters['crossovers']} ({stats['xo_group_frames']} group-frames, "
+              f"{stats['xo_group_frames'] / max(1, far.counters['crossovers'] + far.counters['instant']):.2f} overlap "
+              f"frames per swap), instant swaps {far.counters['instant']}; covered tiles sinking over the block "
+              f"{stats['cover_frames']} tile-frames", file=sys.stderr)
         bl = np.array(stats["bilinear"]) if stats["bilinear"] else np.zeros(1)
         bb = np.array(stats.get("bilinear_bound") or [0.0])
         wall_p99 = float(np.percentile(walls[steady & not_heavy], 99)) if (steady & not_heavy).any() else 0.0

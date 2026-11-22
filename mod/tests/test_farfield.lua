@@ -16,6 +16,9 @@ farfield.SPARE_MAX = 0 -- these tests check the delete pipeline; the spare pool 
 local governor = require('beamngEarth/governor')
 local geodesy = require('beamngEarth/geodesy')
 local crossover = require('beamngEarth/crossover')
+-- (this file checks the C2 crossover and the cover sink, off by default since 2026-11-21: test_farfield_instant.lua
+-- checks the default instant swaps)
+crossover.CROSS, crossover.COVER_SINK_S = 1, 0.3
 
 -- fake wall clock: each spawn costs `spawnCost` ms, everything else is free
 local now, spawnCost = 0, 1.5

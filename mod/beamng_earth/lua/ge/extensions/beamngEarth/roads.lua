@@ -447,9 +447,41 @@ end
 M.SLOW_UNIT_MS = 60
 M.BIG_UNIT_MS = 20          -- (M.lastBig: { kind, ms, at = os.clock() } of the last unit this slow or slower)
 
+-- A dropped road geotile's building shapes stay drawn until a far LOD of their cell is made to take over, or the same
+-- tile's new content shows its own (M.stepRetiring): then they are hidden and the far one shown in the same frame.
+-- Before (2026-11-21) they waited in the delete queue, the far tile hidden 3 more frames, then made (LAZY_FAR_PARTS
+-- had not made it under the near buildings): a hole of a few frames to a second at every tile left behind, and a tile
+-- re-sent with new content drew its old and new buildings together for a while. At most RETIRE_MAX_S.
+local retiring = {}         -- { gkey, ids, at } in drop order
+M.RETIRE_MAX_S = 5
+local function retireNear(t)
+  if not t.geo or not M.farGeo or not M._owns then return false end
+  local ids = {}
+  local function take(id) if id and M._owns(id) then ids[#ids + 1] = id; return true end return false end
+  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4' }) do
+    if take(t[w]) then t[w] = nil end
+    if t.oldPart and take(t.oldPart[w]) then t.oldPart[w] = nil end
+  end
+  if t.custom then
+    local keep = {}
+    for _, id in ipairs(t.custom) do if not take(id) then keep[#keep + 1] = id end end
+    t.custom = keep
+  end
+  if #ids == 0 then return false end
+  local o = scenetree.findObjectById(ids[1])
+  if o and not M.nearPlayer(o:getPosition(), M.DROP_WAIT_M) then     -- (a teleport's leftovers: nothing to hand over)
+    for _, id in ipairs(ids) do deleteQ[#deleteQ + 1] = id end
+    return true
+  end
+  retiring[#retiring + 1] = { gkey = t.gkey, ids = ids, at = now() }
+  M._markSquare(M._squareOf(t.gkey) or '')      -- (its far tile, waiting unmade under them: made now, hidden)
+  return true
+end
+
 local function dropTile(key)
   local t = tiles[key]
   if not t then return end
+  retireNear(t)
   for _, sl in pairs(t.slots or {}) do slotDrop(sl) end
   for w, v in pairs(t.oldSkin or {}) do       -- (a geotile's previous skin and replaced parts: road geotiles below)
     if type(w) == 'string' and w:sub(1, 2) == 's:' then slotDrop(v) else deleteQ[#deleteQ + 1] = v end
@@ -522,12 +554,15 @@ local function farLamps(key, f, on)
   end
 end
 
--- Hide outgoing geometry now. Deletion still uses the frame budget.
+-- Hide outgoing geometry now. Deletion still uses the frame budget. (Also a near tile's part whose replacement is made:
+-- an exact variant's old shape and an old skin's road mesh stood drawn in the same place as the new one until the
+-- delete queue reached them, z-fighting, 2026-11-21.)
 local function retireFar(id)
   local o = scenetree.findObjectById(id)
   if o then o:setHidden(true) end
   deleteQ[#deleteQ + 1] = id
 end
+M._retire = retireFar
 
 -- Every road not of anchor aid goes (a new anchor: the server re-sends its tiles).
 local function switchAnchor(aid)
@@ -1344,7 +1379,7 @@ M._swapState = function() return swapState end
 function M.dropOldSkin(t, what)
   if not t.oldSkin then return end
   local function drop(w)
-    if t.oldSkin[w] then deleteQ[#deleteQ + 1] = t.oldSkin[w]; t.oldSkin[w] = nil; M.geoStats.skinSwaps = M.geoStats.skinSwaps + 1 end
+    if t.oldSkin[w] then retireFar(t.oldSkin[w]); t.oldSkin[w] = nil; M.geoStats.skinSwaps = M.geoStats.skinSwaps + 1 end
     if t.oldSkin['s:' .. w] then slotDrop(t.oldSkin['s:' .. w]); t.oldSkin['s:' .. w] = nil end
   end
   if what then drop(what) else for _, w in ipairs(M.SKIN_WHATS) do drop(w) end end
@@ -1686,8 +1721,9 @@ function M.onFarDrop(msg, kind)
   if geotile.isKey(msg.key) then
     local key = M.farGeoKey(kind or 'F', msg.key)
     local f = far[key]
-    if f and f.geo and f.kind == 'F' and M.packPending(f) then
-      f.dropWait = f.dropWait or now()   -- (its square's pack not made yet: it stays until it is, updateFarGeo)
+    if f and f.geo and (f.kind == 'F' or f.kind == 'P' or f.kind == 'S') and M.dropWaits(f) then
+      f.dropWait = f.dropWait or now()   -- (no coarser LOD made to take over yet: it stays until one is, updateFarGeo)
+      M._markFarOf(f)
       return true
     end
     return M.dropFarGeo(key)
@@ -1764,6 +1800,45 @@ local function farGeoKey(kind, gkey) return tostring(kind) .. ':' .. tostring(gk
 M.farGeoKey = farGeoKey
 M.FAR_GEO_ORPHAN_S = 120    -- a far geotile of an old server session not sent again goes after this long
 
+-- Event-driven LOD checks (the user, 2026-11-21: "lower LODs stick around too long ... Often you can see 2 LODs
+-- overlap"). The round-robin below visits FAR_CHECKS_PER_FRAME far entries a frame: with ~2,800 of them after a long
+-- drive a pack stayed drawn over its square's far tiles for up to ~35 frames after they were all made, and a skyline
+-- over its pack. Any change that can flip a square's LOD (a far part made or dropped, a near building made or deleted)
+-- marks every LOD of that square; flushFar checks them in the same frame, coarse kinds first (a far tile hides under
+-- its pack's stored state). Nothing marked: nothing done.
+local farDirty, farDirtyAny = {}, false
+local function markFar(key)
+  if far[key] then farDirty[key] = true; farDirtyAny = true end
+end
+-- Skyline square (a geotile key at geotile.Z - 2) of road geotile gkey, or nil.
+local function squareOf(gkey)
+  local z, x, y = geotile.parse(gkey)
+  if not z then return nil end
+  return geotile.key(math.floor(x / M.SKY_UNIT), math.floor(y / M.SKY_UNIT), z - 2)
+end
+M._squareOf = squareOf
+-- Every far LOD of skyline square sq: its pack, skyline, horizon tile, far bridge tile and 16 far buildings tiles.
+local function markSquare(sq)
+  local z, x, y = geotile.parse(sq)
+  if not z then return end
+  markFar(farGeoKey('P', sq)); markFar(farGeoKey('S', sq)); markFar(farGeoKey('B', sq))
+  markFar(farGeoKey('H', geotile.key(math.floor(x / 8), math.floor(y / 8), z - 3)))
+  local n = 2 ^ (geotile.Z - z)
+  for j = 0, n - 1 do
+    for i = 0, n - 1 do markFar(farGeoKey('F', geotile.key(x * n + i, y * n + j, geotile.Z))) end
+  end
+end
+M._markSquare = markSquare
+function M._markBridge(gkey) markFar(farGeoKey('B', squareOf(gkey) or '')) end
+-- The squares a far geotile f's LODs stand for (its own; a horizon tile's: one a piece).
+local function markFarOf(f)
+  if not f or not f.geo then return end
+  if f.kind == 'F' then markSquare(squareOf(f.gkey) or '')
+  elseif f.kind == 'H' then for sq in pairs(f.parts) do markSquare(sq) end
+  else markSquare(f.gkey) end
+end
+M._markFarOf = markFarOf
+
 -- A far geotile part's placement into anchor a: its position (p.at) and rotation (p.rot), rigid at its pivot.
 local function farPartPlace(f, p, a)
   local pl = geotile.placement(f.frame, a, 0, 0, p.pivot or 0)
@@ -1833,6 +1908,7 @@ function M.dropFarGeo(key)
   end
   if f.kind == 'F' then farSeen[key] = nil end
   far[key] = nil
+  markFarOf(f)              -- (a coarser LOD of its square may show again: this frame, flushFar)
   return true
 end
 
@@ -1899,6 +1975,9 @@ function M.onFarGeo(msg, currentAnchor, kind)
   end
   release(used)
   far[key] = f
+  -- (one with nothing to make is done at once: its square may hand over now; one with parts changes nothing until
+  -- they are made, updateFar)
+  if next(f.parts) == nil then markFarOf(f) end
   M.geoStats.far = (M.geoStats.far or 0) + 1
   return true
 end
@@ -1924,134 +2003,158 @@ function M.nearShowsDeck(gkey, tk)
   return t.skin ~= nil and t.skin.road == nil and (t.skin.pending or 0) <= 0
 end
 
--- The pack (kind 'P') of far buildings tile f's skyline square, or nil.
-local function packOf(f)
-  local z, x, y = geotile.parse(f.gkey)
-  if not z then return nil end
-  local n = M.SKY_UNIT
-  return far[farGeoKey('P', geotile.key(math.floor(x / n), math.floor(y / n), z - 2))]
+-- Does far geotile f's drop wait (M.onFarDrop, at most PACK_HANDOVER_S)? While nothing coarser is made to show
+-- instead (made: every part, or none to make) and f is drawn within its reach of the car (DROP_WAIT_M; 2x for a pack,
+-- 4x for a skyline: not for a teleport's far-away leftovers): a far buildings tile waits for its square's pack or
+-- skyline, a pack for the skyline or the horizon piece, a skyline for the horizon piece. Leaving a town at speed the far
+-- tiles 1.2 km behind went before their square's pack came (its service time, p95 20 s in a live drive), and a pack
+-- before the skyline (made only once it would show, LAZY_FAR_PARTS): a hole until the coarser one was made. A coarser
+-- LOD does not wait to be made under one waiting to go (farGeoHidden nearOnly).
+M.DROP_WAIT_M = 4000
+local DROP_REACH = { F = 1, P = 2, S = 4 }
+local function lodMade(key)
+  local c = far[key]
+  if not c then return false end
+  for _, q in pairs(c.parts) do if not q.id and not q.failed then return false end end
+  return true
 end
--- Is far tile f's square's pack here but its shape not made yet (f's drop waits for it)?
-function M.packPending(f)
-  local pk = packOf(f)
-  if not pk then return false end
-  for _, p in pairs(pk.parts) do if not p.id then return true end end
-  return false
+-- the horizon piece of square sq made (or its horizon tile here without one: no towers there)
+local function hzMade(sq)
+  local z, x, y = geotile.parse(sq)
+  if not z then return false end
+  local h = far[farGeoKey('H', geotile.key(math.floor(x / 8), math.floor(y / 8), z - 3))]
+  if not h then return false end
+  local q = h.parts[sq]
+  return q == nil or q.id ~= nil or q.failed == true
 end
--- Pack f's square: are its far tiles all here and made (or waiting hidden: their road geotile shows its own)?
-function M.packCovered(f)
-  if not f.packKeys then
-    local z, x, y = f.sky[1], f.sky[2], f.sky[3]
-    if not z then return false end
+function M.dropWaits(f)
+  local sq = f.kind == 'F' and squareOf(f.gkey) or f.gkey
+  if not sq or not DROP_REACH[f.kind] then return false end
+  if f.kind == 'F' and (lodMade(farGeoKey('P', sq)) or lodMade(farGeoKey('S', sq))) then return false end
+  if f.kind == 'P' and (lodMade(farGeoKey('S', sq)) or hzMade(sq)) then return false end
+  if f.kind == 'S' and hzMade(sq) then return false end
+  local p = f.parts.shape
+  if not p or not p.id or p.hidden then return false end     -- (nothing drawn: nothing to keep)
+  return p.at == nil or M.nearPlayer({ x = p.at[1], y = p.at[2] }, M.DROP_WAIT_M * DROP_REACH[f.kind])
+end
+
+-- A far geotile part with nothing (more) to draw for now: made, waiting hidden (LAZY_FAR_PARTS: its road geotile shows
+-- its own) or failed to make (counted as done: a broken shape must not keep its square's coarser LOD forever).
+local function partDone(q) return q.id ~= nil or q.deferred ~= nil or q.failed == true end
+-- The 16 far buildings tiles' keys (and road geotile keys) of skyline square sq, kept on holder.
+local function squareKeys(holder, sq)
+  if not holder.sqKeys then
+    local z, x, y = geotile.parse(sq)
+    if not z then return nil end
     local n = 2 ^ (geotile.Z - z)
-    f.packKeys, f.packGeo = {}, {}
+    holder.sqKeys, holder.sqGeo = {}, {}
     for j = 0, n - 1 do
       for i = 0, n - 1 do
         local g = geotile.key(x * n + i, y * n + j, geotile.Z)
-        f.packKeys[#f.packKeys + 1], f.packGeo[#f.packGeo + 1] = farGeoKey('F', g), g
+        holder.sqKeys[#holder.sqKeys + 1], holder.sqGeo[#holder.sqGeo + 1] = farGeoKey('F', g), g
       end
     end
   end
-  -- (a geotile whose road tile shows its own buildings counts as covered without its far tile: after a fast run the
-  -- far field took 30-60 s to catch up, and one far tile of sixteen missing kept the whole square's pack - walls with
-  -- painted windows - over the real buildings beside a stopped car; the user's report, 2026-11-14)
-  for idx, k in ipairs(f.packKeys) do
+  return holder.sqKeys, holder.sqGeo
+end
+-- Does square sq show its buildings at the far tiles' level (or finer): every one of its 16 far buildings tiles here and
+-- made (or done), not waiting to go, or its road geotile showing its own buildings? The one hand-over rule of the pack,
+-- the skyline and the horizon pieces: a coarser LOD hides in the frame this turns true, and the far tiles (hidden
+-- under it while it shows: M.coarserShown) show in that same frame. Never both, never neither.
+-- (a geotile whose road tile shows its own buildings counts as covered without its far tile: after a fast run the
+-- far field took 30-60 s to catch up, and one far tile of sixteen missing kept the whole square's pack - walls with
+-- painted windows - over the real buildings beside a stopped car; the user's report, 2026-11-14)
+function M.squareFilled(holder, sq)
+  local keys, geos = squareKeys(holder, sq)
+  if not keys then return false end
+  for idx, k in ipairs(keys) do
     local ff = far[k]
     local ok = ff ~= nil and not ff.dropWait
     if ok then
-      for _, p in pairs(ff.parts) do if not p.id and not p.deferred then ok = false; break end end
+      for _, p in pairs(ff.parts) do if not partDone(p) then ok = false; break end end
     end
-    if not ok and not M.nearShowsBuildings(f.packGeo[idx]) then return false end
+    if not ok and not M.nearShowsBuildings(geos[idx]) then return false end
   end
-  return true
+  return #keys > 0
 end
+-- Pack f's square: are its far tiles all here and made (or waiting hidden: their road geotile shows its own)?
+function M.packCovered(f) return M.squareFilled(f, f.gkey) end
 
 -- Horizon piece p (skyline square sq, a geotile key at geotile.Z - 2): does its square show buildings of its own (its
--- skyline tile made or empty, its pack made, or a far buildings tile under it seen)?
+-- skyline tile made or empty, its pack made, or its far buildings tiles all made)?
 local function partsMade(f)
   for _, q in pairs(f.parts) do if not q.id then return false end end
   return true
 end
-function M.hzCovered(p, sq)
+function M.hzCovered(p, sq, nearOnly)
   local s = far[farGeoKey('S', sq)]
-  if s and partsMade(s) and not M.farGeoHidden(s) then return true end   -- (a skyline tile shown, not one handing over)
+  if s and not (nearOnly and s.dropWait) and partsMade(s) and not M.farGeoHidden(s) then return true end   -- (a skyline tile shown, not one handing over)
   local pk = far[farGeoKey('P', sq)]
-  if pk and next(pk.parts) and partsMade(pk) then return true end
-  if not p.hzKeys then
-    local z, x, y = geotile.parse(sq)
-    if not z then return false end
-    local n = 2 ^ (geotile.Z - z)
-    p.hzKeys = {}
-    for j = 0, n - 1 do
-      for i = 0, n - 1 do
-        local g = geotile.key(x * n + i, y * n + j, geotile.Z)
-        p.hzKeys[#p.hzKeys + 1], p.hzGeo = farGeoKey('F', g), p.hzGeo or {}
-        p.hzGeo[#p.hzKeys] = g
-      end
-    end
-  end
+  if pk and not (nearOnly and pk.dropWait) and next(pk.parts) and partsMade(pk) then return true end
   -- (all of its far tiles arrived and made: one of sixteen hid the whole piece, the towers of the other fifteen gone
-  -- until theirs came, Codex review 2026-11-14)
-  -- (or the geotile's road tile shows its own buildings: the same ownership as packCovered and the skyline)
-  for idx, k in ipairs(p.hzKeys) do
-    local ok = farSeen[k] and true or false
-    local f = far[k]
-    if ok and f then
-      if f.dropWait then ok = false end
-      for _, q in pairs(f.parts) do if not q.id and not q.deferred then ok = false; break end end
-    end
-    if not ok and not M.nearShowsBuildings(p.hzGeo[idx]) then return false end
-  end
-  return #p.hzKeys > 0
+  -- until theirs came, Codex review 2026-11-14; or the geotile's road tile shows its own buildings)
+  return M.squareFilled(p, sq)
 end
 
--- Pure-ish: is far geotile f's part sub hidden now (the ownership rule above)?
-function M.farGeoHidden(f, sub)
-  if f.kind ~= 'B' then
+-- Is a coarser LOD of far buildings tile f's square drawn now (its pack, skyline or horizon piece made and shown)?
+-- Then f stays hidden: the square's far tiles come one by one over seconds at speed, and each one drawn on top of
+-- the pack's copy of the same buildings was the "lod texture" z-fighting the user saw (2026-11-21). They show
+-- together once the coarser one hides (M.squareFilled). (Its stored state: flushFar checks coarse kinds first.)
+local function shownPart(key, sub)
+  local c = far[key]
+  local q = c and c.parts[sub or 'shape']
+  return q ~= nil and q.id ~= nil and not q.hidden
+end
+function M.coarserShown(f)
+  if not f.coarse then
+    local sq = squareOf(f.gkey)
+    local z, x, y = geotile.parse(sq or '')
+    if not z then return false end
+    f.coarse = { farGeoKey('P', sq), farGeoKey('S', sq),
+      farGeoKey('H', geotile.key(math.floor(x / 8), math.floor(y / 8), z - 3)), sq }
+  end
+  local c = f.coarse
+  return shownPart(c[1]) or shownPart(c[2]) or shownPart(c[3], c[4])
+end
+
+-- Pure-ish: is far geotile f's part sub hidden now (the ownership rule above)? nearOnly: whether it waits to be made
+-- (LAZY_FAR_PARTS): the rule without a coarser LOD over it (a far buildings tile under its pack is made, hidden, to
+-- be ready for the hand-over) and without near shapes that are only on their way out (M._nearOwns: the far tile is
+-- made, hidden, while a dropped road geotile's buildings wait for it, retireNear).
+function M.farGeoHidden(f, sub, nearOnly)
+  if f.kind ~= 'B' and not nearOnly then
     local part = f.parts[f.kind == 'H' and sub or 'shape']
     if M._nearOwns(part and part.ownerKey or f.key, part) then return true end
   end
   if f.kind == 'P' then return M.packCovered(f) end
   if f.kind == 'H' then
     local p = f.parts[sub]
-    return p ~= nil and M.hzCovered(p, sub)
+    return p ~= nil and M.hzCovered(p, sub, nearOnly)
   end
   if f.kind == 'S' then
-    local pk = far[farGeoKey('P', f.gkey)]        -- (under its square's shown pack)
+    local pk = far[farGeoKey('P', f.gkey)]        -- (under its square's shown pack: one waiting to go, not to be made)
     local pp = pk and pk.parts.shape
-    if pp and pp.id and not pp.hidden then return true end
-    if not f.skyKeys then           -- (its square's far buildings tiles' keys, once)
-      local z, x, y = f.sky[1], f.sky[2], f.sky[3]
-      if not z then return false end
-      local n = 2 ^ (geotile.Z - z)
-      f.skyKeys = {}
-      for j = 0, n - 1 do
-        for i = 0, n - 1 do
-          local g = geotile.key(x * n + i, y * n + j, geotile.Z)
-          f.skyKeys[#f.skyKeys + 1], f.skyGeo = farGeoKey('F', g), f.skyGeo or {}
-          f.skyGeo[#f.skyKeys] = g
-        end
-      end
-    end
-    -- (a geotile whose road tile shows its own buildings counts as seen: the pack hands over to such a mix of near
-    -- and far tiles, packCovered, and the skyline came back over the near buildings; Codex review)
-    for idx, k in ipairs(f.skyKeys) do
-      if not farSeen[k] and not M.nearShowsBuildings(f.skyGeo[idx]) then return false end
-    end
-    return true
+    if pp and pp.id and not pp.hidden and not (nearOnly and pk.dropWait) then return true end
+    -- (its far tiles all made, not only arrived: hidden at "all seen" left the square empty while they were made; a
+    -- geotile whose road tile shows its own buildings counts: the pack hands over to such a mix of near and far tiles,
+    -- packCovered, and the skyline came back over the near buildings; Codex review)
+    return M.squareFilled(f, f.gkey)
   end
   local p = f.parts[sub]
   if not p or not p.near then return false end
   p.nearKey = p.nearKey or geoKey(p.near)
   if f.kind == 'B' then return M.nearShowsDeck(p.near, p.nearKey) end
-  return M.nearShowsBuildings(p.near, p.nearKey)
+  if M.nearShowsBuildings(p.near, p.nearKey) then return true end
+  return not nearOnly and M.coarserShown(f)
 end
 
 -- LAZY_FAR_PARTS: does far part sub of f wait (not made)? Only while it would be hidden now: a road geotile still
 -- being made keeps its far buildings as the quick stand-in (the user, 2026-10-25: "load simpler versions first then
 -- higher detail version later"). (LAZY_WAIT_MAX_S: a part waiting this long is made anyway, shown or hidden by the rule.)
+-- A far buildings tile under its square's coarser LOD does not wait: it is made hidden, so the square can hand over.
 M.LAZY_WAIT_MAX_S = 20
-function M.farGeoWaits(f, sub) return M.farGeoHidden(f, sub) end
+function M.farGeoWaits(f, sub) return M.farGeoHidden(f, sub, true) end
+
 
 -- Track the lifetime of drawn near shapes. A tile may have four building meshes
 -- and an old exact variant waiting in deleteQ. Only their actual deletion releases
@@ -2059,10 +2162,19 @@ function M.farGeoWaits(f, sub) return M.farGeoHidden(f, sub) end
 do
   local owners, counts = {}, {}
   local frame = 0
-  function M._lodFrame() frame = frame + 1 end
-  function M._resetBuildings() owners, counts = {}, {} end
+  local releases, relHead, relTail = {}, 1, 0     -- { frame, owners } of deleted near shapes: checked again once released
+  local markOwners
+  function M._lodFrame()
+    frame = frame + 1
+    while releases[relHead] and releases[relHead][1] <= frame do
+      markOwners(releases[relHead][2])
+      releases[relHead] = nil
+      relHead = relHead + 1
+    end
+  end
+  function M._resetBuildings() owners, counts, releases, relHead, relTail = {}, {}, {}, 1, 0 end
 
-  local function change(key, sub, delta)
+  local function change(key, sub, delta, now)
     local claim = sub and key .. '#' .. sub or key
     local n = (counts[claim] or 0) + delta
     counts[claim] = n > 0 and n or nil
@@ -2074,16 +2186,21 @@ do
       if o then o:setHidden(true) end
       p.hidden = true
     elseif n == 0 then
-      p.releaseFrame = frame + 3
+      p.releaseFrame = (not now) and frame + 3 or nil
     end
   end
 
-  local function changeOwners(o, delta)
-    change(o.cell, nil, delta)
-    change(o.sky, nil, delta)
+  -- (the square's other LODs: a far tile beside the new near building shows the frame the pack hides, flushFar)
+  markOwners = function(o)
+    if o.square then markSquare(o.square) else markFar(o.cell); markFar(o.sky) end
+  end
+
+  local function changeOwners(o, delta, now)
+    change(o.cell, nil, delta, now)
+    change(o.sky, nil, delta, now)
     if o.pack then
-      change(o.pack, nil, delta)
-      change(o.horizon, o.square, delta)
+      change(o.pack, nil, delta, now)
+      change(o.horizon, o.square, delta, now)
     end
   end
 
@@ -2104,22 +2221,72 @@ do
     end
     owners[id] = t.lodOwners
     changeOwners(t.lodOwners, 1)
+    markOwners(t.lodOwners)
   end
 
-  function M._buildingGone(id)
-    if owners[id] then changeOwners(owners[id], -1); owners[id] = nil end
+  -- now: the far LOD takes over this frame (stepRetiring: it is made), no release hysteresis
+  function M._buildingGone(id, now)
+    local o = owners[id]
+    if o then
+      changeOwners(o, -1, now)
+      markOwners(o)
+      if not now then
+        relTail = relTail + 1
+        releases[relTail] = { frame + 3, o }   -- (the far LODs back after the release hysteresis, not ~35 frames)
+      end
+      owners[id] = nil
+    end
   end
+  function M._owns(id) return owners[id] ~= nil end
 
   function M._nearOwns(key, p)
     return counts[key] ~= nil or (p and p.releaseFrame and frame < p.releaseFrame) or false
   end
 end
 
-local function updateFarGeo(key, f)
-  if f.dropWait then       -- (a far tile whose drop waits for its square's pack: M.onFarDrop)
-    if not M.packPending(f) or now() - f.dropWait > M.PACK_HANDOVER_S * 1000 then M.dropFarGeo(key); return end
+-- The dropped road geotiles' building shapes (retireNear): each goes once its cell's far LOD is ready to show (its far
+-- tile made, hidden under them until now; or, without one, its square's pack or skyline made), the tile's new content
+-- shows its buildings, or after RETIRE_MAX_S; then hidden and released at once, flushFar showing the far LOD in this
+-- same frame. (Nothing a frame when none wait.)
+local function retireReady(e)
+  if now() - e.at > M.RETIRE_MAX_S * 1000 or M.nearShowsBuildings(e.gkey) then return true end
+  local f = far[farGeoKey('F', e.gkey)]
+  if f then
+    for _, q in pairs(f.parts) do if not q.id and not q.failed then return false end end
+    return true
   end
-  local shown = false
+  local sq = squareOf(e.gkey)
+  return sq ~= nil and (lodMade(farGeoKey('P', sq)) or lodMade(farGeoKey('S', sq)))
+end
+function M.stepRetiring()
+  if #retiring == 0 then return end
+  local keep = {}
+  for _, e in ipairs(retiring) do
+    if retireReady(e) then
+      for _, id in ipairs(e.ids) do
+        local o = scenetree.findObjectById(id)
+        if o then o:setHidden(true) end
+        deleteQ[#deleteQ + 1] = id
+        M._buildingGone(id, true)
+      end
+    else
+      keep[#keep + 1] = e
+    end
+  end
+  retiring = keep
+end
+function M.retiringCount() return #retiring end     -- (tests)
+local function dropRetiring()
+  for _, e in ipairs(retiring) do for _, id in ipairs(e.ids) do deleteQ[#deleteQ + 1] = id end end
+  retiring = {}
+end
+M._dropRetiring = dropRetiring
+
+local function updateFarGeo(key, f)
+  if f.dropWait then       -- (a far geotile whose drop waits for a coarser LOD to take over: M.onFarDrop)
+    if not M.dropWaits(f) or now() - f.dropWait > M.PACK_HANDOVER_S * 1000 then M.dropFarGeo(key); return end
+  end
+  local shown, flipped = false, false
   for sub, p in pairs(f.parts) do
     local waits = p.deferred and not p.id and M.farGeoWaits(f, sub)
     if not p.id and p.deferred and (not waits or now() - p.deferred > M.LAZY_WAIT_MAX_S * 1000) then
@@ -2133,10 +2300,12 @@ local function updateFarGeo(key, f)
         local o = scenetree.findObjectById(p.id)
         if o then o:setHidden(hide) end
         p.hidden = hide
+        flipped = true
       end
       if not hide then shown = true end
     end
   end
+  if flipped then markFarOf(f) end      -- (the square's other LODs follow this frame, or the next from flushFar)
   if f.lamps then farGeoLamps(f, shown) end
 end
 
@@ -2175,6 +2344,32 @@ local function updateFarOne(key, f)
     end
     if f.lamps and not f.geo then farLamps(key, f, f.id ~= nil and not f.hidden) end
 end
+-- The far entries marked since the last flush (markFar), coarse kinds first: a pack's state is set before the skyline
+-- and the far tiles that read it, a skyline's before the horizon pieces. A drop or a re-mark while flushing waits for
+-- the next frame. (Called at the end of every roads update; cheap when nothing is marked.)
+local FLUSH_RANK = { P = 1, S = 2, H = 3, F = 4, B = 5 }
+local function flushRank(key)
+  local f = far[key]
+  return f and f.geo and FLUSH_RANK[f.kind] or 6
+end
+function M.flushFar()
+  if not farDirtyAny then return 0 end
+  local list = {}
+  for k in pairs(farDirty) do list[#list + 1] = k end
+  farDirty, farDirtyAny = {}, false
+  table.sort(list, function(a, b)
+    local ra, rb = flushRank(a), flushRank(b)
+    if ra ~= rb then return ra < rb end
+    return a < b
+  end)
+  local n = 0
+  for _, k in ipairs(list) do
+    local f = far[k]
+    if f then updateFarOne(k, f); n = n + 1 end
+  end
+  M.farFlushed = (M.farFlushed or 0) + n
+  return n
+end
 local function updateFar(gov)
   if farCursor ~= nil and far[farCursor] == nil then farCursor = nil end     -- (gone: next() cannot go on from it)
   local key, f = next(far, farCursor)
@@ -2209,7 +2404,8 @@ local function updateFar(gov)
         slotMade(id, p.shape)
         p.hidden = M.farGeoHidden(f, sub)
         if p.hidden then scenetree.findObjectById(id):setHidden(true) end
-      else lastError = tostring(id) end
+      else lastError = tostring(id); p.failed = true end
+      markFarOf(f)            -- (its square may hand over now: checked this frame, flushFar)
       local ms = now() - t0
       gov:charge(farKind(), ms, 'mid')
       noteUnit('far' .. f.kind, ms, p.shape)
@@ -2227,6 +2423,7 @@ local function updateFar(gov)
       noteUnit('bldfar', ms, f.shape)
     end
   end
+  M.flushFar()
 end
 
 -- Server message `roads_drop` {anchorId, key}. (A ghost goes when covered: releaseGhosts.)
@@ -2569,11 +2766,13 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
         if t.skin.pending <= 0 then M.dropOldSkin(t) end
       end
       if ok and q.swap and t.oldPart and t.oldPart[q.what] then     -- an exact variant / the base again: swapped
-        deleteQ[#deleteQ + 1] = t.oldPart[q.what]
+        M._retire(t.oldPart[q.what])
         t.oldPart[q.what] = nil
         if t.oldPartSlot and t.oldPartSlot[q.what] then slotDrop(t.oldPartSlot[q.what]); t.oldPartSlot[q.what] = nil end
       end
       if ok and q.what:match('^bld[234]?$') then M._buildingMade(id, t, q.key) end
+      -- (a deck or road surface: its far bridge piece hides this frame, flushFar)
+      if ok and t.geo and (q.what == 'deck' or q.what == 'road') then M._markBridge(t.gkey) end
       if ok and M.onKeepupPart then M.onKeepupPart(q.what, t) end     -- (keepup.lua: a debug recorder)
       if ok then
         if not isRoad then t.cq = t.cq or {}; t.cq[q.what] = q end
@@ -2589,6 +2788,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     end
   end
   step('walks')
+  M.stepRetiring()              -- dropped tiles' buildings whose far LOD is ready: handed over this frame (flushFar)
   updateFar(gov)                -- far buildings: only with the near meshes all made (they share the budget)
   step('far')
   if swapQuiet then
@@ -3174,6 +3374,7 @@ end
 function M.clear()
   M.swapCancel()            -- (a generation swap's tiles and parts go with everything else)
   for key in pairs(tiles) do dropTile(key) end
+  M._dropRetiring()         -- (everything goes now: no hand-over)
   speedtraps.clear()
   for key, f in pairs(far) do
     if f.geo then M.dropFarGeo(key) end
@@ -3214,6 +3415,7 @@ function M.reset()
   end
   for n, d in pairs(slotDropped) do slotsGone[#slotsGone + 1] = { n, d[1], d[2] } end
   objSlot, slotLive, slotDropped = {}, {}, {}
+  M._dropRetiring()         -- (their objects went with the level: the delete queue is emptied below)
   tiles, createQ, deleteQ, walkQ, anchorId, loadedMaterials = {}, {}, {}, {}, nil, false
   M.townBrickLoaded = false
   far, farQ, farSeen = {}, {}, {}
