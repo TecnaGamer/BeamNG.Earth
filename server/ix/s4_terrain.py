@@ -12,7 +12,12 @@ STEP = 4
 
 def ground_of(planner, smp):
     """The ground the solve reads: _ground_line of each piece's samples."""
-    return [planner._ground_line(x["xy"]) for x in smp]
+    import xproc
+    out = []
+    for x in smp:
+        xproc.check_cancel()        # (a piece at a time: the step's time limit, ix/limits.py)
+        out.append(planner._ground_line(x["xy"]))
+    return out
 
 
 def run(planner, smp, system, scope):

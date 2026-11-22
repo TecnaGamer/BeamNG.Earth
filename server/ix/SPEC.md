@@ -74,6 +74,16 @@ s1…s6 in order for each interchange the region finds.
 - One interchange's steps are `pipeline.system()`, the one place that runs them: a lock round an interchange wraps
   that call.
 - `xproc.check_cancel()` runs at each round of the region growth and before each interchange, as the old body did.
+- Each step has a wall-clock limit (`ix/limits.py`: paths 30 s, extent 60 s with the growth, order 10 s, terrain 30 s, datum
+  10 s, heights 120 s, per interchange: to make slowness fail loudly, not to fit today's worst case, so the Shanghai
+  interchanges, 1206 s of extent and 5043 s of heights, fail it until the build is restructured;
+  `BNE_IX_STEP_LIMITS=heights=300,extent=120` overrides, 0 turns one off). It is enforced through the cancel mechanism: a deadline of the thread the step runs in, read
+  by `xproc.check_cancel()` (which the growth's rounds, the finding's loop, the terrain's pieces, the heights' relaxation
+  and its trial solves ask) and capping the heights kernel's own budget; never a thread killed. A step over its limit stops:
+  its line is `ix step: <step> key - pieces N crossings N <seconds> s failed: time limit <N> s`, the pipeline writes a
+  `Limit` artifact (the cache on; `ixcheck` reports its `time_limit` finding), the interchange has no answer and is not
+  stored (the owner gives its claim back; this process does not make it again for every region that reaches it), and
+  nothing takes its place: the eval's build shows `grading: SHAPES infeasible system ... time limit`.
 
 ### `server/grading.py`
 - `_Planner._shape_region_calc` becomes `return ix_pipeline.region(self, home, hk)`.

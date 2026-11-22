@@ -263,6 +263,10 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     if np.isnan(budget):
         raise ValueError("carriageway deadline must not be NaN")
     budget = max(0.0, budget)
+    import xproc
+    left = xproc.deadline_left()        # (a pipeline step's time limit is the kernel's too: its own budget never goes past it)
+    if left is not None:
+        budget = max(0.0, min(budget, left))
     z, info = fast._ef.carriageway_profiles(pack(target), pack(weights_), pack(lower), pack(upper), offsets,
                                            parameters, rows, values, rounds, budget,
                                            *(() if alpha is None and spacing is None else (alpha,)),
