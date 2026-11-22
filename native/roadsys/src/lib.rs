@@ -9,6 +9,7 @@
 pub mod audit;
 pub mod check;
 pub mod derive;
+pub mod endmatch;
 pub mod geom;
 pub mod io;
 pub mod mark;

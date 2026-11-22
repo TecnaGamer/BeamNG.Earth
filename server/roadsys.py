@@ -10,7 +10,7 @@ product declares and hands them over.
       from its own window's cells), the planar partition, markings, the tile's canonical bytes, checks and keys). One log line per tile and <cache>/roadsys/shadow-<format>/<frame>/<tile>.json; nothing the
       player sees reads them (revisit.UNKEYED_VALUES: no key holds the switch at off or shadow).
 
-  heights (M2): today's deck builder and grading take the one profile per carriageway, solved per profile square
+  heights (M2, M3): today's deck builder and grading take the one profile per carriageway, solved per profile square
       (native/roadsys square.rs: a fixed 2 km grid of the region frame; each square from the map cells of its own
       window, the square + 1.1 km, and the ground there alone; the squares blended by a smoothstep partition of
       unity): every whole bridge chain the road tiles' stores solve (roads.BridgeProfiles._chain_solve) takes its
@@ -21,6 +21,10 @@ product declares and hands them over.
       square read short: today's heights, the build not kept. Squares are memoised when read complete and kept in the
       revisit cache (kind "rssq", DISK). It changes what is built: a build switch (revisit.keyed_env, UNKEYED_VALUES;
       the plans' format suffix, plancache.plans_format).
+      M3: the floors take today's headroom and each structure's own drawn depth (_deck_depth; the deck builder draws
+      that depth, chain_heights' "depth"); a chain is brought onto its abutments' approach fills, lifted or dropped,
+      a drop held back by the floors the part holds (native/roadsys endmatch.rs); the terrain targets change the plans'
+      ground only where a floor digs the road under a structure (pins_near), fading back to the plans' own.
 
 Frames: every product is built in the ENU frame of its region (the z8 Web-Mercator tile holding the geotile's
 centre; ~120-160 km), so a component built for two neighbouring tiles is built in one frame, from one read list.
@@ -40,7 +44,7 @@ MODE = os.environ.get("BNE_ROADSYS", "off").strip().lower()
 SHADOW = MODE == "shadow"
 HEIGHTS = MODE == "heights"
 FORMAT = 2                  # the shadow records' JSON (their folder name; 2: M2's profiles, whole components read)
-HEIGHTS_KERNEL = 600        # earthfast.roadsys_heights_reads / roadsys_heights
+HEIGHTS_KERNEL = 602        # earthfast.roadsys_heights_reads / roadsys_heights
 
 FRAME_Z = 8                 # the region frames' Web-Mercator zoom
 CUT = (4000.0, 2000.0)       # strokes cut at a joint past every line of this grid (m, offset): net.rs Opts
@@ -145,13 +149,49 @@ def _table(cell, feats, rows):
         if idx is not None:
             # (the off-ground ranges the deck builder takes, roads.level_ranges: the flags, the level rule, inferred
             # grade separations, ranges lengthened over the roads under them; one support label for both)
+            depth = 0.0
             for a, b, v in roads.level_ranges(feats, idx):
                 if v in ("bridge", "tunnel"):
                     rg.append((float(a), float(b), 0.0 if v == "bridge" else 1.0, 0.0))
+                if v == "bridge":
+                    depth = max(depth, _deck_depth(ll[:, :2], float(a), float(b)))
+            if depth > 0.0:     # (M3: the drawn depth of its decks, the floors' and the deck builder's: _deck_depth)
+                rg.append((0.0, 1.0, 3.0, round(depth, 4)))
             for a, b, v in _ranges(feats.rules.get("level"), idx, vals=True):
                 rg.append((a, b, 2.0, float(v)))
         out["rng"].append(rg)
     return out
+
+
+def _deck_depth(ll, a, b):
+    """m of slab and girders the deck builder draws under the bridge range [a, b] (fractions of its length) of a
+    segment (lon / lat points), by roads.BridgeProfiles._depth's rule on that part alone: the inventory's main span where
+    a record matches, else its geometry's (roads.geom_span), roads.deck_depth of it; 0 with the legacy profile mode
+    (the full depth). The floors take it and the deck builder draws it (chain_heights' depth) (M3)."""
+    import geotiles
+    import roads
+    if roads.bridge_profile_mode() != "curve" or len(ll) < 2:
+        return 0.0
+    fr = geotiles.WorldFrame(float(ll[0, 1]), float(ll[0, 0]))
+    e, n, _u = fr.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
+    xy = np.column_stack((e, n))
+    import dnp
+    d = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+    if d[-1] <= 0:
+        return 0.0
+    s0, s1 = a * d[-1], b * d[-1]
+    keep = (d > s0) & (d < s1)
+    part = np.vstack([[dnp.interp(s0, d, xy[:, 0]), dnp.interp(s0, d, xy[:, 1])], xy[keep],
+                      [dnp.interp(s1, d, xy[:, 0]), dnp.interp(s1, d, xy[:, 1])]])
+    span = 0.0
+    try:
+        import bridgetypes
+        got = bridgetypes.matches(fr, [part])
+        if got:
+            span = float(bridgetypes.record(got[0][1])["span"])
+    except Exception as ex:
+        log.debug("roadsys deck span: %s: %s", type(ex).__name__, ex)
+    return float(roads.deck_depth(span if span > 0 else roads.geom_span([part])))
 
 
 def _segments(tables, frame, style):
@@ -535,6 +575,33 @@ def feature(fid):
     return str(fid).split("|", 1)[0].split("~lanes", 1)[0]
 
 
+HOLD_M = 3.0                # m a floor's point may lie off a deck part's line to hold it (chain_heights)
+
+
+def _stations_near(line, pts, reach):
+    """Arc stations along line (n, 2) of the points within reach of it (their feet), sorted."""
+    if not pts or len(line) < 2:
+        return []
+    a, b = line[:-1], line[1:]
+    ab = b - a
+    l2 = ab[:, 0] * ab[:, 0] + ab[:, 1] * ab[:, 1]
+    seg = np.sqrt(l2)
+    s0 = np.r_[0.0, np.cumsum(seg)][:-1]
+    out = []
+    for x, y in pts:
+        t = np.where(l2 > 1e-12, ((x - a[:, 0]) * ab[:, 0] + (y - a[:, 1]) * ab[:, 1]) / np.where(l2 > 1e-12, l2, 1.0), 0.0)
+        t = np.clip(t, 0.0, 1.0)
+        fx, fy = a[:, 0] + t * ab[:, 0] - x, a[:, 1] + t * ab[:, 1] - y
+        d = np.sqrt(fx * fx + fy * fy)
+        j = int(np.argmin(d))
+        if float(d[j]) <= reach:
+            out.append(float(s0[j] + t[j] * seg[j]))
+    return sorted(out)
+
+
+END_PAST_M = 0.5            # m past a deck's free end its approach's ground is read (chain_heights' lift)
+
+
 def chain_heights(store, comp, parts, ground_ll=None):
     """BNE_ROADSYS=heights: a whole bridge chain's deck heights from the one profile per carriageway (the blended
     profile squares round its decks), as roadshape._built's record: {"deck_z": {part key: heights per vertex of its
@@ -544,6 +611,7 @@ def chain_heights(store, comp, parts, ground_ll=None):
     import fast
     fast.require(HEIGHTS_KERNEL, "roadsys_blend")
     t0 = time.perf_counter()
+    parts_in = parts
     keys, seen = [], set()
     for k in sorted(comp, key=str):     # (one deck kept twice under two part keys: once, the first key's)
         v = parts.get(k)
@@ -576,14 +644,52 @@ def chain_heights(store, comp, parts, ground_ll=None):
     if any(q is None for q in sqs):
         return None                     # (a square not at hand: today's heights, the build not kept)
     out = {}
+    depth = {}
     bad = 0
     for k, (la, lo), d in zip(keys, lls, decks):
         feat = feature(k[0] if isinstance(k, tuple) else k)
-        z = np.asarray(fast._ef.roadsys_blend(sqs, d, _tangents(d), [feat] * len(d), True), np.float64)
+        tg = _tangents(d)
+        z = np.asarray(fast._ef.roadsys_blend(sqs, d, tg, [feat] * len(d), True), np.float64)
+        # (M3: the depth the floors were solved with, its structure's: the deck builder draws it)
+        dp = np.asarray(fast._ef.roadsys_deck_depth(sqs, d, tg, [feat] * len(d)), np.float64)
+        dp = dp[np.isfinite(dp) & (dp > 0)]
+        if len(dp):
+            depth[k] = float(dp.max())
         if not np.isfinite(z).all():
             bad += int((~np.isfinite(z)).sum())
             continue
         out[k] = np.asarray(sf.geodetic_to_enu(la, lo, z)[2], np.float64)
+    if not bad and out:
+        # (M3: the chain brought onto its abutments' ground, the plans' first stage just past each free end (their
+        # approach fills), lifted or dropped; a drop reaches no further than the part's nearest floor over another road
+        # (its holds), so the floors the profile met stay met; native/roadsys endmatch.rs. The terrain targets leave the
+        # approaches to the plans, pins_near)
+        ks = [k for k in keys if k in out]
+        plist, ends_ll = [], []
+        for k in ks:
+            xy = np.asarray(parts_in[k][1], np.float64)[:, :2]
+            plist.append((np.ascontiguousarray(xy), np.ascontiguousarray(out[k], np.float64)))
+            for a, b in ((xy[0], xy[1]), (xy[-1], xy[-2])):
+                d = a - b
+                n = float(np.sqrt(d[0] * d[0] + d[1] * d[1]))
+                ends_ll.append(a + (d / n if n > 1e-9 else 0.0) * END_PAST_M)
+        ep = np.asarray(ends_ll, np.float64)
+        la, lo, _ = sf.enu_to_geodetic(ep[:, 0], ep[:, 1], 0.0)
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        g = np.asarray(store.elev(la, lo), np.float64).reshape(-1)
+        gu = np.asarray(sf.geodetic_to_enu(la, lo, g)[2], np.float64)
+        gu = np.where(np.isfinite(gu), gu, np.nan)
+        # (the floors each part holds over other roads, its holds: a dropped end comes back to the profile by its nearest)
+        fp = fast._ef.roadsys_floor_points(sqs, [box[0] - 5.0, box[1] - 5.0, box[2] + 5.0, box[3] + 5.0])
+        holds = []
+        for k in ks:
+            d = decks[keys.index(k)]
+            feat = feature(k[0] if isinstance(k, tuple) else k)
+            holds.append(_stations_near(d, [(x, y) for x, y, f in fp if f == feat], HOLD_M))
+        lifts = fast._ef.roadsys_end_lifts(plist, [(float(gu[2 * i]), float(gu[2 * i + 1])) for i in range(len(ks))],
+                                           float("inf"), float("inf"), holds)
+        for k, lf in zip(ks, lifts):
+            out[k] = np.asarray(out[k], np.float64) + np.round(np.asarray(lf, np.float64), 4)
     if bad:
         with _memo_lock:
             STATS["unmatched"] += 1
@@ -603,6 +709,8 @@ def chain_heights(store, comp, parts, ground_ll=None):
         if got2 is not None:
             z = out[got2[0]]
             out[k] = z[::-1].copy() if got2[1] else z.copy()
+            if got2[0] in depth:
+                depth[k] = depth[got2[0]]
     import hashlib
     h = hashlib.sha256()
     for k in sorted(out, key=str):
@@ -610,7 +718,10 @@ def chain_heights(store, comp, parts, ground_ll=None):
     with _memo_lock:
         STATS["solved"] += 1
         STATS["total_s"] += time.perf_counter() - t0
-    return {"deck_z": out, "pins": [], "digest": h.hexdigest()[:16], "knots": [], "squares": [s.info()[2] for s in sqs]}
+    for k in sorted(depth, key=str):
+        h.update(str(k).encode() + np.float64(depth[k]).tobytes())
+    return {"deck_z": out, "depth": depth, "pins": [], "digest": h.hexdigest()[:16], "knots": [],
+            "squares": [s.info()[2] for s in sqs]}
 
 
 def _regions_of(la, lo):
@@ -649,7 +760,7 @@ def _square_pins_in(fid, frame, sq, cell_fn, ground_ll):
             return got[1], None
     out = []
     cache = {tuple(sq): me}
-    for feat, pts, tans, w, share, half in me.pins():
+    for feat, pts, tans, w, share, half, hand, low in me.pins():
         box = [float(pts[:, 0].min()), float(pts[:, 1].min()), float(pts[:, 0].max()), float(pts[:, 1].max())]
         nb = []
         for q in fast._ef.roadsys_squares_of_box(box):
@@ -670,7 +781,8 @@ def _square_pins_in(fid, frame, sq, cell_fn, ground_ll):
             if len(run) >= 2:
                 out.append((np.ascontiguousarray(pts[run]), np.round(la[run], 9), np.round(lo[run], 9),
                             np.asarray(z[run], np.float64), round(float(half), 3),
-                            np.round(np.asarray(w, np.float64)[run], 4), np.round(np.asarray(share, np.float64)[run], 4)))
+                            np.round(np.asarray(w, np.float64)[run], 4), np.round(np.asarray(share, np.float64)[run], 4),
+                            np.round(np.asarray(hand, np.float64)[run], 4), np.round(np.asarray(low, np.float64)[run], 4)))
     entry = (tuple(sorted((q, v.info()[1]) for q, v in cache.items())), out)
     with _memo_lock:
         STATS["pins_squares"] += 1
@@ -713,7 +825,7 @@ def pins_near(la0, lo0, la1, lo1, pad_m, cell_fn, today_ll, ground_ll=None):
                 if got is None:
                     revisit.fault(here=True)
                     continue
-                for xy, pla, plo, z, half, w, share in got:
+                for xy, pla, plo, z, half, w, share, hand, low in got:
                     inn = (pla >= g0) & (pla <= g1) & (plo >= h0) & (plo <= h1)
                     if not inn.any():
                         continue
@@ -723,7 +835,7 @@ def pins_near(la0, lo0, la1, lo1, pad_m, cell_fn, today_ll, ground_ll=None):
                     idx = np.flatnonzero(keep)
                     for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
                         if len(run) >= 2:
-                            lines.append((pla[run], plo[run], z[run], half, w[run], share[run]))
+                            lines.append((pla[run], plo[run], z[run], half, w[run], share[run], hand[run], low[run]))
     if not lines:
         return []
     alla = np.concatenate([x[0] for x in lines])
@@ -731,10 +843,16 @@ def pins_near(la0, lo0, la1, lo1, pad_m, cell_fn, today_ll, ground_ll=None):
     today = np.asarray(today_ll(alla, allo), np.float64)
     pins = []
     k = 0
-    for pla, plo, z, half, w, share in lines:
+    for pla, plo, z, half, w, share, hand, low in lines:
         t = today[k:k + len(pla)]
         k += len(pla)
-        dz = z - t
+        # (M3: the plans' ground stays the plans' (their approach fills: the chains meet them, chain_heights) but round a
+        # floor under a structure, where the profile digs the road under (low), fading back over the approach reach; not
+        # round its own structures' ends (hand). M2 laid the whole section's profile over the plans' ground: the two
+        # smoothings fought everywhere, the buried and the bumps; raising the approaches to the profile's deck ends
+        # buried the roads beside them and steepened their ramps)
+        d0 = z - t
+        dz = (1.0 - hand) * low * np.minimum(d0, 0.0)
         if not np.isfinite(dz).all() or float(np.abs(dz * w).max()) < 0.001:
             continue
         pins.append((pla, plo, np.round(dz, 4), np.round(t, 4), half, w, share))

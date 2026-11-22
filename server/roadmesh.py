@@ -411,6 +411,14 @@ TRIM_ALONG_COS = dmath.cos(math.radians(TRIM_ALONG_DEG))
 # made by the cut would stand in the carriageway: Codex P3d)
 COP_TOL_M = 0.03
 
+
+def _coplanar_decks():
+    """trim_overlaps' coplanar cut on: the decks' heights from one joint profile (BNE_ROADSHAPE=profile, or
+    BNE_ROADSYS=heights, M3: a ramp's deck merging beside the main deck now at its height, both slabs' colliders
+    coplanar, two owners of one lane)."""
+    import roadsys
+    return _roadshape.PROFILE_BUILT or roadsys.HEIGHTS
+
 # Short, connected bridge forks need a common two-dimensional surface. Three independently sloped, flat-width
 # ribbons can start at one height and still overlap by tens of centimetres a few metres later. Keep the longitudinal
 # solver's profiles; reconcile their shared footprint here, using one triangulated grid for skin and collision.
@@ -1471,7 +1479,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     rbc = ribbon_pairs([c for c in chunks if not c.get("surface_ref")])                  # deck surfaces too: their asphalt over deck()'s concrete
     if any(r[5] is not None for r, _c in rbc):  # (trimmed as deck() trims their slabs: context, the decks around)
         ctx = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
-        rbc = list(trim_overlaps(rbc, ctx, junctions, coplanar=_roadshape.PROFILE_BUILT))
+        rbc = list(trim_overlaps(rbc, ctx, junctions, coplanar=_coplanar_decks()))
     if shells.ON:           # (the overlays on decks follow the deck surface and stop at its end: PR #987)
         rbc = _overlays_on_decks(rbc)
     # (each deck end with its layer and width: a ground ribbon's end takes the edges of a deck end of its own layer and
@@ -2051,7 +2059,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     junctions = _junction_surfaces(chunks, context)
     cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
     rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all, junctions,
-                       coplanar=_roadshape.PROFILE_BUILT)
+                       coplanar=_coplanar_decks())
     faces = [c for c in chunks if "deck_z" in c]
     if not rb and not piers and not beams and not pads and not faces:
         return None
@@ -2860,7 +2868,7 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
         dch = [c for c in chunks if c.get("deck")]
         cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
         rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all,
-                           junctions, coplanar=_roadshape.PROFILE_BUILT)
+                           junctions, coplanar=_coplanar_decks())
     else:
         rb = _rb
     face_runs = [dict(run, deck=-1-i) for i, c in enumerate(chunks) for run in c.get("deck_runs", ())]

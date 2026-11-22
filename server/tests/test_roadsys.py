@@ -89,7 +89,7 @@ def bridge_network(dx=0.0):
     ]
 
 
-@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 600, "earthfast 600 (roadsys squares) required")
+@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 602, "earthfast 602 (roadsys squares, M3) required")
 class SquareTest(unittest.TestCase):
     def square(self, rows, sq=(-1, 0)):
         fast._ef.roadsys_clear()
@@ -133,10 +133,73 @@ class SquareTest(unittest.TestCase):
     def test_pins_are_ground_runs_of_the_component(self):
         pins = self.square(bridge_network()).pins()
         self.assertTrue(pins)
-        for feat, pts, tans, w, share, half in pins:
+        for feat, pts, tans, w, share, half, hand, low in pins:
             self.assertEqual(len(pts), len(w))
             self.assertTrue(((w >= 0) & (w <= 1)).all())
             self.assertGreater(half, 1.0)
+            self.assertEqual(len(hand), len(pts))
+            self.assertTrue(((hand >= 0) & (hand <= 1) & (low >= 0) & (low <= 1)).all())
+
+    def test_pins_own_the_ground_round_deck_ends_and_dig_under_decks(self):
+        """(M3) hand: 1 at the motorway's deck ends, falling away from them; low: the street under the deck, round
+        its crossing; the motorway's knots far from its deck hand nothing over."""
+        pins = self.square(bridge_network()).pins()
+        mw = [(pts, hand, w) for feat, pts, tans, w, share, half, hand, low in pins if feat == "m"]
+        st = [(pts, low) for feat, pts, tans, w, share, half, hand, low in pins if feat in ("a", "b")]
+        self.assertTrue(mw and st)
+        ends = [-900 + 1800 * 0.48, -900 + 1800 * 0.52]
+        for pts, hand, w in mw:
+            d = np.min(np.abs(pts[:, 1][:, None] - np.array(ends)[None, :]), axis=1)
+            self.assertTrue((hand[d < 1.0] > 0.99).all(), "full at the deck end")
+            self.assertTrue((w[d < 1.0] > 0.99).all(), "never faded at the deck end")
+            if (d > 250).any():
+                self.assertTrue((hand[d > 250] < 0.01).all(), "the plans' own far away")
+        near = [low[np.abs(pts[:, 0] + 300.0) < 2.0] for pts, low in st]
+        self.assertTrue(any(len(v) and v.max() > 0.99 for v in near), "the street dug under the deck")
+
+    def test_a_deck_depth_row_is_its_structures_depth(self):
+        """(M3) a segment's depth row (kind 3): the drawn depth roadsys_deck_depth answers on its structure (the floors'
+        and the deck builder's); none given: the full depth (2.2 m, roads.DECK_FULL_DEPTH)."""
+        rows = bridge_network()
+        a = self.square(rows)
+        pts, tans = np.array([[-300.0, 0.0]]), np.array([[0.0, 1.0]])
+        self.assertAlmostEqual(float(fast._ef.roadsys_deck_depth([a], pts, tans, ["m"])[0]), 2.2)
+        fid, cell, t, n, i, p, cons, rng = rows[3]
+        rows[3] = (fid, cell, t, n, i, p, cons, rng + [(0.0, 1.0, 3.0, 1.1)])
+        b = self.square(rows)
+        self.assertAlmostEqual(float(fast._ef.roadsys_deck_depth([b], pts, tans, ["m"])[0]), 1.1)
+        self.assertTrue(np.isnan(fast._ef.roadsys_deck_depth([b], pts, tans, ["a"])[0]))
+        # (a thinner deck clears the street with less height: never more)
+        za = float(fast._ef.roadsys_blend([a], pts, tans, ["m"], True)[0])
+        zb = float(fast._ef.roadsys_blend([b], pts, tans, ["m"], True)[0])
+        self.assertLessEqual(zb, za + 1e-6)
+
+    def test_end_lifts_raise_a_chain_onto_its_abutments_only_so_far(self):
+        """(M3) roadsys_end_lifts: a free end under the plans' approach is lifted onto it (at most lift_max), never
+        dropped; a joint takes the harmonic blend; the binding checks its shapes."""
+        a = (np.array([[0.0, 0.0], [50.0, 0.0]]), np.array([10.0, 11.0]))
+        b = (np.array([[50.0, 0.0], [100.0, 0.0]]), np.array([11.0, 10.0]))
+        l = fast._ef.roadsys_end_lifts([a, b], [(10.6, float("nan")), (float("nan"), 9.0)], 1.0)
+        self.assertAlmostEqual(float(l[0][0]), 0.6)
+        self.assertAlmostEqual(float(l[1][1]), 0.0)
+        self.assertAlmostEqual(float(l[0][1]), float(l[1][0]))
+        l = fast._ef.roadsys_end_lifts([a, b], [(14.0, float("nan")), (float("nan"), 9.0)], 1.0)
+        self.assertAlmostEqual(float(l[0][0]), 1.0)
+        with self.assertRaises(ValueError):
+            fast._ef.roadsys_end_lifts([a], [], 1.0)
+        # dropped onto a lower approach, back on the profile by the part's hold (a floor it holds at 25 m)
+        a3 = (np.array([[0.0, 0.0], [25.0, 0.0], [50.0, 0.0]]), np.array([10.0, 10.5, 11.0]))
+        l = fast._ef.roadsys_end_lifts([a3], [(9.0, 11.0)], float("inf"), float("inf"), [[25.0]])
+        self.assertAlmostEqual(float(l[0][0]), -1.0)
+        self.assertAlmostEqual(float(l[0][1]), 0.0)
+        self.assertAlmostEqual(float(l[0][2]), 0.0)
+
+    def test_floor_points_are_the_decks_over_other_roads(self):
+        """(M3) roadsys_floor_points: the motorway's floor over the street, on its own feature."""
+        a = self.square(bridge_network())
+        got = fast._ef.roadsys_floor_points([a], [-400.0, -100.0, -200.0, 100.0])
+        self.assertTrue(any(f == "m" and abs(x + 300.0) < 1.0 and abs(y) < 1.0 for x, y, f in got), got)
+        self.assertFalse(any(f != "m" for _x, _y, f in got))
 
     def test_chain_heights_through_a_store(self):
         """roadsys.chain_heights on a store standing in for roads.BridgeProfiles: the deck at the squares' heights,

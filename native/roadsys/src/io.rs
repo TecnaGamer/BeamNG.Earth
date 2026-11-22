@@ -29,6 +29,7 @@ pub struct Seg {
     pub bridge: Vec<(f64, f64)>,
     pub tunnel: Vec<(f64, f64)>,
     pub level: Vec<(f64, f64, f64)>,
+    pub depth: f64,          // (M3) m of slab and girders the deck builder draws under its structure (0: unknown, DECK_FULL_M)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -173,7 +174,7 @@ pub struct TileInput { pub place: Place, pub quad: [[f64; 2]; 4], pub id: (i32, 
 
 pub fn write_tile(t: &TileInput) -> Vec<u8> {
     let mut w = Wr(Vec::new());
-    w.0.extend_from_slice(b"RSTILE01");
+    w.0.extend_from_slice(b"RSTILE02");
     let st = &t.place.style;
     w.s(&st.centre); w.s(&st.left_edge);
     for v in [st.w, st.w_motorway, st.edge, st.edge_motorway, st.centre_urban.0, st.centre_urban.1, st.lane_urban.0,
@@ -195,6 +196,7 @@ pub fn write_tile(t: &TileInput) -> Vec<u8> {
         for &(a, b) in &s.tunnel { w.f64(a); w.f64(b); }
         w.u32(s.level.len() as u32);
         for &(a, b, v) in &s.level { w.f64(a); w.f64(b); w.f64(v); }
+        w.f64(s.depth);
     }
     for q in &t.quad { w.f64(q[0]); w.f64(q[1]); }
     w.i64(t.id.0 as i64); w.i64(t.id.1 as i64);
@@ -207,7 +209,10 @@ pub fn write_tile(t: &TileInput) -> Vec<u8> {
 
 pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
     let mut r = R { b, i: 0 };
-    if b.len() < 8 || r.take(8) != b"RSTILE01" { return Err("not a roadsys tile input".into()); }
+    if b.len() < 8 { return Err("not a roadsys tile input".into()); }
+    let magic = r.take(8).to_vec();
+    let v2 = magic == b"RSTILE02";
+    if !v2 && magic != b"RSTILE01" { return Err("not a roadsys tile input".into()); }
     let mut st = Style { centre: r.s(), left_edge: r.s(), ..Default::default() };
     st.w = r.f64(); st.w_motorway = r.f64(); st.edge = r.f64(); st.edge_motorway = r.f64();
     st.centre_urban = (r.f64(), r.f64()); st.lane_urban = (r.f64(), r.f64()); st.lane_motorway = (r.f64(), r.f64());
@@ -230,6 +235,7 @@ pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
         for _ in 0..nt { s.tunnel.push((r.f64(), r.f64())); }
         let nl = r.u32() as usize;
         for _ in 0..nl { s.level.push((r.f64(), r.f64(), r.f64())); }
+        if v2 { s.depth = r.f64(); }
         segs.push(s);
     }
     let mut quad = [[0.0; 2]; 4];

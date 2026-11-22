@@ -19,10 +19,17 @@
 //! enforced on the upper road against the lower one's Tier A. (A grid bound on components was tried: bounded reads,
 //! but one-sided floors at the squares' borders left 9 % of Newark's floors unmet against 1 %: not kept.)
 //!
-//! Hard limits as an active set (penalties, monotone, at most ROUNDS rounds; fixed order): grade (class limit, or
-//! the DEM's own local grade + 10 % where steeper), comfort |z''| <= 0.3 m/s^2 / v^2 at the design speed, the
-//! crossing floors (clearance + deck depth), deck over ground by 1.5 m away from abutments, tunnels 8 m under ground
-//! away from portals.
+//! Hard limits as an active set (penalties, at most ROUNDS rounds; fixed order): grade (class limit, or the DEM's own
+//! local grade + 10 % where steeper), comfort |z''| <= 0.3 m/s^2 / v^2 at the design speed, the crossing floors
+//! (clearance + the structure's drawn depth), deck over ground by 1.5 m away from abutments, tunnels 8 m under ground
+//! away from portals. A violated limit joins the set; one whose penalty's multiplier turns wrong-signed (the solution
+//! held back on its feasible side) leaves it again, at most RELEASES times (M3: penalty rounds alone kept every limit
+//! ever met as an equality). Limits still short after the rounds are counted (grade_viol, comfort_viol, floors short)
+//! in each square's stats: where they are relaxed. Penalties, not an exact QP: a limit against the couplings or the
+//! held section ends stays a little short and is recorded so.
+//!
+//! M3: a snapped branch's knots past its nose (inside the trunk's surface) lie at the trunk's height (Tier A pins,
+//! Tier B couplings); see net.rs for the crossings no longer floored (decks side by side) and the floors' clearance.
 //!
 //! Solver: the envelope LDL^T and reverse Cuthill-McKee order of native/earthfast/src/structures/heights.rs (the
 //! loops copied as they are: fixed order of every sum, IEEE + - * / only, no FMA, no HashMap), on a matrix assembled
@@ -36,8 +43,10 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub const H_M: f64 = 5.0;
-pub const QP_FORMAT: u64 = 4;            // 2 (M2): split components, feasible floors, measured decks, the chord
-const ROUNDS: usize = 12;
+pub const QP_FORMAT: u64 = 5;            // 2 (M2): split components, feasible floors, measured decks, the chord; 5 (M3): cut zones on the trunk, shallow and along crossings beside a deck
+const ROUNDS: usize = 24;              // (M3: 12 -> 24, the active set's releases)
+const RELEASES: u8 = 2;
+const RELEASE_MULT: f64 = 1e-2;       // (M3) a multiplier past this, wrong-signed: the limit leaves the active set
 const W_PIN: f64 = 1e7;
 const W_COUPLE: f64 = 1e9;          // (M2) couplings over every other term: a nose, joint or deck node never parts
 const W_FLOOR: f64 = 1e6;
@@ -53,6 +62,8 @@ const DECK_DEPTH: f64 = crate::net::DECK_FULL_M;   // net.rs crossings' floor: c
 // a stacked kit's thinner slab comes with M3)
 const STACK_DEPTH: f64 = crate::net::DECK_FULL_M;
 const FLOOR_SLACK: f64 = 0.05;
+const MEASURED_APART_M: f64 = 2.0;
+const MEASURED_NEAR_M: f64 = 60.0;  // (M3) m from a floor its decks' measurements are looked for  // (M3) m two measured decks may lie closer than a floor before it is left out
 const DIG_MAX: f64 = 2.0;
 const OBS_W: f64 = 1.0;
 const W_CHORD: f64 = 0.05;          // a deck knot's pull toward its approaches' chord (per m: a ground knot's 1)
@@ -80,6 +91,7 @@ pub struct ProfStats {
     pub floors_met: usize,
     pub floor_short_max_m: f64,
     pub floors_relaxed: usize,          // floors the grade limits cannot reach from the sections' held ends
+    pub floors_measured_out: usize,     // (M3) floors left out: both decks measured there, closer than the floor
     pub floor_relax_max_m: f64,
     pub stacked: usize,                 // floors of a double deck (the lower deck's clearance + STACK_DEPTH)
     pub grade_viol: usize,
@@ -303,6 +315,7 @@ impl Qp {
         let mut pos = vec![0usize; n];
         for (k, &v) in order.iter().enumerate() { pos[v] = k; }
         let mut active = vec![false; self.cons.len()];
+        let mut released = vec![0u8; self.cons.len()];
         let mut zz = self.guess.clone();
         let mut rounds = 0;
         for _r in 0..ROUNDS {
@@ -314,14 +327,24 @@ impl Qp {
                 Some(v) => zz = v,
                 None => { stats.factor_fail += 1; break; }
             }
-            let mut added = 0;
+            // (M3) an exact active set: a violated limit joins it; one in it that the solution leaves on its feasible
+            // side (its penalty pulls toward the bound: a wrong-signed multiplier) leaves it, at most RELEASES times (no
+            // cycling). Penalty rounds alone kept every limit ever met as an equality: curves held at the comfort bound
+            // where nothing asked for them.
+            let mut changed = 0;
             for (k, c) in self.cons.iter().enumerate() {
-                if active[k] { continue; }
                 let v = c.f.val(&zz);
+                if active[k] {
+                    // (its multiplier as the penalty gives it, 2 w (bound - value) for a lower bound: negative, the
+                    // penalty holds the solution back from where it would go: the limit does not bind)
+                    let slack = if c.ge { v - c.bound } else { c.bound - v };
+                    if 2.0 * c.w * slack > RELEASE_MULT && released[k] < RELEASES { active[k] = false; released[k] += 1; changed += 1; }
+                    continue;
+                }
                 let bad = if c.ge { v < c.bound - 1e-3 } else { v > c.bound + 1e-3 };
-                if bad { active[k] = true; added += 1; }
+                if bad { active[k] = true; changed += 1; }
             }
-            if added == 0 { break; }
+            if changed == 0 { break; }
         }
         if rounds > stats.rounds_max { stats.rounds_max = rounds; }
         for v in zz.iter_mut() { *v = (*v * 1000.0).round() / 1000.0; }
@@ -922,6 +945,11 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
                     let mut t = Vec::new();
                     lin_at(0, m, h[si], snap_station(si, start), 1.0, &mut t);
                     add_sq(&mut qp.trip, &mut qp.rhs, &mklin(&t), zt, W_PIN);
+                    // (M3: and its knots past the nose, inside the trunk's surface, at the trunk's height there: free,
+                    // they carried a climbing ramp's grade on 2.6 m over the motorway it joins, Ottawa 417)
+                    for (i, ts) in cut_knots(net, si, start, &sn, h[si], m, h[sn.trunk]) {
+                        add_sq(&mut qp.trip, &mut qp.rhs, &mklin(&[(i, 1.0)]), at_knots(&z[sn.trunk], h[sn.trunk], ts), W_PIN);
+                    }
                     continue;
                 }
             }
@@ -1033,6 +1061,23 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
                     let lo_in = sec_at(lo, ls_).map(|x| root[x] == root[mem[0]]).unwrap_or(false);
                     if !up_in { continue; }
                     let mut t = Vec::new();
+                    // (M3: a floor between two decks both measured there at heights it would part (lidar, BD TOPO,
+                    // NVDB): the measurement is the truth, no floor; twin decks at two OSM layers, Baltimore I-95)
+                    // (the nearest measured knot within MEASURED_NEAR_M: a lower deck's own measurements are left out
+                    // where another deck runs over it)
+                    let ob_at = |si: usize, s: f64| -> f64 {
+                        let o = &ob[si];
+                        if o.is_empty() { return f64::NAN; }
+                        let c = ((s / h[si]).round() as usize).min(o.len() - 1);
+                        let r = (MEASURED_NEAR_M / h[si]).ceil() as usize;
+                        for d in 0..=r {
+                            if c >= d && o[c - d].is_finite() { return o[c - d]; }
+                            if c + d < o.len() && o[c + d].is_finite() { return o[c + d]; }
+                        }
+                        f64::NAN
+                    };
+                    let (ou, ol) = (ob_at(up, us), ob_at(lo, ls_));
+                    if ou.is_finite() && ol.is_finite() && ou - ol < cr.floor - MEASURED_APART_M { stats.floors_measured_out += 1; continue; }
                     let su = sec_at(up, us).unwrap();
                     let spu = spans.iter().find(|sp| sp.si == up && sp.i0 == secs[su].i0).copied().unwrap();
                     lin_sec(&spu, h[up], us, 1.0, &mut t);
@@ -1104,9 +1149,45 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
                 }
             }
         }
+        // (M3) a branch's knots past its nose lie on its trunk's surface: coupled to the trunk where the trunk is in
+        // this component, else held at the trunk's Tier A
+        for sp in &spans {
+            let st = &net.strokes[sp.si];
+            for (start, sn) in [(true, st.snap0), (false, st.snap1)] {
+                let Some(sn) = sn else { continue };
+                if tier_a[sn.trunk].is_empty() { continue; }
+                for (i, ts) in cut_knots(net, sp.si, start, &sn, h[sp.si], nk[sp.si], h[sn.trunk]) {
+                    if i < sp.i0 || i > sp.i1 { continue; }
+                    let v = sp.base + i - sp.i0;
+                    let ht = h[sn.trunk];
+                    match spans.iter().find(|q| q.si == sn.trunk && ts >= q.i0 as f64 * ht - 1e-6 && ts <= q.i1 as f64 * ht + 1e-6) {
+                        Some(q) => { let mut t = vec![(v, 1.0)]; lin_sec(q, ht, ts, -1.0, &mut t); couples.push(mklin(&t)); couple_dbg.push(format!("cut knot {} of {}", i, sp.si)); }
+                        None => add_sq(&mut qp.trip, &mut qp.rhs, &mklin(&[(v, 1.0)]), at_knots(&tier_a[sn.trunk], ht, ts), W_PIN),
+                    }
+                }
+            }
+        }
         for f in &couples { add_sq(&mut qp.trip, &mut qp.rhs, f, 0.0, W_COUPLE); }
         let (zz, key) = qp.solve(&mut stats);
         qp.check(&zz, &mut stats);
+        if std::env::var("ROADSYS_DEBUG_COMFORT").is_ok() {
+            for c in &qp.cons {
+                if c.kind != 2 { continue; }
+                let v = c.f.val(&zz);
+                let short = if c.ge { c.bound - v } else { v - c.bound };
+                if !(short > 0.5 * absf(c.bound) + 0.002) { continue; }
+                let var = c.f.t[1].0;
+                let sp = spans.iter().find(|sp| var >= sp.base && var <= sp.base + sp.i1 - sp.i0).unwrap();
+                let i = sp.i0 + var - sp.base;
+                let st = &net.strokes[sp.si];
+                let s = (i as f64 * h[sp.si]).min(st.len());
+                let d_end = (i - sp.i0).min(sp.i1 - i);
+                let held_here = is_held(sp.si, s);
+                let d_sup = st.sup.iter().map(|u| absf(s - u.s0).min(absf(s - u.s1))).fold(f64::INFINITY, f64::min);
+                let sup = st.support_at(s).kind;
+                eprintln!("comfort cls {} kmh {} sup {} d_end {} held {} d_sup {:.0} short {:.4} bound {:.4} g {:.2} z {:.2} ta {:.2}", st.cls, st.kmh, sup, d_end, held_here, d_sup, short, c.bound, g[sp.si][i], zz[var], tier_a[sp.si][i]);
+            }
+        }
         for (k, msg) in &floor_dbg {
             let c = &qp.cons[*k];
             let short = c.bound - c.f.val(&zz);
@@ -1130,6 +1211,27 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
     Profiles { h, z, comp_of, comp_cpu, keys, sections, stats, g, ob, tier_a }
 }
 
+/// (M3) A snapped stroke's knots past its nose (inside its trunk's surface: the first cut0 m at a start snap, the last
+/// cut1 m at an end snap), each with the trunk station its point projects to (searched round the nose's station).
+fn cut_knots(net: &Net, si: usize, start: bool, sn: &crate::net::Snap, h: f64, m: usize, ht: f64) -> Vec<(usize, f64)> {
+    let st = &net.strokes[si];
+    let len = st.len();
+    let cut = if start { st.cut0 } else { st.cut1 };
+    let mut out = Vec::new();
+    if !(cut > 1e-3) || m < 2 { return out; }
+    let tr = &net.strokes[sn.trunk];
+    let (t0, t1) = ((sn.s - cut - 60.0).max(0.0), (sn.s + cut + 60.0).min(tr.len()));
+    for i in 0..m {
+        let s = (i as f64 * h).min(len);
+        let inside = if start { s < cut - 1e-6 } else { s > len - cut + 1e-6 };
+        if !inside { continue; }
+        let (ts, _off) = tr.line.project(st.line.at(s).0, t0, t1);
+        let _ = ht;
+        out.push((i, ts));
+    }
+    out
+}
+
 fn at_knots(z: &[f64], h: f64, s: f64) -> f64 {
     if z.is_empty() { return 0.0; }
     if z.len() == 1 { return z[0]; }
@@ -1147,4 +1249,21 @@ fn lin_sec(sp: &Span, h: f64, s: f64, sign: f64, t: &mut Vec<(usize, f64)>) {
     if sp.i1 == sp.i0 { t.push((sp.base, sign)); return; }
     t.push((sp.base + i - sp.i0, sign * (1.0 - u)));
     t.push((sp.base + i + 1 - sp.i0, sign * u));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// (M3) The active set lets a limit go once the solution leaves it on its feasible side: x0 >= 1 and x0 - x1 >= 3
+    /// with both pulled to 0 end at (1.5, -1.5) (only the second binds), not with x0 held at 1 as penalty rounds kept it.
+    #[test]
+    fn a_limit_left_slack_leaves_the_active_set() {
+        let mut qp = Qp { n: 2, trip: vec![(0, 0, 1.0), (1, 1, 1.0)], rhs: vec![0.0, 0.0], cons: Vec::new(), guess: vec![0.0, 0.0] };
+        qp.cons.push(Ineq { f: mklin(&[(0, 1.0)]), bound: 1.0, ge: true, w: 1e7, kind: 1, orig: f64::NAN });
+        qp.cons.push(Ineq { f: mklin(&[(0, 1.0), (1, -1.0)]), bound: 3.0, ge: true, w: 1e7, kind: 1, orig: f64::NAN });
+        store_clear();
+        let (z, _) = qp.solve(&mut ProfStats::default());
+        assert!(absf(z[0] - 1.5) < 2e-3 && absf(z[1] + 1.5) < 2e-3, "{:?}", z);
+    }
 }
