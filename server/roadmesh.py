@@ -1473,6 +1473,10 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     to instead of the box (a geotile's quad in the anchor's world: earthfast.clip_tris_convex, the neighbours' cuts
     along the very same lines); clip then only says where the ribbons reach past the tile (_reach_past)."""
     chunks = [c for c in chunks if not c.get("tube_only")]  # (twin tunnels' tube: no road surface, roads._tunnel_chunks)
+    if any(c.get("rs_hide") or c.get("rs_slab") for c in chunks):
+        # (BNE_ROADSYS=surface: today's deck chunks the road system's faces stand in for, the parapets' base strips)
+        chunks = [c for c in chunks if not c.get("rs_hide") and not c.get("rs_slab")]
+    context = _shown(context)
     if clip is not None:
         chunks = [_reach_past(c, clip) for c in chunks]
     junctions = _junction_surfaces(chunks, context)
@@ -2054,13 +2058,13 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     bridgetypes.truss_members) in painted steel (TRUSS_STEEL). (positions, tris, uvs, materials, tri
     material index) or None. ground: the tile's ground carriageways (roads.build_tile cover_out) for the parapet
     test, drawn or not (with the roads painted into the ground the chunks have none). Pure."""
-    chunks, context = _slab_chunks(chunks), _slab_chunks(context)
+    chunks, context = _slab_chunks(_shown(chunks)), _slab_chunks(_shown(context))
     dch = [c for c in chunks if c.get("deck")]
     junctions = _junction_surfaces(chunks, context)
     cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
     rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all, junctions,
                        coplanar=_coplanar_decks())
-    faces = [c for c in chunks if "deck_z" in c]
+    faces = [c for c in chunks if "deck_z" in c and not c.get("rs_mark")]
     if not rb and not piers and not beams and not pads and not faces:
         return None
     low_parapet_decks = set(low_parapet_decks or ())
@@ -2500,6 +2504,11 @@ SHEET_REACH_MAX_M = 40.0    # m past its road's edge a through deck's slab reach
 SHEET_TOL_M = 0.01          # m past an outline piece's ends a row still meets it
 
 
+def _shown(chunks):
+    """chunks without today's deck chunks the road system's own faces stand in for (BNE_ROADSYS=surface, "rs_hide")."""
+    return [c for c in chunks if not c.get("rs_hide")]
+
+
 def _slab_chunks(chunks):
     """chunks without the decks that draw no slab of their own (road revamp v2 P2b, "noslab": a branch's road surface
     inside an exit's union, on the through deck's slab): for the slabs, their parapets and the tests beside them."""
@@ -2862,7 +2871,7 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
     _rb lets deck() share its already-computed ribbons. Returned dictionaries are ordered by deck
     chunk and edge, and include the points deck() uses verbatim.
     """
-    chunks, context = _slab_chunks(chunks), _slab_chunks(context)
+    chunks, context = _slab_chunks(_shown(chunks)), _slab_chunks(_shown(context))
     junctions = _junction_surfaces(chunks, context)
     if _rb is None:
         dch = [c for c in chunks if c.get("deck")]

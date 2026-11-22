@@ -433,7 +433,7 @@ mod tests {
         let t = crate::io::TileInput { place: p, quad: Q, id: (0, 0), frame: 7, cut: (4000.0, 2000.0), ground: asked.borrow().clone() };
         let back = crate::io::read_tile(&crate::io::write_tile(&t)).unwrap();
         let ground = back.ground.clone();
-        let b = build(&back.place, back.quad, back.id, back.frame, &|_p: &[P2]| ground.clone(), Opts { cut_grid: back.cut.0, cut_offset: back.cut.1 });
+        let b = build(&back.place, back.quad, back.id, back.frame, &|_p: &[P2]| ground.clone(), Opts { cut_grid: back.cut.0, cut_offset: back.cut.1, ..Default::default() });
         assert_eq!(a.bytes, b.bytes);
     }
 }

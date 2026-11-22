@@ -37,6 +37,18 @@ product declares and hands them over.
       the terrain on the terrain's own quantised nodes, 0 mm; its parts at ground level over the approach cleared; the
       end's mismatch faded out over 6 m). Keyed as heights is (its own value, revisit.keyed_value; plans ".rss").
 
+  surface (M4): structures, and every deck drawn from the road system's own surface faces (native/roadsys deck.rs;
+      deck_faces): the planar partition of each road geotile's strokes, built in the geotile's own frame from a
+      complete read, its faces on a structure the deck's top (the drawn road and the collider from the same faces),
+      their heights today's chain solve's on each map feature's deck (the profile the terrain and the hand-over were
+      made for), flat across; the slab under them the slab's share of the structure's drawn depth
+      (BridgeProfiles.depth_of: the floors'; its girders and other substructure are M5's kits);
+      parapets on the free edges only (an edge no other drivable face shares, never across a deck end or a joint), on a
+      PARAPET_W base strip; the markings the partition's own. Today's deck chunks of the features so drawn stay for the
+      tile's other users (clearances, signs, sound, furniture) but are drawn by neither the road mesh nor the deck mesh
+      ("rs_hide"); no junction pads. A structure the faces cannot take (no deck heights for a knot near the tile, a
+      short read) keeps today's deck, recorded (STATS["deck_fallback"]).
+
 Frames: every product is built in the ENU frame of its region (the z8 Web-Mercator tile holding the geotile's
 centre; ~120-160 km), so a component built for two neighbouring tiles is built in one frame, from one read list.
 The frame's identity is in every key."""
@@ -53,11 +65,13 @@ log = logging.getLogger("earthd.roadsys")
 
 MODE = os.environ.get("BNE_ROADSYS", "off").strip().lower()
 SHADOW = MODE == "shadow"
-STRUCTURES = MODE == "structures"       # (M3 structures: heights and the deck ends' hand-over, below)
-HEIGHTS = MODE in ("heights", "structures")
+SURFACE = MODE == "surface"             # (M4 surface: structures, and the decks from the road system's own faces)
+STRUCTURES = MODE in ("structures", "surface")      # (M3 structures: heights and the deck ends' hand-over, below)
+HEIGHTS = MODE in ("heights", "structures", "surface")
 FORMAT = 2                  # the shadow records' JSON (their folder name; 2: M2's profiles, whole components read)
 HEIGHTS_KERNEL = 602        # earthfast.roadsys_heights_reads / roadsys_heights
 STRUCTURES_KERNEL = 603     # earthfast.RoadsysEnds / roadsys_handover_zone, road_exact's "ho" parts
+SURFACE_KERNEL = 606        # earthfast.roadsys_decks
 
 FRAME_Z = 8                 # the region frames' Web-Mercator zoom
 CUT = (4000.0, 2000.0)       # strokes cut at a joint past every line of this grid (m, offset): net.rs Opts
@@ -886,7 +900,7 @@ def _end_rows(feats):
     builder's lengthened or inferred ranges, which the map calls ground): kind "b" a tagged bridge part that a deck of
     the deck builder's covers (roads.bridge_parts; its half width roads.bridge_specs': the deck builder's), "g" a
     tagged ground part (its half width road_specs' plain one: no urban or measured widths, the same in every process),
-    "t" a tunnel part."""
+    "t" a tunnel part. BNE_ROADSYS=surface: by the support labels instead (roads.level_ranges, the decks' faces')."""
     got = feats.__dict__.get("_roadsys_end_rows")
     if got is not None:
         return got
@@ -900,7 +914,9 @@ def _end_rows(feats):
             sp = gs[i] if gs[i] is not None else bs[i]
             if sp is None:
                 continue
-            tags = roads.tag_level_ranges(feats, i)
+            # (M4 surface: the support labels the decks are drawn from, roads.level_ranges: lengthened and inferred
+            # deck ends hand over too, where their faces end)
+            tags = roads.level_ranges(feats, i) if SURFACE else roads.tag_level_ranges(feats, i)
             if bs[i] is not None:
                 decks = [np.asarray(r, np.float64)[:, :2] for r in roads.bridge_parts(feats, i)]
                 for j, ring in enumerate(roads._parts_by_level_new(feats, i, "bridge", rngs=tags)):
@@ -1059,3 +1075,236 @@ def handover_drop(frame, cell_fn, la, lo):
     HANDOVER_STATS["points"] += int(la.size)
     HANDOVER_STATS["dropped"] += int((out > 0).sum())
     return out.reshape(shape)
+
+
+# ------------------------------------------------------------------------- M4 surface: decks from the road faces
+
+DECK_WINDOW_M = 600.0       # m round the tile's box its decks' read reaches (their lane programs: taper reads 400 m)
+DECK_STATS = {"tiles": 0, "built": 0, "faces": 0, "runs": 0, "fallback": 0, "short": 0, "short_cell": 0, "short_max": 0,
+              "errors": 0, "cells": 0,
+              "kernel_s": 0.0, "read_s": 0.0}
+DECK_DUMP = os.environ.get("ROADSYS_DECK_DUMP") or None     # (tools only: each tile's decks written there)
+DECK_INPUTS = os.environ.get("ROADSYS_DECK_INPUTS") or None  # (tools only: each tile's decks' whole input, `roadsys decks`)
+DECK_KEEP_M = 30.0          # m round the tile's box its decks' faces are built (native/roadsys deck.rs KEEP_M)
+DECK_LINES_M = 50.0         # m round the box today's deck heights are read (KEEP_M + EXT_M + some)
+K_STRIP = 9                 # deck.rs K_STRIP: a parapet's base, the slab's top only
+K_MEDIAN = 10               # deck.rs K_MEDIAN: the filled gap to a twin deck, the slab's top only, thin
+MEDIAN_DEPTH_M = 0.04       # m of drawn depth a twin gap's fill takes (its slab ~2 cm: below the envelope's own band)
+DECK_GROUND_M = 300.0       # m round the tile's box the decks' build reads the ground (farther: that box's edge)
+
+
+def _style_of(country, lon):
+    """The marking style tuple RoadsysSegments takes (build_tile's)."""
+    import markings
+    st = markings.style(country, lon)
+    return (st.centre, st.left_edge or "", float(st.w), float(st.w_motorway), float(st.edge), float(st.edge_motorway),
+            tuple(map(float, st.centre_urban)), tuple(map(float, st.lane_urban)), tuple(map(float, st.lane_motorway)),
+            bool(st.double_centre_urban))
+
+
+def _clip_boxes(boxes, w):
+    out = []
+    for b in boxes:
+        c = [max(b[0], w[0]), max(b[1], w[1]), min(b[2], w[2]), min(b[3], w[3])]
+        if c[0] <= c[2] and c[1] <= c[3]:
+            out.append(c)
+    return out
+
+
+def _deck_read(frame, cell_fn, box, style):
+    """(segs, boxes, cells) of a complete read for a tile's decks in frame (roadsys_reads with the profiles from the
+    deck heights: no vertical component read), within the tile's window (its box + DECK_WINDOW_M: the read list's boxes
+    cut to it, a stroke reaching out of it cut there; a fixed window per tile, so the read is the map's alone), or None
+    (a cell not at hand: revisit.fault; past MAX_CELLS)."""
+    import fast
+    import revisit
+    cc = _cells_for(cell_fn)
+    w = [box[0] - DECK_WINDOW_M, box[1] - DECK_WINDOW_M, box[2] + DECK_WINDOW_M, box[3] + DECK_WINDOW_M]
+    wcells = _cells_of_boxes(frame, [w])
+    cells = _cells_of_boxes(frame, [[box[0] - 60, box[1] - 60, box[2] + 60, box[3] + 60]])
+    seen = set()
+    for _r in range(MAX_ROUNDS):
+        for k in sorted(cells - seen, key=str):
+            if cell_fn(k) is None:
+                revisit.fault()
+                with _memo_lock:
+                    DECK_STATS["short_cell"] += 1
+                return None
+        seen |= cells
+        tables = [cc.table(k) for k in sorted(cells, key=str)]
+        segs = _segments(tables, frame, style)
+        boxes, fids, _counts, _cpu = fast._ef.roadsys_reads(segs, list(map(float, box)), CUT, True)
+        boxes = _clip_boxes(boxes, w)
+        need = (_cells_of_boxes(frame, boxes) | _copy_cells(tables, fids)) & wcells
+        missing = need - cells
+        if not missing:
+            return segs, boxes, len(cells)
+        if len(cells | need) > MAX_CELLS:
+            with _memo_lock:
+                DECK_STATS["short_max"] += 1
+            return None
+        cells |= need
+    return None
+
+
+def deck_faces(frame, exact, bridges, cells, country=None):
+    """BNE_ROADSYS=surface: the decks of the tile box exact (x0, y0, x1, y1, in frame) from the road system's own
+    faces (native/roadsys deck.rs) as roads.build_tile chunks: ([chunk], {map features drawn so}), or None (no deck
+    here, or today's decks: a read short, the kernel failing). Chunks: per material the deck's top ("tri" chunks,
+    "deck_z" today's heights flat across, "deck_depth" the structure's drawn depth: its slab's share, roadmesh.deck's
+    faces; the first carries the parapet runs, "deck_runs"), the parapets' base strips ("rs_slab": the slab's top only) and the
+    markings ("rs_mark")."""
+    import fast
+    import roadmesh
+    import roads
+    import dnp
+    import roadsurf3
+    fast.require(SURFACE_KERNEL, "roadsys_decks")
+    cell_fn = getattr(bridges, "cell_fn", None)
+    if cell_fn is None:
+        return None
+    x0, y0, x1, y1 = map(float, exact)
+    m = DECK_LINES_M
+    got = [(fid, sp, np.asarray(xy, np.float64), np.asarray(z, np.float64)) for fid, sp, xy, z, _lon in
+           bridges.parts(cells, (x0 - m, y0 - m, x1 + m, y1 + m))]
+    got = [g for g in got if len(g[2]) >= 2 and np.isfinite(g[3]).all()]
+    if not got:
+        return None
+    with _memo_lock:
+        DECK_STATS["tiles"] += 1
+    t0 = time.perf_counter()
+    try:
+        _la, _lo, _u = frame.enu_to_geodetic(np.array([(x0 + x1) / 2]), np.array([(y0 + y1) / 2]), 0.0)
+        read = _deck_read(frame, cell_fn, (x0, y0, x1, y1), _style_of(country, float(np.asarray(_lo).reshape(-1)[0])))
+    except Exception as ex:          # (today's decks rather than none)
+        log.warning("roadsys decks: read: %s: %s", type(ex).__name__, ex)
+        read = None
+    t1 = time.perf_counter()
+    if read is None:
+        with _memo_lock:
+            DECK_STATS["short"] += 1
+        return None
+    segs, boxes, ncells = read
+    lines = [(feature(fid), np.ascontiguousarray(np.c_[xy[:, :2], z], np.float64)) for fid, _sp, xy, z in got]
+    spec_of, depth_of = {}, {}
+    dd = getattr(bridges, "depth_of", None)
+    for fid, sp, _xy, _z in sorted(got, key=lambda g: str(g[0])):
+        f = feature(fid)
+        spec_of.setdefault(f, sp)
+        if dd is not None:
+            depth_of[f] = max(depth_of.get(f, 0.0), float(dd(fid)))
+    quad = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+    gb = (x0 - DECK_GROUND_M, y0 - DECK_GROUND_M, x1 + DECK_GROUND_M, y1 + DECK_GROUND_M)
+
+    def ground(e, n):
+        # (the ground near the tile only: a point farther out takes the ground at its nearest point of that box; only
+        # the decks' faces near the tile are kept, their heights today's decks')
+        e = np.clip(np.asarray(e, np.float64), gb[0], gb[2])
+        n = np.clip(np.asarray(n, np.float64), gb[1], gb[3])
+        return np.asarray(bridges._ground(np.column_stack((e, n))), np.float64)
+    try:
+        kw = {"dump": os.path.join(DECK_INPUTS, f"decks_{float(frame.lat0):.6f}_{float(frame.lon0):.6f}.rsdk")} if DECK_INPUTS else {}
+        (V, T, K, F, D, feats, runs, MV, MT, MC, fallback, js) = fast._ef.roadsys_decks(
+            segs, quad, ground, lines, CUT, [list(map(float, b)) for b in boxes], **kw)
+    except Exception as ex:
+        with _memo_lock:
+            DECK_STATS["errors"] += 1
+        log.warning("roadsys decks: %s: %s", type(ex).__name__, ex)
+        return None
+    t2 = time.perf_counter()
+    with _memo_lock:
+        DECK_STATS["built"] += 1
+        DECK_STATS["cells"] += ncells
+        DECK_STATS["read_s"] += t1 - t0
+        DECK_STATS["kernel_s"] += t2 - t1
+        DECK_STATS["fallback"] += len(fallback)
+    if len(fallback):
+        log.debug("roadsys decks: today's decks for %s (no deck heights near the tile)", fallback)
+    covered = sorted({feats[i] for i in set(np.asarray(F, np.int64).tolist()) if i >= 0} - set(fallback))
+    if not len(T) or not covered:
+        return None
+    V, T = np.asarray(V, np.float64), np.asarray(T, np.int64)
+    K, F, D = np.asarray(K, np.int64), np.asarray(F, np.int64), np.asarray(D, np.float64)
+    box_poly = np.asarray(quad, np.float64)
+    uv_all = np.column_stack((V[:, 0] / roadmesh.DECK_TOP_TILE_M, V[:, 1]))
+    default_depth = max(depth_of.values()) if depth_of else roads.DECK_FULL_DEPTH
+    out = []
+    groups = {}
+    for i in range(len(T)):
+        f = feats[F[i]] if F[i] >= 0 else None
+        sp = spec_of.get(f) if f is not None else None
+        if sp is None:
+            sp = spec_of[min(spec_of)]
+        depth = depth_of.get(f, 0.0) if f is not None else 0.0
+        if not depth > 0.0:
+            depth = float(D[i]) if D[i] > 0 else default_depth
+        look = roads._deck_look(sp)
+        if K[i] == K_MEDIAN:        # (a twin's filled gap: a thin slab, no walls between the twins' slabs)
+            depth = MEDIAN_DEPTH_M
+        key = ("strip" if K[i] in (K_STRIP, K_MEDIAN) else "top", look["m"], look["tl"], look["p"], round(depth, 3))
+        groups.setdefault(key, []).append(i)
+    for key in sorted(groups):
+        kind, mat, tl, prio, depth = key
+        sel = np.asarray(groups[key], np.int64)
+        xyz, uv, clipped, _src = fast._ef.clip_tris_convex(np.ascontiguousarray(V), np.ascontiguousarray(uv_all),
+                                                           np.ascontiguousarray(T[sel]), box_poly, True)
+        xyz, clipped = np.asarray(xyz, np.float64), np.asarray(clipped, np.int64)
+        if not len(clipped):
+            continue
+        if kind == "strip":
+            ch = roadsurf3._tri_chunk(xyz[:, :2], np.asarray(uv, np.float64), clipped, roadmesh.DECK_SIDE, 10.0, prio,
+                                      "base")
+            ch["rs_slab"] = True
+        else:
+            ch = roadsurf3._tri_chunk(xyz[:, :2], np.asarray(uv, np.float64), clipped, mat, tl, prio, "base")
+        ch.update(fixed=True, deck_z=xyz[np.unique(clipped), 2], deck_depth=float(depth), rs_face=True)
+        out.append(ch)
+    if not out:
+        return None
+    # the parapets: on the free edges' base strips (their outer lines), clipped to the box after the whole run
+    runs_out = []
+    for pts, nrm, closed, _fi in runs:
+        pts, nrm = np.asarray(pts, np.float64), np.asarray(nrm, np.float64)
+        if len(pts) < 2:
+            continue
+        full = np.column_stack((pts[:, :2], pts[:, 2], nrm))
+        if closed:
+            full = np.vstack((full, full[:1]))
+        ends = [] if closed else [tuple(map(float, full[0, :2])), tuple(map(float, full[-1, :2]))]
+        for r in roads.clip_polyline(full, x0, y0, x1, y1):
+            r = np.asarray(r, np.float64)
+            if len(r) < 2:
+                continue
+            o = r[:, 3:5] / np.maximum(dnp.hypot(r[:, 3], r[:, 4]), 1e-9)[:, None]
+            runs_out.append(dict(edge=r[:, :2], z=r[:, 2], out=o, mid=r[:, :2],
+                                 inner=r[:, :2] - o * roadmesh.PARAPET_W,
+                                 line=r[:, :2] - o * (roadmesh.PARAPET_W * 0.5), ends=list(ends), nose=False, v=None))
+    out[0]["deck_runs"] = runs_out
+    # the markings on the decks' faces
+    MV, MT, MC = np.asarray(MV, np.float64), np.asarray(MT, np.int64), np.asarray(MC, np.int64)
+    for colour in sorted(set(MC.tolist())):
+        sel = MT[MC == colour]
+        mat = "line_yellow" if colour == 1 else "line_white"
+        xyz, uv, clipped, _src = fast._ef.clip_tris_convex(
+            np.ascontiguousarray(MV), np.ascontiguousarray(np.column_stack((MV[:, 0], MV[:, 1]))),
+            np.ascontiguousarray(sel), box_poly, True)
+        xyz, clipped = np.asarray(xyz, np.float64), np.asarray(clipped, np.int64)
+        if not len(clipped):
+            continue
+        ch = roadsurf3._tri_chunk(xyz[:, :2], np.zeros((len(xyz), 2)), clipped, mat, 10.0, 30, "mark")
+        ch.update(fixed=True, deck_z=xyz[np.unique(clipped), 2], rs_mark=True)
+        out.append(ch)
+    st_ = json.loads(js)
+    with _memo_lock:
+        DECK_STATS["faces"] += int(st_.get("faces", 0))
+        DECK_STATS["runs"] += len(runs_out)
+    if DECK_DUMP:               # (probes: what each tile's decks took)
+        with open(os.path.join(DECK_DUMP, f"decks_{float(frame.lat0):.6f}_{float(frame.lon0):.6f}.json"), "w", encoding="utf-8") as f:
+            json.dump({"stats": st_, "covered": sorted(covered), "fallback": list(fallback), "feats": list(feats),
+                       "lines": [(fid, xy.round(2).tolist(), z.round(3).tolist()) for fid, _sp, xy, z in got],
+                       "runs": [np.asarray(p, np.float64).round(3).tolist() for p, _n, _c, _f in runs],
+                       "faces": {"v": V.round(3).tolist(), "t": T.tolist(), "k": K.tolist(), "f": F.tolist()}}, f)
+    log.debug("roadsys decks: %s, %d chunks, read %.0f ms (%d cells), kernel %.0f ms", js, len(out),
+              (t1 - t0) * 1e3, ncells, (t2 - t1) * 1e3)
+    return out, set(covered)

@@ -1948,6 +1948,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     except Exception as ex:
         log.warning("deck pads: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         pads_near = []
+    if any(c.get("rs_face") for c in chunks):     # (BNE_ROADSYS=surface: the decks' junctions are the faces' zones)
+        pads_near = []
     pads = [p for p in pads_near if roadsmod.box_owns(box, float(p[1][0]), float(p[1][1]))]
     parapets = roadmeshmod.parapet_runs(chunks, ctx, ground=cover, pads=pads_near)
     import guardrails as guardrailsmod

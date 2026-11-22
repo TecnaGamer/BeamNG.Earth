@@ -562,5 +562,98 @@ class StructuresTest(unittest.TestCase):
         self.assertEqual(got, {"deck": {"pivot": 3.0}})
 
 
+
+@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 606, "earthfast 606 (roadsys surface, M4) required")
+class SurfaceTest(unittest.TestCase):
+    """BNE_ROADSYS=surface (M4): structures plus the decks drawn from the road system's own faces; keyed apart from
+    structures; the decks take today's deck heights (flat across), parapets on the free edges only, the same bytes
+    whatever the map's order; today's deck chunks the faces stand in for are drawn by neither mesh."""
+
+    MOTORWAY = [(-300.0, -900.0), (-300.0, 900.0)]
+
+    def lines(self, z_end=10.0):
+        # (today's deck over the street: m|0 from 0.48 to 0.52 of its 1800 m, its middle 6 m up)
+        y0, y1 = -900.0 + 0.48 * 1800.0, -900.0 + 0.52 * 1800.0
+        g0, g1 = ground(-300.0, y0), ground(-300.0, y1)
+        return [("m", np.array([[-300.0, y0, g0 + z_end - 10.0], [-300.0, 0.0, ground(-300.0, 0.0) + 6.0],
+                                [-300.0, y1, g1 + z_end - 10.0]], np.float64))]
+
+    def decks(self, rows, lines):
+        quad = [(-428.0, -128.0), (-172.0, -128.0), (-172.0, 128.0), (-428.0, 128.0)]
+        return fast._ef.roadsys_decks(table(rows), quad, ground, lines)
+
+    def test_surface_is_structures_and_more(self):
+        import roadsys
+        with mock.patch.dict(os.environ, {"BNE_ROADSYS": "surface"}):
+            importlib.reload(roadsys)
+            self.assertTrue(roadsys.HEIGHTS and roadsys.STRUCTURES and roadsys.SURFACE)
+        with mock.patch.dict(os.environ, {"BNE_ROADSYS": "structures"}):
+            importlib.reload(roadsys)
+            self.assertTrue(roadsys.STRUCTURES)
+            self.assertFalse(roadsys.SURFACE)
+        importlib.reload(roadsys)
+        self.assertFalse(roadsys.SURFACE)
+
+    def test_keyed_apart_from_structures(self):
+        st = revisit.keyed_value("BNE_ROADSYS", "structures")
+        su = revisit.keyed_value("BNE_ROADSYS", "surface")
+        self.assertNotEqual(st, su)
+        self.assertIn(f"u{revisit.ROADSYS_SURFACE_VERSION}", su)
+        keys = {}
+        for v in ("structures", "surface"):
+            with mock.patch.dict(os.environ, {"BNE_ROADSYS": v}):
+                revisit._switches.clear()
+                keys[v] = revisit.switches_key()
+        revisit._switches.clear()
+        self.assertNotEqual(keys["structures"], keys["surface"])
+
+    def test_decks_take_todays_heights_and_parapets_on_free_edges(self):
+        V, T, K, F, D, feats, runs, MV, MT, MC, fallback, js = self.decks(bridge_network(), self.lines())
+        self.assertEqual(list(fallback), [])
+        self.assertEqual(list(feats), ["m"])
+        V, T, K = np.asarray(V), np.asarray(T), np.asarray(K)
+        top = T[K != 9]
+        self.assertGreater(len(top), 10)
+        mid = [V[i] for t in top for i in t if abs(V[i][1]) < 0.3]
+        self.assertTrue(mid)
+        for p in mid:           # (flat across: every vertex of the middle row at today's middle height)
+            self.assertAlmostEqual(p[2], ground(-300.0, 0.0) + 6.0, delta=0.02)
+        self.assertEqual(len(runs), 2, js)       # (one along each side; none across the deck's ends)
+        for pts, nrm, closed, _f in runs:
+            pts = np.asarray(pts)
+            self.assertFalse(closed)
+            self.assertGreater(float(np.ptp(pts[:, 1])), 60.0)
+            self.assertLess(float(np.ptp(pts[:, 0])), 1.0)
+
+    def test_no_deck_heights_is_todays_deck(self):
+        out = self.decks(bridge_network(), [])
+        self.assertEqual(list(out[10]), ["m"])
+        self.assertEqual(len(out[1]), 0)
+
+    def test_same_decks_whatever_the_order(self):
+        a = self.decks(bridge_network(), self.lines())
+        b = self.decks(list(reversed(bridge_network())), self.lines())
+        self.assertEqual(np.asarray(a[0]).tobytes(), np.asarray(b[0]).tobytes())
+        self.assertEqual(np.asarray(a[1]).tobytes(), np.asarray(b[1]).tobytes())
+
+    def test_ground_end_meets_the_ground(self):
+        V, T, K, F, D, feats, runs, MV, MT, MC, fallback, js = self.decks(bridge_network(), self.lines(z_end=10.4))
+        V = np.asarray(V)
+        y0 = -900.0 + 0.48 * 1800.0
+        end = [p for p in V if abs(p[1] - y0) < 0.05 and abs(p[0] + 300.0) < 4.0]
+        self.assertTrue(end)
+        want = float(ground(-300.0, y0 - 0.5))
+        for p in end:
+            self.assertAlmostEqual(p[2], want, delta=0.02)
+
+    def test_hidden_chunks_are_drawn_by_neither_mesh(self):
+        import roadmesh
+        c = {"m": "asphalt", "w": 7.0, "n": [[0.0, 0.0, 5.0], [20.0, 0.0, 5.0]], "deck": True, "fixed": True}
+        self.assertIsNotNone(roadmesh.deck([dict(c)], (0.0, 0.0, 0.0)))
+        self.assertIsNone(roadmesh.deck([dict(c, rs_hide=True)], (0.0, 0.0, 0.0)))
+        self.assertEqual(roadmesh.parapet_runs([dict(c, rs_hide=True)]), [])
+        self.assertEqual(roadmesh._shown([dict(c), dict(c, rs_hide=True)]), [dict(c)])
+
+
 if __name__ == "__main__":
     unittest.main()
