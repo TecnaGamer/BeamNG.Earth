@@ -2284,7 +2284,7 @@ M._dropRetiring = dropRetiring
 
 local function updateFarGeo(key, f)
   if f.dropWait then       -- (a far geotile whose drop waits for a coarser LOD to take over: M.onFarDrop)
-    if not M.dropWaits(f) or now() - f.dropWait > M.PACK_HANDOVER_S * 1000 then M.dropFarGeo(key); return end
+    if not M.dropWaits(f) or now() - f.dropWait >= M.PACK_HANDOVER_S * 1000 then M.dropFarGeo(key); return end
   end
   local shown, flipped = false, false
   for sub, p in pairs(f.parts) do
