@@ -1786,6 +1786,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     import roadsurf3
     v3 = None
     if roadsurf3.ON:
+        cell_fn.lanes_md = _s.md        # (its home cells' lane graphs kept on disk too: roadsurf3.LANES_DISK)
         v3 = {"cell_fn": cell_fn, "signal_fn": lambda keys: furniture.signals_for(_s.md, frame, keys)}
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  sign_obstacles=sign_obstacles, sheet_marks=sheet_marks,

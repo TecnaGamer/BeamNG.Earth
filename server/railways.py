@@ -545,12 +545,22 @@ def level_bridges(frame, cells, rails, reach_box):
     if not ways:
         return rails
     limits = height_limits(frame, cells)        # (a road with a height limit under it is under a bridge: never a crossing)
+    short = [k for k, (_fid, c, kind, xy) in enumerate(rails)
+             if kind == "bridge" and c != "tram" and float(_arc(xy)[-1]) <= LEVEL_BRIDGE_MAX_M]
+    # (every short bridge's crossings with every way in ONE kernel call: per way, each bridge's hits in the order a call
+    # for that bridge alone gives them (the kernel's loop is bridge, way, way segment, bridge segment). A call per way
+    # per short bridge per window was 1.6 million calls, ~30 s of a 16-tile probe at Brno; a call per short bridge
+    # still handed the kernel every way again, ~6 s of a Montreal rail tile's rails stage, 2026-11-21)
+    hits_of = {k: {} for k in short}         # bridge -> {way: its hits} (the ways without one are passed over)
+    if short:
+        for g, hits in enumerate(roads._crossings_by([rails[k][3] for k in short], ways)):
+            for pi, arc, pt in hits:
+                hits_of[short[pi]].setdefault(g, []).append((0, arc, pt))
     out = []
-    for fid, c, kind, xy in rails:
-        if kind == "bridge" and c != "tram" and float(_arc(xy)[-1]) <= LEVEL_BRIDGE_MAX_M:
-            # (every way's crossings in one kernel call, as _crossings gives them way by way: a call per way per short
-            # bridge per window was 1.6 million calls, ~30 s of a 16-tile probe at Brno)
-            for line, hits in zip(ways, roads._crossings_by([xy], ways)):
+    for k, (fid, c, kind, xy) in enumerate(rails):
+        if k in hits_of:
+            for g in sorted(hits_of[k]):
+                line, hits = ways[g], hits_of[k][g]
                 if hits and level_bridge(frame, xy, line, float(np.clip(_seg_arc(line, hits[0][2]), 0.0, 1e9))) \
                         and not limit_near(limits, hits[0][2]):
                     kind = "ground"

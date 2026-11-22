@@ -400,6 +400,20 @@ def _overlaps_bridge_approach(a, b, run):
     checks avoid treating a crossing road's rail as a bridge approach.
     """
     line = np.asarray(run.get("line", ()), np.float64).reshape(-1, 2)
+    if len(line) >= 2:
+        # (a module far from both of the run's ends has no sample near either: no answer to compute. A sample is
+        # within hypot(JOIN_LENGTH_M, JOIN_LATERAL_M) of the end it is near; its distance to that end is at least the
+        # module's start's largest coordinate difference less the module's length (L1). A NaN compares false: the
+        # whole test then. Called per module per parapet run, ~2.5 s of a Montreal rail tile in numpy, 2026-11-21)
+        ax, ay, bx, by = float(a[0]), float(a[1]), float(b[0]), float(b[1])
+        reach = abs(bx - ax) + abs(by - ay) + JOIN_LENGTH_M + JOIN_LATERAL_M + SPAN_TOL_M + 1.0
+        far = 0
+        for e in (line[0], line[-1]):
+            ex, ey = float(e[0]), float(e[1])
+            if max(abs(ex - ax), abs(ey - ay)) > reach:
+                far += 1
+        if far == 2:
+            return False
     a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
     d = b - a
     length = float(dnp.hypot(d[0], d[1]))
