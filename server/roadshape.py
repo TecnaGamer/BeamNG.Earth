@@ -472,7 +472,7 @@ def mapped(rec, mp):
 # taken from the copy of the cell of its first point (the same copy whichever cells were read first), in a frame at the
 # cell's centre. Nothing built reads them: shadow_forks writes them as JSON beside the build; forkprobe.py checks them.
 FORK_VERSION = 513          # earthfast.fork_records
-FORKS_FORMAT = 2            # the records' JSON (shadow_forks' folder name)
+FORKS_FORMAT = 3            # the records' JSON (shadow_forks' folder name; 3: whole_or_sections)
 FORK_REACH_M = 400.0        # m along every arm from the node (the design's window: inputs within 400 m)
 FORK_DIR_M = 20.0           # m of an arm its direction is read over
 FORK_DEG = 40.0             # a fork's two arms turn at most this from the trunk (more: a junction)
@@ -590,7 +590,39 @@ def _segments_round(key, cell_fn, memo, rings, cell_segments, read_cells=None, i
     if read_cells is not None:
         read_cells.extend(keys)
     copies = {str(k): read(k) for k in keys}
-    return {pid: copies[c][0][pid] for c, pid in window.choose({c: pair[1] for c, pair in copies.items()})}
+    chosen = whole_or_sections(window.choose({c: pair[1] for c, pair in copies.items()}))
+    return {pid: copies[c][0][pid] for c, pid in chosen}
+
+
+def whole_or_sections(chosen):
+    """The window's (cell, part id) choices without a road read both whole and as its lane sections ("<road>~lanes
+    <a>-<b>", lanesections.split): one cell's copy of a merged highway can be split where another cell's is not (their
+    lane tags differ), and the choice is made per id, so both were kept and the road was there twice (found by the
+    road rewrite's PT3, 2026-11-22: 2-8 roads in each of four dense boxes). Its sections where they cover all of it,
+    else the whole road (lanesections.replaced_roads' rule). Every cell a section's copy lies in lies in the road's own
+    copy's cells, which the window reads, so every window that holds the road decides the same."""
+    sids = {pid.split("|", 1)[0] for _c, pid in chosen}
+    sections = {}
+    for sid in sids:
+        road, sep, span = sid.partition("~lanes")
+        if sep and road in sids:
+            a, _d, b = span.partition("-")
+            if a.isdigit() and b.isdigit():
+                sections.setdefault(road, []).append((int(a), int(b), sid))
+    if not sections:
+        return chosen
+    drop = set()
+    for road, spans in sections.items():
+        end = 0
+        for a, b, _sid in sorted(spans):
+            if a > end:
+                break
+            end = max(end, b)
+        if end >= 1000000000:
+            drop.add(road)
+        else:
+            drop.update(sid for _a, _b, sid in spans)
+    return [(c, pid) for c, pid in chosen if pid.split("|", 1)[0] not in drop]
 
 
 def cell_forks(key, cell_fn, memo=None):
