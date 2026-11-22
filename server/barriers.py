@@ -80,9 +80,10 @@ def _style(kind, tags):
     if kind == "wall":
         # An explicit material wins over a construction hint. Unrecorded/unsupported material stays neutral.
         hint = material or str(tags.get("wall", "")).strip().lower()
-        mat = {"brick": "bne_wall_brick", "stone": "bne_wall_stone", "dry_stone": "bne_wall_stone",
-               "limestone": "bne_wall_stone", "sandstone": "bne_wall_stone",
-               "concrete": "bne_bridge_concrete", "wood": WOOD, "timber": WOOD}.get(hint, WALL_NEUTRAL)
+        if hint in fences.STONE_TYPES or hint in fences.STONE_MATERIALS:
+            return "wall", "bne_wall_stone"
+        mat = {"brick": "bne_wall_brick", "concrete": "bne_bridge_concrete",
+               "wood": WOOD, "timber": WOOD}.get(hint, WALL_NEUTRAL)
         return "wall", mat
     if kind == "hedge":
         return "hedge", HEDGE
@@ -163,8 +164,10 @@ def plan(frame, cells, box, stats=None):
                     continue
                 height = f.attrs.get("height")
                 h = height[i] if height is not None else None
-                h = metres(tags.get("height"), metres(h, DEFAULTS[kind][0]))
-                w = metres(tags.get("width"), DEFAULTS[kind][1], 0.03, 4)
+                stone_h = fences.stone_height(f, i, tags) if kind == "wall" else None
+                default_h, default_w = DEFAULTS[kind] if stone_h is None else (stone_h, fences.STONE_THICK_M)
+                h = metres(tags.get("height"), metres(h, default_h))
+                w = metres(tags.get("width"), default_w, 0.03, 4)
                 style, mat = _style(kind, tags)
                 s = _arc(np.column_stack(geodesy.geodetic_to_ecef(ll[:, 1], ll[:, 0], 0)))
                 runs.append(Run(str(fid), kind, xy, s, h, w, style, mat, existing=existing is not None and metres(tags.get("width"), None, 0.03, 4) is None,
@@ -482,9 +485,9 @@ def tile_meshes(runs, box, ground, road_lines=()):
 
 
 def tile(frame, tx, ty, md, ground, road_lines, props, exclude_fids=()):
-    """One optional boundary build shared by both tile producers; failures preserve existing scenery."""
+    """Build optional boundaries, returning meshes, gate clearance and wall sources owned by this tile."""
     if not fences.MAPPED_BOUNDARIES_ON:
-        return {}, None
+        return {}, None, frozenset()
     runs = load(frame, tx, ty, md)
     if exclude_fids:
         runs = [r for r in runs if r.fid not in exclude_fids]
@@ -492,6 +495,7 @@ def tile(frame, tx, ty, md, ground, road_lines, props, exclude_fids=()):
         meshes = tile_meshes(runs, roads.tile_bbox(tx, ty), ground, road_lines)
     except (OSError, ValueError) as exc:
         log.warning("boundary tile %s_%s omitted: %s", tx, ty, exc)
-        return {}, None
+        return {}, None, frozenset()
     suppress_fences(props, runs)
-    return meshes, stock_clearance(runs)
+    # The stock stone mesh would otherwise draw the same wall across a mapped gate gap.
+    return meshes, stock_clearance(runs), frozenset(r.fid for r in runs if r.kind == "wall")

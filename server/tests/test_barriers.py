@@ -38,7 +38,7 @@ class BarrierTest(unittest.TestCase):
     def test_opt_out_never_reads_map_data_or_suppresses_props(self):
         props = [["fence", 50., 10., 10., 0., 1.]]
         with patch.object(barriers.fences, "MAPPED_BOUNDARIES_ON", False), patch.object(barriers, "load") as load:
-            self.assertEqual(barriers.tile(FRAME, 0, 0, None, ground, [], props), ({}, None))
+            self.assertEqual(barriers.tile(FRAME, 0, 0, None, ground, [], props), ({}, None, frozenset()))
         load.assert_not_called()
         self.assertEqual(props, [["fence", 50., 10., 10., 0., 1.]])
 
@@ -138,6 +138,32 @@ class BarrierTest(unittest.TestCase):
         # No visual or colliding triangle crosses the gate's centre; no post intrudes into the clear gap.
         centre = barriers._at(r.xy, barriers._arc(r.xy), [np.mean(r.gaps[0][:2])])[0]
         self.assertFalse(np.any((p[tri, 0].min(1) < centre[0]) & (p[tri, 0].max(1) > centre[0])))
+
+    def test_dry_stone_wall_does_not_cover_its_opening_with_a_second_mesh(self):
+        f = infra([[(10, 50), (150, 50)], [(80, 50)]], ["wall", "gate"],
+                  [{"wall": "dry_stone"}, {"width": "4"}])
+        box = roads.tile_bbox(0, 0)
+        planned = runs(f, box)
+        stone = planned[0]
+        self.assertEqual((stone.height, stone.width),
+                         (barriers.fences.STONE_H_M, barriers.fences.STONE_THICK_M))
+        self.assertEqual(stone.material, "bne_wall_stone")
+        with patch.object(barriers.fences, "MAPPED_BOUNDARIES_ON", True), \
+                patch.object(barriers, "load", return_value=planned):
+            meshes, _, owned = barriers.tile(FRAME, 0, 0, None, ground, [], [])
+            with patch.object(barriers, "tile_meshes", side_effect=ValueError("geometry unavailable")):
+                _, _, failed = barriers.tile(FRAME, 0, 0, None, ground, [], [])
+        self.assertEqual(owned, {stone.fid})
+        self.assertFalse(failed)
+        p, tri, *_ = meshes["boundary"][0]
+        self.assertFalse(np.any((p[tri, 0].min(1) < 80) & (p[tri, 0].max(1) > 80)))
+
+        def stock(excluded):
+            return barriers.fences.stone_walls(FRAME, lambda key: f, box,
+                                                lambda lat, lon: np.full_like(lat, 10.), exclude_fids=excluded)
+
+        self.assertEqual(stock(owned), [])
+        self.assertEqual(len(stock(failed)), 1)
 
     def test_line_gate_uses_mapped_span(self):
         f = infra([[(10, 50), (150, 50)], [(78, 50), (83, 50)]], ["wall", "gate"])
@@ -336,7 +362,7 @@ class CurrentPipelineTest(unittest.TestCase):
         with patch.object(barriers.fences, "MAPPED_BOUNDARIES_ON", True), \
                 patch.object(barriers, "load", return_value=runs(f)), patch.object(
                 barriers, "tile_meshes", side_effect=ValueError("budget")):
-            meshes, clearance = barriers.tile(FRAME, 0, 0, None, ground, [], props)
+            meshes, clearance, _ = barriers.tile(FRAME, 0, 0, None, ground, [], props)
         self.assertEqual(meshes, {})
         self.assertIsNone(clearance)
         self.assertEqual(props, original)

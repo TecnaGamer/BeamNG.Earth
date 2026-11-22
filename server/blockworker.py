@@ -1994,12 +1994,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                parapets=parapets, low_parapet_decks=low_parapet_decks, pads=pads)
     mark("deck_mesh")
     import fences
-    try:                            # the mapped stone walls (GitHub #938), in the retaining walls' stone
-        rwalls = rwalls + fences.stone_walls(frame, infra_fn, box, elev, roads=near_roads)
-    except Exception as ex:
-        log.warning("stone walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
-    P.tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
-    mark("tunnel_mesh")
+    boundary_wall_ids = ()
     import railways
     rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
     rground = railways.point_ground(frame, elev, rkey)
@@ -2068,12 +2063,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         mappedpoles.tile_poles(frame, tx, ty, _s.md, elev, props, wires, pole_profile, urban,
                                clearance=clearance[0] if clearance else None)
         import barriers
-        import fences
         boundary_meshes = {}
         try:
             regional = (fences.french_rows(frame, infra_fn, box, elev, near_roads)
                         if fences.MAPPED_BOUNDARIES_ON and frontage_country == "FR" else None)
-            boundary_meshes, gate_clearance = barriers.tile(frame, tx, ty, _s.md,
+            boundary_meshes, gate_clearance, boundary_wall_ids = barriers.tile(frame, tx, ty, _s.md,
                 railways.point_ground(frame, elev), lines, props, exclude_fids=regional[1] if regional else ())
             props.extend(fences.rows(frame, infra_fn, box, elev, decks=[{"n": np.column_stack((xy, z)), "w": spec.width}
                                                                         for _f, spec, xy, z, _l in deck_parts] + rail_decks,
@@ -2154,6 +2148,13 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         props = (props or []) + radar_props
     import racedig                  # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
     racedig.tile_clear(frame, cells, props, wires, elev, _s.md)
+    try:                            # the mapped stone walls (GitHub #938), in the retaining walls' stone
+        rwalls = rwalls + fences.stone_walls(frame, infra_fn, box, elev, roads=near_roads,
+                                             exclude_fids=boundary_wall_ids)
+    except Exception as ex:
+        log.warning("stone walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+    P.tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
+    mark("tunnel_mesh")
     P.boundary_meshes = boundary_meshes if buildings else None
     P.signs = signs
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)

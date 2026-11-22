@@ -32,6 +32,10 @@ Walls use existing brick, stone or concrete materials. Hedges are continuous, le
 installed game's cypress textures, not individual shrubs. Missing fence construction uses timber rails.
 These are documented visual fallbacks, not measured local dimensions or exact replicas of every fence type.
 
+Mapped dry-stone walls keep their stock default height and thickness. Their source is drawn only once,
+so the stock stone mesh cannot close a mapped gate gap. Stock stone walls remain available when the
+optional boundary pass is off or cannot build its meshes.
+
 Unspecified wall material uses a neutral, rough stock plaster finish. Explicit supported materials take precedence
 over wall-type hints. Boundary-specific stone, brick and wood definitions reuse existing textures without the
 building materials' vertex-colour requirement. Physical height/width estimates are unchanged.

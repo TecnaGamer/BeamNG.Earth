@@ -1045,11 +1045,11 @@ STONE_STEP_M = 1.0
 STONE_ROAD_GAP_M = 0.6
 
 
-def stone_height(feats, i):
+def stone_height(feats, i, tags=None):
     """The height (m) of mapped stone wall i, or None when it is not one (STONE_TYPES / STONE_MATERIALS)."""
     classes = feats.attrs.get("class")
     cls = str(classes[i]).strip().lower() if classes is not None else ""
-    tags = _tags(feats, i)
+    tags = _tags(feats, i) if tags is None else tags
     if tags.get("barrier", cls) != "wall" and cls != "wall":
         return None
     wall = tags.get("wall", "")
@@ -1098,11 +1098,11 @@ def _near_road(xy, roads):
     return hit
 
 
-def stone_walls(frame, infra_fn, box, elev, roads=()):
+def stone_walls(frame, infra_fn, box, elev, roads=(), *, exclude_fids=()):
     """The mapped stone walls in box (x0, y0, x1, y1) as roads.retaining_walls' wall dicts (base, top, foot, toward,
     thick, back_top, parapet), for roadmesh.tunnel's stone: each mapped line's pieces whose segments' middles are in
     the box (a wall split across tiles meets at the edge, not drawn twice), cut where a ground road (roads: build_tile's
-    roads_out, (fid, spec, pts, ...)) runs. elev(lat, lon) -> the ground's height."""
+    roads_out, (fid, spec, pts, ...)) runs. Skip sources owned by the optional boundary mesh. elev(lat, lon) -> the ground's height."""
     if infra_fn is None or not STONE_ON:
         return []
     x0, y0, x1, y1 = map(float, box)
@@ -1123,7 +1123,7 @@ def stone_walls(frame, infra_fn, box, elev, roads=()):
         boxes = feats.boxes(frame)
         for i in range(len(feats)):
             fid = str(feats.ids[i])
-            if fid in seen or int(feats.kind[i]) not in (mapgeom.LINE, mapgeom.POLYGON):
+            if fid in seen or fid in exclude_fids or int(feats.kind[i]) not in (mapgeom.LINE, mapgeom.POLYGON):
                 continue
             b = boxes[i]
             if b[2] < x0 - BBOX_PAD_M or b[0] > x1 + BBOX_PAD_M or b[3] < y0 - BBOX_PAD_M or b[1] > y1 + BBOX_PAD_M:
