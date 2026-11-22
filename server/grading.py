@@ -884,6 +884,8 @@ SPAN_EASE_V_MS = 36.0       # m/s the lowered approach's easing is laid out for 
 SPAN_EASE_G = 0.15          # ... feeling at most this vertical acceleration (drivability's lift_g limit is 0.2 g) ...
 SPAN_EASE_MAX_M = 200.0     # ... over this at most (and the plan's own length)
 SPAN_TIE_RUN_M = 20.0       # m of a span spent near its lower end's height before it climbs at DECK_MAX_GRADE (estimate)
+SEAM_MEASURED_ON = os.environ.get("BNE_SEAM_MEASURED", "on") != "off"   # (_grade_match: a deck measured end to end on
+SEAM_MEASURED_TOL_M = 0.75                                               # its ground spans that slope: _measured_spans)
 SEAM_FILLED_ON = os.environ.get("BNE_SEAM_FILLED", "on") != "off"   # (_grade_match reads each end as filled: fill_abutment)
 # BNE_DECK_STRUCT=abut (road revamp RS S2b part 2a, structures.ABUT): the decks of one structure side by side share one
 # abutment height at each common end (earthfast.structure_abutments; _struct_end, _pin_struct_ends). Off: never read.
@@ -6536,6 +6538,30 @@ class _Planner:
             self._marks_seen("_gm_cache", k)
             return cache[k]
 
+    def _measured_spans(self, bridge, z):
+        """Does the deck as measured (roadz.PROVIDER, level 1) meet the ground z (2,) at both ends of bridge (k, 2), within
+        SEAM_MEASURED_TOL_M (a bridge the inventory dates after the survey: its measurement is the old ground, never)?
+        Then it spans that slope as it is: Hammond Drive's 114 m deck over GA-400 climbs 5.1 m, measured, end to end
+        on its ground, and the grade match tilted it level, its approaches a 1.6-2.4 m step onto each end (the user,
+        2026-11-21)."""
+        import roadz
+        prov = roadz.PROVIDER
+        if prov is None or not prov.enabled:
+            return False
+        try:
+            if roadsmod.OBS_BUILT_ON and roadsmod.built_after_survey(self.frame, bridge):
+                return False
+            o = prov.observed(self.frame, bridge, OBS_HALF_M, 1)
+        except Exception as e:
+            _caught(e)
+            return False
+        if o is None:
+            return False
+        o = np.asarray(o, np.float64).reshape(-1)
+        if len(o) != len(bridge) or not (np.isfinite(o[0]) and np.isfinite(o[-1])):
+            return False
+        return abs(float(o[0]) - float(z[0])) <= SEAM_MEASURED_TOL_M and abs(float(o[-1]) - float(z[1])) <= SEAM_MEASURED_TOL_M
+
     def _grade_match_calc(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0]]), np.array([xy[1]]), 0.0)
         home = mapcells.cell_of(float(la[0]), float(lo[0]))
@@ -6579,6 +6605,8 @@ class _Planner:
             z = np.maximum(z, [self._end_filled(bridge, False, past=True), self._end_filled(bridge, True, past=True)])
         deficit = abs(float(z[1] - z[0])) - SEAM_DECK_GRADE * L
         if deficit < 2 * APPROACH_MIN_LIFT:
+            return None
+        if SEAM_MEASURED_ON and self._measured_spans(bridge, z):
             return None
         half = min(deficit / 2.0, SEAM_MATCH_MAX_M)
         mine = 0 if dnp.hypot(*(ends[0] - xy)) <= dnp.hypot(*(ends[1] - xy)) else 1

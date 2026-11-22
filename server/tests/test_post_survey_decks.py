@@ -104,6 +104,36 @@ class BuiltRampTest(unittest.TestCase):
         self.assertTrue(grading._room_for(np.array([[0.0, 0.0], [227.0, 0.0]]), 3.4))
 
 
+class MeasuredSpanTest(unittest.TestCase):
+    """Hammond Drive over GA-400 (33.9190 N 84.3577 W): a 114 m deck measured climbing 5.1 m end to end on its ground;
+    the grade match levelled it, a 1.6-2.4 m step onto each end (the user, 2026-11-21)."""
+    LINE = np.c_[np.linspace(0.0, 114.0, 30), np.zeros(30)]
+
+    def spans(self, measured, built=False):
+        from unittest import mock
+        import roadz
+
+        class Prov:
+            enabled = True
+
+            def observed(self, frame, xy, half, level, name=""):
+                return np.asarray(measured, np.float64)
+        me = type("P", (), {"frame": None})()
+        with mock.patch.object(roadz, "PROVIDER", Prov()), mock.patch.object(roads, "built_after_survey",
+                                                                               lambda f, xy: built):
+            return grading._Planner._measured_spans(me, self.LINE, np.array([304.56, 309.86]))
+
+    def test_measured_end_to_end_on_its_ground(self):
+        self.assertTrue(self.spans(np.linspace(304.83, 309.89, 30)))
+
+    def test_measured_off_its_ground_or_built_after_or_unmeasured(self):
+        self.assertFalse(self.spans(np.linspace(306.5, 307.4, 30)))
+        self.assertFalse(self.spans(np.linspace(304.83, 309.89, 30), built=True))
+        m = np.linspace(304.83, 309.89, 30)
+        m[0] = np.nan
+        self.assertFalse(self.spans(m))
+
+
 class StackShortTest(unittest.TestCase):
     ARCS = [np.array([0.0, 100.0]), np.array([0.0, 100.0])]
     OVER = [(0, 1, 50.0, 50.0)]
