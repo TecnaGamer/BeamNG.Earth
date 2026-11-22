@@ -4178,7 +4178,14 @@ class Server:
             self.abandoned.update(add)
             self.abandoned.difference_update(remove)
             io = getattr(self, "v2_io", None)
-            if io is not None:          # (BNE_V2_HOST: written by a scheduler job, never on the event loop)
+            if io is not None:
+                # (BNE_V2_HOST: the anchors' scheduler jobs dropped or stopped at once, wanted again once removed;
+                # the file written by a scheduler job, never on the event loop)
+                sched = v2host.active()
+                for a in add:
+                    self.__dict__["v2_cancelled"] = sched.cancel_place(int(a))
+                for a in remove:
+                    sched.uncancel_place(int(a))
                 io.submit(Server.write_abandoned, self)
                 return True
             return self.write_abandoned()      # (the lock is re-entrant)
@@ -4313,6 +4320,7 @@ class Server:
         urgent photos; P2: the other photos), the job's anchor its first argument (a teleport drops its queued jobs
         and stops its running ones). A heightmap thread waiting on its block process holds no slot (result_running)."""
         s = v2host.sched()
+        s.reset_places()                # (this server's anchor ids start at 1: none of them left yet)
         hm, req = s.lane("heightmap", HM_THREADS), s.lane("heightmap-req", HM_REQUEST_THREADS)
         self.hm_pool = s.executor(hm, v2host.P1, None, 0)
         self.hm_req_pool = s.executor(req, v2host.P0, None, 0)
@@ -9617,11 +9625,10 @@ class Connection:
         self.abandoned_from = (getattr(self, "abandoned_from", None) or []) + [aid]
         with self.s.warm_cv:
             self.s.warm_want = []
-        sched = v2host.active()
-        if sched is not None:           # (BNE_V2_HOST: its scheduler jobs dropped or stopped at once)
-            dropped, flagged = sched.cancel_place(int(aid))
+        got = self.s.__dict__.pop("v2_cancelled", None)
+        if got is not None:             # (BNE_V2_HOST: its scheduler jobs, set_abandoned)
             log.info("teleport: anchor %d's queued work dropped (scheduler: %d queued jobs dropped, %d running "
-                     "stopped)", aid, dropped, flagged)
+                     "stopped)", aid, *got)
             return
         log.info("teleport: anchor %d's queued work dropped", aid)
 
@@ -9631,9 +9638,6 @@ class Connection:
         if aids:
             Server.set_abandoned(self.s, remove=aids)
             self.abandoned_from = None
-            sched = v2host.active()
-            for aid in aids if sched is not None else ():
-                sched.uncancel_place(int(aid))
 
     async def prepare_anchor(self, msg):
         """Every first-ground preparation has progress and a terminal reply, including setup/finalization errors."""

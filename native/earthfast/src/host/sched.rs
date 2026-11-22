@@ -27,7 +27,7 @@
 //!
 //! Scheduling order never changes what a job makes: outputs stay byte-identical (the jobs are the same functions).
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -159,9 +159,9 @@ pub fn pct(xs: &mut [f32], p: f64) -> Option<f64> {
 /// The scheduler's state (no Python: the unit tests drive it directly).
 pub struct Core<P, H> {
     lanes: Vec<LaneSt>,
-    queued: HashMap<u64, Queued<P, H>>,
-    running: HashMap<u64, Run<H>>,
-    keys: HashMap<String, u64>,
+    queued: BTreeMap<u64, Queued<P, H>>,
+    running: BTreeMap<u64, Run<H>>,
+    keys: BTreeMap<String, u64>,
     left: BTreeSet<i64>,
     next: u64,
     /// the adaptive lanes' slots in use at most
@@ -172,7 +172,7 @@ pub struct Core<P, H> {
 
 impl<P, H> Core<P, H> {
     pub fn new(target: usize) -> Self {
-        Core { lanes: Vec::new(), queued: HashMap::new(), running: HashMap::new(), keys: HashMap::new(),
+        Core { lanes: Vec::new(), queued: BTreeMap::new(), running: BTreeMap::new(), keys: BTreeMap::new(),
                left: BTreeSet::new(), next: 1, target: target.max(1), adaptive_busy: 0,
                stats: Default::default() }
     }
@@ -418,8 +418,6 @@ impl<P, H> Core<P, H> {
         self.left.insert(place);
         let ids: Vec<u64> = self.queued.iter().filter(|(_, q)| q.place == Some(place)).map(|(&id, _)| id).collect();
         let mut out = Vec::with_capacity(ids.len());
-        let mut ids = ids;
-        ids.sort_unstable();
         for id in ids {
             if let Some(q) = self.queued.remove(&id) {
                 self.lanes[q.lane].ready.remove(&(q.class, okey(q.deadline), id));
@@ -450,6 +448,34 @@ impl<P, H> Core<P, H> {
                 r.cancel.store(false, Ordering::SeqCst);
             }
         }
+    }
+
+    /// Jobs of lane l queued or running (blocked ones too).
+    pub fn lane_live(&self, l: usize) -> usize {
+        self.lanes.get(l).map_or(0, |ln| ln.ready.len()) + self.running.values().filter(|r| r.lane == l).count()
+    }
+
+    /// Lane l's queued jobs taken out (shutdown(cancel_futures)): their handles.
+    pub fn drain_lane(&mut self, l: usize) -> Vec<(P, H)> {
+        let Some(ln) = self.lanes.get_mut(l) else { return Vec::new() };
+        let keys: Vec<(u8, u64, u64)> = std::mem::take(&mut ln.ready).into_iter().collect();
+        let mut out = Vec::with_capacity(keys.len());
+        for k in keys {
+            if let Some(q) = self.queued.remove(&k.2) {
+                if let Some(key) = &q.key {
+                    if self.keys.get(key) == Some(&k.2) {
+                        self.keys.remove(key);
+                    }
+                }
+                out.push((q.payload, q.handle));
+            }
+        }
+        out
+    }
+
+    /// Every place wanted again (a new server's anchors: their ids start again at 1).
+    pub fn reset_places(&mut self) {
+        self.left.clear();
     }
 
     pub fn class_deadline(&self, id: u64) -> Option<(u8, f64)> {
@@ -947,6 +973,11 @@ impl Sched {
         kick(&self.sh);
     }
 
+    /// A new Server in this process (tests make many; its anchor ids start again at 1): no place left any more.
+    fn reset_places(&self) {
+        self.sh.state().core.reset_places();
+    }
+
     fn is_left(&self, place: i64) -> bool {
         self.sh.state().core.is_left(place)
     }
@@ -1158,9 +1189,26 @@ impl Lane {
         submit_on(&self.sh, py, self.lane, self.cls, self.due, place, None, f, args)
     }
 
+    /// As ThreadPoolExecutor.shutdown, for this lane alone (the scheduler goes on): cancel_futures: its queued jobs'
+    /// futures cancelled; wait: until none of its jobs is queued or running.
     #[pyo3(signature = (wait = true, cancel_futures = false))]
-    fn shutdown(&self, wait: bool, cancel_futures: bool) {
-        let _ = (wait, cancel_futures);
+    fn shutdown(&self, py: Python<'_>, wait: bool, cancel_futures: bool) -> PyResult<()> {
+        if cancel_futures {
+            let dropped = self.sh.state().core.drain_lane(self.lane);
+            for (_call, fut) in dropped {
+                fut.bind(py).call_method0("cancel")?;
+            }
+        }
+        if wait {
+            let sh = self.sh.clone();
+            let lane = self.lane;
+            py.detach(move || {
+                while sh.state().core.lane_live(lane) > 0 {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+        }
+        Ok(())
     }
 
     #[getter]
