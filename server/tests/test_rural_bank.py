@@ -134,40 +134,40 @@ class BenchLeanTest(unittest.TestCase):
         z = np.full((2, len(grading.bench_offsets())), np.nan)
         self.assertTrue(np.isnan(grading.bench_lean(z)).all())
 
+    def test_any_step_across(self):
+        for step in (0.5, 0.75, 1.0):
+            z = cross(grading.bench_offsets(step), -0.02, 0.30, 2.0)[None, :]
+            np.testing.assert_allclose(grading.bench_lean(z, step), -0.02, atol=1e-9)
+
 
 class RuralLeanTest(unittest.TestCase):
     """grading.rural_lean: the strips' slopes along the road (median, Gaussian, fades)."""
 
-    def test_steady_lean_kept_and_seen(self):
-        lt, conf = grading.rural_lean(np.full(100, 0.03), 2.0, (False, False))
-        np.testing.assert_allclose(lt, 0.03, atol=1e-9)
-        np.testing.assert_allclose(conf, 1.0, atol=1e-9)
+    def test_steady_lean_kept(self):
+        np.testing.assert_allclose(grading.rural_lean(np.full(100, 0.03), 2.0, (False, False)), 0.03, atol=1e-9)
 
-    def test_no_strip_is_level_and_unseen(self):
-        lt, conf = grading.rural_lean(np.full(100, np.nan), 2.0, (False, False))
-        np.testing.assert_allclose(lt, 0.0, atol=1e-12)
-        np.testing.assert_allclose(conf, 0.0, atol=1e-12)
+    def test_no_strip_is_level(self):
+        np.testing.assert_allclose(grading.rural_lean(np.full(100, np.nan), 2.0, (False, False)), 0.0, atol=1e-12)
 
     def test_lone_reading_dropped(self):
         lean = np.zeros(100)
         lean[50] = 0.08                                                 # (a driveway's apron)
-        lt, _conf = grading.rural_lean(lean, 2.0, (False, False))
-        self.assertLess(float(np.abs(lt).max()), 1e-9)
+        self.assertLess(float(np.abs(grading.rural_lean(lean, 2.0, (False, False))).max()), 1e-9)
 
     def test_held_within_the_most(self):
-        lt, _conf = grading.rural_lean(np.full(100, 0.2), 2.0, (False, False))
+        lt = grading.rural_lean(np.full(100, 0.2), 2.0, (False, False))
         self.assertLessEqual(float(lt.max()), grading.RURAL_LEAN_MAX + 1e-9)
 
     def test_fades_level_at_a_flagged_end(self):
-        lt, _conf = grading.rural_lean(np.full(100, 0.03), 2.0, (True, False))
+        lt = grading.rural_lean(np.full(100, 0.03), 2.0, (True, False))
         self.assertEqual(float(lt[0]), 0.0)
         self.assertAlmostEqual(float(lt[-1]), 0.03)
         self.assertAlmostEqual(float(lt[int(grading.RURAL_BANK_FADE_M / 2.0) + 1]), 0.03)
 
     def test_road_going_on_smoothed_in_then_dropped(self):
         lean = np.r_[np.full(20, 0.06), np.full(100, 0.0), np.full(10, 0.06)]
-        lt, conf = grading.rural_lean(lean, 2.0, (False, False), (20, 10))
-        self.assertEqual((len(lt), len(conf)), (100, 100))
+        lt = grading.rural_lean(lean, 2.0, (False, False), (20, 10))
+        self.assertEqual(len(lt), 100)
         self.assertAlmostEqual(float(lt[0]), 0.03, places=2)            # (half way between the two at the join)
         self.assertLess(abs(float(lt[50])), 1e-3)
 
@@ -211,12 +211,29 @@ class TerrainLeanTest(unittest.TestCase):
     def test_measured_level_bend_gets_no_made_up_lean(self):
         self.assertIsNone(self.plan(self.land(0.0, 0.0)).bank)
 
+    def test_bend_where_no_road_shows_is_level_not_ruled(self):
+        # (lidar with no strip anywhere: a slope of 20 % or more across the road all round the bend. Level; the design
+        # rule stands in only where the elevation shows no roads at all, benches False)
+        def steep(la, lo):
+            e, n, _u = self.FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            return 100.0 + 0.2 * np.asarray(n) - 0.2 * np.asarray(e)
+        self.assertIsNone(self.plan(steep).bank)
+        self.assertIsNotNone(self.plan(steep, benches=False).bank)
+
     def test_no_roads_in_the_elevation_share_of_the_rule(self):
         p = self.plan(self.land(0.0, 0.0), benches=False)
         want = grading.RURAL_CURVE_SHARE["tertiary"] * grading.RURAL_BANK_E_MAX
         self.assertAlmostEqual(float(-p.bank.min()), want, places=2)
         self.assertLessEqual(float(p.bank.max()), 1e-9)                 # (a left-hand bend: in, one way only)
         self.assertIsNone(self.plan(self.land(0.0, 0.0), cls="residential", benches=False).bank)
+
+    def test_read_at_every_other_sample_or_at_each(self):
+        got = []
+        for every in (1, grading.RURAL_BENCH_EVERY):
+            with mock.patch.object(grading, "RURAL_BENCH_EVERY", every):
+                got.append(self.mid(self.plan(self.land(0.025, 0.30, at=1.0), xy=self.EAST)))
+        np.testing.assert_allclose(got[0], 0.025, atol=1e-3)
+        np.testing.assert_allclose(got[1], got[0], atol=1e-6)
 
     def test_fades_level_at_a_loose_end(self):
         p = self.plan(self.land(0.03, 0.30), xy=self.EAST)

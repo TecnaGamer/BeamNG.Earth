@@ -3,8 +3,9 @@
 How the graded roads lean across, against the real roads in the elevation: along every drivable ground road round
 the place, every STEP_M,
   built   the graded physics ground's cross slope over the middle of the carriageway (+-MID_OFF_M),
-  road    the real road's: grading.bench_lean of the bare elevation (the most level strip beside the map line),
-          smoothed along as the plans smooth it (grading.rural_lean); meaningful on lidar only,
+  road    the real road's: grading.bench_lean of the bare elevation (the most level strip beside the map line) read
+          every FINE_STEP_M across at every sample (finer than the plans read it: grading.RURAL_BENCH_STEP_M,
+          RURAL_BENCH_EVERY), smoothed along as the plans smooth it (grading.rural_lean); meaningful on lidar only,
   mid     the bare elevation's over +-MID_OFF_M of the map line itself (what a reading that trusts the line gets),
   rule    the design rule's lean into the bend (grading.bank, all of it),
   bend    the centreline's signed curvature over +-BEND_M (in a bend: tighter than BEND_R_M; straight: gentler than
@@ -24,6 +25,7 @@ STEP_M = 2.0
 MIN_LEN_M = 120.0
 END_M = 16.0
 MID_OFF_M = 1.25
+FINE_STEP_M = 0.5
 BEND_M = 15.0
 BEND_R_M = 150.0
 STRAIGHT_R_M = 500.0
@@ -81,7 +83,7 @@ def main():
             if f is not None and len(f):
                 feats.append((str(k), f))
     feats.sort(key=lambda kv: kv[0])
-    offs = grading.bench_offsets()
+    offs = grading.bench_offsets(FINE_STEP_M)
     tot = {}
     rows, done, keep = [], set(), {}
     for _key, f in feats:
@@ -123,8 +125,8 @@ def main():
 
                 built, mid = lean(graded, MID_OFF_M), lean(bare, MID_OFF_M)
                 zc = np.stack([bare(p + nrm * o) for o in offs], 1)
-                raw = grading.bench_lean(zc)
-                road = grading.rural_lean(raw, STEP_M, (False, False))[0]
+                raw = grading.bench_lean(zc, FINE_STEP_M)
+                road = grading.rural_lean(raw, STEP_M, (False, False))
                 rule = grading.bank(p, sp, (False, False), (1, 1))
                 rule = np.zeros(len(p)) if rule is None else np.asarray(rule, np.float64)
                 m = inside
