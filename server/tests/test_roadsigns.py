@@ -40,7 +40,7 @@ class Tables(unittest.TestCase):
             self.assertLessEqual(set(row["order"]), groups, code)
 
     def test_the_first_wave_and_nowhere_else(self):
-        for code in ("UA", "cz", "PL", "DE"):
+        for code in ("UA", "cz", "PL", "DE", "SE", "bg"):
             self.assertIsNotNone(roadsigns.system(code), code)
         with patch.object(roadsigns, "NL_ON", False):
             self.assertIsNone(roadsigns.system("NL"))
@@ -142,6 +142,45 @@ class Poles(unittest.TestCase):
         self.assertAlmostEqual(t[1, 9], mount)
         self.assertAlmostEqual(t[2, 9], mount)
         self.assertAlmostEqual(t[0, 9], mount + sizes["square"][1] + 0.1)
+
+    def test_sweden_reviewed_roles_its_sizes_and_a_pole_each(self):
+        """SE (2026-11-17): only the signs whose Swedish design the atlas draws and no Swedish module places (B1, B2,
+        C1, E1, E2, B3, E9, E16, E22 are placed already); the yellow warning field; TSFS 2019:74's normal sizes (a
+        triangle 0.90 m in town too); no order read, so no two signs share a pole."""
+        sys_row = roadsigns.system("SE")
+        self.assertEqual(sys_row["atlas"], "vienna_y")
+        rules = roadsigns.tables()[1]["rules"]
+        rule = lambda name: float(rules.index(name))        # noqa: E731
+        names = ["warn.curve_right", "prio.give_way", "prio.stop", "reg.no_entry", "info.motorway", "info.crossing_right",
+                 "info.oneway", "info.living_street", "info.bus_stop", "info.tunnel", "info.pedestrian_zone",
+                 "warn.side_right", "warn.chevron_left", "info.parking", "mand.roundabout"]
+        signs = np.array([[0, 0, 1, 0, rule(n), 0, 0, 0, 1, k, 0] for k, n in enumerate(names)], float)
+        kept = [rules[int(r)] for r in roadsigns.supported(signs, sys_row)[:, 4]]
+        self.assertEqual(kept, ["warn.curve_right", "info.parking", "mand.roundabout"])
+        self.assertEqual(roadsigns.sizes_of(sys_row)["tri_up"][0], 0.9)
+        self.assertEqual(roadsigns.sizes_of(sys_row)["octagon"], roadsigns.tables()[1]["sizes"]["default"]["octagon"])
+        self.assertEqual(roadsigns.sizes_of(roadsigns.system("CZ")), roadsigns.tables()[1]["sizes"]["default"])
+        t = roadsigns.table(signs[:1], np.zeros(1), np.zeros(1), sys_row)
+        self.assertAlmostEqual(t[0, 8], 0.9)                # the town size
+        self.assertAlmostEqual(t[0, 9], 2.1)                # over the footway
+        self.assertTrue(all(r < 0 for r in roadsigns.pole_params(sys_row)[:len(rules)]))
+
+    def test_bulgaria_white_field_its_order_and_two_on_a_pole(self):
+        """BG (2026-11-17, Наредба № 18): the white warning field (чл. 18), Б above А above В/Г/Д above Е (чл. 12), two
+        signs to a pole (чл. 11); its reviewed roles only, give way and stop left to furniture.py."""
+        sys_row = roadsigns.system("BG")
+        self.assertEqual(sys_row["atlas"], "vienna_w")
+        self.assertEqual(sys_row["order"][:2], ["priority", "warning"])
+        rules = roadsigns.tables()[1]["rules"]
+        rule = lambda name: float(rules.index(name))        # noqa: E731
+        names = ["warn.side_left", "prio.give_way", "info.motorway", "info.tunnel", "info.dead_end", "info.living_street",
+                 "info.bus_stop", "reg.no_entry"]
+        signs = np.array([[0, 0, 1, 0, rule(n), 0, 0, 0, 1, k, 0] for k, n in enumerate(names)], float)
+        kept = [rules[int(r)] for r in roadsigns.supported(signs, sys_row)[:, 4]]
+        self.assertEqual(kept, ["warn.side_left", "info.bus_stop", "reg.no_entry"])
+        self.assertEqual(roadsigns.pole_params(sys_row)[len(rules)], 2.0)
+        t = roadsigns.table(signs[:1], np.zeros(1), np.zeros(1), sys_row)
+        self.assertAlmostEqual(t[0, 9], 2.25)               # over the pavement in a town
 
     def test_a_yellow_field_takes_its_own_cells_of_the_one_atlas(self):
         """vienna_y (PL) and vienna_w share one atlas (2026-11-13): a warning triangle in PL takes its yellow cell
