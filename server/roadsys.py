@@ -49,6 +49,13 @@ product declares and hands them over.
       ("rs_hide"); no junction pads. A structure the faces cannot take (no deck heights for a knot near the tile, a
       short read) keeps today's deck, recorded (STATS["deck_fallback"]).
 
+  BNE_ROADSYS_XSEC=on (with any of the modes above; off by default): the road system's cross-sections (native/roadsys
+      xsec.rs): each segment's OSM street tags (railtags.XSEC_ATTR, the lane shards' "xsec" table: parking, cycle lanes,
+      bus lanes, shoulders, sidewalks, width:carriageway / est_width, with OSM width and sidewalk) handed to the kernels
+      as one text per segment (_xsec_text); every stroke gets strips for parking, cycle lanes and their buffers, its
+      lanes from a mapped carriageway width where that is plausible. Keyed as every BNE_ setting is (revisit.keyed_env,
+      SWITCH_VERSIONS); the segments' digests (the read lists' keys) hold the texts.
+
 Frames: every product is built in the ENU frame of its region (the z8 Web-Mercator tile holding the geotile's
 centre; ~120-160 km), so a component built for two neighbouring tiles is built in one frame, from one read list.
 The frame's identity is in every key."""
@@ -72,6 +79,8 @@ FORMAT = 2                  # the shadow records' JSON (their folder name; 2: M2
 HEIGHTS_KERNEL = 602        # earthfast.roadsys_heights_reads / roadsys_heights
 STRUCTURES_KERNEL = 603     # earthfast.RoadsysEnds / roadsys_handover_zone, road_exact's "ho" parts
 SURFACE_KERNEL = 606        # earthfast.roadsys_decks
+XSEC = os.environ.get("BNE_ROADSYS_XSEC", "off").strip().lower() == "on"
+XSEC_KERNEL = 610           # earthfast.RoadsysSegments(xsec=...), native/roadsys xsec.rs
 
 FRAME_Z = 8                 # the region frames' Web-Mercator zoom
 CUT = (4000.0, 2000.0)       # strokes cut at a joint past every line of this grid (m, offset): net.rs Opts
@@ -128,6 +137,33 @@ class _Cells:
         return tab
 
 
+_XSEP = "\x1f"
+
+
+def _xsec_text(feats, i):
+    """(BNE_ROADSYS_XSEC) feature i's cross-section tags as the kernels read them (native/roadsys xsec.rs parse):
+    "key=value" pairs sorted by key, joined by U+001F; the lane shards' street tags (railtags.XSEC_ATTR) with OSM's
+    width and sidewalk (osmtags) beside them; "" for a road without street tags."""
+    import railtags
+    col = feats.attrs.get(railtags.XSEC_ATTR)
+    t = col[i] if col is not None else None
+    if not t:
+        return ""
+    got = {str(k): str(v) for k, v in t.items()}
+    w = feats.attrs.get("osm_width")
+    if w is not None and w[i] is not None:
+        try:
+            v = float(w[i])
+            if np.isfinite(v) and v > 0:
+                got.setdefault("width", repr(v))
+        except (TypeError, ValueError):
+            pass
+    sw = feats.attrs.get("osm_sidewalk")
+    if sw is not None and sw[i] not in (None, ""):
+        got.setdefault("sidewalk", str(sw[i]))
+    return _XSEP.join(f"{k}={v}".replace(_XSEP, " ") for k, v in sorted(got.items()))
+
+
 def _ranges(rule, i, vals=False):
     if rule is None:
         return []
@@ -149,7 +185,7 @@ def _table(cell, feats, rows):
     keys = sorted(rows)
     lls = [np.asarray(rows[k]["ll"], np.float64) for k in keys]
     codes = countrybounds.bundled().codes_at([(ll[0, 1], ll[0, 0]) for ll in lls]) if keys else []
-    out = dict(ids=[], texts=[], nums=[], ints=[], ll=[], cons=[], rng=[], cell=cell)
+    out = dict(ids=[], texts=[], nums=[], ints=[], ll=[], cons=[], rng=[], cell=cell, xsec=[])
     for k, ll, code in zip(keys, lls, codes):
         r = rows[k]
         fid = k.split("|", 1)[0]
@@ -166,6 +202,7 @@ def _table(cell, feats, rows):
         else:
             spec = (0.0, 0.0, 0, "", 0)
         out["ids"].append(k)
+        out["xsec"].append(_xsec_text(feats, idx) if XSEC and idx is not None else "")
         out["texts"].append((str(code or ""), spec[3], str(r["turn"] or ""), str(r["turn_bw"] or ""), str(r["place"] or "")))
         out["nums"].append((spec[0], spec[1], float(r["kmh"]), float(r["lane_w"])))
         out["ints"].append((spec[2], spec[4], int(r["cls"]), 1 if r["link"] else 0, int(r["dir"]), int(r["lanes"]),
@@ -224,7 +261,7 @@ def _deck_depth(ll, a, b):
 def _segments(tables, frame, style):
     """earthfast.RoadsysSegments of the tables' segments in frame (every copy: the kernel keeps one)."""
     import fast
-    ids, cells, texts, nums, ints, lls, off = [], [], [], [], [], [], [0]
+    ids, cells, texts, nums, ints, lls, off, xs = [], [], [], [], [], [], [0], []
     con_seg, con_id, con_v, rng_seg, rng = [], [], [], [], []
     for tab in tables:
         if tab is None:
@@ -234,6 +271,7 @@ def _segments(tables, frame, style):
             ids.append(k)
             cells.append(tab["cell"])
             texts.append(tab["texts"][j])
+            xs.append(tab["xsec"][j] if XSEC and "xsec" in tab else "")
             nums.append(tab["nums"][j])
             ints.append(tab["ints"][j])
             lls.append(tab["ll"][j])
@@ -248,10 +286,14 @@ def _segments(tables, frame, style):
     ll = np.concatenate(lls) if lls else np.zeros((0, 2))
     e, n, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
     pts = np.ascontiguousarray(np.column_stack((e, n)), np.float64)
+    kw = {}
+    if XSEC:                # (the cross-section model on: every stroke's strips; the texts in the segments' digests)
+        fast.require(XSEC_KERNEL, "RoadsysSegments xsec")
+        kw["xsec"] = xs
     return fast._ef.RoadsysSegments(
         ids, cells, texts, np.asarray(nums, np.float64).reshape(-1, 4), np.asarray(ints, np.int64).reshape(-1, 9), pts,
         np.asarray(off, np.int64), np.asarray(con_seg, np.int64), con_id, np.asarray(con_v, np.int64),
-        np.asarray(rng_seg, np.int64), np.asarray(rng, np.float64).reshape(-1, 4), style)
+        np.asarray(rng_seg, np.int64), np.asarray(rng, np.float64).reshape(-1, 4), style, **kw)
 
 
 def _cells_of_boxes(frame, boxes):

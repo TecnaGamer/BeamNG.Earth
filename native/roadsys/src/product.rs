@@ -46,6 +46,10 @@ pub fn seg_digest(s: &Seg) -> u64 {
     for r in [&s.bridge, &s.tunnel] { b(&(r.len() as u64).to_le_bytes()); for &(x, y) in r.iter() { b(&x.to_bits().to_le_bytes()); b(&y.to_bits().to_le_bytes()); } }
     b(&(s.level.len() as u64).to_le_bytes());
     for &(x, y, v) in &s.level { b(&x.to_bits().to_le_bytes()); b(&y.to_bits().to_le_bytes()); b(&v.to_bits().to_le_bytes()); }
+    // (BNE_ROADSYS_XSEC: its cross-section tags and the model's version; nothing without them, the keys as before)
+    if !s.xsec.is_empty() {
+        b(b"xsec"); b(&crate::xsec::XSEC_FORMAT.to_le_bytes()); b(&(s.xsec.len() as u64).to_le_bytes()); b(s.xsec.as_bytes());
+    }
     h
 }
 

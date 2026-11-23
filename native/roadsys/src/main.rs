@@ -142,9 +142,11 @@ fn main() {
         return;
     }
     if args.len() < 3 { eprintln!("usage: roadsys PLACE.bin OUTDIR [--reverse] [--repeat N] [--cold] [--cold-repeat N] [--halo M] [--tag NAME]"); std::process::exit(2); }
-    let place = io::read(&args[1]).unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
+    let mut place = io::read(&args[1]).unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
     let outdir = &args[2];
     let flag = |f: &str| args.iter().any(|a| a == f);
+    // (BNE_ROADSYS_XSEC) a format-4 place holds the cross-section tags and builds with the model; --no-xsec without
+    if flag("--no-xsec") { place.xsec = false; for s in place.segs.iter_mut() { s.xsec.clear(); } }
     let val = |f: &str, d: f64| args.iter().position(|a| a == f).and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(d);
     let tag = args.iter().position(|a| a == "--tag").and_then(|i| args.get(i + 1)).cloned().unwrap_or_default();
     let reverse = flag("--reverse");
@@ -326,6 +328,32 @@ fn main() {
     pl.extend_from_slice(&(chk.holes.len() as u32).to_le_bytes());
     for h in &chk.holes { pl.extend_from_slice(&(h[0] as f32).to_le_bytes()); pl.extend_from_slice(&(h[1] as f32).to_le_bytes()); }
     std::fs::write(format!("{}/{}.plan", outdir, name), &pl).ok();
+    // (BNE_ROADSYS_XSEC) --widths: the strokes' cross-sections every 10 m (away from their ends), for the width checks
+    if let Some(i) = args.iter().position(|a| a == "--widths") {
+        let mut w = String::from("stroke,fid,s,x,y,nx,ny,left,right,lanes,strips,shoulders,cls,urban,xsec,tags\n");
+        let mut off = Vec::new();
+        for (si, st) in r.net.strokes.iter().enumerate() {
+            if st.absorbed { continue; }
+            let len = st.len();
+            let mut s = 15.0;
+            while s < len - 15.0 {
+                let part = st.parts.iter().find(|p| s >= p.s0 && s <= p.s1).copied().unwrap_or(st.parts[0]);
+                let seg = &r.net.segs[r.net.edges[part.edge].seg];
+                st.offsets(s, &mut off);
+                let (p, n, _k) = st.row_frame(s, (off[0] - off[off.len() - 1]) / 2.0);
+                let (mut lanes, mut strips, mut sh) = (0.0, 0.0, 0.0);
+                for (k, sl) in st.slots.iter().enumerate() {
+                    let v = off[k] - off[k + 1];
+                    match sl.kind { net::K_LANE => lanes += v, net::K_SHOULDER => sh += v, xsec::K_PARK | xsec::K_CYCLE | xsec::K_BUFFER => strips += v, _ => {} }
+                }
+                let g = r.net.edges[part.edge].seg;
+                let _ = write!(w, "{},{},{:.1},{:.3},{:.3},{:.5},{:.5},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{}\n", si, seg.fid.split('|').next().unwrap_or(""), s, p[0], p[1], n[0], n[1],
+                               off[0], off[off.len() - 1], lanes, strips, sh, seg.cls_s, seg.urban as u8, !seg.xsec.is_empty() as u8, r.net.xs_tags.get(g).copied().unwrap_or(0));
+                s += 10.0;
+            }
+        }
+        std::fs::write(&args[i + 1], w).ok();
+    }
     let st = &r.net.stats;
     let ps = &r.prof.stats;
     let bs = &r.built.stats;
@@ -335,6 +363,7 @@ fn main() {
         "{{\"place\":\"{}\",\"tag\":\"{}\",\"reverse\":{},\"tiles\":{},\"tile_m\":{},\"place_hash\":\"{:016x}\",\
          \"place_cpu_s\":{{\"g1_network\":{:.4},\"layout\":{:.4},\"g3_profile\":{:.4},\"g4_surface\":{:.4},\"markings\":{:.4},\"g6_clip_all\":{:.4}}},\
          \"amortised\":{{{},{},{},{},{},{},{}}},\
+         \"xsec\":{{\"on\":{},\"segs\":{},\"shaped\":{},\"width\":{},\"reject\":{},\"fork_skip\":{}}},\
          \"net\":{{\"segs\":{},\"nodes\":{},\"edges\":{},\"strokes\":{},\"forks\":{},\"forks_at_grade\":{},\"forks_no_separation\":{},\"adds\":{},\"drops\":{},\"structures\":{},\"tunnels\":{},\"crossings\":{},\"unbridged\":{},\"nose_beyond\":{},\"floors_along\":{},\"km\":{:.1},\"km_core\":{:.1}}},\
          \"profile\":{{\"components\":{},\"tier_a\":{},\"tier_b\":{},\"knots\":{},\"biggest_knots\":{},\"biggest_km\":{:.1},\"rounds_max\":{},\"factor_fail\":{},\"floors\":{},\"floors_met\":{},\"floor_short_max_m\":{:.3},\"grade_viol\":{},\"comfort_viol\":{},\"couple_max_mm\":{:.2}}},\
          \"surface\":{{\"zones\":{},\"clusters\":{},\"cluster_cap\":{},\"absorbed\":{},\"zone_fallback_straight\":{},\"zone_fallback_hull\":{},\"zone_fail\":{},\"snap_ok\":{},\"snap_mismatch\":{},\"twin_capped\":{},\"twin_lane_overlap\":{},\"rows\":{},\"tris\":{},\"verts\":{},\"tris_per_tile_p50\":{},\"tris_per_tile_max\":{},\"verts_per_tile_p50\":{},\"verts_per_tile_max\":{},\"mark_pieces\":{},\"mark_fragments\":{}}},\
@@ -343,6 +372,7 @@ fn main() {
         place.name, tag, reverse, tiles.len(), TILE_M, place_hash,
         tmin[0], tmin[1], tmin[2], tmin[3], tmin[4], tiles.iter().map(|t| t.cpu).sum::<f64>(),
         stat3("g1_network", &t_g1), stat3("g3_profile", &t_g3), stat3("g4_surface", &t_g4), stat3("markings", &t_mk), stat3("g5_derived", &t_g5), stat3("g6_clip", &t_g6), stat3("total", &t_tot),
+        r.net.xsec_on, st.xsec_segs, st.xsec_shaped, st.xsec_width, st.xsec_reject, st.xsec_fork_skip,
         st.segs, st.nodes, st.edges, st.strokes, st.forks, st.forks_at_grade, st.forks_no_sep, st.adds, st.drops, st.structures, st.tunnels, st.crossings, st.unbridged, st.nose_beyond, st.along,
         all_len / 1000.0, tot_len / 1000.0,
         ps.components, ps.tier_a, ps.tier_b, ps.knots, ps.biggest_component_knots, ps.biggest_component_km, ps.rounds_max, ps.factor_fail, ps.crossings, ps.floors_met, ps.floor_short_max_m, ps.grade_viol, ps.comfort_viol, ps.couple_max_mm,

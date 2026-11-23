@@ -64,7 +64,7 @@ pub fn run_in(net: &Net, m: &Mesh, inside: &dyn Fn(P2) -> bool, sel: Option<&[bo
         if inside(cen) {
             c.tris_core += 1;
             c.paved_m2 += absf(ar);
-            if m.tag[k].kind == K_LANE { c.lane_m2 += absf(ar); }
+            if m.tag[k].kind == K_LANE || m.tag[k].kind == crate::xsec::K_BUS { c.lane_m2 += absf(ar); }
             let o = orient([m.v[t[0] as usize][0], m.v[t[0] as usize][1]], [m.v[t[1] as usize][0], m.v[t[1] as usize][1]], [m.v[t[2] as usize][0], m.v[t[2] as usize][1]]);
             if o == 0 { c.zero_area += 1; }
             if o < 0 { c.folded += 1; }
@@ -99,7 +99,7 @@ pub fn run_in(net: &Net, m: &Mesh, inside: &dyn Fn(P2) -> bool, sel: Option<&[bo
                 if gi.sup == SUP_TUNNEL || gj.sup == SUP_TUNNEL { continue; }
                 c.overlap_pairs += 1;
                 c.overlap_m2 += ar;
-                if gi.kind == K_LANE || gj.kind == K_LANE { c.overlap_lane_m2 += ar; }
+                if gi.kind == K_LANE || gj.kind == K_LANE || gi.kind == crate::xsec::K_BUS || gj.kind == crate::xsec::K_BUS { c.overlap_lane_m2 += ar; }
                 let (zi, zj) = (gi.piece & 0x8000_0000 != 0, gj.piece & 0x8000_0000 != 0);
                 let cause = if gi.piece == gj.piece { c.overlap_fold_m2 += ar; c.overlap_same_piece_pairs += 1; "same_piece" }
                     else if !zi && !zj { c.overlap_strip_strip_m2 += ar; "strip_strip" }

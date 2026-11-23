@@ -7648,7 +7648,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 604 (603 and 605 kept for other branches): cip (architecture v2's compact per-cell inputs: the lossless cell
     // codec of named arrays and blobs; cip_encode_cell, cip_cell_info, cip_decode; server/cip.py, tools/build_cip.py)
     cip::register(m)?;
-    m.add("VERSION", 607)?;
-    m.add("VERSION", 607)?;
+    // 610: RoadsysSegments(xsec=...): the road system's cross-sections from OSM's street tags (native/roadsys xsec.rs,
+    // BNE_ROADSYS_XSEC=on)
+    m.add("VERSION", 610)?;
     Ok(())
 }

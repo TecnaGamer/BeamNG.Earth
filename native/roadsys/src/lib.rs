@@ -22,6 +22,7 @@ pub mod prof;
 pub mod product;
 pub mod square;
 pub mod tile;
+pub mod xsec;
 
 /// Thread CPU seconds (timings only: nothing built reads them).
 #[cfg(target_os = "linux")]

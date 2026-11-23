@@ -30,6 +30,7 @@ pub struct Seg {
     pub tunnel: Vec<(f64, f64)>,
     pub level: Vec<(f64, f64, f64)>,
     pub depth: f64,          // (M3) m of slab and girders the deck builder draws under its structure (0: unknown, DECK_FULL_M)
+    pub xsec: String,        // (BNE_ROADSYS_XSEC) its cross-section tags, xsec.rs's text ("": none)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -83,13 +84,14 @@ pub struct Place {
     pub style: Style,
     pub segs: Vec<Seg>,
     pub dem: Dem,
+    pub xsec: bool,          // (BNE_ROADSYS_XSEC) the cross-section model on: every stroke gets its strip slots
 }
 
 impl Place {
     /// Everything but the segments (a place read from a subset of them).
     pub fn clone_meta(&self) -> Place {
         Place { name: self.name.clone(), lat: self.lat, lon: self.lon, core: self.core, halo: self.halo,
-                country: self.country.clone(), style: self.style.clone(), segs: Vec::new(), dem: Dem::default() }
+                country: self.country.clone(), style: self.style.clone(), segs: Vec::new(), dem: Dem::default(), xsec: self.xsec }
     }
 }
 
@@ -117,7 +119,7 @@ pub fn read(path: &str) -> Result<Place, String> {
     let mut r = R { b: &b, i: 0 };
     if r.take(8) != b"PT3PLACE" { return Err("not a PT3 place file".into()); }
     let ver = r.u32();
-    if ver != 3 { return Err(format!("format {} (want 3)", ver)); }
+    if ver != 3 && ver != 4 { return Err(format!("format {} (want 3 or 4)", ver)); }
     let mut p = Place { name: r.s(), ..Default::default() };
     p.lat = r.f64(); p.lon = r.f64(); p.core = r.f64(); p.halo = r.f64();
     p.country = r.s();
@@ -145,8 +147,10 @@ pub fn read(path: &str) -> Result<Place, String> {
         for _ in 0..nt { s.tunnel.push((r.f64(), r.f64())); }
         let nl = r.u32() as usize;
         for _ in 0..nl { s.level.push((r.f64(), r.f64(), r.f64())); }
+        if ver >= 4 { s.xsec = r.s(); }     // (format 4: the cross-section tags, the model on)
         p.segs.push(s);
     }
+    p.xsec = ver >= 4;
     let n = r.u32() as usize;
     let step = r.f64();
     let x0 = r.f64();
@@ -174,7 +178,8 @@ pub struct TileInput { pub place: Place, pub quad: [[f64; 2]; 4], pub id: (i32, 
 
 pub fn write_tile(t: &TileInput) -> Vec<u8> {
     let mut w = Wr(Vec::new());
-    w.0.extend_from_slice(b"RSTILE02");
+    // (RSTILE03: the cross-section model on, every segment's tags after its depth; RSTILE02 otherwise, as before)
+    w.0.extend_from_slice(if t.place.xsec { b"RSTILE03" } else { b"RSTILE02" });
     let st = &t.place.style;
     w.s(&st.centre); w.s(&st.left_edge);
     for v in [st.w, st.w_motorway, st.edge, st.edge_motorway, st.centre_urban.0, st.centre_urban.1, st.lane_urban.0,
@@ -197,6 +202,7 @@ pub fn write_tile(t: &TileInput) -> Vec<u8> {
         w.u32(s.level.len() as u32);
         for &(a, b, v) in &s.level { w.f64(a); w.f64(b); w.f64(v); }
         w.f64(s.depth);
+        if t.place.xsec { w.s(&s.xsec); }
     }
     for q in &t.quad { w.f64(q[0]); w.f64(q[1]); }
     w.i64(t.id.0 as i64); w.i64(t.id.1 as i64);
@@ -211,7 +217,8 @@ pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
     let mut r = R { b, i: 0 };
     if b.len() < 8 { return Err("not a roadsys tile input".into()); }
     let magic = r.take(8).to_vec();
-    let v2 = magic == b"RSTILE02";
+    let v3 = magic == b"RSTILE03";
+    let v2 = magic == b"RSTILE02" || v3;
     if !v2 && magic != b"RSTILE01" { return Err("not a roadsys tile input".into()); }
     let mut st = Style { centre: r.s(), left_edge: r.s(), ..Default::default() };
     st.w = r.f64(); st.w_motorway = r.f64(); st.edge = r.f64(); st.edge_motorway = r.f64();
@@ -236,6 +243,7 @@ pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
         let nl = r.u32() as usize;
         for _ in 0..nl { s.level.push((r.f64(), r.f64(), r.f64())); }
         if v2 { s.depth = r.f64(); }
+        if v3 { s.xsec = r.s(); }
         segs.push(s);
     }
     let mut quad = [[0.0; 2]; 4];
@@ -245,5 +253,5 @@ pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
     let cut = (r.f64(), r.f64());
     let ng = r.u32() as usize;
     let ground = (0..ng).map(|_| r.f64()).collect();
-    Ok(TileInput { place: Place { country, style: st, segs, ..Default::default() }, quad, id, frame, cut, ground })
+    Ok(TileInput { place: Place { country, style: st, segs, xsec: v3, ..Default::default() }, quad, id, frame, cut, ground })
 }

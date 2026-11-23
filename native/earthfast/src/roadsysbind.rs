@@ -25,18 +25,24 @@ fn section_of(sid: &str) -> Option<(&str, i64, i64)> {
 #[pymethods]
 impl RoadsysSegments {
     #[new]
-    #[pyo3(signature = (ids, cells, texts, nums, ints, pts, off, con_seg, con_id, con_v, rng_seg, rng, style))]
+    /// xsec (610, BNE_ROADSYS_XSEC): each segment's cross-section tags (native/roadsys xsec.rs's text); given, the
+    /// cross-section model is on (every stroke's strip slots) whatever the texts hold; None: off, as before.
+    #[pyo3(signature = (ids, cells, texts, nums, ints, pts, off, con_seg, con_id, con_v, rng_seg, rng, style, xsec = None))]
     #[allow(clippy::too_many_arguments)]
     fn new(ids: Vec<String>, cells: Vec<String>, texts: Vec<(String, String, String, String, String)>,
            nums: PyReadonlyArray2<'_, f64>, ints: PyReadonlyArray2<'_, i64>, pts: PyReadonlyArray2<'_, f64>,
            off: PyReadonlyArray1<'_, i64>, con_seg: PyReadonlyArray1<'_, i64>, con_id: Vec<String>,
            con_v: PyReadonlyArray1<'_, i64>, rng_seg: PyReadonlyArray1<'_, i64>, rng: PyReadonlyArray2<'_, f64>,
-           style: (String, String, f64, f64, f64, f64, (f64, f64), (f64, f64), (f64, f64), bool)) -> PyResult<Self> {
+           style: (String, String, f64, f64, f64, f64, (f64, f64), (f64, f64), (f64, f64), bool),
+           xsec: Option<Vec<String>>) -> PyResult<Self> {
         let n = ids.len();
         let (nums, ints, pts, off) = (nums.as_array(), ints.as_array(), pts.as_array(), off.as_slice()?);
         if cells.len() != n || texts.len() != n || nums.nrows() != n || nums.ncols() != 4 || ints.nrows() != n
             || ints.ncols() != 9 || pts.ncols() != 2 || off.len() != n + 1 || off[n] as usize != pts.nrows() {
             return Err(PyValueError::new_err("RoadsysSegments: inconsistent columns"));
+        }
+        if xsec.as_ref().map(|x| x.len() != n).unwrap_or(false) {
+            return Err(PyValueError::new_err("RoadsysSegments: xsec must hold one text per segment"));
         }
         let (con_seg, con_v, rng_seg) = (con_seg.as_slice()?, con_v.as_slice()?, rng_seg.as_slice()?);
         let rng = rng.as_array();
@@ -56,6 +62,7 @@ impl RoadsysSegments {
                 inferred: ints[[i, 0]], urban: ints[[i, 1]] != 0, cls: ints[[i, 2]], link: ints[[i, 3]] != 0, dir: ints[[i, 4]],
                 lanes: ints[[i, 5]], lfw: ints[[i, 6]], lbw: ints[[i, 7]], region: ints[[i, 8]],
                 pts: p, cons: Vec::new(), bridge: Vec::new(), tunnel: Vec::new(), level: Vec::new(), depth: 0.0,
+                xsec: xsec.as_ref().map(|x| x[i].clone()).unwrap_or_default(),
             });
         }
         for k in 0..con_id.len() {
@@ -117,7 +124,8 @@ impl RoadsysSegments {
         let segs: Vec<Seg> = keep.into_iter().map(|i| std::mem::take(&mut segs[i])).collect();
         let st = Style { centre: style.0, left_edge: style.1, w: style.2, w_motorway: style.3, edge: style.4, edge_motorway: style.5,
                          centre_urban: style.6, lane_urban: style.7, lane_motorway: style.8, double_centre: style.9 };
-        let place = Place { name: String::new(), country: segs.first().map(|s| s.code.clone()).unwrap_or_default(), style: st, segs, ..Default::default() };
+        let place = Place { name: String::new(), country: segs.first().map(|s| s.code.clone()).unwrap_or_default(), style: st, segs,
+                            xsec: xsec.is_some(), ..Default::default() };
         Ok(RoadsysSegments { place, dropped: (copies, parents, sections) })
     }
 
