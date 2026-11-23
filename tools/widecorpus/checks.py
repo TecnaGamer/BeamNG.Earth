@@ -401,7 +401,7 @@ def areas_input(path, quad, tris, lines, polys):
     paved, 1 hatched, 2 not road surface (sidewalks drawn over the paint)."""
     import struct
     with open(path, "wb") as f:
-        f.write(b"RSAREA01")
+        f.write(b"RSAREA02")
         f.write(np.asarray(quad, dtype="<f8").reshape(4, 2).tobytes())
         f.write(struct.pack("<I", sum(len(t) for _g, t in tris)))
         for gore, t in tris:
@@ -412,6 +412,9 @@ def areas_input(path, quad, tris, lines, polys):
         f.write(struct.pack("<I", len(lines)))
         for road in lines:
             xy = np.asarray(road["xy"], dtype="<f8").reshape(-1, 2)
+            # (the line's own record: where today's width came from, for the width rows)
+            tag = "|".join(str(road.get(k, "")) for k in ("id", "cls", "lanes", "urban", "width", "drive", "oneway")).encode()
+            f.write(struct.pack("<I", len(tag)) + tag)
             f.write(struct.pack("<dI", float(road["width"]), len(xy)))
             f.write(xy.tobytes())
         f.write(struct.pack("<I", len(polys)))

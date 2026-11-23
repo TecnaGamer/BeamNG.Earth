@@ -393,8 +393,8 @@ pub fn build_f(place: &Place, quad: [[f64; 2]; 4], id: (i32, i32), frame: u64, g
         let a = crate::areas::audit(&prep, quad, &tris, &lines);
         let f = &net.area_fit;
         json.pop();
-        let _ = write!(json, ",\"areas_on\":{},\"areas\":{},\"areas_fit\":{{\"strokes\":{},\"fitted\":{},\"stations\":{},\"valid\":{},\"no_area\":{},\"junction\":{},\"fork\":{},\"no_edge\":{},\"implausible\":{},\"outlier\":{},\"few\":{},\"clamped\":{},\"knots\":{}}}}}",
-                       area_on, a.json(), f.strokes, f.fitted, f.stations, f.valid, f.no_area, f.junction, f.fork, f.no_edge, f.implausible, f.outlier, f.few, f.clamped, f.knots);
+        let _ = write!(json, ",\"areas_on\":{},\"areas\":{},\"areas_fit\":{{\"strokes\":{},\"fitted\":{},\"stations\":{},\"valid\":{},\"no_area\":{},\"junction\":{},\"fork\":{},\"no_edge\":{},\"implausible\":{},\"outlier\":{},\"few\":{},\"clamped\":{},\"knots\":{},\"failed\":{}}}}}",
+                       area_on, a.json(), f.strokes, f.fitted, f.stations, f.valid, f.no_area, f.junction, f.fork, f.no_edge, f.implausible, f.outlier, f.few, f.clamped, f.knots, f.failed);
     }
     Out { json, hash: to.hash, bytes: to.bytes, piece_keys }
 }

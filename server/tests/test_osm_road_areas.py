@@ -211,7 +211,8 @@ class Product(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "a.bin")
             checks.areas_input(path, quad, [(False, t)], [dict(xy=[[-10.0, 0.0], [110.0, 0.0]], width=12.0)], polys)
-            got = json.loads(fast._ef.roadsys_areas_audit(open(path, "rb").read()))
+            with open(path, "rb") as f:
+                got = json.loads(fast._ef.roadsys_areas_audit(f.read()))
         self.assertGreater(got["iou"], 0.99)
         self.assertLessEqual(got["edge"]["secondary"]["p95"], 0.3)
 
@@ -227,7 +228,8 @@ class Osmium(unittest.TestCase):
 </osm>"""
         with tempfile.TemporaryDirectory() as d:
             src = os.path.join(d, "x.osm")
-            open(src, "w").write(xml)
+            with open(src, "w") as f:
+                f.write(xml)
             m = ba.build(src, os.path.join(d, "out"), log=lambda s: None)
             self.assertEqual(m["counts"]["polygons"], 1)
 

@@ -262,6 +262,15 @@ pub struct FitStats {
     pub few: usize,
     pub clamped: usize,
     pub knots: usize,
+    pub failed: usize,
+}
+
+impl FitStats {
+    fn add(&mut self, o: &FitStats) {
+        self.stations += o.stations; self.valid += o.valid; self.no_area += o.no_area; self.junction += o.junction;
+        self.fork += o.fork; self.no_edge += o.no_edge; self.implausible += o.implausible; self.outlier += o.outlier;
+        self.few += o.few; self.clamped += o.clamped;
+    }
 }
 
 /// The paved union's exit along the ray p + t d (t in (0, RAY_M]) over the polygons cand at level sup: paved = inside
@@ -330,7 +339,12 @@ pub fn fit(net: &mut Net, prep: &Prep) -> FitStats {
     for si in 0..net.strokes.len() {
         if net.strokes[si].absorbed { continue; }
         stats.strokes += 1;
-        if let Some((k, rows)) = fit_stroke(net, si, prep, &mut stats) {
+        // (a stroke the fit cannot take keeps the lane rules' widths: never a road lost to a polygon)
+        let mut one = FitStats::default();
+        let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fit_stroke(net, si, prep, &mut one)));
+        stats.add(&one);
+        let got = match got { Ok(g) => g, Err(_) => { stats.failed += 1; None } };
+        if let Some((k, rows)) = got {
             stats.fitted += 1;
             stats.knots += k.len();
             out.push((si, k, rows));
@@ -488,7 +502,7 @@ fn fit_stroke(net: &Net, si: usize, prep: &Prep, stats: &mut FitStats) -> Option
         let idx: Vec<usize> = if pass % 2 == 0 { (1..prog.len()).collect() } else { (0..prog.len().saturating_sub(1)).rev().collect() };
         for k in idx {
             if fixed[k] { continue; }
-            let j = if pass == 0 { k - 1 } else { k + 1 };
+            let j = if pass % 2 == 0 { k - 1 } else { k + 1 };
             let ds = absf(prog[k].0 - prog[j].0);
             let lim = SLOPE * ds;
             let wl = wl_of(prog[k].0, &mut off);
@@ -537,8 +551,11 @@ pub const HIST_BINS: usize = 100;       // 0.1 m bins up to EDGE_MAX (the last o
 #[derive(Clone, Copy)]
 pub struct STri { pub p: [P2; 3], pub gore: bool, pub minus: bool }
 
-/// A road centre line of the scene (the width check): its points and nominal width.
-pub struct CLine { pub p: Vec<P2>, pub width: f64 }
+/// A road centre line of the scene (the width check): its points, nominal width and a tag naming where that width
+/// came from, for the per-line width rows (labels: tools' width_labels): the product's strokes "segment id|class|mapped
+/// lanes|layout lanes|urban|country|paved width|driving width|one-way"; today's lines (checks.py) "segment id|class|
+/// lanes|urban|width|driving width|one-way".
+pub struct CLine { pub p: Vec<P2>, pub width: f64, pub tag: String }
 
 const B_G: u8 = 1;      // generated paved
 const B_GORE: u8 = 2;   // generated hatched
@@ -711,6 +728,10 @@ pub struct Audit {
     pub extra_split_m2: f64,
     pub lines: usize,
     pub lines_mapped: usize,
+    /// per centre line with mapped stations: (its tag, the mapped class most of its stations lie in, our chord's
+    /// median, the mapped chord's median, its nominal width, stations): the material for width priors by class and
+    /// region where nothing is mapped
+    pub line_rows: Vec<(String, u8, f64, f64, f64, usize)>,
 }
 
 impl Audit {
@@ -733,7 +754,12 @@ impl Audit {
         }
         let _ = write!(w, "\"islands\":{},\"islands_missed\":{},\"island_offset\":", self.islands, self.islands_missed);
         self.island_off.json(&mut w);
-        let _ = write!(w, ",\"extra_splits\":{},\"extra_split_m2\":{:.2},\"lines\":{},\"lines_mapped\":{}}}", self.extra_splits, self.extra_split_m2, self.lines, self.lines_mapped);
+        let _ = write!(w, ",\"extra_splits\":{},\"extra_split_m2\":{:.2},\"lines\":{},\"lines_mapped\":{},\"line_rows\":[", self.extra_splits, self.extra_split_m2, self.lines, self.lines_mapped);
+        for (i, r) in self.line_rows.iter().enumerate() {
+            let tag: String = r.0.chars().filter(|c| *c != '"' && *c != '\\' && !c.is_control()).collect();
+            let _ = write!(w, "{}[\"{}\",\"{}\",{:.2},{:.2},{:.2},{}]", if i > 0 { "," } else { "" }, tag, CLASS_NAMES[r.1 as usize], r.2, r.3, r.4, r.5);
+        }
+        w.push_str("]}");
         w
     }
 }
@@ -761,7 +787,7 @@ pub fn audit(prep: &Prep, quad: [P2; 4], tris: &[STri], lines: &[CLine]) -> Audi
     let mut a = Audit { polys: prep.p.len(), bad: prep.bad, by_class: prep.by_class, eval_m2: 0.0, mapped_m2: 0.0, gen_m2: 0.0, inter_m2: 0.0,
                         union_m2: 0.0, missing_m2: 0.0, extra_m2: 0.0, edge: (0..7).map(|_| Hist::new()).collect(),
                         width: (0..7).map(|_| Hist::new()).collect(), islands: 0, islands_missed: 0, island_off: Hist::new(),
-                        extra_splits: 0, extra_split_m2: 0.0, lines: 0, lines_mapped: 0 };
+                        extra_splits: 0, extra_split_m2: 0.0, lines: 0, lines_mapped: 0, line_rows: Vec::new() };
     if nx * ny > 40_000_000 { return a; }
     let mut g = Grid { x0, y0, nx, ny, b: vec![0; nx * ny], poly: vec![u32::MAX; nx * ny] };
     // the quad
@@ -895,6 +921,7 @@ pub fn audit(prep: &Prep, quad: [P2; 4], tris: &[STri], lines: &[CLine]) -> Audi
         a.lines += 1;
         if len < 2.0 * WIDTH_END_M + 1.0 { continue; }
         let mut any = false;
+        let (mut gws, mut mws, mut cls_n) = (Vec::new(), Vec::new(), [0usize; 10]);
         let n = ((len - 2.0 * WIDTH_END_M) / WIDTH_STEP).floor() as usize;
         for k in 0..=n {
             let s = WIDTH_END_M + k as f64 * WIDTH_STEP;
@@ -922,9 +949,18 @@ pub fn audit(prep: &Prep, quad: [P2; 4], tris: &[STri], lines: &[CLine]) -> Audi
             let cls = if g.poly[c] != u32::MAX { prep.p[g.poly[c] as usize].cls } else { A_NONE };
             a.width[0].add(gw - mw);
             if drivable(cls) { a.width[cls as usize].add(gw - mw); }
+            gws.push(gw);
+            mws.push(mw);
+            cls_n[cls as usize] += 1;
             any = true;
         }
-        if any { a.lines_mapped += 1; }
+        if any {
+            a.lines_mapped += 1;
+            let med = |v: &mut Vec<f64>| { v.sort_by(|x, y| x.partial_cmp(y).unwrap()); v[v.len() / 2] };
+            let cls = (0..10).max_by_key(|&c| (cls_n[c], std::cmp::Reverse(c))).unwrap_or(0) as u8;
+            let k = gws.len();
+            a.line_rows.push((l.tag.clone(), cls, med(&mut gws), med(&mut mws), l.width, k));
+        }
     }
     // islands
     for &i in &cand {
@@ -1022,7 +1058,7 @@ fn dilate(nx: usize, ny: usize, m: &[bool], r: usize) -> Vec<bool> {
 
 // ----------------------------------------------------------------------------- the CLI's audit input (default path)
 
-/// tools/widecorpus/checks.py's areas input ("RSAREA01", little endian): quad 8 x f64; u32 triangles, each u8 code (0
+/// tools/widecorpus/checks.py's areas input ("RSAREA01"; "RSAREA02": each line first its tag, u32 + UTF-8; little endian): quad 8 x f64; u32 triangles, each u8 code (0
 /// paved, 1 hatched, 2 not road surface: a sidewalk over the paint) + 6 x f64 (x, y of 3 corners); u32 lines, each f64 width, u32 points, points x 2 f64; u32 areas, each u64 key,
 /// u32 + value UTF-8, i64 layer, u8 flags, u32 rings, each u8 role, u32 points, points x 2 f64. Output: the audit's
 /// JSON.
@@ -1046,7 +1082,9 @@ pub fn run_input(b: &[u8]) -> Result<String, String> {
         }
     }
     let mut r = R { b, i: 0 };
-    if r.take(8)? != b"RSAREA01" { return Err("areas input: bad magic".into()); }
+    let magic = r.take(8)?.to_vec();
+    let v2 = magic == b"RSAREA02";
+    if !v2 && magic != b"RSAREA01" { return Err("areas input: bad magic".into()); }
     let mut quad = [[0.0; 2]; 4];
     for q in quad.iter_mut() { q[0] = r.f64()?; q[1] = r.f64()?; }
     let nt = r.count(49)?;
@@ -1061,12 +1099,13 @@ pub fn run_input(b: &[u8]) -> Result<String, String> {
     let nl = r.count(12)?;
     let mut lines = Vec::with_capacity(nl);
     for _ in 0..nl {
+        let tag = if v2 { let n = r.count(1)?; String::from_utf8_lossy(r.take(n)?).into_owned() } else { String::new() };
         let width = r.f64()?;
         let np = r.count(16)?;
         let mut p = Vec::with_capacity(np);
         for _ in 0..np { p.push([r.f64()?, r.f64()?]); }
         if p.iter().any(|v: &P2| !v[0].is_finite() || !v[1].is_finite()) || !width.is_finite() { return Err("areas input: non-finite line".into()); }
-        lines.push(CLine { p, width });
+        lines.push(CLine { p, width, tag: tag.clone() });
     }
     let na = r.count(25)?;
     let mut areas = Vec::with_capacity(na);
@@ -1113,7 +1152,13 @@ pub fn lines_of(net: &Net, d: Option<&[bool]>) -> Vec<CLine> {
     for (si, st) in net.strokes.iter().enumerate() {
         if st.absorbed || d.map(|v| !v[si]).unwrap_or(false) { continue; }
         st.offsets(st.len() / 2.0, &mut off);
-        out.push(CLine { p: st.line.p.clone(), width: off[0] - off[off.len() - 1] });
+        // (the stroke's middle part's map segment: what the labels name)
+        let mid = st.len() / 2.0;
+        let part = st.parts.iter().find(|q| mid >= q.s0 && mid <= q.s1).unwrap_or(&st.parts[0]);
+        let seg = &net.segs[net.edges[part.edge].seg];
+        let tag = format!("{}|{}|{}|{}|{}|{}|{:.2}|{:.2}|{}", seg.fid.split('|').next().unwrap_or(""), st.cls_s, seg.lanes,
+                          seg.inferred, if seg.urban { 1 } else { 0 }, seg.code, seg.pave, seg.drive, if st.oneway { 1 } else { 0 });
+        out.push(CLine { p: st.line.p.clone(), width: off[0] - off[off.len() - 1], tag });
     }
     out
 }
@@ -1168,7 +1213,7 @@ mod tests {
         let p = prepare(&[area]);
         let quad = [[0.0, -50.0], [100.0, -50.0], [100.0, 50.0], [0.0, 50.0]];
         let strip = |h: f64| vec![STri { p: [[0.0, -h], [100.0, -h], [100.0, h]], gore: false, minus: false }, STri { p: [[0.0, -h], [100.0, h], [0.0, h]], gore: false, minus: false }];
-        let line = vec![CLine { p: vec![[-10.0, 0.0], [110.0, 0.0]], width: 12.0 }];
+        let line = vec![CLine { p: vec![[-10.0, 0.0], [110.0, 0.0]], width: 12.0, tag: String::new() }];
         let a = audit(&p, quad, &strip(6.0), &line);
         assert!(a.inter_m2 / a.union_m2 > 0.99);
         assert!(a.edge[A_SECONDARY as usize].q(0.95) <= 0.3, "{}", a.json());
@@ -1242,6 +1287,22 @@ mod tests {
         // a polygon 40 m wide round a 9 m road (a square): implausible, no fit
         let wide = crate::net::build_opts(&road(vec![rect(2, "secondary", -300.0, -20.0, 300.0, 20.0)], false), &order, crate::net::Opts { areas: true, ..Default::default() });
         assert_eq!(wide.area_fit.fitted, 0);
+    }
+
+    #[test]
+    fn a_fit_held_to_junction_ends_settles() {
+        // both ends at junctions (held, not faded: the last knots are not neutral, every slope pass reaches them)
+        let mk = |fid: &str, a: [f64; 2], b: [f64; 2], c0: &str, c1: &str| crate::io::Seg {
+            fid: fid.into(), code: "DE".into(), cls_s: "secondary".into(), pave: 9.0, drive: 7.0, inferred: 2, urban: true, cls: 4,
+            dir: 0, lanes: 2, lfw: -1, lbw: -1, kmh: 50.0, lane_w: 3.5, pts: vec![a, b], cons: vec![(c0.into(), 0), (c1.into(), 1)], ..Default::default() };
+        let segs = vec![mk("m", [-300.0, 0.0], [300.0, 0.0], "j0", "j1"), mk("n0", [-300.0, 0.0], [-300.0, 200.0], "j0", "x0"),
+                        mk("s0", [-300.0, 0.0], [-300.0, -200.0], "j0", "x1"), mk("n1", [300.0, 0.0], [300.0, 200.0], "j1", "x2"),
+                        mk("s1", [300.0, 0.0], [300.0, -200.0], "j1", "x3")];
+        let p = crate::io::Place { segs, areas: vec![rect(2, "secondary", -300.0, -4.0, 300.0, 6.0)], ..Default::default() };
+        let order: Vec<usize> = (0..p.segs.len()).collect();
+        let on = crate::net::build_opts(&p, &order, crate::net::Opts { areas: true, ..Default::default() });
+        assert_eq!(on.area_fit.failed, 0);
+        assert!(on.area_fit.fitted >= 1, "{:?}", on.area_fit);
     }
 
     #[test]
