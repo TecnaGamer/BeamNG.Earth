@@ -49,6 +49,10 @@ BATHY = os.environ.get("BNE_NATURAL_BATHY", "off").strip().lower() == "on"
 VEG_ON = TREES or LEAF or GROUND or CLIFFS          # (the vegetation cells change: their own folder, veg_key)
 SWITCHES = ("BNE_NATURAL_TREES", "BNE_NATURAL_LEAF", "BNE_NATURAL_GROUND", "BNE_NATURAL_CLIFFS", "BNE_NATURAL_BATHY")
 
+# the evidence model's source ranks (~/bnge-tests/adaptiveplan/PLAN.md 2.1): each vegetation item carries the rank of
+# its being and place, its kind and its height (vegetation.Items.source / gsource / hsource) while a switch is on
+S_CORRECTION, S_MAPPED, S_MEASURED, S_DERIVED, S_PRIOR, S_DEFAULT = 0, 1, 2, 3, 4, 5
+
 # the land classes the generator reads (overture.LAYERS["land"]'s where)
 TREE_CLASSES = ("tree",)
 ROW_CLASSES = ("tree_row",)
@@ -290,12 +294,16 @@ def allow_table(mats, bare, beach=False):
     """paint_ground's allow table (256 x 256: a material over a land cover material): the mapped ground refines the
     rasters' (the user, 2026-11-23: poorly mapped places must not look worse; a coarse bare-rock polygon over an alpine
     meadow kept the meadow): rock, scree, sand, mud and the cliffs' bands only over ground the land cover found bare
-    (bare: the materials of no vegetation), a glacier's ice over all but forest, a beach's sand over grass too (its
-    berm: WorldCover reads many beaches as grass)."""
+    (bare: the materials of no vegetation) or wet (its mud: shaded rock read as water), a glacier's ice over all but
+    forest, a beach's sand over grass too (its berm: WorldCover reads many beaches as grass)."""
     t = np.zeros((256, 256), np.uint8)
     for m in ("rock", "loose", "sand", "mud", "grass"):
         t[mats[m], list(bare)] = 1
     t[mats["mud"], mats["mud"]] = 1
+    # (the land cover's water and wetland under mapped rock, scree or sand: WorldCover reads shaded rock in the Alps
+    # as water, Grindelwald's gorge; a real lake is never mapped as bare rock, and its bed is the sea carve's)
+    for m in ("rock", "loose", "sand"):
+        t[mats[m], mats["mud"]] = 1
     t[mats["snow"], :] = 1
     t[mats["snow"], mats["forest"]] = 0
     if beach:

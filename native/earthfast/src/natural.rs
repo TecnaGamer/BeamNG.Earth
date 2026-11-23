@@ -305,7 +305,8 @@ impl Grid<'_> {
 /// of a corridor in pixels, vegetation's), x0 y0 dx dy. bounds: the cell's (ex0, ey0, ex1, ey1): the trees in it are
 /// placed. tops (t, 2): the canopy's tree tops; sec: Web Mercator m per ground m; params: [row spacing m, dedupe
 /// minimum m, canopy search m, tree minimum m]; defaults: a height per slot. -> (x, y, height, crown radius (ground m),
-/// slot, from_row, keep_tops)
+/// slot, from_row, height source (the evidence model's rank: 1 its tag, 2 the canopy model, 3 its trunk's girth, 5 its
+/// species' usual), keep_tops)
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn natural_trees<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, slot: PyReadonlyArray1<'py, u8>,
@@ -319,7 +320,7 @@ pub fn natural_trees<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, slot
                           tops: PyReadonlyArray2<'py, f64>, sec: f64, params: Vec<f64>, defaults: Vec<f64>)
         -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f32>>,
                      Bound<'py, PyArray1<f32>>, Bound<'py, PyArray1<u8>>, Bound<'py, PyArray1<bool>>,
-                     Bound<'py, PyArray1<bool>>)> {
+                     Bound<'py, PyArray1<u8>>, Bound<'py, PyArray1<bool>>)> {
     if grid.len() != 4 || bounds.len() != 4 || params.len() != 4 || defaults.len() != S_COUNT {
         return Err(PyValueError::new_err("natural_trees: grid 4, bounds 4, params 4, defaults per slot"));
     }
@@ -371,20 +372,26 @@ pub fn natural_trees<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, slot
     // else its species' usual
     let mut hh = Vec::with_capacity(cands.len());
     let mut crr = Vec::with_capacity(cands.len());
+    let mut hsrc = Vec::with_capacity(cands.len());
     for c in &cands {
         let mut h = c.h;
+        let mut src = 1u8;
         if !h.is_finite() {
             let top = g.canopy_max(c.x, c.y, search_m * sec);
             if top >= tree_min_m {
                 h = top;
+                src = 2;
             } else if c.circ.is_finite() {
                 let dbh = c.circ / std::f64::consts::PI;
                 h = (3.0 + 28.0 * dbh).clamp(3.0, 35.0);
+                src = 3;
             } else {
                 let s = if (c.slot as usize) < S_COUNT { c.slot as usize } else { S_DECIDUOUS as usize };
                 h = defaults[s];
+                src = 5;
             }
         }
+        hsrc.push(src);
         let cr = if c.crown.is_finite() { c.crown / 2.0 } else { 0.12 * h + 1.0 };
         hh.push(h);
         crr.push(cr);
@@ -408,6 +415,7 @@ pub fn natural_trees<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, slot
     }
     // the cell's own: on its grid, never on a building / water / deck, out of a road's corridor
     let (mut ox, mut oy, mut oh, mut ocr, mut os, mut orow) = (vec![], vec![], vec![], vec![], vec![], vec![]);
+    let mut ohs = vec![];
     for (j, c) in cands.iter().enumerate() {
         if !(c.x >= bx0 && c.x < bx1 && c.y >= by0 && c.y < by1) {
             continue;
@@ -447,9 +455,10 @@ pub fn natural_trees<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, slot
         ocr.push(crr[j] as f32);
         os.push(c.slot);
         orow.push(c.row);
+        ohs.push(hsrc[j]);
     }
     Ok((ox.into_pyarray(py), oy.into_pyarray(py), oh.into_pyarray(py), ocr.into_pyarray(py), os.into_pyarray(py),
-        orow.into_pyarray(py), keep_tops.into_pyarray(py)))
+        orow.into_pyarray(py), ohs.into_pyarray(py), keep_tops.into_pyarray(py)))
 }
 
 /// Hashed choices of placed items at Web Mercator positions (x, y): (u1 .. u_k) per item, keyed on the decimetre

@@ -167,13 +167,22 @@ class Items:
     rank: np.ndarray            # float32 in [0, 1): thinning (a level shows those below its threshold)
     yaw: np.ndarray             # degrees
     scale: np.ndarray           # size variation (around 1)
+    # where each item comes from (natural.py: the evidence model's source ranks, natural.S_*), only while a
+    # BNE_NATURAL_* switch the cells see is on (None otherwise: the cells' files as before): its being and place,
+    # its species / group, its height
+    source: np.ndarray = None
+    gsource: np.ndarray = None
+    hsource: np.ndarray = None
 
     def __len__(self):
         return len(self.lon)
 
     def take(self, sel):
-        return Items(*(getattr(self, f)[sel] for f in ("lon", "lat", "height", "radius", "kind", "group",
-                                                       "rank", "yaw", "scale")))
+        out = Items(*(getattr(self, f)[sel] for f in ("lon", "lat", "height", "radius", "kind", "group",
+                                                      "rank", "yaw", "scale")))
+        if self.source is not None:
+            out.source, out.gsource, out.hsource = self.source[sel], self.gsource[sel], self.hsource[sel]
+        return out
 
 
 def _hash01(a, b, salt):
@@ -434,7 +443,7 @@ class Vegetation:
         fields = ("lon", "lat", "height", "radius", "kind", "group", "rank", "yaw", "scale")
         if p and os.path.exists(p):
             # (a damaged file, empty or cut short after a crash: removed and built again, staging.read_npz)
-            got = staging.read_npz(p, lambda f: Items(*(f[n] for n in fields)), "trees cell")
+            got = staging.read_npz(p, lambda f: _with_sources(Items(*(f[n] for n in fields)), f), "trees cell")
             if got is not None:
                 return got
         self._tl.dem_failed = False
@@ -446,7 +455,8 @@ class Vegetation:
             os.makedirs(os.path.dirname(p), exist_ok=True)
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
             with open(tmp, "wb") as fh:
-                np.savez_compressed(fh, **{n: getattr(items, n) for n in fields})
+                extra = {n: getattr(items, n) for n in SOURCE_FIELDS} if items.source is not None else {}
+                np.savez_compressed(fh, **{n: getattr(items, n) for n in fields}, **extra)
             staging.replace_cached(tmp, p)
         return items
 
@@ -656,6 +666,21 @@ class Vegetation:
             extra.append(self._mapped_items(mapped, lc, leaf, chm, near_water, (lat0 + lat1) / 2))
         if natural.CLIFFS and own_land is not None:
             extra.append(self._cliffs(own_land, solid, road, chm, (lat0 + lat1) / 2, (ex0, ey0, ex1, ey1)))
+        if natural.VEG_ON:              # (the sources, natural.S_*: the mapped refine the measured and the inferred)
+            S = natural
+            gs = S.S_PRIOR
+            if leaf is not None and len(tree):      # (a canopy tree's kind: its forest's mapped leaf type, else the region's)
+                tx, ty = _to3857(tree.lon, tree.lat)
+                c_ = np.clip(np.floor((tx - chm.x0) / chm.dx).astype(np.int64), 0, leaf.shape[1] - 1)
+                r_ = np.clip(np.floor((chm.y0 - ty) / chm.dy).astype(np.int64), 0, leaf.shape[0] - 1)
+                gs = np.where(leaf[r_, c_] != 0, S.S_MAPPED, S.S_PRIOR)
+            _sourced(tree, S.S_MEASURED, gs, S.S_MEASURED)      # (the canopy model's tops)
+            _sourced(scatter, S.S_PRIOR)                        # (hashed by the land cover's class)
+            _sourced(edge, S.S_PRIOR)
+            for part in (planted, hedges, rows):                # (rules on mapped land use: orchards, fields, vines)
+                _sourced(part, S.S_DERIVED, S.S_DERIVED, S.S_DEFAULT)
+            _sourced(bales, S.S_PRIOR)
+            extra = [p if p.source is not None else _sourced(p, S.S_MAPPED) for p in extra]
         return _concat_all([tree, scatter, edge, planted, hedges, rows, bales] + extra)
 
     # --- the mapped natural features (natural.py) ---------------------------------------------------------------
@@ -684,9 +709,8 @@ class Vegetation:
             np.ascontiguousarray(np.stack([tx, ty], axis=1), np.float64), float(sec),
             [natural.ROW_SPACING_M, natural.DEDUPE_M, natural.CANOPY_SEARCH_M, natural.TREE_MIN_M],
             [natural.DEFAULT_H[s] for s in natural.SPECIES])
-        x, y, height, radius, sl, from_row, keep = got
-        # (each placed tree's own leaf code: its tags', a row's for its stations; natural_trees keeps their order)
-        return (x, y, height, radius, sl, from_row), np.asarray(keep, bool)
+        x, y, height, radius, sl, from_row, hsrc, keep = got
+        return (x, y, height, radius, sl, from_row, hsrc), np.asarray(keep, bool)
 
     def _leaf_raster(self, x, y, own_land, chm, shape):
         """The cell's forests' leaf codes on the canopy grid (land: forest / wood; land_use: forest), 0 none."""
@@ -703,10 +727,10 @@ class Vegetation:
     def _mapped_items(self, mapped, lc, leaf, chm, near_water, lat_c):
         """Items of the placed mapped trees: their species' groups (a generic one by the region's rules, its leaf type
         or the forest's around), hashed yaw / rank / size."""
-        x, y, height, radius, sl, from_row = mapped
+        x, y, height, radius, sl, from_row, hsrc = mapped
         n = len(x)
         if not n:
-            return _empty()
+            return _sourced(_empty(), natural.S_MAPPED)
         ef = natural.require()
         u = np.asarray(ef.natural_hash(np.ascontiguousarray(x, np.float64), np.ascontiguousarray(y, np.float64),
                                        [51, 52, 53, 54, 55]))
@@ -741,9 +765,13 @@ class Vegetation:
             group = np.where(generic, reg, group).astype(np.uint8)
             if code is not None:
                 group = np.where(generic, _leaf_groups(group, code, lat), group).astype(np.uint8)
-        return Items(lon, lat, np.asarray(height, np.float32), np.asarray(radius, np.float32),
-                     np.full(n, KIND_TREE, np.uint8), group, (0.5 * u[:, 2]).astype(np.float32),
-                     (u[:, 3] * 360.0).astype(np.float32), (0.85 + 0.3 * u[:, 4]).astype(np.float32))
+        gsrc = np.where(known, natural.S_MAPPED, natural.S_PRIOR)
+        if code is not None:
+            gsrc = np.where(~known & (code != 0), natural.S_MAPPED, gsrc)
+        return _sourced(Items(lon, lat, np.asarray(height, np.float32), np.asarray(radius, np.float32),
+                              np.full(n, KIND_TREE, np.uint8), group, (0.5 * u[:, 2]).astype(np.float32),
+                              (u[:, 3] * 360.0).astype(np.float32), (0.85 + 0.3 * u[:, 4]).astype(np.float32)),
+                        natural.S_MAPPED, gsrc, hsrc)
 
     def _cliffs(self, own_land, solid, road, chm, lat_c, bounds):
         """Items of the rock-face pieces along the cell's mapped cliff lines (natural_cliff_*), in the cell's bounds."""
@@ -788,9 +816,10 @@ class Vegetation:
         x, y, yaw, hh, jit = x[own], y[own], np.asarray(yaw)[own], np.asarray(hh)[own], np.asarray(jit)[own]
         lon, lat = _to4326(x, y)
         n = len(x)
-        return Items(lon, lat, hh.astype(np.float32), (hh * 0.5).astype(np.float32), np.full(n, KIND_ROCK, np.uint8),
-                     np.full(n, G_CLIFF, np.uint8), (0.3 * jit).astype(np.float32), yaw.astype(np.float32),
-                     np.ones(n, np.float32))
+        return _sourced(Items(lon, lat, hh.astype(np.float32), (hh * 0.5).astype(np.float32),
+                              np.full(n, KIND_ROCK, np.uint8), np.full(n, G_CLIFF, np.uint8),
+                              (0.3 * jit).astype(np.float32), yaw.astype(np.float32), np.ones(n, np.float32)),
+                        natural.S_MAPPED, natural.S_MAPPED, natural.S_MEASURED)     # (its height: the elevation's)
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
@@ -948,6 +977,26 @@ def _thin(jj, ii, h, px, k=1.0):
     return jj[keep], ii[keep]
 
 
+SOURCE_FIELDS = ("source", "gsource", "hsource")
+
+
+def _with_sources(items, f):
+    """items with the sources a cell file holds (natural.py's switches on), else as it is."""
+    if all(n in f for n in SOURCE_FIELDS):
+        items.source, items.gsource, items.hsource = (np.asarray(f[n], np.uint8) for n in SOURCE_FIELDS)
+    return items
+
+
+def _sourced(items, source, gsource=None, hsource=None):
+    """items with every item's sources (natural.S_*: a rank, or an array of them)."""
+    n = len(items)
+    as8 = lambda v: np.ascontiguousarray(np.broadcast_to(np.asarray(v, np.uint8), (n,)))   # noqa: E731
+    items.source = as8(source)
+    items.gsource = as8(source if gsource is None else gsource)
+    items.hsource = as8(source if hsource is None else hsource)
+    return items
+
+
 def _empty():
     z = np.zeros(0)
     return Items(z, z, z.astype(np.float32), z.astype(np.float32), z.astype(np.uint8), z.astype(np.uint8),
@@ -955,8 +1004,11 @@ def _empty():
 
 
 def _concat(a, b):
-    return Items(*(np.concatenate([getattr(a, f), getattr(b, f)]) for f in
-                   ("lon", "lat", "height", "radius", "kind", "group", "rank", "yaw", "scale")))
+    out = Items(*(np.concatenate([getattr(a, f), getattr(b, f)]) for f in
+                  ("lon", "lat", "height", "radius", "kind", "group", "rank", "yaw", "scale")))
+    if a.source is not None and b.source is not None:
+        out.source, out.gsource, out.hsource = (np.concatenate([getattr(a, f), getattr(b, f)]) for f in SOURCE_FIELDS)
+    return out
 
 
 R = 6378137.0

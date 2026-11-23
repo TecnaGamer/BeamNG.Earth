@@ -147,6 +147,28 @@ class MappedTreesTest(unittest.TestCase):
         x = np.sort(on.lon) * 111320 * np.cos(np.radians(a[1]))
         self.assertGreater(np.diff(x).min(), 3.0, "no two on top of each other")
 
+    def test_sources_mapped_vs_inferred(self):
+        """Each item's evidence ranks (natural.S_*): the mapped trees 1, the canopy's 2, the scatter's 4; kept in the
+        cell's file; none while the switches are off."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d, mock.patch.multiple(natural, TREES=True, VEG_ON=True):
+            it = veg.Vegetation(self._md(), d).cell(KEY)
+            again = veg.Vegetation(self._md(), d).cell(KEY)        # (from the file)
+        self.assertIsNotNone(it.source)
+        np.testing.assert_array_equal(it.source, again.source)
+        np.testing.assert_array_equal(it.hsource, again.hsource)
+        pine = np.flatnonzero(it.group == veg.GROUPS.index("pine"))
+        self.assertEqual(it.source[pine].tolist(), [natural.S_MAPPED])
+        self.assertEqual(it.hsource[pine].tolist(), [natural.S_MAPPED], "its height from its tag")
+        oak = np.flatnonzero(it.group == veg.GROUPS.index("oak"))
+        self.assertEqual(it.hsource[oak].tolist(), [natural.S_DEFAULT], "no tag, no canopy: its species' usual")
+        canopy = (it.kind == veg.KIND_TREE) & (it.source != natural.S_MAPPED)
+        self.assertTrue(canopy.any() and (it.source[canopy] == natural.S_MEASURED).all())
+        bush = it.kind == veg.KIND_BUSH
+        self.assertTrue(set(it.source[bush].tolist()) <= {natural.S_MEASURED, natural.S_PRIOR})
+        off = veg.Vegetation(FakeMapData(), None).cell(KEY)
+        self.assertIsNone(off.source)
+
     def test_deterministic(self):
         with mock.patch.multiple(natural, TREES=True, VEG_ON=True):
             a = veg.Vegetation(self._md(), None).cell(KEY)
