@@ -34,8 +34,9 @@ import geotiles  # noqa: E402
 
 LAT, LON = 39.2834, -76.5934
 BRIDGE_LAT, BRIDGE_LON = 39.2617, -76.611        # (Baltimore's Hanover Street bridge: a square with far bridge pieces)
-CACHE = os.path.expanduser("~/.cache/beamng-earth")
-HAVE_DATA = os.path.isdir(os.path.join(CACHE, "mapdata")) and os.environ.get("BNGE_FARGEO_REAL", "1") != "0"
+from geo_test_cache import SOURCE, work_cache
+
+HAVE_DATA = os.path.isdir(os.path.join(SOURCE, "mapdata")) and os.environ.get("BNGE_FARGEO_REAL", "1") != "0"
 ROADS_LUA = Path(__file__).resolve().parents[2] / "mod/beamng_earth/lua/ge/extensions/beamngEarth/roads.lua"
 
 
@@ -272,9 +273,10 @@ class RealDataTest(unittest.TestCase):
             lon_b = LON + 15000.0 / (111320.0 * math.cos(math.radians(LAT)))
             outs = []
             for i, (alat, alon) in enumerate(((LAT, LON), (LAT, lon_b))):
-                r = subprocess.run([sys.executable, os.path.join(here, "fargeo_content.py"), os.path.join(tmp, str(i)),
-                                    str(LAT), str(LON), str(BRIDGE_LAT), str(BRIDGE_LON), str(alat), str(alon)],
-                                   capture_output=True, text=True, timeout=1200)
+                with work_cache() as cache:
+                    r = subprocess.run([sys.executable, os.path.join(here, "fargeo_content.py"), os.path.join(tmp, str(i)),
+                                        str(LAT), str(LON), str(BRIDGE_LAT), str(BRIDGE_LON), str(alat), str(alon)],
+                                       env=dict(os.environ, BNGE_GEO_WORK_CACHE=cache), capture_output=True, text=True, timeout=1200)
                 self.assertEqual(r.returncode, 0, r.stderr[-2000:])
                 outs.append(r.stdout)
             self.assertTrue(outs[0].strip(), "content written")
@@ -299,7 +301,10 @@ class RealDataTest(unittest.TestCase):
         self.addCleanup(setattr, railways, "COARSE_AT", railways.COARSE_AT)
         self.addCleanup(setattr, bw, "_s", getattr(bw, "_s", None))
         revisit.ON = False
-        bw._s = bw._State(CACHE, True, True, True, True, True, True, True)
+        copy = work_cache()
+        cache = copy.__enter__()
+        self.addCleanup(copy.__exit__, None, None, None)
+        bw._s = bw._State(cache, True, True, True, True, True, True, True)
         raw = lambda la, lo: bw.ground(None, la, lo, bw._s.dem.sample(la, lo, 15))     # noqa: E731
         sx, sy = geotiles.tile_of(LAT, LON, geotiles.SKY_Z)
         keys = geotiles.children(sx, sy, geotiles.SKY_Z, geotiles.FAR_Z)

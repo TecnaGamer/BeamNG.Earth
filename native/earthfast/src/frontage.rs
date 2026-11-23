@@ -309,3 +309,6 @@ impl FrontageCoverage {
         self.shapes.len()
     }
 }
+
+#[path = "town_paving.rs"]
+pub mod town;

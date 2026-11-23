@@ -21,6 +21,7 @@ import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back be
 import argparse  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
+import serverlog  # noqa: E402
 import math  # noqa: E402
 import dmath  # noqa: E402
 import multiprocessing  # noqa: E402
@@ -172,7 +173,14 @@ def main():
     ap.add_argument("--cache", required=True, help="this helper's own cache folder (the map data, DEM, its plans)")
     ap.add_argument("--procs", type=int, default=max(1, (os.cpu_count() or 2) // 2))
     a = ap.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    serverlog.configure(logging.INFO)
+    try:
+        run(a)
+    finally:
+        serverlog.shutdown()
+
+
+def run(a):
     import mpshare
     import plancache
     os.makedirs(a.cache, exist_ok=True)

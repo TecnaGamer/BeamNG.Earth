@@ -31,9 +31,12 @@ MOD_SETTINGS = ["quality", "trees", "treeDistance", "groundCover", "groundCoverD
                 "nightLights", "distantTraffic", "distantTrafficQuality", "viewDistanceMode", "viewDistanceKm",
                 "terrainDetail", "buildingDistance", "groundPhoto", "objectDetail", "roads", "clouds", "skyMode",
                 "mapStyle", "framePacing", "teleportPriority"]
+# the engine patches' states (enginepatches.lua: on / off / failed / none each; 2026-11-22, after BeamNG 0.40.6 dropped
+# two of them for every Linux player unseen)
+ENGINE_PATCHES = ["gcpatch", "texkeep", "terfast", "dtsmooth"]
 SETUP_NAMES = {**dict.fromkeys(("v", "cpu", "cores", "threads", "gpu", "vramGB", "ramGB", "api", "os",
                                 "windowSystem", "res", "hz", "game", "otherMods")),
-               "gameSettings": GAME_SETTINGS, "modSettings": MOD_SETTINGS}
+               "gameSettings": GAME_SETTINGS, "modSettings": MOD_SETTINGS, "enginePatches": ENGINE_PATCHES}
 KEEP_SUMMARIES = 4              # the mod's windows kept between reports (one a report at 5 minutes each)
 MEMORY_STEPS = (0, 512, 1024, 2048, 3072, 4096, 6144, 8192, 12288, 16384, 24576, 32768)
 CORE_STEPS = (0, 0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8, 12, 16)

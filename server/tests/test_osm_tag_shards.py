@@ -491,6 +491,27 @@ class MapDataUseTest(unittest.TestCase):
         with mock.patch.object(osmtags.OsmTags, "cell", return_value=({3: {}}, [])):
             self.assertEqual(md._osm_cell(mapcells.cell_of(LAT0, LON0), "demand"), ({3: {}}, []))
 
+    def test_a_closed_pool_is_raised_not_taken_for_no_tags(self):
+        # A process exiting with a roads build on a pool thread (gate 293): the shards' and the Layercake file's reads
+        # find their pools shut down. Answered "no tags", the cell's roads were stored without them for good
+        from concurrent.futures import ThreadPoolExecutor
+        closed = ThreadPoolExecutor(1)
+        closed.shutdown()
+
+        def read(*_a, **_k):
+            return closed.submit(lambda: None).result()
+        md = self.md()
+        sh = mock.Mock()
+        sh.tile.side_effect = read
+        md.osm_shards = sh
+        with mock.patch.object(osmtags.OsmTags, "cell", side_effect=read):
+            with self.assertRaisesRegex(RuntimeError, "cannot schedule new futures"):
+                md._osm_cell(mapcells.cell_of(LAT0, LON0), "demand")
+        sh.down.assert_not_called()
+        sh.tile.side_effect = osmtagshards.ShardError("boom")      # (a source's own failure: still optional)
+        with mock.patch.object(osmtags.OsmTags, "cell", side_effect=OSError("down")):
+            self.assertEqual(md._osm_cell(mapcells.cell_of(LAT0, LON0), "demand"), ({}, []))
+
     def test_the_shards_answer(self):
         md = self.md()
         sh = mock.Mock()

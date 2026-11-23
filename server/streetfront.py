@@ -112,7 +112,7 @@ def tags_of(feats, i):
     return tags if isinstance(tags, dict) else {}
 
 
-def _areas(frame, cells, box):
+def _areas(frame, cells, box, include_paving_holes=True):
     """Paved destination polygons and areas to leave open, in the tile's frame."""
     import plazas
     import surface
@@ -159,7 +159,8 @@ def _areas(frame, cells, box):
                         public_green.append(rings[0])
                 elif hard:
                     paved.append(rings[0])
-                    protected.extend(rings[1:])
+                    if include_paving_holes:
+                        protected.extend(rings[1:])
                     if (area or courtyard) and not (parking or square):
                         explicit.append((rings, mat))
                 elif cls in COMMERCIAL:
@@ -621,17 +622,17 @@ def widen_city_walks(walks, targets, rings, excluded, barriers, carriageways):
     return n
 
 
-def city_frontage(frame, tx, ty, md, walks, rings, items, carriageways, dense, z_at=None, redrape=False):
+def city_frontage(frame, tx, ty, md, walks, rings, items, carriageways, dense, z_at=None, redrape=False, drives=()):
     """Widen a city tile's sidewalks to its buildings outside Europe's details (widen_city_walks); the number."""
     import logging
     import roads
     import sidewalks
 
-    if not CITY_ON or not items or not walks:
+    if not CITY_ON or (not items and not (sidewalks.V2 and rings)) or not walks:
         return 0
     box = roads.tile_bbox(tx, ty)
     targets = city_targets(items, np.array(box[:2]), dense)
-    if not targets:
+    if not targets and not (sidewalks.V2 and rings):
         return 0
     try:
         features = [layer for key in roads.cells_of_tile(frame, tx, ty, CITY_FRONT_M + 2.)
@@ -643,6 +644,34 @@ def city_frontage(frame, tx, ty, md, walks, rings, items, carriageways, dense, z
     near = (box[0] - margin, box[1] - margin, box[2] + margin, box[3] + margin)
     areas = _areas(frame, features, near)
     barriers = barrier_lines(frame, features, near)
+    if sidewalks.V2:
+        import fast
+        fast.require(561, "sidewalk facade widths")
+        import buildings
+        # Both geotiles can see the mapped walls at a seam. A generated
+        # facade or inferred shop classification belongs to its centre tile.
+        targets = [r for r in targets if (r.min(axis=0) > np.asarray(box[:2]) + 10.).all()
+                   and (r.max(axis=0) < np.asarray(box[2:]) - 10.).all()]
+        targets.extend(buildings.near_rings(frame, tx, ty, md, margin=margin + 8., city_classes=CITY_CLASSES))
+        shapes = [(r, 1, True) for r in targets] + [(r, 2, True) for r in rings]
+        shapes.extend((r, 0, True) for r in (*areas[0], *areas[1]))
+        shapes.extend((line, False, False) for line in barriers)
+        # Paired carriageway edges, including parking aisles and garage access.
+        for line, half in ([(p, sp.width / 2) for _, sp, p, _ in carriageways] +
+                           [(np.asarray(ch["n"], np.float64), ch["w"] / 2) for ch in drives if len(ch.get("n", ())) > 1]):
+            for offset in (-half, half):
+                shapes.append((roads.offset_polyline(line, offset), False, False))
+        frontage = fast._ef.TownFrontage(shapes)
+        count = 0
+        for walk in walks:
+            if "pts" not in walk or any(walk.get(k) for k in ("median", "detached", "mapped", "bay_shifted")):
+                continue
+            curb, outward = sidewalks.run_geometry(walk["pts"], walk["side"], walk["w"], walk.get("end_n"))
+            widths = frontage.profile(curb, outward, walk["w"], walk.get("drives", ()), walk.get("junction", (False, False)))
+            if widths:
+                walk["front_widths"] = widths
+                count += 1
+        return count
     n = widen_city_walks(walks, targets, rings, areas[1], barriers, carriageways)
     if n:
         walks[:] = sidewalks.clear_overlaps(walks)

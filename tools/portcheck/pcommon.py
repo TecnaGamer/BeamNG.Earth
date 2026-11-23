@@ -4,6 +4,7 @@ The tools prove that a port step changed no output: they build the frozen corpus
 server, again with another, and compare the two outputs exactly.
 
   build.py    the plans and cell facts of every corpus place's map cells, in-process (plancmp, factcmp)
+  farfail.py  replay imagery outages and recovery on local and global far tiles (independent of the corpus cache)
   session.py  a real server session per place in the players' layout (the launcher's options, the mod's hello):
               every message and every file a message names (tilecmp, blkcmp, farcmp, msgcmp), and the run's plans
   plancmp.py  factcmp.py  tilecmp.py  blkcmp.py  farcmp.py  msgcmp.py: compare two outputs (exit 0: identical,
@@ -26,6 +27,8 @@ The usual round, on the mini PC (the plan: the corpus's caches sit there):
     python3 tools/portcheck/session.py --cache ... --out OUT --server-dir TREE/server
     python3 tools/portcheck/plancmp.py BEFORE OUT   (factcmp, tilecmp, blkcmp, farcmp, msgcmp the same way)
 """
+from contextlib import contextmanager, ExitStack
+from pathlib import Path
 import hashlib
 import json
 import os
@@ -124,15 +127,21 @@ def work_copy(src, dst):
     check_apart(src, dst)
     check_cache(src)
     check_cache(dst)
+    if not os.path.isdir(src):
+        raise SystemExit(f"missing corpus cache: {src}")
     if os.path.exists(dst):
         shutil.rmtree(dst)
     os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
-    if os.path.isdir(src):
-        # (macOS's cp has no --reflink: -c clones on APFS, the same copy-on-write idea)
+    # A reflink is an independent file. No derived output from an older run may seed this one.
+    if os.name == "nt":
+        shutil.copytree(src, dst)
+    else:
         subprocess.run(["cp", "-cR", src, dst] if sys.platform == "darwin" else ["cp", "-a", "--reflink=auto", src, dst],
                        check=True)
-    else:
-        os.makedirs(dst)
+    for name in (*DERIVED, "bake"):
+        path = os.path.join(dst, name)
+        if os.path.isdir(path):
+            shutil.rmtree(path)
     return dst
 
 
@@ -235,7 +244,7 @@ def npz_diff(pa, pb, limit=5):
                 elif n == "meta" or a.dtype.kind in "SUV" or (a.dtype == np.uint8 and a.ndim == 1):
                     try:
                         ja, jb = json.loads(bytes(a).decode("utf-8")), json.loads(bytes(b).decode("utf-8"))
-                        out += [f"{n}{p[1:]}: {x} vs {y}" for p, x, y in json_diff(ja, jb, "$", limit)]
+                        out += [f"{n}{p[1:]}: {x} vs {y}" for p, x, y in json_diff(ja, jb, "$", limit)] or [f"{n}: bytes differ"]
                     except (ValueError, UnicodeDecodeError):
                         out.append(f"{n}: bytes differ")
                 else:
@@ -326,7 +335,11 @@ class Report:
                       file=out)
         print(f"{self.what}: {self.same} identical, {self.differ} differ, {len(self.only_a)} only in A, "
               f"{len(self.only_b)} only in B", file=out)
-        return 1 if self.differ else 2 if (self.only_a or self.only_b) else 0
+        if self.differ:
+            return 1
+        if self.only_a or self.only_b or not self.same:
+            return 2
+        return 0
 
 
 def compare_trees(a, b, sub, rep, select=None):
@@ -341,8 +354,109 @@ def compare_trees(a, b, sub, rep, select=None):
                     got[rel] = os.path.join(d, n)
         return got
     la, lb = listing(a), listing(b)
+    if not la and not lb:
+        rep.item(sub, ["no files on either side"])
     for rel in sorted(set(la) & set(lb)):
         rep.item(rel, file_diff(la[rel], lb[rel]))
     rep.only("A", sorted(set(la) - set(lb)))
     rep.only("B", sorted(set(lb) - set(la)))
     return rep
+
+
+@contextmanager
+def output_lock(root, writing):
+    """Readers exclude writers. The lock file stays at the same inode between runs."""
+    stamp = Path(root) / ".portcheck.lock"
+    try:
+        fh = stamp.open("a+b" if writing else "rb")
+    except FileNotFoundError:
+        if writing:
+            raise
+        # Legacy and read-only comparisons need no new files. Detect a writer which
+        # introduced the first lock while this reader was inspecting its results.
+        yield
+        if stamp.exists():
+            raise SystemExit(f"portcheck output changed during comparison: {root}")
+        return
+    with fh:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK if writing else msvcrt.LK_NBRLCK, 1)
+            else:
+                import fcntl
+                mode = fcntl.LOCK_EX if writing else fcntl.LOCK_SH
+                fcntl.flock(fh, mode | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise SystemExit(f"cannot lock portcheck output {root}: {exc}") from exc
+        yield
+
+
+@contextmanager
+def comparing(a, b):
+    check_comparison(a, b)
+    with ExitStack() as locks:
+        for root in (a, b):
+            locks.enter_context(output_lock(root, writing=False))
+        yield
+
+
+def publish_place(staging, out, name, kinds):
+    """Under the writer lock, replace this place. Its pending marker covers the entire group."""
+    for kind in kinds:
+        dest = Path(out) / kind / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            shutil.rmtree(dest)
+        os.replace(Path(staging) / kind / name, dest)
+
+
+def coverage_errors(index, expected_cells=None):
+    """Every demanded map cell needs a completed plan, including cells with zero roads."""
+    cells = index.get("cells")
+    if not isinstance(cells, list) or not cells:
+        return ["missing demanded cell inventory"]
+    plans = index["plans"]
+    errors = [f"{cell}: demanded plan missing" for cell in cells if cell.replace("/", "_") not in plans]
+    if expected_cells is not None and sorted(cells) != sorted(expected_cells):
+        errors.append("demanded cells differ from the frozen corpus")
+    if "road_features" in index:
+        counts = index["road_features"]
+        if not isinstance(counts, dict) or set(counts) != set(cells) or any(type(n) is not int or n < 0 for n in counts.values()):
+            errors.append("missing or invalid verified road feature counts")
+    errors.extend(f"{key}: short plan" for key, plan in plans.items() if plan.get("complete") is not True)
+    return errors
+
+
+def missing_fact_cells(cells, counts, directory):
+    """build.py names each stored fact kind_z_x_y_hash.json. Neighbours cannot cover a demanded cell."""
+    covered = set()
+    for path in Path(directory).glob("*.json"):
+        parts = path.stem.split("_")
+        if len(parts) == 5 and path.is_file():
+            covered.add("/".join(parts[1:4]))
+    return [f"{cell}: no facts stored or verified empty input" for cell in cells
+            if counts.get(cell) != 0 and cell not in covered]
+
+
+def check_comparison(a, b):
+    """Each comparison needs two independently recorded output trees."""
+    a, b = map(os.path.realpath, (a, b))
+    if _inside(a, b) or _inside(b, a):
+        raise SystemExit("comparison needs two separate output trees")
+
+def comparison_places(a, b, sub, selected):
+    """The full frozen corpus by default. An explicitly named subset is a partial comparison."""
+    names = set(selected or corpus()["places"])
+    if not selected:
+        for root in (a, b):
+            folder = os.path.join(root, sub)
+            if os.path.isdir(folder):
+                names.update(os.listdir(folder))
+    kind = "build" if sub in ("plans", "facts") else "session"
+    for name in sorted(names):
+        for root in (a, b):
+            if os.path.exists(os.path.join(root, f"{kind}-{name}.pending")):
+                raise SystemExit(f"incomplete {kind} for {name} in {root}")
+    return sorted(names)

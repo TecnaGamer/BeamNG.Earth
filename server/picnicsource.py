@@ -89,6 +89,10 @@ class Source:
             return t
 
     def _cell(self, key, kind):
+        import cip
+        got = cip.side_json(cip.any_reader(), "f:picnic", key)
+        if got is not None:             # (the cell's rows as the builder read them: CIP on)
+            return features_of([(int(fid), le, am, to, bytes.fromhex(g)) for fid, le, am, to, g in got])
         if self._down:
             return None
         for attempt in (0, 1):

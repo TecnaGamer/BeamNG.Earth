@@ -60,6 +60,42 @@ class ProvisionalFollowTest(unittest.TestCase):
         self.assertIsNone(r)                # (built within PROVISIONAL_FOLLOW_S of the check: no stand-in)
         self.assertEqual(self.checked, [(0.0, 0.0)])
 
+    def test_graded_winner_discards_only_the_losing_workers_files(self):
+        if earthd.PROVISIONAL_FOLLOW_S <= 0 or not earthd.PROVISIONAL_FIRST:
+            self.skipTest("provisional follow blocks off in this environment")
+        self.release.set()
+        s = self.conn.s
+        s.block_planned = lambda *args: False
+        s.out_dir = "out"
+        provisional = {"heightmap": "p.png", "ter": "p.ter", "layers": ["p_m0.png"], "base": "photo.jpg"}
+
+        async def go():
+            loop = asyncio.get_running_loop()
+            started, removed = asyncio.Event(), loop.create_future()
+            release = threading.Event()
+
+            def worker(*args):
+                loop.call_soon_threadsafe(started.set)
+                if not release.wait(10):
+                    raise TimeoutError("the graded reply was held up")
+                return provisional
+
+            s.make_provisional_follow = worker
+            s.remove_off_loop = lambda paths: removed.set_result(list(paths))
+            job = loop.create_future()
+            follow = asyncio.create_task(earthd.Connection.provisional_follow(self.conn, self.anchor, 0., 0., job))
+            try:
+                await asyncio.wait_for(started.wait(), 10)
+                job.set_result({"heightmap": "g.png", "ter": "g.ter"})
+                self.assertIsNone(await asyncio.wait_for(follow, 10))
+                self.assertFalse(removed.done())
+            finally:
+                release.set()
+            names = [os.path.basename(p) for p in await asyncio.wait_for(removed, 10)]
+            self.assertCountEqual(names, ["p.png", "p.ter", "p_m0.png"])
+            self.assertFalse(s.prov_info)
+        asyncio.run(go())
+
     def test_stuck_check_starts_the_stand_in(self):
         """A plan check stuck past PROVISIONAL_FOLLOW_S (the pool busy for good) counts as planned: the stand-in is
         made after the follow wait, not after the check."""

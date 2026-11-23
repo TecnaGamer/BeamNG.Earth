@@ -304,3 +304,119 @@ pub fn mip_levels_fast<'py>(py: pyo3::Python<'py>, rgb: numpy::PyReadonlyArray3<
 pub fn bc1_ispc_linked() -> bool {
     ispc_linked()
 }
+
+use numpy::{IntoPyArray, PyArray3, PyReadonlyArray1, PyReadonlyArray3};
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
+
+/// Weight of the forest floor at each mip, in log2 metres (shared by the BC1 and BC7 photo encoders).
+#[pyfunction]
+fn fade_weights(mut texel: f64, levels: usize, near: f64, far: f64) -> Vec<f64> {
+    let span = libm::log2(far / near);
+    (0..levels).map(|_| {
+        let weight = if texel > 0.0 { (libm::log2(far / texel) / span).clamp(0.0, 1.0) } else { 1.0 };
+        texel *= 2.0;
+        weight
+    }).collect()
+}
+
+fn mix(a: ArrayView3<u8>, c: ArrayView3<u8>, q: u32) -> Array3<u8> {
+    numpy::ndarray::Zip::from(a).and(c).map_collect(|&x, &y| {
+        ((y as u32 * (256 - q) + x as u32 * q + 128) >> 8) as u8
+    })
+}
+
+#[pyfunction]
+fn photo_mix<'py>(py: Python<'py>, floor: PyReadonlyArray3<'py, u8>, canopy: PyReadonlyArray3<'py, u8>, q: u32)
+                  -> PyResult<Bound<'py, PyArray3<u8>>> {
+    let (a, c) = (floor.as_array(), canopy.as_array());
+    if a.shape() != c.shape() || q > 256 {
+        return Err(PyValueError::new_err("photo_mix: different image shapes or weight outside 0..256"));
+    }
+    Ok(py.detach(|| mix(a, c, q)).into_pyarray(py))
+}
+
+/// Apply all changed RGB texels to the canopy copy (roads, roofs and cliff paint survive the mip fade).
+#[pyfunction]
+fn photo_keep_painted<'py>(py: Python<'py>, before: PyReadonlyArray3<'py, u8>, after: PyReadonlyArray3<'py, u8>,
+                           canopy: PyReadonlyArray3<'py, u8>) -> PyResult<Bound<'py, PyArray3<u8>>> {
+    let (a, b, c) = (before.as_array(), after.as_array(), canopy.as_array());
+    if a.shape() != b.shape() || a.shape() != c.shape() || a.shape()[2] != 3 {
+        return Err(PyValueError::new_err("photo_keep_painted: expected three RGB images of the same shape"));
+    }
+    let out = py.detach(|| {
+        let mut out = c.as_standard_layout().into_owned();
+        let (a, b) = (a.as_standard_layout(), b.as_standard_layout());
+        for ((old, new), dst) in a.as_slice().unwrap().chunks_exact(3).zip(b.as_slice().unwrap().chunks_exact(3))
+            .zip(out.as_slice_mut().unwrap().chunks_exact_mut(3)) {
+            if old != new {
+                dst.copy_from_slice(new);
+            }
+        }
+        out
+    });
+    Ok(out.into_pyarray(py))
+}
+
+/// imagery.encode_dds's legacy DXT1 and sRGB DX10 headers both use depth 0 and mip caps, including at 1x1.
+fn far_dds_header(w: usize, h: usize, n: usize, srgb: bool) -> Vec<u8> {
+    let mut header = vec![0; if srgb { 148 } else { 128 }];
+    header[..4].copy_from_slice(b"DDS ");
+    for (offset, value) in [(4, 124), (8, 0xa1007), (12, h as u32), (16, w as u32),
+                            (20, (w.div_ceil(4) * h.div_ceil(4) * 8) as u32), (28, n as u32),
+                            (76, 32), (80, 4), (108, 0x401008)] {
+        header[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    header[84..88].copy_from_slice(if srgb { b"DX10" } else { b"DXT1" });
+    if srgb {
+        header[128] = 72; // DXGI_FORMAT_BC1_UNORM_SRGB
+        header[132] = 3;  // D3D10_RESOURCE_DIMENSION_TEXTURE2D
+        header[140] = 1;  // one array slice
+    }
+    header
+}
+
+type Fade<'a> = (ArrayView3<'a, u8>, f64, f64, f64);
+
+pub(crate) fn photo_dds(a: ArrayView3<u8>, lut: ArrayView1<f32>, sharpen: f32, srgb: bool, fade: Option<Fade>) -> Vec<u8> {
+    let levels = mip_levels_int(a, lut, sharpen);
+    let n = levels.len() + 1;
+    let mut out = far_dds_header(a.shape()[1], a.shape()[0], n, srgb);
+    let floor = std::iter::once(a.view()).chain(levels.iter().map(|l| l.view()));
+    if let Some((canopy, texel, near, far)) = fade {
+        let canopy_levels = mip_levels_int(canopy, lut, sharpen);
+        let crowns = std::iter::once(canopy.view()).chain(canopy_levels.iter().map(|l| l.view()));
+        for ((a, c), weight) in floor.zip(crowns).zip(fade_weights(texel, n, near, far)) {
+            let q = (weight * 256.0).round_ties_even() as u32;
+            out.extend(match q {
+                0 => bc1_blocks(c),
+                256 => bc1_blocks(a),
+                _ => bc1_blocks(mix(a, c, q).view()),
+            });
+        }
+    } else {
+        for image in floor {
+            out.extend(bc1_blocks(image));
+        }
+    }
+    out
+}
+
+#[pyfunction]
+fn encode_photo_dds<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, lut: PyReadonlyArray1<'py, f32>,
+                         sharpen: f32, srgb: bool, fade: Option<(PyReadonlyArray3<'py, u8>, f64, f64, f64)>)
+                         -> PyResult<Bound<'py, PyBytes>> {
+    let (a, lut) = (rgb.as_array(), lut.as_array());
+    let fade = fade.as_ref().map(|(c, t, near, far)| (c.as_array(), *t, *near, *far));
+    if a.is_empty() || a.shape()[2] != 3 || lut.len() != 256 || fade.as_ref().is_some_and(|f| f.0.shape() != a.shape()) {
+        return Err(PyValueError::new_err("encode_photo_dds: expected nonempty matching RGB images and a 256-entry LUT"));
+    }
+    let out = py.detach(|| photo_dds(a, lut, sharpen, srgb, fade));
+    Ok(PyBytes::new(py, &out))
+}
+
+pub fn register_photo(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(fade_weights, m)?)?;
+    m.add_function(wrap_pyfunction!(photo_mix, m)?)?;
+    m.add_function(wrap_pyfunction!(photo_keep_painted, m)?)?;
+    m.add_function(wrap_pyfunction!(encode_photo_dds, m)?)
+}

@@ -402,6 +402,11 @@ fn duplicates(ms: &[Member], idx: &Index) -> Vec<usize> {
     dup
 }
 
+/// The member each one duplicates (duplicates', the members' own index), for the abutments' end groups.
+pub(crate) fn member_duplicates(ms: &[Member]) -> Vec<usize> {
+    duplicates(ms, &Index::new(ms))
+}
+
 /// The pairs (i, j), i < j, that could be one structure whatever their heights and outlines: the edges of
 /// structure_groups_core's own tests in CLOSURE mode (every height 0, so every height limit holds; one outline round
 /// everything, so every BESIDE_OUTLINE candidate holds; every end free for END_ON whatever JOIN took it; no member
@@ -507,7 +512,7 @@ pub fn structure_groups_core(ms: &[Member], outlines: &[Vec<[f64; 2]>]) -> Out {
 }
 
 /// structure_groups_core; closure: structure_touch_core's mode (no duplicates, every end free for END_ON).
-fn groups_core(ms: &[Member], outlines: &[Vec<[f64; 2]>], closure: bool) -> Out {
+pub(crate) fn groups_core(ms: &[Member], outlines: &[Vec<[f64; 2]>], closure: bool) -> Out {
     let n = ms.len();
     let mut acc = Acc { ms, edges: BTreeMap::new(), rejected: BTreeMap::new(), conflicts: BTreeMap::new() };
     let idx = Index::new(ms);
@@ -667,7 +672,7 @@ pub fn structure_groups<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, o
 
 /// The members of the kernels' arrays (pts (P, 2 or 3): x y [z]; z NaN when 2 columns), checked.
 #[allow(clippy::too_many_arguments)]
-fn members(pts: &PyReadonlyArray2<f64>, off: &PyReadonlyArray1<i64>, half: &PyReadonlyArray1<f64>,
+pub(crate) fn members(pts: &PyReadonlyArray2<f64>, off: &PyReadonlyArray1<i64>, half: &PyReadonlyArray1<f64>,
            kind: &PyReadonlyArray1<i64>, level: &PyReadonlyArray1<f64>, fid: &PyReadonlyArray1<i64>,
            outside: Option<&PyReadonlyArray1<i64>>, cols: usize) -> PyResult<Vec<Member>> {
     let (pts, half, kind, level, fid) = (pts.as_array(), half.as_array(), kind.as_array(), level.as_array(),

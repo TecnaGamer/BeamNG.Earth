@@ -484,6 +484,52 @@ do
   G.CHECK_S, G.REROUTE_S = check, reroute
   beamngEarth_core, getPlayerVehicle = savedCore, savedGet
 end
+-- At speed the arrows are the route's line, its heights from rays onto the ground loaded then: a bridge deck that
+-- arrives later lifts them at the next check, not after another LINE_REBUILD_M (codex-speedlod, 130 mph).
+do
+  local savedCore, savedGet, savedGm, savedRay = rawget(_G, 'beamngEarth_core'), rawget(_G, 'getPlayerVehicle'),
+    rawget(_G, 'core_groundMarkers'), rawget(_G, 'castRayStatic')
+  local savedVec = rawget(_G, 'vec3')
+  vec3 = savedVec or function(x, y, z) return { x = x, y = y, z = z } end
+  local check = G.CHECK_S
+  G.CHECK_S = 0
+  local answer, serial, deck = nil, 0, nil
+  beamngEarth_core = { requestRoute = function() return true end,
+    takeRoute = function() local r = answer; answer = nil return r end, groundSerial = function() return serial end }
+  getPlayerVehicle = function() return nil end
+  local sets = 0
+  core_groundMarkers = { setPath = function() sets = sets + 1 return true end, routePlanner = { path = {} } }
+  -- the ground at 0 m; the deck (once loaded) 12 m up between 300 and 500 m east
+  castRayStatic = function(from, _, len)
+    if deck and from.x >= 300 and from.x <= 500 then return from.z - 12 end
+    return from.z
+  end
+  local anchor = { geodeticToEnu = function(_, lat, lon) return lon * 1000, lat * 1000, 0 end }
+  local player = { x = 0, y = 0, z = 0, vx = 58, vy = 0, lat = 0, lon = 0 }
+  G.setDestination(0, 3, 'East')
+  G.update(anchor, player)
+  answer = { points = { { 0, 0 }, { 0, 3 } }, dist = 3000, dur = 100 }
+  G.update(anchor, player)
+  local function deckZ()
+    for _, p in ipairs(core_groundMarkers.routePlanner.path) do
+      if p.pos.x >= 350 and p.pos.x <= 450 then return p.pos.z end
+    end
+  end
+  local n0 = G.lineSets or 0
+  T.check(n0 > 0 and math.abs(deckZ()) < 1e-9, 'line arrows at speed, on the ground under the bridge before its deck')
+  G.update(anchor, player)
+  T.check((G.lineSets or 0) == n0, 'nothing new: the line is not set again')
+  deck, serial = true, 1         -- the deck's road tile came: a collision rebuild
+  G.update(anchor, player)
+  T.check((G.lineSets or 0) == n0 + 1 and math.abs(deckZ() - 12) < 1e-9 and (G.lineRefreshes or 0) >= 1,
+    'the ground changed: set again at the next check, the arrows on the deck')
+  G.update(anchor, player)
+  T.check((G.lineSets or 0) == n0 + 1, 'and once only')
+  G.clear()
+  G.CHECK_S = check
+  beamngEarth_core, getPlayerVehicle, core_groundMarkers, castRayStatic = savedCore, savedGet, savedGm, savedRay
+  vec3 = savedVec
+end
 -- Marker simplification must not remove topology: nearby nodes may still be required edges.
 do
   local function node(x, links, z) return { pos = { x = x, y = 0, z = z or 0 }, links = links or {} } end

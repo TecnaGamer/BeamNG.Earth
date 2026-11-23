@@ -208,6 +208,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   once per area; `BNE_LOD2_ROOFS=off` turns it off.
   `BNE_GRADE_GUARD=on` (off by default; Settings > Experimental > Road steepness limit) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
+  `BNE_BATTER=vanilla` (off by default and not on the settings page yet: still to be checked in game) rolls the ground
+  beside roads and railways off in wide cut and fill slopes like the stock maps' (gentler in towns, stopping short of
+  buildings) instead of a narrow carved ribbon.
 - Smooth bends (on by default; `BNE_ROAD_SMOOTH=off` draws the roads as mapped): the map draws a bend as a few
   straight pieces, so roads had a visible corner at every vertex, and a banked racetrack's chords made a series of
   bumps. Each bend of a drivable road and racetrack is an arc tangent to both pieces (a motorway's gentle, a lane's
@@ -465,7 +468,10 @@ connection (the map is downloaded while you play).
    - **Linux, native game:** started with the engine patches (`tools/gcpatch`: grass kept across block moves,
      steady game speed (dtsmooth: no catch-up burst after a hitch), shorter ground block swaps (terfast), lighter
      frames after a swap (texkeep: unchanged ground textures kept)) already applied, no Steam launch options needed.
-     On Windows the launcher applies dtsmooth and terfast to the running game.
+     On Windows the launcher applies dtsmooth and terfast to the running game. The patches find the engine's code by
+     its instructions, so a game update that leaves those functions as they were keeps them; a patch that does not
+     apply (a game update changed its code) is named in the launcher's window and in a warning in the game, and the
+     game runs without it.
    - **Linux, Windows build under Proton:** the AppImage sees the Proton setting and starts that build through
      Steam (the server runs natively). The `.exe` also works inside the game's Proton prefix (for example with
      protontricks' launcher).

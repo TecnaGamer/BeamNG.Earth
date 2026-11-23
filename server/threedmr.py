@@ -49,6 +49,7 @@ import dnp
 from PIL import Image
 
 import cdae
+import fast
 import netfetch
 import staging
 
@@ -595,36 +596,20 @@ def model_position(model_id, cache_dir, iface=None, timeout=30.0, offline=False)
     return lat, lon, False, "api"
 
 
-_near_memo = {}  # (cache folder, info file name) -> (lat, lon) of its model (credited_near)
+_near_memo = {}  # cache directory -> native index of corrected, offline model positions
+
+
+def _credit_position(path, cache_dir, model_id):
+    with open(path) as f:
+        json.load(f)  # ignore an incomplete info file, even for a model with a shipped position override
+    return model_position(int(model_id), cache_dir, offline=True)[:2]
 
 
 def credited_near(lat, lon, range_m, cache_dir):
-    """Is a 3dmr.eu model within range_m metres of (lat, lon), as far as this cache knows (its info_<id>.json files,
-    at model_position's place)? Never a request: credits.feature_ids asks it every second (the overlay names the
-    library near a model; its CC BY 4.0 models ask for "3D Model Repository" as their attribution). False with the
-    models off."""
     if not enabled() or not cache_dir:
         return False
-    d = os.path.join(cache_dir, "threedmr_cache")
-    try:
-        names = os.listdir(d)
-    except OSError:
-        return False
-    for name in names:
-        if not (name.startswith("info_") and name.endswith(".json")):
-            continue
-        ll = _near_memo.get((d, name))
-        if ll is None:
-            try:
-                with open(os.path.join(d, name)) as f:
-                    json.load(f)            # (a whole file: model_position below reads it, never fetches)
-                mlat, mlon, _corrected, _source = model_position(int(name[5:-5]), cache_dir, offline=True)
-            except Exception:
-                continue
-            ll = _near_memo[(d, name)] = (float(mlat), float(mlon))
-        if _latlon_dist_m(lat, lon, ll[0], ll[1]) <= range_m:
-            return True
-    return False
+    fast.require(576, "credited_model_near")
+    return fast._ef.credited_model_near(_near_memo, lat, lon, range_m, cache_dir, _credit_position)
 
 
 # --- auto yaw from the OSM footprint --------------------------------------------------------

@@ -586,22 +586,22 @@ class StaleSwapTest(unittest.TestCase):
         with open(os.path.join(d, "old.ter"), "wb") as f:
             f.write(b"old ter")
         anchor = types.SimpleNamespace(id=7, stale=(gen,), stale_fresh=set(), stale_held=False, swap_gate=None)
-        server = types.SimpleNamespace(out_dir=d, hm=collections.OrderedDict({key: {"ter": "old.ter", "stale": "old"}}),
+        server = types.SimpleNamespace(out_dir=d, hm=collections.OrderedDict({key: {"heightmap": "hm.png", "ter": "old.ter", "stale": "old"}}),
                                        hm_committed=collections.deque([key]), hm_sent=collections.deque([key]),
-                                       ui_pool=None, is_abandoned=lambda aid: False, hm_suffix={},
-                                       _remove=lambda p: events.append(("removed", os.path.basename(p))))
-        server.hm_name = lambda k: f"hm{server.hm_suffix.get(k, '')}.png"
+                                       ui_pool=None, is_abandoned=lambda aid: False,
+                                       remove_off_loop=lambda paths: events.extend(("removed", os.path.basename(p)) for p in paths),
+                                       retire_terrain=lambda names: events.extend(("removed", n) for n in names))
 
         async def terrain(a, cx, cy, lane=None):
             events.append(("build", (a.id, cx, cy) in a.stale_fresh, bool(a.stale)))
             if build_fails:
                 raise RuntimeError("no block")
-            events.append(("built as", server.hm_name((a.id, cx, cy))))
-            with open(os.path.join(d, server.hm_name((a.id, cx, cy))), "wb") as f:
+            events.append(("built as", "new.png"))
+            with open(os.path.join(d, "new.png"), "wb") as f:
                 f.write(b"old heights" if block_same else b"new heights")
             with open(os.path.join(d, "new.ter"), "wb") as f:
                 f.write(b"old ter" if block_same else b"new ter")
-            info = {"ter": "new.ter"}
+            info = {"heightmap": "new.png", "ter": "new.ter"}
             server.hm[(a.id, cx, cy)] = info        # (as _hm_done)
             return info
         server.terrain = terrain
@@ -643,8 +643,7 @@ class StaleSwapTest(unittest.TestCase):
                                      signs=types.SimpleNamespace(refresh=lambda: events.append(("signs",))),
                                      terrain_msg=lambda k, info: {"cx": k[1], "cy": k[2], "ter": info["ter"]},
                                      spawn=lambda c: c.close(), SWAP_BUILD_S=5.0, SWAP_COMMIT_S=0.3)
-        conn._block_digest = lambda k, info: earthd.Connection._block_digest(conn, k, info)
-        conn._remove_later = lambda p: earthd.Connection._remove_later(conn, p)
+        conn._block_digest = earthd.Connection._block_digest.__get__(conn)
 
         class Inline:
             def submit(self, fn, *a):
@@ -670,13 +669,13 @@ class StaleSwapTest(unittest.TestCase):
         # the block was built as this version's while the anchor was still the older one's, and not shown meanwhile
         self.assertEqual(events[0], ("build", True, True))
         self.assertEqual(anchor.stale, ())
-        self.assertEqual(server.hm[key], {"ter": "new.ter"})
+        self.assertEqual(server.hm[key], {"heightmap": "new.png", "ter": "new.ter"})
         # built under names of its own: the shown block's files were never written over (the mod's rollback)
         built = next(e[1] for e in events if e[0] == "built as")
         self.assertNotEqual(built, "hm.png")
         with open(os.path.join(server.out_dir, "hm.png"), "rb") as f:
             self.assertEqual(f.read(), b"old heights")
-        self.assertEqual(server.hm_name(key), built, "and they are the block's names from the commit on")
+        self.assertEqual(server.hm[key]["heightmap"], built, "and they are the block's names from the commit on")
         self.assertIsNone(anchor.swap_gate, "the blocks' gate is open again")
         # the content, the trees and the signs only after the mod's commit
         self.assertLess(events.index(("tracker end", True)), events.index(("veg redo",)))
@@ -686,9 +685,9 @@ class StaleSwapTest(unittest.TestCase):
         ok, anchor, server, conn, sent, events, key = self.make(block_same=True)
         self.assertTrue(ok)
         self.assertNotIn("terrain_refresh", [m["type"] for m in sent])
-        self.assertEqual(server.hm[key], {"ter": "old.ter"}, "the mod's block: its mark gone, its .ter kept")
+        self.assertEqual(server.hm[key], {"heightmap": "hm.png", "ter": "old.ter"}, "the mod's block: its mark gone, its .ter kept")
         self.assertIn(("removed", "new.ter"), events)
-        self.assertEqual(server.hm_name(key), "hm.png", "its own files are the block's")
+        self.assertEqual(server.hm[key]["heightmap"], "hm.png", "its own files are the block's")
 
     def test_the_mod_cannot_commit_the_older_version_stays_whole(self):
         for kw in ({"mod_ok": False}, {"mod_answers": False}):
@@ -702,7 +701,7 @@ class StaleSwapTest(unittest.TestCase):
             self.assertNotIn(("veg redo",), events)
             self.assertIn(("removed", "new.ter"), events)
             self.assertIsNone(anchor.swap_gate)
-            self.assertEqual(server.hm_name(key), "hm.png", "the shown block's names are the key's again")
+            self.assertEqual(server.hm[key]["heightmap"], "hm.png", "the shown block's names are the key's again")
             with open(os.path.join(server.out_dir, "hm.png"), "rb") as f:
                 self.assertEqual(f.read(), b"old heights", "and its file is untouched: the mod can install it again")
 
@@ -714,15 +713,42 @@ class StaleSwapTest(unittest.TestCase):
         self.assertEqual(server.hm[key].get("stale"), "old")
 
     def test_block_requests_wait_behind_the_swap(self):
-        import inspect
+        import asyncio
+        from types import SimpleNamespace
         import earthd
-        src = inspect.getsource(earthd.Connection.prepare_terrain)
-        self.assertIn("swap_gate", src)
-        self.assertLess(src.index("await gate.wait()"), src.index("self.s.terrain(anchor, cx, cy)"))
-        # a block the older version lacks is built only once the swap is committed
-        self.assertIn("stale_wait_swap", inspect.getsource(earthd.Server.make_heightmap))
-        # and no ungraded stand-in under the older version's skins
-        self.assertIn('getattr(anchor, "stale", ())', inspect.getsource(earthd.Connection.provisional_follow))
+
+        async def request():
+            key = (7, 0.0, 0.0)
+            gate = asyncio.Event()
+            anchor = SimpleNamespace(id=7, stale=("old",), swap_gate=gate)
+            build = asyncio.get_running_loop().create_future()
+            graded = {"heightmap": "graded.png"}
+            stand_in = {"heightmap": "provisional.png"}
+            server = SimpleNamespace(anchors={7: anchor}, snap=float, grading=True,
+                                     layout=SimpleNamespace(block_at=lambda x, y: (x, y)),
+                                     hm_sent=[], prov_info={key: stand_in}, terrain=mock.Mock(return_value=build))
+            replies = []
+            conn = SimpleNamespace(s=server, active=7, block=(0.0, 0.0), terrain_wait=0,
+                                   _send_terrain_ready=lambda req, k, info: replies.append((req, k, info)))
+            conn.provisional_follow = earthd.Connection.provisional_follow.__get__(conn)
+            task = asyncio.create_task(earthd.Connection.prepare_terrain(
+                conn, {"requestId": 9, "anchorId": 7, "cx": 0.0, "cy": 0.0}))
+            await asyncio.sleep(0)
+            server.terrain.assert_not_called()
+            self.assertFalse(task.done())
+
+            gate.set()
+            await asyncio.sleep(0)
+            server.terrain.assert_called_once_with(anchor, 0.0, 0.0)
+            # Even a ready stand-in must stay hidden under the older generation's skins.
+            self.assertIsNone(await conn.provisional_follow(anchor, 0.0, 0.0, build))
+            self.assertFalse(replies)
+            build.set_result(graded)
+            await asyncio.wait_for(task, 1.0)
+            self.assertEqual(replies, [(9, key, graded)])
+
+        with mock.patch.object(earthd, "PROVISIONAL_FIRST", True), mock.patch.object(earthd, "PROVISIONAL_FOLLOW_S", 1.0):
+            asyncio.run(request())
 
 
 class _Loop:

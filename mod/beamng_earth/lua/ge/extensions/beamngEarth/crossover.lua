@@ -1,4 +1,5 @@
--- LOD swap transitions done with transforms only (docs/V1_2_DESIGN.md 2.5 C1/C2, 12 "P2").
+-- LOD swap transitions done with transforms only (docs/V1_2_DESIGN.md 2.5 C1/C2, 12 "P2"). Off by default since
+-- 2026-11-21 (CROSS = 0, COVER_SINK_S = 0): every swap is C1, never two LODs of the same ground drawn together.
 -- Pure math, runs under plain luajit.
 --
 -- C2, the two-phase vertical crossover (default): with Delta >= max|new - old| over the swapped area,
@@ -21,9 +22,16 @@ local M = {}
 local max, min, sqrt, atan, tan, rad, deg, acos, asin, floor = math.max, math.min, math.sqrt, math.atan, math.tan,
   math.rad, math.deg, math.acos, math.asin, math.floor
 
+-- CROSS = 0 (2026-11-21): every swap is instant (C1), in view or not. A crossover draws the old and the new tiles
+-- together for PHASE1_S + PHASE2_S over the same ground (two photo resolutions mixed in patches, z-fighting where
+-- they meet), and at 130 mph many ran at once ahead of the car: the user, "lower LODs stick around too long for
+-- buildings and terrain. Often you can see 2 LODs overlap". 1 brings the C2 crossover back.
+M.CROSS = 0
 M.PHASE1_S = 0.25          -- new tiles rise
 M.PHASE2_S = 0.25          -- old tiles sink
-M.COVER_SINK_S = 0.3       -- far tiles newly covered by the terrain block sink this long (phase 2 only)
+-- far tiles newly covered by the terrain block sink this long (phase 2 only); 0 (2026-11-21): they hide or drop under
+-- the block in its commit frame (a sinking tile is a second ground over the block for that long)
+M.COVER_SINK_S = 0
 M.MAX_GROUPS = 24          -- concurrent crossovers (transition cap)
 M.MARGIN_DEG = 10          -- frustum margin for the off-screen test
 M.NEAR_POP_M = 5000        -- at the cap, an in-view group nearer than this waits instead of popping

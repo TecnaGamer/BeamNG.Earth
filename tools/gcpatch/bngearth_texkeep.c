@@ -17,10 +17,12 @@
 // MAX_KEEP_MB, and all of them when the BeamNG.Earth level ends (the level flag gone). Every other caller and every
 // other level: the stock function, nothing kept.
 //
-// Exact build only (BeamNG.drive 0.40.4 Linux, the 2026-11-06 executable; ported from the 2026-10-29 one on 2026-11-13): the code and data it relies on are compared
-// byte for byte at startup (the vtable slots' relocated values, createTexture's prologue, both call sites,
-// requestDeleteTexture's and destroySelf's code); on any difference it does nothing and says why in
-// <user>/temp/beamngEarth_texkeep.txt. On by default; off: BNGEARTH_TEXKEEP_OFF=1 or BNGEARTH_TEXKEEP=0. BNGEARTH_TEXKEEP_DRY=1: installed but
+// Found by code, not by address (2026-11-22: BeamNG 0.40.6 moved a vtable by 0x20 and the old exact-address check
+// dropped texkeep for every player): createTexture, the pack loader (both call sites, fixed offsets in it), destroySelf
+// and requestDeleteTexture (destroySelf's callee) are matched against masked whole-function signatures
+// (bngearth_sigs.h, mksigs.py), each exactly once; the two call sites must load the same profile; the vtable slots are
+// the relocated data words holding createTexture's address. On any difference it does nothing and says why (and the
+// build id) in <user>/temp/beamngEarth_texkeep.txt. On by default; off: BNGEARTH_TEXKEEP_OFF=1 or BNGEARTH_TEXKEEP=0. BNGEARTH_TEXKEEP_DRY=1: installed but
 // never hands back a kept texture (counts and times the stock calls only: an A/B baseline with the same overhead).
 // BNGEARTH_TEXKEEP_LOG=1: one line per terrain pack call in <user>/temp/beamngEarth_texkeep.log.
 //
@@ -36,6 +38,7 @@
 //   while this thread owns the mutex calls requestDeleteTexture itself (what destroySelf does under the lock) instead of
 //   locking a second time.
 #include "bngearth_common.h"
+#include "bngearth_sigs.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <sys/mman.h>
@@ -45,36 +48,16 @@
 #define STATUS_FILE "beamngEarth_texkeep.txt"
 #define LOG_FILE "beamngEarth_texkeep.log"
 
-// BeamNG.drive 0.40 Linux (BinLinux/BeamNG.drive.x64 sha256 4fa0771d463ab31f...): vaddrs (PIE, base added at runtime)
-#define CREATE_TEXTURE 0xc6ece0UL       // GFXTextureManager::createTexture(const Path&, GFXTextureProfile*)
-#define REQUEST_DELETE 0xc6a630UL       // GFXTextureManager::requestDeleteTexture(GFXTextureObject*)
-#define DESTROY_SELF 0xc7d4d0UL         // GFXTextureObject::destroySelf (vtable[2] of the texture objects)
-#define SITE_CACHED_CALL 0x173f2dfUL    // lea rdx,[profile]; mov rsi,r15; mov rdi,r13; call rax  (cache file up to date)
-#define SITE_PACKED_CALL 0x173f70fUL    // lea rdx,[profile]; mov rsi,r15; mov rdi,r13; call rbx  (just re-packed)
+// The engine functions, found by their masked whole-function signatures (bngearth_sigs.h, mksigs.py; reference
+// BeamNG.drive 0.40.6 Linux, the 2026-11-19 executable). Offsets inside the matched pack loader (tk_loader):
+#define SITE_CACHED_OFF 0x69f           // lea rdx,[profile]; mov rsi,r15; mov rdi,r13; call rax  (cache file up to date)
+#define SITE_PACKED_OFF 0xacf           // lea rdx,[profile]; mov rsi,r15; mov rdi,r13; call rbx  (just re-packed)
 #define SITE_CALL_LEN 15
-static const uintptr_t VTABLE_SLOTS[3] = {0x4d6ad50UL, 0x4de3298UL, 0x4e2fcc8UL};   // slot 5 of the 3 managers' vtables
-
-static const unsigned char SIG_CREATE[24] = {
-    0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54,
-    0x53, 0x48, 0x81, 0xec, 0x28, 0x04, 0x00, 0x00};
-static const unsigned char SIG_SITE_CACHED[SITE_CALL_LEN] = {
-    0x48, 0x8d, 0x15, 0x5a, 0xe0, 0x7a, 0x03, 0x4c, 0x89, 0xfe, 0x4c, 0x89, 0xef, 0xff, 0xd0};
-static const unsigned char SIG_SITE_PACKED[SITE_CALL_LEN] = {
-    0x48, 0x8d, 0x15, 0x2a, 0xdc, 0x7a, 0x03, 0x4c, 0x89, 0xfe, 0x4c, 0x89, 0xef, 0xff, 0xd3};
-// requestDeleteTexture: the start, up to its use of +0x30 (name), +0x70 (delete time), +0x2c (weak count)
-static const unsigned char SIG_REQUEST_DELETE[64] = {
-    0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54,
-    0x49, 0x89, 0xf4, 0x53, 0x48, 0x89, 0xfb, 0x48, 0x8d, 0x7e, 0x30, 0x48, 0x83, 0xec, 0x08, 0xe8,
-    0x9c, 0x2a, 0xe0, 0xff, 0x41, 0x89, 0xc0, 0x31, 0xc0, 0x45, 0x84, 0xc0, 0x0f, 0x84, 0x16, 0x01,
-    0x00, 0x00, 0x4d, 0x8d, 0x6c, 0x24, 0x2c, 0x41, 0x89, 0x44, 0x24, 0x70, 0xf0, 0x41, 0x83, 0x44};
-// destroySelf, whole: rbx = obj+0x50 (device); lock rbx+0x88; rdi = [rbx+0xb0]; requestDeleteTexture; unlock
-static const unsigned char SIG_DESTROY_SELF[0x54] = {
-    0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5, 0x41, 0x55, 0x41, 0x54, 0x49, 0x89, 0xfc, 0x53,
-    0x48, 0x83, 0xec, 0x08, 0x48, 0x8b, 0x5f, 0x50, 0x4c, 0x8d, 0xab, 0x88, 0x00, 0x00, 0x00, 0x4c,
-    0x89, 0xef, 0xe8, 0x89, 0x8f, 0x99, 0xff, 0x85, 0xc0, 0x75, 0x29, 0x48, 0x8b, 0xbb, 0xb0, 0x00,
-    0x00, 0x00, 0x48, 0x85, 0xff, 0x74, 0x08, 0x4c, 0x89, 0xe6, 0xe8, 0x21, 0xd1, 0xfe, 0xff, 0x4c,
-    0x89, 0xef, 0xe8, 0x49, 0x8f, 0x99, 0xff, 0x48, 0x83, 0xc4, 0x08, 0x31, 0xc0, 0x5b, 0x41, 0x5c,
-    0x41, 0x5d, 0x5d, 0xc3};
+#define SITE_DISP 3                     // the lea's rip displacement (both: the same profile)
+#define DESTROY_REQ_REL 0x3b, 0x3f      // destroySelf: call requestDeleteTexture
+#define MAX_SLOTS 16                    // vtable slots holding createTexture (0.40.6: 3, one per texture manager)
+static const unsigned char SITE_CACHED_TAIL[8] = {0x4c, 0x89, 0xfe, 0x4c, 0x89, 0xef, 0xff, 0xd0};
+static const unsigned char SITE_PACKED_TAIL[8] = {0x4c, 0x89, 0xfe, 0x4c, 0x89, 0xef, 0xff, 0xd3};
 
 #define OBJ_REFS 0x10
 #define OBJ_DEVICE 0x50
@@ -93,11 +76,12 @@ typedef void *(*create_fn)(void *mgr, void *path, void *profile);
 typedef void (*request_delete_fn)(void *mgr, void *obj);
 typedef void (*destroy_fn)(void *obj);
 
-static uintptr_t g_base;
 static create_fn g_orig;
 static request_delete_fn g_request_delete;
 static uintptr_t g_ret_cached, g_ret_packed, g_destroy_self;
 static int g_dry, g_log;
+static uintptr_t g_main_base;
+static char g_found[256];                   // how the targets were found (the status line)
 static atomic_int g_on;                     // the level flag (watcher thread)
 
 struct entry { char *key; void *obj; void *vptr; unsigned long long used, gen; unsigned mb_est; };
@@ -231,7 +215,7 @@ static void *hook_create(void *mgr, void *path, void *profile) {
         if (g_log && path_key(path, profile, key, sizeof key) && strcasestr(key, "terrainmaterialcache")) {
             void *obj = g_orig(mgr, path, profile);
             char what[48];
-            snprintf(what, sizeof what, "other(%#lx)", (unsigned long)(ret - g_base));
+            snprintf(what, sizeof what, "other(%#lx)", (unsigned long)(ret - g_main_base));
             log_call(what, 0, key, obj, 0);
             return obj;
         }
@@ -343,10 +327,10 @@ static void status_line(char *msg, size_t n, const char *state) {
     unsigned long long hits = atomic_load(&st_hits), misses = atomic_load(&st_misses), packed = atomic_load(&st_packed);
     double miss_ms = atomic_load(&st_miss_ns) / 1e6, packed_ms = atomic_load(&st_packed_ns) / 1e6;
     snprintf(msg, n, "%s; kept %d (~%u MB est.); cached-pack calls: %llu hits, %llu %s (%.0f ms, %.2f ms each); "
-             "re-packed calls %llu (%.0f ms); evicted %llu, dropped %llu, foreign %llu",
+             "re-packed calls %llu (%.0f ms); evicted %llu, dropped %llu, foreign %llu (%s)",
              state, g_nkeep, atomic_load(&st_kept_mb), hits, misses, g_dry ? "stock (dry run)" : "misses", miss_ms,
              misses ? miss_ms / misses : 0.0, packed, packed_ms, (unsigned long long)atomic_load(&st_evicted),
-             (unsigned long long)atomic_load(&st_dropped), (unsigned long long)atomic_load(&st_foreign));
+             (unsigned long long)atomic_load(&st_dropped), (unsigned long long)atomic_load(&st_foreign), g_found);
 }
 
 // The level flag -> g_on; the status file every 2 s while something changed.
@@ -366,7 +350,7 @@ static void *watch(void *arg) {
         unsigned long long sum = atomic_load(&st_hits) + atomic_load(&st_misses) + atomic_load(&st_packed) +
                                  atomic_load(&st_evicted) + (unsigned long long)g_nkeep;
         if (on != last_on || (++tick % 8 == 0 && sum != last_sum)) {
-            char msg[512];
+            char msg[900];
             status_line(msg, sizeof msg, on ? (g_dry ? "applied (dry run: counting only), BeamNG.Earth level"
                                                      : "applied: terrain packs kept across rebuilds (BeamNG.Earth level)")
                                             : "stock: another level");
@@ -380,10 +364,48 @@ static void *watch(void *arg) {
     return NULL;
 }
 
-static int same(const struct bnge_main *m, uintptr_t vaddr, const unsigned char *sig, size_t n) {
-    return bnge_mapped(m, vaddr, n, PF_R | PF_X) && memcmp((const void *)(m->base + vaddr), sig, n) == 0;
+// Where everything is in this build: NULL, or why texkeep cannot act. slots: the relocated data words that hold
+// createTexture's address (the texture managers' vtables; every caller through them gets the hook, which is the stock
+// function for all but the pack loader's cached call).
+struct tk_targets {
+    uintptr_t create, loader, request_delete, destroy_self, ret_cached, ret_packed;
+    uintptr_t *slots[MAX_SLOTS];
+    int nslots;
+};
+
+static const char *found_once(const struct bnge_main *m, const struct bnge_sig *s, uintptr_t *at, char *why, size_t n) {
+    int k = bnge_sig_find(m, s, at);
+    if (k == 1) return NULL;
+    snprintf(why, n, "%s: %d matches of its code", s->name, k);
+    return why;
 }
 
+static const char *tk_locate(const struct bnge_main *m, struct tk_targets *t, char *why, size_t n) {
+    memset(t, 0, sizeof *t);
+    if (found_once(m, &tk_create, &t->create, why, n) || found_once(m, &tk_loader, &t->loader, why, n) ||
+        found_once(m, &tk_destroy_self, &t->destroy_self, why, n)) return why;
+    t->request_delete = bnge_rel_target(t->destroy_self, DESTROY_REQ_REL);
+    if (!bnge_mapped(m, t->request_delete - m->base, tk_request_delete.len, PF_X) ||
+        !bnge_sig_at(&tk_request_delete, (const unsigned char *)t->request_delete))
+        return "requestDeleteTexture (destroySelf's call) differs";
+    uintptr_t c = t->loader + SITE_CACHED_OFF, p = t->loader + SITE_PACKED_OFF;
+    if (memcmp((const void *)(c + 7), SITE_CACHED_TAIL, 8) != 0 || memcmp((const void *)(p + 7), SITE_PACKED_TAIL, 8) != 0)
+        return "the pack loader's calls differ";
+    if (bnge_rel_target(c, SITE_DISP, 7) != bnge_rel_target(p, SITE_DISP, 7))
+        return "the pack loader's two calls use different profiles";
+    t->ret_cached = c + SITE_CALL_LEN;
+    t->ret_packed = p + SITE_CALL_LEN;
+    // the vtable slots: aligned words of the relocated read-only data (RELRO: .data.rel.ro) equal to createTexture
+    for (uintptr_t a = (m->relro_start + 7) & ~(uintptr_t)7; a + 8 <= m->relro_end; a += 8) {
+        if (*(const uintptr_t *)a != t->create) continue;
+        if (t->nslots == MAX_SLOTS) return "createTexture is referenced from too many places";
+        t->slots[t->nslots++] = (uintptr_t *)a;
+    }
+    if (t->nslots == 0) return "no vtable holds createTexture";
+    return NULL;
+}
+
+#ifndef BNGE_SIGTEST
 __attribute__((constructor)) static void bngearth_texkeep(void) {
     if (!bnge_is_main_game()) return;
     // (on by default since the 2026-11-14 teleport soaks, README.md; off: BNGEARTH_TEXKEEP_OFF=1 or BNGEARTH_TEXKEEP=0.
@@ -391,57 +413,53 @@ __attribute__((constructor)) static void bngearth_texkeep(void) {
     const char *on_ = getenv("BNGEARTH_TEXKEEP");
     const char *off_ = getenv("BNGEARTH_TEXKEEP_OFF");
     if ((off_ && *off_ && strcmp(off_, "0")) || (on_ && !strcmp(on_, "0"))) {
-        bnge_report(TAG, STATUS_FILE, "off (BNGEARTH_TEXKEEP_OFF / BNGEARTH_TEXKEEP=0)");
+        bnge_report_sticky(TAG, STATUS_FILE, "off (BNGEARTH_TEXKEEP_OFF / BNGEARTH_TEXKEEP=0)");
         return;
     }
     struct bnge_main m;
     bnge_find_main(&m);
-    if (!m.seen) { bnge_report(TAG, STATUS_FILE, "not applied: the game's code was not found"); return; }
-    const char *why = NULL;
-    if (!same(&m, CREATE_TEXTURE, SIG_CREATE, sizeof SIG_CREATE)) why = "createTexture differs";
-    else if (!same(&m, SITE_CACHED_CALL, SIG_SITE_CACHED, SITE_CALL_LEN)) why = "the pack loader's cached call differs";
-    else if (!same(&m, SITE_PACKED_CALL, SIG_SITE_PACKED, SITE_CALL_LEN)) why = "the pack loader's re-pack call differs";
-    else if (!same(&m, REQUEST_DELETE, SIG_REQUEST_DELETE, sizeof SIG_REQUEST_DELETE)) why = "requestDeleteTexture differs";
-    else if (!same(&m, DESTROY_SELF, SIG_DESTROY_SELF, sizeof SIG_DESTROY_SELF)) why = "destroySelf differs";
-    for (int i = 0; !why && i < 3; i++) {
-        if (!bnge_mapped(&m, VTABLE_SLOTS[i], 8, PF_R)) why = "a vtable slot is not mapped";
-        else if (*(uintptr_t *)(m.base + VTABLE_SLOTS[i]) != m.base + CREATE_TEXTURE) why = "a vtable slot differs";
-    }
-    if (why) {
-        char msg[256];
-        snprintf(msg, sizeof msg, "not applied: another game build (%s); stock", why);
-        bnge_report(TAG, STATUS_FILE, msg);
+    if (!m.seen) { bnge_report_sticky(TAG, STATUS_FILE, "not applied: the game's code was not found"); return; }
+    char why[160], msg[400], build[48];
+    bnge_build_id(build, sizeof build);
+    struct tk_targets t;
+    if (tk_locate(&m, &t, why, sizeof why)) {
+        snprintf(msg, sizeof msg, "not applied: another game build (%s; build id %s); stock", why, build);
+        bnge_report_sticky(TAG, STATUS_FILE, msg);
         return;
     }
-    g_base = m.base;
-    g_orig = (create_fn)(m.base + CREATE_TEXTURE);
-    g_request_delete = (request_delete_fn)(m.base + REQUEST_DELETE);
-    g_destroy_self = m.base + DESTROY_SELF;
-    g_ret_cached = m.base + SITE_CACHED_CALL + SITE_CALL_LEN;
-    g_ret_packed = m.base + SITE_PACKED_CALL + SITE_CALL_LEN;
+    g_main_base = m.base;
+    g_orig = (create_fn)t.create;
+    g_request_delete = (request_delete_fn)t.request_delete;
+    g_destroy_self = t.destroy_self;
+    g_ret_cached = t.ret_cached;
+    g_ret_packed = t.ret_packed;
+    snprintf(g_found, sizeof g_found, "found by signature: createTexture %#lx, pack loader %#lx, %d vtable slots; build id %s",
+             (unsigned long)(t.create - m.base), (unsigned long)(t.loader - m.base), t.nslots, build);
     g_dry = getenv("BNGEARTH_TEXKEEP_DRY") && strcmp(getenv("BNGEARTH_TEXKEEP_DRY"), "0") && *getenv("BNGEARTH_TEXKEEP_DRY");
     g_log = getenv("BNGEARTH_TEXKEEP_LOG") && strcmp(getenv("BNGEARTH_TEXKEEP_LOG"), "0") && *getenv("BNGEARTH_TEXKEEP_LOG");
 
-    // The slots (RELRO, read-only after relocation): writable for the three 8-byte stores, then read-only again.
+    // The slots (RELRO, read-only after relocation): writable for each 8-byte store, then read-only again.
     long pagesz = sysconf(_SC_PAGESIZE);
-    for (int i = 0; i < 3; i++) {
-        uintptr_t a = m.base + VTABLE_SLOTS[i];
+    for (int i = 0; i < t.nslots; i++) {
+        uintptr_t a = (uintptr_t)t.slots[i];
         uintptr_t page = a & ~(uintptr_t)(pagesz - 1);
         if (mprotect((void *)page, (size_t)pagesz, PROT_READ | PROT_WRITE) != 0) {
             // (earlier slots stay hooked: the hook is stock for every caller until the level flag shows up)
-            bnge_report(TAG, STATUS_FILE, "not applied: mprotect refused");
+            bnge_report_sticky(TAG, STATUS_FILE, "not applied: mprotect refused");
             return;
         }
         __atomic_store_n((uintptr_t *)a, (uintptr_t)hook_create, __ATOMIC_RELEASE);
         mprotect((void *)page, (size_t)pagesz, PROT_READ);
     }
     // (without the watcher the level flag never shows up: the hook stays stock for every caller)
-    pthread_t t;
-    if (pthread_create(&t, NULL, watch, NULL) != 0) {
-        bnge_report(TAG, STATUS_FILE, "not applied: no thread for the level flag");
+    pthread_t th;
+    if (pthread_create(&th, NULL, watch, NULL) != 0) {
+        bnge_report_sticky(TAG, STATUS_FILE, "not applied: no thread for the level flag");
         return;
     }
-    pthread_detach(t);
-    bnge_report(TAG, STATUS_FILE, g_dry ? "ready (dry run): counting while the BeamNG.Earth level runs"
-                                        : "ready: applied while the BeamNG.Earth level runs");
+    pthread_detach(th);
+    snprintf(msg, sizeof msg, "%s (%s)", g_dry ? "ready (dry run): counting while the BeamNG.Earth level runs"
+                                               : "ready: applied while the BeamNG.Earth level runs", g_found);
+    bnge_report(TAG, STATUS_FILE, msg);
 }
+#endif

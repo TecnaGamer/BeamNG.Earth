@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -95,6 +96,21 @@ class RoadMeshTest(unittest.TestCase):
                            "markings above the asphalt")
         self.assertLessEqual(np.diff(np.unique(np.round(base[:, 0], 3))).max(), roadmesh.DRAPE_STEP + 1e-6)
         self.assertTrue(set(np.unique(UV[:, 0])) <= {0.0, 1.0}, "u across the width")
+
+    def test_skipped_cluster_wear_preserves_ground_strip_fade(self):
+        from types import SimpleNamespace
+
+        wear = dict(chunk("bne_wear_patch", 1., [(0, 0, 10), (20, 0, 10)]), fixed=True, fid="deck")
+        strip = dict(chunk("bne_dirt_gravel", 5., [(0, 20, 0), (20, 20, 0)]), slen=20., fends=(0, 1))
+        origin = (0., 0., 0.)
+        with patch.object(roadmesh, "SURFACE_V2", True), patch.object(
+                roadmesh, "_junction_surfaces", return_value={"deck": SimpleNamespace(cluster=True)}):
+            self.assertIsNone(roadmesh.build(FRAME, [wear], slope, origin))
+            expected = roadmesh.build(FRAME, [strip], slope, origin)
+            actual = roadmesh.build(FRAME, [wear, strip], slope, origin)
+            for a, b in zip(actual, expected, strict=True):
+                np.testing.assert_array_equal(a, b)
+            self.assertGreater(np.ptp(actual[5][:, 1]), 0.)
 
     def test_writes_one_primitive_per_material(self):
         chunks = [chunk("road_asphalt_2lane", 6.0, [(0, 0, 0), (30, 0, 0)]),
@@ -471,6 +487,41 @@ class BridgeTest(unittest.TestCase):
         self.assertTrue(np.allclose(z[1], [20.0, 30.0]), z[1])
         loop = [np.array([[0.0, 0], [10, 0]]), np.array([[10.0, 0], [0, 0]])]
         self.assertTrue(np.isnan(roads.deck_heights(loop, lambda xy: xy[:, 0])[0]).all(), "no abutment known")
+
+    def test_closed_slab_and_girders_follow_a_sag(self):
+        # At Highway 104 a cap from the ends of a girder rose through the driving surface.
+        deck = dict(chunk("road_asphalt_2lane", 12., [[0, 0, 20], [50, 0, 16], [100, 0, 20]]),
+                    deck=True, fixed=True, kr=True)
+        with patch.object(roadmesh.shells, "ON", True), tempfile.TemporaryDirectory() as directory:
+            mesh = roadmesh.deck([deck], (0., 0., 0.), parapets=[])
+            path = os.path.join(directory, "sag.cdae")
+            roadmesh.write(path, mesh)
+            shape = cdae.read(path)
+        arr = cdae.mesh_arrays(next(m for m in shape["meshes"] if m["type"] == 0))
+        vertices = np.asarray(arr["verts"])
+        tris = np.asarray(arr["indices"]).reshape(-1, 3)
+        self.assertFalse(roadmesh.shells.open_loops(vertices, tris))
+        # On either linear half, triangle clearance is linear. Its extrema can only occur at
+        # a vertex or where an edge crosses the knot. Check both windings, including the soffit.
+        faces = vertices[tris]
+        for edge in range(3):
+            a, b = faces[:, edge], faces[:, (edge + 1) % 3]
+            on_knot = (a[:, 0] - 50.) * (b[:, 0] - 50.) < 0.
+            lo, hi = a[on_knot], b[on_knot]
+            u = (50. - lo[:, 0]) / (hi[:, 0] - lo[:, 0])
+            self.assertTrue(np.all(lo[:, 2] + u * (hi[:, 2] - lo[:, 2]) <= 16.00001))
+        # Every underside stays at least one slab thickness below the top. The top itself
+        # has the asphalt material. Limit this check to concrete faces facing up or down.
+        for start, count, flags in np.asarray(arr["primitives"]).reshape(-1, 3):
+            if shape["materials"][flags & cdae.PRIM_MATERIAL_MASK]["name"] != roadmesh.DECK_SIDE:
+                continue
+            concrete = faces[start // 3:(start + count) // 3]
+            centres = concrete.mean(axis=1)
+            normal = np.cross(concrete[:, 1] - concrete[:, 0], concrete[:, 2] - concrete[:, 0])
+            internal = (np.abs(normal[:, 2]) > 1e-5) & (np.abs(centres[:, 1]) < 6.)
+            clearance = 16. + .08 * np.abs(centres[internal, 0] - 50.) - centres[internal, 2]
+            self.assertGreater(len(clearance), 0)
+            self.assertGreaterEqual(float(clearance.min()), roadmesh.DECK_DEPTH - 1e-5)
 
     def test_deck_slab_collides_and_closes(self):
         deck = {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "p": 20, "deck": True, "fixed": True,

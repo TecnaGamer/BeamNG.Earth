@@ -30,7 +30,8 @@ BBOX_PAD_M = 2.0
 GROUPS = ("guardrail", "guardrail_start", "guardrail_end", "guardrail_back", "guardrail_back_start",
           "guardrail_back_end", "jersey", "jersey_end", "cable", "kantstolpe",
           "se_f17", "se_f17_400", "se_f17_300", "se_f17_200", "se_f18_11", "se_f18_12", "se_f18_21", "se_f2", "se_c1",
-          "se_b3", "se_e1", "se_e2", "se_a19")      # (sesigns.py's: rows go in after every barrier's, medians only reads those)
+          "se_b3", "se_e1", "se_e2", "se_a19", "se_c1_t", "se_e16_r", "se_e16_l",
+          "se_e9", "se_e10")      # (sesigns.py's: rows go in after every barrier's, medians only reads those)
 STOCK_GROUPS = GROUPS
 import euguardrails
 ALL_GROUPS = GROUPS + euguardrails.GROUPS
@@ -400,6 +401,20 @@ def _overlaps_bridge_approach(a, b, run):
     checks avoid treating a crossing road's rail as a bridge approach.
     """
     line = np.asarray(run.get("line", ()), np.float64).reshape(-1, 2)
+    if len(line) >= 2:
+        # (a module far from both of the run's ends has no sample near either: no answer to compute. A sample is
+        # within hypot(JOIN_LENGTH_M, JOIN_LATERAL_M) of the end it is near; its distance to that end is at least the
+        # module's start's largest coordinate difference less the module's length (L1). A NaN compares false: the
+        # whole test then. Called per module per parapet run, ~2.5 s of a Montreal rail tile in numpy, 2026-11-21)
+        ax, ay, bx, by = float(a[0]), float(a[1]), float(b[0]), float(b[1])
+        reach = abs(bx - ax) + abs(by - ay) + JOIN_LENGTH_M + JOIN_LATERAL_M + SPAN_TOL_M + 1.0
+        far = 0
+        for e in (line[0], line[-1]):
+            ex, ey = float(e[0]), float(e[1])
+            if max(abs(ex - ax), abs(ey - ay)) > reach:
+                far += 1
+        if far == 2:
+            return False
     a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
     d = b - a
     length = float(dnp.hypot(d[0], d[1]))

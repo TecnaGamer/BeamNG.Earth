@@ -145,7 +145,14 @@ pub struct SetupIn {
     game_settings: Option<Value>,
     #[serde(rename = "otherMods")]
     other_mods: Option<Value>,
+    // 2026-11-22: the engine patches' states ({"terfast": "failed", ...}; enginepatches.lua)
+    #[serde(rename = "enginePatches")]
+    engine_patches: Option<Value>,
 }
+
+/// The engine patches a setup may name and the states it may give them (perfstats.ENGINE_PATCHES).
+pub const PATCHES: [&str; 4] = ["gcpatch", "texkeep", "terfast", "dtsmooth"];
+pub const PATCH_STATES: [&str; 4] = ["on", "off", "failed", "none"];
 
 #[derive(Deserialize, Default)]
 pub struct ServerIn {
@@ -933,6 +940,13 @@ impl Perf {
         let vsync = s.game_settings.as_ref().and_then(|g| g.as_object()).and_then(|g| g.get("vsync"));
         if let Some(v) = on_off(vsync) { groups.push(format!("vsync:{v}")); }
         if let Some(m) = vnum(&s.other_mods).filter(|x| *x >= 0.0 && *x < 10000.0) { groups.push(format!("mods:{}", m as u64)); }
+        if let Some(ep) = s.engine_patches.as_ref().and_then(|e| e.as_object()) {
+            for name in PATCHES {
+                if let Some(st) = ep.get(name).and_then(|v| v.as_str()).filter(|v| PATCH_STATES.contains(v)) {
+                    groups.push(format!("{name}:{st}"));
+                }
+            }
+        }
         let _ = &s.os;
         (groups, ram)
     }
@@ -1203,6 +1217,14 @@ mod tests {
         let e = p.errors(u + 600);
         assert_eq!(e, serde_json::json!([["a3f9c2e1", 14, {"OSError:24": 7}]]));
         assert!(!serde_json::to_string(&v).unwrap().contains("39.2"));
+    }
+
+    #[test]
+    fn engine_patch_groups() {
+        let s: SetupIn = serde_json::from_value(serde_json::json!({"enginePatches": {
+            "terfast": "failed", "texkeep": "on", "gcpatch": "weird", "other": "on", "dtsmooth": 3}})).unwrap();
+        let (g, _) = Perf::setup_groups(&s);
+        assert_eq!(g, vec!["texkeep:on".to_string(), "terfast:failed".to_string()]);
     }
 
     #[test]

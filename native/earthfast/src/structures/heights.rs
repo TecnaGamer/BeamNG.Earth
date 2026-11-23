@@ -526,7 +526,7 @@ fn inside_any(w: &[(f64, f64)], t: f64) -> bool {
 
 /// The envelope LDL^T of the symmetric matrix (rows of (col, value) with col <= row, in the factor's order) and a
 /// solve of it for b. None when a pivot is not positive.
-fn ldl_solve(n: usize, lower: &[BTreeMap<usize, f64>], rhs: &[f64]) -> Option<Vec<f64>> {
+pub(crate) fn ldl_solve(n: usize, lower: &[BTreeMap<usize, f64>], rhs: &[f64]) -> Option<Vec<f64>> {
     let first: Vec<usize> = (0..n).map(|i| lower[i].keys().next().copied().unwrap_or(i).min(i)).collect();
     let mut rows: Vec<Vec<f64>> = (0..n).map(|i| vec![0.0; i - first[i] + 1]).collect();
     for i in 0..n {
@@ -585,7 +585,7 @@ fn ldl_solve(n: usize, lower: &[BTreeMap<usize, f64>], rhs: &[f64]) -> Option<Ve
 /// (bytes, operations) of one envelope LDL^T (ldl_solve) of the pattern adj (symmetric) in the factor order pos: the
 /// envelope's f64 entries x 8, and per row of profile w (its distance to its first entry) 3 w (w + 1) / 2 + 8 w + 4
 /// (the inner products' terms, the divisions, the two triangular solves: an upper bound). None: overflow.
-fn factor_cost(adj: &[Vec<usize>], pos: &[usize]) -> Option<(u64, u64)> {
+pub(crate) fn factor_cost(adj: &[Vec<usize>], pos: &[usize]) -> Option<(u64, u64)> {
     let n = adj.len();
     let mut first: Vec<usize> = (0..n).collect();
     for v in 0..n {
@@ -607,7 +607,7 @@ fn factor_cost(adj: &[Vec<usize>], pos: &[usize]) -> Option<(u64, u64)> {
 }
 
 /// A reverse Cuthill-McKee order of the graph adj (neighbours sorted), components by their lowest (degree, index).
-fn rcm(adj: &[Vec<usize>]) -> Vec<usize> {
+pub(crate) fn rcm(adj: &[Vec<usize>]) -> Vec<usize> {
     let n = adj.len();
     let mut seen = vec![false; n];
     let mut order = Vec::with_capacity(n);
