@@ -2301,7 +2301,35 @@ def _twin_trimmed(secs):
     parts = [(secs[n][0], secs[n][1], np.asarray(secs[n][2], np.float64), np.asarray(secs[n][3], np.float64), 0.0)
              for n in cov]
     out = list(secs)
-    for i, j, _mid, _w in roadsmod.twin_tunnels(parts):
+    twins = roadsmod.twin_tunnels(parts)
+    if roadsmod.BORE_ON:
+        # (a shared tube covers only the stretch two parts share, each in its own tube past it: only a short covered
+        # overhang past it to the section's own mouth, no other covered section going on from there, is cut)
+        ends = [np.asarray(p[2], np.float64)[[0, -1]] for p in parts]
+
+        def mouth(n, e):
+            pt = ends[n][e]
+            return not any(m != n and float(dnp.hypot(*(q - pt))) < roadsmod.CHAIN_JOIN_M
+                           for m in range(len(ends)) for q in ends[m])
+        for tw in twins:
+            for a, on in ((tw.i, tw.on_i), (tw.j, tw.on_j)):
+                k = np.flatnonzero(on)
+                if not len(k):
+                    continue
+                fid, spec, xy, z, kind = out[cov[a]]
+                xy, z = np.asarray(xy), np.asarray(z)
+                if len(xy) != len(on):
+                    continue
+                s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy[:, :2], axis=0).T))]
+                lo, hi = 0, len(xy) - 1
+                if k[0] > 0 and s[k[0]] <= roadsmod.TWIN_TRIM_M and mouth(a, 0):
+                    lo = int(k[0])
+                if k[-1] < hi and s[-1] - s[k[-1]] <= roadsmod.TWIN_TRIM_M and mouth(a, 1):
+                    hi = int(k[-1])
+                if (lo, hi) != (0, len(xy) - 1) and hi - lo >= 1:
+                    out[cov[a]] = (fid, spec, xy[lo:hi + 1], z[lo:hi + 1], kind)
+        return out
+    for i, j, _mid, _w, *_ in twins:
         for a, b in ((i, j), (j, i)):
             xa, xb = parts[a][2], parts[b][2]
             ub = xb[-1] - xb[0]
