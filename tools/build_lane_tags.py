@@ -3,13 +3,15 @@ lanes:forward / backward, overtaking, ...) as small gzip JSON shards the server 
 LaneTags), for the road markings (the user, 2026-10-28: "look at how some maps get detailed lane by lane data";
 research: docs/research/2026-10-28-road-markings-standards.md §5), and Germany's road rules and junction signs. OSM
 US's Layercake highways file, which osmtags.py reads, has `lanes` but none of these.
+Plain `lanes` tags on motorways and trunks are kept too: merged Overture highways need each source way's count
+to preserve local lane changes, even where Layercake supplies no primary count.
 
     python3 tools/build_lane_tags.py planet-latest.osm.pbf out/
     python3 tools/build_lane_tags.py https://.../planet-YYMMDD.osm.pbf out/     (streamed twice by curl: no disk)
 
 Shards: <OUT_DIR>/<x>/<y>.json.gz per z7 tile (build_rail_tags.SHARD_ZOOM), and <OUT_DIR>/manifest.json. A shard:
-- "ways": {way id: tags}: the highway ways with any of LANE_KEYS, and the roundabout rings; their tags in TAGS. Only
-  these: a reader of "ways" gets the same data as before the road rules came.
+- "ways": {way id: tags}: the highway ways with any of LANE_KEYS, motorways/trunks with `lanes`, and the roundabout
+  rings; their tags in TAGS.
 - "rules": {"priority_road": {"designated" / "end" / "yes_unposted": [way ids]}, "zone:maxspeed": {"DE:30" / "DE:20"
   / "DE:10": [way ids]}}: every highway way with a road rule, lane way or not (rule_tags, normalised at build time:
   the raw values are never written, the shards' size matters on a Steam Deck), only around Germany (GERMANY_BOX: a
@@ -19,9 +21,8 @@ Shards: <OUT_DIR>/<x>/<y>.json.gz per z7 tile (build_rail_tags.SHARD_ZOOM), and 
   junction sign (SIGN_BASES) or a mapped town sign (Ortstafeln: TOWN_CODES, for the town signs, server/townentry.py;
   sign_records), only inside GERMANY_BOX; the name (town signs only) and the direction keys only where mapped. Each
   reader keeps the codes it knows (designs.mapped_rows, townentry.Towns.mapped_nodes).
-Outside the box a shard holds what the tool wrote before the road rules; only a shard a rule way touches that also
-reaches inside the box differs (a way across the box's edge, with a node inside, can add a rules-only shard in the
-tile next door).
+The rules and sign nodes are restricted to the box; the lane ways are kept worldwide (a way across the box's edge,
+with a node inside, can add a rules-only shard in the tile next door).
 Design of the rules and the nodes (A2): docs/research/2026-11-06-german-junctions-design.md
 A way is placed, in "ways" and "rules" alike, by its first, middle and last nodes (enough for a way: they are short),
 so the second pass looks up three nodes a way instead of all of them. Data: (c) OpenStreetMap contributors, ODbL 1.0.
@@ -81,7 +82,7 @@ _PLATE = re.compile(r"^(?:DE:)?1002-[\w.]+$")           # a Zusatzzeichen 1002-x
 _ZONE_TYPE = re.compile(r"^DE:zone:?(30|20|10)$")
 # what the first pass asks pyosmium for, a way and a node each only their own keys (an object with none never reaches
 # Python; every tagged node is checked: three keys, not all of these, keep that cheap)
-WAY_KEYS = tuple(dict.fromkeys(LANE_KEYS + ("junction",) + RULE_KEYS))
+WAY_KEYS = tuple(dict.fromkeys(LANE_KEYS + ("lanes", "junction") + RULE_KEYS))
 NODE_KEYS = SIGN_KEYS
 
 
@@ -90,11 +91,12 @@ def _codes(value):
 
 
 def lane_way(tags):
-    """A highway way's entry in the shards' "ways" (its TAGS), None if it has none: it has a lane key or is a
-    roundabout ring (a junction=yes / spui way without lane tags is not)."""
+    """A highway way's entry in the shards' "ways" (its TAGS): a lane key, a motorway/trunk's plain lane count, or
+    a roundabout ring (a junction=yes / spui way without lane tags is not)."""
     if "highway" not in tags:
         return None
-    if tags.get("junction") not in RINGS and not any(k in tags for k in LANE_KEYS):
+    plain_highway = tags["highway"] in ("motorway", "trunk") and "lanes" in tags
+    if not plain_highway and tags.get("junction") not in RINGS and not any(k in tags for k in LANE_KEYS):
         return None
     return {t: tags[t] for t in TAGS if t in tags}
 
