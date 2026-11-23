@@ -410,10 +410,38 @@ def _tangent(line, s, sq):
     return v / max(float(dnp.hypot(*v)), 1e-9)
 
 
-def _proj_many(line, s, P):
-    """proj for many points P (k, 2): arc lengths along line (arc lengths s) of the points nearest them, distances."""
+def _proj_many(line, s, P, near=None):
+    """proj for many points P (k, 2): arc lengths along line (arc lengths s) of the points nearest them, distances.
+    near: only the pairs a caller keeping pairs by distance could keep are computed: a point against the segments
+    whose box, grown by near, holds it (a segment further than near from a point's x or y range is further than
+    near from the point: a bound, so no pair within near is lost); a point with no such segment has distance inf
+    and the arc of its first candidate, had it one (the callers test the distance alone). The ramp's junctions
+    asked it of every road in its box, 54,000 times a region, and nothing was within JOIN_M in 39 % of them, 70 %
+    of the seconds (Boston's Bowker: the long ramps' 1,600 points against every line of the box)."""
     a, ab = line[:-1], line[1:] - line[:-1]
     L2 = np.maximum((ab * ab).sum(1), 1e-12)
+    P = np.asarray(P, np.float64)
+    if near is not None and len(P) * len(a) > 4096:
+        sx0, sx1 = np.minimum(a[:, 0], line[1:, 0]) - near, np.maximum(a[:, 0], line[1:, 0]) + near
+        sy0, sy1 = np.minimum(a[:, 1], line[1:, 1]) - near, np.maximum(a[:, 1], line[1:, 1]) + near
+        may = ((P[:, 0, None] >= sx0[None]) & (P[:, 0, None] <= sx1[None])
+               & (P[:, 1, None] >= sy0[None]) & (P[:, 1, None] <= sy1[None]))
+        rows = np.flatnonzero(may.any(1))
+        if not len(rows):
+            return np.full(len(P), float(s[0])), np.full(len(P), np.inf)
+        if len(rows) < len(P) or not may.all():
+            # (only the points with a candidate, each against its own: the same arithmetic on the kept pairs)
+            sj = np.full(len(P), float(s[0]))
+            dj = np.full(len(P), np.inf)
+            Q = P[rows]
+            t = np.clip(((Q[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
+            v = a[None] + t[..., None] * ab[None] - Q[:, None, :]
+            dist = np.where(may[rows], dnp.hypot(v[..., 0], v[..., 1]), np.inf)
+            j = np.argmin(dist, axis=1)
+            r = np.arange(len(rows))
+            sj[rows] = s[j] + t[r, j] * (s[j + 1] - s[j])
+            dj[rows] = dist[r, j]
+            return sj, dj
     t = np.clip(((P[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
     v = a[None] + t[..., None] * ab[None] - P[:, None, :]
     dist = dnp.hypot(v[..., 0], v[..., 1])
@@ -2193,7 +2221,7 @@ def _junction_roads(net, rp, done, pieced):
         mj = net.m[j]
         if mj.kind != "ground" or len(net.lines[j]) < 2:
             continue
-        sj, dist = _proj_many(net.lines[j], net.s[j], pt)
+        sj, dist = _proj_many(net.lines[j], net.s[j], pt, near=JOIN_M)
         q = int(np.argmin(dist))
         if dist[q] > JOIN_M:
             continue

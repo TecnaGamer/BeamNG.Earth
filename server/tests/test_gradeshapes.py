@@ -719,3 +719,43 @@ def test_a_ramps_samples_stop_at_the_reach_budget_and_the_embankments_own_do_not
     assert run(ix.RAMP_MAX_M)[1:] == (full, ks_none)                # (the whole budget: as with none)
     _r, capped, ks_cap = run(100.0)
     assert capped <= 100.0 + ix.STEP_M and ks_cap < ks_none
+
+
+def test_a_projection_asked_for_the_near_pairs_alone_keeps_them_to_the_last_bit():
+    # (_proj_many's near: the ramp's junctions ask it of every road in the ramp's box and keep a pair by its distance;
+    # nothing was within JOIN_M in 39 % of the asks, 70 % of its seconds. A point against the segments whose box grown
+    # by near holds it: a bound, so every pair within near is kept, with the full projection's arc and distance, and a
+    # point with no such segment is as far as one none is near)
+    import dnp
+    rng = np.random.default_rng(7)
+
+    def full(line, s, P):
+        a, ab = line[:-1], line[1:] - line[:-1]
+        L2 = np.maximum((ab * ab).sum(1), 1e-12)
+        t = np.clip(((P[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
+        v = a[None] + t[..., None] * ab[None] - P[:, None, :]
+        dist = dnp.hypot(v[..., 0], v[..., 1])
+        j = np.argmin(dist, axis=1)
+        r = np.arange(len(P))
+        return s[j] + t[r, j] * (s[j + 1] - s[j]), dist[r, j]
+
+    for trial in range(120):
+        nseg, k = int(rng.integers(3, 300)), int(rng.integers(1, 1600))
+        if trial % 3 == 0:       # a wandering line, the points scattered wide
+            line = np.cumsum(rng.normal(size=(nseg + 1, 2)) * 30.0, axis=0)
+            P = line[0] + rng.uniform(-2000, 2000, size=(k, 2))
+        elif trial % 3 == 1:     # the points along the line (a ramp beside the road)
+            line = np.cumsum(rng.normal(size=(nseg + 1, 2)) * 5.0, axis=0)
+            idx = rng.integers(0, nseg, k)
+            P = line[idx] + rng.uniform(size=(k, 1)) * (line[idx + 1] - line[idx]) + rng.normal(scale=ix.JOIN_M * 1.5, size=(k, 2))
+        else:                    # a winding line, the points in a thin box across it
+            t = np.linspace(0.0, 6.0 * np.pi, nseg + 1)
+            line = np.stack([t * 50.0, 400.0 * np.sin(t)], axis=1)
+            P = np.stack([rng.uniform(line[:, 0].min(), line[:, 0].max(), k), rng.uniform(-400.0, 400.0, k)], axis=1)
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
+        sf, df = full(line, s, P)
+        sn, dn = ix._proj_many(line, s, P, near=ix.JOIN_M)
+        kept = df <= ix.JOIN_M
+        assert np.array_equal(kept, dn <= ix.JOIN_M), trial
+        assert np.array_equal(sf[kept], sn[kept]), trial
+        assert np.array_equal(ix._proj_many(line, s, P)[0], sf) and np.array_equal(ix._proj_many(line, s, P)[1], df)
