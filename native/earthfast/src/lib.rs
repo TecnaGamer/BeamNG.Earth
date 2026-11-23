@@ -195,6 +195,7 @@ mod tilecuts;
 mod bldclear;
 mod bnwt;
 mod cip;
+mod quality;
 mod aerialcov;
 mod decisions;
 mod lidarz;
@@ -7648,7 +7649,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 604 (603 and 605 kept for other branches): cip (architecture v2's compact per-cell inputs: the lossless cell
     // codec of named arrays and blobs; cip_encode_cell, cip_cell_info, cip_decode; server/cip.py, tools/build_cip.py)
     cip::register(m)?;
-    m.add("VERSION", 607)?;
-    m.add("VERSION", 607)?;
+    // 614: quality (the per-cell data-quality record, the adaptive plan's J2: quality_counts, quality_record,
+    // quality_meta, quality_fields; server/quality.py, tools/build_cip.py's "q" section)
+    quality::register(m)?;
+    m.add("VERSION", 614)?;
     Ok(())
 }
