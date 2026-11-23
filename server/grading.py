@@ -5409,9 +5409,9 @@ class _Planner:
                         np.round(xy, 1).tolist(), np.round(z0, 2).tolist(), np.round(np.asarray(p.z), 2).tolist(),
                         np.flatnonzero(h).tolist() if h is not None else None, np.flatnonzero(under(i)).tolist())
         log.warning("grading: road laws %s: %d of %d plans changed, %s chains, %s couplings, %s samples, %s networks "
-                    "(%s infeasible, left as they are), %.2f s", key, n, len(plans), info.get("chains"),
+                    "(%s infeasible, left as they are; %s eased), %.2f s", key, n, len(plans), info.get("chains"),
                     info.get("couplings"), info.get("samples"), info.get("networks"), info.get("infeasible"),
-                    _time.monotonic() - t0)
+                    info.get("eased", 0), _time.monotonic() - t0)
         for members, kinfo in info.get("failed", ()):       # (each: what the kernel said; the conflict to fix)
             log.error("grading: road laws infeasible network in %s: %d chains; %s", key, len(members),
                       kinfo.get("error") or ", ".join("%s %s" % (k, kinfo[k]) for k in sorted(kinfo)

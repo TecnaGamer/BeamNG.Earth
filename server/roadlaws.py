@@ -39,6 +39,7 @@ import dnp
 import gradeshapes as _gsh
 
 log = logging.getLogger("earthd.grading")
+_DUMP_N = 0                   # (BNE_LAWS_DUMP's files, this process)
 
 STEP_M = 4.0                # m between a run's samples
 NODE_M = 1.0                # m: plan ends this close are one node
@@ -54,6 +55,10 @@ MIN_MOVE_M = 0.005          # m: a plan changed less than this is left as it was
 APPROACH_M = 40.0           # m of a road before a junction it meets driven at JUNCTION_KMH (its curve law that speed's)
 JUNCTION_KMH = 20.0         # km/h: turning in or out of a junction
 LANDING_TOL = 0.03          # a road leaves a junction at the grade of the road it joins its way, within this (camber)
+EASE_M = (0.05, 0.2, 0.6, 2.0)   # m: the rungs a network the kernel leaves without an answer is eased by, the least that
+                                  # gives it one: its landings' bands, its bounds and its grades (ix/relax's easing, lumped;
+                                  # a 4-chain network dead for 6 cm of landing, a 260-chain one for a floor over a ceiling,
+                                  # A5 underpass and Boston's Bowker, 2026-11-23)
 
 Member = collections.namedtuple("Member", "kind cls kmh")
 
@@ -171,9 +176,88 @@ def _past_carriageway(xy, P, seg, t, half):
     return float(dnp.hypot(along, max(side - half, 0.0)))
 
 
-def _solve_networks(chains, ccps):
+def _dump(members, chains, cps, info):
+    """BNE_LAWS_DUMP=<dir>: a failed network's problem as an npz (its chains' samples, bounds and laws, its couplings,
+    the kernel's info), to be read offline: the conflict named without running the game. Pure but for the file."""
+    import json
+    import os
+    d = os.environ.get("BNE_LAWS_DUMP")
+    if not d:
+        return
+    try:
+        os.makedirs(d, exist_ok=True)
+        global _DUMP_N
+        _DUMP_N += 1
+        off = np.r_[0, np.cumsum([len(c["t"]) for c in chains])]
+        rows = []
+        for cp in cps:
+            rows.append([*cp[:4], {"eq": 0, "ge": 1, "le": 2}[cp[4]], cp[5]] +
+                        (list(cp[6:8]) + [cp[8]] if len(cp) == 9 else [-1, 0, 0.0]))
+        np.savez(os.path.join(d, "net%03d.npz" % _DUMP_N),
+                 members=np.asarray(members, np.int64),
+                 t=np.concatenate([c["t"] for c in chains]),
+                 w=np.concatenate([c["w"] for c in chains]),
+                 lo=np.concatenate([c["lo"] for c in chains]),
+                 hi=np.concatenate([c["hi"] for c in chains]),
+                 par=np.asarray([(c["grade"], c["K"], c.get("lam", 1e-3), c.get("step", 4.0), c.get("length", 0.0))
+                                 for c in chains], np.float64),
+                 off=off,
+                 cps=np.asarray(rows if rows else np.zeros((0, 9)), np.float64),
+                 info=json.dumps({k: v for k, v in info.items() if k != "failed"}))
+    except Exception as e:          # (never the solve's to fail on)
+        log.debug("laws dump: %s: %s", type(e).__name__, e)
+
+
+def _eased(chains, cps, ease, e):
+    """Copies of the chains and their couplings with rung e of ease in them: every landing's band widened by e (ease:
+    the couplings' flags, False where a run's own pieces join — a road is one road), every bound lo/hi by e, every grade
+    by e a step and every curve's K eased by as much (a steeper stretch, a tighter curve: drivable where the passes'
+    estimates contradict). Pure."""
+    out = []
+    for q, cp in enumerate(cps):
+        if e <= 0.0 or not (ease[q] if q < len(ease) else True):
+            out.append(cp)
+            continue
+        a, i, b, j, kind, v = cp[:6]
+        tail = tuple(cp[6:]) if len(cp) == 9 else ()
+        if kind == "eq":
+            out += [(a, i, b, j, "ge", v - e) + tail, (a, i, b, j, "le", v + e) + tail]
+            continue
+        cp = list(cp)
+        cp[5] = v - e if kind == "ge" else (v + e if kind == "le" else v)
+        out.append(tuple(cp))
+    if e <= 0.0:
+        return chains, out
+    import copy
+    ch = copy.deepcopy(chains)
+    for c in ch:
+        c["lo"], c["hi"] = c["lo"] - e, c["hi"] + e
+        c["grade"], c["K"] = c["grade"] + e / c["step"], c["K"] / (1.0 + e / c["step"])
+    return ch, out
+
+
+def _collapse(chains):
+    """The chains with every lo > hi met in the middle, in place: two estimates of one height (a shape's floor over a
+    deck's ceiling, a landing pin between bounds), the laws the arbiter — the kernel refuses a lo over a hi outright and
+    the whole network with it. (n, max m) of the places. Pure but for the chains' lo/hi."""
+    n, mx = 0, 0.0
+    for c in chains:
+        bad = np.flatnonzero(c["lo"] > c["hi"])
+        if not len(bad):
+            continue
+        mx = max(mx, float((c["lo"] - c["hi"])[bad].max()))
+        n += len(bad)
+        mid = 0.5 * (c["lo"][bad] + c["hi"][bad])
+        c["lo"], c["hi"] = np.array(c["lo"]), np.array(c["hi"])
+        c["lo"][bad] = c["hi"][bad] = mid
+    return n, mx
+
+
+def _solve_networks(chains, ccps, ease=None):
     """The chains' profiles ([array or None: left as it was]), each connected network (chains joined by couplings)
-    solved on its own, once. Returns (profiles, stats: stats["failed"] [(chains, kernel info)] of those with none)."""
+    solved on its own. A network the kernel leaves without an answer (its laws contradicting, or two of its bounds) is
+    solved again eased by the least rung of EASE_M that gives it one (said); one with no answer even eased is left as it
+    is, and said. Returns (profiles, stats: stats["failed"] [(chains, kernel info)] of those with none)."""
     import carriageways as _cw
     n = len(chains)
     parent = list(range(n))
@@ -191,23 +275,40 @@ def _solve_networks(chains, ccps):
     for c in range(n):
         groups[root(c)].append(c)
     out = [None] * n
-    stats = dict(networks=len(groups), infeasible=0, failed=[], ok_chain=[False] * n)
+    stats = dict(networks=len(groups), infeasible=0, eased=0, failed=[], ok_chain=[False] * n)
     for members in groups.values():
         pos = {c: q for q, c in enumerate(members)}
+        ces = [ease[q] if ease is not None else True for q, cp in enumerate(ccps) if cp[0] in pos]
         cps = [(pos[cp[0]], cp[1], pos[cp[2]]) + tuple(cp[3:6]) + ((pos[cp[6]],) + tuple(cp[7:]) if len(cp) == 9 else ())
                for cp in ccps if cp[0] in pos]
-        info = {}
-        try:
-            got = _cw.solve([chains[c] for c in members], cps, diagnostics=info)
-        except Exception as e:          # (this network as the passes left it)
-            got, info = None, {"error": "%s: %s" % (type(e).__name__, e)}
+        chs = [chains[c] for c in members]
+        nbad, bad_m = _collapse(chs)
+        got, info, e_used = None, {}, 0.0
+        for e in (0.0,) + EASE_M:
+            ch2, cp2 = _eased(chs, cps, ces, e)
+            info = {}
+            try:
+                got = _cw.solve(ch2, cp2, diagnostics=info)
+            except Exception as ex:          # (this network as the passes left it)
+                got, info = None, {"error": "%s: %s" % (type(ex).__name__, ex)}
+            if got is not None and info.get("feasible", True) and info.get("converged", True):
+                e_used = e
+                break
+            if e == 0.0 and info.get("status") not in ("PrimalInfeasible", "AlmostPrimalInfeasible", "InconsistentBounds"):
+                break                   # (a budget spent or a kernel error: easing is not its answer)
         if got is not None and info.get("feasible", True) and info.get("converged", True):
             for c, z in zip(members, got):
                 out[c] = z
                 stats["ok_chain"][c] = True
+            if e_used > 0.0 or nbad:
+                stats["eased"] += 1
+                log.info("road laws: a network of %d chains answered with %.2f m of ease (its landings' bands, its "
+                         "bounds, its grades; the least rung)%s", len(members), e_used,
+                         (", %d bounds met in the middle by up to %.2f m" % (nbad, bad_m)) if nbad else "")
         else:
             stats["infeasible"] += 1
             stats["failed"].append((members, info))
+            _dump(members, chs, cps, info)
     return out, stats
 
 
@@ -496,6 +597,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
     rad_j = laws(Member("ground", "road", JUNCTION_KMH))[1]
     chains, where = [], []          # where[run]: [(chain, its first run sample)]
     ccps = []
+    cease = []                   # parallel: True where a coupling is a landing (roadlaws' own), False a run's pieces
     for r, x in enumerate(R):
         m = len(x["sv"])
         na = int(round(APPROACH_M / max(x["step"], 1e-6)))
@@ -517,6 +619,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         for (c1, a1_, b1_), (c2, a2_, _b2) in zip(where[r], where[r][1:]):
             for q in range(a2_, b1_ + 1):               # (the overlap: both pieces' samples equal)
                 ccps.append((c1, q - a1_, c2, q - a2_, "eq", 0.0))
+                cease.append(False)
 
     def chain_of(r, i):
         for c, a, b in where[r]:
@@ -529,9 +632,11 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         cb, jb = chain_of(cp[2], cp[3])
         if len(cp) == 9:
             ccps.append((ca, ja, cb, jb, cp[4], cp[5]) + chain_of(cp[6], cp[7]) + (cp[8],))
+            cease.append(True)
         elif (ca, ja) != (cb, jb):
             ccps.append((ca, ja, cb, jb, cp[4], cp[5]))
-    out, stats = _solve_networks(chains, ccps)
+            cease.append(True)
+    out, stats = _solve_networks(chains, ccps, cease)
     if diagnostics is not None:
         diagnostics.update(stats)
         diagnostics.update(chains=len(chains), couplings=len(ccps), samples=int(sum(len(c["t"]) for c in chains)))

@@ -406,5 +406,48 @@ def roadmesh_shoulder():
     return roadmesh.TUNNEL_SHOULDER
 
 
+class EaseTest(unittest.TestCase):
+    """A network the kernel leaves without an answer is eased by the least rung (its landings' bands, its bounds, its
+    grades), not left as the passes made it: whole city networks died for a landing 6 cm out (A5 underpass) and a shape's
+    floor over a ceiling (Boston's Bowker), 2026-11-23."""
+
+    def _chain(self, z, lo=None, hi=None, grade=0.1, K=30.0):
+        n = len(z)
+        return dict(t=np.asarray(z, np.float64), w=np.ones(n),
+                    lo=np.full(n, -np.inf) if lo is None else np.asarray(lo, np.float64),
+                    hi=np.full(n, np.inf) if hi is None else np.asarray(hi, np.float64),
+                    grade=grade, K=K, lam=1e-3, step=4.0, length=0.0)
+
+    def test_a_landing_and_a_pin_that_contradict_are_eased_not_dropped(self):
+        a = self._chain(np.full(10, 100.0))
+        b = self._chain(np.full(5, 100.0))
+        a["lo"][0] = a["hi"][0] = 100.0            # (the main road's mouth: held)
+        b["lo"][-1] = b["hi"][-1] = 103.0         # (a shape's pin 3 m up, 4 steps of a 10 % road: 1.6 m)
+        out, stats = roadlaws._solve_networks([a, b], [(0, 0, 1, 0, "eq", 0.0)])
+        self.assertEqual(stats["infeasible"], 0, stats["failed"])
+        self.assertEqual(stats["eased"], 1)
+        self.assertIsNotNone(out[0])
+        self.assertIsNotNone(out[1])
+        self.assertLess(abs(float(out[0][0]) - float(out[1][0])), 2.5, "the landing kept within the ease")
+
+    def test_two_estimates_of_one_height_meet_in_the_middle(self):
+        c = self._chain(np.full(10, 100.0))
+        c["lo"][5], c["hi"][5] = 101.0, 100.0      # (a fill's floor over a deck's ceiling at one sample)
+        out, stats = roadlaws._solve_networks([c], [])
+        self.assertEqual(stats["infeasible"], 0, stats["failed"])
+        self.assertIsNotNone(out[0])
+        self.assertGreaterEqual(float(out[0][5]), 100.0)
+        self.assertLessEqual(float(out[0][5]), 101.0)
+
+    def test_a_coupling_held_hard_stays_equal(self):
+        a = self._chain(np.full(10, 100.0))
+        b = self._chain(np.full(5, 100.0))
+        b["lo"][-1] = b["hi"][-1] = 103.0
+        out, stats = roadlaws._solve_networks([a, b], [(0, 0, 1, 0, "eq", 0.0)], [False])
+        self.assertEqual(stats["infeasible"], 0, stats["failed"])
+        self.assertIsNotNone(out[1])
+        self.assertLess(abs(float(out[0][0]) - float(out[1][0])), 1e-6, "a run's pieces stay one road, exactly")
+
+
 if __name__ == "__main__":
     unittest.main()
