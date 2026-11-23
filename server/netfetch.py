@@ -358,9 +358,10 @@ POLICIES = {
     "bulkdata.csdi.gov.hk": HostPolicy(rate=1.0, burst=4.0, max_conc=4, daily_budget=1000, daily_hard=2000,
                                        allow_prefetch=True, offline_ok=True, miss_ttl=None, binary=True, timeout=120.0,
                                        max_attempts=3, base_delay=2.0, optional=True),
-    # Enter-only bounded category searches, never terrain/bulk downloads. No retries on shared query services.
+    # Bounded, user-requested searches and bus lines, never terrain/bulk downloads. No automatic retries.
+    # Bus queries allow 60 s of server execution: a 4 s read timeout cut them off and opened the breaker.
     "overpass-api.de": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=50, daily_hard=100,
-                                   cache_ttl=DAY, max_wait=1.0, timeout=4.0, max_attempts=1, optional=True,
+                                   cache_ttl=DAY, max_wait=1.0, connect_timeout=4.0, timeout=65.0, max_attempts=1, optional=True,
                                    interactive_only=True, breaker_threshold=1, breaker_open=60.0),
     "query.wikidata.org": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=50, daily_hard=100,
                                      cache_ttl=DAY, max_wait=1.0, timeout=7.0, max_attempts=1, optional=True,
@@ -369,6 +370,15 @@ POLICIES = {
     "vector.openstreetmap.org": HostPolicy(denied=True, daily_hard=0),
     "build.protomaps.com": HostPolicy(denied=True, daily_hard=0),
 }
+# The bus-line fallback uses the same conservative request limits, only after the primary is unavailable.
+# https://wiki.openstreetmap.org/wiki/Overpass_API#Instances_with_global_data_coverage
+POLICIES["overpass.private.coffee"] = POLICIES["overpass-api.de"]
+# Västtrafik's timetable (gtfsbus.py: one 92 MB zip a week at most, made into an index on disk): Trafiklab with the
+# player's own key (Bronze: 50 calls a month), else the Mobility Database's daily copy of the same CC0 feed
+POLICIES["opendata.samtrafiken.se"] = HostPolicy(rate=0.01, burst=1.0, max_conc=1, daily_budget=3, daily_hard=5,
+                                                 binary=True, timeout=300.0, connect_timeout=15.0, max_attempts=1,
+                                                 optional=True)
+POLICIES["files.mobilitydatabase.org"] = POLICIES["opendata.samtrafiken.se"]
 # The Wikipedias the map's search asks (geocode.wiki_langs): by the player's country and the computer's language
 WIKIPEDIA_LANGS = ("en", "de", "fr", "it", "es", "pt", "nl", "pl", "cs", "sk", "sv", "no", "da", "fi", "hu", "ro", "el",
                    "tr", "ru", "uk", "ja", "ko", "zh", "hr", "sl", "bg", "sr")
@@ -519,7 +529,10 @@ ROLES = {
     "photon.komoot.io": "the map's address search (the other search sources stand in)",
     "nominatim.openstreetmap.org": "street and address search on Enter",
     "www.wikidata.org": "landmarks in the map's search",
-    "overpass-api.de": "nearby category search on Enter",
+    "overpass-api.de": "nearby category search on Enter; the bus lines near you (Bus lines)",
+    "overpass.private.coffee": "bus lines near you when the primary Overpass service is unavailable",
+    "opendata.samtrafiken.se": "Västtrafik's bus lines (Trafiklab GTFS Regional, with your Trafiklab key), weekly",
+    "files.mobilitydatabase.org": "Västtrafik's bus lines (the same feed's public copy, without a key), weekly",
     "query.wikidata.org": "notable category search on Enter",
     "routing.openstreetmap.de": "GPS routes",
     "valhalla1.openstreetmap.de": "GPS routes without highways (the normal route meanwhile)",

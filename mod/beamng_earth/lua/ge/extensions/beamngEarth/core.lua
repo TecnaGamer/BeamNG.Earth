@@ -1700,6 +1700,9 @@ local function onMessage(msg)
   elseif t == 'stations_result' then         -- the station finder's answer (finder.lua: Nearest, the prompt, the map)
     local f = rawget(_G, 'beamngEarth_finder')
     if f and f.onStations then f.onStations(msg) end
+  elseif t == 'bus_lines_result' then       -- the bus lines near the player (busline.lua)
+    local b = rawget(_G, 'beamngEarth_busline')
+    if b and b.onLines then b.onLines(msg) end
   elseif t == 'geocode_result' then
     if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error, text = msg.text } end
   elseif t == 'areas' then
@@ -3824,10 +3827,17 @@ function M.requestStations(id, lat, lon, rKm, kinds, mode)
   net.send({ type = 'stations', id = id, lat = lat, lon = lon, r_km = rKm, kinds = kinds, mode = mode })
   return true
 end
-function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via)
+-- The bus lines near lat, lon (busline.lua; server buslines.py from OpenStreetMap); the answer is bus_lines_result.
+function M.requestBusLines(id, lat, lon)
+  if not net.isConnected() then return false end
+  net.send({ type = 'bus_lines', id = id, lat = lat, lon = lon })
+  return true
+end
+function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via, profile)
   if not net.isConnected() then return false end
   net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,
-    via = via, download = settings.get('routeDownload'), avoid = settings.get('routeAvoidHighways') and true or nil })
+    via = via, download = settings.get('routeDownload'), avoid = settings.get('routeAvoidHighways') and true or nil,
+    profile = profile })
   return true
 end
 function M.takeRoute(id)

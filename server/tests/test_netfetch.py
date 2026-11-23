@@ -843,7 +843,7 @@ class PolicyTest(unittest.TestCase):
             with self.assertRaises(nf.FetchFailed):
                 f.get("https://overpass-api.de/api/interpreter?data=offline-test")
             self.assertEqual(request.call_count, 1, "no automatic retry")
-            self.assertEqual(request.call_args.args[2], 4.0, "Overpass alone has the shorter timeout")
+            self.assertEqual(request.call_args.args[2], (4.0, 65.0), "connect quickly, allow the 60 s bus query to finish")
             with self.assertRaises(nf.HostUnavailable):
                 f.get("https://overpass-api.de/api/interpreter?data=offline-test")
             self.assertEqual(request.call_count, 1, "the breaker still prevents another request")
