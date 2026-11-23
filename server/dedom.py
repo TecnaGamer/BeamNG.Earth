@@ -11,7 +11,8 @@ its DOM height and (every DGM_EVERY-th) its DGM height. The game reads only the 
 BNE_DE_DECKS_DIR reads a local folder of shards instead.
 
 Overture and OSM give a bridge's order (layer) but no height, and the inference assumed 6 m of clearance; Germany's
-standard is 4.70 m. Where a state serves its DOM and DGM as an open WCS (a subset of any box, no key), every road
+standard is 4.70 m over motorways and 4.50 m on other roads.
+Where a state serves its DOM and DGM as an open WCS (a subset of any box, no key), every road
 bridge of a cell is sampled on a 1 m grid across its width (SAMPLE_M) and the samples go to the lidar measuring as
 points; the DGM under the same samples brings the state's heights onto our DEM's (roadz.datum_fit). Outside a
 service's state its WCS has no data there: no points, the inference stands.
