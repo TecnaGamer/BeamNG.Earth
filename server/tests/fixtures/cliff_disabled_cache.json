@@ -1,7 +1,0 @@
-{
-  "upstream": "3cc8866b3a7a7026ddfdcbc562ceb8c9397cb0d3",
-  "expressions": {
-    "_roads_tile_cached": "revisit.key('roads', round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift), bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations), _md_versions(bool(buildings)), float(buried), lamp_region, country, pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)), *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat), bool(roadsmod.ROADS_IN_GROUND), *_surf_tags(geodesy.EnuFrame(lat, lon), *roadsmod_tile_bbox(tx, ty)), _nyc_key(geodesy.EnuFrame(lat, lon), roadsmod_tile_bbox(tx, ty)) if buildings else None, bool(de_junctions), *de)",
-    "_geo_content_key": "revisit.key('roadsg', str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations), _md_versions(bool(buildings)) if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M, pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), *_radar_key(), bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), *_surf_tags(tile.frame, *tile.box[:4]), ('rules', _ground_rules() if rules is None else rules), _nyc_key(tile.frame, tile.box, cache_dir) if buildings else None, *deck_key, bool(de_junctions), *de)"
-  }
-}
