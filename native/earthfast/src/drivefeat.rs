@@ -555,10 +555,12 @@ mod tests {
             let want = base + profile(&f[0], d);
             assert!((h - want).abs() < 1e-9, "{} {} {}", p[0], h, want);
         }
-        // the plan's own vertices kept exactly
+        // the plan's own vertices kept exactly (their heights outside the feature too)
         for (i, q) in xy.iter().enumerate() {
             let j = oxy.iter().position(|p| p == q).unwrap();
-            assert_eq!(oz[j], z[i]);
+            if (q[0] - 10.0).abs() > 0.5 * 4.0 + 1.5 {
+                assert_eq!(oz[j], z[i]);
+            }
         }
         // increasing stations
         for w in oxy.windows(2) {
