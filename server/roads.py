@@ -12012,8 +12012,13 @@ def _bore_pairs(X, widths, Z, roads_=None):
             d, j, t = _near_on(X[a][inb], X[b])
             sd = X[b][j + 1] - X[b][j]
             sd = sd / np.maximum(dnp.hypot(*sd.T), 1e-9)[:, None]
+            # (beside b, not past either of its ends: its end point within reach of a's points past it is no mate
+            # there; one twin's portal 3 m deeper than the other's, GitHub #84)
+            tb0 = (X[b][1] - X[b][0]) / max(float(dnp.hypot(*(X[b][1] - X[b][0]))), 1e-9)
+            tb1 = (X[b][-1] - X[b][-2]) / max(float(dnp.hypot(*(X[b][-1] - X[b][-2]))), 1e-9)
+            beside = ((X[a][inb] - X[b][0]) @ tb0 > -0.5) & ((X[a][inb] - X[b][-1]) @ tb1 < 0.5)
             near = np.zeros(len(X[a]), bool)
-            near[inb] = (d < reach) & (np.abs((tan[a][inb] * sd).sum(1)) >= BORE_COS)
+            near[inb] = (d < reach) & (np.abs((tan[a][inb] * sd).sum(1)) >= BORE_COS) & beside
             if not near.any():
                 continue
             jj, tt = np.zeros(len(X[a]), np.int64), np.zeros(len(X[a]))
