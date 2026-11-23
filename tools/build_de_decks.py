@@ -284,7 +284,9 @@ def shards(dest, keep=1, out=None, only=None):
     for state in sorted(os.listdir(src)):
         d = os.path.join(src, state)
         if os.path.isdir(d):
-            for name in os.listdir(d):
+            # (sorted: two cells' samples at one place keep the first's, and every keep-th of a tile's samples is kept
+            # in this order; a folder's listing order is its file system's, another on another machine)
+            for name in sorted(os.listdir(d)):
                 if name.endswith(".npz") and os.path.getsize(os.path.join(d, name)) > 300:
                     z, x, y = map(int, name[:-4].split("_"))
                     lon0, lat0, lon1, lat1 = mapcells.CellKey(z, x, y).bounds()

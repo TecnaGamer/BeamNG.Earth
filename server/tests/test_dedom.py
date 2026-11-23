@@ -84,6 +84,37 @@ class ShardTest(unittest.TestCase):
         self.assertTrue(np.isnan(got["dgm"][order][1]))
         self.assertEqual(dedom.decode(b"broken"), {})
 
+    def test_shards_whatever_the_folder_order(self):
+        """Two cells with samples at the same places (a bridge across their border, each state's value): the shards
+        are the same bytes whatever order the file system lists the cells in (the first cell's sample is kept, and
+        every keep-th sample of a tile, in the cells' sorted order)."""
+        rng = np.random.default_rng(1531)
+        a, b = mapcells.CellKey(14, 8500, 5492), mapcells.CellKey(14, 8501, 5492)
+        lon0, lat0, lon1, lat1 = a.bounds()
+        la, lo = rng.uniform(lat0, lat1, 600), rng.uniform(lon1 - 0.002, lon1, 600)
+
+        def build(d, order):
+            for key, dom in ((a, 60.0), (b, 61.0)):
+                os.makedirs(os.path.join(d, "cells", "nw"), exist_ok=True)
+                with open(build_de_decks.cell_path(d, "nw", key), "wb") as fh:
+                    fh.write(dedom.encode(la, lo, np.full(len(la), dom), np.full(len(la), 50.0)))
+            real = os.listdir
+            with mock.patch.object(build_de_decks.os, "listdir", side_effect=lambda q: order(real(q))):
+                build_de_decks.shards(d, 4)
+            out = {}
+            for root, _dirs, names in os.walk(os.path.join(d, "dedecks")):
+                for n in names:
+                    if n.endswith(".npz"):
+                        with open(os.path.join(root, n), "rb") as fh:
+                            out[n] = fh.read()
+            return out
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2,                 mock.patch("builtins.print"):
+            one, two = build(d1, sorted), build(d2, lambda names: sorted(names, reverse=True))
+        self.assertTrue(one)
+        self.assertEqual(one, two)
+        got = dedom.decode(next(iter(one.values())))
+        self.assertEqual(set(got["dom"].tolist()), {60.0})       # (the first cell's samples)
+
     def test_a_tile_without_a_shard_has_no_points(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {dedom.LOCAL_ENV: d}):
             dedom._shards.clear()
