@@ -167,7 +167,9 @@ neighbours through the net's grid; the relations of the members of earlier round
 An interchange ends where its roads come back to the ground, which is the end of a ramp, not the end of a structure. A
 road leaving a deck belongs to the interchange as far as the deck's ramp reaches (`gradeshapes._ramp_reaches`, from the
 pieces alone, before anything is solved: the ramp the embankment step lays, `_Ramper`, from the height the structure needs
-and the roads' grade and curve laws, through the junctions it meets). Structures that join, cross or dig one road are one
+and the roads' grade and curve laws, through the junctions it meets, no further than `REACH_MAX_M` from the end it left
+— the junctions' chains included — and only for a deck whose reach can meet another rising deck's: its extent artifact's
+law names it). Structures that join, cross or dig one road are one
 system; systems whose ramps run along one stretch of a road are one interchange (`Interchange.parts`): one extent, one key,
 one owner, which solves each system as it is and lays the embankments of all at once, so where two ramps meet on a road
 one lays what the other does. A road on the ground beyond the reaches is a boundary held at its own ground.

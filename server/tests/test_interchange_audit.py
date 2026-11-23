@@ -338,6 +338,68 @@ def test_what_a_ramp_reaches_does_not_depend_on_the_order_of_the_members():
         assert _interchanges(m) == _interchanges(m[::-1]), link_m
 
 
+def _reach_grid(top=6000.0, d2_at=4300.0):
+    """Two viaducts over their motorways, both ends of each on one road (link) that a parallel side road and cross
+    streets every 400 m make a grid of. The ground climbs 12 % along the roads' way and the roads' grade law allows
+    6 %: a cut below it (an embankment above it, downhill) can never get back, and every column of the grid is a way
+    on - a deck's reach ferries between the columns and follows them as far as they go, with the budget off."""
+    slope = 0.12
+
+    def ground(xy):
+        return slope * np.asarray(xy, np.float64)[:, 1]
+
+    def fixed(net, i, s):
+        sv = np.atleast_1d(np.asarray(s, np.float64))
+        q = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
+                      np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
+        z = ground(q)
+        return np.asarray(z, np.float64) if np.ndim(s) else float(z[0])
+
+    m = [_ground("m1", _line(-800, 0, 800, 0, 200), "motorway"),
+         _deck("d1", _line(0, -250, 0, 250, 60)),
+         _ground("s1", _line(0, -900, 0, -250)),
+         Member(("link", "ground", 0), _line(0, 250, 0, top, 150), "ground", "motorway", 120, 0.0, 12.0, None),
+         Member(("side", "ground", 0), _line(300, 250, 300, top, 150), "ground", "motorway", 120, 0.0, 12.0, None)]
+    y, k = 650.0, 0
+    while y < top - 150.0:
+        m.append(Member(("x%d" % k, "ground", 0), _line(0, y, 300, y), "ground", "motorway", 120, 0.0, 12.0, None))
+        k += 1
+        y += 400.0
+    m += [_ground("m2", _line(-800, d2_at + 250, 800, d2_at + 250, 200), "motorway"),
+          _deck("d2", _line(0, d2_at, 0, d2_at + 500, 60))]
+    return m, lambda n_: (ground, lambda i, s: fixed(n_, i, s))
+
+
+def _grid_interchanges(m, reader):
+    net, found = gs.find_interchanges(m, reader=reader)
+    return [(sorted(str(net.m[i].key[0]) for i in f.sysm["seeds"]),
+             sorted(sorted(str(net.m[i].key[0]) for i in p.sysm["seeds"]) for p in f.parts)) for f in found]
+
+
+def test_decks_beyond_both_reaches_stay_apart_whatever_the_grid_between_them():
+    # (the reach budget and the partner prune: every ramp of a deck's laying stays within REACH_MAX_M of the end it
+    # left, so two decks whose ends are all further apart than both reaches can overlap no span - the grid between
+    # them, followed column to column with the budget off, merged them into one interchange of two systems)
+    m, reader = _reach_grid(d2_at=4300.0)
+    assert _grid_interchanges(m, reader) == _grid_interchanges(m[::-1], reader) == [( ["d1"], []), (["d2"], [])]
+    with mock.patch.object(gs, "REACH_MAX_M", 1.0e9):
+        assert _grid_interchanges(m, reader) == [( ["d1", "d2"], [["d1"], ["d2"]])]
+
+
+def test_within_the_reach_budget_the_pairs_are_the_laws_own():
+    # (no pair changes inside the laws: a meet within the budget and a parting before it, on the flat fixtures and on
+    # the climbing grid, come out the same with the budget off)
+    for link_m in (60.0, 2000.0):
+        members = _long_overpasses(link_m)
+        with mock.patch.object(gs, "REACH_MAX_M", 1.0e9):
+            unb = _interchanges(members)
+        assert _interchanges(members) == unb, link_m
+    m, reader = _reach_grid(d2_at=310.0)
+    with mock.patch.object(gs, "REACH_MAX_M", 1.0e9):
+        unb = _grid_interchanges(m, reader)
+    assert _grid_interchanges(m, reader) == unb == [( ["d1", "d2"], [["d1"], ["d2"]])]
+
+
 def test_a_round_scans_only_the_members_it_adds_and_finds_what_a_full_scan_finds():
     # (a growth's rounds: the cells added in a round bring their members, each scanned against its neighbours through the
     # grid; the relations of the members of the rounds before are kept)

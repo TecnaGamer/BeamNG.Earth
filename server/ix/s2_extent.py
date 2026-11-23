@@ -10,7 +10,7 @@ import gradeshapes as _gsh
 from . import artifacts, cache, s1_paths
 
 FORMAT = 2
-LAWS = (("gradeshapes", ["TUNNEL_MAX_M"]),)
+LAWS = (("gradeshapes", ["TUNNEL_MAX_M", "REACH_MAX_M"]),)
 LAWS_DIGEST = cache.laws_digest(*LAWS)
 STEP = 2
 

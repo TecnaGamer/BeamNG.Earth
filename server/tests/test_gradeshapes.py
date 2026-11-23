@@ -698,3 +698,83 @@ def test_a_deck_ending_at_a_tunnels_mouth_is_where_its_structure_leaves_the_grou
     rel = {i: ix._relations(net, i) for i in range(len(m))}
     links, leave = ix._Verdicts(net, rel, lambda i: i, None).links()
     assert (1, 0) in leave and (1, 1) in leave
+
+
+def test_a_ramps_samples_stop_at_the_reach_budget_and_the_embankments_own_do_not():
+    # (the reach's budget, _Ramper's left: a cut below a ground that climbs faster than the roads' grade law would
+    # run the whole of every road it is followed along; the budget caps its samples where the reach's chain has
+    # spent it. The embankments' own laying passes no budget (left None) and is never capped)
+    road = Member("north", _line(0, 0, 0, 3000, 200), "ground", "motorway", 120, 0, 12.0, None)
+    net = ix.Net([road])
+    ground = lambda xy: 0.12 * np.asarray(xy, np.float64)[:, 1]
+
+    def run(left):
+        lay = ix._Ramper(net, lambda x: ground(x["xy"]), {})
+        lay.ramp_from(0, 0.0, True, None, -ix.deck_grade(road), over=0.0, sign=-1.0, left=left)
+        rp = lay.ramps[0]
+        return rp, float(rp[4]["d"][min(rp[9], len(rp[4]["d"]) - 1)]), rp[9]
+
+    _r, full, ks_none = run(None)
+    assert full == ix.RAMP_MAX_M and ks_none == len(_r[5])          # (the cut never gets back: every sample)
+    assert run(ix.RAMP_MAX_M)[1:] == (full, ks_none)                # (the whole budget: as with none)
+    _r, capped, ks_cap = run(100.0)
+    assert capped <= 100.0 + ix.STEP_M and ks_cap < ks_none
+
+
+def test_a_projection_asked_for_the_near_pairs_alone_keeps_them_to_the_last_bit():
+    # (_proj_many's near: the ramp's junctions ask it of every road in the ramp's box and keep a pair by its distance;
+    # nothing was within JOIN_M in 39 % of the asks, 70 % of its seconds. A point against the segments whose box grown
+    # by near holds it: a bound, so every pair within near is kept, with the full projection's arc and distance, and a
+    # point with no such segment is as far as one none is near)
+    import dnp
+    rng = np.random.default_rng(7)
+
+    def full(line, s, P):
+        a, ab = line[:-1], line[1:] - line[:-1]
+        L2 = np.maximum((ab * ab).sum(1), 1e-12)
+        t = np.clip(((P[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
+        v = a[None] + t[..., None] * ab[None] - P[:, None, :]
+        dist = dnp.hypot(v[..., 0], v[..., 1])
+        j = np.argmin(dist, axis=1)
+        r = np.arange(len(P))
+        return s[j] + t[r, j] * (s[j + 1] - s[j]), dist[r, j]
+
+    for trial in range(120):
+        nseg, k = int(rng.integers(3, 300)), int(rng.integers(1, 1600))
+        if trial % 3 == 0:       # a wandering line, the points scattered wide
+            line = np.cumsum(rng.normal(size=(nseg + 1, 2)) * 30.0, axis=0)
+            P = line[0] + rng.uniform(-2000, 2000, size=(k, 2))
+        elif trial % 3 == 1:     # the points along the line (a ramp beside the road)
+            line = np.cumsum(rng.normal(size=(nseg + 1, 2)) * 5.0, axis=0)
+            idx = rng.integers(0, nseg, k)
+            P = line[idx] + rng.uniform(size=(k, 1)) * (line[idx + 1] - line[idx]) + rng.normal(scale=ix.JOIN_M * 1.5, size=(k, 2))
+        else:                    # a winding line, the points in a thin box across it
+            t = np.linspace(0.0, 6.0 * np.pi, nseg + 1)
+            line = np.stack([t * 50.0, 400.0 * np.sin(t)], axis=1)
+            P = np.stack([rng.uniform(line[:, 0].min(), line[:, 0].max(), k), rng.uniform(-400.0, 400.0, k)], axis=1)
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
+        sf, df = full(line, s, P)
+        sn, dn = ix._proj_many(line, s, P, near=ix.JOIN_M)
+        kept = df <= ix.JOIN_M
+        assert np.array_equal(kept, dn <= ix.JOIN_M), trial
+        assert np.array_equal(sf[kept], sn[kept]), trial
+        assert np.array_equal(ix._proj_many(line, s, P)[0], sf) and np.array_equal(ix._proj_many(line, s, P)[1], df)
+
+
+def test_a_members_laws_are_made_once_and_follow_the_laws_set_anew():
+    # (max_grade, curve_radius, deck_grade and deck_depth by the member's law key and the laws' values: asked 160,000
+    # times a region for a thousand members. The same floats as unmemoized; a law set anew (grading sets them from
+    # roads.py; a test eases one) is made anew, never a stale answer)
+    m = Member("x", _line(0, 0, 100, 0), "deck", "secondary", 60, 1.0, 5.0, None)
+    for fn in (ix.max_grade, ix.curve_radius, ix.deck_grade):
+        assert fn(m) == fn._unmemoized(m)
+    assert ix.deck_depth(120.0) == ix._deck_depth_unmemoized(120.0) and ix.deck_depth(120) == ix.deck_depth(120.0)
+    was = ix.deck_grade(m)
+    ix.DECK_MAX_GRADE = was - 0.01
+    try:
+        assert ix.deck_grade(m) == was - 0.01 and ix.deck_grade(m) == ix.deck_grade._unmemoized(m)
+    finally:
+        ix.DECK_MAX_GRADE = was
+    assert ix.deck_grade(m) == was
+    t = Member("r", _line(0, 0, 100, 0), "rail", "rail", None, 0.0, 2.0, None)
+    assert ix.max_grade(t) == ix.railways.GRADE and ix.curve_radius(t) == max(ix.R_MIN_RAIL_M, (100.0 / 3.6) ** 2 / ix.A_VERT_RAIL)

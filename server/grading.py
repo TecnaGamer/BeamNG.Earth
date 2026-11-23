@@ -4900,7 +4900,15 @@ class _Planner:
     # ---- tunnel and bridge grading by interchange (gradeshapes.py) ----
 
     def _shape_members(self, k):
-        """Cell k's roads and tracks as gradeshapes members (frame ENU), keyed the same from every cell."""
+        """Cell k's roads and tracks as gradeshapes members (frame ENU), keyed the same from every cell. Made once per
+        cell: a region's growths read the cells round each interchange's seeds again, the same 11 cells 189 times in
+        Boston's Bowker's region (each read rebuilding its ~400 members: 29 s, a third of the region), and a member is
+        read-only (its line interpolated, never written), so one cell's are every net's."""
+        memo = self.__dict__.setdefault("_shape_members_memo", {})
+        with self.lock:
+            got = memo.get(str(k))
+        if got is not None:
+            return got
         c = self._cell_enu(k)
         nodes = self._cell_nodes(k)
         out = []
@@ -4937,6 +4945,10 @@ class _Planner:
                 out.append(_gsh.Member(key, line, kind, "rail", None, float(lvs[n]) if lvs is not None else 0.0, 2.0,
                                        None))
         out += self._shape_tunnels(k)
+        with self.lock:
+            if len(memo) > 256:
+                memo.clear()
+            memo[str(k)] = out
         return out
 
     def _shape_tunnels(self, k):
