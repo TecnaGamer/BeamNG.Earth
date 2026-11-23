@@ -305,6 +305,16 @@ pub fn build_f(place: &Place, quad: [[f64; 2]; 4], id: (i32, i32), frame: u64, g
     let t8 = crate::cpu_now();
     // keys: each delivered stroke's own read list (its deps' boxes) and profile; zones by their arms
     let digests: Vec<u64> = net.segs.iter().map(seg_digest).collect();
+    let area_on = opts.areas && !place.areas.is_empty();
+    let mut area_order: Vec<usize> = (0..place.areas.len()).collect();
+    area_order.sort_by_key(|&i| (place.areas[i].key, crate::areas::area_digest(&place.areas[i])));
+    let area_boxes: Vec<[f64; 4]> = if area_on { area_order.iter().map(|&i| {
+        let a = &place.areas[i];
+        let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for (_r, r) in &a.rings { let q = bbox_of(r); b = [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[2]), b[3].max(q[3])]; }
+        b
+    }).collect() } else { Vec::new() };
+    let area_keys: Vec<u64> = if area_on { area_order.iter().map(|&i| crate::areas::area_digest(&place.areas[i])).collect() } else { Vec::new() };
     let seg_boxes: Vec<[f64; 4]> = net.segs.iter().map(|s| bbox_of(&s.pts)).collect();
     let mut piece_keys: BTreeMap<u32, u64> = BTreeMap::new();
     let mut stroke_key = vec![0u64; ns];
@@ -328,6 +338,13 @@ pub fn build_f(place: &Place, quad: [[f64; 2]; 4], id: (i32, i32), frame: u64, g
         items.sort();
         let mut h = net::uid_of("piece", &[PIECE_FORMAT, frame, net.strokes[si].uid]);
         for (f, dg) in &items { h = net::uid_of(f, &[h, *dg]); }
+        if area_on {
+            // (BNE_ROADSYS_AREAS=on: the mapped areas within the fit's reach of any stroke it depends on, their
+            // dataset's build and the fit's format)
+            h = net::uid_of("areas", &[h, crate::areas::AREA_FORMAT, place.area_build]);
+            let bg: Vec<[f64; 4]> = bxs.iter().map(|b| grow(*b, crate::areas::RAY_M + 5.0)).collect();
+            for (k, ab) in area_boxes.iter().enumerate() { if bg.iter().any(|b| meets(*b, *ab)) { h = net::uid_of("area", &[h, area_keys[k]]); } }
+        }
         pk.sort();
         for k in pk { h = net::uid_of("prof", &[h, k]); }
         stroke_key[si] = h;
@@ -367,6 +384,18 @@ pub fn build_f(place: &Place, quad: [[f64; 2]; 4], id: (i32, i32), frame: u64, g
         chk.paved_m2, chk.lane_m2, chk.overlap_m2, chk.overlap_lane_m2, chk.overlap_fold_m2, chk.overlap_strip_strip_m2, chk.overlap_zone_strip_m2, chk.overlap_zone_zone_m2, chk.hole_samples, chk.hole_uncovered, chk.nonmanifold_edges, chk.flipped_edges, chk.tjunctions, chk.folded, chk.zero_area,
         seam_hash(&to.sides[0]), seam_hash(&to.sides[1]), seam_hash(&to.sides[2]), seam_hash(&to.sides[3]),
         keys_json);
+    // the mapped road areas: the audit of the tile's faces against them, and the fit's counts (areas.rs)
+    let mut json = json;
+    if !place.areas.is_empty() {
+        let prep = crate::areas::prepare(&place.areas);
+        let tris = crate::areas::faces_of(&built.mesh, &quad);
+        let lines = crate::areas::lines_of(&net, Some(&d));
+        let a = crate::areas::audit(&prep, quad, &tris, &lines);
+        let f = &net.area_fit;
+        json.pop();
+        let _ = write!(json, ",\"areas_on\":{},\"areas\":{},\"areas_fit\":{{\"strokes\":{},\"fitted\":{},\"stations\":{},\"valid\":{},\"no_area\":{},\"junction\":{},\"fork\":{},\"no_edge\":{},\"implausible\":{},\"outlier\":{},\"few\":{},\"clamped\":{},\"knots\":{},\"failed\":{}}}}}",
+                       area_on, a.json(), f.strokes, f.fitted, f.stations, f.valid, f.no_area, f.junction, f.fork, f.no_edge, f.implausible, f.outlier, f.few, f.clamped, f.knots, f.failed);
+    }
     Out { json, hash: to.hash, bytes: to.bytes, piece_keys }
 }
 
@@ -430,7 +459,7 @@ mod tests {
         let asked = std::cell::RefCell::new(Vec::new());
         let gr = |pts: &[P2]| { let v = g(pts); asked.borrow_mut().extend_from_slice(&v); v };
         let a = build(&p, Q, (0, 0), 7, &gr, Opts::default());
-        let t = crate::io::TileInput { place: p, quad: Q, id: (0, 0), frame: 7, cut: (4000.0, 2000.0), ground: asked.borrow().clone() };
+        let t = crate::io::TileInput { place: p, quad: Q, id: (0, 0), frame: 7, cut: (4000.0, 2000.0), ground: asked.borrow().clone(), areas_on: false };
         let back = crate::io::read_tile(&crate::io::write_tile(&t)).unwrap();
         let ground = back.ground.clone();
         let b = build(&back.place, back.quad, back.id, back.frame, &|_p: &[P2]| ground.clone(), Opts { cut_grid: back.cut.0, cut_offset: back.cut.1, ..Default::default() });

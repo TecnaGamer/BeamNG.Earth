@@ -731,6 +731,9 @@ class MapData:
         if not osmml.ON:                        # (every machine-learned outline kept: keyed only while off)
             v["osm_over_ml"] = False
         v["dem"] = dem_identity()               # (the elevation the plans, facts and tiles are made on: pinned per release)
+        import osmareas
+        if osmareas.FIT:                        # (BNE_ROADSYS_AREAS=on: the mapped road areas' build, keyed only while on)
+            v["osmareas"] = osmareas.identity(self)
         return v
 
     def warm_manifests(self):
@@ -738,10 +741,12 @@ class MapData:
         server's start): a first run's tiles, plans and cell facts were keyed without them until a build happened to
         ask, and none of those was found again by the next run (versions)."""
         def run():
+            import osmareas
             import osmcolours
             import osmyears
             got = []
-            for mod in (osmyears, osmcolours):  # (the building years and colours: pinned now for the next start, frozen)
+            mods = (osmyears, osmcolours, osmareas) if osmareas.ON else (osmyears, osmcolours)
+            for mod in mods:                    # (the building years and colours: pinned now for the next start, frozen)
                 try:
                     got.append(mod.shards(self))
                 except Exception:

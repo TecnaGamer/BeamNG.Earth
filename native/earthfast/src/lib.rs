@@ -8,6 +8,7 @@
 use crate::dm::Dm;
 mod dm;
 mod roadsysbind;
+mod roadareas;
 mod unalign;
 mod island_kerb;
 mod deckreach;
@@ -7648,7 +7649,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 604 (603 and 605 kept for other branches): cip (architecture v2's compact per-cell inputs: the lossless cell
     // codec of named arrays and blobs; cip_encode_cell, cip_cell_info, cip_decode; server/cip.py, tools/build_cip.py)
     cip::register(m)?;
-    m.add("VERSION", 607)?;
-    m.add("VERSION", 607)?;
+    // 608: OSM's mapped road areas (area:highway=*): roadareas::oah_decode (a tile of tools/build_osm_road_areas.py,
+    // server/osmareas.py), RoadsysAreas + RoadsysSegments(areas=, fit=) (native/roadsys areas.rs: the M0 audit of the
+    // generated surface against them in every product built with areas; BNE_ROADSYS_AREAS=on: the carriageway edges'
+    // soft targets), roadsys_areas_audit (tools/widecorpus/checks.py: today's road surface against them)
+    roadareas::register(m)?;
+    m.add("VERSION", 608)?;
     Ok(())
 }

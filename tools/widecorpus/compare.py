@@ -21,7 +21,10 @@ UNITS = {"inLane": .25, "kerb_in_lane_lips": .25, "step4": 1, "deck_end_steps_5c
          # 0.25 m edge samples, counts
          "double_owner_m2": 1, "envelope_intrusion_m2": 1, "opening_blocked_m2": 1, "pier_in_face_m2": 1,
          "parapet_in_cw_m": 1, "handover_lip_over_5mm": 4, "clearance_short_cells": 8, "clearance_excess_cells": 40,
-         "tcracks_collider": 1, "tcracks_road": 5, "folds_in_lane": 5}
+         "tcracks_collider": 1, "tcracks_road": 5, "folds_in_lane": 5,
+         # OSM's mapped road areas (checks.py areas_*, WIDE_AREAS_DIR: native/roadsys areas.rs): m^2 of the mapped
+         # carriageway not paved / paved past it, mapped islands paved over, holes the surface leaves in mapped pavement
+         "areas_missing_m2": 20, "areas_extra_m2": 20, "areas_islands_missed": 1, "areas_extra_splits": 1}
 REVIEW_LIMIT = {"inLane": 1, "kerb_in_lane_lips": 1, "deck_end_steps_5cm": 1, "step4": 2,
                 "outline_crossings": 1, "drive_hole_samples": 3, "clearance_under_4m": 3,
                 "missing_pavement_samples": 5, "ride_50mph_over_0.5g": 5, "grade_over_15pct": 5,

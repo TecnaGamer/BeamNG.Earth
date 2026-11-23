@@ -49,6 +49,12 @@ product declares and hands them over.
       ("rs_hide"); no junction pads. A structure the faces cannot take (no deck heights for a knot near the tile, a
       short read) keeps today's deck, recorded (STATS["deck_fallback"]).
 
+  BNE_ROADSYS_AREAS (osmareas.py; with shadow or surface): audit: the products read OSM's mapped road areas
+      (area:highway=*) of their read's cells and report how their faces meet them (the shadow record's "areas": edge
+      distance, IoU, width error, splits; native/roadsys areas.rs); on: the areas are also the carriageway edges' soft
+      targets (lane widths, outer shoulders, a shift; the lane rules keep the lanes), for the shadow tiles and M4's
+      decks alike; keyed (a BNE_ switch; MapData.versions()["osmareas"]; the pieces' keys hold every area they read).
+
 Frames: every product is built in the ENU frame of its region (the z8 Web-Mercator tile holding the geotile's
 centre; ~120-160 km), so a component built for two neighbouring tiles is built in one frame, from one read list.
 The frame's identity is in every key."""
@@ -221,8 +227,28 @@ def _deck_depth(ll, a, b):
     return float(roads.deck_depth(span if span > 0 else roads.geom_span([part])))
 
 
-def _segments(tables, frame, style):
-    """earthfast.RoadsysSegments of the tables' segments in frame (every copy: the kernel keeps one)."""
+def _areas(md, cells, frame):
+    """(areas, fit) for a read of cells in frame: earthfast.RoadsysAreas of their mapped road areas (osmareas.py,
+    BNE_ROADSYS_AREAS audit / on) and whether they are the carriageways' targets (on); (None, False) when off or none."""
+    import osmareas
+    if not osmareas.ON or md is None:
+        return None, False
+    try:
+        a = osmareas.areas_for(md, cells, frame)
+    except Exception as ex:         # (no areas rather than no road: the build faults to be made again)
+        log.warning("roadsys areas: %s: %s", type(ex).__name__, ex)
+        import revisit
+        revisit.fault()
+        a = None
+    return a, osmareas.FIT and a is not None
+
+
+AREAS_MD_FN = None          # () -> MapData for the decks' areas (blockworker: its process's own), or None
+
+
+def _segments(tables, frame, style, areas=None, fit=False):
+    """earthfast.RoadsysSegments of the tables' segments in frame (every copy: the kernel keeps one); areas
+    (RoadsysAreas) and fit: the mapped road areas round them (_areas)."""
     import fast
     ids, cells, texts, nums, ints, lls, off = [], [], [], [], [], [], [0]
     con_seg, con_id, con_v, rng_seg, rng = [], [], [], [], []
@@ -251,7 +277,7 @@ def _segments(tables, frame, style):
     return fast._ef.RoadsysSegments(
         ids, cells, texts, np.asarray(nums, np.float64).reshape(-1, 4), np.asarray(ints, np.int64).reshape(-1, 9), pts,
         np.asarray(off, np.int64), np.asarray(con_seg, np.int64), con_id, np.asarray(con_v, np.int64),
-        np.asarray(rng_seg, np.int64), np.asarray(rng, np.float64).reshape(-1, 4), style)
+        np.asarray(rng_seg, np.int64), np.asarray(rng, np.float64).reshape(-1, 4), style, areas=areas, fit=bool(fit))
 
 
 def _cells_of_boxes(frame, boxes):
@@ -305,7 +331,8 @@ def build_tile(gx, gy, md, dem, cells_cache=None, country=None, dump=None):
         rounds += 1
         tr = time.perf_counter()
         tables = [cc.table(k) for k in sorted(cells, key=str)]
-        segs = _segments(tables, frame, style)
+        areas, fit = _areas(md, cells, frame)
+        segs = _segments(tables, frame, style, areas, fit)
         t_read += time.perf_counter() - tr
         boxes, fids, counts, cpu = fast._ef.roadsys_reads(segs, box, CUT, True)
         reads_cpu += cpu
@@ -1132,7 +1159,8 @@ def _deck_read(frame, cell_fn, box, style):
                 return None
         seen |= cells
         tables = [cc.table(k) for k in sorted(cells, key=str)]
-        segs = _segments(tables, frame, style)
+        areas, fit = _areas(AREAS_MD_FN() if AREAS_MD_FN is not None else None, cells, frame)
+        segs = _segments(tables, frame, style, areas, fit)
         boxes, fids, _counts, _cpu = fast._ef.roadsys_reads(segs, list(map(float, box)), CUT, True)
         boxes = _clip_boxes(boxes, w)
         need = (_cells_of_boxes(frame, boxes) | _copy_cells(tables, fids)) & wcells

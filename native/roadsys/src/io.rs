@@ -83,13 +83,16 @@ pub struct Place {
     pub style: Style,
     pub segs: Vec<Seg>,
     pub dem: Dem,
+    pub areas: Vec<crate::areas::Area>,     // OSM's mapped road areas round the read (areas.rs: the audit, the fit)
+    pub area_build: u64,                    // their dataset build's identity (in the keys where the fit is on)
 }
 
 impl Place {
     /// Everything but the segments (a place read from a subset of them).
     pub fn clone_meta(&self) -> Place {
         Place { name: self.name.clone(), lat: self.lat, lon: self.lon, core: self.core, halo: self.halo,
-                country: self.country.clone(), style: self.style.clone(), segs: Vec::new(), dem: Dem::default() }
+                country: self.country.clone(), style: self.style.clone(), segs: Vec::new(), dem: Dem::default(),
+                areas: self.areas.clone(), area_build: self.area_build }
     }
 }
 
@@ -170,11 +173,12 @@ impl Wr {
 /// A shadow tile build's whole input (product::build): the segments, the style, the quad, the label, the frame, the
 /// cut grid and the ground heights the build asked for (in its order): "RSTILE01" + fields, little-endian. The CLI
 /// (`roadsys tile`) builds it again on any platform: the same bytes are the determinism test.
-pub struct TileInput { pub place: Place, pub quad: [[f64; 2]; 4], pub id: (i32, i32), pub frame: u64, pub cut: (f64, f64), pub ground: Vec<f64> }
+/// RSTILE03 adds the mapped road areas, their build and the fit's switch (areas_on).
+pub struct TileInput { pub place: Place, pub quad: [[f64; 2]; 4], pub id: (i32, i32), pub frame: u64, pub cut: (f64, f64), pub ground: Vec<f64>, pub areas_on: bool }
 
 pub fn write_tile(t: &TileInput) -> Vec<u8> {
     let mut w = Wr(Vec::new());
-    w.0.extend_from_slice(b"RSTILE02");
+    w.0.extend_from_slice(b"RSTILE03");
     let st = &t.place.style;
     w.s(&st.centre); w.s(&st.left_edge);
     for v in [st.w, st.w_motorway, st.edge, st.edge_motorway, st.centre_urban.0, st.centre_urban.1, st.lane_urban.0,
@@ -204,6 +208,23 @@ pub fn write_tile(t: &TileInput) -> Vec<u8> {
     w.f64(t.cut.0); w.f64(t.cut.1);
     w.u32(t.ground.len() as u32);
     for &v in &t.ground { w.f64(v); }
+    w.u8(t.areas_on as u8);
+    w.0.extend_from_slice(&t.place.area_build.to_le_bytes());
+    w.u32(t.place.areas.len() as u32);
+    for a in &t.place.areas {
+        w.0.extend_from_slice(&a.key.to_le_bytes());
+        w.s(&a.value);
+        w.i64(a.layer);
+        w.u8(a.flags);
+        w.u32(a.links.len() as u32);
+        for l in &a.links { w.0.extend_from_slice(&l.to_le_bytes()); }
+        w.u32(a.rings.len() as u32);
+        for (role, r) in &a.rings {
+            w.u8(*role);
+            w.u32(r.len() as u32);
+            for p in r { w.f64(p[0]); w.f64(p[1]); }
+        }
+    }
     w.0
 }
 
@@ -211,7 +232,8 @@ pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
     let mut r = R { b, i: 0 };
     if b.len() < 8 { return Err("not a roadsys tile input".into()); }
     let magic = r.take(8).to_vec();
-    let v2 = magic == b"RSTILE02";
+    let v3 = magic == b"RSTILE03";
+    let v2 = v3 || magic == b"RSTILE02";
     if !v2 && magic != b"RSTILE01" { return Err("not a roadsys tile input".into()); }
     let mut st = Style { centre: r.s(), left_edge: r.s(), ..Default::default() };
     st.w = r.f64(); st.w_motorway = r.f64(); st.edge = r.f64(); st.edge_motorway = r.f64();
@@ -245,5 +267,28 @@ pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
     let cut = (r.f64(), r.f64());
     let ng = r.u32() as usize;
     let ground = (0..ng).map(|_| r.f64()).collect();
-    Ok(TileInput { place: Place { country, style: st, segs, ..Default::default() }, quad, id, frame, cut, ground })
+    let mut place = Place { country, style: st, segs, ..Default::default() };
+    let mut areas_on = false;
+    if v3 {
+        areas_on = r.u8() != 0;
+        place.area_build = u64::from_le_bytes(r.take(8).try_into().unwrap());
+        let na = r.u32() as usize;
+        for _ in 0..na {
+            let key = u64::from_le_bytes(r.take(8).try_into().unwrap());
+            let value = r.s();
+            let layer = r.i64();
+            let flags = r.u8();
+            let nl = r.u32() as usize;
+            let links = (0..nl).map(|_| u64::from_le_bytes(r.take(8).try_into().unwrap())).collect();
+            let nr = r.u32() as usize;
+            let mut rings = Vec::with_capacity(nr);
+            for _ in 0..nr {
+                let role = r.u8();
+                let np = r.u32() as usize;
+                rings.push((role, (0..np).map(|_| { let x = r.f64(); [x, r.f64()] }).collect()));
+            }
+            place.areas.push(crate::areas::Area { key, value, layer, flags, links, rings });
+        }
+    }
+    Ok(TileInput { place, quad, id, frame, cut, ground, areas_on })
 }

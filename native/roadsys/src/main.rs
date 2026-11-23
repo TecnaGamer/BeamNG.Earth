@@ -79,7 +79,7 @@ fn main() {
             used.set(true);
             t.ground.clone()
         };
-        let out = product::build(&t.place, t.quad, t.id, t.frame, &g, net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, ..Default::default() });
+        let out = product::build(&t.place, t.quad, t.id, t.frame, &g, net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, areas: t.areas_on, ..Default::default() });
         std::fs::create_dir_all(&args[3]).ok();
         let name = format!("{}_{}", t.id.0, t.id.1);
         std::fs::write(format!("{}/{}.json", args[3], name), &out.json).ok();
@@ -131,6 +131,34 @@ fn main() {
             Ok((bytes, o)) => { println!("decks {:016x} {} {} {}", roadsys::geom::fnv(&bytes), o.t.len(), o.runs.len(), o.mt.len()); return; }
             Err(e) => { eprintln!("{}", e); std::process::exit(1) }
         }
+    }
+    if args.len() == 3 && args[1] == "fit" {
+        // (BNE_ROADSYS_AREAS) a tile input's (ROADSYS dump, RSTILE03) lane graph with its mapped areas' fit: FNV-1a 64
+        // of every stroke's area program and of its boundary offsets every 5 m, the fit's counts and the audit's hash
+        let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(1) });
+        let t = io::read_tile(&b).unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
+        let order: Vec<usize> = (0..t.place.segs.len()).collect();
+        let net = net::build_opts(&t.place, &order, net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, areas: true, ..Default::default() });
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut off = Vec::new();
+        for st in &net.strokes {
+            bytes.extend_from_slice(&st.uid.to_le_bytes());
+            for (s, k) in &st.area { bytes.extend_from_slice(&s.to_bits().to_le_bytes()); for v in k { bytes.extend_from_slice(&v.to_bits().to_le_bytes()); } }
+            let n = (st.len() / 5.0).floor() as usize;
+            for i in 0..=n { st.offsets((i as f64 * 5.0).min(st.len()), &mut off); for v in &off { bytes.extend_from_slice(&v.to_bits().to_le_bytes()); } }
+        }
+        let f = &net.area_fit;
+        println!("fit {:016x} strokes {} fitted {} knots {} valid {}", geom::fnv(&bytes), f.strokes, f.fitted, f.knots, f.valid);
+        return;
+    }
+    if args.len() == 4 && args[1] == "areas" {
+        // the mapped road areas' audit of a surface (tools/widecorpus/checks.py, areas.rs run_input): IN.bin -> OUT.json
+        let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(1) });
+        match areas::run_input(&b) {
+            Ok(j) => { std::fs::write(&args[3], j).unwrap_or_else(|e| { eprintln!("{}: {}", args[3], e); std::process::exit(1) }); }
+            Err(e) => { eprintln!("{}", e); std::process::exit(1); }
+        }
+        return;
     }
     if args.len() == 4 && args[1] == "audit" {
         // the M0 audit (tools/widecorpus/checks.py): IN.bin -> OUT.json

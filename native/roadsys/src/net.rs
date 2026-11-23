@@ -149,6 +149,7 @@ pub struct Stroke {
     pub lane_scale: Vec<(f64, f64)>,   // (station, factor): lane widths from the measured gap to a parallel carriageway
     pub cap_nbrs: Vec<usize>,          // the parallel carriageways whose gap capped it (part.rs caps): its read list
     pub reach: f64,                    // m round it its lane program reads (the lane graph's walks; product.rs halos)
+    pub area: Vec<crate::areas::Knot>, // (BNE_ROADSYS_AREAS) its mapped road areas' program: lane factor, outer shoulders, shift
 }
 
 impl Stroke {
@@ -196,11 +197,30 @@ impl Stroke {
         for &t in &ts { out.push(add(p, scale(n, t))); }
     }
 
-    /// Boundary offsets t_0 >= t_1 >= ... >= t_S (m, + left of the stroke) at station s.
+    /// Boundary offsets t_0 >= t_1 >= ... >= t_S (m, + left of the stroke) at station s (with its mapped areas'
+    /// program, areas.rs, where it has one).
     pub fn offsets(&self, s: f64, out: &mut Vec<f64>) {
+        if self.area.is_empty() { self.offsets_raw(s, None, out); } else { self.offsets_raw(s, Some(crate::areas::knot_at(&self.area, s)), out); }
+    }
+
+    /// offsets() with the areas' parameters area ([lane factor, left / right outer shoulder extra, shift]) or none.
+    pub fn offsets_raw(&self, s: f64, area: Option<[f64; 4]>, out: &mut Vec<f64>) {
         out.clear();
         let n = self.slots.len();
         let mut ws: Vec<f64> = self.slots.iter().map(|k| k.w(s)).collect();
+        if let Some(a) = area {
+            for k in 0..n { if self.slots[k].kind == K_LANE { ws[k] *= a[0]; } }
+            if let Some(k) = (0..n).find(|&k| ws[k] > 1e-6) { if self.slots[k].kind == K_SHOULDER { ws[k] = (ws[k] + a[1]).max(0.0); } }
+            if let Some(k) = (0..n).rev().find(|&k| ws[k] > 1e-6) { if self.slots[k].kind == K_SHOULDER { ws[k] = (ws[k] + a[2]).max(0.0); } }
+        }
+        let dt = area.map(|a| a[3]).unwrap_or(0.0);
+        self.offsets_ws(s, &ws, out);
+        if dt != 0.0 { for t in out.iter_mut() { *t += dt; } }
+    }
+
+    fn offsets_ws(&self, s: f64, ws0: &[f64], out: &mut Vec<f64>) {
+        let n = self.slots.len();
+        let mut ws: Vec<f64> = ws0.to_vec();
         if !self.lane_scale.is_empty() {
             let c = &self.lane_scale;
             let k = c.partition_point(|x| x.0 <= s);
@@ -302,9 +322,10 @@ pub struct NetStats {
 #[derive(Clone, Copy, Debug)]
 /// flat_struct (M4, deck.rs): no crossfall on structure faces (today's decks are flat across: the terrain and the
 /// hand-over were made for them).
-pub struct Opts { pub cut_grid: f64, pub cut_offset: f64, pub flat_struct: bool }
+/// areas (BNE_ROADSYS_AREAS=on): the place's mapped road areas are the carriageway edges' soft targets (areas::fit).
+pub struct Opts { pub cut_grid: f64, pub cut_offset: f64, pub flat_struct: bool, pub areas: bool }
 
-impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0, flat_struct: false } } }
+impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0, flat_struct: false, areas: false } } }
 
 pub struct Net {
     pub opts: Opts,
@@ -320,6 +341,7 @@ pub struct Net {
     pub edge_stroke: Vec<(usize, usize)>, // edge -> (stroke, part)
     pub crossings: Vec<Crossing>,
     pub stats: NetStats,
+    pub area_fit: crate::areas::FitStats,
 }
 
 // ---------------------------------------------------------------------------------------------- v3 helpers (ported)
@@ -800,7 +822,7 @@ pub fn build_opts(place: &Place, input_order: &[usize], opts: Opts) -> Net {
     let nn = nodes.len();
     let mut net = Net { opts, segs, node_ids: ids.clone(), cut: vec![false; nn], region, edges, nodes, forks: Vec::new(),
                         fork_at: vec![None; nn], strokes: Vec::new(), edge_stroke: Vec::new(), crossings: Vec::new(),
-                        stats: NetStats::default() };
+                        stats: NetStats::default(), area_fit: Default::default() };
     net.stats.segs = net.segs.len();
     net.stats.nodes = net.nodes.iter().filter(|n| !n.arms.is_empty()).count();
     net.stats.edges = net.edges.len();
@@ -820,6 +842,10 @@ pub fn build_opts(place: &Place, input_order: &[usize], opts: Opts) -> Net {
     strokes(&mut net);
     lanes(&mut net);
     joints(&mut net);
+    if opts.areas && !place.areas.is_empty() {
+        let prep = crate::areas::prepare(&place.areas);
+        net.area_fit = crate::areas::fit(&mut net, &prep);
+    }
     crossings(&mut net);
     net.stats.strokes = net.strokes.len();
     net
@@ -1017,7 +1043,7 @@ fn strokes(net: &mut Net) {
             uid, parts: ps, line, n0, n1, oneway: seg.dir != 0, lht, slots: Vec::new(), anchor_l: Prog::default(),
             anchor_r: Prog::default(), right_windows: Vec::new(), stations: Vec::new(), dense: Vec::new(), sup: merged,
             cls, cls_s: seg.cls_s.clone(), kmh: if kmh > 0.0 { kmh } else { 50.0 }, region, snap0: None, snap1: None,
-            cut0: 0.0, cut1: 0.0, absorbed: false, lane_scale: Vec::new(), cap_nbrs: Vec::new(), reach: 0.0,
+            cut0: 0.0, cut1: 0.0, absorbed: false, lane_scale: Vec::new(), cap_nbrs: Vec::new(), reach: 0.0, area: Vec::new(),
         });
     }
     for s in &net.strokes {
