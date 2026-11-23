@@ -11979,6 +11979,7 @@ BORE_TOUCH_M = 0.5      # m: at a split or a merge inside the hill (two parts fr
                         # while their decks overlap or come within this of each other; past it a ramp keeps its own
                         # grade, and the wider one (the mainline) keeps its floor (an independent review, 2026-11-23: a
                         # ramp down at 5 % sagged a level mainline 3.9-7 m)
+TWIN_LEVEL_M = 0.1      # m: _twin_level levels two decks' floors this far apart, less up to twice it, none past
 TWIN_STAGGER_M = 15.0   # m: a shared tube reaches over a part's own end this far past its mate's (one mouth, its portals
                         # staggered: GitHub #84's 3 m, each in a stub of its own tube, the walls in the other's lanes)
 
@@ -12463,7 +12464,9 @@ def _twin_level(parts, twins):
             _d, j, t = _near_on(xa[k], xb)
             zb = Z[b][j] + t * (Z[b][j + 1] - Z[b][j])
             dz = np.zeros(len(xa))
-            dz[k] = (zb - Z[a][k]) / 2
+            # (a few cm between two solves: levelled; a real gap, a ramp climbing away past a split's one floor: not)
+            gap = np.abs(zb - Z[a][k])
+            dz[k] = (zb - Z[a][k]) / 2 * np.clip((2 * TWIN_LEVEL_M - gap) / TWIN_LEVEL_M, 0.0, 1.0)
             s = _arc(xa)
             L = OBS_BLEND_MIN_M
             for e, step in ((int(k[0]), -1), (int(k[-1]), 1)):     # (past the stretch: eased off)

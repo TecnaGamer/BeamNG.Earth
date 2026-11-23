@@ -711,7 +711,7 @@ class OneBoreReview(unittest.TestCase):
             for x, y, z in np.asarray(c["n"], np.float64):
                 lowest = min(float(np.interp(x, *zip(*sorted(zip(d[:, 0], d[:, 2]))))) for d in decks
                              if d[:, 0].min() - 1e-6 <= x <= d[:, 0].max() + 1e-6)
-                self.assertLessEqual(z, lowest + 1e-6)
+                self.assertLessEqual(z, lowest + 1e-3)      # (the chunks' heights to the mm)
 
     def test_a_wide_road_beside_a_narrow_one_has_no_wall_in_its_lanes(self):
         # an 11 m mainline beside a 4.5 m ramp: the tube centred between their lines put its wall 0.43 m into the
@@ -728,6 +728,18 @@ class OneBoreReview(unittest.TestCase):
         low = tri[:, :, 2].min(1) < 10.0 + 0.01 * tri[:, :, 0].mean(1) + 4.5
         cy, cx = tri[:, :, 1].mean(1), tri[:, :, 0].mean(1)
         self.assertFalse((steep & low & (cy > -5.5) & (cy < 8.0 + 2.25) & (cx > 5) & (cx < 295)).any())
+
+    def test_a_climbing_ramp_does_not_lift_the_mainline_s_deck(self):
+        # the drawn decks under a split's shared tube were levelled to their mean: the Milchbucktunnel's northbound
+        # deck lifted 0.3 m toward its ramp climbing away (lanecheck, 1605-1644 m)
+        m = line(0.0, 300.0)
+        r = np.c_[np.linspace(0.0, 300.0, 76), np.linspace(0.0, 300.0, 76) * np.tan(np.radians(8.0))]
+        zm, zr = np.full(len(m), 20.0), 20.0 + 0.06 * np.maximum(r[:, 0] - 40.0, 0.0)
+        ch = self.chunks([("m.0#0", Spec(5.8, "paved", True, "trunk"), m, zm, 0.0),
+                          ("r.0#0", Spec(8.3, "paved", True, "trunk"), r, zr, 0.0)], mouths={})
+        decks = [np.asarray(c["n"], np.float64) for c in ch if c.get("deck") and np.median(np.asarray(c["n"])[:, 1]) < 0.5]
+        self.assertTrue(decks)
+        self.assertLess(max(float(np.abs(d[:, 2] - 20.0).max()) for d in decks), 0.01, "the mainline's deck on its floor")
 
     def test_one_tube_whichever_order_the_parts_come_in(self):
         sp = Spec(5.8, "paved", True, "trunk")
