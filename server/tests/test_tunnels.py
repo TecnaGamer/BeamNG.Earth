@@ -599,11 +599,37 @@ class OneBore(unittest.TestCase):
         mesh = roadmesh.tunnel(ch, (0.0, 0.0, 0.0))
         P, T = mesh[0], mesh[1]
         tri = P[np.asarray(T, np.int64).reshape(-1, 3)]
-        steep = np.abs(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])[:, 2]) < 1e-6
+        steep = (np.abs(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])[:, 2]) < 1e-6) &             (np.ptp(tri[:, :, 2], axis=1) > 0.1)      # (a wall, not the shared floor's 2 cm lip)
         low = tri[:, :, 2].min(1) < 10.0 + 0.02 * tri[:, :, 0].mean(1) + 4.5
         y = tri[:, :, 1].mean(1)
         inside = (y > -6.0 - 2.9) & (y < 6.5 + 2.9) & (tri[:, :, 0].mean(1) > 5.0) & (tri[:, :, 0].mean(1) < 195.0)
         self.assertFalse((steep & low & inside).any(), "no wall over any of the three carriageways")
+
+    def test_the_shared_tube_has_a_floor_between_the_decks(self):
+        # the two carriageways' decks (5.8 m) 6.9 m apart: a 1.1 m slot between them under the shared tube, its floor
+        # nothing (lanecheck, Milchbucktunnel: where the mapped carriageways lie further apart than their decks)
+        lines, widths, floors, meas = self.bore()
+        new = roads.bore_floors(lines, widths, floors, meas)
+        sp = Spec(self.W, "paved", True, "trunk")
+        ch = self.chunks([("n.0#2", sp, lines[0], new[0], 0.0), ("s.0#1", sp, lines[1], new[1], 0.0)])
+        mesh = roadmesh.tunnel(ch, (0.0, 0.0, 0.0))
+        P, T = mesh[0], np.asarray(mesh[1], np.int64).reshape(-1, 3)
+        tri = P[T]
+        for x in (300.0, 700.0, 1100.0):                    # (straight down at the middle, between the decks)
+            z_floor = 10.0 + 1.6 + 0.0227 * x               # (the measured line: the one floor)
+            hits = []
+            for a, b, c in tri:
+                d = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])
+                if abs(d) < 1e-9 or d < 0 and False:
+                    continue
+                l1 = ((b[0] - x) * (c[1] - 0.0) - (c[0] - x) * (b[1] - 0.0)) / d
+                l2 = ((c[0] - x) * (a[1] - 0.0) - (a[0] - x) * (c[1] - 0.0)) / d
+                l3 = 1.0 - l1 - l2
+                if min(l1, l2, l3) >= -1e-9:
+                    hits.append(l1 * a[2] + l2 * b[2] + l3 * c[2])
+            near = [z for z in hits if abs(z - z_floor) < 0.1]
+            self.assertTrue(near, f"a floor in the slot between the decks at x {x}")
+            self.assertTrue(all(z < z_floor - 0.005 for z in near), "just under the decks")
 
     def test_no_hole_in_the_hill_over_the_split(self):
         lines, widths, floors, meas = self.bore()

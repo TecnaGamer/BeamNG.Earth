@@ -3046,6 +3046,7 @@ LOW_CAP_M = 7.0            # m a low arch's stone top runs back from its portal 
                            # dips to the floor and is cut away (roads.arch_raise, LOW_HOLE_M + LOW_HOLE_STEP): from
                            # above a row of dark terrain teeth behind the face (79th Street Transverse, 2026-10-17)
 TUNNEL_OVERLAP = 0.25      # m a tube piece reaches past a tile edge
+BORE_FLOOR_DROP = 0.02     # m a shared tube's own floor lies under its carriageways' decks
 TUNNEL_LIGHT = "bne_tunnel_light"   # the lamps' emissive material (levels/beamng_earth/art/shapes/beamngEarth)
 TUNNEL_LAMP_EVERY = 6.0    # m between the lamp fixtures along each wall ...
 TUNNEL_LAMP_L = 1.2        # ... each this long, ...
@@ -3217,6 +3218,10 @@ def tunnel(chunks, origin, walls=()):
         mat = 3 if stone else 5                               # (its portal faces: 2, the stone in daylight; a full
                                                             # tube's inside: 5, TUNNEL_INNER)
         sec = _tunnel_section(hw, th, low, box=low and not stone and portals.ON)    # (a major road's low tube: a box)
+        if c.get("bore_floor"):
+            # (a shared tube's own floor, wall to wall, BORE_FLOOR_DROP under the carriageways' decks: where two lie
+            # further apart than their width the strip between them had no floor; roads._bore_tubes)
+            sec = np.vstack([sec, [(-hw + TUNNEL_SHOULDER, -BORE_FLOOR_DROP), (hw - TUNNEL_SHOULDER, -BORE_FLOOR_DROP)]])
         k, m = len(mid), len(sec)
         rows = np.empty((m, k, 3))
         for j, (off, h) in enumerate(sec):

@@ -12502,7 +12502,7 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
     jobs = []                                   # (fid, its ends, [(look, width, line)], spec, its mouths, its length)
     for pc, w, mo, L, own in tubes:             # the tube round them where they share it (_bore_tubes)
         jobs.append((parts[own][0], (pc[0, :2], pc[-1, :2]),
-                     [({**TUNNEL, "tunnel": True, "tube_only": True}, w, pc)], parts[own][1], mo, L))
+                     [({**TUNNEL, "tunnel": True, "tube_only": True, "bore_floor": BORE_ON}, w, pc)], parts[own][1], mo, L))
     for n, (fid, spec, xy, z, lon) in enumerate(parts):
         pts = np.c_[xy, z]
         # A covered road needs its own colliding floor even when its mapped surface normally belongs to the
@@ -12545,7 +12545,7 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                             ch["tunnel_len"] = round(length, 1)             # (the whole sub-part's: sound_boxes)
                             if spec.cls in CONCRETE_WALL_CLASSES:
                                 ch["concrete"] = True   # (a major road's low arch: concrete, as its cutting's walls)
-                            for flag in ("no_tube", "tube_only"):
+                            for flag in ("no_tube", "tube_only", "bore_floor"):
                                 if look.get(flag):
                                     ch[flag] = True
                             if getattr(tunnels, "height", None) is not None:
