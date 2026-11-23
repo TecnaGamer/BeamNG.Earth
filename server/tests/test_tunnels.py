@@ -517,14 +517,16 @@ class OneBore(unittest.TestCase):
         self.assertEqual(roads.twin_tunnels([("a.0#0", sp, a, z(a), 0.0), ("c.0#0", sp, cross, np.full(76, 13.0), 0.0)]),
                          [], "a crossing: two tubes")
 
-    def chunks(self, parts, mouths=None):
+    def chunks(self, parts, mouths=None, box=(-300.0, -300.0, 2000.0, 300.0)):
         class T:
-            def parts(self, cells, exact):
-                return parts
+            def parts(self, cells, exact):          # (as the store: the parts crossing the box)
+                x0, y0, x1, y1 = exact
+                return [p for p in parts if ((p[2][:, 0] >= x0) & (p[2][:, 0] <= x1) & (p[2][:, 1] >= y0) &
+                                             (p[2][:, 1] <= y1)).any()]
 
             def mouth(self, fid):
                 return (mouths or {}).get(fid, (True, True))
-        return roads._tunnel_chunks(T(), [], (-300.0, -300.0, 2000.0, 300.0))
+        return roads._tunnel_chunks(T(), [], box)
 
     def test_chunks_own_tubes_past_the_bore_and_no_face_at_the_split(self):
         lines, widths, floors, meas = self.bore()
@@ -568,6 +570,40 @@ class OneBore(unittest.TestCase):
         ends = [(float(c[0][0]), float(c[0][2])) for c in decks]
         self.assertTrue(any(abs(x + 100.0) < 1e-6 and abs(z - float(served[0][0])) < 1e-6 for x, z in ends),
                         "its portal's height kept")
+
+    def test_a_tile_holding_one_carriageway_still_draws_the_shared_tube(self):
+        # a tile's box takes the northbound alone where the bore runs along its edge (the southbound 6.9 m over it):
+        # paired within the tile only, the northbound was drawn in its own tube there, its wall between the lanes, and
+        # the strip between their decks had no floor (lanecheck, Milchbucktunnel, 1148-1166 m)
+        lines, widths, floors, meas = self.bore()
+        new = roads.bore_floors(lines, widths, floors, meas)
+        sp = Spec(self.W, "paved", True, "trunk")
+        parts = [("n.0#2", sp, lines[0], new[0], 0.0), ("s.0#1", sp, lines[1], new[1], 0.0)]
+        ch = self.chunks(parts, box=(400.0, -300.0, 600.0, 0.0))
+        self.assertTrue(any(c.get("tube_only") for c in ch), "the shared tube")
+        self.assertFalse(any(c.get("tunnel") and c.get("deck") and not c.get("no_tube") for c in ch),
+                         "no carriageway in its own tube in the bore")
+
+    def test_three_roads_at_one_mouth_share_one_tube(self):
+        # the Milchbucktunnel's north mouths (lanecheck): a service road between the two carriageways for its last 30
+        # m, three portals side by side; one tube per pair of them stood its wall in the third one's lane
+        sp, sv = Spec(5.8, "paved", True, "trunk"), Spec(3.5, "paved", True, "service")
+        a = line(0.0, 200.0, y=-6.0)
+        b = line(0.0, 200.0, y=0.0)[::-1]
+        c = line(0.0, 200.0, y=6.5)[::-1]
+        z = lambda xy: 10.0 + 0.02 * xy[:, 0]          # noqa: E731
+        parts = [("a.0#0", sp, a, z(a), 0.0), ("b.0#0", sv, b, z(b), 0.0), ("c.0#0", sp, c, z(c), 0.0)]
+        ch = self.chunks(parts)
+        tubes = [c_ for c_ in ch if c_.get("tunnel") and not c_.get("no_tube")]
+        self.assertTrue(tubes and all(c_.get("tube_only") for c_ in tubes), "no carriageway in its own tube")
+        mesh = roadmesh.tunnel(ch, (0.0, 0.0, 0.0))
+        P, T = mesh[0], mesh[1]
+        tri = P[np.asarray(T, np.int64).reshape(-1, 3)]
+        steep = np.abs(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])[:, 2]) < 1e-6
+        low = tri[:, :, 2].min(1) < 10.0 + 0.02 * tri[:, :, 0].mean(1) + 4.5
+        y = tri[:, :, 1].mean(1)
+        inside = (y > -6.0 - 2.9) & (y < 6.5 + 2.9) & (tri[:, :, 0].mean(1) > 5.0) & (tri[:, :, 0].mean(1) < 195.0)
+        self.assertFalse((steep & low & inside).any(), "no wall over any of the three carriageways")
 
     def test_no_hole_in_the_hill_over_the_split(self):
         lines, widths, floors, meas = self.bore()
