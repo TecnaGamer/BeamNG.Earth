@@ -727,6 +727,28 @@ class SourceTest(unittest.TestCase):
             with mock.patch.object(hkbuildings, "ON", False):
                 self.assertFalse(hkbuildings.credited_near(d, *LOHAS, 1500.0))
 
+    def test_credited_near_the_player(self):
+        # the credits line near the player names the Lands Department once road tiles are shown, as CREDITS.md
+        # words it; not with the source off (no hkbuildings on the map data), never a download
+        import types
+        import credits
+        import geodesy
+
+        with tempfile.TemporaryDirectory() as d:
+            md = types.SimpleNamespace(cache_dir=d, hkbuildings=hkbuildings.Source(d, FakeFetcher([TOWER])))
+            s = types.SimpleNamespace(anchors={1: types.SimpleNamespace(frame=geodesy.EnuFrame(*LOHAS))},
+                                      mapdata=md, surface=None, veg=None, airports=None)
+            conn = types.SimpleNamespace(s=s, active=1, focus=(0.0, 0.0), roads=types.SimpleNamespace(aid=1, sent={1}),
+                                         veg=None, sea_sent=None, gravity=None)
+            self.assertNotIn("bld:landsd-hk", credits.feature_ids(conn))
+            self.assertTrue(md.hkbuildings.wait([self.key]))
+            self.assertIn("bld:landsd-hk", credits.feature_ids(conn))
+            self.assertEqual(credits.line({"bld:landsd-hk"}), "Buildings: HK Gov LandsD (CSDI)")
+            md.hkbuildings = None
+            self.assertNotIn("bld:landsd-hk", credits.feature_ids(conn))
+        text = (Path(__file__).resolve().parents[2] / "CREDITS.md").read_text()
+        self.assertIn(credits.full_label("bld:landsd-hk"), text)
+
     def test_a_cell_without_buildings_is_kept_empty(self):
         with tempfile.TemporaryDirectory() as d:
             fx = FakeFetcher([])
