@@ -33,6 +33,10 @@ M.SPECIES = {
     winter = { 1.05, 0.72, 0.5 } },
   { mats = { 'generibush_leaves' }, merged = {}, folders = {}, tint = { 1.5, 0.95, 0.35 }, days = 0,
     winter = { 1.05, 0.75, 0.5 } },
+  -- (2026-11-23) evergreen, a constant tint (always: every season, whatever the mode): Italy's fluffy_bush (fluffy, the
+  -- maquis') a pale sage green (RGB ~0.40 0.46 0.32) among the maquis' ~0.30 0.36 0.20: it stood out on Makarska's
+  -- slopes, the user's screenshot; darker and a little greener
+  { mats = { 'fluffy' }, merged = {}, folders = {}, always = { 0.74, 0.8, 0.62 } },
 }
 -- (oaks turn last; folders: the species' tree shapes, whose far imposters (the engine's flat pictures of a whole tree,
 -- materials 'imposter_mat__<shape path>') take the same tint: they kept their summer green while the 3D trees in front
@@ -91,6 +95,7 @@ function M.getMode() return mode end     -- (groundcover.lua: the grass's season
 -- Pure: the tint of a species {tint, days, winter} on day doy at lat for mode: the strongest of its fall (its own
 -- timing, eased), winter and spring tints, as {r, g, b} multipliers and that amount.
 function M.speciesTint(sp, mode_, doy, lat)
+  if sp.always then return sp.always, 1 end
   local f, w, s
   if mode_ == 'fall' then f, w, s = 1, 0, 0
   elseif mode_ == 'winter' then f, w, s = 0, 1, 0
