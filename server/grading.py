@@ -2301,7 +2301,7 @@ def _twin_trimmed(secs):
     parts = [(secs[n][0], secs[n][1], np.asarray(secs[n][2], np.float64), np.asarray(secs[n][3], np.float64), 0.0)
              for n in cov]
     out = list(secs)
-    twins = roadsmod.twin_tunnels(parts)
+    twins = roadsmod.twin_tunnels(parts, stagger=0.0)   # (the stretch both run: no mouth overhang)
     if roadsmod.BORE_ON:
         # (a shared tube covers only the stretch two parts share, each in its own tube past it: only a short covered
         # overhang past it to the section's own mouth, no other covered section going on from there, is cut)

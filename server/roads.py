@@ -9797,6 +9797,19 @@ class TunnelProfiles(BridgeProfiles):
     def _structure(self, chain):                # (no truss over a tunnel)
         return [], []
 
+    def _chain_edges(self, pool, ground):
+        """BridgeProfiles._chain_edges, and parts whose tubes overlap side by side (_bore_edges, as far as the tubes
+        reach, not the decks' MERGE_TOUCH_M) in one chain: bore_floors makes one bore's floors one only in one solve
+        (an independent review, 2026-11-23: carriageways 7.5-9 m apart got a shared tube over floors 1.5 m apart)."""
+        nk, by_node, crossing = super()._chain_edges(pool, ground)
+        if BORE_ON:
+            keys = sorted(pool)
+            for a, b in _bore_edges([pool[k][1] for k in keys],
+                                    [pool[k][0].width if pool[k][0] is not None else 0.0 for k in keys]):
+                crossing.setdefault(keys[a], set()).add(keys[b])
+                crossing.setdefault(keys[b], set()).add(keys[a])
+        return nk, by_node, crossing
+
     wet = None      # wet(lat, lon) -> water depth (m): identify chains needing a constrained wet profile and finite
                     # client water columns. Unsupported wet chains stay excluded; earthd/blockworker set the sources.
     open = None
@@ -10907,7 +10920,8 @@ def tunnel_hole_mask(parts, u, cx, cy, square, heights=None, mouths=None):
     n_own = len(parts)
     fin = [p for p in parts if np.isfinite(np.asarray(p[3])).all()]
     heights, mouths = dict(heights or {}), dict(mouths or {})
-    tubes, _under = _bore_tubes(fin, twin_tunnels(fin), lambda f: mouths.get(f, (True, True)))
+    tubes, _under = _bore_tubes(fin, twin_tunnels(fin), lambda f: mouths.get(f, (True, True)),
+                                (x0, y0, x0 + n * square, y0 + n * square))
     for n, (piece, w, mo, _L, own) in enumerate(tubes):     # (each piece of the shared tubes, its own mouths)
         fid = f"{fin[own][0]}~bore{n}"
         if fin[own][0] in heights:
@@ -11961,6 +11975,12 @@ BORE_DZ_M = 4.0         # m: floors further apart than this (the median over the
 BORE_COVER_M = 7.3      # m: a floor raised to a bore-mate's measured one stays this far under the lower ground over
                         # them (the tube's 6.8 m and soil), unless the deeper of the two already is not
 BORE_PIECE_M = 20.0     # m: a shared tube's pieces, each as wide as both carriageways and the room between them there
+BORE_TOUCH_M = 0.5      # m: at a split or a merge inside the hill (two parts from one node) the floors are one only
+                        # while their decks overlap or come within this of each other; past it a ramp keeps its own
+                        # grade, and the wider one (the mainline) keeps its floor (an independent review, 2026-11-23: a
+                        # ramp down at 5 % sagged a level mainline 3.9-7 m)
+TWIN_STAGGER_M = 15.0   # m: a shared tube reaches over a part's own end this far past its mate's (one mouth, its portals
+                        # staggered: GitHub #84's 3 m, each in a stub of its own tube, the walls in the other's lanes)
 
 
 def _near_on(xy, other):
@@ -11981,32 +12001,46 @@ def _near_on(xy, other):
     return out_d, out_j, out_t
 
 
-def _bore_pairs(X, widths, Z, roads_=None):
+def _bore_pairs(X, widths, Z, roads_=None, splits=False):
     """Bore-mates among tunnel parts (lines X [(n, 2)], widths, floors Z): per ordered pair (a, b) the runs of a's
-    points where b's tube overlaps a's (within the tubes' reach of b's line, heading along it) for BORE_MIN_M at
-    least, their floors BORE_DZ_M apart at most (the median): [(a, b, i0, i1, j, t)], j and t per point of the run
-    b's segment index and fraction at its nearest point. A road's own sections (roads_: per part its road) and a part
-    going on from another's end are not mates. Pure."""
+    points beside b (not past either of its ends) where b's tube overlaps a's (within the tubes' reach of b's line,
+    heading along it) for BORE_MIN_M at least, their floors BORE_DZ_M apart at most (the median): [(a, b, i0, i1, j, t,
+    split)], j and t per point of the run b's segment index and fraction at its nearest point, split: a and b leave one
+    node (a split or a merge inside the hill; splits=True: their run then only while their decks overlap or come within
+    BORE_TOUCH_M of each other, past it a ramp keeps its own grade). A road's own sections (roads_: per part its road)
+    and a part going on from another's end are not mates. Only pairs whose boxes meet are looked at. Pure."""
     out = []
     n = len(X)
+    if n < 2:
+        return out
     S = [_arc(x) for x in X]
     tan = []
     for x in X:
         g = np.gradient(x, axis=0) if len(x) >= 2 else np.zeros((len(x), 2))
         tan.append(g / np.maximum(dnp.hypot(*g.T), 1e-9)[:, None])
+    ok = [len(x) >= 2 and np.isfinite(z).all() for x, z in zip(X, Z)]
+    W = np.asarray(widths, np.float64)
+    lo = np.asarray([x.min(0) if len(x) else (np.inf, np.inf) for x in X], np.float64)
+    hi = np.asarray([x.max(0) if len(x) else (-np.inf, -np.inf) for x in X], np.float64)
+    pad = W / 2 + roadmesh.TUNNEL_SHOULDER + 1.0
+    meet = np.ones((n, n), bool)
+    for k in (0, 1):
+        meet &= (lo[:, None, k] - pad[:, None] <= hi[None, :, k] + pad[None, :]) & \
+                (hi[:, None, k] + pad[:, None] >= lo[None, :, k] - pad[None, :])
     for a in range(n):
-        if len(X[a]) < 2 or not np.isfinite(Z[a]).all():
+        if not ok[a]:
             continue
-        for b in range(n):
-            if b == a or len(X[b]) < 2 or not np.isfinite(Z[b]).all():
+        for b in (int(v) for v in np.flatnonzero(meet[a])):
+            if b == a or not ok[b]:
                 continue
             if roads_ is not None and roads_[a] is not None and roads_[a] == roads_[b]:
                 continue
             if _goes_on(X[a], X[b]):
                 continue
-            reach = (widths[a] + widths[b]) / 2 + 2 * roadmesh.TUNNEL_SHOULDER + 1.0      # their tubes overlap
-            lo, hi = X[b].min(0) - reach, X[b].max(0) + reach
-            inb = np.flatnonzero(((X[a] >= lo) & (X[a] <= hi)).all(1))
+            split = any(float(dnp.hypot(*(X[a][ea] - X[b][eb]))) <= TWIN_JOIN_M for ea in (0, -1) for eb in (0, -1))
+            reach = (W[a] + W[b]) / 2 + (BORE_TOUCH_M if splits and split else 2 * roadmesh.TUNNEL_SHOULDER + 1.0)
+            blo, bhi = X[b].min(0) - reach, X[b].max(0) + reach
+            inb = np.flatnonzero(((X[a] >= blo) & (X[a] <= bhi)).all(1))
             if len(inb) < 2:
                 continue
             d, j, t = _near_on(X[a][inb], X[b])
@@ -12024,10 +12058,10 @@ def _bore_pairs(X, widths, Z, roads_=None):
             jj, tt = np.zeros(len(X[a]), np.int64), np.zeros(len(X[a]))
             jj[inb], tt[inb] = j, t
             zb = Z[b][jj] + tt * (Z[b][jj + 1] - Z[b][jj])
-            for i0, i1 in _runs(near, S[a], BORE_MIN_M):
+            for i0, i1 in _runs(near, S[a], BORE_MIN_M if not (splits and split) else 2.0):
                 if float(np.median(np.abs(Z[a][i0:i1 + 1] - zb[i0:i1 + 1]))) > BORE_DZ_M:
                     continue                    # one over the other
-                out.append((a, b, i0, i1, jj[i0:i1 + 1], tt[i0:i1 + 1]))
+                out.append((a, b, i0, i1, jj[i0:i1 + 1], tt[i0:i1 + 1], split))
     return out
 
 
@@ -12047,48 +12081,74 @@ def _runs(mask, s, min_m):
     return out
 
 
+def _bore_edges(lines, widths):
+    """(i, j), i < j: tunnel parts whose tubes overlap side by side (the tubes' reach: _bore_pairs'), for
+    TunnelProfiles._chain_edges: solved in one chain, so bore_floors makes their floors one. Pure."""
+    return _deck_beside(lines, [w + 2 * roadmesh.TUNNEL_SHOULDER + 1.0 - MERGE_TOUCH_M for w in widths])
+
+
+def _smooth(dh, dist, L):
+    u = np.clip(1.0 - np.abs(dist) / L, 0.0, 1.0)
+    return dh * u * u * (3.0 - 2.0 * u)
+
+
 def bore_floors(lines, widths, floors, measured=None, ground=None, roads=None):
     """floors (per tunnel part of one network: its line (n, 2), width, floor (n,)) with every two parts whose tubes
     overlap side by side (_bore_pairs: one bore) on one floor where they do: a source's measured floor where either
     has one there (measured: per part, per point, the measured height as the solve eased it, NaN where none), eased in
-    from the deeper floor where the measurement starts or stops inside the bore, else the deeper of the two (the
-    cover kept); a floor raised to a measured one no nearer the lower ground over them (ground: per part, per point,
-    the raw ground) than BORE_COVER_M unless the deeper of the two already is. Every part's ends keep their heights
-    (a portal on its graded ground, a joint on the chain's pin): within the bore the one floor eases onto them as a
-    measured deck onto its joints (earthfast.deck_blend's curve, OBS_BLEND_DG), each portal its own where two meet one
-    mouth; past the bore each part eases from the one floor onto its own over the room it has before its end. roads:
+    from the deeper floor where the measurement starts or stops inside the bore, else the deeper of the two (the cover
+    kept); at a split or a merge inside the hill (two parts from one node) only while their decks overlap or touch, on
+    the wider one's floor (the mainline's: a ramp leaving it does not drag it along), else the deeper; a floor raised to
+    a measured one no nearer the lower ground over them (ground: per part, per point, the raw ground) than BORE_COVER_M
+    unless the deeper of the two already is. Every part's ends keep their heights (a portal on its graded ground, a
+    joint on the chain's pin): within the bore the one floor eases onto them as a measured deck onto its joints
+    (earthfast.deck_blend's curve, OBS_BLEND_DG), the mates' first and each part's own last (exact), each portal its own
+    where two meet one mouth; past the bore each part eases from the one floor onto its own over the room it has, and
+    where it has too little for OBS_BLEND_DG the bore's floor eases onto its own inside (both parts together). roads:
     per part its road (its own sections are never mates). Pure."""
     X = [np.asarray(ln, np.float64).reshape(-1, 2) for ln in lines]
     Z = [np.asarray(z, np.float64) for z in floors]
     out = [z.copy() for z in Z]
     if not BORE_ON or len(X) < 2:
         return out
-    pairs = _bore_pairs(X, widths, Z, roads)
+    pairs = _bore_pairs(X, widths, Z, roads, splits=True)
     if not pairs:
         return out
     n = len(X)
+    W = [float(w) for w in widths]
     M = [np.full(len(Z[k]), np.nan) if measured is None or measured[k] is None else np.asarray(measured[k], np.float64)
          for k in range(n)]
     G = [None if ground is None or ground[k] is None else np.asarray(ground[k], np.float64) for k in range(n)]
     S = [_arc(x) for x in X]
-    face = [{} for _ in range(n)]           # per part: point -> [(a mate's floor, measured, ground) facing it]
-    runs = [[] for _ in range(n)]           # per part: (i0, i1, mate, reach)
-    for a, b, i0, i1, jj, tt in pairs:
+    face = [{} for _ in range(n)]       # per part: point -> [(a mate's floor, measured, ground, width, split)]
+    runs = [[] for _ in range(n)]       # per part: (i0, i1, mate, reach)
+    for a, b, i0, i1, jj, tt, split in pairs:
         zb = Z[b][jj] + tt * (Z[b][jj + 1] - Z[b][jj])
         mb = M[b][jj] + tt * (M[b][jj + 1] - M[b][jj])       # (NaN where either end has none)
         gb = None if G[b] is None else G[b][jj] + tt * (G[b][jj + 1] - G[b][jj])
         for m, i in enumerate(range(i0, i1 + 1)):
-            face[a].setdefault(i, []).append((float(zb[m]), float(mb[m]), None if gb is None else float(gb[m])))
-        runs[a].append((i0, i1, b, (widths[a] + widths[b]) / 2 + 2 * roadmesh.TUNNEL_SHOULDER + 1.0))
+            face[a].setdefault(i, []).append((float(zb[m]), float(mb[m]), None if gb is None else float(gb[m]),
+                                              W[b], split))
+        runs[a].append((i0, i1, b, (W[a] + W[b]) / 2 + 2 * roadmesh.TUNNEL_SHOULDER + 1.0))
+    # the target per part: the measured floor, else at a split the mainline's, else the deeper
+    F0, inside = [None] * n, [None] * n
     for a in range(n):
         if not runs[a]:
             continue
         z, s = Z[a], S[a]
-        inside = np.zeros(len(z), bool)
+        ins = np.zeros(len(z), bool)
         low, me, gm = z.copy(), np.full(len(z), np.nan), np.full(len(z), np.nan)
         for i, fs in face[a].items():
-            inside[i] = True
-            low[i] = min([float(z[i])] + [f[0] for f in fs])
+            ins[i] = True
+            par = [f[0] for f in fs if not f[4]]
+            spl = [(f[0], f[3]) for f in fs if f[4]]
+            if spl:
+                spl.append((float(z[i]), W[a]))
+                wmax = max(w for _z, w in spl)
+                main = min(zz for zz, w in spl if w >= wmax - 0.5)
+                low[i] = min([main] + par)
+            else:
+                low[i] = min([float(z[i])] + par)
             ms = [m for m in [float(M[a][i])] + [f[1] for f in fs] if np.isfinite(m)]
             if ms:
                 me[i] = min(ms)
@@ -12097,7 +12157,7 @@ def bore_floors(lines, widths, floors, measured=None, ground=None, roads=None):
             if gs:
                 gm[i] = min(gs)
         T = low.copy()
-        have = inside & np.isfinite(me)
+        have = ins & np.isfinite(me)
         k = 0
         while k < len(z):                       # (each measured stretch eased from the deeper floor where it begins or
             if not have[k]:                     # ends inside the bore, as _observed_floor eases onto a portal)
@@ -12106,62 +12166,80 @@ def bore_floors(lines, widths, floors, measured=None, ground=None, roads=None):
             r = k
             while r + 1 < len(z) and have[r + 1]:
                 r += 1
-            t0 = float(low[k]) if k > 0 and inside[k - 1] else float("nan")
-            t1 = float(low[r]) if r + 1 < len(z) and inside[r + 1] else float("nan")
+            t0 = float(low[k]) if k > 0 and ins[k - 1] else float("nan")
+            t1 = float(low[r]) if r + 1 < len(z) and ins[r + 1] else float("nan")
             if r > k:
                 import fast
                 T[k:r + 1] = np.asarray(fast._ef.deck_blend(np.ascontiguousarray(s[k:r + 1] - s[k]),
                                                              np.ascontiguousarray(me[k:r + 1]), t0, t1, OBS_BLEND_DG,
                                                              OBS_BLEND_MIN_M, 0.5), np.float64)
             k = r + 1
-        up = inside & (T > low) & np.isfinite(gm)
+        up = ins & (T > low) & np.isfinite(gm)
         T[up] = np.minimum(T[up], np.maximum(low[up], gm[up] - BORE_COVER_M))
-        F = np.where(inside, T, z)
-        # the ends held: its own (a portal, a joint) where they lie in the bore, and its mates' beside it (theirs, as
-        # the mates hold them), its own winning where both lie at one mouth
-        pins = [(0.0, float(z[0]), True), (float(s[-1]), float(z[-1]), True)]
-        pins = [p for p, k in zip(pins, (0, len(z) - 1)) if inside[k]]
-        own = list(pins)
+        F0[a], inside[a] = np.where(ins, T, z), ins
+
+    def room(a, k, step):
+        """(the last point of the room past run end k going `step`, its length; half when another run is past it)"""
+        z, s, ins = Z[a], S[a], inside[a]
+        m = k + step
+        while 0 <= m + step < len(z) and not ins[m + step]:
+            m += step
+        r = abs(float(s[m] - s[k]))
+        return m, (r if m in (0, len(z) - 1) else r / 2)
+    # where a part has too little room past the bore to ease back onto its own floor, the bore's floor takes its own
+    # at the bore's end (a pin both hold)
+    held = []                                   # (part, point, height)
+    for a in range(n):
+        if F0[a] is None:
+            continue
+        ins = inside[a]
+        for e in np.flatnonzero(np.diff(ins.astype(np.int8))):
+            for k, step in ((int(e), 1), (int(e) + 1, -1)):
+                if not ins[k] or not (0 <= k + step < len(ins)) or ins[k + step]:
+                    continue
+                dh = abs(float(F0[a][k] - Z[a][k]))
+                _m, rm = room(a, k, step)
+                if dh > 1e-6 and rm < 1.5 * dh / OBS_BLEND_DG:
+                    held.append((a, X[a][k], float(Z[a][k])))
+    for a in range(n):
+        if F0[a] is None:
+            continue
+        z, s, ins = Z[a], S[a], inside[a]
+        F = F0[a].copy()
+        k_in = np.flatnonzero(ins)
+        # the ends held: the mates' beside its runs first (their ends, their held points), then its own, exact
+        own = [(float(s[k]), float(z[k])) for k in (0, len(z) - 1) if ins[k]]
+        own += [(float(s[int(np.argmin(np.hypot(*(X[a] - p).T)))]), h) for b, p, h in held if b == a]
+        mates = []
         for i0, i1, b, reach in runs[a]:
-            for e in (0, -1):
-                d, j, t = _near_on(X[b][e][None, :], X[a])
+            pts = [(X[b][e], float(Z[b][e])) for e in (0, -1)] + [(p, h) for c, p, h in held if c == b]
+            for p, h in pts:
+                d, j, t = _near_on(p[None, :], X[a])
                 at = float(s[j[0]] + t[0] * (s[j[0] + 1] - s[j[0]]))
-                if d[0] < reach and s[i0] - 1e-6 <= at <= s[i1] + 1e-6 and \
-                        all(abs(at - p[0]) > reach for p in own):
-                    pins.append((at, float(Z[b][e]), False))
-        k_in = np.flatnonzero(inside)
-        for at, h, _own in pins:
-            here = float(np.interp(at, s, F))
-            dh = h - here
-            if abs(dh) < 1e-9:
-                continue
-            L = max(1.5 * abs(dh) / OBS_BLEND_DG, OBS_BLEND_MIN_M)
-            u = np.clip(1.0 - np.abs(s[k_in] - at) / L, 0.0, 1.0)
-            F[k_in] += dh * u * u * (3.0 - 2.0 * u)
+                if d[0] < reach and s[i0] - reach <= at <= s[i1] + reach and all(abs(at - o[0]) > reach for o in own):
+                    mates.append((at, h))
+        for at, h in mates + own:
+            dh = h - float(np.interp(at, s, F))
+            if abs(dh) > 1e-9:
+                F[k_in] += _smooth(dh, s[k_in] - at, max(1.5 * abs(dh) / OBS_BLEND_DG, OBS_BLEND_MIN_M))
+        for at, h in own:                       # (its own, exact: a joint's two pieces meet)
+            k = int(np.argmin(np.abs(s - at)))
+            if ins[k] and abs(s[k] - at) < 1e-6:
+                F[k] = h
         # past the bore: from the one floor back onto its own over the room before its end or the next stretch
-        edges = np.flatnonzero(np.diff(inside.astype(np.int8)))
-        for e in edges:
-            for k, step in ((e, 1), (e + 1, -1)):      # (the run's last point, the way out of it)
-                if not inside[k] or k + step < 0 or k + step >= len(z) or inside[k + step]:
+        for e in np.flatnonzero(np.diff(ins.astype(np.int8))):
+            for k, step in ((int(e), 1), (int(e) + 1, -1)):
+                if not ins[k] or not (0 <= k + step < len(z)) or ins[k + step]:
                     continue
                 dh = float(F[k] - z[k])
                 if abs(dh) < 1e-9:
                     continue
-                m = k + step
-                while 0 <= m + step < len(z) and not inside[m + step]:
-                    m += step
-                room = abs(float(s[m] - s[k]))
-                if m in (0, len(z) - 1):
-                    pass                            # (its end: held)
-                else:
-                    room = room / 2                 # (another stretch's easing from the other side)
-                L = min(max(1.5 * abs(dh) / OBS_BLEND_DG, OBS_BLEND_MIN_M), max(room, 1e-6))
+                m, rm = room(a, k, step)
+                L = min(max(1.5 * abs(dh) / OBS_BLEND_DG, OBS_BLEND_MIN_M), max(rm, 1e-6))
                 idx = np.arange(k + step, m + step, step)
-                u = np.clip(1.0 - np.abs(s[idx] - s[k]) / L, 0.0, 1.0)
-                F[idx] += dh * u * u * (3.0 - 2.0 * u)
+                F[idx] += _smooth(dh, s[idx] - s[k], L)
         out[a] = F
     return out
-
 
 
 def _tunnel_road(fid):
@@ -12200,37 +12278,73 @@ def _line_near(xy, other):
     return out_d, out_q
 
 
-Twin = namedtuple("Twin", "i j mid width on_i on_j widths")
-Twin.__doc__ = """Two tunnel parts sharing one tube where theirs overlap (twin_tunnels): parts i < j; the tube's midline
-(k, 3) along part i (each point halfway to j's line, the floors' mean), width: the widest road surface it covers there
-(both carriageways and the room between), widths: per midline point; on_i, on_j: each part's points under it."""
+Twin = namedtuple("Twin", "i j mid width on_i on_j widths side")
+Twin.__doc__ = """Two tunnel parts sharing one tube where theirs overlap (twin_tunnels): parts i, j; the tube's midline
+(k, 3) along part i (each point halfway to j's line, the lower of the two floors), width: the widest road surface it
+covers there (both carriageways and the room between), widths: per midline point; on_i, on_j: each part's points under
+it; side: per midline point part i's line's offset from it (left of its heading positive; part j's the other way)."""
 
 
-def twin_tunnels(parts):
-    """Tunnel parts ([(fid, spec, xy, z, lon)]) sharing one tube: [Twin] (i < j). BNE_BORE on: wherever two parts'
-    tubes overlap side by side for BORE_MIN_M (_bore_pairs: two carriageways mapped apart in one bore, a ramp
-    splitting off or merging inside the hill) with their floors within TWIN_DZ_M at the median (one floor:
-    bore_floors), a part in as many as it meets, each covering only that stretch: past it a part keeps its own tube.
+def twin_tunnels(parts, stagger=None):
+    """Tunnel parts ([(fid, spec, xy, z, lon)]) sharing one tube: [Twin]. BNE_BORE on: wherever two parts' tubes
+    overlap side by side for BORE_MIN_M (_bore_pairs: two carriageways mapped apart in one bore, a ramp splitting off
+    or merging inside the hill) with their floors within TWIN_DZ_M at the median (one floor: bore_floors), a part in
+    as many as it meets, each covering only that stretch (past it a part keeps its own tube) and reaching over a part's
+    own end up to `stagger` m (TWIN_STAGGER_M) past its mate's (one mouth, the portals staggered); each pair along the
+    part with the smaller id, the pairs in their ids' order (two tiles listing the parts otherwise build one tube).
     Off: as before (_twin_tunnels_whole). Pure."""
     if not BORE_ON:
         return _twin_tunnels_whole(parts)
+    stagger = TWIN_STAGGER_M if stagger is None else stagger
     X = [np.asarray(p[2], np.float64).reshape(-1, 2) for p in parts]
     Z = [np.asarray(p[3], np.float64) for p in parts]
     W = [float(p[1].width) for p in parts]
+    key = [(str(p[0]), n) for n, p in enumerate(parts)]
     out = []
-    for a, b, i0, i1, jj, tt in _bore_pairs(X, W, Z, [_tunnel_road(p[0]) for p in parts]):
-        if a > b:
-            continue                            # (each pair once, along its first part)
-        P = X[a][i0:i1 + 1]
+    for a, b, i0, i1, jj, tt, _split in _bore_pairs(X, W, Z, [_tunnel_road(p[0]) for p in parts]):
+        if key[a] > key[b]:
+            continue                            # (each pair once, along the part with the smaller id)
         q = X[b][jj] + tt[:, None] * (X[b][jj + 1] - X[b][jj])
         zq = Z[b][jj] + tt * (Z[b][jj + 1] - Z[b][jj])
-        if float(np.median(np.abs(Z[a][i0:i1 + 1] - zq))) > TWIN_DZ_M:
+        idx = np.arange(i0, i1 + 1)
+        reach = (W[a] + W[b]) / 2 + 2 * roadmesh.TUNNEL_SHOULDER + 1.0
+        s_a = _arc(X[a])
+        # (a staggered mouth: the run ends where b ends and a's own end lies within `stagger` past it: on to a's end,
+        # facing b's line carried on past its end)
+        for side_ in ((1, -1) if stagger > 0 else ()):
+            k_end = int(idx[-1] if side_ == 1 else idx[0])
+            rest = np.arange(k_end + 1, len(X[a])) if side_ == 1 else np.arange(0, k_end)[::-1]
+            if not len(rest) or abs(float(s_a[rest[-1]] - s_a[k_end])) > stagger:
+                continue
+            # (b's end nearest the run's: its place along a, between the run's end and a's own)
+            e_b = -1 if dnp.hypot(*(X[b][-1] - X[a][k_end])) <= dnp.hypot(*(X[b][0] - X[a][k_end])) else 0
+            b_e = X[b][e_b]
+            t_out = b_e - X[b][-2 if e_b == -1 else 1]
+            t_out = t_out / max(float(dnp.hypot(*t_out)), 1e-9)
+            _d, j_, t_ = _near_on(b_e[None, :], X[a])
+            at_b = float(s_a[j_[0]] + t_[0] * (s_a[j_[0] + 1] - s_a[j_[0]]))
+            if (side_ == 1 and at_b < s_a[k_end] - 1.0) or (side_ == -1 and at_b > s_a[k_end] + 1.0):
+                continue
+            along = (X[a][rest] - b_e) @ t_out
+            qv = b_e + np.maximum(along, 0.0)[:, None] * t_out
+            if (dnp.hypot(*(X[a][rest] - qv).T) >= reach).any():
+                continue
+            zb_e = float(Z[b][e_b])
+            if side_ == 1:
+                idx, q, zq = np.r_[idx, rest], np.r_[q, qv], np.r_[zq, np.full(len(rest), zb_e)]
+            else:
+                idx, q, zq = np.r_[rest[::-1], idx], np.r_[qv[::-1], q], np.r_[np.full(len(rest), zb_e), zq]
+        P = X[a][idx]
+        if float(np.median(np.abs(Z[a][idx] - zq))) > TWIN_DZ_M:
             continue                            # (floors not made one: as before, two tubes)
-        mid = np.c_[(P + q) / 2, (Z[a][i0:i1 + 1] + zq) / 2]
+        mxy = (P + q) / 2
+        mid = np.c_[mxy, np.minimum(Z[a][idx], zq)]
+        g = np.gradient(mxy, axis=0)
+        g = g / np.maximum(dnp.hypot(*g.T), 1e-9)[:, None]
+        side = ((P - mxy) * np.c_[-g[:, 1], g[:, 0]]).sum(1)
         widths = dnp.hypot(*(P - q).T) + (W[a] + W[b]) / 2
         on_a = np.zeros(len(X[a]), bool)
-        on_a[i0:i1 + 1] = True
-        reach = (W[a] + W[b]) / 2 + 2 * roadmesh.TUNNEL_SHOULDER + 1.0
+        on_a[idx] = True
         d, _j, _t = _near_on(X[b], P)
         t0 = (P[1] - P[0]) / max(float(dnp.hypot(*(P[1] - P[0]))), 1e-9)
         t1 = (P[-1] - P[-2]) / max(float(dnp.hypot(*(P[-1] - P[-2]))), 1e-9)
@@ -12240,7 +12354,8 @@ def twin_tunnels(parts):
             continue
         k = np.flatnonzero(on_b)
         on_b[k[0]:k[-1] + 1] = True
-        out.append(Twin(a, b, mid, float(widths.max()), on_a, on_b, widths))
+        out.append(Twin(a, b, mid, float(widths.max()), on_a, on_b, widths, side))
+    out.sort(key=lambda t: (key[t.i], key[t.j], float(t.mid[0, 0]), float(t.mid[0, 1])))
     return out
 
 
@@ -12287,7 +12402,7 @@ def _twin_tunnels_whole(parts):
             width = float(np.median(d[near])) + (sa.width + sb.width) / 2
             mid = mid[k0:k1 + 1]
             out.append(Twin(i, j, mid, width, np.ones(len(xa), bool), np.ones(len(xb), bool),
-                            np.full(len(mid), width)))
+                            np.full(len(mid), width), np.zeros(len(mid))))
             taken.update((i, j))
             break
     return out
@@ -12295,13 +12410,13 @@ def _twin_tunnels_whole(parts):
 
 def _twin_pieces(tw, parts, mouth_of):
     """The shared tube of a Twin over parts ([(fid, spec, xy, z, lon)]) as [(line (k, 3), width, (start is a portal,
-    end is one))]: BNE_BORE on, pieces BORE_PIECE_M long each as wide as it must be there, a portal face only at an
-    end where a part under it leaves the hill (its end there under the tube and a mouth: mouth_of(fid)), none where
-    the parts go on apart inside it (a split, a merge); off, as before: the whole midline at its width, with the
-    first part's mouths."""
+    end is one), (its first and last midline point))]: BNE_BORE on, pieces BORE_PIECE_M long each as wide as it must be
+    there, a portal face only at an end where a part under it leaves the hill (its end there under the tube and a
+    mouth: mouth_of(fid)), none where the parts go on apart inside it (a split, a merge); off, as before: the whole
+    midline at its width, with the first part's mouths."""
     mid = np.asarray(tw.mid, np.float64)
     if not BORE_ON:
-        return [(mid, tw.width, tuple(mouth_of(parts[tw.i][0])))] if len(mid) >= 2 else []
+        return [(mid, tw.width, tuple(mouth_of(parts[tw.i][0])), (0, len(mid) - 1))] if len(mid) >= 2 else []
     if len(mid) < 2:
         return []
     m = [False, False]
@@ -12323,7 +12438,8 @@ def _twin_pieces(tw, parts, mouth_of):
         cuts.append(len(mid) - 1)
     out = []
     for n, (a, b) in enumerate(zip(cuts[:-1], cuts[1:])):
-        out.append((mid[a:b + 1], float(np.max(tw.widths[a:b + 1])), (m[0] and n == 0, m[1] and b == len(mid) - 1)))
+        out.append((mid[a:b + 1], float(np.max(tw.widths[a:b + 1])), (m[0] and n == 0, m[1] and b == len(mid) - 1),
+                    (a, b)))
     return out
 
 
@@ -12365,14 +12481,16 @@ def _twin_level(parts, twins):
     return [(p[0], p[1], p[2], Z[n] + delta[n], p[4]) if n in delta else p for n, p in enumerate(parts)]
 
 
-def _bore_tubes(parts, twins, mouth_of):
+def _bore_tubes(parts, twins, mouth_of, box=None):
     """The shared tubes of twins (twin_tunnels) over parts ([(fid, spec, xy, z, lon)]): ([(line (k, 3), width, (start is
-    a portal, end is one), the whole tube's length, the part it is drawn for)], {part: its points under one}). BNE_BORE on: each pair's tube in
-    pieces (_twin_pieces), each widened over every other part beside it there, heading along it at its floor (a third
-    road in the bore: a service road between two carriageways at a mouth; one tube per pair stood its wall in the
-    third one's lane, the Milchbucktunnel's north mouths, lanecheck 2026-11-23), its line moved to the middle of them
-    all, a portal where any of them leaves the hill under it; a piece another already covers left out (one tube, one
-    portal face). Off: as before. Pure."""
+    a portal, end is one), the whole tube's length, the part it is drawn for)], {part: its points under one}). BNE_BORE
+    on: each pair's tube in pieces (_twin_pieces) round both carriageways' own edges (a wider one's outer edge too),
+    each widened over every other part beside it there, heading along it at its floor (a third road in the bore: a
+    service road between two carriageways at a mouth; one tube per pair stood its wall in the third one's lane, the
+    Milchbucktunnel's north mouths, lanecheck 2026-11-23), its line moved to the middle of them all and its floor at the
+    lowest of their floors, a portal at the tube's own ends where any of them leaves the hill there; a piece another
+    already covers left out (one tube, one portal face). box (x0, y0, x1, y1): the pieces near it alone (a tile's, a
+    block's). Off: as before. Pure."""
     import roadmesh
     under = {}
     for tw in twins:
@@ -12382,7 +12500,7 @@ def _bore_tubes(parts, twins, mouth_of):
     if not BORE_ON:
         for tw in twins:
             L = _length(np.asarray(tw.mid, np.float64))
-            out += [(pc, w, mo, L, tw.i) for pc, w, mo in _twin_pieces(tw, parts, mouth_of)]
+            out += [(pc, w, mo, L, tw.i) for pc, w, mo, _ab in _twin_pieces(tw, parts, mouth_of)]
         return out, under
     X = [np.asarray(p[2], np.float64).reshape(-1, 2) for p in parts]
     Z = [np.asarray(p[3], np.float64) for p in parts]
@@ -12391,24 +12509,33 @@ def _bore_tubes(parts, twins, mouth_of):
     for x in X:
         g = np.gradient(x, axis=0) if len(x) >= 2 else np.zeros((len(x), 2))
         tan.append(g / np.maximum(dnp.hypot(*g.T), 1e-9)[:, None])
-    kept = []                                   # (line xy, half width): the pieces drawn so far
+    kept = []                                   # (line xy, half width, box): the pieces drawn so far
     for tw in twins:
         L = _length(np.asarray(tw.mid, np.float64))
-        for pc, w, mo in _twin_pieces(tw, parts, mouth_of):
+        pieces = _twin_pieces(tw, parts, mouth_of)
+        for n_pc, (pc, w, mo, (ka, kb)) in enumerate(pieces):
             pc = np.array(pc, np.float64)
             P = pc[:, :2]
+            if box is not None:
+                r = w + 2 * roadmesh.TUNNEL_SHOULDER + 10.0
+                if P[:, 0].max() + r < box[0] or P[:, 0].min() - r > box[2] or \
+                        P[:, 1].max() + r < box[1] or P[:, 1].min() - r > box[3]:
+                    continue
             g = np.gradient(P, axis=0)
             g = g / np.maximum(dnp.hypot(*g.T), 1e-9)[:, None]
             nrm = np.c_[-g[:, 1], g[:, 0]]
-            lo, hi = -w / 2, w / 2
+            o_i = np.asarray(tw.side, np.float64)[ka:kb + 1]     # (both carriageways' own edges)
+            lo = float(min((o_i - W[tw.i] / 2).min(), (-o_i - W[tw.j] / 2).min()))
+            hi = float(max((o_i + W[tw.i] / 2).max(), (-o_i + W[tw.j] / 2).max()))
+            lo0, hi0 = -w / 2, w / 2
             mo = list(mo)
             t0 = (P[1] - P[0]) / max(float(dnp.hypot(*(P[1] - P[0]))), 1e-9)
             t1 = (P[-1] - P[-2]) / max(float(dnp.hypot(*(P[-1] - P[-2]))), 1e-9)
             for c in range(len(parts)):
                 if c in (tw.i, tw.j) or len(X[c]) < 2 or not np.isfinite(Z[c]).all():
                     continue
-                reach = hi + W[c] / 2 + 2 * roadmesh.TUNNEL_SHOULDER + 1.0
-                box_lo, box_hi = P.min(0) - reach - abs(lo), P.max(0) + reach + abs(lo)
+                reach = max(abs(lo), abs(hi)) + W[c] / 2 + 2 * roadmesh.TUNNEL_SHOULDER + 1.0
+                box_lo, box_hi = P.min(0) - reach, P.max(0) + reach
                 k = np.flatnonzero(((X[c] >= box_lo) & (X[c] <= box_hi)).all(1))
                 if len(k) < 2:
                     continue
@@ -12429,21 +12556,35 @@ def _bore_tubes(parts, twins, mouth_of):
                 m = np.zeros(len(X[c]), bool)
                 m[k[ok]] = True
                 under[c] = m if c not in under else under[c] | m
+                d2, j2, t2 = _near_on(P, X[c][k[ok]] if ok.sum() >= 2 else X[c])      # (its floor under the piece)
+                zc = Z[c][k[ok]][j2] + t2 * (Z[c][k[ok]][j2 + 1] - Z[c][k[ok]][j2])
+                pc[:, 2] = np.where(d2 < reach, np.minimum(pc[:, 2], zc), pc[:, 2])
                 mc = mouth_of(parts[c][0])
-                for e, at in ((0, 0), (1, len(X[c]) - 1)):          # (its mouth under this piece: a portal face)
-                    if m[at] and mc[e]:
-                        mo[0 if dnp.hypot(*(X[c][at] - P[0])) <= dnp.hypot(*(X[c][at] - P[-1])) else 1] = True
-            if (lo, hi) != (-w / 2, w / 2):
+                for e, at in ((0, 0), (1, len(X[c]) - 1)):     # (its mouth at the tube's own end: a portal face)
+                    if not (m[at] and mc[e]):
+                        continue
+                    if n_pc == 0 and dnp.hypot(*(X[c][at] - P[0])) <= dnp.hypot(*(X[c][at] - P[-1])):
+                        mo[0] = True
+                    elif n_pc == len(pieces) - 1 and dnp.hypot(*(X[c][at] - P[-1])) < dnp.hypot(*(X[c][at] - P[0])):
+                        mo[1] = True
+            if (lo, hi) != (lo0, hi0):
                 pc[:, :2] = P + nrm * ((lo + hi) / 2)
                 w = hi - lo
             # (a piece another already covers: left out)
+            bb = (pc[:, 0].min() - w, pc[:, 1].min() - w, pc[:, 0].max() + w, pc[:, 1].max() + w)
             probe = np.concatenate([pc[:, :2] + nrm * f * (w / 2 - 0.3) for f in (-1.0, 0.0, 1.0)])
-            if any(np.all(_near_on(probe, kp)[0] <= kh + 0.3) and
-                   np.all(((probe - kp[0]) @ ((kp[1] - kp[0]) / max(float(dnp.hypot(*(kp[1] - kp[0]))), 1e-9))) > -0.5) and
-                   np.all(((probe - kp[-1]) @ ((kp[-1] - kp[-2]) / max(float(dnp.hypot(*(kp[-1] - kp[-2]))), 1e-9))) < 0.5)
-                   for kp, kh in kept):
+            covered = False
+            for kp, kh, kb_ in kept:
+                if kb_[2] < bb[0] or kb_[0] > bb[2] or kb_[3] < bb[1] or kb_[1] > bb[3]:
+                    continue
+                if np.all(_near_on(probe, kp)[0] <= kh + 0.3) and \
+                        np.all(((probe - kp[0]) @ ((kp[1] - kp[0]) / max(float(dnp.hypot(*(kp[1] - kp[0]))), 1e-9))) > -0.5) and \
+                        np.all(((probe - kp[-1]) @ ((kp[-1] - kp[-2]) / max(float(dnp.hypot(*(kp[-1] - kp[-2]))), 1e-9))) < 0.5):
+                    covered = True
+                    break
+            if covered:
                 continue
-            kept.append((pc[:, :2].copy(), w / 2))
+            kept.append((pc[:, :2].copy(), w / 2, bb))
             out.append((pc, w, tuple(mo), L, tw.i))
     return out, under
 
@@ -12502,7 +12643,7 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
     twins = twin_tunnels(parts)
     parts = _twin_level(parts, twins)           # (one floor drawn under each shared tube)
     mouth_of = tunnels.mouth if getattr(tunnels, "mouth", None) is not None else (lambda f: (True, True))
-    tubes, under = _bore_tubes(parts, twins, mouth_of)      # (part -> its points under a shared tube)
+    tubes, under = _bore_tubes(parts, twins, mouth_of, near)    # (part -> its points under a shared tube)
     owner = {id(tw): tw.i for tw in twins}
     jobs = []                                   # (fid, its ends, [(look, width, line)], spec, its mouths, its length)
     for pc, w, mo, L, own in tubes:             # the tube round them where they share it (_bore_tubes)
