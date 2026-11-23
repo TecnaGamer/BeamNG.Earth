@@ -56,34 +56,32 @@ def fetcher():
     policies.update({h: pol for h in BUILD_HOSTS})
     cache = os.environ.get("BNE_CACHE", os.path.join(os.path.expanduser("~"), ".cache", "beamng-earth"))
     fx = netfetch.Fetcher(stats_dir=os.path.join(cache, "netstats"), policies=policies)
-    fx.transport._tls_context = tls_context(cache)
+    fx.transport._tls_context = tls_context()
     return fx, cache
 
 
-# Schleswig-Holstein's download host sends its certificate without the intermediate (D-Trust BR CA 1-20-1 2020): the
-# intermediate is added to the trusted ones (it still has to chain to a root the system trusts)
-SH_INTERMEDIATE = "http://www.d-trust.net/cgi-bin/D-TRUST_BR_CA_1-20-1_2020.crt"
+# Schleswig-Holstein's download host has sent its certificate without the intermediate (D-TRUST BR CA 1-20-1 2020).
+# The intermediate is shipped beside this file (fetched once from D-Trust over HTTPS; the same bytes the host sends now
+# and the ones our build had downloaded) and checked against its SHA-256 (of the DER) before it is loaded. It only helps
+# build the chain: partial chains are not accepted (Python 3.13's default context accepts them, which would make a
+# certificate in the store a trust anchor of its own), so the chain must still end at a root the system trusts.
+SH_INTERMEDIATE = os.path.join(HERE, "d-trust-br-ca-1-20-1-2020.pem")
+SH_INTERMEDIATE_SHA256 = "199ab2aaafff40401e0a3b7b87ee9964659effa94a1fecbe918ae136e4b4e0a8"
 
 
-def tls_context(cache):
+def tls_context(path=SH_INTERMEDIATE, sha256=SH_INTERMEDIATE_SHA256):
+    """The build's TLS context: the system's roots, no partial chains, the pinned intermediate for chain building.
+    Raises ValueError when the file is not the pinned certificate (nothing is loaded then)."""
+    import hashlib
     import ssl
-    import netfetch
-    import urllib.request
+    with open(path, encoding="ascii") as fh:
+        der = ssl.PEM_cert_to_DER_cert(fh.read())
+    got = hashlib.sha256(der).hexdigest()
+    if got != sha256:
+        raise ValueError(f"{os.path.basename(path)}: sha256 {got}, not the pinned {sha256}")
     ctx = ssl.create_default_context()
-    p = os.path.join(cache, "d-trust-br-ca-1-20-1-2020.crt")
-    try:
-        if not os.path.exists(p):
-            req = urllib.request.Request(SH_INTERMEDIATE, headers={"User-Agent": netfetch.USER_AGENT})
-            with urllib.request.urlopen(req, timeout=30) as r:
-                body = r.read()
-            with open(p + ".part", "wb") as fh:
-                fh.write(body)
-            os.replace(p + ".part", p)
-        with open(p, "rb") as fh:
-            body = fh.read()
-        ctx.load_verify_locations(cadata=body if body.startswith(b"-----") is False else body.decode())
-    except (OSError, ssl.SSLError) as e:
-        print("no D-Trust intermediate:", e, flush=True)
+    ctx.verify_flags &= ~getattr(ssl, "VERIFY_X509_PARTIAL_CHAIN", 0)
+    ctx.load_verify_locations(cadata=der)
     return ctx
 
 
@@ -214,7 +212,7 @@ def read_cell(p):
     """(lat, lon, dom, dgm) of a cell file: dedom's shard encoding, or the first NRW build's plain arrays."""
     with open(p, "rb") as fh:
         body = fh.read()
-    with np.load(io.BytesIO(body)) as z:
+    with np.load(io.BytesIO(body), allow_pickle=False) as z:
         if "lat" in z.files:
             return z["lat"], z["lon"], z["dom"], z["dgm"]
     d = dedom.decode(body)

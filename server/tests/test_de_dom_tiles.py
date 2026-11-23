@@ -112,5 +112,37 @@ class WcsTest(unittest.TestCase):
         self.assertNotIn("sl", {s["name"] for s in dedom.SERVICES})
 
 
+class TlsTest(unittest.TestCase):
+    """The build's TLS context (build_de_decks.tls_context): Schleswig-Holstein's intermediate from the file shipped in
+    tools/, checked against its pinned SHA-256, added for chain building only (no partial chains)."""
+
+    def test_pinned_intermediate_loaded(self):
+        import ssl
+        import build_de_decks
+        ctx = build_de_decks.tls_context()
+        self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(ctx.check_hostname)
+        self.assertFalse(ctx.verify_flags & getattr(ssl, "VERIFY_X509_PARTIAL_CHAIN", 0))
+        names = [dict(x[0] for x in c["subject"]).get("commonName") for c in ctx.get_ca_certs()]
+        self.assertIn("D-TRUST BR CA 1-20-1 2020", names)
+
+    def test_wrong_certificate_refused(self):
+        import ssl
+        import build_de_decks
+        with open(build_de_decks.SH_INTERMEDIATE, encoding="ascii") as fh:
+            der = bytearray(ssl.PEM_cert_to_DER_cert(fh.read()))
+        der[-40] ^= 0x01            # (another certificate: one bit of its signature)
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "other.pem")
+            with open(p, "w", encoding="ascii") as fh:
+                fh.write(ssl.DER_cert_to_PEM_cert(bytes(der)))
+            with self.assertRaises(ValueError):
+                build_de_decks.tls_context(p)
+            with open(p, "w", encoding="ascii") as fh:
+                fh.write(ssl.DER_cert_to_PEM_cert(b"x" * 64))     # (not a certificate at all)
+            with self.assertRaises(ValueError):
+                build_de_decks.tls_context(p)
+
+
 if __name__ == "__main__":
     unittest.main()
