@@ -529,7 +529,8 @@ M.CATALOG = {
     { IT .. 'trees/trees_italy/cork_oak_bush_medium', 3.04 }, { IT .. 'trees/trees_italy/scraggly_bush', 3.8 },
     -- (the asset survey 2026-11-19) the tall maquis: Italy's large cork oak bush and its tall-plant bush
     { IT .. 'trees/trees_italy/cork_oak_bush_large', 5.7 }, { IT .. 'trees/trees_italy/tall_plant_bush', 5.93 },
-    { IT .. 'trees/trees_italy/tall_plant', 2.7 },     -- (2026-11-20, the unused stock survey)
+    -- (not Italy's tall_plant: a 7.7 x 2.3 m strip of tall plants 2.5 m high, a hedge piece, not a bush: blocks in the
+    -- maquis; 2026-11-23)
   },
   -- the north's and the mountains' tops: birch / willow scrub (the birch-barked aspen bushes), spruce saplings, junipers
   shrub_north = {
