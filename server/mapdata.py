@@ -138,6 +138,16 @@ LAYERS = tuple(x for x in VECTOR_LAYERS if x not in OPTIONAL_LAYERS) + RASTER_LA
 ALL_LAYERS = VECTOR_LAYERS + RASTER_LAYERS
 DEFAULT_CACHE = os.path.expanduser("~/.cache/beamng-earth")
 # A request that the limiter or a policy refused for a non-demand kind (prefetch() returns False)
+# Set by _build (in the building thread) when the cell's OSM road tags failed for real (the source unreachable, DuckDB
+# missing, a damaged file): the cell is served this once but not written to the cache, so the roads are not stuck on
+# their width guesses for good once the source is back (a 2026-11-08 outage kept 89 of 126 cells without tags).
+_PARTIAL = threading.local()
+
+
+class _OsmMissing(tuple):
+    """(tags, raceways) of a cell whose OSM tags could not be read: empty, and marked."""
+
+
 DEFERRED = (netfetch.Deferred, netfetch.PolicyDenied, netfetch.BudgetExceeded, netfetch.HostUnavailable,
             netfetch.RateLimited)
 
@@ -863,7 +873,10 @@ class MapData:
             if feats is None:
                 feats, sources = self.overture.query(layer, key, kind)
             if osm is not None:
-                feats = self._osm(feats, osm.result(), lambda need: self._osm_geometry(key, kind, need))
+                got = osm.result()
+                if isinstance(got, _OsmMissing):
+                    _PARTIAL.flag = True
+                feats = self._osm(feats, got, lambda need: self._osm_geometry(key, kind, need))
             ox, oy = mapcells.owner(feats.attrs.get("cx", np.zeros(0)), feats.attrs.get("cy", np.zeros(0)), key.z)
             feats.own = (ox == key.x) & (oy == key.y)
             if feats.clipped is not None:
@@ -985,9 +998,9 @@ class MapData:
                 raise
             log.warning("mapdata: OSM road tags of %s: the host is busy (%s); the roads go on without them", key, kind)
             return {}, []
-        except Exception as e:          # optional: the roads go on with their guesses
+        except Exception as e:          # optional: the roads go on with their guesses (this once: _build keeps no cell)
             log.warning("mapdata: OSM road tags of %s: %s: %s", key, type(e).__name__, e)
-            return {}, []
+            return _OsmMissing(({}, []))
 
     def osm_fuel_path(self, key):
         return os.path.join(self.raw_dir, "osmfuel_cells", f"v{OSM_POI_VERSION}", f"{_key(key)}.json")
@@ -1079,6 +1092,7 @@ class MapData:
             if arrays is not None:
                 return self._mirrored(key, layer, path, arrays), True
             try:
+                _PARTIAL.flag = False
                 arrays = self._build(key, layer, kind)
                 if arrays.pop("_fallback", None) is not None:
                     # (the tiles failed: the parquet cell, kept with the parquet ones; asked of the tiles again next
@@ -1087,7 +1101,12 @@ class MapData:
                     if not os.path.exists(ppath):
                         self._store(ppath, arrays)
                     return self._mirrored(key, layer, ppath, arrays), False
-                self._store(path, arrays)
+                if _PARTIAL.flag:
+                    _PARTIAL.flag = False
+                    revisit.fault()         # (what is built from it now is not kept either)
+                    log.warning("mapdata: %s %s built without its OSM road tags: served, not kept", key, layer)
+                else:
+                    self._store(path, arrays)
             finally:
                 if mine:
                     xproc.release(path + ".lock")
