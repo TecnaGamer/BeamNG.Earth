@@ -380,7 +380,7 @@ class CliffRocksTest(unittest.TestCase):
         self.assertGreater(float(np.ptp(actual)), .01)
         self.assertFalse(np.allclose(actual, cm.sample(u, v, roadcut=True)))
         root = Path(__file__).resolve().parents[2]
-        mats = json.loads((root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json').read_text())
+        mats = json.loads((root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff_materials.src.json').read_text())
         stage = mats[cm.ARID_CUT_MATERIAL]['Stages'][0]
         self.assertTrue(stage['vertColor'])
         for key in ('baseColorMap', 'normalMap', 'roughnessMap', 'ambientOcclusionMap'):
@@ -1199,7 +1199,7 @@ class CliffRocksTest(unittest.TestCase):
         np.testing.assert_allclose(cliffmaterial.sample(u, v), cliffmaterial.sample(u+1, v-2), atol=1e-6)
         root = Path(__file__).resolve().parents[2]
         art = root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth'
-        material = json.loads((art/'cliff.materials.json').read_text())[cr.MATERIAL]['Stages'][0]
+        material = json.loads((art/'cliff_materials.src.json').read_text())[cr.MATERIAL]['Stages'][0]
         self.assertEqual(material['metallicFactor'], 0)
         self.assertLessEqual(material['detailNormalMapStrength'], .3)
         self.assertGreater(material['detailScale'][0], 50)  # sub-2 m detail; macro scale unchanged
@@ -1242,7 +1242,7 @@ class CliffRocksTest(unittest.TestCase):
         np.testing.assert_allclose(cm.sample(u,v,True),cm.sample(u+1,v-2,True),atol=1e-6)
         self.assertLess(cm.sample(u,v,True).max(),cm.RELIEF_M)
         root = Path(__file__).resolve().parents[2]
-        mats = json.loads((root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json').read_text())
+        mats = json.loads((root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff_materials.src.json').read_text())
         for key in ('baseColorMap','normalMap','roughnessMap','ambientOcclusionMap'):
             self.assertNotEqual(mats[cm.ROAD_CUT_MATERIAL]['Stages'][0][key],mats[cr.MATERIAL]['Stages'][0][key])
             with Image.open(texture_source(mats[cm.ROAD_CUT_MATERIAL]['Stages'][0][key])) as im:

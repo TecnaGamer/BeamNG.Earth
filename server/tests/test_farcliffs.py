@@ -778,7 +778,7 @@ class FarCliffsTest(unittest.TestCase):
         from PIL import Image
         import cliffcolors
         root=Path(__file__).resolve().parents[2]/'mod/beamng_earth'
-        mats=json.loads((root/'levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json').read_text())
+        mats=json.loads((root/'levels/beamng_earth/art/shapes/beamngEarth/cliff_materials.src.json').read_text())
         for name in fc.MATERIALS:
             stage=mats[name]['Stages'][0]
             with Image.open(texture_source(stage['detailMap'])) as im:
@@ -924,7 +924,7 @@ class FarCliffsTest(unittest.TestCase):
         from PIL import Image
         root=Path(__file__).resolve().parents[2]
         mod=root/'mod/beamng_earth'
-        mats=json.loads((mod/'levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json').read_text())
+        mats=json.loads((mod/'levels/beamng_earth/art/shapes/beamngEarth/cliff_materials.src.json').read_text())
         for name in (cm.MATERIALS[cm.CANYON],*fc.MATERIALS):
             stage=mats[name]['Stages'][0]
             import cliffcolors

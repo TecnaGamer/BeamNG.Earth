@@ -1,7 +1,7 @@
 -- Load only the enabled material families. The authored maps live in the mod;
 -- optional stock-derived ground detail lives in the player's private cache.
 local M = {}
-local SOURCE = '/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json'
+local SOURCE = '/levels/beamng_earth/art/shapes/beamngEarth/cliff_materials.src.json'
 local ROOT = '/temp/beamngEarth/shapes/'
 local GROUND = ROOT..'cliff_ground_v1/'
 local DETAIL = {

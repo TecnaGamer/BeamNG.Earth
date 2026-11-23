@@ -13,7 +13,7 @@ class LimestonePbrTest(unittest.TestCase):
     def test_authored_relief_cavity_shading_and_rough_dark_areas(self):
         sources = ROOT/'mod/texture_sources'
         entries = json.loads((sources/'textures.json').read_text())['textures']
-        material = json.loads((ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json').read_text())['bne_cliff_roadcut']['Stages'][0]
+        material = json.loads((ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff_materials.src.json').read_text())['bne_cliff_roadcut']['Stages'][0]
         maps = {}
         for channel in ('baseColorMap', 'normalMap', 'roughnessMap', 'ambientOcclusionMap'):
             entry = entries[material[channel].lstrip('/')]

@@ -204,7 +204,7 @@ class CliffTransitionTest(unittest.TestCase):
 
     def test_near_canyon_grain_has_square_physical_repeat(self):
         root=Path(__file__).resolve().parents[2]
-        mats=json.loads((root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json').read_text())
+        mats=json.loads((root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff_materials.src.json').read_text())
         stage=mats['bne_cliff_canyon_sat']['Stages'][0]
         repeat=np.array([cm.WIDTH_M,cm.CANYON_HEIGHT_M])/stage['detailScale']
         np.testing.assert_allclose(repeat[0],repeat[1])
@@ -218,7 +218,7 @@ class CliffTransitionTest(unittest.TestCase):
 
     def test_all_families_share_one_opaque_mask_and_preserve_pbr(self):
         root=Path(__file__).resolve().parents[2]
-        mats=json.loads((root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json').read_text())
+        mats=json.loads((root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff_materials.src.json').read_text())
         masks=set()
         for old,new in zip(cm.MATERIALS,ct.MATERIALS):
             a,b=mats[old],mats[new]

@@ -122,7 +122,7 @@ def _canyon_detail_field(family=1):
     import fast
     import modtextures
     root=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parents[1]))/'mod/beamng_earth'
-    material=root/'levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json'
+    material=root/'levels/beamng_earth/art/shapes/beamngEarth/cliff_materials.src.json'
     stage=json.loads(material.read_text())[MATERIALS[family]]['Stages'][0]
     # Reduce one output row at a time: a 4K asset must not create several
     # full-resolution float images in every terrain worker. Assets are POT.

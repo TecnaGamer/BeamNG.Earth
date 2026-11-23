@@ -13,7 +13,7 @@ SOURCES = ROOT/'mod/texture_sources'
 class CliffRoughnessTest(unittest.TestCase):
     def test_materials_use_aligned_nonuniform_authored_maps(self):
         entries = json.loads((SOURCES/'textures.json').read_text())['textures']
-        materials = json.loads((ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json').read_text())
+        materials = json.loads((ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff_materials.src.json').read_text())
         checked = set()
         for name, material in materials.items():
             stage = material['Stages'][0]

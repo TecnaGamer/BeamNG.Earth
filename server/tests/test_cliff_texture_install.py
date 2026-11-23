@@ -29,7 +29,7 @@ class CliffTextureInstallTest(unittest.TestCase):
             self.assertEqual(set(modtextures.plan(entries=cliffs, env={"BNE_CLIFFS": "1"})), set(cliffs))
 
     def test_manifest_requirements_follow_actual_material_references(self):
-        path = ROOT / "mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json"
+        path = ROOT / "mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff_materials.src.json"
         expected = texture_requirements(json.loads(path.read_text(encoding="utf-8")))
         entries = modtextures.manifest()
         for path, flags in expected.items():

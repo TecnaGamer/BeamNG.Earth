@@ -46,7 +46,8 @@ def dds_levels(data):
 def material_textures():
     """{vfs path: [materials.json files naming it]} for every /levels/beamng_earth/ texture a material names."""
     out = {}
-    for p in LEVEL.rglob("*.materials.json"):
+    # (cliff_materials.src.json: the cliffs' materials, loaded by cliffmaterials.lua by path only when cliffs are on)
+    for p in [*LEVEL.rglob("*.materials.json"), *LEVEL.rglob("*_materials.src.json")]:
         for m in re.finditer(r'"(/levels/beamng_earth/[^"]+\.(?:png|dds|jpg))"', p.read_text(encoding="utf-8")):
             out.setdefault(m.group(1), []).append(p.name)
     return out
@@ -67,6 +68,12 @@ def check_pow2_mips(test, data, what):
 
 
 class ModTexturesTest(unittest.TestCase):
+    def test_cliff_materials_not_loaded_by_the_engine(self):
+        """The engine loads every *.materials.json under the level at each level load: the cliffs' materials (their DDS
+        made only with BNE_CLIFFS) carry another name, read by cliffmaterials.lua by path when cliffs are on."""
+        self.assertEqual([p.name for p in LEVEL.rglob("cliff*.materials.json")], [])
+        self.assertTrue((LEVEL / "art/shapes/beamngEarth/cliff_materials.src.json").is_file())
+
     def test_no_png_textures_left_in_the_level(self):
         left = [str(p.relative_to(MOD)) for p in LEVEL.rglob("*") if p.suffix.lower() in (".png", ".jpg", ".tga")
                 and TERRAINS not in p.parents and p.name != "beamng_earth_preview.jpg"]

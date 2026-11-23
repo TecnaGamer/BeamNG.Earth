@@ -110,7 +110,7 @@ def main():
     for path, flags in texture_requirements(materials).items():
         entries[path]["requires_any"] = flags
     target.mkdir(parents=True, exist_ok=True)
-    (target/"cliff.materials.json").write_text(json.dumps(materials, indent=2)+"\n", encoding="utf-8")
+    (target/"cliff_materials.src.json").write_text(json.dumps(materials, indent=2)+"\n", encoding="utf-8")
     manifest_path.write_text(json.dumps(manifest, indent=1)+"\n", encoding="utf-8")
     print(f"Imported {len(fingerprints)} unique maps; stock maps excluded.")
 
