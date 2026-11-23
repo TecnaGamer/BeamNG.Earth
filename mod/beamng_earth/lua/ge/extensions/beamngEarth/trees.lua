@@ -525,8 +525,7 @@ M.CATALOG = {
     { UT .. 'groundcover/s_gc_utah_grey_bush_01', 0.7 }, { UT .. 'groundcover/s_gc_utah_grey_bush_03', 1.0 },
     { UT .. 'trees/Juniper/Juniper_bush_small_01', 1.2 },     -- (not generibush: its leaves turn in the fall, seasonlook)
     { UT .. 'trees/Juniper/Juniper_bush_medium_01', 2.4 },
-    -- (not Italy's fluffy_bush: its pale sage green stood out on Makarska's slopes, the user 2026-11-23; a tint
-    -- darkened it near, but its far imposter keeps the stock colour: seasonlook leaves imposters alone, GitHub #535)
+    -- (Italy's fluffy_bush: a darker copy, M.SHAPE_COPIES)
     { IT .. 'trees/trees_italy/cork_oak_bush_medium', 3.04 }, { IT .. 'trees/trees_italy/scraggly_bush', 3.8 },
     -- (the asset survey 2026-11-19) the tall maquis: Italy's large cork oak bush and its tall-plant bush
     { IT .. 'trees/trees_italy/cork_oak_bush_large', 5.7 }, { IT .. 'trees/trees_italy/tall_plant_bush', 5.93 },
@@ -836,19 +835,28 @@ for _, g in ipairs({ 'deciduous', 'oak', 'birch', 'beech', 'pine_west', 'mediter
   end
   M.CATALOG[g .. '_open'] = out
 end
--- (2026-11-23, the unused stock survey) the Mediterranean's town and roadside trees: Italy's pruned city holm oaks, in
--- the open twin only. Their shapes wear the deciduous oaks' oak_leaves_01 / 02, which seasonlook turns rust-brown in the
--- fall (a material is global): copies with those materials renamed (M.HOLM_OAKS, holmOaks: written once into the user
--- folder from the game's own files, as the static signal; the user 2026-11-23: a new shape is fine done well)
+-- (2026-11-23) copies of stock shapes, written once into the user folder from the game's own files (as the static
+-- signal; the user 2026-11-23: a new shape is fine done well): their materials renamed (mats) and copied from the stock
+-- materials file under the new names, with a constant colour factor (tint) in the copy's definition. A material is
+-- global: the renamed ones keep seasonlook off them (Italy's city holm oaks wear the deciduous oaks' oak_leaves_01 /
+-- 02, which turn rust-brown in the fall; a holm oak is evergreen). The tint is in the definition before the shape first
+-- draws, so its far imposter bakes in that colour too: no imposter reload (seasonlook leaves imposters alone since
+-- 1.7.3: reloading them while trees streamed in hung GPUs, GitHub #535). Italy's fluffy_bush a pale sage green
+-- (~0.40 0.46 0.32) among the maquis' ~0.30 0.36 0.20: it stood out on Makarska's slopes, near and far, the user's.
+-- The same geometry and textures as the stock shapes: no cost beyond them.
 M.HOLM_OAK_MATS = { oak_leaves_01 = 'bne_holm_oak_leaves_01', oak_leaves_02 = 'bne_holm_oak_leaves_02',
   m_oak_leaves_distant = 'bne_holm_oak_leaves_distant', m_oak_leaves_02_distant = 'bne_holm_oak_leaves_02_distant' }
-M.HOLM_OAK_STOCK_MATS = IT .. 'trees/trees_italy/main.materials.json'
-M.HOLM_OAKS = {
-  { stock = IT .. 'trees/trees_italy/holm_oak_city_small', out = '/temp/beamngEarth/shapes/holm_oak_city_small_v1', h = 5.6 },
-  { stock = IT .. 'trees/trees_italy/holm_oak_city_tall', out = '/temp/beamngEarth/shapes/holm_oak_city_tall_v1', h = 9.7 },
+local ITM = IT .. 'trees/trees_italy/main.materials.json'
+local COPY = '/temp/beamngEarth/shapes/'
+M.SHAPE_COPIES = {
+  { stock = IT .. 'trees/trees_italy/holm_oak_city_small', out = COPY .. 'holm_oak_city_small_v1', h = 5.6,
+    group = 'mediterranean_open', matfile = ITM, mats = M.HOLM_OAK_MATS },
+  { stock = IT .. 'trees/trees_italy/holm_oak_city_tall', out = COPY .. 'holm_oak_city_tall_v1', h = 9.7,
+    group = 'mediterranean_open', matfile = ITM, mats = M.HOLM_OAK_MATS },
+  { stock = IT .. 'trees/trees_italy/fluffy_bush', out = COPY .. 'fluffy_bush_v1', h = 2.47, group = 'maquis',
+    matfile = ITM, mats = { fluffy = 'bne_fluffy_v1' }, tint = { bne_fluffy_v1 = { 0.74, 0.8, 0.62 } } },
 }
-M.HOLM_OAK_MATFILE = '/temp/beamngEarth/shapes/holm_oak_v1.materials.json'
-for _, o in ipairs(M.HOLM_OAKS) do table.insert(M.CATALOG.mediterranean_open, { o.out, o.h }) end
+for _, o in ipairs(M.SHAPE_COPIES) do table.insert(M.CATALOG[o.group], { o.out, o.h }) end
 M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n
 for _, g in ipairs({ 'straw_n', 'straw_s', 'silage_n', 'silage_s' }) do M.GROUP_MAX_M[g] = 400; M.ONE_SPELLING[g] = true end
 -- The months (1-12) a group shows in (server vegetation.bale_items: the bales after the harvest; the south's six months
@@ -1153,57 +1161,65 @@ function M.applySeason(month)
   end
 end
 
--- Pure: a holm oak dae's text with its leaf materials renamed (M.HOLM_OAK_MATS: whole names only, the ids
--- '<name>-material' / '-effect' with them); nil without any.
-function M.holmOakDae(dae)
+-- Pure: a dae's text with its materials renamed (mats: whole names only, the ids '<name>-material' / '-effect' with
+-- them); nil without any.
+function M.copyDae(dae, mats)
   if type(dae) ~= 'string' then return nil end
   local n = 0
-  for from, to in pairs(M.HOLM_OAK_MATS) do
+  for from, to in pairs(mats) do
     local c
     dae, c = dae:gsub('%f[%w_]' .. from:gsub('_', '%%_') .. '%f[^%w_]', to)
     n = n + c
   end
   return n > 0 and dae or nil
 end
--- Pure: the copies' materials from the stock materials file's table: each renamed leaf material as the stock one
--- (name, mapTo; no persistentId), the rest left to the stock file.
-function M.holmOakMaterials(stock)
+function M.holmOakDae(dae) return M.copyDae(dae, M.HOLM_OAK_MATS) end
+-- Pure: the renamed materials from the stock materials file's table: each as the stock one (name, mapTo; no
+-- persistentId), its first stage's baseColorFactor times tint[new name] when given; nil when one is missing.
+function M.copyMaterials(stock, mats, tint)
   if type(stock) ~= 'table' then return nil end
   local out = {}
-  for from, to in pairs(M.HOLM_OAK_MATS) do
+  for from, to in pairs(mats) do
     local m = stock[from]
     if type(m) ~= 'table' then return nil end
     local c = {}
     for k, v in pairs(m) do c[k] = v end
     c.name, c.mapTo, c.persistentId = to, to, nil
+    local t = tint and tint[to]
+    if t and type(m.Stages) == 'table' then
+      local stages = {}
+      for k, v in pairs(m.Stages) do stages[k] = v end
+      local s1 = {}
+      for k, v in pairs(stages[1] or {}) do s1[k] = v end
+      local f = type(s1.baseColorFactor) == 'table' and s1.baseColorFactor or { 1, 1, 1, 1 }
+      s1.baseColorFactor = { (f[1] or 1) * t[1], (f[2] or 1) * t[2], (f[3] or 1) * t[3], f[4] or 1 }
+      stages[1] = s1
+      c.Stages = stages
+    end
     out[to] = c
   end
   return out
 end
-local function holmOaks()
-  if not FS:fileExists(M.HOLM_OAK_MATFILE) then
-    local mats = M.holmOakMaterials(jsonDecode(readFile(M.HOLM_OAK_STOCK_MATS) or ''))
+function M.holmOakMaterials(stock) return M.copyMaterials(stock, M.HOLM_OAK_MATS) end
+local function copyShape(o)
+  local mat, dae = o.out .. '.materials.json', o.out .. '.dae'
+  if not FS:fileExists(mat) then
+    local mats = M.copyMaterials(jsonDecode(readFile(o.matfile) or ''), o.mats, o.tint)
     if not mats then return false end
-    writeFile(M.HOLM_OAK_MATFILE, jsonEncode(mats))
+    writeFile(mat, jsonEncode(mats))
   end
-  loadJsonMaterialsFile(M.HOLM_OAK_MATFILE)
-  for _, o in ipairs(M.HOLM_OAKS) do
-    local dae = o.out .. '.dae'
-    if not FS:fileExists(dae) then
-      local text = M.holmOakDae(readFile(o.stock .. '.dae'))
-      if not text then return false end
-      writeFile(dae, text)
-    end
-    if not FS:fileExists(dae) then return false end
+  loadJsonMaterialsFile(mat)
+  if not FS:fileExists(dae) then
+    local text = M.copyDae(readFile(o.stock .. '.dae'), o.mats)
+    if not text then return false end
+    writeFile(dae, text)
   end
-  return true
+  return FS:fileExists(dae)
 end
-local function dropHolmOaks()
+local function dropCopy(o)
   local out = {}
-  for _, v in ipairs(M.CATALOG.mediterranean_open) do
-    if not v[1]:find('/temp/beamngEarth/shapes/holm_oak', 1, true) then out[#out + 1] = v end
-  end
-  M.CATALOG.mediterranean_open = out
+  for _, v in ipairs(M.CATALOG[o.group]) do if v[1] ~= o.out then out[#out + 1] = v end end
+  M.CATALOG[o.group] = out
 end
 
 local function setup()
@@ -1218,13 +1234,15 @@ local function setup()
     local ok, made = pcall(staticSignal)
     if ok and made then M.CATALOG.signal[1][1] = M.STATIC_SIGNAL
     else log('W', 'beamngEarth.trees', 'static signal shape: ' .. tostring(made)) end
-    local okH, madeH = pcall(holmOaks)
-    if not (okH and madeH) then
-      dropHolmOaks()
-      log('W', 'beamngEarth.trees', 'holm oak shapes: ' .. tostring(madeH))
+    for _, o in ipairs(M.SHAPE_COPIES) do
+      local okC, madeC = pcall(copyShape, o)
+      if not (okC and madeC) then
+        dropCopy(o)
+        log('W', 'beamngEarth.trees', 'shape copy ' .. o.out .. ': ' .. tostring(madeC))
+      end
     end
   else
-    dropHolmOaks()
+    for _, o in ipairs(M.SHAPE_COPIES) do dropCopy(o) end
   end
   ready = true
   return true

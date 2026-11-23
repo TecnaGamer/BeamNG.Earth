@@ -1140,8 +1140,17 @@ do
   for _, v in ipairs(trees.CATALOG.mediterranean) do if v[1]:find('holm_oak_city', 1, true) then inForest = inForest + 1 end end
   -- (offline the game's files are not there: setup drops the copies it could not write, else both stand in the open)
   T.check((inOpen == 2 or inOpen == 0) and inForest == 0, 'the copies in the open twin only, or none when not written')
-  T.check(#trees.HOLM_OAKS == 2 and trees.HOLM_OAKS[1].out:find('^/temp/beamngEarth/shapes/') ~= nil,
-    'two copies, in the user folder')
+  T.check(#trees.SHAPE_COPIES == 3 and trees.SHAPE_COPIES[1].out:find('^/temp/beamngEarth/shapes/') ~= nil,
+    'the copies in the user folder')
+  -- the fluffy bush's copy: its material renamed, its colour factor the stock one times the tint (in the definition:
+  -- the far imposter bakes darker, no reload)
+  local fl = trees.copyMaterials({ fluffy = { name = 'fluffy', Stages = { { baseColorFactor = { 1, 0.9, 1, 1 } }, {} } } },
+    { fluffy = 'bne_fluffy_v1' }, { bne_fluffy_v1 = { 0.74, 0.8, 0.62 } })
+  local f = fl and fl.bne_fluffy_v1.Stages[1].baseColorFactor
+  T.check(f and math.abs(f[1] - 0.74) < 1e-6 and math.abs(f[2] - 0.72) < 1e-6 and math.abs(f[3] - 0.62) < 1e-6
+    and f[4] == 1, 'the tint multiplied into the copy factor')
+  local nofactor = trees.copyMaterials({ fluffy = { Stages = { {} } } }, { fluffy = 'x' }, { x = { 0.5, 0.5, 0.5 } })
+  T.check(nofactor.x.Stages[1].baseColorFactor[1] == 0.5, 'no stock factor: the tint alone')
 end
 
 T.done('test_trees')
