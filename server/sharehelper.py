@@ -27,9 +27,11 @@ import dmath  # noqa: E402
 import multiprocessing  # noqa: E402
 import time  # noqa: E402
 import zlib  # noqa: E402
-# (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell)
+# (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell, nor
+# Switzerland's cut cells, roadz.tlm_tags)
 os.environ["BNE_ROADZ_HK"] = "off"
 os.environ["BNE_HKDTM"] = "off"
+os.environ["BNE_ROADZ_TLM"] = "off"
 
 log = logging.getLogger("earthd.sharehelper")
 

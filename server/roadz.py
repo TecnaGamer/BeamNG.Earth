@@ -9,6 +9,14 @@ Sources, each per z14 map-data cell, kept on disk under <cache>/roadz/v<VERSION>
   reads BD TOPO with (CRS:84 bbox, GeoJSON, the "ign_wfs" lane).
 - "nvdb": Norway, the Norwegian Public Roads Administration's NVDB API v4 road network (NLOD 2.0): LINESTRING Z,
   10-15 cm; medium L (in the air: a bridge), U / B (underground, in a building: a tunnel); vegsystem (E18, R4 ...).
+- "tlm": Switzerland and Liechtenstein, swisstopo's swissTLM3D (Open Government Data, free with the attribution
+  "swisstopo"): its roads as 3D lines (LV95; heights above the sea, LN02, 0.2-1.5 m), each with its kind of structure
+  (KUNSTBAUTE: bridges, tunnels, underpasses, galleries; server/tlmcodes.py). swisstopo serves it only whole (one
+  ~5 GB file a release, no service by area), so it is cut into this source's cells once (tools/build_swisstlm.py:
+  every road of a cell, in the Lines file this module keeps, under <source> = TLM_CELLS): a cell is read from disk
+  (the tool can write into the cache) or from BNGE_ROADZ_TLM_URL (<url>/14/<x>/<y>.npz; a 404: no roads there).
+  Offered only where a cell can be had (the URL set, or the cell on disk: sources_at), so with neither nothing is
+  asked and the inference stands.
 - "hk": Hong Kong, the Transport Department's Road Network centrelines (ELEVATION: a signed level tier, 0 ground, 1-4
   decks, -1 / -2 tunnels; ROUTE_NUM; STREET_ENAME) with heights from CEDD's 2020 airborne LiDAR (0.5 m DTM and DSM, a
   750 x 600 m sheet a zip): ground roads the DTM, decks the one surface earthfast.deck_lidar finds in the DSM's pixels
@@ -36,8 +44,8 @@ the source's own ground: the median of (source Z - our DEM) over its ground road
 taken off, so a datum or survey offset of 0.5-2 m makes no step where the deck meets our graded approach.
 
 Off: BNE_ROADZ=off (every source), BNE_LIDAR_DECKS=off (the US lidar decks only), BNE_ROADZ_HK=off (Hong Kong
-only). Pure given the cached data: every process reads the same files; a fetch that fails is a revisit fault
-(netfetch) and the inference stands in.
+only), BNE_ROADZ_TLM=off (Switzerland only). Pure given the cached data: every process reads the same files; a fetch
+that fails is a revisit fault (netfetch) and the inference stands in.
 Malformed vector survey records are isolated: invalid XY splits a line into valid runs, invalid Z is missing, and
 bridge/tunnel levels stay attached to each run. Cached invalid coordinates trigger a refetch; if unavailable, the
 existing inference remains the fallback. This validation does not smooth or alter finite surveyed heights.
@@ -74,6 +82,10 @@ NATIVE = 102                # earthfast.VERSION of the kernels below
 ON = os.environ.get("BNE_ROADZ", "on") != "off"
 LIDAR_ON = os.environ.get("BNE_LIDAR_DECKS", "on") != "off"
 HK_ON = os.environ.get("BNE_ROADZ_HK", "on") != "off"
+TLM_ON = os.environ.get("BNE_ROADZ_TLM", "on") != "off"
+TLM_URL = os.environ.get("BNGE_ROADZ_TLM_URL", "").rstrip("/")     # (where the cut cells are served; unset: disk)
+TLM_CELLS = "tlm1"          # the "tlm" source's cell folder and the tag of the plans made with it (tlm_tags): changed
+                            # with a new cut of its cells (another release, other rules), so that old ones are not read
 # the "hk" source's cell folder (<source> above) and the tag of the plans made with it (hk_tags): changed with its
 # heights, so that cells and plans kept under the old one are not read (hk / hk1: a deck the median of 15 DSM reads
 # across it; hk2: the one surface deck_lidar finds in the DSM pixels round its line; hk3: the lines asked for to
@@ -86,6 +98,9 @@ PROVIDER = None             # the server's RoadZ (MapData makes it): BridgeProfi
 FR_BOUNDS = (41.3, -5.2, 51.2, 9.7)         # lat0, lon0, lat1, lon1: metropolitan France (PR #456's box)
 NO_BOUNDS = (57.9, 4.0, 71.3, 31.3)         # mainland Norway
 HK_BOUNDS = hklidar.BOUNDS
+CH_BOUNDS = (45.80, 5.94, 47.82, 10.50)     # Switzerland and Liechtenstein (swissTLM3D's extent; a box: with
+                                            # BNGE_ROADZ_TLM_URL set its French, German, Austrian and Italian border
+                                            # cells are keyed apart too, their cells 404s, no roads)
 US_BOUNDS = ((24.0, -125.0, 49.5, -66.5), (51.0, -170.0, 71.5, -129.0), (18.5, -161.0, 22.5, -154.5))
 WFS_URL = "https://data.geopf.fr/wfs/ows"
 WFS_LANE = "ign_wfs"
@@ -312,14 +327,16 @@ def _in(b, lat, lon):
 
 
 def sources_at(lat, lon, lidar=None):
-    """The sources that may know heights at (lat, lon): 'ign', 'nvdb', 'hk' (HK_ON), 'lidar' (bridges only; lidar: on,
-    default LIDAR_ON)."""
+    """The sources that may know heights at (lat, lon): 'ign', 'nvdb', 'tlm' (TLM_ON), 'hk' (HK_ON), 'lidar' (bridges
+    only; lidar: on, default LIDAR_ON)."""
     lidar = LIDAR_ON if lidar is None else lidar
     out = []
     if _in(FR_BOUNDS, lat, lon):
         out.append("ign")
     if _in(NO_BOUNDS, lat, lon):
         out.append("nvdb")
+    if TLM_ON and _in(CH_BOUNDS, lat, lon) and (TLM_URL or _tlm_kept(lat, lon)):
+        out.insert(0, "tlm")    # (before "ign": its box reaches over Switzerland, where BD TOPO has nothing)
     if HK_ON and _in(HK_BOUNDS, lat, lon):
         out.append("hk")
     if lidar and any(_in(b, lat, lon) for b in US_BOUNDS):
@@ -336,6 +353,36 @@ def hk_tags(key):
             and lon0 - pad <= HK_BOUNDS[3] and HK_BOUNDS[1] <= lon1 + pad):
         return ()
     return ((HK_CELLS,) if ON and HK_ON else ()) + (("hkdtm1",) if hkdtm.ON else ())
+
+
+def _tlm_kept(lat, lon):
+    """Is the "tlm" cell at (lat, lon) on this computer (the cutting tool's, written into the cache)? No network."""
+    d = PROVIDER.dir if PROVIDER is not None else None
+    if not d:
+        return False
+    k = mapcells.cell_of(lat, lon)
+    return os.path.exists(os.path.join(d, TLM_CELLS, str(k.z), str(k.x), f"{k.y}.npz"))
+
+
+def tlm_tags(key):
+    """(TLM_CELLS,) when map cell key's road plans are made with Switzerland's measured heights (the "tlm" source on,
+    the cell in CH_BOUNDS, its cut cells served, BNGE_ROADZ_TLM_URL, or this cell kept on this computer), else (): the
+    plans made there before, and the baked packs and shared decisions made without them, are not those (plancache).
+    (A partial cut kept on disk only: a plan cell beside a kept one can read its heights untagged; for local trials.)"""
+    if not (ON and TLM_ON):
+        return ()
+    k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
+    lon0, lat0, lon1, lat1 = k.bounds()
+    if not (lat0 <= CH_BOUNDS[2] and CH_BOUNDS[0] <= lat1 and lon0 <= CH_BOUNDS[3] and CH_BOUNDS[1] <= lon1):
+        return ()
+    if TLM_URL:
+        return (TLM_CELLS,)
+    d = PROVIDER.dir if PROVIDER is not None else None
+    if d and k.z >= 14:
+        z14 = mapcells.CellKey(14, k.x >> (k.z - 14), k.y >> (k.z - 14))
+        if os.path.exists(os.path.join(d, TLM_CELLS, "14", str(z14.x), f"{z14.y}.npz")):
+            return (TLM_CELLS,)
+    return ()
 
 
 def hk_cell(key):
@@ -791,6 +838,8 @@ class RoadZ:
             src = "lidar-nogaps"            # (built without the ground stretches: not the cells with them)
         if src == "hk":
             src = HK_CELLS
+        elif src == "tlm":
+            src = TLM_CELLS
         return os.path.join(self.dir, src, str(key.z), str(key.x), f"{key.y}.npz") if self.dir else None
 
     def lines(self, src, key, cdn_only=False):
@@ -850,7 +899,7 @@ class RoadZ:
                         if src == "lidar":
                             got = self._lidar(key, cdn_only=True) if cdn_only else self._lidar(key)
                         else:
-                            got = {"ign": self._ign, "nvdb": self._nvdb, "hk": self._hk}[src](key)
+                            got = {"ign": self._ign, "nvdb": self._nvdb, "tlm": self._tlm, "hk": self._hk}[src](key)
                     except _CellBuilt:      # (another process's: read as any cell on disk, not written again)
                         got = Lines.load(p)
                         with open(p + ".gaps.json", encoding="utf-8") as fh:
@@ -1159,6 +1208,20 @@ class RoadZ:
             if len(feats) < WFS_PAGE:
                 break
         return Lines.build(rows)
+
+    def _tlm(self, key):
+        """Switzerland's cell, cut from swissTLM3D beforehand (tools/build_swisstlm.py): from BNGE_ROADZ_TLM_URL; none
+        there (404): the cell has no roads; no URL: left to the inference, no fault (a cell on disk was read before
+        this, lines(); sources_at offers the source only where one of the two is)."""
+        if not TLM_URL:
+            raise _NoProduct()
+        import io
+        import netfetch
+        try:
+            body = self._fetch(f"{TLM_URL}/{key.z}/{key.x}/{key.y}.npz")
+        except netfetch.NotFound:
+            return Lines.build([])
+        return Lines.load(io.BytesIO(body))
 
     def _nvdb(self, key):
         lon0, lat0, lon1, lat1 = key.bounds()
@@ -1857,9 +1920,13 @@ class RoadZ:
             segs, segz, oks, lvs, cells = [], [], [], [], []
             if src in DEFERRED and self._lidar_skipped(keys, src):
                 return None                 # (this run goes without a cell's lidar: the inference, every process)
+            missing = False
             for k in keys:
                 ln = self.lines(src, k)
                 if ln is None:
+                    if src == "tlm":        # (Switzerland's cells not to be had now: the next source, BD TOPO at
+                        missing = True      # the French border, else the inference)
+                        break
                     return None             # (incomplete: the inference rather than half a source)
                 if not len(ln):
                     continue
@@ -1875,7 +1942,7 @@ class RoadZ:
                 oks.append((want & nm_ok[line_of]).astype(np.uint8))
                 lvs.append(lv)
                 cells.append((k, ln, vxy))
-            if not segs:
+            if missing or not segs:
                 continue
             reach = half + (LIDAR_REACH_M if src == "lidar" else MATCH_REACH_M)
             q, seg, ok = np.ascontiguousarray(xy), np.ascontiguousarray(np.vstack(segs)), np.concatenate(oks)
