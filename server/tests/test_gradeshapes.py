@@ -698,3 +698,24 @@ def test_a_deck_ending_at_a_tunnels_mouth_is_where_its_structure_leaves_the_grou
     rel = {i: ix._relations(net, i) for i in range(len(m))}
     links, leave = ix._Verdicts(net, rel, lambda i: i, None).links()
     assert (1, 0) in leave and (1, 1) in leave
+
+
+def test_a_ramps_samples_stop_at_the_reach_budget_and_the_embankments_own_do_not():
+    # (the reach's budget, _Ramper's left: a cut below a ground that climbs faster than the roads' grade law would
+    # run the whole of every road it is followed along; the budget caps its samples where the reach's chain has
+    # spent it. The embankments' own laying passes no budget (left None) and is never capped)
+    road = Member("north", _line(0, 0, 0, 3000, 200), "ground", "motorway", 120, 0, 12.0, None)
+    net = ix.Net([road])
+    ground = lambda xy: 0.12 * np.asarray(xy, np.float64)[:, 1]
+
+    def run(left):
+        lay = ix._Ramper(net, lambda x: ground(x["xy"]), {})
+        lay.ramp_from(0, 0.0, True, None, -ix.deck_grade(road), over=0.0, sign=-1.0, left=left)
+        rp = lay.ramps[0]
+        return rp, float(rp[4]["d"][min(rp[9], len(rp[4]["d"]) - 1)]), rp[9]
+
+    _r, full, ks_none = run(None)
+    assert full == ix.RAMP_MAX_M and ks_none == len(_r[5])          # (the cut never gets back: every sample)
+    assert run(ix.RAMP_MAX_M)[1:] == (full, ks_none)                # (the whole budget: as with none)
+    _r, capped, ks_cap = run(100.0)
+    assert capped <= 100.0 + ix.STEP_M and ks_cap < ks_none

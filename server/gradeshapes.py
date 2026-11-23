@@ -83,6 +83,11 @@ TUNNEL_MAX_M = 300.0        # m: a longer road tunnel is a tunnel network of its
 CONNECT_M = 400.0           # m: a road on the ground this short between two structures' ends is named by the audits (it joins
 #                             nothing: an interchange takes in a road as far as its ramps reach, _ramp_reaches)
 RAMP_MAX_M = 600.0          # m: the longest embankment or cut followed along a road
+REACH_MAX_M = 1800.0        # m: how far from its end a deck's reach is followed, the junctions' chains included (a
+                            # ramp is back on its ground, or meets another deck's, within this of the end it left;
+                            # farther on is a grid wandering, not a ramp: a rising ground the cuts cannot climb back
+                            # to sent them along every street of a town's grid, minutes of the extent step. A deck
+                            # whose ends are each further than this from every other rising deck's is not laid at all)
 DIP_MARGIN_M = 3.0          # m past the upper part's edge a road going under holds its dip before its cut ramps up
 FOOT_STEP_M = 1.0           # m between the points of a crossing's footprint (under_pairs)
 DECK_MAX_GRADE = 0.06       # a deck climbs no steeper than this (the game's: roads.DECK_MAX_GRADE, grading sets it from there)
@@ -848,9 +853,13 @@ def _ramp_reaches(net, seeds, rel, dig, clock=None):
     (_Ramper: the road's grade and curve laws, through the junctions they meet) over the stretches of the roads they run
     along: an embankment from the height the structure needs (clearance_need: the headroom and its depth) falling away at
     the deck's grade, and a cut from the ground at that grade, the end standing anywhere between. What the solve picks is
-    not known before it is made, so both are followed, as far as either goes. A structure that digs the road under it, or
+    not known before it is made, so both are followed, as far as either goes (and no further than REACH_MAX_M from
+    the end they left, the junctions' chains included). A structure that digs the road under it, or
     that rises for nothing, has no ramp. Two structures whose ramps run along one stretch of a road are one interchange
-    (the road is not on its ground between them, and the ramps meeting there are laid together). clock: {seed: seconds},
+    (the road is not on its ground between them, and the ramps meeting there are laid together). A deck every end of
+    which is further than that from every other rising deck's is not laid at all: its spans can overlap no other deck's
+    (each deck's laying is its own — the claims stop no ramp of another deck's), so it pairs nothing.
+    clock: {seed: seconds},
     to each seed the seconds spent for it added."""
     members = net.m
     ground = dig.read()[0]
@@ -872,11 +881,22 @@ def _ramp_reaches(net, seeds, rel, dig, clock=None):
             for dist, end in zip(ends[0], ends[1]):
                 if end is not None and math.isfinite(dist):
                     rise[end] = max(rise.get(end, 0.0), clearance_need(net, i, j, q))
+    # (the ends a reach is laid from, and the decks that can meet: a deck's every ramp stays within REACH_MAX_M of
+    # the end it left, so two decks whose ends are all further apart than both reaches never overlap a span, and —
+    # the laying is each deck's own, its claims stop no other deck's ramp — skipping one changes no pair. A deck
+    # alone in its reach is the common case: a bridge over a valley with a town's grid under it)
+    ends_at = {}
+    for i, e in rise:
+        ends_at.setdefault(i, []).append(net.lines[i][-1 if e else 0])
+    with_another = {i for i, ps in ends_at.items()
+                    if any(k != i
+                           and min(float(np.linalg.norm(p - q)) for q in qs) <= 2.0 * REACH_MAX_M + 2.0 * JOIN_M + STEP_M
+                           for k, qs in ends_at.items() for p in ps)}
     pieced = {int(i): [(0.0, float(net.L[i]))] for i in seeds}
     spans = {}
     for i in seeds:
         mi = members[i]
-        if mi.kind != "deck":
+        if mi.kind != "deck" or i not in with_another:
             continue
         t0 = time.perf_counter()
         lay = _Ramper(net, ground_of, pieced)
@@ -892,17 +912,22 @@ def _ramp_reaches(net, seeds, rel, dig, clock=None):
                     for j2, k2, s2, _t, _q in rel[i]):
                 continue        # (the bridge goes on past this end over the road's middle: no end onto it)
             for sign_, over_ in ((1.0, over), (-1.0, 0.0)):
-                lay.ramp_from(j, sj, sj < net.L[j] / 2, None, -deck_grade(mi), over=over_, sign=sign_)
+                lay.ramp_from(j, sj, sj < net.L[j] / 2, None, -deck_grade(mi), over=over_, sign=sign_,
+                              left=REACH_MAX_M)
         n0, n = len(lay.ramps), 0
         while n < len(lay.ramps):
             rp = lay.ramps[n]
             if n >= n0:
                 lay.cover(rp[4], rp[9])
-            for jj, s_, ways, z0, surface in _junction_roads(net, rp, lay.done, pieced):
+            for jj, s_, ways, z0, surface, at_d in _junction_roads(net, rp, lay.done, pieced):
                 lay.done.setdefault(jj, []).append((s_ - JOIN_M, s_ + JOIN_M))
+                left = None if rp[11] is None else rp[11] - at_d - STEP_M
+                if left is not None and left <= 0.0:
+                    continue        # (the reach's budget spent: no ramp of this deck runs further from its end)
                 for toward_end in ways:
                     tb = _tangent(net.lines[jj], net.s[jj], s_) * (1.0 if toward_end else -1.0)
-                    lay.ramp_from(jj, s_, toward_end, z0, float(surface[0] * tb[0] + surface[1] * tb[1]), branch=True)
+                    lay.ramp_from(jj, s_, toward_end, z0, float(surface[0] * tb[0] + surface[1] * tb[1]), branch=True,
+                                  left=left)
             n += 1
         for rp in lay.ramps:
             for m_, (lo, hi) in _stretches(rp[4], rp[9]).items():
@@ -2129,7 +2154,7 @@ def _junction_roads(net, rp, done, pieced):
     junction, 0.14 m of a 7 % ramp. A ramp that never gets OFF_GROUND_M off its ground has no junctions: a cut 0.04 m
     deep at the end of a deck laid the trunk meeting it 0.04 m down at the junction, the deck's approach beside it a
     bump (Storrow Drive, Boston)."""
-    _j, _s0, _d, _z0, x, z, _k, sign, gr, ks, _g0 = rp
+    _j, _s0, _d, _z0, x, z, _k, sign, gr, ks, _g0, _left = rp
     k = min(int(ks), len(z))
     if k < 1:
         return []
@@ -2177,7 +2202,8 @@ def _junction_roads(net, rp, done, pieced):
             continue
         ways = [w for w in (True, False) if (net.L[j] - s_ if w else s_) > JOIN_M]
         if ways:
-            out.append((j, s_, ways, float(zt[q]), surface[at[q]]))
+            # (the parent's arc at the junction too: the reach's budget spends it, ix's _ramp_reaches)
+            out.append((j, s_, ways, float(zt[q]), surface[at[q]], float(x["d"][at[q]])))
     return sorted(out, key=lambda o: str(net.m[o[0]].key))
 
 
@@ -2185,7 +2211,7 @@ class _Ramper:
     """The ramps off the ends of shapes, laid one at a time: embankments' (from the solved shapes' ends and what they reach)
     and the reach's (_ramp_reaches: from the height the laws ask of an end, before anything is solved), one laying for
     both. ramps: (first member, s0, direction +1/-1, z0, samples, z, touch index, sign, ground, split index, leaving
-    grade) of each laid; started: (member, direction, s0, sign, z0) of the ends a ramp has left; pieced: {member: [(s
+    grade, reach budget left) of each laid; started: (member, direction, s0, sign, z0) of the ends a ramp has left; pieced: {member: [(s
     from, s to)]} the shapes' pieces (decks, dips); done: {member: [(s from, s to)]} the stretches set (the shapes' pieces
     first, then every ramp's as it is laid: a road's own ramp through a junction is its height there, not another's).
     ground_of(samples) -> the ground's heights at them."""
@@ -2200,10 +2226,11 @@ class _Ramper:
         for j_, ab in _stretches(x, ks).items():
             self.done.setdefault(j_, []).append(ab)
 
-    def ramp_from(self, j, s0, toward_end, z0, g_along, branch=False, over=0.0, sign=None):
+    def ramp_from(self, j, s0, toward_end, z0, g_along, branch=False, over=0.0, sign=None, left=None):
         """The ramp from height z0 (None: over its own ground by over) on member j at arc length s0 away from there (toward
         j's end if toward_end), leaving at grade g_along; branch: it is a junction's, off a ramp's. sign: +1 an embankment,
-        -1 a cut (None: by z0 against the ground there)."""
+        -1 a cut (None: by z0 against the ground there). left: the arc length left of the reach's budget
+        (REACH_MAX_M less what its chain has run from the deck's end; None: none, the embankments' own laying)."""
         net, started, pieced, done = self.net, self.started, self.pieced, self.done
         segs = _onward(net, j, s0, toward_end)
         x = sample(net, [dict(segs=segs)])[0]
@@ -2251,7 +2278,9 @@ class _Ramper:
                 if stop:
                     ks = min(ks, i)
                     break
-        self.ramps.append((j, s0, d_, z0, x, z, k, sign, gr, ks, g_along))
+        if left is not None and ks > 1:      # (the reach's budget: no sample of this ramp runs further along than it)
+            ks = max(1, min(ks, int(np.searchsorted(x["d"], left)) + 1))
+        self.ramps.append((j, s0, d_, z0, x, z, k, sign, gr, ks, g_along, left))
         if not branch:
             self.cover(x, ks)
 
@@ -2327,7 +2356,7 @@ def embankments(net, systems, shapes, ground_along, beside=()):
     while n < len(ramps):
         if n >= n0:
             cover(ramps[n][4], ramps[n][9])
-        for j, s_, ways, z0, surface in _junction_roads(net, ramps[n], done, pieced):
+        for j, s_, ways, z0, surface, _at_d in _junction_roads(net, ramps[n], done, pieced):
             done.setdefault(j, []).append((s_ - JOIN_M, s_ + JOIN_M))    # (the junction taken: another ramp
             #                                                         of the one shape meets its roads a few metres
             #                                                         along, at a height of its own descent — a second
@@ -2349,8 +2378,8 @@ def embankments(net, systems, shapes, ground_along, beside=()):
         for b in range(len(ramps)):
             if a == b or a in used or b in used:
                 continue
-            ja, sa, da, za, xa, _z_a, _ka, _sa, _ga, ka, g0a = ramps[a]
-            jb, sb, db, zb, xb, _z_b, _kb, _sb, _gb, kb, g0b = ramps[b]
+            ja, sa, da, za, xa, _z_a, _ka, _sa, _ga, ka, g0a, _la = ramps[a]
+            jb, sb, db, zb, xb, _z_b, _kb, _sb, _gb, kb, g0b, _lb = ramps[b]
             if ja != jb or da != 1 or db != -1 or sb <= sa:
                 continue
             reach_a = sa + xa["d"][min(ka, len(xa["d"]) - 1)]
@@ -2367,7 +2396,7 @@ def embankments(net, systems, shapes, ground_along, beside=()):
                     zv = za + (zb - za) * t
                 out.setdefault(ja, []).append((sv, zv, "set"))
                 used |= {a, b}
-    for n, (j, s0, d, z0, x, z, k, sign, gr, ks, _g0) in enumerate(ramps):
+    for n, (j, s0, d, z0, x, z, k, sign, gr, ks, _g0, _left) in enumerate(ramps):
         if n in used:
             continue
         k_end = min(ks, len(z))
