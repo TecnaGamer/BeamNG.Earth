@@ -128,7 +128,8 @@ CAM = NESTED["pose.cam"]                # h: the screen height px (screen-space 
 TERRAIN = SHAPES["terrain"]
 WEATHER_NESTED = {name.split(".", 1)[1]: keys for name, keys in NESTED.items() if name.startswith("weather.")}
 # message types the plain session cannot produce (each has its own session test below)
-EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
+EXERCISED_ELSEWHERE = {"debug_map_result",  # test_cliff_debuglayers exercises success/error/busy replies
+                     "far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
                        "space_clouds",                               # the clouds from space: NASA GIBS (test_spaceclouds)
                        "tunnel_floor",                               # a tunnel at the spot: needs map data
                        "roads_skin", "roads_exact",                  # road geotiles (test_roadgeo)
@@ -791,6 +792,9 @@ class ServerMessagesTest(test_server.ServerHarness):
             self.assertEqual(m["shape"].rsplit("/", 1)[1], f"slot_{m['material'].rsplit('_', 1)[1]}.cdae")
             self.assertIs(m["detail"], True)
         if kind == "hello":
+            if "cliffs" in m:
+                self.assertEqual(set(m["cliffs"]), {"available", "natural", "roadCuts"})
+                self.assertTrue(all(type(v) is bool for v in m["cliffs"].values()))
             self.assertIn(m["nearVisual"], ("mesh", "terrain"))
             self.assertEqual(m["format"], self.server.layout.format)
             self.assertIn(m["format"], modsim.CORE["FORMATS"])

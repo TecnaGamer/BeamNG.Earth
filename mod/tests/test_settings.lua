@@ -768,4 +768,11 @@ do
   T.check(settings.uiMapPreload(1, 2, true).ok == false, 'no core: nothing')
   beamngEarth_core = core0
 end
+-- Presets tune cliff detail without changing the player's category choices.
+for name, detail in pairs({ low = 'low', medium = 'medium', high = 'normal', ultra = 'high', extreme = 'extreme' }) do
+  T.check(settings.PRESETS[name].cliffDetail == detail, 'cliff detail follows ' .. name)
+  T.check(settings.PRESETS[name].naturalCliffs == nil and settings.PRESETS[name].cliffRoadCuts == nil,
+    'presets preserve cliff category choices')
+  T.check(settings.PRESETS[name].cliffTextures == nil, 'presets never opt into a texture download')
+end
 T.done('test_settings')

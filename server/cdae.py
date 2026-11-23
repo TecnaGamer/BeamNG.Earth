@@ -580,7 +580,8 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     def detail(d):
         P = np.asarray(d["positions"], np.float64).reshape(-1, 3)
         T, TM = _sorted_tris(d["tris"], d.get("tri_materials"), nmat)
-        return _mesh_data(P, T, TM, nmat, None, d.get("uvs"), None, None, d.get("colors"))
+        return _mesh_data(P, T, TM, nmat, d.get("normals"), d.get("uvs"),
+                          d.get("uvs2"), d.get("tangent_uvs"), d.get("colors"))
 
     for d in parts:
         levels[0].extend(detail(d))
