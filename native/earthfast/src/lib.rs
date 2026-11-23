@@ -151,6 +151,7 @@ mod wallsindex;
 mod roadwalls;
 mod mappedlamps;
 mod vegclumps;
+mod natural;
 mod roadwear;
 mod roadtone;
 mod railbeds;
@@ -7648,7 +7649,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 604 (603 and 605 kept for other branches): cip (architecture v2's compact per-cell inputs: the lossless cell
     // codec of named arrays and blobs; cip_encode_cell, cip_cell_info, cip_decode; server/cip.py, tools/build_cip.py)
     cip::register(m)?;
-    m.add("VERSION", 607)?;
-    m.add("VERSION", 607)?;
+    // 611 (608-610 kept for other branches): natural (OpenStreetMap's mapped natural features, BNE_NATURAL_*: mapped
+    // trees and tree rows, forests' leaf type, natural ground, cliffs along mapped lines, depth bands; server/natural.py)
+    natural::register(m)?;
+    m.add("VERSION", 611)?;
     Ok(())
 }

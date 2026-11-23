@@ -55,7 +55,7 @@ import mapcells  # noqa: E402
 
 N = 1 << cip.ZOOM
 VECTOR = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
-          "road_routes", "town_areas", "town_points", "hoods")
+          "road_routes", "town_areas", "town_points", "hoods", "land", "bathymetry")
 RASTER = ("landcover", "canopy")
 DEFAULT_LAYERS = VECTOR + RASTER
 # the planet build's: the rasters stay on their sources (WorldCover / the canopy model: ~2 / ~100-200 kB a land cell, a
@@ -554,8 +554,9 @@ def attribution():
         f"BeamNG.Earth compact per-cell inputs (CIP format {cip.FORMAT}): a collective database of separate sections.",
         "",
         "[m:roads m:connectors m:road_routes m:buildings m:building_parts m:water m:land_use m:infrastructure "
-        "m:town_* m:hoods] Overture Maps data, ODbL-1.0 (https://opendatacommons.org/licenses/odbl/1-0/).",
+        "m:town_* m:hoods m:land] Overture Maps data, ODbL-1.0 (https://opendatacommons.org/licenses/odbl/1-0/).",
         f"Attribution: {overture.ATTRIBUTION}",
+        "[m:bathymetry] Overture Maps bathymetry (ETOPO / GLOBathy), CC0-1.0.",
         "[m:places] Overture Maps places: CDLA-Permissive-2.0 / Apache-2.0 / CC0 per source (Overture's NOTICE).",
         "[t:rail t:lanes f:osmfuel f:picnic, OSM tags in m:roads] OpenStreetMap contributors, ODbL-1.0.",
         "[z:*] heights derived from USGS 3DEP (public domain), IGN BD TOPO (Etalab 2.0), NVDB (NLOD), HK CSDI.",

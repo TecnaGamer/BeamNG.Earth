@@ -1012,6 +1012,24 @@ do -- round bales in their season only, by hemisphere (server vegetation.bale_it
     'November: the south\'s silage only')
 end
 
+do -- the mapped natural features' groups (server natural.py, BNE_NATURAL_*): species shapes, cliffs, leaf-off winters
+  for _, g in ipairs({ 'oak', 'beech', 'birch', 'pine', 'fir', 'redwood', 'cypress', 'olive', 'holm_oak', 'cliff',
+                       'leafoff_n', 'leafoff_s' }) do
+    T.check(trees.CATALOG[g] and #trees.CATALOG[g] > 0, 'natural group ' .. g .. ' has shapes')
+  end
+  local shape = trees.pick('pine', 12, 0.3)
+  T.check(shape:find('pine'), 'a mapped pine is a pine: ' .. shape)
+  trees.applySeason(1)
+  T.check(trees.CATALOG.leafoff_n == trees.BARE and trees.CATALOG.leafoff_s == trees.CATALOG.deciduous,
+    'January: the north\'s mapped deciduous forests bare, the south\'s leafy')
+  trees.applySeason(7)
+  T.check(trees.CATALOG.leafoff_n == trees.CATALOG.deciduous and trees.CATALOG.leafoff_s == trees.BARE,
+    'July: the south\'s bare')
+  trees.applySeason(5)
+  T.check(trees.CATALOG.leafoff_n == trees.CATALOG.deciduous and trees.CATALOG.leafoff_s == trees.CATALOG.deciduous,
+    'May: both leafy')
+end
+
 do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is not a barrier
   local shape, sc = trees.pick('golfflag', 2.05, 0.3)
   T.check(trees.CATALOG.golfflag and shape == trees.CATALOG.golfflag[1][1] and math.abs(sc - 1) < 1e-9,

@@ -32,6 +32,7 @@ import numpy as np
 
 import beaches
 import fast
+import natural
 import dmath
 import dnp
 
@@ -65,6 +66,14 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
           "oak_west", "tropical", "mediterranean", "conifer_clump", "deciduous_clump", "oak_west_clump",
           "mediterranean_clump", "vine", "straw_n", "straw_s", "silage_n", "silage_s", "eucalyptus",
           "eucalyptus_clump", "poplar", "creosote")
+# the mapped natural features' groups (natural.py, BNE_NATURAL_*: in the tiles' group lists only while a switch is on,
+# groups_list): species of mapped trees, the rock faces along mapped cliffs, the bare winter broadleaves
+BASE_GROUPS = GROUPS
+NATURAL_GROUPS = ("oak", "beech", "birch", "pine", "fir", "redwood", "cypress", "olive", "holm_oak", "cliff",
+                  "leafoff_n", "leafoff_s")
+GROUPS = BASE_GROUPS + NATURAL_GROUPS
+(G_OAK, G_BEECH, G_BIRCH, G_PINE, G_FIR, G_REDWOOD, G_CYPRESS, G_OLIVE, G_HOLM_OAK, G_CLIFF, G_LEAFOFF_N,
+ G_LEAFOFF_S) = range(len(BASE_GROUPS), len(GROUPS))
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
@@ -227,6 +236,24 @@ def regional(group, height, lat, lon, lcls, u, riparian=None):
          G_OAK_WEST, G_TROPICAL], [WC["shrub"], WC["bare"], WC["grass"], WC["built"]],
         zones(la, lo, None if riparian is None else bc(riparian, bool)),
         [G_MEDITERRANEAN, G_EUCALYPTUS, G_POPLAR, G_CREOSOTE]), np.uint8)
+
+
+def _leaf_share(code, share):
+    """The conifer share from the forests' leaf codes (natural_leaf_share: needleleaved 1, broadleaved 0, mixed 1/2,
+    else share)."""
+    return np.asarray(natural.require().natural_leaf_share(np.ascontiguousarray(code, np.uint8),
+                                                           np.ascontiguousarray(share, np.float64)))
+
+
+def _leaf_groups(group, code, lat):
+    """The groups after the forests' leaf cycle (natural_leaf_groups): evergreen broadleaves holm oaks; with
+    BNE_NATURAL_LEAF=season the deciduous broadleaves bare in their winter (leafoff_n / leafoff_s)."""
+    n = len(group)
+    return np.asarray(natural.require().natural_leaf_groups(
+        np.ascontiguousarray(group, np.uint8), np.ascontiguousarray(code, np.uint8),
+        np.ascontiguousarray(np.broadcast_to(np.asarray(lat, np.float64), (n,))), G_DECIDUOUS, G_HOLM_OAK,
+        [G_DECIDUOUS, G_POPLAR, G_OAK_WEST], [G_LEAFOFF_N, G_LEAFOFF_S], bool(natural.SEASON),
+        natural.TROPICS_LAT), np.uint8)
 
 
 def _in_box(lat, lon, box):
@@ -399,7 +426,7 @@ class Vegetation:
         return False
 
     def _path(self, x, y):
-        rel = getattr(self.md, "release", "x")
+        rel = f'{getattr(self.md, "release", "x")}{natural.veg_key()}'     # (a switch's cells their own folder)
         return os.path.join(self.dir, str(rel), str(x), f"{y}.npz") if self.dir else None
 
     def _load(self, x, y):
@@ -464,6 +491,7 @@ class Vegetation:
             else None                       # (within RIPARIAN_M of a river, lake or shore: riverside poplars)
         road_cells = []
         clump_roads = []                    # (the carriageways the far clumps keep off: clumps)
+        lands = {}                          # (the natural features, natural.py: each cell's land layer; switches on)
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
                 kk = (mapcells.ZOOM, x + dx, y + dy)
@@ -484,6 +512,8 @@ class Vegetation:
                 if near_water is not None:
                     _mask_near(c2.layers.get("water"), near_water, chm, RIPARIAN_M)
                 road_cells.append(c2.layers.get("roads"))
+                if natural.VEG_ON and (natural.TREES or (dx, dy) == (0, 0)):
+                    lands[(dx, dy)] = self._land(kk)
         # the rounded corners of curbless junctions (roadcorners.py): no tree, bush or rock on their asphalt
         _mask_corners(road_cells, (road, curb), chm, cd.bounds, getattr(self.surface, "urban", None), self.widths)
         # smoothed heights (3 x 3 mean), then the local maxima by height band
@@ -517,6 +547,7 @@ class Vegetation:
             hs = hs.copy()
             hs[nr[ok], nc[ok]] = np.maximum(hs[nr[ok], nc[ok]], hs[rj_[ok], ri_[ok]])     # keep its height
             tops |= moved
+        solid = blocked.copy()              # (buildings, water, decks: no mapped tree there, natural_trees)
         blocked |= road
         jj, ii = np.nonzero(tops)
         # one top per crown (flat crowns had several); a crown's radius in pixels as at MERC_REF_LAT (chm.dx / k), and
@@ -548,14 +579,31 @@ class Vegetation:
             keep[barren[~near]] = False
             jj, ii, th, tlon, tlat, lcls, is_tree = jj[keep], ii[keep], th[keep], tlon[keep], tlat[keep], lcls[keep], \
                 is_tree[keep]
+        own_land = lands.get((0, 0))
+        mapped = None
+        if natural.TREES:                   # the mapped trees (natural_trees): the canopy's tops that are them dropped
+            mapped, keep = self._mapped_trees(lands, mx[ii], my[jj], hs, solid, road, curb, push, chm,
+                                              (ex0, ey0, ex1, ey1), (lat0 + lat1) / 2)
+            if not keep.all():
+                jj, ii, th, tlon, tlat, lcls, is_tree = jj[keep], ii[keep], th[keep], tlon[keep], tlat[keep], \
+                    lcls[keep], is_tree[keep]
+        leaf = None
+        if natural.LEAF:                    # the forests' leaf type / cycle on the canopy grid
+            leaf = self._leaf_raster(x, y, own_land, chm, h.shape)
         # hashed choices keyed on the global pixel (z17 Web-Mercator index: the CHM grid)
         gx = np.floor((mx[ii] + 20037508.342789244) / chm.dx).astype(np.int64)
         gy = np.floor((20037508.342789244 - my[jj]) / chm.dy).astype(np.int64)
         u1, u2, u3, u4 = (_hash01(gx, gy, s) for s in (1, 2, 3, 4))
-        conifer = u1 < _conifer_share(tlat, tlon) * np.clip(th / 12.0, 0.5, 1.2)
+        share = _conifer_share(tlat, tlon) * np.clip(th / 12.0, 0.5, 1.2)
+        code = leaf[jj, ii] if leaf is not None else None
+        if code is not None:
+            share = _leaf_share(code, share)
+        conifer = u1 < share
         group = np.where(is_tree, np.where(conifer, G_CONIFER, G_DECIDUOUS), G_SHRUB).astype(np.uint8)
         group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7),
                          riparian=None if near_water is None else near_water[jj, ii])
+        if code is not None:
+            group = _leaf_groups(group, code, tlat)
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
         tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)
@@ -591,14 +639,158 @@ class Vegetation:
         # (a clump moved off a road stays in this cell and off its buildings, water and decks: ClumpRoads)
         tree = clumps(tree, lcls, (lat0 + lat1) / 2,
                       roads=ClumpRoads(clump_roads, chm, blocked, (ex0, ey0, ex1, ey1)))
-        scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
+        nat_ground = None
+        if natural.GROUND and own_land is not None:     # mapped sand / ice / bare rock for the scatter
+            got = natural.ground_codes([own_land])
+            if got:
+                nat_ground = natural.code_raster(got, h.shape, (chm.x0, chm.y0, chm.dx, chm.dy))
+        scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs, nat_ground)
         edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
         bounds = (lon0, lat0, lon1, lat1)
         planted = orchard_items(lu, chm, blocked, bounds)
         hedges = farm_foliage(lu, chm, blocked, bounds)
         rows = vineyard_items(lu, chm, blocked, bounds)
         bales = bale_items(lu, chm, blocked, bounds)
-        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
+        extra = []
+        if mapped is not None:
+            extra.append(self._mapped_items(mapped, lc, leaf, chm, near_water, (lat0 + lat1) / 2))
+        if natural.CLIFFS and own_land is not None:
+            extra.append(self._cliffs(own_land, solid, road, chm, (lat0 + lat1) / 2, (ex0, ey0, ex1, ey1)))
+        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales] + extra)
+
+    # --- the mapped natural features (natural.py) ---------------------------------------------------------------
+    def _land(self, key):
+        """The land layer (natural.py) of cell key, None when not at hand (its features left out, as a neighbour's)."""
+        try:
+            return self.md.cell(key, layers=("land",)).layers.get("land")
+        except Exception as e:          # (the cell serves this session, not kept: built whole next time)
+            log.debug("vegetation: land of %s: %s: %s", key, type(e).__name__, e)
+            self._tl.dem_failed = True
+            return None
+
+    def _mapped_trees(self, lands, tx, ty, hs, solid, road, curb, push, chm, bounds, lat):
+        """(the cell's mapped trees placed: natural_trees' arrays, the canopy tops (tx, ty) to keep)."""
+        ef = natural.require()
+        (pts, slot, hh, cr, circ, tleaf, rows, roff, rslot, rh, rcr, rleaf) = natural.tree_inputs(
+            [lands[k] for k in sorted(lands)], _to3857)
+        sec = 1.0 / max(0.05, dmath.cos(dmath.radians(min(abs(float(lat)), 85.0))))
+        u8 = lambda a: np.ascontiguousarray(a, np.uint8)        # noqa: E731
+        f32 = lambda a: np.ascontiguousarray(a, np.float32)     # noqa: E731
+        got = ef.natural_trees(
+            np.ascontiguousarray(pts, np.float64), u8(slot), f32(hh), f32(cr), f32(circ),
+            np.ascontiguousarray(rows, np.float64), np.ascontiguousarray(roff, np.int64), u8(rslot), f32(rh), f32(rcr),
+            f32(hs), solid.view(np.uint8), road.view(np.uint8), curb.view(np.uint8), f32(push),
+            [float(chm.x0), float(chm.y0), float(chm.dx), float(chm.dy)], [float(b) for b in bounds],
+            np.ascontiguousarray(np.stack([tx, ty], axis=1), np.float64), float(sec),
+            [natural.ROW_SPACING_M, natural.DEDUPE_M, natural.CANOPY_SEARCH_M, natural.TREE_MIN_M],
+            [natural.DEFAULT_H[s] for s in natural.SPECIES])
+        x, y, height, radius, sl, from_row, keep = got
+        # (each placed tree's own leaf code: its tags', a row's for its stations; natural_trees keeps their order)
+        return (x, y, height, radius, sl, from_row), np.asarray(keep, bool)
+
+    def _leaf_raster(self, x, y, own_land, chm, shape):
+        """The cell's forests' leaf codes on the canopy grid (land: forest / wood; land_use: forest), 0 none."""
+        feats = [own_land]
+        try:
+            feats.append(self.md.cell((mapcells.ZOOM, x, y), layers=("land_use",)).layers.get("land_use"))
+        except Exception as e:
+            log.debug("vegetation: land use of %s: %s", (x, y), e)
+        got = natural.forest_codes(feats)
+        if not got:
+            return None
+        return natural.code_raster(got, shape, (chm.x0, chm.y0, chm.dx, chm.dy))
+
+    def _mapped_items(self, mapped, lc, leaf, chm, near_water, lat_c):
+        """Items of the placed mapped trees: their species' groups (a generic one by the region's rules, its leaf type
+        or the forest's around), hashed yaw / rank / size."""
+        x, y, height, radius, sl, from_row = mapped
+        n = len(x)
+        if not n:
+            return _empty()
+        ef = natural.require()
+        u = np.asarray(ef.natural_hash(np.ascontiguousarray(x, np.float64), np.ascontiguousarray(y, np.float64),
+                                       [51, 52, 53, 54, 55]))
+        lon, lat = _to4326(x, y)
+        sl = np.asarray(sl, np.uint8)
+        names = np.array(natural.SPECIES + ("",), object)
+        known = sl < len(natural.SPECIES)
+        name = names[np.where(known, sl, len(natural.SPECIES))]
+        code = None
+        if leaf is not None:
+            c_ = np.floor((x - chm.x0) / chm.dx).astype(np.int64)
+            r_ = np.floor((chm.y0 - y) / chm.dy).astype(np.int64)
+            ok = (c_ >= 0) & (c_ < leaf.shape[1]) & (r_ >= 0) & (r_ < leaf.shape[0])
+            code = np.zeros(n, np.uint8)
+            code[ok] = leaf[r_[ok], c_[ok]]
+        unknown = ~known
+        if unknown.any():                   # no species, no leaf type: the forest's around, else the region's share
+            share = _conifer_share(lat, lon) * np.clip(np.asarray(height, np.float64) / 12.0, 0.5, 1.2)
+            if code is not None:
+                share = _leaf_share(code, share)
+            name = np.where(unknown, np.where(u[:, 0] < share, "conifer", "deciduous"), name)
+        group = np.array([GROUPS.index(str(v)) for v in name], np.uint8)
+        generic = np.isin(group, (G_DECIDUOUS, G_CONIFER))
+        if generic.any():
+            lcls = lc.sample(lon, lat) if lc is not None else np.zeros(n, np.uint8)
+            rip = None
+            if near_water is not None:
+                c_ = np.clip(np.floor((x - chm.x0) / chm.dx).astype(np.int64), 0, near_water.shape[1] - 1)
+                r_ = np.clip(np.floor((chm.y0 - y) / chm.dy).astype(np.int64), 0, near_water.shape[0] - 1)
+                rip = near_water[r_, c_]
+            reg = regional(group, np.asarray(height, np.float64), lat, lon, lcls, u[:, 1], riparian=rip)
+            group = np.where(generic, reg, group).astype(np.uint8)
+            if code is not None:
+                group = np.where(generic, _leaf_groups(group, code, lat), group).astype(np.uint8)
+        return Items(lon, lat, np.asarray(height, np.float32), np.asarray(radius, np.float32),
+                     np.full(n, KIND_TREE, np.uint8), group, (0.5 * u[:, 2]).astype(np.float32),
+                     (u[:, 3] * 360.0).astype(np.float32), (0.85 + 0.3 * u[:, 4]).astype(np.float32))
+
+    def _cliffs(self, own_land, solid, road, chm, lat_c, bounds):
+        """Items of the rock-face pieces along the cell's mapped cliff lines (natural_cliff_*), in the cell's bounds."""
+        if self.dem is None:
+            return _empty()
+        cls = natural.classes(own_land)
+        sel = np.flatnonzero(np.isin(cls, natural.CLIFF_CLASSES) & (own_land.kind == 2))
+        if not len(sel):
+            return _empty()
+        ef = natural.require()
+        lines, off = natural._line_xy(own_land, sel, _to3857)
+        if len(off) < 2:
+            return _empty()
+        sec = 1.0 / max(0.05, dmath.cos(dmath.radians(min(abs(float(lat_c)), 85.0))))
+        st, ids = ef.natural_cliff_stations(np.ascontiguousarray(lines, np.float64), off, natural.CLIFF_STEP_M * sec)
+        st = np.asarray(st)
+        if not len(st):
+            return _empty()
+        d = natural.CLIFF_PROBE_M * sec
+        px = np.concatenate([st[:, 0] - st[:, 2] * d, st[:, 0] + st[:, 2] * d])
+        py = np.concatenate([st[:, 1] - st[:, 3] * d, st[:, 1] + st[:, 3] * d])
+        lon, lat = _to4326(px, py)
+        try:
+            z = np.asarray(self.dem.sample(lat, lon, natural.CLIFF_DEM_ZOOM), np.float64).reshape(2, len(st))
+        except Exception as e:          # (offline, no tile): no cliffs, the cell not kept
+            log.debug("vegetation: cliffs' ground: %s", e)
+            self._tl.dem_failed = True
+            return _empty()
+        import roads as roadsmod
+        shapes = [float(v) for sh in roadsmod.CLIFF_SHAPES for v in sh]
+        x, y, yaw, hh, jit = ef.natural_cliff_pieces(
+            np.ascontiguousarray(st, np.float64), np.ascontiguousarray(ids, np.int64), z[0] - z[1], shapes,
+            float(roadsmod.CLIFF_TALL_M), [natural.CLIFF_MIN_DROP_M, natural.CLIFF_SINK_M, natural.CLIFF_OVER_M,
+                                           natural.CLIFF_SPACING, natural.CLIFF_MAX_M],
+            solid.view(np.uint8), road.view(np.uint8), [float(chm.x0), float(chm.y0), float(chm.dx), float(chm.dy)],
+            float(sec))
+        x, y = np.asarray(x), np.asarray(y)
+        ex0, ey0, ex1, ey1 = bounds
+        own = (x >= ex0) & (x < ex1) & (y >= ey0) & (y < ey1)
+        if not own.any():
+            return _empty()
+        x, y, yaw, hh, jit = x[own], y[own], np.asarray(yaw)[own], np.asarray(hh)[own], np.asarray(jit)[own]
+        lon, lat = _to4326(x, y)
+        n = len(x)
+        return Items(lon, lat, hh.astype(np.float32), (hh * 0.5).astype(np.float32), np.full(n, KIND_ROCK, np.uint8),
+                     np.full(n, G_CLIFF, np.uint8), (0.3 * jit).astype(np.float32), yaw.astype(np.float32),
+                     np.ones(n, np.float32))
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
@@ -657,8 +849,10 @@ class Vegetation:
             return None
         return dnp.hypot(z[0] - z[1], z[2] - z[3]) / (2 * ROCK_SLOPE_D)
 
-    def _scatter(self, cd, lc, blocked, chm, hs):
-        """Bushes and rocks on a hashed SCATTER_CELL_M grid over shrubland, grass and bare ground."""
+    def _scatter(self, cd, lc, blocked, chm, hs, nat=None):
+        """Bushes and rocks on a hashed SCATTER_CELL_M grid over shrubland, grass and bare ground. nat: the mapped
+        ground's codes on the CHM grid (natural.GROUND_*; None: none): no bush or rock on mapped sand or ice, mapped
+        bare rock and scree as bare ground."""
         if lc is None:
             return _empty()
         lon0, lat0, lon1, lat1 = cd.bounds
@@ -685,6 +879,15 @@ class Vegetation:
         c_ = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
         r_ = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
         ok = (c_ >= 0) & (c_ < hs.shape[1]) & (r_ >= 0) & (r_ < hs.shape[0])
+        if nat is not None:
+            code = np.zeros(len(px), np.uint8)
+            code[ok] = nat[r_[ok], c_[ok]]
+            rocky = code == natural.GROUND_ROCKY
+            if rocky.any():
+                cls = np.where(rocky, WC["bare"], cls).astype(cls.dtype)
+                pb = np.where(rocky, SCATTER_P[WC["bare"]][0], pb)
+                pr = np.where(rocky, SCATTER_P[WC["bare"]][1], pr)
+            ok &= ~np.isin(code, (natural.GROUND_SANDY, natural.GROUND_ICE))
         free = np.zeros(len(px), bool)
         free[ok] = ~blocked[r_[ok], c_[ok]] & ((hs[r_[ok], c_[ok]] < BUSH_MIN_M) | (cls[ok] == UNDERSTORY))
         # bare land in a town is a square, a lot or a building site, not a rock field (desert rocks stood on
@@ -1485,7 +1688,7 @@ class JsonRows(str):
 AUDIO_CELL_M = 256.0 / 12
 AUDIO_H_MID = 15.0
 AUDIO_H_LARGE = 19.0
-AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE) + CLUMP_GROUPS
+AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE, G_CLIFF) + CLUMP_GROUPS
                + BALE_GROUPS]
 
 
@@ -1583,6 +1786,7 @@ def tile_items(frame, tx, ty, veg, cell_ready, elev, sea=None, as_json=False, ra
         return _no_items(as_json, clat, clon)
     _, _, z = frame.geodetic_to_enu(it.lat, it.lon, zg)
     z = _sink_rocks(frame, it, e, n, np.asarray(z, np.float64), elev)
+    it, z = _fit_cliffs(frame, it, e, n, z, elev)
     if as_json:
         # Rust: the same text json.dumps would write for the rows below, without a Python list per tree
         fast.require(0, "veg_rows_json")
@@ -1633,6 +1837,7 @@ def geo_tile_items(gx, gy, veg, cell_ready, elev, sea=None, as_json=False, raw=N
         return _no_items(as_json, clat, clon), 0.0
     _, _, z = frame.geodetic_to_enu(it.lat, it.lon, zg)
     z = _sink_rocks(frame, it, e, n, np.asarray(z, np.float64), elev)
+    it, z = _fit_cliffs(frame, it, e, n, z, elev)
     pivot = round(float(np.median(z)), 2)
     if as_json:
         fast.require(0, "veg_rows_json")
@@ -1672,6 +1877,31 @@ def _sink_rocks(frame, it, e, n, z, elev):
     return z
 
 
+def _fit_cliffs(frame, it, e, n, z, elev):
+    """(it, z) with the mapped cliffs' rock-face pieces (G_CLIFF, natural.py) fitted to the drawn ground: their bottom
+    under the face's foot, their top over the ground behind (natural_cliff_probes / natural_cliff_fit)."""
+    k = np.flatnonzero(it.group == G_CLIFF)
+    if not len(k):
+        return it, z
+    import roads as roadsmod
+    ef = natural.require()
+    shapes = [float(v) for sh in roadsmod.CLIFF_SHAPES for v in sh]
+    f64 = lambda a: np.ascontiguousarray(a, np.float64)     # noqa: E731
+    pr = np.asarray(ef.natural_cliff_probes(f64(e[k]), f64(n[k]), f64(it.yaw[k]), f64(it.height[k]), shapes,
+                                            float(roadsmod.CLIFF_TALL_M), natural.CLIFF_PROBE_M))
+    la, lo, _ = frame.enu_to_geodetic(pr[:, 0], pr[:, 1], np.zeros(len(pr)))
+    _, _, zz = frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))
+    zc, hc = ef.natural_cliff_fit(f64(it.height[k]), f64(zz), f64(it.rank[k] / 0.3), shapes,
+                                  float(roadsmod.CLIFF_TALL_M), natural.CLIFF_SINK_M, natural.CLIFF_OVER_M,
+                                  natural.CLIFF_MAX_M)
+    z = z.copy()
+    z[k] = zc
+    height = it.height.copy()
+    height[k] = np.asarray(hc, np.float32)
+    it = Items(it.lon, it.lat, height, it.radius, it.kind, it.group, it.rank, it.yaw, it.scale)
+    return it, z
+
+
 def _concat_all(parts):
     out = parts[0]
     for p in parts[1:]:
@@ -1692,6 +1922,12 @@ def flat_json(rows):
     return json.dumps([v for r in rows for v in r], separators=(",", ":"))
 
 
+def groups_list():
+    """The tiles' group names: the natural ones only while a BNE_NATURAL_* switch the cells see is on (the files as
+    before while off)."""
+    return list(GROUPS if natural.VEG_ON else BASE_GROUPS)
+
+
 def write_tile(out_dir, vfs_dir, aid, tx, ty, rows, flat=False, geo=None):
     """The tile's file: {"groups", "items": rows}, or with flat (a mod that reads it: hello.vegFlat) {"groups",
     "stride": FLAT_STRIDE, "flat": [...]} (flat_json) under its own name. (vfs path, items). geo: a geotile's
@@ -1707,13 +1943,13 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, rows, flat=False, geo=None):
         if geo is not None:             # (the tile's frame and pivot: the mod places it, geotile.lua)
             sound = dict(sound, frame=list(geo["frame"]), pivot=geo["pivot"])
         if flat:
-            head = dict({"groups": list(GROUPS)}, **sound, stride=FLAT_STRIDE, flat=[])
+            head = dict({"groups": groups_list()}, **sound, stride=FLAT_STRIDE, flat=[])
             f.write(json.dumps(head, separators=(",", ":"))[:-3] + flat_json(rows) + "}")
         elif isinstance(rows, JsonRows):  # (tile_items as_json: the items' text, as json.dumps writes them)
-            head = dict({"groups": list(GROUPS)}, **sound, items=[])
+            head = dict({"groups": groups_list()}, **sound, items=[])
             f.write(json.dumps(head, separators=(",", ":"))[:-3] + rows + "}")
         else:
-            f.write(json.dumps({"groups": list(GROUPS), "items": rows}, separators=(",", ":")))  # the C encoder
+            f.write(json.dumps({"groups": groups_list(), "items": rows}, separators=(",", ":")))  # the C encoder
     staging.replace(tmp, path)
     return f"{vfs_dir}/{name}", rows.n if isinstance(rows, JsonRows) else len(rows)
 

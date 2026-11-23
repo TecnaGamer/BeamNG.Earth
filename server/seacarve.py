@@ -31,6 +31,7 @@ import dnp
 from polygon import Path
 
 import mapcells
+import natural
 import pacer
 import cache as cachemod
 import staging
@@ -253,6 +254,32 @@ def _open_raw(raw):
     return _planes(idx, data, n)
 
 
+class _Parts:
+    """Several Features' polygons as one set of mapgeom arrays (natural_bathy_target's input) and their depths."""
+
+    def __init__(self, lonlat, coord_off, ring_off, part_off, kind, depth):
+        self.lonlat, self.coord_off, self.ring_off, self.part_off = lonlat, coord_off, ring_off, part_off
+        self.kind, self.depth = kind, depth
+
+
+def _concat_feats(feats):
+    """The features of feats (mapgeom Features with a "depth" attribute) joined into one _Parts, in order."""
+    ll, co, ro, po, kind, depth = [], [np.zeros(1, np.int64)], [np.zeros(1, np.int64)], [np.zeros(1, np.int64)], [], []
+    nc = nr = npart = 0
+    for f in feats:
+        ll.append(np.asarray(f.lonlat, np.float64)[:, :2])
+        co.append(np.asarray(f.coord_off[1:], np.int64) + nc)
+        ro.append(np.asarray(f.ring_off[1:], np.int64) + nr)
+        po.append(np.asarray(f.part_off[1:], np.int64) + npart)
+        nc += len(f.lonlat)
+        nr += len(f.coord_off) - 1
+        npart += len(f.ring_off) - 1
+        kind.append(np.asarray(f.kind, np.uint8))
+        depth.append(np.asarray(f.attrs["depth"], np.float64))
+    return _Parts(np.ascontiguousarray(np.concatenate(ll)), np.concatenate(co), np.concatenate(ro),
+                  np.concatenate(po), np.concatenate(kind), np.concatenate(depth))
+
+
 def _merc(lat, lon, z=PX_ZOOM):
     """Fractional Web-Mercator pixel coordinates (256 px tiles) at zoom z."""
     lat = np.clip(np.asarray(lat, np.float64), -mapcells.MAX_LAT, mapcells.MAX_LAT)
@@ -403,6 +430,7 @@ class SeaCarver:
         self._cell_locks = {}
         self._land = OrderedDict()      # (x, y) -> raster without the sea's bathymetry (land_raster)
         self._pre = OrderedDict()       # (x, y) -> such a cell's state before its sea floor (_build, _finish)
+        self._band_short = set()        # (x, y) built without a neighbour's depth bands (natural.py): not kept
         self._full_ex = None            # (land_raster's background builds with it)
         self._prefetch_ex = None        # (prefetch_full's)
         self._full_asked = set()
@@ -541,6 +569,7 @@ class SeaCarver:
     def _path(self, x, y):
         rel = getattr(self.md, "release", "x")
         lakes = "lakes" if self.dem is not None else "sea"
+        lakes += natural.sea_key()      # (BNE_NATURAL_BATHY: the depth bands' cells their own folder)
         return os.path.join(self.dir, str(rel), lakes, str(x), f"{y}.npz") if self.dir else None
 
     def _load(self, x, y, with_bathy=True):
@@ -660,6 +689,14 @@ class SeaCarver:
             kmax = int(math.ceil(LAKE_DEPTH_CAP / DEPTH_SLOPE / px)) + 2
             st = shore_steps(m, kmax).astype(np.float32)
             depth[m] = np.minimum(LAKE_DEPTH_CAP, DEPTH_SLOPE * (st[m] - 0.5) * px)
+            if natural.BATHY:           # the depth bands' floor where deeper (natural.py)
+                band = self._bands(x, y, ox, oy, n)
+                deep = m & np.isfinite(band) & (band > LAKE_DEPTH_CAP) if band is not None else None
+                if deep is not None and deep.any():
+                    kb = int(math.ceil(BATHY_MAX / SHORE_SLOPE / px)) + 2
+                    sb = shore_steps(m, kb).astype(np.float32)
+                    floor = np.minimum(np.minimum(band[deep], BATHY_MAX), SHORE_SLOPE * (sb[deep] - 0.5) * px)
+                    depth[deep] = np.maximum(depth[deep], floor)
             level[m] = lv
         if river.any():
             rl = self._river_levels(river, ox, oy)
@@ -710,6 +747,11 @@ class SeaCarver:
                 # where the mosaic has no sea floor (its land DEM over Sydney Harbour: 2-6 m up) the generic floor,
                 # not BATHY_MIN: 1 m of clear water showed the aerial photo's bridge shadow on the bed, 2026-10-18
                 generic = np.minimum(DEPTH_CAP, DEPTH_SLOPE * (st - 0.5) * px)
+                if natural.BATHY:       # where the mosaic has no sea floor: the depth bands' (natural.py)
+                    band = self._bands(ox // CELL_PX + 1, oy // CELL_PX + 1, ox, oy, n)
+                    if band is not None:
+                        generic = np.where(np.isfinite(band) & (band >= BATHY_MIN),
+                                           np.clip(band, BATHY_MIN, BATHY_MAX), generic).astype(generic.dtype)
                 target = np.where(np.isfinite(bathy) & (bathy < -BATHY_MIN), np.clip(-bathy, BATHY_MIN, BATHY_MAX),
                                   generic)
                 depth[sea] = np.minimum(target[sea], SHORE_SLOPE * (st[sea] - 0.5) * px)
@@ -727,7 +769,56 @@ class SeaCarver:
                 fill = np.nanmax(np.where(np.isfinite(nb), nb, -np.inf), axis=0)
             level = np.where(np.isnan(level) & np.isfinite(fill), fill, level).astype(np.float32)
         c = slice(PAD_PX - 1, PAD_PX + CELL_PX + 1)
+        if natural.BATHY:               # (a neighbour's depth bands not at hand: built short, not kept)
+            xy = (ox // CELL_PX + 1, oy // CELL_PX + 1)
+            with self._lock:
+                if xy in self._band_short:
+                    self._band_short.discard(xy)
+                    complete = False
         return depth[c, c].copy(), level[c, c].copy(), outline[c, c].copy(), complete
+
+    def _bands(self, x, y, ox, oy, n):
+        """The depth bands' floor target (natural_bathy_target: m, NaN where no band) on cell (x, y)'s n x n raster at
+        z16 pixel (ox, oy), from its and its neighbours' bathymetry layers (BNE_NATURAL_BATHY), kept per cell for the
+        build; None when there are none. A neighbour not at hand: the cell is built short (incomplete: not kept)."""
+        key = (x, y, ox, oy, n)
+        memo = self.__dict__.setdefault("_band_memo", OrderedDict())
+        with self._lock:
+            if key in memo:
+                return memo[key]
+        feats, short = [], False
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                k = (mapcells.ZOOM, x + dx, y + dy)
+                if not 0 <= k[2] < (1 << mapcells.ZOOM):
+                    continue
+                try:
+                    f = self.md.cell(k, layers=("bathymetry",)).layers.get("bathymetry")
+                except Exception as e:          # offline / refused: this build without them, not kept
+                    log.debug("sea: no depth bands for %s (%s)", k, e)
+                    short = True
+                    continue
+                if f is not None and len(f):
+                    feats.append(f)
+        out = None
+        if feats:                       # (the cells' clipped pieces in one call: the ramp across their edges joined)
+            allf = _concat_feats(feats)
+            sel = np.flatnonzero(allf.kind == 3).astype(np.int64)
+            if len(sel):
+                out = np.asarray(natural.require().natural_bathy_target(
+                    allf.lonlat, allf.coord_off, allf.ring_off, allf.part_off, sel,
+                    np.ascontiguousarray(allf.depth[sel]), int(ox), int(oy), int(n), PX_ZOOM,
+                    float(natural.BATHY_RAMP_PX)))
+                if not np.isfinite(out).any():
+                    out = None
+        with self._lock:
+            if not short:               # (a short answer is asked again by the next build)
+                memo[key] = out
+                while len(memo) > LAND_CELLS:
+                    memo.popitem(last=False)
+            else:
+                self._band_short.add((x, y))
+        return out
 
     def _bathy(self, ox, oy, n):
         """NOAA's elevations (m, negative below the sea) on the n x n raster at z16 pixel (ox, oy), or None

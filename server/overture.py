@@ -258,6 +258,20 @@ LAYERS = {
                      cols=f"subtype, class, {_NAME}, {_SRC}, level, surface, elevation, {_TAGS}",
                      text=("subtype", "class", "name", "src_dataset", "src_record", "surface", "tags"),
                      float=("level", "elevation")),
+    # OpenStreetMap's natural=* features (natural.py, BNE_NATURAL_*; read only while one of those is on): mapped single
+    # trees and tree rows (their genus / species / leaf_type / height / crown in the tags), forests' leaf type, cliffs,
+    # rock, scree, sand, beaches, dunes, glaciers, wetlands. Not the global land polygons (class land, island ...):
+    # the classes the generator uses (natural.LAND_CLASSES)
+    "land": dict(theme="base", type="land", clip=True,
+                 cols=f"subtype, class, {_SRC}, level, surface, elevation, {_TAGS}",
+                 text=("subtype", "class", "src_dataset", "src_record", "surface", "tags"),
+                 float=("level", "elevation"),
+                 where="class IN ('tree', 'tree_row', 'forest', 'wood', 'cliff', 'rock', 'bare_rock', 'stone', "
+                       "'scree', 'shingle', 'sand', 'beach', 'dune', 'glacier', 'wetland')"),
+    # depth polygons below the water's surface (CC0: ETOPO / GLOBathy; natural.py, BNE_NATURAL_BATHY): lake and sea
+    # floors where NOAA's sea floor is missing and for the lakes, which have none
+    "bathymetry": dict(theme="base", type="bathymetry", clip=True, cols=f"{_SRC}, depth",
+                       text=("src_dataset", "src_record"), float=("depth",)),
     "infrastructure": dict(theme="base", type="infrastructure", clip=False,
                            cols=f"subtype, class, {_NAME}, {_SRC}, level, height, surface, {_TAGS}",
                            text=("subtype", "class", "name", "src_dataset", "src_record", "surface", "tags"),
