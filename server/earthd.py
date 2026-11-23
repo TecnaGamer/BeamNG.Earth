@@ -3617,6 +3617,30 @@ class Server:
                                        anchor.frame, drawn, np.c_[x, y], self.anchor_q(anchor)),
                                    speed_traps=speed_traps)
 
+    _season_base = None         # (set_season_day: --season as started)
+
+    def set_season_day(self, doy):
+        """The ground photo's season date (message season_date; the mod's settings seasonDate 'game': its environment
+        date, a week's first day): only under --season auto, whose date it replaces ("doy:<n>", season.amounts_for;
+        the imagery's keys hold the mode, so newly built ground takes it); None: the server's own date again. True
+        when it changed."""
+        im = self.imagery
+        if im is None:
+            return False
+        if self._season_base is None:
+            self._season_base = im.season_mode
+        if self._season_base != "auto":
+            return False
+        try:
+            want = f"doy:{int(doy)}" if doy is not None and 1 <= int(doy) <= 366 else "auto"
+        except (TypeError, ValueError):
+            want = "auto"
+        if im.season_mode == want:
+            return False
+        im.season_mode = want
+        log.info("season date: %s", want)
+        return True
+
     def set_dej(self, on):
         """The settings page's German junction signs switch (message german_junctions): True when it changed (the road
         tiles and the sign tiles are then sent again, as the gas stations' and the direction signs' are)."""
@@ -9038,7 +9062,8 @@ class Connection:
                 m["colormatch"] = self.s.colormatch.mode
             season_mode = getattr(self.s.imagery, "season_mode", "off") if self.s.imagery is not None else "off"
             if season_mode not in (None, "off"):    # --season: the mod tints the trees' leaves to match (seasonlook.lua)
-                m["season"] = season_mode
+                # (a game date, "doy:<n>": the mod's own day, seasondate.lua, so its leaves go as 'auto')
+                m["season"] = "auto" if str(season_mode).startswith("doy:") else season_mode
             if self.s.map_port:                 # the world map's tiles (maptiles.py; --map-tiles on)
                 m["mapPort"] = self.s.map_port
             # the start-time values of the settings read only at a start, and whether a supervisor starts this server
@@ -9312,6 +9337,8 @@ class Connection:
                 self.roads = road_tracker(self)
         elif kind == "graphics":                # the settings page's graphics knobs (set_graphics)
             self.set_graphics(msg)
+        elif kind == "season_date":             # the settings page's Season date: the game's day, or none (the PC's)
+            self.s.set_season_day(msg.get("doy"))
         elif kind == "german_junctions":        # the settings page's switch: the road and sign tiles again, with or without
             if self.s.set_dej(msg.get("on")):   # (and the AI's graph: its stops, give-ways and zone speeds)
                 self.roads.close()

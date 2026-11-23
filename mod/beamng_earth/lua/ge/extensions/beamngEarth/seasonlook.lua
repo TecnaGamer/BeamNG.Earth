@@ -156,7 +156,7 @@ function M.update(inOurLevel, lat)
   local now = os.clock()
   if now - lastCheck < M.CHECK_S then return end
   lastCheck = now
-  local doy = tonumber(os.date('*t').yday)
+  local doy = require('beamngEarth/seasondate').doy()     -- (the PC's or the game's date: settings seasonDate)
   for _, sp in ipairs(M.SPECIES) do
     local tint, t = M.speciesTint(sp, mode, doy, lat)
     for _, n in ipairs(sp.mats) do pcall(tintOne, n, 'baseColorFactor', tint, t) end

@@ -1348,6 +1348,7 @@ local function onMessage(msg)
     st.deshadow = msg.deshadow -- server-side imagery de-shadowing ('lambert' / 'full'; nil = off), shown on the settings page
     st.colormatch = msg.colormatch -- server-side imagery colour-seam removal ('s2'; nil = off), likewise
     seasonlook.setMode(msg.season) -- the imagery's season (server --season): the leaves follow it
+    require('beamngEarth/seasondate').resetSent()     -- (a new connection: the season date sent again)
     st.mapPort = msg.mapPort -- the world map's tile endpoint on 127.0.0.1 (server/maptiles.py; nil = an older server)
     -- the download cache: the new server's usage follows its hello; it gets the page's size cap (the
     -- server keeps it for its next start too)
@@ -3015,6 +3016,7 @@ local function onUpdate(dtReal, dtSim)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
+  require('beamngEarth/seasondate').sync(net)     -- (the photo's season date to the server: settings seasonDate)
   groundcover.setLatitude(st.anchor and st.anchor.lat)   -- (the grass's season: its hemisphere)
   t = mark('ui', t)
   local frameMs = frameMs0

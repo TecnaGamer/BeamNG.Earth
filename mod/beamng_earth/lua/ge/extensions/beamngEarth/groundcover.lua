@@ -622,7 +622,7 @@ local function removeAll()
 end
 
 local function currentMonth()
-  local m = M.dayOverride or (os.date('*t') or {}).yday
+  local m = M.dayOverride or require('beamngEarth/seasondate').doy()     -- (settings seasonDate)
   local okS, sl = pcall(require, 'beamngEarth/seasonlook')
   local mode = okS and type(sl) == 'table' and sl.getMode and sl.getMode() or nil
   return M.dayFor(m, lat, mode)
