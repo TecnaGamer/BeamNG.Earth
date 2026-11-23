@@ -79,7 +79,7 @@ fn main() {
             used.set(true);
             t.ground.clone()
         };
-        let out = product::build(&t.place, t.quad, t.id, t.frame, &g, net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, ..Default::default() });
+        let out = product::build(&t.place, t.quad, t.id, t.frame, &g, net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, areas: t.areas_on, ..Default::default() });
         std::fs::create_dir_all(&args[3]).ok();
         let name = format!("{}_{}", t.id.0, t.id.1);
         std::fs::write(format!("{}/{}.json", args[3], name), &out.json).ok();
@@ -131,6 +131,15 @@ fn main() {
             Ok((bytes, o)) => { println!("decks {:016x} {} {} {}", roadsys::geom::fnv(&bytes), o.t.len(), o.runs.len(), o.mt.len()); return; }
             Err(e) => { eprintln!("{}", e); std::process::exit(1) }
         }
+    }
+    if args.len() == 4 && args[1] == "areas" {
+        // the mapped road areas' audit of a surface (tools/widecorpus/checks.py, areas.rs run_input): IN.bin -> OUT.json
+        let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(1) });
+        match areas::run_input(&b) {
+            Ok(j) => { std::fs::write(&args[3], j).unwrap_or_else(|e| { eprintln!("{}: {}", args[3], e); std::process::exit(1) }); }
+            Err(e) => { eprintln!("{}", e); std::process::exit(1); }
+        }
+        return;
     }
     if args.len() == 4 && args[1] == "audit" {
         // the M0 audit (tools/widecorpus/checks.py): IN.bin -> OUT.json
