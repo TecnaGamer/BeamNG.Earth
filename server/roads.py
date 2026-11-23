@@ -9797,19 +9797,6 @@ class TunnelProfiles(BridgeProfiles):
     def _structure(self, chain):                # (no truss over a tunnel)
         return [], []
 
-    def _chain_edges(self, pool, ground):
-        """BridgeProfiles._chain_edges, and parts whose tubes overlap side by side (_bore_edges, as far as the tubes
-        reach, not the decks' MERGE_TOUCH_M) in one chain: bore_floors makes one bore's floors one only in one solve
-        (an independent review, 2026-11-23: carriageways 7.5-9 m apart got a shared tube over floors 1.5 m apart)."""
-        nk, by_node, crossing = super()._chain_edges(pool, ground)
-        if BORE_ON:
-            keys = sorted(pool)
-            for a, b in _bore_edges([pool[k][1] for k in keys],
-                                    [pool[k][0].width if pool[k][0] is not None else 0.0 for k in keys]):
-                crossing.setdefault(keys[a], set()).add(keys[b])
-                crossing.setdefault(keys[b], set()).add(keys[a])
-        return nk, by_node, crossing
-
     wet = None      # wet(lat, lon) -> water depth (m): identify chains needing a constrained wet profile and finite
                     # client water columns. Unsupported wet chains stay excluded; earthd/blockworker set the sources.
     open = None
@@ -12080,12 +12067,6 @@ def _runs(mask, s, min_m):
             out.append((i, j))
         i = j + 1
     return out
-
-
-def _bore_edges(lines, widths):
-    """(i, j), i < j: tunnel parts whose tubes overlap side by side (the tubes' reach: _bore_pairs'), for
-    TunnelProfiles._chain_edges: solved in one chain, so bore_floors makes their floors one. Pure."""
-    return _deck_beside(lines, [w + 2 * roadmesh.TUNNEL_SHOULDER + 1.0 - MERGE_TOUCH_M for w in widths])
 
 
 def _smooth(dh, dist, L):

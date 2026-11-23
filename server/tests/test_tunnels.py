@@ -762,12 +762,6 @@ class OneBoreReview(unittest.TestCase):
         self.chunks([("a.0#0", sp, a, z(a), 0.0), ("b.0#0", sp, b, z(b), 0.0)], box=(4000.0, -100.0, 4200.0, 100.0))
         self.assertLess(time.perf_counter() - t0, 1.5)
 
-    def test_bore_mates_are_chained_as_far_as_their_tubes_reach(self):
-        # pairs 7.5-9 m apart (5.8 m carriageways) got one tube but were solved apart, their floors never made one
-        a, b = line(0.0, 300.0), line(0.0, 300.0, y=8.0)
-        self.assertEqual(roads._deck_beside([a, b], [5.8, 5.8]), [])
-        self.assertEqual(roads._bore_edges([a, b], [5.8, 5.8]), [(0, 1)])
-
     def test_a_third_road_s_mouth_puts_no_face_inside_the_tube(self):
         sp, sv = Spec(5.8, "paved", True, "trunk"), Spec(3.5, "paved", True, "service")
         a = line(0.0, 400.0, y=-3.5)
