@@ -137,6 +137,41 @@ def speed(m):
     return gradelaw.speed(m.cls, m.kmh)
 
 
+# (the laws of a member are its class, speed and kind alone: asked 160,000 times a region (max_grade 49,000, deck_depth
+# 39,000, deck_grade 16,000, curve_radius 22,000) for a thousand distinct members, by the growth's rounds, the finds, the
+# reaches and the steps alike. By the member's own law key, each law is made once a run; the laws' own values are in
+# the key too (grading sets them from roads.py at its import), so one set anew is made anew)
+_LAWS_MAX = 65536
+_laws_memo = {}
+_laws_lock = threading.Lock()
+
+
+def _law_value(v):
+    """A law's value as a key's part: a set (the path classes) as its sorted tuple, the rest as it is."""
+    return tuple(sorted(v)) if isinstance(v, (set, frozenset)) else v
+
+
+def _by_law(fn, name, laws=(), gradelaws=()):
+    """fn(m) of a member's law key alone (kind, class, speed, level) and the laws' values it reads (names in this
+    module, and in gradelaw: read at each ask, so a law set anew is made anew), made once for each: the same float
+    every time."""
+    def run(m):
+        key = (name,) + tuple(_law_value(globals()[n]) for n in laws) + tuple(_law_value(getattr(gradelaw, n)) for n in gradelaws) \
+            + (m.kind, m.cls, m.kmh, getattr(m, "level", None))
+        got = _laws_memo.get(key)
+        if got is None:
+            got = _laws_memo[key] = fn(m)
+            if len(_laws_memo) > _LAWS_MAX:
+                with _laws_lock:
+                    _laws_memo.clear()
+                    _laws_memo[key] = got
+        return got
+    run.__name__ = fn.__name__
+    run.__doc__ = fn.__doc__
+    run._unmemoized = fn
+    return run
+
+
 def max_grade(m):
     """The steepest grade member m may hold (gradelaw.road_grade: by class and speed, AASHTO's design grades plus
     GAME_GRADE_PLUS; a path 12 %); a track railways.GRADE (the one law of a track: this was its own 2.5 %, beside
@@ -181,7 +216,7 @@ def headroom(m, q=None):
     return HEADROOM_M + HEADROOM_MARGIN_M
 
 
-def deck_depth(span):
+def _deck_depth_unmemoized(span):
     """m of structure under a deck's road for a span of span m (the game's: span / 22, 0.9 to 2.2 m)."""
     return float(np.clip(float(span) / DECK_SPAN_RATIO, DECK_MIN_DEPTH_M, DECK_FULL_DEPTH_M))
 
@@ -1619,6 +1654,30 @@ def deck_grade(m):
     the lanes, humped (ends 14.92, middle 17.03 over a motorway whose clearance asked 16.35) and dropped its ends
     away from the embankment it lands on."""
     return min(max_grade(m), DECK_MAX_GRADE)
+
+
+# (each by its member's law key: _by_law. Wrapped here, after the originals, so each calls the originals itself. The
+# law values each reads are in its key: this module's constants (grading sets them from roads.py at its import) and
+# gradelaw's GAME_GRADE_PLUS, which road_grade adds; a test setting one anew is made anew)
+_GRADELAWS = ("GAME_GRADE_PLUS",)
+max_grade = _by_law(max_grade, "max_grade", laws=tuple(_GRADELAWS), gradelaws=_GRADELAWS)
+curve_radius = _by_law(curve_radius, "curve_radius",
+                       laws=("A_VERT", "A_VERT_RAIL", "R_MIN_ROAD_M", "R_MIN_RAIL_M", "PATHS"), gradelaws=_GRADELAWS)
+deck_grade = _by_law(deck_grade, "deck_grade", laws=("DECK_MAX_GRADE",), gradelaws=_GRADELAWS)
+_law_span_memo = {}
+
+
+def deck_depth(span):
+    """deck_depth(span) by the span and the deck laws (DECK_SPAN_RATIO, the depths' bounds), made once for each: asked
+    39,000 times a region for 200 spans."""
+    span = float(span)
+    key = (span, DECK_SPAN_RATIO, DECK_MIN_DEPTH_M, DECK_FULL_DEPTH_M)
+    got = _law_span_memo.get(key)
+    if got is None:
+        if len(_law_span_memo) > _LAWS_MAX:
+            _law_span_memo.clear()
+        got = _law_span_memo[key] = _deck_depth_unmemoized(span)
+    return got
 
 
 def _law(net, pc):

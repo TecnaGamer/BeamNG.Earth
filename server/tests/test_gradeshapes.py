@@ -759,3 +759,22 @@ def test_a_projection_asked_for_the_near_pairs_alone_keeps_them_to_the_last_bit(
         assert np.array_equal(kept, dn <= ix.JOIN_M), trial
         assert np.array_equal(sf[kept], sn[kept]), trial
         assert np.array_equal(ix._proj_many(line, s, P)[0], sf) and np.array_equal(ix._proj_many(line, s, P)[1], df)
+
+
+def test_a_members_laws_are_made_once_and_follow_the_laws_set_anew():
+    # (max_grade, curve_radius, deck_grade and deck_depth by the member's law key and the laws' values: asked 160,000
+    # times a region for a thousand members. The same floats as unmemoized; a law set anew (grading sets them from
+    # roads.py; a test eases one) is made anew, never a stale answer)
+    m = Member("x", _line(0, 0, 100, 0), "deck", "secondary", 60, 1.0, 5.0, None)
+    for fn in (ix.max_grade, ix.curve_radius, ix.deck_grade):
+        assert fn(m) == fn._unmemoized(m)
+    assert ix.deck_depth(120.0) == ix._deck_depth_unmemoized(120.0) and ix.deck_depth(120) == ix.deck_depth(120.0)
+    was = ix.deck_grade(m)
+    ix.DECK_MAX_GRADE = was - 0.01
+    try:
+        assert ix.deck_grade(m) == was - 0.01 and ix.deck_grade(m) == ix.deck_grade._unmemoized(m)
+    finally:
+        ix.DECK_MAX_GRADE = was
+    assert ix.deck_grade(m) == was
+    t = Member("r", _line(0, 0, 100, 0), "rail", "rail", None, 0.0, 2.0, None)
+    assert ix.max_grade(t) == ix.railways.GRADE and ix.curve_radius(t) == max(ix.R_MIN_RAIL_M, (100.0 / 3.6) ** 2 / ix.A_VERT_RAIL)
