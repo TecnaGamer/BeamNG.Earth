@@ -1178,6 +1178,42 @@ do -- a computer with too little memory (the server's emergency tier): one warni
   T.check(#toasts == 1, 'the lean tier: no toast (the app window says it)')
   guihooks = oldGh
 end
+do -- Bind the clearance policy only to vehicle maps received in this level.
+  local st = core._state()
+  local wasWorld, oldGet, oldAck = st.inOurLevel, getObjectByID, gps.onVehicleMapmgrUpdate
+  local acknowledged, commands = {}, {}
+  gps.onVehicleMapmgrUpdate = function(id) acknowledged[#acknowledged+1] = id end
+  getObjectByID = function(id) return { queueLuaCommand = function(_,code) commands[#commands+1]={id=id,code=code} end } end
+  st.inOurLevel=false;core.onVehicleMapmgrUpdate(7)
+  T.check(#commands==0 and acknowledged[1]==7,'ordinary levels retain GPS acknowledgement without loading a clearance policy')
+  st.inOurLevel=true;core.onVehicleMapmgrUpdate(9)
+  local policyCommand
+  for _, command in ipairs(commands) do
+    if command.code:find('beamngEarth_oncomingClearance',1,true) then policyCommand=command end
+  end
+  T.check(policyCommand and policyCommand.id==9 and acknowledged[2]==9,'the receiving vehicle alone is bound without losing GPS acknowledgement')
+  T.check(policyCommand.code:find('beamngEarth_oncomingClearance',1,true)
+    and policyCommand.code:find('bindMap()',1,true),'the vehicle map hook loads and binds its clearance policy')
+  local previousExtensions, previousPolicies, previousAi = extensions, {}, ai
+  local loaded, bound = {}, {}
+  for _,name in ipairs({'beamngEarth_oncomingClearance','beamngEarth_maneuverClearance'})do
+    previousPolicies[name]=rawget(_G,name);_G[name]=nil
+  end
+  extensions={load=function(name)
+    loaded[name]=true;_G[name]={bindMap=function()bound[name]=(bound[name]or 0)+1 end}
+  end}
+  ai={mode='disabled'}
+  assert(loadstring(policyCommand.code))()
+  T.check(next(loaded)==nil,'parked and manually driven vehicles do not load either helper')
+  ai.mode='traffic'
+  assert(loadstring(policyCommand.code))()
+  T.check(loaded.beamngEarth_maneuverClearance and bound.beamngEarth_maneuverClearance==1,
+    'the receiving vehicle loads and binds the post-reversing yield helper')
+  T.check(bound.beamngEarth_oncomingClearance==1,'the existing oncoming clearance policy is still bound')
+  for _,name in ipairs({'beamngEarth_oncomingClearance','beamngEarth_maneuverClearance'})do _G[name]=previousPolicies[name]end
+  extensions,ai=previousExtensions,previousAi
+  st.inOurLevel, getObjectByID, gps.onVehicleMapmgrUpdate = wasWorld, oldGet, oldAck
+end
 -- the settings page's "Restart world server": the hello comes at the main menu, a level starts (and ends) after it;
 -- the server's start-time settings and its restart capability outlive both (the user, 2026-11-15: no button)
 serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's99r',

@@ -123,6 +123,7 @@ function M.drive(ids, version, force, speed, aggression)
     mapmgr.requestMap()
     return 'waiting'
   end
+  if beamngEarth_maneuverClearance then beamngEarth_maneuverClearance.resume() end
   if obj and obj.getFrontPosition and obj.getPosition and obj.getDirectionVector then
     local front, ref = obj:getFrontPosition(), obj:getPosition()
     ids = M.forwardStart(ids, md, { x = front.x, y = front.y, z = ref.z }, obj:getDirectionVector())
@@ -150,6 +151,13 @@ function M.drive(ids, version, force, speed, aggression)
   lastPath = {}
   for i, id in ipairs(ids) do lastPath[i] = id end
   lastMap, lastVersion, lastSpeed, lastAggression = md, version, speed, aggression
+  -- Autodrive can start after the map acknowledgement while the player was still driving manually.
+  if extensions and extensions.load then
+    if not beamngEarth_oncomingClearance then extensions.load('beamngEarth_oncomingClearance') end
+    if not beamngEarth_maneuverClearance then extensions.load('beamngEarth_maneuverClearance') end
+  end
+  if beamngEarth_oncomingClearance then beamngEarth_oncomingClearance.bindMap() end
+  if beamngEarth_maneuverClearance then beamngEarth_maneuverClearance.bindMap() end
   if not beamngEarth_staticObstacles and extensions and extensions.load then
     extensions.load('beamngEarth_staticObstacles')
   end
