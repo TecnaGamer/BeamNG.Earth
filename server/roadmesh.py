@@ -411,6 +411,14 @@ TRIM_ALONG_COS = dmath.cos(math.radians(TRIM_ALONG_DEG))
 # made by the cut would stand in the carriageway: Codex P3d)
 COP_TOL_M = 0.03
 
+
+def _coplanar_decks():
+    """trim_overlaps' coplanar cut on: the decks' heights from one joint profile (BNE_ROADSHAPE=profile, or
+    BNE_ROADSYS=heights, M3: a ramp's deck merging beside the main deck now at its height, both slabs' colliders
+    coplanar, two owners of one lane)."""
+    import roadsys
+    return _roadshape.PROFILE_BUILT or roadsys.HEIGHTS
+
 # Short, connected bridge forks need a common two-dimensional surface. Three independently sloped, flat-width
 # ribbons can start at one height and still overlap by tens of centimetres a few metres later. Keep the longitudinal
 # solver's profiles; reconcile their shared footprint here, using one triangulated grid for skin and collision.
@@ -1465,13 +1473,17 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     to instead of the box (a geotile's quad in the anchor's world: earthfast.clip_tris_convex, the neighbours' cuts
     along the very same lines); clip then only says where the ribbons reach past the tile (_reach_past)."""
     chunks = [c for c in chunks if not c.get("tube_only")]  # (twin tunnels' tube: no road surface, roads._tunnel_chunks)
+    if any(c.get("rs_hide") or c.get("rs_slab") for c in chunks):
+        # (BNE_ROADSYS=surface: today's deck chunks the road system's faces stand in for, the parapets' base strips)
+        chunks = [c for c in chunks if not c.get("rs_hide") and not c.get("rs_slab")]
+    context = _shown(context)
     if clip is not None:
         chunks = [_reach_past(c, clip) for c in chunks]
     junctions = _junction_surfaces(chunks, context)
     rbc = ribbon_pairs([c for c in chunks if not c.get("surface_ref")])                  # deck surfaces too: their asphalt over deck()'s concrete
     if any(r[5] is not None for r, _c in rbc):  # (trimmed as deck() trims their slabs: context, the decks around)
         ctx = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
-        rbc = list(trim_overlaps(rbc, ctx, junctions, coplanar=_roadshape.PROFILE_BUILT))
+        rbc = list(trim_overlaps(rbc, ctx, junctions, coplanar=_coplanar_decks()))
     if shells.ON:           # (the overlays on decks follow the deck surface and stop at its end: PR #987)
         rbc = _overlays_on_decks(rbc)
     # (each deck end with its layer and width: a ground ribbon's end takes the edges of a deck end of its own layer and
@@ -1571,7 +1583,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     k0 = nverts = 0
     # (the ground ribbons' lengths along and end distances to the deck ends, one call each as above)
     runs = _ground_runs([r for r, _c in rbc if r[5] is None and len(r[0]) >= 2], ab_pts) if len(deck_abuts) else None
-    for ri, ((left, right, v, m, layer, fz), c) in enumerate(rbc):
+    for (left, right, v, m, layer, fz), c in rbc:
         k = len(left)
         if fz is None:
             cur_lift = np.full(k, lift)
@@ -1645,7 +1657,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         T.append(tri)
         M.append(np.full(len(tri), mi))
         TL.append(np.full(len(tri), np.nan if fz is not None else LIFT[layer] + lift))
-        RI.append(np.full(len(tri), ri))
+        RI.append(np.full(len(tri), len(rpar)))  # only emitted ribbons have a fade parameter row
         RW.append(np.full(len(tri), str(c.get("fid", "")).startswith("osm-raceway-")))
         ends = c.get("fends") or (1, 1)
         rpar.append((fu, float(c.get("tl") or 10.0), tu, float(slen) if slen else np.nan,
@@ -1681,6 +1693,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         RI.append(np.full(len(fan), -1))
         RW.append(np.zeros(len(fan), bool))
         nverts += k
+    if not P:               # every ribbon was suppressed cluster wear
+        return None
     P, T, UV, M = np.concatenate(P), np.concatenate(T), np.concatenate(UV), np.concatenate(M)
     TL, RI, RW = np.concatenate(TL), np.concatenate(RI), np.concatenate(RW)
     tid = np.arange(len(T))
@@ -2004,23 +2018,24 @@ def barrier_solid(edge, inward, z, h, v=None, section=JERSEY):
 
 
 def _slabs_from_tops(P, T, UV, M, tops, side):
-    """The decks' slabs as closed solids from their tops as drawn (the user, 2026-11-07: watertight): per slab depth,
-    the tops of its pieces taken together (their shared end rows weld: no wall inside a deck) and closed by
-    shells.close: sides straight down the depth from every edge of the outline, the underside under them, in the
-    side material. Sides from each piece's own edge rows left 13 cm slivers where a junction field retriangulated
-    the top (Pittsburgh 40.44225,-79.99391). P, T, UV, M with the tops replaced (T absolute indices)."""
-    import shells
+    """Close each slab at its design depth using the drawn top triangles for its underside.
+    The welded outline has walls only at exposed edges. Taking each piece separately left 13 cm slivers
+    where a junction field retriangulated the top (Pittsburgh 40.44225,-79.99391).
+    Return P, T, UV and M with absolute triangle indices."""
+    import fast
+    fast.require(568, "deck_slab_solid")
     off = np.r_[0, np.cumsum([len(a) for a in P])]
     drop = set()
     add = []
     for depth, idx in sorted(tops.items()):
-        pp = np.concatenate([P[i] for i in idx])
-        uu = np.concatenate([UV[i] for i in idx])
+        pp = np.concatenate([P[i] for i in idx], dtype=np.float64)
+        uu = np.concatenate([UV[i] for i in idx], dtype=np.float64)
         base = np.r_[0, np.cumsum([len(P[i]) for i in idx])]
-        tt = np.concatenate([T[i] - off[i] + base[j] for j, i in enumerate(idx)])
+        tt = np.concatenate([T[i] - off[i] + base[j] for j, i in enumerate(idx)], dtype=np.int64)
         mt = np.concatenate([M[i] for i in idx])
-        P2, T2, M2, (UV2,) = shells.close(pp, tt, np.full(len(tt), side), (uu,), sink=depth)
-        M2 = np.asarray(M2).copy()
+        xyz, tris, uv = fast._ef.deck_slab_solid(pp, tt, uu, shells.open_loops(pp, tt), depth)
+        P2, T2, UV2 = xyz.reshape(-1, 3), tris.reshape(-1, 3), uv.reshape(-1, 2)
+        M2 = np.full(len(T2), side)
         M2[:len(tt)] = mt
         add.append((P2, T2, UV2, M2))
         drop.update(idx)
@@ -2043,13 +2058,13 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     bridgetypes.truss_members) in painted steel (TRUSS_STEEL). (positions, tris, uvs, materials, tri
     material index) or None. ground: the tile's ground carriageways (roads.build_tile cover_out) for the parapet
     test, drawn or not (with the roads painted into the ground the chunks have none). Pure."""
-    chunks, context = _slab_chunks(chunks), _slab_chunks(context)
+    chunks, context = _slab_chunks(_shown(chunks)), _slab_chunks(_shown(context))
     dch = [c for c in chunks if c.get("deck")]
     junctions = _junction_surfaces(chunks, context)
     cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
     rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all, junctions,
-                       coplanar=_roadshape.PROFILE_BUILT)
-    faces = [c for c in chunks if "deck_z" in c]
+                       coplanar=_coplanar_decks())
+    faces = [c for c in chunks if "deck_z" in c and not c.get("rs_mark")]
     if not rb and not piers and not beams and not pads and not faces:
         return None
     low_parapet_decks = set(low_parapet_decks or ())
@@ -2167,6 +2182,9 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
                 glz, grz = tilted(left, right, z, bk, gl), tilted(left, right, z, bk, gr)
             GL, GR = np.c_[gl, glz - slab] - origin, np.c_[gr, grz - slab] - origin
             GLb, GRb = GL - [0, 0, gird], GR - [0, 0, gird]
+            if shells.ON:
+                # Close the girder along its rows so the shell writer only caps its two short ends.
+                quads(GL, GR, 0.0, 0.05, v, v, side, np.array([0.0, 0.0, 1.0]))
             quads(GL, GLb, 0.0, 0.1, v, v, side, out_l)
             quads(GR, GRb, 0.0, 0.1, v, v, side, -out_l)
             quads(GLb, GRb, 0.0, 0.05, v, v, side, np.array([0.0, 0.0, -1.0]))
@@ -2484,6 +2502,11 @@ def _noses(g):
 
 SHEET_REACH_MAX_M = 40.0    # m past its road's edge a through deck's slab reaches over an exit's union at most
 SHEET_TOL_M = 0.01          # m past an outline piece's ends a row still meets it
+
+
+def _shown(chunks):
+    """chunks without today's deck chunks the road system's own faces stand in for (BNE_ROADSYS=surface, "rs_hide")."""
+    return [c for c in chunks if not c.get("rs_hide")]
 
 
 def _slab_chunks(chunks):
@@ -2848,13 +2871,13 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
     _rb lets deck() share its already-computed ribbons. Returned dictionaries are ordered by deck
     chunk and edge, and include the points deck() uses verbatim.
     """
-    chunks, context = _slab_chunks(chunks), _slab_chunks(context)
+    chunks, context = _slab_chunks(_shown(chunks)), _slab_chunks(_shown(context))
     junctions = _junction_surfaces(chunks, context)
     if _rb is None:
         dch = [c for c in chunks if c.get("deck")]
         cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
         rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all,
-                           junctions, coplanar=_roadshape.PROFILE_BUILT)
+                           junctions, coplanar=_coplanar_decks())
     else:
         rb = _rb
     face_runs = [dict(run, deck=-1-i) for i, c in enumerate(chunks) for run in c.get("deck_runs", ())]
@@ -3406,14 +3429,17 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
     return nv
 
 
-def write(path, mesh, close=True):
+def write(path, mesh, close=True, collider=False):
     """mesh: build's (positions, tris, uvs, materials, tri material) and, with a dirt or gravel strip in it, its fade
     uv: the second uv, in the vertex format that also carries a colour (white: the strips' materials leave vertColor
-    off, and the others in the mesh ignore it or multiply by 1)."""
+    off, and the others in the mesh ignore it or multiply by 1). collider: the drawn mesh is its own collider (the
+    mod's "Visible Mesh Final": decks, tunnels, median barriers): moved off the axis-aligned lattice (cdae.unalign; a
+    straight N-S / E-W deck's rows are a degenerate input for the Windows collision build, 8k triangles ~200 ms)."""
     P, T, UV, mats, M = mesh[:5]
     uvs2 = mesh[5] if len(mesh) > 5 else None
     colors = None if uvs2 is None else np.full((len(P), 4), 255, np.uint8)
     over = np.array([overlay_material(m) for m in mats], bool) if len(mats) else np.zeros(0, bool)
     open_tris = over[np.asarray(M, np.int64)] if over.any() and M is not None else None
+    import roadsurf3
     return cdae.write(path, P, T, uvs=UV, uvs2=uvs2, material=mats, tri_materials=M, object_name="road", open_tris=open_tris,
-                      colors=colors, close=close)   # (close "under": a tunnel's tubes, whose mouths are the way in)
+                      colors=colors, close=close, split_drawn=SURFACE_V2 or roadsurf3.ON, unaligned=bool(collider))

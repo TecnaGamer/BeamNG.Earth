@@ -70,6 +70,7 @@ Sent once per session, and again only when something changes.
 | game graphics settings | preset, mesh, textures, terrain, lighting, shadows, anisotropic, AA, vsync, depth of field, SSAO, motion blur, reflections, grass, display mode | to compare like with like |
 | BeamNG.Earth settings | quality preset, trees and their distance, ground cover, grass distance, rocks, night lights, distant traffic, view distance, terrain detail, building distance, ground photo size, object detail, roads, clouds, sky mode, map style, frame pacing, full-priority loading | which of our options cost the most |
 | other mods (rounded) | 0, 1, 2-4, 5-9, ... | other mods can slow the game too |
+| engine patches | grass, ground textures, terrain swaps, game speed: each `on`, `off`, `failed` or `none` | a game update that stops a patch from applying shows at once |
 
 Amounts are rounded into steps, so they describe a class of machine rather than one machine. Only the settings named
 here are read; nothing else from your game folder.

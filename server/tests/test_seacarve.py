@@ -526,6 +526,7 @@ class BathyKeptTest(unittest.TestCase):
             self.assertTrue(b.complete)
 
     def test_prefetch_points_queues_the_cells(self):
+        import glob
         import time
         with tempfile.TemporaryDirectory() as d:
             sc = seacarve.SeaCarver(BathyMapData(), d)
@@ -533,7 +534,11 @@ class BathyKeptTest(unittest.TestCase):
             t0 = time.monotonic()
             while sc.md.fetcher.calls == 0 and time.monotonic() - t0 < 10:
                 time.sleep(0.05)
+            # (the cell's build goes on after the fetch, writing its raster: waited for before the folder goes; gate 293
+            # under load removed it meanwhile, "Directory not empty: 'bathy'")
+            sc._prefetch_ex.shutdown(wait=True)
             self.assertEqual(sc.md.fetcher.calls, 1, "fetched in the background")
+            self.assertTrue(glob.glob(os.path.join(d, "seacarve", seacarve.BATHY_DIR, "*.tif")), "and kept")
 
 
 class LakeTest(unittest.TestCase):

@@ -830,3 +830,53 @@ pub fn apply(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, g0
     let (v, w) = apply_vw(px, py, base, s, p);
     (0..px.len()).map(|i| combine(v[i], w[i], g0[i])).collect()
 }
+
+
+/// The segments needed for a query's batter parameters, in original pack order.
+/// A point can only see a corridor within half width + reach of its segment. Keep
+/// whole plans for the along-plan closing, opening and dilation. Each candidate's
+/// end caps also read the OLD flags on its two linked segments, even across plans.
+#[pyo3::pyfunction]
+pub fn batter_window<'py>(
+    py: pyo3::Python<'py>,
+    a: numpy::PyReadonlyArray2<'py, f64>, b: numpy::PyReadonlyArray2<'py, f64>,
+    h: numpy::PyReadonlyArray1<'py, f64>, of: numpy::PyReadonlyArray1<'py, i64>,
+    nb: numpy::PyReadonlyArray2<'py, i64>, bounds: (f64, f64, f64, f64), reach: f64,
+) -> pyo3::PyResult<(pyo3::Bound<'py, numpy::PyArray1<i64>>, pyo3::Bound<'py, numpy::PyArray2<i64>>)> {
+    use numpy::{ndarray::Array2, IntoPyArray};
+    use pyo3::exceptions::PyValueError;
+    let (a, b, h, of, nb) = (a.as_array(), b.as_array(), h.as_array(), of.as_array(), nb.as_array());
+    let n = h.len();
+    if a.dim() != (n, 2) || b.dim() != (n, 2) || nb.dim() != (n, 2) || of.len() != n
+        || of.iter().any(|&p| p < 0 || p as usize >= n)
+        || nb.iter().any(|&e| e < -1 || e >= 2 * n as i64) {
+        return Err(PyValueError::new_err("batter_window: invalid segment arrays or links"));
+    }
+    let mut keep_plan = vec![false; n];
+    for i in 0..n {
+        let pad = h[i] + reach + 1e-6; // same outward margin as apply_vw's bin search
+        if a[[i, 0]].max(b[[i, 0]]) + pad < bounds.0 || a[[i, 0]].min(b[[i, 0]]) - pad > bounds.2
+            || a[[i, 1]].max(b[[i, 1]]) + pad < bounds.1 || a[[i, 1]].min(b[[i, 1]]) - pad > bounds.3 {
+            continue;
+        }
+        keep_plan[of[i] as usize] = true;
+        for end in nb.row(i) {
+            if *end >= 0 {
+                keep_plan[of[(*end / 2) as usize] as usize] = true;
+            }
+        }
+    }
+    let mut ids = Vec::new();
+    let mut local = vec![-1i64; n];
+    for i in 0..n {
+        if keep_plan[of[i] as usize] {
+            local[i] = ids.len() as i64;
+            ids.push(i as i64);
+        }
+    }
+    let links = Array2::from_shape_fn((ids.len(), 2), |(i, e)| {
+        let end = nb[[ids[i] as usize, e]];
+        if end < 0 || local[(end / 2) as usize] < 0 { -1 } else { 2 * local[(end / 2) as usize] + end % 2 }
+    });
+    Ok((ids.into_pyarray(py), links.into_pyarray(py)))
+}

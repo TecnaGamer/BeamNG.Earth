@@ -184,13 +184,43 @@ def env_on_windows():
 def report(user_dir, msg, log=None):
     line = f"[{TAG}] dtsmooth: {msg}"
     (log or (lambda s: print(s, file=sys.stderr)))(line)
+    write_status(user_dir, STATUS_FILE, msg)
+
+
+def write_status(user_dir, name, msg):
     if user_dir:
         try:
             os.makedirs(os.path.join(user_dir, "temp"), exist_ok=True)
-            with open(os.path.join(user_dir, "temp", STATUS_FILE), "w") as f:
+            with open(os.path.join(user_dir, "temp", name), "w") as f:
                 f.write(f"{int(time.time())} launcher pid {os.getpid()}: {msg}\n")
         except OSError:
             pass
+
+
+def keep_saying(user_dir, name, msg):
+    """A patch that does not act (off, not applied) says so again each time the BeamNG.Earth level starts, so its status
+    line is as fresh as an acting one's (the mod reads them a few seconds after its level started and warns about one
+    not applied: enginepatches.lua; the Linux library does the same, bnge_report_sticky). A daemon thread polling the
+    level flag (os.path.exists) every FLAG_POLL_S for as long as the launcher runs."""
+    if not user_dir:
+        return
+    flag = os.path.join(user_dir, "temp", LEVEL_FLAG)
+
+    def run():
+        was = os.path.exists(flag)
+        while True:
+            time.sleep(FLAG_POLL_S)
+            on = os.path.exists(flag)
+            if on and not was:
+                write_status(user_dir, name, msg)
+            was = on
+
+    threading.Thread(target=run, name="patch-status-" + name, daemon=True).start()
+
+
+def report_sticky(user_dir, msg, log=None):
+    report(user_dir, msg, log)
+    keep_saying(user_dir, STATUS_FILE, msg)
 
 
 # --- Windows process access ------------------------------------------------------------------------------------------
@@ -552,10 +582,10 @@ def attach(user_dir, wait_s=600.0, log=None, block=True):
     """Windows: wait for the game process, patch it and follow the level flag (in a thread unless block). The
     DtSmoothWin, or None (the status file says why)."""
     if env_off():
-        report(user_dir, "off (BNGEARTH_DTSMOOTH_OFF / BNGEARTH_DTSMOOTH=0)", log)
+        report_sticky(user_dir, "off (BNGEARTH_DTSMOOTH_OFF / BNGEARTH_DTSMOOTH=0)", log)
         return None
     if not env_on_windows():
-        report(user_dir, "off (BNGEARTH_DTSMOOTH_WIN=0)", log)
+        report_sticky(user_dir, "off (BNGEARTH_DTSMOOTH_WIN=0)", log)
         return None
     t0 = time.monotonic()
     pid = None
@@ -565,19 +595,19 @@ def attach(user_dir, wait_s=600.0, log=None, block=True):
             break
         time.sleep(1.0)
     if not pid:
-        report(user_dir, "not applied: the game process was not found", log)
+        report_sticky(user_dir, "not applied: the game process was not found", log)
         return None
     # (the executable must be mapped and its loader done with relocations: a few seconds after the process shows up)
     time.sleep(3.0)
     try:
         proc = WinProcess(pid)
     except OSError as e:
-        report(user_dir, f"not applied: {e}", log)
+        report_sticky(user_dir, f"not applied: {e}", log)
         return None
     d = DtSmoothWin(proc, user_dir, log)
     why = d.apply(env_params())
     if why:
-        report(user_dir, f"not applied: {why}; stock", log)
+        report_sticky(user_dir, f"not applied: {why}; stock", log)
         proc.close()
         return None
     report(user_dir, "ready: applied while the BeamNG.Earth level runs (launcher patch, block at %#x, call at %#x)"

@@ -45,7 +45,7 @@ def fixture(role, directory, kind):
     elif role == "--fixture-guard":
         if kind == "launcher":
             import launcher
-            launcher.watch_parent()
+            launcher.watch_parent(world_server=True)
             subprocess.Popen(command + ["--fixture-leaf", str(root), kind],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, creationflags=flags)
@@ -147,6 +147,17 @@ class ProcessLifecycleTest(unittest.TestCase):
         parent.kill()
         parent.wait(timeout=5)
         self.exited_and_reusable(worker, handle)
+
+    def test_restart_can_stop_an_owned_worker_before_killing_it(self):
+        import srvrestart
+        parent = self.start("worker")
+        worker, handle = self.ready("guard.json")
+        deadline = time.monotonic() + 5
+        while not srvrestart.request_stop(worker["pid"]):
+            self.assertLess(time.monotonic(), deadline, "worker stop event was not registered")
+            time.sleep(.05)
+        self.exited_and_reusable(worker, handle)
+        self.assertIsNone(parent.poll())
 
     def test_explicit_stop_reaps_owned_server_tree(self):
         import launcher

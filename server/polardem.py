@@ -33,7 +33,6 @@ import numpy as np
 
 import cog as cogmod
 import fast
-import dmath
 import rangeread
 
 log = logging.getLogger("earthd.polardem")
@@ -63,35 +62,30 @@ def file_name(lat_sw, lon_sw):
 def band_cols(lat_sw):
     """Columns per degree (level 0) of the files whose south-west corner is at latitude lat_sw: 10" past 85 deg, 5"
     in 80-85 deg (the Copernicus DEM's other bands are not read here)."""
-    if lat_sw >= 85 or lat_sw <= -86:
-        return 360
-    if 80 <= lat_sw <= 84 or -85 <= lat_sw <= -81:
-        return 720
-    raise ValueError(f"latitude {lat_sw} is outside the polar bands")
+    fast.require(565, "polar DEM bands")
+    return fast._ef.polar_band_cols(lat_sw)
 
 
 def file_lat(lat):
     """The south-west latitude of the file whose rows hold lat (the file of row floor((90 - lat) * 3600); the South
     Pole's: the last row's)."""
-    row = np.floor((90.0 - np.asarray(lat, np.float64)) * ROWS_PER_DEG).astype(np.int64)
-    return 89 - np.clip(row, 0, 180 * ROWS_PER_DEG - 1) // ROWS_PER_DEG
+    fast.require(565, "polar file latitude")
+    return fast._ef.polar_file_lat(np.asarray(lat, np.float64))[()]
 
 
 def level_for(pixel_m):
     """The finest level whose pixels (north-south) are not finer than pixel_m needs."""
-    if not pixel_m or pixel_m <= LAT_PX_M:
-        return 0
-    return int(min(LEVELS - 1, math.floor(dmath.log2(pixel_m / LAT_PX_M))))
+    fast.require(565, "polar DEM level")
+    return fast._ef.polar_level(pixel_m, LAT_PX_M, LEVELS)
 
 
 def global_px(lat, lon, level, cpd=360):
     """Fractional global pixel coordinates (column, row) of lat / lon in a band's grid (cpd columns per degree) at
     level: level 0 has pixel centres on whole arc seconds (PixelIsPoint), an overview pixel j is the mean of level-0
     pixels j * f .. j * f + f - 1, centred at j * f + (f - 1) / 2."""
-    f = 1 << level
-    gx = (np.asarray(lon, np.float64) + 180.0) * cpd
-    gy = (90.0 - np.asarray(lat, np.float64)) * ROWS_PER_DEG
-    return (gx - (f - 1) / 2.0) / f, (gy - (f - 1) / 2.0) / f
+    fast.require(565, "polar pixel coordinates")
+    x, y = fast._ef.polar_pixels(np.asarray(lat, np.float64), np.asarray(lon, np.float64), level, cpd)
+    return x[()], y[()]
 
 
 class PolarDem:
@@ -161,61 +155,8 @@ class PolarDem:
         """Heights (m, float64) at lat / lon arrays at or past FROM_LAT; 0 where no file exists."""
         lat = np.atleast_1d(np.asarray(lat, np.float64))
         lon = np.atleast_1d(np.asarray(lon, np.float64))
-        out = np.zeros(lat.shape, np.float64)
-        if lat.size == 0:
-            return out
-        lon = (lon + 180.0) % 360.0 - 180.0
-        files = np.unique(np.floor(lat).astype(np.int64) * 1000 + np.floor(lon).astype(np.int64))
-        level = level_for(pixel_m) if len(files) <= MAX_FILES else LEVELS - 1
-        fl = file_lat(lat)
-        for v in np.unique(fl).tolist():
-            band_cols(v)                    # (points outside the polar bands: ValueError)
-        cpd = np.where((fl >= 85) | (fl <= -86), 360, 720)
-        for c in np.unique(cpd).tolist():   # one band and hemisphere at a time
-            for north in (True, False):
-                m = (cpd == c) & ((fl >= 0) == north)
-                if m.any():
-                    sub = np.zeros(int(m.sum()))
-                    self._sample_into(sub, lat[m], lon[m], level, int(c), north)
-                    out[m] = sub
-        return out
-
-    @staticmethod
-    def _band_rows(cpd, north, level):
-        """The band's global rows (first, last) at level."""
-        f = 1 << level
-        sw = [a for a in range(-90, 90) if (a >= 0) == north and band_rows_ok(a, cpd)]
-        top, bottom = max(sw) + 1, min(sw)          # its files' north edge, south-west corner
-        r0 = int(round((90 - top) * ROWS_PER_DEG))
-        r1 = int(round((90 - bottom) * ROWS_PER_DEG)) - 1
-        return r0 // f, (r1 + 1) // f - 1
-
-    def _sample_into(self, out, lat, lon, level, cpd, north):
-        f = 1 << level
-        cols = 360 * cpd // f                       # the level's global grid
-        b0, b1 = self._band_rows(cpd, north, level)
-        gx, gy = global_px(lat, lon, level, cpd)
-        gx = gx % cols                      # (west of the first centre: wraps to the last columns)
-        # one mosaic over the points' rows (within the band); its columns: the points' span, or the whole circle (plus
-        # a wrapped column) when they surround a pole or straddle the antimeridian
-        r0 = max(b0, min(b1 - 1, int(math.floor(gy.min()))))
-        r1 = max(r0 + 1, min(b1, int(math.floor(gy.max())) + 1))     # (the pole's row: the last two rows)
-        c0, c1 = int(math.floor(gx.min())), int(math.floor(gx.max())) + 1
-        if c1 - c0 + 1 > cols // 2:
-            c0, c1 = 0, cols                # all columns; column `cols` repeats column 0
-        if (r1 - r0 + 1) * (c1 - c0 + 1) > MAX_MOSAIC_PX:
-            low = gy <= np.median(gy)
-            if low.any() and not low.all():         # in two parts, north and south
-                for m in (low, ~low):
-                    sub = np.zeros(int(m.sum()))
-                    self._sample_into(sub, lat[m], lon[m], level, cpd, north)
-                    out[m] = sub
-                return
-        mosaic = self._mosaic(level, cpd, r0, r1, c0, max(c1, c0 + 1), cols)
-        if mosaic is None:
-            return
-        fast.require(55, "bilinear_grid")
-        out[:] = fast._ef.bilinear_grid(mosaic, np.ascontiguousarray(gx - c0), np.ascontiguousarray(gy - r0))
+        fast.require(565, "polar DEM sampler")
+        return fast._ef.polar_sample(lat, lon, pixel_m, LAT_PX_M, LEVELS, MAX_FILES, MAX_MOSAIC_PX, self._mosaic)
 
     def _mosaic(self, level, cpd, r0, r1, c0, c1, cols):
         """Rows r0..r1 x columns c0..c1 (inclusive; columns modulo cols) of a band's global grid at level, float32,

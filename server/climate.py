@@ -6,6 +6,7 @@ import os
 import threading
 
 import numpy as np
+import fast
 
 PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "koppen_1991_2020_0p1.png")
 RES = 0.1
@@ -27,11 +28,10 @@ def _load():
 
 def koppen_many(lat, lon):
     """koppen_at's class of each point (arrays), 0 on the sea's pixels (no coast search: for items on land)."""
-    g = _load()
-    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
-    j = np.clip(((90.0 - lat) / RES).astype(np.int64), 0, g.shape[0] - 1)
-    i = (((lon + 180.0) % 360.0) / RES).astype(np.int64) % g.shape[1]
-    return g[j, i].astype(np.int64)
+    fast.require(564, "Koppen samples")
+    lat, lon = np.broadcast_arrays(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    out = fast._ef.koppen_samples(_load(), lat.ravel(), lon.ravel(), RES).reshape(lat.shape)
+    return out if out.ndim else out[()]
 
 
 def koppen_at(lat, lon):

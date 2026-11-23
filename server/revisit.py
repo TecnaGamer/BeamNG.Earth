@@ -396,7 +396,14 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 # plancache's stage_*)
                 "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE",
                 # (an older version shown while this one is built: what is kept is this version's either way)
-                "BNE_STALE_REVISIT", "BNE_STALE_DAYS")
+                "BNE_STALE_REVISIT", "BNE_STALE_DAYS",
+                # (where the home cells' lane graphs and the decoded roads layers are kept and when they are written:
+                # the same graphs and layers either way, roadsurf3.LANES_DISK, roadlayercache.ASYNC)
+                "BNE_LANES_DISK", "BNE_ROADS_DEC_ASYNC",
+                # (where a cell's inputs are read from: its CIP cell holds the arrays its sources give, bit for bit,
+                # cip.py; the weekly data builds a CIP build pins are keyed as such, MapData.versions(). Proof: the
+                # portcheck corpus's plans and facts and the sessions' tiles identical with it on and the sources gone)
+                "BNE_V2_CIP", "BNE_V2_CIP_URL", "BNE_V2_CIP_BUILD")
 
 
 # BNGE_* settings that change what is built (the road revamp's R1 audit, 2026-11-16): keyed like the build switches
@@ -408,8 +415,17 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
 OUTPUT_ENV = ("BNGE_ONEWAY_JOINS", "BNGE_ROADS_IN_GROUND")
 
 
+# A switch keyed by its value: BNE_ROADSYS (the road rewrite) at off or shadow (M1: built again in the background and
+# logged; nothing built or delivered reads it) changes no output and is no build switch; at heights (M2: today's deck
+# builder and grading take its one profile per carriageway) and every later stage it is one (the tiles', plans' and
+# facts' keys: switches_key, plans_switches_key; its version in SWITCH_VERSIONS).
+UNKEYED_VALUES = {"BNE_ROADSYS": ("", "off", "shadow")}
+
+
 def keyed_env(k):
     """Is environment variable k part of the build switches' hash (code_key, switches_key)?"""
+    if k in UNKEYED_VALUES:
+        return os.environ.get(k, "").strip().lower() not in UNKEYED_VALUES[k]
     return (k.startswith("BNE_") and k not in NOT_SWITCHES) or k in OUTPUT_ENV
 
 
@@ -458,18 +474,38 @@ def keyed_env(k):
 # BNE_ROADSHAPE 9 (P3e, profile): a deck over another along it held as twins are, a twin run held whole once seeded
 # (earthfast 536); the coplanar trim on one seam, where both surfaces meet, past chunk ends inside a part
 # (deck_trim_coplanar); a branch's surface in its union laid on the through deck's; union decks' rows unsimplified.
+# BNE_ROADSHAPE 10 and BNE_ROADSURF_V3=surface 8 (2026-11-22): the fork records' and the v3 lane graph's segment
+# windows never hold a road both whole and as its lane sections (roadshape.whole_or_sections).
+# BNE_ROADSYS 1 (heights, M2, 2026-11-22): the one profile per carriageway in today's decks and as the plans' terrain
+# targets (roads.BridgeProfiles._chain_solve, roadsys.chain_heights; earthfast 600).
+# BNE_ROADSYS 2 (heights, M3, 2026-11-22): crossings beside a deck no floor, a branch past its nose on its trunk, the
+# active set's releases, floors with today's headroom and the deck's own drawn depth (drawn so too), terrain targets
+# only round deck ends and floors, chains lifted onto their abutments' approach fills (earthfast 602).
+# BNE_ROADSYS=structures 1 (M3 structures, 2026-11-22): heights, the ground under the decks' ground ends dropped and
+# the decks' exact variants rebuilt round them on each anchor's lattice (earthfast 603); keyed as "2s1" (heights'
+# version and its own).
+# BNE_ROADSYS=surface 1 (M4 surface, 2026-11-22): structures, and the decks drawn from the road system's own faces
+# (roadsys.deck_faces, earthfast 606); keyed as "2s1u1" (structures' meaning and its own); its plans are heights' own.
+ROADSYS_STRUCTURES_VERSION = 1
+ROADSYS_SURFACE_VERSION = 1
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 9, "BNE_DECK_SKEW": 1}
+                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 2}
 
 
 def keyed_value(k, v):
     """The text a set build switch k = v is hashed as (code_key, switches_key, bakepack.switches): k=v, its
     SWITCH_VERSIONS version after it when it has one."""
     # The surface generation includes the supporting deck and its parapet outline.
-    n = 5 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
+    n = 8 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
+    if k == "BNE_ROADSYS" and v.strip().lower() == "structures":
+        n = f"{n}s{ROADSYS_STRUCTURES_VERSION}"     # (heights' meaning and its own: either moves its keys)
+    if k == "BNE_ROADSYS" and v.strip().lower() == "surface":
+        n = f"{n}s{ROADSYS_STRUCTURES_VERSION}u{ROADSYS_SURFACE_VERSION}"   # (structures' and its own)
+    if k in ("BNE_SIDEWALK_V2", "BNE_SURFACE_V2") and v.strip().lower() in ("on", "1", "yes", "true"):
+        n = 2
     if (k, v) == ("BNE_ROADSHAPE", "profile") and os.environ.get("BNE_ROADSURF_V3") == "surface":
-        n = 10
+        n = 10 if os.environ.get("BNE_PROFILE_ROBUST") == "0" else 11
     return f"{k}={v}" if n is None else f"{k}={v}@v{n}"
 
 
@@ -624,7 +660,7 @@ GENS_KEPT = 6               # generations kept in the file
 GENS_FILE = "generations.json"
 # (the kinds read so: a geotile's road content, an anchor's skin of it, a geotile's trees, an anchor's sign tile, a
 # block's photo, a terrain block. Not the far field's: nothing builds those behind a session yet)
-READ_FORMAT = {"roadsg": 1, "rskin": 1, "vegg": 1, "signs": 1, "basephoto": 1, "block": 1}
+READ_FORMAT = {"roadsg": 2, "rskin": 2, "vegg": 1, "signs": 1, "basephoto": 1, "block": 1}
 STALE_KINDS = frozenset(READ_FORMAT) - {"block"}
 ALTS_KEPT = 50000
 _alts = {}                  # current key -> [(generation id, that generation's key)] (key() in a stale scope)

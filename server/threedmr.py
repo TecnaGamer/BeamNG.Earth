@@ -608,7 +608,7 @@ def _credit_position(path, cache_dir, model_id):
 def credited_near(lat, lon, range_m, cache_dir):
     if not enabled() or not cache_dir:
         return False
-    fast.require(557, "credited_model_near")
+    fast.require(576, "credited_model_near")
     return fast._ef.credited_model_near(_near_memo, lat, lon, range_m, cache_dir, _credit_position)
 
 

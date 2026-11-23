@@ -359,12 +359,25 @@ end
 serverSend({ type = 'far_swap', anchorId = 1, id = 2, add = col, remove = {}, dIn = 0, dOut = 0 })
 T.check(pumpUntil(function() return farfield._tile('0_-4_0') ~= nil end, 300), 'covered L0 tiles swapped in')
 local colObj = objects[farfield._tile('0_-4_0').id]
-T.check(not colObj.hidden and colObj.pos.z == 1100 - 1.0, 'edge ring tile under the block: shown, sunk by its sink')
+T.check(colObj.hidden, 'W edge ring tile under the block: hidden (all block ground)')
+local neObj = objects[farfield._tile('0_-4_3').id]
+T.check(not neObj.hidden and neObj.pos.z <= 1100 - 1.0, 'NW corner tile (N strip under-floor): shown, sunk at least by its sink')
 -- every block import drops the grass on the block: loadBlock asks for its rebuild right after the
 -- import, in the same call (groundcover.lua, docs/ARCHITECTURE.md "Ground surfaces")
 local gcmod = require('beamngEarth/groundcover')
 local gcOrig, gcAt = gcmod.afterBlockChange, {}
 gcmod.afterBlockChange = function() gcAt[#gcAt + 1] = calls.importMaps; return gcOrig() end
+T.check(tb.renderEnabled == nil and (calls.setRenderEnabled or 0) == 0, 'terrain mode: the block is drawn, render flag never touched')
+core.PHOTOLESS_FAR_GROUND = true  -- (the opt-in far ground under a photo-less block; off by default: checked below)
+-- (the block before's photo still on the block's material: a photo-less block elsewhere must not keep it, drawn where
+-- the block has moved)
+local terrainmod = require('beamngEarth/terrain')
+local blockMat = scenetree.findObject(terrainmod.MATERIAL)
+if not blockMat then
+  blockMat = S.newObject('TerrainMaterial'); blockMat.name = terrainmod.MATERIAL; objects[blockMat.id] = blockMat
+end
+blockMat:setField('baseColorBaseTex', 0, '/before.jpg')
+core.setNearVisual('detail')  -- its ready block has no base photo
 T.check(pumpUntil(function() return calls.importMaps == imports + 1 end, 100), 'terrain-follow commit once the strip is live')
 T.check(#gcAt == 1 and gcAt[1] == imports + 1, 'grass rebuild requested once, right after the import')
 gcmod.afterBlockChange = gcOrig
@@ -377,6 +390,23 @@ ct = last('commit_terrain')
 T.check(ct.anchorId == 1 and ct.cx == 256 and ct.cy == 0, 'commit_terrain sent')
 T.check(calls.setClusterPosRelRot == clusterMoves and veh.pos.x == 451, 'terrain-follow does not move vehicles')
 for id, p in pairs(farBefore) do T.check(objects[id].pos.x == p.x, 'terrain-follow does not move far tiles') end
+T.check(not tb.renderEnabled and farfield.rawView(), 'missing base: collision moved but far tiles draw the ground')
+T.check(blockMat:getField('baseColorBaseTex') == terrainmod.LEVEL_BASE.tex and terrainmod.base() == nil,
+  "missing base: the level's flat base, not the block before's photo where the block has moved")
+veh.vel = vec3(58, 0, 0)
+serverSend({ type = 'block_base', anchorId = 1, cx = 0, cy = 0, base = '/old.jpg', baseSize = 2048 })
+frames(2)
+T.check(not tb.renderEnabled, 'late photo of the previous block leaves the far tiles visible')
+serverSend({ type = 'block_base', anchorId = 1, cx = 256, cy = 0, base = '/current.jpg', baseSize = 2048 })
+frames(2)
+T.check(tb.renderEnabled and not farfield.rawView() and require('beamngEarth/terrain').base() == '/current.jpg',
+  'first photo replaces the far ground even at 130 mph')
+core.PHOTOLESS_FAR_GROUND = false
+core._blockPhotoInstalled(nil)
+T.check(tb.renderEnabled and not farfield.rawView(), 'by default a photo-less block is drawn, its far tiles covered')
+core._blockPhotoInstalled('/current.jpg')
+veh.vel = vec3(0, 0, 0)
+core.setNearVisual('terrain')
 -- stale / foreign answers are ignored
 serverSend({ type = 'terrain_ready', requestId = 999, anchorId = 1, cx = 0, cy = 0, heightmap = '/x.png', size = 1024 })
 frames(5)
@@ -567,7 +597,6 @@ veh.pos = vec3(700, 30, 1200)
 veh.vel = vec3(20, 0, 0)
 frames(2)
 local movesBefore, setOrig = calls.setClusterPosRelRot, calls.setOriginalTransform
-T.check(tb.renderEnabled == nil and (calls.setRenderEnabled or 0) == 0, 'terrain mode: the block is drawn, render flag never touched')
 T.check(tb.fields.castShadows == '1', 'the block casts its shadows (the settings\' terrainShadows, default on: the far tiles cast theirs)')
 T.check(require('beamngEarth/terrain').setCastShadows(false) == false and tb.fields.castShadows == '0', 'terrainShadows off: none')
 require('beamngEarth/terrain').setCastShadows(true)

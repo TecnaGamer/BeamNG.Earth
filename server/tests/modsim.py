@@ -11,8 +11,8 @@ ports of:
                 wait for a slot) and phase lengths; defaultErr from the server's hello.cells (M1)
   farfield.lua  the tile state machine (FarField): hidden preload, swap groups that run once
                 every add is loaded, groups sharing a key in arrival order, far_remove ordering,
-                the previous anchor's leftovers at far_done, cover state (edge ring sunk by the
-                server's `sink`, interior hidden; nothing covered in mesh near-visual mode),
+                the previous anchor's leftovers at far_done, cover state (the N/E edge ring sunk,
+                every other covered tile hidden; nothing covered in mesh near-visual mode),
                 onBlockCommit, uncoverReady, deletes (never in a frame that imported); mesh mode:
                 nearest-first imports, previous-anchor tiles dropped once covered; server sessions
                 (switchAnchor's session: old tiles keyed by session and anchor, heldAnchors of the
@@ -116,6 +116,9 @@ CORE = lua_consts("core.lua")
 GOV = lua_consts("governor.lua")
 XO = lua_consts("crossover.lua")
 FAR = lua_consts("farfield.lua")
+# BNGE_FARCOVER_OLD=1 (measurements only): the cover rules before 2026-11-21 (every tile of the 128 m edge ring sunk by
+# the server's `sink`, partial tiles by their error bound, no block floor or exact cover sink)
+OLD_COVER = os.environ.get("BNGE_FARCOVER_OLD") == "1"
 SCREEN_ORDER = re.search(r"^M\.SCREEN_ORDER = (true|false)", (MOD_DIR / "farfield.lua").read_text(), re.M).group(1) == "true"
 EDGE = lua_consts("edgeguard.lua")
 
@@ -694,7 +697,7 @@ class Inst:
     __slots__ = ("key", "aid", "level", "bbox0", "x0", "y0", "x1", "y1", "z", "err", "sink", "seq",
                  "prefetch", "kind", "path", "queued", "loaded", "failed", "shown", "doomed", "removing",
                  "cover", "cover_hide", "anim_end", "grp", "material", "mat", "mat_failed", "session", "shape",
-                 "texture", "slot", "slot_serial")
+                 "texture", "slot", "slot_serial", "top")
 
     def __init__(self, msg, seq, path, cells=None):
         self.key, self.aid = str(msg["key"]), msg["anchorId"]
@@ -724,6 +727,7 @@ class Inst:
         self.queued, self.loaded, self.failed, self.shown = True, False, False, False
         self.doomed = self.removing = False
         self.cover, self.cover_hide, self.anim_end, self.grp = "none", False, None, None
+        self.top = None                 # the mesh's highest point at offset 0 (farfield.lua tileTop: the engine's box)
 
 
 class Group:
@@ -769,6 +773,7 @@ class FarField:
         self.moving = set()
         self.lossy = set()
         self.block = None
+        self.block_info = (None, None)    # the committed block's (floor = zBase, cover = {key: sink}) (setBlock's info)
         self.anchor_id = None
         self.session = None               # server session of the current anchor (switch_anchor)
         self.done = False
@@ -797,17 +802,49 @@ class FarField:
             return "none"
         e = 0.01
         if inst.x0 < b[0] - e or inst.y0 < b[1] - e or inst.x1 > b[2] + e or inst.y1 > b[3] + e:
+            if inst.x0 < b[2] - e and b[0] + e < inst.x1 and inst.y0 < b[3] - e and b[1] + e < inst.y1:
+                return "partial"    # across the block's edge: sunk, still shown (farfield.lua coverOf)
             return "none"
-        d = min(inst.x0 - b[0], inst.y0 - b[1], b[2] - inst.x1, b[3] - inst.y1)
-        return "edge" if d < FAR["EDGE_BAND"] else "interior"
+        if OLD_COVER:
+            d = min(inst.x0 - b[0], inst.y0 - b[1], b[2] - inst.x1, b[3] - inst.y1)
+            return "edge" if d < 128 else "interior"
+        # (2026-11-21: only the N/E ring, the under-floor of the strip past the collidable width; farfield.lua coverOf)
+        return "edge" if inst.x1 > b[2] - e or inst.y1 > b[3] - e else "interior"
 
     @staticmethod
-    def cover_target_hide(inst, cover):
+    def visible_cover(c):
+        return c in ("none", "partial")
+
+    def exact_sink(self, inst):
+        cover = None if OLD_COVER else self.block_info[1]
+        if not cover or inst.aid != self.anchor_id or inst.session != self.session or self.live.get(inst.key) is not inst:
+            return None
+        v = cover.get(inst.key)
+        return float(v) if v is not None else None
+
+    def cover_target(self, inst, cover):
+        """(z offset, hidden) of a cover state: farfield.lua coverTarget."""
         if cover == "none":
-            return False
+            return 0.0, False
+        if cover == "partial":
+            x = self.exact_sink(inst)
+            return -(max(x, FAR["PARTIAL_SINK_M"]) if x is not None
+                     else FAR["PARTIAL_SINK_K"] * inst.err + FAR["PARTIAL_SINK_M"]), False
+        if cover == "interior":
+            return -(inst.sink if inst.sink is not None else FAR["HIDE_DEPTH"]), True
+        fl = None if OLD_COVER else self.block_info[0]
+        if fl is not None and inst.top is not None:
+            return min(-(inst.sink or 0.0), fl - FAR["FLOOR_MARGIN"] - inst.top), False
         if inst.sink is not None:
-            return cover == "interior"
-        return True
+            return -inst.sink, False
+        return -FAR["HIDE_DEPTH"], True
+
+    def cover_target_hide(self, inst, cover):
+        return self.cover_target(inst, cover)[1]
+
+    def cover_offset(self, inst):
+        """The z offset the cover state puts the tile at (no crossover: crossover.CROSS = 0, COVER_SINK_S = 0)."""
+        return self.cover_target(inst, inst.cover)[0]
 
     def animating(self, inst):
         if inst.anim_end is not None and self.clock >= inst.anim_end:
@@ -822,20 +859,27 @@ class FarField:
 
     def apply_cover(self, inst, animate):
         c = self.cover_of(inst)
-        if c == inst.cover:
+        hide = self.cover_target_hide(inst, c)
+        if c == inst.cover and hide == inst.cover_hide:
             return False
-        was_visible = inst.cover == "none" and not self.hidden(inst)
+        changed = c != inst.cover
+        was_visible = self.visible_cover(inst.cover) and not self.hidden(inst)
         inst.cover = c
-        inst.cover_hide = self.cover_target_hide(inst, c)
-        if animate and was_visible and c != "none":
+        inst.cover_hide = hide
+        if animate and changed and was_visible and c != "none" and XO["COVER_SINK_S"] > 0:
             inst.anim_end = self.clock + XO["COVER_SINK_S"]
             self.moving.add(inst)
         else:
             inst.anim_end = None
         return True
 
-    def set_block(self, cx, cy):
+    def set_block(self, cx, cy, info=None):
+        """info: the block's terrain message (its zBase, the floor, and `cover`), or None (farfield.lua setBlock)."""
         self.block = cover_box(cx, cy)
+        info = info if isinstance(info, dict) else {}
+        cover = info.get("cover")
+        self.block_info = (float(info["zBase"]) if info.get("zBase") is not None else None,
+                           cover if isinstance(cover, dict) else None)
 
     def set_near_visual(self, mode):
         """farfield.setNearVisual: 'mesh' or 'terrain'; re-applies every shown tile's cover state."""
@@ -846,8 +890,8 @@ class FarField:
         for inst in list(self.live.values()) + list(self.old.values()):
             self.apply_cover(inst, False)
 
-    def on_block_commit(self, cx, cy):
-        self.set_block(cx, cy)
+    def on_block_commit(self, cx, cy, info=None):
+        self.set_block(cx, cy, info)
         n = 0
         for inst in list(self.live.values()) + list(self.old.values()):
             n += self.apply_cover(inst, True)
@@ -1018,11 +1062,11 @@ class FarField:
                 unknown += 1
         vis_adds, vis_rems, err_n, err_o = [], [], 0.0, 0.0
         for a in adds:
-            if self.cover_of(a) == "none" and not a.failed:
+            if self.visible_cover(self.cover_of(a)) and not a.failed:
                 vis_adds.append(a)
                 err_n = max(err_n, a.err)
         for r in rems:
-            if r.cover == "none" and not self.hidden(r) and r.grp is None:
+            if self.visible_cover(r.cover) and not self.hidden(r) and r.grp is None:
                 vis_rems.append(r)
                 err_o = max(err_o, r.err)
         mode, d_in, d_out = "instant", 0.0, 0.0
@@ -1037,6 +1081,8 @@ class FarField:
                 mode = "instant"
             elif not vis:
                 mode = "instant"
+            elif XO["CROSS"] == 0:
+                mode = "instant"                    # crossover.CROSS = 0: in view too, no two LODs drawn together
             elif self.active_groups >= XO["MAX_GROUPS"]:
                 if nearest <= XO["NEAR_POP_M"]:
                     self.counters["cap_waits"] += 1
@@ -1158,7 +1204,7 @@ class FarField:
             if not inst.doomed:
                 inst.x0, inst.y0, inst.x1, inst.y1 = ff.transform_bbox(src, dst, (inst.x0, inst.y0, inst.x1, inst.y1))
 
-    def switch_anchor(self, new_id, keep_old, blk, session=None):
+    def switch_anchor(self, new_id, keep_old, blk, session=None, info=None):
         """session: the new anchor's server session (None = unchanged); a new one forgets lossy."""
         self.finish_all()
         keep = deque()
@@ -1191,7 +1237,7 @@ class FarField:
             self.session = session
         self.done = False
         if blk is not None:
-            self.set_block(*blk)
+            self.set_block(*blk, info)
             for inst in self.old.values():
                 self.apply_cover(inst, False)
 

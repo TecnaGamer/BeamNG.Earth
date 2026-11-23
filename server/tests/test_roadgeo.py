@@ -35,8 +35,9 @@ import grading  # noqa: E402
 import roads  # noqa: E402
 
 LAT, LON = 39.2834, -76.5934
-CACHE = os.path.expanduser("~/.cache/beamng-earth")
-HAVE_DATA = os.path.isdir(os.path.join(CACHE, "mapdata")) and os.environ.get("BNGE_ROADGEO_REAL", "1") != "0"
+from geo_test_cache import SOURCE, work_cache
+
+HAVE_DATA = os.path.isdir(os.path.join(SOURCE, "mapdata")) and os.environ.get("BNGE_ROADGEO_REAL", "1") != "0"
 
 
 def east(lat, lon, km):
@@ -183,6 +184,30 @@ class ExactVariantTest(unittest.TestCase):
         self.assertEqual(sorted(far), ["bld", "bldcol"])       # (60 x 2.35e-3 = 14 cm; 20 x 2.35e-3 = 4.7 cm)
 
 
+class BusyRoadDriveTest(unittest.TestCase):
+    def test_forward_cells_keep_a_worker_during_terrain_builds(self):
+        # Start at the geographic cell centre, facing east at 130 mph. All
+        # nearby cells except one off the street have already reached the mod.
+        gx, gy = geotiles.tile_of(LAT, LON)
+        frame = geodesy.EnuFrame(*geotiles.centre(gx, gy))
+        tracker = roads.GeoTracker()
+        nearby = {(x, y) for x, y, _ in geotiles.tiles_near(frame, 0., 0., roads.SEND_M)}
+        tracker.sent = nearby - {(gx, gy + 1)}
+        tracker.skins = tracker.sent.copy()
+        tracker.need = {(k, 1): {} for k in tracker.sent}
+        started = []
+        def start(key, *_):
+            started.append(key)
+            tracker.building.add(key)
+        fast._ef.road_geo(tracker, None, 1, frame, (0., 0.), (58., 0.), None, (), None, True, 1.,
+                          start, lambda: None, lambda key: None)
+        self.assertTrue(started)
+        self.assertNotIn(started[0], nearby)
+        self.assertEqual(started[0][1], gy)
+        self.assertGreater(started[0][0], gx)
+        self.assertLessEqual(len(started), roads.BUILD_PER_POSE)
+
+
 class GeoTrackerRebaseTest(unittest.TestCase):
     """A scripted 15 km rebase (the mod's poses round one place, first from an anchor 15 km west, then from one at it):
     no content is built again, a skin for each tile round the car."""
@@ -273,9 +298,10 @@ class RealDataTest(unittest.TestCase):
             lon_b = LON + 15000.0 / (111320.0 * math.cos(math.radians(LAT)))
             outs = []
             for i, (alat, alon) in enumerate(((LAT, LON), (LAT, lon_b))):
-                r = subprocess.run([sys.executable, os.path.join(here, "roadgeo_content.py"), os.path.join(tmp, str(i)),
-                                    str(LAT), str(LON), str(alat), str(alon)], capture_output=True, text=True,
-                                   timeout=900)
+                with work_cache() as cache:
+                    r = subprocess.run([sys.executable, os.path.join(here, "roadgeo_content.py"), os.path.join(tmp, str(i)),
+                                        str(LAT), str(LON), str(alat), str(alon)], env=dict(os.environ, BNGE_GEO_WORK_CACHE=cache), capture_output=True, text=True,
+                                       timeout=900)
                 self.assertEqual(r.returncode, 0, r.stderr[-2000:])
                 outs.append(r.stdout)
             self.assertTrue(outs[0].strip(), "content written")
@@ -293,7 +319,10 @@ class RealDataTest(unittest.TestCase):
         self.addCleanup(setattr, revisit, "CACHE_DIR", revisit.CACHE_DIR)      # (_State points it at CACHE)
         self.addCleanup(setattr, bw, "_s", getattr(bw, "_s", None))
         revisit.ON = False
-        bw._s = bw._State(CACHE, True, True, True, True, True, True, True)
+        copy = work_cache()
+        cache = copy.__enter__()
+        self.addCleanup(copy.__exit__, None, None, None)
+        bw._s = bw._State(cache, True, True, True, True, True, True, True)
         out = tempfile.mkdtemp(prefix="roadgeo_")
         try:
             f = geodesy.EnuFrame(LAT, LON)

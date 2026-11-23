@@ -152,7 +152,7 @@ class CropGenerationPathsTest(unittest.TestCase):
     def test_worker_and_server_guard_the_final_folded_samples(self):
         lat, lon = grids()
         planted = fields(["orchard"], [[ring(1.25, 1.25, 10.25, 10.25)]])
-        surface = SimpleNamespace(block_classes=lambda *a: (np.full(lat.shape, 40, np.uint8), True),
+        surface = SimpleNamespace(block_classes=lambda *a: (np.full(lat.shape, 50, np.uint8), True),
                                   roads=lambda *a: ([], True), lots=lambda *a: [planted])
         state = SimpleNamespace(surface=surface, sea=None, airports=None, md=None, mapdata=None,
                                 anchor=lambda *a: (None, None), out_dir="unused",
@@ -168,7 +168,7 @@ class CropGenerationPathsTest(unittest.TestCase):
             pass
 
         def capture(idx, *args):
-            captures.append(idx[::-1].copy())
+            captures.append(idx.copy())
             raise Written()
 
         with mock.patch.object(blockworker, "_s", state), \
@@ -176,12 +176,14 @@ class CropGenerationPathsTest(unittest.TestCase):
                 mock.patch.object(blockworker, "plan_ahead"), mock.patch.object(blockworker, "sea_ahead"), \
                 mock.patch.object(blockworker.l0roads, "post_for"), \
                 mock.patch.object(blockworker.heightmap, "generate", side_effect=generate), \
-                mock.patch.object(sf, "fold_layers", side_effect=lambda *a: np.full(lat.shape, sf.CROP, np.uint8)), \
+                mock.patch.object(sf, "FOLD_ON", True), \
+                mock.patch.object(sf.fast._ef, "block_fold", return_value=(np.full(lat.shape, sf.CROP, np.uint8), 1)), \
                 mock.patch.object(sf, "write_masks", side_effect=capture):
             with self.assertRaises(Written):
                 blockworker._build(1, 41.1, -104.9, 16, 1 / 64, 0, 0, 16, "unused", "crop.png", provisional=True)
             with self.assertRaises(Written):
-                earthd.Server._make_heightmap_here_(state, anchor, 0, 0, None, time.perf_counter(), 1 / 64,
+                earthd.Server._make_heightmap_here_(state, ("crop.png", "crop.ter"), anchor, 0, 0, None,
+                                                   time.perf_counter(), 1 / 64,
                                                    provisional=True)
         self.assertEqual(len(captures), 2)
         for idx in captures:

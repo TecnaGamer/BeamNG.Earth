@@ -68,7 +68,7 @@ LOOKS = {
 # variation (the stock AsphaltRoad_variation textures: faint mottling and streaks, 5-24 % opaque) in 5-9 m strips about
 # 50 m long, 10 m end fades, texture length about 100 m, running on through the junction mouths; tyre wear (the stock
 # tread_marks_worn at its stock tint and opacity: ours at full brightness and opacity were the "very bright" bands of
-# 2026-11-11) 4-5 m wide on the lane centres in 40-60 m runs with 5-20 m fades, in place of K_TREAD; repair patch strips
+# 2026-11-11) up to 4-5 m wide on the lane centres, capped at one lane on urban surface streets in 40-60 m runs with 5-20 m fades, in place of K_TREAD; repair patch strips
 # (the stock road_patches1 strip) about 8 a km, 15-40 m long, half of them with a joint line across each end. Their
 # materials (roadwear.materials.json) write no depth: roadmesh.v2_rank orders them.
 SURFACE_V2 = os.environ.get("BNE_SURFACE_V2", "off").strip().lower() in ("on", "1", "yes", "true")
@@ -307,11 +307,11 @@ def surface_chunks(pts, off, rows, excl, box, tier):
     """The v2 surface pieces (SURFACE_V2: earthfast.surface_plan) as road mesh chunks; tile_chunks's arrays (the roads'
     centre lines, offsets, attrs rows, excluded pairs), box and tier. Each strip carries its end fade ("fend_m")."""
     import fast
-    fast.require(499, "surface_plan")
+    fast.require(570, "surface_plan")
     P, O, A = fast._ef.surface_plan(np.ascontiguousarray(np.concatenate(pts)), np.asarray(off, np.int64),
                                     np.ascontiguousarray(np.asarray(rows, np.float64).reshape(-1, NA)),
                                     np.asarray(excl, np.int64).reshape(-1, 2),
-                                    np.asarray(box, np.float64)[:4], int(tier))
+                                    np.asarray(box, np.float64)[:4], int(tier), fit_to_road=True)
     out = []
     for k in range(len(A)):
         kind, width, tl, slen, _cell, fend = A[k]

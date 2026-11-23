@@ -121,7 +121,7 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
 | OSM US Layercake highways (GeoParquet, https://layercake.openstreetmap.us/layers/highways/) | OpenStreetMap US (Layercake); data by OpenStreetMap contributors | OpenStreetMap's road tags joined to Overture's road segments by way id (`server/osmtags.py`): lane counts, widths, speed limits, sidewalks, lighting, smoothness. Read in byte ranges, only the parts a map cell needs; cached with the map data | ODbL 1.0 | "© OpenStreetMap contributors" (already in the map credit line) | in use (2026-10-22) |
 | OSM US Layercake buildings (GeoParquet, https://layercake.openstreetmap.us/layers/buildings/) | OpenStreetMap US (Layercake); data by OpenStreetMap contributors | buildings' construction years (start_date), cut weekly into zoom-12 tiles (`tools/build_osm_building_years.py`) and joined to Overture's buildings by way id (`server/osmyears.py`): pre-war towers drawn in masonry, not glass | ODbL 1.0 | "© OpenStreetMap contributors" (already in the map credit line) | built, not published yet (2026-11-14) |
 | OpenStreetMap railways (weekly shards, https://tecnagamer.github.io/BeamNG.Earth-data/rail/) | OpenStreetMap contributors; built weekly from the planet by github.com/TecnaGamer/BeamNG.Earth-data (`tools/build_rail_tags.py`) | railway tags joined to Overture's rail segments by way id (`server/railtags.py`): lines not built yet left out, disused and abandoned ones worn, gauge, level crossings' barriers and lights | ODbL 1.0 | "© OpenStreetMap contributors" (already in the map credit line) | in use (2026-10-27) |
-| Vägmärken C31, B1, A19, F2, F17, F18, T2, C1, B3, E1 and E2 (`bne_se_signs.png`, `bne_se_signs2.png`, `tools/build_swedish_signs.py`, https://www.transportstyrelsen.se/sv/vagtrafik/trafikregler-och-vagmarken/vagmarken/, 2026-11-02) | Transportstyrelsen | the faces of Sweden's speed limit, give-way, moose warning, lane-end, separated-road, turning, no-entry, crossing and motorway signs | the signs are set out in Vägmärkesförordningen (2007:90); no reuse terms stated on the pages | Transportstyrelsen |
+| Vägmärken C31, B1, A19, F2, F17, F18, T2, C1, B3, E1, E2, E9, E10 and E16 (`bne_se_signs.png`, `bne_se_signs2.png`, `tools/build_swedish_signs.py`, https://www.transportstyrelsen.se/sv/vagtrafik/trafikregler-och-vagmarken/vagmarken/, 2026-11-02) | Transportstyrelsen | the faces of Sweden's speed limit, give-way, moose warning, lane-end, separated-road, turning, no-entry, one-way, gångfartsområde, crossing and motorway signs | the signs are set out in Vägmärkesförordningen (2007:90); no reuse terms stated on the pages | Transportstyrelsen |
 | Verkehrszeichen 205, 206, 215, 301, 306, 307 and Zusatzzeichen 1002-10 to 1002-24 (`bne_de_signs.png`, `tools/build_de_signs.py`), drawn from their construction: the sizes of the VwV-StVO (zu den §§ 39 bis 43 Rn. 13) and the Verkehrszeichenkatalog (VzKat, Stand 04/2025: Teil 3 Zeichen 206, Teil 7 Zeichen 1002) | BMDV (VwV-StVO, VzKat) / BASt | the faces of Germany's junction signs: give way, stop, roundabout, priority at the next junction, priority road and its end, the course of a bent priority road | amtliche Werke (§ 5 UrhG): no copyright | none required | branch (2026-11-06) |
 | Verkehrszeichen 274.1 and 274.2, Tempo 30- and Tempo 20-Zone (`bne_de_zones.png`, `tools/build_de_signs.py`), drawn from their construction: the Verkehrszeichenkatalog's pictures (VzKat, Stand 04/2025: Teil 3 Zeichen 274.1, 274.2) and the sizes of the VwV-StVO (zu den §§ 39 bis 43 Rn. 13, 15, 17a); the Tempo 10 face, which the VzKat does not have (StVO § 45 Abs. 1d), drawn as its Tempo 20 | BMDV (VwV-StVO, VzKat) / BASt | the faces of Germany's zone signs, where a mapped 30 / 20 / 10 zone begins and ends | amtliche Werke (§ 5 UrhG): no copyright | none required | branch (2026-11-07) |
 | OpenStreetMap highway sign sources (weekly shards, https://tecnagamer.github.io/BeamNG.Earth-data/signs/) | OpenStreetMap contributors; built weekly from the planet by github.com/TecnaGamer/BeamNG.Earth-data (`tools/build_sign_tags.py`, cody196's PR #363 indexing) | the highway signs (`server/signstream.py`): exits' posted destinations and approaches (motorway_junction, link destination tags), overhead destinations (mainline destination tags, route relations' directions), Interstate mile references (highway=milestone) | ODbL 1.0 | "© OpenStreetMap contributors" (already in the map credit line) | dev (2026-10-28; shown once the data repo publishes signs/) |
@@ -264,6 +264,38 @@ weather). The pause-menu integration follows the pattern of the TAA Standalone m
 - Brown recreation, park and forest entrance boards: original procedural geometry and the existing guide lettering;
   their agency badges are simple drawn shapes (no NPS arrowhead or Forest Service shield). Names come from the map
   data (Overture Maps, © OpenStreetMap contributors, ODbL).
+
+## JPEG encoding in the companion server
+
+The native encoder uses libjpeg-turbo 3.1.0 through turbojpeg-sys 1.2.0.
+This software is based in part on the work of the Independent JPEG Group.
+
+Copyright (C)2009-2024 D. R. Commander.  All Rights Reserved.<br>
+Copyright (C)2015 Viktor Szathmáry.  All Rights Reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+- Redistributions of source code must retain the above copyright notice,
+  this list of conditions and the following disclaimer.
+- Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+- Neither the name of the libjpeg-turbo Project nor the names of its
+  contributors may be used to endorse or promote products derived from this
+  software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS",
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
 
 ## Generic cropland crops
 

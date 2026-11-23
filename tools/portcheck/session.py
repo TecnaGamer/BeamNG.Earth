@@ -27,15 +27,18 @@ lidar road heights or DEM release): the tree's code builds everything.
 --online: fill the corpus cache itself (imagery, far elevation; once, before it is frozen). See pcommon.py.
 """
 import argparse
+from contextlib import ExitStack
 import glob
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
 import threading
 import time
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pcommon  # noqa: E402
@@ -56,7 +59,8 @@ MAT_RE_B = re.compile(rb"(bngEarth[A-Za-z]*)_[0-9a-f]{4}_\d{5}")
 QUIET_S = 20.0              # s without a message naming a file before the session may end (the horizon ring, the
                             # far bridges and retextures come late: 5 s ended runs before them, other tiles in each)
 # the mod's hello capabilities: (field, Lua file under the mod's beamngEarth folder, the constant's pattern)
-CAPS = (("geoTiles", "geotile.lua", r"^M\.Z\s*=\s*(\d+)"),
+CAPS = (("trafficVisuals", "distanttraffic.lua", r"^M\.PROTO\s*=\s*(\d+)"),
+        ("geoTiles", "geotile.lua", r"^M\.Z\s*=\s*(\d+)"),
         ("roadGeo", "roads.lua", r"^M\.ROAD_GEO\s*=\s*(\d+)"),
         ("farGeo", "roads.lua", r"^M\.FAR_GEO\s*=\s*(\d+)"),
         ("farPack", "roads.lua", r"^M\.FAR_PACK\s*=\s*(\d+)"),
@@ -79,6 +83,8 @@ def mod_hello(server_dir):
     hello = {"type": "hello", "protocol": proto, "format": fmt, "modVersion": "portcheck", "streamLease": 1,
              "sessions": [], "slotsHeld": [], "held": [], "vegFlat": True, "swapGen": 1, "readySet": 1}
     for field, name, pat in CAPS:
+        if field == "trafficVisuals" and not re.search(r"^\s*trafficVisuals\s*=", core, re.M):
+            continue  # A baseline recorded against an older mod may predate traffic.
         m = re.search(pat, read(name), re.M)
         if m is None:
             raise SystemExit(f"session.py: the mod's {field} ({name}) not found: update CAPS")
@@ -104,8 +110,8 @@ class Recorder:
         try:
             with open(path, "rb") as f:
                 data = f.read()
-        except OSError:
-            return "@missing:" + os.path.basename(vpath)
+        except OSError as exc:
+            raise OSError(f"could not record {vpath}") from exc
         data = self.norm_bytes(data, ext, depth)
         name = pcommon.sha(data) + ext
         if name not in self.memo:
@@ -171,27 +177,38 @@ def run_session(a, name, place, work, out):
     env = dict(os.environ, PYTHONUNBUFFERED="1", BNE_REVISIT="off", **pcommon.PINNED_ENV)
     if a.budget:
         env["BNGE_BUDGET"] = a.budget
-    logf = open(os.path.join(out, "server.log"), "w")
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=logf, text=True, env=env)
-    port = None
-    while port is None:
-        line = proc.stdout.readline()
-        if not line:
-            raise SystemExit(f"{name}: the server did not start (see {out}/server.log)")
-        logf.write(line)
-        if "listening on 127.0.0.1:" in line:
-            port = int(line.split("127.0.0.1:")[1].split()[0])
-    threading.Thread(target=lambda: [logf.write(ln) for ln in proc.stdout], daemon=True).start()
-    rec = Recorder(out, user)
-    c = Client(port)
-    t0 = time.monotonic()
-    try:
+    with ExitStack() as cleanup:
+        logf = cleanup.enter_context(open(os.path.join(out, "server.log"), "w"))
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=logf, text=True, env=env)
+        ready = queue.Queue()
+
+        def drain():
+            try:
+                for line in proc.stdout:
+                    logf.write(line)
+                    if "listening on 127.0.0.1:" in line:
+                        ready.put(line)
+            finally:
+                ready.put(None)
+
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
+        cleanup.callback(proc.stdout.close)
+        cleanup.callback(reader.join, 5)
+        cleanup.callback(stop_server, proc)
+        try:
+            line = ready.get(timeout=120)
+        except queue.Empty as exc:
+            raise TimeoutError(f"{name}: timed out waiting for the listening port") from exc
+        if line is None:
+            raise RuntimeError(f"{name}: the server did not start (see {out}/server.log)")
+        port = int(line.split("127.0.0.1:")[1].split()[0])
+        rec = Recorder(out, user)
+        cleanup.callback(rec.close)
+        c = Client(port)
+        cleanup.callback(c.close)
+        t0 = time.monotonic()
         summary = play(a, c, rec, place)
-    finally:
-        c.close()
-        rec.close()
-        stop_server(proc)
-        logf.close()
     shutil.rmtree(user, ignore_errors=True)
     summary["seconds"] = round(time.monotonic() - t0, 1)
     summary["messages"] = rec.n
@@ -206,13 +223,18 @@ def play(a, c, rec, place):
         rec.add(m)
         return m
     c.send(mod_hello(a.server_dir))
-    while recv(30)["type"] != "hello":
-        pass
+    deadline = time.monotonic() + 30
+    while recv(max(0, deadline - time.monotonic()))["type"] != "hello":
+        if time.monotonic() >= deadline:
+            raise TimeoutError("server hello missing")
     c.send({"type": "graphics", "lodScale": 1.0, "treeScale": 1.0, "buildingScale": 1.0, "photoPx": 2048,
             "viewM": float(place["view_m"])})
     c.send({"type": "prepare_anchor", "requestId": 1, "lat": lat, "lon": lon, "purpose": "teleport"})
+    deadline = time.monotonic() + 600
     while True:
-        m = recv(600)
+        if time.monotonic() >= deadline:
+            raise TimeoutError("anchor was never ready")
+        m = recv(deadline - time.monotonic())
         if m["type"] == "anchor_error":
             raise SystemExit(f"anchor error: {m}")
         if m["type"] == "anchor_ready":
@@ -250,7 +272,9 @@ def play(a, c, rec, place):
                     gone.append(list(slots.pop(k)))
         elif typ == "far_done" and done_at is None:
             done_at = time.monotonic()
-    return {"anchor": aid, "far_done": done_at is not None}
+    else:
+        raise TimeoutError(f"anchor {aid} did not settle (far_done={done_at is not None}, progress={rec.progress})")
+    return {"anchor": aid, "far_done": True, "settled": True}
 
 
 def loaded(p):
@@ -258,9 +282,12 @@ def loaded(p):
     if p is None:
         return False
     try:
-        return all(p[k][0] >= p[k][1] for k in ("ground", "roads", "trees", "far")) and not p.get("net", [0])[0]
+        counts = [p[k] for k in ("ground", "roads", "trees", "far")]
+        return (all(isinstance(pair, (list, tuple)) and len(pair) == 2
+                    and all(type(n) is int and n >= 0 for n in pair) and pair[0] >= pair[1] for pair in counts)
+                and type(p["net"][0]) is int and p["net"][0] == 0)
     except (KeyError, TypeError, IndexError):
-        return True             # (another shape: the quiet rule alone)
+        return False
 
 
 def copy_plans(work, dst):
@@ -270,6 +297,8 @@ def copy_plans(work, dst):
     index = {}
     for p in sorted(glob.glob(os.path.join(work, "plans", "*", "*", "*", "*.npz"))):
         cell = os.path.basename(p)[:-4]
+        if cell in index:
+            raise ValueError(f"multiple plans for {cell}, refusing to overwrite one: {p}")
         shutil.copyfile(p, os.path.join(dst, cell + ".npz"))
         index[cell] = {"complete": not os.path.exists(p + ".short")}
     pcommon.write_json(os.path.join(dst, "index.json"), {"plans": index})
@@ -294,18 +323,34 @@ def main():
     pcommon.check_cache(a.out)
     pcommon.nice_self()
     os.makedirs(a.out, exist_ok=True)
-    os.makedirs(a.cache, exist_ok=True)
-    for name, place in pcommon.places(a.places):
-        work = a.cache if a.online else pcommon.work_copy(a.cache, os.path.join(a.out, "work-cache"))
+    with pcommon.output_lock(a.out, writing=True), tempfile.TemporaryDirectory(prefix=".portcheck-session-", dir=a.out) as stage:
+        record(a, stage)
+
+
+def record(a, stage):
+    if a.online:
+        os.makedirs(a.cache, exist_ok=True)
+    selected = pcommon.places(a.places)
+    for name, _ in selected:
+        open(os.path.join(a.out, f"session-{name}.pending"), "w").close()
+    for name, place in selected:
+        work = a.cache if a.online else pcommon.work_copy(a.cache, os.path.join(stage, "work-cache"))
         try:
-            s = run_session(a, name, place, work, os.path.join(a.out, "sessions", name))
-            s["plans"] = copy_plans(work, os.path.join(a.out, "splans", name))
+            s = run_session(a, name, place, work, os.path.join(stage, "sessions", name))
+            s["plans"] = copy_plans(work, os.path.join(stage, "splans", name))
+        except BaseException:
+            log = os.path.join(stage, "sessions", name, "server.log")
+            if os.path.isfile(log):
+                shutil.copyfile(log, os.path.join(a.out, f"session-{name}.log"))
+            raise
         finally:
             if a.online:
                 pcommon.prune_derived(a.cache)
             else:
                 shutil.rmtree(work, ignore_errors=True)
-        pcommon.write_json(os.path.join(a.out, "sessions", name, "summary.json"), s)
+        pcommon.write_json(os.path.join(stage, "sessions", name, "summary.json"), s)
+        pcommon.publish_place(stage, a.out, name, ("sessions", "splans"))
+        os.remove(os.path.join(a.out, f"session-{name}.pending"))
         print(f"{name}: {json.dumps(s)}", flush=True)
 
 

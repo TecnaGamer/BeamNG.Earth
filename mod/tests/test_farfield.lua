@@ -16,6 +16,9 @@ farfield.SPARE_MAX = 0 -- these tests check the delete pipeline; the spare pool 
 local governor = require('beamngEarth/governor')
 local geodesy = require('beamngEarth/geodesy')
 local crossover = require('beamngEarth/crossover')
+-- (this file checks the C2 crossover and the cover sink, off by default since 2026-11-21: test_farfield_instant.lua
+-- checks the default instant swaps)
+crossover.CROSS, crossover.COVER_SINK_S = 1, 0.3
 
 -- fake wall clock: each spawn costs `spawnCost` ms, everything else is free
 local now, spawnCost = 0, 1.5
@@ -254,7 +257,9 @@ farfield.onTile(tile(1, 0, -4, 0, { z = 50 }))              -- edge ring, no sin
 step(free, camNorth)
 farfield.onSwap(swap(1, 300, { edge, inner, outside, col, key(0, -4, 0) }))
 step(free, camNorth)
-T.check(visible(obj(edge)) and obj(edge).pos.z == 50 - 1.5, 'edge ring tile: shown, sunk by its sink')
+-- (2026-11-21: only the N/E ring is an under-floor, for the strip past the collidable width; the S/W ring is all block
+-- ground, and a sunk tile there stood through road cuts the server's sink did not know)
+T.check(obj(edge).hidden, 'S/W edge ring tile: hidden like the interior')
 T.check(obj(inner).hidden, 'interior tile: hidden')
 T.check(visible(obj(outside)) and obj(outside).pos.z == 50, 'tile outside the block: true height')
 T.check(obj(col).hidden, 'second-column tile: interior, hidden')
@@ -306,6 +311,15 @@ local part = obj(key(3, 0, 0))
 T.check(visible(part) and math.abs(part.pos.z - (50 - (farfield.PARTIAL_SINK_K * 2 + farfield.PARTIAL_SINK_M))) < 1e-6,
   'straddling coarse tile: shown, sunk by its error')
 T.check(farfield.stats().partial == 1 and farfield.stats().overBlock == 0, 'counted as partial, none at its own height')
+-- the server's exact sink against the block in use (terrain message `cover`) replaces the bound, in the commit frame
+farfield.onBlockCommit(0, 0, { zBase = 0, cover = { [key(3, 0, 0)] = 7.25 } })
+T.near(part.pos.z, 50 - 7.25, 1e-9, 'straddling coarse tile: sunk by the exact cover sink of this block')
+farfield.onBlockCommit(0, 0, { zBase = 0, cover = { [key(3, 0, 0)] = 0.1 } })
+T.near(part.pos.z, 50 - farfield.PARTIAL_SINK_M, 1e-9, '... at least the margin')
+farfield.onBlockCommit(0, 0, { zBase = 0, cover = {} })
+T.near(part.pos.z, 50 - (farfield.PARTIAL_SINK_K * 2 + farfield.PARTIAL_SINK_M), 1e-9, 'none sent for it: the error bound')
+T.check(farfield.stats().partialExact >= 2 and farfield.stats().partialBound >= 1, 'exact / bound partial sinks counted')
+farfield.onBlockCommit(0, 0)
 farfield.onRemove({ type = 'far_remove', anchorId = 1, key = key(3, 0, 0) })
 step(free, camNorth)
 
@@ -322,7 +336,7 @@ T.check(S.calls.createObject_TSStatic == creates, 'no import in the commit frame
 T.check(changed >= 4, 'cover changes applied in the commit frame (' .. changed .. ')')
 T.check(visible(obj(edge)) and obj(edge).pos.z == 50, 'newly uncovered edge tile: true height at once')
 T.check(visible(obj(key(0, -4, 0))) and obj(key(0, -4, 0)).pos.z == 50, 'newly uncovered hidden tile: shown at once')
-T.check(visible(obj(col)) and obj(col).pos.z == 50 - 0.5, 'interior -> edge ring: shown sunk at once')
+T.check(obj(col).hidden, 'interior -> W edge ring: stays hidden')
 T.check(obj(inner).hidden, 'still interior: stays hidden')
 local out = obj(outside)
 T.check(visible(out) and out.pos.z > 50 - 2.0 and out.pos.z <= 50, 'newly covered tile starts sinking (phase 2 only)')
@@ -333,7 +347,19 @@ for _ = 1, 2 do
 end
 for _ = 1, 30 do g2:beginFrame(farfield.hasWork(), 11.5); step(g2, camNorth) end
 T.near(out.pos.z, 50 - 2.0, 1e-9, 'newly covered edge tile ends sunk by its sink after 0.3 s')
-T.check(visible(out), 'edge ring tile stays shown (covers the 2 m N/E strip)')
+T.check(visible(out), 'E edge ring tile stays shown (covers the 2 m N/E strip)')
+-- with the block's floor (its terrain message's zBase): the under-floor's top under every sample of the block, deeper
+-- than the server's sink, in the commit frame; a block replaced in place (a graded one for its provisional one) with a
+-- lower floor takes it at once too
+S.BOX_TOP = 4                               -- (the stub's box: the mesh 4 m over its position)
+farfield.onBlockCommit(256, 0, { zBase = 40 })
+T.near(out.pos.z, 40 - farfield.FLOOR_MARGIN - 4, 1e-9, 'E edge ring tile: its top under the block floor at once')
+T.check(visible(out), '... and still shown (the strip under-floor)')
+farfield.onBlockCommit(256, 0, { zBase = 24 })
+T.near(out.pos.z, 24 - farfield.FLOOR_MARGIN - 4, 1e-9, 'same block, lower floor: deeper in the same frame')
+farfield.onBlockCommit(256, 0, { zBase = 80 })
+T.near(out.pos.z, 50 - 2.0, 1e-9, 'a floor above the tile: never less than the server sink')
+S.BOX_TOP = nil
 -- move back west: the east tile is uncovered again, instantly
 farfield.onBlockCommit(0, 0)
 T.check(out.pos.z == 50 and visible(out), 'uncovered again: back at true height in the same frame')

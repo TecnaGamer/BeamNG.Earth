@@ -1,4 +1,4 @@
-"""Forward map projections of British Columbia's and Canada's elevation data, pure numpy (no PROJ in the app).
+"""Forward map projections of British Columbia's and Canada's elevation data, native kernels (no PROJ in the app).
 
     x, y = forward(epsg, lat, lon)      # WGS84 degrees (arrays) -> the CRS's easting / northing (m)
 
@@ -11,7 +11,7 @@ Lambert conic: Snyder's ellipsoidal formulas. Checked against PROJ in tests/test
 import math
 
 import numpy as np
-import dmath
+import fast
 import dnp
 
 A = 6378137.0
@@ -38,61 +38,28 @@ _ALPHA = (
 )
 
 
+def _points(lat, lon):
+    return np.broadcast_arrays(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+
+
 def utm(lat, lon, zone, k0=0.9996, fe=500000.0, fn=0.0):
-    phi = np.radians(np.asarray(lat, np.float64))
-    lam = np.radians(np.asarray(lon, np.float64) - (zone * 6 - 183))
-    t = dnp.sinh(dnp.arctanh(dnp.sin(phi)) - E * dnp.arctanh(E * dnp.sin(phi)))
-    xi = dnp.arctan2(t, dnp.cos(lam))
-    eta = dnp.arctanh(dnp.sin(lam) / np.sqrt(1 + t * t))
-    x, y = eta.copy(), xi.copy()
-    for j, a in enumerate(_ALPHA, 1):
-        x += a * dnp.cos(2 * j * xi) * dnp.sinh(2 * j * eta)
-        y += a * dnp.sin(2 * j * xi) * dnp.cosh(2 * j * eta)
-    return fe + k0 * _A1 * x, fn + k0 * _A1 * y
+    fast.require(565, "BC UTM projection")
+    x, y = fast._ef.dem_utm(*_points(lat, lon), zone * 6 - 183, k0 * _A1, fe, fn, E, _ALPHA)
+    return x[()], y[()]
 
 
-# --- Albers equal-area conic (BC Albers) --------------------------------------------------------------------------
-def _q(phi):
-    s = dnp.sin(phi)
-    return (1 - E2) * (s / (1 - E2 * s * s) - (1 / (2 * E)) * dnp.log((1 - E * s) / (1 + E * s)))
-
-
-def _m(phi):
-    return dnp.cos(phi) / np.sqrt(1 - E2 * dnp.sq(dnp.sin(phi)))
+def _conic(lat, lon, parallels, origin, offset, albers=False, hrdem=False):
+    fast.require(565, "Canadian conic projection")
+    x, y = fast._ef.dem_conic(*_points(lat, lon), parallels, origin, offset, albers, hrdem)
+    return x[()], y[()]
 
 
 def albers(lat, lon, lat1=50.0, lat2=58.5, lat0=45.0, lon0=-126.0, fe=1000000.0, fn=0.0):
-    p1, p2, p0 = map(math.radians, (lat1, lat2, lat0))
-    m1, m2 = float(_m(p1)), float(_m(p2))
-    q1, q2, q0 = float(_q(p1)), float(_q(p2)), float(_q(p0))
-    n = (m1 * m1 - m2 * m2) / (q2 - q1)
-    c = m1 * m1 + n * q1
-    r0 = A * math.sqrt(c - n * q0) / n
-    phi = np.radians(np.asarray(lat, np.float64))
-    lam = np.radians(np.asarray(lon, np.float64))
-    r = A * np.sqrt(c - n * _q(phi)) / n
-    th = n * (lam - math.radians(lon0))
-    return fe + r * dnp.sin(th), fn + r0 - r * dnp.cos(th)
-
-
-# --- Lambert conformal conic, 2 standard parallels (Canada Atlas Lambert) ----------------------------------------
-def _t(phi):
-    s = dnp.sin(phi)
-    return dnp.tan(np.pi / 4 - phi / 2) / dnp.power((1 - E * s) / (1 + E * s), E / 2)
+    return _conic(lat, lon, (lat1, lat2), (lat0, lon0), (fe, fn), albers=True)
 
 
 def lambert(lat, lon, lat1=49.0, lat2=77.0, lat0=49.0, lon0=-95.0, fe=0.0, fn=0.0):
-    p1, p2, p0 = map(math.radians, (lat1, lat2, lat0))
-    m1, m2 = float(_m(p1)), float(_m(p2))
-    t1, t2, t0 = float(_t(p1)), float(_t(p2)), float(_t(p0))
-    n = (dmath.log(m1) - dmath.log(m2)) / (dmath.log(t1) - dmath.log(t2))
-    ff = m1 / (n * dnp.power(t1, n))
-    r0 = A * ff * dnp.power(t0, n)
-    phi = np.radians(np.asarray(lat, np.float64))
-    lam = np.radians(np.asarray(lon, np.float64))
-    r = A * ff * dnp.power(_t(phi), n)
-    th = n * (lam - math.radians(lon0))
-    return fe + r * dnp.sin(th), fn + r0 - r * dnp.cos(th)
+    return _conic(lat, lon, (lat1, lat2), (lat0, lon0), (fe, fn))
 
 
 def supported(epsg):
@@ -123,13 +90,5 @@ def forward_grid(epsg, lat, lon, step=16):
     ci = np.unique(np.r_[np.arange(0, w, step), w - 1])
     X, Y = forward(epsg, lat[np.ix_(ri, ci)], lon[np.ix_(ri, ci)])
 
-    def interp(G):
-        rows = np.empty((h, len(ci)))
-        for j in range(len(ci)):
-            rows[:, j] = dnp.interp(np.arange(h), ri, G[:, j])
-        out = np.empty((h, w))
-        cols = np.arange(w)
-        for i in range(h):
-            out[i] = dnp.interp(cols, ci, rows[i])
-        return out
-    return interp(X), interp(Y)
+    fast.require(565, "regional DEM projection grid")
+    return tuple(fast._ef.dem_projected_grid(g, ri, ci, h, w) for g in (X, Y))

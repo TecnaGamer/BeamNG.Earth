@@ -9,6 +9,7 @@
     "cx": {"type": "num"},
     "cy": {"type": "num"},
     "heightmap": {"type": "str"},
+    "terrainTicket": {"type": "int", "optional": true, "doc": "ownership of this terrain delivery until the mod releases it"},
     "size": {"type": "int"},
     "squareSize": {"type": "num"},
     "zBase": {"type": "num"},
@@ -18,7 +19,8 @@
     "materials": {"type": "list", "optional": true, "doc": "--surface on (surface.py)"},
     "base": {"type": "str", "optional": true},
     "baseSize": {"type": "num", "optional": true, "doc": "--near-visual detail: the block's photo"},
-    "ter": {"type": "str", "optional": true, "doc": "the block as a .ter (swapped in, no import)"}
+    "ter": {"type": "str", "optional": true, "doc": "the block as a .ter (swapped in, no import)"},
+    "cover": {"type": "dict", "optional": true, "doc": "{far key: m}: the exact sink of each far tile across the block's edge against this block (Connection.far_cover; farfield.lua 'partial')"}
    }
   }
  },
@@ -30,7 +32,7 @@
  },
  "mod_to_server": {
   "hello": {
-   "doc": "sessions: the session folders whose files the mod's objects still use (farfield.heldSessions; a restarted server keeps an earlier run's folder named here, docs/ROADMAP.md \"Robustness\" 3)",
+   "doc": "sessions: the session folders whose files the mod's objects still use (terrain deliveries, far tiles and road tiles; a restarted server keeps each earlier session still named here, docs/ROADMAP.md \"Robustness\" 3)",
    "fields": {
     "protocol": {"type": "int"},
     "format": {"type": "int"},
@@ -41,6 +43,8 @@
     "slotSession": {"type": "str", "optional": true, "doc": "a reconnect: the pooled far-tile slots [[slot, serial], ...] the mod's objects hold for that session"},
     "slotsHeld": {"type": ["list", "dict"], "optional": true},
     "streamLease": {"type": "int", "optional": true},
+    "terrainHeld": {"type": ["list", "dict"], "optional": true, "doc": "complete surviving ticket snapshot on reconnect"},
+    "terrainFiles": {"type": "int", "optional": true},
     "leaseId": {"type": "str", "optional": true},
     "leaseSession": {"type": "str", "optional": true},
     "held": {"type": ["list", "dict"], "optional": true},
@@ -90,6 +94,13 @@
     "cy": {"type": "num"}
    }
   },
+  "terrain_release": {
+   "doc": "return terrain delivery tickets, or all of them after the extension destroyed its TerrainBlock",
+   "fields": {
+    "tickets": {"type": "list", "optional": true},
+    "unloaded": {"type": "bool", "optional": true}
+   }
+  },
   "commit_terrain": {
    "fields": {
     "anchorId": {"type": "int"},
@@ -125,7 +136,9 @@
     "slotsGone": {"type": ["list", "dict"], "optional": true, "doc": "pooled far-tile slots whose far_tile's object is gone: [[slot, serial], ...] (matslots.py)"},
     "foci": {"type": ["list", "dict"], "optional": true, "doc": "other vehicles' collision foci [{x, y, r, trees}] (collisionfoci.lua; earthd parse_foci)"},
     "guardHold": {"type": "bool", "optional": true, "doc": "the edge guard holds the car for its ground (earthd Connection.hold_boost: every core meanwhile)"},
-    "deckWait": {"type": ["list", "dict"], "optional": true, "doc": "the road geotiles the deck guard slows the car for (a bridge's, not in yet): built first (deckspans.py)"}
+    "deckWait": {"type": ["list", "dict"], "optional": true, "doc": "the road geotiles the deck guard slows the car for (a bridge's, not in yet): built first (deckspans.py)"},
+    "frameMs": {"type": "num", "optional": true, "doc": "2026-11-22 (architecture v2 V1, additive): the mean wall time of the game's frames since the last pose (governor.lua frameWindow): BNE_V2_HOST's scheduler lowers its CPU target when it rises over the game's own baseline (sched.rs Adapt)"},
+    "frameMaxMs": {"type": "num", "optional": true, "doc": "... and the longest of them"}
    }
   },
   "cache": {
@@ -757,6 +770,7 @@
     "privacyRegion": {"type": "str"},
     "telemetryConsent": {"type": "int", "doc": "the welcome page's telemetry defaults"},
     "streamLease": {"type": "int", "optional": true},
+    "terrainFiles": {"type": "int", "optional": true},
     "leaseId": {"type": "str", "optional": true},
     "memoryTier": {"type": "str", "optional": true},
     "memoryNote": {"type": "str", "optional": true, "doc": "low-memory machines only (budget.TIER lean / emergency)"},

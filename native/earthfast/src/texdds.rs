@@ -70,7 +70,7 @@ fn parse_role(r: &str) -> Result<Role, String> {
 
 /// (width, height, channels 1 / 3 / 4, 8-bit texels) of a PNG: grey stays one channel, grey + alpha and palettes
 /// become RGB(A); an alpha channel that is 255 everywhere is dropped (as the dev tool's load()).
-fn decode_png(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
+pub(crate) fn decode_png(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
     let mut dec = png::Decoder::new(std::io::Cursor::new(data));
     dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = dec.read_info().map_err(|e| format!("png: {e}"))?;
@@ -129,7 +129,7 @@ fn decode_webp(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
     Ok((w, h, chans, buf))
 }
 
-fn decode_image(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
+pub(crate) fn decode_image(data: &[u8]) -> Result<(usize, usize, usize, Vec<u8>), String> {
     if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
         decode_webp(data)
     } else if data.starts_with(b"\x89PNG") {
@@ -270,7 +270,7 @@ fn rough_fft(w: usize, h: usize, c: usize, px: &[u8], lo: f64, hi: f64) -> Vec<u
 
 /// Pillow's ImageFilter.GaussianBlur(radius) of an 8-bit grey image (libImaging/BoxBlur.c: three extended box blurs
 /// along x, then three along y, edges extended, 8-bit rounding after each pass), bit for bit.
-fn pil_gaussian_blur(img: &mut [u8], w: usize, h: usize, radius: f32) {
+pub(crate) fn pil_gaussian_blur(img: &mut [u8], w: usize, h: usize, radius: f32) {
     let passes = 3i32;
     let sigma2: f32 = radius * radius / passes as f32;
     let big_l: f32 = (12.0f64 * sigma2 as f64 + 1.0).sqrt() as f32;
