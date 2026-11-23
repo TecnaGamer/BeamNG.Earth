@@ -32,6 +32,7 @@ def collect(run, ps, steps):
     times = {s: [] for s in steps}
     per_place = {}
     done = []
+    excluded = {s: [] for s in steps}
     for p in ps:
         out = run / p["id"]
         if not (out / "D0.json").is_file():
@@ -41,8 +42,14 @@ def collect(run, ps, steps):
             continue
         done.append(p["id"])
         per_place[p["id"]] = {}
+        faults0 = _faults(out / "D0.log")
         for s in steps:
             row = read(out / f"{s}.json")
+            if s != "D0" and _faults(out / f"{s}.log") > faults0:
+                # (inputs the snapshot lacked for this step, a map cell read from a stand-in: its build is not the
+                # step's data removal alone)
+                excluded[s].append(p["id"])
+                continue
             times[s].append((row.get("build_wall_s"), row.get("measure_s")))
             if s == "D0":
                 if (out / "rows_D0.npz").is_file():
@@ -59,7 +66,17 @@ def collect(run, ps, steps):
                 blds[s][k].append(np.asarray(v))
             pairs[s].append(read(out / f"cmp_{s}.json"))
     cat = lambda d: {k: np.concatenate(v) for k, v in d.items() if v}     # noqa: E731
-    return done, {s: cat(pooled[s]) for s in steps}, {s: cat(blds[s]) for s in steps}, pairs, times, per_place
+    return done, {s: cat(pooled[s]) for s in steps}, {s: cat(blds[s]) for s in steps}, pairs, times, per_place, excluded
+
+
+def _faults(log):
+    """Map data the offline build could not read (a cell's layer from a stand-in), from its log. (The tiles'
+    source_faults count optional offline refusals too: the corpus's own default builds have them by the thousand.)"""
+    try:
+        text = log.read_text(errors="replace")
+    except OSError:
+        return 0
+    return sum(1 for line in text.splitlines() if "tiles failed" in line or "unreachable" in line)
 
 
 def defect_summary(pairs):
@@ -102,9 +119,9 @@ def _clean(v):
 
 
 def write(run, ps, steps):
-    done, pooled, blds, pairs, times, per_place = collect(run, ps, steps)
+    done, pooled, blds, pairs, times, per_place, excluded = collect(run, ps, steps)
     report = dict(places=done, steps={s: degrade.NAMES[s] for s in steps}, roads={}, buildings={}, defects={},
-                  times={}, areas={}, per_place=per_place)
+                  times={}, areas={}, per_place=per_place, excluded=excluded)
     for s in steps:
         r = pooled[s]
         if s != "D0" and r:
@@ -135,6 +152,8 @@ def markdown(rep, steps):
         if s == "D0" or s not in rep["roads"]:
             continue
         L += [f"## {s}: {rep['steps'][s]}", ""]
+        if rep["excluded"].get(s):
+            L += [f"Left out (more source faults than D0): {', '.join(rep['excluded'][s])}.", ""]
         hdr = ["class", "km"] + [h for _, h in ROAD_COLS]
         L += ["| " + " | ".join(hdr) + " |", "|" + "---|" * len(hdr)]
         for g, v in rep["roads"][s].items():

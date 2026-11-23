@@ -32,7 +32,9 @@ import degrade  # noqa: E402
 
 WIDE_SEEDS = Path.home() / "bnge-tests/widecorpus/cache/seeds"
 TUNER = Path.home() / "bnge-tests/codextune/experiments/returns-world-grid/manifest.json"
-WARM = ("D0", "D3")
+# (the steps that read other cells or other DEM tiles than D0: each warmed online, so every offline build finds its
+# inputs; a step that still faults more than D0 is left out of the tables, degrade_report)
+WARM = ("D0", "D1", "D2", "D3")
 
 
 def fingerprint():
@@ -72,15 +74,23 @@ def warm(p, radius, logs):
     from run import build_process
     seed = CACHE / "seeds" / seed_name(p, radius)
     mark = seed / "snapshot.json"
-    if mark.exists():
+    if mark.exists() and set(read(mark).get("warm_s", {})) >= set(WARM):
         return seed
     seed.mkdir(parents=True, exist_ok=True)
+    staged = seed / "warming.json"
+    if mark.exists():           # (warmed with fewer steps: the new ones added)
+        old = read(mark)
+        stages = {}
+        for step, secs in old.get("warm_s", {}).items():
+            stages[step] = digest([seed.name, degrade.env(step), (HERE / "build.py").read_text()])
+            stages[step + "_s"] = secs
+        save(staged, stages)
+        mark.unlink()
     wide = WIDE_SEEDS / seed.name
     if (wide / "snapshot.json").exists() and not any((seed / r).exists() for r in RAW):
         for r in RAW:
             if (wide / r).is_dir():
                 subprocess.run(["cp", "-a", "--reflink=auto", wide / r, seed], check=True)
-    staged = seed / "warming.json"
     stages = read(staged) if staged.is_file() else {}
     for step in WARM:
         key = digest([seed.name, degrade.env(step), (HERE / "build.py").read_text()])
@@ -185,6 +195,26 @@ def place_job(p, radius, steps, run, code, areas_fn):
         return False
 
 
+def repeat(p, radius, step, run, code):
+    """A/A: step built again in a fresh process from the same snapshot (out/repeat/STEP); the files that differ from
+    the first build's (the logs aside). An empty list: the step is deterministic for this place."""
+    out = run / p["id"]
+    seed = CACHE / "seeds" / seed_name(p, radius)
+    token = read(seed / "snapshot.json")["sha256"]
+    again = out / "repeat"
+    again.mkdir(exist_ok=True)
+    build_step(p, seed, step, radius, again, code, token)
+    a, b = out / step, again / step
+    differ = []
+    for f in sorted(a.rglob("*")):
+        if f.is_file() and not f.name.endswith(".log"):
+            g = b / f.relative_to(a)
+            if not g.is_file() or f.read_bytes() != g.read_bytes():
+                differ.append(str(f.relative_to(a)))
+    extra = [str(g.relative_to(b)) for g in b.rglob("*") if g.is_file() and not (a / g.relative_to(b)).exists()]
+    return differ + extra
+
+
 def ensure_bins():
     (ROOT / "bin").mkdir(parents=True, exist_ok=True)
     subprocess.run(["c++", "-O2", "-std=c++17", "-ffp-contract=off", HERE / "scan.cpp", "-o", ROOT / "bin/scan"],
@@ -208,6 +238,7 @@ def main():
     ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--report", action="store_true", help="only write the tables of what has run")
     ap.add_argument("--no-bins", action="store_true", help="use the binaries already in bin/")
+    ap.add_argument("--repeat", help="A/A: build these steps again for --places and list the files that differ")
     args = ap.parse_args()
     if Path(args.run).name != args.run or args.run in ("", ".", ".."):
         ap.error("invalid run name")
@@ -217,6 +248,12 @@ def main():
     ids = args.places.split(",") if args.places else training_split()
     ps = places(",".join(ids))
     run = ROOT / "runs" / args.run
+    if args.repeat:
+        code = read(run / "manifest.json")["code"]
+        result = {p["id"]: {s: repeat(p, args.radius, s, run, code) for s in args.repeat.split(",")} for p in ps}
+        save(run / "repeat.json", result)
+        print(json.dumps(result, indent=1))
+        return 0 if not any(v for r in result.values() for v in r.values()) else 1
     if args.report:
         import degrade_report
         degrade_report.write(run, ps, steps)

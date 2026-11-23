@@ -2106,7 +2106,7 @@
       "sparse"
     ],
     "why": "Namibian gravel C-road in open desert.",
-    "data": "pin on a unclassified, gravel road; within 500 m: 30 km of roads, lanes tagged on 40 %, width 0 %, surface 91 % (51 % unpaved), maxspeed 44 % of length; 19 buildings, 84 % from OSM (else machine-learned), 0 with a height or levels"
+    "data": "pin on an unclassified, gravel road; within 500 m: 30 km of roads, lanes tagged on 40 %, width 0 %, surface 91 % (51 % unpaved), maxspeed 44 % of length; 19 buildings, 84 % from OSM (else machine-learned), 0 with a height or levels"
   },
   {
     "id": "kisangani-congo-river",
@@ -2128,15 +2128,15 @@
     "name": "Bria",
     "country": "CF",
     "region": "Central Africa",
-    "lat": 6.54185,
-    "lon": 21.98625,
+    "lat": 6.54128,
+    "lon": 21.98748,
     "tags": [
       "jungle",
       "poorly-mapped",
       "sparse"
     ],
     "why": "Central African town mapped by humanitarian campaigns: unpaved streets tagged, no lanes or widths.",
-    "data": "pin on a residential road; within 500 m: 6 km of roads, lanes tagged on 0 %, width 0 %, surface 99 % (99 % unpaved), maxspeed 0 % of length; 1401 buildings, 74 % from OSM (else machine-learned), 0 with a height or levels"
+    "data": "pin on a primary, unpaved road; within 500 m: 9 km of roads, lanes tagged on 0 %, width 0 %, surface 99 % (99 % unpaved), maxspeed 0 % of length; 1590 buildings, 73 % from OSM (else machine-learned), 0 with a height or levels"
   },
   {
     "id": "gaya-bihar-village-road",
@@ -2450,7 +2450,7 @@
       "sparse"
     ],
     "why": "Outback track town.",
-    "data": "pin on a unclassified, unpaved road; within 500 m: 71 km of roads, lanes tagged on 0 %, width 0 %, surface 97 % (95 % unpaved), maxspeed 32 % of length; 109 buildings, 100 % from OSM (else machine-learned), 2 with a height or levels"
+    "data": "pin on an unclassified, unpaved road; within 500 m: 71 km of roads, lanes tagged on 0 %, width 0 %, surface 97 % (95 % unpaved), maxspeed 32 % of length; 109 buildings, 100 % from OSM (else machine-learned), 2 with a height or levels"
   },
   {
     "id": "hermannsburg-ntaria",
@@ -2525,7 +2525,7 @@
       "town"
     ],
     "why": "Arctic town on Svalbard with no outside road link.",
-    "data": "pin on a unclassified road; within 500 m: 8 km of roads, lanes tagged on 6 %, width 0 %, surface 51 % (13 % unpaved), maxspeed 62 % of length; 244 buildings, 91 % from OSM (else machine-learned), 9 with a height or levels"
+    "data": "pin on an unclassified road; within 500 m: 8 km of roads, lanes tagged on 6 %, width 0 %, surface 51 % (13 % unpaved), maxspeed 62 % of length; 244 buildings, 91 % from OSM (else machine-learned), 9 with a height or levels"
   },
   {
     "id": "kangerlussuaq-greenland",
@@ -2585,7 +2585,7 @@
       "sparse"
     ],
     "why": "Volcanic island town with dirt roads.",
-    "data": "pin on a unclassified road; within 500 m: 9 km of roads, lanes tagged on 0 %, width 0 %, surface 9 % (9 % unpaved), maxspeed 0 % of length; 560 buildings, 100 % from OSM (else machine-learned), 0 with a height or levels"
+    "data": "pin on an unclassified road; within 500 m: 9 km of roads, lanes tagged on 0 %, width 0 %, surface 9 % (9 % unpaved), maxspeed 0 % of length; 560 buildings, 100 % from OSM (else machine-learned), 0 with a height or levels"
   },
   {
     "id": "tarawa-causeway",
@@ -2659,7 +2659,7 @@
       "sparse"
     ],
     "why": "Saskatchewan prairie section-line gravel grid.",
-    "data": "pin on a unclassified, gravel road; within 500 m: 5 km of roads, lanes tagged on 100 %, width 0 %, surface 100 % (100 % unpaved), maxspeed 84 % of length; 1 buildings, 0 % from OSM (else machine-learned), 0 with a height or levels"
+    "data": "pin on an unclassified, gravel road; within 500 m: 5 km of roads, lanes tagged on 100 %, width 0 %, surface 100 % (100 % unpaved), maxspeed 84 % of length; 1 buildings, 0 % from OSM (else machine-learned), 0 with a height or levels"
   },
   {
     "id": "iowa-gravel-grid",
@@ -2681,14 +2681,14 @@
     "name": "Hole-in-the-Rock Road",
     "country": "US",
     "region": "United States",
-    "lat": 37.63731,
-    "lon": -111.42582,
+    "lat": 37.69309,
+    "lon": -111.49935,
     "tags": [
       "desert",
       "gravel",
       "sparse"
     ],
     "why": "Utah desert gravel road.",
-    "data": "pin on a track, ground road; within 500 m: 2 km of roads, lanes tagged on 0 %, width 0 %, surface 100 % (100 % unpaved), maxspeed 0 % of length; 1 buildings, 0 % from OSM (else machine-learned), 0 with a height or levels"
+    "data": "pin on an unclassified, unpaved road; within 500 m: 5 km of roads, lanes tagged on 0 %, width 0 %, surface 100 % (100 % unpaved), maxspeed 0 % of length; 0 buildings, 0 % from OSM (else machine-learned), 0 with a height or levels"
   }
 ]

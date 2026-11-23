@@ -74,14 +74,15 @@ class Build:
         self.buildings = read(path) if path.is_file() else None
 
     def surface(self, key):
-        """(upward road base-layer and deck-top triangles (n, 3, 3), deck tops (m, 3, 3), terrain) of a tile."""
+        """(upward road base-layer and deck-top triangles (n, 3, 3), deck tops, deck floors, the terrain, the markings
+        [(material, triangles)]) of a tile."""
         t = self.tiles[key]
         if "surf" in t:
             return t["surf"]
         ctx = t["ctx"]
         terrain = checks.Terrain(self.dir / (key + ".ter"), ctx["block"])
         src = geotiles.frame(*geotiles.parse(key)[1:])
-        surf, tops, floors = [], [], []
+        surf, tops, floors, marks = [], [], [], []
         for file, src_frame in ((f"rg_{key}.json", src), (f"rs_1_{key}.json", None)):
             data = read(self.dir / file)
             for what, entry in data.items():
@@ -97,8 +98,10 @@ class Build:
                         floors.append(up)
                     elif what == "road" and ctx["layers"].get(mat) == "base":
                         surf.append(up)
+                    elif what == "road" and (ctx["layers"].get(mat) == "mark" or mat.startswith(("line_", "crossing"))):
+                        marks.append((mat, up))
         cat = lambda xs: np.concatenate(xs) if xs else np.zeros((0, 3, 3))     # noqa: E731
-        t["surf"] = (cat(surf), cat(tops), cat(floors), terrain)
+        t["surf"] = (cat(surf), cat(tops), cat(floors), terrain, marks)
         return t["surf"]
 
 
@@ -247,7 +250,7 @@ def edges(grid, pt, tan, step=RES_M / 2):
 # --- heights -------------------------------------------------------------------------------------------------------
 def heights(build, key, pt, level):
     """The drivable surface's height at stations: the deck tops on a bridge, the physics terrain on the ground."""
-    surf, tops, floors, terrain = build.surface(key)
+    surf, tops, floors, terrain, _ = build.surface(key)
     z = terrain.sample(pt)[0]
     br = level == "bridge"
     if br.any():
