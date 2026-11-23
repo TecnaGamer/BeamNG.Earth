@@ -286,13 +286,32 @@ def ground_materials(f, mats):
     return sel.astype(np.int64), m[sel].astype(np.uint8)
 
 
+def allow_table(mats, bare, beach=False):
+    """paint_ground's allow table (256 x 256: a material over a land cover material): the mapped ground refines the
+    rasters' (the user, 2026-11-23: poorly mapped places must not look worse; a coarse bare-rock polygon over an alpine
+    meadow kept the meadow): rock, scree, sand, mud and the cliffs' bands only over ground the land cover found bare
+    (bare: the materials of no vegetation), a glacier's ice over all but forest, a beach's sand over grass too (its
+    berm: WorldCover reads many beaches as grass)."""
+    t = np.zeros((256, 256), np.uint8)
+    for m in ("rock", "loose", "sand", "mud", "grass"):
+        t[mats[m], list(bare)] = 1
+    t[mats["mud"], mats["mud"]] = 1
+    t[mats["snow"], :] = 1
+    t[mats["snow"], mats["forest"]] = 0
+    if beach:
+        t[mats["sand"], mats["grass"]] = 1
+    return t
+
+
 def paint_ground(idx, lat, lon, feats_list, mats, affine_coef, cliffs=None):
     """A physics block's material map idx (on its lat / lon grid) with the natural polygons (GROUND) and the cliffs'
-    rock bands (CLIFFS) painted. affine_coef: (coef (3, 2), lo0, la0) of surface.grid_affine. -> idx (a new array when
-    anything changed)."""
+    rock bands (CLIFFS) painted where they refine the land cover's ground (allow_table; mats also holds "bare", the
+    land cover's bare materials, and "forest"). affine_coef: (coef (3, 2), lo0, la0) of surface.grid_affine. -> idx (a
+    new array when anything changed)."""
     ef = require()
     coef, lo0, la0 = affine_coef
     out = idx
+    allow = {False: allow_table(mats, mats["bare"]), True: allow_table(mats, mats["bare"], beach=True)}
     # the band widths in grid pixels: the grid's metres a column from the affine map (columns per degree of longitude)
     k = dmath.cos(dmath.radians(float(la0)))
     cols_per_deg = abs(float(coef[0][0]))
@@ -307,12 +326,19 @@ def paint_ground(idx, lat, lon, feats_list, mats, affine_coef, cliffs=None):
             lf = np.zeros(0, np.int64)
         if not len(sel) and not len(lf):
             continue
-        got, n = ef.natural_ground_paint(np.ascontiguousarray(out, np.uint8), np.ascontiguousarray(coef, np.float64),
-                                         float(lo0), float(la0), *_part_arrays(f), sel, np.ascontiguousarray(m),
-                                         lf, np.full(len(lf), mats["rock"], np.uint8), CLIFF_BAND_M / dx_m,
-                                         CLIFF_TOP_M / dx_m)
-        if n:
-            out = got
+        beach = np.isin(classes(f)[sel], ("beach",)) if len(sel) else np.zeros(0, bool)
+        for is_beach in (False, True):
+            ps = sel[beach == is_beach]
+            ls = lf if not is_beach else np.zeros(0, np.int64)
+            if not len(ps) and not len(ls):
+                continue
+            got, n = ef.natural_ground_paint(np.ascontiguousarray(out, np.uint8),
+                                             np.ascontiguousarray(coef, np.float64), float(lo0), float(la0),
+                                             *_part_arrays(f), ps, np.ascontiguousarray(m[beach == is_beach]),
+                                             ls, np.full(len(ls), mats["rock"], np.uint8), CLIFF_BAND_M / dx_m,
+                                             CLIFF_TOP_M / dx_m, allow[is_beach])
+            if n:
+                out = got
     return out
 
 

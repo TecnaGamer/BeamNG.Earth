@@ -239,8 +239,8 @@ def regional(group, height, lat, lon, lcls, u, riparian=None):
 
 
 def _leaf_share(code, share):
-    """The conifer share from the forests' leaf codes (natural_leaf_share: needleleaved 1, broadleaved 0, mixed 1/2,
-    else share)."""
+    """The conifer share from the forests' leaf codes (natural_leaf_share: needleleaved 0.9, broadleaved 0.1, mixed
+    1/2, else share)."""
     return np.asarray(natural.require().natural_leaf_share(np.ascontiguousarray(code, np.uint8),
                                                            np.ascontiguousarray(share, np.float64)))
 
@@ -852,7 +852,7 @@ class Vegetation:
     def _scatter(self, cd, lc, blocked, chm, hs, nat=None):
         """Bushes and rocks on a hashed SCATTER_CELL_M grid over shrubland, grass and bare ground. nat: the mapped
         ground's codes on the CHM grid (natural.GROUND_*; None: none): no bush or rock on mapped sand or ice, mapped
-        bare rock and scree as bare ground."""
+        bare rock and scree as bare ground where the land cover is sparse (bare, shrubs, moss)."""
         if lc is None:
             return _empty()
         lon0, lat0, lon1, lat1 = cd.bounds
@@ -882,7 +882,9 @@ class Vegetation:
         if nat is not None:
             code = np.zeros(len(px), np.uint8)
             code[ok] = nat[r_[ok], c_[ok]]
-            rocky = code == natural.GROUND_ROCKY
+            # (mapped bare rock / scree as bare ground where the land cover found it sparse: shrubs, moss; its
+            # meadows and forests keep their own scatter, the mapped polygon refines the raster's)
+            rocky = (code == natural.GROUND_ROCKY) & np.isin(cls, (WC["bare"], WC["shrub"], WC["moss"]))
             if rocky.any():
                 cls = np.where(rocky, WC["bare"], cls).astype(cls.dtype)
                 pb = np.where(rocky, SCATTER_P[WC["bare"]][0], pb)

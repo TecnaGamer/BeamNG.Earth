@@ -189,6 +189,12 @@ _OWN = "coalesce(list_filter(sources, lambda s: coalesce(s.property, '') = '')[1
 _SRC_OWN = f"{_OWN}.dataset AS src_dataset, {_OWN}.record_id AS src_record"
 _NAME = "names.\"primary\" AS name"
 _TAGS = "CAST(to_json(source_tags) AS VARCHAR) AS tags"
+# the land layer's tags: only the keys natural.py reads (a Paris cell's mapped trees carry survey dates, cadastre refs,
+# names in French ...: 158 kB of its CIP section, most of it tags nothing reads)
+LAND_TAG_KEYS = ("natural", "genus", "species", "taxon", "genus:la", "species:la", "leaf_type", "leaf_cycle", "height",
+                 "circumference", "diameter_crown", "wetland", "surface")
+_LAND_TAGS = ("CAST(to_json(map_from_entries(list_filter(map_entries(source_tags), e -> e.key IN ("
+              + ", ".join(f"'{k}'" for k in LAND_TAG_KEYS) + ")))) AS VARCHAR) AS tags")
 DIVISION_LANGS = ("en", "de", "fr", "it")
 # the regional languages of France whose names a town sign may add under the French one (townsigns.REGIONAL: Catalan,
 # Occitan, Basque, Breton, Corsican, Alsatian, West Flemish), each a column name_<code> (names.common's, by its
@@ -263,7 +269,7 @@ LAYERS = {
     # rock, scree, sand, beaches, dunes, glaciers, wetlands. Not the global land polygons (class land, island ...):
     # the classes the generator uses (natural.LAND_CLASSES)
     "land": dict(theme="base", type="land", clip=True,
-                 cols=f"subtype, class, {_SRC}, level, surface, elevation, {_TAGS}",
+                 cols=f"subtype, class, {_SRC}, level, surface, elevation, {_LAND_TAGS}",
                  text=("subtype", "class", "src_dataset", "src_record", "surface", "tags"),
                  float=("level", "elevation"),
                  where="class IN ('tree', 'tree_row', 'forest', 'wood', 'cliff', 'rock', 'bare_rock', 'stone', "

@@ -468,8 +468,9 @@ pub fn natural_hash<'py>(py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyRe
     Ok(out.into_pyarray(py))
 }
 
-/// The conifer share of canopy trees from their forest's leaf code (natural_leaf_raster's): needleleaved 1,
-/// broadleaved 0, mixed 1/2, else the regional share given.
+/// The conifer share of canopy trees from their forest's leaf code (natural_leaf_raster's): needleleaved 0.9,
+/// broadleaved 0.1, mixed 1/2, else the regional share given. (Not 1 and 0: a forest's polygon is drawn coarser than
+/// its stands, and a few of the other kind keep the look of the rasters' mix it refines.)
 #[pyfunction]
 pub fn natural_leaf_share<'py>(py: Python<'py>, code: PyReadonlyArray1<'py, u8>, share: PyReadonlyArray1<'py, f64>)
         -> PyResult<Bound<'py, PyArray1<f64>>> {
@@ -478,8 +479,8 @@ pub fn natural_leaf_share<'py>(py: Python<'py>, code: PyReadonlyArray1<'py, u8>,
         return Err(PyValueError::new_err("natural_leaf_share: a share per code"));
     }
     let out: Vec<f64> = cv.iter().zip(sv).map(|(&c, &s)| match c & 3 {
-        LEAF_NEEDLE => 1.0,
-        LEAF_BROAD => 0.0,
+        LEAF_NEEDLE => 0.9,
+        LEAF_BROAD => 0.1,
         LEAF_MIXED => 0.5,
         _ => s,
     }).collect();
@@ -641,6 +642,8 @@ pub fn natural_leaf_raster<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f
 /// grid_affine's least squares map (lon - lo0, lat - la0, 1) -> (col, row), lo0 / la0 given. Polygons: the selected
 /// features (feats, mats: a material per feature; the smaller over the larger). Lines (line_feats, line_mats,
 /// line_w: a band's width in pixels on the line's right, line_top: its width on the left): each line's band.
+/// allow (256, 256): allow[m, b] != 0 where material m may be painted over the land cover's material b (a mapped
+/// polygon refines the rasters' ground, never paints over what they found growing there).
 /// -> (the new map, the number of samples changed)
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
@@ -649,8 +652,13 @@ pub fn natural_ground_paint<'py>(py: Python<'py>, idx: PyReadonlyArray2<'py, u8>
                                  coord_off: PyReadonlyArray1<'py, i64>, ring_off: PyReadonlyArray1<'py, i64>,
                                  part_off: PyReadonlyArray1<'py, i64>, feats: PyReadonlyArray1<'py, i64>,
                                  mats: PyReadonlyArray1<'py, u8>, line_feats: PyReadonlyArray1<'py, i64>,
-                                 line_mats: PyReadonlyArray1<'py, u8>, line_w: f64, line_top: f64)
+                                 line_mats: PyReadonlyArray1<'py, u8>, line_w: f64, line_top: f64,
+                                 allow: PyReadonlyArray2<'py, u8>)
         -> PyResult<(Bound<'py, PyArray2<u8>>, usize)> {
+    let al = allow.as_array();
+    if al.shape() != [256, 256] {
+        return Err(PyValueError::new_err("natural_ground_paint: allow (256, 256)"));
+    }
     let (co, ro, po) = (coord_off.as_slice()?, ring_off.as_slice()?, part_off.as_slice()?);
     let (fs, ms, lf, lm) = (feats.as_slice()?, mats.as_slice()?, line_feats.as_slice()?, line_mats.as_slice()?);
     if ms.len() != fs.len() || lm.len() != lf.len() {
@@ -675,7 +683,11 @@ pub fn natural_ground_paint<'py>(py: Python<'py>, idx: PyReadonlyArray2<'py, u8>
                 continue;
             }
             let v = ms[s];
-            fill_part(&edges, cmin, rmin, cmax, rmax, h, w, |r, c| out[[r, c]] = v);
+            fill_part(&edges, cmin, rmin, cmax, rmax, h, w, |r, c| {
+                if al[[v as usize, src[[r, c]] as usize]] != 0 {
+                    out[[r, c]] = v;
+                }
+            });
         }
     }
     // the cliffs' bands: pixels within line_w on the right of a segment (the face's foot) or line_top on its left
@@ -713,8 +725,9 @@ pub fn natural_ground_paint<'py>(py: Python<'py>, idx: PyReadonlyArray2<'py, u8>
                             // signed distance: the right of the way's direction in (col, row) (row down): ex * py -
                             // ey * px > 0 is the right on a map with the north up
                             let side = (ex * py - ey * px) / len;
-                            if side <= line_w && side >= -line_top {
-                                out[[row as usize, col as usize]] = v;
+                            let (ru, cu) = (row as usize, col as usize);
+                            if side <= line_w && side >= -line_top && al[[v as usize, src[[ru, cu]] as usize]] != 0 {
+                                out[[ru, cu]] = v;
                             }
                         }
                     }

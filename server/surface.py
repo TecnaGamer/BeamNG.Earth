@@ -1404,7 +1404,8 @@ def paint_natural(idx, lat, lon, land):
     """The mapped natural ground (natural.py, BNE_NATURAL_GROUND: rock, scree, sand, beach, dune, glacier, wetland) and
     the cliffs' rock bands (BNE_NATURAL_CLIFFS) on a block's material map; land: the land Features of its cells."""
     import natural
-    mats = {"rock": ROCK, "loose": LOOSE, "sand": SAND, "snow": SNOW, "mud": MUD, "grass": GRASS}
+    mats = {"rock": ROCK, "loose": LOOSE, "sand": SAND, "snow": SNOW, "mud": MUD, "grass": GRASS, "forest": FOREST,
+            "bare": (DIRT, DUSTY, LOOSE, ROCK, SAND)}     # (the land cover's open ground: no vegetation, snow or water)
     return natural.paint_ground(idx, lat, lon, land, mats, grid_affine_coef(lat, lon))
 
 

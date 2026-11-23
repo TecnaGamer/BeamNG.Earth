@@ -191,7 +191,7 @@ class LeafTest(unittest.TestCase):
 
     def test_share_and_groups(self):
         share = veg._leaf_share(np.array([1, 2, 3, 0, 5], np.uint8), np.full(5, 0.3))
-        np.testing.assert_array_equal(share, [0.0, 1.0, 0.5, 0.3, 0.0])
+        np.testing.assert_array_equal(share, [0.1, 0.9, 0.5, 0.3, 0.1])
         g = np.array([veg.G_DECIDUOUS] * 4 + [veg.G_CONIFER], np.uint8)
         code = np.array([natural.CYCLE_EVERGREEN | 1, natural.CYCLE_DECIDUOUS | 1, natural.CYCLE_EVERGREEN | 1,
                          natural.CYCLE_DECIDUOUS | 1, natural.CYCLE_DECIDUOUS | 2], np.uint8)
@@ -212,13 +212,16 @@ class GroundTest(unittest.TestCase):
     def test_polygons_and_cliff_band(self):
         import surface
         lat, lon = self._grid()
-        idx = np.full(lat.shape, surface.GRASS, np.uint8)
+        idx = np.full(lat.shape, surface.LOOSE, np.uint8)      # (bare ground: the mapped ground refines it)
+        idx[:12, :] = surface.GRASS                            # (a meadow along the north edge)
+        idx[:, 95:] = surface.FOREST                           # (a forest along the east edge)
         sq = [(0.0002, 0.0002), (0.0005, 0.0002), (0.0005, 0.0005), (0.0002, 0.0005), (0.0002, 0.0002)]
+        rock = [(0.0, 0.00092), (0.001, 0.00092), (0.001, 0.001), (0.0, 0.001), (0.0, 0.00092)]     # over the meadow
         gl = [(0.0006, 0.0006), (0.0009, 0.0006), (0.0009, 0.0009), (0.0006, 0.0009), (0.0006, 0.0006)]
         wet = [(0.0002, 0.0006), (0.0004, 0.0006), (0.0004, 0.0008), (0.0002, 0.0008), (0.0002, 0.0006)]
         cliff = [(0.0001, 0.0001), (0.0009, 0.0001)]          # west to east: its foot to the south (the right)
-        f = _join(feats(3, [sq, gl, wet], ["beach", "glacier", "wetland"],
-                        [{"surface": "sand"}, {}, {"wetland": "marsh"}], [None, None, None]),
+        f = _join(feats(3, [sq, gl, wet, rock], ["beach", "glacier", "wetland", "bare_rock"],
+                        [{"surface": "sand"}, {}, {"wetland": "marsh"}, {}], [None, None, None, None]),
                   feats(2, [cliff], ["cliff"], [{}]))
         f.attrs.setdefault("surface", np.array([None] * len(f.kind), object))
         with mock.patch.multiple(natural, GROUND=True, CLIFFS=True):
@@ -228,13 +231,15 @@ class GroundTest(unittest.TestCase):
         self.assertEqual(out[r(0.00075), c(0.00075)], surface.SNOW)
         self.assertEqual(out[r(0.0007), c(0.0003)], surface.MUD)
         self.assertEqual(out[r(0.00007), c(0.0005)], surface.ROCK, "the cliff's foot")
-        self.assertEqual(out[r(0.00018), c(0.0005)], surface.GRASS, "not far up behind its top")
-        self.assertEqual(out[r(0.00095), c(0.00095)], surface.GRASS)
+        self.assertEqual(out[r(0.00018), c(0.0005)], surface.LOOSE, "not far up behind its top")
+        self.assertEqual(out[r(0.00096), c(0.0005)], surface.GRASS, "a coarse rock polygon keeps the meadow it covers")
+        self.assertEqual(out[r(0.00096), c(0.00097)], surface.FOREST)
+        self.assertEqual(out[r(0.0007), c(0.00097)], surface.FOREST, "the glacier's ice never over the forest")
 
     def test_pebble_beach_is_loose(self):
         import surface
         lat, lon = self._grid()
-        idx = np.full(lat.shape, surface.GRASS, np.uint8)
+        idx = np.full(lat.shape, surface.DUSTY, np.uint8)
         sq = [(0.0002, 0.0002), (0.0005, 0.0002), (0.0005, 0.0005), (0.0002, 0.0005), (0.0002, 0.0002)]
         f = feats(3, [sq], ["beach"], [{"surface": "pebblestone"}], ["pebblestone"])
         with mock.patch.multiple(natural, GROUND=True, CLIFFS=False):
