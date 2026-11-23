@@ -265,6 +265,7 @@ T.check(count(objs('next')) == 0 and count(objs('bare')) == 1, 'and deleted afte
 -- Cliff contact strips participate in the same atomic swap and rollback, but
 -- remain non-colliding overlays throughout it.
 require('beamngEarth/cliffcontact').ready = true -- private cache prepared at hello
+roads.configureCliffs({available=true, natural=true, roadCuts=true})   -- (hello: cliffs on)
 roads.onSkin({anchorId=1,key=key,path=skinOf('cliffold',{'road','cliffStrip1'})},1)
 run()
 T.check(count(objs('cliffold'))==2, 'cliff contact skin installed')
@@ -280,6 +281,7 @@ run()
 T.check(not objs('cliffold').cliffStrip1.hidden and objs('cliffold').cliffStrip1.fields.collisionType=='None',
   'rollback restores old contact without collision')
 T.check(count(objs('cliffnew'))==0, 'rolled-back cliff contact is removed')
+roads.configureCliffs(nil)
 
 -- ---- the level ends with a swap under way: nothing of it is left ------------------------------------------------
 roads.swapBegin(40)

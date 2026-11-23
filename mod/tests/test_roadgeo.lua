@@ -378,6 +378,7 @@ end
 -- the anchor skin. Rock rows are restored on reconnect, not duplicated on rebase.
 do
   require('beamngEarth/cliffcontact').ready = true -- private cache prepared at hello
+  roads.configureCliffs({available=true, natural=true, roadCuts=true})   -- (hello: cliffs on)
   roads.reset()
   roads.setGeo(true)
   calls = {}
@@ -422,5 +423,6 @@ do
   T.check(#objsWith('dynamic_cliff')==0 and #objsWith('dynamic_strip')==0, 'geotile drop removes cliff and skin')
   local drops=called('trees','dropKey')
   T.check(#drops==1 and drops[1][3]=='g:t'..key, 'geotile drop removes its rock population')
+  roads.configureCliffs(nil)
 end
 T.done('test_roadgeo')

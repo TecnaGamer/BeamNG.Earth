@@ -36,7 +36,11 @@ for i = 1, 256 do M.CLIFF_COLLIDERS[i] = 'cliffCol'..i end
 function M.isCliffCollider(what) return type(what) == 'string' and what:match('^cliffCol%d+$') ~= nil end
 function M.isCliff(what) return what == 'cliff' or (type(what) == 'string' and what:match('^cliff%d+$') ~= nil) end
 function M.isCliffStrip(what) return type(what) == 'string' and what:match('^cliffStrip%d+$') ~= nil end
+-- PR #1412's cliffs (server BNE_CLIFFS): their parts join the tile loops only after hello says cliffs are on
+-- (M.configureCliffs); off, every list and loop is the one without them (no entries, no per-part matching).
+M._cliffsOn = false
 local function withCliffs(list)
+  if not M._cliffsOn then return list end
   for _, what in ipairs(M.CLIFF_WHATS) do list[#list+1] = what end
   for _, what in ipairs(M.CLIFF_STRIPS) do list[#list+1] = what end
   for _, what in ipairs(M.CLIFF_COLLIDERS) do list[#list+1] = what end
@@ -863,9 +867,6 @@ local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
 M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
-for _, what in ipairs(M.CLIFF_WHATS) do M.CONTENT_WHATS[#M.CONTENT_WHATS+1] = what end
-for _, what in ipairs(M.CLIFF_COLLIDERS) do M.CONTENT_WHATS[#M.CONTENT_WHATS+1] = what end
-for _, what in ipairs(M.CLIFF_STRIPS) do M.SKIN_WHATS[#M.SKIN_WHATS+1] = what end
 
 local swapState = nil        -- a generation swap being staged: { gen, parts, tiles } (M.swapBegin)
 local swapBack = nil         -- a rollback's collision still to come: { reloaded, frames } (M.swapUndo)
@@ -1051,7 +1052,7 @@ local function queueGeoParts(key, t, data)
   for _, what in ipairs(M.CONTENT_WHATS) do
     if t.parts[what] then
       local q = { key = key, what = what, tile = t, geo = true,
-        renderOnly = M.isCliff(what) or M.isCliffStrip(what) or what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and isRailDrawn(what)) }
+        renderOnly = (M._cliffsOn and (M.isCliff(what) or M.isCliffStrip(what))) or what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and isRailDrawn(what)) }
       if not q.renderOnly then t.colWant[what] = true end
       if q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
@@ -1231,12 +1232,12 @@ function M.onSkin(msg, currentAnchor)
   for _, what in ipairs(M.SKIN_WHATS) do
     local w = data[what]
     local sl = msgSlot(msg, what)
-    if M.isCliffStrip(what) and not require('beamngEarth/cliffcontact').ready then w = nil end
+    if M._cliffsOn and M.isCliffStrip(what) and not require('beamngEarth/cliffcontact').ready then w = nil end
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       if sl then w = { shape = sl.path, pos = w.pos }; t.slots[what] = sl end
       t.skin[what] = { shape = w.shape, pos = w.pos }
       local q = { key = geoKey(msg.key), walk = w, what = what, tile = t, skin = true,
-        renderOnly = M.isCliffStrip(what) or what == 'road' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
+        renderOnly = (M._cliffsOn and M.isCliffStrip(what)) or what == 'road' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
       if not q.renderOnly then t.colWant[what] = true end
       t.skin.pending = t.skin.pending + 1
       if stage then swapState.expect = swapState.expect + 1 end
@@ -1465,7 +1466,7 @@ function M.onExact(msg, currentAnchor)
         walkQ = keep
         local lean = t.parts.bldcol ~= nil
         local q = { key = geoKey(msg.key), what = what, tile = t, geo = true, swap = true,
-          renderOnly = M.isCliff(what) or M.isCliffStrip(what) or what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
+          renderOnly = (M._cliffsOn and (M.isCliff(what) or M.isCliffStrip(what))) or what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
             or (t.parts.railcol ~= nil and isRailDrawn(what)) }
         walkQ[#walkQ + 1] = q
       end
@@ -1722,10 +1723,10 @@ function M.onTile(msg, currentAnchor, a)
   for _, what in ipairs(withCliffs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3',
       'buscol' })) do
     local w = data[what]
-    if M.isCliffStrip(what) and not require('beamngEarth/cliffcontact').ready then w = nil end
+    if M._cliffsOn and M.isCliffStrip(what) and not require('beamngEarth/cliffcontact').ready then w = nil end
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
-        renderOnly = M.isCliff(what) or M.isCliffStrip(what) or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk')
+        renderOnly = (M._cliffsOn and (M.isCliff(what) or M.isCliffStrip(what))) or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk')
           or (leanRail and isRailDrawn(what)) }
       if not q.renderOnly then tiles[key].colWant[what] = true end
       if q.renderOnly or M.collideNear(tiles[key]) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
@@ -2528,7 +2529,28 @@ local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
 local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol',
   'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }
-WHATS = withCliffs(WHATS)
+
+-- hello's cliffs ({available, natural, roadCuts}; core.lua): the cliff parts join WHATS, CONTENT_WHATS and SKIN_WHATS
+-- (rebuilt in place) when cliffs are on; off (the default) the lists stay exactly the ones without cliffs.
+M._cliffBase = {}
+for k, list in pairs({ whats = WHATS, content = M.CONTENT_WHATS, skin = M.SKIN_WHATS }) do
+  local copy = {}
+  for i, w in ipairs(list) do copy[i] = w end
+  M._cliffBase[k] = copy
+end
+function M.configureCliffs(flags)
+  local on = type(flags) == 'table' and (flags.natural == true or flags.roadCuts == true) or false
+  if on == M._cliffsOn then return end
+  M._cliffsOn = on
+  local function rebuild(list, base, extra)
+    for i = #list, 1, -1 do list[i] = nil end
+    for _, w in ipairs(base) do list[#list + 1] = w end
+    if on then for _, e in ipairs(extra) do for _, w in ipairs(e) do list[#list + 1] = w end end end
+  end
+  rebuild(WHATS, M._cliffBase.whats, { M.CLIFF_WHATS, M.CLIFF_STRIPS, M.CLIFF_COLLIDERS })
+  rebuild(M.CONTENT_WHATS, M._cliffBase.content, { M.CLIFF_WHATS, M.CLIFF_COLLIDERS })
+  rebuild(M.SKIN_WHATS, M._cliffBase.skin, { M.CLIFF_STRIPS })
+end
 
 function M.transform(xf, geodesy)
   local bx, by, bz, bw = xf:beamngQuat()
@@ -2807,7 +2829,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       loadMaterials()
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
-      local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol' or M.isCliffCollider(q.what)) and 'Collision Mesh' or not isRoad
+      local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol' or (M._cliffsOn and M.isCliffCollider(q.what))) and 'Collision Mesh' or not isRoad
       local ok, id = pcall(createWalk, walk, staged and 'None' or collide)
       if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
       if staged and not ok then                    -- (a shape that cannot be made: the swap must not commit)

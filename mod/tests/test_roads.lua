@@ -1010,6 +1010,21 @@ end
 roads.clear()
 roads.setEnabled(true)
 require('beamngEarth/clifftalus').enabled = true
+local cliffTile0 = {chunks={}, cliff={shape='/t/cliff.cdae',pos={0,0,0}}, cliffCol1={shape='/t/cliff_col.cdae',pos={0,0,0}}}
+-- cliffs off (hello without them, the default): cliff parts are not in the tile loops; nothing of them is imported
+T.check(not roads._cliffsOn, 'cliffs off until hello says on')
+T.check(roads.onTile({anchorId=7,key='0_0',data=cliffTile0,n=0},7), 'a tile with cliff parts is accepted with cliffs off')
+for _=1,12 do roads.update(gov,7,{x=0,y=0,z=0}) end
+do
+  local n = 0
+  for _,o in pairs(S.objects) do
+    if o.fields and o.fields.shapeName and tostring(o.fields.shapeName):find('/t/cliff',1,true) then n = n + 1 end
+  end
+  T.check(n == 0, 'cliffs off: no cliff part imported')
+end
+roads.onDrop({anchorId=7,key='0_0'})
+for _=1,12 do roads.update(gov,7,{x=0,y=0,z=0}) end
+roads.configureCliffs({available=true, natural=true, roadCuts=true})
 local cliffTile = {chunks={}, cliff={shape='/t/cliff.cdae',pos={0,0,0}},
   cliff2={shape='/t/cliff2.cdae',pos={0,0,0}},
   cliffCol1={shape='/t/cliff_col.cdae',pos={0,0,0}},
@@ -1041,4 +1056,10 @@ require('beamngEarth/cliffcontact').ready = false
 roads.onTile({anchorId=7,key='0_0',data=cliffTile,n=0},7)
 for _=1,12 do roads.update(gov,7,{x=0,y=0,z=0}) end
 T.check(cliffObjects()==3 and roads.cliffPiecesReady('0_0',7), 'missing private stock skips contacts but keeps cliff faces')
+roads.onDrop({anchorId=7,key='0_0'})
+for _=1,12 do roads.update(gov,7,{x=0,y=0,z=0}) end
+roads.configureCliffs({available=true, natural=false, roadCuts=false})
+T.check(not roads._cliffsOn and #roads.CONTENT_WHATS == #roads._cliffBase.content and #roads.SKIN_WHATS == #roads._cliffBase.skin,
+  'cliffs off again: the lists are the ones without cliffs')
+require('beamngEarth/clifftalus').enabled = false
 T.done('test_roads')

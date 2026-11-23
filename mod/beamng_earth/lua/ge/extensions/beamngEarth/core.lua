@@ -1294,6 +1294,7 @@ local function onMessage(msg)
     require('beamngEarth/clifftalus').configure(msg.cliffs)
     require('beamngEarth/cliffmaterials').configure(msg.cliffs)
     require('beamngEarth/cliffcontact').configure(msg.cliffs)
+    roads.configureCliffs(msg.cliffs)     -- (the cliff parts in the tile loops: only when on)
     if msg.streamLease == 1 and type(msg.leaseId) == 'string' then
       net.serverHello(msg.sessionId, msg.leaseId, msg)
     else
