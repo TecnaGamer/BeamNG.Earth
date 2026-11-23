@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 53          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 54          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -94,6 +94,7 @@ VERSION = 53          # (the cached cells hold their groups: 14 for the regional
                       # 51: 50's last two builds kept 50's spread cells (the same VERSION); the trunk distance by height
                       # 52: the riverside poplars off the forest's land cover (regional)
                       # 53: the far clumps at one of their trees, not the square's centroid (_unlattice: no lattice)
+                      # 54: the town palms by the sea and low only (palm_fit)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -669,6 +670,16 @@ SNAG_FROM = None            # (set below: the groups a dead tree may stand in fo
 # warm towns' palms outside the tropics and North America (its own, earthfast.regional_groups): Koppen class ->
 # (the share in town, outside town, the latitude they stop at); date and fan palms (Italy's, West Coast USA's)
 DRY_PALMS = {8: (0.15, 0.0, 44.0), 4: (0.45, 0.15, 36.0), 6: (0.30, 0.03, 36.0), 14: (0.08, 0.0, 35.0)}
+# (54) ... but by the sea and low: palms need mild winters, and a fan palm in a street is a coast's sight (Nice, Split),
+# not a plateau's (Valensole, 550 m, 100 km inland: two of them by its car park, the user's 2026-11-24). Their share
+# times palm_fit: the sea (Koppen class 0 on its 0.1 degree grid) within PALM_COAST_DEG (full) or PALM_INLAND_DEG
+# (3/4), else PALM_INLAND_KEEP, outside the deserts' and steppes' classes (their oases: any distance); and full below
+# PALM_ELEV_M[0], none from PALM_ELEV_M[1] up, linear between (the winters' mildness: the height decides most)
+PALM_COAST_DEG = 0.2
+PALM_INLAND_DEG = 0.4
+PALM_ELEV_M = (200.0, 450.0)
+PALM_INLAND_KEEP = 0.5      # (farther from the sea: Seville, Cordoba, Murcia, low and mild, have palms in plenty)
+K_DRY_PALMS = (4, 6)             # BWh, BSh: the hot deserts' and steppes' palms are their oases', inland too
 PALM_FROM = None
 # the rainforests (Koppen Af, Am): every generic broadleaf a tropical tree (the shapes span 5-33 m since the stock
 # survey), and fewer palms outside town (regional_groups' 20 % of the tropics' trees: RAINFOREST_PALM_KEEP of them)
@@ -870,6 +881,39 @@ def spruce_line(lat):
     return np.clip(SPRUCE_LINE_M + (50.0 - np.asarray(lat, np.float64)) * SPRUCE_LINE_PER_DEG, 500.0, 1700.0)
 
 
+def _sea_within(lat, lon, deg):
+    """Per point: the sea (Koppen class 0) at the point or on the 8-direction rings of deg / 2 and deg. Pure."""
+    import climate
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    sea = np.asarray(climate.koppen_many(lat, lon)) == 0
+    for r in (0.5 * deg, deg):
+        for dy, dx in _RING:
+            rest = np.flatnonzero(~sea)
+            if not len(rest):
+                return sea
+            sea[rest] = np.asarray(climate.koppen_many(lat[rest] + dy * r, lon[rest] + dx * r)) == 0
+    return sea
+
+
+def palm_fit(lat, lon, elev, k):
+    """(54) Per point: the town palms' share factor 0..1 by the sea's nearness and the height (PALM_*); the hot
+    deserts' and steppes' classes (K_DRY_PALMS) by the height only. elev None: as at the sea's level. Pure."""
+    lat, lon = np.atleast_1d(np.asarray(lat, np.float64)), np.atleast_1d(np.asarray(lon, np.float64))
+    n = len(lat)
+    f = np.ones(n)
+    dry = _in(np.atleast_1d(np.asarray(k)), K_DRY_PALMS)
+    rest = np.flatnonzero(~dry)
+    if len(rest):
+        coast = np.asarray(_on_grid(lambda a, b: _sea_within(a, b, PALM_COAST_DEG), lat[rest], lon[rest]), bool)
+        part = np.asarray(_on_grid(lambda a, b: _sea_within(a, b, PALM_INLAND_DEG), lat[rest], lon[rest]), bool)
+        f[rest] = np.where(coast, 1.0, np.where(part, 0.75, PALM_INLAND_KEEP))
+    if elev is not None:
+        e = np.atleast_1d(np.asarray(elev, np.float64))
+        lo, hi = PALM_ELEV_M
+        f *= np.clip((hi - e) / (hi - lo), 0.0, 1.0)
+    return f
+
+
 def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conifer, u_snag, u_palm, u_alt=None,
                    u_stand=None):
     """The groups after regional(): Eurasia's species (birch / oak / beech, pine_eu / spruce), dead trees, the warm
@@ -975,9 +1019,13 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     cand = ~na & (np.abs(lat) >= 23.5) & _in(g, PALM_FROM)
     if cand.any():
         up = np.asarray(u_palm)
+        fit = np.zeros(len(g))
+        ci = np.flatnonzero(cand & _in(k, tuple(DRY_PALMS)))
+        if len(ci):             # (54: the sea near and low, palm_fit)
+            fit[ci] = palm_fit(lat[ci], lon[ci], None if elev is None else np.asarray(elev)[ci], k[ci])
         for kk, (p_town, p_out, lat_max) in DRY_PALMS.items():
             m = cand & (k == kk) & (np.abs(lat) < lat_max)
-            g[m & (up < np.where(built, p_town, p_out))] = G_PALM_DRY
+            g[m & (up < np.where(built, p_town, p_out) * fit)] = G_PALM_DRY
     # (34) coconut-type palms only in the tropics' climates (Af, Am, Aw): any other palm (California's, Florida's north,
     # the Mediterranean's, the Gulf's) the fan and date palms (the gallery 2026-11-17: the palm group mixed both)
     g[(g == G_PALM) & ~_in(k, K_TROPICS)] = G_PALM_DRY

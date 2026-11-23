@@ -819,6 +819,23 @@ class UnlatticeTest(unittest.TestCase):
         self.assertEqual((nx[0], ny[0]), (cx[0], cy[0]))
 
 
+class PalmFitTest(unittest.TestCase):
+    """(54) The town palms by the sea and low (palm_fit): none on Valensole's plateau (550 m), full on the coast."""
+
+    def test_places(self):
+        import climate
+        la = np.array([43.836, 43.70, 37.39, 40.42, 37.18])
+        lo = np.array([5.986, 7.27, -5.99, -3.70, -3.60])
+        e = np.array([550.0, 10.0, 10.0, 650.0, 700.0])
+        f = veg.palm_fit(la, lo, e, np.asarray(climate.koppen_many(la, lo)))
+        self.assertEqual(float(f[0]), 0.0, "Valensole: a cold plateau")
+        self.assertEqual(float(f[1]), 1.0, "Nice: the coast")
+        self.assertTrue(0.3 <= float(f[2]) < 1.0, "Seville: inland but low, palms in plenty")
+        self.assertEqual(float(f[3]), 0.0, "Madrid: high")
+        self.assertEqual(float(f[4]), 0.0, "Granada: high")
+        self.assertEqual(float(veg.palm_fit(la[:1], lo[:1], None, np.array([4]))[0]), 1.0, "a hot desert's oasis")
+
+
 class NorthBirchTest(unittest.TestCase):
     """(49) Europe's north: fewer conifers than the leaf maps (EU-Forest's plots), its broadleaves birches."""
 
