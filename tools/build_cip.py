@@ -63,6 +63,12 @@ DEFAULT_LAYERS = VECTOR + RASTER
 # cells with a BNWT tile of the transportation, buildings or places archive (roads, buildings, places: ~16-20 M, where
 # a player drives); "roads": the cells with roads (~15 M). A cell left out is read from its sources by the players, as
 # every cell is without CIP (cip.Reader: a cell of the coverage with no tile).
+# --cap-kb: a division layer's section of a cell bigger than this (its arrays' bytes) is left out of the cell and read
+# from its source (cip.Reader: per section). The division areas are whole outlines, not cut to the cell (overture.LAYERS
+# clip=False): a Quebec or Yukon region's outline (290-960 kB of arrays) was in each of its thousands of cells, 51 of a
+# rural Quebec unit's 53 MB, most of a planet build; Manhattan's are 33 kB (median) to 74 kB.
+CAPPED = ("town_areas", "hoods")
+CAP_KB = 128
 SCOPES = {"all": None, "content": ("transportation", "buildings", "places"), "roads": ("transportation",)}
 # the planet build's: the rasters stay on their sources (WorldCover / the canopy model: ~2 / ~100-200 kB a land cell, a
 # planet of ~109 M land cells would be ~0.2 / several TB for ~1-4 MB of a cold visit's downloads)
@@ -115,6 +121,7 @@ class Builder:
         self.lidar = "have"
         self.only = None            # {cell: layers} (--cellset), None: self.layers for every cell
         self.lidar_cells = None     # the cells whose lidar is measured (--cellset's "lidar"), None: every one wanting it
+        self.cap = 0                # bytes: CAPPED sections bigger than this left out (0: none)
 
     # --- data builds ---------------------------------------------------------------------------------------------
     def data_builds(self):
@@ -168,6 +175,8 @@ class Builder:
             except Exception as e:
                 lacks.append((f"m:{layer}", f"{type(e).__name__}: {e}"))
                 continue
+            if self.cap and layer in CAPPED and sum(np.asarray(v).nbytes for v in arrays.values()) > self.cap:
+                continue            # (read from its source: a whole outline repeated in each cell it reaches)
             secs[f"m:{name}"] = arrays
             if layer == "roads":
                 roads = mapgeom.Features.from_arrays("roads", {k: v for k, v in arrays.items() if k != "provenance"},
@@ -303,9 +312,9 @@ def rects_of(cells):
 _B = {}
 
 
-def _unit_init(cache, online, layers, release, lidar, partial, data=None):
+def _unit_init(cache, online, layers, release, lidar, partial, data=None, cap=0):
     _B["b"] = b = Builder(cache, online, layers, release)
-    b.lidar, b.partial, b.store = lidar, partial, False
+    b.lidar, b.partial, b.store, b.cap = lidar, partial, False, cap
     _B["data"] = data
     same_data(b)
 
@@ -474,6 +483,8 @@ def main(argv=None):
     ap.add_argument("--jobs", type=int, default=1, help="world: build processes")
     ap.add_argument("--unit-zoom", type=int, default=10)
     ap.add_argument("--scope", default="all", choices=sorted(SCOPES), help="world: the cells built (SCOPES)")
+    ap.add_argument("--cap-kb", type=int, default=None, help=f"a {'/'.join(CAPPED)} section bigger than this is left "
+                                                            f"out (CAP_KB; default {CAP_KB} with --world, else none)")
     ap.add_argument("--work", help="world: units' parts folder (default OUT/.work)")
     ap.add_argument("--shard", help="world: I/N, the I-th of N contiguous runs of the units (Hilbert order)")
     ap.add_argument("--shard-parts", action="store_true", help="with --shard: the shard's own parts and its record")
@@ -491,6 +502,7 @@ def main(argv=None):
     b = Builder(a.cache, a.online, layers, a.release)
     b.partial = a.partial
     b.lidar = a.lidar or ("measure" if a.online else "have")
+    b.cap = 1024 * (a.cap_kb if a.cap_kb is not None else (CAP_KB if a.world else 0))
     if a.cellset:
         with open(a.cellset, encoding="utf-8") as fh:
             built = sorted({ly for v in json.load(fh)["cells"].values() for ly in v})
@@ -500,6 +512,8 @@ def main(argv=None):
               "data": dict(b.data_builds(), lidar=b.lidar, zstd=cip.LEVEL, layers=built)}
     if a.world and a.scope != "all":
         inputs["data"]["scope"] = a.scope       # (another set of cells: another build; "all" keeps the ids as before)
+    if b.cap:
+        inputs["data"]["cap"] = {ly: b.cap for ly in CAPPED if ly in layers}
     build = cip.build_id(inputs)
     outdir = os.path.join(a.out, f"cip{cip.FORMAT}", b.release, build)
     if a.inputs_only:
@@ -633,7 +647,7 @@ def world(a, b, inputs, build, outdir, meta, layers, build_bnwt):
         pool = None
     else:
         pool = mp.get_context("spawn").Pool(a.jobs, _unit_init, (a.cache, a.online, layers, b.release, b.lidar,
-                                                                  b.partial, _B["data"]))
+                                                                  b.partial, _B["data"], b.cap))
         results = pool.imap_unordered(build_unit, jobs)
     for _u, nc, nb, lk, _s in results:
         done, cells, nbytes = done + 1, cells + nc, nbytes + nb
