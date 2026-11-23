@@ -10209,11 +10209,11 @@ class TunnelProfiles(BridgeProfiles):
             # neighbouring sections share their end sample (no gap between a portal and the open road)
             secs = [(a if n == 0 else a - 1, b, kd) for n, (a, b, kd) in enumerate(secs)]
             if not underwater:
-                hull = floor
+                meas = np.full(len(xy), np.nan)
                 floor = self._observed_floor(k, pool, xy, s, floor, secs,
-                                             tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None))))
+                                             tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None))), meas)
                 if BORE_ON and pool[k][0] is not None:      # (one bore, one floor: bore_floors below)
-                    bore[k] = (xy[:, :2], float(pool[k][0].width), floor, floor < hull - 0.01, np.asarray(g_raw))
+                    bore[k] = (xy[:, :2], float(pool[k][0].width), floor, meas, np.asarray(g_raw))
             cover = (g if gc is None else gc) - floor
             log.debug("tunnel %s: sections %s over %.0f m", k, secs, s[-1])
             subs = {}
@@ -10291,7 +10291,7 @@ class TunnelProfiles(BridgeProfiles):
         return racedig.dig_part(self.frame, elev, xy, s, floor, kinds, races,
                                 spec.width / 2 + roadmesh.TUNNEL_SHOULDER, low_h, roadmesh.TUNNEL_H)
 
-    def _observed_floor(self, k, pool, xy, s, floor, secs, joints=(False, False)):
+    def _observed_floor(self, k, pool, xy, s, floor, secs, joints=(False, False), meas_out=None):
         """floor with each covered section (kind 1 / 2) at the measured height where a source has one (roadz.py,
         level < 0: BD TOPO, NVDB) and it is deeper: never over the ground's lower hull (the cover stays); at a portal
         (next to an open section, or the part's end where no other part of the chain goes on: joints (start, end))
@@ -10333,6 +10333,8 @@ class TunnelProfiles(BridgeProfiles):
                                                        float("nan") if inside1 else float(out[b]),
                                                        OBS_BLEND_DG, OBS_BLEND_MIN_M, 0.5), np.float64)
                 out[a:b + 1] = np.minimum(eased, out[a:b + 1])
+                if meas_out is not None:            # (the measured floor as eased, taken or not: bore_floors)
+                    meas_out[a:b + 1] = eased
             return out
         except Exception as ex:             # the hull rather than no tunnel
             log.debug("observed tunnel floor %s: %s: %s", k, type(ex).__name__, ex)
@@ -12042,7 +12044,8 @@ def _runs(mask, s, min_m):
 def bore_floors(lines, widths, floors, measured=None, ground=None, roads=None):
     """floors (per tunnel part of one network: its line (n, 2), width, floor (n,)) with every two parts whose tubes
     overlap side by side (_bore_pairs: one bore) on one floor where they do: a source's measured floor where either
-    has one there (measured: per part, per point, where the solve took a measurement), else the deeper of the two (the
+    has one there (measured: per part, per point, the measured height as the solve eased it, NaN where none), eased in
+    from the deeper floor where the measurement starts or stops inside the bore, else the deeper of the two (the
     cover kept); a floor raised to a measured one no nearer the lower ground over them (ground: per part, per point,
     the raw ground) than BORE_COVER_M unless the deeper of the two already is. Every part's ends keep their heights
     (a portal on its graded ground, a joint on the chain's pin): within the bore the one floor eases onto them as a
@@ -12058,7 +12061,7 @@ def bore_floors(lines, widths, floors, measured=None, ground=None, roads=None):
     if not pairs:
         return out
     n = len(X)
-    M = [np.zeros(len(Z[k]), bool) if measured is None or measured[k] is None else np.asarray(measured[k], bool)
+    M = [np.full(len(Z[k]), np.nan) if measured is None or measured[k] is None else np.asarray(measured[k], np.float64)
          for k in range(n)]
     G = [None if ground is None or ground[k] is None else np.asarray(ground[k], np.float64) for k in range(n)]
     S = [_arc(x) for x in X]
@@ -12066,28 +12069,48 @@ def bore_floors(lines, widths, floors, measured=None, ground=None, roads=None):
     runs = [[] for _ in range(n)]           # per part: (i0, i1, mate, reach)
     for a, b, i0, i1, jj, tt in pairs:
         zb = Z[b][jj] + tt * (Z[b][jj + 1] - Z[b][jj])
-        mb = M[b][jj] & M[b][jj + 1]
+        mb = M[b][jj] + tt * (M[b][jj + 1] - M[b][jj])       # (NaN where either end has none)
         gb = None if G[b] is None else G[b][jj] + tt * (G[b][jj + 1] - G[b][jj])
         for m, i in enumerate(range(i0, i1 + 1)):
-            face[a].setdefault(i, []).append((float(zb[m]), bool(mb[m]), None if gb is None else float(gb[m])))
+            face[a].setdefault(i, []).append((float(zb[m]), float(mb[m]), None if gb is None else float(gb[m])))
         runs[a].append((i0, i1, b, (widths[a] + widths[b]) / 2 + 2 * roadmesh.TUNNEL_SHOULDER + 1.0))
     for a in range(n):
         if not runs[a]:
             continue
         z, s = Z[a], S[a]
         inside = np.zeros(len(z), bool)
-        F = z.copy()
+        low, me, gm = z.copy(), np.full(len(z), np.nan), np.full(len(z), np.nan)
         for i, fs in face[a].items():
-            vals = [float(z[i])] + [f[0] for f in fs]
-            meas = [bool(M[a][i])] + [f[1] for f in fs]
-            low = min(vals)
-            tgt = min(v for v, m in zip(vals, meas) if m) if any(meas) else low
+            inside[i] = True
+            low[i] = min([float(z[i])] + [f[0] for f in fs])
+            ms = [m for m in [float(M[a][i])] + [f[1] for f in fs] if np.isfinite(m)]
+            if ms:
+                me[i] = min(ms)
             gs = [g for g in [None if G[a] is None else float(G[a][i])] + [f[2] for f in fs]
                   if g is not None and np.isfinite(g)]
-            if gs and tgt > low:
-                tgt = min(tgt, max(low, min(gs) - BORE_COVER_M))
-            F[i] = tgt
-            inside[i] = True
+            if gs:
+                gm[i] = min(gs)
+        T = low.copy()
+        have = inside & np.isfinite(me)
+        k = 0
+        while k < len(z):                       # (each measured stretch eased from the deeper floor where it begins or
+            if not have[k]:                     # ends inside the bore, as _observed_floor eases onto a portal)
+                k += 1
+                continue
+            r = k
+            while r + 1 < len(z) and have[r + 1]:
+                r += 1
+            t0 = float(low[k]) if k > 0 and inside[k - 1] else float("nan")
+            t1 = float(low[r]) if r + 1 < len(z) and inside[r + 1] else float("nan")
+            if r > k:
+                import fast
+                T[k:r + 1] = np.asarray(fast._ef.deck_blend(np.ascontiguousarray(s[k:r + 1] - s[k]),
+                                                             np.ascontiguousarray(me[k:r + 1]), t0, t1, OBS_BLEND_DG,
+                                                             OBS_BLEND_MIN_M, 0.5), np.float64)
+            k = r + 1
+        up = inside & (T > low) & np.isfinite(gm)
+        T[up] = np.minimum(T[up], np.maximum(low[up], gm[up] - BORE_COVER_M))
+        F = np.where(inside, T, z)
         # the ends held: its own (a portal, a joint) where they lie in the bore, and its mates' beside it (theirs, as
         # the mates hold them), its own winning where both lie at one mouth
         pins = [(0.0, float(z[0]), True), (float(s[-1]), float(z[-1]), True)]

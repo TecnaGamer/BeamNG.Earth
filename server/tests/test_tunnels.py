@@ -411,8 +411,8 @@ class OneBore(unittest.TestCase):
         s = poly([(1700, 40), (1500, 3.45), (0, 3.45), (-100, 20)])
         zn = 10.0 + 0.024 * n[:, 0]                              # its hull: the straight line between its portals
         zs = 10.0 + dz_south + 0.0227 * s[:, 0] + stack          # measured (swissTLM3D's line)
-        ms = np.full(len(s), measured)
-        return [n, s], [self.W, self.W], [zn, zs], [np.zeros(len(n), bool), ms]
+        ms = zs.copy() if measured else np.full(len(s), np.nan)
+        return [n, s], [self.W, self.W], [zn, zs], [np.full(len(n), np.nan), ms]
 
     @staticmethod
     def at(xy, z, x, y_sign):
@@ -434,6 +434,19 @@ class OneBore(unittest.TestCase):
             grade = np.diff(new[k]) / np.maximum(ds, 1e-9)
             self.assertLess(float(np.abs(grade).max()), 0.12, "no step along a carriageway")
             self.assertLess(float(np.abs(np.diff(grade)).max()), 0.03, "eased, no kink")
+
+    def test_measured_where_it_is_not_deeper_still_the_one_floor(self):
+        # the solve takes a measurement only where it is deeper than its own floor: where swissTLM3D's line lies a few
+        # cm over the southbound's own floor it was not taken there, and the deeper floor (1.6 m down) cut a notch
+        lines, widths, floors, meas = self.bore()
+        zs = floors[1].copy()
+        zs[200:210] -= 0.05                     # (its own floor, here 5 cm under the measured line)
+        floors = [floors[0], zs]
+        new = roads.bore_floors(lines, widths, floors, meas)
+        ds = np.hypot(*np.diff(lines[1], axis=0).T)
+        self.assertLess(float(np.abs(np.diff(new[1]) / np.maximum(ds, 1e-9)).max()), 0.12, "no notch")
+        xs = np.arange(60.0, 1440.0, 5.0)
+        self.assertLess(float(np.abs(self.at(lines[0], new[0], xs, -1) - self.at(lines[1], new[1], xs, 1)).max()), 0.06)
 
     def test_without_a_measurement_the_deeper(self):
         lines, widths, floors, _ = self.bore(measured=False)
