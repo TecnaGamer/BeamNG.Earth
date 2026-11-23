@@ -95,3 +95,50 @@ class DippedSlipRoadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiftedFreewayTest(unittest.TestCase):
+    """GitHub #1496 (FREEWAY_LONG_LIFT): a motorway raised onto a long deck's abutment (lifted) is no ceiling at its
+    nodes but a floor, as a raised road's: the link joining it comes up to it, the motorway itself is never moved. A link
+    placed beside the motorway's lanes, its end 4.6 m off the motorway's own end (the A1's westbound diverge at Pitesti),
+    joins it too."""
+
+    def setUp(self):
+        self.mway = types.SimpleNamespace(cls="motorway", link=False, subclass=None)
+        self.slip = types.SimpleNamespace(cls="motorway", link=True, subclass="link")
+
+    def run_envelope(self, lifted, slip_start=(100.0, 0.0)):
+        xs = np.arange(0.0, 100.0 + 1e-9, 10.0)
+        mway = plan(np.c_[xs, np.zeros(len(xs))], 7.0 * xs / 100.0, 8.0)    # raised onto its deck at x = 100
+        slip = plan(np.c_[np.linspace(slip_start[0], slip_start[0] + 150.0, 16), np.full(16, slip_start[1]) +
+                          np.linspace(0.0, 40.0, 16)], np.zeros(16), 4.0)      # on the ground, leaving it there
+        plans = [("mway", mway), ("slip", slip)]
+        floor = [np.zeros(len(xs)), np.zeros(16)]
+        grading.ramp_envelope(plans, [self.mway, self.slip], [0], (), floor, lifted)
+        return np.asarray(plans[0][1].z, np.float64), np.asarray(plans[1][1].z, np.float64)
+
+    def test_a_link_comes_up_to_the_lifted_motorway(self):
+        mz, sz = self.run_envelope({0})
+        np.testing.assert_allclose(mz, 7.0 * np.arange(0.0, 101.0, 10.0) / 100.0)     # (never moved)
+        self.assertAlmostEqual(float(sz[0]), 7.0, places=6)
+        self.assertTrue(np.all(np.diff(sz[:8]) <= 1e-9))            # (falling away from it)
+        self.assertGreaterEqual(float(sz.min()), 0.0)
+
+    def test_without_the_lift_a_motorway_node_stays_a_ceiling(self):
+        _mz, sz = self.run_envelope(set())
+        np.testing.assert_array_equal(sz, np.zeros(16))
+
+    def test_a_link_placed_beside_the_lanes_joins_too(self):
+        _mz, sz = self.run_envelope({0}, slip_start=(97.0, 3.5))   # (4.6 m off the motorway's end, no node of its)
+        self.assertGreater(float(sz[0]), 6.0)
+        _mz, sz = self.run_envelope(set(), slip_start=(97.0, 3.5))
+        np.testing.assert_array_equal(sz, np.zeros(16))
+
+
+class ProjectOnTest(unittest.TestCase):
+    def test_arc_and_offset(self):
+        line = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]])
+        arc = np.array([0.0, 10.0, 20.0])
+        s, off = grading._project_on(np.array([[5.0, 2.0], [12.0, 5.0], [-3.0, 0.0]]), line, arc)
+        np.testing.assert_allclose(s, [5.0, 15.0, 0.0])
+        np.testing.assert_allclose(off, [2.0, 2.0, 3.0])

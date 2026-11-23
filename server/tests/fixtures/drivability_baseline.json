@@ -1338,6 +1338,106 @@
   "steps": 0,
   "parts": {}
  },
+ "pitesti_a1_1496": {
+  "steps": 6,
+  "parts": {
+   "bridge:5fbb400f-d854-4953-8621-dc75c872464f~lanes000000000-034221973": {
+    "step_m": 0.0472,
+    "grade": 0.0513,
+    "lift_g": 1.2364
+   },
+   "bridge:9a3dddc9-c72c-478d-a42e-98efa55b0f3b~lanes970081151-998220026": {
+    "step_m": 0.0346,
+    "grade": 0.0504,
+    "lift_g": 1.1889
+   },
+   "ground:1046e709-98a1-4ad0-a5c7-db3b613d016f": {
+    "step_m": 0.0384,
+    "grade": 0.0226,
+    "lift_g": 0.2817
+   },
+   "ground:2e8a1da3-f0d2-4699-a7de-ebde339f2064": {
+    "step_m": 0.0083,
+    "grade": 0.0495,
+    "lift_g": 0.298
+   },
+   "ground:351e3994-6ce0-4f80-9697-50b80e43fd53": {
+    "step_m": 0.0239,
+    "grade": 0.0543,
+    "lift_g": 0.5306
+   },
+   "ground:570d615f-e724-4cd1-b8e3-219a17672c6e": {
+    "step_m": 0.0402,
+    "grade": 0.0518,
+    "lift_g": 0.6816
+   },
+   "ground:57efab25-4271-41dc-9ccd-50597ef842f0": {
+    "step_m": 0.0121,
+    "grade": 0.0357,
+    "lift_g": 0.6387
+   },
+   "ground:621d073c-ae17-46df-a622-07b0e7f8ac2b": {
+    "step_m": 0.0072,
+    "grade": 0.0353,
+    "lift_g": 0.2942
+   },
+   "ground:668eb516-be4e-4b3a-8fd4-f9e08f4eca3b": {
+    "step_m": 0.0365,
+    "grade": 0.0861,
+    "lift_g": 1.2348
+   },
+   "ground:6ca3c244-6005-41a8-95cd-97e5f833f716": {
+    "step_m": 0.0333,
+    "grade": 0.0664,
+    "lift_g": 0.8742
+   },
+   "ground:8e97a696-86fe-499c-857a-951b37496503": {
+    "step_m": 0.0092,
+    "grade": 0.0315,
+    "lift_g": 0.608
+   },
+   "ground:ae15995a-e2a7-465e-b6c4-5de8c687146d": {
+    "step_m": 0.0214,
+    "grade": 0.0906,
+    "lift_g": 1.4781
+   },
+   "ground:b3b5df7c-0a1e-408c-9a1b-b27df1f5b3b2": {
+    "step_m": 0.1767,
+    "grade": 0.0,
+    "lift_g": 0.0
+   },
+   "ground:c0a5e52d-eb04-43b9-ac88-f1fee2ff42dd": {
+    "step_m": 0.0221,
+    "grade": 0.054,
+    "lift_g": 0.8131
+   },
+   "ground:c410c734-dfad-4a3b-a8ef-0687817c73e9": {
+    "step_m": 0.0223,
+    "grade": 0.0363,
+    "lift_g": 0.3697
+   },
+   "ground:de6207df-7aed-43a0-af8d-c7680d23ed96": {
+    "step_m": 0.0081,
+    "grade": 0.027,
+    "lift_g": 0.2044
+   },
+   "ground:f4e4484d-f5ba-4426-9084-13c6067b902d": {
+    "step_m": 0.0387,
+    "grade": 0.0365,
+    "lift_g": 0.5649
+   },
+   "ground:fb642a79-65c3-4376-a895-fb6846d66de2": {
+    "step_m": 0.1302,
+    "grade": 0.1005,
+    "lift_g": 1.2702
+   },
+   "ground:fd1b8193-81ea-4d0f-a42f-316d633b2632": {
+    "step_m": 0.004,
+    "grade": 0.0171,
+    "lift_g": 0.2596
+   }
+  }
+ },
  "prague_924": {
   "steps": 68,
   "parts": {
