@@ -417,6 +417,11 @@ class MapData:
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None
         # the weekly station shards (railtags.StationTags: fuel and charging stations, capacity, charge points)
         self.station_tags = railtags.StationTags(cache_dir, self.fetcher) if railtags.STATIONS_ON else None
+        import drivefeat                # (the mapped driving features' weekly shards: only with a switch that reads them)
+        if drivefeat.SHARDS:
+            import drivetags
+            self.drive_tags = drivetags.DriveTags(cache_dir, self.fetcher)
+            drivetags.DEFAULT[:] = [self.drive_tags]
         import regionaldata
         regionaldata.configure(cache_dir, self.fetcher)     # (PR #505's regional scenery data, fetched on demand)
         import germanroads              # (Germany's surveyed road widths, lanes and surfaces, fetched on demand)
@@ -485,6 +490,23 @@ class MapData:
                 feats.__dict__["_lanes_built"] = built
         except Exception as e:      # (no lane data: the markings' guesses)
             log.debug("lanetags join %s: %s: %s", key, type(e).__name__, e)
+
+    def _drive(self, key, layer, feats):
+        """The roads layer's road segments with the drive shards' way tags (drivetags.join: tracktype, ford, a way's
+        traffic_calming), once per build of them; only with a switch that reads them (drivefeat.SHARDS). Joined after
+        the decode is kept (roadlayercache holds the layer without them: no key of its own to keep)."""
+        t = getattr(self, "drive_tags", None)
+        if t is None or layer != "roads" or feats is None or not len(feats):
+            return
+        built = t.version()
+        if built is None or feats.__dict__.get("_drive_built") == built:
+            return
+        import drivetags
+        try:
+            if drivetags.join(t, feats, key) is not False:
+                feats.__dict__["_drive_built"] = built
+        except Exception as e:      # (the roads as they are)
+            log.debug("drivetags join %s: %s: %s", key, type(e).__name__, e)
 
     # --- the roads layer as decoded, on disk (roadlayercache.py) ---------------------------------
     def _dec_dir(self, key, layer):
@@ -712,6 +734,10 @@ class MapData:
         st = getattr(self, "station_tags", None)
         if st is not None:                      # (the chargers' capacity and charge points: the weekly build in use)
             v["stations"] = st.known()
+        import drivefeat
+        dv = drivefeat.identity(self)
+        if dv is not None:                      # (the drive shards' build: keyed only while a switch reads them)
+            v["drive"] = dv
         if getattr(self, "pmtiles", None) is not None:
             # (the cells from Overture's tiles: their own key, so plans, cell facts and tiles built from them never mix
             # with the parquet cells'; BNGE_MAP_SOURCE=parquet keeps the keys as before)
@@ -753,7 +779,7 @@ class MapData:
             except Exception:
                 got.append(None)
             for src in (getattr(self, "rail_tags", None), getattr(self, "lane_tags", None),
-                        getattr(self, "station_tags", None), *got):
+                        getattr(self, "station_tags", None), getattr(self, "drive_tags", None), *got):
                 if src is None:
                     continue
                 try:
@@ -1346,6 +1372,8 @@ class MapData:
                     f = roadsmooth.smooth(f, frame)         # (bends as arcs, not corners: roadsmooth.py)
                     if dec is not None and revisit.thread_faults() == f0:
                         self._dec_store(key, layer, dec, f, ctx, vers)
+                if layer == "roads":
+                    self._drive(key, layer, f)             # (after the decode is kept: drivefeat's way tags)
                 if layer == "buildings":
                     f = mapgeom.drop_huge(f, BUILDING_MAX_M2)
                     # (OpenStreetMap over machine-learned outlines where OSM maps the cell's buildings: osmml.py)
@@ -1477,6 +1505,7 @@ class MapData:
                 dt, hit = 0.0, True
                 self._rails(key, layer, cd.layers[layer])
                 self._lanes(key, layer, cd.layers[layer])
+                self._drive(key, layer, cd.layers[layer])
             else:
                 entry, hit, dt = results[layer]
                 cd.layers[layer], prov, _ = entry

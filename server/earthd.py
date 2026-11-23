@@ -11031,6 +11031,17 @@ class Connection:
                     rivers = riverlinesmod.plan(frame, x, y, cell_water, tiled,
                                                 lambda la, lo: dem.sample(la, lo, riverlinesmod.DEM_ZOOM),
                                                 sea.outline_at, level_at=carved, road_clear=road_clear())
+                    import drivefeat        # (BNE_UNPAVED: the mapped fords' water over their dipped roads)
+                    if drivefeat.UNPAVED:
+                        try:
+                            rivers = list(rivers) + drivefeat.ford_rivers(
+                                sea.md, frame, x, y,
+                                lambda la, lo: (grader.apply(la, lo, dem.sample(la, lo, riverlinesmod.DEM_ZOOM),
+                                                             planned_only=True) if grader is not None
+                                                else dem.sample(la, lo, riverlinesmod.DEM_ZOOM)),
+                                lambda la, lo: dem.sample(la, lo, riverlinesmod.DEM_ZOOM))
+                        except Exception as e:      # (no fords' water rather than no rivers)
+                            log.debug("ford water: %s: %s", type(e).__name__, e)
                     shores = seacarvemod.shore_plan(frame, x, y, sea)     # (the mod's shore sound)
                     return tiles, rivers, shores, not missing[0] and sea.warm_asked == asked
                 tiles, rivers, shores, complete = await self.loop.run_in_executor(self.s.sea_pool, plan)

@@ -158,4 +158,11 @@ clock = clock + 2; nl.update()
 T.check(mats.bne_bld_facade.fields.emissiveMap == nl.MAPS.bne_bld_facade[1] and nl.status().errors == 0,
   'the evening: its map back')
 nl.reset()
+-- the mapped lamps' colours (BNE_LAMP_TAGS: server furniture.LENS_COLOURS): their lens groups kept, each its profile
+nl.onRows('col', { { 0, 1, 0, 8 }, { 1, 2, 0, 8 }, { 2, 3, 0, 8 } }, { 'lamplens', 'lamplens_white', 'lamplens_yellow' })
+local col = nl.nearest(0, 0, 50, 3)
+T.check(#col == 3 and col[1][7] == nil and col[2][7] == 'LIGHT_WHITE' and col[3][7] == 'LIGHT_YELLOW',
+  'a mapped colour keeps its profile, the stock lens none')
+T.check(nl.LIGHT_WHITE.color ~= nl.LIGHT.color and nl.LIGHT_YELLOW.color ~= nl.LIGHT.color, 'their own colours')
+nl.reset()
 T.done('test_nightlights')

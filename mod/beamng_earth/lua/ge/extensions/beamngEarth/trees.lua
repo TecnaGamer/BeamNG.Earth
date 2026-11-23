@@ -396,6 +396,25 @@ M.GROUP_MAX_M.guardrail_back_end = 4000
 -- Median barriers (server medians.py) and mapped jersey / cable barriers (guardrails.py), in the same rows: the stock
 -- 3 m jersey barrier (it runs along its y axis: the rows' basis says so) and its sloped end; the mod's cable barrier
 -- (tools/build_median_props.py: four ropes and a post every 3 m).
+-- Mapped driving features (server drivefeat.py, BNE_ROAD_BARRIERS / BNE_RAIL_PROPS; tools/build_drive_props.py): lift
+-- gates (down / raised), a field gate's leaf, height restrictor frames by road width, low bollards, railway signals,
+-- ground signals and point machines. Heights: each model's top.
+do
+  local DP = '/levels/beamng_earth/art/shapes/beamngEarth/bne_dp_'
+  for g, h in pairs({ liftgate = 1.04, liftgate_up = 5.55, gate = 1.35, hr4 = 2.5, hr6 = 2.5, hr8 = 2.5, hr10 = 2.5,
+                      bollard = 0.95, rsignal = 4.75, rsignal_dwarf = 0.8, point = 0.37 }) do
+    M.CATALOG['dp_' .. g] = { { DP .. g, h } }
+    M.GROUP_MAX_M['dp_' .. g] = (g == 'rsignal' or g:sub(1, 2) == 'hr') and 500 or 300
+    M.ONE_SPELLING['dp_' .. g] = true
+  end
+  -- the mapped lamps' lenses by their light:colour (server furniture.LENS_COLOURS, BNE_LAMP_TAGS): the stock lens,
+  -- their own night light colour (nightlights.lua)
+  for _, g in ipairs({ 'lamplens_white', 'lamplens_yellow' }) do
+    M.CATALOG[g] = M.CATALOG.lamplens
+    M.GROUP_MAX_M[g] = M.GROUP_MAX_M.lamplens
+    M.NO_COLLIDE[g] = true
+  end
+end
 M.CATALOG.jersey = { { '/art/shapes/objects/jerseybarrier_3m', 0.88 } }
 M.CATALOG.jersey_end = { { '/art/shapes/objects/jerseybarrier_end', 0.88 } }
 M.CATALOG.cable = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cable_barrier', 1.0 } }

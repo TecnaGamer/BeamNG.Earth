@@ -42,8 +42,8 @@ def _open(src):
     """An osmium file of a path, '-' (stdin) or a pipe (/dev/fd/..: a download streamed)."""
     if src == "-":
         return osmium.io.File("", "pbf")        # (libosmium: an empty name is stdin)
-    if not src.endswith(".pbf"):
-        return osmium.io.File(src, "pbf")       # (a pipe: <(curl ...))
+    if not src.endswith((".pbf", ".osm", ".osm.gz", ".osm.bz2")):
+        return osmium.io.File(src, "pbf")       # (a pipe: <(curl ...); an XML extract is read by its name: tests)
     return src
 
 

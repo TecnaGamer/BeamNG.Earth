@@ -104,6 +104,7 @@ mod farlocal;
 mod farpvs;
 mod farsel;
 mod dirtsteps;
+mod drivefeat;
 mod dirtnoise;
 mod racedig;
 mod racejoin;
@@ -7648,7 +7649,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 604 (603 and 605 kept for other branches): cip (architecture v2's compact per-cell inputs: the lossless cell
     // codec of named arrays and blobs; cip_encode_cell, cip_cell_info, cip_decode; server/cip.py, tools/build_cip.py)
     cip::register(m)?;
-    m.add("VERSION", 607)?;
-    m.add("VERSION", 607)?;
+    // 612 (608-611 kept for other branches): drivefeat (the mapped driving features: calming_apply, the speed
+    // bumps / humps / tables / fords in a road plan's profile, BNE_CALMING / BNE_UNPAVED; server/calming.py)
+    drivefeat::register(m)?;
+    m.add("VERSION", 612)?;
     Ok(())
 }
