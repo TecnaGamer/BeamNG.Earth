@@ -132,6 +132,25 @@ fn main() {
             Err(e) => { eprintln!("{}", e); std::process::exit(1) }
         }
     }
+    if args.len() == 3 && args[1] == "fit" {
+        // (BNE_ROADSYS_AREAS) a tile input's (ROADSYS dump, RSTILE03) lane graph with its mapped areas' fit: FNV-1a 64
+        // of every stroke's area program and of its boundary offsets every 5 m, the fit's counts and the audit's hash
+        let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(1) });
+        let t = io::read_tile(&b).unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
+        let order: Vec<usize> = (0..t.place.segs.len()).collect();
+        let net = net::build_opts(&t.place, &order, net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, areas: true, ..Default::default() });
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut off = Vec::new();
+        for st in &net.strokes {
+            bytes.extend_from_slice(&st.uid.to_le_bytes());
+            for (s, k) in &st.area { bytes.extend_from_slice(&s.to_bits().to_le_bytes()); for v in k { bytes.extend_from_slice(&v.to_bits().to_le_bytes()); } }
+            let n = (st.len() / 5.0).floor() as usize;
+            for i in 0..=n { st.offsets((i as f64 * 5.0).min(st.len()), &mut off); for v in &off { bytes.extend_from_slice(&v.to_bits().to_le_bytes()); } }
+        }
+        let f = &net.area_fit;
+        println!("fit {:016x} strokes {} fitted {} knots {} valid {}", geom::fnv(&bytes), f.strokes, f.fitted, f.knots, f.valid);
+        return;
+    }
     if args.len() == 4 && args[1] == "areas" {
         // the mapped road areas' audit of a surface (tools/widecorpus/checks.py, areas.rs run_input): IN.bin -> OUT.json
         let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(1) });
