@@ -9,9 +9,10 @@ turns such a bit into another road (Windows built a 0.78 g crest where Linux had
 Here: the transcendental functions are the native module's libm-crate ones (native/earthfast/src/dm.rs, the same as
 its kernels'; dmath.py is the scalar side), computed in float64 (a float32 input gives a float32 result); hypot is
 sqrt(x * x + y * y); products and norms are elementwise multiplies and numpy's add.reduce (fixed order); solve /
-lstsq / eigh are small native kernels. numpy's elementwise arithmetic, sqrt, sum / cumsum / mean, sort, interp, round
-and friends are exact or the same code everywhere and are used as they are. tests/test_determinism.py fails on a
-platform call in server/*.py.
+lstsq / eigh are small native kernels; interp is numpy's own algorithm in the native module (numpy's C code is
+compiled per platform, and a compiler that fuses its multiply and add gives other bits: the arm64 wheels). numpy's
+elementwise arithmetic, sqrt, sum / cumsum / mean, sort's values, round and friends are exact or the same code
+everywhere and are used as they are. tests/test_determinism.py fails on a platform call in server/*.py.
 """
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -19,6 +20,8 @@ from numpy.lib.stride_tricks import sliding_window_view
 import fast
 
 _ef = fast.native(264, "dnp")
+_ef_interp = fast.native(441, "dnp.interp")
+_ef_mm = fast.native(472, "dnp.matmul")
 
 _ATAN2, _POW, _HYPOT = 32, 33, 34
 
@@ -133,41 +136,50 @@ def power(x, y):
     return _binary(_POW, a, b)
 
 
-def matmul(a, b):
-    """a @ b (numpy's matmul rules: 1-D operands promoted and their axis removed, stacks broadcast) as elementwise
-    products summed over k in a fixed order."""
-    a, b = np.asarray(a), np.asarray(b)
+def _mm_cast(x, dt):
+    """x as dt, and its strides where the cast copied it (the copy's layout can differ from x's; the kernel orders a
+    sum by the layout the Python's ufuncs saw). Only the values x holds are cast: its broadcast (stride-0) axes stay
+    broadcast, so a huge broadcast view is never materialised (an empty result's operand included). Accepted
+    difference (Codex review of e16051bd): the cast happens before the kernel sees an empty result, so a narrower
+    operand whose logical shape is too big for numpy at the wider dtype (a float32 view of 2^59 x 2 elements as
+    float64) raises numpy's ValueError where the Python returned an empty array; the server's operands are float64."""
+    if x.dtype == dt:
+        return x, None
+    core = x[tuple(slice(0, 1) if s == 0 else slice(None) for s in x.strides)]
+    return np.broadcast_to(core.astype(dt), x.shape), x.strides
+
+
+def _mm(a, b):
+    """dnp.matmul of arrays: the kernel, or numpy's integer matmul (exact). float64 / float32 only: float16,
+    longdouble and complex operands raise TypeError (a contract change from the numpy arithmetic before earthfast
+    472, whose sums of those were numpy's; the server's calls are float64)."""
     if a.ndim == 0 or b.ndim == 0:
         raise ValueError("matmul: scalar operands are not allowed, use '*' instead")
     if a.dtype.kind not in "fc" and b.dtype.kind not in "fc":
-        return np.matmul(a, b)          # integers: exact
-    va, vb = a.ndim == 1, b.ndim == 1
-    if va:
-        a = a[None, :]
-    if vb:
-        b = b[:, None]
-    k = a.shape[-1]
-    if b.shape[-2] != k:
-        raise ValueError(f"matmul: shapes {a.shape} and {b.shape} not aligned")
-    if k == 0:
-        out = np.zeros(np.broadcast_shapes(a.shape[:-1] + (1,), b.shape[:-2] + (1, b.shape[-1])),
-                       np.result_type(a, b))
-    elif k <= 8:
-        out = a[..., :, 0:1] * b[..., 0:1, :]
-        for j in range(1, k):
-            out = out + a[..., :, j:j + 1] * b[..., j:j + 1, :]
-    else:
-        out = np.add.reduce(a[..., :, :, None] * b[..., None, :, :], axis=-2)
-    if va:
-        out = out[..., 0, :]
-    if vb:
-        out = out[..., 0]
-    return out if out.ndim else out[()]
+        return np.matmul(a, b)              # integers: exact
+    dt = np.result_type(a, b)
+    if dt.kind != "f" or dt.itemsize not in (4, 8):
+        raise TypeError(f"dnp.matmul: {dt} operands (float64 and float32 only: numpy's float16, longdouble and "
+                        "complex sums are not the kernel's)")
+    dt = np.float64 if dt.itemsize == 8 else np.float32
+    (a, sa), (b, sb) = _mm_cast(a, dt), _mm_cast(b, dt)
+    return _ef_mm.dm_matmul(a, b, sa, sb)
+
+
+def matmul(a, b):
+    """a @ b (numpy's matmul rules: 1-D operands promoted and their axis removed, stacks broadcast) as elementwise
+    products summed over k in a fixed order: the native kernel (earthfast 472, dmmatmul.rs: the order the numpy
+    arithmetic here had, BLAS's CPU-chosen kernels never asked)."""
+    if type(a) is _ND and type(b) is _ND and a.dtype is _F64D and b.dtype is _F64D:
+        return _ef_mm.dm_matmul(a, b)
+    return _mm(np.asarray(a), np.asarray(b))
 
 
 def dot(a, b):
     """np.dot for operands of up to 2 axes (and an N-axis a with a 1- or 2-axis b): matmul's products, a scalar
     operand multiplies."""
+    if type(a) is _ND and type(b) is _ND and a.dtype is _F64D and b.dtype is _F64D and a.ndim and 0 < b.ndim <= 2:
+        return _ef_mm.dm_matmul(a, b)
     a, b = np.asarray(a), np.asarray(b)
     if a.ndim == 0 or b.ndim == 0:
         return a * b
@@ -206,6 +218,46 @@ def convolve(a, v, mode="full"):
     ap = np.concatenate([np.zeros(left), a, np.zeros(right)]) if left or right else a
     w = sliding_window_view(ap, m)
     return np.add.reduce(w * v[::-1], axis=-1) if len(w) else np.zeros(0)
+
+
+def _real(a, what):
+    """a as an array, TypeError unless its values are real numbers of at most float64's precision."""
+    a = np.asarray(a)
+    if a.dtype.kind not in "biuf" or (a.dtype.kind == "f" and a.dtype.itemsize > 8):
+        raise TypeError(f"dnp.interp: {what} must be real numbers (bool, int or float up to float64), not {a.dtype}")
+    return a
+
+
+def interp(x, xp, fp, left=None, right=None, period=None):
+    """np.interp by the native kernel: numpy's own algorithm line for line, its slope * (x - xp[j]) + fp[j] rounded
+    twice. numpy's C code is compiled per platform, and a compiler that contracts (clang on the arm64 wheels) fuses that
+    into one multiply-add: other last bits (the M1 Mac's railway beds, 36 of the corpus's 116 plans, 2026-11-18).
+
+    The contract: real-valued and non-periodic. x, xp, fp, left and right are real numbers (bool, int, float up to
+    float64); period, complex values and anything else are a TypeError. Within it the results are np.interp's bit for
+    bit (x86 wheels), its shapes and errors too: a scalar x gives a numpy float64, an empty x with empty xp and fp an
+    empty array, xp and fp of other lengths or empty a ValueError."""
+    if period is not None:
+        raise TypeError("dnp.interp: period is not supported (real-valued, non-periodic)")
+    xa, xpa, fpa = _real(x, "x"), _real(xp, "xp"), _real(fp, "fp")
+    for name, v in (("left", left), ("right", right)):
+        if v is not None:
+            _real(v, name)
+            if np.ndim(v):
+                raise TypeError(f"dnp.interp: {name} must be a scalar")
+    if xpa.ndim != 1 or fpa.ndim != 1:
+        raise ValueError("dnp.interp: xp and fp must be 1-D")
+    flat = xa.ravel() if xa.dtype == _F64D else np.asarray(xa, np.float64).ravel()
+    if xpa.size != fpa.size:            # (numpy's checks, in numpy's order: no sample points and no x is no error)
+        raise ValueError("fp and xp are not of the same length.")
+    if not xpa.size and not flat.size:
+        return np.zeros(xa.shape)
+    r = _ef_interp.dm_interp(np.ascontiguousarray(flat), np.ascontiguousarray(xpa, np.float64),
+                             np.ascontiguousarray(fpa, np.float64),
+                             None if left is None else float(left), None if right is None else float(right))
+    if xa.ndim == 0:
+        return _F64(r[0])
+    return r if xa.ndim == 1 else r.reshape(xa.shape)
 
 
 def polyfit(x, y, deg):

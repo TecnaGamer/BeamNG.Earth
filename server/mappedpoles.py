@@ -275,7 +275,7 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
     lat = np.array([unique[k][1] for k in keys])
     lon = np.array([unique[k][2] for k in keys])
     _, _, z = frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), float))
-    poles = {}
+    poles, rows_of = {}, {}
     for k, key in enumerate(keys):
         xy, _, _, tags, height = unique[key]
         # (everywhere: the game's own wooden pole, the one furniture.place guesses, at its own height for its wires)
@@ -289,6 +289,7 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
                 continue                # (on a carriageway with no clear spot near: its spans go too, below)
             pole = (row[1], row[2], pole[2], pole[3], style)
         poles[key] = pole
+        rows_of[key] = row
         if furniture._owns(box, *pole[:2]):
             props.append(row)
     for a, b in sorted(spans):
@@ -300,7 +301,8 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
             continue
         aa, ab = pa[4].wire_anchors, pb[4].wire_anchors
         if aa is None and ab is None:   # two stock poles: the stock wires, as between guessed ones
-            wires.extend(furniture.wire_lines([pa[:4], pb[:4]], max_span=max_span))
+            wires.extend(furniture.with_ends(furniture.wire_lines([pa[:4], pb[:4]], max_span=max_span),
+                                             rows_of[a], rows_of[b]))
             continue
         if aa is None or ab is None or len(aa) != len(ab):
             continue
@@ -310,8 +312,10 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
             x, y, z = anchor
             return (p[0] + c * x - s * y, p[1] + s * x + c * y, p[2] + z, 0.)
         for ac, bc in zip(aa, ab):
-            wires.extend(furniture.wire_lines([attachment(pa, ac), attachment(pb, bc)],
-                         ((0., 0., 0.),), max(pa[4].wire_radius or .012, pb[4].wire_radius or .012)))
+            wires.extend(furniture.with_ends(
+                furniture.wire_lines([attachment(pa, ac), attachment(pb, bc)], ((0., 0., 0.),),
+                                     max(pa[4].wire_radius or .012, pb[4].wire_radius or .012)),
+                rows_of[a], rows_of[b]))
 
 
 def _layers(md, frame, tx, ty, margin=MARGIN_M):

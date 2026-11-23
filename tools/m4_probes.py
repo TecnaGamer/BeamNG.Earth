@@ -124,7 +124,13 @@ def check_info(info):
 
 
 def heightmap_path(user_dir, info):
-    """(local path, VFS path) of the live block's heightmap: the server's hm_<anchor>_<cx>_<cy>.png."""
+    """The installed block's exact heightmap, with the centre-based lookup for older mods."""
+    if info.get("heightmap"):
+        vfs = info["heightmap"]
+        path = Path(user_dir, vfs.lstrip("/"))
+        if not path.is_file():
+            raise ProbeError(f"live heightmap {vfs} missing under {user_dir}")
+        return path, vfs
     cx, cy = info["block"]["cx"], info["block"]["cy"]
     name = f"hm_{info['anchorId']}_{int(cx)}_{int(cy)}.png"
     sid = info.get("session")

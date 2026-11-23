@@ -84,21 +84,18 @@ def cell_pieces(feats, frame):
     for i in np.flatnonzero(ok).tolist():
         if feats.kind[i] != mapgeom.LINE:
             continue
-        pieces = [(a, b) for a, b, k in ranges[i] if k == "bridge" and b - a > roads.MIN_PART]
+        floor = roads.part_floor(feats, i, ranges[i])       # (a share of a long road is metres: its short bridge is a deck)
+        pieces = [(a, b) for a, b, k in ranges[i] if k == "bridge" and b - a > floor]
         if not pieces:
             continue
         fid = str(feats.ids[i])
-        for part in feats.parts(i):
-            for ring in part:
-                if len(ring) < 2:
-                    continue
-                for a, b in pieces:
-                    r = ring if (a, b) == (0.0, 1.0) else roads.sub_polyline(ring, a, b)
-                    if len(r) < 2:
-                        continue
-                    r = np.asarray(r, np.float64)
-                    x, y, _ = geotiles.geodetic_to_world(frame, r[:, 1], r[:, 0])
-                    out.append((fid, np.stack([np.asarray(x, np.float64), np.asarray(y, np.float64)], 1)))
+        rings = [ring for part in feats.parts(i) for ring in part if len(ring) >= 2]
+        for r in roads.sub_polylines(rings, pieces):
+            if len(r) < 2:
+                continue
+            r = np.asarray(r, np.float64)
+            x, y, _ = geotiles.geodetic_to_world(frame, r[:, 1], r[:, 0])
+            out.append((fid, np.stack([np.asarray(x, np.float64), np.asarray(y, np.float64)], 1)))
     return out
 
 

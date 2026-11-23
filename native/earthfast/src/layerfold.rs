@@ -214,3 +214,157 @@ mod tests {
         assert_eq!(fold(&idx2, &drop, &[1, 0, 1, 1], 2)[1], 1);
     }
 }
+
+// Material IDs are persisted in blockcache. Listing a lawn or snow also reserves its
+// photo replacement, even if no sample has that material yet. Dirt is listed last.
+const DIRT: u8 = 15;
+const LAWN: usize = 8;
+const SNOW: usize = 5;
+const LOOSE: u8 = 3;
+
+fn listed(mut live: [bool; 256], default_dirt: bool) -> Vec<u8> {
+    live[HOLE as usize] = false;
+    live[DIRT as usize] |= live[LAWN];
+    live[LOOSE as usize] |= live[SNOW];
+    let mut ids: Vec<u8> = (0..HOLE).filter(|&m| m != DIRT && live[m as usize]).collect();
+    if live[DIRT as usize] || (ids.is_empty() && default_dirt) {
+        ids.push(DIRT);
+    }
+    ids
+}
+
+#[pyfunction]
+pub fn block_materials(py: Python<'_>, idx: PyReadonlyArray1<'_, u8>) -> Vec<u8> {
+    let idx = idx.as_array();
+    py.detach(|| {
+        let mut live = [false; 256];
+        for &id in idx {
+            live[id as usize] = true;
+        }
+        listed(live, true)
+    })
+}
+
+type Policy = (Vec<u8>, Vec<(u8, u8)>);
+type Rules = (usize, Vec<u8>, Vec<(u8, u8)>, f64, f64, usize);
+
+fn policy(counts: &[u64], painted: &[u64], core: &[u64], n: usize, square: f64, rules: &Rules) -> Policy {
+    let (num, eligible, lookalikes, share, area, cap) = rules;
+    let mut live = [false; 256];
+    for m in 0..(*num).min(255) {
+        live[m] = counts[m] != 0;
+    }
+    let mut folded = Vec::new();
+    let mut merged = Vec::new();
+    for &m in eligible {
+        let i = m as usize;
+        if live[i]
+            && painted[i] == 0
+            && counts[i] as f64 <= share * n as f64 * n as f64
+            && core[i] as f64 <= area / (square * square)
+        {
+            folded.push(m);
+            live[i] = false;
+        }
+    }
+    if listed(live, false).len() > *cap {
+        for &(a, b) in lookalikes {
+            let now = listed(live, false);
+            if now.len() <= *cap {
+                break;
+            }
+            if now.contains(&a) && now.contains(&b) {
+                merged.push((a, b));
+                live[a as usize] = false;
+            }
+        }
+        let mut rest: Vec<_> = eligible
+            .iter()
+            .copied()
+            .filter(|&m| counts[m as usize] != 0 && !folded.contains(&m) && painted[m as usize] == 0)
+            .collect();
+        rest.sort_by_key(|&m| counts[m as usize]);
+        for m in rest {
+            if listed(live, false).len() <= *cap {
+                break;
+            }
+            folded.push(m);
+            live[m as usize] = false;
+        }
+    }
+    (folded, merged)
+}
+
+#[pyfunction]
+pub fn block_fold_policy(
+    counts: Vec<u64>,
+    painted: Vec<u64>,
+    core: Vec<u64>,
+    n: usize,
+    square: f64,
+    rules: Rules,
+) -> PyResult<Policy> {
+    let required = rules.0.min(256).max(rules.1.iter().map(|&m| m as usize + 1).max().unwrap_or(0));
+    if [counts.len(), painted.len(), core.len()].iter().any(|&k| k < required) {
+        return Err(pyo3::exceptions::PyValueError::new_err("missing material counts for the layer fold"));
+    }
+    Ok(policy(&counts, &painted, &core, n, square, &rules))
+}
+
+#[pyfunction]
+pub fn block_fold<'py>(
+    py: Python<'py>,
+    idx: PyReadonlyArray2<'py, u8>,
+    land: PyReadonlyArray2<'py, u8>,
+    square_m: f64,
+    radius: usize,
+    rules: Rules,
+) -> PyResult<Option<(Bound<'py, PyArray2<u8>>, isize)>> {
+    let n = square(idx.shape(), "block_fold")?;
+    if land.shape() != idx.shape() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "layer and land maps must match",
+        ));
+    }
+    let (idx, land) = (bytes(&idx), bytes(&land));
+    let result = py.detach(|| {
+        let painted: Vec<_> = idx.iter().zip(land.iter()).map(|(a, b)| u8::from(a != b)).collect();
+        let (counts, paint, core) = stats(&idx, &painted, n, (rules.3 * n as f64 * n as f64) as u64, radius);
+        let (folded, merged) = policy(&counts, &paint, &core, n, square_m, &rules);
+        if folded.is_empty() && merged.is_empty() {
+            return None;
+        }
+        let live = std::array::from_fn(|i| i < rules.0 && counts[i] > 0);
+        let mut kept = live;
+        let mut lut: [u8; 256] = std::array::from_fn(|i| i as u8);
+        for (a, b) in merged {
+            kept[a as usize] = false;
+            for m in &mut lut {
+                if *m == a {
+                    *m = b;
+                }
+            }
+        }
+        let mut out = idx.iter().map(|&m| lut[m as usize]).collect::<Vec<_>>();
+        if !folded.is_empty() {
+            let mut drop = [false; 256];
+            for m in folded {
+                drop[m as usize] = true;
+                kept[m as usize] = false;
+            }
+            out = fold(&out, &drop, &painted, n);
+        }
+        Some((
+            out,
+            listed(live, true).len() as isize - listed(kept, true).len() as isize,
+        ))
+    });
+    Ok(result.map(|(out, gone)| {
+        (
+            numpy::ndarray::Array2::from_shape_vec((n, n), out)
+                .unwrap()
+                .into_pyarray(py),
+            gone,
+        )
+    }))
+}

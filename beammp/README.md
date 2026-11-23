@@ -117,13 +117,4 @@ Build it yourself from the source's root: `docker build -f docker/Dockerfile -t 
   `python3 server/sharehelper.py --share-dir <this server's folder>/Resources/Server/BeamNGEarth --cache <a folder
   for its map data> --procs 4` (`--procs`: how many of the machine's cores it uses). It needs internet access and
   a few GB of disk for each area.
-<!-- v1 shared world building: commented out 2026-10-27 (off since 2026-10-23; not coming back for a while).
-- (Turned off for now: each player builds their own world, and the setting below does nothing yet.) Players near
-  each other share one world origin and split the work of building the world: each piece of the distant
-  landscape is built once and sent to the others. For that, the other players must reach each player's computer on
-  **TCP port 47621** (on one network it just works; over the internet, each player forwards it, or else simply builds
-  everything themselves). To use another port on your server, edit the line `G.SHARE_PORT = 47621` near the top of
-  `Resources/Server/BeamNGEarth/main.lua` and restart the server: every player who joins gets it. A player can still
-  pick their own with the environment variable `BNGE_SHARE_PORT`.
--->
 - Players far apart (another country) each build their own world and don't see each other's cars until they meet.

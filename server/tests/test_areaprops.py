@@ -188,6 +188,50 @@ class PlacesTest(unittest.TestCase):
         self.assertEqual(len(cranes), 1)
         self.assertTrue(places.TC_H * places.TC_SCALE[0] - 1e-6 <= cranes[0][6] <= places.TC_H * places.TC_SCALE[1] + 1e-6)
 
+    def _crane_site(self):
+        land = feats("land_use", [("c1", mapgeom.POLYGON, [rect(-60, -40, 60, 40)], "construction",
+                                   {"landuse": "construction"})])
+        return FakeMD(land_use=land)
+
+    def _deck(self, y, z, half=7.5):
+        """A RoadClearance with one bridge deck along x at y, its surface z m over the (flat) ground."""
+        import furniture
+        return furniture.RoadClearance([], [(np.array([[-300.0, y, z], [300.0, y, z]]), half, 2.0)], bounds=BOX)
+
+    def test_crane_under_a_deck_moves_off_it(self):
+        # (A7 Kalbach, 2026-11-15: a site under the viaduct stood its crane's mast through the deck, 27 m up; the grid
+        # knew the ground roads only)
+        md = self._crane_site()
+        before = self.rows(md)
+        crane = next(r for r in before if r[0] == places.G_TC)
+        deck = self._deck(crane[2], 12.0)
+        self.assertFalse(deck.clear(crane))                     # the mast through the deck
+        got = places.tile_rows(FRAME, BOX, md, flat, (), "US", keys=KEYS, clearance=deck)
+        moved = [r for r in got if r[0] == places.G_TC]
+        self.assertEqual(len(moved), 1)
+        self.assertTrue(deck.clear(moved[0]))
+        d = np.hypot(moved[0][1] - crane[1], moved[0][2] - crane[2])
+        self.assertTrue(0.0 < d <= places.TC_SHIFT_M + 1e-6)
+        self.assertTrue(-60 < moved[0][1] < 60 and -40 < moved[0][2] < 40)  # still on its site
+        self.assertEqual(moved[0][4:], crane[4:])               # same yaw, height
+        self.assertEqual([r for r in got if r[0] != places.G_TC], [r for r in before if r[0] != places.G_TC])
+
+    def test_crane_clear_of_roads_is_unchanged(self):
+        md = self._crane_site()
+        before = self.rows(md)
+        crane = next(r for r in before if r[0] == places.G_TC)
+        for deck in (self._deck(crane[2], 60.0),                # high over the crane's jib: headroom kept
+                     self._deck(crane[2] + 70.0, 12.0)):        # beside the site
+            self.assertEqual(places.tile_rows(FRAME, BOX, md, flat, (), "US", keys=KEYS, clearance=deck), before)
+
+    def test_crane_with_no_clear_spot_is_left_out(self):
+        md = self._crane_site()
+        before = self.rows(md)
+        crane = next(r for r in before if r[0] == places.G_TC)
+        got = places.tile_rows(FRAME, BOX, md, flat, (), "US", keys=KEYS, clearance=self._deck(crane[2], 12.0, 120.0))
+        self.assertEqual([r for r in got if r[0] == places.G_TC], [])
+        self.assertEqual(got, [r for r in before if r[0] != places.G_TC])
+
     def test_mapped_street_furniture(self):
         pt = mapgeom.POINT
         infra = feats("infrastructure", [
@@ -212,6 +256,25 @@ class PlacesTest(unittest.TestCase):
         eu = places.street_rows(FRAME, BOX, md, flat, road, "DE", keys=KEYS)
         self.assertIn("hydrant_eu", [r[0] for r in eu])
         self.assertIn("postbox_eu", [r[0] for r in eu])
+
+    def test_a_hydrant_at_a_junction_corner_lands_off_every_road(self):
+        # (the player's report 5T7V9FNQ: a hydrant mapped 2-3 m from the lines of the roads meeting at a corner was
+        # pushed off one onto the next) and one on a junction no spot within reach clears is left out
+        pt = mapgeom.POINT
+        infra = feats("infrastructure", [
+            ("h1", pt, [[[2.0, 2.5]]], "fire_hydrant", {"emergency": "fire_hydrant", "fire_hydrant:type": "pillar"})])
+        md = FakeMD(infrastructure=infra)
+        spec = type("S", (), {"width": 8.0})()
+        cross = [("a", spec, np.array([[-100.0, 0.0, 0.0], [200.0, 0.0, 0.0]]), 0.0),
+                 ("b", spec, np.array([[0.0, -100.0, 0.0], [0.0, 100.0, 0.0]]), 0.0)]
+        got = places.street_rows(FRAME, BOX, md, flat, cross, "DE", keys=KEYS)
+        self.assertEqual(len(got), 1)
+        x, y = got[0][1], got[0][2]
+        self.assertGreaterEqual(min(abs(x), abs(y)), 4.0 + 0.4 - 0.02, (x, y))     # off both carriageways
+        wide = type("S", (), {"width": 60.0})()
+        paved = [("a", wide, np.array([[-100.0, 0.0, 0.0], [200.0, 0.0, 0.0]]), 0.0),
+                 ("b", wide, np.array([[0.0, -100.0, 0.0], [0.0, 100.0, 0.0]]), 0.0)]
+        self.assertEqual(places.street_rows(FRAME, BOX, md, flat, paved, "DE", keys=KEYS), [])
 
     def test_guessed_furniture_gives_way(self):
         guessed = [["hydrant", 0.0, 0.0, 0.0, 0.0, 1.0, 1.5, 0.0], ["hydrant", 200.0, 0.0, 0.0, 0.0, 1.0, 1.5, 0.0],

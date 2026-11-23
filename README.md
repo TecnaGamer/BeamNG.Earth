@@ -208,6 +208,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   once per area; `BNE_LOD2_ROOFS=off` turns it off.
   `BNE_GRADE_GUARD=on` (off by default; Settings > Experimental > Road steepness limit) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
+  `BNE_BATTER=vanilla` (off by default and not on the settings page yet: still to be checked in game) rolls the ground
+  beside roads and railways off in wide cut and fill slopes like the stock maps' (gentler in towns, stopping short of
+  buildings) instead of a narrow carved ribbon.
 - Smooth bends (on by default; `BNE_ROAD_SMOOTH=off` draws the roads as mapped): the map draws a bend as a few
   straight pieces, so roads had a visible corner at every vertex, and a banked racetrack's chords made a series of
   bumps. Each bend of a drivable road and racetrack is an arc tangent to both pieces (a motorway's gentle, a lane's
@@ -397,15 +400,22 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   restart (the app's launcher, or `start.py` for a source install, starts the world server with the `BNE_*`
   switch each stands for: server/experimental.py). With any of them on, the server builds every place itself (the
   shared prebuilt world data is made for the defaults) and rebuilds places you visited. **Road signs** and **Dutch road
-  signs**; **French and European road scenery** (each European country's guardrails, sign faces, bus stops and street
+  signs**; **Revamped roads** (the road revamp in progress, one switch for all its parts: lane and width changes as
+  long as the road's speed needs, deck curves by speed, footbridges that never
+  block the road, abandoned railways off the roads, racetracks that keep their surface and get no street poles along them); **French and European road scenery** (each European country's guardrails, sign faces, bus stops and street
   edges; in France also its markings, bend and traffic signs, speed cameras, utility poles and regional houses);
   **Guard rails at drops**; **Widened entrances**; **Right of way by road class** (stop signs and stopping AI at
   unsignalised junctions); **Bumpy road surfaces**; **Rough dirt roads**; **Tyre polish, crack networks and
   manholes**; **Road steepness limit**; **Road surface from aerial photos**; **Rougher land off the roads**; **Rock
   faces in deep road cuts**; **Ground over shallow tunnels**; **More undersea tunnels**; **Traffic through tunnels**;
   **Solid railway rails**; **Overhead railway wires**; **Grouped level crossings**; **Railway tunnels**; **Rounded
-  railway curves**; **Closed 3D models**; **Detailed Canadian lidar**; **Show the older world while rebuilding** (after
-  an update). A switch set by hand in the server's environment wins over the page.
+  railway curves**; **Closed 3D models**; **Detailed Canadian lidar**; **Generated ground** (`BNE_GEN_GROUND=on`: the
+  ground near you made from 10 m Sentinel-2 colour and the map: land cover, fields, parks, pitches, squares, pools,
+  orchards and vineyards in rows, paths, tracks, hedges, streams, piers, tree heights, roads and buildings, graded to
+  the season, instead of 1 m aerial photos, which are then not downloaded at all, for roof colours neither; less real
+  detail where the map has none);
+  **Show the older world while rebuilding** (after an update). A switch set by hand in the server's environment wins
+  over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
   memory below 24 GB (about 5 GB on a 16 GB PC, at least 1.5 GB) and 60 % of it on a bigger computer, at most 24 GB
@@ -520,13 +530,6 @@ starts a Steam copy through Steam as before.
 
 More detail (traffic, the status bar, reporting problems, troubleshooting): [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
-**Compute sharing (optional, for tinkerers):** another computer on your network can build part of the distant
-landscape for you. On it, from a copy of the same version's source: `python3 server/peerwork.py serve` (port 47620,
-`--workers N` processes; it downloads its own map data). On the computer you play on, set `BNGE_PEERS` to the
-helpers before starting BeamNG.Earth, for example `BNGE_PEERS=192.168.1.20:47620,192.168.1.21:47620`. Helpers
-running other code are left out, and anything a helper fails on is built on your own computer. Only use helpers on a
-network you trust: the connection is not encrypted.
-
 ### Developer setup
 Rail-crossing props can be regenerated with `python3 tools/build_rail_crossing_props.py`;
 their lettering uses the bundled DejaVu Sans Bold font on every platform.
@@ -611,15 +614,6 @@ running the same BeamNG.Earth version with the same settings. A server can also 
 `.bnge` files in `Resources/Server/BeamNGEarth/bake/`), and the machine running the server can build ahead of
 the players itself (the share helper, below).
 
-<!-- v1 shared world building: commented out 2026-10-27 (off since 2026-10-23; not coming back for a while).
-**Sharing the work** (turned off for now: each player builds their own world)**:** players near each other share one
-world origin and split the building of the distant landscape (each piece is built once and sent to the others; faster computers take more), while a player far from
-everyone builds their own. For that the other players must reach your computer on a TCP port, 47621 unless the server
-picks another (the server tells your app which): on the same network it just works; over the internet, forward that
-port in your router, or you simply build everything yourself. A port of your own: set the environment variable
-`BNGE_SHARE_PORT` before starting the app.
--->
-
 **Hosting a server:** download `BeamNG.Earth-BeamMP-Server-<version>.zip` from the
 [Releases](https://github.com/TecnaGamer/BeamNG.Earth/releases) page and follow the guide inside
 (`BeamNG.Earth-README.md`). In short: unzip it into a BeamMP server's folder, set
@@ -638,10 +632,6 @@ checksum BeamMP publishes), its licence and source, and a `ServerConfig.toml` wi
 With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, the Linux host bundle in a container, set up through
 its environment (`BEAMMP_AUTH_KEY`, `BEAMMP_NAME`, `BNGE_WEATHER`, ...; see "Docker" in the server zip's guide,
 [beammp/README.md](beammp/README.md#docker)).
-
-**Shared road plans** (experimental, off by default): `BeamNG.Earth --world-cache export|serve|fetch|verify` packs
-the road plans one machine has built into a checked bundle that other players can fetch and reuse, so their
-companions skip planning those roads; see [docs/SHARED_WORLD.md](docs/SHARED_WORLD.md).
 
 The server keeps its players' shared world building in `Resources/Server/BeamNGEarth/store` (up to `G.SHARE_STORE_MB`,
 2 GB by default; the pieces used longest ago go first) and sends at most `G.SHARE_OUT_KBPS` (1 MB/s) of it, both near

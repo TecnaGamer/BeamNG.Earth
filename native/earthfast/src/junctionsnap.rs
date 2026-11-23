@@ -1,7 +1,10 @@
 //! grading.snap_junctions: a side road's end at a junction takes the height of the road it joins, eased in along the
 //! side road (each road is smoothed on its own: a side road met the main road up to a metre off), and (coarse: the
 //! BNE_COARSE_EASE crossings, GitHub #414) a road running over a higher-ranked road's carriageway away from its ends
-//! takes that road's height there. Higher ranks first: a lower road meets its neighbour's already adjusted height.
+//! takes that road's height there. A higher-ranked road ending on a lower road's middle (Mt Fuji's Subaru Line on the
+//! parking lot's service loop: 0.7 m apart, a near-vertical edge across the lower road) is met by the lower one: it
+//! takes the end's height there, holds it across the higher road's carriageway and returns to its own profile.
+//! Higher ranks first: a lower road meets its neighbour's already adjusted height.
 //! The numpy version's numbers (its pairwise sums, first minimum, operation order), bit for bit.
 use crate::dm::Dm;
 
@@ -51,9 +54,8 @@ fn ease(u: f64) -> f64 {
     }
 }
 
-/// (distance, height, arc position from the nearer end) of the point of polyline xy / z nearest (x, y)
-/// (grading._nearest_on).
-fn nearest_on(xy: &[[f64; 2]], z: &[f64], x: f64, y: f64) -> (f64, f64, f64) {
+/// (distance, segment, its fraction, arc position from the start, length) of the point of polyline xy nearest (x, y).
+fn nearest_arc(xy: &[[f64; 2]], x: f64, y: f64) -> (f64, usize, f64, f64, f64) {
     let m = xy.len() - 1;
     let mut seg = Vec::with_capacity(m);
     let (mut bi, mut bd, mut bt) = (0usize, f64::INFINITY, 0.0);
@@ -71,14 +73,114 @@ fn nearest_on(xy: &[[f64; 2]], z: &[f64], x: f64, y: f64) -> (f64, f64, f64) {
         }
         seg.push(ll.sqrt());
     }
-    let s = np_sum(&seg[..bi]) + seg[bi] * bt;
-    (bd, z[bi] + (z[bi + 1] - z[bi]) * bt, s.min(np_sum(&seg) - s))
+    (bd, bi, bt, np_sum(&seg[..bi]) + seg[bi] * bt, np_sum(&seg))
+}
+
+/// (distance, height, arc position from the nearer end) of the point of polyline xy / z nearest (x, y)
+/// (grading._nearest_on).
+fn nearest_on(xy: &[[f64; 2]], z: &[f64], x: f64, y: f64) -> (f64, f64, f64) {
+    let (bd, bi, bt, s, total) = nearest_arc(xy, x, y);
+    (bd, z[bi] + (z[bi + 1] - z[bi]) * bt, s.min(total - s))
+}
+
+/// Road j (vertices p at arc positions s, o0.. in zz; dz: its change so far, added to) meets the higher-ranked roads'
+/// ends on its carriageway away from its own ends (the end snap is its ends'): it takes the end's height at the nearest
+/// point, eased over taper_m both ways (less where its end is nearer: its own ends keep their height), holds it across
+/// the higher road's carriageway + pad_m (the vertices either side of the point at least) and returns to its own profile
+/// at most grade steep (hold_junction_corridors' rule); where it cannot within the ease (a big step), only the ease.
+/// Not where a higher road runs on past it there (the lower road beside it keeps its height).
+#[allow(clippy::too_many_arguments)]
+fn meet_higher_ends(
+    j: usize, pts: &[[f64; 2]], zz: &[f64], off: &[usize], rank: &[i64], half: &[f64], ab: &numpy::ndarray::ArrayView2<u8>,
+    boxes: &[[f64; 4]], s: &[f64], dz: &mut [f64], reach: f64, end_m: f64, taper_m: f64, max_m: f64, pad_m: f64,
+    grade: f64,
+) {
+    let (o0, o1) = (off[j], off[j + 1]);
+    let len = o1 - o0;
+    let p = &pts[o0..o1];
+    let length = s[len - 1];
+    let bj = boxes[j];
+    for k in 0..rank.len() {
+        let (q0, q1) = (off[k], off[k + 1]);
+        if rank[k] <= rank[j] || q1 - q0 < 2 {
+            continue;
+        }
+        for end in 0..2 {
+            if ab[[k, end]] != 0 {
+                continue; // a bridge abutment's end: the deck's height
+            }
+            let e = if end == 0 { q0 } else { q1 - 1 };
+            let (x, y) = (pts[e][0], pts[e][1]);
+            if !(bj[0] <= x && x <= bj[2] && bj[1] <= y && y <= bj[3]) {
+                continue;
+            }
+            let (dist, g, t, sf, _) = nearest_arc(p, x, y);
+            let from_end = sf.min(length - sf);
+            if dist > half[j] + reach || from_end < end_m {
+                continue;
+            }
+            let cur: Vec<f64> = (0..len).map(|i| zz[o0 + i] + dz[i]).collect();
+            let delta = zz[e] - (cur[g] + (cur[g + 1] - cur[g]) * t);
+            if delta.abs() > max_m || delta.abs() < 0.05 {
+                continue; // a ramp up to an overpass, or bad data: as it was; or met
+            }
+            // beside a higher road that runs on past (a bus lane along a primary): the two are coupled in height
+            // (share_corridors), and pulling this one to an end opens a ledge between them
+            let (fx, fy) = (p[g][0] + (p[g + 1][0] - p[g][0]) * t, p[g][1] + (p[g + 1][1] - p[g][1]) * t);
+            let beside = (0..rank.len()).any(|m| {
+                let (r0, r1) = (off[m], off[m + 1]);
+                let b = boxes[m];
+                if m == j || rank[m] <= rank[j] || r1 - r0 < 2 || !(b[0] <= fx && fx <= b[2] && b[1] <= fy && fy <= b[3]) {
+                    return false;
+                }
+                let (d, _, from_m_end) = nearest_on(&pts[r0..r1], &zz[r0..r1], fx, fy);
+                d <= half[j] + half[m] && from_m_end >= end_m
+            });
+            if beside {
+                continue;
+            }
+            let taper = taper_m.min(from_end).max(1e-6);
+            let hold = half[k] + pad_m;
+            let eased: Vec<f64> = (0..len).map(|i| cur[i] + delta * ease((s[i] - sf).abs() / taper)).collect();
+            let mut out = eased.clone();
+            let mut met_both = true;
+            for side in 0..2 {
+                let idx: Vec<usize> = if side == 0 { (0..=g).rev().collect() } else { (g + 1..len).collect() };
+                let (mut prev, mut prev_d, mut holding, mut met) = (zz[e], 0.0, true, false);
+                for (n, &i) in idx.iter().enumerate() {
+                    let d = (s[i] - sf).abs();
+                    if holding && (n == 0 || d <= hold) {
+                        out[i] = zz[e];
+                        prev_d = d;
+                        continue;
+                    }
+                    holding = false;
+                    let lim = grade * (d - prev_d);
+                    let step = eased[i] - prev;
+                    if step.abs() <= lim {
+                        met = true; // met its eased profile: the rest is that
+                        break;
+                    }
+                    prev += if step > 0.0 { lim } else { -lim };
+                    out[i] = prev;
+                    prev_d = d;
+                }
+                met_both &= met;
+            }
+            let res = if met_both { out } else { eased };
+            for i in 0..len {
+                dz[i] = res[i] - zz[o0 + i];
+            }
+        }
+    }
 }
 
 /// New heights for the plans' vertices. xy (n, 2), z (n): every plan's vertices one after another, plan j's from
 /// off[j] to off[j + 1]; rank: its road rank; half: its carriageway's half width; abut (plans, 2): an end that is a
 /// bridge abutment (left as it is); bbox (plans, 4): its x0, y0, x1, y1. reach, end_m, taper, max_m: grading's
-/// JUNCTION_* constants; coarse: the crossings too (COARSE_EASE_ON). Returns (z, changed per plan). Pure.
+/// JUNCTION_* constants; coarse: the crossings too (COARSE_EASE_ON); major: a higher road's end on a lower road's
+/// middle too (JUNCTION_MAJOR_END_ON), pad_m / grade: its hold's (JUNCTION_HOLD_PAD_M, JUNCTION_HOLD_GRADE). Returns
+/// (z, changed per plan). Pure.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn snap_junctions<'py>(
@@ -95,6 +197,9 @@ pub fn snap_junctions<'py>(
     taper_m: f64,
     max_m: f64,
     coarse: bool,
+    major: bool,
+    pad_m: f64,
+    grade: f64,
 ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<u8>>)> {
     let xa = xy.as_array();
     let n = xa.nrows();
@@ -216,6 +321,10 @@ pub fn snap_junctions<'py>(
                     dz[i] += delta * ease((s[i] - s[i_]).abs() / taper);
                 }
             }
+        }
+        if major {
+            meet_higher_ends(j, &pts, &zz, &off, &rank, &half, &ab, &boxes, &s, &mut dz, reach, end_m, taper_m, max_m,
+                             pad_m, grade);
         }
         if dz.iter().any(|&v| v != 0.0) {
             for i in 0..len {

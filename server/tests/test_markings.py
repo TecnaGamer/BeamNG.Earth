@@ -15,6 +15,9 @@ class StyleTest(unittest.TestCase):
     def test_countries(self):
         self.assertEqual(markings.style("US").centre, "line_yellow")
         self.assertEqual(markings.style("NO").centre, "line_yellow", "Norway paints its centre lines yellow")
+        self.assertEqual(markings.style("NO").left_edge, "line_yellow",
+                         "Norway: a divided road's line next to oncoming traffic is yellow too (E6 Vist)")
+        self.assertIsNone(markings.style("FI").left_edge, "Finland not verified: white left edge as before")
         self.assertEqual(markings.style("DE").centre_rural, (6.0, 12.0))
         self.assertEqual(markings.style("GB").lane_urban, (1.0, 5.0))
         self.assertEqual(markings.style(None, -100.0).centre, "line_yellow", "unknown: by longitude")

@@ -10,7 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import busstationmesh as bm  # noqa: E402
-import railstationmesh as rm  # noqa: E402
+import railstationmesh as rm
+import railways  # noqa: E402
 import railstations as rs  # noqa: E402
 from test_railstations import stations_of  # noqa: E402
 
@@ -311,6 +312,34 @@ class UnderpassTest(unittest.TestCase):
         self.assertIn(round(zf, 2), zs)
         self.assertIn(round(lid, 2), zs)
 
+    def test_floor_ramps_down_to_an_end_whose_ground_lies_under_it(self):
+        """Vienna's Erzherzog-Karl-Strasse: the ground 159.4 over the platform's end and 153.6 at the road's in its cutting, the
+        floor 156.4 from the rails' bed: the floor ramps down to the road's ground and ends there, no flight into it."""
+        import railbridges as rb
+        import railunderpass as ru
+        st, links = self.under("vinnytsia")
+        ln = links[0]
+        path = rb.resample(ln.xy)
+        far = path[-1]
+        tip = ru.flights(ln, path)[-1][-1]
+        sunk = bm.DrawnGround(lambda xy: np.where(np.hypot(xy[:, 0] - tip[0], xy[:, 1] - tip[1]) < 2.0, 90.0, 100.0))
+        zf0, _lid = ru.levels(None, FLAT, st, ln)
+        zf, lid = ru.profile(None, FLAT, st, ln, path)
+        self.assertTrue(np.allclose(zf, zf0))                                        # (the ground over it at both ends: as before)
+        zf, lid = ru.profile(None, sunk, st, ln, path)
+        s = rb._arc(path)
+        self.assertAlmostEqual(zf[0], zf0, delta=1e-6)
+        self.assertLess(zf[-1], 91.0)                                                # (at the road's ground)
+        self.assertTrue(np.all(np.diff(zf) / np.maximum(np.diff(s), 1e-9) >= -ru.FLOOR_GRADE - 1e-6))
+        self.assertTrue(np.allclose(lid - zf, ru.CEIL_D + ru.CLEAR_M))
+        m = bm._Mesh()
+        ru.add(m, None, sunk, st, ln)
+        V = m.result(BIG, (0.0, 0.0, 0.0))[0]
+        near = np.hypot(V[:, 0] - far[0], V[:, 1] - far[1]) < 3.0
+        self.assertGreater(V[near, 2].min(), 89.0)                                   # (no flight down: nothing under the ground)
+        parts = ru.hole_parts(None, sunk, st, ln)
+        self.assertAlmostEqual(float(parts[0][1][-1]), float(zf[-1]), delta=1e-6)
+
     def test_stairs_rise_from_the_floor_to_the_ground(self):
         import railbridges as rb
         import railunderpass as ru
@@ -472,6 +501,49 @@ class RampTest(unittest.TestCase):
         m2 = bm._Mesh()
         rm._ramps(m2, None, low, rm.reference(None, low, pl), pl, -0.5)       # (below the ground: none)
         self.assertIsNone(m2.result(BIG, (0.0, 0.0, 0.0)))
+
+
+class BedTest(unittest.TestCase):
+    def test_a_platform_stands_by_the_tracks_own_bed_not_the_road_under_it(self):
+        # A track over a road (a viaduct, a raised embankment): the ground under it is the road, 6 m under the bed. The platform
+        # was set on that ground, a slab in the road's way beside the elevated track (Vienna's A23, trucks into it).
+        st = no_links(stations_of("vinnytsia")[0])
+        st.country = "UA"
+        pl = max(st.platforms, key=lambda p: len(p.ring))
+        h = rm.platform_height(pl, "UA", len(st.platforms))
+        asked = []
+
+        def bed(tid, xy):
+            asked.append(tid)
+            return np.full(len(xy), 106.0), np.ones(len(xy), bool)
+
+        ref = rm.reference(None, FLAT, pl, bed)
+        self.assertTrue(ref and asked)
+        self.assertTrue(set(asked) <= {t[0] for t in pl.tracks})
+        for _poly, z in ref:
+            self.assertTrue(np.allclose(z, 106.0 + rm.RAIL_TOP_M))
+        m = bm._Mesh()
+        rm._slab(m, None, FLAT, ref, pl.ring, h, bed)
+        V = m.result(BIG, (0.0, 0.0, 0.0))[0]
+        top = 106.0 + rm.RAIL_TOP_M + h
+        self.assertAlmostEqual(float(V[:, 2].max()), top, delta=0.05)
+        self.assertGreater(float(V[:, 2].min()), top - railways.DECK_D - 0.05)       # (on a bridge: the deck's depth, not down to the road)
+        m = bm._Mesh()
+        rm._slab(m, None, FLAT, ref, pl.ring, h, lambda tid, xy: (np.full(len(xy), 106.0), np.zeros(len(xy), bool)))
+        self.assertLess(float(m.result(BIG, (0.0, 0.0, 0.0))[0][:, 2].min()), 100.0)   # (on a bank: the wall to the ground)
+        # a line the railways lay no part of (NaN): the ground, as before
+        ref = rm.reference(None, FLAT, pl, lambda tid, xy: (np.full(len(xy), np.nan), np.zeros(len(xy), bool)))
+        for _poly, z in ref:
+            self.assertTrue(np.allclose(z, 100.0 + rm.RAIL_TOP_M, atol=0.01))
+
+    def test_a_platform_on_a_viaduct_has_no_ramp_that_ends_in_the_air(self):
+        st = no_links(stations_of("vinnytsia")[0])
+        st.country = "UA"
+        pl = max(st.platforms, key=lambda p: rm._runs(p.snapped, p.ring, p.tidx) and len(max(rm._runs(p.snapped, p.ring, p.tidx), key=len)))
+        ref = rm.reference(None, FLAT, pl, lambda tid, xy: (np.full(len(xy), 100.0 + rm.RAMP_MAX_M * rm.RAMP_SLOPE + 2.0), np.zeros(len(xy), bool)))
+        m = bm._Mesh()
+        rm._ramps(m, None, FLAT, ref, pl, 1.1)
+        self.assertIsNone(m.result(BIG, (0.0, 0.0, 0.0)))
 
 
 class FlatAndYellowTest(unittest.TestCase):

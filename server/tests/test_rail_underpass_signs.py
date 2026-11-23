@@ -33,6 +33,12 @@ class RailPiecesTest(unittest.TestCase):
         self.assertAlmostEqual(kinds["bridge"][0], 11.2, delta=0.5)
         self.assertEqual(len(kinds["ground"]), 2)
 
+    def test_a_rail_bridges_level_is_the_maps(self):
+        f = features([[(0.0, 0.0), (1000.0, 0.0)]], ["standard_gauge"], subtypes=["rail"],
+                     flags=[(0, "is_bridge", 0.2, 0.4), (0, "is_bridge", 0.6, 0.8)], levels=[(0, 3.0, 0.2, 0.4)])
+        self.assertEqual(len(dict(railways._pieces(f, 0))["bridge"]), 2)
+        self.assertEqual(railways.bridge_levels(f, 0), [3.0, 1.0], "(the viaduct's own level, 1 with none mapped)")
+
     def test_a_sliver_of_a_short_line_still_goes(self):
         # (a 300 m line: 1e-3 of it is 0.3 m, under MIN_PART_M: as before)
         a, b = 0.5, 0.5008

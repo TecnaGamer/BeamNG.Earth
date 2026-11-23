@@ -22,7 +22,7 @@ class InitialAnchorErrorsTest(ServerHarness):
         self.hello()
         self.c.send({"type": "prepare_anchor", "requestId": 71, "lat": 36.5785, "lon": -118.2923,
                      "purpose": "teleport"})
-        m, seen = self.c.until(lambda m: m["type"] in ("anchor_error", "anchor_ready"), timeout=2)
+        m, seen = self.c.until(lambda m: m["type"] in ("anchor_error", "anchor_ready"), timeout=10)   # (returns on the message; 2 s timed out on a cold Windows runner, 2026-11-18)
         self.assertEqual(m["type"], "anchor_error", stage)
         self.assertEqual(m["requestId"], 71)
         self.assertIn("fixture", m["error"])

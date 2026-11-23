@@ -49,6 +49,62 @@ class Entrance(unittest.TestCase):
         z0 = min(float(np.asarray(c["n"])[:, 2].min()) for c in tube)
         self.assertLess(P[:, 2].max(), z0 + th + max(lk[6] for lk in portals.LOOKS.values()) + 0.5)
 
+    def test_a_road_over_the_mouth_keeps_its_surface(self):
+        # the user's report 72 (Atlanta's infield tunnel, 2026-11-17): a service road passing over a mouth had the
+        # headwall's parapet standing across its lanes. BNE_TUNNEL_ROAD_OVER: fit gives each column a crossing road
+        # covers its cap (the road's lowest sample over the floor), whatever higher bank stands behind it
+        from test_roads import features, FRAME
+        elev = _ridge()
+        x = -43.0               # (the mapped tube from x = -50; the road over it covered out to there: 7 m in)
+
+        def fits(on):
+            was = portals.ROAD_OVER_ON
+            portals.ROAD_OVER_ON = on
+            try:
+                f = features([[(-100, 0), (100, 0)], [(x, -60), (x, 60)]], ["service", "residential"],
+                             flags=[(0, "is_tunnel", 0.25, 0.75)])
+                tp = roads.TunnelProfiles(FRAME, lambda key: f, elev)
+                ch = [c for c in roads._tunnel_chunks(tp, [f], (-128.0, -128.0, 128.0, 128.0)) if c.get("tunnel")]
+                return [ft for c in ch for ft in (c.get("fit") or []) if ft is not None]
+            finally:
+                portals.ROAD_OVER_ON = was
+        off, on = fits(False), fits(True)
+        self.assertTrue(off)
+        self.assertTrue(all(ft.get("cap") is None for ft in off))
+        capped = [ft for ft in on if ft.get("cap")]
+        self.assertTrue(capped)
+        for ft in capped:
+            for c, g in zip(ft["cap"], ft["fg"]):
+                self.assertTrue(c is None or c <= g + 1e-9)
+
+    def test_the_generated_wall_stays_under_a_narrow_crossing_backed_by_a_bank(self):
+        # Codex review of 80e9b3da: the road read on the 3 m row, a bank 9 m up on the 5 m row: taking the parapet
+        # off the road's samples before the rows' max let the bank win, the parapet on top. The cap is per column
+        # after the max, through to the mesh (portals.capped), the lintel LINTEL_MIN over the crown at least
+        fitd = {"st": 1, "fx": [-8.0, -5.0, -2.5, 0.0, 2.5, 5.0, 8.0], "fg": [9.0] * 7, "ws": [2.0, 4.0], "wl": None,
+                "wr": None, "rz": [0.0, 0.0], "sl": 3.0, "sr": 3.0, "sb": 0.0,
+                "cap": [None, 6.0, 6.0, 6.0, 6.0, 6.0, None]}
+        sec = roadmesh._tunnel_section(4.0, 4.5)
+        args = (np.zeros(3), np.array([0.0, 1.0]), np.array([1.0, 0.0]), sec, 4.5, 4.0, 4.0)
+        P, _T, _UV, _C = portals.structure(fitd, *args)
+        on_road = np.abs(P[:, 1]) <= 4.9
+        self.assertLessEqual(float(P[on_road, 2].max()), 6.0 + 1e-6)
+        self.assertLessEqual(portals.crown_top(fitd, 4.5), 6.0 + 1e-6)
+        P0, _T0, _UV0, _C0 = portals.structure(dict(fitd, cap=None), *args)
+        self.assertGreater(float(P0[np.abs(P0[:, 1]) <= 4.9, 2].max()), 6.5, "(without the cap: the bank, th + top_max)")
+        # a lone capped column beside the opening's core (the kernel puts its breakpoint at the core, between the
+        # samples, and drops the sample near it): the generated top over it still under the road
+        lone = dict(fitd, fx=[-8.0, -5.0, -4.5, -2.5, 0.0, 2.5, 5.0, 8.0], fg=[9.0] * 8,
+                    cap=[None, None, 6.0, None, None, None, None, None])
+        P1, _T1, _UV1, _C1 = portals.structure(lone, *args)
+        near = np.abs(P1[:, 1] + 4.5) <= 0.3
+        self.assertTrue(near.any())
+        self.assertLessEqual(float(P1[near, 2].max()), 6.0 + 1e-6)
+        # a road nearer the crown than LINTEL_MIN: the lintel stands LINTEL_MIN over the crown, said so
+        _fg, tmin, short = portals.capped(dict(fitd, cap=[None, 4.6, 4.6, 4.6, 4.6, 4.6, None]), 4.5)
+        self.assertEqual(tmin, portals.LINTEL_MIN)
+        self.assertTrue(short)
+
     def test_flat_ground_beside_the_mouth_brings_the_headwall_down(self):
         # the headwall's top: the parapet over the ground where it is high, sloping down to end_min where it is low
         fitd = {"st": 1, "fx": [-8.0, -5.0, 0.0, 5.0, 8.0], "fg": [0.0, 0.0, 9.0, 0.0, 0.0], "ws": [2.0, 4.0],

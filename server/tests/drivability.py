@@ -30,6 +30,7 @@ get worse and no part may become bad, and an improvement must be written back (-
 again. The fixtures never change, so a part's id names the same road in every run.
 """
 import argparse
+import hashlib
 import json
 import math
 from concurrent.futures import ProcessPoolExecutor
@@ -152,7 +153,9 @@ def measure(name, threads=1, approach=None):
         box = (-RADIUS_M, -RADIUS_M, RADIUS_M, RADIUS_M)
         tunnels = roads.TunnelProfiles(site.frame, lambda k: site.cells.get(str(k)), elev)
         tunnels.raw = site.sample
-        tunnels.ends = lambda la, lo: grader.apply(la, lo, site.sample(la, lo), grading.ROAD_LIFT, roads_only=True)
+        # (as the game's: the ground read as the road's own level at a portal arrives as `base`, earthd / blockworker)
+        tunnels.ends = lambda la, lo, base=None: grader.apply(la, lo, site.sample(la, lo) if base is None else base,
+                                                               grading.ROAD_LIFT, roads_only=True)
         report = Report()
         _measure_ground(report, cells, site.frame, ground, roads)
         structures = [s for surface, profiles in
@@ -209,15 +212,25 @@ class Report:
 
     def __init__(self):
         self.steps, self.parts = 0, {}
+        self.tracks = []
 
     def add(self, where, xy, z, inside, centre):
         """A profile: z at xy (1 m apart) along a wheel track (centre: the centre line), inside: which samples lie
         within RADIUS_M."""
+        if np.any(inside):
+            if not np.isfinite(z[inside]).all():
+                raise ValueError(f"non-finite wheel track on {where}")
+            samples = np.column_stack((xy[inside], z[inside])).astype("<f8", copy=False)
+            self.tracks.append((where["surface"], where["part"], where["class"], bool(centre),
+                                hashlib.sha256(samples.tobytes()).hexdigest()))
         for name, (limit, _tol, fn, on) in METRICS.items():
             if (on == "centre" and not centre) or (fn is not _step and where["class"] not in SPEED_MS):
                 continue
             values, first = fn(z, where["class"])       # (empty when the profile is shorter than the metric's window)
-            values = np.where(inside[first:first + len(values)] & np.isfinite(values), values, 0.0)
+            sampled = inside[first:first + len(values)]
+            if not np.isfinite(values[sampled]).all():
+                raise ValueError(f"non-finite {name} on {where}")
+            values = np.where(sampled, values, 0.0)
             if not len(values):
                 continue
             if fn is _step:
@@ -233,7 +246,10 @@ class Report:
         for key, part in sorted(self.parts.items()):
             if any(part.get(m, 0.0) > limit for m, (limit, *_r) in METRICS.items()):
                 bad[key] = {k: round(v, 4) if isinstance(v, float) else v for k, v in part.items()}
-        return {"steps": self.steps, "parts": bad}
+        if not self.tracks:
+            raise ValueError("site had no sampled wheel tracks")
+        signature = hashlib.sha256(json.dumps(sorted(self.tracks)).encode()).hexdigest()
+        return {"steps": self.steps, "parts": bad, "tracks": signature}
 
 
 def _resample(xy):
@@ -242,7 +258,7 @@ def _resample(xy):
     if s[-1] < 3.0:
         return None
     ss = np.arange(0.0, s[-1], 1.0)
-    return np.c_[np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])]
+    return np.c_[dnp.interp(ss, s, xy[:, 0]), dnp.interp(ss, s, xy[:, 1])]
 
 
 def _inside(xy):
@@ -283,7 +299,7 @@ def _structure(surface, fid, spec, xy, z, ground):
         return None
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(centre, axis=0).T))]
-    zz = np.interp(arc, s, z)
+    zz = dnp.interp(arc, s, z)
     if surface == "bridge":
         zz = np.maximum(zz, ground(centre))
     return SimpleNamespace(surface=surface, fid=fid, spec=spec, xy=centre, z=zz)
@@ -324,7 +340,7 @@ def _every_metre(xy, z):
     between them is a slope over its length, not a ledge over one metre)."""
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     ss = np.arange(0.0, s[-1] + 1e-9, 1.0)
-    return np.c_[np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])], np.interp(ss, s, z)
+    return np.c_[dnp.interp(ss, s, xy[:, 0]), dnp.interp(ss, s, xy[:, 1])], dnp.interp(ss, s, z)
 
 
 def _measure_structure(report, st, structures, ground):

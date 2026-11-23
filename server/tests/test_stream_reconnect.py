@@ -34,8 +34,8 @@ class ReconnectTest(unittest.IsolatedAsyncioTestCase):
                 conn.finished.set()
                 self.handlers.discard(task)
 
-        self.listener = await asyncio.start_server(accept, "127.0.0.1", 0)
-        self.port = self.listener.sockets[0].getsockname()[1]
+        self.listener = await protocol.start_server(accept, "127.0.0.1", 0)
+        self.port = protocol.listen_port(self.listener)
 
     async def asyncTearDown(self):
         for writer in self.clients:
@@ -192,6 +192,34 @@ class ReconnectTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(path, replacement)
         self.assertTrue(self.s.slot_held(n))
         self.assertEqual(path.read_bytes(), b"OLD")
+
+    async def test_resume_keeps_installed_terrain_and_releases_a_lost_reply(self):
+        c, _, w, hello = await self.connect(terrainFiles=1)
+        paths, tickets = [], []
+        for rev in range(2):
+            name = f"hm_1_0_0_{rev}.png"
+            p = Path(self.s.out_dir, name)
+            p.write_bytes(bytes([rev]))
+            paths.append(p)
+            tr = c.terrain_msg((1, 0, 0), dict(heightmap=name, q=1, zBase=0, maxHeight=16))
+            tickets.append(tr["terrainTicket"])
+            self.s.retire_terrain([name])
+        await self.disconnect(c, w)
+        with mock.patch.object(earthd, "LEASE_GRACE_S", 0), mock.patch.object(earthd, "game_running", return_value=True):
+            await self.s.sweep_sessions_async()
+        self.assertTrue(all(p.exists() for p in paths))
+        resumed, _, w, again = await self.connect(leaseSession=self.s.sid, slotSession=self.s.sid,
+                                                  leaseId=hello["leaseId"], slotsHeld=[], terrainFiles=1,
+                                                  terrainHeld=tickets[:1])
+        self.assertEqual(again["leaseId"], hello["leaseId"])
+        self.s.removes_flush()
+        self.assertTrue(paths[0].exists())
+        self.assertFalse(paths[1].exists())
+        await self.disconnect(resumed, w)
+        with mock.patch.object(earthd, "LEASE_GRACE_S", 0), mock.patch.object(earthd, "game_running", return_value=False):
+            await self.s.sweep_sessions_async()
+        self.s.removes_flush()
+        self.assertFalse(paths[0].exists())
 
     async def test_disconnected_anchor_stays_until_complete_reconnect_snapshot(self):
         old, _, w, hello = await self.connect()

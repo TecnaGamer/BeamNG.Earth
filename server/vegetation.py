@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 28          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 29          #(the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -49,7 +49,8 @@ VERSION = 28          # (the cached cells hold their groups: 14 for the regional
                       # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py; 25: the
                       # Mediterranean basin's own trees, G_MEDITERRANEAN; 26: the far clumps, CLUMP_OF, and the
                       # vineyards' rows, vineyard_items; the round bales after the harvest, bale_items; 27: no bushes in a bus station's yard, PR #1023;
-                      # 28: lengths in ground metres at every latitude, _merc_k; ties among flat crowns by a hash)
+                      # 28: lengths in ground metres at every latitude, _merc_k; ties among flat crowns by a hash;
+                      # 29: the far clumps kept off the carriageways, CLUMP_ROAD_MARGIN_M)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -81,6 +82,19 @@ CLUMP_GROUPS = tuple(sorted(set(CLUMP_OF.values())))
 CLUMP_CELL_M = 18.0
 CLUMP_MIN = 3
 CLUMP_ROWS_MAX = 2000       # clump rows a tile sends at most (beside TILE_ROWS_MAX's single items)
+CLUMP_R_K, CLUMP_R_C = 0.3, 2.0     # a clump's radius (ground m): CLUMP_R_K * height + CLUMP_R_C
+# A far clump keeps its footprint off the carriageways (the user, 2026-11-16: "take into consideration if the road is
+# blocked by other buildings or trees"): a forest road through a square had the square's one clump, 6-10 m across, on
+# its lanes, seen from afar until the single trees took over near it. Stock East Coast USA keeps its group shapes 5-10 m
+# off a drivable road's edge (centre to edge, p5: tree_douglasfir_group 5.7 m, tree_beech_forest_group 5.1 m,
+# tree_douglasfir_group_low 10.4 m). Its reach: the road's half width (drawn or its class's, the wider) + a margin by
+# class (CLUMP_ROAD_MARGIN_M, else CLUMP_ROAD_MARGIN_DEFAULT_M). A square whose clump reaches in is split along that
+# road's line; each side's clump is moved straight off the roads by up to CLUMP_SHIFT_M, else its trees stay single
+# (shown far as they were before the clumps). earthfast.veg_clumps
+CLUMP_ROAD_MARGIN_M = {"motorway": 3.0, "motorway_link": 2.0, "trunk": 2.5, "trunk_link": 1.5, "primary": 2.0,
+                       "primary_link": 1.0, "secondary": 1.5, "tertiary": 1.0}
+CLUMP_ROAD_MARGIN_DEFAULT_M = 0.5
+CLUMP_SHIFT_M = 4.0
 # The Mediterranean basin's Cs climates (Beck et al.'s Koppen-Geiger classes 8-10: Csa, Csb, Csc) inside its box: holm
 # and cork oaks, olives, maritime pines, cypresses (Italy's stock trees, trees.lua's "mediterranean"; the asset survey
 # 2026-11-10 found them loaded with Italy's folder but unused). California's Cs keeps the West Coast's own groups.
@@ -127,6 +141,7 @@ EDGE_M = 7.0
 EDGE_CELL_M = 3.0
 EDGE_P = 0.4
 MEM_CELLS = 16
+BUILD_SOON_MAX = 64          # cells build_soon keeps queued (the generated ground's blocks outside the warm-up)
 WARM_M = 1200.0              # cells within this of the player are built ahead (warm_around)
 WC = {"tree": 10, "shrub": 20, "grass": 30, "crop": 40, "built": 50, "bare": 60, "snow": 70,
       "water": 80, "wetland": 90, "mangrove": 95, "moss": 100}
@@ -277,6 +292,7 @@ class Vegetation:
         self._warm_at, self._warm_thread = None, None   # warm_around's latest (lat, lon, radius_m), for the warm thread
         self._warm_cv = threading.Condition()
         self._on_disk = set()           # cells whose file ready() found (the warm thread's: each file checked once)
+        self._soon = OrderedDict()      # build_soon's cells (x, y), oldest first, at most BUILD_SOON_MAX
 
     def cell(self, key):
         """The Items of map-data cell key ((z, x, y) or CellKey)."""
@@ -309,6 +325,25 @@ class Vegetation:
                 self._warm_thread.start()
             self._warm_cv.notify()
 
+    def build_soon(self, key):
+        """Build cell key in the background: the warm thread, after the cells round the player (warm_around), behind
+        the pacer like them. The generated ground's (genground._ask_trees): a block's photo waits for its cells, which
+        the pose's warm-up may never reach. Bounded: BUILD_SOON_MAX, the oldest dropped (asked again after its
+        backoff). True when queued (False: built already)."""
+        if self.ready(key):
+            return False
+        k = (int(key[1]), int(key[2]))
+        with self._warm_cv:
+            if k not in self._soon:
+                self._soon[k] = None
+                while len(self._soon) > BUILD_SOON_MAX:
+                    self._soon.popitem(last=False)
+            if self._warm_thread is None:
+                self._warm_thread = threading.Thread(target=self._warm_loop, daemon=True, name="veg-warm")
+                self._warm_thread.start()
+            self._warm_cv.notify()
+        return True
+
     def _warm_cells(self, lat, lon, radius_m):
         """The cells within radius_m of (lat, lon) not built yet, nearest first (the warm thread's: file checks)."""
         d = radius_m / 111320.0
@@ -325,14 +360,18 @@ class Vegetation:
         while True:
             pacer.hold()                # (a teleport's first block first)
             with self._warm_cv:
-                while not cells and self._warm_at is None:
+                while not cells and self._warm_at is None and not self._soon:
                     self._warm_cv.wait()
                 at, self._warm_at = self._warm_at, None
             if at is not None:          # a newer place: its nearest cells first
                 cells = self._warm_cells(*at)
-                if not cells:
-                    continue
-            x, y = cells.pop(0)
+            if cells:
+                x, y = cells.pop(0)
+            else:                       # (then build_soon's, oldest first)
+                with self._warm_cv:
+                    if not self._soon:
+                        continue
+                    (x, y), _ = self._soon.popitem(last=False)
             try:
                 if self.ready((mapcells.ZOOM, x, y)):
                     continue            # (built before: on disk)
@@ -424,6 +463,7 @@ class Vegetation:
         near_water = np.zeros(h.shape, bool) if _in_box((lat0_ + lat1_) / 2, (lon0_ + lon1_) / 2, RIPARIAN_BOX) \
             else None                       # (within RIPARIAN_M of a river, lake or shore: riverside poplars)
         road_cells = []
+        clump_roads = []                    # (the carriageways the far clumps keep off: clumps)
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
                 kk = (mapcells.ZOOM, x + dx, y + dy)
@@ -437,6 +477,10 @@ class Vegetation:
                 _mask_roads(c2.layers.get("roads"), road, chm, specs=self._specs, walks=True)
                 _mask_roads(c2.layers.get("roads"), curb, chm, push, clear=TREE_PIT_M, specs=self._specs)
                 _mask_decks(c2.layers.get("roads"), deck, chm, self._specs)
+                got = _road_segs(c2.layers.get("roads"), h.shape, chm, CLUMP_ROAD_MARGIN_DEFAULT_M, self._specs,
+                                 margins=CLUMP_ROAD_MARGIN_M)
+                if got is not None:
+                    clump_roads.append(got)
                 if near_water is not None:
                     _mask_near(c2.layers.get("water"), near_water, chm, RIPARIAN_M)
                 road_cells.append(c2.layers.get("roads"))
@@ -544,7 +588,9 @@ class Vegetation:
         if vines.any():             # (the vines' own canopy read as bushes all over a vineyard: its rows stand there)
             keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
             tree, lcls = tree.take(keep), lcls[keep]
-        tree = clumps(tree, lcls, (lat0 + lat1) / 2)
+        # (a clump moved off a road stays in this cell and off its buildings, water and decks: ClumpRoads)
+        tree = clumps(tree, lcls, (lat0 + lat1) / 2,
+                      roads=ClumpRoads(clump_roads, chm, blocked, (ex0, ey0, ex1, ey1)))
         scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
         edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
         bounds = (lon0, lat0, lon1, lat1)
@@ -762,22 +808,54 @@ def clump_cell(lat):
     return tile / k
 
 
-def clumps(tree, lcls, lat):
+class ClumpRoads:
+    """The carriageways the far clumps keep off (clumps): _road_segs' (segs, hws) on the CHM grid chm, any number; a
+    clump moved off one stays in the cell's box own (x0, y0, x1, y1, Web Mercator m: x0 <= x < x1, y0 < y <= y1; its
+    tiles show it) and off blocked (bool, on the CHM grid: buildings, water, decks), else its trees stay single (Codex
+    review of cff64d91: a move across the cell's edge or into water hid its trees far away)."""
+
+    def __init__(self, parts, chm, blocked=None, own=None):
+        self.blocked = np.zeros((0, 0), bool) if blocked is None else np.asarray(blocked, bool)
+        self.own = tuple(float(v) for v in own) if own is not None else (-np.inf, -np.inf, np.inf, np.inf)
+        parts = [p for p in parts if p is not None and len(p[1])]
+        self.segs = np.ascontiguousarray(np.concatenate([p[0] for p in parts]), np.float64) if parts \
+            else np.zeros((0, 4), np.float64)
+        self.hws = np.ascontiguousarray(np.concatenate([p[1] for p in parts]), np.float64) if parts \
+            else np.zeros(0, np.float64)
+        self.grid = (float(chm.x0), float(chm.y0), float(chm.dx), float(chm.dy)) if chm is not None \
+            else (0.0, 0.0, 1.0, 1.0)
+
+
+CLUMP_STATS = {"clear": 0, "split": 0, "moved": 0, "single": 0}     # (counts for the probes: clumps' road outcomes)
+_clump_stats_lock = threading.Lock()
+
+
+def clumps(tree, lcls, lat, roads=None):
     """tree (a cell's canopy Items) with the far clumps added (CLUMP_OF, earthfast.veg_clumps) and the trees they
     stand for flagged (a negative scale: trees.lua shows them only within its near ring). lcls: the land cover class
-    of each; lat: the cell's (clump_cell). Street trees (built-up land) stay single."""
+    of each; lat: the cell's (clump_cell). Street trees (built-up land) stay single. roads (ClumpRoads): the
+    carriageways a clump's footprint (CLUMP_R_K * height + CLUMP_R_C) keeps off: split at the road, moved off it by up
+    to CLUMP_SHIFT_M, else its trees stay single (veg_clumps)."""
     if len(tree) < CLUMP_MIN:
         return tree
-    fast.require(201, "veg_clumps")
+    fast.require(321, "veg_clumps")
     x, y = _to3857(tree.lon, tree.lat)
     table = [255] * len(GROUPS)
     for g, c in CLUMP_OF.items():
         table[g] = c
-    member, cx, cy, ch, cr, cg, cu = fast._ef.veg_clumps(
+    if roads is None:
+        roads = ClumpRoads([], None)
+    merc_per_m = 1.0 / max(dmath.cos(math.radians(min(abs(float(lat)), 85.0))), 0.05)
+    member, cx, cy, ch, cr, cg, cu, st = fast._ef.veg_clumps(
         np.ascontiguousarray(x, np.float64), np.ascontiguousarray(y, np.float64),
         np.ascontiguousarray(tree.group, np.uint8), np.ascontiguousarray(tree.kind, np.uint8),
         np.ascontiguousarray(tree.height, np.float32), np.ascontiguousarray(tree.rank, np.float32),
-        np.ascontiguousarray(lcls, np.uint8), table, KIND_TREE, WC["built"], clump_cell(lat), CLUMP_MIN)
+        np.ascontiguousarray(lcls, np.uint8), table, KIND_TREE, WC["built"], clump_cell(lat), CLUMP_MIN,
+        roads.segs, roads.hws, roads.grid, merc_per_m, (CLUMP_R_K, CLUMP_R_C), CLUMP_SHIFT_M, roads.own,
+        roads.blocked)
+    with _clump_stats_lock:
+        for k_, v_ in zip(("clear", "split", "moved", "single"), st):
+            CLUMP_STATS[k_] += int(v_)
     if not len(cx):
         return tree
     member = np.asarray(member, bool)
@@ -787,7 +865,7 @@ def clumps(tree, lcls, lat):
     lon, la = _to4326(np.asarray(cx), np.asarray(cy))
     h = np.asarray(ch, np.float32)
     n = len(lon)
-    return _concat(tree, Items(lon, la, h, (0.3 * h + 2.0).astype(np.float32), np.full(n, KIND_TREE, np.uint8),
+    return _concat(tree, Items(lon, la, h, (CLUMP_R_K * h + CLUMP_R_C).astype(np.float32), np.full(n, KIND_TREE, np.uint8),
                                np.asarray(cg, np.uint8), np.asarray(cr, np.float32),
                                (np.asarray(cu) * 360.0).astype(np.float32), np.ones(n, np.float32)))
 
@@ -897,7 +975,7 @@ def orchard_items(feats, chm, blocked, bounds=None):
     rank = np.concatenate(ranks).astype(np.float32)
     u = np.concatenate(us)
     if len(lon) > ORCHARD_CELL_MAX:
-        keep = np.sort(np.argpartition(rank, ORCHARD_CELL_MAX - 1)[:ORCHARD_CELL_MAX])
+        keep = np.sort(np.argsort(rank, kind="stable")[:ORCHARD_CELL_MAX])
         lon, lat, height, yaw, rank, u = lon[keep], lat[keep], height[keep], yaw[keep], rank[keep], u[keep]
     group = np.full(len(lon), G_DECIDUOUS, np.uint8)
     group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
@@ -1004,7 +1082,7 @@ def vineyard_items(feats, chm, blocked, bounds=None):
     x, y, yaw, u = np.concatenate(xs), np.concatenate(ys), np.concatenate(yaws), np.concatenate(us)
     rank = (u * 0.15).astype(np.float32)
     if len(x) > VINE_CELL_MAX:
-        keep = np.sort(np.argpartition(rank, VINE_CELL_MAX - 1)[:VINE_CELL_MAX])
+        keep = np.sort(np.argsort(rank, kind="stable")[:VINE_CELL_MAX])
         x, y, yaw, u, rank = x[keep], y[keep], yaw[keep], u[keep], rank[keep]
     lon, lat = _to4326(x, y)
     n = len(lon)
@@ -1086,7 +1164,7 @@ def bale_items(feats, chm, blocked, bounds=None):
     x, y, yaw, g, u = (np.concatenate(a) for a in (xs, ys, yaws, gs, us))
     rank = (u * 0.3).astype(np.float32)
     if len(x) > BALE_CELL_MAX:
-        keep = np.sort(np.argpartition(rank, BALE_CELL_MAX - 1)[:BALE_CELL_MAX])
+        keep = np.sort(np.argsort(rank, kind="stable")[:BALE_CELL_MAX])
         x, y, yaw, g, u, rank = x[keep], y[keep], yaw[keep], g[keep], u[keep], rank[keep]
     lon, lat = _to4326(x, y)
     n = len(lon)
@@ -1189,7 +1267,7 @@ def farm_foliage(feats, chm, blocked, bounds=None):
     rank = np.concatenate(ranks).astype(np.float32)
     u = np.concatenate(us)
     if len(lon) > FARM_BUSH_CELL:
-        keep = np.sort(np.argpartition(rank, FARM_BUSH_CELL - 1)[:FARM_BUSH_CELL])
+        keep = np.sort(np.argsort(rank, kind="stable")[:FARM_BUSH_CELL])
         lon, lat, height, yaw, rank, u = lon[keep], lat[keep], height[keep], yaw[keep], rank[keep], u[keep]
     group = np.full(len(lon), G_SHRUB, np.uint8)
     group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
@@ -1338,14 +1416,24 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, specs=None, walks=F
     pixel, the move that takes it just out of its nearest road's corridor (street trees: vegetation._build). With the
     class widths alone a city street's trees stood in its parking lanes: 136 of 536 trunks in Baltimore, 215 of 1358 in
     Seattle on a drawn carriageway (the user, 2026-10-28: "make sure no trees spawn on the road")."""
+    got = _road_segs(f, mask.shape, chm, clear, specs, walks)
+    if got is not None:
+        fast._ef.road_corridors(mask, push, np.ascontiguousarray(got[0]), np.ascontiguousarray(got[1]))
+
+
+def _road_segs(f, shape, chm, clear=ROAD_CLEAR_M, specs=None, walks=False, margins=None):
+    """(segs (m, 4) c0 r0 c1 r1, hws (m,) px) of road Features f's carriageways (footpaths left out) on the CHM grid
+    (shape: its rows, cols), each its half width (the drawn one, specs(f): roads.road_specs; walks: with its sidewalks;
+    or its class's, the wider) + clear, or + margins[class] (margins: a dict, clear the default); None when it has
+    none."""
     if f is None:
-        return
-    n_r, n_c = mask.shape
+        return None
+    n_r, n_c = shape
     cls = f.attrs.get("class", np.full(len(f.kind), "", object))
     fast.require(63, "road_segments")
     sel = [i for i in np.flatnonzero(f.kind == 2) if str(cls[i]) not in PATH_CLASSES]
     if not sel:
-        return
+        return None
     sp = specs(f) if specs is not None else [None] * len(f.kind)
     import roads as roadsmod
 
@@ -1353,8 +1441,13 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, specs=None, walks=F
         if s is None:   # them; the street trees, pushed to the curb, stand in pits at its edge: GitHub #424 / #425)
             return 0.0
         return s.width / 2 + (s.walk if walks and getattr(s, "walk", 0) and roadsmod.has_sidewalks(s) else 0.0)
-    hw_m = np.array([max(ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M), drawn(sp[i])) + clear
-                     for i in sel], np.float64)
+    import racedig
+
+    def margin(c):      # (BNE_RACEWAY_DIG: a racetrack's band kept clear, racedig.PROP_CLEAR_M)
+        m = clear if margins is None else margins.get(c, clear)
+        return max(m, racedig.PROP_CLEAR_M) if racedig.ON and c == "raceway" else m
+    hw_m = np.array([max(ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M), drawn(sp[i]))
+                     + margin(str(cls[i])) for i in sel], np.float64)
     # every ring's segments on the CHM grid, its half width in grid pixels (a 3857 metre is 1 / cos(lat) of a ground
     # metre), rings off the grid left out (earthfast road_segments, 2026-10-23: the per-ring Python loop it
     # replaced gave the same segments); then the distances and the nearest road's push, without the GIL
@@ -1363,8 +1456,7 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, specs=None, walks=F
                                        np.ascontiguousarray(f.ring_off, np.int64),
                                        np.ascontiguousarray(f.part_off, np.int64), np.asarray(sel, np.int64), hw_m,
                                        float(chm.x0), float(chm.y0), float(chm.dx), float(chm.dy), n_r, n_c)
-    if len(hws):
-        fast._ef.road_corridors(mask, push, np.ascontiguousarray(segs), np.ascontiguousarray(hws))
+    return (segs, hws) if len(hws) else None
 
 
 # --- tiles for the mod --------------------------------------------------------------------------------
@@ -1447,7 +1539,7 @@ def _capped(it):
     out = []
     for sel, cap in ((np.flatnonzero(~clump), TILE_ROWS_MAX), (np.flatnonzero(clump), CLUMP_ROWS_MAX)):
         if len(sel) > cap:
-            sel = sel[np.argpartition(it.rank[sel], cap - 1)[:cap]]
+            sel = sel[np.sort(np.argsort(it.rank[sel], kind="stable")[:cap])]
         out.append(sel)
     return np.sort(np.concatenate(out))
 
@@ -1626,21 +1718,6 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, rows, flat=False, geo=None):
     return f"{vfs_dir}/{name}", rows.n if isinstance(rows, JsonRows) else len(rows)
 
 
-def _squares_near(x, y, m, size):
-    """(i, j) of the size x size squares of the grid whose nearest point is within m of (x, y): a disc (Euclidean, as
-    roads.tiles_near; 2026-10-28, it was the square)."""
-    i0, i1 = math.floor((x - m) / size), math.floor((x + m) / size)
-    j0, j1 = math.floor((y - m) / size), math.floor((y + m) / size)
-    out = []
-    for i in range(i0, i1 + 1):
-        dx = max(i * size - x, x - (i + 1) * size, 0.0)
-        for j in range(j0, j1 + 1):
-            dy = max(j * size - y, y - (j + 1) * size, 0.0)
-            if dx * dx + dy * dy <= m * m:
-                out.append((i, j))
-    return out
-
-
 class Tracker:
     """Per connection: which tiles of a kind the mod has (as roads.Tracker): vegetation tiles by default
     (messages veg_tile / veg_drop); the far buildings use one too (buildings.FAR_*)."""
@@ -1663,6 +1740,7 @@ class Tracker:
         # blocked on the road processes, which re-plan every road cell for a new anchor: after a rebase at 90 mph
         # not one tree tile came for minutes (2026-10-17, salt flats)
         self.pool = None
+        self._warm = None           # (the pool's threads being started off the loop: _pool_ready)
         self.futs = {}
         # geo: keys are geotiles (geotiles.Z, the global grid): what was sent stays sent across anchors (the mod
         # re-places it at a rebase, geotile.lua), the tiles near a point found by their quads in the anchor's world
@@ -1673,14 +1751,13 @@ class Tracker:
         # not wanted (the skyline: where the far buildings' squares are, those being its own tiles))
         self.z, self.group_z = z, group_z
         self.frame = None
-        self._quads = {}            # (anchor id, key) -> its quad in that anchor's world
         self.rebuilt = 0            # tiles built again for a key sent before (diagnostics: 0 with geo)
         self.ever = set() if rebuild_history else None
         # (geotiles: redo_all, the tiles sent asked for again, sent again only where their file changed; digests: the
         # sent files' digests are kept for that, earthd's stale mode turns it on)
         self.redo, self.sent_h, self.digests = set(), {}, False
         self.epoch = 0              # (drop_all: a build started before it lands unwanted)
-        self._gate = None           # (_on_pose_geo: the last pass's inputs, TRACK_MOVE_M)
+        self._gate = None           # last geotile pass's inputs, for the TRACK_MOVE_M gate
 
     def redo_all(self):
         """Every geotile sent is asked for again (earthd Connection.stale_run's swap: they may be an older version's);
@@ -1702,8 +1779,8 @@ class Tracker:
 
     def progress(self):
         """(done, wanted) of the tiles round the car at the last pose (done: sent to the mod); (0, 0) before one."""
-        car = getattr(self, "car", ())
-        return sum(1 for k in car if k in self.sent), len(car)
+        fast.require(551, "tracker_progress")
+        return fast._ef.tracker_progress(getattr(self, "car", ()), self.sent, None, None, None, None, None)
 
     def on_pose(self, conn, aid, x, y, loop, build, view=None, foci=(), frame=None, tree=None):
         """As roads.Tracker.on_pose: the tiles within send_m of the car (x, y) and of the camera when it is away
@@ -1711,170 +1788,66 @@ class Tracker:
         whose trees collide: the tiles within r + 128 m of each, after the car's and camera's, kept within r + 256 m.
         tree: the car's time-to-reach tree (reach.Tree; geotiles only): the car's tiles in its order
         (reach.order_geotiles: right round the car, then along the way it goes) instead of nearest first."""
-        import roads as roadsmod
+        import geotiles
+        fast.require(551, "scenery tile tracker")
+        if self.geo and frame is None:
+            return
+        if aid != self.aid:
+            if self.geo:
+                self.frame = frame
+            else:
+                for f in self.futs.values():
+                    f.cancel()
+                self.sent, self.building, self.futs = set(), set(), {}
+            self.aid = aid
+        if not self._pool_ready(loop, f"{self.kind}-{'geo' if self.geo else 'tile'}"):
+            return
+        view = tuple(view) if view else None
+        start = functools.partial(self._start, conn, loop, build)
         if self.geo:
-            return self._on_pose_geo(conn, aid, x, y, loop, build, view, foci, frame, tree)
-        if aid != self.aid:
-            for f in self.futs.values():
-                f.cancel()                  # the old anchor's that have not started
-            self.aid, self.sent, self.building, self.futs = aid, set(), set(), {}
+            z = self.z or geotiles.Z
+            fast._ef.scenery_geo(self, aid, frame, (x, y), view, foci, tree, z, time.monotonic(),
+                                 TRACK_MAX_S, TRACK_MOVE_M, start,
+                                 functools.partial(self._drop_geo, conn, z))
+        else:
+            fast._ef.anchor_tiles(self, conn, aid, (x, y), view, foci, None, False, 0., start, None)
+
+    def _pool_ready(self, loop, name):
+        """The tracker's own pool (per_pose threads), made on its first pass with every thread started in the loop's
+        default executor, off the event loop (runtimeprofiler's prestart): False until they are, the pass left to the next
+        pose a few tens of ms later. Started one per submit on the loop, a teleport's first trees pass of 64 stalled the
+        event loop 2.5 s (2026-11-16). (A stand-in loop of the tests: no warming, ready at once.)"""
+        import asyncio
         if self.pool is None:
-            from runtimeprofiler import ThreadPoolExecutor
-            self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-tile")
-        spots = [(x, y)] + ([tuple(view)] if view else [])
-        skip = {k for p in spots for k in roadsmod.tiles_near(*p, self.skip_m)} if self.skip_m else ()
-        if self.inner is not None:          # (the skyline: not where the far buildings' groups are)
-            skip = {k for p in spots for k in self._near(*p, self.inner[0], unit=self.unit, group=self.inner[1])}
-        car = set(self._near(x, y, self.send_m))
-        self.car = car - set(skip)          # (progress: the loading line's tiles)
-        seen = set(self._near(*view, self.send_m)) - car if view else set()
-        others = set()
-        for f in foci:
-            others.update(self._near(f[0], f[1], min(self.send_m, f[2] + roadsmod.TILE / 2)))
-        others -= car | seen
-        want = [k for k in car | seen | others if k not in self.sent and k not in self.building and k not in skip]
-        if self.unit == 1:
-            car_key = roadsmod.view_key(conn, aid, x, y)
-            cam_key = roadsmod.view_key(conn, aid, *view) if seen else None
-        else:                               # (keys in larger squares: nearest first)
-            car_key = lambda k: self._dist(k, x, y)     # noqa: E731
-            cam_key = (lambda k: self._dist(k, *view)) if seen else None    # noqa: E731
+            from runtimeprofiler import TileJobs
+            self.pool = TileJobs(self.per_pose, name)
+            if isinstance(loop, asyncio.AbstractEventLoop):
+                self._warm = loop.run_in_executor(None, self.pool.prestart)
+        return self._warm is None or self._warm.done()
 
-        def focus_d(k):
-            return min(self._dist(k, f[0], f[1]) for f in foci)
-        want.sort(key=lambda k: (2, focus_d(k)) if k in others else (1, cam_key(k)) if k in seen else (0, car_key(k)))
-        # at most per_pose in flight: each waits in a thread of the loop's shared executor, and a teleport's
-        # hundreds (one per pose, uncapped) held every thread while the road tiles under the car waited for one
-        # (Sinaia 2026-10-15: bare ground for minutes)
-        for tx, ty in want[:max(0, self.per_pose - len(self.building))]:
-            self.building.add((tx, ty))
-            # (the tile's file read in the worker, not on the event loop: staging.build_inline; the build's own
-            # arguments as before)
-            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
-                                    False)
-            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, job, aid, tx, ty)
-            fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
-        for k in [k for k in list(self.sent) if all(self._dist(k, *p) > self.drop_m for p in spots)
-                  and all(self._dist(k, f[0], f[1]) > f[2] + roadsmod.TILE for f in foci)]:
-            self.sent.discard(k)
-            conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": f"{k[0]}_{k[1]}"})
+    def _start(self, conn, loop, build, key):
+        out_dir = getattr(getattr(conn, "s", None), "out_dir", None)
+        digest = self.geo and (self.digests or key in self.redo)
+        job = functools.partial(staging.build_inline, build, out_dir, digest)
+        if hasattr(getattr(conn, "s", None), "matslots") and self.kind in ("bldfar", "bldsky", "brfar", "bldpack", "bldhz"):
+            job = functools.partial(staging.prepare_shapes, conn.s, self.kind, self.geo, self.aid, key, job)
+        args = key if self.geo else (self.aid, *key)
+        self.building.add(key)
+        fut = self.futs[key] = loop.run_in_executor(self.pool, job, *args)
+        if self.geo:
+            fut.add_done_callback(lambda f, e=self.epoch: self._built_geo(conn, key, f, e))
+        else:
+            fut.add_done_callback(lambda f, a=self.aid: self._built(conn, a, key, f))
 
-    def _on_pose_geo(self, conn, aid, x, y, loop, build, view, foci, frame, tree=None):
-        """on_pose for geotiles: the same rules (send_m, drop_m, the camera's, other cars' foci; group_z's whole groups,
-        inner's tiles left out), the tiles' quads in the anchor's world (frame: its EnuFrame); an anchor change keeps
-        what was sent and in flight."""
+    def _drop_geo(self, conn, z, key):
         import geotiles
-        if frame is None:
-            return
-        if aid != self.aid:
-            self.aid, self.frame = aid, frame
-            self._quads = {k: v for k, v in self._quads.items() if k[0] == aid}
-        if self.pool is None:
-            from runtimeprofiler import ThreadPoolExecutor
-            self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-geo")
-        z = self.z or geotiles.Z
-        spots = [(x, y)] + ([tuple(view)] if view else [])
-        # (a pose that changes nothing this tracker goes by: no pass; the car, the camera and the other cars' foci
-        # within TRACK_MOVE_M of the last pass's, nothing sent, built or asked again since, at most TRACK_MAX_S ago)
-        now = time.monotonic()
-
-        def gate_key():
-            return (aid, id(frame), view is None, len(foci), id(tree), self.send_m, self.drop_m, self.inner,
-                    self.group_z, z, len(self.sent), len(self.building), len(self.redo), self.epoch, self.per_pose)
-        cont = [float(v) for p in spots for v in p[:2]] + [float(v) for f in foci for v in f[:3]]
-        last = getattr(self, "_gate", None)
-        if last is not None and last[0] == gate_key() and now - last[2] < TRACK_MAX_S and len(cont) == len(last[1]) \
-                and all(abs(a - b) <= TRACK_MOVE_M for a, b in zip(cont, last[1])) \
-                and not (last[3] and len(self.building) < self.per_pose):
-            return
-
-        def near(px, py, r):
-            """Keys within r of (px, py), nearest first (each tile by its own quad)."""
-            if self.group_z is None:
-                return [(a, b) for a, b, _d in geotiles.tiles_near(frame, px, py, r, z)]
-            keys = [c for a, b, _d in geotiles.tiles_near(frame, px, py, r, self.group_z)
-                    for c in geotiles.children(a, b, self.group_z, z)]
-            if not keys:
-                return keys
-            d = geotiles.dists(self.frame, keys, z, [(px, py)])[:, 0].tolist()     # (_geo_dist(own=True) of each)
-            return [k for _d, k in sorted(zip(d, keys))]
-        skip = set()
-        if self.inner is not None:
-            for p in spots:
-                skip.update((a, b) for a, b, _d in geotiles.tiles_near(frame, p[0], p[1], self.inner[0], z))
-        car = [k for k in near(x, y, self.send_m) if k not in skip]
-        if tree is not None and car:
-            import reach
-            try:
-                car = reach.order_geotiles(tree, frame, car, x, y, z)
-            except Exception as e:      # (nearest first, as before)
-                log.debug("%s geotiles in the tree's order: %s: %s", self.kind, type(e).__name__, e)
-        self.car = set(car)
-        seen = [k for k in near(*view, self.send_m) if k not in skip] if view else []
-        others = []
-        for f in foci:
-            others += [k for k in near(f[0], f[1], min(self.send_m, f[2] + 128.0)) if k not in skip]
-        order, done = [], set()
-        for k in car + seen + others:           # (nearest first)
-            if k not in done:
-                done.add(k)
-                order.append(k)
-        self.redo &= self.sent
-        want = [k for k in order if (k not in self.sent or k in self.redo) and k not in self.building]
-        n_go = max(0, self.per_pose - len(self.building))
-        more = len(want) > n_go             # (left for a later pass: the gate lets that one through)
-        for gx, gy in want[:n_go]:
-            self.building.add((gx, gy))
-            # (the tile's file read in the worker, not on the event loop: staging.build_inline)
-            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
-                                    self.digests or (gx, gy) in self.redo)
-            fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, job, gx, gy)
-            fut.add_done_callback(lambda f, k=(gx, gy), e=self.epoch: self._built_geo(conn, k, f, e))
-        for k in self._far_sent(spots, foci):
-            self.sent.discard(k)
-            self.sent_h.pop(k, None)
-            conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": geotiles.key(*k, z)})
-            gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
-            if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
-                gone(self.kind, k, geotiles.key(*k, z))
-        self._gate = (gate_key(), cont, now, more)
-
-    def _far_sent(self, spots, foci):
-        """The sent tiles farther than drop_m from every spot and than its reach + 256 m from every focus (_geo_dist
-        of each pair, by group when group_z): one batch call (earthfast.geo_tiles_dist; tile by tile from Python they
-        were whole seconds of a busy event loop, 2026-11-07)."""
-        import geotiles
-        sent = list(self.sent)
-        if not sent:
-            return []
-        z = self.z or geotiles.Z
-        keys, kz = sent, z
-        if self.group_z is not None:
-            keys, kz = [geotiles.parent(k[0], k[1], z, self.group_z) for k in sent], self.group_z
-        pts = [tuple(p[:2]) for p in spots] + [(f[0], f[1]) for f in foci]
-        if not pts:
-            return sent
-        d = geotiles.dists(self.frame, keys, kz, pts)
-        far = np.ones(len(sent), bool)
-        if spots:
-            far &= (d[:, :len(spots)] > self.drop_m).all(axis=1)
-        if foci:
-            far &= (d[:, len(spots):] > np.asarray([f[2] + 256.0 for f in foci], np.float64)).all(axis=1)
-        return [k for k, f in zip(sent, far.tolist()) if f]
-
-    def _geo_dist(self, k, x, y, own=False):
-        """m from (x, y) to geotile k's quad in the anchor's world (to its group's, group_z, unless own)."""
-        import geotiles
-        z = self.z or geotiles.Z
-        if self.group_z is not None and not own:
-            k, z = geotiles.parent(k[0], k[1], z, self.group_z), self.group_z
-        ck = (self.aid, z, k)
-        q = self._quads.get(ck)
-        if q is None:
-            q = self._quads[ck] = geotiles.quad(self.frame, k[0], k[1], z)
-            if len(self._quads) > 20000:
-                self._quads.clear()
-        return geotiles.quad_dist(q, x, y)
+        self.sent.discard(key)
+        self.sent_h.pop(key, None)
+        name = geotiles.key(*key, z)
+        conn.send({"type": f"{self.kind}_drop", "anchorId": self.aid, "key": name})
+        gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
+        if callable(gone):
+            gone(self.kind, key, name)
 
     def drop_all(self, conn):
         """Every geotile sent dropped (a drop message each) and the builds in flight left unwanted (their results are
@@ -1913,25 +1886,17 @@ class Tracker:
             return
         path, n, frame, pivot = res[:4]
         shapes = res[4] if len(res) > 4 else None       # (the far geotiles': {what: shape file}, pooled paths below)
-        again = key in self.redo
-        self.redo.discard(key)
-        if self.digests or again:
-            h = pre.digest if pre is not None else None
-            if h is None:
-                try:
-                    import hashlib
-                    with open(os.path.join(conn.s.out_dir, os.path.basename(path)), "rb") as f:
-                        h = hashlib.sha1(f.read()).digest()
-                except (OSError, AttributeError):
-                    pass
-            if again and h is not None and self.sent_h.get(key) == h and key in self.sent:
-                return                  # (the same tile as the one the mod has)
-            self.sent_h[key] = h
-        if self.ever is not None:
-            if key in self.ever:
-                self.rebuilt += 1
-            self.ever.add(key)
-        self.sent.add(key)
+        h = pre.digest if pre is not None else None
+        if h is None and (self.digests or key in self.redo):
+            try:
+                import hashlib
+                with open(os.path.join(conn.s.out_dir, os.path.basename(path)), "rb") as f:
+                    h = hashlib.sha1(f.read()).digest()
+            except (OSError, AttributeError):
+                pass
+        fast.require(551, "scenery_result")
+        if not fast._ef.scenery_result(self, key, h):
+            return
         m = {"type": f"{self.kind}_tile", "anchorId": self.aid, "key": geotiles.key(*key, self.z or geotiles.Z),
              "path": path, "n": n, "frame": [float(frame[0]), float(frame[1])], "pivot": float(pivot)}
         s = getattr(conn, "s", None)
@@ -1939,7 +1904,7 @@ class Tracker:
         data = pre.data if pre is not None else staging.inline_json(out_dir, path) if out_dir else None
         if data is not None:
             m["data"] = data
-        pool = getattr(s, "pool_shapes", None)
+        pool = pre.pool if pre and pre.prepared is not None else getattr(s, "pool_shapes", None)
         if shapes and pool is not None:
             slots = pool(conn, shapes)
             if slots:
@@ -1949,25 +1914,14 @@ class Tracker:
     def _near(self, x, y, m, unit=None, group=None):
         """Keys (tiles, or unit x unit squares of tiles) whose square, or whose group's square, comes within m."""
         import roads as roadsmod
-        unit = self.unit if unit is None else unit
-        group = self.group if group is None else group
-        if group:                           # (whole groups of `group` tiles; keys in `unit` squares)
-            gs = roadsmod.TILE * group
-            per = group // unit
-            return [(gx * per + i, gy * per + j) for gx, gy in _squares_near(x, y, m, gs)
-                    for i in range(per) for j in range(per)]
-        if unit == 1:
-            return roadsmod.tiles_near(x, y, m)
-        return _squares_near(x, y, m, roadsmod.TILE * unit)
+        fast.require(551, "tracker_near")
+        return fast._ef.tracker_near(x, y, m, roadsmod.TILE, self.unit if unit is None else unit,
+                                     self.group if group is None else group)
 
     def _dist(self, k, x, y):
-        """m (Euclidean, as _near) from (x, y) to key k's square, or to its group's (the far buildings under the
-        skyline)."""
         import roads as roadsmod
-        size = roadsmod.TILE * (self.group or self.unit)
-        per = (self.group // self.unit) if self.group else 1
-        x0, y0 = (k[0] // per) * size, (k[1] // per) * size
-        return roadsmod.box_gap(x0, y0, x0 + size, y0 + size, x, y)
+        fast.require(551, "tracker_distance")
+        return fast._ef.tracker_distance(k, x, y, roadsmod.TILE, self.unit, self.group)
 
     def _built(self, conn, aid, key, fut):
         if aid != self.aid:                 # (an old anchor's: the same key may be in flight for the new one)
@@ -1993,7 +1947,7 @@ class Tracker:
         data = pre.data if pre is not None else staging.inline_json(out_dir, path) if out_dir else None
         if data is not None:                # (the game need not open the file: staging.inline_json)
             m["data"] = data
-        pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
+        pool = pre.pool if pre and pre.prepared is not None else getattr(getattr(conn, "s", None), "pool_shapes", None)
         if self.kind in ("bldfar", "bldsky", "brfar", "bldpack") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
             slots = pool(conn, {"shape": f"{self.kind}_{aid}_{key[0]}_{key[1]}.cdae"})
             if slots:

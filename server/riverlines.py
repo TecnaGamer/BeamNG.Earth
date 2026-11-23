@@ -207,7 +207,7 @@ def _resample(xy, step):
         return xy[:1], s[:1]
     n = max(2, int(math.ceil(s[-1] / step)) + 1)
     t = np.linspace(0.0, s[-1], n)
-    return np.stack([np.interp(t, s, xy[:, 0]), np.interp(t, s, xy[:, 1])], -1), t
+    return np.stack([dnp.interp(t, s, xy[:, 0]), dnp.interp(t, s, xy[:, 1])], -1), t
 
 
 def _running_median(v, n):

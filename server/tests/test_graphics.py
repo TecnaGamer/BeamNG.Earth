@@ -56,14 +56,16 @@ class GraphicsMessageTest(unittest.TestCase):
     def test_defaults_are_todays(self):
         c = self.conn([])
         self.assertEqual((c.lod_scale, c.tree_scale, c.building_scale), (1.0, 1.0, 1.0))
-        self.assertIs(c.kfun(), self.s.kfun, "no scale: the server's own K")
+        self.assertEqual(c.far.ks(c, self.s, 5)[1:], [float(self.s.kfun(lvl)) for lvl in range(1, 6)],
+                         "no scale: the server's own K")
         self.assertEqual((c.veg.send_m, c.bldfar.send_m), (vegetation.SEND_M, buildings.FAR_SEND_M))
         self.assertEqual(self.s.base_px, earthd.BASE_PX)
 
     def test_scales(self):
         c = self.conn([{"type": "graphics", "lodScale": 2.0, "treeScale": 2.2, "buildingScale": 1.5, "photoPx": 4096}])
-        self.assertEqual(c.kfun()(1), 2.0 * self.s.kfun(1))
-        self.assertEqual(c.kfun()(5), 2.0 * self.s.kfun(5))
+        ks = c.far.ks(c, self.s, 5)        # (K of levels 0..5: earthfast FarState, the selection's own)
+        self.assertEqual(ks[1], 2.0 * self.s.kfun(1))
+        self.assertEqual(ks[5], 2.0 * self.s.kfun(5))
         self.assertAlmostEqual(c.veg.send_m, vegetation.SEND_M * 2.2)
         self.assertAlmostEqual(c.veg.drop_m - c.veg.send_m, vegetation.DROP_M - vegetation.SEND_M, msg="its hysteresis")
         self.assertEqual(c.bldfar.send_m, buildings.FAR_SEND_M * 1.5)
@@ -108,31 +110,32 @@ class GraphicsMessageTest(unittest.TestCase):
         c = self.conn([{"type": "graphics", "lodPx": 99}])
         self.assertEqual(c.lod_px_now(), earthd.LOD_PX_MAX)
         c = self.conn([{"type": "graphics", "lodPx": 2}])
-        self.assertIsNone(c.view(), "no camera yet")
+        self.assertIsNone(c.far.view_args(c, self.s), "no camera yet")
         a = self.s.new_anchor(40.0, -80.0)
         self.s.anchors[a.id] = a
         c.active = c.cam_aid = a.id
         c.cam = {"x": 10.0, "y": 20.0, "z": 5.0, "fovDeg": 60, "h": 1440}
         self.s.lod_errs[(a.id, (3, 1, 0))] = 0.4
         self.s.glod_errs[(14, 1, 2)] = 0.7
-        v = c.view()
-        self.assertEqual(v.tau, 2.0)
-        self.assertAlmostEqual(v.ppr, 1440 / (2 * math.tan(math.radians(30))))
-        self.assertEqual(v.err((3, 1, 0)), 0.4)
-        self.assertIsNone(v.err((3, 2, 0)))
-        self.assertEqual(v.gerr[(14, 1, 2)], 0.7)
+        v = c.far.view_args(c, self.s)      # (cx, cy, dz, ppr, tau, reach, h, cap, cells, errs, aid, gerr)
+        self.assertEqual(v[4], 2.0)
+        self.assertAlmostEqual(v[3], 1440 / (2 * math.tan(math.radians(30))))
+        errs, aid = v[9], v[10]
+        self.assertEqual(errs.get((aid, (3, 1, 0))), 0.4)
+        self.assertIsNone(errs.get((aid, (3, 2, 0))))
+        self.assertEqual(v[11][(14, 1, 2)], 0.7)
 
     def test_pixels_per_radian_smoothed_and_capped(self):
         c = self.conn([])
         base = 1440 / (2 * math.tan(math.radians(earthd.LOD_BASE_FOV_DEG) / 2))
-        self.assertAlmostEqual(c.lod_ppr(1440, 60, now=100.0), base)
+        self.assertAlmostEqual(c.far.lod_ppr(1440, 60, 100.0), base)
         # zoomed in: at most LOD_PPR_ZOOM times the base FOV's
-        self.assertAlmostEqual(c.lod_ppr(1440, 5, now=101.0), earthd.LOD_PPR_ZOOM * base)
+        self.assertAlmostEqual(c.far.lod_ppr(1440, 5, 101.0), earthd.LOD_PPR_ZOOM * base)
         # zoomed out again: the most of the last LOD_PPR_WINDOW_S seconds ...
-        self.assertAlmostEqual(c.lod_ppr(1440, 90, now=102.0), earthd.LOD_PPR_ZOOM * base)
+        self.assertAlmostEqual(c.far.lod_ppr(1440, 90, 102.0), earthd.LOD_PPR_ZOOM * base)
         # ... then the new one
         wide = 1440 / (2 * math.tan(math.radians(45)))
-        self.assertAlmostEqual(c.lod_ppr(1440, 90, now=101.0 + earthd.LOD_PPR_WINDOW_S + 0.5), wide)
+        self.assertAlmostEqual(c.far.lod_ppr(1440, 90, 101.0 + earthd.LOD_PPR_WINDOW_S + 0.5), wide)
 
     def test_tile_errors_kept(self):
         s = self.s
@@ -152,7 +155,8 @@ class GraphicsMessageTest(unittest.TestCase):
         counts = {}
         for scale in (0.75, 1.0, 2.0):
             c = self.conn([{"type": "graphics", "lodScale": scale}])
-            tiles, _ = ff.select(37.0, -91.0, [ring], kfun=c.kfun(), radius=150000.0, max_level=ff.HORIZON_MAX_LEVEL,
+            ks = c.far.ks(c, self.s, ff.HORIZON_MAX_LEVEL)     # (this connection's K by level)
+            tiles, _ = ff.select(37.0, -91.0, [ring], kfun=ks.__getitem__, radius=150000.0, max_level=ff.HORIZON_MAX_LEVEL,
                                  min_level=lay.min_level, radii=self.s.near_radii, layout=lay, disc=True, forced_level=-1)
             counts[scale] = len(tiles)
             under = [t for t in tiles.values() if ff.overlaps(t.bbox, block)]

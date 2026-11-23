@@ -118,8 +118,6 @@ class GenerationsTest(unittest.TestCase):
             self.assertTrue(revisit.older(self.d, now=1.0))
             with mock.patch.object(revisit, "STALE_ON", False):
                 self.assertEqual(revisit.older(self.d, now=1.0), [])
-            with mock.patch.dict(os.environ, {"BNGE_WORLD_BUNDLE": "/x"}):
-                self.assertEqual(revisit.older(self.d, now=1.0), [])
         self.assertIn("BNE_STALE_REVISIT", revisit.NOT_SWITCHES)
         self.assertIn("BNE_STALE_DAYS", revisit.NOT_SWITCHES)
         k = revisit.switches_key()
@@ -588,22 +586,22 @@ class StaleSwapTest(unittest.TestCase):
         with open(os.path.join(d, "old.ter"), "wb") as f:
             f.write(b"old ter")
         anchor = types.SimpleNamespace(id=7, stale=(gen,), stale_fresh=set(), stale_held=False, swap_gate=None)
-        server = types.SimpleNamespace(out_dir=d, hm=collections.OrderedDict({key: {"ter": "old.ter", "stale": "old"}}),
+        server = types.SimpleNamespace(out_dir=d, hm=collections.OrderedDict({key: {"heightmap": "hm.png", "ter": "old.ter", "stale": "old"}}),
                                        hm_committed=collections.deque([key]), hm_sent=collections.deque([key]),
-                                       ui_pool=None, is_abandoned=lambda aid: False, hm_suffix={},
-                                       _remove=lambda p: events.append(("removed", os.path.basename(p))))
-        server.hm_name = lambda k: f"hm{server.hm_suffix.get(k, '')}.png"
+                                       ui_pool=None, is_abandoned=lambda aid: False,
+                                       remove_off_loop=lambda paths: events.extend(("removed", os.path.basename(p)) for p in paths),
+                                       retire_terrain=lambda names: events.extend(("removed", n) for n in names))
 
         async def terrain(a, cx, cy, lane=None):
             events.append(("build", (a.id, cx, cy) in a.stale_fresh, bool(a.stale)))
             if build_fails:
                 raise RuntimeError("no block")
-            events.append(("built as", server.hm_name((a.id, cx, cy))))
-            with open(os.path.join(d, server.hm_name((a.id, cx, cy))), "wb") as f:
+            events.append(("built as", "new.png"))
+            with open(os.path.join(d, "new.png"), "wb") as f:
                 f.write(b"old heights" if block_same else b"new heights")
             with open(os.path.join(d, "new.ter"), "wb") as f:
                 f.write(b"old ter" if block_same else b"new ter")
-            info = {"ter": "new.ter"}
+            info = {"heightmap": "new.png", "ter": "new.ter"}
             server.hm[(a.id, cx, cy)] = info        # (as _hm_done)
             return info
         server.terrain = terrain
@@ -645,8 +643,7 @@ class StaleSwapTest(unittest.TestCase):
                                      signs=types.SimpleNamespace(refresh=lambda: events.append(("signs",))),
                                      terrain_msg=lambda k, info: {"cx": k[1], "cy": k[2], "ter": info["ter"]},
                                      spawn=lambda c: c.close(), SWAP_BUILD_S=5.0, SWAP_COMMIT_S=0.3)
-        conn._block_digest = lambda k, info: earthd.Connection._block_digest(conn, k, info)
-        conn._remove_later = lambda p: earthd.Connection._remove_later(conn, p)
+        conn._block_digest = earthd.Connection._block_digest.__get__(conn)
 
         class Inline:
             def submit(self, fn, *a):
@@ -672,13 +669,13 @@ class StaleSwapTest(unittest.TestCase):
         # the block was built as this version's while the anchor was still the older one's, and not shown meanwhile
         self.assertEqual(events[0], ("build", True, True))
         self.assertEqual(anchor.stale, ())
-        self.assertEqual(server.hm[key], {"ter": "new.ter"})
+        self.assertEqual(server.hm[key], {"heightmap": "new.png", "ter": "new.ter"})
         # built under names of its own: the shown block's files were never written over (the mod's rollback)
         built = next(e[1] for e in events if e[0] == "built as")
         self.assertNotEqual(built, "hm.png")
         with open(os.path.join(server.out_dir, "hm.png"), "rb") as f:
             self.assertEqual(f.read(), b"old heights")
-        self.assertEqual(server.hm_name(key), built, "and they are the block's names from the commit on")
+        self.assertEqual(server.hm[key]["heightmap"], built, "and they are the block's names from the commit on")
         self.assertIsNone(anchor.swap_gate, "the blocks' gate is open again")
         # the content, the trees and the signs only after the mod's commit
         self.assertLess(events.index(("tracker end", True)), events.index(("veg redo",)))
@@ -688,9 +685,9 @@ class StaleSwapTest(unittest.TestCase):
         ok, anchor, server, conn, sent, events, key = self.make(block_same=True)
         self.assertTrue(ok)
         self.assertNotIn("terrain_refresh", [m["type"] for m in sent])
-        self.assertEqual(server.hm[key], {"ter": "old.ter"}, "the mod's block: its mark gone, its .ter kept")
+        self.assertEqual(server.hm[key], {"heightmap": "hm.png", "ter": "old.ter"}, "the mod's block: its mark gone, its .ter kept")
         self.assertIn(("removed", "new.ter"), events)
-        self.assertEqual(server.hm_name(key), "hm.png", "its own files are the block's")
+        self.assertEqual(server.hm[key]["heightmap"], "hm.png", "its own files are the block's")
 
     def test_the_mod_cannot_commit_the_older_version_stays_whole(self):
         for kw in ({"mod_ok": False}, {"mod_answers": False}):
@@ -704,7 +701,7 @@ class StaleSwapTest(unittest.TestCase):
             self.assertNotIn(("veg redo",), events)
             self.assertIn(("removed", "new.ter"), events)
             self.assertIsNone(anchor.swap_gate)
-            self.assertEqual(server.hm_name(key), "hm.png", "the shown block's names are the key's again")
+            self.assertEqual(server.hm[key]["heightmap"], "hm.png", "the shown block's names are the key's again")
             with open(os.path.join(server.out_dir, "hm.png"), "rb") as f:
                 self.assertEqual(f.read(), b"old heights", "and its file is untouched: the mod can install it again")
 

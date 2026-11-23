@@ -28,6 +28,36 @@ class _Writer:
         return ("127.0.0.1", 0)
 
 
+class MeshDriveSelectionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_whole_upcoming_swap_precedes_nearer_side_tile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = earthd.Server(tmp, os.path.join(tmp, "cache"), near_visual="mesh", cells=64, horizon=False)
+            self.addCleanup(s.hm_pool.shutdown)
+            self.addCleanup(s.tile_pool.shutdown)
+            c = earthd.Connection(s, None, _Writer())
+            a = s.new_anchor(LAT, LON)
+            s.anchors[a.id] = a
+            c.active, c.focus = a.id, (32.0, 96.0)
+            c.update_far(gate=True)
+            self.assertIn("0_1_0", c.desired)  # east edge in 224 m, outside the 150 m exact ring
+            side = "-1_0_-1"
+            self.assertIn(side, c.desired)
+            c.shown = {c.ck(k): t.bbox for k, t in c.desired.items() if k != side}
+
+            c.vel = (30.0, 0.0)
+            c.update_far(gate=True)
+            east = {f"-1_{i}_{j}" for i in (2, 3) for j in (0, 1)}
+            self.assertEqual({t.key for t in c.queue[:4]}, east)
+            self.assertIn(side, {t.key for t in c.queue[4:]})
+            self.assertIn("0_-2_0", c.desired)
+
+            # Changing direction at the same spot must invalidate the pose selection gate.
+            c.vel = (-30.0, 0.0)
+            c.update_far(gate=True)
+            self.assertNotIn("0_-2_0", c.desired)
+            self.assertTrue({f"-1_{i}_{j}" for i in (-4, -3) for j in (0, 1)} <= c.desired.keys())
+
+
 class FarFirstTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -86,21 +116,14 @@ class FarFirstTest(unittest.TestCase):
             c.focus = steps[0]
             c._set_block(a.id, 0.0, 0.0)
             c.update_far()
-            skipped = [0]
-            orig = c._far_unchanged
-
-            def counted(*args):
-                r = orig(*args)
-                skipped[0] += r
-                return r
-            c._far_unchanged = counted
+            skipped0 = c.far.skipped        # (the selections the gate skipped: earthfast FarState)
             out = []
             for k, p in enumerate(steps):
                 clock.now += 0.5
                 c.focus = p
                 c.update_far(gate=gate)
                 out.append((sorted(c.desired), sorted(c.refined, key=str), [t.key for t in c.queue[:32]]))
-            return out, skipped[0]
+            return out, c.far.skipped - skipped0
         with mock.patch.object(earthd, "time", clock):
             return asyncio.run(go())
 
@@ -234,21 +257,25 @@ class FarFirstTest(unittest.TestCase):
         tiles = [ff.Tile(-1, 0, 0), ff.Tile(-1, 1, 0), ff.Tile(1, 0, 0), ff.Tile(0, 3, 0), ff.Tile(2, 0, 0)]
         c.desired = {t.key: t for t in tiles}
         c.sent, c.inflight = {}, {}
-        c.queue, c.qi, c.graded_wait = list(tiles), 0, []
-        got = [c._next_tile(False), c._next_tile(False)]
+        c.queue = list(tiles)
+
+        def next_tile(ok):
+            return c.far.next_tile(c.active, ok, 0, set())
+        got = [next_tile(False), next_tile(False)]
         self.assertEqual([t.key for t in got], ["1_0_0", "2_0_0"])
-        self.assertIsNone(c._next_tile(False))
-        self.assertEqual([t.key for t in c.graded_wait], ["-1_0_0", "-1_1_0", "0_3_0"])
-        self.assertEqual(c._next_tile(True).key, "-1_0_0")
-        c.sent["-1_1_0"] = tiles[1]                 # (sent meanwhile: skipped)
-        self.assertEqual(c._next_tile(True).key, "0_3_0")
-        self.assertIsNone(c._next_tile(True))
-        self.assertTrue(c.graded(ff.Tile(0, 0, 0)))
-        self.assertFalse(c.graded(ff.Tile(1, 0, 0)))
-        self.assertFalse(c.graded(ff.GTile(12, 1, 1, 3, (0, 0, 1, 0, 1, 1, 0, 1), 1.0)))
+        self.assertIsNone(next_tile(False))
+        self.assertEqual([t.key for t in c.far.graded_wait], ["-1_0_0", "-1_1_0", "0_3_0"])
+        self.assertEqual(next_tile(True).key, "-1_0_0")
+        c.sent = {"-1_1_0": tiles[1]}               # (sent meanwhile: skipped)
+        self.assertEqual(next_tile(True).key, "0_3_0")
+        self.assertIsNone(next_tile(True))
+        g = ff.GTile(12, 1, 1, -1, (0, 0, 1, 0, 1, 1, 0, 1), 1.0)
+        c.desired = {g.key: g}
+        c.queue = [g]
+        self.assertIs(next_tile(False), g, "a global tile is never graded")
+        self.assertEqual(c.graded_top(), 0)
         self.s.sea = object()           # (--sea on: the sea-carved levels wait for the water too)
-        self.assertTrue(c.graded(ff.Tile(2, 0, 0)))
-        self.assertFalse(c.graded(ff.Tile(3, 0, 0)))
+        self.assertEqual(c.graded_top(), earthd.seacarvemod.CARVE_MAX_LEVEL)
 
 
 if __name__ == "__main__":

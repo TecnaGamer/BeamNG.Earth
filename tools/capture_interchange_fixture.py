@@ -2,6 +2,7 @@
 
     python tools/capture_interchange_fixture.py NAME LAT LON CACHE_DIR [--cells-m M] [--prefix PREFIX]
     python tools/capture_interchange_fixture.py --repack FILE.npz     (an older capture in this format)
+    python tools/capture_interchange_fixture.py --repack FILE.npz --keep-m M    (and only the roads within M of the place)
 
 Fetches what is missing into CACHE_DIR (a cache of its own: the map data and DEM tiles go there, nothing else is
 written) and writes server/tests/fixtures/PREFIX_NAME.npz (PREFIX: interchange, tests/interchanges.py; drive,
@@ -76,9 +77,16 @@ def grid(frame, sample, half, step):
 
 
 def main():
-    if len(sys.argv) == 3 and sys.argv[1] == "--repack":
+    if len(sys.argv) in (3, 5) and sys.argv[1] == "--repack":
         with np.load(sys.argv[2], allow_pickle=True) as a:
             data = {k: a[k] for k in a.files}
+        if len(sys.argv) == 5 and sys.argv[3] == "--keep-m":     # (a replay measured near its place: the cells' far
+            sys.path.insert(0, str(ROOT / "server" / "tests"))    # roads left out of the file, tests/interchanges.py's
+            import interchanges                                    # own cut)
+            frame = geodesy.EnuFrame(*(float(v) for v in data["origin"]))
+            for i in range(len(data["cells"])):
+                if f"cell{i}.ids" in data:
+                    data = interchanges._keep_near(data, f"cell{i}.", frame, float(sys.argv[4]))
         save(sys.argv[2], data)
         print(f"{sys.argv[2]}: {Path(sys.argv[2]).stat().st_size / 1e6:.2f} MB")
         return

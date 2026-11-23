@@ -419,7 +419,7 @@ class FarTileTest(unittest.TestCase):
             rgb, used = im.render(FRAME, *sq, px)
             g = np.asarray(built.grid)
             rgb = rockface.rock(rgb, FRAME, *sq, g, x0, y0, tile.size / (g.shape[1] - 1))
-            n = imagery.write_dds(os.path.join(out, "server.dds"), rgb)
+            n = imagery.write_dds(os.path.join(out, "server.dds"), rgb, imagery.FAR_SRGB)
             built2, got = blockworker.far_tile(1, LAT, LON, tile, 12, None, 11, True, layout, tex)
             self.assertIsNotNone(got, "the tiles on disk now")
             self.assertEqual(got[0], n)
@@ -642,6 +642,27 @@ class FirstCellsTest(unittest.TestCase):
         self.assertEqual(blockworker._warm_next([(g, "k")], False), (g, "k"))
         src = Path(blockworker.__file__).read_text()
         self.assertIn("job = None if _FIRST[0] > 0 else", src)
+
+    def test_a_cell_a_teleport_left_is_dropped_quietly(self):
+        """pools.Abandoned from planning ahead is a teleport's cancel, not a fault: no error logged, the cell dropped."""
+        import threading as th
+        import pools as poolsmod
+
+        def give_up(_k):
+            raise poolsmod.Abandoned()
+        g = SimpleNamespace(warm=give_up)
+        old = getattr(blockworker, "_s", None)
+        blockworker._s = SimpleNamespace(cv=th.Condition(), want=[(g, "k"), (g, "other")])
+        self.addCleanup(setattr, blockworker, "_s", old)
+        with self.assertNoLogs("earthd.blockworker", level="WARNING"):
+            blockworker._warm_one((g, "k"))
+        self.assertEqual([k for _g, k in blockworker._s.want], ["other"])
+
+        def fails(_k):
+            raise ValueError("a real fault")
+        with self.assertLogs("earthd.blockworker", level="ERROR"):
+            blockworker._warm_one((SimpleNamespace(warm=fails), "other"))
+        self.assertEqual(blockworker._s.want, [])
 
     def server(self, pools, road=None, cpus=16):
         import earthd

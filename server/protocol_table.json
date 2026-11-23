@@ -1,0 +1,1362 @@
+{
+ "about": "Protocol 4's messages between the world server (server/earthd.py) and the mod (core.lua, farfield.lua, roads.lua ...), one table for both sides (docs/V1_3_SPEC.md E over docs/V1_2_DESIGN.md section 7 as amended by section 12). Read by server/tests/test_protocol_agreement.py, which checks the mod's sends and reads and a real session's messages against it; the Rust host will generate its message types from it (the port plan's section 2.3). Additive fields need no protocol bump: both sides ignore unknown types and fields.",
+ "format": "each message: {doc?, fields: {name: {type, optional?, nullable?, doc?}}, include?}. type is one of int, float, num (int or float), str, bool, list, dict, or a list of them (any of). optional: may be absent; nullable: may be JSON null. include: shapes whose fields follow the message's own (in that order). nested: the keys of a message's object-valued fields.",
+ "protocol": 4,
+ "shapes": {
+  "terrain": {
+   "doc": "a terrain block (terrain_ready / terrain_refresh, and anchor_ready.terrain)",
+   "fields": {
+    "cx": {"type": "num"},
+    "cy": {"type": "num"},
+    "heightmap": {"type": "str"},
+    "terrainTicket": {"type": "int", "optional": true, "doc": "ownership of this terrain delivery until the mod releases it"},
+    "size": {"type": "int"},
+    "squareSize": {"type": "num"},
+    "zBase": {"type": "num"},
+    "maxHeight": {"type": "num"},
+    "q": {"type": "num"},
+    "layers": {"type": "list", "optional": true},
+    "materials": {"type": "list", "optional": true, "doc": "--surface on (surface.py)"},
+    "base": {"type": "str", "optional": true},
+    "baseSize": {"type": "num", "optional": true, "doc": "--near-visual detail: the block's photo"},
+    "ter": {"type": "str", "optional": true, "doc": "the block as a .ter (swapped in, no import)"}
+   }
+  }
+ },
+ "nested": {
+  "pose.cam": ["x", "y", "z", "fx", "fy", "fz", "fovDeg", "h"],
+  "weather.cover": ["total", "low", "mid", "high"],
+  "weather.wind": ["ms", "fromDeg", "gustMs"],
+  "weather.aloft": ["ms", "fromDeg"]
+ },
+ "mod_to_server": {
+  "hello": {
+   "doc": "sessions: the session folders whose files the mod's objects still use (terrain deliveries, far tiles and road tiles; a restarted server keeps each earlier session still named here, docs/ROADMAP.md \"Robustness\" 3)",
+   "fields": {
+    "protocol": {"type": "int"},
+    "format": {"type": "int"},
+    "modVersion": {"type": "str"},
+    "release": {"type": "str", "optional": true},
+    "sessions": {"type": ["list", "dict"], "optional": true},
+    "waterguard": {"type": "int", "optional": true, "doc": "required for world generation when the server enables water"},
+    "slotSession": {"type": "str", "optional": true, "doc": "a reconnect: the pooled far-tile slots [[slot, serial], ...] the mod's objects hold for that session"},
+    "slotsHeld": {"type": ["list", "dict"], "optional": true},
+    "streamLease": {"type": "int", "optional": true},
+    "terrainHeld": {"type": ["list", "dict"], "optional": true, "doc": "complete surviving ticket snapshot on reconnect"},
+    "terrainFiles": {"type": "int", "optional": true},
+    "leaseId": {"type": "str", "optional": true},
+    "leaseSession": {"type": "str", "optional": true},
+    "held": {"type": ["list", "dict"], "optional": true},
+    "vegFlat": {"type": "bool", "optional": true, "doc": "the mod reads a vegetation tile as one flat array (veg_tile's data: {groups, stride, flat}; trees.lua)"},
+    "geoTiles": {"type": "int", "optional": true, "doc": "the mod places geotiles itself (geotile.lua's zoom: 17): the server sends their content once, kept across rebases (geotiles.py, --geo-tiles on)"},
+    "trafficVisuals": {"type": "int", "optional": true},
+    "roadGeo": {"type": "int", "optional": true, "doc": "... the road tiles too (roads.lua ROAD_GEO: content kept, a skin per anchor; roads.GeoTracker)"},
+    "swapGen": {"type": "int", "optional": true, "doc": "... a generation swap's commit barrier (roads.lua swapCommit; earthd Connection.stale_swap)"},
+    "farGeo": {"type": "int", "optional": true, "doc": "... and the far buildings, skyline and far bridges (roads.lua FAR_GEO: blockworker.far_geo)"},
+    "farPack": {"type": "int", "optional": true, "doc": "far building packs past buildings.PACK_INNER_M (hello.farPack)"},
+    "farHz": {"type": "int", "optional": true, "doc": "the horizon ring's tall buildings (bldhz.PROTO)"},
+    "turbineGeo": {"type": "int", "optional": true, "doc": "mapped turbine landmarks reuse the geotile tracker, independently of buildings/roads"},
+    "globalFar": {"type": "int", "optional": true, "doc": "... and the far field from level 3 up as global tiles (farfield.lua GLOBAL_FAR: select_global)"},
+    "readySet": {"type": "int", "optional": true, "doc": "it takes a built block near its target (follow.preferReady: 'terrain_ready_set')"},
+    "userPath": {"type": "str", "optional": true, "doc": "the game's own user folder (FS:getUserPath: Server.check_user_dir, GitHub #770)"},
+    "deckGuard": {"type": "int", "optional": true, "doc": "it slows the car before a bridge whose road tile has not come (deckguard.lua PROTO: 'deck_spans')"}
+   }
+  },
+  "traffic_visuals": {
+   "fields": {
+    "enabled": {"type": "bool"},
+    "reset": {"type": "bool", "optional": true}
+   }
+  },
+  "prepare_anchor": {
+   "fields": {
+    "requestId": {"type": "int"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "cx": {"type": "num", "optional": true},
+    "cy": {"type": "num", "optional": true},
+    "px": {"type": "num", "optional": true, "doc": "2026-10-22: the player's spot when not the origin (BeamMP: onto another player's anchor)"},
+    "py": {"type": "num", "optional": true},
+    "purpose": {"type": "str", "optional": true, "doc": "2026-10-25: 'teleport' (a declared teleport: provisional first block, boost) or 'rebase'"}
+   }
+  },
+  "commit_anchor": {
+   "fields": {
+    "anchorId": {"type": "int"}
+   }
+  },
+  "prepare_terrain": {
+   "fields": {
+    "requestId": {"type": "int"},
+    "anchorId": {"type": "int"},
+    "cx": {"type": "num"},
+    "cy": {"type": "num"}
+   }
+  },
+  "terrain_release": {
+   "doc": "return terrain delivery tickets, or all of them after the extension destroyed its TerrainBlock",
+   "fields": {
+    "tickets": {"type": "list", "optional": true},
+    "unloaded": {"type": "bool", "optional": true}
+   }
+  },
+  "commit_terrain": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "cx": {"type": "num"},
+    "cy": {"type": "num"}
+   }
+  },
+  "swap_done": {
+   "doc": "a generation swap committed (ok) or given up by the mod (core.lua _swapStep; earthd Connection.stale_swap)",
+   "fields": {
+    "gen": {"type": "int"},
+    "ok": {"type": "bool"},
+    "why": {"type": "str", "optional": true}
+   }
+  },
+  "pose": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "x": {"type": "num"},
+    "y": {"type": "num"},
+    "z": {"type": "num"},
+    "vx": {"type": "num"},
+    "vy": {"type": "num"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "speed": {"type": "num"},
+    "cam": {"type": "dict", "optional": true},
+    "follow": {"type": "bool", "optional": true, "doc": "false: the altitude rule holds the block (no prefetch)"},
+    "view": {"type": "bool", "optional": true, "doc": "true: the 3D map's view frame (earthd Conn.map_view)"},
+    "map": {"type": "bool", "optional": true, "doc": "true: the 3D map open (earthd Conn.map_open)"},
+    "held": {"type": ["list", "dict"], "optional": true, "doc": "previous anchors whose tile objects the mod still has (an empty Lua table may encode as {})"},
+    "sessions": {"type": ["list", "dict"], "optional": true, "doc": "the session folders in use, as in hello: an earlier run's one no longer named is released"},
+    "slotsGone": {"type": ["list", "dict"], "optional": true, "doc": "pooled far-tile slots whose far_tile's object is gone: [[slot, serial], ...] (matslots.py)"},
+    "foci": {"type": ["list", "dict"], "optional": true, "doc": "other vehicles' collision foci [{x, y, r, trees}] (collisionfoci.lua; earthd parse_foci)"},
+    "guardHold": {"type": "bool", "optional": true, "doc": "the edge guard holds the car for its ground (earthd Connection.hold_boost: every core meanwhile)"},
+    "deckWait": {"type": ["list", "dict"], "optional": true, "doc": "the road geotiles the deck guard slows the car for (a bridge's, not in yet): built first (deckspans.py)"}
+   }
+  },
+  "cache": {
+   "doc": "the download cache (cache.py; additive): the page's size cap (GB, 0 = unlimited), a clear, or neither (fresh usage numbers); always answered with a 'cache'",
+   "fields": {
+    "capGb": {"type": "num", "optional": true},
+    "clear": {"type": "bool", "optional": true}
+   }
+  },
+  "memory": {
+   "doc": "the settings page's Max RAM for BeamNG.Earth (memwatch.py): the limit (GB, 0 Auto) when the player changed it, or nothing (fresh numbers); always answered with a 'memory'",
+   "fields": {
+    "limitGb": {"type": "num", "optional": true}
+   }
+  },
+  "server_restart": {
+   "doc": "2026-11-15: the settings page's \"Restart world server\" (srvrestart.lua; server srvrestart.py): the server stops cleanly and its launcher starts it again; always answered with a 'server_restart'. key: the capability the server wrote in the game's temp/beamngEarth folder (srvrestart.write_key; core.restartKey)",
+   "fields": {
+    "key": {"type": "str"}
+   }
+  },
+  "report_context": {
+   "doc": "2026-11-12: the in-game reports (report.lua / reportsend.lua; server reportsend.py): the moment's server part (where the camera, the centre's aim point and the car are), the mod's files written (scrubbed), and the player's \"Send to the developers\" (only the folder's name: never a path)",
+   "fields": {
+    "folder": {"type": "str"},
+    "camera": {"type": "dict", "optional": true},
+    "aim": {"type": "dict", "optional": true},
+    "player": {"type": "dict", "optional": true}
+   }
+  },
+  "report_saved": {
+   "fields": {
+    "folder": {"type": "str"}
+   }
+  },
+  "report_send": {
+   "fields": {
+    "folder": {"type": "str"}
+   }
+  },
+  "app_path": {
+   "doc": "2026-10-25: the settings page's cache folder / BeamMP launcher (apppaths.py): chosen in a window or typed",
+   "fields": {
+    "what": {"type": "str", "optional": true},
+    "pick": {"type": "bool", "optional": true},
+    "path": {"type": "str", "optional": true}
+   }
+  },
+  "terrain_patch": {
+   "doc": "the ground's collision patch under another vehicle's collision island off the block (terrainpatch.lua / .py)",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "x0": {"type": "num"},
+    "y0": {"type": "num"},
+    "x1": {"type": "num"},
+    "y1": {"type": "num"}
+   }
+  },
+  "space_clouds_req": {
+   "doc": "2026-11-06: the camera far above the clouds: the cloud shell round the point under it (spaceclouds.lua / .py)",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "alt": {"type": "num"},
+    "sunAz": {"type": "num", "optional": true},
+    "sunEl": {"type": "num", "optional": true, "doc": "(the game sky's sun seen from there)"}
+   }
+  },
+  "runtime_profiler": {
+   "doc": "the performance log (perflog.lua; additive): lines for the server's log (hitches, drops, minutes, the machine)",
+   "fields": {
+    "enabled": {"type": "bool"},
+    "mode": {"type": "str", "optional": true},
+    "probe": {"type": "int", "optional": true}
+   }
+  },
+  "perf_log": {
+   "fields": {
+    "lines": {"type": ["list", "dict"]}
+   }
+  },
+  "perf_setup": {
+   "doc": "the anonymous performance data (perfsummary.lua, perfstats.py; additive): the setup once a connection, 5-minute windows",
+   "fields": {
+    "setup": {"type": "dict"}
+   }
+  },
+  "perf_summary": {
+   "fields": {
+    "summary": {"type": "dict"}
+   }
+  },
+  "roads_reset": {
+   "doc": "BeamMP shared generation (peerwork.py, mpsession.lua): our world server serves our group; the players on our anchor ({id, host, port, code, weight} each). (Commented out 2026-10-27: shared world building is off.) roads (roads.py; additive): the mod removed its roads (switched off and on again): send them again",
+   "fields": {}
+  },
+  "world_reset": {
+   "doc": "the mod's level started again after another level in the same game: forget what was sent",
+   "fields": {}
+  },
+  "gas_stations": {
+   "doc": "gas stations (gasstations.py; additive): on, sent after every hello",
+   "fields": {
+    "on": {"type": "bool"}
+   }
+  },
+  "highway_signs": {
+   "doc": "highway signs (signstream.py; additive): the settings page's switch, sent after every hello and when changed",
+   "fields": {
+    "on": {"type": "bool"}
+   }
+  },
+  "direction_signs": {
+   "fields": {
+    "on": {"type": "bool"}
+   }
+  },
+  "road_signs": {
+   "fields": {
+    "on": {"type": "bool"}
+   }
+  },
+  "german_junctions": {
+   "doc": "German junction signs (designs.py; additive): the settings page's switch, sent after every hello and on a change",
+   "fields": {
+    "on": {"type": "bool"}
+   }
+  },
+  "town_signs": {
+   "doc": "town signs (townentry.py; additive): the settings page's switch, sent after every hello and on a change",
+   "fields": {
+    "on": {"type": "bool"}
+   }
+  },
+  "road_wear": {
+   "doc": "road wear (roadwear.py; additive): the settings page's Road surface detail ('off' / 'basic' / 'full'), sent after every hello and on a change",
+   "fields": {
+    "value": {"type": "str"}
+   }
+  },
+  "graphics": {
+   "doc": "the settings page's graphics (Connection.set_graphics; additive): sent after every hello and on a change; the far field's terrain detail (K x lodScale), the tree tiles' and far buildings' reach, the ground photo's px, the far field's screen-space LOD (lodPx: the largest pop on screen, px; 0: off)",
+   "fields": {
+    "lodScale": {"type": "num", "optional": true},
+    "treeScale": {"type": "num", "optional": true},
+    "buildingScale": {"type": "num", "optional": true},
+    "photoPx": {"type": "num", "optional": true},
+    "viewM": {"type": "num", "optional": true},
+    "lodPx": {"type": "num", "optional": true}
+   }
+  },
+  "map_tiles": {
+   "fields": {
+    "tiles": {"type": "list", "doc": "the world map's basemap tiles as files (settings.mapTiles)"}
+   }
+  },
+  "geocode": {
+   "fields": {
+    "id": {"type": "int"},
+    "q": {"type": "str"},
+    "lat": {"type": "num", "optional": true},
+    "lon": {"type": "num", "optional": true},
+    "full": {"type": "bool", "optional": true, "doc": "the map's search box"}
+   }
+  },
+  "stations": {
+   "fields": {
+    "id": {"type": "int"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "r_km": {"type": "num"},
+    "kinds": {"type": "list"},
+    "mode": {"type": "str", "doc": "the station finder"}
+   }
+  },
+  "preload_place": {
+   "doc": "a destination picked on the world map, loaded ahead; hover: one the pointer rests on (the light part)",
+   "fields": {
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "hover": {"type": "bool", "optional": true}
+   }
+  },
+  "cache_map": {
+   "doc": "the map's cache view (covermap.py; additive): the zoom-z tiles x0..x1, y0..y1; mode summary / elevation / imagery / mapdata (world: not asked by the map yet)",
+   "fields": {
+    "id": {"type": "int"},
+    "z": {"type": "int"},
+    "x0": {"type": "num"},
+    "y0": {"type": "num"},
+    "x1": {"type": "num"},
+    "y1": {"type": "num"},
+    "mode": {"type": "str", "optional": true}
+   }
+  },
+  "area_plan": {
+   "doc": "saved areas (areas.py; additive): a picked box's estimate, a new area, pause / resume / delete one; a saved route: route \"current\" (the last planned GPS route) and half (its corridor's half width, m) instead of the box",
+   "fields": {
+    "id": {"type": "int"},
+    "s": {"type": "num", "optional": true},
+    "w": {"type": "num", "optional": true},
+    "n": {"type": "num", "optional": true},
+    "e": {"type": "num", "optional": true},
+    "route": {"type": "str", "optional": true},
+    "half": {"type": "num", "optional": true},
+    "mode": {"type": "str", "optional": true}
+   }
+  },
+  "area_add": {
+   "fields": {
+    "id": {"type": "int"},
+    "s": {"type": "num", "optional": true},
+    "w": {"type": "num", "optional": true},
+    "n": {"type": "num", "optional": true},
+    "e": {"type": "num", "optional": true},
+    "route": {"type": "str", "optional": true},
+    "half": {"type": "num", "optional": true},
+    "name": {"type": "str", "optional": true},
+    "mode": {"type": "str", "optional": true},
+    "fast": {"type": "bool", "optional": true, "doc": "(fast: areas.py fast mode, the game paused while it runs)"}
+   }
+  },
+  "area_cmd": {
+   "fields": {
+    "id": {"type": "int"},
+    "area": {"type": "str"},
+    "op": {"type": "str", "doc": "op: pause, resume, delete, fast, slow"}
+   }
+  },
+  "route": {
+   "fields": {
+    "id": {"type": "int"},
+    "lat0": {"type": "num"},
+    "lon0": {"type": "num"},
+    "lat1": {"type": "num"},
+    "lon1": {"type": "num"},
+    "bearing": {"type": "num", "optional": true, "doc": "the GPS (routing.py); bearing: the car's heading, the route starts that way"},
+    "download": {"type": "str", "optional": true, "doc": "the \"Download along route\" setting: off / ahead / route (route_download)"},
+    "via": {"type": "list", "optional": true, "doc": "[[lat, lon], ...] waypoints on the way (routing.MAX_VIA; GitHub #935)"},
+    "avoid": {"type": "bool", "optional": true, "doc": "the \"GPS: avoid highways\" setting (routing.plan avoid_highways; PR #1263)"}
+   }
+  },
+  "where": {
+   "fields": {
+    "id": {"type": "int"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "online": {"type": "bool", "doc": "the status bar (geocode.py)"}
+   }
+  },
+  "map_labels": {
+   "doc": "the 3D map's labels by zoom (map3d.lua; maplabels.py)",
+   "fields": {
+    "id": {"type": "int"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "zoom": {"type": "num"},
+    "radius": {"type": "num"}
+   }
+  },
+  "places": {
+   "doc": "the modding API's places round a point (api.lua places / buildings; places.py)",
+   "fields": {
+    "id": {"type": "int"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "radius": {"type": "num", "optional": true},
+    "categories": {"type": "list", "optional": true},
+    "limit": {"type": "num", "optional": true},
+    "cursor": {"type": "str", "optional": true},
+    "buildings": {"type": "bool"},
+    "minConfidence": {"type": "num", "optional": true},
+    "cachedOnly": {"type": "bool", "doc": "only the cells on disk, a wide radius then allowed (places.py)"}
+   }
+  },
+  "map_focus": {
+   "doc": "the 3D map flying: where the view will end (map3d.flyHint; earthd on_map_focus)",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "x": {"type": "num"},
+    "y": {"type": "num"},
+    "eye": {"type": "num"},
+    "seconds": {"type": "num"}
+   }
+  },
+  "globe_req": {
+   "fields": {
+    "anchorId": {"type": "int", "doc": "the 3D map's whole-earth globe for an anchor (globe.lua / globe.py)"}
+   }
+  },
+  "server_list": {
+   "doc": "the BeamNG.Earth servers for the tab in BeamMP's browser (serverlist.lua)",
+   "fields": {}
+  },
+  "share_hello": {
+   "doc": "BeamMP shared world generation v2 (mpsession.lua <-> mpshare.py): our share code asked once a session, the plugin's messages and groups passed through untouched",
+   "fields": {}
+  },
+  "share_in": {
+   "fields": {
+    "d": {"type": "str"}
+   }
+  },
+  "share_group": {
+   "fields": {
+    "d": {"type": "str"}
+   }
+  },
+  "open_page": {
+   "doc": "the update notice's button: the server opens the releases page (updates.open_page; additive)",
+   "fields": {
+    "url": {"type": "str"}
+   }
+  },
+  "update_now": {
+   "doc": "the update notice's \"Update now\" (selfupdate.py)",
+   "fields": {}
+  },
+  "addons_list": {
+   "doc": "the Add-ons page (addons.lua <-> addons.py; additive): the list, one add-on's page, Install / Update (consent: the player agreed to its notice; mp: a BeamMP session, refused), and the mod's answer after the game's mod manager took the file or enabled / disabled / removed the mod",
+   "fields": {
+    "refresh": {"type": "bool", "optional": true}
+   }
+  },
+  "addon_detail": {
+   "fields": {
+    "id": {"type": "str"},
+    "refresh": {"type": "bool", "optional": true}
+   }
+  },
+  "addon_install": {
+   "fields": {
+    "id": {"type": "str"},
+    "consent": {"type": "bool"},
+    "mp": {"type": "bool", "optional": true}
+   }
+  },
+  "addon_applied": {
+   "fields": {
+    "id": {"type": "str"},
+    "op": {"type": "str"},
+    "ok": {"type": "bool"},
+    "error": {"type": "str", "optional": true}
+   }
+  },
+  "addon_run": {
+   "fields": {
+    "id": {"type": "str"},
+    "op": {"type": "str", "doc": "a program beside the game: start / stop / uninstall / autostart"}
+   }
+  },
+  "addon_add": {
+   "fields": {
+    "repo": {"type": "str", "doc": "Add from GitHub: the pasted repository"}
+   }
+  },
+  "addon_forget": {
+   "fields": {
+    "id": {"type": "str", "doc": "an add-on the player added, taken off the list"}
+   }
+  },
+  "addon_options": {
+   "fields": {
+    "id": {"type": "str"},
+    "values": {"type": "dict", "doc": "its Options tab saved"}
+   }
+  },
+  "random_place": {
+   "doc": "the level select's \"Random location\" (randomplace.py; additive)",
+   "fields": {
+    "id": {"type": "int"}
+   }
+  },
+  "place_previews": {
+   "doc": "the level select's place pictures (placepreview.py; additive): [{key, lat, lon}]",
+   "fields": {
+    "places": {"type": ["list", "dict"]}
+   }
+  }
+ },
+ "server_to_mod": {
+  "server_list": {
+   "fields": {
+    "servers": {"type": "list", "optional": true},
+    "error": {"type": "str", "optional": true, "doc": "earthd.server_list (the list service)"}
+   }
+  },
+  "share_info": {
+   "fields": {
+    "code": {"type": "str"},
+    "weight": {"type": "num", "doc": "BeamMP sharing v2: our share code for the poses"},
+    "overtureRelease": {"type": "str", "optional": true, "doc": "2026-11-18: this server's Overture release: the poses carry it (rel), the plugin passes it in bngeAnchors, players of another release are told (mpsession.releaseNote)"}
+   }
+  },
+  "share_out": {
+   "fields": {
+    "to": {"type": "str"},
+    "d": {"type": "str", "doc": "... a message for the plugin (\"S\") or a player"}
+   }
+  },
+  "geocode_result": {
+   "fields": {
+    "id": {"type": "int"},
+    "results": {"type": "list"},
+    "error": {"type": "str", "optional": true},
+    "text": {"type": "str", "optional": true, "doc": "geocode.py"}
+   }
+  },
+  "stations_result": {
+   "fields": {
+    "id": {"type": "int"},
+    "items": {"type": "list"},
+    "partial": {"type": "bool"},
+    "error": {"type": "str", "optional": true, "doc": "stationindex.py"}
+   }
+  },
+  "cache_map_result": {
+   "doc": "covermap.py: w x h levels (base64, north row first) for the asked box, clipped to the world; gen changes with the index; ready: false while the index is being built",
+   "fields": {
+    "id": {"type": "int"},
+    "z": {"type": "int"},
+    "x0": {"type": "int"},
+    "y0": {"type": "int"},
+    "w": {"type": "int"},
+    "h": {"type": "int"},
+    "cells": {"type": "str"},
+    "gen": {"type": "int"},
+    "ready": {"type": "bool", "optional": true},
+    "error": {"type": "str", "optional": true}
+   }
+  },
+  "area_plan_result": {
+   "doc": "areas.py: a picked box's estimate (sizes in bytes, the time in s, days of the hosts' daily limits)",
+   "fields": {
+    "id": {"type": "int"},
+    "ok": {"type": "bool"},
+    "km2": {"type": "num", "optional": true},
+    "items": {"type": "int", "optional": true},
+    "missing": {"type": "int", "optional": true},
+    "downloadBytes": {"type": "int", "optional": true},
+    "diskBytes": {"type": "int", "optional": true},
+    "seconds": {"type": "int", "optional": true},
+    "days": {"type": "num", "optional": true},
+    "hosts": {"type": "list", "optional": true},
+    "excluded": {"type": "list", "optional": true},
+    "km": {"type": "num", "optional": true},
+    "worldTiles": {"type": "int", "optional": true},
+    "worldMissing": {"type": "int", "optional": true},
+    "error": {"type": "str", "optional": true}
+   }
+  },
+  "areas": {
+   "doc": "the saved areas [{id, name, s, w, n, e, state, done, total, msg, mode, route?}] after hello, a change and while one downloads (at most every areas.STATUS_S); result: the answer to an area_add / area_cmd",
+   "fields": {
+    "areas": {"type": "list"},
+    "pinnedBytes": {"type": "int", "optional": true},
+    "result": {"type": "dict", "optional": true},
+    "fast": {"type": "str", "optional": true, "doc": "(the area running fast, \"\" none: the mod pauses the game meanwhile)"}
+   }
+  },
+  "route_result": {
+   "fields": {
+    "id": {"type": "int"},
+    "points": {"type": "list"},
+    "dist": {"type": "num"},
+    "dur": {"type": "num"},
+    "error": {"type": "str", "optional": true},
+    "elev": {"type": ["list", "dict"], "optional": true, "doc": "OSRM; elev: the map's profile (routing.resample, dem.sample)"},
+    "legs": {"type": "list", "optional": true, "doc": "with via: [[dist_m, dur_s], ...] per leg"},
+    "steps": {"type": "list", "optional": true, "doc": "OSRM maneuvers (routing.parse; the API's gpsRoute().steps)"},
+    "avoided": {"type": "bool", "optional": true, "doc": "with avoid: true Valhalla's route without motorways, false it has none (the normal route), absent: not reached"}
+   }
+  },
+  "route_download": {
+   "fields": {
+    "total": {"type": "int"},
+    "done": {"type": "int"},
+    "active": {"type": "bool"}
+   }
+  },
+  "terrain_ready_set": {
+   "doc": "the blocks built already round the player (follow.preferReady takes one instead of its own target)",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "centres": {"type": "list", "doc": "routeahead.py: the route's corridor"}
+   }
+  },
+  "update": {
+   "fields": {
+    "current": {"type": "str"},
+    "latest": {"type": "str"},
+    "url": {"type": "str", "doc": "a newer version on GitHub (updates.py)"},
+    "dev": {"type": "bool", "optional": true, "doc": "(a development build's check: whether the newer one is one too)"}
+   }
+  },
+  "update_status": {
+   "fields": {
+    "state": {"type": "str"},
+    "text": {"type": "str"},
+    "done": {"type": "int", "optional": true},
+    "total": {"type": "int", "optional": true},
+    "version": {"type": "str", "optional": true, "doc": "the \"Update now\" download (selfupdate.py)"}
+   }
+  },
+  "addons": {
+   "doc": "the Add-ons page (addons.py): the cards; one add-on's README and changelog as safe HTML (fast.md_html); a download's progress; the checked file for the game's mod manager (addons.lua hands it over)",
+   "fields": {
+    "addons": {"type": "list"},
+    "error": {"type": "str", "optional": true}
+   }
+  },
+  "addon_detail": {
+   "fields": {
+    "id": {"type": "str"},
+    "card": {"type": "dict", "optional": true},
+    "readme": {"type": "str"},
+    "readmeLinks": {"type": "list"},
+    "releases": {"type": "list"},
+    "error": {"type": "str"}
+   }
+  },
+  "addon_status": {
+   "fields": {
+    "id": {"type": "str"},
+    "state": {"type": "str"},
+    "text": {"type": "str"},
+    "done": {"type": "int", "optional": true},
+    "total": {"type": "int", "optional": true}
+   }
+  },
+  "addon_added": {
+   "fields": {
+    "ok": {"type": "bool"},
+    "id": {"type": "str", "optional": true},
+    "error": {"type": "str", "optional": true, "doc": "Add from GitHub's answer"}
+   }
+  },
+  "addon_apply": {
+   "fields": {
+    "id": {"type": "str"},
+    "op": {"type": "str"},
+    "file": {"type": "str"},
+    "tmp": {"type": "str"},
+    "old": {"type": "list"},
+    "tag": {"type": "str"},
+    "active": {"type": "bool"},
+    "uiApps": {"type": "list"},
+    "code": {"type": "dict"},
+    "oldCode": {"type": "dict", "optional": true}
+   }
+  },
+  "where_result": {
+   "fields": {
+    "id": {"type": "int"},
+    "street": {"type": "str"},
+    "place": {"type": "str", "optional": true},
+    "region": {"type": "str", "optional": true},
+    "country": {"type": "str", "optional": true, "doc": "the status bar's location"}
+   }
+  },
+  "map_labels_result": {
+   "fields": {
+    "id": {"type": "int"},
+    "rows": {"type": "list", "doc": "the 3D map's labels: maplabels.py rows"}
+   }
+  },
+  "places_result": {
+   "doc": "... the modding API's places (places.py rows; buildings asked only, next while more pages follow)",
+   "fields": {
+    "id": {"type": "int"},
+    "places": {"type": "list"},
+    "complete": {"type": "bool"},
+    "pending": {"type": "bool"},
+    "buildings": {"type": "list", "optional": true},
+    "next": {"type": "str", "optional": true},
+    "truncated": {"type": "bool", "optional": true},
+    "error": {"type": "str", "optional": true}
+   }
+  },
+  "globe": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "shape": {"type": "str"},
+    "texture": {"type": "str"},
+    "material": {"type": "str", "doc": "the 3D map's globe"},
+    "miniShape": {"type": "str"},
+    "miniScale": {"type": "num", "doc": "... and its small copy (far out)"}
+   }
+  },
+  "random_place_result": {
+   "fields": {
+    "id": {"type": "int"},
+    "lat": {"type": "num", "optional": true},
+    "lon": {"type": "num", "optional": true},
+    "name": {"type": "str", "optional": true}
+   }
+  },
+  "place_previews_ready": {
+   "fields": {
+    "keys": {"type": "list"}
+   }
+  },
+  "map_tiles_ready": {
+   "fields": {
+    "tiles": {"type": "list", "doc": "[z, x, y, ok, layer] each: written to <user>/temp/beamngEarth/maptiles"}
+   }
+  },
+  "runtime_profiler_pong": {
+   "fields": {
+    "probe": {"type": "int"}
+   }
+  },
+  "runtime_profiler": {
+   "fields": {
+    "profile": {"type": "dict"}
+   }
+  },
+  "hello": {
+   "fields": {
+    "runtimeProfiler": {"type": "int", "optional": true},
+    "waterguard": {"type": "int", "optional": true},
+    "protocol": {"type": "int"},
+    "format": {"type": "int"},
+    "serverVersion": {"type": "str"},
+    "appVersion": {"type": "str"},
+    "sessionId": {"type": "str"},
+    "privacyRegion": {"type": "str"},
+    "telemetryConsent": {"type": "int", "doc": "the welcome page's telemetry defaults"},
+    "streamLease": {"type": "int", "optional": true},
+    "terrainFiles": {"type": "int", "optional": true},
+    "leaseId": {"type": "str", "optional": true},
+    "memoryTier": {"type": "str", "optional": true},
+    "memoryNote": {"type": "str", "optional": true, "doc": "low-memory machines only (budget.TIER lean / emergency)"},
+    "startSettings": {"type": "dict", "optional": true, "doc": "the start-time values of the settings read only at a start (srvrestart.start_view: {id: value}) and whether a supervisor starts the server again (srvrestart.ENV): the settings page's restart button"},
+    "restartable": {"type": "bool", "optional": true},
+    "overtureRelease": {"type": "str", "optional": true, "doc": "2026-11-18: the Overture release this server reads (overture.effective: its supervisor's pick for the app session, overturepick.Pick); the mod pins its level's world to the live connection's and holds on another or none (releasepin.lua)"},
+    "startFixed": {"type": ["list", "dict"], "optional": true, "doc": "... the ids set by hand there (never pending: srvrestart.lua)"},
+    "farFormat": {"type": "str"},
+    "material": {"type": "str"},
+    "nearVisual": {"type": "str"},
+    "attribution": {"type": "str", "doc": "protocol 4"},
+    "cells": {"type": "int", "optional": true, "doc": "v1.4 M1: cells per tile edge, FORMAT 4 only"},
+    "blockSize": {"type": "int", "doc": "the terrain block: samples per edge (always since 2026-11-01) ..."},
+    "squareSize": {"type": "num", "doc": "... and their spacing, m (1 m; without both the mod takes 1024 x 2 m)"},
+    "horizon": {"type": "bool", "optional": true, "doc": "v1.4 M1h: true with --horizon only"},
+    "geoTiles": {"type": "int", "optional": true, "doc": "geotiles: the zoom of the tiles it sends (hello.geoTiles, --geo-tiles on)"},
+    "trafficVisuals": {"type": "int", "optional": true, "doc": "visual roads, independent of the AI graph's physics window"},
+    "roadGeo": {"type": "int", "optional": true, "doc": "road tiles as geotiles (hello.roadGeo, the road processes on)"},
+    "farGeo": {"type": "int", "optional": true, "doc": "far buildings / skyline / far bridges as geotiles (hello.farGeo)"},
+    "farPack": {"type": "int", "optional": true, "doc": "... and the far buildings past PACK_INNER_M as packs (hello.farPack)"},
+    "farHz": {"type": "int", "optional": true, "doc": "... and the horizon ring (hello.farHz, BNE_BLDHZ_DIR)"},
+    "turbineGeo": {"type": "int", "optional": true, "doc": "mapped turbine geotiles (zoom 15; native stock shapes)"},
+    "globalFar": {"type": "int", "optional": true, "doc": "far levels >= 3 as global tiles (hello.globalFar, --global-far)"},
+    "deshadow": {"type": "str", "optional": true, "doc": "--deshadow lambert|full only (the settings page shows it)"},
+    "colormatch": {"type": "str", "optional": true, "doc": "--colormatch s2 only (likewise)"},
+    "season": {"type": "str", "optional": true, "doc": "--season auto / fall (seasonlook.lua tints the leaves)"},
+    "mapPort": {"type": "int", "optional": true, "doc": "the world map's tile endpoint on 127.0.0.1 (maptiles.py)"},
+    "prewarm": {"type": "str", "optional": true, "doc": "the shape listing our shapes' materials (prewarm.py; with map data)"},
+    "imageryCredits": {"type": "list", "optional": true, "doc": "the world map's credits for its view: [[credit, w, s, e, n] or [credit]] per imagery source, and the rest (weather, elevation); with imagery on only"},
+    "otherCredits": {"type": "str", "optional": true}
+   }
+  },
+  "catchup": {
+   "fields": {
+    "on": {"type": "bool", "doc": "the catch-up boost on / off (the mod tags slow frames: perfsummary.lua)"}
+   }
+  },
+  "status": {
+   "fields": {
+    "text": {"type": "str"},
+    "backlog": {"type": "int", "doc": "v1.4 M0: desired - shown far tiles of the current anchor"},
+    "radius": {"type": "num", "optional": true, "doc": "v1.4 M1h: the far-field radius (m), --horizon only"}
+   }
+  },
+  "anchor_ready": {
+   "fields": {
+    "requestId": {"type": "int"},
+    "anchorId": {"type": "int"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "groundZ": {"type": "num", "nullable": true},
+    "terrain": {"type": "dict"},
+    "floorZ": {"type": "num", "nullable": true, "optional": true, "doc": "2026-10-17: in a tunnel, its floor (core.floorCheck)"},
+    "anchorKey": {"type": "str", "optional": true, "doc": "phase 5 (lattice anchors): not sent yet"},
+    "provisional": {"type": "bool", "optional": true, "doc": "2026-10-22: a teleport's ungraded first block"},
+    "px": {"type": "num", "nullable": true, "optional": true},
+    "py": {"type": "num", "nullable": true, "optional": true, "doc": "the prepare_anchor's spot, echoed"},
+    "fuelShapes": {"type": "list", "optional": true, "doc": "2026-10-23: the region's gas station shapes (--gas-stations)"}
+   }
+  },
+  "anchor_progress": {
+   "fields": {
+    "requestId": {"type": "int", "nullable": true},
+    "stage": {"type": "str"},
+    "elapsed": {"type": "num"}
+   }
+  },
+  "anchor_error": {
+   "fields": {
+    "requestId": {"type": "int", "nullable": true},
+    "error": {"type": "str"},
+    "stage": {"type": "str", "optional": true}
+   }
+  },
+  "terrain_ready": {
+   "doc": "building, commented out 2026-10-27)",
+   "fields": {
+    "requestId": {"type": "int"},
+    "anchorId": {"type": "int"}
+   },
+   "include": ["terrain"]
+  },
+  "terrain_refresh": {
+   "doc": "the graded block in place of the provisional one; swap: a generation swap's block, held by the mod until the swap's skins are staged and committed with them",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "swap": {"type": "int", "optional": true}
+   },
+   "include": ["terrain"]
+  },
+  "swap_begin": {
+   "doc": "a generation swap (earthd Connection.stale_swap): what follows with `swap = gen` is staged; all of it sent; given up",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "gen": {"type": "int"}
+   }
+  },
+  "swap_end": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "gen": {"type": "int"},
+    "skins": {"type": "int"}
+   }
+  },
+  "swap_abort": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "gen": {"type": "int"}
+   }
+  },
+  "terrain_error": {
+   "fields": {
+    "requestId": {"type": "int", "nullable": true},
+    "anchorId": {"type": "int", "nullable": true},
+    "error": {"type": "str"}
+   }
+  },
+  "far_tile": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "level": {"type": "int"},
+    "shape": {"type": "str"},
+    "pos": {"type": "list"},
+    "err": {"type": "num"},
+    "skirt": {"type": "num"},
+    "sink": {"type": "num", "optional": true},
+    "state": {"type": "str", "doc": "sink: exactly on L0"},
+    "material": {"type": "str", "optional": true, "doc": "protocol 4, satellite imagery: the tile's own material (all three, or none)"},
+    "texture": {"type": "str", "optional": true},
+    "detail": {"type": "bool", "optional": true},
+    "tex": {"type": "int", "optional": true, "doc": "v1.4 M1: texture px (FORMAT 4, with the material)"},
+    "slotSerial": {"type": "int", "optional": true, "doc": "a pooled shape file's send serial (matslots.py; pose.slotsGone)"},
+    "frame": {"type": "list", "optional": true, "doc": "geotiles phase 3b (hello.globalFar): a global tile's frame [lat, lon] (pos then {0, 0, pivot} in it), and a global tile's / a piece's footprint (flat x, y: its quad / polygon in the anchor's world)"},
+    "poly": {"type": "list", "optional": true}
+   }
+  },
+  "far_swap": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "id": {"type": "int"},
+    "add": {"type": "list"},
+    "remove": {"type": "list"},
+    "dIn": {"type": "num"},
+    "dOut": {"type": "num"}
+   }
+  },
+  "far_remove": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"}
+   }
+  },
+  "far_done": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "count": {"type": "int"}
+   }
+  },
+  "far_retex": {
+   "doc": "--colormatch / --deshadow: a shown (or held) tile's texture rendered again under a new name (additive, protocol 4; exercised by RetexMessagesTest, a session whose colour-match regions turn ready)",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "texture": {"type": "str"}
+   }
+  },
+  "weather": {
+   "doc": "real weather at the player (weather.py; additive, protocol 4)",
+   "fields": {
+    "v": {"type": "int"},
+    "t": {"type": "int"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "code": {"type": "int"},
+    "isDay": {"type": "bool"},
+    "cover": {"type": "dict"},
+    "baseM": {"type": "num"},
+    "baseAglM": {"type": "num"},
+    "rainMmH": {"type": "num"},
+    "snowCmH": {"type": "num"},
+    "visM": {"type": "num", "nullable": true},
+    "fog": {"type": "bool"},
+    "thunder": {"type": "bool"},
+    "wind": {"type": "dict"},
+    "aloft": {"type": "dict", "optional": true},
+    "tempC": {"type": "num"},
+    "dewC": {"type": "num"},
+    "elevM": {"type": "num"},
+    "slTempC": {"type": "num"},
+    "pressureHpa": {"type": "num"},
+    "utcOffsetS": {"type": "int", "optional": true},
+    "tz": {"type": "str", "optional": true},
+    "credit": {"type": "str"}
+   }
+  },
+  "gravity": {
+   "doc": "real gravity at the player (gravity.py; additive, protocol 4): |g| in m/s^2 at (lat, lon, h m MSL)",
+   "fields": {
+    "v": {"type": "int"},
+    "g": {"type": "num"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "h": {"type": "num"},
+    "source": {"type": "str"}
+   }
+  },
+  "block_base": {
+   "doc": "detail mode: a block's base photo rendered again once its NAIP tiles arrived (earthd base_refresh)",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "cx": {"type": "num"},
+    "cy": {"type": "num"},
+    "base": {"type": "str"},
+    "baseSize": {"type": "num"}
+   }
+  },
+  "ground_ahead": {
+   "doc": "the highest ground near the player's path (groundahead.py; the mod's altitude rule), z in the anchor's frame",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "z": {"type": "num"}
+   }
+  },
+  "deck_spans": {
+   "doc": "the bridges round the car (deckspans.py; the mod's deck guard, hello.deckGuard): spans [[x0, y0, x1, y1, ...]] in the anchor's world, abut [bits] (1 the first end on the ground, 2 the last), for the disc (cx, cy) r",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "cx": {"type": "num"},
+    "cy": {"type": "num"},
+    "r": {"type": "num"},
+    "spans": {"type": "list"},
+    "abut": {"type": "list"}
+   }
+  },
+  "sea": {
+   "doc": "the water near the player (--sea on): tiles [key, x, y, z, size, nx, ny] (seatiles.py), rivers [key, kind, flow m/s, [[x, y, z, width, depth], ...]] (riverlines.py)",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "tiles": {"type": "list"},
+    "rivers": {"type": "list"}
+   }
+  },
+  "credits": {
+   "doc": "data credits for the tiles around the player (credits.py; additive, protocol 4, --credits on)",
+   "fields": {
+    "v": {"type": "int"},
+    "near": {"type": "str"},
+    "far": {"type": "str"},
+    "ids": {"type": "list"},
+    "farIds": {"type": "list"}
+   }
+  },
+  "user_dir_mismatch": {
+   "doc": "the loading line's counts (Connection.send_progress, the mod's loadprogress.lua): [done, wanted] each the server writes where the game does not look (Server.check_user_dir, GitHub #770)",
+   "fields": {
+    "game": {"type": "str"},
+    "server": {"type": "str"}
+   }
+  },
+  "load_progress": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "ground": {"type": "list"},
+    "roads": {"type": "list"},
+    "trees": {"type": "list"},
+    "far": {"type": "list"},
+    "net": {"type": "list", "doc": "(the downloads in flight: loadprogress.downloadText)"}
+   }
+  },
+  "roads_tile": {
+   "doc": "road tiles near the player (roads.py; additive, with map data only): a JSON file of DecalRoad chunks",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "path": {"type": "str"},
+    "n": {"type": "int"},
+    "data": {"type": "dict", "optional": true, "doc": "the file's JSON, so the game need not open it (staging.inline_json)"},
+    "slots": {"type": "dict", "optional": true, "doc": "{what: [pooled shape path, serial]} (matslots.py; pose.slotsGone)"},
+    "frame": {"type": "list", "optional": true, "doc": "a road geotile (key \"g17_x_y\", hello.roadGeo): its content in the frame [lat, lon] of its centre, each part {shape, pos, pivot, relief} in data, h its content hash (kept across a server restart), exact {what: shape}: the parts this anchor shows as their exact variants (slots \"x:<what>\")"},
+    "h": {"type": "str", "optional": true},
+    "exact": {"type": "dict", "optional": true}
+   }
+  },
+  "roads_skin": {
+   "doc": "a road geotile's draped surfaces for an anchor (road mesh, plazas, sidewalks; their colliders), a JSON file",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "path": {"type": "str"},
+    "data": {"type": "dict", "optional": true},
+    "slots": {"type": "dict", "optional": true},
+    "swap": {"type": "int", "optional": true}
+   }
+  },
+  "roads_exact": {
+   "doc": "a road geotile's parts shown as their exact variant for an anchor ({what: shape}; false: the base shape again)",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "parts": {"type": "dict"},
+    "slots": {"type": "dict", "optional": true}
+   }
+  },
+  "roads_drop": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"}
+   }
+  },
+  "veg_tile": {
+   "doc": "trees, bushes and rocks of a tile (vegetation.py, --trees on): a JSON file of items (a geotile, key \"g17_x_y\": frame [lat, lon] of its centre and pivot, m in that frame: the mod places it, geotile.lua, and keeps it across rebases)",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "path": {"type": "str"},
+    "n": {"type": "int"},
+    "data": {"type": "dict", "optional": true},
+    "frame": {"type": "list", "optional": true},
+    "pivot": {"type": "num", "optional": true}
+   }
+  },
+  "veg_drop": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"}
+   }
+  },
+  "traffic_tile": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "path": {"type": "str"},
+    "n": {"type": "int"},
+    "data": {"type": "dict", "optional": true},
+    "frame": {"type": "list"},
+    "pivot": {"type": "num"}
+   }
+  },
+  "traffic_drop": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"}
+   }
+  },
+  "traffic_far_tile": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "path": {"type": "str"},
+    "n": {"type": "int"},
+    "data": {"type": "dict", "optional": true},
+    "frame": {"type": "list"},
+    "pivot": {"type": "num"}
+   }
+  },
+  "traffic_far_drop": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"}
+   }
+  },
+  "turbines_tile": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "path": {"type": "str"},
+    "n": {"type": "int"},
+    "data": {"type": "dict", "optional": true},
+    "frame": {"type": "list"},
+    "pivot": {"type": "num"}
+   }
+  },
+  "turbines_drop": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"}
+   }
+  },
+  "bldfar_tile": {
+   "doc": "far buildings (buildings.far_tile, --buildings on): a JSON file naming a render-only mesh (a geotile, key \"g17_x_y\", hello.farGeo: frame [lat, lon] of its centre and pivot, m in that frame: the mod places it and keeps it across rebases; the skyline's and far bridges' keys \"g15_x_y\")",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "path": {"type": "str"},
+    "n": {"type": "int"},
+    "data": {"type": "dict", "optional": true},
+    "slots": {"type": "dict", "optional": true, "doc": "{\"shape\": [pooled shape path, serial]}"},
+    "frame": {"type": "list", "optional": true},
+    "pivot": {"type": "num", "optional": true}
+   }
+  },
+  "bldfar_drop": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"}
+   }
+  },
+  "bldsky_tile": {
+   "doc": "the skyline past them (buildings.skyline_tile): the same, one per SKY_UNIT x SKY_UNIT road tiles",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "path": {"type": "str"},
+    "n": {"type": "int"},
+    "data": {"type": "dict", "optional": true},
+    "slots": {"type": "dict", "optional": true},
+    "frame": {"type": "list", "optional": true},
+    "pivot": {"type": "num", "optional": true}
+   }
+  },
+  "bldsky_drop": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"}
+   }
+  },
+  "brfar_tile": {
+   "doc": "the bridges past the road tiles (buildings.far_bridge_tile): the same, a road tile's square of decks",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "path": {"type": "str"},
+    "n": {"type": "int"},
+    "data": {"type": "dict", "optional": true},
+    "slots": {"type": "dict", "optional": true, "doc": "(a geotile's: {road geotile key: [pooled shape path, serial]})"},
+    "frame": {"type": "list", "optional": true},
+    "pivot": {"type": "num", "optional": true}
+   }
+  },
+  "brfar_drop": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"}
+   }
+  },
+  "bldpack_tile": {
+   "doc": "the far buildings of a whole skyline square past buildings.PACK_INNER_M as one shape (hello.farPack, key \"g15_x_y\")",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "path": {"type": "str"},
+    "n": {"type": "int"},
+    "data": {"type": "dict", "optional": true},
+    "slots": {"type": "dict", "optional": true},
+    "frame": {"type": "list", "optional": true},
+    "pivot": {"type": "num", "optional": true}
+   }
+  },
+  "bldpack_drop": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"}
+   }
+  },
+  "bldhz_tile": {
+   "doc": "the horizon ring's tall buildings, a piece per skyline square under a zoom-12 geotile (hello.farHz, bldhz.py)",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "path": {"type": "str"},
+    "n": {"type": "int"},
+    "data": {"type": "dict", "optional": true},
+    "slots": {"type": "dict", "optional": true},
+    "frame": {"type": "list", "optional": true},
+    "pivot": {"type": "num", "optional": true}
+   }
+  },
+  "bldhz_drop": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"}
+   }
+  },
+  "navgraph": {
+   "doc": "the AI road graph around the player (navgraph.py, --traffic on): a JSON file of nodes and edges",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "path": {"type": "str"},
+    "cx": {"type": "num"},
+    "cy": {"type": "num"},
+    "nodes": {"type": "int"},
+    "edges": {"type": "int"},
+    "serial": {"type": "int"}
+   }
+  },
+  "terrain_patch": {
+   "doc": "the download cache's usage (cache.py; additive, with a Cache only): after hello and every mod 'cache' ... its answer: the patch's shape and centre, or an error (the mod asks again later)",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "key": {"type": "str"},
+    "parts": {"type": "list", "optional": true, "doc": "[{path, x, y}]: small meshes"},
+    "tris": {"type": "int", "optional": true},
+    "error": {"type": "str", "optional": true}
+   }
+  },
+  "tunnel_floor": {
+   "doc": "... its answer: the shell's shape, colour and opacity DDS (game paths), the material's name, where it is round a teleport's spot in a tunnel: its floor, after anchor_ready (core.floorCheck: down onto it once the tube collides)",
+   "fields": {
+    "anchorId": {"type": "int"},
+    "floorZ": {"type": "num"},
+    "x": {"type": "num"},
+    "y": {"type": "num"}
+   }
+  },
+  "space_clouds": {
+   "fields": {
+    "anchorId": {"type": "int"},
+    "shape": {"type": "str"},
+    "color": {"type": "str"},
+    "opacity": {"type": "str"},
+    "material": {"type": "str"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "radius": {"type": "num"},
+    "lightsShape": {"type": "str", "optional": true, "doc": "... and the night side's city lights over the ground (none: none could be had)"},
+    "lights": {"type": "str", "optional": true},
+    "lightsMaterial": {"type": "str", "optional": true}
+   }
+  },
+  "app_paths": {
+   "fields": {
+    "cacheDir": {"type": "str"},
+    "cacheNext": {"type": "str"},
+    "beammp": {"type": "str"},
+    "result": {"type": "dict", "optional": true}
+   }
+  },
+  "report_status": {
+   "doc": "the in-game reports (reportsend.py): a send's state (queued / sending / retry / sent / failed, the collector's report id once sent) and the server's part of a report written",
+   "fields": {
+    "folder": {"type": "str"},
+    "state": {"type": "str"},
+    "id": {"type": "str", "optional": true},
+    "text": {"type": "str", "optional": true},
+    "tries": {"type": "int", "optional": true},
+    "next": {"type": "num", "optional": true}
+   }
+  },
+  "report_context_done": {
+   "fields": {
+    "folder": {"type": "str"},
+    "ok": {"type": "bool"}
+   }
+  },
+  "memory": {
+   "doc": "the server's memory and its limit (memwatch.status), for the settings page: after every mod 'memory'",
+   "fields": {
+    "usedMB": {"type": "num"},
+    "limitMB": {"type": "num"},
+    "effMB": {"type": "num"},
+    "autoMB": {"type": "num"},
+    "setting": {"type": "num"},
+    "tier": {"type": "str"},
+    "processes": {"type": "int"},
+    "sheds": {"type": "int"},
+    "rotations": {"type": "int"},
+    "peakMB": {"type": "num"},
+    "availMB": {"type": "num", "optional": true},
+    "restart": {"type": "bool"},
+    "tooLow": {"type": "bool", "doc": "(over Max RAM for minutes: memwatch.too_low, the settings line says so)"}
+   }
+  },
+  "server_restart": {
+   "doc": "the answer to 'server_restart': ok, the server stops now and is started again; else why not (error)",
+   "fields": {
+    "ok": {"type": "bool"},
+    "error": {"type": "str", "optional": true}
+   }
+  },
+  "cache": {
+   "fields": {
+    "v": {"type": "int"},
+    "usedBytes": {"type": "int"},
+    "capBytes": {"type": "int"},
+    "files": {"type": "int"},
+    "ready": {"type": "bool"},
+    "managed": {"type": "bool"},
+    "clearedBytes": {"type": "int", "optional": true},
+    "pinnedBytes": {"type": "int", "optional": true, "doc": "the saved areas' files (areas.py; kept by a clear)"}
+   }
+  }
+ },
+ "retired": {
+  "doc": "messages commented out of the protocol (shared world building v1, 2026-10-27); not on the wire",
+  "lines": [
+   "\"share\": {\"port\": F(int, OPT)},       # (the BeamMP server's sharing port, its plugin's bngeConfig)",
+   "\"peers\": {\"me\": F(str), \"members\": F(list)},",
+   "\"share\": {\"port\": F(int, NULL), \"code\": F(str), \"weight\": F(NUM, OPT)},   # our group service (shared world"
+  ]
+ }
+}

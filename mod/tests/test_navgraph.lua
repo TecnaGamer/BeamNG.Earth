@@ -3,6 +3,15 @@ local T = dofile((arg[0]:match('^(.*)[/\\]') or '.') .. '/testlib.lua')
 function vec3(x, y, z) return { x = x, y = y, z = z } end
 local N = require('beamngEarth/navgraph')
 
+do      -- the graph in the game's map: its anchor's, and over the place asked about
+  local a = { anchor = 3, serial = 1, box = { -500, -500, 500, 500 } }
+  T.check(N.covers(a, 3, 0, 0, 200), 'the current anchor graph round the place')
+  T.check(not N.covers(a, 2, 0, 0, 200), 'another anchor graph (the map keeps the old one after a teleport)')
+  T.check(not N.covers(a, 3, 400, 0, 200), 'the place not inside its clip')
+  T.check(not N.covers(nil, 3, 0, 0, 200), 'no graph applied yet')
+  T.check(N.covers({ anchor = 3, box = {} }, 3, 9000, 0, 200), 'an unclipped graph covers all')
+  T.check(not N.appliedCovers(3, 0, 0, 10), 'nothing applied in the tests')
+end
 T.check(N.lanes(2, 1, false) == '-++' and N.lanes(2, 1, true) == '++-' and N.lanes(1, 0, false) == '+',
   'lanes: against first for right-hand traffic')
 -- A sub-metre seam on the same carriageway must not force a separate lane adjustment.
@@ -43,7 +52,9 @@ do
       if twoWay then for _, e in ipairs(g.edges) do e[3], e[4], e[5] = 0, 3, 2 end end
       case[2](g)
       local ns = N.toNodes(g, { -100, -100, 200, 200 }, 0, false)
-      T.check(ns.b and ns.c and ns.b.links.c, 'preserve ' .. case[1] .. (twoWay and ' on a two-way road' or ''))
+      local kept = ns.b and ns.c and ns.b.links.c
+      if case[1] == 'a real junction' then kept = ns.b and ns.b.links.x and (ns.b.links.c or ns.b.links.d) end
+      T.check(kept, 'preserve ' .. case[1] .. (twoWay and ' on a two-way road' or ''))
     end
   end
   local reversed = seam()

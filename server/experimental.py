@@ -13,6 +13,8 @@ Defaults: every switch off, as before, and NOTHING added to the environment for 
 variable set is in the cache keys (revisit.code_key / switches_key: the road plans, cell facts, road tiles, blocks;
 decisions.vkey_doc: the shared decision archives, built with the default switches), so an "off" written out would make
 other keys for the same world and lose the archives. A variable already in the environment (set by hand) is kept.
+The switches proven to change no plan and no fact (revisit.PLAN_NEUTRAL, tests/test_plan_neutral.py) are left out of
+the plans' and facts' keys and the archives' (revisit.plans_switches_key): with only those on, the archives still hold.
 """
 import json
 import os
@@ -23,6 +25,33 @@ SETTINGS_FILE = ("settings", "beamngEarth.json")    # (cpupin.MOD_SETTINGS; the 
 FEATURES = (
     ("roadSigns", {"BNE_ROADSIGNS": "on"}, None),                         # roadsigns.ON
     ("expNlRoadSigns", {"BNE_NL_ROADSIGNS": "on"}, "roadSigns"),           # roadsigns.NL_ON (only with ON)
+    # The road revamp's switches as one (the user, 2026-11-17: "if revamped roads arent enabled by default in the dev
+    # builds yet make it a single experemental toggle"); each later revamp switch joins this set, not the page
+    # (BNE_LEVEL_SPACING left out: on the 33-place ride corpus it made perth_915 and a5_underpass worse, 2026-11-17)
+    ("expRoadRevamp", {"BNE_SPEED_TAPERS": "on", "BNE_DECK_K_SPEED": "on",
+                       "BNE_FOOT_CLEAR": "on", "BNE_RAIL_LIFECYCLE": "on", "BNE_RACEWAY_DIG": "on",
+                       "BNE_TUNNEL_ROAD_OVER": "on",
+                       # the ski-ramp fixes (the clearance study's causes 1-3; BNE_UNDER_SPEED left out: no gain)
+                       "BNE_FAST_DECK_ENDS": "on", "BNE_FAST_GAP": "on", "BNE_FAST_DECK_GROUND": "on",
+                       # racetracks without street poles (BNE_POWER_YARDS left out: one open Codex high, feeders
+                       # classified differently by the span and yard tiles)
+                       "BNE_RACEWAY_PROPS": "on",
+                       # railways at roads (the user's reports r61-r64, r80, r92)
+                       "BNE_RAIL_ROAD_FIT": "on", "BNE_RAIL_SEAM_NATURAL": "on",
+                       # road revamp v2, "road shape first" (the user, 2026-11-19: "put them under revamped roads. Have
+                       # that toggle include the latest and what would be the final roads"): vanilla-style cut and fill
+                       # slopes with rocks and wall-foot skirts (P1a), decks that follow the road's curve and bank
+                       # (P1b) and exits off bridges as one deck with their road (P2b, "sheet": builds on P1b's decks),
+                       # (the surface overlay P1c and the new sidewalks P1d moved to their own toggles below, 2026-11-21:
+                       # the wide corpus (193 places) found the overlay alone buried the road surface 2+ cm under terrain
+                       # at Hong Kong and Chicago, and the sidewalks alone added kerb steps at Paris; the user: "Sure go
+                       # ahead" on splitting them out so Revamped roads keeps what clearly helps)
+                       "BNE_BATTER": "vanilla", "BNE_ROADSHAPE": "sheet",
+                       # road surface v3 (2026-11-20: one continuous lane surface for motorways/trunks and their
+                       # bridge decks; beats the sheet decks at all five probe sites, 0 m of parapet in a carriageway)
+                       "BNE_ROADSURF_V3": "surface"}, None),
+    ("expSurfaceOverlay", {"BNE_SURFACE_V2": "on"}, None),                # roadsurf: the second surface layer (P1c)
+    ("expNewSidewalks", {"BNE_SIDEWALK_V2": "on"}, None),                 # sidewalks_v2: town sidewalks (P1d, S5)
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
     ("expEntranceFlares", {"BNE_ENTRANCE_FLARES": "on"}, None),           # roads.flares_enabled
@@ -44,6 +73,7 @@ FEATURES = (
     ("expRailCurves", {"BNE_RAIL_CURVES": "on"}, None),                   # roadsmooth.RAIL_ON
     ("expWatertight", {"BNE_WATERTIGHT": "on"}, None),                    # shells.ON
     ("expCanadaLidar", {"BNE_LIDARBC": "1", "BNE_HRDEM_NEAR": "1"}, None),     # dem.LIDARBC / HRDEM_NEAR
+    ("expGenGround", {"BNE_GEN_GROUND": "on"}, None),                     # genground.ON
     ("expStaleRevisit", {"BNE_STALE_REVISIT": "on"}, None),               # revisit.STALE_ON (not a key: NOT_SWITCHES)
 )
 IDS = tuple(f[0] for f in FEATURES)

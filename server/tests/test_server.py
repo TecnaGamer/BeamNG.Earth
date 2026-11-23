@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cdae  # noqa: E402
 import earthd  # noqa: E402
+import protocol  # noqa: E402
 import farpvs  # noqa: E402
 import revisitpack  # noqa: E402
 import farfield as ff  # noqa: E402
@@ -116,10 +117,10 @@ class ServerHarness(unittest.TestCase):
         self.thread.start()
 
         async def start():
-            return await asyncio.start_server(
+            return await protocol.start_server(
                 lambda r, w: earthd.Connection(self.server, r, w).run(), "127.0.0.1", 0)
         self.srv = asyncio.run_coroutine_threadsafe(start(), self.loop).result(10)
-        self.c = Client(self.srv.sockets[0].getsockname()[1])
+        self.c = Client(protocol.listen_port(self.srv))
 
     def tearDown(self):
         self.c.close()
@@ -285,7 +286,7 @@ class ServerTest(ServerHarness):
         aid = a1["anchorId"]
         h = self.check_terrain(a1["terrain"], 0.0, 0.0)
         self.assertEqual(a1["terrain"]["q"], 1 / 128)     # 600 m relief over the survey, under 512 m in a block (survey_q on block-sized windows, 2026-11-12)
-        self.assertEqual(a1["terrain"]["heightmap"], f"/temp/beamngEarth/{self.server.sid}/hm_{aid}_0_0.png")
+        self.assertRegex(a1["terrain"]["heightmap"], rf"^/temp/beamngEarth/{self.server.sid}/hm_{aid}_0_0_\d+\.png$")
         self.assertAlmostEqual(a1["groundZ"], h[1024, 1024], delta=0.001)   # sample (1024, 1024) = (0, 0)
 
         c.send({"type": "commit_anchor", "anchorId": aid})
@@ -370,11 +371,11 @@ class ServerTest(ServerHarness):
 
         # --- prefetch: driving east at 30 m/s from x = 900 predicts a block at 1024 ---
         self.pose(aid, 900, 0, vx=30)
-        path = os.path.join(self.server.out_dir, f"hm_{aid}_1024_0.png")
+        key = (aid, 1024., 0.)
         end = time.monotonic() + 30
-        while not os.path.exists(path) and time.monotonic() < end:
+        while key not in self.server.hm and time.monotonic() < end:
             time.sleep(0.02)
-        self.assertTrue(os.path.exists(path), "prefetch did not build the predicted terrain")
+        self.assertIn(key, self.server.hm, "prefetch did not build the predicted terrain")
         time.sleep(0.2)
         t0 = time.monotonic()
         c.send({"type": "prepare_terrain", "requestId": 6, "anchorId": aid, "cx": 1024, "cy": 0})
@@ -547,6 +548,37 @@ class ServerTest(ServerHarness):
             self.assertIn(key, s.hm)
         s.connections = set()
 
+    @mock.patch.object(earthd, "HM_CACHE", 4)
+    def test_eviction_drops_the_blocks_the_mod_never_had_first(self):
+        """Daytona laps (2026-11-19): ~30 prefetched guesses a lap beside the ~10 blocks the mod asked for pushed those
+        out before the car was back on them. The guesses go first, then the used ones, least recently used first."""
+        s = self.server
+        s.hm.clear()
+        s.hm_committed.clear()
+        s.hm_sent.clear()
+        used = [(1, 0.0, 0.0), (1, 128.0, 0.0), (1, 256.0, 0.0)]
+        for key in used:
+            s.hm[key] = {}
+            s.hm_sent.append(key)
+        guesses = [(1, 0.0, 512.0), (1, 0.0, 640.0), (1, 0.0, 768.0)]
+        for key in guesses:
+            s.hm[key] = {}
+        s.hm_committed.append(used[-1])
+        s.evict_heightmaps(fresh=guesses[-1])
+        self.assertEqual(set(s.hm), {used[0], used[1], used[2], guesses[-1]})
+        self.assertIn(used[0], s.hm_sent.ever)
+        self.assertNotIn(guesses[0], s.hm_sent.ever)
+        s.hm[(1, 0.0, 896.0)] = {}           # (one more: the last guess goes, no longer the fresh one)
+        s.evict_heightmaps(fresh=(1, 0.0, 896.0))
+        self.assertEqual(set(s.hm), set(used) | {(1, 0.0, 896.0)})
+        s.hm_sent.append((1, 0.0, 896.0))    # (the mod has it: now the least recently used it had goes, never protected)
+        s.hm[(1, 0.0, 1024.0)] = {}
+        s.evict_heightmaps(fresh=(1, 0.0, 1024.0))
+        self.assertEqual(set(s.hm), {used[1], used[2], (1, 0.0, 896.0), (1, 0.0, 1024.0)})
+        self.assertNotIn(used[0], s.hm_sent.ever)
+        s.hm.clear()
+        s.removes_flush()
+
     def test_a_slow_terrain_request_is_logged_and_still_answered(self):
         c = self.c
         self.hello()
@@ -594,9 +626,9 @@ class ServerTest(ServerHarness):
         async def run():
             conn = self.conn()
             conn.active = 1
-            conn._retire([(1, "0_0_0")])
+            conn.far.retire_at((1, "0_0_0"), time.monotonic())
             used = self.server.in_use()
-            conn.retired[(1, "0_0_0")] -= 61.0
+            conn.far.retire_at((1, "0_0_0"), conn.retired[(1, "0_0_0")] - 61.0)
             return used, self.server.in_use()
         self.hello()
         used, later = asyncio.run_coroutine_threadsafe(run(), self.loop).result(10)
@@ -627,18 +659,20 @@ class ServerTest(ServerHarness):
         a = self.prepare_anchor(1, LAT, LON)
         aid = a["anchorId"]
         c.send({"type": "commit_anchor", "anchorId": aid})
+        heights = {0: os.path.basename(a["terrain"]["heightmap"])}
         for n, cx in enumerate(range(256, 256 * 10, 256)):
             c.send({"type": "prepare_terrain", "requestId": 10 + n, "anchorId": aid, "cx": cx, "cy": 0})
             m, _ = c.until(lambda m: m["type"] == "terrain_ready" and m["requestId"] == 10 + n, timeout=60)
+            heights[cx] = os.path.basename(m["heightmap"])
             if n == 2:
                 c.send({"type": "commit_terrain", "anchorId": aid, "cx": cx, "cy": 0})
         time.sleep(0.2)
         files = sorted(os.path.basename(p) for p in glob.glob(os.path.join(self.server.out_dir, "hm_*.png")))
         self.assertLessEqual(len(files), earthd.HM_CACHE, files)
         # Never deleted: the committed terrain, the two before it, the last two handed out.
-        for name in (f"hm_{aid}_0_0.png", f"hm_{aid}_768_0.png", f"hm_{aid}_2048_0.png", f"hm_{aid}_2304_0.png"):
-            self.assertIn(name, files)
-        self.assertNotIn(f"hm_{aid}_256_0.png", files)
+        for cx in (0, 768, 2048, 2304):
+            self.assertIn(heights[cx], files)
+        self.assertNotIn(heights[256], files)
         # Unknown anchor / missing fields -> terrain_error; the connection stays up.
         c.send({"type": "prepare_terrain", "requestId": 99, "anchorId": 42, "cx": 0, "cy": 0})
         m, _ = c.until(lambda m: m["type"] == "terrain_error", timeout=10)
@@ -774,7 +808,7 @@ class MeshServerTest(ServerHarness):
                 self.assertEqual(px, earthd.TEX_NEAR if m["level"] <= -1 else earthd.TEX_FAR)
             else:
                 self.assertEqual(px, 512 if m["level"] >= 2 else 256)
-            self.assertEqual((w, h, mips, fourcc), (px, px, int(math.log2(px)) + 1, b"DXT1"))
+            self.assertEqual((w, h, mips, fourcc), (px, px, int(math.log2(px)) + 1, b"DX10" if imagery.FAR_SRGB else b"DXT1"))
             shape = cdae.read(self.fs(m["shape"]))
             self.assertEqual(shape["materials"][0]["name"], m["material"])
             self.assertEqual(shape["meshes"][0]["tverts2"][0], shape["meshes"][0]["verts"][0])
@@ -886,7 +920,7 @@ class MeshServerTest(ServerHarness):
         but offline_flag is False), tiles still receive fallback material and recover in-place via
         far_retex once breakers close and hosts recover."""
         class Broken(FakeImagery):
-            def render(self, *a, **kw):
+            def render_where(self, *a, **kw):
                 raise imagery.ImageryError("temporary outage: all breakers open")
         working_dir = os.path.join(self.tmp.name, "cache", "working")
         broken_dir = os.path.join(self.tmp.name, "cache", "broken")
@@ -917,10 +951,9 @@ class MeshServerTest(ServerHarness):
         self.server.imagery = FakeImagery(working_dir)
         for h_name in all_hosts:
             b = self.server.net.host(h_name).breaker
-            b.state = "closed"
-            b.open_until = 0.0
-            b.failures.clear()
-            b.probing = False
+            with mock.patch.object(b, "clock", return_value=b.open_until):
+                self.assertEqual(b.allow()[:2], (True, True))
+                self.assertTrue(b.success())
         self.assertFalse(self.server.net.offline)
 
         # Close circuit for imagery hosts to trigger recovery

@@ -45,6 +45,10 @@ pub const STEEP: u8 = 1;
 /// blend it stepped down to the section's held carriageway at its edge (Kennedybruecke in Vienna: a bus lane over the
 /// open "Unterfahrung" stepped 1.2 m, GitHub #1169).
 pub const OPEN_TUNNEL: u8 = 2;
+/// ... and any tunnel part's section held in the open (Plan.tunnel_section: a trench, covered or not). Past its painted
+/// edge a road running beside it keeps its own ground, whatever the rank gap: a street along the top of a trench is
+/// on the ground beside it, not on the trench's floor. A road crossing it still eases onto it (the cross fade below)
+pub const TUNNEL: u8 = 4;
 /// the steepest a segment's line is carried on past its end (extrap): steeper than any road's grade; a steeper
 /// segment (a step held in a plan over a few cm) is carried on at this
 pub const EXTRAP_MAX_GRADE: f64 = 0.35;
@@ -61,6 +65,7 @@ pub struct Prm {
 /// The segments' arrays (grading.PlanPack's, in its order).
 pub struct Segs<'a> {
     pub a: ArrayView2<'a, f64>, pub b: ArrayView2<'a, f64>, pub za: ArrayView1<'a, f64>, pub zb: ArrayView1<'a, f64>,
+    pub width_delta: Option<ArrayView1<'a, f64>>,
     pub h: ArrayView1<'a, f64>, pub rh: ArrayView1<'a, f64>, pub rid: ArrayView1<'a, i64>, pub rk: ArrayView1<'a, i64>,
     pub abut: ArrayView1<'a, u8>, pub cut: ArrayView2<'a, f64>, pub ba: ArrayView1<'a, f64>,
     pub bb: ArrayView1<'a, f64>, pub steep: ArrayView1<'a, u8>, pub link: ArrayView1<'a, u8>,
@@ -75,9 +80,16 @@ struct Seg {
     lox: f64, hix: f64, loy: f64, hiy: f64,     // its box (min / max of its ends)
     len: f64,       // l2.sqrt()
     ext: f64,       // extrap / len
-    za: f64, zb: f64, h: f64, rh: f64, rid: i64, rk: i64,
-    abut: bool, steep: bool, open: bool, link: u8, banked: bool, has_cut: bool, cut_reach: f64, ba: f64, bb: f64,
+    width_delta: f64, za: f64, zb: f64, h: f64, rh: f64, rid: i64, rk: i64,
+    abut: bool, steep: bool, open: bool, tun: bool, link: u8, banked: bool, has_cut: bool, cut_reach: f64, ba: f64,
+    bb: f64,
     cut: [f64; 6], da: f64, db: f64, far0: f64, far0_base: f64,
+}
+
+/// Distance from the wider endpoint edge to the interpolated edge at t.
+#[inline]
+pub(crate) fn taper_inset(delta: f64, t: f64) -> f64 {
+    if delta == 0.0 { 0.0 } else if delta > 0.0 { delta * (1.0 - t) } else { -delta * t }
 }
 
 fn prep(s: &Segs, i: usize, p: &Prm) -> Seg {
@@ -96,8 +108,10 @@ fn prep(s: &Segs, i: usize, p: &Prm) -> Seg {
     let far0 = far0_base.max(h + if rk >= RANK_BUILT { p.rank_fade } else { 0.0 } + 1e-6);
     let l2 = abx * abx + aby * aby;
     Seg {
+        width_delta: s.width_delta.as_ref().map_or(0.0, |d| d[i]),
         ax, ay, abx, aby, l2, lox: ax.min(bx), hix: ax.max(bx), loy: ay.min(by), hiy: ay.max(by), len: l2.sqrt(), ext: p.extrap / l2.sqrt(), za: s.za[i], zb: s.zb[i], h, rh, rid: s.rid[i], rk,
         abut: s.abut[i] != 0, steep: s.steep[i] & STEEP != 0, open: s.steep[i] & OPEN_TUNNEL != 0,
+        tun: s.steep[i] & TUNNEL != 0,
         link: s.link[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0,
         has_cut, cut_reach, ba: s.ba[i], bb: s.bb[i], cut, da: s.abut_d[[i, 0]], db: s.abut_d[[i, 1]], far0, far0_base,
     }
@@ -137,8 +151,13 @@ pub struct Pt {
     // second-highest rank there (equal to hrank when another road of its rank is at the point, so its carriageway
     // is not held over that one's)
     hdeep: f64, hrank: i64, hrank2: i64, hid: i64, hz: f64, hyield: f64, hcar: bool, hdx: f64, hdy: f64,
-    // (rank) that road is a tunnel's open section (OPEN_TUNNEL)
-    hopen: bool,
+    // (rank) that road is a tunnel's open section (OPEN_TUNNEL), a tunnel's section in the open, covered or not (TUNNEL)
+    hopen: bool, htun: bool,
+    // the highest rank of a plan leading onto a bridge (abut) whose carriageway holds the point within ARANK_NEAR_M of
+    // its abutment, and that plan's height there: a road of no higher rank standing more than ARANK_DZ_M off it does
+    // not hold its carriageway whole over it (finish)
+    arank: i64,
+    az: f64,
 }
 
 impl Pt {
@@ -148,7 +167,7 @@ impl Pt {
             num: 0.0, den: 0.0, wmax: 0.0, top: f64::NEG_INFINITY, cmax: 0.0, csum: 0.0, cz: 0.0,
             raised: f64::NEG_INFINITY, bs: base, beff: base, cdeep: 0.0, carz: f64::NAN, carid: -1, bdeep: 0.0,
             bz: f64::NAN, bid: -1, hdeep: f64::INFINITY, hrank: i64::MIN, hrank2: i64::MIN, hid: -1, hz: f64::NAN,
-            hyield: 0.0, hcar: false, hdx: 0.0, hdy: 0.0, hopen: false,
+            hyield: 0.0, hcar: false, hdx: 0.0, hdy: 0.0, hopen: false, htun: false, arank: i64::MIN, az: f64::NAN,
         }
     }
 
@@ -164,8 +183,13 @@ impl Pt {
     #[inline(always)]
     fn finish(&self, lift: f64) -> f64 {
         // (a road whose rank is the point's highest, with no equal-ranked road there, holds its own carriageway whole:
-        // a subordinate road's carriageway, cutting band or ground may not move it, not even by centimetres)
-        if self.hcar && self.hrank > self.hrank2 && self.hrank <= RANK_HOLD_MAX {
+        // a subordinate road's carriageway, cutting band or ground may not move it, not even by centimetres; nor
+        // over the carriageway of an approach of its rank leading onto a bridge, whose end it would cut off at its
+        // own height: the Stonehouse Bridge's deck end 7 m from the gyratory it runs into stepped 1.6 m since
+        // the gyratory's pieces count as one road (GitHub #1374))
+        let cut_off = self.arank >= self.hrank && (self.hid & LEG_ROAD_MASK) >= PIECES_RID
+            && self.az - self.hz > ARANK_DZ_M && self.az - self.hz < ARANK_LEVEL_M;
+        if self.hcar && self.hrank > self.hrank2 && !cut_off && self.hrank <= RANK_HOLD_MAX {
             self.hz + lift
         } else if self.den > 0.0 {
             self.beff + self.wmax * (self.num / self.den - self.beff + lift)
@@ -176,6 +200,18 @@ impl Pt {
 }
 
 const OVERLAP_YIELD_M: f64 = 1.0;   // m (pass 1's overlap yield)
+/// m from its abutment end an approach's carriageway turns another road's hard hold off ...
+const ARANK_NEAR_M: f64 = 12.0;
+/// ... where the approach stands more than this over that road (a deck end the hold would cut off); elsewhere the hold
+/// stands (Vienna's lid junctions, Capitol Crossing, the M1 slip roads: their approaches run at the junction's height
+/// over its carriageway, and the blend there made new steps and crests: drivability, batch185)
+const ARANK_DZ_M: f64 = 0.3;
+/// ... and less than this: an approach this much over the road is another level, a deck over it (a lid's deck over
+/// Vienna's Suedtiroler Platz trench, 4.3 m over the street in it), not a deck end the road's junction cuts off
+const ARANK_LEVEL_M: f64 = 2.5;
+/// a road planned in pieces that PlanPack counts as one (planset.rs: 2^41 + the root piece): the hard hold an
+/// approach turns off is only such a road's, which had no hold where its pieces met before they were one road (PR #1107)
+const PIECES_RID: i64 = 1i64 << 41;
 
 #[inline(always)]
 fn smooth(v: f64) -> f64 {
@@ -256,7 +292,7 @@ impl Lanes {
 /// side; side: off its line, ahead: past its ends.
 #[derive(Clone, Copy, Default)]
 struct Pre {
-    qx: f64, qy: f64, d: f64, target: f64, past: f64, cwall: f64, ctop: f64, creach: f64, side: f64, ahead: f64,
+    h: f64, rh: f64, qx: f64, qy: f64, d: f64, target: f64, past: f64, cwall: f64, ctop: f64, creach: f64, side: f64, ahead: f64,
 }
 
 /// The Pre of the point (qx, qy from the segment's start, tu / t along it, d from it); SIDE: its side and ahead too
@@ -265,7 +301,10 @@ struct Pre {
 fn pre<const SIDE: bool>(g: &Seg, qx: f64, qy: f64, tu: f64, t: f64, d: f64, p: &Prm) -> Pre {
     // (along the segment from its start: an abutment's and pass 1's)
     let along = if g.l2 > 1e-12 && (SIDE || g.abut) { (qx * g.abx + qy * g.aby) / g.len } else { 0.0 };
-    let (target, past, cwall, ctop, creach) = target(g, qx, qy, tu, t, along, p);
+    let inset = taper_inset(g.width_delta, t);
+    let h = g.h - inset;
+    let rh = g.rh - inset;
+    let (target, past, cwall, ctop, creach) = target(g, qx, qy, tu, t, along, rh, p);
     // a cut deeper than wall_cut: a retaining wall at the core's edge, the ground right behind it (for a point more
     // beside the segment than ahead of it: ahead, the road's own next segments blend in along it, and cutting those
     // off made a kink on every crest): pass 1
@@ -274,7 +313,7 @@ fn pre<const SIDE: bool>(g: &Seg, qx: f64, qy: f64, tu: f64, t: f64, d: f64, p: 
         side = if g.l2 > 1e-12 { (qx * g.aby - qy * g.abx).abs() / g.len } else { d };
         ahead = if g.l2 > 1e-12 { (-along).max(along - g.len).max(0.0) } else { 0.0 };
     }
-    Pre { qx, qy, d, target, past, cwall, ctop, creach, side, ahead }
+    Pre { h, rh, qx, qy, d, target, past, cwall, ctop, creach, side, ahead }
 }
 
 /// The segment's target height for the point (qx, qy from its start, tu / t along it; along: m from its start along
@@ -282,7 +321,7 @@ fn pre<const SIDE: bool>(g: &Seg, qx: f64, qy: f64, tu: f64, t: f64, d: f64, p: 
 /// cutting's (wall, top, top offset) on the point's side.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn target(g: &Seg, qx: f64, qy: f64, tu: f64, t: f64, along: f64, p: &Prm) -> (f64, f64, f64, f64, f64) {
+fn target(g: &Seg, qx: f64, qy: f64, tu: f64, t: f64, along: f64, rh: f64, p: &Prm) -> (f64, f64, f64, f64, f64) {
     let mut target = g.za + (g.zb - g.za) * t;
     if g.link != 0 && g.l2 > 1e-12 {
         let e = g.ext;
@@ -317,12 +356,26 @@ fn target(g: &Seg, qx: f64, qy: f64, tu: f64, t: f64, along: f64, p: &Prm) -> (f
         target -= past * p.abut_under;
     }
     if g.banked && g.l2 > 1e-12 {    // (a banked curve: tilted across the carriageway, its edge height past)
-        let off = ((qy * g.abx - qx * g.aby) / g.len).clamp(-g.rh, g.rh);
+        let off = ((qy * g.abx - qx * g.aby) / g.len).clamp(-rh, rh);
         target += (g.ba + (g.bb - g.ba) * t) * off;
     }
     let left = (qx * g.aby - qy * g.abx) < 0.0;
     let co = if left { 0 } else { 3 };
     (target, past, g.cut[co], g.cut[co + 1], g.cut[co + 2])
+}
+
+/// A pair's target past an abutment end, under the deck (past > 0; its target there falling at abut_under): the
+/// abutment's slope, 1 in slope_run (the embankment's) down from the end, never under the point's ground where that
+/// stands higher (ground: a fill the elevation holds under the deck's end, kept at abut_under's fall). At abut_under
+/// alone the ground stood within a deck's depth for its first 11-27 m, across the whole span of a short one: the A5's
+/// 21 m bridges over a service road by Heidelberg had their girders buried, the road's cutting rising into them.
+#[inline(always)]
+fn under_deck(target: f64, past: f64, ground: f64, p: &Prm) -> f64 {
+    if past <= 0.0 {
+        return target;
+    }
+    let slope = target - past * (1.0 / p.slope_run - p.abut_under).max(0.0);
+    slope.max(ground.min(target))
 }
 
 /// Pass 0 of one pair: the carriageway, rank, abutment, cutting and core state.
@@ -333,13 +386,35 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
     if d > g.far0 {
         return;
     }
-    let (target, past, cwall, ctop, creach) = (q.target, q.past, q.cwall, q.ctop, q.creach);
+    let (past, cwall, ctop, creach) = (q.past, q.cwall, q.ctop, q.creach);
+    let target = under_deck(q.target, past, st.bs, p);
     // (a pass road's whole core, its shoulder too: the leg above's fill reached onto the strip between its lanes and
     // its wall and stood there as a jagged fin, 2026-11-01)
-    let cr = if g.steep { g.h } else { g.rh };
+    let cr = if g.steep { q.h } else { q.rh };
+    // (a road's lanes end at its wall's face, or at its fall: the ground there steps to the other level, a wall
+    // between two roads at heights no slope bridges in the room between them (Goeschenen's link road over the
+    // motorway's cutting, whose lanes overlapped in plan 1.9 m: the lower road's lanes reached on past the face and
+    // took the link's ground, 7.3 m of cut under a road on the ground). A face past the lanes' edge changes nothing)
+    let cr = if cwall.is_finite() && !g.steep { cr.min(cwall) } else { cr };
+    let past_wall0 = cwall.is_finite() && d > cwall;
     // (and none past its abutment end, over the deck, from yield_ramp on: the round end of an approach's carriageway
     // reached over the railway under a short bridge, and the track's bed gave way to it there; GitHub #909)
-    let car = past <= p.yield_ramp.max(1e-6);
+    let car = past <= p.yield_ramp.max(1e-6) && !(past_wall0 && !ctop.is_finite());
+    if g.abut && g.rk >= 0 && car && d <= cr && g.rk > st.arank && g.l2 > 1e-12 {
+        // (how far along the approach the point lies from its abutment end: only there, at the deck's end)
+        let along = (qx * g.abx + qy * g.aby) / g.len;
+        let mut to_abut = f64::INFINITY;
+        if g.da.is_finite() {
+            to_abut = to_abut.min((along + g.da).max(0.0));
+        }
+        if g.db.is_finite() {
+            to_abut = to_abut.min((g.len - along + g.db).max(0.0));
+        }
+        if to_abut <= ARANK_NEAR_M {
+            st.arank = g.rk;
+            st.az = target;
+        }
+    }
     if car && (d - cr < st.cdeep || (d <= cr && st.carz.is_nan())) {
         st.cdeep = d - cr;
         st.carz = target;
@@ -348,9 +423,10 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
     // (rank) the highest-ranked road whose core holds the point (equal ranks: the deeper core); a plan leading onto a
     // bridge (abut) is taken as beside it, not over the point's ground, and a cutting's core ends at its wall (as
     // pass 1's hs / drop: the same ground reaches there)
-    let hs0 = if cwall.is_finite() { g.h.min(cwall) } else { g.h };
-    let drop0 = cwall.is_finite() && !ctop.is_finite() && d > cwall;
-    if g.rk >= 0 && !g.abut && !drop0 && d - hs0 < p.rank_fade
+    let hs0 = if cwall.is_finite() { q.h.min(cwall) } else { q.h };
+    // (and a road's rank holds nothing past its wall: the other side of a wall is another level, not this road's
+    // ground to hold, whatever the height difference there)
+    if g.rk >= 0 && !g.abut && !past_wall0 && d - hs0 < p.rank_fade
         && (g.rk > st.hrank || (g.rk == st.hrank && d - hs0 < st.hdeep)) {
         st.hdeep = d - hs0;
         if g.rk > st.hrank || (st.hid != g.rid && g.rk == st.hrank) {
@@ -361,11 +437,12 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
         st.hz = target;
         // (its ground is held across the carriageway; the blend starts at the painted edge, reaches the lower road's
         // full weight its shoulder plus rank_fade out: gentle on the side road too, not a step at the shoulder's edge)
-        let shoulder = (hs0 - g.rh).max(0.0);
+        let shoulder = (hs0 - q.rh).max(0.0);
         let reach = shoulder + p.rank_fade;
-        st.hyield = 1.0 - smooth(((d - g.rh) / reach).clamp(0.0, 1.0));
-        st.hcar = d <= g.rh;
+        st.hyield = 1.0 - smooth(((d - q.rh) / reach).clamp(0.0, 1.0));
+        st.hcar = d <= q.rh.min(if cwall.is_finite() { cwall } else { f64::INFINITY });
         st.hopen = g.open;
+        st.htun = g.tun;
         st.hdx = g.abx / g.len.max(1e-9);       // (its direction there: the side ease below)
         st.hdy = g.aby / g.len.max(1e-9);
     }
@@ -374,7 +451,7 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
     if d > g.far0_base {
         return;
     }
-    if g.abut && d <= g.h && target > st.top {
+    if g.abut && d <= q.h && target > st.top {
         st.top = target;
     }
     if g.has_cut && ctop.is_finite() {     // the ground raised to a cutting's top past its wall
@@ -382,8 +459,8 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
         let al0 = (qx * g.abx + qy * g.aby) / lab0;
         let ahead0 = (-al0).max(al0 - lab0).max(0.0);
         let side0 = (qx * g.aby - qy * g.abx).abs() / lab0;
-        let bend = g.h.min(cwall) + p.wall_flat;     // the band behind its wall
-        if side0 > g.rh && ahead0 < side0 && d - bend < st.bdeep {
+        let bend = q.h.min(cwall) + p.wall_flat;     // the band behind its wall
+        if side0 > q.rh && ahead0 < side0 && d - bend < st.bdeep {
             st.bdeep = d - bend;
             st.bz = target;
             st.bid = g.rid;
@@ -393,7 +470,7 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
         }
     }
     if p.sep {
-        let cn = 1.0 - smooth((d - g.h) / p.core_fade);
+        let cn = 1.0 - smooth((d - q.h) / p.core_fade);
         if cn > 0.0 {
             if cn > st.cmax {
                 st.cmax = cn;
@@ -409,14 +486,15 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
 fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
     let d = q.d;
     // (past every blend's reach: no weight, nothing changes; the box's corners, ~half the pairs)
-    if d - g.h > far1 {
+    if d - q.h > far1 {
         return;
     }
-    let (target, cwall, ctop, side, ahead) = (q.target, q.cwall, q.ctop, q.side, q.ahead);
+    let (cwall, ctop, side, ahead) = (q.cwall, q.ctop, q.side, q.ahead);
+    let target = under_deck(q.target, q.past, st.bs, p);
     // (and not far past a road's end: beside a tunnel the approach's last segment flattened a strip 10 m along it, a
     // pit beside the arch, 2026-10-17)
     // (on a cutting's side the core ends at its wall; where the ground falls away there the road ends)
-    let hs = if cwall.is_finite() { g.h.min(cwall) } else { g.h };
+    let hs = if cwall.is_finite() { q.h.min(cwall) } else { q.h };
     let drop = cwall.is_finite() && !ctop.is_finite() && d > cwall;
     let wall = st.beff - target > p.wall_cut && ahead < side && ahead < p.wall_ahead;
     let tt = if wall { p.wall_t }
@@ -461,7 +539,8 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
     } else {
         0.0
     };
-    yf *= smooth((d - g.rh + over) / ramp);
+    let rhe = if cwall.is_finite() && !g.steep { q.rh.min(cwall) } else { q.rh };
+    yf *= smooth((d - rhe + over) / ramp);
     // (a lower-ranked road gives way over a higher-ranked one's ground (grading.grade_rank): a built (paved / cobble)
     // road keeps its own ground where an unpaved dirt road or track runs beside it, and a built side road eases onto
     // a higher built one the same way. On the higher road's carriageway the lower one gives way whole; past its
@@ -492,7 +571,10 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
         // (a tunnel's open section only: a road crossing it, mapped over the tunnel, eases onto it whatever the class
         // gap; one running beside it, a street along the top of its trench, keeps its own ground: a residential street
         // over the A23's cover beside its portal stepped 1.2 m at the cover's edge, eased down to the open section)
-        let cross = if ranked { 1.0 } else {
+        // A tunnel's section in the open, covered or not, the same past its painted edge for a road within the rank gap:
+        // a street running along the top of the trench was eased 2-3 m down onto its floor, its kerb and the trucks
+        // on it into the trench's wall (TUNNEL)
+        let cross = if ranked && (!st.htun || st.hcar) { 1.0 } else {
             let c = ((g.abx * st.hdx + g.aby * st.hdy) / g.len.max(1e-9)).abs();
             1.0 - smooth((c - 0.5) / (0.866 - 0.5))
         };

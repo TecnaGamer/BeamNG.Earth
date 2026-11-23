@@ -60,7 +60,7 @@ python3 server/earthd.py --port 47613 --user-dir ~/.local/share/BeamNG/BeamNG.dr
 | `--geo-tiles` | `on` | Origin-independent content (`geotiles.py`, earthfast `geotiles.rs`): with a mod whose hello has `geoTiles: 17`, the vegetation comes in the tiles of a global Web-Mercator zoom-17 grid (~240 m at 39 deg, key `g17_<x>_<y>`), each in its own frame (`veg_tile` carries `frame: [lat, lon]` of its centre and `pivot`, m); the mod places a tile into its anchor's world (`geotile.lua`) and keeps it across rebases, so a rebase sends no tree tile again. With road processes (`--road-processes` > 0) and a mod whose hello also has `roadGeo: 1`, the road tiles are geotiles too: their content (buildings, decks, tunnels, rails, wires, street furniture, guard rails, parking, gas stations, pump jacks, sound) built once in the tile's own frame (revisit kind `roadsg`, no anchor in its key; `roads_tile` with `frame`, `h` its content hash, each part's `pivot` and `relief`), the draped surfaces (road mesh, plazas, sidewalks) a skin per anchor (`roads_skin`, cut exactly at the tile's quad), a tall part that rigid placement would leave off by more than 3 cm (colliders) / 10 cm sent as its exact variant for that anchor (`roads_exact`); a rebase sends skins only (`roads.GeoTracker`, `blockworker.roads_geo`). With the far buildings' process too and a mod whose hello has `farGeo: 1`, the far buildings, the skyline and the far bridges are geotiles (`blockworker.far_geo`, revisit kinds `bldfar` / `bldsky` / `brfar` with no anchor in the key): the far buildings in the road geotiles' own zoom-17 grid (a far tile holds exactly the buildings the road geotile of its key holds; the mod hides it once that one's are made: each building shown once at the near / far seam), sent as whole zoom-15 squares (4 x 4: `buildings.SKY_UNIT`); the skyline in those zoom-15 squares (shown while not all 16 far tiles of its square are in); the far bridges' jobs per zoom-15 square, their slabs a piece per road geotile (earthfast `bridge_slabs`; hidden where that road geotile shows its own deck and road mesh); their street lamps grouped per road geotile key in its frame. Each is placed rigidly at its pivot (render-only: no skin, no exact variant) and kept across rebases: a rebase sends no far content again. `off`: the anchor's 256 m tiles, as before (A/B). |
 | `--grading` | `on` | Ground graded under roads (`grading.py`): smooth along the road, flat across the carriageway and a 1 m shoulder, 1:2 slopes back to the natural ground; in the physics block, the level -1 / 0 mesh tiles and the road heights alike. Needs `--roads on`. |
 | `--block-process` | `on` | The terrain-follow and prefetch physics blocks build in two processes of their own (`blockworker.py`: one for the mod's requests, one for the prefetch), off this process's interpreter lock, each with its own DEM reader, road plans (looked up ahead of the player), street widths and 128 m height chunks over the same disk caches. A block that moved one step reuses 7/8 of its heights. `off`: built in this process's threads. In-game 2026-10-12 this took a 58 m/s drive from falling off the block after 0.5 km to 10 km without a fall. |
-| `--surface` | `on` | Ground models under the physics block (`surface.py`, ROADMAP v1.5): every 2 m sample gets a material from the ESA WorldCover class under it (asphalt for built-up, grass, dusty / loose dirt, snow, mud, dirt) and rock where steeper than 35°; one 0/255 mask per material is written next to the heightmap (`hm_<a>_<cx>_<cy>_m<i>.png`) and named in `terrain.layers` / `terrain.materials`. Land cover comes from the map-data cache (`<cache>/mapdata/`), prefetched 3 km around the player; a block never waits for it (an uncached cell reads as dirt until the next block). |
+| `--surface` | `on` | Ground models under the physics block (`surface.py`, ROADMAP v1.5): every 2 m sample gets a material from the ESA WorldCover class under it (asphalt for built-up, grass, dusty / loose dirt, snow, mud, dirt) and rock where steeper than 35°; one 0/255 mask per material is written next to the heightmap (`hm_<a>_<cx>_<cy>_<revision>_m<i>.png`) and named in `terrain.layers` / `terrain.materials`. Land cover comes from the map-data cache (`<cache>/mapdata/`), prefetched 3 km around the player; a block never waits for it (an uncached cell reads as dirt until the next block). |
 | `--credits` | `on` | Data credits for the mod's on-screen overlay (`credits.py`; `credits` messages, see below): the imagery / elevation / weather sources of the tiles within 2 km of the player and of the far field (with `--colormatch s2`, a texture the seam feather corrected also names the S2 references), sent on change, at most once a second. `off`: no message (the mod shows `hello.attribution`). `Server()` has none |
 | `-v` | off | Debug logging, with the event loop's stalls over 0.25 s and the main thread's stack at that moment ("event loop stalled") |
 
@@ -172,7 +172,7 @@ for descriptor overflow. [Distant traffic](../docs/DISTANT_TRAFFIC.md) maps the 
 | `{"type":"anchor_error","requestId":N,"error":"…","stage":"terrain"}` | Setup, terrain and finalization failures produce a terminal reply. `stage` is optional (absent for input validation errors and older servers). |
 | `{"type":"terrain_ready","requestId":N,"anchorId":A,"cx","cy","heightmap","size":1024,"squareSize":2.0,"zBase","maxHeight","q"}` | Same terrain fields as in `anchor_ready`. With `--surface on` the terrain (here and in `anchor_ready.terrain`) also carries `layers` (one mask VFS path per material) and `materials` (`[[TerrainMaterial name, ground model], ...]`, same order; the last is the level's dirt). |
 | `{"type":"terrain_error","requestId":N,"anchorId":A,"error":"…"}` | Unknown anchor, bad fields or a DEM failure (so a request never hangs). |
-| `{"type":"far_tile","anchorId":A,"key":"L_i_j","level":L,"shape":"/temp/beamngEarth/<sid>/far_<A>_<L_i_j>.cdae","pos":[x,y,z],"err":m,"skirt":m,"sink":m,"state":"group","material":"bngEarthSat_<A>_<key>","texture":"/temp/beamngEarth/<sid>/far_<A>_<L_i_j>.dds","detail":true,"tex":256}` | A tile to **load hidden**; it becomes visible only through a `far_swap`. `level` −2…9 (−2, −1 in mesh mode only; up to 10 with `--horizon`); footprint `[pos.x, pos.x + 256·2^level]²`. `pos` = SW corner, z = rounded mean height (an integer, so L-2 vertex heights stay exact multiples of `q`). `err` = max deviation of the tile from a 2× finer DEM reference (m). `skirt` = its skirt depth, `max(2, 0.02·S, 2.5·err + 1)`. `sink` (**L0 in terrain mode only**) = how far to lower the tile so it lies ≥ 0.3 m under the terrain block everywhere (measured against the block's own 2 m Q-rounded lattice). `state` is always `"group"` (`"prefetch"` is phase 4). Keys never depend on the terrain block. **Imagery** (all three or none): `material` = the material name written into the shape (create a Material with `mapTo` = it and `colorMap` = `texture` before the tile; the key's `-` signs are written `m`, e.g. `bngEarthSat_3_m2_10_m4`); `texture` = DDS DXT1 with a full mip chain next to the shape, row 0 = the tile's north edge; `detail` = the shape has UV1 (world-locked detail coordinates, one unit per `DETAIL_M` = 2 m). Without them the shape references the static `bngEarthFar_v3` palette material. `tex` (v1.4 M1, format 4 only, with the material) = the texture's edge in px: the mod's governor unit kind (`cdaeTex128/256/512`). |
+| `{"type":"far_tile","anchorId":A,"key":"L_i_j","level":L,"shape":"/temp/beamngEarth/<sid>/far_<A>_<L_i_j>.cdae","pos":[x,y,z],"err":m,"skirt":m,"sink":m,"state":"group","material":"bngEarthSat_<A>_<key>","texture":"/temp/beamngEarth/<sid>/far_<A>_<L_i_j>.dds","detail":true,"tex":256}` | A tile to **load hidden**; it becomes visible only through a `far_swap`. `level` −2…9 (−2, −1 in mesh mode only; up to 10 with `--horizon`); footprint `[pos.x, pos.x + 256·2^level]²`. `pos` = SW corner, z = rounded mean height (an integer, so L-2 vertex heights stay exact multiples of `q`). `err` = max deviation of the tile from a 2× finer DEM reference (m). `skirt` = its skirt depth, `max(2, 0.02·S, 2.5·err + 1)`. `sink` (**L0 in terrain mode only**) = how far to lower the tile so it lies ≥ 0.3 m under the terrain block everywhere (measured against the block's own 2 m Q-rounded lattice). `state` is always `"group"` (`"prefetch"` is phase 4). Keys never depend on the terrain block. **Imagery** (all three or none): `material` = the material name written into the shape (create a Material with `mapTo` = it and `colorMap` = `texture` before the tile; the key's `-` signs are written `m`, e.g. `bngEarthSat_3_m2_10_m4`); `texture` = DDS DXT1 with a full mip chain next to the shape, row 0 = the tile's north edge (since 2026-11-16 tagged sRGB under a DX10 header, BC1_UNORM_SRGB, `imagery.FAR_SRGB` / BNE_FAR_SRGB: the mod draws such a texture with a v1.5 Material, a plain DXT1 with the 1.0 one); `detail` = the shape has UV1 (world-locked detail coordinates, one unit per `DETAIL_M` = 2 m). Without them the shape references the static `bngEarthFar_v3` palette material. `tex` (v1.4 M1, format 4 only, with the material) = the texture's edge in px: the mod's governor unit kind (`cdaeTex128/256/512`). |
 | `{"type":"far_swap","anchorId":A,"id":G,"add":[keys],"remove":[keys],"dIn":m,"dOut":m}` | A swap group, sent once every `add` has been sent as `far_tile`. Run it once all adds are loaded: show the adds, remove the removes (C2 crossover: spawn adds at z − dIn, raise them, then sink the removes by dOut, then delete). `add` and `remove` cover exactly the same footprint (a parent and its descendants). One-sided groups: `remove: []` for the initial load / tiles entering the 80 km radius, `add: []` for tiles leaving it. `dIn` = max(new − old), `dOut` = max(old − new) over the group (both ≥ 0, evaluated at every vertex of both sides, +0.1 m). Group ids increase per connection. |
 | `{"type":"far_remove","anchorId":A,"key":"L_i_j"}` | For the **active** anchor: eviction of a tile sent as `far_tile` that no group needs any more (the desired set changed before its swap); delete it, it was never shown. For a **previous** anchor (after a rebase): remove that shown tile; it is sent only after every `far_swap` whose adds cover its area (footprints compared in the new frame), so apply it once the swaps received before it have run. |
 | `{"type":"far_retex","anchorId":A,"key":"L_i_j","texture":"/temp/beamngEarth/<sid>/far_<A>_<L_i_j>_r<n>.dds"}` | `--colormatch s2` / `--deshadow lambert\|full` only (additive like `weather`): the texture of a tile the mod shows, or holds (sent, not swapped in yet), under the active anchor was rendered again because a colour-seam / de-shadow region it was rendered without became ready; `n` = the revision (the engine caches textures by path). Point the tile's material (`far_tile.material`) at it: `colorMap` + `flush` + `reload`, time-sliced (the mod: at most 2 a frame, governor unit `retex`). Ignore it for a key not shown or loading under that anchor, and for an older revision than the material has. The shape, the material name and the old file stay; the server deletes old revisions with the tile's other files (eviction only when no connection shows or holds the tile; `prune` once no mod holds the anchor). Sent nearest the player first, at most `--retex-rate` per second. |
@@ -209,7 +209,7 @@ See [global turbine report](../docs/research/2026-11-01-wind-turbine-global.md) 
 
 ## Terrain block (§1, §12 P1)
 
-- `hm_<anchorId>_<cx>_<cy>.png`: 1024² 16-bit grayscale, row 0 = north, `squareSize` = 2.0.
+- `hm_<anchorId>_<cx>_<cy>_<revision>.png`: 1024² 16-bit grayscale, row 0 = north, `squareSize` = 2.0.
   Sample (gx, gy) is at (cx − 1024 + 2·gx, cy − 1024 + 2·gy), computed as integer lattice index × 2.0,
   so every sample is an even-metre point of the anchor frame and a 256 m move is exactly 128 samples.
   Row/column 1023 hold real DEM data. Physics covers (N − 1)·s = 2046 m: [cx − 1024, cx + 1022]; the
@@ -221,12 +221,15 @@ See [global turbine report](../docs/research/2026-11-01-wind-turbine-global.md) 
   Mt Whitney data). Q is chosen once per anchor from a ±15 km relief survey at DEM z10: the smallest of
   {1/256, 1/128, 1/64, 1/32, 1/16} m whose range 65535·Q covers 1.1 × relief + 72 m. A block whose
   relief does not fit uses the next coarser Q (for that block only).
-- Heightmaps are generated once per (anchorId, cx, cy) on two worker threads and kept in an LRU
-  (6 entries). Eviction deletes the file but never touches the current terrain, the two committed
-  before it, the last two handed to the mod, the terrain just built, or the first terrain of an
-  anchor no connection has committed yet. (Protecting every recent anchor's first terrain made the
-  protected set larger than the cache after a rebase, so each new prefetch was deleted as soon as it
-  was built and rebuilt on every pose; found by the integration drive.)
+- The server caches up to 48 graded blocks (16 or 32 on smaller memory tiers). Each delivery to a mod
+  advertising `terrainFiles = 1` includes a `terrainTicket`. Evicting or replacing a revision retires
+  its height PNG, terrain file and every layer mask. The server deletes them after every recipient has
+  returned its ticket in `terrain_release`. The mod keeps installed, deferred, pending and rollback
+  revisions, including the file still bound to the engine's TerrainBlock. A reconnect reports the
+  surviving tickets in `hello.terrainHeld`. A Windows sharing violation leaves the file queued for retry.
+  Older mods have one pending follow request. The server keeps candidate revisions at their confirmed
+  centre and pending centre. A replacement follow request invalidates the earlier request ID, even
+  if the car stays on its current block. Prepared future anchors and swap rollback keep their holds.
 - Prefetch: on each pose ≥ 200 m (Chebyshev) from the block centre, the server predicts the mod's
   next `prepare_terrain` (`predict_request`, REACH = 420 m as in `follow.lua`), builds it in the
   background and forces L0 over it. While a request is pending the prediction starts from the
@@ -680,7 +683,7 @@ cell.provenance, cell.credit_line(), cell.digest()
   kept across VERSIONs). A layer file that does not load, or a block of the wrong length, is a miss
   (rebuilt / fetched again), never a lasting error. Hot blocks stay in one in-memory LRU for the
   whole process (`rangeread.MEM_BYTES`, 64 MiB).
-- **Overture release**: pinned in `overture.RELEASE` (`2026-09-23.1`); `python3 server/mapdata.py
+- **Overture release**: pinned in `overture.RELEASE` (`2026-11-18.0`); `python3 server/mapdata.py
   --latest` prints the newest. Bump the constant to update (cells are cached per release). Once
   Overture has deleted the pinned release, uncached cells raise `overture.ReleaseGone`.
 - **CLI** (development): `python3 server/mapdata.py --cell 39.2834,-76.5934 --dump --png out.png`
@@ -796,6 +799,29 @@ Material once a session and its `trees.lua` catalog entry before the props; `tre
 and the shared body (`sign_town_body[_<cc>].dae`, the posts and the plate's back, `tools/generate_town_signs.py`) at one
 spot, as the speed-limit signs'. A road tile waits for its village points and land cover at most `POINTS_WAIT_S` (45 s)
 once, and is built without signs when they have not come.
+
+## Clearance log (`server/clearance.py`; `BNE_CLEARANCE_LOG=off` turns it off)
+
+While the game streams, every road tile the server builds is checked against the space a vehicle needs, and each place
+where the geometry would not let one through is one `clearance:` line in server.log (INFO, logger `earthd.clearance`; the
+launcher's console shows only warnings, so grep the file). Reference vehicles stand on the tile's own plans: a truck (12 x 2.55
+x 4.0 m) on every carriageway side of every road (both directions of a two-way road, both carriageways of a dual road, a
+deck on its top, a tunnel on its floor, a ground road on the terrain it is painted into) and a wagon (20 x 3.0 x 4.3 m) on
+every track at its rail head, every 24 / 30 m. The body starts 0.5 m over the wheels. A violation is the terrain (the
+physics block's ground), another deck, a tunnel tube or retaining wall, or a railway's mesh inside it, or a stretch of a
+road between two of its ground parts that has no deck or tunnel (an unbuilt bridge).
+
+```
+clearance: truck on road <id> (<class>, <ground|bridge|tunnel>) at x -599.5 y -803.2 z 2249.7 lat 35.392761 lon 138.723402 lane +2.0 heading 238 tile <key> frame <lat0> <lon0> anchor <aid|-> hits terrain by 0.73 m (at x .. y .. z ..)
+```
+
+`x y z` are in the tile's frame (`frame`: its origin's lat / lon; an anchor tile's is the anchor's), `tile` its key (`tx_ty` or
+a geotile's `g17_..`), `lane` the vehicle's offset from the carriageway's centre line, `by` how deep the other geometry is in
+the body (m), `at` where. `hits` is `terrain`, `a deck`, `a tunnel` or `a railway`; a missing bridge says `has no deck or
+tunnel under it (an unbuilt bridge), terrain below`. One line per place (10 m grid of lat / lon), vehicle kind and kind of
+violation in a process's life, at most 25 a tile (the deepest) and 240 a minute. The check runs in the road-tile worker
+that builds the tile, never on the event loop, and only logs; a fault in it is logged once as a warning. A tile that comes
+from the revisit cache is not built, so not checked again.
 
 ## Airports and runways (`server/airports.py`, `runwaygeom.py`, `runwaymarks.py`; docs/research/2026-10-11-airports.md)
 
@@ -962,7 +988,7 @@ written by the v1.3.1 code). `bench_build.py` (not discovered: run it
 by hand, it downloads unless `--synthetic`) times `Server.make_tile` per level, cold and warm.
 
 Cross-component (server ↔ mod):
-- `test_protocol_agreement.py`: the protocol 4 table above as data (sessions in both terrain/no
+- `test_protocol_agreement.py`: the protocol 4 table above as data (`server/protocol_table.json`; sessions in both terrain/no
   imagery and mesh/imagery modes), checked from both sides: the
   mod's `net.send` constructors and every `msg.X` / `tr.X` it reads (parsed from its Lua), every field
   `earthd.py` reads, every message a real in-process session sends (types, nullability, the L0-only

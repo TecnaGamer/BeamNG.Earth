@@ -21,7 +21,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::gradesep::np_interp;
-use crate::levels::np_sum;
+use crate::levels::{np_sum, part_floor, ring_length};
 use crate::{dual_side_core, polyline_dist_core, tight_bends_core};
 
 type P = [f64; 2];
@@ -565,6 +565,7 @@ fn bmean(v: &[bool]) -> f64 {
 /// The kernels' scalar constants read at each call (roads._spec_prm: tests change some).
 struct Prm {
     min_part: f64,
+    min_part_m: f64,
     urban_sample: f64,
     urban_share: f64,
     urban_beside: f64,
@@ -575,6 +576,7 @@ struct Prm {
     dual_gap1: f64,
     dual_share: f64,
     dual_cos: f64,
+    street_dual_overlap: bool,
     mountain_on: bool,
     mountain_switchbacks: f64,
     mountain_span: f64,
@@ -594,11 +596,12 @@ impl Prm {
     fn new(p: &HashMap<String, f64>) -> PyResult<Prm> {
         let g = |k: &str| prm_get(p, k);
         Ok(Prm {
-            min_part: g("MIN_PART")?, urban_sample: g("URBAN_SAMPLE_M")?, urban_share: g("URBAN_SHARE")?,
+            min_part: g("MIN_PART")?, min_part_m: g("MIN_PART_M")?, urban_sample: g("URBAN_SAMPLE_M")?, urban_share: g("URBAN_SHARE")?,
             urban_beside: g("URBAN_BESIDE_M")?, urban_highway_beside: g("URBAN_HIGHWAY_BESIDE_M")?,
             urban_beside_share: g("URBAN_BESIDE_SHARE")?,
             urban_both_share: g("URBAN_BOTH_SHARE")?, dual_gap0: g("DUAL_GAP_M0")?, dual_gap1: g("DUAL_GAP_M1")?,
             dual_share: g("DUAL_SHARE")?, dual_cos: g("DUAL_COS")?, mountain_on: g("MOUNTAIN_ON")? != 0.0,
+            street_dual_overlap: p.get("STREET_DUAL_OVERLAP").copied().unwrap_or(0.0) != 0.0,
             mountain_switchbacks: g("MOUNTAIN_SWITCHBACKS")?, mountain_span: g("MOUNTAIN_SPAN_M")?,
             mountain_turn: g("MOUNTAIN_TURN_DEG")?, mountain_road: g("MOUNTAIN_ROAD_M")?,
             mountain_max_lanes: g("MOUNTAIN_MAX_LANES")?, se_town_kmh: g("SE_TOWN_MAX_KMH")?, edge_m: g("EDGE_M")?,
@@ -832,12 +835,13 @@ fn dual(l: &Layer, rules: &RoadRules, prm: &Prm, specs: &mut [Option<Sp>], europ
         let view = |t: usize| ArrayView2::from_shape((xy[t].len() / 2, 2), &xy[t][..]).unwrap();
         for (ti, &i) in idx.iter().enumerate() {
             let si = input[i].as_ref().unwrap();
+            let street = prm.street_dual_overlap && si.urban && si.oneway && rules.has(si.cls, F_TRUNK);
             let mut best: Option<(f64, usize, f64)> = None;      // (side, j, gap)
             for (tj, &j) in idx.iter().enumerate() {
                 if i == j {
                     continue;
                 }
-                let (share, side) = dual_side_core(view(ti), view(tj), prm.dual_gap0, prm.dual_gap1, prm.dual_cos);
+                let (share, side) = dual_side_core(view(ti), view(tj), prm.dual_gap0, prm.dual_gap1, prm.dual_cos, street);
                 if share >= prm.dual_share && side.abs() > 0.5 {
                     let sj = input[j].as_ref().unwrap();
                     if european && rules.has(si.cls, F_TERTIARY) && !(si.oneway && sj.oneway) && l.eu_country[i] {
@@ -935,7 +939,13 @@ fn base_bridge(l: &Layer, rules: &RoadRules, i: usize, lanes: Option<i64>) -> (S
         rule_w = Some(rules.link_width(lanes.filter(|&v| v != 0).unwrap_or(if ow { 1 } else { 2 })));
     }
     let (w, _) = rules.cw(c, l.built(kind), false, rule_w, ow, lanes.map(|v| v as f64), link);
-    (Sp { width: w, w32: false, kind, urban: false, cls: c, oneway: ow, dir: l.dir(i), kmh: None, gap: None,
+    // (its speed limit as the ground spec reads it: the bridge is a stretch of the same road, and graded, signed and
+    // furnished at the speed it is driven at, not its class's default: a 40 km/h spiral loop was a 90 km/h trunk)
+    let mut kmh = if l.has_k[i] && l.kv[i] > 0.0 { Some(l.kv[i]) } else { None };
+    if kmh.is_none() && l.osm_ms[i].is_finite() {
+        kmh = Some(l.osm_ms[i]);
+    }
+    (Sp { width: w, w32: false, kind, urban: false, cls: c, oneway: ow, dir: l.dir(i), kmh, gap: None,
           median: None, lanes, surf: l.stok[i], link, sides: -1, parking: true, mountain: false },
      ow || rule_w.is_some())
 }
@@ -1075,7 +1085,14 @@ impl RoadRules {
                 for r in a..b {
                     s += rr[[r, 1]] - rr[[r, 0]];
                 }
-                if s > 1.0 - prm.min_part {
+                // (the share a piece of this feature must have: roads.part_floor)
+                let mut len = 0.0f64;
+                for p in l.po[i]..l.po[i + 1] {
+                    for r in l.ro[p]..l.ro[p + 1] {
+                        len += ring_length(&|k, d| l.ll[[k, d]], l.co[r], l.co[r + 1]);
+                    }
+                }
+                if s > 1.0 - part_floor(prm.min_part, prm.min_part_m, len) {
                     continue;
                 }
             }
@@ -1362,6 +1379,52 @@ impl RoadRules {
         let d = PyDict::new(py);
         spec_cols(py, &d, &out, &self.names)?;
         Ok(d)
+    }
+
+    /// roads.width_repair (the road revamp plan's section 2.2 WIDTH repair, its upper side): whether each mapped width
+    /// vals[k] of feature feat[k] is no carriageway but a right-of-way / platform: wider than `factor` times its lanes'
+    /// width (class lane width, LANE_W_DEFAULT without; a two-way road two lanes at least) and a SHOULDER_M each side.
+    /// cls: STYLE class index (-1: not a road of STYLE: never); lanes: the map's count (-1: none); a motorway / trunk
+    /// without one has two, a link one (one-way) or two, any other road without a count is not tested (its count is
+    /// unknown: a wide multi-lane street keeps its mapped width). NaN / inf values: false. MA Route 2's 30.5 m (a 100 ft
+    /// right-of-way) on a two-lane rural trunk (GitHub #901).
+    #[allow(clippy::too_many_arguments)]
+    fn width_rejects<'py>(&self, py: Python<'py>, cls: PyReadonlyArray1<'py, i32>, oneway: PyReadonlyArray1<'py, bool>,
+                          link: PyReadonlyArray1<'py, bool>, lanes: PyReadonlyArray1<'py, i64>,
+                          feat: PyReadonlyArray1<'py, i64>, vals: PyReadonlyArray1<'py, f64>, factor: f64)
+                          -> PyResult<Bound<'py, PyArray1<bool>>> {
+        let (cls, oneway, link, lanes) = (cls.as_array(), oneway.as_array(), link.as_array(), lanes.as_array());
+        let (feat, vals) = (feat.as_array(), vals.as_array());
+        let n = cls.len();
+        if oneway.len() != n || link.len() != n || lanes.len() != n || feat.len() != vals.len() {
+            return Err(PyValueError::new_err("width_rejects: one class, oneway, link and lane count per feature, \
+                                              a feature per value"));
+        }
+        let mut out = vec![false; vals.len()];
+        for (k, o) in out.iter_mut().enumerate() {
+            let (i, v) = (feat[k], vals[k]);
+            if i < 0 || (i as usize) >= n || !v.is_finite() {
+                continue;
+            }
+            let i = i as usize;
+            if cls[i] < 0 {
+                continue;
+            }
+            let c = cls[i] as usize;
+            let ow = oneway[i];
+            let l = if lanes[i] > 0 {
+                lanes[i]
+            } else if link[i] {
+                if ow { 1 } else { 2 }
+            } else if self.has(c, F_MOTORWAY | F_TRUNK) {
+                2
+            } else {
+                continue;
+            };
+            let lb = if ow { l } else { l.max(2) } as f64;
+            *o = v > factor * lb * self.row(c).lw_or(self.lane_w_default) + 2.0 * self.shoulder;
+        }
+        Ok(out.into_pyarray(py))
     }
 
     /// roads._structure_width of features idx (NaN: None).

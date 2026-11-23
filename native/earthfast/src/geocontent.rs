@@ -54,11 +54,56 @@ pub struct Clipped {
     pub src: Vec<i64>,
 }
 
+/// Locate a cut vertex from the original triangle and the shared tile edge.
+/// Corners are the polygon's own coordinates. The other edge vertices are
+/// intersections of two original lines, independent of the order of clipping.
+fn seam_vertex(q: &mut [f64; 3], u: &mut [f64; 2], poly: &[[f64; 2]],
+               vs: [usize; 3], p: &[[f64; 3]], uv: &[[f64; 2]]) {
+    let xy = [q[0], q[1]];
+    if let Some(c) = poly.iter().find(|c| (xy[0]-c[0]).abs().max((xy[1]-c[1]).abs()) < 1e-10) {
+        q[0] = c[0];
+        q[1] = c[1];
+        // Both tiles interpolate the same original face at this corner.
+        let [a,b,d] = vs.map(|i| [p[i][0],p[i][1]]);
+        let area = |a:[f64;2],b:[f64;2],d:[f64;2]| (b[0]-a[0])*(d[1]-a[1])-(b[1]-a[1])*(d[0]-a[0]);
+        let total = area(a,b,d);
+        if total != 0.0 {
+            let (t,v) = (area(a,*c,d)/total,area(a,b,*c)/total);
+            let interp = |x,y,z| x + (y-x)*t + (z-x)*v;
+            q[2] = interp(p[vs[0]][2],p[vs[1]][2],p[vs[2]][2]);
+            *u = std::array::from_fn(|k| interp(uv[vs[0]][k],uv[vs[1]][k],uv[vs[2]][k]));
+        }
+        return;
+    }
+    for k in 0..poly.len() {
+        let (a,b) = (poly[k],poly[(k+1)%poly.len()]);
+        if side(a,b,xy).abs() > 1e-10 * (a[0]-b[0]).abs().max((a[1]-b[1]).abs()) { continue; }
+        let mut closest = f64::INFINITY;
+        for j in 0..3 {
+            let (mut i,mut h) = (vs[j],vs[(j+1)%3]);
+            if p[i] > p[h] {std::mem::swap(&mut i,&mut h);}
+            let (m,n)=(p[i],p[h]);
+            let (da,db)=(side(a,b,[m[0],m[1]]),side(a,b,[n[0],n[1]]));
+            if da==db || da*db>0.0 {continue;}
+            let f=da/(da-db);
+            let mut hit=std::array::from_fn(|t| m[t]+(n[t]-m[t])*f);
+            for t in 0..2 { if a[t]==b[t] {hit[t]=a[t];} }
+            let dist=(hit[0]-xy[0]).abs().max((hit[1]-xy[1]).abs());
+            if dist < closest {
+                closest=dist;
+                *q=hit;
+                *u=std::array::from_fn(|t|uv[i][t]+(uv[h][t]-uv[i][t])*f);
+            }
+        }
+        return;
+    }
+}
+
 /// Triangles (P (n, 3), UV (n, 2), T (m, 3)) cut to the convex polygon poly: those inside kept with their own
 /// vertices, those across its edges clipped (Sutherland-Hodgman, position and uv interpolated) and fanned with new
 /// vertices appended, those outside dropped. src: each output triangle's input index. A point exactly on an edge is
 /// inside (both tiles keep it: a zero-area seam).
-pub fn clip_convex(p: &[[f64; 3]], uv: &[[f64; 2]], t: &[[i64; 3]], poly: &[[f64; 2]]) -> Clipped {
+pub fn clip_convex(p: &[[f64; 3]], uv: &[[f64; 2]], t: &[[i64; 3]], poly: &[[f64; 2]], canonical: bool) -> Clipped {
     let k = poly.len();
     let mut cx = 0.0;
     let mut cy = 0.0;
@@ -122,7 +167,8 @@ pub fn clip_convex(p: &[[f64; 3]], uv: &[[f64; 2]], t: &[[i64; 3]], poly: &[[f64
             continue;
         }
         let base = out.p.len() as i64;
-        for (q, u) in &poly_p {
+        for (q, u) in &mut poly_p {
+            if canonical { seam_vertex(q, u, poly, vs, p, uv); }
             out.p.push(*q);
             out.uv.push(*u);
         }
@@ -136,10 +182,10 @@ pub fn clip_convex(p: &[[f64; 3]], uv: &[[f64; 2]], t: &[[i64; 3]], poly: &[[f64
 
 /// roadgeo.clip_quad: (P (n', 3), UV (n', 2), T (m', 3), src (m',)) of the triangles cut to the convex polygon
 /// poly (k, 2) (clip_convex).
-#[pyfunction]
+#[pyfunction(signature = (p, uv, t, poly, canonical=false))]
 #[allow(clippy::type_complexity)]
 pub fn clip_tris_convex<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, uv: PyReadonlyArray2<'py, f64>,
-                             t: PyReadonlyArray2<'py, i64>, poly: PyReadonlyArray2<'py, f64>)
+                             t: PyReadonlyArray2<'py, i64>, poly: PyReadonlyArray2<'py, f64>, canonical: bool)
                              -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>,
                                           Bound<'py, PyArray1<i64>>)> {
     let (pa, ua, ta, qa) = (p.as_array(), uv.as_array(), t.as_array(), poly.as_array());
@@ -157,7 +203,7 @@ pub fn clip_tris_convex<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, uv:
         return Err(PyValueError::new_err("clip_tris_convex: a triangle's index is out of range"));
     }
     let qv: Vec<[f64; 2]> = (0..qa.nrows()).map(|i| [qa[[i, 0]], qa[[i, 1]]]).collect();
-    let c = py.detach(|| clip_convex(&pv, &uvv, &tv, &qv));
+    let c = py.detach(|| clip_convex(&pv, &uvv, &tv, &qv, canonical));
     let (np_, nt) = (c.p.len(), c.t.len());
     let p2 = numpy::ndarray::Array2::from_shape_vec((np_, 3), c.p.into_iter().flatten().collect()).unwrap();
     let u2 = numpy::ndarray::Array2::from_shape_vec((np_, 2), c.uv.into_iter().flatten().collect()).unwrap();
@@ -444,7 +490,7 @@ mod tests {
         let t = vec![[0i64, 1, 2]];
         let left = [[-10.0, -10.0], [0.3, -10.0], [-0.2, 10.0], [-10.0, 10.0]];
         let right = [[0.3, -10.0], [10.0, -10.0], [10.0, 10.0], [-0.2, 10.0]];
-        let (a, b) = (clip_convex(&p, &uv, &t, &left), clip_convex(&p, &uv, &t, &right));
+        let (a, b) = (clip_convex(&p, &uv, &t, &left, false), clip_convex(&p, &uv, &t, &right, false));
         let whole = 0.5 * ((7.0f64) * 4.0 - 0.5 * 3.5).abs();
         assert!((area(&a) + area(&b) - whole).abs() < 1e-9, "{} + {} vs {whole}", area(&a), area(&b));
     }

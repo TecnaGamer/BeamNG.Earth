@@ -63,8 +63,10 @@ def unpack_heights(s):
 
 def heights_differ(z, want):
     """None when the heights match the golden ones, else what differs."""
-    if want is None or len(want) != len(z):
+    if want is None or want.shape != z.shape:
         return "another grid"
+    if not np.isfinite(z).all() or not np.isfinite(want).all():
+        return "non-finite plan height"
     d = np.abs(z - want)
     n = int(np.count_nonzero(d > PLANS_TOL_M))
     return f"{n} of {len(z)} heights moved, up to {d.max():.4f} m" if n else None
@@ -111,11 +113,14 @@ class FormatTest(unittest.TestCase):
                    lambda _a, b: heights_differ(z, unpack_heights(b)))
 
     def test_plans_compare_within_a_millimetre(self):
-        z = plans_heights()
+        z = np.array([-0.01373, 0.0, 14.21103])
         want = unpack_heights(pack_heights(z))
         self.assertIsNone(heights_differ(z, want), "rounded to 0.1 mm: the same")
         self.assertIsNone(heights_differ(z + 1e-6, want), "another machine's last bits: the same")
         moved = z.copy()
+        moved[0] = np.nan
+        self.assertIsNotNone(heights_differ(moved, want))
+        moved[0] = z[0]
         moved[len(z) // 2] += 0.01
         self.assertIn("1 of", heights_differ(moved, want) or "", "one height 1 cm off: changed")
 

@@ -25,6 +25,7 @@ export const settingsSchema = [
       { id: "groundGrid", type: "select", default: "1", name: "Ground grid", desc: "How fine the ground you drive on is: the distance between the points of its shape. 1 m: the game's own maps' detail, sharp kerbs, banks and ditches. 2 m: the lighter ground of the Low and Medium presets: softer small bumps and road edges, a quarter of the data to load each time the ground moves with you (shorter hitches while driving, faster loading on handhelds).",
         note: RESTART_NOTE,
         options: [ { label: "1 m (default)", value: "1" }, { label: "2 m (lighter)", value: "2" } ] },
+      { id: "terrainShadows", type: "bool", default: true, name: "Ground shadows", desc: "The sun's shadows of the ground around you (the drawn square you drive on): hills and ridges shade the slopes behind them, as the distant ground does, so there is no line in the mountains where the shadows stop. Off: no shadow redraw each time the ground moves with you (shorter hitches on handhelds). The Low and Medium presets turn it off." },
       { id: "trees", type: "select", default: "normal", name: "Tree density", desc: "How many trees and bushes are drawn at each distance. Lowest and Low: thinner forests (the most frame time saved in wooded places). Ultra and Extreme: denser forests far out (strong GPUs).",
         options: [ { label: "Lowest", value: "lowest" }, { label: "Low", value: "low" }, { label: "Medium", value: "medium" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" }, { label: "Ultra", value: "ultra" }, { label: "Extreme", value: "extreme" } ] },
       { id: "treeDistance", type: "select", default: "normal", name: "Tree draw distance", desc: "How far out trees, rocks, poles and roadside props are drawn: about 1.3 km at Normal, 1 km at Near, 0.8 km at Nearest, 2.8 km at Max. Farther needs more memory and a stronger GPU, and the app builds more tree tiles around you.",
@@ -74,6 +75,8 @@ export const settingsSchema = [
       { id: "rumbleStrips", type: "bool", default: true, name: "Rumble strip sound", desc: "Plays a brief rumble when your car drifts onto a likely lane-departure strip on selected Australian, New Zealand and US highway types. Internal lane dividers are ignored. Corridor coverage is approximate because these strips are not mapped consistently." },
       { id: "townSigns", type: "bool", default: true, name: "Town signs", desc: "Each country's own town entry and exit signs where a road enters a town (in Germany the yellow Ortstafeln, where OpenStreetMap has them mapped), from the road network, the land cover and Overture's places. Needs Roads." },
       { id: "adaptiveTraffic", type: "bool", default: false, name: "Adaptive traffic amount", desc: "Experimental. The traffic amount follows the place: up to your full amount in cities, fewer cars in the suburbs and the country, from the nearby road network and the nearest town (changed one car every few seconds while you drive, at once after a teleport). Never more than the traffic amount you chose. Off: always your amount." },
+      { id: "autodriveObstacles", type: "bool", default: false, name: "Autodrive obstacle avoidance", desc: "Experimental. Autodrive checks for static obstacles ahead, brakes and tries clear lanes in your direction. The extra road sensing uses CPU time and may lower the frame rate, most at higher speeds. Off: normal AI driving. Braking for traffic lights works either way." },
+      { id: "autodriveOncomingPass", type: "bool", default: false, name: "Autodrive opposing-lane passing", desc: "Experimental. With obstacle avoidance on, Autodrive may pass an obstruction through a clear opposing lane. Road markings are not checked, so it can cross solid lines. The extra visibility and traffic checks use CPU time while a pass is judged." },
       { id: "rebaseDistance", type: "float", min: 2000, max: 16000, step: 100, default: 15000, name: "Rebase distance (m)", desc: "Advanced. How far you drive before the world quietly moves back under you (keeps the physics precise). 15 km keeps precision at about 1 mm." },
     ],
   },
@@ -87,6 +90,10 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expNlRoadSigns", type: "bool", default: false, name: "Dutch road signs", desc: "Experimental. A first set of the Netherlands' own road signs, drawn by the Road signs above. Needs Road signs.",
         note: RESTART_NOTE, showIf: c => c.roadSigns === true },
+      { id: "expRoadRevamp", type: "bool", default: false, name: "Revamped roads", desc: "Experimental. The road revamp, still in progress: lane and width changes are as long as the road's speed needs; bridge decks curve over crests and dips to suit their speed; footbridges never block the road below; abandoned and disused railways no longer cross roads (heritage lines keep their crossings); racetracks keep their surface, with any tunnel dug under the track and no street poles or lamps along it; level crossings: the track runs right up to the crossing panel, no buffer stops where a siding is cut at a road, and no station platform worked out across a road; tracks beside a road up a hillside are no longer buried in a raised bank. Also the newest road work: wide, rounded cut and fill slopes like the stock maps (with rocks on steep rural cuts), bridge decks that follow the road's curve and bank, and highways built as one continuous road surface: lanes widen and narrow smoothly, exits split off at their real gore, and bridge decks follow the same surface without overlapping slabs or parapets across lanes. Places you visited before are built again once.",
+      { id: "expSurfaceOverlay", type: "bool", default: false, name: "Road surface overlay", desc: "Experimental, still being fixed. A second surface layer on roads: patches, wear and blended edges, with markings lying just above the asphalt. In some cities it can sit below the ground. Places you visited before are built again once." },
+      { id: "expNewSidewalks", type: "bool", default: false, name: "New sidewalks", desc: "Experimental, still being fixed. Town sidewalks as one joined surface per block: kerbs that meet at corners, raised brick and paved plazas where the map says so, sidewalks reaching the buildings. Some kerbs can still have small steps. Places you visited before are built again once." },
+        note: RESTART_NOTE },
       { id: "expEuScenery", type: "bool", default: false, name: "French and European road scenery", desc: "Experimental. Across Europe: each country's own steel guardrails (also along motorway edges where none is mapped), sign faces, bus stops and street edges (kerbs and pavements). In France also: French road markings and edge paint on country roads, bend and traffic signs, speed cameras, utility poles and regional house styles (untyped small buildings in housing areas become houses). Partly estimated where the map has no data.",
         note: RESTART_NOTE },
       { id: "expDropRails", type: "bool", default: false, name: "Guard rails at drops", desc: "Experimental. Steel guard rails along paved country roads wherever the ground falls away steeply beside the road (high embankments, cliffs, the valley side of mountain roads), where none is mapped.",
@@ -129,6 +136,8 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expCanadaLidar", type: "bool", default: false, name: "Detailed Canadian lidar", desc: "Experimental. In Canada, the national lidar terrain (HRDEM) at full detail near you, and British Columbia's own 1 m lidar where it was flown. Sharper ground, but many more downloads: first visits there take much longer.",
         note: RESTART_NOTE },
+      { id: "expGenGround", type: "bool", default: false, name: "Generated ground", desc: "Experimental. The ground near you is made from 10 m satellite colour (Sentinel-2) and the map (land cover, fields, parks, pitches, squares, pools, paths, hedges, streams, tree heights, roads and buildings) instead of downloading 1 m aerial photos, and roofs take their mapped or typical colours instead of the photo's. Places load faster where the photo servers are slow or missing, but the ground shows less real detail where the map has none (unmapped ponds, drives and yards, crop stripes outside mapped fields).",
+        note: RESTART_NOTE },
       { id: "expStaleRevisit", type: "bool", default: false, name: "Show the older world while rebuilding", desc: "Experimental. After an update, places you visited before show the previous version's roads, trees, signs and ground photos while the new version builds them, instead of loading as a first visit.",
         note: RESTART_NOTE },
     ],
@@ -144,6 +153,7 @@ export const settingsSchema = [
       { id: "telemetryPerf", type: "bool", default: true, name: "Performance data", desc: "Part of the anonymous reports: frame rate and hitches, how fast the world is built, the CPU / GPU model and the game and BeamNG.Earth settings, the kind of area you drive in (city, rural, ...) instead of where, and error codes. It shows what makes the game slow or crash on real players' machines.", showIf: c => c.telemetry !== false },
       { id: "telemetryNet", type: "bool", default: true, name: "Network load", desc: "Part of the anonymous reports: how many requests went to each map-data service, so we can slow down or cache before a free service is overloaded.", showIf: c => c.telemetry !== false },
       { id: "mapStyle", type: "select", default: "2d", name: "Map style", desc: "What the map key (M) and the pause menu's Map open. 2D: the flat world map. 3D: the camera flies up from your car and you look around the real world like a map app (move with WASD or the left stick, turn and tilt with the mouse or the right stick, zoom with the wheel); the map key again flies back down to the car. The 3D map is experimental. The map key opens the style you switched to last.", options: [ { label: "2D", value: "2d" }, { label: "3D (experimental)", value: "3d" } ] },
+      { id: "routeAvoidHighways", type: "bool", default: false, name: "GPS: avoid highways", desc: "The GPS plans routes without motorways when it can (country roads); a route only a motorway reaches uses it anyway, and the map says so. Also a button on the map's GPS box. Plans the route again when changed." },
       { id: "hudVisible", type: "bool", default: false, name: "Status window", desc: "The compact BeamNG.Earth status window (connection, location, loading, quick buttons). Also whether it opens at level start." },
       { id: "dashboardSatellite", type: "bool", default: true, name: "Satellite map on dashboards", desc: "BeamNG.Earth's satellite map on vehicles with dashboard screens. Off: the stock dashboard page." },
       { id: "creditsVisible", type: "bool", default: true, name: "Data credits on screen", desc: "Small text in a corner naming the sources of the imagery, elevation and weather around you. On by default: many of the data licences ask for visible credit. Hidden in the pause menu and the big map." },
@@ -151,6 +161,7 @@ export const settingsSchema = [
         options: [ { label: "Bottom left", value: "bottom-left" }, { label: "Bottom right", value: "bottom-right" }, { label: "Top left", value: "top-left" }, { label: "Top right", value: "top-right" } ] },
       { id: "creditsSize", type: "select", default: "small", name: "Data credits size", desc: "Text size of the data credits.", showIf: c => c.creditsVisible !== false,
         options: [ { label: "Small", value: "small" }, { label: "Normal", value: "normal" } ] },
+      { id: "mainMenuTile", type: "bool", default: true, name: "BeamNG.Earth on the main menu", desc: "A BeamNG.Earth tile in the place of Quick-Start Experiences on the game's main menu: a click starts BeamNG.Earth where you left off. Quick-Start stays on the menu's Discover page. Off: the stock tile. Takes effect the next time the main menu opens." },
     ],
   },
   {
@@ -304,6 +315,10 @@ export const connectionText = computed(() => {
 })
 
 export const statusText = computed(() => status.value.status || "-")
+// Off the BeamNG.Earth level (a stock level, the main menu) the settings are saved but nothing applies them until the
+// level loads (issue #1284: the pause menu's tab on West Coast USA looked as if it did nothing). Strictly false: the
+// first poll's answer, not the empty status before it.
+export const offLevel = computed(() => status.value.connection !== undefined && status.value.inOurLevel === false)
 
 // "Restart world server": the box at the top of each page (earthRestart.js) while a setting waits for a restart or one
 // is under way; the button asks the Lua side (settings.uiRestartServer), the poll shows the phases

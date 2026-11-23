@@ -174,5 +174,78 @@ class SnapTest(unittest.TestCase):
         np.testing.assert_allclose(d, 1.7, atol=0.05)
 
 
+class RoadFitTest(unittest.TestCase):
+    """BNE_RAIL_ROAD_FIT (railstations.ROAD_FIT): Hahnstaetten's bare station node (public_transport=no, no platform mapped)
+    got a 250 m platform worked out along its track, straight across the level crossing of the main street 90 m away
+    (the user's report r92, 2026-11-17)."""
+
+    def stations(self, fit, items=None):
+        from unittest import mock
+        with mock.patch.object(rs, "ROAD_FIT", fit):
+            return rs.stations(items if items is not None else items_of("hahnstaetten"), "DE")
+
+    @staticmethod
+    def carriageways(items):
+        import roads
+        return {it["id"]: (np.asarray(it["xy"], np.float64), roads.STYLE[it["cls"]][0] / 2.0) for it in items
+                if it["layer"] == "roads" and it["sub"] != "rail" and it["cls"] in roads.STYLE
+                and it["cls"] not in rs.WALK_CLEAR_CLASSES and float(it.get("level") or 0.0) == 0.0}
+
+    def with_passengers(self):
+        out = []
+        for it in items_of("hahnstaetten"):
+            if it["layer"] == "infrastructure" and it["cls"] == "railway_station":
+                it = dict(it, tags={k: v for k, v in it["tags"].items() if k != "public_transport"})
+            out.append(it)
+        return out
+
+    def test_off_the_platform_crosses_the_street(self):
+        import roads
+        sts = self.stations(False)
+        self.assertEqual(len(sts), 1)
+        pl = sts[0].platforms[0]
+        self.assertFalse(pl.mapped)
+        self.assertTrue(roads._on_carriageways(pl.ring, self.carriageways(items_of("hahnstaetten")), 0.0).any(),
+                        "today's platform lies on the street (the report)")
+
+    def test_no_platform_for_a_station_without_passengers(self):
+        self.assertEqual(self.stations(True), [])
+
+    def test_a_worked_out_platform_stops_short_of_the_roads(self):
+        import roads
+        items = self.with_passengers()
+        sts = self.stations(True, items)
+        self.assertEqual(len(sts), 1)
+        pl = sts[0].platforms[0]
+        self.assertFalse(pl.mapped)
+        self.assertFalse(roads._on_carriageways(pl.ring, self.carriageways(items), rs.ROAD_CLEAR_M - 0.05).any(),
+                         "clear of every carriageway and its footways")
+        tid, xy = pl.tracks[0]
+        edge = rs.norm("DE")[0]
+        near = [dist(xy, pl.ring[i]) for i in np.flatnonzero(pl.snapped)]
+        self.assertGreater(len(near), 10)
+        np.testing.assert_allclose(near, edge, atol=0.1)
+        side = pl.ring[pl.snapped]
+        self.assertGreaterEqual(float(np.max(np.hypot(*(side - side[0]).T))), rs.SYNTH_MIN_M)
+        self.assertEqual(signature(sts), signature(self.stations(True, list(reversed(items)))), "deterministic")
+
+    def test_a_walkway_across_cuts_it_one_beside_does_not(self):
+        line = np.c_[np.arange(50.0, 251.0, 2.0), np.zeros(101)]
+        out = np.tile([0.0, 1.0], (len(line), 1))
+        ss = line[:, 0] - 50.0
+
+        def way(cls, xy):
+            return {"layer": "roads", "sub": "road", "cls": cls, "xy": np.asarray(xy, np.float64), "tags": {},
+                    "level": 0.0, "id": f"{cls}{xy[0]}"}
+        keep = rs._off_roads(line, out, 1.7, [way("footway", [(10.0, 4.0), (290.0, 4.0)])], ss, 50.0)
+        self.assertEqual(len(keep), len(line), "a footway along the platform's back leaves it whole")
+        keep = rs._off_roads(line, out, 1.7, [way("footway", [(150.0, -20.0), (150.0, 20.0)])], ss, 20.0)
+        self.assertLess(float(line[keep[-1], 0]), 150.0 - 1.0 - rs.WALK_CLEAR_M + 0.01)
+        self.assertGreaterEqual(float(line[keep[-1], 0] - line[keep[0], 0]), rs.SYNTH_MIN_M)
+        self.assertIsNone(rs._off_roads(line, out, 1.7, [way("residential", [(x, -20.0), (x, 20.0)])
+                                                         for x in (70.0, 100.0, 130.0, 160.0, 190.0, 220.0)], ss, 50.0),
+                          "streets every 30 m: no run long enough")
+
+
 if __name__ == "__main__":
     unittest.main()

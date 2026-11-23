@@ -95,6 +95,7 @@ def main():
         cmd += ["--telemetry", "on"]
 
     base_env = dict(os.environ)
+    pick = overture_pick(extra)     # (the map data's release: decided once, while the start goes on)
     experimental = experimental_env(user_dir, dict(base_env))   # (for the lines below; run_restarting applies them)
 
     install.say(f"BeamNG.Earth {install.version()}: starting the world server")
@@ -112,23 +113,26 @@ def main():
         install.say(f"  Server log: {log_path}")
     install.say("")
     try:
-        sys.exit(run_restarting(cmd, user_dir, base_env))
+        sys.exit(run_restarting(cmd, user_dir, base_env, pick=pick))
     except KeyboardInterrupt:
         sys.exit(0)
 
 
-def run_restarting(cmd, user_dir, base_env, run=None, limiter=None):
+def run_restarting(cmd, user_dir, base_env, run=None, limiter=None, pick=None):
     """Run the server (run_logged), and again with the same options when it exits asking for it (srvrestart.EXIT_CODE:
     the settings page's "Restart world server"), each time in an environment made anew from base_env with the settings
     read again (server_env: the Experimental switches, the ground grid), at most srvrestart.MAX_RESTARTS in WINDOW_S
-    (the server is told its restarts so far and refuses one past it). Any other exit code is returned."""
+    (the server is told its restarts so far and refuses one past it). Any other exit code is returned. pick: the map
+    data's release (overturepick.Pick), the same for every start of this run (server_env)."""
     import time
     sr = _srvrestart()
     run = run or (lambda c, path, e: run_logged(c, path, e))
     limiter = limiter or sr.Limiter()
     first = True
     while True:
-        env, ids = server_env(user_dir, base_env, limiter.times)
+        env, ids = server_env(user_dir, base_env, limiter.times, pick.release() if pick is not None else None)
+        if first and pick is not None:
+            install.say(f"  Map data: Overture {pick.release()} ({pick.why})")
         if not first and ids:
             install.say("  Experimental features on (the settings page): " + ", ".join(ids))
         first = False
@@ -151,11 +155,30 @@ def _srvrestart():
     return srvrestart
 
 
-def server_env(user_dir, base_env, times=()):
+def overture_pick(extra):
+    """The map data's Overture release for this run (server/overturepick.py), started now in a thread of its own: the
+    first start takes it (waiting overturepick.PICK_S from now at most), every restart the same. None: the server's
+    own default."""
+    try:
+        here = os.path.join(ROOT, "server")
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import overturepick
+        import apppaths         # (earthd's rules: the last --cache-dir, relative to its folder ROOT, else the saved one)
+        saved = apppaths.app_settings().get("cacheDir")
+        default = saved if isinstance(saved, str) and saved else apppaths.default_cache_dir()
+        return overturepick.Pick(overturepick.cache_dir_of(extra, default, ROOT), offline="--offline" in extra)
+    except Exception:
+        return None
+
+
+def server_env(user_dir, base_env, times=(), overture_release=None):
     """(the server's environment, the Experimental ids on): base_env with the settings page's start-time settings as
     the app's launcher applies them (the Experimental switches, the ground grid: a variable set by hand wins), marked
     as a server this script starts again when it asks (srvrestart.supervisor_env, from what was applied)."""
     env = dict(base_env)
+    if overture_release:        # (the run's map data release: overture_pick)
+        env["BNGE_OVERTURE_RELEASE"] = overture_release
     ids = experimental_env(user_dir, env)
     try:
         import experimental

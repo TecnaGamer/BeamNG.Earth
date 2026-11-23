@@ -395,6 +395,62 @@ class RampTieScenarios(unittest.TestCase):
         self.assertAlmostEqual(float(rz[0]), 12.0, places=6, msg="a small gap at the fork still closed")
 
 
+class StackedRampTieScenarios(unittest.TestCase):
+    """Two mainlines of one viaduct 3 m apart in plan, one deck over the other (Daikoku Junction: the K5 line's two
+    levels), each with a ramp of its own level leaving it. The tie holds a ramp at its road's height beside it; it
+    never took the other level's deck for its road (the upper ramp dropped 5 m, the lower one rose 5 m, and the slabs
+    were cut where they met)."""
+
+    def stack(self, up_z=14.2, lo_z=12.4):
+        xs = np.arange(0.0, 401.0, 5.0)
+        n = len(xs)
+        up = np.c_[xs, np.zeros(n)]
+        lo = np.c_[xs, np.full(n, 3.0)]
+        ramp_up = np.c_[xs, 0.15 * xs]                      # leaves the upper road and drifts over the lower one's line
+        ramp_lo = np.c_[xs, 3.0 - 0.15 * xs]                # and the lower road's, toward the upper one's
+        zs = [np.full(n, up_z), np.full(n, lo_z), up_z - 0.01 * xs, lo_z - 0.01 * xs]
+        main = roads.Spec(width=12.0, kind="paved", urban=False, cls="motorway", oneway=True)
+        link = roads.Spec(width=8.0, kind="paved", urban=False, cls="motorway", oneway=True, link=True)
+        return [up, lo, ramp_up, ramp_lo], zs, [main, main, link, link], [3.0, 2.0, 3.0, 2.0]
+
+    def test_a_ramp_is_tied_to_its_own_level_only(self):
+        lines, zs, specs, levels = self.stack()
+        out = roads._tie_beside(lines, zs, specs, None, levels)
+        for k in range(2):
+            np.testing.assert_allclose(out[k], zs[k], err_msg="the roads as solved")
+        self.assertTrue((out[2] >= zs[2] - 1e-6).all(), "the upper ramp never drops")
+        self.assertLessEqual(float(out[3].max()), float(zs[1].max()) + 1e-6, "the lower ramp never rises over its road")
+        np.testing.assert_allclose(out[2][:3], zs[0][:3], atol=1e-6, err_msg="held at its own road's height")
+        np.testing.assert_allclose(out[3][:3], zs[1][:3], atol=1e-6)
+        # (the separation of the two ramps is what it was or more, beside each other)
+        self.assertTrue((out[2] - out[3] >= zs[2] - zs[3] - 1e-6).all())
+
+    def test_it_pulled_a_ramp_to_the_other_level_without_the_levels(self):
+        lines, zs, specs, levels = self.stack()
+        out = roads._tie_beside(lines, zs, specs, None, None)
+        self.assertLess(float(out[2][0]), float(zs[2][0]) - 1.0, "(the case the levels are for)")
+
+    def test_the_switch(self):
+        lines, zs, specs, levels = self.stack()
+        old = roads.TIE_LEVELS_ON
+        try:
+            roads.TIE_LEVELS_ON = False
+            out = roads._tie_beside(lines, zs, specs, None, levels)
+        finally:
+            roads.TIE_LEVELS_ON = old
+        self.assertLess(float(out[2][0]), float(zs[2][0]) - 1.0)
+
+    def test_a_part_of_another_level_is_never_the_road(self):
+        # the lower mainline, narrower than the upper one it lies under, is no branch of it either (it was tied to it,
+        # 5 m up, with the ramp on it)
+        lines, zs, specs, levels = self.stack()
+        specs[0] = roads.Spec(width=18.0, kind="paved", urban=False, cls="motorway", oneway=True)
+        out = roads._tie_beside(lines, zs, specs, None, levels)
+        np.testing.assert_allclose(out[1], zs[1], err_msg="the lower road as solved")
+        out = roads._tie_beside(lines, zs, specs, None, None)
+        self.assertGreater(float(np.abs(out[1] - zs[1]).max()), 1.0, "(the case the levels are for)")
+
+
 class EndJoinScenarios(unittest.TestCase):
     """Ends within 0.5 m of a point already in a node join it (four ramps' ends at a Springfield junction, each within
     0.5 m of a neighbour, made two nodes: one ramp an abutment 9 m under the others)."""
@@ -496,3 +552,23 @@ class DeckTaperScenarios(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RampTieNodeScenarios(unittest.TestCase):
+    """A ramp mapped at another layer than its road is still tied to it where its end is a node of that road: the layer
+    tags at a junction's shared node disagree often; a deck stacked over another shares no node with it."""
+
+    def case(self, ramp_y0):
+        xs = np.arange(0.0, 801.0, 5.0)
+        main = np.c_[xs, np.zeros_like(xs)]
+        ramp = np.c_[xs, ramp_y0 - 0.08 * xs]
+        main_z, ramp_z = np.full(len(xs), 12.0), 12.0 - 0.05 * xs - 1.5
+        mspec = roads.Spec(width=15.0, kind="paved", urban=False, cls="motorway", oneway=True)
+        rspec = roads.Spec(width=8.0, kind="paved", urban=False, cls="motorway", oneway=True, link=True)
+        return roads._tie_beside([main, ramp], [main_z, ramp_z], [mspec, rspec], levels=[2, 1])[1]
+
+    def test_a_ramp_of_another_layer_on_its_roads_node_is_tied(self):
+        self.assertAlmostEqual(float(self.case(0.0)[0]), 12.0, places=6)
+
+    def test_a_ramp_of_another_layer_ending_off_its_nodes_is_not(self):
+        self.assertAlmostEqual(float(self.case(2.5)[0]), 10.5, places=6)

@@ -130,6 +130,16 @@ class ShortTunnelTest(unittest.TestCase):
         self.assertLess(got[0][0], 0.5)
         self.assertGreater(got[0][1], 0.5)
 
+    def test_a_road_over_a_long_tunnel_in_short_segments_is_none(self):
+        # the railway's 90 m tunnel in three 30 m segments (split at its switches): the road over the middle one
+        # crosses a tunnel, not a short "tunnel" under a road bridge (Worcester Street over the tracks under the
+        # Bullring at Birmingham New Street got a deck over each)
+        f = hooked(features([[(-45.0, 0.0), (-15.0, 0.0)], [(-15.0, 0.0), (15.0, 0.0)], [(15.0, 0.0), (45.0, 0.0)],
+                             [(0.0, -200.0), (0.0, 200.0)]],
+                            ["standard_gauge"] * 3 + ["residential"], subtypes=["rail"] * 3 + ["road"],
+                            flags=[(0, "is_tunnel"), (1, "is_tunnel"), (2, "is_tunnel")]), lambda e, n: np.zeros_like(e))
+        self.assertEqual(roads.level_ranges(f, 3), [])
+
     def test_a_level_crossing_is_none(self):
         f = hooked(cross(("residential", "standard_gauge"), subtypes=["road", "rail"]), lambda e, n: np.zeros_like(e))
         self.assertEqual(roads.level_ranges(f, 0), [])
@@ -213,6 +223,31 @@ class UnderpassTest(unittest.TestCase):
             self.assertEqual([k for _, _, k in roads.level_ranges(g, 2)], ["tunnel"])
         finally:
             gradesep.JOINED_ENDS = joined
+
+    def test_the_road_going_on_from_an_underpass_s_portals_stays_on_the_ground(self):
+        # The SR17 at Popoli (42.1710 N 13.8247 E) under the Rome-Pescara railway: the map splits the road at its 20 m
+        # underpass, and its pieces either side met the tunnel at its ends. Taken as lines over it, they got bridges
+        # that ran on along the road through the underpass: the road going under was a deck on the ground (PORTAL_JOIN)
+        lines = [[(0.0, -200.0), (0.0, -10.0)], [(0.0, -10.0), (0.0, 10.0)], [(0.0, 10.0), (0.0, 200.0)],
+                 [(-200.0, 0.0), (200.0, 0.0)]]
+        classes = ["primary", "primary", "primary", "secondary"]
+        f = hooked(features(lines, classes, flags=[(1, "is_tunnel")]), lambda e, n: np.zeros_like(e))
+        self.assertEqual([k for _, _, k in roads.level_ranges(f, 3)], ["bridge"], "the road over it: a bridge")
+        self.assertEqual([roads.level_ranges(f, i) for i in (0, 1, 2)], [[], [], []], "the road under it: ground")
+        joined, gradesep.PORTAL_JOIN = gradesep.PORTAL_JOIN, False
+        try:
+            g = hooked(features(lines, classes, flags=[(1, "is_tunnel")]), lambda e, n: np.zeros_like(e))
+            self.assertIn("bridge", [k for i in (0, 1, 2) for _, _, k in roads.level_ranges(g, i)])
+        finally:
+            gradesep.PORTAL_JOIN = joined
+
+    def test_portal_joins_are_the_rows_at_an_end_of_both_lines(self):
+        pts = np.array([[0.0, -200.0], [0.0, -10.0], [0.0, -10.0], [0.0, 10.0], [-200.0, 0.0], [200.0, 0.0]])
+        starts = np.array([0, 2, 4, 6])
+        cand = np.array([[0, 1, 190.0, 0.0, 0.0, 1.0],     # the road going on from the portal: a join
+                         [2, 1, 200.0, 10.0, 1.0, 1.0],    # a line over the tunnel's middle
+                         [0, 2, 190.0, 0.0, 1.0, 0.0]])    # (not a line over a short tunnel: left to the kernel)
+        self.assertEqual(gradesep._portal_joins(pts, starts, cand).tolist(), [True, False, False])
 
     def test_a_long_tunnel_on_flat_ground_stays_a_tunnel(self):
         # the same on a flat DEM (a covered tunnel the DEM does not show): no bridge over it

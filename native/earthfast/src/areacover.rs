@@ -91,7 +91,7 @@ fn pt_seg(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
     let l2 = dx * dx + dy * dy;
     let t = if l2 > 0.0 { (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
     let (qx, qy) = (a.0 + t * dx, a.1 + t * dy);
-    (((p.0 - qx).powi(2) + (p.1 - qy).powi(2)).sqrt(), t)
+    (((p.0 - qx).sq() + (p.1 - qy).sq()).sqrt(), t)
 }
 
 /// Distance from point p to the axis-aligned rectangle (x0, y0, x1, y1) (0 inside).
@@ -157,7 +157,7 @@ fn corridor_map(lats: &[f64], lons: &[f64], half_m: f64, z: u8) -> Result<HashMa
     };
     for (pa, pb) in segs {
         let mid = ((pa.0 + pb.0) / 2.0).to_radians().dcos().max(1e-6);
-        let seg_len = (((pb.0 - pa.0) * k).powi(2) + ((pb.1 - pa.1) * k * mid).powi(2)).sqrt();
+        let seg_len = (((pb.0 - pa.0) * k).sq() + ((pb.1 - pa.1) * k * mid).sq()).sqrt();
         let pieces = ((seg_len / SUB_M.max(2.0 * half_m)).ceil() as usize).max(1);
         for i in 0..pieces {
             let (f0, f1) = (i as f64 / pieces as f64, (i + 1) as f64 / pieces as f64);
@@ -167,7 +167,7 @@ fn corridor_map(lats: &[f64], lons: &[f64], half_m: f64, z: u8) -> Result<HashMa
             let c = ((a.0 + b.0) / 2.0).to_radians().dcos().max(1e-6);
             let to_m = |lat: f64, lon: f64| ((lon - a.1) * k * c, (lat - a.0) * k);
             let (am, bm) = (to_m(a.0, a.1), to_m(b.0, b.1));
-            let plen = ((bm.0 - am.0).powi(2) + (bm.1 - am.1).powi(2)).sqrt();
+            let plen = ((bm.0 - am.0).sq() + (bm.1 - am.1).sq()).sqrt();
             let dlat = half_m / k;
             let dlon = half_m / (k * c);
             let (s, nn) = (a.0.min(b.0) - dlat, a.0.max(b.0) + dlat);
@@ -213,6 +213,7 @@ pub fn corridor_tiles(lats: Vec<f64>, lons: Vec<f64>, half_m: f64, z: u8, ring: 
     if ring > 0 {
         let last = ((1u64 << z) - 1) as i64;
         let r = ring as i64;
+        #[allow(clippy::disallowed_methods)] // hash order: collected, then sorted by the distinct tile keys
         let mut core: Vec<((u32, u32), f64)> = m.iter().map(|(k, v)| (*k, *v)).collect();
         core.sort_by(|a, b| a.0.cmp(&b.0));
         for ((x, y), at) in core {
@@ -246,7 +247,7 @@ pub fn corridor_size(lats: Vec<f64>, lons: Vec<f64>, half_m: f64) -> (f64, f64) 
     let mut len = 0.0;
     for i in 1..lats.len().min(lons.len()) {
         let c = ((lats[i] + lats[i - 1]) / 2.0).to_radians().dcos();
-        len += (((lats[i] - lats[i - 1]) * k).powi(2) + ((lons[i] - lons[i - 1]) * k * c).powi(2)).sqrt();
+        len += (((lats[i] - lats[i - 1]) * k).sq() + ((lons[i] - lons[i - 1]) * k * c).sq()).sqrt();
     }
     let h = half_m.max(0.0);
     (len, (len * 2.0 * h + std::f64::consts::PI * h * h) / 1e6)
@@ -259,6 +260,8 @@ pub fn corridor_size(lats: Vec<f64>, lons: Vec<f64>, half_m: f64) -> (f64, f64) 
 pub fn keys_in_cover(py: Python<'_>, keys: Vec<String>, cover: Vec<(u8, u32, u32)>) -> Vec<bool> {
     let exact: HashSet<(u8, u32, u32)> = cover.iter().copied().filter(|t| t.0 < 32).collect();
     let mut up: HashSet<(u8, u32, u32)> = HashSet::new();
+    // (hash order: `up` ends as every tile's ancestors whatever the order; membership only)
+    #[allow(clippy::iter_over_hash_type)]
     for &(z, x, y) in &exact {
         for d in 0..=z {
             if !up.insert((z - d, x >> d, y >> d)) && d > 0 {
@@ -266,6 +269,7 @@ pub fn keys_in_cover(py: Python<'_>, keys: Vec<String>, cover: Vec<(u8, u32, u32
             }
         }
     }
+    #[allow(clippy::disallowed_methods)] // hash order: an integer min
     let zmin = exact.iter().map(|t| t.0).min().unwrap_or(0);
     py.detach(|| keys.iter().map(|k| {
         let Some((z, x, y, _)) = tail_tile(k, 0) else { return false };

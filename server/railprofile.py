@@ -1,16 +1,20 @@
 """The rail beds' heights as one surface over the anchor, the same for every tile and every grading cell (plan 035).
 
 railways.profile lays a bed along the lines inside ONE window (a tile's, a grading cell's): a bridge deck or a road tunnel
-just outside the window's edge changes the bed inside it (the deck's ramp climbs 2 % for hundreds of metres), so two
+just outside the window's edge changes the bed inside it (the deck's ramp climbs at railways.GRADE for as far as it reaches), so two
 tiles drew one rail at two heights, a step of 0.85 m at a seam in Kyiv (railcheck.py), and the grader's plan, laid with
 60 m of reach, differed from the mesh, laid with 200 m.
 
-Here the beds are laid at the nodes of a lattice (a tile corner each), every node with a window much wider than the
-reach of what shapes a bed: its own profile, a pure function of (anchor, node). A point's bed is the nodes' beds around
-it (the four corners of its lattice cell) weighted bilinearly, so it is the same whichever tile or cell asks, and
-continuous across every seam by construction (the weights are). The elevation is the grader's (plan_store.elev): the mesh reads it
-in its own frame (the ENU heights, railways.point_ground), the grader as the DEM's heights, each with its own lattice (a
-frame's), so the mesh's bed is the bed the ground is graded to to within the nodes' blending. Pure given its inputs; BNE_RAIL_PROFILE=off keeps the per-window beds."""
+Here the beds are laid at the nodes of a lattice, every node with a window much wider than the reach of what shapes a
+bed: its own profile, a pure function of (anchor, node). A point's bed is the nodes' beds around it (the four corners of
+its lattice cell) weighted bilinearly, so it is the same whichever tile or cell asks, and continuous across every seam by
+construction (the weights are). The lattice is laid on the globe (lattice_rows: rows NODE_M apart in latitude, the columns
+of a row NODE_M apart in its own metres), not on a frame: the mesh's frame (the anchor's) and the grader's (its planning
+region's, kilometres away) laid their nodes on different lines, and a raised deck's ramp, reaching past the windows, was
+blended from different nodes (1.3-1.7 m apart under a track's ground). The elevation is the grader's (plan_store.elev), as
+the DEM's heights, and the mesh in an anchor's frame reads the planning region's frame's lattice (railways._region_beds),
+so the track is drawn on the bed the ground is graded to whatever the anchor, to within the frames' curvature. Pure
+given its inputs; BNE_RAIL_PROFILE=off keeps the per-window beds."""
 import math
 import os
 import threading
@@ -18,6 +22,7 @@ from collections import OrderedDict
 
 import numpy as np
 
+import dnp
 import fast
 import railways
 import revisit
@@ -25,11 +30,16 @@ import roads
 
 ENABLED = os.environ.get("BNE_RAIL_PROFILE", "on") not in ("off", "0", "false")
 SMOOTH_ON = os.environ.get("BNE_RAIL_SMOOTH", "on") not in ("off", "0", "false")
-NODE_M = roads.TILE                 # m between the nodes (a tile corner each)
+NODE_M = roads.TILE                 # m between the nodes (a lattice on the globe: lattice_rows)
+M_LAT = 111320.0                    # m of a degree of latitude (the lattice's own: it does not depend on a frame)
+COS_MIN = 0.05                      # the least cosine of a row's latitude (its columns' spacing grows past it)
 MARGIN_M = 350.0                    # m of line taken round a node's support (+-NODE_M) for its profile
 SMOOTH_STEPS = 25                   # steps (STEP_M each) either side the ground beds are averaged over, twice more
 MAX_CUT_M = 3.0                     # m the long smoothing moves a bed at most (cuttings and embankments stay modest)
 PIN_M = 30.0                        # m from a part's end the bed is left as railways.profile made it (a joint, a deck)
+# A point of a line the node's window split into other parts than the asking window's (no exact key: _find) takes the
+# node's nearest points of the same line (_find_near); off with BNE_RAIL_FIND_NEAR=off.
+FIND_NEAR_ON = os.environ.get("BNE_RAIL_FIND_NEAR", "on") not in ("off", "0", "false")
 JOIN_ON = os.environ.get("BNE_RAIL_SWITCH_FIX", "on") not in ("off", "0", "false")
 JOIN_M = 2.0                        # m: a ground part's end this near another part's line (not near its ends) is a switch
 JOIN_INTERIOR_M = 3.0               # m: ... farther than this from the other part's own ends (that is a joint: profile's)
@@ -40,9 +50,10 @@ NODE_MEMO_POINTS = 3_000_000        # points kept in the nodes (~16 bytes a poin
                                     # bed. 48 nodes were fewer than one tile asks (a whole viaduct's nodes): Berlin-Mitte,
                                     # 25 tiles: 290 nodes made 3579 times, ~3 of a tile's ~5 s. Only a node made on a
                                     # complete read is kept (_node: a short DEM's node would outlive its build's rebuild)
-_NODES = OrderedDict()              # (anchor key, ix, iy) -> {(fid, kind): (packed keys, heights)}
+_NODES = OrderedDict()              # (anchor key, ix, iy) -> ({(fid, kind): group}, earthfast.RailNode | None)
 _NODES_LOCK = threading.Lock()      # (road tiles are built on several threads)
 _NODES_PTS = [0]
+_EMPTY = ({}, None)                 # (a node with no lines)
 _PACK = np.int64(1) << 31           # (a centimetre key (a, b) as one int64: (a + 2^31) << 32 | (b + 2^31))
 
 
@@ -50,10 +61,6 @@ def _cm(xy):
     """(n, 2) int64: each point of xy in whole centimetres. The points lie every STEP_M from their part's start whatever
     the window (railways.parts), so the same point has the same key (fid, kind, x cm, y cm) in every node's window."""
     return np.round(np.asarray(xy, np.float64).reshape(-1, 2) * 100.0).astype(np.int64)
-
-
-def _pack(a, b):
-    return ((np.asarray(a, np.int64) + _PACK) << 32) | (np.asarray(b, np.int64) + _PACK)
 
 
 def smooth(xy, zb):
@@ -111,34 +118,101 @@ def join_beds(rails, zbs, inside=None):
     return np.split(_join_flat(rails, xy, off, np.concatenate(zs), inside), off[1:-1])
 
 
-_NEIGHBOURS = ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1))
-
-
 def _find(node, fid, kind, cm):
     """(k,): node's height at each centimetre key cm (k, 2) of (fid, kind), or at the first of the keys a centimetre off
-    that it has (_NEIGHBOURS' order: two windows' float noise round a point lying on a centimetre's edge to neighbouring
-    keys), or NaN."""
-    out = np.full(len(cm), np.nan)
-    got = node.get((fid, kind))
-    if got is None or not len(cm):
+    that it has (the key, then +-1 cm in x, in y, then the diagonals: two windows' float noise round a point lying on a
+    centimetre's edge to neighbouring keys), or NaN (earthfast.RailNode.find)."""
+    groups, packed = node
+    g = groups.get((fid, kind))
+    if g is None or not len(cm):
+        return np.full(len(cm), np.nan)
+    return packed.find(g, np.ascontiguousarray(cm, np.int64))
+
+
+def _points(node):
+    return 0 if node[1] is None else len(node[1])
+
+
+def _find_near(node, fid, cm, out):
+    """out's NaNs (no exact key in node: _find) filled from node's points of fid, any kind, within half a STEP_M,
+    interpolated between the two nearest. The node's window split the line into other parts (other bridges spanned,
+    other starts) than the asking one, so no key matched: railways._beds fell back to profiling the whole cell, decks
+    raised 7.5 m over Popoli's track 2 carried along it, the ground graded to them (mounds, cut walls through the track)."""
+    todo = np.flatnonzero(np.isnan(out))
+    if not len(todo):
         return out
-    keys, zs = got
-    todo = np.ones(len(cm), bool)
-    for da, db in _NEIGHBOURS:
-        q = _pack(cm[:, 0] + da, cm[:, 1] + db)
-        at = np.minimum(np.searchsorted(keys, q), len(keys) - 1)
-        hit = todo & (keys[at] == q)
-        out[hit] = zs[at[hit]]
-        todo &= ~hit
-        if not todo.any():
-            break
+    groups, packed = node
+    if packed is None:
+        return out
+    fast.require(510, "RailNode.group")
+    ks, zs = [], []
+    for (f_, _k), g in groups.items():
+        if f_ == fid:
+            keys, z_ = packed.group(g)
+            ks.append(np.asarray(keys, np.int64))
+            zs.append(np.asarray(z_, np.float64))
+    if not ks:
+        return out
+    keys, z_ = np.concatenate(ks), np.concatenate(zs)
+    kx = (((keys >> 32) & 0xFFFFFFFF) - _PACK).astype(np.float64)     # (the sign bit: a key at x >= 0 wraps)
+    ky = ((keys & 0xFFFFFFFF) - _PACK).astype(np.float64)
+    lim = 50.0 * railways.STEP_M                # (cm: half a step)
+    for i in todo:
+        d = dnp.hypot(kx - cm[i, 0], ky - cm[i, 1])
+        j = np.argsort(d, kind="stable")[:2]
+        if d[j[0]] > lim:
+            continue
+        if len(j) > 1 and d[j[1]] <= 2 * lim and d[j[0]] + d[j[1]] > 0:
+            w0 = d[j[1]] / (d[j[0]] + d[j[1]])
+            out[i] = w0 * z_[j[0]] + (1.0 - w0) * z_[j[1]]
+        else:
+            out[i] = z_[j[0]]
     return out
 
 
+def _row_lat(j):
+    """The latitude (deg) of lattice row j (rows NODE_M apart)."""
+    return np.asarray(j, np.float64) * NODE_M / M_LAT
+
+
+def _row_dlon(j):
+    """The longitude step (deg) of the columns of lattice row j: NODE_M metres at its latitude."""
+    c = np.maximum(dnp.cos(np.radians(_row_lat(j))), COS_MIN)     # (deterministic: dnp)
+    return NODE_M / (M_LAT * c)
+
+
+def lattice_rows(lat, lon):
+    """Where the points (lat, lon in degrees, (n,)) lie in the lattice: two rows (j, j + 1) of nodes round each, and in each
+    row its two columns: ([(row (n,), column (n,), weight (n,))] for the four nodes round each point, weights summing to 1).
+    The same for the same place whatever frame it was asked in: rows are latitudes, a row's columns are longitudes, the
+    weights bilinear in the latitude and, in each row, the longitude."""
+    lat = np.asarray(lat, np.float64)
+    lon = np.asarray(lon, np.float64)
+    fj = lat * M_LAT / NODE_M
+    j = np.floor(fj).astype(np.int64)
+    ty = fj - j
+    out = []
+    for dj in (0, 1):
+        r = j + dj
+        fi = lon / _row_dlon(r)
+        i = np.floor(fi).astype(np.int64)
+        tx = fi - i
+        wy = ty if dj else 1.0 - ty
+        for di in (0, 1):
+            out.append((r, i + di, wy * (tx if di else 1.0 - tx)))
+    return out
+
+
+def _node_xy(frame, ix, iy):
+    """Node (ix = column, iy = row)'s place in the frame (x, y)."""
+    e, n, _ = frame.geodetic_to_enu(np.array([float(_row_lat(iy))]), np.array([float(ix * _row_dlon(iy))]), 0.0)
+    return float(np.asarray(e).ravel()[0]), float(np.asarray(n).ravel()[0])
+
+
 def _node(frame, akey, load, ground, ix, iy):
-    """{(fid, kind): (centimetre keys packed (_pack), sorted; bed heights)} of node (ix, iy): the lines of a window NODE_M +
-    MARGIN_M round it, laid by railways.profile on ground's heights (the underpasses read in the same window). A point
-    two parts of a feature share has the later part's height."""
+    """({(fid, kind): group}, earthfast.RailNode of the groups' beds by centimetre key, or None) of node (ix, iy): the
+    lines of a window NODE_M + MARGIN_M round it, laid by railways.profile on ground's heights (the underpasses read in
+    the same window). A point two parts of a feature share has the later part's height."""
     ck = (akey, ix, iy)
     with _NODES_LOCK:
         got = _NODES.get(ck)
@@ -155,23 +229,23 @@ def _node(frame, akey, load, ground, ix, iy):
         if not _NODES:              # (cleared from outside: the tests)
             _NODES_PTS[0] = 0
         _NODES[ck] = out
-        _NODES_PTS[0] += sum(len(k) for k, _z in out.values())
+        _NODES_PTS[0] += _points(out)
         while _NODES_PTS[0] > NODE_MEMO_POINTS and len(_NODES) > 1:
-            _NODES_PTS[0] -= sum(len(k) for k, _z in _NODES.popitem(last=False)[1].values())
+            _NODES_PTS[0] -= _points(_NODES.popitem(last=False)[1])
     return out
 
 
 def _make_node(frame, load, ground, ix, iy):
     """_node's node (ix, iy), made (not looked up)."""
-    cx, cy = ix * NODE_M, iy * NODE_M
+    cx, cy = _node_xy(frame, ix, iy)
     box = (cx - NODE_M, cy - NODE_M, cx + NODE_M, cy + NODE_M)
     reach = MARGIN_M
     cells = [load(k) for k in railways.cells_near(frame, box, reach)]
-    tunnels = railways.road_underpasses(frame, cells, box, reach)     # (parts' own: asked once)
+    tcls = []
+    tunnels = railways.road_underpasses(frame, cells, box, reach, classes=tcls)     # (parts' own: asked once)
     rails = [r for r in railways.parts(frame, cells, box, reach=reach, clip=True, underpasses=tunnels) if r[1] != "tram"]
-    out = {}
     if rails:
-        tunnels = tunnels + railways.coarse_underpasses(frame, cells, box, rails, reach)
+        tunnels = railways.raising_underpasses(tunnels, tcls) + railways.plain_underpasses(frame, cells, box, rails, reach, tunnels)
         xy, off = _flat(rails)
         z = np.concatenate([np.asarray(zb, np.float64).ravel() for zb, _zg in railways.profile(rails, ground, tunnels)])
         if SMOOTH_ON:
@@ -180,17 +254,11 @@ def _make_node(frame, load, ground, ix, iy):
                  box[2] + reach - 3 * railways.STEP_M, box[3] + reach - 3 * railways.STEP_M)
         if JOIN_ON:
             z = _join_flat(rails, xy, off, z, inner)
-        cm = _cm(xy)
-        packed = _pack(cm[:, 0], cm[:, 1])
-        by = {}
-        for n, (fid, _c, kind, _pxy) in enumerate(rails):
-            by.setdefault((fid, kind), []).append(n)
-        for fk, ns in by.items():
-            k = np.concatenate([packed[off[n]:off[n + 1]] for n in ns])
-            v = np.concatenate([z[off[n]:off[n + 1]] for n in ns])
-            uk, first = np.unique(k[::-1], return_index=True)     # (the last of equal keys, as a dict's update)
-            out[fk] = (uk, v[::-1][first])
-    return out
+        fast.require(492, "rail_node_pack")
+        groups = {}
+        group = np.array([groups.setdefault((fid, kind), len(groups)) for fid, _c, kind, _pxy in rails], np.int64)
+        return groups, fast._ef.rail_node_pack(_cm(xy), np.ascontiguousarray(z, np.float64), off, group, len(groups))
+    return _EMPTY
 
 
 def beds(frame, akey, load, ground, rails):
@@ -202,19 +270,18 @@ def beds(frame, akey, load, ground, rails):
         z = np.full(len(xy), np.nan)
         if cls != "tram" and len(xy):
             cm = _cm(xy)
-            fx, fy = xy[:, 0] / NODE_M, xy[:, 1] / NODE_M
-            ix, iy = np.floor(fx).astype(np.int64), np.floor(fy).astype(np.int64)
-            tx, ty = fx - ix, fy - iy
+            la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
             num, den = np.zeros(len(xy)), np.zeros(len(xy))
-            for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1)):
-                w = (tx if dx else 1.0 - tx) * (ty if dy else 1.0 - ty)
-                for cell in set(zip((ix + dx).tolist(), (iy + dy).tolist())):
-                    m = (ix + dx == cell[0]) & (iy + dy == cell[1]) & (w > 1e-9)
+            for row, col, w in lattice_rows(la, lo):
+                for cell in set(zip(col.tolist(), row.tolist())):
+                    m = (col == cell[0]) & (row == cell[1]) & (w > 1e-9)
                     if not m.any():
                         continue
                     node = _node(frame, akey, load, ground, cell[0], cell[1])
                     idx = np.flatnonzero(m)
                     zz = _find(node, fid, kind, cm[idx])
+                    if FIND_NEAR_ON:
+                        zz = _find_near(node, fid, cm[idx], zz)
                     ok = np.isfinite(zz)
                     num[idx[ok]] += w[idx[ok]] * zz[ok]
                     den[idx[ok]] += w[idx[ok]]
