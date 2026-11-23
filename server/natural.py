@@ -81,6 +81,7 @@ ROW_SPACING_M = 8.0         # a tree row's trees this far apart (a crown diamete
 DEDUPE_M = 3.0              # a canopy top this near a mapped tree (its crown's radius at least) is that tree
 CANOPY_SEARCH_M = 3.0       # a mapped tree without a height: the canopy's top within this
 TREE_MIN_M = 3.0            # (vegetation.TREE_MIN_M)
+WALL_CLEAR_M = 1.0          # no mapped trunk this near a building's wall or the water (furniture.STREET_TREE_WALL_M)
 STREET_TREE_CLEAR_M = 6.0   # a made-up street tree (furniture.py) this near a mapped tree is left out
 # leaf codes (natural.rs LEAF_* / CYCLE_*)
 LEAF_BROAD, LEAF_NEEDLE, LEAF_MIXED = 1, 2, 3

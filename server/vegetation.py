@@ -707,7 +707,8 @@ class Vegetation:
             f32(hs), solid.view(np.uint8), road.view(np.uint8), curb.view(np.uint8), f32(push),
             [float(chm.x0), float(chm.y0), float(chm.dx), float(chm.dy)], [float(b) for b in bounds],
             np.ascontiguousarray(np.stack([tx, ty], axis=1), np.float64), float(sec),
-            [natural.ROW_SPACING_M, natural.DEDUPE_M, natural.CANOPY_SEARCH_M, natural.TREE_MIN_M],
+            [natural.ROW_SPACING_M, natural.DEDUPE_M, natural.CANOPY_SEARCH_M, natural.TREE_MIN_M,
+             natural.WALL_CLEAR_M],
             [natural.DEFAULT_H[s] for s in natural.SPECIES])
         x, y, height, radius, sl, from_row, hsrc, keep = got
         return (x, y, height, radius, sl, from_row, hsrc), np.asarray(keep, bool)

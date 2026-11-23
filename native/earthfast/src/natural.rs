@@ -304,7 +304,8 @@ impl Grid<'_> {
 /// decks; road: the roads' drawn corridors; curb: the roads + their tree pit margin; push (3, n_r, n_c): the move out
 /// of a corridor in pixels, vegetation's), x0 y0 dx dy. bounds: the cell's (ex0, ey0, ex1, ey1): the trees in it are
 /// placed. tops (t, 2): the canopy's tree tops; sec: Web Mercator m per ground m; params: [row spacing m, dedupe
-/// minimum m, canopy search m, tree minimum m]; defaults: a height per slot. -> (x, y, height, crown radius (ground m),
+/// minimum m, canopy search m, tree minimum m, wall clearance m (no trunk within it of a blocked pixel: a building's
+/// wall, the water's edge)]; defaults: a height per slot. -> (x, y, height, crown radius (ground m),
 /// slot, from_row, height source (the evidence model's rank: 1 its tag, 2 the canopy model, 3 its trunk's girth, 5 its
 /// species' usual), keep_tops)
 #[pyfunction]
@@ -321,8 +322,8 @@ pub fn natural_trees<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, slot
         -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f32>>,
                      Bound<'py, PyArray1<f32>>, Bound<'py, PyArray1<u8>>, Bound<'py, PyArray1<bool>>,
                      Bound<'py, PyArray1<u8>>, Bound<'py, PyArray1<bool>>)> {
-    if grid.len() != 4 || bounds.len() != 4 || params.len() != 4 || defaults.len() != S_COUNT {
-        return Err(PyValueError::new_err("natural_trees: grid 4, bounds 4, params 4, defaults per slot"));
+    if grid.len() != 4 || bounds.len() != 4 || params.len() != 5 || defaults.len() != S_COUNT {
+        return Err(PyValueError::new_err("natural_trees: grid 4, bounds 4, params 5, defaults per slot"));
     }
     let (pv, sv, hv, cv, civ) = (pts.as_array(), slot.as_slice()?, height.as_slice()?, crown.as_slice()?,
                                  circ.as_slice()?);
@@ -333,6 +334,23 @@ pub fn natural_trees<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, slot
     let pu = push.as_array();
     let tv = tops.as_array();
     let (row_sp_m, dedupe_m, search_m, tree_min_m) = (params[0], params[1], params[2], params[3]);
+    let wall_px = (params[4] * sec / g.dx).ceil().max(0.0) as i64;
+    let (nr_all, nc_all) = (g.hs.shape()[0] as i64, g.hs.shape()[1] as i64);
+    // (a blocked pixel within wall_px: the trunk would stand in or against a building, in the water)
+    let near_blocked = |r: i64, c: i64| -> bool {
+        for dr in -wall_px..=wall_px {
+            for dc in -wall_px..=wall_px {
+                if dr * dr + dc * dc > wall_px * wall_px {
+                    continue;
+                }
+                let (rr, cc) = (r + dr, c + dc);
+                if rr >= 0 && cc >= 0 && rr < nr_all && cc < nc_all && g.blocked[[rr as usize, cc as usize]] != 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    };
     let (bx0, by0, bx1, by1) = (bounds[0], bounds[1], bounds[2], bounds[3]);
     // candidates: the single trees, then the rows' stations (each row from its own start: the same stations in every
     // cell it crosses), a station within 0.6 spacing of a single tree left out (the row's trees mapped one by one)
@@ -425,7 +443,7 @@ pub fn natural_trees<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, slot
             None => continue,
         };
         let (mut x, mut y) = (c.x, c.y);
-        if g.blocked[[r, col]] != 0 {
+        if near_blocked(r as i64, col as i64) {
             continue;
         }
         if g.road[[r, col]] != 0 {
@@ -440,7 +458,7 @@ pub fn natural_trees<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, slot
                 continue;
             }
             let (nr, nc) = (nr as usize, nc as usize);
-            if g.blocked[[nr, nc]] != 0 || g.curb[[nr, nc]] != 0 {
+            if near_blocked(nr as i64, nc as i64) || g.curb[[nr, nc]] != 0 {
                 continue;
             }
             x = c.x + pc * g.dx;
