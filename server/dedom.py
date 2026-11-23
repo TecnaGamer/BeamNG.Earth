@@ -19,6 +19,7 @@ service's state its WCS has no data there: no points, the inference stands.
     service_at(lat, lon)            the SERVICES entry whose box holds the point, or None
     sample(fetch, svc, lat, lon)    (dom, dgm) heights (NaN: none) of the points, read in boxes of at most box_m
     points(fetch, s, w, n, e)       (lat, lon, dom, dgm) of the shards' samples in a box (the game's side)
+    plausible(xy, half, s, z, ...)  whether a measured deck reads a road surface (not tree crowns over a track)
 """
 import io
 import math
@@ -42,6 +43,24 @@ DGM_EVERY = 4               # every this many samples keep their DGM height (the
 NO_Z = -(1 << 31)           # a shard's height for none (cm)
 LOCAL_ENV = "BNE_DE_DECKS_DIR"
 NAME = "dedecks"            # the dataset's folder on the data site (its manifest.json; the shards beside or on "data")
+
+# A deck is measured from the samples on its mapped carriageway only (its line +- its half width, not past its ends:
+# DECK_PAD_M beyond), and a deck that stands high over the ground at both free ends is kept only where its samples
+# read a road surface (plausible). The surface model also holds tree crowns, masts and trusses: a crown over a forest
+# track's little bridge reads as a deck 14-28 m over the ground at both ends, its samples scattered round the profile.
+# The profile itself cannot jump (roadz's kernel allows LIDAR_MAX_GRADE between stations), so the scatter is measured:
+# the share of the samples (at the stations the profile measured) within SUPPORT_DZ_M of it. On the 14 states' spots
+# (1250 deck reads, every sample and every 4th): the real decks standing ABOVE_M or more over the ground at both free
+# ends (viaducts, the Elbbruecken's truss spans) have 0.73-1.0 of their samples on the profile, the crowns and masts
+# 0.11-0.60. Neither alone is a rule: dozens of real decks stand high at both ends, and occluded decks (under another
+# deck) have few samples on their profile anywhere.
+DECK_PAD_M = 0.0            # m beyond the carriageway's half width a deck's samples count (the US lidar's: 2 m)
+ABOVE_M = 5.0               # m over the ground beyond both free ends from which a deck's samples must read a road ...
+SUPPORT_MIN = 0.65          # ... this share of them within SUPPORT_DZ_M of its profile ...
+SUPPORT_MIN_N = 10          # ... of at least this many samples
+SUPPORT_DZ_M = 0.5
+BEYOND_M = (1.0, 12.0)      # m past a deck's end its ground is read (the DGM samples of its approach, else our DEM)
+TOUCH_M = 3.0               # an end this near another deck's line goes on as that deck (not onto the ground)
 
 # The states whose surface model is open: a box round each (south, west, north, east; the game reads the shards there,
 # a point in the box but outside the state finds none), its UTM zone (EPSG 25832 / 25833 = zone 32 / 33), the credit
@@ -204,6 +223,104 @@ def grid_along(xy, half, step=SAMPLE_M):
     n = np.stack([-d[:, 1], d[:, 0]], 1) / np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
     off = np.arange(-half, half + 1e-9, step)
     return (pts[:, None, :] + off[None, :, None] * n[:, None, :]).reshape(-1, 2)
+
+
+def on_line(xy, half, p):
+    """(on, arc): which points p (n, 2) lie within half of polyline xy and not past its ends (as roadz's deck_lidar
+    counts them), and their arc along xy (the nearest segment's; the first of equals)."""
+    p = np.asarray(p, np.float64).reshape(-1, 2)
+    arc = np.r_[0.0, np.cumsum(dnp.hypot(np.diff(xy[:, 0]), np.diff(xy[:, 1])))]
+    best = np.full(len(p), np.inf)
+    at = np.zeros(len(p))
+    seg = np.full(len(p), -1, np.int64)
+    tr = np.zeros(len(p))
+    for i in range(len(xy) - 1):
+        ax, ay = float(xy[i, 0]), float(xy[i, 1])
+        bx, by = float(xy[i + 1, 0]) - ax, float(xy[i + 1, 1]) - ay
+        t = ((p[:, 0] - ax) * bx + (p[:, 1] - ay) * by) / max(bx * bx + by * by, 1e-12)
+        tc = np.clip(t, 0.0, 1.0)
+        d = dnp.hypot(p[:, 0] - (ax + tc * bx), p[:, 1] - (ay + tc * by))
+        k = d < best
+        best[k], at[k], seg[k], tr[k] = d[k], arc[i] + tc[k] * (arc[i + 1] - arc[i]), i, t[k]
+    past = ((seg == 0) & (tr < 0.0)) | ((seg == len(xy) - 2) & (tr > 1.0))
+    return (best <= half) & ~past, at
+
+
+def support(xy, half, s, z, pts):
+    """(share, n): of the n samples pts (n, 3) on the carriageway (on_line) of a deck measured as heights z at the
+    evenly spaced stations s along xy, at the stations it measured (z finite: not where another deck hides it), the
+    share within SUPPORT_DZ_M of the profile ((NaN, 0): none)."""
+    s, z = np.asarray(s, np.float64), np.asarray(z, np.float64)
+    ok = np.isfinite(z)
+    if not ok.any() or len(s) < 2 or not len(pts):
+        return float("nan"), 0
+    lo, hi = xy.min(0) - half, xy.max(0) + half
+    near = np.flatnonzero((pts[:, 0] >= lo[0]) & (pts[:, 0] <= hi[0]) & (pts[:, 1] >= lo[1]) & (pts[:, 1] <= hi[1]))
+    on, at = on_line(xy, half, pts[near, :2])
+    at = at[on]
+    st = np.minimum(np.round(at / (s[1] - s[0])).astype(np.int64), len(s) - 1)     # (the kernel's station of each)
+    k = ok[st]
+    if not k.any():
+        return float("nan"), 0
+    prof = dnp.interp(at[k], s[ok], z[ok])
+    dz = np.abs(pts[near[on][k], 2] - prof)
+    return float(np.count_nonzero(dz <= SUPPORT_DZ_M)) / len(dz), int(len(dz))
+
+
+def ground_beyond(xy, half, ground, end):
+    """The median ground height (ground (k, 3) points: the state's DGM on our datum) from BEYOND_M[0] to BEYOND_M[1]
+    past end 0 (the first point) or 1 (the last) of line xy, within half of its direction; NaN: no sample there."""
+    if not len(ground):
+        return float("nan")
+    q, q2 = (xy[0], xy[1]) if end == 0 else (xy[-1], xy[-2])
+    ux, uy = float(q[0] - q2[0]), float(q[1] - q2[1])
+    n = dmath.hypot(ux, uy)
+    if n <= 0.0:
+        return float("nan")
+    ux, uy = ux / n, uy / n
+    dx, dy = ground[:, 0] - float(q[0]), ground[:, 1] - float(q[1])
+    along, across = dx * ux + dy * uy, np.abs(dy * ux - dx * uy)
+    k = (along >= BEYOND_M[0]) & (along <= BEYOND_M[1]) & (across <= half)
+    return float(np.median(ground[k, 2])) if k.any() else float("nan")
+
+
+def line_dist(xy, q):
+    """The distance of point q (2,) from polyline xy (k, 2), its ends included."""
+    best = float("inf")
+    for i in range(len(xy) - 1):
+        ax, ay = float(xy[i, 0]), float(xy[i, 1])
+        bx, by = float(xy[i + 1, 0]) - ax, float(xy[i + 1, 1]) - ay
+        t = min(1.0, max(0.0, ((float(q[0]) - ax) * bx + (float(q[1]) - ay) * by) / max(bx * bx + by * by, 1e-12)))
+        best = min(best, dmath.hypot(float(q[0]) - (ax + t * bx), float(q[1]) - (ay + t * by)))
+    return best
+
+
+def plausible(xy, half, s, z, pts, ground, dem, others=()):
+    """(ok, why): whether a deck measured as heights z at stations s along its line xy (local metres) reads a road
+    surface. pts (n, 3): the samples on our datum; ground (k, 3): the DGM samples on our datum; dem(x, y): our DEM
+    there (the ground at an end the DGM has no sample beyond, NaN: none); others: the other decks' lines (an end
+    within TOUCH_M of one goes on as that deck: a viaduct's ends stand high, on other decks). Not a road surface (the
+    inference stands for it): both ends free and ABOVE_M or more over the ground beyond them, and under SUPPORT_MIN of
+    its samples on the profile, or fewer than SUPPORT_MIN_N samples to tell (a crown of trees over a track)."""
+    ok = np.flatnonzero(np.isfinite(z))
+    if not len(ok):
+        return True, ""
+    over = []
+    for end, zi in ((0, ok[0]), (1, ok[-1])):
+        q = xy[0] if end == 0 else xy[-1]
+        if any(len(o) >= 2 and line_dist(o, q) <= TOUCH_M for o in others):
+            return True, ""
+        g = ground_beyond(xy, half, ground, end)
+        if not np.isfinite(g):
+            g = float(dem(float(q[0]), float(q[1])))
+        if not (np.isfinite(g) and float(z[zi]) - g >= ABOVE_M):
+            return True, ""
+        over.append(float(z[zi]) - g)
+    share, n = support(xy, half, s, z, pts)
+    if n >= SUPPORT_MIN_N and share >= SUPPORT_MIN:
+        return True, ""
+    return False, (f"both ends {min(over):.1f} m or more over the ground, {share:.2f} of {n} samples on the profile "
+                   "(tree crowns?)")
 
 
 # ---- the shards ----

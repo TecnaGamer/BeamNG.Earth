@@ -92,6 +92,70 @@ class ShardTest(unittest.TestCase):
         self.assertEqual(len(got[0]), 0)
 
 
+class PlausibleTest(unittest.TestCase):
+    """dedom.plausible: a deck standing high over the ground at both free ends is kept only where its carriageway's
+    samples read a road surface; tree crowns over a track (samples scattered round the profile) are not measured."""
+
+    def setUp(self):
+        self.rng = np.random.default_rng(1531)
+        self.xy = np.array([[0.0, 0.0], [30.0, 0.0]])
+        self.s = np.linspace(0.0, 30.0, 9)
+        self.grid = np.mgrid[-2:33:1.0, -6:7:1.0].reshape(2, -1).T
+        self.ground = np.c_[self.grid, np.zeros(len(self.grid))]     # (the DGM: flat at 0, beyond both ends too)
+
+    def deck(self, z):
+        return np.c_[self.grid, z]
+
+    def check(self, pts, z=14.0, half=2.5, ground=None, dem=0.0, others=()):
+        return dedom.plausible(self.xy, half, self.s, np.full(len(self.s), z), pts,
+                               self.ground if ground is None else ground, lambda x, y: dem, others)
+
+    def crowns(self):
+        z = 14.0 + self.rng.normal(0.0, 0.8, len(self.grid))
+        z[self.rng.random(len(z)) < 0.25] = 0.0         # (gaps in the crowns: the ground)
+        return self.deck(z)
+
+    def test_smooth_deck_high_over_the_ground_kept(self):
+        """A viaduct's span 12 m over the ground at both ends: its samples on its surface (a few railings, cars)."""
+        z = np.full(len(self.grid), 12.0) + self.rng.normal(0.0, 0.03, len(self.grid))
+        z[self.rng.random(len(z)) < 0.2] += 1.5
+        self.assertEqual(self.check(self.deck(z), 12.0, half=4.0), (True, ""))
+
+    def test_crowns_over_a_track_dropped(self):
+        ok, why = self.check(self.crowns())
+        self.assertFalse(ok)
+        self.assertIn("on the profile", why)
+
+    def test_crowns_without_dgm_beyond_read_our_dem(self):
+        self.assertFalse(self.check(self.crowns(), ground=np.zeros((0, 3)), dem=0.5)[0])
+        # (the ground beyond as high: the deck stands on its approaches, its samples are not judged)
+        self.assertTrue(self.check(self.crowns(), ground=np.zeros((0, 3)), dem=10.0)[0])
+
+    def test_low_deck_not_judged(self):
+        """A deck near the ground at an end (a crossing, its approaches) keeps its measurement whatever its scatter."""
+        self.assertTrue(self.check(self.crowns(), ground=self.ground + [0.0, 0.0, 10.0])[0])
+
+    def test_end_on_another_deck_kept(self):
+        """An end that goes on as another deck stands on no approach: a viaduct's span is not judged."""
+        other = np.array([[30.0, 1.0], [60.0, 5.0]])
+        self.assertTrue(self.check(self.crowns(), others=[other])[0])
+
+    def test_too_few_samples_dropped(self):
+        """High over the ground at both free ends with a handful of samples: nothing to tell a road by."""
+        z = np.full(len(self.grid), 14.0)
+        few = self.deck(z)[(np.abs(self.grid[:, 1]) < 0.5) & (self.grid[:, 0] % 10 == 0)]
+        self.assertLess(len(few), dedom.SUPPORT_MIN_N)
+        self.assertFalse(self.check(few)[0])
+
+    def test_only_the_carriageway_counts(self):
+        """Crowns beside the deck (past its half width) and past its ends are not its samples."""
+        z = np.full(len(self.grid), 14.0)
+        off = (np.abs(self.grid[:, 1]) > 2.5) | (self.grid[:, 0] < 0.0) | (self.grid[:, 0] > 30.0)
+        z[off] = 20.0 + self.rng.normal(0.0, 3.0, int(off.sum()))
+        share, n = dedom.support(self.xy, 2.5, self.s, np.full(len(self.s), 14.0), self.deck(z))
+        self.assertEqual((share, n), (1.0, 31 * 5))
+        self.assertTrue(self.check(self.deck(z))[0])
+
 
 class ManifestTest(unittest.TestCase):
     """The shards read through the dataset's manifest (pagesdata.Manifest): from its "data" host when it names one,
@@ -174,6 +238,7 @@ class ManifestTest(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(d, "pagesdata", "dedecks", "manifest.json")))
             self.reset()
 
+
 @unittest.skipUnless(NATIVE, "earthfast with the lidar kernels")
 class CellTest(unittest.TestCase):
     """A 120 m bridge over a road in a cell of NRW: the surface model's deck 6.3 m over flat ground at 50 m (the DGM
@@ -197,7 +262,7 @@ class CellTest(unittest.TestCase):
         a = self.dom if "dom" in url.split("COVERAGEID=")[1][:8] else self.dgm
         return geotiff(a, self.x0, self.y0)
 
-    def built(self, fetch):
+    def built(self, fetch, half=4.0):
         """The game's measured Lines of the cell from shards built offline with fetch as the state's service: the
         game's own fetch fails, so only the shards can have given it anything."""
         tmp = tempfile.TemporaryDirectory()
@@ -205,7 +270,7 @@ class CellTest(unittest.TestCase):
         self.addCleanup(dedom._shards.clear)
         dedom._shards.clear()
         build = roadz.RoadZ(None, None, None)
-        with mock.patch.object(build, "_bridges", return_value=[(self.ring, 4.0)]), \
+        with mock.patch.object(build, "_bridges", return_value=[(self.ring, half)]), \
                 mock.patch.object(build, "_gap_candidates", return_value=[]), \
                 mock.patch.object(build, "_fetch", side_effect=lambda u, **k: fetch(u)):
             la, lo, dom, dgm = build.dedom_samples(self.key, dedom.SERVICES[0])
@@ -217,7 +282,7 @@ class CellTest(unittest.TestCase):
         def no_service(u, **k):
             raise AssertionError("the game asked " + u)
         with mock.patch.dict(os.environ, {dedom.LOCAL_ENV: tmp.name}), \
-                mock.patch.object(game, "_bridges", return_value=[(self.ring, 4.0)]), \
+                mock.patch.object(game, "_bridges", return_value=[(self.ring, half)]), \
                 mock.patch.object(game, "_gap_candidates", return_value=[]), \
                 mock.patch.object(game, "_fetch", side_effect=no_service), \
                 mock.patch.object(game, "_dem_raw", side_effect=lambda la, lo: np.full(len(np.atleast_1d(la)), 50.0)):
@@ -230,6 +295,20 @@ class CellTest(unittest.TestCase):
         z = got.z[got.off[0]:got.off[1]]
         self.assertGreater(np.isfinite(z).sum(), 10)
         self.assertAlmostEqual(float(np.nanmedian(z)), 50.0 + 6.3, delta=0.3)
+
+    def test_canopy_over_a_mapped_track_not_measured(self):
+        """A forest track's 30 m bridge under tree crowns 14 m high (15 % of the samples through to the ground):
+        no deck measured, the inference stands; with the rule off the crowns would be its deck."""
+        la, lo, _ = self.frame.enu_to_geodetic(np.array([-15.0, 15.0]), np.array([0.0, 0.0]), 0.0)
+        self.ring = np.stack([np.asarray(lo), np.asarray(la)], 1)
+        rng = np.random.default_rng(1531)
+        crown = 50.4 + 14.0 + rng.normal(0.0, 0.5, self.dgm.shape)
+        self.dom = np.where(rng.random(self.dgm.shape) < 0.15, 50.4, crown)
+        self.assertEqual(len(self.built(self.fetch, half=2.5)), 0)
+        with mock.patch.object(dedom, "ABOVE_M", 1e9):
+            got = self.built(self.fetch, half=2.5)
+        self.assertEqual(len(got), 1)
+        self.assertGreater(float(np.nanmedian(got.z[got.off[0]:got.off[1]])), 60.0)
 
     def test_outside_the_state_no_decks(self):
         nan = np.full_like(self.dom, -9999.0)

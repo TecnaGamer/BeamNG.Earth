@@ -1379,10 +1379,25 @@ class RoadZ:
         e, n, _ = frame.geodetic_to_enu(la[ok], lo[ok], 0.0)
         pts = np.ascontiguousarray(np.stack([np.asarray(e), np.asarray(n), dom[ok] - off], 1))
         cls = np.ascontiguousarray(np.ones(int(ok.sum()), np.uint8))
+        g = np.isfinite(dgm)
+        ge, gn, _ = frame.geodetic_to_enu(la[g], lo[g], 0.0)
+        ground = np.stack([np.asarray(ge, np.float64), np.asarray(gn, np.float64), dgm[g] - off], 1)
+        dropped = []
+
+        def check(i, xy, half, s, z):
+            """dedom.plausible: a deck whose samples read no road surface (tree canopy) is not measured."""
+            def dem(x, y):
+                ela, elo, _ = frame.enu_to_geodetic(np.array([x]), np.array([y]), 0.0)
+                return float(self._dem_raw(np.asarray(ela, np.float64), np.asarray(elo, np.float64))[0])
+            got, why = dedom.plausible(xy, half, s, z, pts, ground, dem,
+                                       [o for j, (o, _h) in enumerate(local[:nb]) if j != i])
+            if not got:
+                dropped.append(why)
+            return got
         fast.require(GAP_NATIVE, "roadz surface-model decks")
-        rows, gaps = self._measure(frame, parts, local, nb, [c[0] for c in cands], pts, cls)
-        log.debug("roadz dedom %s %s: %d decks, %d samples, datum %.2f, %d rows, %d stretches", svc["name"], key, nb,
-                  len(pts), off, len(rows), len(gaps))
+        rows, gaps = self._measure(frame, parts, local, nb, [c[0] for c in cands], pts, cls, dedom.DECK_PAD_M, check)
+        log.debug("roadz dedom %s %s: %d decks, %d samples, datum %.2f, %d rows, %d stretches, dropped %s",
+                  svc["name"], key, nb, len(pts), off, len(rows), len(gaps), dropped)
         got = Lines.build(rows, corrected=True)
         got.gaps = gaps
         return got
@@ -1608,9 +1623,10 @@ class RoadZ:
         return got
 
     @staticmethod
-    def _profile(frame, xy, half, pts, cls):
-        """deck_lidar along line xy: (s, z, the stations' x, y, lat, lon, arc of xy) or None without a surface."""
-        s, z, _cnt = fast._ef.deck_lidar(np.ascontiguousarray(xy), pts, cls, float(half + LIDAR_PAD_M),
+    def _profile(frame, xy, half, pts, cls, pad=LIDAR_PAD_M):
+        """deck_lidar along line xy: (s, z, the stations' x, y, lat, lon, arc of xy) or None without a surface. The
+        points within half + pad of the line count."""
+        s, z, _cnt = fast._ef.deck_lidar(np.ascontiguousarray(xy), pts, cls, float(half + pad),
                                          LIDAR_STEP_M, LIDAR_MAX_GRADE, 3, 24.0, 4.0)
         s, z = np.asarray(s, np.float64), np.asarray(z, np.float64)
         if len(s) < 2 or not np.isfinite(z).any():
@@ -1620,14 +1636,17 @@ class RoadZ:
         sla, slo, _ = frame.enu_to_geodetic(sx, sy, 0.0)
         return s, z, sx, sy, np.asarray(sla, np.float64), np.asarray(slo, np.float64), arc
 
-    def _decks(self, frame, parts, local, pts, cls):
-        """(rows, ends): the decks' measured lines (Lines.build rows) and their measured ends [(x, y, z)]."""
+    def _decks(self, frame, parts, local, pts, cls, pad=LIDAR_PAD_M, check=None):
+        """(rows, ends): the decks' measured lines (Lines.build rows) and their measured ends [(x, y, z)]. check(i, xy,
+        half, s, z) -> False drops deck i's measurement (not a road surface: the inference stands for it)."""
         rows, ends = [], []
-        for (ring, half), (xy, _h) in zip(parts, local):
-            got = self._profile(frame, xy, half, pts, cls)
+        for i, ((ring, half), (xy, _h)) in enumerate(zip(parts, local)):
+            got = self._profile(frame, xy, half, pts, cls, pad)
             if got is None:
                 continue
             s, z, sx, sy, sla, slo, _arc = got
+            if check is not None and not check(i, xy, half, s, z):
+                continue
             rows.append((np.stack([slo, sla], 1), z, 1, "", ""))
             ok = np.flatnonzero(np.isfinite(z))
             for at, far in ((ok[0], s[ok[0]]), (ok[-1], s[-1] - s[ok[-1]])):
@@ -1653,12 +1672,12 @@ class RoadZ:
         g = float(self._dem_raw(np.asarray(la, np.float64), np.asarray(lo, np.float64))[0])
         return np.isfinite(g) and z - g >= LIDAR_GAP_RISE_M
 
-    def _stretches(self, frame, parts, local, fids, pts, cls, ends):
+    def _stretches(self, frame, parts, local, fids, pts, cls, ends, pad=LIDAR_PAD_M):
         """(rows, gaps) of the ground stretches parts (from a deck's end: lidar_gap_stretch) of the features fids."""
         rows, gaps = [], []
         for fid, (ring, half), (xy, _h) in zip(fids, parts, local):
             z_end = self._end_z(ends, xy[0])
-            got = self._profile(frame, xy, half, pts, cls) if np.isfinite(z_end) else None
+            got = self._profile(frame, xy, half, pts, cls, pad) if np.isfinite(z_end) else None
             if got is None:
                 continue
             s, z, sx, sy, sla, slo, arc = got
@@ -1675,14 +1694,14 @@ class RoadZ:
             gaps.append((str(fid), (float(ring[0, 0]), float(ring[0, 1])), (float(elo[0]), float(ela[0]))))
         return rows, gaps
 
-    def _approaches(self, frame, parts, local, pts, cls, ends):
+    def _approaches(self, frame, parts, local, pts, cls, ends, pad=LIDAR_PAD_M):
         """Lines.build rows (level 0) of the approaches parts (drawn roads from a deck end, as the gap candidates): each
         measured from its deck's measured end to where it is back on our DTM (APPROACH_*); none where it never stands
         APPROACH_MIN_DEV_M off it (the DTM is right) or starts off the deck's end (another surface: a deck over it)."""
         rows = []
         for (ring, half), (xy, _h) in zip(parts, local):
             z_end = self._end_z(ends, xy[0])
-            got = self._profile(frame, xy, half, pts, cls) if np.isfinite(z_end) else None
+            got = self._profile(frame, xy, half, pts, cls, pad) if np.isfinite(z_end) else None
             if got is None:
                 continue
             s, z, sx, sy, sla, slo, _arc = got
@@ -1702,14 +1721,15 @@ class RoadZ:
             rows.append((np.stack([slo, sla], 1)[keep], z[keep], 0, "", ""))
         return rows
 
-    def _measure(self, frame, parts, local, nb, fids, pts, cls):
+    def _measure(self, frame, parts, local, nb, fids, pts, cls, pad=LIDAR_PAD_M, check=None):
         """(rows, gaps): _decks of parts[:nb], then _stretches of the rest (of the features fids) that go on from an
-        elevated measured deck end, all from the points pts (n, 3) in frame (heights on our DEM's datum), cls (n,)."""
-        rows, ends = self._decks(frame, parts[:nb], local[:nb], pts, cls)
+        elevated measured deck end, all from the points pts (n, 3) in frame (heights on our DEM's datum), cls (n,).
+        pad, check: as _decks (a deck check drops has no measured ends: nothing goes on from it)."""
+        rows, ends = self._decks(frame, parts[:nb], local[:nb], pts, cls, pad, check)
         todo = [n_ for n_ in range(nb, len(parts)) if self._elevated_end(frame, ends, local[n_][0][0])]
         r2, gaps = self._stretches(frame, [parts[n_] for n_ in todo], [local[n_] for n_ in todo],
-                                   [fids[n_ - nb] for n_ in todo], pts, cls, ends)
-        r3 = self._approaches(frame, parts[nb:], local[nb:], pts, cls, ends)
+                                   [fids[n_ - nb] for n_ in todo], pts, cls, ends, pad)
+        r3 = self._approaches(frame, parts[nb:], local[nb:], pts, cls, ends, pad)
         return rows + r2 + r3, gaps
 
     # ---- the elevated ground stretches, one answer per cell and session ----
