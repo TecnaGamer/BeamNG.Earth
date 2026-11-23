@@ -550,6 +550,25 @@ class OneBore(unittest.TestCase):
         ends = [p for c in shared for p, f in zip((c["n"][0], c["n"][-1]), c["portal"]) if f]
         self.assertEqual(sorted(round(p[0]) for p in ends), [0, 400])
 
+    def test_drawn_decks_one_floor_when_served_from_two_solves(self):
+        # the network solved in two stores (frames) from two starts, its joints pinned a few cm apart: each carriageway
+        # served from another solve, 6-7 cm apart under their shared tube (lanecheck, Milchbucktunnel without swisstopo)
+        lines, widths, floors, meas = self.bore()
+        new = roads.bore_floors(lines, widths, floors, meas)
+        sp = Spec(self.W, "paved", True, "trunk")
+        served = [new[0] + 0.065, new[1]]
+        ch = self.chunks([("n.0#2", sp, lines[0], served[0], 0.0), ("s.0#1", sp, lines[1], served[1], 0.0)])
+        decks = [np.asarray(c["n"], np.float64) for c in ch if c.get("tunnel") and c.get("deck")]
+        north = np.concatenate([d for d in decks if np.median(d[:, 1]) < 0])
+        south = np.concatenate([d for d in decks if np.median(d[:, 1]) > 0])
+        xs = np.arange(100.0, 1400.0, 10.0)
+        zn = np.interp(xs, *zip(*sorted(zip(north[:, 0], north[:, 2]))))
+        zs = np.interp(xs, *zip(*sorted(zip(south[:, 0], south[:, 2]))))
+        self.assertLess(float(np.abs(zn - zs).max()), 0.005, "one floor drawn")
+        ends = [(float(c[0][0]), float(c[0][2])) for c in decks]
+        self.assertTrue(any(abs(x + 100.0) < 1e-6 and abs(z - float(served[0][0])) < 1e-6 for x, z in ends),
+                        "its portal's height kept")
+
     def test_no_hole_in_the_hill_over_the_split(self):
         lines, widths, floors, meas = self.bore()
         new = roads.bore_floors(lines, widths, floors, meas)

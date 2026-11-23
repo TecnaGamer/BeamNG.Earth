@@ -12321,6 +12321,44 @@ def _twin_pieces(tw, parts, mouth_of):
     return out
 
 
+def _twin_level(parts, twins):
+    """parts ([(fid, spec, xy, z, lon)]) with the floors of every shared tube's two parts (twins: twin_tunnels) at one
+    floor where it covers them, the mean of the two at facing points, eased back onto their own over OBS_BLEND_MIN_M
+    past it and at their ends (a portal, a joint) kept: the network is solved in more than one store (frame) from more
+    than one start, its joints pinned a few cm apart, and the two carriageways of one bore served from two solves, 6
+    to 7 cm apart where bore_floors made them one (the Milchbucktunnel without swisstopo, lanecheck 2026-11-23). Pure."""
+    if not BORE_ON or not twins:
+        return parts
+    Z = [np.asarray(p[3], np.float64) for p in parts]
+    delta = {}
+    for tw in twins:
+        for a, b, on in ((tw.i, tw.j, tw.on_i), (tw.j, tw.i, tw.on_j)):
+            k = np.flatnonzero(on)
+            if len(k) < 2:
+                continue
+            xa = np.asarray(parts[a][2], np.float64).reshape(-1, 2)
+            xb = np.asarray(parts[b][2], np.float64).reshape(-1, 2)
+            _d, j, t = _near_on(xa[k], xb)
+            zb = Z[b][j] + t * (Z[b][j + 1] - Z[b][j])
+            dz = np.zeros(len(xa))
+            dz[k] = (zb - Z[a][k]) / 2
+            s = _arc(xa)
+            L = OBS_BLEND_MIN_M
+            for e, step in ((int(k[0]), -1), (int(k[-1]), 1)):     # (past the stretch: eased off)
+                m = e + step
+                while 0 <= m < len(xa) and abs(s[m] - s[e]) < L:
+                    u = 1.0 - abs(s[m] - s[e]) / L
+                    dz[m] = dz[e] * u * u * (3.0 - 2.0 * u)
+                    m += step
+            for e in (0, len(xa) - 1):                            # (its ends kept: eased onto them inside)
+                if dz[e] == 0.0:
+                    continue
+                w = np.clip(np.abs(s - s[e]) / L, 0.0, 1.0)
+                dz = dz * (w * w * (3.0 - 2.0 * w))
+            delta[a] = delta.get(a, 0.0) + dz
+    return [(p[0], p[1], p[2], Z[n] + delta[n], p[4]) if n in delta else p for n, p in enumerate(parts)]
+
+
 def _mask_pieces(mask, n):
     """A part's n points as [(i0, i1, under)] pieces by the mask of those under a shared tube (None: none): the runs
     under it, and between them the runs in the part's own tube reaching onto the runs' end points (no gap). Pure."""
@@ -12369,6 +12407,7 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
     parts = [p for p in tunnels.parts(cells, exact) if np.isfinite(p[3]).all()]
     layouts = rampmerges.plans([(fid, sp, np.c_[xy, z], lon) for fid, sp, xy, z, lon in parts])
     twins = twin_tunnels(parts)
+    parts = _twin_level(parts, twins)           # (one floor drawn under each shared tube)
     under = {}                                  # part -> its points under a shared tube
     for tw in twins:
         for k, on in ((tw.i, tw.on_i), (tw.j, tw.on_j)):
