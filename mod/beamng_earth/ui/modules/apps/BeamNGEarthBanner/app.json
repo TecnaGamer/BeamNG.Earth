@@ -1,10 +1,10 @@
 {
   "domElement": "<beamng-earth-banner></beamng-earth-banner>",
-  "name": "BeamNG.Earth: Connection",
+  "name": "beamngEarth.hud.banner.name",
   "types": [
     "ui.apps.categories.utility"
   ],
-  "description": "What is wrong with the world server and what to do (hidden while all is well).",
+  "description": "beamngEarth.hud.banner.description",
   "css": {
     "top": "36px",
     "height": "60px",

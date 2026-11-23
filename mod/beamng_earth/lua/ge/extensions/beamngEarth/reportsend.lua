@@ -19,6 +19,7 @@
 --   screenshot, the exact location (rounded to ~1 km then) and the logs. The world server sends it (in the
 --   background, retried, kept on disk until sent: the folder's send.json / sent.json) and answers with a short id
 --   the player can quote on Discord.
+local i18n = require('beamngEarth/i18n')
 local M = {}
 
 M.AIM_M = 3000              -- the centre ray's reach
@@ -294,19 +295,19 @@ function M.draw(imgui)
   if not w then return end
   im.SetNextWindowSize(im.ImVec2(620, 560), im.Cond_FirstUseEver)
   local keep = im.BoolPtr(true)
-  if im.Begin('Send this report to the BeamNG.Earth developers##bngeSend', keep, 0) then
+  if im.Begin(i18n.t('report.upload.window', nil, 'Send this report to the BeamNG.Earth developers') .. '###bngeSend', keep, 0) then
     local d = w.data or {}
     local st = status[w.name]
-    wrapped(M.PRIVACY)
+    wrapped(i18n.t('report.upload.privacy', nil, M.PRIVACY))
     im.Separator()
-    im.TextUnformatted('What is sent:')
+    im.TextUnformatted(i18n.t('report.upload.content', nil, 'What is sent:'))
     wrapped(string.format('- The report: %s "%s"%s', tostring(d.kind or ''), tostring(d.title or ''),
       (d.note and #d.note > 0) and string.format(' and its description (%d characters)', #d.note) or ''))
     if size(w.dir, 'screenshot.jpg') then
       w.shot = checkbox(string.format('Screenshot (%.0f KB)##bngeSendShot', (size(w.dir, 'screenshot.jpg') or 0) / 1024), w.shot)
     end
     local loc = d.lat and string.format('%.5f, %.5f', d.lat, d.lon) or 'none'
-    w.exact = checkbox('Exact location: ' .. loc .. '##bngeSendLoc', w.exact)
+    w.exact = checkbox(i18n.t('report.upload.position', { location = loc }, 'Exact location: ' .. loc) .. '###bngeSendLoc', w.exact)
     if not w.exact and d.lat then
       wrapped(string.format('  Rounded to about 1 km instead: %.2f, %.2f (the map ids, street names and the roads and '
         .. 'buildings near the spot are left out too). The screenshot can still show where you are.', d.lat, d.lon))
@@ -315,8 +316,7 @@ function M.draw(imgui)
       w.logs = checkbox('Logs: the world server\'s last 300 lines and the game\'s warnings and errors of the last '
         .. '10 minutes##bngeSendLogs', w.logs)
     end
-    wrapped('- Game and PC: the game and mod versions, graphics settings, CPU / GPU / memory, the mod\'s settings and '
-      .. 'enabled mods\' names (hardware.json, report.json)')
+    wrapped(i18n.t('report.upload.system', nil, '- Game and PC: the game and mod versions, graphics settings, CPU / GPU / memory, the mod\'s settings and enabled mods\' names (hardware.json, report.json)'))
     wrapped('- The view and performance: camera, what is under the screen\'s centre, the car, the last 60 s of frame '
       .. 'times, weather and time of day (report.json)')
     wrapped('- The world server\'s state: its version and settings, memory, loading backlog, the data sources and map '
@@ -328,22 +328,22 @@ function M.draw(imgui)
     im.Separator()
     local busy = st and (st.state == 'queued' or st.state == 'sending' or st.state == 'retry')
     if st and st.state == 'sent' then
-      im.TextUnformatted('Sent. Report id: ' .. tostring(st.id or '?'))
-      wrapped('Quote this id on Discord or GitHub so we can find your report.')
+      im.TextUnformatted(i18n.t('report.upload.sent', { id = tostring(st.id or '?') }, 'Sent. Report id: ' .. tostring(st.id or '?')))
+      wrapped(i18n.t('report.upload.findId', nil, 'Quote this id on Discord or GitHub so we can find your report.'))
       if st.text and #st.text > 0 then wrapped('(' .. st.text .. ')') end
     elseif busy then
       im.TextUnformatted(st.state == 'retry' and string.format('Not sent yet, trying again in %d s',
-        st.next or 0) or 'Sending...')
+        st.next or 0) or i18n.t('report.upload.sending', nil, 'Sending...'))
       if st.text and #st.text > 0 then wrapped(st.text) end
-      wrapped('It is kept and sent in the background (also after a restart): you can close this window.')
+      wrapped(i18n.t('report.upload.background', nil, 'It is kept and sent in the background (also after a restart): you can close this window.'))
     else
-      if st and st.state == 'failed' then wrapped('Not sent: ' .. tostring(st.text or '')) end
-      if im.Button(st and st.state == 'failed' and 'Try again##bngeSendGo' or 'Send##bngeSendGo') then send(w) end
+      if st and st.state == 'failed' then wrapped(i18n.t('report.upload.failed', { error = tostring(st.text or '') }, 'Not sent: ' .. tostring(st.text or ''))) end
+      if im.Button(st and st.state == 'failed' and i18n.t('report.upload.retry', nil, 'Try again') .. '###bngeSendGo' or i18n.t('report.upload.action', nil, 'Send') .. '###bngeSendGo') then send(w) end
       im.SameLine()
     end
-    if im.Button('Open folder##bngeSendDir') then pcall(Engine.Platform.exploreFolder, '/' .. w.dir) end
+    if im.Button(i18n.t('report.folder', nil, 'Open folder') .. '###bngeSendDir') then pcall(Engine.Platform.exploreFolder, '/' .. w.dir) end
     im.SameLine()
-    if im.Button('Close##bngeSendClose') then win = nil end
+    if im.Button(i18n.t('report.close', nil, 'Close') .. '###bngeSendClose') then win = nil end
   end
   im.End()
   if not keep[0] then win = nil end

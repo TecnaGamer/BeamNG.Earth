@@ -1,5 +1,6 @@
 -- Opt-in live profiler. Core supplies the previous completed frame's wall time and marks.
 -- All history is bounded; no frame samples, UI allocations or network requests while off.
+local t = require('beamngEarth/i18n').t
 local M = { enabled = false, mode = 'essential', page = 'all', compact = false }
 local frameProfile = require('beamngEarth/frameprofile')
 local presentation = require('beamngEarth/profiler_view')
@@ -394,12 +395,12 @@ function M.draw(inLevel)
   local styleCount,styleVars=ui.pushStyle(im)
   if M.compact then
     im.SetNextWindowSize(im.ImVec2(420,145),im.Cond_FirstUseEver)
-    if im.Begin('Earth profiler / collecting') then
+    if im.Begin(t('profiler.compactTitle', nil, "Earth profiler / collecting")) then
       refresh(now);summary(im)
-      wrapped(im,frozen and 'Display frozen; collection continues.' or 'Live / continuous collection')
-      if im.Button('Open profiler') then M.setCompact(false) end
+      wrapped(im,frozen and t('profiler.displayFrozen', nil, "Display frozen; collection continues.") or t('profiler.displayLive', nil, "Live / continuous collection"))
+      if im.Button(t('profiler.open', nil, "Open profiler")) then M.setCompact(false) end
       im.SameLine()
-      if im.Button('Stop profiling') then stop() end
+      if im.Button(t('profiler.stop', nil, "Stop profiling")) then stop() end
     end
     im.End();im.PopStyleVar(styleVars);im.PopStyleColor(styleCount);return
   end
@@ -416,9 +417,9 @@ function M.draw(inLevel)
     if M.enabled then
       refresh(now)
       if message then wrapped(im,message) end
-      if supported==false then wrapped(im,'This server cannot provide worker or I/O telemetry.')
-      elseif not view.serverAgeMs or view.serverAgeMs>3000 then wrapped(im,'Server telemetry unavailable or stale; retained values are not live.') end
-      if view.server and view.server.collectionMode and view.server.collectionMode~=M.mode then wrapped(im,'Another client is keeping shared server collection in Full mode.') end
+      if supported==false then wrapped(im,t('profiler.noServerTelemetry', nil, "This server cannot provide worker or I/O telemetry."))
+      elseif not view.serverAgeMs or view.serverAgeMs>3000 then wrapped(im,t('profiler.staleServerTelemetry', nil, "Server telemetry unavailable or stale; retained values are not live.")) end
+      if view.server and view.server.collectionMode and view.server.collectionMode~=M.mode then wrapped(im,t('profiler.sharedFullMode', nil, "Another client is keeping shared server collection in Full mode.")) end
       local footerHeight=ui.footerHeight(im,view,M.page,im.GetContentRegionAvail().x)
       if im.BeginChild1('##profiler-content',im.ImVec2(0,-footerHeight),false) then ui.body(im,view,M) end
       im.EndChild()

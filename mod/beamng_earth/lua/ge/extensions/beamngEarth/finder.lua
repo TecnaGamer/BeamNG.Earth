@@ -4,6 +4,7 @@
 -- sick as well"; of the prompt showing by itself: "i like how it does above"). The stations come from the server's
 -- station index (server/stationindex.py) through stations / stations_result; the route is the mod's GPS (gps.lua).
 -- Nothing runs per frame: the fuel gauge is read every CHECK_S, and only in our level with the setting on.
+local i18n = require('beamngEarth/i18n')
 local M = {}
 
 M.LOW, M.REARM = 0.15, 0.25     -- the prompt below LOW (of the tanks' capacity), again only after REARM or another car
@@ -113,17 +114,22 @@ end
 local function finish(req, items)
   local best = items and items[1]
   if req.purpose == 'nearest' then
-    if not best then M.say('No station within ' .. M.NEAR_KM .. ' km') return end
+    if not best then M.say(i18n.t('navigation.stationMissing', { radius = M.NEAR_KM }, 'No station within ' .. M.NEAR_KM .. ' km')) return end
     if gps().setDestination(best.lat, best.lon, named(best)) then
       M.stationDest = { lat = best.lat, lon = best.lon }
-      M.say(string.format('Route to %s, %.1f km', named(best), best.km or 0))
+      M.say(i18n.t('navigation.stationRoute', { name = named(best), distance = string.format('%.1f', best.km or 0) }, string.format('Route to %s, %.1f km', named(best), best.km or 0)))
     end
   elseif req.purpose == 'prompt' and best then
     local b = rawget(_G, 'core_input_bindings')
     local key = b and b.getControlForAction and b.getControlForAction(M.ACTION)
-    local how = key and ('Press ' .. tostring(key):upper() .. ' to route') or "Pick Nearest station in the radial menu to route"
-    M.say(string.format('%s low: nearest %s %.1f km. %s', req.kind == 'ev' and 'Charge' or 'Fuel',
-      req.kind == 'ev' and 'charger' or 'station', best.km or 0, how))
+    local how = key and i18n.t('navigation.routeKey', { key = tostring(key):upper() }, 'Press ' .. tostring(key):upper() .. ' to route') or
+      i18n.t('navigation.routeRadial', nil, 'Pick Nearest station in the radial menu to route')
+    local params = { distance = string.format('%.1f', best.km or 0), action = how }
+    if req.kind == 'ev' then
+      M.say(i18n.t('navigation.lowCharge', params, 'Charge low: nearest charger ' .. params.distance .. ' km. ' .. how))
+    else
+      M.say(i18n.t('navigation.lowFuel', params, 'Fuel low: nearest station ' .. params.distance .. ' km. ' .. how))
+    end
   end
 end
 
@@ -207,8 +213,8 @@ function M.onQuickAccessLoaded()
   qa.addEntry({ level = M.RADIAL_LEVEL, uniqueID = 'beamngEarthFinder', generator = function(entries)
     local st = player()
     if not (st and st.inOurLevel) then return end
-    table.insert(entries, { title = 'Nearest station', icon = 'fuelPump', uniqueID = 'beamngEarthNearestStation',
-      desc = 'Route the GPS to the nearest gas station (an EV charger for an electric car)',
+    table.insert(entries, { title = i18n.t('navigation.nearestStation', nil, 'Nearest station'), icon = 'fuelPump', uniqueID = 'beamngEarthNearestStation',
+      desc = i18n.t('navigation.nearestStationHelp', nil, 'Route the GPS to the nearest gas station (an EV charger for an electric car)'),
       onSelect = function() M.nearest() return { 'hide' } end })
   end })
 end

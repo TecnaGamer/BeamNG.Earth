@@ -1,10 +1,10 @@
 {
   "domElement": "<beamng-earth-credits></beamng-earth-credits>",
-  "name": "BeamNG.Earth: Data credits",
+  "name": "beamngEarth.hud.credits.name",
   "types": [
     "ui.apps.categories.utility"
   ],
-  "description": "The sources of the map data around you (their licences ask for visible credit).",
+  "description": "beamngEarth.hud.credits.description",
   "css": {
     "bottom": "0px",
     "left": "0px",

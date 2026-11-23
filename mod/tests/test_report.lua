@@ -132,8 +132,8 @@ im2.CollapsingHeader1 = function() return false end
 report.openSend(folder)
 report.onUpdate()
 T.check(report.status().sendOpen and #netSent == 0 and not files[folder .. 'send.json'], 'nothing is sent before Send')
-clicks['Exact location: 39.28000, -76.59000##bngeSendLoc'] = false
-clicks['Send##bngeSendGo'] = true
+clicks['Exact location: 39.28000, -76.59000###bngeSendLoc'] = false
+clicks['Send###bngeSendGo'] = true
 report.onUpdate()
 clicks = {}
 local name = folder:match('([^/]+)/$')

@@ -2,7 +2,8 @@
 -- generator for a player who joined a BeamNG.Earth server without it (the user, 2026-10-22: "Add a popup with players
 -- without the mod that highly recommends them install the .earth server"). Players with the generator build the world
 -- on their own PC; without it the world has to come from the server or other players, slower (the hybrid plan,
--- .claude/work/beammp_plan.md). BeamMP's rules ask for no spam: one window per session, and "Don't show again".
+-- .claude/work/beammp_plan.md). BeamMP's rules ask for no spam: one window per session, and i18n.t('multiplayer.noRepeat', nil, 'Don\'t show again').
+local i18n = require('beamngEarth/i18n')
 local M = {}
 
 M.RECOMMEND_WAIT_S = 15     -- in our level this long in a BeamMP session with no world generator: the window
@@ -261,10 +262,10 @@ local CALL = "local b = package.loaded['beamngEarth/beammp'] if b then b.onChoic
 
 -- Pure: the game's dialog (ui-vue popup.js "showConfirmationDialog") for the recommendation.
 function M.dialog()
-  return { title = M.TITLE, text = M.TEXT, buttons = {
-    { label = "Don't show again", luaCallback = string.format(CALL, 'off'), isCancel = false },
-    { label = 'Not now', luaCallback = string.format(CALL, 'later'), isCancel = true },
-    { label = 'Get BeamNG.Earth (recommended)', luaCallback = string.format(CALL, 'get'), default = true,
+  return { title = i18n.t('multiplayer.recommendTitle', nil, M.TITLE), text = i18n.t('multiplayer.recommendText', nil, M.TEXT), buttons = {
+    { label = i18n.t('multiplayer.noRepeat', nil, 'Don\'t show again'), luaCallback = string.format(CALL, 'off'), isCancel = false },
+    { label = i18n.t('multiplayer.later', nil, 'Not now'), luaCallback = string.format(CALL, 'later'), isCancel = true },
+    { label = i18n.t('multiplayer.get', nil, 'Get BeamNG.Earth (recommended)'), luaCallback = string.format(CALL, 'get'), default = true,
       isConfirm = true },
   } }
 end
@@ -273,7 +274,7 @@ end
 function M.onChoice(choice)
   if choice == 'get' then
     M.openInstallPage()
-    guihooks.trigger('showConfirmationDialog', { title = 'BeamNG.Earth', text = M.AFTER_TEXT,
+    guihooks.trigger('showConfirmationDialog', { title = 'BeamNG.Earth', text = i18n.t('multiplayer.installInstructions', nil, M.AFTER_TEXT),
       buttons = { { label = 'OK', luaCallback = '', default = true, isConfirm = true } } })
   elseif choice == 'off' and settingsRef then
     settingsRef.set(M.SETTING, 'true')

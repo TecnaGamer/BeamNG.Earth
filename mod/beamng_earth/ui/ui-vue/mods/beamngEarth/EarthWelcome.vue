@@ -2,7 +2,7 @@
   <!-- A one-time welcome (the user, 2026-10-15: "add a 1 time popup with info about this project"): what it is,
        the companion server, the keys, credits. Shown once per WELCOME_VERSION by settings.lua; again from the
        settings page's "Show welcome". -->
-  <div class="earth-welcome" @keydown.esc.stop="done" tabindex="-1" ref="rootEl">
+  <div class="earth-welcome" :dir="direction" @keydown.esc.stop="done" tabindex="-1" ref="rootEl">
     <div class="card">
       <div class="head">
         <svg class="globe" viewBox="0 0 48 48" aria-hidden="true">
@@ -13,46 +13,41 @@
                 stroke-linecap="round"/>
         </svg>
         <div>
-          <div class="title">Welcome to BeamNG.Earth</div>
-          <div class="sub">Drive anywhere on the real Earth.</div>
+          <div class="title">{{ t('welcome.welcomeToBeamNGEarth') }}</div>
+          <div class="sub">{{ t('welcome.driveAnywhereOnTheReal') }}</div>
         </div>
       </div>
 
       <div class="server" :class="{ ok: connected, bad: connected === false }">
         <span class="dot"></span>
-        <span v-if="connected">World server connected: the world is building around you.</span>
-        <span v-else-if="connected === false">World server not running. Start it with <b>run_server</b> (Windows)
-          or <b>run_server.sh</b> (Linux) from the BeamNG.Earth folder, then come back.</span>
-        <span v-else>Checking the world server…</span>
+        <span v-if="connected">{{ t('welcome.worldServerConnectedTheWorld') }}</span>
+        <span v-else-if="connected === false">{{ t('welcome.worldServerNotRunningStart') }} <b>{{ t('welcome.runServer') }}</b> {{ t('welcome.windowsOr') }} <b>{{ t('welcome.runServerSh') }}</b> {{ t('welcome.linuxFromTheBeamNGEarth') }}</span>
+        <span v-else>{{ t('welcome.checkingTheWorldServer') }}</span>
       </div>
 
       <div class="cols">
         <div class="col">
-          <div class="h">How it works</div>
-          <p>A small companion program on your PC builds the world as you drive: real terrain, roads, buildings,
-            trees, water and aerial photos, from open map data. Keep it running while you play.</p>
-          <p>A place you visit for the first time takes a few seconds to appear; after that it comes from the cache.</p>
-          <div class="h">Getting around</div>
+          <div class="h">{{ t('welcome.howItWorks') }}</div>
+          <p>{{ t('welcome.aSmallCompanionProgramOn') }}</p>
+          <p>{{ t('welcome.aPlaceYouVisitFor') }}</p>
+          <div class="h">{{ t('welcome.gettingAround') }}</div>
           <ul>
-            <li><b>M</b>: the world map. Search an address, right-click to teleport, left-click to set a GPS route.</li>
-            <li><b>Autodrive</b> on the GPS bar: the car drives the route by itself.</li>
-            <li><b>Places</b> on the map: save spots and jump back to them.</li>
+            <li><b>M</b>{{ t('welcome.theWorldMapSearchAn') }}</li>
+            <li><b>{{ t('welcome.autodrive') }}</b> {{ t('welcome.onTheGPSBarThe') }}</li>
+            <li><b>{{ t('welcome.places') }}</b> {{ t('welcome.onTheMapSaveSpots') }}</li>
           </ul>
         </div>
         <div class="col">
-          <div class="h">Help make it better</div>
+          <div class="h">{{ t('welcome.helpMakeItBetter') }}</div>
           <ul>
-            <li><b>Ctrl+Shift+E</b>: report a problem here (a screenshot, the place and your frame rate are saved as a
-              ready-to-post issue).</li>
-            <li><b>Ctrl+Shift+Y</b>: record a 30-second performance profile.</li>
+            <li><b>{{ t('welcome.ctrlShiftE') }}</b>{{ t('welcome.reportAProblemHereA') }}</li>
+            <li><b>{{ t('welcome.ctrlShiftY') }}</b>{{ t('welcome.recordA30SecondPerformance') }}</li>
           </ul>
-          <div class="h">Settings</div>
-          <p>Pause menu → Mods → <b>BeamNG.Earth</b>: view distance, weather and sky, grass, the download cache.</p>
-          <div class="h">Data</div>
-          <p class="small">Imagery, elevation and map data from open sources: USGS, USDA NAIP, state and national
-            mapping agencies, EOX Sentinel-2 cloudless, Overture Maps / OpenStreetMap contributors, Mapterhorn.
-            The sources in use are credited on screen while you drive.</p>
-          <p class="small preview">A beta: expect some rough edges. Thanks for trying it!</p>
+          <div class="h">{{ t('welcome.settings') }}</div>
+          <p>{{ t('welcome.pauseMenuMods') }} <b>BeamNG.Earth</b>{{ t('welcome.viewDistanceWeatherAndSky') }}</p>
+          <div class="h">{{ t('welcome.data') }}</div>
+          <p class="small">{{ t('welcome.imageryElevationAndMapData') }}</p>
+          <p class="small preview">{{ t('welcome.aBetaExpectSomeRough') }}</p>
         </div>
       </div>
 
@@ -60,33 +55,29 @@
            TELEMETRY.md): nothing is sent until a button below saves it. The boxes start as this computer's region says
            (settings.uiPrivacy: nothing ticked in the EU / EEA and a few other places, performance unticked in some). -->
       <div class="privacy" :class="{ ask: privacy.needed }">
-        <div class="h">Anonymous statistics<span v-if="privacy.needed" class="badge">your choice</span></div>
-        <p class="small">BeamNG.Earth can send small anonymous reports to our server every 5 minutes. They never say who
-          or where you are: no name, account, address, coordinates or places. They show how many people play, keep the
-          free map services from being overloaded, and tell us what makes the game slow or crash. Choose what to send;
-          you can change it any time in settings.
-          <a href="#" @click.prevent="openLink(DOC_URL)">Everything we collect and why</a></p>
+        <div class="h">{{ t('welcome.anonymousStatistics') }}<span v-if="privacy.needed" class="badge">{{ t('welcome.yourChoice') }}</span></div>
+        <p class="small">{{ t('welcome.beamNGEarthCanSendSmall') }}
+          <a href="#" @click.prevent="openLink(DOC_URL)">{{ t('welcome.everythingWeCollectAndWhy') }}</a></p>
         <label class="tick"><input type="checkbox" @change="touch" v-model="privacy.telemetry"/>
-          <span><b>Usage statistics</b>: a random install id, the app version, your operating system, whether the game
-            and BeamMP are running. Unticked: nothing at all is sent.</span></label>
+          <span><b>{{ t('welcome.usageStatistics') }}</b>{{ t('welcome.aRandomInstallIdThe') }}</span></label>
         <label class="tick sub" :class="{ off: !privacy.telemetry }">
           <input type="checkbox" @change="touch" v-model="privacy.perf" :disabled="!privacy.telemetry"/>
-          <span><b>Performance data</b>: frame rate and hitches, world-building speed, your CPU / GPU model and
-            settings, the kind of area (city, rural, ...) and error codes.</span></label>
+          <span><b>{{ t('welcome.performanceData') }}</b>{{ t('welcome.frameRateAndHitchesWorld') }}</span></label>
         <label class="tick sub" :class="{ off: !privacy.telemetry }">
           <input type="checkbox" @change="touch" v-model="privacy.net" :disabled="!privacy.telemetry"/>
-          <span><b>Network load</b>: how many requests went to each map-data service.</span></label>
+          <span><b>{{ t('welcome.networkLoad') }}</b>{{ t('welcome.howManyRequestsWentTo') }}</span></label>
       </div>
 
       <div class="btns">
-        <button class="btn" @click="openMap">Open the map</button>
-        <button class="btn primary" @click="done">Start driving</button>
+        <button class="btn" @click="openMap">{{ t('welcome.openTheMap') }}</button>
+        <button class="btn primary" @click="done">{{ t('welcome.startDriving') }}</button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
+import { t, direction } from "./i18n.js"
 import { ref, reactive, onMounted, onUnmounted, nextTick } from "vue"
 import { openLink } from "./earthSettingsStore.js"
 
