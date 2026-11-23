@@ -78,11 +78,11 @@ end
 -- (2026-11-23) an evergreen's constant tint: every season and mode, the fall's off too
 do
   local fl
-  for _, sp in ipairs(S.SPECIES) do if sp.mats[1] == 'fluffy' then fl = sp end end
-  T.check(fl ~= nil, 'the fluffy bush has its tint')
+  for _, sp in ipairs(S.SPECIES) do if sp.mats[1] == 'm_seeded_grass_01' then fl = sp end end
+  T.check(fl ~= nil, 'the seeded grasses have their tint')
   for _, m in ipairs({ 'auto', 'fall', 'winter', 'spring', nil }) do
     local tint, t = S.speciesTint(fl, m, 300, 43.3)
-    T.check(t == 1 and tint[1] < 1 and tint[3] < tint[2], 'fluffy: darker and greener in mode ' .. tostring(m))
+    T.check(t == 1 and tint[1] < 1 and tint[3] < tint[2], 'seeded grass: darker in mode ' .. tostring(m))
   end
 end
 

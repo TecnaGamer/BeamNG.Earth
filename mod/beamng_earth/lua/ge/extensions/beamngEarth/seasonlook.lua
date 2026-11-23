@@ -33,10 +33,10 @@ M.SPECIES = {
     winter = { 1.05, 0.72, 0.5 } },
   { mats = { 'generibush_leaves' }, merged = {}, folders = {}, tint = { 1.5, 0.95, 0.35 }, days = 0,
     winter = { 1.05, 0.75, 0.5 } },
-  -- (2026-11-23) evergreen, a constant tint (always: every season, whatever the mode): Italy's fluffy_bush (fluffy, the
-  -- maquis') a pale sage green (RGB ~0.40 0.46 0.32) among the maquis' ~0.30 0.36 0.20: it stood out on Makarska's
-  -- slopes, the user's screenshot; darker and a little greener
-  { mats = { 'fluffy' }, merged = {}, folders = {}, always = { 0.74, 0.8, 0.62 } },
+  -- (2026-11-23) a constant tint (always: every season, whatever the mode): East Coast USA's seeded grasses (the hay
+  -- meadows' heads m_seeded_grass_01, the reeds and tall grass m_seeded_grass_03) pale yellow-green, brighter than the
+  -- grass round them, near and far (the grass has no imposters), the user's screenshot
+  { mats = { 'm_seeded_grass_01', 'm_seeded_grass_03' }, merged = {}, folders = {}, always = { 0.78, 0.85, 0.7 } },
 }
 -- (oaks turn last; folders: the species' tree shapes, whose far imposters (the engine's flat pictures of a whole tree,
 -- materials 'imposter_mat__<shape path>') take the same tint: they kept their summer green while the 3D trees in front
