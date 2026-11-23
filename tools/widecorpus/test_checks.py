@@ -109,8 +109,13 @@ class MeshChecks(unittest.TestCase):
 class CorpusChecks(unittest.TestCase):
     def test_public_ids_and_strata(self):
         public = places(public_only=True)
-        self.assertTrue(150 <= len(public) <= 200)
+        self.assertTrue(150 <= len(public) <= 250)
         self.assertTrue(all(p["region"] and p["why"] and p["tags"] and p["name"] for p in public))
+        # (the sparse and extreme stratum, adaptive plan decision 2: ~40 places in many regions, each with its data note)
+        sparse = [p for p in public if "sparse" in p["tags"]]
+        self.assertGreaterEqual(len(sparse), 35)
+        self.assertGreaterEqual(len({p["region"] for p in sparse}), 12)
+        self.assertTrue(all(p.get("data") for p in sparse))
         tags = {tag for p in public for tag in p["tags"]}
         self.assertFalse({"stack","cloverleaf","diamond","slip","gravel","tram","rail-over-road",
                           "road-over-rail","racetrack","switchback","tunnel-portal","bridge-exit"}-tags)
