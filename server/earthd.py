@@ -8628,8 +8628,13 @@ class Connection:
 
     async def debug_map(self, msg):
         """Bounded, read-only placement overlays; never starts world generation."""
-        import debuglayers
         out = {"type": "debug_map_result", "id": msg.get("id")}
+        import cliffsettings
+        if not (cliffsettings.available() or cliffsettings.DEBUG):     # (the overlay is BNE_CLIFFS / BNE_CLIFFS_DEBUG only)
+            out["error"] = "Debug overlays are off on this server"
+            self.send(out)
+            return
+        import debuglayers
         try:
             if getattr(self, "_debug_map_busy", False):
                 out["error"] = "Debug layer busy; retrying"
@@ -9099,8 +9104,9 @@ class Connection:
             import budget
             from cliffsettings import SETTINGS as cliff_settings
             from cliffsettings import available as cliffs_available
+            from cliffsettings import DEBUG as cliffs_debug
             m["cliffs"] = {"available": cliffs_available(), "natural": cliff_settings.natural,
-                           "roadCuts": cliff_settings.road_cuts}
+                           "roadCuts": cliff_settings.road_cuts, "debug": cliffs_debug}
             if budget.TIER in ("lean", "emergency"):    # (a low-memory machine: the mod warns on the emergency tier)
                 m["memoryTier"] = budget.TIER
                 note = budget.memory_notice(tier_=budget.TIER)

@@ -251,11 +251,12 @@
             <input type="checkbox" v-model="cacheOn" /> Cache <span class="layer-hint">(downloaded data)</span></label>
           <BngSelect v-if="cacheOn" class="cache-select" :value="cacheMode" :options="cacheModeOptions"
                      :config="cacheSelectConfig" @valueChanged="v => (cacheMode = v)" />
+          <template v-if="debugAvail">
           <div class="panel-sub">Debug Overlays</div>
           <label class="layer-opt"><input type="checkbox" v-model="debugOn" /> Cliff placement</label>
           <BngSelect v-if="debugOn" class="cache-select" :value="debugMode" :options="debugOptions"
                      :config="cacheSelectConfig" @valueChanged="v => (debugMode = v)" />
-
+          </template>
         </div>
       </div>
       <button v-if="!embedded" class="map-btn" @click="open3d" title="The 3D map (experimental): fly over the real world like a map app">3D map</button>
@@ -1340,6 +1341,12 @@ function ctxNearest() {
 // Regional debug providers share one bounded, opt-in query and canvas renderer.
 const debugEl = ref(null)
 const debugOn = ref(false)
+// the overlay only with cliffs available on the server (BNE_CLIFFS) or its BNE_CLIFFS_DEBUG (asked when the map opens)
+const debugAvail = ref(false)
+function askDebugAvail() {
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiCliffDebugAvailable and beamngEarth_settings.uiCliffDebugAvailable() or false`,
+            r => { debugAvail.value = r === true; if (!debugAvail.value) debugOn.value = false })
+}
 const debugMode = ref("cliff_regions")
 const debugOptions = ref([
   { label: "Natural cliff regions", value: "cliff_regions" },
@@ -2278,6 +2285,7 @@ onMounted(() => {
   }
   viewEl.value.addEventListener("mousemove", onHover)
   engineLua("if beamngEarth_settings and beamngEarth_settings.mapOpened then beamngEarth_settings.mapOpened(true) end")
+  askDebugAvail()
   poll()
   pollTimer = setInterval(poll, 1000)
   nextTick(() => rootEl.value && rootEl.value.focus())

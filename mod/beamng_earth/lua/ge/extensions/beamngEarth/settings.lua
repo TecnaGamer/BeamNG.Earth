@@ -1141,7 +1141,12 @@ end
 -- The map's cache view (server covermap.py): ask (z, x0, y0, x1, y1, mode -> { id } or { error }) and poll (id -> nil
 -- while waiting, else { z, x0, y0, w, h, cells (base64 levels), gen, ready, error }).
 local cacheMapId = 0
--- Regional placement overlays: read-only geographic providers, requested only by the debug map UI.
+-- Regional placement overlays: read-only geographic providers, requested only by the debug map UI (shown only when
+-- the server has cliffs available or BNE_CLIFFS_DEBUG: uiCliffDebugAvailable).
+function M.uiCliffDebugAvailable()
+  local core = ext('beamngEarth_core')
+  return core and core.cliffDebugAvailable and core.cliffDebugAvailable() or false
+end
 function M.uiDebugMap(layer, s, w, n, e)
   local core = ext('beamngEarth_core')
   if not core or not core.requestDebugMap then return { error = 'BeamNG.Earth is not loaded' } end

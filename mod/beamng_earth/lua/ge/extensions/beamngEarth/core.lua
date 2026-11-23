@@ -1291,6 +1291,7 @@ local function onMessage(msg)
     require('beamngEarth/profiler').receive(msg.profile)
   elseif t == 'hello' then
     M._cliffsAvailable = msg.cliffs and msg.cliffs.available == true or false
+    M._cliffsDebug = msg.cliffs and msg.cliffs.debug == true or false     -- (server BNE_CLIFFS_DEBUG)
     require('beamngEarth/clifftalus').configure(msg.cliffs)
     require('beamngEarth/cliffmaterials').configure(msg.cliffs)
     require('beamngEarth/cliffcontact').configure(msg.cliffs)
@@ -3762,6 +3763,8 @@ function M.updateInfo() return updateInfo end
 -- says why it did not go out).
 -- Only the server's explicit startup opt-in can expose Dynamic cliffs controls.
 function M.cliffsAvailable() return M._cliffsAvailable == true end
+-- The world map's "Cliff placement" overlay: only with cliffs available (BNE_CLIFFS) or the server's BNE_CLIFFS_DEBUG.
+function M.cliffDebugAvailable() return M._cliffsAvailable == true or M._cliffsDebug == true end
 
 function M.cacheState() return cacheInfo end
 local function cacheReady() return net.isConnected() and st.sessionId ~= nil end
