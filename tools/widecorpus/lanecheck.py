@@ -17,8 +17,11 @@ the tunnel lanes against measured tunnel lines (swissTLM3D cells: the truth).
     python tools/widecorpus/lanecheck.py report SITE [--state NAME ...]
 
 SITE: a JSON file {"id", "country", "lines": [[[lat, lon], ...], ...] (the roads whose tiles to build),
-"axis": [[lat, lon], ...] (where s runs), "tlm": a folder of tlm cells (optional)}. Work under
-~/bnge-tests/lanecheck/<id>/.
+"axis": [[lat, lon(, h)], ...] (where s runs; with heights: the measured line the floors are compared with),
+"lanes": [{"id", "width", "xy": [[lat, lon], ...], "level"}] (optional: the place's own carriageways, as mapped, audited
+whatever the road code makes of them, with a gauge between two of them one bore apart), "tlm": a folder of tlm cells
+(optional)}; tools/widecorpus/sites/milchbuck.json is one. Work under ~/bnge-tests/lanecheck/<id>/. LANECHECK_AUDITOR:
+another roadsys binary than bin/roadsys-target/release's.
 """
 import argparse
 from collections import defaultdict
