@@ -523,7 +523,7 @@ M.CATALOG = {
   -- bushes)
   maquis = {
     { UT .. 'groundcover/s_gc_utah_grey_bush_01', 0.7 }, { UT .. 'groundcover/s_gc_utah_grey_bush_03', 1.0 },
-    { UT .. 'trees/Juniper/Juniper_bush_small_01', 1.2 }, { IT .. 'trees/trees_italy/generibush', 1.83 },
+    { UT .. 'trees/Juniper/Juniper_bush_small_01', 1.2 },     -- (not generibush: its leaves turn in the fall, seasonlook)
     { UT .. 'trees/Juniper/Juniper_bush_medium_01', 2.4 }, { IT .. 'trees/trees_italy/fluffy_bush', 2.47 },
     { IT .. 'trees/trees_italy/cork_oak_bush_medium', 3.04 }, { IT .. 'trees/trees_italy/scraggly_bush', 3.8 },
     -- (the asset survey 2026-11-19) the tall maquis: Italy's large cork oak bush and its tall-plant bush

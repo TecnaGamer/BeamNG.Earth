@@ -24,6 +24,15 @@ M.SPECIES = {
   -- summer green is a tint (summer, applied the more the less fall it is), their fall the texture's own gold.
   { mats = { 'm_poplar_leaves_01', 'm_poplar_leaves_02' }, merged = {}, folders = { 'trees_poplar' },
     summer = { 0.55, 0.85, 0.95 }, days = 5, winter = { 0.95, 0.85, 0.7 } },
+  -- (2026-11-23, every shape's leaf materials against this list) the vineyards' vines (Italy's grape_vine_group: grape)
+  -- turn gold and rust; the forest floor's ferns (Hirochi's lush_ferns: forest_vegetation, also Cliff's buttercups'
+  -- atlas, which the grass shows only from April to July) brown like bracken; the temperate woods' generic bushes
+  -- (generibush: generibush_leaves; out of the maquis since, which is evergreen)
+  { mats = { 'grape' }, merged = {}, folders = {}, tint = { 1.5, 1.0, 0.35 }, days = 0, winter = { 1.0, 0.72, 0.5 } },
+  { mats = { 'forest_vegetation' }, merged = {}, folders = {}, tint = { 1.45, 0.9, 0.4 }, days = 5,
+    winter = { 1.05, 0.72, 0.5 } },
+  { mats = { 'generibush_leaves' }, merged = {}, folders = {}, tint = { 1.5, 0.95, 0.35 }, days = 0,
+    winter = { 1.05, 0.75, 0.5 } },
 }
 -- (oaks turn last; folders: the species' tree shapes, whose far imposters (the engine's flat pictures of a whole tree,
 -- materials 'imposter_mat__<shape path>') take the same tint: they kept their summer green while the 3D trees in front

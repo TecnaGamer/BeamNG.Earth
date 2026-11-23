@@ -65,4 +65,14 @@ do
     == pop, 'a poplar imposter: the poplar')
 end
 
+-- (2026-11-23) every deciduous leaf material the vegetation shapes wear turns: the vines, the ferns, the generic bushes
+do
+  local have = {}
+  for _, sp in ipairs(S.SPECIES) do for _, m in ipairs(sp.mats) do have[m:lower()] = true end end
+  for _, m in ipairs({ 'oak_leaves_01', 'beech_leaves', 'birch_leaves_01', 'm_poplar_leaves_01', 'grape',
+    'forest_vegetation', 'generibush_leaves' }) do
+    T.check(have[m], m .. ' turns in the fall')
+  end
+end
+
 T.done('test_seasonlook')
