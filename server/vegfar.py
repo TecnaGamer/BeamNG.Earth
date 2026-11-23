@@ -75,18 +75,27 @@ def far_rows(gx, gy, rasters, elev, z=Z):
     ras = rasters.canopy_coarse(float(mx0), float(my0), float(mx1), float(my1))
     if ras is None:
         return [], 0.0
-    # (a Web-Mercator pixel is cos(lat) of its size on the ground: the squares SPACING_M of ground whatever the latitude)
-    block = max(2, int(round(SPACING_M / (ras.dx * max(0.05, float(dnp.cos(np.radians(clat))))))))
-    sq = squares(ras.data, block)
+    # (2026-11-23, the user's screenshot of the hills over Split: rows of clumps up the slopes, a grid, as only an
+    # orchard stands: one clump in every SPACING_M square, near its middle. Now cells of about half that (of ground: a
+    # Web-Mercator pixel is cos(lat) of its size there), each with a clump at a hashed chance that keeps one per
+    # SPACING_M square on average, anywhere in its cell: pairs and gaps as a wood has, no lattice)
+    px_m = ras.dx * max(0.05, float(dnp.cos(np.radians(clat))))
+    cell = max(1, int(round(SPACING_M / 2.0 / px_m)))
+    chance = min(1.0, dnp.sq(cell * px_m / SPACING_M))
+    sq = squares(ras.data, cell)
     if len(sq) == 0:
         return [], 0.0
     r0, c0 = sq[:, 0], sq[:, 1]
-    # a hashed spot in the square (world-fixed: the square's own pixel indices in the global overview grid)
+    # (world-fixed hashes: the cell's own pixel indices in the global overview grid)
     gi = np.round((ras.x0 + MERC_HALF) / ras.dx).astype(np.int64) + c0.astype(np.int64)
     gj = np.round((MERC_HALF - ras.y0) / ras.dy).astype(np.int64) + r0.astype(np.int64)
+    take = veg._hash01(gi, gj, 96) < chance
+    if not take.any():
+        return [], 0.0
+    sq, r0, c0, gi, gj = sq[take], r0[take], c0[take], gi[take], gj[take]
     u1, u2 = veg._hash01(gi, gj, 91), veg._hash01(gi, gj, 92)
-    px = ras.x0 + (c0 + block * (0.15 + 0.7 * u1)) * ras.dx
-    py = ras.y0 - (r0 + block * (0.15 + 0.7 * u2)) * ras.dy
+    px = ras.x0 + (c0 + cell * u1) * ras.dx
+    py = ras.y0 - (r0 + cell * u2) * ras.dy
     lon, lat = _to4326(px, py)
     tx, ty = geotiles.tile_of(lat, lon, z)
     own = (tx == gx) & (ty == gy)

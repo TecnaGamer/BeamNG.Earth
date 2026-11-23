@@ -777,6 +777,48 @@ class TrunkThinTest(unittest.TestCase):
         self.assertTrue(np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1]))
 
 
+class UnlatticeTest(unittest.TestCase):
+    """(53) _unlattice: the far clumps clear of the roads at one of their own trees, not the square's centroid."""
+
+    def _square(self, n=4, cell=20.0):
+        rng = np.random.default_rng(2)
+        xs, ys, cx, cy = [], [], [], []
+        for i in range(n):
+            for j in range(n):
+                px = (i + rng.uniform(0, 1, 6)) * cell
+                py = (j + rng.uniform(0, 1, 6)) * cell
+                xs.append(px); ys.append(py); cx.append(px.mean()); cy.append(py.mean())
+        x, y = np.concatenate(xs) - veg.MERC_HALF_WORLD, np.concatenate(ys) - veg.MERC_HALF_WORLD
+        cx, cy = np.array(cx) - veg.MERC_HALF_WORLD, np.array(cy) - veg.MERC_HALF_WORLD
+        return x, y, cx, cy, cell
+
+    def test_moved_to_a_member(self):
+        x, y, cx, cy, cell = self._square()
+        u = np.linspace(0.05, 0.95, len(cx))
+        nx, ny = veg._unlattice(cx, cy, np.full(len(cx), 15.0, np.float32), u, x, y, np.ones(len(x), bool), cell,
+                                1.0, None)
+        pts = set(zip(np.round(x, 6), np.round(y, 6)))
+        self.assertTrue(all((round(a, 6), round(b, 6)) in pts for a, b in zip(nx, ny)), "each at one of its trees")
+        self.assertEqual(int(np.sum((np.abs(nx - cx) < 1e-9) & (np.abs(ny - cy) < 1e-9))), 0)
+        again = veg._unlattice(cx, cy, np.full(len(cx), 15.0, np.float32), u, x, y, np.ones(len(x), bool), cell,
+                               1.0, None)
+        self.assertTrue(np.array_equal(again[0], nx) and np.array_equal(again[1], ny), "deterministic")
+
+    def test_moved_only_when_clear_and_off_roads(self):
+        x, y, cx, cy, cell = self._square(n=1)
+        u = np.array([0.5])
+        # a clump not at its square's centroid (a road-split one): left as placed
+        nx, ny = veg._unlattice(cx + 2.0, cy, np.array([15.0], np.float32), u, x, y, np.ones(len(x), bool), cell,
+                                1.0, None)
+        self.assertEqual((nx[0], ny[0]), (cx[0] + 2.0, cy[0]))
+        # a road through the square (CHM grid: 1 m pixels from the square's corner): the clump stays at the centroid
+        x0, y0 = -veg.MERC_HALF_WORLD, -veg.MERC_HALF_WORLD + cell
+        segs = np.array([[0.0, 10.0, 20.0, 10.0]])
+        roads = SimpleNamespace(segs=segs, hws=np.array([30.0]), grid=(x0, y0, 1.0, 1.0))
+        nx, ny = veg._unlattice(cx, cy, np.array([15.0], np.float32), u, x, y, np.ones(len(x), bool), cell, 1.0, roads)
+        self.assertEqual((nx[0], ny[0]), (cx[0], cy[0]))
+
+
 class NorthBirchTest(unittest.TestCase):
     """(49) Europe's north: fewer conifers than the leaf maps (EU-Forest's plots), its broadleaves birches."""
 
@@ -1043,8 +1085,8 @@ class ClumpTest(unittest.TestCase):
         self.assertEqual(int(out.group[4]), veg.G_CONIFER_CLUMP, "most of them firs")
         self.assertAlmostEqual(float(out.rank[4]), float(it.rank[:3].min()), places=6)
         cx, cy = veg._to3857(out.lon[4:], out.lat[4:])
-        self.assertAlmostEqual(float(cx[0]), float(xs[:3].mean()), places=3)
-        self.assertAlmostEqual(float(cy[0]), float(ys[:3].mean()), places=3)
+        # (53) at one of its trees, not the square's centroid (_unlattice: no lattice of clumps)
+        self.assertLess(float(np.min(np.hypot(xs[:3] - cx[0], ys[:3] - cy[0]))), 1e-3, "at one of its trees")
         again = veg.clumps(it, lc, LAT)
         self.assertTrue(np.array_equal(again.lon, out.lon) and np.array_equal(again.yaw, out.yaw), "deterministic")
 
@@ -1065,8 +1107,9 @@ class ClumpTest(unittest.TestCase):
         it, lc = firs([7.0, 8.5, 8.0, -8.0, -8.5, -7.0])
         before = veg.clumps(it, lc, LAT)
         self.assertEqual(len(before), 7, "no roads: one clump")
-        _, cy0 = veg._to3857(before.lon[6:], before.lat[6:])
-        self.assertLess(abs(float(cy0[0]) - mid) / k, 1.0, "on the track's line")
+        cx0, cy0 = veg._to3857(before.lon[6:], before.lat[6:])
+        fx, fy = veg._to3857(it.lon, it.lat)
+        self.assertLess(float(np.min(np.hypot(fx - cx0[0], fy - cy0[0]))), 1e-3, "(53) at one of its firs")
         # the track on a CHM-like grid round the square (1 Web Mercator m pixels)
         chm = SimpleNamespace(x0=sx - 100.0, y0=sy + cell + 100.0, dx=1.0, dy=1.0)
         a, b = veg._to4326(np.array([sx - 80.0, sx + cell + 80.0]), np.array([mid, mid]))

@@ -71,6 +71,14 @@ class RowsTest(unittest.TestCase):
         self.assertTrue(all(abs(r[1]) < half and abs(r[2]) < half for r in rows))     # (in the tile's own frame)
         again, _ = vegfar.far_rows(gx, gy, FakeRasters(18), lambda la, lo: np.full(np.shape(la), 120.0))
         self.assertEqual(rows, again)                                                 # (deterministic)
+        # (2026-11-23: no lattice in a full forest: some clumps nearer than a quarter of the spacing, and the nearest
+        # neighbours' distances spread, not all about one spacing as a jittered grid's)
+        xy = np.array([[r[1], r[2]] for r in rows])
+        d = np.hypot(xy[:, None, 0] - xy[None, :, 0], xy[:, None, 1] - xy[None, :, 1])
+        np.fill_diagonal(d, 1e9)
+        nn = d.min(axis=1)
+        self.assertGreater(float(np.mean(nn < 0.25 * vegfar.SPACING_M)), 0.05, "pairs, as a wood has")
+        self.assertGreater(float(np.std(nn) / np.mean(nn)), 0.35, "the spacing varies (a jittered grid's ~0.2)")
 
     def test_no_forest_no_rows(self):
         gx, gy = geotiles.tile_of(34.85, -116.9, vegfar.Z)

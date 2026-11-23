@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 52          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 53          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -93,6 +93,7 @@ VERSION = 52          # (the cached cells hold their groups: 14 for the regional
                       # 50: dev's thinning back (its count of trees), the tall trunks at least TRUNK_MIN_M apart (_thin_trunks)
                       # 51: 50's last two builds kept 50's spread cells (the same VERSION); the trunk distance by height
                       # 52: the riverside poplars off the forest's land cover (regional)
+                      # 53: the far clumps at one of their trees, not the square's centroid (_unlattice: no lattice)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -1954,6 +1955,61 @@ CLUMP_STATS = {"clear": 0, "split": 0, "moved": 0, "single": 0}     # (counts fo
 _clump_stats_lock = threading.Lock()
 
 
+MERC_HALF_WORLD = 20037508.342789244     # (earthfast vegclumps' HALF_WORLD: its squares' keys)
+
+
+def _unlattice(cx, cy, ch, cu, x, y, member, cell, merc_per_m, roads):
+    """(53) The far clumps a square's trees' centroid stood at (earthfast veg_clumps: the squares clear of the roads)
+    moved to one of their own trees, picked by the clump's hash cu: the centroid of a full square's 4-8 tops is nearly
+    its middle, a lattice of ~18 m up a forested slope, rows as only an orchard has (the user's hills over Split,
+    2026-11-23; Syrynka's clumps: 43 % within a tenth of a square of its middle, 3 % for random spots). A tree's spot is
+    on the canopy, off buildings and water, in the square's own map cell; kept at the centroid when the clump there
+    would reach a road (roads: ClumpRoads' segments and half widths). The road-split and moved clumps stay as placed."""
+    if len(cx) == 0 or not member.any():
+        return cx, cy
+    ids = np.flatnonzero(member)
+    ki = np.floor((x[ids] + MERC_HALF_WORLD) / cell).astype(np.int64)
+    kj = np.floor((y[ids] + MERC_HALF_WORLD) / cell).astype(np.int64)
+    key = ki * (1 << 31) + kj
+    order = np.argsort(key, kind="stable")
+    ids, key = ids[order], key[order]
+    start = np.r_[0, np.flatnonzero(key[1:] != key[:-1]) + 1]
+    count = np.diff(np.r_[start, len(key)])
+    ukey = key[start]
+    sx = np.add.reduceat(x[ids], start) / count
+    sy = np.add.reduceat(y[ids], start) / count
+    ck = np.floor((cx + MERC_HALF_WORLD) / cell).astype(np.int64) * (1 << 31)         + np.floor((cy + MERC_HALF_WORLD) / cell).astype(np.int64)
+    pos = np.searchsorted(ukey, ck)
+    pos = np.minimum(pos, len(ukey) - 1)
+    found = ukey[pos] == ck
+    clear = found & (np.abs(sx[pos] - cx) < 1e-3) & (np.abs(sy[pos] - cy) < 1e-3)
+    if not clear.any():
+        return cx, cy
+    k = np.flatnonzero(clear)
+    pick = ids[start[pos[k]] + np.minimum((cu[k] * count[pos[k]]).astype(np.int64), count[pos[k]] - 1)]
+    nx, ny = x[pick], y[pick]
+    if roads is not None and len(roads.segs):
+        r = (CLUMP_R_K * ch[k].astype(np.float64) + CLUMP_R_C) * merc_per_m
+        ok = np.ones(len(k), bool)
+        # (the segments in the CHM grid's pixels: to Web Mercator as earthfast veg_clumps reads them, roads.grid)
+        gx0, gy0, gdx, gdy = roads.grid
+        segs, hws = roads.segs, roads.hws * gdx
+        for a in range(0, len(segs), 512):          # (in chunks: clumps x segments)
+            sg, hw = segs[a:a + 512], hws[a:a + 512]
+            ax, ay = gx0 + sg[:, 0] * gdx, gy0 - sg[:, 1] * gdy
+            bx, by = gx0 + sg[:, 2] * gdx, gy0 - sg[:, 3] * gdy
+            dx, dy = bx - ax, by - ay
+            l2 = np.maximum(dx * dx + dy * dy, 1e-12)
+            t = np.clip(((nx[:, None] - ax) * dx + (ny[:, None] - ay) * dy) / l2, 0.0, 1.0)
+            qx, qy = ax + t * dx - nx[:, None], ay + t * dy - ny[:, None]
+            d = np.sqrt(qx * qx + qy * qy)
+            ok &= ~(d < hw[None, :] + r[:, None]).any(axis=1)
+        k, nx, ny = k[ok], nx[ok], ny[ok]
+    cx, cy = cx.copy(), cy.copy()
+    cx[k], cy[k] = nx, ny
+    return cx, cy
+
+
 def clumps(tree, lcls, lat, roads=None):
     """tree (a cell's canopy Items) with the far clumps added (CLUMP_OF, earthfast.veg_clumps) and the trees they
     stand for flagged (a negative scale: trees.lua shows them only within its near ring). lcls: the land cover class
@@ -1983,6 +2039,8 @@ def clumps(tree, lcls, lat, roads=None):
     if not len(cx):
         return tree
     member = np.asarray(member, bool)
+    cx, cy = _unlattice(np.asarray(cx, np.float64), np.asarray(cy, np.float64), np.asarray(ch, np.float32),
+                        np.asarray(cu, np.float64), x, y, member, clump_cell(lat), merc_per_m, roads)
     scale = tree.scale.copy()
     scale[member] = -np.abs(scale[member])
     tree = Items(tree.lon, tree.lat, tree.height, tree.radius, tree.kind, tree.group, tree.rank, tree.yaw, scale)
