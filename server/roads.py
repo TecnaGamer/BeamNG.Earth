@@ -15496,8 +15496,10 @@ def shape_files(aid, tx, ty):
     for k in range(2, RAIL_PARTS_MAX + 1):
         out[f"rail{k}"] = f"rail_{aid}_{tx}_{ty}_{k}.cdae"
         out[f"railcol{k}"] = f"railcol_{aid}_{tx}_{ty}_{k}.cdae"
-    import cliffscene
-    out.update(cliffscene.shape_files(aid, tx, ty))
+    import cliffsettings
+    if cliffsettings.SETTINGS.enabled:      # (PR #1412's cliffs, BNE_CLIFFS: no extra names, no staging stat, when off)
+        import cliffscene
+        out.update(cliffscene.shape_files(aid, tx, ty))
     return out
 
 

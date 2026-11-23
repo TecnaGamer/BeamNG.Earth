@@ -2282,9 +2282,13 @@ def geo_names(key, aid=None):
             if what not in ("road", "walk", "walkcol") and not what.startswith("cliffStrip"):
                 out[what] = f"rg_{key}_{what}.cdae"
         return out
-    import cliffscene
-    return {"json": f"rs_{aid}_{key}.json", "road": f"rs_{aid}_{key}_road.cdae", "walk": f"rs_{aid}_{key}_walk.cdae",
-            "walkcol": f"rs_{aid}_{key}_walkcol.cdae", **cliffscene.skin_files(key, aid)}
+    out = {"json": f"rs_{aid}_{key}.json", "road": f"rs_{aid}_{key}_road.cdae", "walk": f"rs_{aid}_{key}_walk.cdae",
+           "walkcol": f"rs_{aid}_{key}_walkcol.cdae"}
+    import cliffsettings
+    if cliffsettings.SETTINGS.enabled:      # (the cliffs' contact strips: only with BNE_CLIFFS on)
+        import cliffscene
+        out.update(cliffscene.skin_files(key, aid))
+    return out
 
 
 def _shape_info(path, pos, what):

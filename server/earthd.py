@@ -5927,7 +5927,9 @@ class Server:
         out = [os.path.join(self.out_dir, name), os.path.join(self.out_dir, stem + ".dds"),
                os.path.join(self.out_dir, stem + "_road.dds")]
         out += [os.path.join(self.out_dir, f"{stem}_r{r}.dds") for r in range(1, rev + 1)]
-        out += [os.path.join(self.out_dir, f"{stem}_r{r}.cdae") for r in range(1, rev + 1)]
+        import cliffsettings
+        if cliffsettings.SETTINGS.natural:  # (a cliff-coloured shape's photo revisions: Server.retexture, BNE_CLIFFS)
+            out += [os.path.join(self.out_dir, f"{stem}_r{r}.cdae") for r in range(1, rev + 1)]
         if texture is not None and os.path.join(self.out_dir, texture) not in out:
             out.append(os.path.join(self.out_dir, texture))
         if name.endswith(".dae"):
