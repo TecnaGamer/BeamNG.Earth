@@ -244,6 +244,7 @@ pub const JUNCTION_M: f64 = 12.0;       // m past the carriageway's half width r
 pub const GAP_M: f64 = 60.0;            // a run of stations without a target this long fades to today's widths
 pub const MIN_STATIONS: usize = 4;
 pub const MIN_SHARE: f64 = 0.3;
+pub const STRUCT_HOLD_M: f64 = 30.0;    // (flat_struct) m round a structure the lane rules' widths are kept
 
 /// The fit's counts (FitStats; the product's JSON "areas_fit").
 #[derive(Default, Debug, Clone)]
@@ -363,6 +364,9 @@ fn fit_stroke(net: &Net, si: usize, prep: &Prep, stats: &mut FitStats) -> Option
         let wg = t0 - ts;
         let (p, nrm, _k) = st.row_frame(s, hw);
         if st.dense.iter().any(|&(a, b)| s >= a - 10.0 && s <= b + 10.0) { stats.fork += 1; got.push(None); continue; }
+        if net.opts.flat_struct && st.sup.iter().any(|u| u.kind == SUP_STRUCT && s >= u.s0 - STRUCT_HOLD_M && s <= u.s1 + STRUCT_HOLD_M) {
+            stats.fork += 1; got.push(None); continue;
+        }
         let jr = JUNCTION_M + hw;
         if (j0 && norm(sub(p, p0)) < jr) || (j1 && norm(sub(p, p1)) < jr) { stats.junction += 1; got.push(None); continue; }
         let sup = st.support_at(s).kind;
@@ -455,8 +459,15 @@ fn fit_stroke(net: &Net, si: usize, prep: &Prep, stats: &mut FitStats) -> Option
     let last = knots[knots.len() - 1].0;
     let hold1 = j1 && st.snap1.is_none();
     if !hold1 && last < len { prog.push(((last + fade).min(len).max(last + 1e-3), neutral)); }
-    // forks' windows: neutral inside (the snaps and gores keep the lane rules' widths)
-    for &(a, b) in &st.dense {
+    // forks' windows: neutral inside (the snaps and gores keep the lane rules' widths); with flat_struct (M4's decks
+    // between today's ground roads, deck.rs) the structures and STRUCT_HOLD_M round them too: a deck keeps the
+    // width of the approaches it joins (a fitted deck between unfitted ground roads made steps and cracks at its
+    // joints, the gate at Wroclaw's Grunwaldzki bridge)
+    let mut hold: Vec<(f64, f64)> = st.dense.clone();
+    if net.opts.flat_struct {
+        for u in &st.sup { if u.kind == SUP_STRUCT { hold.push((u.s0 - STRUCT_HOLD_M + 10.0, u.s1 + STRUCT_HOLD_M - 10.0)); } }
+    }
+    for &(a, b) in &hold {
         prog.retain(|x| !(x.0 > a - 10.0 && x.0 < b + 10.0));
         prog.push((a - 10.0, neutral));
         prog.push((b + 10.0, neutral));
@@ -470,9 +481,13 @@ fn fit_stroke(net: &Net, si: usize, prep: &Prep, stats: &mut FitStats) -> Option
         for (k, sl) in st.slots.iter().enumerate() { if sl.kind == K_LANE { w += (off[k] - off[k + 1]).max(0.0); } }
         w.max(1.0)
     };
-    for pass in 0..2 {
-        let idx: Vec<usize> = if pass == 0 { (1..prog.len()).collect() } else { (0..prog.len().saturating_sub(1)).rev().collect() };
+    // (the neutral knots are fixed: a fork's or a deck's window keeps exactly the lane rules' widths, its neighbours
+    // bend toward it; a few rounds settle where a fixed knot sits between moved ones)
+    let fixed: Vec<bool> = prog.iter().map(|k| k.1 == neutral).collect();
+    for pass in 0..8 {
+        let idx: Vec<usize> = if pass % 2 == 0 { (1..prog.len()).collect() } else { (0..prog.len().saturating_sub(1)).rev().collect() };
         for k in idx {
+            if fixed[k] { continue; }
             let j = if pass == 0 { k - 1 } else { k + 1 };
             let ds = absf(prog[k].0 - prog[j].0);
             let lim = SLOPE * ds;
@@ -1227,6 +1242,29 @@ mod tests {
         // a polygon 40 m wide round a 9 m road (a square): implausible, no fit
         let wide = crate::net::build_opts(&road(vec![rect(2, "secondary", -300.0, -20.0, 300.0, 20.0)], false), &order, crate::net::Opts { areas: true, ..Default::default() });
         assert_eq!(wide.area_fit.fitted, 0);
+    }
+
+    #[test]
+    fn decks_between_todays_roads_keep_todays_widths() {
+        // (flat_struct: M4's decks, whose approaches are today's ground roads) a structure on "b" from x 90 to 210
+        let area = rect(2, "secondary", -300.0, -4.0, 300.0, 6.0);
+        let mut p = road(vec![area], false);
+        p.segs[1].bridge = vec![(0.3, 0.7)];
+        p.segs[1].level = vec![(0.3, 0.7, 1.0)];
+        p.areas[0].flags = 0;
+        let mut bridge = rect(4, "secondary", 60.0, -4.0, 240.0, 6.0);
+        bridge.flags = 1;
+        p.areas.push(bridge);
+        let order: Vec<usize> = (0..p.segs.len()).collect();
+        let on = crate::net::build_opts(&p, &order, crate::net::Opts { areas: true, flat_struct: true, ..Default::default() });
+        let (l, r) = edges_at(&on, 150.0);
+        assert!((l - 4.5).abs() < 1e-9 && (r + 4.5).abs() < 1e-9, "{l} {r}");
+        let (l, r) = edges_at(&on, -150.0);
+        assert!((l - 6.0).abs() < 0.15 && (r + 4.0).abs() < 0.15, "{l} {r}");
+        // the shadow partition (no flat_struct) fits the deck too
+        let sh = crate::net::build_opts(&p, &order, crate::net::Opts { areas: true, ..Default::default() });
+        let (l, r) = edges_at(&sh, 150.0);
+        assert!((l - 6.0).abs() < 0.15 && (r + 4.0).abs() < 0.15, "{l} {r}");
     }
 
     #[test]
