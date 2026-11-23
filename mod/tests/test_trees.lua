@@ -1112,4 +1112,36 @@ do -- PROP_LEAD_S: at speed the furniture tiles ahead count nearer for the group
 end
 T.check(trees.spareWanted(trees.FRAME_MS) == 0 and trees.spareWanted(trees.LOADING_FRAME_MS) >= trees.POOL_SPARE,
   'no spare Forests while driving by default (POOL_SPARE_DRIVE 0)')
+-- (2026-11-23) the city holm oaks' copies: leaf materials renamed (whole names, ids with them), the rest untouched;
+-- their materials copied under the new names; the copies in the Mediterranean towns' open twin only
+do
+  local dae = '<material id="oak_leaves_02-material" name="oak_leaves_02"><instance_effect url="#oak_leaves_02-effect"/>'
+    .. '<material id="m_oak_leaves_02_distant-material" name="m_oak_leaves_02_distant"/>'
+    .. '<material id="holm_oak_branches-material" name="holm_oak_branches"/><image id="t_oak_leaves_b_color_png"/>'
+  local out = trees.holmOakDae(dae)
+  T.check(out ~= nil, 'holm oak dae renamed')
+  T.check(not out:find('"oak_leaves_02', 1, true) and out:find('name="bne_holm_oak_leaves_02"', 1, true) ~= nil,
+    'oak_leaves_02 renamed')
+  T.check(out:find('url="#bne_holm_oak_leaves_02-effect"', 1, true) ~= nil, 'its effect id too')
+  T.check(out:find('name="bne_holm_oak_leaves_02_distant"', 1, true) ~= nil, 'the distant one')
+  T.check(out:find('holm_oak_branches', 1, true) ~= nil and out:find('t_oak_leaves_b_color_png', 1, true) ~= nil,
+    'branches and texture ids untouched')
+  T.check(trees.holmOakDae('<material name="Oak_bark_01"/>') == nil, 'nothing to rename: nil')
+  local stock = { oak_leaves_01 = { name = 'oak_leaves_01', mapTo = 'oak_leaves_01', persistentId = 'x', Stages = {} },
+    oak_leaves_02 = { name = 'oak_leaves_02', mapTo = 'oak_leaves_02', Stages = {} },
+    m_oak_leaves_distant = { name = 'm_oak_leaves_distant', Stages = {} },
+    m_oak_leaves_02_distant = { name = 'm_oak_leaves_02_distant', Stages = {} } }
+  local mats = trees.holmOakMaterials(stock)
+  T.check(mats and mats.bne_holm_oak_leaves_01 and mats.bne_holm_oak_leaves_01.mapTo == 'bne_holm_oak_leaves_01'
+    and mats.bne_holm_oak_leaves_01.persistentId == nil, 'materials copied under the new names')
+  T.check(trees.holmOakMaterials({ oak_leaves_01 = {} }) == nil, 'a missing stock material: nil')
+  local inOpen, inForest = 0, 0
+  for _, v in ipairs(trees.CATALOG.mediterranean_open) do if v[1]:find('holm_oak_city', 1, true) then inOpen = inOpen + 1 end end
+  for _, v in ipairs(trees.CATALOG.mediterranean) do if v[1]:find('holm_oak_city', 1, true) then inForest = inForest + 1 end end
+  -- (offline the game's files are not there: setup drops the copies it could not write, else both stand in the open)
+  T.check((inOpen == 2 or inOpen == 0) and inForest == 0, 'the copies in the open twin only, or none when not written')
+  T.check(#trees.HOLM_OAKS == 2 and trees.HOLM_OAKS[1].out:find('^/temp/beamngEarth/shapes/') ~= nil,
+    'two copies, in the user folder')
+end
+
 T.done('test_trees')

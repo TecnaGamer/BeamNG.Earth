@@ -834,8 +834,19 @@ for _, g in ipairs({ 'deciduous', 'oak', 'birch', 'beech', 'pine_west', 'mediter
   end
   M.CATALOG[g .. '_open'] = out
 end
--- (2026-11-20, the unused stock survey: not Italy's city holm oaks: they wear the deciduous oaks' oak_leaves_01 / 02,
--- which seasonlook turns rust-brown in the fall, and a holm oak is evergreen)
+-- (2026-11-23, the unused stock survey) the Mediterranean's town and roadside trees: Italy's pruned city holm oaks, in
+-- the open twin only. Their shapes wear the deciduous oaks' oak_leaves_01 / 02, which seasonlook turns rust-brown in the
+-- fall (a material is global): copies with those materials renamed (M.HOLM_OAKS, holmOaks: written once into the user
+-- folder from the game's own files, as the static signal; the user 2026-11-23: a new shape is fine done well)
+M.HOLM_OAK_MATS = { oak_leaves_01 = 'bne_holm_oak_leaves_01', oak_leaves_02 = 'bne_holm_oak_leaves_02',
+  m_oak_leaves_distant = 'bne_holm_oak_leaves_distant', m_oak_leaves_02_distant = 'bne_holm_oak_leaves_02_distant' }
+M.HOLM_OAK_STOCK_MATS = IT .. 'trees/trees_italy/main.materials.json'
+M.HOLM_OAKS = {
+  { stock = IT .. 'trees/trees_italy/holm_oak_city_small', out = '/temp/beamngEarth/shapes/holm_oak_city_small_v1', h = 5.6 },
+  { stock = IT .. 'trees/trees_italy/holm_oak_city_tall', out = '/temp/beamngEarth/shapes/holm_oak_city_tall_v1', h = 9.7 },
+}
+M.HOLM_OAK_MATFILE = '/temp/beamngEarth/shapes/holm_oak_v1.materials.json'
+for _, o in ipairs(M.HOLM_OAKS) do table.insert(M.CATALOG.mediterranean_open, { o.out, o.h }) end
 M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n
 for _, g in ipairs({ 'straw_n', 'straw_s', 'silage_n', 'silage_s' }) do M.GROUP_MAX_M[g] = 400; M.ONE_SPELLING[g] = true end
 -- The months (1-12) a group shows in (server vegetation.bale_items: the bales after the harvest; the south's six months
@@ -1140,6 +1151,59 @@ function M.applySeason(month)
   end
 end
 
+-- Pure: a holm oak dae's text with its leaf materials renamed (M.HOLM_OAK_MATS: whole names only, the ids
+-- '<name>-material' / '-effect' with them); nil without any.
+function M.holmOakDae(dae)
+  if type(dae) ~= 'string' then return nil end
+  local n = 0
+  for from, to in pairs(M.HOLM_OAK_MATS) do
+    local c
+    dae, c = dae:gsub('%f[%w_]' .. from:gsub('_', '%%_') .. '%f[^%w_]', to)
+    n = n + c
+  end
+  return n > 0 and dae or nil
+end
+-- Pure: the copies' materials from the stock materials file's table: each renamed leaf material as the stock one
+-- (name, mapTo; no persistentId), the rest left to the stock file.
+function M.holmOakMaterials(stock)
+  if type(stock) ~= 'table' then return nil end
+  local out = {}
+  for from, to in pairs(M.HOLM_OAK_MATS) do
+    local m = stock[from]
+    if type(m) ~= 'table' then return nil end
+    local c = {}
+    for k, v in pairs(m) do c[k] = v end
+    c.name, c.mapTo, c.persistentId = to, to, nil
+    out[to] = c
+  end
+  return out
+end
+local function holmOaks()
+  if not FS:fileExists(M.HOLM_OAK_MATFILE) then
+    local mats = M.holmOakMaterials(jsonDecode(readFile(M.HOLM_OAK_STOCK_MATS) or ''))
+    if not mats then return false end
+    writeFile(M.HOLM_OAK_MATFILE, jsonEncode(mats))
+  end
+  loadJsonMaterialsFile(M.HOLM_OAK_MATFILE)
+  for _, o in ipairs(M.HOLM_OAKS) do
+    local dae = o.out .. '.dae'
+    if not FS:fileExists(dae) then
+      local text = M.holmOakDae(readFile(o.stock .. '.dae'))
+      if not text then return false end
+      writeFile(dae, text)
+    end
+    if not FS:fileExists(dae) then return false end
+  end
+  return true
+end
+local function dropHolmOaks()
+  local out = {}
+  for _, v in ipairs(M.CATALOG.mediterranean_open) do
+    if not v[1]:find('/temp/beamngEarth/shapes/holm_oak', 1, true) then out[#out + 1] = v end
+  end
+  M.CATALOG.mediterranean_open = out
+end
+
 local function setup()
   if ready then return true end
   M.applySeason()
@@ -1152,6 +1216,13 @@ local function setup()
     local ok, made = pcall(staticSignal)
     if ok and made then M.CATALOG.signal[1][1] = M.STATIC_SIGNAL
     else log('W', 'beamngEarth.trees', 'static signal shape: ' .. tostring(made)) end
+    local okH, madeH = pcall(holmOaks)
+    if not (okH and madeH) then
+      dropHolmOaks()
+      log('W', 'beamngEarth.trees', 'holm oak shapes: ' .. tostring(madeH))
+    end
+  else
+    dropHolmOaks()
   end
   ready = true
   return true
