@@ -241,6 +241,86 @@ class Source:
             out.append((int(fid), leisure, amenity, tourism, bytes(geom)))
         return out
 
+    def store_many(self, keys, kind="demand"):
+        """The rows of cells keys read in one scan of their union's row groups and kept as _cell keeps each cell's
+        (_rows_save; tools/build_cip.py: a z10 unit's 256 cells were 256 scans of the same row groups, ~0.1 s each).
+        Each cell's rows are _query's for it: its box tested in DuckDB with the same expression, the rows in file order
+        (_query's single-threaded scan order). Errors are raised (the builder records the cells as lacking)."""
+        keys = list(keys)
+        for attempt in (0, 1):
+            etag, remote = self._version(kind)
+            todo = [k for k in keys if _rows_load(remote, k) is None]
+            try:
+                got = self._query_many(remote, [k.bounds() for k in todo], kind) if todo else []
+            except rangeread.Changed:
+                if attempt:
+                    raise
+                log.info("picnic tables: %s changed (was %s)", self.url, etag)
+                self._forget()
+                continue
+            for k, rows in zip(todo, got):
+                _rows_save(remote, k, rows)
+            return len(todo)
+        return 0
+
+    def _query_many(self, remote, bounds_list, kind):
+        out = [[] for _ in bounds_list]
+        if not bounds_list:
+            return out
+        u = (min(b[0] for b in bounds_list), min(b[1] for b in bounds_list), max(b[2] for b in bounds_list),
+             max(b[3] for b in bounds_list))
+        rd = self.reader
+        files = {PATH: remote}
+        con, proto, errors = rd._connect(files, kind)
+
+        def box(b):
+            lon0, lat0, lon1, lat1 = b
+            return (f"bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND bbox.ymin <= {lat1!r} "
+                    f"AND bbox.ymax >= {lat0!r}")
+        try:
+            uri = f"'{proto}://{PATH}'"
+            groups = self._groups(con, uri, remote, kind)
+            cand = _candidates(groups, u)
+            if not cand:
+                return out
+            want = set(COLUMNS) | {"bbox"}
+            rd._fetch(files, {PATH: [r for rg in cand for c, rs in groups[rg]["cols"].items() if c in want
+                                     for r in rs]}, kind)
+            only = " OR ".join(f"file_row_number BETWEEN {groups[rg]['first']} AND "
+                               f"{groups[rg]['first'] + groups[rg]['n'] - 1}" for rg in cand)
+            mark = ("lower(leisure) IN ('picnic_table', 'picnic_site') OR "
+                    "lower(amenity) IN ('picnic_table', 'bbq', 'barbecue', 'bbq_grill') OR "
+                    "lower(tourism) = 'picnic_site'")
+            con.execute(f"""CREATE TEMP TABLE pu AS SELECT id, leisure, amenity, tourism, file_row_number, bbox
+                FROM read_parquet({uri}, file_row_number = true) WHERE ({only}) AND {box(u)} AND ({mark})""")
+            per = [con.execute(f"""SELECT id, leisure, amenity, tourism, file_row_number FROM pu WHERE {box(b)}
+                ORDER BY file_row_number""").fetchall() for b in bounds_list]
+            nums = sorted({int(row[4]) for rows in per for row in rows})
+            if not nums:
+                return out
+            hit = sorted({rg for n in nums for rg in cand
+                          if groups[rg]["first"] <= n < groups[rg]["first"] + groups[rg]["n"]})
+            rd._fetch(files, {PATH: [r for rg in hit for span in groups[rg]["cols"].get("geometry", [])
+                                     for r in (span,)]}, kind)
+            try:
+                con.execute("SET enable_geoparquet_conversion = false")
+            except Exception:
+                pass
+            geoms = dict(con.execute(f"""SELECT file_row_number, geometry
+                FROM read_parquet({uri}, file_row_number = true)
+                WHERE file_row_number IN ({', '.join(map(str, nums))})""").fetchall())
+        except Exception:
+            for e in errors:
+                if isinstance(e, rangeread.Changed):
+                    raise e
+            raise
+        finally:
+            con.close()
+        for i, rows in enumerate(per):
+            out[i] = [(int(fid), le, am, to, bytes(geoms[num])) for fid, le, am, to, num in rows
+                      if geoms.get(num) is not None]
+        return out
+
 
 def _rows_path(remote, key):
     return os.path.join(remote.cache_dir, "cells", str(key.z), str(key.x), f"{key.y}.json")
