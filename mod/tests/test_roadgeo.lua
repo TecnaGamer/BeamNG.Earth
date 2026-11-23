@@ -374,4 +374,53 @@ do
   roads.reset()
 end
 
+-- Dynamic cliff content remains in its geographic frame; contact strips follow
+-- the anchor skin. Rock rows are restored on reconnect, not duplicated on rebase.
+do
+  require('beamngEarth/cliffcontact').ready = true -- private cache prepared at hello
+  roads.reset()
+  roads.setGeo(true)
+  calls = {}
+  car.x, car.y = A:geodeticToWorld(clat, clon, 0)
+  local data = {frame={clat,clon}, chunks={}, h='cliffs',
+    cliff={shape='/s/dynamic_cliff.cdae',pos={-118,-118,0},pivot=40,relief=60},
+    cliff2={shape='/s/dynamic_cliff2.cdae',pos={-118,-118,0},pivot=40,relief=60},
+    talus={groups={'talus_large_a08060'},items={{0,10,20,40,0,1,8,.2,1,0,0,0,1,0,0,0,1}}}}
+  local msg={anchorId=1,key=key,data=data,frame={clat,clon},h='cliffs'}
+  T.check(roads.onTile(msg,1,A), 'cliff geotile accepted')
+  T.check(not roads.cliffPiecesReady(key,1), 'geographic rock rows wait for both faces')
+  run(1,A)
+  local faces=objsWith('dynamic_cliff')
+  T.check(#faces==2 and roads.cliffPiecesReady(key,1), 'geographic cliff faces imported')
+  T.check(faces[1].fields.collisionType=='None' and faces[2].fields.collisionType=='None', 'cliff skins use the existing terrain collision')
+  local rows=called('trees','onGeoRows')
+  T.check(#rows==1 and rows[1][3]=='t'..key and rows[1][7]==17, 'rocks retain basis stride and geographic key')
+  local xf=geodesy.transformOf(geotile.placement(frame,A,0,0,40).r,geotile.placement(frame,A,0,0,40).t)
+  local x,y,z=xf:apply(-118,-118,0)
+  T.near(faces[1].pos.x,x,1e-8,'cliff x at geographic pivot')
+  T.near(faces[1].pos.z,z,1e-8,'cliff z at geographic pivot')
+  roads.onSkin({anchorId=1,key=key,data={cliffStrip1={shape='/s/dynamic_strip_a.cdae',pos={0,0,0}}}},1)
+  run(1,A)
+  T.check(#objsWith('dynamic_strip_a')==1, 'geographic contact strip imported')
+  T.check(objsWith('dynamic_strip_a')[1].fields.collisionType=='None', 'contact decoration does not add collision')
+  calls={}
+  car.x,car.y=B:geodeticToWorld(clat,clon,0)
+  roads.replace(B,2)
+  run(2,B)
+  T.check(#objsWith('dynamic_cliff')==2 and #called('trees','onGeoRows')==0, 'rebase keeps faces and does not duplicate rock rows')
+  roads.onSkin({anchorId=2,key=key,data={cliffStrip1={shape='/s/dynamic_strip_b.cdae',pos={0,0,0}}}},2)
+  run(2,B)
+  T.check(#objsWith('dynamic_strip_a')==0 and #objsWith('dynamic_strip_b')==1, 'contact strip replaced with the new anchor skin')
+  require('beamngEarth/cliffcontact').ready = false
+  roads.onSkin({anchorId=2,key=key,data={cliffStrip1={shape='/s/dynamic_strip_missing.cdae',pos={0,0,0}}}},2)
+  run(2,B)
+  T.check(#objsWith('dynamic_strip')==0 and #objsWith('dynamic_cliff')==2, 'unavailable contact skin removes old strip without removing cliff faces')
+  roads.onTile(msg,2,B)
+  T.check(#called('trees','onGeoRows')==1, 'reconnect restores cleared rock rows')
+  roads.onDrop({anchorId=2,key=key})
+  run(2,B)
+  T.check(#objsWith('dynamic_cliff')==0 and #objsWith('dynamic_strip')==0, 'geotile drop removes cliff and skin')
+  local drops=called('trees','dropKey')
+  T.check(#drops==1 and drops[1][3]=='g:t'..key, 'geotile drop removes its rock population')
+end
 T.done('test_roadgeo')

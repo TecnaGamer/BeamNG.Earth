@@ -34,6 +34,7 @@
         />
       </template>
       <!-- the cache view (server covermap.py): what is downloaded where, at what detail; under the grid and markers -->
+      <canvas v-show="debugOn" ref="debugEl" class="debug-canvas" :width="w" :height="h" />
       <canvas v-show="cacheOn" ref="cacheEl" class="cache-canvas" :width="w" :height="h" />
       <!-- saved areas (server areas.py) and the box being picked -->
       <div v-for="a in areaRects" :key="'ar' + a.id" class="area-rect" :class="a.cls"
@@ -250,6 +251,11 @@
             <input type="checkbox" v-model="cacheOn" /> Cache <span class="layer-hint">(downloaded data)</span></label>
           <BngSelect v-if="cacheOn" class="cache-select" :value="cacheMode" :options="cacheModeOptions"
                      :config="cacheSelectConfig" @valueChanged="v => (cacheMode = v)" />
+          <div class="panel-sub">Debug Overlays</div>
+          <label class="layer-opt"><input type="checkbox" v-model="debugOn" /> Cliff placement</label>
+          <BngSelect v-if="debugOn" class="cache-select" :value="debugMode" :options="debugOptions"
+                     :config="cacheSelectConfig" @valueChanged="v => (debugMode = v)" />
+
         </div>
       </div>
       <button v-if="!embedded" class="map-btn" @click="open3d" title="The 3D map (experimental): fly over the real world like a map app">3D map</button>
@@ -270,6 +276,14 @@
       </div>
       <div v-if="cacheMode === 'elevation' || cacheMode === 'imagery'" class="cache-legend-hint">Faint: only part of the square</div>
       <div v-if="cacheMsg" class="cache-legend-hint">{{ cacheMsg }}</div>
+    </div>
+
+    <div v-if="debugOn" class="debug-legend" :class="{ 'beside-panel': panelOpen }" @mousedown.stop @wheel.stop aria-live="polite">
+      <div class="cache-legend-title">Debug: {{ debugTitle }}</div>
+      <div v-for="item in debugData?.legend || []" :key="item.id" class="cache-legend-row">
+        <span class="cache-swatch" :style="{ background: item.color }"></span>{{ item.label }}
+      </div>
+      <div v-if="debugMessage" class="debug-note">{{ debugMessage }}</div>
     </div>
 
     <!-- status: tiles unavailable / not connected -->
@@ -485,6 +499,7 @@
 import { ref, shallowRef, computed, watch, onMounted, onUnmounted, nextTick } from "vue"
 import { useEvents } from "@/services/events"
 import { vBngOnUiNav } from "@/common/directives"
+import { paintDebugFeatures } from "./debugoverlay.js"
 import * as mm from "./mapmath.js"
 import * as ms from "./mapstations.js"
 import * as sm from "./mapsearch.js"
@@ -1321,6 +1336,82 @@ function ctxNearest() {
     scheduleStations(0)
   }, { limitMs: NEAR_FROM_HERE_MS })
 }
+
+// Regional debug providers share one bounded, opt-in query and canvas renderer.
+const debugEl = ref(null)
+const debugOn = ref(false)
+const debugMode = ref("cliff_regions")
+const debugOptions = ref([
+  { label: "Natural cliff regions", value: "cliff_regions" },
+  { label: "Generated cliffs & road cuts", value: "cliff_generated" },
+  { label: "Cliff outcrops & rubble", value: "cliff_rocks" },
+  { label: "Road-cut material regions", value: "cliff_cuts" },
+])
+const debugData = ref(null), debugMessage = ref("")
+const debugTitle = computed(() => debugOptions.value.find(o => o.value === debugMode.value)?.label || "Cliff placement")
+let debugTimer = null, debugPoll = null, debugSeq = 0, debugFrame = null
+function scheduleDebug(delay = 350) {
+  clearTimeout(debugTimer)
+  debugTimer = setTimeout(askDebug, delay)
+}
+function askDebug() {
+  if (!debugOn.value) return
+  const v = view.value, box = mm.viewBox(v.lat, v.lon, v.z, w.value, h.value, 0)
+  const [west, south, rawEast, north] = box
+  const east = rawEast < west ? rawEast + 360 : rawEast
+  const seq = ++debugSeq
+  clearTimeout(debugPoll)
+  debugMessage.value = "Loading placement rules…"
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiDebugMap and beamngEarth_settings.uiDebugMap(${luaStr(debugMode.value)},${south},${west},${north},${east}) or nil`, r => {
+    if (seq !== debugSeq) return
+    if (!r?.id) {
+      debugMessage.value = r?.error || "Connect to the companion server to view debug overlays."
+      scheduleDebug(5000)
+      return
+    }
+    let tries = 0
+    const poll = () => engineLua(`beamngEarth_settings.uiDebugMapResult(${r.id})`, result => {
+      if (seq !== debugSeq) return
+      if (!result) {
+        if (++tries < 50) debugPoll = setTimeout(poll, 100)
+        else { debugMessage.value = "No response from the server. Retrying…"; scheduleDebug(5000) }
+        return
+      }
+      debugMessage.value = result.error || result.note || ""
+      if (!result.error) {
+        debugData.value = result
+        if (result.layers?.length) debugOptions.value = result.layers.map(o => ({ label: o.label, value: o.id }))
+      }
+      scheduleDebug(5000)
+    })
+    debugPoll = setTimeout(poll, 50)
+  })
+}
+function drawDebug() {
+  debugFrame = null
+  const ctx = debugEl.value?.getContext("2d")
+  if (!ctx) return
+  ctx.clearRect(0, 0, w.value, h.value)
+  if (!debugOn.value || !debugData.value) return
+  paintDebugFeatures(ctx, debugData.value, {
+    screen, width: w.value, world: 256 * Math.pow(2, view.value.z),
+    alpha: ["cliff_generated", "cliff_rocks"].includes(debugMode.value) ? 0.68 : 0.28,
+  })
+}
+function queueDebugDraw() {
+  if (debugFrame === null) debugFrame = requestAnimationFrame(drawDebug)
+}
+watch([view, w, h], () => { if (debugOn.value) { scheduleDebug(); nextTick(queueDebugDraw) } })
+watch([debugData, debugOn], () => nextTick(queueDebugDraw))
+watch([debugOn, debugMode], () => {
+  debugSeq++; clearTimeout(debugTimer); clearTimeout(debugPoll)
+  debugData.value = null; debugMessage.value = ""
+  if (debugOn.value) scheduleDebug(0)
+})
+onUnmounted(() => {
+  debugSeq++; clearTimeout(debugTimer); clearTimeout(debugPoll)
+  if (debugFrame !== null) cancelAnimationFrame(debugFrame)
+})
 
 // the bumpers: off -> each view in turn -> off
 function cycleCache(dir) {
@@ -2586,4 +2677,9 @@ const fmtLatLon = mm.fmtLatLon
 .map-bottom.beside-panel .attribution { max-width: 100%; }
 .map-view { bottom: 0; }
 .earth-map.embedded .map-bottom { bottom: 6px; }
+.debug-canvas { position: absolute; inset: 0; pointer-events: none; }
+.debug-legend { position: absolute; right: 12px; bottom: calc(6.5vh + 40px); z-index: 9; width: min(330px, calc(100% - 24px)); box-sizing: border-box; padding: 12px; background: #202832; color: #edf1f5; border: 1px solid #64707c; border-radius: 4px; font-size: 12px; max-height: 40%; overflow: auto; }
+.debug-legend.beside-panel { right: 386px; max-width: calc(100% - 398px); }
+.debug-legend .cache-legend-row { white-space: normal; }
+.debug-note { margin-top: 8px; color: #c7d0d9; line-height: 1.45; }
 </style>

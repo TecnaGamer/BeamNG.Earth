@@ -125,6 +125,8 @@ def run_restarting(cmd, user_dir, base_env, run=None, limiter=None, pick=None):
     (the server is told its restarts so far and refuses one past it). Any other exit code is returned. pick: the map
     data's release (overturepick.Pick), the same for every start of this run (server_env)."""
     import time
+    import cliffstock
+    from launcher import game_install_dir
     sr = _srvrestart()
     run = run or (lambda c, path, e: run_logged(c, path, e))
     limiter = limiter or sr.Limiter()
@@ -133,6 +135,11 @@ def run_restarting(cmd, user_dir, base_env, run=None, limiter=None, pick=None):
         env, ids = server_env(user_dir, base_env, limiter.times, pick.release() if pick is not None else None)
         if first and pick is not None:
             install.say(f"  Map data: Overture {pick.release()} ({pick.why})")
+        # Use the same lazy game lookup and private cache as the app launcher.
+        # Complete conversion before the child starts, also on --keep-mod/restart.
+        if pick is not None and env.get("BNE_CLIFFS", "off").strip().lower() in {"1", "on", "true"}:
+            env["BNGE_CACHE_DIR"] = pick.cache_dir
+        cliffstock.prepare_enabled(game_install_dir, user_dir, env=env, diagnostic=install.say)
         if not first and ids:
             install.say("  Experimental features on (the settings page): " + ", ".join(ids))
         first = False

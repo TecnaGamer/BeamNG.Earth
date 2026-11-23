@@ -15483,6 +15483,8 @@ def shape_files(aid, tx, ty):
     for k in range(2, RAIL_PARTS_MAX + 1):
         out[f"rail{k}"] = f"rail_{aid}_{tx}_{ty}_{k}.cdae"
         out[f"railcol{k}"] = f"railcol_{aid}_{tx}_{ty}_{k}.cdae"
+    import cliffscene
+    out.update(cliffscene.shape_files(aid, tx, ty))
     return out
 
 
@@ -15553,7 +15555,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
                rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, custom_entries=None, decals=True,
                bld_none=False, barrier_mesh=None, barrier_chunks=(), turbines=(), signs=None, towns=None,
-               walk_ground=None, speed_traps=(), bus_col=None):
+               walk_ground=None, speed_traps=(), bus_col=None, cliff_mesh=None):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -15573,6 +15575,10 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     data = {"v": VERSION, "chunks": [] if road_mesh is not None or not decals else
             [{k: v for k, v in c.items() if k != "waterguard"} for c in chunks
              if not c.get("tube_only") and not c.get("wear")]}     # (road wear: a mesh's only, roadwear.py)
+    if cliff_mesh is not None:
+        import cliffscene
+        x0, y0, _, _ = tile_bbox(tx, ty)
+        cliffscene.write(data, out_dir, vfs_dir, aid, tx, ty, (x0, y0, 0.0), cliff_mesh)
     guards = {c["waterguard"]["id"]: c["waterguard"] for c in chunks if c.get("waterguard")}
     if guards:
         data["waterguard"] = [guards[k] for k in sorted(guards)]

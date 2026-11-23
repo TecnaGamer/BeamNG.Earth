@@ -1,0 +1,514 @@
+{
+  "bne_cliff_strata": {
+    "name": "bne_cliff_strata",
+    "mapTo": "bne_cliff_strata",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_base.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_near.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_near_roughness.data.dds",
+        "baseColorFactor": [
+          1.3,
+          1.4,
+          1.5,
+          1
+        ],
+        "metallicFactor": 0,
+        "vertColor": true,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_ao.data.dds",
+        "roughnessFactor": 1,
+        "useAnisotropic": true,
+        "roughnessMapUseUV": 0,
+        "detailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/detail.data.dds",
+        "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/rock_grain.normal.dds",
+        "detailNormalMapStrength": 0.3,
+        "detailScale": [
+          76.2,
+          76.2
+        ],
+        "normalMapUseUV": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_cliff_roadcut": {
+    "name": "bne_cliff_roadcut",
+    "mapTo": "bne_cliff_roadcut",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut_base.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut_near_roughness.data.dds",
+        "baseColorFactor": [
+          1.1,
+          1.1,
+          1.1,
+          1
+        ],
+        "metallicFactor": 0,
+        "vertColor": true,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut_ao.data.dds",
+        "roughnessFactor": 1,
+        "useAnisotropic": true,
+        "roughnessMapUseUV": 0,
+        "detailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/detail.data.dds",
+        "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/rock_grain.normal.dds",
+        "detailNormalMapStrength": 0.35,
+        "detailScale": [
+          76.2,
+          76.2
+        ],
+        "normalMapStrength": 0.48,
+        "normalMapUseUV": 0,
+        "ambientOcclusionMapUseUV": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_cliff_roadcut_arid": {
+    "name": "bne_cliff_roadcut_arid",
+    "mapTo": "bne_cliff_roadcut_arid",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near_base.color.dds",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "normalMapStrength": 0.32,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near_roughness.data.dds",
+        "roughnessMapUseUV": 0,
+        "normalMapUseUV": 0,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near_ao.data.dds",
+        "ambientOcclusionMapUseUV": 0,
+        "detailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/detail.data.dds",
+        "detailMapUseUV": 0,
+        "detailBaseColorMapStrength": 0.18,
+        "detailNormalMap": "/temp/beamngEarth/shapes/cliff_ground_v1/normal.dds",
+        "detailNormalMapStrength": 0.22,
+        "detailScale": [
+          30.48,
+          30.48
+        ],
+        "normalDetailMapUseUV": 0,
+        "ambientOcclusionDetailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/ao.data.dds",
+        "detailAoMapStrength": 0.22,
+        "roughnessDetailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/roughness.data.dds",
+        "detailRoughnessMapStrength": 0.06
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_cliff_canyon_sat": {
+    "name": "bne_cliff_canyon_sat",
+    "mapTo": "bne_cliff_canyon_sat",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_near_base.color.dds",
+        "baseColorFactor": [
+          1.182453762295748,
+          1.3869361526467974,
+          1.604173021096044,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "normalMapStrength": 0.3,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_near.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_near_roughness.data.dds",
+        "roughnessMapUseUV": 0,
+        "normalMapUseUV": 0,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_source_ao.data.dds",
+        "ambientOcclusionMapUseUV": 0,
+        "detailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/detail.data.dds",
+        "detailMapUseUV": 0,
+        "detailBaseColorMapStrength": 0.18,
+        "detailNormalMap": "/temp/beamngEarth/shapes/cliff_ground_v1/normal.dds",
+        "detailNormalMapStrength": 0.22,
+        "detailScale": [
+          30.48,
+          60.96
+        ],
+        "normalDetailMapUseUV": 0,
+        "ambientOcclusionDetailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/ao.data.dds",
+        "detailAoMapStrength": 0.22,
+        "roughnessDetailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/roughness.data.dds",
+        "detailRoughnessMapStrength": 0.06
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_far_cliff_canyon_blend": {
+    "name": "bne_far_cliff_canyon_blend",
+    "mapTo": "bne_far_cliff_canyon_blend",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          2.191481630493194,
+          2.7426258658303135,
+          3.0905787004239977,
+          1
+        ],
+        "detailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_base.color.dds",
+        "detailMapUseUV": 0,
+        "detailScale": [
+          1,
+          1
+        ],
+        "detailBaseColorMapStrength": 0.84,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far.normal.dds",
+        "normalMapUseUV": 1,
+        "roughnessFactor": 1,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "normalMapStrength": 0.7,
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_roughness.data.dds",
+        "roughnessMapUseUV": 1
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_far_cliff_strata_blend": {
+    "name": "bne_far_cliff_strata_blend",
+    "mapTo": "bne_far_cliff_strata_blend",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.959774210865709,
+          1.9714051758386686,
+          1.988411009868763,
+          1
+        ],
+        "detailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_base.color.dds",
+        "detailMapUseUV": 0,
+        "detailScale": [
+          1,
+          1
+        ],
+        "detailBaseColorMapStrength": 0.45,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_far.normal.dds",
+        "normalMapUseUV": 1,
+        "roughnessFactor": 1,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_far_roughness.data.dds",
+        "roughnessMapUseUV": 1
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_cliff_strata_terrain": {
+    "name": "bne_cliff_strata_terrain",
+    "mapTo": "bne_cliff_strata_terrain",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_base.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_near.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_near_roughness.data.dds",
+        "baseColorFactor": [
+          1.3,
+          1.4,
+          1.5,
+          1
+        ],
+        "metallicFactor": 0,
+        "vertColor": true,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_ao.data.dds",
+        "roughnessFactor": 1,
+        "useAnisotropic": true,
+        "roughnessMapUseUV": 0,
+        "detailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/detail.data.dds",
+        "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/rock_grain.normal.dds",
+        "detailNormalMapStrength": 0.3,
+        "detailScale": [
+          76.2,
+          76.2
+        ],
+        "normalMapUseUV": 0
+      },
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true,
+        "metallicFactor": 0,
+        "roughnessFactor": 0.94,
+        "opacityFactor": 1,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/terrain_rim.data.dds",
+        "opacityMapUseUV": 1
+      },
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false,
+    "activeLayers": 2
+  },
+  "bne_cliff_roadcut_terrain": {
+    "name": "bne_cliff_roadcut_terrain",
+    "mapTo": "bne_cliff_roadcut_terrain",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut_base.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut_near_roughness.data.dds",
+        "baseColorFactor": [
+          1.1,
+          1.1,
+          1.1,
+          1
+        ],
+        "metallicFactor": 0,
+        "vertColor": true,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut_ao.data.dds",
+        "roughnessFactor": 1,
+        "useAnisotropic": true,
+        "roughnessMapUseUV": 0,
+        "detailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/detail.data.dds",
+        "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/rock_grain.normal.dds",
+        "detailNormalMapStrength": 0.35,
+        "detailScale": [
+          76.2,
+          76.2
+        ],
+        "normalMapUseUV": 0,
+        "normalMapStrength": 0.48,
+        "ambientOcclusionMapUseUV": 0
+      },
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true,
+        "metallicFactor": 0,
+        "roughnessFactor": 0.94,
+        "opacityFactor": 1,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/terrain_rim.data.dds",
+        "opacityMapUseUV": 1
+      },
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false,
+    "activeLayers": 2
+  },
+  "bne_cliff_roadcut_arid_terrain": {
+    "name": "bne_cliff_roadcut_arid_terrain",
+    "mapTo": "bne_cliff_roadcut_arid_terrain",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near_base.color.dds",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "normalMapStrength": 0.32,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near_roughness.data.dds",
+        "roughnessMapUseUV": 0,
+        "normalMapUseUV": 0,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near_ao.data.dds",
+        "ambientOcclusionMapUseUV": 0,
+        "detailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/detail.data.dds",
+        "detailMapUseUV": 0,
+        "detailBaseColorMapStrength": 0.18,
+        "detailNormalMap": "/temp/beamngEarth/shapes/cliff_ground_v1/normal.dds",
+        "detailNormalMapStrength": 0.22,
+        "detailScale": [
+          30.48,
+          30.48
+        ],
+        "normalDetailMapUseUV": 0,
+        "ambientOcclusionDetailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/ao.data.dds",
+        "detailAoMapStrength": 0.22,
+        "roughnessDetailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/roughness.data.dds",
+        "detailRoughnessMapStrength": 0.06
+      },
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true,
+        "metallicFactor": 0,
+        "roughnessFactor": 0.94,
+        "opacityFactor": 1,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/terrain_rim.data.dds",
+        "opacityMapUseUV": 1
+      },
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false,
+    "activeLayers": 2
+  },
+  "bne_cliff_canyon_sat_terrain": {
+    "name": "bne_cliff_canyon_sat_terrain",
+    "mapTo": "bne_cliff_canyon_sat_terrain",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_near_base.color.dds",
+        "baseColorFactor": [
+          1.182453762295748,
+          1.3869361526467974,
+          1.604173021096044,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "normalMapStrength": 0.3,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_near.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_near_roughness.data.dds",
+        "roughnessMapUseUV": 0,
+        "normalMapUseUV": 0,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_source_ao.data.dds",
+        "ambientOcclusionMapUseUV": 0,
+        "detailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/detail.data.dds",
+        "detailMapUseUV": 0,
+        "detailBaseColorMapStrength": 0.18,
+        "detailNormalMap": "/temp/beamngEarth/shapes/cliff_ground_v1/normal.dds",
+        "detailNormalMapStrength": 0.22,
+        "detailScale": [
+          30.48,
+          60.96
+        ],
+        "normalDetailMapUseUV": 0,
+        "ambientOcclusionDetailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/ao.data.dds",
+        "detailAoMapStrength": 0.22,
+        "roughnessDetailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/roughness.data.dds",
+        "detailRoughnessMapStrength": 0.06
+      },
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true,
+        "metallicFactor": 0,
+        "roughnessFactor": 0.94,
+        "opacityFactor": 1,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/terrain_rim.data.dds",
+        "opacityMapUseUV": 1
+      },
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false,
+    "activeLayers": 2
+  },
+  "bne_far_cliff_arid_blend": {
+    "name": "bne_far_cliff_arid_blend",
+    "mapTo": "bne_far_cliff_arid_blend",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          2.0176708786838,
+          2.15338866265566,
+          2.2810844836358792,
+          1
+        ],
+        "detailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far_base.color.dds",
+        "detailMapUseUV": 0,
+        "detailScale": [
+          1,
+          1
+        ],
+        "detailBaseColorMapStrength": 0.65,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far.normal.dds",
+        "normalMapUseUV": 1,
+        "roughnessFactor": 1,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "normalMapStrength": 0.7,
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far_roughness.data.dds",
+        "roughnessMapUseUV": 1,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far_ao.data.dds",
+        "ambientOcclusionMapUseUV": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  }
+}

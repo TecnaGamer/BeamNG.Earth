@@ -908,4 +908,52 @@ do
   step(free, nil, 100)
 end
 
+-- A satellite color correction replaces the cliff mesh through the same
+-- hidden-import/crossover path, never changing the file of a live TSStatic.
+do
+  farfield.switchAnchor(70, false, { cx = 0, cy = 0 })
+  local first = tile(70, 1, 0, 8)
+  first.material = 'bngEarthFar_cliff_test'
+  first.texture = '/temp/beamngEarth/t/far_70_1_0_8.dds'
+  farfield.onTile(first); step()
+  farfield.onSwap(swap(70, 1, { first.key })); step(free, nil, 100)
+  local old = farfield._tile(first.key)
+  local revision = tile(70, 1, 0, 8)
+  revision.shape = '/temp/beamngEarth/t/far_70_1_0_8_r1.cdae'
+  revision.material = first.material
+  revision.texture = '/temp/beamngEarth/t/far_70_1_0_8_r1.dds'
+  local update = { anchorId = 70, key = first.key, texture = revision.texture, replacement = revision }
+  farfield.onRetex(update)
+  T.check(farfield._tile(first.key) == old, 'cliff refresh retains old instance before import')
+  T.check(farfield._pending(first.key).shape == revision.shape, 'cliff refresh queues distinct shape path')
+  step(free, nil, 100)
+  T.check(farfield._tile(first.key).shape == revision.shape, 'cliff refresh swaps loaded replacement')
+  T.check(old.doomed, 'cliff refresh retires old instance after replacement loads')
+  farfield.onRetex(update)
+  T.check(farfield._pending(first.key) == nil, 'duplicate cliff refresh cannot enqueue another shape')
+  local shown = farfield._tile(first.key)
+  local broken = tile(70, 1, 0, 8)
+  broken.shape = '/temp/beamngEarth/t/far_70_1_0_8_r2.cdae'
+  broken.material = first.material
+  broken.texture = '/temp/beamngEarth/t/far_70_1_0_8_r2.dds'
+  local exists = FS.fileExists
+  FS.fileExists = function(_, path) return path ~= broken.shape end
+  farfield.onRetex({ anchorId = 70, key = first.key, texture = broken.texture, replacement = broken })
+  step(free, nil, 100)
+  FS.fileExists = exists
+  T.check(farfield._tile(first.key) == shown and not shown.doomed,
+    'failed cliff color replacement keeps previous surface visible')
+  T.check(farfield._pending(first.key) == nil, 'failed cliff replacement does not block later swaps')
+  farfield.onTile(tile(70, 1, 1, 8, { state = 'prefetch' }))
+  local pending = farfield._pending('1_1_8')
+  pending.texture = '/temp/beamngEarth/t/far_70_1_1_8.dds'
+  local pre = tile(70, 1, 1, 8)
+  pre.shape = '/temp/beamngEarth/t/far_70_1_1_8_r1.cdae'
+  pre.texture = '/temp/beamngEarth/t/far_70_1_1_8_r1.dds'
+  farfield.onRetex({ anchorId = 70, key = pre.key, texture = pre.texture, replacement = pre })
+  step(free, nil, 100)
+  T.check(farfield._tile(pre.key) == nil and farfield._pending(pre.key).prefetch,
+    'cliff refresh cannot show a prefetched tile before its server swap')
+end
+
 T.done('test_farfield')

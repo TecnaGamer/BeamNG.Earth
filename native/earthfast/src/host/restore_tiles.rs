@@ -321,6 +321,7 @@ impl<'py> Restore<'_, 'py> {
                 )?;
             }
             kw.set_item("tile", &t.tile)?;
+            kw.set_item("cliff_colors", extra.call_method1("get", ("cliff_colors", false))?)?;
             kw.set_item("tex_px", px)?;
             kw.set_item("shape", shape)?;
             kw.set_item(
