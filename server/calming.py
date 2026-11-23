@@ -21,7 +21,8 @@ Drivability (tools/drivefeat_ride.py, the IRI golden car): hump, table and cushi
 20 mph (0.57).
   dip      a drainage dip: -0.06 m, ramp 2.0
   mini_bumps 0.03 m bump; yes (unspecified): a hump
-The Netherlands and Belgium build taller (CROW plateaus and drempels ~0.10-0.12 m): hump / table / bump x 4/3.
+The Netherlands and Belgium build taller (CROW plateaus and drempels ~0.10-0.12 m): hump / table x 4/3.
+Two features reaching one spot (one hump mapped twice) take the higher, never the sum (drivefeat.rs).
 A mapped height (height=*, "0.1", "10 cm", "4 in") is taken within 0.02-0.15 m. chicane, choker, island,
 rumble_strip, painted_table: no height here (their kerbs / paint: roads' build-outs and markings).
 
@@ -58,7 +59,7 @@ FORD_DIP_M, FORD_RAMP_M, FORD_TOP_M, FORD_TOP_MAX_M = 0.30, 4.0, 4.0, 30.0
 FORD_WATER_M = 0.22
 FORDS = ("yes", "boat")
 TALL = {"NL": 4.0 / 3.0, "BE": 4.0 / 3.0}
-TALL_KINDS = ("hump", "table", "bump", "yes")
+TALL_KINDS = ("hump", "table", "yes")     # (a bump stays: taller, it would lift a wheel at the 15 mph it is for)
 H_MIN, H_MAX = 0.02, 0.15
 
 

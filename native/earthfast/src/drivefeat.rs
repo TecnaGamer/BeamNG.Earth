@@ -176,13 +176,16 @@ pub fn apply(xy: &[[f64; 2]], z: &[f64], bank: &[f64], widen: &[f64], feats: &[F
         }
         seg_of.push(seg);
     }
-    // the features' offsets (each station takes the sum of the features reaching it: two close bumps add)
+    // the features' offsets: where several reach a station, the highest rise and the deepest dip (not their sum: one
+    // hump mapped twice, on a node of each of two ways or as two close nodes, is one hump, not a double one)
     for (i, &(at, _)) in merged.iter().enumerate() {
-        let mut dz = 0.0;
+        let (mut up, mut down) = (0.0f64, 0.0f64);
         for &(c, k) in &on {
-            dz += profile(&feats[k], at - c);
+            let d = profile(&feats[k], at - c);
+            up = up.max(d);
+            down = down.min(d);
         }
-        oz[i] += dz;
+        oz[i] += up + down;
     }
     // each new segment's source segment: the one its first station lies in
     let segs: Vec<usize> = (0..merged.len().saturating_sub(1)).map(|i| seg_of[i]).collect();
@@ -609,6 +612,16 @@ mod tests {
         let disc = marks(&lines, &[3.0], &[0], &[1], &[[10.0, 1.0, 2.0, 1.5, 0.0, 0.0]], 1.5, false, 16);
         assert_eq!(disc.len(), 1);
         assert_eq!(disc[0].len(), 16);
+    }
+
+    #[test]
+    fn twice_mapped_is_one_hump() {
+        let (xy, z) = line(11, 2.0);
+        let f = Feature { x: 10.0, y: 0.0, height: 0.075, ramp: 1.85, top: 0.0 };
+        let g = Feature { x: 10.4, ..f };
+        let (oxy, oz, ..) = apply(&xy, &z, &[], &[], &[f, g], 1.5, 0.25);
+        let top = oxy.iter().zip(&oz).map(|(p, h)| h - 0.01 * p[0]).fold(0.0f64, f64::max);
+        assert!(top <= 0.075 + 1e-9, "{top}");
     }
 
     #[test]
