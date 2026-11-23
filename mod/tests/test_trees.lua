@@ -1140,7 +1140,16 @@ do
   for _, v in ipairs(trees.CATALOG.mediterranean) do if v[1]:find('holm_oak_city', 1, true) then inForest = inForest + 1 end end
   -- (offline the game's files are not there: setup drops the copies it could not write, else both stand in the open)
   T.check((inOpen == 2 or inOpen == 0) and inForest == 0, 'the copies in the open twin only, or none when not written')
-  T.check(#trees.SHAPE_COPIES == 3 and trees.SHAPE_COPIES[1].out:find('^/temp/beamngEarth/shapes/') ~= nil,
+  -- (the olive's copy replaces the stock olive in every group, or offline the stock one is back: never both)
+  local copyN, stockN = 0, 0
+  for _, list in pairs(trees.CATALOG) do
+    for _, v in ipairs(list) do
+      if v[1]:find('olive_v1', 1, true) then copyN = copyN + 1 end
+      if v[1]:find('trees_italy/olive', 1, true) then stockN = stockN + 1 end
+    end
+  end
+  T.check((copyN == 0) ~= (stockN == 0), 'the olive: its copy or the stock one, not both')
+  T.check(#trees.SHAPE_COPIES == 4 and trees.SHAPE_COPIES[1].out:find('^/temp/beamngEarth/shapes/') ~= nil,
     'the copies in the user folder')
   -- the fluffy bush's copy: its material renamed, its colour factor the stock one times the tint (in the definition:
   -- the far imposter bakes darker, no reload)

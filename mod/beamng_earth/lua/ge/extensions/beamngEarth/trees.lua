@@ -856,8 +856,22 @@ M.SHAPE_COPIES = {
     group = 'mediterranean_open', matfile = ITM, mats = M.HOLM_OAK_MATS },
   { stock = IT .. 'trees/trees_italy/fluffy_bush', out = COPY .. 'fluffy_bush_v1', h = 2.47, group = 'maquis',
     matfile = ITM, mats = { fluffy = 'bne_fluffy_v1' }, tint = { bne_fluffy_v1 = { 0.74, 0.8, 0.62 } } },
+  -- (replace: the copy stands for the stock shape in every group) Italy's olive: a silvery grey-green (~0.44 0.50
+  -- 0.31), right near, but its far imposter has no shade of its own crown and shone off the hills (the user,
+  -- 2026-11-23): its leaves a little darker, its distant LOD's more
+  { stock = IT .. 'trees/trees_italy/olive', out = COPY .. 'olive_v1', replace = true, matfile = ITM,
+    mats = { olive = 'bne_olive_v1', m_olive_distant = 'bne_olive_distant_v1' },
+    tint = { bne_olive_v1 = { 0.85, 0.87, 0.8 }, bne_olive_distant_v1 = { 0.78, 0.8, 0.72 } } },
 }
-for _, o in ipairs(M.SHAPE_COPIES) do table.insert(M.CATALOG[o.group], { o.out, o.h }) end
+-- the copies into the catalog: a new shape into its group, a replacing one in place of its stock shape everywhere
+local function swapShape(from, to)
+  for _, list in pairs(M.CATALOG) do
+    for _, v in ipairs(list) do if v[1] == from then v[1] = to end end
+  end
+end
+for _, o in ipairs(M.SHAPE_COPIES) do
+  if o.replace then swapShape(o.stock, o.out) else table.insert(M.CATALOG[o.group], { o.out, o.h }) end
+end
 M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n
 for _, g in ipairs({ 'straw_n', 'straw_s', 'silage_n', 'silage_s' }) do M.GROUP_MAX_M[g] = 400; M.ONE_SPELLING[g] = true end
 -- The months (1-12) a group shows in (server vegetation.bale_items: the bales after the harvest; the south's six months
@@ -1218,6 +1232,7 @@ local function copyShape(o)
   return FS:fileExists(dae)
 end
 local function dropCopy(o)
+  if o.replace then swapShape(o.out, o.stock); return end     -- (the stock shape back)
   local out = {}
   for _, v in ipairs(M.CATALOG[o.group]) do if v[1] ~= o.out then out[#out + 1] = v end end
   M.CATALOG[o.group] = out
