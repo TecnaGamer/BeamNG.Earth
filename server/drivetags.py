@@ -180,10 +180,15 @@ def join(t, feats, key):
             feats.attrs["osm_surface_map"] = (np.full(len(feats), None, object) if raw is None
                                               else np.asarray(raw, object).copy())
         sf = np.asarray(feats.attrs["osm_surface_map"], object).copy()
+        # (the surface's source kept apart, the evidence model's ranks: mapped "S1", derived from the tracktype "S3")
+        src = np.array([None if v is None or v == "" or (isinstance(v, float) and v != v) else "S1:surface"
+                        for v in sf.tolist()], object)
         for i, g in enumerate(cols["tracktype"].tolist()):
-            if g in TRACKTYPE_SURFACE and (sf[i] is None or sf[i] == "" or (isinstance(sf[i], float) and sf[i] != sf[i])):
+            if g in TRACKTYPE_SURFACE and src[i] is None:
                 sf[i] = TRACKTYPE_SURFACE[g]
+                src[i] = "S3:tracktype"
         feats.attrs["osm_surface"] = sf
+        feats.attrs["surface_src"] = src
         for memo in ("_map_surface_values", "_road_specs"):
             feats.__dict__.pop(memo, None)
     return True

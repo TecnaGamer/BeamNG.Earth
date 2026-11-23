@@ -256,19 +256,19 @@ CLASS_GAIN = {"track": 1.0, "path": 1.0, "unclassified": 0.8, "service": 0.7, "r
 DEFAULT_GAIN = 0.7
 
 
-def rough_gain(feats, i):
-    """grading.dirt_bumps' gain of road feature i (an unpaved road's: dirt_bumps leaves built roads alone): its mapped
-    smoothness, else tracktype (SMOOTH_GAIN / TRACK_GAIN), else its surface value's (SURFACE_GAIN), else its class's
-    (CLASS_GAIN, DEFAULT_GAIN); None with BNE_UNPAVED off (the road as BNE_DIRT_BUMP has it)."""
-    if not UNPAVED:
-        return None
-    for col, table in (("osm_smoothness", SMOOTH_GAIN), ("osm_tracktype", TRACK_GAIN)):
+def rough_resolve(feats, i):
+    """(gain, source rank, confidence) of an unpaved road feature i's roughness, the evidence model's ladder
+    (~/bnge-tests/adaptiveplan/PLAN.md 2.1; mapped and inferred kept apart): "S1:smoothness" / "S1:tracktype" /
+    "S1:surface" (mapped, confidence 3), "S4:class" (a prior by class, 1), "S5:default" (0). The surface's own source
+    (OSM mapped, or filled from the tracktype: drivetags.join's surface_src "S3:tracktype") counts as it is."""
+    for col, table, rank in (("osm_smoothness", SMOOTH_GAIN, "S1:smoothness"),
+                             ("osm_tracktype", TRACK_GAIN, "S1:tracktype")):
         v = feats.attrs.get(col)
         if v is None:
             continue
         g = table.get(str(v[i]).strip().lower()) if v[i] is not None else None
         if g is not None:
-            return g
+            return g, rank, 3
     try:
         import roads as roadsmod
         sv = roadsmod._map_surface_values(feats)[i]
@@ -276,9 +276,22 @@ def rough_gain(feats, i):
     except Exception:
         g = None
     if g is not None:
-        return g
+        src = feats.attrs.get("surface_src")
+        rank = str(src[i]) if src is not None and src[i] else "S1:surface"
+        return g, rank, 2 if rank.startswith("S3") else 3
     cls = feats.attrs.get("class")
-    return CLASS_GAIN.get(str(cls[i]) if cls is not None else "", DEFAULT_GAIN)
+    c = str(cls[i]) if cls is not None else ""
+    if c in CLASS_GAIN:
+        return CLASS_GAIN[c], "S4:class", 1
+    return DEFAULT_GAIN, "S5:default", 0
+
+
+def rough_gain(feats, i):
+    """grading.dirt_bumps' gain of road feature i (an unpaved road's: dirt_bumps leaves built roads alone):
+    rough_resolve's; None with BNE_UNPAVED off (the road as BNE_DIRT_BUMP has it)."""
+    if not UNPAVED:
+        return None
+    return rough_resolve(feats, i)[0]
 
 
 # --- BNE_UNPAVED: the fords' water (the sea message's River pieces: earthd's river plan) ------------------------------

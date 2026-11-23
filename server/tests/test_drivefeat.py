@@ -150,6 +150,9 @@ class UnpavedTest(unittest.TestCase):
             self.assertEqual(drivefeat.rough_gain(F, 2), drivefeat.SMOOTH_GAIN["horrible"])   # (smoothness first)
         with mock.patch.object(drivefeat, "UNPAVED", False):
             self.assertIsNone(drivefeat.rough_gain(F, 0))
+        self.assertEqual(drivefeat.rough_resolve(F, 0)[1:], ("S1:tracktype", 3))
+        self.assertEqual(drivefeat.rough_resolve(F, 2)[1:], ("S1:smoothness", 3))
+        self.assertEqual(drivefeat.rough_resolve(F, 1)[1:], ("S5:default", 0))      # (missing: unknown, a default)
 
     def test_dirt_bumps_scale(self):
         import grading
