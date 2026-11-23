@@ -4160,7 +4160,10 @@ M.onUiChangedState = onUiChangedState
 M.onClientStartMission = onClientStartMission
 M.onClientPreStartMission = onClientPreStartMission
 M.onNavgraphReloaded = function() navgraph.onReloaded() end
-M.onVehicleMapmgrUpdate = function(id) gps.onVehicleMapmgrUpdate(id) end
+M.onVehicleMapmgrUpdate = function(id)
+  gps.onVehicleMapmgrUpdate(id)
+  if st.inOurLevel then navgraph.onVehicleMapmgrUpdate(id) end
+end
 M.onAiRouteDone = function(id) gps.onAiRouteDone(id) end
 M.onVehicleSwitched = function(oldId, newId, player)
   if st.inOurLevel then navgraph.onVehicleSwitched(oldId, newId, player) end
@@ -4168,6 +4171,12 @@ end
 -- (vehicles spawned / removed, traffic's pooled ones shown / hidden: a slow frame's context in the anonymous summary;
 -- GitHub #594, freezes as traffic despawns)
 M.onVehicleSpawned = function() M._psum.mod.note('spawn') end
+M.onTrafficVehicleAdded = function(id)
+  if st.inOurLevel then navgraph.onTrafficVehicleAdded(id) end
+end
+M.onTrafficVehicleRemoved = function(id)
+  if st.inOurLevel then navgraph.onTrafficVehicleRemoved(id) end
+end
 M.onVehicleDestroyed = function() M._psum.mod.note('despawn') end
 M.onVehicleActiveChanged = function(_, active) M._psum.mod.note(active and 'spawn' or 'despawn') end
 M.onClientEndMission = onClientEndMission

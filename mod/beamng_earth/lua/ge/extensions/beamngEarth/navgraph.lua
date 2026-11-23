@@ -145,7 +145,23 @@ local pendingSignals = nil -- the clipped nodes whose signals go in next frame
 local started = false
 local respawnAll = false
 local lastGuard = -math.huge
-local cuts = {}         -- { x, y } of the applied graph's nodes that lost a road to the clip
+local cuts = {}         -- { x, y, id } of the applied graph's nodes that lost a road to the clip
+local stoppedAtCuts = {}
+
+function M.onTrafficCutStop(id, cut, x, y, z)
+  stoppedAtCuts[id] = type(cut)=='string' and cut~='' and type(x)=='number' and type(y)=='number'
+    and type(z)=='number' and {cut,x,y,z} or nil
+end
+
+local function reportedCutStop(id, p)
+  local r=stoppedAtCuts[id]
+  if not r then return false end
+  if (p.x-r[2])^2+(p.y-r[3])^2+(p.z-r[4])^2<=4 then
+    for _,c in ipairs(cuts)do if c[3]==r[1]then return true end end
+  end
+  stoppedAtCuts[id]=nil -- a relocated car or a changed graph cannot inherit the old hold
+  return false
+end
 
 -- Pure: point inside box {x0, y0, x1, y1} shrunk by m (no box: anywhere).
 function M.inside(b, x, y, m)
@@ -295,7 +311,7 @@ end
 
 -- Pure-ish (needs vec3): the stock map's node table of graph g clipped to box b: {name = {pos, radius,
 -- links = {other = edge}}}, every edge shared by both ends (double-sided) with in/out nodes, positions and radii.
--- Returns nodes, node count, edge count and the cuts: { x, y } of each kept node with a road to a node left out.
+-- Returns nodes, node count, edge count and the cuts: { x, y, id } of each kept node with a road to a node left out.
 function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
   local nodes, nn, ne = {}, 0, 0
   local keep = {}
@@ -334,6 +350,12 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
     return t
   end
   local cut, cutList = {}, {}
+  for _, name in ipairs(g.cuts or {}) do
+    if phys[name] and not cut[name] then
+      cut[name] = true
+      cutList[#cutList + 1] = { keep[name][1], keep[name][2], name }
+    end
+  end
   for _, e in ipairs(g.edges) do
     step()
     local a, bb = e[1], e[2]
@@ -341,7 +363,7 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
       local k = pair[1]
       if phys[k] and not phys[pair[2]] and g.nodes[pair[2]] and not cut[k] then
         cut[k] = true
-        cutList[#cutList + 1] = { keep[k][1], keep[k][2] }
+        cutList[#cutList + 1] = { keep[k][1], keep[k][2], k }
       end
     end
     if keep[a] and keep[bb] and a ~= bb and not M.tooSteep(keep[a], keep[bb]) then
@@ -436,6 +458,7 @@ function M.onMessage(msg, currentAnchor)
   local ok, g = pcall(jsonDecode, readFile(msg.path) or '')
   if not ok or type(g) ~= 'table' or type(g.nodes) ~= 'table' or type(g.edges) ~= 'table' then return false end
   graph = { anchor = msg.anchorId, serial = msg.serial, nodes = g.nodes, edges = g.edges,
+            cuts = type(g.cuts) == 'table' and g.cuts or {},
             signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil,
             lines = type(g.lines) == 'table' and g.lines or nil,      -- (tunnel stretches: the minimap's, minimaproads)
             trafficProfile = type(g.trafficProfile) == 'table' and g.trafficProfile or nil,  -- (M.ADAPTIVE)
@@ -603,7 +626,12 @@ local function apply(b, pre, moved)
   local tA = wall()
   if keep then pcall(gps.afterGraph, keep, m.nodes, moved) end    -- before the vehicles' new map
   stats.gpsMs = stats.gpsMs + (wall() - tA)
-  be:queueAllObjectLua('mapmgr.requestMap()')
+  -- Pool vehicles can fetch the latest map before their queued GE acknowledgement runs.
+  -- Publish its boundaries alongside the map mailbox, so setMap can protect its first plan.
+  local cutIds = {}
+  for _, c in ipairs(cl) do cutIds[#cutIds + 1] = c[3] end
+  be:sendToMailbox('beamngEarthTrafficCuts', lpack.encode(cutIds))
+  be:queueAllObjectLua(M.trafficBoundaryCommand() .. '; mapmgr.requestMap()')
   -- the minimap (the navigation app, in 0.40's freeroam layout and ours) indexes the map's roads once and keeps them:
   -- it showed the first graph's streets, or none, as the player drove on (the user, 2026-10-22)
   local mr = rawget(_G, 'ui_apps_minimap_roads')
@@ -695,6 +723,14 @@ local function trafficSystem()
 end
 
 local function playerId() return be and be.getPlayerVehicleID and be:getPlayerVehicleID(0) or -1 end
+
+-- Stock may still have a boost queued for the previous spawn. Only our
+-- execution-time clearance check may launch a car after we relocate it.
+local function discardSpawnBoost(traffic)
+  if type(traffic) == 'table' and type(traffic.respawnSpeed) == 'number' and traffic.respawnSpeed > 0 then
+    traffic.respawnSpeed = nil
+  end
+end
 
 -- Pure: where a respawned car goes, (x, y, dirX, dirY, min m, max m) for gameplay_traffic.forceTeleport, or nil for
 -- behind the camera: ahead of a player at (px, py) moving (vx, vy) m/s faster than AHEAD_MS, AHEAD_M along the way but
@@ -800,6 +836,7 @@ local function guard(b, all, lag)
     -- The full traffic table also contains player vehicles and may still contain an AI car just entered by a player.
     if localplayers.controlled(id, o, controlled) or (type(traffic) == 'table' and traffic.isAi == false) then
       stillSince[id], seenAt[id], lastTeleport[id] = nil, nil, nil
+      stoppedAtCuts[id] = nil
     else
       if o and o:getActive() then
         local p = o:getPosition()
@@ -832,6 +869,7 @@ local function guard(b, all, lag)
           local facingCut = fl > 1e-6 and M.headingToCut(p.x, p.y, f.x / fl, f.y / fl, cuts, M.CUT_NEAR_M) or false
           atCut = M.cutStopped(sp, fwd, roadDot, r and r.oneWay or nil, facingCut)
         end
+        if not paused and sp<M.STUCK_MS and reportedCutStop(id,p) then atCut=true end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
           stillSince[id] = stillSince[id] or now
         else
@@ -844,13 +882,33 @@ local function guard(b, all, lag)
           if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1
           elseif atCut then stats.cutStopRespawns = (stats.cutStopRespawns or 0) + 1 end
           stillSince[id] = nil
+          stoppedAtCuts[id] = nil
           lastTeleport[id] = now
           -- behind the camera: the stock default is 100-500 m in front of it, where the player sees the car
           -- pop in and its tyres smoke as it lands (the photo comparisons, 2026-10-14)
           local cp, cf = core_camera and core_camera.getPosition(), core_camera and core_camera.getForward()
           local pu = pv and pv:getVelocity()
           local ax, ay, adx, ady, amin, amax = nil
-          if pp and pu and not all then ax, ay, adx, ady, amin, amax = M.aheadSpot(pp.x, pp.y, pu.x, pu.y, b) end
+          if pp and pu and not all then
+            -- The next car starts at rest. Measure its ahead gap from the traffic already
+            -- in front, so recycling cannot insert it just ahead of a fast-moving queue.
+            local speed = math.sqrt(pu.x * pu.x + pu.y * pu.y)
+            local ux, uy, lead = pu.x / math.max(speed, 1e-6), pu.y / math.max(speed, 1e-6), 0
+            if speed >= M.AHEAD_MS then
+              for otherId in pairs(gt.getTrafficData() or {}) do
+                local other = otherId ~= id and otherId ~= me and getObjectByID(otherId) or nil
+                if other and other:getActive() then
+                  local q = other:getPosition()
+                  local dx, dy = q.x - pp.x, q.y - pp.y
+                  if math.abs(q.z - pp.z) < 5 and math.abs(dx * uy - dy * ux) < 6 then
+                    local ahead = dx * ux + dy * uy
+                    if ahead <= M.AHEAD_M[2] then lead = math.max(lead, ahead) end
+                  end
+                end
+              end
+            end
+            ax, ay, adx, ady, amin, amax = M.aheadSpot(pp.x + ux * lead, pp.y + uy * lead, pu.x, pu.y, b)
+          end
           local ox, oy, odx, ody
           if ax and M.ONCOMING then
             oncomingTurn = not oncomingTurn
@@ -871,6 +929,7 @@ local function guard(b, all, lag)
           else
             pcall(gt.forceTeleport, id)
           end
+          discardSpawnBoost(traffic)
         end
       else
         stillSince[id] = nil
@@ -894,6 +953,8 @@ local function scatterTraffic(gt, b)
     end
   end
   pcall(gt.forceTeleportAll, eligibleTraffic)
+  local data = gt.getTrafficData and gt.getTrafficData() or {}
+  for _, id in ipairs(eligibleTraffic) do discardSpawnBoost(data[id]) end
 end
 
 -- Stock can keep a traffic car in its AI pool after somebody enters it. In particular, setActiveAmount(0) would
@@ -1233,6 +1294,7 @@ function M.transform(xf, anchorId)
     end
   end
   graph = { anchor = anchorId, serial = graph.serial, nodes = nodes, edges = graph.edges, signals = graph.signals,
+            cuts = graph.cuts,
             rules = graph.rules, lines = lines, trafficProfile = graph.trafficProfile, mph = graph.mph, moved = true }
   dirty, urgent = true, true
   if applied then applied.box = nil end
@@ -1242,6 +1304,40 @@ end
 function M.currentGraph() return graph end      -- (tests)
 function M._startTraffic() return startTraffic() end    -- (tests: the level start's traffic, by hand)
 function M._cuts() return cuts end      -- (probes: the clip's cut nodes)
+
+-- The mailbox is published once per graph; every vehicle compiles the same small
+-- command, independent of the number of cuts. Activation can precede ai.setMode.
+local boundaryCommand = 'if not beamngEarth_trafficBoundary then extensions.load("beamngEarth_trafficBoundary") end; '
+  .. 'local data=obj:getLastMailbox("beamngEarthTrafficCuts"); '
+  .. 'if data and data~="" then beamngEarth_trafficBoundary.setCuts(lpack.decode(data)) end'
+local activeBoundaryCommand = 'if ai.mode=="traffic" then ' .. boundaryCommand .. ' end'
+function M.trafficBoundaryCommand(activating)
+  return activating and boundaryCommand or activeBoundaryCommand
+end
+
+function M.onTrafficVehicleAdded(id)
+  if not graph or not applied then return end
+  local vehicle = getObjectByID(id)
+  -- Stock also registers the player with ignoreAi=true; it is not a traffic car.
+  -- Install before activation, including dormant pool members, so their first
+  -- map and plan are protected even if the GE acknowledgement arrives later.
+  if vehicle and vehicle.isTraffic == 'true' and not vehicle:isPlayerControlled() then
+    vehicle:queueLuaCommand(M.trafficBoundaryCommand(true))
+  end
+end
+
+function M.onTrafficVehicleRemoved(id)
+  local vehicle = getObjectByID(id)
+  if vehicle then
+    vehicle:queueLuaCommand('if beamngEarth_trafficBoundary then extensions.unload("beamngEarth_trafficBoundary") end')
+  end
+end
+
+function M.onVehicleMapmgrUpdate(id)
+  if not graph or not applied then return end
+  local vehicle = getObjectByID(id)
+  if vehicle then vehicle:queueLuaCommand(M.trafficBoundaryCommand()) end
+end
 
 function M.onTeleport()
   respawnAll = true
@@ -1305,16 +1401,25 @@ end
 
 -- Pure (PR #728, ProxyFirewall202): the vehicle Lua that pushes a car standing (or slower than target - 1 m/s) on to
 -- target m/s along its heading (thrusters.applyVelocity) and spins its wheels to match (beamngEarth_spawnMotion), or nil.
-function M.spawnVelocityCommand(target)
+function M.spawnVelocityCommand(target, request)
   target = tonumber(target)
   if not target or target ~= target or target <= 1 or target == math.huge or target > 80 then return nil end
   local threshold = math.max(0, target - 1)
-  return string.format('local _d=obj:getDirectionVector(); local _v=obj:getVelocity(); local _f=_v:dot(_d); '
+  local body = string.format('local _d=obj:getDirectionVector(); local _v=obj:getVelocity(); local _f=_v:dot(_d); '
+    .. 'if _f>=%.3f then _reason="at-speed" end; '
     .. 'if _f>=-1 and _f<%.3f and thrusters and type(thrusters.applyVelocity)=="function" then '
-    .. 'local _ok=pcall(thrusters.applyVelocity,_d*%.3f); if _ok then pcall(function() '
     .. 'if not beamngEarth_spawnMotion then extensions.load("beamngEarth_spawnMotion") end; '
+    .. 'local _clearOk,_clear,_why=pcall(function() return beamngEarth_spawnMotion.canLaunch(%.3f) end); '
+    .. 'if not (_clearOk and _clear) then _reason=_why or "unsafe"; return end; '
+    .. 'local _ok=pcall(thrusters.applyVelocity,_d*%.3f); if _ok then _applied=true; _reason="launched"; pcall(function() '
     .. 'if beamngEarth_spawnMotion then beamngEarth_spawnMotion.applyRollingSpeed(%.3f) end end) end end',
-    threshold, target, target)
+    threshold, threshold, target, target, target)
+  local prefix='local _applied,_reason=false,"not-ready"; '
+  if not request then return prefix .. body end
+  return prefix .. 'local _ok=pcall(function() ' .. body .. ' end); '
+    .. 'obj:queueGameEngineLua(string.format(' .. string.format('%q',
+      "require('beamngEarth/navgraph').onSpawnLaunch(%d," .. tostring(request) .. ",%s,%q)")
+    .. ',obj:getId(),tostring(_applied),_ok and _reason or "error"))'
 end
 
 -- Pure: the speed (m/s) a respawned car is launched at on an edge with this limit (m/s), its heading's cosine with the
@@ -1328,7 +1433,57 @@ function M.launchSpeed(limit, cosine, oneWay, nearJunction)
   return math.min(v, 80)
 end
 
+-- Stock queues its own unconditional impulse during the traffic tick, before
+-- our delayed launch. Use just the launch that checks live vehicle clearance.
+local stockTicks = {}
+local function releaseStockTick(id)
+  local w = stockTicks[id]
+  if not w then return end
+  w.active = false
+  if w.traffic.onTrafficTick == w.wrapper then w.traffic.onTrafficTick = w.original end
+  stockTicks[id] = nil
+end
+local function syncStockTicks()
+  local gt = gameplay_traffic
+  local data = gt and gt.getTrafficData and gt.getTrafficData() or {}
+  local enabled = M.enabled and M.LAUNCH and applied and graph
+  for id, w in pairs(stockTicks) do
+    if not enabled or data[id] ~= w.traffic or w.traffic.onTrafficTick ~= w.wrapper then releaseStockTick(id) end
+  end
+  if not enabled then return end
+  localplayers.snapshot(controlled)
+  for id, traffic in pairs(data) do
+    if type(traffic) == 'table' and type(traffic.onTrafficTick) == 'function' and not stockTicks[id] then
+      local w = { id = id, traffic = traffic, original = traffic.onTrafficTick, active = true }
+      w.wrapper = function(self, ...)
+        if w.active and M.enabled and M.LAUNCH and applied and graph and self.isAi ~= false
+          and not localplayers.controlled(w.id, getObjectByID(w.id), controlled) then discardSpawnBoost(self) end
+        return w.original(self, ...)
+      end
+      traffic.onTrafficTick, stockTicks[id] = w.wrapper, w
+    end
+  end
+end
+
 local launchCount, launchWait, lastLaunchScan = {}, {}, -math.huge
+local launchRequest = 0
+local function skippedLaunch(reason)
+  stats.launchSkipped = (stats.launchSkipped or 0) + 1
+  stats.launchSkipReasons = stats.launchSkipReasons or {}
+  stats.launchSkipReasons[reason] = (stats.launchSkipReasons[reason] or 0) + 1
+end
+function M.onSpawnLaunch(id, request, launched, reason)
+  local w = launchWait[id]
+  if not w or w.request ~= request then return end
+  w.inFlight = false
+  if launched then
+    stats.launches = (stats.launches or 0) + 1
+    launchWait[id] = nil
+  else
+    skippedLaunch(reason or 'unsafe')
+    if reason=='at-speed' or reason=='impact-detector' or reason=='multiple-clusters' then launchWait[id]=nil end
+  end
+end
 local junctionNodes, junctionOf = nil, nil   -- (the graph's nodes where 3+ roads meet: positions, per graph table)
 
 local function nearJunction(x, y, radius)
@@ -1348,7 +1503,7 @@ local function nearJunction(x, y, radius)
   return false
 end
 
-local function launch(id)
+local function launch(id, request)
   local o = getObjectByID(id)
   if not o or not o:getActive() or localplayers.controlled(id, o, controlled) then return end
   local m = map and map.getMap and map.getMap()
@@ -1364,23 +1519,26 @@ local function launch(id)
   local f = o:getDirectionVector()
   f.z = 0
   if d:length() < 0.1 or f:length() < 0.1 then return end
-  local v = M.launchSpeed(e.speedLimit, d:normalized():dot(f:normalized()), e.oneWay, nearJunction(p.x, p.y))
-  local cmd = v and M.spawnVelocityCommand(v)
+  local heading = f:normalized()
+  local v = M.launchSpeed(e.speedLimit, d:normalized():dot(heading), e.oneWay, nearJunction(p.x, p.y))
+  -- A boost must leave time to stop before the loaded road ends, even while the traffic guard waits.
+  if v and M.headingToCut(p.x, p.y, heading.x, heading.y, cuts, M.stopReach(v) + v) then return end
+  local cmd = v and M.spawnVelocityCommand(v, request)
   if cmd then
     o:queueLuaCommand(cmd)
-    stats.launches = (stats.launches or 0) + 1
+    stats.launchRequests = (stats.launchRequests or 0) + 1
+    return true
   end
 end
 
 -- Every LAUNCH_SCAN_S: the traffic cars whose respawn count went up are launched once placed (M.LAUNCH above).
 local function launchRespawned(now)
   local gt = gameplay_traffic
-  if not M.LAUNCH or not gt or not gt.getState or gt.getState() ~= 'on' or now - lastLaunchScan < M.LAUNCH_SCAN_S then
-    return
-  end
+  if now - lastLaunchScan < M.LAUNCH_SCAN_S then return end
   lastLaunchScan = now
+  syncStockTicks() -- shares the protected launch-scan cadence, including release when LAUNCH is switched off
+  if not M.LAUNCH or not gt or not gt.getState or gt.getState() ~= 'on' then return end
   if simTimeAuthority and simTimeAuthority.getPause and simTimeAuthority.getPause() then return end
-  localplayers.snapshot(controlled)
   local data = gt.getTrafficData() or {}
   for id, t in pairs(data) do
     if type(t) == 'table' and t.isAi ~= false then
@@ -1391,15 +1549,20 @@ local function launchRespawned(now)
       launchCount[id] = rc
       local w = launchWait[id]
       if w then
-        if t.state == 'fadeIn' or (t.state == 'active' and t.respawnActive ~= true) then
-          w.readyAt = w.readyAt or (now + M.LAUNCH_DELAY_S)
-          if now >= w.readyAt then
-            launchWait[id] = nil
-            local ok, err = pcall(launch, id)
-            if not ok then log('W', 'beamngEarth', 'navgraph launch: ' .. tostring(err)) end
-          end
-        elseif now >= w.expires then
+        if now >= w.expires then
           launchWait[id] = nil
+          stats.launchExpired = (stats.launchExpired or 0) + 1
+        elseif t.state == 'fadeIn' or (t.state == 'active' and t.respawnActive ~= true) then
+          w.readyAt = w.readyAt or (now + M.LAUNCH_DELAY_S)
+          if now >= w.readyAt and not w.inFlight then
+            launchRequest = launchRequest + 1
+            w.request, w.inFlight = launchRequest, true
+            local ok, sent = pcall(launch, id, w.request)
+            if not ok or not sent then
+              w.inFlight = false
+              skippedLaunch(ok and 'road-ineligible' or 'error')
+            end
+          end
         end
       end
     end
@@ -1428,7 +1591,10 @@ local function overtakeScan(now)
 end
 
 function M.update(aid, b, gov)
-  if not M.enabled or not graph then return end
+  if not M.enabled or not graph then
+    for id in pairs(stockTicks) do releaseStockTick(id) end
+    return
+  end
   local t0 = os.clock()
   do
     local ok, err = pcall(checkRegion, t0)
@@ -1533,13 +1699,18 @@ function M.status()
            nodes = stats.nodes, edges = stats.edges, junctions = stats.junctions, started = started,
            cuts = stats.cuts, cutRespawns = stats.cutRespawns, cutStopRespawns = stats.cutStopRespawns,
            aheadRespawns = stats.aheadRespawns,
-           launches = stats.launches, oncomingRespawns = stats.oncomingRespawns, overtake = overtake.status(),
+           launches = stats.launches, launchRequests = stats.launchRequests, launchSkipped = stats.launchSkipped,
+           launchSkipReasons = stats.launchSkipReasons, launchExpired = stats.launchExpired, oncomingRespawns = stats.oncomingRespawns, overtake = overtake.status(),
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
            traffic = gameplay_traffic and gameplay_traffic.getState() or nil, trafficAdaptive = M.trafficStatus() }
 end
 
 function M.reset()
+  for id in pairs(stockTicks) do releaseStockTick(id) end
+  if applied and be and be.queueAllObjectLua then
+    be:queueAllObjectLua('if beamngEarth_trafficBoundary then extensions.unload("beamngEarth_trafficBoundary") end')
+  end
   local gt = gameplay_traffic
   if gt and gt.getState and gt.getState() == 'on' and (heldActive or next(protectedTraffic)) then
     syncTrafficPool(gt)
@@ -1566,6 +1737,7 @@ function M.reset()
   seenAt = {}
   lastTeleport = {}
   cuts = {}
+  stoppedAtCuts = {}
   M.restoreChoice()
   stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
   prep, waited = nil, 0

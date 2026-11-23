@@ -4,6 +4,7 @@
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
+lpack = { encode = function(value) return value end }
 table.clear = table.clear or function(t) for k in pairs(t) do t[k] = nil end end
 
 local rawQuat = quat
@@ -59,7 +60,7 @@ core_multiseat = { getPlayers = function(result)
   for i, player in ipairs(roster) do result[i] = player end
   return result
 end }
-be = {}
+be = { sendToMailbox = function() end }
 function be:getPlayerVehicleID(player) return slots[player] or -1 end
 function be:getObjectCount()
   local n = 0
@@ -73,6 +74,8 @@ function be:getObject(i)
   end
 end
 function be:queueAllObjectLua() end
+function be:sendToMailbox() end
+lpack = { encode = function(value) return value end }
 function be:enterVehicle(player, o) slots[player] = o and o.id or nil end
 function getPlayerVehicle(player) return objects[slots[player or 0]] end
 function getObjectByID(id) return objects[id] end
@@ -195,6 +198,7 @@ T.check(activeAmount == 0 and not ai:getActive() and not ai2:getActive() and sec
 roster, slots[7] = { 0 }, ai.id
 local beforeAI = teleports[ai.id] or 0
 switched(second.id, ai.id, 7)
+data[ai.id].respawnSpeed, data[ai2.id].respawnSpeed = 8.333, 8.333
 T.check(ai:getActive() and pool.allVehs[ai.id] == nil and not data[ai.id].enableRespawn
   and data[ai.id].ignoreForceTeleport, 'joined AI removed from the hold and protected immediately')
 T.check((teleports[ai.id] or 0) == beforeAI, 'joining an inactive AI car does not trigger its deferred teleport')
@@ -204,6 +208,8 @@ T.check(activeAmount == 2 and ai:getActive() and (teleports[ai.id] or 0) == befo
   'restoring the pool does not move the second driver')
 T.check(bulk[ai2.id] and not bulk[ai.id] and not bulk[first.id], 'the all-forced path scatters only unoccupied AI')
 T.check((teleports[ai2.id] or 0) > 0, 'unoccupied AI is recycled after the new graph')
+T.check(data[ai2.id].respawnSpeed == nil, 'bulk recycling discards a pending stock launch for an unoccupied AI')
+T.check(data[ai.id].respawnSpeed == 8.333, 'bulk recycling does not change a local driver\'s pending state')
 
 roster, slots[7] = { 0, 7 }, second.id
 switched(ai.id, second.id, 7)
