@@ -146,10 +146,12 @@ local DEFAULT_LAT, DEFAULT_LON = 36.596718, -118.169991 -- Whitney Portal Road u
 local STUCK_S = 5
 local ERROR_HOLD_S = 10
 local ATTRIBUTION = 'Elevation: Mapterhorn (https://mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen'
--- shown once satellite-textured tiles arrive (docs/V1_3_SPEC.md C; EOX's required wording)
+-- shown once satellite-textured tiles arrive (docs/V1_3_SPEC.md C; EOX's required wording; the server's hello.attribution
+-- replaces it with the sources it uses. EOX's 2023 mosaic, CC BY-NC-SA, left the chain 2026-11-23)
 local IMAGERY_ATTRIBUTION = 'Imagery: USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain); '
+  .. 'Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0); '
   .. 'EOxCloudless https://cloudless.eox.at by '
-  .. 'EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2023 / 2016 & 2017; CC BY-NC-SA 4.0 / CC BY 4.0)'
+  .. 'EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016 & 2017; CC BY 4.0)'
 local FULL_ATTRIBUTION = IMAGERY_ATTRIBUTION .. '\n' .. ATTRIBUTION
 
 local st -- all runtime state, see resetState()

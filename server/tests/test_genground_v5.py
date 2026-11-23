@@ -185,7 +185,7 @@ class PendingFitTest(unittest.TestCase):
             def render(self, frame, x0, y0, size, px, pending=None):
                 if state["missing"] and pending is not None:
                     pending.add(TILE)
-                return np.full((px, px, 3), 120, np.uint8), {"eox2023": px * px}
+                return np.full((px, px, 3), 120, np.uint8), {"eox2016": px * px}
 
         key = gg.mapcells.cell_of(40.758, -73.985)
         now = [1000.0]

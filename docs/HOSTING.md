@@ -68,7 +68,7 @@ The main ideas:
 - **Static files only.** The CDN is a bucket of immutable files behind Cloudflare's cache. There is no application
   server in front of the data; the player's own BeamNG.Earth server reads the files.
 - **A fallback for everything.** If a file is missing, the CDN is down or a dataset is switched off, the client uses
-  the original open source (Sentinel-2 from EOX, Mapterhorn's tile endpoint, Overture's files, and so on).
+  the original open source (Sentinel-2 cloudless 2016 from EOX, Mapterhorn's tile endpoint, Overture's files, and so on).
 - **Builds run in public.** Most data is built by GitHub Actions in the public data repository, so anyone can read
   the exact code and inputs. In the aerial and BNWT workflows, the jobs that build run without secrets; only small,
   simple upload jobs hold the bucket token.
@@ -204,7 +204,9 @@ decision blocks (see below).
 
 - **What:** ESA WorldCover's 2021 Sentinel-2 composite (CC BY 4.0), tone-mapped into Web Mercator tiles: JPEG for
   zooms 3 to 12, WebP for 13 and 14 (zoom 14 only to 50 degrees latitude). The client uses them for the distant land,
-  ahead of USGS and EOX.
+  ahead of USGS and EOX, and (since 2026-11-23, "bngs2fine") enlarged for the nearer ground outside the US and the
+  regional services, the 3D map's globe and the world map; EOX's 2016 mosaic (CC BY 4.0) only at sea and as the
+  fallback. EOX's 2018+ mosaics are CC BY-NC-SA 4.0: nothing the project publishes may hold their pixels.
 - **Built by:** `tools/build_s2_packs.py`, run by the data repo's `tiles` workflow, one job per zoom-5 region. Zoom 13
   and up is resumable: a finished region leaves a marker under `s2wc/v1/_done/<zoom>/`.
 - **How often:** by hand. The source composite does not change.

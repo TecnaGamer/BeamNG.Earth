@@ -44,7 +44,7 @@ for a repeat hit.
 
 Per-source lifetimes (ROADMAP "Caching" 3): LIFETIMES maps a path prefix to the longest a file may be
 kept after its download (s); the start-up walk deletes older ones. Empty today: none of the current
-sources (USGS public domain, EOX CC BY / CC BY-NC-SA, Mapterhorn, AWS Terrain Tiles) limits caching
+sources (USGS public domain, EOX 2016 and the Sentinel-2 packs CC BY, Mapterhorn, AWS Terrain Tiles) limits caching
 time; the 404 markers' own expiry is netfetch's miss_ttl. Per-producer versions live in the paths
 (colormatch/v1/, imagery/usgs-ds1-<mode>/): a generator update writes a new directory and the old one
 is never read again, so it ages out through the LRU instead of being deleted at once (ROADMAP 5).
