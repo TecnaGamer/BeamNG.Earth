@@ -8508,6 +8508,7 @@ class TunnelProfiles(BridgeProfiles):
         self._pins = {}             # part id -> (start, end) geodetic floor heights of its ends inside the hill
                                     # (_chain_pins; NaN at a portal)
         self._subsea = set()        # part ids whose underwater profile was solved successfully
+        self._subsea_survey_portals = set()  # (part id, endpoint) moved by a surveyed wet profile
 
     def _raw_ground(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
@@ -9166,7 +9167,8 @@ class TunnelProfiles(BridgeProfiles):
                 "caps": mine(self.caps), "mouths": mine(self.mouths), "open": {o for o in self.open
                                                                                if o.split("#")[0] in pids},
                 "drowned": {k: v for k, v in self._drowned.items() if k in pids},
-                "subsea": self._subsea & pids}
+                "subsea": self._subsea & pids,
+                "subsea_survey_portals": {(pid, at) for pid, at in self._subsea_survey_portals if pid in pids}}
 
     def _adopt_take(self, extra):
         if not extra:
@@ -9176,6 +9178,7 @@ class TunnelProfiles(BridgeProfiles):
                 getattr(self, name).setdefault(k, v)
         self.open.update(extra["open"])
         self._subsea.update(extra.get("subsea", ()))
+        self._subsea_survey_portals.update(extra.get("subsea_survey_portals", ()))
         for k, v in extra["drowned"].items():
             self._drowned.setdefault(k, v)
 
@@ -13191,7 +13194,9 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     if tunnel_mesh is not None:     # roadmesh.tunnel: the tubes and portals (colliding)
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"tunnel_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh, close="under")
+        # A tube's open boundary can run along both portal arches and the floor.
+        # The generic bottom cap can span the driving space, so keep the authored mesh.
+        roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh, close=False)
         data["tunnel"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if guardrail_rows:              # mapped guard rails and the median barriers (guardrails / medians): Forest rows
         import guardrails

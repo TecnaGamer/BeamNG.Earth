@@ -175,7 +175,9 @@ def fit(roads, tunnels, cells, chunks, parts):
                 continue
             i, nx, nw = en["i0"], len(en["fx"]), len(WING_S)
             zf = float(z[en["at"]])
-            face = np.max([g[i + q * nx:i + (q + 1) * nx] for q in range(len(FACE_IN))], axis=0) - zf
+            sampled_face = g[i:i + len(FACE_IN) * nx].reshape(len(FACE_IN), nx) - zf
+            face = sampled_face.max(axis=0)
+            face_depth = np.asarray(FACE_IN)[sampled_face.argmax(axis=0)]
             # the hill's face over the axis: how far in the graded approach goes on before it (a hood reaches out of
             # the face to the mouth: Laerdal's stands ~5 m out of its slope)
             setback = 0.0
@@ -196,7 +198,7 @@ def fit(roads, tunnels, cells, chunks, parts):
             rise = float(g[i] - zf) - max(sides_h, 0.0)
             st = int(fast._ef.portal_style(c.get("cls") in MAJOR or bool(c.get("concrete")), th, rise, sides_h))
             r2 = lambda v: [round(float(x), 2) for x in v]      # noqa: E731
-            fits.append({"st": st, "fx": r2(en["fx"]), "fg": r2(face), "ws": list(WING_S),
+            fits.append({"st": st, "fx": r2(en["fx"]), "fg": r2(face), "fd": r2(face_depth), "ws": list(WING_S),
                          "wl": r2(wl) if en["wing_ok"][0] else None, "wr": r2(wr) if en["wing_ok"][1] else None,
                          "rz": r2(rz), "sl": round(en["sides"][0], 2), "sr": round(en["sides"][1], 2),
                          "sb": round(setback, 2) if st in (0, 2) else 0.0})
@@ -233,25 +235,68 @@ def setback(fitd, low=False):
     return 0.0 if low or fitd is None else float(fitd.get("sb") or 0.0)
 
 
-def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), low=False):
+def _rake_rock_face(mesh, p, ul, out, crown, fitd):
+    """Shape a tall backing into the surveyed cut while leaving the collar at its original plane."""
+    points, tris, uvs, codes = mesh
+    if not len(tris) or points[:, 2].max() < p[2] + crown + 1.5:
+        return mesh
+
+    # Split shared edges together. The face, its top and its returns must deform as one mesh.
+    for _ in range(2):
+        ends = np.sort(tris[:, [[0, 1], [1, 2], [2, 0]]], axis=2).reshape(-1, 2)
+        edges, inverse = np.unique(ends, axis=0, return_inverse=True)
+        d, e, f = (inverse.reshape(-1, 3) + len(points)).T
+        a, b, c = tris.T
+        points = np.r_[points, points[edges].mean(axis=1)]
+        uvs = np.r_[uvs, uvs[edges].mean(axis=1)]
+        tris = np.r_[np.c_[a, d, f], np.c_[d, b, e], np.c_[f, e, c], np.c_[d, e, f]]
+        codes = np.tile(codes, 4)
+
+    rel = points - p
+    across = dnp.matmul(rel[:, :2], ul)
+    along = dnp.matmul(rel[:, :2], out)
+    over = np.maximum(rel[:, 2] - crown - 0.25, 0.0)
+    support = np.interp(across, fitd["fx"], fitd.get("fd", [3.0] * len(fitd["fx"])))
+    # The upper rock leans back toward the ground sample. Shallow, staggered ledges
+    # break up the surface without moving its arch or pushing rock into the approach.
+    t = np.clip(over / 3.0, 0.0, 1.0)
+    ledges = 0.35 * dnp.sin(rel[:, 2] * 1.55 + across * 0.48) + 0.22 * dnp.sin(across * 1.8 - rel[:, 2] * 0.66)
+    drift = np.minimum(0.53 * over, 0.9 * support)
+    drift = np.clip(drift + t * ledges * np.minimum(1.0, 0.35 * support), 0.0, support)
+    drift *= np.clip(1.0 - np.maximum(along, 0.0) / 2.0, 0.0, 1.0)
+    points[:, :2] -= drift[:, None] * out
+    return points, tris, uvs, codes
+
+
+def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), low=False, *, collar=True):
     """The mouth's structure for roadmesh.tunnel: (positions (n, 3), triangles (m, 3), uvs (n, 2), codes (m,): 0 the
     structure, 1 soil). p: the mouth's floor centre in the mesh's coordinates; walls_near: (left, right) a cutting's
-    retaining wall already stands there (no wing wall on that side)."""
+    retaining wall already stands there (no wing wall on that side). With collar=False, fit a retaining face at the
+    opening of a tube whose collar is already modeled. Its top follows the cut up to 12 m above the vault."""
     fast.require(VERSION, "portal_mesh")
     st = _look(fitd, low)
     none = np.zeros(0)
     # a hood: its headwall back at the hill's face, the hood reaching out from there to the mouth
-    sb = setback(fitd, low)
+    sb = setback(fitd, low) if collar else 0.0
     p = np.asarray(p, np.float64) - np.r_[np.asarray(out, np.float64) * sb, 0.0]
     ws = np.asarray(fitd["ws"], np.float64) + sb
     wl = np.asarray(fitd["wl"], np.float64) if fitd.get("wl") is not None and not walls_near[0] else none
     wr = np.asarray(fitd["wr"], np.float64) if fitd.get("wr") is not None and not walls_near[1] else none
     pr = prm(st, th, hw, float(fitd["sl"]), float(fitd["sr"]), uv_m)
     pr[2] += sb
+    if not collar:
+        pr[2:4] = 0.0  # omit the native hood; the custom rim follows this same opening
+        pr[5] = 0.15   # keep the back face within the tube wall at a bend
+        terrain_top = np.asarray(fitd["fg"], np.float64)
+        if np.isfinite(terrain_top).any():
+            pr[9] = np.clip(np.max(terrain_top[np.isfinite(terrain_top)]) + pr[6] - th, pr[9], 12.0)
     pr = np.r_[pr, sb]          # (inner_from: the tube's own walls are the hood's inside up to the mouth)
-    return fast._ef.portal_mesh([float(v) for v in p], [float(v) for v in ul], [float(v) for v in out], pr,
+    mesh = fast._ef.portal_mesh([float(v) for v in p], [float(v) for v in ul], [float(v) for v in out], pr,
                                 np.ascontiguousarray(sec, np.float64), np.asarray(fitd["fx"], np.float64),
                                 np.asarray(fitd["fg"], np.float64), ws, wl, wr, np.asarray(fitd["rz"], np.float64))
+    if not collar:
+        return _rake_rock_face(mesh, p, ul, out, float(sec[:, 1].max()), fitd)
+    return mesh
 
 
 def cover(mid, left, z, ground, hw, th, caps, uv_m, soil_uv_m, sec=None):

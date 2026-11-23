@@ -83,6 +83,31 @@ class Entrance(unittest.TestCase):
         inside = ends & (np.abs(cen[:, 1]) < 4.0) & (cen[:, 2] > 0.2) & (cen[:, 2] < 4.0)
         self.assertFalse(inside.any(), "an end cap across the tube's opening")
 
+    def test_norway_portal_fills_the_hillside_gap_on_a_descending_bore(self):
+        ch = roads._chunk(roads.TUNNEL, 9.6, np.array([[0., 0., 0.], [12., 0., -0.72], [30., 0., -1.8]]))
+        ch.update(fixed=True, deck=True, tunnel=True, portal=[True, False], norway_portal_style=["arch", None],
+                  ground=[1., 1., 20.], fit=[{"st": 0, "sb": 3., "fx": [-9., -6., 0., 6., 9.],
+                                             "fg": [18., 17., 13.6, 9., 5.], "ws": [], "rz": [],
+                                             "sl": 3., "sr": 3.}, None])
+        points, triangles, _, materials, _ = roadmesh.tunnel([ch], np.zeros(3))
+        self.assertIn(roadmesh.TUNNEL_SOIL, materials, "cover continues over the exposed bore")
+        upper = points[points[:, 2] > 9.5]
+        self.assertGreater(np.ptp(upper[:, 0]), 1.0, "the rock rises back into the hillside")
+        a, b, c = points[triangles, 1:].transpose(1, 0, 2)
+        edge_a, edge_b = b - a, c - a
+        cross = lambda u, v: u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]
+        det = cross(edge_a, edge_b)
+
+        def intersects(y, z):
+            rel = [y, z] - a
+            with np.errstate(divide="ignore", invalid="ignore"):
+                u, v = cross(rel, edge_b) / det, cross(edge_a, rel) / det
+                return ((np.abs(det) > 1e-8) & (u >= 0.) & (v >= 0.) & (u + v <= 1.)).any()
+
+        self.assertTrue(intersects(0.35, 10.), "the headwall fills the gap above the crown")
+        for y in (-2.5, 0., 2.5):
+            self.assertFalse(intersects(y, 1.7), "the headwall and cover leave the driving lane open")
+
     def test_styles_from_the_ground(self):
         import fast
         fast.require(portals.VERSION, "portal_style")
@@ -92,6 +117,26 @@ class Entrance(unittest.TestCase):
         self.assertEqual(ef.portal_style(True, 6.8, 1.0, 0.0), 1)     # under flat ground: cut-and-cover
         self.assertEqual(ef.portal_style(True, 6.8, 10.0, 4.0), 0)    # out of a rock cut into a hill: still a hood
         self.assertEqual(ef.portal_style(True, 6.8, 10.0, 9.5), 1)    # out of a trough deeper than the opening
+
+
+class SurveyedApproach(unittest.TestCase):
+    def test_matching_road_descends_into_the_tunnel_on_a_shared_height(self):
+        import grading
+        import norway_tunnels
+
+        s = np.arange(0., 81., 2.)
+        xy = np.c_[-s, np.zeros(len(s))]
+        original = grading.Plan(xy, 6.7 - 0.06 * s, 5.0)
+        adjacent = grading.Plan(xy + [0., 4.], original.z.copy(), 5.0)
+        ends = {"trunk": [(np.zeros(2), np.array([1., 0.]), 0.85, 0.075)]}
+
+        plans = norway_tunnels.join_surveyed_approaches([("trunk", original), ("local", adjacent)], ends)
+        revised = plans[0][1].z
+        self.assertAlmostEqual(revised[0], 0.85)
+        self.assertTrue((np.diff(revised[:11]) > 0.).all(), "the final 20 m drops as the car approaches")
+        np.testing.assert_array_equal(revised[s >= 60.], original.z[s >= 60.])
+        self.assertAlmostEqual(original.z[0], 6.7, msg="cached road-stage plan remains intact")
+        self.assertIs(plans[1][1], adjacent)
 
 
 class Box(unittest.TestCase):

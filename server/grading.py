@@ -2459,8 +2459,11 @@ class _Planner:
         plans = list(plans)
         covers, opens = [], []
         if feats is not None and len(feats):
+            import norway_tunnels
             portals = {}
-            secs = self._tunnel_sections(feats, key, portals=portals)
+            surveyed_ends = {}
+            secs = self._tunnel_sections(feats, key, portals=portals, surveyed_ends=surveyed_ends)
+            plans = norway_tunnels.join_surveyed_approaches(plans, surveyed_ends)
             covered = {f.rsplit("#", 1)[0] for f, _s, _xy, _z, k in secs if k}
             for fid, spec, xy, z, k in secs:
                 if k == 0:
@@ -6214,12 +6217,13 @@ class _Planner:
         with holder.lock:
             return holder.__dict__.setdefault("_tunnel_cs", cs)
 
-    def _tunnel_sections(self, feats, key=None, road_plans=(), portals=None):
+    def _tunnel_sections(self, feats, key=None, road_plans=(), portals=None, surveyed_ends=None):
         """[(fid, spec, xy, z, kind)] of the tunnels' sections, as the tunnel networks have them (_tunnel_chains: the
         floor and the sections the road tiles draw and the terrain blocks cut their holes for): kind 0 an open road at
         z, 1 a low arch, 2 a full tunnel; z the plans' (the terrain's datum: the floor less ROAD_LIFT, which apply
         adds). portals ({(fid, an end's xy rounded): is a portal}): filled for the covered sections' ends
-        (_mouth_plans). A part left out by the networks (under water, GitHub #128) has none."""
+        (_mouth_plans). surveyed_ends receives the connected road pins lowered by a matched subsea survey.
+        A part left out by the networks (under water, GitHub #128) has none."""
         import geotiles
         import pools
         out = []
@@ -6250,6 +6254,7 @@ class _Planner:
                     subs = st._closed_of(whole) + st._open_of(whole)
                     with st.lock:
                         secs = list(st.sections.get(st._part_id(k), ()))
+                        lowered_pins = getattr(st, "_subsea_survey_portals", ()) if surveyed_ends is not None else ()
                 except pools.Abandoned:
                     raise
                 except Exception as e:      # (no plans for this tunnel rather than none for the cell)
@@ -6268,6 +6273,14 @@ class _Planner:
                     pxy = np.stack([np.asarray(e_, np.float64), np.asarray(n_, np.float64)], axis=1)
                     # (by the section's own id, the networks' fid.part#section: its mouths are the networks' too)
                     out.append((str(sub), ts[i], pxy, np.asarray(h, np.float64) - ROAD_LIFT, kind))
+                    if lowered_pins:
+                        for at, near, outer in ((0, 1, 0), (-1, -2, len(secs) - 1)):
+                            if n == outer and (st._part_id(k), at) in lowered_pins:
+                                d = pxy[near] - pxy[at]
+                                dist = float(dnp.hypot(*d))
+                                if dist > 0.05:
+                                    surveyed_ends.setdefault(fid, []).append(
+                                        (pxy[at], d / dist, h[at] - ROAD_LIFT, (h[at] - h[near]) / dist))
                     if kind and portals is not None:
                         for at, is_mouth in zip((0, -1), st.mouth(sub)):
                             portals[(str(sub), tuple(np.round(pxy[at], 3)))] = bool(is_mouth)

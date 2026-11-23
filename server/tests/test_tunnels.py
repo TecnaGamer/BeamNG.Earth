@@ -1,6 +1,7 @@
 """Tunnels (2026-10-17, the user: "tunnels through terrain need to be added"): the floor profile, the tube mesh and the
 terrain block's holes at the portals."""
 import sys
+import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -119,6 +120,35 @@ class Mesh(unittest.TestCase):
     def test_no_tunnel_no_mesh(self):
         ch = roads._chunk(roads.DECK, 7.0, np.c_[line(0, 40), np.full(11, 5.0)])
         self.assertIsNone(roadmesh.tunnel([ch], (0.0, 0.0, 0.0)))
+
+    def test_tunnel_keeps_its_metadata_after_a_zero_length_chunk(self):
+        origin = (0.0, 0.0, 0.0)
+        empty = roads._chunk(roads.TUNNEL, 7.0, np.array([[0.0, 0.0, 5.0]] * 2))
+        empty.update(fixed=True, deck=True, tunnel=True, tunnel_h=2.8, portal=[False, False])
+        tube = roads._chunk(roads.TUNNEL, 7.0, np.array([[0.0, 0.0, 5.0], [40.0, 0.0, 5.0]]))
+        tube.update(fixed=True, deck=True, tunnel=True, portal=[True, False])
+
+        points, _, _, materials, _ = roadmesh.tunnel([empty, tube], origin)
+        self.assertIn(roadmesh.TUNNEL_INNER, materials)
+        self.assertAlmostEqual(points[:, 2].max(), 5.0 + roadmesh.TUNNEL_H + roadmesh.PORTAL_FRAME)
+
+    def test_watertight_export_keeps_norway_tunnel_open(self):
+        import cdae
+        import shells
+
+        pts = np.array([[0.0, 0.0, 5.0], [50.0, 0.0, 5.0]])
+        ch = roads._chunk(roads.TUNNEL, 7.0, pts)
+        ch.update(fixed=True, deck=True, tunnel=True, portal=[True, True],
+                  norway_rock=True, norway_portal_style=["rock", "arch"])
+        mesh = roadmesh.tunnel([ch], (0.0, 0.0, 0.0))
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(shells, "ON", True):
+            roads.write_tile(tmp, "/vfs", 1, 0, 0, [ch], tunnel_mesh=mesh)
+            shape = cdae.read(Path(tmp) / "tunnel_1_0_0.cdae")
+
+        # The outside skin's boundary includes the open mouths. Closing that loop adds
+        # colliding triangles through the tube, so export only the authored geometry.
+        exported = cdae.mesh_arrays(shape["meshes"][0])
+        self.assertEqual(len(exported["indices"]) // 3, len(mesh[1]))
 
 
 class OpenUnderpass(unittest.TestCase):

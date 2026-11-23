@@ -2520,7 +2520,7 @@ def tunnel(chunks, origin, walls=()):
     floor; at a chunk end that is a portal ("portal") a face around the opening, seen from both sides. (positions,
     tris, uvs, materials, tri material index) or None. Pure."""
     tc = [c for c in chunks if c.get("tunnel") and not c.get("no_tube")]     # (twins: one tube_only round both)
-    rb = [(r, c) for r, c in zip(ribbons(tc), tc) if r[5] is not None] if tc else []
+    rb = [(r, c) for r, c in ribbon_pairs(tc) if r[5] is not None]
     if not rb and not walls:
         return None
     P, T, UV, M = [], [], [], []           # M: per T entry its material index (0 concrete, 1 lamps, 2 stone, 3 dark stone,
@@ -2597,7 +2597,7 @@ def tunnel(chunks, origin, walls=()):
         new_portal = portals.ON
         if rock or any(looks):
             nv = _add_blocks(P, T, UV, M, nv, norway_tunnels.shell(mid,u,z,sec,hw,th,origin), 6 if rock else 0)
-        elif new_portal and not low and c.get("ground") is not None and len(c["ground"]) == len(c["n"]) and k >= 2:
+        if new_portal and not low and c.get("ground") is not None and len(c["ground"]) == len(c["n"]) and k >= 2:
             # the tube's outside where the ground does not cover it (portals.cover: a box, soil on its top); the
             # chunk's ground at the ribbon's rows, by the arc along it
             cn = np.asarray(c["n"], np.float64)[:, :2]
@@ -2606,7 +2606,7 @@ def tunnel(chunks, origin, walls=()):
             gr = np.interp(sm * (sc[-1] / max(float(sm[-1]), 1e-9)), sc, np.asarray(c["ground"], np.float64))
             # (no cover under a hood: it is the tube's outside from its mouth back to the hill's face)
             for e_, f_ in enumerate(fits if c.get("portal") else ()):
-                if f_ is not None and (c.get("portal") or (False, False))[e_]:
+                if f_ is not None and portal[e_] and not looks[e_]:
                     d_ = sm if e_ == 0 else sm[-1] - sm
                     gr = np.where(d_ <= portals.setback(f_) + 0.5 if portals.setback(f_) > 0 else False, np.inf, gr)
             nv = _add_blocks(P, T, UV, M, nv, portals.cover(mid - np.asarray(origin, np.float64)[:2], u, z - origin[2],
@@ -2629,7 +2629,12 @@ def tunnel(chunks, origin, walls=()):
                     near[i] = any(len(w["base"]) and np.min(np.linalg.norm(np.asarray(w["base"])[:,:2]-test,axis=1)) < 5.
                                   for w in walls)
                 mouth = norway_tunnels.mouth_mesh(np.r_[mid[at],z[at]]-origin,leftv,outv,sec,th,hw,style,fitd,near)
-                nv = _add_blocks(P,T,UV,M,nv,mouth,6 if style == "rock" else 0)
+                nv = _add_blocks(P, T, UV, M, nv, mouth, 6 if style == "rock" else 0)
+                if fitd is not None:
+                    # Fit the slope behind the rim, using the exact same opening as the tube.
+                    face = portals.structure(fitd, np.r_[mid[at], z[at]] - origin, leftv, outv,
+                                             sec, th, hw, SCREE_UV_M, near, collar=False)
+                    nv = _add_blocks(P, T, UV, M, nv, face, 6)
                 continue
             if fitd is not None:
                 # the mouth's structure from the ground round it (portals.structure: collar, headwall, wing walls);
@@ -2796,4 +2801,4 @@ def write(path, mesh, close=True):
     over = np.array([overlay_material(m) for m in mats], bool) if len(mats) else np.zeros(0, bool)
     open_tris = over[np.asarray(M, np.int64)] if over.any() and M is not None else None
     return cdae.write(path, P, T, uvs=UV, uvs2=uvs2, material=mats, tri_materials=M, object_name="road", open_tris=open_tris,
-                      colors=colors, close=close)   # (close "under": a tunnel's tubes, whose mouths are the way in)
+                      colors=colors, close=close)

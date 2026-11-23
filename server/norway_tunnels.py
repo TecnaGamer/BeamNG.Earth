@@ -346,6 +346,53 @@ def approach_grade(frame, plan, spec, ends):
                      lat, lon, float(repaired[0] - before))
 
 
+def join_surveyed_approaches(plans, ends):
+    """Ease a ground-road plan into a lowered, surveyed tunnel portal.
+
+    Work on copies of road-stage plans, since the tunnel solver reads the
+    unmodified stage. A road has to share both the source and the approach.
+    """
+    if not ends:
+        return plans
+    from copy import copy
+
+    adjusted = []
+    for fid, plan in plans:
+        result = plan
+        matches = ends.get(fid, ())
+        for side in (0, 1):
+            if not matches or plan.abut[side] or len(plan.xy) < 3:
+                continue
+            sl = slice(None, None, -1 if side else 1)
+            xy, z = plan.xy[sl], result.z[sl]
+            heading = unit(xy[0] - xy[1])
+            nearby = [(height, slope) for point, inward, height, slope in matches
+                      if np.linalg.norm(xy[0] - point) < 2.5 and np.dot(heading, inward) > 0.82]
+            if len(nearby) != 1:
+                continue
+            height, slope = nearby[0]  # slope is measured outward from the portal
+            delta = height - z[0]
+            s = arc(xy)
+            length = min(60.0, s[-1])
+            if length < 32.0 or not -8.5 <= delta < -0.25 or not 0.0 < slope <= MAX_GRADE:
+                continue
+            reach = np.flatnonzero(s[:-1] < length)
+            if np.any(np.diff(s)[reach] < 0.05):
+                continue
+            grade = (np.interp(6.0, s, z) - z[0]) / 6.0
+            t = np.clip(s / length, 0.0, 1.0)
+            correction = (1.0 - t)**2 * (delta * (1.0 + 2.0 * t) + length * (slope - grade) * t)
+            revised = z + correction
+            if np.max(np.abs(np.diff(revised)[reach] / np.diff(s)[reach])) > MAX_GRADE:
+                continue
+            if result is plan:
+                result = copy(plan)
+                result.z = plan.z.copy()
+            result.z[sl] = revised
+        adjusted.append((fid, result))
+    return adjusted
+
+
 def _style(chunk, fit):
     """A realistic small portal only where the world already has a mouth."""
     th = float(chunk.get("tunnel_h") or 6.8)

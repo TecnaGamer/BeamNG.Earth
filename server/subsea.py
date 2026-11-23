@@ -93,7 +93,100 @@ def profiles(owner, comp, pool):
         return None
 
 
-def _profiles(owner, comp, pool):
+def _norwegian_survey(frame, xy, s):
+    """Match a complete cached NVDB bore to this mapped chain, in the solver's datum."""
+    import norway_tunnel_nvdb
+    import norway_tunnels
+
+    if not norway_tunnels.NVDB_BORE_HEIGHTS:
+        return None
+    middle = norway_tunnels.location(frame, xy[len(xy) // 2])
+    if not norway_tunnels.in_norway(*middle):
+        return None
+    candidates = {}
+    for at in (0, len(xy) // 2, -1):
+        loc = norway_tunnels.location(frame, xy[at])
+        for record in norway_tunnel_nvdb.bore_lines_near(*loc):
+            candidates.setdefault(record["id"], record)
+    matches = []
+    for record in candidates.values():
+        line = np.asarray(record["line3d"], np.float64)
+        if line.ndim != 2 or line.shape[1] != 3 or len(line) < 3 or not np.isfinite(line).all():
+            continue
+        e, n, z = frame.geodetic_to_enu(*line.T)
+        pos = np.column_stack((e, n))
+        vec = np.diff(pos, axis=0)
+        length2 = np.sum(vec * vec, axis=1)
+        arc = np.r_[0., np.cumsum(np.sqrt(length2))]
+        # The official line may repeat a portal a few centimetres apart.
+        keep = length2 >= .01
+        if not keep.any():
+            continue
+        vec, length2 = vec[keep], length2[keep]
+        delta = xy[:, None] - pos[:-1][keep]
+        frac = np.clip((delta * vec).sum(2) / length2, 0., 1.)
+        residual = delta - frac[:, :, None] * vec
+        dist2 = np.sum(residual * residual, axis=2)
+        which = np.argmin(dist2, axis=1)
+        row = np.arange(len(xy))
+        error = np.sqrt(dist2[row, which])
+        score = float(np.percentile(error, 90))
+        if max(error[0], error[-1]) > 9. or score > 6. or error.max() > 18.:
+            continue
+        point_frac = frac[row, which]
+        along = arc[:-1][keep][which] + point_frac * np.sqrt(length2[which])
+        direction = 1 if along[-1] > along[0] else -1
+        if (direction * (along[-1] - along[0]) < .8 * s[-1] or
+                np.minimum(direction * np.diff(along), 0.).sum() < -4.):
+            continue
+        heights = z[:-1][keep][which] + point_frac * np.diff(z)[keep][which]
+        if not np.isfinite(heights).all() or np.max(np.abs(np.diff(heights) / np.diff(s))) > .18:
+            continue
+        matches.append((score, heights))
+    matches.sort(key=lambda item: item[0])
+    if not matches or (len(matches) > 1 and matches[1][0] < matches[0][0] + 2.):
+        return None
+    return matches[0][1]
+
+
+def _survey_portals(owner, chain, surveyed, free_ends, observed_portals):
+    """Use a lower, dry pin corroborated by approach terrain or the mapped road survey."""
+    xy, wet = chain["xy"], chain["wet"]
+    portals = chain["portal"].copy()
+    if not wet.any():
+        return portals
+    frame = owner.frame
+    _, _, levels = frame.enu_to_geodetic(*xy[wet].T, chain["level"][wet])
+    # A small higher inland lake can precede the actual crossing; read the predominant datum.
+    water_h = np.median(levels)
+    sample_dist = np.array([10., 20., 30., 40.])
+    ground = owner._raw_ground if owner.raw is not None else owner._ground
+    for i, (at, near) in enumerate(((0, 1), (-1, -2))):
+        if not free_ends[i] or chain["depth"][at] > .5:
+            continue
+        drop = portals[i] - surveyed[at]
+        if not .75 < drop <= 8.:
+            continue
+        d = xy[at] - xy[near]
+        approach = xy[at] + sample_dist[:, None] * d / np.linalg.norm(d)
+        height = np.asarray(ground(approach), np.float64)
+        if not np.isfinite(height).all():
+            continue
+        slope = np.clip(np.median(np.diff(height) / np.diff(sample_dist)), -GRADE, GRADE)
+        expected = np.median(height - slope * sample_dist)
+        la, lo, _ = frame.enu_to_geodetic(*xy[at], 0.)
+        water = frame.geodetic_to_enu(la, lo, water_h)[2]
+        # The outward probe crosses terrain off a curved road, and may include synthetic hills.
+        # Agreement with a separate road-link match supports the height even in that case.
+        supported = abs(surveyed[at] - expected) <= 1.5 or abs(surveyed[at] - observed_portals[i]) <= .75
+        if supported and surveyed[at] > water + .2:
+            portals[i] = surveyed[at]
+    if abs(portals[1] - portals[0]) > GRADE * chain["s"][-1]:
+        return chain["portal"]
+    return portals
+
+
+def _profiles(owner, comp, pool, use_nvdb=True):
     """{part key: floor array} and actual wet-chain membership; None on an unsolved/missing-input bore."""
     if owner.water is None:
         return None
@@ -175,15 +268,20 @@ def _profiles(owner, comp, pool):
     local = {i: j for j, i in enumerate(active)}
     offsets = np.r_[0, np.cumsum([len(chains[i]["s"]) for i in active])].astype(np.int64)
     targets, weights, lowers, uppers, reaches, svals, params = [], [], [], [], [], [], []
+    moved_portals = set()
+    used_nvdb = False
     for i in active:
         c = chains[i]; s = c["s"]; wet = c["wet"]
-        t = np.interp(s, [0., s[-1]], c["portal"])
+        portal = c["portal"]
+        t = np.interp(s, [0., s[-1]], portal)
         t = np.where(wet, c["ground"] - COVER, t)
         w = np.where(wet, 1., .2)
         upper = np.where(wet, c["ground"] - COVER, c["ground"])
         # Surveyed road heights take precedence over an inferred bathymetric bed. Do not infer a survey from OSM.
         import roadz
         provider = roadz.PROVIDER
+        survey = None
+        observed_portals = np.full(2, np.nan)
         if provider is not None and provider.enabled:
             try:
                 observed = provider.observed(owner.frame, c["xy"], c["width"] / 2, -1, c["name"])
@@ -196,12 +294,31 @@ def _profiles(owner, comp, pool):
                 if ok.mean() >= .9:
                     observed = np.interp(s, s[ok], observed[ok])
                     la, lo, _ = owner.frame.enu_to_geodetic(c["xy"][:, 0], c["xy"][:, 1], 0.)
-                    observed = np.asarray(owner.frame.geodetic_to_enu(la, lo, observed)[2])
-                    t, w = observed, np.full(len(s), 100.)
-                    upper = np.where(wet, np.minimum(c["level"] - COVER,
-                                                    np.maximum(c["ground"] - COVER, observed + .05)), upper)
+                    survey = np.asarray(owner.frame.geodetic_to_enu(la, lo, observed)[2])
+                    observed_portals = np.where(ok[[0, -1]], survey[[0, -1]], np.nan)
+        if use_nvdb:
+            measured = _norwegian_survey(owner.frame, c["xy"], s)
+            free_ends = tuple(len(ends[node(c["xy"][at])]) == 1 for at in (0, -1))
+            if measured is not None:
+                shift = portal - measured[[0, -1]]
+                # Verify a coherent vertical datum before trusting the whole shape.
+                if max(abs(shift)) <= 8. and abs(shift[0] - shift[1]) <= 1.75:
+                    # A general road survey supplies the bore's interior but does not lower a dry portal.
+                    # Let the independently matched tunnel survey correct that pin even with full coverage.
+                    portal = _survey_portals(owner, c, measured, free_ends, observed_portals)
+                    moved_portals.update(node(c["xy"][at]) for at, before, after in
+                                         zip((0, -1), c["portal"], portal) if before != after)
+                    if survey is None:
+                        survey = measured + np.interp(s, [0., s[-1]], portal - measured[[0, -1]])
+                        used_nvdb = True
+                    else:
+                        used_nvdb |= bool(np.any(portal != c["portal"]))
+        if survey is not None:
+            t, w = survey, np.full(len(s), 100.)
+            upper = np.where(wet, np.minimum(c["level"] - COVER,
+                                            np.maximum(c["ground"] - COVER, survey + .05)), upper)
         lower = np.full(len(s), -np.inf)
-        for at, p in [(0, c["portal"][0]), (-1, c["portal"][1])]:
+        for at, p in [(0, portal[0]), (-1, portal[1])]:
             if len(ends[node(c["xy"][at])]) == 1:
                 if c["depth"][at] > .5:
                     if _final(owner, [ch["xy"][e] for ch in chains for e in (0, -1)],
@@ -245,6 +362,8 @@ def _profiles(owner, comp, pool):
                 log.info("subsea profile at %s solved with its dry ground under its portals' reach",
                          chains[active[0]]["name"] or "an unnamed tunnel")
     if not ok(info):
+        if used_nvdb:  # Preserve the normal solver if a survey cannot satisfy these local constraints.
+            return _profiles(owner, comp, pool, use_nvdb=False)
         log.warning("subsea profile unsolved: %s; grade %.6g, curve %.6g, bounds %.3g/%.3g m", info["status"],
                     info["grade_excess"], info["curve_excess"], info["lower_shortfall_m"], info["upper_excess_m"])
         # Infeasible is the same answer on every build of the same inputs: once the map holds no more of the network
@@ -263,4 +382,9 @@ def _profiles(owner, comp, pool):
         if i in local:
             j = local[i]
             result[k] = np.interp(s, chains[i]["s"], z[offsets[j]:offsets[j + 1]])
+    if moved_portals:
+        with owner.lock:
+            owner._subsea_survey_portals.update(
+                (owner._part_id(k), at) for k in result for at in (0, -1)
+                if node(pool[k][1][at]) in moved_portals)
     return result, membership
