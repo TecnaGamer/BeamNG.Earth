@@ -696,7 +696,7 @@ KERB_KINDS = {"island": 3.0, "choker": 4.0, "chicane": 5.0}
 
 
 def tile_kerbs(roads, nodes):
-    """[(k, 2) outlines] of the kerbed traffic calming on the tile's roads (BNE_CALMING): a mapped island's refuge on
+    """[(k, 3) outlines] of the kerbed traffic calming on the tile's roads (BNE_CALMING): a mapped island's refuge on
     the centre line, a choker's two build-outs, a chicane's two (earthfast drive_marks kinds 3-5); roads.build_tile
     draws each as a kerbed island (its splitters' curbs)."""
     import numpy as np
@@ -718,5 +718,9 @@ def tile_kerbs(roads, nodes):
     half = [float(r[1].width) / 2 for r in paved]
     dirs = [0] * len(paved)
     lanes = [1] * len(paved)
-    return [np.asarray(p, np.float64) for p in fast._ef.drive_marks(lines, half, dirs, lanes,
-                                                                  np.array(rows, np.float64), MARK_REACH_M, False, 8)]
+    # (k, 3), z 0 as the other kerb runs' points (draped; build_tile's walks read three coordinates)
+    out = []
+    for p in fast._ef.drive_marks(lines, half, dirs, lanes, np.array(rows, np.float64), MARK_REACH_M, False, 8):
+        p = np.asarray(p, np.float64)
+        out.append(np.c_[p, np.zeros(len(p))])
+    return out

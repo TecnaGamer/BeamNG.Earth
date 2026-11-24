@@ -234,6 +234,7 @@ class TileShapesTest(unittest.TestCase):
         self.assertEqual(len(ch), 2)
         self.assertEqual(narrow, [])
         self.assertEqual(len(isl), 1)
+        self.assertTrue(all(o.shape[1] == 3 for o in ch + isl))       # (build_tile's walks: three coordinates)
 
     def test_barriers_never_close_a_driven_road(self):
         roads = self._roads(6.0)
