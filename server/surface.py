@@ -170,7 +170,10 @@ def warp(lat, lon):
 
 # road surface kind (roads.py) -> material; drawn in this order (paved last: it wins at junctions)
 ROAD_MATERIAL = {"dirt": DIRT, "gravel": LOOSE, "cobble": COBBLE, "paved": ASPHALT,
-                 "rock": ROCK, "grass": GRASS}     # rock and grass roads: the ground's own materials (roads.terrain_surface)
+                 "rock": ROCK, "grass": LAWN}      # rock and grass roads: the ground's own materials (roads.terrain_surface);
+# (2026-11-24) a grass road (OSM surface=grass, grass_paver: a vineyard's or a field's track) the mown lawn's layer, not
+# the meadow's: the meadow's long grass and seeded heads grew knee-high on Laufen's Herrenweg, the user's; a track's
+# grass is kept short by the wheels and the mower (the lawn's short grass only, groundcover.lua; the same tyres' GRASS)
 ROAD_ORDER = ("dirt", "gravel", "rock", "grass", "cobble", "paved")
 
 
