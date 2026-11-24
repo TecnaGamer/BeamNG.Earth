@@ -397,8 +397,10 @@ def _remote(fetch, x, y):
     import netfetch
     pages = manifest(fetch)
     if pages.current() is None:
-        if pages.missing:
-            return b""              # (not published: no samples, the inference stands)
+        if pages.missing or pages.decided:
+            # (not published, or none for this run, in the process that fetched or one that took the run's decision:
+            # no samples, the inference stands; the build is "none" in every key, identity)
+            return b""
         raise netfetch.FetchFailed(f"{NAME}: no manifest reachable")
     try:
         return pagesdata.fetch_data(_Via(fetch), pages.data, pages.base, f"{x}/{y}.npz")

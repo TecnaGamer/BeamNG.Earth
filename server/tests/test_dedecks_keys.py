@@ -1,6 +1,6 @@
 """Germany's measured decks (dedom.py) and the caches: the build they are measured with (dedom.identity) names the German
-answers' folder (roadz.RoadZ._path), tags the German cells' plans (roadz.de_tags, plancache._revisit_key) and their
-decision slices (decisions.slice_digest); German cells stay out of packs and the BeamMP share (mpshare.local_only)."""
+answers' folder (roadz.RoadZ._path), is in MapData.versions() (plans, facts, blocks, tiles, packs, the BeamMP share)
+and, left out of the archives' vkey, in the German cells' decision slices (decisions.slice_digest)."""
 import json
 import os
 import shutil
@@ -17,7 +17,6 @@ import decisions  # noqa: E402
 import mapcells  # noqa: E402
 import mpshare  # noqa: E402
 import netfetch  # noqa: E402
-import plancache  # noqa: E402
 import roadz  # noqa: E402
 
 PAGES = "https://pages.test/data"
@@ -106,15 +105,27 @@ class CellTest(Run):
             self.assertTrue(roadz.de_cell(mapcells.CellKey(k.z, k.x, k.y + 1)))
             self.assertFalse(roadz.de_cell(mapcells.CellKey(k.z, k.x, k.y + 3)))
 
-    def test_tags_follow_the_build(self):
+    def test_versions_hold_the_build(self):
+        md = types.SimpleNamespace()
         self.publish("2026-11-23")
-        a = roadz.de_tags(COLOGNE)
-        self.assertEqual(len(a), 1)
-        self.assertEqual(roadz.de_tags(PARIS), ())
+        self.assertIsNone(dedom.identity(network=False))
+        dedom.manifest().current()              # (freeze_manifests: decided at the start)
+        a = dedom.identity(network=False)
+        self.assertTrue(a.startswith("b-"))
+        # (left out of the archives' vkey: their German items carry it in their slices)
+        self.assertIn("dedecks", decisions.WEEKLY)
         self.next_run()
         self.publish(None)
-        self.assertEqual(roadz.de_tags(COLOGNE), ("dedecks:none",))
-        self.assertNotEqual(a, roadz.de_tags(COLOGNE))
+        dedom.manifest().current()
+        self.assertEqual(dedom.identity(network=False), "none")
+        del md
+
+    def test_none_for_the_run_reads_no_samples(self):
+        self.publish(None)
+        dedom.manifest().current()
+        pages = dedom.manifest()
+        pages.missing = False                   # (a worker that took the run's "none" from the session)
+        self.assertEqual(dedom._remote(lambda u: b"", 1, 2), b"", "no samples, no fault: the build is none")
 
     def test_answers_kept_under_their_build(self):
         self.publish("2026-11-23")
@@ -129,16 +140,6 @@ class CellTest(Run):
         self.assertNotEqual(roadz.RoadZ(self.dir, None)._path("lidar", COLOGNE), p,
                             "an answer made while nothing was published is not read once it is")
 
-    def test_plan_keys(self):
-        pc = plancache.PlanCache(os.path.join(self.dir, "plans", "r1"), "w1s1")
-        pc.persist = (self.dir, (plancache.FRAMES, "w1s1", {"overture": "x"}))
-        self.publish("2026-11-23")
-        a, pa = pc._revisit_key(tuple(COLOGNE)), pc._revisit_key(tuple(PARIS))
-        self.next_run()
-        self.publish("2026-12-01")
-        self.assertNotEqual(pc._revisit_key(tuple(COLOGNE)), a)
-        self.assertEqual(pc._revisit_key(tuple(PARIS)), pa, "outside Germany: the keys as before")
-
     def test_slices_and_share(self):
         off = {"rails": None, "lanes": None}
         self.publish("2026-11-23")
@@ -150,8 +151,7 @@ class CellTest(Run):
         self.next_run()
         self.publish("2026-12-01")
         self.assertIsNone(decisions.slice_digest(off, tuple(COLOGNE), [], fetch=False), "not decided: no item")
-        self.assertTrue(mpshare.local_only(tuple(COLOGNE)))
-        self.assertFalse(mpshare.local_only(tuple(PARIS)))
+        self.assertFalse(mpshare.local_only(tuple(COLOGNE)), "shared: the share's key holds the versions")
 
 
 if __name__ == "__main__":

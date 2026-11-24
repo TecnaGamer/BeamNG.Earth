@@ -273,7 +273,6 @@ class PlanCache:
         import roadsurf
         return revisit.format_key("plans", plans_format(), *self.persist[1],
                                   (int(key[0]), int(key[1]), int(key[2])), *roadz.hk_tags(key), *roadz.tlm_tags(key),
-                                  *roadz.de_tags(key),
                                   *roadsurf.cell_tags(key))     # (the photo's road surfaces round it: other kinds)
 
     def _where(self, key):
@@ -352,9 +351,8 @@ class PlanCache:
         if roadz.hk_cell(key) or roadz.tlm_tags(key):     # (Switzerland's heights: no pack or archive has them)
             return False
         k = bakepack.plans_key(self.signature, key)
-        if not roadz.de_cell(key) and any(k in p.items and bakepack._matches(p, self._bake_expect())
-                                          for p in bakepack.packs(self.persist[0])):
-            return True             # (Germany's: no pack, _baked)
+        if any(k in p.items and bakepack._matches(p, self._bake_expect()) for p in bakepack.packs(self.persist[0])):
+            return True
         import decisions        # (a shared archive's block already downloaded: nothing fetched or unpacked here)
         return decisions.enabled() and decisions.has_plans(self.persist[0], self.signature, key, self.persist[1][2])
 
@@ -373,10 +371,7 @@ class PlanCache:
                                     # measured heights)
         import io
         import bakepack
-        # (a German cell's plans hold the measured decks' build, roadz.de_tags, which a pack's key does not: none from
-        # a pack. The decision archives' items do: their digest holds it, decisions.slice_digest)
-        got = None if roadz.de_cell(key) else bakepack.find(self.persist[0], bakepack.plans_key(self.signature, key),
-                                                             self._bake_expect())
+        got = bakepack.find(self.persist[0], bakepack.plans_key(self.signature, key), self._bake_expect())
         if got is None:
             got = self._decided(key)
             if got is None:
@@ -450,7 +445,7 @@ class PlanCache:
             provenance = None
             import roadz
             # (Hong Kong's heights and Switzerland's cut cells stay on this computer: mpshare.local_only)
-            shared = not (roadz.hk_cell(key) or roadz.tlm_tags(key) or roadz.de_cell(key))
+            shared = not (roadz.hk_cell(key) or roadz.tlm_tags(key))
             if persist:
                 with self._lock:
                     v0 = self._planned_with.pop((int(key[0]), int(key[1]), int(key[2])), None)

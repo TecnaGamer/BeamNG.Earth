@@ -376,22 +376,14 @@ def tlm_tags(key):
 
 def de_cell(key):
     """Can map cell key's plans read Germany's measured decks (dedom.py: the source on and a state's service box within
-    one cell of the cell's box, so a road part of the cell reaching a cell measured there counts too)? No network."""
+    one cell of the cell's box, so a road part of the cell reaching a cell measured there counts too)? No network.
+    (The decision archives' slice of such a cell holds the build: decisions.slice_digest.)"""
     if not (ON and DE_ON):
         return False
     lon0, lat0, lon1, lat1 = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])).bounds()
     dla, dlo = lat1 - lat0, lon1 - lon0
     return any(lat0 - dla <= b[2] and b[0] <= lat1 + dla and lon0 - dlo <= b[3] and b[1] <= lon1 + dlo
                for b in (s["box"] for s in dedom.SERVICES))
-
-
-def de_tags(key):
-    """("dedecks:<build>",) for a German cell (de_cell): the build of the measured decks its plans are made with
-    (dedom.identity: deciding the run's manifest, once), else (). Plans made with one build are not those of another,
-    nor those made before the data was published."""
-    if not de_cell(key):
-        return ()
-    return ("dedecks:" + (dedom.identity() or "none"),)
 
 
 def hk_cell(key):

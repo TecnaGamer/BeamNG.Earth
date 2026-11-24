@@ -249,12 +249,14 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(len(dedom.points(fetch, 51.0, 7.0, 51.01, 7.01)[0]), 0)
         self.assertEqual(self.asked, [f"{self.PAGES}/dedecks/manifest.json"])     # (no shard asked for)
 
-    def test_manifest_unreachable_raises(self):
+    def test_manifest_unreachable_none_for_the_run(self):
+        # (the run is decided without a manifest, a fault recorded by pagesdata: no samples in any process, and the
+        # build is "none" in every key, dedom.identity, so nothing measured now is read once a build is had)
         import netfetch
         fetch = self.serve({f"{self.PAGES}/dedecks/manifest.json": netfetch.FetchFailed("504")})
-        with self.assertRaises(netfetch.FetchError):
-            dedom.points(fetch, 51.0, 7.0, 51.01, 7.01)
-        self.assertEqual(dedom._shards, {})         # (nothing kept: the cell is built again later)
+        la, _lo, _dom, _dgm = dedom.points(fetch, 51.0, 7.0, 51.01, 7.01)
+        self.assertEqual(len(la), 0)
+        self.assertEqual(dedom.identity(network=False), "none")
 
     def test_the_manifest_pinned_on_disk(self):
         x, y = dedom.tile_of(51.001, 7.001)
