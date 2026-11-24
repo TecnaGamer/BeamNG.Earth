@@ -58,7 +58,6 @@ NO_OUTPUT = {
     "BNGE_NET_MBPS": "the network's speed estimate",
     "BNGE_PRECACHE_LIDAR_WAIT": "a wait (an incomplete read is a revisit fault, never kept)",
     "BNGE_ROADZ_SESSION": "the run's session folder",
-    "BNGE_ROADZ_TLM_URL": "where swissTLM3D's cells are read (a plan made with them is keyed by roadz.tlm_tags)",
     "BNGE_DEM_ARCHIVES": "Mapterhorn's tiles from its archives or its endpoint: the same tiles (pinned per release: "
                          "dem.ELEVATION_ID)",
     "BNGE_DEM_CDN": "Mapterhorn's z0-12 from the project's packs: the same bytes as its endpoint (dem.py; set from the "

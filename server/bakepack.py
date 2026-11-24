@@ -150,7 +150,7 @@ _sync = {"at": -1e9, "busy": False, "backoff": None}
 # and terrain stay on the computer that read them): the packs and the BeamMP helper are made with both off
 # (sharehelper.py, bake_area), the players' servers with both on; the cells they change are left out by cell instead;
 # and Switzerland's (roadz.tlm_tags, from BNE_ROADZ_TLM_DIR too: no pack or archive is made with its cells)
-CELL_SCOPED = frozenset({"BNE_ROADZ_HK", "BNE_HKDTM", "BNE_ROADZ_TLM", "BNE_ROADZ_TLM_DIR"})
+CELL_SCOPED = frozenset({"BNE_ROADZ_HK", "BNE_HKDTM", "BNE_ROADZ_TLM", "BNE_ROADZ_TLM_DIR", "BNGE_ROADZ_TLM_URL"})
 _switches = []
 
 

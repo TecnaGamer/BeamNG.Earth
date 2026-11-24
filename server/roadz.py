@@ -365,7 +365,9 @@ def tlm_tags(key):
         return ()
     k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
     lon0, lat0, lon1, lat1 = k.bounds()
-    if not (lat0 <= CH_BOUNDS[2] and CH_BOUNDS[0] <= lat1 and lon0 <= CH_BOUNDS[3] and CH_BOUNDS[1] <= lon1):
+    pad = CLIP_PAD_M / 111320.0     # (as hk_tags: a road part of the cell whose middle is in CH_BOUNDS reads "tlm")
+    if not (lat0 - pad <= CH_BOUNDS[2] and CH_BOUNDS[0] <= lat1 + pad
+            and lon0 - pad <= CH_BOUNDS[3] and CH_BOUNDS[1] <= lon1 + pad):
         return ()
     return (TLM_CELLS,) if (TLM_URL or TLM_DIR) else ()
 
@@ -824,6 +826,9 @@ class RoadZ:
         if src == "hk":
             src = HK_CELLS
         elif src == "tlm":
+            if TLM_DIR:
+                return None                 # (BNE_ROADZ_TLM_DIR: read from that folder every run, never kept here,
+                                            # so a cut finished, redone or replaced is what is read next)
             src = TLM_CELLS
         return os.path.join(self.dir, src, str(key.z), str(key.x), f"{key.y}.npz") if self.dir else None
 

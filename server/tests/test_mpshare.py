@@ -182,6 +182,33 @@ class HubTest(unittest.TestCase):
         offer(good)
         self.assertIsNotNone(plan_store(self.dirs[1])._kept(cell), "and the real one is")
 
+    def test_local_only_cells_neither_asked_nor_taken(self):
+        import roadz
+        b = self.hubs[1]
+        b.hello()
+        zurich = (14, 8580, 5737)
+        saved = roadz.TLM_URL, roadz.TLM_DIR
+        try:
+            roadz.TLM_URL, roadz.TLM_DIR = "https://cells.example/tlm", ""
+            self.assertTrue(mpshare.local_only(zurich))
+            la, lo = __import__("mapcells").CellKey(*zurich).center()
+            b.prefetch(la, lo, now=time.monotonic())
+            self.assertNotIn(zurich, {v[1] for v in b.wanted.values()}, "Swiss heights here: not asked")
+            key = "plans/w1s1/14_8580_5737"
+            iid = mpshare.item_id(b.code, key)
+            b.wanted.clear()
+            b.wanted[iid] = (key, zurich, time.monotonic())
+            good = self.build(0, (14, 4824, 6159))
+            refused = b.stats["refused"]
+            b.on_data("S|" + json.dumps({"t": "c", "id": "xz", "i": 0, "n": 1, "iid": iid, "key": key, "c": b.code,
+                                         "z": None, "d": mpshare.b64e(good)}))
+            self.assertEqual(b.stats["refused"], refused + 1, "another player's plans: not kept under our tagged key")
+            self.assertIsNone(plan_store(self.dirs[1])._kept(zurich))
+            roadz.TLM_URL = ""
+            self.assertFalse(mpshare.local_only(zurich))
+        finally:
+            roadz.TLM_URL, roadz.TLM_DIR = saved
+
     def test_a_road_process_waits_a_little_for_a_cell_coming(self):
         import threading
         b = self.hubs[1]

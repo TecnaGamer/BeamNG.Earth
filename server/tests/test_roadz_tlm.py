@@ -7,6 +7,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -146,6 +147,15 @@ class CellTest(Saved, unittest.TestCase):
         other = mapcells.CellKey(14, self.key.x + 1, self.key.y)
         self.assertEqual(len(roadz.RoadZ(self.dir, f).lines("tlm", other)), 0, "no file: a cell without roads")
 
+    def test_a_folder_s_cells_are_not_kept_in_the_cache(self):
+        roadz.TLM_DIR = self.cells
+        rows = [(UNDERPASS[0], UNDERPASS[1], -1, "", "Bahnhofquai")]
+        self.assertEqual(len(roadz.RoadZ(self.dir, FakeFetcher({})).lines("tlm", self.key)), 0, "not cut yet")
+        self.keep(self.key, rows)
+        self.assertEqual(len(roadz.RoadZ(self.dir, FakeFetcher({})).lines("tlm", self.key)), 1,
+                         "the finished cut read by the next server, not the empty answer kept before")
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "roadz", f"v{roadz.VERSION}", roadz.TLM_CELLS)))
+
     def test_no_url_leaves_the_inference(self):
         roadz.TLM_URL = ""
         f = FakeFetcher({})
@@ -174,6 +184,17 @@ class TagTest(Saved, unittest.TestCase):
         self.assertEqual(roadz.tlm_tags(self.zurich), (roadz.TLM_CELLS,), "the same in a process without a RoadZ")
         nb = mapcells.CellKey(14, self.zurich.x + 1, self.zurich.y)
         self.assertEqual(roadz.tlm_tags(nb), (roadz.TLM_CELLS,), "its neighbour too, cut or not")
+
+    def test_cells_just_outside_the_box_tagged(self):
+        roadz.TLM_URL = "https://cells.example/tlm"
+        pad = roadz.CLIP_PAD_M / 111320.0
+        k = mapcells.cell_of(47.0, 8.5)
+        lon0, lat0, lon1, lat1 = k.bounds()
+        with mock.patch.object(roadz, "CH_BOUNDS", (45.80, 5.94, lat0 - pad / 2, 10.50)):
+            # (the box's edge just south of the cell: a road part of the cell can have its middle inside the box)
+            self.assertEqual(roadz.tlm_tags(k), (roadz.TLM_CELLS,))
+        with mock.patch.object(roadz, "CH_BOUNDS", (45.80, 5.94, lat0 - 2 * pad, 10.50)):
+            self.assertEqual(roadz.tlm_tags(k), ())
 
 
 class ToolTest(unittest.TestCase):

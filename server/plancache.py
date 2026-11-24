@@ -444,7 +444,8 @@ class PlanCache:
                 fh.write(data)
             provenance = None
             import roadz
-            shared = not roadz.hk_cell(key)         # (Hong Kong's heights stay on this computer: roadz.hk_cell)
+            # (Hong Kong's heights and Switzerland's cut cells stay on this computer: mpshare.local_only)
+            shared = not (roadz.hk_cell(key) or roadz.tlm_tags(key))
             if persist:
                 with self._lock:
                     v0 = self._planned_with.pop((int(key[0]), int(key[1]), int(key[2])), None)
