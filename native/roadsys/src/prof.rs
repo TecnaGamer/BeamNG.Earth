@@ -43,7 +43,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub const H_M: f64 = 5.0;
-pub const QP_FORMAT: u64 = 5;            // 2 (M2): split components, feasible floors, measured decks, the chord; 5 (M3): cut zones on the trunk, shallow and along crossings beside a deck
+pub const QP_FORMAT: u64 = 6;            // 2 (M2): split components, feasible floors, measured decks, the chord; 5 (M3): cut zones on the trunk, shallow and along crossings beside a deck; 6 (M5): twin decks coupled, structure runs across strokes
 const ROUNDS: usize = 24;              // (M3: 12 -> 24, the active set's releases)
 const RELEASES: u8 = 2;
 const RELEASE_MULT: f64 = 1e-2;       // (M3) a multiplier past this, wrong-signed: the limit leaves the active set
@@ -53,19 +53,23 @@ const W_FLOOR: f64 = 1e6;
 const W_GRADE: f64 = 1e5;
 const W_COMFORT: f64 = 1e5;
 const W_SIDE: f64 = 1e5;
+const W_TWIN: f64 = 1e6;            // (M5) a twin deck's knot to its neighbour's height (per knot)
+const TWIN_OBS_DZ_M: f64 = 0.5;     // (M5) m two twins' measured heights may differ before they are not held together
 const A_MAX: f64 = 0.3;
 const DECK_OVER_GROUND: f64 = 1.5;
 const TUNNEL_COVER: f64 = 8.0;
 const END_FREE_M: f64 = 15.0;
+const END_CONT_M: f64 = 1.0;        // (M5) m from a stroke's end a structure's end counts as going on past it
 const DECK_DEPTH: f64 = crate::net::DECK_FULL_M;   // net.rs crossings' floor: clearance + this
 // (a double deck's upper deck over the lower deck's clearance: today's builder draws it with its full depth too, M2;
 // a stacked kit's thinner slab comes with M3)
 const STACK_DEPTH: f64 = crate::net::DECK_FULL_M;
 const FLOOR_SLACK: f64 = 0.05;
 const MEASURED_APART_M: f64 = 2.0;
+const MEASURED_MIN_CLEAR_M: f64 = 2.0;  // (M5) m a measured deck stands over the road under it at least for its floor to hold
 const MEASURED_NEAR_M: f64 = 60.0;  // (M3) m from a floor its decks' measurements are looked for  // (M3) m two measured decks may lie closer than a floor before it is left out
 const DIG_MAX: f64 = 2.0;
-const OBS_W: f64 = 1.0;
+const OBS_W: f64 = 50.0;
 const W_CHORD: f64 = 0.05;          // a deck knot's pull toward its approaches' chord (per m: a ground knot's 1)
 const CHORD_OUT_M: f64 = 10.0;
 const UNDER_OBS_M: f64 = 25.0;
@@ -92,6 +96,7 @@ pub struct ProfStats {
     pub floor_short_max_m: f64,
     pub floors_relaxed: usize,          // floors the grade limits cannot reach from the sections' held ends
     pub floors_measured_out: usize,     // (M3) floors left out: both decks measured there, closer than the floor
+    pub floors_measured: usize,         // (M5) floors at the clearance a measured deck keeps over the road under it
     pub floor_relax_max_m: f64,
     pub stacked: usize,                 // floors of a double deck (the lower deck's clearance + STACK_DEPTH)
     pub grade_viol: usize,
@@ -382,20 +387,49 @@ impl Qp {
 struct Span { si: usize, i0: usize, i1: usize, base: usize }
 
 /// The ground's chord under a structure interval at station s: linear between the ground at its two ends.
-fn chord(st: &crate::net::Stroke, sup: crate::net::Sup, h: f64, gs: &[f64], s: f64) -> f64 {
+fn chord(st: &crate::net::Stroke, sup: crate::net::Sup, h: f64, gs: &[f64], s: f64, cont: (bool, bool)) -> Option<f64> {
     let m = gs.len();
     let at = |x: f64| -> f64 { let f = clampf(x / h, 0.0, (m - 1) as f64); let i = (f as usize).min(m.saturating_sub(2)); let u = f - i as f64;
                                if m < 2 { gs[0] } else { gs[i] * (1.0 - u) + gs[i + 1] * u } };
     let (a, b) = (sup.s0.max(0.0), sup.s1.min(st.len()));
+    // (M5: an end where the structure goes on past the stroke's end (another stroke's deck there, a nose on a deck) has
+    // no approach ground: the chord is the other end's level; both such: none. The ground under the next deck pulled
+    // a viaduct's joint down toward the valley floor)
+    let (ca, cb) = (cont.0 && a <= END_CONT_M, cont.1 && b >= st.len() - END_CONT_M);
     // (anchored on the approach ground CHORD_OUT_M outside each end: the DEM at a structure end is often the ground
     // below already, where the map's range was lengthened over a road under it)
     let (za, zb) = (at((a - CHORD_OUT_M).max(0.0)), at((b + CHORD_OUT_M).min(st.len())));
-    if b - a <= 1e-6 { return za; }
-    za + (zb - za) * clampf((s - a) / (b - a), 0.0, 1.0)
+    match (ca, cb) {
+        (true, true) => return None,
+        (true, false) => return Some(zb),
+        (false, true) => return Some(za),
+        _ => {}
+    }
+    if b - a <= 1e-6 { return Some(za); }
+    Some(za + (zb - za) * clampf((s - a) / (b - a), 0.0, 1.0))
+}
+
+/// (M5) Per stroke, whether a structure goes on past each of its ends: another stroke's structure ends at that node
+/// (a deck-level node), or the end is snapped (a nose / joint) to a trunk on a structure there.
+pub fn struct_cont(net: &Net) -> Vec<(bool, bool)> {
+    let mut ends: Vec<Vec<(usize, bool)>> = vec![Vec::new(); net.nodes.len()];
+    for (si, st) in net.strokes.iter().enumerate() { ends[st.n0].push((si, true)); ends[st.n1].push((si, false)); }
+    let end_struct = |si: usize, start: bool| { let st = &net.strokes[si]; st.support_at(if start { 0.0 } else { st.len() }).kind == SUP_STRUCT };
+    net.strokes.iter().enumerate().map(|(si, st)| {
+        let one = |start: bool| -> bool {
+            let node = if start { st.n0 } else { st.n1 };
+            if ends[node].iter().any(|&(o, a)| (o, a) != (si, start) && end_struct(o, a)) { return true; }
+            match if start { st.snap0 } else { st.snap1 } {
+                Some(sn) => net.strokes[sn.trunk].support_at(sn.s).kind == SUP_STRUCT,
+                None => false,
+            }
+        };
+        (one(true), one(false))
+    }).collect()
 }
 
 /// The objective and limits of stroke spans: DEM following, smoothing, grade, comfort, deck over ground, tunnel cover.
-fn add_spans(net: &Net, spans: &[Span], h: &[f64], g: &[Vec<f64>], ob: &[Vec<f64>], qp: &mut Qp) {
+fn add_spans(net: &Net, spans: &[Span], h: &[f64], g: &[Vec<f64>], ob: &[Vec<f64>], cont: &[(bool, bool)], qp: &mut Qp) {
     for sp in spans {
         let st = &net.strokes[sp.si];
         let (hh, gs) = (h[sp.si], &g[sp.si]);
@@ -418,9 +452,10 @@ fn add_spans(net: &Net, spans: &[Span], h: &[f64], g: &[Vec<f64>], ob: &[Vec<f64
             // (M2: a deck knot pulled lightly toward the chord between its approaches' grounds: on a long deck with
             // nothing measured the curvature alone carried the approach ramps on into a 4-5 m hump, Seal Beach)
             if sup.kind == SUP_STRUCT {
-                let c = chord(st, sup, hh, gs, s);
-                qp.trip.push((var(i), var(i), cw * W_CHORD * hh));
-                qp.rhs[var(i)] += cw * W_CHORD * hh * c;
+                if let Some(c) = chord(st, sup, hh, gs, s, cont[sp.si]) {
+                    qp.trip.push((var(i), var(i), cw * W_CHORD * hh));
+                    qp.rhs[var(i)] += cw * W_CHORD * hh * c;
+                }
             }
             // (M2: a measured deck height, a soft target with a ground knot's weight)
             if sup.kind == SUP_STRUCT {
@@ -430,10 +465,12 @@ fn add_spans(net: &Net, spans: &[Span], h: &[f64], g: &[Vec<f64>], ob: &[Vec<f64
             if sup.kind == SUP_GROUND {
                 qp.cons.push(Ineq { f: mklin(&[(var(i), 1.0)]), bound: gs[i] - DIG_MAX, ge: true, w: W_SIDE, kind: 3, orig: f64::NAN });
             }
-            let far = s > sup.s0 + END_FREE_M && s < sup.s1 - END_FREE_M;
+            // (M5: an end the structure goes on past is no abutment: deck over ground holds up to it)
+            let (ca, cb) = (cont[sp.si].0 && sup.s0 <= END_CONT_M, cont[sp.si].1 && sup.s1 >= st.len() - END_CONT_M);
+            let far = (ca || s > sup.s0 + END_FREE_M) && (cb || s < sup.s1 - END_FREE_M);
             // (M2: only where the ground lies under the chord between the structure's two end grounds by more than
             // the clearance: a surface model holding the bridge itself, Copernicus' DSM, lifted every deck over it)
-            if sup.kind == SUP_STRUCT && far && gs[i] + DECK_OVER_GROUND < chord(st, sup, hh, gs, s) {
+            if sup.kind == SUP_STRUCT && far && chord(st, sup, hh, gs, s, cont[sp.si]).map(|c| gs[i] + DECK_OVER_GROUND < c).unwrap_or(false) {
                 qp.cons.push(Ineq { f: mklin(&[(var(i), 1.0)]), bound: gs[i] + DECK_OVER_GROUND, ge: true, w: W_SIDE, kind: 3, orig: f64::NAN });
             }
             if sup.kind == SUP_TUNNEL && far {
@@ -512,6 +549,7 @@ pub struct Plan {
     pub ends: Vec<Vec<(usize, bool)>>,
     pub deck_node: Vec<bool>,
     pub cap_cuts: usize,
+    pub twins: Vec<(usize, usize, usize, f64)>,     // (M5) (stroke, knot, beside stroke, its station): twin decks
 }
 
 impl Plan {
@@ -617,6 +655,78 @@ fn split_components(secs: &[Sec], cpl: &[Cpl], full_root: &[usize], unbreakable:
         }
     }
     (joined, cuts)
+}
+
+/// (M5) m between two decks' carriageways (their outer boundaries) at most for them to be twins (deck.rs TWIN_M)
+pub const TWIN_GAP_M: f64 = 3.0;
+const TWIN_COS: f64 = 0.9063077870366499;       // cos 25 deg
+const TWIN_CELL_M: f64 = 16.0;
+const TWIN_HALF_MAX_M: f64 = 20.0;
+
+fn half_at(st: &crate::net::Stroke, s: f64, offs: &mut Vec<f64>) -> f64 {
+    st.offsets(s, offs);
+    if offs.is_empty() { 3.5 } else { offs[0].max(-offs[offs.len() - 1]).min(TWIN_HALF_MAX_M) }
+}
+
+/// (M5) The twin pairs of the strokes want marks: (stroke a, knot i, stroke b, station on b) for every structure knot
+/// of a beside a structure of b (uid a < uid b), near parallel (25 deg), apart by at most their half widths + TWIN_GAP_M
+/// and, at two map levels, by at least half their two half widths (not one over the other). Fixed order: strokes by index, knots in order,
+/// candidates by stroke index.
+pub fn twin_pairs(net: &Net, h: &[f64], nk: &[usize], want: &dyn Fn(usize) -> bool) -> Vec<(usize, usize, usize, f64)> {
+    let ns = net.strokes.len();
+    let mut offs = Vec::new();
+    let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+    let mut has: Vec<bool> = vec![false; ns];
+    for si in 0..ns {
+        if !want(si) || nk[si] == 0 { continue; }
+        let st = &net.strokes[si];
+        if !st.sup.iter().any(|u| u.kind == SUP_STRUCT) { continue; }
+        has[si] = true;
+        for i in 0..nk[si] {
+            let s = (i as f64 * h[si]).min(st.len());
+            if st.support_at(s).kind != SUP_STRUCT { continue; }
+            let p = st.line.at(s).0;
+            let key = ((p[0] / TWIN_CELL_M).floor() as i64, (p[1] / TWIN_CELL_M).floor() as i64);
+            let v = grid.entry(key).or_default();
+            if v.last() != Some(&si) { v.push(si); }
+        }
+    }
+    let mut out = Vec::new();
+    let reach = TWIN_HALF_MAX_M * 2.0 + TWIN_GAP_M;
+    let r = (reach / TWIN_CELL_M).ceil() as i64;
+    let mut cand: Vec<usize> = Vec::new();
+    for a in 0..ns {
+        if !has[a] { continue; }
+        let st = &net.strokes[a];
+        for i in 0..nk[a] {
+            let s = (i as f64 * h[a]).min(st.len());
+            if st.support_at(s).kind != SUP_STRUCT { continue; }
+            let (p, t) = st.line.at(s);
+            let (cx, cy) = ((p[0] / TWIN_CELL_M).floor() as i64, (p[1] / TWIN_CELL_M).floor() as i64);
+            cand.clear();
+            for dx in -r..=r { for dy in -r..=r {
+                if let Some(v) = grid.get(&(cx + dx, cy + dy)) { for &b in v { if b != a && net.strokes[b].uid > st.uid { cand.push(b); } } }
+            } }
+            cand.sort_unstable();
+            cand.dedup();
+            let ha = half_at(st, s, &mut offs);
+            for &b in &cand {
+                let sb_ = &net.strokes[b];
+                let (sb, off) = sb_.line.project(p, 0.0, sb_.len());
+                let ub = sb_.support_at(sb);
+                if ub.kind != SUP_STRUCT { continue; }
+                let tb = sb_.line.at(sb).1;
+                if absf(dot(t, tb)) < TWIN_COS { continue; }
+                let hb = half_at(sb_, sb, &mut offs);
+                let d = absf(off);
+                // (overlapping in plan at two map levels: one over the other, a double deck; at one level: a ramp's deck
+                // merging into its road's, one surface)
+                if d > ha + hb + TWIN_GAP_M || (d < 0.5 * (ha + hb) && ub.level != st.support_at(s).level) { continue; }
+                out.push((a, i, b, sb));
+            }
+        }
+    }
+    out
 }
 
 pub fn plan(net: &Net, need: Option<&[bool]>) -> Plan { plan_w(net, need, None) }
@@ -791,6 +901,16 @@ pub fn plan_w(net: &Net, need: Option<&[bool]>, window: Option<[f64; 4]>) -> Pla
             }
         }
     }
+    // (M5) twin decks: a structure knot beside another stroke's structure (near parallel, their carriageways within
+    // TWIN_GAP_M of each other, not one over the other): one height there, a coupling per knot. Decks side by side
+    // took two profiles 1.7-3.7 m apart (Seal Beach): a step and two parapets between lanes the map puts side by side
+    let twins = twin_pairs(net, &h, &nk, &want);
+    for (ti, &(a_si, ia, b_si, sb)) in twins.iter().enumerate() {
+        let sa = (ia as f64 * h[a_si]).min(net.strokes[a_si].len());
+        if let (Some(a), Some(b)) = (sec_at(a_si, sa), sec_at(b_si, sb)) {
+            cpl.push(Cpl { key: (3, net.strokes[a_si].uid, net.strokes[b_si].uid, ia as i64, mm(sb)), a, b, what: 3, idx: ti });
+        }
+    }
     cpl.sort_by(|x, y| x.key.cmp(&y.key));
     let nsec = secs.len();
     // full components: every coupling united (the split rule's input: a function of the component alone, never of
@@ -813,7 +933,7 @@ pub fn plan_w(net: &Net, need: Option<&[bool]>, window: Option<[f64; 4]>) -> Pla
         if ra != rb { let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) }; par[hi] = lo; }
     }
     let root: Vec<usize> = (0..nsec).map(|i| find(&mut par, i)).collect();
-    Plan { h, nk, secs, sec_of, cpl, joined, root, full_root, ends, deck_node, cap_cuts }
+    Plan { h, nk, secs, sec_of, cpl, joined, root, full_root, ends, deck_node, cap_cuts, twins }
 }
 
 pub fn solve(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, need: Option<&[bool]>) -> Profiles { solve_w(net, g_of, need, None) }
@@ -906,6 +1026,7 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
         }
     }
     let node_z: Vec<f64> = gz[k..].to_vec();
+    let cont = struct_cont(net);
     let mut stats = ProfStats::default();
     let mut ends: Vec<Vec<(usize, bool)>> = vec![Vec::new(); net.nodes.len()];
     for (si, st) in net.strokes.iter().enumerate() {
@@ -934,7 +1055,7 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
         let st = &net.strokes[si];
         let m = nk[si];
         let mut qp = Qp { n: m, trip: Vec::new(), rhs: vec![0.0; m], cons: Vec::new(), guess: g[si].clone() };
-        add_spans(net, &[Span { si, i0: 0, i1: m - 1, base: 0 }], &h, &g, &ob, &mut qp);
+        add_spans(net, &[Span { si, i0: 0, i1: m - 1, base: 0 }], &h, &g, &ob, &cont, &mut qp);
         for (start, node) in [(true, st.n0), (false, st.n1)] {
             let kv = if start { 0 } else { m - 1 };
             let snap = if start { st.snap0 } else { st.snap1 };
@@ -995,7 +1116,7 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
         let mut guess = vec![0.0; n];
         for sp in &spans { for i in sp.i0..=sp.i1 { guess[sp.base + i - sp.i0] = tier_a[sp.si][i]; } }
         let mut qp = Qp { n, trip: Vec::new(), rhs: vec![0.0; n], cons: Vec::new(), guess };
-        add_spans(net, &spans, &h, &g, &ob, &mut qp);
+        add_spans(net, &spans, &h, &g, &ob, &cont, &mut qp);
         // stations where a coupling of this component holds a span (no Tier A pin within 3 knots of them)
         let mut held: Vec<(usize, f64)> = Vec::new();
         for (k, c) in cpl.iter().enumerate() {
@@ -1003,6 +1124,7 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
             match c.what {
                 0 => { let cr = &net.crossings[c.idx]; held.push((cr.a, cr.sa)); held.push((cr.b, cr.sb)); }
                 1 => { for &(o, a) in &ends[c.idx] { held.push((o, if a { 0.0 } else { net.strokes[o].len() })); } }
+                3 => { let (a, ia, b, sb) = pl.twins[c.idx]; held.push((a, (ia as f64 * h[a]).min(net.strokes[a].len()))); held.push((b, sb)); }
                 _ => {
                     let (si, start) = (c.idx / 2, c.idx % 2 == 1);
                     let st = &net.strokes[si];
@@ -1047,6 +1169,7 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
         }
         // couplings inside the component; floors (one-sided against the lower road's Tier A where it stays out)
         let mut couples: Vec<Lin> = Vec::new();
+        let mut twin_terms: Vec<Lin> = Vec::new();
         let mut couple_dbg: Vec<String> = Vec::new();
         let mut floor_dbg: Vec<(usize, String)> = Vec::new();
         for (k, c) in cpl.iter().enumerate() {
@@ -1078,10 +1201,22 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
                     };
                     let (ou, ol) = (ob_at(up, us), ob_at(lo, ls_));
                     if ou.is_finite() && ol.is_finite() && ou - ol < cr.floor - MEASURED_APART_M { stats.floors_measured_out += 1; continue; }
+                    // (M5: a measured deck over a road: the clearance it measures over the lower road's own profile is
+                    // the floor where that is less: neither the deck lifted off its measurement nor the road under it dug
+                    // out (a street under the JFX's measured viaduct was dug 0.9 m for a floor the real deck does not keep)
+                    let mut floor = cr.floor;
+                    if ou.is_finite() && !ol.is_finite() && !tier_a[lo].is_empty() {
+                        let have = ou - at_knots(&tier_a[lo], h[lo], ls_);
+                        if have < floor {
+                            if have < MEASURED_MIN_CLEAR_M { stats.floors_measured_out += 1; continue; }
+                            floor = have;
+                            stats.floors_measured += 1;
+                        }
+                    }
                     let su = sec_at(up, us).unwrap();
                     let spu = spans.iter().find(|sp| sp.si == up && sp.i0 == secs[su].i0).copied().unwrap();
                     lin_sec(&spu, h[up], us, 1.0, &mut t);
-                    let mut bound = cr.floor;
+                    let mut bound = floor;
                     if cr.stacked { bound -= DECK_DEPTH - STACK_DEPTH; stats.stacked += 1; }
                     let true_floor = bound;
                     // feasibility (M2): the most the grades can open between the two from their sections' held ends
@@ -1134,6 +1269,19 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
                     let vb = var_of(k1.0, if k1.1 { 0 } else { nk[k1.0] - 1 });
                     if let (Some(va), Some(vb)) = (va, vb) { couples.push(mklin(&[(va, 1.0), (vb, -1.0)])); couple_dbg.push(format!("node {} at {:?} deck {}", nd, net.nodes[nd].p, deck_node[nd])); }
                 }
+                3 => {
+                    let (a, ia, b, sb) = pl.twins[c.idx];
+                    // (both measured there, more than TWIN_OBS_DZ_M apart: decks at two heights, the measurements kept)
+                    let oa = ob[a].get(ia).copied().unwrap_or(f64::NAN);
+                    let obk = if ob[b].is_empty() { f64::NAN } else { ob[b][((sb / h[b]).round() as usize).min(ob[b].len() - 1)] };
+                    if oa.is_finite() && obk.is_finite() && absf(oa - obk) > TWIN_OBS_DZ_M { continue; }
+                    let spa = spans.iter().find(|sp| sp.si == a && ia >= sp.i0 && ia <= sp.i1).copied();
+                    let spb = spans.iter().find(|sp| sp.si == b && sb >= sp.i0 as f64 * h[b] - 1e-6 && sb <= sp.i1 as f64 * h[b] + 1e-6).copied();
+                    let (Some(spa), Some(spb)) = (spa, spb) else { continue };
+                    let mut t = vec![(spa.base + ia - spa.i0, 1.0)];
+                    lin_sec(&spb, h[b], sb, -1.0, &mut t);
+                    twin_terms.push(mklin(&t));
+                }
                 _ => {
                     let (si, start) = (c.idx / 2, c.idx % 2 == 1);
                     let st = &net.strokes[si];
@@ -1168,6 +1316,7 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
             }
         }
         for f in &couples { add_sq(&mut qp.trip, &mut qp.rhs, f, 0.0, W_COUPLE); }
+        for f in &twin_terms { add_sq(&mut qp.trip, &mut qp.rhs, f, 0.0, W_TWIN); }
         let (zz, key) = qp.solve(&mut stats);
         qp.check(&zz, &mut stats);
         if std::env::var("ROADSYS_DEBUG_COMFORT").is_ok() {
@@ -1265,5 +1414,37 @@ mod tests {
         store_clear();
         let (z, _) = qp.solve(&mut ProfStats::default());
         assert!(absf(z[0] - 1.5) < 2e-3 && absf(z[1] + 1.5) < 2e-3, "{:?}", z);
+    }
+
+    fn seg(fid: &str, pts: &[[f64; 2]], bridge: Option<(f64, f64)>) -> crate::io::Seg {
+        crate::io::Seg { fid: fid.into(), code: "US".into(), cls_s: "secondary".into(), pave: 7.0, drive: 7.0, inferred: 2, cls: 4, dir: 1,
+              lanes: 2, lfw: -1, lbw: -1, kmh: 60.0, lane_w: 3.5, pts: pts.to_vec(), cons: Vec::new(),
+              bridge: bridge.into_iter().collect(), level: bridge.map(|b| vec![(b.0, b.1, 1.0)]).unwrap_or_default(), ..Default::default() }
+    }
+
+    /// (M5) Twin decks side by side take one height: two one-way viaducts 9 m apart over ground that differs by 3 m
+    /// between them come out within a few cm of each other; 40 m apart, they keep their own profiles.
+    #[test]
+    fn twin_decks_take_one_height() {
+        let solve_pair = |dy: f64| {
+            let place = crate::io::Place { segs: vec![seg("p", &[[-600.0, dy], [600.0, dy]], Some((0.3, 0.7))),
+                                                     seg("q", &[[600.0, -dy], [-600.0, -dy]], Some((0.3, 0.7)))], ..Default::default() };
+            let net = crate::net::build(&place, &[0, 1]);
+            store_clear();
+            let g = |p: &[P2]| -> Vec<f64> { p.iter().map(|q| if q[1] > 0.0 { 13.0 } else { 10.0 } + 0.002 * q[0]).collect() };
+            let pr = solve(&net, &g, None);
+            let at = |y: f64| -> f64 {
+                let si = (0..net.strokes.len()).find(|&si| (net.strokes[si].line.at(0.0).0[1] - y).abs() < 0.5).unwrap();
+                let (s, _) = net.strokes[si].line.project([0.0, y], 0.0, net.strokes[si].len());
+                pr.at(si, s)
+            };
+            (at(dy), at(-dy), twin_pairs(&net, &pr.h, &pr.z.iter().map(|z| z.len()).collect::<Vec<_>>(), &|_| true).len())
+        };
+        let (a, b, n) = solve_pair(4.5);
+        assert!(n > 10, "{n} twin knots");
+        assert!(absf(a - b) < 0.05, "{a} {b}");
+        let (a, b, n) = solve_pair(20.0);
+        assert_eq!(n, 0);
+        assert!(absf(a - b) > 1.0, "{a} {b}");
     }
 }

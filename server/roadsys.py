@@ -89,9 +89,9 @@ SURFACE = MODE == "surface"             # (M4 surface: structures, and the decks
 STRUCTURES = MODE in ("structures", "surface")      # (M3 structures: heights and the deck ends' hand-over, below)
 HEIGHTS = MODE in ("heights", "structures", "surface")
 FORMAT = 2                  # the shadow records' JSON (their folder name; 2: M2's profiles, whole components read)
-HEIGHTS_KERNEL = 602        # earthfast.roadsys_heights_reads / roadsys_heights
+HEIGHTS_KERNEL = 623        # earthfast.roadsys_heights_reads / roadsys_heights
 STRUCTURES_KERNEL = 603     # earthfast.RoadsysEnds / roadsys_handover_zone, road_exact's "ho" parts
-SURFACE_KERNEL = 606        # earthfast.roadsys_decks
+SURFACE_KERNEL = 623        # earthfast.roadsys_decks
 XSEC = os.environ.get("BNE_ROADSYS_XSEC", "off").strip().lower() == "on"
 XSEC_KERNEL = 617           # earthfast.RoadsysSegments(xsec=...), native/roadsys xsec.rs (617: with areas=, fit= in one binary; trunk 616 has no xsec)
 
@@ -500,12 +500,14 @@ GROUND = None               # (lat, lon) -> geodetic heights: the profiles' grou
 DISK = None                 # (load(name) -> bytes or None, save(name, bytes)): squares kept between processes
 DUMP_DIR = os.environ.get("ROADSYS_SQUARE_DUMP") or None   # (tools only: each square's whole input written there)
 DISK_FN = None              # () -> DISK or None, asked once a process has its cache (blockworker._square_disk)
-STATS = {"chains": 0, "solved": 0, "unmatched": 0, "short": 0, "error": 0, "squares": 0, "square_memo": 0,
+STATS = {"chains": 0, "solved": 0, "unmatched": 0, "short": 0, "short_memo": 0, "error": 0, "squares": 0, "square_memo": 0,
          "square_disk": 0, "square_cells": 0, "square_cells_max": 0, "square_read_s": 0.0, "square_kernel_s": 0.0,
          "square_cpu_ms": 0.0, "pins_squares": 0, "obs_runs": 0, "obs_measured": 0, "total_s": 0.0}
 SQ_MEMO_MAX = 96            # squares kept per process (by region, square and their cells' road revisions)
 PIN_MEMO_MAX = 48
 _squares = {}
+_short_sq = {}              # (M5) squares read short: (monotonic time, square), SHORT_TTL_S
+SHORT_TTL_S = 30.0
 _pins = {}
 _memo_lock = threading.Lock()
 _sq_locks = {}
@@ -583,10 +585,19 @@ def square(fid, frame, sq, cell_fn, ground_ll=None):
     with _memo_lock:
         got = _squares.get(mk)
         lk = _sq_locks.setdefault((fid, sq), threading.Lock())
+        short = _short_sq.get(mk)
     if got is not None:
         with _memo_lock:
             STATS["square_memo"] += 1
         return got
+    if short is not None and time.monotonic() - short[0] < SHORT_TTL_S:
+        # (M5: a square read short is the same square while its cells' revisions are: kept a short while for this
+        # process's other askers (each of them faulted, never kept), not solved again on every grading query: 628 short
+        # solves over 36 corpus places)
+        revisit.fault(here=True)
+        with _memo_lock:
+            STATS["short_memo"] += 1
+        return short[1]
     with lk:                            # (one solve per square at a time: a second asker waits for the first's)
         with _memo_lock:
             got = _squares.get(mk)
@@ -627,11 +638,14 @@ def square(fid, frame, sq, cell_fn, ground_ll=None):
                 log.debug("roadsys square %s %s: %s: %s", fid, sq, type(e).__name__, e)
                 return None
             if not (b.complete and sb.complete):
-                # (read short: used by this asker alone, which is not kept; never memoised nor kept on disk, so no later
-                # build takes it as complete)
+                # (read short: used by its askers alone, which are not kept; never memoised as complete nor kept on disk,
+                # so no later build takes it as complete; SHORT_TTL_S in this process: _short_sq)
                 revisit.fault(here=True)
                 with _memo_lock:
                     STATS["short"] += 1
+                    _short_sq[mk] = (time.monotonic(), got)
+                    while len(_short_sq) > SQ_MEMO_MAX:
+                        _short_sq.pop(next(iter(_short_sq)))
                 return got
             rec = json.loads(got.info()[0])
             with _memo_lock:
@@ -703,6 +717,36 @@ def _stations_near(line, pts, reach):
 
 
 END_PAST_M = 0.5            # m past a deck's free end its approach's ground is read (chain_heights' lift)
+DECK_HALF_MIN_M = 2.0       # m: a deck part's half width at least, for the ends on another deck (_ends_on_decks)
+
+
+def _half_width(part):
+    """A published deck part's half width (its spec's width; DECK_HALF_MIN_M at least)."""
+    try:
+        w = float(getattr(part[0], "width", 0.0) or 0.0)
+    except (TypeError, ValueError, IndexError):
+        w = 0.0
+    return max(DECK_HALF_MIN_M, 0.5 * w)
+
+
+def _ends_on_decks(pts, owner, decks):
+    """(n,) bool: each point (n, 2) within the half width of a deck line of decks [(key, line (m, 2), half)] other
+    than its owner's (owner: n keys) and of the same chain: an end there goes on onto that deck."""
+    out = np.zeros(len(pts), bool)
+    for i, (x, y) in enumerate(np.asarray(pts, np.float64)):
+        for k, line, half in decks:
+            if k == owner[i] or len(line) < 2:
+                continue
+            a, b = line[:-1], line[1:]
+            ab = b - a
+            l2 = ab[:, 0] * ab[:, 0] + ab[:, 1] * ab[:, 1]
+            t = np.clip(np.where(l2 > 1e-12, ((x - a[:, 0]) * ab[:, 0] + (y - a[:, 1]) * ab[:, 1])
+                                 / np.where(l2 > 1e-12, l2, 1.0), 0.0), 0.0, 1.0)
+            fx, fy = a[:, 0] + t * ab[:, 0] - x, a[:, 1] + t * ab[:, 1] - y
+            if float(np.min(fx * fx + fy * fy)) <= half * half:
+                out[i] = True
+                break
+    return out
 
 
 def chain_heights(store, comp, parts, ground_ll=None):
@@ -782,6 +826,13 @@ def chain_heights(store, comp, parts, ground_ll=None):
         g = np.asarray(store.elev(la, lo), np.float64).reshape(-1)
         gu = np.asarray(sf.geodetic_to_enu(la, lo, g)[2], np.float64)
         gu = np.where(np.isfinite(gu), gu, np.nan)
+        # (M5: an end whose approach point lies on another deck of the chain is no abutment: the deck goes on there
+        # (two parts of one viaduct a metre or two apart, past endmatch's JOIN_M), so no ground is read for it. The
+        # ground under the next deck brought a viaduct's joint down to the floor of the valley: an 8 m V, railramp)
+        others = [(k, np.asarray(parts_in[k][1], np.float64)[:, :2], _half_width(parts_in[k]))
+                  for k in keys]
+        on_deck = _ends_on_decks(ep, [k for k in ks for _ in (0, 1)], others)
+        gu = np.where(on_deck, np.nan, gu)
         # (the floors each part holds over other roads, its holds: a dropped end comes back to the profile by its nearest)
         fp = fast._ef.roadsys_floor_points(sqs, [box[0] - 5.0, box[1] - 5.0, box[2] + 5.0, box[3] + 5.0])
         holds = []
@@ -850,17 +901,17 @@ def _square_pins_in(fid, frame, sq, cell_fn, ground_ll):
     """_square_pins' work, in its own revisit scope: (lines or None, memo entry or None)."""
     import fast
     import revisit
-    me = square(fid, frame, sq, cell_fn, ground_ll)
-    if me is None:
-        return None, None
-    mk = (fid, tuple(sq))
+    mk = (fid, tuple(sq), getattr(ground_ll or GROUND, "tag", getattr(ground_ll or GROUND, "__name__", "")))
     with _memo_lock:
         got = _pins.get(mk)
     if got is not None:
-        # (valid while every square its heights blended is still the one it was: each looked up again, memoised)
-        if all((square(fid, frame, q, cell_fn, ground_ll) or me).info()[1] == k if q != tuple(sq) else me.info()[1] == k
-               for q, k in got[0]):
-            return got[1], None
+        # (M5: kept only when every square it blended was read complete, and a square is a pure function of its
+        # window's map cells: taken as it is. Looking every square up again read each one's window of map cells on
+        # every grading query, 15,000 cell reads at the JFX: a quarter of the heights mode's build time)
+        return got[1], None
+    me = square(fid, frame, sq, cell_fn, ground_ll)
+    if me is None:
+        return None, None
     out = []
     cache = {tuple(sq): me}
     for feat, pts, tans, w, share, half, hand, low in me.pins():

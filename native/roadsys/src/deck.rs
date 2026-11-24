@@ -46,7 +46,7 @@ const TWIN_STEP_M: f64 = 0.25;
 /// between them until they are a level apart)
 pub const TWIN_DZ_M: f64 = 1.5;
 /// m at most a strip widens to the map's paved half width
-pub const WIDEN_MAX_M: f64 = 3.0;
+pub const WIDEN_MAX_M: f64 = 8.0;
 const CELL_M: f64 = 8.0;
 /// m past a ground end the ground it is brought onto is read (roadsys.END_PAST_M)
 pub const END_PAST_M: f64 = 0.5;
@@ -171,6 +171,40 @@ impl Grid {
 
 /// Is cluster cl's junction on a structure (every arm on one at its end there)? Else it is the ground's: no deck face,
 /// and a structure ending at it ends on the ground.
+/// The structure strokes and their boxes grown by their widest mapped half width (widen_out's candidates).
+fn struct_boxes(net: &Net) -> Vec<(usize, [f64; 4])> {
+    let mut out = Vec::new();
+    for (si, st) in net.strokes.iter().enumerate() {
+        if !st.sup.iter().any(|u| u.kind == SUP_STRUCT) || st.line.p.is_empty() { continue; }
+        let half = st.parts.iter().map(|p| net.segs[net.edges[p.edge].seg].pave * 0.5).fold(0.0f64, f64::max);
+        out.push((si, grow(bbox_of(&st.line.p), half + 1.0)));
+    }
+    out
+}
+
+/// m a free edge's strip widens at point q, facing out: to the farthest mapped paved edge (line +- the map's paved
+/// half width) of any structure stroke whose mapped band holds q, across it (within 60 deg of its normal), past q
+/// outward; at most WIDEN_MAX_M. (M5: any stroke's, not only the edge's own: a ramp mapped beside the main deck
+/// before its nose, its line 1.5 m past the main deck's faces, had the parapet across its mapped lanes, I-95)
+fn widen_out(net: &Net, sts: &[(usize, [f64; 4])], q: P2, out: P2) -> f64 {
+    let mut best = 0.0f64;
+    for &(sj, b) in sts {
+        if !inside(b, q) { continue; }
+        let st = &net.strokes[sj];
+        let (s_, off) = st.line.project(q, 0.0, st.len());
+        if st.support_at(s_).kind != SUP_STRUCT { continue; }
+        let part = st.parts.iter().find(|p| s_ >= p.s0 - 1e-6 && s_ <= p.s1 + 1e-6).unwrap_or(&st.parts[0]);
+        let half = net.segs[net.edges[part.edge].seg].pave * 0.5;
+        if !(half > 0.0) || absf(off) >= half { continue; }
+        let t = st.line.at(s_).1;
+        let c = dot(out, [-t[1], t[0]]);
+        if absf(c) < 0.5 { continue; }
+        let ext = if c > 0.0 { half - off } else { half + off };
+        if ext > best { best = ext; }
+    }
+    best.min(WIDEN_MAX_M)
+}
+
 fn zone_struct(net: &Net, lay: &part::Layout, cl: usize) -> bool {
     let arms = &lay.arms[cl];
     !arms.is_empty() && arms.iter().all(|a| {
@@ -402,6 +436,8 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
     // height across a gap of at most TWIN_M outward: a twin deck, the gap filled to its middle, no parapet there
     let kept_ids: Vec<u32> = kept.iter().map(|k| k.0).collect();
     let kgrid = Grid::new(&m.v, &m.t, &kept_ids);
+    let dbg_free = std::env::var("ROADSYS_DECK_FREE_DEBUG").is_ok();
+    let sboxes = struct_boxes(&net);
     type FreeE = (u32, i32, f64, f64, usize);
     let mut free: BTreeMap<u32, Vec<FreeE>> = BTreeMap::new();
     let mut incoming: BTreeMap<u32, usize> = BTreeMap::new();
@@ -424,12 +460,31 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
             let zm = (m.v[a as usize][2] + m.v[b as usize][2]) as f64 / 2000.0;
             grid.heights(&m.v, &m.t, add(mid, scale(out, COVER_OUT_M)), &mut hs);
             if hs.iter().any(|&(_t, z)| absf(z - zm) <= COVER_DZ_M) { continue; }
+            // (M5: a twin is a kept face across a gap of at most TWIN_M once both decks are widened to their map's
+            // paved half widths (the strips below): two 14 m carriageways 12 m apart are twins, the gap filled, not
+            // two parapets each 2.5 m into the other's mapped lanes)
+            let r_self = widen_out(&net, &sboxes, mid, out);
             let mut gap = 0.0;
             let mut dd = COVER_OUT_M + TWIN_STEP_M;
-            while dd <= TWIN_M + 1e-9 {
+            while dd <= TWIN_M + r_self + WIDEN_MAX_M + 1e-9 {
                 kgrid.heights(&m.v, &m.t, add(mid, scale(out, dd)), &mut hs);
-                if hs.iter().any(|&(_t, z)| absf(z - zm) <= TWIN_DZ_M) { gap = dd; break; }
+                let q = add(mid, scale(out, dd));
+                let hit = hs.iter().any(|&(t, z)| {
+                    if absf(z - zm) > TWIN_DZ_M { return false; }
+                    if dd <= TWIN_M + 1e-9 { return true; }
+                    let tg2 = m.tag[t as usize];
+                    let sj = if tg2.kind == K_ZONE { usize::MAX } else { stroke_of.get(&tg2.piece).copied().unwrap_or(usize::MAX) };
+                    sj != si_of && dd <= TWIN_M + r_self + widen_out(&net, &sboxes, q, [-out[0], -out[1]]) + 1e-9
+                });
+                if hit { gap = dd; break; }
                 dd += TWIN_STEP_M;
+            }
+            if dbg_free {
+                let mut hs2: Vec<(u32, f64)> = Vec::new();
+                let mut seen: Vec<String> = Vec::new();
+                let mut d2 = COVER_OUT_M;
+                while d2 <= 12.0 { grid.heights(&m.v, &m.t, add(mid, scale(out, d2)), &mut hs2); for &(t, z) in &hs2 { seen.push(format!("{:.2}:{}:{}:{:.2}", d2, m.tag[t as usize].sup, kept_ids.binary_search(&t).is_ok(), z - zm)); } d2 += 0.5; }
+                eprintln!("FREE {:.1} {:.1} zm {:.2} rself {:.2} gap {:.2} si {} seen {}", mid[0], mid[1], zm, r_self, gap, si_of, seen.join(" "));
             }
             free.entry(a).or_default().push((b, fi, dep, gap, si_of));
             *incoming.entry(b).or_insert(0) += 1;
@@ -493,7 +548,7 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
     }
     let mut strip_tris = 0usize;
     let mut twin_m = 0.0f64;
-    for (ch, gaps, sis, closed, fi, dep) in &chains {
+    for (ch, gaps, _sis, closed, fi, dep) in &chains {
         let k = ch.len();
         let p: Vec<P2> = ch.iter().map(|&i| pv(i)).collect();
         let nseg = if *closed { k } else { k - 1 };
@@ -505,17 +560,9 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
         // (a strip's width per edge: half the gap to a twin deck; else STRIP_W past the map's paved half width from its
         // line where the faces end short of it (a carriageway's lanes on its line, its shoulders apart): the slab and
         // parapet as wide as the map's road, as today's decks)
-        let reach = |i: usize, sj: usize| -> f64 {
-            if sj == usize::MAX { return 0.0; }
-            let st = &net.strokes[sj];
-            let (s_, off) = st.line.project(p[i], 0.0, st.len());
-            let part = st.parts.iter().find(|q| s_ >= q.s0 - 1e-6 && s_ <= q.s1 + 1e-6).unwrap_or(&st.parts[0]);
-            let half = net.segs[net.edges[part.edge].seg].pave * 0.5;
-            if !(half > 0.0) { return 0.0; }
-            clampf(half - absf(off), 0.0, WIDEN_MAX_M)
-        };
+        let reach = |i: usize, e: usize| -> f64 { widen_out(&net, &sboxes, p[i], rn[e]) };
         let ew: Vec<f64> = (0..nseg).map(|e| if gaps[e] > 0.0 { gaps[e] * 0.5 } else {
-            STRIP_W + reach(e, sis[e]).max(reach((e + 1) % k, sis[e]))
+            STRIP_W + reach(e, e).max(reach((e + 1) % k, e))
         }).collect();
         let mut nrm: Vec<P2> = Vec::with_capacity(k);
         let mut wv: Vec<f64> = Vec::with_capacity(k);
@@ -760,6 +807,32 @@ mod tests {
         // two runs: the decks' outer edges; none in the median
         assert_eq!(o.runs.len(), 2, "{}", o.json);
         for r in &o.runs { assert!(r.p.iter().all(|q| absf(q[1]) > 5.0), "{:?}", &r.p[..2]); }
+    }
+
+    /// (M5) twins whose own faces are more than TWIN_M apart but whose mapped carriageways (14 m each, lines 12 m apart)
+    /// meet: one filled median, no parapet in either's mapped lanes; mapped 7 m wide, the same lines keep their gap
+    #[test]
+    fn twins_apart_until_widened_to_the_maps_width() {
+        let build_pair = |pave: f64| {
+            let mut segs = Vec::new();
+            for (f, y) in [("p", 6.0), ("q", -6.0)] {
+                let xs: [f64; 2] = if f == "p" { [-400.0, 400.0] } else { [400.0, -400.0] };
+                let mut sg = seg(f, &[[xs[0], y], [xs[1], y]], &[], Some((0.45, 0.55)));
+                sg.dir = 1;
+                sg.pave = pave;
+                sg.drive = 7.0;
+                segs.push(sg);
+            }
+            let pl = Place { segs, ..Default::default() };
+            let ls = vec![DeckLine { feat: "p".into(), p: vec![[-40.0, 6.0, 12.0], [40.0, 6.0, 12.0]] },
+                          DeckLine { feat: "q".into(), p: vec![[40.0, -6.0, 12.0], [-40.0, -6.0, 12.0]] }];
+            build(&pl, Q, &g, &ls, Opts::default())
+        };
+        let wide = build_pair(14.0);
+        assert!(wide.fallback.is_empty(), "{:?}", wide.fallback);
+        assert!(wide.runs.iter().all(|r| r.p.iter().all(|q| absf(q[1]) > 12.0)), "{}", wide.json);
+        let narrow = build_pair(7.0);
+        assert!(narrow.runs.iter().any(|r| r.p.iter().all(|q| absf(q[1]) < 3.0)), "{}", narrow.json);
     }
 
     #[test]
