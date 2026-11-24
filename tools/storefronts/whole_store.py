@@ -227,6 +227,10 @@ def _sign_font(size):
 
 
 def sign_image(identity, aspect=4.5, height_m=1., surface="facade"):
+    from storefrontpack import sign
+    artwork = sign(identity, aspect)
+    if artwork is not None:
+        return artwork
     height = 128
     width = max(64, min(1200, round(height * aspect)))
     image = Image.new("RGB", (width, height), identity.paint)

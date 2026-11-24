@@ -18,6 +18,7 @@ from tempfile import NamedTemporaryFile
 import numpy as np
 
 import revisit
+import storefrontpack
 
 from threedmr import STOREFRONT_VERSION
 from gasstations import GAS_CATEGORIES
@@ -827,6 +828,9 @@ def cached_entry(cache, name, coords, bearing, material, sign_height=None, doors
     # Round away sub-centimetre anchor differences. The key describes the geometry actually exported.
     coords = coords.round(7)
     parameters = [STOREFRONT_VERSION, CATALOG_DIGEST, name, coords.tolist(), bearing, material]
+    pack = storefrontpack.active.get()
+    if pack is not None:
+        parameters.append(pack.digest)
     if sign_height is not None:
         parameters.append(sign_height)
     if doors:

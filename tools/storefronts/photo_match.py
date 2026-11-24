@@ -1,9 +1,12 @@
 """Match a photographed wall using camera coordinates and the bearing to the selected crop."""
 
 import math
+from pathlib import Path
+import sys
 from xml.etree import ElementTree
 
 import numpy as np
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "server"))
 from whole_store import simplify
 
 

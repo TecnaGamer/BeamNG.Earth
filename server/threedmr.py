@@ -375,11 +375,17 @@ def local_models(cache_dir):
         with open(path) as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return []
-    return [
+        data = []
+    entries = [
         {**entry, "id": f"local_{os.path.splitext(entry['file'])[0]}"} for entry in data
         if not (entry.get("storefront_source") and entry.get("branded_storefront") and entry.get("storefront_edition", 0) != STOREFRONT_EDITION)
     ]
+
+    from storefrontpack import snapshot
+    pack = snapshot(cache_dir)
+    if pack:
+        entries = [e for e in entries if e["file"] not in pack.replaces] + pack.sites
+    return entries
 
 
 def local_signature(cache_dir):
@@ -387,6 +393,8 @@ def local_signature(cache_dir):
     tiles' revisit keys: a model added, moved or replaced is built in places visited before. () without any."""
     out = []
     for entry in local_models(cache_dir) if cache_dir else ():
+        if entry["id"].startswith("local_pack_") and entry["file"].startswith("pack_"):
+            continue  # Immutable pack assets are covered together by the archive digest.
         try:
             st = os.stat(os.path.join(cache_dir, "threedmr_cache", str(entry.get("file"))))
             out.append((json.dumps(entry, sort_keys=True), st.st_size, st.st_mtime_ns))
@@ -397,6 +405,10 @@ def local_signature(cache_dir):
     if os.environ.get("BNE_STOREFRONTS") == "1":
         from storeidentity import CATALOG_DIGEST
         out.append(("streamed-storefronts", STOREFRONT_VERSION, CATALOG_DIGEST))
+        from storefrontpack import snapshot
+        pack = snapshot(cache_dir)
+        if pack:
+            out.append(("storefront-pack", pack.digest))
         if os.environ.get("BNE_LOCAL_BUSINESS_SIGNS") == "1":
             out.append(("local-business-signs", 1))
     return tuple(out)

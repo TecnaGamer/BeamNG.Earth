@@ -43,6 +43,10 @@ NAMES = {normalized_name(key): name for key, name in NAMES.items() if name in ac
 
 def chain(value, cinema=False):
     label = normalized_name(value)
+    from storefrontpack import active
+    pack = active.get()
+    if pack and label in pack.names:
+        return pack.names[label]
     if cinema:
         for prefix in ("amc", "regal", "cinemark"):
             if label.startswith(prefix + " "):

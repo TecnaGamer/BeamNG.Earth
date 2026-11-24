@@ -19,6 +19,7 @@ import math
 from typing import NamedTuple
 
 import numpy as np
+import storefrontpack
 
 import fast
 import dmath
@@ -6585,6 +6586,7 @@ def custom_models(frame, custom, ground, out_dir, vfs_dir, road_ends=None, items
     )
 
 
+@storefrontpack.tile_scope("cache_dir")
 def road_tile_items(
     frame, tx, ty, md, ground, decks=None, skip=frozenset(), cache_dir=None, urban_fn=None, widths=None,
     left_hand=False, clear_stats=None

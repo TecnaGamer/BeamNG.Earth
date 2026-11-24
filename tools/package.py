@@ -36,7 +36,7 @@ TOOLS = ["tools/reports.py", "tools/sketchfab_assets.py"]  # no stored credentia
 # same relative layout in source archives and frozen apps so the renderer finds its fonts.
 STOREFRONT_RUNTIME = [
     "tools/storefronts/" + name for name in (
-        "build_stores.py", "fictional_catalog.json", "entrance_designs.py",
+        "build_stores.py", "pack_model.py", "fictional_catalog.json", "entrance_designs.py",
         "store_match.py", "whole_store.py",
     )
 ] + [

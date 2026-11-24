@@ -24,6 +24,7 @@ import threading
 import time
 
 import numpy as np
+import storefrontpack
 import dmath
 import dnp
 
@@ -1292,6 +1293,7 @@ def terrain_patch(aid, lat, lon, zoom, box, path):
     return terrainpatch.build(frame, elev, box, path)
 
 
+@storefrontpack.tile_scope("out_dir", session_dir=True)
 def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings=False, left_hand=False,
                mph=True, q=None, gas_stations=False, buried=0.0, lamp_region=None, country=None, pole_profile=None,
                de_junctions=False, towns_on=False, wear=None):
@@ -2490,6 +2492,7 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
                        *deck_key, bool(de_junctions), *de)     # (the German junction parts last)
 
 
+@storefrontpack.tile_scope("scratch", session_dir=True)
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,
                  country=None, scratch_vfs="/x", pole_profile=None, wait_gaps=False, de_junctions=False, towns_on=False, wear=None):
     """Saved areas' world phase (areas.py, the user 2026-10-29: "pre generate along a route or area"): geotile (gx, gy)'s
@@ -2540,6 +2543,7 @@ def _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q):
                        float(heightmapmod.SQUARE))
 
 
+@storefrontpack.tile_scope("scratch", session_dir=True)
 def prebuild_geo_skin(aid, lat, lon, zoom, gx, gy, gzoom, scratch, scratch_vfs, sidewalks, lift, buildings, left_hand,
                       mph, q, gas_stations, buried=0.0, lamp_region=None, country=None, pole_profile=None,
                       de_junctions=False, towns_on=False, wear=None):
@@ -3175,6 +3179,7 @@ def _geo_near(gx, gy, lat, lon):
         return False
 
 
+@storefrontpack.tile_scope("out_dir", session_dir=True)
 def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
               gas_stations, buried=0.0, lamp_region=None, country=None, content=True, skin=True, exact=None, pole_profile=None,
               de_junctions=False, towns_on=False, wear=None):

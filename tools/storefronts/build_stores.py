@@ -39,6 +39,15 @@ def export_store(path, match, observations, out, *, entrance_direction=None, loc
         category, name = name.style, name.name
         mapped_name = not str(ident).startswith("poi_")
     identity = identity_for(chain(name) or name, local_panel[0] if local_panel else category or "shop", mapped_name=mapped_name)
+    from storefrontpack import active
+    pack = active.get()
+    row = pack.assets.get(identity.key) if pack else None
+    if row and "model" in row and street is not None and not (carhop or drive_through or local_panel):
+        from pack_model import fitted_store
+        entry = fitted_store(pack.folder / row["model"], row, identity, path, ident, coords,
+                             entrance_direction if entrance_direction is not None else street, out, source_key(name))
+        if entry:
+            return entry
     height = STYLES[identity.style]["height"]
     center = (coords.min(0) + coords.max(0)) / 2
     # The naming switch changes the sign on a category model, independent of its entrance.

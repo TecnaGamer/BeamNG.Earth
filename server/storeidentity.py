@@ -154,7 +154,9 @@ def source_key(name):
 
 def identity_for(name, panel="shop", *, mapped_name=False):
     if panel not in {"mall_entrance", "atm"}:
-        known = SOURCES.get(name.casefold())
+        from storefrontpack import active
+        pack = active.get()
+        known = (pack.identities.get(name.casefold()) if pack else None) or SOURCES.get(name.casefold())
         if known is not None:
             return known
     kind = panel if panel == "mall_entrance" else panel.removeprefix("mall_")
