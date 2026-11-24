@@ -727,16 +727,17 @@ class VineyardTest(unittest.TestCase):
         frame, feats, ring, chm, clear = self._field([0, 200, 260, 60, 0], [0, 0, 60, 60, 0])
         it = veg.vineyard_items(feats, chm, clear, None)
         self.assertGreater(len(it), 60)
-        self.assertTrue(np.all(it.group == veg.G_VINE))
+        self.assertTrue(np.all((it.group == veg.G_VINE) | (it.group == veg.G_VINE_ROW)))
+        self.assertGreater(int(np.sum(it.group == veg.G_VINE)), 30, "the groups inside")
         yaw = np.asarray(it.yaw) % 180.0
         self.assertTrue(np.all(np.minimum(yaw, 180.0 - yaw) < 0.5), "rows along the long sides")
         from polygon import Path
         x, y = veg._to3857(ring[:, 0], ring[:, 1])
         path = Path(np.column_stack([x, y]))
         cx, cy = veg._to3857(it.lon, it.lat)
-        k = (veg.VINE_ALONG_M / 2 - 1.0) / np.cos(np.radians(44.9))
+        half = np.where(it.group == veg.G_VINE, veg.VINE_ALONG_M / 2 - 1.0, veg.VINE_SEG_M / 2 - 0.3) * self.SEC
         for s in (-1, 1):
-            self.assertTrue(np.all(path.contains_points(np.column_stack([cx + s * k, cy]))), "both ends inside")
+            self.assertTrue(np.all(path.contains_points(np.column_stack([cx + s * half, cy]))), "both ends inside")
         again = veg.vineyard_items(feats, chm, clear, None)
         self.assertTrue(np.array_equal(again.lon, it.lon) and np.array_equal(again.yaw, it.yaw), "deterministic")
         self.assertEqual(len(veg.vineyard_items(feats, chm, np.ones_like(clear), None)), 0, "roads / buildings: none")
@@ -744,6 +745,213 @@ class VineyardTest(unittest.TestCase):
     def test_only_vineyards(self):
         frame, feats, ring, chm, clear = self._field([0, 100, 100, 0, 0], [0, 0, 50, 50, 0], cls="orchard")
         self.assertEqual(len(veg.vineyard_items(feats, chm, clear, None)), 0)
+
+    SEC = 1.0 / np.cos(np.radians(44.9))        # (Web Mercator m per ground m at the test fields)
+
+    def _rows(self, it):
+        """{row's y (Web Mercator m, rounded): sorted [(x0, x1, group)]} of rows running east-west: each item's
+        extent along its row (a group's three rows)."""
+        cx, cy = veg._to3857(it.lon, it.lat)
+        row = veg.VINE_ROW_M * self.SEC
+        lines = []
+        for x, y, g in zip(cx, cy, it.group):
+            half = (veg.VINE_ALONG_M if g == veg.G_VINE else veg.VINE_SEG_M) / 2 * self.SEC
+            for dy in ((-1, 0, 1) if g == veg.G_VINE else (0,)):
+                lines.append((float(y + dy * row), float(x - half), float(x + half), int(g)))
+        first = min(r[0] for r in lines)            # (a row's own y: the rest are whole rows from it)
+        out = {}
+        for y, a, b, g in lines:
+            out.setdefault(first + round((y - first) / row) * row, []).append((a, b, g))
+        return {k: sorted(v) for k, v in out.items()}
+
+    GAP = 0.6           # m: what a row may leave open (the samples' half step, a stretch's few decimetres)
+
+    def _closed(self, items, ry):
+        """No gap along a row's items (sorted by start) wider than GAP: each starts before the furthest end yet."""
+        reach = items[0][1]
+        for a, b, g in items[1:]:
+            self.assertLess(a - reach, self.GAP * self.SEC, f"row {ry}: open at {a:.1f}")
+            reach = max(reach, b)
+        return reach
+
+    def test_rows_run_up_to_slanted_edges(self):
+        # the parallelogram's 45-degree ends: every row runs closed from edge to edge (the groups alone left their
+        # 15.9 m steps: open triangles; the nearest count of World-to-BeamNG left a gap beside each group and a
+        # stretch under a segment empty: small triangles, the user's in-game check 2026-11-20)
+        frame, feats, ring, chm, clear = self._field([0, 200, 260, 60, 0], [0, 0, 60, 60, 0])
+        it = veg.vineyard_items(feats, chm, clear, None)
+        self.assertGreater(int(np.sum(it.group == veg.G_VINE_ROW)), 20, "single rows at the ends")
+        x, y = veg._to3857(ring[:, 0], ring[:, 1])
+        y0 = float(y.min())
+        rows = self._rows(it)
+        self.assertGreater(len(rows), 20)
+        checked = 0
+
+        def at(i, j, ry):                                     # (the edge from corner i to j at the row's y)
+            return float(x[i] + (x[j] - x[i]) * (ry - y[i]) / (y[j] - y[i]))
+        for ry, items in rows.items():
+            d = ry - y0
+            if d < 1.0 or d > float(y.max()) - y0 - 1.0:
+                continue
+            left, right = at(0, 3, ry), at(1, 2, ry)
+            self.assertLess(items[0][0] - left, self.GAP * self.SEC, f"row {ry}: up to the left edge")
+            self.assertLess(right - self._closed(items, ry), self.GAP * self.SEC, f"row {ry}: up to the right edge")
+            single = [(a, b) for a, b, g in items if g == veg.G_VINE_ROW]
+            self.assertTrue(all(a >= left - 0.4 * self.SEC and b <= right + 0.4 * self.SEC for a, b in single),
+                            f"row {ry}: no single row past the edge")
+            checked += 1
+        self.assertGreater(checked, 15)
+
+    def test_rows_run_up_to_a_road(self):
+        # a road 6 m wide across the field (the canopy grid's blocked pixels): no item on it, the rows reach it
+        # within one segment from both sides
+        frame, feats, ring, chm, clear = self._field([0, 200, 200, 0, 0], [0, 0, 60, 60, 0])
+        blocked = clear.copy()
+        x, y = veg._to3857(ring[:, 0], ring[:, 1])
+        road0, road1 = float(x.min()) + 97.0 * self.SEC, float(x.min()) + 103.0 * self.SEC
+        cols = chm.x0 + (np.arange(blocked.shape[1]) + 0.5) * chm.dx
+        blocked[:, (cols >= road0) & (cols <= road1)] = True
+        it = veg.vineyard_items(feats, chm, blocked, None)
+        rows = self._rows(it)
+        self.assertGreater(len(rows), 15)
+        near = (self.GAP * self.SEC + chm.dx)               # (the road's pixels: one more pixel either way)
+        for ry, items in rows.items():
+            west = [r for r in items if r[1] <= road0 + near]
+            east = [r for r in items if r[0] >= road1 - near]
+            self.assertFalse([1 for a, b, g in items if a < road0 - near and b > road1 + near], "none across")
+            self.assertTrue(west and east, f"row {ry}: on both sides")
+            self.assertLess(road0 - self._closed(west, ry), near, f"row {ry}: up to the road from the west")
+            self.assertLess(east[0][0] - road1, near, f"row {ry}: up to the road from the east")
+            self._closed(east, ry)
+
+    def test_row_fill_only_in_a_narrow_field(self):
+        # a strip too narrow for a group (5 m): single rows only, along it
+        frame, feats, ring, chm, clear = self._field([0, 120, 120, 0, 0], [0, 0, 5, 5, 0])
+        it = veg.vineyard_items(feats, chm, clear, None)
+        self.assertGreater(len(it), 15)
+        self.assertTrue(np.all(it.group == veg.G_VINE_ROW))
+
+    @staticmethod
+    def _slope(frame, grade, deg):
+        """heights(lat, lon): ground rising grade (rise over run) towards deg counter-clockwise from east."""
+        c, s = np.cos(np.radians(deg)), np.sin(np.radians(deg))
+
+        def heights(lat, lon):
+            e, n, _ = frame.geodetic_to_enu(np.asarray(lat, float), np.asarray(lon, float), np.zeros(np.size(lat)))
+            return grade * (c * np.asarray(e) + s * np.asarray(n))
+        return heights
+
+    @staticmethod
+    def _yaw_off(it, deg):
+        """The rows' largest angle from the axis deg (yaws are axes: 180 degrees apart are the same)."""
+        d = (np.asarray(it.yaw, float) - deg) % 180.0
+        return float(np.max(np.minimum(d, 180.0 - d)))
+
+    def test_rows_down_the_slope(self):
+        # World-to-BeamNG's rows: on a 10 % slope rising north the rows run north-south, across the field's long
+        # sides; flat, or without heights, along them as before
+        frame, feats, ring, chm, clear = self._field([0, 200, 260, 60, 0], [0, 0, 60, 60, 0])
+        down = veg.vineyard_items(feats, chm, clear, None, self._slope(frame, 0.10, 90.0))
+        self.assertGreater(len(down), 30)
+        self.assertLess(self._yaw_off(down, 90.0), 0.5, "rows along the fall line")
+        flat = veg.vineyard_items(feats, chm, clear, None, self._slope(frame, 0.0, 90.0))
+        self.assertLess(self._yaw_off(flat, 0.0), 0.5, "flat: along the long sides")
+        gentle = veg.vineyard_items(feats, chm, clear, None, self._slope(frame, 0.01, 90.0))
+        self.assertLess(self._yaw_off(gentle, 0.0), 0.5, "under VINE_FALL_MIN: along the long sides")
+        self.assertLess(self._yaw_off(veg.vineyard_items(feats, chm, clear, None, lambda la, lo: None), 0.0), 0.5,
+                        "the DEM cannot say: along the long sides")
+
+    def test_groups_end_to_end_on_a_slope(self):
+        # a 30 % slope along the rows: the groups lie pitched (15.9 m over the ground), so their centres are spaced by
+        # their run over the map, a little overlapping (VINE_JOIN_M); 15.9 m flat apart left a gap at every joint
+        frame, feats, ring, chm, clear = self._field([0, 30, 30, 0, 0], [0, 0, 200, 200, 0])
+        it = veg.vineyard_items(feats, chm, clear, None, self._slope(frame, 0.30, 90.0))
+        g = it.group == veg.G_VINE
+        self.assertGreater(int(g.sum()), 6)
+        self.assertLess(self._yaw_off(it, 90.0), 0.5, "rows down the slope")
+        cx, cy = veg._to3857(it.lon[g], it.lat[g])
+        steps = []
+        for x in np.unique(np.round(cx, 1)):                  # (a column of groups: one middle row)
+            ys = np.sort(cy[np.round(cx, 1) == x])
+            steps += np.diff(ys).tolist()
+        want = (veg.VINE_ALONG_M - veg.VINE_JOIN_M) / np.sqrt(1.0 + 0.30 ** 2) * self.SEC
+        self.assertTrue(steps)
+        np.testing.assert_allclose(steps, want, rtol=0.01)
+        flat = veg.vineyard_items(feats, chm, clear, None, self._slope(frame, 0.0, 90.0))
+        fy = np.sort(veg._to3857(flat.lon[flat.group == veg.G_VINE], flat.lat[flat.group == veg.G_VINE])[1])
+        self.assertAlmostEqual(float(np.min(np.diff(fy)[np.diff(fy) > 1.0])),
+                               (veg.VINE_ALONG_M - veg.VINE_JOIN_M) * self.SEC, delta=0.05)
+
+    def test_rows_keep_to_an_edge_near_the_fall_line(self):
+        # the slope's fall line 10 degrees off the long sides (within VINE_SNAP_DEG): the rows stay parallel to them;
+        # 40 degrees off: down the slope
+        frame, feats, ring, chm, clear = self._field([0, 200, 260, 60, 0], [0, 0, 60, 60, 0])
+        near = veg.vineyard_items(feats, chm, clear, None, self._slope(frame, 0.10, 10.0))
+        self.assertLess(self._yaw_off(near, 0.0), 0.5)
+        far = veg.vineyard_items(feats, chm, clear, None, self._slope(frame, 0.10, 40.0))
+        self.assertLess(self._yaw_off(far, 40.0), 1.0)
+
+    def test_fall_axis_over_a_crest(self):
+        # a ridge along x, falling north and south of it: one axis, north-south (the mean of the gradients is 0)
+        frame, feats, ring, chm, clear = self._field([0, 200, 200, 0, 0], [-60, -60, 60, 60, -60])
+        _, xy, holes, area = next(veg._field_rings(feats, "vineyard", veg.VINE_MIN_M2))
+
+        def ridge(lat, lon):
+            _, n, _ = frame.geodetic_to_enu(np.asarray(lat, float), np.asarray(lon, float), np.zeros(np.size(lat)))
+            return -0.1 * np.abs(np.asarray(n))
+        u, slope, _ge, _gn = veg._fall_axis(xy, holes, area, ridge, 1.0 / np.cos(np.radians(44.9)))
+        self.assertAlmostEqual(abs(float(u[1])), 1.0, places=3)
+        self.assertGreater(slope, 0.08)
+
+    def _tile(self, yaws, groups):
+        frame = geodesy.EnuFrame(44.9, -0.15)
+        e = np.array([10.0 + 30 * i for i in range(len(yaws))])
+        n = np.full(len(yaws), 20.0)
+        la, lo, _ = frame.enu_to_geodetic(e, n, np.zeros(len(e)))
+        k = len(yaws)
+        it = veg.Items(lo, la, np.full(k, 2.6, np.float32), np.full(k, 1.2, np.float32), np.ones(k, np.uint8),
+                       np.array(groups, np.uint8), np.zeros(k, np.float32), np.array(yaws, np.float32),
+                       np.ones(k, np.float32))
+        return frame, it, e, n
+
+    def test_vine_tilt_lies_on_the_slope(self):
+        # 10 % up north: a group along north-south pitches atan(0.1) (down when it faces south), none rolls; one
+        # along east-west rolls instead; a tree stays upright
+        frame, it, e, n = self._tile([90.0, 270.0, 0.0, 0.0], [veg.G_VINE, veg.G_VINE, veg.G_VINE, veg.G_DECIDUOUS])
+        tilt = veg._vine_tilt(frame, it, e, n, self._slope(frame, 0.10, 90.0))
+        want = np.degrees(np.arctan(0.1))
+        np.testing.assert_allclose(tilt[0], [want, -want, 0.0, 0.0], atol=0.05)
+        np.testing.assert_allclose(tilt[1], [0.0, 0.0, want, 0.0], atol=0.05)
+        self.assertIsNone(veg._vine_tilt(*self._tile([0.0], [veg.G_DECIDUOUS])[:4], lambda la, lo: np.zeros(np.shape(la))))
+        steep = veg._vine_tilt(frame, it, e, n, self._slope(frame, 3.0, 90.0))
+        self.assertEqual(float(steep[0][0]), veg.VINE_TILT_MAX_DEG, "a DEM spike: at most VINE_TILT_MAX_DEG")
+
+    def test_tile_rows_with_vines(self):
+        # a tile with vines: rows of TILT_STRIDE numbers, the native module's text the same as json.dumps of the rows,
+        # the flat file's stride 10; a tile without: 8 as before
+        import json
+        import os
+        import tempfile
+        frame, it, e, n = self._tile([90.0, 0.0], [veg.G_VINE, veg.G_DECIDUOUS])
+        z = np.array([5.0, 6.0])
+        tilt = veg._vine_tilt(frame, it, e, n, self._slope(frame, 0.10, 90.0))
+        rows = veg._tile_rows(it, e, n, z, tilt, False, 44.9, -0.15)
+        js = veg._tile_rows(it, e, n, z, tilt, True, 44.9, -0.15)
+        self.assertEqual([len(r) for r in rows], [veg.TILT_STRIDE] * 2)
+        self.assertEqual(rows[0][8:], [5.7, 0.0])
+        self.assertEqual(rows[1][8:], [0.0, 0.0])
+        self.assertEqual(str(js), json.dumps(rows, separators=(",", ":")))
+        self.assertEqual((js.stride, js.n), (veg.TILT_STRIDE, 2))
+        plain = veg._tile_rows(it, e, n, z, None, True, 44.9, -0.15)
+        self.assertEqual(plain.stride, veg.FLAT_STRIDE)
+        self.assertEqual(json.loads(plain), [r[:8] for r in rows])
+        with tempfile.TemporaryDirectory() as tmp:
+            for got, stride in ((js, veg.TILT_STRIDE), (rows, veg.TILT_STRIDE), (plain, veg.FLAT_STRIDE)):
+                path, _ = veg.write_tile(tmp, "/v", 1, 0, 0, got, flat=True)
+                with open(os.path.join(tmp, os.path.basename(path))) as f:
+                    doc = json.load(f)
+                self.assertEqual(doc["stride"], stride)
+                self.assertEqual(len(doc["flat"]), 2 * stride)
 
 
 class BaleTest(unittest.TestCase):

@@ -59,8 +59,8 @@ class SwitchesOffTest(unittest.TestCase):
             self.assertEqual(natural.veg_key(), "")
             self.assertEqual(natural.sea_key(), "")
             self.assertEqual(veg.groups_list(), list(veg.BASE_GROUPS))
-        self.assertEqual(len(veg.BASE_GROUPS), 25, "the base groups' numbers never move")
-        self.assertEqual(veg.GROUPS[:25], veg.BASE_GROUPS)
+        self.assertEqual(len(veg.BASE_GROUPS), 26, "the base groups' numbers never move (vine_row, PR #1501, the 26th)")
+        self.assertEqual(veg.GROUPS[:26], veg.BASE_GROUPS)
         with mock.patch.multiple(natural, TREES=True, VEG_ON=True):
             self.assertTrue(natural.veg_key().startswith("-nat"))
             self.assertEqual(veg.groups_list(), list(veg.GROUPS))
