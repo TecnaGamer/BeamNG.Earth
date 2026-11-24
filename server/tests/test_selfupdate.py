@@ -94,6 +94,22 @@ class DownloadTest(unittest.TestCase):
         self.assertIsNone(selfupdate.staged("9.9.9-beta", path), "the new copy runs itself")
         self.assertEqual(selfupdate.staged("1.5.5-beta", self.me), path, "... and the old one still hands over")
 
+    def test_a_renamed_appimage_updates(self):
+        # (an AppImage manager renamed the player's file "...-x86_64.appimage": "not a packaged BeamNG.Earth file",
+        # 2026-11-24. The release's ".AppImage" is downloaded under its own name and the old file hands over)
+        me = os.path.join(self.dir, "BeamNG.Earth-1.5.5-beta-x86_64.appimage")
+        open(me, "wb").close()
+        self.assertEqual(selfupdate.asset_suffix(me), ".AppImage")
+        name = "BeamNG.Earth-9.9.9-beta-x86_64.AppImage"
+        rel = release(url=selfupdate.ASSET_PREFIX + "v9.9.9-beta/" + name, name=name)
+        rel["assets"] = rel["assets"][1:]        # (the fixture's placeholder AppImage entry: this one instead)
+        with mock.patch("urllib.request.urlopen", opener(rel)):
+            version, path = selfupdate.download(FakeNet(), "1.5.5-beta", me)
+        self.assertEqual(os.path.basename(path), name)
+        self.assertTrue(os.access(path, os.X_OK))
+        self.assertEqual(selfupdate.staged("1.5.5-beta", me), path)
+        self.assertIsNone(selfupdate.asset_suffix("/a/BeamNG.Earth.tar.gz"))
+
     def test_bad_checksum_deleted(self):
         with mock.patch("urllib.request.urlopen", opener(release(), body=b"tampered")):
             with self.assertRaises(selfupdate.UpdateError):
