@@ -1084,6 +1084,26 @@ end
 T.check(trees.spareWanted(trees.FRAME_MS) == 0 and trees.spareWanted(trees.LOADING_FRAME_MS) >= trees.POOL_SPARE,
   'no spare Forests while driving by default (POOL_SPARE_DRIVE 0)')
 do
+  trees.reset()
+  local oldClock, hour, clock = os.clock, 18, 100
+  os.clock = function() return clock end
+  local env = core_environment
+  core_environment = {getTimeOfDay=function() return {time=((hour-12)%24)/24} end}
+  local density = require('beamngEarth/parkingdensity')
+  local _, display = density.split({{124,80,1,90,3,'sedan',1.45,'retail',.5},
+                                    {132,80,1,90,3,'suv',1.74,'dealer',.8}})
+  trees.onRows(100,'cars0_0',display,density.groups,9)
+  trees.update(100,{x=0,y=80})
+  T.check(count()==2,'daytime customers and dealer display cars use scenery renderer')
+  hour,clock=2,110
+  trees.update(100,{x=5,y=80})
+  T.check(count()==1,'late night customer car removed while inventory remains')
+  trees.dropKey('100:cars0_0')
+  trees.update(100,{x=5,y=80})
+  T.check(count()==0,'drop removes parking scenery')
+  os.clock,core_environment=oldClock,env
+end
+do
   local ground = require('beamngEarth/terrainpatch')
   local roads = require('beamngEarth/roads')
   local ready, pieces = ground.groundReady, roads.cliffPiecesReady
