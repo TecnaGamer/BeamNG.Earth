@@ -1,4 +1,8 @@
 """Compiled stock models stay private and retain authored mesh/LOD/collision bytes."""
+import os as _os, sys as _sys  # (server/ and the repo root, run from anywhere: tools/run_tests.py, unittest)
+_sys.path[:0] = [p for p in (_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                             _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+                 if p not in _sys.path]
 import json
 from pathlib import Path
 import tempfile

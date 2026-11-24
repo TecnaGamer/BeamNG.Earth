@@ -1,4 +1,8 @@
 """Distant cliff coverage must not add triangles, move ground or texture skirts."""
+import os as _os, sys as _sys  # (server/ and the repo root, run from anywhere: tools/run_tests.py, unittest)
+_sys.path[:0] = [p for p in (_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                             _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+                 if p not in _sys.path]
 import sys, tempfile, unittest, json
 from pathlib import Path
 from collections import Counter

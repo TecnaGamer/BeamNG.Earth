@@ -1,4 +1,8 @@
 """Cliff-only native tile clipping preserves the established seam/attribute rules."""
+import os as _os, sys as _sys  # (server/ and the repo root, run from anywhere: tools/run_tests.py, unittest)
+_sys.path[:0] = [p for p in (_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                             _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+                 if p not in _sys.path]
 import unittest
 import numpy as np
 import fast
