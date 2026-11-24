@@ -273,8 +273,10 @@ decision blocks (see below).
 ### Compact per-cell inputs (CIP): `cip<FORMAT>/<release>/<build>/`
 
 - **What:** architecture v2's per-cell inputs (`server/cip.py`): one file per zoom-14 cell with everything the
-  client's map data reads for it, as the client itself would make it: every Overture layer's cell file (OpenStreetMap's
-  road tags joined), the weekly rail and lane shards' slice the cell's roads read, the 3DEP lidar road heights' answers
+  client's map data reads for it, as the client itself would make it: every Overture layer's cell file (the roads
+  without OpenStreetMap's road tags since CIP content 2: the client joins them when it decodes the roads, from its run's
+  weekly `osmtags/` build, as for every cell), the weekly rail and lane shards' slice the cell's roads read, the 3DEP
+  lidar road heights' answers
   (US), OpenStreetMap's fuel and picnic rows; and per build the OurAirports snapshot. Lossless (native codec
   `cip.rs`), so plans, facts and tiles built from it are the ones the sources give. A dense Manhattan cell is about
   1 MB; the 290 cells a cold Manhattan visit reads are about 90 MB (today: ~920 MB of map inputs, 700 MB of it lidar

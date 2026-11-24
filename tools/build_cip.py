@@ -8,7 +8,8 @@
 
 Each cell's sections are made by the server's own code, in this process, with CIP off (cip.py lists them):
   m:<layer>   MapData's cell file arrays of the layer: the cache's file when it holds one (what the server reads), else
-              MapData._build from the sources (Overture through the build's map source, OSM's road tags joined) and
+              MapData._build from the sources (Overture through the build's map source; the roads without OSM's tags,
+              joined by the reader at the decode from its run's build: mapdata roads 10) and
               stored there as the server stores it. A parquet stand-in (the tiles failed) is never put in a build.
   t:rail t:lanes   railtags.cell_slice of the weekly shards for the cell's roads' way ids (decisions.ids_of)
   z:<src>     the roadz answer files the cache holds for the cell (--online: measured first, for the cells that want
@@ -137,9 +138,9 @@ class Builder:
             # trial pinned no rail / lane build and left out every cell's t:rail / t:lanes)
             out[name] = (t.version() if self.online else t.known()) if t is not None else None
         try:
-            sh = md._osm_shards()
-            got = sh.manifest() if sh is not None else None
-            out["osmtags"] = got[0] if got else None
+            # (the OSM road tags' build the "q" records are counted with: the roads' sections hold none, roads 10)
+            got = md.osm_tags_build(network=self.online)
+            out["osmtags"] = got if got not in ("layercake", "none") else None
         except Exception:
             out["osmtags"] = None
         return out
@@ -161,6 +162,9 @@ class Builder:
                     return None
                 for ly in quality.LAYERS:
                     layers[ly] = secs[f"m:{md.layer_name(ly)}"]
+                layers["roads"], ok = md.roads_joined_arrays(key, layers["roads"])   # (as the server counts them)
+                if not ok:
+                    return None
                 lanes = secs.get("t:lanes")
                 t = getattr(md, "lane_tags", None)
                 if lanes is None and t is not None and t.known() is not None:
@@ -168,6 +172,9 @@ class Builder:
             else:
                 for ly in quality.LAYERS:
                     layers[ly] = self.layer(key, ly)[1]
+                layers["roads"], ok = md.roads_joined_arrays(key, layers["roads"])
+                if not ok:
+                    return None
                 lanes = quality.lanes_slice(md, key, layers["roads"])
             return quality.counts(key, layers, lanes)
         except Exception as e:      # (a source failed: no record for the cells next to it)
@@ -203,7 +210,7 @@ class Builder:
         import railtags
         md = self.md
         secs, lacks = {}, []
-        roads = None
+        roads, roads_ok = None, True
         for layer in (self.only.get(key, ()) if self.only is not None else self.layers):
             try:
                 name, arrays = self.layer(key, layer)
@@ -214,9 +221,14 @@ class Builder:
                 continue            # (read from its source: a whole outline repeated in each cell it reaches)
             secs[f"m:{name}"] = arrays
             if layer == "roads":
-                roads = mapgeom.Features.from_arrays("roads", {k: v for k, v in arrays.items() if k != "provenance"},
+                # (the ways the server's joins look up: its decode's, the OSM road tags joined; the section holds none)
+                joined, ok = md.roads_joined_arrays(key, arrays)
+                roads = mapgeom.Features.from_arrays("roads", {k: v for k, v in joined.items() if k != "provenance"},
                                                      "")
-        if roads is not None:
+                if not ok:          # (the slices' way ids not the server's: left out, read from the shards)
+                    lacks.append(("t:osmtags", "the OSM road tags of the build could not be had"))
+                    roads_ok = False
+        if roads is not None and roads_ok:
             ids = decisions.ids_of(roads)
             for sec, t in (("t:rail", getattr(md, "rail_tags", None)), ("t:lanes", getattr(md, "lane_tags", None))):
                 if t is None or t.known() is None:
@@ -793,7 +805,7 @@ def attribution():
         f"Attribution: {overture.ATTRIBUTION}",
         "[m:bathymetry] Overture Maps bathymetry (ETOPO / GLOBathy), CC0-1.0.",
         "[m:places] Overture Maps places: CDLA-Permissive-2.0 / Apache-2.0 / CC0 per source (Overture's NOTICE).",
-        "[t:rail t:lanes f:osmfuel f:picnic, OSM tags in m:roads] OpenStreetMap contributors, ODbL-1.0.",
+        "[t:rail t:lanes f:osmfuel f:picnic] OpenStreetMap contributors, ODbL-1.0.",
         "[z:*] heights derived from USGS 3DEP (public domain), IGN BD TOPO (Etalab 2.0), NVDB (NLOD), HK CSDI.",
         "[m:landcover] ESA WorldCover 2021 v200, CC BY 4.0. [m:canopy] Meta and WRI canopy height, CC BY 4.0.",
         "[airports] OurAirports, public domain.", ""])

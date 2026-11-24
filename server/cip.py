@@ -10,7 +10,10 @@ pulled ~900 MB of those).
 
 What a cell holds (sections, native codec earthfast cip.rs: lossless, every array back with its dtype, shape and bytes):
   m:<layer>        a map layer's cell file as mapdata.MapData._build makes it (Overture through the source the build
-                   names, OpenStreetMap's road tags joined, `own`, the provenance record; the rasters' pixels)
+                   names, `own`, the provenance record; the rasters' pixels). The roads hold no OpenStreetMap tags
+                   (mapdata roads 10): the reader joins them at the decode from its own run's tag shard build, as for
+                   every cell, so a build never brings another week's tags (CONTENT 2; a CONTENT 1 build, tags baked
+                   in, is not read: its roads.9 sections are other code's, code_inputs)
   t:rail t:lanes   the weekly rail / lane tag shards' slice a join of the cell reads (railtags: the cell's ways' tags,
   t:stations       its nodes in the joins' pad; the stations whose point is in the cell), shard order kept
   z:<src> z:<src>.gaps   the lidar road heights' answer files (roadz: the cell's Lines arrays and its gaps JSON)
@@ -23,8 +26,10 @@ Every one is what the server would have made itself from the same inputs, bit fo
 with the server's own code), so nothing built from a CIP cell has a cache key of its own: the map layer's file, the
 plans, facts and tiles are the ones the sources give. What the build read is its manifest's "inputs" (inputs()): the
 code-made parts (formats, versions, the Overture release, the map source) must equal this server's own or the build
-is not used; the weekly data builds it pinned (OSM road tags, rail, lanes, stations) are the ones this server then
-reports (MapData.versions()), for every cell, CIP or not: no cell keyed by one build mixes with another's.
+is not used; the weekly data builds it pinned (rail, lanes, stations) are the ones this server then reports
+(MapData.versions()), for every cell, CIP or not: no cell keyed by one build mixes with another's. The OSM road tags'
+build it pinned only names what its "q" records were counted with (quality.Source reads them while the run's build is
+that one); the roads' tags are the run's own (above).
 
 A cell the build has no section for (outside its coverage, a layer it lacks), a build that cannot be read (404,
 network, another format) or a damaged cell: the source as before (the fallback is per section, logged once a cell).
@@ -57,7 +62,7 @@ FORMAT = 1                 # the cell codec and section names (earthfast cip.rs 
 # What the sections hold: bump with any change of what a section is made from or how (the builder's reads, a slice's
 # rule): builds of another content are not read. (The map layers' own content is keyed by mapdata.VERSION,
 # LAYER_VERSIONS and the map source, as their cache files are.)
-CONTENT = 1
+CONTENT = 2                # (2: the roads' sections without OpenStreetMap's tags: joined by the reader, mapdata roads 10)
 ZOOM = 14
 ARCHIVE = "cells"
 PART_MB = 32               # a part's data at most: a CDN edge caches it whole on the first read

@@ -86,15 +86,23 @@ def cell_layers(key, roads=True, buildings=(), lanes=True):
 
 
 class FakeMd:
-    """MapData's reads the quality Source makes (layer_arrays), from a dict of cells."""
+    """MapData's reads the quality Source makes (layer_arrays, the roads' OSM tag join), from a dict of cells (their
+    roads hold their OSM tags already: the join gives them as they are)."""
 
-    def __init__(self, cells):
+    def __init__(self, cells, osm="o1"):
         self.cells = cells
         self.cip = None
         self.lane_tags = None
+        self.osm = osm
 
     def layer_arrays(self, key, layer, kind="demand"):
         return self.cells[key][0][layer], True
+
+    def roads_joined_arrays(self, key, arrays, kind="demand"):
+        return arrays, True
+
+    def osm_tags_build(self, network=True):
+        return self.osm
 
 
 @unittest.skipUnless(HAVE, "needs earthfast with quality")
@@ -213,6 +221,9 @@ class Record(unittest.TestCase):
         class Reader:
             def one(self, key, name, kind="demand"):
                 return other if name == "q" else None
+
+            def data_builds(self):
+                return {"osmtags": "o1"}
         cells = {k: cell_layers(k) for k in quality.ring(KEY)}
         md = FakeMd(cells)
         md.cip = Reader()
@@ -225,6 +236,36 @@ class Record(unittest.TestCase):
             quality.lanes_slice = orig
         self.assertEqual(src.stats["made"], 1)
         self.assertEqual(quality.fields(got)["cells"], 9)
+
+    def test_stored_section_of_another_osm_tags_build_is_made_again(self):
+        """A CIP build's "q" counted with other OSM road tags than the run's (the roads' tags are joined at the
+        decode, from the run's build: mapdata roads 10) is not read: the record is made from the run's layers."""
+        nine = [self.counts_of(k) if k == KEY else None for k in quality.ring(KEY)]
+        rec = quality.record(KEY, nine)
+        asked = []
+
+        class Reader:
+            def one(self, key, name, kind="demand"):
+                asked.append(name)
+                return rec if name == "q" else None
+
+            def data_builds(self):
+                return {"osmtags": "o-older"}
+        cells = {k: cell_layers(k) for k in quality.ring(KEY)}
+        md = FakeMd(cells)
+        md.cip = Reader()
+        orig = quality.lanes_slice
+        quality.lanes_slice = lambda md_, key, roads: cells[key][1]
+        try:
+            src = quality.Source(md)
+            got = src.data(KEY)
+            self.assertEqual((src.stats["stored"], src.stats["made"]), (0, 1))
+            self.assertNotIn("q", asked)
+            md.osm = "o-older"          # (the run's build the one it was counted with: read)
+            self.assertEqual(quality.Source(md).data(KEY), rec)
+        finally:
+            quality.lanes_slice = orig
+        self.assertEqual(quality.fields(got)["cells"], 9, "made from the run's 3 x 3 cells")
 
     def test_cip_puts_the_record_first(self):
         import cip
