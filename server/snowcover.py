@@ -165,6 +165,12 @@ def _window(f, south, west, north, east):
     return (res, ci0, cj0, idx, tables, counts)
 
 
+def deep_possible():
+    """Can a block get deep snow (its .ter then lists the snow layer: surface.write_ter / snow_layers)? Any snow mode
+    (a preset's depth or W1's state may reach D3, permanent snow does)."""
+    return ON and MODE != "none"
+
+
 def perm_possible(south, west, north, east):
     """Can permanent snow lie in the box (a polar / alpine Koppen class within a pixel of it)?"""
     import climate

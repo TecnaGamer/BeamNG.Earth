@@ -264,5 +264,41 @@ class LookTest(unittest.TestCase):
             self.assertLessEqual(int(np.abs(ob.astype(int) - of[750:, :250].astype(int)).max()), 3)
 
 
+class LayersTest(unittest.TestCase):
+    def test_deep_snow_to_the_snow_layer(self):
+        """A block's .ter lists the snow layer while winter is on; snow_layers moves its land samples under deep snow
+        there and leaves the roads; off, the listing is today's."""
+        import tempfile
+        import surface as sf
+        n = 64
+        idx = np.full((n, n), sf.GRASS, np.uint8)
+        idx[:, 20:24] = sf.ASPHALT
+        idx[40:, :10] = sf.FOREST
+        q = np.zeros((n, n), np.uint16)
+        frame = geodesy.EnuFrame(*PLAINS)
+        with tempfile.TemporaryDirectory() as d:
+            with winter(on=False):
+                _, used = sf.write_ter(d, "a.ter", q, idx)
+                self.assertNotIn(sf.SNOW, used)
+            for preset, want in (("heavy", True), ("light", False)):
+                with winter(preset) as sc:
+                    name, used = sf.write_ter(d, "b.ter", q, idx)
+                    self.assertIn(sf.SNOW, used)
+                    self.assertEqual(used[-1], sf.DIRT if sf.DIRT in used else used[-1])
+                    masks = sf.write_masks(idx[::-1], d, "b")
+                    sp = sc.spec_for_square(frame, 0.0, 0.0, float(n))
+                    look = sc.look(sp, frame, 0.0, 0.0, float(n), np.full((5, 5), 200.0), 0.5, 0.5, 16.0)
+                    _, _, _, was, _ = sf._read_ter(f"{d}/{name}")      # (its border ring: holes)
+                    k = sf.snow_layers(d, name, masks, look, 0.0, 0.0, 1.0)
+                    _, _, _, lay, _ = sf._read_ter(f"{d}/{name}")
+                    if want:
+                        land = np.isin(was, (sf.GRASS, sf.FOREST))
+                        self.assertEqual(k, int(land.sum()))
+                        self.assertTrue((lay[was == sf.ASPHALT] == sf.ASPHALT).all(), "the roads stay theirs")
+                        self.assertTrue((lay[land] == sf.SNOW).all())
+                    else:
+                        self.assertEqual(k, 0, "D2: not deep, the land layers stay")
+
+
 if __name__ == "__main__":
     unittest.main()

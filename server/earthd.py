@@ -5194,6 +5194,7 @@ class Server:
                     surfacemod.photo_lawns(self.out_dir, info["ter"], info["layers"], photo[0])
                 except Exception as e:
                     log.info("photo lawns %s: %s", (anchor.id, cx, cy), e)
+                Server._snow_layers(self, anchor, cx, cy, info)
         elif (anchor.id, cx, cy) in self.base_skipped and self.near_visual == "detail" and self.imagery is not None:
             # a block built ahead (a fast player's prefetch, not waited on yet) gets its stand-in before it is ready:
             # made after it, the mod could take the block first and show the level's green base until it came (a
@@ -5221,13 +5222,35 @@ class Server:
         info["zoom"] = anchor.hm_zoom
         return info
 
-    def _photo_lawns(self, key, ter, layers, rgb):
+    def _photo_lawns(self, key, ter, layers, rgb, info=None):
         if key in self.hm_committed:            # (in use since it was asked for: its .ter is the engine's, _base_later)
             return
         try:
             surfacemod.photo_lawns(self.out_dir, ter, layers, rgb)
         except Exception as e:
             log.info("photo lawns %s: %s", key, e)
+        anchor = self.anchors.get(key[0]) if info is not None else None
+        if anchor is not None and key not in self.hm_committed:
+            Server._snow_layers(self, anchor, key[1], key[2], info)
+
+    def _snow_layers(self, anchor, cx, cy, info):
+        """Winter: the block's samples under deep snow to the snow layer (surface.snow_layers), from the snow its photo
+        was made with (base_snow) at the block's own heights (its .ter). Before the game reads the block, as the lawns.
+        Called as Server._snow_layers(self, ...)."""
+        spec = Server.base_snow(self, anchor, cx, cy)
+        if spec is None or not info.get("ter") or not info.get("layers") or info.get("zBase") is None:
+            return 0
+        try:
+            sq = heightmap.SQUARE
+            size = self.layout.block * sq
+            x0, y0 = cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M
+            step = 16
+            U, _n, _idx = surfacemod.ter_heights(self.out_dir, info["ter"], info["zBase"], info["maxHeight"], step)
+            look = snowcovermod.look(spec, anchor.frame, x0, y0, size, U, x0 + 0.5 * sq, y0 + 0.5 * sq, step * sq)
+            return surfacemod.snow_layers(self.out_dir, info["ter"], info["layers"], look, x0, y0, sq) if look else 0
+        except Exception as e:
+            log.info("snow layers %s: %s", (anchor.id, cx, cy), e)
+            return 0
 
     def _quick_later(self, anchor, cx, cy):
         """quick_pool: a block sent without its photo gets its stand-in (write_quick_base) onto its entry and to the mod
@@ -5289,7 +5312,7 @@ class Server:
                     # a drive). Never a block in use: the engine watches its .ter, reloaded it when patched here and
                     # froze in its TextureCooker (a pads refresh's block whose photo came a second after it, Billings
                     # 2026-11-11: "File changed [hm_2_0_384_5.ter]", the game hung)
-                    self.quick_pool.submit(self._photo_lawns, key, info["ter"], info["layers"], photo[0])
+                    self.quick_pool.submit(self._photo_lawns, key, info["ter"], info["layers"], photo[0], info)
             for c in list(self.connections):    # (the mod drops another anchor's)
                 c.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
                         "base": f"{self.vfs_dir}/{name}", "baseSize": size})
