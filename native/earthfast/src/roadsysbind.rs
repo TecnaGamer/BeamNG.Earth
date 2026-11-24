@@ -67,19 +67,26 @@ fn section_of(sid: &str) -> Option<(&str, i64, i64)> {
 #[pymethods]
 impl RoadsysSegments {
     #[new]
-    #[pyo3(signature = (ids, cells, texts, nums, ints, pts, off, con_seg, con_id, con_v, rng_seg, rng, style, areas = None, fit = false))]
+    /// xsec (610, BNE_ROADSYS_XSEC): each segment's cross-section tags (native/roadsys xsec.rs's text); given, the
+    /// cross-section model is on (every stroke's strip slots) whatever the texts hold; None: off, as before.
+    /// areas / fit (608, BNE_ROADSYS_AREAS): the mapped road areas round the read and whether they are the carriageway
+    /// edges' targets. Both on (617): the fit sets the carriageway's whole width and edges, the strips divide it.
+    #[pyo3(signature = (ids, cells, texts, nums, ints, pts, off, con_seg, con_id, con_v, rng_seg, rng, style, areas = None, fit = false, xsec = None))]
     #[allow(clippy::too_many_arguments)]
     fn new(ids: Vec<String>, cells: Vec<String>, texts: Vec<(String, String, String, String, String)>,
            nums: PyReadonlyArray2<'_, f64>, ints: PyReadonlyArray2<'_, i64>, pts: PyReadonlyArray2<'_, f64>,
            off: PyReadonlyArray1<'_, i64>, con_seg: PyReadonlyArray1<'_, i64>, con_id: Vec<String>,
            con_v: PyReadonlyArray1<'_, i64>, rng_seg: PyReadonlyArray1<'_, i64>, rng: PyReadonlyArray2<'_, f64>,
            style: (String, String, f64, f64, f64, f64, (f64, f64), (f64, f64), (f64, f64), bool),
-           areas: Option<PyRef<'_, RoadsysAreas>>, fit: bool) -> PyResult<Self> {
+           areas: Option<PyRef<'_, RoadsysAreas>>, fit: bool, xsec: Option<Vec<String>>) -> PyResult<Self> {
         let n = ids.len();
         let (nums, ints, pts, off) = (nums.as_array(), ints.as_array(), pts.as_array(), off.as_slice()?);
         if cells.len() != n || texts.len() != n || nums.nrows() != n || nums.ncols() != 4 || ints.nrows() != n
             || ints.ncols() != 9 || pts.ncols() != 2 || off.len() != n + 1 || off[n] as usize != pts.nrows() {
             return Err(PyValueError::new_err("RoadsysSegments: inconsistent columns"));
+        }
+        if xsec.as_ref().map(|x| x.len() != n).unwrap_or(false) {
+            return Err(PyValueError::new_err("RoadsysSegments: xsec must hold one text per segment"));
         }
         let (con_seg, con_v, rng_seg) = (con_seg.as_slice()?, con_v.as_slice()?, rng_seg.as_slice()?);
         let rng = rng.as_array();
@@ -99,6 +106,7 @@ impl RoadsysSegments {
                 inferred: ints[[i, 0]], urban: ints[[i, 1]] != 0, cls: ints[[i, 2]], link: ints[[i, 3]] != 0, dir: ints[[i, 4]],
                 lanes: ints[[i, 5]], lfw: ints[[i, 6]], lbw: ints[[i, 7]], region: ints[[i, 8]],
                 pts: p, cons: Vec::new(), bridge: Vec::new(), tunnel: Vec::new(), level: Vec::new(), depth: 0.0,
+                xsec: xsec.as_ref().map(|x| x[i].clone()).unwrap_or_default(),
             });
         }
         for k in 0..con_id.len() {
@@ -163,7 +171,7 @@ impl RoadsysSegments {
         let (areas, area_build) = match &areas { Some(a) => (a.areas.clone(), a.build), None => (Vec::new(), 0) };
         let fit = fit && !areas.is_empty();
         let place = Place { name: String::new(), country: segs.first().map(|s| s.code.clone()).unwrap_or_default(), style: st, segs,
-                            areas, area_build, ..Default::default() };
+                            xsec: xsec.is_some(), areas, area_build, ..Default::default() };
         Ok(RoadsysSegments { place, dropped: (copies, parents, sections), fit })
     }
 
@@ -612,6 +620,20 @@ pub fn roadsys_decks<'py>(py: Python<'py>, segs: PyRef<'py, RoadsysSegments>, qu
         PyArray1::from_vec(py, o.mc.iter().map(|&k| k as i64).collect()), o.fallback.clone(), o.json.clone()))
 }
 
+/// (610, BNE_ROADSYS_XSEC) the half extent (m from its mapped line) of one segment's carriageway with its
+/// cross-section, from its RoadsysSegments columns (texts, nums, ints as server/roadsys.py _table writes them) and its
+/// cross-section text; None when the text does not shape it (today's widths). The deck ends' hand-over reads it.
+#[pyfunction]
+pub fn roadsys_xsec_half_extent(texts: (String, String, String, String, String), nums: [f64; 4], ints: [i64; 9], xsec: String) -> Option<f64> {
+    let s = Seg {
+        code: texts.0, cls_s: texts.1, turn: texts.2, turn_bw: texts.3, place: texts.4,
+        pave: nums[0], drive: nums[1], kmh: nums[2], lane_w: nums[3],
+        inferred: ints[0], urban: ints[1] != 0, cls: ints[2], link: ints[3] != 0, dir: ints[4], lanes: ints[5], lfw: ints[6],
+        lbw: ints[7], region: ints[8], xsec, ..Default::default()
+    };
+    roadsys::net::xsec_half_extent(&s)
+}
+
 /// (608) The mapped road areas' audit of a surface (native/roadsys areas.rs run_input: the "RSAREA01" input
 /// tools/widecorpus/checks.py writes): its JSON.
 #[pyfunction]
@@ -635,6 +657,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadsys_deck_depth, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_end_lifts, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_floor_points, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_xsec_half_extent, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_clear, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_audit, m)?)?;
     m.add_class::<RoadsysEnds>()?;

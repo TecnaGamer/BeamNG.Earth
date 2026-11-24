@@ -488,11 +488,13 @@ def keyed_env(k):
 # version and its own).
 # BNE_ROADSYS=surface 1 (M4 surface, 2026-11-22): structures, and the decks drawn from the road system's own faces
 # (roadsys.deck_faces, earthfast 606); keyed as "2s1u1" (structures' meaning and its own); its plans are heights' own.
+# BNE_ROADSYS_XSEC 1 (2026-11-22): the road system's cross-sections from OSM's street tags (parking, cycle and bus lanes,
+# shoulders, mapped carriageway widths; native/roadsys xsec.rs XSEC_FORMAT 1, earthfast 610).
 ROADSYS_STRUCTURES_VERSION = 1
 ROADSYS_SURFACE_VERSION = 1
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 2}
+                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 2, "BNE_ROADSYS_XSEC": 1}
 
 
 def keyed_value(k, v):

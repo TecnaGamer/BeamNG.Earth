@@ -7750,6 +7750,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 604 (603 and 605 kept for other branches): cip (architecture v2's compact per-cell inputs: the lossless cell
     // codec of named arrays and blobs; cip_encode_cell, cip_cell_info, cip_decode; server/cip.py, tools/build_cip.py)
     cip::register(m)?;
+    // 610: RoadsysSegments(xsec=...): the road system's cross-sections from OSM's street tags (native/roadsys xsec.rs,
+    // BNE_ROADSYS_XSEC=on)
     // 608: OSM's mapped road areas (area:highway=*): roadareas::oah_decode (a tile of tools/build_osm_road_areas.py,
     // server/osmareas.py), RoadsysAreas + RoadsysSegments(areas=, fit=) (native/roadsys areas.rs: the M0 audit of the
     // generated surface against them in every product built with areas; BNE_ROADSYS_AREAS=on: the carriageway edges'
@@ -7764,6 +7766,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 612 (608-611 kept for other branches): drivefeat (the mapped driving features: calming_apply, the speed
     // bumps / humps / tables / fords in a road plan's profile, BNE_CALMING / BNE_UNPAVED; server/calming.py)
     drivefeat::register(m)?;
-    m.add("VERSION", 620)?;
+    // 617: both 608 (areas) and 610 (xsec) in one binary; RoadsysSegments(areas=, fit=, xsec=) compose (the areas fit
+    // sets the carriageway's total width and edges, the cross-section strips divide it)
+    m.add("VERSION", 621)?;
     Ok(())
 }

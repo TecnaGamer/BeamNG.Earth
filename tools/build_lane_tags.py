@@ -19,6 +19,12 @@ Shards: <OUT_DIR>/<x>/<y>.json.gz per z7 tile (build_rail_tags.SHARD_ZOOM), and 
   junction sign (SIGN_BASES) or a mapped town sign (Ortstafeln: TOWN_CODES, for the town signs, server/townentry.py;
   sign_records), only inside GERMANY_BOX; the name (town signs only) and the direction keys only where mapped. Each
   reader keeps the codes it knows (designs.mapped_rows, townentry.Towns.mapped_nodes).
+- "xsec" (only with --xsec): the street tags of every drivable highway way (XSEC_HIGHWAYS) with any of XSEC_KEYS
+  (parking, cycle lanes, bus lanes, shoulders, sidewalks and kerbs, width:carriageway, est_width: the road system's
+  cross-sections, native/roadsys xsec.rs, BNE_ROADSYS_XSEC), lane way or not, as one table: {"keys": the keys used in
+  the shard, sorted; "sets": the distinct value rows ([value or null per key]), sorted; "ids": the way ids sorted and
+  delta-coded; "set": each id's row}. Placed as "ways" are. Left out where a shard has none, and everywhere without
+  --xsec (the shards then as before, byte for byte).
 Outside the box a shard holds what the tool wrote before the road rules; only a shard a rule way touches that also
 reaches inside the box differs (a way across the box's edge, with a node inside, can add a rules-only shard in the
 tile next door).
@@ -79,6 +85,66 @@ _SIGN = re.compile(r"^(?:DE:)?(?:" + "|".join(re.escape(b) for b in SIGN_BASES) 
 _TOWN = re.compile(r"^(?:city_limit|(?:DE:)?31[01])(?=$|[\[\-:])")
 _PLATE = re.compile(r"^(?:DE:)?1002-[\w.]+$")           # a Zusatzzeichen 1002-xx plate (1002-12: "right turn")
 _ZONE_TYPE = re.compile(r"^DE:zone:?(30|20|10)$")
+# (--xsec) the road system's cross-sections (native/roadsys xsec.rs reads these and nothing else): the street tags of a
+# drivable highway, by side (left / right / both)
+_SIDES = ("left", "right", "both")
+XSEC_KEYS = tuple(dict.fromkeys(
+    [f"parking:{s}{x}" for s in _SIDES for x in ("", ":orientation", ":width", ":restriction")]
+    + [f"parking:lane:{s}{x}" for s in _SIDES for x in ("", ":parallel", ":diagonal", ":perpendicular")]
+    + ["cycleway", "cycleway:lane", "cycleway:width", "cycleway:buffer"]
+    + [f"cycleway:{s}{x}" for s in _SIDES for x in ("", ":lane", ":width", ":buffer", ":buffer:left")]
+    + ["busway"] + [f"busway:{s}" for s in _SIDES]
+    + ["bus:lanes", "bus:lanes:forward", "bus:lanes:backward", "psv:lanes", "psv:lanes:forward", "psv:lanes:backward"]
+    + ["shoulder", "shoulder:width", "shoulder:surface"] + [f"shoulder:{s}{x}" for s in _SIDES for x in ("", ":width", ":surface")]
+    + ["sidewalk:width", "sidewalk:kerb"] + [f"sidewalk:{s}{x}" for s in _SIDES for x in ("", ":width", ":kerb")]
+    + ["kerb:height", "kerb:left:height", "kerb:right:height", "width:carriageway", "est_width"]))
+XSEC_HIGHWAYS = frozenset(("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential",
+                           "living_street", "service", "road", "busway", "motorway_link", "trunk_link", "primary_link",
+                           "secondary_link", "tertiary_link"))
+XSEC_VALUE_MAX = 64         # characters: a longer value is not one the model reads (it is left out)
+
+
+def xsec_way(tags):
+    """A way's entry in the shards' "xsec" ({key: value} of its XSEC_KEYS), None when it is no drivable highway or
+    has none."""
+    if tags.get("highway") not in XSEC_HIGHWAYS:
+        return None
+    got = {k: tags[k] for k in XSEC_KEYS if k in tags and len(tags[k]) <= XSEC_VALUE_MAX}
+    return got or None
+
+
+class XsecRows:
+    """The first pass's "xsec" ways, compact (the planet has ~10 M; a dict and an array per way would not fit a CI
+    runner's memory beside the lane ways): ids and node refs in typed arrays, each distinct tag set once. Iterates as
+    [(id, {key: value}, (first, middle, last) refs)], as rail.write takes them."""
+
+    def __init__(self):
+        from array import array
+        self.ids, self.sets_at, self.refs = array("q"), array("l"), array("q")
+        self.sets, self._at = [], {}
+
+    def append(self, oid, tags, refs):
+        k = tuple(sorted(tags.items()))
+        j = self._at.get(k)
+        if j is None:
+            j = self._at[k] = len(self.sets)
+            self.sets.append(dict(k))
+        self.ids.append(oid)
+        self.sets_at.append(j)
+        self.refs.extend(int(r) for r in refs)
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __iter__(self):
+        refs = np.frombuffer(self.refs, np.int64).reshape(-1, 3) if len(self.ids) else np.zeros((0, 3), np.int64)
+        for i in range(len(self.ids)):
+            yield self.ids[i], self.sets[self.sets_at[i]], refs[i]
+
+    def all_refs(self):
+        return np.frombuffer(self.refs, np.int64) if len(self.ids) else np.zeros(0, np.int64)
+
+
 # what the first pass asks pyosmium for, a way and a node each only their own keys (an object with none never reaches
 # Python; every tagged node is checked: three keys, not all of these, keep that cheap)
 WAY_KEYS = tuple(dict.fromkeys(LANE_KEYS + ("junction",) + RULE_KEYS))
@@ -188,17 +254,19 @@ def rules_in_box(rules, nid, nlon, nlat):
     return keep
 
 
-def first_pass(src):
+def first_pass(src, xsec=None):
     """(ways, rules, nodes): ways [(id, lane_way tags, (first, middle, last) node refs)]; rules [(id, rule_tags, the
     same refs)] of every highway way with a road rule, lane way or not (rules_in_box keeps the German ones after the
-    second pass); nodes [(id, lon, lat, a sign_records record)] inside GERMANY_BOX."""
+    second pass); nodes [(id, lon, lat, a sign_records record)] inside GERMANY_BOX. xsec (an XsecRows, --xsec): filled
+    with (id, xsec_way tags, the same refs)."""
     with rail._Source(src) as f:
         fp = osmium.FileProcessor(f, osmium.osm.NODE | osmium.osm.WAY)
-        fp = fp.with_filter(osmium.filter.KeyFilter(*WAY_KEYS).enable_for(osmium.osm.WAY))
-        return _first_pass(fp.with_filter(osmium.filter.KeyFilter(*NODE_KEYS).enable_for(osmium.osm.NODE)))
+        keys = WAY_KEYS if xsec is None else tuple(dict.fromkeys(WAY_KEYS + XSEC_KEYS))
+        fp = fp.with_filter(osmium.filter.KeyFilter(*keys).enable_for(osmium.osm.WAY))
+        return _first_pass(fp.with_filter(osmium.filter.KeyFilter(*NODE_KEYS).enable_for(osmium.osm.NODE)), xsec)
 
 
-def _first_pass(objects):
+def _first_pass(objects, xsec=None):
     ways, rules, nodes, t0, k = [], [], [], time.time(), 0
     for o in objects:
         k += 1
@@ -213,7 +281,8 @@ def _first_pass(objects):
         if "highway" not in tags or len(o.nodes) < 2:
             continue
         lane, rule = lane_way(tags), rule_tags(tags)
-        if lane is None and not rule:
+        xs = xsec_way(tags) if xsec is not None else None
+        if lane is None and not rule and xs is None:
             continue
         refs = [n.ref for n in o.nodes]
         refs = np.array([refs[0], refs[len(refs) // 2], refs[-1]], np.int64)
@@ -221,6 +290,8 @@ def _first_pass(objects):
             ways.append((o.id, lane, refs))
         if rule:
             rules.append((o.id, rule, refs))
+        if xs is not None:
+            xsec.append(o.id, xs, refs)
     return ways, rules, nodes
 
 
@@ -229,18 +300,23 @@ def main():
     ap.add_argument("planet", help="the planet (or an extract): a .osm.pbf path, an http(s) URL (streamed), '-'")
     ap.add_argument("out")
     ap.add_argument("--second-pass", help="the planet again for the second pass (a path, or '-' stdin: streaming)")
+    ap.add_argument("--xsec", action="store_true", help="also the street tags of the road system's cross-sections (\"xsec\")")
     a = ap.parse_args()
     t0 = time.time()
-    ways, rules, nodes = first_pass(a.planet)
+    xsec = XsecRows() if a.xsec else None
+    ways, rules, nodes = first_pass(a.planet, xsec) if xsec is not None else first_pass(a.planet)
     print(f"pass 1: {len(ways):,} ways, {len(rules):,} with road rules, {len(nodes):,} sign nodes (junction and town signs), "
-          f"{time.time() - t0:.0f} s", flush=True)
-    refs = [r for _i, _t, r in ways] + [r for _i, _t, r in rules]
+          + (f"{len(xsec):,} with street tags, " if xsec is not None else "") + f"{time.time() - t0:.0f} s", flush=True)
+    refs = [r for _i, _t, r in ways] + [r for _i, _t, r in rules] + ([xsec.all_refs()] if xsec is not None else [])
     ids = np.unique(np.concatenate(refs)) if refs else np.zeros(0, np.int64)
     nid, nlon, nlat = rail.second_pass(a.second_pass or a.planet, ids)
     print(f"pass 2: {len(nid):,} node places, {time.time() - t0:.0f} s", flush=True)
     rules = rules_in_box(rules, nid, nlon, nlat)
     print(f"{len(rules):,} road rules in Germany's box", flush=True)
-    rail.write(a.out, ways, nodes, nid, nlon, nlat, rules=rules)
+    if xsec is None:
+        rail.write(a.out, ways, nodes, nid, nlon, nlat, rules=rules)
+    else:
+        rail.write(a.out, ways, nodes, nid, nlon, nlat, rules=rules, xsec=xsec)
     print(f"done in {time.time() - t0:.0f} s")
 
 

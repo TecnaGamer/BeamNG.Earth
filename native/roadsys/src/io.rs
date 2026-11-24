@@ -30,6 +30,7 @@ pub struct Seg {
     pub tunnel: Vec<(f64, f64)>,
     pub level: Vec<(f64, f64, f64)>,
     pub depth: f64,          // (M3) m of slab and girders the deck builder draws under its structure (0: unknown, DECK_FULL_M)
+    pub xsec: String,        // (BNE_ROADSYS_XSEC) its cross-section tags, xsec.rs's text ("": none)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -83,6 +84,7 @@ pub struct Place {
     pub style: Style,
     pub segs: Vec<Seg>,
     pub dem: Dem,
+    pub xsec: bool,          // (BNE_ROADSYS_XSEC) the cross-section model on: every stroke gets its strip slots
     pub areas: Vec<crate::areas::Area>,     // OSM's mapped road areas round the read (areas.rs: the audit, the fit)
     pub area_build: u64,                    // their dataset build's identity (in the keys where the fit is on)
 }
@@ -91,7 +93,7 @@ impl Place {
     /// Everything but the segments (a place read from a subset of them).
     pub fn clone_meta(&self) -> Place {
         Place { name: self.name.clone(), lat: self.lat, lon: self.lon, core: self.core, halo: self.halo,
-                country: self.country.clone(), style: self.style.clone(), segs: Vec::new(), dem: Dem::default(),
+                country: self.country.clone(), style: self.style.clone(), segs: Vec::new(), dem: Dem::default(), xsec: self.xsec,
                 areas: self.areas.clone(), area_build: self.area_build }
     }
 }
@@ -120,7 +122,7 @@ pub fn read(path: &str) -> Result<Place, String> {
     let mut r = R { b: &b, i: 0 };
     if r.take(8) != b"PT3PLACE" { return Err("not a PT3 place file".into()); }
     let ver = r.u32();
-    if ver != 3 { return Err(format!("format {} (want 3)", ver)); }
+    if ver != 3 && ver != 4 { return Err(format!("format {} (want 3 or 4)", ver)); }
     let mut p = Place { name: r.s(), ..Default::default() };
     p.lat = r.f64(); p.lon = r.f64(); p.core = r.f64(); p.halo = r.f64();
     p.country = r.s();
@@ -148,8 +150,10 @@ pub fn read(path: &str) -> Result<Place, String> {
         for _ in 0..nt { s.tunnel.push((r.f64(), r.f64())); }
         let nl = r.u32() as usize;
         for _ in 0..nl { s.level.push((r.f64(), r.f64(), r.f64())); }
+        if ver >= 4 { s.xsec = r.s(); }     // (format 4: the cross-section tags, the model on)
         p.segs.push(s);
     }
+    p.xsec = ver >= 4;
     let n = r.u32() as usize;
     let step = r.f64();
     let x0 = r.f64();
@@ -173,12 +177,15 @@ impl Wr {
 /// A shadow tile build's whole input (product::build): the segments, the style, the quad, the label, the frame, the
 /// cut grid and the ground heights the build asked for (in its order): "RSTILE01" + fields, little-endian. The CLI
 /// (`roadsys tile`) builds it again on any platform: the same bytes are the determinism test.
-/// RSTILE03 adds the mapped road areas, their build and the fit's switch (areas_on).
+/// RSTILE03 adds the mapped road areas, their build and the fit's switch (areas_on); RSTILE04 (BNE_ROADSYS_XSEC) is
+/// RSTILE03 with every segment's cross-section tags after its depth (the model on).
 pub struct TileInput { pub place: Place, pub quad: [[f64; 2]; 4], pub id: (i32, i32), pub frame: u64, pub cut: (f64, f64), pub ground: Vec<f64>, pub areas_on: bool }
 
 pub fn write_tile(t: &TileInput) -> Vec<u8> {
     let mut w = Wr(Vec::new());
-    w.0.extend_from_slice(b"RSTILE03");
+    // (RSTILE04: RSTILE03 with the cross-section model on, every segment's tags after its depth; RSTILE03 otherwise,
+    // byte for byte as before)
+    w.0.extend_from_slice(if t.place.xsec { b"RSTILE04" } else { b"RSTILE03" });
     let st = &t.place.style;
     w.s(&st.centre); w.s(&st.left_edge);
     for v in [st.w, st.w_motorway, st.edge, st.edge_motorway, st.centre_urban.0, st.centre_urban.1, st.lane_urban.0,
@@ -201,6 +208,7 @@ pub fn write_tile(t: &TileInput) -> Vec<u8> {
         w.u32(s.level.len() as u32);
         for &(a, b, v) in &s.level { w.f64(a); w.f64(b); w.f64(v); }
         w.f64(s.depth);
+        if t.place.xsec { w.s(&s.xsec); }
     }
     for q in &t.quad { w.f64(q[0]); w.f64(q[1]); }
     w.i64(t.id.0 as i64); w.i64(t.id.1 as i64);
@@ -232,7 +240,8 @@ pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
     let mut r = R { b, i: 0 };
     if b.len() < 8 { return Err("not a roadsys tile input".into()); }
     let magic = r.take(8).to_vec();
-    let v3 = magic == b"RSTILE03";
+    let v4 = magic == b"RSTILE04";
+    let v3 = v4 || magic == b"RSTILE03";
     let v2 = v3 || magic == b"RSTILE02";
     if !v2 && magic != b"RSTILE01" { return Err("not a roadsys tile input".into()); }
     let mut st = Style { centre: r.s(), left_edge: r.s(), ..Default::default() };
@@ -258,6 +267,7 @@ pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
         let nl = r.u32() as usize;
         for _ in 0..nl { s.level.push((r.f64(), r.f64(), r.f64())); }
         if v2 { s.depth = r.f64(); }
+        if v4 { s.xsec = r.s(); }
         segs.push(s);
     }
     let mut quad = [[0.0; 2]; 4];
@@ -267,28 +277,44 @@ pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
     let cut = (r.f64(), r.f64());
     let ng = r.u32() as usize;
     let ground = (0..ng).map(|_| r.f64()).collect();
-    let mut place = Place { country, style: st, segs, ..Default::default() };
+    let mut place = Place { country, style: st, segs, xsec: v4, ..Default::default() };
     let mut areas_on = false;
     if v3 {
         areas_on = r.u8() != 0;
-        place.area_build = u64::from_le_bytes(r.take(8).try_into().unwrap());
-        let na = r.u32() as usize;
-        for _ in 0..na {
-            let key = u64::from_le_bytes(r.take(8).try_into().unwrap());
-            let value = r.s();
-            let layer = r.i64();
-            let flags = r.u8();
-            let nl = r.u32() as usize;
-            let links = (0..nl).map(|_| u64::from_le_bytes(r.take(8).try_into().unwrap())).collect();
-            let nr = r.u32() as usize;
-            let mut rings = Vec::with_capacity(nr);
-            for _ in 0..nr {
-                let role = r.u8();
-                let np = r.u32() as usize;
-                rings.push((role, (0..np).map(|_| { let x = r.f64(); [x, r.f64()] }).collect()));
-            }
-            place.areas.push(crate::areas::Area { key, value, layer, flags, links, rings });
-        }
+        let (build, areas) = areas_block(&mut r);
+        place.area_build = build;
+        place.areas = areas;
     }
     Ok(TileInput { place, quad, id, frame, cut, ground, areas_on })
+}
+
+/// A tile input's areas block: the build, the count, the areas.
+fn areas_block(r: &mut R<'_>) -> (u64, Vec<crate::areas::Area>) {
+    let build = u64::from_le_bytes(r.take(8).try_into().unwrap());
+    let na = r.u32() as usize;
+    let mut areas = Vec::with_capacity(na);
+    for _ in 0..na {
+        let key = u64::from_le_bytes(r.take(8).try_into().unwrap());
+        let value = r.s();
+        let layer = r.i64();
+        let flags = r.u8();
+        let nl = r.u32() as usize;
+        let links = (0..nl).map(|_| u64::from_le_bytes(r.take(8).try_into().unwrap())).collect();
+        let nr = r.u32() as usize;
+        let mut rings = Vec::with_capacity(nr);
+        for _ in 0..nr {
+            let role = r.u8();
+            let np = r.u32() as usize;
+            rings.push((role, (0..np).map(|_| { let x = r.f64(); [x, r.f64()] }).collect()));
+        }
+        areas.push(crate::areas::Area { key, value, layer, flags, links, rings });
+    }
+    (build, areas)
+}
+
+/// (the CLI's --areas) "RSAREAS1" + a tile input's areas block: mapped road areas in a place's frame.
+pub fn read_areas(b: &[u8]) -> Result<(u64, Vec<crate::areas::Area>), String> {
+    if b.len() < 20 || &b[..8] != b"RSAREAS1" { return Err("not a roadsys areas file".into()); }
+    let mut r = R { b, i: 8 };
+    Ok(areas_block(&mut r))
 }

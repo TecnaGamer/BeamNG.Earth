@@ -14,7 +14,7 @@
 //! Determinism: polygons in key order, strokes independent of each other, fixed sample stations, IEEE + - * / and
 //! sqrt only, BTreeMap only; the raster audit is integer cells.
 use crate::geom::*;
-use crate::net::{Net, Stroke, K_GORE, K_LANE, K_SHOULDER, SUP_STRUCT, SUP_TUNNEL};
+use crate::net::{is_strip, Net, Stroke, K_GORE, K_LANE, K_SHOULDER, SUP_STRUCT, SUP_TUNNEL};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -314,18 +314,24 @@ fn exit(prep: &Prep, cand: &[u32], p: P2, d: P2) -> Option<f64> {
 
 fn lane_max(st: &Stroke) -> f64 { if st.cls >= 1 && st.cls <= 2 { LANE_MAX_FAST } else { LANE_MAX } }
 
-/// The fit parameters at a station: lane factor f, extra width of the outer left / right shoulder, shift.
-pub type Knot = (f64, [f64; 4]);
+/// The fit parameters at a station: lane factor f, extra width of the outer left / right shoulder, shift, strip factor
+/// g (BNE_ROADSYS_XSEC's parking, cycle lanes and buffers: 1 unless the mapped width leaves them no room beside the
+/// lanes at their least; always 1 on a stroke without strips).
+pub type Knot = (f64, [f64; 5]);
 
-/// The program at s (linear between knots, held past the ends); [1, 0, 0, 0] without knots.
-pub fn knot_at(k: &[Knot], s: f64) -> [f64; 4] {
-    if k.is_empty() { return [1.0, 0.0, 0.0, 0.0]; }
+/// The parameters that change nothing.
+pub const NEUTRAL: [f64; 5] = [1.0, 0.0, 0.0, 0.0, 1.0];
+
+/// The program at s (linear between knots, held past the ends); NEUTRAL without knots.
+pub fn knot_at(k: &[Knot], s: f64) -> [f64; 5] {
+    if k.is_empty() { return NEUTRAL; }
     let i = k.partition_point(|x| x.0 <= s);
     if i == 0 { return k[0].1; }
     if i >= k.len() { return k[k.len() - 1].1; }
     let (a, b) = (k[i - 1], k[i]);
     let u = if b.0 > a.0 { (s - a.0) / (b.0 - a.0) } else { 0.0 };
-    [a.1[0] + (b.1[0] - a.1[0]) * u, a.1[1] + (b.1[1] - a.1[1]) * u, a.1[2] + (b.1[2] - a.1[2]) * u, a.1[3] + (b.1[3] - a.1[3]) * u]
+    [a.1[0] + (b.1[0] - a.1[0]) * u, a.1[1] + (b.1[1] - a.1[1]) * u, a.1[2] + (b.1[2] - a.1[2]) * u, a.1[3] + (b.1[3] - a.1[3]) * u,
+     a.1[4] + (b.1[4] - a.1[4]) * u]
 }
 
 /// Does a node end a carriageway at a junction (three or more arms)?
@@ -396,7 +402,11 @@ fn fit_stroke(net: &Net, si: usize, prep: &Prep, stats: &mut FitStats) -> Option
             _ => { stats.no_edge += 1; got.push(None); continue; }
         };
         let wm = tl + tr;
-        if !(wm >= 2.0 && wm <= 40.0 && wm <= (2.2 * wg).max(wg + 10.0) && wm >= 0.5 * wg) { stats.implausible += 1; got.push(None); continue; }
+        // (the lower bound against the width without BNE_ROADSYS_XSEC's strips: the fit squeezes them, so perpendicular
+        // parking or a cycle lane the outline leaves out is no reason to drop the station; wx 0 without strips)
+        let mut wx = 0.0;
+        for (k, sl) in st.slots.iter().enumerate() { if is_strip(sl.kind) { wx += (off[k] - off[k + 1]).max(0.0); } }
+        if !(wm >= 2.0 && wm <= 40.0 && wm <= (2.2 * wg).max(wg + 10.0) && wm >= 0.5 * (wg - wx)) { stats.implausible += 1; got.push(None); continue; }
         got.push(Some((s, tl, -tr)));
     }
     // outliers: a station's width or centre far from the median of it and its two valid neighbours each side
@@ -422,40 +432,51 @@ fn fit_stroke(net: &Net, si: usize, prep: &Prep, stats: &mut FitStats) -> Option
     for &(s, ml, mr) in &keep {
         st.offsets_raw(s, None, &mut off);
         let wg = off[0] - off[off.len() - 1];
-        let (mut wl, mut nl) = (0.0, 0usize);
+        let (mut wl, mut nl, mut wx) = (0.0, 0usize, 0.0);
         for (k, sl) in st.slots.iter().enumerate() {
             if sl.kind == K_LANE { let w = off[k] - off[k + 1]; if w > 1e-6 { wl += w; nl += 1; } }
+            if is_strip(sl.kind) { wx += (off[k] - off[k + 1]).max(0.0); }
         }
         let (shl, shr) = outer_shoulders(st, &off);
         let wm = ml - mr;
         let mut f = 1.0;
         let mut el = 0.0;
         let mut er = 0.0;
+        let mut g = 1.0;
         if nl > 0 && wl > 1e-3 {
             let per = wl / nl as f64;
             let (flo, fhi) = ((LANE_MIN / per).min(1.0), (lmax / per).max(1.0));
             let want = (wm - (wg - wl)) / wl;
             f = clampf(want, flo, fhi);
             if f != want { stats.clamped += 1; }
+            // (BNE_ROADSYS_XSEC) the mapped width is the carriageway's whole: lanes at their least and the outer
+            // shoulders at SHOULDER_MIN still too wide, the strips are squeezed into the rest (as xsec.rs squeezes them
+            // into a too narrow width:carriageway); none on a stroke without strips (wx 0)
+            if wx > 1e-6 && want < flo {
+                let sh_min = shl.map(|a| a.min(SHOULDER_MIN)).unwrap_or(0.0) + shr.map(|b| b.min(SHOULDER_MIN)).unwrap_or(0.0);
+                let sh_now = shl.unwrap_or(0.0) + shr.unwrap_or(0.0);
+                let room = wm - (wg - wl - wx - sh_now + sh_min) - f * wl;
+                g = clampf(room / wx, 0.0, 1.0);
+            }
         }
-        let rem = wm - (wg - wl) - f * wl;
+        let rem = wm - (wg - wl - wx) - g * wx - f * wl;
         // the rest into the outer shoulders, half each, none under SHOULDER_MIN
         if let (Some(a), Some(b)) = (shl, shr) {
             el = (rem / 2.0).max(SHOULDER_MIN - a);
             er = (rem - el).max(SHOULDER_MIN - b);
         }
-        st.offsets_raw(s, Some([f, el, er, 0.0]), &mut off);
+        st.offsets_raw(s, Some([f, el, er, 0.0, g]), &mut off);
         let (gl, gr) = (off[0], off[off.len() - 1]);
         let dt = clampf((ml + mr) / 2.0 - (gl + gr) / 2.0, -SHIFT_MAX.min(0.5 * wg), SHIFT_MAX.min(0.5 * wg));
-        knots.push((s, [f, el, er, dt]));
+        knots.push((s, [f, el, er, dt, g]));
     }
     // a 3-tap average (the 5 m samples' jitter), then gaps and ends
     let raw = knots.clone();
     for k in 1..knots.len().saturating_sub(1) {
         if raw[k + 1].0 - raw[k - 1].0 > 2.5 * STEP_M { continue; }
-        for c in 0..4 { knots[k].1[c] = (raw[k - 1].1[c] + raw[k].1[c] + raw[k + 1].1[c]) / 3.0; }
+        for c in 0..5 { knots[k].1[c] = (raw[k - 1].1[c] + raw[k].1[c] + raw[k + 1].1[c]) / 3.0; }
     }
-    let neutral = [1.0, 0.0, 0.0, 0.0];
+    let neutral = NEUTRAL;
     let mut prog: Vec<Knot> = Vec::with_capacity(knots.len() + 8);
     let fade = 30.0;
     let first = knots[0].0;
@@ -489,11 +510,14 @@ fn fit_stroke(net: &Net, si: usize, prep: &Prep, stats: &mut FitStats) -> Option
     prog.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     prog.dedup_by(|a, b| absf(a.0 - b.0) < 1e-6);
     // slopes: each edge moves at most SLOPE m per m (forward then backward passes on the edge-moving parameters)
-    let wl_of = |s: f64, off: &mut Vec<f64>| -> f64 {
+    let wl_of = |s: f64, off: &mut Vec<f64>| -> (f64, f64) {
         st.offsets_raw(s, None, off);
-        let mut w = 0.0;
-        for (k, sl) in st.slots.iter().enumerate() { if sl.kind == K_LANE { w += (off[k] - off[k + 1]).max(0.0); } }
-        w.max(1.0)
+        let (mut w, mut x) = (0.0, 0.0);
+        for (k, sl) in st.slots.iter().enumerate() {
+            if sl.kind == K_LANE { w += (off[k] - off[k + 1]).max(0.0); }
+            if is_strip(sl.kind) { x += (off[k] - off[k + 1]).max(0.0); }
+        }
+        (w.max(1.0), x.max(1.0))
     };
     // (the neutral knots are fixed: a fork's or a deck's window keeps exactly the lane rules' widths, its neighbours
     // bend toward it; a few rounds settle where a fixed knot sits between moved ones)
@@ -505,12 +529,14 @@ fn fit_stroke(net: &Net, si: usize, prep: &Prep, stats: &mut FitStats) -> Option
             let j = if pass % 2 == 0 { k - 1 } else { k + 1 };
             let ds = absf(prog[k].0 - prog[j].0);
             let lim = SLOPE * ds;
-            let wl = wl_of(prog[k].0, &mut off);
+            let (wl, wx) = wl_of(prog[k].0, &mut off);
             let flim = 2.0 * lim / wl;
+            let glim = 2.0 * lim / wx;
             let pj = prog[j].1;
             let v = &mut prog[k].1;
             v[0] = clampf(v[0], pj[0] - flim, pj[0] + flim);
             for c in 1..4 { v[c] = clampf(v[c], pj[c] - lim, pj[c] + lim); }
+            v[4] = clampf(v[4], pj[4] - glim, pj[4] + glim);
         }
     }
     // rows: where the program bends by more than 1 cm (a station rows must include)
@@ -519,7 +545,7 @@ fn fit_stroke(net: &Net, si: usize, prep: &Prep, stats: &mut FitStats) -> Option
         let bend = if k == 0 || k + 1 == prog.len() { true } else {
             let (a, b, c) = (prog[k - 1], prog[k], prog[k + 1]);
             let u = if c.0 > a.0 { (b.0 - a.0) / (c.0 - a.0) } else { 0.5 };
-            (0..4).any(|i| absf(b.1[i] - (a.1[i] + (c.1[i] - a.1[i]) * u)) * if i == 0 { 3.0 } else { 1.0 } > 0.01)
+            (0..5).any(|i| absf(b.1[i] - (a.1[i] + (c.1[i] - a.1[i]) * u)) * if i == 0 || i == 4 { 3.0 } else { 1.0 } > 0.01)
         };
         if bend && prog[k].0 > 0.0 && prog[k].0 < len { rows.push(prog[k].0); }
     }
@@ -1287,6 +1313,39 @@ mod tests {
         // a polygon 40 m wide round a 9 m road (a square): implausible, no fit
         let wide = crate::net::build_opts(&road(vec![rect(2, "secondary", -300.0, -20.0, 300.0, 20.0)], false), &order, crate::net::Opts { areas: true, ..Default::default() });
         assert_eq!(wide.area_fit.fitted, 0);
+    }
+
+    #[test]
+    fn with_cross_sections_the_area_is_the_whole_and_the_strips_divide_it() {
+        // (BNE_ROADSYS_XSEC with the fit) parking on both sides: the mapped area sets the carriageway's edges, the
+        // strips keep their widths while the lanes can take the rest, and are squeezed once the lanes are at their least
+        let order: Vec<usize> = vec![0, 1];
+        let with = |xs: &str, half: f64| -> (Net, Net) {
+            let mut p = road(vec![rect(2, "secondary", -300.0, -half, 300.0, half)], false);
+            for s in p.segs.iter_mut() { s.xsec = xs.replace(';', "\u{1f}"); }
+            p.xsec = true;
+            (crate::net::build_opts(&p, &order, crate::net::Opts { areas: true, ..Default::default() }),
+             crate::net::build_opts(&p, &order, crate::net::Opts::default()))
+        };
+        let strips = |n: &Net| -> f64 {
+            let st = &n.strokes[0];
+            let (s, _) = st.line.project([0.0, 0.0], 0.0, f64::INFINITY);
+            let mut off = Vec::new();
+            st.offsets(s, &mut off);
+            st.slots.iter().enumerate().filter(|(_, k)| is_strip(k.kind)).map(|(k, _)| off[k] - off[k + 1]).sum()
+        };
+        let (on, off) = with("parking:both=lane", 5.0);
+        assert!(on.area_fit.fitted >= 1, "{:?}", on.area_fit);
+        let (l, r) = edges_at(&on, 0.0);
+        assert!((l - 5.0).abs() < 0.15 && (r + 5.0).abs() < 0.15, "{l} {r}");
+        assert!(strips(&off) > 3.0 && (strips(&on) - strips(&off)).abs() < 1e-9, "{} {}", strips(&on), strips(&off));
+        // perpendicular parking the outline leaves out (mapped as parking spaces): the station is no outlier, the
+        // edges still the mapped ones, the strips squeezed into what the lanes at their least leave
+        let (on, off) = with("parking:both=lane;parking:both:orientation=perpendicular", 4.0);
+        assert!(on.area_fit.fitted >= 1, "{:?}", on.area_fit);
+        let (l, r) = edges_at(&on, 0.0);
+        assert!((l - 4.0).abs() < 0.15 && (r + 4.0).abs() < 0.15, "{l} {r}");
+        assert!(strips(&on) > 0.5 && strips(&on) < 0.5 * strips(&off), "{} {}", strips(&on), strips(&off));
     }
 
     #[test]

@@ -717,7 +717,8 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
                 for (k, sl) in st.slots.iter().enumerate() {
                     if !(ra.s >= sl.alive.0 - 1e-9 && rb.s <= sl.alive.1 + 1e-9) { continue; }
                     let (a, bb, c, d) = (ra.b[k], ra.b[k + 1], rb.b[k + 1], rb.b[k]);
-                    let tag = Tag { kind: sl.kind, sup: sup.kind, piece: piece_of(st.uid), slot: k as u16, sid: if sup.kind == SUP_GROUND { 0 } else { sup.sid } };
+                    let kind = if st.over.is_empty() { sl.kind } else { st.face_kind(k, (ra.s + rb.s) / 2.0) };
+                    let tag = Tag { kind, sup: sup.kind, piece: piece_of(st.uid), slot: k as u16, sid: if sup.kind == SUP_GROUND { 0 } else { sup.sid } };
                     for tri in [[bb, c, d], [bb, d, a]] {
                         if tri[0] == tri[1] || tri[1] == tri[2] || tri[0] == tri[2] { continue; }
                         let pv = |i: u32| { let v = m.v[i as usize]; [v[0], v[1]] };
