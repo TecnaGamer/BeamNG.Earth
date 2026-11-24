@@ -3382,6 +3382,8 @@ class Server:
             if park is not None:
                 import busstationpark
                 park = park + busstationpark.rows(anchor.frame, self.mapdata, box, elev)
+            import parkingdisplay
+            park = parkingdisplay.apply(anchor.frame, tx, ty, self.mapdata, park, items, drives)
             buildingsmod.brick_walks(walks, items, anchor.lat, anchor.lon)
         chunks += parkingmod.finish_markings(anchor.frame, tx, ty, self.mapdata, elev, items, marks,
                                              separate_bays=bool(frontage_country))

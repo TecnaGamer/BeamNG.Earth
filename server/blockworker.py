@@ -1940,6 +1940,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         if park is not None:
             import busstationpark
             park = park + busstationpark.rows(frame, _s.md, box, elev)
+        import parkingdisplay
+        park = parkingdisplay.apply(frame, tx, ty, _s.md, park, items, drives)
         buildingsmod.brick_walks(walks, items, centre[0], centre[1], side)
         if walks_raw is not None:
             buildingsmod.brick_walks(walks_raw, items, centre[0], centre[1], side)
