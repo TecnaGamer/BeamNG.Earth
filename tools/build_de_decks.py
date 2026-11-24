@@ -12,7 +12,11 @@ DEST/vg2500): a bridge across the border is sampled from both sides, and the sha
 
 Each cell's road bridges (the server's own map data, roadz.RoadZ._bridges) are sampled on dedom's 1 m grid across
 their width, in requests of at most BOX_M round each bridge (WCS) or from the tiles they fall on. Uses the server's
-cache (BNE_CACHE, default ~/.cache/beamng-earth) for the map data.
+cache (BNE_CACHE, default ~/.cache/beamng-earth) for the map data; a fresh cache of its own makes a build that another
+machine can repeat (the map cells there keep the OSM road tags of whenever they were made).
+
+Needs, besides the server's packages: tifffile and imagecodecs (the states' DOM / DGM GeoTIFFs are compressed:
+without imagecodecs every cell with a bridge fails), pyshp (the state borders).
 """
 import io
 import json
@@ -193,6 +197,12 @@ def cells(dest, state, box=None):
         except Exception as e:          # (the service or the map data unreachable: this cell again next run)
             failed += 1
             print("cell", key, type(e).__name__, str(e)[:200], flush=True)
+            continue
+        roads_layer = md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+        if roads_layer is not None and roads_layer.__dict__.get("_bnge_fallback"):
+            # (the cell's roads without the run's OSM road tags, a stand-in: its bridges not those; again next run)
+            failed += 1
+            print("cell", key, "map data without its OSM road tags: again next run", flush=True)
             continue
         ok = np.isfinite(dom)
         with open(p + ".part", "wb") as fh:
