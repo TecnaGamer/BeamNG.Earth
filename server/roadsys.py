@@ -1016,7 +1016,10 @@ def _ends_from(frame, cell_fn, keys, reg):
             return None
         if feats is None or not len(feats):
             continue
+        xs = _xsec_extents(cell_fn, k) if XSEC else {}
         for kind, fid, j, ll, hw in _end_rows(feats):
+            if kind == "b" and feature(fid) in xs:      # (a deck drawn from its cross-section: its own half extent)
+                hw = max(hw, xs[feature(fid)])
             rows.setdefault((kind, fid, j), (ll, hw))     # (a feature in several cells: once)
     br, gr, tu = [], [], []
     for (kind, fid, j) in sorted(rows):
@@ -1034,6 +1037,25 @@ def _ends_from(frame, cell_fn, keys, reg):
         else:
             tu.append(xy)
     return fast._ef.RoadsysEnds(br, gr, tu, float(heightmap.SQUARE))
+
+
+def _xsec_extents(cell_fn, key):
+    """(BNE_ROADSYS_XSEC) {map feature: half extent of its carriageway with its cross-section} of cell key's segments
+    whose cross-section shapes them (earthfast.roadsys_xsec_half_extent: the deck faces' own width), the widest copy."""
+    import fast
+    fast.require(XSEC_KERNEL, "roadsys_xsec_half_extent")
+    tab = _cells_for(cell_fn).table(key)
+    out = {}
+    if tab is None:
+        return out
+    for k, texts, nums, ints, x in zip(tab["ids"], tab["texts"], tab["nums"], tab["ints"], tab["xsec"]):
+        if not x:
+            continue
+        e = fast._ef.roadsys_xsec_half_extent(tuple(texts), list(map(float, nums)), list(map(int, ints)), x)
+        if e is not None:
+            f = feature(k.split("|", 1)[0])
+            out[f] = max(out.get(f, 0.0), float(e))
+    return out
 
 
 def ends_of_cell(frame, cell_fn, key):

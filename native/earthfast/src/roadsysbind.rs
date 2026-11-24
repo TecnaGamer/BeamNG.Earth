@@ -566,6 +566,20 @@ pub fn roadsys_decks<'py>(py: Python<'py>, segs: PyRef<'py, RoadsysSegments>, qu
         PyArray1::from_vec(py, o.mc.iter().map(|&k| k as i64).collect()), o.fallback.clone(), o.json.clone()))
 }
 
+/// (610, BNE_ROADSYS_XSEC) the half extent (m from its mapped line) of one segment's carriageway with its
+/// cross-section, from its RoadsysSegments columns (texts, nums, ints as server/roadsys.py _table writes them) and its
+/// cross-section text; None when the text does not shape it (today's widths). The deck ends' hand-over reads it.
+#[pyfunction]
+pub fn roadsys_xsec_half_extent(texts: (String, String, String, String, String), nums: [f64; 4], ints: [i64; 9], xsec: String) -> Option<f64> {
+    let s = Seg {
+        code: texts.0, cls_s: texts.1, turn: texts.2, turn_bw: texts.3, place: texts.4,
+        pave: nums[0], drive: nums[1], kmh: nums[2], lane_w: nums[3],
+        inferred: ints[0], urban: ints[1] != 0, cls: ints[2], link: ints[3] != 0, dir: ints[4], lanes: ints[5], lfw: ints[6],
+        lbw: ints[7], region: ints[8], xsec, ..Default::default()
+    };
+    roadsys::net::xsec_half_extent(&s)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadsys_decks, m)?)?;
     m.add_class::<RoadsysSegments>()?;
@@ -579,6 +593,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadsys_deck_depth, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_end_lifts, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_floor_points, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_xsec_half_extent, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_clear, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_audit, m)?)?;
     m.add_class::<RoadsysEnds>()?;

@@ -430,15 +430,21 @@ impl Net {
         self.lane_w_today(g)
     }
 
-    fn lane_w_today(&self, g: usize) -> f64 {
-        let s = &self.segs[g];
-        let w = if s.cls >= 1 && s.cls <= CLS_TRUNK { self.t(self.region[g], T_LANE_W) } else {
+    fn lane_w_today(&self, g: usize) -> f64 { lane_w_of(&self.segs[g], self.region[g]) }
+}
+
+/// Today's lane width of segment s in TAPER row region (Net::lane_w without a cross-section).
+fn lane_w_of(s: &Seg, region: usize) -> f64 {
+    {
+        let w = if s.cls >= 1 && s.cls <= CLS_TRUNK { TAPER[region][T_LANE_W] } else {
             let n = if s.dir != 0 { lanes_eff(s, true) } else { lanes_eff(s, true) + lanes_eff(s, false) };
             if s.lanes < 1 && s.dir == 0 && s.inferred <= 1 { s.drive / 2.0 } else if s.lane_w > 0.0 { s.lane_w } else { s.drive / n.max(1) as f64 }
         };
         clampf(w, 2.2, 5.0)
     }
+}
 
+impl Net {
     /// Shoulder / margin width on the (right, left) side of edge e's carriageway.
     fn shoulder_w(&self, e: usize) -> (f64, f64) { shoulder_of(self.seg_of_edge(e)) }
 
@@ -889,9 +895,9 @@ fn cut_nodes(net: &mut Net, opts: Opts) {
         let (sa, sb) = (net.seg_of_edge(a.0), net.seg_of_edge(b.0));
         let same = sa.cls == sb.cls && sa.link == sb.link && sa.lanes == sb.lanes && sa.lfw == sb.lfw && sa.lbw == sb.lbw
             && sa.place == sb.place && sa.lane_w == sb.lane_w && sa.turn == sb.turn && sa.turn_bw == sb.turn_bw
-            && (sa.dir == 0) == (sb.dir == 0) && sa.pave == sb.pave && sa.drive == sb.drive && sa.urban == sb.urban
-            && sa.xsec == sb.xsec;
-        if !same { return false; }
+            && (sa.dir == 0) == (sb.dir == 0) && sa.pave == sb.pave && sa.drive == sb.drive && sa.urban == sb.urban;
+        // (BNE_ROADSYS_XSEC: the same strips on both sides; tags that shape nothing never move a cut)
+        if !same || net.lays[net.edges[a.0].seg] != net.lays[net.edges[b.0].seg] { return false; }
         for &(e, fwd) in arms {
             let ed = &net.edges[e];
             if on_structure(net, e, if fwd { ed.va } else { ed.vb }) { return false; }
@@ -1371,6 +1377,36 @@ fn build_slots(net: &mut Net, si: usize) -> SlotsOut {
     (out_slots, al, ar, rwin, stations, dense, snaps_out, over)
 }
 
+/// The TAPER row of segment s (build_opts' rule).
+fn region_of(s: &Seg) -> usize {
+    let r = s.region.max(0) as usize;
+    if r == 0 && s.code.eq_ignore_ascii_case("JP") { 6 } else if r < 6 { r } else { 0 }
+}
+
+/// (BNE_ROADSYS_XSEC) segment s's layout with its cross-section (sides in its own direction), None without one that
+/// shapes it.
+pub fn seg_lay(s: &Seg) -> Option<Lay> {
+    let region = region_of(s);
+    let lht = TAPER[region][T_LHT] > 0.5;
+    let c = xsec::Ctx { code: &s.code, cls: &s.cls_s, urban: s.urban, oneway: s.dir != 0 };
+    let x = xsec::parse(&s.xsec, &c, s.dir, lht)?;
+    if !x.shapes() { return None; }
+    let n = if s.dir != 0 { lanes_eff(s, true) } else { lanes_eff(s, true) + lanes_eff(s, false) };
+    let (r, l) = shoulder_of(s);
+    let sh = if s.dir == 0 { (r, r) } else if s.dir > 0 { (l, r) } else { (r, l) };
+    Some(xsec::layout_w(&x, &c, n, lane_w_of(s, region), sh, s.lanes >= 1, s.cls >= 1 && s.cls <= CLS_TRUNK, s.bridge.is_empty()))
+}
+
+/// (BNE_ROADSYS_XSEC) the half extent of segment s's carriageway with its cross-section, from its mapped line (lanes
+/// and strips centred, the wider shoulder): what a deck drawn from it covers (the deck ends' hand-over reads it).
+pub fn xsec_half_extent(s: &Seg) -> Option<f64> {
+    let lay = seg_lay(s)?;
+    let n = if s.dir != 0 { lanes_eff(s, true) } else { lanes_eff(s, true) + lanes_eff(s, false) };
+    let lw = if lay.lane_w > 0.0 { clampf(lay.lane_w, 2.2, 5.0) } else { lane_w_of(s, region_of(s)) };
+    let inner = n.max(1) as f64 * lw + lay.left.strips() + lay.right.strips();
+    Some(inner / 2.0 + lay.left.shoulder.max(lay.right.shoulder))
+}
+
 /// (BNE_ROADSYS_XSEC) every segment's cross-section (xsec.rs): its tags read, its strips and lanes laid out against
 /// today's lane width and shoulders.
 fn cross_sections(net: &mut Net) {
@@ -1384,7 +1420,8 @@ fn cross_sections(net: &mut Net) {
         let (r, l) = shoulder_of(s);
         // (today's shoulders in the segment's direction: a two-way's right one on both sides, build_slots')
         let sh = if s.dir == 0 { (r, r) } else if s.dir > 0 { (l, r) } else { (r, l) };
-        let lay = xsec::layout(&x, &c, n, net.lane_w_today(g), sh, s.lanes >= 1, s.cls >= 1 && s.cls <= CLS_TRUNK);
+        // (a segment with a structure never wider than today's: its deck meets today's approaches and abutments)
+        let lay = xsec::layout_w(&x, &c, n, net.lane_w_today(g), sh, s.lanes >= 1, s.cls >= 1 && s.cls <= CLS_TRUNK, s.bridge.is_empty());
         net.xs_tags[g] = lay.tags;
         if !x.shapes() { continue; }
         net.stats.xsec_shaped += 1;

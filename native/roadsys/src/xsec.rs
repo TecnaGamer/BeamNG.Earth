@@ -395,6 +395,14 @@ impl XSec {
 /// lane width and today's shoulders (left, right); urban: a town street (the gutter where its edge is mapped);
 /// marked: its lanes are mapped (lanes=*); motorway: motorway / trunk (lanes keep the region's width).
 pub fn layout(x: &XSec, c: &Ctx, n: i64, lane_today: f64, sh_today: (f64, f64), marked: bool, motorway: bool) -> Lay {
+    layout_w(x, c, n, lane_today, sh_today, marked, motorway, true)
+}
+
+/// layout, and with widen false never wider than today's carriageway without a mapped width (a structure: its deck
+/// meets approaches and abutments drawn for today's width; the strips squeezed in with the lanes at their least).
+#[allow(clippy::too_many_arguments)]
+pub fn layout_w(x: &XSec, c: &Ctx, n: i64, lane_today: f64, sh_today: (f64, f64), marked: bool, motorway: bool,
+                widen: bool) -> Lay {
     let urban = c.urban;
     let gutter = prior(Attr::Gutter, c);
     let side = |s: &Side, today: f64| -> SideW {
@@ -454,6 +462,11 @@ pub fn layout(x: &XSec, c: &Ctx, n: i64, lane_today: f64, sh_today: (f64, f64), 
     if need > budget + 1e-9 && lane_today > lo {
         let lw = (budget - strips - shoulders) / nn;
         out.lane_w = if lw > lo { lw } else { lo };
+        if !widen && lw < lo {
+            let rest = budget - shoulders - lo * nn;
+            let f = if rest > 0.0 && strips > 0.0 { rest / strips } else { 0.0 };
+            for sd in [&mut out.left, &mut out.right] { sd.buffer *= f; sd.cycle *= f; sd.park *= f; }
+        }
     }
     out
 }
