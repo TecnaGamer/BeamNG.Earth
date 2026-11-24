@@ -6609,6 +6609,24 @@ pub(crate) fn rtin_core(hv: &[f64], n: usize, max_err: f64) -> (Vec<[i64; 3]>, V
         (tris, surf, worst)
 }
 
+/// The interpreter is about to finalize (server/fast.py's atexit hook, on the thread that finalizes): from now on every
+/// other thread coming back to Python through PyO3 (a kernel's detach ending, an attach from a detached thread) parks
+/// forever instead, the ones already on their way in let through first (at most wait_s). Returns whether none was left.
+/// CPython before 3.14 ended such threads with pthread_exit(), whose forced unwind through the kernel's Rust frames
+/// crashed or hung the process at exit (vendor/pyo3-0.30.1/src/internal/exit_guard.rs).
+#[pyfunction]
+fn begin_exit(_py: Python<'_>, wait_s: f64) -> bool {
+    let wait = std::time::Duration::from_secs_f64(if wait_s.is_finite() { wait_s.clamp(0.0, 60.0) } else { 0.0 });
+    // SAFETY: the Python<'_> token: this thread is attached
+    unsafe { pyo3::exit_guard::begin(wait) }
+}
+
+/// begin_exit's bookkeeping, for tests: (threads on top of PyO3 frames, of those detached, attaching now).
+#[pyfunction]
+fn exit_guard_counts() -> (isize, isize, isize) {
+    pyo3::exit_guard::counts()
+}
+
 #[pymodule]
 fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(countrymap::country_codes, m)?)?;
@@ -7768,6 +7786,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     drivefeat::register(m)?;
     // 617: both 608 (areas) and 610 (xsec) in one binary; RoadsysSegments(areas=, fit=, xsec=) compose (the areas fit
     // sets the carriageway's total width and edges, the cross-section strips divide it)
-    m.add("VERSION", 621)?;
+    // 622: begin_exit, exit_guard_counts (the vendored PyO3's exit_guard: threads that would attach while the interpreter shuts down
+    // park instead; CPython < 3.14 ended them with pthread_exit, a forced unwind through Rust frames that crashed or
+    // hung the exit, server/fast.py's atexit hook calls it)
+    m.add_function(wrap_pyfunction!(begin_exit, m)?)?;
+    m.add_function(wrap_pyfunction!(exit_guard_counts, m)?)?;
+    m.add("VERSION", 622)?;
     Ok(())
 }
