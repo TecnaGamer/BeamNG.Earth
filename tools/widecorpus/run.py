@@ -81,12 +81,16 @@ def build_process(p, cache, out, radius, env, offline, log):
     with log.open("w") as f:
         with subprocess.Popen(cmd, env=clean, stdout=f, stderr=subprocess.STDOUT, cwd=runtime,
                               start_new_session=True) as worker:
-            last_tile = time.monotonic()
+            last_tile = prev = time.monotonic()
             written = 0
             try:
                 while worker.poll() is None:
                     if space_exhausted.wait(2):
                         raise OSError("39 GB scratch cache limit")
+                    now = time.monotonic()
+                    if now - prev > 60:     # (this process was stopped, a gate's SIGSTOP: the time is not the build's)
+                        last_tile += now - prev
+                    prev = now
                     count = sum(1 for _ in out.glob("*.ter"))
                     if count > written:
                         written = count
