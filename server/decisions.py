@@ -27,6 +27,8 @@ Inside a block, items are keyed as the local caches key them, plus their digest:
     w/<z>_<x>_<y>                                    a cell's way ids (JSON), for every cell of the block's rings
 A cell whose local key carries more (Hong Kong's measured heights, roadz.hk_tags; the photo's road-surface verdicts,
 roadsurf.cell_tags / layer_tags) never matches an item: the builder makes none there, and the client does not ask.
+Germany's measured decks (roadz.de_tags: their build) are in the slice of each German cell instead (slice_digest), so
+an item made with one build is read only by a server that measures with the same one.
 A hit is copied into the local revisit cache under the client's own key (plancache._revisit_key, roads._facts_key):
 read once from the archive, from the local cache after.
 
@@ -259,7 +261,14 @@ def slice_digest(sources, cell, ids, fetch=True):
     data's osm_tags_source() or None}: the OSM road tags' slice is the cell's whole answer, every tagged highway in it,
     as the join reads them); None when a shard cannot be had (fetch False: when it is not in memory)."""
     import mapcells
+    import roadz
     doc = {}
+    if roadz.de_cell(cell):         # (Germany's measured decks: the build its plans read, roadz.de_tags)
+        import dedom
+        ident = dedom.identity(network=fetch)
+        if ident is None:
+            return None
+        doc["dedecks"] = ident
     if "osmtags" in sources:
         t = sources["osmtags"]
         if t is None:

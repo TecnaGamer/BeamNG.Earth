@@ -18,12 +18,15 @@ points; the DGM under the same samples brings the state's heights onto our DEM's
 service's state its WCS has no data there: no points, the inference stands.
 
     service_at(lat, lon)            the SERVICES entry whose box holds the point, or None
+    identity()                      the build the measurements are made with (roadz's folder and plan tag)
     sample(fetch, svc, lat, lon)    (dom, dgm) heights (NaN: none) of the points, read in boxes of at most box_m
     points(fetch, s, w, n, e)       (lat, lon, dom, dgm) of the shards' samples in a box (the game's side)
     plausible(xy, half, s, z, ...)  whether a measured deck reads a road surface (not tree crowns over a track)
 """
+import hashlib
 import io
 import math
+import re
 import os
 import threading
 import types
@@ -366,6 +369,26 @@ def manifest(fetch=None):
             got = _state["pages"] = pagesdata.Manifest(_state["cache"], fx, NAME, retry_s=pagesdata.RETRY_S,
                                                        recheck=False, on_change=_changed)
         return got
+
+
+def identity(network=True):
+    """The dedecks build this run's measurements are made with, as a name part: "b-<built>" (the manifest's build),
+    "none" (none for the run: not published, or not reachable, when the inference stands), "dir-<hash>" (BNE_DE_DECKS_DIR,
+    its path's), or None (network false and the run's manifest not decided yet). roadz names its German answers'
+    folder and tags the German cells' plans and decision slices with it, so answers and plans measured with one build
+    are never read for another (nor an answer saved while nothing was published, once it is)."""
+    local = os.environ.get(LOCAL_ENV)
+    if local:
+        return "dir-" + hashlib.blake2s(os.path.abspath(local).encode(), digest_size=6).hexdigest()
+    pages = manifest()
+    if network:
+        pages.current()
+    elif pages.known() is None and not pages.decided:
+        return None
+    built = pages.built
+    if built is None:
+        return "none"
+    return "b-" + re.sub(r"[^A-Za-z0-9._-]", "_", str(built))[:80]
 
 
 def _remote(fetch, x, y):

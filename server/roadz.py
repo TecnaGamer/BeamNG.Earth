@@ -374,6 +374,26 @@ def tlm_tags(key):
     return (TLM_CELLS,) if (TLM_URL or TLM_DIR) else ()
 
 
+def de_cell(key):
+    """Can map cell key's plans read Germany's measured decks (dedom.py: the source on and a state's service box within
+    one cell of the cell's box, so a road part of the cell reaching a cell measured there counts too)? No network."""
+    if not (ON and DE_ON):
+        return False
+    lon0, lat0, lon1, lat1 = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])).bounds()
+    dla, dlo = lat1 - lat0, lon1 - lon0
+    return any(lat0 - dla <= b[2] and b[0] <= lat1 + dla and lon0 - dlo <= b[3] and b[1] <= lon1 + dlo
+               for b in (s["box"] for s in dedom.SERVICES))
+
+
+def de_tags(key):
+    """("dedecks:<build>",) for a German cell (de_cell): the build of the measured decks its plans are made with
+    (dedom.identity: deciding the run's manifest, once), else (). Plans made with one build are not those of another,
+    nor those made before the data was published."""
+    if not de_cell(key):
+        return ()
+    return ("dedecks:" + (dedom.identity() or "none"),)
+
+
 def hk_cell(key):
     """Are map cell key's road plans made with Hong Kong's measured heights or terrain (hk_tags)? They are then kept on
     this computer only: the HK government's terms allow redistribution, but with an indemnity and terms that may change
@@ -797,7 +817,7 @@ class RoadZ:
         """Is this cell's LiDAR kept on disk already (or in its CIP cell: written out now)? No network."""
         k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
         return all(p and (os.path.exists(p) or self._cip_fill(s, k, p))
-                   for p, s in ((self._path(s, k), s) for s in self.lidar_sources(k)))
+                   for p, s in ((self._path(s, k, network=False), s) for s in self.lidar_sources(k)))
 
     def _cip_fill(self, src, key, p):
         """Cell key's answer file of source src written from its CIP cell (cip.py: the builder's own measurement of
@@ -822,8 +842,18 @@ class RoadZ:
         os.replace(tmp, p)
         return True
 
-    def _path(self, src, key):
+    def _path(self, src, key, network=True):
+        """The cell's answer file of source src (None: not kept). A German cell's measured decks (dedom.py, through the
+        "lidar" source) are kept under their build's folder (dedom.identity): an answer is never read for another
+        build. network false: None while the run's dedecks manifest is not decided."""
         import roads
+        if src == "lidar" and DE_ON:
+            la, lo = key.center()
+            if dedom.service_at(la, lo) is not None:
+                ident = dedom.identity(network)
+                if ident is None:
+                    return None
+                src = "dedecks-" + ident + ("" if roads.LIDAR_GAPS_ON else "-nogaps")
         if src == "lidar" and not roads.LIDAR_GAPS_ON:
             src = "lidar-nogaps"            # (built without the ground stretches: not the cells with them)
         if src == "hk":

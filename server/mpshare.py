@@ -179,11 +179,12 @@ def valid_plans(data):
 
 
 def local_only(cell):
-    """Are cell's plans, here, made with data that stays on this computer (Hong Kong's measured heights or terrain,
-    Switzerland's cut cells: plancache keys them apart)? They are neither shared nor taken from another player, whose
-    plans of the cell are made without it (sharehelper: those sources off) and would be kept under the tagged key."""
+    """Are cell's plans, here, keyed by data the share's key does not hold (Hong Kong's measured heights or terrain,
+    Switzerland's cut cells, Germany's measured decks of one build: plancache keys them apart)? They are neither shared
+    nor taken from another player, whose plans of the cell are made without it (sharehelper: HK and Swiss sources off)
+    or with another build, and would be kept under the tagged key."""
     import roadz
-    return bool(roadz.hk_cell(cell) or roadz.tlm_tags(cell))
+    return bool(roadz.hk_cell(cell) or roadz.tlm_tags(cell) or roadz.de_cell(cell))
 
 
 # --- the main process's side --------------------------------------------------------------------------------------

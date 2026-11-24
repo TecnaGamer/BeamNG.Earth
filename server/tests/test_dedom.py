@@ -208,6 +208,7 @@ class ManifestTest(unittest.TestCase):
     def reset():
         dedom._state.update(cache=None, fetcher=None, pages=None)
         dedom._shards.clear()
+        dedom.pagesdata.session_reset()     # (the run's decisions are per process: each test its own run)
 
     def serve(self, files):
         import netfetch
