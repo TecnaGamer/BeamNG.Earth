@@ -119,6 +119,7 @@ mod farlocal;
 mod farpvs;
 mod farsel;
 mod dirtsteps;
+mod drivefeat;
 mod dirtnoise;
 mod racedig;
 mod racejoin;
@@ -7760,6 +7761,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 611 (608-610 kept for other branches): natural (OpenStreetMap's mapped natural features, BNE_NATURAL_*: mapped
     // trees and tree rows, forests' leaf type, natural ground, cliffs along mapped lines, depth bands; server/natural.py)
     natural::register(m)?;
-    m.add("VERSION", 619)?;
+    // 612 (608-611 kept for other branches): drivefeat (the mapped driving features: calming_apply, the speed
+    // bumps / humps / tables / fords in a road plan's profile, BNE_CALMING / BNE_UNPAVED; server/calming.py)
+    drivefeat::register(m)?;
+    m.add("VERSION", 620)?;
     Ok(())
 }

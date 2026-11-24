@@ -1822,6 +1822,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         import designs
         de_nodes = designs.reads_here(True, frame, designs.tile_reach(box, skin_margin))
     nodes = secrossings.read(_s.md, frame, near_cells) if secrossings.wanted(country, de_nodes) else None
+    import drivefeat                    # (the mapped driving features' inputs: None with every switch off)
+    drive = drivefeat.tile_inputs(_s.md, frame, near_cells, nodes)
     clearance = [] if buildings else None      # (build_tile's RoadClearance, PR #629: the powerlines' too)
     roadside_jobs = []                  # sign placement after the rendered barriers and driveways
     drives = []
@@ -1861,7 +1863,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
                                  pole_profile=pole_profile, signs=signs, roadside_jobs=roadside_jobs,
                                  driveways_out=mapped_drives,
-                                 signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes,
+                                 signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes, drive=drive,
                                  development=developmentmod.for_tile(_s.md, frame, tx, ty),
                                  clearance_out=clearance, towns=towns, de_on=de_junctions, de_routes=de_routes,
                                  # (the mapped utility poles mappedpoles.tile_poles draws: no guessed ones along them)
@@ -2144,6 +2146,27 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             raise
         except Exception as ex:
             log.warning("street furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        if drive is not None and drive.get("nodes"):    # (BNE_RAIL_PROPS: the mapped railway signals, points)
+            try:
+                import drivefeat
+                if drivefeat.RAIL_PROPS:
+                    rcells = [cell_fn(k) for k in near_cells]
+                    props.extend(drivefeat.rail_rows(frame, box, drive["nodes"], drivefeat.rail_lines_of(frame, rcells),
+                                                     elev, left_running=bool(left_hand)))
+            except fast.NativeMissing:
+                raise
+            except Exception as ex:
+                log.warning("rail props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        if drive is not None and drive.get("infra"):    # (BNE_ROAD_BARRIERS: the mapped gates, bollards ...)
+            try:
+                import drivefeat
+                rcells = [cell_fn(k) for k in near_cells]
+                props.extend(drivefeat.barrier_rows(frame, box, drive["infra"], near_roads, elev,
+                                                    drivefeat.routed_of(rcells)))
+            except fast.NativeMissing:
+                raise
+            except Exception as ex:
+                log.warning("road barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         try:           # (tall buildings' obstruction lights, long tunnels' jet fans)
             props.extend(places.warning_rows(items, x0, y0))
             props.extend(places.tunnel_fan_rows(chunks))

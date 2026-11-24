@@ -40,6 +40,7 @@ import dmath
 import dnp
 
 import bumps
+import drivefeat
 import mapcells
 import racedig
 import railways as railwaysmod
@@ -1014,7 +1015,7 @@ def field_heights(frame, elev, xy, r, sigma):
 
 
 def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None, decks=None,
-               rings=None, landings=None, part_ids=None, ext_ids=None, bank_through=None):
+               rings=None, landings=None, part_ids=None, ext_ids=None, bank_through=None, rough=None):
     """plan_road for many (lonlat, spec) parts with one elev call (its cost is per call); abut: per part (start, end)
     flags, the ends leading onto a bridge (fill_abutment); ext: per part (before, after), the lines (k, 2) in the frame
     from its start / end outward along the part the road goes on in (Grader._extensions), or None: their ground is in
@@ -1168,7 +1169,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         p = _plan(xy, zx, spec, ab, (nb, na), step, bank_xy=bank_xy,
                   bank_ext=(len(bank_before), len(bank_after)),
                   banked=not (RING_LEVEL_ON and rings is not None and rings[j]), coarse=coarse,
-                  bank_abut=(ab[0] and not thr[0], ab[1] and not thr[1]) if thr != (False, False) else None)
+                  bank_abut=(ab[0] and not thr[0], ab[1] and not thr[1]) if thr != (False, False) else None,
+                  rough=None if rough is None else rough[j])
         # (road roughness, PR #639 by subformatdnb: off unless BNE_BUMPS > 0; cached plans keep whatever they were
         # planned with, so a change takes effect on places planned after it)
         out.append(bumps.apply(frame, p, spec, ab) if bumps.SCALE > 0 else p)
@@ -1365,13 +1367,16 @@ def _dirt_noise(seed):
     return fast._ef.DirtNoise(int(seed))
 
 
-def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
+def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP, gain=None):
     """What a minor dirt road is really like, one value per profile sample (n samples, ext: how many lie past the
     part's ends): a soft undulation plus discrete damage -- potholes, broken patches (a step with soft edges) and the
     odd deep pit -- placed from the road's own position, so every process builds the same ones. None for a built
     road. The sizes are metres; BNE_DIRT_BUMP scales the lot (1: as here, 0: off). DEM smoothing extensions get zero
     damage: neighbouring samples must not change this part's pattern or move its junction taper."""
-    if spec.kind in roadsmod.BUILT or DIRT_ROUGH <= 0.0:
+    # (gain: BNE_UNPAVED's mapped grade, drivefeat.rough_gain: the road's tracktype / smoothness scale the lot, on at
+    # BNE_DIRT_BUMP's strength or 1 where that is off; None: as before)
+    rough = DIRT_ROUGH if gain is None else (DIRT_ROUGH if DIRT_ROUGH > 0.0 else 1.0) * float(gain)
+    if spec.kind in roadsmod.BUILT or rough <= 0.0:
         return None
     if spec.cls == "track":
         scale, wave = DIRT_TRACK_SHARE, DIRT_TRACK_WAVE_SHARE
@@ -1419,17 +1424,17 @@ def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
     if length > 10.0:
         for _ in range(rng.poisson(max(1.0, length / DIRT_POTHOLE_EVERY_M))):
             bowl(rng.uniform(0.0, length), rng.uniform(*DIRT_POTHOLE_W_M),
-                 rng.uniform(*DIRT_POTHOLE_D_M) * DIRT_ROUGH * scale)
+                 rng.uniform(*DIRT_POTHOLE_D_M) * rough * scale)
         for _ in range(rng.poisson(max(1.0, length / DIRT_PATCH_EVERY_M))):   # broken patch: a step, soft edges
             c = rng.uniform(0.0, length)
             w = rng.uniform(*DIRT_PATCH_W_M)
-            d = rng.uniform(*DIRT_PATCH_D_M) * DIRT_ROUGH * scale * (1.0 if rng.uniform(0.0, 1.0) < 0.5 else -1.0)
+            d = rng.uniform(*DIRT_PATCH_D_M) * rough * scale * (1.0 if rng.uniform(0.0, 1.0) < 0.5 else -1.0)
             edge = 0.35 * w
             add(c, 0.5 * w + 4.0 * edge, lambda x, c=c, w=w, d=d, edge=edge:
                 d * 0.5 * (dnp.tanh((x - (c - 0.5 * w)) / edge) - dnp.tanh((x - (c + 0.5 * w)) / edge)))
         for _ in range(rng.poisson(max(0.3, length / DIRT_PIT_EVERY_M))):      # the odd deep pit
             bowl(rng.uniform(0.0, length), rng.uniform(*DIRT_PIT_W_M),
-                 rng.uniform(*DIRT_PIT_D_M) * DIRT_ROUGH * scale)
+                 rng.uniform(*DIRT_PIT_D_M) * rough * scale)
         if DIRT_BASE_M > 0.0 and length > 1.5 * DIRT_BASE_M:   # keep the terrain's own course: no net rise or fall
             k = max(1, int(DIRT_BASE_M / max(step, 1e-6)))
             pad = k // 2
@@ -1437,7 +1442,7 @@ def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
             out = out - dnp.convolve(padded, np.ones(k) / k, mode="valid")[:len(out)]
     # Tracks still get more damage, but not arbitrarily deep overlapping holes. Main roads keep their smaller
     # share; BNE_DIRT_BUMP still scales the bounds. Bound after removing the mean, which can itself raise berms.
-    strength = DIRT_ROUGH * min(1.0, max(scale, wave))
+    strength = rough * min(1.0, max(scale, wave))
     out = np.clip(out, -DIRT_DEPTH_MAX_M * strength, DIRT_RISE_MAX_M * strength)
     # The asymmetric bounds can leave a net depression. Balance by reducing the stronger side only, so neither
     # the depth nor the rise can exceed its bound again (and a zero sample never turns into a raised berm).
@@ -1453,14 +1458,14 @@ def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
 
 
 def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_xy=None, bank_ext=None, banked=True,
-          coarse=False, bank_abut=None):
+          coarse=False, bank_abut=None, rough=None):
     """ext: (before, after), samples of z past the part's ends (plan_roads): smoothed with it, then dropped. step: m
     between the samples. bank_xy: the matching extended geometry, trimmed after the curvature/runoff pass. banked
     False: level across (a roundabout's ring)."""
     built = spec.kind in roadsmod.BUILT
     zs = smooth_profile(median_profile(z, step, MEDIAN_M if built else DIRT_MEDIAN_M), step,
                         profile_sigma(spec, coarse))[ext[0]:len(z) - ext[1]]
-    bumps = dirt_bumps(xy, spec, len(z), ext, step)
+    bumps = dirt_bumps(xy, spec, len(z), ext, step, rough)
     if bumps is not None:                       # (not smoothed again: a pothole's edge is sharp, that is the point)
         damage = bumps[ext[0]:len(z) - ext[1]].copy()
         cap = DIRT_STEP_MAX_M
@@ -1475,6 +1480,13 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
             import fast
             fast.require(157, "dirt_step_clamp")
             damage = np.asarray(fast._ef.dirt_step_clamp(np.ascontiguousarray(damage, np.float64), float(cap)))
+        if rough is not None and len(zs) > 2:
+            # (BNE_UNPAVED: the damage on the road's own profile as it is drawn without it, the VERTEX_STEP vertices
+            # joined linearly; every PROFILE_STEP sample kept below would otherwise also bring back the elevation
+            # data's own 2 m detail the thinning smooths: rides measured 20-25 cm dips that were not damage at all)
+            every4 = max(1, int(round(VERTEX_STEP / PROFILE_STEP)))
+            k4 = np.r_[np.arange(0, len(zs) - 1, every4), len(zs) - 1]
+            zs = dnp.interp(np.arange(len(zs), dtype=np.float64), k4.astype(np.float64), zs[k4])
         zs = zs + damage
     # thin to VERTEX_STEP (the profile stays smooth between: linear in the grading pass); a minor dirt road keeps
     # every sample, or its potholes would be smoothed away by the linear stretches between the vertices
@@ -1482,6 +1494,12 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
     vstep = DIRT_VERTEX_STEP if minor_dirt else VERTEX_STEP
     every = max(1, int(round(vstep / PROFILE_STEP)))
     keep = np.r_[np.arange(0, len(xy) - 1, every), len(xy) - 1]
+    if rough is not None and bumps is not None and minor_dirt:
+        # (BNE_UNPAVED: the VERTEX_STEP vertices, and every sample only where there is damage: the junctions' tapered
+        # ends keep the drawn road's own vertices, so their flat cores and ramps stay where they were)
+        every4 = max(1, int(round(VERTEX_STEP / PROFILE_STEP)))
+        keep = np.union1d(np.r_[np.arange(0, len(xy) - 1, every4), len(xy) - 1],
+                          np.flatnonzero(np.abs(damage) > 1e-3))
     # Where a street-edge profile is known, grade its actual carriageway.
     # Legacy streets still allow enough flat ground for their urban width.
     width = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, True, None, spec.oneway)) \
@@ -2833,6 +2851,7 @@ class _Planner:
             specs = roadsmod.road_specs(feats, None, self.widths)
             placement = roadsmod.placement_context([feats], None, self.widths)     # (as the road tiles draw them)
             parts, ids, clipped, rings, pids = [], [], [], [], []
+            rough = [] if drivefeat.UNPAVED else None       # (BNE_UNPAVED: each part's mapped grade, rough_gain)
             box = self._clip_box(key)
             keeps = []
             for i in range(len(feats)):
@@ -2856,6 +2875,8 @@ class _Planner:
                         pids.append(pid)
                         clipped.append(len(pieces) > 1 or r is not ring)
                         rings.append(roadsmod.is_ring(feats, i))
+                        if rough is not None:
+                            rough.append(drivefeat.rough_gain(feats, i))
             pspecs = []
             abut = None
             if (ABUT_FILL_ON or APPROACH_ON) and parts:
@@ -2893,7 +2914,8 @@ class _Planner:
                                                                          coarse=coarse, obs=self._obs(key),
                                                                          decks=self._decks_near(key), rings=rings,
                                                                          landings=landings, part_ids=pids,
-                                                                         ext_ids=ext_ids, bank_through=through)):
+                                                                         ext_ids=ext_ids, bank_through=through,
+                                                                         rough=rough)):
                 if p is not None:
                     p.rid = road_id(fid)
                     import lanesections
@@ -3024,6 +3046,26 @@ class _Planner:
                 except Exception as e:      # the road's own core rather than none
                     _caught(e)
                     log.debug("grading: hairpins of %s: %s: %s", key, type(e).__name__, e)
+            if (drivefeat.CALMING or drivefeat.UNPAVED) and plans:
+                # the mapped speed bumps / humps / tables in the roads' profiles (calming.py), after every pass that
+                # moves a road's heights (before the corners graded to them and the trim to the cell's box)
+                try:
+                    import calming
+                    calming.apply(self.md, self.frame, plans[:len(pspecs)], calming.lattice_min_base(), feats)
+                except Exception as e:      # the roads as graded rather than no grading
+                    _caught(e)
+                    log.debug("grading: traffic calming of %s: %s: %s", key, type(e).__name__, e)
+            if drivefeat.ENDS and plans:
+                # the mapped turning circles' bulbs and passing places held at their roads' heights (roadends.py)
+                try:
+                    import roadends
+                    epads = roadends.corner_pads(roadends.rows_of(pparts, self.frame), self.frame)
+                    eplans = roadends.grade(epads, plans[:len(pspecs)])
+                    plans.extend(eplans)
+                    pclip.extend([True] * len(eplans))
+                except Exception as e:      # the roads' own grading rather than none
+                    _caught(e)
+                    log.debug("grading: road ends of %s: %s: %s", key, type(e).__name__, e)
             if CORNERS_ON and plans:
                 # the rounded corners of curbless junctions (roadcorners.py): the ground under each graded to its roads'
                 # solved heights (trimmed to the cell's box with the roads' plans below)

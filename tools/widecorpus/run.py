@@ -207,6 +207,9 @@ def main():
     ap.add_argument("--radius", type=int, default=30)
     ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--switch", choices=sorted(REVAMPED))
+    ap.add_argument("--env", action="append", default=[], metavar="NAME=VALUE",
+                    help="a configuration of these BNE_* settings instead of Revamped (repeatable; e.g. the mapped "
+                         "driving features' switches)")
     ap.add_argument("--warm-only", action="store_true")
     ap.add_argument("--run", default="current")
     ap.add_argument("--bisect", action="store_true")
@@ -235,7 +238,12 @@ def main():
         ap.error("duplicate coordinates in selection")
     code = fingerprint()
     configs = {"default": {}}
-    if args.switch:
+    if args.env:
+        env = dict(e.split("=", 1) for e in args.env)
+        if not all(k.startswith("BNE_") for k in env):
+            ap.error("--env takes BNE_* settings")
+        configs["custom"] = env
+    elif args.switch:
         configs[args.switch] = {args.switch: REVAMPED[args.switch]}
     else:
         configs["revamped"] = REVAMPED

@@ -1838,3 +1838,33 @@ nothing the player sees; each later stage that changes output leaves that list i
   line and `<cache>/roadsys/shadow-1/<frame>/<tile>.json` (timings, read list, network / profile / surface stats,
   checks, seam hashes, the pieces' keys). `tools/roadsys_shadow.py` runs it over a box (orders, cold, dumps for
   `roadsys tile` under Wine).
+
+## Mapped driving features (`server/drivefeat.py`; 2026-11-23, every switch off by default)
+
+OpenStreetMap / Overture data points the generator did not read, each behind its own BNE_* build switch (keyed like
+every BNE_* variable; with one that reads the "drive" shards on, their build is MapData.versions()' "drive"):
+
+- **Data.** Overture's infrastructure points (barriers, gates, bollards, cattle grids, height restrictors, stop /
+  give-way / crossing nodes with crossing:markings, street lamps' light:* tags) are read as they come. What Overture
+  drops comes from a new weekly planet build, `tools/build_drive_tags.py` (dataset "drive", z7 gzip JSON shards like the
+  rail and lane ones, `server/drivetags.py`): traffic_calming, turning circles / loops, mini roundabouts, passing
+  places, fords, railway signals / points / buffer stops (nodes), and the tracktype / ford / traffic_calming of highway
+  ways (delta-coded id lists, `railtags.Rules`). `BNE_DRIVETAGS_DIR` reads a local build (tests). The way tags are
+  joined to the decoded roads layer after it is kept (`MapData._drive`), so `roadlayercache` keeps nothing new.
+- **BNE_CALMING.** Bumps / humps / tables / cushions / dips as profiles in the road plans (`calming.py`, earthfast
+  `drivefeat.rs calming_apply`: half-cosine ramps, a flat top, the plan densified every 0.25 m round each), after every
+  grading pass that moves heights, so the physics lattice, meshes and decals take them. Triangle markings on humps /
+  tables in the TSRGD / MUTCD countries; islands, chokers and chicanes as kerbed islands.
+- **BNE_UNPAVED.** tracktype fills a missing surface (grade1 compacted .. grade5 grass); smoothness, else tracktype,
+  else the surface, else the class sets an unpaved road's roughness (grading.dirt_bumps' gain); mapped fords dip the
+  road 0.3 m and get a short River piece of water over the dip (`drivefeat.ford_rivers`, the sea message).
+- **BNE_ROAD_BARRIERS.** Gates, lift gates, height restrictors, bollards and cattle grids on roads
+  (`tools/build_drive_props.py`'s bne_dp_* models; the cattle grid a draped stock grate). Never closed on a road the AI
+  graph drives (navgraph's own rule); closed only with access=private / no on one it leaves out.
+- **BNE_ROAD_ENDS.** Turning circles as paved bulbs at dead ends, passing places as lay-bys (pseudo-corners of
+  `roadcorners`: painted, masked, cleared of trees, graded), mini roundabouts as white discs.
+- **BNE_NODE_MARKINGS.** Mapped zebras, stop lines and give-way paint (TSRGD 1003's double broken line in the UK and
+  Ireland) where the map has them, every country but Sweden and Germany (their own readings).
+- **BNE_RAIL_PROPS.** Railway signals (main / dwarf) and point machines beside the track where mapped.
+- **BNE_LAMP_TAGS.** A mapped street lamp's light:count (double arm), lamp_mount (none on walls / wires) and
+  light:colour / lamp_type (its night light's colour, nightlights.lua).

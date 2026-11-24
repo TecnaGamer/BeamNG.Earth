@@ -13912,7 +13912,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
                sign_obstacles=None, roadside_jobs=None, towns=None, mapped_poles=None, de_on=False, de_routes=(),
-               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, sheet_marks=None, v3=None):
+               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, sheet_marks=None, v3=None,
+               drive=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -14239,6 +14240,13 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         crosswalks, jlines, jramps, teeth, zebras = designs.junction_paint(
             de_ctl, roads, de_ctx, crosswalks, jlines, jramps, nodes, signals, left_hand)
     elif walks is not None and str(country or "").upper() != "SE":
+        if drive is not None and drive.get("marks") is not None:
+            # BNE_NODE_MARKINGS: the map's zebras, stop and give-way nodes painted (drivefeat.mapped_marks)
+            import drivefeat as _df
+            crosswalks, mteeth, jlines, mz = _df.mapped_marks(roads, drive["marks"], crosswalks, jlines, signals,
+                                                              country, left_hand)
+            teeth = teeth + mteeth
+            zebras = zebras + [(np.array([cw["a"], cw["b"]])[:, :2], cw["w"] / 2) for cw in mz]
         # every other country: a give-way line across each roundabout entry (roundabouts.entry_marks)
         import roundabouts as _rb
         rb_marks, rb_cuts = _rb.entry_marks(roads, signals, country, priority, crosswalks, left_hand)
@@ -14288,6 +14296,18 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if fill is not None and _box_meets(fill[0], wexact):
                 walks.append({"disc": {"ring": fill[0], "apex": fill[1], "mat": fill[2], "h": fill[3], "dome": fill[4]},
                               "fid": "island"})
+    if walks is not None and drive is not None and drive.get("nodes"):
+        # BNE_CALMING: the mapped islands, chokers and chicanes as kerbed islands (drivefeat.tile_kerbs)
+        import drivefeat as _df
+        for out_ in _df.tile_kerbs(roads, drive["nodes"]):
+            mid_ = offset_polyline(np.vstack([out_[-1:], out_, out_[:2]]), roundabouts.SPLIT_CURB_W / 2)[1:-1]
+            band_ = simplify(np.vstack([mid_, mid_[:1]]), tol=0.05)
+            for piece in clip_polyline(band_, *wexact):
+                run = densify(piece, spacing=2.0)
+                if len(run) >= 2:
+                    walks.append({"pts": run, "side": 1, "caps": (False, False), "ramps": [],
+                                  "w": roundabouts.SPLIT_CURB_W, "fid": "splitter", "h": roundabouts.SPLIT_CURB_H,
+                                  "brick": True, "mat": 7})
     if walks is not None and nodes is not None and isl:        # splitter islands where the map has a refuge (roundabouts.splitters)
         for sp_ in roundabouts.splitters(roads, nodes.get("islands")):
             out_ = sp_["outline"]
@@ -14358,6 +14378,14 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 chunks.append({"m": markings.ARROW_MATERIAL, "w": 0.0, "tl": 4.0, "p": CENTRE["p"], "layer": "mark",
                                "poly": [[round(float(v), 3) for v in q] for q in corners],
                                "uvq": uv.tolist(), "n": []})
+    if drive is not None and drive.get("nodes"):    # (the mapped humps' triangles, mini roundabouts: drivefeat)
+        import drivefeat as _df
+        teeth = teeth + _df.tile_teeth(roads, drive["nodes"], country, left_hand)
+    if drive is not None and drive.get("infra"):    # (the mapped cattle grids across their roads: drivefeat)
+        import drivefeat as _df
+        for ch in _df.cattle_grid_chunks(drive["infra"], roads, wexact):
+            if skin_own(*np.asarray(ch["poly"], np.float64)[:, :2].mean(0)):
+                chunks.append(ch)
     for tri in teeth:
         if skin_own(*tri[:2].mean(0)[:2]):
             chunks.append(mark_poly(tri))
