@@ -1,0 +1,222 @@
+{
+  "bne_dp_white": {
+    "name": "bne_dp_white",
+    "mapTo": "bne_dp_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "298993a3-3faf-53a0-a8be-05b30914aaf0",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.88,
+          0.88,
+          0.86,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dp_red": {
+    "name": "bne_dp_red",
+    "mapTo": "bne_dp_red",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "3133f067-649c-5189-bf97-9935c4d045e4",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.66,
+          0.06,
+          0.05,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dp_yellow": {
+    "name": "bne_dp_yellow",
+    "mapTo": "bne_dp_yellow",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "9db05d19-7ce3-5ed3-9c7c-acfa202ba5b2",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.86,
+          0.66,
+          0.06,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dp_metal": {
+    "name": "bne_dp_metal",
+    "mapTo": "bne_dp_metal",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "67f1cac9-825c-56e3-886c-34d9705b834e",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.6,
+          0.61,
+          0.62,
+          1.0
+        ],
+        "metallicFactor": 0.8,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dp_dark": {
+    "name": "bne_dp_dark",
+    "mapTo": "bne_dp_dark",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "324c561d-dc2c-58e4-9e6e-7e77edc075ba",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.12,
+          0.12,
+          0.13,
+          1.0
+        ],
+        "metallicFactor": 0.3,
+        "roughnessFactor": 0.55
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dp_black": {
+    "name": "bne_dp_black",
+    "mapTo": "bne_dp_black",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6191ee38-8955-5565-8f2e-9a0a7fc21e18",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.03,
+          0.03,
+          0.03,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dp_lens_red": {
+    "name": "bne_dp_lens_red",
+    "mapTo": "bne_dp_lens_red",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "1f5fce9d-a542-5207-bfae-4644fde981be",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.7,
+          0.04,
+          0.03,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.1
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dp_lens_green": {
+    "name": "bne_dp_lens_green",
+    "mapTo": "bne_dp_lens_green",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "0f7962c6-c479-5ee5-a360-22b819adff94",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.05,
+          0.55,
+          0.25,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.1
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dp_lens_yellow": {
+    "name": "bne_dp_lens_yellow",
+    "mapTo": "bne_dp_lens_yellow",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f86a6aae-570d-5977-8045-c1a2b5eab4f0",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.85,
+          0.55,
+          0.05,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.1
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dp_grey": {
+    "name": "bne_dp_grey",
+    "mapTo": "bne_dp_grey",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6d0d646b-5bd4-517f-aa36-c4be02fc3c0e",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.45,
+          0.46,
+          0.45,
+          1.0
+        ],
+        "metallicFactor": 0.2,
+        "roughnessFactor": 0.7
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

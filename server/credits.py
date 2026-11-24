@@ -59,8 +59,6 @@ IMAGERY = {
     "naipusda": "USDA NAIP",
     "naip": "USDA NAIP via USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program",
     "usgs": "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program",       # (USGS's requested credit line)
-    "eox2023": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
-               "(Contains modified Copernicus Sentinel data 2023)",
     "eox2016": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
                "(Contains modified Copernicus Sentinel data 2016 & 2017)",
 }
@@ -86,7 +84,6 @@ WEATHER_ID = "wx:open-meteo"
 # The full wordings above stay the attribution of record: hello.attribution (the settings page) and CREDITS.md.
 SHORT = {
     "img:md6in": "MD iMAP", "img:naipusda": "USDA NAIP", "img:naip": "USDA NAIP", "img:usgs": "USGS",
-    "img:eox2023": "EOX Sentinel-2 cloudless 2023 (Copernicus)",
     "img:eox2016": "EOX Sentinel-2 cloudless 2016 (Copernicus)",
     "img:ct2023": "CT ECO", "img:ma2025": "MassGIS", "img:dc2025": "DC OCTO", "img:indiana": "Indiana IGIO",
     "img:ohio": "Ohio OGRIP", "img:ncarolina": "NC OneMap", "img:penn": "PEMA / PASDA", "img:virginia": "VGIN",

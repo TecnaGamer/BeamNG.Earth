@@ -19,6 +19,9 @@ CLI_DUTY = 0.25     # earthd's --background-duty default
 SLICE_S = 0.05      # busy this long between sleeps (the sleeps are SLICE_S * (1 / duty - 1) or longer)
 
 _local = threading.local()
+_exit = threading.Event()       # the process exits (exiting()): pace() sleeps no more
+_sleeping = [0]                 # threads in pace()'s sleep
+_sleep_cv = threading.Condition()
 
 
 def enable(duty=DUTY):
@@ -34,8 +37,32 @@ def pace():
         return
     busy = time.perf_counter() - _local.t0
     if busy >= SLICE_S:
-        time.sleep(busy * (1.0 / duty - 1.0))
+        if not _exit.is_set():
+            with _sleep_cv:
+                _sleeping[0] += 1
+            try:
+                _exit.wait(busy * (1.0 / duty - 1.0))
+            finally:
+                with _sleep_cv:
+                    _sleeping[0] -= 1
+                    _sleep_cv.notify_all()
         _local.t0 = time.perf_counter()
+
+
+def exiting(wait_s):
+    """The process exits (fast.py's atexit hook): wake the threads sleeping in pace() and wait (at most wait_s) until
+    they are out of it. pace() is called back from the kernels (sun_scores, the horizon march, colormatch's blurs): a
+    thread asleep in it when the interpreter finalized was ended by CPython < 3.14 with pthread_exit through the
+    kernel's Rust frames (fast.py, _exit_hook). True when none is left."""
+    _exit.set()
+    until = time.monotonic() + wait_s
+    with _sleep_cv:
+        while _sleeping[0]:
+            left = until - time.monotonic()
+            if left <= 0:
+                return False
+            _sleep_cv.wait(left)
+    return True
 
 
 def idle():

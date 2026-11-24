@@ -62,6 +62,7 @@ FEATURES = (
     ("expGradeGuard", {"BNE_GRADE_GUARD": "on"}, None),                   # grading.GUARD_ON
     ("expPhotoSurface", {"BNE_PHOTO_SURFACE": "1"}, None),                # photosurface.ON
     ("expTerrainBumps", {"BNE_TERRAIN_BUMPS": "on"}, None),               # grading.TERRAIN_BUMPS_ON
+    ("expRoadFollow", {"BNE_ROAD_FOLLOW": "on"}, None),                   # grading.FOLLOW_ON
     ("expCliffWalls", {"BNE_CLIFF_WALLS": "on"}, None),                   # roads.CLIFF_WALLS_ON
     ("expTunnelLids", {"BNE_TUNNEL_LIDS": "on"}, None),                   # tunnellids.ON
     ("expSubseaTunnels", {"BNE_SUBSEA_RELAX": "on"}, None),               # subsea.RELAX

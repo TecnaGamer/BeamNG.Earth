@@ -1,0 +1,72 @@
+use crate::impl_::pyfunction::PyFunctionDef;
+#[cfg(all(not(Py_LIMITED_API), not(PyPy), not(GraalPy)))]
+use crate::types::PyFrame;
+#[cfg(Py_3_15)]
+use crate::types::PyFrozenDict;
+use crate::types::{
+    PyBool, PyByteArray, PyBytes, PyCapsule, PyComplex, PyDict, PyFloat, PyFrozenSet, PyList,
+    PyMapping, PyMappingProxy, PyModule, PyRange, PySequence, PySet, PySlice, PyString,
+    PyTraceback, PyTuple, PyType, PyWeakref, PyWeakrefProxy, PyWeakrefReference,
+};
+use crate::{Bound, PyAny, PyResult, ffi};
+
+use crate::pyclass_init::PyClassInitializer;
+
+use crate::impl_::{
+    pyclass_init::PyNativeTypeInitializer,
+    pymethods::PyMethodDef,
+    pymodule::{AddClassToModule, AddTypeToModule, ModuleDef},
+};
+
+pub trait Sealed {}
+
+// for FfiPtrExt
+impl Sealed for *mut ffi::PyObject {}
+
+// for PyResultExt
+impl Sealed for PyResult<Bound<'_, PyAny>> {}
+
+// for Py(...)Methods
+impl Sealed for Bound<'_, PyAny> {}
+impl Sealed for Bound<'_, PyBool> {}
+impl Sealed for Bound<'_, PyByteArray> {}
+impl Sealed for Bound<'_, PyBytes> {}
+impl Sealed for Bound<'_, PyCapsule> {}
+impl Sealed for Bound<'_, PyComplex> {}
+impl Sealed for Bound<'_, PyDict> {}
+impl Sealed for Bound<'_, PyFloat> {}
+#[cfg(Py_3_15)]
+impl Sealed for Bound<'_, PyFrozenDict> {}
+impl Sealed for Bound<'_, PyFrozenSet> {}
+impl Sealed for Bound<'_, PyList> {}
+impl Sealed for Bound<'_, PyMapping> {}
+impl Sealed for Bound<'_, PyMappingProxy> {}
+impl Sealed for Bound<'_, PyModule> {}
+impl Sealed for Bound<'_, PyRange> {}
+impl Sealed for Bound<'_, PySequence> {}
+impl Sealed for Bound<'_, PySet> {}
+impl Sealed for Bound<'_, PySlice> {}
+impl Sealed for Bound<'_, PyString> {}
+impl Sealed for Bound<'_, PyTraceback> {}
+#[cfg(all(not(Py_LIMITED_API), not(PyPy), not(GraalPy)))]
+impl Sealed for Bound<'_, PyFrame> {}
+impl Sealed for Bound<'_, PyTuple> {}
+impl Sealed for Bound<'_, PyType> {}
+impl Sealed for Bound<'_, PyWeakref> {}
+impl Sealed for Bound<'_, PyWeakrefProxy> {}
+impl Sealed for Bound<'_, PyWeakrefReference> {}
+
+impl<T> Sealed for AddTypeToModule<T> {}
+impl<T> Sealed for AddClassToModule<T> {}
+impl Sealed for PyMethodDef {}
+impl Sealed for PyFunctionDef {}
+impl Sealed for ModuleDef {}
+
+impl<T: crate::type_object::PyTypeInfo> Sealed for PyNativeTypeInitializer<T> {}
+impl<T: crate::pyclass::PyClass> Sealed for PyClassInitializer<T> {}
+
+#[cfg(wip_feature_std)]
+#[allow(clippy::disallowed_types)]
+impl Sealed for std::sync::Once {}
+#[cfg(feature = "parking_lot")]
+impl Sealed for parking_lot::Once {}

@@ -67,6 +67,8 @@ PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARE
               "BNE_FR_ROADS", "BNE_GRADE_GUARD", "BNE_HRDEM_NEAR", "BNE_LIDARBC", "BNE_PHOTO_SURFACE",
               "BNE_RAIL_CURVES", "BNE_RAIL_TUNNELS", "BNE_RAIL_XING", "BNE_SUBSEA_RELAX", "BNE_TERRAIN_BUMPS",
               "BNE_TUNNEL_LIDS",
+              # (grading.FOLLOW_ON: the plans' profiles)
+              "BNE_ROAD_FOLLOW",
               # (the Revamped roads setting: tapers, deck K, level spacing, footbridges, rail lifecycle, raceways)
               "BNE_DECK_K_SPEED", "BNE_RACEWAY_DIG", "BNE_FAST_DECK_ENDS", "BNE_FAST_GAP", "BNE_FAST_DECK_GROUND", "BNE_RAIL_LIFECYCLE",
               "BNE_RAIL_SEAM_NATURAL",

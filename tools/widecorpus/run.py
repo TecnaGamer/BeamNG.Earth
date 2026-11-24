@@ -81,12 +81,16 @@ def build_process(p, cache, out, radius, env, offline, log):
     with log.open("w") as f:
         with subprocess.Popen(cmd, env=clean, stdout=f, stderr=subprocess.STDOUT, cwd=runtime,
                               start_new_session=True) as worker:
-            last_tile = time.monotonic()
+            last_tile = prev = time.monotonic()
             written = 0
             try:
                 while worker.poll() is None:
                     if space_exhausted.wait(2):
                         raise OSError("39 GB scratch cache limit")
+                    now = time.monotonic()
+                    if now - prev > 60:     # (this process was stopped, a gate's SIGSTOP: the time is not the build's)
+                        last_tile += now - prev
+                    prev = now
                     count = sum(1 for _ in out.glob("*.ter"))
                     if count > written:
                         written = count
@@ -207,6 +211,9 @@ def main():
     ap.add_argument("--radius", type=int, default=30)
     ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--switch", choices=sorted(REVAMPED))
+    ap.add_argument("--env", action="append", default=[], metavar="NAME=VALUE",
+                    help="a configuration of these BNE_* settings instead of Revamped (repeatable; e.g. the mapped "
+                         "driving features' switches)")
     ap.add_argument("--warm-only", action="store_true")
     ap.add_argument("--run", default="current")
     ap.add_argument("--bisect", action="store_true")
@@ -235,7 +242,12 @@ def main():
         ap.error("duplicate coordinates in selection")
     code = fingerprint()
     configs = {"default": {}}
-    if args.switch:
+    if args.env:
+        env = dict(e.split("=", 1) for e in args.env)
+        if not all(k.startswith("BNE_") for k in env):
+            ap.error("--env takes BNE_* settings")
+        configs["custom"] = env
+    elif args.switch:
         configs[args.switch] = {args.switch: REVAMPED[args.switch]}
     else:
         configs["revamped"] = REVAMPED

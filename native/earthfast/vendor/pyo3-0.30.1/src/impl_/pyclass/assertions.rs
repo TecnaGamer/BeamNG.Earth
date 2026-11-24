@@ -1,0 +1,36 @@
+/// Helper function that can be used at compile time to emit a diagnostic if
+/// the type does not implement `Send` or `Sync` when it should; the mere act
+/// of invoking this function will cause the diagnostic to be emitted if needed.
+pub const fn assert_pyclass_send_sync<T>()
+where
+    T: Send + Sync,
+{
+}
+
+#[track_caller]
+#[allow(clippy::assertions_on_constants, reason = "invoked by a proc macro")]
+pub const fn assert_immutable_type_supported() {
+    assert!(
+        cfg!(any(all(Py_3_10, not(Py_LIMITED_API)), Py_3_14)),
+        "`immutable_type` requires Python >= 3.10 (or >= 3.14 when using the `abi3` feature)"
+    );
+}
+
+#[track_caller]
+pub const fn assert_type_implements_traverse(implements_traverse: bool) {
+    assert!(
+        implements_traverse,
+        "an implementation of `__clear__` requires an implementation of `__traverse__`"
+    )
+}
+
+mod tests {
+    #[cfg(feature = "macros")]
+    #[test]
+    fn test_assert_pyclass_send_sync() {
+        #[crate::pyclass(crate = "crate")]
+        struct MyClass {}
+
+        super::assert_pyclass_send_sync::<MyClass>();
+    }
+}

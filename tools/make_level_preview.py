@@ -1,6 +1,6 @@
 """The level's preview (the freeroam level select): the whole Earth as the in-game map shows it zoomed out all the way
 (EarthMap.vue mapmath MIN_Z = 2), from Sentinel-2 cloudless 2016 by EOX (CC BY 4.0: free to ship with its credit,
-which the level's description carries; the 2023 mosaic the server streams is CC BY-NC-SA).
+which the level's description carries; EOX's 2018+ mosaics are CC BY-NC-SA and not used anywhere).
 
     python3 tools/make_level_preview.py [--zoom 3] [--out mod/beamng_earth/levels/beamng_earth/beamng_earth_preview.jpg]
 

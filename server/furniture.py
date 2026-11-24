@@ -1001,6 +1001,10 @@ class RoadClearance:
         return True
 
 
+# a mapped lamp's light:colour (BNE_LAMP_TAGS) -> its lens group (nightlights.lua's profile of that colour)
+LENS_COLOURS = {"white": "lamplens_white", "yellow": "lamplens_yellow"}
+
+
 def lamp_lenses(rows):
     """A lens row [G_LENS, x, y, z, yaw, 1, 1, 0] under each head of every lamp row (LAMP_HEADS, MAPPED_LAMP_HEADS: a
     double arm has two; its scale: the row's height over the catalog's, 1 for both), and a G_GLOW row at the same
@@ -1018,6 +1022,8 @@ def lamp_lenses(rows):
         k = r[6] / LAMP_H.get(r[0], r[6]) if r[6] else 1.0     # (a scaled lamp: its head scaled alike)
         group = ("fr_lantern_light" if r[0] == "fr_lantern" else G_HIGH_MAST_LENS if r[0] == "streetlight_high_mast"
                  else G_LENS)
+        if len(r) > 8 and group == G_LENS and r[8] in LENS_COLOURS:
+            group = LENS_COLOURS[r[8]]     # (a mapped lamp's light:colour, BNE_LAMP_TAGS: worldprops)
         for head in heads:
             hx, hy, hz = head[0] * k, head[1] * k, head[2] * k
             yaw = (r[4] + head[3]) % 360. if len(head) > 3 and head[3] else r[4]
@@ -1510,7 +1516,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     # (the tile's own, at their mapped points: not moved off the clearance like a guessed one)
     rows += [list(r) for r in mapped_lamps if _owns(box, r[1], r[2])]
     rows = citylamps.localize(rows, poleprofiles.lamp_country_selector(pole_profile, pole_frame))
-    return under_decks(rows + lamp_lenses(rows), list(decks), wires)
+    lenses = lamp_lenses(rows)
+    rows = [r[:8] if len(r) == 9 else r for r in rows]     # (a mapped lamp's colour: its lens's, not the row's)
+    return under_decks(rows + lenses, list(decks), wires)
 
 
 def off_rail_beds(rows, obstacles):

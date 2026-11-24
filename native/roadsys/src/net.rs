@@ -12,6 +12,7 @@
 //! strips of G4 are built from one ordered set of boundaries (no pieces to trim).
 use crate::geom::*;
 use crate::io::{Place, Seg};
+use crate::xsec::{self, Lay, SideW};
 
 pub const T_LANE_W: usize = 0;
 pub const T_EXIT_K: usize = 1;
@@ -149,10 +150,29 @@ pub struct Stroke {
     pub lane_scale: Vec<(f64, f64)>,   // (station, factor): lane widths from the measured gap to a parallel carriageway
     pub cap_nbrs: Vec<usize>,          // the parallel carriageways whose gap capped it (part.rs caps): its read list
     pub reach: f64,                    // m round it its lane program reads (the lane graph's walks; product.rs halos)
+    pub over: Vec<(usize, f64, f64, u8)>, // (BNE_ROADSYS_XSEC) (slot, s0, s1, what): a bus lane / unpaved shoulder face kind
+                                       // (xsec::K_BUS, K_SOFT) or an advisory cycle lane's dashed line (OVER_ADV)
+    pub area: Vec<crate::areas::Knot>, // (BNE_ROADSYS_AREAS) its mapped road areas' program: lane factor, outer shoulders,
+                                       // shift, strip factor (the cross-section's strips, BNE_ROADSYS_XSEC)
 }
+
+/// Stroke.over's mark for an advisory cycle lane (markings only, never a face kind).
+pub const OVER_ADV: u8 = 0x40;
+
+/// (BNE_ROADSYS_XSEC) a cross-section strip slot between the lanes and a shoulder: parking, a cycle lane, a buffer.
+pub fn is_strip(kind: u8) -> bool { kind == xsec::K_PARK || kind == xsec::K_CYCLE || kind == xsec::K_BUFFER }
 
 impl Stroke {
     pub fn len(&self) -> f64 { self.line.len() }
+    /// (BNE_ROADSYS_XSEC) the override `what` of slot k at station s, if any.
+    pub fn over_at(&self, k: usize, s: f64, what: u8) -> bool {
+        self.over.iter().any(|o| o.0 == k && o.3 == what && s >= o.1 && s <= o.2)
+    }
+    /// The face kind of slot k at station s (its slot's, or an override's).
+    pub fn face_kind(&self, k: usize, s: f64) -> u8 {
+        for o in &self.over { if o.0 == k && o.3 < OVER_ADV && s >= o.1 && s <= o.2 { return o.3; } }
+        self.slots[k].kind
+    }
     pub fn support_at(&self, s: f64) -> Sup {
         for u in &self.sup { if s >= u.s0 && s <= u.s1 { return *u; } }
         Sup { s0: 0.0, s1: self.len(), kind: SUP_GROUND, sid: 0, level: 0.0, depth: 0.0 }
@@ -196,11 +216,33 @@ impl Stroke {
         for &t in &ts { out.push(add(p, scale(n, t))); }
     }
 
-    /// Boundary offsets t_0 >= t_1 >= ... >= t_S (m, + left of the stroke) at station s.
+    /// Boundary offsets t_0 >= t_1 >= ... >= t_S (m, + left of the stroke) at station s (with its mapped areas'
+    /// program, areas.rs, where it has one).
     pub fn offsets(&self, s: f64, out: &mut Vec<f64>) {
+        if self.area.is_empty() { self.offsets_raw(s, None, out); } else { self.offsets_raw(s, Some(crate::areas::knot_at(&self.area, s)), out); }
+    }
+
+    /// offsets() with the areas' parameters area ([lane factor, left / right outer shoulder extra, shift, strip factor])
+    /// or none. (The strip factor scales the cross-section's parking, cycle lanes and buffers, BNE_ROADSYS_XSEC: a
+    /// stroke without them is untouched by it.)
+    pub fn offsets_raw(&self, s: f64, area: Option<[f64; 5]>, out: &mut Vec<f64>) {
         out.clear();
         let n = self.slots.len();
         let mut ws: Vec<f64> = self.slots.iter().map(|k| k.w(s)).collect();
+        if let Some(a) = area {
+            for k in 0..n { if self.slots[k].kind == K_LANE { ws[k] *= a[0]; } }
+            if a[4] != 1.0 { for k in 0..n { if is_strip(self.slots[k].kind) { ws[k] *= a[4]; } } }
+            if let Some(k) = (0..n).find(|&k| ws[k] > 1e-6) { if self.slots[k].kind == K_SHOULDER { ws[k] = (ws[k] + a[1]).max(0.0); } }
+            if let Some(k) = (0..n).rev().find(|&k| ws[k] > 1e-6) { if self.slots[k].kind == K_SHOULDER { ws[k] = (ws[k] + a[2]).max(0.0); } }
+        }
+        let dt = area.map(|a| a[3]).unwrap_or(0.0);
+        self.offsets_ws(s, &ws, out);
+        if dt != 0.0 { for t in out.iter_mut() { *t += dt; } }
+    }
+
+    fn offsets_ws(&self, s: f64, ws0: &[f64], out: &mut Vec<f64>) {
+        let n = self.slots.len();
+        let mut ws: Vec<f64> = ws0.to_vec();
         if !self.lane_scale.is_empty() {
             let c = &self.lane_scale;
             let k = c.partition_point(|x| x.0 <= s);
@@ -294,6 +336,11 @@ pub struct NetStats {
     pub along: usize,
     pub cuts: usize,
     pub cut_unjoined: usize,
+    pub xsec_segs: usize,              // (BNE_ROADSYS_XSEC) segments with cross-section tags
+    pub xsec_shaped: usize,            // ... whose tags change their strips or lanes
+    pub xsec_width: usize,             // ... whose lanes come from a mapped width
+    pub xsec_reject: usize,            // ... whose mapped width gave no plausible lanes (today's lanes kept)
+    pub xsec_fork_skip: usize,         // strokes with a fork event whose strips stay empty
 }
 
 /// Build options. cut_grid: strokes are cut at a node past each line of a fixed grid of this size (m, in the frame;
@@ -302,9 +349,10 @@ pub struct NetStats {
 #[derive(Clone, Copy, Debug)]
 /// flat_struct (M4, deck.rs): no crossfall on structure faces (today's decks are flat across: the terrain and the
 /// hand-over were made for them).
-pub struct Opts { pub cut_grid: f64, pub cut_offset: f64, pub flat_struct: bool }
+/// areas (BNE_ROADSYS_AREAS=on): the place's mapped road areas are the carriageway edges' soft targets (areas::fit).
+pub struct Opts { pub cut_grid: f64, pub cut_offset: f64, pub flat_struct: bool, pub areas: bool }
 
-impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0, flat_struct: false } } }
+impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0, flat_struct: false, areas: false } } }
 
 pub struct Net {
     pub opts: Opts,
@@ -320,6 +368,10 @@ pub struct Net {
     pub edge_stroke: Vec<(usize, usize)>, // edge -> (stroke, part)
     pub crossings: Vec<Crossing>,
     pub stats: NetStats,
+    pub xsec_on: bool,                  // (BNE_ROADSYS_XSEC) the cross-section model: every stroke gets its strip slots
+    pub lays: Vec<Option<Lay>>,         // seg -> its cross-section's strips (sides in the segment's direction)
+    pub xs_tags: Vec<u16>,              // seg -> what its cross-section took from tags (xsec::T_*; 0: all inferred)
+    pub area_fit: crate::areas::FitStats,
 }
 
 // ---------------------------------------------------------------------------------------------- v3 helpers (ported)
@@ -399,20 +451,41 @@ impl Net {
 
     fn seg_of_edge(&self, e: usize) -> &Seg { &self.segs[self.edges[e].seg] }
 
-    /// Lane width on edge e: the region's for motorway / trunk, else the road's own (v3 Ctx::lane_w), sane bounds.
+    /// Lane width on edge e: the region's for motorway / trunk, else the road's own (v3 Ctx::lane_w), sane bounds;
+    /// (BNE_ROADSYS_XSEC) its cross-section's where a mapped width gives them.
     fn lane_w(&self, e: usize) -> f64 {
         let g = self.edges[e].seg;
-        let s = &self.segs[g];
-        let w = if s.cls >= 1 && s.cls <= CLS_TRUNK { self.t(self.region[g], T_LANE_W) } else {
+        if let Some(Some(l)) = self.lays.get(g) { if l.lane_w > 0.0 { return clampf(l.lane_w, 2.2, 5.0); } }
+        self.lane_w_today(g)
+    }
+
+    fn lane_w_today(&self, g: usize) -> f64 { lane_w_of(&self.segs[g], self.region[g]) }
+}
+
+/// Today's lane width of segment s in TAPER row region (Net::lane_w without a cross-section).
+fn lane_w_of(s: &Seg, region: usize) -> f64 {
+    {
+        let w = if s.cls >= 1 && s.cls <= CLS_TRUNK { TAPER[region][T_LANE_W] } else {
             let n = if s.dir != 0 { lanes_eff(s, true) } else { lanes_eff(s, true) + lanes_eff(s, false) };
             if s.lanes < 1 && s.dir == 0 && s.inferred <= 1 { s.drive / 2.0 } else if s.lane_w > 0.0 { s.lane_w } else { s.drive / n.max(1) as f64 }
         };
         clampf(w, 2.2, 5.0)
     }
+}
 
+impl Net {
     /// Shoulder / margin width on the (right, left) side of edge e's carriageway.
-    fn shoulder_w(&self, e: usize) -> (f64, f64) {
-        let s = self.seg_of_edge(e);
+    fn shoulder_w(&self, e: usize) -> (f64, f64) { shoulder_of(self.seg_of_edge(e)) }
+
+    /// (BNE_ROADSYS_XSEC) part p's strips in stroke terms (left, right), None without a cross-section.
+    fn xs_part(&self, p: &Part) -> Option<(SideW, SideW)> {
+        let l = self.lays[self.edges[p.edge].seg].as_ref()?;
+        Some(if p.fwd { (l.left, l.right) } else { (l.right, l.left) })
+    }
+}
+
+fn shoulder_of(s: &Seg) -> (f64, f64) {
+    {
         let street = clampf((s.pave - s.drive) / 2.0, 0.3, 2.6);
         if s.cls == 1 && !s.link { return (3.0, 1.0); }
         if s.urban && !(s.cls == 1) { return (street, street); }
@@ -421,7 +494,9 @@ impl Net {
         let m = clampf((s.pave - s.drive) / 2.0, 0.3, 2.6);
         (m, m)
     }
+}
 
+impl Net {
     /// v3 arms_of: arms of node n in the fork classes (cls > 0).
     fn arms_fc(&self, n: usize) -> Vec<(usize, bool)> {
         self.nodes[n].arms.iter().copied().filter(|&(e, _)| self.seg_of_edge(e).cls > 0).collect()
@@ -800,7 +875,11 @@ pub fn build_opts(place: &Place, input_order: &[usize], opts: Opts) -> Net {
     let nn = nodes.len();
     let mut net = Net { opts, segs, node_ids: ids.clone(), cut: vec![false; nn], region, edges, nodes, forks: Vec::new(),
                         fork_at: vec![None; nn], strokes: Vec::new(), edge_stroke: Vec::new(), crossings: Vec::new(),
-                        stats: NetStats::default() };
+                        stats: NetStats::default(), xsec_on: place.xsec, lays: Vec::new(), xs_tags: Vec::new(),
+                        area_fit: Default::default() };
+    net.lays = vec![None; net.segs.len()];
+    net.xs_tags = vec![0; net.segs.len()];
+    if net.xsec_on { cross_sections(&mut net); }
     net.stats.segs = net.segs.len();
     net.stats.nodes = net.nodes.iter().filter(|n| !n.arms.is_empty()).count();
     net.stats.edges = net.edges.len();
@@ -820,6 +899,10 @@ pub fn build_opts(place: &Place, input_order: &[usize], opts: Opts) -> Net {
     strokes(&mut net);
     lanes(&mut net);
     joints(&mut net);
+    if opts.areas && !place.areas.is_empty() {
+        let prep = crate::areas::prepare(&place.areas);
+        net.area_fit = crate::areas::fit(&mut net, &prep);
+    }
     crossings(&mut net);
     net.stats.strokes = net.strokes.len();
     net
@@ -847,7 +930,8 @@ fn cut_nodes(net: &mut Net, opts: Opts) {
         let same = sa.cls == sb.cls && sa.link == sb.link && sa.lanes == sb.lanes && sa.lfw == sb.lfw && sa.lbw == sb.lbw
             && sa.place == sb.place && sa.lane_w == sb.lane_w && sa.turn == sb.turn && sa.turn_bw == sb.turn_bw
             && (sa.dir == 0) == (sb.dir == 0) && sa.pave == sb.pave && sa.drive == sb.drive && sa.urban == sb.urban;
-        if !same { return false; }
+        // (BNE_ROADSYS_XSEC: the same strips on both sides; tags that shape nothing never move a cut)
+        if !same || net.lays[net.edges[a.0].seg] != net.lays[net.edges[b.0].seg] { return false; }
         for &(e, fwd) in arms {
             let ed = &net.edges[e];
             if on_structure(net, e, if fwd { ed.va } else { ed.vb }) { return false; }
@@ -1017,7 +1101,8 @@ fn strokes(net: &mut Net) {
             uid, parts: ps, line, n0, n1, oneway: seg.dir != 0, lht, slots: Vec::new(), anchor_l: Prog::default(),
             anchor_r: Prog::default(), right_windows: Vec::new(), stations: Vec::new(), dense: Vec::new(), sup: merged,
             cls, cls_s: seg.cls_s.clone(), kmh: if kmh > 0.0 { kmh } else { 50.0 }, region, snap0: None, snap1: None,
-            cut0: 0.0, cut1: 0.0, absorbed: false, lane_scale: Vec::new(), cap_nbrs: Vec::new(), reach: 0.0,
+            cut0: 0.0, cut1: 0.0, absorbed: false, lane_scale: Vec::new(), cap_nbrs: Vec::new(), reach: 0.0, over: Vec::new(),
+            area: Vec::new(),
         });
     }
     for s in &net.strokes {
@@ -1041,9 +1126,10 @@ fn lanes(net: &mut Net) {
     // branch snaps registered by trunk strokes: (branch stroke, at start?, Snap)
     let mut snaps: Vec<(usize, bool, Snap)> = Vec::new();
     for si in 0..ns {
-        let (slots, al, ar, rw, stations, dense, snaps_here) = build_slots(net, si);
+        let (slots, al, ar, rw, stations, dense, snaps_here, over) = build_slots(net, si);
         let st = &mut net.strokes[si];
         st.slots = slots; st.anchor_l = al; st.anchor_r = ar; st.right_windows = rw; st.stations = stations; st.dense = dense;
+        st.over = over;
         snaps.extend(snaps_here);
     }
     for (b, at_start, sn) in snaps {
@@ -1065,7 +1151,7 @@ fn lanes(net: &mut Net) {
     }
 }
 
-type SlotsOut = (Vec<Slot>, Prog, Prog, Vec<(f64, f64)>, Vec<f64>, Vec<(f64, f64)>, Vec<(usize, bool, Snap)>);
+type SlotsOut = (Vec<Slot>, Prog, Prog, Vec<(f64, f64)>, Vec<f64>, Vec<(f64, f64)>, Vec<(usize, bool, Snap)>, Vec<(usize, f64, f64, u8)>);
 
 fn build_slots(net: &mut Net, si: usize) -> SlotsOut {
     let st = &net.strokes[si];
@@ -1118,7 +1204,9 @@ fn build_slots(net: &mut Net, si: usize) -> SlotsOut {
     };
     let place_l = |net: &Net, p: &Part| -> f64 {
         let s = net.seg_of_edge(p.edge);
-        left_off(&s.place, lanes_of_part(net, p, true), net.lane_w(p.edge))
+        let v = left_off(&s.place, lanes_of_part(net, p, true), net.lane_w(p.edge));
+        // (BNE_ROADSYS_XSEC) a one-way without a mapped placement: its whole carriageway (lanes and strips) centred
+        match net.xs_part(p) { Some((l, r)) if oneway && s.place.is_empty() => v + (r.strips() - l.strips()) / 2.0, _ => v }
     };
     let mut al = Prog { w0: place_l(net, &parts[0]), steps: vec![] };
     let mut ar = Prog { w0: place_l(net, &parts[0]) - lanes_of_part(net, &parts[0], true) as f64 * w0, steps: vec![] };
@@ -1313,12 +1401,132 @@ fn build_slots(net: &mut Net, si: usize) -> SlotsOut {
             }
         }
     }
+    let mut over: Vec<(usize, f64, f64, u8)> = Vec::new();
+    if net.xsec_on { xsec_slots(net, &parts, oneway, &mut slots, &mut order, &mut over); }
     // the stroke's own slots in order (re-indexed), snaps re-indexed below
     let remap: Vec<usize> = { let mut r = vec![0; slots.len()]; for (k, &id) in order.iter().enumerate() { r[id] = k; } r };
     let out_slots: Vec<Slot> = order.iter().map(|&id| slots[id].clone()).collect();
     let snaps_out = snaps_out.into_iter().map(|(b, at, s)| (b, at, Snap { k0: remap[s.k0], k1: remap[s.k1], ..s })).collect();
+    let over = over.into_iter().map(|(k, a, b, w)| (remap[k], a, b, w)).collect();
     stations.retain(|&s| s >= 0.0 && s <= len);
-    (out_slots, al, ar, rwin, stations, dense, snaps_out)
+    (out_slots, al, ar, rwin, stations, dense, snaps_out, over)
+}
+
+/// The TAPER row of segment s (build_opts' rule).
+fn region_of(s: &Seg) -> usize {
+    let r = s.region.max(0) as usize;
+    if r == 0 && s.code.eq_ignore_ascii_case("JP") { 6 } else if r < 6 { r } else { 0 }
+}
+
+/// (BNE_ROADSYS_XSEC) segment s's layout with its cross-section (sides in its own direction), None without one that
+/// shapes it.
+pub fn seg_lay(s: &Seg) -> Option<Lay> {
+    let region = region_of(s);
+    let lht = TAPER[region][T_LHT] > 0.5;
+    let c = xsec::Ctx { code: &s.code, cls: &s.cls_s, urban: s.urban, oneway: s.dir != 0 };
+    let x = xsec::parse(&s.xsec, &c, s.dir, lht)?;
+    if !x.shapes() { return None; }
+    let n = if s.dir != 0 { lanes_eff(s, true) } else { lanes_eff(s, true) + lanes_eff(s, false) };
+    let (r, l) = shoulder_of(s);
+    let sh = if s.dir == 0 { (r, r) } else if s.dir > 0 { (l, r) } else { (r, l) };
+    Some(xsec::layout_w(&x, &c, n, lane_w_of(s, region), sh, s.lanes >= 1, s.cls >= 1 && s.cls <= CLS_TRUNK, s.bridge.is_empty()))
+}
+
+/// (BNE_ROADSYS_XSEC) the half extent of segment s's carriageway with its cross-section, from its mapped line (lanes
+/// and strips centred, the wider shoulder): what a deck drawn from it covers (the deck ends' hand-over reads it).
+pub fn xsec_half_extent(s: &Seg) -> Option<f64> {
+    let lay = seg_lay(s)?;
+    let n = if s.dir != 0 { lanes_eff(s, true) } else { lanes_eff(s, true) + lanes_eff(s, false) };
+    let lw = if lay.lane_w > 0.0 { clampf(lay.lane_w, 2.2, 5.0) } else { lane_w_of(s, region_of(s)) };
+    let inner = n.max(1) as f64 * lw + lay.left.strips() + lay.right.strips();
+    Some(inner / 2.0 + lay.left.shoulder.max(lay.right.shoulder))
+}
+
+/// (BNE_ROADSYS_XSEC) every segment's cross-section (xsec.rs): its tags read, its strips and lanes laid out against
+/// today's lane width and shoulders.
+fn cross_sections(net: &mut Net) {
+    for g in 0..net.segs.len() {
+        let s = &net.segs[g];
+        let lht = TAPER[net.region[g]][T_LHT] > 0.5;
+        let c = xsec::Ctx { code: &s.code, cls: &s.cls_s, urban: s.urban, oneway: s.dir != 0 };
+        let Some(x) = xsec::parse(&s.xsec, &c, s.dir, lht) else { continue };
+        net.stats.xsec_segs += 1;
+        let n = if s.dir != 0 { lanes_eff(s, true) } else { lanes_eff(s, true) + lanes_eff(s, false) };
+        let (r, l) = shoulder_of(s);
+        // (today's shoulders in the segment's direction: a two-way's right one on both sides, build_slots')
+        let sh = if s.dir == 0 { (r, r) } else if s.dir > 0 { (l, r) } else { (r, l) };
+        // (a segment with a structure never wider than today's: its deck meets today's approaches and abutments)
+        let lay = xsec::layout_w(&x, &c, n, net.lane_w_today(g), sh, s.lanes >= 1, s.cls >= 1 && s.cls <= CLS_TRUNK, s.bridge.is_empty());
+        net.xs_tags[g] = lay.tags;
+        if !x.shapes() { continue; }
+        net.stats.xsec_shaped += 1;
+        if lay.lane_w > 0.0 { net.stats.xsec_width += 1; }
+        if lay.reject > 0 { net.stats.xsec_reject += 1; }
+        net.lays[g] = Some(lay);
+    }
+}
+
+/// (BNE_ROADSYS_XSEC) a stroke's strip slots: on each side between the lanes and the shoulder, from the lanes out,
+/// buffer, cycle lane, parking (every stroke has them, zero wide where nothing is mapped, so strokes meeting at a cut
+/// keep equal rows); each part's widths, changing at a joint over STRIP_STEP_M; the shoulders the cross-section's
+/// where a part has one. A stroke with a fork event keeps empty strips and today's shoulders (recorded).
+fn xsec_slots(net: &mut Net, parts: &[Part], oneway: bool, slots: &mut Vec<Slot>, order: &mut Vec<usize>,
+              over: &mut Vec<(usize, f64, f64, u8)>) {
+    const STRIP_STEP_M: f64 = 15.0;
+    let inf = f64::INFINITY;
+    let fork = slots.iter().any(|k| k.kind == K_GORE);
+    let vals: Vec<Option<(SideW, SideW)>> = parts.iter().map(|p| net.xs_part(p)).collect();
+    if fork && vals.iter().any(|v| v.is_some()) { net.stats.xsec_fork_skip += 1; }
+    let vals: Vec<Option<(SideW, SideW)>> = if fork { vec![None; parts.len()] } else { vals };
+    let today: Vec<(f64, f64)> = parts.iter().map(|p| { let (r, l) = net.shoulder_w(p.edge); if oneway { (l, r) } else { (r, r) } }).collect();
+    let val = |k: usize, left: bool, f: &dyn Fn(&SideW) -> f64| -> f64 {
+        match vals[k] { Some((l, r)) => f(if left { &l } else { &r }), None => 0.0 }
+    };
+    let prog = |left: bool, f: &dyn Fn(&SideW) -> f64, half: f64, base: &dyn Fn(usize) -> f64| -> Prog {
+        let v = |k: usize| if vals[k].is_some() { val(k, left, f) } else { base(k) };
+        let mut pr = Prog { w0: v(0), steps: vec![] };
+        for k in 0..parts.len().saturating_sub(1) {
+            let (a, b) = (v(k), v(k + 1));
+            if b != a { let sg = parts[k].s1; pr.steps.push((sg - half, sg + half, b - a)); }
+        }
+        pr
+    };
+    let zero = |_k: usize| 0.0;
+    let mk = |slots: &mut Vec<Slot>, kind: u8, pr: Prog| -> usize {
+        slots.push(Slot { kind, group: 9, prog: pr, alive: (-inf, inf), cap: vec![] });
+        slots.len() - 1
+    };
+    let fb = |w: &SideW| w.buffer;
+    let fc = |w: &SideW| w.cycle;
+    let fp = |w: &SideW| w.park;
+    let (pl, cl, bl) = (mk(slots, xsec::K_PARK, prog(true, &fp, STRIP_STEP_M / 2.0, &zero)),
+                        mk(slots, xsec::K_CYCLE, prog(true, &fc, STRIP_STEP_M / 2.0, &zero)),
+                        mk(slots, xsec::K_BUFFER, prog(true, &fb, STRIP_STEP_M / 2.0, &zero)));
+    let (br, cr, pr) = (mk(slots, xsec::K_BUFFER, prog(false, &fb, STRIP_STEP_M / 2.0, &zero)),
+                        mk(slots, xsec::K_CYCLE, prog(false, &fc, STRIP_STEP_M / 2.0, &zero)),
+                        mk(slots, xsec::K_PARK, prog(false, &fp, STRIP_STEP_M / 2.0, &zero)));
+    // [left shoulder, park, cycle, buffer, ... lanes ..., buffer, cycle, park, right shoulder]
+    for id in [bl, cl, pl] { order.insert(1, id); }
+    for id in [br, cr, pr] { let n = order.len(); order.insert(n - 1, id); }
+    if vals.iter().all(|v| v.is_none()) { return; }
+    // the shoulders (slots 0 and 1: no fork, so the stroke's only ones)
+    let fs = |w: &SideW| w.shoulder;
+    slots[0].prog = prog(true, &fs, 15.0, &|k| today[k].0);
+    slots[1].prog = prog(false, &fs, 15.0, &|k| today[k].1);
+    // overrides per part: unpaved shoulders, advisory cycle lanes, bus lanes (the side's outermost lane alive there)
+    for (k, p) in parts.iter().enumerate() {
+        let Some((l, r)) = vals[k] else { continue };
+        let mid = (p.s0 + p.s1) / 2.0;
+        for (left, w, sh, cyc) in [(true, l, 0usize, cl), (false, r, 1usize, cr)] {
+            if w.soft { over.push((sh, p.s0, p.s1, xsec::K_SOFT)); }
+            if w.adv && w.cycle > 0.0 { over.push((cyc, p.s0, p.s1, OVER_ADV)); }
+            if w.bus {
+                let alive = |id: &usize| slots[*id].kind == K_LANE && mid >= slots[*id].alive.0 && mid <= slots[*id].alive.1;
+                let lane = if left { order.iter().find(|id| alive(id)) } else { order.iter().rev().find(|id| alive(id)) };
+                if let Some(&id) = lane { over.push((id, p.s0, p.s1, xsec::K_BUS)); }
+            }
+        }
+    }
 }
 
 /// m of clearance under a structure over a road of class cls in country: today's deck builder's headroom

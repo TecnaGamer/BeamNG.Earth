@@ -180,6 +180,18 @@ ROAD_ORDER = ("dirt", "gravel", "rock", "grass", "cobble", "paved")
 def grid_affine(lat, lon):
     """Least-squares affine map (lon, lat) -> (col, row) of a sample grid given by its lat / lon arrays
     (a 1 km block is affine to well under a centimetre). Returns a function (lon, lat) -> (col, row)."""
+    coef, lo0, la0 = grid_affine_coef(lat, lon)
+
+    def f(lon_, lat_):
+        B = np.stack([np.asarray(lon_, np.float64) - lo0, np.asarray(lat_, np.float64) - la0,
+                      np.ones(np.shape(lon_))], axis=-1)
+        cr = dnp.matmul(B, coef)
+        return cr[..., 0], cr[..., 1]
+    return f
+
+
+def grid_affine_coef(lat, lon):
+    """grid_affine's least squares: (coef (3, 2), lo0, la0), (col, row) = (lon - lo0, lat - la0, 1) @ coef."""
     lat = np.asarray(lat, np.float64)
     lon = np.asarray(lon, np.float64)
     h, w = lat.shape
@@ -189,13 +201,7 @@ def grid_affine(lat, lon):
     lo0, la0 = float(lo.mean()), float(la.mean())
     A = np.stack([lo - lo0, la - la0, np.ones_like(lo)], axis=1)
     coef, *_ = dnp.lstsq(A, np.stack([cc.ravel(), rr.ravel()], axis=1).astype(np.float64), rcond=None)
-
-    def f(lon_, lat_):
-        B = np.stack([np.asarray(lon_, np.float64) - lo0, np.asarray(lat_, np.float64) - la0,
-                      np.ones(np.shape(lon_))], axis=-1)
-        cr = dnp.matmul(B, coef)
-        return cr[..., 0], cr[..., 1]
-    return f
+    return coef, lo0, la0
 
 
 def _lonlat_boxes(feats):
@@ -1430,6 +1436,15 @@ def _plazas(feats):
     return (sub.astype(str) == "pedestrian") & np.isin(cls.astype(str), list(PLAZA_CLASSES))
 
 
+def paint_natural(idx, lat, lon, land):
+    """The mapped natural ground (natural.py, BNE_NATURAL_GROUND: rock, scree, sand, beach, dune, glacier, wetland) and
+    the cliffs' rock bands (BNE_NATURAL_CLIFFS) on a block's material map; land: the land Features of its cells."""
+    import natural
+    mats = {"rock": ROCK, "loose": LOOSE, "sand": SAND, "snow": SNOW, "mud": MUD, "grass": GRASS, "forest": FOREST,
+            "bare": (DIRT, DUSTY, LOOSE, ROCK, SAND)}     # (the land cover's open ground: no vegetation, snow or water)
+    return natural.paint_ground(idx, lat, lon, land, mats, grid_affine_coef(lat, lon))
+
+
 def _paint(idx, lat, lon, feats_list, select, material):
     h, w = idx.shape
     to_px = grid_affine(lat, lon)
@@ -1652,11 +1667,12 @@ class Surface:
     def close(self):
         self.pool.shutdown(wait=False)
 
-    def _cached(self, key):
-        """The cell's land-cover Raster from the cache, None if absent (a fetch is queued) or no
+    def _cached(self, key, *, fetch=True):
+        """The cell's land-cover Raster from the cache, None if absent (queued only with fetch=True) or no
         coverage (open ocean: the layer is stored as missing)."""
         if not self.md.has(key, "landcover"):
-            self._queue(key)
+            if fetch:
+                self._queue(key)
             return None
         try:        # (mapdata's memory LRU: a far tile's road paint and every block read the same cells again)
             return self.md.cell(key, layers=("landcover",), kind="background").layers.get("landcover")
@@ -1884,19 +1900,39 @@ class Surface:
                     log.debug("surface: %s of %s: %s: %s", layer, key, type(e).__name__, e)
         return out
 
+    def natural_land(self, lat, lon):
+        """The "land" Features (natural.py) of the cells around the points that are cached; never waits (a missing
+        cell is fetched in the background and nothing built now is kept: revisit.fault)."""
+        lat = np.asarray(lat, np.float64)
+        lon = np.asarray(lon, np.float64)
+        out = []
+        for key in mapcells.cells_for_points(lat, lon):
+            if not self.md.has(key, "land"):
+                self._queue(key, ("land",))
+                revisit.fault()
+                continue
+            try:
+                out.append(self.md.cell(key, layers=("land",), kind="background").layers.get("land"))
+            except Exception as e:      # an unreadable cache file: like a missing one
+                log.debug("surface: land of %s: %s: %s", key, type(e).__name__, e)
+        return out
+
     def urban(self, lat, lon):
         """Built-up land cover (WorldCover 50) at the points: roads.road_specs's urban_fn. Uncached cells
         read as not built-up."""
         return self.classes(lat, lon)[0] == roadsmod.URBAN_CLASS
 
     @profile_step('Land cover')
-    def classes(self, lat, lon):
+    def classes(self, lat, lon, *, fetch=True):
         """(WorldCover class per point, complete): 0 (no data) where the cell is not cached yet. The
-        land cover is read at the warped points (warp: organic borders)."""
+        land cover is read at the warped points (warp: organic borders). Distant cliffs
+        use fetch=False to read available cover without expanding the download area."""
         lat, lon = warp(lat, lon)
         fast.require(564, "land-cover raster samples")
+        source = self._cached if fetch else lambda key: self._cached(key, fetch=False)
+        missing = self._is_queued if fetch else lambda key: not self.md.has(key, "landcover")
         out, complete = fast._ef.landcover_samples(lat.ravel(), lon.ravel(), mapcells.cells_for_points(lat, lon),
-                                                   self._cached, self._is_queued, revisit.fault,
+                                                   source, missing, revisit.fault,
                                                    mapcells.MAX_LAT, POLAR_CLASS)
         return out.reshape(lat.shape), complete
 

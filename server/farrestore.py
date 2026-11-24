@@ -46,13 +46,23 @@ def placeholder(n):
     return (base + "~" * n)[:n] if n >= len(base) else "~" * n
 
 
-def key(base_key, px, name_len):
+def key(base_key, px, name_len, photo=None):
     """A farfin item's key: the tile's own revisit key (an anchor's tile: its "far" key; a global tile: its "fargeo"
-    key), its texture's size (the shape's UV gutter) and the material name's length."""
-    return revisit.key(KIND, base_key, int(px), int(name_len))
+    key), its texture's size (the shape's UV gutter), the material name's length, and
+    for satellite-colored global cliffs the exact photo digest."""
+    from cliffsettings import SETTINGS
+    return revisit.key(KIND, base_key, int(px), int(name_len), *SETTINGS.cache_parts, *((photo,) if SETTINGS.natural else ()))
 
 
-def keep(cache_dir, k, built, px, name_len, sides=None, extra=None):
+def photo_identity(path):
+    """Colors baked into global cliff shapes belong to these exact DDS bytes."""
+    import hashlib
+    with open(path, "rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def keep(cache_dir, k, built, px, name_len, sides=None, extra=None,
+         *, cliff_frame=None, cliff_surface=None, cliff_texture=None):
     """A worker's far tile kept as a farfin item (its shape encoded here with the placeholder name, plain: the pack
     compresses the record, the restore the shape's body). sides: {"tex.dds" / "mask.dds": revisit.Side} kept beside
     it; extra: more numbers (tex_bytes, used). The plain shape goes back to the server with the tile
@@ -60,18 +70,26 @@ def keep(cache_dir, k, built, px, name_len, sides=None, extra=None):
     Never raises; False when not kept."""
     try:
         import farfield
-        plain = farfield.built_shape(built, placeholder(name_len), px, packed=False)
+        with revisit.scope() as inputs:
+            plain = farfield.built_shape(built, placeholder(name_len), px, packed=False,
+                                         cliff_frame=cliff_frame, cliff_surface=cliff_surface, cliff_texture=cliff_texture)
         built.shape_plain = (plain, int(name_len), int(px))
+        built.shape_photo = photo_identity(cliff_texture) if cliff_texture is not None else None
+        # Missing cached land cover may still produce a live fallback, but must
+        # not freeze that fallback into subsequent visits once cover arrives.
+        complete, until = inputs.kept_until()
+        if not complete:
+            return False
         grid = b"" if built.grid is None else np.ascontiguousarray(built.grid, np.float32).tobytes()
         gshape = None if built.grid is None else list(np.shape(built.grid))
         meta = {"pos": [float(v) for v in built.pos], "err": float(built.err),
                 "sink": None if built.sink is None else float(built.sink), "skirt": float(built.skirt),
                 "err_n": None if built.err_n is None else float(built.err_n), "gshape": gshape,
-                "sides": sorted((sides or {}).keys())}
+                "sides": sorted((sides or {}).keys()), "cliff_colors": bool(getattr(built, "cliff_colors", False))}
         meta.update(extra or {})
         blobs = {"shape": plain, "grid": grid}
         blobs.update(sides or {})
-        return revisit.store(cache_dir, KIND, k, blobs, meta)
+        return revisit.store(cache_dir, KIND, k, blobs, meta, until=until)
     except Exception:
         return False
 

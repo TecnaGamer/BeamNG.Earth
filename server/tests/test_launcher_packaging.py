@@ -57,6 +57,16 @@ class SourceZipTest(unittest.TestCase):
         self.assertIn("gameinstall.py", need)
         self.assertEqual(sorted(need - packed), [])
 
+    def test_every_root_module_of_the_other_entry_points_is_packed(self):
+        """start.py and install.py too (PR #1412: cliffstock imports clifftextures inside a function; the ZIP without
+        it crashed the launcher with BNE_CLIFFS=1)."""
+        pkg = package()
+        packed = set(pkg.FILES) | set(pkg.TOOLS)
+        for start in ("start.py", "install.py"):
+            with self.subTest(start):
+                self.assertEqual(sorted(root_closure(start) - packed), [])
+        self.assertIn("clifftextures.py", root_closure("launcher.py"))
+
 
 if __name__ == "__main__":
     unittest.main()

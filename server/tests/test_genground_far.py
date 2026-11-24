@@ -22,7 +22,7 @@ class _Im:
         x, y = np.meshgrid(x0 + k, y0 + size - k)
         r = 90 + 40 * np.sin(x / 37.0) + 20 * np.cos(y / 53.0)     # det-ok: a test's photo
         g = 110 + 30 * np.sin((x + y) / 71.0)                       # det-ok: a test's photo
-        return np.stack([r, g, np.full_like(r, 70)], 2).clip(0, 255).astype(np.uint8), {"eox2023": px * px}
+        return np.stack([r, g, np.full_like(r, 70)], 2).clip(0, 255).astype(np.uint8), {"eox2016": px * px}
 
 
 class FarTest(unittest.TestCase):
@@ -191,7 +191,7 @@ class MipFadeTest(unittest.TestCase):
 
         class Dark(_Im):
             def render(self, frame, x0, y0, size, px, pending=None):
-                return np.full((px, px, 3), (40, 60, 35), np.uint8), {"eox2023": px * px}
+                return np.full((px, px, 3), (40, 60, 35), np.uint8), {"eox2016": px * px}
         canopy = gg.canopy_grid
 
         def tall(mx, my, rasters):
@@ -229,16 +229,16 @@ class CodexReviewTest(unittest.TestCase):
 
         class Im(_Im):
             def __init__(self, fin, sigs, value):
-                self.chain = [types.SimpleNamespace(name="eox2023")]
+                self.chain = [types.SimpleNamespace(name="eox2016")]
                 self.tone, self.leaf_on, self.season_mode = "auto", True, "off"
                 self.finished_only, self._fin_sigs, self.value = fin, sigs, value
 
             def render(self, frame, x0, y0, size, px, pending=None):
-                return np.full((px, px, 3), self.value, np.uint8), {"eox2023": px * px}
+                return np.full((px, px, 3), self.value, np.uint8), {"eox2016": px * px}
         frame = geodesy.EnuFrame(40.877, -77.566)
         raw, _ = gg.render_far(Im(False, {}, 60), frame, 0.0, 0.0, 512.0, 256, None, None)
-        fin, _ = gg.render_far(Im(True, {"eox2023": "abc"}, 160), frame, 0.0, 0.0, 512.0, 256, None, None)
-        other, _ = gg.render_far(Im(True, {"eox2023": "def"}, 200), frame, 0.0, 0.0, 512.0, 256, None, None)
+        fin, _ = gg.render_far(Im(True, {"eox2016": "abc"}, 160), frame, 0.0, 0.0, 512.0, 256, None, None)
+        other, _ = gg.render_far(Im(True, {"eox2016": "def"}, 200), frame, 0.0, 0.0, 512.0, 256, None, None)
         self.assertNotEqual(int(raw.mean()), int(fin.mean()), "the finished imagery's own square")
         self.assertNotEqual(int(fin.mean()), int(other.mean()), "other finished settings: their own square")
 
@@ -247,7 +247,7 @@ class CodexReviewTest(unittest.TestCase):
         # render_far's pixels depend on
         import types
         import earthd
-        im = types.SimpleNamespace(chain=[types.SimpleNamespace(name="eox2023")], leaf_on=True, season_mode="off")
+        im = types.SimpleNamespace(chain=[types.SimpleNamespace(name="eox2016")], leaf_on=True, season_mode="off")
         md = types.SimpleNamespace(versions=lambda buildings=False: {"overture": "x"})
 
         def server(veg):

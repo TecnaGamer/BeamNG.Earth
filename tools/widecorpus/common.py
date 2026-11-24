@@ -8,9 +8,11 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 TREE = HERE.parents[1]
-ROOT = Path.home() / "bnge-tests/widecorpus"
+# (WIDE_CORPUS_ROOT: another scratch folder under ~/bnge-tests for a separate study, the degradation test's; the
+# private places stay the corpus's own list)
+ROOT = Path(os.environ.get("WIDE_CORPUS_ROOT") or Path.home() / "bnge-tests/widecorpus")
 CACHE = ROOT / "cache"
-PRIVATE = ROOT / "places_private.json"
+PRIVATE = Path.home() / "bnge-tests/widecorpus/places_private.json"
 RAW = ("dem", "mapdata", "pagesdata", "roadz", "gravity", "cdn", "airports")
 def _revamped():
     """The Experimental "Revamped roads" switches, read from the server's own table (server/experimental.py FEATURES),

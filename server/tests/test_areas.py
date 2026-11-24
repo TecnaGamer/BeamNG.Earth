@@ -534,13 +534,13 @@ class ProducerHooksTest(unittest.TestCase):
     def test_imagery_sources_for_a_square(self):
         import imagery
         with tempfile.TemporaryDirectory() as d:
-            im = imagery.Imagery(d, ["virginia", "naip", "usgs", "eox2023"], fetcher=netfetch.Fetcher(offline=True))
+            im = imagery.Imagery(d, ["virginia", "naip", "usgs", "eox2016"], fetcher=netfetch.Fetcher(offline=True))
             excluded = set()
             got = list(im.predownload_sources(13, 2353, 3122, 17, fetch_probes=False, excluded=excluded))
             # NAIP (lazy: only fetched while driving otherwise) at z17: 16 x 16 under the z13 square; USGS at z16 (its
             # deepest): 8 x 8; then EOX at z14: 2 x 2
             self.assertEqual([(s.name, len(k), k[0][1]) for s, k in got],
-                             [("naip", 256, 17), ("usgs", 64, 16), ("eox2023", 4, 14)])
+                             [("naip", 256, 17), ("usgs", 64, 16), ("eox2016", 4, 14)])
             self.assertEqual(excluded, {"virginia"}, "a regional service: no bulk downloads")
             key = got[1][1][0]
             self.assertFalse(im.on_disk_or_missing(key))

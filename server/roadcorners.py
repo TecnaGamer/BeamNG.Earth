@@ -199,6 +199,10 @@ def _entry(cells, urban=None, widths=None, frame=None, left_hand=False, bounds=N
     try:
         rows, rings = _rows(cells, specs, frame, bounds, anchor)
         entry = [frame, rows, find(rows, bounds, rings)]
+        import drivefeat
+        if drivefeat.ENDS:          # (BNE_ROAD_ENDS: the turning circles' bulbs and passing places as fills: roadends.py)
+            import roadends
+            entry[2] = entry[2] + roadends.corner_pads(rows, frame)
         with _LOCK:
             while len(_CACHE) >= CACHE_N:
                 _CACHE.popitem(last=False)

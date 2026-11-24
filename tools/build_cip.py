@@ -8,13 +8,17 @@
 
 Each cell's sections are made by the server's own code, in this process, with CIP off (cip.py lists them):
   m:<layer>   MapData's cell file arrays of the layer: the cache's file when it holds one (what the server reads), else
-              MapData._build from the sources (Overture through the build's map source, OSM's road tags joined) and
+              MapData._build from the sources (Overture through the build's map source; the roads without OSM's tags,
+              joined by the reader at the decode from its run's build: mapdata roads 10) and
               stored there as the server stores it. A parquet stand-in (the tiles failed) is never put in a build.
   t:rail t:lanes   railtags.cell_slice of the weekly shards for the cell's roads' way ids (decisions.ids_of)
   z:<src>     the roadz answer files the cache holds for the cell (--online: measured first, for the cells that want
               a lidar: roadz.RoadZ.lines, the 3DEP reads moved here from the players)
   f:osmfuel f:picnic   the per-cell rows of OpenStreetMap's fuel stations / picnic tables the cache holds (--online:
               read first)
+  q           the cell's data-quality record (server/quality.py: its data part, made from the 3 x 3 cells' layers by
+              the server's own kernel; a neighbour outside the build is read as a cell is); left out when a 3 x 3
+              cell's layers could not be had (the server makes it then), and with --quality off
 SRC is a cache of the builder's own (never the player's: pcommon.check_cache refuses it); --online lets the sources be
 fetched into it. Every cell is decoded again and compared with what went in before it is kept (--no-verify skips).
 
@@ -26,8 +30,21 @@ Written (the BNWT container: tools/build_bnwt.PartWriter, parts of at most --par
     OUT/cip<FORMAT>/<release>/latest.json                  {"build": <build>} (the readers' default)
     OUT/cip<FORMAT>/<release>/<build>/ATTRIBUTION.txt
 <build> is the hash of the inputs (cip.build_id): the code-made part (formats, versions, the release, the map source)
-and the weekly data builds the cells were made from (OSM road tags, rail, lanes, stations). Deterministic: the same
+and the weekly data builds the cells were made from (OSM road tags, rail, lanes, stations), with the build's pin set
+(inputs.data.pins: every weekly dataset's manifest, by its build, data folder and SHA-256). Deterministic: the same
 inputs give the same bytes (cells in tile-id order, zstd at a fixed level, JSON with sorted keys, no timestamps).
+
+The pin set (2026-11-24: planet run 45290114494's 333 shards refused, exit 3, once the weekly rail.yml run published
+new rail / lane / OSM tag builds while they ran): every weekly dataset (pagesdata's: rail, lanes, stations, signs,
+FRA, OSM tags, years, colours, areas, tall buildings, regional) is decided ONCE, when the build is planned
+(--write-pins FILE: the manifests as served then, written with the build id), and every shard given that file (--pins
+FILE) reads exactly those builds (a pinned pagesdata session: pagesdata.seed_session; a dataset it does not name is no
+data) from their build-addressed folders (data/<name>/<key>/ on the tile host, <name>/<key>/ parts: never
+overwritten), whatever Pages serves meanwhile; a shard checks first that the pinned builds it reads are there (exit 4,
+"pinned build unavailable", not a retry of the same thing). A build days later, a rerun, reads the same file (cip.yml:
+the bucket's cip<FORMAT>/<release>/<build>/pins.json) and resumes the same build id. Without --pins the run decides the
+pin set itself at its start (one session for its worker processes too). Exit 3 (--expect-build) now only means other
+code or other switches than the build's.
 """
 import argparse
 import gzip
@@ -50,12 +67,13 @@ except ImportError:
 import numpy as np  # noqa: E402
 
 import cip  # noqa: E402
+import quality  # noqa: E402
 import fast  # noqa: E402
 import mapcells  # noqa: E402
 
 N = 1 << cip.ZOOM
 VECTOR = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
-          "road_routes", "town_areas", "town_points", "hoods")
+          "road_routes", "town_areas", "town_points", "hoods", "land", "bathymetry")
 RASTER = ("landcover", "canopy")
 DEFAULT_LAYERS = VECTOR + RASTER
 # --scope: which cells of a z10 unit a world build holds. "all": every one (open sea and empty land too: ~229 M of the
@@ -73,6 +91,144 @@ SCOPES = {"all": None, "content": ("transportation", "buildings", "places"), "ro
 # the planet build's: the rasters stay on their sources (WorldCover / the canopy model: ~2 / ~100-200 kB a land cell, a
 # planet of ~109 M land cells would be ~0.2 / several TB for ~1-4 MB of a cold visit's downloads)
 WORLD_LAYERS = VECTOR
+
+
+# --- the pin set: every weekly dataset's build, decided once for a build (see the docstring) --------------------------
+PINS_FORMAT = 1
+# inputs.data's parts that name weekly data builds: plan_key leaves them out (a build's code and switches alone)
+PIN_KEYS = ("rails", "lanes", "osmtags", "stations", "pins")
+EXIT_UNAVAILABLE = 4
+
+
+class PinsUnavailable(Exception):
+    """A pinned build the build reads cannot be had (its folder gone, the host failing, or not build-addressed)."""
+
+
+def load_pins(path):
+    """The pin set document of file path ({"format", "datasets": {ident: manifest text or None}, "build", ...}),
+    checked; raises SystemExit when it is not one."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        if not isinstance(doc, dict) or doc.get("format") != PINS_FORMAT or not isinstance(doc.get("datasets"), dict):
+            raise ValueError("not a pin set of this format")
+        for ident, body in doc["datasets"].items():
+            if not isinstance(ident, str) or "|" not in ident:
+                raise ValueError(f"dataset {ident!r}")
+            if body is not None and not isinstance(json.loads(body), dict):
+                raise ValueError(f"{ident}: its manifest is not an object")
+        pin_summary(doc["datasets"])            # (two datasets of one name: refused here)
+        return doc
+    except (OSError, ValueError, TypeError) as e:
+        raise SystemExit(f"--pins {path}: {type(e).__name__}: {e}")
+
+
+def pin_summary(datasets):
+    """inputs.data["pins"]: {dataset name: {"built", "key", "data", "sha256"} of its pinned manifest, or None (no data
+    this build)}. The SHA-256 is the manifest text's: the build id is a function of the whole pin set."""
+    import pagesdata
+    out = {}
+    for ident in sorted(datasets):
+        body = datasets[ident]
+        name = ident.split("|", 1)[0]
+        if name in out:
+            raise ValueError(f"two pinned datasets named {name}")
+        if body is None:
+            out[name] = None
+            continue
+        m = json.loads(body)
+        out[name] = {"built": m.get("built"), "key": m.get("key"), "data": pagesdata.data_url(m),
+                     "sha256": hashlib.sha256(body.encode("utf-8")).hexdigest()}
+    return out
+
+
+def plan_key(inputs):
+    """The build's code and switches without its weekly data (PIN_KEYS): equal for every build of the same code and
+    settings (cip.yml's pointer to the build in progress: cip<FORMAT>/<release>/open/<plan key>.json)."""
+    return cip.build_id({"code": inputs["code"],
+                         "data": {k: v for k, v in inputs["data"].items() if k not in PIN_KEYS}})
+
+
+def collect_pins(b, strict):
+    """The run's pin set: every weekly dataset decided in the run's session (after MapData.freeze_manifests).
+    strict (a build's plan, --write-pins): a dataset decided "none" must be one not published (its manifest a 404 now),
+    never one that failed or answered late (a whole planet build without it)."""
+    import netfetch
+    import pagesdata
+    got = pagesdata.session_entries(b.cache)
+    if strict:
+        for ident, body in sorted(got.items()):
+            if body is not None:
+                continue
+            base = ident.split("|", 1)[1]
+            try:
+                b.md.fetcher.get(f"{base}/manifest.json", kind="demand")
+            except netfetch.NotFound:
+                continue
+            except Exception as e:
+                raise PinsUnavailable(f"{ident}: its manifest could not be had ({type(e).__name__}: {e}): plan again")
+            raise PinsUnavailable(f"{ident}: its manifest came only after the plan's wait: plan again")
+    return got
+
+
+def read_sources(b):
+    """[(name, pagesdata.Manifest)] of the weekly datasets whose files the build's cells are made from (data_builds':
+    rail, lanes, OSM road tags)."""
+    md = b.md
+    out = []
+    for name, t in (("rails", getattr(md, "rail_tags", None)), ("lanes", getattr(md, "lane_tags", None))):
+        if t is not None:
+            out.append((name, t.manifest))
+    try:
+        sh = md._osm_shards()
+    except Exception:
+        sh = None
+    if sh is not None:
+        out.append(("osmtags", sh.pages.manifest))
+    return out
+
+
+def check_pins(b, pinned):
+    """A pinned build (--pins) reads the builds it pinned: each weekly dataset the cells are made from is in the pin set
+    (by its ident: the same BNE_DATA_PAGES as the plan's) and its pinned build's files are there: its data folder's
+    manifest names the build, each archive part (absolute: the build's own folder) answers, or (no data folder) Pages
+    still serves that build. Raises PinsUnavailable."""
+    import pagesdata
+    f = b.md.fetcher
+    for name, mf in read_sources(b):
+        ident = mf.ident()
+        if pinned is not None and ident not in pinned:
+            raise PinsUnavailable(f"{name}: {ident} is not in the pin set (pinned: {sorted(pinned)}): run with the "
+                                  "plan's BNE_DATA_PAGES / *_BASE")
+        m = mf.current()
+        if m is None:
+            continue                    # (no data this build: pinned so)
+        built = pagesdata.build_of(m)
+        try:
+            parts = m.get("parts")
+            archives = [p.get("archive") if isinstance(p, dict) else None for p in parts] \
+                if isinstance(parts, list) and parts else ([m["archive"]] if m.get("archive") else [])
+            if archives:                # (an archive's parts: osmtags' <name>/<build>/ folders)
+                for a in archives:
+                    if not isinstance(a, str) or not a.startswith("https://"):
+                        raise PinsUnavailable(f"{name} {built}: part {a!r} is not in a folder of its build's own")
+                    r = f.get(a, kind="demand", headers={"Range": "bytes=0-6"})
+                    if not r.body.startswith(b"PMTiles"):
+                        raise PinsUnavailable(f"{name} {built}: {a} is not its PMTiles part")
+            elif pagesdata.data_url(m):
+                d = pagesdata.data_url(m)
+                got = json.loads(f.get(f"{d}/manifest.json", kind="demand").body.decode("utf-8"))
+                if pagesdata.build_of(got) != built:
+                    raise PinsUnavailable(f"{name}: {d} holds build {pagesdata.build_of(got)!r}, not {built!r}")
+            else:
+                got = json.loads(f.get(f"{mf.base}/manifest.json", kind="demand").body.decode("utf-8"))
+                if pagesdata.build_of(got) != built:
+                    raise PinsUnavailable(f"{name}: Pages serves build {pagesdata.build_of(got)!r} now and the pinned "
+                                          f"{built!r} names no data folder of its own")
+        except PinsUnavailable:
+            raise
+        except Exception as e:
+            raise PinsUnavailable(f"{name} {built}: {type(e).__name__}: {e}")
 
 
 def cells_around(lat, lon, r):
@@ -122,6 +278,7 @@ class Builder:
         self.only = None            # {cell: layers} (--cellset), None: self.layers for every cell
         self.lidar_cells = None     # the cells whose lidar is measured (--cellset's "lidar"), None: every one wanting it
         self.cap = 0                # bytes: CAPPED sections bigger than this left out (0: none)
+        self.quality = True         # the "q" section (q_ready)
 
     # --- data builds ---------------------------------------------------------------------------------------------
     def data_builds(self):
@@ -132,12 +289,48 @@ class Builder:
             # trial pinned no rail / lane build and left out every cell's t:rail / t:lanes)
             out[name] = (t.version() if self.online else t.known()) if t is not None else None
         try:
-            sh = md._osm_shards()
-            got = sh.manifest() if sh is not None else None
-            out["osmtags"] = got[0] if got else None
+            # (the OSM road tags' build the "q" records are counted with: the roads' sections hold none, roads 10)
+            got = md.osm_tags_build(network=self.online)
+            out["osmtags"] = got if got not in ("layercake", "none") else None
         except Exception:
             out["osmtags"] = None
         return out
+
+    # --- the quality record ------------------------------------------------------------------------------------------
+    def q_ready(self):
+        """Does this build make the "q" section (every layer its counts read, for every cell)?"""
+        return self.quality and self.only is None and all(ly in self.layers for ly in quality.LAYERS)
+
+    def q_counts(self, key, secs=None, lacks=()):
+        """Cell key's quality counts (quality.counts) from its own sections (secs, lacks: cell()'s) or, for a cell
+        not built here (a neighbour), from its layers read as cell() reads them; None when a layer or the lane slice
+        could not be had (the cell's neighbours get no "q" then; the server makes theirs)."""
+        md = self.md
+        layers = {}
+        try:
+            if secs is not None:
+                if any(s == "t:lanes" or s[2:].split(".")[0] in quality.LAYERS for s, _w in lacks):
+                    return None
+                for ly in quality.LAYERS:
+                    layers[ly] = secs[f"m:{md.layer_name(ly)}"]
+                layers["roads"], ok = md.roads_joined_arrays(key, layers["roads"])   # (as the server counts them)
+                if not ok:
+                    return None
+                lanes = secs.get("t:lanes")
+                t = getattr(md, "lane_tags", None)
+                if lanes is None and t is not None and t.known() is not None:
+                    return None
+            else:
+                for ly in quality.LAYERS:
+                    layers[ly] = self.layer(key, ly)[1]
+                layers["roads"], ok = md.roads_joined_arrays(key, layers["roads"])
+                if not ok:
+                    return None
+                lanes = quality.lanes_slice(md, key, layers["roads"])
+            return quality.counts(key, layers, lanes)
+        except Exception as e:      # (a source failed: no record for the cells next to it)
+            print(f"quality {key}: {type(e).__name__}: {e}", file=sys.stderr)
+            return None
 
     # --- one cell --------------------------------------------------------------------------------------------------
     def layer(self, key, layer):
@@ -168,7 +361,7 @@ class Builder:
         import railtags
         md = self.md
         secs, lacks = {}, []
-        roads = None
+        roads, roads_ok = None, True
         for layer in (self.only.get(key, ()) if self.only is not None else self.layers):
             try:
                 name, arrays = self.layer(key, layer)
@@ -179,9 +372,14 @@ class Builder:
                 continue            # (read from its source: a whole outline repeated in each cell it reaches)
             secs[f"m:{name}"] = arrays
             if layer == "roads":
-                roads = mapgeom.Features.from_arrays("roads", {k: v for k, v in arrays.items() if k != "provenance"},
+                # (the ways the server's joins look up: its decode's, the OSM road tags joined; the section holds none)
+                joined, ok = md.roads_joined_arrays(key, arrays)
+                roads = mapgeom.Features.from_arrays("roads", {k: v for k, v in joined.items() if k != "provenance"},
                                                      "")
-        if roads is not None:
+                if not ok:          # (the slices' way ids not the server's: left out, read from the shards)
+                    lacks.append(("t:osmtags", "the OSM road tags of the build could not be had"))
+                    roads_ok = False
+        if roads is not None and roads_ok:
             ids = decisions.ids_of(roads)
             for sec, t in (("t:rail", getattr(md, "rail_tags", None)), ("t:lanes", getattr(md, "lane_tags", None))):
                 if t is None or t.known() is None:
@@ -281,6 +479,58 @@ def section_stats(key, secs, cellbytes, stats):
         s["alone"] += len(one)
 
 
+def quality_cells(b, keys, made):
+    """(key, secs, lacks, why) of every cell of keys, made(key) -> (secs, lacks), in rows from the north: secs with
+    the "q" section when the build makes it (Builder.q_ready) and the 3 x 3 cells' counts could all be had (a cell of
+    keys counted from its own sections, a neighbour outside keys from its layers), else why (None: made or not made
+    by this build). Two rows of cells are held back at most (their neighbours below come first)."""
+    on = b.q_ready()
+    keys = sorted(set(keys), key=lambda k: (k.y, k.x))
+    counts = {}
+    pending = []
+
+    def finish(item):
+        key, secs, lacks = item
+        if not on:
+            return key, secs, lacks, None
+        nine = []
+        for nk in quality.ring(key):
+            if nk is None:
+                nine.append(None)
+                continue
+            if nk not in counts:
+                counts[nk] = b.q_counts(nk)
+            if counts[nk] is None:
+                return key, secs, lacks, f"{nk}: its layers or lane slice could not be had"
+            nine.append(counts[nk])
+        return key, dict(secs, **{quality.SECTION: quality.record(key, nine)}), lacks, None
+
+    for key in keys:
+        while pending and pending[0][0].y + 1 < key.y:
+            yield finish(pending.pop(0))
+        secs, lacks = made(key)
+        if on:
+            counts[key] = b.q_counts(key, secs, lacks)
+        pending.append((key, secs, lacks))
+        lo = key.y - 3                  # (counts of rows no pending cell reads any more)
+        if len(counts) > 4096:
+            for k in [k for k in counts if k.y < lo]:
+                del counts[k]
+    while pending:
+        yield finish(pending.pop(0))
+
+
+def ring_of(keys):
+    """The cells next to keys (8-neighbourhood) that are not in keys."""
+    ks = set(keys)
+    out = set()
+    for k in ks:
+        for nk in quality.ring(k):
+            if nk is not None and nk not in ks:
+                out.add(nk)
+    return sorted(out, key=lambda k: (k.x, k.y))
+
+
 def rects_of(cells):
     """Coverage rectangles (x0, y0, x1, y1) of a set of cells: runs of x per row, merged down equal runs."""
     rows = {}
@@ -312,9 +562,9 @@ def rects_of(cells):
 _B = {}
 
 
-def _unit_init(cache, online, layers, release, lidar, partial, data=None, cap=0):
+def _unit_init(cache, online, layers, release, lidar, partial, data=None, cap=0, q=True):
     _B["b"] = b = Builder(cache, online, layers, release)
-    b.lidar, b.partial, b.store, b.cap = lidar, partial, False, cap
+    b.lidar, b.partial, b.store, b.cap, b.quality = lidar, partial, False, cap, q
     _B["data"] = data
     same_data(b)
 
@@ -329,7 +579,7 @@ def same_data(b):
             raise RuntimeError(f"the weekly data builds changed under the build: {got} vs {want}")
 
 
-def unit_ahead(b, keys):
+def unit_ahead(b, keys, ring=()):
     """What a unit's cells read from the network, fetched at once: the BNWT tiles of its layers (one range read per
     archive instead of one per 4 x 4 block) and the OSM fuel / picnic rows of all its cells (one scan each instead of
     256: ~0.2 s of every cell, an empty one too). A failure here is not one: each cell reads its own then."""
@@ -339,7 +589,8 @@ def unit_ahead(b, keys):
     bw = getattr(md, "bnwt", None)
     if bw is not None:
         try:
-            bw.prefetch([(k, ly) for k in keys for ly in b.layers], "demand")
+            bw.prefetch([(k, ly) for k in keys for ly in b.layers]
+                        + [(k, ly) for k in ring for ly in quality.LAYERS if ly in b.layers], "demand")
         except Exception as e:
             print(f"unit prefetch: BNWT: {type(e).__name__}: {e}", file=sys.stderr)
     try:
@@ -386,20 +637,23 @@ def build_unit(args):
                     for x in range(max(x0, ux << sh), min(x1, ((ux + 1) << sh) - 1) + 1)
                     for y in range(max(y0, uy << sh), min(y1, ((uy + 1) << sh) - 1) + 1)})
     base = os.path.join(parts, f"{uz}_{ux}_{uy}")
-    unit_ahead(b, [mapcells.CellKey(cip.ZOOM, x, y) for _tid, x, y in cells])
+    keys = [mapcells.CellKey(cip.ZOOM, x, y) for _tid, x, y in cells]
+    unit_ahead(b, keys, ring_of(keys) if b.q_ready() else ())
     if SCOPES[scope] is not None:
         cells = [c for c in cells if in_scope(b, SCOPES[scope], c[1], c[2])]
     ids, lens, ind, lacking = [], [], [], {}
+    tid_of = {mapcells.CellKey(cip.ZOOM, x, y): tid for tid, x, y in cells}
+    done = {}
+    for key, secs, lacks, qwhy in quality_cells(b, list(tid_of), b.cell):
+        if lacks and not b.partial:
+            raise RuntimeError(f"{key}: lacks {lacks[:3]}")     # (a world build never ships a source's failure)
+        for sec, _why in lacks + ([(quality.SECTION, qwhy)] if qwhy else []):
+            lacking[sec] = lacking.get(sec, 0) + 1
+        done[tid_of[key]] = b.encode(key, secs, verify=verify)
     tmp = f"{base}.bin.{os.getpid()}.tmp"
     with open(tmp, "wb") as f:
-        for tid, x, y in cells:
-            key = mapcells.CellKey(cip.ZOOM, x, y)
-            secs, lacks = b.cell(key)
-            if lacks and not b.partial:
-                raise RuntimeError(f"{key}: lacks {lacks[:3]}")     # (a world build never ships a source's failure)
-            for sec, _why in lacks:
-                lacking[sec] = lacking.get(sec, 0) + 1
-            cb = b.encode(key, secs, verify=verify)
+        for tid in sorted(done):        # (the cells in tile-id order, as the parts list them)
+            cb = done[tid]
             f.write(cb)
             ids.append(tid)
             lens.append(len(cb))
@@ -466,7 +720,12 @@ def main(argv=None):
     ap.add_argument("--inputs-only", action="store_true", help="print the build's id and inputs, build nothing (with "
                                                                "--world: the planet build's, whose layers differ)")
     ap.add_argument("--expect-build", metavar="ID", help="refuse to build (exit 3) unless the inputs are build ID (the "
-                                                         "CI's: a weekly data build landed since its plan)")
+                                                         "CI's: other code or switches than the plan's)")
+    ap.add_argument("--pins", metavar="FILE", help="the build's pin set (--write-pins' file): every weekly dataset read "
+                                                   "as that build, whatever Pages serves now (exit 4: a pinned build "
+                                                   "the cells read is not available)")
+    ap.add_argument("--write-pins", metavar="FILE", help="write the pin set this run decided (with the build id and "
+                                                         "inputs: a plan's, for --pins)")
     ap.add_argument("--online", action="store_true", help="fetch the sources (else the cache alone)")
     ap.add_argument("--lidar", default=None, choices=("measure", "have", "skip"),
                     help="the lidar answers: measured here for the cells that want one (default with --online), the "
@@ -485,6 +744,8 @@ def main(argv=None):
     ap.add_argument("--scope", default="all", choices=sorted(SCOPES), help="world: the cells built (SCOPES)")
     ap.add_argument("--cap-kb", type=int, default=None, help=f"a {'/'.join(CAPPED)} section bigger than this is left "
                                                             f"out (CAP_KB; default {CAP_KB} with --world, else none)")
+    ap.add_argument("--quality", default="on", choices=("on", "off"), help="the cells' data-quality record (section "
+                                                                        "\"q\", server/quality.py)")
     ap.add_argument("--work", help="world: units' parts folder (default OUT/.work)")
     ap.add_argument("--shard", help="world: I/N, the I-th of N contiguous runs of the units (Hilbert order)")
     ap.add_argument("--shard-parts", action="store_true", help="with --shard: the shard's own parts and its record")
@@ -499,10 +760,31 @@ def main(argv=None):
     import logging
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     layers = tuple(x for x in (a.layers or ",".join(WORLD_LAYERS if a.world else DEFAULT_LAYERS)).split(",") if x)
+    if a.pins and a.write_pins:
+        ap.error("--pins and --write-pins: one or the other")
+    import pagesdata
+    pins = load_pins(a.pins) if a.pins else None
+    # (the run's one decision of every weekly dataset, in every worker process too: the pin set's, else this run's own)
+    if pins is not None:
+        pagesdata.seed_session(a.cache, pins["datasets"])
+    else:
+        pagesdata.start_session(a.cache)
     b = Builder(a.cache, a.online, layers, a.release)
+    try:
+        if pins is None:
+            b.md.freeze_manifests()()
+            datasets = collect_pins(b, strict=bool(a.write_pins))
+        else:
+            datasets = pins["datasets"]
+        if a.online and (pins is not None or a.write_pins):
+            check_pins(b, set(datasets) if pins is not None else None)
+    except PinsUnavailable as e:
+        print(f"build_cip: pinned build unavailable: {e}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
     b.partial = a.partial
     b.lidar = a.lidar or ("measure" if a.online else "have")
     b.cap = 1024 * (a.cap_kb if a.cap_kb is not None else (CAP_KB if a.world else 0))
+    b.quality = a.quality == "on"
     if a.cellset:
         with open(a.cellset, encoding="utf-8") as fh:
             built = sorted({ly for v in json.load(fh)["cells"].values() for ly in v})
@@ -514,10 +796,27 @@ def main(argv=None):
         inputs["data"]["scope"] = a.scope       # (another set of cells: another build; "all" keeps the ids as before)
     if b.cap:
         inputs["data"]["cap"] = {ly: b.cap for ly in CAPPED if ly in layers}
+    if a.cellset:
+        b.only = {}                     # (q_ready: a cellset's cells hold their visit's layers only)
+    if b.q_ready():
+        inputs["data"]["q"] = quality.version()     # (the record's rules: another build; readers check each section)
+    inputs["data"]["pins"] = pin_summary(datasets)  # (every weekly dataset's build: the build id is the pin set's too)
     build = cip.build_id(inputs)
     outdir = os.path.join(a.out, f"cip{cip.FORMAT}", b.release, build)
+    unpinned = sorted(i for i, v in datasets.items() if v is None)
+    if pins is not None and pins.get("build") not in (None, build):
+        # (the pin set's own build is another: other code or switches than its plan's; --expect-build says so too)
+        print(f"build_cip: the pin set is of build {pins.get('build')}, these inputs are {build}", file=sys.stderr)
+    if a.write_pins:
+        doc = {"format": PINS_FORMAT, "build": build, "plan_key": plan_key(inputs), "inputs": inputs,
+               "pages": pagesdata.PAGES, "datasets": datasets}
+        tmp = a.write_pins + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, sort_keys=True, separators=(",", ":"))
+        os.replace(tmp, a.write_pins)
     if a.inputs_only:
-        print(json.dumps({"build": build, "inputs": inputs, "out": outdir}, sort_keys=True))
+        print(json.dumps({"build": build, "inputs": inputs, "out": outdir, "plan_key": plan_key(inputs),
+                          "none": unpinned}, sort_keys=True))
         return 0
     if a.expect_build and a.expect_build != build and a.world and a.assemble and a.from_shards:
         # (the index of a finished build: its inputs are the ones its shards' records name, of this code; a weekly
@@ -526,7 +825,8 @@ def main(argv=None):
         outdir = os.path.join(a.out, f"cip{cip.FORMAT}", b.release, build)
     elif a.expect_build and a.expect_build != build:
         print(json.dumps({"build": build, "expected": a.expect_build, "inputs": inputs}, sort_keys=True))
-        print(f"build_cip: the inputs are build {build} now, not {a.expect_build}", file=sys.stderr)
+        print(f"build_cip: the inputs are build {build} now, not {a.expect_build} (other code or switches than the "
+              f"plan's{'' if pins is not None else ', or no --pins: the weekly data as served now'})", file=sys.stderr)
         return 3
     os.makedirs(outdir, exist_ok=True)
     import build_bnwt
@@ -554,19 +854,21 @@ def main(argv=None):
     stats, lacking, t0 = {}, {}, time.perf_counter()
     cpu0 = time.process_time()
     total = 0
-    for i, key in enumerate(cells):
-        secs, lacks = b.cell(key)
-        for s, why in lacks:
+    done = {}
+    for i, (key, secs, lacks, qwhy) in enumerate(quality_cells(b, cells, b.cell)):
+        for s, why in lacks + ([(quality.SECTION, qwhy)] if qwhy else []):
             lacking.setdefault(s, []).append(f"{key}: {why}")
         cb = b.encode(key, secs, verify=not a.no_verify)
         if a.stats:
             section_stats(key, secs, cb, stats)
         stats.setdefault("_cells", {})[str(key)] = len(cb)
         total += len(cb)
-        pw.add(fast._ef.pmt_tile_id(14, key.x, key.y), cb, False)
+        done[fast._ef.pmt_tile_id(14, key.x, key.y)] = cb
         if sys.stderr.isatty() or i % 25 == 0:
             print(f"\r{i + 1}/{len(cells)} cells, {total / 1e6:.1f} MB", end="", file=sys.stderr)
     print(file=sys.stderr)
+    for tid in sorted(done):            # (the parts' directory in tile-id order)
+        pw.add(tid, done[tid], False)
     parts = pw.finish()
     write_index(outdir, meta, inputs, rects, parts, len(cells), pw.contents, a.cache, a.airports,
                 sorted({ly for v in b.only.values() for ly in v}) if b.only is not None else layers, a.online)
@@ -647,7 +949,7 @@ def world(a, b, inputs, build, outdir, meta, layers, build_bnwt):
         pool = None
     else:
         pool = mp.get_context("spawn").Pool(a.jobs, _unit_init, (a.cache, a.online, layers, b.release, b.lidar,
-                                                                  b.partial, _B["data"], b.cap))
+                                                                  b.partial, _B["data"], b.cap, b.quality))
         results = pool.imap_unordered(build_unit, jobs)
     for _u, nc, nb, lk, _s in results:
         done, cells, nbytes = done + 1, cells + nc, nbytes + nb
@@ -689,10 +991,11 @@ def attribution():
         f"BeamNG.Earth compact per-cell inputs (CIP format {cip.FORMAT}): a collective database of separate sections.",
         "",
         "[m:roads m:connectors m:road_routes m:buildings m:building_parts m:water m:land_use m:infrastructure "
-        "m:town_* m:hoods] Overture Maps data, ODbL-1.0 (https://opendatacommons.org/licenses/odbl/1-0/).",
+        "m:town_* m:hoods m:land] Overture Maps data, ODbL-1.0 (https://opendatacommons.org/licenses/odbl/1-0/).",
         f"Attribution: {overture.ATTRIBUTION}",
+        "[m:bathymetry] Overture Maps bathymetry (ETOPO / GLOBathy), CC0-1.0.",
         "[m:places] Overture Maps places: CDLA-Permissive-2.0 / Apache-2.0 / CC0 per source (Overture's NOTICE).",
-        "[t:rail t:lanes f:osmfuel f:picnic, OSM tags in m:roads] OpenStreetMap contributors, ODbL-1.0.",
+        "[t:rail t:lanes f:osmfuel f:picnic] OpenStreetMap contributors, ODbL-1.0.",
         "[z:*] heights derived from USGS 3DEP (public domain), IGN BD TOPO (Etalab 2.0), NVDB (NLOD), HK CSDI.",
         "[m:landcover] ESA WorldCover 2021 v200, CC BY 4.0. [m:canopy] Meta and WRI canopy height, CC BY 4.0.",
         "[airports] OurAirports, public domain.", ""])

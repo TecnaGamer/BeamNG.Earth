@@ -71,6 +71,11 @@ M.SCHEMA = {
   -- the drawn terrain block's aerial photo (px over the 1 km block; terrain.setPhotoSize, the server's photoPx):
   -- from the next level load
   groundPhoto = { kind = 'enum', default = '2048', values = { '1024', '2048', '4096' }, label = 'Ground photo resolution' },
+  -- Cliff-only startup controls; available only after the server opts in with BNE_CLIFFS.
+  naturalCliffs = { kind = 'bool', default = true, label = 'Natural cliffs' },
+  cliffRoadCuts = { kind = 'bool', default = true, label = 'Road-cut cliffs' },
+  cliffTextures = { kind = 'enum', default = 'bundled', values = { 'bundled', '4k' }, label = 'Cliff textures' },
+  cliffDetail = { kind = 'enum', default = 'normal', values = { 'low', 'medium', 'normal', 'high', 'extreme' }, label = 'Cliff detail' },
   -- the physics ground's grid (m between the terrain block's samples; GitHub #943): '2' the lighter ground of the Low and
   -- Medium presets (512² samples a km, a quarter of the data at each block swap), '1' the stock maps' resolution. The
   -- server reads it when it starts (launcher.start_server: BNGE_GROUND_SQUARE), so it holds from the next start
@@ -148,6 +153,7 @@ M.SCHEMA = {
   expGradeGuard = { kind = 'bool', default = false, label = 'Road steepness limit' },
   expPhotoSurface = { kind = 'bool', default = false, label = 'Road surface from aerial photos' },
   expTerrainBumps = { kind = 'bool', default = false, label = 'Rougher land off the roads' },
+  expRoadFollow = { kind = 'bool', default = false, label = 'Roads follow the land' },
   expCliffWalls = { kind = 'bool', default = false, label = 'Rock faces in deep road cuts' },
   expTunnelLids = { kind = 'bool', default = false, label = 'Ground over shallow tunnels' },
   expSubseaTunnels = { kind = 'bool', default = false, label = 'More undersea tunnels' },
@@ -222,7 +228,7 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
   devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
-M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'terrainShadows', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
+M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTextures', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'terrainShadows', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'seasonDate', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
@@ -233,7 +239,7 @@ M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 't
   'devMapKm',
   -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)
   'expNlRoadSigns', 'expRoadRevamp', 'expSurfaceOverlay', 'expNewSidewalks', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
-  'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
+  'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expRoadFollow', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
   'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
   'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
 
@@ -247,25 +253,25 @@ M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, q
 -- the first run (M.detectQuality).
 M.PRESET_KEYS = { 'trees', 'treeDistance', 'groundCover', 'groundCoverDensity', 'grassDistance', 'rocks', 'nightLights', 'distantTrafficQuality',
   'viewDistanceMode', 'viewDistanceKm', 'terrainDetail', 'buildingDistance', 'groundPhoto', 'objectDetail', 'roadDetail',
-  'groundGrid', 'terrainShadows' }
+  'groundGrid', 'terrainShadows', 'cliffDetail' }
 M.PRESETS = {
-  low = { trees = 'low', treeDistance = 'near', groundCover = false, groundCoverDensity = 'low', grassDistance = 'near',
+  low = { cliffDetail = 'low', trees = 'low', treeDistance = 'near', groundCover = false, groundCoverDensity = 'low', grassDistance = 'near',
     rocks = true, nightLights = 'few', viewDistanceMode = 'fixed', viewDistanceKm = 40, terrainDetail = 'low',
     buildingDistance = 'near', groundPhoto = '1024', objectDetail = 'game', distantTrafficQuality = 'low', roadDetail = 'off',
     groundGrid = '2', terrainShadows = false },
-  medium = { trees = 'medium', treeDistance = 'medium', groundCover = true, groundCoverDensity = 'low',
+  medium = { cliffDetail = 'medium', trees = 'medium', treeDistance = 'medium', groundCover = true, groundCoverDensity = 'low',
     grassDistance = 'normal', rocks = true, nightLights = 'few', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'medium',
     roadDetail = 'basic', groundGrid = '2', terrainShadows = false },
-  high = { trees = 'normal', treeDistance = 'normal', groundCover = true, groundCoverDensity = 'normal',
+  high = { cliffDetail = 'normal', trees = 'normal', treeDistance = 'normal', groundCover = true, groundCoverDensity = 'normal',
     grassDistance = 'normal', rocks = true, nightLights = 'normal', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high',
     roadDetail = 'full', groundGrid = '1', terrainShadows = true },
-  ultra = { trees = 'high', treeDistance = 'far', groundCover = true, groundCoverDensity = 'high', grassDistance = 'normal',
+  ultra = { cliffDetail = 'high', trees = 'high', treeDistance = 'far', groundCover = true, groundCoverDensity = 'high', grassDistance = 'normal',
     rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100, terrainDetail = 'high',
     buildingDistance = 'far', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high', roadDetail = 'full',
     groundGrid = '1', terrainShadows = true },
-  extreme = { trees = 'extreme', treeDistance = 'max', groundCover = true, groundCoverDensity = 'high',
+  extreme = { cliffDetail = 'extreme', trees = 'extreme', treeDistance = 'max', groundCover = true, groundCoverDensity = 'high',
     grassDistance = 'far', rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'extreme', buildingDistance = 'max', groundPhoto = '4096', objectDetail = 'extreme', distantTrafficQuality = 'high',
     roadDetail = 'full', groundGrid = '1', terrainShadows = true },
@@ -812,6 +818,7 @@ function M.uiState()
   if core and core.appPath and cachePolls % M.CACHE_POLL == 1 then core.appPath() end
   status.paths = core and core.appPathState and core.appPathState() or nil
   -- the settings waiting for a world server restart, and a restart under way (core.restartState, srvrestart.lua)
+  status.cliffsAvailable = core and core.cliffsAvailable and core.cliffsAvailable() or false
   status.restart = core and core.restartState and core.restartState(values, M.ORDER) or nil
   local schema = {}
   for _, k in ipairs(M.ORDER) do
@@ -1138,6 +1145,27 @@ end
 -- The map's cache view (server covermap.py): ask (z, x0, y0, x1, y1, mode -> { id } or { error }) and poll (id -> nil
 -- while waiting, else { z, x0, y0, w, h, cells (base64 levels), gen, ready, error }).
 local cacheMapId = 0
+-- Regional placement overlays: read-only geographic providers, requested only by the debug map UI (shown only when
+-- the server has cliffs available or BNE_CLIFFS_DEBUG: uiCliffDebugAvailable).
+function M.uiCliffDebugAvailable()
+  local core = ext('beamngEarth_core')
+  return core and core.cliffDebugAvailable and core.cliffDebugAvailable() or false
+end
+function M.uiDebugMap(layer, s, w, n, e)
+  local core = ext('beamngEarth_core')
+  if not core or not core.requestDebugMap then return { error = 'BeamNG.Earth is not loaded' } end
+  M._debugMapId = (M._debugMapId or 0) + 1
+  if not core.requestDebugMap(M._debugMapId, tostring(layer), tonumber(s), tonumber(w), tonumber(n), tonumber(e)) then
+    return { error = 'Companion server not connected' }
+  end
+  return { id = M._debugMapId }
+end
+function M.uiDebugMapResult(id)
+  local core = ext('beamngEarth_core')
+  return core and core.takeDebugMap and core.takeDebugMap(tonumber(id)) or nil
+end
+
+
 function M.uiCacheMap(z, x0, y0, x1, y1, mode)
   local core = ext('beamngEarth_core')
   if not core or not core.requestCacheMap then return { error = 'BeamNG.Earth is not loaded' } end

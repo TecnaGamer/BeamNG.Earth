@@ -63,6 +63,21 @@ def paint(tags):
     return 0 if tags.get("crossing") in UNPAINTED else M15
 
 
+STRIPED = ("zebra", "ladder", "ladder:skewed", "ladder:paired", "yes")
+
+
+def marked(tags):
+    """Whether a crossing node's tags map a striped crossing (BNE_NODE_MARKINGS, drivefeat.mapped_marks: any country):
+    crossing:markings zebra / ladder (continental bars) / yes, or crossing=zebra, crossing_ref=zebra; never at signals
+    (their junctions' crosswalks are drawn as today)."""
+    if tags.get("crossing") == "traffic_signals" or tags.get("crossing:signals") == "yes":
+        return False
+    m = str(tags.get("crossing:markings", "")).lower()
+    if m:
+        return m in STRIPED
+    return tags.get("crossing") == "zebra" or tags.get("crossing_ref") == "zebra"
+
+
 DE_MARKED = ("zebra", "marked", "uncontrolled")     # crossing=: a marked crossing without signals
 
 
@@ -123,7 +138,7 @@ def nodes(frame, infra_list):
         ll = np.array([q[1] for q in found], np.float64)
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
         xy = np.column_stack([np.asarray(e), np.asarray(n)])
-    crossings, lines, priority, zebras, signals, de, refuges = [], [], [], [], [], [], []
+    crossings, lines, priority, zebras, signals, de, refuges, striped = [], [], [], [], [], [], [], []
     for (cls, _, tag), p in zip(found, xy if found else ()):
         if cls == "crossing":
             crossings.append((float(p[0]), float(p[1]), paint(tag)))
@@ -132,6 +147,8 @@ def nodes(frame, infra_list):
                 refuges.append((float(p[0]), float(p[1])))
             if paint(tag) & M15 and tag.get("crossing") != "traffic_signals":
                 zebras.append((float(p[0]), float(p[1])))
+            if marked(tag):
+                striped.append((float(p[0]), float(p[1])))
         elif cls == "traffic_signals":
             signals.append((float(p[0]), float(p[1])))
         elif cls in ("give_way", "stop"):
@@ -143,7 +160,7 @@ def nodes(frame, infra_list):
         return any(math.hypot(z[0] - q[0], z[1] - q[1]) < SIGNALS_NEAR_M for q in signals)
     zebras = [z for z in zebras if not lit(z)]
     de = [(x, y, 0 if w and lit((x, y)) else w) for x, y, w in de]
-    return {"crossings": crossings, "zebras": zebras, "de_crossings": de, "islands": refuges,
+    return {"crossings": crossings, "zebras": zebras, "de_crossings": de, "islands": refuges, "striped": striped,
             "stop_lines": np.array(lines, np.float64).reshape(-1, 2),
             "priority": np.array(priority, np.float64).reshape(-1, 3)}
 

@@ -23,6 +23,7 @@ import fast  # noqa: E402
 import geodesy  # noqa: E402
 import netfetch  # noqa: E402
 import osmyears  # noqa: E402
+import pagesdata  # noqa: E402
 import revisit  # noqa: E402
 
 try:
@@ -275,6 +276,9 @@ class BuildAndReadTest(unittest.TestCase):
             self.assertEqual(osmyears.identity(md), "none")
             self.assertIsNone(osmyears.Fetch(frame, -300, -300, 300, 300, md).years())
             fresh = SimpleNamespace(fetcher=FakeFetcher(self.files()), cache_dir=md.cache_dir)
+            self.assertEqual(osmyears.identity(fresh), "none", "another source of this process: the same")
+            pagesdata.session_reset()               # (the next process)
+            fresh = SimpleNamespace(fetcher=FakeFetcher(self.files()), cache_dir=md.cache_dir)
             self.assertEqual(osmyears.identity(fresh), self.man["built"], "the next process: the pinned build")
 
     def test_the_build_is_frozen_for_the_process(self):
@@ -291,7 +295,10 @@ class BuildAndReadTest(unittest.TestCase):
             self.assertEqual(osmyears.identity(md), built)
             yrs = osmyears.Fetch(frame, -300, -300, 300, 300, md).years()
             self.assertEqual(osmyears.lookup(yrs, ["w34633854@1"]).tolist(), [1931])
-            fresh = SimpleNamespace(fetcher=FakeFetcher({}), cache_dir=md.cache_dir)    # (another process)
+            fresh = SimpleNamespace(fetcher=FakeFetcher({}), cache_dir=md.cache_dir)    # (this process's)
+            self.assertEqual(osmyears.identity(fresh), built, "another source of this process: the same")
+            pagesdata.session_reset()               # (another process)
+            fresh = SimpleNamespace(fetcher=FakeFetcher({}), cache_dir=md.cache_dir)
             self.assertEqual(osmyears.identity(fresh), "2099-01-01T00:00:00Z")
 
     def test_unreachable_tiles_fault(self):

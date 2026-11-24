@@ -190,7 +190,7 @@ class Archive(unittest.TestCase):
         import netfetch
         a = sample_arrays()
         lc = {"data": np.arange(16, dtype=np.uint8).reshape(4, 4), "meta": np.array("{}"), "provenance": np.array("null")}
-        release, _ = self._build({KEY: {"m:roads.9": a, "m:landcover": lc}})
+        release, _ = self._build({KEY: {f"m:{mapdata.MapData.layer_name('roads')}": a, "m:landcover": lc}})
         r = cip.Reader(os.path.join(self.tmp, "cache", "mapdata", "raw"), netfetch.Fetcher(offline=True), release,
                        base=os.path.join(self.tmp, "out"))
         st = type("M", (), {})()
@@ -214,6 +214,23 @@ class Archive(unittest.TestCase):
                        base=os.path.join(self.tmp, "out"))
         self.assertIsNone(cip.layer_arrays(r, KEY, "roads.9"))
         self.assertEqual(r.data_builds(), {})
+
+    def test_a_build_with_tags_baked_in_is_refused(self):
+        """A build of the code before roads 10 (CONTENT 1: its m:roads.9 sections hold the OSM road tags of its own
+        week, as the planet build started at b56aa907): refused whole, every section read from the sources, so its
+        tags never mix with the run's own build's (mapdata joins those at the decode)."""
+        import mapdata
+        import netfetch
+        old = dict(cip.code_inputs("2026-10-21.0"), cip=[cip.FORMAT, 1], layer_versions={"roads": 9})
+        self.assertNotEqual(old, cip.code_inputs("2026-10-21.0"))
+        release, _ = self._build({KEY: {"m:roads.9": sample_arrays(), "t:rail": b'{"ways": []}'}},
+                                 {"code": old, "data": {"rails": "r1", "lanes": "l1", "osmtags": "o-older"}})
+        r = cip.Reader(os.path.join(self.tmp, "cache", "mapdata", "raw"), netfetch.Fetcher(offline=True), release,
+                       base=os.path.join(self.tmp, "out"))
+        self.assertIsNone(cip.layer_arrays(r, KEY, "roads.9"))
+        self.assertIsNone(cip.layer_arrays(r, KEY, mapdata.MapData.layer_name("roads")))
+        self.assertIsNone(cip.side_json(r, "t:rail", KEY))
+        self.assertEqual(r.data_builds(), {}, "no weekly pin of it either")
 
 
 if __name__ == "__main__":

@@ -171,7 +171,8 @@ PIN_RECHECK_S = 1.0         # s between looks for a manifest another process may
 class Shards:
     """A dataset of BeamNG.Earth-data's GitHub Pages (name: its folder, e.g. "rail", "fra"): z7 shards
     <PAGES>/<name>/<x>/<y>.json.gz and its manifest, each shard fetched once and kept on disk per build. The manifest
-    stays on Pages; the shards come from its "data" folder when it names one (pagesdata.Manifest)."""
+    stays on Pages; the shards come from its "data" folder when it names one, else Pages while Pages serves the run's
+    build (pagesdata.Manifest: a shard is only ever kept under the build it is of)."""
 
     def __init__(self, cache_dir, fetcher, name):
         self.name = name
@@ -243,8 +244,8 @@ class Shards:
         return (r, pin) if pin else (None, None)
 
     def known(self):
-        """The build in use as far as known without asking the network (versions(): every tile's cache key); before
-        this run has asked for it, the last build pinned on disk. (None until the manifest came: the tiles built in
+        """The build in use as far as known without asking the network (versions(): every tile's cache key): the
+        run's (pagesdata.Manifest's session), decided from the pin on disk when none is yet. (None until the manifest came: the tiles built in
         a run's first minutes had other keys than the same tiles built later, in the revisit cache: a warm drive
         rebuilt and stored again ~1.5 GB of far tiles, 2026-11-04.)"""
         _, pin = self.cip_pin()
@@ -253,8 +254,8 @@ class Shards:
         return self.manifest.built if not ON else self.manifest.known(PIN_RECHECK_S)
 
     def version(self):
-        """The build in use ("built" of its manifest), or None (none reachable yet). The pinned/refresh policy is
-        pagesdata.Manifest.current's (the night of 1.9.0: see pagesdata). CIP on: the build its cells' slices are of."""
+        """The build in use ("built" of its manifest), or None (no data this run). The run's, decided once for every
+        process of it (pagesdata.Manifest.current: see pagesdata). CIP on: the build its cells' slices are of."""
         _, pin = self.cip_pin()
         if pin:
             return pin
@@ -264,7 +265,8 @@ class Shards:
 
     def get(self, rel, kind="demand"):
         """The bytes of the dataset's file rel (path in its folder) for the build in use: from the manifest's "data"
-        host, else (or that failing) Pages (pagesdata.fetch_data)."""
+        host, else (or that failing) Pages while Pages serves the same build (pagesdata.Manifest.fetch: else
+        pagesdata.OtherBuild, not had)."""
         return self.manifest.fetch(rel, kind)
 
     def clear_memory(self):
@@ -391,6 +393,22 @@ def cell_slice(sh, key, ids):
             rules[k] = {values[v_i]: np.diff(np.array(by[v_i], np.int64), prepend=0).tolist()
                         for v_i in sorted(by)}
         out["rules"] = rules
+    xd = sh.get("xsec")
+    if isinstance(xd, dict):            # (BNE_ROADSYS_XSEC: the cross-section rows of those ways, the table's form)
+        xs = xsec_table(sh, None)
+        want = sorted({int(i) for i in ids if str(i).isdigit()})
+        got = xs.get_many(want) if xs is not None else []
+        rows = [(w, t) for w, t in zip(want, got) if t is not None]
+        keys = sorted({k for _w, t in rows for k in t})
+        sets, idx, at = [], [], {}
+        for _w, t in rows:
+            row = tuple(t.get(k) for k in keys)
+            if row not in at:
+                at[row] = len(sets)
+                sets.append(list(row))
+            idx.append(at[row])
+        out["xsec"] = {"keys": keys, "sets": sets, "ids": np.diff(np.array([w for w, _t in rows], np.int64), prepend=0).tolist(),
+                       "set": idx}
     lon0, lat0, lon1, lat1 = (float(v) for v in key.bounds())
     out["nodes"] = [list(nd) for nd in sh.get("nodes") or ()
                     if lon0 - PAD <= nd[1] <= lon1 + PAD and lat0 - PAD <= nd[2] <= lat1 + PAD]
@@ -404,6 +422,8 @@ def shard_of_slice(sl):
            "nodes": list(sl.get("nodes") or ())}
     if "rules" in sl:
         got["rules"] = Rules(sl["rules"])
+    if isinstance(sl.get("xsec"), dict):
+        got["xsec"] = sl["xsec"]
     return got
 
 
@@ -448,6 +468,64 @@ class RailTags(Shards):
 
 
 LANES_ON = os.environ.get("BNE_LANETAGS", "on") != "off"
+# (BNE_ROADSYS_XSEC=on: the road system's cross-sections, native/roadsys xsec.rs) the lane shards' "xsec" table
+# (tools/build_lane_tags.py --xsec: the street tags of every drivable highway way with any of XSEC_KEYS, by way id)
+# joined to the roads as attrs XSEC_ATTR, one {key: value} (or None) per road: the way covering most of it. Off: not
+# read. BNE_LANES_XSEC_DIR: a local --xsec build's folder whose shards' "xsec" stand in where the shards in use have
+# none (a sample build: tests and probes; its path is keyed as every BNE_ setting is).
+XSEC_ON = os.environ.get("BNE_ROADSYS_XSEC", "off").strip().lower() == "on"
+XSEC_DIR = os.environ.get("BNE_LANES_XSEC_DIR") or None
+XSEC_ATTR = "osm_xsec"
+
+
+class XsecTable:
+    """A shard's "xsec" table: {"keys": [k...], "sets": [[value or None per key]...], "ids": way ids sorted and
+    delta-coded, "set": the set of each}: get_many(way ids) -> [{key: value} or None]."""
+
+    def __init__(self, doc):
+        keys = [str(k) for k in doc.get("keys") or ()]
+        self.sets = [{k: str(v) for k, v in zip(keys, row) if v is not None} for row in doc.get("sets") or ()]
+        self.ids = np.cumsum(np.asarray(doc.get("ids") or (), np.int64))
+        self.set = np.asarray(doc.get("set") or (), np.int64)
+        if len(self.ids) != len(self.set) or (len(self.set) and (self.set.min() < 0 or self.set.max() >= len(self.sets))):
+            self.ids, self.set = np.zeros(0, np.int64), np.zeros(0, np.int64)
+
+    def get_many(self, ids):
+        out = []
+        for w in ids:
+            if w is None or not len(self.ids):
+                out.append(None)
+                continue
+            j = int(np.searchsorted(self.ids, int(w)))
+            out.append(self.sets[int(self.set[j])] if j < len(self.ids) and int(self.ids[j]) == int(w) else None)
+        return out
+
+
+_XSEC_LOCAL = {}            # (x, y) -> XsecTable or None (BNE_LANES_XSEC_DIR's shards)
+
+
+def xsec_table(sh, key):
+    """The XsecTable of shard sh (the cell key's), from BNE_LANES_XSEC_DIR where sh has none, or None."""
+    got = sh.get("_xsec_obj") if isinstance(sh, dict) else None
+    if got is not None:
+        return got
+    doc = sh.get("xsec") if isinstance(sh, dict) else None
+    if isinstance(doc, dict):
+        got = XsecTable(doc)
+        sh["_xsec_obj"] = got
+        return got
+    if XSEC_DIR is None or key is None:
+        return None
+    shift = key.z - SHARD_ZOOM
+    xy = (key.x >> shift, key.y >> shift)
+    if xy not in _XSEC_LOCAL:
+        try:
+            with gzip.open(os.path.join(XSEC_DIR, str(xy[0]), f"{xy[1]}.json.gz"), "rt", encoding="utf-8") as fh:
+                d = json.load(fh).get("xsec")
+            _XSEC_LOCAL[xy] = XsecTable(d) if isinstance(d, dict) else None
+        except (OSError, ValueError):
+            _XSEC_LOCAL[xy] = None
+    return _XSEC_LOCAL[xy]
 # OpenStreetMap's lane-level road tags (tools/build_lane_tags.py), attrs osm_<key with ':' as '_'>: the road markings'
 # lane-by-lane data (markings.py). bus:lanes:forward, bus:lanes:backward and psv:lanes join only if the shard has them.
 LANE_COLUMNS = ("lanes", "turn:lanes", "turn:lanes:forward", "turn:lanes:backward", "turn:lanes:both_ways", "change:lanes",
@@ -646,6 +724,13 @@ class LaneTags(Shards):
             found = [(lo, la, t) for _id, lo, la, t in nodes
                      if lon0 - pad <= lo <= lon1 + pad and lat0 - pad <= la <= lat1 + pad]
         feats.__dict__["_sign_nodes"] = found
+        if XSEC_ON:             # (the road system's cross-sections: the street tags of the way covering most of a road)
+            col = np.full(n, None, object)
+            xs = xsec_table(sh, key)
+            if xs is not None and rec is not None:
+                for i, t in zip(road, xs.get_many([way_id(str(rec[i])) for i in road])):
+                    col[i] = t
+            feats.attrs[XSEC_ATTR] = col
         import roadlanes
         roadlanes.invalidate(feats)
 

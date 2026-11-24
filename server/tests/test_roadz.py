@@ -397,6 +397,23 @@ class ObservedTest(unittest.TestCase):
         self.assertAlmostEqual(info["offset"], 1.5)
         self.assertIsNone(rz.observed(FRAME, xy, 4.0, -1), "no tunnel there")
 
+    def test_a_missing_swiss_cell_leaves_the_next_source(self):
+        # (BD TOPO's box reaches over Switzerland and CH_BOUNDS over France's border: a Swiss cell not to be had now,
+        # its host down, must not cost a French border cell its BD TOPO heights for the run)
+        roadz.sources_at = lambda lat, lon, lidar=None: ["tlm", "ign"]
+        bridge = self.src_line(np.linspace(-35, 35, 15), np.full(15, 2.0), np.full(15, FLAT + 6.0), 1)
+        ground = self.src_line(np.linspace(-200, -35, 20), np.full(20, 2.0), np.full(20, FLAT), 0)
+        rz = provider_with(roadz.Lines.build([bridge, ground]))
+        rz.lines = lambda s, key: None if s == "tlm" else roadz.Lines.build([bridge, ground])
+        info = {}
+        z = rz.observed(FRAME, np.c_[np.linspace(-35, 35, 36), np.zeros(36)], 4.0, 1, "", info)
+        self.assertIsNotNone(z)
+        self.assertEqual(info["source"], "ign")
+        np.testing.assert_allclose(z, FLAT + 6.0, atol=1e-6)
+        rz.lines = lambda s, key: None
+        self.assertIsNone(rz.observed(FRAME, np.c_[np.linspace(-35, 35, 36), np.zeros(36)], 4.0, 1),
+                          "BD TOPO's cell missing too: the inference, as before")
+
     def test_level_must_agree(self):
         ground = self.src_line(np.linspace(-200, 200, 40), np.zeros(40), np.full(40, FLAT), 0)
         rz = provider_with(roadz.Lines.build([ground]))

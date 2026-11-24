@@ -22,6 +22,12 @@ import netfetch  # noqa: E402
 import nycmassing as nm  # noqa: E402
 import nycshards  # noqa: E402
 import nyctanks as nt  # noqa: E402
+import pagesdata  # noqa: E402
+
+
+def next_process():
+    """A new process: this one's decisions of the run forgotten (pagesdata's session; no session folder here)."""
+    pagesdata.session_reset()
 
 LAT, LON = 40.7484, -73.9857
 KEY = mapcells.cell_of(LAT, LON)
@@ -68,6 +74,7 @@ def site(cells, built="2026-11-10"):
 
 class FrozenBuildTest(unittest.TestCase):
     def setUp(self):
+        next_process()
         self.tmp = tempfile.mkdtemp(prefix="nycshards-test-")
         self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
 
@@ -94,6 +101,7 @@ class FrozenBuildTest(unittest.TestCase):
         self.assertEqual(s.identity(), "none")
         self.assertEqual(s.shard(KEY), {})
         self.assertEqual(len(self.src(host).shard(KEY) or {}), 0, "(another process: not decided before its key)")
+        next_process()
         nxt = self.src(host)
         self.assertNotEqual(nxt.identity(), "none")
         self.assertEqual(len(nxt.shard(KEY)["d"]), 2)
@@ -151,6 +159,8 @@ class FrozenBuildTest(unittest.TestCase):
         s.pin()                                     # (pinned for the next process)
         self.assertEqual(s.identity(), ident_a, "frozen for this process")
         self.assertIsNone(s.shard(KEY), "the new bytes are not build A's: not had (the tile faulted)")
+        self.assertEqual(self.src(host).identity(), ident_a, "another source of this process: the same build")
+        next_process()
         nxt = self.src(host)
         ident_b = nxt.identity()
         self.assertNotEqual(ident_b, ident_a)
@@ -177,6 +187,7 @@ class FrozenBuildTest(unittest.TestCase):
         self.assertIsNone(s.shard(KEY))
         host.files.clear()                          # (withdrawn: the manifest a 404)
         self.assertFalse(s.pin())
+        next_process()
         self.assertEqual(self.src(host).identity(), "none", "the next process: none")
 
     def test_a_shard_of_other_bytes_is_not_read_nor_kept(self):
@@ -230,10 +241,12 @@ class TileKeyTest(unittest.TestCase):
                              ("none", "none"), "decided at the first key: none for this process")
             nm._SOURCES.clear()                     # (the main process: its own sources, never deciding)
             nt._SOURCES.clear()
+            next_process()                          # (another process than the worker's, no session folder here)
             self.assertTrue(all(v.startswith("2026-11-14-") for v in blockworker._nyc_key(
                 geodesy.EnuFrame(LAT, LON), (-500, -500, 500, 500), cache_dir=tmp)), "the main process's peek")
             nm._SOURCES.clear()                     # (the next process)
             nt._SOURCES.clear()
+            next_process()
             got = blockworker._nyc_key(geodesy.EnuFrame(LAT, LON), (-500, -500, 500, 500))
             self.assertTrue(all(v.startswith("2026-11-14-") for v in got), got)
             self.assertEqual(blockworker._nyc_key(geodesy.EnuFrame(LAT, LON), (0, 0, 10, 10)), got, "frozen")

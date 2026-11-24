@@ -1,5 +1,5 @@
 """The roads layer as mapdata.MapData._decoded_layer leaves it, kept on disk for the server's other processes and the
-next run: a cell's roads with OpenStreetMap's rail and lane tags joined, the level ways promoted, the merged highways'
+next run: a cell's roads with OpenStreetMap's road, rail and lane tags joined, the level ways promoted, the merged highways'
 lane sections split out and the bends rounded (roadsmooth.py). Every process made them again for each cell it read
 (~20 ms of thread CPU a city cell, the lane sections and the rounding 0.9 of it: 752 decodes, 17 CPU-s of a first visit
 to York PA across its processes, 4.7 s of them in the process whose first graded block everything waited for;
@@ -30,11 +30,12 @@ import mapgeom
 log = logging.getLogger("earthd.roadlayercache")
 
 ON = os.environ.get("BNE_ROADS_DEC", "on") not in ("off", "0", "false")
-FORMAT = 1
+FORMAT = 2                  # (2: the OSM road tags' build in the key, joined at the decode: mapdata roads 10)
 # kept on the layer beside its arrays (_lane_section_joints: lanesections' joints as the split made them, before
 # the bends were rounded: read from the rounded lines instead, a slip road's mouth stood elsewhere and one building of
 # an I-83 tile was cut differently, 2026-11-12)
-STATE = ("_lanes_built", "_rails_built", "_rail_nodes", "_sign_nodes", "_road_revision", "_lane_section_joints")
+STATE = ("_lanes_built", "_rails_built", "_osm_built", "_rail_nodes", "_sign_nodes", "_road_revision",
+         "_lane_section_joints")
 MEMOS = ("_xy_in", "_centres", "_boxes", "_boxes_in", "_ll_boxes", "_lonlat_boxes", "_feature_boxes", "_ecef",
          "_id_pos", "_ids_at")      # pure in the arrays, made again when asked for: not kept
 FIELDS = ("layer", "ids", "kind", "part_off", "ring_off", "coord_off", "lonlat", "en", "own", "clipped", "attrs", "rules")
@@ -91,8 +92,10 @@ def _dtype(descr):
     return np.lib.format.descr_to_dtype(descr if isinstance(descr, str) else [tuple(x) for x in descr])
 
 
-def key(code, stamp, rails, lanes, switches):
-    return json.dumps([FORMAT, code, stamp, rails, lanes, switches], sort_keys=True)
+def key(code, stamp, rails, lanes, switches, osm):
+    """The key of a decode: the code, the layer file's stamp, the rail / lane / OSM road tags' builds it joined, the
+    switches."""
+    return json.dumps([FORMAT, code, stamp, rails, lanes, switches, osm], sort_keys=True)
 
 
 def encode(f):

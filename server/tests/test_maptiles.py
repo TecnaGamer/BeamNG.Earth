@@ -22,31 +22,37 @@ import imagery  # noqa: E402
 import maptiles  # noqa: E402
 
 S = imagery.SOURCES
+# The default chain with the CDN's Sentinel-2 packs on (cdn.chain): bngs2 before USGS, its second place after it
+CHAIN = tuple(n for d in imagery.DEFAULT_CHAIN for n in (("bngs2", "usgs", "bngs2fine") if d == "usgs" else (d,)))
+RED = {"usgs": 60, "bngs2": 140, "eox2016": 200}
 
 
 class FakeImagery:
     """Imagery's .chain / .tiles / .attribution: each source's tiles are one flat colour (red channel
     = the source) with a gradient so they are not uniform; `missing` / `blank` / `fail` per source."""
 
-    def __init__(self, chain=imagery.DEFAULT_CHAIN, missing=(), blank=(), fail=()):
+    def __init__(self, chain=CHAIN, missing=(), blank=(), fail=(), black=()):
         self.chain = tuple(S[n] for n in chain)
-        self.missing, self.blank, self.fail = set(missing), set(blank), set(fail)
+        self.missing, self.blank, self.fail, self.black = set(missing), set(blank), set(fail), set(black)
         self.calls = []
 
     def tiles(self, keys, kind="demand"):
         out = {}
         for k in keys:
             src, z, x, y = k
+            name = imagery.store_of(src)            # (bngs2fine: bngs2's tiles)
             self.calls.append((src.name, z, x, y, kind))
-            if src.name in self.fail:
+            if name in self.fail:
                 raise imagery.ImageryError("down")
-            if src.name in self.missing or src.name not in ("usgs", "eox2023", "eox2016"):
+            if name in self.missing or name not in RED:
                 out[k] = None               # (the regional sources: no tile here)
                 continue
             a = np.zeros((256, 256, 3), np.uint8)
-            a[..., 0] = {"usgs": 60, "eox2023": 140, "eox2016": 200}[src.name]
-            if src.name not in self.blank:
+            a[..., 0] = RED[name]
+            if name not in self.blank:
                 a[..., 1] = np.arange(256, dtype=np.uint8)[:, None]      # rows 0..255: a gradient north to south
+            if name in self.black:
+                a[128:] = 0                 # (the packs' open sea: "no data")
             out[k] = imagery.as_tile(a)
         return out
 
@@ -86,14 +92,32 @@ class MapTilesTest(unittest.TestCase):
             with self.assertRaises(maptiles.BadTile, msg=bad):
                 maptiles.parse_path(bad)
 
-    def test_eox_first_at_low_zoom_usgs_above(self):
+    def test_global_layer_first_at_low_zoom_usgs_above(self):
         img = FakeImagery()
         t = maptiles.MapTiles(img)
         _, src, _, _ = t.tile(11, 584, 783)
-        self.assertEqual(src, "eox2023")
+        self.assertEqual(src, "bngs2")
         _, src, _, _ = t.tile(14, 4683, 6266)
-        self.assertEqual(src, "usgs")
+        self.assertEqual(src, "usgs", "the packs only to their own zoom ahead of USGS")
+        self.assertFalse([c for c in img.calls if c[0].startswith("eox")], "EOX only where the rest has nothing")
         self.assertTrue(all(c[4] == maptiles.FETCH_KIND for c in img.calls))
+        _, src, _, _ = maptiles.MapTiles(FakeImagery(chain=imagery.DEFAULT_CHAIN)).tile(11, 584, 783)
+        self.assertEqual(src, "eox2016", "without the packs: EOX 2016")
+        self.assertFalse([n for n in imagery.SOURCES if n == "eox2023"])
+
+    def test_packs_enlarged_past_usgs_and_sea_filled(self):
+        """Outside USGS the packs' second place draws the finer views (enlarged); a pack tile's black "no data" (its
+        open sea) is filled from the next source."""
+        img = FakeImagery(missing=("usgs",))
+        _, src, _, _ = maptiles.MapTiles(img).tile(15, 9412, 12490)
+        self.assertEqual(src, "bngs2")
+        self.assertIn("bngs2fine", {c[0] for c in img.calls})
+        self.assertNotIn(("bngs2", 15), {c[:2] for c in img.calls}, "the first place: not finer than its zoom")
+        jpeg, src, _, _ = maptiles.MapTiles(FakeImagery(black=("bngs2",))).tile(11, 584, 783)
+        a = decode(jpeg)
+        self.assertEqual(src, "bngs2")
+        self.assertLess(abs(a[:100, :, 0].mean() - 140), 6, "the packs' land")
+        self.assertLess(abs(a[160:, :, 0].mean() - 200), 6, "EOX 2016 at sea")
 
     def test_usgs_not_below_its_min_zoom(self):
         img = FakeImagery(chain=("usgs",))
@@ -101,29 +125,29 @@ class MapTilesTest(unittest.TestCase):
         self.assertEqual(img.calls, [])
 
     def test_fall_through_missing_and_blank(self):
-        self.assertEqual(maptiles.MapTiles(FakeImagery(missing=("usgs",))).tile(15, 9412, 12490)[1], "eox2023")
-        self.assertEqual(maptiles.MapTiles(FakeImagery(blank=("usgs", "eox2023"))).tile(15, 9412, 12490)[1],
+        self.assertEqual(maptiles.MapTiles(FakeImagery(missing=("usgs",))).tile(15, 9412, 12490)[1], "bngs2")
+        self.assertEqual(maptiles.MapTiles(FakeImagery(blank=("usgs", "bngs2"))).tile(15, 9412, 12490)[1],
                          "eox2016")
-        self.assertIsNone(maptiles.MapTiles(FakeImagery(missing=("usgs", "eox2023", "eox2016"))).tile(15, 1, 1))
+        self.assertIsNone(maptiles.MapTiles(FakeImagery(missing=("usgs", "bngs2", "eox2016"))).tile(15, 1, 1))
 
     def test_failure_raises_only_when_nothing_else_has_it(self):
         _, src, final, _ = maptiles.MapTiles(FakeImagery(fail=("usgs",))).tile(15, 9412, 12490)
-        self.assertEqual(src, "eox2023")
+        self.assertEqual(src, "bngs2")
         self.assertFalse(final, "a later source standing in for one that failed: a stand-in")
         self.assertTrue(maptiles.MapTiles(FakeImagery(missing=("usgs",))).tile(15, 9412, 12490)[2],
                         "one that has nothing there: the tile")
         with self.assertRaises(imagery.ImageryError):
-            maptiles.MapTiles(FakeImagery(fail=("usgs", "eox2023", "eox2016"))).tile(15, 9412, 12490)
+            maptiles.MapTiles(FakeImagery(fail=("usgs", "bngs2", "eox2016"))).tile(15, 9412, 12490)
 
     def test_overzoom_crops_the_ancestor(self):
-        img = FakeImagery(chain=("eox2023",))
+        img = FakeImagery(chain=("eox2016",))
         t = maptiles.MapTiles(img)
         # z16 from the z14 ancestor: 4 x 4 children; the bottom row of children holds the
         # ancestor's rows 192..255 of the gradient
         x, y = (100 << 2) + 1, (200 << 2) + 3
         jpeg, src, final, _ = t.tile(16, x, y)
         self.assertTrue(final)
-        self.assertEqual(img.calls[-1][:4], ("eox2023", 14, 100, 200))
+        self.assertEqual(img.calls[-1][:4], ("eox2016", 14, 100, 200))
         a = decode(jpeg)
         self.assertEqual(a.shape, (256, 256, 3))
         self.assertTrue(185 <= a[:, :, 1].mean() <= 230, a[:, :, 1].mean())
@@ -139,9 +163,9 @@ class MapTilesTest(unittest.TestCase):
         self.assertEqual(t.respond("POST", "/tiles/1/0/0.jpg")[0], 405)
         self.assertIn(b"fake", t.respond("GET", "/attribution")[2])
         self.assertEqual(t.respond("GET", "/health")[2], b"ok")
-        dead = maptiles.MapTiles(FakeImagery(fail=("usgs", "eox2023", "eox2016")))
+        dead = maptiles.MapTiles(FakeImagery(fail=("usgs", "bngs2", "eox2016")))
         self.assertEqual(dead.respond("GET", "/tiles/12/1170/1566.jpg")[0], 503)
-        self.assertEqual(maptiles.MapTiles(FakeImagery(missing=("usgs", "eox2023", "eox2016"))).respond(
+        self.assertEqual(maptiles.MapTiles(FakeImagery(missing=("usgs", "bngs2", "eox2016"))).respond(
             "GET", "/tiles/12/1170/1566.jpg")[0], 404)
 
     def test_http_on_localhost(self):
@@ -230,7 +254,7 @@ class LazyImagery(FakeImagery):
     says how to answer: "data", "none", "fail" or "nothing" (still undecided after)."""
 
     def __init__(self, fetch="data", state="todo", until=None):
-        super().__init__(chain=("md6in", "usgs", "eox2023"))
+        super().__init__(chain=("md6in", "usgs", "eox2016"))
         self.fetch, self.state, self.until, self.fetched = fetch, state, until, []
 
     def lazy_tile_state(self, key):

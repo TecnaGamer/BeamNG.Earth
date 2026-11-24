@@ -412,14 +412,16 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
 # its reason and fails on a new one). BNGE_ONEWAY_JOINS=0: the one-way ends' lane joins off (the roads layer, so the
 # facts and plans); BNGE_ROADS_IN_GROUND=0: the carriageway meshes in the road tiles (a helper's per-client setting is
 # in the road tile's key too: blockworker._roads_tile_cached).
-OUTPUT_ENV = ("BNGE_ONEWAY_JOINS", "BNGE_ROADS_IN_GROUND")
+OUTPUT_ENV = ("BNGE_ONEWAY_JOINS", "BNGE_ROADS_IN_GROUND", "BNGE_ROADZ_TLM_URL")
 
 
 # A switch keyed by its value: BNE_ROADSYS (the road rewrite) at off or shadow (M1: built again in the background and
 # logged; nothing built or delivered reads it) changes no output and is no build switch; at heights (M2: today's deck
 # builder and grading take its one profile per carriageway) and every later stage it is one (the tiles', plans' and
 # facts' keys: switches_key, plans_switches_key; its version in SWITCH_VERSIONS).
-UNKEYED_VALUES = {"BNE_ROADSYS": ("", "off", "shadow")}
+# BNE_ROADSYS_AREAS (osmareas.py) at audit only reports how the road system's faces meet OSM's mapped road areas;
+# at on the areas shape the carriageways (keyed, with the areas' build in MapData.versions()).
+UNKEYED_VALUES = {"BNE_ROADSYS": ("", "off", "shadow"), "BNE_ROADSYS_AREAS": ("", "off", "audit")}
 
 
 def keyed_env(k):
@@ -486,11 +488,13 @@ def keyed_env(k):
 # version and its own).
 # BNE_ROADSYS=surface 1 (M4 surface, 2026-11-22): structures, and the decks drawn from the road system's own faces
 # (roadsys.deck_faces, earthfast 606); keyed as "2s1u1" (structures' meaning and its own); its plans are heights' own.
+# BNE_ROADSYS_XSEC 1 (2026-11-22): the road system's cross-sections from OSM's street tags (parking, cycle and bus lanes,
+# shoulders, mapped carriageway widths; native/roadsys xsec.rs XSEC_FORMAT 1, earthfast 610).
 ROADSYS_STRUCTURES_VERSION = 1
 ROADSYS_SURFACE_VERSION = 1
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 2}
+                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 2, "BNE_ROADSYS_XSEC": 1}
 
 
 def keyed_value(k, v):
