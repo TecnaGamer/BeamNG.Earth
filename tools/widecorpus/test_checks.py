@@ -166,7 +166,7 @@ class CorpusChecks(unittest.TestCase):
     def test_confirmed_production_failure_requires_frozen_replays(self):
         p={"id":"failed"}
         configs={"default":{}, "revamped":REVAMPED}
-        key="BNE_SIDEWALK_V2"
+        key=sorted(REVAMPED)[-1]   # (any of the set: read from server/experimental.py, which changes)
         error=dict(type="IndexError",file="server/roadmesh.py",function="example",message="out of range")
         identity=digest([p,30,"code"])
         with tempfile.TemporaryDirectory() as d:
@@ -217,7 +217,7 @@ class CorpusChecks(unittest.TestCase):
                 historical(new,old,manifest)
 
     def test_bisect_requires_the_interacting_switches(self):
-        needed={"BNE_DECK_K_SPEED","BNE_SIDEWALK_V2"}
+        needed=set(sorted(REVAMPED)[1:3])   # (two of the set that only matter together)
         p={"id":"fixture"}
         configs={"default":{}, "revamped":REVAMPED}
         def build(place,radius,configs,run,code):
