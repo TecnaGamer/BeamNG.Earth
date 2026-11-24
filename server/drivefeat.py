@@ -39,13 +39,23 @@ SWITCHES = ("BNE_CALMING", "BNE_UNPAVED", "BNE_ROAD_BARRIERS", "BNE_ROAD_ENDS", 
             "BNE_LAMP_TAGS")
 
 
+# the switches whose output depends on the border data (countrybounds: the calming heights' country factors, a turning
+# circle's radius and a passing place's side, the paint's country rules): its signature keyed only while one is on
+COUNTRY = CALMING or ENDS or MARKINGS
+
+
 def identity(md):
-    """MapData.versions()' "drive" entry: (VERSION, the drive shards' build in use or None) while a switch that reads
-    them is on, else None (nothing keyed: every switch off keeps today's keys)."""
-    if not SHARDS:
+    """MapData.versions()' "drive" entry (the plans', cell facts' and tiles' keys) while a mapped-feature switch that
+    reads data is on: (VERSION, the drive shards' build in use or None, the border data's signature
+    (countrybounds.signature) or None); None with them off (nothing keyed: every switch off keeps trunk's keys)."""
+    if not (SHARDS or COUNTRY):
         return None
-    t = getattr(md, "drive_tags", None)
-    return (VERSION, t.known() if t is not None else None)
+    t = getattr(md, "drive_tags", None) if SHARDS else None
+    border = None
+    if COUNTRY:
+        import countrybounds
+        border = countrybounds.signature()
+    return (VERSION, t.known() if t is not None else None, border)
 
 
 # --- BNE_NODE_MARKINGS: the mapped stop / give-way / zebra nodes as paint (roads.build_tile, every country but Sweden

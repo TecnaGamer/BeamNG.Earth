@@ -736,7 +736,8 @@ class MapData:
             v["stations"] = st.known()
         import drivefeat
         dv = drivefeat.identity(self)
-        if dv is not None:                      # (the drive shards' build: keyed only while a switch reads them)
+        if dv is not None:                      # (the drive shards' build and the border data: keyed only while a
+                                                # switch reads them)
             v["drive"] = dv
         if getattr(self, "pmtiles", None) is not None:
             # (the cells from Overture's tiles: their own key, so plans, cell facts and tiles built from them never mix

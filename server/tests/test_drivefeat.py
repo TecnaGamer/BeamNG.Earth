@@ -40,6 +40,23 @@ class DefaultsTest(unittest.TestCase):
             finally:
                 importlib.reload(drivefeat)
 
+    def test_border_data_keyed_only_while_on(self):
+        class MD:
+            drive_tags = None
+        with mock.patch("countrybounds.signature", lambda: "borders:a"):
+            for flag in ("CALMING", "ENDS", "MARKINGS"):
+                with mock.patch.object(drivefeat, flag, True), mock.patch.object(drivefeat, "COUNTRY", True):
+                    a = drivefeat.identity(MD())
+                    with mock.patch("countrybounds.signature", lambda: "borders:b"):
+                        b = drivefeat.identity(MD())
+                    self.assertNotEqual(a, b, flag)
+                    self.assertEqual(a[2], "borders:a")
+            off = {f: False for f in ("CALMING", "UNPAVED", "ENDS", "MARKINGS", "RAIL_PROPS", "SHARDS", "COUNTRY")}
+            with mock.patch.multiple(drivefeat, **off):
+                self.assertIsNone(drivefeat.identity(MD()))
+                with mock.patch("countrybounds.signature", lambda: "borders:b"):
+                    self.assertIsNone(drivefeat.identity(MD()))
+
     def test_switches_are_build_switches(self):
         import revisit
         for k in drivefeat.SWITCHES:
