@@ -793,7 +793,7 @@ class ServerMessagesTest(test_server.ServerHarness):
             self.assertIs(m["detail"], True)
         if kind == "hello":
             if "cliffs" in m:
-                self.assertEqual(set(m["cliffs"]), {"available", "natural", "roadCuts"})
+                self.assertEqual(set(m["cliffs"]), {"available", "natural", "roadCuts", "debug"})
                 self.assertTrue(all(type(v) is bool for v in m["cliffs"].values()))
             self.assertIn(m["nearVisual"], ("mesh", "terrain"))
             self.assertEqual(m["format"], self.server.layout.format)

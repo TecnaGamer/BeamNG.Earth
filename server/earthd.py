@@ -9105,8 +9105,9 @@ class Connection:
             from cliffsettings import SETTINGS as cliff_settings
             from cliffsettings import available as cliffs_available
             from cliffsettings import DEBUG as cliffs_debug
-            m["cliffs"] = {"available": cliffs_available(), "natural": cliff_settings.natural,
-                           "roadCuts": cliff_settings.road_cuts, "debug": cliffs_debug}
+            if cliffs_available() or cliffs_debug:     # (PR #1412's cliffs: hello without them when off, as before)
+                m["cliffs"] = {"available": cliffs_available(), "natural": cliff_settings.natural,
+                               "roadCuts": cliff_settings.road_cuts, "debug": cliffs_debug}
             if budget.TIER in ("lean", "emergency"):    # (a low-memory machine: the mod warns on the emergency tier)
                 m["memoryTier"] = budget.TIER
                 note = budget.memory_notice(tier_=budget.TIER)
