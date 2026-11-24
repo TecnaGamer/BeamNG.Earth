@@ -130,7 +130,7 @@ class EnvReadTest(unittest.TestCase):
 
 def _md():
     """A MapData's attributes versions() reads, nothing loaded."""
-    return types.SimpleNamespace(release="2026-test")
+    return types.SimpleNamespace(release="2026-test", osm_tags_build=lambda network=True: "layercake")   # (versions() asks it)
 
 
 class ElevationKeyTest(unittest.TestCase):
