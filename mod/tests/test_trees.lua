@@ -1168,6 +1168,10 @@ do
     'no veteran among the common oaks')
   T.check(count('pine_eu', 'scots_pine_filler') == 1 and count('pine_eu_open', 'scots_pine_filler') == 0,
     'the crowd-grown Scots pine in the woods only')
+  -- (2026-11-24) the liana-hung jungle trees in the forest only, never by a road
+  T.check(count('tropical', 'tro_tree_1_huge') == 1 and count('tropical_open', 'tro_tree_1_huge') == 0
+    and count('tropical_open', 'tro_tree_2_medium') == 0 and count('tropical_open', 'tro_tree_2_tall') == 1,
+    'liana trees off the roads (tro_tree_2_tall_02 stays)')
   -- (the olive's copy replaces the stock olive in every group, or offline the stock one is back: never both)
   local copyN, stockN = 0, 0
   for _, list in pairs(trees.CATALOG) do

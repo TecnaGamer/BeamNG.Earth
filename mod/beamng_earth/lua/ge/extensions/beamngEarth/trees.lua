@@ -850,7 +850,12 @@ end
 -- only: East Coast USA's douglasfir large_c / large_d / small_a, West Coast USA's weathered Monterey pine)
 M.FOREST_ONLY = { '_forest', 'filler', 'tree_oak_large_', 'douglasfir_large_c', 'douglasfir_large_d',
   'douglasfir_small_a', 'pine_radiata_weathered' }
+-- (2026-11-24, the user's Bali: liana-hung jungle giants with buttress roots by an asphalt road, their roots on the
+-- sidewalk) Jungle Rock Island's trees that wear its hanging vines (tro_vines_2d), by name: the forest's only, as the
+-- fillers (tro_tree_2_tall_02, tro_tree_2_large carry none and stay in the open)
+M.FOREST_ONLY_NAMES = { tro_tree_1_huge = true, tro_tree_2_medium = true, tro_tree_2_tall = true }
 function M.forestOnly(shape)
+  if M.FOREST_ONLY_NAMES[shape:match('([^/]+)$') or ''] then return true end
   for _, k in ipairs(M.FOREST_ONLY) do
     if shape:find(k, 1, true) then return true end
   end
