@@ -1065,4 +1065,31 @@ do -- PROP_LEAD_S: at speed the furniture tiles ahead count nearer for the group
 end
 T.check(trees.spareWanted(trees.FRAME_MS) == 0 and trees.spareWanted(trees.LOADING_FRAME_MS) >= trees.POOL_SPARE,
   'no spare Forests while driving by default (POOL_SPARE_DRIVE 0)')
+do
+  local ground = require('beamngEarth/terrainpatch')
+  local roads = require('beamngEarth/roads')
+  local ready, pieces = ground.groundReady, roads.cliffPiecesReady
+  local enabled = ground.ENABLED
+  ground.ENABLED = false
+  roads.cliffPiecesReady = function(key, aid) return key == '1_2' and aid == 7 end
+  local tile = {s=8, f={0,10,20,30,0,1,4,0}, sourceKey='t1_2', anchor=7}
+  T.check(trees.cliffGroundReady(tile, 1), 'rock readiness uses the production terrainpatch API')
+  ground.groundReady = function(x, y) return x ~= 14 or y ~= 24 end
+  T.check(not trees.cliffGroundReady(tile, 1), 'rock waits when one footprint corner lacks solid ground')
+  ground.groundReady = function() return true end
+  tile.anchor = 8
+  T.check(not trees.cliffGroundReady(tile, 1), 'rock waits for its supporting cliff in the current anchor')
+  local calls, present, pass = 0, false, {}
+  roads.cliffPiecesReady = function() calls = calls + 1; return present end
+  for i = 1, 100 do T.check(not trees.cliffGroundReady(tile, 1, pass), 'unloaded support waits') end
+  T.check(calls == 1, 'one supporting-cliff lookup for all rocks in a pass')
+  present = true
+  T.check(not trees.cliffGroundReady(tile, 1, pass), 'a pass retains its missing-support result')
+  pass = {}
+  T.check(trees.cliffGroundReady(tile, 1, pass), 'the next pass notices newly imported support')
+  ground.groundReady = function() return false end
+  T.check(not trees.cliffGroundReady(tile, 1, pass), 'cached support never bypasses per-rock ground checks')
+  T.check(calls == 2, 'present support is shared within the pass too')
+  ground.groundReady, ground.ENABLED, roads.cliffPiecesReady = ready, enabled, pieces
+end
 T.done('test_trees')

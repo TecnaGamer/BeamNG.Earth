@@ -1616,11 +1616,12 @@ class Surface:
     def close(self):
         self.pool.shutdown(wait=False)
 
-    def _cached(self, key):
-        """The cell's land-cover Raster from the cache, None if absent (a fetch is queued) or no
+    def _cached(self, key, *, fetch=True):
+        """The cell's land-cover Raster from the cache, None if absent (queued only with fetch=True) or no
         coverage (open ocean: the layer is stored as missing)."""
         if not self.md.has(key, "landcover"):
-            self._queue(key)
+            if fetch:
+                self._queue(key)
             return None
         try:        # (mapdata's memory LRU: a far tile's road paint and every block read the same cells again)
             return self.md.cell(key, layers=("landcover",), kind="background").layers.get("landcover")
@@ -1854,13 +1855,16 @@ class Surface:
         return self.classes(lat, lon)[0] == roadsmod.URBAN_CLASS
 
     @profile_step('Land cover')
-    def classes(self, lat, lon):
+    def classes(self, lat, lon, *, fetch=True):
         """(WorldCover class per point, complete): 0 (no data) where the cell is not cached yet. The
-        land cover is read at the warped points (warp: organic borders)."""
+        land cover is read at the warped points (warp: organic borders). Distant cliffs
+        use fetch=False to read available cover without expanding the download area."""
         lat, lon = warp(lat, lon)
         fast.require(564, "land-cover raster samples")
+        source = self._cached if fetch else lambda key: self._cached(key, fetch=False)
+        missing = self._is_queued if fetch else lambda key: not self.md.has(key, "landcover")
         out, complete = fast._ef.landcover_samples(lat.ravel(), lon.ravel(), mapcells.cells_for_points(lat, lon),
-                                                   self._cached, self._is_queued, revisit.fault,
+                                                   source, missing, revisit.fault,
                                                    mapcells.MAX_LAT, POLAR_CLASS)
         return out.reshape(lat.shape), complete
 

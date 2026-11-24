@@ -152,10 +152,15 @@ pub struct Stroke {
     pub reach: f64,                    // m round it its lane program reads (the lane graph's walks; product.rs halos)
     pub over: Vec<(usize, f64, f64, u8)>, // (BNE_ROADSYS_XSEC) (slot, s0, s1, what): a bus lane / unpaved shoulder face kind
                                        // (xsec::K_BUS, K_SOFT) or an advisory cycle lane's dashed line (OVER_ADV)
+    pub area: Vec<crate::areas::Knot>, // (BNE_ROADSYS_AREAS) its mapped road areas' program: lane factor, outer shoulders,
+                                       // shift, strip factor (the cross-section's strips, BNE_ROADSYS_XSEC)
 }
 
 /// Stroke.over's mark for an advisory cycle lane (markings only, never a face kind).
 pub const OVER_ADV: u8 = 0x40;
+
+/// (BNE_ROADSYS_XSEC) a cross-section strip slot between the lanes and a shoulder: parking, a cycle lane, a buffer.
+pub fn is_strip(kind: u8) -> bool { kind == xsec::K_PARK || kind == xsec::K_CYCLE || kind == xsec::K_BUFFER }
 
 impl Stroke {
     pub fn len(&self) -> f64 { self.line.len() }
@@ -211,11 +216,33 @@ impl Stroke {
         for &t in &ts { out.push(add(p, scale(n, t))); }
     }
 
-    /// Boundary offsets t_0 >= t_1 >= ... >= t_S (m, + left of the stroke) at station s.
+    /// Boundary offsets t_0 >= t_1 >= ... >= t_S (m, + left of the stroke) at station s (with its mapped areas'
+    /// program, areas.rs, where it has one).
     pub fn offsets(&self, s: f64, out: &mut Vec<f64>) {
+        if self.area.is_empty() { self.offsets_raw(s, None, out); } else { self.offsets_raw(s, Some(crate::areas::knot_at(&self.area, s)), out); }
+    }
+
+    /// offsets() with the areas' parameters area ([lane factor, left / right outer shoulder extra, shift, strip factor])
+    /// or none. (The strip factor scales the cross-section's parking, cycle lanes and buffers, BNE_ROADSYS_XSEC: a
+    /// stroke without them is untouched by it.)
+    pub fn offsets_raw(&self, s: f64, area: Option<[f64; 5]>, out: &mut Vec<f64>) {
         out.clear();
         let n = self.slots.len();
         let mut ws: Vec<f64> = self.slots.iter().map(|k| k.w(s)).collect();
+        if let Some(a) = area {
+            for k in 0..n { if self.slots[k].kind == K_LANE { ws[k] *= a[0]; } }
+            if a[4] != 1.0 { for k in 0..n { if is_strip(self.slots[k].kind) { ws[k] *= a[4]; } } }
+            if let Some(k) = (0..n).find(|&k| ws[k] > 1e-6) { if self.slots[k].kind == K_SHOULDER { ws[k] = (ws[k] + a[1]).max(0.0); } }
+            if let Some(k) = (0..n).rev().find(|&k| ws[k] > 1e-6) { if self.slots[k].kind == K_SHOULDER { ws[k] = (ws[k] + a[2]).max(0.0); } }
+        }
+        let dt = area.map(|a| a[3]).unwrap_or(0.0);
+        self.offsets_ws(s, &ws, out);
+        if dt != 0.0 { for t in out.iter_mut() { *t += dt; } }
+    }
+
+    fn offsets_ws(&self, s: f64, ws0: &[f64], out: &mut Vec<f64>) {
+        let n = self.slots.len();
+        let mut ws: Vec<f64> = ws0.to_vec();
         if !self.lane_scale.is_empty() {
             let c = &self.lane_scale;
             let k = c.partition_point(|x| x.0 <= s);
@@ -322,9 +349,10 @@ pub struct NetStats {
 #[derive(Clone, Copy, Debug)]
 /// flat_struct (M4, deck.rs): no crossfall on structure faces (today's decks are flat across: the terrain and the
 /// hand-over were made for them).
-pub struct Opts { pub cut_grid: f64, pub cut_offset: f64, pub flat_struct: bool }
+/// areas (BNE_ROADSYS_AREAS=on): the place's mapped road areas are the carriageway edges' soft targets (areas::fit).
+pub struct Opts { pub cut_grid: f64, pub cut_offset: f64, pub flat_struct: bool, pub areas: bool }
 
-impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0, flat_struct: false } } }
+impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0, flat_struct: false, areas: false } } }
 
 pub struct Net {
     pub opts: Opts,
@@ -343,6 +371,7 @@ pub struct Net {
     pub xsec_on: bool,                  // (BNE_ROADSYS_XSEC) the cross-section model: every stroke gets its strip slots
     pub lays: Vec<Option<Lay>>,         // seg -> its cross-section's strips (sides in the segment's direction)
     pub xs_tags: Vec<u16>,              // seg -> what its cross-section took from tags (xsec::T_*; 0: all inferred)
+    pub area_fit: crate::areas::FitStats,
 }
 
 // ---------------------------------------------------------------------------------------------- v3 helpers (ported)
@@ -846,7 +875,8 @@ pub fn build_opts(place: &Place, input_order: &[usize], opts: Opts) -> Net {
     let nn = nodes.len();
     let mut net = Net { opts, segs, node_ids: ids.clone(), cut: vec![false; nn], region, edges, nodes, forks: Vec::new(),
                         fork_at: vec![None; nn], strokes: Vec::new(), edge_stroke: Vec::new(), crossings: Vec::new(),
-                        stats: NetStats::default(), xsec_on: place.xsec, lays: Vec::new(), xs_tags: Vec::new() };
+                        stats: NetStats::default(), xsec_on: place.xsec, lays: Vec::new(), xs_tags: Vec::new(),
+                        area_fit: Default::default() };
     net.lays = vec![None; net.segs.len()];
     net.xs_tags = vec![0; net.segs.len()];
     if net.xsec_on { cross_sections(&mut net); }
@@ -869,6 +899,10 @@ pub fn build_opts(place: &Place, input_order: &[usize], opts: Opts) -> Net {
     strokes(&mut net);
     lanes(&mut net);
     joints(&mut net);
+    if opts.areas && !place.areas.is_empty() {
+        let prep = crate::areas::prepare(&place.areas);
+        net.area_fit = crate::areas::fit(&mut net, &prep);
+    }
     crossings(&mut net);
     net.stats.strokes = net.strokes.len();
     net
@@ -1068,6 +1102,7 @@ fn strokes(net: &mut Net) {
             anchor_r: Prog::default(), right_windows: Vec::new(), stations: Vec::new(), dense: Vec::new(), sup: merged,
             cls, cls_s: seg.cls_s.clone(), kmh: if kmh > 0.0 { kmh } else { 50.0 }, region, snap0: None, snap1: None,
             cut0: 0.0, cut1: 0.0, absorbed: false, lane_scale: Vec::new(), cap_nbrs: Vec::new(), reach: 0.0, over: Vec::new(),
+            area: Vec::new(),
         });
     }
     for s in &net.strokes {

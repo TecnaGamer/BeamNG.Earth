@@ -887,7 +887,7 @@ frames(1)
 local function words(x) return (x:gsub('%s+', ' ')) end -- the overlay wraps long lines at spaces
 T.check(#drawnCredits == 1 and words(drawnCredits[1]) == words(core.attribution()), 'credits: the attribution line before any credits message')
 serverSend({ type = 'credits', v = 1, near = 'Imagery: USGS The National Map | Elevation: Mapterhorn (see mapterhorn.com/attribution)',
-  far = 'Far imagery: EOX', ids = { 'img:usgs', 'dem:mapterhorn' }, farIds = { 'img:eox2023' } })
+  far = 'Far imagery: EOX', ids = { 'img:usgs', 'dem:mapterhorn' }, farIds = { 'img:eox2016' } })
 drawnCredits = {}
 frames(3)
 T.check(#drawnCredits == 3, 'credits: one text draw per frame')

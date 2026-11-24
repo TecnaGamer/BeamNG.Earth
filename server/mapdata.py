@@ -731,6 +731,9 @@ class MapData:
         if not osmml.ON:                        # (every machine-learned outline kept: keyed only while off)
             v["osm_over_ml"] = False
         v["dem"] = dem_identity()               # (the elevation the plans, facts and tiles are made on: pinned per release)
+        import osmareas
+        if osmareas.FIT:                        # (BNE_ROADSYS_AREAS=on: the mapped road areas' build, keyed only while on)
+            v["osmareas"] = osmareas.identity(self)
         return v
 
     def warm_manifests(self):
@@ -738,10 +741,12 @@ class MapData:
         server's start): a first run's tiles, plans and cell facts were keyed without them until a build happened to
         ask, and none of those was found again by the next run (versions)."""
         def run():
+            import osmareas
             import osmcolours
             import osmyears
             got = []
-            for mod in (osmyears, osmcolours):  # (the building years and colours: pinned now for the next start, frozen)
+            mods = (osmyears, osmcolours, osmareas) if osmareas.ON else (osmyears, osmcolours)
+            for mod in mods:                    # (the building years and colours: pinned now for the next start, frozen)
                 try:
                     got.append(mod.shards(self))
                 except Exception:
@@ -1108,18 +1113,44 @@ class MapData:
         if not osmfuel.budget_ok(self.fetcher):         # (the road tags first: the host's budget is shared)
             raise osmfuel.OverShare(f"OSM fuel: past {osmfuel.OSM_FUEL_SHARE:.0%} of {osmfuel.HOST}'s daily budget")
         rows = self.osmfuel.cell(_key(key).bounds(), kind)
+        self._osm_fuel_store(key, rows)
+        self._osm_fuel_prune(kind)
+        return rows
+
+    def osm_fuel_fetch_many(self, keys, kind="demand"):
+        """osm_fuel_fetch of every cell of keys not on disk, in one scan (osmfuel.OsmFuel.cells_many: the same rows;
+        tools/build_cip.py's z10 units). Returns the number of cells fetched."""
+        import osmfuel
+        if not OSM_FUEL or self.fetcher is None:
+            return 0
+        keys = [_key(k) for k in keys if not os.path.exists(self.osm_fuel_path(k))]
+        if not keys:
+            return 0
+        with self._lock:
+            if getattr(self, "osmfuel", None) is None:
+                self.osmfuel = osmfuel.OsmFuel(self.raw_dir, self.fetcher)
+        if not osmfuel.budget_ok(self.fetcher):
+            raise osmfuel.OverShare(f"OSM fuel: past {osmfuel.OSM_FUEL_SHARE:.0%} of {osmfuel.HOST}'s daily budget")
+        for k, rows in zip(keys, self.osmfuel.cells_many([k.bounds() for k in keys], kind)):
+            self._osm_fuel_store(k, rows)
+        self._osm_fuel_prune(kind)
+        return len(keys)
+
+    def _osm_fuel_store(self, key, rows):
         path = self.osm_fuel_path(key)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = f"{path}.{os.getpid()}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(rows, f)
         os.replace(tmp, path)
+
+    def _osm_fuel_prune(self, kind):
+        import osmfuel
         now = time.monotonic()
         if now - getattr(self, "_osm_pruned", -1e9) >= osmfuel.PRUNE_EVERY_S and hasattr(self.osmfuel, "version"):
             self._osm_pruned = now                  # (its blocks under a cap)
             _, remote = self.osmfuel.version(kind)
             osmfuel.prune_blocks(remote.cache_dir, remote.size)
-        return rows
 
     def osm_fuel_warm(self, kind="prefetch"):
         """Worker thread: the OSM fuel file's version and row-group index read once (3 requests, 5 MB, about 1 s the

@@ -596,8 +596,8 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
 
 /// The decks' whole input as one file (the CLI's `roadsys decks IN` builds it again, on Linux and on Windows, for the
 /// byte comparison): the place, quad and cut (io::write_tile, its ground the heights asked, in order) and the lines.
-pub fn encode_input(place: &Place, quad: [[f64; 2]; 4], cut: (f64, f64), ground: &[f64], lines: &[DeckLine]) -> Vec<u8> {
-    let t = crate::io::TileInput { place: place.clone(), quad, id: (0, 0), frame: 0, cut, ground: ground.to_vec() };
+pub fn encode_input(place: &Place, quad: [[f64; 2]; 4], cut: (f64, f64), ground: &[f64], lines: &[DeckLine], areas_on: bool) -> Vec<u8> {
+    let t = crate::io::TileInput { place: place.clone(), quad, id: (0, 0), frame: 0, cut, ground: ground.to_vec(), areas_on };
     let tb = crate::io::write_tile(&t);
     let mut b = b"RSDECK01".to_vec();
     b.extend_from_slice(&(tb.len() as u64).to_le_bytes());
@@ -645,7 +645,7 @@ pub fn run_input(b: &[u8]) -> Result<(Vec<u8>, Decks), String> {
         at.set(k + pts.len());
         v
     };
-    let o = build(&t.place, t.quad, &g, &lines, Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, ..Default::default() });
+    let o = build(&t.place, t.quad, &g, &lines, Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, areas: t.areas_on, ..Default::default() });
     Ok((output_bytes(&o), o))
 }
 
@@ -736,7 +736,7 @@ mod tests {
         let asked = std::cell::RefCell::new(Vec::new());
         let gr = |pts: &[P2]| { let v = g(pts); asked.borrow_mut().extend_from_slice(&v); v };
         let a = build(&p, Q, &gr, &lines(), Opts::default());
-        let file = encode_input(&p, Q, (4000.0, 2000.0), &asked.borrow(), &lines());
+        let file = encode_input(&p, Q, (4000.0, 2000.0), &asked.borrow(), &lines(), false);
         let (bytes, b) = run_input(&file).unwrap();
         assert_eq!(output_bytes(&a), bytes);
         assert_eq!(a.t.len(), b.t.len());

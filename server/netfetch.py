@@ -22,8 +22,8 @@ hosts get DEFAULT_POLICY):
     Retry-After), then requests raise HostUnavailable without touching the network; after the open
     time one probe goes through (half-open): its success closes it (open time back to breaker_open;
     a late success of a request sent before it opened does not), failure re-opens it for twice as
-    long (up to breaker_max). Callers fail over along their own chains (imagery usgs -> eox2023 ->
-    eox2016 -> palette; DEM Mapterhorn -> AWS);
+    long (up to breaker_max). Callers fail over along their own chains (imagery bngs2 -> usgs ->
+    bngs2fine -> eox2016 -> palette; DEM Mapterhorn -> AWS);
   * daily budgets (soft: at 80 % prefetch / background stop with one warning, at 100 % demand runs
     at half rate with a warning per hour; hard: BudgetExceeded), counted per UTC day and persisted
     in <stats_dir>/<YYYY-MM-DD>.json (every STATS_FLUSH_S and at close), so a restart keeps them;

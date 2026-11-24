@@ -169,7 +169,7 @@ class LegacyTest(Base):
         root = self.root
         olds = [self.old(col(root, "imagery", "usgs", "16", str(x)), y, T0 + y) for x in (1, 2) for y in (5, 6)]
         self.old(col(root, "dem", "mapterhorn", "15", "9"), 4)
-        jpg = col(root, "imagery", "eox2023", "14", "1", "1.jpg")
+        jpg = col(root, "imagery", "eox2016", "14", "1", "1.jpg")
         os.makedirs(os.path.dirname(jpg))
         with open(jpg, "wb") as f:
             f.write(b"x" * 100)
@@ -181,9 +181,9 @@ class LegacyTest(Base):
         for x in (1, 2):
             self.assertEqual(dict(missindex.column(col(root, "imagery", "usgs", "16", str(x)))), {5: T0 + 5, 6: T0 + 6})
         self.assertEqual(sorted(k for k in c.keys()), [
-            "dem/mapterhorn/15/9/_misses", "imagery/eox2023/14/1/1.jpg",
+            "dem/mapterhorn/15/9/_misses", "imagery/eox2016/14/1/1.jpg",
             "imagery/usgs/16/1/_misses", "imagery/usgs/16/2/_misses"])
-        for src in ("imagery/usgs", "imagery/eox2023", "dem/mapterhorn"):
+        for src in ("imagery/usgs", "imagery/eox2016", "dem/mapterhorn"):
             self.assertTrue(os.path.exists(col(root, *src.split("/"), missindex.MIGRATED)), src)
         missindex.reset_memo()
         self.assertEqual(missindex.when(missindex.marker(col(root, "imagery", "usgs", "16", "1"), 5)), T0 + 5)

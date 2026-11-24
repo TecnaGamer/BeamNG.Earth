@@ -14,7 +14,7 @@ import earthd  # noqa: E402
 import imagery  # noqa: E402
 
 # Source tags in the red channel tell the sources apart in a texture (as test_server.FakeImagery).
-RED = {"usgs": 60, "eox2023": 140, "eox2016": 200}
+RED = {"usgs": 60, "bngs2": 140, "bngs2fine": 140, "eox2016": 200}
 
 
 def fake_load(self, key):

@@ -51,6 +51,8 @@ def source_lines(frame, features, quad):
                         continue
                     lines.append(dict(id=fid, level=level, width=spec.width, lanes=spec.lanes or
                                       (1 if spec.oneway else 2), paved=spec.kind in ("paved", "cobble"),
+                                      cls=str(spec.cls), drive=round(float(roads.lane_layout(spec)[0]), 2),
+                                      urban=int(bool(spec.urban)), oneway=int(bool(spec.oneway)),
                                       xy=xy.tolist()))
     return lines
 

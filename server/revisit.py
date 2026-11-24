@@ -419,7 +419,9 @@ OUTPUT_ENV = ("BNGE_ONEWAY_JOINS", "BNGE_ROADS_IN_GROUND")
 # logged; nothing built or delivered reads it) changes no output and is no build switch; at heights (M2: today's deck
 # builder and grading take its one profile per carriageway) and every later stage it is one (the tiles', plans' and
 # facts' keys: switches_key, plans_switches_key; its version in SWITCH_VERSIONS).
-UNKEYED_VALUES = {"BNE_ROADSYS": ("", "off", "shadow")}
+# BNE_ROADSYS_AREAS (osmareas.py) at audit only reports how the road system's faces meet OSM's mapped road areas;
+# at on the areas shape the carriageways (keyed, with the areas' build in MapData.versions()).
+UNKEYED_VALUES = {"BNE_ROADSYS": ("", "off", "shadow"), "BNE_ROADSYS_AREAS": ("", "off", "audit")}
 
 
 def keyed_env(k):

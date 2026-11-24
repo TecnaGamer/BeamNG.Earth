@@ -140,7 +140,7 @@ class SeasonTest(unittest.TestCase):
 
             def _render(self, where, px, pending=None):
                 calls.append("render")
-                return np.full((px, px, 3), 100, np.uint8), {"eox2023": px * px}
+                return np.full((px, px, 3), 100, np.uint8), {"eox2016": px * px}
 
             def _seasoned(self, where, rgb):
                 calls.append(("season", rgb.shape))
@@ -291,7 +291,7 @@ class CodexRound2Test(unittest.TestCase):
 
 class _ImStub:
     def render(self, frame, x0, y0, size, px, pending=None):
-        return np.full((px, px, 3), 100, np.uint8), {"eox2023": px * px}
+        return np.full((px, px, 3), 100, np.uint8), {"eox2016": px * px}
 
 
 if __name__ == "__main__":

@@ -12,8 +12,50 @@ use std::collections::BTreeMap;
 /// The segments of a read, deduplicated (one copy per segment: the one with the most points, ties by the smaller
 /// cell name, as roadshape.SegmentWindow chooses) and with each road split into lane sections taken either whole
 /// (its sections where they cover all of it) or as its sections, never both (lanesections.replaced_roads' rule).
+/// areas (RoadsysAreas): OSM's mapped road areas round the read (the products' audit; fit: BNE_ROADSYS_AREAS=on, the
+/// carriageway edges' soft targets, native/roadsys areas.rs).
 #[pyclass(frozen)]
-pub struct RoadsysSegments { place: Place, dropped: (usize, usize, usize) }
+pub struct RoadsysSegments { place: Place, dropped: (usize, usize, usize), fit: bool }
+
+/// OSM's mapped road areas in a frame (server/osmareas.py: the tiles of a read's cells decoded by oah_decode, their
+/// points in the frame): keys (2 x the OSM id, + 1 for a relation), values, layers, flags, the rings (each ring's
+/// polygon index, role 0 outer / 1 inner, its first point in pts; pt_off has one more), pts (n, 2) and the dataset's
+/// build identity (in the keys where the fit is on).
+#[pyclass(frozen)]
+pub struct RoadsysAreas { areas: Vec<roadsys::areas::Area>, build: u64 }
+
+#[pymethods]
+impl RoadsysAreas {
+    #[new]
+    #[pyo3(signature = (keys, values, layers, flags, ring_poly, ring_role, pt_off, pts, build))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(keys: PyReadonlyArray1<'_, u64>, values: Vec<String>, layers: PyReadonlyArray1<'_, i64>, flags: PyReadonlyArray1<'_, i64>,
+           ring_poly: PyReadonlyArray1<'_, i64>, ring_role: PyReadonlyArray1<'_, i64>, pt_off: PyReadonlyArray1<'_, i64>,
+           pts: PyReadonlyArray2<'_, f64>, build: u64) -> PyResult<Self> {
+        let (keys, layers, flags) = (keys.as_slice()?, layers.as_slice()?, flags.as_slice()?);
+        let (rp, rr, po) = (ring_poly.as_slice()?, ring_role.as_slice()?, pt_off.as_slice()?);
+        let pts = pts.as_array();
+        let n = keys.len();
+        if values.len() != n || layers.len() != n || flags.len() != n || rr.len() != rp.len() || po.len() != rp.len() + 1
+            || (pts.nrows() > 0 && pts.ncols() != 2) || po.last().map(|&v| v as usize != pts.nrows()).unwrap_or(true) {
+            return Err(PyValueError::new_err("RoadsysAreas: inconsistent columns"));
+        }
+        let mut areas: Vec<roadsys::areas::Area> = (0..n).map(|i| roadsys::areas::Area {
+            key: keys[i], value: values[i].clone(), layer: layers[i], flags: flags[i].clamp(0, 255) as u8, links: Vec::new(), rings: Vec::new() }).collect();
+        for k in 0..rp.len() {
+            let (i, a, b) = (rp[k], po[k], po[k + 1]);
+            if i < 0 || i as usize >= n || a < 0 || b < a || b as usize > pts.nrows() {
+                return Err(PyValueError::new_err("RoadsysAreas: a ring out of range"));
+            }
+            let r: Vec<[f64; 2]> = (a as usize..b as usize).map(|j| [pts[[j, 0]], pts[[j, 1]]]).collect();
+            if r.iter().any(|q| !q[0].is_finite() || !q[1].is_finite()) { return Err(PyValueError::new_err("RoadsysAreas: non-finite point")); }
+            areas[i as usize].rings.push((if rr[k] != 0 { 1 } else { 0 }, r));
+        }
+        Ok(RoadsysAreas { areas, build })
+    }
+
+    fn count(&self) -> usize { self.areas.len() }
+}
 
 /// "<road>~lanes<a>-<b>" -> (road, a, b).
 fn section_of(sid: &str) -> Option<(&str, i64, i64)> {
@@ -27,14 +69,16 @@ impl RoadsysSegments {
     #[new]
     /// xsec (610, BNE_ROADSYS_XSEC): each segment's cross-section tags (native/roadsys xsec.rs's text); given, the
     /// cross-section model is on (every stroke's strip slots) whatever the texts hold; None: off, as before.
-    #[pyo3(signature = (ids, cells, texts, nums, ints, pts, off, con_seg, con_id, con_v, rng_seg, rng, style, xsec = None))]
+    /// areas / fit (608, BNE_ROADSYS_AREAS): the mapped road areas round the read and whether they are the carriageway
+    /// edges' targets. Both on (617): the fit sets the carriageway's whole width and edges, the strips divide it.
+    #[pyo3(signature = (ids, cells, texts, nums, ints, pts, off, con_seg, con_id, con_v, rng_seg, rng, style, areas = None, fit = false, xsec = None))]
     #[allow(clippy::too_many_arguments)]
     fn new(ids: Vec<String>, cells: Vec<String>, texts: Vec<(String, String, String, String, String)>,
            nums: PyReadonlyArray2<'_, f64>, ints: PyReadonlyArray2<'_, i64>, pts: PyReadonlyArray2<'_, f64>,
            off: PyReadonlyArray1<'_, i64>, con_seg: PyReadonlyArray1<'_, i64>, con_id: Vec<String>,
            con_v: PyReadonlyArray1<'_, i64>, rng_seg: PyReadonlyArray1<'_, i64>, rng: PyReadonlyArray2<'_, f64>,
            style: (String, String, f64, f64, f64, f64, (f64, f64), (f64, f64), (f64, f64), bool),
-           xsec: Option<Vec<String>>) -> PyResult<Self> {
+           areas: Option<PyRef<'_, RoadsysAreas>>, fit: bool, xsec: Option<Vec<String>>) -> PyResult<Self> {
         let n = ids.len();
         let (nums, ints, pts, off) = (nums.as_array(), ints.as_array(), pts.as_array(), off.as_slice()?);
         if cells.len() != n || texts.len() != n || nums.nrows() != n || nums.ncols() != 4 || ints.nrows() != n
@@ -124,9 +168,11 @@ impl RoadsysSegments {
         let segs: Vec<Seg> = keep.into_iter().map(|i| std::mem::take(&mut segs[i])).collect();
         let st = Style { centre: style.0, left_edge: style.1, w: style.2, w_motorway: style.3, edge: style.4, edge_motorway: style.5,
                          centre_urban: style.6, lane_urban: style.7, lane_motorway: style.8, double_centre: style.9 };
+        let (areas, area_build) = match &areas { Some(a) => (a.areas.clone(), a.build), None => (Vec::new(), 0) };
+        let fit = fit && !areas.is_empty();
         let place = Place { name: String::new(), country: segs.first().map(|s| s.code.clone()).unwrap_or_default(), style: st, segs,
-                            xsec: xsec.is_some(), ..Default::default() };
-        Ok(RoadsysSegments { place, dropped: (copies, parents, sections) })
+                            xsec: xsec.is_some(), areas, area_build, ..Default::default() };
+        Ok(RoadsysSegments { place, dropped: (copies, parents, sections), fit })
     }
 
     /// (segments kept, copies dropped, whole roads dropped for their sections, sections dropped for their road)
@@ -134,6 +180,9 @@ impl RoadsysSegments {
 }
 
 fn opts(cut: (f64, f64)) -> roadsys::net::Opts { roadsys::net::Opts { cut_grid: cut.0, cut_offset: cut.1, ..Default::default() } }
+
+/// opts() with the areas' fit of segs (RoadsysSegments' fit: BNE_ROADSYS_AREAS=on and areas given).
+fn opts_of(segs: &RoadsysSegments, cut: (f64, f64)) -> roadsys::net::Opts { roadsys::net::Opts { areas: segs.fit, ..opts(cut) } }
 
 /// The tile's read list from the segments read so far: (boxes in the frame to read, segment ids whose every copy
 /// must be read, [delivered, full, program, profile] stroke counts, cpu s).
@@ -143,7 +192,8 @@ fn opts(cut: (f64, f64)) -> roadsys::net::Opts { roadsys::net::Opts { cut_grid: 
 pub fn roadsys_reads(py: Python<'_>, segs: PyRef<'_, RoadsysSegments>, bbox: [f64; 4], cut: (f64, f64), field: bool)
                      -> (Vec<[f64; 4]>, Vec<String>, [usize; 4], f64) {
     let place = &segs.place;
-    let r = py.detach(|| roadsys::product::reads_f(place, bbox, opts(cut), field));
+    let o = opts_of(&segs, cut);
+    let r = py.detach(|| roadsys::product::reads_f(place, bbox, o, field));
     (r.boxes, r.fids, r.counts, r.cpu)
 }
 
@@ -205,10 +255,11 @@ pub fn roadsys_build<'py>(py: Python<'py>, segs: PyRef<'py, RoadsysSegments>, qu
         })
     };
     let fld: Option<roadsys::product::Field> = if ffn.is_some() { Some((&z_of, fkey)) } else { None };
-    let out = py.detach(|| roadsys::product::build_f(place, quad, id, frame, &g_of, fld, opts(cut)));
+    let o = opts_of(&segs, cut);
+    let out = py.detach(|| roadsys::product::build_f(place, quad, id, frame, &g_of, fld, o));
     if let Some(e) = err.lock().unwrap().take() { return Err(e); }
     if let Some(path) = dump {
-        let t = roadsys::io::TileInput { place: place.clone(), quad, id, frame, cut, ground: asked.lock().unwrap().clone() };
+        let t = roadsys::io::TileInput { place: place.clone(), quad, id, frame, cut, ground: asked.lock().unwrap().clone(), areas_on: o.areas };
         std::fs::write(&path, roadsys::io::write_tile(&t)).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
     }
     Ok((out.json, PyBytes::new(py, &out.bytes)))
@@ -263,7 +314,9 @@ pub fn roadsys_squares_of_box(bbox: [f64; 4]) -> Vec<(i64, i64)> { roadsys::squa
 pub fn roadsys_square(py: Python<'_>, segs: PyRef<'_, RoadsysSegments>, sq: (i64, i64), ground: Bound<'_, PyAny>,
                       cut: (f64, f64), dump: Option<String>, obs: Option<Bound<'_, PyAny>>) -> PyResult<RoadsysSquare> {
     let win = roadsys::square::window(sq);
-    let place = Place { segs: segs.place.segs.iter().filter(|s| roadsys::product::seg_in(s, &[win])).cloned().collect(), ..segs.place.clone_meta() };
+    // (the squares' heights are the lane rules' own: no mapped areas in them, BNE_ROADSYS_AREAS or not)
+    let place = Place { segs: segs.place.segs.iter().filter(|s| roadsys::product::seg_in(s, &[win])).cloned().collect(), areas: Vec::new(),
+                        area_build: 0, ..segs.place.clone_meta() };
     let ground = ground.unbind();
     let err: std::sync::Mutex<Option<PyErr>> = std::sync::Mutex::new(None);
     let asked: std::sync::Mutex<Vec<f64>> = std::sync::Mutex::new(Vec::new());
@@ -306,7 +359,7 @@ pub fn roadsys_square(py: Python<'_>, segs: PyRef<'_, RoadsysSegments>, sq: (i64
         asked.lock().unwrap().extend_from_slice(&seen.lock().unwrap());
         // (the square's whole input, for `roadsys square` on another platform: the determinism test)
         let t = roadsys::io::TileInput { place: place.clone(), quad: [[0.0; 2]; 4], id: (sq.0 as i32, sq.1 as i32), frame: 0, cut,
-                                         ground: asked.lock().unwrap().clone() };
+                                         ground: asked.lock().unwrap().clone(), areas_on: false };
         std::fs::write(&path, roadsys::io::write_tile(&t)).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
     }
     Ok(RoadsysSquare { sq: out })
@@ -545,10 +598,11 @@ pub fn roadsys_decks<'py>(py: Python<'py>, segs: PyRef<'py, RoadsysSegments>, qu
             }
         })
     };
-    let o = py.detach(|| roadsys::deck::build(place, quad, &g_of, &dl, opts(cut)));
+    let op = opts_of(&segs, cut);
+    let o = py.detach(|| roadsys::deck::build(place, quad, &g_of, &dl, op));
     if let Some(e) = err.lock().unwrap().take() { return Err(e); }
     if let Some(path) = dump {
-        let b = roadsys::deck::encode_input(place, quad, cut, &asked.lock().unwrap(), &dl);
+        let b = roadsys::deck::encode_input(place, quad, cut, &asked.lock().unwrap(), &dl, op.areas);
         std::fs::write(&path, b).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
     }
     let a3 = |v: &[[f64; 3]]| { let mut a = numpy::ndarray::Array2::<f64>::zeros((v.len(), 3)); for (i, q) in v.iter().enumerate() { for c in 0..3 { a[[i, c]] = q[c]; } } a };
@@ -580,8 +634,18 @@ pub fn roadsys_xsec_half_extent(texts: (String, String, String, String, String),
     roadsys::net::xsec_half_extent(&s)
 }
 
+/// (608) The mapped road areas' audit of a surface (native/roadsys areas.rs run_input: the "RSAREA01" input
+/// tools/widecorpus/checks.py writes): its JSON.
+#[pyfunction]
+pub fn roadsys_areas_audit(py: Python<'_>, data: &[u8]) -> PyResult<String> {
+    let b = data.to_vec();
+    py.detach(move || roadsys::areas::run_input(&b)).map_err(PyValueError::new_err)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadsys_decks, m)?)?;
+    m.add_class::<RoadsysAreas>()?;
+    m.add_function(wrap_pyfunction!(roadsys_areas_audit, m)?)?;
     m.add_class::<RoadsysSegments>()?;
     m.add_function(wrap_pyfunction!(roadsys_reads, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_build, m)?)?;

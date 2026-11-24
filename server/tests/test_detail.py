@@ -131,7 +131,7 @@ class DetailBaseRefreshTest(ServerHarness):
     def setUp(self):
         super().setUp()
         im = self.server.imagery
-        self.server.imagery = test_server.FakeImagery(im.cache_dir, chain=("naip", "usgs", "eox2023", "eox2016"))
+        self.server.imagery = test_server.FakeImagery(im.cache_dir, chain=("naip", "usgs", "eox2016"))
         self.server.imagery._probe_status = lambda key: "covered"
         self.server.imagery.disk = im.disk
 

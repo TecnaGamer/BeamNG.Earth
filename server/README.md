@@ -12,6 +12,48 @@ the car too.
 
 ## Run
 
+### Optional dynamic cliffs
+
+Dynamic cliffs add rock faces to steep terrain and roadside cuts, with embedded
+outcrops and smaller rocks. Rock colors adapt to the local satellite imagery.
+The entire feature is off by default. Set **`BNE_CLIFFS=1`** before installation
+and launcher/server startup to opt in. This is the only Dynamic cliffs switch;
+the former `BNE_CLIFF_ROAD_CUTS` variable is no longer used.
+
+With the opt-in enabled, Graphics settings offers **Natural cliffs**,
+**Road-cut cliffs**, and **Cliff detail**. Both categories start enabled and can
+be switched independently. These controls are hidden without the server opt-in;
+saved choices and graphics presets cannot enable the feature themselves.
+Use **Restart world server** to apply changes (or restart manually when running
+without the launcher). Road cuts take priority wherever both categories overlap.
+
+Cliff detail follows graphics presets: Low → Low, Medium → Medium, High → Normal,
+Ultra → High, Extreme → Extreme. Category toggles remain your own choices.
+Low and Medium build simpler nearby meshes; higher levels keep detailed meshes
+visible farther away. All levels retain the authored texture resolution.
+Cached cliff results include both category choices and detail. Disabling the
+master opt-in skips all cliff generation and cliff texture preparation.
+All cliff textures are prepared before driving when opted in, so changing
+categories later needs no texture conversion during streaming.
+
+The authored rock textures retain 4K detail. See the
+[texture source notes](../mod/texture_sources/levels/beamng_earth/art/shapes/beamngEarth/cliff/README.md)
+for download, installation and estimated texture-memory sizes. Optional ground
+detail and contact strips use stock assets from the player's own BeamNG
+installation, prepared before driving. If those assets are unavailable, the
+server startup reports that the decoration is unavailable; cliff faces still
+work. For a standalone installation, `install.py --game-dir` selects the game
+installation used for this preparation.
+
+Cliff rocks also use the installed game's compiled models, prepared in a private
+versioned cache before streaming. Their authored detail levels and collision
+shapes are preserved. Only material bindings change for satellite-based colors;
+the game does not need to recompile a Collada model for each color while driving.
+Missing or unsupported stock models skip the dependent rocks with a diagnostic.
+These models and their derived copies are never included in the mod download.
+
+### Server command
+
 ```sh
 python3 server/earthd.py                    # listens on 127.0.0.1:47613
 python3 server/earthd.py --port 47613 --user-dir ~/.local/share/BeamNG/BeamNG.drive/current \
@@ -30,7 +72,7 @@ python3 server/earthd.py --port 47613 --user-dir ~/.local/share/BeamNG/BeamNG.dr
 | `--hysteresis` | `0.25` | A refined node stays refined until d ≥ (1 + h) × its switch distance (v1.3 §D: band ≥ 25 %) |
 | `--far-radius` | `80000` | Far field half-size (m) around the player |
 | `--nice` | `10` | Niceness increment of the whole process (0 = leave as is) |
-| `--imagery` | `usgs,eox2023,eox2016` | Satellite imagery source chain (first source with data wins, per source tile), or `off` for the v1.2 palette look (tiles without `material`) |
+| `--imagery` | the regional sources, NAIP, `usgs,eox2016` (the CDN switch adds `bngs2` before USGS and `bngs2fine` after it) | Satellite imagery source chain (first source with data wins, per source tile), or `off` for the v1.2 palette look (tiles without `material`) |
 | `--near-visual` | `mesh` | `mesh`: the ground near the player is drawn by L-2 (64 m) / L-1 (128 m) tiles and the TerrainBlock is physics only; `terrain`: the v1.2 look (the block is drawn, L0 tiles under it are covered) |
 | `--cells` | `32` | Tile cells per edge (docs/V1_4_SPEC.md §3.1, M1). `32`: the v1.3.1 layout, FORMAT 3. `64` (mesh mode only): 8704-tri tiles, FORMAT 4, exact level L-1 (128 m, the 2 m lattice), L0 within 400 m, `hello.cells`, `far_tile.tex`, tile cache 2500. The default stays 32 until the in-game probe P8 passes |
 | `--block` | `512` (mesh mode), `1024` (terrain mode) | Terrain block samples per edge (docs/V1_4_SPEC.md §3.5, M4). `1024`: the v1.3.1 block (256 m centre grid). `512` (mesh mode only): a 512² physics block, collidable [c−512, c+510], centres on a 128 m grid, `hello.blockSize: 512`, `terrain.size: 512`, the prefetch predicts the mod's 512 follow table (prepare at 128 m, lead 2 s, fast mode above 150 m/s: lead 3 s, prepare test 0.75 s ahead). The default in mesh mode since the in-game probes P2, P7 and P11 passed (`tools/m4_probes.py`, 2026-10-10); `Server()` keeps 1024 |
@@ -72,7 +114,7 @@ API keys, no other packages (the `.cdae` writer has its own msgpack encoder). Th
 The v1.2 behaviour is `--near-visual terrain --imagery off` (the integration drive and `test_e2e.py`
 run that way).
 
-On startup the server prints `earthd listening on 127.0.0.1:<port> session <sessionId> -> <dir> (far tiles: cdae, near visual: mesh, imagery: usgs,eox2023,eox2016)`.
+On startup the server prints `earthd listening on 127.0.0.1:<port> session <sessionId> -> <dir> (far tiles: cdae, near visual: mesh, imagery: usgs,eox2016)`.
 Session folders left by earlier runs (only folders that contain its `.earthd-session` marker) are
 deleted at start when their marker is more than a day old (`SESSION_STALE_S`). A younger one may still
 be on the game's screen (a crashed or restarted server: the game watches loaded files, and a shape
@@ -165,7 +207,7 @@ for descriptor overflow. [Distant traffic](../docs/DISTANT_TRAFFIC.md) maps the 
 
 | Message | Notes |
 |---|---|
-| `{"type":"hello","protocol":4,"format":3,"serverVersion":"0.4.0","sessionId":"…","farFormat":"cdae"\|"dae","material":"bngEarthFar_v3","nearVisual":"mesh"\|"terrain","attribution":"…","cells":64,"blockSize":512,"horizon":true,"deshadow":"full","colormatch":"s2"}` | `format`: 3 with `--cells 32` (v1.3.1), 4 with `--cells 64`; `cells` (v1.4 M1) only with format 4: the tiles' cells per edge (the mod's crossover fallback error and the exact level of its `exactMiss` metric; 32 without it). `blockSize` (v1.4 M4) only with `--block 512`: the terrain block's samples per edge; the mod configures its lattice, terrain-follow table, layer / flat maps and rebase staleness rule from it before anything else (1024 without it); every `terrain.size` of the session is this size. `horizon` (v1.4 M1h) only with `--horizon`: every `status` then carries `radius`; the mod sets the sky's planet radius to 6371 km and its view distance from the radius. `deshadow` only with `--deshadow lambert|full`: the mode (the mod's settings page shows it; it is server-side only). `colormatch` only with `--colormatch s2`: the same for the colour-seam removal. `farFormat` tells which shape type the tiles are; `material` is the static palette material (tiles without imagery). `nearVisual`: `mesh` = disable the TerrainBlock's rendering (physics only), the tiles draw all the ground; `terrain` = v1.2. `attribution`: the credit line for the sources in use (with `--colormatch s2` also the S2 reference layers when the chain lacks them), e.g. "Imagery: USGS The National Map (public domain); EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2023), CC BY-NC-SA 4.0; EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016 & 2017), CC BY 4.0; Weather data by Open-Meteo.com; Elevation: Mapterhorn (see mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen". |
+| `{"type":"hello","protocol":4,"format":3,"serverVersion":"0.4.0","sessionId":"…","farFormat":"cdae"\|"dae","material":"bngEarthFar_v3","nearVisual":"mesh"\|"terrain","attribution":"…","cells":64,"blockSize":512,"horizon":true,"deshadow":"full","colormatch":"s2"}` | `format`: 3 with `--cells 32` (v1.3.1), 4 with `--cells 64`; `cells` (v1.4 M1) only with format 4: the tiles' cells per edge (the mod's crossover fallback error and the exact level of its `exactMiss` metric; 32 without it). `blockSize` (v1.4 M4) only with `--block 512`: the terrain block's samples per edge; the mod configures its lattice, terrain-follow table, layer / flat maps and rebase staleness rule from it before anything else (1024 without it); every `terrain.size` of the session is this size. `horizon` (v1.4 M1h) only with `--horizon`: every `status` then carries `radius`; the mod sets the sky's planet radius to 6371 km and its view distance from the radius. `deshadow` only with `--deshadow lambert|full`: the mode (the mod's settings page shows it; it is server-side only). `colormatch` only with `--colormatch s2`: the same for the colour-seam removal. `farFormat` tells which shape type the tiles are; `material` is the static palette material (tiles without imagery). `nearVisual`: `mesh` = disable the TerrainBlock's rendering (physics only), the tiles draw all the ground; `terrain` = v1.2. `attribution`: the credit line for the sources in use (with `--colormatch s2` also the S2 reference layers when the chain lacks them), e.g. "Imagery: USGS The National Map (public domain); Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0); EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016 & 2017), CC BY 4.0; Weather data by Open-Meteo.com; Elevation: Mapterhorn (see mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen". |
 | `{"type":"status","text":"…","backlog":n,"radius":m}` | Progress text, and protocol/format mismatch warnings; while the network is degraded or `--offline`, the text ends in " \| Degraded: …" / " \| Offline - using cached data" (see "Network"; re-sent when that changes). `backlog` (v1.4 M0): desired far tiles of the current anchor not shown yet; with `--status-interval S` the last status is re-sent every S s while it changes. `radius` (v1.4 M1h, `--horizon` only): the far-field radius in m (80 km to 1500 km); the last status is re-sent when it moves by more than 2 %. The mod sets `LevelInfo.visibleDistance` = max(100 km, 1.1 × radius), with 10 % hysteresis. |
 | `{"type":"anchor_ready","requestId":N,"anchorId":A,"lat":d,"lon":d,"groundZ":m,"terrain":{"cx","cy","heightmap","size":1024,"squareSize":2.0,"zBase","maxHeight","q"}}` | `size`: 1024, or 512 with `--block 512` (`hello.blockSize`). `groundZ` = terrain height at (0, 0) of the new frame (bilinear on the quantised grid, i.e. what the game will report), or `null` if (0, 0) is outside the block. `q` = height quantum, `maxHeight = q·65536`, `zBase` a multiple of 64 m (so of `q`). No `anchorKey` yet (lattice anchors are phase 5). With `--gas-stations on`, `fuelShapes`: the shapes the anchor's region's gas stations use (`gasstations.style_shapes`), which the mod preloads (only that region's). |
 | `{"type":"anchor_progress","requestId":N,"stage":"terrain","elapsed":s}` | Additive protocol-4 heartbeat while preparing an anchor (every 2 seconds, plus an initial message). Stages: `preparing`, `land_cover`, `terrain`, `finalizing`; elapsed monotonic seconds since this request began. It stops at completion/cancellation. Older mods ignore it; newer mods also accept servers without it. This reports activity, not a completion percentage. |
@@ -177,7 +219,7 @@ for descriptor overflow. [Distant traffic](../docs/DISTANT_TRAFFIC.md) maps the 
 | `{"type":"far_remove","anchorId":A,"key":"L_i_j"}` | For the **active** anchor: eviction of a tile sent as `far_tile` that no group needs any more (the desired set changed before its swap); delete it, it was never shown. For a **previous** anchor (after a rebase): remove that shown tile; it is sent only after every `far_swap` whose adds cover its area (footprints compared in the new frame), so apply it once the swaps received before it have run. |
 | `{"type":"far_retex","anchorId":A,"key":"L_i_j","texture":"/temp/beamngEarth/<sid>/far_<A>_<L_i_j>_r<n>.dds"}` | `--colormatch s2` / `--deshadow lambert\|full` only (additive like `weather`): the texture of a tile the mod shows, or holds (sent, not swapped in yet), under the active anchor was rendered again because a colour-seam / de-shadow region it was rendered without became ready; `n` = the revision (the engine caches textures by path). Point the tile's material (`far_tile.material`) at it: `colorMap` + `flush` + `reload`, time-sliced (the mod: at most 2 a frame, governor unit `retex`). Ignore it for a key not shown or loading under that anchor, and for an older revision than the material has. The shape, the material name and the old file stay; the server deletes old revisions with the tile's other files (eviction only when no connection shows or holds the tile; `prune` once no mod holds the anchor). Sent nearest the player first, at most `--retex-rate` per second. |
 | `{"type":"far_done","anchorId":A,"count":K}` | Every swap group for the current desired set has been sent. K = number of tiles the mod shows once those swaps have run. Sent again after each later change completes. |
-| `{"type":"credits","v":1,"near":"…","far":"…","ids":[…],"farIds":[…]}` | Data credits (`server/credits.py`; additive like `weather`, `--credits on` only). Every built tile records its sources: `img:<source>` for each imagery source with texels in its texture (`Imagery.render`'s counts; the fallback colour and a palette tile name none), `img:eox2023` + `img:eox2016` (the colour references) for a texture whose USGS tiles `--colormatch s2` changed (`render`'s `colormatch` count; a re-rendered stale texture takes its new render's sources), `dem:mapterhorn` / `dem:aws-terrarium` for the provider of each DEM tile under its footprint at its DEM zoom (`dem.Dem.served`, also after a netfetch failover from Mapterhorn to AWS), and `wx:open-meteo` once weather went to the mod. Shown tiles (previous anchors' included) whose footprint is within 2 km of the player are near, the rest far (a near source stays near while one of its tiles is within 2.2 km, so a player rocking across the radius does not flip it); `far` names only sources the near part does not; nothing is sent before some shown tile's sources are known (the weather alone would replace the mod's full attribution line). `near` = "Imagery: … \| Elevation: … \| Weather data by Open-Meteo.com", `far` = "Far imagery: … \| Far elevation: …" (or ""), in the order USGS, EOX 2023, EOX 2016, Mapterhorn, AWS, weather; EOX in its prescribed wording, Mapterhorn as "Mapterhorn (see mapterhorn.com/attribution)" (CREDITS.md's wording) (its underlying dataset is not in the tiles). Checked after a pose or a swap at most once a second; sent only when it changed; re-sent on `hello`. The mod (`credits.lua`) draws `near` and `far` as two lines in a screen corner. |
+| `{"type":"credits","v":1,"near":"…","far":"…","ids":[…],"farIds":[…]}` | Data credits (`server/credits.py`; additive like `weather`, `--credits on` only). Every built tile records its sources: `img:<source>` for each imagery source with texels in its texture (`Imagery.render`'s counts; the fallback colour and a palette tile name none), `img:bngs2` + `img:eox2016` (the colour references; bngs2 only when the chain has it) for a texture whose USGS tiles `--colormatch s2` changed (`render`'s `colormatch` count; a re-rendered stale texture takes its new render's sources), `dem:mapterhorn` / `dem:aws-terrarium` for the provider of each DEM tile under its footprint at its DEM zoom (`dem.Dem.served`, also after a netfetch failover from Mapterhorn to AWS), and `wx:open-meteo` once weather went to the mod. Shown tiles (previous anchors' included) whose footprint is within 2 km of the player are near, the rest far (a near source stays near while one of its tiles is within 2.2 km, so a player rocking across the radius does not flip it); `far` names only sources the near part does not; nothing is sent before some shown tile's sources are known (the weather alone would replace the mod's full attribution line). `near` = "Imagery: … \| Elevation: … \| Weather data by Open-Meteo.com", `far` = "Far imagery: … \| Far elevation: …" (or ""), in the order USGS, EOX 2016, the Sentinel-2 packs, Mapterhorn, AWS, weather; EOX in its prescribed wording, Mapterhorn as "Mapterhorn (see mapterhorn.com/attribution)" (CREDITS.md's wording) (its underlying dataset is not in the tiles). Checked after a pose or a swap at most once a second; sent only when it changed; re-sent on `hello`. The mod (`credits.lua`) draws `near` and `far` as two lines in a screen corner. |
 | `{"type":"cache","v":1,"usedBytes":n,"capBytes":n,"files":n,"ready":true,"managed":true,"clearedBytes":n}` | The download cache's usage (`server/cache.py`; additive, only with a `Cache`: the command line has one, `Server()` none). After `hello` and in answer to every mod `cache`. `usedBytes` / `files`: what is tracked (`dem/`, `imagery/`, `colormatch/`, `deshadow/`, `mapdata/`, and `gravity/`, which is never removed); `capBytes` 0 = unlimited; `ready` false while the start-up walk is still counting; `managed` false when the cache's `VERSION` is a newer layout (then it is left alone: counted, never evicted or cleared); `clearedBytes` only in the answer to a clear (bytes removed). The settings page shows "1.2 GB of 20 GB, 34877 files". |
 | `{"type":"gravity","v":1,"g":m/s²,"lat","lon","h":m,"source":"egm2008"\|"normal"}` | Real gravity (`server/gravity.py` Provider / Tracker; additive like `weather`). \|g\| at the player's pose (geodetic lat/lon from the pose's anchor frame, `h` = metres above sea level, `msl=True` for EGM2008): computed on the provider's own thread (never the event loop) after the first pose on a known anchor, again when the player moved > 2 km or > 200 m in height from the last value, or when EGM2008 became available; re-sent on `hello`. `source` `"normal"` = WGS84 normal gravity (EGM2008 not on disk yet: a daemon thread downloads it, a failure is retried after 10 min). The mod (`weather.lua`) writes `g − 3.086e-6 × (z − h)` through `core_environment.setGravity` in steps of ≤ 1e-3 m/s² per second; it clears the value on a new `hello`. |
 | `{"type":"weather","v":1,"t":epoch,"lat","lon","code":wmo,"isDay","cover":{"total","low","mid","high"},"baseM","baseAglM","rainMmH","snowCmH","visM","fog","thunder","wind":{"ms","fromDeg","gustMs"},"aloft":{"ms","fromDeg"},"tempC","dewC","elevM","slTempC","pressureHpa","utcOffsetS","tz","credit"}` | Real weather (`server/weather.py`; additive, no protocol bump: both sides ignore unknown types). Open-Meteo's current (15-min) conditions at the 0.1° cell of the player's `pose.lat/lon`, fetched when there is none yet, every 10 min, or after 25 km (one request in flight; a failure keeps the last weather and retries after 2 min, or after the host's Retry-After / open circuit if longer; concurrent requests for one cell share a fetch); cached per (cell, 15-min slot) for all connections; re-sent on `hello`. Rates per hour from the 15-min sums (`× 3600 / interval`); a weather code with a zero sum gets a light floor (drizzle 0.3, rain 1, thunder 4 mm/h; snow 0.5 cm/h). `visM` (null = unknown) is ≤ 800 m with fog codes 45/48. `baseM`/`baseAglM`: the drawn deck's base (= max(low, mid)): a low deck at the LCL (125 m/K × (T − Td)), a mid deck ≥ 3000 m ASL; clamped 200–6000 m above the model ground `elevM`. `slTempC` = `tempC` + 0.0065 × `elevM` (the game lowers it with height). `aloft` = 700 hPa wind (cloud drift). `utcOffsetS`/`tz` = the place's real time zone (`timezone=auto`). `credit` = "Weather data by Open-Meteo.com" (CC BY 4.0), also in `hello.attribution` while weather is on. The mod's mapping is `beamngEarth/weather.lua`. |
@@ -190,6 +232,27 @@ first (the mod's cover and commit gating need them), then tiles of groups that a
 sent, then the rest, nearest first (in mesh mode there is no block class: the L-2 tiles around the
 player come first by distance). The imagery of the next 12 queued tiles is fetched ahead of their
 build.
+
+### Dynamic cliffs protocol additions
+
+`BNE_CLIFFS=1` permits the saved Natural cliffs and Road-cut cliffs settings.
+The server's `hello` includes `cliffs: {available: boolean, natural: boolean,
+roadCuts: boolean}`. Availability gates the UI; the category values gate client
+materials and stock-rock decorations. Cliff settings join the existing startup
+settings snapshot and restart flow; cached meshes include category and detail choices.
+
+A `far_retex` may also contain `replacement`, a complete `far_tile` message.
+This updates satellite-driven cliff vertex colors along with the imagery: the
+mod imports the replacement hidden, then swaps it into the existing tile while
+preserving visibility and ownership. Texture-only updates retain their existing
+behavior. Replacement shapes use new revision paths; pooled shapes carry a fresh
+`slotSerial` so a held old shape cannot be reused before release.
+
+The debug map sends `debug_map {id, layer, s, w, n, e}`. Its read-only provider
+returns `debug_map_result {id, layers, legend, features, note, enabled}` or
+`{id, error}` for invalid/busy requests. The `enabled` object uses `natural` and
+`road_cuts`. Providers use production material selectors and already-delivered
+placement records; they do not generate tiles or fetch external data.
 
 ## Wind turbine geotiles
 
@@ -324,8 +387,13 @@ Format decoded from engine-written files (golden pairs in `tests/fixtures/`):
 | Source | URL (all Web-Mercator XYZ, 256 px, no key) | Zooms used | Licence |
 |---|---|---|---|
 | `usgs` | `basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}` | 10–16 (~1.9 m/px at 36° N at z16) | public domain |
-| `eox2023` | `tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg` | ≤ 14 (Sentinel-2, ~10 m native) | CC BY-NC-SA 4.0 |
-| `eox2016` | `tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg` | ≤ 14 | CC BY 4.0 |
+| `bngs2` | `tiles.tgforever.net/s2wc/v1/{z}/{px}/{py}.bngp` (packs of 8 × 8 tiles; ESA WorldCover's 2021 Sentinel-2 composite) | ≤ 13 (the CDN switch's `max_zoom`), only views of its own zooms | CC BY 4.0 |
+| `bngs2fine` | the same packs (the same files on disk), after `usgs` | views finer than the packs' zoom, enlarged (`enlarge_only`; the switch's `"fine": false` leaves it out) | CC BY 4.0 |
+| `eox2016` | `tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg` | ≤ 14 (Sentinel-2, ~10 m native): the sea, past the packs, without them | CC BY 4.0 |
+
+EOX's 2023 mosaic (`eox2023`, the global layer until 2026-11-23) is CC BY-NC-SA 4.0, like every EOX year after
+2017: it is never fetched (`--imagery` accepts the name and leaves it out), and the caches made from it are made again
+(the chain is in every texture's key; colormatch v2; the globe's texture v2; the map tiles' format 3).
 
 - **Rendering**: per tile, a texture of exactly the tile's footprint. Texel centres → ENU (the
   anchor frame) → lat/lon (the same mapping the geometry uses) → Web-Mercator pixel at the zoom whose
@@ -346,8 +414,8 @@ Format decoded from engine-written files (golden pairs in `tests/fixtures/`):
   fetch threads, every request through `netfetch` (the host's rate and concurrency cap, 3 attempts,
   its circuit breaker; one persistent HTTPS connection per host and fetch thread). Once a host's
   circuit is open its tiles fail at once, so an outage costs each texture nothing instead of ~3.5 s
-  (offline) to ~60 s (timeouts) per source and the tile workers keep up; `eox2023` and `eox2016` share
-  one host and so one breaker. A 400 is an error, not a miss (no marker). An unreachable source falls
+  (offline) to ~60 s (timeouts) per source and the tile workers keep up; `bngs2` and `bngs2fine` share
+  one host and so one breaker (as EOX's layers do). A 400 is an error, not a miss (no marker). An unreachable source falls
   through to the next one; if no source can fill a texel because of network errors (not 404s), the
   tile is sent without imagery (palette material) rather than with a baked fallback colour, and
   counts as degraded in the status note. The far-tile prefetch asks with kind `prefetch` (only while
@@ -368,8 +436,9 @@ Format decoded from engine-written files (golden pairs in `tests/fixtures/`):
 - **Colour seams** (`--colormatch s2`, default off; docs/research/2026-10-10-imagery-colormatch.md §3,
   §7): USGS is a mosaic of NAIP flights flown per state and year, so flight boundaries are colour
   steps (Monument Valley's AZ/UT line: ΔE 17.6). Per USGS z12 region (~8 km) one background thread
-  detects the survey seams on the z14 grid against EOX S2 2023 (2016 per tile where 2023 has
-  nothing): long, consistent steps of the USGS/S2 ratio that S2 does not have and USGS does (a
+  detects the survey seams on the z14 grid against Sentinel-2: the `bngs2` packs enlarged to z14 where the chain has
+  them, EOX 2016 per tile where they have nothing (EOX 2023 until 2026-11-23; the Four Corners A/B of that day: the
+  CO/NM step 1.70 -> 0.99 with the packs, 1.07 with EOX 2023, 1.35 with EOX 2016 alone): long, consistent steps of the USGS/S2 ratio that S2 does not have and USGS does (a
   step in S2 only, e.g. at the edge of the 2016 fallback, is not imported; a 1-tile halo of
   neighbouring tiles; the sub-pixel line from z16 tiles fetched along the seam), then builds the
   feather field from the seams of the region and its 8 neighbours: each side of a seam moves half
@@ -485,7 +554,7 @@ built in `main_async` and handed to `Dem`, `Imagery`, `weather.fetch` and `gravi
   `HostUnavailable`, no network); after 30 s one probe goes through; a failed probe re-opens it for
   twice as long (up to 15 min), a success closes it (only the probe's: a late answer to a request
   sent before the breaker opened leaves it open). The chains fail over by themselves: imagery
-  usgs → eox2023 → eox2016 → palette, DEM Mapterhorn → AWS.
+  bngs2 → usgs → bngs2fine → eox2016 → palette, DEM Mapterhorn → AWS.
 - **Connections**: one keep-alive connection per host and worker thread; a request that fails on a
   reused connection (the server may have closed it while idle) is sent once more on a fresh one, a
   failure on a fresh connection (timeout, refused) is the attempt's result, so a timeout costs one
@@ -1012,11 +1081,10 @@ Cross-component (server ↔ mod):
 ## Attribution
 
 Show this in the mod UI (the server sends the line for the sources in use as `hello.attribution`):
-"Imagery: USGS The National Map (public domain); EOxCloudless https://cloudless.eox.at by EOX IT
-Services GmbH (Contains modified Copernicus Sentinel data 2023), CC BY-NC-SA 4.0; EOxCloudless
-https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016 &
-2017), CC BY 4.0; Weather data by Open-Meteo.com; Elevation: Mapterhorn (see
+"Imagery: USGS The National Map (public domain); Contains modified Copernicus Sentinel data 2021 (ESA WorldCover
+Sentinel-2 composite, CC BY 4.0); EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified
+Copernicus Sentinel data 2016 & 2017), CC BY 4.0; Weather data by Open-Meteo.com; Elevation: Mapterhorn (see
 mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen". Open-Meteo data: CC BY 4.0,
 <https://open-meteo.com/>. EOX credit in its June 2026 wording (docs/research/2026-10-10-rate-limits.md):
-2023 CC BY-NC-SA 4.0 (personal, non-commercial use), 2016 CC BY 4.0; see <https://cloudless.eox.at>. Elevation source details: <https://mapterhorn.com/attribution>,
+2016 CC BY 4.0 (the later years are CC BY-NC-SA 4.0 and not used); see <https://cloudless.eox.at>. Elevation source details: <https://mapterhorn.com/attribution>,
 <https://github.com/tilezen/joerd/blob/master/docs/attribution.md>.

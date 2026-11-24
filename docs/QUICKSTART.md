@@ -114,7 +114,7 @@ graphics settings (`game: machine:` lines) and the game's own performance lines:
   mod into the game and updates the server's packages by itself (`--keep-mod` leaves the game's copy alone).
 
 ## Credits
-The map comes from free and open data sources (USGS, Sentinel-2 by EOX, Mapterhorn, OpenStreetMap
+The map comes from free and open data sources (USGS, Copernicus Sentinel-2 via ESA WorldCover and EOX, Mapterhorn, OpenStreetMap
 and Overture contributors, and more). The full list and their licences are in
 [CREDITS.md](../CREDITS.md); the game also shows the credits on screen.
 BeamNG.Earth is an unofficial fan project, not made or endorsed by BeamNG GmbH.

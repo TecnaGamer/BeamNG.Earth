@@ -548,14 +548,16 @@ class Dem:
             if c["index"] is None and now - c["at"] < COVERAGE_RETRY_S and c.get("failed"):
                 return None
             path = os.path.join(self.cache_dir, MAPTERHORN["name"], "download_urls.json")
-            try:
+            stale = None        # (an older list on disk: kept when the refresh below fails, so plans don't change
+            try:                # with whether one download worked: offline, a host down, a frozen test cache)
                 age = now - os.path.getmtime(path)
+                with open(path, "rb") as f:
+                    doc = json.loads(f.read())
                 if age < COVERAGE_MAX_AGE_S:
-                    with open(path, "rb") as f:
-                        doc = json.loads(f.read())
-                        c["index"], c["at"], c["failed"] = coverage_index(doc), now - age, False
-                        c["archives"] = mtarchive.archives_of(doc)
-                        return c["index"]
+                    c["index"], c["at"], c["failed"] = coverage_index(doc), now - age, False
+                    c["archives"] = mtarchive.archives_of(doc)
+                    return c["index"]
+                stale = doc
             except (OSError, ValueError):
                 pass
             try:
@@ -571,9 +573,14 @@ class Dem:
                     f.write(body)
                 os.replace(tmp, path)
                 c["index"], c["at"], c["failed"] = idx, now, False
-            except Exception as e:      # (offline, a host down, another format): ask every tile, as before
-                log.debug("dem: Mapterhorn coverage: %s: %s", type(e).__name__, e)
-                c["at"], c["failed"] = now, True
+            except Exception as e:      # (offline, a host down, another format): the older list if there is one,
+                log.debug("dem: Mapterhorn coverage: %s: %s", type(e).__name__, e)      # else ask every tile
+                idx = coverage_index(stale) if stale is not None else None
+                if idx:     # (retried after COVERAGE_RETRY_S, not the full max age)
+                    c["index"], c["at"], c["failed"] = idx, now - COVERAGE_MAX_AGE_S + COVERAGE_RETRY_S, False
+                    c["archives"] = mtarchive.archives_of(stale)
+                else:
+                    c["at"], c["failed"] = now, True
             return c["index"]
 
     def coarse_at(self, lat, lon):
