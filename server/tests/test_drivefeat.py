@@ -185,6 +185,30 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(b.norm_way({"tracktype": "grade1"}), {})          # (a highway's only)
 
 
+class MappedMarksTest(unittest.TestCase):
+    def _t(self):
+        import roads
+        sp = roads.Spec(7.0, "paved", True, "residential", False, 2.0, 0, 50, None, None, 2, "asphalt")
+        return [("w", sp, np.c_[np.arange(-100.0, 1.0, 10.0), np.zeros(11), np.zeros(11)], 0.0),
+                ("e", sp, np.c_[np.arange(0.0, 101.0, 10.0), np.zeros(11), np.zeros(11)], 0.0),
+                ("s", sp, np.c_[np.zeros(11), np.arange(0.0, -101.0, -10.0), np.zeros(11)], 0.0)]
+
+    def test_only_what_is_mapped(self):
+        rows = self._t()
+        none = {"striped": [], "priority": np.zeros((0, 3)), "stop_lines": np.zeros((0, 2))}
+        cw, teeth, _jl, added = drivefeat.mapped_marks(rows, none, [], {}, None, "US", False)
+        self.assertEqual((cw, teeth, added), ([], [], []))           # (nothing invented)
+        got = {"striped": [(60.0, 0.0)], "priority": np.array([[0.0, -12.0, 0.0]]), "stop_lines": np.zeros((0, 2))}
+        cw, teeth, _jl, added = drivefeat.mapped_marks(rows, got, [], {}, None, "US", False)
+        self.assertEqual(len(added), 1)
+        self.assertTrue(teeth and all(t.shape == (3, 3) for t in teeth))     # (shark's teeth)
+        cw, teeth, jl, _a = drivefeat.mapped_marks(rows, got, [], {}, None, "GB", True)
+        self.assertTrue(teeth and all(t.shape == (4, 3) for t in teeth))     # (TSRGD 1003's broken lines)
+        stop = {"striped": [], "priority": np.array([[0.0, -12.0, 1.0]]), "stop_lines": np.zeros((0, 2))}
+        cw, _t, _jl, _a = drivefeat.mapped_marks(rows, stop, [], {}, None, "US", False)
+        self.assertEqual(sum(1 for c in cw if c.get("stop")), 1)
+
+
 class LampTagsTest(unittest.TestCase):
     def test_lamp_tags(self):
         self.assertIsNone(drivefeat.lamp_tags({"lamp_mount": "wall"}))

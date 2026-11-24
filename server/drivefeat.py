@@ -129,8 +129,23 @@ def mapped_marks(roads, found, crosswalks, jlines, signals, country, left_hand):
     yields_at = pr[pr[:, 2] == 0.0][:, :2] if len(pr) else np.zeros((0, 2))
     teeth = []
     jlines = {k: list(v) for k, v in jlines.items()}
+    # the junction arms with a mapped sign (furniture._mapped_priority: the map's give-way / stop node on the arm), each
+    # from the junction out (give_way_arms' form), whatever the country's guessed controls say
+    lines = {fid: pts for fid, _, pts, _ in roads}
+    garms, sarms_m = [], []
+    for k, arms in furniture._arms(roads).items():
+        if len(arms) < 3:
+            continue
+        wide = max(a[1].width for a in arms) / 2
+        for a in arms:
+            if a[1].kind != "paved" or furniture._outbound(a):
+                continue
+            what = furniture._mapped_priority(a, pr)
+            if what is None:
+                continue
+            arm = (a[0], a[1], np.asarray(lines[a[0]] if a[4] else lines[a[0]][::-1], np.float64), wide)
+            (garms if what == furniture.G_YIELD else sarms_m).append(arm)
     # give-way arms: the paint replaces the drawn stop line on that arm (give_way_lines' "gone")
-    garms = _arms_near(furniture.give_way_arms(roads, signals, country, pr), yields_at)
     if garms:
         if str(country or "").upper() in DOUBLE_DASH:
             lines, cuts = markings.stop_lines([(f, sp, ln, w, furniture.G_STOP) for f, sp, ln, w in garms], crosswalks,
@@ -148,7 +163,7 @@ def mapped_marks(roads, found, crosswalks, jlines, signals, country, left_hand):
         for k, v in cuts.items():
             jlines.setdefault(k, []).extend(v)
     # stop arms without a drawn stop line
-    sarms = _arms_near(furniture.give_way_arms(roads, signals, country, pr, stops=True), stops_at)
+    sarms = [arm + (furniture.G_STOP,) for arm in sarms_m]
     if sarms:
         have = np.array([0.5 * (np.asarray(c["a"])[:2] + np.asarray(c["b"])[:2]) for c in crosswalks
                          if c.get("stop")]).reshape(-1, 2)
