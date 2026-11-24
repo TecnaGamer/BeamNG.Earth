@@ -3737,6 +3737,7 @@ class Server:
             "tone": self.tone,
             "leaf_on": getattr(im, "leaf_on", None),
             "season_mode": getattr(im, "season_mode", None),
+            **({"winter": True} if snowcovermod.ON else {}),     # (BNE_WINTER; the snow itself: a spec in each key)
             # road plans (plancache.for_grader's signature)
             "plans": f"w{int(self.road_widths is not None)}s{int(self.sea is not None)}",
         }
@@ -4846,6 +4847,27 @@ class Server:
         size = self.layout.block * heightmap.SQUARE
         return snowcovermod.spec_for_square(anchor.frame, cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M,
                                             size)
+
+    def snow_changed(self):
+        """(event loop) The snow state changed (W1's state, a preset set live: snow_mode): every far tile with a
+        texture re-rendered at the live retexture's pace, nearest a player first (each takes its new spec: far_snow),
+        every block's photo at its next base refresh (base_stale). A committed block's snow layer follows with its next
+        build (its .ter is the engine's). Returns the far tiles queued."""
+        n = 0
+        for ck, info in list(self.tiles.items()):
+            if getattr(info, "material", None) is None or getattr(info, "texture", None) is None:
+                continue
+            info.stale = True
+            self.retex_request(ck, pump=False)
+            n += 1
+        if n:
+            self._retex_pump()
+        if self.near_visual == "detail":
+            self.base_stale.update(k for k in self.hm if k[0] in self.anchors)
+        self.snow_changes = getattr(self, "snow_changes", 0) + 1
+        log.info("snow state changed (%s): %d far tiles to texture again, %d block photos", snowcovermod.MODE, n,
+                 len(self.base_stale))
+        return n
 
     def far_snow(self, anchor, tile):
         """The snow a far tile's texture is made with (snowcover.spec_for_square over tile_where's square; None while
@@ -9208,6 +9230,8 @@ class Connection:
             season_mode = getattr(self.s.imagery, "season_mode", "off") if self.s.imagery is not None else "off"
             if season_mode not in (None, "off"):    # --season: the mod tints the trees' leaves to match (seasonlook.lua)
                 m["season"] = season_mode
+            if snowcovermod.ON:                 # BNE_WINTER: the snow layer's look, the grass under snow (winterlook.lua)
+                m["snow"] = snowcovermod.hello()
             if self.s.map_port:                 # the world map's tiles (maptiles.py; --map-tiles on)
                 m["mapPort"] = self.s.map_port
             # the start-time values of the settings read only at a start, and whether a supervisor starts this server
@@ -9474,6 +9498,11 @@ class Connection:
                 self.roads.close()
                 self.roads = road_tracker(self)
                 self.signs.refresh()
+        elif kind == "snow_mode":               # winter (BNE_WINTER): another snow state live (a preset; dev / tests)
+            if snowcovermod.set_mode(msg.get("mode")):
+                self.s.snow_changed()
+                for c in list(self.s.connections):
+                    c.send({"type": "snow", "snow": snowcovermod.hello()})
         elif kind == "road_wear":               # the settings page's Road detail: the road tiles again, worn or not
             if self.s.set_road_wear(msg.get("value")):
                 self.roads.close()

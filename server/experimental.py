@@ -75,6 +75,7 @@ FEATURES = (
     ("expWatertight", {"BNE_WATERTIGHT": "on"}, None),                    # shells.ON
     ("expCanadaLidar", {"BNE_LIDARBC": "1", "BNE_HRDEM_NEAR": "1"}, None),     # dem.LIDARBC / HRDEM_NEAR
     ("expGenGround", {"BNE_GEN_GROUND": "on"}, None),                     # genground.ON
+    ("expWinter", {"BNE_WINTER": "on"}, None),                            # snowcover.ON (the winter plan's master)
     ("expStaleRevisit", {"BNE_STALE_REVISIT": "on"}, None),               # revisit.STALE_ON (not a key: NOT_SWITCHES)
 )
 IDS = tuple(f[0] for f in FEATURES)

@@ -1355,6 +1355,7 @@ local function onMessage(msg)
     st.deshadow = msg.deshadow -- server-side imagery de-shadowing ('lambert' / 'full'; nil = off), shown on the settings page
     st.colormatch = msg.colormatch -- server-side imagery colour-seam removal ('s2'; nil = off), likewise
     seasonlook.setMode(msg.season) -- the imagery's season (server --season): the leaves follow it
+    seasonlook.setSnow(msg.snow) -- winter's snow (server BNE_WINTER; nil: off): the snow layer's look, the grass
     st.mapPort = msg.mapPort -- the world map's tile endpoint on 127.0.0.1 (server/maptiles.py; nil = an older server)
     -- the download cache: the new server's usage follows its hello; it gets the page's size cap (the
     -- server keeps it for its next start too)
@@ -1613,6 +1614,8 @@ local function onMessage(msg)
     -- the BeamNG.Earth servers for the tab in BeamMP's server browser (serverlist.lua)
     local sl = rawget(_G, 'beamngEarth_serverlist')
     if sl and sl.onList then sl.onList(msg) end
+  elseif t == 'snow' then
+    seasonlook.setSnow(msg.snow) -- another snow state live (server snow_mode)
   elseif t == 'block_base' then
     -- detail mode: a block's base photo rendered again with its NAIP tiles (server base_refresh): the block
     -- in use takes it now, a ready one not committed yet takes it at its commit

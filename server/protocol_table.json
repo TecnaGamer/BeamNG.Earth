@@ -28,7 +28,9 @@
   "pose.cam": ["x", "y", "z", "fx", "fy", "fz", "fovDeg", "h"],
   "weather.cover": ["total", "low", "mid", "high"],
   "weather.wind": ["ms", "fromDeg", "gustMs"],
-  "weather.aloft": ["ms", "fromDeg"]
+  "weather.aloft": ["ms", "fromDeg"],
+  "hello.snow": ["mode", "cover", "depth"],
+  "snow.snow": ["mode", "cover", "depth"]
  },
  "mod_to_server": {
   "debug_map": {
@@ -283,6 +285,12 @@
    "doc": "town signs (townentry.py; additive): the settings page's switch, sent after every hello and on a change",
    "fields": {
     "on": {"type": "bool"}
+   }
+  },
+  "snow_mode": {
+   "doc": "winter (BNE_WINTER, snowcover.py; additive): another snow state live, a debug preset or none / real (dev tools and tests; the server answers with 'snow' and textures what is shown again)",
+   "fields": {
+    "mode": {"type": "str"}
    }
   },
   "road_wear": {
@@ -819,6 +827,7 @@
     "deshadow": {"type": "str", "optional": true, "doc": "--deshadow lambert|full only (the settings page shows it)"},
     "colormatch": {"type": "str", "optional": true, "doc": "--colormatch s2 only (likewise)"},
     "season": {"type": "str", "optional": true, "doc": "--season auto / fall (seasonlook.lua tints the leaves)"},
+    "snow": {"type": "dict", "optional": true, "doc": "BNE_WINTER only (snowcover.hello): {mode, cover 0..8, depth bin 0..6 for a preset}: winterlook.lua's snow layer look and the grass under snow"},
     "mapPort": {"type": "int", "optional": true, "doc": "the world map's tile endpoint on 127.0.0.1 (maptiles.py)"},
     "prewarm": {"type": "str", "optional": true, "doc": "the shape listing our shapes' materials (prewarm.py; with map data)"},
     "imageryCredits": {"type": "list", "optional": true, "doc": "the world map's credits for its view: [[credit, w, s, e, n] or [credit]] per imagery source, and the rest (weather, elevation); with imagery on only"},
@@ -999,6 +1008,12 @@
     "lon": {"type": "num"},
     "h": {"type": "num"},
     "source": {"type": "str"}
+   }
+  },
+  "snow": {
+   "doc": "winter (BNE_WINTER; additive): the snow state changed live (snow_mode): hello.snow's object again (winterlook.lua)",
+   "fields": {
+    "snow": {"type": "dict"}
    }
   },
   "block_base": {

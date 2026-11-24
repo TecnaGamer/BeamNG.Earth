@@ -148,6 +148,8 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expGenGround", type: "bool", default: false, name: "Generated ground", desc: "Experimental. The ground near you is made from 10 m satellite colour (Sentinel-2) and the map (land cover, fields, parks, pitches, squares, pools, paths, hedges, streams, tree heights, roads and buildings) instead of downloading 1 m aerial photos, and roofs take their mapped or typical colours instead of the photo's. Places load faster where the photo servers are slow or missing, but the ground shows less real detail where the map has none (unmapped ponds, drives and yards, crop stripes outside mapped fields).",
         note: RESTART_NOTE },
+      { id: "expWinter", type: "bool", default: false, name: "Winter", desc: "Experimental. Snow on the ground near and far where the weather has it, cut by the real terrain: lower on slopes facing away from the sun, none on cliffs, the forests staying dark, and permanent snow on high mountains and the poles. The 3D grass thins under snow and deep snow gets its own ground texture. Not yet: snowy roads, roofs and trees, and the snow's grip.",
+        note: RESTART_NOTE },
       { id: "expStaleRevisit", type: "bool", default: false, name: "Show the older world while rebuilding", desc: "Experimental. After an update, places you visited before show the previous version's roads, trees, signs and ground photos while the new version builds them, instead of loading as a first visit.",
         note: RESTART_NOTE },
     ],

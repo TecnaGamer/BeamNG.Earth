@@ -264,6 +264,34 @@ class LookTest(unittest.TestCase):
             self.assertLessEqual(int(np.abs(ob.astype(int) - of[750:, :250].astype(int)).max()), 3)
 
 
+class LiveTest(unittest.TestCase):
+    def test_state_change_textures_what_is_shown_again(self):
+        """snow_mode: another mode live (winter on only), every far tile with a texture marked stale and queued for the
+        live retexture, every block's photo for its refresh; the message's object is the protocol table's."""
+        import json
+        import earthd
+        with winter(on=False) as sc:
+            self.assertFalse(sc.set_mode("heavy"), "winter off: no snow mode")
+        with winter("none") as sc:
+            self.assertFalse(sc.set_mode("blizzard"))
+            self.assertTrue(sc.set_mode("heavy"))
+            self.assertEqual(sc.MODE, "heavy")
+            self.assertFalse(sc.set_mode("heavy"), "no change")
+            shown = SimpleNamespace(material="m", texture="t.dds", stale=False)
+            bare = SimpleNamespace(material=None, texture=None, stale=False)
+            queued = []
+            srv = SimpleNamespace(tiles={(1, "a"): shown, (1, "b"): bare}, near_visual="detail",
+                                  hm={(1, 0, 0): {}, (2, 0, 0): {}}, anchors={1: object()}, base_stale=set())
+            srv.retex_request = lambda ck, pump=True: queued.append(ck)
+            srv._retex_pump = lambda: None
+            self.assertEqual(earthd.Server.snow_changed(srv), 1)
+            self.assertEqual((queued, shown.stale, bare.stale), ([(1, "a")], True, False))
+            self.assertEqual(srv.base_stale, {(1, 0, 0)})
+            table = json.loads((Path(__file__).resolve().parents[1] / "protocol_table.json").read_text())
+            self.assertLessEqual(set(sc.hello()), set(table["nested"]["snow.snow"]))
+            self.assertLessEqual(set(sc.hello()), set(table["nested"]["hello.snow"]))
+
+
 class LayersTest(unittest.TestCase):
     def test_deep_snow_to_the_snow_layer(self):
         """A block's .ter lists the snow layer while winter is on; snow_layers moves its land samples under deep snow

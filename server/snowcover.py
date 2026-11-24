@@ -106,6 +106,17 @@ def set_provider(fn):
     _provider = fn
 
 
+def set_mode(mode):
+    """Another snow mode live (the server's main process: the specs are made there and handed to the workers):
+    True when it changed (the caller re-renders what is shown: earthd.Server.snow_changed). Winter must be on."""
+    global MODE
+    mode = str(mode or "").strip().lower()
+    if not ON or mode == MODE or not (mode in PRESETS or mode in ("none", "real")):
+        return False
+    MODE = mode
+    return True
+
+
 def field_for(south, west, north, east):
     if not ON or MODE == "none":
         return None
@@ -166,9 +177,10 @@ def _window(f, south, west, north, east):
 
 
 def deep_possible():
-    """Can a block get deep snow (its .ter then lists the snow layer: surface.write_ter / snow_layers)? Any snow mode
-    (a preset's depth or W1's state may reach D3, permanent snow does)."""
-    return ON and MODE != "none"
+    """Can a block get deep snow (its .ter then lists the snow layer: surface.write_ter / snow_layers)? While winter is
+    on, whatever the mode: a preset's depth or W1's state may reach D3 any time (set_mode, the state's hours), and the
+    block processes that write the .ter do not follow a live mode change."""
+    return ON
 
 
 def perm_possible(south, west, north, east):

@@ -4272,6 +4272,7 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     process's own CPU, one interpreter for every thread (55 s of a drive), and the far field waited on it. A tile
     built in this anchor's place before (and its texture) comes from the revisit cache."""
     import revisit
+    import snowcover
     mask = tex.get("mask") if tex.get("mask") and tex["mask"][1] else None
     k = _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex)
     got = revisit.load(_s.cache_dir, "far", k)
@@ -4297,7 +4298,8 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
             revisit.store(_s.cache_dir, "far", k, blobs, meta,
                           where=_where_enu(lat, lon, *tile.bbox, layout=repr(layout), md=_md_versions(),
                                            chain=tuple(tex["chain"]), tone=tex["tone"], leaf_on=tex["leaf_on"],
-                                           season_mode=tex["season_mode"]))
+                                           season_mode=tex["season_mode"],
+                                           **({"winter": True} if snowcover.ON else {})))
             _keep_fin(k, built, tex, mask, got, lat, lon)
         except Exception as e:          # (not kept rather than no tile)
             log.debug("revisit: far tile %s not kept: %s: %s", (tile.level, tile.i, tile.j), type(e).__name__, e)

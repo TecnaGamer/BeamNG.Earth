@@ -137,6 +137,7 @@ EXERCISED_ELSEWHERE = {"debug_map_result",  # test_cliff_debuglayers exercises s
                        "swap_begin", "swap_end", "swap_abort",       # a generation swap (test_stale_revisit.StaleSwapTest)
                        "runtime_profiler", "runtime_profiler_pong",  # opt-in feed/probe (test_runtimeprofiler_server)
                        "update_status",                              # the player's "Update now" (test_selfupdate)
+                       "snow",                                       # winter's live state (BNE_WINTER: test_snowcover)
                        "catchup",                                    # the catch-up boost: a driving player behind (test_catchup)
                        "where_result",                               # the status bar: asked by the mod while driving
                        "map_labels_result",                          # the 3D map's labels: asked in map mode
@@ -224,7 +225,7 @@ def mod_sends():
     (core hands them net.send)."""
     out = {}
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
-                              "addons.lua", "api.lua", "terrainfiles.lua"), r"net(?:'\))?\.send\(\{"),
+                              "addons.lua", "api.lua", "terrainfiles.lua", "winterlook.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua", "spaceclouds.lua", "globe.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{"),
                            (("reportsend.lua",), r"\bnet\(\)\.send\(\{")):
