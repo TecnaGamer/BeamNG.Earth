@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 57          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 58          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -98,6 +98,7 @@ VERSION = 57          # (the cached cells hold their groups: 14 for the regional
                       # 55: the veteran oaks in loose woods (veteran_oaks), the tropics' giant filler (G_TRO_GIANT)
                       # 56: the vineyards' edges filled with single rows (G_VINE_ROW)
                       # 57: those rows along each row line, flush with the field's edge (_vine_runs; 56's cells rebuilt)
+                      # 58: a group only where its three rows and their leaves fit (VINE_ROW_LEAF_M), the rows' too
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -2302,6 +2303,10 @@ VINE_ROW_ACROSS_M = 2.45
 VINE_ROW_HALF_M = 2.75      # m: half the piece's length
 VINE_ROW_END_M = 0.5
 VINE_ROW_SAMPLE_M = 0.5
+# (58) a row's leaves reach VINE_ROW_LEAF_M either side of its line: a group fits only where its three rows' ends and
+# middles do, and their leaves' edges (its outer rows lay over a slanted track, and its three rows ended in a step: the
+# user's Laufen, 2026-11-24); a single row's run is free only where its leaves' edges are too
+VINE_ROW_LEAF_M = 0.9
 VINE_ROW_MIN_M = 4.5         # (a shorter run: the 5.5 m piece would reach past the field's edge)
 VINE_ROW_H_M = 2.39         # the shape's height (trees.lua CATALOG.vine_row)
 EDGE_AXIS_DEG = 8.0         # _edge_axis: edges this near a direction count for it
@@ -2359,16 +2364,20 @@ def _vine_runs(xy, path, hps, chm, blocked, u, v, groups, phase_b, sec):
     out, ids = [], []
     if len(t) < 2 or m1 < m0:
         return np.zeros((0, 2)), np.zeros(0, np.int64)
+    leaf = VINE_ROW_LEAF_M * sec
     for m in range(m0, m1 + 1):
         b = phase_b + m * rs
-        q = t[:, None] * u[None, :] + b * v[None, :]
-        free = np.asarray(path.contains_points(q), bool)
+        line = t[:, None] * u[None, :] + b * v[None, :]
+        free = np.asarray(path.contains_points(line), bool)
         if not free.any():
             continue
-        for hp in hps:
-            free &= ~np.asarray(hp.contains_points(q), bool)
-        if blocked is not None and np.any(blocked):
-            free &= ~_blocked_at(q, chm, blocked)
+        for q in (line, line + leaf * v, line - leaf * v):      # (58: the leaves' edges too)
+            if q is not line:
+                free &= np.asarray(path.contains_points(q), bool)
+            for hp in hps:
+                free &= ~np.asarray(hp.contains_points(q), bool)
+            if blocked is not None and np.any(blocked):
+                free &= ~_blocked_at(q, chm, blocked)
         near = np.abs(gm - m) <= 1
         for a in ga[near]:
             free &= np.abs(t - a) > gh
@@ -2413,25 +2422,29 @@ def vineyard_items(feats, chm, blocked, bounds=None):
         hps = [Path(np.column_stack(_to3857(np.asarray(hole, np.float64)[:, 0], np.asarray(hole, np.float64)[:, 1])))
                for hole in holes if len(hole) >= 3]
 
+        v = np.array([-u[1], u[0]])
+        rs, leaf = VINE_ROW_ACROSS_M * sec, VINE_ROW_LEAF_M * sec
+
         def fits(c, k):
-            """an item centred at c (n, 2) reaching k along u either side: its ends in the field, out of its holes,
-            and its centre and ends free"""
-            ends = [c + k * u, c - k * u]
+            """a group centred at c (n, 2) reaching k along u either side: each of its three rows' ends in the field and
+            out of its holes, free all along (every metre), and the outer rows' leaves' edges too"""
             ok = np.ones(len(c), bool)
-            for e in ends:
-                ok &= np.asarray(path.contains_points(e), bool)
-                for hp in hps:
-                    ok &= ~np.asarray(hp.contains_points(e), bool)
-            if blocked is not None and np.any(blocked):
-                for q in [c] + ends:
-                    ok &= ~_blocked_at(q, chm, blocked)
+            for off in (-rs - leaf, -rs, 0.0, rs, rs + leaf):
+                line = c + off * v
+                ends = [line + k * u, line - k * u]
+                for e in ends:
+                    ok &= np.asarray(path.contains_points(e), bool)
+                    for hp in hps:
+                        ok &= ~np.asarray(hp.contains_points(e), bool)
+                if blocked is not None and np.any(blocked):     # (every metre along it: a track may cross between)
+                    for f in np.linspace(-1.0, 1.0, max(3, int(2 * k / sec) + 1)):
+                        ok &= ~_blocked_at(line + f * k * u, chm, blocked)
             return ok
 
         # the item's ends (a metre in from them) in the field too, and every one of its three points free
         ok = fits(pts, (0.5 * VINE_ALONG_M - 1.0) * sec)
         pts = pts[ok]
         # (56) the row lines' runs the groups leave: single rows flush with their ends
-        v = np.array([-u[1], u[0]])
         rows, rid = _vine_runs(xy, path, hps, chm, blocked, u, v, pts, phase_b, sec)
         if bounds is not None:
             ex0, ey0 = _to3857(bounds[0], bounds[1])

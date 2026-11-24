@@ -1368,6 +1368,35 @@ class VineyardTest(unittest.TestCase):
         self.assertTrue(np.array_equal(again.lon, it.lon) and np.array_equal(again.yaw, it.yaw), "deterministic")
         self.assertEqual(len(veg.vineyard_items(feats, chm, np.ones_like(clear), None)), 0, "roads / buildings: none")
 
+    def test_no_vine_over_a_slanted_track(self):
+        # (58) a 4 m track across the field at 30 degrees: no group's rows nor any single row's leaves on it
+        frame, feats, ring, chm, clear = self._field([0, 200, 200, 0, 0], [0, 0, 100, 100, 0])
+        blocked = clear.copy()
+        n_r, n_c = blocked.shape
+        cc, rr = np.meshgrid(np.arange(n_c), np.arange(n_r))
+        mx, my = chm.x0 + (cc + 0.5) * chm.dx, chm.y0 - (rr + 0.5) * chm.dy
+        lo, la = veg._to4326(mx.ravel(), my.ravel())
+        e, n, _ = frame.geodetic_to_enu(la, lo, np.zeros(len(la)))
+        d = np.abs(np.asarray(n) - 30.0 - np.tan(np.radians(30)) * (np.asarray(e) - 50.0)) * np.cos(np.radians(30))
+        blocked[:] = (d < 2.0).reshape(blocked.shape)
+        it = veg.vineyard_items(feats, chm, blocked, None)
+        self.assertGreater(len(it), 50)
+        cx, cy = veg._to3857(it.lon, it.lat)
+        sec = 1 / np.cos(np.radians(44.9))
+        g = np.asarray(it.group) == veg.G_VINE
+        yaw = np.radians(np.asarray(it.yaw, np.float64))
+        ux, uy = np.cos(yaw), np.sin(yaw)
+        hits = 0
+        for i in range(len(cx)):
+            half = (veg.VINE_ALONG_M / 2 - 1.0) if g[i] else (veg.VINE_ROW_HALF_M - 0.3)
+            offs = (-veg.VINE_ROW_ACROSS_M, 0.0, veg.VINE_ROW_ACROSS_M) if g[i] else (0.0,)
+            for o in offs:
+                for f in np.linspace(-1, 1, 15):
+                    px = cx[i] + (f * half * ux[i] - o * uy[i]) * sec
+                    py = cy[i] + (f * half * uy[i] + o * ux[i]) * sec
+                    hits += int(veg._blocked_at(np.array([[px, py]]), chm, blocked)[0])
+        self.assertEqual(hits, 0, "a vine row on the track")
+
     def test_only_vineyards(self):
         frame, feats, ring, chm, clear = self._field([0, 100, 100, 0, 0], [0, 0, 50, 50, 0], cls="orchard")
         self.assertEqual(len(veg.vineyard_items(feats, chm, clear, None)), 0)
