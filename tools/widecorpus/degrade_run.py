@@ -38,7 +38,8 @@ WARM = ("D0", "D1", "D2", "D3")
 
 
 def fingerprint():
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=TREE).strip().decode()
+    # (the server's and native code's committed trees, not HEAD: a commit of tools alone keeps the results)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD:server", "HEAD:native"], cwd=TREE).strip().decode()
     diff = subprocess.check_output(["git", "diff", "--binary", "HEAD", "--", "server", "native"], cwd=TREE)
     files = sorted([HERE / n for n in ("run.py", "common.py", "build.py", "checks.py", "scan.cpp", "degrade.py")] +
                    [HERE.parent / "roadgeoprobe.py", HERE.parent / "probes/markprobe.py"])
@@ -239,6 +240,9 @@ def main():
     ap.add_argument("--report", action="store_true", help="only write the tables of what has run")
     ap.add_argument("--no-bins", action="store_true", help="use the binaries already in bin/")
     ap.add_argument("--repeat", help="A/A: build these steps again for --places and list the files that differ")
+    ap.add_argument("--resume", action="store_true",
+                    help="finish the run with the code fingerprint it started with (after changes that build nothing "
+                         "differently: the runner, the tables)")
     args = ap.parse_args()
     if Path(args.run).name != args.run or args.run in ("", ".", ".."):
         ap.error("invalid run name")
@@ -268,7 +272,7 @@ def main():
             shutil.rmtree(old)
     if not args.no_bins:
         ensure_bins()
-    code = fingerprint()
+    code = read(run / "manifest.json")["code"] if args.resume and (run / "manifest.json").is_file() else fingerprint()
     save(run / "manifest.json", dict(code=code, radius=args.radius, steps=steps, places=ids,
                                      envs={s: degrade.env(s) for s in steps}))
     import degrade_areas
