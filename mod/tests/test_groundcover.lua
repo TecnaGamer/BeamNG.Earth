@@ -195,6 +195,13 @@ T.check(has('mediterranean', 5, 'cropRipe') and has('mediterranean', 7, 'stubble
   "the Mediterranean's earlier harvest; no fields in the tropics' profile")
 T.check(has('mediterranean', 4, 'flowers') and not has('mediterranean', 7, 'flowers') and has('mediterranean', 7, 'dry')
   and has('mediterranean', 1, 'small') and not has('mediterranean', 7, 'small'), 'Mediterranean: green spring, dry summer')
+-- (2026-11-24) the Atlantic's Csb (Porto, Galicia): a shorter dry season, some green through it; California's Csb as before
+T.check(gc.profileOf(9, nil, 41.16, -8.11) == 'mediterranean_oceanic' and gc.profileOf(9, nil, 37.8, -122.4) == 'mediterranean'
+  and gc.profileOf(9, nil, 40.9, -4.1) == 'mediterranean' and gc.profileOf(8, nil, 41.16, -8.11) == 'mediterranean'
+  and gc.profileOf(9) == 'mediterranean', 'the Atlantic Csb by its place only')
+T.check(has('mediterranean_oceanic', 8, 'smallSummer') and has('mediterranean_oceanic', 8, 'dry')
+  and has('mediterranean_oceanic', 6, 'small') and not has('mediterranean_oceanic', 6, 'dry')
+  and not has('mediterranean_oceanic', 8, 'small'), 'Atlantic Csb: green to June, some green in the dry summer')
 
 -- objects: only for the layers the block lists, more once a block lists more
 local st

@@ -3017,7 +3017,8 @@ local function onUpdate(dtReal, dtSim)
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
   require('beamngEarth/seasondate').sync(net)     -- (the photo's season date to the server: settings seasonDate)
-  groundcover.setLatitude(st.anchor and st.anchor.lat)   -- (the grass's season: its hemisphere)
+  groundcover.setLatitude(st.anchor and st.anchor.lat, st.anchor and st.anchor.lon)   -- (the grass's season: its
+  -- hemisphere; its place: the Atlantic's Csb)
   t = mark('ui', t)
   local frameMs = frameMs0
   statusbar.frame(frameMs0)

@@ -85,5 +85,13 @@ do
     T.check(t == 1 and tint[1] < 1 and tint[3] < tint[2], 'seeded grass: darker in mode ' .. tostring(m))
   end
 end
+-- (2026-11-24) the dry grasses darker, every season
+do
+  local dry
+  for _, sp in ipairs(S.SPECIES) do if sp.mats[1] == 'm_grass_dry_01' then dry = sp end end
+  T.check(dry ~= nil and dry.mats[2] == 'm_grass_dry_02', 'the dry grasses have their tint')
+  local tint, t = S.speciesTint(dry, 'auto', 220, 41.2)
+  T.check(t == 1 and tint[1] < 0.8 and tint[1] >= tint[3], 'dry grass: darker, a little less warm')
+end
 
 T.done('test_seasonlook')

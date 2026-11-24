@@ -37,6 +37,10 @@ M.SPECIES = {
   -- meadows' heads m_seeded_grass_01, the reeds and tall grass m_seeded_grass_03) pale yellow-green, brighter than the
   -- grass round them, near and far (the grass has no imposters), the user's screenshot
   { mats = { 'm_seeded_grass_01', 'm_seeded_grass_03' }, merged = {}, folders = {}, always = { 0.78, 0.85, 0.7 } },
+  -- (2026-11-24) the dry grasses (West Coast USA's m_grass_dry_01, Automation Test Track's m_grass_dry_02: the summer-dry
+  -- climates' and the steppes' straw) a light straw that shone gold over whole hillsides in a low sun, Porto's in
+  -- August, the user's comparison: darker and a little less warm
+  { mats = { 'm_grass_dry_01', 'm_grass_dry_02' }, merged = {}, folders = {}, always = { 0.74, 0.72, 0.7 } },
 }
 -- (oaks turn last; folders: the species' tree shapes, whose far imposters (the engine's flat pictures of a whole tree,
 -- materials 'imposter_mat__<shape path>') take the same tint: they kept their summer green while the 3D trees in front

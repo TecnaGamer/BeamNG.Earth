@@ -303,6 +303,25 @@ M.PROFILES = {
     -- irrigated town lawns
     E('lawn', 'wcusa', 'mown_grass_close', LAWN, 0.6),
   }, wetland(0.05, 0.15, 0.01), fields({ young = span(12, 3), ripe = span(4, 5), stubble = span(6, 8), ripeShare = 0.6 })),
+  -- (2026-11-24) Csb and Csc on the Atlantic (ATLANTIC_CSB: Galicia, northern Portugal, over 1000 mm a year, the
+  -- user's Porto in August all gold): a shorter dry season (July to September) and some green through it, the
+  -- grass's 0.3 as 0.12; California's and the meseta's Csb keep the Mediterranean's golden summer
+  mediterranean_oceanic = join({
+    smallGrass(0.3, 0.27, 0.27, 0.1, { months = span(10, 6) }),
+    smallGrass(0.12, 0.1, 0.1, 0, { id = 'smallSummer', months = span(7, 9) }),
+    longGrass(0.1, { months = span(10, 6) }),
+    E('flowers', 'italy', 'flowers', G, 0.3, { months = span(3, 6) }),
+    E('buttercups', 'cliff', 'Buttercup1', G, 0.04, { months = span(3, 5) }),
+    E('daisies', 'eca', 'Daisies', G, 0.1, { months = span(2, 6), types = { [4] = { layer = LAWN, p = 0.5 } },
+      fields = { radius = 60, dissolveRadius = 40 } }),
+    dryGrass(0.2, { months = span(7, 9) }),
+    dryGrass(0.1, { id = 'dryWet', months = span(10, 6) }),
+    E('dry2', 'att', 'grass_dry_2', G, 0.1, { months = span(7, 9) }),
+    E('herb', 'italy', 'shrub_grass_02', G, 1.0, { months = span(6, 10),
+      types = { [0] = { layer = FOREST, p = 0.5 }, [2] = { layer = DUSTY, p = 0.5 } } }),
+    E('garrigue', 'italy', 'shrubs', DUSTY, 0.04),
+    E('lawn', 'wcusa', 'mown_grass_close', LAWN, 0.6),
+  }, wetland(0.05, 0.15, 0.01), fields({ young = span(12, 3), ripe = span(5, 6), stubble = span(7, 8), ripeShare = 0.6 })),
   -- BSh, BSk: dry tussocks on the arid grassland, spring's green and flowers
   steppe = join({
     dryGrass(0.2, { types = { [0] = { layer = DRY, p = 0.2 }, [1] = { layer = DRY, p = 1 }, [4] = { layer = DRY, p = 1 },
@@ -434,8 +453,14 @@ local KOPPEN = { 'tropical', 'tropical', 'savanna', 'desert_hot', 'desert_cold',
   'mediterranean', 'mediterranean', 'mediterranean', 'subtropical', 'temperate', 'temperate', 'subtropical',
   'temperate', 'temperate', 'continental', 'continental', 'boreal', 'boreal', 'continental', 'continental', 'boreal',
   'boreal', 'continental', 'continental', 'boreal', 'boreal', 'tundra', 'tundra' }
-function M.profileOf(k, biome)
+-- the Atlantic's Csb / Csc (mediterranean_oceanic): northwestern Iberia, west of the meseta's dry interior
+M.ATLANTIC_CSB = { lat0 = 39.5, lat1 = 44.5, lon0 = -10.0, lon1 = -6.5 }
+function M.profileOf(k, biome, lat, lon)
   k = tonumber(k)
+  local a, la, lo = M.ATLANTIC_CSB, tonumber(lat), tonumber(lon)
+  if (k == 9 or k == 10) and la and lo and la >= a.lat0 and la <= a.lat1 and lo >= a.lon0 and lo <= a.lon1 then
+    return 'mediterranean_oceanic'
+  end
   if k and KOPPEN[k] then return KOPPEN[k] end
   if type(biome) == 'table' then
     local set, var = tonumber(biome[1]), tonumber(biome[2]) or 0
@@ -542,6 +567,7 @@ local climate = { k = nil, biome = nil }
 local profile = 'generic'
 local month = nil         -- the profile day (DAY_STEP steps) the objects were made for
 local lat = nil
+local lon = nil         -- (the anchor's: the Atlantic's Csb, M.profileOf)
 local keepSeen = false    -- (remake: the same place, the layers seen kept)
 M.dayOverride = nil       -- (console: a calendar day of the year instead of today's)
 
@@ -763,7 +789,7 @@ end
 -- ambience set): another profile makes the objects again (at a climate border, seldom: the vote holds its choice).
 function M.setClimate(k, biome)
   climate.k, climate.biome = tonumber(k), biome
-  local p = M.profileOf(k, biome)
+  local p = M.profileOf(k, biome, lat, lon)
   if p == profile then return false end
   profile = p
   remake()
@@ -772,9 +798,13 @@ end
 
 -- The anchor's latitude (core, every frame: the season's hemisphere); a new profile day makes the objects again.
 local monthCheck = -math.huge
-function M.setLatitude(v)
+function M.setLatitude(v, w)
   local was = lat
-  lat = tonumber(v)
+  lat, lon = tonumber(v), tonumber(w)
+  if climate.k then     -- (the Atlantic's Csb by the anchor's place: a new place may change the profile)
+    local p = M.profileOf(climate.k, climate.biome, lat, lon)
+    if p ~= profile then profile = p; remake(); return end
+  end
   if #created == 0 or not month then return end
   -- (looked at once a minute, or at once when the hemisphere changes: os.date each frame is waste)
   local now = os.clock()
