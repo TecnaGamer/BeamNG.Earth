@@ -1140,6 +1140,34 @@ do
   for _, v in ipairs(trees.CATALOG.mediterranean) do if v[1]:find('holm_oak_city', 1, true) then inForest = inForest + 1 end end
   -- (offline the game's files are not there: setup drops the copies it could not write, else both stand in the open)
   T.check((inOpen == 2 or inOpen == 0) and inForest == 0, 'the copies in the open twin only, or none when not written')
+  -- the woods' holm oaks (2026-11-24): the tree in the woods and in the open, the fillers in the woods only, the bushes
+  -- in the maquis, the filler group as the far clump; each a copy (never the stock shape with its deciduous leaves)
+  local function count(g, k)
+    local n = 0
+    for _, v in ipairs(trees.CATALOG[g]) do if v[1]:find(k, 1, true) then n = n + 1 end end
+    return n
+  end
+  local wrote = count('mediterranean', 'holm_oak_v1') == 1
+  T.check(count('mediterranean_open', 'holm_oak_v1') == (wrote and 1 or 0), 'the holm oak in the open too')
+  T.check(count('mediterranean', 'holm_oak_filler_') == (wrote and 2 or 0)
+    and count('mediterranean_open', 'holm_oak_filler') == 0, 'its fillers in the woods only')
+  T.check(count('maquis', 'holm_oak_bush') == (wrote and 2 or 0), 'its bushes in the maquis')
+  T.check(count('mediterranean_clump', 'holm_oak_filler_center_v1') == (wrote and 1 or 0), 'its far clump')
+  local stockHolm = 0
+  for _, list in pairs(trees.CATALOG) do
+    for _, v in ipairs(list) do
+      if v[1]:find('trees_italy/holm_oak', 1, true) and not v[1]:find('holm_oak_city', 1, true) then stockHolm = stockHolm + 1 end
+    end
+  end
+  T.check(stockHolm == 0, 'no stock holm oak anywhere (its leaves turn in the fall)')
+  -- (55) the veteran oak and the tropics' giant filler: their own groups only (the server places them)
+  T.check(#trees.CATALOG.oak_veteran == 1 and trees.CATALOG.oak_veteran[1][1]:find('tree_oak_large_a', 1, true) ~= nil,
+    'the veteran oak group')
+  T.check(#trees.CATALOG.tro_giant == 1 and count('tropical', 'filler_04') == 0, 'the giant filler its own group only')
+  T.check(count('oak', 'tree_oak_large_a') == 0 and count('deciduous', 'tree_oak_large_a') == 0,
+    'no veteran among the common oaks')
+  T.check(count('pine_eu', 'scots_pine_filler') == 1 and count('pine_eu_open', 'scots_pine_filler') == 0,
+    'the crowd-grown Scots pine in the woods only')
   -- (the olive's copy replaces the stock olive in every group, or offline the stock one is back: never both)
   local copyN, stockN = 0, 0
   for _, list in pairs(trees.CATALOG) do
@@ -1149,7 +1177,7 @@ do
     end
   end
   T.check((copyN == 0) ~= (stockN == 0), 'the olive: its copy or the stock one, not both')
-  T.check(#trees.SHAPE_COPIES == 4 and trees.SHAPE_COPIES[1].out:find('^/temp/beamngEarth/shapes/') ~= nil,
+  T.check(#trees.SHAPE_COPIES == 10 and trees.SHAPE_COPIES[1].out:find('^/temp/beamngEarth/shapes/') ~= nil,
     'the copies in the user folder')
   -- the fluffy bush's copy: its material renamed, its colour factor the stock one times the tint (in the definition:
   -- the far imposter bakes darker, no reload)

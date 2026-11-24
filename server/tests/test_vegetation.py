@@ -836,6 +836,37 @@ class PalmFitTest(unittest.TestCase):
         self.assertEqual(float(veg.palm_fit(la[:1], lo[:1], None, np.array([4]))[0]), 1.0, "a hot desert's oasis")
 
 
+class VeteranOakTest(unittest.TestCase):
+    """(55) A rare veteran oak inside loose broadleaf woods (veteran_oaks), never in the open or a dense stand."""
+
+    def test_cover(self):
+        m = np.zeros((10, 10), bool)
+        m[:, :5] = True
+        c = veg._cover_at(m, 1, np.array([5, 5, 5, 0]), np.array([0, 4, 9, 0]))
+        self.assertEqual(list(c), [1.0, 2 / 3, 0.0, 1.0])        # (the window clipped at the edges)
+
+    def test_rules(self):
+        n = 8
+        g = np.array([veg.G_OAK, veg.G_DECIDUOUS, veg.G_OAK, veg.G_DECIDUOUS_OPEN, veg.G_OAK, veg.G_BEECH, veg.G_OAK,
+                      veg.G_OAK], np.uint8)
+        h = np.array([13.0, 15.0, 13.0, 13.0, 25.0, 13.0, 13.0, 13.0])
+        lat = np.array([50.0] * 7 + [10.0])
+        lc = np.full(n, veg.WC["tree"], np.uint8)
+        cover = np.array([0.4, 0.5, 0.9, 0.4, 0.4, 0.4, 0.4, 0.4])
+        u = np.array([0.01, 0.02, 0.01, 0.01, 0.01, 0.01, 0.5, 0.01])
+        out = veg.veteran_oaks(g, h, lat, lc, cover, u)
+        self.assertEqual(list(out == veg.G_OAK_VETERAN),
+                         [True, True, False, False, False, False, False, False])
+        # (a dense stand, the open twin, too tall, a beech, the hash over the share, the tropics: none)
+        self.assertEqual(list(veg.veteran_oaks(g, h, lat, np.full(n, veg.WC["grass"], np.uint8), cover, u)
+                              == veg.G_OAK_VETERAN), [False] * n)
+
+    def test_groups_in_order(self):
+        self.assertEqual(veg.GROUPS[veg.G_OAK_VETERAN], "oak_veteran")
+        self.assertEqual(veg.GROUPS[veg.G_TRO_GIANT], "tro_giant")
+        self.assertEqual(len(veg.GROUPS), 61)
+
+
 class NorthBirchTest(unittest.TestCase):
     """(49) Europe's north: fewer conifers than the leaf maps (EU-Forest's plots), its broadleaves birches."""
 

@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 54          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 55          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -95,6 +95,7 @@ VERSION = 54          # (the cached cells hold their groups: 14 for the regional
                       # 52: the riverside poplars off the forest's land cover (regional)
                       # 53: the far clumps at one of their trees, not the square's centroid (_unlattice: no lattice)
                       # 54: the town palms by the sea and low only (palm_fit)
+                      # 55: the veteran oaks in loose woods (veteran_oaks), the tropics' giant filler (G_TRO_GIANT)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -122,7 +123,9 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
           # (35: the world's own, species_groups' biome rules)
           "savanna", "laurel", "pine_maritime",
           # (48: the tropics' dead wood: Jungle Rock Island's fallen fronds and branches, its fallen giant)
-          "deadwood_tropical")
+          "deadwood_tropical",
+          # (55: a rare veteran oak inside loose broadleaf woods; the tropics' giant filler in remote forest)
+          "oak_veteran", "tro_giant")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
@@ -130,7 +133,7 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
  G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP, G_MAQUIS, G_SHRUB_NORTH, G_SHRUB_TROPICAL, G_FERN, G_DEADWOOD,
  G_TRO_THICKET, G_DECIDUOUS_OPEN, G_OAK_OPEN, G_BIRCH_OPEN, G_BEECH_OPEN, G_PINE_WEST_OPEN, G_MEDITERRANEAN_OPEN,
  G_TROPICAL_OPEN, G_CONIFER_OPEN, G_SPRUCE_OPEN, G_PINE_EU_OPEN, G_REDWOOD, G_TRO_UNDERSTORY,
- G_DESERT_SHRUB_HOT, G_SAVANNA, G_LAUREL, G_PINE_MARITIME, G_DEADWOOD_TROPICAL) = range(59)
+ G_DESERT_SHRUB_HOT, G_SAVANNA, G_LAUREL, G_PINE_MARITIME, G_DEADWOOD_TROPICAL, G_OAK_VETERAN, G_TRO_GIANT) = range(61)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -1118,6 +1121,45 @@ OPEN_FROM = {G_DECIDUOUS: G_DECIDUOUS_OPEN, G_OAK: G_DECIDUOUS_OPEN, G_BIRCH: G_
              G_SNAG_BROAD: G_DECIDUOUS_OPEN, G_SNAG_CONIFER: G_CONIFER_OPEN}
 
 
+# (55) The veteran oaks (the user, 2026-11-24: "the veteran should be there but rare inside loose forests"): East
+# Coast USA's tree_oak_large_a, a broad old oak with a flared, buttressed trunk, out since 2026-11-20 (scaled to a 20 m
+# forest tree its trunk was a 3-4 m boulder of bark, and it stood in roadside rows of clones). Now its own group, for
+# VETERAN_SHARE of the broadleaf woods' oaks and broadleaves VETERAN_H tall (near its own 13.2 m: the trunk ~2-3 m
+# across, an old oak's) where the canopy is loose (under VETERAN_COVER of the pixels within VETERAN_WIN_M are canopy:
+# an old oak grew up in the open, a wood pasture's, a forest edge's or a glade's), in the temperate latitudes, never
+# in the open (by a road, in town: their _open twins are not taken).
+VETERAN_SHARE = 0.03
+VETERAN_H = (11.0, 17.0)
+VETERAN_COVER = 0.6
+VETERAN_WIN_M = 15.0
+VETERAN_LAT = (30.0, 62.0)
+
+
+def _cover_at(m, r, jj, ii):
+    """The share of m's pixels in the (2r+1)^2 window around the pixels (jj, ii), the window clipped at the grid's
+    edges. Pure, exact (integer sums)."""
+    m = np.asarray(m)
+    n_r, n_c = m.shape
+    c = np.zeros((n_r + 1, n_c + 1), np.int64)
+    c[1:, 1:] = m.astype(np.int64).cumsum(0).cumsum(1)
+    jj, ii = np.asarray(jj, np.int64), np.asarray(ii, np.int64)
+    r0, r1 = np.clip(jj - r, 0, n_r), np.clip(jj + r + 1, 0, n_r)
+    c0, c1 = np.clip(ii - r, 0, n_c), np.clip(ii + r + 1, 0, n_c)
+    s = c[r1, c1] - c[r0, c1] - c[r1, c0] + c[r0, c0]
+    return s / np.maximum(1, (r1 - r0) * (c1 - c0))
+
+
+def veteran_oaks(group, height, lat, lcls, cover, u):
+    """group with the veteran oaks (VETERAN_*) in G_OAK_VETERAN: the forest's (land cover tree) oaks and broadleaves
+    VETERAN_H tall where the canopy cover is under VETERAN_COVER, u (hashed [0, 1) per tree) under VETERAN_SHARE.
+    Pure."""
+    g = np.array(group, np.uint8, copy=True)
+    h, a = np.asarray(height), np.abs(np.asarray(lat))
+    v = _in(g, (G_OAK, G_DECIDUOUS)) & (np.asarray(lcls) == WC["tree"]) & (h >= VETERAN_H[0]) & (h <= VETERAN_H[1])         & (a >= VETERAN_LAT[0]) & (a <= VETERAN_LAT[1]) & (np.asarray(cover) < VETERAN_COVER)         & (np.asarray(u) < VETERAN_SHARE)
+    g[v] = G_OAK_VETERAN
+    return g
+
+
 def open_groups(group, open_):
     """group with the trees in the open (per item, open_) in their OPEN_FROM twins. Pure."""
     g = np.array(group, np.uint8, copy=True)
@@ -1167,6 +1209,11 @@ THICKET_H = (5.5, 7.5)
 # branches, now and then a fallen giant: Jungle Rock Island's, unused before; the user, 2026-11-19: "use as many of the
 # available assets as possible"), DEADWOOD_H tall as the temperate dead wood
 THICKET_SHARE = 0.5
+# (55) and TRO_GIANT_SHARE of the thickets Jungle Rock Island's giant filler (tro_tree_2_filler_04: a 24 m dome of aerial
+# roots and vines, 27 m across; the user, 2026-11-24: "only far away from roads"), TRO_GIANT_ROAD_M or more from any road
+TRO_GIANT_SHARE = 0.25
+TRO_GIANT_H = (22.0, 26.0)
+TRO_GIANT_ROAD_M = 80.0
 # Trees in the open (OPEN_ROAD_M from a road's edge, or on built-up land): no forest-interior shapes there (the
 # forest trees and fillers by their names, *_forest*, *filler*: tall, thin, sparse; East Coast USA's mossy oaks,
 # tree_oak_large_*: moss on a trunk by an asphalt road, the user's test 2026-11-16, and a veteran's huge gnarled
@@ -1549,6 +1596,10 @@ class Vegetation:
             near = _dilate(curb, max(1, int(round(OPEN_ROAD_M * sec / chm.dx))))
             open_ |= near[jj, ii]
         group = open_groups(group, open_)
+        # (55) a rare veteran oak inside loose broadleaf woods (veteran_oaks: never in the open, the twins above)
+        vsec = 1.0 / max(0.05, dmath.cos(dmath.radians(clat)))
+        cover = _cover_at(hs >= TREE_MIN_M, max(1, int(round(VETERAN_WIN_M * vsec / chm.dx))), jj, ii)
+        group = veteran_oaks(group, th, tlat, lcls, cover, _hash01(gx, gy, 39))
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
         tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)
@@ -1683,14 +1734,24 @@ class Vegetation:
         if not keep.any():
             return _empty()
         GI, GJ, lon, lat, k = GI[keep], GJ[keep], lon[keep], lat[keep], k[keep]
+        px, py = px[keep], py[keep]
         n = len(lon)
         tro = np.isin(k, K_RAINFOREST + K_SAVANNA) & (np.abs(lat) < 23.5)
         thicket = tro & (_hash01(GI, GJ, 88) < THICKET_SHARE)
-        lo_h = np.where(thicket, THICKET_H[0], DEADWOOD_H[0])
-        hi_h = np.where(thicket, THICKET_H[1], DEADWOOD_H[1])
+        giant = thicket & (_hash01(GI, GJ, 89) < TRO_GIANT_SHARE)
+        if giant.any() and road.any():
+            near, b = _coarse_near(road, TRO_GIANT_ROAD_M * sec / chm.dx)
+            gc = np.clip(np.floor((px - chm.x0) / chm.dx).astype(np.int64), 0, road.shape[1] - 1)
+            gr = np.clip(np.floor((chm.y0 - py) / chm.dy).astype(np.int64), 0, road.shape[0] - 1)
+            giant &= ~near[gr // b, gc // b]
+        thicket &= ~giant
+        lo_h = np.where(giant, TRO_GIANT_H[0], np.where(thicket, THICKET_H[0], DEADWOOD_H[0]))
+        hi_h = np.where(giant, TRO_GIANT_H[1], np.where(thicket, THICKET_H[1], DEADWOOD_H[1]))
         h = (lo_h + (hi_h - lo_h) * _hash01(GI, GJ, 84)).astype(np.float32)
-        group = np.where(thicket, G_TRO_THICKET, np.where(tro, G_DEADWOOD_TROPICAL, G_DEADWOOD))
-        return Items(lon, lat, h, np.where(thicket, 0.6 * h, 1.5 * h).astype(np.float32), np.full(n, KIND_BUSH, np.uint8),
+        group = np.where(giant, G_TRO_GIANT,
+                         np.where(thicket, G_TRO_THICKET, np.where(tro, G_DEADWOOD_TROPICAL, G_DEADWOOD)))
+        r_m = np.where(giant, 0.5 * h, np.where(thicket, 0.6 * h, 1.5 * h))
+        return Items(lon, lat, h, r_m.astype(np.float32), np.where(giant, KIND_TREE, KIND_BUSH).astype(np.uint8),
                      group.astype(np.uint8), _hash01(GI, GJ, 85).astype(np.float32),
                      (_hash01(GI, GJ, 86) * 360.0).astype(np.float32),
                      (0.85 + 0.3 * _hash01(GI, GJ, 87)).astype(np.float32))
