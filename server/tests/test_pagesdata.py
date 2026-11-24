@@ -37,10 +37,13 @@ class Site:
         self.calls = []
         self.answer = netfetch.Offline
         self.lock = threading.Lock()
+        self.release = threading.Event()    # (a test holding the answer back: cleared until it sets it)
+        self.release.set()
 
     def get(self, url, kind="demand"):
         with self.lock:
             self.calls.append(url)
+        self.release.wait(10)
         a = self.answer
         if isinstance(a, type) and issubclass(a, Exception):
             if issubclass(a, netfetch.FetchError):
@@ -147,7 +150,9 @@ class StaleIfErrorTest(unittest.TestCase):
             m, site = self._stale(cache, json.dumps({"built": "new", "files": {}}).encode())
             changed = []
             m.on_change = lambda: changed.append(m.built)
+            site.release.clear()        # (the refresh's answer held back: no race with a fast machine)
             self.assertEqual(m.build(), "old", "the pin in use while the refresh runs")
+            site.release.set()
             settle(m, site, 1)
             self.assertEqual(m.build(), "new", "the fresh manifest taken")
             self.assertEqual(changed, ["old", "new"])
