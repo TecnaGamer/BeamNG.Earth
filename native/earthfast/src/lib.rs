@@ -110,6 +110,7 @@ mod roadz;
 mod fartex;
 mod photojpeg;
 mod leafon;
+mod snowlook;
 mod photomesh;
 mod deshadow;
 mod colormatch;
@@ -6890,6 +6891,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::cut_ground, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::core_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
+    m.add_class::<snowlook::SnowLook>()?;
+    m.add_function(wrap_pyfunction!(snowlook::snow_ela, m)?)?;
+    m.add_function(wrap_pyfunction!(snowlook::snow_perm_possible, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::season_amounts, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::leaf_on, m)?)?;
@@ -7791,6 +7795,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // hung the exit, server/fast.py's atexit hook calls it)
     m.add_function(wrap_pyfunction!(begin_exit, m)?)?;
     m.add_function(wrap_pyfunction!(exit_guard_counts, m)?)?;
-    m.add("VERSION", 622)?;
+    m.add("VERSION", 623)?;
     Ok(())
 }

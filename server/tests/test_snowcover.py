@@ -1,0 +1,241 @@
+"""snowcover (winter W2): the snow term on the ground photos, its band tables and its keys."""
+import importlib
+import os
+import sys
+import unittest
+from contextlib import contextmanager
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import geodesy  # noqa: E402
+import revisit  # noqa: E402
+import snowcover  # noqa: E402
+
+
+@contextmanager
+def winter(snow=None, on=True):
+    """snowcover as a server started with BNE_WINTER / BNE_SNOW would have it (module constants: reloaded)."""
+    old = {k: os.environ.get(k) for k in ("BNE_WINTER", "BNE_SNOW")}
+    try:
+        for k in old:
+            os.environ.pop(k, None)
+        if on:
+            os.environ["BNE_WINTER"] = "on"
+        if snow is not None:
+            os.environ["BNE_SNOW"] = snow
+        importlib.reload(snowcover)
+        yield snowcover
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        snowcover.set_provider(None)
+        importlib.reload(snowcover)
+
+
+ALPS = (46.55, 7.95)        # a polar / alpine Koppen class near (permanent snow possible)
+PLAINS = (40.0, -89.0)      # Illinois: none
+
+
+def ramp(lo, hi, n=65, axis=0):
+    """A height grid rising from lo to hi to the north (axis 0) or the east (axis 1)."""
+    v = np.linspace(lo, hi, n)
+    return np.tile(v[:, None], (1, n)) if axis == 0 else np.tile(v[None, :], (n, 1))
+
+
+class OffTest(unittest.TestCase):
+    def test_off_reads_and_keys_nothing(self):
+        with winter(on=False) as sc:
+            self.assertFalse(sc.ON)
+            self.assertEqual(sc.MODE, "none")
+            self.assertIsNone(sc.spec_for_box(46.0, 7.0, 47.0, 8.0))
+            self.assertIsNone(sc.spec_for_square(geodesy.EnuFrame(*ALPS), -500, -500, 1000))
+            self.assertEqual(sc.key_parts(None), ())
+            self.assertIsNone(sc.hello())
+
+    def test_none_is_todays_key(self):
+        """BNE_SNOW=none with winter on: no spec, no key part, and the switches stay out of the code key (every key
+        that holds no snow part is today's)."""
+        revisit._switches.clear()
+        base = revisit.switches_key()
+        with winter("none") as sc:
+            revisit._switches.clear()
+            self.assertEqual(revisit.switches_key(), base)
+            self.assertIsNone(sc.spec_for_box(*ALPS, ALPS[0] + 0.01, ALPS[1] + 0.01))
+            self.assertEqual(revisit.key("far", 1, 2, *sc.key_parts(None)), revisit.key("far", 1, 2))
+        with winter("heavy") as sc:
+            revisit._switches.clear()
+            self.assertEqual(revisit.switches_key(), base, "BNE_WINTER / BNE_SNOW are keyed by the specs, not the code")
+            sp = sc.spec_for_box(*PLAINS, PLAINS[0] + 0.01, PLAINS[1] + 0.01)
+            self.assertIsNotNone(sp)
+            self.assertNotEqual(revisit.key("far", 1, 2, *sc.key_parts(sp)), revisit.key("far", 1, 2))
+        revisit._switches.clear()
+
+
+class KeyTest(unittest.TestCase):
+    def box(self, at=PLAINS, d=0.05):
+        return (at[0] - d, at[1] - d, at[0] + d, at[1] + d)
+
+    def test_presets_differ(self):
+        sigs = {}
+        for name in snowcover.PRESETS:
+            with winter(name) as sc:
+                sigs[name] = sc.spec_for_box(*self.box()).sig
+                self.assertEqual(sc.spec_for_box(*self.box()).sig, sigs[name], "a spec is a pure function")
+        self.assertEqual(len(set(sigs.values())), len(sigs), sigs)
+
+    def test_band_tables_never_share_a_key(self):
+        """Any change of a table the box reads (a row's elevation, cover, depth, age, a road share) is another key;
+        a change in a cell the box does not read is not."""
+        T = snowcover.Table
+        base = T(((200, 0, 0, 0), (600, 8, 3, 0)), (8, 8, 8, 8, 8))
+        variants = [base, T(((200, 0, 0, 0), (601, 8, 3, 0)), base.road), T(((200, 0, 0, 0), (600, 7, 3, 0)), base.road),
+                    T(((200, 0, 0, 0), (600, 8, 4, 0)), base.road), T(((200, 0, 0, 0), (600, 8, 3, 1)), base.road),
+                    T(base.rows, (8, 8, 8, 8, 7)), T(((600, 8, 3, 0),), base.road)]
+        with winter("real") as sc:
+            sigs = []
+            for t in variants:
+                sc.set_provider(lambda s, w, n, e, t=t: sc.Field(0.1, uniform=t))
+                sigs.append(sc.spec_for_box(*self.box()).sig)
+            self.assertEqual(len(set(sigs)), len(sigs))
+            # a per-cell field: the box's own cells and their padding are read, a cell far away is not
+            ci, cj = int((PLAINS[1] + 180) / 0.1), int((90 - PLAINS[0]) / 0.1)
+            cells = {(ci + di, cj + dj): base for di in range(-3, 4) for dj in range(-3, 4)}
+            sc.set_provider(lambda s, w, n, e: sc.Field(0.1, cells))
+            a = sc.spec_for_box(*self.box(d=0.01)).sig
+            far = dict(cells)
+            far[(ci + 3, cj + 3)] = variants[1]
+            sc.set_provider(lambda s, w, n, e: sc.Field(0.1, far))
+            self.assertEqual(sc.spec_for_box(*self.box(d=0.01)).sig, a, "a cell the box does not read")
+            near = dict(cells)
+            near[(ci, cj)] = variants[1]
+            sc.set_provider(lambda s, w, n, e: sc.Field(0.1, near))
+            self.assertNotEqual(sc.spec_for_box(*self.box(d=0.01)).sig, a)
+            # no cover anywhere round the box and no permanent snow: no spec (today's keys)
+            sc.set_provider(lambda s, w, n, e: sc.Field(0.1, uniform=T(((0, 0, 0, 0),), base.road)))
+            self.assertIsNone(sc.spec_for_box(*self.box()))
+            sc.set_provider(None)
+            self.assertIsNone(sc.spec_for_box(*self.box()), "real without W1's state: none")
+
+    def test_permanent_snow_only_in_polar_alpine_climates(self):
+        with winter("real") as sc:
+            self.assertIsNone(sc.spec_for_box(*self.box(PLAINS)))
+            sp = sc.spec_for_box(*self.box(ALPS))
+            self.assertTrue(sp is not None and sp.perm and sp.field is None)
+            self.assertTrue(sc.perm_possible(71.9, -40.1, 72.0, -40.0), "Greenland")
+            self.assertFalse(sc.perm_possible(-1.0, 20.0, -0.9, 20.1), "the Congo")
+
+    def test_server_specs(self):
+        """earthd's base photo key and render take one spec of write_base's square; the far tiles' of tile_where's."""
+        import earthd
+        import heightmap
+        with winter("heavy") as sc:
+            anchor = SimpleNamespace(frame=geodesy.EnuFrame(*PLAINS), lat=PLAINS[0], lon=PLAINS[1])
+            srv = SimpleNamespace(layout=SimpleNamespace(block=1024))
+            size = 1024 * heightmap.SQUARE
+            got = earthd.Server.base_snow(srv, anchor, 0.0, 0.0)
+            want = sc.spec_for_square(anchor.frame, -size / 2 - earthd.BASE_SHIFT_M, -size / 2 - earthd.BASE_SHIFT_M,
+                                      size)
+            self.assertEqual(got.sig, want.sig)
+        with winter(on=False):
+            self.assertIsNone(earthd.Server.base_snow(srv, anchor, 0.0, 0.0))
+
+
+class LookTest(unittest.TestCase):
+    def setUp(self):
+        self.frame = geodesy.EnuFrame(*PLAINS)
+
+    def look(self, sc, U, x0=-500.0, size=1000.0, n=65):
+        sp = sc.spec_for_square(self.frame, x0, x0, size)
+        return sp, sc.look(sp, self.frame, x0, x0, size, U, x0, x0, size / (n - 1))
+
+    def table(self, sc, rows):
+        sc.set_provider(lambda s, w, n, e: sc.Field(0.25, uniform=sc.Table(rows, sc.NO_ROAD)))
+
+    def test_line_cut_by_height_and_aspect(self):
+        with winter("real") as sc:
+            self.table(sc, ((50, 0, 0, 0), (150, 8, 3, 0)))
+            ys = np.array([-490.0, 0.0, 490.0])
+            xs = np.zeros(3)
+            _, up = self.look(sc, ramp(0, 300))                     # rising north: the slope faces south
+            c_up, _ = up.sample(xs, ys)
+            self.assertLess(c_up[0], 3)
+            self.assertGreater(c_up[2], 240)
+            _, down = self.look(sc, ramp(300, 0))                   # the same heights falling north: facing the pole
+            c_down, _ = down.sample(xs, -ys)
+            self.assertGreater(int(c_down[1]), int(c_up[1]), "the snow line lower on the slope facing the pole")
+            # a 60 degree wall holds none, whatever the table says
+            _, wall = self.look(sc, ramp(0, 1700))
+            self.assertLess(int(wall.sample(xs, ys)[0].max()), 3)
+
+    def test_permanent_snow(self):
+        frame = geodesy.EnuFrame(*ALPS)
+        with winter("real") as sc:
+            sp = sc.spec_for_square(frame, -500, -500, 1000)
+            hi = sc.look(sp, frame, -500, -500, 1000, np.full((65, 65), 4200.0), -500, -500, 1000 / 64)
+            lo = sc.look(sp, frame, -500, -500, 1000, np.full((65, 65), 1200.0), -500, -500, 1000 / 64)
+            c, d = hi.sample(np.zeros(1), np.zeros(1))
+            self.assertGreater(int(c[0]), 250)
+            self.assertEqual(int(d[0]), 6)
+            self.assertEqual(int(lo.sample(np.zeros(1), np.zeros(1))[0][0]), 0)
+
+    def test_photo(self):
+        with winter("heavy") as sc:
+            sp, sl = self.look(sc, np.full((65, 65), 300.0))
+            grass = np.zeros((256, 256, 3), np.uint8)
+            grass[...] = (95, 120, 60)
+            out = sl.apply(grass)
+            self.assertGreater(int(out[..., 0].min()), 200, "open ground white under heavy snow")
+            crowns = np.zeros_like(grass)
+            crowns[...] = (24, 40, 30)
+            self.assertLess(int(sl.apply(crowns)[..., 0].mean()), 90, "dark conifer crowns keep most of their colour")
+            snowy = np.full_like(grass, 246)
+            self.assertIsNone(sl.apply(snowy), "imagery already snowy is not whitened again")
+            self.assertTrue(sl.any(256))
+        with winter("dusting") as sc:
+            _, dust = self.look(sc, np.full((65, 65), 300.0))
+            fine = np.zeros((1024, 1024, 3), np.uint8)     # (1 m texels: the patches show; coarser, an even share)
+            fine[...] = grass[0, 0]
+            out = dust.apply(fine).astype(int)
+            white = (out[..., 0] > 160).mean()
+            self.assertTrue(0.1 < white < 0.9, f"a dusting is patchy: {white:.2f} of the texels white")
+        with winter("alpine") as sc:
+            _, low = self.look(sc, np.full((65, 65), 300.0))
+            self.assertIsNone(low.apply(grass), "below the preset's line: untouched")
+            self.assertFalse(low.any(256))
+
+    def test_no_seam(self):
+        """A block photo and a far tile over the same ground: their snow agrees where they overlap (one function of
+        the world point; planar heights, which both grids hold exactly)."""
+        with winter("real") as sc:
+            self.table(sc, ((100, 0, 0, 0), (400, 8, 3, 0)))
+
+            def plane(x0, size, n):
+                xs = x0 + np.arange(n) * (size / (n - 1))
+                return 150.0 + 0.1 * xs[None, :] + 0.15 * xs[:, None] + 0.0 * xs[:, None]
+            # block: [-500, 500]^2 at 65 nodes; far tile: [-500, 3500]^2 at 33 nodes, the block its south-west corner
+            sp_b = sc.spec_for_square(self.frame, -500, -500, 1000)
+            sp_f = sc.spec_for_square(self.frame, -500, -500, 4000)
+            b = sc.look(sp_b, self.frame, -500, -500, 1000, plane(-500, 1000, 65), -500, -500, 1000 / 64)
+            f = sc.look(sp_f, self.frame, -500, -500, 4000, plane(-500, 4000, 33), -500, -500, 4000 / 32)
+            pts = np.linspace(-490, 490, 15)
+            xs, ys = np.meshgrid(pts, pts)
+            cb, _ = b.sample(xs.ravel(), ys.ravel())
+            cf, _ = f.sample(xs.ravel(), ys.ravel())
+            self.assertLessEqual(int(np.abs(cb.astype(int) - cf.astype(int)).max()), 2)
+            # the same texels (the far tile's 4 m texel grid over the block's corner): the same colours
+            g = np.zeros((1000, 1000, 3), np.uint8)
+            g[...] = (90, 110, 70)
+            ob = b.apply(g[::4, ::4].copy())
+            of = f.apply(np.ascontiguousarray(np.tile(g[:1, :1], (1000, 1000, 1))))
+            self.assertIsNotNone(ob)
+            self.assertLessEqual(int(np.abs(ob.astype(int) - of[750:, :250].astype(int)).max()), 3)
+
+
+if __name__ == "__main__":
+    unittest.main()

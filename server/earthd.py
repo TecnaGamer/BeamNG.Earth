@@ -159,6 +159,7 @@ import vegetation as vegetationmod
 import buildings as buildingsmod  # noqa: E402
 import bldhz as bldhzmod  # noqa: E402
 import rockface as rockfacemod  # noqa: E402
+import snowcover as snowcovermod  # noqa: E402
 import geotiles as geotilesmod  # noqa: E402
 import riverlines as riverlinesmod  # noqa: E402
 import groundahead as groundaheadmod  # noqa: E402
@@ -4822,6 +4823,7 @@ class Server:
                                   heightmap.SQUARE, BASE_RENDER_PX, self.base_px,
                                   BASE_AO, [s.name for s in im.chain], self.tone, im.leaf_on,
                                   seasonmod.season_key(im.season_mode, float(anchor.lat)),
+                                  *snowcovermod.key_parts(Server.base_snow(self, anchor, cx, cy)),
                                   self.tex_modes, roadsmod.ROADS_IN_GROUND, bool(self.buildings),
                                   self.mapdata.versions() if self.mapdata is not None else None,
                                   self.road_widths is not None, self.surface is not None, anchor.zooms[0],
@@ -4834,6 +4836,25 @@ class Server:
         except Exception as e:          # (no cache rather than no photo)
             log.debug("revisit: base photo key: %s: %s", type(e).__name__, e)
             return None
+
+    def base_snow(self, anchor, cx, cy):
+        """The snow block (cx, cy)'s base photo is made with (snowcover.spec_for_square over write_base's square; None
+        while winter is off or no snow can lie there): its revisit key's part and the photo's, from one spec.
+        Called as Server.base_snow(self, ...) (the tests' servers are namespaces)."""
+        if not snowcovermod.ON or not hasattr(anchor, "frame"):
+            return None
+        size = self.layout.block * heightmap.SQUARE
+        return snowcovermod.spec_for_square(anchor.frame, cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M,
+                                            size)
+
+    def far_snow(self, anchor, tile):
+        """The snow a far tile's texture is made with (snowcover.spec_for_square over tile_where's square; None while
+        winter is off): one spec per render, handed to its revisit key (tex_key, blockworker._far_tile_key) and to the
+        texture (finish_tile_texture, tex["snow"])."""
+        if not snowcovermod.ON:
+            return None
+        frame, x0, y0, size = self.tile_where(anchor, tile)
+        return snowcovermod.spec_for_square(frame, x0, y0, size)
 
     def _base_pad_digest(self, anchor, cx, cy):
         """The gas station / frontage pads a block's photo is painted with (block_fuel_pads' box: surface.pad_digest,
@@ -5001,7 +5022,7 @@ class Server:
         name = self.base_name(key, rev)
         im = self.imagery
         tex = {"chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-               "season_mode": im.season_mode}
+               "season_mode": im.season_mode, "snow": Server.base_snow(self, anchor, cx, cy)}
         if fin:
             tex["fin"] = fin
         try:
@@ -5521,6 +5542,7 @@ class Server:
         size = self.layout.block * heightmap.SQUARE
         x0, y0 = cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M
         quick = quick and not self._photo_data_cached(anchor, x0, y0, size)
+        snow = Server.base_snow(self, anchor, cx, cy)
         t0 = time.perf_counter()
         try:
             pending = set()
@@ -5585,6 +5607,9 @@ class Server:
                 rgb = rockfacemod.rock(rgb, anchor.frame, x0, y0, size, U, x0, y0, size / (n - 1))
             except Exception as e:      # the photo stays as it is
                 log.debug("base photo %s: rock faces: %s", (anchor.id, cx, cy), e)
+                U = None
+            if snow is not None:        # (winter: the far tiles' snow term, after the roads and rock as theirs)
+                rgb = snowcovermod.apply_kept(snow, rgb, anchor.frame, x0, y0, size, U, x0, y0, size / (n - 1))
             return rgb
 
         fast.require(564, "terrain base rendering")
@@ -6392,7 +6417,7 @@ class Server:
         sq = imagerymod.gutter_square(x0q, y0q, size_q, px)
         tex = {"path": os.path.join(self.out_dir, texture), "px": px, "mask": None,
                "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-               "season_mode": im.season_mode, "quick": False}
+               "season_mode": im.season_mode, "quick": False, "snow": self.far_snow(anchor, tile)}
         args = (blockworker.far_global_tile, tile.z, tile.x, tile.y, zoom, gref, self.layout, tex)
         fut = self.far_pool.submit(*args)           # (its geometry meanwhile: kept, a second call reads it back)
         try:
@@ -6430,6 +6455,7 @@ class Server:
         node = tile.base if isinstance(tile, farfield.Piece) else tile
         ck = self.far_ck(anchor.id, tile.key)
         path = os.path.join(self.out_dir, self.tile_name(*ck))
+        snow = self.far_snow(anchor, tile)     # (one spec: the texture's key and its render, here or in the worker)
         done = None             # (texture file, bytes, sources used) when the worker rendered it (blockworker.far_tile)
         geo = None              # the geometry's future while this thread renders the texture
         coarse = None           # (Built, done) of a coarse cover's tile (coarse_texture)
@@ -6455,7 +6481,7 @@ class Server:
                     later = [im.done_token()]
                 tex = {"path": os.path.join(self.out_dir, texture), "px": px, "mask": None,
                        "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                       "season_mode": im.season_mode, "quick": quick and bool(later)}
+                       "season_mode": im.season_mode, "quick": quick and bool(later), "snow": snow}
                 fin_n = self.fin_name_len()
                 if fin_n:                   # (its shape kept for the bulk restore: farrestore.py)
                     tex["keep_fin"] = fin_n
@@ -6467,7 +6493,7 @@ class Server:
                 if got is not None:
                     done = (texture, got[0], got[1])
                     if fin_n and not later:     # (final as rendered: no analyses to come; the restore's texture)
-                        self.keep_texture(self.tex_key(anchor, tile, px), texture, got[0], got[1], (), None)
+                        self.keep_texture(self.tex_key(anchor, tile, px, snow), texture, got[0], got[1], (), None)
                 else:
                     later = []
             elif self.far_pool is not None:
@@ -6512,7 +6538,8 @@ class Server:
                        "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                                 self.road_mask_px(lvl)) if self.road_masks else None,
                        "chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                       "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px_t), **self.gen_far_tex()}
+                       "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px_t), **self.gen_far_tex(),
+                       "snow": snow}
                 if analyses and not raw_quick:
                     tex["fin"] = {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain}
                 if not raw_quick and self.fin_name_len():   # (a final texture: kept for the bulk restore)
@@ -6590,7 +6617,7 @@ class Server:
             try:
                 px = px_t
                 texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
-                tk = self.tex_key(anchor, tile, px)
+                tk = self.tex_key(anchor, tile, px, snow)
                 hit = revisitmod.load(self.cache_dir, "fartex", tk)
                 if hit is not None:         # (rendered in this place before: the revisit cache)
                     blobs, extra = hit
@@ -6618,7 +6645,7 @@ class Server:
                             w0 = time.perf_counter()
                             built, geo = geo.result(), None
                             geo_wait = time.perf_counter() - w0
-                        tex_bytes = self.finish_tile_texture(anchor, tile, px, rgb, built.grid, texture)
+                        tex_bytes = self.finish_tile_texture(anchor, tile, px, rgb, built.grid, texture, snow)
                     finally:
                         revisitmod.end(f0)
                     self.keep_texture(tk, texture, tex_bytes, used, pending, f0)
@@ -6710,14 +6737,16 @@ class Server:
                 info.stale = True
         return info
 
-    def tex_key(self, anchor, tile, px):
+    def tex_key(self, anchor, tile, px, snow=None):
         """The revisit cache's key of a far tile's texture rendered here (revisit.py): a global tile's names no anchor
-        (any anchor's, any session's); a piece's is its node's (the same texture)."""
+        (any anchor's, any session's); a piece's is its node's (the same texture). snow: the spec it is rendered with
+        (far_snow; None: no snow, no key part)."""
         im = self.imagery
+        sn = snowcovermod.key_parts(snow)
         if isinstance(tile, farfield.GTile):
             return revisitmod.key("fartex", "m", farfield.GLOBAL_GEO_VERSION, tile.key, px, [s.name for s in im.chain],
                                   self.tone, im.leaf_on, im.season_mode, self.tex_modes, self.layout.cells,
-                                  farfield.global_dem_zoom(tile.z, self.layout.cells))
+                                  farfield.global_dem_zoom(tile.z, self.layout.cells), *sn)
         if isinstance(tile, farfield.Piece):
             tile = tile.base
         # (the generated ground's near rings, render_far: its trees and map data, as blockworker._far_tile_key's; the
@@ -6730,7 +6759,7 @@ class Server:
                               self.tone, im.leaf_on, im.season_mode, self.tex_modes, roadsmod.ROADS_IN_GROUND,
                               self.mapdata.versions() if self.mapdata is not None else None,
                               self.road_widths is not None, self.surface is not None, self.layout.cells,
-                              anchor.zooms[max(tile.level, 0)], *gen)
+                              anchor.zooms[max(tile.level, 0)], *gen, *sn)
 
     def keep_texture(self, tk, texture, tex_bytes, used, pending, f0):
         """A far texture rendered here kept in the revisit cache when it is final: no colour-match or de-shadow region
@@ -6802,17 +6831,19 @@ class Server:
             f.write(data)
         staging.replace(tmp, path)
 
-    def finish_tile_texture(self, anchor, tile, px, photo, grid, texture):
+    def finish_tile_texture(self, anchor, tile, px, photo, grid, texture, snow=None):
+        """snow: the spec the texture is made with (far_snow, the one its tex_key holds; None: none)."""
         path = os.path.join(self.out_dir, texture)
         if isinstance(photo, imagerymod.FarPhoto):
             frame, x0, y0, size = self.tile_where(anchor, tile)
             rock = rockfacemod.tile_inputs(frame, x0, y0, size, px, grid)
+            sl = snowcovermod.look_from_rock(snow, frame, rock)
             if isinstance(tile, farfield.GTile):
-                return photo.write(path, rock, imagerymod.FAR_SRGB)
+                return photo.write(path, rock, imagerymod.FAR_SRGB, snow=sl)
             if not surfacemod.far_photo_roads(size, px):
                 node = tile.base if isinstance(tile, farfield.Piece) else tile
                 self.write_road_mask(anchor, node, px, texture)
-                return photo.write(path, rock, imagerymod.FAR_SRGB)
+                return photo.write(path, rock, imagerymod.FAR_SRGB, snow=sl)
             if not (PAINT_WORKER and self.far_pool is not None and self.surface is not None):
                 node = tile.base if isinstance(tile, farfield.Piece) else tile
                 x, y, _, _ = node.bbox
@@ -6823,7 +6854,7 @@ class Server:
                 except Exception as e:
                     log.debug("road faces of %s: %s", node.key, e)
                 self.write_road_mask(anchor, node, px, texture)
-                return photo.write(path, rock, imagerymod.FAR_SRGB, paint=layers)
+                return photo.write(path, rock, imagerymod.FAR_SRGB, paint=layers, snow=sl)
             rgb = photo.shade(rock)
         else:
             rgb = self.rock_faces(anchor, tile, px, photo, grid)
@@ -6831,6 +6862,11 @@ class Server:
             node = tile.base if isinstance(tile, farfield.Piece) else tile
             rgb = self.road_faces(anchor, node, px, rgb)
             self.write_road_mask(anchor, node, px, texture)
+        if snow is not None:        # (winter: after the roads, as the FarPhoto paths and the blocks)
+            frame, x0, y0, size = self.tile_where(anchor, tile)
+            g = None if grid is None else np.asarray(grid, np.float64)
+            rgb = snowcovermod.apply_kept(snow, rgb, frame, *imagerymod.gutter_square(x0, y0, size, px), g, x0, y0,
+                                          size / (g.shape[1] - 1) if g is not None and g.ndim == 2 else 1.0)
         return genground.write_far_dds(path, rgb, imagerymod.FAR_SRGB)
 
     def rock_faces(self, anchor, tile, px, rgb, grid):
@@ -6976,6 +7012,7 @@ class Server:
         t0 = time.perf_counter()
         px = self.tile_tex_px(anchor, tile)
         pending = set()
+        snow = self.far_snow(anchor, tile)     # (one spec: the texture and its key)
         # (a global tile sharpened from a small texture, the coarse cover's or a hidden one's (farpvs.py): in a far-tile
         # process like its first build, not in this interpreter)
         upgrade = isinstance(tile, farfield.GTile) and (prev.coarse or 0 < (prev.tex_px or 0) < px)
@@ -6986,7 +7023,7 @@ class Server:
             im = self.imagery
             tex = {"path": os.path.join(self.out_dir, texture), "px": px, "mask": None,
                    "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                   "season_mode": im.season_mode}
+                   "season_mode": im.season_mode, "snow": snow}
             args = (blockworker.far_global_tile, tile.z, tile.x, tile.y,
                     farfield.global_dem_zoom(tile.z, self.layout.cells),
                     farfield.global_dem_zoom(tile.z + 1, self.layout.cells), self.layout, tex)
@@ -7011,7 +7048,8 @@ class Server:
                    "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                             self.road_mask_px(tile.level)) if self.road_masks else None,
                    "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                   "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px), **self.gen_far_tex()}
+                   "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px), **self.gen_far_tex(),
+                   "snow": snow}
             lvl = tile.level
             got = self.far_pool.submit(blockworker.far_tile, anchor.id, anchor.lat, anchor.lon, tile,
                                        anchor.zooms[lvl], None, anchor.zooms[lvl - 1], self.near_visual in BLOCK_DRAWN,
@@ -7026,8 +7064,8 @@ class Server:
             return replace(prev, retex_repeat=prev.retex_repeat + 1)
         ck = self.far_ck(anchor.id, tile.key)
         texture = self.texture_name(*ck, prev.rev + 1)
-        tex_bytes = self.finish_tile_texture(anchor, tile, px, rgb, prev.grid, texture)
-        self.keep_texture(self.tex_key(anchor, tile, px), texture, tex_bytes, used, pending, None)
+        tex_bytes = self.finish_tile_texture(anchor, tile, px, rgb, prev.grid, texture, snow)
+        self.keep_texture(self.tex_key(anchor, tile, px, snow), texture, tex_bytes, used, pending, None)
         sources = prev.credits
         if self.credits is not None:        # the new texture's sources (the corrected one names S2 too)
             frame, x0, y0, s = self.tile_where(anchor, tile)
@@ -7077,7 +7115,7 @@ class Server:
                 edge = sum(math.hypot(q[(2 * k + 2) % 8] - q[2 * k], q[(2 * k + 3) % 8] - q[2 * k + 1])
                            for k in range(4)) / 4
                 t = farfield.GTile(z, x, y, level, q, float(edge))
-                if revisitmod.has(self.cache_dir, "fartex", self.tex_key(anchor, t, px)):
+                if revisitmod.has(self.cache_dir, "fartex", self.tex_key(anchor, t, px, self.far_snow(anchor, t))):
                     skipped += 1
                     return
                 try:
