@@ -146,6 +146,33 @@ class KeyTest(unittest.TestCase):
             self.assertIsNone(earthd.Server.base_snow(srv, anchor, 0.0, 0.0))
 
 
+class FarTexKeyTest(unittest.TestCase):
+    def test_fartex_key_holds_the_week_and_the_snow(self):
+        """Server.tex_key ("fartex", the main process's far textures and the bulk restore's): the season's week
+        (season_key, not "auto" alone: October's grade served in late November) and the snow spec's part."""
+        import datetime
+        import earthd
+        import season
+        im = SimpleNamespace(chain=[SimpleNamespace(name="eox2016")], leaf_on=True, season_mode="auto")
+        srv = SimpleNamespace(imagery=im, tone="auto", tex_modes=(), road_masks=False, mapdata=None, road_widths=None,
+                              surface=None, layout=SimpleNamespace(cells=64), road_mask_px=lambda lvl: 0)
+        anchor = SimpleNamespace(lat=40.877, lon=-77.566, zooms={k: 16 - k for k in range(9)})
+        tile = SimpleNamespace(key=(5, 0, 0), level=5, size=8192.0, bbox=(0.0, 0.0, 8192.0, 8192.0))
+        real = season.utc_today
+        try:
+            season.utc_today = lambda: datetime.date(2026, 10, 20)
+            october = earthd.Server.tex_key(srv, anchor, tile, 256)
+            season.utc_today = lambda: datetime.date(2026, 11, 24)
+            november = earthd.Server.tex_key(srv, anchor, tile, 256)
+            self.assertNotEqual(october, november)
+            with winter("heavy") as sc:
+                sp = sc.spec_for_box(40.8, -77.6, 40.9, -77.5)
+                self.assertNotEqual(earthd.Server.tex_key(srv, anchor, tile, 256, sp), november)
+                self.assertEqual(earthd.Server.tex_key(srv, anchor, tile, 256, None), november)
+        finally:
+            season.utc_today = real
+
+
 class LookTest(unittest.TestCase):
     def setUp(self):
         self.frame = geodesy.EnuFrame(*PLAINS)
