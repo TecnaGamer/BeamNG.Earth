@@ -78,7 +78,10 @@ class CliffStreamTest(unittest.TestCase):
 
     def test_all_piece_paths_are_declared(self):
         import cliffscene
-        files = roads.shape_files(1,2,3)
+        import cliffsettings
+        # (the cliff names are declared only with cliffs on: off, a road tile names none, test_cliff_off_names)
+        with patch.object(cliffsettings, 'SETTINGS', cliffsettings.CliffSettings(True, True)):
+            files = roads.shape_files(1,2,3)
         self.assertEqual(len([k for k in files if cliffscene.is_face(k)]),cliffrocks.STREAM_PARTS_MAX)
         self.assertTrue(files['cliff'].endswith('cliff_1_2_3.cdae'))
         self.assertTrue(files['cliff64'].endswith('cliff_1_2_3_64.cdae'))
@@ -155,7 +158,9 @@ class CliffSkinSupportTest(unittest.TestCase):
         positions = np.array([[-2., 1., 3.], [4., 5., 6.], [0., 3., 7.]])
         projected = [(SimpleNamespace(positions=positions), None)]
         gx, gy = geotiles.tile_of(35.96, -114.66)
+        import cliffsettings
         with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(cliffsettings, 'SETTINGS', cliffsettings.CliffSettings(True, True)), \
              patch.object(bw, '_s', SimpleNamespace(anchor=lambda *args: (None, None))), \
              patch.object(bw, '_skin_inputs', return_value={'cliff_strips': ['source']}), \
              patch.object(bw, 'tunnel_profiles', return_value=[]), \

@@ -125,13 +125,15 @@ class CliffDebugRequestTest(unittest.TestCase):
         sent = []
         conn = SimpleNamespace(s=SimpleNamespace(place_pool=None), send=sent.append)
         msg = dict(CliffDebugLayersTest.BOX, layer='cliff_regions', id=12)
-        with patch.object(cliffsettings, 'SETTINGS', cliffsettings.CliffSettings()):
+        with patch.object(cliffsettings, 'SETTINGS', cliffsettings.CliffSettings()), \
+                patch.object(cliffsettings, 'DEBUG', True):   # (the overlay: BNE_CLIFFS or BNE_CLIFFS_DEBUG only)
             self.run_request(conn, msg)
         self.check_contract(sent[-1])
         self.assertEqual(sent[-1]['id'], 12)
         self.assertEqual(sent[-1]['features'], [])
         self.assertFalse(conn._debug_map_busy)
-        self.run_request(conn, dict(msg, s='invalid'))
+        with patch.object(cliffsettings, 'DEBUG', True):
+            self.run_request(conn, dict(msg, s='invalid'))
         self.check_contract(sent[-1])
         self.assertIn('error', sent[-1])
         self.assertFalse(conn._debug_map_busy)
@@ -140,11 +142,22 @@ class CliffDebugRequestTest(unittest.TestCase):
         import earthd
         sent = []
         conn = SimpleNamespace(_debug_map_busy=True, send=sent.append)
-        with patch.object(debuglayers, 'query', side_effect=AssertionError('duplicate work')):
+        with patch.object(debuglayers, 'query', side_effect=AssertionError('duplicate work')), \
+                patch.object(cliffsettings, 'DEBUG', True):
             self.run_request(conn, dict(id=3))
         self.check_contract(sent[-1])
         self.assertIn('busy', sent[-1]['error'])
         self.assertTrue(conn._debug_map_busy, 'the active request still owns the guard')
+
+    def test_off_without_cliffs_or_debug(self):
+        """Neither BNE_CLIFFS nor BNE_CLIFFS_DEBUG: an error at once, no provider asked (PR #1412 review R3)."""
+        sent = []
+        conn = SimpleNamespace(s=SimpleNamespace(place_pool=None), send=sent.append)
+        with patch.object(debuglayers, 'query', side_effect=AssertionError('no provider when off')), \
+                patch.object(cliffsettings, 'DEBUG', False), patch.dict('os.environ', {'BNE_CLIFFS': 'off'}):
+            self.run_request(conn, dict(CliffDebugLayersTest.BOX, layer='cliff_regions', id=4))
+        self.check_contract(sent[-1])
+        self.assertIn('off', sent[-1]['error'])
 
 
 if __name__ == '__main__':

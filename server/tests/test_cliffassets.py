@@ -1,4 +1,8 @@
 """Shipped cliff sources retain authored detail and use the install DDS pipeline."""
+import os as _os, sys as _sys  # (server/ and the repo root, run from anywhere: tools/run_tests.py, unittest)
+_sys.path[:0] = [p for p in (_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                             _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+                 if p not in _sys.path]
 import json
 from pathlib import Path
 import struct
@@ -50,7 +54,7 @@ class CliffAssetTest(unittest.TestCase):
 
     def test_private_rock_detail_paths_match_runtime_cache(self):
         import cliffstock
-        materials = json.loads((ROOT / "mod/beamng_earth" / CLIFF).with_suffix(".materials.json").read_text())
+        materials = json.loads((ROOT / "mod/beamng_earth" / CLIFF).parent.joinpath("cliff_materials.src.json").read_text())
         references = [value for material in materials.values() for stage in material.get("Stages", [])
                       for value in stage.values() if isinstance(value, str) and "/cliff_ground_v" in value]
         self.assertTrue(references)
