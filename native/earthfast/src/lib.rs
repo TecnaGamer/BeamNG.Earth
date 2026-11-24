@@ -7268,8 +7268,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     ggshade::register(m)?;
     // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
     // out (Codex review of 308)
-    // 342: opt-in dynamic cliff generation, placement and material preparation.
-    // 343: canyon contact strips follow the rendered terrain-blended rim.
+    // 616 (608-615 kept for other branches): PR #1412's opt-in dynamic cliffs (BNE_CLIFFS; server/cliffsettings.py
+    // CLIFF_KERNEL): generation, placement, material preparation, canyon contact strips on the terrain-blended rim
     m.add_function(wrap_pyfunction!(clifflod::cliff_lod_edges, m)?)?;
     m.add_function(wrap_pyfunction!(clifflod::cliff_lod_prepare, m)?)?;
     m.add_function(wrap_pyfunction!(clifflod::cliff_lod_trial, m)?)?;
@@ -7746,7 +7746,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 604 (603 and 605 kept for other branches): cip (architecture v2's compact per-cell inputs: the lossless cell
     // codec of named arrays and blobs; cip_encode_cell, cip_cell_info, cip_decode; server/cip.py, tools/build_cip.py)
     cip::register(m)?;
-    m.add("VERSION", 607)?;
-    m.add("VERSION", 607)?;
+    m.add("VERSION", 616)?;
     Ok(())
 }

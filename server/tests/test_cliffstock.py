@@ -1,4 +1,8 @@
 """Private contact maps are deterministic BC4 cutout data, never shipped stock images."""
+import os as _os, sys as _sys  # (server/ and the repo root, run from anywhere: tools/run_tests.py, unittest)
+_sys.path[:0] = [p for p in (_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                             _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+                 if p not in _sys.path]
 from io import BytesIO
 import json
 from pathlib import Path
@@ -60,7 +64,7 @@ class CliffStockMapsTest(unittest.TestCase):
             fast._ef.cliff_contact_color_factor(height_png(np.zeros((2, 2), dtype=np.uint8)))
 
     def test_contact_maps_have_correct_mips_and_preserve_source_depth(self):
-        fast.require(305, "private cliff contact maps")
+        fast.require(__import__("cliffsettings").CLIFF_KERNEL, "private cliff contact maps")
         # Distinct values within a single high byte catch accidental conversion
         # of the stock height to eight bits before normalization.
         source = height_png(np.array([[1024, 1025], [1027, 1026]], dtype=np.uint16))

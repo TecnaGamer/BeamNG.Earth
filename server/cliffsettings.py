@@ -7,7 +7,7 @@ from pathlib import Path
 import hashlib
 
 # Minimum native interface required by this feature, independent of upstream releases.
-CLIFF_KERNEL = 343
+CLIFF_KERNEL = 616  # (the native module 616: lib.rs; 608-615 kept for other branches)
 DEBUG = os.environ.get("BNE_CLIFFS_DEBUG", "off").strip().lower() in {"1", "on", "true"}
 
 KEYS = ("naturalCliffs", "cliffRoadCuts", "cliffDetail", "cliffTextures")

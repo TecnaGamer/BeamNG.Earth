@@ -177,7 +177,7 @@ class TalusTest(unittest.TestCase):
         np.testing.assert_array_equal(counts, [1, 1, 1, 1, 0])
 
     def test_outcrop_candidates_share_world_positions_across_overlapping_tiles(self):
-        fast.require(305, "cliff outcrop candidates")
+        fast.require(__import__("cliffsettings").CLIFF_KERNEL, "cliff outcrop candidates")
         ys = np.arange(-48., 52., 4.)
         results = []
         for xs in (np.arange(-80., 52., 4.), np.arange(-40., 92., 4.)):
