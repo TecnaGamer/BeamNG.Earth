@@ -17,8 +17,8 @@ a few KB to ~100 KB.
     BNE_OSMAREAS_DIR    a staged build on disk (manifest.json and its <key>/ parts: tools, tests, measurements), read
                         without the network
 
-The build used is the one pinned on disk when this process first asks (AreaShards.frozen, as osmyears'), the same for
-the whole process, and it is in the keys (identity()); with BNE_OSMAREAS_DIR the folder's own manifest. A tile that
+The build used is the server run's (AreaShards.frozen, as osmyears': pagesdata's session), the same in every process
+of the run, and it is in the keys (identity()); with BNE_OSMAREAS_DIR the folder's own manifest. A tile that
 could not be had makes no areas for the read and faults the build (revisit.fault: built again later, with them).
 
 Data (c) OpenStreetMap contributors, ODbL 1.0.

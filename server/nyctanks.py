@@ -12,8 +12,8 @@ at most. A building whose roof holds a tank point carries a tank there (the topm
 the photo; in a cell the manifest lists, no other building has one (the photo is the answer, an empty roof included).
 A cell the manifest does not list keeps the procedural tanks. A shard that could not be had (or did not match the
 manifest, or a listed cell gone): the procedural tanks for now and the tile faulted (revisit.fault: built again
-later). The manifest and shards are nycshards.Shards': the build pinned on disk when the process first asks, for the
-whole process, named in the keys of the tiles near BOX (blockworker._nyc_key); none pinned (not published, not
+later). The manifest and shards are nycshards.Shards': the server run's build (decided at the first ask in any of its
+processes: pagesdata's session), for the whole run, named in the keys of the tiles near BOX (blockworker._nyc_key); none pinned (not published, not
 fetched yet): no measured tanks, nothing faulted. BNE_NYC_TANKS=off: the procedural tanks as before.
 
     BNE_NYC_TANKS_URL   the shards' base URL (default: the data repo's Pages, nyctanks/v1)

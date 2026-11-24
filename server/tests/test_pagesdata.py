@@ -75,6 +75,7 @@ def settle(m, site, n):
 class StaleIfErrorTest(unittest.TestCase):
 
     def setUp(self):
+        pagesdata.session_reset()
         self.clock = Clock()
         p = mock.patch.object(pagesdata, "time", self.clock.mod)
         p.start()
@@ -135,31 +136,41 @@ class StaleIfErrorTest(unittest.TestCase):
             m.build()
             time.sleep(0.05)
             self.assertEqual(len(site.calls), 2, "twice as long after a second failure")
-            # back online: the fresh manifest replaces the pin and the build
+            # back online: the fresh manifest is pinned for the next start; this run keeps its build
             site.answer = json.dumps({"built": "new", "files": {}}).encode()
             self.clock.t += pagesdata.RETRY_S
             m.build()
             settle(m, site, 3)
-            self.assertEqual(m.build(), "new")
+            self.assertEqual(m.build(), "old", "the run's build kept")
             with open(os.path.join(m.dir, "manifest.json")) as fh:
                 self.assertEqual(json.load(fh)["built"], "new", "pinned")
             self.assertEqual(m.backoff.failures, 0, "the backoff starts over")
 
-    def test_online_refresh_replaces_the_pin(self):
-        with tempfile.TemporaryDirectory() as cache:
-            m, site = self._stale(cache, json.dumps({"built": "new", "files": {}}).encode())
-            changed = []
-            m.on_change = lambda: changed.append(m.built)
-            site.release.clear()        # (the refresh's answer held back: no race with a fast machine)
-            self.assertEqual(m.build(), "old", "the pin in use while the refresh runs")
-            site.release.set()
-            settle(m, site, 1)
-            self.assertEqual(m.build(), "new", "the fresh manifest taken")
-            self.assertEqual(changed, ["old", "new"])
-            with open(os.path.join(cache, "pagesdata", "rail", "manifest.json")) as fh:
-                self.assertEqual(json.load(fh)["built"], "new", "and pinned")
-            self.assertLess(time.time() - os.path.getmtime(os.path.join(cache, "pagesdata", "rail",
-                                                                        "manifest.json")), 60)
+    def test_online_refresh_pins_for_the_next_start(self):
+        """R6 of ~/bnge-tests/manifestaudit: a refresh that works pins the newer build for the next start and never
+        replaces the run's (it did, whatever recheck=False asked: regionaldata switched mid-run)."""
+        for recheck in (True, False):
+            pagesdata.session_reset()
+            with tempfile.TemporaryDirectory() as cache:
+                pin(cache, "rail", "old", pagesdata.MANIFEST_TTL_S + 60)
+                site = Site()
+                site.answer = json.dumps({"built": "new", "files": {}}).encode()
+                changed = []
+                m = pagesdata.Manifest(cache, site, "rail", recheck=recheck, on_change=lambda: changed.append(m.built))
+                self.assertEqual(m.build(), "old", "the pin in use at once")
+                settle(m, site, 1)
+                self.assertEqual(m.build(), "old", "the run's build kept after its refresh")
+                self.assertEqual(m.known(), "old")
+                self.assertEqual(changed, ["old"], "taken once")
+                with open(os.path.join(cache, "pagesdata", "rail", "manifest.json")) as fh:
+                    self.assertEqual(json.load(fh)["built"], "new", "pinned for the next start")
+                self.assertLess(time.time() - os.path.getmtime(os.path.join(cache, "pagesdata", "rail",
+                                                                            "manifest.json")), 60)
+                again = pagesdata.Manifest(cache, site, "rail", recheck=recheck)
+                self.assertEqual(again.build(), "old", "another reader of this process: the run's")
+                pagesdata.session_reset()           # (the next start)
+                nxt = pagesdata.Manifest(cache, site, "rail", recheck=recheck)
+                self.assertEqual(nxt.build(), "new", "the next start takes the newer pin")
 
     def test_no_pin_and_a_failure_is_a_missing_input(self):
         with tempfile.TemporaryDirectory() as cache:

@@ -12,8 +12,8 @@ thread), and the buildings wait for them WAIT_S at most. A map building with no 
 building parts always win) whose outline holds a record's interior point and is within AREA_RATIO of its area takes
 the record's parts (the join in Rust: earthfast.nyc_massing_match), through the same path the map's parts take
 (buildings.tile_buildings). A mapped pitched roof, or a building off the ground (min_height), keeps the map's shape.
-The manifest and shards are nycshards.Shards': the build pinned on disk when the process first asks is used for the
-whole process and named in the keys of the tiles near BOX (blockworker._nyc_key: a tile built before the dataset was
+The manifest and shards are nycshards.Shards': the server run's build (decided at the first ask in any of its
+processes: pagesdata's session) is used for the whole run and named in the keys of the tiles near BOX (blockworker._nyc_key: a tile built before the dataset was
 published, before a cell was added or on an older build keeps no key of the build in use); only the cells it lists,
 each checked against it. A shard that could not be had (or did not match, or a listed cell gone) faults the tile
 (revisit.fault: built again later) and is asked again after nycshards.SHARD_RETRY_S. Outside the box, or with

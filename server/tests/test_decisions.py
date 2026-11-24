@@ -339,7 +339,8 @@ class SharedPlansTest(unittest.TestCase):
             for n in os.listdir(os.path.join(run, sig)):
                 if n.endswith(".npz"):
                     cell = tuple(int(v) for v in n[:-4].split("_"))
-                    items.setdefault(cell, {})[decisions.plans_key(sig, cell)] = (
+                    # (the run folder: the signature and the versions' digest, plancache.PlanCache)
+                    items.setdefault(cell, {})[decisions.plans_key(sig.split(".v", 1)[0], cell)] = (
                         Path(run, sig, n).read_bytes(), True)
         self.assertTrue(items)
         return z, items

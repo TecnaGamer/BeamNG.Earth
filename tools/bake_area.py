@@ -111,6 +111,8 @@ def main():
     print(f"{len(cells)} cells, {a.procs} processes", flush=True)
     os.makedirs(a.cache, exist_ok=True)
     plancache.start_run(a.cache)            # (one run: the workers share plans, lock files)
+    import pagesdata                        # (one build of each weekly dataset in every worker: pagesdata's session)
+    pagesdata.ensure_session(a.cache)
     os.environ.setdefault("BNE_LIDAR_GAPS_WAIT", "120")
     work = os.path.join(a.cache, "bake_work")
     os.makedirs(work, exist_ok=True)

@@ -171,7 +171,8 @@ PIN_RECHECK_S = 1.0         # s between looks for a manifest another process may
 class Shards:
     """A dataset of BeamNG.Earth-data's GitHub Pages (name: its folder, e.g. "rail", "fra"): z7 shards
     <PAGES>/<name>/<x>/<y>.json.gz and its manifest, each shard fetched once and kept on disk per build. The manifest
-    stays on Pages; the shards come from its "data" folder when it names one (pagesdata.Manifest)."""
+    stays on Pages; the shards come from its "data" folder when it names one, else Pages while Pages serves the run's
+    build (pagesdata.Manifest: a shard is only ever kept under the build it is of)."""
 
     def __init__(self, cache_dir, fetcher, name):
         self.name = name
@@ -243,8 +244,8 @@ class Shards:
         return (r, pin) if pin else (None, None)
 
     def known(self):
-        """The build in use as far as known without asking the network (versions(): every tile's cache key); before
-        this run has asked for it, the last build pinned on disk. (None until the manifest came: the tiles built in
+        """The build in use as far as known without asking the network (versions(): every tile's cache key): the
+        run's (pagesdata.Manifest's session), decided from the pin on disk when none is yet. (None until the manifest came: the tiles built in
         a run's first minutes had other keys than the same tiles built later, in the revisit cache: a warm drive
         rebuilt and stored again ~1.5 GB of far tiles, 2026-11-04.)"""
         _, pin = self.cip_pin()
@@ -253,8 +254,8 @@ class Shards:
         return self.manifest.built if not ON else self.manifest.known(PIN_RECHECK_S)
 
     def version(self):
-        """The build in use ("built" of its manifest), or None (none reachable yet). The pinned/refresh policy is
-        pagesdata.Manifest.current's (the night of 1.9.0: see pagesdata). CIP on: the build its cells' slices are of."""
+        """The build in use ("built" of its manifest), or None (no data this run). The run's, decided once for every
+        process of it (pagesdata.Manifest.current: see pagesdata). CIP on: the build its cells' slices are of."""
         _, pin = self.cip_pin()
         if pin:
             return pin
@@ -264,7 +265,8 @@ class Shards:
 
     def get(self, rel, kind="demand"):
         """The bytes of the dataset's file rel (path in its folder) for the build in use: from the manifest's "data"
-        host, else (or that failing) Pages (pagesdata.fetch_data)."""
+        host, else (or that failing) Pages while Pages serves the same build (pagesdata.Manifest.fetch: else
+        pagesdata.OtherBuild, not had)."""
         return self.manifest.fetch(rel, kind)
 
     def clear_memory(self):

@@ -2616,6 +2616,12 @@ class _Planner:
                 log.info("revisit: cell %s's plans made short: %s", key, b.why_not())
             if mine:        # (kept for later visits too when complete: nothing it read failed or was missing)
                 self.shared.store(key, *got, persist=whole)
+                refused = getattr(self.shared, "refused", None)
+                if whole and refused is not None and refused(key):
+                    # (planned across a change of the map data's versions: short here too, plancache.store)
+                    _note_plans(key, False)
+                    with self.lock:
+                        self.short.add(key)
         finally:
             revisit.end(b)
             if mine:
