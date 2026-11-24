@@ -19,13 +19,15 @@ the tunnel lanes against measured tunnel lines (swissTLM3D cells: the truth).
 SITE: a JSON file {"id", "country", "lines": [[[lat, lon], ...], ...] (the roads whose tiles to build),
 "axis": [[lat, lon(, h)], ...] (where s runs; with heights: the measured line the floors are compared with),
 "lanes": [{"id", "width", "xy": [[lat, lon], ...], "level"}] (optional: the place's own carriageways, as mapped, audited
-whatever the road code makes of them, with a gauge between two of them one bore apart), "tlm": a folder of tlm cells
-(optional)}; tools/widecorpus/sites/milchbuck.json is one. Work under ~/bnge-tests/lanecheck/<id>/. LANECHECK_AUDITOR:
+whatever the road code makes of them, with a gauge between two of them one bore apart), "tlm": a folder of swissTLM3D
+road-height cells made by tools/build_swisstlm.py (optional; or LANECHECK_TLM; copied into the site's own snapshot)};
+the id is lower-case letters, digits, _ and -. tools/widecorpus/sites/milchbuck.json is one. Work under ~/bnge-tests/lanecheck/<id>/. LANECHECK_AUDITOR:
 another roadsys binary than bin/roadsys-target/release's.
 """
 import argparse
 from collections import defaultdict
 import json
+import re
 import math
 import os
 from pathlib import Path
@@ -54,6 +56,8 @@ TRUTH_NEAR_M = 6.0      # m from a measured tunnel line for a lane cell to be co
 
 def site_of(path):
     s = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(s.get("id"), str) or not re.fullmatch(r"[a-z0-9_-]+", s["id"]):
+        raise ValueError(f"site id {s.get('id')!r}: lower-case letters, digits, _ and - only")
     s["dir"] = ROOT / s["id"]
     return s
 
@@ -116,10 +120,11 @@ def warm(site, tree):
     d = site["dir"]
     seed = d / "seed"
     seed.mkdir(parents=True, exist_ok=True)
-    if site.get("tlm"):
+    tlm = site.get("tlm") or os.environ.get("LANECHECK_TLM")
+    if tlm:
         dst = seed / "roadz" / "v3" / "tlm1"
         if not dst.exists():
-            shutil.copytree(Path(site["tlm"]).expanduser(), dst)
+            shutil.copytree(Path(tlm).expanduser(), dst)   # (a copy: never a link into another cache)
     work = d / "warm"
     for p in pins(site):
         if (work / p["id"]).exists():

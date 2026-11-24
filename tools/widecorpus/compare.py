@@ -54,7 +54,12 @@ def pair(p, default, candidate, across_builds=False):
             raise ValueError("no lane coverage")
         if any(not math.isfinite(v) or v<0 for t in tiles.values() for v in (*t["metrics"].values(),t["seconds"])):
             raise ValueError("invalid tile measurement")
-    fields = sorted(set(UNITS) | COVERAGE | {k for tree in (a,b) for t in tree.values() for k in t["metrics"]})
+    # The auditor's measuring rules (native/roadsys audit.rs AUDIT_VERSION; results from before it carry none: 1)
+    versions = {t["metrics"].get("audit_version", 1.0) for tree in (a,b) for t in tree.values()}
+    if len(versions) > 1:
+        raise ValueError(f"different audit versions {sorted(versions)}: measure both with the same auditor")
+    fields = sorted((set(UNITS) | COVERAGE | {k for tree in (a,b) for t in tree.values() for k in t["metrics"]})
+                    - {"audit_version"})
     per_tile = {}
     for key in sorted(a):
         d = {k:round(b[key]["metrics"].get(k,0)-a[key]["metrics"].get(k,0),6) for k in fields}

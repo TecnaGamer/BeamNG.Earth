@@ -341,6 +341,10 @@ fn qkey(v: [f64; 3]) -> (i64, i64, i64) {
 #[derive(Default)]
 pub struct Metrics { pub m: BTreeMap<&'static str, f64> }
 
+/// The audit's measuring rules: raised whenever a metric's meaning changes (2: tunnel lanes ride their traced floor,
+/// terrain counts as a floor). tools/widecorpus compare.py refuses to pair results of two versions.
+pub const AUDIT_VERSION: f64 = 2.0;
+
 impl Metrics {
     fn add(&mut self, k: &'static str, v: f64) { *self.m.entry(k).or_insert(0.0) += v; }
     fn max(&mut self, k: &'static str, v: f64) { let e = self.m.entry(k).or_insert(0.0); if v > *e { *e = v; } }
@@ -376,7 +380,7 @@ fn tunnel_floors(sc: &Scene, ss: &[Sample], deck_top: &Grid, floors: &Grid, vaul
     for (_, mut row) in rows {
         row.sort();
         let mut prev = f64::NAN;
-        let mut last_station = i64::MIN;
+        let mut last_station: Option<i64> = None;
         for (station, i) in row {
             let s = &ss[i];
             let (x, y) = (s.x, s.y);
@@ -384,8 +388,8 @@ fn tunnel_floors(sc: &Scene, ss: &[Sample], deck_top: &Grid, floors: &Grid, vaul
                 .filter_map(|&k| ray(&tris[k as usize], x, y)).collect();
             let zt = sc.terrain.at(x, y);
             if zt.is_finite() { cands.push(zt); }
-            if station - last_station > 2 { prev = f64::NAN; }        // (a gap in the row: seeded again)
-            last_station = station;
+            if last_station.map_or(true, |l| station - l > 2) { prev = f64::NAN; }   // (a gap in the row: seeded again)
+            last_station = Some(station);
             if cands.is_empty() { prev = f64::NAN; continue; }
             let near = if prev.is_finite() {
                 cands.iter().copied().min_by(|a, b| (a - prev).abs().total_cmp(&(b - prev).abs()))
@@ -407,6 +411,7 @@ fn tunnel_floors(sc: &Scene, ss: &[Sample], deck_top: &Grid, floors: &Grid, vaul
 /// The audit of one scene.
 pub fn audit(sc: &Scene) -> Metrics {
     let mut m = Metrics::default();
+    m.add("audit_version", AUDIT_VERSION);
     let tris = &sc.tris;
     let ter = &sc.terrain;
     // colliding up / down faces (vertical rays) and every colliding face (column clipping)

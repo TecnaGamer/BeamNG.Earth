@@ -138,6 +138,17 @@ class CorpusChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             pair(p,scene(10,0),{**bad,"snapshot":"same"})
 
+    def test_two_audit_versions_are_not_paired(self):
+        def scene(version):
+            m = {"step4": 1, "lane_samples": 1, **({} if version is None else {"audit_version": version})}
+            return dict(snapshot="same", code="same", tiles={"A": dict(metrics=m, seconds=1)})
+        p = {"id": "one"}
+        self.assertNotIn("audit_version", pair(p, scene(2.0), scene(2.0))["delta"])
+        with self.assertRaises(ValueError):
+            pair(p, scene(None), scene(2.0))   # (results from before the version: 1)
+        with self.assertRaises(ValueError):
+            pair(p, scene(2.0), scene(3.0))
+
     def test_missing_pair_is_reported(self):
         with tempfile.TemporaryDirectory() as d:
             result=ranking(Path(d),[{"id":"example"}],{"default":{},"revamped":{}},"code",30)

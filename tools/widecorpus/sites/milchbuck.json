@@ -3,7 +3,6 @@
  "country": "CH",
  "why": "Zurich's Milchbucktunnel: one bore, both directions mapped as two one-way roads 6.9 m apart (OSM).",
  "sources": "lines and lanes: OpenStreetMap (ODbL), ways 31715547, 90062603, 32554254, 257237954, 257237956; axis: swissTLM3D 396912F5 + FF38DAAB (lat, lon, height), swisstopo",
- "tlm": "~/.cache/beamng-earth/roadz/v3/tlm1",
  "lanes": [
   {
    "id": "northbound",
