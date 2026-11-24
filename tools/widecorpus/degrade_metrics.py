@@ -393,6 +393,9 @@ def summarize_roads(rows):
                      lanes_exact=round(float((r["l1"] == r["l0"])[m].mean()), 4) if m.any() else math.nan)
             mapped = m & (r["mapped_l0"] > 0)
             s["lanes_exact_mapped"] = round(float((r["l1"] == r["l0"])[mapped].mean()), 4) if mapped.any() else math.nan
+            # (on the roads whose full data mapped a lane count: what removing the tags changes where there were any)
+            wm = np.abs(r["w1"] - r["w0"])[mapped]
+            s.update(width_mapped_med=q(wm, 50), width_mapped_p90=q(wm, 90))
             s["mapped_share"] = round(float(mapped.sum() / max(m.sum(), 1)), 4)
             own = r["own"]
             hole = own & ~r["centre1"]
@@ -431,6 +434,7 @@ def _area_stats(r):
 
 def summarize_buildings(rows):
     out = {}
+    rows = {k: (np.asarray(v, float) if k == "err_m" else np.asarray(v).astype(bool)) for k, v in rows.items()}
     for name, sel in (("all", np.ones(len(rows["err_m"]), bool)), ("mapped", rows["mapped"])):
         if not sel.any():
             continue

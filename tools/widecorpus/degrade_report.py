@@ -9,7 +9,9 @@ from common import read, save
 import degrade
 import degrade_metrics as dm
 
-ROAD_COLS = (("width_med", "width p50 m"), ("width_p90", "p90"), ("lanes_exact", "lanes exact"),
+ROAD_COLS = (("width_med", "width p50 m"), ("width_p90", "p90"), ("width_mapped_med", "where D0 had a lane count: p50"),
+             ("width_mapped_p90", "p90"), ("lanes_exact", "lanes exact"), ("lanes_exact_mapped", "where D0 had a lane count"),
+             ("mapped_share", "share with a lane count"),
              ("edge_med", "edge p50 m"), ("edge_p90", "p90"), ("drawn_width_med", "drawn width p50 m"),
              ("drawn_width_p90", "p90"), ("surface_lost", "surface lost"))
 VERT_COLS = (("z_med", "height p50 m"), ("z_p90", "p90"), ("grade_med", "grade p50 %"), ("grade_p90", "p90"),
@@ -57,7 +59,7 @@ def collect(run, ps, steps):
                     for k, v in r.items():
                         pooled[s][k].append(v)
                 continue
-            r = dm.load_rows(out / f"rows_{s}.npz")
+            r = _with_areas(dm.load_rows(out / f"rows_{s}.npz"))
             for k, v in r.items():
                 pooled[s][k].append(v)
             per_place[p["id"]][s] = dm.summarize_roads(r).get("all", {})
@@ -67,6 +69,15 @@ def collect(run, ps, steps):
             pairs[s].append(read(out / f"cmp_{s}.json"))
     cat = lambda d: {k: np.concatenate(v) for k, v in d.items() if v}     # noqa: E731
     return done, {s: cat(pooled[s]) for s in steps}, {s: cat(blds[s]) for s in steps}, pairs, times, per_place, excluded
+
+
+def _with_areas(r):
+    """A place's rows with the mapped-area columns (NaN, off) where it has no mapped road areas: pooled columns of one
+    length."""
+    n = len(r["cls"])
+    if "La" not in r:
+        r = dict(r, La=np.full(n, np.nan), Ra=np.full(n, np.nan), area_centre=np.zeros(n, bool))
+    return r
 
 
 def _faults(log):
@@ -158,7 +169,8 @@ def markdown(rep, steps):
         L += ["| " + " | ".join(hdr) + " |", "|" + "---|" * len(hdr)]
         for g, v in rep["roads"][s].items():
             L.append("| " + " | ".join([g, f"{v['metres'] / 1000:.1f}"] + [
-                _fmt(v.get(k), pct=k in ("lanes_exact", "surface_lost")) for k, _ in ROAD_COLS]) + " |")
+                _fmt(v.get(k), pct=k in ("lanes_exact", "surface_lost", "lanes_exact_mapped", "mapped_share"))
+                for k, _ in ROAD_COLS]) + " |")
         L += ["", "Vertical (drivable surface at the stations):", ""]
         hdr = ["class"] + [h for _, h in VERT_COLS] + ["grade>15 % D0 / step", "ride>0.5 g D0 / step"]
         L += ["| " + " | ".join(hdr) + " |", "|" + "---|" * len(hdr)]
