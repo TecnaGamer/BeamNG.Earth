@@ -2325,7 +2325,6 @@ M._deckCtx = {
   end,
   hold = require('beamngEarth/simhold'),
 }
-trees.groundAt = M._deckCtx.groundAt      -- (56: the vineyards' rows tilted to the block's ground, trees.slopeFrame)
 function M._deckGuardStep(dtReal, dtSim)
   local g, c = st.deck, M._deckCtx
   if M._deckFailed then return end

@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 58          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 55          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -96,9 +96,6 @@ VERSION = 58          # (the cached cells hold their groups: 14 for the regional
                       # 53: the far clumps at one of their trees, not the square's centroid (_unlattice: no lattice)
                       # 54: the town palms by the sea and low only (palm_fit)
                       # 55: the veteran oaks in loose woods (veteran_oaks), the tropics' giant filler (G_TRO_GIANT)
-                      # 56: the vineyards' edges filled with single rows (G_VINE_ROW)
-                      # 57: those rows along each row line, flush with the field's edge (_vine_runs; 56's cells rebuilt)
-                      # 58: a group only where its three rows and their leaves fit (VINE_ROW_LEAF_M), the rows' too
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -128,9 +125,7 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
           # (48: the tropics' dead wood: Jungle Rock Island's fallen fronds and branches, its fallen giant)
           "deadwood_tropical",
           # (55: a rare veteran oak inside loose broadleaf woods; the tropics' giant filler in remote forest)
-          "oak_veteran", "tro_giant",
-          # (56: a vineyard's single row, Italy's grape_vine, where the three-row group does not fit: the edges)
-          "vine_row")
+          "oak_veteran", "tro_giant")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
@@ -138,8 +133,7 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
  G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP, G_MAQUIS, G_SHRUB_NORTH, G_SHRUB_TROPICAL, G_FERN, G_DEADWOOD,
  G_TRO_THICKET, G_DECIDUOUS_OPEN, G_OAK_OPEN, G_BIRCH_OPEN, G_BEECH_OPEN, G_PINE_WEST_OPEN, G_MEDITERRANEAN_OPEN,
  G_TROPICAL_OPEN, G_CONIFER_OPEN, G_SPRUCE_OPEN, G_PINE_EU_OPEN, G_REDWOOD, G_TRO_UNDERSTORY,
- G_DESERT_SHRUB_HOT, G_SAVANNA, G_LAUREL, G_PINE_MARITIME, G_DEADWOOD_TROPICAL, G_OAK_VETERAN, G_TRO_GIANT,
- G_VINE_ROW) = range(62)
+ G_DESERT_SHRUB_HOT, G_SAVANNA, G_LAUREL, G_PINE_MARITIME, G_DEADWOOD_TROPICAL, G_OAK_VETERAN, G_TRO_GIANT) = range(61)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -2291,24 +2285,6 @@ VINE_H_M = 2.6              # the shape's height (trees.lua CATALOG.vine)
 VINE_MIN_M2 = 300.0
 VINE_CELL_MAX = 40000
 VINE_TREE_M = 4.0           # a canopy top this tall in a vineyard is a tree, kept
-# (56) where a group does not fit (its ends out of the field, on a road or a building: the field's edges, a lattice
-# square's worth of bare ground by every road, the user's Laufen 2026-11-24, where the real rows run to the track)
-# single rows (Italy's grape_vine, 5.5 m of one row, 2.4 m high) fill each row line (the groups' rows, VINE_ROW_ACROSS_M
-# apart) from where the groups end to the field's edge: the line sampled every VINE_ROW_SAMPLE_M, its free runs (in the
-# field, out of its holes, off roads and buildings, off the groups) VINE_ROW_END_M in from their ends, each run covered
-# by pieces at most VINE_ROW_ALONG_M apart, the first and last flush with its ends (rows ending along the edge, not in
-# the lattice's steps: the user's "teeth", 2026-11-24); a run under VINE_ROW_MIN_M stays bare
-VINE_ROW_ALONG_M = 5.3
-VINE_ROW_ACROSS_M = 2.45
-VINE_ROW_HALF_M = 2.75      # m: half the piece's length
-VINE_ROW_END_M = 0.5
-VINE_ROW_SAMPLE_M = 0.5
-# (58) a row's leaves reach VINE_ROW_LEAF_M either side of its line: a group fits only where its three rows' ends and
-# middles do, and their leaves' edges (its outer rows lay over a slanted track, and its three rows ended in a step: the
-# user's Laufen, 2026-11-24); a single row's run is free only where its leaves' edges are too
-VINE_ROW_LEAF_M = 0.9
-VINE_ROW_MIN_M = 4.5         # (a shorter run: the 5.5 m piece would reach past the field's edge)
-VINE_ROW_H_M = 2.39         # the shape's height (trees.lua CATALOG.vine_row)
 EDGE_AXIS_DEG = 8.0         # _edge_axis: edges this near a direction count for it
 
 
@@ -2348,66 +2324,11 @@ def _field_rings(feats, cls_name, min_m2):
             yield fid, np.column_stack([x, y]), parts[0][1:], area
 
 
-def _vine_runs(xy, path, hps, chm, blocked, u, v, groups, phase_b, sec):
-    """(56) The single rows (VINE_ROW_*) of a vineyard ring xy (Web Mercator; path its Path, hps its holes'): on each
-    row line (v-coordinate phase_b + m VINE_ROW_ACROSS_M sec, the groups' rows) the runs in the field, off blocked and off
-    the groups (centres groups: a group covers its three lines VINE_ALONG_M / 2 either side of its centre), each covered by
-    pieces flush with its ends. Returns their centres (n, 2) and an id per piece (line and order: its hash)."""
-    rs, ds = VINE_ROW_ACROSS_M * sec, VINE_ROW_SAMPLE_M * sec
-    a_r, b_r = dnp.matmul(xy, u), dnp.matmul(xy, v)
-    m0 = int(math.ceil((float(b_r.min()) - phase_b) / rs))
-    m1 = int(math.floor((float(b_r.max()) - phase_b) / rs))
-    ga = dnp.matmul(groups, u) if len(groups) else np.zeros(0)
-    gm = np.rint((dnp.matmul(groups, v) - phase_b) / rs).astype(np.int64) if len(groups) else np.zeros(0, np.int64)
-    gh = (0.5 * VINE_ALONG_M) * sec
-    t = np.arange(float(a_r.min()), float(a_r.max()) + ds, ds)
-    out, ids = [], []
-    if len(t) < 2 or m1 < m0:
-        return np.zeros((0, 2)), np.zeros(0, np.int64)
-    leaf = VINE_ROW_LEAF_M * sec
-    for m in range(m0, m1 + 1):
-        b = phase_b + m * rs
-        line = t[:, None] * u[None, :] + b * v[None, :]
-        free = np.asarray(path.contains_points(line), bool)
-        if not free.any():
-            continue
-        for q in (line, line + leaf * v, line - leaf * v):      # (58: the leaves' edges too)
-            if q is not line:
-                free &= np.asarray(path.contains_points(q), bool)
-            for hp in hps:
-                free &= ~np.asarray(hp.contains_points(q), bool)
-            if blocked is not None and np.any(blocked):
-                free &= ~_blocked_at(q, chm, blocked)
-        near = np.abs(gm - m) <= 1
-        for a in ga[near]:
-            free &= np.abs(t - a) > gh
-        if not free.any():
-            continue
-        edge = np.diff(np.concatenate([[0], free.astype(np.int8), [0]]))
-        starts, ends = np.flatnonzero(edge == 1), np.flatnonzero(edge == -1) - 1
-        h, step, end = VINE_ROW_HALF_M * sec, VINE_ROW_ALONG_M * sec, VINE_ROW_END_M * sec
-        for i0, i1 in zip(starts, ends):
-            t0, t1 = float(t[i0]) + end, float(t[i1]) - end
-            length = t1 - t0
-            if length < VINE_ROW_MIN_M * sec:
-                continue
-            if length <= 2 * h:
-                cs = np.array([0.5 * (t0 + t1)])
-            else:
-                n = int(math.ceil((length - 2 * h) / step)) + 1
-                cs = t0 + h + (length - 2 * h) * np.arange(n) / (n - 1)
-            out.append(cs[:, None] * u[None, :] + b * v[None, :])
-            ids.append((m + (1 << 16)) * (1 << 16) + int(i0) // 4 * 64 + np.arange(len(cs)))
-    if not out:
-        return np.zeros((0, 2)), np.zeros(0, np.int64)
-    return np.concatenate(out), np.concatenate(ids).astype(np.int64)
-
-
 def vineyard_items(feats, chm, blocked, bounds=None):
     """The rows of vines of land_use class vineyard (VINE_*): G_VINE items, yaw along the rows. blocked: the canopy
     grid's buildings, roads and water; bounds (lon0, lat0, lon1, lat1) keeps an item in this cell."""
     from polygon import Path
-    xs, ys, yaws, us, gs = [], [], [], [], []
+    xs, ys, yaws, us = [], [], [], []
     for fid, xy, holes, area in _field_rings(feats, "vineyard", VINE_MIN_M2):
         u = _edge_axis(xy)
         key = np.uint64(_fid_key(fid))
@@ -2418,69 +2339,48 @@ def vineyard_items(feats, chm, blocked, bounds=None):
         pts = _lattice(xy, holes, u, along, across, phase_a, phase_b)
         if pts is None or len(pts) == 0:
             continue
-        path = Path(xy)
-        hps = [Path(np.column_stack(_to3857(np.asarray(hole, np.float64)[:, 0], np.asarray(hole, np.float64)[:, 1])))
-               for hole in holes if len(hole) >= 3]
-
-        v = np.array([-u[1], u[0]])
-        rs, leaf = VINE_ROW_ACROSS_M * sec, VINE_ROW_LEAF_M * sec
-
-        def fits(c, k):
-            """a group centred at c (n, 2) reaching k along u either side: each of its three rows' ends in the field and
-            out of its holes, free all along (every metre), and the outer rows' leaves' edges too"""
-            ok = np.ones(len(c), bool)
-            for off in (-rs - leaf, -rs, 0.0, rs, rs + leaf):
-                line = c + off * v
-                ends = [line + k * u, line - k * u]
-                for e in ends:
-                    ok &= np.asarray(path.contains_points(e), bool)
-                    for hp in hps:
-                        ok &= ~np.asarray(hp.contains_points(e), bool)
-                if blocked is not None and np.any(blocked):     # (every metre along it: a track may cross between)
-                    for f in np.linspace(-1.0, 1.0, max(3, int(2 * k / sec) + 1)):
-                        ok &= ~_blocked_at(line + f * k * u, chm, blocked)
-            return ok
-
         # the item's ends (a metre in from them) in the field too, and every one of its three points free
-        ok = fits(pts, (0.5 * VINE_ALONG_M - 1.0) * sec)
+        k = (0.5 * VINE_ALONG_M - 1.0) * sec
+        ends = [pts + k * u, pts - k * u]
+        ok = np.ones(len(pts), bool)
+        path = Path(xy)
+        for e in ends:
+            ok &= np.asarray(path.contains_points(e), bool)
+        for hole in holes:
+            hole = np.asarray(hole, np.float64)
+            if len(hole) >= 3:
+                hp = Path(np.column_stack(_to3857(hole[:, 0], hole[:, 1])))
+                for e in ends:
+                    ok &= ~np.asarray(hp.contains_points(e), bool)
+        if blocked is not None and np.any(blocked):
+            for p in [pts] + ends:
+                ok &= ~_blocked_at(p, chm, blocked)
         pts = pts[ok]
-        # (56) the row lines' runs the groups leave: single rows flush with their ends
-        rows, rid = _vine_runs(xy, path, hps, chm, blocked, u, v, pts, phase_b, sec)
-        if bounds is not None:
+        if bounds is not None and len(pts):
             ex0, ey0 = _to3857(bounds[0], bounds[1])
             ex1, ey1 = _to3857(bounds[2], bounds[3])
-
-            def inside(q):
-                return (q[:, 0] >= ex0) & (q[:, 0] < ex1) & (q[:, 1] > ey0) & (q[:, 1] <= ey1)
-            if len(pts):
-                pts = pts[inside(pts)]
-            if len(rows):
-                m = inside(rows)
-                rows, rid = rows[m], rid[m]
-        if len(pts) == 0 and len(rows) == 0:
+            pts = pts[(pts[:, 0] >= ex0) & (pts[:, 0] < ex1) & (pts[:, 1] > ey0) & (pts[:, 1] <= ey1)]
+        if len(pts) == 0:
             continue
-        yaw0 = math.degrees(dmath.atan2(float(u[1]), float(u[0])))
         uh = _hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 32)
-        ur = _hash01(np.full(len(rows), key), rid.astype(np.uint64) + np.uint64(1 << 20), 32)
-        xs.append(np.concatenate([pts[:, 0], rows[:, 0]]))
-        ys.append(np.concatenate([pts[:, 1], rows[:, 1]]))
-        yaws.append(np.concatenate([yaw0 + 180.0 * (uh < 0.5), yaw0 + 180.0 * (ur < 0.5)]))
-        us.append(np.concatenate([uh, ur]))
-        gs.append(np.concatenate([np.full(len(pts), G_VINE, np.uint8), np.full(len(rows), G_VINE_ROW, np.uint8)]))
+        yaw0 = math.degrees(dmath.atan2(float(u[1]), float(u[0])))
+        xs.append(pts[:, 0])
+        ys.append(pts[:, 1])
+        yaws.append(yaw0 + 180.0 * (uh < 0.5))
+        us.append(uh)
     if not xs:
         return _empty()
     x, y, yaw, u = np.concatenate(xs), np.concatenate(ys), np.concatenate(yaws), np.concatenate(us)
-    g = np.concatenate(gs)
     rank = (u * 0.15).astype(np.float32)
     if len(x) > VINE_CELL_MAX:
         keep = np.sort(np.argsort(rank, kind="stable")[:VINE_CELL_MAX])
-        x, y, yaw, u, rank, g = x[keep], y[keep], yaw[keep], u[keep], rank[keep], g[keep]
+        x, y, yaw, u, rank = x[keep], y[keep], yaw[keep], u[keep], rank[keep]
     lon, lat = _to4326(x, y)
     n = len(lon)
-    h = (np.where(g == G_VINE_ROW, VINE_ROW_H_M, VINE_H_M)
-         * (0.95 + 0.1 * _hash01(np.arange(n, dtype=np.uint64), np.full(n, 7, np.uint64), 33))).astype(np.float32)
+    h = (VINE_H_M * (0.95 + 0.1 * _hash01(np.arange(n, dtype=np.uint64), np.full(n, 7, np.uint64), 33))).astype(
+        np.float32)
     return Items(lon, lat, h, np.full(n, 1.2, np.float32), np.full(n, KIND_BUSH, np.uint8),
-                 g.astype(np.uint8), rank, yaw.astype(np.float32), np.ones(n, np.float32))
+                 np.full(n, G_VINE, np.uint8), rank, yaw.astype(np.float32), np.ones(n, np.float32))
 
 
 # Round bales on fields after the harvest (the asset survey's #16): the stock race props s_haybaleround_large_01
@@ -2879,8 +2779,7 @@ class JsonRows(str):
 AUDIO_CELL_M = 256.0 / 12
 AUDIO_H_MID = 15.0
 AUDIO_H_LARGE = 19.0
-AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE, G_VINE_ROW, G_DEADWOOD,
-                                                         G_DEADWOOD_TROPICAL)
+AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE, G_DEADWOOD, G_DEADWOOD_TROPICAL)
                + CLUMP_GROUPS + BALE_GROUPS]
 
 
