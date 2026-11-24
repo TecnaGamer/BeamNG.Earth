@@ -461,8 +461,10 @@ pub fn natural_trees<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, slot
             if near_blocked(nr as i64, nc as i64) || g.curb[[nr, nc]] != 0 {
                 continue;
             }
-            x = c.x + pc * g.dx;
-            y = c.y - pr * g.dy;
+            // (to the target pixel's centre, as the canopy's tops stand: the masks are judged there, and a trunk
+            // kept where it is mapped could stand up to half a pixel inside the drawn kerb)
+            x = g.x0 + (nc as f64 + 0.5) * g.dx;
+            y = g.y0 - (nr as f64 + 0.5) * g.dy;
             if !(x >= bx0 && x < bx1 && y >= by0 && y < by1) {
                 continue;
             }
