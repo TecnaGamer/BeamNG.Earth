@@ -20,7 +20,7 @@ from it. The output is compared with the same place's full-data build (D0, the s
 
 Deterministic: each step is a pure function of the inputs (columns blanked, rule tables emptied, tag keys dropped);
 no randomness, no ordering by hash. The road layer's OSM tags are removed before they are joined to the Overture
-segments (MapData._osm), so what is built from them at decode time (the lane sections, one-way joins, Layercake lane
+segments (MapData._osm_read, the decode-time join's read), so what is built from them at decode time (the lane sections, one-way joins, Layercake lane
 counts) is built without them; the lane shards' columns and Overture's rules are blanked right after their join
 (MapData._lanes), before the level ways, lane sections and rounding. The decoded roads must therefore be made again
 (the runner removes mapdata/v2/*/roads.* from the build's private copy; the raw inputs re-decode offline) and the
@@ -182,15 +182,17 @@ def install(step):
         raise RuntimeError("degrade.install called twice")
     MD._j1_step = step
     keys = osm_keys(step)
-    orig_osm = MD._osm
+    orig_osm_read = MD._osm_read
     orig_lanes = MD._lanes
     orig_decoded = MD._decoded_layer
     orig_bdtopo = MD._bdtopo
     orig_collect = MD._cell_collect
 
-    def _osm(feats, got, geometry=None):
-        tags, ways = got
-        return orig_osm(feats, (strip_tags(tags, keys), strip_ways(ways, keys)), geometry)
+    def _osm_read(self, key, kind):
+        # (the decode-time join reads a cell's OSM tags here since roads 10, osmtags joined at decode: stripped before
+        # they reach the lane sections and one-way joins, as the bake-time join's input was before)
+        tags, ways, geometry, src = orig_osm_read(self, key, kind)
+        return strip_tags(tags, keys), strip_ways(ways, keys), geometry, src
 
     def _lanes(self, key, layer, feats, *args, **kwargs):
         out = orig_lanes(self, key, layer, feats, *args, **kwargs)
@@ -219,7 +221,7 @@ def install(step):
             return feats
         return orig_bdtopo(self, key, layer, feats)
 
-    MD._osm = staticmethod(_osm)
+    MD._osm_read = _osm_read
     MD._lanes = _lanes
     MD._dec_key = _dec_key
     MD._decoded_layer = _decoded_layer

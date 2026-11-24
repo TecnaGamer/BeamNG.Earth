@@ -138,8 +138,8 @@ class Filter(unittest.TestCase):
 
     def test_install_patches_map_reads(self):
         # (in its own process: the patch is global)
-        code = ("import sys; sys.path[:0]=[%r,%r]; import degrade, mapdata; m=mapdata.MapData; o=m._osm;"
-                "degrade.install('D1'); assert m._osm is not o and m._j1_step=='D1';"
+        code = ("import sys; sys.path[:0]=[%r,%r]; import degrade, mapdata; m=mapdata.MapData; o=m._osm_read;"
+                "degrade.install('D1'); assert m._osm_read is not o and m._j1_step=='D1';"
                 "assert m._dec_key(None,None,'roads',{})==(None,{});"
                 "print('ok')") % (str(TREE / "server"), str(HERE))
         out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
