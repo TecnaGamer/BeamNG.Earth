@@ -267,6 +267,20 @@ weather). The pause-menu integration follows the pattern of the TAA Standalone m
   their agency badges are simple drawn shapes (no NPS arrowhead or Forest Service shield). Names come from the map
   data (Overture Maps, © OpenStreetMap contributors, ODbL).
 
+## Dynamic cliffs
+
+| Set | Source and redistribution information |
+| --- | --- |
+| Natural cliffs / shared rock grain | Poly Haven CC0 scans; [notice](server/data/cliff_natural.NOTICE.md) |
+| Limestone | Austint30, CC0; OpenAI image generation through ChatGPT/Codex, offline authored PBR; [notice and record limitations](server/data/cliff_limestone.NOTICE.md) |
+| Arid rock | Austint30, CC0; OpenAI image generation through ChatGPT/Codex, overlapping patch assembly; [notice and record limitations](server/data/cliff_arid.NOTICE.md) |
+| Canyon rock | Austint30, CC0; OpenAI image generation through ChatGPT/Codex, overlapping patch assembly; [notice and record limitations](server/data/cliff_canyon.NOTICE.md) |
+| Height / transition references | Scan-derived and authored numeric data; [sources and hashes](server/data/cliff_references.NOTICE.md) |
+
+Stock BeamNG rock models and contact-detail maps are read from the player's own
+installation. They and their derivatives are not redistributed in this repository
+or the optional texture pack.
+
 ## JPEG encoding in the companion server
 
 The native encoder uses libjpeg-turbo 3.1.0 through turbojpeg-sys 1.2.0.

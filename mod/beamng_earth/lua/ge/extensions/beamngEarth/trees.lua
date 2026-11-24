@@ -8,6 +8,7 @@
 local M = {}
 local vienna = require('beamngEarth/vienna_convention_speed_signs')
 local geotile = require('beamngEarth/geotile')
+local clifftalus = require('beamngEarth/clifftalus')
 -- Geotiles (server --geo-tiles on, hello.geoTiles): a tile keyed 'g17_x_y' holds its items in its own frame (msg.frame,
 -- msg.pivot); it belongs to no anchor. Its items are made where its placement into the current anchor puts them
 -- (geotile.placement); at a rebase its Forest takes the move from the old placement to the new one (rendering at once,
@@ -904,9 +905,12 @@ local function itemType(shape, solid)
     d = (worldEditorCppApi and worldEditorCppApi.createObject) and worldEditorCppApi.createObject('TSForestItemData')
       or createObject('TSForestItemData')
     if not d then return nil end
-    d:setField('shapeFile', 0, shape .. '.dae')
+    local compiledRock = shape:find('cliff_talus_', 1, true) and shape:sub(-5) == '.cdae'
+    d:setField('shapeFile', 0, compiledRock and shape or (shape .. '.dae'))
     d:setField('collidable', 0, solid and '1' or '0')
-    d:setField('windScale', 0, '0.4'); d:setField('branchAmp', 0, '0.1'); d:setField('detailAmp', 0, '0.2')
+    local rock = shape:find('cliff_talus_', 1, true) ~= nil
+    d:setField('windScale', 0, rock and '0' or '0.4')
+    d:setField('branchAmp', 0, rock and '0' or '0.1'); d:setField('detailAmp', 0, rock and '0' or '0.2')
     d:registerObject(name)
     if Sim and Sim.getDataBlockSet then Sim.getDataBlockSet():addObject(d) end
   end
@@ -918,6 +922,7 @@ end
 -- item's rank; else the nearest. Returns shape, scale.
 function M.pick(group, h, rank)
   local list = M.CATALOG[group] or M.CATALOG.deciduous
+  if (clifftalus.enabled and clifftalus.isGroup(group)) then return clifftalus.pick(group, list, h, rank) end
   local cands = {}
   for _, range in ipairs({ { 0.8, 1.25 }, { 0.6, 1.6 } }) do      -- near its size first, then wider
     for _, v in ipairs(list) do
@@ -1158,7 +1163,7 @@ local function addTile(anchorId, tileKey, flat, stride, groups, geo, count)
   local old = tiles[key]
   local tx, ty = tostring(tileKey):match('(%-?%d+)_(%-?%d+)$')
   -- (the shape cache is the items': every message brings items of its own)
-  local t = { anchor = anchorId, f = flat, s = stride, n = count or math.floor(#flat / stride),
+  local t = { anchor = anchorId, sourceKey = tostring(tileKey), f = flat, s = stride, n = count or math.floor(#flat / stride),
     groups = type(groups) == 'table' and groups or nil,
     made = old and old.made or {}, solid = old and old.solid or {}, near = old and old.near,
     shapes = {}, scales = {},
@@ -1643,7 +1648,30 @@ function M.spareWanted(frameMs)
   return frameMs >= M.LOADING_FRAME_MS and math.max(M.POOL_SPARE, M.POOL_SPARE_CALM) or M.POOL_SPARE_DRIVE
 end
 
+-- Wait for solid ground and the supporting cliff, including after rebases.
+function M.cliffGroundReady(t, i, support)
+  -- All rocks in a tile share the same cliff pieces. Their presence cannot change
+  -- during this synchronous Forest pass; retry on the next pass after imports.
+  local pieces = support and support[t]
+  if pieces == nil then
+    local source = t.key or (t.sourceKey or ''):gsub('^t', '')
+    pieces = require('beamngEarth/roads').cliffPiecesReady(source, t.anchor)
+    if support then support[t] = pieces end
+  end
+  if not pieces then return false end
+  local b = (i-1)*t.s
+  local x, y, z = t.f[b+F_X], t.f[b+F_Y], t.f[b+F_Z]
+  if t.geo then x, y, z = geotile.apply(t.pl, x, y, z) end
+  local radius = math.max(2, tonumber(t.f[b+F_HEIGHT]) or 2)
+  local ground = require('beamngEarth/terrainpatch')
+  if not ground.groundReady(x, y)
+    or not ground.groundReady(x-radius, y-radius) or not ground.groundReady(x+radius, y-radius)
+    or not ground.groundReady(x-radius, y+radius) or not ground.groundReady(x+radius, y+radius) then return false end
+  return true
+end
+
 function M.update(anchorId, player, view, frameMs, fill)
+  local cliffSupport = nil
   if not next(tiles) then return end
   if frameMs and frameMs <= 0 then return end
   if not setup() then return end
@@ -1895,7 +1923,7 @@ function M.update(anchorId, player, view, frameMs, fill)
         local b = (i - 1) * s
         local r = f[b + F_RANK]
         local g = names[f[b + F_GROUP] + 1]
-        local cap = g and M.GROUP_MAX_M[g]
+        local cap = g and (M.GROUP_MAX_M[g] or ((clifftalus.enabled and clifftalus.isGroup(g)) and clifftalus.MAX_DISTANCE_M))
         local isGuardrail = M.isBarrier(g)
         if isGuardrail then
           -- Preserve continuous 3 m runs until a tile cap actually requires thinning.
@@ -1919,13 +1947,35 @@ function M.update(anchorId, player, view, frameMs, fill)
         end
         if g and M.groupOff[g] then r = 2 end    -- a group the player turned off (setGroupEnabled)
         -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree
-        if g and not M.CATALOG[g] then
+        if g and not M.CATALOG[g] and not (clifftalus.enabled and clifftalus.isGroup(g)) then
           r = 2
           if not M.unknownGroups[g] then M.unknownGroups[g] = true; log('W', 'beamngEarth.trees', 'no shapes for group ' .. g) end
         end
         -- an item something else stands in for (navgraph.lua's switchable signal heads), or one in the way of
         -- something (townsigns.lua: a tree in front of a town sign); no call at all when nothing hides (every row)
         if g and (M.suppress or next(M.hiders)) and hidden(g, f[b + F_X], f[b + F_Y], t.anchor, t, f[b + F_Z]) then r = 2 end
+        if (clifftalus.enabled and clifftalus.isGroup(g)) then
+          if not clifftalus.available(g) or M.groupOff.cliff_rock then r = 2 end
+          if r < want and not t.made[i] then
+            cliffSupport = cliffSupport or {}
+            if not M.cliffGroundReady(t, i, cliffSupport) then
+              skipped = skipped or i
+              r = 2
+            end
+          end
+          if r < want and not M.CATALOG[g] then
+            -- One private material/model preparation step, under the existing
+            -- loading budget. Model import still uses the usual Forest budget.
+            local ok, catalog = pcall(clifftalus.catalog, g, true)
+            if ok and catalog then
+              M.CATALOG[g] = catalog
+              M.GROUP_MAX_M[g] = clifftalus.MAX_DISTANCE_M
+            elseif not ok then
+              clifftalus.fail(g, catalog)
+            end
+            stop(t, i, skipped, want, band, near); return
+          end
+        end
         local solid = near and not M.NO_COLLIDE[g or '']
         if solid and rOn2 and r < want then
           local x, y = f[b + F_X], f[b + F_Y]
@@ -2073,7 +2123,7 @@ function M.keepupMissing(px, py, r)
         if (x - lx) * (x - lx) + (y - ly) * (y - ly) <= r2 and not t.made[i] then
           local g = names[f[b + F_GROUP] + 1]
           local rk = f[b + F_RANK]
-          local cap = g and M.GROUP_MAX_M[g]
+          local cap = g and (M.GROUP_MAX_M[g] or ((clifftalus.enabled and clifftalus.isGroup(g)) and clifftalus.MAX_DISTANCE_M))
           if M.isBarrier(g) then
             local rowCap
             for _, lim in ipairs(M.TILE_CAP) do if dist <= lim[1] then rowCap = lim[2]; break end end

@@ -12,6 +12,48 @@ the car too.
 
 ## Run
 
+### Optional dynamic cliffs
+
+Dynamic cliffs add rock faces to steep terrain and roadside cuts, with embedded
+outcrops and smaller rocks. Rock colors adapt to the local satellite imagery.
+The entire feature is off by default. Set **`BNE_CLIFFS=1`** before installation
+and launcher/server startup to opt in. This is the only Dynamic cliffs switch;
+the former `BNE_CLIFF_ROAD_CUTS` variable is no longer used.
+
+With the opt-in enabled, Graphics settings offers **Natural cliffs**,
+**Road-cut cliffs**, and **Cliff detail**. Both categories start enabled and can
+be switched independently. These controls are hidden without the server opt-in;
+saved choices and graphics presets cannot enable the feature themselves.
+Use **Restart world server** to apply changes (or restart manually when running
+without the launcher). Road cuts take priority wherever both categories overlap.
+
+Cliff detail follows graphics presets: Low → Low, Medium → Medium, High → Normal,
+Ultra → High, Extreme → Extreme. Category toggles remain your own choices.
+Low and Medium build simpler nearby meshes; higher levels keep detailed meshes
+visible farther away. All levels retain the authored texture resolution.
+Cached cliff results include both category choices and detail. Disabling the
+master opt-in skips all cliff generation and cliff texture preparation.
+All cliff textures are prepared before driving when opted in, so changing
+categories later needs no texture conversion during streaming.
+
+The authored rock textures retain 4K detail. See the
+[texture source notes](../mod/texture_sources/levels/beamng_earth/art/shapes/beamngEarth/cliff/README.md)
+for download, installation and estimated texture-memory sizes. Optional ground
+detail and contact strips use stock assets from the player's own BeamNG
+installation, prepared before driving. If those assets are unavailable, the
+server startup reports that the decoration is unavailable; cliff faces still
+work. For a standalone installation, `install.py --game-dir` selects the game
+installation used for this preparation.
+
+Cliff rocks also use the installed game's compiled models, prepared in a private
+versioned cache before streaming. Their authored detail levels and collision
+shapes are preserved. Only material bindings change for satellite-based colors;
+the game does not need to recompile a Collada model for each color while driving.
+Missing or unsupported stock models skip the dependent rocks with a diagnostic.
+These models and their derived copies are never included in the mod download.
+
+### Server command
+
 ```sh
 python3 server/earthd.py                    # listens on 127.0.0.1:47613
 python3 server/earthd.py --port 47613 --user-dir ~/.local/share/BeamNG/BeamNG.drive/current \
@@ -190,6 +232,27 @@ first (the mod's cover and commit gating need them), then tiles of groups that a
 sent, then the rest, nearest first (in mesh mode there is no block class: the L-2 tiles around the
 player come first by distance). The imagery of the next 12 queued tiles is fetched ahead of their
 build.
+
+### Dynamic cliffs protocol additions
+
+`BNE_CLIFFS=1` permits the saved Natural cliffs and Road-cut cliffs settings.
+The server's `hello` includes `cliffs: {available: boolean, natural: boolean,
+roadCuts: boolean}`. Availability gates the UI; the category values gate client
+materials and stock-rock decorations. Cliff settings join the existing startup
+settings snapshot and restart flow; cached meshes include category and detail choices.
+
+A `far_retex` may also contain `replacement`, a complete `far_tile` message.
+This updates satellite-driven cliff vertex colors along with the imagery: the
+mod imports the replacement hidden, then swaps it into the existing tile while
+preserving visibility and ownership. Texture-only updates retain their existing
+behavior. Replacement shapes use new revision paths; pooled shapes carry a fresh
+`slotSerial` so a held old shape cannot be reused before release.
+
+The debug map sends `debug_map {id, layer, s, w, n, e}`. Its read-only provider
+returns `debug_map_result {id, layers, legend, features, note, enabled}` or
+`{id, error}` for invalid/busy requests. The `enabled` object uses `natural` and
+`road_cuts`. Providers use production material selectors and already-delivered
+placement records; they do not generate tiles or fetch external data.
 
 ## Wind turbine geotiles
 

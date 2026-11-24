@@ -673,6 +673,38 @@ fn dds_header(w: usize, h: usize, mips: usize, dxgi: u32) -> Vec<u8> {
     o
 }
 
+/// Encode prefiltered scalar levels using the same BC4 backend as installed
+/// textures. Callers supply nonlinear coverage mips filtered in height space.
+pub(crate) fn scalar_levels_dds(levels: Vec<(usize, usize, Vec<u8>)>) -> Result<Vec<u8>, String> {
+    let (w, h, _) = levels.first().ok_or("empty scalar mip chain")?;
+    let mut out = dds_header(*w, *h, levels.len(), DXGI_BC4);
+    for (w, h, px) in levels {
+        if w == 0 || h == 0 || !w.is_power_of_two() || !h.is_power_of_two() || px.len() != w * h {
+            return Err("invalid scalar mip dimensions".into());
+        }
+        let level = Level { w, h, chans: 1, px };
+        out.extend(encode_rows(&level, DXGI_BC4, 0, h)?);
+    }
+    Ok(out)
+}
+
+/// Linear data with the standard mip filter. RGB detail must remain RGB: a
+/// single-channel shader detail map can introduce a red cast.
+pub(crate) fn data_dds(w: usize, h: usize, channels: usize, pixels: Vec<u8>) -> Result<Vec<u8>, String> {
+    if !w.is_power_of_two() || !h.is_power_of_two() || !matches!(channels, 1 | 3)
+        || pixels.len() != w * h * channels {
+        return Err("invalid detail map dimensions".into());
+    }
+    let dxgi = if channels == 1 { DXGI_BC4 } else { DXGI_BC7 };
+    let levels = mip_chain(w, h, channels, pixels, Role::Data);
+    let mut out = dds_header(w, h, levels.len(), dxgi);
+    for (w, h, pixels) in levels {
+        let level = to_encoder(w, h, channels, &pixels, dxgi);
+        out.extend(encode_rows(&level, dxgi, 0, level.h)?);
+    }
+    Ok(out)
+}
+
 /// Run f(i) for i in 0..n on `threads` workers (an index handed out at a time).
 fn parallel<F: Fn(usize) + Sync>(n: usize, threads: usize, f: F) {
     let next = AtomicUsize::new(0);
