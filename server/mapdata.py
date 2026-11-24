@@ -494,6 +494,46 @@ class MapData:
         except Exception as e:      # (no lane data: the markings' guesses)
             log.debug("lanetags join %s: %s: %s", key, type(e).__name__, e)
 
+    def _joins_due(self, feats):
+        """Is a tag join of the roads layer feats due (_rails / _lanes / _drive: its build's join not made yet, a shard
+        that could not be had at its decode)?"""
+        rt = getattr(self, "rail_tags", None)
+        if rt is not None:
+            sub = feats.attrs.get("subtype")
+            if sub is not None and (np.asarray(sub).astype(str) == "rail").any():
+                b = rt.version()
+                if b is not None and feats.__dict__.get("_rails_built") != b:
+                    return True
+        for name, flag in (("lane_tags", "_lanes_built"), ("drive_tags", "_drive_built")):
+            t = getattr(self, name, None)
+            if t is not None:
+                b = t.version()
+                if b is not None and feats.__dict__.get(flag) != b:
+                    return True
+        return False
+
+    def _joined(self, key, layer, feats):
+        """A roads layer from memory with its due tag joins made (_joins_due): on a copy, which takes its place in
+        memory, never on the object other threads may be reading (a join sets its columns one at a time: a reader
+        took some of one join and some of another, R4 of ~/bnge-tests/manifestaudit). The layer itself when none is
+        due (the usual case: one join a build, at the decode)."""
+        if layer != "roads" or feats is None or not len(feats) or not self._joins_due(feats):
+            return feats
+        import copy
+        c = copy.copy(feats)                # (its own __dict__, attrs and rules; the arrays shared, never changed)
+        c.attrs, c.rules = dict(feats.attrs), dict(feats.rules)
+        self._rails(key, layer, c)
+        self._lanes(key, layer, c)
+        self._drive(key, layer, c)
+        if all(c.__dict__.get(f) == feats.__dict__.get(f) for f in ("_rails_built", "_lanes_built", "_drive_built")):
+            return feats                    # (nothing joined: unreachable again, faulted by the join)
+        k = (str(_key(key)), layer)
+        with self._mem_lock:
+            cur = self._mem.get(k)
+            if cur is not None and cur[0] is feats:
+                self._mem[k] = (c, cur[1], cur[2])
+        return c
+
     def _drive(self, key, layer, feats):
         """The roads layer's road segments with the drive shards' way tags (drivetags.join: tracktype, ford, a way's
         traffic_calming), once per build of them; only with a switch that reads them (drivefeat.SHARDS). Joined after
@@ -766,36 +806,91 @@ class MapData:
             v["osmareas"] = osmareas.identity(self)
         return v
 
-    def warm_manifests(self):
-        """The weekly datasets' manifests (rails, lanes, stations: versions()' keys) fetched now, in the background (the
-        server's start): a first run's tiles, plans and cell facts were keyed without them until a build happened to
-        ask, and none of those was found again by the next run (versions)."""
-        def run():
+    def freeze_manifests(self, wait_s=None):
+        """The server's main process, before its workers start: the run's build of every weekly dataset decided now
+        (pagesdata.Manifest's session: rails, lanes, stations, signs, drive, FRA crossings, the OSM tag / year / colour /
+        area archives, the tall buildings, the regional scenery), each in a thread of its own: the pin on disk at once,
+        a first run's fetched (pagesdata.FETCH_WAIT_S at most, else none for the run). Every process of the run reads
+        those (the workers inherit the session's folder), so the tiles, plans and cell facts of one session are of one
+        build each, and a first run's are keyed with the builds from its first tile on (versions). Returns a function
+        that waits for them (wait_s at most; None: FETCH_WAIT_S and a little): called before the worker processes
+        start. (The datasets first asked later, a roof folder or New York's shards, are decided by the first process
+        that asks, the same way.)"""
+        import pagesdata
+
+        def srcs():
+            out = [getattr(self, "rail_tags", None), getattr(self, "lane_tags", None),
+                   getattr(self, "station_tags", None), getattr(self, "drive_tags", None)]
+            hs = getattr(self, "highway_signs", None)
+            out.append(getattr(hs, "tags", None))
+            import railtags
+            if railtags.ON and self.fetcher is not None:
+                out.append(railtags.Shards(self.cache_dir, self.fetcher, "fra"))     # (blockworker's fra.Crossings)
+            try:
+                tg = self._osm_shards()
+                out.append(tg.pages if tg is not None else None)
+            except Exception:
+                out.append(None)
             import osmareas
             import osmcolours
             import osmyears
-            got = []
-            mods = (osmyears, osmcolours, osmareas) if osmareas.ON else (osmyears, osmcolours)
-            for mod in mods:                    # (the building years and colours: pinned now for the next start, frozen)
+            for mod in (osmyears, osmcolours, osmareas) if osmareas.ON else (osmyears, osmcolours):
                 try:
-                    got.append(mod.shards(self))
+                    out.append(mod.shards(self))
                 except Exception:
-                    got.append(None)
+                    out.append(None)
             try:
                 import bldhz            # (the horizon ring's tall buildings, the same way)
                 tall = bldhz.source(self)
-                got.append(tall if isinstance(tall, bldhz.PagesIndex) else None)
+                out.append(tall if isinstance(tall, bldhz.PagesIndex) else None)
             except Exception:
-                got.append(None)
-            for src in (getattr(self, "rail_tags", None), getattr(self, "lane_tags", None),
-                        getattr(self, "station_tags", None), getattr(self, "drive_tags", None), *got):
-                if src is None:
-                    continue
-                try:
+                out.append(None)
+            return [x for x in out if x is not None]
+
+        def one(src):
+            try:
+                if hasattr(src, "frozen"):
+                    src.frozen()
+                else:
                     src.version()
-                except Exception as e:
-                    log.debug("manifest of %s: %s: %s", getattr(src, "name", src), type(e).__name__, e)
-        threading.Thread(target=run, daemon=True, name="manifests").start()
+            except Exception as e:
+                log.debug("manifest of %s: %s: %s", getattr(src, "name", src), type(e).__name__, e)
+
+        def regional():
+            try:
+                import regionaldata
+                regionaldata.manifest()
+            except Exception as e:
+                log.debug("regional manifest: %s: %s", type(e).__name__, e)
+        ts = [threading.Thread(target=one, args=(src,), daemon=True, name="manifests") for src in srcs()]
+        ts.append(threading.Thread(target=regional, daemon=True, name="manifests"))
+        for t in ts:
+            t.start()
+        t0 = time.monotonic()
+        limit = (pagesdata.FETCH_WAIT_S + 5.0) if wait_s is None else wait_s
+
+        def wait():
+            for t in ts:
+                t.join(max(0.0, limit - (time.monotonic() - t0)))
+            late = sum(t.is_alive() for t in ts)
+            if late:
+                log.warning("weekly data: %d manifest(s) not decided before the workers start", late)
+            log.info("weekly data: %s (%.2f s)", " ".join(f"{k}={v}" for k, v in self.weekly_builds().items()),
+                     time.monotonic() - t0)
+        return wait
+
+    def weekly_builds(self):
+        """{dataset: the run's build or None} of the weekly datasets this map data holds (the log line at start)."""
+        out = {}
+        for k in ("rail_tags", "lane_tags", "station_tags", "drive_tags"):
+            t = getattr(self, k, None)
+            if t is not None:
+                out[t.name] = t.manifest.built
+        return out
+
+    def warm_manifests(self):
+        """freeze_manifests without waiting (an owner that starts no worker processes)."""
+        self.freeze_manifests()
 
     def _pmt(self, layer):
         """Does this layer come from Overture's tiles (pmtiles.py; BNGE_MAP_SOURCE)?"""
@@ -1538,9 +1633,7 @@ class MapData:
             if layer in mem:                # decoded before: shared (cell layers are never changed after loading)
                 cd.layers[layer], prov, _ = mem[layer]
                 dt, hit = 0.0, True
-                self._rails(key, layer, cd.layers[layer])
-                self._lanes(key, layer, cd.layers[layer])
-                self._drive(key, layer, cd.layers[layer])
+                cd.layers[layer] = self._joined(key, layer, cd.layers[layer])
             else:
                 entry, hit, dt = results[layer]
                 cd.layers[layer], prov, _ = entry

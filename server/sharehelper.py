@@ -212,7 +212,8 @@ def run(a):
             time.sleep(POLL_S)          # (nobody there, or the map data's weekly versions not known yet)
             continue
         sig, versions = got
-        pc = plancache.PlanCache(os.path.join(a.cache, "plans", os.environ.get(plancache.RUN_ENV) or "helper"), sig)
+        pc = plancache.PlanCache(os.path.join(a.cache, "plans", os.environ.get(plancache.RUN_ENV) or "helper"), sig,
+                                 versions=versions)
         pc.persist = (a.cache, (plancache.FRAMES, sig, versions))
         code = mpshare.expect_code(pc._bake_expect())
 

@@ -183,11 +183,9 @@ class TagShards:
         with self._lock:
             if self._man is not None and self._man[0] == built:
                 return self._man
-        try:
-            with open(os.path.join(self.pages.dir, "manifest.json"), encoding="utf-8") as f:
-                m = json.load(f)
-        except (OSError, ValueError, TypeError):
-            return None
+        # (the run's manifest, pagesdata.Manifest's: the pin on disk may be a newer one, fetched for the next start)
+        m = self.pages.manifest.current()
+        m = dict(m) if isinstance(m, dict) else None
         parts = parts_of(m) if isinstance(m, dict) else None
         if parts is None or m.get("built") != built or m.get("format") != self.FORMAT \
                 or not isinstance(m.get("zoom"), int) or not 0 < m["zoom"] <= 14 or not self._valid(m):

@@ -133,21 +133,33 @@ def for_grader(cache_dir, grader, widths, wet):
     run = os.environ.get(RUN_ENV)
     if not run:
         return None
-    pc = PlanCache(os.path.join(cache_dir, "plans", run), signature)
-    pc.persist = (cache_dir, (FRAMES, pc.signature,
-                              md.versions() if md is not None and hasattr(md, "versions") else None))
+    versions = md.versions() if md is not None and hasattr(md, "versions") else None
+    # (the run's folder of the map data's versions: plans of one build are never read for another's tiles and blocks,
+    # whatever a process holds; R1 of ~/bnge-tests/manifestaudit: the weekly builds were switched mid-run and the old
+    # build's plans fed the new build's keys, kept across restarts)
+    pc = PlanCache(os.path.join(cache_dir, "plans", run), signature, versions=versions)
+    pc.persist = (cache_dir, (FRAMES, pc.signature, versions))
     if md is not None and hasattr(md, "versions"):
-        # (the versions followed, not taken once: a first run's weekly manifests come after its first anchor, and a
-        # pinned week-old build is refreshed during a session; taken once, every plan of the session was keyed
-        # without them / with the old build, and never found again, nor in a shared archive)
+        # (the versions followed, not taken once: they are the run's (pagesdata's session decides the weekly builds
+        # before the workers start), and a plan is kept only under the versions it was planned with (claim / store))
         pc._versions_of = md.versions
     return pc
 
 
+def versions_tag(versions):
+    """A short digest of the map data's versions (a run folder's name part: PlanCache)."""
+    return hashlib.sha256(json.dumps(versions, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
+
+
 class PlanCache:
-    def __init__(self, root, signature):
-        self.dir = os.path.join(root, FRAMES, signature)
+    def __init__(self, root, signature, versions=None):
+        """root: the run's folder; versions: the map data's versions the run's plans are of (None: a folder of the
+        signature alone), a digest of them in the folder's name (versions_tag)."""
+        self.dir = os.path.join(root, FRAMES, signature if versions is None else
+                                f"{signature}.v{versions_tag(versions)}")
         self.signature = signature
+        self._planned_with = {}     # cell key -> the versions when this process began planning it (claim; store)
+        self._refused = set()       # cell keys whose complete plans store kept as short (refused)
         self._persist = None    # (cache dir, key parts) of the revisit cache's copy (for_grader), or None: persist
         self._versions_of = None    # (for_grader: the map data's versions(), read again at most every VERSIONS_RECHECK_S)
         self._persist_at = time.monotonic()
@@ -297,6 +309,31 @@ class PlanCache:
         self._persist = value
         self._versions_of = None
 
+    def _versions_now(self):
+        """The map data's versions now (read now, not VERSIONS_RECHECK_S old), taken into persist; None without."""
+        p = self._persist
+        if p is None:
+            return None
+        if self._versions_of is None:
+            return p[1][2]
+        try:
+            v = self._versions_of()
+        except Exception:
+            v = None
+        if v is None:
+            return p[1][2]
+        if v != p[1][2]:
+            self._persist = (p[0], (p[1][0], p[1][1], v))
+        self._persist_at = time.monotonic()
+        return v
+
+    def _note_planning(self, key):
+        """This process begins planning cell key: the versions it is planned with (store keeps it under them only)."""
+        k = (int(key[0]), int(key[1]), int(key[2]))
+        v = self._versions_now()
+        with self._lock:
+            self._planned_with[k] = v
+
     def has(self, key):
         """Are cell key's plans on disk (this run's, or the revisit cache's copy)? A stat or two, nothing read."""
         if os.path.exists(self._path(key)):
@@ -407,6 +444,20 @@ class PlanCache:
             provenance = None
             import roadz
             shared = not roadz.hk_cell(key)         # (Hong Kong's heights stay on this computer: roadz.hk_cell)
+            if persist:
+                with self._lock:
+                    v0 = self._planned_with.pop((int(key[0]), int(key[1]), int(key[2])), None)
+                v1 = self._versions_now()
+                if v0 is not None and v1 is not None and v0 != v1:
+                    # (planned with other map data versions than the ones now: kept under neither, short for the run's
+                    # other processes; R2: a plan begun on one weekly build was filed under the next one's key)
+                    what = (", ".join(sorted(str(k) for k in set(v0) | set(v1) if v0.get(k) != v1.get(k)))
+                            if isinstance(v0, dict) and isinstance(v1, dict) else "?")
+                    log.warning("cell %s's plans: the map data's versions changed while they were made (%s); not kept",
+                                key, what)
+                    persist = False
+                    with self._lock:
+                        self._refused.add((int(key[0]), int(key[1]), int(key[2])))
             if persist and shared:      # (the marker of complete plans: the plans' own digest, cell and signature)
                 provenance = json.dumps({"schema": 3, "sha256": hashlib.sha256(data).hexdigest(),
                                          "key": [int(key[0]), int(key[1]), int(key[2])], "frames": FRAMES,
@@ -447,6 +498,16 @@ class PlanCache:
             self.stats["written"] += 1
         return True
 
+    def refused(self, key):
+        """Did store keep cell key's complete plans as short (the map data's versions changed while they were made)?
+        Asked once: the grader's own copy is short then too."""
+        k = (int(key[0]), int(key[1]), int(key[2]))
+        with self._lock:
+            if k in self._refused:
+                self._refused.discard(k)
+                return True
+        return False
+
     def is_short(self, key):
         """Were cell key's plans in this run's folder made short of something (store's persist false)? Read so, the
         reader's builds are not kept either (grading.Grader._plan_cell). The revisit cache's and baked packs' never are:
@@ -483,6 +544,8 @@ class PlanCache:
             holder.append(h[2] if h else None)
         got, mine = xproc.once(self._path(key) + ".lock", lambda: self.load(key), WAIT_S, on_wait=waiting,
                                live_s=LIVE_WAIT_S, live_note=f"cell {key}'s plans")
+        if got is None:                     # (planned here: with the versions now, store's check)
+            self._note_planning(key)
         waited = time.monotonic() - t0
         if got is not None and waited > xproc.POLL_S:
             with self._lock:

@@ -87,6 +87,10 @@ KEEP_SHARE = 0.25
 MIRRORED = ("mapdata-mirror",)      # counted and cleared, never evicted file by file (a cell's files and its "ok" go
                                     # together: mapdata prunes it whole, MIRROR_MB)
 KEPT = ("gravity", "airports")                              # counted only
+# never evicted nor cleared: the server runs' decided builds of the weekly datasets (pagesdata's session: a few hundred
+# bytes a dataset; a worker started later reads them, and one gone would decide again, maybe on a newer pin). Its own
+# prune removes old runs' (pagesdata.start_session)
+RUN_KEEP = ("pagesdata/session/",)
 DEFAULT_CAP_GB = 20.0
 MAX_CAP_GB = 1e6            # 1 PB: anything above is a mistake (and would overflow)
 GB = 1e9                    # the page's GB (decimal, as disk sizes are sold)
@@ -592,7 +596,7 @@ class Cache(NoCache):
         with self._lock:
             e = self._entries.get(key)
             top = key.split("/", 1)[0]
-            if e is None or e[1] >= floor or not (self._evictable(key, e[0]) or
+            if e is None or e[1] >= floor or key.startswith(RUN_KEEP) or not (self._evictable(key, e[0]) or
                                                   empty_too and _marker(key, e[0]) and top in MANAGED or
                                                   mirrored_too and top in MIRRORED):
                 return None

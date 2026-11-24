@@ -6266,7 +6266,7 @@ class Server:
         sig = f"w{int(self.road_widths is not None)}s{int(self.sea is not None)}"
         md = self.mapdata.versions() if self.mapdata is not None and hasattr(self.mapdata, "versions") else None
         pc = plancachemod.PlanCache(os.path.join(self.cache_dir, "plans",
-                                                 os.environ.get(plancachemod.RUN_ENV) or "share"), sig)
+                                                 os.environ.get(plancachemod.RUN_ENV) or "share"), sig, versions=md)
         pc.persist = (self.cache_dir, (plancachemod.FRAMES, sig, md))
         return pc
 
@@ -11622,13 +11622,19 @@ async def main_async(args, restart=None):
         ml = farfield.MESH_MIN_LEVEL[args.cells]
         radii = {ml: args.near_radii[0], ml + 1: args.near_radii[1]}
     net = netfetch.Fetcher(stats_dir=os.path.join(args.cache_dir, "netstats"), offline=args.offline)
+    # (the run's one build of each weekly dataset, decided here and read by every worker process: pagesdata's session,
+    # its folder in the environment they inherit; before any manifest is read)
+    import pagesdata
+    pagesdata.start_session(args.cache_dir)
     # map data (mapdata.py): land cover for the surfaces, roads; one instance shares its cache locks
     mapdata = None
+    manifests_wait = None
     try:
         mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
                    if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
         if mapdata is not None:
-            mapdata.warm_manifests()    # (versions()' weekly builds pinned before the first builds are keyed on them)
+            # (versions()' weekly builds decided before the first builds are keyed on them, and before the workers)
+            manifests_wait = mapdata.freeze_manifests()
     except BaseException:
         try:
             if mapdata is not None:
@@ -11684,6 +11690,8 @@ async def main_async(args, restart=None):
     netfetch.SHARED_DIR = os.environ[netfetch.SHARED_ENV]
     log.info("startup: preparing worker processes")
     block_pools, far_pool, photo_pool = [], None, None
+    if manifests_wait is not None:              # (the weekly builds decided before any worker can ask: freeze_manifests)
+        await asyncio.get_running_loop().run_in_executor(None, manifests_wait)
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     if not sharing_machine() and not os.environ.get("BNE_STAGE_SHARE"):
         # (likewise: no shared road stages on a small machine, here and in the workers; sharing_machine)

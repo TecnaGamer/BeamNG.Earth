@@ -122,6 +122,9 @@ class Source:
             s = self.sites.get(folder)
             if s is None:
                 s = self.sites[folder] = railtags.Shards(self.cache_dir, self.fetcher, folder)
+                # (the shards are kept without a build and are in no tile's key: Pages' files whatever build it has, as
+                # before; not the weekly datasets' build check, which would only drop roofs)
+                s.manifest.any_build = True
             return s
 
     def shard(self, x, y, folder="lod2"):
