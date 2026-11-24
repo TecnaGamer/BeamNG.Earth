@@ -754,7 +754,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 31     # 31: small machine-learned outlines (sheds, garages) kept where OSM maps a house within 20 m (osmml.py, 2026-11-19); 30: the street walls without the machine-learned building outlines OSM's buildings make stale (osmml.py: an ML outline where OSM maps a cell's buildings, or overlapping an OSM one, left out of the buildings layer; Fells Point's demolished rowhouses on vacant lots, the user 2026-11-18): the widths of town streets between buildings (_wall_capped, _laned_walled), 2026-11-18; 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 32     # 32: a segment Overture merged from several OSM ways takes the surface most of it has (merged_surface; Sulzburg's Herrenweg, GitHub #1506), 2026-11-24; 31: small machine-learned outlines (sheds, garages) kept where OSM maps a house within 20 m (osmml.py, 2026-11-19); 30: the street walls without the machine-learned building outlines OSM's buildings make stale (osmml.py: an ML outline where OSM maps a cell's buildings, or overlapping an OSM one, left out of the buildings layer; Fells Point's demolished rowhouses on vacant lots, the user 2026-11-18): the widths of town streets between buildings (_wall_capped, _laned_walled), 2026-11-18; 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -2025,12 +2025,108 @@ def _map_surface_value(feats, i):
     import busstations
     if busstations.PASSAGE_IDS and str(feats.ids[i]) in busstations.PASSAGE_IDS:
         return "asphalt"            # a bus station's drive lane (Hradec: the map says paving_stones for the whole yard)
-    osm = feats.attrs.get("osm_surface")
+    osm = osm_surface_column(feats)
     if osm is not None and i < len(osm):
         v = str(osm[i]).strip()
         if v and v.lower() not in ("nan", "none"):
             return v
     return _rule_value(feats.rules.get("surface"), i)
+
+
+def _osm_text(v):
+    """An OpenStreetMap text column's element as a value, or None ("", "nan" and "none" in any case: no value)."""
+    v = str(v).strip()
+    return v if v and v.lower() not in ("nan", "none") else None
+
+
+def _surface_look(cls, v):
+    """What a surface value is drawn as, for comparing two of them: 'rock' / 'grass' (the ground's own materials,
+    terrain_surface) or surface_kind's paved / cobble / gravel / dirt."""
+    t = surface_token(v)
+    if t in ROCKISH:
+        return "rock"
+    if t in GRASSY:
+        return "grass"
+    return surface_kind(cls, v)
+
+
+UNPAVED_LOOKS = frozenset({"gravel", "dirt", "grass", "rock"})
+
+
+def _overlap(s, e, ranges):
+    """Length of [s, e] inside the union of the disjoint ranges [(a, b)]."""
+    return sum(max(0.0, min(e, b) - max(s, a)) for a, b in ranges)
+
+
+def merged_surface(cls, osm, own, rules):
+    """The surface value of a segment Overture merged from several OpenStreetMap ways: osm, the surface of the one way
+    its tags were joined from (src_record; own: that way's ranges on the segment, fractions of its length), unless the
+    rest of the segment, by Overture's surface rules ([(value, start, end)]), is mostly of another look (_surface_look):
+    then that look's value covering the most of the rest. Every look weighed by its share of the segment: the joined
+    way's by its own ranges, Overture's rules by their length outside them (a generic "unpaved" as the joined way's
+    look when that is unpaved too); a tie keeps osm. Pure."""
+    share, best = {}, {}
+    mine = _surface_look(cls, osm)
+    share[mine] = sum(b - a for a, b in own)
+    for v, s, e in rules:
+        v = _osm_text(v)
+        if v is None or v.lower() == "unknown":     # (Overture's "unknown": no surface known there)
+            continue
+        w = (e - s) - _overlap(s, e, own)
+        if w <= 0.0:
+            continue
+        # Overture's generic "unpaved" (its list has no grass, ground or compacted: OSM's are folded into it) says
+        # nothing against an unpaved joined way: it counts as that way's look, never against it
+        look = mine if mine in UNPAVED_LOOKS and surface_token(v) == "unpaved" else _surface_look(cls, v)
+        share[look] = share.get(look, 0.0) + w
+        if w > best.get(look, (None, 0.0))[1]:
+            best[look] = (v, w)
+    top = max(share, key=lambda k: (share[k], k == mine))
+    return osm if top == mine or share[top] <= share[mine] else best[top][0]
+
+
+def osm_surface_column(feats):
+    """feats' osm_surface column (osmtags.join: the surface of each road's own OpenStreetMap way) with the segments
+    Overture merged from several ways corrected, kept on feats; the column itself where none needs it.
+
+    Overture merges the ways between two junctions into one segment ("src_ways", overture.way_sources) and osmtags.join
+    reads the tags of one of them, the way covering most of it (src_record). Its surface held for the whole segment, and
+    Overture's own surface rules, which have each way's surface along it, were never read: Sulzburg's Herrenweg, a
+    gravel track (w50822567, w1563039711), merged with the grass track before it (w50822566, 35 % of the segment), was
+    drawn as a grass track with grass growing on it (2026-11-20). A segment whose ways are mostly of another look than
+    the joined way now takes that look (merged_surface). One look per segment still: the segment is not split."""
+    st = getattr(feats, "__dict__", None)
+    st = st if isinstance(st, dict) else {}     # (a stand-in class's mappingproxy: nothing kept)
+    if "_osm_surface_col" in st:
+        return st["_osm_surface_col"]
+    col = feats.attrs.get("osm_surface")
+    ways, table = feats.rules.get("src_ways"), feats.rules.get("surface")
+    recs, classes = feats.attrs.get("src_record"), feats.attrs.get("class")
+    out = col
+    if (col is not None and recs is not None and ways is not None and len(ways.feature) and table is not None
+            and len(table.feature)):
+        vals = None
+        for i in np.unique(np.asarray(ways.feature, np.int64)).tolist():
+            if i >= len(col):
+                continue
+            osm = _osm_text(col[i])
+            if osm is None:
+                continue
+            rec = str(recs[i])
+            own = [(float(s), float(e)) for w, s, e in ways.for_feature(i) if str(w) == rec]
+            rules = [(v, float(s), float(e)) for v, s, e in table.for_feature(i)]
+            if not own or not rules:
+                continue
+            cls = str(classes[i]) if classes is not None else "unknown"
+            v = merged_surface(cls, osm, own, rules)
+            if v != osm:
+                if vals is None:
+                    vals = [str(x) for x in col.tolist()]
+                vals[i] = v
+        if vals is not None:
+            out = mapgeom.text_column(vals)
+    st["_osm_surface_col"] = out
+    return out
 
 
 # Untagged minor roads in country where the mapped ones are gravel (2026-11-03: Estonia's unclassified roads and
@@ -3834,7 +3930,7 @@ def _map_surface_values(feats):
         return got
     import fast
     fast.require(380, "map_surface_values")
-    out = fast._ef.map_surface_values(len(feats), feats.attrs.get("osm_surface"), feats.rules.get("surface"))
+    out = fast._ef.map_surface_values(len(feats), osm_surface_column(feats), feats.rules.get("surface"))
     feats.__dict__["_map_surface_values"] = out
     return out
 
@@ -3926,7 +4022,7 @@ def _spec_inputs(feats):
     if n:
         first = ll[co[ro[po[:-1]]]]
         se = np.asarray(sweden.contains(first[:, 0], first[:, 1]), bool)
-    se_tag, se_kind, se_tok, tokens = _surface_rules().sweden_surfaces(cls_s, se, a.get("osm_surface"), sf["tokens"])
+    se_tag, se_kind, se_tok, tokens = _surface_rules().sweden_surfaces(cls_s, se, osm_surface_column(feats), sf["tokens"])
     aisle = fast._ef.aisles(se, rules.get("subclass"))
     cols = {"cls": cls, "elig": elig, "has_w": has_w, "wv": wv, "osm_w": _osm_widths(feats, *OSM_WIDTH_M),
             "osm_lanes": osm_lanes, "osm_ms": _osm_values(feats, "maxspeed", 5.0, 200.0), "has_ow": has_ow,
