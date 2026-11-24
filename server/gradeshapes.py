@@ -56,6 +56,12 @@ import findground
 import gradelaw
 import railways
 
+import logging
+
+log = logging.getLogger("earthd.grading")
+_PROF = threading.local()      # (BNE_IX_PROFILE: _ramp_reaches' counters, one line per find; a thread's own: cells are planned side by side)
+_PHASE = [""]              # (BNE_IX_PROFILE: find_interchanges' phase being timed)
+
 STEP_M = 4.0                # m between a deck's or a dip's samples
 CUT_MIN_M = 0.05            # m: a join's arc this near a sample is that sample
 SEGMENT_STEP_ON = os.environ.get("BNE_SEGMENT_STEP", "1").strip().lower() not in ("0", "off", "no", "false")
@@ -281,12 +287,25 @@ class Net:
     """The members' geometry, made once: lines, arc lengths, boxes, and (built on the first near()) a grid over the
     boxes."""
 
-    def __init__(self, members):
+    def __init__(self, members, geo=None):
+        """geo (a growth's Scan.geo): {line id: (arc lengths, box)} of the members the rounds before had, their lines
+        being the same arrays: a round's net of 60,000 members made its own again, a second and a half each (Yokohama)."""
         self.m = members
         self.lines = [np.asarray(m.line, np.float64)[:, :2] for m in members]
-        self.s = [arclen(l_) for l_ in self.lines]
+        if geo is None:
+            self.s = [arclen(l_) for l_ in self.lines]
+            self.box = np.array([np.r_[l_.min(0), l_.max(0)] for l_ in self.lines]) if members else np.zeros((0, 4))
+        else:
+            self.s, boxes = [], []
+            for i, l_ in enumerate(self.lines):
+                got = geo.get(_line_id(self, i))
+                if got is None or len(got[0]) != len(l_):
+                    got = (arclen(l_), np.r_[l_.min(0), l_.max(0)])
+                    geo[_line_id(self, i)] = got
+                self.s.append(got[0])
+                boxes.append(got[1])
+            self.box = np.array(boxes) if boxes else np.zeros((0, 4))
         self.L = [float(s[-1]) for s in self.s]
-        self.box = np.array([np.r_[l_.min(0), l_.max(0)] for l_ in self.lines]) if members else np.zeros((0, 4))
         self._grid = None
 
     def _index(self):
@@ -370,6 +389,12 @@ _PAIR_REL = {}
 _PAIR_REL_MAX = 200000
 
 
+_LINE_ID = {}              # (repr(key), len(line)) -> a member's line id: a growth's rounds each make a new net, and
+_LINE_ID_MAX = 100000      # (62,000 members hashed a round was a second of each: Yokohama; ~35 MB at the cap)
+RAMP_MEMO_MAX = 4000       # ramps kept in a growth's memo (_Ramper.memo: their samples, ground and curve; ~11 KB a ramp,
+                           # 44 MB at most, freed with the growth; a giant interchange lays 1,200 a round)
+
+
 def _line_id(net, i):
     ids = getattr(net, "_line_ids", None)
     if ids is None:
@@ -377,7 +402,16 @@ def _line_id(net, i):
     got = ids.get(i)
     if got is None:
         a = np.ascontiguousarray(net.lines[i], np.float64)
-        got = ids[i] = (repr(net.m[i].key), len(a), hash(a.tobytes()), net.m[i].nodes)
+        # (the cache's key: the member's key, its nodes, its length and its two ends, which two frames' lines of one way
+        # never share; the hash of the whole line only a miss pays. A member's line is immutable in a frame)
+        k = (repr(net.m[i].key), len(a), net.m[i].nodes, float(a[0, 0]), float(a[0, 1]), float(a[-1, 0]), float(a[-1, 1]))
+        got = _LINE_ID.get(k)
+        if got is None:
+            got = (k[0], len(a), hash(a.tobytes()), net.m[i].nodes)
+            if len(_LINE_ID) >= _LINE_ID_MAX:
+                _LINE_ID.clear()
+            _LINE_ID[k] = got
+        ids[i] = got
     return got
 
 
@@ -385,11 +419,16 @@ def _pair(net, i, j):
     """Member i's relations with member j, from a cache by the two members' keys and lines."""
     key = (_line_id(net, i), _line_id(net, j))
     got = _PAIR_REL.get(key)
+    P = _PROF.__dict__
     if got is None:
+        P["pair_miss"] = P.get("pair_miss", 0) + 1
+        P["pair_pts"] = P.get("pair_pts", 0) + len(net.lines[i]) * len(net.lines[j])
         got = _pair_relations(net, i, j)
         if len(_PAIR_REL) >= _PAIR_REL_MAX:
             _PAIR_REL.clear()
         _PAIR_REL[key] = got
+    else:
+        P["pair_hit"] = P.get("pair_hit", 0) + 1
     return got
 
 
@@ -412,6 +451,8 @@ class Scan:
 
     def __init__(self):
         self.pairs = {}
+        self.ramps = {}         # (_ramp_reaches' memo across the rounds: _Ramper.memo)
+        self.geo = {}           # (the rounds' nets' members' arc lengths and boxes: Net(geo=))
         self.scanned = []
 
     def add(self, net):
@@ -788,18 +829,32 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
     crossing of two seeds, detail (kind, s on a, s on b); "dip": two seeds over one road they dig, detail None), with the
     seeds; nothing else about the answer. "ramp": two seeds whose ramps meet on a road on the ground (detail the road): they
     stay systems of their own, in one interchange."""
-    net = Net(members)
+    net = Net(members, None if scan is None else scan.geo)
     n = len(members)
+    prof = {} if os.environ.get("BNE_IX_PROFILE") else None
+    tp = [time.perf_counter()]
+
+    def lap():
+        if prof is None:
+            return
+        now = time.perf_counter()
+        name = _PHASE[0]
+        prof[name] = prof.get(name, 0.0) + now - tp[0]
+        tp[0] = now
     if trace is not None:
         trace["seeds"], trace["merges"] = [], []
     cand = [i for i in range(n) if _is_seed(net, i) and len(net.lines[i]) >= 2 and not (skip is not None and skip(net, i))]
+    lap()
     t_rel = {}
     rel = {}
     if scan is not None:
         t0 = time.perf_counter()
         scan.add(net)
         t_scan = time.perf_counter() - t0
+        _PHASE[0] = "scan"
+        lap()
     import xproc
+    _PHASE[0] = "relations"
     for k_, i in enumerate(cand):
         if not k_ % 32:
             xproc.check_cancel()        # (the growth's step time limit, ix/limits.py, and a place a teleport left)
@@ -809,6 +864,8 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
         t_rel[i] = time.perf_counter() - t0 + (t_scan / len(cand) if scan is not None else 0.0)
     # a deck chain is part of an interchange only if one of its decks crosses a road, a track or a tunnel (over or
     # under): a bridge over a river or a valley alone is the bridges' own (roads.py), not a grade separation's
+    _PHASE[0] = "net"
+    lap()
     crosses = {i for i in cand if any(kind == "cross" and _over(members[i], members[j]) is not None
                                       for j, kind, _a, _b, _q in rel[i])}
     dpar = {i: i for i in cand if members[i].kind == "deck"}
@@ -854,9 +911,13 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
             if j in par:
                 unite(i, j, "relation", (kind, si, sj))
     dig = _Verdicts(net, rel, droot, reader)
+    _PHASE[0] = "verdicts"
+    lap()
     t_dip = {}
     for a, b in _shared_dips(net, seeds, rel, dig, t_dip):
         unite(a, b, "dip")
+    _PHASE[0] = "dips"
+    lap()
     groups = {}
     for i in seeds:
         groups.setdefault(root(i), []).append(i)
@@ -871,7 +932,7 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
             r = cpar[r]
         return r
     if reach is True:
-        reaches = _ramp_reaches(net, seeds, rel, dig, t_dip)
+        reaches = _ramp_reaches(net, seeds, rel, dig, t_dip, None if scan is None else scan.ramps)
     elif not reach:
         reaches = []
     else:
@@ -879,6 +940,8 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
         for grp in reach:
             ss = sorted((i for i in seeds if str(members[i].key) in grp), key=lambda x: str(members[x].key))
             reaches += [(ss[0], i, -1) for i in ss[1:]]
+    _PHASE[0] = "reach"
+    lap()
     for a, b, j in reaches:
         if trace is not None:
             trace["merges"].append((a, b, "ramp", j))
@@ -894,11 +957,13 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
         if want is not None and not want(net, seeds_c):
             continue
         parts = []
+        _PHASE[0] = "close"
         for r in sorted(cgroups[c], key=lambda x: str(members[x].key)):
             t0 = time.perf_counter()
             seeds_r = sorted(groups[r], key=lambda x: str(members[x].key))
             parts.append(Interchange(_system(net, seeds_r, rel, dig), sum(t_rel[i] for i in seeds_r),
                                      time.perf_counter() - t0 + sum(t_dip.get(i, 0.0) for i in seeds_r)))
+        lap()
         if len(parts) == 1:
             found.append(parts[0])
             continue
@@ -906,10 +971,23 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
                      crossings=[x for p in parts for x in p.sysm["crossings"]],
                      ends=[e for p in parts for e in p.sysm["ends"]])
         found.append(Interchange(whole, sum(p.paths_s for p in parts), sum(p.extent_s for p in parts), tuple(parts)))
+    _PHASE[0] = "rest"
+    lap()
+    if prof is not None:
+        big = max((len(x.parts or (x,)) for x in found), default=0)
+        log.warning("ix profile: find of %d members, %d seeds, %d interchanges (the largest %d systems): %s s; pairs "
+                    "%d missed (%d point pairs), %d kept%s", n, len(cand), len(found), big,
+                    ", ".join("%s %.2f" % (k, prof[k]) for k in ("net", "scan", "relations", "verdicts", "dips",
+                                                "reach", "close", "rest") if k in prof),
+                    _PROF.__dict__.get("pair_miss", 0), _PROF.__dict__.get("pair_pts", 0), _PROF.__dict__.get("pair_hit", 0),
+                    "" if scan is not None else " (no scan: every member scanned)")
+    _PROF.__dict__.pop("pair_miss", None)
+    _PROF.__dict__.pop("pair_hit", None)
+    _PROF.__dict__.pop("pair_pts", None)
     return net, found
 
 
-def _ramp_reaches(net, seeds, rel, dig, clock=None):
+def _ramp_reaches(net, seeds, rel, dig, clock=None, memo=None):
     """[(seed, seed, road)] of the structures whose ramps meet on a road on the ground. An interchange ends where its road
     is back on its ground, which is the end of the ramp, not the end of the structure: from each end of a deck that rises
     for a road under it, onto a road on the ground, the ramps it may leave by, laid as the embankment step lays them
@@ -923,12 +1001,22 @@ def _ramp_reaches(net, seeds, rel, dig, clock=None):
     which is further than that from every other rising deck's is not laid at all: its spans can overlap no other deck's
     (each deck's laying is its own — the claims stop no ramp of another deck's), so it pairs nothing.
     clock: {seed: seconds},
-    to each seed the seconds spent for it added."""
+    to each seed the seconds spent for it added. memo (a growth's Scan.ramps): the ramps laid by the rounds before,
+    laid again by their samples, ground and curve (ix/owner.grow)."""
     members = net.m
     ground = dig.read()[0]
+    prof = {} if os.environ.get("BNE_IX_PROFILE") else None
+    _PROF.__dict__.update(ramp_calls=0, jr_calls=0, jr_pts=0, jr_cand=0, jr_secs=0.0, jr_may=0, memo_hits=0,
+                          ground_calls=0, ground_pts=0, ground_secs=0.0, rise_secs=0.0, lay_secs=0.0, span_secs=0.0)
+    P = _PROF.__dict__
 
     def ground_of(x):
-        return np.zeros(len(x["mem"])) if ground is None else np.asarray(ground(x["xy"]), np.float64)
+        P["ground_calls"] = P.get("ground_calls", 0) + 1
+        P["ground_pts"] = P.get("ground_pts", 0) + len(x["mem"])
+        _t = time.perf_counter()
+        got = np.zeros(len(x["mem"])) if ground is None else np.asarray(ground(x["xy"]), np.float64)
+        P["ground_secs"] = P.get("ground_secs", 0.0) + time.perf_counter() - _t
+        return got
 
     rise = {}               # (deck, 0 its start | 1 its end) -> how far over its ground the structure's end stands
     for i in seeds:
@@ -962,7 +1050,9 @@ def _ramp_reaches(net, seeds, rel, dig, clock=None):
         if mi.kind != "deck" or i not in with_another:
             continue
         t0 = time.perf_counter()
-        lay = _Ramper(net, ground_of, pieced)
+        lay = _Ramper(net, ground_of, pieced, memo)
+        _t = time.perf_counter()
+        P["rise_secs"] = P.get("rise_secs", 0.0) + _t - t0
         for j, kind, si, sj, q in rel[i]:
             mj = members[j]
             if kind != "join" or mj.kind != "ground" or min(si, net.L[i] - si) > JOIN_M:
@@ -978,25 +1068,48 @@ def _ramp_reaches(net, seeds, rel, dig, clock=None):
                 lay.ramp_from(j, sj, sj < net.L[j] / 2, None, -deck_grade(mi), over=over_, sign=sign_,
                               left=REACH_MAX_M)
         n0, n = len(lay.ramps), 0
+        P["lay_secs"] = P.get("lay_secs", 0.0) + time.perf_counter() - _t
         while n < len(lay.ramps):
             rp = lay.ramps[n]
             if n >= n0:
                 lay.cover(rp[4], rp[9])
-            for jj, s_, ways, z0, surface, at_d in _junction_roads(net, rp, lay.done, pieced):
+            P["ramp_calls"] += 1
+            _t = time.perf_counter()
+            jr = _junction_roads(net, rp, lay.done, pieced)
+            P["jr_secs"] += time.perf_counter() - _t
+            P["jr_calls"] += 1
+            P["jr_pts"] += 16 * min(int(rp[9]), len(rp[5]))
+            for jj, s_, ways, z0, surface, at_d in jr:
                 lay.done.setdefault(jj, []).append((s_ - JOIN_M, s_ + JOIN_M))
                 left = None if rp[11] is None else rp[11] - at_d - STEP_M
                 if left is not None and left <= 0.0:
                     continue        # (the reach's budget spent: no ramp of this deck runs further from its end)
                 for toward_end in ways:
                     tb = _tangent(net.lines[jj], net.s[jj], s_) * (1.0 if toward_end else -1.0)
+                    _t = time.perf_counter()
                     lay.ramp_from(jj, s_, toward_end, z0, float(surface[0] * tb[0] + surface[1] * tb[1]), branch=True,
                                   left=left)
+                    P["lay_secs"] = P.get("lay_secs", 0.0) + time.perf_counter() - _t
             n += 1
         for rp in lay.ramps:
+            _t = time.perf_counter()
             for m_, (lo, hi) in _stretches(rp[4], rp[9]).items():
                 spans.setdefault(m_, []).append((lo, hi, i))
+            P["span_secs"] = P.get("span_secs", 0.0) + time.perf_counter() - _t
         if clock is not None:
             clock[i] = clock.get(i, 0.0) + time.perf_counter() - t0
+    if prof is not None:
+        log.warning("ix profile: _ramp_reaches of %d seeds: %d ramps, %d _junction_roads calls, %.1f s in them "
+                    "(%.3f s a call), %d points projected, %d candidate pairs, may cells %d; ground %d calls %d pts %.2f s",
+                    len(seeds), P["ramp_calls"], P["jr_calls"], P["jr_secs"],
+                    P["jr_secs"] / max(1, P["jr_calls"]), P["jr_pts"], P["jr_cand"], P["jr_may"],
+                    P.get("ground_calls", 0), P.get("ground_pts", 0), P.get("ground_secs", 0.0))
+        if memo is not None:
+            log.warning("ix profile:   ramps laid again from the growth's memo: %d of %d (%d kept)", P.get("memo_hits", 0),
+                        P["ramp_calls"], len(memo))
+        log.warning("ix profile:   of it: rise %.2f s, ramps laid %.2f s (%d ground calls, %.2f s), junctions %.2f s, "
+                    "spans %.2f s", P.get("rise_secs", 0.0), P.get("lay_secs", 0.0), P.get("ground_calls", 0),
+                    P.get("ground_secs", 0.0), P["jr_secs"], P.get("span_secs", 0.0))
     out = []
     for m_, lst in spans.items():
         lst.sort()
@@ -2276,10 +2389,12 @@ def _junction_roads(net, rp, done, pieced):
     bx = net.box
     cand = np.flatnonzero((bx[:, 0] <= hi[0]) & (bx[:, 2] >= lo[0]) & (bx[:, 1] <= hi[1]) & (bx[:, 3] >= lo[1]))
     out = []
+    _PROF.__dict__["jr_cand"] = _PROF.__dict__.get("jr_cand", 0) + int(len(cand))
     for j in cand.tolist():
         mj = net.m[j]
         if mj.kind != "ground" or len(net.lines[j]) < 2:
             continue
+        _PROF.__dict__["jr_may"] = _PROF.__dict__.get("jr_may", 0) + len(pt) * (len(net.lines[j]) - 1)
         sj, dist = _proj_many(net.lines[j], net.s[j], pt, near=JOIN_M)
         q = int(np.argmin(dist))
         if dist[q] > JOIN_M:
@@ -2294,6 +2409,51 @@ def _junction_roads(net, rp, done, pieced):
     return sorted(out, key=lambda o: str(net.m[o[0]].key))
 
 
+def _x_by_id(net, x):
+    """A ramp's samples (sample()) with their members named by line id (_line_id) in place of the net's indices."""
+    at = {}
+    mem = []
+    for i in x["mem"].tolist():
+        q = at.get(i)
+        if q is None:
+            q = at[i] = _line_id(net, i)
+        mem.append(q)
+    return dict(x, mem=mem, joints=[(kk, _line_id(net, jj), s0) for kk, jj, s0 in x.get("joints", ())])
+
+
+def _x_by_index(net, x, segs):
+    """The same samples back in a net's indices. x names its members by line id; the ramp's segments (segs: _onward's,
+    the same members by their line ids as the key's) carry every member it runs along or joints to, so the map is made
+    of them: without it a stale index was another road's stretch (_ramp_reaches' done, pieced, spans)."""
+    at = {_line_id(net, q): q for q, _a, _b in segs}
+    mem = np.array([at[q] for q in x["mem"]], np.int64)
+    return dict(x, mem=mem, joints=[(kk, at[jj], s0) for kk, jj, s0 in x.get("joints", ())])
+
+
+def _memo_check(ramper, net, segs, j, z0, g_along, over, sign, key, got):
+    """BNE_IX_MEMO_CHECK: a memo hit recomputed and compared (the growth's rounds laid the same ramps whole, before the
+    memo: any difference is a key that names two ramps)."""
+    xs = sample(net, [dict(segs=segs)])[0]
+    x, gr = _x_by_id(net, xs), ramper.ground_of(xs)
+    z0_ = float(gr[0]) + over if z0 is None else z0
+    sign_ = (1.0 if z0_ >= gr[0] else -1.0) if sign is None else sign
+    g_max, rad = max_grade(net.m[j]), curve_radius(net.m[j])
+    z, k = ramp(z0_, g_along, sign_, g_max, rad, x["d"] - x["d"][0], gr)
+    x0, gr0, z00, sign0, g_max0, rad0, z0k, k0 = got
+    bad = (not np.array_equal(x["xy"], x0["xy"]) or not np.array_equal(np.asarray(x["mem"]), np.asarray(x0["mem"]))
+           or not np.array_equal(np.asarray(x["ms"]), np.asarray(x0["ms"])) or not np.array_equal(x["d"], x0["d"])
+           or not np.array_equal(gr, gr0) or z0_ != z00 or sign_ != sign0
+           or (g_max, rad) != (g_max0, rad0) or not np.array_equal(z, z0k) or k != k0)
+    if bad:
+        log.error("ix memo check: the ramp %s laid again differs from the one kept: z0 %s/%s sign %s/%s k %s/%s "
+                  "xy %s mem %s ms %s d %s ground %s z %s laws %s", str(key)[:160], z0_, z00, sign_, sign0, k, k0,
+                  np.array_equal(x["xy"], x0["xy"]), np.array_equal(np.asarray(x["mem"]), np.asarray(x0["mem"])),
+                  np.array_equal(np.asarray(x["ms"]), np.asarray(x0["ms"])), np.array_equal(x["d"], x0["d"]),
+                  np.array_equal(gr, gr0), np.array_equal(z, z0k), (g_max, rad) == (g_max0, rad0))
+    else:
+        log.warning("ix memo check: a hit laid again, the same ramp (%s)", str(key)[:120])
+
+
 class _Ramper:
     """The ramps off the ends of shapes, laid one at a time: embankments' (from the solved shapes' ends and what they reach)
     and the reach's (_ramp_reaches: from the height the laws ask of an end, before anything is solved), one laying for
@@ -2303,10 +2463,11 @@ class _Ramper:
     first, then every ramp's as it is laid: a road's own ramp through a junction is its height there, not another's).
     ground_of(samples) -> the ground's heights at them."""
 
-    def __init__(self, net, ground_of, pieced):
+    def __init__(self, net, ground_of, pieced, memo=None):
         self.net, self.ground_of, self.pieced = net, ground_of, pieced
         self.ramps, self.started = [], []
         self.done = {j: list(v) for j, v in pieced.items()}
+        self.memo = memo        # (a growth's rounds: {key: (samples, ground, z0, sign, g_max, rad, z, k)} of the ramps laid before, _ramp_reaches)
 
     def cover(self, x, ks):
         """done: the stretches of the members a ramp's first ks samples run along."""
@@ -2320,16 +2481,43 @@ class _Ramper:
         (REACH_MAX_M less what its chain has run from the deck's end; None: none, the embankments' own laying)."""
         net, started, pieced, done = self.net, self.started, self.pieced, self.done
         segs = _onward(net, j, s0, toward_end)
-        x = sample(net, [dict(segs=segs)])[0]
-        mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"])
-        gr = self.ground_of(x)
-        if z0 is None:
-            z0 = float(gr[0]) + over
-        if sign is None:
-            sign = 1.0 if z0 >= gr[0] else -1.0
         d_ = 1 if toward_end else -1
-        g_max, rad = max_grade(net.m[j]), curve_radius(net.m[j])
-        z, k = ramp(z0, g_along, sign, g_max, rad, x["d"] - x["d"][0], gr)
+        memo, key = self.memo, None
+        if memo is not None:
+            # (a growth's rounds lay the same ramps again from the same ends along the same roads: the samples, the
+            # ground under them and the ramp's curve are the same whenever every member it runs along is. The key names
+            # them all: a member added by a round where the ramp runs changes it. Yokohama's stacked viaducts: 1,200
+            # ramps a round for 820 seeds, the last rounds adding 2 roads, each round the same 1,200 ground reads)
+            key = (_line_id(net, j), round(float(s0), 3), d_, tuple(_line_id(net, q) for q, _a, _b in segs),
+                   None if z0 is None else round(float(z0), 4), round(float(g_along), 6), None if sign is None else sign,
+                   None if z0 is not None else float(over))
+            got = memo.get(key)
+            if got is not None and os.environ.get("BNE_IX_MEMO_CHECK"):
+                _memo_check(self, net, segs, j, z0, g_along, over, sign, key, got)
+            if got is not None:
+                x, gr, z0, sign, g_max, rad, z, k = got
+                memo[key] = got           # (move to the end: the least recently used is the first to go)
+                # (the samples name their members by line id, the round's net's indices made now: a later round's net
+                # numbers them otherwise, and a stretch looked up by a stale index was another road's)
+                x = _x_by_index(net, x, segs)
+                _PROF.__dict__["memo_hits"] = _PROF.__dict__.get("memo_hits", 0) + 1
+        if key is None or got is None:
+            x = sample(net, [dict(segs=segs)])[0]
+            mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"])
+            gr = self.ground_of(x)
+            if z0 is None:
+                z0 = float(gr[0]) + over
+            if sign is None:
+                sign = 1.0 if z0 >= gr[0] else -1.0
+            g_max, rad = max_grade(net.m[j]), curve_radius(net.m[j])
+            z, k = ramp(z0, g_along, sign, g_max, rad, x["d"] - x["d"][0], gr)
+            if memo is not None:
+                if len(memo) >= RAMP_MEMO_MAX:
+                    for old in list(memo)[:RAMP_MEMO_MAX // 4]:
+                        del memo[old]
+                memo[key] = (_x_by_id(net, x), gr, z0, sign, g_max, rad, z, k)
+        else:
+            mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"])
         if branch:
             # (a junction's ramp never rises past the crest it leaves it with (a fill) nor falls below the trough (a
             # cut): the junction is the top of the embankment it starts, the bottom of the cut, or where its grade

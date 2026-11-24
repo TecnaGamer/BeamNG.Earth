@@ -232,6 +232,7 @@ def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
     box = None
     reach = True
     scan = _gsh.Scan()
+    prev = None             # (the last round's find and its members' keys: a round with the same members is skipped)
     if hint is not None:
         b = hint["box"]
         e, n, _ = planner.frame.geodetic_to_enu(np.array([b[0], b[0], b[2], b[2]]), np.array([b[1], b[3], b[1], b[3]]), 0.0)
@@ -258,19 +259,39 @@ def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
         if box is not None:
             lo, hi = box[0] - grading.SHAPES_PAD_M, box[1] + grading.SHAPES_PAD_M
         else:
+            # (the growth's pad: a ramp runs as far as REACH_MAX_M from the end it left, so a pad shorter than that
+            # finds the chain's next decks one ring at a time: Yokohama's stacked viaducts, 8 rounds of 78 s for a
+            # chain 5 km long, the last three adding 38 roads. BNE_IX_GROW_PAD_M tries another)
+            pad = float(os.environ.get("BNE_IX_GROW_PAD_M", grading.SHAPES_PAD_M))
             seeds = np.concatenate([cur_net.lines[i] for i in cur.sysm["seeds"]])
-            lo, hi = seeds.min(0) - grading.SHAPES_PAD_M, seeds.max(0) + grading.SHAPES_PAD_M
+            lo, hi = seeds.min(0) - pad, seeds.max(0) + pad
         t0 = time.perf_counter()
         with limits.scope("paths", read_s):         # (the steps' time limits count the growth: its reading is the paths')
             s1_paths.load(planner, lo, hi, byk, loaded)
             members = s1_paths.members_of(byk, lo, hi)
         t1 = time.perf_counter()
+        keys_ = [m.key for m in members]
+        # (a round that holds the same members as the last finds what it did: the find is a function of them. Skipped:
+        # the fixed point's last round, which only confirms it. Yokohama's stacked viaducts: two of eight rounds, 13 s)
+        if prev is not None and keys_ == prev[2]:
+            # (the last round's nxt is cur, whose ids are ids: closed)
+            if os.environ.get("BNE_IX_PROFILE"):
+                log.warning("ix profile: growth round of %s skipped: the same %d members as the last round", cid[:12],
+                            len(members))
+            break
         with limits.scope("extent", find_s):        # (and its finding the extent's)
             nxt_net, found = _gsh.find_interchanges(members, lambda n_: (planner._ground_line, s2_extent.make_fixed(planner, n_)),
                                                     scan=scan, reach=reach)
+        prev = (nxt_net, found, keys_)
         read_s += t1 - t0
         find_s += time.perf_counter() - t1
         nxt = next((x for x in found if cid in {_gsh.canonical_id(nxt_net.m[i]) for i in x.sysm["seeds"]}), None)
+        if os.environ.get("BNE_IX_PROFILE"):
+            log.warning("ix profile: growth round of %s from %s: %d cells read in %.2f s, find of %d members in %.2f s, "
+                        "ids %d -> %d, box %.0f x %.0f m", cid[:12], pt, len(loaded), read_s, len(members),
+                        time.perf_counter() - t1, len(ids),
+                        len(_gsh.system_ids(nxt_net, nxt.sysm)) if nxt is not None else -1,
+                        0.0 if box is None else float(box[1][0] - box[0][0]), 0.0 if box is None else float(box[1][1] - box[0][1]))
         if nxt is None:         # (its seeds are not seeds in the wider find: the interchange as it was)
             if box is not None:
                 box, reach = None, True     # (the stored extent did not give it: grown as without)

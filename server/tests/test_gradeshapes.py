@@ -778,3 +778,64 @@ def test_a_members_laws_are_made_once_and_follow_the_laws_set_anew():
     assert ix.deck_grade(m) == was
     t = Member("r", _line(0, 0, 100, 0), "rail", "rail", None, 0.0, 2.0, None)
     assert ix.max_grade(t) == ix.railways.GRADE and ix.curve_radius(t) == max(ix.R_MIN_RAIL_M, (100.0 / 3.6) ** 2 / ix.A_VERT_RAIL)
+
+
+def _scan_rounds(members, rounds, ground):
+    """find_interchanges over the members of each round in turn, one Scan kept (a growth's rounds: owner.grow): the
+    last round's (net, found)."""
+    scan = ix.Scan()
+    net = found = None
+    for part in rounds:
+        net, found = ix.find_interchanges([members[k] for k in part], lambda n_: (ground, lambda i, s: _fixed(n_, ground, i, s)),
+                                          scan=scan, reach=True)
+    return net, found
+
+
+def test_a_growth_lays_the_same_ramps_with_and_without_its_memo():
+    # (ix/owner.grow's rounds lay the same ramps again from the same ends: _Ramper.memo keeps their samples, ground
+    # and curve by the members they run along. The rounds' answer must be the one laid whole)
+    slope = lambda xy: 0.05 * xy[:, 1] + 0.01 * np.sin(xy[:, 0] / 30.0)
+    keys = ["m1", "m2", "d1", "d2", "mid", "s", "n", "side", "e"]
+    m = [Member("m1", _line(-800, 0, 800, 0, 200), "ground", "motorway", 120, 0, 12.0, None),
+         Member("m2", _line(-800, 120, 800, 120, 200), "ground", "motorway", 120, 0, 12.0, None),
+         Member("d1", _line(0, -30, 0, 30, 13), "deck", "secondary", 60, 1, 5.0, None),
+         Member("d2", _line(0, 90, 0, 150, 13), "deck", "secondary", 60, 1, 5.0, None),
+         Member("mid", _line(0, 30, 0, 90, 16), "ground", "secondary", 60, 0, 5.0, None),
+         Member("s", _line(0, -600, 0, -30), "ground", "secondary", 60, 0, 5.0, None),
+         Member("n", _line(0, 150, 0, 700), "ground", "secondary", 60, 0, 5.0, None),
+         Member("side", _line(-500, -300, 500, -300, 100), "ground", "residential", 30, 0, 4.0, None),
+         Member("e", _line(300, -700, 300, 700, 200), "ground", "primary", 70, 0, 5.0, None)]
+    # (the rounds number the members otherwise, as a growth's does: its box slides and members_of keeps those in it)
+    rounds = [[0, 1, 2, 3, 4, 5, 6], [7, 6, 5, 4, 3, 2, 1, 0], [8, 7, 6, 5, 4, 3, 2, 1, 0], [3, 1, 8, 0, 6, 2, 7, 5, 4],
+              [0, 1, 2, 3, 4, 5, 6, 7, 8]]
+    with_memo = _scan_rounds(m, rounds, slope)
+    real_init = ix._Ramper.__init__
+
+    def no_memo(self, net, ground_of, pieced, memo=None):
+        real_init(self, net, ground_of, pieced, None)
+    ix._Ramper.__init__ = no_memo
+    try:
+        whole = _scan_rounds(m, rounds, slope)
+    finally:
+        ix._Ramper.__init__ = real_init
+    assert len(with_memo[1]) == 1 and len(whole[1]) == 1, "one interchange: the two decks' ramps meet on mid"
+    a, b = with_memo[1][0], whole[1][0]
+    assert sorted(a.sysm["seeds"]) == sorted(b.sysm["seeds"])
+    assert [(c["u"], c["d"]) for c in a.sysm["crossings"]] == [(c["u"], c["d"]) for c in b.sysm["crossings"]]
+    assert sorted(a.sysm["ends"]) == sorted(b.sysm["ends"])
+    assert len(a.parts) == len(b.parts)
+    scan = ix.Scan()
+    hits = [0]
+    real_by_index = ix._x_by_index
+
+    def counting(net, x, segs):
+        hits[0] += 1
+        return real_by_index(net, x, segs)
+    ix._x_by_index = counting
+    try:
+        for part in rounds:
+            ix.find_interchanges([m[k] for k in part], lambda n_: (slope, lambda i, s: _fixed(n_, slope, i, s)), scan=scan,
+                                 reach=True)
+    finally:
+        ix._x_by_index = real_by_index
+    assert hits[0] > 4, "the ramps of the rounds before were laid again from the memo, in the round's own indices"
