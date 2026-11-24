@@ -13,10 +13,10 @@ Sources, each per z14 map-data cell, kept on disk under <cache>/roadz/v<VERSION>
   "swisstopo"): its roads as 3D lines (LV95; heights above the sea, LN02, 0.2-1.5 m), each with its kind of structure
   (KUNSTBAUTE: bridges, tunnels, underpasses, galleries; server/tlmcodes.py). swisstopo serves it only whole (one
   ~5 GB file a release, no service by area), so it is cut into this source's cells once (tools/build_swisstlm.py:
-  every road of a cell, in the Lines file this module keeps, under <source> = TLM_CELLS): a cell is read from disk
-  (the tool can write into the cache) or from BNGE_ROADZ_TLM_URL (<url>/14/<x>/<y>.npz; a 404: no roads there).
-  Offered only where a cell can be had (the URL set, or the cell on disk: sources_at), so with neither nothing is
-  asked and the inference stands.
+  every road of a cell, in the Lines file this module keeps): a cell is read from the tool's folder,
+  BNE_ROADZ_TLM_DIR (<dir>/14/<x>/<y>.npz; none there: no roads), or from BNGE_ROADZ_TLM_URL (the same layout; a 404:
+  no roads there). Offered, and the plans tagged (tlm_tags), from those two settings alone, never from what a process
+  finds on disk, so every process keys a plan alike; with neither nothing is asked and the inference stands.
 - "hk": Hong Kong, the Transport Department's Road Network centrelines (ELEVATION: a signed level tier, 0 ground, 1-4
   decks, -1 / -2 tunnels; ROUTE_NUM; STREET_ENAME) with heights from CEDD's 2020 airborne LiDAR (0.5 m DTM and DSM, a
   750 x 600 m sheet a zip): ground roads the DTM, decks the one surface earthfast.deck_lidar finds in the DSM's pixels
@@ -83,7 +83,8 @@ ON = os.environ.get("BNE_ROADZ", "on") != "off"
 LIDAR_ON = os.environ.get("BNE_LIDAR_DECKS", "on") != "off"
 HK_ON = os.environ.get("BNE_ROADZ_HK", "on") != "off"
 TLM_ON = os.environ.get("BNE_ROADZ_TLM", "on") != "off"
-TLM_URL = os.environ.get("BNGE_ROADZ_TLM_URL", "").rstrip("/")     # (where the cut cells are served; unset: disk)
+TLM_URL = os.environ.get("BNGE_ROADZ_TLM_URL", "").rstrip("/")     # (where the cut cells are served)
+TLM_DIR = os.environ.get("BNE_ROADZ_TLM_DIR", "")   # (or a folder of them: tools/build_swisstlm.py's --out)
 TLM_CELLS = "tlm1"          # the "tlm" source's cell folder and the tag of the plans made with it (tlm_tags): changed
                             # with a new cut of its cells (another release, other rules), so that old ones are not read
 # the "hk" source's cell folder (<source> above) and the tag of the plans made with it (hk_tags): changed with its
@@ -335,7 +336,7 @@ def sources_at(lat, lon, lidar=None):
         out.append("ign")
     if _in(NO_BOUNDS, lat, lon):
         out.append("nvdb")
-    if TLM_ON and _in(CH_BOUNDS, lat, lon) and (TLM_URL or _tlm_kept(lat, lon)):
+    if TLM_ON and _in(CH_BOUNDS, lat, lon) and (TLM_URL or TLM_DIR):
         out.insert(0, "tlm")    # (before "ign": its box reaches over Switzerland, where BD TOPO has nothing)
     if HK_ON and _in(HK_BOUNDS, lat, lon):
         out.append("hk")
@@ -355,34 +356,18 @@ def hk_tags(key):
     return ((HK_CELLS,) if ON and HK_ON else ()) + (("hkdtm1",) if hkdtm.ON else ())
 
 
-def _tlm_kept(lat, lon):
-    """Is the "tlm" cell at (lat, lon) on this computer (the cutting tool's, written into the cache)? No network."""
-    d = PROVIDER.dir if PROVIDER is not None else None
-    if not d:
-        return False
-    k = mapcells.cell_of(lat, lon)
-    return os.path.exists(os.path.join(d, TLM_CELLS, str(k.z), str(k.x), f"{k.y}.npz"))
-
-
 def tlm_tags(key):
     """(TLM_CELLS,) when map cell key's road plans are made with Switzerland's measured heights (the "tlm" source on,
-    the cell in CH_BOUNDS, its cut cells served, BNGE_ROADZ_TLM_URL, or this cell kept on this computer), else (): the
+    the cell in CH_BOUNDS, its cut cells served, BNGE_ROADZ_TLM_URL, or in a folder, BNE_ROADZ_TLM_DIR), else (): the
     plans made there before, and the baked packs and shared decisions made without them, are not those (plancache).
-    (A partial cut kept on disk only: a plan cell beside a kept one can read its heights untagged; for local trials.)"""
+    From the settings alone (no look at the disk): every process, whatever it has read or built, keys a cell alike."""
     if not (ON and TLM_ON):
         return ()
     k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
     lon0, lat0, lon1, lat1 = k.bounds()
     if not (lat0 <= CH_BOUNDS[2] and CH_BOUNDS[0] <= lat1 and lon0 <= CH_BOUNDS[3] and CH_BOUNDS[1] <= lon1):
         return ()
-    if TLM_URL:
-        return (TLM_CELLS,)
-    d = PROVIDER.dir if PROVIDER is not None else None
-    if d and k.z >= 14:
-        z14 = mapcells.CellKey(14, k.x >> (k.z - 14), k.y >> (k.z - 14))
-        if os.path.exists(os.path.join(d, TLM_CELLS, "14", str(z14.x), f"{z14.y}.npz")):
-            return (TLM_CELLS,)
-    return ()
+    return (TLM_CELLS,) if (TLM_URL or TLM_DIR) else ()
 
 
 def hk_cell(key):
@@ -1210,9 +1195,12 @@ class RoadZ:
         return Lines.build(rows)
 
     def _tlm(self, key):
-        """Switzerland's cell, cut from swissTLM3D beforehand (tools/build_swisstlm.py): from BNGE_ROADZ_TLM_URL; none
-        there (404): the cell has no roads; no URL: left to the inference, no fault (a cell on disk was read before
-        this, lines(); sources_at offers the source only where one of the two is)."""
+        """Switzerland's cell, cut from swissTLM3D beforehand (tools/build_swisstlm.py): from BNE_ROADZ_TLM_DIR, or
+        BNGE_ROADZ_TLM_URL; none there (no file, a 404): the cell has no roads; neither set: left to the inference, no
+        fault (sources_at offers the source only with one of them)."""
+        if TLM_DIR:
+            path = os.path.join(TLM_DIR, str(key.z), str(key.x), f"{key.y}.npz")
+            return Lines.load(path) if os.path.exists(path) else Lines.build([])
         if not TLM_URL:
             raise _NoProduct()
         import io

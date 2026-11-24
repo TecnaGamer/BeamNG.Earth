@@ -15,11 +15,11 @@ written (the server takes a 404 for none).
 Needs GDAL through pyogrio, geopandas and pyproj (pip install pyogrio geopandas shapely pyproj numpy); not the
 server's packages.
 
-    python tools/build_swisstlm.py --out <cache>/roadz/v<roadz.VERSION>/tlm1      (all of Switzerland: hours)
+    python tools/build_swisstlm.py --out tlmcells                                 (all of Switzerland: hours)
     python tools/build_swisstlm.py --out cells --box 47.36,8.50,47.41,8.56         (lat0,lon0,lat1,lon1)
 
-<out> is a folder of <z>/<x>/<y>.npz: the server's cache folder for "tlm" (roadz.TLM_CELLS: it reads its cells there
-before asking BNGE_ROADZ_TLM_URL), or a folder to serve under that URL.
+<out> is a folder of <z>/<x>/<y>.npz: the server reads it with BNE_ROADZ_TLM_DIR=<out>, or serves it under
+BNGE_ROADZ_TLM_URL. (Not the server's own cache folder: what the server keeps there is its answer per cell.)
 
 Data: swissTLM3D (c) swisstopo, Open Government Data (https://www.swisstopo.admin.ch/en/terms-of-use-free-geodata-
 and-geoservices): free use with the attribution "swisstopo".
@@ -41,7 +41,6 @@ URL = ("/vsizip//vsicurl/https://data.geo.admin.ch/ch.swisstopo.swisstlm3d/swiss
 CH_BOX = (45.80, 5.94, 47.82, 10.50)       # lat0, lon0, lat1, lon1 (roadz.CH_BOUNDS)
 LAYER, COLUMNS = "TLM_STRASSE", ["KUNSTBAUTE", "NAME", "STRASSENNAME"]
 PAD_M = 300.0                              # m round a z12 tile its box reads further (a line reaching in from outside)
-SAMPLE_DEG = 0.0002                        # deg between the samples a line's cells are found by (~15-20 m)
 
 
 def tile_of(lat, lon, z):
@@ -62,12 +61,31 @@ def bounds(z, x, y):
 
 
 def cells_of_line(lonlat, z=14):
-    """The z14 cells a line's vertices and the straight pieces between them pass (sampled every SAMPLE_DEG)."""
+    """The z14 cells a line's vertices and the straight pieces between them pass, exactly: each piece is cut where it
+    crosses a cell's edge (a meridian, or a parallel at a row's edge), and every part between two cuts lies in one cell
+    (its middle's), so a piece clipping a cell's corner by centimetres finds that cell too."""
+    n = 1 << z
+
+    def edge_lat(y):
+        return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
     out = set()
     for (a, b) in zip(lonlat[:-1], lonlat[1:]):
-        k = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / SAMPLE_DEG))
-        for t in np.linspace(0.0, 1.0, k + 1):
-            out.add(tile_of(a[1] + t * (b[1] - a[1]), a[0] + t * (b[0] - a[0]), z))
+        a0, a1, b0, b1 = float(a[0]), float(a[1]), float(b[0]), float(b[1])
+        (xa, ya), (xb, yb) = tile_of(a1, a0, z), tile_of(b1, b0, z)
+        ts = {0.0, 1.0}
+        if b0 != a0:
+            for x in range(min(xa, xb) + 1, max(xa, xb) + 1):
+                ts.add((x / n * 360.0 - 180.0 - a0) / (b0 - a0))
+        if b1 != a1:
+            for y in range(min(ya, yb) + 1, max(ya, yb) + 1):
+                ts.add((edge_lat(y) - a1) / (b1 - a1))
+        ts = sorted(min(1.0, max(0.0, t)) for t in ts)
+        out.add((xa, ya))
+        out.add((xb, yb))
+        for t0, t1 in zip(ts[:-1], ts[1:]):
+            if t1 > t0:
+                t = (t0 + t1) / 2
+                out.add(tile_of(a1 + t * (b1 - a1), a0 + t * (b0 - a0), z))
     return out
 
 

@@ -107,6 +107,6 @@ A site is a JSON file (`sites/milchbuck.json` is one):
 - `lines`: `[[[lat, lon], ...], ...]`, the roads whose tiles to build;
 - `axis`: `[[lat, lon(, h)], ...]`, where the distance along the site runs; with heights, the measured line the tunnel floors are compared with;
 - `lanes` (optional): `[{"id", "width", "xy": [[lat, lon], ...], "level"}]`, the place's own carriageways as mapped;
-- `tlm` (optional, or `LANECHECK_TLM`): a folder of swissTLM3D road-height cells from `tools/build_swisstlm.py`, copied into the site's snapshot.
+- `tlm` (optional, or `LANECHECK_TLM`): a folder of swissTLM3D road-height cells from `tools/build_swisstlm.py`, copied into the site's folder and read through `BNE_ROADZ_TLM_DIR`.
 
 `LANECHECK_AUDITOR` picks another roadsys binary than `bin/roadsys-target/release`'s. The audit's metrics carry `audit_version` (audit.rs `AUDIT_VERSION`); `compare.py` refuses to pair results measured with two versions, so re-measure the baseline after the auditor changes.

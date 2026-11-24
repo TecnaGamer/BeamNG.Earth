@@ -20,7 +20,8 @@ SITE: a JSON file {"id", "country", "lines": [[[lat, lon], ...], ...] (the roads
 "axis": [[lat, lon(, h)], ...] (where s runs; with heights: the measured line the floors are compared with),
 "lanes": [{"id", "width", "xy": [[lat, lon], ...], "level"}] (optional: the place's own carriageways, as mapped, audited
 whatever the road code makes of them, with a gauge between two of them one bore apart), "tlm": a folder of swissTLM3D
-road-height cells made by tools/build_swisstlm.py (optional; or LANECHECK_TLM; copied into the site's own snapshot)};
+road-height cells made by tools/build_swisstlm.py (optional; or LANECHECK_TLM; copied into the site's folder and read through
+BNE_ROADZ_TLM_DIR)};
 the id is lower-case letters, digits, _ and -. tools/widecorpus/sites/milchbuck.json is one. Work under ~/bnge-tests/lanecheck/<id>/. LANECHECK_AUDITOR:
 another roadsys binary than bin/roadsys-target/release's.
 """
@@ -94,7 +95,7 @@ def pins(site):
     return out
 
 
-def run_build(tree, place, cache, out, offline, log, probe=None):
+def run_build(tree, place, cache, out, offline, log, probe=None, tlm=None):
     out.mkdir(parents=True)
     runtime = out.parent / ("rt-" + out.name)
     temp = runtime / "tmp"
@@ -104,6 +105,8 @@ def run_build(tree, place, cache, out, offline, log, probe=None):
                TMP=str(temp), PYTHONHASHSEED="0", PYTHONDONTWRITEBYTECODE="1", OMP_NUM_THREADS="1",
                OPENBLAS_NUM_THREADS="1", RAYON_NUM_THREADS="1", BNGE_NET_SHARED=str(ROOT / "netgate"),
                BNE_REVISIT="off", BNGE_PLAN_RUN="wide")
+    if tlm is not None:             # (the site's swissTLM3D cells: roadz's "tlm" source, its plans tagged)
+        env["BNE_ROADZ_TLM_DIR"] = str(tlm)
     cmd = [sys.executable, str(HERE / "lanecheck_build.py"), str(Path(tree).resolve()), json.dumps(place), str(cache),
            str(out), "1", "1" if offline else "0"]
     if probe is not None:           # (lanecheck_probe.py: the same build, its tunnel parts recorded)
@@ -115,22 +118,26 @@ def run_build(tree, place, cache, out, offline, log, probe=None):
         raise RuntimeError(f"build of {place['id']} exited {r.returncode}: see {log}")
 
 
+def site_tlm(site):
+    """The site's copy of its swissTLM3D cells (warm), or None."""
+    d = site["dir"] / "tlm"
+    return d if d.is_dir() else None
+
+
 def warm(site, tree):
     """Every pin built online once into one snapshot of inputs (seed); only the raw input folders kept."""
     d = site["dir"]
     seed = d / "seed"
     seed.mkdir(parents=True, exist_ok=True)
     tlm = site.get("tlm") or os.environ.get("LANECHECK_TLM")
-    if tlm:
-        dst = seed / "roadz" / "v3" / "tlm1"
-        if not dst.exists():
-            shutil.copytree(Path(tlm).expanduser(), dst)   # (a copy: never a link into another cache)
+    if tlm and not (d / "tlm").exists():
+        shutil.copytree(Path(tlm).expanduser(), d / "tlm")   # (a copy: never a link into another cache)
     work = d / "warm"
     for p in pins(site):
         if (work / p["id"]).exists():
             continue
         print("warm", p["id"], flush=True)
-        run_build(tree, p, seed, work / p["id"], False, d / f"warm-{p['id']}.log")
+        run_build(tree, p, seed, work / p["id"], False, d / f"warm-{p['id']}.log", tlm=site_tlm(site))
     for item in seed.iterdir():
         if item.is_dir() and item.name not in RAW:
             shutil.rmtree(item)
@@ -152,7 +159,7 @@ def build_state(site, state, tree):
         if out.exists():
             shutil.rmtree(out)
         print(state, "build", p["id"], flush=True)
-        run_build(tree, p, cache, out, True, d / f"build-{state}-{p['id']}.log")
+        run_build(tree, p, cache, out, True, d / f"build-{state}-{p['id']}.log", tlm=site_tlm(site))
 
 
 def probe_state(site, state, tree):
@@ -170,7 +177,7 @@ def probe_state(site, state, tree):
             if out.exists():
                 shutil.rmtree(out)
             print(state, "probe", p["id"], flush=True)
-            run_build(tree, p, cache, out, True, work / f"probe-{p['id']}.log", probe=rec)
+            run_build(tree, p, cache, out, True, work / f"probe-{p['id']}.log", probe=rec, tlm=site_tlm(site))
         got = json.loads(rec.read_text())
         merged["parts"].update(got["parts"])
         merged["open"].update(got["open"])

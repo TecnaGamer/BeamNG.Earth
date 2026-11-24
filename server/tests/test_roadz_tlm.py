@@ -1,6 +1,6 @@
 """Switzerland's road heights (roadz.py source "tlm": swisstopo's swissTLM3D, cut into cells by
 tools/build_swisstlm.py; server/tlmcodes.py): its kinds of structure as levels, where it is offered, how a cell is
-read (from disk, from BNGE_ROADZ_TLM_URL, a 404, no URL), the plans' tag, and the tool's cell file."""
+read (from BNE_ROADZ_TLM_DIR, from BNGE_ROADZ_TLM_URL, a 404, neither), the plans' tag, and the tool's cell file."""
 import io
 import os
 import shutil
@@ -54,20 +54,21 @@ def cell_bytes(rows):
 
 
 class Saved:
-    """roadz's URL and provider put back after a test."""
+    """roadz's URL, folder and provider put back after a test."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="roadz_tlm_")
-        self.saved = roadz.TLM_URL, roadz.PROVIDER
+        self.cells = os.path.join(self.dir, "tlmcells")      # (the tool's --out: BNE_ROADZ_TLM_DIR)
+        self.saved = roadz.TLM_URL, roadz.TLM_DIR, roadz.PROVIDER
+        roadz.TLM_DIR = ""
 
     def tearDown(self):
-        roadz.TLM_URL, roadz.PROVIDER = self.saved
+        roadz.TLM_URL, roadz.TLM_DIR, roadz.PROVIDER = self.saved
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def keep(self, key, rows):
-        """A cell on this computer, as the tool writes it into the cache."""
-        p = os.path.join(self.dir, "roadz", f"v{roadz.VERSION}", roadz.TLM_CELLS, str(key.z), str(key.x),
-                         f"{key.y}.npz")
+        """A cell in the tool's folder."""
+        p = os.path.join(self.cells, str(key.z), str(key.x), f"{key.y}.npz")
         build_swisstlm.write_cell(p, rows)
         return p
 
@@ -99,13 +100,15 @@ class WhereTest(Saved, unittest.TestCase):
         got = roadz.sources_at(*ZURICH)
         self.assertLess(got.index("tlm"), got.index("ign"), "before BD TOPO's box, which reaches over Zurich")
 
-    def test_a_kept_cell(self):
+    def test_a_folder_of_cells(self):
         roadz.TLM_URL = ""
         roadz.PROVIDER = roadz.RoadZ(self.dir, FakeFetcher({}))
-        self.assertNotIn("tlm", roadz.sources_at(*ZURICH))
         self.keep(mapcells.cell_of(*ZURICH), [(UNDERPASS[0], UNDERPASS[1], -1, "", "Bahnhofquai")])
+        self.assertNotIn("tlm", roadz.sources_at(*ZURICH), "a cell on disk alone is not the setting")
+        roadz.TLM_DIR = self.cells
         self.assertIn("tlm", roadz.sources_at(*ZURICH))
-        self.assertNotIn("tlm", roadz.sources_at(46.0037, 8.9511), "Lugano's cell is not kept")
+        self.assertIn("tlm", roadz.sources_at(46.0037, 8.9511), "Lugano: offered too (no cell there: no roads)")
+        self.assertNotIn("tlm", roadz.sources_at(48.8566, 2.3522))   # Paris
 
 
 class CellTest(Saved, unittest.TestCase):
@@ -132,6 +135,17 @@ class CellTest(Saved, unittest.TestCase):
         self.assertIsNotNone(ln)
         self.assertEqual(len(ln), 0)
 
+    def test_from_the_folder(self):
+        roadz.TLM_DIR = self.cells
+        self.keep(self.key, [(UNDERPASS[0], UNDERPASS[1], -1, "", "Bahnhofquai")])
+        f = FakeFetcher({})
+        ln = roadz.RoadZ(self.dir, f).lines("tlm", self.key)
+        self.assertEqual(len(ln), 1)
+        self.assertAlmostEqual(float(ln.z[1]), 403.632)
+        self.assertEqual(f.asked, [], "nothing asked")
+        other = mapcells.CellKey(14, self.key.x + 1, self.key.y)
+        self.assertEqual(len(roadz.RoadZ(self.dir, f).lines("tlm", other)), 0, "no file: a cell without roads")
+
     def test_no_url_leaves_the_inference(self):
         roadz.TLM_URL = ""
         f = FakeFetcher({})
@@ -144,7 +158,7 @@ class TagTest(Saved, unittest.TestCase):
     baked packs' or the shared archives', which are made without them)."""
     zurich = mapcells.CellKey(14, 8580, 5737)
 
-    def test_served_kept_or_neither(self):
+    def test_served_in_a_folder_or_neither(self):
         roadz.TLM_URL, roadz.PROVIDER = "", None
         self.assertEqual(roadz.tlm_tags(self.zurich), (), "no cells anywhere: the plans as before")
         roadz.TLM_URL = "https://cells.example/tlm"
@@ -152,9 +166,14 @@ class TagTest(Saved, unittest.TestCase):
         self.assertEqual(roadz.tlm_tags(mapcells.CellKey(14, 8301, 5636)), (), "Paris")
         roadz.TLM_URL = ""
         roadz.PROVIDER = roadz.RoadZ(self.dir, FakeFetcher({}))
-        self.assertEqual(roadz.tlm_tags(self.zurich), (), "not on disk")
         self.keep(self.zurich, [(UNDERPASS[0], UNDERPASS[1], -1, "", "Bahnhofquai")])
-        self.assertEqual(roadz.tlm_tags(self.zurich), (roadz.TLM_CELLS,), "kept on this computer")
+        self.assertEqual(roadz.tlm_tags(self.zurich), (), "a cell on disk alone: untagged, as it is not read")
+        roadz.TLM_DIR = self.cells
+        self.assertEqual(roadz.tlm_tags(self.zurich), (roadz.TLM_CELLS,), "the folder set")
+        roadz.PROVIDER = None
+        self.assertEqual(roadz.tlm_tags(self.zurich), (roadz.TLM_CELLS,), "the same in a process without a RoadZ")
+        nb = mapcells.CellKey(14, self.zurich.x + 1, self.zurich.y)
+        self.assertEqual(roadz.tlm_tags(nb), (roadz.TLM_CELLS,), "its neighbour too, cut or not")
 
 
 class ToolTest(unittest.TestCase):
@@ -185,6 +204,12 @@ class ToolTest(unittest.TestCase):
         line = np.array([[lon1 - 0.0008, lat0 - 0.0002], [lon1 + 0.0002, lat0 + 0.0008]])
         self.assertIn((k.x, k.y), build_swisstlm.cells_of_line(line))
         self.assertIn((k.x + 1, k.y), build_swisstlm.cells_of_line(line))
+        # (a piece clipping the cell's corner by ~1 m: found exactly, where samples every ~20 m missed it)
+        e = 1e-5
+        line = np.array([[lon1 - 0.003, lat1 + 0.003 - e], [lon1 + 0.003 - e, lat1 - 0.003]])
+        got = build_swisstlm.cells_of_line(line)
+        self.assertIn((k.x, k.y), got)
+        self.assertEqual(got, {(k.x, k.y - 1), (k.x, k.y), (k.x + 1, k.y)})
 
 
 if __name__ == "__main__":
