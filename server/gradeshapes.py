@@ -417,18 +417,22 @@ def _line_id(net, i):
 
 def _pair(net, i, j):
     """Member i's relations with member j, from a cache by the two members' keys and lines."""
+    _t0 = time.perf_counter()
     key = (_line_id(net, i), _line_id(net, j))
     got = _PAIR_REL.get(key)
     P = _PROF.__dict__
     if got is None:
         P["pair_miss"] = P.get("pair_miss", 0) + 1
         P["pair_pts"] = P.get("pair_pts", 0) + len(net.lines[i]) * len(net.lines[j])
+        _t = time.perf_counter()
         got = _pair_relations(net, i, j)
+        P["pair_s"] = P.get("pair_s", 0.0) + time.perf_counter() - _t
         if len(_PAIR_REL) >= _PAIR_REL_MAX:
             _PAIR_REL.clear()
         _PAIR_REL[key] = got
     else:
         P["pair_hit"] = P.get("pair_hit", 0) + 1
+        P["pair_hit_s"] = P.get("pair_hit_s", 0.0) + time.perf_counter() - _t0
     return got
 
 
@@ -461,9 +465,18 @@ class Scan:
         new = [i for i, k in enumerate(ids) if k not in self.pairs and len(net.lines[i]) >= 2]
         for i in new:
             self.pairs[ids[i]] = {}
+        P = _PROF.__dict__ if os.environ.get("BNE_IX_PROFILE") else None
+        if P is not None:
+            P["near_s"] = P.get("near_s", 0.0)
+            P["near_n"] = P.get("near_n", 0)
         for i in new:
             seed_i = _is_seed(net, i)
-            for j in net.near_along(i, JOIN_M + 0.5):
+            _t = time.perf_counter()
+            near = net.near_along(i, JOIN_M + 0.5)
+            if P is not None:
+                P["near_s"] += time.perf_counter() - _t
+                P["near_n"] += 1
+            for j in near:
                 if len(net.lines[j]) < 2:
                     continue
                 if seed_i:
@@ -981,6 +994,15 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
                                                 "reach", "close", "rest") if k in prof),
                     _PROF.__dict__.get("pair_miss", 0), _PROF.__dict__.get("pair_pts", 0), _PROF.__dict__.get("pair_hit", 0),
                     "" if scan is not None else " (no scan: every member scanned)")
+    if prof is not None and scan is not None:
+        log.warning("ix profile:   scan: %d new members, near_along %.2f s (%d asks); pairs missed %d in %.2f s, kept %d in "
+                    "%.2f s", scan.scanned[-1], _PROF.__dict__.get("near_s", 0.0), _PROF.__dict__.get("near_n", 0),
+                    _PROF.__dict__.get("pair_miss", 0), _PROF.__dict__.get("pair_s", 0.0),
+                    _PROF.__dict__.get("pair_hit", 0), _PROF.__dict__.get("pair_hit_s", 0.0))
+        _PROF.__dict__.pop("pair_s", None)
+        _PROF.__dict__.pop("pair_hit_s", None)
+        _PROF.__dict__.pop("near_s", None)
+        _PROF.__dict__.pop("near_n", None)
     _PROF.__dict__.pop("pair_miss", None)
     _PROF.__dict__.pop("pair_hit", None)
     _PROF.__dict__.pop("pair_pts", None)
