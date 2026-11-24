@@ -169,6 +169,9 @@ class ExecutorTest(unittest.TestCase):
             return await asyncio.gather(*[loop.run_in_executor(ex, pow, 2, n) for n in range(5)])
 
         self.assertEqual(asyncio.run(main()), [1, 2, 4, 8, 16])
+        end = time.monotonic() + 10     # (a worker resolves its future, then counts the task: wait for the count)
+        while s.stats(False)["classes"]["P2"]["done"] < 5 and time.monotonic() < end:
+            time.sleep(0.01)
         st = s.stats(True)
         self.assertEqual(st["classes"]["P2"]["done"], 5)
         self.assertIsNotNone(st["classes"]["P2"]["lateP95"])
