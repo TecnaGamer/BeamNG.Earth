@@ -11,11 +11,13 @@ What is shared, and its key. A version key (vkey: sha256 of vkey_doc) names ever
 holds besides the cell: PLANS_FORMAT / FACTS_FORMAT (plancache.plans_format: with the grade guard's tag), the plans'
 frames, the build switches (revisit.plans_switches_key: the BNE_* that change plans or facts), the map data's versions
 (MapData.versions(): Overture release, map source, the optional layers' versions) WITHOUT the weekly datasets' builds
-(WEEKLY: rails, lanes, stations; a weekly build made every archive unreachable). What a cell's items read of the weekly
-rail and lane tags is keyed per item instead (FORMAT 2): each item's key ends in "@<dep>", the digest of the slices of
-the cells round it (ring: RING_PLANS cells for plans, whose facts read their neighbours' facts; RING_FACTS for facts),
-a cell's slice (slice_digest) being the rail and lane shards' tags of the OSM ways of that cell's roads layer, their
-road rules, and the shards' nodes in it (what railtags' joins read). The way ids of each of those cells are in the
+(WEEKLY: rails, lanes, stations, osmtags; a weekly build made every archive unreachable). What a cell's items read of the
+weekly rail, lane and OSM road tags is keyed per item instead (FORMAT 2): each item's key ends in "@<dep>", the digest
+of the slices of the cells round it (ring: RING_PLANS cells for plans, whose facts read their neighbours' facts;
+RING_FACTS for facts), a cell's slice (slice_digest) being the rail and lane shards' tags of the OSM ways of that
+cell's roads layer, their road rules, and the shards' nodes in it (what railtags' joins read), and the digest of the
+OSM road tags the cell's roads are joined with at their decode (mapdata.MapData.osm_tags_slice: the cell's tags,
+raceways, busways and lane geometry of the run's tag shard build; SLICES, in the vkey). The way ids of each of those cells are in the
 block (w/<z>_<x>_<y>: they follow the Overture release, which the vkey holds), so a player's server makes the same
 digest from its own weekly shards without the map data: a weekly build misses only the items whose cells' tags
 changed. The station shards are no part of it: no plan or fact reads them (gasstations' road tiles do).
@@ -73,7 +75,10 @@ NET_RETRY_S = 60.0              # ... after a network error
 FETCH_WAIT_S = 20.0             # s a process waits for another downloading the same block
 MAX_BLOCK_BYTES = 96 << 20
 MEM_BLOCKS = 6                  # blocks kept in memory per process
-WEEKLY = ("rails", "lanes", "stations", "osmyears", "osmcolours")     # versions() keys left out of the vkey (per item instead: slice_digest)
+WEEKLY = ("rails", "lanes", "stations", "osmyears", "osmcolours", "osmtags")     # versions() keys left out of the vkey (per item instead: slice_digest)
+# what a cell's slice holds (slice_digest), in the vkey: an archive whose items were keyed by other slices is not read
+# (osmtags: the OSM road tags joined at the roads' decode since mapdata roads 10, R7 of ~/bnge-tests/manifestaudit)
+SLICES = ("rails", "lanes", "osmtags")
 PINS = "pins.json"
 
 
@@ -107,7 +112,7 @@ def vkey_doc(versions):
     import roads
     return {"dec": FORMAT, "plans": plancache.plans_format(), "facts": roads.FACTS_FORMAT,
             "frames": plancache.FRAMES, "switches": revisit.plans_switches_key(),
-            "rings": [RING_PLANS, RING_FACTS],
+            "rings": [RING_PLANS, RING_FACTS], "slices": list(SLICES),
             "versions": json.loads(json.dumps({k: v for k, v in versions.items() if k not in WEEKLY},
                                               sort_keys=True))}
 
@@ -249,11 +254,21 @@ def _nodes_near(sh, cell):
 
 
 def slice_digest(sources, cell, ids, fetch=True):
-    """The digest (32 hex) of what cell's roads (their way ids) read of the weekly rail and lane tags, from sources
-    ({"rails": railtags.RailTags or None (off), "lanes": LaneTags or None}); None when a shard cannot be had (fetch
-    False: when it is not in memory)."""
+    """The digest (32 hex) of what cell's roads (their way ids) read of the weekly rail and lane tags and of the OSM
+    road tags, from sources ({"rails": railtags.RailTags or None (off), "lanes": LaneTags or None, "osmtags": the map
+    data's osm_tags_source() or None}: the OSM road tags' slice is the cell's whole answer, every tagged highway in it,
+    as the join reads them); None when a shard cannot be had (fetch False: when it is not in memory)."""
     import mapcells
     doc = {}
+    if "osmtags" in sources:
+        t = sources["osmtags"]
+        if t is None:
+            doc["osmtags"] = "off"
+        else:
+            d = t.cell_slice(mapcells.CellKey(*(int(v) for v in cell)), fetch)
+            if d is None:
+                return None
+            doc["osmtags"] = d
     for name in ("rails", "lanes"):
         t = sources.get(name)
         if t is None:
@@ -289,15 +304,22 @@ def register_weekly(md):
 
 
 def weekly_sources():
-    """{"rails", "lanes"} of the registered map data (None: that dataset off), or None (no map data)."""
+    """{"rails", "lanes", "osmtags"} of the registered map data (None: that dataset off), or None (no map data)."""
     md = _SOURCES[0]() if _SOURCES else None
     if md is None:
         return None
-    return {"rails": getattr(md, "rail_tags", None), "lanes": getattr(md, "lane_tags", None)}
+    return weekly_of(md)
+
+
+def weekly_of(md):
+    """{"rails", "lanes", "osmtags"} of map data md (slice_digest's sources; tools/build_decisions.py's too)."""
+    osm = md.osm_tags_source() if hasattr(md, "osm_tags_source") else None
+    return {"rails": getattr(md, "rail_tags", None), "lanes": getattr(md, "lane_tags", None), "osmtags": osm}
 
 
 def _weekly_builds(sources):
-    return tuple(None if t is None else t.known() for t in (sources.get("rails"), sources.get("lanes")))
+    return tuple(None if t is None else t.known()
+                 for t in (sources.get("rails"), sources.get("lanes"), sources.get("osmtags")))
 
 
 def block_of(cell):

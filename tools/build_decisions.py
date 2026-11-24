@@ -43,7 +43,7 @@ sys.path.insert(0, SERVER)
 import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 
 PASSES = 3
-WEEKLY_KEYS = ("rails", "lanes", "stations")      # (decisions.WEEKLY: kept in each record's versions, not the vkey)
+WEEKLY_KEYS = ("rails", "lanes", "stations", "osmtags")   # (decisions.WEEKLY: kept in each record's versions, not the vkey)
 # what earthd puts in every player's environment (its --bridge-profile default; BNE_NETSTATS_PROC is not a switch)
 PLAYER_SWITCHES = {"BNE_BRIDGE_PROFILE": "curve"}
 TEST_PLACES = {"fells": (39.28, -76.60), "manhattan": (40.76, -73.98), "stelvio": (46.53, 10.45),
@@ -205,8 +205,8 @@ def weekly_of(versions):
 
 
 def wait_weekly(md, wait_s=None, sleep=time.sleep):
-    """The weekly datasets' builds ({rails, lanes, stations}) once every one is known (each manifest asked, again
-    every 10 s for up to wait_s), or None. Planning without them would make plans without their tags."""
+    """The weekly datasets' builds ({rails, lanes, stations, osmtags}) once every one is known (each manifest asked,
+    again every 10 s for up to wait_s), or None. Planning without them would make plans without their tags."""
     srcs = [getattr(md, a, None) for a in ("rail_tags", "lane_tags", "station_tags")]
     t0 = time.monotonic()
     wait_s = WEEKLY_WAIT_S if wait_s is None else wait_s
@@ -214,6 +214,8 @@ def wait_weekly(md, wait_s=None, sleep=time.sleep):
         for src in srcs:
             if src is not None:
                 src.version()
+        if hasattr(md, "osm_tags_build"):
+            md.osm_tags_build()             # (the OSM road tags' build of the run, decided)
         got = weekly_of(md.versions())
         if all(got.get(k, 0) is not None for k in WEEKLY_KEYS):
             return got
@@ -237,7 +239,7 @@ def _ways_worker(args):
     start = wait_weekly(md)
     if start is None:
         return {"error": "the weekly datasets' manifests could not be had"}
-    sources = {"rails": getattr(md, "rail_tags", None), "lanes": getattr(md, "lane_tags", None)}
+    sources = decisions.weekly_of(md)       # (rails, lanes and the OSM road tags: the server's own slices)
     with open(out_jsonl, "w") as rec:
         for z, x, y in cells:
             try:

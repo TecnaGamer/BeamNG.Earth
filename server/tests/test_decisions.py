@@ -35,7 +35,7 @@ from test_roads import features, FRAME  # noqa: E402
 HAVE = getattr(fast._ef, "VERSION", 0) >= decisions.NATIVE
 SEED = bytes(range(32))
 OTHER_SEED = bytes(range(1, 33))
-VERSIONS = {"pipeline": 9, "overture": "2026-test", "rails": "r1", "lanes": "l1", "stations": "s1"}
+VERSIONS = {"pipeline": 9, "overture": "2026-test", "rails": "r1", "lanes": "l1", "stations": "s1", "osmtags": "o1"}
 
 
 class VersionedMD(FakeMD):

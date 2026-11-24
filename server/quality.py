@@ -240,6 +240,10 @@ class Source:
                 if isinstance(got, mapdata.StandIn):
                     raise ValueError(f"{key} {ly}: a parquet stand-in")
                 layers[ly] = got
+            # (the roads with their OSM tags, the run's build, as the decode joins them: the file is Overture's alone)
+            layers["roads"], ok = self.md.roads_joined_arrays(key, layers["roads"], kind)
+            if not ok:
+                raise ValueError(f"{key}: OSM road tags not of the run's build")
             lanes = lanes_slice(self.md, key, layers["roads"])
             blob = counts(key, layers, lanes)
         except Exception as e:      # (a source failed: no record this time)
@@ -256,7 +260,8 @@ class Source:
         layers could not be had."""
         key = mapcells.check(key)
         r = getattr(self.md, "cip", None)
-        if r is not None:
+        if r is not None and r.data_builds().get("osmtags") == self.md.osm_tags_build():
+            # (counted with the OSM road tags of the run's build only: the roads' tags are joined at the decode)
             sec = r.one(key, SECTION, kind)
             if sec is not None and stored_ok(sec):
                 self.stats["stored"] += 1

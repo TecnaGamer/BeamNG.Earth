@@ -15,9 +15,12 @@ replaced source way IDs. The tag values are parsed in the query
 The file is rewritten in place: a version is pinned by its ETag (the cache directory; every range request carries
 If-Match, rangeread.Changed when it moved on), and the next version is taken on the next start (version()).
 
-A layer of its own is not needed: mapdata joins the tags into the roads layer when it builds a cell (all processes
-read the same cell file, so a road's lanes and width agree everywhere). Unreachable: the cell keeps no tags and the
-roads use their width guesses (roads.carriageway), as before.
+A layer of its own is not needed: mapdata joins the tags into the roads layer when it decodes a cell (MapData._osm_join,
+since roads 10; the cell file is Overture's alone), from the server run's one build of the weekly tag shards
+(osmtagshards.py, pagesdata's session), so a road's lanes and width agree in every cell and process of a run, and that
+build is in every key made of them (MapData.versions() "osmtags"). This file is read when the run has no shard build
+(the decode is then keyed "layercake"), or stands in for a shard that could not be read (a stand-in: nothing kept is
+made of it). Unreachable: no tags, the roads use their width guesses (roads.carriageway), as before.
 """
 import json
 import logging
