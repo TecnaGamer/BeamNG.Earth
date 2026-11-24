@@ -229,6 +229,38 @@ class CoverageTest(unittest.TestCase):
             demmod._coverage.update(saved)
 
 
+    def test_stale_list_kept_when_refresh_fails(self):
+        """A list on disk older than COVERAGE_MAX_AGE_S is still used when the refresh fails (offline, the host down, a
+        frozen test cache): plans don't change with whether one download worked."""
+        import json
+
+        class Down(LidarDepthFetcher):
+            def get(self, url, *, kind="demand", headers=None):
+                if url == demmod.COVERAGE_URL:
+                    self.calls.append(url)
+                    raise OSError("offline")
+                return super().get(url, kind=kind, headers=headers)
+        saved = dict(demmod._coverage)
+        demmod._coverage.update(index=None, at=-1e18, failed=False)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                path = os.path.join(d, "mapterhorn", "download_urls.json")
+                os.makedirs(os.path.dirname(path))
+                with open(path, "w") as fh:
+                    json.dump(CoverageTest.DOC, fh)
+                old = time.time() - demmod.COVERAGE_MAX_AGE_S - 86400
+                os.utime(path, (old, old))
+                f = Down()
+                dem = demmod.Dem(d, fetcher=f)
+                self.assertEqual(dem._coverage(), {(10, 22): 16, (11, 22): 13}, "the stale list, not none")
+                self.assertEqual(f.calls, [demmod.COVERAGE_URL], "a refresh was tried")
+                self.assertEqual(dem._coverage(), {(10, 22): 16, (11, 22): 13})
+                self.assertEqual(len(f.calls), 1, "not asked again before COVERAGE_RETRY_S")
+                self.assertIsNone(dem._download(demmod.MAPTERHORN, 16, (12 << 10) + 5, 22 << 10), "unlisted z6 tile")
+        finally:
+            demmod._coverage.clear()
+            demmod._coverage.update(saved)
+
 class FillHolesTest(unittest.TestCase):
     def test_small_hole_filled_sea_kept(self):
         a = np.full((64, 64), -1.5, np.float32)
