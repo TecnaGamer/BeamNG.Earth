@@ -252,8 +252,9 @@ SMOOTH_GAIN = {"excellent": 0.1, "good": 0.2, "intermediate": 0.45, "bad": 0.8, 
 SURFACE_GAIN = {"compacted": 0.4, "fine_gravel": 0.5, "pebblestone": 0.7, "gravel": 0.7, "wbm": 0.6,
                 "laterite": 0.8, "unpaved": 0.9, "ground": 1.0, "dirt": 1.0, "earth": 1.0, "soil": 1.0,
                 "clay": 1.1, "sand": 0.8, "grass": 1.2, "grass_paver": 0.6, "mud": 1.4, "rock": 1.3, "rocky": 1.3}
-CLASS_GAIN = {"track": 1.0, "path": 1.0, "unclassified": 0.8, "service": 0.7, "residential": 0.6}
-DEFAULT_GAIN = 0.7
+# (an unclassified gravel road is often a county road driven at 45-55 mph: a gentle prior; a track the full one)
+CLASS_GAIN = {"track": 1.0, "path": 1.0, "unclassified": 0.45, "service": 0.6, "residential": 0.45}
+DEFAULT_GAIN = 0.5
 
 
 def rough_resolve(feats, i):

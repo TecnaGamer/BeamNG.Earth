@@ -20,7 +20,7 @@ use pyo3::prelude::*;
 use crate::dm::Dm;
 
 /// A level feature (a ford) is held level only where the plan rises at most this much over its flat top.
-pub const LEVEL_MAX_RISE_M: f64 = 0.4;
+pub const LEVEL_MAX_RISE_M: f64 = 0.15;
 
 /// One feature: position (x, y) in the plan's frame and its profile.
 #[derive(Clone, Copy, Debug)]
@@ -654,21 +654,21 @@ mod tests {
 
     #[test]
     fn ford_bottom_is_level() {
-        let (xy, z) = (vec![[0.0, 0.0], [40.0, 0.0]], vec![0.0, 2.0]);     // (a 5 % slope)
+        let (xy, z) = (vec![[0.0, 0.0], [40.0, 0.0]], vec![0.0, 1.0]);     // (a 2.5 % slope)
         let f = Feature { x: 20.0, y: 0.0, height: -0.3, ramp: 4.0, top: 4.0, level: true };
         let (oxy, oz, ..) = apply(&xy, &z, &[], &[], &[f], 1.5, 0.25);
         let bottom: Vec<f64> = oxy.iter().zip(&oz).filter(|(p, _)| (p[0] - 20.0).abs() <= 2.0).map(|(_, h)| *h).collect();
         let lo = bottom.iter().cloned().fold(f64::INFINITY, f64::min);
         assert!(bottom.iter().all(|h| (h - lo).abs() < 1e-9), "{bottom:?}");
-        assert!((lo - (0.9 - 0.3)).abs() < 1e-9, "{lo}");
+        assert!((lo - (0.45 - 0.3)).abs() < 1e-9, "{lo}");
         // never above the plan
         for (p, h) in oxy.iter().zip(&oz) {
-            assert!(*h <= 0.05 * p[0] + 1e-9);
+            assert!(*h <= 0.025 * p[0] + 1e-9);
         }
         // a steep road: the dip follows it
-        let (oxy, oz, ..) = apply(&xy, &[0.0, 8.0], &[], &[], &[f], 1.5, 0.25);
+        let (oxy, oz, ..) = apply(&xy, &[0.0, 4.0], &[], &[], &[f], 1.5, 0.25);
         let j = oxy.iter().position(|p| (p[0] - 20.0).abs() < 1e-9).unwrap();
-        assert!((oz[j] - (4.0 - 0.3)).abs() < 1e-9);
+        assert!((oz[j] - (2.0 - 0.3)).abs() < 1e-9);
     }
 
     #[test]

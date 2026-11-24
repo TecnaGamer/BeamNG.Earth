@@ -1480,6 +1480,13 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
             import fast
             fast.require(157, "dirt_step_clamp")
             damage = np.asarray(fast._ef.dirt_step_clamp(np.ascontiguousarray(damage, np.float64), float(cap)))
+        if rough is not None and len(zs) > 2:
+            # (BNE_UNPAVED: the damage on the road's own profile as it is drawn without it, the VERTEX_STEP vertices
+            # joined linearly; every PROFILE_STEP sample kept below would otherwise also bring back the elevation
+            # data's own 2 m detail the thinning smooths: rides measured 20-25 cm dips that were not damage at all)
+            every4 = max(1, int(round(VERTEX_STEP / PROFILE_STEP)))
+            k4 = np.r_[np.arange(0, len(zs) - 1, every4), len(zs) - 1]
+            zs = np.interp(np.arange(len(zs), dtype=np.float64), k4.astype(np.float64), zs[k4])
         zs = zs + damage
     # thin to VERTEX_STEP (the profile stays smooth between: linear in the grading pass); a minor dirt road keeps
     # every sample, or its potholes would be smoothed away by the linear stretches between the vertices
