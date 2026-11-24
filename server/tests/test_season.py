@@ -44,6 +44,22 @@ def _hsv(rgb):
 
 
 class ColourTest(unittest.TestCase):
+    def test_auto_is_graded_and_keyed_by_its_week(self):
+        # (far tiles and block photos were keyed by "auto" alone: October's fall colours served in late November)
+        d = datetime.date(2026, 11, 26)          # a Thursday
+        start = season.slot_date(d)
+        self.assertEqual(start, datetime.date(2026, 11, 23), "the Monday the week's slot starts on")
+        self.assertEqual(season.slot_date(start + datetime.timedelta(days=6)), start)
+        self.assertEqual(season.amounts_for("auto", 45.0, d), season.season_amounts(start, 45.0),
+                         "graded with the slot's date: the key says it all")
+        k = season.season_key("auto", 45.0, d)
+        self.assertEqual(k, ("auto", "2026-11-23"))
+        self.assertEqual(season.season_key("auto", 45.0, start + datetime.timedelta(days=6)), k, "same week, same key")
+        self.assertNotEqual(season.season_key("auto", 45.0, d + datetime.timedelta(days=7)), k, "next week: another")
+        self.assertEqual(season.season_key("auto", 0.0, d), ("auto", "none"), "the tropics: no season, one key")
+        self.assertEqual(season.season_key("off", 45.0, d), "off")
+        self.assertEqual(season.season_key("fall", 45.0, d), "fall")
+
     def test_leaf_on_greens_vegetation_only(self):
         rgb = np.zeros((64, 64, 3), np.uint8)
         rgb[:, :32] = (120, 105, 80)            # dormant grass (left), a grey roof (right)

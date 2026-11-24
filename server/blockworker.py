@@ -4308,12 +4308,14 @@ def _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
         surf = _surf_tags(geodesy.EnuFrame(lat, lon), *tile.bbox)
     import genground
     import imagery as imagerymod
+    import season as seasonmod
     _gx, _gy, gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, int(tex["px"]))
     if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, int(tex["px"])) is not None \
             and not tex.get("quick"):
         surf = (*surf, genground.far_key(getattr(_s, "md", None), tex.get("gen_trees")))
     return revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
-                       mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
+                       mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"],
+                       seasonmod.season_key(tex["season_mode"], lat),
                        bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
                        *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()), *surf)
 

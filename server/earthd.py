@@ -4856,6 +4856,7 @@ class Server:
     # under it on disk and nothing read short meanwhile (revisit.faults).
     def base_revisit_key(self, anchor, cx, cy):
         """The revisit key of the block's finished base photo, or None (revisit off, no imagery)."""
+        import season as seasonmod
         im = self.imagery
         if not revisitmod.ON or im is None or not hasattr(im, "chain") or not hasattr(anchor, "lat"):
             return None
@@ -4863,7 +4864,8 @@ class Server:
             return revisitmod.key("basephoto", round(float(anchor.lat), 7), round(float(anchor.lon), 7), float(cx),
                                   float(cy), ("v", BASE_PHOTO_VERSION, BASE_SHIFT_M), self.layout.block,
                                   heightmap.SQUARE, BASE_RENDER_PX, self.base_px,
-                                  BASE_AO, [s.name for s in im.chain], self.tone, im.leaf_on, im.season_mode,
+                                  BASE_AO, [s.name for s in im.chain], self.tone, im.leaf_on,
+                                  seasonmod.season_key(im.season_mode, float(anchor.lat)),
                                   self.tex_modes, roadsmod.ROADS_IN_GROUND, bool(self.buildings),
                                   self.mapdata.versions() if self.mapdata is not None else None,
                                   self.road_widths is not None, self.surface is not None, anchor.zooms[0],
