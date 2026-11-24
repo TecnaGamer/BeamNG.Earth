@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 56          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 57          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -97,6 +97,7 @@ VERSION = 56          # (the cached cells hold their groups: 14 for the regional
                       # 54: the town palms by the sea and low only (palm_fit)
                       # 55: the veteran oaks in loose woods (veteran_oaks), the tropics' giant filler (G_TRO_GIANT)
                       # 56: the vineyards' edges filled with single rows (G_VINE_ROW)
+                      # 57: those rows along each row line, flush with the field's edge (_vine_runs; 56's cells rebuilt)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
