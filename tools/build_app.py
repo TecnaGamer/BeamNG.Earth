@@ -219,6 +219,9 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
     if IS_WIN:
         vf, mf = version_files(work, ver)
         cmd += ["--version-file", vf, "--manifest", mf]
+    from package import STOREFRONT_RUNTIME
+    for rel in STOREFRONT_RUNTIME:
+        cmd += ["--add-data", f"{os.path.join(ROOT, rel)}{SEP}{os.path.dirname(rel)}"]
     for m in mods:                                  # the server runs from launcher.py --server: all of it
         cmd += ["--hidden-import", m]
     for lib in ("earthfast.pyd", "earthfast.abi3.so"):
