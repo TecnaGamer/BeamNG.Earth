@@ -864,7 +864,8 @@ class VeteranOakTest(unittest.TestCase):
     def test_groups_in_order(self):
         self.assertEqual(veg.GROUPS[veg.G_OAK_VETERAN], "oak_veteran")
         self.assertEqual(veg.GROUPS[veg.G_TRO_GIANT], "tro_giant")
-        self.assertEqual(len(veg.GROUPS), 61)
+        self.assertEqual(veg.GROUPS[veg.G_VINE_ROW], "vine_row")
+        self.assertEqual(len(veg.GROUPS), 62)
 
 
 class NorthBirchTest(unittest.TestCase):
@@ -1341,17 +1342,28 @@ class VineyardTest(unittest.TestCase):
         # a parallelogram 200 m along x with 45-degree ends: its principal axis is skewed, its rows run along x
         frame, feats, ring, chm, clear = self._field([0, 200, 260, 60, 0], [0, 0, 60, 60, 0])
         it = veg.vineyard_items(feats, chm, clear, None)
-        self.assertGreater(len(it), 60)
-        self.assertTrue(np.all(it.group == veg.G_VINE))
+        grp = np.asarray(it.group) == veg.G_VINE
+        row = np.asarray(it.group) == veg.G_VINE_ROW
+        self.assertGreater(int(grp.sum()), 60)
+        self.assertTrue(np.all(grp | row))
+        self.assertGreater(int(row.sum()), 10, "(56) the slanted ends filled with single rows")
         yaw = np.asarray(it.yaw) % 180.0
         self.assertTrue(np.all(np.minimum(yaw, 180.0 - yaw) < 0.5), "rows along the long sides")
         from polygon import Path
         x, y = veg._to3857(ring[:, 0], ring[:, 1])
         path = Path(np.column_stack([x, y]))
         cx, cy = veg._to3857(it.lon, it.lat)
-        k = (veg.VINE_ALONG_M / 2 - 1.0) / np.cos(np.radians(44.9))
+        sec = 1 / np.cos(np.radians(44.9))
+        k = (veg.VINE_ALONG_M / 2 - 1.0) * sec
+        kr = (veg.VINE_ROW_HALF_M - veg.VINE_ROW_END_M) * sec
         for s in (-1, 1):
-            self.assertTrue(np.all(path.contains_points(np.column_stack([cx + s * k, cy]))), "both ends inside")
+            self.assertTrue(np.all(path.contains_points(np.column_stack([cx[grp] + s * k, cy[grp]]))), "both ends inside")
+            self.assertTrue(np.all(path.contains_points(np.column_stack([cx[row] + s * kr, cy[row]]))),
+                            "a row's ends inside")
+        # no single row on a group's square (the rows fill only the squares the group left)
+        g_xy, r_xy = np.column_stack([cx[grp], cy[grp]]), np.column_stack([cx[row], cy[row]])
+        d = np.hypot(r_xy[:, None, 0] - g_xy[None, :, 0], r_xy[:, None, 1] - g_xy[None, :, 1])
+        self.assertTrue(np.all(d.min(axis=1) > 2.0 * sec), "no row on a group")
         again = veg.vineyard_items(feats, chm, clear, None)
         self.assertTrue(np.array_equal(again.lon, it.lon) and np.array_equal(again.yaw, it.yaw), "deterministic")
         self.assertEqual(len(veg.vineyard_items(feats, chm, np.ones_like(clear), None)), 0, "roads / buildings: none")

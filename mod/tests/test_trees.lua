@@ -1169,6 +1169,19 @@ do
   T.check(count('pine_eu', 'scots_pine_filler') == 1 and count('pine_eu_open', 'scots_pine_filler') == 0,
     'the crowd-grown Scots pine in the woods only')
   -- (2026-11-24) the liana-hung jungle trees in the forest only, never by a road
+  -- (56) the vineyards tilted to the ground: a plane rising 0.1 along x
+  local plane = function(x, y) return 100 + 0.1 * x + 0.05 * y end
+  local X, Y, Z, zg = trees.slopeFrame(plane, 10, 20, 102, 0, 7.9, 3.6)
+  T.check(X and math.abs(X[3] / X[1] - 0.1) < 1e-9 and math.abs(zg - 102) < 1e-9, 'tilted along the rows, at the ground')
+  T.check(math.abs(Y[3] / math.sqrt(Y[1] ^ 2 + Y[2] ^ 2) - 0.05) < 0.01 and Z[3] > 0.99
+    and math.abs(X[1] * Z[1] + X[2] * Z[2] + X[3] * Z[3]) < 1e-9, 'and across, an orthonormal frame')
+  local X2 = trees.slopeFrame(plane, 10, 20, 102, math.pi / 2, 7.9, 3.6)
+  T.check(X2 and math.abs(X2[3] / X2[2] - 0.05) < 1e-9, 'a row along y climbs the slope along y')
+  T.check(trees.slopeFrame(nil, 0, 0, 0, 0, 1, 1) == nil and trees.slopeFrame(plane, 10, 20, 90, 0, 7.9, 3.6) == nil
+    and trees.slopeFrame(function() return nil end, 0, 0, 0, 0, 1, 1) == nil, 'no ground, or another level: level')
+  local steep = trees.slopeFrame(function(x) return x end, 0, 0, 0, 0, 7.9, 3.6)
+  T.check(steep and math.abs(steep[3] / steep[1] - trees.MAX_TILT) < 1e-9, 'the tilt capped')
+  T.check(#trees.CATALOG.vine_row == 1 and trees.CATALOG.vine_row[1][1]:find('grape_vine$') ~= nil, 'the single row')
   T.check(count('tropical', 'tro_tree_1_huge') == 1 and count('tropical_open', 'tro_tree_1_huge') == 0
     and count('tropical_open', 'tro_tree_2_medium') == 0 and count('tropical_open', 'tro_tree_2_tall') == 1,
     'liana trees off the roads (tro_tree_2_tall_02 stays)')

@@ -452,6 +452,9 @@ M.CATALOG = {
   -- vineyards' rows (server vegetation.vineyard_items): Italy's grape_vine_group, three rows 2.45 m apart and 15.9 m
   -- long along its x (out to 450 m, GROUP_MAX_M: beyond it the ground photo shows the rows)
   vine = { { IT .. 'trees/trees_italy/grape_vine_group', 2.6 } },
+  -- (56) a single row's piece (Italy's grape_vine, 5.5 m of one row) where the group does not fit: the fields' edges
+  -- by the tracks (server vegetation.VINE_ROW_*)
+  vine_row = { { IT .. 'trees/trees_italy/grape_vine', 2.39 } },
   -- round bales after the harvest (server vegetation.bale_items): the stock race props, straw on farmland, wrapped
   -- silage on meadows; by hemisphere, shown in their season only (SEASON)
   straw_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_large_01', 1.22 } },
@@ -817,6 +820,7 @@ M.GROUP_MAX_M.billboard = 900
 M.GROUP_MAX_M.barn = 800
 M.GROUP_MAX_M.golfflag = 400
 M.GROUP_MAX_M.vine = 450
+M.GROUP_MAX_M.vine_row = 450
 M.GROUP_MAX_M.creosote = 250       -- (as the other shrubs)
 M.NO_COLLIDE.creosote = true
 for _, g in ipairs({ 'maquis', 'shrub_north', 'shrub_tropical', 'tro_understory' }) do     -- (30: as the other shrubs)
@@ -1363,6 +1367,39 @@ function M.varies(group)
   return townsigns.TREE_GROUPS[group] or M.FAR_ONLY[group] or false
 end
 local function frac(x) return x - math.floor(x) end
+
+-- (56) The vineyards on a slope (the user's 2026-11-24: a 16 m group of three rows set level on a hillside, its posts
+-- hanging in the air at the downhill end): a vine item's frame tilted to the ground under it, the ground's heights at
+-- its ends and its sides (M.groundAt: core's, the terrain block's; nil off it, then level as before). halfL, halfW: the
+-- item's half length (along its x, the rows) and half width; MAX_TILT the steepest slope followed. Pure (groundAt
+-- aside): x, y, z0 the item's place, yaw (radians, counter-clockwise from +x). Returns the frame's three columns
+-- (x, y, z axes as {x, y, z}) and the ground's height under the centre, or nil (no ground, or it is off z0 by more than
+-- MAX_DZ: another level's).
+M.SLOPED = { vine = { 7.9, 3.6 }, vine_row = { 2.75, 1.0 } }
+M.MAX_TILT = 0.35
+M.MAX_DZ = 4.0
+local function unit(x, y, z)
+  local l = math.sqrt(x * x + y * y + z * z)
+  return { x / l, y / l, z / l }
+end
+function M.slopeFrame(groundAt, x, y, z0, yaw, halfL, halfW)
+  if not groundAt then return nil end
+  local c, s = math.cos(yaw), math.sin(yaw)
+  local za = groundAt(x + halfL * c, y + halfL * s)
+  local zb = groundAt(x - halfL * c, y - halfL * s)
+  local zc = groundAt(x - halfW * s, y + halfW * c)
+  local zd = groundAt(x + halfW * s, y - halfW * c)
+  if not (za and zb and zc and zd) then return nil end
+  local zm = (za + zb + zc + zd) / 4
+  if math.abs(zm - z0) > M.MAX_DZ then return nil end
+  local sx = math.max(-M.MAX_TILT, math.min(M.MAX_TILT, (za - zb) / (2 * halfL)))
+  local sy = math.max(-M.MAX_TILT, math.min(M.MAX_TILT, (zc - zd) / (2 * halfW)))
+  local X = unit(c, s, sx)
+  local Yp = unit(-s, c, sy)
+  local Z = unit(X[2] * Yp[3] - X[3] * Yp[2], X[3] * Yp[1] - X[1] * Yp[3], X[1] * Yp[2] - X[2] * Yp[1])
+  local Y = { Z[2] * X[3] - Z[3] * X[2], Z[3] * X[1] - Z[1] * X[3], Z[1] * X[2] - Z[2] * X[1] }
+  return X, Y, Z, zm
+end
 local PROP_WINDOWS = { { 0.8, 1.25 }, { 0.6, 1.6 } }
 
 -- A tree's lean (the user's test at Syrynka 2026-11-18: East Coast USA's forest birches are straight upright
@@ -1570,8 +1607,20 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
     -- Existing props use a flat yaw (counter-clockwise in server coordinates). The vegetation leans a little (M.lean).
     local lx, ly = 0, 0
     if M.varies(group) then lx, ly = M.lean(group, f[b + F_RANK]) end
-    itemVec:set(lx, ly, -math.rad(f[b + F_YAW] + yawAdd))
-    m:setFromEuler(itemVec)
+    local sl = M.SLOPED[group]
+    local X, Y, Z, zg
+    if sl then
+      X, Y, Z, zg = M.slopeFrame(M.groundAt, itemPos.x, itemPos.y, itemPos.z, math.rad(f[b + F_YAW] + yawAdd), sl[1], sl[2])
+    end
+    if X then           -- (56: a vineyard's rows on the slope under them)
+      itemVec:set(X[1], X[2], X[3]); m:setColumn(0, itemVec)
+      itemVec:set(Y[1], Y[2], Y[3]); m:setColumn(1, itemVec)
+      itemVec:set(Z[1], Z[2], Z[3]); m:setColumn(2, itemVec)
+      itemPos:set(itemPos.x, itemPos.y, zg)
+    else
+      itemVec:set(lx, ly, -math.rad(f[b + F_YAW] + yawAdd))
+      m:setFromEuler(itemVec)
+    end
     m:setPosition(itemPos)
   end
   local ok, it = pcall(function() return fd:createNewItem(d, m, sc) end)
