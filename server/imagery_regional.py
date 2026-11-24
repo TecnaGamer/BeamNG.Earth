@@ -29,10 +29,18 @@ PLACE = {
     "luxembourg": "Luxembourg", "austria": "Austria", "it_bolzano": "South Tyrol", "it_pcn": "Italy",
     "poland": "Poland", "czechia": "Czechia", "estonia": "Estonia", "flanders": "Flanders (Belgium)",
     "de_bayern": "Bavaria", "de_nrw": "North Rhine-Westphalia", "de_bw": "Baden-Wurttemberg",
-    "de_nds": "Lower Saxony", "de_berlin": "Berlin", "de_hessen": "Hesse", "japan": "Japan",
+    "de_nds": "Lower Saxony", "de_berlin": "Berlin", "de_hessen": "Hesse", "de_hamburg": "Hamburg",
+    "de_bremen": "Bremen", "de_sh": "Schleswig-Holstein", "de_mv": "Mecklenburg-Western Pomerania",
+    "de_bb": "Brandenburg", "de_st": "Saxony-Anhalt", "de_sn": "Saxony", "de_th": "Thuringia",
+    "de_saarland": "Saarland", "de_rp": "Rhineland-Palatinate", "japan": "Japan",
     "hongkong": "Hong Kong",
     "au_nsw": "New South Wales", "au_tas": "Tasmania", "ontario": "Ontario",
 }
+
+# An export source that burns a mark into a corner of every image it serves: px its request reaches past the parent's
+# top and left edges, cut off again before the split (imagery.Source.margin). M-V's "(c) GeoBasis-DE/M-V" stands in
+# the top-left ~100 x 12 px of every GetMap answer, whatever its size (2026-11-23)
+MARGIN = {"de_mv": 24}
 
 # name: (url, attribution, (south, west, north, east), kind, leaf_off)
 #   kind "xyz": an XYZ / TMS cache; "export": a WMS / ArcGIS export (lazy)
@@ -112,12 +120,40 @@ REGIONAL = {
                (50.32, 5.86, 52.53, 9.46), "export", False),
     "de_bw": ("https://owsproxy.lgl-bw.de/owsproxy/ows/WMS_LGL-BW_ATKIS_DOP_20_C?LAYERS=IMAGES_DOP_20_RGB&" + WMS,
               "LGL Baden-Wuerttemberg DOP20 (dl-de/by-2-0)", (47.53, 7.51, 49.79, 10.50), "export", False),
+    # Hamburg and Bremen before Lower Saxony, whose box holds both. Hamburg's time series also carries satellite
+    # years under a closed licence (Pleiades 2022, Maxar 2023): its own 2024 flight pinned (TIME=2024)
+    "de_hamburg": ("https://geodienste.hamburg.de/wms_dop_zeitreihe_belaubt?LAYERS=dop_zeitreihe_belaubt&TIME=2024&"
+                   + WMS, "Freie und Hansestadt Hamburg, Landesbetrieb Geoinformation und Vermessung (LGV), DOP 2024 "
+                   "(dl-de/by-2-0)", (53.39, 9.73, 53.74, 10.33), "export", False),
+    "de_bremen": ("https://geodienste.bremen.de/wms_dop20_2023?LAYERS=DOP20_2023_HB,DOP20_2023_BHV&" + WMS,
+                  "Landesamt GeoInformation Bremen DOP20 2023 (CC BY 4.0)", (53.01, 8.48, 53.61, 8.99), "export", True),
     "de_nds": ("https://opendata.lgln.niedersachsen.de/doorman/noauth/dop_wms?LAYERS=ni_dop20&" + WMS,
                "LGLN Niedersachsen DOP20 (dl-de/by-2-0)", (51.29, 6.65, 53.90, 11.60), "export", False),
     "de_berlin": ("https://gdi.berlin.de/services/wms/truedop_2024?LAYERS=truedop_2024&" + WMS,
                   "Geoportal Berlin TrueDOP 2024 (dl-de/zero-2-0)", (52.33, 13.08, 52.68, 13.77), "export", False),
     "de_hessen": ("https://www.gds-srv.hessen.de/cgi-bin/lika-services/ogc-free-images.ows?LAYERS=he_dop20_rgb&" + WMS,
                   "HVBG Hessen DOP20", (49.39, 7.77, 51.66, 10.24), "export", False),
+    "de_sh": ("https://dienste.gdi-sh.de/WMS_SH_DOP20col_OpenGBD?LAYERS=sh_dop20_rgb&" + WMS,
+              "(c) GeoBasis-DE/LVermGeo SH/CC BY 4.0", (53.35, 7.85, 55.10, 11.35), "export", False),
+    # (M-V burns its copyright into every answer's top-left corner: MARGIN)
+    "de_mv": ("https://www.geodaten-mv.de/dienste/adv_dop?LAYERS=mv_dop&" + WMS, "(c) GeoBasis-DE/M-V 2025 (CC BY 4.0)",
+              (53.10, 10.59, 54.69, 14.42), "export", False),
+    # (its layer holds Berlin too: de_berlin's TrueDOP comes first there)
+    "de_bb": ("https://isk.geobasis-bb.de/mapproxy/dop20c/service/wms?LAYERS=bebb_dop20c&" + WMS,
+              "(c) GeoBasis-DE/LGB, dl-de/by-2-0", (51.36, 11.26, 53.56, 14.77), "export", False),
+    "de_st": ("https://www.geodatenportal.sachsen-anhalt.de/wss/service/ST_LVermGeo_DOP_WMS_OpenData/guest?"
+              "LAYERS=lsa_lvermgeo_dop20_2&" + WMS, "(c) GeoBasis-DE / LVermGeo ST, dl-de/by-2-0",
+              (50.94, 10.56, 53.04, 13.19), "export", False),
+    "de_sn": ("https://geodienste.sachsen.de/wms_geosn_dop-rgb/guest?LAYERS=sn_dop_020&" + WMS,
+              "Quelle: GeoSN, dl-de/by-2-0", (50.17, 11.87, 51.69, 15.04), "export", True),
+    "de_th": ("https://www.geoproxy.geoportal-th.de/geoproxy/services/DOP20?LAYERS=th_dop&" + WMS,
+              "(c) GDI-Th (CC BY 4.0)", (50.20, 9.87, 51.65, 12.65), "export", False),
+    # Saarland before Rhineland-Palatinate, whose box holds it
+    "de_saarland": ("https://geoportal.saarland.de/freewms/dop2026?LAYERS=sl_dop20_rgb&" + WMS,
+                    "(c) GeoBasis DE/LVGL-SL (2026), dl-de/by-2-0", (49.11, 6.36, 49.64, 7.41), "export", False),
+    "de_rp": ("https://geo4.service24.rlp.de/wms/rp_dop20.fcgi?LAYERS=rp_dop20&" + WMS,
+              "(c) GeoBasis-DE / LVermGeoRP (2026), dl-de/by-2-0, http://www.lvermgeo.rlp.de [Daten bearbeitet]",
+              (48.97, 6.11, 50.94, 8.51), "export", False),
     # --- Asia / Oceania / Americas -------------------------------------------------------------------------------
     "japan": ("https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", "GSI Japan (Geospatial Information Authority of Japan) seamless photo",
               (24.0, 122.9, 45.6, 146.0), "xyz", False),

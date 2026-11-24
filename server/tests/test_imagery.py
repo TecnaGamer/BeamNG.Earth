@@ -1532,5 +1532,108 @@ class LatLonBboxTest(unittest.TestCase):
         self.assertIn("{bbox4326}", imagery.SOURCES["poland"].url)
 
 
+
+class GermanStatesTest(unittest.TestCase):
+    """The German states' orthophoto services (imagery_regional.REGIONAL: all 16 states): each well-formed, a city
+    state before the state whose box holds it, Hamburg's own 2024 flight pinned."""
+    STATES = ("de_bayern", "de_nrw", "de_bw", "de_hamburg", "de_bremen", "de_nds", "de_berlin", "de_hessen", "de_sh",
+              "de_mv", "de_bb", "de_st", "de_sn", "de_th", "de_saarland", "de_rp")
+
+    def test_entries(self):
+        import imagery_regional as r
+        self.assertEqual(sorted(n for n in r.REGIONAL if n.startswith("de_")), sorted(self.STATES))
+        for n in self.STATES:
+            url, attr, (s, w, n_, e), kind, leaf = r.REGIONAL[n]
+            self.assertEqual(kind, "export", n)
+            self.assertTrue(url.startswith("https://") and url.endswith(r.WMS) and "LAYERS=" in url, n)
+            self.assertTrue(47.0 < s < n_ < 55.5 and 5.5 < w < e < 15.5, n)
+            self.assertTrue(attr.isascii() and attr, n)
+            self.assertIsInstance(leaf, bool)
+            self.assertIn(n, r.PLACE)
+            src = imagery.SOURCES[n]
+            self.assertEqual((src.export, src.lazy, src.nodata, src.min_zoom), (2, True, "white", 17), n)
+            self.assertIn(n, imagery.DEFAULT_CHAIN)
+
+    def test_order(self):
+        """A source's box holding another state: the smaller one first (where it has nothing, white, the next one
+        fills in; the larger one's service paints its own state only)."""
+        chain = list(imagery.DEFAULT_CHAIN)
+        for first, then in (("de_hamburg", "de_nds"), ("de_bremen", "de_nds"), ("de_hamburg", "de_sh"),
+                            ("de_berlin", "de_bb"), ("de_saarland", "de_rp")):
+            self.assertLess(chain.index(first), chain.index(then), (first, then))
+
+    def test_hamburg_pinned_to_its_2024_flight(self):
+        # (its time series also holds Pleiades 2022 and Maxar 2023 under closed licences)
+        self.assertIn("&TIME=2024&", imagery.SOURCES["de_hamburg"].url)
+
+    def test_margin_only_where_a_mark_is_burnt_in(self):
+        import imagery_regional as r
+        self.assertEqual(set(r.MARGIN), {"de_mv"})
+        self.assertEqual({n for n, s in imagery.SOURCES.items() if s.margin}, {"de_mv"})
+
+
+class ExportMarginTest(ImageryCase):
+    """Source.margin (M-V burns "(c) GeoBasis-DE/M-V" into the top-left corner of every GetMap answer): the request
+    reaches margin px past the parent's top and left edges and that strip is cut off before the split; a source
+    without one asks for the parent's box at 1024 px as before."""
+    BOX = re.compile(r"BBOX=([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)&WIDTH=(\d+)&HEIGHT=(\d+)")
+
+    def serve(self, url, headers, timeout):
+        x0, y0, x1, y1, w, h = (float(v) for v in self.BOX.search(url).groups())
+        self.asked.append((x0, y0, x1, y1, int(w), int(h)))
+        n = int(w)
+        i = np.arange(n)
+        a = np.empty((n, n, 3), np.uint8)
+        a[..., 0] = 60 + i[None, :] % 50
+        a[..., 1] = 80 + i[:, None] % 50
+        a[..., 2] = 90
+        a[:12, :100] = (255, 0, 0)              # the burnt-in copyright, whatever the size
+        a[-8:, -8:] = (0, 0, 250)               # a mark at the box's bottom-right corner
+        return 200, {}, png(a)
+
+    def fetch(self, name, lat, lon):
+        self.asked = []
+        transport = mock.Mock()
+        transport.request.side_effect = self.serve
+        net = netfetch.Fetcher(transport=transport, sleep=lambda s: None, policies=FAST)
+        im = imagery.Imagery(self.tmp.name, (name,), fetcher=net, tone=0.0)
+        src = imagery.SOURCES[name]
+        fx, fy = imagery.mercator_px(np.array([lat]), np.array([lon]), 17)
+        x, y = int(fx[0]) // imagery.TILE & ~3, int(fy[0]) // imagery.TILE & ~3     # a parent's top-left child
+        tiles = {}
+        for j in range(4):
+            for i in range(4):
+                b = im.raw(src, 17, x + i, y + j)
+                tiles[i, j] = np.asarray(Image.open(io.BytesIO(b)).convert("RGB")).astype(int)
+        return src, imagery.mercator_bbox(15, x >> 2, y >> 2), tiles
+
+    def test_corner_mark_cut_off(self):
+        src, mb, tiles = self.fetch("de_mv", 53.63, 11.41)         # Schwerin
+        m = src.margin
+        self.assertEqual(len(self.asked), 1, "one request for the parent")
+        x0, y0, x1, y1, w, h = self.asked[0]
+        self.assertEqual((w, h), (1024 + m, 1024 + m))
+        px = (mb[2] - mb[0]) / 1024
+        self.assertAlmostEqual(x0, mb[0] - m * px, delta=0.01)    # m px further west and north
+        self.assertAlmostEqual(y1, mb[3] + m * px, delta=0.01)
+        self.assertAlmostEqual(x1, mb[2], delta=0.01)             # the east and south edges as they were
+        self.assertAlmostEqual(y0, mb[1], delta=0.01)
+        corner = tiles[0, 0]
+        self.assertLess(int((corner[..., 0] - corner[..., 2]).max()), 100, "no red copyright in the corner tile")
+        # the served image's texel (m, m) is the parent's top-left one (no shift): the pattern there
+        self.assertLessEqual(abs(corner[0, 0, 0] - (60 + m % 50)), 6)
+        self.assertLessEqual(abs(corner[0, 0, 1] - (80 + m % 50)), 6)
+        self.assertGreater(int(tiles[3, 3][-1, -1, 2]), 200, "the bottom-right corner kept")
+
+    def test_no_margin_as_before(self):
+        src, mb, tiles = self.fetch("de_th", 50.98, 11.03)         # Erfurt
+        self.assertEqual(src.margin, 0)
+        x0, y0, x1, y1, w, h = self.asked[0]
+        self.assertEqual((w, h), (1024, 1024))
+        for got, want in zip((x0, y0, x1, y1), mb):
+            self.assertAlmostEqual(got, want, delta=0.001)
+        self.assertGreater(int(tiles[0, 0][0, 0, 0]) - int(tiles[0, 0][0, 0, 2]), 100, "the mark is in this one")
+
+
 if __name__ == "__main__":
     unittest.main()
