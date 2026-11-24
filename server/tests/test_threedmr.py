@@ -1405,6 +1405,19 @@ class SupportZTest(unittest.TestCase):
         # far past SUPPORT_DZ_CAP, so the bare minimum stands (an openwork tower's legs, not debris)
         self.assertAlmostEqual(threedmr._support_z(z), float(z.min()), places=6)
 
+    def test_authored_storefront_beds_its_floor_when_roof_vertices_dominate(self):
+        roof, triangles = self._grid_plate(11, 3.)
+        vertices = np.vstack([roof, [[0., 0., 0.], [1., 0., 0.]]])
+        triangles = np.vstack([triangles, [[0, len(roof), len(roof) + 1]]])
+        self.assertEqual(threedmr._support_z(vertices[:, 2]), 3.)
+        with tempfile.TemporaryDirectory() as directory:
+            result = threedmr.write_model(directory, "store", vertices, triangles,
+                                          vertices[:, :2], None, None, 10., authored_floor=True)
+            decoded = cdae.read(os.path.join(directory, result["shape"]))
+            verts = cdae.mesh_arrays(decoded["meshes"][0])["verts"]
+            self.assertAlmostEqual(float(verts[:, 2].min()), 9.8, places=3)
+            self.assertAlmostEqual(float(verts[:, 2].max()), 12.8, places=3)
+
     def test_write_model_beds_the_plate_not_the_debris_below_it(self):
         plate, plate_tris = self._grid_plate(
             11, 10.0
