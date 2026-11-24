@@ -13,6 +13,7 @@ import roadmesh  # noqa: E402
 import roads  # noqa: E402
 
 Spec = roads.Spec
+OBS_DG = roads.OBS_BLEND_DG
 
 
 def line(x0, x1, step=4.0, y=0.0):
@@ -334,7 +335,7 @@ class TwinTunnels(unittest.TestCase):
     def test_found_with_a_midline_and_a_width_round_both(self):
         tw = roads.twin_tunnels(self.parts())
         self.assertEqual(len(tw), 1)
-        i, j, mid, width = tw[0]
+        i, j, mid, width = tw[0].i, tw[0].j, tw[0].mid, tw[0].width
         self.assertEqual((i, j), (0, 1))
         self.assertTrue(np.allclose(mid[:, 1], 4.75))
         self.assertAlmostEqual(width, 9.5 + 11.0)
@@ -384,6 +385,393 @@ class TwinTunnels(unittest.TestCase):
         mid_row = int(np.argmin(np.abs(ys - 4.75)))
         self.assertTrue(m[mid_row, (xs > 0) & (xs < 4)].any(), "... but the shared mouth is, between them too")
         self.assertFalse(m[mid_row, (xs > 20) & (xs < 200)].any())
+
+
+class OneBore(unittest.TestCase):
+    """Zurich's Milchbucktunnel (lanecheck, 2026-11-23): one bore, its two carriageways mapped as two one-way roads
+    6.9 m apart and solved each on its own floor: the southbound on swissTLM3D's measured line, the northbound on its
+    ground's hull, 1.6 m lower at the south end. One tube round both stood on two floors (a 1.5 m step between the
+    lanes, under the twin rule's 2 m); without the measurement, 2.3 m apart, two tubes through each other's walls.
+    Past the bore the ramps had no tube at all (the whole part no_tube), the shared tube's portal face stood inside
+    the hill where they split, and a ramp splitting off inside the hill ran its tube through the other's lanes."""
+
+    W = 5.8
+
+    def bore(self, measured=True, dz_south=1.6, stack=0.0):
+        """northbound (0): its approach from (-100, -20), along y = -3.45 from x = 0 to 1500, a ramp away to
+        (1700, -40); southbound (1): the other way at y = +3.45, its ramp from (1700, 40), its approach on to
+        (-100, 20)."""
+        def poly(pts):
+            out = [np.asarray(pts[0], np.float64)]
+            for a, b in zip(pts[:-1], pts[1:]):
+                a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
+                k = max(1, int(np.hypot(*(b - a)) / 4.0))
+                out.extend(a + (b - a) * t for t in np.linspace(0, 1, k + 1)[1:])
+            return np.asarray(out)
+        n = poly([(-100, -20), (0, -3.45), (1500, -3.45), (1700, -40)])
+        s = poly([(1700, 40), (1500, 3.45), (0, 3.45), (-100, 20)])
+        zn = 10.0 + 0.024 * n[:, 0]                              # its hull: the straight line between its portals
+        zs = 10.0 + dz_south + 0.0227 * s[:, 0] + stack          # measured (swissTLM3D's line)
+        ms = zs.copy() if measured else np.full(len(s), np.nan)
+        return [n, s], [self.W, self.W], [zn, zs], [np.full(len(n), np.nan), ms]
+
+    @staticmethod
+    def at(xy, z, x, y_sign):
+        k = np.flatnonzero(np.sign(xy[:, 1]) == y_sign)
+        o = np.argsort(xy[k, 0])
+        return np.interp(x, xy[k, 0][o], z[k][o])
+
+    def test_one_floor_where_they_share_the_bore_the_measured_one(self):
+        lines, widths, floors, meas = self.bore()
+        new = roads.bore_floors(lines, widths, floors, meas)
+        xs = np.arange(60.0, 1440.0, 5.0)
+        zn, zs = self.at(lines[0], new[0], xs, -1), self.at(lines[1], new[1], xs, 1)
+        self.assertLess(float(np.abs(zn - zs).max()), 0.02, "one floor across the bore")
+        self.assertLess(float(np.abs(zs - self.at(lines[1], floors[1], xs, 1)).max()), 0.02, "on the measured line")
+        for k in (0, 1):            # the ends kept: a portal's graded ground, a joint's pin
+            self.assertAlmostEqual(float(new[k][0]), float(floors[k][0]), places=6)
+            self.assertAlmostEqual(float(new[k][-1]), float(floors[k][-1]), places=6)
+            ds = np.hypot(*np.diff(lines[k], axis=0).T)
+            grade = np.diff(new[k]) / np.maximum(ds, 1e-9)
+            self.assertLess(float(np.abs(grade).max()), 0.12, "no step along a carriageway")
+            self.assertLess(float(np.abs(np.diff(grade)).max()), 0.03, "eased, no kink")
+
+    def test_measured_where_it_is_not_deeper_still_the_one_floor(self):
+        # the solve takes a measurement only where it is deeper than its own floor: where swissTLM3D's line lies a few
+        # cm over the southbound's own floor it was not taken there, and the deeper floor (1.6 m down) cut a notch
+        lines, widths, floors, meas = self.bore()
+        zs = floors[1].copy()
+        zs[200:210] -= 0.05                     # (its own floor, here 5 cm under the measured line)
+        floors = [floors[0], zs]
+        new = roads.bore_floors(lines, widths, floors, meas)
+        ds = np.hypot(*np.diff(lines[1], axis=0).T)
+        self.assertLess(float(np.abs(np.diff(new[1]) / np.maximum(ds, 1e-9)).max()), 0.12, "no notch")
+        xs = np.arange(60.0, 1440.0, 5.0)
+        self.assertLess(float(np.abs(self.at(lines[0], new[0], xs, -1) - self.at(lines[1], new[1], xs, 1)).max()), 0.06)
+
+    def test_without_a_measurement_the_deeper(self):
+        lines, widths, floors, _ = self.bore(measured=False)
+        new = roads.bore_floors(lines, widths, floors)
+        xs = np.arange(60.0, 1440.0, 5.0)
+        zn, zs = self.at(lines[0], new[0], xs, -1), self.at(lines[1], new[1], xs, 1)
+        self.assertLess(float(np.abs(zn - zs).max()), 0.02)
+        low = np.minimum(self.at(lines[0], floors[0], xs, -1), self.at(lines[1], floors[1], xs, 1))
+        self.assertLess(float(np.abs(zn - low).max()), 0.02, "the deeper floor: the cover kept")
+
+    def test_one_over_the_other_left_alone(self):
+        lines, widths, floors, meas = self.bore(stack=8.0)
+        new = roads.bore_floors(lines, widths, floors, meas)
+        for k in (0, 1):
+            self.assertTrue(np.allclose(new[k], floors[k]))
+
+    def test_a_common_mouth_keeps_each_portal_and_meets_inside(self):
+        # Reunion's Route des Tamarins (GitHub #84): both carriageways leave the hill at one mouth, their approaches
+        # graded 0.4 m apart: each portal keeps its height, one floor from a few tens of metres in
+        a = line(0.0, 400.0, y=0.0)
+        b = line(0.0, 400.0, y=9.5)[::-1]
+        za = 10.0 + 0.01 * a[:, 0]
+        zb = 10.4 + 0.01 * b[:, 0]
+        new = roads.bore_floors([a, b], [11.0, 11.0], [za, zb])
+        self.assertAlmostEqual(float(new[0][0]), 10.0, places=6)
+        self.assertAlmostEqual(float(new[1][-1]), 10.4, places=6)
+        xs = np.arange(40.0, 360.0, 5.0)
+        zb_at = np.interp(xs, b[::-1, 0], new[1][::-1])
+        self.assertLess(float(np.abs(np.interp(xs, a[:, 0], new[0]) - zb_at).max()), 0.02)
+
+    def test_own_sections_and_a_road_going_on_are_not_mates(self):
+        sp = 5.8
+        a = line(0.0, 300.0)
+        b = line(300.0, 600.0)
+        za, zb = 10.0 + 0.0 * a[:, 0], 12.0 + 0.0 * b[:, 0]
+        new = roads.bore_floors([a, b], [sp, sp], [za, zb])
+        self.assertTrue(np.allclose(new[0], za) and np.allclose(new[1], zb), "one going on from the other's end")
+        c = line(0.0, 300.0, y=6.9)
+        new = roads.bore_floors([a, c], [sp, sp], [za, za + 1.0], roads=["r", "r"])
+        self.assertTrue(np.allclose(new[1], za + 1.0), "one road's own sections")
+
+    def test_twins_share_only_the_bore(self):
+        lines, widths, floors, meas = self.bore()
+        new = roads.bore_floors(lines, widths, floors, meas)
+        sp = Spec(self.W, "paved", True, "trunk")
+        parts = [("n.0#2", sp, lines[0], new[0], 0.0), ("s.0#1", sp, lines[1], new[1], 0.0)]
+        tw = roads.twin_tunnels(parts)
+        self.assertEqual(len(tw), 1)
+        t = tw[0]
+        on_n = t.on_i if t.i == 0 else t.on_j
+        xn = lines[0][on_n, 0]
+        self.assertLess(float(xn.min()), 0.0)
+        self.assertGreater(float(xn.max()), 1490.0)
+        self.assertFalse(on_n[-1] or on_n[0], "the ramp and the approach: their own tubes")
+        self.assertTrue(np.all(t.widths >= 6.9 + self.W - 0.3), "round both carriageways")
+
+    def test_a_split_inside_the_hill_one_tube_while_they_overlap(self):
+        sp = Spec(self.W, "paved", True, "trunk")
+        a = line(0.0, 300.0)
+        b = np.c_[np.linspace(0.0, 300.0, 76), np.linspace(0.0, 60.0, 76)]
+        z = lambda xy: 10.0 + 0.02 * xy[:, 0]          # noqa: E731
+        tw = roads.twin_tunnels([("a.0#0", sp, a, z(a), 0.0), ("b.0#0", sp, b, z(b), 0.0)])
+        self.assertEqual(len(tw), 1)
+        t = tw[0]
+        self.assertTrue(t.on_i[0] and not t.on_i[-1])
+        self.assertLess(float(t.widths[0]), float(t.widths[-1]), "widening with the split")
+        cross = np.c_[np.full(76, 150.0), np.linspace(-150, 150, 76)]
+        self.assertEqual(roads.twin_tunnels([("a.0#0", sp, a, z(a), 0.0), ("c.0#0", sp, cross, np.full(76, 13.0), 0.0)]),
+                         [], "a crossing: two tubes")
+
+    def chunks(self, parts, mouths=None, box=(-300.0, -300.0, 2000.0, 300.0)):
+        class T:
+            def parts(self, cells, exact):          # (as the store: the parts crossing the box)
+                x0, y0, x1, y1 = exact
+                return [p for p in parts if ((p[2][:, 0] >= x0) & (p[2][:, 0] <= x1) & (p[2][:, 1] >= y0) &
+                                             (p[2][:, 1] <= y1)).any()]
+
+            def mouth(self, fid):
+                return (mouths or {}).get(fid, (True, True))
+        return roads._tunnel_chunks(T(), [], box)
+
+    def test_chunks_own_tubes_past_the_bore_and_no_face_at_the_split(self):
+        lines, widths, floors, meas = self.bore()
+        new = roads.bore_floors(lines, widths, floors, meas)
+        sp = Spec(self.W, "paved", True, "trunk")
+        ch = self.chunks([("n.0#2", sp, lines[0], new[0], 0.0), ("s.0#1", sp, lines[1], new[1], 0.0)])
+        own = [c for c in ch if c.get("tunnel") and c.get("deck") and not c.get("no_tube")]
+        self.assertTrue(any(np.asarray(c["n"])[:, 0].max() > 1600 for c in own), "the ramps in their own tubes")
+        self.assertTrue(any(np.asarray(c["n"])[:, 0].min() < -50 for c in own), "the approaches in their own tubes")
+        shared = [c for c in ch if c.get("tube_only")]
+        self.assertTrue(shared)
+        self.assertFalse(any(any(c.get("portal") or ()) for c in shared), "no portal face where they split")
+        floors_ = [c for c in ch if c.get("no_tube")]
+        self.assertTrue(floors_ and all(-20.0 < np.asarray(c["n"])[:, 0].min() and np.asarray(c["n"])[:, 0].max() < 1520.0
+                                        for c in floors_), "no_tube only in the bore")
+
+    def test_chunks_a_common_mouth_has_the_face(self):
+        a = line(0.0, 400.0, y=0.0)
+        b = line(0.0, 400.0, y=9.5)[::-1]
+        sp = Spec(11.0, "paved", True, "trunk")
+        ch = self.chunks([("a.0#0", sp, a, 10.0 + 0.01 * a[:, 0], 0.0), ("b.0#0", sp, b, 10.0 + 0.01 * b[:, 0], 0.0)])
+        shared = [c for c in ch if c.get("tube_only")]
+        ends = [p for c in shared for p, f in zip((c["n"][0], c["n"][-1]), c["portal"]) if f]
+        self.assertEqual(sorted(round(p[0]) for p in ends), [0, 400])
+
+    def test_drawn_decks_one_floor_when_served_from_two_solves(self):
+        # the network solved in two stores (frames) from two starts, its joints pinned a few cm apart: each carriageway
+        # served from another solve, 6-7 cm apart under their shared tube (lanecheck, Milchbucktunnel without swisstopo)
+        lines, widths, floors, meas = self.bore()
+        new = roads.bore_floors(lines, widths, floors, meas)
+        sp = Spec(self.W, "paved", True, "trunk")
+        served = [new[0] + 0.065, new[1]]
+        ch = self.chunks([("n.0#2", sp, lines[0], served[0], 0.0), ("s.0#1", sp, lines[1], served[1], 0.0)])
+        decks = [np.asarray(c["n"], np.float64) for c in ch if c.get("tunnel") and c.get("deck")]
+        north = np.concatenate([d for d in decks if np.median(d[:, 1]) < 0])
+        south = np.concatenate([d for d in decks if np.median(d[:, 1]) > 0])
+        xs = np.arange(100.0, 1400.0, 10.0)
+        zn = np.interp(xs, *zip(*sorted(zip(north[:, 0], north[:, 2]))))
+        zs = np.interp(xs, *zip(*sorted(zip(south[:, 0], south[:, 2]))))
+        self.assertLess(float(np.abs(zn - zs).max()), 0.005, "one floor drawn")
+        ends = [(float(c[0][0]), float(c[0][2])) for c in decks]
+        self.assertTrue(any(abs(x + 100.0) < 1e-6 and abs(z - float(served[0][0])) < 1e-6 for x, z in ends),
+                        "its portal's height kept")
+
+    def test_a_tile_holding_one_carriageway_still_draws_the_shared_tube(self):
+        # a tile's box takes the northbound alone where the bore runs along its edge (the southbound 6.9 m over it):
+        # paired within the tile only, the northbound was drawn in its own tube there, its wall between the lanes, and
+        # the strip between their decks had no floor (lanecheck, Milchbucktunnel, 1148-1166 m)
+        lines, widths, floors, meas = self.bore()
+        new = roads.bore_floors(lines, widths, floors, meas)
+        sp = Spec(self.W, "paved", True, "trunk")
+        parts = [("n.0#2", sp, lines[0], new[0], 0.0), ("s.0#1", sp, lines[1], new[1], 0.0)]
+        ch = self.chunks(parts, box=(400.0, -300.0, 600.0, 0.0))
+        self.assertTrue(any(c.get("tube_only") for c in ch), "the shared tube")
+        self.assertFalse(any(c.get("tunnel") and c.get("deck") and not c.get("no_tube") for c in ch),
+                         "no carriageway in its own tube in the bore")
+
+    def test_three_roads_at_one_mouth_share_one_tube(self):
+        # the Milchbucktunnel's north mouths (lanecheck): a service road between the two carriageways for its last 30
+        # m, three portals side by side; one tube per pair of them stood its wall in the third one's lane
+        sp, sv = Spec(5.8, "paved", True, "trunk"), Spec(3.5, "paved", True, "service")
+        a = line(0.0, 200.0, y=-6.0)
+        b = line(0.0, 200.0, y=0.0)[::-1]
+        c = line(0.0, 200.0, y=6.5)[::-1]
+        z = lambda xy: 10.0 + 0.02 * xy[:, 0]          # noqa: E731
+        parts = [("a.0#0", sp, a, z(a), 0.0), ("b.0#0", sv, b, z(b), 0.0), ("c.0#0", sp, c, z(c), 0.0)]
+        ch = self.chunks(parts)
+        tubes = [c_ for c_ in ch if c_.get("tunnel") and not c_.get("no_tube")]
+        self.assertTrue(tubes and all(c_.get("tube_only") for c_ in tubes), "no carriageway in its own tube")
+        mesh = roadmesh.tunnel(ch, (0.0, 0.0, 0.0))
+        P, T = mesh[0], mesh[1]
+        tri = P[np.asarray(T, np.int64).reshape(-1, 3)]
+        steep = (np.abs(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])[:, 2]) < 1e-6) &             (np.ptp(tri[:, :, 2], axis=1) > 0.1)      # (a wall, not the shared floor's 2 cm lip)
+        low = tri[:, :, 2].min(1) < 10.0 + 0.02 * tri[:, :, 0].mean(1) + 4.5
+        y = tri[:, :, 1].mean(1)
+        inside = (y > -6.0 - 2.9) & (y < 6.5 + 2.9) & (tri[:, :, 0].mean(1) > 5.0) & (tri[:, :, 0].mean(1) < 195.0)
+        self.assertFalse((steep & low & inside).any(), "no wall over any of the three carriageways")
+
+    def test_the_shared_tube_has_a_floor_between_the_decks(self):
+        # the two carriageways' decks (5.8 m) 6.9 m apart: a 1.1 m slot between them under the shared tube, its floor
+        # nothing (lanecheck, Milchbucktunnel: where the mapped carriageways lie further apart than their decks)
+        lines, widths, floors, meas = self.bore()
+        new = roads.bore_floors(lines, widths, floors, meas)
+        sp = Spec(self.W, "paved", True, "trunk")
+        ch = self.chunks([("n.0#2", sp, lines[0], new[0], 0.0), ("s.0#1", sp, lines[1], new[1], 0.0)])
+        mesh = roadmesh.tunnel(ch, (0.0, 0.0, 0.0))
+        P, T = mesh[0], np.asarray(mesh[1], np.int64).reshape(-1, 3)
+        tri = P[T]
+        for x in (300.0, 700.0, 1100.0):                    # (straight down at the middle, between the decks)
+            z_floor = 10.0 + 1.6 + 0.0227 * x               # (the measured line: the one floor)
+            hits = []
+            for a, b, c in tri:
+                d = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])
+                if abs(d) < 1e-9 or d < 0 and False:
+                    continue
+                l1 = ((b[0] - x) * (c[1] - 0.0) - (c[0] - x) * (b[1] - 0.0)) / d
+                l2 = ((c[0] - x) * (a[1] - 0.0) - (a[0] - x) * (c[1] - 0.0)) / d
+                l3 = 1.0 - l1 - l2
+                if min(l1, l2, l3) >= -1e-9:
+                    hits.append(l1 * a[2] + l2 * b[2] + l3 * c[2])
+            near = [z for z in hits if abs(z - z_floor) < 0.1]
+            self.assertTrue(near, f"a floor in the slot between the decks at x {x}")
+            self.assertTrue(all(z < z_floor - 0.005 for z in near), "just under the decks")
+
+    def test_no_hole_in_the_hill_over_the_split(self):
+        lines, widths, floors, meas = self.bore()
+        new = roads.bore_floors(lines, widths, floors, meas)
+        sp = Spec(self.W, "paved", True, "trunk")
+        parts = [("n.0#2", sp, lines[0], new[0], 0.0), ("s.0#1", sp, lines[1], new[1], 0.0)]
+        n, sq = 128, 2.0
+        u = np.full((n, n), 120.0)                     # the hill over the split
+        mask = roads.tunnel_hole_mask(parts, u, 1500.0, 0.0, sq, None, {"n.0#2": (True, True), "s.0#1": (True, True)})
+        self.assertFalse(mask.any())
+
+
+class OneBoreReview(unittest.TestCase):
+    """The independent review of the one-bore change (2026-11-23), each finding as the case it was found on."""
+
+    def chunks(self, parts, mouths=None, box=(-300.0, -300.0, 2000.0, 300.0)):
+        class T:
+            def parts(self, cells, exact):
+                x0, y0, x1, y1 = exact
+                return [p for p in parts if ((p[2][:, 0] >= x0) & (p[2][:, 0] <= x1) & (p[2][:, 1] >= y0) &
+                                             (p[2][:, 1] <= y1)).any()]
+
+            def mouth(self, fid):
+                return (mouths or {}).get(fid, (True, True))
+        return roads._tunnel_chunks(T(), [], box)
+
+    def test_a_ramp_keeps_its_grade_and_the_mainline_its_floor(self):
+        # a 4.5 m ramp leaving a level 7.5 m mainline inside the hill at 4 degrees, down or up at its own 5 %: made one
+        # floor while their tubes overlapped, the mainline sagged 3.9-7 m or the ramp climbed at 16-25 % past it
+        for g in (-0.05, 0.05):
+            m0, m1 = line(-400.0, 0.0), line(0.0, 800.0)
+            t = np.arange(0.0, 600.0 + 1e-9, 4.0)
+            r = np.c_[t, t * np.tan(np.radians(4.0))]
+            zr = 20.0 + g * t
+            new = roads.bore_floors([m0, m1, r], [7.5, 7.5, 4.5], [np.full(len(m0), 20.0), np.full(len(m1), 20.0), zr],
+                                    roads=["m0", "m1", "r"])
+            self.assertLess(float(np.abs(new[1] - 20.0).max()), 0.05, "the mainline keeps its floor")
+            gr = np.abs(np.diff(new[2])) / 4.0
+            self.assertLess(float(gr.max()), abs(g) + OBS_DG + 0.011, "the ramp's grade")
+
+    def test_staggered_mouths_share_one_tube(self):
+        # GitHub #84: two 11 m carriageways 9.5 m apart, one portal 3 m deeper: each in a stub of its own tube at the
+        # mouth, its wall 2.7 m into the other's lanes
+        sp = Spec(11.0, "paved", True, "trunk")
+        for stag in (1.0, 3.0):
+            a = line(0.0, 400.0, y=0.0)
+            b = np.r_[[[stag, 9.5]], line(4.0, 400.0, y=9.5)][::-1]
+            ch = self.chunks([("a.0#1", sp, a, 10.0 + 0.01 * a[:, 0], 0.0), ("b.0#1", sp, b, 10.0 + 0.01 * b[:, 0], 0.0)],
+                             box=(-20.0, -20.0, 60.0, 30.0))
+            own = [c for c in ch if c.get("tunnel") and c.get("deck") and not c.get("no_tube")]
+            self.assertFalse(own, f"no carriageway in a tube of its own at the mouth ({stag} m)")
+            shared = [c for c in ch if c.get("tube_only")]
+            self.assertTrue(any(f and float(p[0]) < stag + 1.0 for c in shared for p, f in zip((c["n"][0], c["n"][-1]),
+                                                                                                 c["portal"])), "one face")
+
+    def test_no_step_at_a_joint_in_the_bore(self):
+        # the carriageways in pieces joined inside the bore, floors 1.5 m apart: a mate's end height overwrote the
+        # part's own, 0.6-1.6 m steps between the pieces at the joint
+        a0, a = line(-200.0, 0.0, y=-3.45), line(0.0, 400.0, y=-3.45)
+        b, b2 = line(-300.0, 32.0, y=3.45), line(32.0, 400.0, y=3.45)
+        fl = [np.full(len(a0), 10.0), np.full(len(a), 10.0), np.full(len(b), 11.5), np.full(len(b2), 11.5)]
+        new = roads.bore_floors([a0, a, b, b2], [5.8] * 4, fl, roads=["n1", "n2", "s1", "s2"])
+        self.assertAlmostEqual(float(new[0][-1]), float(new[1][0]), places=6)
+        self.assertAlmostEqual(float(new[2][-1]), float(new[3][0]), places=6)
+        for z in new:
+            self.assertLess(float(np.abs(np.diff(z)).max()), 4.0 * 0.12, "no step along a carriageway")
+
+    def test_the_shared_floor_is_never_over_a_deck(self):
+        # its floor at the two floors' mean stood 18 cm over the lower deck where their portals were 0.4 m apart
+        sp = Spec(11.0, "paved", True, "trunk")
+        a = line(0.0, 400.0, y=0.0)
+        b = line(0.0, 400.0, y=9.5)[::-1]
+        ch = self.chunks([("a.0#0", sp, a, 10.0 + 0.01 * a[:, 0], 0.0), ("b.0#0", sp, b, 10.4 + 0.01 * b[:, 0], 0.0)])
+        decks = [np.asarray(c["n"], np.float64) for c in ch if c.get("deck")]
+        for c in ch:
+            if not c.get("tube_only"):
+                continue
+            for x, y, z in np.asarray(c["n"], np.float64):
+                lowest = min(float(np.interp(x, *zip(*sorted(zip(d[:, 0], d[:, 2]))))) for d in decks
+                             if d[:, 0].min() - 1e-6 <= x <= d[:, 0].max() + 1e-6)
+                self.assertLessEqual(z, lowest + 1e-3)      # (the chunks' heights to the mm)
+
+    def test_a_wide_road_beside_a_narrow_one_has_no_wall_in_its_lanes(self):
+        # an 11 m mainline beside a 4.5 m ramp: the tube centred between their lines put its wall 0.43 m into the
+        # mainline's outer lane
+        a = line(0.0, 300.0, y=0.0)
+        b = line(0.0, 300.0, y=8.0)[::-1]
+        z = lambda xy: 10.0 + 0.01 * xy[:, 0]          # noqa: E731
+        ch = self.chunks([("a.0#0", Spec(11.0, "paved", True, "trunk"), a, z(a), 0.0),
+                          ("b.0#0", Spec(4.5, "paved", True, "trunk"), b, z(b), 0.0)])
+        mesh = roadmesh.tunnel(ch, (0.0, 0.0, 0.0))
+        tri = mesh[0][np.asarray(mesh[1], np.int64).reshape(-1, 3)]
+        steep = (np.abs(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])[:, 2]) < 1e-6) & \
+            (np.ptp(tri[:, :, 2], axis=1) > 0.1)
+        low = tri[:, :, 2].min(1) < 10.0 + 0.01 * tri[:, :, 0].mean(1) + 4.5
+        cy, cx = tri[:, :, 1].mean(1), tri[:, :, 0].mean(1)
+        self.assertFalse((steep & low & (cy > -5.5) & (cy < 8.0 + 2.25) & (cx > 5) & (cx < 295)).any())
+
+    def test_a_climbing_ramp_does_not_lift_the_mainline_s_deck(self):
+        # the drawn decks under a split's shared tube were levelled to their mean: the Milchbucktunnel's northbound
+        # deck lifted 0.3 m toward its ramp climbing away (lanecheck, 1605-1644 m)
+        m = line(0.0, 300.0)
+        r = np.c_[np.linspace(0.0, 300.0, 76), np.linspace(0.0, 300.0, 76) * np.tan(np.radians(8.0))]
+        zm, zr = np.full(len(m), 20.0), 20.0 + 0.06 * np.maximum(r[:, 0] - 40.0, 0.0)
+        ch = self.chunks([("m.0#0", Spec(5.8, "paved", True, "trunk"), m, zm, 0.0),
+                          ("r.0#0", Spec(8.3, "paved", True, "trunk"), r, zr, 0.0)], mouths={})
+        decks = [np.asarray(c["n"], np.float64) for c in ch if c.get("deck") and np.median(np.asarray(c["n"])[:, 1]) < 0.5]
+        self.assertTrue(decks)
+        self.assertLess(max(float(np.abs(d[:, 2] - 20.0).max()) for d in decks), 0.01, "the mainline's deck on its floor")
+
+    def test_one_tube_whichever_order_the_parts_come_in(self):
+        sp = Spec(5.8, "paved", True, "trunk")
+        a = line(0.0, 300.0)
+        b = np.c_[np.linspace(0.0, 300.0, 76), np.linspace(0.0, 60.0, 76)]
+        z = lambda xy: 10.0 + 0.02 * xy[:, 0]          # noqa: E731
+        p = [("a.0#0", sp, a, z(a), 0.0), ("b.0#0", sp, b, z(b), 0.0)]
+        one, two = roads.twin_tunnels(p), roads.twin_tunnels(p[::-1])
+        self.assertEqual(len(one), len(two))
+        for t1, t2 in zip(one, two):
+            self.assertTrue(np.allclose(t1.mid, t2.mid) and np.allclose(t1.widths, t2.widths))
+
+    def test_a_long_bore_is_quick_per_tile(self):
+        import time
+        sp = Spec(5.8, "paved", True, "trunk")
+        a = line(0.0, 8000.0, y=-3.45)
+        b = line(0.0, 8000.0, y=3.45)[::-1]
+        z = lambda xy: 10.0 + 0.01 * xy[:, 0]          # noqa: E731
+        t0 = time.perf_counter()
+        self.chunks([("a.0#0", sp, a, z(a), 0.0), ("b.0#0", sp, b, z(b), 0.0)], box=(4000.0, -100.0, 4200.0, 100.0))
+        self.assertLess(time.perf_counter() - t0, 1.5)
+
+    def test_a_third_road_s_mouth_puts_no_face_inside_the_tube(self):
+        sp, sv = Spec(5.8, "paved", True, "trunk"), Spec(3.5, "paved", True, "service")
+        a = line(0.0, 400.0, y=-3.5)
+        b = line(0.0, 400.0, y=3.5)[::-1]
+        c = line(150.0, 250.0, y=0.0)                    # (a service road between them, its ends mouths)
+        z = lambda xy: 10.0 + 0.01 * xy[:, 0]          # noqa: E731
+        ch = self.chunks([("a.0#0", sp, a, z(a), 0.0), ("b.0#0", sp, b, z(b), 0.0), ("c.0#0", sv, c, z(c), 0.0)],
+                         mouths={"a.0#0": (False, False), "b.0#0": (False, False), "c.0#0": (True, True)})
+        faces = [p for c_ in ch if c_.get("tube_only") for p, f in zip((c_["n"][0], c_["n"][-1]), c_["portal"]) if f]
+        self.assertEqual(faces, [], "no portal face across the tube")
 
 
 class FloorAt(unittest.TestCase):
