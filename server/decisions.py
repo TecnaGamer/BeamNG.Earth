@@ -27,6 +27,9 @@ Inside a block, items are keyed as the local caches key them, plus their digest:
     w/<z>_<x>_<y>                                    a cell's way ids (JSON), for every cell of the block's rings
 A cell whose local key carries more (Hong Kong's measured heights, roadz.hk_tags; the photo's road-surface verdicts,
 roadsurf.cell_tags / layer_tags) never matches an item: the builder makes none there, and the client does not ask.
+Germany's measured decks (MapData.versions' "dedecks": their build, left out of the vkey as WEEKLY) are in the slice
+of each German cell (slice_digest, roadz.de_cell), so an item made with one build is read only by a server that
+measures with the same one, and a new build misses only the German items.
 A hit is copied into the local revisit cache under the client's own key (plancache._revisit_key, roads._facts_key):
 read once from the archive, from the local cache after.
 
@@ -75,7 +78,8 @@ NET_RETRY_S = 60.0              # ... after a network error
 FETCH_WAIT_S = 20.0             # s a process waits for another downloading the same block
 MAX_BLOCK_BYTES = 96 << 20
 MEM_BLOCKS = 6                  # blocks kept in memory per process
-WEEKLY = ("rails", "lanes", "stations", "osmyears", "osmcolours", "osmtags")     # versions() keys left out of the vkey (per item instead: slice_digest)
+WEEKLY = ("rails", "lanes", "stations", "osmyears", "osmcolours", "osmtags",     # versions() keys left out of the vkey (per item instead: slice_digest)
+          "dedecks")                # (Germany's measured decks: in the slices of the German cells, roadz.de_cell)
 # what a cell's slice holds (slice_digest), in the vkey: an archive whose items were keyed by other slices is not read
 # (osmtags: the OSM road tags joined at the roads' decode since mapdata roads 10, R7 of ~/bnge-tests/manifestaudit)
 SLICES = ("rails", "lanes", "osmtags")
@@ -259,7 +263,14 @@ def slice_digest(sources, cell, ids, fetch=True):
     data's osm_tags_source() or None}: the OSM road tags' slice is the cell's whole answer, every tagged highway in it,
     as the join reads them); None when a shard cannot be had (fetch False: when it is not in memory)."""
     import mapcells
+    import roadz
     doc = {}
+    if roadz.de_cell(cell):         # (Germany's measured decks: the build its plans read, versions' "dedecks")
+        import dedom
+        ident = dedom.identity(network=fetch)
+        if ident is None:
+            return None
+        doc["dedecks"] = ident
     if "osmtags" in sources:
         t = sources["osmtags"]
         if t is None:

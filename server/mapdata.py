@@ -843,6 +843,10 @@ class MapData:
         if not osmml.ON:                        # (every machine-learned outline kept: keyed only while off)
             v["osm_over_ml"] = False
         v["dem"] = dem_identity()               # (the elevation the plans, facts and tiles are made on: pinned per release)
+        import roadz
+        if roadz.ON and roadz.DE_ON:            # (Germany's measured decks: the build the lidar answers there are made
+            import dedom                        # with, dedom.identity; None while not decided, as the weekly ones)
+            v["dedecks"] = dedom.identity(network=False)
         import osmareas
         if osmareas.FIT:                        # (BNE_ROADSYS_AREAS=on: the mapped road areas' build, keyed only while on)
             v["osmareas"] = osmareas.identity(self)
@@ -881,6 +885,11 @@ class MapData:
                     out.append(mod.shards(self))
                 except Exception:
                     out.append(None)
+            import roadz
+            if roadz.ON and roadz.DE_ON:        # (Germany's measured decks: their build is in versions() too)
+                import dedom
+                import types
+                out.append(types.SimpleNamespace(name="dedecks", frozen=lambda: dedom.manifest().current()))
             try:
                 import bldhz            # (the horizon ring's tall buildings, the same way)
                 tall = bldhz.source(self)

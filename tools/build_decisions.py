@@ -43,7 +43,8 @@ sys.path.insert(0, SERVER)
 import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 
 PASSES = 3
-WEEKLY_KEYS = ("rails", "lanes", "stations", "osmtags")   # (decisions.WEEKLY: kept in each record's versions, not the vkey)
+WEEKLY_KEYS = ("rails", "lanes", "stations", "osmtags",   # (decisions.WEEKLY: kept in each record's versions, not the vkey)
+               "dedecks")      # (Germany's measured decks: "none" while nothing is published; absent with the source off)
 # what earthd puts in every player's environment (its --bridge-profile default; BNE_NETSTATS_PROC is not a switch)
 PLAYER_SWITCHES = {"BNE_BRIDGE_PROFILE": "curve"}
 TEST_PLACES = {"fells": (39.28, -76.60), "manhattan": (40.76, -73.98), "stelvio": (46.53, 10.45),
@@ -201,7 +202,10 @@ WEEKLY_WAIT_S = 180.0
 
 
 def weekly_of(versions):
-    return {k: versions.get(k) for k in WEEKLY_KEYS} if isinstance(versions, dict) else None
+    if not isinstance(versions, dict):
+        return None
+    # (dedecks only where versions() has it: absent with the source off)
+    return {k: versions.get(k) for k in WEEKLY_KEYS if k != "dedecks" or k in versions}
 
 
 def wait_weekly(md, wait_s=None, sleep=time.sleep):
@@ -216,6 +220,10 @@ def wait_weekly(md, wait_s=None, sleep=time.sleep):
                 src.version()
         if hasattr(md, "osm_tags_build"):
             md.osm_tags_build()             # (the OSM road tags' build of the run, decided)
+        import roadz
+        if roadz.ON and roadz.DE_ON:
+            import dedom
+            dedom.identity()                # (Germany's measured decks' build of the run, decided)
         got = weekly_of(md.versions())
         if all(got.get(k, 0) is not None for k in WEEKLY_KEYS):
             return got

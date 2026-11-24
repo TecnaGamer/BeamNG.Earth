@@ -167,7 +167,10 @@ class SchedulerTest(unittest.TestCase):
         # bounds: one at a time, starts at least 1 / rate apart, on the tile pool (never the loop)
         self.assertEqual(self.peak[0], 1)
         t = [a for a, _ in self.starts]
-        self.assertTrue(all(b - a >= 1 / s.retex_rate - 0.005 for a, b in zip(t, t[1:])), t)
+        # (the starts are stamped when the pool's thread takes each one, the pacing is set when it is handed over: a
+        # late pick-up of one makes the next gap look shorter, 44 ms of 50 on a busy machine, gate batch337)
+        self.assertTrue(all(b - a >= 1 / s.retex_rate - 0.015 for a, b in zip(t, t[1:])), t)
+        self.assertGreaterEqual(t[-1] - t[0], (len(t) - 1) / s.retex_rate - 0.015, t)
         self.assertTrue(all(n.startswith("far") for n in self.threads), self.threads)
         self.assertEqual((s.retex_stats["started"], s.retex_stats["sent"]), (4, 4))
 
