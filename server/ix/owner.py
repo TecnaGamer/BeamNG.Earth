@@ -266,8 +266,8 @@ def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
     checked = {cid}
     box = None
     reach = True
-    scan = _gsh.Scan()
-    prev = None             # (the last round's find and its members' keys: a round with the same members is skipped)
+    scan = _gsh.Scan()         # (its rounds scan into the process's pair index: a district's pairs are made by the first
+    prev = None             # growth over it; the last round's find and its members' keys: the same members, a skipped round)
     if hint is not None:
         b = hint["box"]
         e, n, _ = planner.frame.geodetic_to_enu(np.array([b[0], b[0], b[2], b[2]]), np.array([b[1], b[3], b[1], b[3]]), 0.0)

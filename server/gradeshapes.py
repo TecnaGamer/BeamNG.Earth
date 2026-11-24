@@ -387,6 +387,9 @@ def _tunnel_network(net, j):
 
 _PAIR_REL = {}
 _PAIR_REL_MAX = 200000
+PAIRS_MAX_SEEDS = 100000       # seeds the process's pair index holds (PAIRS): ~450 B one (its line id, its entry), and
+PAIRS_MAX_PAIRS = 200000       # ~350 B a pair (its relations with a neighbour): ~115 MB at most together, plus the one
+                               # net that goes past the caps (a giant interchange's: 10,000 seeds, kept whole)
 
 
 _LINE_ID = {}              # (repr(key), len(line)) -> a member's line id: a growth's rounds each make a new net, and
@@ -447,49 +450,121 @@ def _relations(net, i):
     return out
 
 
-class Scan:
-    """The relations of the structures with the members near them, kept across the rounds of one growth (find_interchanges
-    scan=): a round scans only the members it adds, each against its neighbours through the net's grid, and the relations
-    of the members of the rounds before are the ones kept. {line id: {line id: relations}} for the structures' side (a
-    member's relations with a neighbour: _pair), and `scanned`: the members each round scanned (the count of them)."""
+class _Pairs:
+    """The process's pair index: pairs {line id: {line id: relations}} (a seed's relations with the members near it, as
+    _pair gives them; a member that is no seed has no entry), n the pairs counted (the caps', PAIRS_MAX_*). Rebound for
+    a new one when full: a growth reading the old one goes on with it, whole."""
+
+    __slots__ = ("pairs", "n")
 
     def __init__(self):
         self.pairs = {}
+        self.n = 0
+
+    def full(self):
+        return len(self.pairs) >= PAIRS_MAX_SEEDS or self.n >= PAIRS_MAX_PAIRS
+
+
+PAIRS = _Pairs()
+
+
+class Scan:
+    """What a growth's rounds keep (find_interchanges scan=): the process's pair index (PAIRS: the relations of the
+    seeds with the members near them, made by the first growth over a district and read by every round and growth after
+    it, a region's planner's), the ramps' memo (_ramp_reaches' memo across the rounds: _Ramper.memo), the rounds' nets'
+    members' arc lengths and boxes (Net(geo=)) and `scanned`: the seeds each round scanned or asked (the count of them)."""
+
+    def __init__(self):
         self.ramps = {}         # (_ramp_reaches' memo across the rounds: _Ramper.memo)
         self.geo = {}           # (the rounds' nets' members' arc lengths and boxes: Net(geo=))
         self.scanned = []
+        self.ix = PAIRS
+        self.fresh = 0
+        self.ids, self.at = [], {}
 
     def add(self, net):
-        """This round's net: every member not seen before scanned against its neighbours."""
+        """This round's net into the index. A seed the index has not seen is scanned against the members near it (its
+        line, every NEAR_CHUNK_M: near_along), each pair both ways where a side is a seed. A seed the index has is asked
+        for the members near it (its box: near, which holds every member a relation needs) that its entry lacks, and
+        paired with those: this net's new members, and a member it met in no net it was scanned in (the same part read
+        from another cell is another member, kept in this net in place of the copy the last net kept: one_part, so a
+        seed's neighbours are not the same from one net to the next). A member that is no seed is never asked: it has
+        no relations of its own, and every seed near it is. So a seed's entry names every member near it in the net,
+        whichever growth indexed each: relations() is _relations()."""
+        global PAIRS
         ids = [_line_id(net, i) for i in range(len(net.m))]
-        new = [i for i, k in enumerate(ids) if k not in self.pairs and len(net.lines[i]) >= 2]
-        for i in new:
-            self.pairs[ids[i]] = {}
+        seeds = [i for i in range(len(net.m)) if len(net.lines[i]) >= 2 and _is_seed(net, i)]
+        ix = PAIRS
+        if ix.full():
+            # (full: the index holds this net's seeds only; the other growths' districts are scanned again when met)
+            keep = _Pairs()
+            for i in seeds:
+                if ids[i] in ix.pairs:
+                    keep.pairs[ids[i]] = ix.pairs[ids[i]]
+                    keep.n += len(ix.pairs[ids[i]])
+            PAIRS = ix = keep
+        pairs = ix.pairs
         P = _PROF.__dict__ if os.environ.get("BNE_IX_PROFILE") else None
         if P is not None:
             P["near_s"] = P.get("near_s", 0.0)
             P["near_n"] = P.get("near_n", 0)
+            P["check_s"] = P.get("check_s", 0.0)
+            P["check_n"] = P.get("check_n", 0)
+        new = [i for i in seeds if ids[i] not in pairs]
         for i in new:
-            seed_i = _is_seed(net, i)
+            pairs[ids[i]] = {}
+        asked = len(new)
+
+        def pair(i, j):
+            """The pair of the seed i with the member j both ways where a side is a seed (i's side if it lacks j)."""
+            rel = pairs[ids[i]]
+            if ids[j] not in rel:
+                got = _pair(net, i, j)
+                rel[ids[j]] = got
+                ix.n += bool(got)
+            rj = pairs.get(ids[j])
+            if rj is not None and ids[i] not in rj:
+                got = _pair(net, j, i)
+                rj[ids[i]] = got
+                ix.n += bool(got)
+
+        for i in new:
             _t = time.perf_counter()
             near = net.near_along(i, JOIN_M + 0.5)
             if P is not None:
                 P["near_s"] += time.perf_counter() - _t
                 P["near_n"] += 1
             for j in near:
-                if len(net.lines[j]) < 2:
-                    continue
-                if seed_i:
-                    self.pairs[ids[i]][ids[j]] = _pair(net, i, j)
-                if _is_seed(net, j):
-                    self.pairs.setdefault(ids[j], {})[ids[i]] = _pair(net, j, i)
-        self.scanned.append(len(new))
+                if len(net.lines[j]) >= 2:
+                    pair(i, j)
+        new_set = set(new)
+        for i in seeds:
+            if i in new_set:
+                continue
+            _t = time.perf_counter()
+            near = net.near(i, JOIN_M + 0.5)
+            if P is not None:
+                P["check_s"] += time.perf_counter() - _t
+                P["check_n"] += 1
+            rel = pairs[ids[i]]
+            lacking = [j for j in near if ids[j] not in rel]
+            if lacking:
+                asked += 1
+                for j in lacking:
+                    if len(net.lines[j]) >= 2:
+                        pair(i, j)
+                    else:
+                        rel[ids[j]] = []       # (a member of one point: nothing to relate, not asked for again)
+        self.ix = ix
+        self.scanned.append(asked)
+        self.fresh = len(new)
         self.ids = ids
         self.at = {k: j for j, k in enumerate(ids)}
 
     def relations(self, net, i):
-        """_relations(net, i) from what the rounds kept: in index order of the neighbours, the same list."""
-        got = sorted((self.at[k], rels) for k, rels in self.pairs.get(self.ids[i], {}).items() if k in self.at)
+        """_relations(net, i) from what the index kept: in index order of the neighbours, the same list."""
+        at = self.at
+        got = sorted((at[k], rels) for k, rels in self.ix.pairs.get(self.ids[i], {}).items() if k in at)
         return [(j,) + r_ for j, rels in got for r_ in rels]
 
 
@@ -860,6 +935,7 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
     lap()
     t_rel = {}
     rel = {}
+    check = scan is not None and bool(os.environ.get("BNE_IX_PAIRS_CHECK"))     # (the index against a full scan)
     if scan is not None:
         t0 = time.perf_counter()
         scan.add(net)
@@ -872,8 +948,17 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
         if not k_ % 32:
             xproc.check_cancel()        # (the growth's step time limit, ix/limits.py, and a place a teleport left)
         t0 = time.perf_counter()
-        rel[i] = [r_ for r_ in (_relations(net, i) if scan is None else scan.relations(net, i))
-                  if not _tunnel_network(net, r_[0])]
+        if scan is None:
+            rel[i] = [r_ for r_ in _relations(net, i) if not _tunnel_network(net, r_[0])]
+        else:
+            rel[i] = [r_ for r_ in scan.relations(net, i) if not _tunnel_network(net, r_[0])]
+            if check:
+                whole = [r_ for r_ in _relations(net, i) if not _tunnel_network(net, r_[0])]
+                _PROF.__dict__["pairs_checked"] = _PROF.__dict__.get("pairs_checked", 0) + 1
+                if rel[i] != whole:
+                    _PROF.__dict__["pairs_bad"] = _PROF.__dict__.get("pairs_bad", 0) + 1
+                    log.warning("ix profile: PAIRS CHECK: seed %d of %d members: the index's %d relations are not the "
+                                "scan's %d", i, n, len(rel[i]), len(whole))
         t_rel[i] = time.perf_counter() - t0 + (t_scan / len(cand) if scan is not None else 0.0)
     # a deck chain is part of an interchange only if one of its decks crosses a road, a track or a tunnel (over or
     # under): a bridge over a river or a valley alone is the bridges' own (roads.py), not a grade separation's
@@ -995,14 +1080,18 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
                     _PROF.__dict__.get("pair_miss", 0), _PROF.__dict__.get("pair_pts", 0), _PROF.__dict__.get("pair_hit", 0),
                     "" if scan is not None else " (no scan: every member scanned)")
     if prof is not None and scan is not None:
-        log.warning("ix profile:   scan: %d new members, near_along %.2f s (%d asks); pairs missed %d in %.2f s, kept %d in "
-                    "%.2f s", scan.scanned[-1], _PROF.__dict__.get("near_s", 0.0), _PROF.__dict__.get("near_n", 0),
+        log.warning("ix profile:   scan: of %d members %d seeds: %d new scanned (near_along %.2f s), %d old asked for the "
+                    "neighbours they lack (near %.2f s, %d asks); pairs missed %d in %.2f s, kept %d in %.2f s; index %d "
+                    "seeds, %d pairs%s", n, len(cand), scan.fresh, _PROF.__dict__.get("near_s", 0.0),
+                    scan.scanned[-1] - scan.fresh, _PROF.__dict__.get("check_s", 0.0), _PROF.__dict__.get("check_n", 0),
                     _PROF.__dict__.get("pair_miss", 0), _PROF.__dict__.get("pair_s", 0.0),
-                    _PROF.__dict__.get("pair_hit", 0), _PROF.__dict__.get("pair_hit_s", 0.0))
-        _PROF.__dict__.pop("pair_s", None)
-        _PROF.__dict__.pop("pair_hit_s", None)
-        _PROF.__dict__.pop("near_s", None)
-        _PROF.__dict__.pop("near_n", None)
+                    _PROF.__dict__.get("pair_hit", 0), _PROF.__dict__.get("pair_hit_s", 0.0),
+                    len(scan.ix.pairs), scan.ix.n,
+                    ("; CHECK: %d of %d seeds differ from a full scan" % (_PROF.__dict__.get("pairs_bad", 0),
+                                                                         _PROF.__dict__.get("pairs_checked", 0)))
+                    if check else "")
+        for k in ("pair_s", "pair_hit_s", "near_s", "near_n", "check_s", "check_n"):
+            _PROF.__dict__.pop(k, None)
     _PROF.__dict__.pop("pair_miss", None)
     _PROF.__dict__.pop("pair_hit", None)
     _PROF.__dict__.pop("pair_pts", None)
