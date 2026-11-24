@@ -3,7 +3,7 @@
 (and V1_1_SPEC.md).
 
     python3 server/earthd.py [--port 47613] [--user-dir DIR] [--cache-dir DIR] [--far-format cdae|dae]
-                             [--imagery usgs,eox2023,eox2016|off] [--near-visual mesh|terrain]
+                             [--imagery usgs,eox2016|off] [--near-visual mesh|terrain]
                              [--cells 32|64] [--tex 256,256,256,512] [--block 1024|512] [--horizon]
                              [--deshadow off|lambert|full] [--colormatch off|s2]
                              [--weather on|off] [--gravity on|off] [--offline] [--credits on|off]
@@ -551,9 +551,9 @@ FIRST_RAMP_NEAR_PX = 256
 # them in the chain (one request for 8 x 8 tiles; the full texture takes them at those zooms anyway, so the coarse step
 # now looks like what replaces it), EOX for the finer zooms (z13+) and without them. EOX's own throttling hits every
 # player (the user, 2026-11-11): its coarse-cover tiles (~60-100 a cold French teleport, z7-z12) were fetched only for
-# a step the full texture replaces. BNGE_COARSE_EOX=1: EOX alone, as before.
-FIRST_RAMP_CHAIN = (("eox2023", "eox2016") if os.environ.get("BNGE_COARSE_EOX") == "1"
-                    else ("bngs2", "eox2023", "eox2016"))
+# a step the full texture replaces. BNGE_COARSE_EOX=1: EOX alone, as before. EOX is its 2016 mosaic (CC BY 4.0) since
+# 2026-11-23: its 2018+ ones are CC BY-NC-SA.
+FIRST_RAMP_CHAIN = (("eox2016",) if os.environ.get("BNGE_COARSE_EOX") == "1" else ("bngs2", "eox2016"))
 FIRST_RAMP_MAX_S = 12.0
 # Far tiles that wait for the place's map data (Connection.graded: graded under the roads like the block at levels
 # <= 0, the sea floor carved to L2) in flight at most this share of the far workers (at least one): at a place never
@@ -6156,7 +6156,7 @@ class Server:
     def up_px(self, anchor, tile, full):
         """The most texture px far tile `tile` may get where the screen resolves more of it than its level's `full`
         (farpvs.UP_ON, pvs_px): farpvs.UP_PX_MAX at most, and texels no finer than the sharpest photos at its middle
-        (Imagery.sharp_zoom: USGS's z16 in the US, EOX's z14 elsewhere: larger would only enlarge them)."""
+        (Imagery.sharp_zoom: USGS's z16 in the US, Sentinel-2's z14 elsewhere: larger would only enlarge them)."""
         return self.up_px_many(anchor, [tile], [full])[0]
 
     def up_px_many(self, anchor, tiles, fulls):
@@ -9358,9 +9358,11 @@ class Connection:
             return
         import globe as globemod
         frame = self.s.anchors[aid].frame
+        im = self.s.imagery
+        s2 = im is not None and any(getattr(src, "name", None) == "bngs2" for src in getattr(im, "chain", ()))
         try:
             res = await asyncio.get_running_loop().run_in_executor(
-                None, globemod.build, self.s.out_dir, self.s.vfs_dir, frame, aid, self.s.cache_dir, self.s.net)
+                None, globemod.build, self.s.out_dir, self.s.vfs_dir, frame, aid, self.s.cache_dir, self.s.net, s2)
         except Exception as e:
             log.warning("globe: %s: %s", type(e).__name__, e)
             return
@@ -12273,8 +12275,10 @@ def main():
                     help="Linux: idle scheduling (the server runs only on CPU time the game leaves) or normal; auto "
                          "(default): idle unless the server has cores of its own (--pin)")
     ap.add_argument("--imagery", type=imagerymod.parse_chain, default=imagerymod.DEFAULT_CHAIN,
-                    help="satellite imagery source chain, first with data wins: any of usgs,eox2023,eox2016, "
-                         "or 'off' for the v1.2 palette look (default: usgs,eox2023,eox2016)")
+                    help="satellite imagery source chain, first with data wins: any of usgs,eox2016 (and the "
+                         "regional sources), or 'off' for the v1.2 palette look (default: the regional sources, NAIP, "
+                         "usgs,eox2016; the CDN switch adds the project's Sentinel-2 packs, bngs2 / bngs2fine). "
+                         "eox2023 is accepted and left out (CC BY-NC-SA)")
     ap.add_argument("--near-visual", choices=NEAR_VISUALS, default="mesh",
                     help="mesh: the ground near the player is drawn by 64/128 m tiles and the terrain block is "
                          "physics only (default); terrain: the v1.2 look (the terrain block is drawn); detail: the "
@@ -12313,7 +12317,7 @@ def main():
                          "shadows of the terrain; off = the imagery as served (default)")
     ap.add_argument("--colormatch", choices=colormatchmod.MODES, default=None,
                     help="remove the colour seams between NAIP flights in the USGS imagery (docs/research/"
-                         "2026-10-10-imagery-colormatch.md): s2 = the seam feather against Sentinel-2 (EOX), "
+                         "2026-10-10-imagery-colormatch.md): s2 = the seam feather against Sentinel-2 (bngs2, else EOX 2016), "
                          "only near detected survey seams (the default when the imagery chain has USGS, since "
                          "the in-game checks of 2026-10-11); off = the imagery as served")
     ap.add_argument("--retex-rate", type=float, default=RETEX_RATE,

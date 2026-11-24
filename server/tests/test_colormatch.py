@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -31,6 +32,8 @@ import earthd  # noqa: E402
 import farfield as ff  # noqa: E402
 import geodesy  # noqa: E402
 import imagery  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import standins  # noqa: E402  (a second global layer for the golden renders, "s2other")
 
 RZ = 14                                 # test regions: z14 tiles
 LAT0, LON0 = 37.31, -103.87             # an arbitrary place for the synthetic world
@@ -139,11 +142,12 @@ def noise_tile(*seed):
 
 
 class WorldImagery(imagery.Imagery):
-    """The world's tiles (USGS z14..16 inside its box, EOX 2023 z14 there), seeded noise for the
-    rest (so the coverage probes count it as covered). No disk, no network."""
+    """The world's tiles (USGS z14..16 inside its box, its Sentinel-2 at z14 there from either reference, the packs or
+    EOX 2016), seeded noise for the rest (so the coverage probes count it as covered). No disk, no network. The chain
+    has no packs (the reference is EOX 2016 alone) unless given."""
 
-    def __init__(self, cache_dir, world, **kw):
-        super().__init__(cache_dir, ("usgs", "eox2023", "eox2016"), **kw)
+    def __init__(self, cache_dir, world, chain=("usgs", "eox2016"), **kw):
+        super().__init__(cache_dir, chain, **kw)
         self.world = world
         self.loads = {}
 
@@ -155,7 +159,7 @@ class WorldImagery(imagery.Imagery):
             if z < 14:
                 return imagery.as_tile(noise_tile(z, x, y))
             return imagery.as_tile(self.world.usgs(z, x, y)) if self.world.covered(z, x, y) else None
-        if src.name == "eox2023" and z == 14 and self.world.covered(z, x, y):
+        if src.name in ("bngs2", "eox2016") and z == 14 and self.world.covered(z, x, y):
             return imagery.as_tile(self.world.s2(x, y))
         return imagery.as_tile(noise_tile(z, x, y, len(src.name)))
 
@@ -550,7 +554,7 @@ class WorldTest(unittest.TestCase):
 
     def test_other_sources_and_coarser_zooms_untouched(self):
         n = np.zeros((256, 256, 3), np.uint8) + 90
-        e = (imagery.SOURCES["eox2023"], 16, self.world.X0 * 4, self.world.Y0 * 4)
+        e = (imagery.SOURCES["eox2016"], 16, self.world.X0 * 4, self.world.Y0 * 4)
         self.assertEqual(self.c.apply(e, n, self.im), (None, True))
         self.assertEqual(self.c.apply((U, 13, self.world.X0 // 2, self.world.Y0 // 2), n, self.im), (None, True))
 
@@ -617,16 +621,19 @@ class NoSeamTest(unittest.TestCase):
 
 
 class FallbackImagery(WorldImagery):
-    """S2 2023 missing on the world's east column of z14 tiles: the per-tile fallback takes S2 2016
-    there, in a palette of its own (a straight step in S2 only, along the tile edge)."""
+    """The packs (at z14 here: S2_Z14) missing on the world's east column of z14 tiles: the per-tile fallback takes EOX
+    2016 there, in a palette of its own (a straight step in S2 only, along the tile edge)."""
     TINT16 = np.array([0.8, 0.9, 1.35], np.float32)
+
+    def __init__(self, cache_dir, world, **kw):
+        super().__init__(cache_dir, world, chain=("bngs2", "usgs", "eox2016"), **kw)
 
     def _load(self, key):
         src, z, x, y = key
         if z == 14 and src.name in cm.REFS and self.world.covered(z, x, y) and x == self.world.X0 + 1:
             with self._lock:
                 self.loads[(src.name, z)] = self.loads.get((src.name, z), 0) + 1
-            if src.name == "eox2023":
+            if src.name == "bngs2":
                 return None
             return imagery.as_tile(ds.to_srgb(np.clip(ds.to_lin(self.world.s2(x, y)) * self.TINT16, 0, 1)))
         return super()._load(key)
@@ -634,9 +641,11 @@ class FallbackImagery(WorldImagery):
 
 class S2OnlyStepTest(unittest.TestCase):
     def test_fallback_edge_not_imported(self):
-        """The edge between S2 2023 and the 2016 fallback is not a survey seam: no field, USGS
+        """The edge between the packs and the EOX 2016 fallback is not a survey seam: no field, USGS
         unchanged (§5: a step in S2 only is never imported into USGS)."""
-        with tempfile.TemporaryDirectory() as tmp:
+        from dataclasses import replace
+        z14 = replace(imagery.SOURCES["bngs2"], max_zoom=14, max_view_zoom=14, zoom_max_lat=())
+        with mock.patch.dict(imagery.SOURCES, {"bngs2": z14}), tempfile.TemporaryDirectory() as tmp:
             w = World(seam=False)
             c = cm.ColorMatch(os.path.join(tmp, "c"), "s2", region_z=RZ)
             im = FallbackImagery(os.path.join(tmp, "c", "imagery"), w, colormatch=c, tone=0.0)
@@ -790,7 +799,7 @@ class CacheTest(unittest.TestCase):
         out = corrected(c, im, keys)
         im.close()
         self.assertEqual(im.loads.get(("usgs", 14), 0), 0)        # no analysis
-        self.assertEqual(im.loads.get(("eox2023", 14), 0), 0)
+        self.assertEqual(im.loads.get(("eox2016", 14), 0), 0)
         for k in keys:
             self.assertTrue((out[k] == self.out[k]).all(), k)
         self.assertGreater(c.stats.get("corrected", 0), 0)
@@ -812,7 +821,18 @@ class CacheTest(unittest.TestCase):
         self.assertIsNone(c.field(rk, enqueue=False))
         self.assertIsNone(c._load(rk, "seams"))
         c.close()
-        c = cm.ColorMatch(root, "s2", region_z=RZ)  # the right meta: read back
+        c = cm.ColorMatch(root, "s2", region_z=RZ)  # the right meta: read back (bound to a chain without the packs,
+        c.bind(types.SimpleNamespace(chain=(imagery.SOURCES["usgs"], imagery.SOURCES["eox2016"]))) # as they were made)
+        self.assertEqual(c.meta["refs"], "eox2016")
+        self.assertIsInstance(c.field(rk, enqueue=False), cm.Field)
+        c.close()
+        c = cm.ColorMatch(root, "s2", region_z=RZ)  # bound to a chain with them: made against another reference
+        c.bind(types.SimpleNamespace(chain=(imagery.SOURCES["bngs2"], imagery.SOURCES["usgs"])))
+        self.assertEqual((c.refs, c.meta["refs"]), (("bngs2", "eox2016"), "bngs2,eox2016"))
+        self.assertIsNone(c.field(rk, enqueue=False))
+        c.close()
+        c = cm.ColorMatch(root, "s2", region_z=RZ)
+        c.bind(types.SimpleNamespace(chain=(imagery.SOURCES["usgs"],)))
         self.assertIsInstance(c.field(rk, enqueue=False), cm.Field)
         c.close()
         # a stale field is computed again (from the cached seams: no detection)
@@ -1008,10 +1028,15 @@ class SeededImagery(imagery.Imagery):
         return imagery.as_tile(rng.integers(0, 256, (256, 256, 3), dtype=np.uint8))
 
 
+# The default chain with a second global layer before EOX 2016 (EOX 2023 there until 2026-11-23; the stand-in "s2other"
+# has its name's length, which seeds the noise: the same pixels)
+GOLDEN_CHAIN = tuple(n for d in imagery.DEFAULT_CHAIN for n in ((standins.ALT, "eox2016") if d == "eox2016" else (d,)))
+
+
 def golden(**kw):
     h = hashlib.sha256()
     with tempfile.TemporaryDirectory() as d:
-        im = SeededImagery(d, **kw)
+        im = SeededImagery(d, chain=GOLDEN_CHAIN, **kw)
         f = geodesy.EnuFrame(36.5785, -118.2923)
         for (x0, y0, size, px) in [(0, 0, 64, 256), (-12000, 300, 64, 256), (-2000, -3000, 512, 256),
                                    (-9000, 5000, 4096, 512), (-40000, -20000, 32768, 256)]:
@@ -1025,8 +1050,10 @@ def golden(**kw):
 class FlagOffTest(unittest.TestCase):
     # sha256 of these renders by the imagery code without the de-shadow and colour-match hooks (test_deshadow.FlagOffTest
     # pins the same digests: the finished pyramid's since 2026-10-29)
-    GOLDEN = {1.0: "f0b36dae73d66c9d15d056a6bfbf4b37aee3e0af42ccc53e1de4bdd208790b3c",
-              0.0: "a8c2eedb16fa69f148c11b613099c8d7501e60a2a9cbef2fa1cc48f420a01e47"}
+    # (2026-11-23: the stand-in's name in the per-source counts; the pixels are those of f0b36dae / a8c2eedb, checked
+    # with the name mapped back to eox2023)
+    GOLDEN = {1.0: "b623879eeec89ebce3aac0ec36f947eb1fdc4c7cc1721a02ca3c57b94495918b",
+              0.0: "f647e1532b661e6941b08883ed71f47f5d5b57f9ad4bde2bad24d4b152828eac"}
 
     def test_render_byte_identical_without_colormatch(self):
         for tone, digest in self.GOLDEN.items():
@@ -1044,12 +1071,12 @@ class FlagOffTest(unittest.TestCase):
             self.assertIn("colormatch s2", s2.imagery.summary())
             self.assertEqual(s2.imagery.attribution(), imagery.ATTRIBUTION)
             s2.imagery.close()
-            s3 = earthd.Server(tmp, os.path.join(tmp, "cache"), imagery=("eox2023",), colormatch="s2")
+            s3 = earthd.Server(tmp, os.path.join(tmp, "cache"), imagery=("eox2016",), colormatch="s2")
             self.assertIsNone(s3.colormatch)        # no USGS in the chain: nothing to match
             s3.imagery.close()
             s4 = earthd.Server(tmp, os.path.join(tmp, "cache"), imagery=("usgs",), colormatch="s2")
             self.assertEqual(s4.imagery.attribution(), "Imagery: " + "; ".join(     # the reference is credited
-                imagery.SOURCES[n].attribution for n in ("usgs", "eox2023", "eox2016")))
+                imagery.SOURCES[n].attribution for n in ("usgs", "eox2016")))
             s4.imagery.close()
             s5 = earthd.Server(tmp, os.path.join(tmp, "cache"), imagery=("usgs",))
             self.assertEqual(s5.imagery.attribution(), "Imagery: " + imagery.SOURCES["usgs"].attribution)
@@ -1059,10 +1086,10 @@ class FlagOffTest(unittest.TestCase):
         """The command line turns s2 on when the imagery chain has USGS (in-game checks 2026-10-11);
         an explicit flag wins; no USGS / no imagery: off. Server() itself keeps off."""
         self.assertEqual(cm.MODES[0], "off")
-        chain = imagery.parse_chain("usgs,eox2023,eox2016")
+        chain = imagery.parse_chain("usgs,eox2016")
         self.assertEqual(earthd.resolve_colormatch(None, chain), "s2")
         self.assertEqual(earthd.resolve_colormatch("off", chain), "off")
-        self.assertEqual(earthd.resolve_colormatch(None, imagery.parse_chain("eox2023")), "off")
+        self.assertEqual(earthd.resolve_colormatch(None, imagery.parse_chain("eox2016")), "off")
         self.assertEqual(earthd.resolve_colormatch(None, imagery.parse_chain("off")), "off")
         import inspect
         self.assertEqual(inspect.signature(earthd.Server).parameters["colormatch"].default, "off")

@@ -7654,6 +7654,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // generated surface against them in every product built with areas; BNE_ROADSYS_AREAS=on: the carriageway edges'
     // soft targets), roadsys_areas_audit (tools/widecorpus/checks.py: today's road surface against them)
     roadareas::register(m)?;
-    m.add("VERSION", 608)?;
+    m.add("VERSION", 609)?;
     Ok(())
 }

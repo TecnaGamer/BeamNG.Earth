@@ -11,6 +11,13 @@ spending cap), read at the server's start and every SWITCH_TTL_S; unreachable or
 max_view_zoom, in this process and the block workers it spawns): the far rings of that zoom take its packs instead
 of EOX's tiles. Read once at the server's start, so a change reaches a player at their next start.
 
+With bngs2 on, its second place (imagery "bngs2fine": the same packs enlarged, enlarge_only) goes right after USGS:
+the views finer than the packs take them where USGS has nothing, EOX's 2016 mosaic only at sea, past the packs'
+latitude and wherever no pack exists (EOX's 2018+ mosaics are CC BY-NC-SA: none in the chain since 2026-11-23).
+"fine": false ({"imagery": {"bngs2": {"enabled": true, "fine": false}}}) leaves it out: EOX 2016 draws those views
+(blurrier, but none of the 2021 composite's snow and cloud in the Alps and the Arctic, ~/bnge-tests/eoxswap/sheets);
+BNGE_S2_FINE=0 / 1 overrides the switch.
+
 "max_lat" (a number: for max_zoom; or {"14": 50, ...} per zoom): the packs of that zoom end at that latitude (the z14
 packs are built to 50 degrees: tiles.yml max_lat); farther out bngs2's finest zoom is the next coarser one
 (imagery.zoom_caps), as before the switch raised it there.
@@ -52,6 +59,7 @@ SWITCH_URL = overturepick.SWITCH_URL     # (BNGE_CDN_SWITCH, else the data repo'
 SWITCH_TTL_S = overturepick.SWITCH_TTL_S
 CDN_HOST = CDN_BASE.split("://", 1)[-1].split("/", 1)[0]
 S2 = imagerymod.SOURCES["bngs2"]
+S2_FINE = "bngs2fine"       # its tiles enlarged for the finer views: right after BEFORE
 BEFORE = "usgs"             # the chain position: ahead of this source (after the regional and NAIP ones)
 
 
@@ -96,7 +104,7 @@ def _max_lat(on, max_zoom):
 
 def chain(names, fetcher, cache_dir):
     """The imagery chain (source names) with the CDN's sources the switch turns on, each where it belongs."""
-    names = [n for n in names if n not in (S2.name, AER)]
+    names = [n for n in names if n not in (S2.name, S2_FINE, AER)]
     imagery = switch(fetcher, cache_dir).get("imagery") or {}
     aer = imagery.get(AER) or {}
     env = os.environ.get("BNGE_AERIAL", "").strip().lower()
@@ -118,7 +126,9 @@ def chain(names, fetcher, cache_dir):
            else imagerymod.SOURCES[S2.name])
     log.info("cdn: %s on (%s, to zoom %d%s)", S2.name, CDN_BASE, src.max_zoom,
              "".join(f", z{z} to {lim:g} deg" for z, lim in src.zoom_max_lat))
-    return tuple(names[:i] + [S2.name] + names[i:])
+    env = os.environ.get("BNGE_S2_FINE", "").strip()
+    fine = env != "0" if env in ("0", "1") else on.get("fine", True) is not False
+    return tuple(names[:i] + [S2.name, names[i]] + ([S2_FINE] if fine else []) + names[i + 1:])
 
 
 def dem_release(fetcher, cache_dir):

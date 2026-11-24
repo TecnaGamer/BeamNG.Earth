@@ -78,6 +78,22 @@ class PlacePreviewTest(unittest.TestCase):
             self.assertEqual(len(calls), 1, "made once")
             self.assertFalse(os.path.exists(os.path.join(d, "levels", "beamng_earth", "x.jpg")))
 
+    def test_older_pictures_made_again(self):
+        """A folder of an older format (pictures that may hold EOX 2023 pixels, before 2026-11-23): its pictures are
+        deleted once and made again; other files stay."""
+        with tempfile.TemporaryDirectory() as d:
+            folder = os.path.join(d, *placepreview.FOLDER)
+            os.makedirs(folder)
+            for name in ("1p5_2p5.jpg", "notes.txt"):
+                open(os.path.join(folder, name), "wb").write(b"old")
+            placepreview._swept.discard(folder)
+            self.assertEqual(placepreview.sweep(d), 1)
+            self.assertEqual(sorted(os.listdir(folder)), [placepreview.FORMAT_FILE, "notes.txt"])
+            open(os.path.join(folder, "1p5_2p5.jpg"), "wb").write(b"new")
+            placepreview._swept.discard(folder)
+            self.assertEqual(placepreview.sweep(d), 0, "the current format: kept")
+            self.assertTrue(os.path.exists(os.path.join(folder, "1p5_2p5.jpg")))
+
 
 if __name__ == "__main__":
     unittest.main()

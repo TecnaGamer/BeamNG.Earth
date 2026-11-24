@@ -50,7 +50,7 @@
           <p>Pause menu → Mods → <b>BeamNG.Earth</b>: view distance, weather and sky, grass, the download cache.</p>
           <div class="h">Data</div>
           <p class="small">Imagery, elevation and map data from open sources: USGS, USDA NAIP, state and national
-            mapping agencies, EOX Sentinel-2 cloudless, Overture Maps / OpenStreetMap contributors, Mapterhorn.
+            mapping agencies, Copernicus Sentinel-2 (ESA WorldCover, EOX), Overture Maps / OpenStreetMap contributors, Mapterhorn.
             The sources in use are credited on screen while you drive.</p>
           <p class="small preview">A beta: expect some rough edges. Thanks for trying it!</p>
         </div>

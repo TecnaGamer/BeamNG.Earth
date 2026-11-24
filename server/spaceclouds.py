@@ -109,7 +109,7 @@ def merc_lat(y, z):
 
 def mosaic(fetcher, z, x0, y0, x1, y1, url=TILE_URL, px=TEX_PX, kind="demand"):
     """The (px, px, 3) uint8 image of the global pixel box at zoom z from the layer's tiles (black where a tile could
-    not be had), and how many tiles came (globe.py: the whole world from EOX)."""
+    not be had), and how many tiles came (globe.py: the whole world from EOX 2016)."""
     from PIL import Image
     tx0, tx1 = int(math.floor(x0 / 256)), int(math.floor(x1 / 256))
     ty0, ty1 = int(math.floor(y0 / 256)), int(math.floor(y1 / 256))

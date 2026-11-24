@@ -149,7 +149,9 @@ Physics geometry always comes from open data:
 - **Elevation:** Mapterhorn (open, Terrarium WebP, z12 global, up to z18 where
   national lidar exists), with AWS Terrain Tiles as fallback. Above ±85° use
   Copernicus GLO-30, because the Mercator sources stop there.
-- **Imagery:** EOX Sentinel-2 cloudless 2016 (CC BY, 10 m) far away, NAIP or
+- **Imagery:** Sentinel-2 far away (the project's packs of ESA WorldCover's 2021
+  composite, CC BY 4.0; EOX Sentinel-2 cloudless 2016, CC BY, at sea and as the
+  fallback; EOX's 2018+ mosaics are CC BY-NC-SA and not used), NAIP or
   national orthophotos near the player. Esri World Imagery is optional, using
   the user's own key.
 - **Buildings and roads:** Overture and OpenStreetMap, from extracts the server
@@ -495,8 +497,8 @@ their chunk arrived.
   same whatever order its regions were computed in and from whichever anchor (tested: fields and
   rendered bytes equal for two region orders; fields are stored float16 and used as stored, so a
   field read from disk gives the bytes of a freshly computed one):
-  1. seams (`<cache>/colormatch/v1/usgs/12/x/y.seams.npz`, `.seams.none`): z14 USGS and EOX S2 2023
-     (2016 per tile) over the region plus a 1-tile halo, reliability weights, IRLS, the oriented
+  1. seams (`<cache>/colormatch/v2/usgs/12/x/y.seams.npz`, `.seams.none`): z14 USGS and Sentinel-2 (the
+     bngs2 packs enlarged to z14, EOX 2016 per tile; EOX 2023 until 2026-11-23) over the region plus a 1-tile halo, reliability weights, IRLS, the oriented
      step filter (15 m grid, 36 angles, 5 x 240 m segments, the S2 gate), NMS, hysteresis and the
      component filter (>= 1.5 km, consistent step vector, and USGS carries the step: the median
      USGS step on the 300 m cut blurs over the component's median ratio step >= 0.5); per seam cell
@@ -709,7 +711,7 @@ over to AWS, a 400 wrote a permanent `.404` marker, and the User-Agent lived in 
   failed probe up to 15 min), daily soft/hard budgets in `<cache>/netstats/<UTC date>.json`, one
   summary log line a minute. Injectable clock, sleep, rng, transport and wall clock (tests).
 - **Failover**: `HostUnavailable` / `RateLimited` cost no network and the chains move on: imagery
-  usgs → eox2023 → eox2016 (one host, one breaker: both skipped together) → palette; DEM Mapterhorn →
+  bngs2 → usgs → bngs2fine (one host, one breaker) → eox2016 → palette; DEM Mapterhorn →
   AWS for the same key (also on Mapterhorn errors now) → `DemUnavailable` (where a coarse offline DEM
   will go). A prefetch future the limiter dropped is re-fetched as demand by the render that needs it
   (one fetch for every render waiting on it); prefetch skips a source whose circuit is open, so it
@@ -840,7 +842,7 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   `imagery/usgs-ds1-<mode>/`): after a generator update the old directory is never read again and
   ages out through the LRU, so only what changed is recomputed.
 - **Lifetimes** (ROADMAP 3, the cheap part): `cache.LIFETIMES` (path prefix -> max age after the
-  download), enforced by the start-up walk. Empty: USGS (public domain), EOX (CC BY / CC BY-NC-SA),
+  download), enforced by the start-up walk. Empty: USGS (public domain), EOX 2016 and the Sentinel-2 packs (CC BY),
   Mapterhorn and AWS Terrain Tiles set no caching-time limit; 404 markers expire through netfetch's
   `miss_ttl` (90 days). Background refresh of stale tiles is not built.
 - **Protocol** (additive, no bump; server/README.md): mod -> server `cache` {`capGb`, `clear`} (both

@@ -186,7 +186,7 @@ class LruTest(Base):
 
     def test_unlimited_and_raised_cap(self):
         for i in range(5):
-            put(self.root, f"imagery/eox2023/14/1/{i}.jpg", MB, T0 - DAY)
+            put(self.root, f"imagery/eox2016/14/1/{i}.jpg", MB, T0 - DAY)
         c = self.make(cap_gb=0)
         self.assertEqual(c.evict(), (0, 0))
         self.assertTrue(c.set_cap(0.002))
@@ -387,14 +387,14 @@ class VersionTest(Base):
 
 class LifetimeTest(Base):
     def test_files_past_their_source_lifetime_go_at_the_walk(self):
-        put(self.root, "imagery/eox2023/14/1/0.jpg", MB, T0 - 40 * DAY)
-        put(self.root, "imagery/eox2023/14/1/1.jpg", MB, T0 - 10 * DAY)
+        put(self.root, "imagery/eox2016/14/1/0.jpg", MB, T0 - 40 * DAY)
+        put(self.root, "imagery/eox2016/14/1/1.jpg", MB, T0 - 10 * DAY)
         put(self.root, "imagery/usgs/16/1/0.jpg", MB, T0 - 400 * DAY)
         self.assertEqual(cachemod.LIFETIMES, {}, "no source limits caching time today")
-        with mock.patch.dict(cachemod.LIFETIMES, {"imagery/eox2023/": 30 * DAY}):
+        with mock.patch.dict(cachemod.LIFETIMES, {"imagery/eox2016/": 30 * DAY}):
             c = self.make()
-        self.assertFalse(exists(self.root, "imagery/eox2023/14/1/0.jpg"))
-        self.assertTrue(exists(self.root, "imagery/eox2023/14/1/1.jpg"))
+        self.assertFalse(exists(self.root, "imagery/eox2016/14/1/0.jpg"))
+        self.assertTrue(exists(self.root, "imagery/eox2016/14/1/1.jpg"))
         self.assertTrue(exists(self.root, "imagery/usgs/16/1/0.jpg"))
         self.assertEqual((c.usage(), c.stats["expired"]), ((2 * MB, 2), 1))
 
@@ -695,10 +695,10 @@ class ProducerTest(Base):
         cm.disk = c
         try:
             cm._store((1, 2), "field", colormatchmod.EMPTY, {})        # the "no seams" marker (JSON)
-            self.assertIn("colormatch/v1/usgs/12/1/2.none", c._entries)
+            self.assertIn("colormatch/v2/usgs/12/1/2.none", c._entries)
             self.clock.t += 10
             self.assertIsNotNone(cm._load((1, 2), "field"))
-            self.assertEqual(c._entries["colormatch/v1/usgs/12/1/2.none"][1], T0 + 10)
+            self.assertEqual(c._entries["colormatch/v2/usgs/12/1/2.none"][1], T0 + 10)
         finally:
             cm.close()
         ds = deshadowmod.Deshadow(self.root, dem=None, mode="full")
