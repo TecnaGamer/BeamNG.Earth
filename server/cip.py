@@ -15,6 +15,8 @@ What a cell holds (sections, native codec earthfast cip.rs: lossless, every arra
   t:stations       its nodes in the joins' pad; the stations whose point is in the cell), shard order kept
   z:<src> z:<src>.gaps   the lidar road heights' answer files (roadz: the cell's Lines arrays and its gaps JSON)
   f:osmfuel f:picnic     OpenStreetMap's fuel stations / picnic tables of the cell (the per-cell JSON the server keeps)
+  q                the cell's data-quality record's data part (quality.py: made from the 3 x 3 cells' layers by the
+                   server's own kernel; its first byte names its version, a reader of another makes it again)
 and per build, beside the cells: airports.csv / runways.csv (OurAirports, the snapshot the build used).
 
 Every one is what the server would have made itself from the same inputs, bit for bit (tools/build_cip.py makes them
@@ -64,9 +66,9 @@ ON = os.environ.get("BNE_V2_CIP", "off").strip().lower() == "on"
 BASE_URL = (os.environ.get("BNE_V2_CIP_URL") or "").strip().rstrip("/")
 BUILD = (os.environ.get("BNE_V2_CIP_BUILD") or "").strip()
 WEEKLY = ("osmtags", "rails", "lanes", "stations")   # data builds a build pins (inputs()["data"])
-# section order in a cell: what most reads want first (a partial decode stops at the end of the section asked for); the
-# connectors before the roads, whose connector references are coded as indexes into them (cip.rs 'X')
-ORDER = ("m:connectors", "m:roads", "m:road_routes", "m:water", "m:land_use", "m:infrastructure", "m:buildings",
+# section order in a cell: what most reads want first (a partial decode stops at the end of the section asked for; the
+# quality record's ~360 bytes first); the connectors before the roads, whose connector references are coded as indexes into them (cip.rs 'X')
+ORDER = ("q", "m:connectors", "m:roads", "m:road_routes", "m:water", "m:land_use", "m:infrastructure", "m:buildings",
          "m:building_parts", "m:town_areas", "m:town_points", "m:hoods", "t:rail", "t:lanes", "t:stations", "z:lidar",
          "z:lidar.gaps", "z:lidar-nogaps", "z:hk3", "z:ign", "z:nvdb", "f:osmfuel", "f:picnic", "m:landcover",
          "m:places", "m:canopy")

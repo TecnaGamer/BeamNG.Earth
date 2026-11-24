@@ -210,6 +210,7 @@ mod tilecuts;
 mod bldclear;
 mod bnwt;
 mod cip;
+mod quality;
 mod aerialcov;
 mod decisions;
 mod lidarz;
@@ -7752,6 +7753,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // generated surface against them in every product built with areas; BNE_ROADSYS_AREAS=on: the carriageway edges'
     // soft targets), roadsys_areas_audit (tools/widecorpus/checks.py: today's road surface against them)
     roadareas::register(m)?;
-    m.add("VERSION", 616)?;
+    // 614: quality (the per-cell data-quality record, the adaptive plan's J2: quality_counts, quality_record,
+    // quality_meta, quality_fields; server/quality.py, tools/build_cip.py's "q" section)
+    quality::register(m)?;
+    m.add("VERSION", 618)?;
     Ok(())
 }

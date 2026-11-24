@@ -15,6 +15,9 @@ Each cell's sections are made by the server's own code, in this process, with CI
               a lidar: roadz.RoadZ.lines, the 3DEP reads moved here from the players)
   f:osmfuel f:picnic   the per-cell rows of OpenStreetMap's fuel stations / picnic tables the cache holds (--online:
               read first)
+  q           the cell's data-quality record (server/quality.py: its data part, made from the 3 x 3 cells' layers by
+              the server's own kernel; a neighbour outside the build is read as a cell is); left out when a 3 x 3
+              cell's layers could not be had (the server makes it then), and with --quality off
 SRC is a cache of the builder's own (never the player's: pcommon.check_cache refuses it); --online lets the sources be
 fetched into it. Every cell is decoded again and compared with what went in before it is kept (--no-verify skips).
 
@@ -50,6 +53,7 @@ except ImportError:
 import numpy as np  # noqa: E402
 
 import cip  # noqa: E402
+import quality  # noqa: E402
 import fast  # noqa: E402
 import mapcells  # noqa: E402
 
@@ -122,6 +126,7 @@ class Builder:
         self.only = None            # {cell: layers} (--cellset), None: self.layers for every cell
         self.lidar_cells = None     # the cells whose lidar is measured (--cellset's "lidar"), None: every one wanting it
         self.cap = 0                # bytes: CAPPED sections bigger than this left out (0: none)
+        self.quality = True         # the "q" section (q_ready)
 
     # --- data builds ---------------------------------------------------------------------------------------------
     def data_builds(self):
@@ -138,6 +143,36 @@ class Builder:
         except Exception:
             out["osmtags"] = None
         return out
+
+    # --- the quality record ------------------------------------------------------------------------------------------
+    def q_ready(self):
+        """Does this build make the "q" section (every layer its counts read, for every cell)?"""
+        return self.quality and self.only is None and all(ly in self.layers for ly in quality.LAYERS)
+
+    def q_counts(self, key, secs=None, lacks=()):
+        """Cell key's quality counts (quality.counts) from its own sections (secs, lacks: cell()'s) or, for a cell
+        not built here (a neighbour), from its layers read as cell() reads them; None when a layer or the lane slice
+        could not be had (the cell's neighbours get no "q" then; the server makes theirs)."""
+        md = self.md
+        layers = {}
+        try:
+            if secs is not None:
+                if any(s == "t:lanes" or s[2:].split(".")[0] in quality.LAYERS for s, _w in lacks):
+                    return None
+                for ly in quality.LAYERS:
+                    layers[ly] = secs[f"m:{md.layer_name(ly)}"]
+                lanes = secs.get("t:lanes")
+                t = getattr(md, "lane_tags", None)
+                if lanes is None and t is not None and t.known() is not None:
+                    return None
+            else:
+                for ly in quality.LAYERS:
+                    layers[ly] = self.layer(key, ly)[1]
+                lanes = quality.lanes_slice(md, key, layers["roads"])
+            return quality.counts(key, layers, lanes)
+        except Exception as e:      # (a source failed: no record for the cells next to it)
+            print(f"quality {key}: {type(e).__name__}: {e}", file=sys.stderr)
+            return None
 
     # --- one cell --------------------------------------------------------------------------------------------------
     def layer(self, key, layer):
@@ -281,6 +316,58 @@ def section_stats(key, secs, cellbytes, stats):
         s["alone"] += len(one)
 
 
+def quality_cells(b, keys, made):
+    """(key, secs, lacks, why) of every cell of keys, made(key) -> (secs, lacks), in rows from the north: secs with
+    the "q" section when the build makes it (Builder.q_ready) and the 3 x 3 cells' counts could all be had (a cell of
+    keys counted from its own sections, a neighbour outside keys from its layers), else why (None: made or not made
+    by this build). Two rows of cells are held back at most (their neighbours below come first)."""
+    on = b.q_ready()
+    keys = sorted(set(keys), key=lambda k: (k.y, k.x))
+    counts = {}
+    pending = []
+
+    def finish(item):
+        key, secs, lacks = item
+        if not on:
+            return key, secs, lacks, None
+        nine = []
+        for nk in quality.ring(key):
+            if nk is None:
+                nine.append(None)
+                continue
+            if nk not in counts:
+                counts[nk] = b.q_counts(nk)
+            if counts[nk] is None:
+                return key, secs, lacks, f"{nk}: its layers or lane slice could not be had"
+            nine.append(counts[nk])
+        return key, dict(secs, **{quality.SECTION: quality.record(key, nine)}), lacks, None
+
+    for key in keys:
+        while pending and pending[0][0].y + 1 < key.y:
+            yield finish(pending.pop(0))
+        secs, lacks = made(key)
+        if on:
+            counts[key] = b.q_counts(key, secs, lacks)
+        pending.append((key, secs, lacks))
+        lo = key.y - 3                  # (counts of rows no pending cell reads any more)
+        if len(counts) > 4096:
+            for k in [k for k in counts if k.y < lo]:
+                del counts[k]
+    while pending:
+        yield finish(pending.pop(0))
+
+
+def ring_of(keys):
+    """The cells next to keys (8-neighbourhood) that are not in keys."""
+    ks = set(keys)
+    out = set()
+    for k in ks:
+        for nk in quality.ring(k):
+            if nk is not None and nk not in ks:
+                out.add(nk)
+    return sorted(out, key=lambda k: (k.x, k.y))
+
+
 def rects_of(cells):
     """Coverage rectangles (x0, y0, x1, y1) of a set of cells: runs of x per row, merged down equal runs."""
     rows = {}
@@ -312,9 +399,9 @@ def rects_of(cells):
 _B = {}
 
 
-def _unit_init(cache, online, layers, release, lidar, partial, data=None, cap=0):
+def _unit_init(cache, online, layers, release, lidar, partial, data=None, cap=0, q=True):
     _B["b"] = b = Builder(cache, online, layers, release)
-    b.lidar, b.partial, b.store, b.cap = lidar, partial, False, cap
+    b.lidar, b.partial, b.store, b.cap, b.quality = lidar, partial, False, cap, q
     _B["data"] = data
     same_data(b)
 
@@ -329,7 +416,7 @@ def same_data(b):
             raise RuntimeError(f"the weekly data builds changed under the build: {got} vs {want}")
 
 
-def unit_ahead(b, keys):
+def unit_ahead(b, keys, ring=()):
     """What a unit's cells read from the network, fetched at once: the BNWT tiles of its layers (one range read per
     archive instead of one per 4 x 4 block) and the OSM fuel / picnic rows of all its cells (one scan each instead of
     256: ~0.2 s of every cell, an empty one too). A failure here is not one: each cell reads its own then."""
@@ -339,7 +426,8 @@ def unit_ahead(b, keys):
     bw = getattr(md, "bnwt", None)
     if bw is not None:
         try:
-            bw.prefetch([(k, ly) for k in keys for ly in b.layers], "demand")
+            bw.prefetch([(k, ly) for k in keys for ly in b.layers]
+                        + [(k, ly) for k in ring for ly in quality.LAYERS if ly in b.layers], "demand")
         except Exception as e:
             print(f"unit prefetch: BNWT: {type(e).__name__}: {e}", file=sys.stderr)
     try:
@@ -386,20 +474,23 @@ def build_unit(args):
                     for x in range(max(x0, ux << sh), min(x1, ((ux + 1) << sh) - 1) + 1)
                     for y in range(max(y0, uy << sh), min(y1, ((uy + 1) << sh) - 1) + 1)})
     base = os.path.join(parts, f"{uz}_{ux}_{uy}")
-    unit_ahead(b, [mapcells.CellKey(cip.ZOOM, x, y) for _tid, x, y in cells])
+    keys = [mapcells.CellKey(cip.ZOOM, x, y) for _tid, x, y in cells]
+    unit_ahead(b, keys, ring_of(keys) if b.q_ready() else ())
     if SCOPES[scope] is not None:
         cells = [c for c in cells if in_scope(b, SCOPES[scope], c[1], c[2])]
     ids, lens, ind, lacking = [], [], [], {}
+    tid_of = {mapcells.CellKey(cip.ZOOM, x, y): tid for tid, x, y in cells}
+    done = {}
+    for key, secs, lacks, qwhy in quality_cells(b, list(tid_of), b.cell):
+        if lacks and not b.partial:
+            raise RuntimeError(f"{key}: lacks {lacks[:3]}")     # (a world build never ships a source's failure)
+        for sec, _why in lacks + ([(quality.SECTION, qwhy)] if qwhy else []):
+            lacking[sec] = lacking.get(sec, 0) + 1
+        done[tid_of[key]] = b.encode(key, secs, verify=verify)
     tmp = f"{base}.bin.{os.getpid()}.tmp"
     with open(tmp, "wb") as f:
-        for tid, x, y in cells:
-            key = mapcells.CellKey(cip.ZOOM, x, y)
-            secs, lacks = b.cell(key)
-            if lacks and not b.partial:
-                raise RuntimeError(f"{key}: lacks {lacks[:3]}")     # (a world build never ships a source's failure)
-            for sec, _why in lacks:
-                lacking[sec] = lacking.get(sec, 0) + 1
-            cb = b.encode(key, secs, verify=verify)
+        for tid in sorted(done):        # (the cells in tile-id order, as the parts list them)
+            cb = done[tid]
             f.write(cb)
             ids.append(tid)
             lens.append(len(cb))
@@ -485,6 +576,8 @@ def main(argv=None):
     ap.add_argument("--scope", default="all", choices=sorted(SCOPES), help="world: the cells built (SCOPES)")
     ap.add_argument("--cap-kb", type=int, default=None, help=f"a {'/'.join(CAPPED)} section bigger than this is left "
                                                             f"out (CAP_KB; default {CAP_KB} with --world, else none)")
+    ap.add_argument("--quality", default="on", choices=("on", "off"), help="the cells' data-quality record (section "
+                                                                        "\"q\", server/quality.py)")
     ap.add_argument("--work", help="world: units' parts folder (default OUT/.work)")
     ap.add_argument("--shard", help="world: I/N, the I-th of N contiguous runs of the units (Hilbert order)")
     ap.add_argument("--shard-parts", action="store_true", help="with --shard: the shard's own parts and its record")
@@ -503,6 +596,7 @@ def main(argv=None):
     b.partial = a.partial
     b.lidar = a.lidar or ("measure" if a.online else "have")
     b.cap = 1024 * (a.cap_kb if a.cap_kb is not None else (CAP_KB if a.world else 0))
+    b.quality = a.quality == "on"
     if a.cellset:
         with open(a.cellset, encoding="utf-8") as fh:
             built = sorted({ly for v in json.load(fh)["cells"].values() for ly in v})
@@ -514,6 +608,10 @@ def main(argv=None):
         inputs["data"]["scope"] = a.scope       # (another set of cells: another build; "all" keeps the ids as before)
     if b.cap:
         inputs["data"]["cap"] = {ly: b.cap for ly in CAPPED if ly in layers}
+    if a.cellset:
+        b.only = {}                     # (q_ready: a cellset's cells hold their visit's layers only)
+    if b.q_ready():
+        inputs["data"]["q"] = quality.version()     # (the record's rules: another build; readers check each section)
     build = cip.build_id(inputs)
     outdir = os.path.join(a.out, f"cip{cip.FORMAT}", b.release, build)
     if a.inputs_only:
@@ -554,19 +652,21 @@ def main(argv=None):
     stats, lacking, t0 = {}, {}, time.perf_counter()
     cpu0 = time.process_time()
     total = 0
-    for i, key in enumerate(cells):
-        secs, lacks = b.cell(key)
-        for s, why in lacks:
+    done = {}
+    for i, (key, secs, lacks, qwhy) in enumerate(quality_cells(b, cells, b.cell)):
+        for s, why in lacks + ([(quality.SECTION, qwhy)] if qwhy else []):
             lacking.setdefault(s, []).append(f"{key}: {why}")
         cb = b.encode(key, secs, verify=not a.no_verify)
         if a.stats:
             section_stats(key, secs, cb, stats)
         stats.setdefault("_cells", {})[str(key)] = len(cb)
         total += len(cb)
-        pw.add(fast._ef.pmt_tile_id(14, key.x, key.y), cb, False)
+        done[fast._ef.pmt_tile_id(14, key.x, key.y)] = cb
         if sys.stderr.isatty() or i % 25 == 0:
             print(f"\r{i + 1}/{len(cells)} cells, {total / 1e6:.1f} MB", end="", file=sys.stderr)
     print(file=sys.stderr)
+    for tid in sorted(done):            # (the parts' directory in tile-id order)
+        pw.add(tid, done[tid], False)
     parts = pw.finish()
     write_index(outdir, meta, inputs, rects, parts, len(cells), pw.contents, a.cache, a.airports,
                 sorted({ly for v in b.only.values() for ly in v}) if b.only is not None else layers, a.online)
@@ -647,7 +747,7 @@ def world(a, b, inputs, build, outdir, meta, layers, build_bnwt):
         pool = None
     else:
         pool = mp.get_context("spawn").Pool(a.jobs, _unit_init, (a.cache, a.online, layers, b.release, b.lidar,
-                                                                  b.partial, _B["data"], b.cap))
+                                                                  b.partial, _B["data"], b.cap, b.quality))
         results = pool.imap_unordered(build_unit, jobs)
     for _u, nc, nb, lk, _s in results:
         done, cells, nbytes = done + 1, cells + nc, nbytes + nb
