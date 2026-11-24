@@ -15,6 +15,7 @@ M.MIN_CHANGE = 0.4      -- m/s: a cap closer than this to the last one sent is n
 M.FAST_MS = 17.9        -- m/s (40 mph): a limit from this up is a fast road (the fast-road habit), under it a street
 M.MAX_OVER = 0.18       -- over the limit at most (the police check is 1.2x)
 M.MIN_OVER = -0.06      -- under it at most (the slow few)
+M.winter = nil          -- winter.lua sets itself here when it loads (its speedFactor)
 
 -- [country or region] = { share of drivers who speed, mean over the limit on fast roads (share of it), its spread,
 -- the share of that on town streets }. From traffic surveys: about 70 % of US drivers over the posted limit on
@@ -87,6 +88,10 @@ function M.update(dt, graph)
     return
   end
   local cc = graph and graph.rules and graph.rules.country or nil
+  -- winter (winter.lua, loaded only with the server's BNE_WINTER): slower on snow and ice, plan 4.4 (~0.8 on packed
+  -- snow, 0.65 on ice); 1 without it
+  local w = M.winter
+  local wf = w and w.speedFactor and w.speedFactor() or 1
   local player = be and be.getPlayerVehicleID and be:getPlayerVehicleID(0) or -1
   for id, c in pairs(cars) do
     if not data[id] then cars[id] = nil end        -- (gone)
@@ -106,9 +111,9 @@ function M.update(dt, graph)
       end
       local limit = v.tracking and tonumber(v.tracking.speedLimit)
       if limit and limit > 4.2 then
-        local cap = M.cap(limit, c.fast, c.street)
+        local cap = M.cap(limit, c.fast, c.street) * wf
         local obj = getObjectByID(id)
-        if cap > limit and rough(obj) then cap = limit end     -- (a rough road: no speeding there)
+        if cap > limit * wf and rough(obj) then cap = limit * wf end     -- (a rough road: no speeding there)
         if not c.sent or math.abs(cap - c.sent) >= M.MIN_CHANGE or clock - c.at >= M.RESEND_S then
           if obj then
             obj:queueLuaCommand(string.format('ai.setSpeedMode("limit") ai.setSpeed(%.2f)', cap))

@@ -150,6 +150,8 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expStaleRevisit", type: "bool", default: false, name: "Show the older world while rebuilding", desc: "Experimental. After an update, places you visited before show the previous version's roads, trees, signs and ground photos while the new version builds them, instead of loading as a first visit.",
         note: RESTART_NOTE },
+      { id: "expWinter", type: "bool", default: false, name: "Winter grip", desc: "Experimental. Roads get slippery when the real weather brings snow, slush, frost or ice: grip follows the snow on the ground and the road's class (main roads are cleared and salted first, bridges freeze first). The road's condition shows in the status bar. No snow on the ground yet.",
+        note: RESTART_NOTE },
     ],
   },
   {
