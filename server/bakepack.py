@@ -148,8 +148,9 @@ _sync = {"at": -1e9, "busy": False, "backoff": None}
 
 # Switches whose output is confined to cells that are never baked or shared (roadz.hk_cell: Hong Kong's measured heights
 # and terrain stay on the computer that read them): the packs and the BeamMP helper are made with both off
-# (sharehelper.py, bake_area), the players' servers with both on; the cells they change are left out by cell instead
-CELL_SCOPED = frozenset({"BNE_ROADZ_HK", "BNE_HKDTM"})
+# (sharehelper.py, bake_area), the players' servers with both on; the cells they change are left out by cell instead;
+# and Switzerland's (roadz.tlm_tags: no pack or archive is made with its cells)
+CELL_SCOPED = frozenset({"BNE_ROADZ_HK", "BNE_HKDTM", "BNE_ROADZ_TLM"})
 _switches = []
 
 

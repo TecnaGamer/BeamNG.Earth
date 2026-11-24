@@ -21,9 +21,11 @@ PASSES = 3                  # planning passes: cells short of something in one a
 SERVER = os.path.join(os.path.dirname(HERE), "server")
 sys.path.insert(0, SERVER)
 import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
-# (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell)
+# (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell, nor
+# Switzerland's cut cells, roadz.tlm_tags)
 os.environ["BNE_ROADZ_HK"] = "off"
 os.environ["BNE_HKDTM"] = "off"
+os.environ["BNE_ROADZ_TLM"] = "off"
 
 
 def _worker(args):

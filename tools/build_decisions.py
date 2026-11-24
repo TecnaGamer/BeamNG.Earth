@@ -138,7 +138,7 @@ def _worker(args):
 
     def store(self, key, plans, keeps, covers, opens, decks=None, persist=False):
         ok = orig_store(self, key, plans, keeps, covers, opens, decks, persist=persist)
-        if ok and persist and not roadz.hk_cell(key):
+        if ok and persist and not roadz.hk_cell(key) and not roadz.tlm_tags(key):
             rec.write(json.dumps({"plans": [int(k) for k in key], "sig": self.signature, "path": self._path(key),
                                   "versions": self.persist[1][2] if self.persist else None}, sort_keys=True) + "\n")
             rec.flush()
@@ -150,7 +150,7 @@ def _worker(args):
         if cid is None or roads._facts_key(feats, kind, extra) is None:
             return
         cell = tuple(int(v) for v in cid[0].split("/"))
-        if cell[0] != decisions.CELL_Z or roadz.hk_cell(cell):
+        if cell[0] != decisions.CELL_Z or roadz.hk_cell(cell) or roadz.tlm_tags(cell):
             return
         rec.write(json.dumps({"facts": kind, "layer": cid[1], "extra": extra, "cell": cid[0], "versions": cid[2],
                               "data": json.dumps(data)}) + "\n")
