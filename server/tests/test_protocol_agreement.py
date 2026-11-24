@@ -219,11 +219,11 @@ def top_keys(table):
 
 def mod_sends():
     """{type: (keys, nested)} of every net.send({...}) in core.lua, places.lua (the level select's pictures) and
-    mpsession.lua (require('beamngEarth/net').send), and every send({...}) in terrainpatch.lua and spaceclouds.lua
-    (core hands them net.send)."""
+    mpsession.lua (require('beamngEarth/net').send), seasondate.lua (core hands it net), and every send({...}) in
+    terrainpatch.lua and spaceclouds.lua (core hands them net.send)."""
     out = {}
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
-                              "addons.lua", "api.lua", "terrainfiles.lua"), r"net(?:'\))?\.send\(\{"),
+                              "addons.lua", "api.lua", "terrainfiles.lua", "seasondate.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua", "spaceclouds.lua", "globe.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{"),
                            (("reportsend.lua",), r"\bnet\(\)\.send\(\{")):
