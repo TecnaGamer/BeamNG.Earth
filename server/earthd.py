@@ -165,6 +165,7 @@ import groundahead as groundaheadmod  # noqa: E402
 import deckspans as deckspansmod  # noqa: E402
 import routeahead as routeaheadmod  # noqa: E402
 import furniture as furnituremod  # noqa: E402
+import natural as naturalmod  # noqa: E402
 import development as developmentmod  # noqa: E402
 import townentry as townentrymod  # noqa: E402     (PR #597's town entry and exit signs)
 import heightmap  # noqa: E402
@@ -3356,6 +3357,9 @@ class Server:
             margin = streetfront.BUILT_FRONT_M + 2. if frontage_country else 2.
             rings = buildingsmod.near_rings(anchor.frame, tx, ty, self.mapdata, margin=margin, skip=skip)
             props[:] = furnituremod.off_buildings(props, rings)
+            if naturalmod.TREES:        # (nor a made-up one by a mapped tree, natural.py)
+                props[:] = naturalmod.off_mapped(props, anchor.frame, tx, ty, self.mapdata,
+                                                 (furnituremod.G_STREET_TREE,))
             props.extend(buildingsmod.doors(items, lines, x0, y0, drives, infer_fences=frontage_country != "FR"))
             props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
             drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
@@ -4630,6 +4634,10 @@ class Server:
             return info, stages
 
         def paint(idx, road_feats):
+            if (naturalmod.GROUND or naturalmod.CLIFFS) and hasattr(self.surface, "natural_land"):
+                land = self.surface.natural_land(keep["lat"], keep["lon"])     # (mapped rock, sand ...: natural.py)
+                if land:
+                    idx = surfacemod.paint_natural(idx, keep["lat"], keep["lon"], land)
             lots = (self.surface.lots(keep["lat"], keep["lon"]) if hasattr(self.surface, "lots") else None)
             if lots:                    # farmland under the carriageways (a field does not cover the asphalt)
                 idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)

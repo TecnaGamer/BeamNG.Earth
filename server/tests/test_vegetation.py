@@ -441,8 +441,8 @@ class FlatTileTest(unittest.TestCase):
                 old = json.load(fh)
             with open(os.path.join(tmp, "veg_7_-1_2.flat.json")) as fh:
                 new = json.load(fh)
-        self.assertEqual(old, {"groups": list(veg.GROUPS), "items": rows})        # an older mod's: unchanged
-        self.assertEqual(new, {"groups": list(veg.GROUPS), "stride": veg.FLAT_STRIDE, "flat": rows[0] * 3})
+        self.assertEqual(old, {"groups": veg.groups_list(), "items": rows})        # an older mod's: unchanged
+        self.assertEqual(new, {"groups": veg.groups_list(), "stride": veg.FLAT_STRIDE, "flat": rows[0] * 3})
         self.assertEqual(veg.FLAT_STRIDE, len(rows[0]))
 
 

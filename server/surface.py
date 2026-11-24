@@ -168,6 +168,18 @@ ROAD_ORDER = ("dirt", "gravel", "rock", "grass", "cobble", "paved")
 def grid_affine(lat, lon):
     """Least-squares affine map (lon, lat) -> (col, row) of a sample grid given by its lat / lon arrays
     (a 1 km block is affine to well under a centimetre). Returns a function (lon, lat) -> (col, row)."""
+    coef, lo0, la0 = grid_affine_coef(lat, lon)
+
+    def f(lon_, lat_):
+        B = np.stack([np.asarray(lon_, np.float64) - lo0, np.asarray(lat_, np.float64) - la0,
+                      np.ones(np.shape(lon_))], axis=-1)
+        cr = dnp.matmul(B, coef)
+        return cr[..., 0], cr[..., 1]
+    return f
+
+
+def grid_affine_coef(lat, lon):
+    """grid_affine's least squares: (coef (3, 2), lo0, la0), (col, row) = (lon - lo0, lat - la0, 1) @ coef."""
     lat = np.asarray(lat, np.float64)
     lon = np.asarray(lon, np.float64)
     h, w = lat.shape
@@ -177,13 +189,7 @@ def grid_affine(lat, lon):
     lo0, la0 = float(lo.mean()), float(la.mean())
     A = np.stack([lo - lo0, la - la0, np.ones_like(lo)], axis=1)
     coef, *_ = dnp.lstsq(A, np.stack([cc.ravel(), rr.ravel()], axis=1).astype(np.float64), rcond=None)
-
-    def f(lon_, lat_):
-        B = np.stack([np.asarray(lon_, np.float64) - lo0, np.asarray(lat_, np.float64) - la0,
-                      np.ones(np.shape(lon_))], axis=-1)
-        cr = dnp.matmul(B, coef)
-        return cr[..., 0], cr[..., 1]
-    return f
+    return coef, lo0, la0
 
 
 def _lonlat_boxes(feats):
@@ -1394,6 +1400,15 @@ def _plazas(feats):
     return (sub.astype(str) == "pedestrian") & np.isin(cls.astype(str), list(PLAZA_CLASSES))
 
 
+def paint_natural(idx, lat, lon, land):
+    """The mapped natural ground (natural.py, BNE_NATURAL_GROUND: rock, scree, sand, beach, dune, glacier, wetland) and
+    the cliffs' rock bands (BNE_NATURAL_CLIFFS) on a block's material map; land: the land Features of its cells."""
+    import natural
+    mats = {"rock": ROCK, "loose": LOOSE, "sand": SAND, "snow": SNOW, "mud": MUD, "grass": GRASS, "forest": FOREST,
+            "bare": (DIRT, DUSTY, LOOSE, ROCK, SAND)}     # (the land cover's open ground: no vegetation, snow or water)
+    return natural.paint_ground(idx, lat, lon, land, mats, grid_affine_coef(lat, lon))
+
+
 def _paint(idx, lat, lon, feats_list, select, material):
     h, w = idx.shape
     to_px = grid_affine(lat, lon)
@@ -1847,6 +1862,23 @@ class Surface:
                     out.append(self.md.cell(key, layers=(layer,), kind="background").layers.get(layer))
                 except Exception as e:      # an unreadable cache file: like a missing one
                     log.debug("surface: %s of %s: %s: %s", layer, key, type(e).__name__, e)
+        return out
+
+    def natural_land(self, lat, lon):
+        """The "land" Features (natural.py) of the cells around the points that are cached; never waits (a missing
+        cell is fetched in the background and nothing built now is kept: revisit.fault)."""
+        lat = np.asarray(lat, np.float64)
+        lon = np.asarray(lon, np.float64)
+        out = []
+        for key in mapcells.cells_for_points(lat, lon):
+            if not self.md.has(key, "land"):
+                self._queue(key, ("land",))
+                revisit.fault()
+                continue
+            try:
+                out.append(self.md.cell(key, layers=("land",), kind="background").layers.get("land"))
+            except Exception as e:      # an unreadable cache file: like a missing one
+                log.debug("surface: land of %s: %s: %s", key, type(e).__name__, e)
         return out
 
     def urban(self, lat, lon):

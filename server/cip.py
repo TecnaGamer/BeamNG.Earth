@@ -71,7 +71,7 @@ WEEKLY = ("osmtags", "rails", "lanes", "stations")   # data builds a build pins 
 ORDER = ("q", "m:connectors", "m:roads", "m:road_routes", "m:water", "m:land_use", "m:infrastructure", "m:buildings",
          "m:building_parts", "m:town_areas", "m:town_points", "m:hoods", "t:rail", "t:lanes", "t:stations", "z:lidar",
          "z:lidar.gaps", "z:lidar-nogaps", "z:hk3", "z:ign", "z:nvdb", "f:osmfuel", "f:picnic", "m:landcover",
-         "m:places", "m:canopy")
+         "m:places", "m:canopy", "m:land", "m:bathymetry")   # (the natural layers last: natural.py)
 ROADZ_SRCS = ("lidar", "lidar-nogaps", "hk3", "ign", "nvdb")
 DECODED_MB = 96            # decoded sections kept per process (MapData keeps its own decoded layers: these are the
                            # side reads, slices, lidar answers, rows, and layers between their reads)

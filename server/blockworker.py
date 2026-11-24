@@ -34,6 +34,7 @@ import dem as demmod
 import development as developmentmod
 import farfield
 import furniture
+import natural
 import geodesy
 import grading as gradingmod
 import heightmap
@@ -927,6 +928,10 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
         return info, stages
 
     def paint(idx, road_feats):
+        if (natural.GROUND or natural.CLIFFS) and hasattr(_s.surface, "natural_land"):
+            land = _s.surface.natural_land(keep["lat"], keep["lon"])   # (mapped rock, sand, ice ...: natural.py)
+            if land:
+                idx = surfacemod.paint_natural(idx, keep["lat"], keep["lon"], land)
         lots = _s.surface.lots(keep["lat"], keep["lon"]) if hasattr(_s.surface, "lots") else None
         if lots:                        # farmland under the carriageways (a field does not cover the asphalt)
             idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
@@ -1897,6 +1902,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         margin = streetfront.BUILT_FRONT_M + 2. if frontage_country else streetfront.CITY_FRONT_M + 2. if city else 2.
         rings = buildingsmod.near_rings(frame, tx, ty, _s.md, margin=margin, skip=skip)
         props[:] = furniture.off_buildings(props, rings)     # (no street tree in a house)
+        if natural.TREES:               # (nor a made-up one by a mapped tree, natural.py)
+            props[:] = natural.off_mapped(props, frame, tx, ty, _s.md, (furniture.G_STREET_TREE,))
         props.extend(buildingsmod.doors(items, lines, x0, y0, drives, infer_fences=frontage_country != "FR"))
         props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
         drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))

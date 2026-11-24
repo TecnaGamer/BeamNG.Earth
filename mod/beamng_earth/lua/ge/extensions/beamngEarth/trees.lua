@@ -379,6 +379,50 @@ M.CATALOG = {
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler', 33.0 },
   },
 }
+-- The mapped trees' species (server natural.SPECIES, BNE_NATURAL_TREES: OpenStreetMap's genus / species / leaf type on
+-- natural=tree and tree rows): the stock shapes of that kind, all in folders MATERIALS already loads and all already
+-- drawn by other groups (no new shape's cost; only BARE's leafless oaks are new); heights from the shapes' bounds (the
+-- asset survey, 2026-11-10)
+M.CATALOG.oak = {
+  { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
+  { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.2 }, { ECA .. 'trees/trees_oak/tree_oak_large_c', 15.5 },
+  { ECA .. 'trees/trees_oak/tree_oak_large_b', 15.9 }, { ECA .. 'trees/trees_oak/tree_oak_forest_a', 15.9 },
+  { ECA .. 'trees/trees_oak/tree_oak_forest_b', 16.0 },
+}
+M.CATALOG.beech = {
+  { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 }, { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 },
+  { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
+}
+M.CATALOG.birch = {     -- (East Coast USA's aspens: white bark, the birches' and aspens' stand-in)
+  { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_c', 9.7 },
+  { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
+}
+M.CATALOG.pine = {
+  { WCA .. 'trees/trees_conifer/pine_radiata_small', 8.6 }, { IT .. 'trees/trees_italy/maritime_pine_2', 11.9 },
+  { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { WCA .. 'trees/trees_conifer/pine_radiata_large', 13.2 },
+  { WCA .. 'trees/trees_conifer/pine_radiata_forest', 13.3 }, { IT .. 'trees/trees_italy/scots_pine', 18.9 },
+}
+M.CATALOG.fir = {       -- (spruces, firs, larches, cedars, hemlocks: the Douglas firs)
+  { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
+  { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
+  { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
+}
+M.CATALOG.redwood = {
+  { WCA .. 'trees/trees_conifer/redwood_split', 38.1 }, { WCA .. 'trees/trees_conifer/redwood_tall', 38.5 },
+  { WCA .. 'trees/trees_conifer/redwood_broad', 38.5 },
+}
+M.CATALOG.cypress = { { IT .. 'trees/trees_italy/cypress_tree', 7.2 } }
+M.CATALOG.olive = { { IT .. 'trees/trees_italy/olive', 4.3 } }
+M.CATALOG.holm_oak = {  -- (evergreen oaks and the evergreen broadleaves' stand-in)
+  { IT .. 'trees/trees_italy/holm_oak_city_small', 5.6 }, { IT .. 'trees/trees_italy/holm_oak_city_tall', 9.6 },
+  { IT .. 'trees/trees_italy/holm_oak', 12.9 },
+}
+-- the mapped deciduous broadleaf forests (BNE_NATURAL_LEAF=season) by hemisphere: their leafy broadleaves, bare in
+-- their winter months (LEAFOFF: East Coast USA's leafless oaks; applySeason, at setup only)
+M.CATALOG.leafoff_n = M.CATALOG.deciduous
+M.CATALOG.leafoff_s = M.CATALOG.deciduous
+M.LEAFOFF = { leafoff_n = { 12, 1, 2, 3 }, leafoff_s = { 6, 7, 8, 9 } }
+M.BARE = { { ECA .. 'trees/trees_oak/tree_oak_dead_b', 8.69 }, { ECA .. 'trees/trees_oak/tree_oak_dead_a', 12.54 } }
 -- Italy's authored three-metre crash barrier and two end treatments. The back-facing variants reuse
 -- the same mesh with its longitudinal/lateral axes reversed; the caps are swapped to flare outwards.
 M.CATALOG.guardrail = { { '/art/shapes/objects/italy_guardrails_basic', 0.9 } }
@@ -867,6 +911,11 @@ function M.applySeason(month)
     local on = false
     for _, m in ipairs(months) do if m == month then on = true end end
     M.groupOff[g] = (not on) or nil
+  end
+  for g, months in pairs(M.LEAFOFF) do      -- (the mapped deciduous forests: bare in their winter)
+    local bare = false
+    for _, m in ipairs(months) do if m == month then bare = true end end
+    M.CATALOG[g] = bare and M.BARE or M.CATALOG.deciduous
   end
 end
 

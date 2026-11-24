@@ -166,6 +166,7 @@ mod wallsindex;
 mod roadwalls;
 mod mappedlamps;
 mod vegclumps;
+mod natural;
 mod roadwear;
 mod roadtone;
 mod railbeds;
@@ -7756,6 +7757,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 614: quality (the per-cell data-quality record, the adaptive plan's J2: quality_counts, quality_record,
     // quality_meta, quality_fields; server/quality.py, tools/build_cip.py's "q" section)
     quality::register(m)?;
-    m.add("VERSION", 618)?;
+    // 611 (608-610 kept for other branches): natural (OpenStreetMap's mapped natural features, BNE_NATURAL_*: mapped
+    // trees and tree rows, forests' leaf type, natural ground, cliffs along mapped lines, depth bands; server/natural.py)
+    natural::register(m)?;
+    m.add("VERSION", 619)?;
     Ok(())
 }

@@ -139,14 +139,17 @@ LANE_CONTEXT_CELLS = 16       # neighbour cells' raw road layers kept for slip-r
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
                                 # the exact no-area test of clipped rings)
+# OpenStreetMap's natural features and the depth polygons (natural.py): only built while a BNE_NATURAL_* switch asks
+# for them (after the others in ALL_LAYERS: the cover map's layer rows of the others keep their numbers)
+NATURAL_LAYERS = ("land", "bathymetry")
 VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
-                 "road_routes", "town_areas", "town_points", "hoods")
+                 "road_routes", "town_areas", "town_points", "hoods") + NATURAL_LAYERS
 RASTER_LAYERS = ("landcover", "canopy")
 OPTIONAL_LAYERS = ("building_parts", "places", "road_routes", "town_areas", "town_points",
-                   "hoods")   # built only when asked for by name (buildings.py,
+                   "hoods") + NATURAL_LAYERS   # built only when asked for by name (buildings.py,
                                                                     # gasstations.py, dirsigns.py, townentry.py)
 LAYERS = tuple(x for x in VECTOR_LAYERS if x not in OPTIONAL_LAYERS) + RASTER_LAYERS
-ALL_LAYERS = VECTOR_LAYERS + RASTER_LAYERS
+ALL_LAYERS = tuple(x for x in VECTOR_LAYERS if x not in NATURAL_LAYERS) + RASTER_LAYERS + NATURAL_LAYERS
 DEFAULT_CACHE = os.path.expanduser("~/.cache/beamng-earth")
 # A request that the limiter or a policy refused for a non-demand kind (prefetch() returns False)
 DEFERRED = (netfetch.Deferred, netfetch.PolicyDenied, netfetch.BudgetExceeded, netfetch.HostUnavailable,
