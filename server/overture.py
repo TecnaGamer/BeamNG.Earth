@@ -131,7 +131,10 @@ def tolerant(spec, present, layer=""):
         items = []
         for it in _top_items(spec[key]):
             name = it.strip()
-            if re.fullmatch(r"[A-Za-z_]\w*", name) and name not in present and name not in BASE_COLUMNS:
+            if layer == "places" and name == "addresses[1].freeform AS street_address" and "addresses" not in present:
+                items.append(" NULL AS street_address")
+                missing.append("addresses")
+            elif re.fullmatch(r"[A-Za-z_]\w*", name) and name not in present and name not in BASE_COLUMNS:
                 items.append(f" NULL AS {name}")
                 missing.append(name)
             else:
@@ -287,9 +290,9 @@ LAYERS = {
     # taxonomy.primary (the old categories column is gone), brand.wikidata / brand.names.primary
     "places": dict(theme="places", type="place", clip=False,
                    cols=f"basic_category, taxonomy.\"primary\" AS taxonomy, brand.wikidata AS brand_wikidata, "
-                        f"brand.names.\"primary\" AS brand_name, {_NAME}, {_SRC}, operating_status, confidence",
+                        f"brand.names.\"primary\" AS brand_name, addresses[1].freeform AS street_address, {_NAME}, {_SRC}, operating_status, confidence",
                    text=("basic_category", "taxonomy", "brand_wikidata", "brand_name", "name", "src_dataset",
-                         "src_record", "operating_status"),
+                         "src_record", "operating_status", "street_address"),
                    float=("confidence",)),
     # the status bar's town, state and country (placenames.py, GitHub #602: no outside geocoder): the towns'
     # points (no geometry read: the bbox centre is the point) with their names in DIVISION_LANGS (names.common:
