@@ -234,6 +234,20 @@ class Record(unittest.TestCase):
         self.assertEqual([n for n, _c, _l in cip.cell_sections(cell)], ["q", "m:roads.9"])
         self.assertEqual(cip.decode_cell(KEY, cell, ["q"])["q"], rec)
 
+    def test_handed_over_columns_cover_the_kernels_reads(self):
+        import re
+        rs = (Path(__file__).resolve().parents[2] / "native" / "earthfast" / "src" / "quality.rs").read_text()
+        body = rs.split("mod tests")[0]
+        named = set(re.findall(r'"((?:attr|rule)\.[a-z_.]+)"', body))
+        named |= {f"rule.{n}.feature" for n in re.findall(r'rule_rows\("([a-z_]+)"', body)}
+        named |= set(re.findall(r'\.(?:ints|floats|strs|nonempty)\("([a-z_]+)"\)', body))
+        named.discard("ids")
+        self.assertEqual(named - quality.KEEP, set())
+        layers, lanes = cell_layers(KEY, buildings=[(0.2, 0.3)])
+        full = fast._ef.quality_counts(KEY.z, KEY.x, KEY.y, {ly: __import__("cip").arrays_section(
+            {k: v for k, v in a.items() if k != "provenance"}) for ly, a in layers.items()}, lanes)
+        self.assertEqual(full, quality.counts(KEY, layers, lanes))
+
     def test_source_block(self):
         m = quality.meta(KEY)                   # Fells Point: Maryland's six-inch photos, NAIP, USGS, EOX
         self.assertEqual(len(m), fast._ef.QUALITY_META_LEN)

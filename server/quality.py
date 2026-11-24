@@ -60,16 +60,31 @@ def ring(key):
     return out
 
 
-def _arrays_list(arrays):
+# The arrays quality.rs reads (tests/test_quality.py checks this against the kernel's source): only these are handed
+# over (a dense cell's other columns, the infrastructure tags' JSON above all, were half of its counting time)
+KEEP = frozenset((
+    "kind", "part_off", "ring_off", "coord_off", "lonlat", "own",
+    "attr.subtype", "attr.class", "attr.subclass", "attr.name", "attr.src_record", "attr.src_dataset",
+    "attr.osm_lanes", "attr.osm_width", "attr.osm_maxspeed", "attr.osm_surface", "attr.osm_sidewalk", "attr.osm_lit",
+    "attr.osm_smoothness", "attr.osm_oneway",
+    "rule.width.feature", "rule.surface.feature", "rule.max_speed_kmh.feature", "rule.oneway.feature",
+    "rule.connectors.feature", "rule.connectors.value", "rule.connectors.start",
+    "attr.cx", "attr.cy", "attr.height", "attr.num_floors", "attr.roof_shape", "attr.roof_color", "attr.roof_material",
+    "attr.facade_material", "attr.facade_color", "attr.has_parts"))
+KEEP_IDS = ("connectors",)      # (the layers whose ids it reads)
+
+
+def _arrays_list(layer, arrays):
     import cip
-    return cip.arrays_section({k: v for k, v in arrays.items() if k != "provenance" and not k.startswith("_")})
+    keep = KEEP | ({"ids"} if layer in KEEP_IDS else set())
+    return cip.arrays_section({k: v for k, v in arrays.items() if k in keep})
 
 
 def counts(key, layers, lanes=None):
     """Cell key's counts blob from {layer: its cell file arrays} (LAYERS; a missing layer counts as empty) and its
     t:lanes slice (JSON bytes; None: lane tags unknown)."""
     key = mapcells.check(key)
-    return _ef().quality_counts(key.z, key.x, key.y, {ly: _arrays_list(a) for ly, a in layers.items()},
+    return _ef().quality_counts(key.z, key.x, key.y, {ly: _arrays_list(ly, a) for ly, a in layers.items()},
                                 None if lanes is None else bytes(lanes))
 
 
