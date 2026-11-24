@@ -405,7 +405,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   block the road, abandoned railways off the roads, racetracks that keep their surface and get no street poles along them); **French and European road scenery** (each European country's guardrails, sign faces, bus stops and street
   edges; in France also its markings, bend and traffic signs, speed cameras, utility poles and regional houses);
   **Guard rails at drops**; **Widened entrances**; **Right of way by road class** (stop signs and stopping AI at
-  unsignalised junctions); **Bumpy road surfaces**; **Rough dirt roads**; **Tyre polish, crack networks and
+  unsignalised junctions); **Bumpy road surfaces**; **Rough dirt roads**; **Banked country roads**
+  (country roads take the sideways tilt of the real road, read from lidar elevation); **Tyre polish, crack networks and
   manholes**; **Road steepness limit**; **Road surface from aerial photos**; **Rougher land off the roads**; **Rock
   faces in deep road cuts**; **Ground over shallow tunnels**; **More undersea tunnels**; **Traffic through tunnels**;
   **Solid railway rails**; **Overhead railway wires**; **Grouped level crossings**; **Railway tunnels**; **Rounded

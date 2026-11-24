@@ -58,6 +58,7 @@ FEATURES = (
     ("expPriorityStops", {"BNE_PRIORITY_STOPS": "on"}, None),             # furniture.PRIORITY_STOPS
     ("expRoadBumps", {"BNE_BUMPS": "1"}, None),                           # bumps.SCALE
     ("expRoughDirt", {"BNE_DIRT_BUMP": "1", "BNE_DIRT_BANK": "0.015"}, None),   # grading.DIRT_ROUGH / DIRT_BANK_M
+    ("expRuralBank", {"BNE_RURAL_BANK": "on"}, None),                     # grading.RURAL_BANK_ON
     ("expWearStrips", {"BNE_WEAR_STRIPS": "on"}, None),                   # roadwear.STRIPS_ON
     ("expGradeGuard", {"BNE_GRADE_GUARD": "on"}, None),                   # grading.GUARD_ON
     ("expPhotoSurface", {"BNE_PHOTO_SURFACE": "1"}, None),                # photosurface.ON
