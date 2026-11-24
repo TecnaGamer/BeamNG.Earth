@@ -2291,13 +2291,17 @@ VINE_CELL_MAX = 40000
 VINE_TREE_M = 4.0           # a canopy top this tall in a vineyard is a tree, kept
 # (56) where a group does not fit (its ends out of the field, on a road or a building: the field's edges, a lattice
 # square's worth of bare ground by every road, the user's Laufen 2026-11-24, where the real rows run to the track)
-# its square is filled with single rows (Italy's grape_vine, 5.5 m of one row, 2.4 m high): the group's three rows
-# VINE_ROW_ACROSS_M apart, each in VINE_ROW_STEPS pieces along it, every piece whose ends are in the field and free
+# single rows (Italy's grape_vine, 5.5 m of one row, 2.4 m high) fill each row line (the groups' rows, VINE_ROW_ACROSS_M
+# apart) from where the groups end to the field's edge: the line sampled every VINE_ROW_SAMPLE_M, its free runs (in the
+# field, out of its holes, off roads and buildings, off the groups) VINE_ROW_END_M in from their ends, each run covered
+# by pieces at most VINE_ROW_ALONG_M apart, the first and last flush with its ends (rows ending along the edge, not in
+# the lattice's steps: the user's "teeth", 2026-11-24); a run under VINE_ROW_MIN_M stays bare
 VINE_ROW_ALONG_M = 5.3
 VINE_ROW_ACROSS_M = 2.45
-VINE_ROW_STEPS = (-1, 0, 1)
-VINE_ROW_HALF_M = 2.75      # m: half the piece's length (its ends VINE_ROW_END_M in from that checked)
+VINE_ROW_HALF_M = 2.75      # m: half the piece's length
 VINE_ROW_END_M = 0.5
+VINE_ROW_SAMPLE_M = 0.5
+VINE_ROW_MIN_M = 4.5         # (a shorter run: the 5.5 m piece would reach past the field's edge)
 VINE_ROW_H_M = 2.39         # the shape's height (trees.lua CATALOG.vine_row)
 EDGE_AXIS_DEG = 8.0         # _edge_axis: edges this near a direction count for it
 
@@ -2338,6 +2342,57 @@ def _field_rings(feats, cls_name, min_m2):
             yield fid, np.column_stack([x, y]), parts[0][1:], area
 
 
+def _vine_runs(xy, path, hps, chm, blocked, u, v, groups, phase_b, sec):
+    """(56) The single rows (VINE_ROW_*) of a vineyard ring xy (Web Mercator; path its Path, hps its holes'): on each
+    row line (v-coordinate phase_b + m VINE_ROW_ACROSS_M sec, the groups' rows) the runs in the field, off blocked and off
+    the groups (centres groups: a group covers its three lines VINE_ALONG_M / 2 either side of its centre), each covered by
+    pieces flush with its ends. Returns their centres (n, 2) and an id per piece (line and order: its hash)."""
+    rs, ds = VINE_ROW_ACROSS_M * sec, VINE_ROW_SAMPLE_M * sec
+    a_r, b_r = dnp.matmul(xy, u), dnp.matmul(xy, v)
+    m0 = int(math.ceil((float(b_r.min()) - phase_b) / rs))
+    m1 = int(math.floor((float(b_r.max()) - phase_b) / rs))
+    ga = dnp.matmul(groups, u) if len(groups) else np.zeros(0)
+    gm = np.rint((dnp.matmul(groups, v) - phase_b) / rs).astype(np.int64) if len(groups) else np.zeros(0, np.int64)
+    gh = (0.5 * VINE_ALONG_M) * sec
+    t = np.arange(float(a_r.min()), float(a_r.max()) + ds, ds)
+    out, ids = [], []
+    if len(t) < 2 or m1 < m0:
+        return np.zeros((0, 2)), np.zeros(0, np.int64)
+    for m in range(m0, m1 + 1):
+        b = phase_b + m * rs
+        q = t[:, None] * u[None, :] + b * v[None, :]
+        free = np.asarray(path.contains_points(q), bool)
+        if not free.any():
+            continue
+        for hp in hps:
+            free &= ~np.asarray(hp.contains_points(q), bool)
+        if blocked is not None and np.any(blocked):
+            free &= ~_blocked_at(q, chm, blocked)
+        near = np.abs(gm - m) <= 1
+        for a in ga[near]:
+            free &= np.abs(t - a) > gh
+        if not free.any():
+            continue
+        edge = np.diff(np.concatenate([[0], free.astype(np.int8), [0]]))
+        starts, ends = np.flatnonzero(edge == 1), np.flatnonzero(edge == -1) - 1
+        h, step, end = VINE_ROW_HALF_M * sec, VINE_ROW_ALONG_M * sec, VINE_ROW_END_M * sec
+        for i0, i1 in zip(starts, ends):
+            t0, t1 = float(t[i0]) + end, float(t[i1]) - end
+            length = t1 - t0
+            if length < VINE_ROW_MIN_M * sec:
+                continue
+            if length <= 2 * h:
+                cs = np.array([0.5 * (t0 + t1)])
+            else:
+                n = int(math.ceil((length - 2 * h) / step)) + 1
+                cs = t0 + h + (length - 2 * h) * np.arange(n) / (n - 1)
+            out.append(cs[:, None] * u[None, :] + b * v[None, :])
+            ids.append((m + (1 << 16)) * (1 << 16) + int(i0) // 4 * 64 + np.arange(len(cs)))
+    if not out:
+        return np.zeros((0, 2)), np.zeros(0, np.int64)
+    return np.concatenate(out), np.concatenate(ids).astype(np.int64)
+
+
 def vineyard_items(feats, chm, blocked, bounds=None):
     """The rows of vines of land_use class vineyard (VINE_*): G_VINE items, yaw along the rows. blocked: the canopy
     grid's buildings, roads and water; bounds (lon0, lat0, lon1, lat1) keeps an item in this cell."""
@@ -2373,17 +2428,10 @@ def vineyard_items(feats, chm, blocked, bounds=None):
 
         # the item's ends (a metre in from them) in the field too, and every one of its three points free
         ok = fits(pts, (0.5 * VINE_ALONG_M - 1.0) * sec)
-        # (56) a square whose group does not fit: its single rows that do
-        v = np.array([-u[1], u[0]])
-        sub = np.array([a * VINE_ROW_ALONG_M * u + b * VINE_ROW_ACROSS_M * v
-                        for b in VINE_ROW_STEPS for a in VINE_ROW_STEPS]) * sec          # (9, 2)
-        rest = pts[~ok]
-        rows = (rest[:, None, :] + sub[None, :, :]).reshape(-1, 2) if len(rest) else np.zeros((0, 2))
-        rid = (np.flatnonzero(~ok)[:, None] * len(sub) + np.arange(len(sub))[None, :]).reshape(-1)
-        if len(rows):
-            keep_r = fits(rows, (VINE_ROW_HALF_M - VINE_ROW_END_M) * sec)
-            rows, rid = rows[keep_r], rid[keep_r]
         pts = pts[ok]
+        # (56) the row lines' runs the groups leave: single rows flush with their ends
+        v = np.array([-u[1], u[0]])
+        rows, rid = _vine_runs(xy, path, hps, chm, blocked, u, v, pts, phase_b, sec)
         if bounds is not None:
             ex0, ey0 = _to3857(bounds[0], bounds[1])
             ex1, ey1 = _to3857(bounds[2], bounds[3])
@@ -2399,8 +2447,7 @@ def vineyard_items(feats, chm, blocked, bounds=None):
             continue
         yaw0 = math.degrees(dmath.atan2(float(u[1]), float(u[0])))
         uh = _hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 32)
-        # (a row piece's turn by its square's: the three rows of a square face one way, as a group's)
-        ur = _hash01(np.full(len(rows), key), (rid // len(sub)).astype(np.uint64) + np.uint64(1 << 20), 32)
+        ur = _hash01(np.full(len(rows), key), rid.astype(np.uint64) + np.uint64(1 << 20), 32)
         xs.append(np.concatenate([pts[:, 0], rows[:, 0]]))
         ys.append(np.concatenate([pts[:, 1], rows[:, 1]]))
         yaws.append(np.concatenate([yaw0 + 180.0 * (uh < 0.5), yaw0 + 180.0 * (ur < 0.5)]))
