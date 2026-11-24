@@ -137,24 +137,28 @@ class Mirrors:
     def _path(self):
         return os.path.join(self.root, "mirrors.json")
 
-    def _load(self):
+    def _load(self, any_age=False):
         try:
             with open(self._path(), encoding="utf-8") as f:
                 d = json.load(f)
-            if time.time() - float(d["t"]) < RANK_TTL_S and sorted(d["order"]) == list(range(len(MIRRORS))) \
-                    and d.get("mirrors") == list(MIRRORS):
+            fresh = any_age or time.time() - float(d["t"]) < RANK_TTL_S
+            if fresh and sorted(d["order"]) == list(range(len(MIRRORS))) and d.get("mirrors") == list(MIRRORS):
                 return [int(i) for i in d["order"]]
         except (OSError, ValueError, KeyError, TypeError):
             pass
         return None
 
     def _measure(self, release, kind):
-        """Each mirror's time for a 16 KB read of the transportation archive, at once; the order (failures last)."""
+        """Each mirror's time for a 16 KB read of the transportation archive, at once; the order (failures last). No
+        mirror answering (offline): the last order measured, whatever its age (stale-if-error), asked again by the next
+        process. A probe's failure faults no build (netfetch.stale_ok, in the pool's threads): it only orders the
+        mirrors, the reads that need the bytes fail on their own."""
         def one(i):
             url = MIRRORS[i].format(release=release, theme="transportation")
             t0 = time.perf_counter()
             try:
-                r = self.fetcher.get(url, kind=kind, headers={"Range": f"bytes=0-{HEAD_BYTES - 1}"})
+                with netfetch.stale_ok():
+                    r = self.fetcher.get(url, kind=kind, headers={"Range": f"bytes=0-{HEAD_BYTES - 1}"})
                 if r.status == 206 and r.body[:7] == b"PMTiles":
                     with self._lock2:       # (the fastest mirror's read serves as the archive's head: one round less)
                         self.heads.setdefault((release, "transportation"), []).append(
@@ -166,6 +170,11 @@ class Mirrors:
         with ThreadPoolExecutor(len(MIRRORS)) as ex:
             got = list(ex.map(one, range(len(MIRRORS))))
         ms = {HOSTS[i]: (None if s is None else round(s * 1000.0, 1)) for i, s in got}
+        if all(s is None for _, s in got):
+            old = self._load(any_age=True)
+            if old is not None:
+                log.info("pmtiles: no mirror answered; the order measured before stays in use")
+                return old
         order = [i for i, s in sorted((g for g in got if g[1] is not None), key=lambda g: (g[1], g[0]))]
         order += [i for i, s in got if s is None]
         log.info("pmtiles: mirrors by answer time %s", ms)

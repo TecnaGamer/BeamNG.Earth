@@ -5,11 +5,13 @@ A dataset (rail, lanes, signs, regional...) publishes <PAGES>/<name>/manifest.js
 names the build the shards on disk belong to, and its "data" (data_url) the https folder the build's files are served
 from instead (the tile host, R2 behind Cloudflare's cache), or none: beside the manifest on Pages. The manifest pinned
 on disk is used at once, whatever its age (the data on disk is always usable): one older than MANIFEST_TTL_S is
-refreshed in the background, one fetch at a time, and kept when that fetch fails. Without one (a first run) one thread
-fetches it and the others wait for its answer, at most FETCH_WAIT_S, instead of asking each for itself. (2026-11-09,
-the night of 1.9.0: GitHub answered 504s for hours; every road worker process asked each dataset's manifest for itself,
-2 tries x 20 s, two at a time, and dropped the data it had on disk once a day's manifest was due: world gen hung at
-15 % for players; a test with 10 s 504s cost a first tile 17 s.)
+refreshed in the background, one fetch at a time, and kept when that fetch fails (stale-if-error: the failure faults
+no build, netfetch.stale_ok; asked again after RETRY_S, doubling per failure in a row up to MANIFEST_TTL_S:
+netfetch.Backoff). Without one (a first run) one thread fetches it and the others wait for its answer, at most
+FETCH_WAIT_S, instead of asking each for itself. (2026-11-09, the night of 1.9.0: GitHub answered 504s for hours;
+every road worker process asked each dataset's manifest for itself, 2 tries x 20 s, two at a time, and dropped the data
+it had on disk once a day's manifest was due: world gen hung at 15 % for players; a test with 10 s 504s cost a first
+tile 17 s.)
 
 rail tags, lane tags, sign tags (railtags.Shards) and the regional scenery (regionaldata) read their manifests and
 fetch their files through the one state machine here: the pinning, the data host and the fetch-once policy are not
@@ -143,7 +145,8 @@ class Manifest:
         self.built = None           # its key (the build), what cache keys are made from
         self.data = None            # its "data" host (data_url), None: the files beside the manifest on Pages
         self.checked = 0.0
-        self.down_at = 0.0
+        self.down_at = 0.0          # the last failed fetch (without a manifest in use: asked again retry_s after it)
+        self.backoff = netfetch.Backoff(retry_s, max(retry_s, ttl))   # a stale one's refresh failing: asked again
         self.fetching = None        # threading.Event while a manifest fetch runs (the others wait for its answer)
         self.missing = False        # the last manifest fetch was a 404 (not published), not a failure
 
@@ -208,12 +211,12 @@ class Manifest:
                     self.data = data        # (the same build may have moved to another host)
                 if age < self.ttl:
                     self.checked = now - age
-                elif self.fetching is None and now - self.down_at >= self.retry_s:
+                elif self.fetching is None and self.backoff.due(now):
                     self.fetching = threading.Event()
                     self.checked = now          # (asked once; the next check after ttl or a failure)
                     refresh = True
                 got = self.manifest
-            if refresh:
+            if refresh:     # (the pinned one in use meanwhile and when it fails: its failure is no build's)
                 threading.Thread(target=self._refresh, name=f"{self.name}-manifest", daemon=True).start()
             return got
         with self.lock:
@@ -260,22 +263,32 @@ class Manifest:
 
     def _refresh(self):
         """Fetch the manifest (this thread holds self.fetching), pin it, and take its build; the manifest in use when
-        it cannot be had."""
+        it cannot be had. With one in use (a stale pin's background refresh) a failure is stale-if-error: it faults no
+        build (netfetch.stale_ok), is logged once, and is asked again after self.backoff; without one it is a missing
+        input, as before."""
         now = time.time()
         try:
+            with self.lock:
+                have = self.manifest is not None
             try:
-                got = fetch_pin(self.fetcher, self.base, self.dir)
+                with netfetch.stale_ok(have):
+                    got = fetch_pin(self.fetcher, self.base, self.dir)
             except Exception as e:      # (offline, not published yet: without it, or with the build pinned before)
-                log.debug("%s manifest: %s: %s", self.name, type(e).__name__, e)
                 with self.lock:
                     self.down_at = now
                     self.missing = isinstance(e, netfetch.NotFound)
+                    if self.manifest is not None:
+                        netfetch.refresh_failed(log, self.backoff, now, f"{self.name} manifest", e)
+                        self.checked = self.backoff.until - self.ttl    # (current() asks again then, not after ttl)
+                    else:
+                        log.debug("%s manifest: %s: %s", self.name, type(e).__name__, e)
                     return self.manifest   # (a build learnt before stays in use)
             key = self.key(got)
             with self.lock:
                 changed = key != self.built
                 self.manifest, self.built, self.data, self.checked = got, key, data_url(got), now
                 self.missing = False
+                self.backoff.ok()
                 if changed:
                     self._changed()
             return got

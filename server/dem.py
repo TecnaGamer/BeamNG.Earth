@@ -173,6 +173,7 @@ COVERAGE_URL = "https://download.mapterhorn.com/download_urls.json"
 COVERAGE_ZOOM = 6
 COVERAGE_MAX_AGE_S = 7 * 86400.0    # the copy on disk read again from the net after this (it adds areas)
 COVERAGE_RETRY_S = 600.0            # a failed read asked again after this (until then: every tile asked, as before)
+COVERAGE_RETRY_MAX_S = 86400.0      # a stale list's failed refreshes: asked again after COVERAGE_RETRY_S, doubling to this
 _coverage = {"index": None, "at": -1e18, "lock": threading.Lock()}
 
 
@@ -537,7 +538,9 @@ class Dem:
 
     def _coverage(self):
         """coverage_index of Mapterhorn's file list (the copy on disk, read again from the net when old), or None when
-        it cannot be had: every tile is asked then. One per process."""
+        it cannot be had: every tile is asked then. One per process. An old list's refresh failing keeps the old list
+        (stale-if-error): that failure faults no build (netfetch.stale_ok), is logged once, and is asked again after
+        COVERAGE_RETRY_S, doubling per failure in a row up to COVERAGE_RETRY_MAX_S (netfetch.Backoff)."""
         c = _coverage
         now = time.time()
         if c["index"] is not None and now - c["at"] < COVERAGE_MAX_AGE_S:
@@ -554,14 +557,22 @@ class Dem:
                 with open(path, "rb") as f:
                     doc = json.loads(f.read())
                 if age < COVERAGE_MAX_AGE_S:
-                    c["index"], c["at"], c["failed"] = coverage_index(doc), now - age, False
+                    c["index"], c["at"], c["failed"], c["doc"] = coverage_index(doc), now - age, False, doc
                     c["archives"] = mtarchive.archives_of(doc)
                     return c["index"]
                 stale = doc
             except (OSError, ValueError):
                 pass
+            if stale is None and c["index"] is not None:
+                stale = c.get("doc")      # (the list this process read before, its file gone meanwhile)
+            if stale is not None and not (isinstance(stale, dict) and coverage_index(stale)):
+                stale = None            # (an old file that lists nothing usable is no copy)
+            backoff = c.get("backoff")
+            if backoff is None:
+                backoff = c["backoff"] = netfetch.Backoff(COVERAGE_RETRY_S, COVERAGE_RETRY_MAX_S)
             try:
-                body = self.fetcher.get(COVERAGE_URL, kind="demand").body
+                with netfetch.stale_ok(stale is not None):      # (an old list in hand: its refresh is no build's)
+                    body = self.fetcher.get(COVERAGE_URL, kind="demand").body
                 doc = json.loads(body)
                 idx = coverage_index(doc)
                 if not idx:
@@ -572,14 +583,16 @@ class Dem:
                 with open(tmp, "wb") as f:
                     f.write(body)
                 os.replace(tmp, path)
-                c["index"], c["at"], c["failed"] = idx, now, False
+                c["index"], c["at"], c["failed"], c["doc"] = idx, now, False, doc
+                backoff.ok()
             except Exception as e:      # (offline, a host down, another format): the older list if there is one,
-                log.debug("dem: Mapterhorn coverage: %s: %s", type(e).__name__, e)      # else ask every tile
-                idx = coverage_index(stale) if stale is not None else None
-                if idx:     # (retried after COVERAGE_RETRY_S, not the full max age)
-                    c["index"], c["at"], c["failed"] = idx, now - COVERAGE_MAX_AGE_S + COVERAGE_RETRY_S, False
-                    c["archives"] = mtarchive.archives_of(stale)
+                idx = coverage_index(stale) if stale is not None else None      # else ask every tile
+                if idx:     # (retried after the backoff, not the full max age)
+                    netfetch.refresh_failed(log, backoff, now, "dem: Mapterhorn's file list", e)
+                    c["index"], c["at"], c["failed"] = idx, backoff.until - COVERAGE_MAX_AGE_S, False
+                    c["archives"], c["doc"] = mtarchive.archives_of(stale), stale
                 else:
+                    log.debug("dem: Mapterhorn coverage: %s: %s", type(e).__name__, e)
                     c["at"], c["failed"] = now, True
             return c["index"]
 
