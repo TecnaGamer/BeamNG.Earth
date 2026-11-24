@@ -19,6 +19,9 @@ use pyo3::prelude::*;
 
 use crate::dm::Dm;
 
+/// A level feature (a ford) is held level only where the plan rises at most this much over its flat top.
+pub const LEVEL_MAX_RISE_M: f64 = 0.4;
+
 /// One feature: position (x, y) in the plan's frame and its profile.
 #[derive(Clone, Copy, Debug)]
 pub struct Feature {
@@ -27,6 +30,9 @@ pub struct Feature {
     pub height: f64,
     pub ramp: f64,
     pub top: f64,
+    /// a level bottom (a ford): the top held at the lowest planned height over it less |height|, the ramps blending
+    /// the plan into it; else the profile is added to the plan's heights
+    pub level: bool,
 }
 
 /// The profile's offset at signed distance `d` from the feature's centre (0 outside it).
@@ -176,12 +182,33 @@ pub fn apply(xy: &[[f64; 2]], z: &[f64], bank: &[f64], widen: &[f64], feats: &[F
         }
         seg_of.push(seg);
     }
+    // a level feature's bottom: the lowest of the plan's own heights over its top (the stations there), less |height|
+    let base = oz.clone();
+    let bottoms: Vec<f64> = on.iter().map(|&(c, k)| {
+        let f = &feats[k];
+        if !f.level {
+            return 0.0;
+        }
+        let over: Vec<f64> = merged.iter().zip(&base).filter(|((at, _), _)| (at - c).abs() <= 0.5 * f.top + 1e-9)
+            .map(|(_, z)| *z).collect();
+        let lo = over.iter().cloned().fold(f64::INFINITY, f64::min);
+        let hi = over.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        // (on a road climbing more than LEVEL_MAX_RISE_M over the top, not level: the dip follows the slope, NaN)
+        if !lo.is_finite() || hi - lo > LEVEL_MAX_RISE_M { f64::NAN } else { lo - f.height.abs() }
+    }).collect();
     // the features' offsets: where several reach a station, the highest rise and the deepest dip (not their sum: one
     // hump mapped twice, on a node of each of two ways or as two close nodes, is one hump, not a double one)
     for (i, &(at, _)) in merged.iter().enumerate() {
         let (mut up, mut down) = (0.0f64, 0.0f64);
-        for &(c, k) in &on {
-            let d = profile(&feats[k], at - c);
+        for (j, &(c, k)) in on.iter().enumerate() {
+            let f = &feats[k];
+            let d = if f.level && bottoms[j].is_finite() {
+                // (the weight of the bottom: 1 on the top, the half-cosine down the ramps)
+                let w = if f.height != 0.0 { profile(f, at - c) / f.height } else { 0.0 };
+                (w * (bottoms[j] - base[i])).min(0.0)
+            } else {
+                profile(f, at - c)
+            };
             up = up.max(d);
             down = down.min(d);
         }
@@ -196,7 +223,7 @@ pub fn apply(xy: &[[f64; 2]], z: &[f64], bank: &[f64], widen: &[f64], feats: &[F
 }
 
 /// calming.apply's kernel: (xy (n2, 2), z (n2,), bank (n2,) or empty, widen (n2,) or empty, segs (n2 - 1,) the source
-/// segment of each, taken: the features' indices on this plan). feats (m, 5): x, y, height, ramp, top.
+/// segment of each, taken: the features' indices on this plan). feats (m, 5 or 6): x, y, height, ramp, top[, level].
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn calming_apply<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyReadonlyArray1<'py, f64>,
@@ -206,8 +233,8 @@ pub fn calming_apply<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: Py
                                        Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>)> {
     let xa = xy.as_array();
     let fa = feats.as_array();
-    if xa.ncols() != 2 || (fa.nrows() > 0 && fa.ncols() != 5) {
-        return Err(pyo3::exceptions::PyValueError::new_err("xy (n, 2), feats (m, 5)"));
+    if xa.ncols() != 2 || (fa.nrows() > 0 && fa.ncols() != 5 && fa.ncols() != 6) {
+        return Err(pyo3::exceptions::PyValueError::new_err("xy (n, 2), feats (m, 5 or 6)"));
     }
     let pts: Vec<[f64; 2]> = xa.rows().into_iter().map(|r| [r[0], r[1]]).collect();
     let zv = z.as_array().to_vec();
@@ -217,7 +244,8 @@ pub fn calming_apply<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: Py
         return Err(pyo3::exceptions::PyValueError::new_err("z / bank / widen not one per vertex"));
     }
     let fs: Vec<Feature> = fa.rows().into_iter()
-        .map(|r| Feature { x: r[0], y: r[1], height: r[2], ramp: r[3], top: r[4] }).collect();
+        .map(|r| Feature { x: r[0], y: r[1], height: r[2], ramp: r[3], top: r[4], level: r.len() > 5 && r[5] != 0.0 })
+        .collect();
     let (oxy, oz, ob, ow, segs, taken) = apply(&pts, &zv, &bv, &wv, &fs, reach, step);
     let flat: Vec<f64> = oxy.iter().flat_map(|p| [p[0], p[1]]).collect();
     let arr = numpy::ndarray::Array2::from_shape_vec((oxy.len(), 2), flat)
@@ -536,7 +564,7 @@ mod tests {
 
     #[test]
     fn hump_profile_shape() {
-        let f = Feature { x: 0.0, y: 0.0, height: 0.075, ramp: 1.85, top: 0.0 };
+        let f = Feature { x: 0.0, y: 0.0, height: 0.075, ramp: 1.85, top: 0.0, level: false };
         assert!((profile(&f, 0.0) - 0.075).abs() < 1e-12);
         assert_eq!(profile(&f, 1.85), 0.0);
         assert_eq!(profile(&f, -2.0), 0.0);
@@ -547,7 +575,7 @@ mod tests {
     #[test]
     fn table_adds_vertices_and_height() {
         let (xy, z) = line(6, 4.0);
-        let f = [Feature { x: 10.0, y: 0.5, height: 0.08, ramp: 1.5, top: 4.0 }];
+        let f = [Feature { x: 10.0, y: 0.5, height: 0.08, ramp: 1.5, top: 4.0, level: false }];
         let (oxy, oz, _b, _w, segs, taken) = apply(&xy, &z, &[], &[], &f, 1.5, 0.25);
         assert_eq!(taken, vec![0]);
         assert!(oxy.len() > xy.len() + 20);
@@ -574,7 +602,7 @@ mod tests {
     #[test]
     fn far_feature_untouched() {
         let (xy, z) = line(4, 4.0);
-        let f = [Feature { x: 6.0, y: 3.0, height: 0.08, ramp: 1.5, top: 4.0 }];
+        let f = [Feature { x: 6.0, y: 3.0, height: 0.08, ramp: 1.5, top: 4.0, level: false }];
         let (oxy, oz, _b, _w, segs, taken) = apply(&xy, &z, &[], &[], &f, 1.5, 0.25);
         assert!(taken.is_empty());
         assert_eq!(oxy, xy);
@@ -617,7 +645,7 @@ mod tests {
     #[test]
     fn twice_mapped_is_one_hump() {
         let (xy, z) = line(11, 2.0);
-        let f = Feature { x: 10.0, y: 0.0, height: 0.075, ramp: 1.85, top: 0.0 };
+        let f = Feature { x: 10.0, y: 0.0, height: 0.075, ramp: 1.85, top: 0.0, level: false };
         let g = Feature { x: 10.4, ..f };
         let (oxy, oz, ..) = apply(&xy, &z, &[], &[], &[f, g], 1.5, 0.25);
         let top = oxy.iter().zip(&oz).map(|(p, h)| h - 0.01 * p[0]).fold(0.0f64, f64::max);
@@ -625,10 +653,29 @@ mod tests {
     }
 
     #[test]
+    fn ford_bottom_is_level() {
+        let (xy, z) = (vec![[0.0, 0.0], [40.0, 0.0]], vec![0.0, 2.0]);     // (a 5 % slope)
+        let f = Feature { x: 20.0, y: 0.0, height: -0.3, ramp: 4.0, top: 4.0, level: true };
+        let (oxy, oz, ..) = apply(&xy, &z, &[], &[], &[f], 1.5, 0.25);
+        let bottom: Vec<f64> = oxy.iter().zip(&oz).filter(|(p, _)| (p[0] - 20.0).abs() <= 2.0).map(|(_, h)| *h).collect();
+        let lo = bottom.iter().cloned().fold(f64::INFINITY, f64::min);
+        assert!(bottom.iter().all(|h| (h - lo).abs() < 1e-9), "{bottom:?}");
+        assert!((lo - (0.9 - 0.3)).abs() < 1e-9, "{lo}");
+        // never above the plan
+        for (p, h) in oxy.iter().zip(&oz) {
+            assert!(*h <= 0.05 * p[0] + 1e-9);
+        }
+        // a steep road: the dip follows it
+        let (oxy, oz, ..) = apply(&xy, &[0.0, 8.0], &[], &[], &[f], 1.5, 0.25);
+        let j = oxy.iter().position(|p| (p[0] - 20.0).abs() < 1e-9).unwrap();
+        assert!((oz[j] - (4.0 - 0.3)).abs() < 1e-9);
+    }
+
+    #[test]
     fn pieces_agree() {
         // two overlapping pieces of one line, the same heights where they overlap
         let (xy, z) = line(11, 2.0);
-        let f = [Feature { x: 9.3, y: 0.0, height: 0.07, ramp: 0.5, top: 1.0 }];
+        let f = [Feature { x: 9.3, y: 0.0, height: 0.07, ramp: 0.5, top: 1.0, level: false }];
         let (a, az, ..) = apply(&xy[..8], &z[..8], &[], &[], &f, 1.5, 0.25);
         let (b, bz, ..) = apply(&xy[3..], &z[3..], &[], &[], &f, 1.5, 0.25);
         for (p, h) in a.iter().zip(&az) {

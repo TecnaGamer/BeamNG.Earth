@@ -54,7 +54,9 @@ KINDS = {
 }
 # a ford (BNE_UNPAVED: ford=yes on a road's node or way): the road dips FORD_DIP_M over FORD_RAMP_M ramps either side of
 # a FORD_TOP_M flat bottom, and water stands FORD_WATER_M over the bottom (fords.rivers: the sea message's River
-# pieces). A ford's own way: its flat bottom its length less the ramps, within FORD_TOP_MAX_M.
+# pieces, drivefeat.ford_rivers). A ford's own way: its flat bottom its length less the ramps, within FORD_TOP_MAX_M.
+# The bottom is level (the lowest planned height over it less the dip) where the road rises at most drivefeat.rs
+# LEVEL_MAX_RISE_M over it, so the water fills it evenly; on a steeper road the dip follows the slope.
 FORD_DIP_M, FORD_RAMP_M, FORD_TOP_M, FORD_TOP_MAX_M = 0.30, 4.0, 4.0, 30.0
 FORD_WATER_M = 0.22
 FORDS = ("yes", "boat")
@@ -104,11 +106,11 @@ def profile_of(tags, country, min_base):
 
 
 def features(md, frame, plans, min_base):
-    """(m, 5) feature rows [x, y, height, ramp, top] in the frame for the calming nodes round the plans, and their
+    """(m, 6) feature rows [x, y, height, ramp, top, level] in the frame for the calming nodes round the plans, and their
     node ids (m,), ascending by id; None when the shards there could not be had (a fault: drivetags)."""
     t = drivetags.of(md)
     if t is None or not plans:
-        return np.zeros((0, 5)), np.zeros(0, np.int64)
+        return np.zeros((0, 6)), np.zeros(0, np.int64)
     xy = np.concatenate([np.asarray(p.xy, np.float64)[:, :2] for p in plans])
     pad = 20.0
     x0, y0 = xy.min(axis=0) - pad
@@ -122,7 +124,7 @@ def features(md, frame, plans, min_base):
     rows, ids = [], []
     for nid, nlo, nla, tags in nodes:
         if drivefeat.UNPAVED and str(tags.get("ford", "")).lower() in FORDS:
-            prof = (-FORD_DIP_M, FORD_RAMP_M, FORD_TOP_M)
+            prof = (-FORD_DIP_M, FORD_RAMP_M, FORD_TOP_M, 1.0)       # (level: drivefeat.rs)
         elif drivefeat.CALMING and tags.get("traffic_calming"):
             prof = profile_of(tags, cb.at(nla, nlo), min_base)
         else:
@@ -130,9 +132,9 @@ def features(md, frame, plans, min_base):
         if prof is None:
             continue
         e, n, _ = frame.geodetic_to_enu(np.array([nla]), np.array([nlo]), 0.0)
-        rows.append([float(np.asarray(e)[0]), float(np.asarray(n)[0]), *prof])
+        rows.append([float(np.asarray(e)[0]), float(np.asarray(n)[0]), *prof, *(() if len(prof) > 3 else (0.0,))])
         ids.append(nid)
-    return np.array(rows, np.float64).reshape(-1, 5), np.array(ids, np.int64)
+    return np.array(rows, np.float64).reshape(-1, 6), np.array(ids, np.int64)
 
 
 def apply_plan(p, feats):
@@ -168,7 +170,7 @@ def ford_ways(frame, roads):
     out = []
     col = roads.attrs.get("osm_ford")
     if col is None:
-        return np.zeros((0, 5))
+        return np.zeros((0, 6))
     for i in np.flatnonzero(np.array([str(v).lower() in FORDS if v is not None else False for v in col], bool)):
         for part in roadsmod.ground_parts(roads, int(i)):
             if len(part) < 2:
@@ -178,8 +180,8 @@ def ford_ways(frame, roads):
             s_ = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
             mid = np.array([dnp.interp(s_[-1] / 2, s_, xy[:, 0]), dnp.interp(s_[-1] / 2, s_, xy[:, 1])])
             top = min(FORD_TOP_MAX_M, max(FORD_TOP_M, float(s_[-1]) - 2 * FORD_RAMP_M))
-            out.append([float(mid[0]), float(mid[1]), -FORD_DIP_M, FORD_RAMP_M, top])
-    return np.array(out, np.float64).reshape(-1, 5)
+            out.append([float(mid[0]), float(mid[1]), -FORD_DIP_M, FORD_RAMP_M, top, 1.0])
+    return np.array(out, np.float64).reshape(-1, 6)
 
 
 def apply(md, frame, plans, min_base, roads=None):
