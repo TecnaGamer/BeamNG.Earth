@@ -158,7 +158,8 @@ def known_key(planner, cid, pt):
     """The key of the interchange the road cid (a canonical id) at pt (lat, lon) is part of, when this process or the
     run's index knows it, else None."""
     with LOCK:
-        ik = pick(INDEX.get(cid, ()), pt)
+        ents = INDEX.get(cid, ())
+        ik = pick(ents, pt)
     sh = planner.shared
     if ik is None and sh is not None and hasattr(sh, "shape_index"):
         ents = sh.shape_index(cid)
@@ -166,6 +167,13 @@ def known_key(planner, cid, pt):
             with LOCK:
                 INDEX[cid] = ents
             ik = pick(ents, pt)
+    if ik is None and ents and os.environ.get("BNE_IX_PROFILE"):
+        # (the road is in the index but nowhere near pt: how far, and what the nearest entry holds)
+        near = min(ents, key=lambda e: max(e[1][0] - pt[0], pt[0] - e[1][2], 0.0) + max(e[1][1] - pt[1], pt[1] - e[1][3], 0.0))
+        a, b, c, d = near[1]
+        log.warning("ix profile: known_key: road %s at (%.6f, %.6f) has %d index entries, none holding it: the nearest "
+                    "box (%.6f, %.6f, %.6f, %.6f) is %.0f m away, key %s", cid, pt[0], pt[1], len(ents), a, b, c, d,
+                    111000 * (max(a - pt[0], pt[0] - c, 0.0) + max(b - pt[1], pt[1] - d, 0.0)), near[0][:12])
     return ik
 
 
@@ -206,15 +214,42 @@ def index_add(planner, ik, net, sysm):
             INDEX.clear()
         for cid, b in boxes.items():
             INDEX[cid] = [e for e in INDEX.get(cid, ()) if e[0] != ik] + [(ik, b)]
+        if os.environ.get("BNE_IX_PROFILE"):
+            log.warning("ix profile: index %s: %s", ik[:12], "; ".join("%s box (%.6f, %.6f, %.6f, %.6f), %d entries"
+                                                                       % (c[:20], b[0], b[1], b[2], b[3], len(INDEX[c]))
+                                                                       for c, b in sorted(boxes.items())))
     sh = planner.shared
     if sh is not None and hasattr(sh, "shape_index_store"):
         sh.shape_index_store(ik, boxes)
 
 
+def piece_system(cur_net, cur, nxt_net, found, cid):
+    """The system of a wider find (found, in nxt_net) that the piece cur (in cur_net) is part of: of those with the road
+    cid among their seeds, the one whose seeds lie nearest the piece's seeds (the least distance of a seed's line to a
+    piece seed's middle point). A road's pieces within the pad are several systems of the same road, and the first found
+    is not always the asking piece's: followed, it is an interchange the index knows (the same key), so nothing is
+    indexed for the piece, and every region holding it grows it again (Compiegne: a deck's two pieces 800 m apart,
+    grown at every ask; Yokohama: 140 s of a build's growths). None when no system has the road among its seeds."""
+    mid = [cur_net.lines[i][len(cur_net.lines[i]) // 2] for i in cur.sysm["seeds"]]
+    best = None
+    for x in found:
+        seeds = x.sysm["seeds"]
+        if cid not in {_gsh.canonical_id(nxt_net.m[i]) for i in seeds}:
+            continue
+        if not mid:
+            return x
+        d = min(float(np.min(np.hypot(nxt_net.lines[j][:, 0] - m[0], nxt_net.lines[j][:, 1] - m[1])))
+                for j in seeds for m in mid)
+        if best is None or d < best[0]:
+            best = (d, x)
+    return None if best is None else best[1]
+
+
 def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
     """(key, net, Interchange, the net's other systems) of the whole interchange the one found (ix, in net: a piece of it,
     as some region's box holds it) is part of: the members within SHAPES_PAD_M of its seeds (what a ramp reaches) found
-    again as interchanges, the one holding the road cid taken, and so on until it takes in nothing more. Whichever piece it
+    again as interchanges, the one the piece is part of (piece_system: of the systems with the road cid among their seeds,
+    the one nearest the asking piece), and so on until it takes in nothing more. Whichever piece it
     starts from, the end is the same set of roads and the same last box (an interchange taking in nothing at its own box's
     size is closed, and every interchange has one such set), so every region finds the same key. adopt: the run's index is
     looked at for every piece the growth takes in, before the next round: an interchange another process has found
@@ -285,7 +320,7 @@ def grow(planner, net, ix, cid, pt, adopt=True, hint=None):
         prev = (nxt_net, found, keys_)
         read_s += t1 - t0
         find_s += time.perf_counter() - t1
-        nxt = next((x for x in found if cid in {_gsh.canonical_id(nxt_net.m[i]) for i in x.sysm["seeds"]}), None)
+        nxt = piece_system(cur_net, cur, nxt_net, found, cid)
         if os.environ.get("BNE_IX_PROFILE"):
             log.warning("ix profile: growth round of %s from %s: %d cells read in %.2f s, find of %d members in %.2f s, "
                         "ids %d -> %d, box %.0f x %.0f m", cid[:12], pt, len(loaded), read_s, len(members),
@@ -510,6 +545,11 @@ def _interchange(planner, net, ix, hk, clock):
             # that learns its key from the index meanwhile finds the solution claimed, not the whole interchange to be
             # followed and solved again)
             ik_, n2, i2, others = grow(planner, net, ix, cid, pt)
+            if os.environ.get("BNE_IX_PROFILE"):
+                log.warning("ix profile: grown from road %s at (%.6f, %.6f): %s", cid[:20], pt[0], pt[1],
+                            ("known key " + ik_[:12]) if n2 is None else
+                            ("key %s, %d seeds (%s)" % (ik_[:12], len(i2.sysm["seeds"]),
+                                                        ", ".join(sorted({_gsh.canonical_id(n2.m[i])[:20] for i in i2.sysm["seeds"]})))))
             if n2 is None:
                 return ik_, None, False
             index_add(planner, ik_, n2, i2.sysm)
