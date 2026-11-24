@@ -1494,6 +1494,12 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
     vstep = DIRT_VERTEX_STEP if minor_dirt else VERTEX_STEP
     every = max(1, int(round(vstep / PROFILE_STEP)))
     keep = np.r_[np.arange(0, len(xy) - 1, every), len(xy) - 1]
+    if rough is not None and bumps is not None and minor_dirt:
+        # (BNE_UNPAVED: the VERTEX_STEP vertices, and every sample only where there is damage: the junctions' tapered
+        # ends keep the drawn road's own vertices, so their flat cores and ramps stay where they were)
+        every4 = max(1, int(round(VERTEX_STEP / PROFILE_STEP)))
+        keep = np.union1d(np.r_[np.arange(0, len(xy) - 1, every4), len(xy) - 1],
+                          np.flatnonzero(np.abs(damage) > 1e-3))
     # Where a street-edge profile is known, grade its actual carriageway.
     # Legacy streets still allow enough flat ground for their urban width.
     width = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, True, None, spec.oneway)) \
