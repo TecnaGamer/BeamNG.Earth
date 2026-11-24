@@ -241,6 +241,7 @@ class TileKeyTest(unittest.TestCase):
                              ("none", "none"), "decided at the first key: none for this process")
             nm._SOURCES.clear()                     # (the main process: its own sources, never deciding)
             nt._SOURCES.clear()
+            next_process()                          # (another process than the worker's, no session folder here)
             self.assertTrue(all(v.startswith("2026-11-14-") for v in blockworker._nyc_key(
                 geodesy.EnuFrame(LAT, LON), (-500, -500, 500, 500), cache_dir=tmp)), "the main process's peek")
             nm._SOURCES.clear()                     # (the next process)

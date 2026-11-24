@@ -206,12 +206,39 @@ class MidSessionRefreshTest(SessionCase):
         self.assertEqual(len(got), 1, got)
         self.assertEqual(pagesdata.session_get(self.cache, f"lanes|{LANES}"), (True, got.pop()))
 
+    def test_new_yorks_shards_one_build_a_run(self):
+        """nycshards (its own manifests): decided once a run in any process; the main process's peek (its guess of the
+        workers' keys) is that decision, not a newer pin."""
+        import nyctanks
+        base = "https://example.invalid/nyctanks/v1"
+        d = os.path.join(self.cache, "pagesdata", "nyctanks", "v1")
+        os.makedirs(d)
+        with open(os.path.join(d, "manifest.json"), "w") as f:
+            json.dump({"format": 1, "built": "2026-11-10", "cells": {}}, f)
+        pagesdata.start_session(self.cache)
+        a = nyctanks.Source(self.cache, fetcher=Offline(), base=base).identity()
+        self.assertTrue(a.startswith("2026-11-10-"), a)
+        with open(os.path.join(d, "manifest.json"), "w") as f:
+            json.dump({"format": 1, "built": "2026-11-20", "cells": {}}, f)
+        pagesdata.session_reset()                   # (another process of the run: the session folder only)
+        self.assertEqual(nyctanks.Source(self.cache, fetcher=Offline(), base=base).identity(peek=True), a)
+        self.assertEqual(nyctanks.Source(self.cache, fetcher=Offline(), base=base).identity(), a)
+
     def test_session_folders_of_other_caches_are_not_read(self):
         other = tempfile.mkdtemp(prefix="manifestfreeze-other-")
         self.addCleanup(shutil.rmtree, other, True)
         pagesdata.start_session(other)
         self.assertIsNone(pagesdata.session_dir(self.cache))
         self.assertIsNotNone(pagesdata.session_dir(other))
+
+    def test_a_helper_keeps_the_session_it_inherited(self):
+        """build_decisions, bake_area, the BeamMP share helper: the server's session when they are its helpers, else
+        one of their own."""
+        d = pagesdata.ensure_session(self.cache)
+        self.assertEqual(pagesdata.ensure_session(self.cache), d, "inherited: kept")
+        other = tempfile.mkdtemp(prefix="manifestfreeze-other-")
+        self.addCleanup(shutil.rmtree, other, True)
+        self.assertNotEqual(pagesdata.ensure_session(other), d, "another cache: its own")
 
     def test_old_session_folders_pruned_this_runs_kept(self):
         old = pagesdata.start_session(self.cache)

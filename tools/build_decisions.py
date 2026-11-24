@@ -258,6 +258,8 @@ def plan_area(cache, cells, procs, work, label):
     os.makedirs(work, exist_ok=True)
     todo, results, jobs = cells, [], []
     t0 = time.time()
+    import pagesdata                        # (one build of each weekly dataset in every worker of the build)
+    pagesdata.ensure_session(cache)
     for pass_ in range(PASSES):
         plancache.start_run(cache)          # (a new run: the last run's short plans are not read again)
         pj = [(cache, todo[i::procs], os.path.join(work, f"{label}_p{pass_}w{i}.jsonl"), i) for i in range(procs)]

@@ -165,11 +165,17 @@ class Shards:
         return self._parse(text.encode("utf-8")) if text is not None else None
 
     def peek(self):
-        """The frozen build, else the one pinned on disk (not frozen: no wait, no fetch), else None: the main process's
-        guess of the workers' keys (earthd.Server.geo_content_key)."""
+        """The frozen build, else the run's decision (a worker's: pagesdata's session), else the one pinned on disk
+        (not frozen: no wait, no fetch), else None: the main process's guess of the workers' keys
+        (earthd.Server.geo_content_key)."""
         with self.lock:
             if self._frozen is not _UNSET:
                 return self._frozen
+        if not self.local and self.root:
+            import pagesdata
+            found, text = pagesdata.session_get(self.cache_dir, f"{self.NAME}/{self.VERSION}|{self.base}")
+            if found:
+                return self._parse(text.encode("utf-8")) if text is not None else None
         return self._read_pin()[0]
 
     def current(self):

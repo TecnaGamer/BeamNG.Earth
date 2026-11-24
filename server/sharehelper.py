@@ -190,6 +190,8 @@ def run(a):
     import overturepick
     log.info("helper: Overture release %s", overturepick.choose_for_process(a.cache))
     plancache.start_run(a.cache)
+    import pagesdata                # (the server's weekly builds when it started this helper, else one of its own)
+    pagesdata.ensure_session(a.cache)
     # (a cell whose lidar answer is late keeps the rule and its plans are not kept: wait for it, as bake_area does; the
     # items' codes are the bake expect's, without the build switches, so the players still match)
     os.environ.setdefault("BNE_LIDAR_GAPS_WAIT", "120")

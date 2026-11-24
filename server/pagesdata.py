@@ -206,6 +206,12 @@ def session_owner(cache_dir):
     return d is not None and _OWNER == [d, os.getpid()]
 
 
+def ensure_session(cache_dir):
+    """A tool or helper that starts worker processes (build_decisions, bake_area, the BeamMP share helper): the session
+    it inherited when it is cache_dir's (a server's helper: the server's builds), else one of its own. The folder."""
+    return session_dir(cache_dir) or start_session(cache_dir)
+
+
 def session_dir(cache_dir):
     """The run's session folder when it is cache_dir's (SESSION_ENV), else None (decided per process)."""
     d = os.environ.get(SESSION_ENV)
