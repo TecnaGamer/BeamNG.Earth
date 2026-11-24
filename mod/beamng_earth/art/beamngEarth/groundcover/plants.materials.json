@@ -24,6 +24,9 @@
     "alphaTest": true,
     "annotation": "NATURE",
     "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
     "translucentBlendOp": "None"
   },
   "bngEarth_ripe_grain": {
@@ -107,6 +110,9 @@
     "alphaTest": true,
     "annotation": "NATURE",
     "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
     "translucentBlendOp": "None"
   },
   "bngEarth_drybranch": {
@@ -134,6 +140,9 @@
     "alphaTest": true,
     "annotation": "NATURE",
     "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
     "translucentBlendOp": "None"
   },
   "bngEarth_lush": {
@@ -161,6 +170,9 @@
     "alphaTest": true,
     "annotation": "NATURE",
     "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
     "translucentBlendOp": "None"
   },
   "bngEarth_vines": {
@@ -186,6 +198,9 @@
     "alphaTest": true,
     "annotation": "NATURE",
     "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
     "translucentBlendOp": "None"
   }
 }
