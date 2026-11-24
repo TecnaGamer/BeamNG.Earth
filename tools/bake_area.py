@@ -39,6 +39,10 @@ def _worker(args):
     import roads
     earthd.raise_open_files()
     bw.init(cache, False, True, True, True, True, None, logging.WARNING, True, True, 0, None, False)
+    import roadz
+    if roadz.ON and roadz.DE_ON:            # (Germany's measured decks' build: in versions(), decided before planning,
+        import dedom                        # the same in every worker through the run's session)
+        dedom.identity()
     rec = open(out_jsonl, "a")
     orig_store = plancache.PlanCache.store
     orig_facts = roads._facts_store

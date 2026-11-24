@@ -46,6 +46,7 @@ ZOOM = 10                   # the shards' tiles (~25 km)
 DGM_EVERY = 4               # every this many samples keep their DGM height (the datum needs a few thousand a cell)
 NO_Z = -(1 << 31)           # a shard's height for none (cm)
 LOCAL_ENV = "BNE_DE_DECKS_DIR"
+PIN_RECHECK_S = 1.0         # s between looks for the run's decision another process made (identity, as railtags')
 NAME = "dedecks"            # the dataset's folder on the data site (its manifest.json; the shards beside or on "data")
 
 # A deck is measured from the samples on its mapped carriageway only (its line +- its half width, not past its ends:
@@ -383,8 +384,8 @@ def identity(network=True):
     pages = manifest()
     if network:
         pages.current()
-    elif pages.known() is None and not pages.decided:
-        return None
+    elif pages.known(PIN_RECHECK_S) is None and not pages.decided:
+        return None                 # (looked at again: another process may decide the run's meanwhile)
     built = pages.built
     if built is None:
         return "none"
