@@ -669,8 +669,8 @@ fn half_at(st: &crate::net::Stroke, s: f64, offs: &mut Vec<f64>) -> f64 {
 }
 
 /// (M5) The twin pairs of the strokes want marks: (stroke a, knot i, stroke b, station on b) for every structure knot
-/// of a beside a structure of b (uid a < uid b), near parallel (25 deg), apart by at most their half widths + TWIN_GAP_M
-/// and, at two map levels, by at least half their two half widths (not one over the other). Fixed order: strokes by index, knots in order,
+/// of a beside a structure of b (uid a < uid b) at the same map level, near parallel (25 deg), apart by at most their
+/// half widths + TWIN_GAP_M. Fixed order: strokes by index, knots in order,
 /// candidates by stroke index.
 pub fn twin_pairs(net: &Net, h: &[f64], nk: &[usize], want: &dyn Fn(usize) -> bool) -> Vec<(usize, usize, usize, f64)> {
     let ns = net.strokes.len();
@@ -719,9 +719,10 @@ pub fn twin_pairs(net: &Net, h: &[f64], nk: &[usize], want: &dyn Fn(usize) -> bo
                 if absf(dot(t, tb)) < TWIN_COS { continue; }
                 let hb = half_at(sb_, sb, &mut offs);
                 let d = absf(off);
-                // (overlapping in plan at two map levels: one over the other, a double deck; at one level: a ramp's deck
-                // merging into its road's, one surface)
-                if d > ha + hb + TWIN_GAP_M || (d < 0.5 * (ha + hb) && ub.level != st.support_at(s).level) { continue; }
+                // (at one map level only: decks at two levels side by side or one over the other are a double deck or
+                // ramps parting in height (Fort Pitt's: held together, one fell 13 m into a V); at one level a ramp's
+                // deck merging into its road's is one surface)
+                if d > ha + hb + TWIN_GAP_M || ub.level != st.support_at(s).level { continue; }
                 out.push((a, i, b, sb));
             }
         }

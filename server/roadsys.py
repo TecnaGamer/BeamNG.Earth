@@ -203,9 +203,12 @@ def _table(cell, feats, rows):
         r = rows[k]
         fid = k.split("|", 1)[0]
         idx = None
+        x0, y0 = float(ll[0, 0]), float(ll[0, 1])
         for i in by_fid.get(fid, []):
             a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
-            if np.allclose(feats.lonlat[a], ll[0], atol=1e-9, rtol=0):
+            # (np.allclose(atol=1e-9, rtol=0) as two float compares: 29,000 calls a place, 1.2 s)
+            q = feats.lonlat[a]
+            if abs(float(q[0]) - x0) <= 1e-9 and abs(float(q[1]) - y0) <= 1e-9:
                 idx = i
                 break
         sp = None if idx is None else (ground[idx] or bridges[idx])
