@@ -15070,7 +15070,7 @@ class Tracker:
         def stuck():
             # a build that never ends leaves the loading line at "roads & buildings 0/36" with nothing in the log (GitHub
             # #241, a Discord report): said once per tile, with how many are in flight
-            for k in self.building:
+            for k in list(self.building):    # (a snapshot: a tile's done callback or a start can change it meanwhile)
                 t0 = self.started.get(k)
                 if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
                     self.stuck_said.add(k)
@@ -15322,7 +15322,7 @@ class GeoTracker:
                                   self._built(conn, a, kk, f, c, sk, m))
 
         def stuck():
-            for k in self.building:
+            for k in list(self.building):    # (a snapshot: a tile's done callback or a start can change it meanwhile)
                 t0 = self.started.get(k)
                 if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
                     self.stuck_said.add(k)
