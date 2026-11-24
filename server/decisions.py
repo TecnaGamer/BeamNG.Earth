@@ -341,6 +341,7 @@ class Store:
         self._keys = {}             # (vkey, bx, by, hash) -> frozenset of item keys
         self._slices = {}           # (cell, weekly builds, ids digest) -> slice digest
         self._failed = {}           # (vkey, bx, by) -> monotonic time a download failed
+        self._man_backoff = {}      # vkey hex -> netfetch.Backoff of its manifest's failed refreshes (monotonic s)
         self._inflight = {}         # (vkey, bx, by) -> Event
         self.stats = {"hits": 0, "misses": 0, "fetched": 0, "bytes": 0, "bad": 0, "fetch_s": 0.0, "stale": 0}
 
@@ -443,27 +444,46 @@ class Store:
                         return self._parse_manifest(vk, f.read()), MANIFEST_TTL_S - age
         except (OSError, ValueError) as e:
             log.info("%s: manifest of %s on disk unusable (%s: %s)", self.WHAT, vk, type(e).__name__, e)
+        # (an older answer on disk, a manifest or "none built", is used when the refresh fails: stale-if-error, the
+        # failure faults no build, netfetch.stale_ok; asked again after NET_RETRY_S, doubling to MANIFEST_TTL_S)
         try:
-            body = self.fetcher.get(self.url(vk, self.MANIFEST), kind="demand", lane=self.LANE).body
+            with open(path, "rb") as f:
+                old = self._parse_manifest(vk, f.read())
+        except (OSError, ValueError):
+            old = None
+        stale = old is not None or os.path.exists(absent)
+        with self._lock:
+            backoff = self._man_backoff.get(vk)
+            if backoff is None:
+                backoff = self._man_backoff[vk] = netfetch.Backoff(NET_RETRY_S, max(NET_RETRY_S, MANIFEST_TTL_S))
+        try:
+            with netfetch.stale_ok(stale):
+                body = self.fetcher.get(self.url(vk, self.MANIFEST), kind="demand", lane=self.LANE).body
             blocks = self._parse_manifest(vk, body)
             _write(path, body)
             try:
                 os.remove(absent)
             except OSError:
                 pass
+            with self._lock:
+                backoff.ok()
             log.info("%s: version %s: %d blocks built", self.WHAT, vk, len(blocks))
             return blocks, MANIFEST_TTL_S
         except netfetch.NotFound:
             _write(absent, b"")
+            with self._lock:
+                backoff.ok()
             log.info("%s: none built for version %s", self.WHAT, vk)
             return None, RETRY_S
         except (netfetch.FetchError, ValueError, OSError) as e:
-            log.info("%s: manifest of %s unavailable (%s: %s)", self.WHAT, vk, type(e).__name__, e)
-            try:                        # (the copy on disk, however old: blocks only ever get added)
-                with open(path, "rb") as f:
-                    return self._parse_manifest(vk, f.read()), NET_RETRY_S
-            except (OSError, ValueError):
+            if not stale:
+                log.info("%s: manifest of %s unavailable (%s: %s)", self.WHAT, vk, type(e).__name__, e)
                 return None, NET_RETRY_S
+            now = time.monotonic()
+            with self._lock:
+                netfetch.refresh_failed(log, backoff, now, f"{self.WHAT}: manifest of {vk}", e)
+                wait = backoff.until - now
+            return old, wait            # (the copy on disk, however old: blocks only ever get added; or "none built")
 
     # --- blocks ------------------------------------------------------------------------------------------------
     def block(self, vk, vkb, bx, by, fetch=True):

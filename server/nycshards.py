@@ -178,11 +178,13 @@ class Shards:
             if self._pinning or time.time() - self._pin_at < MANIFEST_RETRY_S:
                 return
             self._pinning, self._pin_at = True, time.time()
-        threading.Thread(target=self.pin, name=f"{self.NAME}-manifest", daemon=True).start()
+        # (a stale pin's refresh, for the next process: this one keeps the pin it froze, so a failure is no build's)
+        threading.Thread(target=self.pin, args=(True,), name=f"{self.NAME}-manifest", daemon=True).start()
 
-    def pin(self):
+    def pin(self, stale=False):
         """Fetch the manifest and pin it on disk (for a later ask's freeze, or the next process); a 404 unpins it.
-        True when one is pinned."""
+        True when one is pinned. stale: a pin is in use (stale-if-error: a failure faults no build, netfetch.stale_ok;
+        without one, a first run, a failure is a missing input as before)."""
         import netfetch
         with self.lock:
             self._pin_at = time.time()      # (the next ask after MANIFEST_RETRY_S at the earliest)
@@ -191,7 +193,8 @@ class Shards:
                 self.fetcher = netfetch.Fetcher()
             path = os.path.join(self.root, "manifest.json") if self.root else None
             try:
-                body = self.fetcher.get(f"{self.base}/manifest.json", kind="demand").body
+                with netfetch.stale_ok(stale):
+                    body = self.fetcher.get(f"{self.base}/manifest.json", kind="demand").body
             except netfetch.NotFound:   # (not published, or withdrawn)
                 if path:
                     try:
@@ -200,7 +203,8 @@ class Shards:
                         pass
                 return False
             except Exception as e:      # (offline, the site failing: the pinned one stays)
-                log.debug("%s manifest: %s: %s", self.NAME, type(e).__name__, e)
+                log.log(logging.INFO if stale else logging.DEBUG, "%s manifest: %s: %s%s", self.NAME,
+                        type(e).__name__, e, "; the pinned one stays in use" if stale else "")
                 return False
             if self._parse(body) is None or not path:
                 return False

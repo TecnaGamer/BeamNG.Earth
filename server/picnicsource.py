@@ -129,42 +129,13 @@ class Source:
         with self._lock:
             if self._remote is not None and time.time() - self._checked < VERSION_TTL_S:
                 return self._remote
-            pin = os.path.join(self.raw_dir, "picnicsource", "pinned")
-            etag = size = None
-            try:
-                with open(pin) as f:
-                    etag, size, when = f.read().split("\n")[:3]
-                    size, when = int(size), float(when)
-                if time.time() - when > VERSION_TTL_S:
-                    etag = None
-            except (OSError, ValueError):
-                etag = None
-            if etag is None:
-                down = os.path.join(self.raw_dir, "picnicsource", "unreachable")
-                try:
-                    recent = time.time() - os.path.getmtime(down) < RETRY_S
-                except OSError:
-                    recent = False
-                if recent:
-                    raise rangeread.RangeError(f"{self.url}: unreachable at the last try")
-                try:
-                    r = self.fetcher.get(self.url, kind=kind, headers={"Range": "bytes=0-15"})
-                    etag = r.headers.get("etag", "").strip()
-                    m = rangeread.CONTENT_RANGE.match(r.headers.get("content-range", ""))
-                    if not etag or not m or m.group(3) == "*":
-                        raise rangeread.RangeError(f"{self.url}: no ETag or size")
-                except Exception:
-                    os.makedirs(os.path.dirname(down), exist_ok=True)
-                    open(down, "w").close()
-                    raise
-                size = int(m.group(3))
-                os.makedirs(os.path.dirname(pin), exist_ok=True)
-                with open(pin + ".tmp", "w") as f:
-                    f.write(f"{etag}\n{size}\n{time.time()}\n")
-                os.replace(pin + ".tmp", pin)
+            # (a pin past VERSION_TTL_S stays in use when the server cannot be asked: stale-if-error)
+            etag, size, fresh_for = rangeread.pinned_version(
+                self.fetcher, self.url, os.path.join(self.raw_dir, "picnicsource"), kind, VERSION_TTL_S, RETRY_S,
+                f"picnic tables: {self.url}")
             d = os.path.join(self.raw_dir, "picnicsource", re.sub(r"[^A-Za-z0-9]+", "_", etag).strip("_"))
             self._remote = (etag, rangeread.RemoteFile([self.url], size, d, self.fetcher, if_match=etag))
-            self._checked = time.time()
+            self._checked = time.time() - VERSION_TTL_S + fresh_for     # (asked again after fresh_for)
             return self._remote
 
     def _forget(self):

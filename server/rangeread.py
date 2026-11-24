@@ -87,6 +87,81 @@ class Missing(RangeError):
     miss_ttl, as dem.py and imagery.py remember missing tiles)."""
 
 
+# --- a file rewritten in place, pinned by its ETag ----------------------------------------------
+def pinned_version(fetcher, url, folder, kind, ttl_s, retry_s, what):
+    """(etag, size, fresh_for s) of the version of url in use: the one pinned in <folder>/pinned while younger than
+    ttl_s, else the server's (a 16-byte range read), pinned. (osmtags.OsmTags, picnicsource.Source: Layercake files.)
+
+    A pin past ttl_s stays in use when that ask fails (offline, a host down, an HTTP error, no ETag): stale-if-error,
+    the failure faults no build (netfetch.stale_ok), the blocks kept under its ETag are still read, and the server is
+    asked again after retry_s, doubling per failure in a row up to ttl_s (the count kept in <folder>/unreachable, for
+    every process). Without a pin a failure raises, and the next retry_s raise RangeError at once, as before."""
+    import time
+    pin = os.path.join(folder, "pinned")
+    down = os.path.join(folder, "unreachable")
+    now = time.time()
+    etag = size = None
+    try:
+        with open(pin) as f:
+            etag, size, when = f.read().split("\n")[:3]
+            size, when = int(size), float(when)
+        if not etag:
+            raise ValueError("no ETag")
+    except (OSError, ValueError):
+        etag = None
+    if etag is not None and now - when <= ttl_s:
+        return etag, size, ttl_s - (now - when)
+    try:
+        with open(down) as f:
+            fails = max(1, int(f.read().strip() or 1))
+        wait = min(ttl_s, retry_s * 2 ** min(fails - 1, 30)) if etag is not None else retry_s
+        left = wait - (now - os.path.getmtime(down))
+    except (OSError, ValueError):
+        fails, left = 0, 0.0
+    if left > 0:
+        if etag is None:
+            raise RangeError(f"{url}: unreachable at the last try")
+        return etag, size, left
+    try:
+        with netfetch.stale_ok(etag is not None):
+            r = fetcher.get(url, kind=kind, headers={"Range": "bytes=0-15"})
+        got = r.headers.get("etag", "").strip()
+        m = CONTENT_RANGE.match(r.headers.get("content-range", ""))
+        if not got or not m or m.group(3) == "*":
+            raise RangeError(f"{url}: no ETag or size")
+    except Exception as e:
+        os.makedirs(folder, exist_ok=True)
+        _write_small(down, f"{fails + 1}\n")
+        if etag is None:
+            raise
+        wait = min(ttl_s, retry_s * 2 ** min(fails, 30))
+        log.log(logging.INFO if fails == 0 else logging.DEBUG,
+                "%s: version check failed (%s: %s); the pinned %s stays in use, asked again in %.0f s",
+                what, type(e).__name__, e, etag, wait)
+        return etag, size, wait
+    os.makedirs(folder, exist_ok=True)
+    _write_small(pin, f"{got}\n{int(m.group(3))}\n{time.time()}\n")
+    try:
+        os.remove(down)
+    except OSError:
+        pass
+    return got, int(m.group(3)), ttl_s
+
+
+def _write_small(path, text):
+    """text to path whole (a writer-unique temporary name, renamed over it)."""
+    tmp = f"{path}.{os.getpid()}-{threading.get_ident()}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
 # --- the process-wide in-memory block LRU -------------------------------------------------------
 _mem = OrderedDict()            # (cache_dir, block index) -> bytes
 _mem_lock = threading.Lock()

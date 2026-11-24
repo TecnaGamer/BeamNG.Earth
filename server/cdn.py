@@ -45,10 +45,12 @@ the packs were built from; the server's BNGE_DEM_CDN (a release, or "off") overr
 """
 import logging
 import os
+import threading
 import time
 
 import aerialpacks as aerialpacksmod
 import imagery as imagerymod
+import netfetch
 import overturepick
 
 log = logging.getLogger("earthd.cdn")
@@ -63,8 +65,13 @@ S2_FINE = "bngs2fine"       # its tiles enlarged for the finer views: right afte
 BEFORE = "usgs"             # the chain position: ahead of this source (after the regional and NAIP ones)
 
 
+_refresh = {"lock": threading.Lock(), "backoff": netfetch.Backoff(SWITCH_TTL_S / 6, SWITCH_TTL_S)}
+
+
 def switch(fetcher, cache_dir):
-    """The switch file's dict (from the net at most every SWITCH_TTL_S, else the copy on disk), {} when unknown."""
+    """The switch file's dict (from the net at most every SWITCH_TTL_S, else the copy on disk), {} when unknown.
+    An older copy on disk is used when the net fails (stale-if-error: no build faulted, netfetch.stale_ok), and the net
+    is asked again only after a backoff (the server's start reads the switch four times: one try, not four)."""
     path = os.path.join(cache_dir, "cdn", "cdn.json")
     try:
         fresh = time.time() - os.path.getmtime(path) < SWITCH_TTL_S
@@ -73,17 +80,27 @@ def switch(fetcher, cache_dir):
     doc = overturepick.read_switch_file(path) if fresh else None    # (past SWITCH_MAX_BYTES: not read)
     if doc is not None:
         return doc
-    try:
-        # (no more than SWITCH_MAX_BYTES read, on the wire and decoded: netfetch.TooLarge)
-        doc = overturepick.get_switch(
-            lambda url: fetcher.get(url, kind="demand", max_bytes=overturepick.SWITCH_MAX_BYTES).body)
-        if doc is None:
-            raise ValueError(f"not an object of at most {overturepick.SWITCH_MAX_BYTES} bytes")
-        overturepick.keep_switch(path, doc)     # (whole, a writer-unique temporary name: the app's pick writes it too)
-        return doc
-    except Exception as e:          # (offline, not there yet: the original sources)
-        log.info("cdn: no switch file (%s: %s): off", type(e).__name__, e)
-        return overturepick.read_switch_file(path) or {}
+    old = overturepick.read_switch_file(path)
+    with _refresh["lock"]:
+        backoff = _refresh["backoff"]
+        if old is not None and not backoff.due(time.monotonic()):
+            return old
+        try:
+            # (no more than SWITCH_MAX_BYTES read, on the wire and decoded: netfetch.TooLarge)
+            with netfetch.stale_ok(old is not None):
+                doc = overturepick.get_switch(
+                    lambda url: fetcher.get(url, kind="demand", max_bytes=overturepick.SWITCH_MAX_BYTES).body)
+            if doc is None:
+                raise ValueError(f"not an object of at most {overturepick.SWITCH_MAX_BYTES} bytes")
+            overturepick.keep_switch(path, doc)     # (whole, a writer-unique name: the app's pick writes it too)
+            backoff.ok()
+            return doc
+        except Exception as e:          # (offline, not there yet: the copy on disk, else the original sources)
+            if old is not None:
+                netfetch.refresh_failed(log, backoff, time.monotonic(), "cdn: the switch file", e)
+                return old
+            log.info("cdn: no switch file (%s: %s): off", type(e).__name__, e)
+            return {}
 
 
 AER = "bngaer"

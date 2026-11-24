@@ -604,6 +604,65 @@ class TooLarge(BadResponse):
     """A body past the caller's max_bytes (Fetcher.get), on the wire or decoded: not read further, not asked again."""
 
 
+# --- stale-if-error refreshes ------------------------------------------------------------------
+# A cached input past its time to live (a dataset's manifest, Mapterhorn's file list, the switch file...) is asked
+# again while its older copy stays usable. That ask failing (offline, a host down, an HTTP error, a malformed answer)
+# keeps the older copy: the build read a whole input, not a short one, so the refresh's error must not fault it
+# (revisit.fault: FetchError does at its construction; a background thread's fault is every running build's). 2026-11-24:
+# a frozen test cache, offline players and a GitHub Pages outage had every plan made "short" by the daily manifest
+# refreshes of the rail and lane datasets, and by the weekly one of Mapterhorn's file list.
+
+@contextmanager
+def stale_ok(on=True):
+    """with stale_ok(have_copy): the requests this thread makes inside fault no build when they fail (on: an older copy
+    is in hand and is used then: stale-if-error). on False: as without it (no copy at all: a failure is a genuinely
+    missing input, the build is short)."""
+    if not on:
+        yield
+        return
+    prev = getattr(_quiet, "on", False)
+    _quiet.on = True
+    try:
+        yield
+    finally:
+        _quiet.on = prev
+
+
+class Backoff:
+    """When a cached input's failed refresh is tried again: base_s after the first failure, twice as long after each
+    further one in a row, at most max_s; ok() (an answer) starts over. Not locked: under the owner's lock.
+    failed() is True for the first failure in a row (log it at info, the others at debug: no log line per try)."""
+
+    def __init__(self, base_s, max_s=None):
+        self.base_s = float(base_s)
+        self.max_s = float(max(base_s, max_s if max_s is not None else 8 * base_s))
+        self.failures = 0
+        self.at = None              # when the last failure was (the clock the caller passes)
+        self.until = None           # no try before this (None: due)
+
+    def due(self, now):
+        return self.until is None or now >= self.until
+
+    def failed(self, now):
+        self.failures += 1
+        self.at = now
+        self.until = now + min(self.max_s, self.base_s * 2 ** min(self.failures - 1, 30))
+        return self.failures == 1
+
+    def ok(self):
+        self.failures = 0
+        self.at = self.until = None
+
+
+def refresh_failed(logger, backoff, now, what, e):
+    """Note a failed refresh of a cached input (what) whose older copy stays in use: backoff.failed(now), logged at
+    info the first time in a row, then at debug."""
+    first = backoff.failed(now)
+    logger.log(logging.INFO if first else logging.DEBUG,
+               "%s: refresh failed (%s: %s); the older copy stays in use, asked again in %.0f s",
+               what, type(e).__name__, e, backoff.until - now)
+
+
 @dataclass
 class Response:
     status: int

@@ -75,7 +75,10 @@ def fetch(lat, lon, net=None):
     """One Open-Meteo GET (blocking) through net (a netfetch.Fetcher; None = the process-wide one):
     the parsed JSON. Raises netfetch.FetchError (RateLimited / HostUnavailable carry retry_after)."""
     net = net if net is not None else netfetch.default_fetcher()
-    return json.loads(net.get(url(lat, lon), kind="background").body.decode("utf-8"))
+    # (the weather is no build's input: its failures fault no build, netfetch.stale_ok; it runs in the loop's default
+    # executor, where a fault was every running build's, every RETRY_S while offline)
+    with netfetch.stale_ok():
+        return json.loads(net.get(url(lat, lon), kind="background").body.decode("utf-8"))
 
 
 def _f(v, default=0.0):
