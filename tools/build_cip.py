@@ -30,8 +30,21 @@ Written (the BNWT container: tools/build_bnwt.PartWriter, parts of at most --par
     OUT/cip<FORMAT>/<release>/latest.json                  {"build": <build>} (the readers' default)
     OUT/cip<FORMAT>/<release>/<build>/ATTRIBUTION.txt
 <build> is the hash of the inputs (cip.build_id): the code-made part (formats, versions, the release, the map source)
-and the weekly data builds the cells were made from (OSM road tags, rail, lanes, stations). Deterministic: the same
+and the weekly data builds the cells were made from (OSM road tags, rail, lanes, stations), with the build's pin set
+(inputs.data.pins: every weekly dataset's manifest, by its build, data folder and SHA-256). Deterministic: the same
 inputs give the same bytes (cells in tile-id order, zstd at a fixed level, JSON with sorted keys, no timestamps).
+
+The pin set (2026-11-24: planet run 45290114494's 333 shards refused, exit 3, once the weekly rail.yml run published
+new rail / lane / OSM tag builds while they ran): every weekly dataset (pagesdata's: rail, lanes, stations, signs,
+FRA, OSM tags, years, colours, areas, tall buildings, regional) is decided ONCE, when the build is planned
+(--write-pins FILE: the manifests as served then, written with the build id), and every shard given that file (--pins
+FILE) reads exactly those builds (a pinned pagesdata session: pagesdata.seed_session; a dataset it does not name is no
+data) from their build-addressed folders (data/<name>/<key>/ on the tile host, <name>/<key>/ parts: never
+overwritten), whatever Pages serves meanwhile; a shard checks first that the pinned builds it reads are there (exit 4,
+"pinned build unavailable", not a retry of the same thing). A build days later, a rerun, reads the same file (cip.yml:
+the bucket's cip<FORMAT>/<release>/<build>/pins.json) and resumes the same build id. Without --pins the run decides the
+pin set itself at its start (one session for its worker processes too). Exit 3 (--expect-build) now only means other
+code or other switches than the build's.
 """
 import argparse
 import gzip
@@ -78,6 +91,144 @@ SCOPES = {"all": None, "content": ("transportation", "buildings", "places"), "ro
 # the planet build's: the rasters stay on their sources (WorldCover / the canopy model: ~2 / ~100-200 kB a land cell, a
 # planet of ~109 M land cells would be ~0.2 / several TB for ~1-4 MB of a cold visit's downloads)
 WORLD_LAYERS = VECTOR
+
+
+# --- the pin set: every weekly dataset's build, decided once for a build (see the docstring) --------------------------
+PINS_FORMAT = 1
+# inputs.data's parts that name weekly data builds: plan_key leaves them out (a build's code and switches alone)
+PIN_KEYS = ("rails", "lanes", "osmtags", "stations", "pins")
+EXIT_UNAVAILABLE = 4
+
+
+class PinsUnavailable(Exception):
+    """A pinned build the build reads cannot be had (its folder gone, the host failing, or not build-addressed)."""
+
+
+def load_pins(path):
+    """The pin set document of file path ({"format", "datasets": {ident: manifest text or None}, "build", ...}),
+    checked; raises SystemExit when it is not one."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        if not isinstance(doc, dict) or doc.get("format") != PINS_FORMAT or not isinstance(doc.get("datasets"), dict):
+            raise ValueError("not a pin set of this format")
+        for ident, body in doc["datasets"].items():
+            if not isinstance(ident, str) or "|" not in ident:
+                raise ValueError(f"dataset {ident!r}")
+            if body is not None and not isinstance(json.loads(body), dict):
+                raise ValueError(f"{ident}: its manifest is not an object")
+        pin_summary(doc["datasets"])            # (two datasets of one name: refused here)
+        return doc
+    except (OSError, ValueError, TypeError) as e:
+        raise SystemExit(f"--pins {path}: {type(e).__name__}: {e}")
+
+
+def pin_summary(datasets):
+    """inputs.data["pins"]: {dataset name: {"built", "key", "data", "sha256"} of its pinned manifest, or None (no data
+    this build)}. The SHA-256 is the manifest text's: the build id is a function of the whole pin set."""
+    import pagesdata
+    out = {}
+    for ident in sorted(datasets):
+        body = datasets[ident]
+        name = ident.split("|", 1)[0]
+        if name in out:
+            raise ValueError(f"two pinned datasets named {name}")
+        if body is None:
+            out[name] = None
+            continue
+        m = json.loads(body)
+        out[name] = {"built": m.get("built"), "key": m.get("key"), "data": pagesdata.data_url(m),
+                     "sha256": hashlib.sha256(body.encode("utf-8")).hexdigest()}
+    return out
+
+
+def plan_key(inputs):
+    """The build's code and switches without its weekly data (PIN_KEYS): equal for every build of the same code and
+    settings (cip.yml's pointer to the build in progress: cip<FORMAT>/<release>/open/<plan key>.json)."""
+    return cip.build_id({"code": inputs["code"],
+                         "data": {k: v for k, v in inputs["data"].items() if k not in PIN_KEYS}})
+
+
+def collect_pins(b, strict):
+    """The run's pin set: every weekly dataset decided in the run's session (after MapData.freeze_manifests).
+    strict (a build's plan, --write-pins): a dataset decided "none" must be one not published (its manifest a 404 now),
+    never one that failed or answered late (a whole planet build without it)."""
+    import netfetch
+    import pagesdata
+    got = pagesdata.session_entries(b.cache)
+    if strict:
+        for ident, body in sorted(got.items()):
+            if body is not None:
+                continue
+            base = ident.split("|", 1)[1]
+            try:
+                b.md.fetcher.get(f"{base}/manifest.json", kind="demand")
+            except netfetch.NotFound:
+                continue
+            except Exception as e:
+                raise PinsUnavailable(f"{ident}: its manifest could not be had ({type(e).__name__}: {e}): plan again")
+            raise PinsUnavailable(f"{ident}: its manifest came only after the plan's wait: plan again")
+    return got
+
+
+def read_sources(b):
+    """[(name, pagesdata.Manifest)] of the weekly datasets whose files the build's cells are made from (data_builds':
+    rail, lanes, OSM road tags)."""
+    md = b.md
+    out = []
+    for name, t in (("rails", getattr(md, "rail_tags", None)), ("lanes", getattr(md, "lane_tags", None))):
+        if t is not None:
+            out.append((name, t.manifest))
+    try:
+        sh = md._osm_shards()
+    except Exception:
+        sh = None
+    if sh is not None:
+        out.append(("osmtags", sh.pages.manifest))
+    return out
+
+
+def check_pins(b, pinned):
+    """A pinned build (--pins) reads the builds it pinned: each weekly dataset the cells are made from is in the pin set
+    (by its ident: the same BNE_DATA_PAGES as the plan's) and its pinned build's files are there: its data folder's
+    manifest names the build, each archive part (absolute: the build's own folder) answers, or (no data folder) Pages
+    still serves that build. Raises PinsUnavailable."""
+    import pagesdata
+    f = b.md.fetcher
+    for name, mf in read_sources(b):
+        ident = mf.ident()
+        if pinned is not None and ident not in pinned:
+            raise PinsUnavailable(f"{name}: {ident} is not in the pin set (pinned: {sorted(pinned)}): run with the "
+                                  "plan's BNE_DATA_PAGES / *_BASE")
+        m = mf.current()
+        if m is None:
+            continue                    # (no data this build: pinned so)
+        built = pagesdata.build_of(m)
+        try:
+            parts = m.get("parts")
+            archives = [p.get("archive") if isinstance(p, dict) else None for p in parts] \
+                if isinstance(parts, list) and parts else ([m["archive"]] if m.get("archive") else [])
+            if archives:                # (an archive's parts: osmtags' <name>/<build>/ folders)
+                for a in archives:
+                    if not isinstance(a, str) or not a.startswith("https://"):
+                        raise PinsUnavailable(f"{name} {built}: part {a!r} is not in a folder of its build's own")
+                    r = f.get(a, kind="demand", headers={"Range": "bytes=0-6"})
+                    if not r.body.startswith(b"PMTiles"):
+                        raise PinsUnavailable(f"{name} {built}: {a} is not its PMTiles part")
+            elif pagesdata.data_url(m):
+                d = pagesdata.data_url(m)
+                got = json.loads(f.get(f"{d}/manifest.json", kind="demand").body.decode("utf-8"))
+                if pagesdata.build_of(got) != built:
+                    raise PinsUnavailable(f"{name}: {d} holds build {pagesdata.build_of(got)!r}, not {built!r}")
+            else:
+                got = json.loads(f.get(f"{mf.base}/manifest.json", kind="demand").body.decode("utf-8"))
+                if pagesdata.build_of(got) != built:
+                    raise PinsUnavailable(f"{name}: Pages serves build {pagesdata.build_of(got)!r} now and the pinned "
+                                          f"{built!r} names no data folder of its own")
+        except PinsUnavailable:
+            raise
+        except Exception as e:
+            raise PinsUnavailable(f"{name} {built}: {type(e).__name__}: {e}")
 
 
 def cells_around(lat, lon, r):
@@ -569,7 +720,12 @@ def main(argv=None):
     ap.add_argument("--inputs-only", action="store_true", help="print the build's id and inputs, build nothing (with "
                                                                "--world: the planet build's, whose layers differ)")
     ap.add_argument("--expect-build", metavar="ID", help="refuse to build (exit 3) unless the inputs are build ID (the "
-                                                         "CI's: a weekly data build landed since its plan)")
+                                                         "CI's: other code or switches than the plan's)")
+    ap.add_argument("--pins", metavar="FILE", help="the build's pin set (--write-pins' file): every weekly dataset read "
+                                                   "as that build, whatever Pages serves now (exit 4: a pinned build "
+                                                   "the cells read is not available)")
+    ap.add_argument("--write-pins", metavar="FILE", help="write the pin set this run decided (with the build id and "
+                                                         "inputs: a plan's, for --pins)")
     ap.add_argument("--online", action="store_true", help="fetch the sources (else the cache alone)")
     ap.add_argument("--lidar", default=None, choices=("measure", "have", "skip"),
                     help="the lidar answers: measured here for the cells that want one (default with --online), the "
@@ -604,7 +760,27 @@ def main(argv=None):
     import logging
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     layers = tuple(x for x in (a.layers or ",".join(WORLD_LAYERS if a.world else DEFAULT_LAYERS)).split(",") if x)
+    if a.pins and a.write_pins:
+        ap.error("--pins and --write-pins: one or the other")
+    import pagesdata
+    pins = load_pins(a.pins) if a.pins else None
+    # (the run's one decision of every weekly dataset, in every worker process too: the pin set's, else this run's own)
+    if pins is not None:
+        pagesdata.seed_session(a.cache, pins["datasets"])
+    else:
+        pagesdata.start_session(a.cache)
     b = Builder(a.cache, a.online, layers, a.release)
+    try:
+        if pins is None:
+            b.md.freeze_manifests()()
+            datasets = collect_pins(b, strict=bool(a.write_pins))
+        else:
+            datasets = pins["datasets"]
+        if a.online and (pins is not None or a.write_pins):
+            check_pins(b, set(datasets) if pins is not None else None)
+    except PinsUnavailable as e:
+        print(f"build_cip: pinned build unavailable: {e}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
     b.partial = a.partial
     b.lidar = a.lidar or ("measure" if a.online else "have")
     b.cap = 1024 * (a.cap_kb if a.cap_kb is not None else (CAP_KB if a.world else 0))
@@ -624,10 +800,23 @@ def main(argv=None):
         b.only = {}                     # (q_ready: a cellset's cells hold their visit's layers only)
     if b.q_ready():
         inputs["data"]["q"] = quality.version()     # (the record's rules: another build; readers check each section)
+    inputs["data"]["pins"] = pin_summary(datasets)  # (every weekly dataset's build: the build id is the pin set's too)
     build = cip.build_id(inputs)
     outdir = os.path.join(a.out, f"cip{cip.FORMAT}", b.release, build)
+    unpinned = sorted(i for i, v in datasets.items() if v is None)
+    if pins is not None and pins.get("build") not in (None, build):
+        # (the pin set's own build is another: other code or switches than its plan's; --expect-build says so too)
+        print(f"build_cip: the pin set is of build {pins.get('build')}, these inputs are {build}", file=sys.stderr)
+    if a.write_pins:
+        doc = {"format": PINS_FORMAT, "build": build, "plan_key": plan_key(inputs), "inputs": inputs,
+               "pages": pagesdata.PAGES, "datasets": datasets}
+        tmp = a.write_pins + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, sort_keys=True, separators=(",", ":"))
+        os.replace(tmp, a.write_pins)
     if a.inputs_only:
-        print(json.dumps({"build": build, "inputs": inputs, "out": outdir}, sort_keys=True))
+        print(json.dumps({"build": build, "inputs": inputs, "out": outdir, "plan_key": plan_key(inputs),
+                          "none": unpinned}, sort_keys=True))
         return 0
     if a.expect_build and a.expect_build != build and a.world and a.assemble and a.from_shards:
         # (the index of a finished build: its inputs are the ones its shards' records name, of this code; a weekly
@@ -636,7 +825,8 @@ def main(argv=None):
         outdir = os.path.join(a.out, f"cip{cip.FORMAT}", b.release, build)
     elif a.expect_build and a.expect_build != build:
         print(json.dumps({"build": build, "expected": a.expect_build, "inputs": inputs}, sort_keys=True))
-        print(f"build_cip: the inputs are build {build} now, not {a.expect_build}", file=sys.stderr)
+        print(f"build_cip: the inputs are build {build} now, not {a.expect_build} (other code or switches than the "
+              f"plan's{'' if pins is not None else ', or no --pins: the weekly data as served now'})", file=sys.stderr)
         return 3
     os.makedirs(outdir, exist_ok=True)
     import build_bnwt

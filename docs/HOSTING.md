@@ -283,10 +283,16 @@ decision blocks (see below).
   point clouds).
 - **Files:** `cells.index.json` (the build's inputs: the code-made part a client must match, the weekly data builds it
   pinned; coverage; parts), the parts `cells.pNNN.pmtiles` (PMTiles v3, at most 32 MB each so the edge caches a part
-  whole), `airports.csv.gz`, `runways.csv.gz`, `ATTRIBUTION.txt`, `_build/` records; and
-  `cip<FORMAT>/<release>/latest.json` (`{"build": ...}`, written **last**: what clients read first).
+  whole), `airports.csv.gz`, `runways.csv.gz`, `ATTRIBUTION.txt`, `_build/` records, `pins.json` (the build's pin
+  set: every weekly dataset's manifest as it was when the build was planned, written first and never replaced); and
+  `cip<FORMAT>/<release>/latest.json` (`{"build": ...}`, written **last**: what clients read first), and
+  `cip<FORMAT>/<release>/open/<plan key>.json` (`{"build": ...}`: the build a later run of the same code and switches
+  resumes).
 - **Built by:** `tools/build_cip.py --world` from a **pinned** BeamNG.Earth release tag or commit, in the data repo's
-  `cip` workflow (after `bnwt`: the builder reads Overture through the release's BNWT archives).
+  `cip` workflow (after `bnwt`: the builder reads Overture through the release's BNWT archives). Every weekly dataset
+  is decided once per build (`--write-pins`; its pin set is part of the build id) and every shard reads exactly those
+  builds from their build-addressed folders (`--pins`), so a weekly data build landing during the multi-day planet
+  build changes nothing; a rerun days later resumes the same build with its stored `pins.json`.
 - **How often:** monthly (after the BNWT build), plus by hand.
 - **Size:** roughly 250-330 GB per world release (estimate from samples; vector layers only, the rasters stay on
   their sources).

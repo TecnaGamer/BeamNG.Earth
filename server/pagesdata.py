@@ -22,7 +22,10 @@ filed Pages' newer shards under the older build, and re-joined shared layers col
 - a build's files come from its "data" host (build-addressed); Pages (no "data", or the data host failing) only while
   Pages' own manifest names the session's build and the file comes from the same Pages deploy as that manifest
   (Manifest.fetch: else OtherBuild, the file not had in this run);
-- a process without a session folder (tools, tests, a server's helper started on its own) decides once per process.
+- a process without a session folder (tools, tests, a server's helper started on its own) decides once per process;
+- a pinned session (seed_session: tools/build_cip.py --pins, the CIP planet build's shards, 2026-11-24) holds exactly
+  the decisions it was seeded with, made days before in another job: a dataset not in it is "none" for the run in
+  every process (never decided from the disk or the network), and no pin is fetched again.
 
 (2026-11-09, the night of 1.9.0: GitHub answered 504s for hours; every road worker process asked each dataset's
 manifest for itself, 2 tries x 20 s, two at a time, and dropped the data it had on disk once a day's manifest was due:
@@ -257,10 +260,82 @@ def session_get(cache_dir, ident):
     if sdir is None:
         return False, None
     found, body = _read_entry(_entry(sdir, ident), ident)
+    if not found and session_pinned(cache_dir) is not None:
+        # (a pinned run: what the pin set does not name is no data, in every process, never this run's own decision)
+        log.warning("pagesdata %s: not in the run's pin set: no data this run", ident)
+        body, _ = session_put(cache_dir, ident, None, "unpinned")
+        return True, body
     if found:
         with _PROC_LOCK:
             body = _PROC.setdefault(k, body)
     return found, body
+
+
+PINS_NAME = "_pins.json"        # in a session folder: the run is pinned (seed_session); its idents
+_PINNED = {}                    # session folder -> frozenset of the pinned idents, or None (not pinned)
+
+
+def session_pinned(cache_dir):
+    """The idents a pinned session (seed_session) was seeded with (a frozenset), or None: not a pinned session (or
+    no session)."""
+    sdir = session_dir(cache_dir)
+    if sdir is None:
+        return None
+    with _PROC_LOCK:
+        if sdir in _PINNED:
+            return _PINNED[sdir]
+    try:
+        with open(os.path.join(sdir, PINS_NAME), encoding="utf-8") as fh:
+            got = frozenset(str(i) for i in json.load(fh)["idents"])
+    except (OSError, ValueError, KeyError, TypeError):
+        got = None
+    with _PROC_LOCK:
+        return _PINNED.setdefault(sdir, got)
+
+
+def seed_session(cache_dir, datasets):
+    """A pinned run (tools/build_cip.py --pins): a session folder of its own (start_session, in the environment its
+    worker processes inherit) holding exactly the decisions datasets gives ({ident: manifest text, or None: no data}),
+    marked pinned: every process of the run reads those builds, a dataset not named is none for the run (session_get),
+    and no pin is fetched again (Manifest._adopt). Raises when a decision could not be recorded as given. The folder."""
+    d = start_session(cache_dir)
+    for ident in sorted(datasets):
+        body = datasets[ident]
+        if body is not None and not isinstance(body, str):
+            raise ValueError(f"pin {ident}: not a manifest's text")
+        got, _won = session_put(cache_dir, ident, body, "pins")
+        if got != body or _read_entry(_entry(d, ident), ident) != (True, body):
+            raise RuntimeError(f"pin {ident}: the session holds another decision")
+    write_atomic(os.path.join(d, PINS_NAME), json.dumps({"idents": sorted(datasets)}).encode("utf-8"))
+    with _PROC_LOCK:
+        _PINNED.pop(d, None)
+    return d
+
+
+def session_entries(cache_dir):
+    """{ident: manifest text or None} of every decision in the run's session folder (the pin set a plan records:
+    tools/build_cip.py), {} without a session."""
+    sdir = session_dir(cache_dir)
+    out = {}
+    if sdir is None:
+        return out
+    try:
+        names = sorted(os.listdir(sdir))
+    except OSError:
+        return out
+    for n in names:
+        if not n.endswith(".json") or n == PINS_NAME:
+            continue
+        try:
+            with open(os.path.join(sdir, n), encoding="utf-8") as fh:
+                got = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(got, dict) and isinstance(got.get("ident"), str) and _entry(sdir, got["ident"]) == \
+                os.path.join(sdir, n):
+            body = got.get("body")
+            out[got["ident"]] = body if isinstance(body, str) else None
+    return out
 
 
 def session_put(cache_dir, ident, body, who=""):
@@ -317,6 +392,7 @@ def session_reset():
     """Forget this process's decisions (tests)."""
     with _PROC_LOCK:
         _PROC.clear()
+        _PINNED.clear()
 
 
 def session_take(cache_dir, ident, decide, who=""):
@@ -433,7 +509,9 @@ class Manifest:
                 m = None
             if not isinstance(m, dict):
                 m = None
-        if not mine and m is not None and self.dir and session_owner(self.cache_dir):
+        if session_pinned(self.cache_dir) is not None:
+            mine = False                # (a pinned run's builds were decided elsewhere: no pin fetched again here)
+        elif not mine and m is not None and self.dir and session_owner(self.cache_dir):
             mine = True                 # (the session's main process refreshes every stale pin, whoever decided it)
             try:
                 age = time.time() - os.path.getmtime(os.path.join(self.dir, "manifest.json"))
