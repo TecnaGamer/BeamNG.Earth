@@ -64,6 +64,13 @@ def _warm_versions():
                 t.version()
             except Exception as ex:
                 log.info("helper: %s version: %s: %s", type(t).__name__, type(ex).__name__, ex)
+    import roadz
+    if roadz.ON and roadz.DE_ON:        # (Germany's measured decks: their build in versions() too, decided here)
+        try:
+            import dedom
+            dedom.identity()
+        except Exception as ex:
+            log.info("helper: dedecks: %s: %s", type(ex).__name__, ex)
 
 
 def _expect(lat, lon):
