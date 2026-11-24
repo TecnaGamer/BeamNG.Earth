@@ -84,8 +84,9 @@ MEDIAN_M = float(os.environ.get("BNE_GRADE_MEDIAN", "24"))
 # already smooth along a road) it took the road's real crests and dips out with the noise. A Gaussian of sigma s keeps
 # exp(-2 pi^2 s^2 / L^2) of a crest-to-crest wave L long: at 20 m (a tertiary road) a 100 m dip kept 45 % of its depth,
 # at 40 m (a primary road) a 200 m one 45 %; at FOLLOW_CLASS_SIGMA_M's 9 and 14 m, 85 % and 90 %. Motorways and trunks
-# keep SIGMA_MAJOR_M (built to long, gentle grades). The median shrinks to FOLLOW_MEDIAN_M so a crest or dip at least
-# half that long stays. One switch for every caller (the chains', the pins', l0roads' profile_sigma): pieces of one
+# keep SIGMA_MAJOR_M (built to long, gentle grades). Below them the median shrinks to FOLLOW_MEDIAN_M so a crest or dip
+# at least half that long stays (profile_median; motorways, trunks and the major corridor keep MEDIAN_M, which takes the
+# tree and bridge spikes out of coarse elevation, #271). One switch for every caller (the chains', the pins', l0roads' profile_sigma): pieces of one
 # road planned in other calls still smooth alike. On the coarse global model the roads ride more of its noise: a
 # switch for lidar places. BNE_ROAD_FOLLOW=on (the settings page's "Roads follow the land").
 FOLLOW_ON = os.environ.get("BNE_ROAD_FOLLOW", "off") == "on"
@@ -96,8 +97,6 @@ FOLLOW_CLASS_SIGMA_M = {"primary": 12.0, "secondary": 9.0, "tertiary": 6.0, "unc
                         "residential": 4.0, "service": 4.0, "living_street": 4.0}
 FOLLOW_LINK_SIGMA_M = 8.0   # a slip road's (SIGMA_M otherwise)
 FOLLOW_MEDIAN_M = 8.0
-if FOLLOW_ON:
-    MEDIAN_M = min(MEDIAN_M, FOLLOW_MEDIAN_M)
 DIRT_MEDIAN_M = 10.0        # (tracks keep their small real bumps)
 RAIL_GRADE_ON = os.environ.get("BNE_RAIL_GRADE", "1") != "0"    # the ground laid to the railways' bed (railways.py)
 RAIL_TAG = "rail:"
@@ -1315,6 +1314,16 @@ def _point_along(line, d):
     return np.array([float(line[-1][0]), float(line[-1][1])])
 
 
+def profile_median(spec):
+    """m: the median window of a road's profile before profile_sigma's smoothing: MEDIAN_M (a dirt road's DIRT_MEDIAN_M);
+    with FOLLOW_ON FOLLOW_MEDIAN_M below trunk roads, the roads profile_sigma follows the land on."""
+    if spec.kind not in roadsmod.BUILT:
+        return DIRT_MEDIAN_M
+    if FOLLOW_ON and spec.cls not in ("motorway", "trunk"):
+        return min(MEDIAN_M, FOLLOW_MEDIAN_M)
+    return MEDIAN_M
+
+
 def profile_sigma(spec, coarse=False):
     """m: the profile smoothing of a road of this spec (coarse: on the coarse global elevation, plan_roads)."""
     if spec.kind not in roadsmod.BUILT:
@@ -1485,7 +1494,7 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
     between the samples. bank_xy: the matching extended geometry, trimmed after the curvature/runoff pass. banked
     False: level across (a roundabout's ring)."""
     built = spec.kind in roadsmod.BUILT
-    zs = smooth_profile(median_profile(z, step, MEDIAN_M if built else DIRT_MEDIAN_M), step,
+    zs = smooth_profile(median_profile(z, step, profile_median(spec)), step,
                         profile_sigma(spec, coarse))[ext[0]:len(z) - ext[1]]
     bumps = dirt_bumps(xy, spec, len(z), ext, step, rough)
     if bumps is not None:                       # (not smoothed again: a pothole's edge is sharp, that is the point)
@@ -5359,7 +5368,7 @@ class _Planner:
                 bcls.append(cls + "_link" if cls is not None and _is_link(sp) else cls)
             else:
                 ground_l.append((line, sp.width / 2 + shoulder(sp), sp.cls))
-                ground_ids.append((fid, j, profile_sigma(sp), MEDIAN_M if sp.kind in roadsmod.BUILT else DIRT_MEDIAN_M))
+                ground_ids.append((fid, j, profile_sigma(sp), profile_median(sp)))
                 ground_link.append(_is_link(sp))
         rail_xy, rail_gxy = [], []
         if rail or rail_g:

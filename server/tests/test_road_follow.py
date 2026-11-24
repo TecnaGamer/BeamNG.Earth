@@ -32,6 +32,18 @@ class FollowTest(unittest.TestCase):
             self.assertEqual(grading.profile_sigma(roads.Spec(4.0, "gravel", False, "track")),
                              grading.DIRT_SIGMA_MINOR_M)      # dirt roads as before
 
+    def test_median_shorter_below_trunk_roads_only(self):
+        with mock.patch.object(grading, "FOLLOW_ON", False):
+            self.assertEqual(grading.profile_median(spec("tertiary")), grading.MEDIAN_M)
+        with mock.patch.object(grading, "FOLLOW_ON", True):
+            self.assertEqual(grading.profile_median(spec("tertiary")), grading.FOLLOW_MEDIAN_M)
+            self.assertEqual(grading.profile_median(spec("primary", link=True)), grading.FOLLOW_MEDIAN_M)
+            # (motorways and trunks keep the long median that takes coarse elevation's tree and bridge spikes out, #271)
+            self.assertEqual(grading.profile_median(spec("motorway")), grading.MEDIAN_M)
+            self.assertEqual(grading.profile_median(spec("trunk")), grading.MEDIAN_M)
+            self.assertEqual(grading.profile_median(roads.Spec(4.0, "gravel", False, "track")), grading.DIRT_MEDIAN_M)
+        self.assertEqual(grading.MEDIAN_M, float(os.environ.get("BNE_GRADE_MEDIAN", "24")))   # (never changed in place)
+
     def test_on_keeps_a_100m_dip(self):
         s = np.arange(0.0, 600.0, grading.PROFILE_STEP)
         z = -2.0 * np.exp(-((s - 300.0) / 25.0) ** 2)         # a 2 m dip about 100 m across
