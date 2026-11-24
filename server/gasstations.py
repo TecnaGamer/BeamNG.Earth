@@ -104,6 +104,7 @@ class Station:
     confirmed: bool     # a gas_station pin or a fuel brand; else a convenience brand that needs a canopy
     trusted: bool = True    # its records current (TRUST_CONF): a station mapped as one building needs it
     osm: bool = False       # OpenStreetMap has a fuel station here (with_osm): confirmed, and named for fuel by it
+    fuel_bounds: tuple = ()  # ENU bounds of an explicitly mapped fuel area, when available.
 
 
 def _candidates(f):
@@ -256,14 +257,21 @@ def with_osm(stations, osm):
         near = [o for o in osm if math.hypot(o["x"] - st.x, o["y"] - st.y) <= OSM_CONFIRM_M]
         if near:
             used.update(o["id"] for o in near)
-            st = Station(st.id, st.x, st.y, st.name, st.brand, st.pins, True, True, True)
+            areas = [o["fuel_bounds"] for o in near if o.get("fuel_bounds")]
+            bounds = ()
+            if len(areas) == 1:
+                x0, y0, x1, y1 = areas[0]
+                occupants = [s for s in stations if x0 <= s.x <= x1 and y0 <= s.y <= y1]
+                if len(occupants) == 1 and occupants[0] is st:
+                    bounds = areas[0]
+            st = Station(st.id, st.x, st.y, st.name, st.brand, st.pins, True, True, True, bounds)
         out.append(st)
     for o in osm:
         if o["id"] in used or any(math.hypot(o["x"] - s.x, o["y"] - s.y) <= OSM_CONFIRM_M for s in out):
             continue
         name = o.get("name") or o.get("brand") or "Gas station"
         out.append(Station("osm%x" % int(o["id"]), float(o["x"]), float(o["y"]), name, o.get("brand") or "",
-                           ("osm:%d" % int(o["id"]),), True, True, True))
+                           ("osm:%d" % int(o["id"]),), True, True, True, o.get("fuel_bounds", ())))
     return out
 
 
@@ -1563,6 +1571,16 @@ def _layout(st, blds, roads, service=(), style="default"):
     (_one_building_site); failing that, a pump pair anywhere open near the pin (_wide_pair_site): each only where
     nothing before it is laid out, so no station that has a forecourt today changes."""
     site = _layout_core(st, blds, roads, service, style)
+    if site is not None and not site.drop_ids and st.fuel_bounds:
+        # An imagery outline coinciding with the mapped forecourt can masquerade as
+        # the shop, leaving pumps outside its solid walls. Compare all four sides.
+        shop = next((b for b in blds if b.id == site.shop_id), None)
+        if shop is not None and not shop.name and not shop.cls:
+            bounds = np.r_[shop.ring.min(0), shop.ring.max(0)]
+            if np.max(np.abs(bounds - st.fuel_bounds)) <= 3 and _pin_building(st, blds) is shop:
+                canopy_site = _one_building_site(st, blds, roads, service, style)
+                if canopy_site is not None:
+                    return canopy_site
     if site is None:
         site = _one_building_site(st, blds, roads, service, style)
     if site is None:
@@ -1995,6 +2013,9 @@ def _osm_points(frame, cells, amenity="fuel"):
             e, n, _ = frame.geodetic_to_enu((y0 + y1) / 2, (x0 + x1) / 2, 0.0)
             out.append({"id": r["id"], "x": float(e), "y": float(n), "name": r.get("name") or "",
                         "brand": r.get("brand") or ""})
+            if amenity == "fuel" and x1 > x0 and y1 > y0:
+                ex, ny, _ = frame.geodetic_to_enu(np.array([y0,y1]), np.array([x0,x1]), np.zeros(2))
+                out[-1]["fuel_bounds"] = (float(min(ex)), float(min(ny)), float(max(ex)), float(max(ny)))
     return out
 
 

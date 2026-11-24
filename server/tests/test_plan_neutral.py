@@ -77,6 +77,10 @@ PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARE
               "BNE_BATTER", "BNE_ROADSHAPE", "BNE_SIDEWALK_V2", "BNE_ROADSURF_V3")
 # Experimental switches the planning does not read that are still NOT on the list, and why (each keeps its keys)
 NOT_LISTED = {
+    "BNE_STOREFRONTS": "road tiles export cached storefront meshes and replace procedural building geometry; "
+                       "the local-only side-effect proof does not cover that pipeline",
+    "BNE_LOCAL_BUSINESS_SIGNS": "streamedstores.models updates the caller's building facade and door layout and "
+                               "exports its signs into the model cache; shared plans are not proven for this switch",
     "BNE_SURFACE_V2": "road tiles' surface overlays and marking lift only (roadmesh / roadwear, revamp v2 P1c); comes with the Revamped roads setting, whose other switches the plans read, so it stays keyed with it",
     "BNE_GEN_GROUND": "its gated code (the base photo with other arguments: genground.render, blockworker.base_photo, "
                       "earthd.Server._base_in) stores into the server's own state and drives the photo pipeline whose "

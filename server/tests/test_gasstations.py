@@ -712,6 +712,17 @@ class LayoutTest(unittest.TestCase):
         site = gs.layout(st, [store, roof], ROAD)
         self.assertEqual((site.shop_id, site.drop_ids), ("store", ("roof",)))
 
+    def test_fuel_area_survives_unambiguous_pin_merge(self):
+        bounds = (-10., -20., 10., 20.)
+        area = dict(id=1, x=0., y=0., fuel_bounds=bounds)
+        def station(key, x):
+            return gs.Station(key, x, 0., "Pump", "", (key,), True)
+        inside, outside = station("in", 1.), station("out", 15.)
+        merged = gs.with_osm([inside, outside], [area])
+        self.assertEqual([s.fuel_bounds for s in merged], [bounds, ()])
+        self.assertFalse(any(s.fuel_bounds for s in gs.with_osm([inside, station("two", 2.)], [area])))
+        self.assertFalse(gs.with_osm([inside], [area, dict(area, id=2)])[0].fuel_bounds)
+
     def test_with_osm(self):
         # (the OSM test, 2026-10-28: "lets test OSM if it is too laggy we will revert") OpenStreetMap's fuel stations
         # (osmfuel.py) confirm a listing within OSM_CONFIRM_M and are stations themselves where nothing is listed
