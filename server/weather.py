@@ -81,6 +81,31 @@ def fetch(lat, lon, net=None):
         return json.loads(net.get(url(lat, lon), kind="background").body.decode("utf-8"))
 
 
+# The snow kernel's hourly forcing (winter W1, BNE_WINTER: server/snow.py; ~/bnge-tests/winterplan PROBES.md P9: every
+# name valid, past_days 10 + forecast_days 1 = 264 hours in one call). snowfall in cm is left out: Open-Meteo makes it
+# with a fixed 7:1 ratio; the kernel takes the water equivalent and its own density. 12 variables count ~1.2 calls.
+SNOW_HOURLY = ("temperature_2m", "dew_point_2m", "wet_bulb_temperature_2m", "precipitation",
+               "snowfall_water_equivalent", "wind_speed_10m", "shortwave_radiation", "soil_temperature_0cm",
+               "freezing_level_height", "snow_depth", "relative_humidity_2m", "cloud_cover")
+SNOW_PAST_DAYS = 10
+SNOW_FORECAST_DAYS = 1
+
+
+def hourly_url(lat, lon):
+    q = {"latitude": f"{lat:.4f}", "longitude": f"{lon:.4f}", "hourly": ",".join(SNOW_HOURLY),
+         "past_days": SNOW_PAST_DAYS, "forecast_days": SNOW_FORECAST_DAYS, "wind_speed_unit": "ms",
+         "timeformat": "unixtime", "timezone": "auto", "cell_selection": "land"}
+    return API + "?" + urllib.parse.urlencode(q, safe=",")
+
+
+def fetch_hourly(lat, lon, net=None):
+    """The snow kernel's hourly forcing at (lat, lon): one Open-Meteo GET (blocking) through net, the parsed JSON, under
+    the same "background" limits as fetch (10 s apart, the 500-a-day cap)."""
+    net = net if net is not None else netfetch.default_fetcher()
+    with netfetch.stale_ok():
+        return json.loads(net.get(hourly_url(lat, lon), kind="background").body.decode("utf-8"))
+
+
 def _f(v, default=0.0):
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else default
 

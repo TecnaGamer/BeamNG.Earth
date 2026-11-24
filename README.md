@@ -414,8 +414,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   orchards and vineyards in rows, paths, tracks, hedges, streams, piers, tree heights, roads and buildings, graded to
   the season, instead of 1 m aerial photos, which are then not downloaded at all, for roof colours neither; less real
   detail where the map has none);
-  **Show the older world while rebuilding** (after an update). A switch set by hand in the server's environment wins
-  over the page.
+  **Show the older world while rebuilding** (after an update); **Winter grip** (`BNE_WINTER=on`: roads get slippery
+  when the real weather brings snow, slush, frost or ice, from an hourly snow model of the last 10 days' weather; main
+  roads are cleared and salted first and bridges freeze first; the road's condition shows in the status bar; no white
+  ground yet. `BNE_WINTER=light` or `ice` forces a fixed light-snow or ice-storm state). A switch set by hand in the
+  server's environment wins over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
   memory below 24 GB (about 5 GB on a 16 GB PC, at least 1.5 GB) and 60 % of it on a bigger computer, at most 24 GB

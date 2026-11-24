@@ -85,6 +85,7 @@ NOT_LISTED = {
     "BNE_FR_HOUSES": "comes only with BNE_FR_ROADS and BNE_EU_ROAD_DETAILS (the EU scenery setting), which the plans "
                      "read; its gated code also stores into its callers' objects (buildings.tile_buildings)",
     "BNE_STALE_REVISIT": "no build switch at all (revisit.NOT_SWITCHES)",
+    "BNE_WINTER": "no build switch at all (revisit.NOT_SWITCHES): a live snowstate message only (snow.py)",
     "BNE_TUNNEL_ROAD_OVER": "road tiles' tunnel entrances only (portals.fit: the headwall's top under a road crossing "
                             "over the mouth); not yet proven plan-neutral both ways, so it stays keyed with the "
                             "Revamped roads setting",

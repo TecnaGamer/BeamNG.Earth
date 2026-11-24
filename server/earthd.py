@@ -185,6 +185,7 @@ import fast  # noqa: E402
 import protocol  # noqa: E402
 msgs = protocol.ef  # noqa: E402  (made in Rust: far_tile, far_swap, far_remove, far_done, status, load_progress)
 import weather as weathermod  # noqa: E402
+import snow as snowmod  # noqa: E402
 
 PROTOCOL = 4
 SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; reconcile on reconnect (PR #817 had 8 MiB:
@@ -1494,6 +1495,8 @@ class Server:
         self._prune_scheduled = set()
         # Real weather at the player (weather.py): a weathermod.Service, or None (--weather off)
         self.weather = weather
+        # Winter W1 (snow.py): a snowmod.Service when BNE_WINTER is set (main), else None: no snowstate at all
+        self.snow = None
         # Real gravity at the player (gravity.py): a gravitymod.Provider, or None (--gravity off)
         self.gravity = gravity
         # On-screen data credits (credits.py): a creditsmod.Credits, or None (--credits off; Server()'s default)
@@ -7820,6 +7823,7 @@ class Connection:
         self.radius_sent = None
         self.zmax_region = None
         self.weather = weathermod.Tracker()     # real weather: fetch rule, last message sent
+        self.snow = snowmod.Tracker()           # winter W1 (BNE_WINTER): the snow state's rule, last message sent
         self.road_geo = False                   # road tiles as geotiles (hello.geoTiles, Server.roads_geo_ok)
         self.roads = roadsmod.Tracker()         # road tiles sent to the mod (--roads on)
         self.signs = signstream.Tracker()       # their highway signs (key "s<tx>_<ty>")
@@ -9227,6 +9231,8 @@ class Connection:
                 self.send(self.weather.msg)
             if self.gravity.msg is not None:        # ... and its gravity
                 self.send(self.gravity.msg)
+            if self.snow.msg is not None:           # ... and its snow (BNE_WINTER)
+                self.send(self.snow.msg)
             if self.credits.msg is not None:        # ... and the data credits
                 self.send(self.credits.msg)
             if self.s.net_note():                   # --offline / hosts down: say so at once
@@ -10371,6 +10377,8 @@ class Connection:
 
     def _pose_ground(self, aid, x, y, vx, vy, msg):
         self.gravity.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0))
+        if self.s.snow is not None:         # (BNE_WINTER only)
+            self.snow.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0))
         self.ground_ahead(aid, x, y, vx, vy)
         self.deck_spans(aid, x, y)
         if self.s.sea is not None:
@@ -11837,6 +11845,9 @@ async def main_async(args, restart=None):
                     sea=seacarvemod.SeaCarver(mapdata, args.cache_dir) if args.sea == "on" else None,
                     vegetation=(vegetationmod.Vegetation(mapdata, args.cache_dir) if args.trees == "on" else None))
     server.make_fast_pool = make_fast_pool
+    if snowmod.ON:      # (BNE_WINTER: real snow from the weather's source, or a preset with no network)
+        server.snow = snowmod.Service(fetch=lambda lat, lon: weathermod.fetch_hourly(lat, lon, net=net))
+        log.info("winter: snow state %s", snowmod.MODE)
     if late_pool is not None:
         server.start_late(late_pool)
     if budget.TREE_MB or budget.LOW_FREE_GB:    # (this process's own caches: dropped by the free memory / the budget)

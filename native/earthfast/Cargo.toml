@@ -80,6 +80,10 @@ intel_tex_2 = "=0.5.0"
 ispc_rt = "=2.0.4"
 num_cpus = "=1.17.0"
 
+[lints.rust]
+# snow.rs builds alone (rustc --cfg snow_standalone, without its PyO3 calls) for the Linux / Windows determinism check
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(snow_standalone)"] }
+
 [profile.release]
 opt-level = 3
 lto = true

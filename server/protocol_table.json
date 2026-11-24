@@ -1001,6 +1001,26 @@
     "source": {"type": "str"}
    }
   },
+  "snowstate": {
+   "doc": "winter W1 (snow.py, BNE_WINTER only; additive, protocol 4): the snow kernel's state at the player for the UTC hour t; ground [depth mm, bin 0..6, cover 0..8, wet, crust, SWE mm, hours since snow]; roads / bridges per plow class P0..P4 [condition, lane depth mm, pavement degC, edge condition, edge depth mm, grit 0/1, wheel tracks 0..1]; bands [z m, depth mm facing the pole, facing the equator, forest floor]; winter.lua applies it",
+   "fields": {
+    "v": {"type": "int"},
+    "t": {"type": "int"},
+    "src": {"type": "str"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "elevM": {"type": "int"},
+    "cellElevM": {"type": "int"},
+    "regime": {"type": "int"},
+    "airC": {"type": "num"},
+    "surfC": {"type": "num"},
+    "ground": {"type": "list"},
+    "roads": {"type": "list"},
+    "bridges": {"type": "list"},
+    "bands": {"type": "list"},
+    "credit": {"type": "str"}
+   }
+  },
   "block_base": {
    "doc": "detail mode: a block's base photo rendered again once its NAIP tiles arrived (earthd base_refresh)",
    "fields": {

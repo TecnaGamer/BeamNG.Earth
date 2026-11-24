@@ -77,6 +77,7 @@ import deshadow as deshadowmod  # noqa: E402
 import gravity as gravitymod  # noqa: E402
 import test_weather  # noqa: E402
 import weather  # noqa: E402
+import snow as snowmod  # noqa: E402
 
 NUM = (int, float)
 OPT = "optional"            # may be absent
@@ -240,7 +241,7 @@ def mod_sends():
 def mod_reads():
     """Fields the mod reads from server messages: msg.X / p.msg.X / tr.X (terrain) in its Lua."""
     out = set()
-    for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "credits.lua", "roads.lua", "mpsession.lua",
+    for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "winter.lua", "credits.lua", "roads.lua", "mpsession.lua",
                  "addons.lua", "api.lua", "reportsend.lua", "terrainfiles.lua"):
         text = code_only((LUA / name).read_text(encoding="utf-8"), "--")
         out |= set(re.findall(r"\bmsg\.(\w+)", text))
@@ -691,6 +692,7 @@ class ServerMessagesTest(test_server.ServerHarness):
     def setUp(self):
         super().setUp()
         self.server.weather = weather.Service(fetch=test_weather.FakeFetch())     # no network
+        self.server.snow = snowmod.Service(mode="light")       # winter W1 (BNE_WINTER): a preset, no network either
         self.server.gravity = gravitymod.Provider(model=gravitymod.GravityModel.from_npz(GRAVITY_FIXTURE),
                                                   download=False)               # no network either
         self.server.credits = creditsmod.Credits(interval=0.1)
@@ -766,6 +768,10 @@ class ServerMessagesTest(test_server.ServerHarness):
                     self.assertEqual(set(m[k]), fields, (k, m))
                     self.assertTrue(all(isinstance(v, NUM) for v in m[k].values()), (k, m))
             self.assertEqual((m["v"], m["credit"]), (weather.VERSION, weather.CREDIT))
+        if kind == "snowstate":
+            self.assertEqual((m["v"], m["src"]), (snowmod.VERSION, "light"))
+            self.assertEqual((len(m["ground"]), len(m["roads"]), len(m["bridges"]), len(m["bands"])), (7, 5, 5, 8))
+            self.assertTrue(all(len(r) == 7 and isinstance(r[0], str) for r in m["roads"] + m["bridges"]), m)
         if kind == "gravity":
             self.assertEqual((m["v"], m["source"]), (gravitymod.MSG_VERSION, "egm2008"))
             self.assertTrue(9.75 < m["g"] < 9.85, m)
