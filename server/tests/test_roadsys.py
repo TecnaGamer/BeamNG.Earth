@@ -411,9 +411,14 @@ class SwitchTest(unittest.TestCase):
         i = src.index("if roadsys.HEIGHTS and not roadshape.PROFILE_BUILT:")
         self.assertIn("roadsys.pins_near(", src[i:i + 400])
 
-    def test_not_on_the_settings_page(self):
+    def test_only_with_the_revamped_roads_setting(self):
+        # (the user, 2026-11-24: "make sure the revamped roads toggle uses the updated rewritten roads": no page entry
+        # of its own, only inside Revamped roads, at the M4 surface mode with the areas fit and cross-sections)
         import experimental
-        self.assertFalse(any("BNE_ROADSYS" in env for _sid, env, _n in experimental.FEATURES))
+        holders = [sid for sid, env, _n in experimental.FEATURES if any(k.startswith("BNE_ROADSYS") for k in env)]
+        self.assertEqual(holders, ["expRoadRevamp"])
+        env = {sid: env for sid, env, _n in experimental.FEATURES}["expRoadRevamp"]
+        self.assertEqual((env["BNE_ROADSYS"], env["BNE_ROADSYS_AREAS"], env["BNE_ROADSYS_XSEC"]), ("surface", "on", "on"))
 
     def test_the_tile_path_only_reads_the_flag(self):
         src = (HERE / "blockworker.py").read_text(encoding="utf-8")
