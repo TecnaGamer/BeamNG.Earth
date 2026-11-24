@@ -406,7 +406,7 @@ class _OsmTagsSource:
 def _stand_in_stale(f):
     """Is decoded layer f a stand-in (_bnge_fallback: when it was decoded) older than STAND_IN_S?"""
     t = getattr(f, "__dict__", {}).get("_bnge_fallback")
-    return t is not None and time.monotonic() - t > STAND_IN_S
+    return t is not None and time.monotonic() - t >= STAND_IN_S   # (>=: a coarse clock (Windows: 15.6 ms ticks) can read 0.0 since)
 
 
 class MapData:
