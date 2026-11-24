@@ -1,0 +1,381 @@
+import itertools
+from xml.etree import ElementTree
+
+import numpy as np
+from polygon import contains_points
+from storeidentity import CHAIN_GROUPS, LocalSign, category_family, normalized_name
+
+MAX_TENANT_FRONTAGE_DEPTH_M = 15.0
+
+ALIASES = {
+    "bass pro shops outdoor world": "Bass Pro Shops",
+    "cracker barrel old country store": "Cracker Barrel",
+    "bojangles'": "Bojangles",
+    "freddy's": "Freddy's Frozen Custard & Steakburgers", "church's chicken": "Church's Texas Chicken",
+    "hyvee": "Hy-Vee", "fry's food and drug": "Fry's Food Stores", "kingsoopers": "King Soopers",
+    "at&t store": "AT&T", "verizon wireless": "Verizon",
+    "in-n-out": "In-N-Out Burger", "in n out burger": "In-N-Out Burger",
+    "amc": "AMC Theatres", "amc theaters": "AMC Theatres", "regal": "Regal Cinemas",
+    "tj maxx": "T.J. Maxx", "t.j.maxx": "T.J. Maxx", "ross": "Ross Dress for Less",
+    "harbor freight": "Harbor Freight Tools", "tractor supply company": "Tractor Supply Co.",
+    "tractor supply": "Tractor Supply Co.", "dick's": "Dick's Sporting Goods",
+    "sprouts": "Sprouts Farmers Market", "chipotle mexican grill": "Chipotle",
+    "papa john's": "Papa Johns", "raising cane's chicken fingers": "Raising Cane's",
+    "jersey mike's": "Jersey Mike's Subs", "whole foods": "Whole Foods Market",
+}
+
+BRANDS = {"Q38076": "McDonald's", "Q153417": "Kroger", "Q483551": "Walmart"}
+
+NAMES = {name.casefold(): name for _, names in CHAIN_GROUPS for name in names}
+active_names = set(NAMES.values())
+NAMES.update(ALIASES)
+NAMES.update({
+    "walmart supercenter": "Walmart", "walmart neighborhood market": "Walmart",
+    "publix super market": "Publix", "costco wholesale": "Costco",
+    "home depot": "The Home Depot", "lowe's home improvement": "Lowe's",
+    "cvs pharmacy": "CVS", "walgreens pharmacy": "Walgreens",
+    "five guys famous burgers and fries": "Five Guys",
+})
+
+
+NAMES = {normalized_name(key): name for key, name in NAMES.items() if name in active_names}
+
+
+def chain(value, cinema=False):
+    label = normalized_name(value)
+    if cinema:
+        for prefix in ("amc", "regal", "cinemark"):
+            if label.startswith(prefix + " "):
+                return NAMES.get(prefix)
+    if label == "burlington coat factory" or label.startswith("burlington coat factory "):
+        return NAMES.get("burlington")
+    return NAMES.get(label)
+
+
+def brand(tags):
+    labels = {chain(tags.get(key), tags.get("amenity") == "cinema") for key in ("brand", "name")}
+    if tags.get("drive_in") == "yes":
+        return None
+    labels.add(BRANDS.get(tags.get("brand:wikidata")))
+    for (key, types), names in CHAIN_GROUPS:
+        if tags.get(key) in types:
+            for name in names:
+                if name in labels:
+                    return name
+
+
+COMPASS_BEARINGS = {point: i * 22.5 for i, point in enumerate(
+    "N NNE NE ENE E ESE SE SSE S SSW SW WSW W WNW NW NNW".split()
+)}
+
+
+def sign_bearing(value):
+    """Read a mapped sign's facing. Either face orients a two-sided sign."""
+    for face in str(value).upper().split(";"):
+        face = face.strip()
+        if face in COMPASS_BEARINGS:
+            return COMPASS_BEARINGS[face]
+        try:
+            bearing = float(face)
+        except ValueError:
+            continue
+        if np.isfinite(bearing):
+            return bearing % 360
+    return None
+
+
+def sign_endpoints(location, height, facing, nearby_roads):
+    """Return lon/lat panel endpoints. Roads are metre offsets from the mapped sign."""
+    if facing is None:
+        nearest = 100.
+        for road in nearby_roads:
+            edges = np.diff(road, axis=0)
+            if not len(edges):
+                continue
+            length2 = np.sum(edges**2, axis=1)
+            along = np.clip(-np.sum(road[:-1]*edges, axis=1) / np.maximum(length2, 1e-12), 0, 1)
+            dist = np.linalg.norm(road[:-1] + along[:, None]*edges, axis=1)
+            dist[length2 == 0] = np.inf
+            k = int(dist.argmin())
+            if dist[k] < nearest:
+                nearest = dist[k]
+                facing = np.degrees(np.arctan2(edges[k, 0], edges[k, 1]))
+    if facing is None or not np.isfinite(facing):
+        return None
+    angle = np.radians(facing)
+    scale = np.array([111320*np.cos(np.radians(location[1])), 111132])
+    half = np.array([np.cos(angle), -np.sin(angle)]) * min(2.5, height*.32) / scale
+    return np.array([location-half, location+half])
+
+
+def parking_frontage(coords, point, parking, *, entrances=(), walks=()):
+    """Estimate a short sign panel on a wall supported by both a tenant point and parking in front."""
+    if not (len(parking) or len(entrances) or len(walks)):
+        return None
+    scale = np.array([111320 * np.cos(np.radians(point[1])), 111132])
+    ring = (coords - point) * scale
+    edges = np.roll(ring, -1, axis=0) - ring
+    widths = np.linalg.norm(edges, axis=1)
+    along = np.clip(-np.sum(ring * edges, axis=1) / np.maximum(widths**2, 1e-12), 0, 1)
+    closest = ring + along[:, None] * edges
+    distances = np.linalg.norm(closest, axis=1)
+    first, second = distances.argsort()[:2]
+    if distances[first] > MAX_TENANT_FRONTAGE_DEPTH_M or distances[second] < distances[first] + 5:
+        return None
+    if widths[first] < 6:
+        return None
+    axis = edges[first] / widths[first]
+    if np.sum(ring[:, 0] * edges[:, 1] - ring[:, 1] * edges[:, 0]) < 0:
+        axis = -axis
+    normal = np.array([axis[1], -axis[0]])
+    def supports(points, minimum, maximum, lateral):
+        if not len(points):
+            return False
+        ahead = (np.asarray(points)-point)*scale-closest[first]
+        depth = ahead @ normal
+        return np.any((depth >= minimum) & (depth <= maximum) & (np.abs(ahead @ axis) <= lateral))
+
+    if not (supports(parking,2.,45.,20.) or supports(entrances,-1.5,1.5,4.)
+            or supports(walks,1.,16.,8.)):
+        return None
+    half = min(10., min(along[first], 1-along[first]) * widths[first] - 1)
+    if half < 3:
+        return None
+    return point + np.array([closest[first] - half * axis, closest[first] + half * axis]) / scale
+
+
+def public_ground(tags):
+    return (tags.get("access", "yes") in {"customers", "yes", "public", "permissive"}
+            and tags.get("level", "0") == "0" and tags.get("foot") != "no")
+
+
+def business(tags):
+    known = brand(tags)
+    if known:
+        return known
+    label = " ".join((tags.get("name") or tags.get("brand") or "").split())
+    if not 2 <= len(label) <= 80 or not label.isprintable() or chain(label):
+        return None
+    family = category_family({tags.get("shop"), tags.get("amenity")})
+    if family in {"dining_room", "counter"} and tags.get("amenity") in {"restaurant", "fast_food"}:
+        family = {"pizza": "pizzeria", "sandwich": "sandwich_shop"}.get(tags.get("cuisine"), family)
+    return LocalSign(label, family) if family else None
+
+
+def matches(path):
+    tree = ElementTree.parse(path)
+
+    def tags(element):
+        return {t.get("k"): t.get("v") for t in element.findall("tag")}
+
+    nodes = {n.get("id"): n for n in tree.findall("node")}
+
+    def point(n):
+        return [float(n.get("lon")), float(n.get("lat"))]
+
+    path_ends = set()
+    address_roads = {}
+    parking = []
+    buildings = []
+    units = []
+    for way in tree.findall("way"):
+        refs = [n.get("ref") for n in way.findall("nd")]
+        if any(ref not in nodes for ref in refs):
+            continue  # Partial extracts may omit nodes outside the download boundary.
+        attributes = tags(way)
+        if (len(refs) >= 2 and refs[0] != refs[-1] and attributes.get("highway") in {"footway","path","pedestrian"}
+                and public_ground(attributes) and attributes.get("indoor") != "yes"):
+            path_ends.update((refs[0], refs[-1]))
+        if attributes.get("name") and attributes.get("highway") in {
+            "primary", "secondary", "tertiary", "residential", "unclassified", "living_street"
+        } and len(refs) >= 2:
+            road = np.array([point(nodes[r]) for r in refs])
+            address_roads.setdefault(attributes["name"].casefold(), []).append(road)
+        if attributes.get("service") == "parking_aisle":
+            parking.extend(point(nodes[r]) for r in refs)
+        if len(refs) < 4 or refs[0] != refs[-1]:
+            continue
+        props = tags(way)
+        coords = np.array([point(nodes[r]) for r in refs[:-1]])
+        if not np.isfinite(coords).all():
+            continue
+        distinct = np.any(coords != np.roll(coords, 1, axis=0), axis=1)
+        coords = coords[distinct]
+        refs = [r for r, keep in zip(refs[:-1], distinct) if keep]
+        if len(coords) < 3:
+            continue
+        local = coords - coords[0]
+        area2 = np.sum(
+            local[:, 0] * np.roll(local[:, 1], -1)
+            - local[:, 1] * np.roll(local[:, 0], -1)
+        )
+        if abs(area2) < 1e-16:
+            continue
+        refs.append(refs[0])
+        if props.get("amenity") == "parking":
+            parking.append(coords.mean(0))
+        if not props.get("building") and props.get("level") == "0":
+            unit = business(props)
+            if unit or props.get("shop") or props.get("amenity"):
+                units.append((way.get("id"), refs, unit, props.get("indoor") in {"yes", "room"}))
+        if props.get("building") and props["building"] != "no":
+            buildings.append((way.get("id"), coords, props, refs))
+    # A tagged advertising totem has its own location. Keep ordinary advertising billboards
+    # on the existing billboard path; their operator need not be the advertised business.
+    for node in nodes.values():
+        props = tags(node)
+        if props.get("advertising") != "totem":
+            continue
+        name = chain(props.get("brand")) or chain(props.get("name"))
+        if not name:
+            continue
+        try:
+            height = float(props.get("height", 6))
+        except ValueError:
+            continue
+        if not 2 <= height <= 20:
+            continue
+        location = np.array(point(node))
+        scale = np.array([111320*np.cos(np.radians(location[1])), 111132])
+        roads = ((road-location)*scale for lines in address_roads.values() for road in lines)
+        endpoints = sign_endpoints(location, height, sign_bearing(props.get("direction")), roads)
+        if endpoints is not None:
+            yield (name, "totem_" + node.get("id"), endpoints, None, [], None, height)
+
+    tenant_points = []
+    for node in nodes.values():
+        attrs = tags(node)
+        if attrs.get("level", "0") == "0" and attrs.get("name") and (attrs.get("shop") or attrs.get("amenity")):
+            tenant_points.append((node.get("id"), business(attrs), np.array(point(node)),
+                                  attrs.get("indoor") in {"yes", "room"}))
+        elif (tenant := brand(attrs)) and attrs.get("level", "0") == "0":
+            tenant_points.append((node.get("id"), tenant, np.array(point(node)), attrs.get("indoor") in {"yes", "room"}))
+    parking = np.asarray(parking).reshape(-1, 2)
+    for ident, coords, props, refs in buildings:
+        lo, hi = coords.min(0), coords.max(0)
+        name = business(props)
+        if isinstance(name, LocalSign):
+            try:
+                low_rise = float(props.get("building:levels", 1)) <= 2 and float(props.get("height", 0)) <= 14
+            except ValueError:
+                low_rise = False
+            if (not low_rise or props["building"] not in {"yes", "retail", "commercial", "supermarket", "kiosk"}
+                    or props.get("shop") == "mall" or props.get("indoor") in {"yes", "room"}
+                    or not public_ground(props)):
+                name = None
+            elif any(occupant != name and np.all(point_ > lo) and np.all(point_ < hi)
+                     and contains_points(coords, [point_])[0] for _, occupant, point_, _ in tenant_points):
+                name = None
+        # Prefer a mapped tenant wall over an inferred parking-facing panel.
+        exterior = {
+            frozenset((a, b)): i for i, (a, b) in enumerate(itertools.pairwise(refs))
+        }
+        has_unit = False
+        for unit_id, unit_refs, unit_name, indoor in units:
+            shared = [
+                exterior[edge]
+                for a, b in itertools.pairwise(unit_refs)
+                if (edge := frozenset((a, b))) in exterior
+            ]
+            if not shared:
+                if isinstance(name, LocalSign) and unit_name != name:
+                    unit_points = np.array([point(nodes[r]) for r in unit_refs[:-1]])
+                    if (np.all(unit_points >= lo) and np.all(unit_points <= hi)
+                            and np.all(contains_points(coords, unit_points))):
+                        has_unit = True
+                continue
+            interior = [point(nodes[r]) for r in unit_refs[:-1] if r not in refs]
+            if not interior or not all(contains_points(coords, interior)):
+                continue
+            has_unit = True
+            if not unit_name:
+                continue
+            # A door node splits a straight shared wall into two OSM edges.
+            sides = set(shared)
+            starts = [i for i in sides if (i-1) % len(coords) not in sides]
+            if len(starts) != 1:
+                continue
+            indices = [(starts[0]+j) % len(coords) for j in range(len(sides)+1)]
+            span = coords[[indices[0],indices[-1]]]
+            scale = [111320*np.cos(np.radians(span[0,1])),111132]
+            line = (span[1]-span[0])*scale
+            if np.linalg.norm(line) < 2:
+                continue
+            axis = line/np.linalg.norm(line)
+            wall = (coords[indices]-span[0])*scale
+            if np.max(np.abs(wall @ [-axis[1],axis[0]])) > .25 or np.any(np.diff(wall @ axis) <= 0):
+                continue  # Multiple sides or a recessed corner cannot share one flat tenant panel.
+            unit_doors = []
+            for j in indices[1:-1]:
+                t = tags(nodes[refs[j]])
+                if (t.get("entrance") in {"yes","main"} and public_ground(t) and t.get("amenity") != "loading_dock"):
+                    unit_doors.append((coords[j],False))
+            if indoor and not unit_doors:
+                continue
+            # Host ring winding determines which side faces outside.
+            ring = coords - coords[0]
+            signed_area = sum(
+                a[0] * b[1] - b[0] * a[1]
+                for a, b in zip(ring, np.roll(ring, -1, axis=0))
+            )
+            if signed_area < 0:
+                span = span[::-1]
+            yield unit_name, unit_id, span, None, unit_doors, None
+        if not name and not has_unit and props.get("building") == "retail":
+            for node_id, tenant, location, indoor in tenant_points:
+                if indoor or not tenant or not (np.all(location > lo) and np.all(location < hi) and contains_points(coords, [location])[0]):
+                    continue
+                panel = parking_frontage(coords, location, parking)
+                if panel is not None:
+                    yield tenant, "poi_" + node_id, panel, None, [], None
+        if (
+            not name
+            or has_unit
+            or props.get("building")
+            in {"apartments", "office", "mixed_use", "residential", "hotel"}
+        ):
+            continue
+        center = (lo + hi) / 2
+        scale = np.array([111320 * np.cos(np.radians(center[1])), 111132])
+        marked, inferred, docks = [], [], []
+        for ref in refs[:-1]:
+            attributes = tags(nodes[ref])
+            if attributes.get("amenity") == "loading_dock":
+                docks.append(point(nodes[ref]))
+            elif public_ground(attributes):
+                if attributes.get("entrance") in {"yes","main"}:
+                    marked.append(point(nodes[ref]))
+                elif "entrance" not in attributes and ref in path_ends:
+                    inferred.append(point(nodes[ref]))
+        doors = marked or inferred
+        # When the door is unmapped, a store's addressed street identifies its public approach.
+        road_points = []
+        for road in address_roads.get(props.get("addr:street", "").casefold(), []):
+            starts = (road[:-1] - center) * scale
+            segments = np.diff(road, axis=0) * scale
+            along = np.clip(-np.sum(starts * segments, axis=1) /
+                            np.maximum(np.sum(segments**2, axis=1), 1e-12), 0, 1)
+            nearest = starts + along[:, None] * segments
+            offset = nearest[np.argmin(np.linalg.norm(nearest, axis=1))]
+            if 1 <= np.linalg.norm(offset) <= np.linalg.norm((hi - lo) * scale) / 2 + 100:
+                road_points.append(center + offset / scale)
+        targets = road_points or doors or parking
+        if len(targets) == 0:
+            continue
+        offset = min(
+            ((target - center) * scale for target in targets), key=np.linalg.norm
+        )
+        if (
+            np.linalg.norm(offset) > np.linalg.norm((hi - lo) * scale) / 2 + 100
+            or np.linalg.norm(offset) < 1
+        ):
+            continue
+        fixtures = [(p, False) for p in doors] + [(p, True) for p in docks]
+        yield (
+            name,
+            ident,
+            coords,
+            offset / np.linalg.norm(offset),
+            fixtures,
+            props.get("building:material"),
+        )
