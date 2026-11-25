@@ -8,7 +8,7 @@
 //! Quiet (rain and thunder faded to silence, the device kept open) while the mod says muted (paused, unfocused), when
 //! its lines stop for HEARTBEAT_S (a hung game), and in Pre-recorded mode.
 //!
-//!   weathersynth live-serve [--thunder procedural|files:DIR] [--seed N]
+//!   weathersynth live-serve [--thunder procedural|files:DIR] [--seed N] [--buffer FRAMES (default 256)]
 
 use crate::live::Controls;
 use crate::proto::Msg;
@@ -37,14 +37,18 @@ pub fn mix_for(m: Option<&Msg>, stale: bool) -> (Controls, f64) {
     (rain, thunder)
 }
 
-pub fn state_line(latency_ms: f64, underruns: u64, renderer: &str, counts: (u64, u64, u64, usize)) -> String {
+/// buf: (the largest callback in frames, the ring's fill target in frames, whether the fixed buffer was taken)
+pub fn state_line(latency_ms: f64, underruns: u64, renderer: &str, counts: (u64, u64, u64, usize), buf: (u32, u32, bool)) -> String {
     format!(
-        "{{\"state\":\"live\",\"latencyMs\":{:.1},\"underruns\":{underruns},\"renderer\":{},\"rendered\":{},\"late\":{},\"dropped\":{}}}",
+        "{{\"state\":\"live\",\"latencyMs\":{:.1},\"underruns\":{underruns},\"renderer\":{},\"rendered\":{},\"late\":{},\"dropped\":{},\"callbackFrames\":{},\"targetFrames\":{},\"fixedBuffer\":{}}}",
         latency_ms,
         crate::proto::quote(renderer),
         counts.0,
         counts.1,
-        counts.2
+        counts.2,
+        buf.0,
+        buf.1,
+        buf.2
     )
 }
 
@@ -70,6 +74,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let get = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     let choice = get("--thunder").unwrap_or_else(|| "procedural".into());
     let seed: u64 = get("--seed").and_then(|s| s.parse().ok()).unwrap_or(1);
+    let buffer: u32 = get("--buffer").and_then(|s| s.parse().ok()).unwrap_or(0);
     let fail = |why: String| -> ! {
         eprintln!("{why}");
         println!("{}", failed_line(&why));
@@ -80,9 +85,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let rname = renderer.name();
     let bus = Arc::new(Bus::new());
     let (silent, _) = mix_for(None, true);
-    let out = crate::audio::open(seed, crate::audio::Mix { rain: silent, thunder: 0.0 }, bus.clone())
+    let out = crate::audio::open(seed, crate::audio::Mix { rain: silent, thunder: 0.0 }, bus.clone(), buffer)
         .unwrap_or_else(|e| fail(format!("audio device: {e}")));
-    eprintln!("live-serve: device {:?} {} Hz x{} {} thunder={rname}", out.device_name, out.sample_rate, out.channels, out.format);
+    eprintln!(
+        "live-serve: device {:?} {} Hz x{} {} buffer={:?} thunder={rname}",
+        out.device_name, out.sample_rate, out.channels, out.format, out.fixed_frames
+    );
     let b2 = bus.clone();
     let render = std::thread::Builder::new()
         .name("thunder-render".into())
@@ -152,7 +160,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
             if base_underruns.is_none() && started.elapsed().as_secs_f64() >= 1.0 {
                 base_underruns = Some(u);
             }
-            let line = state_line(out.latency_ms(), u - base_underruns.unwrap_or(u), &rname, bus.counts());
+            let ld = |a: &std::sync::atomic::AtomicU32| a.load(std::sync::atomic::Ordering::Relaxed);
+            let buf = (ld(&out.callback_frames), ld(&out.target_frames), out.fixed_frames.is_some());
+            let line = state_line(out.latency_ms(), u - base_underruns.unwrap_or(u), &rname, bus.counts(), buf);
             let mut lock = stdout.lock();
             if writeln!(lock, "{line}").and_then(|_| lock.flush()).is_err() {
                 break; // (the server is gone)
@@ -205,7 +215,7 @@ mod tests {
 
     #[test]
     fn state_lines_parse() {
-        let l = state_line(23.456, 2, "procedural", (5, 1, 0, 1));
+        let l = state_line(23.456, 2, "procedural", (5, 1, 0, 1), (256, 768, true));
         let j = crate::proto::parse(&l).unwrap();
         assert_eq!(j.str("state"), Some("live"));
         assert_eq!(j.num("latencyMs"), Some(23.5));

@@ -87,6 +87,14 @@ pub struct Mix {
     pub thunder: f64,
 }
 
+/// The ring's fill target: TARGET_CALLBACKS device callbacks, one more after each underrun (from GROW_AFTER_S in), at
+/// most MAX_QUEUE_S. The latency is the fill plus the device's own buffering.
+pub const TARGET_CALLBACKS: usize = 3;
+pub const GROW_AFTER_S: f64 = 1.0;
+pub const MAX_QUEUE_S: f64 = 0.1;
+/// the device buffer asked for (frames) when the caller gives none: cpal BufferSize::Fixed, clamped to the device's range
+pub const DEFAULT_BUFFER_FRAMES: u32 = 256;
+
 pub struct Output {
     _stream: cpal::Stream,
     pub ring: Arc<Ring>,
@@ -94,11 +102,17 @@ pub struct Output {
     pub channels: u16,
     pub device_name: String,
     pub format: String,
+    /// the buffer asked for: Some(frames) when the device took BufferSize::Fixed, None when it runs its default
+    pub fixed_frames: Option<u32>,
     stop: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
     pub mix: Arc<Mutex<Mix>>,
     /// the device's own latency (callback to playback, µs), as the callback last saw it
     pub device_latency_us: Arc<AtomicU32>,
+    /// the largest callback seen (frames)
+    pub callback_frames: Arc<AtomicU32>,
+    /// the worker's fill target now (frames)
+    pub target_frames: Arc<AtomicU32>,
     /// set by the stream's error callback (a device lost: the caller reports 'failed')
     pub error: Arc<AtomicBool>,
 }
@@ -120,9 +134,93 @@ impl Drop for Output {
     }
 }
 
-/// Open the default output device (shared mode) and start the worker: the live rain plus the bus's thunders. The
-/// callback copies only (f32 as is; i16 / u16 converted in place from a buffer made before the stream starts).
-pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>) -> Result<Output, String> {
+/// The callback's shared state (all lock-free).
+#[derive(Clone)]
+struct Cb {
+    ring: Arc<Ring>,
+    lat: Arc<AtomicU32>,
+    frames: Arc<AtomicU32>,
+    error: Arc<AtomicBool>,
+    channels: usize,
+}
+
+impl Cb {
+    fn note(&self, info: &cpal::OutputCallbackInfo, samples: usize) {
+        let ts = info.timestamp();
+        if let Some(d) = ts.playback.duration_since(&ts.callback) {
+            self.lat.store(d.as_micros().min(u32::MAX as u128) as u32, Ordering::Relaxed);
+        }
+        let f = (samples / self.channels.max(1)) as u32;
+        if f > self.frames.load(Ordering::Relaxed) {
+            self.frames.store(f, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Build the output stream for the device's sample format (f32 as is; i16 / u16 converted through a scratch made
+/// here, before the stream starts). Output streams only.
+fn build(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    fmt: cpal::SampleFormat,
+    cb: &Cb,
+) -> Result<cpal::Stream, String> {
+    let err_fn = {
+        let e2 = cb.error.clone();
+        move |err: cpal::StreamError| {
+            eprintln!("audio stream error: {err}");
+            e2.store(true, Ordering::Relaxed);
+        }
+    };
+    let scratch_len = cb.ring.cap();
+    let r = match fmt {
+        cpal::SampleFormat::F32 => {
+            let c = cb.clone();
+            device.build_output_stream(
+                config,
+                move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                    c.note(info, data.len());
+                    c.ring.pop_into(data)
+                },
+                err_fn,
+                None,
+            )
+        }
+        cpal::SampleFormat::I16 => {
+            let c = cb.clone();
+            let mut tmp = vec![0.0f32; scratch_len];
+            device.build_output_stream(
+                config,
+                move |data: &mut [i16], info: &cpal::OutputCallbackInfo| {
+                    c.note(info, data.len());
+                    copy_converted(&c.ring, &mut tmp, data, |v| (v.clamp(-1.0, 1.0) * 32767.0) as i16, 0)
+                },
+                err_fn,
+                None,
+            )
+        }
+        cpal::SampleFormat::U16 => {
+            let c = cb.clone();
+            let mut tmp = vec![0.0f32; scratch_len];
+            device.build_output_stream(
+                config,
+                move |data: &mut [u16], info: &cpal::OutputCallbackInfo| {
+                    c.note(info, data.len());
+                    copy_converted(&c.ring, &mut tmp, data, |v| ((v.clamp(-1.0, 1.0) + 1.0) * 32767.5) as u16, 32768)
+                },
+                err_fn,
+                None,
+            )
+        }
+        other => return Err(format!("device sample format {other:?} is not handled (f32, i16, u16 are)")),
+    };
+    r.map_err(|e| format!("build_output_stream: {e}"))
+}
+
+/// Open the default output device (shared mode) with a small fixed buffer (buffer_frames, 0: DEFAULT_BUFFER_FRAMES,
+/// clamped to the device's range; the device's default if it refuses) and start the worker: the live rain plus the
+/// bus's thunders. The callback copies only.
+pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>, buffer_frames: u32) -> Result<Output, String> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or("no default output device")?;
     let device_name = device.description().map(|d| d.name().to_string()).unwrap_or_else(|_| "?".into());
@@ -130,78 +228,53 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>) -> Result<Output, String> {
     let sample_rate = cfg.sample_rate();
     let channels = cfg.channels();
     let fmt = cfg.sample_format();
-    let config: cpal::StreamConfig = cfg.into();
-    // ~200 ms of interleaved audio in the ring; the worker keeps it ~2/3 full
-    let ring = Arc::new(Ring::new((sample_rate as usize * channels as usize) / 5));
-    let error = Arc::new(AtomicBool::new(false));
-    let lat = Arc::new(AtomicU32::new(0));
-    let err_fn = {
-        let e2 = error.clone();
-        move |err: cpal::StreamError| {
-            eprintln!("audio stream error: {err}");
-            e2.store(true, Ordering::Relaxed);
+    let want = if buffer_frames == 0 { DEFAULT_BUFFER_FRAMES } else { buffer_frames };
+    let fixed = match *cfg.buffer_size() {
+        cpal::SupportedBufferSize::Range { min, max } => want.clamp(min.max(1), max.max(min.max(1))),
+        cpal::SupportedBufferSize::Unknown => want,
+    };
+    let mut config: cpal::StreamConfig = cfg.into();
+    // the ring can hold MAX_QUEUE_S and more; only its fill target (small) sets the latency
+    let ring = Arc::new(Ring::new(((sample_rate as f64 * MAX_QUEUE_S * 2.0) as usize).max(4096) * channels as usize));
+    let cb = Cb {
+        ring: ring.clone(),
+        lat: Arc::new(AtomicU32::new(0)),
+        frames: Arc::new(AtomicU32::new(0)),
+        error: Arc::new(AtomicBool::new(false)),
+        channels: channels as usize,
+    };
+    config.buffer_size = cpal::BufferSize::Fixed(fixed);
+    let (stream, fixed_frames) = match build(&device, &config, fmt, &cb) {
+        Ok(s) => (s, Some(fixed)),
+        Err(e) => {
+            eprintln!("audio: a {fixed}-frame buffer was refused ({e}); the device's default buffer instead");
+            config.buffer_size = cpal::BufferSize::Default;
+            (build(&device, &config, fmt, &cb)?, None)
         }
     };
-    let note_latency = |l: &Arc<AtomicU32>, info: &cpal::OutputCallbackInfo| {
-        let ts = info.timestamp();
-        if let Some(d) = ts.playback.duration_since(&ts.callback) {
-            l.store(d.as_micros().min(u32::MAX as u128) as u32, Ordering::Relaxed);
-        }
-    };
-    let scratch_len = (sample_rate as usize * channels as usize) / 5;
-    let stream = match fmt {
-        cpal::SampleFormat::F32 => {
-            let (r2, l2) = (ring.clone(), lat.clone());
-            device.build_output_stream(
-                &config,
-                move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
-                    note_latency(&l2, info);
-                    r2.pop_into(data)
-                },
-                err_fn,
-                None,
-            )
-        }
-        cpal::SampleFormat::I16 => {
-            let (r2, l2) = (ring.clone(), lat.clone());
-            let mut tmp = vec![0.0f32; scratch_len];
-            device.build_output_stream(
-                &config,
-                move |data: &mut [i16], info: &cpal::OutputCallbackInfo| {
-                    note_latency(&l2, info);
-                    copy_converted(&r2, &mut tmp, data, |v| (v.clamp(-1.0, 1.0) * 32767.0) as i16, 0)
-                },
-                err_fn,
-                None,
-            )
-        }
-        cpal::SampleFormat::U16 => {
-            let (r2, l2) = (ring.clone(), lat.clone());
-            let mut tmp = vec![0.0f32; scratch_len];
-            device.build_output_stream(
-                &config,
-                move |data: &mut [u16], info: &cpal::OutputCallbackInfo| {
-                    note_latency(&l2, info);
-                    copy_converted(&r2, &mut tmp, data, |v| ((v.clamp(-1.0, 1.0) + 1.0) * 32767.5) as u16, 32768)
-                },
-                err_fn,
-                None,
-            )
-        }
-        other => return Err(format!("device sample format {other:?} is not handled (f32, i16, u16 are)")),
-    }
-    .map_err(|e| format!("build_output_stream: {e}"))?;
     let stop = Arc::new(AtomicBool::new(false));
     let mix = Arc::new(Mutex::new(initial));
-    let (s2, m2, r3, b2, l3) = (stop.clone(), mix.clone(), ring.clone(), bus, lat.clone());
-    let worker = std::thread::Builder::new()
-        .name("weather-synth".into())
-        .spawn(move || synth_worker(seed, r3, m2, b2, l3, s2, sample_rate, channels))
-        .map_err(|e| e.to_string())?;
-    // the ring filled before the device starts pulling (no underruns at the start), at most 0.5 s
+    let target = Arc::new(AtomicU32::new(TARGET_CALLBACKS as u32 * fixed));
+    let w = Worker {
+        seed,
+        ring: ring.clone(),
+        mix: mix.clone(),
+        bus,
+        dev_lat: cb.lat.clone(),
+        cb_frames: cb.frames.clone(),
+        target: target.clone(),
+        stop: stop.clone(),
+        sr: sample_rate,
+        ch: channels,
+        guess_frames: fixed,
+    };
+    let worker = std::thread::Builder::new().name("weather-synth".into()).spawn(move || w.run()).map_err(|e| e.to_string())?;
+    // the ring filled to its first target before the device starts pulling, at most 0.5 s
     let t0 = std::time::Instant::now();
-    while ring.filled() < ring.cap() / 2 && t0.elapsed().as_secs_f64() < 0.5 {
-        std::thread::sleep(std::time::Duration::from_millis(2));
+    while ring.filled() < (TARGET_CALLBACKS * fixed as usize * channels as usize).min(ring.cap() / 2)
+        && t0.elapsed().as_secs_f64() < 0.5
+    {
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     if let Err(e) = stream.play() {
         stop.store(true, Ordering::Relaxed);
@@ -215,11 +288,14 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>) -> Result<Output, String> {
         channels,
         device_name,
         format: format!("{fmt:?}"),
+        fixed_frames,
         stop,
         worker: Some(worker),
         mix,
-        device_latency_us: lat,
-        error,
+        device_latency_us: cb.lat,
+        callback_frames: cb.frames,
+        target_frames: target,
+        error: cb.error,
     })
 }
 
@@ -236,74 +312,107 @@ fn copy_converted<T: Copy>(ring: &Ring, tmp: &mut [f32], data: &mut [T], conv: i
     }
 }
 
-/// The worker: renders 512-sample blocks at the engine rate (the rain, then the thunders due by the time the block will
-/// be heard), resamples linearly to the device rate, duplicates to every channel, and keeps the ring topped up.
-#[allow(clippy::too_many_arguments)]
-fn synth_worker(
+/// Pure: the fill target (frames) for the callback size, the underruns counted since the start of growth and the cap.
+pub fn fill_target(callback_frames: u32, grown: u64, max_frames: u32) -> u32 {
+    let cb = callback_frames.max(32) as u64;
+    ((TARGET_CALLBACKS as u64 + grown) * cb).min(max_frames.max(cb as u32) as u64) as u32
+}
+
+struct Worker {
     seed: u64,
     ring: Arc<Ring>,
     mix: Arc<Mutex<Mix>>,
     bus: Arc<Bus>,
     dev_lat: Arc<AtomicU32>,
+    cb_frames: Arc<AtomicU32>,
+    target: Arc<AtomicU32>,
     stop: Arc<AtomicBool>,
     sr: u32,
     ch: u16,
-) {
-    let mut lr = LiveRain::new(seed);
-    let step = ENGINE_FS / sr as f64; // engine samples per device sample
-    let mut src = vec![0.0f32; 512];
-    let mut src_pos = 0.0f64; // position in the current block
-    let mut prev = 0.0f32;
-    let mut have = false;
-    let mut frame = Vec::with_capacity(4096);
-    let target = ring.cap() * 2 / 3;
-    let mut thunder_gain = 0.0f32; // followed per block (no clicks on a volume change)
-    while !stop.load(Ordering::Relaxed) {
-        if ring.filled() >= target {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            continue;
-        }
-        let m = mix.lock().map(|m| *m).ok();
-        if let Some(m) = m {
-            lr.set(m.rain);
-        }
-        let want_thunder = m.map(|m| m.thunder as f32).unwrap_or(0.0);
-        frame.clear();
-        // produce ~10 ms of device frames
-        let frames = sr as usize / 100;
-        for _ in 0..frames {
-            if !have || src_pos >= src.len() as f64 {
-                if have {
-                    prev = src[src.len() - 1];
-                    src_pos -= src.len() as f64;
+    guess_frames: u32,
+}
+
+impl Worker {
+    /// Renders 512-sample blocks at the engine rate (the rain, then the thunders due by the time the block will be
+    /// heard), resamples linearly to the device rate, duplicates to every channel, and keeps the ring at its target in
+    /// callback-sized pieces, sleeping about half a callback between checks.
+    fn run(self) {
+        let (sr, ch) = (self.sr, self.ch as usize);
+        let mut lr = LiveRain::new(self.seed);
+        let step = ENGINE_FS / sr as f64; // engine samples per device sample
+        let mut src = vec![0.0f32; 512];
+        let mut src_pos = 0.0f64;
+        let mut prev = 0.0f32;
+        let mut have = false;
+        let mut frame: Vec<f32> = Vec::with_capacity(8192);
+        let mut thunder_gain = 0.0f32;
+        let started = std::time::Instant::now();
+        let mut base_underruns: Option<u64> = None;
+        let max_frames = (sr as f64 * MAX_QUEUE_S) as u32;
+        while !self.stop.load(Ordering::Relaxed) {
+            let cbf = match self.cb_frames.load(Ordering::Relaxed) {
+                0 => self.guess_frames,
+                f => f,
+            };
+            let u = self.ring.underruns.load(Ordering::Relaxed);
+            let grown = match base_underruns {
+                Some(b) => u - b,
+                None => {
+                    if started.elapsed().as_secs_f64() >= GROW_AFTER_S {
+                        base_underruns = Some(u);
+                    }
+                    0
                 }
-                for v in src.iter_mut() {
-                    *v = 0.0;
+            };
+            let target = fill_target(cbf, grown, max_frames);
+            self.target.store(target, Ordering::Relaxed);
+            let filled_frames = self.ring.filled() / ch;
+            if filled_frames >= target as usize {
+                let half_cb_us = (cbf as f64 * 0.5e6 / sr as f64) as u64;
+                std::thread::sleep(std::time::Duration::from_micros(half_cb_us.clamp(500, 4000)));
+                continue;
+            }
+            let m = self.mix.lock().map(|m| *m).ok();
+            if let Some(m) = m {
+                lr.set(m.rain);
+            }
+            let want_thunder = m.map(|m| m.thunder as f32).unwrap_or(0.0);
+            frame.clear();
+            let frames = (target as usize - filled_frames).min(cbf as usize).max(32);
+            for _ in 0..frames {
+                if !have || src_pos >= src.len() as f64 {
+                    if have {
+                        prev = src[src.len() - 1];
+                        src_pos -= src.len() as f64;
+                    }
+                    for v in src.iter_mut() {
+                        *v = 0.0;
+                    }
+                    lr.process(&mut src);
+                    // the UTC time this block will be heard: now + what is queued ahead of it + the device's latency
+                    let queued = (self.ring.filled() + frame.len()) as f64 / (sr as f64 * ch as f64);
+                    let t_out = utc_now() + queued + self.dev_lat.load(Ordering::Relaxed) as f64 * 1e-6;
+                    self.bus.start_due(t_out);
+                    thunder_gain += (want_thunder - thunder_gain) * 0.2;
+                    self.bus.mix(&mut src, thunder_gain);
+                    have = true;
                 }
-                lr.process(&mut src);
-                // the UTC time this block will be heard: now + what is queued ahead of it + the device's latency
-                let queued = ring.filled() as f64 / (sr as f64 * ch as f64) + frame.len() as f64 / (sr as f64 * ch as f64);
-                let t_out = utc_now() + queued + dev_lat.load(Ordering::Relaxed) as f64 * 1e-6;
-                bus.start_due(t_out);
-                thunder_gain += (want_thunder - thunder_gain) * 0.2;
-                bus.mix(&mut src, thunder_gain);
-                have = true;
+                let i = src_pos.floor() as usize;
+                let fr = (src_pos - i as f64) as f32;
+                let a = if i == 0 { prev } else { src[i - 1] };
+                let b = src[i];
+                let v = a + (b - a) * fr;
+                for _ in 0..ch {
+                    frame.push(v);
+                }
+                src_pos += step;
             }
-            let i = src_pos.floor() as usize;
-            let fr = (src_pos - i as f64) as f32;
-            let a = if i == 0 { prev } else { src[i - 1] };
-            let b = src[i];
-            let v = a + (b - a) * fr;
-            for _ in 0..ch {
-                frame.push(v);
-            }
-            src_pos += step;
-        }
-        let mut off = 0;
-        while off < frame.len() && !stop.load(Ordering::Relaxed) {
-            off += ring.push(&frame[off..]);
-            if off < frame.len() {
-                std::thread::sleep(std::time::Duration::from_millis(2));
+            let mut off = 0;
+            while off < frame.len() && !self.stop.load(Ordering::Relaxed) {
+                off += self.ring.push(&frame[off..]);
+                if off < frame.len() {
+                    std::thread::sleep(std::time::Duration::from_micros(500));
+                }
             }
         }
     }
@@ -319,6 +428,14 @@ mod tests {
         assert!(!src.contains(&forbidden), "audio.rs must never build an input stream");
         let forbidden_raw = ["build_", "input_", "stream_raw"].concat();
         assert!(!src.contains(&forbidden_raw));
+    }
+
+    #[test]
+    fn fill_target_grows_and_caps() {
+        assert_eq!(super::fill_target(256, 0, 4410), 768);
+        assert_eq!(super::fill_target(256, 2, 4410), 1280, "one callback more per underrun");
+        assert_eq!(super::fill_target(256, 100, 4410), 4410, "capped");
+        assert_eq!(super::fill_target(0, 0, 4410), 96, "an unknown callback: a small floor");
     }
 
     #[test]
