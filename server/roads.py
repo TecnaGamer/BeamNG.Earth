@@ -10063,7 +10063,9 @@ class TunnelProfiles(BridgeProfiles):
             self._load(mapcells.CellKey(z, x, y), pool, scratch)
         for k in sorted(set(old) - set(pool), key=str):
             pool[k] = old[k]
-        return any(old.get(k) is not v for k, v in pool.items())
+        def same(a, b):
+            return a is b or (a is not None and a[4] == b[4] and a[0] == b[0] and np.array_equal(a[1], b[1]))
+        return not all(same(old.get(k), v) for k, v in pool.items())
 
     @staticmethod
     def _part_id(key):
