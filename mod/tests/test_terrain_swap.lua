@@ -137,4 +137,25 @@ terrain.setWet(0)
 terrain.swap('/t/w3.ter', 2, 512, 0, 0, 0, { materials = mats }, nil)
 T.check(asph.fields.roughnessBaseTex == '/levels/beamng_earth/art/terrains/bngEarth_base_r.png'
   and asph.fields.aoBaseTex == '/levels/beamng_earth/art/terrains/bngEarth_base_ao.png', 'dry: its own maps back')
+-- a field list with a constant (no texture) on one layer only; a changed list is applied at the next swap, and dry
+-- puts every field it touched back
+local cob = createObject('TerrainMaterial'); cob:registerObject('bngEarthGroundCobble')
+asph:setField('aoDetailStrength', 0, '0.8 0.2')
+cob:setField('aoDetailStrength', 0, '1 0.3')
+local mats2 = { { 'bngEarthGroundAsphalt', 'ASPHALT_OLD' }, { 'bngEarthGroundCobble', 'COBBLESTONE' } }
+local saved = terrain.WET_FIELDS[2]
+terrain.WET_FIELDS[2] = { { 'aoBaseTex', 'bngEarth_base_h.png' }, { 'aoDetailStrength', '0 0', layers = '^bngEarthGroundAsphalt' } }
+terrain.setWet(2)
+terrain.swap('/t/w4.ter', 2, 512, 0, 0, 0, { materials = mats2 }, nil)
+T.check(asph.fields.aoDetailStrength == '0 0' and cob.fields.aoDetailStrength == '1 0.3'
+  and cob.fields.aoBaseTex:find('bngEarth_base_h') ~= nil, 'a constant on the asphalt only, the base map on both')
+terrain.WET_FIELDS[2] = { { 'roughnessBaseTex', 'bngEarth_base_nm.png' } }
+terrain.swap('/t/w5.ter', 2, 512, 0, 0, 0, { materials = mats2 }, nil)
+T.check(asph.fields.aoDetailStrength == '0.8 0.2' and asph.fields.roughnessBaseTex:find('bngEarth_base_nm') ~= nil
+  and asph.fields.aoBaseTex == '/levels/beamng_earth/art/terrains/bngEarth_base_ao.png', 'a changed list: applied, the rest back')
+terrain.setWet(0)
+terrain.swap('/t/w6.ter', 2, 512, 0, 0, 0, { materials = mats2 }, nil)
+T.check(asph.fields.roughnessBaseTex == '/levels/beamng_earth/art/terrains/bngEarth_base_r.png'
+  and cob.fields.aoDetailStrength == '1 0.3' and asph.fields.aoDetailStrength == '0.8 0.2', 'dry: all back')
+terrain.WET_FIELDS[2] = saved
 T.done('test_terrain_swap')

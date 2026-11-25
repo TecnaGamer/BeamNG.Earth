@@ -714,10 +714,23 @@ end
 -- step (0 dry, 1 damp, 2 wet) comes from wetlook.lua; it shows from the next swap (driving: every few hundred metres;
 -- standing still: when the next block comes).
 M.WET_LAYERS = { '^bngEarthGroundAsphalt', '^bngEarthGroundCobble', '^bngEarthGroundPavers', '^bngEarthGroundBrick' }
-M.WET_MAPS = { [1] = { r = 'bngEarth_base_h.png', ao = 'bngEarth_base_ao.png' },     -- damp: roughness 0.69
-  [2] = { r = 'bngEarth_base_nm.png', ao = 'bngEarth_base_h.png' } }                  -- wet: roughness 0.5, ao 0.69
+-- Each step: the fields set on the paved layers ({ field, value, layers = a name pattern or nil for all of them }). A
+-- '.png' value is one of the level's flat base maps (at the ground photo's size); anything else is set as it is (the
+-- strengths are plain numbers in the material's constants: no texture). The shader adds (2 t - 1) x strength of the
+-- detail and macro maps to the base value, then clamps: the stock asphalt AO detail (mean 0.84) at its 0.8 near strength
+-- adds +0.54, so any base AO under it clamps to 1 within the detail distance (the wet road showed no darkening near the
+-- camera, only its sheen) -- its AO detail goes while wet; the tile layers' AO details are offsets about 0.45 and stay.
+M.WET_FIELDS = {
+  [1] = {                                                         -- damp: roughness 0.69
+    { 'roughnessBaseTex', 'bngEarth_base_h.png' },
+  },
+  [2] = {                                                         -- wet: roughness 0.5, ao 0.69
+    { 'roughnessBaseTex', 'bngEarth_base_nm.png' },
+    { 'aoBaseTex', 'bngEarth_base_h.png' },
+  },
+}
 local wetWant = 0
-local wetHave, wetOrig = {}, {}     -- layer name -> the step on it; -> { r, ao } its own base maps
+local wetHave, wetOrig = {}, {}     -- layer name -> the field list on it; -> { field = its own value }
 M.wetSets = 0
 
 -- Pure: is a terrain material one of the paved layers?
@@ -733,23 +746,35 @@ function M.setWet(step)
 end
 function M.wetStep() return wetWant end
 
--- The paved layers among `slots` set to the wanted step (only those not on it yet). Called inside the swap, before
--- the block's file is set.
+-- Pure: the value a wet field entry sets.
+function M.wetValue(v)
+  if type(v) == 'string' and v:match('%.png$') then return M.baseMapFor(TERRAIN_DIR .. v, M.BASE_TEX_SIZE) end
+  return v
+end
+
+-- The paved layers among `slots` set to the wanted step (only those not on it yet: the step's field list, a changed
+-- list too). Fields the list leaves out get the layer's own value back. Called inside the swap, before the block's file
+-- is set.
 function M.applyWet(slots)
+  local list = M.WET_FIELDS[wetWant] or false
   for _, name in ipairs(slots or {}) do
-    if M.isWetLayer(name) and (wetHave[name] or 0) ~= wetWant then
+    if M.isWetLayer(name) and (wetHave[name] or false) ~= list then
       local m = scenetree.findObject(name)
       if m then
-        if not wetOrig[name] then
-          wetOrig[name] = { r = m:getField('roughnessBaseTex', 0), ao = m:getField('aoBaseTex', 0) }
+        local orig = wetOrig[name] or {}
+        wetOrig[name] = orig
+        local want = {}
+        for _, e in ipairs(list or {}) do
+          if not e.layers or name:find(e.layers) then want[e[1]] = M.wetValue(e[2]) end
         end
-        local o = wetOrig[name]
-        local maps = M.WET_MAPS[wetWant]
-        local r = maps and M.baseMapFor(TERRAIN_DIR .. maps.r, M.BASE_TEX_SIZE) or o.r
-        local ao = maps and M.baseMapFor(TERRAIN_DIR .. maps.ao, M.BASE_TEX_SIZE) or o.ao
-        m:setField('roughnessBaseTex', 0, r)
-        m:setField('aoBaseTex', 0, ao)
-        wetHave[name] = wetWant
+        for f in pairs(want) do
+          if orig[f] == nil then orig[f] = m:getField(f, 0) or '' end
+        end
+        for f, v in pairs(orig) do
+          local nv = want[f] or M.baseMapFor(v, M.BASE_TEX_SIZE)     -- (its own, at the photo size now)
+          if tostring(m:getField(f, 0)) ~= tostring(nv) then m:setField(f, 0, nv) end
+        end
+        wetHave[name] = list
         M.wetSets = M.wetSets + 1
       end
     end
