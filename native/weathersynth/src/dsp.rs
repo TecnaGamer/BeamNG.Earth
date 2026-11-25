@@ -38,6 +38,31 @@ pub fn next_pow2(n: usize) -> usize {
     p
 }
 
+/// Twiddles of one FFT stage, each from libm directly (no recurrence drift), cached per (stage length, direction) and
+/// thread: the same values as computing them each time, so results are bit-identical, without the sin/cos cost.
+fn twiddles(len: usize, inverse: bool) -> std::rc::Rc<Vec<C>> {
+    thread_local! {
+        static CACHE: std::cell::RefCell<std::collections::HashMap<(usize, bool), std::rc::Rc<Vec<C>>>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    CACHE.with(|c| {
+        c.borrow_mut()
+            .entry((len, inverse))
+            .or_insert_with(|| {
+                let sign = if inverse { 1.0 } else { -1.0 };
+                std::rc::Rc::new(
+                    (0..len / 2)
+                        .map(|k| {
+                            let ang = sign * m::TAU * k as f64 / len as f64;
+                            C::new(m::cos(ang), m::sin(ang))
+                        })
+                        .collect(),
+                )
+            })
+            .clone()
+    })
+}
+
 /// In-place iterative radix-2 FFT. `inverse` uses +i and divides by n.
 pub fn fft(a: &mut [C], inverse: bool) {
     let n = a.len();
@@ -54,17 +79,10 @@ pub fn fft(a: &mut [C], inverse: bool) {
             a.swap(i, j);
         }
     }
-    let sign = if inverse { 1.0 } else { -1.0 };
     let mut len = 2;
     while len <= n {
         let half = len / 2;
-        // twiddles for this stage, each from libm directly (no recurrence drift)
-        let tw: Vec<C> = (0..half)
-            .map(|k| {
-                let ang = sign * m::TAU * k as f64 / len as f64;
-                C::new(m::cos(ang), m::sin(ang))
-            })
-            .collect();
+        let tw = twiddles(len, inverse);
         let mut i = 0;
         while i < n {
             for k in 0..half {
@@ -172,6 +190,22 @@ impl Biquad {
             a * ((a + 1.0) + (a - 1.0) * c - sa) / a0,
             2.0 * ((a - 1.0) - (a + 1.0) * c) / a0,
             ((a + 1.0) - (a - 1.0) * c - sa) / a0,
+        )
+    }
+    /// Low shelf (RBJ, slope 1): gain_db below f0.
+    pub fn lowshelf(fs: f64, f0: f64, gain_db: f64) -> Biquad {
+        let a = m::pow(10.0, gain_db / 40.0);
+        let w = m::TAU * f0 / fs;
+        let (s, c) = (m::sin(w), m::cos(w));
+        let alpha = s / 2.0 * m::sqrt(2.0);
+        let sa = 2.0 * m::sqrt(a) * alpha;
+        let a0 = (a + 1.0) + (a - 1.0) * c + sa;
+        Biquad::new(
+            a * ((a + 1.0) - (a - 1.0) * c + sa) / a0,
+            2.0 * a * ((a - 1.0) - (a + 1.0) * c) / a0,
+            a * ((a + 1.0) - (a - 1.0) * c - sa) / a0,
+            -2.0 * ((a - 1.0) + (a + 1.0) * c) / a0,
+            ((a + 1.0) + (a - 1.0) * c - sa) / a0,
         )
     }
     /// Band-pass, 0 dB peak gain.
