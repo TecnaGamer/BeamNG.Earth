@@ -13,6 +13,8 @@
 //!   weathersynth thunder-bench [--micro M]           live thunder render times by distance
 
 mod analyze;
+#[cfg(feature = "audio")]
+mod audio;
 mod dsp;
 mod live;
 mod loudness;
@@ -222,6 +224,41 @@ fn run() -> Result<(), String> {
             print!("{}", live::thunder_bench(mm));
         }
         "drop-spectra" => print!("{}", rain::drop_spectra()),
+        #[cfg(feature = "audio")]
+        "live-play" => {
+            // the device prototype: the live rain out of the default output device (shared mode, output only).
+            // --seconds S, then either fixed --rate R [--shelter S] [--cabin C] or the scripted sweep
+            let secs: f64 = arg(&args, "--seconds").unwrap_or("30".into()).parse().map_err(|_| "bad --seconds")?;
+            let fixed = arg(&args, "--rate").map(|r| {
+                let f = |k: &str, d: f64| arg(&args, k).and_then(|v| v.parse().ok()).unwrap_or(d);
+                (r.parse().unwrap_or(5.0), f("--shelter", 1.0), f("--cabin", 0.0))
+            });
+            let c0 = live::Controls { rain_mm_h: 0.0, shelter: 1.0, cabin: 0.0, volume: 0.5, muted: false };
+            let out = audio::open(1, c0)?;
+            println!("device={} rate={} channels={}", out.device_name, out.sample_rate, out.channels);
+            let t0 = std::time::Instant::now();
+            let mut last = -1i64;
+            while t0.elapsed().as_secs_f64() < secs {
+                let t = t0.elapsed().as_secs_f64();
+                let (rate, shelter, cabin) = fixed.unwrap_or_else(|| {
+                    let fr = t / secs;
+                    if fr < 0.25 { (0.7, 1.0, 0.0) } else if fr < 0.5 { (5.0, 1.0, 0.0) } else if fr < 0.75 { (35.0, 1.0, 0.0) } else { (35.0, 1.0, 1.0) }
+                });
+                if let Ok(mut c) = out.controls.lock() {
+                    *c = live::Controls { rain_mm_h: rate, shelter, cabin, volume: 0.5, muted: false };
+                }
+                if t as i64 != last {
+                    last = t as i64;
+                    println!(
+                        "t={:.0}s rate={rate} cabin={cabin} ring={} underruns={}",
+                        t,
+                        out.ring.filled(),
+                        out.ring.underruns.load(std::sync::atomic::Ordering::Relaxed)
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
         "storm-dump" => print!("{}", storm::dump()),
         "analyze" => {
             println!("{}", analyze::header());

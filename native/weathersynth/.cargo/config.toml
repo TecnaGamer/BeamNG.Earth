@@ -1,0 +1,6 @@
+# The reviewed crates only (vendor/: tools/vendor_reviewed.py). Build with --offline.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"

@@ -9,6 +9,17 @@ license = "MIT"
 # Deterministic maths: the same bits on every platform (the C library's sin / exp / pow differ between glibc, mingw and
 # the UCRT). The same pinned crate earthfast uses (dm.rs, reviewed 2026-11-12), already in the registry cache.
 libm = "=0.2.16"
+# Live weather audio out of the world server (feature `audio`; the offline renderer builds without it): cpal, pinned,
+# default features only (no asio, jack or audio_thread_priority): ALSA on Linux (alsa / alsa-sys, libasound.so.2
+# linked dynamically), WASAPI shared mode on Windows (windows 0.62.2). Read in full before it came in (2026-11-25:
+# cpal, alsa, alsa-sys, dasp_sample line by line; windows-implement / windows-interface in full; windows / windows-core
+# scanned; owners kennykerr / microsoft/windows-rs and rustaudio). Vendored: vendor/ (tools/vendor_reviewed.py: the
+# reviewed crates unmodified, checksums against crates.io; stubs for the other platforms' crates), libc 0.2.190 pinned
+# in Cargo.lock like earthfast's.
+cpal = { version = "=0.17.3", optional = true }
+
+[features]
+audio = ["dep:cpal"]
 
 [profile.release]
 opt-level = 3
