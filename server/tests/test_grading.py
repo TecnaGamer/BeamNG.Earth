@@ -2202,6 +2202,79 @@ class LevelWallsTest(unittest.TestCase):
         self.assertTrue(np.isnan(grading.level_boundary(30.0, 7.0, 8.0, 4.15, 5.15, 7.2)).all())
 
 
+class AbutmentWallsTest(unittest.TestCase):
+    """A deck's end standing on another road's carriageway at another level (Boston's Bowker Overpass over Storrow Drive: the
+    deck's end 6.4 m from the centre line of a road whose carriageway reaches 11 m each side, 10 m under it). The higher-
+    ranked road's hold reached over the approach's core, and the embankment, planned up to the deck's height, fell to the
+    road's level over its last metres: a 4-6 m step against the deck's top at its end."""
+
+    def _plans(self, tilt=0.0, low_z=1.6, gap=6.4):
+        x = np.arange(-60.0, 61.0, 4.0)
+        low = grading.Plan(np.c_[x, np.zeros(len(x))], np.full(len(x), low_z), 12.0, road_half=11.0)
+        low.rid, low.rank = 1, 118
+        y = np.arange(46.0, gap - 0.01, -3.9)
+        y = np.r_[y[y > gap], gap]
+        xy = np.c_[np.zeros(len(y)), y]
+        if tilt:
+            th = np.radians(tilt)
+            rot = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+            xy = (xy - [0.0, gap]) @ rot.T + [0.0, gap]
+        app = grading.Plan(xy, np.linspace(7.5, 11.74, len(y)), 5.7, abut=(False, True), road_half=2.7)
+        app.rid, app.rank = 2, 114
+        return [("approach", app), ("road", low)]
+
+    def _ground(self, xy):
+        return np.full(len(xy), 7.4)        # (the road, at 1.6, in a cutting 5.8 m deep)
+
+    def _at_end(self, plans, back):
+        """The graded ground m back from the deck's end along the approach (negative: under the deck)."""
+        xy = np.asarray(plans[0][1].xy)
+        d = (xy[-1] - xy[-2]) / np.hypot(*(xy[-1] - xy[-2]))
+        pts = xy[-1][None, :] - np.asarray(back, np.float64)[:, None] * d[None, :]
+        return grading.grade_points(pts[:, 0], pts[:, 1], np.full(len(pts), 7.4), [p for _f, p in plans])
+
+    def test_the_ground_meets_the_deck_at_its_end(self):
+        for tilt in (0.0, 20.0):
+            plans = self._plans(tilt)
+            deck_z = float(plans[0][1].z[-1])
+            with unittest.mock.patch.object(grading, "ABUT_WALLS_ON", False):
+                before = self._at_end(plans, [0.0, 1.0])
+            self.assertLess(float(before.max()), deck_z - 3.0, "the road's hold over the approach's last metres")
+            self.assertEqual(grading.abutment_walls(plans, [None, None], self._ground), 1)
+            back = np.array([0.0, 1.0])
+            a = plans[0][1]
+            grade = (a.z[-1] - a.z[-2]) / float(np.hypot(*(np.asarray(a.xy)[-1] - np.asarray(a.xy)[-2])))
+            after = self._at_end(plans, back)            # (the approach's own height back along it, its grade)
+            self.assertLess(float(np.abs(after - (deck_z - grade * back)).max()), 0.35, (tilt, np.round(after, 2).tolist()))
+
+    def test_the_wall_is_the_roads_and_ends_its_lanes_at_the_approach(self):
+        plans = self._plans()
+        grading.abutment_walls(plans, [None, None], self._ground)
+        self.assertIsNone(plans[0][1].cut, "the approach keeps its own ground")
+        cut = np.asarray(plans[1][1].cut)
+        near = np.isfinite(cut[:, 0])           # (the approach is on the road's left: it runs along +x, the approach at y > 0)
+        self.assertTrue(near.any() and not np.isfinite(cut[:, 3]).any())
+        np.testing.assert_allclose(cut[near, 1], plans[0][1].z[-1])        # (its top: the deck's height)
+        self.assertLessEqual(float(cut[near, 0].max()), 6.4 + 5.7 - grading.WALL_FLAT_M)   # (the end's edge nearest the segment)
+        self.assertAlmostEqual(float(cut[near, 0].min()), 6.4 - grading.WALL_FLAT_M)        # (the end line at its nearest, a grid step under the deck)
+
+    def test_one_level_clear_roads_and_off_the_carriageway_are_left_alone(self):
+        for kw in (dict(low_z=10.0), dict(gap=12.0)):      # (one level: WALL_CUT_M; the end past the carriageway's edge)
+            plans = self._plans(**kw)
+            self.assertEqual(grading.abutment_walls(plans, [None, None], self._ground), 0, kw)
+            self.assertIsNone(plans[1][1].cut)
+        plans = self._plans()
+        plans[0][1].abut = (False, False)               # (no deck at its end)
+        self.assertEqual(grading.abutment_walls(plans, [None, None], self._ground), 0)
+        plans = self._plans()                           # (the approach on its ground: a lid's deck over its trench street)
+        self.assertEqual(grading.abutment_walls(plans, [None, None], lambda xy: np.full(len(xy), 11.0)), 0)
+        plans = self._plans(low_z=5.0)                  # (the road 6.7 m under it, but on its ground: no cutting)
+        self.assertEqual(grading.abutment_walls(plans, [None, None], lambda xy: np.full(len(xy), 5.0)), 0)
+        plans = self._plans()
+        plans[1][1].rank = -1                           # (no grade rank: no hold to reach over the approach)
+        self.assertEqual(grading.abutment_walls(plans, [None, None], self._ground), 0)
+
+
 class UnderDeckTest(unittest.TestCase):
     """A road under a deck may only go down in the road laws (_road_laws' under): under it is beside its line within
     its half width (+ ROAD_LAWS_DECK_M), not past its ends, where the ground it ends on is."""

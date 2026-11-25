@@ -136,6 +136,15 @@ DIP_HOLDS = os.environ.get("BNE_DIP_HOLDS", "off") == "on"   # (a dipped road he
 # which stood 7.3 m under its own survey height (the survey's truth replay).
 # BNE_LEVEL_WALLS=off: as before.
 LEVEL_WALLS_ON = os.environ.get("BNE_LEVEL_WALLS", "on") != "off"
+# A deck's end that stands on the carriageway of a road in a cutting under it (the map's centre line of a wide road, 6.4 m
+# from the deck's end on a carriageway 11 m each side: Boston's Bowker Overpass over Storrow Drive): the road's rank held
+# its lanes over the approach's core, and the embankment, planned up to the deck's height, fell away to the road's level
+# over its last 4 m, a 6 m step against the deck's top at its end. The deck's end is an abutment, a wall across the road
+# under it (abutment_walls): the road's lanes and its rank's hold end at the end line, the approach's ground goes on to it
+# at the deck's height. BNE_ABUT_WALLS=off: as before.
+ABUT_WALLS_ON = os.environ.get("BNE_ABUT_WALLS", "on") != "off"
+ABUT_LEVEL_M = 2.5          # m: a road this far under a deck's end is on another level (gradebins ARANK_LEVEL_M: nearer, the painter
+                            # turns the road's hold off over the approach's last metres itself)
 EXTRAP_M = float(os.environ.get("BNE_GRADE_EXTRAP", "4"))             # m a segment's line is carried on past an end where its plan goes on (grade_points: no
                             # washboard of the vertex step on a grade)
 STEEP_RUN = 0.5
@@ -3442,6 +3451,12 @@ class _Planner:
                 except Exception as e:      # each road's own core rather than no grading
                     _caught(e)
                     log.debug("grading: level walls of %s: %s: %s", key, type(e).__name__, e)
+            if ABUT_WALLS_ON and plans:
+                try:            # a deck's end on another road's lanes: the wall across it (abutment_walls)
+                    abutment_walls(plans, pspecs, self._ground_line)
+                except Exception as e:      # the road's own core rather than no grading
+                    _caught(e)
+                    log.debug("grading: abutment walls of %s: %s: %s", key, type(e).__name__, e)
             if CORNERS_ON and plans:
                 # the rounded corners of curbless junctions (roadcorners.py): the ground under each graded to its roads'
                 # solved heights (trimmed to the cell's box with the roads' plans below)
@@ -11333,6 +11348,94 @@ def level_walls(plans, specs):
         for c0 in (0, 3):
             take = np.isfinite(new[:, c0]) & ~(cut[:, c0] <= new[:, c0])       # (a sharp cutting's nearer wall kept)
             cut[take, c0:c0 + 3] = new[take, c0:c0 + 3]
+        p.cut = cut
+        n_changed += 1
+    return n_changed
+
+
+def abutment_walls(plans, specs, ground):
+    """Plan.cut on the plans of roads whose lanes lie under a deck's end (ABUT_WALLS_ON). An approach (a plan leading onto
+    a bridge, Plan.abut) on an embankment (its end more than WALL_CUT_M over its ground: ground(xy (k, 2)) -> heights;
+    one on its ground, a lid's deck over its trench street, keeps the road's hold) ends at its abutment, a line across its
+    core at the deck's end. Where that end stands on the carriageway of another road more than ABUT_LEVEL_M under it and
+    cut more than WALL_CUT_M into its ground (a road in a cutting has its wall already: the abutment is one more across
+    it), the road's lanes and its rank's hold end at the face, each segment's distance to the nearest point of the end
+    line (WALL_FLAT_M less: the ground goes on at the approach's height one terrain grid step under the deck, the end
+    itself and the triangles round it the approach's), the approach's height the wall's top, as level_walls puts
+    the wall between two roads side by side (gradebins pair0 / pair1 end a carriageway at its wall, by the distance to
+    the segment: its end caps too). plans [(fid, Plan)] in place, the first len(specs) the roads' (as level_walls; the walls
+    on those of at least CORRIDOR_MIN_RH, no paths or tracks, with a grade rank: the rank's hold is what reaches over the
+    approach). Returns how many plans changed."""
+    f64 = np.float64
+    idx = [i for i in range(min(len(plans), len(specs))) if len(plans[i][1].xy) >= 2 and TUNNEL_TAG not in plans[i][0]]
+    others = LevelLines([(i, np.asarray(plans[i][1].xy, f64)[:, :2], np.asarray(plans[i][1].z, f64)) for i in idx
+                         if float(plans[i][1].road_half) >= CORRIDOR_MIN_RH and int(plans[i][1].rank) >= 0])
+    new = {}                    # plan index -> (segments, 6): the walls
+    for i in idx:
+        a = plans[i][1]
+        for e in (0, 1):
+            if not a.abut[e]:
+                continue
+            xy = np.asarray(a.xy, f64)[:, :2]
+            z = np.asarray(a.z, f64)
+            end, back, ze = (xy[0], xy[1], float(z[0])) if e == 0 else (xy[-1], xy[-2], float(z[-1]))
+            along = end - back
+            if float(np.hypot(*along)) <= 1e-6 or ze - float(np.asarray(ground(end[None, :]), f64)[0]) <= WALL_CUT_M:
+                continue
+            along /= np.hypot(*along)
+            # (the end line across the approach's core, the end itself first: a point about every metre)
+            q = np.concatenate([end[None, :], end[None, :] + np.linspace(-a.half, a.half, max(2, int(math.ceil(
+                2.0 * a.half)) + 1))[:, None] * np.array([-along[1], along[0]])[None, :]])
+            lo, hi = q.min(0), q.max(0)
+            for j, line, zl in others.rows:
+                b = plans[j][1]
+                if j == i or (b.rid >= 0 and b.rid == a.rid):
+                    continue
+                lb = np.asarray(line, f64)
+                if (lb.max(0) < lo - b.road_half).any() or (lb.min(0) > hi + b.road_half).any():
+                    continue
+                ab = lb[1:] - lb[:-1]
+                l2 = (ab * ab).sum(1)
+                ok = l2 > 1e-12
+                if not ok.any():
+                    continue
+                rel = q[None, :, :] - lb[:-1, None, :]                      # (segments, points, 2)
+                t = np.clip((rel * ab[:, None, :]).sum(2) / np.maximum(l2, 1e-12)[:, None], 0.0, 1.0)
+                dist = dnp.hypot(*(rel - t[..., None] * ab[:, None, :]).transpose(2, 0, 1))
+                left = (ab[:, None, 0] * rel[..., 1] - ab[:, None, 1] * rel[..., 0]) > 0.0
+                zm = (zl[1:] + zl[:-1]) / 2.0
+                # (the deck's end on the road's carriageway, the road more than ABUT_LEVEL_M under it there and cut more
+                # than WALL_CUT_M into its ground: a road in a cutting has its wall, the abutment one more)
+                low = ok & (ze - zm > ABUT_LEVEL_M)
+                if not (low & (dist[:, 0] < b.road_half)).any():
+                    continue
+                mid = (lb[1:] + lb[:-1]) / 2.0
+                low[low] = np.asarray(ground(mid[low]), f64) - zm[low] > WALL_CUT_M
+                if not (low & (dist[:, 0] < b.road_half)).any():
+                    continue
+                on = low[:, None] & (dist < b.road_half)
+                on[:, 0] = False
+                if j not in new:
+                    new[j] = np.full((len(lb) - 1, 6), np.nan)
+                for side, c0 in ((left, 0), (~left, 3)):
+                    dd = np.where(on & side, dist, np.inf).min(1) - WALL_FLAT_M
+                    dd[dd <= 0.0] = np.inf                                  # (an end across the road's own line: no wall)
+                    k = np.flatnonzero(np.isfinite(dd))
+                    if not len(k):
+                        continue
+                    top = np.maximum(dd[k] + WALL_FLAT_M + WALL_T_M, float(b.road_half))
+                    take = ~(new[j][k, c0] <= dd[k])                        # (the nearest line)
+                    for col, v in enumerate((dd[k], np.full(len(k), ze), top)):
+                        new[j][k[take], c0 + col] = v[take]
+    n_changed = 0
+    for j, w in new.items():
+        if not np.isfinite(w[:, [0, 3]]).any():
+            continue
+        p = plans[j][1]
+        cut = np.full(w.shape, np.nan) if p.cut is None else np.asarray(p.cut, f64).copy()
+        for c0 in (0, 3):
+            take = np.isfinite(w[:, c0]) & ~(cut[:, c0] <= w[:, c0])           # (a nearer wall kept)
+            cut[take, c0:c0 + 3] = w[take, c0:c0 + 3]
         p.cut = cut
         n_changed += 1
     return n_changed
