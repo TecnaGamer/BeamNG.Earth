@@ -268,6 +268,33 @@ class ChainEndsTest(unittest.TestCase):
         self.assertEqual(roadsys._half_width((None, a)), roadsys.DECK_HALF_MIN_M)
 
 
+class StructureDepthTest(unittest.TestCase):
+    def test_some_bridges_are_thicker_than_others(self):
+        """(M5) roadsys.structure_depth: a through truss's floor system whatever its span, a deck truss a tenth of its
+        span or so, girders span / 22 within 0.6-4.0 m (a short slab thin, a long flyover deep)."""
+        import bridgetypes as bt
+        import roadsys
+        self.assertEqual(roadsys.structure_depth(120.0, bt.NBI_THROUGH_TRUSS), roadsys.DEPTH_FLOOR_SYSTEM_M)
+        self.assertAlmostEqual(roadsys.structure_depth(60.0, bt.NBI_DECK_TRUSS), 5.0)
+        self.assertAlmostEqual(roadsys.structure_depth(8.0), 0.6)
+        self.assertAlmostEqual(roadsys.structure_depth(44.0), 2.0)
+        self.assertAlmostEqual(roadsys.structure_depth(200.0, bt.PLAIN), 4.0)
+        self.assertLess(roadsys.structure_depth(15.0), roadsys.structure_depth(60.0))
+
+    def test_railway_clearance_by_line_and_country(self):
+        """(M5) roadsys.rail_clearance: a catenary's by country, a loading gauge's otherwise, light rail and metro
+        their own; trams and lines not built hold no floor (RAIL_CLASSES)."""
+        import roadsys
+        self.assertEqual(roadsys.rail_clearance("US", "standard_gauge", False), 7.0)
+        self.assertEqual(roadsys.rail_clearance("DE", "standard_gauge", True), 5.7)
+        self.assertEqual(roadsys.rail_clearance("DE", "standard_gauge", False), 5.0)
+        self.assertEqual(roadsys.rail_clearance("gb", "standard_gauge", False), 4.8)
+        self.assertEqual(roadsys.rail_clearance("XX", "standard_gauge", True), 6.0)
+        self.assertEqual(roadsys.rail_clearance("US", "light_rail", True), 5.0)
+        self.assertNotIn("tram", roadsys.RAIL_CLASSES)
+        self.assertNotIn("unknown", roadsys.RAIL_CLASSES)
+
+
 @unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 596, "earthfast 596 (roadsys) required")
 class KernelTest(unittest.TestCase):
     def test_same_bytes_whatever_the_order(self):

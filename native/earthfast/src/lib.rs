@@ -72,6 +72,7 @@ mod roadshape;
 mod shore;
 mod photofill;
 mod ambience;
+mod snow; // winter W1 (BNE_WINTER): the hourly integer snow kernel (server/snow.py)
 mod gradeguard;
 mod power;
 mod underpass;
@@ -110,6 +111,7 @@ mod roadz;
 mod fartex;
 mod photojpeg;
 mod leafon;
+mod snowlook;
 mod photomesh;
 mod deshadow;
 mod colormatch;
@@ -6890,6 +6892,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::cut_ground, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::core_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
+    m.add_class::<snowlook::SnowLook>()?;
+    m.add_function(wrap_pyfunction!(snowlook::snow_ela, m)?)?;
+    m.add_function(wrap_pyfunction!(snowlook::snow_evergreen, m)?)?;
+    m.add_function(wrap_pyfunction!(snowlook::snow_perm_possible, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::season_amounts, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::leaf_on, m)?)?;
@@ -7791,6 +7797,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // hung the exit, server/fast.py's atexit hook calls it)
     m.add_function(wrap_pyfunction!(begin_exit, m)?)?;
     m.add_function(wrap_pyfunction!(exit_guard_counts, m)?)?;
-    m.add("VERSION", 623)?;
+    // 623: road M5 (roadsys)
+    // 624: snow_state / snow_preset / snow_regime / snow_band_depth / snow_band_table / snow_lake_share /
+    // snow_wet_only / snow_selftest / snow_conditions (snow.rs: the winter W1 kernel, server/snow.py, BNE_WINTER /
+    // BNE_WET_ROADS)
+    // 625: SnowLook / snow_ela / snow_perm_possible / snow_evergreen, finish_far_photo(snow=) (snowlook.rs: the winter
+    // W2 snow on the ground photos, server/snowcover.py)
+    snow::py::register(m)?;
+    // 626: road M5 rounds 2-3 (roadsys: twins, widen_out, class / sign / rail clearance floors, mapped ranges,
+    // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
+    m.add("VERSION", 626)?;
     Ok(())
 }

@@ -403,7 +403,13 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 # (where a cell's inputs are read from: its CIP cell holds the arrays its sources give, bit for bit,
                 # cip.py; the weekly data builds a CIP build pins are keyed as such, MapData.versions(). Proof: the
                 # portcheck corpus's plans and facts and the sessions' tiles identical with it on and the sources gone)
-                "BNE_V2_CIP", "BNE_V2_CIP_URL", "BNE_V2_CIP_BUILD")
+                "BNE_V2_CIP", "BNE_V2_CIP_URL", "BNE_V2_CIP_BUILD",
+                # (winter W1, snow.py: a live 'snowstate' message only; snow never enters plans, cell facts, tiles or
+                # the decision archives, ~/bnge-tests/winterplan/PLAN.md decisions. W2: the snow on the ground photos is
+                # in the keys of the items it changes, the far tiles' textures and the blocks' base photos, as
+                # snowcover.key_parts: a spec's hash of the band tables, the packs and the look's version, nothing
+                # where no snow can lie. Anything else snow comes to change must carry its own spec part, snowcover.py)
+                "BNE_WINTER", "BNE_SNOW", "BNE_WET_ROADS")
 
 
 # BNGE_* settings that change what is built (the road revamp's R1 audit, 2026-11-16): keyed like the build switches
@@ -496,11 +502,15 @@ def keyed_env(k):
 # another deck of the chain is no abutment (earthfast 623, QP_FORMAT 6).
 # BNE_ROADSYS=surface 2 (M5): the decks' free edges widened to any structure's mapped paved width (not only their own
 # stroke's, up to 8 m), twins found across their widened gaps.
+# BNE_ROADSYS 4 (M5 round 2, the user's decisions 2026-11-24): the mapped bridge ends (the map's tags, not the deck
+# builder's lengthened ranges) for the structures and the hand-over; clearances by the lower road's class and maxheight
+# signs, the road under cut up to 5 m; each structure's own depth by its design and span (earthfast 626, QP_FORMAT 7).
+# BNE_ROADSYS=surface 3: decks drawn their whole depth, the lengthened stretch past a mapped end drawn as ground road.
 ROADSYS_STRUCTURES_VERSION = 1
-ROADSYS_SURFACE_VERSION = 2
+ROADSYS_SURFACE_VERSION = 3
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 3, "BNE_ROADSYS_XSEC": 1}
+                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 4, "BNE_ROADSYS_XSEC": 1}
 
 
 def keyed_value(k, v):
