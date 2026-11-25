@@ -10010,8 +10010,7 @@ class TunnelProfiles(BridgeProfiles):
         blocks and the grading each ask for a network from their own cell, and solved it with whatever cells that had
         brought: I-395's ramps under Washington pinned to different joints by the tunnel store and the grading, a 1.4 m
         step in the ground between them (2026-11-12)."""
-        while True:
-            comp = super()._resolve(start, pool, ground, loaded)
+        def end_cells(comp):
             cells = {}
             for k in comp:
                 xy = np.asarray(pool[k][1], np.float64)
@@ -10019,6 +10018,21 @@ class TunnelProfiles(BridgeProfiles):
                 for la_, lo_ in zip(np.asarray(la), np.asarray(lo)):
                     ck = mapcells.cell_of(float(la_), float(lo_))
                     cells.setdefault(str(ck), ck)
+            return cells
+
+        while True:
+            comp = super()._resolve(start, pool, ground, loaded)
+            # the parts as the network's own cells give them, in their keys' order (the longest copy, the first such
+            # of equal length), whichever cell the asker loaded first: copies of one part from different cells differ
+            # in their last bits, and Wacker Drive's network, asked from two cells by two threads, was solved from
+            # different copies and published by whichever finished first (two builds' tunnel meshes 1.5e-5 m apart,
+            # 2026-11-25). Until its cells settle (a copy's ends can lie in other cells).
+            cells = end_cells(comp)
+            for _ in range(4):
+                if not self._canon_pool(pool, [c for c in cells if c in loaded]):
+                    break
+                comp = BridgeProfiles._resolve(self, start, pool, ground, loaded, grow=False)
+                cells = end_cells(comp)
             new = [cells[c] for c in sorted(cells) if c not in loaded]
             if not new or len(loaded) >= CHAIN_CELLS:
                 break
@@ -10037,6 +10051,19 @@ class TunnelProfiles(BridgeProfiles):
         # continuation is in a cell not read from one the map simply ends)
         self._tls.read = frozenset(loaded)
         return comp
+
+    def _canon_pool(self, pool, cells):
+        """pool again from these cells (keys), in their keys' order (_load's rule: the longest copy wins, the first of
+        equal length); a part none of them gives is kept as it was. True when a part changed."""
+        old = dict(pool)
+        pool.clear()
+        scratch = {}
+        for c in sorted(cells):
+            z, x, y = (int(v) for v in c.split("/"))
+            self._load(mapcells.CellKey(z, x, y), pool, scratch)
+        for k in sorted(set(old) - set(pool), key=str):
+            pool[k] = old[k]
+        return any(old.get(k) is not v for k, v in pool.items())
 
     @staticmethod
     def _part_id(key):
