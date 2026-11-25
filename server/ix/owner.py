@@ -238,8 +238,11 @@ def piece_system(cur_net, cur, nxt_net, found, cid):
             continue
         if not mid:
             return x
-        d = min(float(np.min(np.hypot(nxt_net.lines[j][:, 0] - m[0], nxt_net.lines[j][:, 1] - m[1])))
-                for j in seeds for m in mid)
+        # (every point of a seed's line against every middle point at once: a mesh's system has thousands of seeds and
+        # the piece hundreds of middles, one numpy call for each pair was most of a round's seconds)
+        mids = np.asarray(mid, np.float64)
+        d = min(float(np.min(np.hypot(nxt_net.lines[j][:, 0, None] - mids[None, :, 0],
+                                      nxt_net.lines[j][:, 1, None] - mids[None, :, 1]))) for j in seeds)
         if best is None or d < best[0]:
             best = (d, x)
     return None if best is None else best[1]
