@@ -202,6 +202,22 @@ local function root()
   return M.ROOT
 end
 
+-- A binary file's bytes / written whole ('rb' / 'wb': the game's readFile and writeFile open text mode).
+local function readBin(path)
+  local f = io and io.open and io.open(path, 'rb')
+  if not f then return readFile(path) end
+  local d = f:read('*all')
+  f:close()
+  return d
+end
+local function writeBin(path, data)
+  local f = io and io.open and io.open(path, 'wb')
+  if not f then return writeFile(path, data) end
+  f:write(data)
+  f:close()
+  return true
+end
+
 -- The copy of a stock shape (made once: kept in the user folder), or nil.
 local function copyOf(shape)
   local c = copies[shape]
@@ -211,12 +227,12 @@ local function copyOf(shape)
   if not renames then return nil end
   local out = root() .. shape:match('[^/]+$') .. '.cdae'
   if not FS:fileExists(out) then
-    local bytes, n = M.patchCdae(readFile(shape .. '.cdae'), renames)
+    local bytes, n = M.patchCdae(readBin(shape .. '.cdae'), renames)
     if not bytes then                       -- (no leaf cards: a dead tree, already bare; or not readable)
       M.stats.stock[#M.stats.stock + 1] = shape:match('[^/]+$')
       return nil
     end
-    writeFile(out, bytes)
+    writeBin(out, bytes)
     if not FS:fileExists(out) then M.stats.failed = M.stats.failed + 1; return nil end
     M.stats.copied = M.stats.copied + 1
   end
