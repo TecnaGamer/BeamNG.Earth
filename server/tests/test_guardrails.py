@@ -562,6 +562,83 @@ class GuardrailForestTest(unittest.TestCase):
         for row in in_gap:
             self.assertAlmostEqual(row[2], 8.2, delta=0.05)
 
+    def test_a_barrier_between_two_ramps_on_a_bend_stays_on_its_line(self):
+        """Two one-lane ramps side by side round a loop (I-70 at Washington, PA, 2026-11-18), a jersey barrier mapped
+        between them. Each 8.3 m carriageway reaches over the barrier's line, and on the bend a ramp's own next
+        segment was nearer than the other ramp, so a module was taken for a side rail and pushed to one ramp's edge:
+        the run zigzagged between two lines in the lanes. Every module is now a median, on the mapped line."""
+        def arc(radius, step_deg=4.0):
+            t = np.deg2rad(np.arange(200.0, 340.0 + 1e-9, step_deg))
+            return np.column_stack((100.0 + radius * np.cos(t), 60.0 + radius * np.sin(t)))
+        ramps = [self.road(arc(50.0), width=8.3), self.road(arc(56.0), width=8.3)]
+        line = arc(53.0, 1.0)
+        lat, lon, _ = self.frame.enu_to_geodetic(line[:, 0], line[:, 1], np.zeros(len(line)))
+        f = mapgeom.Features(layer="infrastructure", ids=np.array(["jersey-1"]),
+                             kind=np.array([mapgeom.LINE], np.uint8), part_off=np.array([0, 1], np.int64),
+                             ring_off=np.array([0, 1], np.int64), coord_off=np.array([0, len(line)], np.int64),
+                             lonlat=np.column_stack((lon, lat)),
+                             attrs={"subtype": np.array(["barrier"]), "class": np.array(["jersey_barrier"])})
+        rows = guardrails.forest_rows(self.frame, lambda _k: f, (0.0, -20.0, 200.0, 60.0),
+                                      lambda lat, lon: np.full(np.shape(lat), 12.0, np.float64), roads=ramps)
+        self.assertGreater(len(rows), 30)
+        for row in rows:
+            radius = float(np.hypot(row[1] - 100.0, row[2] - 60.0))
+            self.assertAlmostEqual(radius, 53.0, delta=0.1)
+
+    def test_a_median_leaving_a_lane_where_two_ramps_part_stays_one_line(self):
+        """Where the two loop ramps part (I-70 at Washington, PA, 2026-11-18) the mapped barrier runs along one ramp, a
+        little on its 8.3 m carriageway, while the other ramp turns away. Each module went to the middle of the widening
+        gap on its own, then back to the mapped line where it left the lane: pieces stepped out and jumped back. The
+        modules' ends now meet."""
+        t = np.linspace(0.0, 1.0, 41)
+        bend = np.column_stack((60.0 + 60.0 * t, 6.0 + 25.0 * t ** 2))
+        ramps = [self.road([[0.0, 0.0], [140.0, 0.0]], width=8.3),
+                 self.road(np.vstack(([[0.0, 6.0]], bend)), width=8.3)]
+        line = np.array([[10.0, 3.6], [130.0, 3.6]])
+        lat, lon, _ = self.frame.enu_to_geodetic(line[:, 0], line[:, 1], np.zeros(2))
+        f = mapgeom.Features(layer="infrastructure", ids=np.array(["jersey-1"]),
+                             kind=np.array([mapgeom.LINE], np.uint8), part_off=np.array([0, 1], np.int64),
+                             ring_off=np.array([0, 1], np.int64), coord_off=np.array([0, 2], np.int64),
+                             lonlat=np.column_stack((lon, lat)),
+                             attrs={"subtype": np.array(["barrier"]), "class": np.array(["jersey_barrier"])})
+        rows = guardrails.forest_rows(self.frame, lambda _k: f, (0.0, -20.0, 200.0, 60.0),
+                                      lambda lat, lon: np.full(np.shape(lat), 12.0, np.float64), roads=ramps)
+        rows.sort(key=lambda r: r[1])
+        self.assertGreater(len(rows), 30)
+        half = guardrails.MODULE_LENGTH_M / 2
+        ends = [(np.array([r[1], r[2]]) - half * np.array([r[11], r[12]]),
+                 np.array([r[1], r[2]]) + half * np.array([r[11], r[12]])) for r in rows]
+        for (_, b), (a, _) in zip(ends, ends[1:]):
+            self.assertLess(abs(float(b[1] - a[1])), 0.15)
+
+    def test_a_barrier_mapped_as_a_chain_of_ways_meets_at_the_joins(self):
+        """One jersey barrier mapped as three ways end to end (the I-70 loop ramps at Washington, PA, 2026-11-18). Each
+        way's modules were centred on it on their own, so at a join they left a gap or overlapped and turned there:
+        kinks along the run. A module now ends on each join from both sides; a free end keeps the centred margin."""
+        lines = [np.array([[10.0, 0.0], [50.0, 0.0]]), np.array([[50.0, 0.0], [67.3, 0.0]]),
+                 np.array([[67.3, 0.0], [99.0, 0.0]])]
+        ll, off = [], [0]
+        for line in lines:
+            lat, lon, _ = self.frame.enu_to_geodetic(line[:, 0], line[:, 1], np.zeros(2))
+            ll.append(np.column_stack((lon, lat)))
+            off.append(off[-1] + 2)
+        f = mapgeom.Features(layer="infrastructure", ids=np.array(["j1", "j2", "j3"]),
+                             kind=np.full(3, mapgeom.LINE, np.uint8), part_off=np.arange(4, dtype=np.int64),
+                             ring_off=np.arange(4, dtype=np.int64), coord_off=np.array(off, np.int64),
+                             lonlat=np.concatenate(ll),
+                             attrs={"subtype": np.array(["barrier"] * 3), "class": np.array(["jersey_barrier"] * 3)})
+        rows = guardrails.forest_rows(self.frame, lambda _k: f, self.BOX,
+                                      lambda lat, lon: np.full(np.shape(lat), 12.0, np.float64))
+        half = guardrails.MODULE_LENGTH_M / 2
+        starts = sorted(r[1] - half for r in rows)
+        ends = sorted(r[1] + half for r in rows)
+        for join in (50.0, 67.3):
+            self.assertAlmostEqual(min(ends, key=lambda x: abs(x - join)), join, delta=0.02)
+            self.assertAlmostEqual(min(starts, key=lambda x: abs(x - join)), join, delta=0.02)
+        for a, b in zip(starts[1:], ends):
+            self.assertLessEqual(a, b + 1e-6)                                   # no gap anywhere
+        self.assertAlmostEqual(starts[0] - 10.0, 99.0 - ends[-1], delta=0.3)     # (free ends: margins alike)
+
     def test_a_skewed_lower_road_rail_stays_on_the_ground(self):
         """A lower road 23° off a deck still clears the deck's parallel test (Drie Merenweg under the
         Zuidtangent). The rail follows the lower road, so it stays at ground height on that road's edge

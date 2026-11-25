@@ -499,6 +499,9 @@ def _deck_segments(decks):
 # split at a bridge (CT 72 under High Street, its lower part layer=-1 and not among the ground roads) its piece's end
 # looks like a dead end, and two modules stood in its lanes.
 RAIL_CLEAR_M = 0.25             # m a rail across a road's line keeps clear of its carriageway's edge
+GAP_PUSH = 2.0                  # a median barrier d m on a lane goes 2 d m out of it, at most to the gap's middle: the
+                                # middle for one well on the lane (#1025), and no jump where two ramps part and it
+                                # leaves the lane bit by bit (the I-70 loop at Washington, PA, 2026-11-18)
 LANE_CENTER_M = 1.5             # m of the centre line that stays put: a median, not a side rail drawn in the lane
 CROSS_SAMPLES = 7               # points along a module checked
 
@@ -582,16 +585,20 @@ def _along_road(a, b, rsegs):
     other = aligned & (np.arange(len(dots)) != k)
     median, gap = False, None
     if other.any():
+        # The other carriageway is the nearest aligned segment on the far side of the rail. Segments on this side
+        # are this carriageway's own (its next segment on a bend is often nearer than the road across the rail:
+        # two one-lane ramps side by side, the I-70 loop at Washington, PA, 2026-11-18).
+        t1 = float(np.clip(along[k], 0.0, rsegs["len"][k]))
+        n1 = rsegs["a"][k] + t1 * unit
         a2, u2, l2 = rsegs["a"][other], rsegs["unit"][other], rsegs["len"][other]
         t2 = np.clip(np.sum((mid - a2) * u2, axis=1), 0.0, l2)
         n2 = a2 + t2[:, None] * u2
         d2 = dnp.hypot(*(mid - n2).T) - rsegs["half"][other]
-        j = int(np.argmin(d2))
-        if float(d2[j]) <= MEDIAN_REACH_M:
-            t1 = float(np.clip(along[k], 0.0, rsegs["len"][k]))
-            n1 = rsegs["a"][k] + t1 * unit
-            median = float(dnp.dot(mid - n1, mid - n2[j])) < 0.0
-            if median:
+        across = dnp.matmul(mid - n2, mid - n1) < 0.0
+        if across.any():
+            j = int(np.flatnonzero(across)[np.argmin(d2[across])])
+            if float(d2[j]) <= MEDIAN_REACH_M:
+                median = True
                 # (the gap between the two carriageways' edges, from this one's line toward the other: its middle,
                 # or the middle of their overlap; a mapped median barrier inside either goes there, _shift_to_edge)
                 v2 = n2[j] - n1
@@ -618,16 +625,51 @@ def _shift_to_edge(a, b, road):
     return _moved(a, b, target, road["origin"], road["unit"])
 
 
+def _segments_near(rsegs, xy, reach):
+    """The road segments (rsegs' layout) within reach of xy plus their own half width (a probe's candidates)."""
+    v = xy - rsegs["a"]
+    t = np.clip(np.sum(v * rsegs["unit"], axis=1), 0.0, rsegs["len"])
+    d = dnp.hypot(*(v - t[:, None] * rsegs["unit"]).T) - rsegs["half"]
+    keep = d <= reach
+    return {key: val[keep] for key, val in rsegs.items()}
+
+
+def _shift_ends(a, b, road, rsegs):
+    """_shift_to_edge with each end of a median moved as far as a module centred on it would be: where the move changes
+    along the run (a median leaving a lane as two ramps part) the modules follow it as one line instead of stepping
+    from one to the next. A module that is not moved, and a side rail, move as before."""
+    na, nb = _shift_to_edge(a, b, road)
+    if road is None or not road["median"] or (np.array_equal(na, a) and np.array_equal(nb, b)):
+        return na, nb               # (a side rail goes to a fixed offset from its road's edge: the modules meet as they are)
+    half = 0.5 * (b - a)
+    near = _segments_near(rsegs, 0.5 * (a + b), float(dnp.hypot(half[0], half[1])) * 2.0 + MEDIAN_REACH_M)
+    out = []
+    for p, moved in ((a, na), (b, nb)):
+        probe = _along_road(p - half, p + half, near)
+        if probe is None:
+            out.append(moved)
+            continue
+        pa, pb = _shift_to_edge(p - half, p + half, probe)
+        out.append(p + 0.5 * ((pa - (p - half)) + (pb - (p + half))))
+    return out[0], out[1]
+
+
 def _to_gap(a, b, gap, lat, origin, unit):
-    """A median barrier (a, b) on either carriageway's lanes moved to the middle of the gap between their edges, or of
-    their overlap (gap: (this one's half width, the other's edge from this one's line, the barrier's distance past the
-    other's edge); lat: its signed offset from this one's line). One between them already stays."""
+    """A median barrier (a, b) on either carriageway's lanes moved out of them by GAP_PUSH times as far as it was on
+    them, at most to the middle of the gap between their edges (to the middle of their overlap where they overlap)
+    (gap: (this one's half width, the other's edge from this one's line, the barrier's distance past the other's
+    edge); lat: its signed offset from this one's line). One between them already stays."""
     if gap is None:
         return a, b
     e1, e2, d_other = gap
-    if abs(lat) >= e1 - 0.05 and d_other >= -0.05:
+    x, half_gap = abs(lat), 0.5 * (e2 - e1)
+    if e1 - x > 0.05:                   # on this one's lanes
+        target = e1 + min(half_gap, GAP_PUSH * (e1 - x))
+    elif d_other < -0.05:               # on the other's
+        target = e2 - min(half_gap, GAP_PUSH * -d_other)
+    else:
         return a, b
-    return _moved(a, b, math.copysign(0.5 * (e1 + e2), lat), origin, unit)
+    return _moved(a, b, math.copysign(target, lat), origin, unit)
 
 
 def _moved(a, b, target, origin, unit):
@@ -857,6 +899,57 @@ def _self_doubles(rows, dist=0.9, dot=0.8, dz=1.5):
 
 
 
+JOIN_M = 1.0         # m: a mapped barrier line's end this near another's end (of the same kind) goes on into it
+
+
+class _Joins:
+    """Where mapped barrier lines go on into another of the same kind (one barrier mapped as a chain of ways): the
+    other line's end is looked up in the cells around this end, so every tile decides the same."""
+
+    def __init__(self, frame, infra_fn):
+        self.frame, self.infra_fn, self.cells = frame, infra_fn, {}
+
+    def _ends(self, key):
+        got = self.cells.get(key)
+        if got is not None:
+            return got
+        got = []
+        try:
+            feats = self.infra_fn(key)
+        except Exception:
+            feats = None
+        if feats is not None and len(feats) and (feats.attrs.get("class") is not None or
+                                                  feats.attrs.get("tags") is not None):
+            for i in range(len(feats)):
+                if int(feats.kind[i]) != mapgeom.LINE:
+                    continue
+                kind = _barrier_kind(feats, i)
+                if kind is None:
+                    continue
+                for part in feats.parts(i):
+                    if not part or len(part[0]) < 2:
+                        continue
+                    lonlat = np.asarray(part[0], np.float64)[[0, -1]]
+                    e, n = mapgeom.enu_xy(feats, self.frame, lonlat)
+                    got.extend((kind, str(feats.ids[i]), np.array([e[j], n[j]], np.float64)) for j in (0, 1))
+        self.cells[key] = got
+        return got
+
+    def at(self, kind, fid, xy):
+        """Whether another mapped line of this kind has an end within JOIN_M of xy (ENU)."""
+        la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0]], np.float64), np.array([xy[1]], np.float64),
+                                               np.zeros(1, np.float64))
+        try:
+            keys = mapcells.cells_for_points(la, lo, pad_lat=0.00002, pad_lon=0.00002, max_cells=4)
+        except (ValueError, OverflowError):
+            return False
+        for key in keys:
+            for k2, f2, p2 in self._ends(key):
+                if k2 == kind and f2 != fid and float(dnp.hypot(*(p2 - xy))) <= JOIN_M:
+                    return True
+        return False
+
+
 def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
                 supported_decks_out=None, roads=()):
     """Return Forest-item rows for the stock Italy guardrail model.
@@ -901,6 +994,7 @@ def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bri
 
     seen = set()
     placements = []
+    joins = _Joins(frame, infra_fn)
     for key in keys:
         try:
             feats = infra_fn(key)
@@ -950,13 +1044,23 @@ def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bri
 
                 # Fit all modules inside the mapped line. Neighbouring 3 m shapes overlap by 0.2 m;
                 # the unused margins are shared between the two ends, avoiding gaps at either cap.
+                # An end where another mapped line of this kind goes on (one barrier mapped as a chain of
+                # ways) gets a module ending exactly on it, so the two lines' modules meet there.
+                join_a, join_b = joins.at(kind, fid, line[0]), joins.at(kind, fid, line[-1])
+                step = MODULE_STEP_M
                 count = max(1, int(math.floor((total - MODULE_LENGTH_M) / MODULE_STEP_M)) + 1)
-                covered = MODULE_LENGTH_M + (count - 1) * MODULE_STEP_M
+                if join_a and join_b and total > MODULE_LENGTH_M:
+                    count = int(math.ceil((total - MODULE_LENGTH_M) / MODULE_STEP_M - 1e-9)) + 1
+                    step = (total - MODULE_LENGTH_M) / (count - 1) if count > 1 else 0.0
+                covered = MODULE_LENGTH_M + (count - 1) * step
                 start = 0.5 * (total - covered)
+                if join_a != join_b and total > MODULE_LENGTH_M:
+                    start = 0.0 if join_a else total - covered
+                closed_a, closed_b = closed_a or join_a, closed_b or join_b
 
                 spans = []
                 for k in range(count):
-                    sa = start + k * MODULE_STEP_M
+                    sa = start + k * step
                     sb = sa + MODULE_LENGTH_M
                     a, _ = _at(line, arc, float(sa))
                     b, _ = _at(line, arc, float(sb))
@@ -1036,7 +1140,7 @@ def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bri
                             if shifts is not None:
                                 mode = "join"
                     if mode == "ground":
-                        source_a, source_b = _shift_to_edge(source_a, source_b, road)
+                        source_a, source_b = _shift_ends(source_a, source_b, road, rsegs)
                     elif mode == "median":                 # (off either deck's lanes, #1025)
                         source_a, source_b = _to_gap(source_a, source_b, rel["gap"], rel["slat"], rel["origin"],
                                                      rel["unit"])
