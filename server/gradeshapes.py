@@ -2414,6 +2414,11 @@ def ramp(z0, g0, sign, g, rad, d, ground):
     g1 = float(grade[t - 1])
     look = min(n - 1, t + max(2, int(round(abs(g1) * rad / max(ds.mean(), 1e-6))) + 2))
     g2 = float((ground[look] - ground[t - 1]) / max(d[look] - d[t - 1], 1e-6)) if look > t - 1 else g1
+    # (the road lands on a line of at most its own max grade: a ground rising off the start faster than that (a deck's
+    # end in a trench, the ground a metre over it a few metres on) is read over a few samples as a grade of 0.3 or 0.6,
+    # and the curve onto that line, 0.5 rad |g2 - g1| long, carried the ramp 40 m up over level ground: A61's two
+    # motorways' ramps floored the road at 235-247 m on ground of 199, each interchange's differently)
+    g2 = float(np.clip(g2, -g, g))
     half = 0.5 * rad * abs(g2 - g1)             # (a curve onto the ground: about half its length either side)
     line = z_t + g2 * (d - s_t)                 # (the ground's line the ramp lands tangent to)
     # (that curve runs from where the ramp itself is, at its grade, to the ground's line, at its grade, over the
