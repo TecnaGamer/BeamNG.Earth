@@ -150,6 +150,15 @@ do
   T.check(B.map(ECA .. 'trees_douglasfir/tree_douglasfir_large_a', 0.01) == ECA .. 'trees_douglasfir/tree_douglasfir_large_a',
     'a conifer: itself')
   T.check(B.reportLine():find('^bare trees: amount 0%.%d%d, %d+ bare') ~= nil, 'the log line: ' .. B.reportLine())
+  local a0 = B.status().amount
+  seasonlook.update(true, 39.30)
+  T.check(B.status().amount == a0, 'a rebase nearby: the amount kept')
+  seasonlook.update(true, 46.5)
+  T.check(B.status().amount == nil, 'a teleport far north: the amount taken anew')
+  B.map(stock, 0.3)
+  T.check(B.status().amount == B.amountFor('auto', tonumber(os.date('*t').yday), 46.5), '... at the new place')
+  seasonlook.update(true, 39.29)
+  B.map(stock, 0.3)
   seasonlook.restore()
   T.check(trees.bareMap == nil and B.status().amount == nil and not B.status().active, 'the level ended: stock trees')
   seasonlook.update(true, 39.29)

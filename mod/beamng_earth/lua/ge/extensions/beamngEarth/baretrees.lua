@@ -149,6 +149,7 @@ end
 M.ROOT = nil            -- the copies' folder (set with the game's build: a game update recompiles its shapes)
 local active = false    -- winter on and the textures there
 local latched = nil     -- the amount taken at the first tree
+local latchedAt, reported = nil, false      -- when (os.clock), and its log line sent
 local inputs = {}       -- mode, lat, snow, state: the latch's
 local copies = {}       -- stock shape -> its copy's path, or false (none possible)
 M.stats = { copied = 0, bare = 0, kept = 0, failed = 0 }
@@ -237,7 +238,6 @@ end
 -- One line for the server's log (its perf_log: the file players send) REPORT_S after the amount was taken: what the
 -- level's trees became and the far pictures the engine baked for the copies so far.
 M.REPORT_S = 60
-local latchedAt, reported = nil, false
 function M.reportLine()
   local imp = 0
   if FS and FS.findFiles and M.ROOT then
@@ -262,7 +262,15 @@ function M.resume(mode)
     end)
   end
 end
-function M.setLat(lat) if lat then inputs.lat = lat end end
+-- The anchor's latitude (seasonlook.lua, as it changes): a place this much farther north or south (a teleport; the
+-- level starts at one place and the player is sent to another) takes its own amount from its next tree on.
+M.RELATCH_DEG = 0.25
+function M.setLat(lat)
+  if not lat then return end
+  if inputs.lat == nil or math.abs(lat - inputs.lat) > M.RELATCH_DEG then
+    inputs.lat, latched, latchedAt, reported = lat, nil, nil, false
+  end
+end
 function M.setState(state) if type(state) == 'table' then inputs.state = state end end
 
 -- The level ended or winter went off: the trees placed after this are the stock ones (those placed stay until made
