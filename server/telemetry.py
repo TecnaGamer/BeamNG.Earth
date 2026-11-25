@@ -5,9 +5,15 @@ Every REPORT_S the server sends https://earth.tgforever.net/telemetry (the proje
 
     {"id": a random install id (TELEMETRY_ID file in the cache; no name, account or hardware in it),
      "v": the app version, "os": windows / linux / deck / macos, "game": a game connected now, "mp": in BeamMP,
-     "interval": REPORT_S,
+     "interval": REPORT_S, "rid": a random id of this server run, "seq": the report's number in the run,
      "sources": {host: {"req", "mb", "ok", "e4xx", "e404", "e429", "e5xx", "err", "retry", "deferred", "waited",
-                        "waitMs", "limitFail", "budget"}}}   (since the last report)
+                        "waitMs", "limitFail", "budget"}},   (since the last report)
+     "dem": {"<source>:<caller>:<zoom>:<outcome>": n}}   (the elevation tiles' raw reads, under the network switch;
+                                                         dem.py _note: which module, no position)
+
+A report whose answer did not come is sent again unchanged (its rid and seq) before any new counts, for as long as it
+takes, so a collector that got it the first time counts it once (never under another seq); one the collector refuses
+outright (a 4xx but 408 / 429) is dropped.
 
 Nothing else: no place, no position, no IP kept (the collector derives the country from the address and drops it).
 Off with the settings page's Anonymous usage statistics switch (read before every report), BNE_TELEMETRY=off (or
@@ -15,7 +21,7 @@ earthd --telemetry off), and always in --offline mode. Failures are silent: a re
 cannot be sent is dropped (its counts go into the next one).
 
 The per-host counts are every process's (netfetch.process_totals: the worker processes write theirs to
-BNE_NETSTATS_PROC, this sums what changed since the last report).
+BNE_NETSTATS_PROC, this run's own folder: run_proc_dir; this sums what changed since the last report).
 """
 import json
 import logging
@@ -24,6 +30,7 @@ import platform
 import secrets
 import threading
 import time
+import urllib.error
 import urllib.request
 
 import netfetch
@@ -56,7 +63,12 @@ REPORT_S = 300.0            # s between reports (the collector counts an install
 FIRST_S = 60.0              # s after the start before the first
 TIMEOUT_S = 10.0
 ID_FILE = "telemetry_id"
-PROC_KEEP_S = 3600.0        # a dead process's totals file is removed this long after its last write
+PROC_KEEP_S = 3600.0        # a dead process's totals file is removed this long after its last write (and an old
+                            # run's folder this long after its last change)
+DEM_KEYS = 64               # DEM detail keys a report holds at most (the rest summed under "other"; ~3 KB: the
+                            # collector takes 16 KB a report)
+REJECTED = "rejected"       # send()'s answer for a report the collector refused outright (True: taken; False: no
+                            # answer, perhaps taken: sent again unchanged)
 KEYS = {"req": ("requests",), "mb": ("bytes",), "ok": ("s2xx",), "e4xx": ("s4xx",), "e404": ("s404",),
         "e429": ("s429",), "e5xx": ("s5xx",), "err": ("errors",), "retry": ("retries",),
         # our own limits: background requests dropped (deferred), demand ones that waited (and ms) or were refused,
@@ -84,6 +96,37 @@ def install_id(cache_dir):
     except OSError as e:
         log.debug("telemetry id: %s", e)
     return v
+
+
+def run_proc_dir(root):
+    """root/<a new run id>, made, for this server run's process totals files (netfetch.write_process_totals): what
+    this run's telemetry reads, and nothing an older run left. A new Reporter counts every file it finds from zero, so
+    the files the last run's processes left (counted and sent by that run) were counted again at each restart, and
+    two servers reporting from one folder counted each other's (2026-11-15 review). Older runs' folders untouched for
+    PROC_KEEP_S, and the totals files of versions before the run folders (root/<pid>.json), are removed uncounted."""
+    run = f"r{int(time.time())}-{os.getpid()}-{secrets.token_hex(3)}"
+    got = os.path.join(root, run)
+    os.makedirs(got, exist_ok=True)
+    now = time.time()
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return got
+    import shutil
+    for name in names:
+        p = os.path.join(root, name)
+        try:
+            if name == run:
+                continue
+            if os.path.isdir(p):
+                newest = max([os.path.getmtime(p)] + [os.path.getmtime(os.path.join(p, n)) for n in os.listdir(p)])
+                if now - newest > PROC_KEEP_S:
+                    shutil.rmtree(p, ignore_errors=True)
+            elif name.endswith((".json", ".tmp")):
+                os.remove(p)
+        except OSError:
+            continue
+    return got
 
 
 def choices(settings):
@@ -124,8 +167,14 @@ class Reporter:
         self.perf = perf
         # keep_id False (privacyregion.NO_ID: Russia): a random id of this run only, never stored
         self.id = install_id(cache_dir) if keep_id else secrets.token_hex(16)
-        self.seen = {}              # pid -> {host: {counter: n}} last counted
-        self.carry = {}             # host -> counts not yet delivered (a failed report)
+        self.seen = {}              # (pid, instance) -> ({host: {counter: n}}, {detail key: n}) last counted
+        self.carry = {}             # host -> counts not yet in a report
+        self.carry_dem = {}         # detail key -> counts not yet in a report
+        # (the reports' idempotency: rid a random id of this run, seq each report's number; a report whose answer was
+        # lost is sent again as it was, the same seq, so a collector that saw it can tell and count it once)
+        self.rid = secrets.token_hex(8)
+        self.seq = 0
+        self.pending = None         # (seq, sources, dem) of a report not acknowledged: sent again before new counts
         self._stop = threading.Event()
 
     def start(self):
@@ -147,11 +196,15 @@ class Reporter:
                 return
 
     def _process_totals(self):
-        """{pid: {host: {counter: n}}}: this process's and the other processes' files."""
-        out = {os.getpid(): netfetch.process_totals()}
+        """{(pid, instance): ({host: {counter: n}}, {detail key: n})}: this process's and the other processes' files
+        (proc_dir: this server run's own folder, run_proc_dir). A file whose process has not written for PROC_KEEP_S
+        is counted (what changed since it was last seen) and then removed: its process is gone."""
+        me = os.getpid()
+        out = {(me, netfetch.instance()): (netfetch.process_totals(), netfetch.process_details())}
         if not self.proc_dir or not os.path.isdir(self.proc_dir):
             return out
         now = time.time()
+        gone = []
         for name in os.listdir(self.proc_dir):
             if not name.endswith(".json"):
                 continue
@@ -160,28 +213,57 @@ class Reporter:
                 with open(path, encoding="utf-8") as fh:
                     d = json.load(fh)
                 pid = int(d.get("pid"))
-                if pid != os.getpid():
-                    out[pid] = d.get("hosts") or {}
+                k = (pid, str(d.get("inst") or ""))
+                if pid != me:
+                    out[k] = (d.get("hosts") or {}, d.get("detail") or {})
                 if now - float(d.get("at", now)) > PROC_KEEP_S:
-                    os.remove(path)
-                    self.seen.pop(pid, None)
+                    gone.append((path, k))
             except (OSError, ValueError, TypeError):
                 continue
+        self._gone = gone
         return out
 
     def deltas(self):
-        """{host: {key: n}} counted since the last call (every process), plus what a failed report left."""
+        """{host: {key: n}} counted since the last call (every process), plus what has not been in a report yet;
+        the DEM detail counts likewise in self.carry_dem."""
         out = {h: dict(v) for h, v in self.carry.items()}
-        for pid, hosts in self._process_totals().items():
-            last = self.seen.get(pid, {})
+        dem = dict(self.carry_dem)
+        self._gone = []
+        for k, (hosts, detail) in self._process_totals().items():
+            last, last_d = self.seen.get(k, ({}, {}))
             for host, c in hosts.items():
                 prev = last.get(host, {})
                 d = out.setdefault(host, dict.fromkeys(KEYS, 0))
                 for key, (counter,) in KEYS.items():
                     n = max(0, int(c.get(counter, 0)) - int(prev.get(counter, 0)))
                     d[key] = d.get(key, 0) + n
-            self.seen[pid] = {h: dict(c) for h, c in hosts.items()}
+            for key, v in detail.items():
+                try:
+                    n = max(0, int(v) - int(last_d.get(key, 0)))
+                except (TypeError, ValueError):
+                    continue
+                if n:
+                    dem[str(key)] = dem.get(str(key), 0) + n
+            self.seen[k] = ({h: dict(c) for h, c in hosts.items()}, dict(detail))
+        for path, k in self._gone:          # (counted above: removed now, and forgotten)
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            self.seen.pop(k, None)
+        self.carry_dem = {key: n for key, n in dem.items() if n}
         return {h: d for h, d in out.items() if any(d.values())}
+
+    def take_dem(self):
+        """The DEM detail counts deltas() gathered (cleared): {key: n}, at most DEM_KEYS of them, the rest summed
+        under "other"."""
+        dem, self.carry_dem = self.carry_dem, {}
+        if len(dem) <= DEM_KEYS:
+            return dem
+        top = sorted(dem.items(), key=lambda kv: (-kv[1], kv[0]))
+        out = dict(top[:DEM_KEYS - 1])
+        out["other"] = out.get("other", 0) + sum(n for _, n in top[DEM_KEYS - 1:])
+        return out
 
     def body(self, sources):
         game, mp = self.state()
@@ -195,14 +277,27 @@ class Reporter:
 
     def report(self):
         sources = self.deltas()
+        dem = self.take_dem()
         a = self.allowed()
         a = a if isinstance(a, dict) else {"main": bool(a), "net": bool(a), "perf": False}
         if not a.get("main"):           # (off, or not chosen yet on the welcome page: nothing sent, these counts dropped)
-            self.carry = {}
+            self.carry, self.pending = {}, None
             return
         if not a.get("net"):            # (network load off: no per-source counts)
-            sources = {}
-        body = self.body(sources)
+            sources, dem, self.pending = {}, {}, None
+        if self.pending is not None:
+            # (the last report's answer did not come: it is sent again as it was, its seq, before any new count; the
+            # new ones wait for the next report)
+            seq, send_sources, send_dem = self.pending
+            self.carry, self.carry_dem = sources, dem
+        else:
+            self.seq += 1
+            seq, send_sources, send_dem = self.seq, sources, dem
+            self.carry, self.carry_dem = {}, {}
+        body = self.body(send_sources)
+        body["rid"], body["seq"] = self.rid, seq
+        if send_dem:
+            body["dem"] = {str(k)[:64]: int(v) for k, v in sorted(send_dem.items())}
         perf = None
         if self.perf:
             try:
@@ -215,10 +310,19 @@ class Reporter:
         if perf and upload:
             body["perf"] = perf
         self._keep_last(body, None if upload else perf)
-        if self.send(body):
-            self.carry = {}
-        else:
-            self.carry = sources        # (sent with the next report)
+        got = self.send(body)
+        if got is REJECTED:
+            # (refused outright, a 400 / 413: the collector took none of it, and the same body would be refused
+            # again: its counts dropped, never put under a new seq)
+            log.debug("telemetry: report %d refused by the collector: its counts dropped", seq)
+            self.pending = None
+        elif got:
+            self.pending = None
+        elif self.pending is None:
+            # (no answer: it may have arrived. Sent again as it is, its rid and seq, until an answer comes: its counts
+            # are never put under another seq, which a collector would count a second time; one body at most, the
+            # new counts wait in carry)
+            self.pending = (seq, send_sources, send_dem)
 
     def _keep_last(self, body, held=None):
         """The report as sent, for the settings page's "What is sent" (LAST_FILE in the cache); held: the performance
@@ -240,6 +344,11 @@ class Reporter:
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=netfetch.windows_ssl_context()) as r:
                 return 200 <= r.status < 300
+        except urllib.error.HTTPError as e:
+            log.debug("telemetry report: HTTP %s", e.code)
+            # (the collector's own answer: a 4xx other than "too soon" (429) / a timeout (408) means it took nothing
+            # and never will; 429, 5xx: not counted now, the same report again later)
+            return REJECTED if 400 <= e.code < 500 and e.code not in (408, 429) else False
         except Exception as e:
             log.debug("telemetry report: %s: %s", type(e).__name__, e)
             return False

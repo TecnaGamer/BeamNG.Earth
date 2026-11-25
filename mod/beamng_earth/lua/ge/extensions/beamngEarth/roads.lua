@@ -21,9 +21,32 @@
 
 local stopwatch = require('beamngEarth/stopwatch')
 local sea = require('beamngEarth/sea')
+local clifftalus = require('beamngEarth/clifftalus')
 local speedtraps = require('beamngEarth/speedtraps')
 
 local M = {}
+
+-- Bounded streamed parts, matching server/cliffscene.py. Faces are content;
+-- contact strips follow the anchor's terrain skin through swaps and rebases.
+M.CLIFF_WHATS, M.CLIFF_STRIPS = {}, {}
+for i = 1, 64 do M.CLIFF_WHATS[i] = i == 1 and 'cliff' or ('cliff'..i) end
+for i = 1, 24 do M.CLIFF_STRIPS[i] = 'cliffStrip'..i end
+M.CLIFF_COLLIDERS = {}
+for i = 1, 256 do M.CLIFF_COLLIDERS[i] = 'cliffCol'..i end
+function M.isCliffCollider(what) return type(what) == 'string' and what:match('^cliffCol%d+$') ~= nil end
+function M.isCliff(what) return what == 'cliff' or (type(what) == 'string' and what:match('^cliff%d+$') ~= nil) end
+function M.isCliffStrip(what) return type(what) == 'string' and what:match('^cliffStrip%d+$') ~= nil end
+-- PR #1412's cliffs (server BNE_CLIFFS): their parts join the tile loops only after hello says cliffs are on
+-- (M.configureCliffs); off, every list and loop is the one without them (no entries, no per-part matching).
+M._cliffsOn = false
+local function withCliffs(list)
+  if not M._cliffsOn then return list end
+  for _, what in ipairs(M.CLIFF_WHATS) do list[#list+1] = what end
+  for _, what in ipairs(M.CLIFF_STRIPS) do list[#list+1] = what end
+  for _, what in ipairs(M.CLIFF_COLLIDERS) do list[#list+1] = what end
+  return list
+end
+
 
 M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/main.materials.json',
@@ -197,6 +220,8 @@ local reloadWaits = 0
 local newColliders = {}    -- { id, walkQ entry } of the colliders made since the last reloadCollision
 local extBoxes = {}        -- boxes { x0, y0, z0, x1, y1, z1 } round other modules' colliders made since the last rebuild
                            -- (M.requestCollision)
+local lateCells = {}       -- ... and points due only within hardReach (M.requestLate: trees made solid far ahead), by
+local lateN = 0            -- LATE_CELL_M cell ("gx_gy" -> { x0, y0 }); lateN: how many cells
 local farDeletes = {}      -- ids of colliders dropped far from the car or behind it (updateCollideRange): their deletion
                            -- waits for any later rebuild (deletesDirty), never a prompt one
 local CUSTOM_MATERIALS_PATH = '/levels/beamng_earth/art/shapes/beamngEarth/three_dmr.materials.json'
@@ -278,6 +303,13 @@ M.OPAQUE = { 'road_asphalt_2lane', 'italy_cobblestone' }
 -- cascade every frame (the tiles are dynamic TSStatics, no cached shadow map), for a shadow that fell under the road
 -- itself. The decks' slabs, the curbs and the sidewalks keep theirs.
 M.NO_SHADOW = { 'road_asphalt_2lane', 'italy_cobblestone', 'm_gm_concrete_plain' }
+
+function M.loadWalkMaterials(walk)
+  if type(walk) == 'table' and walk.townBrick and not M.townBrickLoaded then
+    loadJsonMaterialsFile('/levels/east_coast_usa/art/shapes/buildings/main.materials.json')
+    M.townBrickLoaded = true
+  end
+end
 
 local function loadMaterials()
   if loadedMaterials then return end
@@ -440,9 +472,41 @@ end
 M.SLOW_UNIT_MS = 60
 M.BIG_UNIT_MS = 20          -- (M.lastBig: { kind, ms, at = os.clock() } of the last unit this slow or slower)
 
+-- A dropped road geotile's building shapes stay drawn until a far LOD of their cell is made to take over, or the same
+-- tile's new content shows its own (M.stepRetiring): then they are hidden and the far one shown in the same frame.
+-- Before (2026-11-21) they waited in the delete queue, the far tile hidden 3 more frames, then made (LAZY_FAR_PARTS
+-- had not made it under the near buildings): a hole of a few frames to a second at every tile left behind, and a tile
+-- re-sent with new content drew its old and new buildings together for a while. At most RETIRE_MAX_S.
+local retiring = {}         -- { gkey, ids, at } in drop order
+M.RETIRE_MAX_S = 5
+local function retireNear(t)
+  if not t.geo or not M.farGeo or not M._owns then return false end
+  local ids = {}
+  local function take(id) if id and M._owns(id) then ids[#ids + 1] = id; return true end return false end
+  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4' }) do
+    if take(t[w]) then t[w] = nil end
+    if t.oldPart and take(t.oldPart[w]) then t.oldPart[w] = nil end
+  end
+  if t.custom then
+    local keep = {}
+    for _, id in ipairs(t.custom) do if not take(id) then keep[#keep + 1] = id end end
+    t.custom = keep
+  end
+  if #ids == 0 then return false end
+  local o = scenetree.findObjectById(ids[1])
+  if o and not M.nearPlayer(o:getPosition(), M.DROP_WAIT_M) then     -- (a teleport's leftovers: nothing to hand over)
+    for _, id in ipairs(ids) do deleteQ[#deleteQ + 1] = id end
+    return true
+  end
+  retiring[#retiring + 1] = { gkey = t.gkey, ids = ids, at = now() }
+  M._markSquare(M._squareOf(t.gkey) or '')      -- (its far tile, waiting unmade under them: made now, hidden)
+  return true
+end
+
 local function dropTile(key)
   local t = tiles[key]
   if not t then return end
+  retireNear(t)
   for _, sl in pairs(t.slots or {}) do slotDrop(sl) end
   for w, v in pairs(t.oldSkin or {}) do       -- (a geotile's previous skin and replaced parts: road geotiles below)
     if type(w) == 'string' and w:sub(1, 2) == 's:' then slotDrop(v) else deleteQ[#deleteQ + 1] = v end
@@ -459,7 +523,7 @@ local function dropTile(key)
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
-  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  for _, w in ipairs(withCliffs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' })) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   for _, w in ipairs(M.SIGN_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.signs then deleteQ[#deleteQ + 1] = t.signs end
@@ -476,6 +540,7 @@ local function dropTile(key)
   if t.props then require('beamngEarth/trees').dropKey((key:gsub(':', ':p', 1))) end
   if t.guardrails then require('beamngEarth/trees').dropKey((key:gsub(':', ':g', 1))) end
   if t.props then require('beamngEarth/nightlights').dropKey(key) end
+  if t.talus then require('beamngEarth/trees').dropKey((key:gsub(':', ':t', 1))) end
   if t.park then require('beamngEarth/parking').dropKey(key) end
   if t.speedTraps then speedtraps.dropKey(key) end
   if t.fuel then require('beamngEarth/gasstations').dropKey(key) end
@@ -515,6 +580,16 @@ local function farLamps(key, f, on)
   end
 end
 
+-- Hide outgoing geometry now. Deletion still uses the frame budget. (Also a near tile's part whose replacement is made:
+-- an exact variant's old shape and an old skin's road mesh stood drawn in the same place as the new one until the
+-- delete queue reached them, z-fighting, 2026-11-21.)
+local function retireFar(id)
+  local o = scenetree.findObjectById(id)
+  if o then o:setHidden(true) end
+  deleteQ[#deleteQ + 1] = id
+end
+M._retire = retireFar
+
 -- Every road not of anchor aid goes (a new anchor: the server re-sends its tiles).
 local function switchAnchor(aid)
   if aid == anchorId then return end
@@ -526,7 +601,7 @@ local function switchAnchor(aid)
   for key, f in pairs(far) do
     if f.anchor ~= aid and not f.ghost and not f.geo then      -- (far geotiles: M.replace)
       farLamps(key, f, false)
-      if f.id then deleteQ[#deleteQ + 1] = f.id end
+      if f.id then retireFar(f.id) end
       slotDrop(f.slot)
       far[key] = nil
     end
@@ -544,12 +619,17 @@ local function switchAnchor(aid)
   walkQ = keep
 end
 
+-- The DecalRoads' depth bias: in the stock maps' range (0 to 0.05: West Coast USA 0.05 on its lines and wear, Italy
+-- 0.0015 on every decal; the vanilla roads study 2026-11-19); it was 0.1 (2026-10-11, from when the asphalt itself was
+-- a DecalRoad over coarse ground tiles), twice the stock maps' largest.
+M.DECAL_BIAS = '0.05'
+
 -- Pure: the DecalRoad fields of a chunk (name, value), in order.
 function M.fieldsFor(chunk)
   return {
     { 'material', chunk.m }, { 'textureLength', tostring(chunk.tl or 10) },
     { 'renderPriority', tostring(chunk.p or 20) }, { 'drivability', '-1' }, { 'improvedSpline', 'true' },
-    { 'overObjects', 'false' }, { 'distanceFade', M.FADE }, { 'decalBias', '0.1' },
+    { 'overObjects', 'false' }, { 'distanceFade', M.FADE }, { 'decalBias', M.DECAL_BIAS },
   }
 end
 
@@ -566,13 +646,16 @@ local holdActive = false
 local swapQuiet = nil       -- { frames left, stopwatch } after a terrain swap (M.terrainSwapped)    -- core's drop hold: the game paused, the car frozen where it was dropped (M.setHold)
 local lastDir = nil         -- unit { x, y } of the player's motion at FAST_MS or more, else nil
 local orderDir = nil        -- ... at ORDER_MS or more (nextWalk, urgentWalk)
--- The collision radius towards tile centre (cx, cy) from the player at p: lastRadius ahead of a fast car (within 45
--- degrees of its heading, and its own tile), COLLIDE_M min beside and behind it; lastRadius all round when slow.
+-- Use the fast collision radius along the road ahead, with one tile of lateral clearance.
+-- Nearby turns keep the all-round collision island.
 function M.radiusToward(p, cx, cy, radius, dir)
   if not dir then return radius end
   local dx, dy = cx - p.x, cy - p.y
   local d = math.sqrt(dx * dx + dy * dy)
-  if d <= M.TILE_M or (dx * dir.x + dy * dir.y) >= 0.7071 * d then return radius end
+  -- Beyond the all-round island, load a tile-wide corridor. A 45-degree
+  -- cone made colliders hundreds of metres off the freeway on every rebuild.
+  if d <= M.TILE_M or (dx * dir.x + dy * dir.y >= 0.7071 * d
+      and math.abs(dx * dir.y - dy * dir.x) <= M.TILE_M) then return radius end
   return math.min(radius, M.COLLIDE_M[1])
 end
 -- Pure: how far (m) behind a car at p heading along unit dir the near edge of the square of half-side half centred on
@@ -748,6 +831,9 @@ local function spawnCustom(key, shape, pos, rot, col)
   local id = createWalk(walk, collide)
   t.custom = t.custom or {}
   t.custom[#t.custom + 1] = id
+  -- Custom buildings replace the procedural footprints under them. Bridge
+  -- sections are render-only with a separate invisible deck collider.
+  if col ~= false and not shape:find('_deck', 1, true) then M._buildingMade(id, t, key) end
   if collide then markTileCollider(t) end
   return id
 end
@@ -787,6 +873,17 @@ local swapBack = nil         -- a rollback's collision still to come: { reloaded
 
 local function geoKey(gkey) return 'g:' .. tostring(gkey) end
 M.geoKey = geoKey
+
+function M.cliffPiecesReady(key, aid)
+  local t = tiles[geotile.isKey(key) and geoKey(key) or tileKey(aid, key)]
+  if not t then return false end
+  for _, what in ipairs(M.CLIFF_WHATS) do
+    if (t.parts or t.cliffParts or {})[what] and (not t[what] or not scenetree.findObjectById(t[what])) then
+      return false
+    end
+  end
+  return true
+end
 
 -- A geotile's placement of a part (its pivot) into anchor a: { pl = geotile.placement, xf = rigid transform, q }.
 local function partPlacement(t, a, pivot)
@@ -891,6 +988,11 @@ end
 -- The rows of tile t (key) handed to their modules, mapped into its current placement (made: replaced in place).
 local function geoRows(key, t, data, replacing)
   local pl = t.rowPl.pl
+  if not replacing and type(data.talus) == 'table' and type(data.talus.items) == 'table' then
+    require('beamngEarth/trees').onGeoRows('t'..t.gkey, t.gkey, data.talus.items, data.talus.groups, 17,
+      t.frame, t.rowPivot or 0, t.anchorObj)
+    t.talus = true
+  end
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
     -- (at a rebase trees.lua places its own geotiles: trees.transform)
     if not replacing then
@@ -950,7 +1052,7 @@ local function queueGeoParts(key, t, data)
   for _, what in ipairs(M.CONTENT_WHATS) do
     if t.parts[what] then
       local q = { key = key, what = what, tile = t, geo = true,
-        renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and isRailDrawn(what)) }
+        renderOnly = (M._cliffsOn and (M.isCliff(what) or M.isCliffStrip(what))) or what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and isRailDrawn(what)) }
       if not q.renderOnly then t.colWant[what] = true end
       if q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
@@ -1003,6 +1105,11 @@ function M.onGeoTile(msg, currentAnchor, a)
         and not T.hasGeo('g' .. old.gkey) then
       T.onGeoRows('g' .. old.gkey, old.gkey, data.guardrails.items, data.guardrails.groups, 17, old.frame,
         old.rowPivot or 0, old.anchorObj)
+    end
+    if type(data.talus) == 'table' and type(data.talus.items) == 'table' and not T.hasGeo('t'..old.gkey) then
+      T.onGeoRows('t'..old.gkey, old.gkey, data.talus.items, data.talus.groups, 17,
+        old.frame, old.rowPivot or 0, old.anchorObj)
+      old.talus = true
     end
     M.geoStats.kept = M.geoStats.kept + 1
     return true
@@ -1120,15 +1227,17 @@ function M.onSkin(msg, currentAnchor)
   t.skin = { anchor = msg.anchorId, anchorObj = anchorObj, pending = 0,
     pivot = { tonumber(pv[1]) or t.cx or 0, tonumber(pv[2]) or t.cy or 0, tonumber(pv[3]) or 0 }, q = tonumber(data.q) or 0 }
   local road = type(data.road) == 'table' and data.road.shape and type(data.road.pos) == 'table' and data.road
+  M.loadWalkMaterials(data.walk)
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   for _, what in ipairs(M.SKIN_WHATS) do
     local w = data[what]
     local sl = msgSlot(msg, what)
+    if M._cliffsOn and M.isCliffStrip(what) and not require('beamngEarth/cliffcontact').ready then w = nil end
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       if sl then w = { shape = sl.path, pos = w.pos }; t.slots[what] = sl end
       t.skin[what] = { shape = w.shape, pos = w.pos }
       local q = { key = geoKey(msg.key), walk = w, what = what, tile = t, skin = true,
-        renderOnly = what == 'road' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
+        renderOnly = (M._cliffsOn and M.isCliffStrip(what)) or what == 'road' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
       if not q.renderOnly then t.colWant[what] = true end
       t.skin.pending = t.skin.pending + 1
       if stage then swapState.expect = swapState.expect + 1 end
@@ -1318,7 +1427,7 @@ M._swapState = function() return swapState end
 function M.dropOldSkin(t, what)
   if not t.oldSkin then return end
   local function drop(w)
-    if t.oldSkin[w] then deleteQ[#deleteQ + 1] = t.oldSkin[w]; t.oldSkin[w] = nil; M.geoStats.skinSwaps = M.geoStats.skinSwaps + 1 end
+    if t.oldSkin[w] then retireFar(t.oldSkin[w]); t.oldSkin[w] = nil; M.geoStats.skinSwaps = M.geoStats.skinSwaps + 1 end
     if t.oldSkin['s:' .. w] then slotDrop(t.oldSkin['s:' .. w]); t.oldSkin['s:' .. w] = nil end
   end
   if what then drop(what) else for _, w in ipairs(M.SKIN_WHATS) do drop(w) end end
@@ -1357,7 +1466,7 @@ function M.onExact(msg, currentAnchor)
         walkQ = keep
         local lean = t.parts.bldcol ~= nil
         local q = { key = geoKey(msg.key), what = what, tile = t, geo = true, swap = true,
-          renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
+          renderOnly = (M._cliffsOn and (M.isCliff(what) or M.isCliffStrip(what))) or what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
             or (t.parts.railcol ~= nil and isRailDrawn(what)) }
         walkQ[#walkQ + 1] = q
       end
@@ -1500,10 +1609,11 @@ function M.onTile(msg, currentAnchor, a)
     lastError = 'unreadable road tile ' .. tostring(msg.path)
     return false
   end
+  M.loadWalkMaterials(data.walk)
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
-  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail', 'rail2', 'rail3',
-      'railcol', 'railcol2', 'railcol3', 'barrier', 'buscol', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }) do
+  for _, what in ipairs(withCliffs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail', 'rail2', 'rail3',
+      'railcol', 'railcol2', 'railcol3', 'barrier', 'buscol', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' })) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -1517,6 +1627,13 @@ function M.onTile(msg, currentAnchor, a)
   local road = type(data.road) == 'table' and data.road.shape and type(data.road.pos) == 'table' and data.road
   tiles[key] = { anchor = msg.anchorId, objs = {}, queued = road and 0 or #data.chunks,
     colliders = type(data.colliders) == 'table' and data.colliders or {}, slots = slots, at = now(), colWant = {} }
+  if clifftalus.enabled then
+    local parts = {}
+    for _, what in ipairs(M.CLIFF_WHATS) do
+      if data[what] then parts[what] = true end
+    end
+    if next(parts) then tiles[key].cliffParts = parts end
+  end
   protectWater(tiles[key], data, a)
   if type(data.speedTraps) == 'table' and data.speedTraps[1] then
     speedtraps.onRows(key, data.speedTraps)
@@ -1527,6 +1644,10 @@ function M.onTile(msg, currentAnchor, a)
     walkQ[#walkQ + 1] = { key = key, walk = road, what = 'road', tile = tiles[key] }
   else
     for _, c in ipairs(data.chunks) do createQ[#createQ + 1] = { key = key, chunk = c } end
+  end
+  if type(data.talus) == 'table' and type(data.talus.items) == 'table' then
+    require('beamngEarth/trees').onRows(msg.anchorId, 't'..tostring(msg.key), data.talus.items, data.talus.groups, 17)
+    tiles[key].talus = true
   end
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
     if type(data.townsigns) == 'table' then   -- the town signs' faces: their Materials and shapes first (townsigns.lua)
@@ -1599,12 +1720,13 @@ function M.onTile(msg, currentAnchor, a)
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   local leanRail = type(data.railcol) == 'table' and data.railcol.shape ~= nil
   -- tunnels (server roadmesh.tunnel: tubes and portals) and railway tracks (server railways.py) collide like the decks
-  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3',
-      'buscol' }) do
+  for _, what in ipairs(withCliffs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3',
+      'buscol' })) do
     local w = data[what]
+    if M._cliffsOn and M.isCliffStrip(what) and not require('beamngEarth/cliffcontact').ready then w = nil end
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
-        renderOnly = (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk')
+        renderOnly = (M._cliffsOn and (M.isCliff(what) or M.isCliffStrip(what))) or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk')
           or (leanRail and isRailDrawn(what)) }
       if not q.renderOnly then tiles[key].colWant[what] = true end
       if q.renderOnly or M.collideNear(tiles[key]) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
@@ -1635,7 +1757,7 @@ function M.onFarTile(msg, currentAnchor, kind)
   if not kind then farSeen[key] = true end
   local old = far[key]
   if old then farLamps(key, old, false) end
-  if old and old.id then deleteQ[#deleteQ + 1] = old.id end
+  if old and old.id then retireFar(old.id) end
   if old then slotDrop(old.slot) end
   far[key] = nil
   local sl = msgSlot(msg, 'shape')
@@ -1659,8 +1781,9 @@ function M.onFarDrop(msg, kind)
   if geotile.isKey(msg.key) then
     local key = M.farGeoKey(kind or 'F', msg.key)
     local f = far[key]
-    if f and f.geo and f.kind == 'F' and M.packPending(f) then
-      f.dropWait = f.dropWait or now()   -- (its square's pack not made yet: it stays until it is, updateFarGeo)
+    if f and f.geo and (f.kind == 'F' or f.kind == 'P' or f.kind == 'S') and M.dropWaits(f) then
+      f.dropWait = f.dropWait or now()   -- (no coarser LOD made to take over yet: it stays until one is, updateFarGeo)
+      M._markFarOf(f)
       return true
     end
     return M.dropFarGeo(key)
@@ -1670,7 +1793,7 @@ function M.onFarDrop(msg, kind)
   local f = far[key]
   if f and f.ghost then return end
   if f then farLamps(key, f, false) end
-  if f and f.id then deleteQ[#deleteQ + 1] = f.id end
+  if f and f.id then retireFar(f.id) end
   if f then slotDrop(f.slot) end
   far[key] = nil
 end
@@ -1737,6 +1860,45 @@ local function farGeoKey(kind, gkey) return tostring(kind) .. ':' .. tostring(gk
 M.farGeoKey = farGeoKey
 M.FAR_GEO_ORPHAN_S = 120    -- a far geotile of an old server session not sent again goes after this long
 
+-- Event-driven LOD checks (the user, 2026-11-21: "lower LODs stick around too long ... Often you can see 2 LODs
+-- overlap"). The round-robin below visits FAR_CHECKS_PER_FRAME far entries a frame: with ~2,800 of them after a long
+-- drive a pack stayed drawn over its square's far tiles for up to ~35 frames after they were all made, and a skyline
+-- over its pack. Any change that can flip a square's LOD (a far part made or dropped, a near building made or deleted)
+-- marks every LOD of that square; flushFar checks them in the same frame, coarse kinds first (a far tile hides under
+-- its pack's stored state). Nothing marked: nothing done.
+local farDirty, farDirtyAny = {}, false
+local function markFar(key)
+  if far[key] then farDirty[key] = true; farDirtyAny = true end
+end
+-- Skyline square (a geotile key at geotile.Z - 2) of road geotile gkey, or nil.
+local function squareOf(gkey)
+  local z, x, y = geotile.parse(gkey)
+  if not z then return nil end
+  return geotile.key(math.floor(x / M.SKY_UNIT), math.floor(y / M.SKY_UNIT), z - 2)
+end
+M._squareOf = squareOf
+-- Every far LOD of skyline square sq: its pack, skyline, horizon tile, far bridge tile and 16 far buildings tiles.
+local function markSquare(sq)
+  local z, x, y = geotile.parse(sq)
+  if not z then return end
+  markFar(farGeoKey('P', sq)); markFar(farGeoKey('S', sq)); markFar(farGeoKey('B', sq))
+  markFar(farGeoKey('H', geotile.key(math.floor(x / 8), math.floor(y / 8), z - 3)))
+  local n = 2 ^ (geotile.Z - z)
+  for j = 0, n - 1 do
+    for i = 0, n - 1 do markFar(farGeoKey('F', geotile.key(x * n + i, y * n + j, geotile.Z))) end
+  end
+end
+M._markSquare = markSquare
+function M._markBridge(gkey) markFar(farGeoKey('B', squareOf(gkey) or '')) end
+-- The squares a far geotile f's LODs stand for (its own; a horizon tile's: one a piece).
+local function markFarOf(f)
+  if not f or not f.geo then return end
+  if f.kind == 'F' then markSquare(squareOf(f.gkey) or '')
+  elseif f.kind == 'H' then for sq in pairs(f.parts) do markSquare(sq) end
+  else markSquare(f.gkey) end
+end
+M._markFarOf = markFarOf
+
 -- A far geotile part's placement into anchor a: its position (p.at) and rotation (p.rot), rigid at its pivot.
 local function farPartPlace(f, p, a)
   local pl = geotile.placement(f.frame, a, 0, 0, p.pivot or 0)
@@ -1801,11 +1963,12 @@ function M.dropFarGeo(key)
   if not f or not f.geo then return false end
   farGeoLamps(f, false)
   for _, p in pairs(f.parts) do
-    if p.id then deleteQ[#deleteQ + 1] = p.id end
+    if p.id then retireFar(p.id) end
     slotDrop(p.slot)
   end
   if f.kind == 'F' then farSeen[key] = nil end
   far[key] = nil
+  markFarOf(f)              -- (a coarser LOD of its square may show again: this frame, flushFar)
   return true
 end
 
@@ -1842,7 +2005,7 @@ function M.onFarGeo(msg, currentAnchor, kind)
   end
   local frame = geotile.frameOf({ frame = msg.frame or data.frame, key = msg.key })
   if not frame then release(); lastError = 'far geotile without a frame: ' .. tostring(msg.key); return false end
-  local f = { geo = true, kind = k, gkey = msg.key, frame = frame, h = h, anchor = currentAnchor, parts = {},
+  local f = { geo = true, kind = k, key = key, gkey = msg.key, frame = frame, h = h, anchor = currentAnchor, parts = {},
     lamps = M.flatLamps(data.lamps) }
   if k == 'S' or k == 'P' then
     local z, x, y = geotile.parse(msg.key)
@@ -1863,7 +2026,8 @@ function M.onFarGeo(msg, currentAnchor, kind)
       used[sub] = true
       -- (near: the road geotile whose own content shows these buildings / this deck)
       local p = { shape = sl and sl.path or e.shape, slot = sl, pos = e.pos, pivot = tonumber(e.pivot) or 0,
-        near = (k == 'B' and sub) or (k == 'F' and msg.key) or nil }
+        near = (k == 'B' and sub) or (k == 'F' and msg.key) or nil,
+        ownerKey = k == 'H' and (key .. '#' .. sub) or key }
       if anchorObj then farPartPlace(f, p, anchorObj) end
       f.parts[sub] = p
       farQ[#farQ + 1] = key .. '#' .. sub
@@ -1871,6 +2035,9 @@ function M.onFarGeo(msg, currentAnchor, kind)
   end
   release(used)
   far[key] = f
+  -- (one with nothing to make is done at once: its square may hand over now; one with parts changes nothing until
+  -- they are made, updateFar)
+  if next(f.parts) == nil then markFarOf(f) end
   M.geoStats.far = (M.geoStats.far or 0) + 1
   return true
 end
@@ -1896,136 +2063,290 @@ function M.nearShowsDeck(gkey, tk)
   return t.skin ~= nil and t.skin.road == nil and (t.skin.pending or 0) <= 0
 end
 
--- The pack (kind 'P') of far buildings tile f's skyline square, or nil.
-local function packOf(f)
-  local z, x, y = geotile.parse(f.gkey)
-  if not z then return nil end
-  local n = M.SKY_UNIT
-  return far[farGeoKey('P', geotile.key(math.floor(x / n), math.floor(y / n), z - 2))]
+-- Does far geotile f's drop wait (M.onFarDrop, at most PACK_HANDOVER_S)? While nothing coarser is made to show
+-- instead (made: every part, or none to make) and f is drawn within its reach of the car (DROP_WAIT_M; 2x for a pack,
+-- 4x for a skyline: not for a teleport's far-away leftovers): a far buildings tile waits for its square's pack or
+-- skyline, a pack for the skyline or the horizon piece, a skyline for the horizon piece. Leaving a town at speed the far
+-- tiles 1.2 km behind went before their square's pack came (its service time, p95 20 s in a live drive), and a pack
+-- before the skyline (made only once it would show, LAZY_FAR_PARTS): a hole until the coarser one was made. A coarser
+-- LOD does not wait to be made under one waiting to go (farGeoHidden nearOnly).
+M.DROP_WAIT_M = 4000
+local DROP_REACH = { F = 1, P = 2, S = 4 }
+local function lodMade(key)
+  local c = far[key]
+  if not c then return false end
+  for _, q in pairs(c.parts) do if not q.id and not q.failed then return false end end
+  return true
 end
--- Is far tile f's square's pack here but its shape not made yet (f's drop waits for it)?
-function M.packPending(f)
-  local pk = packOf(f)
-  if not pk then return false end
-  for _, p in pairs(pk.parts) do if not p.id then return true end end
-  return false
+-- the horizon piece of square sq made (or its horizon tile here without one: no towers there)
+local function hzMade(sq)
+  local z, x, y = geotile.parse(sq)
+  if not z then return false end
+  local h = far[farGeoKey('H', geotile.key(math.floor(x / 8), math.floor(y / 8), z - 3))]
+  if not h then return false end
+  local q = h.parts[sq]
+  return q == nil or q.id ~= nil or q.failed == true
 end
--- Pack f's square: are its far tiles all here and made (or waiting hidden: their road geotile shows its own)?
-function M.packCovered(f)
-  if not f.packKeys then
-    local z, x, y = f.sky[1], f.sky[2], f.sky[3]
-    if not z then return false end
+function M.dropWaits(f)
+  local sq = f.kind == 'F' and squareOf(f.gkey) or f.gkey
+  if not sq or not DROP_REACH[f.kind] then return false end
+  if f.kind == 'F' and (lodMade(farGeoKey('P', sq)) or lodMade(farGeoKey('S', sq))) then return false end
+  if f.kind == 'P' and (lodMade(farGeoKey('S', sq)) or hzMade(sq)) then return false end
+  if f.kind == 'S' and hzMade(sq) then return false end
+  local p = f.parts.shape
+  if not p or not p.id or p.hidden then return false end     -- (nothing drawn: nothing to keep)
+  return p.at == nil or M.nearPlayer({ x = p.at[1], y = p.at[2] }, M.DROP_WAIT_M * DROP_REACH[f.kind])
+end
+
+-- A far geotile part with nothing (more) to draw for now: made, waiting hidden (LAZY_FAR_PARTS: its road geotile shows
+-- its own) or failed to make (counted as done: a broken shape must not keep its square's coarser LOD forever).
+local function partDone(q) return q.id ~= nil or q.deferred ~= nil or q.failed == true end
+-- The 16 far buildings tiles' keys (and road geotile keys) of skyline square sq, kept on holder.
+local function squareKeys(holder, sq)
+  if not holder.sqKeys then
+    local z, x, y = geotile.parse(sq)
+    if not z then return nil end
     local n = 2 ^ (geotile.Z - z)
-    f.packKeys, f.packGeo = {}, {}
+    holder.sqKeys, holder.sqGeo = {}, {}
     for j = 0, n - 1 do
       for i = 0, n - 1 do
         local g = geotile.key(x * n + i, y * n + j, geotile.Z)
-        f.packKeys[#f.packKeys + 1], f.packGeo[#f.packGeo + 1] = farGeoKey('F', g), g
+        holder.sqKeys[#holder.sqKeys + 1], holder.sqGeo[#holder.sqGeo + 1] = farGeoKey('F', g), g
       end
     end
   end
-  -- (a geotile whose road tile shows its own buildings counts as covered without its far tile: after a fast run the
-  -- far field took 30-60 s to catch up, and one far tile of sixteen missing kept the whole square's pack - walls with
-  -- painted windows - over the real buildings beside a stopped car; the user's report, 2026-11-14)
-  for idx, k in ipairs(f.packKeys) do
+  return holder.sqKeys, holder.sqGeo
+end
+-- Does square sq show its buildings at the far tiles' level (or finer): every one of its 16 far buildings tiles here and
+-- made (or done), not waiting to go, or its road geotile showing its own buildings? The one hand-over rule of the pack,
+-- the skyline and the horizon pieces: a coarser LOD hides in the frame this turns true, and the far tiles (hidden
+-- under it while it shows: M.coarserShown) show in that same frame. Never both, never neither.
+-- (a geotile whose road tile shows its own buildings counts as covered without its far tile: after a fast run the
+-- far field took 30-60 s to catch up, and one far tile of sixteen missing kept the whole square's pack - walls with
+-- painted windows - over the real buildings beside a stopped car; the user's report, 2026-11-14)
+function M.squareFilled(holder, sq)
+  local keys, geos = squareKeys(holder, sq)
+  if not keys then return false end
+  for idx, k in ipairs(keys) do
     local ff = far[k]
     local ok = ff ~= nil and not ff.dropWait
     if ok then
-      for _, p in pairs(ff.parts) do if not p.id and not p.deferred then ok = false; break end end
+      for _, p in pairs(ff.parts) do if not partDone(p) then ok = false; break end end
     end
-    if not ok and not M.nearShowsBuildings(f.packGeo[idx]) then return false end
+    if not ok and not M.nearShowsBuildings(geos[idx]) then return false end
   end
-  return true
+  return #keys > 0
 end
+-- Pack f's square: are its far tiles all here and made (or waiting hidden: their road geotile shows its own)?
+function M.packCovered(f) return M.squareFilled(f, f.gkey) end
 
 -- Horizon piece p (skyline square sq, a geotile key at geotile.Z - 2): does its square show buildings of its own (its
--- skyline tile made or empty, its pack made, or a far buildings tile under it seen)?
+-- skyline tile made or empty, its pack made, or its far buildings tiles all made)?
 local function partsMade(f)
   for _, q in pairs(f.parts) do if not q.id then return false end end
   return true
 end
-function M.hzCovered(p, sq)
+function M.hzCovered(p, sq, nearOnly)
   local s = far[farGeoKey('S', sq)]
-  if s and partsMade(s) and not M.farGeoHidden(s) then return true end   -- (a skyline tile shown, not one handing over)
+  if s and not (nearOnly and s.dropWait) and partsMade(s) and not M.farGeoHidden(s) then return true end   -- (a skyline tile shown, not one handing over)
   local pk = far[farGeoKey('P', sq)]
-  if pk and next(pk.parts) and partsMade(pk) then return true end
-  if not p.hzKeys then
-    local z, x, y = geotile.parse(sq)
-    if not z then return false end
-    local n = 2 ^ (geotile.Z - z)
-    p.hzKeys = {}
-    for j = 0, n - 1 do
-      for i = 0, n - 1 do
-        local g = geotile.key(x * n + i, y * n + j, geotile.Z)
-        p.hzKeys[#p.hzKeys + 1], p.hzGeo = farGeoKey('F', g), p.hzGeo or {}
-        p.hzGeo[#p.hzKeys] = g
-      end
-    end
-  end
+  if pk and not (nearOnly and pk.dropWait) and next(pk.parts) and partsMade(pk) then return true end
   -- (all of its far tiles arrived and made: one of sixteen hid the whole piece, the towers of the other fifteen gone
-  -- until theirs came, Codex review 2026-11-14)
-  -- (or the geotile's road tile shows its own buildings: the same ownership as packCovered and the skyline)
-  for idx, k in ipairs(p.hzKeys) do
-    local ok = farSeen[k] and true or false
-    local f = far[k]
-    if ok and f then
-      if f.dropWait then ok = false end
-      for _, q in pairs(f.parts) do if not q.id and not q.deferred then ok = false; break end end
-    end
-    if not ok and not M.nearShowsBuildings(p.hzGeo[idx]) then return false end
-  end
-  return #p.hzKeys > 0
+  -- until theirs came, Codex review 2026-11-14; or the geotile's road tile shows its own buildings)
+  return M.squareFilled(p, sq)
 end
 
--- Pure-ish: is far geotile f's part sub hidden now (the ownership rule above)?
-function M.farGeoHidden(f, sub)
+-- Is a coarser LOD of far buildings tile f's square drawn now (its pack, skyline or horizon piece made and shown)?
+-- Then f stays hidden: the square's far tiles come one by one over seconds at speed, and each one drawn on top of
+-- the pack's copy of the same buildings was the "lod texture" z-fighting the user saw (2026-11-21). They show
+-- together once the coarser one hides (M.squareFilled). (Its stored state: flushFar checks coarse kinds first.)
+local function shownPart(key, sub)
+  local c = far[key]
+  local q = c and c.parts[sub or 'shape']
+  return q ~= nil and q.id ~= nil and not q.hidden
+end
+function M.coarserShown(f)
+  if not f.coarse then
+    local sq = squareOf(f.gkey)
+    local z, x, y = geotile.parse(sq or '')
+    if not z then return false end
+    f.coarse = { farGeoKey('P', sq), farGeoKey('S', sq),
+      farGeoKey('H', geotile.key(math.floor(x / 8), math.floor(y / 8), z - 3)), sq }
+  end
+  local c = f.coarse
+  return shownPart(c[1]) or shownPart(c[2]) or shownPart(c[3], c[4])
+end
+
+-- Pure-ish: is far geotile f's part sub hidden now (the ownership rule above)? nearOnly: whether it waits to be made
+-- (LAZY_FAR_PARTS): the rule without a coarser LOD over it (a far buildings tile under its pack is made, hidden, to
+-- be ready for the hand-over) and without near shapes that are only on their way out (M._nearOwns: the far tile is
+-- made, hidden, while a dropped road geotile's buildings wait for it, retireNear).
+function M.farGeoHidden(f, sub, nearOnly)
+  if f.kind ~= 'B' and not nearOnly then
+    local part = f.parts[f.kind == 'H' and sub or 'shape']
+    if M._nearOwns(part and part.ownerKey or f.key, part) then return true end
+  end
   if f.kind == 'P' then return M.packCovered(f) end
   if f.kind == 'H' then
     local p = f.parts[sub]
-    return p ~= nil and M.hzCovered(p, sub)
+    return p ~= nil and M.hzCovered(p, sub, nearOnly)
   end
   if f.kind == 'S' then
-    local pk = far[farGeoKey('P', f.gkey)]        -- (under its square's shown pack)
+    local pk = far[farGeoKey('P', f.gkey)]        -- (under its square's shown pack: one waiting to go, not to be made)
     local pp = pk and pk.parts.shape
-    if pp and pp.id and not pp.hidden then return true end
-    if not f.skyKeys then           -- (its square's far buildings tiles' keys, once)
-      local z, x, y = f.sky[1], f.sky[2], f.sky[3]
-      if not z then return false end
-      local n = 2 ^ (geotile.Z - z)
-      f.skyKeys = {}
-      for j = 0, n - 1 do
-        for i = 0, n - 1 do
-          local g = geotile.key(x * n + i, y * n + j, geotile.Z)
-          f.skyKeys[#f.skyKeys + 1], f.skyGeo = farGeoKey('F', g), f.skyGeo or {}
-          f.skyGeo[#f.skyKeys] = g
-        end
-      end
-    end
-    -- (a geotile whose road tile shows its own buildings counts as seen: the pack hands over to such a mix of near
-    -- and far tiles, packCovered, and the skyline came back over the near buildings; Codex review)
-    for idx, k in ipairs(f.skyKeys) do
-      if not farSeen[k] and not M.nearShowsBuildings(f.skyGeo[idx]) then return false end
-    end
-    return true
+    if pp and pp.id and not pp.hidden and not (nearOnly and pk.dropWait) then return true end
+    -- (its far tiles all made, not only arrived: hidden at "all seen" left the square empty while they were made; a
+    -- geotile whose road tile shows its own buildings counts: the pack hands over to such a mix of near and far tiles,
+    -- packCovered, and the skyline came back over the near buildings; Codex review)
+    return M.squareFilled(f, f.gkey)
   end
   local p = f.parts[sub]
   if not p or not p.near then return false end
   p.nearKey = p.nearKey or geoKey(p.near)
   if f.kind == 'B' then return M.nearShowsDeck(p.near, p.nearKey) end
-  return M.nearShowsBuildings(p.near, p.nearKey)
+  if M.nearShowsBuildings(p.near, p.nearKey) then return true end
+  return not nearOnly and M.coarserShown(f)
 end
 
 -- LAZY_FAR_PARTS: does far part sub of f wait (not made)? Only while it would be hidden now: a road geotile still
 -- being made keeps its far buildings as the quick stand-in (the user, 2026-10-25: "load simpler versions first then
 -- higher detail version later"). (LAZY_WAIT_MAX_S: a part waiting this long is made anyway, shown or hidden by the rule.)
+-- A far buildings tile under its square's coarser LOD does not wait: it is made hidden, so the square can hand over.
 M.LAZY_WAIT_MAX_S = 20
-function M.farGeoWaits(f, sub) return M.farGeoHidden(f, sub) end
+function M.farGeoWaits(f, sub) return M.farGeoHidden(f, sub, true) end
+
+
+-- Track the lifetime of drawn near shapes. A tile may have four building meshes
+-- and an old exact variant waiting in deleteQ. Only their actual deletion releases
+-- ownership. Pack and skyline files each contain one indivisible shape per square.
+do
+  local owners, counts = {}, {}
+  local frame = 0
+  local releases, relHead, relTail = {}, 1, 0     -- { frame, owners } of deleted near shapes: checked again once released
+  local markOwners
+  function M._lodFrame()
+    frame = frame + 1
+    while releases[relHead] and releases[relHead][1] <= frame do
+      markOwners(releases[relHead][2])
+      releases[relHead] = nil
+      relHead = relHead + 1
+    end
+  end
+  function M._resetBuildings() owners, counts, releases, relHead, relTail = {}, {}, {}, 1, 0 end
+
+  local function change(key, sub, delta, now)
+    local claim = sub and key .. '#' .. sub or key
+    local n = (counts[claim] or 0) + delta
+    counts[claim] = n > 0 and n or nil
+    local f = far[key]
+    local p = f and (f.geo and f.parts[sub or 'shape'] or not f.geo and f)
+    if not p then return end
+    if n > 0 and p.id and not p.hidden then
+      local o = scenetree.findObjectById(p.id)
+      if o then o:setHidden(true) end
+      p.hidden = true
+    elseif n == 0 then
+      p.releaseFrame = (not now) and frame + 3 or nil
+    end
+  end
+
+  -- (the square's other LODs: a far tile beside the new near building shows the frame the pack hides, flushFar)
+  markOwners = function(o)
+    if o.square then markSquare(o.square) else markFar(o.cell); markFar(o.sky) end
+  end
+
+  local function changeOwners(o, delta, now)
+    change(o.cell, nil, delta, now)
+    change(o.sky, nil, delta, now)
+    if o.pack then
+      change(o.pack, nil, delta, now)
+      change(o.horizon, o.square, delta, now)
+    end
+  end
+
+  function M._buildingMade(id, t, key)
+    if not t.lodOwners then
+      if t.geo then
+        local z, x, y = geotile.parse(t.gkey)
+        local square = geotile.key(math.floor(x / 4), math.floor(y / 4), z - 2)
+        t.lodOwners = { cell = farGeoKey('F', t.gkey), sky = farGeoKey('S', square),
+          pack = farGeoKey('P', square), square = square,
+          horizon = farGeoKey('H', geotile.key(math.floor(x / 32), math.floor(y / 32), z - 5)) }
+      else
+        local x, y = key:match(':(%-?%d+)_(%-?%d+)$')
+        if not x then return end
+        local n = M.SKY_UNIT
+        t.lodOwners = { cell = key, sky = tileKey(t.anchor, 'S' .. math.floor(x / n) .. '_' .. math.floor(y / n)) }
+      end
+    end
+    owners[id] = t.lodOwners
+    changeOwners(t.lodOwners, 1)
+    markOwners(t.lodOwners)
+  end
+
+  -- now: the far LOD takes over this frame (stepRetiring: it is made), no release hysteresis
+  function M._buildingGone(id, now)
+    local o = owners[id]
+    if o then
+      changeOwners(o, -1, now)
+      markOwners(o)
+      if not now then
+        relTail = relTail + 1
+        releases[relTail] = { frame + 3, o }   -- (the far LODs back after the release hysteresis, not ~35 frames)
+      end
+      owners[id] = nil
+    end
+  end
+  function M._owns(id) return owners[id] ~= nil end
+
+  function M._nearOwns(key, p)
+    return counts[key] ~= nil or (p and p.releaseFrame and frame < p.releaseFrame) or false
+  end
+end
+
+-- The dropped road geotiles' building shapes (retireNear): each goes once its cell's far LOD is ready to show (its far
+-- tile made, hidden under them until now; or, without one, its square's pack or skyline made), the tile's new content
+-- shows its buildings, or after RETIRE_MAX_S; then hidden and released at once, flushFar showing the far LOD in this
+-- same frame. (Nothing a frame when none wait.)
+local function retireReady(e)
+  if now() - e.at > M.RETIRE_MAX_S * 1000 or M.nearShowsBuildings(e.gkey) then return true end
+  local f = far[farGeoKey('F', e.gkey)]
+  if f then
+    for _, q in pairs(f.parts) do if not q.id and not q.failed then return false end end
+    return true
+  end
+  local sq = squareOf(e.gkey)
+  return sq ~= nil and (lodMade(farGeoKey('P', sq)) or lodMade(farGeoKey('S', sq)))
+end
+function M.stepRetiring()
+  if #retiring == 0 then return end
+  local keep = {}
+  for _, e in ipairs(retiring) do
+    if retireReady(e) then
+      for _, id in ipairs(e.ids) do
+        local o = scenetree.findObjectById(id)
+        if o then o:setHidden(true) end
+        deleteQ[#deleteQ + 1] = id
+        M._buildingGone(id, true)
+      end
+    else
+      keep[#keep + 1] = e
+    end
+  end
+  retiring = keep
+end
+function M.retiringCount() return #retiring end     -- (tests)
+local function dropRetiring()
+  for _, e in ipairs(retiring) do for _, id in ipairs(e.ids) do deleteQ[#deleteQ + 1] = id end end
+  retiring = {}
+end
+M._dropRetiring = dropRetiring
 
 local function updateFarGeo(key, f)
-  if f.dropWait then       -- (a far tile whose drop waits for its square's pack: M.onFarDrop)
-    if not M.packPending(f) or now() - f.dropWait > M.PACK_HANDOVER_S * 1000 then M.dropFarGeo(key); return end
+  if f.dropWait then       -- (a far geotile whose drop waits for a coarser LOD to take over: M.onFarDrop)
+    if not M.dropWaits(f) or now() - f.dropWait >= M.PACK_HANDOVER_S * 1000 then M.dropFarGeo(key); return end
   end
-  local shown = false
+  local shown, flipped = false, false
   for sub, p in pairs(f.parts) do
     local waits = p.deferred and not p.id and M.farGeoWaits(f, sub)
     if not p.id and p.deferred and (not waits or now() - p.deferred > M.LAZY_WAIT_MAX_S * 1000) then
@@ -2039,10 +2360,12 @@ local function updateFarGeo(key, f)
         local o = scenetree.findObjectById(p.id)
         if o then o:setHidden(hide) end
         p.hidden = hide
+        flipped = true
       end
       if not hide then shown = true end
     end
   end
+  if flipped then markFarOf(f) end      -- (the square's other LODs follow this frame, or the next from flushFar)
   if f.lamps then farGeoLamps(f, shown) end
 end
 
@@ -2072,6 +2395,7 @@ local function updateFarOne(key, f)
       else
         hide = tiles[key] ~= nil and (tiles[key].bld ~= nil or tiles[key].bldNone == true)
       end
+      hide = hide or M._nearOwns(key, f)
       if hide ~= (f.hidden or false) then
         local o = scenetree.findObjectById(f.id)
         if o then o:setHidden(hide) end
@@ -2079,6 +2403,32 @@ local function updateFarOne(key, f)
       end
     end
     if f.lamps and not f.geo then farLamps(key, f, f.id ~= nil and not f.hidden) end
+end
+-- The far entries marked since the last flush (markFar), coarse kinds first: a pack's state is set before the skyline
+-- and the far tiles that read it, a skyline's before the horizon pieces. A drop or a re-mark while flushing waits for
+-- the next frame. (Called at the end of every roads update; cheap when nothing is marked.)
+local FLUSH_RANK = { P = 1, S = 2, H = 3, F = 4, B = 5 }
+local function flushRank(key)
+  local f = far[key]
+  return f and f.geo and FLUSH_RANK[f.kind] or 6
+end
+function M.flushFar()
+  if not farDirtyAny then return 0 end
+  local list = {}
+  for k in pairs(farDirty) do list[#list + 1] = k end
+  farDirty, farDirtyAny = {}, false
+  table.sort(list, function(a, b)
+    local ra, rb = flushRank(a), flushRank(b)
+    if ra ~= rb then return ra < rb end
+    return a < b
+  end)
+  local n = 0
+  for _, k in ipairs(list) do
+    local f = far[k]
+    if f then updateFarOne(k, f); n = n + 1 end
+  end
+  M.farFlushed = (M.farFlushed or 0) + n
+  return n
 end
 local function updateFar(gov)
   if farCursor ~= nil and far[farCursor] == nil then farCursor = nil end     -- (gone: next() cannot go on from it)
@@ -2114,7 +2464,8 @@ local function updateFar(gov)
         slotMade(id, p.shape)
         p.hidden = M.farGeoHidden(f, sub)
         if p.hidden then scenetree.findObjectById(id):setHidden(true) end
-      else lastError = tostring(id) end
+      else lastError = tostring(id); p.failed = true end
+      markFarOf(f)            -- (its square may hand over now: checked this frame, flushFar)
       local ms = now() - t0
       gov:charge(farKind(), ms, 'mid')
       noteUnit('far' .. f.kind, ms, p.shape)
@@ -2122,12 +2473,17 @@ local function updateFar(gov)
       local t0 = now()
       loadMaterials()
       local ok, id = pcall(createWalk, { shape = f.shape, pos = f.pos }, false)
-      if ok then f.id = id; slotMade(id, f.shape) else lastError = tostring(id) end
+      if ok then
+        f.id = id
+        slotMade(id, f.shape)
+        updateFarOne(key, f)
+      else lastError = tostring(id) end
       local ms = now() - t0
       gov:charge(farKind(), ms, 'mid')
       noteUnit('bldfar', ms, f.shape)
     end
   end
+  M.flushFar()
 end
 
 -- Server message `roads_drop` {anchorId, key}. (A ghost goes when covered: releaseGhosts.)
@@ -2173,6 +2529,28 @@ local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
 local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol',
   'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }
+
+-- hello's cliffs ({available, natural, roadCuts}; core.lua): the cliff parts join WHATS, CONTENT_WHATS and SKIN_WHATS
+-- (rebuilt in place) when cliffs are on; off (the default) the lists stay exactly the ones without cliffs.
+M._cliffBase = {}
+for k, list in pairs({ whats = WHATS, content = M.CONTENT_WHATS, skin = M.SKIN_WHATS }) do
+  local copy = {}
+  for i, w in ipairs(list) do copy[i] = w end
+  M._cliffBase[k] = copy
+end
+function M.configureCliffs(flags)
+  local on = type(flags) == 'table' and (flags.natural == true or flags.roadCuts == true) or false
+  if on == M._cliffsOn then return end
+  M._cliffsOn = on
+  local function rebuild(list, base, extra)
+    for i = #list, 1, -1 do list[i] = nil end
+    for _, w in ipairs(base) do list[#list + 1] = w end
+    if on then for _, e in ipairs(extra) do for _, w in ipairs(e) do list[#list + 1] = w end end end
+  end
+  rebuild(WHATS, M._cliffBase.whats, { M.CLIFF_WHATS, M.CLIFF_STRIPS, M.CLIFF_COLLIDERS })
+  rebuild(M.CONTENT_WHATS, M._cliffBase.content, { M.CLIFF_WHATS, M.CLIFF_COLLIDERS })
+  rebuild(M.SKIN_WHATS, M._cliffBase.skin, { M.CLIFF_STRIPS })
+end
 
 function M.transform(xf, geodesy)
   local bx, by, bz, bw = xf:beamngQuat()
@@ -2306,7 +2684,7 @@ local function releaseGhosts(player)
     if f.ghost then
       if all then
         farLamps(key, f, false)
-        if f.id then deleteQ[#deleteQ + 1] = f.id end
+        if f.id then retireFar(f.id) end
         slotDrop(f.slot)
         far[key] = nil
       else left = true end
@@ -2331,6 +2709,7 @@ local function step(name)
   stepT0 = t
 end
 function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
+  M._lodFrame()
   -- A deleted collider stays in the physics cache until a rebuild. Allow a full subsequent update after
   -- that asynchronous rebuild before restoring deep water over its old bore.
   if #waterReleases > 0 then           -- (no table a frame when there is nothing to release)
@@ -2366,6 +2745,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       end
       o:delete()
     end
+    M._buildingGone(did)
     slotObjGone(did)
     farDeletes[did] = nil
     local ms = now() - t0
@@ -2449,7 +2829,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       loadMaterials()
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
-      local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol') and 'Collision Mesh' or not isRoad
+      local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol' or (M._cliffsOn and M.isCliffCollider(q.what))) and 'Collision Mesh' or not isRoad
       local ok, id = pcall(createWalk, walk, staged and 'None' or collide)
       if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
       if staged and not ok then                    -- (a shape that cannot be made: the swap must not commit)
@@ -2468,10 +2848,13 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
         if t.skin.pending <= 0 then M.dropOldSkin(t) end
       end
       if ok and q.swap and t.oldPart and t.oldPart[q.what] then     -- an exact variant / the base again: swapped
-        deleteQ[#deleteQ + 1] = t.oldPart[q.what]
+        M._retire(t.oldPart[q.what])
         t.oldPart[q.what] = nil
         if t.oldPartSlot and t.oldPartSlot[q.what] then slotDrop(t.oldPartSlot[q.what]); t.oldPartSlot[q.what] = nil end
       end
+      if ok and q.what:match('^bld[234]?$') then M._buildingMade(id, t, q.key) end
+      -- (a deck or road surface: its far bridge piece hides this frame, flushFar)
+      if ok and t.geo and (q.what == 'deck' or q.what == 'road') then M._markBridge(t.gkey) end
       if ok and M.onKeepupPart then M.onKeepupPart(q.what, t) end     -- (keepup.lua: a debug recorder)
       if ok then
         if not isRoad then t.cq = t.cq or {}; t.cq[q.what] = q end
@@ -2487,6 +2870,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     end
   end
   step('walks')
+  M.stepRetiring()              -- dropped tiles' buildings whose far LOD is ready: handed over this frame (flushFar)
   updateFar(gov)                -- far buildings: only with the near meshes all made (they share the budget)
   step('far')
   if swapQuiet then
@@ -2494,13 +2878,16 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     if swapQuiet.frames <= 0 and swapQuiet.since() >= M.SWAP_QUIET_MS then swapQuiet = nil end
   end
   local urgent = collisionDirty and (holdActive or M.extDue(extGap(), lastSpeed, sinceReload()) or M.urgentColliders()
-      or (#extBoxes > 0 and M.focusDue(extGap))) and sinceReload() > M.URGENT_GAP_S * 1000
+      or (#extBoxes > 0 and M.focusDue(extGap)) or M.lateUrgent()) and sinceReload() > M.URGENT_GAP_S * 1000
   local due = not swapQuiet and ((collisionDirty and sinceReload() > M.RELOAD_EVERY_S * 1000) or urgent
       or (deletesDirty and sinceReload() > M.RELOAD_DELETES_S * 1000))
   if due and not urgent and M.deferWhileRolling(lastSpeed, sinceReload()) then due = false end
   -- (NEED: a fast car's pending colliders wait for their deadline, not for RELOAD_EVERY_S; what else set the flag
   -- (trees, props, deletes near the car) keeps the timer)
   if due and not urgent and M.NEED and lastSpeed >= M.FAST_MS and M.onlyColliderDirt(dirtySrc) then due = false end
+  -- (only late colliders since the last rebuild, below FAST_MS: each is due by its own distance, M.lateUrgent; no
+  -- RELOAD_EVERY_S. At speed the timer stays: trees.lua's SOLID_LEAD_S counts on it, the late deadline is the backstop)
+  if due and not urgent and lastSpeed < M.FAST_MS and M.onlyLateDirt(dirtySrc) then due = false end
   if due and not holdActive and reloadWaits < M.RELOAD_WAIT_FRAMES and gov.roomFor and not gov:roomFor(M.RELOAD_ROOM_MS) then
     reloadWaits = reloadWaits + 1
     due = false
@@ -2522,6 +2909,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     require('beamngEarth/perfsummary').note('collision')
     lastReloadAt, reloads = now(), reloads + 1
     collisionDirty, deletesDirty, sinceReload, extBoxes = false, false, stopwatch.new(), {}
+    M.clearLate()
     if swapWait and not swapState.reloaded then swapState.reloaded, swapState.frames = true, 0 end
     if swapBack and not swapBack.reloaded then swapBack.reloaded, swapBack.frames = true, 0 end
     local ms = now() - t0
@@ -2631,6 +3019,8 @@ noteNewColliders = function()
     if t and t[q.what] == c[1] and playerIn(t.colliders[q.what], q.what, t) then
       local o = scenetree.findObjectById(c[1])
       if o then o:delete() end
+      M._buildingGone(c[1])
+      slotObjGone(c[1])
       t[q.what] = nil
       held[#held + 1] = q
       removed = removed + 1
@@ -2668,6 +3058,10 @@ logReload = function(why)
   local e = { at = os.clock(), why = why, v = math.floor(lastSpeed * 10 + 0.5) / 10, n = #newColliders, kinds = kinds,
     gap = gap < math.huge and math.floor(gap) or -1, reach = math.floor(M.needReach(lastSpeed)), src = dirtySrc,
     walkQ = #walkQ, parked = #parked, held = #held }
+  local okE, ext = pcall(extGap)                -- (the nearest of other modules' boxes, and of the late cells)
+  e.ext = okE and ext and math.floor(ext) or -1
+  local okL, late = pcall(M._lateGap)
+  e.late = okL and late and math.floor(late) or -1
   dirtySrc = {}
   reloadLog[#reloadLog + 1] = e
   if #reloadLog > M.RELOAD_LOG then table.remove(reloadLog, 1) end
@@ -2774,12 +3168,16 @@ function M.urgentWalk(q, quiet)
   if best or not M.URGENT_SURFACES or quiet then return best, false end
   local keys = nil
   for i, e in ipairs(q) do
-    if (e.what == 'road' or e.what == 'walk') and e.stage == nil then
+    local col = lastSpeed >= M.FAST_MS and (e.what == 'bldcol' or e.what == 'walkcol')
+    if (e.what == 'road' or e.what == 'walk' or col) and e.stage == nil then
       keys = keys or surfaceKeys(p, dir, lastSpeed)
       local t = keys[e.key] and tiles[e.key]
       if t and t.cx and not t.ghost and (not e.tile or e.tile == t) then
         local dx, dy = t.cx - p.x, t.cy - p.y
-        local d = math.sqrt(dx * dx + dy * dy) + (e.what == 'road' and 0 or 1e4)
+        -- At highway speed finish the nearer tile (including its lean collision)
+        -- before drawing the next one's road. Preserve queue order for equal costs.
+        local bias = lastSpeed >= M.FAST_MS and (col and 2 or 1) or 1e4
+        local d = math.sqrt(dx * dx + dy * dy) + (e.what == 'road' and 0 or bias)
         if d < bd then best, bd = i, d end
       end
     end
@@ -2803,6 +3201,16 @@ function M.boxGap2(b, x, y)
   local dx = math.max(b[1] - x, 0, x - b[4])
   local dy = math.max(b[2] - y, 0, y - b[5])
   return math.sqrt(dx * dx + dy * dy)
+end
+
+-- Pure: did only late colliders (M.requestLate) set the flag? src: { source = n }
+function M.onlyLateDirt(src)
+  local any = false
+  for k in pairs(src or {}) do
+    if k ~= 'requestLate' then return false end
+    any = true
+  end
+  return any
 end
 
 -- Pure: did only made colliders (markTileCollider, their promotion near the car) set the flag? src: { source = n }
@@ -2984,6 +3392,42 @@ function M.requestCollision(box)
     extBoxes[#extBoxes + 1] = { box[1], box[2], 0, box[4], box[5], 0 }
   end
 end
+-- Colliders made far ahead that may wait for any rebuild, but no longer than the car's coming within hardReach of them
+-- (no NEED_GAP_S wait, whatever the rolling deferral ROLL_DEFER_S holds back): trees.lua's items made solid at their
+-- reach radius (REACH). pts: { x1, y1, x2, y2, ... }, kept by LATE_CELL_M cell (a cell's square counts as near as its
+-- nearest point: a box round a pass's items spanned the road ahead and came due at once). Taken by any rebuild.
+M.LATE_CELL_M = 16
+function M.requestLate(pts)
+  markDirty('requestLate')
+  local c = M.LATE_CELL_M
+  for i = 1, #pts - 1, 2 do
+    local gx, gy = math.floor(pts[i] / c), math.floor(pts[i + 1] / c)
+    local k = gx .. '_' .. gy
+    if not lateCells[k] then lateCells[k] = { gx * c, gy * c }; lateN = lateN + 1 end
+  end
+end
+-- The distance (m) from the car to the nearest late cell (nil: none; 0: no car).
+local function lateGap()
+  if lateN == 0 then return nil end
+  local p = playerNow()
+  if not p then return 0 end
+  local best, c = math.huge, M.LATE_CELL_M
+  for _, q in pairs(lateCells) do
+    local dx = math.max(q[1] - p.x, 0, p.x - (q[1] + c))
+    local dy = math.max(q[2] - p.y, 0, p.y - (q[2] + c))
+    local d = dx * dx + dy * dy
+    if d < best then best = d end
+  end
+  return math.sqrt(best)
+end
+M._lateGap = lateGap
+-- Pure: are late colliders dist m from the car due now (speed v m/s)?
+function M.lateDue(dist, v)
+  return dist ~= nil and dist <= M.hardReach(v)
+end
+-- Are late colliders due for the player's car now? (update's urgent test) / every one gone (a rebuild made them solid)
+function M.lateUrgent() return lateN > 0 and M.lateDue(lateGap(), lastSpeed) end
+function M.clearLate() lateCells, lateN = {}, 0 end
 -- The distance (m) from p (default: the car) to the nearest of those boxes (nil: none; 0: no car). (cutoff: unused)
 extGap = function(_, p)
   if #extBoxes == 0 then return nil end
@@ -3021,6 +3465,7 @@ function M.collisionRebuilt()
   local removed = noteNewColliders()
   lastReloadAt, reloads = now(), reloads + 1
   collisionDirty, deletesDirty, sinceReload, extBoxes = removed > 0, false, stopwatch.new(), {}
+  M.clearLate()
   -- (a generation swap committed in this frame, before the terrain's own rebuild: its skins' collision is in it)
   if swapState and swapState.committed and not swapState.reloaded then swapState.reloaded, swapState.frames = true, 0 end
   if swapBack and not swapBack.reloaded then swapBack.reloaded, swapBack.frames = true, 0 end
@@ -3066,10 +3511,11 @@ end
 function M.clear()
   M.swapCancel()            -- (a generation swap's tiles and parts go with everything else)
   for key in pairs(tiles) do dropTile(key) end
+  M._dropRetiring()         -- (everything goes now: no hand-over)
   speedtraps.clear()
   for key, f in pairs(far) do
     if f.geo then M.dropFarGeo(key) end
-    if f.id then deleteQ[#deleteQ + 1] = f.id end
+    if f.id then retireFar(f.id) end
     slotDrop(f.slot)
   end
   far, farQ = {}, {}
@@ -3082,6 +3528,7 @@ function M.clear()
     end
     slotObjGone(id)
   end
+  M._resetBuildings()
   deleteQ = {}
   walkQ, parked = {}, {}
   if collisionDirty then be:reloadCollision(); M.collisionRebuilt() end
@@ -3089,6 +3536,7 @@ end
 
 -- The level ended: its objects are gone with it.
 function M.reset()
+  M._resetBuildings()
   M.swapCancel()            -- (a generation swap's tiles and parts go with the level)
   for _, t in pairs(tiles) do sea.release(t.waterguard) end
   for _, token in pairs(objectWater) do sea.release(token) end
@@ -3104,10 +3552,13 @@ function M.reset()
   end
   for n, d in pairs(slotDropped) do slotsGone[#slotsGone + 1] = { n, d[1], d[2] } end
   objSlot, slotLive, slotDropped = {}, {}, {}
+  M._dropRetiring()         -- (their objects went with the level: the delete queue is emptied below)
   tiles, createQ, deleteQ, walkQ, anchorId, loadedMaterials = {}, {}, {}, {}, nil, false
+  M.townBrickLoaded = false
   far, farQ, farSeen = {}, {}, {}
   held, parked, newColliders, swapQuiet = {}, {}, {}, nil     -- (walkQ entries of objects gone with the level)
   collisionDirty, deletesDirty, dirtyAt, extBoxes, farDeletes = false, false, {}, {}, {}
+  M.clearLate()
   behindState.dir, behindState.slowMs, behindState.x = nil, 0, nil
 end
 
@@ -3199,6 +3650,60 @@ function M.ahead(x, y, hx, hy, dist)
   return out
 end
 
+-- The deck guard's question (deckguard.lua): has the road tile at (x, y) of the current anchor come? 'missing' (and the
+-- tile's key: a geotile's as the server names it) while no tile is there yet; else 'ready', whether its deck collider is
+-- made or not (a tile that came has its deck queued, made by the urgent imports and turned solid by the NEED rebuilds
+-- before the car reaches it, this module's own job), or it has no deck there at all (the server built none). Roads
+-- off: 'ready' (no deck ever comes).
+function M.deckAt(x, y)
+  if not M.enabled then return 'ready' end
+  if M.geo then
+    local k = M.geoKeyAt(x, y)
+    if not k then return 'ready' end
+    local t = tiles[geoKey(k)]
+    if not t then return 'missing', k end
+    return 'ready'
+  end
+  if not anchorId then return 'ready' end
+  local sq = math.floor(x / M.TILE_M) .. '_' .. math.floor(y / M.TILE_M)
+  local t = tiles[tileKey(anchorId, sq)]
+  if not t or t.ghost then return 'missing', sq end
+  return 'ready'
+end
+
+-- The road tiles as a grid for the deck guard's walk along a span (deckguard.lua scanSpan: every tile the span's line
+-- crosses, not points on it): xy(x, y) -> the fractional cell of the current anchor's world point (a geotile's Web-
+-- Mercator x, y at geotile.Z; an anchor tile's x / TILE_M, y / TILE_M), at(ix, iy) -> deckAt's answer for that tile.
+local function mercFrac(lat, lon)
+  local n = 2 ^ geotile.Z
+  local la = math.max(-geotile.MAX_LAT, math.min(geotile.MAX_LAT, lat)) * math.pi / 180.0
+  return (lon + 180.0) / 360.0 * n, (1.0 - math.log(math.tan(la) + 1.0 / math.cos(la)) / math.pi) / 2.0 * n
+end
+M.deckGrid = {
+  xy = function(x, y)
+    if M.geo then
+      local a = anchorObj
+      if not a then return x / M.TILE_M, y / M.TILE_M end
+      return mercFrac(a:worldToGeodetic(x, y, 0))
+    end
+    return x / M.TILE_M, y / M.TILE_M
+  end,
+  at = function(ix, iy)
+    if not M.enabled then return 'ready' end
+    if M.geo then
+      if not anchorObj then return 'ready' end
+      local k = geotile.key(ix, iy)
+      if not tiles[geoKey(k)] then return 'missing', k end
+      return 'ready'
+    end
+    if not anchorId then return 'ready' end
+    local sq = ix .. '_' .. iy
+    local t = tiles[tileKey(anchorId, sq)]
+    if not t or t.ghost then return 'missing', sq end
+    return 'ready'
+  end,
+}
+
 -- The server's hello: road tiles as geotiles (hello.roadGeo == M.ROAD_GEO) or the anchor's.
 function M.setGeo(on) M.geo = on and true or false end
 
@@ -3231,12 +3736,12 @@ function M.newSession()
       if farSeen[key] then keepSeen[key] = true end
       any = true
     else
-      if f.id then deleteQ[#deleteQ + 1] = f.id end
+      if f.id then retireFar(f.id) end
       slotDrop(f.slot)
       if f.geo then
         farGeoLamps(f, false)
         for _, p in pairs(f.parts) do
-          if p.id then deleteQ[#deleteQ + 1] = p.id end
+          if p.id then retireFar(p.id) end
           slotDrop(p.slot)
         end
       end

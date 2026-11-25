@@ -30,7 +30,8 @@ BBOX_PAD_M = 2.0
 GROUPS = ("guardrail", "guardrail_start", "guardrail_end", "guardrail_back", "guardrail_back_start",
           "guardrail_back_end", "jersey", "jersey_end", "cable", "kantstolpe",
           "se_f17", "se_f17_400", "se_f17_300", "se_f17_200", "se_f18_11", "se_f18_12", "se_f18_21", "se_f2", "se_c1",
-          "se_b3", "se_e1", "se_e2", "se_a19")      # (sesigns.py's: rows go in after every barrier's, medians only reads those)
+          "se_b3", "se_e1", "se_e2", "se_a19", "se_c1_t", "se_e16_r", "se_e16_l",
+          "se_e9", "se_e10")      # (sesigns.py's: rows go in after every barrier's, medians only reads those)
 STOCK_GROUPS = GROUPS
 import euguardrails
 ALL_GROUPS = GROUPS + euguardrails.GROUPS
@@ -43,28 +44,41 @@ KINDS = {"guard_rail": 0, "jersey_barrier": G_JERSEY, "cable_barrier": G_CABLE} 
 HEIGHTS = {G_JERSEY: 0.88, G_JERSEY_END: 0.88, G_CABLE: 1.0}                       # (the rest: MODULE_HEIGHT_M)
 
 
+# A guard rail mapped in concrete is a concrete wall (OSM barrier=guard_rail + material=concrete: I-81 at Bristol VA's
+# median, a Jersey wall in the street photos, drawn as Italy's steel rail inside the lane; the player's report
+# JRHVD9QF, 2026-11-19): the stock jersey barrier, as barrier=jersey_barrier is.
+CONCRETE_MATERIALS = {"concrete", "reinforced_concrete", "precast_concrete"}
+
+
+def _osm_tags(feats, i):
+    """The preserved OSM tags of feature i as a dict ({} none or unreadable)."""
+    tags = feats.attrs.get("tags")
+    if tags is None:
+        return {}
+    try:
+        values = json.loads(str(tags[i]))
+    except (TypeError, ValueError):
+        return {}
+    # source_tags is optional in Overture and may be absent, JSON null, or another
+    # JSON value. Only an object can contain OSM tag keys.
+    return values if isinstance(values, dict) else {}
+
+
 def _barrier_kind(feats, i):
     """A mapped barrier line's kind among KINDS, or None: Overture's normalized class, falling back to the preserved
-    OSM tags."""
+    OSM tags; a guard rail mapped in concrete (CONCRETE_MATERIALS) is a jersey barrier."""
     classes = feats.attrs.get("class")
     subtypes = feats.attrs.get("subtype")
     cls = str(classes[i]).strip().lower() if classes is not None else ""
     subtype = str(subtypes[i]).strip().lower() if subtypes is not None else ""
-    if subtype == "barrier" and cls in KINDS:
-        return cls
-    tags = feats.attrs.get("tags")
-    if tags is None:
-        return None
-    try:
-        values = json.loads(str(tags[i]))
-    except (TypeError, ValueError):
-        return None
-    # source_tags is optional in Overture and may be absent, JSON null, or another
-    # JSON value. Only an object can contain OSM tag keys.
-    if not isinstance(values, dict):
-        return None
-    v = str(values.get("barrier", "")).strip().lower()
-    return v if v in KINDS else None
+    values = _osm_tags(feats, i)
+    kind = cls if subtype == "barrier" and cls in KINDS else None
+    if kind is None:
+        v = str(values.get("barrier", "")).strip().lower()
+        kind = v if v in KINDS else None
+    if kind == "guard_rail" and str(values.get("material", "")).strip().lower() in CONCRETE_MATERIALS:
+        return "jersey_barrier"
+    return kind
 
 
 def _is_guardrail(feats, i):
@@ -387,6 +401,20 @@ def _overlaps_bridge_approach(a, b, run):
     checks avoid treating a crossing road's rail as a bridge approach.
     """
     line = np.asarray(run.get("line", ()), np.float64).reshape(-1, 2)
+    if len(line) >= 2:
+        # (a module far from both of the run's ends has no sample near either: no answer to compute. A sample is
+        # within hypot(JOIN_LENGTH_M, JOIN_LATERAL_M) of the end it is near; its distance to that end is at least the
+        # module's start's largest coordinate difference less the module's length (L1). A NaN compares false: the
+        # whole test then. Called per module per parapet run, ~2.5 s of a Montreal rail tile in numpy, 2026-11-21)
+        ax, ay, bx, by = float(a[0]), float(a[1]), float(b[0]), float(b[1])
+        reach = abs(bx - ax) + abs(by - ay) + JOIN_LENGTH_M + JOIN_LATERAL_M + SPAN_TOL_M + 1.0
+        far = 0
+        for e in (line[0], line[-1]):
+            ex, ey = float(e[0]), float(e[1])
+            if max(abs(ex - ax), abs(ey - ay)) > reach:
+                far += 1
+        if far == 2:
+            return False
     a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
     d = b - a
     length = float(dnp.hypot(d[0], d[1]))
@@ -1210,9 +1238,9 @@ def bridge_rows(parapets, frame=None):
             b, _ = _at(line, arc, sb)
             if float(dnp.hypot(*(b - a))) < 0.05:
                 continue
-            za, zb = float(np.interp(sa, arc, z)), float(np.interp(sb, arc, z))
+            za, zb = float(dnp.interp(sa, arc, z)), float(dnp.interp(sb, arc, z))
             p = 0.5 * (a + b)
-            zp = float(np.interp(0.5 * (sa + sb), arc, z))
+            zp = float(dnp.interp(0.5 * (sa + sb), arc, z))
             if frame is not None:
                 pla, plo, _ = frame.enu_to_geodetic(float(p[0]), float(p[1]), 0.0)
                 key = f"bridge:{float(pla):.6f}:{float(plo):.6f}"

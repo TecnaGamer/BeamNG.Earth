@@ -9,6 +9,14 @@ Sources, each per z14 map-data cell, kept on disk under <cache>/roadz/v<VERSION>
   reads BD TOPO with (CRS:84 bbox, GeoJSON, the "ign_wfs" lane).
 - "nvdb": Norway, the Norwegian Public Roads Administration's NVDB API v4 road network (NLOD 2.0): LINESTRING Z,
   10-15 cm; medium L (in the air: a bridge), U / B (underground, in a building: a tunnel); vegsystem (E18, R4 ...).
+- "tlm": Switzerland and Liechtenstein, swisstopo's swissTLM3D (Open Government Data, free with the attribution
+  "swisstopo"): its roads as 3D lines (LV95; heights above the sea, LN02, 0.2-1.5 m), each with its kind of structure
+  (KUNSTBAUTE: bridges, tunnels, underpasses, galleries; server/tlmcodes.py). swisstopo serves it only whole (one
+  ~5 GB file a release, no service by area), so it is cut into this source's cells once (tools/build_swisstlm.py:
+  every road of a cell, in the Lines file this module keeps): a cell is read from the tool's folder,
+  BNE_ROADZ_TLM_DIR (<dir>/14/<x>/<y>.npz; none there: no roads), or from BNGE_ROADZ_TLM_URL (the same layout; a 404:
+  no roads there). Offered, and the plans tagged (tlm_tags), from those two settings alone, never from what a process
+  finds on disk, so every process keys a plan alike; with neither nothing is asked and the inference stands.
 - "hk": Hong Kong, the Transport Department's Road Network centrelines (ELEVATION: a signed level tier, 0 ground, 1-4
   decks, -1 / -2 tunnels; ROUTE_NUM; STREET_ENAME) with heights from CEDD's 2020 airborne LiDAR (0.5 m DTM and DSM, a
   750 x 600 m sheet a zip): ground roads the DTM, decks the one surface earthfast.deck_lidar finds in the DSM's pixels
@@ -26,6 +34,9 @@ Sources, each per z14 map-data cell, kept on disk under <cache>/roadz/v<VERSION>
   end that the lidar shows elevated (roads.lidar_gap_candidates: an untagged viaduct stretch), read where the
   deck's measured end stands over the DTM only (the nodes the decks' read had not): their elevated start is a deck
   in roads.level_ranges (gap_answers, one decision per cell and server run; BNE_LIDAR_GAPS=off: none).
+  Before any point is read, a cell's answer is asked of the project's CDN (lidarz.py, BNGE_LIDARZ: the same answer
+  measured by the project's builder along the same map lines and DEM, signed; a planning process that would take the
+  rule waits lidarz.WAIT_S for it); any miss reads the point clouds as below.
 Matching (earthfast.roadz_match): each station of a map road takes the nearest source segment of its level (bridge,
 tunnel, ground) within reach whose direction agrees and whose name / number does not contradict the map's; the
 heights then lose their spikes and impossible grades (earthfast.profile_clean). Vector heights are taken relative to
@@ -33,8 +44,8 @@ the source's own ground: the median of (source Z - our DEM) over its ground road
 taken off, so a datum or survey offset of 0.5-2 m makes no step where the deck meets our graded approach.
 
 Off: BNE_ROADZ=off (every source), BNE_LIDAR_DECKS=off (the US lidar decks only), BNE_ROADZ_HK=off (Hong Kong
-only). Pure given the cached data: every process reads the same files; a fetch that fails is a revisit fault
-(netfetch) and the inference stands in.
+only), BNE_ROADZ_TLM=off (Switzerland only). Pure given the cached data: every process reads the same files; a fetch
+that fails is a revisit fault (netfetch) and the inference stands in.
 Malformed vector survey records are isolated: invalid XY splits a line into valid runs, invalid Z is missing, and
 bridge/tunnel levels stay attached to each run. Cached invalid coordinates trigger a refetch; if unavailable, the
 existing inference remains the fallback. This validation does not smooth or alter finite surveyed heights.
@@ -53,11 +64,13 @@ from collections import OrderedDict
 
 import numpy as np
 
+import dedom
 import fast
 import dmath
 import dnp
 import hkdtm
 import hklidar
+import lidarz
 import mapcells
 import roadzhk
 import xproc
@@ -69,17 +82,28 @@ VERSION = 3                 # (2: the lidar cells carry the ground stretches fou
 NATIVE = 102                # earthfast.VERSION of the kernels below
 ON = os.environ.get("BNE_ROADZ", "on") != "off"
 LIDAR_ON = os.environ.get("BNE_LIDAR_DECKS", "on") != "off"
+DE_ON = os.environ.get("BNE_DE_DECKS", "on") != "off"    # Germany's surface-model decks (dedom.py)
 HK_ON = os.environ.get("BNE_ROADZ_HK", "on") != "off"
+TLM_ON = os.environ.get("BNE_ROADZ_TLM", "on") != "off"
+TLM_URL = os.environ.get("BNGE_ROADZ_TLM_URL", "").rstrip("/")     # (where the cut cells are served)
+TLM_DIR = os.environ.get("BNE_ROADZ_TLM_DIR", "")   # (or a folder of them: tools/build_swisstlm.py's --out)
+TLM_CELLS = "tlm1"          # the "tlm" source's cell folder and the tag of the plans made with it (tlm_tags): changed
+                            # with a new cut of its cells (another release, other rules), so that old ones are not read
 # the "hk" source's cell folder (<source> above) and the tag of the plans made with it (hk_tags): changed with its
 # heights, so that cells and plans kept under the old one are not read (hk / hk1: a deck the median of 15 DSM reads
-# across it; hk2: the one surface deck_lidar finds in the DSM pixels round its line). Not VERSION: every source's cells
-HK_CELLS = "hk2"
+# across it; hk2: the one surface deck_lidar finds in the DSM pixels round its line; hk3: the lines asked for to
+# HK_LINE_TOL_DEG and their vertices roadzhk.VERTEX_MIN_M apart or more, a cell before held up to a million). Not
+# VERSION: every source's cells
+HK_CELLS = "hk3"
 LIDAR_INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usgs3dep_index.json.gz")
 PROVIDER = None             # the server's RoadZ (MapData makes it): BridgeProfiles / Grader ask it
 
 FR_BOUNDS = (41.3, -5.2, 51.2, 9.7)         # lat0, lon0, lat1, lon1: metropolitan France (PR #456's box)
 NO_BOUNDS = (57.9, 4.0, 71.3, 31.3)         # mainland Norway
 HK_BOUNDS = hklidar.BOUNDS
+CH_BOUNDS = (45.80, 5.94, 47.82, 10.50)     # Switzerland and Liechtenstein (swissTLM3D's extent; a box: with
+                                            # BNGE_ROADZ_TLM_URL set its French, German, Austrian and Italian border
+                                            # cells are keyed apart too, their cells 404s, no roads)
 US_BOUNDS = ((24.0, -125.0, 49.5, -66.5), (51.0, -170.0, 71.5, -129.0), (18.5, -161.0, 22.5, -154.5))
 WFS_URL = "https://data.geopf.fr/wfs/ows"
 WFS_LANE = "ign_wfs"
@@ -91,7 +115,9 @@ NVDB_PAGE = 1000
 NVDB_PAGES = 40
 HK_TD_URL = ("https://portal.csdi.gov.hk/server/rest/services/common/td_rcd_1638949160594_2844/FeatureServer/10/"
              "query")
-HK_IDS = 200                # OBJECTIDs a request (its URL under the service's limit: 2.4 kB answered 404, 1.8 kB not)
+HK_LINE_TOL_DEG = 1e-7      # degrees (~1 cm): how far from its line a vertex may lie that the service leaves out
+                            # (maxAllowableOffset). Asked for whole, some curves come in vertices 0.03 mm apart: 3.3 MB
+                            # for one 57 m line, 139 MB for the cell at Hong Kong (22.28 N 114.16 E), 2026-11-15
 EPT_BASE = "https://s3-us-west-2.amazonaws.com/usgs-lidar-public/"
 EPT_R = 6378137.0           # EPSG:3857's sphere
 
@@ -242,6 +268,10 @@ class _CellBuilt(Exception):
     """Another process built the whole cell while this one read its nodes (RoadZ._read): its file is taken."""
 
 
+class _NoProduct(Exception):
+    """No CDN answer for a cell whose lidar would have to be read (RoadZ._lidar's cdn_only)."""
+
+
 # A node's read is claimed across the server's processes (xproc: a lock file beside its part file): the main process
 # builds the place's cells ahead (Server.warm_place -> RoadZ.warm) while the block and road-tile processes ask for the
 # same cells, and each downloaded and decoded every node until the cell's file was down. A node another process reads
@@ -300,18 +330,20 @@ def _in(b, lat, lon):
 
 
 def sources_at(lat, lon, lidar=None):
-    """The sources that may know heights at (lat, lon): 'ign', 'nvdb', 'hk' (HK_ON), 'lidar' (bridges only; lidar: on,
-    default LIDAR_ON)."""
+    """The sources that may know heights at (lat, lon): 'ign', 'nvdb', 'tlm' (TLM_ON), 'hk' (HK_ON), 'lidar' (bridges
+    only; lidar: on, default LIDAR_ON)."""
     lidar = LIDAR_ON if lidar is None else lidar
     out = []
     if _in(FR_BOUNDS, lat, lon):
         out.append("ign")
     if _in(NO_BOUNDS, lat, lon):
         out.append("nvdb")
+    if TLM_ON and _in(CH_BOUNDS, lat, lon) and (TLM_URL or TLM_DIR):
+        out.insert(0, "tlm")    # (before "ign": its box reaches over Switzerland, where BD TOPO has nothing)
     if HK_ON and _in(HK_BOUNDS, lat, lon):
         out.append("hk")
-    if lidar and any(_in(b, lat, lon) for b in US_BOUNDS):
-        out.append("lidar")
+    if lidar and (any(_in(b, lat, lon) for b in US_BOUNDS) or (DE_ON and dedom.service_at(lat, lon) is not None)):
+        out.append("lidar")     # (in Germany: a state's open surface model instead of a point cloud, dedom.py)
     return out
 
 
@@ -324,6 +356,34 @@ def hk_tags(key):
             and lon0 - pad <= HK_BOUNDS[3] and HK_BOUNDS[1] <= lon1 + pad):
         return ()
     return ((HK_CELLS,) if ON and HK_ON else ()) + (("hkdtm1",) if hkdtm.ON else ())
+
+
+def tlm_tags(key):
+    """(TLM_CELLS,) when map cell key's road plans are made with Switzerland's measured heights (the "tlm" source on,
+    the cell in CH_BOUNDS, its cut cells served, BNGE_ROADZ_TLM_URL, or in a folder, BNE_ROADZ_TLM_DIR), else (): the
+    plans made there before, and the baked packs and shared decisions made without them, are not those (plancache).
+    From the settings alone (no look at the disk): every process, whatever it has read or built, keys a cell alike."""
+    if not (ON and TLM_ON):
+        return ()
+    k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
+    lon0, lat0, lon1, lat1 = k.bounds()
+    pad = CLIP_PAD_M / 111320.0     # (as hk_tags: a road part of the cell whose middle is in CH_BOUNDS reads "tlm")
+    if not (lat0 - pad <= CH_BOUNDS[2] and CH_BOUNDS[0] <= lat1 + pad
+            and lon0 - pad <= CH_BOUNDS[3] and CH_BOUNDS[1] <= lon1 + pad):
+        return ()
+    return (TLM_CELLS,) if (TLM_URL or TLM_DIR) else ()
+
+
+def de_cell(key):
+    """Can map cell key's plans read Germany's measured decks (dedom.py: the source on and a state's service box within
+    one cell of the cell's box, so a road part of the cell reaching a cell measured there counts too)? No network.
+    (The decision archives' slice of such a cell holds the build: decisions.slice_digest.)"""
+    if not (ON and DE_ON):
+        return False
+    lon0, lat0, lon1, lat1 = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])).bounds()
+    dla, dlo = lat1 - lat0, lon1 - lon0
+    return any(lat0 - dla <= b[2] and b[0] <= lat1 + dla and lon0 - dlo <= b[3] and b[1] <= lon1 + dlo
+               for b in (s["box"] for s in dedom.SERVICES))
 
 
 def hk_cell(key):
@@ -454,18 +514,28 @@ class Lines:
         return len(self.off) - 1
 
     def save(self, path):
+        """The lines to path (one file, replaced whole). A cell the CDN's product gave carries its identity inside
+        it (array "lidarz": lidarz.identity_bytes), so no eviction can part the heights from what they must be checked
+        against (Codex review of 866ebb97: a file of its own beside them could be evicted alone)."""
         import staging
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = staging.tmp_for(path)
+        extra = {}
+        ident = getattr(self, "lidarz", None)
+        if ident is not None:
+            extra["lidarz"] = np.frombuffer(lidarz.identity_bytes(ident), np.uint8)
         with open(tmp, "wb") as fh:
             np.savez_compressed(fh, lonlat=self.lonlat, z=self.z, off=self.off, level=self.level, ref=self.ref,
-                                name=self.name, corrected=np.array(self.corrected))
+                                name=self.name, corrected=np.array(self.corrected), **extra)
         staging.replace_cached(tmp, path)
 
     @classmethod
     def load(cls, path):
         with np.load(path, allow_pickle=False) as d:
-            return cls(d["lonlat"], d["z"], d["off"], d["level"], d["ref"], d["name"], bool(d["corrected"]))
+            got = cls(d["lonlat"], d["z"], d["off"], d["level"], d["ref"], d["name"], bool(d["corrected"]))
+            if "lidarz" in d.files:     # (a CDN cell: its identity, lidarz.kept_ok)
+                got.lidarz = lidarz.identity_of(d["lidarz"].tobytes())
+        return got
 
 
 # ---- the vector sources ----------------------------------------------------------------------------------------
@@ -602,7 +672,7 @@ def resample_line(xy, step):
         return xy[:1], np.zeros(min(1, len(xy)))
     m = max(1, int(math.ceil(s[-1] / step - 1e-9))) + 1
     t = np.linspace(0.0, s[-1], m)
-    return np.stack([np.interp(t, s, xy[:, 0]), np.interp(t, s, xy[:, 1])], 1), t
+    return np.stack([dnp.interp(t, s, xy[:, 0]), dnp.interp(t, s, xy[:, 1])], 1), t
 
 
 def datum_fit(z_src, z_dem):
@@ -714,6 +784,7 @@ class RoadZ:
         self._lock = threading.Lock()
         self._cell_locks = {}
         self.sheets = hklidar.at(cache_dir, fetcher)     # (Hong Kong's LiDAR sheets: the terrain reads them too)
+        dedom.configure(cache_dir, fetcher)             # (Germany's deck shards: their manifest pinned in the cache)
         self.stats = {"cells": 0, "requests": 0, "bytes": 0, "seconds": 0.0}     # (built here, not read from disk)
         self._raw = OrderedDict()           # (dataset, node) -> its .laz bytes (_node_bytes; RAW_NODES_MB kept)
         self._raw_bytes = 0
@@ -735,21 +806,61 @@ class RoadZ:
         return bool(self.lidar_sources(key))
 
     def lidar_on_disk(self, key):
-        """Is this cell's LiDAR kept on disk already? No network."""
+        """Is this cell's LiDAR kept on disk already (or in its CIP cell: written out now)? No network."""
         k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
-        return all(p and os.path.exists(p) for p in (self._path(s, k) for s in self.lidar_sources(k)))
+        return all(p and (os.path.exists(p) or self._cip_fill(s, k, p))
+                   for p, s in ((self._path(s, k, network=False), s) for s in self.lidar_sources(k)))
 
-    def _path(self, src, key):
+    def _cip_fill(self, src, key, p):
+        """Cell key's answer file of source src written from its CIP cell (cip.py: the builder's own measurement of
+        the same inputs, the same arrays), when CIP is on and the build has it. True when written."""
+        import cip
+        r = cip.any_reader()
+        if r is None or not p:
+            return False
+        got = cip.roadz_files(r, os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(p)))), key)
+        if got is None:
+            return False
+        npz, gaps = got
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        if gaps is not None:            # (the gaps first: lines() reads them beside the lines)
+            tmp = f"{p}.gaps.json.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(gaps)
+            os.replace(tmp, p + ".gaps.json")
+        tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(npz)
+        os.replace(tmp, p)
+        return True
+
+    def _path(self, src, key, network=True):
+        """The cell's answer file of source src (None: not kept). A German cell's measured decks (dedom.py, through the
+        "lidar" source) are kept under their build's folder (dedom.identity): an answer is never read for another
+        build. network false: None while the run's dedecks manifest is not decided."""
         import roads
+        if src == "lidar" and DE_ON:
+            la, lo = key.center()
+            if dedom.service_at(la, lo) is not None:
+                ident = dedom.identity(network)
+                if ident is None:
+                    return None
+                src = "dedecks-" + ident + ("" if roads.LIDAR_GAPS_ON else "-nogaps")
         if src == "lidar" and not roads.LIDAR_GAPS_ON:
             src = "lidar-nogaps"            # (built without the ground stretches: not the cells with them)
         if src == "hk":
             src = HK_CELLS
+        elif src == "tlm":
+            if TLM_DIR:
+                return None                 # (BNE_ROADZ_TLM_DIR: read from that folder every run, never kept here,
+                                            # so a cut finished, redone or replaced is what is read next)
+            src = TLM_CELLS
         return os.path.join(self.dir, src, str(key.z), str(key.x), f"{key.y}.npz") if self.dir else None
 
-    def lines(self, src, key):
+    def lines(self, src, key, cdn_only=False):
         """The cell's Lines of source src (fetched and kept on disk the first time), or None when it could not be
-        had (offline, a failed fetch: asked again next time)."""
+        had (offline, a failed fetch: asked again next time). cdn_only: the lidar's from disk or the CDN's product
+        only (lidarz.py), None (no fault) when it would have to be read."""
         key = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
         mk = (src, str(key))
         with self._lock:
@@ -764,12 +875,27 @@ class RoadZ:
             if got is not None:
                 return got
             p = self._path(src, key)
-            if p and os.path.exists(p):
+            if p and (os.path.exists(p) or self._cip_fill(src, key, p)):
                 try:
                     got = Lines.load(p)
                     if src == "lidar":      # (its elevated ground stretches: written before the lines)
                         with open(p + ".gaps.json", encoding="utf-8") as fh:
                             got.gaps = [(str(f), tuple(a), tuple(b)) for f, a, b in json.load(fh)]
+                        # (a cell the CDN's product gave (its identity inside the file, Lines.load): taken again
+                        # only while this server's map, DEM and lkey still make the builder's measurement, else made
+                        # anew; Codex reviews of 206afb6f and 866ebb97)
+                        if getattr(got, "lidarz", None) is not None and not lidarz.kept_ok(self, key, got):
+                            for q in (p + ".gaps.json", p):
+                                try:
+                                    os.remove(q)
+                                except OSError:
+                                    pass
+                            if prefetched() and not getattr(_tl, "prefetch", False):
+                                # (a planning process of a server run reads no point clouds, gap_answers: the CDN,
+                                # else None and the rule, the server's prefetch measuring it meanwhile)
+                                cdn_only = True
+                                self._want(src, key)
+                            raise ValueError("a CDN cell no longer this server's measurement")
                     # (used: the download cache's eviction takes a file's mtime for its last use when this server's
                     # own process did not read it, and these are read in the workers; a cell read on every visit was
                     # as old as its download, among the first evicted when the disk ran short of its reserve, and
@@ -785,12 +911,17 @@ class RoadZ:
                 t0 = time.monotonic()
                 try:
                     try:
-                        got = {"ign": self._ign, "nvdb": self._nvdb, "hk": self._hk, "lidar": self._lidar}[src](key)
+                        if src == "lidar":
+                            got = self._lidar(key, cdn_only=True) if cdn_only else self._lidar(key)
+                        else:
+                            got = {"ign": self._ign, "nvdb": self._nvdb, "tlm": self._tlm, "hk": self._hk}[src](key)
                     except _CellBuilt:      # (another process's: read as any cell on disk, not written again)
                         got = Lines.load(p)
                         with open(p + ".gaps.json", encoding="utf-8") as fh:
                             got.gaps = [(str(f), tuple(a), tuple(b)) for f, a, b in json.load(fh)]
                         p = None
+                except _NoProduct:
+                    return None             # (left to the server's prefetch: gap_answers)
                 except Exception as e:      # (a FetchError is a revisit fault already)
                     log.debug("roadz %s %s: %s: %s", src, key, type(e).__name__, e)
                     _tl.failed = e          # (the prefetch's: a 404 ends a want, _pf_loop)
@@ -1093,6 +1224,23 @@ class RoadZ:
                 break
         return Lines.build(rows)
 
+    def _tlm(self, key):
+        """Switzerland's cell, cut from swissTLM3D beforehand (tools/build_swisstlm.py): from BNE_ROADZ_TLM_DIR, or
+        BNGE_ROADZ_TLM_URL; none there (no file, a 404): the cell has no roads; neither set: left to the inference, no
+        fault (sources_at offers the source only with one of them)."""
+        if TLM_DIR:
+            path = os.path.join(TLM_DIR, str(key.z), str(key.x), f"{key.y}.npz")
+            return Lines.load(path) if os.path.exists(path) else Lines.build([])
+        if not TLM_URL:
+            raise _NoProduct()
+        import io
+        import netfetch
+        try:
+            body = self._fetch(f"{TLM_URL}/{key.z}/{key.x}/{key.y}.npz")
+        except netfetch.NotFound:
+            return Lines.build([])
+        return Lines.load(io.BytesIO(body))
+
     def _nvdb(self, key):
         lon0, lat0, lon1, lat1 = key.bounds()
         rows, start = [], None
@@ -1117,18 +1265,10 @@ class RoadZ:
         qlat = (CLIP_PAD_M + roadzhk.OCCLUDE_M) / 111320.0
         env = f"{lon0 - qlat * k:.6f},{lat0 - qlat:.6f},{lon1 + qlat * k:.6f},{lat1 + qlat:.6f}"
         fields = "OBJECTID,ELEVATION,ROUTE_NUM,STREET_ENAME"
-        feats = hklidar.arcgis(self._get_json, HK_TD_URL, {
+        lines = roadzhk.parse_td(hklidar.arcgis(self._get_json, HK_TD_URL, {
             "where": "1=1", "geometry": env, "geometryType": "esriGeometryEnvelope", "inSR": 4326,
-            "spatialRel": "esriSpatialRelIntersects", "outSR": 4326, "outFields": fields, "orderByFields": "OBJECTID"})
-        # the same features in HK1980 Grid by their ids: the envelope query with outSR 2326 answers another set of
-        # lines (2026-11-10: 89 for 84 at Shek Mun, some 50 m outside the box), the vertices themselves agree to 0.4 mm
-        ids = sorted({(f.get("attributes") or {}).get("OBJECTID") for f in feats} - {None})
-        grid = []
-        for i in range(0, len(ids), HK_IDS):
-            grid += hklidar.arcgis(self._get_json, HK_TD_URL, {
-                "objectIds": ",".join(str(int(v)) for v in ids[i:i + HK_IDS]), "outSR": 2326, "outFields": "OBJECTID",
-                "orderByFields": "OBJECTID"})
-        lines = roadzhk.parse_td(feats, grid)
+            "spatialRel": "esriSpatialRelIntersects", "outSR": 4326, "outFields": fields, "orderByFields": "OBJECTID",
+            "maxAllowableOffset": f"{HK_LINE_TOL_DEG:.9f}"}))
 
         def inside(ll):
             return ((ll[:, 0] >= lon0 - plon) & (ll[:, 0] <= lon1 + plon)
@@ -1228,20 +1368,42 @@ class RoadZ:
         return [c for c in roads.lidar_gap_candidates(feats)
                 if lon0 <= c[1][0, 0] < lon1 and lat0 <= c[1][0, 1] < lat1]
 
-    def _lidar(self, key):
-        import geodesy
+    def lidar_inputs(self, key):
+        """(parts, cands, names) of what cell key's lidar read measures along: its bridge parts [(lonlat, half
+        width)], gap candidates [(fid, lonlat, half width)] and the 3DEP datasets to try (LIDAR_DATASETS at most; []:
+        nothing to read). From the map alone (no point clouds): the CDN product's inputs digest (lidarz.py)."""
         parts = self._bridges(key)
         cands = self._gap_candidates(key)
         if not parts and not cands:
-            return Lines.build([], corrected=True)
+            return parts, cands, []
         lat_c, lon_c = key.center()
         names = lidar_datasets(lat_c, lon_c)
         if not names:
             first = parts[0][0] if parts else cands[0][1]
             mid = first[len(first) // 2]
             names = lidar_datasets(float(mid[1]), float(mid[0]))
+        return parts, cands, names[:LIDAR_DATASETS]
+
+    def _lidar(self, key, cdn_only=False):
+        """The cell's lidar Lines (.gaps: the elevated stretches' answers). cdn_only: never read the point clouds
+        (_NoProduct when the CDN's product has no answer and a read would be needed: gap_answers' planning processes,
+        which leave the reads to the server's prefetch)."""
+        import geodesy
+        lat_c, lon_c = key.center()
+        svc = dedom.service_at(lat_c, lon_c) if DE_ON else None
+        if svc is not None:     # (Germany: the dedom shards, small files like the CDN's product, read here too)
+            return self._dedom(key, svc)
+        parts, cands, names = self.lidar_inputs(key)
         if not names:
             return Lines.build([], corrected=True)
+        if parts and lidarz.enabled():
+            # (a read would follow: the builder's answer for exactly these inputs first, lidarz.py; a miss reads here)
+            got = lidarz.cell(self, key, parts, cands, names)
+            if got is not None:
+                return got
+        if parts and cdn_only:
+            raise _NoProduct(str(key))
+        lat_c, lon_c = key.center()
         frame = geodesy.EnuFrame(lat_c, lon_c)
         nb = len(parts)
         parts = parts + [(ring, half) for _fid, ring, half in cands]     # (the candidates measured in the same read)
@@ -1249,11 +1411,98 @@ class RoadZ:
         for ring, half in parts:
             e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
             local.append((np.stack([np.asarray(e), np.asarray(n)], 1), half))
-        for name in names[:LIDAR_DATASETS]:
+        for name in names:
             got = self._lidar_from(name, key, frame, parts, local, nb, [c[0] for c in cands])
             if got is not None:
                 return got
         return Lines.build([], corrected=True)
+
+    def _dedom(self, key, svc):
+        """The cell's decks (and their stretches and approaches, as _lidar_from) measured on a German state's surface
+        model: the dedom shards' samples round the cell (made offline along every bridge, tools/build_de_decks.py) are
+        the points (class 1), their DGM heights the datum onto our DEM. No samples (outside the state, no bridge, no
+        shard yet): none, the inference stands."""
+        import geodesy
+        parts = self._bridges(key)
+        cands = self._gap_candidates(key)
+        empty = Lines.build([], corrected=True)
+        empty.gaps = []
+        if not parts:
+            return empty
+        lat_c, lon_c = key.center()
+        frame = geodesy.EnuFrame(lat_c, lon_c)
+        nb = len(parts)
+        parts = parts + [(ring, half) for _fid, ring, half in cands]
+        local = []
+        for ring, half in parts:
+            e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+            local.append((np.stack([np.asarray(e), np.asarray(n)], 1), half))
+        allr = np.concatenate([ring for ring, _h in parts])
+        pad = 60.0 / 111320.0
+        padx = pad / max(0.2, dmath.cos(math.radians(lat_c)))
+        la, lo, dom, dgm = dedom.points(lambda u: self._fetch(u, lane="dedom"), float(allr[:, 1].min()) - pad,
+                                        float(allr[:, 0].min()) - padx, float(allr[:, 1].max()) + pad,
+                                        float(allr[:, 0].max()) + padx)
+        ok = np.isfinite(dom)
+        if ok.sum() < DATUM_MIN_PTS:
+            return empty
+        gi = np.flatnonzero(np.isfinite(dgm))
+        if len(gi) > 4000:
+            gi = gi[:: int(math.ceil(len(gi) / 4000))]
+        fit = datum_fit(dgm[gi], self._dem_raw(la[gi], lo[gi])) if len(gi) else None
+        if fit is None or fit[0] != 1.0:
+            log.debug("roadz dedom %s %s: no datum fit (%d ground samples)", svc["name"], key, len(gi))
+            return empty
+        off = fit[1]
+        e, n, _ = frame.geodetic_to_enu(la[ok], lo[ok], 0.0)
+        pts = np.ascontiguousarray(np.stack([np.asarray(e), np.asarray(n), dom[ok] - off], 1))
+        cls = np.ascontiguousarray(np.ones(int(ok.sum()), np.uint8))
+        g = np.isfinite(dgm)
+        ge, gn, _ = frame.geodetic_to_enu(la[g], lo[g], 0.0)
+        ground = np.stack([np.asarray(ge, np.float64), np.asarray(gn, np.float64), dgm[g] - off], 1)
+        dropped = []
+
+        def check(i, xy, half, s, z):
+            """dedom.plausible: a deck whose samples read no road surface (tree canopy) is not measured."""
+            def dem(x, y):
+                ela, elo, _ = frame.enu_to_geodetic(np.array([x]), np.array([y]), 0.0)
+                return float(self._dem_raw(np.asarray(ela, np.float64), np.asarray(elo, np.float64))[0])
+            got, why = dedom.plausible(xy, half, s, z, pts, ground, dem,
+                                       [o for j, (o, _h) in enumerate(local[:nb]) if j != i])
+            if not got:
+                dropped.append(why)
+            return got
+        fast.require(GAP_NATIVE, "roadz surface-model decks")
+        rows, gaps = self._measure(frame, parts, local, nb, [c[0] for c in cands], pts, cls, dedom.DECK_PAD_M, check)
+        log.debug("roadz dedom %s %s: %d decks, %d samples, datum %.2f, %d rows, %d stretches, dropped %s",
+                  svc["name"], key, nb, len(pts), off, len(rows), len(gaps), dropped)
+        got = Lines.build(rows, corrected=True)
+        got.gaps = gaps
+        return got
+
+    def dedom_samples(self, key, svc, box_m=250.0, sample=None):
+        """(lat, lon, dom, dgm) of the cell's bridges sampled on the state's services (tools/build_de_decks.py: the
+        build machine's side, never the game's): each deck and its candidate stretches on dedom's 1 m grid across its
+        width plus LIDAR_PAD_M, in requests of at most box_m (or read by sample(lat, lon) -> (dom, dgm))."""
+        import geodesy
+        parts = self._bridges(key)
+        if not parts:
+            return tuple(np.zeros(0) for _ in range(4))
+        parts = parts + [(ring, half) for _fid, ring, half in self._gap_candidates(key)]
+        lat_c, lon_c = key.center()
+        frame = geodesy.EnuFrame(lat_c, lon_c)
+        grid = []
+        for ring, half in parts:
+            e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+            grid.append(dedom.grid_along(np.stack([np.asarray(e), np.asarray(n)], 1), half + LIDAR_PAD_M))
+        g = np.concatenate(grid)
+        la, lo, _ = frame.enu_to_geodetic(g[:, 0], g[:, 1], 0.0)
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        if sample is not None:          # (a state's tiles, tools/de_dom_tiles.py)
+            dom, dgm = sample(la, lo)
+        else:
+            dom, dgm = dedom.sample(lambda u: self._fetch(u, lane="dedom"), svc, la, lo, box_m)
+        return la, lo, dom, dgm
 
     def _boxes(self, frame, parts, local):
         """EPT boxes (Mercator) along parts: one per BOX_STEP_M of each line, padded by its half width."""
@@ -1452,26 +1701,30 @@ class RoadZ:
         return got
 
     @staticmethod
-    def _profile(frame, xy, half, pts, cls):
-        """deck_lidar along line xy: (s, z, the stations' x, y, lat, lon, arc of xy) or None without a surface."""
-        s, z, _cnt = fast._ef.deck_lidar(np.ascontiguousarray(xy), pts, cls, float(half + LIDAR_PAD_M),
+    def _profile(frame, xy, half, pts, cls, pad=LIDAR_PAD_M):
+        """deck_lidar along line xy: (s, z, the stations' x, y, lat, lon, arc of xy) or None without a surface. The
+        points within half + pad of the line count."""
+        s, z, _cnt = fast._ef.deck_lidar(np.ascontiguousarray(xy), pts, cls, float(half + pad),
                                          LIDAR_STEP_M, LIDAR_MAX_GRADE, 3, 24.0, 4.0)
         s, z = np.asarray(s, np.float64), np.asarray(z, np.float64)
         if len(s) < 2 or not np.isfinite(z).any():
             return None
         arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
-        sx, sy = np.interp(s, arc, xy[:, 0]), np.interp(s, arc, xy[:, 1])
+        sx, sy = dnp.interp(s, arc, xy[:, 0]), dnp.interp(s, arc, xy[:, 1])
         sla, slo, _ = frame.enu_to_geodetic(sx, sy, 0.0)
         return s, z, sx, sy, np.asarray(sla, np.float64), np.asarray(slo, np.float64), arc
 
-    def _decks(self, frame, parts, local, pts, cls):
-        """(rows, ends): the decks' measured lines (Lines.build rows) and their measured ends [(x, y, z)]."""
+    def _decks(self, frame, parts, local, pts, cls, pad=LIDAR_PAD_M, check=None):
+        """(rows, ends): the decks' measured lines (Lines.build rows) and their measured ends [(x, y, z)]. check(i, xy,
+        half, s, z) -> False drops deck i's measurement (not a road surface: the inference stands for it)."""
         rows, ends = [], []
-        for (ring, half), (xy, _h) in zip(parts, local):
-            got = self._profile(frame, xy, half, pts, cls)
+        for i, ((ring, half), (xy, _h)) in enumerate(zip(parts, local)):
+            got = self._profile(frame, xy, half, pts, cls, pad)
             if got is None:
                 continue
             s, z, sx, sy, sla, slo, _arc = got
+            if check is not None and not check(i, xy, half, s, z):
+                continue
             rows.append((np.stack([slo, sla], 1), z, 1, "", ""))
             ok = np.flatnonzero(np.isfinite(z))
             for at, far in ((ok[0], s[ok[0]]), (ok[-1], s[-1] - s[ok[-1]])):
@@ -1497,12 +1750,12 @@ class RoadZ:
         g = float(self._dem_raw(np.asarray(la, np.float64), np.asarray(lo, np.float64))[0])
         return np.isfinite(g) and z - g >= LIDAR_GAP_RISE_M
 
-    def _stretches(self, frame, parts, local, fids, pts, cls, ends):
+    def _stretches(self, frame, parts, local, fids, pts, cls, ends, pad=LIDAR_PAD_M):
         """(rows, gaps) of the ground stretches parts (from a deck's end: lidar_gap_stretch) of the features fids."""
         rows, gaps = [], []
         for fid, (ring, half), (xy, _h) in zip(fids, parts, local):
             z_end = self._end_z(ends, xy[0])
-            got = self._profile(frame, xy, half, pts, cls) if np.isfinite(z_end) else None
+            got = self._profile(frame, xy, half, pts, cls, pad) if np.isfinite(z_end) else None
             if got is None:
                 continue
             s, z, sx, sy, sla, slo, arc = got
@@ -1514,19 +1767,19 @@ class RoadZ:
                 continue
             keep = s <= m + 1e-6
             rows.append((np.stack([slo, sla], 1)[keep], z[keep], 1, "", ""))
-            ex, ey = np.interp(m, arc, xy[:, 0]), np.interp(m, arc, xy[:, 1])
+            ex, ey = dnp.interp(m, arc, xy[:, 0]), dnp.interp(m, arc, xy[:, 1])
             ela, elo, _ = frame.enu_to_geodetic(np.array([ex]), np.array([ey]), 0.0)
             gaps.append((str(fid), (float(ring[0, 0]), float(ring[0, 1])), (float(elo[0]), float(ela[0]))))
         return rows, gaps
 
-    def _approaches(self, frame, parts, local, pts, cls, ends):
+    def _approaches(self, frame, parts, local, pts, cls, ends, pad=LIDAR_PAD_M):
         """Lines.build rows (level 0) of the approaches parts (drawn roads from a deck end, as the gap candidates): each
         measured from its deck's measured end to where it is back on our DTM (APPROACH_*); none where it never stands
         APPROACH_MIN_DEV_M off it (the DTM is right) or starts off the deck's end (another surface: a deck over it)."""
         rows = []
         for (ring, half), (xy, _h) in zip(parts, local):
             z_end = self._end_z(ends, xy[0])
-            got = self._profile(frame, xy, half, pts, cls) if np.isfinite(z_end) else None
+            got = self._profile(frame, xy, half, pts, cls, pad) if np.isfinite(z_end) else None
             if got is None:
                 continue
             s, z, sx, sy, sla, slo, _arc = got
@@ -1546,14 +1799,15 @@ class RoadZ:
             rows.append((np.stack([slo, sla], 1)[keep], z[keep], 0, "", ""))
         return rows
 
-    def _measure(self, frame, parts, local, nb, fids, pts, cls):
+    def _measure(self, frame, parts, local, nb, fids, pts, cls, pad=LIDAR_PAD_M, check=None):
         """(rows, gaps): _decks of parts[:nb], then _stretches of the rest (of the features fids) that go on from an
-        elevated measured deck end, all from the points pts (n, 3) in frame (heights on our DEM's datum), cls (n,)."""
-        rows, ends = self._decks(frame, parts[:nb], local[:nb], pts, cls)
+        elevated measured deck end, all from the points pts (n, 3) in frame (heights on our DEM's datum), cls (n,).
+        pad, check: as _decks (a deck check drops has no measured ends: nothing goes on from it)."""
+        rows, ends = self._decks(frame, parts[:nb], local[:nb], pts, cls, pad, check)
         todo = [n_ for n_ in range(nb, len(parts)) if self._elevated_end(frame, ends, local[n_][0][0])]
         r2, gaps = self._stretches(frame, [parts[n_] for n_ in todo], [local[n_] for n_ in todo],
-                                   [fids[n_ - nb] for n_ in todo], pts, cls, ends)
-        r3 = self._approaches(frame, parts[nb:], local[nb:], pts, cls, ends)
+                                   [fids[n_ - nb] for n_ in todo], pts, cls, ends, pad)
+        r3 = self._approaches(frame, parts[nb:], local[nb:], pts, cls, ends, pad)
         return rows + r2 + r3, gaps
 
     # ---- the elevated ground stretches, one answer per cell and session ----
@@ -1615,7 +1869,15 @@ class RoadZ:
                 except Exception as e:
                     log.debug("roadz %s gaps %s: %s: %s", src, key, type(e).__name__, e)
                     done[str(key)] = None
-            threads = []
+            def from_cdn(key):
+                try:
+                    ln = self.lines(src, key, cdn_only=True)
+                    if ln is not None:
+                        done[str(key)] = list(getattr(ln, "gaps", []))
+                except Exception as e:
+                    log.debug("roadz %s gaps %s from the CDN: %s: %s", src, key, type(e).__name__, e)
+            threads, cdn = [], []
+            t0 = time.monotonic()
             pre = prefetched()      # (the server's prefetch reads them: taken only when on disk, PREFETCHED_WAIT_S)
             for key in todo:
                 p = self._decision(src, key)
@@ -1623,10 +1885,27 @@ class RoadZ:
                     continue                # (decided already: _decide reads it)
                 if pre:
                     f = self._path(src, key)
-                    if f and os.path.exists(f):
-                        build(key)          # (a read of the files on disk)
+                    if f and (os.path.exists(f) or self._cip_fill(src, key, f)):     # (or its CIP cell's: CIP on)
+                        if src == "lidar" and lidarz.enabled():
+                            # (a kept CDN cell is checked first, lidarz.kept_ok: its DEM reads may download tiles and a
+                            # dropped one asks the CDN again, so on a thread with the same wait as a CDN read, the rule
+                            # past it; Codex review of 1b5ba25e)
+                            t = threading.Thread(target=from_cdn, args=(key,), name="roadz-lidarz", daemon=True)
+                            t.start()
+                            cdn.append(t)
+                        else:
+                            # (a read of the files on disk, at once; with the product off a kept CDN cell fails its
+                            # check at once and, in this planning process, is no point-cloud read: lines)
+                            build(key)
                         continue
                     self._want(src, key)    # (asked of the server's prefetch)
+                    if src == "lidar" and lidarz.enabled():
+                        # (the builder's answer from the CDN: a block read, not the point clouds; lidarz.WAIT_S at
+                        # most, then the rule as before while the prefetch reads it)
+                        t = threading.Thread(target=from_cdn, args=(key,), name="roadz-lidarz", daemon=True)
+                        t.start()
+                        cdn.append(t)
+                        continue
                     if PREFETCHED_WAIT_S <= 0:
                         continue            # (the rule for the run: planned again once the lidar is in, LateWork)
                 t = threading.Thread(target=build, args=(key,), name="roadz-gaps", daemon=True)
@@ -1636,11 +1915,13 @@ class RoadZ:
                 wait = PREFETCHED_WAIT_S
             else:
                 wait = LIDAR_GAPS_SLOW_WAIT_S if getattr(self, "_gaps_slow", False) else LIDAR_GAPS_WAIT_S
-            end = time.monotonic() + wait
+            end = t0 + wait
             for t in threads:
                 t.join(max(0.0, end - time.monotonic()))
             if any(t.is_alive() for t in threads):
                 self._gaps_slow = True          # (LIDAR_GAPS_SLOW_WAIT_S from now on)
+            for t in cdn:
+                t.join(max(0.0, t0 + max(wait, lidarz.WAIT_S) - time.monotonic()))
             for key in todo:
                 got = self._decide(key, done.get(str(key)), src)    # (not built in time: None, the rule)
                 if got is None:
@@ -1667,13 +1948,20 @@ class RoadZ:
 
     # ---- heights for a map road ----
     def _dem_raw(self, la, lo):
+        """Our DEM's heights at (la, lo) (DEM_ZOOM). Every call is logged while this thread's _tl.dem_log is a list
+        (the lidarz builder: where the measuring read the DEM, and what it read there, lidarz.measure)."""
         d = getattr(self.md, "dem", None) if self.md is not None else None
         if d is None and self.md is not None:
             import gradesep
             d = gradesep._dem(self.md)
         if d is None:
-            return np.full(len(np.atleast_1d(la)), np.nan)
-        return np.asarray(d.sample(np.asarray(la, np.float64), np.asarray(lo, np.float64), DEM_ZOOM), np.float64)
+            out = np.full(len(np.atleast_1d(la)), np.nan)
+        else:
+            out = np.asarray(d.sample(np.asarray(la, np.float64), np.asarray(lo, np.float64), DEM_ZOOM), np.float64)
+        rec = getattr(_tl, "dem_log", None)
+        if rec is not None:
+            rec.append((np.array(la, np.float64).ravel(), np.array(lo, np.float64).ravel(), np.array(out).ravel()))
+        return out
 
     def _cell_offset(self, src, key, ln):
         mk = (src, str(key))
@@ -1746,9 +2034,13 @@ class RoadZ:
             segs, segz, oks, lvs, cells = [], [], [], [], []
             if src in DEFERRED and self._lidar_skipped(keys, src):
                 return None                 # (this run goes without a cell's lidar: the inference, every process)
+            missing = False
             for k in keys:
                 ln = self.lines(src, k)
                 if ln is None:
+                    if src == "tlm":        # (Switzerland's cells not to be had now: the next source, BD TOPO at
+                        missing = True      # the French border, else the inference)
+                        break
                     return None             # (incomplete: the inference rather than half a source)
                 if not len(ln):
                     continue
@@ -1764,7 +2056,7 @@ class RoadZ:
                 oks.append((want & nm_ok[line_of]).astype(np.uint8))
                 lvs.append(lv)
                 cells.append((k, ln, vxy))
-            if not segs:
+            if missing or not segs:
                 continue
             reach = half + (LIDAR_REACH_M if src == "lidar" else MATCH_REACH_M)
             q, seg, ok = np.ascontiguousarray(xy), np.ascontiguousarray(np.vstack(segs)), np.concatenate(oks)

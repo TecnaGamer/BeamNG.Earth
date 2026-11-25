@@ -143,14 +143,43 @@ INDEX_TTL_S = 24 * 3600     # index.json read again after this long
 CHECK_S = 600.0             # a place's packs looked for at most this often ...
 CHECK_RETRY_S = 30.0        # ... sooner while the map data's versions are not all known yet
 NEAR_M = 5000.0             # a pack within this of the player is fetched
-_sync = {"at": -1e9, "busy": False}
+_sync = {"at": -1e9, "busy": False, "backoff": None}
+
+
+# Switches whose output is confined to cells that are never baked or shared (roadz.hk_cell: Hong Kong's measured heights
+# and terrain stay on the computer that read them): the packs and the BeamMP helper are made with both off
+# (sharehelper.py, bake_area), the players' servers with both on; the cells they change are left out by cell instead;
+# and Switzerland's (roadz.tlm_tags, from BNE_ROADZ_TLM_DIR too: no pack or archive is made with its cells)
+CELL_SCOPED = frozenset({"BNE_ROADZ_HK", "BNE_HKDTM", "BNE_ROADZ_TLM", "BNE_ROADZ_TLM_DIR", "BNGE_ROADZ_TLM_URL"})
+_switches = []
+
+
+def switches():
+    """The build switches a pack's (or a BeamMP share's, mpshare.expect_code) items were made with: revisit.switches_key's
+    BNE_* that change output, the settings page's Experimental ones among them, without CELL_SCOPED and the switches no
+    plan or fact depends on (revisit.PLAN_NEUTRAL: the same key as revisit.plans_switches_key's); in its meta and in
+    every expect: a pack made with other switches (the defaults, for a player with an experimental switch on) holds
+    other plans and facts. The bridge profile as the roads read it (earthd writes its CLI default into the
+    environment, the helper and bake_area do not: the same rule as the decision archives). Once a process."""
+    if not _switches:
+        import hashlib
+        import revisit
+        import roads
+        sw = {k: v for k, v in os.environ.items()       # (revisit.PLAN_NEUTRAL: no plan or fact differs with them)
+              if revisit.keyed_env(k) and k not in CELL_SCOPED and k not in revisit.PLAN_NEUTRAL}
+        sw["BNE_BRIDGE_PROFILE"] = roads.bridge_profile_mode()
+        h = hashlib.sha1()
+        for k in sorted(sw):
+            h.update(revisit.keyed_value(k, sw[k]).encode())
+        _switches.append(h.hexdigest()[:16])
+    return _switches[0]
 
 
 def _expect_for(md, signature):
     import plancache
     import roads
     return {"bake_format": BAKE_FORMAT, "plans_format": plancache.PLANS_FORMAT, "facts_format": roads.FACTS_FORMAT,
-            "frames": plancache.FRAMES, "signature": signature,
+            "frames": plancache.FRAMES, "signature": signature, "switches": switches(),
             "versions": json.loads(json.dumps(md.versions(), sort_keys=True))}
 
 
@@ -191,13 +220,34 @@ def sync(cache_dir, net, md, lat, lon, signature, now=None):
         return []
     _sync["at"], _sync["busy"] = now, True
     got = []
+    import netfetch
+    backoff = _sync["backoff"]
+    if backoff is None:
+        backoff = _sync["backoff"] = netfetch.Backoff(CHECK_S, INDEX_TTL_S / 4)
     try:
         d = os.path.join(cache_dir, SUBDIR)
         os.makedirs(d, exist_ok=True)
         ip = os.path.join(d, "index.json")
-        if not os.path.exists(ip) or _t.time() - os.path.getmtime(ip) > INDEX_TTL_S:
-            _get(net, RELEASE_URL + "index.json", ip, 4 << 20)
-        index = json.load(open(ip, encoding="utf-8"))
+        # (nothing waits on these downloads, in a background thread no build's scope covers: their failures fault no
+        # build, netfetch.stale_ok; the server plans for itself meanwhile. A stale index stays in use when its refresh
+        # fails, asked again after the backoff)
+        with netfetch.stale_ok():
+            old = _read_index(ip)
+            if old is None or _t.time() - os.path.getmtime(ip) > INDEX_TTL_S:
+                if old is None or backoff.due(now):
+                    try:        # (checked before it replaces the copy: a portal's page is no index)
+                        _get(net, RELEASE_URL + "index.json", ip + ".new", 4 << 20)
+                        if _read_index(ip + ".new") is None:
+                            raise ValueError("index.json: not an index")
+                        os.replace(ip + ".new", ip)
+                        backoff.ok()
+                    except Exception as ex:
+                        if old is None:
+                            raise
+                        netfetch.refresh_failed(log, backoff, now, "bake packs: index.json", ex)
+        index = _read_index(ip)
+        if index is None:
+            raise ValueError("index.json unreadable")
         for e in index.get("packs", []):
             s, w, n, east = e["bbox"]
             k = 111320.0 * dmath.cos(math.radians(lat))
@@ -208,7 +258,8 @@ def sync(cache_dir, net, md, lat, lon, signature, now=None):
             path = os.path.join(d, e["name"])
             if os.path.exists(path) and os.path.getsize(path) == e.get("size"):
                 continue
-            _get(net, RELEASE_URL + e["name"], path, int(e.get("size", 0)) + (1 << 20))
+            with netfetch.stale_ok():
+                _get(net, RELEASE_URL + e["name"], path, int(e.get("size", 0)) + (1 << 20))
             log.info("bake pack %s fetched (%.1f MB)", e["name"], os.path.getsize(path) / 1e6)
             got.append(e["name"])
     except Exception as ex:          # (none there, offline, a rate limit: the server plans for itself, as before)
@@ -216,6 +267,16 @@ def sync(cache_dir, net, md, lat, lon, signature, now=None):
     finally:
         _sync["busy"] = False
     return got
+
+
+def _read_index(ip):
+    """The release's index.json on disk (a dict), or None (none, unreadable)."""
+    try:
+        with open(ip, encoding="utf-8") as fh:
+            got = json.load(fh)
+        return got if isinstance(got, dict) else None
+    except (OSError, ValueError):
+        return None
 
 
 class _Meta:

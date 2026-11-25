@@ -75,7 +75,36 @@ def fetch(lat, lon, net=None):
     """One Open-Meteo GET (blocking) through net (a netfetch.Fetcher; None = the process-wide one):
     the parsed JSON. Raises netfetch.FetchError (RateLimited / HostUnavailable carry retry_after)."""
     net = net if net is not None else netfetch.default_fetcher()
-    return json.loads(net.get(url(lat, lon), kind="background").body.decode("utf-8"))
+    # (the weather is no build's input: its failures fault no build, netfetch.stale_ok; it runs in the loop's default
+    # executor, where a fault was every running build's, every RETRY_S while offline)
+    with netfetch.stale_ok():
+        return json.loads(net.get(url(lat, lon), kind="background").body.decode("utf-8"))
+
+
+# The snow kernel's hourly forcing (winter W1, BNE_WINTER: server/snow.py; ~/bnge-tests/winterplan PROBES.md P9: every
+# name valid; past_hours / forecast_hours set the window). snowfall in cm is left out: Open-Meteo makes it
+# with a fixed 7:1 ratio; the kernel takes the water equivalent and its own density. 12 variables count ~1.2 calls.
+SNOW_HOURLY = ("temperature_2m", "dew_point_2m", "wet_bulb_temperature_2m", "precipitation",
+               "snowfall_water_equivalent", "wind_speed_10m", "shortwave_radiation", "soil_temperature_0cm",
+               "freezing_level_height", "snow_depth", "relative_humidity_2m", "cloud_cover")
+
+
+def hourly_url(lat, lon, past_hours=240, forecast_hours=6):
+    """The road-surface / snow kernel's request: past_hours before now and forecast_hours after (snow.py: 240 + 6
+    with winter, the pack's memory; 24 + 6 for wet roads alone)."""
+    q = {"latitude": f"{lat:.4f}", "longitude": f"{lon:.4f}", "hourly": ",".join(SNOW_HOURLY),
+         "past_hours": int(past_hours), "forecast_hours": int(forecast_hours), "wind_speed_unit": "ms",
+         "timeformat": "unixtime", "timezone": "auto", "cell_selection": "land"}
+    return API + "?" + urllib.parse.urlencode(q, safe=",")
+
+
+def fetch_hourly(lat, lon, past_hours=240, forecast_hours=6, net=None):
+    """The kernel's hourly forcing at (lat, lon): one Open-Meteo GET (blocking) through net, the parsed JSON, under the
+    same "background" limits as fetch (10 s apart, the 500-a-day cap)."""
+    net = net if net is not None else netfetch.default_fetcher()
+    with netfetch.stale_ok():
+        return json.loads(net.get(hourly_url(lat, lon, past_hours, forecast_hours), kind="background").body
+                          .decode("utf-8"))
 
 
 def _f(v, default=0.0):

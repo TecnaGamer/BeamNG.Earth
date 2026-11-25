@@ -53,9 +53,12 @@ with the normal BeamMP launcher.
    - `G.TIME = 'real'` (each player's real local time where they are) or a fixed local time such as `'20:30'`, with
      `G.TIME_SPEED` 0 (it stays), 1 (it runs at real speed) or more (60: an hour of the day every real minute). Every
      player sees the same time.
-   - `G.WEATHER = 'real'` (the live weather where each player is) or `'clear'`, `'cloudy'`, `'rain'`, `'storm'`,
-     `'snow'`, `'fog'` for everyone.
-   - A player who set Sky or Weather to Manual in BeamNG.Earth's settings keeps their own.
+   - `G.WEATHER = 'real'` (the live weather where each player is, the default), `'real-host'` (everyone gets the live
+     weather where the longest-joined player is) or a preset for everyone: `'clear'`, `'fewclouds'`, `'cloudy'`,
+     `'overcast'`, `'drizzle'`, `'rain'`, `'heavyrain'`, `'storm'`, `'fog'`, `'lightsnow'`, `'snow'`, `'blizzard'`,
+     `'sleet'`, `'freezingrain'`, `'hail'`.
+   - A player who set Sky or Weather to Off (Manual) in BeamNG.Earth's settings keeps their own. "Show rain and snow"
+     and "Rain visibility" stay each player's own.
 4. **Open the port** if players come over the internet: forward the server's port, **TCP and UDP**, in your router to
    the server's computer (and allow it in its firewall). Players on the same network need nothing.
 5. **Start the server.** Its log should show `[BeamNG.Earth] plugin loaded`.
@@ -89,8 +92,8 @@ docker run -d --name beamng-earth -p 30814:30814/tcp -p 30814:30814/udp -v beamn
   edit `/data/ServerConfig.toml` and restart. A port other than 30814: set `BEAMMP_PORT` and publish that same port
   (`-p 30899:30899/tcp -p 30899:30899/udp`), as the server tells the list its own.
 - **Time, weather and listing** for everyone (the settings at the top of `main.lua`): `BNGE_TIME` (`real` or
-  `HH:MM`), `BNGE_TIME_SPEED` (0, 1, 60, ...), `BNGE_WEATHER` (`real`, `clear`, `cloudy`, `rain`, `storm`, `snow`,
-  `fog`), `BNGE_LISTED` (`false` keeps a public server off the BeamNG.Earth list too). A value it doesn't know stops
+  `HH:MM`), `BNGE_TIME_SPEED` (0, 1, 60, ...), `BNGE_WEATHER` (`real`, `real-host` or a preset name as above),
+  `BNGE_LISTED` (`false` keeps a public server off the BeamNG.Earth list too). A value it doesn't know stops
   the start with a message saying which.
 
 Build it yourself from the source's root: `docker build -f docker/Dockerfile -t beamng-earth-server .`
@@ -117,13 +120,4 @@ Build it yourself from the source's root: `docker build -f docker/Dockerfile -t 
   `python3 server/sharehelper.py --share-dir <this server's folder>/Resources/Server/BeamNGEarth --cache <a folder
   for its map data> --procs 4` (`--procs`: how many of the machine's cores it uses). It needs internet access and
   a few GB of disk for each area.
-<!-- v1 shared world building: commented out 2026-10-27 (off since 2026-10-23; not coming back for a while).
-- (Turned off for now: each player builds their own world, and the setting below does nothing yet.) Players near
-  each other share one world origin and split the work of building the world: each piece of the distant
-  landscape is built once and sent to the others. For that, the other players must reach each player's computer on
-  **TCP port 47621** (on one network it just works; over the internet, each player forwards it, or else simply builds
-  everything themselves). To use another port on your server, edit the line `G.SHARE_PORT = 47621` near the top of
-  `Resources/Server/BeamNGEarth/main.lua` and restart the server: every player who joins gets it. A player can still
-  pick their own with the environment variable `BNGE_SHARE_PORT`.
--->
 - Players far apart (another country) each build their own world and don't see each other's cars until they meet.

@@ -3,9 +3,15 @@
 Sources (all Web-Mercator XYZ, 256 px tiles, no key; verified 2026-10-10):
   usgs     USGS The National Map ImageryOnly. Public domain. US only, z <= 16 (~1.9 m/px at 36 N).
            Outside its coverage it answers 404, or (at low zooms) a uniform white tile.
-  eox2023  Sentinel-2 cloudless 2023 by EOX. Global, ~10 m (native around z14). CC BY-NC-SA 4.0.
-           Open ocean is a uniform deep blue tile (a real colour, not "no data").
-  eox2016  Sentinel-2 cloudless 2016 by EOX. Global, ~10 m. CC BY 4.0. Last fallback.
+  bngs2    the project's own Sentinel-2 packs (ESA WorldCover's 2021 composite, CC BY 4.0; cdn.py puts it in the chain):
+           the land to z13 (z12 JPEG / z13 WebP packs); open sea is black ("no data": the next source).
+  bngs2fine  the same packs enlarged for the views finer than their zoom, after USGS (whose sharper tiles keep those
+           views in the US): never asked for a view its own zoom draws (enlarge_only).
+  eox2016  Sentinel-2 cloudless 2016 by EOX. Global, ~10 m (native around z14). CC BY 4.0. Last fallback: the sea, the
+           ice past the packs, and everything when the CDN switch has the packs off. Open ocean is a uniform deep blue
+           tile (a real colour, not "no data").
+  (eox2023, EOX's 2023 mosaic, was the global layer until 2026-11-23: CC BY-NC-SA 4.0, like every EOX year after 2017,
+  so it is never fetched; --imagery still accepts the name and leaves it out, RETIRED.)
 
 A texture is rendered for a tile's ENU footprint by sampling the imagery at every texel centre:
 ENU plane point (anchor frame) -> lat/lon (the same mapping the tile geometry uses, so the
@@ -19,7 +25,7 @@ Caching: raw tiles on disk under <cache>/<source>/<z>/<x>/<y>.jpg (whatever form
 sent), 404s remembered in a column's miss index (missindex.py, as dem.py does; they expire after the host's miss_ttl,
 90 days), decoded tiles in an in-memory LRU. Downloads run on a small pool (FETCH_WORKERS <= 6)
 through a netfetch.Fetcher: the host's rate limit, concurrency cap, retries and circuit breaker
-(keyed by host, so eox2023 and eox2016 share one), one persistent HTTPS connection per thread and
+(keyed by host), one persistent HTTPS connection per thread and
 host. A source whose host cannot be asked fails at once (ImageryError), and render() takes the
 next source. prefetch() asks with kind="prefetch" (dropped when the host's bucket is low; render
 then fetches the tile on demand).
@@ -28,14 +34,13 @@ The finished pyramid (geotiles phase 3a, 2026-10-29): what does not depend on th
 tile and kept: Imagery.finished() is the tile de-shadowed (--deshadow), colour-matched (--colormatch) and tone-mapped,
 with its nodata mask, under <cache>/imagery/fin<FIN_VERSION>-<settings>/<source>/z/x/y.bnf (a JPEG, FIN_QUALITY), in
 memory as that JPEG (MEM_FINISHED_MB) and the recent ones decoded (MEM_DECODED). A texture for any anchor is then a
-warp of finished tiles (earthfast.tile_warp: decode, mosaic, Pillow's MESH / BILINEAR, the chain's composite, no GIL),
+warp of finished tiles (PhotoCanvas.warp: decode, mosaic, Pillow's MESH / BILINEAR, the chain's composite, no GIL),
 the season grade (earthfast.season_img: date and texel size dependent, so per texture) and its DDS: a rebase or a
 teleport back renders none of the corrections again. A tile made while a correction's region was not ready (or beyond
 REQUEST_M) is kept with that region noted and made again once it is ready (_fresh).
 
 Output: DDS DXT1 with a full mip chain (write_dds): linear-light 2 x 2 levels, each sharpened, and their BC1 blocks
-(earthfast.dds_levels: integer mips and ISPC's BC1 kernels on the CPU) under our own header (DDSD_MIPMAPCOUNT,
-DDSCAPS_MIPMAP|COMPLEX).
+(bc1fast.rs builds the DDS header, integer mips and ISPC BC1 blocks on the CPU).
 """
 from runtimeprofiler import step as profile_step
 import contextlib
@@ -53,7 +58,7 @@ from dataclasses import dataclass, replace as dc_replace
 
 import numpy as np
 
-from PIL import Image, ImageFilter
+from PIL import Image
 
 import cache as cachemod
 import dem as demmod
@@ -94,7 +99,7 @@ MESH_CELLS = 8                     # render(): exact reprojection on an 8 x 8 gr
 FALLBACK_RGB = (100, 89, 69)       # no imagery anywhere: the terrain material's dirt colour
 POLAR_RGB = (226, 232, 240)        # ... past Web Mercator's limit, where it is all ice (polar ice sheet, sea ice): snow
 BLANK_RANGE = 2                    # a tile whose pixels all lie within this many levels is uniform
-SEA_RGB, SEA_TOL = (24, 44, 78), 3  # ... unless it is this colour: EOX cloudless' open sea (2023 and 2016 alike), data
+SEA_RGB, SEA_TOL = (24, 44, 78), 3  # ... unless it is this colour: EOX cloudless' open sea (every year alike), data
 NODATA_MAX, NODATA_SHARE = 6, 0.02   # an export tile with > 2 % texels this black is outside the data
 NODATA_BLOCK = 8                   # px: inside a tile, a square this size all this black is outside the data
 NODATA_EDGE = 2                    # ... and this much round it (the JPEG's grey fringe on the black)
@@ -146,15 +151,23 @@ class Source:
     # ((zoom, |latitude| limit), ...): that zoom's tiles exist only within the limit (the Sentinel-2 z14 packs to 50
     # degrees: cdn.json "max_lat"); farther out the source's finest zoom is the next coarser one (zoom_caps)
     zoom_max_lat: tuple = ()
+    # The folder (and pack fetches) of another source's tiles this one shares: the same tiles under a second place in
+    # the chain (bngs2fine: bngs2's); "": its own name
+    store: str = ""
+    # Used only for views finer than its own finest zoom at that latitude (its tiles enlarged): the same source's earlier
+    # place in the chain draws the views of its own zooms
+    enlarge_only: bool = False
+
+
+def store_of(src):
+    """The name of the folder a source's tiles are kept under (Source.store)."""
+    return src.store or src.name
 
 
 SOURCES = {
     "usgs": Source("usgs", "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
                    16, "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain)", probe_zooms=(10, 12),
                    min_zoom=10),
-    "eox2023": Source("eox2023", "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg",
-                      14, "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified "
-                          "Copernicus Sentinel data 2023), CC BY-NC-SA 4.0"),
     "eox2016": Source("eox2016", "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg",
                       14, "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified "
                           "Copernicus Sentinel data 2016 & 2017), CC BY 4.0"),
@@ -187,7 +200,7 @@ SOURCES["md6in"] = Source(
              "?bbox={bbox}&bboxSR=3857&imageSR=3857&size={size},{size}&format=jpg&f=image",
     17, "State of Maryland, MD iMAP / DoIT six-inch imagery", min_zoom=17, export=2, lazy=True,
     bounds=(37.88, -79.49, 39.73, -75.04), nodata="white", leaf_off=True)
-BASE_CHAIN = ("md6in", "naipusda", "naip", "usgs", "eox2023", "eox2016")     # the chain before the regional sources
+BASE_CHAIN = ("md6in", "naipusda", "naip", "usgs", "eox2016")     # the chain before the regional sources
 # Regional aerial imagery (imagery_regional.py: state and national orthophoto services, each within its box)
 import bcortho as bcorthomod  # noqa: E402
 import imagery_regional
@@ -195,7 +208,9 @@ import tilepack as tilepackmod  # noqa: E402
 import aerialpacks as aerialpacksmod  # noqa: E402
 # The project's own tile host (cdn.py: its switch puts this in the chain): Sentinel-2 photos of the whole land, ESA
 # WorldCover's 2021 Sentinel-2 RGBNIR composite (CC BY 4.0), tone-mapped Web-Mercator JPEG tiles to z12 in packs of 8 x 8
-# (tools/build_s2_packs.py); the far rings everywhere, ahead of USGS / EOX, whose sharper tiles keep the nearer zooms
+# (tools/build_s2_packs.py); the far rings everywhere, ahead of USGS / EOX, whose sharper tiles keep the nearer zooms in
+# the US; elsewhere (bngs2fine, after USGS) its tiles enlarged keep them too: sharper than EOX's 2016 mosaic in the
+# comparison of 2026-11-23 (~/bnge-tests/eoxswap/sheets), and EOX's later years are CC BY-NC-SA
 CDN_BASE = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").rstrip("/")
 # Its finest zoom: 12 (JPEG packs) until the switch file raises it (cdn.chain: "max_zoom" 13, the WebP packs of 2026-11-11,
 # once the whole land is built); kept in the environment so the block workers (spawned) read the same
@@ -227,6 +242,7 @@ SOURCES["bngs2"] = Source(
     "bngs2", CDN_BASE + "/s2wc/v1/{z}/{px}/{py}.bngp", _s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)),
     "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)",
     pack=3, max_view_zoom=_s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)), zoom_max_lat=_s2_max_lat(os.environ.get(S2_MAX_LAT_ENV)))
+SOURCES["bngs2fine"] = dc_replace(SOURCES["bngs2"], name="bngs2fine", store="bngs2", max_view_zoom=99, enlarge_only=True)
 
 
 def set_s2_max_zoom(z, max_lat=None):
@@ -241,6 +257,7 @@ def set_s2_max_zoom(z, max_lat=None):
         os.environ[S2_MAX_LAT_ENV] = ",".join(f"{k}:{v}" for k, v in lim)
     if SOURCES["bngs2"].max_zoom != z or SOURCES["bngs2"].zoom_max_lat != lim:
         SOURCES["bngs2"] = dc_replace(SOURCES["bngs2"], max_zoom=z, max_view_zoom=z, zoom_max_lat=lim)
+        SOURCES["bngs2fine"] = dc_replace(SOURCES["bngs2fine"], max_zoom=z, zoom_max_lat=lim)
     return SOURCES["bngs2"]
 # The 1 m aerial packs (aerialpacks.py, tools/build_aerial_packs.py; the user, 2026-11-13: prebaked for metro areas and
 # main road corridors, built on demand elsewhere): AVIF 4:4:4 tiles of zooms 14-17 from openly licensed photos (NAIP,
@@ -274,11 +291,22 @@ for _n, (_url, _attr, _bounds, _kind, _leaf) in imagery_regional.REGIONAL.items(
 SOURCES["bcortho"] = Source("bcortho", bcorthomod.URL, 17, bcorthomod.ATTRIBUTION, min_zoom=17, export=2, lazy=True,
                             bounds=(47.9, -130.1, 51.1, -121.9), nodata="black")
 DEFAULT_CHAIN = ("md6in", *imagery_regional.REGIONAL, *(("bcortho",) if os.environ.get("BNE_BCORTHO", "1") != "0" else ()),
-                 "naipusda", "naip", "usgs", "eox2023", "eox2016")
+                 "naipusda", "naip", "usgs", "eox2016")
+# Names --imagery still accepts and leaves out: EOX's 2023 mosaic (CC BY-NC-SA 4.0, dropped 2026-11-23)
+RETIRED = ("eox2023",)
 # The line the mod shows (V1_3_SPEC §C), for the default chain: every source's own credit, EOX's in
 # its June 2026 wording (docs/research/2026-10-10-rate-limits.md: "EOxCloudless https://cloudless.eox.at
-# by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2023)", 2016: "... 2016 & 2017").
-ATTRIBUTION = "Imagery: " + "; ".join(SOURCES[n].attribution for n in DEFAULT_CHAIN)
+# by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016 & 2017)").
+def _attribution(srcs):
+    seen, out = set(), []
+    for s_ in srcs:
+        if s_.attribution not in seen:          # (bngs2 and bngs2fine: one credit)
+            seen.add(s_.attribution)
+            out.append(s_.attribution)
+    return "Imagery: " + "; ".join(out)
+
+
+ATTRIBUTION = _attribution(SOURCES[n] for n in DEFAULT_CHAIN)
 
 
 class ImageryError(IOError):
@@ -299,7 +327,7 @@ def parse_chain(text):
     """--imagery value -> tuple of source names, or None for 'off'."""
     if text.strip().lower() == "off":
         return None
-    chain = tuple(s.strip().lower() for s in text.split(",") if s.strip())
+    chain = tuple(s.strip().lower() for s in text.split(",") if s.strip() and s.strip().lower() not in RETIRED)
     bad = [s for s in chain if s not in SOURCES]
     if bad or not chain:
         raise ValueError(f"unknown imagery source(s) {bad or text!r}; choose from {', '.join(SOURCES)} or off")
@@ -326,7 +354,7 @@ def tone_lut(strength=1.0, lift=1.0):
 FAR_LAZY = os.environ.get("BNGE_FAR_LAZY", "1") != "0"
 FAR_WARM_MAX = 400                  # far tiles queued at most (the farthest dropped)
 FAR_BUDGET_SHARE = 0.5              # ... fetched only while the host's daily budget is less used than this
-SHARP_FALLBACK_ZOOM = 14            # Imagery.sharp_zoom while unknown (EOX's Sentinel-2, everywhere)
+SHARP_FALLBACK_ZOOM = 14            # Imagery.sharp_zoom while unknown (Sentinel-2's native zoom, everywhere)
 SHARP_PROBE_ALL = os.environ.get("BNGE_SHARP_PROBE_ALL") == "1"
 # (Imagery._needed; BNGE_PREFETCH_PAST_REGIONAL=1: on. Off by default: measured 2026-11-11 it made a cold French
 # teleport's IGN requests 2,600-3,100 (from ~2,000-2,400: tiles prefetched at a queued size the build then did not use)
@@ -358,7 +386,8 @@ def is_uniform(a):
     range is at most the tile's, so a photo is told apart without reducing every pixel (~9 s of a teleport's
     fetch threads in Fells Point, 2026-10-16); only a sample that looks blank checks them all. One colour that is
     EOX's open sea (SEA_RGB) is data, not a blank: taken for missing, the next layer was fetched for the same water
-    (Bergen: 374 of EOX 2023's tiles were its sea, and EOX 2016 drew them in the same blue)."""
+    (Bergen: 374 of EOX 2023's tiles were its sea, and EOX 2016 drew them in the same blue; EOX 2023 left the chain
+    2026-11-23)."""
     if a.ndim == 3 and a.shape[0] >= 32 and a.shape[1] >= 32:
         sm = a[::16, ::16]
         if int((sm.max(axis=(0, 1)).astype(int) - sm.min(axis=(0, 1))).max()) > BLANK_RANGE:
@@ -383,36 +412,44 @@ def match_colours(rgb, ref, sigma_px):
     rgb * blur(ref) / blur(rgb), per channel, the gain clipped to [1/3, 3] (Gaussian blur of sigma_px
     texels) and, for a coarser ref, computed at its size and scaled up. Where rgb already is ref, nothing
     changes; elsewhere the detail is rgb's and everything coarser than ~sigma ref's."""
-    r = max(1.0, float(sigma_px))
-    h, w = ref.shape[:2]
-    im = Image.fromarray(rgb, "RGB")
-    if (h, w) != rgb.shape[:2]:
-        im = im.resize((w, h), Image.BOX)
-    a = im.filter(ImageFilter.GaussianBlur(r))
-    b = Image.fromarray(ref, "RGB").filter(ImageFilter.GaussianBlur(r))
-    gain = np.clip((np.asarray(b, np.float32) + 4.0) / (np.asarray(a, np.float32) + 4.0), 1 / 3, 3)
-    if (h, w) != rgb.shape[:2]:
-        gain = np.stack([np.asarray(Image.fromarray(gain[..., c], "F").resize(rgb.shape[1::-1], Image.BILINEAR))
-                         for c in range(3)], -1)
-    out = rgb.astype(np.float32) * gain
-    return np.clip(np.rint(out), 0, 255).astype(np.uint8)
+    fast.require(559, "match_colours")
+    if rgb.shape[:2] != ref.shape[:2] and (rgb.shape[0] != rgb.shape[1] or ref.shape[0] != ref.shape[1]):
+        # The installed Pillow determines the pass order for rectangular resize operations.
+        small = Image.fromarray(rgb).resize(ref.shape[1::-1], Image.Resampling.BOX)
+        gain = fast._ef.photo_colour_gain(np.asarray(small), ref, sigma_px)
+        gain = np.stack([np.asarray(Image.fromarray(gain[..., c]).resize(rgb.shape[1::-1], Image.Resampling.BILINEAR))
+                         for c in range(3)], axis=-1)
+        return np.clip(np.rint(rgb * gain), 0, 255).astype(np.uint8)
+    return fast._ef.match_colours(rgb, ref, sigma_px)
 
 
 def zoom_caps(src, lat):
     """(max_zoom, max_view_zoom) of src at latitude lat: each zoom whose zoom_max_lat limit lat is beyond is dropped
-    (a coarser one stands in, as at a source's own max_zoom)."""
+    (a coarser one stands in, as at a source's own max_zoom). An enlarge_only source keeps its max_view_zoom (it is
+    the one that draws the finer views; view_ok)."""
     mz, mv = src.max_zoom, src.max_view_zoom
     if src.zoom_max_lat:
         a = abs(float(lat))
         lim = dict(src.zoom_max_lat)
         while mz in lim and a > lim[mz]:
             mz -= 1
-        if mz != src.max_zoom and mv >= src.max_zoom:
+        if mz != src.max_zoom and mv >= src.max_zoom and not src.enlarge_only:
             mv = mz             # (its finest view zoom follows its finest zoom down, as bngs2's max_view_zoom = max_zoom)
     # (no limit hit: both as the source says; a finer view than max_zoom still takes its tiles enlarged when its
     # max_view_zoom allows: capping mv at max_zoom for every source made finer views skip them, 2026-11-13: the far
     # rings' imagery and terrain came late, the drive test's commit margin fell from +12 m to -44 m)
     return mz, mv
+
+
+def view_ok(src, zw, mz, mv):
+    """Does src draw a view of zoom zw, given its zoom_caps (mz, mv) there? Not finer than mv, and an enlarge_only
+    source only finer than mz (its own zooms are drawn by its first place in the chain)."""
+    return zw <= mv and not (src.enlarge_only and zw <= mz)
+
+
+def tile_lat(z, y):
+    """The latitude (deg) of Web-Mercator row y (tiles, fractional) at zoom z."""
+    return math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * y / 2 ** z))))
 
 
 def in_bounds(src, z, x, y):
@@ -542,7 +579,7 @@ def _overzoom(a, key, d):
 
 # The finished pyramid (geotiles phase 3a, .claude/work/geotiles_plan.md): every source tile once de-shadowed,
 # colour-matched and tone-mapped (Imagery.finished), kept on disk under <cache>/imagery/fin<FIN_VERSION>-<settings>/
-# <source>/z/x/y.bnf, so a far tile's texture or a block's photo for any anchor is a warp of these (earthfast.tile_warp)
+# <source>/z/x/y.bnf, so a far tile's texture or a block's photo for any anchor is a warp of these (PhotoCanvas.warp)
 # and a rebase or a teleport back renders none of it again.
 FIN_VERSION = 1             # bump: every finished tile is made again (its directory holds it)
 FIN_MAGIC = b"BNF1"
@@ -554,7 +591,7 @@ MEM_DECODED = 384           # ... and the most recent ones decoded too (192 KB e
 @dataclass
 class Finished:
     """A source tile as the textures sample it (Imagery.finished), de-shadowed, colour-matched and tone-mapped. data:
-    its JPEG as kept on disk (bytes: earthfast.tile_warp decodes it, so a texture is the same from memory or disk),
+    its JPEG as kept on disk (bytes: PhotoCanvas.warp decodes it, so a texture is the same from memory or disk),
     or its RGB (256, 256, 3) uint8 (a uniform tile, or one not kept); relit: by --deshadow (its texels count as
     such); uniform: one colour (a later source fills it); hole: its nodata texels (nodata_mask, None: none), left out
     where a later source can fill them; cm: the colour match changed it; wait: the corrections not applied because
@@ -566,8 +603,12 @@ class Finished:
     cm: bool = False
     wait: tuple = ()
 
+    @property
+    def is_jpeg(self):
+        return isinstance(self.data, bytes)
+
     def for_mosaic(self, last):
-        """(data, alpha, hole) for earthfast.tile_warp: the nodata texels left out for a source that is not the chain's
+        """(data, alpha, hole) for PhotoCanvas.warp: the nodata texels left out for a source that is not the chain's
         last (the next one fills them); a relit tile's alpha 254 (counted as relit)."""
         return self.data, 254 if self.relit else 255, (None if last else self.hole)
 
@@ -582,6 +623,30 @@ DS_PENDING = "ds"
 # pending token (IMG_PENDING, batch id) until their background download is done (fetch_later, img_status)
 IMG_PENDING = "img"
 LATER_WORKERS = 6           # fetch_later's batches downloading at once
+
+
+@dataclass
+class FarPhoto:
+    """A completed source composite waiting for the far geometry, which builds concurrently."""
+    pixels: object
+    grade: object
+
+    def shade(self, rock, snow=None):
+        """snow: the texture's earthfast.SnowLook (snowcover.look_from_rock; winter on), applied last."""
+        if snow is None:
+            fast.require(559, "finish_far_photo")
+            return fast._ef.finish_far_photo(self.pixels, self.grade, rock, None)
+        fast.require(625, "finish_far_photo snow")
+        return fast._ef.finish_far_photo(self.pixels, self.grade, rock, None, snow=snow)
+
+    def write(self, path, rock, srgb, paint=None, snow=None):
+        fast.require(563 if snow is None else 625, "finish_far_photo")
+        tmp = staging.tmp_for(path)
+        kw = {} if snow is None else {"snow": snow}
+        size = fast._ef.finish_far_photo(self.pixels, self.grade, rock, (_TO_LIN, MIP_SHARPEN, srgb), path=tmp,
+                                         paint=paint, **kw)
+        staging.replace(tmp, path)
+        return size
 
 
 class Imagery:
@@ -641,13 +706,14 @@ class Imagery:
         self._warm_want = []                # warm(): lazy tiles ahead of the player, nearest first
         self._warm_cv = threading.Condition()
         self._warm_thread = None
+        self._closed = False                # close(wait=True): the warm thread returns
         self._far_warm = {}                 # far_warm(): tag -> (priority, frame, x0, y0, size, px, done callback)
         self._far_keys = {}                 # ... tag -> (its item, its lazy keys, [any fetched]) (the warm thread's)
         self._inflight = {}
         self._lock = threading.RLock()     # RLock: a done future's callback runs at once
         self._sharp = {}                    # sharp_zoom: (lat, lon) ~5 km square -> zoom
         self._local = threading.local()     # per fetch thread: the kind of the request being loaded
-        self.stats = {}                     # counters ("usgs:net", "eox2023:404", ...), and fetch times
+        self.stats = {}                     # counters ("usgs:net", "eox2016:404", ...), and fetch times
         self.fetch_ms = []                  # network fetch latencies (ms), for the log / measurements
 
     def attribution(self):
@@ -657,7 +723,7 @@ class Imagery:
         extra = [SOURCES[n] for n in getattr(self.colormatch, "refs", ()) if n not in names]
         if names == list(DEFAULT_CHAIN) and not extra:
             return ATTRIBUTION
-        return "Imagery: " + "; ".join(s.attribution for s in list(self.chain) + extra)
+        return _attribution(list(self.chain) + extra)
 
     def aerial(self):
         """The process's coverage of the 1 m aerial packs (aerialpacks.Coverage; their files kept under this cache): the
@@ -689,6 +755,8 @@ class Imagery:
         extra = [SOURCES[n] for n in getattr(self.colormatch, "refs", ()) if n not in names]
         out = []
         for src in list(self.chain) + extra:
+            if src.store:               # (bngs2fine: bngs2's credit, listed once)
+                continue
             box = src.bounds or US_CREDIT_BOXES.get(src.name)
             if box:
                 s_, w_, n_, e_ = box
@@ -716,7 +784,7 @@ class Imagery:
         return "; ".join([lat, str(st)] + extra)
 
     def _paths(self, src, z, x, y):
-        d = os.path.join(self.cache_dir, src.name, str(z), str(x))
+        d = os.path.join(self.cache_dir, store_of(src), str(z), str(x))
         return os.path.join(d, f"{y}.jpg"), os.path.join(d, f"{y}.404")
 
     def _discard(self, src, z, x, y):
@@ -771,7 +839,7 @@ class Imagery:
         """A pack source's tile: its pack (tilepack.py) fetched as one request and every tile in it written to disk (a
         missing one as a 404 marker), one fetch per pack at a time; None if there is no tile there."""
         (pz, px, py), _ = tilepackmod.pack_of(z, x, y, src.pack)
-        key = (src.name, pz, px, py, "pack")
+        key = (store_of(src), pz, px, py, "pack")
         with self._lock:
             lock = self._export_locks.setdefault(key, threading.Lock())
         with lock:
@@ -965,7 +1033,7 @@ class Imagery:
         plat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (py + 0.5) / 2 ** pz))))
         for src in self.chain:
             mz, mv = zoom_caps(src, plat)
-            if zw > mv:
+            if not view_ok(src, zw, mz, mv):
                 continue
             z = min(zw, mz)
             p = self.fetcher.policy(netfetch.host_of(src.url))
@@ -994,7 +1062,7 @@ class Imagery:
     def sharp_zoom(self, lat, lon, reach=None):
         """The finest zoom the chain's photos hold at (lat, lon): the most of its sources' whose coverage there is known
         (their probes on hand: NAIP's z17 in the US (lazy: FAR_LAZY, far_warm fetches them), USGS's z16, a regional
-        service's z17; EOX's z14 everywhere), SHARP_FALLBACK_ZOOM while a probe is unknown (its fetch started). Kept
+        service's z17; Sentinel-2's z14 everywhere), SHARP_FALLBACK_ZOOM while a probe is unknown (its fetch started). Kept
         per ~5 km square once known (farpvs.UP_ON: a far tile is never made finer than this). reach: the finest zoom
         the caller's texture can come to (a far tile at farpvs.UP_PX_MAX): a source that only draws finer zooms (a
         regional tile cache's REGIONAL_XYZ_MIN_ZOOM) can never draw it, its coverage there is not probed (its box
@@ -1010,7 +1078,7 @@ class Imagery:
         best, unknown = None, False
         with self._lock:
             for src in self.chain:
-                if src.lazy and not FAR_LAZY:
+                if (src.lazy and not FAR_LAZY) or src.enlarge_only:     # (the same tiles' first place counts)
                     continue
                 z = min(zoom_caps(src, lat))
                 if z < src.min_zoom or (best is not None and z <= best):
@@ -1269,26 +1337,24 @@ class Imagery:
         cw = px // cells
         if netfetch.NETLOG_STACK:
             netfetch._why.ctx = f"{where.size / px:.2f}m{px}px"
-        lat, lon = where.grid(cells)
-        if np.abs(lat).max() > MAX_LAT:
+        grid = _photo_grid(where, cells)
+        south, _, north, _, clat = grid.bounds()
+        if max(-south, north) > MAX_LAT:
             return
         g = 0 if GUTTER_FETCH else int(getattr(where, "g", 0) or 0)
-        zw = zoom_for(float(lat[cells // 2, cells // 2]), where.size / px)
-        clat = float(lat[cells // 2, cells // 2])
+        zw = zoom_for(clat, where.size / px)
         for k, src in enumerate(self.chain):
             mz, mv = zoom_caps(src, clat)
-            if zw > mv:
+            if not view_ok(src, zw, mz, mv):
                 continue
             z = min(zw, mz)
             if z < src.min_zoom or src.lazy:    # (a lazy source's tiles: only warm() fetches them)
                 continue
-            n = 2 ** z
-            fx, fy = mercator_px(lat, lon, z)
-            fx = fx - n * TILE * np.round((fx - fx[0, 0]) / (n * TILE))
-            m = self._mosaic_keys(src, z, fx, fy)
-            if m is None:
+            mesh = grid.project(z, MAX_MOSAIC)
+            if mesh is None:
                 return
-            tx0, ty0, nx, ny, keys = m
+            tx0, ty0, nx, ny = mesh.tiles
+            keys = _mosaic_keys(mesh, src, z)
             if not range_in_bounds(src, z, tx0, tx0 + nx - 1, ty0, ty0 + ny - 1):
                 # outside the source's area: never asked, and the next source is the one render draws from (it skips
                 # this one too). It ended the prefetch here (2026-10-15: carrying on to the base sources made the
@@ -1301,7 +1367,7 @@ class Imagery:
                     return
                 continue
             if g:
-                cx0, cx1, cy0, cy1 = _core_tiles(fx, fy, cells, cw, g, px)
+                cx0, cx1, cy0, cy1 = mesh.core_tiles(cells, cw, g, px)
                 keys = {t: kk for t, kk in keys.items() if cx0 <= t[0] <= cx1 and cy0 <= t[1] <= cy1}
             yield k, src, netfetch.host_of(src.url), list(keys.values())
 
@@ -1728,6 +1794,8 @@ class Imagery:
         done, want = set(), None    # keys of this list found done: not looked at on disk again at every wake
         while True:
             with self._warm_cv:
+                if self._closed:
+                    return
                 if self._warm_want is not want:     # a new list (the player moved on): looked at afresh
                     done, want = set(), self._warm_want
             # (the disk looked at outside the lock: warm(), on the server's event loop, waits for it, and 28 of the 40
@@ -1750,7 +1818,7 @@ class Imagery:
                     key = far[1]
             if key is None:
                 with self._warm_cv:
-                    if self._warm_want is want and not self._far_warm:
+                    if self._warm_want is want and not self._far_warm and not self._closed:
                         self._warm_cv.wait()
                 continue
             src, z, x, y = key
@@ -1865,10 +1933,10 @@ class Imagery:
 
     def _fin_path(self, key):
         src, z, x, y = key
-        sig = self._fin_sigs.get(src.name)
+        sig = self._fin_sigs.get(store_of(src))
         if sig is None:
-            sig = self._fin_sigs[src.name] = self._fin_sig(src)
-        return os.path.join(self.cache_dir, f"fin{FIN_VERSION}-{sig}", src.name, str(z), str(x), f"{y}.bnf")
+            sig = self._fin_sigs[store_of(src)] = self._fin_sig(src)
+        return os.path.join(self.cache_dir, f"fin{FIN_VERSION}-{sig}", store_of(src), str(z), str(x), f"{y}.bnf")
 
     def _raw_stamp(self, key):
         """(size, mtime ns) of a source tile's raw file, (0, 0) when there is none on disk."""
@@ -1883,13 +1951,12 @@ class Imagery:
         to come; its RGB as a JPEG (FIN_QUALITY, 4:4:4; a uniform tile's as a PNG); its nodata mask as packed bits if it
         has one) and to memory as the disk has it (the JPEG: a texture is the same from either)."""
         path = self._fin_path(key)
-        b = io.BytesIO()
         if f.uniform:                   # (one colour: a PNG of ~1 KB, exact)
+            b = io.BytesIO()
             Image.fromarray(f.data, "RGB").save(b, "PNG", compress_level=1)
+            jpg = b.getvalue()
         else:
-            Image.fromarray(f.data, "RGB").save(b, "JPEG", quality=FIN_QUALITY, subsampling=0)
-        jpg = b.getvalue()
-        if not f.uniform:
+            jpg = fast.photo_jpeg(f.data, FIN_QUALITY, True)
             f.data = jpg
         self._fin_put(key, f)
         flags = (1 if f.uniform else 0) | (2 if f.relit else 0) | (4 if f.cm else 0) | (8 if f.hole is not None else 0)
@@ -1909,40 +1976,14 @@ class Imagery:
     def _fin_read(self, key):
         """A finished tile from disk, or None (none, unreadable, or made from a raw file that has changed since)."""
         path = self._fin_path(key)
-        try:
-            with open(path, "rb") as fh:
-                data = fh.read()
-            if data[:4] != FIN_MAGIC:
-                return None
-            flags, nwait, _, size, mtime = struct.unpack_from("<BBH2Q", data, 4)
-            stamp = self._raw_stamp(key)
-            if stamp != (0, 0) and stamp != (size, mtime):
-                return None                 # the raw tile was fetched again: made again from it
-            o = 24
-            wait = []
-            for _ in range(nwait):
-                k, rx, ry = struct.unpack_from("<B2I", data, o)
-                wait.append(("ds" if k == 1 else "cm", (rx, ry)))
-                o += 9
-            (n,) = struct.unpack_from("<I", data, o)
-            o += 4
-            img = data[o:o + n]
-            if flags & 1:               # (a uniform tile's PNG: decoded here)
-                im = Image.open(io.BytesIO(img))
-                img = np.asarray(im if im.mode == "RGB" else im.convert("RGB"))
-                if img.shape != (TILE, TILE, 3):
-                    return None
-            elif len(img) != n or img[:2] != b"\xff\xd8":
-                return None
-            hole = None
-            if flags & 8:
-                hole = np.unpackbits(np.frombuffer(data, np.uint8, TILE * TILE // 8, o + n))[:TILE * TILE] \
-                    .reshape(TILE, TILE).astype(bool)
-        except (OSError, ValueError, struct.error):
+        fast.require(559, "read_finished_tile")
+        got = fast._ef.read_finished_tile(path, self._paths(*key)[0])
+        if got is None:
             return None
-        self.disk.used(path, len(data))
+        tile, size = got
+        self.disk.used(path, size)
         self._count("finished:disk")
-        return Finished(img, bool(flags & 2), bool(flags & 1), hole, bool(flags & 4), tuple(wait))
+        return tile
 
     def _fresh(self, key, f, pending):
         """Can a finished tile made before a correction's region was ready still be used? False once one of them
@@ -2071,33 +2112,25 @@ class Imagery:
                     ev.set()
         return out
 
-    def _mosaic_keys(self, src, z, fx, fy):
-        """(tx0, ty0, nx, ny, {(tx, ty): key}) of src's zoom-z tiles covering global pixel coordinates fx, fy, or None
-        if that would take more than MAX_MOSAIC tiles."""
-        n = 2 ** z
-        tx0, tx1 = int(math.floor(fx.min() - 1)) // TILE, int(math.floor(fx.max() + 1)) // TILE
-        ty0 = max(0, int(math.floor(fy.min() - 1)) // TILE)
-        ty1 = min(n - 1, int(math.floor(fy.max() + 1)) // TILE)
-        nx, ny = tx1 - tx0 + 1, ty1 - ty0 + 1
-        if nx * ny > MAX_MOSAIC or ny <= 0:
-            return None
-        return tx0, ty0, nx, ny, {(tx, ty): (src, z, tx % n, ty) for ty in range(ty0, ty1 + 1)
-                                  for tx in range(tx0, tx1 + 1)}
-
     @profile_step('Imagery render')
-    def render(self, frame, x0, y0, size, px, pending=None, gutter=False):
+    def render(self, frame, x0, y0, size, px, pending=None, gutter=False, **output):
         """_render(); texels from a lazy source (NAIP) then take their large-scale colour from the rest of
         the chain (match_colours): NAIP's detail, USGS's colours, so the block's photo meets the far tiles
         around it (USGS, colour-matched and de-shadowed) without a seam (in-game 2026-10-13, Annapolis: the
         NAIP block was a darker, greener square, its water much darker)."""
-        return self.render_where(self.square(frame, x0, y0, size, px, gutter), px, pending)
+        return self.render_where(self.square(frame, x0, y0, size, px, gutter), px, pending, **output)
 
     @profile_step('Imagery render')
-    def render_merc(self, z, x, y, px, pending=None):
+    def render_merc(self, z, x, y, px, pending=None, **output):
         """render() of Web-Mercator tile (z, x, y) with a gutter(px) border: px x px, the tile itself covering texels
         g .. px - g on both axes (gutter_uv of its Mercator position), row 0 north (the far field's global tiles,
         farfield.GTile: the same texture for every anchor)."""
-        return self.render_where(MercSquare(z, x, y, px), px, pending)
+        return self.render_where(MercSquare(z, x, y, px), px, pending, **output)
+
+    @profile_step('Imagery render')
+    def far_photo(self, where, px, pending=None):
+        """Keep the source composite native for the seasonal grade, rock and DDS once the height grid arrives."""
+        return self.render_where(where, px, pending, far=True)
 
     @staticmethod
     def square(frame, x0, y0, size, px, gutter=False):
@@ -2133,15 +2166,15 @@ class Imagery:
         return t is not False or self._on_disk(key)
 
     @profile_step('Imagery source assembly')
-    def render_where(self, where, px, pending=None):
-        """render() of a square (EnuSquare, MercSquare)."""
-        rgb, used = self._render(where, px, pending)
+    def render_where(self, where, px, pending=None, far=False):
+        """Render an EnuSquare or MercSquare. With far=True, retain the native canvas for the DDS writer."""
+        rgb, used = self._render(where, px, pending, keep_canvas=True)
         if any(s.lazy and s.name in used for s in self.chain) and not all(s.lazy for s in self.chain):
             # the reference only gives the colour above MATCH_SIGMA_M: rendered and matched at MATCH_DOWN times
             # coarser texels (64x fewer texels to render, blur and stream through memory than at full size)
             small = max(MATCH_MIN_PX, px // MATCH_DOWN)
             try:
-                ref, ref_used = self._render(where, small, pending, skip_lazy=True)
+                ref, ref_used = self._render(where, small, pending, skip_lazy=True, keep_canvas=True)
             except ImageryError:            # the reference is unreachable: NAIP as served
                 ref, ref_used = None, {}
             if ref is not None and ref_used.get("none"):
@@ -2150,26 +2183,35 @@ class Imagery:
                 # was pulled to the fallback's grey-brown, Fells Point's mean blue 115 -> 76, 2026-11-13)
                 ref = None
             if ref is not None:
-                rgb = match_colours(rgb, ref, MATCH_SIGMA_M / (where.size / small))
-                if self.leaf_on and any(s.leaf_off and s.name in used for s in self.chain):
-                    rgb = season.leaf_on(rgb, ref)
+                leaf_on = self.leaf_on and any(s.leaf_off and s.name in used for s in self.chain)
+                fast.require(563, "correct_lazy")
+                rgb.correct_lazy(ref, MATCH_SIGMA_M / (where.size / small), leaf_on)
+                if leaf_on:
                     used["leafon"] = sum(used.get(s.name, 0) for s in self.chain if s.leaf_off)
-        return self._seasoned(where, rgb), used
+        if far:
+            return FarPhoto(rgb, self._season_inputs(where)), used
+        return self._seasoned(where, rgb.take_rgb()), used
 
     SEASON_GRID = 17            # world positions for the season noise: on this grid, bilinear in between
 
     def _seasoned(self, where, rgb):
         """rgb graded toward the season (season.grade; season_mode "off": unchanged)."""
-        if self.season_mode in (None, "off", "summer"):
+        args = self._season_inputs(where)
+        if args is None:
             return rgb
-        lat, lon = where.grid(self.SEASON_GRID - 1)             # row 0 = north
-        amounts = season.amounts_for(self.season_mode, float(np.mean(lat)))
-        if not any(v > 0 for v in amounts.values()):
-            return rgb
-        xm, ym = season.world_metres(lat, lon)
-        return season.grade(rgb, xm, ym, amounts)       # (the grid, upscaled to the texels in the kernel)
+        out = fast._ef.season_img(np.asarray(rgb, np.uint8), *args)
+        return rgb if out is None else out
 
-    def _render(self, where, px, pending=None, skip_lazy=False):
+    def _season_inputs(self, where):
+        if self.season_mode in (None, "off", "summer"):
+            return None
+        lat, east, north = _photo_grid(where, self.SEASON_GRID - 1).season_grid()
+        amounts = season.amounts_for(self.season_mode, lat)
+        if not any(v > 0 for v in amounts.values()):
+            return None
+        return (east, north, season._PAL32, season.grade_params(amounts))
+
+    def _render(self, where, px, pending=None, skip_lazy=False, keep_canvas=False):
         """Texture of a square (where: EnuSquare: [x0, x0+size] x [y0, y0+size] of an anchor's frame; MercSquare),
         px x px,
         row 0 = north edge, column 0 = west edge (texel centres at (i + 0.5) * size / px).
@@ -2178,7 +2220,7 @@ class Imagery:
         A warp of the finished source tiles (finished(): de-shadowed, colour-matched, tone-mapped once per
         source tile and kept on disk, so nothing of that is done again for another anchor's tiles): the ENU ->
         lat/lon -> Web-Mercator mapping is evaluated on a MESH_CELLS² grid of cell corners and mapped bilinearly
-        in between (Pillow's MESH transform, BILINEAR sampling, earthfast.tile_warp): the mapping is smooth
+        in between (Pillow's MESH transform, BILINEAR sampling, PhotoCanvas.warp): the mapping is smooth
         enough that this is exact to well under a texel (second-order error ~ R tan(lat) dphi² / 8 for a cell of
         dphi rad: ~4 m on a 131 km tile at 36 deg, 0.01 of its 512 m texel; nothing measurable on near tiles).
         Each texel takes the first source of the chain whose four bilinear taps all have data. pending: a set that
@@ -2191,48 +2233,45 @@ class Imagery:
         cw = px // cells
         if netfetch.NETLOG_STACK:
             netfetch._why.ctx = f"{where.size / px:.2f}m{px}px{type(where).__name__[:4]}"
-        lat_raw, lon = where.grid(cells)                         # [row (north first), col]
-        lat = np.clip(lat_raw, -89.9, 89.9)
-        zw = zoom_for(float(lat[cells // 2, cells // 2]), where.size / px)
-        out = np.zeros((px, px, 3), np.uint8)
-        filled = np.zeros((px, px), np.uint8)
+        grid = _photo_grid(where, cells)
+        south, west, north, east, center = grid.bounds()
+        polar = max(-south, north) > MAX_LAT
+        south, north, clat = (min(89.9, max(-89.9, la)) for la in (south, north, center))
+        zw = zoom_for(clat, where.size / px)
         used, error, relit, full = {}, None, 0, False
         g = 0 if GUTTER_FETCH else int(getattr(where, "g", 0) or 0)     # (the gutter: on hand or clamped)
-        fast.require(108, "imagery tile_warp")
-        clat = float(lat[cells // 2, cells // 2])
+        fast.require(559, "PhotoCanvas")
+        canvas = fast._ef.PhotoCanvas(px, g)
         for i, src in enumerate(self.chain):
             last = i == len(self.chain) - 1
             mz, mv = zoom_caps(src, clat)
-            if zw > mv:
+            if not view_ok(src, zw, mz, mv):
                 continue
             z = min(zw, mz)
             if z < src.min_zoom or (skip_lazy and src.lazy):
                 continue
             if src.bounds:                  # a regional source elsewhere: not even its mosaic's keys
                 bs, bw, bn, be = src.bounds
-                if lat.max() < bs or lat.min() > bn or lon.max() < bw or lon.min() > be:
+                if north < bs or south > bn or east < bw or west > be:
                     continue
-            m = None
             while True:
-                fx, fy = mercator_px(lat, lon, z)
-                w = TILE * 2 ** z
-                fx = fx - w * np.round((fx - fx[0, 0]) / w)        # unwrap across the antimeridian
-                m = self._mosaic_keys(src, z, fx, fy)
-                if m is not None or z <= src.min_zoom:
+                mesh = grid.project(z, MAX_MOSAIC)
+                if mesh is not None or z <= src.min_zoom:
                     break
                 z -= 1                      # footprint too large for the zoom: coarser
-            if m is None:
+            if mesh is None:
                 continue
-            tx0, ty0, nx, ny, keys = m
+            tx0, ty0, _, _ = mesh.tiles
+            keys = _mosaic_keys(mesh, src, z)
             if g:
-                cx0, cx1, cy0, cy1 = _core_tiles(fx, fy, cells, cw, g, px)
+                cx0, cx1, cy0, cy1 = mesh.core_tiles(cells, cw, g, px)
                 keys = {t: kk for t, kk in keys.items()
                         if (cx0 <= t[0] <= cx1 and cy0 <= t[1] <= cy1) or self._on_hand(kk)}
-            if filled.any():
+            if used:
                 # a later source: only the tiles under the texels still unfilled (an all-sea tile of the first is
                 # one colour, "missing", and the whole footprint was fetched again from the next: at Bergen EOX's
                 # 2016 layer was fetched for 1347 of the 1792 tiles of its 2023 one, on the far field's slowest host)
-                need = _unfilled_tiles(filled, cells, cw, fx, fy)
+                need = _unfilled_tiles(canvas, cells, cw, mesh)
                 keys = {t: kk for t, kk in keys.items() if t in need}
                 if not keys:
                     continue
@@ -2249,7 +2288,7 @@ class Imagery:
                 if f is None or (not last and f.uniform):
                     continue                # missing here: the next source fills it
                 data, alpha, hole = f.for_mosaic(last)
-                if isinstance(data, bytes):
+                if f.is_jpeg:
                     with self._lock:
                         d = self._fin_rgb.get(key)
                         if d is not None and d[0] is f:
@@ -2261,9 +2300,7 @@ class Imagery:
                 cm_any |= f.cm
             if not tiles:
                 continue
-            qx = np.ascontiguousarray(fx - tx0 * TILE, np.float64)
-            qy = np.ascontiguousarray(fy - ty0 * TILE, np.float64)
-            hits, rh, full, decoded = fast._ef.tile_warp(tiles, nx, ny, qx, qy, cells, cw, out, filled)
+            hits, rh, full, decoded = canvas.warp_mesh(tiles, mesh, cells, cw)
             if decoded:
                 with self._lock:
                     for i, rgb in decoded:
@@ -2274,49 +2311,58 @@ class Imagery:
                     while len(self._fin_rgb) > MEM_DECODED:
                         self._fin_rgb.popitem(last=False)
             if hits:
-                used[src.name] = int(hits)
+                used[store_of(src)] = used.get(store_of(src), 0) + int(hits)     # (bngs2fine: bngs2's credit)
                 relit += int(rh)
                 if cm_any:
                     used["colormatch"] = used.get("colormatch", 0) + int(hits)
-            if full or (g and filled[g:px - g, g:px - g].all()):
+            if full:
                 break
-        gfill = None
-        if g:                               # (the gutter's texels no tile on hand gave: the footprint's edge, below)
-            gfill = filled == 0
-            gfill[g:px - g, g:px - g] = False
-            if gfill.any():
-                filled[gfill] = 1
-                full = bool(filled.all())
-            else:
-                gfill = None
-        if not full:
-            if error is not None:           # not known to be uncovered: do not bake a fallback
-                raise error
-            hole = filled == 0
-            out[hole] = self.lut[np.array(FALLBACK_RGB)]
-            if np.abs(lat_raw).max() > MAX_LAT:      # the polar caps: snow
-                i, j = np.nonzero(hole)
-                la = where.texel_lat(i, j, px)
-                cap = np.abs(la) > MAX_LAT
-                out[i[cap], j[cap]] = self.lut[np.array(POLAR_RGB)]
-                if cap.any():
-                    used["polar"] = int(cap.sum())
-            used["none"] = int(hole.sum()) - used.get("polar", 0)
-            if not used["none"]:
-                del used["none"]
-        if gfill is not None:
-            i, j = np.nonzero(gfill)
-            out[i, j] = out[np.clip(i, g, px - g - 1), np.clip(j, g, px - g - 1)]
+        if not full and error is not None:
+            raise error
+        cap = None
+        if not full and polar:
+            i, j = canvas.holes()
+            cap = np.abs(where.texel_lat(i, j, px)) > MAX_LAT
+        none, snow = canvas.fill(self.lut[list(FALLBACK_RGB)], self.lut[list(POLAR_RGB)], cap)
+        if snow:
+            used["polar"] = snow
+        if none:
+            used["none"] = none
         if relit:
             used["deshadow"] = relit
-        return out, used
+        return (canvas if keep_canvas else canvas.take_rgb()), used
 
-    def close(self):
+    def close(self, wait=False):
+        """Stop fetching: the fetches queued are dropped. wait: instead the warm thread stops and every fetch already
+        queued (urgent and fetch_later's too) is done before this returns: nothing writes in cache_dir after (a
+        test's folder removed right after, gate 293: "Directory not empty" with a prefetch still writing)."""
+        if wait:
+            with self._warm_cv:
+                self._closed = True
+                self._warm_cv.notify_all()
+            if self._warm_thread is not None:
+                self._warm_thread.join()
+            for pool in (self._later_pool, self.urgent_pool, self.pool):     # (fetch_later's batches use the pool)
+                if pool is not None:
+                    pool.shutdown(wait=True)
         if self.deshadow is not None:
             self.deshadow.close()
         if self.colormatch is not None:
             self.colormatch.close()
         self.pool.shutdown(wait=False, cancel_futures=True)
+
+
+_FAR_RENDERERS = (Imagery.render, Imagery.render_merc)
+_RENDER_WHERE = Imagery.render_where
+
+
+def render_far(render, *args, **kwargs):
+    """Call the provider's public renderer. Only the built-in methods can defer shading and DDS encoding
+    on the native canvas. An override (including one calling super()) gets its usual RGB and source counts."""
+    if getattr(render, "__func__", None) in _FAR_RENDERERS and \
+            getattr(render.__self__.render_where, "__func__", None) is _RENDER_WHERE:
+        kwargs["far"] = True
+    return render(*args, **kwargs)
 
 
 class HostPools:
@@ -2357,12 +2403,22 @@ class EnuSquare:
     def __init__(self, frame, x0, y0, size):
         self.frame, self.x0, self.y0, self.size = frame, x0, y0, size
 
-    def grid(self, n):
-        """(lat, lon) of its (n + 1)^2 grid of corners, row 0 north, column 0 west."""
+    def mesh(self, n):
+        import geodesy
+        import geotiles
+        if type(self.frame) is geodesy.EnuFrame:
+            return fast._ef.PhotoGrid.enu(n, self.x0, self.y0, self.size, self.frame.origin, self.frame.rot)
+        if type(self.frame) is geotiles.WorldFrame:
+            return fast._ef.PhotoGrid.world(n, self.x0, self.y0, self.size, self.frame.lat0, self.frame.lon0)
+        # Custom projections supply the lat/lon grid themselves.
         k = np.arange(n + 1) * (self.size / n)
         E, N = np.meshgrid(self.x0 + k, self.y0 + self.size - k)
         lat, lon, _ = self.frame.enu_to_geodetic(E, N, 0.0)
-        return lat, lon
+        return fast._ef.PhotoGrid(lat, lon)
+
+    def grid(self, n):
+        fast.require(563, "PhotoGrid")
+        return self.mesh(n).arrays()
 
     def texel_lat(self, i, j, px):
         t = self.size / px
@@ -2370,32 +2426,21 @@ class EnuSquare:
         return la
 
 
-def _core_tiles(fx, fy, cells, cw, g, px):
-    """(tx0, tx1, ty0, ty1): the tiles (global pixel coordinates fx, fy at the (cells + 1)^2 grid corners, as
-    _mosaic_keys) the bilinear taps of a texture's footprint texels (g .. px - g - 1 on both axes) touch, as the warp
-    (earthfast warp_rgba) places them (Rust: earthfast core_tiles)."""
-    fast.require(222, "core_tiles")
-    return fast._ef.core_tiles(np.ascontiguousarray(fx, np.float64), np.ascontiguousarray(fy, np.float64),
-                               int(cells), int(cw), int(g), int(px))
+def _photo_grid(where, cells):
+    fast.require(563, "PhotoGrid")
+    if type(where) in (EnuSquare, MercSquare):
+        return where.mesh(cells)
+    return fast._ef.PhotoGrid(*where.grid(cells))
 
 
-def _unfilled_tiles(filled, cells, cw, fx, fy):
-    """{(tx, ty)} of the tiles (global pixel coordinates fx, fy at the (cells + 1)^2 grid corners, as _mosaic_keys)
-    under the render cells (cw texels each, the last taking the rest) that still have unfilled texels, with the
-    bilinear taps' pixel round them. Pure."""
-    px = filled.shape[0]
-    out = set()
-    for r in range(cells):
-        r1 = px if r == cells - 1 else (r + 1) * cw
-        for c in range(cells):
-            c1 = px if c == cells - 1 else (c + 1) * cw
-            if filled[r * cw:r1, c * cw:c1].all():
-                continue
-            xs, ys = fx[r:r + 2, c:c + 2], fy[r:r + 2, c:c + 2]
-            for ty in range(int(math.floor(ys.min() - 1)) // TILE, int(math.floor(ys.max() + 1)) // TILE + 1):
-                for tx in range(int(math.floor(xs.min() - 1)) // TILE, int(math.floor(xs.max() + 1)) // TILE + 1):
-                    out.add((tx, ty))
-    return out
+def _mosaic_keys(mesh, src, z):
+    tx0, ty0, nx, ny = mesh.tiles
+    n = 2 ** z
+    return {(tx, ty): (src, z, tx % n, ty) for ty in range(ty0, ty0 + ny) for tx in range(tx0, tx0 + nx)}
+
+
+def _unfilled_tiles(canvas, cells, cw, mesh):
+    return canvas.unfilled_tiles(cells, cw, mesh)
 
 
 class MercSquare:
@@ -2416,10 +2461,12 @@ class MercSquare:
         lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1.0 - 2.0 * (self.y + fy) / w))))
         return lat, lon
 
+    def mesh(self, n):
+        return fast._ef.PhotoGrid.mercator(n, self.z, self.x, self.y, self.f0, self.f1)
+
     def grid(self, n):
-        f = self.f0 + np.arange(n + 1) * ((self.f1 - self.f0) / n)
-        FX, FY = np.meshgrid(f, f)                       # row 0 north: y fraction grows southwards
-        return self._ll(FX, FY)
+        fast.require(563, "PhotoGrid")
+        return self.mesh(n).arrays()
 
     def texel_lat(self, i, j, px):
         t = (self.f1 - self.f0) / px
@@ -2487,29 +2534,36 @@ def mip_chain(img):
     return [Image.fromarray(a, "RGB") for a in mip_arrays(np.asarray(img.convert("RGB")))]
 
 
-def encode_dds(rgb):
+def encode_dds(rgb, srgb=False, fade=None):
     """DDS bytes of an RGB image (uint8 [h, w, 3], power-of-two sides): DXT1 (BC1, no alpha)
     with the full mip chain (mip_arrays' chain, in integers: within one sRGB step of it), in one Rust call
-    (earthfast.dds_levels, bc1fast.rs: ISPC's BC1 kernels on the CPU, ~10x our own encoder at its quality and
-    faster than the GPU's round trip, which the game's frames paid for on a Steam Deck: no GPU here since 287)."""
-    rgb = np.ascontiguousarray(np.asarray(rgb, np.uint8))
-    h, w = rgb.shape[:2]
-    fast.require(287, "imagery dds_levels")
-    data, n, _err = fast._ef.dds_levels(rgb, _TO_LIN, float(MIP_SHARPEN), False)
-    assert len(data) == sum(dxt1_size(max(1, w >> k), max(1, h >> k)) for k in range(n)), (rgb.shape, len(data))
-    flags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_MIPMAPCOUNT | DDSD_LINEARSIZE
-    head = (DDS_MAGIC
-            + struct.pack("<7I", 124, flags, h, w, dxt1_size(w, h), 0, n)
-            + struct.pack("<11I", *((0,) * 11))
-            + struct.pack("<2I4s5I", 32, DDPF_FOURCC, b"DXT1", 0, 0, 0, 0, 0)
-            + struct.pack("<5I", DDSCAPS_TEXTURE | DDSCAPS_MIPMAP | DDSCAPS_COMPLEX, 0, 0, 0, 0))
-    assert len(head) == DDS_HEADER
-    return head + data
+    (earthfast.encode_photo_dds, bc1fast.rs: ISPC's BC1 kernels on the CPU, ~10x our own encoder at its quality and
+    faster than the GPU's round trip, which the game's frames paid for on a Steam Deck: no GPU here since 287).
+    srgb: the same blocks under a DX10 header as DXGI_FORMAT_BC1_UNORM_SRGB (FAR_SRGB).
+    fade (canopy rgb, texel m): the generated ground's mip fade (genground.write_far_dds): each mip of rgb and of the
+    canopy version (the same chain) blended by genground.fade_weights, then encoded as dds_levels does (byte for byte
+    the same with every weight 1)."""
+    fast.require(559, "encode_photo_dds")
+    if fade is not None:
+        import genground
+        fade = (np.asarray(fade[0], np.uint8), float(fade[1]), genground.FADE_NEAR_M, genground.FADE_FAR_M)
+    return fast._ef.encode_photo_dds(np.asarray(rgb, np.uint8), _TO_LIN, MIP_SHARPEN, bool(srgb), fade)
 
 
-def write_dds(path, rgb):
+# The far tiles' photos (2026-11-16, the near/far ground border the user saw in the mountains): the game drew them with
+# a version 1.0 Material, whose legacy lighting left their shaded and mid-dark ground ~10-12 % darker than the same photo
+# on the terrain block's v1.5 material (Stelvio: the block 105 luma, the far tiles 94; the far tiles as v1.5 materials
+# reading the same blocks as sRGB, 106: ~/bnge-tests/texlayer). A v1.5 Material reads a plain DXT1 as linear (washed out),
+# so the far tiles' textures are tagged sRGB (the GPU decodes them like the block's BC7_UNORM_SRGB photo) and the mod
+# draws a tile whose texture is tagged so with a v1.5 Material (satmat.lua). BNE_FAR_SRGB=off: the plain DXT1 and the
+# 1.0 Material, as before.
+DXGI_BC1_UNORM_SRGB = 72
+FAR_SRGB = os.environ.get("BNE_FAR_SRGB", "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+def write_dds(path, rgb, srgb=False, fade=None):
     """encode_dds() to path atomically; returns the file size."""
-    data = encode_dds(rgb)
+    data = encode_dds(rgb, srgb, fade)
     tmp = staging.tmp_for(path)
     with open(tmp, "wb") as f:
         f.write(data)

@@ -156,6 +156,7 @@ end
 -- the session
 
 local core = require('beamngEarth/core')
+T.check(not core.autodriveReady(), 'Autodrive waits for a connected session and committed block')
 local gps = require('beamngEarth/gps')
 local gpsUpdate, gpsFrames = gps.update, {}
 gps.update = function(anchor, player)
@@ -228,7 +229,7 @@ local function warned(pat)
   for _, w in ipairs(warnings) do if w:match(pat) then return true end end
   return false
 end
-serverSend({ type = 'hello', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's1', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's1', farFormat = 'cdae',
   material = 'bngEarthFar_v3', nearVisual = 'terrain', attribution = 'Imagery: test credits; Elevation: test' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == 1 end), 'auto-teleport requested in our level')
 do -- the level start's teleport is the first recent place (places.lua; no file API here: memory only)
@@ -270,6 +271,16 @@ T.check(tb.pos.x == -1024 and tb.pos.y == -1024 and tb.pos.z == 1100, 'block pos
 T.check(tb.lastImport.sq == 2.0 and tb.lastImport.maxH == 3500, 'importMaps squareSize 2.0 + height')
 T.check(pumpUntil(function() return calls.safeTeleport == 2 end, 10), 'teleport placement')
 T.near(veh.pos.z, 1181, 1e-9, 'placed at groundZ + 1')
+
+do  -- the deck guard (deckguard.lua): the server's spans for the current anchor taken, its frame step without an error
+  local st = core._state()
+  T.check(received('hello')[1].deckGuard == 1, 'hello.deckGuard: the server sends deck_spans')
+  serverSend({ type = 'deck_spans', anchorId = st.anchorId, cx = 0, cy = 0, r = 1200, spans = { { 10, 0, 70, 0 } },
+    abut = { 3 } })
+  frames(3)
+  T.check(#st.deck.spans == 1 and st.deck.aid == st.anchorId, 'deck_spans taken for the current anchor')
+  T.check(not core._deckFailed and st.deck.stats.looks > 0, 'the deck guard looks in the frame without an error')
+end
 
 -- far tiles: loaded hidden within the governor budget, shown by their swap group
 local farKeys = {}
@@ -317,9 +328,21 @@ veh.pos = vec3(301, 0, 1200)
 T.check(pumpUntil(function() return #received('prepare_terrain') == 1 end, 5), 'prepare_terrain past 300 m')
 local pt = received('prepare_terrain')[1]
 T.check(pt.anchorId == 1 and pt.cx == 256 and pt.cy == 0, 'target = snap256(player + 4 s * v) = (256, 0)')
+frames(101) -- a real pending request passes the five-second health threshold
+T.check(not core.serverHealthy(), 'late terrain prefetch still marks normal server health unhealthy')
+T.check(core.autodriveReady(), 'late prefetch leaves the existing block usable by Autodrive')
+T.check(core._state().guard.mode ~= 'hold' and calls.importMaps == imports,
+  'the existing terrain stays loaded and the distant edge guard does not hold')
+serverSend({ type = 'terrain_error', requestId = pt.requestId, error = 'fixture terrain failure' })
+frames(1)
+T.check(not core.autodriveReady(), 'an actual terrain error still holds Autodrive')
+T.check(pumpUntil(function() return last('prepare_terrain').requestId ~= pt.requestId end, 120),
+  'terrain error is retried through the normal request lifecycle')
+pt = last('prepare_terrain')
 serverSend({ type = 'terrain_ready', requestId = pt.requestId, anchorId = 1, cx = 256, cy = 0,
   heightmap = '/temp/beamngEarth/s1/hm_1_256_0.png', size = 1024, squareSize = SQ, zBase = 1110, maxHeight = 1024, q = 1 / 64 })
 frames(40)
+T.check(core.autodriveReady(), 'a successful terrain reply clears the error hold')
 T.check(calls.importMaps == imports, 'ready but below 450 m: no commit yet')
 local farBefore = {}
 for _, o in ipairs(S.liveOf('TSStatic')) do farBefore[o.id] = o:getPosition() end
@@ -336,12 +359,25 @@ end
 serverSend({ type = 'far_swap', anchorId = 1, id = 2, add = col, remove = {}, dIn = 0, dOut = 0 })
 T.check(pumpUntil(function() return farfield._tile('0_-4_0') ~= nil end, 300), 'covered L0 tiles swapped in')
 local colObj = objects[farfield._tile('0_-4_0').id]
-T.check(not colObj.hidden and colObj.pos.z == 1100 - 1.0, 'edge ring tile under the block: shown, sunk by its sink')
+T.check(colObj.hidden, 'W edge ring tile under the block: hidden (all block ground)')
+local neObj = objects[farfield._tile('0_-4_3').id]
+T.check(not neObj.hidden and neObj.pos.z <= 1100 - 1.0, 'NW corner tile (N strip under-floor): shown, sunk at least by its sink')
 -- every block import drops the grass on the block: loadBlock asks for its rebuild right after the
 -- import, in the same call (groundcover.lua, docs/ARCHITECTURE.md "Ground surfaces")
 local gcmod = require('beamngEarth/groundcover')
 local gcOrig, gcAt = gcmod.afterBlockChange, {}
 gcmod.afterBlockChange = function() gcAt[#gcAt + 1] = calls.importMaps; return gcOrig() end
+T.check(tb.renderEnabled == nil and (calls.setRenderEnabled or 0) == 0, 'terrain mode: the block is drawn, render flag never touched')
+core.PHOTOLESS_FAR_GROUND = true  -- (the opt-in far ground under a photo-less block; off by default: checked below)
+-- (the block before's photo still on the block's material: a photo-less block elsewhere must not keep it, drawn where
+-- the block has moved)
+local terrainmod = require('beamngEarth/terrain')
+local blockMat = scenetree.findObject(terrainmod.MATERIAL)
+if not blockMat then
+  blockMat = S.newObject('TerrainMaterial'); blockMat.name = terrainmod.MATERIAL; objects[blockMat.id] = blockMat
+end
+blockMat:setField('baseColorBaseTex', 0, '/before.jpg')
+core.setNearVisual('detail')  -- its ready block has no base photo
 T.check(pumpUntil(function() return calls.importMaps == imports + 1 end, 100), 'terrain-follow commit once the strip is live')
 T.check(#gcAt == 1 and gcAt[1] == imports + 1, 'grass rebuild requested once, right after the import')
 gcmod.afterBlockChange = gcOrig
@@ -354,6 +390,23 @@ ct = last('commit_terrain')
 T.check(ct.anchorId == 1 and ct.cx == 256 and ct.cy == 0, 'commit_terrain sent')
 T.check(calls.setClusterPosRelRot == clusterMoves and veh.pos.x == 451, 'terrain-follow does not move vehicles')
 for id, p in pairs(farBefore) do T.check(objects[id].pos.x == p.x, 'terrain-follow does not move far tiles') end
+T.check(not tb.renderEnabled and farfield.rawView(), 'missing base: collision moved but far tiles draw the ground')
+T.check(blockMat:getField('baseColorBaseTex') == terrainmod.LEVEL_BASE.tex and terrainmod.base() == nil,
+  "missing base: the level's flat base, not the block before's photo where the block has moved")
+veh.vel = vec3(58, 0, 0)
+serverSend({ type = 'block_base', anchorId = 1, cx = 0, cy = 0, base = '/old.jpg', baseSize = 2048 })
+frames(2)
+T.check(not tb.renderEnabled, 'late photo of the previous block leaves the far tiles visible')
+serverSend({ type = 'block_base', anchorId = 1, cx = 256, cy = 0, base = '/current.jpg', baseSize = 2048 })
+frames(2)
+T.check(tb.renderEnabled and not farfield.rawView() and require('beamngEarth/terrain').base() == '/current.jpg',
+  'first photo replaces the far ground even at 130 mph')
+core.PHOTOLESS_FAR_GROUND = false
+core._blockPhotoInstalled(nil)
+T.check(tb.renderEnabled and not farfield.rawView(), 'by default a photo-less block is drawn, its far tiles covered')
+core._blockPhotoInstalled('/current.jpg')
+veh.vel = vec3(0, 0, 0)
+core.setNearVisual('terrain')
 -- stale / foreign answers are ignored
 serverSend({ type = 'terrain_ready', requestId = 999, anchorId = 1, cx = 0, cy = 0, heightmap = '/x.png', size = 1024 })
 frames(5)
@@ -534,6 +587,7 @@ serverSend({ type = 'far_tile', anchorId = 4, key = '1_1_0', shape = '/temp/beam
 server.failErr = 'connection reset by peer'
 T.check(pumpUntil(function() return calls.createObject_TSStatic == before + 1 end, 50), 'final frame decoded before close')
 T.check(pumpUntil(function() return #received('hello') == connects + 1 end, 100), 'reconnected after reset')
+T.check(not core.autodriveReady(), 'a new transport awaiting its session still holds Autodrive')
 
 -- the (restarted) server says hello again: re-register the SAME origin under a new anchorId,
 -- terrain where terrain-follow would put it; nothing in the world moves
@@ -543,19 +597,21 @@ veh.pos = vec3(700, 30, 1200)
 veh.vel = vec3(20, 0, 0)
 frames(2)
 local movesBefore, setOrig = calls.setClusterPosRelRot, calls.setOriginalTransform
-T.check(tb.renderEnabled == nil and (calls.setRenderEnabled or 0) == 0, 'terrain mode: the block is drawn, render flag never touched')
-T.check(tb.fields.castShadows == '0', 'the block casts no shadows (no shadow-map redraw at its moves)')
+T.check(tb.fields.castShadows == '1', 'the block casts its shadows (the settings\' terrainShadows, default on: the far tiles cast theirs)')
+T.check(require('beamngEarth/terrain').setCastShadows(false) == false and tb.fields.castShadows == '0', 'terrainShadows off: none')
+require('beamngEarth/terrain').setCastShadows(true)
 T.check(farfield.nearVisual() == 'terrain', 'terrain near visual')
 local roadsMod = require('beamngEarth/roads')
 local roadClears, realClear = 0, roadsMod.clear
 roadsMod.clear = function(...) roadClears = roadClears + 1; return realClear(...) end
-serverSend({ type = 'hello', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's2', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's2', farFormat = 'cdae',
   material = 'bngEarthFar_v9', nearVisual = 'mesh' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == nAnchor + 1 end, 10), 'resync requested on hello')
+T.check(not core.autodriveReady(), 'an outstanding resync still holds Autodrive')
 T.check(roadClears == 1, 'a new server session: the old session\'s road tiles cleared')
 roadsMod.clear = realClear
 T.check(tb.renderEnabled == false and farfield.nearVisual() == 'mesh', 'hello nearVisual = mesh: block render disabled, far field in mesh mode')
-T.check(tb.fields.castShadows == '0', 'mesh mode: still no shadows')
+T.check(tb.fields.castShadows == '0', 'mesh mode: no shadows (the block is not drawn)')
 T.check(warned('material mismatch: server bngEarthFar_v9, mod bngEarthFar_v3'), 'hello: a different far-tile material is reported')
 log = stubLog
 local rs = last('prepare_anchor')
@@ -628,6 +684,41 @@ do
   T.check(core.teleport(10.5, 20.5, nil, { record = false }) == true and #places.recentList() == n2
     and places.recentList()[1] == top, 'recent places: a tool teleport (record = false) is not recorded')
 end
+-- "Where you left off" with the car's heading: taken only when the start's own request commits; a placement before
+-- that (the level start's flat ground, placeFrames) neither uses nor drops it (Codex on 2ffc2fcc)
+do
+  local stH = core._state()
+  local rots, savedQ, savedST = {}, quatFromDir, spawn.safeTeleport
+  quatFromDir = function(d) return { d = d } end
+  spawn.safeTeleport = function(v, pos, rot, ...) rots[#rots + 1] = rot; return savedST(v, pos, rot, ...) end
+  local nPrep = #received('prepare_anchor')
+  T.check(core._teleportTo(46.6, 7.9, nil, 'start', 90) == true, 'start teleport with a heading asked')
+  local reqH = last('prepare_anchor')
+  T.check(#received('prepare_anchor') == nPrep + 1 and stH.startHeading == nil, 'heading not in use before the commit')
+  -- an earlier placement (the flat ground's) while the request is pending: the car's own heading, the saved one kept
+  stH.placeFrames, stH.placeZ = 1, 1181
+  local nRot = #rots
+  frames(2)
+  T.check(#rots == nRot + 1 and math.abs(rots[#rots].d.x) < 1e-9 and stH.startHeading == nil and stH.headingFor
+    and stH.headingFor.heading == 90, 'a placement before the commit keeps the car\'s heading and the saved one waits')
+  -- the first request fails (anchor_error) and is asked again later: the heading goes with the retry (Codex on aa16d9c9)
+  local nPrep2 = #received('prepare_anchor')
+  serverSend({ type = 'anchor_error', requestId = reqH.requestId, error = 'test: elevation download failed' })
+  T.check(pumpUntil(function() return #received('prepare_anchor') == nPrep2 + 1 end, 400), 'the failed start retried')
+  reqH = last('prepare_anchor')
+  T.check(stH.headingFor and stH.headingFor.requestId == reqH.requestId, 'the heading moved to the retry\'s request')
+  serverSend({ type = 'anchor_ready', requestId = reqH.requestId, anchorId = 77, lat = reqH.lat, lon = reqH.lon,
+    groundZ = 1180, px = reqH.px, py = reqH.py, terrain = terrainMsg(reqH.cx or 0, reqH.cy or 0,
+    '/temp/beamngEarth/s1/hm_77_0_0.png', 1100) })
+  nRot = #rots
+  T.check(pumpUntil(function() return #rots > nRot end, 40), 'the start teleport placed the car')
+  local hx, hy = core.headingDir(90, stH.placeX or 0, stH.placeY or 0)
+  local d = rots[#rots] and rots[#rots].d
+  T.check(d and math.abs(d.x - hx) < 1e-6 and math.abs(d.y - hy) < 1e-6 and hx > 0.99,
+    string.format('placed facing the saved heading (east): %.3f %.3f', d and d.x or 0, d and d.y or 0))
+  T.check(stH.startHeading == nil and stH.headingFor == nil, 'the heading used once')
+  quatFromDir, spawn.safeTeleport = savedQ, savedST
+end
 T.check(core.setFarBudget(3) == 3 and core.setFarBudget(10) == 4, 'far budget setter (governor target, 1-4 ms)')
 
 -- M1 (docs/V1_4_SPEC.md 3.1): a FORMAT 4 server sends hello.cells; the mod reads formats 3 and 4
@@ -637,13 +728,13 @@ local function said(pat)
   for _, w in ipairs(infos) do if w:match(pat) then return true end end
   return false
 end
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's3',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's3',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(2)
 T.check(crossover.cells() == 64 and crossover.defaultErr(0) == 1, 'hello.cells 64: crossover.defaultErr from it')
 T.check(farfield.stats().exactLevel == -1, 'hello.cells 64: the exact level (exactMiss metric) is L-1')
 T.check(not said('Format mismatch'), 'FORMAT 4 accepted')
-serverSend({ type = 'hello', protocol = 4, format = 5, serverVersion = '0.4.0', sessionId = 's4', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 5, serverVersion = '0.4.0', sessionId = 's4', farFormat = 'cdae',
   material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(2)
 T.check(said('Format mismatch: server 5, mod 3/4'), 'an unknown format is reported')
@@ -656,7 +747,7 @@ local lattice = require('beamngEarth/lattice')
 local rebase = require('beamngEarth/rebase')
 veh.vel = vec3(0, 0, 0)
 local nA = #received('prepare_anchor')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, blockSize = 512, serverVersion = '0.4.0', sessionId = 's5',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, blockSize = 512, serverVersion = '0.4.0', sessionId = 's5',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == nA + 1 end, 10), '512: resync requested on hello')
 T.check(lattice.N == 512 and lattice.HALF == 512 and follow.GRID == 128 and follow.REACH == 260 and follow.PREPARE_DIST == 128
@@ -703,7 +794,7 @@ T.check(calls.importMaps == impFlat + 1 and tb.lastImport.path:match('beamngEart
 T.check(tb.lastImport.maps[1].path:match('beamngEarth_layer_512%.png$') ~= nil and tb.pos.x == -512 and tb.pos.y == -512,
   '512: flat block 1024 m centred on the origin')
 -- a server without hello.blockSize: back to the v1.3.1 block
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(lattice.N == 1024 and follow.GRID == 256 and follow.REACH == 420 and rebase.STALE_DIST == 450,
@@ -722,7 +813,7 @@ T.check(scenetree.theLevelInfo.visibleDistance == 100000 and sky.atmoPlanetRadiu
 serverSend({ type = 'status', text = 'x', backlog = 0, radius = 300000 })
 frames(3)
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and postApplies == 0, 'status.radius without hello.horizon: ignored')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's7', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(sky.atmoPlanetRadius == 6371, 'hello.horizon: sky planet radius 6371 km')
@@ -750,12 +841,12 @@ T.check(sky.atmoPlanetRadius == 6371, 'level start in horizon mode: planet radiu
 T.near(scenetree.theLevelInfo.visibleDistance, 440000, 1e-6, 'level start: visibleDistance from the known radius')
 -- a server without horizon: the level's values back
 local pa = postApplies
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's8',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's8',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(sky.atmoPlanetRadius == 6360, 'no hello.horizon: the level\'s sky planet radius back')
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and postApplies == pa + 1, 'no hello.horizon: 100 km back, with postApply')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's9', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 serverSend({ type = 'status', text = 'x', backlog = 0, radius = 500000 })
@@ -775,7 +866,7 @@ beamngEarth_weather = { onGravity = function(m) gotGravity = m end, clearGravity
 serverSend({ type = 'gravity', v = 1, g = 9.7867, lat = 36.58, lon = -118.29, h = 4400, source = 'egm2008' })
 frames(2)
 T.check(gotGravity and gotGravity.g == 9.7867 and gotGravity.source == 'egm2008', 'gravity message handed to beamngEarth_weather')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's10', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(cleared == 1, 'hello: the previous session\'s gravity cleared')
@@ -796,7 +887,7 @@ frames(1)
 local function words(x) return (x:gsub('%s+', ' ')) end -- the overlay wraps long lines at spaces
 T.check(#drawnCredits == 1 and words(drawnCredits[1]) == words(core.attribution()), 'credits: the attribution line before any credits message')
 serverSend({ type = 'credits', v = 1, near = 'Imagery: USGS The National Map | Elevation: Mapterhorn (see mapterhorn.com/attribution)',
-  far = 'Far imagery: EOX', ids = { 'img:usgs', 'dem:mapterhorn' }, farIds = { 'img:eox2023' } })
+  far = 'Far imagery: EOX', ids = { 'img:usgs', 'dem:mapterhorn' }, farIds = { 'img:eox2016' } })
 drawnCredits = {}
 frames(3)
 T.check(#drawnCredits == 3, 'credits: one text draw per frame')
@@ -810,7 +901,7 @@ T.check(#drawnCredits == 0, 'credits: hidden while the pause menu is open')
 core.onUiChangedState('play', 'menu')
 frames(1)
 T.check(#drawnCredits == 1, 'credits: back after the pause menu')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's11', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', attribution = 'Elevation: s11' })
 drawnCredits = {}
 frames(3)
@@ -891,7 +982,7 @@ end
 local function sentCaches() return received('cache') end
 local nCache = #sentCaches()
 beamngEarth_settings = { cacheCapGb = function() return 50 end }
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's12', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(#sentCaches() == nCache + 1 and sentCaches()[nCache + 1].capGb == 50, 'hello: the page\'s cache cap sent')
@@ -937,7 +1028,7 @@ do
     session = function(id, available) seen.id, seen.available = id, available end,
     reset = function() seen = {} end,
     hasWork = function() return false end, update = function() end, onTeleport = function() end }
-  serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, sessionId = 'traffic-reload',
+  serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, sessionId = 'traffic-reload',
     streamLease = 1, leaseId = 'game-owner',
     farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', trafficVisuals = 2 })
   frames(3)
@@ -990,6 +1081,18 @@ do
   local a, b, c = core.safeSpot(5, 5, function() return 7 end)
   T.check(a == 5 and b == 5 and c == 7, 'safeSpot: ground under the spot: the spot itself')
   T.check(core.safeSpot(0, 0, function() return nil end) == nil, 'safeSpot: no ground anywhere near: nil')
+end
+-- a ready block without its photo waits (the gate, until the hard commit distance) while the block in use shows one
+do
+  local core = require('beamngEarth/core')
+  local shown = '/temp/beamngEarth/s2/hm_6_768_-128_base.jpg'
+  T.check(not core.photoGateOpen({ cx = 896, cy = -128 }, shown, 'detail'), 'photo gate: no photo, one shown: waits')
+  T.check(not core.photoGateOpen({ base = false }, shown, 'detail'), 'photo gate: base false: waits')
+  T.check(core.photoGateOpen({ base = '/temp/beamngEarth/s2/hm_6_896_-128_base_q.jpg' }, shown, 'detail'),
+    'photo gate: a stand-in photo is a photo')
+  T.check(core.photoGateOpen({ base = false }, nil, 'detail'), 'photo gate: nothing shown either: no reason to wait')
+  T.check(core.photoGateOpen({ base = false }, shown, 'terrain'), 'photo gate: only in detail mode')
+  T.check(core.photoGateOpen(nil, shown, 'detail'), 'photo gate: no message: open')
 end
 -- a block's refreshed base photo (block_base) waits while the car is fast and comes once it is slower (core.applyBaseLater)
 do
@@ -1059,7 +1162,7 @@ do -- a computer with too little memory (the server's emergency tier): one warni
     end
     if oldGh and oldGh.trigger then return oldGh.trigger(name, data) end
   end }
-  local hello = { type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's5',
+  local hello = { type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's5',
     farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', memoryTier = 'emergency',
     memoryNote = 'This computer has 4 GB of memory.' }
   serverSend(hello)
@@ -1069,10 +1172,49 @@ do -- a computer with too little memory (the server's emergency tier): one warni
   serverSend(hello)
   core.onUpdate(0.05, 0.05)
   T.check(#toasts == 1, 'the same server session: not again')
-  serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
+  serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
     farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', memoryTier = 'lean', memoryNote = 'x' })
   core.onUpdate(0.05, 0.05)
   T.check(#toasts == 1, 'the lean tier: no toast (the app window says it)')
   guihooks = oldGh
+end
+-- the settings page's "Restart world server": the hello comes at the main menu, a level starts (and ends) after it;
+-- the server's start-time settings and its restart capability outlive both (the user, 2026-11-15: no button)
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's99r',
+  farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', restartable = true,
+  startSettings = { groundGrid = '1', expAiTunnels = false }, startFixed = { 'serverCores' } })
+for _ = 1, 3 do core.onUpdate(0.05, 0.05) end
+local rOrder, rMine = { 'groundGrid', 'expAiTunnels' }, { groundGrid = '1', expAiTunnels = true }
+T.check(core.restartState(rMine, rOrder).pending[1] == 'expAiTunnels', 'restart: pending after the hello')
+core.onClientEndMission()
+core.onClientStartMission()
+for _ = 1, 3 do core.onUpdate(0.05, 0.05) end
+local rsL = core.restartState(rMine, rOrder)
+T.check(#rsL.pending == 1 and rsL.pending[1] == 'expAiTunnels' and rsL.restartable == true,
+  string.format('restart: a level start after the hello keeps the start-time settings and the button (%d pending, %s)',
+    #rsL.pending, tostring(rsL.restartable)))
+T.check(#core.restartState({ groundGrid = '1', expAiTunnels = false, serverCores = '2' },
+  { 'groundGrid', 'expAiTunnels', 'serverCores' }).pending == 0, 'restart: ... and the fixed list')
+
+-- "Where you left off" keeps the car's heading (the user, 2026-11-15): carHeading (degrees clockwise from true north,
+-- the anchor's north at the car) and headingDir (its inverse) agree, away from the anchor too (meridian convergence)
+do
+  local geo = require('beamngEarth/geodesy')
+  local stH = core._state()
+  local savedA, savedDir = stH.anchor, veh.getDirectionVector
+  stH.anchor = geo.newAnchor(64.0, -21.9)                  -- (far north: true north turns across the frame)
+  local x, y = 20000, 5000
+  for _, h in ipairs({ 0, 37.5, 90, 181, 270, 359 }) do
+    local dx, dy = core.headingDir(h, x, y)
+    veh.getDirectionVector = function() return vec3(dx, dy, 0) end
+    local back = core.carHeading(x, y)
+    T.check(back and math.abs(((back - h + 540) % 360) - 180) < 1e-6,
+      string.format('heading %.1f: the direction placed and read back agree (%s)', h, tostring(back)))
+  end
+  local nx, ny = stH.anchor:northAt(x, y)
+  local dx, dy = core.headingDir(0, x, y)
+  T.check(math.abs(dx - nx) < 1e-9 and math.abs(dy - ny) < 1e-9, 'heading 0: along true north at the car')
+  T.check(core.headingDir(nil, x, y) == nil and core.headingDir(0 / 0, x, y) == nil, 'no heading: nothing to turn to')
+  stH.anchor, veh.getDirectionVector = savedA, savedDir
 end
 T.done('test_core_stubbed')

@@ -63,7 +63,7 @@ local function objs(tag)
   local out = {}
   for _, o in pairs(S.objects) do
     if o.class == 'TSStatic' then
-      local what = tostring(o.fields.shapeName):match('/s/rs_' .. tag .. '_(%a+)%.cdae')
+      local what = tostring(o.fields.shapeName):match('/s/rs_' .. tag .. '_(%w+)%.cdae')
       if what then out[what] = o end
     end
   end
@@ -261,6 +261,27 @@ while not roads.swapSettled(11) and os.clock() < tEnd11 do roads.update(gov, 1, 
 T.check(roads.swapSettled(11) and roads.swapFinish(11), 'settled and finished')
 run()
 T.check(count(objs('next')) == 0 and count(objs('bare')) == 1, 'and deleted after')
+
+-- Cliff contact strips participate in the same atomic swap and rollback, but
+-- remain non-colliding overlays throughout it.
+require('beamngEarth/cliffcontact').ready = true -- private cache prepared at hello
+roads.configureCliffs({available=true, natural=true, roadCuts=true})   -- (hello: cliffs on)
+roads.onSkin({anchorId=1,key=key,path=skinOf('cliffold',{'road','cliffStrip1'})},1)
+run()
+T.check(count(objs('cliffold'))==2, 'cliff contact skin installed')
+roads.swapBegin(39)
+roads.onSkin({anchorId=1,key=key,path=skinOf('cliffnew',{'road','cliffStrip1'}),swap=39},1)
+run()
+T.check(roads.swapStaged(39) and objs('cliffnew').cliffStrip1.hidden, 'cliff contact staged out of sight')
+T.check(roads.swapCommit(39), 'cliff contact committed')
+T.check(objs('cliffold').cliffStrip1.hidden and not objs('cliffnew').cliffStrip1.hidden, 'cliff contact switches atomically')
+T.check(objs('cliffnew').cliffStrip1.fields.collisionType=='None', 'cliff contact remains render-only')
+T.check(roads.swapUndo(39), 'cliff contact commit can be rolled back')
+run()
+T.check(not objs('cliffold').cliffStrip1.hidden and objs('cliffold').cliffStrip1.fields.collisionType=='None',
+  'rollback restores old contact without collision')
+T.check(count(objs('cliffnew'))==0, 'rolled-back cliff contact is removed')
+roads.configureCliffs(nil)
 
 -- ---- the level ends with a swap under way: nothing of it is left ------------------------------------------------
 roads.swapBegin(40)

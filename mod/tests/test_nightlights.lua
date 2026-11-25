@@ -158,4 +158,24 @@ clock = clock + 2; nl.update()
 T.check(mats.bne_bld_facade.fields.emissiveMap == nl.MAPS.bne_bld_facade[1] and nl.status().errors == 0,
   'the evening: its map back')
 nl.reset()
+-- the mapped lamps' colours (BNE_LAMP_TAGS: server furniture.LENS_COLOURS): their lens groups kept, each its profile
+nl.onRows('col', { { 0, 1, 0, 8 }, { 1, 2, 0, 8 }, { 2, 3, 0, 8 } }, { 'lamplens', 'lamplens_white', 'lamplens_yellow' })
+local col = nl.nearest(0, 0, 50, 3)
+T.check(#col == 3 and col[1][7] == nil and col[2][7] == 'LIGHT_WHITE' and col[3][7] == 'LIGHT_YELLOW',
+  'a mapped colour keeps its profile, the stock lens none')
+T.check(nl.LIGHT_WHITE.color ~= nl.LIGHT.color and nl.LIGHT_YELLOW.color ~= nl.LIGHT.color, 'their own colours')
+nl.reset()
+-- a dark stormy sky before the clock's night (beamngEarth_weather.duskDark): lamps on; a bright day: not
+do
+  local env0, w0 = core_environment, rawget(_G, 'beamngEarth_weather')
+  local dark = true
+  core_environment = { getLightState = function() return { isNight = false, time = 0.2, nightStart = 0.25, nightEnd = 0.75 } end }
+  beamngEarth_weather = { duskDark = function(ls) return dark and ls.time == 0.2 end }
+  T.check(nl.isNight() == true, 'a storm\'s dusk: night for the lamps')
+  dark = false
+  T.check(nl.isNight() == false, 'a clear dusk: still day')
+  beamngEarth_weather = { duskDark = function() error('boom') end }
+  T.check(nl.isNight() == false, 'a failing weather hook: the clock decides')
+  core_environment, beamngEarth_weather = env0, w0
+end
 T.done('test_nightlights')

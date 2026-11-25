@@ -27,6 +27,8 @@ HUBS = {
     "trutnov": (50.5652, 15.91106),
     "pardubice": (50.03171, 15.75609),       # platform_edge, 8 bridges, 13 tunnels, 11 lifts
     "passau": (48.57371, 13.45047),          # DE: platform_edge, height, level, tunnels (corridor)
+    "hahnstaetten": (50.3089, 8.06656),      # DE: a bare station node (public_transport=no), no platform mapped, the
+                                             # line over a level crossing 90 m from it (the user's report r92)
 }
 LAYERS = ("infrastructure", "buildings", "places", "roads", "land_use")
 OUT = os.path.join(os.path.dirname(HERE), "server", "tests", "data", "railstations")

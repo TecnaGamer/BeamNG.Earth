@@ -48,7 +48,11 @@ class Runner:
 
     def say(self, msg):
         with self.lock:
-            print(f"[{time.time() - self.t0:6.0f}s] {msg}", flush=True)
+            line = f"[{time.time() - self.t0:6.0f}s] {msg}"
+            enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+            # (a test's output in a character the console's code page lacks, e.g. U+FFFD on Windows cp1252, stopped
+            # the whole run with UnicodeEncodeError, CI 2026-11-15)
+            print(line.encode(enc, "replace").decode(enc, "replace"), flush=True)
 
     def expected(self, m):
         return self.hist.get(m, {}).get("secs", DEFAULT_S)
@@ -76,13 +80,9 @@ class Runner:
                               "proc": None, "killed": False}
         # the stacks only: the timer kills the tree (an exit here would leave the module's servers behind)
         # --durations was introduced in Python 3.12; the companion supports 3.10+.
-        code = ("import faulthandler,sys,unittest;faulthandler.dump_traceback_later(%d);"
-                "sys.exit(not unittest.main(module=None,argv=['run_tests','-v',%r]"
-                "+(['--durations=5'] if sys.version_info >= (3,12) else []),exit=False)"
-                ".result.wasSuccessful())" % (max(1, self.timeout - 10), m))
         with open(os.path.join(self.logs, f"{m}.log"), "w", encoding="utf-8") as log:
             p = st["proc"] = subprocess.Popen(
-                [sys.executable, "-B", "-u", "-c", code], cwd=TESTS, env=dict(os.environ, PYTHONUNBUFFERED="1"),
+                [sys.executable, "-B", "-u", os.path.abspath(__file__), "--worker", m, str(self.timeout)], cwd=TESTS, env=dict(os.environ, PYTHONUNBUFFERED="1"),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                 start_new_session=os.name != "nt")      # its own process group: killpg reaches its children
             timer = threading.Timer(self.timeout, self.timed_out, (st,))
@@ -96,12 +96,17 @@ class Runner:
             finally:
                 timer.cancel()
         dt = time.time() - st["start"]
-        res = "HANG" if st["killed"] else "OK" if p.returncode == 0 else "FAIL"
+        res = "HANG" if st["killed"] else "OK" if p.returncode == 0 and "result" in st else "FAIL"
         self.say(f"== {m:26} {res:6} {dt:6.1f}s  {st['n']} tests"
                  + (f"  bad: {', '.join(st['bad'])}" if st["bad"] else ""))
         return m, res, dt
 
     def parse(self, m, st, line):
+        summary = re.fullmatch(r"GATE unittest (\d+) (\d+)", line)
+        if summary:
+            st["result"] = True
+            if int(summary[2]):
+                self.say(f"{m}: {summary[2]} skipped, {summary[1]} tests reported")
         if line.startswith("Timeout ("):                        # faulthandler's dump before the timeout
             self.say(f"{m:29} slow    near its timeout: stacks in {os.path.join(self.logs, m + '.log')}")
         s = START.match(line)
@@ -193,6 +198,29 @@ class Runner:
         return 1 if bad else 0
 
 
+def worker(module, timeout):
+    import faulthandler
+    import unittest
+    sys.path.insert(0, os.getcwd())  # parent starts each worker in the tests directory
+    faulthandler.dump_traceback_later(max(1, timeout - 10))
+    argv = ["unittest", "-v", module]
+    if sys.version_info >= (3, 12):
+        argv.append("--durations=5")
+    result = unittest.main(module=None, argv=argv, exit=False).result
+    print(f"GATE unittest {result.testsRun} {len(result.skipped)}")
+    if os.environ.get("BNGE_QUALITY_GATE") == "1":
+        required = {"test_bake_formats", "test_determinism", "test_drivability", "test_fast",
+                    "test_ground_rules", "test_plan_neutral", "test_seamprobe"}
+        if module.split(".")[0] in required:
+            for test, reason in result.skipped:
+                if test.id() != "test_plan_neutral.CorpusTest.test_plans_and_facts_identical" or os.environ.get("PLAN_NEUTRAL_CORPUS") == "1":
+                    print(f"FAIL required coverage skipped: {test} ({reason})")
+                    return 1
+            if result.expectedFailures or result.testsRun == 0:
+                return 1
+    return int(not (result.wasSuccessful() and (result.testsRun or result.skipped)))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Run the server tests module by module, with live progress.")
     ap.add_argument("modules", nargs="*", help="test modules (default: every server/tests/test_*.py)")
@@ -208,9 +236,14 @@ def main():
             hist = json.load(f)
     except (OSError, ValueError):
         hist = {}
+    mods = list(dict.fromkeys(mods))
+    if not mods:
+        ap.error("no Python test modules found")
     mods.sort(key=lambda m: -hist.get(m, {}).get("secs", DEFAULT_S))     # longest first: none ends the run alone
     return Runner(mods, max(1, a.par), a.timeout, os.path.abspath(a.logs), hist).all()
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--worker"]:
+        sys.exit(worker(sys.argv[2], int(sys.argv[3])))
     sys.exit(main())

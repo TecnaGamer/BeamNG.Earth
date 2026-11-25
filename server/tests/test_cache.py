@@ -186,7 +186,7 @@ class LruTest(Base):
 
     def test_unlimited_and_raised_cap(self):
         for i in range(5):
-            put(self.root, f"imagery/eox2023/14/1/{i}.jpg", MB, T0 - DAY)
+            put(self.root, f"imagery/eox2016/14/1/{i}.jpg", MB, T0 - DAY)
         c = self.make(cap_gb=0)
         self.assertEqual(c.evict(), (0, 0))
         self.assertTrue(c.set_cap(0.002))
@@ -387,14 +387,14 @@ class VersionTest(Base):
 
 class LifetimeTest(Base):
     def test_files_past_their_source_lifetime_go_at_the_walk(self):
-        put(self.root, "imagery/eox2023/14/1/0.jpg", MB, T0 - 40 * DAY)
-        put(self.root, "imagery/eox2023/14/1/1.jpg", MB, T0 - 10 * DAY)
+        put(self.root, "imagery/eox2016/14/1/0.jpg", MB, T0 - 40 * DAY)
+        put(self.root, "imagery/eox2016/14/1/1.jpg", MB, T0 - 10 * DAY)
         put(self.root, "imagery/usgs/16/1/0.jpg", MB, T0 - 400 * DAY)
         self.assertEqual(cachemod.LIFETIMES, {}, "no source limits caching time today")
-        with mock.patch.dict(cachemod.LIFETIMES, {"imagery/eox2023/": 30 * DAY}):
+        with mock.patch.dict(cachemod.LIFETIMES, {"imagery/eox2016/": 30 * DAY}):
             c = self.make()
-        self.assertFalse(exists(self.root, "imagery/eox2023/14/1/0.jpg"))
-        self.assertTrue(exists(self.root, "imagery/eox2023/14/1/1.jpg"))
+        self.assertFalse(exists(self.root, "imagery/eox2016/14/1/0.jpg"))
+        self.assertTrue(exists(self.root, "imagery/eox2016/14/1/1.jpg"))
         self.assertTrue(exists(self.root, "imagery/usgs/16/1/0.jpg"))
         self.assertEqual((c.usage(), c.stats["expired"]), ((2 * MB, 2), 1))
 
@@ -695,10 +695,10 @@ class ProducerTest(Base):
         cm.disk = c
         try:
             cm._store((1, 2), "field", colormatchmod.EMPTY, {})        # the "no seams" marker (JSON)
-            self.assertIn("colormatch/v1/usgs/12/1/2.none", c._entries)
+            self.assertIn("colormatch/v2/usgs/12/1/2.none", c._entries)
             self.clock.t += 10
             self.assertIsNotNone(cm._load((1, 2), "field"))
-            self.assertEqual(c._entries["colormatch/v1/usgs/12/1/2.none"][1], T0 + 10)
+            self.assertEqual(c._entries["colormatch/v2/usgs/12/1/2.none"][1], T0 + 10)
         finally:
             cm.close()
         ds = deshadowmod.Deshadow(self.root, dem=None, mode="full")
@@ -798,14 +798,6 @@ class ServerCacheTest(Base):
         self.assertEqual([m["type"] for m in msgs], ["hello"])
         self.assertFalse(os.path.exists(os.path.join(self.root, "c2", cachemod.VERSION_FILE)),
                          "Server() alone writes nothing into the cache root")
-
-    @unittest.skip("shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while): earthd.share_port")
-    def test_share_port(self):
-        """The BeamMP group service's port: this machine's BNGE_SHARE_PORT, else the BeamMP server's, else 47621."""
-        self.assertEqual(earthd.share_port(None, ""), earthd.peerworkmod.SHARE_PORT)
-        self.assertEqual(earthd.share_port(50000, ""), 50000)
-        self.assertEqual(earthd.share_port(50000, "51000"), 51000)
-        self.assertEqual(earthd.share_port(80, "x"), earthd.peerworkmod.SHARE_PORT, "unusable ones skipped")
 
     def test_cli(self):
         self.assertEqual(earthd.parse_cache_cap("12.5"), 12.5)

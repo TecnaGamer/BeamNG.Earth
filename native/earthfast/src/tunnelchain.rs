@@ -12,6 +12,7 @@
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::prelude::*;
+use crate::dm::Dm;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
@@ -464,7 +465,7 @@ pub fn join_arcs(xy: &[f64], s: &[f64], pts: &[f64], starts: &[i64], tol: f64, c
             let (dx, dy) = (bx - ax, by - ay);
             let l2 = dx * dx + dy * dy;
             let t = if l2 > 0.0 { (((px - ax) * dx + (py - ay) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-            let d = ((px - ax - t * dx).powi(2) + (py - ay - t * dy).powi(2)).sqrt();
+            let d = ((px - ax - t * dx).sq() + (py - ay - t * dy).sq()).sqrt();
             if d < best {
                 best = d;
                 arc = s[i] + t * (s[i + 1] - s[i]);
@@ -487,7 +488,7 @@ pub fn join_arcs(xy: &[f64], s: &[f64], pts: &[f64], starts: &[i64], tol: f64, c
             let (mut lo, mut hi) = (a0, a0);
             'walk: for w in idx.windows(2) {
                 let (px, py, qx, qy) = (pts[2 * w[0]], pts[2 * w[0] + 1], pts[2 * w[1]], pts[2 * w[1] + 1]);
-                let len = ((qx - px).powi(2) + (qy - py).powi(2)).sqrt();
+                let len = ((qx - px).sq() + (qy - py).sq()).sqrt();
                 let m = (len / STEP_M).ceil().max(1.0) as usize;
                 for k in 1..=m {
                     let t = k as f64 / m as f64;

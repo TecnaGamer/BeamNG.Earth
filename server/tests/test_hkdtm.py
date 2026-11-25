@@ -78,6 +78,42 @@ class Fetcher(TerrariumFetcher):
         return super().get(url, kind=kind, headers=headers)
 
 
+def reference_tile(t, z, x, y, size=hkdtm.TILE):
+    """HkDtm.tile as it was before the coarse test (the whole tile projected first), run on t's own methods."""
+    h = np.zeros((size, size), np.float32)
+    ok = np.zeros((size, size), bool)
+    lat, lon = hrdem.tile_lat_lon(z, x, y, size)
+    ex, ny = hkdtm.grid(lat, lon)
+    box = (float(ex.min()), float(ny.min()), float(ex.max()), float(ny.max()))
+    d = z - hkdtm.INDEX_ZOOM
+    chunk = (hkdtm.INDEX_ZOOM, x >> d, y >> d)
+    idx = t._index(chunk)
+    short = idx is None
+    if short:
+        t._want(chunk, box)
+    taken = np.zeros((size, size), bool)
+    for name, url, (x0, y0, x1, y1) in idx or ():
+        if not (x0 < box[2] and box[0] < x1 and y0 < box[3] and box[1] < y1):
+            continue
+        m = (ex >= x0) & (ex < x1) & (ny >= y0) & (ny < y1) & ~taken
+        if not m.any():
+            continue
+        taken |= m
+        s = t._sheet(name, url)
+        if s is None:
+            short = True
+        if not s:
+            continue
+        v = s.bilinear(ex[m], ny[m])
+        good = np.isfinite(v)
+        h[m] = np.where(good, v + hkdtm.TO_EGM2008_M, 0.0)
+        ok[m] = good
+    with t._lock:
+        t.stats["tiles"] += 1
+        t.stats["short"] += short
+    return h, ok, short
+
+
 def settle(t, timeout=10.0):
     """Wait for t's background downloads."""
     end = time.monotonic() + timeout
@@ -143,6 +179,173 @@ class TileTest(unittest.TestCase):
         _h, ok, short = self.dtm().tile(*paris)
         self.assertFalse(ok.any() or short)
         self.assertEqual(self.fetcher.queries, [])
+
+
+CHUNK = (hkdtm.INDEX_ZOOM, KEY[1] >> 1, KEY[2] >> 1)
+CHUNK_DECISION = "index_14_13389_7146"
+URL = "https://" + hklidar.SHEET_HOST + "/cedd/lidar/2020dtm/%s.zip"
+
+
+class FirstVisitTest(unittest.TestCase):
+    """A tile projects only a coarse part of its pixels when this run reads none of its sheets, and answers exactly as
+    when it projected them all (reference_tile): the same heights, decisions, downloads and index asked for."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = tmp.name
+        self.fetcher = Fetcher()
+        lat, lon = hrdem.tile_lat_lon(*KEY, hkdtm.TILE)
+        self.ex, self.ny = hkdtm.grid(lat, lon)
+        self.box = (float(self.ex.min()), float(self.ny.min()), float(self.ex.max()), float(self.ny.max()))
+        self.env = mock.patch.dict(os.environ, {xproc.RUN_ENV: "run1"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def dtm(self):
+        return hkdtm.HkDtm(hklidar.Sheets(os.path.join(self.root, "hklidar"), self.fetcher))
+
+    def write_index(self, extra=()):
+        """The chunk's index on disk: the extra [(name, box)] sheets first, then the fixture's two."""
+        p = self.dtm()._index_path(CHUNK)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        rows = [[n, URL % n, list(b)] for n, b in extra]
+        rows += [[k, URL % k, [e, 826800.0, e + 600, 828000.0]] for k, e in SHEETS.items()]
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(rows, fh)
+
+    def put_sheet(self, name):
+        p = self.dtm().sheets.path("dtm", name)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "wb") as fh:
+            fh.write(self.fetcher.zips[URL % name])
+
+    def put_gone(self, name):
+        p = self.dtm().sheets.path("dtm", name)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p + ".404", "wb").close()
+
+    def ask(self, tile, key):
+        """tile(HkDtm, *key) on a new HkDtm: (h, ok, short), what it decided (a name once: asking again is the first
+        ask's answer), asked to download and wanted (as [(kind, ...)] by kind, each in its order, nothing done), its
+        stats, and how many points it projected."""
+        t, log, points = self.dtm(), [], [0]
+        decide, grid = t._decide, hkdtm.grid
+        t._decide = lambda what, now: (log.append(("decide", what)) if ("decide", what) not in log else None,
+                                       decide(what, now))[1]
+        t._fetch_later = lambda name, url: log.append(("later", name))
+        t._want = lambda chunk, box: log.append(("want", chunk, box))
+
+        def counted(lat, lon):
+            points[0] += np.broadcast(lat, lon).size
+            return grid(lat, lon)
+        with mock.patch.object(hkdtm, "grid", counted):
+            got = tile(t, *key)
+        return got, sorted(log, key=lambda r: r[0]), dict(t.stats), points[0]
+
+    def same_as_before(self, key=KEY):
+        """What tile answers, after checking that reference_tile (asked first: it makes the run's decisions) did
+        the same."""
+        old = self.ask(reference_tile, key)
+        new = self.ask(lambda t, *k: t.tile(*k), key)
+        for a, b in zip(old[0], new[0]):
+            np.testing.assert_array_equal(a, b)
+        self.assertEqual(old[1:3], new[1:3])
+        self.assertEqual(old[3], hkdtm.TILE * hkdtm.TILE, "(the reference projects every pixel)")
+        return new
+
+    def decide_without_sheets(self):
+        """The run's first ask, before the sheets are on disk: they are not read this run."""
+        self.ask(reference_tile, KEY)
+
+    def test_index_missing(self):
+        (h, ok, short), log, stats, points = self.same_as_before()
+        self.assertEqual((short, ok.any(), h.any()), (True, False, False))
+        self.assertEqual(log, [("decide", CHUNK_DECISION), ("want", CHUNK, self.box)])
+        self.assertEqual(stats, {"tiles": 1, "short": 1})
+        self.assertLessEqual(points, 4096)
+
+    def test_same_wants_all_over_hong_kong(self):
+        for lat, lon in ((22.383, 114.208), (22.30, 114.17), (22.2, 113.9), (22.55, 114.4), (22.45, 114.1)):
+            for z in (15, 16, 17):
+                self.same_as_before((z, *demmod._tile_xy(lat, lon, z)))
+
+    def test_every_sheet_gone(self):
+        self.write_index()
+        for k in SHEETS:
+            self.put_gone(k)
+        (h, ok, short), log, stats, points = self.same_as_before()
+        self.assertEqual((short, ok.any(), h.any()), (False, False, False))
+        self.assertEqual(log, [("decide", CHUNK_DECISION)])
+        self.assertEqual(stats, {"tiles": 1, "short": 0})
+        self.assertLessEqual(points, 4096)
+
+    def test_sheets_on_disk_not_read_this_run(self):
+        self.write_index()
+        self.decide_without_sheets()
+        for k in SHEETS:
+            self.put_sheet(k)
+        (h, ok, short), log, stats, points = self.same_as_before()
+        self.assertEqual((short, ok.any(), h.any()), (True, False, False))
+        self.assertEqual(log, [("decide", CHUNK_DECISION), ("decide", "dtm_7SE12A"), ("decide", "dtm_7SE12B"),
+                               ("later", "7SE12A"), ("later", "7SE12B")])
+        self.assertEqual(stats, {"tiles": 1, "short": 1})
+        self.assertLessEqual(points, 4096)
+
+    def test_one_sheet_read_and_its_neighbour_not(self):
+        self.write_index()
+        self.put_sheet("7SE12A")
+        self.decide_without_sheets()                # (7SE12A on disk at its first ask: read; 7SE12B not)
+        self.put_sheet("7SE12B")
+        (h, ok, short), log, stats, points = self.same_as_before()
+        self.assertTrue(short)
+        e, n = self.ex, self.ny
+        west = (e > SHEETS["7SE12A"] + 2) & (e < SHEETS["7SE12B"] - 2) & (n > 826802) & (n < 827998)
+        np.testing.assert_allclose(h[west], ground(e, n)[west] + hkdtm.TO_EGM2008_M, atol=2e-3)
+        self.assertTrue(ok[west].all())
+        self.assertFalse(ok[e >= SHEETS["7SE12B"]].any(), "the neighbour's pixels: Mapterhorn's")
+        self.assertEqual(log, [("decide", CHUNK_DECISION), ("decide", "dtm_7SE12A"), ("decide", "dtm_7SE12B"),
+                               ("later", "7SE12B")])
+        self.assertEqual(stats, {"tiles": 1, "short": 1})
+        self.assertGreaterEqual(points, hkdtm.TILE * hkdtm.TILE)
+
+    def corner_sheet(self):
+        """A sheet whose box meets the tile's box only at its north-east corner: no pixel of the tile in it."""
+        x0, y0 = self.box[2] - 0.001, self.box[3] - 0.001
+        self.assertFalse(((self.ex >= x0) & (self.ny >= y0)).any(), "(the case: a box meeting, no pixel)")
+        return "7SE99Z", (x0, y0, x0 + 600, y0 + 600)
+
+    def test_sheet_touching_the_corner_not_gone(self):
+        self.write_index([self.corner_sheet()])
+        self.decide_without_sheets()
+        (h, ok, short), log, stats, points = self.same_as_before()
+        self.assertEqual((short, ok.any(), h.any()), (True, False, False))
+        self.assertEqual(log, [("decide", CHUNK_DECISION), ("decide", "dtm_7SE12A"), ("decide", "dtm_7SE12B"),
+                               ("later", "7SE12A"), ("later", "7SE12B")])
+        self.assertGreaterEqual(points, hkdtm.TILE * hkdtm.TILE, "it may have pixels: the tile is projected")
+
+    def test_sheet_touching_the_corner_gone(self):
+        self.write_index([self.corner_sheet()])
+        self.put_gone("7SE99Z")
+        self.decide_without_sheets()
+        (h, ok, short), log, stats, points = self.same_as_before()
+        self.assertEqual((short, ok.any(), h.any()), (True, False, False))
+        self.assertEqual(log, [("decide", CHUNK_DECISION), ("decide", "dtm_7SE12A"), ("decide", "dtm_7SE12B"),
+                               ("later", "7SE12A"), ("later", "7SE12B")])
+        self.assertLessEqual(points, 4096)
+
+    def test_sheet_with_one_pixel_off_the_lattice(self):
+        e, n = float(self.ex[101, 103]), float(self.ny[101, 103])
+        box = (e - 0.001, n - 0.001, e + 0.001, n + 0.001)
+        self.assertEqual(((self.ex >= box[0]) & (self.ex < box[2]) & (self.ny >= box[1]) & (self.ny < box[3])).sum(), 1)
+        self.write_index([("7SE98Y", box)])
+        self.decide_without_sheets()
+        (h, ok, short), log, stats, points = self.same_as_before()
+        self.assertEqual((short, ok.any(), h.any()), (True, False, False))
+        self.assertEqual(log, [("decide", CHUNK_DECISION), ("decide", "dtm_7SE98Y"), ("decide", "dtm_7SE12A"),
+                               ("decide", "dtm_7SE12B"), ("later", "7SE98Y"), ("later", "7SE12A"),
+                               ("later", "7SE12B")])
+        self.assertGreaterEqual(points, hkdtm.TILE * hkdtm.TILE)
 
 
 class DemTest(unittest.TestCase):

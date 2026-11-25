@@ -13,6 +13,7 @@ from concurrent.futures import CancelledError
 import numpy as np
 import dnp
 import exitsigns
+import netfetch
 import recreationrules
 import routeindex
 import xproc
@@ -58,7 +59,10 @@ class Tags:
             for start in range(0, len(missing), 64):
                 batch = missing[start:start+64]
                 url = f'https://api.openstreetmap.org/api/0.6/{kind}s.json?{kind}s='+','.join(map(str,batch))
-                elements = json.loads(self.fetcher.get(url, kind='demand', lane='recreation-exits').body)['elements']
+                # (last week's copies in hand: a failure is stale-if-error, no build's fault)
+                with netfetch.stale_ok(len(stale) == len(ids)):
+                    body = self.fetcher.get(url, kind='demand', lane='recreation-exits').body
+                elements = json.loads(body)['elements']
                 found = {int(e['id']):e for e in elements if e.get('type') == kind}
                 if set(found) != set(batch):raise ValueError('Incomplete OSM destination response')
                 folder = self.directory/kind;folder.mkdir(parents=True, exist_ok=True)
@@ -112,7 +116,7 @@ def records(links, mains, ways, nodes):
             if station<250:continue
             projected=p[k]+t[k]*(p[k+1]-p[k]);arc=np.r_[0.,np.cumsum(lengths)]
             start=max(0.,station-1800.)
-            approach=np.vstack([[np.interp(start,arc,p[:,j]) for j in (0,1)],p[(arc>start)&(arc<station)],projected])
+            approach=np.vstack([[dnp.interp(start,arc,p[:,j]) for j in (0,1)],p[(arc>start)&(arc<station)],projected])
             right=np.array([tangent[1],-tangent[0]])
             lateral=dnp.matmul((path-point)*scale, right)
             side=next((1 if v>0 else -1 for v in lateral if abs(v)>1.),None)

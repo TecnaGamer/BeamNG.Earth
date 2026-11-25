@@ -1,5 +1,5 @@
 """The roads layer as mapdata.MapData._decoded_layer leaves it, kept on disk for the server's other processes and the
-next run: a cell's roads with OpenStreetMap's rail and lane tags joined, the level ways promoted, the merged highways'
+next run: a cell's roads with OpenStreetMap's road, rail and lane tags joined, the level ways promoted, the merged highways'
 lane sections split out and the bends rounded (roadsmooth.py). Every process made them again for each cell it read
 (~20 ms of thread CPU a city cell, the lane sections and the rounding 0.9 of it: 752 decodes, 17 CPU-s of a first visit
 to York PA across its processes, 4.7 s of them in the process whose first graded block everything waited for;
@@ -30,11 +30,12 @@ import mapgeom
 log = logging.getLogger("earthd.roadlayercache")
 
 ON = os.environ.get("BNE_ROADS_DEC", "on") not in ("off", "0", "false")
-FORMAT = 1
+FORMAT = 2                  # (2: the OSM road tags' build in the key, joined at the decode: mapdata roads 10)
 # kept on the layer beside its arrays (_lane_section_joints: lanesections' joints as the split made them, before
 # the bends were rounded: read from the rounded lines instead, a slip road's mouth stood elsewhere and one building of
 # an I-83 tile was cut differently, 2026-11-12)
-STATE = ("_lanes_built", "_rails_built", "_rail_nodes", "_sign_nodes", "_road_revision", "_lane_section_joints")
+STATE = ("_lanes_built", "_rails_built", "_osm_built", "_rail_nodes", "_sign_nodes", "_road_revision",
+         "_lane_section_joints")
 MEMOS = ("_xy_in", "_centres", "_boxes", "_boxes_in", "_ll_boxes", "_lonlat_boxes", "_feature_boxes", "_ecef",
          "_id_pos", "_ids_at")      # pure in the arrays, made again when asked for: not kept
 FIELDS = ("layer", "ids", "kind", "part_off", "ring_off", "coord_off", "lonlat", "en", "own", "clipped", "attrs", "rules")
@@ -91,8 +92,10 @@ def _dtype(descr):
     return np.lib.format.descr_to_dtype(descr if isinstance(descr, str) else [tuple(x) for x in descr])
 
 
-def key(code, stamp, rails, lanes, switches):
-    return json.dumps([FORMAT, code, stamp, rails, lanes, switches], sort_keys=True)
+def key(code, stamp, rails, lanes, switches, osm):
+    """The key of a decode: the code, the layer file's stamp, the rail / lane / OSM road tags' builds it joined, the
+    switches."""
+    return json.dumps([FORMAT, code, stamp, rails, lanes, switches, osm], sort_keys=True)
 
 
 def encode(f):
@@ -227,15 +230,31 @@ def has(d, want):
 def store(d, want, f, ctx):
     """Features f written to folder d under key want (ctx: [(neighbour cell string, its file's stamp)]): the bytes
     written, or 0 when it is not kept."""
+    got = _prepare(d, want, f, ctx)
+    return _write(*got) if got is not None else 0
+
+
+def _prepare(d, want, f, ctx):
+    """store's part that reads f (its arrays' bytes copied, its table and meta): (d, want, table, raw, meta) or None
+    when it is not kept."""
     try:
         arrays, meta = encode(f)
     except Unkept as e:
         log.debug("road layer %s: not kept: %s", d, e)
-        return 0
+        return None
     meta["ctx"] = [[c, s] for c, s in ctx]
-    tmp = f"{d}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         table, raw = _blob(arrays)
+    except Exception as e:
+        log.debug("road layer %s: not written: %s: %s", d, type(e).__name__, e)
+        return None
+    return d, want, table, raw, meta
+
+
+def _write(d, want, table, raw, meta):
+    """store's part that writes (the frame packed, the folder renamed into place): the bytes written, or 0."""
+    tmp = f"{d}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
         z = bytes(_ef().zstd_pack(raw, LEVEL))
         os.makedirs(tmp, exist_ok=True)
         with open(os.path.join(tmp, BLOB), "wb") as fh:
@@ -254,3 +273,75 @@ def store(d, want, f, ctx):
         log.debug("road layer %s: not written: %s: %s", d, type(e).__name__, e)
         shutil.rmtree(tmp, ignore_errors=True)
         return 0
+
+
+# The writes on a thread of their own (2026-11-21, road waits): a cell's decode handed its layer to the tiles waiting for
+# it only once the layer was packed and written, and on a first visit's busy disk that was most of the wait of a road
+# tile's neighbour reads (26 of a Newark tile's 65 s in the writes). What the write reads of the layer is copied before
+# the decode returns (_prepare); the pack, the files and the rename follow. A write not done when the process ends is
+# lost: the layer is decoded again next time, as before. BNE_ROADS_DEC_ASYNC=off: written before the decode returns.
+ASYNC = os.environ.get("BNE_ROADS_DEC_ASYNC", "on") not in ("off", "0", "false")
+PENDING_MAX = 16            # writes queued at most (~2.6 MB a city cell's; past it the decode writes its own)
+_queue = []
+_cv = threading.Condition()
+_busy = [0]
+_thread = []
+
+
+def store_later(d, want, f, ctx, on_written=None):
+    """store, its write on the writer thread (ASYNC; on_written(bytes) after it). The bytes written when written here
+    (not ASYNC, or the queue full), else 0."""
+    got = _prepare(d, want, f, ctx)
+    if got is None:
+        return 0
+    with _cv:
+        if ASYNC and len(_queue) < PENDING_MAX:
+            _queue.append((got, on_written))
+            if not _thread or not _thread[0].is_alive():
+                t = threading.Thread(target=_writer, daemon=True, name="roads-dec-write")
+                _thread[:] = [t]
+                t.start()
+            _cv.notify()
+            return 0
+    size = _write(*got)
+    if size and on_written is not None:
+        on_written(size)
+    return size
+
+
+def _writer():
+    while True:
+        with _cv:
+            while not _queue:
+                _cv.wait()
+            got, on_written = _queue.pop(0)
+            _busy[0] += 1
+        try:
+            size = _write(*got)
+            if size and on_written is not None:
+                on_written(size)
+        except Exception as e:      # (never the writer's end)
+            log.debug("road layer write: %s: %s", type(e).__name__, e)
+        finally:
+            with _cv:
+                _busy[0] -= 1
+                _cv.notify_all()
+
+
+def flush(timeout=None):
+    """Wait for the queued writes (tests, a clean exit); True when none is left."""
+    import time
+    end = None if timeout is None else time.monotonic() + timeout
+    with _cv:
+        while _queue or _busy[0]:
+            left = None if end is None else end - time.monotonic()
+            if left is not None and left <= 0:
+                return False
+            _cv.wait(left)
+    return True
+
+
+def pending(d, want):
+    """Is a write of folder d under key want queued or being written in this process?"""
+    with _cv:
+        return any(g[0] == d and g[1] == want for g, _cb in _queue)

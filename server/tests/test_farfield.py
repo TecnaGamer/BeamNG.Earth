@@ -125,7 +125,7 @@ class SelectionTest(unittest.TestCase):
         u, _ = ff.select(600.0, 0.0, both)
         # Moving the block only changes tiles in the union of both footprints, and only
         # between L0 and coarser levels there.
-        adds, removes = ff.diff(a, b)
+        adds, removes = [k for k in b if k not in a], [k for k in a if k not in b]
         for k in adds + removes:
             self.assertTrue(any(ff.overlaps(ff.tile_of(k).bbox, x) for x in both), k)
         self.assertLess(len(adds) + len(removes), 30)
@@ -305,6 +305,16 @@ class LayoutTest(unittest.TestCase):
             self.assertFalse(hasattr(ff, name), name)
         for table in (ff.K_TABLE, ff.NEAR_RADII, ff.MESH_MIN_LEVEL, ff.CONTENT_FORMAT, ff.TEX_DEFAULT):
             self.assertEqual(set(table), set(ff.CELL_COUNTS))
+
+
+class SurfaceSamplingTest(unittest.TestCase):
+    def test_interpolates_stored_float32_edges(self):
+        # The edge rises by 1024 + 2^-16 metres. In a stored float32 grid
+        # this edge difference rounds to 1024 before interpolation.
+        grid = np.array([[-2.0 ** -16, 1024.0], [-2.0 ** -16, 1024.0]], np.float32)
+        self.assertEqual(float(ff.surface_at(grid, 1.0, 0.25, 0.0)), 256.0 - 2.0 ** -16)
+        self.assertEqual(float(ff.surface_at(grid.astype(np.float64), 1.0, 0.25, 0.0)),
+                         256.0 - 3.0 * 2.0 ** -18)
 
 
 class TileGeometryTest(unittest.TestCase):

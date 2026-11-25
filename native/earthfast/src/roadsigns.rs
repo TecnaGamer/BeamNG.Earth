@@ -290,7 +290,7 @@ fn dead_length(net: &Net, e: usize, ends: &HashMap<i64, usize>, outgoing: &HashM
         let arms = *ends.get(&ed.to).unwrap_or(&0);
         if arms == 1 {
             let (p, _) = net.at(ed.road, if ed.fwd { ed.sb } else { ed.sa });
-            let shut = open.iter().any(|q| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) < OPEN_END_M * OPEN_END_M);
+            let shut = open.iter().any(|q| (q[0] - p[0]).sq() + (q[1] - p[1]).sq() < OPEN_END_M * OPEN_END_M);
             return if shut { None } else { Some(total) };
         }
         if arms != 2 { return None; }
@@ -329,7 +329,7 @@ fn on_road(net: &Net, q: [f64; 2]) -> Option<(usize, f64)> {
             let (dx, dy) = (bx - ax, by - ay);
             let l2 = (dx * dx + dy * dy).max(1e-12);
             let t = (((q[0] - ax) * dx + (q[1] - ay) * dy) / l2).clamp(0.0, 1.0);
-            let d2 = (ax + t * dx - q[0]).powi(2) + (ay + t * dy - q[1]).powi(2);
+            let d2 = (ax + t * dx - q[0]).sq() + (ay + t * dy - q[1]).sq();
             if d2 <= CROSSING_ON_M * CROSSING_ON_M && best.map_or(true, |b| d2 < b.2) {
                 best = Some((r, rd.s[k - rd.a] + t * l2.sqrt(), d2));
             }
@@ -586,7 +586,7 @@ fn poles(signs: Vec<Sign>, pole: &[f64; N_POLE]) -> Vec<Sign> {
     for i in 0..n {
         if taken[i] { continue; }
         let s = &signs[i];
-        let near = |o: &Sign| dot(o.dir, s.dir) > SAME_WAY_COS && (o.xy[0] - s.xy[0]).powi(2) + (o.xy[1] - s.xy[1]).powi(2) < PANEL_GAP_M * PANEL_GAP_M;
+        let near = |o: &Sign| dot(o.dir, s.dir) > SAME_WAY_COS && (o.xy[0] - s.xy[0]).sq() + (o.xy[1] - s.xy[1]).sq() < PANEL_GAP_M * PANEL_GAP_M;
         if out.iter().any(near) || singles.iter().any(near) { continue; }
         singles.push(s.clone());
     }
@@ -607,7 +607,7 @@ pub fn plan(a: &Input) -> Vec<Sign> {
         let (p, q) = (a.off[r] as usize, a.off[r + 1] as usize);
         let mut s = vec![0.0f64; q.saturating_sub(p)];
         for k in p + 1..q {
-            s[k - p] = s[k - p - 1] + ((a.pts[[k, 0]] - a.pts[[k - 1, 0]]).powi(2) + (a.pts[[k, 1]] - a.pts[[k - 1, 1]]).powi(2)).sqrt();
+            s[k - p] = s[k - p - 1] + ((a.pts[[k, 0]] - a.pts[[k - 1, 0]]).sq() + (a.pts[[k, 1]] - a.pts[[k - 1, 1]]).sq()).sqrt();
         }
         let flags = if a.meta.ncols() > 5 { a.meta[[r, 5]] as i64 } else { 0 };
         let road = Road { a: p, b: q, s, hw: a.meta[[r, 0]], dir: a.meta[[r, 1]] as i64, rank: a.meta[[r, 2]] as i64,
@@ -672,7 +672,7 @@ pub fn plan(a: &Input) -> Vec<Sign> {
                 for &j in grid.get(&(c.rule, gx + dx, gy + dy)).map_or(&[][..], |v| &v[..]) {
                     let o = &cands[j];
                     if dot(o.dir, c.dir) > SAME_WAY_COS
-                        && (o.xy[0] - c.xy[0]).powi(2) + (o.xy[1] - c.xy[1]).powi(2) < gap * gap {
+                        && (o.xy[0] - c.xy[0]).sq() + (o.xy[1] - c.xy[1]).sq() < gap * gap {
                         near = true;
                         break 'scan;
                     }
@@ -724,7 +724,7 @@ pub fn plan(a: &Input) -> Vec<Sign> {
         }
         let Some((q, t, road_xy)) = found else { continue };
         if (0..a.avoid.nrows()).any(|k| dot([a.avoid[[k, 2]], a.avoid[[k, 3]]], t) > SAME_WAY_COS
-                                    && (a.avoid[[k, 0]] - q[0]).powi(2) + (a.avoid[[k, 1]] - q[1]).powi(2) < AVOID_M * AVOID_M) {
+                                    && (a.avoid[[k, 0]] - q[0]).sq() + (a.avoid[[k, 1]] - q[1]).sq() < AVOID_M * AVOID_M) {
             continue;
         }
         let size = if rd.urban { 0 } else if rd.rank >= PRIMARY { 2 } else { 1 };
@@ -1201,7 +1201,7 @@ mod tests {
         for (i, a) in s.iter().enumerate() {
             for b in &s[i + 1..] {
                 if dot(a.dir, b.dir) > SAME_WAY_COS {
-                    assert!((a.xy[0] - b.xy[0]).powi(2) + (a.xy[1] - b.xy[1]).powi(2) >= PANEL_GAP_M * PANEL_GAP_M, "{s:?}");
+                    assert!((a.xy[0] - b.xy[0]).sq() + (a.xy[1] - b.xy[1]).sq() >= PANEL_GAP_M * PANEL_GAP_M, "{s:?}");
                 }
             }
         }
@@ -1246,7 +1246,7 @@ mod tests {
         for (i, a) in s.iter().enumerate() {
             for b in &s[i + 1..] {
                 if dot(a.dir, b.dir) > SAME_WAY_COS {
-                    assert!((a.xy[0] - b.xy[0]).powi(2) + (a.xy[1] - b.xy[1]).powi(2) >= PANEL_GAP_M * PANEL_GAP_M, "{s:?}");
+                    assert!((a.xy[0] - b.xy[0]).sq() + (a.xy[1] - b.xy[1]).sq() >= PANEL_GAP_M * PANEL_GAP_M, "{s:?}");
                 }
             }
         }
@@ -1288,7 +1288,7 @@ mod tests {
         let (l, r) = (of(&s, CHEVRON_LEFT), of(&s, CHEVRON_RIGHT));
         assert_eq!((l.len(), r.len()), (3, 3), "{s:?}");
         for c in l.iter().chain(r.iter()) {
-            let d = ((c.xy[0] + 25.0).powi(2) + (c.xy[1] - 25.0).powi(2)).sqrt();
+            let d = ((c.xy[0] + 25.0).sq() + (c.xy[1] - 25.0).sq()).sqrt();
             assert!(d > 25.0 + 4.0, "on the outside of the bend: {c:?} is {d} m from its centre");
         }
     }

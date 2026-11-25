@@ -49,6 +49,10 @@ class LimitTest(unittest.TestCase):
         self.assertIsNone(budget.desktop_sizes(0))
         dem, md, shed, rot, road, far = budget.desktop_sizes(16384.0)
         self.assertEqual((dem, md, shed, rot), (512, 256, 3000, 4000))
+        # the map data cache goes on growing with the limit past 16 GB (a 48 GB PC's Auto, 24 GB: a dense city's road
+        # tiles decoded their cells' layers again and again in 256 MB)
+        self.assertEqual(budget.desktop_sizes(24576.0)[1], 384)
+        self.assertEqual(budget.desktop_sizes(20480.0)[1], 320)
         small = budget.desktop_sizes(budget.limit_mb(24.0))
         self.assertLess(small[0], 512)
         self.assertGreaterEqual(small[4], 3)
@@ -141,6 +145,30 @@ class WatchTest(unittest.TestCase):
         memwatch._state.clear()
         memwatch._state.update(self.saved[0])
         budget.OVER, budget.LOW_FREE_GB, budget.LIMIT_MB = self.saved[1:]
+        budget.ROOM_MB, budget.POOL_MB = None, {}
+
+    def test_a_burst_starts_only_where_it_fits(self):
+        """Daytona session 2026-11-19: 7 far-tile burst processes (~0.7 GB each) started at 21-22 GB of a 24 GB limit
+        took the server to 27.3 GB. The watchdog leaves the room and each pool's process size for the burst's check
+        (pools.burst_fits), and the summary says where the memory is (by_pool)."""
+        import pools
+        far = _Pool([11, 12])
+        far.name = "far tile"
+        road = _Pool([13])
+        road.name = "road tile"
+        mbs = {1: 900, 11: 600, 12: 700, 13: 1000}
+        self.assertEqual(self.w.step(mbs, 3200, 8000, [far, road]), "ok")
+        self.assertEqual((budget.ROOM_MB, budget.POOL_MB), (800.0, {"far tile": 700, "road tile": 1000}))
+        self.assertTrue(pools.burst_fits("far tile", 1))
+        self.assertFalse(pools.burst_fits("far tile", 2), "two more of 700 MB: not in 800 MB")
+        self.assertTrue(pools.burst_fits("bldfar", 7), "a pool not measured yet: as before")
+        line = memwatch.by_pool(mbs, [far, road])
+        self.assertEqual(line, "far tile 2 x 700 max = 1300, road tile 1000, other 900")   # (pid 1: not this process)
+        self.assertEqual(memwatch.by_pool({os.getpid(): 1500, 13: 1000}, [road]), "main 1500, road tile 1000")
+        memwatch._state["limit"] = 0.0
+        self.w.step(mbs, 3200, 8000, [far, road])
+        self.assertIsNone(budget.ROOM_MB)
+        self.assertTrue(pools.burst_fits("far tile", 7), "no limit: no check")
 
     def test_under_soft_nothing(self):
         a, b = _Pool([11]), _Pool([12])
@@ -164,9 +192,40 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(memwatch._state["rotations"], 1)
 
     def test_short_system_lowers_the_limit(self):
-        mbs = {1: 1000, 11: 1000, 12: 1000}         # 3000 of 4000, but 200 MB available of a 954 MB reserve
-        self.assertEqual(self.w.step(mbs, 3000, 200, [_Pool([11]), _Pool([12])]), "shed")
-        self.assertLess(memwatch._state["eff"], 3000)
+        memwatch._state["limit"] = 8000.0
+        mbs = {1: 2000, 11: 2000, 12: 2000}         # 6000 of 8000, but 200 MB available of a 954 MB reserve
+        self.assertEqual(self.w.step(mbs, 6000, 200, [_Pool([11]), _Pool([12])]), "shed")
+        self.assertLess(memwatch._state["eff"], 6000)
+
+    def test_never_below_the_floor(self):
+        """A low limit (an 8 GB PC's Auto ~2.5 GB, a 4 GB one's 1.5 GB) or one lowered while the computer is short of
+        memory: held to FLOOR_MB, where the lean server's own process and a road process fit (1.10.0-beta: a 3 GB
+        setting lowered to 1.2 GB, the server over it at every check)."""
+        for limit, avail in ((1536.0, 8000), (2518.0, 8000), (3072.0, 0)):
+            memwatch._state["limit"] = limit
+            w = memwatch._Watch(clock=lambda: self.t[0])
+            mbs = {1: 1700, 11: 700}                # (the lean layout: the server and its road process)
+            self.assertEqual(w.step(mbs, 2400, avail, [_Pool([11])]), "ok", (limit, avail))
+            self.assertEqual(memwatch._state["eff"], memwatch.FLOOR_MB)
+            self.assertFalse(budget.OVER)
+        self.assertEqual(memwatch.status()["limitMB"], round(memwatch.FLOOR_MB), "the settings page: what is held")
+        memwatch._state["limit"] = 0.0
+        self.assertEqual(memwatch.floored(0.0), 0.0, "no limit: none")
+
+    def test_too_low_said_once_then_cleared(self):
+        mbs = {1: 3000, 11: 2000}
+        pools_ = [_Pool([11], inflight=5)]          # (a backlog: never replaced, the server stays over)
+        with self.assertLogs("earthd.memwatch", "WARNING") as cm:
+            for _ in range(40):
+                self.w.step(mbs, 5000, 8000, pools_)
+                self.t[0] += 5
+        self.assertEqual(sum("too low" in r for r in cm.output), 1, cm.output)
+        self.assertTrue(memwatch.status()["tooLow"])
+        self.assertIn("Max RAM", memwatch.too_low())
+        self.t[0] += 5
+        self.w.step({1: 1500, 11: 500}, 2000, 8000, pools_)
+        self.assertFalse(memwatch.status()["tooLow"])
+        self.assertEqual(memwatch.too_low(), "")
 
     def test_status_and_live_setting(self):
         with mock.patch.dict(os.environ, {budget.SETTING_ENV: ""}), \

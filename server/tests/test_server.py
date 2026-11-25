@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cdae  # noqa: E402
 import earthd  # noqa: E402
+import protocol  # noqa: E402
 import farpvs  # noqa: E402
 import revisitpack  # noqa: E402
 import farfield as ff  # noqa: E402
@@ -67,10 +68,10 @@ def cells(keys, cell=256.0):
 
 class FakeImagery(imagery.Imagery):
     """Imagery whose 'downloads' are synthetic tiles: seeded noise, red channel 60 for usgs and
-    140 for the EOX layers (no network). usgs has data only east of LON (so the chain falls back to eox2023
-    west of it); counts every load."""
+    140 for the global Sentinel-2 layer (no network). usgs has data only east of LON (so the chain falls back to
+    eox2016 west of it); counts every load."""
 
-    def __init__(self, cache_dir, chain=("usgs", "eox2023", "eox2016"), **kw):     # (no lazy NAIP: timing)
+    def __init__(self, cache_dir, chain=("usgs", "eox2016"), **kw):     # (no lazy NAIP: timing)
         super().__init__(cache_dir, chain, **kw)
         self.loads = 0
 
@@ -116,10 +117,10 @@ class ServerHarness(unittest.TestCase):
         self.thread.start()
 
         async def start():
-            return await asyncio.start_server(
+            return await protocol.start_server(
                 lambda r, w: earthd.Connection(self.server, r, w).run(), "127.0.0.1", 0)
         self.srv = asyncio.run_coroutine_threadsafe(start(), self.loop).result(10)
-        self.c = Client(self.srv.sockets[0].getsockname()[1])
+        self.c = Client(protocol.listen_port(self.srv))
 
     def tearDown(self):
         self.c.close()
@@ -146,6 +147,21 @@ class ServerHarness(unittest.TestCase):
 
     def conn(self):
         return next(iter(self.server.connections))
+
+    def record_dispatch(self):
+        """[tile key] in the order the server starts their builds (Server.tile, on the event loop): its scheduling
+        decision. The send order is the builds' completion order, and under load one worker descheduled in a build lets
+        the others finish any number of later tiles first (gate 303: an under-block corner tile sent after 3 tiles
+        outside the block; a slack of tile_workers - 1 positions assumed every build took as long)."""
+        s, order, tile = self.server, [], self.server.tile
+
+        def spy(anchor, t, *a, **kw):
+            ck = s.far_ck(anchor.id, t.key)
+            if ck not in s.tiles and ck not in s.tile_inflight and ck not in s.renewing:
+                order.append(t.key)
+            return tile(anchor, t, *a, **kw)
+        s.tile = spy
+        return order
 
     def fs(self, vfs):
         self.assertTrue(vfs.startswith(f"/temp/beamngEarth/{self.server.sid}/"))
@@ -285,9 +301,13 @@ class ServerTest(ServerHarness):
         aid = a1["anchorId"]
         h = self.check_terrain(a1["terrain"], 0.0, 0.0)
         self.assertEqual(a1["terrain"]["q"], 1 / 128)     # 600 m relief over the survey, under 512 m in a block (survey_q on block-sized windows, 2026-11-12)
-        self.assertEqual(a1["terrain"]["heightmap"], f"/temp/beamngEarth/{self.server.sid}/hm_{aid}_0_0.png")
+        self.assertRegex(a1["terrain"]["heightmap"], rf"^/temp/beamngEarth/{self.server.sid}/hm_{aid}_0_0_\d+\.png$")
         self.assertAlmostEqual(a1["groundZ"], h[1024, 1024], delta=0.001)   # sample (1024, 1024) = (0, 0)
 
+        dispatched = self.record_dispatch()
+        # (the camera before the commits: the builds started before the mod's first pose go by distance alone, and how
+        # many there are depends on the machine's load; MeshServerTest.start)
+        self.pose(aid, 0, 0)                # (a pose of a prepared, newer anchor commits it: connection_pose)
         c.send({"type": "commit_anchor", "anchorId": aid})
         c.send({"type": "commit_terrain", "anchorId": aid, "cx": 0, "cy": 0})
         self.pose(aid, 0, 0)
@@ -307,21 +327,19 @@ class ServerTest(ServerHarness):
         self.check_cover(far, aid, 0, 0, [(0, 0)])
         # The initial set is one-sided groups (nothing to replace).
         self.assertTrue(all(not s["remove"] for s in far.swaps))
-        # The 64 L0 tiles under the committed (2 km) block come first, then nearest-first.
+        # The 64 L0 tiles under the committed (2 km) block are built first, then nearest-first (the order the builds
+        # start in: record_dispatch; each built once).
+        dispatched = list(dispatched)       # (the initial set's)
+        self.assertEqual(sorted(dispatched), sorted(want))
         under = [m for m in tiles if overlaps(ff.tile_of(m["key"]).bbox, ff.Block(0, 0, self.block).bbox)]
-        # Builds run tile_workers at a time, so the last of them may finish after a tile that
-        # started alongside it (seen under CPU load): allow that much slack.
-        first = {m["key"] for m in tiles[:64 + self.server.tile_workers - 1]}
-        self.assertEqual(len(under), 64)
-        self.assertLessEqual({m["key"] for m in under}, first)
-        # The other tiles nearest first, up to the same completion-order jitter. The block tiles
-        # are left out: the slack above lets a corner one (1086 m away) arrive after position
-        # 64, ahead of the 1024 m ring outside the block (a flaky failure under CPU load when
-        # this took tiles[64:]).
         under_keys = {m["key"] for m in under}
+        self.assertEqual(len(under), 64)
+        self.assertEqual(set(dispatched[:64]), under_keys)
+        # The other tiles nearest first, up to tile_workers positions (the selection's own groups and ties). The block
+        # tiles are left out: a corner one (1086 m away) is farther than the 1024 m ring outside the block.
         # (view-weighted, 2026-10-16: the poses' camera looks north from 8 m behind the player)
         cone = ff.view_cone({"x": 0, "y": -8, "fx": 0, "fy": 1, "fovDeg": 60})
-        rest = [ff.view_distance(want[m["key"]], cone, 0, 0) for m in tiles if m["key"] not in under_keys]
+        rest = [ff.view_distance(want[k], cone, 0, 0) for k in dispatched if k not in under_keys]
         ds = sorted(rest)
         slack = self.server.tile_workers
         late = [i for i in range(len(rest)) if rest[i] > ds[min(i + slack, len(ds) - 1)]]
@@ -370,17 +388,28 @@ class ServerTest(ServerHarness):
 
         # --- prefetch: driving east at 30 m/s from x = 900 predicts a block at 1024 ---
         self.pose(aid, 900, 0, vx=30)
-        path = os.path.join(self.server.out_dir, f"hm_{aid}_1024_0.png")
+        key = (aid, 1024., 0.)
         end = time.monotonic() + 30
-        while not os.path.exists(path) and time.monotonic() < end:
+        while key not in self.server.hm and time.monotonic() < end:
             time.sleep(0.02)
-        self.assertTrue(os.path.exists(path), "prefetch did not build the predicted terrain")
+        self.assertIn(key, self.server.hm, "prefetch did not build the predicted terrain")
         time.sleep(0.2)
-        t0 = time.monotonic()
+        # Served from the cache: no build of that block again, the prefetched file sent (a reply time limit of 0.15 s
+        # measured the machine's load: 0.18 s with the interpreter contended).
+        cached = self.server.hm[key]["heightmap"]
+        built = []
+        make = self.server.make_heightmap
+
+        def counted(anchor, cx, cy, *a, **kw):
+            built.append((anchor.id, cx, cy))
+            return make(anchor, cx, cy, *a, **kw)
+        self.server.make_heightmap = counted
         c.send({"type": "prepare_terrain", "requestId": 6, "anchorId": aid, "cx": 1024, "cy": 0})
         tr, seen = c.until(lambda m: m["type"] == "terrain_ready", timeout=30)
+        self.server.make_heightmap = make
         self.assertEqual((tr["requestId"], tr["cx"]), (6, 1024.0))
-        self.assertLess(time.monotonic() - t0, 0.15)            # served from the cache
+        self.assertNotIn(key, built)
+        self.assertEqual(os.path.basename(tr["heightmap"]), cached)
         far.apply(seen)
         if not [m for m in seen if m["type"] == "far_done"] or self.conn().dirty:
             self.stream_until_done(far, aid)
@@ -429,13 +458,26 @@ class ServerTest(ServerHarness):
         self.pose(aid2, 0, 0, held={})                      # empty Lua table: may encode as {}
         # Deleted gradually, not in one burst (a burst stalled the game ~300 ms, in-game 2026-10-10):
         # once deletion has started there are still files left for a while.
-        # (delete_interval 2 ms: on Windows ~16 ms, its event loop's timer resolution)
-        end = time.monotonic() + 5 + 0.02 * before
+        # (delete_interval 2 ms: on Windows ~16 ms, its event loop's timer resolution; the pacing itself is
+        # DeleteQueueTest's)
+        # Waited for until the server says its part is done: the old anchor pruned (a prune waits while one of its
+        # builds runs) and the paced queue drained. A wall-clock limit measured the machine's load instead: under the
+        # gate's idle-priority lanes the loop, the delete thread and the builds took >20 ms per file of hops between
+        # them (gates 295, 298: 659 files left after 18 s while the queue was still draining).
+        s = self.server
+
+        async def drained():        # (on the loop: prune() forgets the anchor and queues its files in one callback)
+            return aid not in s.anchors and not s.delete_queue and not s._deleting
+
+        def server_done():
+            return asyncio.run_coroutine_threadsafe(drained(), self.loop).result(60)
+        end = time.monotonic() + 300
         partial = False
         while time.monotonic() < end:
+            done = server_done()        # (read before the listing: a file listed after it is a file the server left)
             n = len(glob.glob(os.path.join(self.server.out_dir, f"far_{aid}_*")))
             partial |= 0 < n < before
-            if n == 0:
+            if n == 0 or done:
                 break
             time.sleep(0.01)
         self.assertTrue(partial, "old tile files were deleted all at once")
@@ -547,6 +589,37 @@ class ServerTest(ServerHarness):
             self.assertIn(key, s.hm)
         s.connections = set()
 
+    @mock.patch.object(earthd, "HM_CACHE", 4)
+    def test_eviction_drops_the_blocks_the_mod_never_had_first(self):
+        """Daytona laps (2026-11-19): ~30 prefetched guesses a lap beside the ~10 blocks the mod asked for pushed those
+        out before the car was back on them. The guesses go first, then the used ones, least recently used first."""
+        s = self.server
+        s.hm.clear()
+        s.hm_committed.clear()
+        s.hm_sent.clear()
+        used = [(1, 0.0, 0.0), (1, 128.0, 0.0), (1, 256.0, 0.0)]
+        for key in used:
+            s.hm[key] = {}
+            s.hm_sent.append(key)
+        guesses = [(1, 0.0, 512.0), (1, 0.0, 640.0), (1, 0.0, 768.0)]
+        for key in guesses:
+            s.hm[key] = {}
+        s.hm_committed.append(used[-1])
+        s.evict_heightmaps(fresh=guesses[-1])
+        self.assertEqual(set(s.hm), {used[0], used[1], used[2], guesses[-1]})
+        self.assertIn(used[0], s.hm_sent.ever)
+        self.assertNotIn(guesses[0], s.hm_sent.ever)
+        s.hm[(1, 0.0, 896.0)] = {}           # (one more: the last guess goes, no longer the fresh one)
+        s.evict_heightmaps(fresh=(1, 0.0, 896.0))
+        self.assertEqual(set(s.hm), set(used) | {(1, 0.0, 896.0)})
+        s.hm_sent.append((1, 0.0, 896.0))    # (the mod has it: now the least recently used it had goes, never protected)
+        s.hm[(1, 0.0, 1024.0)] = {}
+        s.evict_heightmaps(fresh=(1, 0.0, 1024.0))
+        self.assertEqual(set(s.hm), {used[1], used[2], (1, 0.0, 896.0), (1, 0.0, 1024.0)})
+        self.assertNotIn(used[0], s.hm_sent.ever)
+        s.hm.clear()
+        s.removes_flush()
+
     def test_a_slow_terrain_request_is_logged_and_still_answered(self):
         c = self.c
         self.hello()
@@ -594,9 +667,9 @@ class ServerTest(ServerHarness):
         async def run():
             conn = self.conn()
             conn.active = 1
-            conn._retire([(1, "0_0_0")])
+            conn.far.retire_at((1, "0_0_0"), time.monotonic())
             used = self.server.in_use()
-            conn.retired[(1, "0_0_0")] -= 61.0
+            conn.far.retire_at((1, "0_0_0"), conn.retired[(1, "0_0_0")] - 61.0)
             return used, self.server.in_use()
         self.hello()
         used, later = asyncio.run_coroutine_threadsafe(run(), self.loop).result(10)
@@ -627,18 +700,20 @@ class ServerTest(ServerHarness):
         a = self.prepare_anchor(1, LAT, LON)
         aid = a["anchorId"]
         c.send({"type": "commit_anchor", "anchorId": aid})
+        heights = {0: os.path.basename(a["terrain"]["heightmap"])}
         for n, cx in enumerate(range(256, 256 * 10, 256)):
             c.send({"type": "prepare_terrain", "requestId": 10 + n, "anchorId": aid, "cx": cx, "cy": 0})
             m, _ = c.until(lambda m: m["type"] == "terrain_ready" and m["requestId"] == 10 + n, timeout=60)
+            heights[cx] = os.path.basename(m["heightmap"])
             if n == 2:
                 c.send({"type": "commit_terrain", "anchorId": aid, "cx": cx, "cy": 0})
         time.sleep(0.2)
         files = sorted(os.path.basename(p) for p in glob.glob(os.path.join(self.server.out_dir, "hm_*.png")))
         self.assertLessEqual(len(files), earthd.HM_CACHE, files)
         # Never deleted: the committed terrain, the two before it, the last two handed out.
-        for name in (f"hm_{aid}_0_0.png", f"hm_{aid}_768_0.png", f"hm_{aid}_2048_0.png", f"hm_{aid}_2304_0.png"):
-            self.assertIn(name, files)
-        self.assertNotIn(f"hm_{aid}_256_0.png", files)
+        for cx in (0, 768, 2048, 2304):
+            self.assertIn(heights[cx], files)
+        self.assertNotIn(heights[256], files)
         # Unknown anchor / missing fields -> terrain_error; the connection stays up.
         c.send({"type": "prepare_terrain", "requestId": 99, "anchorId": 42, "cx": 0, "cy": 0})
         m, _ = c.until(lambda m: m["type"] == "terrain_error", timeout=10)
@@ -724,10 +799,15 @@ class MeshServerTest(ServerHarness):
     near_visual = "mesh"
     with_imagery = True
 
-    def start(self, x=0.0, y=0.0):
+    def start(self, x=0.0, y=0.0, cam_first=False):
+        """cam_first: a pose (its camera) before the commits. The mod sends it a frame after them; the builds the server
+        starts meanwhile go by distance alone (it has no view cone yet), and how many depends on the machine's load."""
         far = FarState()
         self.hello()
         aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
+        self.dispatched = self.record_dispatch()
+        if cam_first:
+            self.pose(aid, x, y)        # (a pose of a prepared, newer anchor commits it: connection_pose)
         self.c.send({"type": "commit_anchor", "anchorId": aid})
         self.c.send({"type": "commit_terrain", "anchorId": aid, "cx": 0, "cy": 0})
         self.pose(aid, x, y)
@@ -737,7 +817,9 @@ class MeshServerTest(ServerHarness):
 
     def test_session(self):
         c = self.c
-        far, aid, done, seen, dt = self.start()
+        # (the camera before the first build: under the gate's load up to a worker round of tiles was started before
+        # the mod's first pose and sent first, ranked [0, 0, 0, 16, ...] by view distance, gates 295 and 298)
+        far, aid, done, seen, dt = self.start(cam_first=True)
         stats = self.server.level_stats
         print(f"\n  mesh initial set: {done['count']} tiles in {dt:.2f} s (synthetic DEM + imagery); "
               "per level build/texture ms: " + ", ".join(
@@ -754,15 +836,18 @@ class MeshServerTest(ServerHarness):
         self.check_swaps(seen, aid)
         self.check_cover(far, aid, 0, 0, [])
         self.assertFalse([m for m in tiles if "sink" in m])
-        # nearest first (view-weighted: the poses' camera looks north from 8 m behind the player), up to the
-        # builds' completion-order jitter
+        # nearest first (view-weighted: the poses' camera looks north from 8 m behind the player), by the order the
+        # builds start in (record_dispatch: the sends are in completion order, any number apart under load), up to
+        # tile_workers positions
+        dispatched = list(self.dispatched)  # (the initial set's)
+        self.assertEqual(sorted(dispatched), sorted(want))
         cone = ff.view_cone({"x": 0, "y": -8, "fx": 0, "fy": 1, "fovDeg": 60})
         vd = sorted(ff.view_distance(ff.tile_of(k), cone, 0, 0) for k in want)
         slack = self.server.tile_workers
-        ranks = [sum(1 for v in vd if v < ff.view_distance(ff.tile_of(m["key"]), cone, 0, 0)) for m in tiles[:8]]
-        self.assertTrue(all(ff.view_distance(ff.tile_of(m["key"]), cone, 0, 0) <= vd[8 + slack] for m in tiles[:8]),
-                        f"the first 8 sent ranked {ranks} by view distance (slack {slack})")
-        self.assertEqual(tiles[0]["level"], ex)
+        ranks = [sum(1 for v in vd if v < ff.view_distance(ff.tile_of(k), cone, 0, 0)) for k in dispatched[:8]]
+        self.assertTrue(all(ff.view_distance(ff.tile_of(k), cone, 0, 0) <= vd[8 + slack] for k in dispatched[:8]),
+                        f"the first 8 built ranked {ranks} by view distance (slack {slack})")
+        self.assertEqual(ff.tile_of(dispatched[0]).level, ex)
         # textures: DXT1 with mips, the layout's size per level (32 cells: TEX_NEAR for the two
         # finest levels, TEX_FAR beyond; 64: 256 px to L1, 512 from L2); shapes name the material
         # and have the layout's triangle count (8704 with 64 cells) up to L0
@@ -774,7 +859,7 @@ class MeshServerTest(ServerHarness):
                 self.assertEqual(px, earthd.TEX_NEAR if m["level"] <= -1 else earthd.TEX_FAR)
             else:
                 self.assertEqual(px, 512 if m["level"] >= 2 else 256)
-            self.assertEqual((w, h, mips, fourcc), (px, px, int(math.log2(px)) + 1, b"DXT1"))
+            self.assertEqual((w, h, mips, fourcc), (px, px, int(math.log2(px)) + 1, b"DX10" if imagery.FAR_SRGB else b"DXT1"))
             shape = cdae.read(self.fs(m["shape"]))
             self.assertEqual(shape["materials"][0]["name"], m["material"])
             self.assertEqual(shape["meshes"][0]["tverts2"][0], shape["meshes"][0]["verts"][0])
@@ -886,7 +971,7 @@ class MeshServerTest(ServerHarness):
         but offline_flag is False), tiles still receive fallback material and recover in-place via
         far_retex once breakers close and hosts recover."""
         class Broken(FakeImagery):
-            def render(self, *a, **kw):
+            def render_where(self, *a, **kw):
                 raise imagery.ImageryError("temporary outage: all breakers open")
         working_dir = os.path.join(self.tmp.name, "cache", "working")
         broken_dir = os.path.join(self.tmp.name, "cache", "broken")
@@ -917,10 +1002,9 @@ class MeshServerTest(ServerHarness):
         self.server.imagery = FakeImagery(working_dir)
         for h_name in all_hosts:
             b = self.server.net.host(h_name).breaker
-            b.state = "closed"
-            b.open_until = 0.0
-            b.failures.clear()
-            b.probing = False
+            with mock.patch.object(b, "clock", return_value=b.open_until):
+                self.assertEqual(b.allow()[:2], (True, True))
+                self.assertTrue(b.success())
         self.assertFalse(self.server.net.offline)
 
         # Close circuit for imagery hosts to trigger recovery

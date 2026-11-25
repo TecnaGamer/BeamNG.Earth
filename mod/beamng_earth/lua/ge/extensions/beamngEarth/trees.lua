@@ -8,6 +8,7 @@
 local M = {}
 local vienna = require('beamngEarth/vienna_convention_speed_signs')
 local geotile = require('beamngEarth/geotile')
+local clifftalus = require('beamngEarth/clifftalus')
 -- Geotiles (server --geo-tiles on, hello.geoTiles): a tile keyed 'g17_x_y' holds its items in its own frame (msg.frame,
 -- msg.pivot); it belongs to no anchor. Its items are made where its placement into the current anchor puts them
 -- (geotile.placement); at a rebase its Forest takes the move from the old placement to the new one (rendering at once,
@@ -40,7 +41,7 @@ M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = tr
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, slope_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, high_mast_light = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, rrbuffer = 400, rrwalk = 250, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, bench_metal = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, signal_left = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
@@ -66,6 +67,42 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
+-- ... and within a near tile only the items within reachRadius of the car collide, each by its own distance (REACH,
+-- 2026-11-22): a tile counted near by its nearest point made all its items solid, out to ~560 m from the car (3 x 3 to
+-- 4 x 4 tiles round it). The guarantee stays: every item within SOLID_M (SOLID_LEAD_S of driving at speed) collides,
+-- as every item of a tile within SOLID_M did; the overshoot of the tiles' squares goes. An item stays solid to
+-- reachRadius + REACH_HYST_M, and none behind the moving car by its own position (BEHIND_M, BEHIND_HYST_M). A near
+-- tile's rows are looked at again once the car moved REACH_STEP_M (REACH_STEP_S of driving at speed), the radius
+-- changed that much or the kept heading turned. Items made solid within CLOSE_M or roads.needReach are sent in a box
+-- (due by the NEED rule); those farther out to roads.requestLate (due only once the car is within roads.hardReach of
+-- one, ~3 s off, if no rebuild came before), as a rebuild without a deadline may wait ROLL_DEFER_S
+-- while the car rolls (on open ground at 15 m/s the tile rule's first rebuild after a tree turned solid came 43 m
+-- before it). A NEED-rule box for every one (due within needReach) made 64 rebuilds instead of 22 on a 4.5 min
+-- Baltimore drive at ~30 mph (Windows, in-game probe 2026-11-22), each a 100-170 ms stall there while streaming.
+-- Tiles solid for another player's car keep every item solid (SOLID_M, as before).
+-- Measured 2026-11-22 (in-game probe, ~/bnge-tests/treecol): a reload's physics build is ~0.19 ms per 1,000 collision
+-- triangles on a Steam Deck, ~0.05 on the Windows test PC; a stock tree has 19-90. Baltimore downtown: ~460 solid
+-- items (~11k triangles, ~0.3 ms of a 7 ms Windows build); Green Ridge forest (Deck, car standing): 3,181 solid items,
+-- 152k triangles, 21 ms a rebuild -> REACH 1,857, 85k, 13-15 ms.
+-- OFF by default (2026-11-22 drives, Baltimore -> Druid Hill Park, ~25-35 mph): REACH cut the solid items 3-4x
+-- (Windows median 1,030 -> 260, Deck 612 -> 168) but needs the late points to stay safe, and they made the rebuilds
+-- 5.0 -> 8.7 a minute (Windows) / 4.9 -> 8.2 (Deck). In town a rebuild's cost is not the trees (~2 ms of ~20 on the
+-- Deck, ~0.3 of ~8 on Windows) and on Windows every rebuild while new shapes load stalls 100-300 ms whatever it holds,
+-- so the extra rebuilds cost more than the triangles saved. A dense forest is where it pays (Deck 20 -> 12-15 ms a
+-- rebuild): see ~/bnge-tests/treecol and the commit message before switching it on.
+M.REACH = false
+M.rowsTotal = 0
+M.SOLID_LEAD_S = 8
+M.REACH_STEP_M = 15
+M.REACH_STEP_S = 1.0
+M.REACH_HYST_M = 25       -- an item's own hysteresis (the rescan step at least)
+M.REACH_BEHIND = true     -- none behind the moving car by its own position (BEHIND_M); false: the tiles' rule only
+M.REACH_DIR_COS = 0.94     -- ... or the kept heading turned ~20 degrees (or came or went)
+-- The radius (m) within which an item collides with the car at speed v (m/s): SOLID_M, or SOLID_LEAD_S of driving.
+-- (8 s: a rebuild that waits for RELOAD_EVERY_S (roads.lua, 6 s) at speed still comes 2 s before the car does.)
+function M.reachRadius(v)
+  return math.max(M.SOLID_M, (v or 0) * M.SOLID_LEAD_S)
+end
 -- ... but not behind a moving car (roads.lua BEHIND, its kept heading): a tile whose near edge is BEHIND_M or more behind
 -- it along the heading gets no solid items, and one solid already loses them BEHIND_HYST_M farther (2026-11-14, a Steam
 -- Deck 45 mph Fells Point drive: ~800 of ~1,250 solid trees and props were behind the car, a quarter of every
@@ -150,6 +187,12 @@ M.CATALOG = {
   -- rock faces along rural road cuts (server roads.cliff_rows: Italy's rock-face kit, as its own cut slopes are made)
   cliff = {
     { IT .. 'rocks/italy_rockface_short_wide', 2.9 }, { IT .. 'rocks/italy_rockface_tall_wide', 13.2 },
+  },
+  -- boulders sunk into steep graded slopes beside rural roads (server roads.slope_rocks, with the vanilla slopes:
+  -- BNE_BATTER=vanilla): Italy's rock-face boulders, as its own steep cuts carry them (heights from the DAEs)
+  slope_rock = {
+    { IT .. 'rocks/italy_rockface_boulder_4', 1.05 }, { IT .. 'rocks/italy_rockface_boulder_3', 1.77 },
+    { IT .. 'rocks/italy_rockface_boulder_2', 2.12 }, { IT .. 'rocks/italy_rockface_boulder_1', 3.12 },
   },
   deciduous = {
     { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
@@ -316,6 +359,9 @@ M.CATALOG = {
   -- vineyards' rows (server vegetation.vineyard_items): Italy's grape_vine_group, three rows 2.45 m apart and 15.9 m
   -- long along its x (out to 450 m, GROUP_MAX_M: beyond it the ground photo shows the rows)
   vine = { { IT .. 'trees/trees_italy/grape_vine_group', 2.6 } },
+  -- the rows' rest up to the field's edge and its roads (server vegetation._row_fill): Italy's single row, 5.5 m
+  -- along its x (the height as the group's: the server sends the same, at scale 1)
+  vine_row = { { IT .. 'trees/trees_italy/grape_vine', 2.6 } },
   -- round bales after the harvest (server vegetation.bale_items): the stock race props, straw on farmland, wrapped
   -- silage on meadows; by hemisphere, shown in their season only (SEASON)
   straw_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_large_01', 1.22 } },
@@ -336,6 +382,50 @@ M.CATALOG = {
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler', 33.0 },
   },
 }
+-- The mapped trees' species (server natural.SPECIES, BNE_NATURAL_TREES: OpenStreetMap's genus / species / leaf type on
+-- natural=tree and tree rows): the stock shapes of that kind, all in folders MATERIALS already loads and all already
+-- drawn by other groups (no new shape's cost; only BARE's leafless oaks are new); heights from the shapes' bounds (the
+-- asset survey, 2026-11-10)
+M.CATALOG.oak = {
+  { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
+  { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.2 }, { ECA .. 'trees/trees_oak/tree_oak_large_c', 15.5 },
+  { ECA .. 'trees/trees_oak/tree_oak_large_b', 15.9 }, { ECA .. 'trees/trees_oak/tree_oak_forest_a', 15.9 },
+  { ECA .. 'trees/trees_oak/tree_oak_forest_b', 16.0 },
+}
+M.CATALOG.beech = {
+  { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 }, { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 },
+  { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
+}
+M.CATALOG.birch = {     -- (East Coast USA's aspens: white bark, the birches' and aspens' stand-in)
+  { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_c', 9.7 },
+  { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
+}
+M.CATALOG.pine = {
+  { WCA .. 'trees/trees_conifer/pine_radiata_small', 8.6 }, { IT .. 'trees/trees_italy/maritime_pine_2', 11.9 },
+  { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { WCA .. 'trees/trees_conifer/pine_radiata_large', 13.2 },
+  { WCA .. 'trees/trees_conifer/pine_radiata_forest', 13.3 }, { IT .. 'trees/trees_italy/scots_pine', 18.9 },
+}
+M.CATALOG.fir = {       -- (spruces, firs, larches, cedars, hemlocks: the Douglas firs)
+  { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
+  { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
+  { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
+}
+M.CATALOG.redwood = {
+  { WCA .. 'trees/trees_conifer/redwood_split', 38.1 }, { WCA .. 'trees/trees_conifer/redwood_tall', 38.5 },
+  { WCA .. 'trees/trees_conifer/redwood_broad', 38.5 },
+}
+M.CATALOG.cypress = { { IT .. 'trees/trees_italy/cypress_tree', 7.2 } }
+M.CATALOG.olive = { { IT .. 'trees/trees_italy/olive', 4.3 } }
+M.CATALOG.holm_oak = {  -- (evergreen oaks and the evergreen broadleaves' stand-in)
+  { IT .. 'trees/trees_italy/holm_oak_city_small', 5.6 }, { IT .. 'trees/trees_italy/holm_oak_city_tall', 9.6 },
+  { IT .. 'trees/trees_italy/holm_oak', 12.9 },
+}
+-- the mapped deciduous broadleaf forests (BNE_NATURAL_LEAF=season) by hemisphere: their leafy broadleaves, bare in
+-- their winter months (LEAFOFF: East Coast USA's leafless oaks; applySeason, at setup only)
+M.CATALOG.leafoff_n = M.CATALOG.deciduous
+M.CATALOG.leafoff_s = M.CATALOG.deciduous
+M.LEAFOFF = { leafoff_n = { 12, 1, 2, 3 }, leafoff_s = { 6, 7, 8, 9 } }
+M.BARE = { { ECA .. 'trees/trees_oak/tree_oak_dead_b', 8.69 }, { ECA .. 'trees/trees_oak/tree_oak_dead_a', 12.54 } }
 -- Italy's authored three-metre crash barrier and two end treatments. The back-facing variants reuse
 -- the same mesh with its longitudinal/lateral axes reversed; the caps are swapped to flare outwards.
 M.CATALOG.guardrail = { { '/art/shapes/objects/italy_guardrails_basic', 0.9 } }
@@ -354,6 +444,25 @@ M.GROUP_MAX_M.guardrail_back_end = 4000
 -- Median barriers (server medians.py) and mapped jersey / cable barriers (guardrails.py), in the same rows: the stock
 -- 3 m jersey barrier (it runs along its y axis: the rows' basis says so) and its sloped end; the mod's cable barrier
 -- (tools/build_median_props.py: four ropes and a post every 3 m).
+-- Mapped driving features (server drivefeat.py, BNE_ROAD_BARRIERS / BNE_RAIL_PROPS; tools/build_drive_props.py): lift
+-- gates (down / raised), a field gate's leaf, height restrictor frames by road width, low bollards, railway signals,
+-- ground signals and point machines. Heights: each model's top.
+do
+  local DP = '/levels/beamng_earth/art/shapes/beamngEarth/bne_dp_'
+  for g, h in pairs({ liftgate = 1.04, liftgate_up = 5.55, gate = 1.35, hr4 = 2.5, hr6 = 2.5, hr8 = 2.5, hr10 = 2.5,
+                      bollard = 0.95, rsignal = 4.75, rsignal_dwarf = 0.8, point = 0.37 }) do
+    M.CATALOG['dp_' .. g] = { { DP .. g, h } }
+    M.GROUP_MAX_M['dp_' .. g] = (g == 'rsignal' or g:sub(1, 2) == 'hr') and 500 or 300
+    M.ONE_SPELLING['dp_' .. g] = true
+  end
+  -- the mapped lamps' lenses by their light:colour (server furniture.LENS_COLOURS, BNE_LAMP_TAGS): the stock lens,
+  -- their own night light colour (nightlights.lua)
+  for _, g in ipairs({ 'lamplens_white', 'lamplens_yellow' }) do
+    M.CATALOG[g] = M.CATALOG.lamplens
+    M.GROUP_MAX_M[g] = M.GROUP_MAX_M.lamplens
+    M.NO_COLLIDE[g] = true
+  end
+end
 M.CATALOG.jersey = { { '/art/shapes/objects/jerseybarrier_3m', 0.88 } }
 M.CATALOG.jersey_end = { { '/art/shapes/objects/jerseybarrier_end', 0.88 } }
 M.CATALOG.cable = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cable_barrier', 1.0 } }
@@ -369,7 +478,8 @@ M.GROUP_MAX_M.giveway_b1 = 300
 -- Sweden's signs (server sesigns.py, tools/build_median_props.py's SE_SIGNS): their shapes, heights and how far out they show.
 local SE_SIGNS = { se_f17 = 2.70, se_f17_400 = 2.78, se_f17_300 = 2.78, se_f17_200 = 2.78, se_f18_11 = 2.70, se_f18_12 = 2.70,
   se_f18_21 = 2.70, se_f2 = 3.50, se_c1 = 2.10, se_b3 = 2.60, se_e1 = 2.70, se_e2 = 2.70,
-  se_a19 = 2.30 }
+  se_a19 = 2.30, se_c1_t = 2.70, se_e16_r = 2.40, se_e16_l = 2.40,
+  se_e9 = 2.70, se_e10 = 2.70 }
 for g, h in pairs(SE_SIGNS) do
   M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, h } }
   M.GROUP_MAX_M[g] = 500
@@ -524,6 +634,7 @@ M.GROUP_MAX_M.billboard = 900
 M.GROUP_MAX_M.barn = 800
 M.GROUP_MAX_M.golfflag = 400
 M.GROUP_MAX_M.vine = 450
+M.GROUP_MAX_M.vine_row = 450
 M.GROUP_MAX_M.creosote = 250       -- (as the other shrubs)
 M.NO_COLLIDE.creosote = true
 M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n
@@ -824,6 +935,11 @@ function M.applySeason(month)
     for _, m in ipairs(months) do if m == month then on = true end end
     M.groupOff[g] = (not on) or nil
   end
+  for g, months in pairs(M.LEAFOFF) do      -- (the mapped deciduous forests: bare in their winter)
+    local bare = false
+    for _, m in ipairs(months) do if m == month then bare = true end end
+    M.CATALOG[g] = bare and M.BARE or M.CATALOG.deciduous
+  end
 end
 
 local function setup()
@@ -861,9 +977,12 @@ local function itemType(shape, solid)
     d = (worldEditorCppApi and worldEditorCppApi.createObject) and worldEditorCppApi.createObject('TSForestItemData')
       or createObject('TSForestItemData')
     if not d then return nil end
-    d:setField('shapeFile', 0, shape .. '.dae')
+    local compiledRock = shape:find('cliff_talus_', 1, true) and shape:sub(-5) == '.cdae'
+    d:setField('shapeFile', 0, compiledRock and shape or (shape .. '.dae'))
     d:setField('collidable', 0, solid and '1' or '0')
-    d:setField('windScale', 0, '0.4'); d:setField('branchAmp', 0, '0.1'); d:setField('detailAmp', 0, '0.2')
+    local rock = shape:find('cliff_talus_', 1, true) ~= nil
+    d:setField('windScale', 0, rock and '0' or '0.4')
+    d:setField('branchAmp', 0, rock and '0' or '0.1'); d:setField('detailAmp', 0, rock and '0' or '0.2')
     d:registerObject(name)
     if Sim and Sim.getDataBlockSet then Sim.getDataBlockSet():addObject(d) end
   end
@@ -875,6 +994,7 @@ end
 -- item's rank; else the nearest. Returns shape, scale.
 function M.pick(group, h, rank)
   local list = M.CATALOG[group] or M.CATALOG.deciduous
+  if (clifftalus.enabled and clifftalus.isGroup(group)) then return clifftalus.pick(group, list, h, rank) end
   local cands = {}
   for _, range in ipairs({ { 0.8, 1.25 }, { 0.6, 1.6 } }) do      -- near its size first, then wider
     for _, v in ipairs(list) do
@@ -1014,6 +1134,35 @@ end
 -- thousands a second while a forest loads. Every item sets the whole rotation and the position: nothing of the item
 -- before stays.
 local itemMat, itemVec, itemPos = nil, nil, nil
+
+-- Pure: the columns (x, y, z axes; 9 numbers) of an item turned by yaw (degrees counter-clockwise from +x, the
+-- server's), then tilted by pitch (its x axis this many degrees above the horizontal) and roll (its y axis): a vine
+-- group lying on the slope (server vegetation._vine_tilt, a tile of stride F_ROLL or more). Orthonormal, right-handed.
+function M.tiltBasis(yaw, pitch, roll)
+  local y, p, r = math.rad(yaw or 0), math.rad(pitch or 0), math.rad(roll or 0)
+  local cy, sy = math.cos(y), math.sin(y)
+  local fx, fy, fz = math.cos(p) * cy, math.cos(p) * sy, math.sin(p)
+  local sx, sy2, sz = -math.cos(r) * sy, math.cos(r) * cy, math.sin(r)
+  local d = sx * fx + sy2 * fy + sz * fz           -- (the side made square to the forward axis)
+  sx, sy2, sz = sx - d * fx, sy2 - d * fy, sz - d * fz
+  local l = math.sqrt(sx * sx + sy2 * sy2 + sz * sz)
+  sx, sy2, sz = sx / l, sy2 / l, sz / l
+  return fx, fy, fz, sx, sy2, sz, fy * sz - fz * sy2, fz * sx - fx * sz, fx * sy2 - fy * sx
+end
+local F_PITCH, F_ROLL = 9, 10      -- (a vegetation tile of stride 10: server vegetation.TILT_STRIDE)
+
+-- Columns c (0-2) of a basis into the item matrix, turned by a geotile's placement rotation r (nil: none).
+local function setBasis(m, r, b)
+  for c = 0, 2 do
+    local vx, vy, vz = b[1 + 3 * c], b[2 + 3 * c], b[3 + 3 * c]
+    if r then
+      vx, vy, vz = r[1] * vx + r[2] * vy + r[3] * vz, r[4] * vx + r[5] * vy + r[6] * vz, r[7] * vx + r[8] * vy + r[9] * vz
+    end
+    itemVec:set(vx, vy, vz); m:setColumn(c, itemVec)
+  end
+end
+local basis9 = { 0, 0, 0, 0, 0, 0, 0, 0, 0 }      -- (reused: no table an item)
+
 local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   local d = itemType(shape, vienna.faceSolid(group, townsigns.faceSolid(group, solid)))
   if not d then M.errors = M.errors + 1; return nil end
@@ -1035,14 +1184,15 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   if t.s >= 17 and type(f[b + 17]) == 'number' then
     -- Guardrails carry their orthonormal world-space basis; local X follows the road chord. (A geotile's: in its
     -- frame, turned by its placement's rotation.)
-    local r = t.geo and t.madePl and t.madePl.r
-    for c = 0, 2 do
-      local vx, vy, vz = f[b + 9 + 3 * c], f[b + 10 + 3 * c], f[b + 11 + 3 * c]
-      if r then
-        vx, vy, vz = r[1] * vx + r[2] * vy + r[3] * vz, r[4] * vx + r[5] * vy + r[6] * vz, r[7] * vx + r[8] * vy + r[9] * vz
-      end
-      itemVec:set(vx, vy, vz); m:setColumn(c, itemVec)
-    end
+    for j = 1, 9 do basis9[j] = f[b + 8 + j] end
+    setBasis(m, t.geo and t.madePl and t.madePl.r, basis9)
+    m:setPosition(itemPos)
+  elseif t.s >= F_ROLL and (f[b + F_PITCH] ~= 0 or f[b + F_ROLL] ~= 0) then
+    -- A vine group on the slope (its pitch and roll, server vegetation._vine_tilt): its basis from the server's yaw,
+    -- in the tile's frame (a geotile's turned by its placement, as the guardrails').
+    basis9[1], basis9[2], basis9[3], basis9[4], basis9[5], basis9[6], basis9[7], basis9[8], basis9[9] =
+      M.tiltBasis(f[b + F_YAW], f[b + F_PITCH], f[b + F_ROLL])
+    setBasis(m, t.geo and t.madePl and t.madePl.r, basis9)
     m:setPosition(itemPos)
   else
     -- Existing props use a flat yaw (counter-clockwise in server coordinates).
@@ -1115,7 +1265,7 @@ local function addTile(anchorId, tileKey, flat, stride, groups, geo, count)
   local old = tiles[key]
   local tx, ty = tostring(tileKey):match('(%-?%d+)_(%-?%d+)$')
   -- (the shape cache is the items': every message brings items of its own)
-  local t = { anchor = anchorId, f = flat, s = stride, n = count or math.floor(#flat / stride),
+  local t = { anchor = anchorId, sourceKey = tostring(tileKey), f = flat, s = stride, n = count or math.floor(#flat / stride),
     groups = type(groups) == 'table' and groups or nil,
     made = old and old.made or {}, solid = old and old.solid or {}, near = old and old.near,
     shapes = {}, scales = {},
@@ -1600,7 +1750,30 @@ function M.spareWanted(frameMs)
   return frameMs >= M.LOADING_FRAME_MS and math.max(M.POOL_SPARE, M.POOL_SPARE_CALM) or M.POOL_SPARE_DRIVE
 end
 
+-- Wait for solid ground and the supporting cliff, including after rebases.
+function M.cliffGroundReady(t, i, support)
+  -- All rocks in a tile share the same cliff pieces. Their presence cannot change
+  -- during this synchronous Forest pass; retry on the next pass after imports.
+  local pieces = support and support[t]
+  if pieces == nil then
+    local source = t.key or (t.sourceKey or ''):gsub('^t', '')
+    pieces = require('beamngEarth/roads').cliffPiecesReady(source, t.anchor)
+    if support then support[t] = pieces end
+  end
+  if not pieces then return false end
+  local b = (i-1)*t.s
+  local x, y, z = t.f[b+F_X], t.f[b+F_Y], t.f[b+F_Z]
+  if t.geo then x, y, z = geotile.apply(t.pl, x, y, z) end
+  local radius = math.max(2, tonumber(t.f[b+F_HEIGHT]) or 2)
+  local ground = require('beamngEarth/terrainpatch')
+  if not ground.groundReady(x, y)
+    or not ground.groundReady(x-radius, y-radius) or not ground.groundReady(x+radius, y-radius)
+    or not ground.groundReady(x-radius, y+radius) or not ground.groundReady(x+radius, y+radius) then return false end
+  return true
+end
+
 function M.update(anchorId, player, view, frameMs, fill)
+  local cliffSupport = nil
   if not next(tiles) then return end
   if frameMs and frameMs <= 0 then return end
   if not setup() then return end
@@ -1700,6 +1873,13 @@ function M.update(anchorId, player, view, frameMs, fill)
   -- groups' caps (GROUP_MAX_M), so a door / hydrant / sign shows seconds ahead at any speed, not 120-200 m out
   local leadM, lhx, lhy = 0, 0, 0
   local psp = player.speed or 0
+  local reachR = M.REACH and M.reachRadius(psp) or M.SOLID_M      -- (the car's radius for solid tiles / items)
+  local reachStep = math.max(M.REACH_STEP_M, psp * M.REACH_STEP_S)
+  -- (the boxes round solid items made, roads.requestCollision: within CLOSE_M; with REACH within roads.needReach too,
+  -- which at speed is farther: an item made solid that late is due by the NEED rule, not the next rebuild)
+  local boxR = math.max(M.CLOSE_M, okR and type(roadsM) == 'table' and roadsM.needReach and M.REACH
+    and roadsM.needReach(psp) or 0)
+  local boxR2 = boxR * boxR
   if M.PROP_LEAD_S > 0 and psp > M.PROP_LEAD_MIN_MS and psp < 150 then
     leadM = math.min(M.PROP_LEAD_MAX_M, psp * M.PROP_LEAD_S)
     lhx, lhy = (player.vx or 0) / psp, (player.vy or 0) / psp
@@ -1718,19 +1898,46 @@ function M.update(anchorId, player, view, frameMs, fill)
         capD = math.max(0, dist - leadM)
       end
       local band = groupBand(t, capD)
-      local nearD = dCar <= M.SOLID_M or (t.near and dCar <= M.SOLID_M + M.SOLID_HYST_M)
+      local nearD = dCar <= reachR or (t.near and dCar <= reachR + M.SOLID_HYST_M)
       local isBehind = nearD and behind(t)
       -- (a tile within SOLID_M kept from solid only by BEHIND: its items made solid again are all sent with a box,
       -- however far, until it leaves SOLID_M: the car turned back to it)
       if isBehind then t.restore = true elseif not nearD then t.restore = nil end
       local mine = nearD and not isBehind
-      local near = mine or nearFocus(t) or false
+      local focusNear = nearFocus(t)
+      local near = mine or focusNear or false
       t.byFocus = (near and not mine) or nil      -- (solid for another player's car only: every item sent with a box)
+      -- REACH: the car's own near tiles pick their solid items by distance (t.reach: the car, the radius and the
+      -- heading their last pass used); every item of a tile near another player's car stays solid
+      local reach = M.REACH and mine and not focusNear or false
+      if reach ~= (t.reach ~= nil) then
+        t.reach = reach and {} or nil
+        if near == t.near then t.pending = true end
+      elseif reach and not t.pending then
+        local k = t.reach
+        local moved = k.x and (math.abs(player.x - k.x) + math.abs(player.y - k.y)) or math.huge
+        local dirChanged = (bdir == nil) ~= (k.dx == nil)
+          or (bdir and (bdir.x * k.dx + bdir.y * k.dy) < M.REACH_DIR_COS)
+        if moved >= reachStep or math.abs(reachR - (k.r or 0)) >= reachStep or dirChanged then
+          -- (a tile wholly within the radius, the heading unset then and now, has every item solid already)
+          local far = math.sqrt((math.abs(player.x - t.cx) + (t.half or 128)) ^ 2
+            + (math.abs(player.y - t.cy) + (t.half or 128)) ^ 2)
+          if bdir or k.dx or not k.all or far > reachR then t.pending = true end
+        end
+      end
       if t.moved or want ~= t.shown or band ~= t.band or near ~= t.near or t.pending then
         nOrder = nOrder + 1
         oKeys[nOrder], oD[nOrder] = key, dist
         oWant[nOrder], oBand[nOrder], oNear[nOrder], oCapD[nOrder] = want, band, near, capD
-        oSort[nOrder] = M.orderKey(dist, nOrder)
+        local priority = dist
+        if not view and t.furn and psp >= 25 and leadM > 0 then
+          local dx, dy = t.cx - player.x, t.cy - player.y
+          local side = math.abs(dx * lhy - dy * lhx)
+          if dx * lhx + dy * lhy >= 0 and side <= (t.half or 128) then
+            priority = math.max(0, dist - leadM)
+          end
+        end
+        oSort[nOrder] = M.orderKey(priority, nOrder)
       end
     end
     ::continue::
@@ -1744,18 +1951,23 @@ function M.update(anchorId, player, view, frameMs, fill)
   if M.NEAR_URGENT_MS > 0 and nOrder > 0 and oD[oSort[1] % ORDER_SLOTS] <= M.NEAR_URGENT_M then
     limit = math.max(limit, M.NEAR_URGENT_MS)
   end
-  local nearMade = false
+  local nearMade, nearBare = false, false   -- (solid items made; ... some with no box or late point: the next rebuild)
   local madeBoxes, cb = nil, nil            -- (boxes { x0, y0, x1, y1 } round the solid items made, one a tile)
+  local lateMade = nil                      -- (... and the REACH items made solid farther out: { x1, y1, ... }, roads.requestLate)
   local rowsScanned = 0
   local function finish()
-    M.lastRows = rowsScanned                -- (diagnostics)
+    M.lastRows = rowsScanned                -- (diagnostics; rowsTotal: every pass's so far)
+    M.rowsTotal = M.rowsTotal + rowsScanned
     if nearMade then
       local ok, roads = pcall(require, 'beamngEarth/roads')
       if ok and roads.requestCollision then
-        roads.requestCollision()
+        -- (REACH: every item made solid has a box or a late point, each due by its own distance; no bare request,
+        -- which would start the RELOAD_EVERY_S timer for them as well)
+        if nearBare or not roads.requestLate then roads.requestCollision() end
         for _, b in ipairs(madeBoxes or {}) do roads.requestCollision({ b[1], b[2], 0, b[3], b[4], 0 }) end
+        if lateMade and roads.requestLate then roads.requestLate(lateMade) end
       end
-      nearMade, madeBoxes, cb = false, nil, nil
+      nearMade, nearBare, madeBoxes, cb, lateMade = false, false, nil, nil, nil
     end
   end
   -- a pass over a tile's rows stopped (its frame's time or items, or no Forest yet): the next pass for the same targets
@@ -1796,6 +2008,14 @@ function M.update(anchorId, player, view, frameMs, fill)
       local from = scan and scan.want == want and scan.band == band and scan.near == near and scan.from or 1
       t.scan = nil
       local f, s, names = t.f, t.s, t.groups or GROUPS
+      -- REACH: an item of the car's own near tile is solid within reachR of it (REACH_HYST_M more once solid), not
+      -- behind it; rOn2 nil: every item of a near tile (another player's car, or REACH off)
+      local rOn2, rOff2, behindOn, behindOff, rpl = nil, nil, nil, nil, nil
+      if near and t.reach then
+        rOn2, rOff2 = reachR * reachR, (reachR + math.max(M.REACH_HYST_M, reachStep)) ^ 2
+        behindOn, behindOff = -M.BEHIND_M, -(M.BEHIND_M + M.BEHIND_HYST_M)
+        rpl = t.geo and (t.madePl or t.pl) or nil
+      end
       rowsScanned = rowsScanned + math.max(0, t.n - from + 1)
       local skipped = nil
       for i = from, t.n do
@@ -1805,7 +2025,7 @@ function M.update(anchorId, player, view, frameMs, fill)
         local b = (i - 1) * s
         local r = f[b + F_RANK]
         local g = names[f[b + F_GROUP] + 1]
-        local cap = g and M.GROUP_MAX_M[g]
+        local cap = g and (M.GROUP_MAX_M[g] or ((clifftalus.enabled and clifftalus.isGroup(g)) and clifftalus.MAX_DISTANCE_M))
         local isGuardrail = M.isBarrier(g)
         if isGuardrail then
           -- Preserve continuous 3 m runs until a tile cap actually requires thinning.
@@ -1829,14 +2049,46 @@ function M.update(anchorId, player, view, frameMs, fill)
         end
         if g and M.groupOff[g] then r = 2 end    -- a group the player turned off (setGroupEnabled)
         -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree
-        if g and not M.CATALOG[g] then
+        if g and not M.CATALOG[g] and not (clifftalus.enabled and clifftalus.isGroup(g)) then
           r = 2
           if not M.unknownGroups[g] then M.unknownGroups[g] = true; log('W', 'beamngEarth.trees', 'no shapes for group ' .. g) end
         end
         -- an item something else stands in for (navgraph.lua's switchable signal heads), or one in the way of
         -- something (townsigns.lua: a tree in front of a town sign); no call at all when nothing hides (every row)
         if g and (M.suppress or next(M.hiders)) and hidden(g, f[b + F_X], f[b + F_Y], t.anchor, t, f[b + F_Z]) then r = 2 end
+        if (clifftalus.enabled and clifftalus.isGroup(g)) then
+          if not clifftalus.available(g) or M.groupOff.cliff_rock then r = 2 end
+          if r < want and not t.made[i] then
+            cliffSupport = cliffSupport or {}
+            if not M.cliffGroundReady(t, i, cliffSupport) then
+              skipped = skipped or i
+              r = 2
+            end
+          end
+          if r < want and not M.CATALOG[g] then
+            -- One private material/model preparation step, under the existing
+            -- loading budget. Model import still uses the usual Forest budget.
+            local ok, catalog = pcall(clifftalus.catalog, g, true)
+            if ok and catalog then
+              M.CATALOG[g] = catalog
+              M.GROUP_MAX_M[g] = clifftalus.MAX_DISTANCE_M
+            elseif not ok then
+              clifftalus.fail(g, catalog)
+            end
+            stop(t, i, skipped, want, band, near); return
+          end
+        end
         local solid = near and not M.NO_COLLIDE[g or '']
+        if solid and rOn2 and r < want then
+          local x, y = f[b + F_X], f[b + F_Y]
+          if rpl then x, y = geotile.apply(rpl, x, y, f[b + F_Z]) end
+          local dx, dy = x - player.x, y - player.y
+          local was = t.solid[i] == true
+          solid = dx * dx + dy * dy <= (was and rOff2 or rOn2)
+          if solid and bdir and M.REACH_BEHIND and dx * bdir.x + dy * bdir.y < (was and behindOff or behindOn) then
+            solid = false
+          end
+        end
         if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid) then
           local sh, sc = shapeOf(t, i)
           if budget <= 0 then stop(t, i, skipped, want, band, near); return end
@@ -1852,7 +2104,7 @@ function M.update(anchorId, player, view, frameMs, fill)
               nearMade = true
               local x, y = itemPos and itemPos.x, itemPos and itemPos.y   -- (where makeItem put it)
               if t.made[i] and x and (t.restore or t.byFocus
-                  or (x - player.x) ^ 2 + (y - player.y) ^ 2 <= M.CLOSE_M * M.CLOSE_M) then
+                  or (x - player.x) ^ 2 + (y - player.y) ^ 2 <= boxR2) then
                 if not cb then
                   cb = { x, y, x, y }
                   madeBoxes = madeBoxes or {}
@@ -1863,7 +2115,13 @@ function M.update(anchorId, player, view, frameMs, fill)
                   if x > cb[3] then cb[3] = x end
                   if y > cb[4] then cb[4] = y end
                 end
-              end
+              elseif t.made[i] and x and t.reach then
+                -- (REACH: due once the car is within roads.hardReach of it, if no rebuild came before: a rebuild
+                -- without a deadline may wait ROLL_DEFER_S while the car rolls, longer than the 200 m take)
+                lateMade = lateMade or {}
+                lateMade[#lateMade + 1] = x
+                lateMade[#lateMade + 1] = y
+              else nearBare = true end
             end
             budget = budget - 1
             if elapsed() > limit then stop(t, i + 1, skipped, want, band, near); return end
@@ -1882,6 +2140,12 @@ function M.update(anchorId, player, view, frameMs, fill)
         end
       end
       t.shown = want
+      if t.reach then         -- (REACH: what this pass measured from; all: every item within the radius, no heading)
+        local far = math.sqrt((math.abs(player.x - t.cx) + (t.half or 128)) ^ 2
+          + (math.abs(player.y - t.cy) + (t.half or 128)) ^ 2)
+        t.reach = { x = player.x, y = player.y, r = reachR, dx = bdir and bdir.x, dy = bdir and bdir.y,
+          all = not bdir and far <= reachR }
+      end
       t.band = band
       t.near = near
       if skipped then t.pending = true; t.scan = { from = skipped, want = want, band = band, near = near }; dirty = true end
@@ -1961,7 +2225,7 @@ function M.keepupMissing(px, py, r)
         if (x - lx) * (x - lx) + (y - ly) * (y - ly) <= r2 and not t.made[i] then
           local g = names[f[b + F_GROUP] + 1]
           local rk = f[b + F_RANK]
-          local cap = g and M.GROUP_MAX_M[g]
+          local cap = g and (M.GROUP_MAX_M[g] or ((clifftalus.enabled and clifftalus.isGroup(g)) and clifftalus.MAX_DISTANCE_M))
           if M.isBarrier(g) then
             local rowCap
             for _, lim in ipairs(M.TILE_CAP) do if dist <= lim[1] then rowCap = lim[2]; break end end
@@ -1981,6 +2245,43 @@ function M.keepupMissing(px, py, r)
                 reason = t.flush and 'flush' or (t.moved and 'moved') or (t.pending and 'pending') or '' }
             end
           end
+        end
+      end
+    end
+  end
+  return out
+end
+
+-- Diagnostics (probes, tools): the solid items made now, by group, and the tiles with work left. Walks every tile.
+function M.solidStats()
+  local solid, byGroup, pending = 0, {}, 0
+  for li = 1, #tileList do
+    local t = tiles[tileList[li]]
+    if t.pending then pending = pending + 1 end
+    local names = t.groups or GROUPS
+    for i in pairs(t.solid) do
+      solid = solid + 1
+      local g = names[t.f[(i - 1) * t.s + F_GROUP] + 1] or '?'
+      byGroup[g] = (byGroup[g] or 0) + 1
+    end
+  end
+  return { solid = solid, byGroup = byGroup, pending = pending, live = liveItems, tiles = #tileList }
+end
+
+-- Diagnostics: the items made within r of (px, py), where they were made: { x, y, z, solid, group }.
+function M.itemsNear(px, py, r)
+  local out = {}
+  for li = 1, #tileList do
+    local t = tiles[tileList[li]]
+    local h = t.half or 128
+    if math.abs(px - t.cx) <= r + h and math.abs(py - t.cy) <= r + h then
+      local names, pl = t.groups or GROUPS, t.geo and (t.madePl or t.pl) or nil
+      for i in pairs(t.made) do
+        local b = (i - 1) * t.s
+        local x, y, z = t.f[b + F_X], t.f[b + F_Y], t.f[b + F_Z]
+        if pl then x, y, z = geotile.apply(pl, x, y, z) end
+        if (x - px) ^ 2 + (y - py) ^ 2 <= r * r then
+          out[#out + 1] = { x = x, y = y, z = z, solid = t.solid[i] == true, group = names[t.f[b + F_GROUP] + 1] or '?' }
         end
       end
     end

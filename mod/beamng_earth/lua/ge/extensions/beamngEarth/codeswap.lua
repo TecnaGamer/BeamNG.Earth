@@ -15,8 +15,9 @@
 -- onModDeactivated) or a copy's modScript runs (modScript.lua: a newer copy taking over from an older one that has none
 -- of this), and the copy now mounted is another one, our extensions are unloaded and our modules forgotten; the mod
 -- manager then loads the mounted copy's extensions (loadManualUnloadExtensions), or this does after a hook. Nothing is
--- swapped while no copy is mounted (between BeamMP turning one off and the other on: the running code still turns the
--- player's copy back on when they leave, beammp.lua), nor when the mounted copy is the same.
+-- swapped while no copy is mounted (between BeamMP turning one off and the other on, a stock-map server), nor when the
+-- mounted copy is the same. The player's copy is switched back on after the session by a job core.lua's
+-- onModDeactivated starts before this runs (beammp.lua): the swap doesn't touch it, whatever version the server sent.
 -- BeamMP turns the server's copy on before it turns the player's off, and the mod manager runs a modScript by its
 -- virtual path, so the player's copy's modScript usually runs then: the swap comes from the running code's hooks (the
 -- player's app), and a server's newer copy can take over an older app's code only when its files win (measured on the
@@ -31,6 +32,10 @@ M.DIR = '/lua/ge/extensions/beamngEarth/'
 M.OFF_FILE = '/settings/beamngEarth_nocodeswap'
 M.GLOBAL = 'beamngEarthCodeFingerprint'   -- (a global: it outlives the modules, so a newer copy's modScript can read it)
 M.CORE = 'beamngEarth_core'
+-- The GPS's destination and the waypoints still ahead, carried across a swap: gps.lua keeps them in its module, which
+-- the swap forgets, so a route set before a BeamMP join was gone after it. The mounted copy's gps.lua takes them once
+-- at load (gps.lua M.CARRY).
+M.GPS = 'beamngEarthGpsCarry'
 -- Not code: release.lua names the release, written only into packaged copies (tools/package.py), so a BeamMP server's
 -- copy of the player's own version would look like another one (the Deck, 2026-11-11: two needless swaps a join)
 M.SKIP = { ['release.lua'] = true }
@@ -98,8 +103,25 @@ function M.ownModule(k)
     or s == 'core/cameraModes/earthGlobe'
 end
 
+-- The running GPS's route as M.GPS: { { lat, lon, name }... }, the waypoints ahead and the destination last; nil
+-- without a destination (a route cleared before the swap stays cleared).
+function M.keepGps()
+  rawset(_G, M.GPS, nil)
+  local gps = package.loaded['beamngEarth/gps']
+  if type(gps) ~= 'table' or type(gps.status) ~= 'function' then return end
+  local ok, st = pcall(gps.status)
+  if not ok or type(st) ~= 'table' or tonumber(st.lat) == nil or tonumber(st.lon) == nil then return end
+  local stops = {}
+  for _, w in ipairs(type(st.waypoints) == 'table' and st.waypoints or {}) do
+    stops[#stops + 1] = { lat = w.lat, lon = w.lon, name = w.name }
+  end
+  stops[#stops + 1] = { lat = st.lat, lon = st.lon, name = st.name }
+  rawset(_G, M.GPS, stops)
+end
+
 -- Unload our extensions, forget our modules; load the mounted copy's when reload. -> the extensions unloaded.
 function M.swap(why, reload)
+  pcall(M.keepGps)                -- (before the unload: our extensions' unload may clear the GPS)
   local names = ours()
   local ext = rawget(_G, 'extensions')
   local log = rawget(_G, 'log')

@@ -94,6 +94,30 @@ class StagingTest(unittest.TestCase):
             staging.os.replace = real
             staging.REPLACE_WAITS = old_waits
 
+    def test_loop_rename_runs_on_io_thread_before_return(self):
+        import asyncio
+        import threading
+        from unittest import mock
+
+        threads = []
+        rename = os.replace
+
+        def record(src, dst):
+            threads.append(threading.get_ident())
+            rename(src, dst)
+
+        async def run(dst):
+            tmp = staging.tmp_for(dst)
+            Path(tmp).write_bytes(b"complete")
+            with mock.patch.object(os, "replace", record):
+                staging.replace(tmp, dst)
+            self.assertEqual(Path(dst).read_bytes(), b"complete")
+            self.assertEqual(len(threads), 1)
+            self.assertNotEqual(threads[0], threading.get_ident())
+
+        with tempfile.TemporaryDirectory() as root:
+            asyncio.run(run(os.path.join(root, "tile.cdae")))
+
     def test_game_file_held_for_a_moment(self):
         """Windows: a file in the game's folder the game (or a virus scanner) has open cannot be replaced for a moment;
         a block's surface mask failed the whole block (PermissionError, 2026-11-13). Tried again, then the error."""
@@ -212,6 +236,35 @@ class ReadNpzTest(unittest.TestCase):
             with self.assertLogs("earthd.staging", "WARNING"):
                 self.assertIsNone(staging.read_npz(p, lambda f: f["a"]), "a member missing")
             self.assertIsNone(staging.read_npz(p, lambda f: f["a"]), "missing: None, quietly")
+
+
+class InlineRawTest(unittest.TestCase):
+    """A tracker's tile file read in its worker (build_inline): the same value inline_json gives the event loop, as
+    text the frame carries as it is; \\u escapes written as real UTF-8; too large or unreadable: None."""
+
+    def test_build_inline(self):
+        import json
+        import hashlib
+        with tempfile.TemporaryDirectory() as d:
+            obj = {"groups": ["tree"], "items": [[1, 2.5]], "name": "Saint-Étienne"}
+            with open(os.path.join(d, "veg_a.json"), "w") as f:
+                json.dump(obj, f)                   # (ensure_ascii: \u escapes)
+
+            def build(gx, gy):
+                return "/vfs/veg_a.json", 3, (gx, gy), 0.0
+            got = staging.build_inline(build, d, True, 1, 2)
+            self.assertEqual(got.res, ("/vfs/veg_a.json", 3, (1, 2), 0.0))
+            self.assertEqual(got.data.value(), staging.inline_json(d, "/vfs/veg_a.json"))
+            self.assertNotIn("\\u", got.data.text)
+            self.assertIn("É", got.data.text)
+            with open(os.path.join(d, "veg_a.json"), "rb") as f:
+                self.assertEqual(got.digest, hashlib.sha1(f.read()).digest())
+            self.assertIs(staging.inline_from(got, d, "/vfs/veg_a.json"), got.data)
+            self.assertIsNone(staging.build_inline(lambda: None, d, False).res)
+            self.assertIsNone(staging.inline_raw(d, "/vfs/veg_a.json", max_bytes=10))
+            self.assertIsNone(staging.inline_raw(d, "/vfs/missing.json"))
+            two = staging.build_inline_paths(lambda: {"a": "/v/veg_a.json"}, d, lambda r: [r["a"], None, r["a"]])
+            self.assertEqual(list(two.files), ["/v/veg_a.json"])
 
 
 if __name__ == "__main__":

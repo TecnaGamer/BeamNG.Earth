@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -95,6 +96,21 @@ class RoadMeshTest(unittest.TestCase):
                            "markings above the asphalt")
         self.assertLessEqual(np.diff(np.unique(np.round(base[:, 0], 3))).max(), roadmesh.DRAPE_STEP + 1e-6)
         self.assertTrue(set(np.unique(UV[:, 0])) <= {0.0, 1.0}, "u across the width")
+
+    def test_skipped_cluster_wear_preserves_ground_strip_fade(self):
+        from types import SimpleNamespace
+
+        wear = dict(chunk("bne_wear_patch", 1., [(0, 0, 10), (20, 0, 10)]), fixed=True, fid="deck")
+        strip = dict(chunk("bne_dirt_gravel", 5., [(0, 20, 0), (20, 20, 0)]), slen=20., fends=(0, 1))
+        origin = (0., 0., 0.)
+        with patch.object(roadmesh, "SURFACE_V2", True), patch.object(
+                roadmesh, "_junction_surfaces", return_value={"deck": SimpleNamespace(cluster=True)}):
+            self.assertIsNone(roadmesh.build(FRAME, [wear], slope, origin))
+            expected = roadmesh.build(FRAME, [strip], slope, origin)
+            actual = roadmesh.build(FRAME, [wear, strip], slope, origin)
+            for a, b in zip(actual, expected, strict=True):
+                np.testing.assert_array_equal(a, b)
+            self.assertGreater(np.ptp(actual[5][:, 1]), 0.)
 
     def test_writes_one_primitive_per_material(self):
         chunks = [chunk("road_asphalt_2lane", 6.0, [(0, 0, 0), (30, 0, 0)]),
@@ -294,6 +310,48 @@ class TrimOverlapsTest(unittest.TestCase):
             np.testing.assert_allclose(m[1], main[0][1])
             np.testing.assert_allclose(r[0], ramp[0][0])
 
+    def crossing(self, angle_deg, dz, half=3.25):
+        """A deck along x at z 100 and another deck 1.75 m half wide crossing it at the origin, angle_deg off its way,
+        dz under it (the B 254 over a farm track's bridge at Trutzhain: 6.5 m wide, 49 degrees, 4.1 m)."""
+        x = np.arange(-30.0, 30.01, 1.0)
+        main = ((np.c_[x, np.full(len(x), half)], np.c_[x, np.full(len(x), -half)], x / 10, "m", "base",
+                 np.full(len(x), 100.0)), {"fid": "b254"})
+        a = np.radians(angle_deg)
+        s = np.arange(-30.0, 30.01, 1.0)
+        mid = np.c_[s * np.cos(a), s * np.sin(a)]
+        n = np.array([-np.sin(a), np.cos(a)])
+        track = ((mid + 1.75 * n, mid - 1.75 * n, s / 10, "m", "base", np.full(len(s), 100.0 - dz)), {"fid": "track"})
+        return main, track
+
+    def test_crossing_deck_leaves_the_carriageway_whole(self):
+        """A deck crossing over or under another one at another height is an overpass: neither is cut round the
+        crossing. Before, the B 254's deck kept a tenth of its half width there (0.65 m of 6.5 m): a hole 4 m deep across
+        both lanes the autodrive fell into at 80 km/h (50.8968, 9.2746, two survey drives)."""
+        for angle in (49.0, 90.0, 35.0):
+            main, track = self.crossing(angle, 4.1)
+            (m, _), (t, _) = roadmesh.trim_overlaps([main, track])
+            np.testing.assert_allclose(m[0], main[0][0])
+            np.testing.assert_allclose(m[1], main[0][1])
+            np.testing.assert_allclose(t[0], track[0][0])
+            np.testing.assert_allclose(t[1], track[0][1])
+
+    def test_shallow_ramp_trimmed_as_before(self):
+        """A ramp leaving its mainline at a shallow angle (within TRIM_ALONG_DEG) is cut exactly as before the angle
+        test (every overlapping piece counted: TRIM_ALONG_COS -1)."""
+        main, ramp = self.crossing(8.0, 2.4)
+        got = roadmesh.trim_overlaps([main, ramp])
+        old = roadmesh.TRIM_ALONG_COS
+        try:
+            roadmesh.TRIM_ALONG_COS = -1.0
+            before = roadmesh.trim_overlaps([main, ramp])
+        finally:
+            roadmesh.TRIM_ALONG_COS = old
+        for (r, _), (b, _) in zip(got, before):
+            np.testing.assert_array_equal(r[0], b[0])
+            np.testing.assert_array_equal(r[1], b[1])
+        width = np.hypot(*(got[0][0][0] - got[0][0][1]).T)
+        self.assertLess(width.min(), 4.0)           # (the gore: cut where the ramp's line runs under the deck's)
+
 
 class MedianGapTest(unittest.TestCase):
     """The gap from a deck's edge to another deck's across a median: beside it and outside it only (a merge on I-95 by
@@ -429,6 +487,41 @@ class BridgeTest(unittest.TestCase):
         self.assertTrue(np.allclose(z[1], [20.0, 30.0]), z[1])
         loop = [np.array([[0.0, 0], [10, 0]]), np.array([[10.0, 0], [0, 0]])]
         self.assertTrue(np.isnan(roads.deck_heights(loop, lambda xy: xy[:, 0])[0]).all(), "no abutment known")
+
+    def test_closed_slab_and_girders_follow_a_sag(self):
+        # At Highway 104 a cap from the ends of a girder rose through the driving surface.
+        deck = dict(chunk("road_asphalt_2lane", 12., [[0, 0, 20], [50, 0, 16], [100, 0, 20]]),
+                    deck=True, fixed=True, kr=True)
+        with patch.object(roadmesh.shells, "ON", True), tempfile.TemporaryDirectory() as directory:
+            mesh = roadmesh.deck([deck], (0., 0., 0.), parapets=[])
+            path = os.path.join(directory, "sag.cdae")
+            roadmesh.write(path, mesh)
+            shape = cdae.read(path)
+        arr = cdae.mesh_arrays(next(m for m in shape["meshes"] if m["type"] == 0))
+        vertices = np.asarray(arr["verts"])
+        tris = np.asarray(arr["indices"]).reshape(-1, 3)
+        self.assertFalse(roadmesh.shells.open_loops(vertices, tris))
+        # On either linear half, triangle clearance is linear. Its extrema can only occur at
+        # a vertex or where an edge crosses the knot. Check both windings, including the soffit.
+        faces = vertices[tris]
+        for edge in range(3):
+            a, b = faces[:, edge], faces[:, (edge + 1) % 3]
+            on_knot = (a[:, 0] - 50.) * (b[:, 0] - 50.) < 0.
+            lo, hi = a[on_knot], b[on_knot]
+            u = (50. - lo[:, 0]) / (hi[:, 0] - lo[:, 0])
+            self.assertTrue(np.all(lo[:, 2] + u * (hi[:, 2] - lo[:, 2]) <= 16.00001))
+        # Every underside stays at least one slab thickness below the top. The top itself
+        # has the asphalt material. Limit this check to concrete faces facing up or down.
+        for start, count, flags in np.asarray(arr["primitives"]).reshape(-1, 3):
+            if shape["materials"][flags & cdae.PRIM_MATERIAL_MASK]["name"] != roadmesh.DECK_SIDE:
+                continue
+            concrete = faces[start // 3:(start + count) // 3]
+            centres = concrete.mean(axis=1)
+            normal = np.cross(concrete[:, 1] - concrete[:, 0], concrete[:, 2] - concrete[:, 0])
+            internal = (np.abs(normal[:, 2]) > 1e-5) & (np.abs(centres[:, 1]) < 6.)
+            clearance = 16. + .08 * np.abs(centres[internal, 0] - 50.) - centres[internal, 2]
+            self.assertGreater(len(clearance), 0)
+            self.assertGreaterEqual(float(clearance.min()), roadmesh.DECK_DEPTH - 1e-5)
 
     def test_deck_slab_collides_and_closes(self):
         deck = {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "p": 20, "deck": True, "fixed": True,
@@ -647,6 +740,96 @@ class BridgeProfilesTest(unittest.TestCase):
         self.assertTrue(np.allclose(got2["a"][1], got1["a"][1]) and np.allclose(got2["b"][1], got1["b"][1]))
         ea, eb = got1["a"], got1["b"]
         self.assertAlmostEqual(float(ea[1][-1]), float(eb[1][0]), places=6, msg="the halves meet")
+
+    def test_chain_the_same_whichever_cell_asks_first(self):
+        """A chain across two map cells whose cells hold different copies of a road under it (each cell's own clip):
+        the deck is the same whichever part, so whichever cell, is asked first (BridgeProfiles.CANON_LOAD). Before,
+        the first cell loaded gave the road's copy: 5 of Fells Point's far-bridge tiles moved up to 3.9 m between two
+        runs of the same code (tools/portcheck, 2026-11-16)."""
+        import mapcells
+        import roads
+        from test_roads import features
+        home = mapcells.cell_of(LAT, LON)
+        east = (home.bounds()[2] - LON) * M_LON             # m: the cell's east edge
+        lines = [[(east - 300, 0), (east + 20, 0)], [(east + 20, 0), (east + 340, 0)]]
+        levels = [(0, 1.0, 0.5, 1.0), (1, 1.0, 0.0, 0.5)]
+        street = [(east - 60, -200), (east - 60, 200)]       # under the deck, in the west cell
+        stub = [(east - 60, 120), (east - 60, 200)]          # the east cell's clip of it: not under the deck
+        west = features(lines + [street], ["primary", "primary", "residential"], levels=levels,
+                        ids=["a", "b", "street"])
+        eastf = features(lines + [stub], ["primary", "primary", "residential"], levels=levels,
+                         ids=["a", "b", "street"])
+        cell_fn = lambda key: west if key == home else eastf
+        flat = lambda la, lo: np.full(np.shape(la), 10.0)
+        box_a, box_b = (east - 200, -50, east - 100, 50), (east + 200, -50, east + 300, 50)
+        decks = []
+        for first in (box_a, box_b):        # the chain solved from part a (west cell first), then from part b (east)
+            bp = roads.BridgeProfiles(FRAME, cell_fn, flat)
+            bp.parts([west, eastf], first)
+            decks.append({fid: z for box in (box_a, box_b)
+                          for fid, spec, xy, z, lon in bp.parts([west, eastf], box)})
+        self.assertEqual(set(decks[0]), {"a", "b"})
+        self.assertEqual(set(decks[1]), {"a", "b"})
+        for fid in ("a", "b"):
+            self.assertEqual(decks[0][fid].tobytes(), decks[1][fid].tobytes(), fid)
+        # (over the street the west cell holds: the east cell's stub alone left the deck on the ground, 9.9 m)
+        self.assertGreater(float(decks[0]["a"].max()), 15.0, "over the street")
+
+    def test_piece_drawn_whatever_was_solved_before(self):
+        """A bridge piece that the asking copy of its road keys otherwise than the cells it lies in (each copy's own
+        level ranges) is drawn, or not, the same whether or not some earlier solve published it under the asking
+        copy's key (_held_in): at Fells Point such a piece was drawn only after another tile's solve had read the
+        asking cell, a far-bridge tile's part count changing with the asking order (2026-11-16)."""
+        import mapcells
+        import roads
+        from test_roads import features
+        home = mapcells.cell_of(LAT, LON)
+        east = (home.bounds()[2] - LON) * M_LON
+        c = [(east + 50, 0), (east + 350, 0)]                    # wholly in the east cell
+        west = features([c], ["primary"], levels=[(0, 1.0, 0.0, 1.0)], ids=["c"])
+        eastf = features([c], ["primary"], levels=[(0, 1.0, 0.05, 1.0)], ids=["c"])     # (another key there)
+        self.assertNotEqual(roads.part_keys(west, 0, "bridge"), roads.part_keys(eastf, 0, "bridge"))
+        flat = lambda la, lo: np.full(np.shape(la), 10.0)
+        box_c = (east + 150, -50, east + 250, 50)
+        got = []
+        for published in (False, True):
+            bp = roads.BridgeProfiles(FRAME, lambda key: west if key == home else eastf, flat)
+            if published:       # (a solve that read the west cell published the west copy's piece)
+                other = roads.BridgeProfiles(FRAME, lambda key: west, flat)
+                other.parts([west], box_c)
+                bp.done.update(other.done)
+            got.append(sorted((fid, z.tobytes()) for fid, spec, xy, z, lon in bp.parts([west], box_c)))
+        self.assertEqual(got[0], got[1])
+        self.assertEqual(got[0], [], "the east cell's copy has no piece under the west copy's key")
+
+    def test_long_chain_the_same_from_either_end(self):
+        """A viaduct over more than CHAIN_CELLS map cells: every piece's deck the same whichever end is asked first
+        (the windows of roads.CHAIN_BLOCK blocks; capped at the cells nearest the asker, the decks were the asker's)."""
+        import mapcells
+        import roads
+        from test_roads import features
+        step, n = 1000.0, 28                                # 28 km: ~15 cells of 1.9 km at 39.3 N
+        lines = [[(-14000 + i * step, 0), (-14000 + (i + 1) * step, 0)] for i in range(n)]
+        cells_of = [{mapcells.cell_of(LAT, LON + e / M_LON) for e, _n in ln} for ln in lines]
+        memo = {}
+
+        def cell_fn(key):           # (each cell's copy: the pieces with an end in it)
+            if key not in memo:
+                ids = [i for i in range(n) if key in cells_of[i]]
+                memo[key] = features([lines[i] for i in ids], ["primary"] * len(ids),
+                                     levels=[(j, 1.0, 0.0, 1.0) for j in range(len(ids))],
+                                     ids=[f"v{i:02d}" for i in ids]) if ids else None
+            return memo[key]
+        hilly = lambda la, lo: 10.0 + 25.0 * np.sin((np.asarray(lo) - LON) * M_LON / 2300.0)
+        every = [cell_fn(k) for k in sorted({c for cs in cells_of for c in cs}, key=str)]
+        self.assertGreater(len(every), roads.CHAIN_CELLS)
+        decks = []
+        for first in ((-13900, -50, -13700, 50), (13700, -50, 13900, 50)):     # the west end first, the east end first
+            bp = roads.BridgeProfiles(FRAME, cell_fn, hilly)
+            bp.parts(every, first)
+            decks.append({fid: z.tobytes() for fid, spec, xy, z, lon in bp.parts(every, (-14100, -50, 14100, 50))})
+        self.assertEqual(len(decks[0]), n)
+        self.assertEqual(decks[0], decks[1])
 
     def test_crossing_decks_stack_by_level(self):
         import roads

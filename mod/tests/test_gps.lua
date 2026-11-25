@@ -484,6 +484,52 @@ do
   G.CHECK_S, G.REROUTE_S = check, reroute
   beamngEarth_core, getPlayerVehicle = savedCore, savedGet
 end
+-- At speed the arrows are the route's line, its heights from rays onto the ground loaded then: a bridge deck that
+-- arrives later lifts them at the next check, not after another LINE_REBUILD_M (codex-speedlod, 130 mph).
+do
+  local savedCore, savedGet, savedGm, savedRay = rawget(_G, 'beamngEarth_core'), rawget(_G, 'getPlayerVehicle'),
+    rawget(_G, 'core_groundMarkers'), rawget(_G, 'castRayStatic')
+  local savedVec = rawget(_G, 'vec3')
+  vec3 = savedVec or function(x, y, z) return { x = x, y = y, z = z } end
+  local check = G.CHECK_S
+  G.CHECK_S = 0
+  local answer, serial, deck = nil, 0, nil
+  beamngEarth_core = { requestRoute = function() return true end,
+    takeRoute = function() local r = answer; answer = nil return r end, groundSerial = function() return serial end }
+  getPlayerVehicle = function() return nil end
+  local sets = 0
+  core_groundMarkers = { setPath = function() sets = sets + 1 return true end, routePlanner = { path = {} } }
+  -- the ground at 0 m; the deck (once loaded) 12 m up between 300 and 500 m east
+  castRayStatic = function(from, _, len)
+    if deck and from.x >= 300 and from.x <= 500 then return from.z - 12 end
+    return from.z
+  end
+  local anchor = { geodeticToEnu = function(_, lat, lon) return lon * 1000, lat * 1000, 0 end }
+  local player = { x = 0, y = 0, z = 0, vx = 58, vy = 0, lat = 0, lon = 0 }
+  G.setDestination(0, 3, 'East')
+  G.update(anchor, player)
+  answer = { points = { { 0, 0 }, { 0, 3 } }, dist = 3000, dur = 100 }
+  G.update(anchor, player)
+  local function deckZ()
+    for _, p in ipairs(core_groundMarkers.routePlanner.path) do
+      if p.pos.x >= 350 and p.pos.x <= 450 then return p.pos.z end
+    end
+  end
+  local n0 = G.lineSets or 0
+  T.check(n0 > 0 and math.abs(deckZ()) < 1e-9, 'line arrows at speed, on the ground under the bridge before its deck')
+  G.update(anchor, player)
+  T.check((G.lineSets or 0) == n0, 'nothing new: the line is not set again')
+  deck, serial = true, 1         -- the deck's road tile came: a collision rebuild
+  G.update(anchor, player)
+  T.check((G.lineSets or 0) == n0 + 1 and math.abs(deckZ() - 12) < 1e-9 and (G.lineRefreshes or 0) >= 1,
+    'the ground changed: set again at the next check, the arrows on the deck')
+  G.update(anchor, player)
+  T.check((G.lineSets or 0) == n0 + 1, 'and once only')
+  G.clear()
+  G.CHECK_S = check
+  beamngEarth_core, getPlayerVehicle, core_groundMarkers, castRayStatic = savedCore, savedGet, savedGm, savedRay
+  vec3 = savedVec
+end
 -- Marker simplification must not remove topology: nearby nodes may still be required edges.
 do
   local function node(x, links, z) return { pos = { x = x, y = 0, z = z or 0 }, links = links or {} } end
@@ -529,5 +575,32 @@ do
   T.check(ids() == 'a,b,c', 'the stock inclusive one-metre merge boundary is restored')
   nodes.b.pos.x = -1.001
   T.check(ids() == 'a,c', 'nodes beyond the stock merge radius remain invalid')
+end
+-- A viaduct (one-way, eastbound, 400 m up its approach) over a two-way track whose line runs 3 m beside it, 24 m
+-- below (the A7's Zillbach viaduct, 2026-11-16): height-aware choices take the deck, the 2D one the track.
+do
+  local function n(x, y, z, links) return { pos = { x = x, y = y, z = z }, links = links or {} } end
+  local ow = function(from) return { oneWay = true, inNode = from } end
+  local vnodes = { d0 = n(-200, 0, 30), d1 = n(0, 0, 30), d2 = n(200, 0, 30), d3 = n(400, 0, 30),
+    t1 = n(0, -3, 6), t2 = n(400, -3, 6) }
+  vnodes.d0.links.d1 = ow('d0'); vnodes.d1.links.d2 = ow('d1'); vnodes.d2.links.d3 = ow('d2')
+  vnodes.t1.links.t2 = {}
+  local segs = G.edgeSegments(vnodes)
+  local _, _, flat = G.nearestEdge(segs, 150, -2.5, 1, 0)
+  T.check(flat and flat.segment.a:sub(1, 1) == 't', 'in 2D the track under the viaduct is the nearer edge (the old pick)')
+  local d3, z3, deck = G.nearestEdge3(segs, 150, -2.5, 30.5, 1, 0)
+  T.check(deck and deck.segment.a:sub(1, 1) == 'd' and math.abs(z3 - 30) < 1e-9 and math.abs(d3 - 2.5) < 1e-9,
+    'nearestEdge3 from the car\'s height takes the deck, with its height and 2D distance')
+  local _, _, low = G.nearestEdge3(segs, 150, -2.5, 6, 1, 0)
+  T.check(low and low.segment.a:sub(1, 1) == 't', 'from the track\'s height the track')
+  local _, z, pick = G.recoverPick(segs, -100, -2.5, 1, 0, 50, -2.9, 1, 0, 30.5, 150)
+  T.check(pick and pick.segment.a:sub(1, 1) == 'd' and math.abs(z - 30) < 1e-9,
+    'recovery ahead picks the viaduct the car is on, joined to its road')
+  _, _, pick = G.recoverPick(segs, -100, -2.5, 1, 0, 50, -2.9, -1, 0, 30.5, 150)
+  T.check(pick and pick.segment.a:sub(1, 1) == 't', 'never against a one-way carriageway: the only edge drivable west')
+  local carNodes = { d0 = vnodes.d0, d1 = vnodes.d1, d2 = vnodes.d2, d3 = vnodes.d3, t1 = vnodes.t1, t2 = vnodes.t2,
+    u = n(-200, -40, 6, { t1 = {} }) }
+  _, _, pick = G.recoverPick(G.edgeSegments(carNodes), -150, -38, 1, 0.19, 50, -2.9, 1, 0, 6.5, 150)
+  T.check(pick and pick.segment.a:sub(1, 1) == 't', 'a car down on the track road stays on its own road')
 end
 T.done('test_gps')

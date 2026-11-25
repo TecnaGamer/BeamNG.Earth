@@ -1,0 +1,368 @@
+use crate::conversion::{FromPyObjectOwned, FromPyObjectSequence, IntoPyObject};
+#[cfg(feature = "experimental-inspect")]
+use crate::inspect::{PyStaticExpr, type_hint_identifier, type_hint_subscript};
+use crate::types::PySequence;
+use crate::types::any::PyAnyMethods;
+use crate::{Borrowed, Bound, PyErr, exceptions};
+use crate::{FromPyObject, PyAny, PyResult, PyTypeInfo, Python, err::CastError, ffi};
+
+use core::mem::MaybeUninit;
+
+impl<'py, T, const N: usize> IntoPyObject<'py> for [T; N]
+where
+    T: IntoPyObject<'py>,
+{
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = T::SEQUENCE_OUTPUT_TYPE;
+
+    /// Turns [`[u8; N]`](core::array) into [`PyBytes`], all other `T`s will be turned into a [`PyList`]
+    ///
+    /// [`PyBytes`]: crate::types::PyBytes
+    /// [`PyList`]: crate::types::PyList
+    #[inline]
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        T::owned_sequence_into_pyobject(self, py, crate::conversion::private::Token)
+    }
+}
+
+impl<'a, 'py, T, const N: usize> IntoPyObject<'py> for &'a [T; N]
+where
+    &'a T: IntoPyObject<'py>,
+{
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+
+    #[cfg(feature = "experimental-inspect")]
+    const OUTPUT_TYPE: PyStaticExpr = <&[T]>::OUTPUT_TYPE;
+
+    #[inline]
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        self.as_slice().into_pyobject(py)
+    }
+}
+
+impl<'py, T, const N: usize> FromPyObject<'_, 'py> for [T; N]
+where
+    T: FromPyObjectOwned<'py>,
+{
+    type Error = PyErr;
+
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = type_hint_subscript!(
+        type_hint_identifier!("_typeshed", "SupportsLenAndGetItem"),
+        T::INPUT_TYPE
+    );
+
+    fn extract(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
+        if let Some(extractor) = T::sequence_extractor(obj, crate::conversion::private::Token) {
+            return extractor.to_array();
+        }
+
+        create_array_from_obj(obj)
+    }
+}
+
+fn create_array_from_obj<'py, T, const N: usize>(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<[T; N]>
+where
+    T: FromPyObjectOwned<'py>,
+{
+    // Types that pass `PySequence_Check` usually implement enough of the sequence protocol
+    // to support this function and if not, we will only fail extraction safely.
+    // SAFETY: passing valid pointer to python API
+    if unsafe { ffi::PySequence_Check(obj.as_ptr()) } == 0 {
+        return Err(CastError::new(obj, PySequence::type_object(obj.py()).into_any()).into());
+    }
+
+    let seq_len = obj.len()?;
+    if seq_len != N {
+        return Err(invalid_sequence_length(N, seq_len));
+    }
+    array_try_from_fn(|idx| {
+        obj.get_item(idx)
+            .and_then(|any| any.extract().map_err(Into::into))
+    })
+}
+
+// TODO: use `core::array::try_from_fn`, if that stabilises:
+// https://github.com/rust-lang/rust/issues/89379
+fn array_try_from_fn<E, F, T, const N: usize>(mut cb: F) -> Result<[T; N], E>
+where
+    F: FnMut(usize) -> Result<T, E>,
+{
+    let mut array: [MaybeUninit<T>; N] = [const { MaybeUninit::uninit() }; N];
+
+    array_try_from_fn_erased(&mut array, &mut cb)?;
+
+    // TODO: use `MaybeUninit::array_assume_init` if that stabilises in future?
+    //
+    // SAFETY: the loop above has fully initialized all `N` elements of `array`,
+    // since we only exit the loop once `guard.initialized == N`.
+    Ok(array.map(|elem| unsafe { elem.assume_init() }))
+}
+
+fn array_try_from_fn_erased<E, T>(
+    buffer: &mut [MaybeUninit<T>],
+    cb: &mut impl FnMut(usize) -> Result<T, E>,
+) -> Result<(), E> {
+    // Panic guard for incremental initialization of arrays.
+    //
+    // Disarm the guard with `mem::forget` once the array has been initialized.
+    struct Guard<'a, T> {
+        // The array to be initialized.
+        array_mut: &'a mut [MaybeUninit<T>],
+        // The number of items that have been initialized so far.
+        initialized: usize,
+    }
+
+    impl<T> Guard<'_, T> {
+        // Adds an item to the array and updates the initialized item counter.
+        //
+        // # Safety
+        //
+        // No more than N elements must be initialized.
+        #[inline]
+        unsafe fn push_unchecked(&mut self, item: T) {
+            // SAFETY: If `initialized` was correct before and the caller does not
+            // invoke this method more than N times, then writes will be in-bounds
+            // and slots will not be initialized more than once.
+            unsafe {
+                self.array_mut
+                    .get_unchecked_mut(self.initialized)
+                    .write(item);
+
+                self.initialized = self.initialized.unchecked_add(1)
+            }
+        }
+    }
+
+    impl<T> Drop for Guard<'_, T> {
+        #[inline]
+        fn drop(&mut self) {
+            debug_assert!(self.initialized <= self.array_mut.len());
+            // SAFETY: this slice will contain only initialized objects.
+            unsafe {
+                core::ptr::drop_in_place(
+                    &mut self.array_mut[..self.initialized] as *mut [_] as *mut [T],
+                );
+            }
+        }
+    }
+
+    let mut guard = Guard {
+        array_mut: buffer,
+        initialized: 0,
+    };
+
+    while guard.initialized < guard.array_mut.len() {
+        let item = cb(guard.initialized)?;
+        // SAFETY: loop condition ensures there's space to push the item.
+        unsafe { guard.push_unchecked(item) };
+    }
+
+    core::mem::forget(guard);
+
+    Ok(())
+}
+
+pub(crate) fn invalid_sequence_length(expected: usize, actual: usize) -> PyErr {
+    exceptions::PyValueError::new_err(format!(
+        "expected a sequence of length {expected} (got {actual})"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::platform::prelude::*;
+    #[cfg(panic = "unwind")]
+    use core::any::Any;
+    #[cfg(panic = "unwind")]
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    // allow use of panic mod without leaking anything else from std
+    #[cfg(panic = "unwind")]
+    mod panic {
+        extern crate std;
+        pub use std::panic::*;
+    }
+
+    use crate::{PyResult, Python, types::PyList};
+    use crate::{
+        conversion::IntoPyObject,
+        types::{PyBytes, PyBytesMethods, any::PyAnyMethods},
+    };
+
+    #[test]
+    #[cfg(panic = "unwind")]
+    fn array_try_from_fn() {
+        static DROP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+        struct CountDrop;
+        impl Drop for CountDrop {
+            fn drop(&mut self) {
+                DROP_COUNTER.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let _ = catch_unwind_silent(move || {
+            let _: Result<[CountDrop; 4], ()> = super::array_try_from_fn(|idx| {
+                #[expect(clippy::manual_assert, reason = "testing panic during array creation")]
+                if idx == 2 {
+                    panic!("peek a boo");
+                }
+                Ok(CountDrop)
+            });
+        });
+        assert_eq!(DROP_COUNTER.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn test_extract_bytes_to_array() {
+        Python::attach(|py| {
+            let v: [u8; 33] = py
+                .eval(c"b'abcabcabcabcabcabcabcabcabcabcabc'", None, None)
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(&v, b"abcabcabcabcabcabcabcabcabcabcabc");
+        })
+    }
+
+    #[test]
+    fn test_extract_bytes_wrong_length() {
+        Python::attach(|py| {
+            let v: PyResult<[u8; 3]> = py.eval(c"b'abcdefg'", None, None).unwrap().extract();
+            assert_eq!(
+                v.unwrap_err().to_string(),
+                "ValueError: expected a sequence of length 3 (got 7)"
+            );
+        })
+    }
+
+    #[test]
+    fn test_extract_bytearray_to_array() {
+        Python::attach(|py| {
+            let v: [u8; 33] = py
+                .eval(
+                    c"bytearray(b'abcabcabcabcabcabcabcabcabcabcabc')",
+                    None,
+                    None,
+                )
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(&v, b"abcabcabcabcabcabcabcabcabcabcabc");
+        })
+    }
+
+    #[test]
+    fn test_extract_small_bytearray_to_array() {
+        Python::attach(|py| {
+            let v: [u8; 3] = py
+                .eval(c"bytearray(b'abc')", None, None)
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(&v, b"abc");
+        });
+    }
+    #[test]
+    fn test_into_pyobject_array_conversion() {
+        Python::attach(|py| {
+            let array: [f32; 4] = [0.0, -16.0, 16.0, 42.0];
+            let pyobject = array.into_pyobject(py).unwrap();
+            let pylist = pyobject.cast::<PyList>().unwrap();
+            assert_eq!(pylist.get_item(0).unwrap().extract::<f32>().unwrap(), 0.0);
+            assert_eq!(pylist.get_item(1).unwrap().extract::<f32>().unwrap(), -16.0);
+            assert_eq!(pylist.get_item(2).unwrap().extract::<f32>().unwrap(), 16.0);
+            assert_eq!(pylist.get_item(3).unwrap().extract::<f32>().unwrap(), 42.0);
+        });
+    }
+
+    #[test]
+    fn test_extract_invalid_sequence_length() {
+        Python::attach(|py| {
+            let v: PyResult<[u8; 3]> = py
+                .eval(c"bytearray(b'abcdefg')", None, None)
+                .unwrap()
+                .extract();
+            assert_eq!(
+                v.unwrap_err().to_string(),
+                "ValueError: expected a sequence of length 3 (got 7)"
+            );
+        })
+    }
+
+    #[test]
+    fn test_intopyobject_array_conversion() {
+        Python::attach(|py| {
+            let array: [f32; 4] = [0.0, -16.0, 16.0, 42.0];
+            let pylist = array
+                .into_pyobject(py)
+                .unwrap()
+                .cast_into::<PyList>()
+                .unwrap();
+
+            assert_eq!(pylist.get_item(0).unwrap().extract::<f32>().unwrap(), 0.0);
+            assert_eq!(pylist.get_item(1).unwrap().extract::<f32>().unwrap(), -16.0);
+            assert_eq!(pylist.get_item(2).unwrap().extract::<f32>().unwrap(), 16.0);
+            assert_eq!(pylist.get_item(3).unwrap().extract::<f32>().unwrap(), 42.0);
+        });
+    }
+
+    #[test]
+    fn test_array_intopyobject_impl() {
+        Python::attach(|py| {
+            let bytes: [u8; 6] = *b"foobar";
+            let obj = bytes.into_pyobject(py).unwrap();
+            assert!(obj.is_instance_of::<PyBytes>());
+            let obj = obj.cast_into::<PyBytes>().unwrap();
+            assert_eq!(obj.as_bytes(), &bytes);
+
+            let nums: [u16; 4] = [0, 1, 2, 3];
+            let obj = nums.into_pyobject(py).unwrap();
+            assert!(obj.is_instance_of::<PyList>());
+        });
+    }
+
+    #[test]
+    fn test_extract_non_iterable_to_array() {
+        Python::attach(|py| {
+            let v = py.eval(c"42", None, None).unwrap();
+            v.extract::<i32>().unwrap();
+            v.extract::<[i32; 1]>().unwrap_err();
+        });
+    }
+
+    #[cfg(feature = "macros")]
+    #[test]
+    fn test_pyclass_intopy_array_conversion() {
+        #[crate::pyclass(crate = "crate")]
+        struct Foo;
+
+        Python::attach(|py| {
+            let array: [Foo; 8] = [Foo, Foo, Foo, Foo, Foo, Foo, Foo, Foo];
+            let list = array
+                .into_pyobject(py)
+                .unwrap()
+                .cast_into::<PyList>()
+                .unwrap();
+            let _bound = list.get_item(4).unwrap().cast::<Foo>().unwrap();
+        });
+    }
+
+    // https://stackoverflow.com/a/59211505
+    #[cfg(panic = "unwind")]
+    fn catch_unwind_silent<F, R>(f: F) -> Result<R, Box<dyn Any + Send + 'static>>
+    where
+        F: FnOnce() -> R + panic::UnwindSafe,
+    {
+        let prev_hook = panic::take_hook();
+        panic::set_hook(Box::new(|_| {}));
+        let result = panic::catch_unwind(f);
+        panic::set_hook(prev_hook);
+        result
+    }
+}

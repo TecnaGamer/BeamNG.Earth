@@ -15,8 +15,8 @@ is() { case $2 in *'
 time=${BNGE_TIME:-}; speed=${BNGE_TIME_SPEED:-}; weather=${BNGE_WEATHER:-}; listed=${BNGE_LISTED:-}
 [ -z "$time" ] || is 'real|([01][0-9]|2[0-3]):[0-5][0-9]' "$time" || fail "BNGE_TIME must be real or HH:MM"
 [ -z "$speed" ] || is '[0-9]+(\.[0-9]+)?' "$speed" || fail "BNGE_TIME_SPEED must be a number (0, 1, 60, ...)"
-[ -z "$weather" ] || is 'real|clear|cloudy|rain|storm|snow|fog' "$weather" \
-  || fail "BNGE_WEATHER must be real, clear, cloudy, rain, storm, snow or fog"
+[ -z "$weather" ] || is 'real|real-host|clear|fewclouds|cloudy|overcast|drizzle|rain|heavyrain|storm|fog|lightsnow|snow|blizzard|sleet|freezingrain|hail' "$weather" \
+  || fail "BNGE_WEATHER must be real, real-host or a preset (clear, fewclouds, cloudy, overcast, drizzle, rain, heavyrain, storm, fog, lightsnow, snow, blizzard, sleet, freezingrain, hail)"
 [ -z "$listed" ] || is 'true|false' "$listed" || fail "BNGE_LISTED must be true or false"
 
 [ -f "$data/ServerConfig.toml" ] || cp "$root/ServerConfig.default.toml" "$data/ServerConfig.toml"

@@ -75,7 +75,7 @@ fn line_x(p: P2, d: P2, q: P2, e: P2) -> Option<P2> {
 }
 
 /// np.linspace(start, stop, k) (k >= 2).
-fn linspace(start: f64, stop: f64, k: usize) -> Vec<f64> {
+pub(crate) fn linspace(start: f64, stop: f64, k: usize) -> Vec<f64> {
     let div = (k - 1) as f64;
     let delta = stop - start;
     let step = delta / div;
@@ -203,6 +203,9 @@ struct K {
     bulb_m: f64, taper_m: f64, nose_deg: f64, nose_gap_m: f64, nose_max_m: f64, cw_cell_m: f64, cw_gap: f64,
     cw_w: f64, stop_gap: f64, stop_w: f64, node_tol: f64, merge_m: f64, connector_m: f64, connector_widths: f64,
     pave_radius: f64, pave_radius_major: f64, service_r: f64, curb_w: f64, radius_tries: Vec<f64>,
+    sidewalk_v2: bool,
+    separate_crossings: bool,
+    arc_step: f64,              // m per curb-return arc segment (0.75; sidewalks v2's curb returns 0.5: earthfast 502)
     left_hand: bool,            // traffic drives on the left: the stop line across the branch's other half
 }
 
@@ -359,7 +362,7 @@ fn piece(k: &K, p: P2, u1: P2, w1: f64, u2: P2, w2: f64, r: f64) -> Option<Piece
     let a0 = (t1[1] - z[1]).datan2(t1[0] - z[0]);
     let a1 = (t2[1] - z[1]).datan2(t2[0] - z[0]);
     let da = pmod(a1 - a0 + std::f64::consts::PI, TWO_PI) - std::f64::consts::PI;
-    let kk = 3usize.max((da.abs() * r / 0.75) as usize + 1);
+    let kk = 3usize.max((da.abs() * r / k.arc_step) as usize + 1);
     let arc: Vec<P2> = linspace(0.0, 1.0, kk).iter().map(|&s| {
         let ang = a0 + da * s;
         [z[0] + r * ang.dcos(), z[1] + r * ang.dsin()]
@@ -628,7 +631,7 @@ fn find_core(k: &K, net: &Net, walk_w: Option<f64>, parking_m: f64, pavement: bo
             net.pts(r).iter().any(|p| nhyp(sub(xy(p), c)) < 60.0)
         }).collect()
     };
-    let mut cw_grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let mut cw_grid: HashMap<(i64, i64), Vec<(usize, i64)>> = HashMap::new();
     let mut cw_half = 0.0f64;
     // the junctions in order of their first node's position (np.round(pos, 2)), stable
     let r2 = |v: f64| (v * 100.0).round_ties_even() / 100.0;
@@ -721,6 +724,9 @@ fn find_core(k: &K, net: &Net, walk_w: Option<f64>, parking_m: f64, pavement: bo
                 if hwi && hwj && !pavement {
                     if let Some((mut corner, ci, cj)) = across(k, net, &bi, &bj, cr, x, walk_w, fi, fj) {
                         corner.footway = footway;
+                        if k.sidewalk_v2 {
+                            corner.sides = Some((ri, li, rj, -lj));
+                        }
                         let id = out.corners.len();
                         out.corners.push(corner);
                         out.cuts.push((ri, li, pi, ui, ci));
@@ -806,7 +812,7 @@ fn find_core(k: &K, net: &Net, walk_w: Option<f64>, parking_m: f64, pavement: bo
                 let a0 = (tti[1] - z[1]).datan2(tti[0] - z[0]);
                 let a1 = (ttj[1] - z[1]).datan2(ttj[0] - z[0]);
                 let da = pmod(a1 - a0 + std::f64::consts::PI, TWO_PI) - std::f64::consts::PI;
-                let kk = 3usize.max((da.abs() * radius / 0.75) as usize + 1);
+                let kk = 3usize.max((da.abs() * radius / k.arc_step) as usize + 1);
                 let arc2: Vec<P2> = linspace(0.0, 1.0, kk).iter().map(|&s| {
                     let ang = a0 + da * s;
                     [z[0] + radius * ang.dcos(), z[1] + radius * ang.dsin()]
@@ -889,8 +895,10 @@ fn find_core(k: &K, net: &Net, walk_w: Option<f64>, parking_m: f64, pavement: bo
                 }
                 let arc: Vec<P3> = curb2.iter().zip(&zs).map(|(c, zz)| [c[0], c[1], *zz]).collect();
                 let mut corner = Corner { arc, inward: nrm, outer, fill, footway, ..Default::default() };
-                if pavement {
+                if pavement || k.sidewalk_v2 {
                     corner.sides = Some((ri, li, rj, -lj));
+                }
+                if pavement {
                     corner.edge = Some((pi, ui, ci, pj, uj, cj));
                 }
                 let id = out.corners.len();
@@ -938,19 +946,24 @@ fn find_core(k: &K, net: &Net, walk_w: Option<f64>, parking_m: f64, pavement: bo
                 continue;
             }
             let hl = 0.5 * nhyp(sub(a, bb));
-            let cw_reach = hl + cw_half + 2.0;
+            let clear = if k.separate_crossings { 2.0f64.max(k.cw_w + 2.0 * k.cw_gap) } else { 2.0 };
+            let cw_reach = hl + cw_half + clear;
             let (gi, gj) = ((c[0] / k.cw_cell_m).floor() as i64, (c[1] / k.cw_cell_m).floor() as i64);
             let kc = (cw_reach / k.cw_cell_m).ceil() as i64;
             let mut touch = false;
             'cells: for di in -kc..=kc {
                 for dj in -kc..=kc {
                     if let Some(v) = cw_grid.get(&(gi + di, gj + dj)) {
-                        for &q in v {
+                        for &(q, fid) in v {
                             let (qa, qb) = out.crosswalks[q];
                             let (qa, qb) = ([qa[0], qa[1]], [qb[0], qb[1]]);
                             let d = [seg_dist(a, qa, qb), seg_dist(bb, qa, qb), seg_dist(c, qa, qb)];
                             let mn = d[1..].iter().fold(d[0], |m, &v| if v < m { v } else { m });  // (builtin min)
-                            if mn < 2.0 {
+                            // Corners at either end of a short block can paint two ladders almost
+                            // on top of each other. Leave the kerb-ramp margins between their edges.
+                            let same_crossing = k.separate_crossings && fid == net.fid[ri] && d[2] < clear
+                                && dot(nl, unit(sub(qa, qb))).abs() > 0.9;
+                            if mn < 2.0 || same_crossing {
                                 touch = true;
                                 break 'cells;
                             }
@@ -962,7 +975,7 @@ fn find_core(k: &K, net: &Net, walk_w: Option<f64>, parking_m: f64, pavement: bo
                 continue;
             }
             out.crosswalks.push(([a[0], a[1], z], [bb[0], bb[1], z]));
-            cw_grid.entry((gi, gj)).or_default().push(out.crosswalks.len() - 1);
+            cw_grid.entry((gi, gj)).or_default().push((out.crosswalks.len() - 1, net.fid[ri]));
             if hl > cw_half {
                 cw_half = hl;
             }
@@ -1035,7 +1048,7 @@ fn rows2<'py>(py: Python<'py>, v: &[P2]) -> Bound<'py, PyAny> {
 /// across the whole driving width; earthfast 264). Returns find's 6-tuple.
 #[pyfunction]
 #[pyo3(signature = (pts, off, fids, fid_rank, width, rad, walk, flags, fw_state, fw_width, fw_rank, walks, walk_w,
-                    parking_m, pavement, bounds, consts, radius_tries, cw_w, stop_w, left_hand=false))]
+                    parking_m, pavement, bounds, consts, radius_tries, cw_w, stop_w, left_hand=false, separate_crossings=false))]
 #[allow(clippy::too_many_arguments)]
 pub fn junctions_find<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
                            fids: Bound<'py, PyList>, fid_rank: PyReadonlyArray1<'py, i64>,
@@ -1044,14 +1057,14 @@ pub fn junctions_find<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off
                            fw_state: PyReadonlyArray2<'py, u8>, fw_width: PyReadonlyArray2<'py, f64>,
                            fw_rank: PyReadonlyArray2<'py, i64>, walks: Bound<'py, PyList>, walk_w: Option<f64>,
                            parking_m: f64, pavement: bool, bounds: Option<(f64, f64, f64, f64)>, consts: Vec<f64>,
-                           radius_tries: Vec<f64>, cw_w: f64, stop_w: f64, left_hand: bool)
+                           radius_tries: Vec<f64>, cw_w: f64, stop_w: f64, left_hand: bool, separate_crossings: bool)
                            -> PyResult<Bound<'py, PyTuple>> {
     let pa = pts.as_array();
     let offa = off.as_array();
     let n = offa.len().saturating_sub(1);
     if pa.ncols() < 3 || fids.len() != n || fid_rank.as_array().len() != n || width.as_array().len() != n || rad.as_array().len() != n
         || walk.as_array().len() != n || flags.as_array().len() != n || fw_state.as_array().nrows() != n || walks.len() != 2 * n
-        || consts.len() != 23 || (n > 0 && offa[n] as usize != pa.nrows()) {
+        || !(consts.len() == 23 || consts.len() == 24) || (n > 0 && offa[n] as usize != pa.nrows()) {
         return Err(PyValueError::new_err("junctions_find: mismatched road arrays"));
     }
     let p: Vec<P3> = (0..pa.nrows()).map(|i| [pa[[i, 0]], pa[[i, 1]], pa[[i, 2]]]).collect();
@@ -1084,12 +1097,16 @@ pub fn junctions_find<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off
         return Err(PyValueError::new_err("junctions_find: fid ranks out of range"));
     }
     let c = &consts;
+    if c.len() > 23 && !(c[23].is_finite() && c[23] >= 0.05) {
+        return Err(PyValueError::new_err("junctions_find: arc step must be >= 0.05 m"));
+    }
     let k = K {
         radius: c[0], corner_lo: c[1], corner_hi: c[2], acute_deg: c[3], acute_t_m: c[4], acute_r_min: c[5],
         branch_m: c[6], bulb_m: c[7], taper_m: c[8], nose_deg: c[9], nose_gap_m: c[10], nose_max_m: c[11],
         cw_cell_m: c[12], cw_gap: c[13], cw_w, stop_gap: c[14], stop_w, node_tol: c[15], merge_m: c[16],
         connector_m: c[17], connector_widths: c[18], pave_radius: c[19], pave_radius_major: c[20], service_r: c[21],
-        curb_w: c[22], radius_tries, left_hand,
+        curb_w: c[22], sidewalk_v2: c.len() > 23, separate_crossings, radius_tries,
+        arc_step: if c.len() > 23 { c[23] } else { 0.75 }, left_hand,
     };
     let bounds = bounds.map(|b| [b.0, b.1, b.2, b.3]);
     let o = py.detach(|| find_core(&k, &net, walk_w, parking_m, pavement, bounds));
@@ -1099,7 +1116,21 @@ pub fn junctions_find<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off
     for cn in &o.corners {
         let d = PyDict::new(py);
         d.set_item("arc", rows3(py, &cn.arc))?;
-        d.set_item("inward", rows2(py, &cn.inward))?;
+        if k.sidewalk_v2 && cn.sides.is_some() && cn.outer.len() >= 2 {
+            // Use the branch's surveyed cross section at either tangent.
+            // A chord normal is turned inward by half the last arc segment.
+            let mut inward = cn.inward.clone();
+            for (a, o) in [(0, cn.outer.len() - 1), (cn.arc.len() - 1, 0)] {
+                let dir = [cn.outer[o][0] - cn.arc[a][0], cn.outer[o][1] - cn.arc[a][1]];
+                let width = mhyp(dir);
+                if width > 0.1 {
+                    inward[a] = [dir[0] / width, dir[1] / width];
+                }
+            }
+            d.set_item("inward", rows2(py, &inward))?;
+        } else {
+            d.set_item("inward", rows2(py, &cn.inward))?;
+        }
         let outer = PyList::empty(py);
         for q in &cn.outer {
             outer.append(PyTuple::new(py, q.iter())?)?;

@@ -5,6 +5,7 @@ __pycache__/
 # local backups and logs
 backups/
 *.log
+!native/earthfast/vendor/turbojpeg-sys-1.2.0/libjpeg-turbo/doc/change.log
 
 # in-game test runs and screenshots (hundreds of MB): keep the written reports (*.md, *.json),
 # not the per-run folders
@@ -19,6 +20,13 @@ docs/research/*.jsonl
 
 # agent worktrees
 .claude/
+!/.claude/
+/.claude/*
+!/.claude/skills/
+/.claude/skills/*
+!/.claude/skills/port-review/
+/.claude/skills/port-review/*
+!/.claude/skills/port-review/SKILL.md
 tools/gcpatch/build/
 docs/research/streetview/
 docs/research/ortho/
@@ -30,5 +38,6 @@ dist/
 native/earthfast/target/
 build/
 native/serverlist/target/
+native/roadsys/target/
 server/earthfast.FAST-BUILD-do-not-commit
 *.prof

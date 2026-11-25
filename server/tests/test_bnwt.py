@@ -435,8 +435,13 @@ class ContentGuard(unittest.TestCase):
     columns, the query, the clipping, the WKB decode, the column builders; Overture's tiles' reader and its FORMAT; the
     block path) must bump that archive's bnwt.CONTENT (the old archives are then not read) or show that the output is
     unchanged; then the fingerprint here is updated."""
-    FINGERPRINT = {("base", 1): "925b2e6e87dc4a6c", ("transportation", 1): "98802c4b9213d440",
-                   ("buildings", 1): "0c37ee4249d499ca", ("places", 1): "af34ebc49196615b"}
+    # (2026-11-18: mapgeom.text_column ported to Rust, earthfast 454; its output byte for byte the same: 11.3 M values
+    # over three cold visits and test_textcol_native's parity, so the archives stay at CONTENT 1)
+    # (2026-11-22: Reader.query's connection made at its first statement, _run's simplification of whole division
+    # outlines kept by their WKB (_simplified): the same statements and the same pure function; no base layer
+    # simplifies; CIP units of Manhattan, the open sea, the Sahara and the Yukon byte for byte the same; base stays at 1)
+    FINGERPRINT = {("base", 1): "52c719597716ccf1", ("transportation", 1): "3d94e4d2261a7dd0",
+                   ("buildings", 1): "628fa00065e3eecd", ("places", 1): "21b3b00b2b99c951"}
 
     @staticmethod
     def fingerprint(name):

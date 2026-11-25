@@ -75,7 +75,6 @@ class WriteGroundBaseTest(unittest.TestCase):
             s = types.SimpleNamespace(out_dir=out, user_dir=d, vfs_dir="/temp/beamngEarth/x", base_px=128,
                                       ter_serial=itertools.count(5), block_pools=[], base_lock=threading.Lock(),
                                       ground_bases={}, near_visual="detail")
-            s.hm_name = lambda key: earthd.Server.hm_name(s, key)
             s.hm_stem = lambda key: earthd.Server.hm_stem(s, key)
             anchor = types.SimpleNamespace(id=1, lat=40.0, lon=-80.0)
             info = {"ter": name, "q": q, "surfaceComplete": True}

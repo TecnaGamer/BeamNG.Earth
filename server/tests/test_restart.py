@@ -41,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import earthd  # noqa: E402
+import protocol  # noqa: E402
 import geodesy  # noqa: E402
 import modsim  # noqa: E402
 import test_server  # noqa: E402
@@ -233,6 +234,107 @@ class SessionAdoptionTest(unittest.TestCase):
         self.assertGreater(len(set(seen)), 2, f"one file at a time: {seen[:20]}")
         self.assertEqual(self.s.orphans, {})
 
+    def test_slow_sweep_markers_leave_the_loop_responsive(self):
+        self.s.heartbeat_at -= earthd.SESSION_HEARTBEAT_S
+        self.s.orphan_s = 30
+        for sid in self.s.orphans:
+            self.s.orphans[sid] -= 1000
+        calls = []
+
+        async def run():
+            loop = asyncio.get_running_loop()
+
+            def slow(fn):
+                def io(path):
+                    # Only the event loop can unblock this fake filesystem call.
+                    tick = threading.Event()
+                    loop.call_soon_threadsafe(tick.set)
+                    self.assertTrue(tick.wait(3), f"{fn.__name__} blocked the event loop")
+                    calls.append((fn.__name__, Path(path).parent.name))
+                    return fn(path)
+                return io
+
+            queue = mock.Mock()
+            with mock.patch.object(os, "utime", slow(os.utime)), \
+                    mock.patch.object(os.path, "getmtime", slow(os.path.getmtime)), \
+                    mock.patch.object(self.s, "queue_delete", queue):
+                gone = await self.s.sweep_sessions_async()
+            self.assertEqual(gone, [Path(self.a[0]).name, Path(self.b[0]).name])
+            self.assertEqual([call.args[0] for call in queue.call_args_list],
+                             [self.s._session_paths(sid) for sid in gone])
+
+        asyncio.run(run())
+        self.assertEqual(calls[0], ("utime", self.s.sid))
+        for folder in (self.a[0], self.b[0]):
+            self.assertIn(("getmtime", Path(folder).name), calls)
+
+    def test_grace_restart_in_the_same_clock_tick_is_seen(self):
+        # Windows' monotonic clock ticks every ~15.6 ms: a disconnect in the same tick as the sweep's snapshot must
+        # still change the stored grace start, or the sweep deletes a folder whose grace just restarted.
+        sid_a = Path(self.a[0]).name
+        c = self.conn()
+        self.s.claim_sessions(c, [sid_a])
+        since = self.s.orphans[sid_a]
+        self.s.connections.remove(c)
+        with mock.patch("earthd.time.monotonic", return_value=since):
+            self.s.drop_claims(c)
+        self.assertNotEqual(self.s.orphans[sid_a], since)
+        self.assertEqual(self.s._finish_session_sweep([(sid_a, since, [])]), [])
+        self.assertIn(sid_a, self.s.orphans)
+
+    def test_sweep_rechecks_ownership_after_listing(self):
+        self.s.orphan_s = 0  # even a fresh marker qualifies: only the new claim / grace can protect the files
+        sid_a, sid_b = Path(self.a[0]).name, Path(self.b[0]).name
+        c = self.conn()
+        listing = self.s._session_paths
+
+        async def run():
+            loop = asyncio.get_running_loop()
+            listed, resume = asyncio.Event(), threading.Event()
+
+            def paused(sid):
+                paths = listing(sid)
+                if sid == sid_b:
+                    loop.call_soon_threadsafe(listed.set)
+                    self.assertTrue(resume.wait(5), "listing blocked the event loop")
+                return paths
+
+            with mock.patch.object(self.s, "_session_paths", paused), \
+                    mock.patch.object(self.s, "queue_delete") as queue:
+                sweep = asyncio.create_task(self.s.sweep_sessions_async())
+                try:
+                    await asyncio.wait_for(listed.wait(), 5)
+                    # One game disconnects, restarting its grace. Another keeps its claim.
+                    self.s.claim_sessions(c, [sid_a])
+                    self.s.connections.remove(c)
+                    self.s.drop_claims(c)
+                    self.s.claim_sessions(self.conn(), [sid_b])
+                finally:
+                    resume.set()
+                self.assertEqual(await sweep, [])
+                queue.assert_not_called()
+            self.assertEqual(set(self.s.orphans), {sid_a, sid_b})
+
+        asyncio.run(run())
+
+    def test_sweep_keeps_marker_renewed_by_another_server_during_listing(self):
+        self.s.orphan_s = 30
+        for sid in self.s.orphans:
+            self.s.orphans[sid] -= 1000
+        sid_a, sid_b = Path(self.a[0]).name, Path(self.b[0]).name
+        listing = self.s._session_paths
+
+        def renew_while_listing(sid):
+            if sid == sid_b:
+                os.utime(Path(self.a[0]) / earthd.SESSION_MARKER)
+            return listing(sid)
+
+        with mock.patch.object(self.s, "_session_paths", renew_while_listing), \
+                mock.patch.object(self.s, "queue_delete") as queue:
+            self.assertEqual(asyncio.run(self.s.sweep_sessions_async()), [sid_b])
+        queue.assert_called_once_with(listing(sid_b))
+        self.assertEqual(set(self.s.orphans), {sid_a})
+
     def test_no_game_at_start_every_earlier_session_goes(self):
         """No game running at the start (the launcher starts the server first): every earlier session goes now, moved
         out of the user folder at once (no file watcher sees it), deleted by the trash thread; none kept as an orphan."""
@@ -305,9 +407,9 @@ class _Running:
         self.thread.start()
 
         async def start():
-            return await asyncio.start_server(lambda r, w: earthd.Connection(s, r, w).run(), "127.0.0.1", 0)
+            return await protocol.start_server(lambda r, w: earthd.Connection(s, r, w).run(), "127.0.0.1", 0)
         self.srv = asyncio.run_coroutine_threadsafe(start(), self.loop).result(10)
-        self.port = self.srv.sockets[0].getsockname()[1]
+        self.port = protocol.listen_port(self.srv)
         self.alive = True
 
     def call(self, fn, *args):
@@ -703,8 +805,56 @@ class LeakedPacksTest(unittest.TestCase):
             s.hm[key] = {"base": names[2], "old_bases": [names[1]]}
             s.hm_committed, s.hm_sent = [], []
             s.evict_heightmaps(fresh=None)
+            s.removes_flush()               # (the files go in the "remove" thread)
             self.assertNotIn(key, s.hm)
             self.assertFalse(any(os.path.exists(p) for p in packs), "every photo of the block goes with it")
+
+    def test_eviction_never_deletes_a_rebuilt_blocks_files(self):
+        """A block evicted (its files removed in the "remove" thread) and built again while that removal is under way
+        (Codex review: the rebuild started after the removal's check and its files were deleted under it): the new
+        build's files stay; the rebuild waits for the removal of its block."""
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(earthd, "game_running", lambda: True), \
+                mock.patch.object(earthd, "HM_CACHE", 0):
+            s = self.server(root)
+            a = s.new_anchor(46.86, -113.98)
+            s.anchors[a.id] = a
+            key = (a.id, 0.0, 0.0)
+            path = os.path.join(s.out_dir, s.base_name(key))
+            with open(path, "w") as f:
+                f.write("old")
+            s.hm[key] = {"base": s.base_name(key)}
+            s.hm_committed, s.hm_sent = [], []
+            deleting, rebuilt = threading.Event(), threading.Event()
+            real_remove = earthd.Server._remove
+
+            def slow_remove(p):
+                if p == path and not deleting.is_set():
+                    deleting.set()          # (the removal under way: its check passed)
+                    rebuilt.wait(2.0)
+                real_remove(p)
+
+            def make(anchor, cx, cy, progress, lane=None, queued_at=None):
+                with open(path, "w") as f:
+                    f.write("new")
+                return {"zoom": 14, "seconds": 0.0, "zBase": 0.0, "maxHeight": 1.0, "q": 0.25}
+
+            async def go():
+                s.evict_heightmaps(fresh=None)
+                for _ in range(400):
+                    if deleting.is_set():
+                        break
+                    await asyncio.sleep(0.005)
+                task = asyncio.ensure_future(s.terrain(a, 0.0, 0.0))
+                await asyncio.sleep(0.2)    # (the rebuild's chance to write before the removal goes on)
+                rebuilt.set()
+                await task
+            with mock.patch.object(earthd.Server, "_remove", staticmethod(slow_remove)), \
+                    mock.patch.object(s, "make_heightmap", make):
+                asyncio.run(go())
+                s.removes_flush()
+            self.assertIn(key, s.hm)
+            with open(path) as f:
+                self.assertEqual(f.read(), "new", "the rebuilt block's file stays")
 
     def test_leaked_packs_wiped_once_with_no_game(self):
         import terraincache

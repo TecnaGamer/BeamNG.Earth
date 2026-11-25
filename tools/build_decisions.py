@@ -40,9 +40,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SERVER = os.path.join(ROOT, "server")
 sys.path.insert(0, SERVER)
+import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 
 PASSES = 3
-WEEKLY_KEYS = ("rails", "lanes", "stations")      # (decisions.WEEKLY: kept in each record's versions, not the vkey)
+WEEKLY_KEYS = ("rails", "lanes", "stations", "osmtags",   # (decisions.WEEKLY: kept in each record's versions, not the vkey)
+               "dedecks")      # (Germany's measured decks: "none" while nothing is published; absent with the source off)
 # what earthd puts in every player's environment (its --bridge-profile default; BNE_NETSTATS_PROC is not a switch)
 PLAYER_SWITCHES = {"BNE_BRIDGE_PROFILE": "curve"}
 TEST_PLACES = {"fells": (39.28, -76.60), "manhattan": (40.76, -73.98), "stelvio": (46.53, 10.45),
@@ -137,7 +139,7 @@ def _worker(args):
 
     def store(self, key, plans, keeps, covers, opens, decks=None, persist=False):
         ok = orig_store(self, key, plans, keeps, covers, opens, decks, persist=persist)
-        if ok and persist and not roadz.hk_cell(key):
+        if ok and persist and not roadz.hk_cell(key) and not roadz.tlm_tags(key):
             rec.write(json.dumps({"plans": [int(k) for k in key], "sig": self.signature, "path": self._path(key),
                                   "versions": self.persist[1][2] if self.persist else None}, sort_keys=True) + "\n")
             rec.flush()
@@ -149,7 +151,7 @@ def _worker(args):
         if cid is None or roads._facts_key(feats, kind, extra) is None:
             return
         cell = tuple(int(v) for v in cid[0].split("/"))
-        if cell[0] != decisions.CELL_Z or roadz.hk_cell(cell):
+        if cell[0] != decisions.CELL_Z or roadz.hk_cell(cell) or roadz.tlm_tags(cell):
             return
         rec.write(json.dumps({"facts": kind, "layer": cid[1], "extra": extra, "cell": cid[0], "versions": cid[2],
                               "data": json.dumps(data)}) + "\n")
@@ -200,12 +202,15 @@ WEEKLY_WAIT_S = 180.0
 
 
 def weekly_of(versions):
-    return {k: versions.get(k) for k in WEEKLY_KEYS} if isinstance(versions, dict) else None
+    if not isinstance(versions, dict):
+        return None
+    # (dedecks only where versions() has it: absent with the source off)
+    return {k: versions.get(k) for k in WEEKLY_KEYS if k != "dedecks" or k in versions}
 
 
 def wait_weekly(md, wait_s=None, sleep=time.sleep):
-    """The weekly datasets' builds ({rails, lanes, stations}) once every one is known (each manifest asked, again
-    every 10 s for up to wait_s), or None. Planning without them would make plans without their tags."""
+    """The weekly datasets' builds ({rails, lanes, stations, osmtags}) once every one is known (each manifest asked,
+    again every 10 s for up to wait_s), or None. Planning without them would make plans without their tags."""
     srcs = [getattr(md, a, None) for a in ("rail_tags", "lane_tags", "station_tags")]
     t0 = time.monotonic()
     wait_s = WEEKLY_WAIT_S if wait_s is None else wait_s
@@ -213,6 +218,12 @@ def wait_weekly(md, wait_s=None, sleep=time.sleep):
         for src in srcs:
             if src is not None:
                 src.version()
+        if hasattr(md, "osm_tags_build"):
+            md.osm_tags_build()             # (the OSM road tags' build of the run, decided)
+        import roadz
+        if roadz.ON and roadz.DE_ON:
+            import dedom
+            dedom.identity()                # (Germany's measured decks' build of the run, decided)
         got = weekly_of(md.versions())
         if all(got.get(k, 0) is not None for k in WEEKLY_KEYS):
             return got
@@ -236,7 +247,7 @@ def _ways_worker(args):
     start = wait_weekly(md)
     if start is None:
         return {"error": "the weekly datasets' manifests could not be had"}
-    sources = {"rails": getattr(md, "rail_tags", None), "lanes": getattr(md, "lane_tags", None)}
+    sources = decisions.weekly_of(md)       # (rails, lanes and the OSM road tags: the server's own slices)
     with open(out_jsonl, "w") as rec:
         for z, x, y in cells:
             try:
@@ -257,6 +268,8 @@ def plan_area(cache, cells, procs, work, label):
     os.makedirs(work, exist_ok=True)
     todo, results, jobs = cells, [], []
     t0 = time.time()
+    import pagesdata                        # (one build of each weekly dataset in every worker of the build)
+    pagesdata.ensure_session(cache)
     for pass_ in range(PASSES):
         plancache.start_run(cache)          # (a new run: the last run's short plans are not read again)
         pj = [(cache, todo[i::procs], os.path.join(work, f"{label}_p{pass_}w{i}.jsonl"), i) for i in range(procs)]
@@ -383,15 +396,20 @@ def _index(root):
         return {}
 
 
-def pack(by_block, out, vkey_hex, vkey_bytes, doc, seed, built_by):
+def pack(by_block, out, vkey_hex, vkey_bytes, doc, seed, built_by, store=None, npz=None):
     """by_block's items into their blocks under <out>/d<FORMAT>/<vkey>/12/<x>/<y>.<h>.bngd (h: the file's own sha256,
     16 hex; merged with the block's current file: its items kept unless made again, by base key), signed; the
     current names in current.json, the replaced ones in retired.json (with when: run.py prune-out removes them after
     a grace period, so a client holding the old manifest still finds them); the manifest rewritten. Returns
-    {(bx, by): bytes}."""
+    {(bx, by): bytes}. store: the product's layout (a decisions.Store class: decisions.Store, lidarz.Store), npz(key):
+    is a kept item numpy's npz (the decision plans)."""
     import decisions
     import fast
-    root = os.path.join(out, f"d{decisions.FORMAT}", vkey_hex)
+    store = store or decisions.Store
+    npz = npz or (lambda k: k.startswith("p/"))
+    kw = {} if store.DOMAIN == "dec" else {"domain": store.DOMAIN}
+    ext = store.EXT
+    root = os.path.join(out, f"{store.PREFIX}{store.LAYOUT}", vkey_hex)
     os.makedirs(root, exist_ok=True)
     cur = _index(root)
     try:
@@ -405,29 +423,29 @@ def pack(by_block, out, vkey_hex, vkey_bytes, doc, seed, built_by):
         name = f"{bx}/{by}"
         old_h = cur.get(name)
         if old_h:                       # (a block built before: its items kept unless made again now)
-            with open(os.path.join(root, str(decisions.BLOCK_Z), str(bx), f"{by}.{old_h}.bngd"), "rb") as f:
+            with open(os.path.join(root, str(decisions.BLOCK_Z), str(bx), f"{by}.{old_h}.{ext}"), "rb") as f:
                 old = f.read()
-            fast._ef.dec_verify_block(old, decisions.BLOCK_Z, bx, by, vkey_bytes, [pub])
+            fast._ef.dec_verify_block(old, decisions.BLOCK_Z, bx, by, vkey_bytes, [pub], **kw)
             made = {decisions.base_key(k) for k in items}
-            for k in fast._ef.dec_block_info(old)[4]:
+            for k in fast._ef.dec_block_info(old, **kw)[4]:
                 if decisions.base_key(k) not in made:
-                    items[k] = (fast._ef.dec_block_item(old, k), k.startswith("p/"))
+                    items[k] = (fast._ef.dec_block_item(old, k, **kw), npz(k))
         body = fast._ef.dec_pack_block(decisions.BLOCK_Z, bx, by, vkey_bytes,
-                                       [(k, v[0], v[1]) for k, v in sorted(items.items())], seed)
+                                       [(k, v[0], v[1]) for k, v in sorted(items.items())], seed, **kw)
         h = hashlib.sha256(body).hexdigest()[:decisions.HASH_HEX]
-        decisions._write(os.path.join(root, str(decisions.BLOCK_Z), str(bx), f"{by}.{h}.bngd"), body)
+        decisions._write(os.path.join(root, str(decisions.BLOCK_Z), str(bx), f"{by}.{h}.{ext}"), body)
         if old_h and old_h != h:
-            retired[f"{decisions.BLOCK_Z}/{bx}/{by}.{old_h}.bngd"] = time.time()
+            retired[f"{decisions.BLOCK_Z}/{bx}/{by}.{old_h}.{ext}"] = time.time()
         cur[name] = h
         sizes[(bx, by)] = len(body)
     decisions._write(os.path.join(root, "retired.json"), json.dumps(retired, sort_keys=True).encode())
     decisions._write(os.path.join(root, "current.json"), json.dumps(cur, sort_keys=True).encode())
     blocks = sorted([int(k.split("/")[0]), int(k.split("/")[1]), h] for k, h in cur.items())
-    man = {"format": decisions.FORMAT, "vkey": vkey_hex, "doc": doc, "blocks": blocks,
+    man = {"format": store.LAYOUT, "vkey": vkey_hex, "doc": doc, "blocks": blocks,
            "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "builder": built_by,
            "key": pub.hex()[:16]}
-    decisions._write(os.path.join(root, "manifest.bngm"),
-                     fast._ef.dec_make_manifest(json.dumps(man, sort_keys=True).encode("utf-8"), seed))
+    decisions._write(os.path.join(root, store.MANIFEST),
+                     fast._ef.dec_make_manifest(json.dumps(man, sort_keys=True).encode("utf-8"), seed, **kw))
     return sizes
 
 
@@ -489,6 +507,9 @@ def main():
     airports.Store(a.cache, netfetch.Fetcher()).load()
     if "BNGE_DEM_CDN" not in os.environ:
         os.environ["BNGE_DEM_CDN"] = cdn.dem_release(netfetch.Fetcher(), a.cache) or "off"
+    # (the Overture release players' apps pick, or BNGE_OVERTURE_RELEASE for a candidate: in the vkey)
+    import overturepick
+    print("Overture release", overturepick.choose_for_process(a.cache), flush=True)
     work = os.path.join(a.cache, "dec_work")
     stats = []
     for name, s, w, n, e in places:

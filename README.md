@@ -24,12 +24,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Copernicus 30 m elsewhere with buildings and small tree stands filtered out of it.
 - Aerial and satellite imagery on the ground: open state and national orthophotos (Maryland's 15 cm photos,
   a dozen more US states, NAIP across the US, Switzerland, France, Portugal, Spain, the Netherlands, Germany's states,
-  Austria, Poland, Czechia, Japan, parts of Australia and Canada, and more), Sentinel-2 cloudless everywhere else; shadows and
+  Austria, Poland, Czechia, Japan, parts of Australia and Canada, and more), Sentinel-2 everywhere else; shadows and
   colour seams taken out of the photos, the season's colours graded in, cliffs drawn as rock.
 - A real view distance out to the horizon, with the Earth's curvature.
 - Both poles: Antarctica's ice sheet up to the South Pole (2,835 m) from the Copernicus DEM, the Arctic's sea ice
   at the North Pole, the polar day and night of the real sky, and a minimap compass that points to true north.
-- Opt-in (`BNE_PHOTO_SURFACE=1`): an untagged track, service or unclassified road is asphalt, grass or gravel by the
+- Opt-in (Settings > Experimental > Road surface from aerial photos, or `BNE_PHOTO_SURFACE=1`): an untagged track, service or unclassified road is asphalt, grass or gravel by the
   colour of the regional photo under it (a lane as green as its verges is a grass lane, a pale neutral one gravel).
 - Ground materials from land cover (grass, dirt, rock, sand, snow, mud, lawns, paved squares and parking
   lots) with 3D grass and bushes. Squares and pedestrian areas are painted into the ground with their own textures by
@@ -80,9 +80,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   railway lines as 3D track (ballast, sleepers and rails, rail bridges on piers, the ground cut and filled for the
   line; abandoned and disused lines overgrown and rusty; lines not built yet left out), level crossings with the rails
   flush in the road and crossbucks, flashing lights or gates (in the US as the FRA's crossing inventory lists them),
-  and tram tracks (street track where trams run on the road). Opt-in (set `BNE_RAIL_XING=1`): a level crossing as
+  and tram tracks (street track where trams run on the road). Opt-in (Settings > Experimental > Grouped level crossings, or `BNE_RAIL_XING=1`): a level crossing as
   one place (a barrier kit per approach, a rubber deck between the rails), crushed-stone ballast on tracks in use,
-  parallel tracks sharing one bed, and buildings, lamps and poles kept off the railway's bed. Opt-in (`BNE_CATENARY=1`): electrified lines
+  parallel tracks sharing one bed, and buildings, lamps and poles kept off the railway's bed. Opt-in (Settings > Experimental > Overhead railway wires, or `BNE_CATENARY=1`): electrified lines
   (OpenStreetMap `electrified`) get catenary masts, cantilevers and contact wire, concrete or steel by country.
   A track's bed comes from one profile per line, the same in every tile and grading cell (no steps at tile seams),
   smoothed along the line with its bends rounded; switches and crossovers meet the lines they join; a road crossing a
@@ -92,7 +92,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   beside the rail head, roofs on columns, benches, bins and lamps, footbridges, walkable underpasses, boarded track
   crossings and name boards (`BNE_RAILSTATIONS=off` turns them off). The catenary runs on through way joints and
   switches, with portals over three tracks or more, droppers and per-class wire materials. Opt-in: a physics
-  collider at the rails for riding them (`BNE_RAIL_COLLIDE=on`) and rail tunnels as tubes (`BNE_RAIL_TUNNELS=on`).
+  collider at the rails for riding them (Settings > Experimental > Solid railway rails, or `BNE_RAIL_COLLIDE=on`) and rail tunnels as tubes (Settings > Experimental > Railway tunnels, or `BNE_RAIL_TUNNELS=on`).
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
 - Golf courses: mapped greens, fairways, rough and bunkers painted into the ground, and a flag at each mapped hole
@@ -121,7 +121,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   where the limit changes, past major junctions and motorway entrances, and as reminders on long roads; the US
   "SPEED LIMIT" panel, Canada's "MAXIMUM" panel, and elsewhere the round red-ring sign (mph in the UK). The Highway
   signs setting switches them too.
-- Road signs (off unless the server has `BNE_ROADSIGNS=on`; Settings > World > Road signs): no-entry signs where a one-way road ends, dead-end signs, pedestrian-crossing signs at marked crossings without signals, sharp-bend and double-bend warnings, roundabout signs, signal warnings, motorway and living-street signs, one-way signs, narrowing and side-road warnings, chevron boards, give way and stop, tunnel, bus stop, car park, pedestrian zone and cycle path signs, drawn from vectors on one atlas per sign system (Czechia, Germany, Poland, Ukraine so far); a sign stands only where the road data implies it.
+- Road signs (experimental, off by default; Settings > Experimental > Road signs, from the next world server restart): no-entry signs where a one-way road ends, dead-end signs, pedestrian-crossing signs at marked crossings without signals, sharp-bend and double-bend warnings, roundabout signs, signal warnings, motorway and living-street signs, one-way signs, narrowing and side-road warnings, chevron boards, give way and stop, tunnel, bus stop, car park, pedestrian zone and cycle path signs, drawn from vectors on one atlas per sign system (Czechia, Germany, Poland, Ukraine so far); a sign stands only where the road data implies it.
   signs setting switches them too. In Germany, with the town signs on, the general limits are not posted, as there:
   no 50 at a town's entry sign (the sign itself sets the 50) or in town, no 100 outside towns, except where a lower
   limit ends.
@@ -169,7 +169,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - **Real weather** at the player from Open-Meteo, updated as you travel: cloud cover and high cirrus, clouds
   drifting with the wind aloft, fog from the real visibility, ground wind with gusts that pushes the cars,
   rain and snow, the air temperature, and the sun dimming under overcast. It goes through the game's own
-  weather system, so the Time & Weather menu shows the real values; a manual mode leaves it to you.
+  weather system, so the Time & Weather menu shows the real values.
+- **Weather page and radial menu**: Real weather, one of 15 presets (clear to thunderstorm, fog, snow, blizzard,
+  sleet, freezing rain, hail) or Off (the game's own controls); intensity, how fast it changes, rain and snow on or
+  off, rain visibility, the real clouds, fog, wind and rain each on or off, and a limit on how thick fog gets. Rain
+  and snow stop in tunnels, parking structures and under bridges, rain thickens the air and turns the fog grey, and
+  traffic turns its headlights on and slows down in rain, snow and fog.
 - **Seasons**: the photos' colours and the trees' leaves follow the time of year (autumn colours, bare
   trees in winter where the photos were taken leaf-off).
 - **Real gravity**: the WGS84 gravity for your latitude and altitude plus the EGM2008 local anomalies, so
@@ -182,6 +187,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   edges, ditches and the ground at walls follow the map closely (the Low and Medium presets use a lighter 2 m grid).
 - Buildings, sidewalks, curbs and bridge decks are solid (lean collision meshes near the car keep the
   physics' collision rebuilds cheap).
+- A bridge ahead that has not loaded yet (its road piece comes after the ground under it): the car slows down smoothly
+  and stops short of it until it has, instead of driving into the gap; also in BeamMP, where only your own car is
+  slowed (on by default; Settings > World > Slow down before bridges still loading).
 - Real bridge and tunnel heights where open data measures them: in the US, bridge decks follow the USGS 3DEP lidar
   measured along each bridge, and so do the roads leading onto them up to where they are back on the ground
   (`BNE_APPROACH_LIDAR=off` turns that part off); in France (IGN BD TOPO) and Norway (NVDB), bridges and tunnels follow the national road
@@ -203,8 +211,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Switzerland and Liechtenstein (swissBUILDINGS3D), Estonia and Vienna. Where a model
   has no roof type, the shape is read from its roof faces when the data is built. A small file per ~25 km, fetched
   once per area; `BNE_LOD2_ROOFS=off` turns it off.
-  `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
+  `BNE_GRADE_GUARD=on` (off by default; Settings > Experimental > Road steepness limit) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
+  `BNE_BATTER=vanilla` (off by default and not on the settings page yet: still to be checked in game) rolls the ground
+  beside roads and railways off in wide cut and fill slopes like the stock maps' (gentler in towns, stopping short of
+  buildings) instead of a narrow carved ribbon.
 - Smooth bends (on by default; `BNE_ROAD_SMOOTH=off` draws the roads as mapped): the map draws a bend as a few
   straight pieces, so roads had a visible corner at every vertex, and a banked racetrack's chords made a series of
   bumps. Each bend of a drivable road and racetrack is an arc tangent to both pieces (a motorway's gentle, a lane's
@@ -212,7 +223,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   spirals so the curvature has no steps (`BNE_ROAD_G2=off`: the arcs alone). The road's ends and the points where
   another road joins it stay where the map has them. The road mesh, the ground's grading, the markings and the AI's
   routes all follow the same line. Driveways and parking aisles keep their mapped corners; railways are rounded only
-  with `BNE_RAIL_CURVES=on`.
+  with `BNE_RAIL_CURVES=on` (Settings > Experimental > Rounded railway curves).
 - Lane changes inside a highway stretch (from PR #880 by DerEifrige-f; `BNE_LANE_SECTIONS=off` turns it off): where
   the map's ways between two junctions hold different lane counts (an auxiliary lane opening before an exit, a lane
   dropping after an entrance), the road gets each part's own lane count and width. Where OpenStreetMap places the
@@ -243,7 +254,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   ground, the distant land) is kept on disk, up to 2 GB (the oldest go first; the environment variable
   `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off). It is kept across app updates unless the
   update changes how that part of the world is built.
-- Experimental, off by default (`BNE_STALE_REVISIT=on` turns it on): after an app update, a place you've been to is
+- Experimental, off by default (Settings > Experimental > Show the older world while rebuilding, or `BNE_STALE_REVISIT=on`): after an app update, a place you've been to is
   shown as it was last built (its ground, roads, sidewalks, street furniture, trees and signs, all of that one version
   together) while the new version is built in the background, then swapped in: the ground and road surfaces that
   changed are prepared out of sight and switched in one frame with the car held for a moment, and only the parts the
@@ -273,7 +284,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 
 **Map and navigation**
 - A level select with famous places and a **Random location** button (it starts you on a road).
-- World map (**M**): pan and zoom the globe, satellite or street map (EOX) with a roads & labels overlay,
+- World map (**M**): pan and zoom the globe, satellite (Sentinel-2, aerial photos) or street map (EOX) with a roads & labels overlay,
   borders and place names (the **Layers** button), search for landmarks and places as you type and streets and
   addresses on Enter, in any language, or ask for "highest bridge in Switzerland", teleport anywhere. Kinds of places
   work too: "race track", "rally", "off-road", "peak", "forest", "beach" ... (plurals, typos, "near <place>") list
@@ -352,7 +363,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     ground around you; from the next level load.
   - **Ground grid** (1 m / 2 m): how fine the ground you drive on is. 2 m (the Low and Medium presets) loads a
     quarter of the data each time the ground moves with you: shorter hitches while driving, at the cost of softer
-    small bumps and road edges; from the next start of BeamNG.Earth.
+    small bumps and road edges; from the next world server restart (Restart world server, below).
   - **Tree density** (Lowest to Extreme) and **Tree draw distance** (about 0.5 to 1.7 miles; 0.8 miles at Normal).
   - **Building draw distance**: the simple far buildings, the skyline and far bridges (Near to Max, twice Normal's 1
     and 3 miles), and the tallest towers past them (none at Near, 12 miles at Normal, 22 at Far, the horizon at Max).
@@ -379,18 +390,52 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Overlapping physics blocks reuse raw land-cover classifications in a bounded native cache. Updated source
   data invalidates them; terrain slopes, underwater materials and road surfaces are still computed afresh.
 - **Performance** settings page: the world server's CPU cores (Auto: a quarter of your cores, at most half) and its
-  priority (Low: the game always comes first; Normal: the map loads faster on a busy CPU), from the next start; and
+  priority (Low: the game always comes first; Normal: the map loads faster on a busy CPU), from the next world server
+  restart; and
   **Full priority loading**: when you join the world and after a teleport, the app builds the place on every CPU core
   and the game keeps two until it has loaded.
+- **Restart world server** (at the top of the settings pages): the settings the world server reads only when it starts
+  (the Experimental page, Ground grid, the server's CPU cores and priority, 3D models from 3dmr.eu, Max RAM's cache
+  sizes, a new download cache folder) apply without closing the game. Once one of them differs from what the running server started with, the page
+  names it and offers the button: the server stops cleanly, the app's launcher (or `start.py`) starts it again with the
+  same options and the settings read anew, and the world reloads around you in a few seconds while your car is held
+  still (in multiplayer only your own world reloads and only your car waits). A server started by hand gets no button;
+  only the game itself can ask (with a key the server writes in the game's own folder), at most five restarts in ten
+  minutes (then the button is refused for a while and the server keeps running); a setting forced in the server's
+  environment by hand is not offered.
+- **Experimental** settings page: features still being tested, all off by default, each from the next world server
+  restart (the app's launcher, or `start.py` for a source install, starts the world server with the `BNE_*`
+  switch each stands for: server/experimental.py). With any of them on, the server builds every place itself (the
+  shared prebuilt world data is made for the defaults) and rebuilds places you visited. **Road signs** and **Dutch road
+  signs**; **Revamped roads** (the road revamp in progress, one switch for all its parts: lane and width changes as
+  long as the road's speed needs, deck curves by speed, footbridges that never
+  block the road, abandoned railways off the roads, racetracks that keep their surface and get no street poles along them); **French and European road scenery** (each European country's guardrails, sign faces, bus stops and street
+  edges; in France also its markings, bend and traffic signs, speed cameras, utility poles and regional houses);
+  **Guard rails at drops**; **Widened entrances**; **Right of way by road class** (stop signs and stopping AI at
+  unsignalised junctions); **Bumpy road surfaces**; **Rough dirt roads**; **Tyre polish, crack networks and
+  manholes**; **Road steepness limit**; **Road surface from aerial photos**; **Rougher land off the roads**; **Rock
+  faces in deep road cuts**; **Ground over shallow tunnels**; **More undersea tunnels**; **Traffic through tunnels**;
+  **Solid railway rails**; **Overhead railway wires**; **Grouped level crossings**; **Railway tunnels**; **Rounded
+  railway curves**; **Closed 3D models**; **Detailed Canadian lidar**; **Generated ground** (`BNE_GEN_GROUND=on`: the
+  ground near you made from 10 m Sentinel-2 colour and the map: land cover, fields, parks, pitches, squares, pools,
+  orchards and vineyards in rows, paths, tracks, hedges, streams, piers, tree heights, roads and buildings, graded to
+  the season, instead of 1 m aerial photos, which are then not downloaded at all, for roof colours neither; less real
+  detail where the map has none);
+  **Show the older world while rebuilding** (after an update); **Winter grip** (`BNE_WINTER=on`: roads get slippery
+  when the real weather brings snow, slush, frost or ice, from an hourly snow model of the last 10 days' weather; main
+  roads are cleared and salted first and bridges freeze first; the road's condition shows in the status bar; no white
+  ground yet. `BNE_WINTER=light` or `ice` forces a fixed light-snow or ice-storm state); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too). A switch set by hand in the
+  server's environment wins over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
   memory below 24 GB (about 5 GB on a 16 GB PC, at least 1.5 GB) and 60 % of it on a bigger computer, at most 24 GB
   (about 19 GB on a 32 GB PC); or pick 3 to 32 GB. The
   page shows the memory in use against the limit. Near the limit the server drops its caches and restarts its busiest
-  helper processes, and it uses less while your computer is short of memory; the caches and the number of helper
+  helper processes, and it uses less while your computer is short of memory, but never holds itself below 3 GB (the
+  least its own processes need: on an 8 GB or 4 GB computer too); the caches and the number of helper
   processes are sized for the limit from the next start (the limit itself applies at once). A low limit makes the
-  world load more slowly, not crash. (`--max-ram-gb` / `BNGE_MAX_RAM_GB` on the server; `BNGE_MEMWATCH=off` turns the
-  watchdog off.)
+  world load more slowly, not stop; when the limit is too low for the place, the status line and the settings page
+  say so. (`--max-ram-gb` / `BNGE_MAX_RAM_GB` on the server; `BNGE_MEMWATCH=off` turns the watchdog off.)
 - Works behind a proxy: the app's downloads use the HTTP/HTTPS proxy set on your computer (HTTPS_PROXY, HTTP_PROXY,
   NO_PROXY or the system's proxy setting; SOCKS proxies are not supported).
 - Updates: the mod tells you in game (and on its settings page, with a link) when a newer version is on GitHub;
@@ -433,7 +478,10 @@ connection (the map is downloaded while you play).
    - **Linux, native game:** started with the engine patches (`tools/gcpatch`: grass kept across block moves,
      steady game speed (dtsmooth: no catch-up burst after a hitch), shorter ground block swaps (terfast), lighter
      frames after a swap (texkeep: unchanged ground textures kept)) already applied, no Steam launch options needed.
-     On Windows the launcher applies dtsmooth and terfast to the running game.
+     On Windows the launcher applies dtsmooth and terfast to the running game. The patches find the engine's code by
+     its instructions, so a game update that leaves those functions as they were keeps them; a patch that does not
+     apply (a game update changed its code) is named in the launcher's window and in a warning in the game, and the
+     game runs without it.
    - **Linux, Windows build under Proton:** the AppImage sees the Proton setting and starts that build through
      Steam (the server runs natively). The `.exe` also works inside the game's Proton prefix (for example with
      protontricks' launcher).
@@ -476,19 +524,24 @@ and remembered; `default` goes back. Move the old cache folder there first to ke
 deleted in the background while you play (no long wait for the many small files). The in-game **Clear cache** button
 keeps the area around you.
 
-**BeamNG.drive installed somewhere else** (not in a Steam library the app finds, e.g. another launcher): the app asks
-where it is the first time (Enter opens your system's folder window, or type or paste the folder) and remembers it;
-`--game-dir PATH` sets it too, `--game-dir default` forgets it. A game folder outside Steam is started directly. On
-Linux, BeamMP's launcher finds the game only in Steam's libraries, so BeamMP isn't started with such a copy.
+**BeamNG.drive installed somewhere else** (not in a Steam library the app finds, e.g. another launcher): the app also
+looks where BeamNG itself records its folder and, on Windows, in the Epic Games Launcher's list of installed games.
+Not found anywhere: the app asks where it is the first time (Enter opens your system's folder window, or type or paste
+the folder) and remembers it; `--game-dir PATH` sets it too, `--game-dir default` forgets it. **Several copies**
+(Steam and Epic Games, say): the app asks once which one to start and remembers it; `--choose-game` asks again. An
+Epic Games copy starts directly (see below); a copy in a folder of your own starts from its folder. On Linux, BeamMP's
+launcher finds the game only in Steam's libraries, so BeamMP isn't started with a copy outside them (single player
+works as usual).
+
+**Starting without Steam** (`--launch direct`, remembered; `--launch steam` or `--launch auto` goes back): the app
+starts the game's own program with `-nosteam` and the same user folder (`-userpath`), so the mod, the map cache and
+your settings stay the same, and Steam doesn't need to be running. Windows: `Bin64\BeamNG.drive.x64.exe` (BeamNG's
+launch options window is skipped; `--gfx` still picks a renderer); Linux: the native `BinLinux/BeamNG.drive.x64`.
+Steam's overlay, Steam Input and play time aren't available this way. BeamMP still starts with the game. On a
+Steam Deck in Game Mode, and for the Windows build under Proton, the game starts as before. The default (`auto`)
+starts a Steam copy through Steam as before.
 
 More detail (traffic, the status bar, reporting problems, troubleshooting): [docs/QUICKSTART.md](docs/QUICKSTART.md).
-
-**Compute sharing (optional, for tinkerers):** another computer on your network can build part of the distant
-landscape for you. On it, from a copy of the same version's source: `python3 server/peerwork.py serve` (port 47620,
-`--workers N` processes; it downloads its own map data). On the computer you play on, set `BNGE_PEERS` to the
-helpers before starting BeamNG.Earth, for example `BNGE_PEERS=192.168.1.20:47620,192.168.1.21:47620`. Helpers
-running other code are left out, and anything a helper fails on is built on your own computer. Only use helpers on a
-network you trust: the connection is not encrypted.
 
 ### Developer setup
 Rail-crossing props can be regenerated with `python3 tools/build_rail_crossing_props.py`;
@@ -559,7 +612,9 @@ BeamNG.Earth runs on [BeamMP](https://beammp.com/) servers (in testing): drive t
 Leaving a server turns BeamNG.Earth back on (joining one switches your other mods off).
 
 You are sent to where the others are. Cars show in the right place in everyone's world; other players show on the
-world map (**M**) as green arrows; players far away (another country) are hidden until you meet. Crash damage: a crash
+world map (**M**) as green arrows; players far away (another country) are hidden until you meet. A far player's car
+isn't even loaded on your computer until it comes within about 15 miles (then it appears with its latest parts and
+paint, by BeamMP's own spawn queue settings), so far players spawning or changing cars don't freeze your game. Crash damage: a crash
 you watch keeps the damage your own game worked out; a car that crashed out of your sight takes on its owner's damage
 (broken parts and dents) once it comes within about 0.6 miles.
 
@@ -572,15 +627,6 @@ running the same BeamNG.Earth version with the same settings. A server can also 
 `.bnge` files in `Resources/Server/BeamNGEarth/bake/`), and the machine running the server can build ahead of
 the players itself (the share helper, below).
 
-<!-- v1 shared world building: commented out 2026-10-27 (off since 2026-10-23; not coming back for a while).
-**Sharing the work** (turned off for now: each player builds their own world)**:** players near each other share one
-world origin and split the building of the distant landscape (each piece is built once and sent to the others; faster computers take more), while a player far from
-everyone builds their own. For that the other players must reach your computer on a TCP port, 47621 unless the server
-picks another (the server tells your app which): on the same network it just works; over the internet, forward that
-port in your router, or you simply build everything yourself. A port of your own: set the environment variable
-`BNGE_SHARE_PORT` before starting the app.
--->
-
 **Hosting a server:** download `BeamNG.Earth-BeamMP-Server-<version>.zip` from the
 [Releases](https://github.com/TecnaGamer/BeamNG.Earth/releases) page and follow the guide inside
 (`BeamNG.Earth-README.md`). In short: unzip it into a BeamMP server's folder, set
@@ -590,8 +636,9 @@ over the internet, and start it (its log shows `[BeamNG.Earth] plugin loaded`). 
 BeamMP's own public list, so players without BeamNG.Earth never see it; `Private = true`, or no AuthKey: on no list,
 players use Direct Connect. The plugin lists the server once a minute with `curl` (Linux, and Windows 10 and later).
 Update the server zip with every release: it carries the mod the server sends to players. The server's time and weather for everyone
-(`G.TIME`: real or a fixed / running time such as `'20:30'`; `G.WEATHER`: real or clear, cloudy, rain, storm, snow,
-fog) are set near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
+(`G.TIME`: real or a fixed / running time such as `'20:30'`; `G.WEATHER`: real, real-host (everyone gets the weather
+where the longest-joined player is) or a preset such as clear, overcast, rain, heavyrain, storm, fog, snow, blizzard)
+are set near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
 little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip. Releases may also carry
 ready-made host bundles (`BeamNG.Earth-Host-<version>-Windows.zip` / `-Linux-x86_64.zip`, built by
 `tools/build_host.py`): the zip above plus BeamMP's own unmodified server program (v3.9.3, checked against the
@@ -599,10 +646,6 @@ checksum BeamMP publishes), its licence and source, and a `ServerConfig.toml` wi
 With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, the Linux host bundle in a container, set up through
 its environment (`BEAMMP_AUTH_KEY`, `BEAMMP_NAME`, `BNGE_WEATHER`, ...; see "Docker" in the server zip's guide,
 [beammp/README.md](beammp/README.md#docker)).
-
-**Shared road plans** (experimental, off by default): `BeamNG.Earth --world-cache export|serve|fetch|verify` packs
-the road plans one machine has built into a checked bundle that other players can fetch and reuse, so their
-companions skip planning those roads; see [docs/SHARED_WORLD.md](docs/SHARED_WORLD.md).
 
 The server keeps its players' shared world building in `Resources/Server/BeamNGEarth/store` (up to `G.SHARE_STORE_MB`,
 2 GB by default; the pieces used longest ago go first) and sends at most `G.SHARE_OUT_KBPS` (1 MB/s) of it, both near
@@ -660,9 +703,11 @@ issue page** still opens a ready-to-post public issue if you prefer that. Detail
 The repository contains only code; all map data is downloaded at runtime and cached locally.
 - Imagery: state and national orthophoto services where they are open (Maryland, a dozen more US
   states, Switzerland, France, Portugal, Spain, the Netherlands, Germany's states, Poland (GUGiK), Japan, parts of Australia and
-  Canada, and more), USDA NAIP and USGS The National Map (public domain; "Map services and data available from U.S. Geological Survey, National Geospatial Program") in the US, and Sentinel-2
-  cloudless by EOX IT Services GmbH everywhere (https://s2maps.eu, contains modified Copernicus Sentinel
-  data; 2016 release CC BY 4.0, 2023 release CC BY-NC-SA 4.0, non-commercial).
+  Canada, and more), USDA NAIP and USGS The National Map (public domain; "Map services and data available from U.S. Geological Survey, National Geospatial Program") in the US, and
+  Sentinel-2 everywhere: BeamNG.Earth's own tiles of ESA WorldCover's 2021 Sentinel-2 composite ("Contains modified
+  Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)") and, at sea and as the fallback,
+  Sentinel-2 cloudless 2016 by EOX IT Services GmbH (https://cloudless.eox.at, contains modified Copernicus Sentinel
+  data 2016 & 2017, CC BY 4.0). EOX's 2023 release (CC BY-NC-SA 4.0, non-commercial) is no longer used.
 - Elevation: Mapterhorn (https://mapterhorn.com/attribution; zooms 0-12 served from BeamNG.Earth's own tile host,
   repacked from Mapterhorn's archive as Mapterhorn allows), AWS Terrain Tiles / Mapzen; the polar caps from
   85 deg on: Copernicus DEM GLO-30 (produced using Copernicus WorldDEM-30 (c) DLR e.V. 2010-2014 and (c) Airbus

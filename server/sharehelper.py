@@ -12,22 +12,26 @@ tools/bake_area.py does).
 
   python3 server/sharehelper.py --share-dir ~/BeamMP-Earth-Server/Resources/Server/BeamNGEarth --cache ~/.cache/bnge-helper --procs 4
 """
-import argparse
-import json
-import logging
-import math
-import dmath
-import multiprocessing
 import os
 import sys
-import time
-import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-# (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell)
+import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
+import argparse  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+import serverlog  # noqa: E402
+import math  # noqa: E402
+import dmath  # noqa: E402
+import multiprocessing  # noqa: E402
+import time  # noqa: E402
+import zlib  # noqa: E402
+# (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell, nor
+# Switzerland's cut cells, roadz.tlm_tags)
 os.environ["BNE_ROADZ_HK"] = "off"
 os.environ["BNE_HKDTM"] = "off"
+os.environ["BNE_ROADZ_TLM"] = "off"
 
 log = logging.getLogger("earthd.sharehelper")
 
@@ -60,6 +64,13 @@ def _warm_versions():
                 t.version()
             except Exception as ex:
                 log.info("helper: %s version: %s: %s", type(t).__name__, type(ex).__name__, ex)
+    import roadz
+    if roadz.ON and roadz.DE_ON:        # (Germany's measured decks: their build in versions() too, decided here)
+        try:
+            import dedom
+            dedom.identity()
+        except Exception as ex:
+            log.info("helper: dedecks: %s: %s", type(ex).__name__, ex)
 
 
 def _expect(lat, lon):
@@ -171,11 +182,25 @@ def main():
     ap.add_argument("--cache", required=True, help="this helper's own cache folder (the map data, DEM, its plans)")
     ap.add_argument("--procs", type=int, default=max(1, (os.cpu_count() or 2) // 2))
     a = ap.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    serverlog.configure(logging.INFO)
+    try:
+        run(a)
+    finally:
+        serverlog.shutdown()
+
+
+def run(a):
     import mpshare
     import plancache
     os.makedirs(a.cache, exist_ok=True)
+    # (the map data's Overture release, decided once as a player's app decides it, before the pool starts and before
+    # anything reads map data: its plans' expect is of it, and players of another release have another code: never
+    # mixed, overturepick.choose_for_process)
+    import overturepick
+    log.info("helper: Overture release %s", overturepick.choose_for_process(a.cache))
     plancache.start_run(a.cache)
+    import pagesdata                # (the server's weekly builds when it started this helper, else one of its own)
+    pagesdata.ensure_session(a.cache)
     # (a cell whose lidar answer is late keeps the rule and its plans are not kept: wait for it, as bake_area does; the
     # items' codes are the bake expect's, without the build switches, so the players still match)
     os.environ.setdefault("BNE_LIDAR_GAPS_WAIT", "120")
@@ -198,7 +223,8 @@ def main():
             time.sleep(POLL_S)          # (nobody there, or the map data's weekly versions not known yet)
             continue
         sig, versions = got
-        pc = plancache.PlanCache(os.path.join(a.cache, "plans", os.environ.get(plancache.RUN_ENV) or "helper"), sig)
+        pc = plancache.PlanCache(os.path.join(a.cache, "plans", os.environ.get(plancache.RUN_ENV) or "helper"), sig,
+                                 versions=versions)
         pc.persist = (a.cache, (plancache.FRAMES, sig, versions))
         code = mpshare.expect_code(pc._bake_expect())
 

@@ -70,6 +70,7 @@ Sent once per session, and again only when something changes.
 | game graphics settings | preset, mesh, textures, terrain, lighting, shadows, anisotropic, AA, vsync, depth of field, SSAO, motion blur, reflections, grass, display mode | to compare like with like |
 | BeamNG.Earth settings | quality preset, trees and their distance, ground cover, grass distance, rocks, night lights, distant traffic, view distance, terrain detail, building distance, ground photo size, object detail, roads, clouds, sky mode, map style, frame pacing, full-priority loading | which of our options cost the most |
 | other mods (rounded) | 0, 1, 2-4, 5-9, ... | other mods can slow the game too |
+| engine patches | grass, ground textures, terrain swaps, game speed: each `on`, `off`, `failed` or `none` | a game update that stops a patch from applying shows at once |
 
 Amounts are rounded into steps, so they describe a class of machine rather than one machine. Only the settings named
 here are read; nothing else from your game folder.
@@ -123,6 +124,10 @@ only numbers (and in section 2 short model names and settings values), so no pos
 | field | example | why |
 |---|---|---|
 | requests per map service | `basemap.nationalmap.gov`: 88 requests, 2.8 MB, 0 errors, 0 rate-limited | BeamNG.Earth downloads from free public services (map data, elevation, photos). These counts show us whether we are putting too much load on any of them, so we can cache or slow down before a service blocks everyone. |
+| elevation tile reads by part of the app | `mapterhorn:grading:16:net`: 12 (the elevation service, the part of BeamNG.Earth that asked, the zoom level, and whether the tile came from your disk, another of the app's processes, the project's tile host or the service itself) | to see which parts of the app ask the free elevation service most, so we can cut those requests. At most 64 such counts a report; no tile numbers or positions. |
+
+Each report also carries a random id of the app's current run and the report's number in that run, so a report that
+is sent again (because its answer got lost) is counted only once.
 
 ## 7. Requests for aerial photo packs (main switch)
 

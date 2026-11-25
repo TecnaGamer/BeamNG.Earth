@@ -107,6 +107,18 @@ Same pattern as MSFS "anchor space", Cesium origin-shifting, and KSP floating or
   and navgraph node tables.
 - Output: atomic files in `<user>/temp/beamngEarth/<session>/` (versioned names,
   because the engine caches by path), plus small JSON control messages.
+- The game connection (protocol 4: a u32 LE length + UTF-8 JSON, at most 16 MiB a frame) is served by asyncio, or
+  with `BNGE_HOST=on` by earthfast's host (`native/earthfast/src/host`, the Rust port's phase 1; plan
+  `.claude/work/rust-port-plan-2026-11-15.md` section 4): Rust owns the listening socket, the reads, the framing, the
+  outgoing queue and the writes on threads of its own (`bnge-io` accepts, `bnge-rd-N` / `bnge-wr-N` per connection),
+  without the GIL. The hand-over needs no GIL either: the first frame into an empty inbox writes one byte to a local
+  socket pair the event loop reads like any socket, and the loop then takes everything that came as one batch
+  (`protocol.HostServer`; what comes while it is busy waits in that batch, consecutive poses of one anchor merged:
+  `BNGE_HOST_MERGE`). The handlers run unchanged on the loop, the "Python lane", through `protocol.HostStream`
+  (asyncio's reader / writer surface: drain's 64 / 16 KiB water marks, close flushes, abort drops). So frames keep
+  moving both ways while the loop or the GIL is held; each frame's wait for the lane is measured in Rust (the
+  once-a-minute `host:` line; `bnge-watch` logs `python lane: N frames waiting X s` past 2 s). `BNGE_HOST_RECORD=DIR`
+  (developers) records what the game sends for `tools/hostreplay.py` (private: the player's positions).
 
 ### Mod `beamng_earth`
 - Level `levels/beamng_earth/`: smallgrid skeleton **without GroundPlane**,
@@ -137,7 +149,9 @@ Physics geometry always comes from open data:
 - **Elevation:** Mapterhorn (open, Terrarium WebP, z12 global, up to z18 where
   national lidar exists), with AWS Terrain Tiles as fallback. Above ±85° use
   Copernicus GLO-30, because the Mercator sources stop there.
-- **Imagery:** EOX Sentinel-2 cloudless 2016 (CC BY, 10 m) far away, NAIP or
+- **Imagery:** Sentinel-2 far away (the project's packs of ESA WorldCover's 2021
+  composite, CC BY 4.0; EOX Sentinel-2 cloudless 2016, CC BY, at sea and as the
+  fallback; EOX's 2018+ mosaics are CC BY-NC-SA and not used), NAIP or
   national orthophotos near the player. Esri World Imagery is optional, using
   the user's own key.
 - **Buildings and roads:** Overture and OpenStreetMap, from extracts the server
@@ -483,8 +497,8 @@ their chunk arrived.
   same whatever order its regions were computed in and from whichever anchor (tested: fields and
   rendered bytes equal for two region orders; fields are stored float16 and used as stored, so a
   field read from disk gives the bytes of a freshly computed one):
-  1. seams (`<cache>/colormatch/v1/usgs/12/x/y.seams.npz`, `.seams.none`): z14 USGS and EOX S2 2023
-     (2016 per tile) over the region plus a 1-tile halo, reliability weights, IRLS, the oriented
+  1. seams (`<cache>/colormatch/v2/usgs/12/x/y.seams.npz`, `.seams.none`): z14 USGS and Sentinel-2 (the
+     bngs2 packs enlarged to z14, EOX 2016 per tile; EOX 2023 until 2026-11-23) over the region plus a 1-tile halo, reliability weights, IRLS, the oriented
      step filter (15 m grid, 36 angles, 5 x 240 m segments, the S2 gate), NMS, hysteresis and the
      component filter (>= 1.5 km, consistent step vector, and USGS carries the step: the median
      USGS step on the 300 m cut blurs over the component's median ratio step >= 0.5); per seam cell
@@ -669,6 +683,21 @@ in 2026-10-10-weather-probe-results.md.
   offset, the same switch matrix for the time), `test_settings.lua` (the 'auto' migration),
   `test_core_stubbed.lua` (forwarding). Still to check in-game: the temperature-curve setter form,
   `setPercentage` drops visible, coverage calibration above 0.95 (overcast), fog k = 1/H, wind push.
+- **Weather phase A** (the weather plan 2026-11-24, `~/bnge-tests/weatherplan/PLAN.md`, approved): modes
+  real / preset / manual ("Off"); 15 presets (`M.PRESETS`, synthetic messages; deterministic, BeamMP's too);
+  `scaleMsg` (intensity), `filterReal` (the real clouds / fog / wind / precipitation each left out), change speed
+  (`M.step` with T = 0..120 s), the fog cap. A Weather page (settings.lua `weather*`, `real*`, `rainVisibility`,
+  `fogLimit`) and a radial ring (`/root/sandbox/bngEarthWeather/`). The rain and snow objects have one owner
+  (`ownPrecip` / `precipBlock`, 4 Hz while they fall, nothing when Off): Off, the setting, the 3D map, the big map,
+  missions, above the cloud base; a shelter fade (`ambience.shelterAt`: the road tiles' tunnel / arch / parking /
+  under-bridge boxes, else 3 upward `castRayStatic` rays). Shares from log-rate curves (`RAIN_CURVE`, `SNOW_CURVE`)
+  times a pool scaled by the rain visibility; rain and snow add extinction (`rainSigma`, `snowSigma`); flakes by
+  temperature (`FLAKES`); snow uses the level's own `bngEarthSnowflake` datablock (Snow_menu drew centimetre
+  specks) with collision on; the rain box fades out inside itself, without splashes or turbulence. Grey fog:
+  `FOG_TINT` levers on the ScatterSky by `fogGrey`, restored exactly. Traffic: `trafficLights` / `trafficCap` /
+  `duskDark` (wxtraffic.lua wraps the stock traffic class's checkTimeOfDay inside its onTrafficTick only;
+  speeding.lua; nightlights.lua). BeamMP: `G.WEATHER = 'real-host'` relays the longest-joined player's real
+  weather (`bngeWeather`, checked on both sides: `G.weatherMsg`, `sanitizeMsg`).
 ## Dev tools and the pause-menu settings page (docs/DEVTOOLS.md; built offline 2026-10-10)
 - `dev.lua` (extension `beamngEarth_dev`): in-world overlays (per-tile LOD tint, tile outlines by
   state, loading heat with the next imports numbered, physics block squares, rings, under-car
@@ -697,7 +726,7 @@ over to AWS, a 400 wrote a permanent `.404` marker, and the User-Agent lived in 
   failed probe up to 15 min), daily soft/hard budgets in `<cache>/netstats/<UTC date>.json`, one
   summary log line a minute. Injectable clock, sleep, rng, transport and wall clock (tests).
 - **Failover**: `HostUnavailable` / `RateLimited` cost no network and the chains move on: imagery
-  usgs → eox2023 → eox2016 (one host, one breaker: both skipped together) → palette; DEM Mapterhorn →
+  bngs2 → usgs → bngs2fine (one host, one breaker) → eox2016 → palette; DEM Mapterhorn →
   AWS for the same key (also on Mapterhorn errors now) → `DemUnavailable` (where a coarse offline DEM
   will go). A prefetch future the limiter dropped is re-fetched as demand by the render that needs it
   (one fetch for every render waiting on it); prefetch skips a source whose circuit is open, so it
@@ -828,7 +857,7 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   `imagery/usgs-ds1-<mode>/`): after a generator update the old directory is never read again and
   ages out through the LRU, so only what changed is recomputed.
 - **Lifetimes** (ROADMAP 3, the cheap part): `cache.LIFETIMES` (path prefix -> max age after the
-  download), enforced by the start-up walk. Empty: USGS (public domain), EOX (CC BY / CC BY-NC-SA),
+  download), enforced by the start-up walk. Empty: USGS (public domain), EOX 2016 and the Sentinel-2 packs (CC BY),
   Mapterhorn and AWS Terrain Tiles set no caching-time limit; 404 markers expire through netfetch's
   `miss_ttl` (90 days). Background refresh of stale tiles is not built.
 - **Protocol** (additive, no bump; server/README.md): mod -> server `cache` {`capGb`, `clear`} (both
@@ -869,6 +898,20 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   anchor commit (a new frame) forgets the remembered ground height (`edgeguard.newFrame`).
   Offline: 30 m/s rests 15 m inside, braking <= 6.6 m/s^2; 134 m/s on a 512 block stays on it (cut to
   the profile when it engages); an aircraft at 500 m flies off untouched.
+- **Deck guard** (`deckguard.lua`, server `deckspans.py`; 2026-11-15, a BeamMP player fell through small bridges in
+  Baltimore whose road tiles came late): a deck is part of its road tile, and the block, which comes first, already
+  has the gap under it. For a mod that says `hello.deckGuard`, the server lists the map's tagged bridges of drivable
+  roads within 1.2 km of the car (`deck_spans`: chains of pieces joined at shared ends, which ends stand on the
+  ground), from the cells already on disk, in its own thread, again every 150 m / 4 s and sent only when changed.
+  Every 0.25 s (nothing at all while no span is within reach) the mod follows the car's path ahead (an arc at its turn
+  rate) for its braking distance + 2 s and finds the first place on a span the car drives onto (along it, entered at an
+  end at the deck's level, or already on it) whose road tile has not arrived (`roads.deckGrid`: every tile the span crosses, walked over the tile grid; no tile there; a tile in
+  makes its deck solid in time itself) where the block's ground lies 2 m or more under the deck's level (the
+  abutments' heights, `getTerrainHeight`): then a light drag, the speed capped to stop 12 m short (4 m/s^2, at most
+  7 m/s^2 taken off), a hold (simhold: our car only in BeamMP) if it cannot stop, a set-back if it went over anyway;
+  `pose.deckWait` names the tile (built first, `GeoTracker.deck_first`) and `guardHold` gives the server every core
+  while the car waits. No collider, no ray; plans, blocks and tiles unchanged. Tests: `test_deckguard.lua`,
+  `test_deckspans.py`.
 - **Session adoption** (server `Server._scan_sessions / claim_sessions / release_session /
   sweep_sessions`, mod `farfield.heldSessions`): see server/README.md "Run" and the protocol table
   (`hello.sessions`, `pose.sessions`; the server's own messages are unchanged, so a default session is
@@ -1335,10 +1378,17 @@ CLI). The only change to an existing module: host policies in `netfetch.POLICIES
   file, up to ~0.75 GiB after a long drive). One dense city cell is
   3.3 MB of layer files and ~66 MB of raw blocks (they serve the neighbours too: the next cells
   cost 0-9 MB); a desert cell 60-90 KB and 35 MB.
-- **Release pinning**: `overture.RELEASE = "2026-09-23.1"`; `mapdata.py --latest` prints the newest;
-  bump the constant (cells are cached per release; a data update may change a place, a restart
-  never does). A pinned release Overture has deleted raises `ReleaseGone` for uncached cells (also
-  when its STAC index is cached and the files answer 404).
+- **Release pinning**: the build's own release is `overturepick.RELEASE = "2026-11-18.0"`
+  (`overture.RELEASE`); `mapdata.py --latest` prints the newest. A newer one reaches players without
+  an app update through the data repo's `cdn.json` `{"overture": {"release": ...}}` (once its products
+  are built): the server's supervisor (the launcher, `start.py`; the share helper and the decisions
+  builder for themselves) decides once per app session (`overturepick.Pick`: listed in Overture's STAC
+  catalogue, a supported schema, one 5 s deadline; no answer in time: the last session's release when
+  newer than the build's and its STAC index is kept in `<cache>/cdn`, else the build's) and hands it to
+  every server it starts (`BNGE_OVERTURE_RELEASE`; `overture.effective()`, frozen per process, keys the
+  cells, plans and facts). The hello carries it; the mod pins a level to its live connection's release
+  and holds (no anchor, no resync) on another (`releasepin.lua`). A release Overture has deleted raises
+  `ReleaseGone` for uncached cells (also when its STAC index is cached and the files answer 404).
 - **Provenance**: per cell a list of records (Overture per theme with the source datasets and
   licences of its features and the release, WorldCover with its files, CHM with its file), each
   with the exact attribution and licence (CREDITS.md; Overture's per-theme texts whole, read
@@ -1780,3 +1830,56 @@ distances), ours (60+ miles) showed it as soft distance. In our level the far bl
 player's preset resets it); the near blur and the player's settings stay theirs; the stock parameters return when
 the level ends. LOD research: docs/research/2026-10-14-lod-research.md (also: linear-light sharpened mip chains,
 `imagery.mip_arrays`; gentler far-tree rings, the engine billboards far trees itself).
+
+## Road surface + bridge rewrite: BNE_ROADSYS (M0 harness, M1 shadow; 2026-11-22)
+
+The approved rewrite (bridgerewrite/DESIGN.md: one road sheet, one profile per carriageway, one owner per drivable
+point) lives in `native/roadsys`, a crate of its own linked into earthfast (`roadsys_*` functions, `src/roadsysbind.rs`)
+and built as a CLI for the harnesses. `BNE_ROADSYS` = off (default: nothing runs, the server is byte-identical) |
+shadow (M1). It is a developer switch, not on the settings page, and in `revisit.NOT_SWITCHES` while shadow changes
+nothing the player sees; each later stage that changes output leaves that list in the commit that does.
+
+- **M0, the audit** (`audit.rs`, `tools/widecorpus/checks.py`): double owners, envelope intrusions, blocked openings,
+  piers in faces, parapets in the carriageway, hand-over lips, clearance against the floors, T-cracks and folds, on
+  any built road scene (today's output in the wide corpus; the shadow product later), with hold thresholds in
+  `compare.py`. `run.py --extra FILE` adds places kept outside Git (the bridge study's sites).
+- **M1, the shadow product** (`server/roadsys.py`, `product.rs`): each built road geotile is built again in one
+  background thread. Its read list is the product's own (the strokes reaching the tile, their junction clusters' arms,
+  snap trunks, capping neighbours and vertical components, each whole, with the lane graph's 920 m reach), asked
+  again until no map cell is missing, so it depends on the map data alone, never on visit order. Built in the ENU frame
+  of the tile's z8 region. Strokes are cut at plain joints past a 4 km grid (net.rs `Opts`). Profiles: Tier A per
+  stroke, Tier B sections reaching 2 x L_vc past each structure, crossing, deck node, nose and joint, components
+  capped at 40 km; every solve keyed by its whole assembled problem and reused only for that problem. Per tile: a log
+  line and `<cache>/roadsys/shadow-1/<frame>/<tile>.json` (timings, read list, network / profile / surface stats,
+  checks, seam hashes, the pieces' keys). `tools/roadsys_shadow.py` runs it over a box (orders, cold, dumps for
+  `roadsys tile` under Wine).
+
+## Mapped driving features (`server/drivefeat.py`; 2026-11-23, every switch off by default)
+
+OpenStreetMap / Overture data points the generator did not read, each behind its own BNE_* build switch (keyed like
+every BNE_* variable; with one that reads the "drive" shards on, their build is MapData.versions()' "drive"):
+
+- **Data.** Overture's infrastructure points (barriers, gates, bollards, cattle grids, height restrictors, stop /
+  give-way / crossing nodes with crossing:markings, street lamps' light:* tags) are read as they come. What Overture
+  drops comes from a new weekly planet build, `tools/build_drive_tags.py` (dataset "drive", z7 gzip JSON shards like the
+  rail and lane ones, `server/drivetags.py`): traffic_calming, turning circles / loops, mini roundabouts, passing
+  places, fords, railway signals / points / buffer stops (nodes), and the tracktype / ford / traffic_calming of highway
+  ways (delta-coded id lists, `railtags.Rules`). `BNE_DRIVETAGS_DIR` reads a local build (tests). The way tags are
+  joined to the decoded roads layer after it is kept (`MapData._drive`), so `roadlayercache` keeps nothing new.
+- **BNE_CALMING.** Bumps / humps / tables / cushions / dips as profiles in the road plans (`calming.py`, earthfast
+  `drivefeat.rs calming_apply`: half-cosine ramps, a flat top, the plan densified every 0.25 m round each), after every
+  grading pass that moves heights, so the physics lattice, meshes and decals take them. Triangle markings on humps /
+  tables in the TSRGD / MUTCD countries; islands, chokers and chicanes as kerbed islands.
+- **BNE_UNPAVED.** tracktype fills a missing surface (grade1 compacted .. grade5 grass); smoothness, else tracktype,
+  else the surface, else the class sets an unpaved road's roughness (grading.dirt_bumps' gain); mapped fords dip the
+  road 0.3 m and get a short River piece of water over the dip (`drivefeat.ford_rivers`, the sea message).
+- **BNE_ROAD_BARRIERS.** Gates, lift gates, height restrictors, bollards and cattle grids on roads
+  (`tools/build_drive_props.py`'s bne_dp_* models; the cattle grid a draped stock grate). Never closed on a road the AI
+  graph drives (navgraph's own rule); closed only with access=private / no on one it leaves out.
+- **BNE_ROAD_ENDS.** Turning circles as paved bulbs at dead ends, passing places as lay-bys (pseudo-corners of
+  `roadcorners`: painted, masked, cleared of trees, graded), mini roundabouts as white discs.
+- **BNE_NODE_MARKINGS.** Mapped zebras, stop lines and give-way paint (TSRGD 1003's double broken line in the UK and
+  Ireland) where the map has them, every country but Sweden and Germany (their own readings).
+- **BNE_RAIL_PROPS.** Railway signals (main / dwarf) and point machines beside the track where mapped.
+- **BNE_LAMP_TAGS.** A mapped street lamp's light:count (double arm), lamp_mount (none on walls / wires) and
+  light:colour / lamp_type (its night light's colour, nightlights.lua).

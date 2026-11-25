@@ -16,17 +16,10 @@ Pure functions of their inputs (no state); numpy, and the grade in Rust (earthfa
 import datetime
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image
 
 import fast
-import dnp
 
-M_PER_DEG = 111320.0
-# leaf_on: the reference is vegetation where its green chromaticity g / (r + g + b) is above this (summer USGS at
-# Columbia: canopy and grass 0.35-0.38, pavement and roofs ~0.33)
-VEG_CHROMA = (0.345, 0.37)
-LEAF_ON_LUM = 0.8           # share of the reference's large-scale brightness taken in vegetation
-LUM_GAIN = (0.5, 1.5)
 # grade: canopy = vegetation that is darker and textured at the 2-3 m scale (lawns and verges are smooth and light)
 VEG_HUE = (60.0, 75.0, 160.0, 175.0)        # deg: green between the ramps
 CANOPY_V = (0.44, 0.52)                     # value above which it is not canopy
@@ -36,77 +29,86 @@ FALL_YELLOW = 0.35          # every green pixel's hue moves this share toward ye
 PATCH_M = (18.0, 6.0, 25.0)  # noise scales: stands, single trees, colour regions
 NOISE_GRID = 128            # the noise is computed on at most this many cells a side and interpolated
 CANOPY_TEXTURE_MAX_M = 2.5  # coarser texels: the canopy by brightness only
-FALL_PEAK_DOY_40N = 300     # ~Oct 27 at 40 degrees; 2.5 days earlier per degree further from the equator
-FALL_HALF_DAYS = 28.0
 WINTER_BARE_DESAT = 0.7     # saturation lost by bare canopy at full winter
-
-
-def _smooth(x, a, b):
-    t = np.clip((x - a) / (b - a), 0.0, 1.0)
-    return t * t * (3.0 - 2.0 * t)
-
-
-WINTER_DOY_40N = (330, 365 + 60)   # bare from ~Nov 26 to ~Mar 1 at 40 N (ramps of WINTER_RAMP_DAYS either side)
-WINTER_RAMP_DAYS = 20.0
-SPRING_PEAK_DOY_40N = 112           # ~Apr 22: the fresh flush
-SPRING_HALF_DAYS = 22.0
 
 
 def season_amounts(date, lat):
     """{"fall", "winter", "spring": 0..1} at a date (datetime.date) and latitude: how far the leaves have turned,
     how bare the deciduous canopy is, how fresh the spring flush is (0 in the tropics; the southern hemisphere half a
     year later; 2.5 days earlier per degree north for fall, later for spring). Pure."""
-    if abs(lat) < 23.0:
-        return {"fall": 0.0, "winter": 0.0, "spring": 0.0}
-    doy = date.timetuple().tm_yday
-    if lat < 0:
-        doy = (doy + 182) % 365
-    shift = (abs(lat) - 40.0) * 2.5
-    fall = max(0.0, 1.0 - abs(doy - (FALL_PEAK_DOY_40N - shift)) / FALL_HALF_DAYS)
-    w0, w1 = WINTER_DOY_40N[0] - shift, WINTER_DOY_40N[1] + shift
-    d = doy if doy >= w0 - WINTER_RAMP_DAYS else doy + 365          # Jan-Mar count from the previous year
-    winter = min(max(0.0, (d - (w0 - WINTER_RAMP_DAYS)) / WINTER_RAMP_DAYS),
-                 max(0.0, (w1 + WINTER_RAMP_DAYS - d) / WINTER_RAMP_DAYS), 1.0)
-    spring = max(0.0, 1.0 - abs(doy - (SPRING_PEAK_DOY_40N + shift)) / SPRING_HALF_DAYS)
-    return {"fall": float(fall), "winter": float(winter), "spring": float(spring)}
+    fast.require(563, "season_amounts")
+    fall, winter, spring = fast._ef.season_amounts(date.timetuple().tm_yday, lat)
+    return {"fall": fall, "winter": winter, "spring": spring}
+
+
+# "auto" grades with the date of the week it is in (UTC, slots of SEASON_SLOT_DAYS from a fixed Monday), not today's:
+# what a texture is graded with is then a function of its cache key (season_key), the same on every machine, and the
+# far tiles and block photos made in October are not served as late November's (their keys held "auto" alone).
+SEASON_SLOT_DAYS = 7
+_SLOT_EPOCH = datetime.date(2026, 1, 5)     # a Monday
+SEASON_KEY_LAT_PAD = 1.0    # deg: a key holds the slot where the season changes within this of its latitude
+
+
+def utc_today():
+    return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def slot_date(today=None):
+    """The first day of the SEASON_SLOT_DAYS slot that today (default: the UTC date) is in."""
+    d = today or utc_today()
+    return d - datetime.timedelta(days=(d - _SLOT_EPOCH).days % SEASON_SLOT_DAYS)
 
 
 def amounts_for(mode, lat, today=None):
-    """season_amounts for --season: "auto" (today's date), "off" (none), "fall" / "winter" / "spring" (full)."""
+    """season_amounts for --season: "auto" (the date of this week's slot, slot_date), "off" (none), "fall" / "winter" /
+    "spring" (full)."""
     if mode in ("fall", "winter", "spring"):
         return {"fall": 0.0, "winter": 0.0, "spring": 0.0, mode: 1.0}
     if mode == "auto":
-        return season_amounts(today or datetime.date.today(), lat)
+        return season_amounts(slot_date(today), lat)
     return {"fall": 0.0, "winter": 0.0, "spring": 0.0}
+
+
+def season_key(mode, lat, today=None):
+    """The season's part of a texture's cache key at latitude lat: mode itself, or for "auto" the slot's date where
+    any amount is above 0 within SEASON_KEY_LAT_PAD of lat (a far tile lies within that of its anchor), else "none"
+    (the tropics and full summer: the textures stay put all those weeks)."""
+    if mode != "auto":
+        return mode
+    d = slot_date(today)
+    for la in (float(lat) - SEASON_KEY_LAT_PAD, float(lat), float(lat) + SEASON_KEY_LAT_PAD):
+        if any(v > 0.0 for v in season_amounts(d, max(-90.0, min(90.0, la))).values()):
+            return ("auto", d.isoformat())
+    return ("auto", "none")
 
 
 def leaf_on(rgb, ref):
     """rgb (uint8 [h, w, 3], a leaf-off photo already matched to ref at the large scale) with the summer reference
     ref's (coarser uint8) colour in its vegetation: chroma, and LEAF_ON_LUM of the brightness, at ref's scale."""
+    fast.require(563, "leaf_on")
     h, w = rgb.shape[:2]
-    rim = Image.fromarray(ref, "RGB").filter(ImageFilter.GaussianBlur(1.0))
-    c = np.asarray(rim, np.float32)
-    veg = _smooth(c[..., 1] / (c.sum(-1) + 1.0), *VEG_CHROMA)
-    if not (veg > 0.01).any():
+    rh, rw = ref.shape[:2]
+    if (h == w and rh == rw) or (h, w) == (rh, rw):
+        out = fast._ef.leaf_on(rgb, ref)
+        return rgb if out is None else out
+
+    # Pillow versions differ on the pass order for some rectangular resizes.
+    small = np.asarray(Image.fromarray(rgb).resize((rw, rh), Image.Resampling.BOX))
+    fields = fast._ef.leaf_fields(small, ref)
+    if fields is None:
         return rgb
-    vw = np.asarray(Image.fromarray(veg.astype(np.float32), "F").resize((w, h), Image.BILINEAR))
-    ycc = np.asarray(Image.fromarray(rgb, "RGB").convert("YCbCr"), np.float32).copy()
-    rc = np.asarray(rim.resize((w, h), Image.BILINEAR).convert("YCbCr"), np.float32)
-    ycc[..., 1:] += vw[..., None] * (rc[..., 1:] - ycc[..., 1:])
-    # brightness: ratio of the reference's to ours, both at ref's texels
-    small = (ref.shape[1], ref.shape[0])
-    ys = np.asarray(Image.fromarray(rgb, "RGB").resize(small, Image.BOX).convert("L")
-                    .filter(ImageFilter.GaussianBlur(1.0)), np.float32)
-    yr = np.asarray(rim.convert("L"), np.float32)
-    g = np.clip((yr + 4.0) / (ys + 4.0), *LUM_GAIN)
-    g = np.asarray(Image.fromarray(g.astype(np.float32), "F").resize((w, h), Image.BILINEAR))
-    ycc[..., 0] *= 1.0 + vw * LEAF_ON_LUM * (g - 1.0)
-    out = Image.fromarray(np.clip(np.rint(ycc), 0, 255).astype(np.uint8), "YCbCr").convert("RGB")
-    return np.asarray(out)
+    return fast._ef.leaf_blend(rgb, *(np.asarray(Image.fromarray(a).resize((w, h), Image.Resampling.BILINEAR))
+                                      for a in fields))
 
 
 GRADE_HALF_PX = 512         # textures this big are graded at half size and applied as a colour ratio
 _PAL32 = np.array(FALL_PALETTE, np.float32)
+
+
+def grade_params(amounts):
+    return (float(amounts.get("fall", 0.0)), float(amounts.get("winter", 0.0)), float(amounts.get("spring", 0.0)),
+            FALL_YELLOW, WINTER_BARE_DESAT, tuple(CANOPY_V), tuple(CANOPY_STD), tuple(PATCH_M), NOISE_GRID,
+            CANOPY_TEXTURE_MAX_M, GRADE_HALF_PX)
 
 
 def grade(rgb, xm, ym, amounts):
@@ -118,8 +120,8 @@ def grade(rgb, xm, ym, amounts):
     colour change is a few metres coarse at most, the detail stays the texture's own). xm, ym may instead be a 2-D
     grid over the texture (corner to corner), upscaled to its texels by Pillow's BILINEAR. The Rust kernel
     earthfast.season_img (Pillow's resampling where this module used it: the same numbers)."""
-    fall, winter, spring = (float(amounts.get(k, 0.0)) for k in ("fall", "winter", "spring"))
-    if fall <= 0.0 and winter <= 0.0 and spring <= 0.0:
+    params = grade_params(amounts)
+    if max(params[:3]) <= 0.0:
         return rgb
     fast.require(108, "season grade")
 
@@ -129,13 +131,14 @@ def grade(rgb, xm, ym, amounts):
             a = np.broadcast_to(a, rgb.shape[:2])
         return np.ascontiguousarray(a)
     out = fast._ef.season_img(np.ascontiguousarray(np.asarray(rgb, np.uint8)[..., :3]), f32(xm), f32(ym), _PAL32,
-                              (fall, winter, spring, FALL_YELLOW, WINTER_BARE_DESAT, tuple(CANOPY_V), tuple(CANOPY_STD),
-                               tuple(PATCH_M), NOISE_GRID, CANOPY_TEXTURE_MAX_M, GRADE_HALF_PX))
+                              params)
     return rgb if out is None else out
 
 
 def world_metres(lat, lon):
     """(east, north) metres of geodetic arrays, on a fixed world grid (noise anchors). Pure."""
     lat = np.asarray(lat, np.float64)
-    return (np.asarray(lon, np.float64) * M_PER_DEG * dnp.cos(np.radians(lat))).astype(np.float32), \
-        (lat * M_PER_DEG).astype(np.float32)
+    fast.require(563, "season_metres")
+    la, lo = np.broadcast_arrays(lat, np.asarray(lon, np.float64))
+    east, north = fast._ef.season_metres(la, lo, lat)
+    return (east if east.ndim else east[()], north if north.ndim else north[()])

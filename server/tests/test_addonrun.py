@@ -244,11 +244,17 @@ class OptionsTest(unittest.TestCase):
             time.sleep(0.1)
         os.remove(seen)
         self.assertTrue(self.a.set_options("tool", {"port": 47901}))
-        end = time.monotonic() + 20
-        while not os.path.exists(seen) and time.monotonic() < end:
+        # (the restarted program creates seen.txt and then writes its arguments: wait for the text, not the file; the
+        # mini PC lane read it empty in between, gate 317)
+        end, text = time.monotonic() + 20, ""
+        while "--port" not in text and time.monotonic() < end:
             time.sleep(0.1)
-        with open(seen) as f:
-            self.assertIn("--port 47901", f.read())
+            try:
+                with open(seen) as f:
+                    text = f.read()
+            except OSError:
+                pass
+        self.assertIn("--port 47901", text)
 
     def test_bad_declarations_refused(self):
         for bad in ([{"key": "Port", "type": "int"}], [{"key": "p", "type": "float"}],

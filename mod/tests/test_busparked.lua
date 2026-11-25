@@ -17,6 +17,8 @@ core_vehicles = {
     function v:getId() return self.id end
     function v:delete() deleted = deleted + 1; objects[self.id] = nil end
     function v:queueLuaCommand(c) if c:find('parkingbrake') then brakes = brakes + 1 end end
+    function v:getPosition() return self.pos end
+    function v:setActive(on) self.active = on end
     objects[nextId] = v
     return v
   end,
@@ -87,8 +89,37 @@ local s0, t0 = spawned, teleports
 local far = { x = 3000, y = 0, z = 10 }
 now = now + 3; B.update(1, far, now)
 T.check(spawned == s0 and teleports == t0 + 1, 'a bus left behind is moved to the new bay (no new spawn)')
+local busId = next(objects)
+T.check(B.isOurs(busId) and not B.isOurs(busId + 1000), 'isOurs: our bus only (collisionfoci: parked, not a player car)')
+T.check(objects[busId].active == 1, 'moved to the new bay: active')
 
--- a teleport / a new anchor: all deleted; a missing model: no more tries
+-- left behind with no free bay near: parked inactive (no physics), not deleted; active again once moved
+local nowhere = { x = 9000, y = 9000, z = 10 }
+now = now + 3; B.update(1, nowhere, now)
+T.check(objects[busId] and objects[busId].active == 0 and B.status().buses == 1, 'far, no bay: kept but inactive')
+local s1 = spawned
+now = now + 3; B.update(1, far, now)
+T.check(spawned == s1 and objects[busId].active == 1, 'back near a bay: moved and active again, no spawn')
+
+-- a rebase (a new anchor without a teleport): the bus is kept, its place read again from the vehicle
+objects[busId].pos = { x = 50, y = 0, z = 10 }
+B.onRows(2, '2:0_0', { { 60, 0, 10, 0, 2 } })
+local s2, d2 = spawned, deleted
+now = now + 3; B.update(2, { x = 0, y = 0, z = 10 }, now)
+T.check(deleted == d2 and spawned == s2 and B.status().buses == 1, 'rebase: the bus is kept (no delete, no spawn)')
+
+-- the player's setting off: the bus goes, none spawned; on again: one
+package.loaded['beamngEarth/settings'] = { get = function(k) if k == 'stationBuses' then return false end end }
+now = now + 3; B.update(2, { x = 0, y = 0, z = 10 }, now)
+T.check(B.status().buses == 0, 'setting off: the bus is deleted')
+local s3 = spawned
+now = now + 3; B.update(2, { x = 0, y = 0, z = 10 }, now)
+T.check(spawned == s3, 'setting off: no spawn')
+package.loaded['beamngEarth/settings'] = nil
+now = now + 3; B.update(2, { x = 0, y = 0, z = 10 }, now)
+T.check(spawned == s3 + 1, 'setting back on (or no settings module): one bus again')
+
+-- a teleport: all deleted; a missing model: no more tries
 B.onTeleport()
 T.check(B.status().buses == 0, 'teleport: all buses deleted')
 B.reset()

@@ -6,7 +6,7 @@ local S = dofile(dir .. '/stubs.lua')
 local roads = require('beamngEarth/roads')
 local settings = require('beamngEarth/settings')
 
-T.check(settings.defaults().roadSigns == true, 'road signs are on in the settings (the server flag BNE_ROADSIGNS decides)')
+T.check(settings.defaults().roadSigns == false, 'road signs are off by default (the Experimental switch: the server\'s BNE_ROADSIGNS at its start)')
 T.check(settings.defaults().directionSigns == true and settings.defaults().highwaySigns == true, 'the other sign switches are as before')
 
 local found = false

@@ -202,7 +202,39 @@ T.check(r.ok and r.value == 'real' and wMode == 'real' and files[settings.FILE].
 files[settings.FILE].weatherMode = 'auto'
 vals, warn = settings.load()
 T.check(vals.weatherMode == 'real' and #warn == 0, "a saved 'auto' loads as 'real' without a warning (" .. #warn .. ')')
-T.check(#settings.SCHEMA.weatherMode.values == 2 and settings.validate('weatherMode', 'auto') == 'real', 'weather values: real, manual')
+T.check(#settings.SCHEMA.weatherMode.values == 3 and settings.validate('weatherMode', 'auto') == 'real'
+  and settings.validate('weatherMode', 'preset') == 'preset', 'weather values: real, preset, manual (Off)')
+-- the Weather page's other choices reach beamngEarth_weather (the weather plan, phase A)
+do
+  local got = {}
+  local w = beamngEarth_weather
+  w.setPresetChoice = function(v) got.preset = v end
+  w.setIntensity = function(v) got.intensity = v end
+  w.setChangeSpeed = function(v) got.change = v end
+  w.setShowPrecip = function(v) got.show = v end
+  w.setRainVisibility = function(v) got.vis = v end
+  w.setRealPart = function(p, v) got[p] = v end
+  w.setFogLimit = function(v) got.fogLimit = v end
+  T.check(settings.set('weatherPreset', 'storm').ok and got.preset == 'storm', 'preset applied')
+  T.check(not settings.set('weatherPreset', 'tornado').ok, 'an unknown preset is refused')
+  T.check(settings.set('weatherIntensity', 2).value == 1.5 and got.intensity == 1.5, 'intensity clamped to 150 %')
+  T.check(settings.set('weatherChange', '0').ok and got.change == 0, 'change speed: instant (a number)')
+  T.check(settings.set('weatherPrecip', false).ok and got.show == false, 'show rain and snow')
+  T.check(settings.set('rainVisibility', 2).ok and got.vis == 2, 'rain visibility')
+  T.check(settings.set('realFog', false).ok and got.fog == false, 'real fog left out')
+  T.check(settings.set('realWind', false).ok and got.wind == false and settings.set('realClouds', false).ok and got.clouds == false
+    and settings.set('realPrecip', false).ok and got.precip == false, 'real wind, clouds, rain and snow left out')
+  T.check(settings.set('fogLimit', '500').ok and got.fogLimit == 500, 'fog cap as metres')
+  T.check(settings.get('weatherPreset') == 'storm' and settings.SCHEMA.weatherPreset.default == 'rain'
+    and settings.SCHEMA.rainVisibility.default == 1.3 and settings.SCHEMA.weatherChange.default == '60', 'weather defaults')
+  local okW, wmod = pcall(require, 'beamngEarth/weather')
+  T.check(okW and table.concat(wmod.PRESET_ORDER, ',') == table.concat(settings.SCHEMA.weatherPreset.values, ','),
+    'the page\'s presets are weather.lua\'s, in its order')
+  for _, k in ipairs({ 'weatherPreset', 'weatherIntensity', 'weatherChange', 'weatherPrecip', 'rainVisibility', 'realClouds',
+      'realFog', 'realWind', 'realPrecip', 'fogLimit' }) do
+    settings.set(k, settings.SCHEMA[k].default)
+  end
+end
 -- the switch to manual when the weather (time) is changed in the game: weather.lua / sky.lua set
 -- their own mode, then save it here; applying it again is not needed (and not done)
 local nCalls, nSky = #wCalls, #skyCalls
@@ -599,6 +631,40 @@ do
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
+-- mapControls(false) and onExtensionUnloaded release BigMap and beamngEarthMapBlocked even when mapCtl is nil
+do
+  local popArgs, filterArgs = {}, {}
+  local origEnter, origToggle = function() end, function() end
+  local bm = { enterBigMap = origEnter, toggleBigMap = origToggle }
+  local saved = {
+    core_input_actionFilter = rawget(_G, 'core_input_actionFilter'),
+    freeroam_bigMapMode = rawget(_G, 'freeroam_bigMapMode'),
+    popActionMap = rawget(_G, 'popActionMap'),
+  }
+  core_input_actionFilter = {
+    addAction = function(dev, name, on) filterArgs[#filterArgs + 1] = { dev, name, on } end,
+  }
+  freeroam_bigMapMode = bm
+  popActionMap = function(name) popArgs[#popArgs + 1] = name end
+
+  settings.mapControls(false)
+  T.check(#popArgs == 1 and popArgs[1] == 'BigMap', 'mapControls(false) with nil mapCtl pops BigMap')
+  T.check(#filterArgs == 1 and filterArgs[1][1] == 0 and filterArgs[1][2] == 'beamngEarthMapBlocked' and filterArgs[1][3] == false,
+    'mapControls(false) with nil mapCtl clears beamngEarthMapBlocked filter')
+
+  settings.redirectBigMap(true)
+  T.check(bm.enterBigMap ~= origEnter and bm.toggleBigMap ~= origToggle, 'redirectBigMap(true) wraps BigMap handlers')
+  settings.onExtensionUnloaded()
+  T.check(#popArgs == 2 and popArgs[2] == 'BigMap', 'onExtensionUnloaded pops BigMap')
+  T.check(#filterArgs == 2 and filterArgs[2][2] == 'beamngEarthMapBlocked' and filterArgs[2][3] == false,
+    'onExtensionUnloaded clears beamngEarthMapBlocked filter')
+  T.check(not settings.isMapOpen(), 'onExtensionUnloaded clears mapOpen')
+  T.check(bm.enterBigMap == origEnter and bm.toggleBigMap == origToggle,
+    'onExtensionUnloaded restores BigMap handlers')
+
+  for k, v in pairs(saved) do rawset(_G, k, v) end
+end
+
 -- The map's other players in a BeamMP session: none is nil, not an empty table (it reaches EarthMap.vue as {}, not
 -- [], and the map's .map() threw every second: the map stopped drawing in multiplayer; PR #509 by Astel123457).
 do
@@ -693,6 +759,34 @@ files[settings.FILE] = { version = 2, townSigns = false }
 T.check(settings.load().townSigns == false, 'a version-2 file: the player turned them off')
 files[settings.FILE] = nil
 
+-- the Experimental page (2026-11-15: the server's BNE_* build switches, server/experimental.py FEATURES): every switch
+-- a bool, off by default, on the settings page; road signs off by default since version 3 (a version-2 file's true was
+-- the hidden switch's default), a version-3 file's choice kept
+do
+  local exp = { 'roadSigns', 'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops',
+    'expRoadBumps', 'expRoughDirt', 'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls',
+    'expTunnelLids', 'expSubseaTunnels', 'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels',
+    'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expGenGround', 'expStaleRevisit', 'expWinter', 'expWetRoads' }
+  local inOrder = {}
+  for _, k in ipairs(settings.ORDER) do inOrder[k] = true end
+  for _, k in ipairs(exp) do
+    local s = settings.SCHEMA[k]
+    T.check(s and s.kind == 'bool' and s.default == false, 'experimental ' .. k .. ': a bool, off by default')
+    T.check(inOrder[k] and not settings.HIDDEN[k], 'experimental ' .. k .. ': on the settings page')
+  end
+  T.check(settings.VERSION >= 3, 'settings version 3: road signs a real switch')
+  files[settings.FILE] = nil
+  T.check(settings.load().roadSigns == false and settings.load().expRoadBumps == false, 'no file: all off')
+  files[settings.FILE] = { version = 2, roadSigns = true, expRoadBumps = true }
+  local v = settings.load()
+  T.check(v.roadSigns == false, 'a version-2 file: road signs off (true was the hidden default)')
+  T.check(v.expRoadBumps == true, 'a version-2 file: another experimental switch is the player\'s')
+  files[settings.FILE] = { version = 3, roadSigns = true }
+  T.check(settings.load().roadSigns == true, 'a version-3 file: the player turned road signs on')
+  files[settings.FILE] = nil
+  settings.load()
+end
+
 -- the map's preload of a place: picked (the box) or pointed at (hover: the light part), to core.preloadPlace
 do
   local calls = {}
@@ -705,5 +799,12 @@ do
   beamngEarth_core = nil
   T.check(settings.uiMapPreload(1, 2, true).ok == false, 'no core: nothing')
   beamngEarth_core = core0
+end
+-- Presets tune cliff detail without changing the player's category choices.
+for name, detail in pairs({ low = 'low', medium = 'medium', high = 'normal', ultra = 'high', extreme = 'extreme' }) do
+  T.check(settings.PRESETS[name].cliffDetail == detail, 'cliff detail follows ' .. name)
+  T.check(settings.PRESETS[name].naturalCliffs == nil and settings.PRESETS[name].cliffRoadCuts == nil,
+    'presets preserve cliff category choices')
+  T.check(settings.PRESETS[name].cliffTextures == nil, 'presets never opt into a texture download')
 end
 T.done('test_settings')

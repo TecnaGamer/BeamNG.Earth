@@ -342,9 +342,32 @@ def set_cancel(check):
         _cancel_proc[0] = check
 
 
+def set_thread_cancel(check):
+    """This thread's own cancel check only, never the process's: a thread that serves no job (blockworker's road plans
+    ahead) must not see the running job's "a teleport left its place" check, or it gives up the new place's cells
+    (2026-11-22 Fells Point: every plan ahead raised Abandoned while a Bonneville job ran in the process, and no road
+    tile came for 4 minutes). check() true raises pools.Abandoned; a check returning False shields the thread."""
+    _cancel.check = check
+
+
+_extra = [None]                 # BNE_V2_HOST (v2host.py): the scheduler's job flag (a place left), or None
+
+
+def extra_cancel(check):
+    """A check every thread's _cancelled also asks (v2host: earthfast.sched_cancelled, the flag of the scheduler job
+    the thread runs, raised when a teleport leaves its place); None: none (the default)."""
+    _extra[0] = check
+
+
 def _cancelled():
-    check = getattr(_cancel, "check", None) or _cancel_proc[0]
-    return check is not None and check()
+    local = getattr(_cancel, "check", None)
+    if local:                   # (this thread's own check decides: one returning False shields it, set_thread_cancel)
+        return bool(local())
+    check = _cancel_proc[0]
+    if check is not None and check():
+        return True
+    extra = _extra[0]
+    return extra is not None and extra()
 
 
 def check_cancel():
@@ -354,17 +377,25 @@ def check_cancel():
         raise pools.Abandoned()
 
 
-def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_note=None):
+def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_note=None, patient=False):
     """(result, False): ready() gave it (at once or after waiting for another process); (None, True): this process
     does the work (release(lock) after the result is written); (None, False): do it without the lock (a wait past
     wait_s, or a less urgent holder). on_wait(): called once when this process starts waiting. live_s: past wait_s,
     waited on up to live_s while the holder still works (alive, its lock touched within LIVE_FRESH_S: _heartbeat) and
     this thread holds no lock itself (no wait of its can close a circle of waits: the holder's own waits for other
     processes stay bounded by their wait_s); such a wait past LIVE_WARN_S is logged once (live_note: what it waits
-    for)."""
+    for). patient: a less urgent holder is waited for too (work already in flight that ends sooner than the same work
+    started again here: a raw DEM tile's one download, dem.Dem._download)."""
     got = ready()
     if got is not None:
         return got, False
+    import v2host
+    with v2host.blocked():          # (BNE_V2_HOST: a scheduler job waiting here gives its slot back)
+        return _once_wait(lock, ready, wait_s, kind, on_wait, live_s, live_note, patient)
+
+
+def _once_wait(lock, ready, wait_s, kind, on_wait, live_s, live_note, patient):
+    """once() past its first look."""
     t0 = time.monotonic()
     waited = False
     holder = seen = None
@@ -396,7 +427,7 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_not
                     holder = None
                     continue
                 # (not broken now, its guard busy: the deadline and cancel checks below, then looked at again)
-            if h is not None and h[:2] > _rank(kind):
+            if not patient and h is not None and h[:2] > _rank(kind):
                 return None, False          # do it here, not wait
         elif holder is not None and holder == now_holder and pid is not None and time.monotonic() >= recheck:
             # (the same holder, looked at again now and then: one that died after we first looked, a road tile's
@@ -412,6 +443,12 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_not
                 on_wait()
         if time.monotonic() - t0 > wait_s:
             if not (live_s is not None and time.monotonic() - t0 <= live_s and _works(lock, pid) and holds_none()):
+                # (a holder writes its result before it releases: one that finished since the last look has no lock
+                # left to look fresh, and its result is there: read it, not build it again here. Windows CI,
+                # 2026-11-19: LockTest's waiter returned (None, False) in that gap)
+                got = ready()
+                if got is not None:
+                    return got, False
                 return None, False
             if not warned and time.monotonic() - t0 > LIVE_WARN_S:
                 # (alive and touching its lock, not necessarily getting on: a holder stuck alive is waited out to

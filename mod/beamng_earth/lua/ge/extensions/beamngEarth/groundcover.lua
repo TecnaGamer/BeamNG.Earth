@@ -65,6 +65,11 @@ M.DEFS = {
   { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_scrub', layer = 'bngEarthGroundDusty', share = 0.08 },
   { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_scrub', layer = 'bngEarthGroundDusty', share = 0.05,
     fields = LONG_NEAR },
+  -- (2026-11-16, server/surface.py FOREST / DRYGRASS: tree cover had the grass layer and its full carpet) forest floor:
+  -- sparse short grass between the trunks; arid grassland: mostly West Coast USA's dry grass. Crop soil and sand: none.
+  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_forest', layer = 'bngEarthGroundForest', share = 0.08 },
+  { source = 'wcusa', src = 'grass_dry_1', name = 'grass_dry_1_dry', layer = 'bngEarthGroundDryGrass', share = 0.2 },
+  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_dry', layer = 'bngEarthGroundDryGrass', share = 0.06 },
 }
 M.PREFIX = 'bngEarthGC_'
 -- set on every object after the stock fields (see the header)
@@ -78,6 +83,9 @@ M.density = 1.0
 -- times it, its element count times its square (the same density on the larger disc: the rebuild frame grows with it)
 M.DISTANCE = { near = 0.7, normal = 1.0, far = 1.5 }
 M.distance = 1.0
+-- element count factor under snow (winterlook.lua: winter's snow depth; 1 without): the grass thins under a light cover
+-- (deep snow moves the block's samples to the snow layer, where none grows anyway)
+M.snow = 1.0
 M.RADIUS_FIELDS = { radius = true, dissolveRadius = true }
 
 local created = {}        -- object names we made
@@ -177,7 +185,7 @@ function M.ensure()
         do
           local gc = createObject('GroundCover')
           local dist = M.distance
-          for _, c in ipairs(M.fieldsFor(def, d.layer, d.share * M.density * dist * dist, dist)) do
+          for _, c in ipairs(M.fieldsFor(def, d.layer, d.share * M.density * M.snow * dist * dist, dist)) do
             gc:setField(c[1], c[2], c[3])
           end
           for k, v in pairs(d.fields or {}) do
@@ -244,6 +252,17 @@ function M.setDistance(v)
   return true
 end
 
+-- Under snow (winterlook.lua): the element counts times f (0..1; 1 = none); existing objects are made again with it.
+function M.setSnow(f)
+  f = tonumber(f)
+  if not f or f < 0 then return false end
+  f = math.min(f, 1)
+  if f == M.snow then return true end
+  M.snow = f
+  if #created > 0 then M.rebuild() end
+  return true
+end
+
 -- The level ended (its objects are gone with it, the stock materials loaded for it too: a level started again in
 -- the same game session found no m_grass_* / wca_groundcover and drew no grass, 2026-10-19).
 function M.reset()
@@ -263,7 +282,7 @@ function M.rebuild()
 end
 
 function M.status()
-  return { enabled = M.enabled, density = M.density, distance = M.distance, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil, error = lastError }
+  return { enabled = M.enabled, density = M.density, distance = M.distance, snow = M.snow, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil, error = lastError }
 end
 
 return M

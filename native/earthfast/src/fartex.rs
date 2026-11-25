@@ -10,13 +10,13 @@
 //!   resampling where season.py used it.
 //! - dds_levels: the texture's mip chain and its BC1 blocks (imagery.encode_dds) in one call.
 
-use numpy::ndarray::{Array2, Array3, ArrayView2, ArrayView3};
-use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyReadwriteArray2,
-            PyReadwriteArray3};
+use numpy::ndarray::{s, Array2, Array3, ArrayView2, ArrayView3};
+use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::types::PyBytes;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use crate::finished_tile::{CachedTile, Pixels};
 use crate::{season_grade_core, season_noise_at, sm_f32};
 
 pub const TILE: usize = 256;
@@ -174,7 +174,11 @@ pub fn warp_rgba(a: ArrayView3<u8>, qx: ArrayView2<f64>, qy: ArrayView2<f64>, ce
 #[pyfunction]
 pub fn core_tiles(qx: PyReadonlyArray2<'_, f64>, qy: PyReadonlyArray2<'_, f64>, cells: usize, cw: usize, g: usize,
                   px: usize) -> PyResult<(i64, i64, i64, i64)> {
-    let (qx, qy) = (qx.as_array(), qy.as_array());
+    footprint_tiles(qx.as_array(), qy.as_array(), cells, cw, g, px)
+}
+
+pub(crate) fn footprint_tiles(qx: ArrayView2<f64>, qy: ArrayView2<f64>, cells: usize, cw: usize, g: usize,
+                              px: usize) -> PyResult<(i64, i64, i64, i64)> {
     if qx.shape() != [cells + 1, cells + 1] || qy.shape() != [cells + 1, cells + 1] || cells * cw != px
         || cells == 0 || 2 * g >= px {
         return Err(PyValueError::new_err("core_tiles: the mesh is not (cells + 1)^2, cells * cw != px or no footprint"));
@@ -214,10 +218,21 @@ pub fn core_tiles(qx: PyReadonlyArray2<'_, f64>, qy: PyReadonlyArray2<'_, f64>, 
 
 /// A finished tile as tile_warp takes it: its RGB (256, 256, 3) decoded, or its JPEG (decoded here, on the warp's
 /// threads: imagery.Imagery keeps the finished tiles as their JPEGs, the disk's bytes).
+#[pyclass(frozen)]
+pub struct DecodedTile(Array3<u8>);
+
 #[derive(FromPyObject)]
 pub enum TileSrc<'py> {
+    Decoded(Bound<'py, DecodedTile>),
+    Cached(Bound<'py, CachedTile>),
     Rgb(PyReadonlyArray3<'py, u8>),
     Jpeg(Bound<'py, PyBytes>),
+}
+
+#[derive(FromPyObject)]
+pub enum TileMask<'py> {
+    Cached(Bound<'py, CachedTile>),
+    Array(PyReadonlyArray2<'py, bool>),
 }
 
 enum Src<'a> {
@@ -244,148 +259,265 @@ pub fn jpeg_rgb<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, numpy:
     Ok(Array3::from_shape_vec((TILE, TILE, 3), px).expect("checked").into_pyarray(py))
 }
 
-/// One chain source's part of a texture (imagery.Imagery._render): tiles [(col, row, its RGB or JPEG, alpha, hole
-/// (256, 256) bool or None)] of its nx x ny mosaic, each tile's texels at alpha (255; 254: relit by --deshadow) but
-/// its hole's at 0, like the rest of the mosaic; warped onto the px x px texture by the mesh qx, qy (mosaic pixel
-/// coordinates of the cells x cells mesh corners, cw px a cell: warp_rgba, Pillow's premultiplied RGBA warp), and
-/// written into out (px, px, 3) where filled (px, px) is 0 and the warped alpha is >= 254 (all four bilinear taps have
-/// data), filled set there. Returns (texels written, of them relit (alpha 254), every texel filled now, [(index in
-/// tiles, its RGB)] of the JPEGs decoded here: the caller keeps the recent ones decoded (neighbouring textures share
-/// their edge tiles)).
-#[pyfunction]
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn tile_warp<'py>(py: Python<'py>,
-                      tiles: Vec<(usize, usize, TileSrc<'py>, u8, Option<PyReadonlyArray2<'py, bool>>)>,
-                      nx: usize, ny: usize, qx: PyReadonlyArray2<'py, f64>, qy: PyReadonlyArray2<'py, f64>, cells: usize,
-                      cw: usize, mut out: PyReadwriteArray3<'py, u8>, mut filled: PyReadwriteArray2<'py, u8>)
-                      -> PyResult<(u64, u64, bool, Vec<(usize, Bound<'py, numpy::PyArray3<u8>>)>)> {
-    let views: Vec<(usize, usize, Src, u8, Option<ArrayView2<bool>>)> = tiles.iter()
-        .map(|(c, r, t, al, h)| (*c, *r, match t { TileSrc::Rgb(a) => Src::Rgb(a.as_array()),
-                                                    TileSrc::Jpeg(b) => Src::Jpeg(b.as_bytes()) },
-                                 *al, h.as_ref().map(|m| m.as_array()))).collect();
-    for (c, r, t, _, h) in &views {
-        let bad_rgb = matches!(t, Src::Rgb(a) if a.shape() != [TILE, TILE, 3]);
-        if bad_rgb || *c >= nx || *r >= ny || h.as_ref().is_some_and(|m| m.shape() != [TILE, TILE]) {
-            return Err(PyValueError::new_err(format!("tile_warp: tile ({c}, {r}) of a {nx} x {ny} mosaic")));
+/// One texture while Imagery resolves its chain, with its RGB and coverage owned by Rust.
+#[pyclass]
+pub struct PhotoCanvas {
+    image: Array3<u8>,
+    filled: Array2<u8>,
+    gutter: usize,
+    remaining: usize,
+}
+
+#[pymethods]
+impl PhotoCanvas {
+    #[new]
+    fn new(px: usize, gutter: usize) -> PyResult<Self> {
+        if px == 0 || gutter > (px - 1) / 2 || px.checked_mul(px).and_then(|n| n.checked_mul(3)).is_none() {
+            return Err(PyValueError::new_err("PhotoCanvas: empty footprint"));
         }
+        Ok(Self { image: Array3::zeros((px, px, 3)), filled: Array2::zeros((px, px)), gutter, remaining: px * px })
     }
-    let (qx, qy) = (qx.as_array(), qy.as_array());
-    if qx.shape() != [cells + 1, cells + 1] || qy.shape() != [cells + 1, cells + 1] {
-        return Err(PyValueError::new_err("tile_warp: the mesh is not (cells + 1)^2"));
-    }
-    let mut o = out.as_array_mut();
-    let mut f = filled.as_array_mut();
-    let px = o.shape()[0];
-    if o.shape() != [px, px, 3] || f.shape() != [px, px] || cells * cw != px {
-        return Err(PyValueError::new_err("tile_warp: out (px, px, 3), filled (px, px), cells * cw == px"));
-    }
-    let got = py.detach(|| {
-        // the JPEGs decoded on up to 4 threads
-        let jpegs: Vec<(usize, &[u8])> = views.iter().enumerate()
-            .filter_map(|(i, v)| if let Src::Jpeg(b) = v.2 { Some((i, b)) } else { None }).collect();
-        let mut decoded: Vec<Option<Result<Vec<u8>, String>>> = (0..views.len()).map(|_| None).collect();
-        let nthreads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 4)
-            .min(jpegs.len().max(1));
-        if nthreads <= 1 {
-            for (i, b) in &jpegs {
-                decoded[*i] = Some(decode_jpeg(b));
-            }
-        } else {
-            let chunk = jpegs.len().div_ceil(nthreads);
-            let res: Vec<Vec<(usize, Result<Vec<u8>, String>)>> = std::thread::scope(|sc| {
-                let hs: Vec<_> = jpegs.chunks(chunk).map(|part| sc.spawn(move || {
-                    part.iter().map(|(i, b)| (*i, decode_jpeg(b))).collect::<Vec<_>>()
-                })).collect();
-                hs.into_iter().map(|h| h.join().expect("a JPEG decode thread panicked")).collect()
-            });
-            for (i, r) in res.into_iter().flatten() {
-                decoded[i] = Some(r);
-            }
+
+    /// Source tile coordinates under mesh cells with remaining holes, including the bilinear taps.
+    fn unfilled_tiles(&self, py: Python<'_>, cells: usize, cw: usize, mesh: &crate::photomesh::SourceMesh) -> PyResult<std::collections::BTreeSet<(i64, i64)>> {
+        let (fx, fy) = (mesh.x.view(), mesh.y.view());
+        let px = self.filled.nrows();
+        if cells == 0 || px == 0 || cw != px / cells || fx.dim() != (cells + 1, cells + 1) || fx.dim() != fy.dim() {
+            return Err(PyValueError::new_err("unfilled_tiles: invalid mesh"));
         }
-        let (mh, mw) = (ny * TILE, nx * TILE);
-        let mut mos = Array3::<u8>::zeros((mh, mw, 4));
-        {
-            let ms = mos.as_slice_mut().expect("a new array is contiguous");
-            for (k, (c, r, t, al, h)) in views.iter().enumerate() {
-                let own;
-                let sl: &[u8] = match t {
-                    Src::Rgb(a) => {
-                        own = a.as_standard_layout();
-                        own.as_slice().expect("standard layout")
+        let tile = |p: f64| (p.floor() as i64).div_euclid(TILE as i64);
+        Ok(py.detach(|| {
+            let mut keys = std::collections::BTreeSet::new();
+            for r in 0..cells {
+                for c in 0..cells {
+                    let end = |i| if i + 1 == cells { px } else { (i + 1) * cw };
+                    if self.filled.slice(s![r*cw..end(r), c*cw..end(c)]).iter().all(|&v| v != 0) { continue; }
+                    let range = |a: ArrayView2<f64>| {
+                        let quad = a.slice(s![r..=r+1, c..=c+1]);
+                        let lo = quad.iter().copied().fold(f64::INFINITY, f64::min);
+                        let hi = quad.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                        tile(lo - 1.0)..=tile(hi + 1.0)
+                    };
+                    let xs = range(fx);
+                    for ty in range(fy) {
+                        keys.extend(xs.clone().map(|tx| (tx, ty)));
                     }
-                    Src::Jpeg(_) => match decoded[k].as_ref().expect("decoded above") {
-                        Ok(v) => v.as_slice(),
-                        Err(e) => return Err(PyValueError::new_err(format!("tile_warp: tile ({c}, {r}): {e}"))),
-                    },
+                }
+            }
+            keys
+        }))
+    }
+
+    /// Unfilled footprint texels at the poles, so a custom projection may supply their cap mask.
+    fn holes<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, numpy::PyArray1<usize>>, Bound<'py, numpy::PyArray1<usize>>)> {
+        if self.filled.is_empty() { return Err(PyValueError::new_err("photo canvas already finished")); }
+        let g = self.gutter;
+        let hi = self.filled.nrows() - g;
+        let (ys, xs): (Vec<_>, Vec<_>) = py.detach(|| self.filled.slice(s![g..hi,g..hi]).indexed_iter()
+            .filter_map(|((r,c), &v)| (v == 0).then_some((r + g, c + g))).unzip());
+        Ok((ys.into_pyarray(py), xs.into_pyarray(py)))
+    }
+
+    /// Fill known empty texels first, then extend the nearest footprint edge into any unresolved gutter.
+    fn fill<'py>(&mut self, py: Python<'py>, fallback: [u8; 3], polar: [u8; 3], cap: Option<PyReadonlyArray1<'py, bool>>)
+                  -> PyResult<(usize, usize)> {
+        let cap = cap.as_ref().map(|a| a.as_array());
+        let (mut none, mut snow) = (0, 0);
+        let px = self.filled.nrows();
+        if px == 0 { return Err(PyValueError::new_err("photo canvas already finished")); }
+        let (g, hi) = (self.gutter, px - self.gutter);
+        py.detach(|| {
+            if self.remaining == 0 { return; }
+            for ((r, c), &f) in self.filled.slice(s![g..hi, g..hi]).indexed_iter() {
+                if f != 0 { continue; }
+                let k = none + snow;
+                let color = if cap.as_ref().is_some_and(|a| a.get(k) == Some(&true)) {
+                    snow += 1;
+                    polar
+                } else {
+                    none += 1;
+                    fallback
                 };
-                let hm = h.as_ref().map(|m| m.as_standard_layout());
-                let hs = hm.as_ref().map(|m| m.as_slice().expect("standard layout"));
-                for y in 0..TILE {
-                    let o0 = ((r * TILE + y) * mw + c * TILE) * 4;
-                    let row = &sl[y * TILE * 3..(y + 1) * TILE * 3];
-                    let dst = &mut ms[o0..o0 + TILE * 4];
-                    for (d, s3) in dst.chunks_exact_mut(4).zip(row.chunks_exact(3)) {
-                        d[0] = s3[0];
-                        d[1] = s3[1];
-                        d[2] = s3[2];
-                        d[3] = *al;
+                for b in 0..3 { self.image[[r+g, c+g, b]] = color[b]; }
+            }
+            if g > 0 {
+                for ((r, c), &v) in self.filled.indexed_iter() {
+                    if v == 0 && (r < g || r >= hi || c < g || c >= hi) {
+                        for b in 0..3 { self.image[[r,c,b]] = self.image[[r.clamp(g,hi-1), c.clamp(g,hi-1), b]]; }
                     }
-                    if let Some(hs) = hs {
-                        for (x, &hole) in hs[y * TILE..(y + 1) * TILE].iter().enumerate() {
-                            if hole {
-                                dst[x * 4 + 3] = 0;
+                }
+            }
+        });
+        if cap.is_some_and(|a| a.len() != none + snow) { return Err(PyValueError::new_err("invalid polar mask")); }
+        self.filled = Array2::default((0, 0));
+        Ok((none, snow))
+    }
+
+    /// Both composites stay native while the lazy layer takes its reference's low-frequency colour.
+    fn correct_lazy(&mut self, py: Python<'_>, reference: &PhotoCanvas, sigma: f32, leaf_on: bool) -> PyResult<()> {
+        if !self.filled.is_empty() || !reference.filled.is_empty() || self.image.is_empty() || reference.image.is_empty() {
+            return Err(PyValueError::new_err("correct_lazy: expected finished canvases"));
+        }
+        py.detach(|| {
+            let matched = matched(self.image.view(), reference.image.view(), sigma);
+            self.image = if leaf_on {
+                crate::leafon::correct(matched.view(), reference.image.view()).unwrap_or(matched)
+            } else { matched };
+        });
+        Ok(())
+    }
+
+    fn take_rgb<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray3<u8>>> {
+        if !self.filled.is_empty() || self.image.is_empty() {
+            return Err(PyValueError::new_err("expected a finished photo canvas"));
+        }
+        Ok(std::mem::take(&mut self.image).into_pyarray(py))
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn warp<'py>(&mut self, py: Python<'py>, tiles: Vec<(usize, usize, TileSrc<'py>, u8, Option<TileMask<'py>>)>,
+                 nx: usize, ny: usize, qx: PyReadonlyArray2<'py, f64>, qy: PyReadonlyArray2<'py, f64>,
+                 cells: usize, cw: usize) -> PyResult<(u64, u64, bool, Vec<(usize, DecodedTile)>)> {
+        self.warp_views(py, tiles, nx, ny, qx.as_array(), qy.as_array(), cells, cw)
+    }
+
+    fn warp_mesh<'py>(&mut self, py: Python<'py>, tiles: Vec<(usize, usize, TileSrc<'py>, u8, Option<TileMask<'py>>)>,
+                      mesh: &crate::photomesh::SourceMesh, cells: usize, cw: usize)
+                      -> PyResult<(u64, u64, bool, Vec<(usize, DecodedTile)>)> {
+        self.warp_views(py, tiles, mesh.tiles.2, mesh.tiles.3, mesh.qx.view(), mesh.qy.view(), cells, cw)
+    }
+}
+
+impl PhotoCanvas {
+    fn warp_views<'py>(&mut self, py: Python<'py>, tiles: Vec<(usize, usize, TileSrc<'py>, u8, Option<TileMask<'py>>)>,
+                       nx: usize, ny: usize, qx: ArrayView2<f64>, qy: ArrayView2<f64>, cells: usize, cw: usize)
+                       -> PyResult<(u64, u64, bool, Vec<(usize, DecodedTile)>)> {
+        let views: Vec<(usize, usize, Src, u8, Option<ArrayView2<bool>>)> = tiles.iter()
+            .map(|(c, r, t, al, h)| (*c, *r, match t {
+                TileSrc::Decoded(t) => Src::Rgb(t.get().0.view()),
+                TileSrc::Rgb(a) => Src::Rgb(a.as_array()),
+                TileSrc::Jpeg(b) => Src::Jpeg(b.as_bytes()),
+                TileSrc::Cached(t) => match &t.get().pixels {
+                    Pixels::Rgb(a) => Src::Rgb(a.view()), Pixels::Jpeg(b) => Src::Jpeg(b),
+                }
+            }, *al, h.as_ref().and_then(|m| match m {
+                TileMask::Array(a) => Some(a.as_array()), TileMask::Cached(t) => t.get().hole.as_ref().map(|h| h.view()),
+            }))).collect();
+        for (c, r, t, _, h) in &views {
+            let bad_rgb = matches!(t, Src::Rgb(a) if a.shape() != [TILE, TILE, 3]);
+            if bad_rgb || *c >= nx || *r >= ny || h.as_ref().is_some_and(|m| m.shape() != [TILE, TILE]) {
+                return Err(PyValueError::new_err(format!("tile_warp: tile ({c}, {r}) of a {nx} x {ny} mosaic")));
+            }
+        }
+        if qx.shape() != [cells + 1, cells + 1] || qy.shape() != [cells + 1, cells + 1] {
+            return Err(PyValueError::new_err("tile_warp: the mesh is not (cells + 1)^2"));
+        }
+        let mut o = self.image.view_mut();
+        let mut f = self.filled.view_mut();
+        let px = o.shape()[0];
+        if px == 0 || f.nrows() != px || cells.checked_mul(cw) != Some(px) {
+            return Err(PyValueError::new_err("tile_warp: out (px, px, 3), filled (px, px), cells * cw == px"));
+        }
+        let got = py.detach(|| {
+            // the JPEGs decoded on up to 4 threads
+            let jpegs: Vec<(usize, &[u8])> = views.iter().enumerate()
+                .filter_map(|(i, v)| if let Src::Jpeg(b) = v.2 { Some((i, b)) } else { None }).collect();
+            let mut decoded: Vec<Option<Result<Vec<u8>, String>>> = (0..views.len()).map(|_| None).collect();
+            let nthreads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 4)
+                .min(jpegs.len().max(1));
+            if nthreads <= 1 {
+                for (i, b) in &jpegs {
+                    decoded[*i] = Some(decode_jpeg(b));
+                }
+            } else {
+                let chunk = jpegs.len().div_ceil(nthreads);
+                let res: Vec<Vec<(usize, Result<Vec<u8>, String>)>> = std::thread::scope(|sc| {
+                    let hs: Vec<_> = jpegs.chunks(chunk).map(|part| sc.spawn(move || {
+                        part.iter().map(|(i, b)| (*i, decode_jpeg(b))).collect::<Vec<_>>()
+                    })).collect();
+                    hs.into_iter().map(|h| h.join().expect("a JPEG decode thread panicked")).collect()
+                });
+                for (i, r) in res.into_iter().flatten() {
+                    decoded[i] = Some(r);
+                }
+            }
+            let (mh, mw) = (ny * TILE, nx * TILE);
+            let mut mos = Array3::<u8>::zeros((mh, mw, 4));
+            {
+                let ms = mos.as_slice_mut().expect("a new array is contiguous");
+                for (k, (c, r, t, al, h)) in views.iter().enumerate() {
+                    let own;
+                    let sl: &[u8] = match t {
+                        Src::Rgb(a) => {
+                            own = a.as_standard_layout();
+                            own.as_slice().expect("standard layout")
+                        }
+                        Src::Jpeg(_) => match decoded[k].as_ref().expect("decoded above") {
+                            Ok(v) => v.as_slice(),
+                            Err(e) => return Err(PyValueError::new_err(format!("tile_warp: tile ({c}, {r}): {e}"))),
+                        },
+                    };
+                    let hm = h.as_ref().map(|m| m.as_standard_layout());
+                    let hs = hm.as_ref().map(|m| m.as_slice().expect("standard layout"));
+                    for y in 0..TILE {
+                        let o0 = ((r * TILE + y) * mw + c * TILE) * 4;
+                        let row = &sl[y * TILE * 3..(y + 1) * TILE * 3];
+                        let dst = &mut ms[o0..o0 + TILE * 4];
+                        for (d, s3) in dst.chunks_exact_mut(4).zip(row.chunks_exact(3)) {
+                            d[0] = s3[0];
+                            d[1] = s3[1];
+                            d[2] = s3[2];
+                            d[3] = *al;
+                        }
+                        if let Some(hs) = hs {
+                            for (x, &hole) in hs[y * TILE..(y + 1) * TILE].iter().enumerate() {
+                                if hole {
+                                    dst[x * 4 + 3] = 0;
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        // (a block's 1024 px photo on 4 threads; a far texture on its far thread alone)
-        let res = warp_rgba(mos.view(), qx, qy, cells, cw, px, if px >= 1024 { 4 } else { 1 });
-        let (mut hits, mut relit, mut full) = (0u64, 0u64, true);
-        let rs = res.as_slice().expect("a new array is contiguous");
-        let mut put = |k: usize, fv: &mut u8, ov: &mut [u8]| {
-            if *fv != 0 {
-                return;
-            }
-            let al = rs[k * 4 + 3];
-            if al >= 254 {
-                ov.copy_from_slice(&rs[k * 4..k * 4 + 3]);
-                *fv = 1;
-                hits += 1;
-                if al == 254 {
-                    relit += 1;
+            // (a block's 1024 px photo on 4 threads; a far texture on its far thread alone)
+            let res = warp_rgba(mos.view(), qx, qy, cells, cw, px, if px >= 1024 { 4 } else { 1 });
+            let (mut hits, mut relit, mut full) = (0u64, 0u64, true);
+            let rs = res.as_slice().expect("a new array is contiguous");
+            let mut put = |k: usize, fv: &mut u8, ov: &mut [u8]| {
+                if *fv != 0 {
+                    return;
                 }
-            } else {
-                full = false;
-            }
-        };
-        match (f.as_slice_mut(), o.as_slice_mut()) {
-            (Some(fs), Some(os)) => {
-                for (k, (fv, ov)) in fs.iter_mut().zip(os.chunks_exact_mut(3)).enumerate() {
-                    put(k, fv, ov);
-                }
-            }
-            _ => {
-                for y in 0..px {
-                    for x in 0..px {
-                        let mut ov = [o[[y, x, 0]], o[[y, x, 1]], o[[y, x, 2]]];
-                        put(y * px + x, &mut f[[y, x]], &mut ov);
-                        for c in 0..3 {
-                            o[[y, x, c]] = ov[c];
-                        }
+                let al = rs[k * 4 + 3];
+                if al >= 254 {
+                    ov.copy_from_slice(&rs[k * 4..k * 4 + 3]);
+                    *fv = 1;
+                    hits += 1;
+                    if al == 254 {
+                        relit += 1;
                     }
+                } else {
+                    full = false;
                 }
+            };
+            let coverage = f.as_slice_mut().expect("owned contiguous coverage");
+            let rgb = o.as_slice_mut().expect("owned contiguous RGB");
+            for (k, (fv, ov)) in coverage.iter_mut().zip(rgb.chunks_exact_mut(3)).enumerate() {
+                put(k, fv, ov);
             }
-        }
-        let decoded: Vec<(usize, Vec<u8>)> = decoded.into_iter().enumerate()
-            .filter_map(|(i, d)| d.and_then(|r| r.ok()).map(|v| (i, v))).collect();
-        Ok((hits, relit, full, decoded))
-    });
-    let (hits, relit, full, decoded) = got?;
-    Ok((hits, relit, full, decoded.into_iter().map(|(i, v)| {
-        (i, Array3::from_shape_vec((TILE, TILE, 3), v).expect("checked").into_pyarray(py))
-    }).collect()))
+            let decoded: Vec<(usize, Vec<u8>)> = decoded.into_iter().enumerate()
+                .filter_map(|(i, d)| d.and_then(|r| r.ok()).map(|v| (i, v))).collect();
+            let g = self.gutter;
+            if !full && g > 0 {
+                full = f.slice(s![g..px-g,g..px-g]).iter().all(|&v| v != 0);
+            }
+            Ok((hits, relit, full, decoded))
+        });
+        let (hits, relit, full, decoded) = got?;
+        self.remaining -= hits as usize;
+        Ok((hits, relit, full, decoded.into_iter().map(|(i, v)| {
+            (i, DecodedTile(Array3::from_shape_vec((TILE, TILE, 3), v).expect("checked")))
+        }).collect()))
+    }
 }
 
 // --- the season grade of a texture (season.grade) ---------------------------------------------------------------
@@ -501,11 +633,19 @@ fn clip8(v: i32) -> u8 {
 
 /// Image.fromarray(rgb, "RGB").resize((ow, oh), Image.BOX).
 pub fn resize_box_rgb(a: ArrayView3<u8>, ow: usize, oh: usize) -> Array3<u8> {
+    resize_rgb(a, ow, oh, 0.5, box_filter)
+}
+
+pub(crate) fn resize_bilinear_rgb(a: ArrayView3<u8>, ow: usize, oh: usize) -> Array3<u8> {
+    resize_rgb(a, ow, oh, 1.0, bilinear_filter)
+}
+
+fn resize_rgb(a: ArrayView3<u8>, ow: usize, oh: usize, support: f64, filter: fn(f64) -> f64) -> Array3<u8> {
     let (ih, iw) = (a.shape()[0], a.shape()[1]);
     let own = a.as_standard_layout();
     let src = own.as_slice().expect("standard layout");
-    let ch = pil_coeffs(iw, ow, 0.5, box_filter);
-    let cv = pil_coeffs(ih, oh, 0.5, box_filter);
+    let ch = pil_coeffs(iw, ow, support, filter);
+    let cv = pil_coeffs(ih, oh, support, filter);
     let (kh, kv) = (coeffs_8bpc(&ch), coeffs_8bpc(&cv));
     let y0 = cv.bounds[0].0;
     let y1 = cv.bounds[oh - 1].0 + cv.bounds[oh - 1].1;
@@ -542,6 +682,17 @@ pub fn resize_box_rgb(a: ArrayView3<u8>, ow: usize, oh: usize) -> Array3<u8> {
         }
     }
     Array3::from_shape_vec((oh, ow, 3), out).expect("sized")
+}
+
+/// Resize the RGB ground photo before its roads and rock are drawn.
+#[pyfunction]
+pub fn photo_resize<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, px: usize)
+                         -> PyResult<Bound<'py, numpy::PyArray3<u8>>> {
+    let a = rgb.as_array();
+    if a.is_empty() || a.shape()[0] != a.shape()[1] || a.shape()[2] != 3 || px == 0 {
+        return Err(PyValueError::new_err("photo_resize: expected nonempty square RGB and a positive size"));
+    }
+    Ok(py.detach(|| resize_bilinear_rgb(a, px, px)).into_pyarray(py))
 }
 
 /// season._box: the mean over (2r + 1)^2 windows, edges clamped, by numpy's float64 cumulative sums (the same
@@ -724,6 +875,8 @@ fn grade(rgb: ArrayView3<u8>, xm: Metres, ym: Metres, p: &SeasonParams, pal: Arr
     Some(Array3::from_shape_vec((hh, ww, 3), out).expect("sized"))
 }
 
+type GradeSettings = (f64, f64, f64, f64, f64, (f64, f64), (f64, f64), (f64, f64, f64), usize, f64, usize);
+
 /// season.grade of an RGB texture (h, w, 3) at its texels' world metres xm, ym (h, w); None: unchanged. xm, ym of
 /// another shape: a grid over the texture (imagery._seasoned's 17 x 17), upscaled to (h, w) here as it did (Pillow's
 /// BILINEAR of the grid less its minimum, the minimum added back in float32). params: (fall, winter, spring,
@@ -732,24 +885,97 @@ fn grade(rgb: ArrayView3<u8>, xm: Metres, ym: Metres, p: &SeasonParams, pal: Arr
 #[allow(clippy::type_complexity)]
 pub fn season_img<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, xm: PyReadonlyArray2<'py, f32>,
                        ym: PyReadonlyArray2<'py, f32>, pal: PyReadonlyArray2<'py, f32>,
-                       params: (f64, f64, f64, f64, f64, (f64, f64), (f64, f64), (f64, f64, f64), usize, f64, usize))
+                       params: GradeSettings)
                        -> PyResult<Option<Bound<'py, numpy::PyArray3<u8>>>> {
     let (a, xm, ym, pal) = (rgb.as_array(), xm.as_array(), ym.as_array(), pal.as_array());
     let (hh, ww) = (a.shape()[0], a.shape()[1]);
     if a.shape()[2] != 3 || xm.shape() != ym.shape() || xm.is_empty() || hh < 2 || ww < 2 {
         return Err(PyValueError::new_err("season_img: rgb (h, w, 3), xm and ym of one shape, h and w >= 2"));
     }
+    let out = py.detach(|| grade_at(a, xm, ym, pal, params));
+    Ok(out.map(|o| o.into_pyarray(py)))
+}
+
+fn grade_at(a: ArrayView3<u8>, xm: ArrayView2<f32>, ym: ArrayView2<f32>, pal: ArrayView2<f32>,
+            params: GradeSettings) -> Option<Array3<u8>> {
+    let (hh, ww, _) = a.dim();
     let p = SeasonParams { fall: params.0, winter: params.1, spring: params.2, fall_yellow: params.3,
                            winter_desat: params.4, canopy_v: params.5, canopy_std: params.6, patch_m: params.7,
                            noise_grid: params.8.max(1), canopy_texture_max_m: params.9, half_px: params.10 };
-    let out = py.detach(|| {
-        if xm.shape() == [hh, ww] {
-            grade(a, Metres::Full(xm), Metres::Full(ym), &p, pal)
-        } else {
-            grade(a, Metres::Grid(xm), Metres::Grid(ym), &p, pal)
+    if xm.shape() == [hh, ww] {
+        grade(a, Metres::Full(xm), Metres::Full(ym), &p, pal)
+    } else {
+        grade(a, Metres::Grid(xm), Metres::Grid(ym), &p, pal)
+    }
+}
+
+#[derive(FromPyObject)]
+pub enum Rendered<'py> {
+    Canvas(PyRef<'py, PhotoCanvas>),
+    Rgb(PyReadonlyArray3<'py, u8>),
+}
+
+type GradeInput<'py> = (PyReadonlyArray2<'py, f32>, PyReadonlyArray2<'py, f32>, PyReadonlyArray2<'py, f32>, GradeSettings);
+
+/// Shade a source composite. A photo that still needs road paint returns its RGB; otherwise
+/// the same detached call delivers the complete DDS, without exporting a pixel buffer to Python.
+#[pyfunction]
+/// snow (625): the texture's snow (snowlook.rs, winter on), after its rock and road paint.
+#[pyo3(signature = (source, season, rock, dds, *, path=None, paint=None, snow=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn finish_far_photo<'py>(py: Python<'py>, source: Rendered<'py>,
+                    season: Option<GradeInput<'py>>, rock: Option<(PyReadonlyArray2<'py, f64>, crate::RockArea)>,
+                    dds: Option<(PyReadonlyArray1<'py, f32>, f32, bool)>, path: Option<std::path::PathBuf>,
+                    paint: Option<&crate::paintlist::PaintLayers>, snow: Option<PyRef<'py, crate::snowlook::SnowLook>>)
+                    -> PyResult<Bound<'py, PyAny>> {
+    let img = match &source {
+        Rendered::Canvas(c) if c.filled.is_empty() => c.image.view(),
+        Rendered::Canvas(_) => return Err(PyValueError::new_err("expected a finished photo canvas")),
+        Rendered::Rgb(a) => a.as_array(),
+    };
+    let dds = dds.as_ref().map(|(lut, sharp, srgb)| (lut.as_array(), *sharp, *srgb));
+    let season = season.as_ref().map(|(x,y,p,s)| (x.as_array(), y.as_array(), p.as_array(), *s));
+    let rock = rock.as_ref().map(|(u,s)| (u.as_array(), *s));
+    let (h,w,c) = img.dim();
+    if (path.is_some() && dds.is_none()) || h == 0 || h != w || c != 3 || dds.is_some_and(|(lut, _, _)| lut.len() != 256) || season.as_ref().is_some_and(|(x,y,p,_)|
+        h < 2 || x.is_empty() || x.dim() != y.dim() || p.dim() != (3,3)) {
+        return Err(PyValueError::new_err("far_dds: invalid square RGB texture, season grid or palette"));
+    }
+    if let Some(layers) = paint { layers.validate(img.dim())?; }
+    enum Finished { Dds(Vec<u8>), Written(usize), Rgb(Array3<u8>) }
+    let snow_ref = snow.as_deref();
+    let output = py.detach(|| -> std::io::Result<Finished> {
+        let graded = season.and_then(|(x,y,p,s)| grade_at(img, x, y, p, s));
+        let a = graded.as_ref().map_or_else(|| img.view(), |v| v.view());
+        let shaded = rock.and_then(|(u,s)| crate::rock_core(a, u, s));
+        let mut owned = shaded.or(graded);
+        if let Some(layers) = paint {
+            owned = Some(layers.apply(owned.unwrap_or_else(|| img.to_owned())));
         }
-    });
-    Ok(out.map(|o| o.into_pyarray(py)))
+        if let Some(sl) = snow_ref {
+            let snowy = sl.apply_core(owned.as_ref().map_or_else(|| img.view(), |v| v.view()), None);
+            if snowy.is_some() {
+                owned = snowy;
+            }
+        }
+        if let Some((lut, sharpen, srgb)) = dds {
+            let a = owned.as_ref().map_or_else(|| img.view(), |v| v.view());
+            let data = crate::bc1fast::photo_dds(a, lut, sharpen, srgb, None);
+            if let Some(path) = path {
+                std::fs::write(path, &data)?;
+                Ok(Finished::Written(data.len()))
+            } else {
+                Ok(Finished::Dds(data))
+            }
+        } else {
+            Ok(Finished::Rgb(owned.unwrap_or_else(|| img.to_owned())))
+        }
+    })?;
+    Ok(match output {
+        Finished::Written(size) => size.into_pyobject(py)?.into_any(),
+        Finished::Dds(data) => PyBytes::new(py, &data).into_any(),
+        Finished::Rgb(image) => image.into_pyarray(py).into_any(),
+    })
 }
 
 /// imagery.encode_dds' payload in one call (one GIL hand-over a texture: each was a wait of up to the interpreter's
@@ -797,4 +1023,106 @@ pub fn dds_levels<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, lut: PyR
         (blobs.concat(), n, err)
     });
     Ok((PyBytes::new(py, &data), n, err))
+}
+
+/// Match a lazy source's low-frequency colour to the next source in the chain. The RGB Gaussian
+/// blur is three independent 8-bit Pillow blurs, and its gain is resized as mode F.
+#[pyfunction]
+pub fn match_colours<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, reference: PyReadonlyArray3<'py, u8>,
+                          sigma: f32) -> PyResult<Bound<'py, numpy::PyArray3<u8>>> {
+    let (a, b) = (rgb.as_array(), reference.as_array());
+    let nc = a.dim().2;
+    let rc = b.dim().2;
+    if a.is_empty() || b.is_empty() || nc != 3 || rc != 3 {
+        return Err(PyValueError::new_err("match_colours: expected two nonempty RGB images"));
+    }
+    Ok(py.detach(|| matched(a, b, sigma)).into_pyarray(py))
+}
+
+fn matched(a: ArrayView3<u8>, b: ArrayView3<u8>, sigma: f32) -> Array3<u8> {
+    let (h, w, _) = a.dim();
+    let (rh, rw, _) = b.dim();
+    let small = resize_box_rgb(a, rw, rh);
+    let gain = blurred_gain(small.view(), b, sigma);
+    let mut out = Array3::zeros((h, w, 3));
+    for ch in 0..3 {
+        let g = gain.slice(s![.., .., ch]);
+        let full;
+        let g = if (h, w) == (rh, rw) { g } else {
+            full = resize_f32(g, w, h);
+            full.view()
+        };
+        numpy::ndarray::Zip::from(out.slice_mut(s![.., .., ch])).and(a.slice(s![.., .., ch])).and(g)
+            .for_each(|v, &p, &g| *v = rint_small(p as f32 * g) as u8);
+    }
+    out
+}
+
+fn blurred_gain(a: ArrayView3<u8>, b: ArrayView3<u8>, sigma: f32) -> Array3<f32> {
+    let (h, w, _) = a.dim();
+    let mut gain = Array3::zeros((h, w, 3));
+    for ch in 0..3 {
+        let mut src: Vec<u8> = a.slice(s![.., .., ch]).iter().copied().collect();
+        let mut dst: Vec<u8> = b.slice(s![.., .., ch]).iter().copied().collect();
+        crate::texdds::pil_gaussian_blur(&mut src, w, h, sigma.max(1.0));
+        crate::texdds::pil_gaussian_blur(&mut dst, w, h, sigma.max(1.0));
+        for ((g, p), r) in gain.slice_mut(s![.., .., ch]).iter_mut().zip(src).zip(dst) {
+            *g = ((r as f32 + 4.0) / (p as f32 + 4.0)).clamp(1.0 / 3.0, 3.0);
+        }
+    }
+    gain
+}
+
+/// Rectangular callers may need Pillow-version-specific resize ordering on either side of this filter.
+#[pyfunction]
+pub fn photo_colour_gain<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, reference: PyReadonlyArray3<'py, u8>,
+                              sigma: f32) -> PyResult<Bound<'py, numpy::PyArray3<f32>>> {
+    let (a, b) = (rgb.as_array(), reference.as_array());
+    if a.is_empty() || a.shape()[2] != 3 || a.dim() != b.dim() {
+        return Err(PyValueError::new_err("photo_colour_gain: expected two matching nonempty RGB images"));
+    }
+    Ok(py.detach(|| blurred_gain(a, b, sigma)).into_pyarray(py))
+}
+
+/// Cut a generated far tile directly from its cached ENU squares. Two taps may be on
+/// opposite sides of a square boundary. Their multiply-add order is genground.render_far's.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+pub fn cut_ground<'py>(py: Python<'py>, squares: Vec<(PyReadonlyArray3<'py, u8>, Option<PyReadonlyArray3<'py, u8>>)>,
+                       nx: usize, ny: usize, side: usize, px: usize, x0: f64, y0: f64, size: f64,
+                       west: f64, north: f64, spacing: f64)
+                       -> PyResult<(Bound<'py, numpy::PyArray3<u8>>, Option<Bound<'py, numpy::PyArray3<u8>>>)> {
+    let views: Vec<_> = squares.iter().map(|(a,c)| (a.as_array(), c.as_ref().map(|b| b.as_array()))).collect();
+    if views.is_empty() || nx.checked_mul(ny) != Some(views.len()) || side == 0 || px == 0 || !(spacing > 0.0)
+        || views.iter().any(|(a,c)| a.dim() != (side,side,3) || c.is_some_and(|b| b.dim() != a.dim())) {
+        return Err(PyValueError::new_err("cut_ground: invalid grid of RGB squares"));
+    }
+    let (w, h) = (nx * side, ny * side);
+    let texel = size / px as f64;
+    let (floor, canopy) = py.detach(|| {
+        let taps = |v: f64, max: usize| {
+            let v = v.clamp(0.0, (max - 1) as f64);
+            let lo = v as usize;
+            (lo, (lo + 1).min(max - 1), v - lo as f64)
+        };
+        let xs: Vec<_> = (0..px).map(|x| taps((x0 + (x as f64 + 0.5)*texel - west)/spacing - 0.5,w)).collect();
+        let ys: Vec<_> = (0..px).map(|y| taps((north - (y0 + size - (y as f64 + 0.5)*texel))/spacing - 0.5,h)).collect();
+        let cut = |tiles: Vec<ArrayView3<u8>>| {
+            let at = |x: usize,y: usize,ch| {
+                // Python enumerates the squares from the south. Each image stores its north row first.
+                tiles[(ny - 1 - y / side)*nx + x / side][[y % side,x % side,ch]] as f64
+            };
+            Array3::from_shape_fn((px,px,3), |(y,x,ch)| {
+                let (x0,x1,fx) = xs[x];
+                let (y0,y1,fy) = ys[y];
+                let top = at(x0,y0,ch)*(1.0-fx) + at(x1,y0,ch)*fx;
+                let bot = at(x0,y1,ch)*(1.0-fx) + at(x1,y1,ch)*fx;
+                (top*(1.0-fy) + bot*fy).round_ties_even() as u8
+            })
+        };
+        let floor = cut(views.iter().map(|v| v.0).collect());
+        let crowns: Option<Vec<_>> = views.iter().map(|v| v.1).collect();
+        (floor, crowns.map(cut))
+    });
+    Ok((floor.into_pyarray(py), canopy.map(|c| c.into_pyarray(py))))
 }

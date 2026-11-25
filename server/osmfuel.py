@@ -117,16 +117,87 @@ class OsmFuel(osmtags.OsmTags):
             raise
         finally:
             con.close()
-        out = []
-        for fid, amenity, brand, name, building, x0, y0, x1, y1 in rows:
-            if x0 is None:
-                continue
-            if isinstance(name, (list, tuple)):
-                name = name[0] if name else None
-            out.append({"id": int(fid), "amenity": amenity, "brand": brand or "", "name": name or "",
-                        "building": building or "",
-                        "bbox": (float(x0), float(y0), float(x1), float(y1))})
+        return [x for x in map(_row, rows) if x is not None]
+
+    def cells_many(self, bounds_list, kind="demand"):
+        """[cell(bounds) for bounds in bounds_list] in one scan of the union's row groups (tools/build_cip.py: a z10
+        unit's 256 cells were 256 DuckDB scans of the same row groups, ~0.1 s each, most of an empty cell's build).
+        Each cell's rows are the ones cell() gives: its box tested in DuckDB with the same expression, the rows in file
+        order (cell()'s single-threaded scan order)."""
+        for attempt in (0, 1):
+            etag, remote = self.version(kind)
+            try:
+                return self._fuel_many(remote, bounds_list, kind)
+            except rangeread.Changed:
+                if attempt:
+                    raise
+                log.info("osmfuel: %s changed (was %s), taking the new version", self.url, etag)
+                self._forget()
+        return [[] for _ in bounds_list]
+
+    def _fuel_many(self, remote, bounds_list, kind):
+        out = [[] for _ in bounds_list]
+        if not bounds_list:
+            return out
+        u = (min(b[0] for b in bounds_list), min(b[1] for b in bounds_list), max(b[2] for b in bounds_list),
+             max(b[3] for b in bounds_list))
+        rd = self._reader
+        files = {PATH: remote}
+        con, proto, errors = rd._connect(files, kind)
+        try:
+            uri = f"'{proto}://{PATH}'"
+            groups = self._groups(con, uri, remote, kind)
+            cand = self._candidates(groups, u)
+            if not cand:
+                return out
+            rd._fetch(files, {PATH: [r for rg in cand for c in FIND for r in groups[rg]["cols"].get(c, [])]}, kind)
+            only = " OR ".join(f"file_row_number BETWEEN {groups[rg]['first']} AND "
+                               f"{groups[rg]['first'] + groups[rg]['n'] - 1}" for rg in cand)
+            con.execute(f"""CREATE TEMP TABLE fu AS SELECT file_row_number, amenity, bbox FROM read_parquet({uri},
+                file_row_number = true) WHERE ({only}) AND {_box(u)}""")
+            per = []
+            for b in bounds_list:
+                per.append([int(r[0]) for r in con.execute(f"""SELECT file_row_number, amenity FROM fu WHERE {_box(b)}
+                    ORDER BY file_row_number""").fetchall() if r[1] in AMENITIES])
+            hits = sorted({r for h in per for r in h})
+            if not hits:
+                return out
+            hit = sorted({rg for r in hits for rg in cand
+                          if groups[rg]["first"] <= r < groups[rg]["first"] + groups[rg]["n"]})
+            rd._fetch(files, {PATH: [r for rg in hit for c in DETAIL for r in groups[rg]["cols"].get(c, [])]}, kind)
+            try:
+                con.execute("SET enable_geoparquet_conversion = false")
+            except Exception:
+                pass
+            got = {int(r[0]): r[1:] for r in con.execute(f"""SELECT file_row_number, id, amenity, brand, name,
+                building, bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax FROM read_parquet({uri}, file_row_number = true)
+                WHERE file_row_number IN ({', '.join(map(str, hits))})""").fetchall()}
+        except Exception:
+            for e in errors:
+                if isinstance(e, rangeread.Changed):
+                    raise e
+            raise
+        finally:
+            con.close()
+        for i, h in enumerate(per):
+            out[i] = [x for x in (_row(got[r]) for r in h if r in got) if x is not None]
         return out
+
+
+def _box(bounds):
+    lon0, lat0, lon1, lat1 = bounds
+    return f"bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND bbox.ymin <= {lat1!r} AND bbox.ymax >= {lat0!r}"
+
+
+def _row(r):
+    """A station's dict of (id, amenity, brand, name, building, xmin, ymin, xmax, ymax), None without a bbox."""
+    fid, amenity, brand, name, building, x0, y0, x1, y1 = r
+    if x0 is None:
+        return None
+    if isinstance(name, (list, tuple)):
+        name = name[0] if name else None
+    return {"id": int(fid), "amenity": amenity, "brand": brand or "", "name": name or "", "building": building or "",
+            "bbox": (float(x0), float(y0), float(x1), float(y1))}
 
 
 

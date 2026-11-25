@@ -15,6 +15,10 @@ from pathlib import Path
 import tempfile
 import zipfile
 
+try:        # (first: numpy's AVX-512 kernels held back before anything imports numpy, tools/npyfirst.py)
+    import npyfirst  # noqa: E402,F401
+except ImportError:     # (loaded by its path into another process, a test: that process's entry point guards)
+    pass
 import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra

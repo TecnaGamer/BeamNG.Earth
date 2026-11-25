@@ -31,11 +31,10 @@ unchanged).
 """
 import logging
 import math
-import os
 import time
 
 import numpy as np
-import dmath
+import fast
 import dnp
 
 import colormatch as colormatchmod
@@ -60,8 +59,6 @@ IMAGERY = {
     "naipusda": "USDA NAIP",
     "naip": "USDA NAIP via USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program",
     "usgs": "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program",       # (USGS's requested credit line)
-    "eox2023": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
-               "(Contains modified Copernicus Sentinel data 2023)",
     "eox2016": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
                "(Contains modified Copernicus Sentinel data 2016 & 2017)",
 }
@@ -87,7 +84,6 @@ WEATHER_ID = "wx:open-meteo"
 # The full wordings above stay the attribution of record: hello.attribution (the settings page) and CREDITS.md.
 SHORT = {
     "img:md6in": "MD iMAP", "img:naipusda": "USDA NAIP", "img:naip": "USDA NAIP", "img:usgs": "USGS",
-    "img:eox2023": "EOX Sentinel-2 cloudless 2023 (Copernicus)",
     "img:eox2016": "EOX Sentinel-2 cloudless 2016 (Copernicus)",
     "img:ct2023": "CT ECO", "img:ma2025": "MassGIS", "img:dc2025": "DC OCTO", "img:indiana": "Indiana IGIO",
     "img:ohio": "Ohio OGRIP", "img:ncarolina": "NC OneMap", "img:penn": "PEMA / PASDA", "img:virginia": "VGIN",
@@ -127,6 +123,8 @@ FEATURES = {
     "bld:nyc-3d": "NYC 3-D Building Model (OTI)",
     "roadz:hk": "HK Gov TD and CEDD (DATA.GOV.HK, CSDI)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
+    # (winterpacks.py: the winter looks' packs; the consumer names them where it used them)
+    "land:esa-cci-lc": "ESA Land Cover CCI", "land:jrc-gsw": "EC JRC/Google (Global Surface Water)",
 }
 # (the full wordings of features whose licences name each provider: hello.attribution / CREDITS.md)
 LONG = {
@@ -151,6 +149,13 @@ LONG = {
     "roof:lod2-ee": "Building 3D model data: Republic of Estonia Land and Spatial Development Board 2026 (open data "
                     "licence, https://geoportaal.maaruum.ee/opendata-licence); roof shapes read from the models' "
                     "faces, data changed",
+    "land:esa-cci-lc": "Evergreen share of the trees: ESA Land Cover CCI project team; Defourny, P. (2019): ESA Land "
+                       "Cover Climate Change Initiative (Land_Cover_cci): Global Land Cover Maps, Version 2.0.7. "
+                       "Centre for Environmental Data Analysis; with thanks to the ESA Climate Change Initiative and "
+                       "the Land Cover CCI project, data changed",
+    "land:jrc-gsw": "Water share: Source: EC JRC/Google. Pekel, J.-F., Cottam, A., Gorelick, N., Belward, A. S. (2016): "
+                    "High-resolution mapping of global surface water and its long-term changes. Nature 540, 418-422 "
+                    "(Copernicus Programme), data changed",
     "roof:lod2-wien": "Roof shapes and heights in Vienna: Datenquelle: Stadt Wien - data.wien.gv.at (Generalisiertes "
                       "Dachmodell LOD2.1, CC BY 4.0), data changed",
 }
@@ -171,12 +176,10 @@ ORDER = ([f"img:{n}" for n in IMAGERY] + [f"dem:{n}" for n in ELEVATION] + list(
 NOT_SOURCES = ("none", "polar", "deshadow", "colormatch", "leafon")
 
 
-def _rank(i):
-    return (ORDER.index(i), "") if i in ORDER else (len(ORDER), i)
-
-
-def ordered(ids):
-    return sorted(ids, key=_rank)
+_native = fast.native(557, "data credits")
+ordered = _native.credit_ordered
+line = _native.credit_line
+feature_ids = _native.credit_features
 
 
 def full_label(i):
@@ -194,140 +197,6 @@ def full_label(i):
 def label(i):
     """The overlay's short name of a source id."""
     return SHORT.get(i) or full_label(i)
-
-
-def line(ids, far=False):
-    """'Imagery: a, b | Elevation: c | Map: OpenStreetMap, Overture Maps | ... | Weather: Open-Meteo' (far: 'Far
-    imagery: ...'), short names (label), in ORDER, each name once; '' for no ids."""
-    groups = {}
-    for i in ordered(ids):
-        names = groups.setdefault(i.partition(":")[0], [])
-        n = label(i)
-        if n not in names:
-            names.append(n)
-    out = []
-    for kind, title, far_title in GROUPS:
-        if groups.get(kind):
-            out.append(f"{far_title if far else title}: " + ", ".join(groups[kind]))
-    for kind, names in groups.items():          # (a kind without a group: its names alone)
-        if kind not in {g[0] for g in GROUPS}:
-            out.append(", ".join(names))
-    return " | ".join(out)
-
-
-FEATURE_NEAR_M = 1500.0         # m: the map data, bridges and airports this close to the player are credited
-
-
-def feature_ids(conn):
-    """The ids of the non-tile sources that built what is near the player (FEATURES): the map data's datasets in
-    the cells around it (their provenance: OpenStreetMap, Microsoft's buildings, TomTom, ...) once road tiles are
-    shown, the land cover with the surface on, the canopy with trees shown, NOAA with sea tiles, the bridge
-    inventories with a record near, 3dmr.eu with one of its models near, OurAirports with a runway near, EGM2008
-    with real gravity. Cheap: cached provenance only (mapdata.layer_provenance, threedmr.credited_near), never a
-    download."""
-    import mapcells
-    s = conn.s
-    ids = set()
-    anchor = getattr(s, "anchors", {}).get(conn.active)
-    if anchor is None:
-        return ids
-    fx, fy = conn.focus
-    lat, lon, _ = anchor.frame.enu_to_geodetic(fx, fy, 0.0)
-    lat, lon = float(lat), float(lon)
-    md = getattr(s, "mapdata", None)
-    roads = getattr(conn, "roads", None)
-    roads_on = md is not None and roads is not None and getattr(roads, "aid", None) == conn.active and roads.sent
-    veg = getattr(conn, "veg", None)
-    veg_on = getattr(s, "veg", None) is not None and veg is not None and getattr(veg, "aid", None) == conn.active \
-        and veg.sent
-    if md is not None and hasattr(md, "layer_provenance"):
-        dlat = FEATURE_NEAR_M / 110540.0
-        dlon = FEATURE_NEAR_M / (111320.0 * max(0.1, dmath.cos(math.radians(lat))))
-        for key in mapcells.cells_for_bbox(lat - dlat, lon - dlon, lat + dlat, lon + dlon):
-            layers = (("roads", "buildings", "water") if roads_on else ()) \
-                + (("landcover",) if getattr(s, "surface", None) is not None else ()) \
-                + (("canopy",) if veg_on else ())
-            for layer in layers:
-                p = md.layer_provenance(key, layer)
-                if not isinstance(p, dict):
-                    continue
-                pid = p.get("id", "")
-                if pid.startswith("overture:"):
-                    ds = [d.get("dataset") for d in p.get("datasets") or [] if d.get("features", 1) > 0]
-                    if ds:
-                        ids.add("map:Overture")
-                        ids |= {f"map:{d}" for d in ds if d}
-                elif pid == "esa-worldcover":
-                    ids.add("land:esa-worldcover")
-                elif pid == "meta-wri-chm":
-                    ids.add("canopy:meta-wri-chm")
-                elif pid == "lidarbc-chm":
-                    ids.add("canopy:lidarbc-chm")
-                    ids.add("canopy:meta-wri-chm")
-    sea = getattr(conn, "sea_sent", None)
-    if sea and sea[0] == conn.active and sea[1] and sea[1][0]:
-        ids.add("sea:noaa")
-    if roads_on:
-        try:
-            import bridgetypes
-            if len(bridgetypes.nbi_near(lat, lon, FEATURE_NEAR_M)[0]):
-                ids.add("bridge:nbi")
-            if bridgetypes.wd_near(lat, lon, FEATURE_NEAR_M):
-                ids.add("bridge:wikidata")
-        except Exception:           # (the inventories are optional files)
-            pass
-        try:                        # (a measured roof shard on disk near, each country's own credit: lod2roofs)
-            import lod2roofs
-            src = getattr(md, "lod2_roofs", None)
-            if src is not None and (src.cache_dir or src.local):
-                ids |= lod2roofs.credited_near(src.cache_dir, lat, lon, FEATURE_NEAR_M, src.local)
-        except Exception:
-            pass
-        try:                        # (a measured Dutch roof square on disk near: threedbag)
-            import threedbag
-            if threedbag.credited_near(getattr(md, "cache_dir", None), lat, lon, FEATURE_NEAR_M):
-                ids.add("roof:3dbag")
-        except Exception:
-            pass
-        try:                        # (New York's measured massing on disk near: nycmassing)
-            import nycmassing
-            if nycmassing.credited_near(getattr(md, "cache_dir", None), lat, lon, FEATURE_NEAR_M):
-                ids.add("bld:nyc-3d")
-        except Exception:
-            pass
-        try:                        # (France's measured buildings on disk near: bdtopo)
-            import bdtopo
-            if getattr(md, "bdtopo", None) is not None and bdtopo.credited_near(getattr(md, "cache_dir", None),
-                                                                                lat, lon, FEATURE_NEAR_M):
-                ids.add("bld:bdtopo-fr")
-        except Exception:
-            pass
-        try:                        # (a Hong Kong road heights cell on disk near: roadz)
-            import roadz
-            if roadz.hk_credited_near(getattr(md, "cache_dir", None), lat, lon, FEATURE_NEAR_M):
-                ids.add("roadz:hk")
-        except Exception:
-            pass
-        try:                        # (a 3dmr.eu model near: threedmr's cached answers only)
-            import threedmr
-            if threedmr.credited_near(lat, lon, FEATURE_NEAR_M, getattr(s, "root", None)):
-                ids.add("model:3dmr")
-        except Exception:
-            pass
-    ap = getattr(s, "airports", None)
-    db = getattr(ap, "db", None)
-    if db is not None:
-        try:
-            if db.near(lat, lon, FEATURE_NEAR_M):
-                ids.add("air:ourairports")
-        except Exception:
-            pass
-    grav = getattr(getattr(conn, "gravity", None), "msg", None)
-    if isinstance(grav, dict) and grav.get("source") == "egm2008":
-        ids.add("grav:egm2008")
-    if veg_on:                      # (the trees' tiles carry the forest ambience's set: climate.koppen_at)
-        ids.add("climate:beck-kg")
-    return ids
 
 
 def dem_keys(frame, bbox, zoom):
@@ -392,13 +261,6 @@ def polar_covered(frame, bbox, polar):
         return False
 
 
-def bbox_distance(bb, x, y):
-    """Distance from (x, y) to the nearest point of the box (0 inside)."""
-    dx = max(bb[0] - x, 0.0, x - bb[2])
-    dy = max(bb[1] - y, 0.0, y - bb[3])
-    return math.hypot(dx, dy)
-
-
 class Credits:
     """The server's credits setting (earthd --credits on): the near radius and its hysteresis, the
     throttle and the clock (injectable for tests)."""
@@ -411,38 +273,7 @@ class Credits:
         anything is known (no anchor, no tile built; built tiles without sources, the polar ice, still send
         one). near_before: the ids near in the
         last message (they stay near within the hysteresis band)."""
-        if conn.active is None:
-            return None
-        fx, fy = conn.focus
-        tiles = conn.s.tiles
-        near, far, kept = set(), set(), set()
-        keep = frozenset(near_before)
-        known = False                   # a shown tile was built (its sources known, perhaps none: the polar ice)
-        for ck, bb in list(conn.shown.items()):
-            info = tiles.get(ck)
-            ids = getattr(info, "credits", None)
-            known = known or ids is not None
-            if not ids:
-                continue
-            d = bbox_distance(bb, fx, fy)
-            if d <= self.near_m:
-                near |= ids
-            else:
-                far |= ids
-                if keep and d <= self.near_m + self.hyst_m:
-                    kept |= ids & keep
-        near |= kept
-        if not near and not far and not known:
-            return None
-        if conn.weather.msg is not None:
-            near.add(WEATHER_ID)
-        try:
-            near |= feature_ids(conn)
-        except Exception:               # (a bug here must not lose the imagery credits)
-            log.exception("credits: feature sources failed")
-        far -= near
-        return {"type": "credits", "v": VERSION, "near": line(near), "far": line(far, far=True),
-                "ids": ordered(near), "farIds": ordered(far)}
+        return _native.credit_message(conn, self.near_m, self.hyst_m, near_before)
 
 
 class Tracker:
@@ -458,27 +289,10 @@ class Tracker:
     def poke(self, conn):
         """Something the credits depend on may have changed (a pose, a swap): check once the
         interval since the last check has passed."""
-        cr = conn.s.credits
-        if cr is None or self.timer is not None:
-            return
-        delay = max(0.0, self.last_check + cr.interval - cr.clock())
-        self.timer = conn.loop.call_later(delay, self.check, conn)
+        _native.credit_poke(self, conn)
 
     def check(self, conn):
-        self.timer = None
-        cr = conn.s.credits
-        if cr is None:
-            return
-        self.last_check = cr.clock()
-        self.checks += 1
-        try:
-            msg = cr.message(conn, self.msg["ids"] if self.msg else ())
-        except Exception:               # a bug must not stop the connection
-            log.exception("credits failed")
-            return
-        if msg is not None and msg != self.msg:
-            self.msg = msg
-            conn.send(msg)
+        _native.credit_check(self, conn)
 
     def close(self):
         if self.timer is not None:

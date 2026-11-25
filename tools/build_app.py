@@ -25,6 +25,10 @@ import re
 import shutil
 import subprocess
 import sys
+try:        # (first: numpy's AVX-512 kernels held back before anything imports numpy, tools/npyfirst.py)
+    import npyfirst  # noqa: E402,F401
+except ImportError:     # (loaded by its path into another process, a test: that process's entry point guards)
+    pass
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NAME = "BeamNG.Earth"
@@ -34,9 +38,9 @@ SEP = ";" if IS_WIN else ":"
 
 
 def _overture_release():
-    """overture.RELEASE, read from the source (the build script does not import the server)."""
+    """overturepick.RELEASE (overture.RELEASE), read from the source (the build script does not import the server)."""
     import re
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server", "overture.py"), encoding="utf-8") as f:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server", "overturepick.py"), encoding="utf-8") as f:
         return re.search(r'^RELEASE = "([^"]+)"', f.read(), re.M).group(1)
 
 
@@ -154,10 +158,11 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            # (the mod's DDS textures' lossless sources: modtextures.py makes the DDS at install)
            "--add-data", f"{os.path.join(ROOT, 'mod', 'texture_sources')}{SEP}mod/texture_sources",
            "--hidden-import", "modtextures",
+           "--hidden-import", "cliffstock",
+           "--hidden-import", "clifftextures",
            "--add-data", f"{os.path.join(ROOT, 'VERSION')}{SEP}.",
            "--add-data", f"{os.path.join(ROOT, 'LICENSE')}{SEP}.",
            "--add-data", f"{os.path.join(ROOT, 'CREDITS.md')}{SEP}.",
-           "--add-data", f"{os.path.join(ROOT, 'docs', 'SHARED_WORLD.md')}{SEP}docs",
            "--add-data", f"{os.path.join(ROOT, 'docs', 'RELAUNCH_TROUBLESHOOTING.md')}{SEP}docs",
            "--add-data", f"{os.path.join(ROOT, 'docs', 'STABILITY_VALIDATION.md')}{SEP}docs",
            "--add-data", f"{os.path.join(server, 'bridges_us.npz')}{SEP}.",     # (bridgetypes.DB_PATH: beside the modules)
@@ -184,11 +189,16 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'ky_interstate_medians.json')}{SEP}.",
            # threedmr.position_fix's offline table (probe/position_audit.json's own OSM-measured corrections)
            "--add-data", f"{os.path.join(server, 'threedmr_position_fixes.json')}{SEP}."]
-    # the sources' fingerprint (peerwork.code_id: compute-sharing helpers build only for the same code)
+    # Cliff geometry inputs are read beside the server modules, including in a frozen app.
+    for name in ("cliff_height.png", "cliff_cut_height.png", "cliff_arid_cut_height.png",
+                 "cliff_canyon_height.png", "cliff_transition_means.json"):
+        cmd += ["--add-data", f"{os.path.join(server, name)}{SEP}."]
+    # every server source's fingerprint (blockcache._code_id: earthd's own copy of the block build is in no revisit
+    # closure)
     sys.path.insert(0, server)
-    import peerwork
+    import revisit
     with open(os.path.join(work, "CODE_ID"), "w", encoding="ascii") as f:
-        f.write(peerwork.source_id(server))
+        f.write(revisit.all_source_id(server))
     cmd += ["--add-data", f"{os.path.join(work, 'CODE_ID')}{SEP}."]
     # (the revisit cache's own fingerprint: only the modules its items are made with, revisit.source_id; an update of
     # the rest keeps every place's cache)
@@ -196,6 +206,15 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
     with open(os.path.join(work, "REVISIT_ID"), "w", encoding="ascii") as f:
         f.write(revisit.source_id(server))
     cmd += ["--add-data", f"{os.path.join(work, 'REVISIT_ID')}{SEP}."]
+    # the AVX-512 targets of the numpy this app bundles (npyguard: held back on an AVX-512 CPU), from that numpy
+    # itself; the release workflow then runs the built executable's --check-numpy (numpy imports with them, -W error)
+    import json
+    import npyguard
+    names = npyguard.dispatch_names()
+    import importlib.metadata
+    with open(os.path.join(work, npyguard.FROZEN_FILE), "w", encoding="utf-8") as f:
+        json.dump({"numpy": importlib.metadata.version("numpy"), "names": list(names)}, f)
+    cmd += ["--add-data", f"{os.path.join(work, npyguard.FROZEN_FILE)}{SEP}."]
     cmd += ["--onefile"] if onefile else ["--onedir"]
     if IS_WIN:
         vf, mf = version_files(work, ver)

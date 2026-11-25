@@ -20,6 +20,7 @@ use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use std::collections::HashMap;
 
 use crate::geotiles::{geo_to_ecef, lat_of, lon_of, near, quad, quad_dist, centre, Frame};
@@ -155,6 +156,26 @@ impl Horizon {
         let zm = self.zmax_merc(node.0, node.1, node.2).unwrap_or_else(|| self.zmax(b));
         d <= self.min_d || d <= self.reach + (2.0 * self.r * zm.max(0.0)).sqrt()
     }
+
+    /// How far d can move before keeps' answer may change (its two bounds' distance from d).
+    fn keeps_slack(&self, d: f64, b: &[f64; 4], node: (u32, i64, i64)) -> f64 {
+        let zm = self.zmax_merc(node.0, node.1, node.2).unwrap_or_else(|| self.zmax(b));
+        let t = self.reach + (2.0 * self.r * zm.max(0.0)).sqrt();
+        let s = (d - self.min_d).abs();
+        if t.is_finite() { s.min((d - t).abs()) } else { s }
+    }
+}
+
+/// The selection's slack (far_global_select, farsel far_select_nodes: earthd's selection gate): never more than this,
+/// the roots past the disc + SLACK_PAD not being looked at.
+pub const SLACK_PAD: f64 = 64.0;
+
+/// slack = the least of slack and |v| (NaN ignored).
+pub fn tighten(slack: &mut f64, v: f64) {
+    let a = v.abs();
+    if a < *slack {
+        *slack = a;
+    }
 }
 
 fn quad_flat(q: &[[f64; 2]; 4]) -> Vec<f64> {
@@ -186,12 +207,30 @@ fn out_of_view(c: &[f64], b: &[f64; 4], d: f64) -> f64 {
     if a - slack <= c[6].clamp(-1.0, 1.0).dacos() { 1.0 } else { c[8].max(1.0) }
 }
 
-/// far_global_select's view argument: (cx, cy, dz, ppr, tau, reach, hs, cap, cells, errs).
-pub type SseArgs = (f64, f64, f64, f64, f64, f64, f64, f64, f64, HashMap<(u32, i64, i64), f64>);
+/// far_global_select's view argument: (cx, cy, dz, ppr, tau, reach, hs, cap, cells, errs {(z, x, y): err}). errs is
+/// looked up node by node as the selection meets them (earthd's glod_errs holds every built global tile's, up to
+/// LOD_ERRS_MAX: copied whole into a map at every pose it was the event loop's O(tiles built) per pose).
+pub type SseArgs<'py> = (f64, f64, f64, f64, f64, f64, f64, f64, f64, Bound<'py, PyDict>);
+
+/// The known errors: the caller's dict (far_global_select), or a map (the tests).
+enum Errs<'py> {
+    Dict(Bound<'py, PyDict>),
+    #[allow(dead_code)]
+    Map(HashMap<(u32, i64, i64), f64>),
+}
+
+impl Errs<'_> {
+    fn get(&self, node: &(u32, i64, i64)) -> Option<f64> {
+        match self {
+            Errs::Map(m) => m.get(node).copied(),
+            Errs::Dict(d) => d.get_item(*node).ok().flatten().and_then(|v| v.extract::<f64>().ok()),
+        }
+    }
+}
 
 /// Screen-space LOD (farfield.View, the same rule as farfield.select's): the camera, the pop allowed and the known
 /// errors of the built tiles.
-pub struct Sse {
+pub struct Sse<'py> {
     cx: f64,
     cy: f64,
     dz: f64,
@@ -201,20 +240,20 @@ pub struct Sse {
     hs: f64,
     cap: f64,
     cells: f64,
-    errs: HashMap<(u32, i64, i64), f64>,
+    errs: Errs<'py>,
 }
 
-impl From<SseArgs> for Sse {
-    fn from(a: SseArgs) -> Self {
+impl<'py> From<SseArgs<'py>> for Sse<'py> {
+    fn from(a: SseArgs<'py>) -> Self {
         let (cx, cy, dz, ppr, tau, reach, hs, cap, cells, errs) = a;
-        Sse { cx, cy, dz: dz.max(0.0), ppr, tau, reach, hs, cap, cells: cells.max(1.0), errs }
+        Sse { cx, cy, dz: dz.max(0.0), ppr, tau, reach, hs, cap, cells: cells.max(1.0), errs: Errs::Dict(errs) }
     }
 }
 
-impl Sse {
+impl Sse<'_> {
     /// The node's split pop on screen (px; its known error at most cap vertex spacings, from the camera), or None.
     fn pixels(&self, node: (u32, i64, i64), q: &[[f64; 2]; 4], size: f64) -> Option<f64> {
-        let e = (*self.errs.get(&node)?).min(self.cap * size / self.cells);
+        let e = self.errs.get(&node)?.min(self.cap * size / self.cells);
         Some(e * self.ppr / quad_dist(q, self.cx, self.cy).dhypot(self.dz).max(1.0))
     }
 
@@ -236,6 +275,25 @@ impl Sse {
             split
         }
     }
+
+    /// How far the camera and the player can move before decide's answer may change (its bounds' distances; INF for a
+    /// node whose error is not known: the distance rule's own then).
+    #[allow(clippy::too_many_arguments)]
+    fn slack(&self, was: bool, node: (u32, i64, i64), q: &[[f64; 2]; 4], size: f64, d: f64, d3: f64, lim: f64,
+             lim_f: f64, h: f64) -> f64 {
+        let Some(e) = self.errs.get(&node) else { return f64::INFINITY };
+        let e = e.min(self.cap * size / self.cells);
+        let dm = quad_dist(q, self.cx, self.cy).dhypot(self.dz).max(1.0);
+        let d1 = e * self.ppr / self.tau;
+        let mut s = f64::INFINITY;
+        for v in [dm - d1, dm - d1 * (1.0 + self.hs), d - self.reach * lim, d3 - lim_f] {
+            tighten(&mut s, v);
+        }
+        if was {
+            tighten(&mut s, d3 - (1.0 + h) * lim_f);
+        }
+        s
+    }
 }
 
 /// The global part of a far-field selection for a player at (px, py) of the anchor (lat0, lon0)'s world.
@@ -250,7 +308,9 @@ impl Sse {
 /// SSE split's reach (times the switch distance), its hysteresis hs, the error cap in vertex spacings (cap x edge / cells)
 /// and errs {(z, x, y): the built tile's normal error (m)}: see Sse::decide.
 /// Returns (tiles [(z, x, y, quad (8), real edge m)], refined [(z, x, y)], regions [(x, y, quad (8))]: the refined
-/// tiles of zoom zf, which the anchor's own nodes fill).
+/// tiles of zoom zf, which the anchor's own nodes fill, slack m: the selection is the same while the player, the radius,
+/// the eye height and the camera move less than this in all (every bound a node's answer goes by is farther from its
+/// value than this; at most SLACK_PAD)).
 #[pyfunction]
 #[pyo3(signature = (lat0, lon0, px, py, radius, disc, zf, max_level, k, rmin, h, prev, hold, forced, horizon=None, eye_h=0.0,
                     cone=None, view=None))]
@@ -260,8 +320,9 @@ pub fn far_global_select<'py>(lat0: f64, lon0: f64, px: f64, py: f64, radius: f6
                               hold: Vec<(u32, i64, i64)>, forced: Vec<(f64, f64, f64, f64)>,
                               horizon: Option<(f64, f64, f64, PyReadonlyArray2<'py, f64>, f64, f64,
                                                Option<(u32, i64, i64, PyReadonlyArray2<'py, f64>)>)>,
-                              eye_h: f64, cone: Option<Vec<f64>>, view: Option<SseArgs>)
-                         -> PyResult<(Vec<(u32, i64, i64, Vec<f64>, f64)>, Vec<(u32, i64, i64)>, Vec<(i64, i64, Vec<f64>)>)> {
+                              eye_h: f64, cone: Option<Vec<f64>>, view: Option<SseArgs<'py>>)
+                         -> PyResult<(Vec<(u32, i64, i64, Vec<f64>, f64)>, Vec<(u32, i64, i64)>, Vec<(i64, i64, Vec<f64>)>,
+                                      f64)> {
     let sse = view.map(Sse::from).filter(|v| v.tau > 0.0);
     let hz = horizon.map(|(reach, min_d, r, base, half, cell, merc)| {
         let a = base.as_array();
@@ -277,21 +338,31 @@ pub fn far_global_select<'py>(lat0: f64, lon0: f64, px: f64, py: f64, radius: f6
     let hold: std::collections::HashSet<(u32, i64, i64)> = hold.into_iter().collect();
     let sq = [px - radius, py - radius, px + radius, py + radius];
     let reach = if disc { radius } else { radius * std::f64::consts::SQRT_2 };
-    let mut stack: Vec<(u32, i64, i64)> = near(&f, zroot, px, py, reach).into_iter().map(|(x, y, _)| (zroot, x, y)).collect();
+    // (the roots out to SLACK_PAD past the reach: those past the radius are culled below, their distance the slack's)
+    let mut stack: Vec<(u32, i64, i64)> = near(&f, zroot, px, py, reach + SLACK_PAD).into_iter()
+        .map(|(x, y, _)| (zroot, x, y)).collect();
     stack.reverse();
     let (mut tiles, mut refined, mut regions) = (Vec::new(), Vec::new(), Vec::new());
+    let mut slack = SLACK_PAD;
     while let Some((z, x, y)) = stack.pop() {
         let q = quad(&f, z, x, y);
         let b = bbox(&q);
         let d = quad_dist(&q, px, py);
         if disc {
+            tighten(&mut slack, d - radius);
             if d >= radius {
                 continue;
             }
-        } else if !overlaps(&b, &sq) {
-            continue;
+        } else {
+            for v in [b[0] - sq[2], b[2] - sq[0], b[1] - sq[3], b[3] - sq[1]] {
+                tighten(&mut slack, v);
+            }
+            if !overlaps(&b, &sq) {
+                continue;
+            }
         }
         if let Some(hz) = &hz {
+            tighten(&mut slack, hz.keeps_slack(d, &b, (z, x, y)));
             if !hz.keeps(d, &b, (z, x, y)) {
                 continue;
             }
@@ -308,16 +379,27 @@ pub fn far_global_select<'py>(lat0: f64, lon0: f64, px: f64, py: f64, radius: f6
             // camera far up the tiles are as coarse as its height asks: the user, 2026-11-07, "its building a bunch of
             // little tiles directly under the camera even tho im extreamly high up")
             let mut d3 = (d * d + eye_h * eye_h).sqrt();
+            let mut fac = 1.0;
             if let Some(c) = cone.as_deref() {
-                d3 *= out_of_view(c, &b, d);
+                fac = out_of_view(c, &b, d);
+                d3 *= fac;
+                if out_of_view(c, &b, 1e-9) != 1.0 {
+                    tighten(&mut slack, d);         // (the node under the camera, d 0, counts as in view)
+                }
             }
             let lim = (k[lvl.min(k.len() - 1)] * size).max(rmin);
             let was = prev.contains(&node);
             let split = d3 < lim || (was && d3 < (1.0 + h) * lim);
+            // (d3 moves at most fac x the player's move plus the eye's)
+            tighten(&mut slack, (d3 - lim) / fac);
+            if was {
+                tighten(&mut slack, (d3 - (1.0 + h) * lim) / fac);
+            }
             match &sse {
                 // (the floor: the child level's switch distance; a global node's children are about half its edge)
                 Some(v) => {
                     let lim_f = (k[(lvl - 1).min(k.len() - 1)] * size * 0.5).max(rmin);
+                    tighten(&mut slack, v.slack(was, node, &q, size, d, d3, lim, lim_f, h) / fac);
                     v.decide(split, was, node, &q, size, d, d3, lim, lim_f, h)
                 }
                 None => split,
@@ -337,7 +419,13 @@ pub fn far_global_select<'py>(lat0: f64, lon0: f64, px: f64, py: f64, radius: f6
             tiles.push((z, x, y, quad_flat(&q), size));
         }
     }
-    Ok((tiles, refined, regions))
+    // (square mode: the roots are searched by their quads' distance, kept by their bboxes' overlap with the square; far
+    // from the anchor a rotated root's bbox overlaps it past the search's reach, so a move of any size may bring one in:
+    // no slack, every pose selects. Codex review round 3; the disc's search and cull go by the same distance)
+    if !disc {
+        slack = 0.0;
+    }
+    Ok((tiles, refined, regions, slack))
 }
 
 fn quads_of(a: &numpy::ndarray::ArrayView2<'_, f64>) -> Vec<Vec<P2>> {
@@ -373,8 +461,13 @@ pub fn far_box_cover(quads: PyReadonlyArray2<'_, f64>, x0: f64, y0: f64, x1: f64
 #[pyfunction]
 pub fn far_overlap_pairs(py: Python<'_>, polys: Vec<Vec<f64>>, side: Vec<u8>, min_area: f64, rel: f64)
                          -> Vec<(usize, usize)> {
+    py.detach(|| overlap_pairs(&polys, &side, min_area, rel))
+}
+
+/// far_overlap_pairs without the GIL hand-over (the far state machine's swap groups, host/farstate.rs).
+pub fn overlap_pairs(polys: &[Vec<f64>], side: &[u8], min_area: f64, rel: f64) -> Vec<(usize, usize)> {
     let ps: Vec<Vec<P2>> = polys.iter().map(|v| v.chunks(2).map(|c| [c[0], c[1]]).collect()).collect();
-    py.detach(|| {
+    {
         let bbs: Vec<[f64; 4]> = ps.iter().map(|p| bbox(p)).collect();
         let areas: Vec<f64> = ps.iter().map(|p| poly_area(p).abs()).collect();
         let mut order: Vec<usize> = (0..ps.len()).collect();
@@ -396,29 +489,57 @@ pub fn far_overlap_pairs(py: Python<'_>, polys: Vec<Vec<f64>>, side: Vec<u8>, mi
         }
         out.sort_unstable();
         out
-    })
+    }
 }
 
 // --- meshes ----------------------------------------------------------------------------------------------------------
 
-/// Height of the grid's triangulated surface (cells split SW-NE where i + j is even: farfield.surface_at) at grid-index
-/// coordinates (gx east, gy north).
-fn surface_at(g: &[f64], n: usize, gx: f64, gy: f64) -> f64 {
-    let c = n - 1;
-    let i = (gx.floor() as i64).clamp(0, c as i64 - 1) as usize;
-    let j = (gy.floor() as i64).clamp(0, c as i64 - 1) as usize;
-    let (a, b) = (gx - i as f64, gy - j as f64);
-    let (z00, z10, z01, z11) = (g[j * n + i], g[j * n + i + 1], g[(j + 1) * n + i], g[(j + 1) * n + i + 1]);
-    if (i + j) % 2 == 0 {
-        if a >= b { z00 + a * (z10 - z00) + b * (z11 - z10) } else { z00 + a * (z11 - z01) + b * (z01 - z00) }
-    } else if a + b <= 1.0 {
-        z00 + a * (z10 - z00) + b * (z01 - z00)
-    } else {
-        z11 + (1.0 - a) * (z01 - z11) + (1.0 - b) * (z10 - z11)
-    }
+/// Corner indices and weights at grid coordinates (gx east, gy north).
+pub(crate) struct Triangle {
+    pub base: usize,
+    pub dx: (usize, usize),
+    pub dy: (usize, usize),
+    pub a: f64,
+    pub b: f64,
 }
 
-fn grid_tris(c: usize) -> Vec<[i64; 3]> {
+pub(crate) fn triangle_at(n: usize, gx: f64, gy: f64) -> Triangle {
+    let last = n as i64 - 2;
+    let i = (gx.floor() as i64).clamp(0, last) as usize;
+    let j = (gy.floor() as i64).clamp(0, last) as usize;
+    let (a, b) = (gx - i as f64, gy - j as f64);
+    let sw = j * n + i;
+    let (se, nw, ne) = (sw + 1, sw + n, sw + n + 1);
+    let (base, dx, dy, a, b) = if (i + j) % 2 == 0 {
+        if a >= b {
+            (sw, (se, sw), (ne, se), a, b)
+        } else {
+            (sw, (ne, nw), (nw, sw), a, b)
+        }
+    } else if a + b <= 1.0 {
+        (sw, (se, sw), (nw, sw), a, b)
+    } else {
+        (ne, (nw, ne), (se, ne), 1.0 - a, 1.0 - b)
+    };
+    Triangle { base, dx, dy, a, b }
+}
+
+pub(crate) fn surface_at(g: &[f64], n: usize, gx: f64, gy: f64) -> f64 {
+    let t = triangle_at(n, gx, gy);
+    g[t.base] + t.a * (g[t.dx.0] - g[t.dx.1]) + t.b * (g[t.dy.0] - g[t.dy.1])
+}
+
+pub(crate) fn edge_runs(n: usize) -> [Vec<usize>; 4] {
+    let c = n - 1;
+    [
+        (0..n).collect(),
+        (0..n).map(|j| j * n + c).collect(),
+        (0..n).rev().map(|i| c * n + i).collect(),
+        (0..n).rev().map(|j| j * n).collect(),
+    ]
+}
+
+pub(crate) fn grid_tris(c: usize) -> Vec<[i64; 3]> {
     let nx = c + 1;
     let mut out = Vec::with_capacity(2 * c * c);
     for j in 0..c {
@@ -441,16 +562,21 @@ fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+pub(crate) fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
-const WATER_U: f64 = 0.02;      // farfield.WATER_U
+#[pyfunction]
+pub(crate) fn far_skirt_depth(size: f64, err: f64) -> f64 {
+    2.0f64.max(0.02 * size).max(2.5 * err + 1.0)
+}
+
+pub(crate) const WATER_U: f64 = 0.02;      // farfield.WATER_U
 
 type Mesh<'py> = (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>,
                   Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>);
 
-fn arr2<'py, T: numpy::Element>(py: Python<'py>, v: Vec<T>, cols: usize) -> Bound<'py, PyArray2<T>> {
+pub(crate) fn arr2<'py, T: numpy::Element>(py: Python<'py>, v: Vec<T>, cols: usize) -> Bound<'py, PyArray2<T>> {
     let rows = v.len() / cols.max(1);
     numpy::ndarray::Array2::from_shape_vec((rows, cols), v).unwrap().into_pyarray(py)
 }
@@ -612,15 +738,9 @@ pub fn far_global_mesh<'py>(py: Python<'py>, z: u32, x: i64, y: i64, elev: PyRea
             pl.extend_from_slice(&[i as f64 / c as f64, j as f64 / c as f64]);
         }
         let mut tv: Vec<i64> = tris.iter().flat_map(|t| t.iter().map(|&v| new_of[v as usize])).collect();
-        // skirts: the edge runs ordered so each faces outwards (farfield._skirt), lowered copies
-        let skirt = 2.0f64.max(0.02 * size).max(2.5 * err + 1.0);
-        let g = |i: usize, j: usize| j * nv + i;
-        let runs: [Vec<usize>; 4] = [
-            (0..nv).map(|i| g(i, 0)).collect(),
-            (0..nv).map(|j| g(c, j)).collect(),
-            (0..nv).rev().map(|i| g(i, c)).collect(),
-            (0..nv).rev().map(|j| g(0, j)).collect(),
-        ];
+        // skirts: the edge runs ordered so each faces outwards, lowered copies
+        let skirt = far_skirt_depth(size, err);
+        let runs = edge_runs(nv);
         for run in runs.iter() {
             let used: Vec<usize> = run.iter().copied().filter(|&k| new_of[k] >= 0).collect();
             let base = cnt;
@@ -753,6 +873,7 @@ pub fn far_clip_mesh<'py>(py: Python<'py>, positions: PyReadonlyArray2<'py, f64>
             }
         }
         let mut lows: HashMap<usize, usize> = HashMap::new();
+        #[allow(clippy::disallowed_methods)] // hash order: filtered per edge, then sort_unstable on the distinct keys
         let mut bound: Vec<(usize, usize)> = edges.keys().copied()
             .filter(|&(a, b)| !edges.contains_key(&(b, a)))
             .filter(|&(a, b)| match (on_edge(&verts[a]), on_edge(&verts[b])) {
@@ -829,10 +950,11 @@ mod tests {
         assert!((normal_err(&r, &s, 3, 1.0) - 0.5f64.sqrt()).abs() < 1e-12);
     }
 
-    fn sse(tau: f64, e: f64) -> Sse {
+    fn sse(tau: f64, e: f64) -> Sse<'static> {
         let mut errs = HashMap::new();
         errs.insert((5, 0, 0), e);
-        Sse::from((0.0, 0.0, 0.0, 1000.0, tau, 4.0, 0.5, 1e9, 64.0, errs))
+        Sse { cx: 0.0, cy: 0.0, dz: 0.0, ppr: 1000.0, tau, reach: 4.0, hs: 0.5, cap: 1e9, cells: 64.0,
+              errs: Errs::Map(errs) }
     }
 
     #[test]

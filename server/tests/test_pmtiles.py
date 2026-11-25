@@ -591,6 +591,59 @@ class MapDataTest(Base):
         self.assertFalse(os.path.exists(md.path(key, "roads")))
         self.assertTrue(os.path.exists(md.path(key, "roads", parquet=True)))
 
+    def test_stand_in_buildings_measure_nothing_kept(self):
+        """A parquet-only cached buildings cell (no provenance format, empty) stands in when the tiles fail: the road
+        widths and clearances measured on it are neither stored nor remembered (walls, sets, memos) and the build is
+        not kept; once the tiles are back (and the stand-in's STAND_IN_S past), the same RoadWidths and MapData measure
+        the tiles' buildings (Codex, 2026-11-18)."""
+        import gc
+        import overture
+        import roadwidth
+        self.enterContext(mock.patch.object(mapdata, "MAP_SOURCE", "pmtiles"))
+        with mock.patch.object(mapdata, "MAP_SOURCE", "parquet"):
+            mdp = self.md(FakeFetcher({}))
+        with mock.patch.object(mdp.overture, "query", return_value=(overture.empty("buildings"), {})):
+            mdp.layer_arrays(CELL, "buildings")
+        f = FakeFetcher({"buildings.pmtiles": archive(buildings())})
+        md = self.md(f)
+        self.assertEqual(md.path(CELL, "buildings", parquet=True), mdp.path(CELL, "buildings"))
+        self.assertTrue(os.path.exists(md.path(CELL, "buildings", parquet=True)))
+        store = roadwidth.store_dir(os.path.join(self.tmp, "w"), md)
+        rw = roadwidth.RoadWidths(lambda k: md.cell(k, ("buildings",)).layers.get("buildings"), store)
+        # a street along the building across the tiles' edge, ~9 m north of its wall
+        ll = np.array([lonlat(*world(A, 3900, 80)), lonlat(*world(EAST, 60, 80))])
+        f.down.update(pmtiles.HOSTS)
+        with mock.patch.object(md.overture, "query", return_value=(overture.empty("buildings"), {})):
+            with revisit.scope() as b:
+                rw.measure_many([("r", ll, 3)])
+                got = (rw.get("r", ll), rw.cap("r", ll))
+        self.assertEqual(got, (None, None))                 # (the stand-in cells have no buildings)
+        self.assertFalse(b.complete)
+        self.assertEqual((rw.memo, rw.caps, len(rw.walls), len(rw.combos), len(rw.reframed)), ({}, {}, 0, 0, 0))
+        self.assertFalse(os.path.exists(store) and any(fs for _, _, fs in os.walk(store)))
+        self.assertFalse(os.path.exists(md.path(CELL, "buildings")))
+        # the tiles back: the stand-in cells served from memory for STAND_IN_S (still not kept), then the tiles asked
+        # again on the same MapData: the tiles' building measured, kept
+        f.down.clear()
+        with revisit.scope() as b:
+            self.assertIsNone(rw.cap("r", ll))
+        self.assertFalse(b.complete)
+        self.assertEqual(rw.caps, {})
+        self.enterContext(mock.patch.object(mapdata, "STAND_IN_S", -1.0))
+        with revisit.scope() as b:
+            rw.measure_many([("r", ll, 3)])
+            cap = rw.cap("r", ll)
+        self.assertTrue(b.complete)
+        self.assertIsNotNone(cap)
+        self.assertIsNotNone(cap[0])
+        ref = roadwidth.RoadWidths(lambda k: md.cell(k, ("buildings",)).layers.get("buildings"))
+        self.assertEqual(cap, ref.cap("r", ll))
+        self.assertEqual(rw.get("r", ll), ref.get("r", ll))
+        self.assertTrue(os.path.exists(md.path(CELL, "buildings")))
+        self.assertTrue(any(fs for _, _, fs in os.walk(store)))
+        del rw, ref
+        gc.collect()
+
     def test_parquet_source_keeps_the_old_keys(self):
         with mock.patch.object(mapdata, "MAP_SOURCE", "parquet"):
             md = self.md(FakeFetcher({}))

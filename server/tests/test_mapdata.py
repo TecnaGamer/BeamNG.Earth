@@ -34,6 +34,7 @@ import overture  # noqa: E402
 import rangeread  # noqa: E402
 import xproc  # noqa: E402
 import railtags  # noqa: E402
+import revisit  # noqa: E402
 
 railtags.LANES_ON = False       # (the lane shards are fetched per build: test_railtags; these count Overture's requests)
 import osmtagshards  # noqa: E402
@@ -877,25 +878,35 @@ class CacheTest(Sources, SmallBlocks, unittest.TestCase):
             self.assertEqual(md.warm([(mf.CELL, "roads"), (mf.CELL, "water"), (mf.CELL, "roads")]), 2)
         md._warm_ex.shutdown(wait=True)
         self.assertTrue(md.has(mf.CELL, "roads") and md.has(mf.CELL, "water"))
-        n = t.count()
+        n = t.count() - t.count("layercake")
         cd = md.cell(mf.CELL, ("roads", "water"))
         self.assertTrue(all(s["hit"] for s in cd.stats.values()))
-        self.assertEqual(t.count(), n)
+        self.assertEqual(t.count() - t.count("layercake"), n)   # (the OSM road tags: read at the decode, roads 10)
         with mock.patch.object(mapdata, "WARM_THREADS", 2):
             self.assertEqual(md.warm([(mf.CELL, "roads")]), 0)
         self.assertEqual(md._warming, set())
 
-    def test_a_deferred_osm_prefetch_is_not_cached(self):
-        # the OSM tags' host had no room for a prefetch: the roads are not built (prefetch False) rather than cached for
-        # good without their tags; on demand they are built without them
+    def test_a_deferred_osm_read_is_a_stand_in(self):
+        # roads 10: the layer file is Overture's alone, so the OSM tags' host having no room never stops it being built
+        # and kept; a decode whose tags could not be had is a stand-in (nothing kept is made of it: revisit fault) and
+        # is decoded again with them once STAND_IN_S is past
         import osmtags
         cache = os.path.join(self.tmp, "cache")
         md, _ = self.mapdata(cache=cache)
         with mock.patch.object(osmtags.OsmTags, "cell", side_effect=netfetch.Deferred("busy, prefetch dropped")):
-            self.assertFalse(md.prefetch(mf.CELL, ("roads",)))
-            self.assertFalse(md.has(mf.CELL, "roads"), "nothing cached")
-            self.assertIn("roads", md.cell(mf.CELL, ("roads",)).layers)
-        self.assertTrue(md.has(mf.CELL, "roads"))
+            self.assertTrue(md.prefetch(mf.CELL, ("roads",)))
+            self.assertTrue(md.has(mf.CELL, "roads"), "the Overture cell cached")
+            before = revisit.faults()
+            f = md.cell(mf.CELL, ("roads",)).layers["roads"]
+            self.assertIsNotNone(f.__dict__.get("_bnge_fallback"), "no tags of the run's source: a stand-in")
+            self.assertEqual(f.__dict__.get("_osm_built"), "none")
+            self.assertGreater(revisit.faults(), before)
+        with mock.patch.object(osmtags.OsmTags, "cell", return_value=({}, [])), \
+                mock.patch.object(mapdata, "STAND_IN_S", 0.0):
+            f = md.cell(mf.CELL, ("roads",)).layers["roads"]
+        self.assertIsNone(f.__dict__.get("_bnge_fallback"))
+        self.assertEqual(f.__dict__.get("_osm_built"), "layercake")
+        self.assertIn("osm_lanes", f.attrs, "the join's columns")
 
     def test_one_build_per_cell_across_processes(self):
         # two MapData over one cache (two of the server's processes): the second waits for the first's layer file

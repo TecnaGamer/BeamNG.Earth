@@ -23,7 +23,7 @@ deploy script, service wrapper and unit files).
 6. [The data repository and its workflows](#the-data-repository-and-its-workflows)
 7. [The collector service](#the-collector-service)
 8. [The on-demand aerial builder](#the-on-demand-aerial-builder)
-9. [Signed decision archives](#signed-decision-archives)
+9. [Signed decision archives](#signed-decision-archives) (and the [lidar road heights](#lidar-road-heights))
 10. [Client settings (environment variables)](#client-settings-environment-variables)
 11. [Run your own CDN, step by step](#run-your-own-cdn-step-by-step)
 12. [Costs](#costs)
@@ -46,7 +46,7 @@ deploy script, service wrapper and unit files).
   | Cloudflare R2 bucket          | -----------------> | tiles.tgforever.net           |
   | bnge-tiles                    |                    | Cloudflare edge cache         |
   |  s2wc/  dem/  aerial/  bnwt2/ |                    | (cache rule "R2 tiles";       |
-  |  dec/   data/ osmtags/        |                    |  /bnwt* goes straight to R2)  |
+  |  dec/ lz/ data/ osmtags/      |                    |  /bnwt* goes straight to R2)  |
   +-------------------------------+                    +---------------+---------------+
                 ^                                                      |
                 | S3 API uploads                                       | HTTPS GET, range reads
@@ -68,7 +68,7 @@ The main ideas:
 - **Static files only.** The CDN is a bucket of immutable files behind Cloudflare's cache. There is no application
   server in front of the data; the player's own BeamNG.Earth server reads the files.
 - **A fallback for everything.** If a file is missing, the CDN is down or a dataset is switched off, the client uses
-  the original open source (Sentinel-2 from EOX, Mapterhorn's tile endpoint, Overture's files, and so on).
+  the original open source (Sentinel-2 cloudless 2016 from EOX, Mapterhorn's tile endpoint, Overture's files, and so on).
 - **Builds run in public.** Most data is built by GitHub Actions in the public data repository, so anyone can read
   the exact code and inputs. In the aerial and BNWT workflows, the jobs that build run without secrets; only small,
   simple upload jobs hold the bucket token.
@@ -150,7 +150,8 @@ repo holds the current file):
 {"imagery":   {"bngs2":  {"enabled": true, "max_zoom": 13, "max_lat": {"14": 50}},
                "bngaer": {"enabled": true, "request": true}},
  "dem":       {"bngmt":  {"enabled": true, "release": "0.0.13"}},
- "decisions": {"enabled": true, "request": false}}
+ "decisions": {"enabled": true, "request": false},
+ "lidarz":    {"enabled": true}}
 ```
 
 | key | turns on | options |
@@ -159,6 +160,7 @@ repo holds the current file):
 | `imagery.bngaer` | the 1 m aerial packs | `request: false` = never ask for on-demand builds |
 | `dem.bngmt` | the Mapterhorn z0-12 elevation packs | `release`: which Mapterhorn release's packs to read |
 | `decisions` | the signed decision archives | `request: true` = ask for missing blocks (only when the collector supports it) |
+| `lidarz` | the signed lidar road heights | none |
 
 BNWT is not in the switch file yet: it is on only when a player sets `BNGE_BNWT_URL`.
 
@@ -175,12 +177,14 @@ All paths are relative to the bucket root, which is also `https://tiles.tgforeve
 | `s2wc/v1/{z}/{px}/{py}.bngp` | Sentinel-2 photo packs | data repo `tiles` | by hand | `public, max-age=2592000, immutable` (30 days) | yes |
 | `dem/mapterhorn/<release>/{z}/{px}/{py}.bngp` | Mapterhorn elevation, z0-12 | data repo `dem` | by hand, per Mapterhorn release | `public, max-age=2592000, immutable` | yes |
 | `dem/mapterhorn/<release>/index.bin` | which packs exist | data repo `dem` | once per release | `public, max-age=86400` | yes |
+| `dem/mapterhorn/archives.json` | the binding of Mapterhorn's regional archive copies (each mirror's ETag) to the listed release's MD5 (`tools/build_mt_bindings.py`; the client reads z13+ only from a bound copy) | data repo `mt-bindings` | by hand, per Mapterhorn release (`--merge` keeps what still holds) | `public, max-age=86400` (the client reads it daily) | yes |
 | `aerial/v1/g<gen>/{z}/{px}/{py}.bngp` | 1 m aerial packs | data repo `aerial`; the builder box | by hand; on demand | `public, max-age=31536000, immutable` (1 year) | yes |
 | `aerial/v1/cov/<rx>/<ry>.json` | aerial coverage per region | the same | after every build | `public, max-age=300` | no (`.json`) |
 | `aerial/v1/_cells/<x>_<y>.json` | per-cell build records | the same | after every cell | `no-cache` | no |
 | `bnwt<FORMAT>/<release>/...pmtiles` | prebaked world input tiles | data repo `bnwt` | monthly | `public, max-age=31536000, immutable` | no (`/bnwt`) |
 | `bnwt<FORMAT>/<release>/*.json` | BNWT indexes, manifests, shard records | data repo `bnwt` | monthly | `no-cache` | no |
 | `dec/d<FORMAT>/<vkey>/...` | signed decision archives | the builder box | after each release | see [below](#signed-decision-archives) | see below |
+| `lz/lz<FORMAT>/<lkey>/...` | signed lidar road heights | the builder box | when roadz's rules or the map change | as the decision archives | as the decision archives |
 | `data/<dataset>/<key>/...` | mirror of the weekly datasets | data repo `data` (`tools/mirror_data.py`) | weekly | `public, max-age=31536000, immutable` | yes |
 | `data/<dataset>/<key>/manifest.json` | marks a complete copy | the same | weekly | `public, max-age=3600` | no (`.json`) |
 | `osmtags/<key>/osmtags*.pmtiles` | OpenStreetMap road tags | data repo `data` (job `osmtags`) | weekly | `public, max-age=31536000, immutable` | yes |
@@ -200,7 +204,9 @@ decision blocks (see below).
 
 - **What:** ESA WorldCover's 2021 Sentinel-2 composite (CC BY 4.0), tone-mapped into Web Mercator tiles: JPEG for
   zooms 3 to 12, WebP for 13 and 14 (zoom 14 only to 50 degrees latitude). The client uses them for the distant land,
-  ahead of USGS and EOX.
+  ahead of USGS and EOX, and (since 2026-11-23, "bngs2fine") enlarged for the nearer ground outside the US and the
+  regional services, the 3D map's globe and the world map; EOX's 2016 mosaic (CC BY 4.0) only at sea and as the
+  fallback. EOX's 2018+ mosaics are CC BY-NC-SA 4.0: nothing the project publishes may hold their pixels.
 - **Built by:** `tools/build_s2_packs.py`, run by the data repo's `tiles` workflow, one job per zoom-5 region. Zoom 13
   and up is resumable: a finished region leaves a marker under `s2wc/v1/_done/<zoom>/`.
 - **How often:** by hand. The source composite does not change.
@@ -217,6 +223,23 @@ decision blocks (see below).
 - **Built by:** `tools/build_mt_packs.py` in the data repo's `dem` workflow. It reads the archive with range reads
   (never stores it whole), checks the archive's ETag on every read, and checks its MD5 before writing `index.bin`.
 - **How often:** by hand, for each new Mapterhorn release.
+- **Zooms 13 and deeper** are not on the project's host: the client reads them straight out of Mapterhorn's regional
+  archives (`6-<x>-<y>.pmtiles`, one per zoom-6 tile with lidar, listed in Mapterhorn's `download_urls.json` with
+  their size and MD5) by HTTP range reads, from Source Cooperative's mirror
+  (`https://data.source.coop/mapterhorn/mapterhorn/<name>`) first, then `https://download.mapterhorn.com/<name>`, and
+  only when neither can be read from the tile endpoint (`server/mtarchive.py`). Each archive's header and leaf
+  directories are cached under `<cache>/dem/mtarchive/<md5>/` (a new release is a new folder). A mirror's copy is
+  read only once it is proven to be the listed release: its ETag is the list's MD5 itself (a file stored in one
+  part), or the **binding file** below ties that ETag to the MD5; every read carries `If-Match` with it. Tiles next to
+  each other in the archive come in one read.
+- **Binding file:** `dem/mapterhorn/archives.json` on the tile host, built by `tools/build_mt_bindings.py --out
+  archives.json [--names ...] [--mirrors data.source.coop ...] [--max-gb N] [--merge old.json]` (exit status 3 when it
+  was asked to hash and bound nothing): each mirror's copy of each archive read whole (4 range reads of 64 MiB in
+  flight on kept connections, `If-Match` its ETag) through MD5; a copy whose MD5 is the list's gets its ETag recorded. Without an entry (and
+  for multipart copies, whose ETag is not their MD5) the client uses the tile endpoint for that archive. Every archive
+  once per mirror per Mapterhorn release (8.9 TiB per mirror for release 0.0.13): start with the regions players
+  visit; `--merge` keeps the entries still valid for a new release. `Cache-Control`: a day (`max-age=86400`); the
+  client reads it again daily.
 - **Size:** about the size of the source archive (331 GiB for release 0.0.13).
 
 ### 1 m aerial packs: `aerial/v1/`
@@ -247,10 +270,44 @@ decision blocks (see below).
 - **Size:** roughly 200 GB per world release (estimate). Not edge-cached, so every read is an R2 read.
 - **Status:** players use it only with `BNGE_BNWT_URL=https://tiles.tgforever.net`.
 
+### Compact per-cell inputs (CIP): `cip<FORMAT>/<release>/<build>/`
+
+- **What:** architecture v2's per-cell inputs (`server/cip.py`): one file per zoom-14 cell with everything the
+  client's map data reads for it, as the client itself would make it: every Overture layer's cell file (the roads
+  without OpenStreetMap's road tags since CIP content 2: the client joins them when it decodes the roads, from its run's
+  weekly `osmtags/` build, as for every cell), the weekly rail and lane shards' slice the cell's roads read, the 3DEP
+  lidar road heights' answers
+  (US), OpenStreetMap's fuel and picnic rows; and per build the OurAirports snapshot. Lossless (native codec
+  `cip.rs`), so plans, facts and tiles built from it are the ones the sources give. A dense Manhattan cell is about
+  1 MB; the 290 cells a cold Manhattan visit reads are about 90 MB (today: ~920 MB of map inputs, 700 MB of it lidar
+  point clouds).
+- **Files:** `cells.index.json` (the build's inputs: the code-made part a client must match, the weekly data builds it
+  pinned; coverage; parts), the parts `cells.pNNN.pmtiles` (PMTiles v3, at most 32 MB each so the edge caches a part
+  whole), `airports.csv.gz`, `runways.csv.gz`, `ATTRIBUTION.txt`, `_build/` records, `pins.json` (the build's pin
+  set: every weekly dataset's manifest as it was when the build was planned, written first and never replaced); and
+  `cip<FORMAT>/<release>/latest.json` (`{"build": ...}`, written **last**: what clients read first), and
+  `cip<FORMAT>/<release>/open/<plan key>.json` (`{"build": ...}`: the build a later run of the same code and switches
+  resumes).
+- **Built by:** `tools/build_cip.py --world` from a **pinned** BeamNG.Earth release tag or commit, in the data repo's
+  `cip` workflow (after `bnwt`: the builder reads Overture through the release's BNWT archives). Every weekly dataset
+  is decided once per build (`--write-pins`; its pin set is part of the build id) and every shard reads exactly those
+  builds from their build-addressed folders (`--pins`), so a weekly data build landing during the multi-day planet
+  build changes nothing; a rerun days later resumes the same build with its stored `pins.json`.
+- **How often:** monthly (after the BNWT build), plus by hand.
+- **Size:** roughly 250-330 GB per world release (estimate from samples; vector layers only, the rasters stay on
+  their sources).
+- **Status:** not published yet; players use it only with `BNE_V2_CIP=on`.
+
 ### Signed decision archives: `dec/d<FORMAT>/<vkey>/`
 
 Pre-computed road plans and cell facts for popular places, for exactly one server version. See
 [Signed decision archives](#signed-decision-archives) for the layout, the signing and the recommended headers.
+
+### Signed lidar road heights: `lz/lz<FORMAT>/<lkey>/`
+
+For each US map cell with a bridge, exactly what the client's own 3DEP lidar read would produce (its measured deck,
+elevated-stretch and approach lines), so a first visit reads a few small blocks instead of the point clouds. See
+[Lidar road heights](#lidar-road-heights).
 
 ### Weekly data mirror: `data/` and `osmtags/`
 
@@ -461,6 +518,63 @@ here and in the bucket, after a grace period (7 days), so a client that still ho
 blocks meanwhile. The collector does not yet have an endpoint for requesting missing blocks (TELEMETRY.md, section 8),
 so keep `"request": false` in the switch file.
 
+## Lidar road heights
+
+**What they are.** In the US the client measures bridge decks and their approaches in the USGS 3DEP point clouds
+(`server/roadz.py`). A cold Manhattan visit downloaded 698 MB in 2,538 requests for that (54 % of all its bytes), and
+kept about 2 MB of answers. The answers arrived after the first road plans, so every near cell was planned twice.
+The builder measures popular places once with the same code (`tools/build_lidarz.py`) and publishes the answers per
+map cell (`server/lidarz.py`, `native/earthfast/src/lidarz.rs`). The 12 cells round a Manhattan teleport point are
+4 blocks, 0.59 MB, where the builder read 114 MB of point clouds in 250 requests for them.
+
+**Same result, or no result.** A client uses a cell's record only when it would have measured exactly the same thing.
+Otherwise it reads the lidar itself, as before. A record's key holds a digest of the cell's inputs: its bridge and
+approach lines from the client's own map, their widths, and the 3DEP datasets to read. The record also holds every
+point where the builder's measuring read our DEM (the datum's ground points beside the road, the deck ends, the
+stations of the stretches and approaches) and a digest of the heights it read; the client reads its own DEM at the
+same points and compares. Another map release or DEM changes only the cells it touches. A cell taken from the CDN
+keeps its record inside its own cache file (`roadz/.../<y>.npz`, so eviction cannot part them) and is checked again
+each time a process reads it from disk; when the map, the DEM or the lkey no longer agree, or the switch is off, the
+cell is made again. The version key (`<lkey>`) holds the measuring rules: `roadz.VERSION`, the
+kernels' versions and every constant the measuring reads. It does not hold the server release, so a build stays
+valid across updates until those rules change.
+
+**Layout** (under `BNGE_LIDARZ_URL`, by default `https://tiles.tgforever.net/lz`):
+
+```
+lz<FORMAT>/<lkey>/manifest.bnlm         signed: the lkey's document and the list of blocks
+lz<FORMAT>/<lkey>/12/<x>/<y>.<h>.bnlz   one z12 block's cell records (4 x 4 cells), signed; <h> the file's hash
+```
+
+**Signing.** These files use the decision archives' format, key and checks (`decisions.rs`, domain `lidarz`). Their
+magics (`BNLZ` / `BNLM`) are inside the signed bytes, so a decision block never verifies as a lidar block or the other
+way round. `BNGE_DECISIONS_PUBKEY` replaces the accepted keys for both.
+
+**Build and upload** (on the builder box; `run.py` maps the credentials, the build reads the key only through
+`--key`):
+
+```sh
+python3 hosting/decisions-builder/run.py --product lidarz build --places-file places.txt --procs 2
+python3 hosting/decisions-builder/run.py --product lidarz upload     # through the unit's EnvironmentFile
+```
+
+By hand, the same as the decision archives with these names:
+
+```sh
+python3 tools/build_lidarz.py build --places "manhattan" --cache ~/bnge-builder/decisions-cache \
+    --out ~/bnge-builder/dec-out --key ~/bnge-builder/decisions-signing.key --procs 2
+aws s3 sync <out>/lz2/<lkey>/12 s3://<bucket>/lz/lz2/<lkey>/12 --exclude "*" --include "*.bnlz" \
+    --endpoint-url "$R2_ENDPOINT" --content-type application/octet-stream \
+    --cache-control "public, max-age=31536000, immutable"
+aws s3 cp <out>/lz2/<lkey>/manifest.bnlm s3://<bucket>/lz/lz2/<lkey>/manifest.bnlm \
+    --endpoint-url "$R2_ENDPOINT" --content-type application/octet-stream --cache-control "no-cache"
+```
+
+A cell is measured once per lkey and set of inputs. The records are kept in `<cache>/lidarz_work/`, so building the
+same places again after a map release reads the point clouds only for the cells whose bridges changed. A Manhattan
+cell reads up to about 50 MB of point clouds from the 3DEP bucket on AWS, as a player's server would. Turn it on
+with `{"lidarz": {"enabled": true}}` in the switch file once the place's blocks are uploaded.
+
 ## Client settings (environment variables)
 
 These are read by the BeamNG.Earth server on the player's PC (`server/`). Set them in the environment that starts the
@@ -479,10 +593,15 @@ launcher or `run_server.sh` / `run_server.bat`. With the launcher you can also p
 | `BNGE_DEM_CDN` | the switch file | a Mapterhorn release to read from the CDN (e.g. `0.0.13`), or `off` |
 | `BNGE_S2_MAX_ZOOM`, `BNGE_S2_MAX_LAT` | the switch file | the Sentinel-2 packs' finest zoom (12 to 14) and per-zoom latitude limits (`14:50`); normally set from the switch |
 | `BNGE_BNWT_URL` | unset (off) | where the BNWT archives are: `https://...`, `file://...` or a folder. Set it to `https://tiles.tgforever.net` to use the project's. |
+| `BNE_V2_CIP` | `off` | `on`: read the [compact per-cell inputs](#compact-per-cell-inputs-cip-cipformatreleasebuild) first; every cell or section a build lacks comes from its source as before |
+| `BNE_V2_CIP_URL`, `BNE_V2_CIP_BUILD` | `<BNGE_CDN_BASE>`; `latest.json`'s | where the CIP builds are (`https://...`, `file://...` or a folder) and which build |
 | `BNGE_DECISIONS` | the switch file | `on` / `off`: use the decision archives whatever the switch says |
 | `BNGE_DECISIONS_URL` | `<BNGE_CDN_BASE>/dec` | where the decision archives are |
 | `BNGE_DECISIONS_PUBKEY` | the compiled `TRUSTED` keys | ed25519 public keys (hex, comma-separated) to accept **instead of** the compiled ones |
 | `BNGE_DECISIONS_REQUEST`, `BNGE_DECISIONS_REQUEST_URL` | off; `https://earth.tgforever.net/decisions/request` | ask for missing decision blocks (not deployed yet) |
+| `BNGE_LIDARZ` | the switch file | `on` / `off`: use the lidar road heights whatever the switch says |
+| `BNGE_LIDARZ_URL` | `<BNGE_CDN_BASE>/lz` | where the lidar road heights are |
+| `BNGE_LIDARZ_WAIT` | `6` | seconds a road planning process waits for a cell's record before it plans without the lidar (the server reads it meanwhile, and the cell is planned again when it is in) |
 
 ### Other hosted data and services
 

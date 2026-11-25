@@ -8,6 +8,18 @@ local S = dofile(dir .. '/stubs.lua')
 local ms = require('beamngEarth/mpsession')
 T.near(ms.dist(0, 179.995, 0, -179.995), 1111.949, 0.01, 'damage neighbours across the date line')
 
+-- pure: the players of another map data release than ours (BeamMP shared generation: not shared with them; told)
+do
+  local A, B = '2026-11-18.0', '2099-01-16.0'
+  local list = { ['1'] = { name = 'me', rel = A }, ['2'] = { name = 'b', rel = B }, ['3'] = { name = 'c', rel = A },
+    ['4'] = { name = 'd' } }
+  local o = ms.otherReleases(A, list, '1')
+  T.check(#o == 1 and o[1].name == 'b' and o[1].rel == B, 'otherReleases: only a known other release')
+  T.check(#ms.otherReleases(nil, list, '1') == 0, 'otherReleases: ours not known: none')
+  T.check(#ms.otherReleases(B, list, '2') == 2, 'otherReleases: from the other side')
+  T.check(ms.releaseId('2026-11-18.0') == A and ms.releaseId('x') == nil and ms.releaseId(5) == nil, 'releaseId')
+end
+
 -- pure: who is hidden
 local hide = ms.toHide({ [10] = 1, [11] = 2, [12] = 3 }, function(pid) return pid == 1 or pid == 2 end)
 T.check(not hide[10] and not hide[11] and hide[12], 'toHide: an unknown anchor hidden, known ones not')
@@ -78,6 +90,20 @@ T.check(other.active == 1 and stranger.active == 0, 'a known anchor: on (convert
 ms.update(ms.HIDE_S, anchor, { x = 100, y = 0, z = 0 })
 T.check(require('beamngEarth/mpanchor').knows(2) and not require('beamngEarth/mpanchor').knows(3),
   'mpanchor told the anchors')
+-- (mpdefer: the far test of a car with no packet yet, by its owner's place, from our anchor)
+do
+  local ma = require('beamngEarth/mpanchor')
+  local la, lo = ma.own()
+  local changed = ma.ownChanged
+  ma.announceOwn(36.5, -118.1)
+  local pla, plo = ms.ownerPlace(2)
+  T.check(pla == 36.6 and plo == -118.0 and ms.ownerPlace(3) == nil, 'ownerPlace: a known player\'s place, nil unknown')
+  T.near(ms.ownerDist(2), ms.dist(36.5, -118.1, 36.6, -118.0), 1e-6, 'ownerDist: from our anchor')
+  T.check(ms.ownerDist(3) == nil, 'ownerDist: unknown player')
+  T.check(ms.isOff(22) and not ms.isOff(21), 'isOff: a car switched off here')
+  if la then ma.announceOwn(la, lo) end
+  ma.ownChanged = changed
+end
 
 -- A complete anchors snapshot expires missing or malformed peers. This also keeps
 -- a disconnected player's origin from being reused for a new player with that id.
@@ -436,5 +462,57 @@ do -- no car (BeamMP joins without one): the free camera on the ground, and lift
   ms.placeCamera({ x = 0, y = 0, z = -50 })
   T.check(put == nil, 'a car: the camera is never moved here')
   be, core_camera, getPlayerVehicle, quatFromDir = savedBe, savedCam, savedGet, savedQ
+end
+-- the players of another map data release: told once for each new set (a toast), never per bngeAnchors
+do
+  local A, B = '2026-11-18.0', '2099-01-16.0'
+  local toasts = {}
+  local gh0 = rawget(_G, 'guihooks')
+  guihooks = { trigger = function(ev, d) if ev == 'toastrMsg' then toasts[#toasts + 1] = d end end }
+  ms.onShareInfo({ code = 'c', weight = 1, overtureRelease = A })
+  decoded.relA = { ['2'] = { aLat = 36.5, aLon = -118.1, lat = 36.5, lon = -118.1, name = 'b', rel = A } }
+  decoded.relB = { ['2'] = { aLat = 36.5, aLon = -118.1, lat = 36.5, lon = -118.1, name = 'b', rel = B } }
+  handlers.bngeAnchors('relA')
+  T.check(#toasts == 0, 'the same release: nothing said')
+  handlers.bngeAnchors('relB')
+  handlers.bngeAnchors('relB')
+  T.check(#toasts == 1 and toasts[1].msg:find('b (' .. B .. ')', 1, true) and toasts[1].msg:find(A, 1, true),
+    'another release: told once, naming the player and both releases')
+  local n = #sent
+  ms.update(5, anchor, { x = 100, y = 0, z = 0 })
+  T.check(#sent > n and sent[#sent].data:find('"rel":' .. A, 1, true), 'our poses carry our release')
+  -- the level's pin (core) without any share_info answer (Codex round 1: a share_hello lost before the hello)
+  ms.reset()
+  ms.setRelease(B)
+  T.check(ms.ownRelease() == B, 'the level\'s release known without share_info')
+  ms.setRelease('bad')
+  T.check(ms.ownRelease() == nil, 'a malformed one: none')
+  guihooks = gh0
+end
+-- the server's weather (the weather plan, phase A): a preset or 'real-host' (the host told it is one), the host's weather
+-- relayed and checked (weather.sanitizeMsg), the host's own sent to the server
+do
+  local W = require('beamngEarth/weather')
+  local calls, hostGot, sent = {}, nil, {}
+  local wx0, ev0, dec0, enc0 = beamngEarth_weather, TriggerServerEvent, jsonDecode, jsonEncode
+  beamngEarth_weather = { setPreset = function(n, host) calls[#calls + 1] = tostring(n) .. '/' .. tostring(host) end,
+    setHostWeather = function(m) hostGot = m end, sanitizeMsg = W.sanitizeMsg }
+  ms.applyServerSky({ weather = 'real-host', weatherHost = true })
+  ms.applyServerSky({ weather = 'storm' })
+  ms.applyServerSky({})
+  T.check(calls[1] == 'real-host/true' and calls[2] == 'storm/false' and calls[3] == 'nil/false',
+    'server weather: real-host (host), a preset, real: ' .. table.concat(calls, ' '))
+  jsonDecode = function() return { code = 61, rainMmH = 2, lat = 10, cmd = 'x', wind = { ms = 'fast' } } end
+  ms._onWeather('{...}')
+  T.check(hostGot and hostGot.code == 61 and hostGot.rainMmH == 2 and hostGot.lat == nil and hostGot.cmd == nil
+    and hostGot.wind.ms == 0, 'the host\'s weather: checked before use')
+  hostGot = nil
+  ms._onWeather(string.rep('x', ms.WEATHER_MAX_BYTES + 1))
+  T.check(hostGot == nil, 'an oversized message is dropped')
+  TriggerServerEvent = function(name, data) sent[#sent + 1] = { name, data } end
+  jsonEncode = function(t) return 'code=' .. tostring(t.code) end
+  ms.sendHostWeather({ code = 3, lat = 1, tz = 'X' })
+  T.check(#sent == 1 and sent[1][1] == 'bngeWeather' and sent[1][2] == 'code=3', 'the host sends its weather (checked)')
+  beamngEarth_weather, TriggerServerEvent, jsonDecode, jsonEncode = wx0, ev0, dec0, enc0
 end
 T.done('test_mpsession')

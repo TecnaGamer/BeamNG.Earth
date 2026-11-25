@@ -310,6 +310,25 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(dirsigns.plate_for(st["DE"], "", "L 3016")[1], "l")
         self.assertIsNone(dirsigns.plate_for(st["DE"], "", "XYZ"))
 
+    def test_sweden_and_bulgaria_plates(self):
+        """SE (TSFS 2019:74, F14): a European route's green plate above a national or county road's blue; the county
+        designations without a network (O 500) have none. BG (Наредба № 18 чл. 159-160): the motorway's and an I or II
+        class road's number before the European, a III class or municipal road none."""
+        st = dirsigns.styles()["countries"]
+        se = lambda n, r: dirsigns.plate_for(st["SE"], n, r)       # noqa: E731
+        self.assertEqual(se("e-road", "E 20"), (0, "e"))
+        self.assertEqual(se("se:rv", "40")[1], "n")
+        self.assertEqual(se("se:lv", "158")[1], "n")
+        self.assertIsNone(se("", "O 500"))
+        bg = lambda n, r: dirsigns.plate_for(st["BG"], n, r)       # noqa: E731
+        self.assertEqual(bg("bg:motorway", "A 1"), (0, "a"))
+        self.assertEqual(bg("bg:national", "6")[1], "n")
+        self.assertEqual(bg("bg:national", "16")[1], "n")
+        self.assertIsNone(bg("bg:national", "375"))
+        self.assertIsNone(bg("bg:municipal", "SOF1020"))
+        self.assertLess(bg("bg:national", "6")[0], bg("e-road", "E 79")[0])
+        self.assertEqual(st["BG"]["board"]["urban"]["ink"], [0, 0, 0])      # a white board in town, black text
+
     def test_parse_routes(self):
         self.assertEqual(dirsigns.parse_routes("ua:international|М-07|0.19|1.0;e-road|E 373|0.0|1.0"),
                          [("ua:international", "М-07", 0.19, 1.0), ("e-road", "E 373", 0.0, 1.0)])
@@ -358,6 +377,14 @@ class FaceTest(unittest.TestCase):
         again = self.make(content)
         self.assertEqual(again[0], name, "the same content, the same file")
         self.assertNotEqual(self.make([(0, [], [("Ковель", "", "65")])])[0], name)
+
+    def test_sweden_and_bulgaria_boards_draw(self):
+        for cc, kind, content in (("SE", "road", [(0, [("e", "E 20"), ("n", "40")], [("Alingsås", "", "25")])]),
+                                  ("BG", "urban", [(0, [], [("Пловдив", "Plovdiv", "")])]),
+                                  ("BG", "freeway", [(0, [("a", "A 1"), ("e", "E 80")], [("София", "Sofia", "45")])])):
+            name, _, w, h = self.make(content, cc, kind)
+            self.assertTrue(os.path.exists(os.path.join(self.dir, name + ".dds")), cc)
+            self.assertTrue(w > 0 and h > 0, cc)
 
     def test_more_rows_make_a_taller_board_and_long_names_stay_within_the_widest(self):
         one = self.make([(0, [], [("Ковель", "Kovel", "65")])])
