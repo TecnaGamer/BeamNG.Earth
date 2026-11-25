@@ -87,9 +87,9 @@ pub struct Mix {
     pub thunder: f64,
 }
 
-/// The ring's fill target: TARGET_CALLBACKS device callbacks, one more after each underrun (from GROW_AFTER_S in), at
+/// The ring's fill target: fill_target's (about one callback and a margin), more after each underrun (from GROW_AFTER_S in), at
 /// most MAX_QUEUE_S. The latency is the fill plus the device's own buffering.
-pub const TARGET_CALLBACKS: usize = 3;
+pub const MARGIN_FRAMES: u64 = 512;
 pub const GROW_AFTER_S: f64 = 1.0;
 pub const MAX_QUEUE_S: f64 = 0.1;
 /// the device buffer asked for (frames) when the caller gives none: cpal BufferSize::Fixed, clamped to the device's range
@@ -254,7 +254,8 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>, buffer_frames: u32) -> Resul
     };
     let stop = Arc::new(AtomicBool::new(false));
     let mix = Arc::new(Mutex::new(initial));
-    let target = Arc::new(AtomicU32::new(TARGET_CALLBACKS as u32 * fixed));
+    let first_target = fill_target(fixed, 0, (sample_rate as f64 * MAX_QUEUE_S) as u32);
+    let target = Arc::new(AtomicU32::new(first_target));
     let w = Worker {
         seed,
         ring: ring.clone(),
@@ -271,7 +272,7 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>, buffer_frames: u32) -> Resul
     let worker = std::thread::Builder::new().name("weather-synth".into()).spawn(move || w.run()).map_err(|e| e.to_string())?;
     // the ring filled to its first target before the device starts pulling, at most 0.5 s
     let t0 = std::time::Instant::now();
-    while ring.filled() < (TARGET_CALLBACKS * fixed as usize * channels as usize).min(ring.cap() / 2)
+    while ring.filled() < (first_target as usize * channels as usize).min(ring.cap() / 2)
         && t0.elapsed().as_secs_f64() < 0.5
     {
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -313,9 +314,13 @@ fn copy_converted<T: Copy>(ring: &Ring, tmp: &mut [f32], data: &mut [T], conv: i
 }
 
 /// Pure: the fill target (frames) for the callback size, the underruns counted since the start of growth and the cap.
+/// One callback's worth (it can ask for all of it at once) plus a margin of half a callback or MARGIN_FRAMES, whichever
+/// is more (ALSA at 256 frames: 768, as 3 callbacks; WASAPI shared mode, which calls back with its whole ~22 ms buffer
+/// whatever is asked: 1.5 callbacks), and half a callback more (at least 128 frames) per underrun.
 pub fn fill_target(callback_frames: u32, grown: u64, max_frames: u32) -> u32 {
     let cb = callback_frames.max(32) as u64;
-    ((TARGET_CALLBACKS as u64 + grown) * cb).min(max_frames.max(cb as u32) as u64) as u32
+    let t = cb + (cb / 2).max(MARGIN_FRAMES) + grown * (cb / 2).max(128);
+    t.min(max_frames.max(cb as u32) as u64) as u32
 }
 
 struct Worker {
@@ -432,10 +437,11 @@ mod tests {
 
     #[test]
     fn fill_target_grows_and_caps() {
-        assert_eq!(super::fill_target(256, 0, 4410), 768);
-        assert_eq!(super::fill_target(256, 2, 4410), 1280, "one callback more per underrun");
+        assert_eq!(super::fill_target(256, 0, 4410), 768, "ALSA 256: three callbacks");
+        assert_eq!(super::fill_target(1056, 0, 4800), 1584, "WASAPI's 1056: one and a half");
+        assert_eq!(super::fill_target(256, 2, 4410), 1024, "128 frames more per underrun");
         assert_eq!(super::fill_target(256, 100, 4410), 4410, "capped");
-        assert_eq!(super::fill_target(0, 0, 4410), 96, "an unknown callback: a small floor");
+        assert_eq!(super::fill_target(0, 0, 4410), 544, "an unknown callback: the floor plus the margin");
     }
 
     #[test]

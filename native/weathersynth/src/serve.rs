@@ -17,6 +17,8 @@ pub const STATE_S: f64 = 0.5;
 pub const HEARTBEAT_S: f64 = 1.0;
 /// the thunder's volume in a tunnel or under a deck (storm.lua MUFFLED)
 pub const MUFFLED: f64 = 0.45;
+/// device reopens allowed per minute before 'failed'
+pub const REOPEN_MAX: usize = 3;
 
 /// The rain's controls and the thunders' master gain for the last message (None: none yet) and whether it is stale.
 pub fn mix_for(m: Option<&Msg>, stale: bool) -> (Controls, f64) {
@@ -85,7 +87,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let rname = renderer.name();
     let bus = Arc::new(Bus::new());
     let (silent, _) = mix_for(None, true);
-    let out = crate::audio::open(seed, crate::audio::Mix { rain: silent, thunder: 0.0 }, bus.clone(), buffer)
+    let mut out = crate::audio::open(seed, crate::audio::Mix { rain: silent, thunder: 0.0 }, bus.clone(), buffer)
         .unwrap_or_else(|e| fail(format!("audio device: {e}")));
     eprintln!(
         "live-serve: device {:?} {} Hz x{} {} buffer={:?} thunder={rname}",
@@ -125,6 +127,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // underruns counted from 1 s in (the device's first callbacks prime its own buffer, larger than what is queued)
     let started = Instant::now();
     let mut base_underruns: Option<u64> = None;
+    let mut reopens = 0u32;
+    let mut reopen_at: Vec<Instant> = Vec::new();
+    let mut underruns_before = 0u64; // (from streams before a reopen)
     let stdout = std::io::stdout();
     loop {
         match rx.recv_timeout(Duration::from_millis(50)) {
@@ -152,7 +157,22 @@ pub fn run(args: &[String]) -> Result<(), String> {
             *mx = crate::audio::Mix { rain, thunder };
         }
         if out.error.load(std::sync::atomic::Ordering::Relaxed) {
-            fail("the audio device stopped (unplugged or changed)".into());
+            // a stream error (ALSA POLLERR when the sound server reconfigures, a device switched or unplugged): the
+            // default device opened again, at most REOPEN_MAX times a minute; then failed (the mod's files take over)
+            reopen_at.retain(|t: &Instant| t.elapsed().as_secs_f64() < 60.0);
+            if reopen_at.len() >= REOPEN_MAX {
+                fail("the audio device keeps failing (unplugged or changed)".into());
+            }
+            reopen_at.push(Instant::now());
+            reopens += 1;
+            eprintln!("live-serve: the audio stream failed; opening the default device again ({reopens})");
+            let u = out.ring.underruns.load(std::sync::atomic::Ordering::Relaxed);
+            underruns_before += u - base_underruns.unwrap_or(u);
+            drop(out);
+            std::thread::sleep(Duration::from_millis(200));
+            out = crate::audio::open(seed, crate::audio::Mix { rain, thunder }, bus.clone(), buffer)
+                .unwrap_or_else(|e| fail(format!("audio device (reopening): {e}")));
+            base_underruns = None;
         }
         if state_at.elapsed().as_secs_f64() >= STATE_S {
             state_at = Instant::now();
@@ -160,9 +180,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
             if base_underruns.is_none() && started.elapsed().as_secs_f64() >= 1.0 {
                 base_underruns = Some(u);
             }
+
             let ld = |a: &std::sync::atomic::AtomicU32| a.load(std::sync::atomic::Ordering::Relaxed);
             let buf = (ld(&out.callback_frames), ld(&out.target_frames), out.fixed_frames.is_some());
-            let line = state_line(out.latency_ms(), u - base_underruns.unwrap_or(u), &rname, bus.counts(), buf);
+            let line = state_line(out.latency_ms(), underruns_before + u - base_underruns.unwrap_or(u), &rname, bus.counts(), buf);
+            let (rl, rm) = bus.render_ms();
+            let line = format!(
+                "{},\"reopens\":{reopens},\"renderMsLast\":{rl:.0},\"renderMsMax\":{rm:.0}}}",
+                &line[..line.len() - 1]
+            );
             let mut lock = stdout.lock();
             if writeln!(lock, "{line}").and_then(|_| lock.flush()).is_err() {
                 break; // (the server is gone)

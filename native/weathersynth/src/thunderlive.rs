@@ -141,6 +141,8 @@ struct State {
     voices: Vec<Voice>,
     stop: bool,
     rendered: u64,
+    render_ms_max: f64,
+    render_ms_last: f64,
     late: u64,
     dropped: u64,
 }
@@ -218,9 +220,16 @@ impl Bus {
     }
 
     /// (render thread) a finished render (for the spec it was asked: a kind changed meanwhile renders again)
+    #[cfg(test)]
     pub fn done(&self, id: &str, spec: Spec, samples: Vec<f32>) {
+        self.done_timed(id, spec, samples, 0.0)
+    }
+
+    pub fn done_timed(&self, id: &str, spec: Spec, samples: Vec<f32>, ms: f64) {
         let mut st = self.st.lock().unwrap();
         st.rendered += 1;
+        st.render_ms_last = ms;
+        st.render_ms_max = st.render_ms_max.max(ms);
         if let Some(e) = st.entries.get_mut(id) {
             e.rendering = false;
             if e.spec.kind == spec.kind {
@@ -280,6 +289,12 @@ impl Bus {
         st.voices.retain(|v| v.pos < v.samples.len());
     }
 
+    /// (the last render's ms, the longest's)
+    pub fn render_ms(&self) -> (f64, f64) {
+        let st = self.st.lock().unwrap();
+        (st.render_ms_last, st.render_ms_max)
+    }
+
     pub fn stop(&self) {
         self.st.lock().unwrap().stop = true;
         self.cv.notify_all();
@@ -296,8 +311,9 @@ impl Bus {
 pub fn render_loop(bus: Arc<Bus>, mut r: Box<dyn ThunderRenderer>, now: fn() -> f64) {
     while !bus.stopped() {
         if let Some((id, spec)) = bus.next_job(now, 0.25) {
+            let t0 = std::time::Instant::now();
             let s = r.render(&spec);
-            bus.done(&id, spec, s);
+            bus.done_timed(&id, spec, s, t0.elapsed().as_secs_f64() * 1000.0);
         }
     }
 }
