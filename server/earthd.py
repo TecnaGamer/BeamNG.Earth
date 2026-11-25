@@ -6716,10 +6716,14 @@ class Server:
     def tex_key(self, anchor, tile, px):
         """The revisit cache's key of a far tile's texture rendered here (revisit.py): a global tile's names no anchor
         (any anchor's, any session's); a piece's is its node's (the same texture)."""
+        import season as seasonmod
         im = self.imagery
         if isinstance(tile, farfield.GTile):
+            # (the season's week, season_key, as the far and base photo keys: "auto" alone served October's fall
+            # colours in late November; a global tile's grade is its own latitude's)
+            sk = seasonmod.season_key(im.season_mode, farfield.global_frame_ll(tile.z, tile.x, tile.y)[0])
             return revisitmod.key("fartex", "m", farfield.GLOBAL_GEO_VERSION, tile.key, px, [s.name for s in im.chain],
-                                  self.tone, im.leaf_on, im.season_mode, self.tex_modes, self.layout.cells,
+                                  self.tone, im.leaf_on, sk, self.tex_modes, self.layout.cells,
                                   farfield.global_dem_zoom(tile.z, self.layout.cells))
         if isinstance(tile, farfield.Piece):
             tile = tile.base
@@ -6730,7 +6734,8 @@ class Server:
             if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, px) is not None else ()
         return revisitmod.key("fartex", round(float(anchor.lat), 7), round(float(anchor.lon), 7), tile.key, px,
                               self.road_mask_px(tile.level) if self.road_masks else 0, [s.name for s in im.chain],
-                              self.tone, im.leaf_on, im.season_mode, self.tex_modes, roadsmod.ROADS_IN_GROUND,
+                              self.tone, im.leaf_on, seasonmod.season_key(im.season_mode, float(anchor.lat)),
+                              self.tex_modes, roadsmod.ROADS_IN_GROUND,
                               self.mapdata.versions() if self.mapdata is not None else None,
                               self.road_widths is not None, self.surface is not None, self.layout.cells,
                               anchor.zooms[max(tile.level, 0)], *gen)
