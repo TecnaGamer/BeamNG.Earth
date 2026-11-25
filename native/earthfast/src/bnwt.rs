@@ -48,22 +48,22 @@ const MAGIC: &[u8; 4] = b"BNWT";
 const Q: f64 = 1e7;
 
 // ------------------------------------------------------------------------------------------------ bytes
-struct W(Vec<u8>);
+pub(crate) struct W(pub(crate) Vec<u8>);
 
 impl W {
-    fn u8(&mut self, v: u8) {
+    pub(crate) fn u8(&mut self, v: u8) {
         self.0.push(v);
     }
-    fn u16(&mut self, v: u16) {
+    pub(crate) fn u16(&mut self, v: u16) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
-    fn u32(&mut self, v: u32) {
+    pub(crate) fn u32(&mut self, v: u32) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
-    fn u64(&mut self, v: u64) {
+    pub(crate) fn u64(&mut self, v: u64) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
-    fn str8(&mut self, s: &str) -> Result<(), String> {
+    pub(crate) fn str8(&mut self, s: &str) -> Result<(), String> {
         if s.len() > 255 {
             return Err(format!("name too long: {s}"));
         }
@@ -81,13 +81,13 @@ impl W {
     }
 }
 
-struct R<'a> {
-    b: &'a [u8],
-    i: usize,
+pub(crate) struct R<'a> {
+    pub(crate) b: &'a [u8],
+    pub(crate) i: usize,
 }
 
 impl<'a> R<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
         if n > self.b.len() - self.i {
             return Err("truncated section".into());
         }
@@ -95,19 +95,19 @@ impl<'a> R<'a> {
         self.i += n;
         Ok(s)
     }
-    fn u8(&mut self) -> Result<u8, String> {
+    pub(crate) fn u8(&mut self) -> Result<u8, String> {
         Ok(self.take(1)?[0])
     }
-    fn u16(&mut self) -> Result<u16, String> {
+    pub(crate) fn u16(&mut self) -> Result<u16, String> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
-    fn u32(&mut self) -> Result<u32, String> {
+    pub(crate) fn u32(&mut self) -> Result<u32, String> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
-    fn u64(&mut self) -> Result<u64, String> {
+    pub(crate) fn u64(&mut self) -> Result<u64, String> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
-    fn str8(&mut self) -> Result<String, String> {
+    pub(crate) fn str8(&mut self) -> Result<String, String> {
         let n = self.u8()? as usize;
         String::from_utf8(self.take(n)?.to_vec()).map_err(|e| e.to_string())
     }
@@ -117,16 +117,16 @@ impl<'a> R<'a> {
     }
 }
 
-fn zigzag(v: i64) -> u64 {
+pub(crate) fn zigzag(v: i64) -> u64 {
     ((v << 1) ^ (v >> 63)) as u64
 }
 
-fn unzig(u: u64) -> i64 {
+pub(crate) fn unzig(u: u64) -> i64 {
     ((u >> 1) as i64) ^ -((u & 1) as i64)
 }
 
 /// An integer stream: n, the width, the zig-zag values' byte planes.
-fn put_ints(w: &mut W, a: &[i64]) {
+pub(crate) fn put_ints(w: &mut W, a: &[i64]) {
     let mx = a.iter().map(|&v| zigzag(v)).max().unwrap_or(0);
     let width: usize = if mx < 1 << 8 { 1 } else if mx < 1 << 16 { 2 } else if mx < 1 << 32 { 4 } else { 8 };
     w.u32(a.len() as u32);
@@ -137,7 +137,7 @@ fn put_ints(w: &mut W, a: &[i64]) {
     }
 }
 
-fn get_ints(r: &mut R) -> Result<Vec<i64>, String> {
+pub(crate) fn get_ints(r: &mut R) -> Result<Vec<i64>, String> {
     let n = r.u32()? as usize;
     let width = r.u8()? as usize;
     if !matches!(width, 1 | 2 | 4 | 8) {
@@ -155,7 +155,7 @@ fn get_ints(r: &mut R) -> Result<Vec<i64>, String> {
 }
 
 /// Raw fixed-size items as byte planes (n, item size, planes).
-fn put_raw(w: &mut W, item: usize, b: &[u8]) -> Result<(), String> {
+pub(crate) fn put_raw(w: &mut W, item: usize, b: &[u8]) -> Result<(), String> {
     if item == 0 || item > 255 || b.len() % item != 0 {
         return Err(format!("raw column: {} bytes of {item}-byte items", b.len()));
     }
@@ -169,7 +169,7 @@ fn put_raw(w: &mut W, item: usize, b: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn get_raw(r: &mut R) -> Result<(usize, Vec<u8>), String> {
+pub(crate) fn get_raw(r: &mut R) -> Result<(usize, Vec<u8>), String> {
     let n = r.u32()? as usize;
     let item = r.u8()? as usize;
     let b = r.take(n.checked_mul(item).ok_or("raw column too long")?)?;
@@ -184,7 +184,7 @@ fn get_raw(r: &mut R) -> Result<(usize, Vec<u8>), String> {
 }
 
 // ------------------------------------------------------------------------------------------------ text
-fn is_uuid(s: &str) -> bool {
+pub(crate) fn is_uuid(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 36
         && b.iter().enumerate().all(|(i, &c)| {
@@ -196,7 +196,7 @@ fn is_uuid(s: &str) -> bool {
         })
 }
 
-fn hexval(c: u8) -> u8 {
+pub(crate) fn hexval(c: u8) -> u8 {
     if c.is_ascii_digit() {
         c - b'0'
     } else {
@@ -204,7 +204,7 @@ fn hexval(c: u8) -> u8 {
     }
 }
 
-fn put_text(w: &mut W, vals: &[String], width: u32) {
+pub(crate) fn put_text(w: &mut W, vals: &[String], width: u32) {
     w.u32(width);
     let n = vals.len();
     let ne = vals.iter().filter(|s| !s.is_empty()).count();
@@ -250,9 +250,9 @@ fn put_text(w: &mut W, vals: &[String], width: u32) {
 
 /// A text column decoded straight to numpy's fixed-width unicode layout: (width in characters, at least 1 as
 /// mapgeom.text_column makes it; n x width UCS-4 code points, little-endian).
-struct Text {
-    width: usize,
-    ucs4: Vec<u8>,
+pub(crate) struct Text {
+    pub(crate) width: usize,
+    pub(crate) ucs4: Vec<u8>,
 }
 
 fn ucs4(words: &[Vec<char>], codes: &[usize], width: usize) -> Result<Text, String> {
@@ -269,7 +269,7 @@ fn ucs4(words: &[Vec<char>], codes: &[usize], width: usize) -> Result<Text, Stri
     Ok(Text { width, ucs4: out })
 }
 
-fn get_text(r: &mut R) -> Result<Text, String> {
+pub(crate) fn get_text(r: &mut R) -> Result<Text, String> {
     let width = r.u32()? as usize;
     if width == 0 || width > 1 << 20 {
         return Err(format!("text width {width}"));

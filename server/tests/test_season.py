@@ -44,6 +44,22 @@ def _hsv(rgb):
 
 
 class ColourTest(unittest.TestCase):
+    def test_auto_is_graded_and_keyed_by_its_week(self):
+        # (far tiles and block photos were keyed by "auto" alone: October's fall colours served in late November)
+        d = datetime.date(2026, 11, 26)          # a Thursday
+        start = season.slot_date(d)
+        self.assertEqual(start, datetime.date(2026, 11, 23), "the Monday the week's slot starts on")
+        self.assertEqual(season.slot_date(start + datetime.timedelta(days=6)), start)
+        self.assertEqual(season.amounts_for("auto", 45.0, d), season.season_amounts(start, 45.0),
+                         "graded with the slot's date: the key says it all")
+        k = season.season_key("auto", 45.0, d)
+        self.assertEqual(k, ("auto", "2026-11-23"))
+        self.assertEqual(season.season_key("auto", 45.0, start + datetime.timedelta(days=6)), k, "same week, same key")
+        self.assertNotEqual(season.season_key("auto", 45.0, d + datetime.timedelta(days=7)), k, "next week: another")
+        self.assertEqual(season.season_key("auto", 0.0, d), ("auto", "none"), "the tropics: no season, one key")
+        self.assertEqual(season.season_key("off", 45.0, d), "off")
+        self.assertEqual(season.season_key("fall", 45.0, d), "fall")
+
     def test_leaf_on_greens_vegetation_only(self):
         rgb = np.zeros((64, 64, 3), np.uint8)
         rgb[:, :32] = (120, 105, 80)            # dormant grass (left), a grey roof (right)
@@ -76,6 +92,32 @@ class ColourTest(unittest.TestCase):
         part = season.grade(rgb[:, :64], xs[:, :64], -ys[:, :64], {"fall": 1.0})
         self.assertLess(np.abs(part[:, 10:54].astype(int) - out[:, 10:54].astype(int)).max(), 2)
 
+
+
+
+class FarTexKeyTest(unittest.TestCase):
+    def test_fartex_key_holds_the_week(self):
+        """Server.tex_key ("fartex", the main process's far textures and the bulk restore's): the season's week
+        (season_key, not "auto" alone: October's grade was served in late November; found by the winter W2 agent)."""
+        import datetime
+        from types import SimpleNamespace
+        import earthd
+        import season
+        im = SimpleNamespace(chain=[SimpleNamespace(name="eox2016")], leaf_on=True, season_mode="auto")
+        srv = SimpleNamespace(imagery=im, tone="auto", tex_modes=(), road_masks=False, mapdata=None, road_widths=None,
+                              surface=None, layout=SimpleNamespace(cells=64), road_mask_px=lambda lvl: 0)
+        anchor = SimpleNamespace(lat=40.877, lon=-77.566, zooms={k: 16 - k for k in range(9)})
+        tile = SimpleNamespace(key=(5, 0, 0), level=5, size=8192.0, bbox=(0.0, 0.0, 8192.0, 8192.0))
+        real = season.utc_today
+        try:
+            season.utc_today = lambda: datetime.date(2026, 10, 20)
+            october = earthd.Server.tex_key(srv, anchor, tile, 256)
+            season.utc_today = lambda: datetime.date(2026, 11, 24)
+            november = earthd.Server.tex_key(srv, anchor, tile, 256)
+            self.assertNotEqual(october, november)
+            self.assertEqual(earthd.Server.tex_key(srv, anchor, tile, 256), november)
+        finally:
+            season.utc_today = real
 
 if __name__ == "__main__":
     unittest.main()

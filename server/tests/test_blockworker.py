@@ -167,6 +167,29 @@ class GermanRoutesTest(unittest.TestCase):
             self.assertEqual(bool(pool), want, (at, on))
 
 
+class MappedLampsTest(unittest.TestCase):
+    """The mapped street lamps worldprops.tile_props makes reach roads.build_tile (97d0bcf2 had dropped them from the
+    call: the road builder then guessed lamps along every mapped street and drew the mapped ones beside them)."""
+
+    def test_road_tile_gets_the_mapped_lamps(self):
+        import worldprops
+        from unittest import mock
+        row = ["streetlight", 10.0, 20.0, 0.0, 90.0, 1.0, 9.0, 0.0]
+        got = []
+        blockworker._s = SimpleNamespace(md=FakeMapData(None, None), dem=FakeDem(), widths=None, surface=None,
+                                         airports=None, sea=None, lock=threading.Lock(), cache_dir=tmp_cache(self),
+                                         bridges={}, anchor=lambda aid, lat, lon: (None, None))
+
+        def props(frame, tx, ty, md, elev, lamps=None, **kw):
+            lamps.append(row)
+            return [], set()
+        with mock.patch.object(worldprops, "tile_props", props), \
+                mock.patch.object(roads, "build_tile", side_effect=lambda *p, **k: got.append(k.get("mapped_lamps")) or []), \
+                tempfile.TemporaryDirectory() as out:
+            blockworker.roads_tile(1, LAT, LON, 15, 0, 0, out, "/temp/x", False, 0.0, buildings=True)
+        self.assertEqual(got, [[row]])
+
+
 class NavgraphTest(unittest.TestCase):
     """blockworker.navgraph: the graph built in a road process is the one navgraph.build makes with the same inputs
     (the server's way), its file written and the rules passed through."""

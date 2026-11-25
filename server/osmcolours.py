@@ -16,8 +16,8 @@ starts (Fetch), and wait WAIT_S at most; a row's key is its way's or relation's 
 
 The build is the building tiles' key (identity(): MapData.versions(buildings=True), blockworker._md_versions(True)),
 "off" / "none" without one, as osmyears'.
-- Off (BNE_OSMCOLOURS=off, BNE_RAILTAGS=off), nothing pinned at the process's first ask (not published yet, a first
-  run), or a manifest this cannot read: no colours (Overture's alone, as before), nothing faulted.
+- Off (BNE_OSMCOLOURS=off, BNE_RAILTAGS=off), none for the run (not published yet, a first run whose fetch
+  failed), or a manifest this cannot read: no colours (Overture's alone, as before), nothing faulted.
 - A tile that could not be had: no colours, the building tile faulted (revisit.fault: built again later).
 
     BNE_OSMCOLOURS_BASE   the dataset's folder elsewhere than <BNE_DATA_PAGES>/osmcolours (a staged build)

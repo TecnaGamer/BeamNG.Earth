@@ -59,6 +59,9 @@ for line in io.lines(script) do
     if w[6] then folder = w[6] end
   elseif c == 'B' then
     farfield.onBlockCommit(tonumber(w[2]), tonumber(w[3]))
+  elseif c == 'X' then              -- crossover.CROSS, crossover.COVER_SINK_S (off by default since 2026-11-21)
+    local xo = require('beamngEarth/crossover')
+    xo.CROSS, xo.COVER_SINK_S = tonumber(w[2]), tonumber(w[3])
   elseif c == 'C' then
     cam = { x = tonumber(w[2]), y = tonumber(w[3]), z = tonumber(w[4]), fx = tonumber(w[5]), fy = tonumber(w[6]),
       fz = tonumber(w[7]), fovDeg = tonumber(w[8]) }

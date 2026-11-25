@@ -8,15 +8,27 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 TREE = HERE.parents[1]
-ROOT = Path.home() / "bnge-tests/widecorpus"
+# (WIDE_CORPUS_ROOT: another scratch folder under ~/bnge-tests for a separate study, the degradation test's; the
+# private places stay the corpus's own list)
+ROOT = Path(os.environ.get("WIDE_CORPUS_ROOT") or Path.home() / "bnge-tests/widecorpus")
 CACHE = ROOT / "cache"
-PRIVATE = ROOT / "places_private.json"
+PRIVATE = Path.home() / "bnge-tests/widecorpus/places_private.json"
 RAW = ("dem", "mapdata", "pagesdata", "roadz", "gravity", "cdn", "airports")
-REVAMPED = {f"BNE_{name}": "on" for name in (
-    "SPEED_TAPERS", "DECK_K_SPEED", "FOOT_CLEAR", "RAIL_LIFECYCLE", "RACEWAY_DIG",
-    "TUNNEL_ROAD_OVER", "FAST_DECK_ENDS", "FAST_GAP", "FAST_DECK_GROUND",
-    "RACEWAY_PROPS", "RAIL_ROAD_FIT", "RAIL_SEAM_NATURAL", "SURFACE_V2", "SIDEWALK_V2")}
-REVAMPED.update(BNE_BATTER="vanilla", BNE_ROADSHAPE="sheet", BNE_ROADSURF_V3="surface")
+def _revamped():
+    """The Experimental "Revamped roads" switches, read from the server's own table (server/experimental.py FEATURES),
+    so the corpus always tests exactly what players get (2026-11-21: a hard-coded copy kept the surface overlay and
+    the new sidewalks after they moved to their own toggles)."""
+    import ast
+    tree = ast.parse((TREE / "server" / "experimental.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "FEATURES" for t in node.targets):
+            for entry in ast.literal_eval(node.value):
+                if entry[0] == "expRoadRevamp":
+                    return dict(entry[1])
+    raise RuntimeError("expRoadRevamp not found in server/experimental.py")
+
+
+REVAMPED = _revamped()
 
 
 def digest(obj):
@@ -43,10 +55,14 @@ def save(path, value):
         temp.unlink(missing_ok=True)
 
 
-def places(ids=None, public_only=False):
+def places(ids=None, public_only=False, extra=()):
+    """The catalogue's places, the private ones unless public_only, and those of every extra file (JSON arrays kept
+    outside Git, such as the bridge study's sites: tools/widecorpus/run.py --extra)."""
     data = read(HERE / "places.json")
     if not public_only and PRIVATE.exists():
         data += read(PRIVATE)
+    for path in extra:
+        data += read(Path(path))
     by_id = {}
     for p in data:
         key = p["id"]

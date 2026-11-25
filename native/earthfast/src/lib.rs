@@ -1,16 +1,36 @@
-//! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
+//! Geometry kernels for the world server.
 //! All coordinates are metres in the anchor's local frame, f64.
 // Determinism (the Rust port plan's section 2.6; native/earthfast/clippy.toml lists the methods and types): no platform
 // maths (dm::Dm instead), no powi / mul_add, no std HashMap / HashSet iteration order into an output, no std hasher
 // whose keys vary per process or per Rust release. A site that needs one anyway carries a narrow #[allow(...)] with its
 // reason; `cargo clippy` fails on a new one.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
+mod cliffcuts;
+mod cliffsurface;
+mod cliffappearance;
+mod cliffphoto;
+mod cliffplacement;
+mod clifffar;
+mod cliffstock;
+mod cliffground;
+mod cliffselect;
+mod clifflod;
+mod cliffdetail;
+mod cliffstream;
+mod cliffstrips;
+mod clifftransition;
 use crate::dm::Dm;
 mod dm;
+mod roadsysbind;
+mod roadareas;
+mod unalign;
 mod island_kerb;
 mod deckreach;
 mod demsample;
 mod demtiles;
+mod follow;
+mod terrainready;
+mod provisional;
 mod dembias;
 mod regionaldem;
 mod lidarbc;
@@ -52,6 +72,7 @@ mod roadshape;
 mod shore;
 mod photofill;
 mod ambience;
+mod snow; // winter W1 (BNE_WINTER): the hourly integer snow kernel (server/snow.py)
 mod gradeguard;
 mod power;
 mod underpass;
@@ -59,6 +80,7 @@ mod coarseease;
 mod junctionsnap;
 mod tunnelcover;
 mod tunnelchain;
+mod tunnelrec;
 mod portal;
 mod gradesep;
 mod lamps;
@@ -90,17 +112,23 @@ mod roadz;
 mod fartex;
 mod photojpeg;
 mod leafon;
+mod snowlook;
 mod photomesh;
 mod deshadow;
 mod colormatch;
 mod finished_tile;
 mod farglobal;
+mod farlocal;
 mod farpvs;
 mod farsel;
 mod dirtsteps;
+mod drivefeat;
 mod dirtnoise;
 mod racedig;
 mod racejoin;
+mod railmesh;
+mod railstations;
+mod catenary;
 mod railfit;
 mod gridinterp;
 mod dejunction;
@@ -122,6 +150,7 @@ mod stageshare;
 mod classgrid;
 mod frontage;
 mod furnstations;
+mod delineators;
 mod stationgeom;
 mod busstation;
 mod railpiers;
@@ -141,6 +170,7 @@ mod wallsindex;
 mod roadwalls;
 mod mappedlamps;
 mod vegclumps;
+mod natural;
 mod roadwear;
 mod roadtone;
 mod railbeds;
@@ -174,6 +204,7 @@ mod layerfold;
 mod terrainblock;
 mod blockgrid;
 mod blockphoto;
+mod farstandin;
 mod landcover;
 mod roadsurf;
 mod levelways;
@@ -183,6 +214,8 @@ mod shelterfit;
 mod tilecuts;
 mod bldclear;
 mod bnwt;
+mod cip;
+mod quality;
 mod aerialcov;
 mod decisions;
 mod lidarz;
@@ -6580,6 +6613,24 @@ pub(crate) fn rtin_core(hv: &[f64], n: usize, max_err: f64) -> (Vec<[i64; 3]>, V
         (tris, surf, worst)
 }
 
+/// The interpreter is about to finalize (server/fast.py's atexit hook, on the thread that finalizes): from now on every
+/// other thread coming back to Python through PyO3 (a kernel's detach ending, an attach from a detached thread) parks
+/// forever instead, the ones already on their way in let through first (at most wait_s). Returns whether none was left.
+/// CPython before 3.14 ended such threads with pthread_exit(), whose forced unwind through the kernel's Rust frames
+/// crashed or hung the process at exit (vendor/pyo3-0.30.1/src/internal/exit_guard.rs).
+#[pyfunction]
+fn begin_exit(_py: Python<'_>, wait_s: f64) -> bool {
+    let wait = std::time::Duration::from_secs_f64(if wait_s.is_finite() { wait_s.clamp(0.0, 60.0) } else { 0.0 });
+    // SAFETY: the Python<'_> token: this thread is attached
+    unsafe { pyo3::exit_guard::begin(wait) }
+}
+
+/// begin_exit's bookkeeping, for tests: (threads on top of PyO3 frames, of those detached, attaching now).
+#[pyfunction]
+fn exit_guard_counts() -> (isize, isize, isize) {
+    pyo3::exit_guard::counts()
+}
+
 #[pymodule]
 fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(countrymap::country_codes, m)?)?;
@@ -6843,6 +6894,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::cut_ground, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::core_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
+    m.add_class::<snowlook::SnowLook>()?;
+    m.add_function(wrap_pyfunction!(snowlook::snow_ela, m)?)?;
+    m.add_function(wrap_pyfunction!(snowlook::snow_evergreen, m)?)?;
+    m.add_function(wrap_pyfunction!(snowlook::snow_perm_possible, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::season_amounts, m)?)?;
     m.add_function(wrap_pyfunction!(leafon::leaf_on, m)?)?;
@@ -6913,6 +6968,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(devctx::dev_pois, m)?)?;
     m.add_class::<devctx::DevContext>()?;
     m.add_function(wrap_pyfunction!(furnstations::furniture_stations, m)?)?;
+    m.add_function(wrap_pyfunction!(delineators::delineator_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(delineators::delineator_curvature, m)?)?;
     // 188: devctx (development.py's Context whole: dev_building_bits / dev_land_bits / dev_pois, the labels of a
     // Features in one call; DevContext, the tile's raster and its batched samples); furnstations::furniture_stations
     // (furniture._stations: a sidewalk run's stations with their k arc lengths, one call per run)
@@ -7038,6 +7095,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 235: roadsmooth.smooth's layer steps (road_connector_pins, road_smooth_rebuild, road_smooth_fractions: its
     // Python round the line kernels was most of the smoothing's CPU)
     m.add_function(wrap_pyfunction!(roadsmooth::road_connector_pins, m)?)?;
+    // 594: roadsmooth.smooth's lines rounded one at a time with their switch pins, in one call (road waits)
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_pinned_many, m)?)?;
     m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_rebuild, m)?)?;
     m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_fractions, m)?)?;
     // (and lanesections.split's new layer: lane_split_coords / lane_split_rules)
@@ -7123,6 +7182,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     dm::register(m)?;
     demsample::register(m)?;
     demtiles::register(m)?;
+    follow::register(m)?;
+    farlocal::register(m)?;
+    terrainready::register(m)?;
+    provisional::register(m)?;
     m.add_function(wrap_pyfunction!(dembias::dem_bias, m)?)?;
     regionaldem::register(m)?;
     m.add_function(wrap_pyfunction!(lidarbc::bc_sample, m)?)?;
@@ -7235,6 +7298,90 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     ggshade::register(m)?;
     // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
     // out (Codex review of 308)
+    // 616 (608-615 kept for other branches): PR #1412's opt-in dynamic cliffs (BNE_CLIFFS; server/cliffsettings.py
+    // CLIFF_KERNEL): generation, placement, material preparation, canyon contact strips on the terrain-blended rim
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_edges, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_prepare, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_trial, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_validate, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_retreat, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_ground, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_clearance, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_reduce, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffdetail::cliff_detail_subdivide, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffdetail::cliff_detail_weights, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffdetail::cliff_detail_displace, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_height_sample, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_terrain_envelope, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_cut_chart, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_refine_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_grid_normals, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_mesh_layout, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_surface_uv, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_mesh_finish, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_mesh_clip, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_toes, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_output, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_restore, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_clusters, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstream::cliff_stream_parts, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_strip_project, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_strip_domains, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_contact_runs, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_contact_order, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_contact_patches, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_contact_map, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstream::cliff_contact_batches, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_terrain_sample, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_terrain_faces, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_strip_tint, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_strip_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_attributes, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_relief_weights, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_normals, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_fill_gaps, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_clip, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffselect::cliff_select, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffappearance::cliff_families, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffappearance::cliff_rock_tints, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffappearance::cliff_color_transfer, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffappearance::cliff_material_tints, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffphoto::cliff_photo_queries, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffphoto::cliff_photo_tints, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_base_seeds, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_base_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_sample_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_footprint_queries, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_rough_faces, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstock::cliff_contact_maps, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstock::cliff_contact_color_factor, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffground::cliff_ground_maps, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_outcrop_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_surface_normals, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_seat_companions, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_layout, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_boundaries, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_sample_colors, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_detail_row, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_photo_field, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_projection_axes, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_owned, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_allowed_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_companion_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_outcrop_poses, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_rubble_poses, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_rubble_selection, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_rubble_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffselect::cliff_components, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffselect::cliff_grow, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffselect::cliff_extend, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_select, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffcuts::cliff_road_clearance, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_sustained, m)?)?;
     // 310: stage 3 perf: gg_grid (the texel grid and its Web-Mercator metres, rectangles), the edge-table polygon fill,
     // the capsule-interval line fill, value_noises on the kernels' threads (all the same output)
     // 311: stage 3 steps 2-3: gg_regions(..., t) with the bounded hedgerow skirt; gen_ground's field-edge barriers and
@@ -7629,12 +7776,62 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(blockphoto::block_base_photo, m)?)?;
     m.add_function(wrap_pyfunction!(blockphoto::block_rgba, m)?)?;
     m.add_class::<blockphoto::BlockPhotoOverlap>()?;
+    m.add_function(wrap_pyfunction!(farstandin::far_standin, m)?)?;   // 597
     m.add_function(wrap_pyfunction!(landcover::landcover_samples, m)?)?;
     m.add_function(wrap_pyfunction!(blockgrid::block_cached_grid, m)?)?;
     m.add_function(wrap_pyfunction!(terrainblock::block_params, m)?)?;
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
+    railmesh::register(m)?;
+    railstations::register(m)?;
+    catenary::register(m)?;
+    // 596: the road surface + bridge rewrite's shadow product and M0 audit (native/roadsys; BNE_ROADSYS=shadow); 600: M2's
+    // heights squares (RoadsysSquare, roadsys_square, roadsys_blend; BNE_ROADSYS=heights); 603: M3's structures
+    // (RoadsysEnds, roadsys_handover_zone: the deck ends' hand-over on the anchor's lattice, BNE_ROADSYS=structures;
+    // road_exact's always-exact parts, "ho"); 606: M4's surface decks (roadsys_decks: decks from the road system's own
+    // structure faces, BNE_ROADSYS=surface)
+    roadsysbind::register(m)?;
+    tunnelrec::register(m)?;
+    // 599: unalign::collider_unalign (colliders off the axis-aligned lattice, cdae.COLLIDER_UNALIGN_M)
+    unalign::register(m)?;
+    // 604 (603 and 605 kept for other branches): cip (architecture v2's compact per-cell inputs: the lossless cell
+    // codec of named arrays and blobs; cip_encode_cell, cip_cell_info, cip_decode; server/cip.py, tools/build_cip.py)
+    cip::register(m)?;
+    // 610: RoadsysSegments(xsec=...): the road system's cross-sections from OSM's street tags (native/roadsys xsec.rs,
+    // BNE_ROADSYS_XSEC=on)
+    // 608: OSM's mapped road areas (area:highway=*): roadareas::oah_decode (a tile of tools/build_osm_road_areas.py,
+    // server/osmareas.py), RoadsysAreas + RoadsysSegments(areas=, fit=) (native/roadsys areas.rs: the M0 audit of the
+    // generated surface against them in every product built with areas; BNE_ROADSYS_AREAS=on: the carriageway edges'
+    // soft targets), roadsys_areas_audit (tools/widecorpus/checks.py: today's road surface against them)
+    roadareas::register(m)?;
+    // 614: quality (the per-cell data-quality record, the adaptive plan's J2: quality_counts, quality_record,
+    // quality_meta, quality_fields; server/quality.py, tools/build_cip.py's "q" section)
+    quality::register(m)?;
+    // 611 (608-610 kept for other branches): natural (OpenStreetMap's mapped natural features, BNE_NATURAL_*: mapped
+    // trees and tree rows, forests' leaf type, natural ground, cliffs along mapped lines, depth bands; server/natural.py)
+    natural::register(m)?;
+    // 612 (608-611 kept for other branches): drivefeat (the mapped driving features: calming_apply, the speed
+    // bumps / humps / tables / fords in a road plan's profile, BNE_CALMING / BNE_UNPAVED; server/calming.py)
+    drivefeat::register(m)?;
+    // 617: both 608 (areas) and 610 (xsec) in one binary; RoadsysSegments(areas=, fit=, xsec=) compose (the areas fit
+    // sets the carriageway's total width and edges, the cross-section strips divide it)
+    // 622: begin_exit, exit_guard_counts (the vendored PyO3's exit_guard: threads that would attach while the interpreter shuts down
+    // park instead; CPython < 3.14 ended them with pthread_exit, a forced unwind through Rust frames that crashed or
+    // hung the exit, server/fast.py's atexit hook calls it)
+    m.add_function(wrap_pyfunction!(begin_exit, m)?)?;
+    m.add_function(wrap_pyfunction!(exit_guard_counts, m)?)?;
+    // 623: road M5 (roadsys)
+    // 624: snow_state / snow_preset / snow_regime / snow_band_depth / snow_band_table / snow_lake_share /
+    // snow_wet_only / snow_selftest / snow_conditions (snow.rs: the winter W1 kernel, server/snow.py, BNE_WINTER /
+    // BNE_WET_ROADS)
+    // 625: SnowLook / snow_ela / snow_perm_possible / snow_evergreen, finish_far_photo(snow=) (snowlook.rs: the winter
+    // W2 snow on the ground photos, server/snowcover.py)
+    snow::py::register(m)?;
+    // 626: road M5 rounds 2-3 (roadsys: twins, widen_out, class / sign / rail clearance floors, mapped ranges,
+    // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
+    // 627: deck_shape(lhw=, nbi=): the deck ends' skew only as the abutment of a short structure's crossing, waterways
+    // (kind 3) crossed too, the US bridge inventory's skew first (roadshape.py, nbiskew.py); its ends' audit numbers
     // 581: upstream dev (580) merged with the fork's grading kernels (509-511 above: their numbers were taken by dev's own 509-511, so
     // both sets of changes are in this build and the version is past both; rail_crossing_roads takes the road grade law's callback as its last argument
     // (the third item of a ground crossing, railways.graded_crossings); the plans' SURFACE_WIDTH flag is 8 (4 is TUNNEL))
@@ -7644,6 +7841,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 583: the cutting's wall by the plan's weight too (those columns negative: -1 a cutting's wall, +1 a fill's): the ground over the
     // road there, the same along the plan's run, not the point's own height over the road's (it flickered round wall_cut); every wall's
     // flat strip is fill_flat (the lattice's teeth reach) behind the core
-    m.add("VERSION", 583)?;
+    // 630: upstream dev (629) merged with the fork's grading kernels (581-583 above: gradebins fill / cutting walls, rail_crossing_roads' grade callback),
+    // both sets of changes in this build, the version past both
+    m.add("VERSION", 630)?;
     Ok(())
 }

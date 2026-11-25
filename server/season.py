@@ -41,13 +41,45 @@ def season_amounts(date, lat):
     return {"fall": fall, "winter": winter, "spring": spring}
 
 
+# "auto" grades with the date of the week it is in (UTC, slots of SEASON_SLOT_DAYS from a fixed Monday), not today's:
+# what a texture is graded with is then a function of its cache key (season_key), the same on every machine, and the
+# far tiles and block photos made in October are not served as late November's (their keys held "auto" alone).
+SEASON_SLOT_DAYS = 7
+_SLOT_EPOCH = datetime.date(2026, 1, 5)     # a Monday
+SEASON_KEY_LAT_PAD = 1.0    # deg: a key holds the slot where the season changes within this of its latitude
+
+
+def utc_today():
+    return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def slot_date(today=None):
+    """The first day of the SEASON_SLOT_DAYS slot that today (default: the UTC date) is in."""
+    d = today or utc_today()
+    return d - datetime.timedelta(days=(d - _SLOT_EPOCH).days % SEASON_SLOT_DAYS)
+
+
 def amounts_for(mode, lat, today=None):
-    """season_amounts for --season: "auto" (today's date), "off" (none), "fall" / "winter" / "spring" (full)."""
+    """season_amounts for --season: "auto" (the date of this week's slot, slot_date), "off" (none), "fall" / "winter" /
+    "spring" (full)."""
     if mode in ("fall", "winter", "spring"):
         return {"fall": 0.0, "winter": 0.0, "spring": 0.0, mode: 1.0}
     if mode == "auto":
-        return season_amounts(today or datetime.date.today(), lat)
+        return season_amounts(slot_date(today), lat)
     return {"fall": 0.0, "winter": 0.0, "spring": 0.0}
+
+
+def season_key(mode, lat, today=None):
+    """The season's part of a texture's cache key at latitude lat: mode itself, or for "auto" the slot's date where
+    any amount is above 0 within SEASON_KEY_LAT_PAD of lat (a far tile lies within that of its anchor), else "none"
+    (the tropics and full summer: the textures stay put all those weeks)."""
+    if mode != "auto":
+        return mode
+    d = slot_date(today)
+    for la in (float(lat) - SEASON_KEY_LAT_PAD, float(lat), float(lat) + SEASON_KEY_LAT_PAD):
+        if any(v > 0.0 for v in season_amounts(d, max(-90.0, min(90.0, la))).values()):
+            return ("auto", d.isoformat())
+    return ("auto", "none")
 
 
 def leaf_on(rgb, ref):

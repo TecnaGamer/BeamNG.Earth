@@ -1,5 +1,5 @@
 {
- "_measured_on": "f2be4fc49dce+dirty",
+ "_measured_on": "4a95dbbc75b0",
  "a20_921": {
   "steps": 15,
   "parts": {
@@ -286,12 +286,17 @@
   }
  },
  "casagranda_bridge": {
-  "steps": 63,
+  "steps": 75,
   "parts": {
    "bridge:24180283-706a-4193-a9d6-18dbee4df38d": {
     "step_m": 0.1506,
     "grade": 0.2052,
     "lift_g": 2.6256
+   },
+   "ground:053629ed-5cd3-43a0-9a3f-45d606754d27": {
+    "step_m": 0.4081,
+    "grade": 0.0,
+    "lift_g": 0.0
    },
    "ground:1281a8c3-1331-4625-a6d5-6ce823032ce0": {
     "step_m": 0.2144,
@@ -304,12 +309,12 @@
     "lift_g": 0.3299
    },
    "ground:56a28a10-46e0-4513-aadc-4ad7ffe86ab4": {
-    "step_m": 0.7714,
+    "step_m": 0.5171,
     "grade": 0.0,
     "lift_g": 0.0
    },
    "tunnel:053629ed-5cd3-43a0-9a3f-45d606754d27.366496#1": {
-    "step_m": 0.3843,
+    "step_m": 0.558,
     "grade": 0.0,
     "lift_g": 0.0
    },

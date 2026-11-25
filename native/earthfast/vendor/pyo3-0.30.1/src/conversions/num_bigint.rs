@@ -1,0 +1,723 @@
+#![cfg(feature = "num-bigint")]
+//!  Conversions to and from [num-bigint](https://docs.rs/num-bigint)’s [`BigInt`] and [`BigUint`] types.
+//!
+//! This is useful for converting Python integers when they may not fit in Rust's built-in integer types.
+//!
+//! # Setup
+//!
+//! To use this feature, add this to your **`Cargo.toml`**:
+//!
+//! ```toml
+//! [dependencies]
+//! num-bigint = "*"
+#![doc = concat!("pyo3 = { version = \"", env!("CARGO_PKG_VERSION"),  "\", features = [\"num-bigint\"] }")]
+//! ```
+//!
+//! Note that you must use compatible versions of num-bigint and PyO3.
+//! The required num-bigint version may vary based on the version of PyO3.
+//!
+//! ## Examples
+//!
+//! Using [`BigInt`] to correctly increment an arbitrary precision integer.
+//! This is not possible with Rust's native integers if the Python integer is too large,
+//! in which case it will fail its conversion and raise `OverflowError`.
+//! ```rust,no_run
+//! use num_bigint::BigInt;
+//! use pyo3::prelude::*;
+//!
+//! #[pyfunction]
+//! fn add_one(n: BigInt) -> BigInt {
+//!     n + 1
+//! }
+//!
+//! #[pymodule]
+//! # #[pyo3(name = "example_num_bigint")]
+//! fn my_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
+//!     m.add_function(wrap_pyfunction!(add_one, m)?)?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Python code:
+//! ```python
+//! from my_module import add_one
+//!
+//! n = 1 << 1337
+//! value = add_one(n)
+//!
+//! assert n + 1 == value
+//! ```
+
+#[cfg(any(all(Py_3_14, not(Py_LIMITED_API)), Py_3_15))]
+use crate::conversions::std::num::{
+    PYLONG_BITS_IN_DIGIT, is_30bit_layout, pylong_from_digits, pylong_visit_digits,
+};
+#[allow(unused_imports, reason = "conditionally used")]
+use crate::platform::prelude::*;
+#[cfg(Py_LIMITED_API)]
+use crate::types::{PyBytes, bytes::PyBytesMethods};
+use crate::{
+    Borrowed, Bound, FromPyObject, PyAny, PyErr, PyResult, Python, conversion::IntoPyObject,
+    conversions::std::num::nb_index, types::PyInt,
+};
+
+use num_bigint::{BigInt, BigUint};
+
+#[cfg(any(not(Py_LIMITED_API), Py_3_15))]
+use num_bigint::Sign;
+
+#[cfg(feature = "experimental-inspect")]
+use crate::PyTypeInfo;
+#[cfg(feature = "experimental-inspect")]
+use crate::conversions::std::num::INT_INPUT_TYPE;
+#[cfg(feature = "experimental-inspect")]
+use crate::inspect::PyStaticExpr;
+
+#[cfg(any(all(Py_3_14, not(Py_LIMITED_API)), Py_3_15))]
+struct PyLongDigitIter<I> {
+    digits: I,
+    acc: u64,
+    acc_bits: usize,
+    remaining: usize,
+}
+
+#[cfg(any(all(Py_3_14, not(Py_LIMITED_API)), Py_3_15))]
+impl<I> Iterator for PyLongDigitIter<I>
+where
+    I: ExactSizeIterator<Item = u32>,
+{
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        const MASK: u32 = (1 << PYLONG_BITS_IN_DIGIT) - 1;
+
+        if self.remaining == 0 {
+            return None;
+        }
+
+        while self.acc_bits < PYLONG_BITS_IN_DIGIT {
+            let Some(digit) = self.digits.next() else {
+                break;
+            };
+
+            self.acc |= u64::from(digit) << self.acc_bits;
+            self.acc_bits += u32::BITS as usize;
+        }
+
+        let digit = self.acc as u32 & MASK;
+        self.acc >>= PYLONG_BITS_IN_DIGIT;
+        self.acc_bits = self.acc_bits.saturating_sub(PYLONG_BITS_IN_DIGIT);
+        self.remaining -= 1;
+        Some(digit)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+#[cfg(any(all(Py_3_14, not(Py_LIMITED_API)), Py_3_15))]
+impl<I> ExactSizeIterator for PyLongDigitIter<I>
+where
+    I: ExactSizeIterator<Item = u32>,
+{
+    fn len(&self) -> usize {
+        self.remaining
+    }
+}
+
+#[cfg(any(all(Py_3_14, not(Py_LIMITED_API)), Py_3_15))]
+#[inline]
+fn pylong_from_u32_digits<I>(
+    py: Python<'_>,
+    negative: bool,
+    bits: usize,
+    digits: I,
+) -> Bound<'_, PyInt>
+where
+    I: ExactSizeIterator<Item = u32>,
+{
+    let digits = PyLongDigitIter {
+        digits,
+        acc: 0,
+        acc_bits: 0,
+        remaining: bits.div_ceil(PYLONG_BITS_IN_DIGIT),
+    };
+    pylong_from_digits(py, negative, digits)
+}
+
+// for identical functionality between BigInt and BigUint
+macro_rules! bigint_conversion {
+    ($rust_ty: ty, $is_signed: literal, $bits:path, $iter_u32_digits:path, $negative:expr) => {
+        #[cfg_attr(docsrs, doc(cfg(feature = "num-bigint")))]
+        impl<'py> IntoPyObject<'py> for $rust_ty {
+            type Target = PyInt;
+            type Output = Bound<'py, Self::Target>;
+            type Error = PyErr;
+
+            #[cfg(feature = "experimental-inspect")]
+            const OUTPUT_TYPE: PyStaticExpr = <&$rust_ty>::OUTPUT_TYPE;
+
+            #[inline]
+            fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+                (&self).into_pyobject(py)
+            }
+        }
+
+        #[cfg_attr(docsrs, doc(cfg(feature = "num-bigint")))]
+        impl<'py> IntoPyObject<'py> for &$rust_ty {
+            type Target = PyInt;
+            type Output = Bound<'py, Self::Target>;
+            type Error = PyErr;
+
+            #[cfg(feature = "experimental-inspect")]
+            const OUTPUT_TYPE: PyStaticExpr = PyInt::TYPE_HINT;
+
+            fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+                use num_traits::ToBytes;
+
+                #[cfg(any(all(Py_3_14, not(Py_LIMITED_API)), Py_3_15))]
+                {
+                    if is_30bit_layout(py) {
+                        let bits: usize = $bits(self)
+                            .try_into()
+                            .expect(concat!(stringify!($rust_ty), " bit length fits in usize"));
+
+                        return Ok(pylong_from_u32_digits(
+                            py,
+                            $negative(self),
+                            bits,
+                            $iter_u32_digits(self),
+                        ));
+                    }
+                }
+
+                #[cfg(all(not(Py_LIMITED_API), Py_3_13))]
+                {
+                    use crate::conversions::std::num::int_from_ne_bytes;
+                    let bytes = self.to_ne_bytes();
+                    Ok(int_from_ne_bytes::<{ $is_signed }>(py, &bytes))
+                }
+
+                #[cfg(all(not(Py_LIMITED_API), not(Py_3_13)))]
+                {
+                    use crate::conversions::std::num::int_from_le_bytes;
+                    let bytes = self.to_le_bytes();
+                    Ok(int_from_le_bytes::<{ $is_signed }>(py, &bytes))
+                }
+
+                #[cfg(Py_LIMITED_API)]
+                {
+                    use $crate::py_result_ext::PyResultExt;
+                    use $crate::types::any::PyAnyMethods;
+                    let bytes = self.to_le_bytes();
+                    let bytes_obj = PyBytes::new(py, &bytes);
+                    let kwargs = if $is_signed {
+                        let kwargs = crate::types::PyDict::new(py);
+                        kwargs.set_item(crate::intern!(py, "signed"), true)?;
+                        Some(kwargs)
+                    } else {
+                        None
+                    };
+                    // SAFETY: `int.from_bytes` returns a python `int`
+                    unsafe {
+                        py.get_type::<PyInt>()
+                            .call_method("from_bytes", (bytes_obj, "little"), kwargs.as_ref())
+                            .cast_into_unchecked()
+                    }
+                }
+            }
+        }
+    };
+}
+
+bigint_conversion!(
+    BigUint,
+    false,
+    BigUint::bits,
+    BigUint::iter_u32_digits,
+    |_| false
+);
+bigint_conversion!(
+    BigInt,
+    true,
+    BigInt::bits,
+    BigInt::iter_u32_digits,
+    |value: &BigInt| BigInt::sign(value) == Sign::Minus
+);
+
+#[cfg_attr(docsrs, doc(cfg(feature = "num-bigint")))]
+impl<'py> FromPyObject<'_, 'py> for BigInt {
+    type Error = PyErr;
+
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = INT_INPUT_TYPE;
+
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<BigInt, Self::Error> {
+        // fast path - checking for subclass of `int` just checks a bit in the type object
+        let num_owned: Bound<'_, PyInt>;
+        let num = if let Ok(long) = ob.cast::<PyInt>() {
+            long
+        } else {
+            num_owned = nb_index(&ob)?;
+            num_owned.as_borrowed()
+        };
+        #[cfg(any(all(Py_3_14, not(Py_LIMITED_API)), Py_3_15))]
+        if is_30bit_layout(ob.py()) {
+            return pylong_visit_digits(num.as_any().as_borrowed(), |negative, compact, digits| {
+                let Some(digits) = digits else {
+                    return Ok(BigInt::from(compact));
+                };
+                let sign = if negative { Sign::Minus } else { Sign::Plus };
+                Ok(BigInt::new(sign, int_from_pylong_digits(digits)))
+            });
+        }
+        #[cfg(not(Py_LIMITED_API))]
+        {
+            let mut buffer = int_to_u32_vec::<true>(&num)?;
+            let sign = if buffer.last().copied().is_some_and(|last| last >> 31 != 0) {
+                // BigInt::new takes an unsigned array, so need to convert from two's complement
+                // flip all bits, 'subtract' 1 (by adding one to the unsigned array)
+                let mut elements = buffer.iter_mut();
+                for element in elements.by_ref() {
+                    *element = (!*element).wrapping_add(1);
+                    if *element != 0 {
+                        // if the element didn't wrap over, no need to keep adding further ...
+                        break;
+                    }
+                }
+                // ... so just two's complement the rest
+                for element in elements {
+                    *element = !*element;
+                }
+                Sign::Minus
+            } else {
+                Sign::Plus
+            };
+            Ok(BigInt::new(sign, buffer))
+        }
+        #[cfg(Py_LIMITED_API)]
+        {
+            let n_bits = int_n_bits(&num)?;
+            if n_bits == 0 {
+                return Ok(BigInt::from(0isize));
+            }
+            let bytes = int_to_py_bytes(&num, (n_bits + 8) / 8, true)?;
+            Ok(BigInt::from_signed_bytes_le(bytes.as_bytes()))
+        }
+    }
+}
+
+#[cfg_attr(docsrs, doc(cfg(feature = "num-bigint")))]
+impl<'py> FromPyObject<'_, 'py> for BigUint {
+    type Error = PyErr;
+
+    #[cfg(feature = "experimental-inspect")]
+    const INPUT_TYPE: PyStaticExpr = INT_INPUT_TYPE;
+
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<BigUint, Self::Error> {
+        // fast path - checking for subclass of `int` just checks a bit in the type object
+        let num_owned: Bound<'_, PyInt>;
+        let num = if let Ok(long) = ob.cast::<PyInt>() {
+            long
+        } else {
+            num_owned = nb_index(&ob)?;
+            num_owned.as_borrowed()
+        };
+        #[cfg(any(all(Py_3_14, not(Py_LIMITED_API)), Py_3_15))]
+        if is_30bit_layout(ob.py()) {
+            return pylong_visit_digits(num.as_any().as_borrowed(), |negative, compact, digits| {
+                if negative {
+                    return Err(crate::exceptions::PyValueError::new_err(
+                        "can't convert negative int to unsigned",
+                    ));
+                }
+                let Some(digits) = digits else {
+                    return Ok(BigUint::from(compact as u64));
+                };
+                Ok(BigUint::new(int_from_pylong_digits(digits)))
+            });
+        }
+        #[cfg(not(Py_LIMITED_API))]
+        {
+            let buffer = int_to_u32_vec::<false>(&num)?;
+            Ok(BigUint::new(buffer))
+        }
+        #[cfg(Py_LIMITED_API)]
+        {
+            let n_bits = int_n_bits(&num)?;
+            if n_bits == 0 {
+                return Ok(BigUint::from(0usize));
+            }
+            let bytes = int_to_py_bytes(&num, n_bits.div_ceil(8), false)?;
+            Ok(BigUint::from_bytes_le(bytes.as_bytes()))
+        }
+    }
+}
+
+#[cfg(any(all(Py_3_14, not(Py_LIMITED_API)), Py_3_15))]
+#[inline]
+fn int_from_pylong_digits(digits: &[u32]) -> Vec<u32> {
+    let n_digits = digits
+        .last()
+        .map(|last| {
+            let prefix_bits = (digits.len() - 1) * PYLONG_BITS_IN_DIGIT;
+            let last_bits = (u32::BITS - last.leading_zeros()) as usize;
+
+            let total_bits = prefix_bits + last_bits;
+
+            if total_bits == 0 {
+                0
+            } else {
+                (total_bits - 1) / u32::BITS as usize + 1
+            }
+        })
+        .unwrap_or(0);
+
+    let mut py_digits = Vec::with_capacity(n_digits);
+    let ptr: *mut u32 = py_digits.as_mut_ptr();
+
+    if let Some((&last, init)) = digits.split_last() {
+        let mut acc = 0;
+        let mut acc_bits = 0;
+        let mut written = 0;
+
+        for &digit in init {
+            acc |= u64::from(digit) << acc_bits;
+            let new_bits = acc_bits + PYLONG_BITS_IN_DIGIT;
+
+            if new_bits >= u32::BITS as usize {
+                // SAFETY: the total number of writes is bounded by `n_digits`.
+                unsafe {
+                    ptr.add(written).write(acc as u32);
+                    written += 1;
+                }
+                acc >>= u32::BITS;
+                acc_bits = new_bits - u32::BITS as usize;
+            } else {
+                acc_bits = new_bits;
+            }
+        }
+
+        acc |= u64::from(last) << acc_bits;
+        while written < n_digits {
+            // SAFETY: `written < n_digits <= capacity` by construction.
+            unsafe {
+                ptr.add(written).write(acc as u32);
+                written += 1;
+            }
+            acc >>= u32::BITS;
+        }
+
+        // SAFETY: exactly `written` elements were initialized above.
+        unsafe { py_digits.set_len(written) };
+    }
+
+    py_digits
+}
+
+#[cfg(not(any(Py_LIMITED_API, Py_3_13)))]
+#[inline]
+fn int_to_u32_vec<const SIGNED: bool>(long: &Bound<'_, PyInt>) -> PyResult<Vec<u32>> {
+    use crate::ffi;
+
+    let mut buffer = Vec::new();
+    let n_bits = int_n_bits(long)?;
+    if n_bits == 0 {
+        return Ok(buffer);
+    }
+    let n_digits = if SIGNED {
+        (n_bits + 32) / 32
+    } else {
+        n_bits.div_ceil(32)
+    };
+    buffer.reserve_exact(n_digits);
+    // SAFETY: `buffer` has capacity for `n_digits` u32s, which `_PyLong_AsByteArray`
+    // fully initializes on success; `set_len` is only reached on success
+    unsafe {
+        crate::err::error_on_negative(
+            long.py(),
+            ffi::_PyLong_AsByteArray(
+                long.as_ptr().cast(),
+                buffer.as_mut_ptr() as *mut u8,
+                n_digits * 4,
+                1,
+                SIGNED.into(),
+            ),
+        )?;
+        buffer.set_len(n_digits)
+    };
+    buffer
+        .iter_mut()
+        .for_each(|chunk| *chunk = u32::from_le(*chunk));
+
+    Ok(buffer)
+}
+
+#[cfg(all(not(Py_LIMITED_API), Py_3_13))]
+#[inline]
+fn int_to_u32_vec<const SIGNED: bool>(long: &Bound<'_, PyInt>) -> PyResult<Vec<u32>> {
+    use crate::ffi;
+
+    let mut buffer = Vec::new();
+    let mut flags = ffi::Py_ASNATIVEBYTES_LITTLE_ENDIAN;
+    if !SIGNED {
+        flags |= ffi::Py_ASNATIVEBYTES_UNSIGNED_BUFFER | ffi::Py_ASNATIVEBYTES_REJECT_NEGATIVE;
+    }
+    // SAFETY: passing a NULL buffer with size 0 is the documented way to query the required size
+    let n_bytes =
+        unsafe { ffi::PyLong_AsNativeBytes(long.as_ptr().cast(), core::ptr::null_mut(), 0, flags) };
+    let n_bytes_unsigned: usize = n_bytes.try_into().map_err(|_| PyErr::fetch(long.py()))?;
+    if n_bytes == 0 {
+        return Ok(buffer);
+    }
+    let n_digits = n_bytes_unsigned.div_ceil(4);
+    buffer.reserve_exact(n_digits);
+    // SAFETY: `buffer` has capacity for `n_digits` u32s; `PyLong_AsNativeBytes` fills
+    // the entire buffer regardless of the value, so `set_len` is always valid
+    unsafe {
+        ffi::PyLong_AsNativeBytes(
+            long.as_ptr().cast(),
+            buffer.as_mut_ptr().cast(),
+            (n_digits * 4).try_into().unwrap(),
+            flags,
+        );
+        buffer.set_len(n_digits);
+    };
+    buffer
+        .iter_mut()
+        .for_each(|chunk| *chunk = u32::from_le(*chunk));
+
+    Ok(buffer)
+}
+
+#[cfg(Py_LIMITED_API)]
+fn int_to_py_bytes<'py>(
+    long: &Bound<'py, PyInt>,
+    n_bytes: usize,
+    is_signed: bool,
+) -> PyResult<Bound<'py, PyBytes>> {
+    use crate::intern;
+    use crate::types::any::PyAnyMethods;
+    let py = long.py();
+    let kwargs = if is_signed {
+        let kwargs = crate::types::PyDict::new(py);
+        kwargs.set_item(intern!(py, "signed"), true)?;
+        Some(kwargs)
+    } else {
+        None
+    };
+    let bytes = long.call_method(
+        intern!(py, "to_bytes"),
+        (n_bytes, intern!(py, "little")),
+        kwargs.as_ref(),
+    )?;
+    Ok(bytes.cast_into()?)
+}
+
+#[inline]
+#[cfg(any(not(Py_3_13), Py_LIMITED_API))]
+fn int_n_bits(long: &Bound<'_, PyInt>) -> PyResult<usize> {
+    use crate::types::PyAnyMethods;
+    long.call_method0(crate::intern!(long.py(), "bit_length"))
+        .and_then(|any| any.extract())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::exceptions::PyTypeError;
+    use crate::test_utils::generate_unique_module_name;
+    use crate::types::{PyAnyMethods as _, PyDict, PyModule};
+    use pyo3_ffi::c_str;
+
+    fn rust_fib<T>() -> impl Iterator<Item = T>
+    where
+        T: From<u16>,
+        for<'a> &'a T: core::ops::Add<Output = T>,
+    {
+        let mut f0: T = T::from(1);
+        let mut f1: T = T::from(1);
+        core::iter::from_fn(move || {
+            let f2 = &f0 + &f1;
+            Some(core::mem::replace(&mut f0, core::mem::replace(&mut f1, f2)))
+        })
+    }
+
+    fn python_fib(py: Python<'_>) -> impl Iterator<Item = Bound<'_, PyAny>> + '_ {
+        let mut f0 = 1i32.into_pyobject(py).unwrap().into_any();
+        let mut f1 = 1i32.into_pyobject(py).unwrap().into_any();
+        core::iter::from_fn(move || {
+            let f2 = f0.call_method1("__add__", (&f1,)).unwrap();
+            Some(core::mem::replace(&mut f0, core::mem::replace(&mut f1, f2)))
+        })
+    }
+
+    #[test]
+    fn convert_biguint() {
+        Python::attach(|py| {
+            // check the first 2000 numbers in the fibonacci sequence
+            for (py_result, rs_result) in python_fib(py).zip(rust_fib::<BigUint>()).take(2000) {
+                // Python -> Rust
+                assert_eq!(py_result.extract::<BigUint>().unwrap(), rs_result);
+                // Rust -> Python
+                assert!(py_result.eq(rs_result).unwrap());
+            }
+        });
+    }
+
+    #[test]
+    fn convert_bigint() {
+        Python::attach(|py| {
+            // check the first 2000 numbers in the fibonacci sequence
+            for (py_result, rs_result) in python_fib(py).zip(rust_fib::<BigInt>()).take(2000) {
+                // Python -> Rust
+                assert_eq!(py_result.extract::<BigInt>().unwrap(), rs_result);
+                // Rust -> Python
+                assert!(py_result.eq(&rs_result).unwrap());
+
+                // negate
+
+                let rs_result = rs_result * -1;
+                let py_result = py_result.call_method0("__neg__").unwrap();
+
+                // Python -> Rust
+                assert_eq!(py_result.extract::<BigInt>().unwrap(), rs_result);
+                // Rust -> Python
+                assert!(py_result.eq(rs_result).unwrap());
+            }
+        });
+    }
+
+    fn python_index_class(py: Python<'_>) -> Bound<'_, PyModule> {
+        let index_code = c_str!(
+            r#"
+class C:
+    def __init__(self, x):
+        self.x = x
+    def __index__(self):
+        return self.x
+"#
+        );
+        PyModule::from_code(
+            py,
+            index_code,
+            c"index.py",
+            &generate_unique_module_name("index"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn convert_index_class() {
+        Python::attach(|py| {
+            let index = python_index_class(py);
+            let locals = PyDict::new(py);
+            locals.set_item("index", index).unwrap();
+            let ob = py.eval(c"index.C(10)", None, Some(&locals)).unwrap();
+            let _: BigInt = ob.extract().unwrap();
+            let _: BigUint = ob.extract().unwrap();
+        });
+    }
+
+    #[test]
+    fn handle_zero() {
+        Python::attach(|py| {
+            let zero: BigInt = 0i32.into_pyobject(py).unwrap().extract().unwrap();
+            assert_eq!(zero, BigInt::from(0));
+        })
+    }
+
+    #[cfg(any(all(Py_3_14, not(Py_LIMITED_API)), Py_3_15))]
+    #[test]
+    fn pylong_export() {
+        Python::attach(|py| {
+            if !is_30bit_layout(py) {
+                return;
+            }
+
+            let small = 42_i32.into_pyobject(py).unwrap();
+            let (negative, compact, digits) =
+                pylong_visit_digits(small.as_any().as_borrowed(), |negative, compact, digits| {
+                    Ok((negative, compact, digits.map(<[u32]>::to_vec)))
+                })
+                .unwrap();
+            assert!(!negative);
+            assert_eq!(compact, 42);
+            assert_eq!(digits, None);
+
+            let big = BigInt::new(Sign::Minus, vec![u32::MAX, 0x8000_0001, 0x1234_5678, 1])
+                .into_pyobject(py)
+                .unwrap();
+            let (negative, digits) =
+                pylong_visit_digits(big.as_any().as_borrowed(), |negative, _, digits| {
+                    Ok((negative, digits.map(<[u32]>::to_vec)))
+                })
+                .unwrap();
+            assert!(negative);
+            let digits = digits.unwrap();
+            assert_eq!(
+                int_from_pylong_digits(&digits),
+                vec![u32::MAX, 0x8000_0001, 0x1234_5678, 1]
+            );
+        });
+    }
+
+    /// `OverflowError` on converting Python int to BigInt, see issue #629
+    #[test]
+    fn check_overflow() {
+        Python::attach(|py| {
+            macro_rules! test {
+                ($T:ty, $value:expr, $py:expr) => {
+                    let value = $value;
+                    std::println!("{}: {}", stringify!($T), value);
+                    let python_value = value.clone().into_pyobject(py).unwrap();
+                    let roundtrip_value = python_value.extract::<$T>().unwrap();
+                    assert_eq!(value, roundtrip_value);
+                };
+            }
+
+            for i in 0..=256usize {
+                // test a lot of values to help catch other bugs too
+                test!(BigInt, BigInt::from(i), py);
+                test!(BigUint, BigUint::from(i), py);
+                test!(BigInt, -BigInt::from(i), py);
+                test!(BigInt, BigInt::from(1) << i, py);
+                test!(BigUint, BigUint::from(1u32) << i, py);
+                test!(BigInt, -BigInt::from(1) << i, py);
+                test!(BigInt, (BigInt::from(1) << i) + 1u32, py);
+                test!(BigUint, (BigUint::from(1u32) << i) + 1u32, py);
+                test!(BigInt, (-BigInt::from(1) << i) + 1u32, py);
+                test!(BigInt, (BigInt::from(1) << i) - 1u32, py);
+                test!(BigUint, (BigUint::from(1u32) << i) - 1u32, py);
+                test!(BigInt, (-BigInt::from(1) << i) - 1u32, py);
+            }
+        });
+    }
+
+    #[cfg(any(all(Py_3_14, not(Py_LIMITED_API)), Py_3_15))]
+    #[test]
+    fn biguint_negative() {
+        Python::attach(|py| {
+            let value = py.eval(c"-(1 << 130)", None, None).unwrap();
+            let err = value.extract::<BigUint>().unwrap_err();
+            assert!(err.is_instance_of::<crate::exceptions::PyValueError>(py));
+            assert_eq!(
+                err.value(py).to_string(),
+                "can't convert negative int to unsigned"
+            );
+        });
+    }
+
+    #[test]
+    fn from_py_float_type_error() {
+        Python::attach(|py| {
+            let obj = 12.3f64.into_pyobject(py).unwrap();
+            let err = obj.extract::<BigInt>().unwrap_err();
+            assert!(err.is_instance_of::<PyTypeError>(py));
+
+            let err = obj.extract::<BigUint>().unwrap_err();
+            assert!(err.is_instance_of::<PyTypeError>(py));
+        });
+    }
+}

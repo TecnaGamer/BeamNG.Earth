@@ -50,7 +50,9 @@ def asset_suffix(path):
     p = str(path or "")
     if p.lower().endswith(".exe"):
         return ".exe"
-    if p.endswith(".AppImage"):
+    if p.lower().endswith(".appimage"):
+        # (any case: AppImage managers rename the file, e.g. "...-x86_64.appimage" (a player, 2026-11-24: "not a packaged
+        # BeamNG.Earth file"); the release asset is always ".AppImage", downloaded under its own name beside it)
         return ".AppImage"
     return None
 

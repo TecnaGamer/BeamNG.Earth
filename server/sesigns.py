@@ -12,6 +12,12 @@ TSFS 2019:74.
                 spansk sväng, or "vänstersvängskörfält typ Ögla" (K236534-8)
     C1          both sides of the end of an exit ramp from a motorway or mötesfri väg, and of such an ögla (K237582)
     B3          both sides of a painted crossing without signals, at 60 km/h at most (TSFS 3 kap. 10-11 §§)
+    C1, E16     a town's one-way carriageways at their junctions: C1 both sides of the end its traffic leaves by, facing
+                whoever would turn in (TSFS 4 kap. 3 §: "en väg eller en körbana"); E16 at both corners of the end
+                its traffic enters by, facing the crossing road's traffic, its arrow along the street, where a crossing
+                road is two-way (6 kap. 16-17 §§), on a one-way street only: a divided road's carriageway is not one
+                (16 §: all traffic the other way banned). Both over the sidewalk, 2.1 m up (1 kap. 13 §)
+    E9, E10     where a gångfartsområde (OpenStreetMap's living_street) begins and ends at another street
     E1, E2      where a motorway begins and ends, and on the ramps on to and off it (TSFS 6 kap. 3-4 §§, K237587)
     A19         the moose, sparingly (the user: "very typical swedish thing but dont overdo it", 2026-11-03): no data
                 says where they stand (OpenStreetMap has 1 within 150 km of Borås, Trafikverket's API has no signs),
@@ -19,8 +25,11 @@ TSFS 2019:74.
                 L m gets a pair with chance L / MOOSE_SPACING_M, by a hash of its id: MOOSE_FROM_M into it, each
                 facing the traffic entering it. Not on motorways, 2+1 roads or divided roads: those have game fences.
 
-Spansk sväng: the data has no turn bans (Overture's prohibited_transitions are not downloaded), so it is told by shape:
-a one-way link leaving a fast main road on the right that comes back across it, or ends beside it heading along it. Of
+Spansk sväng: require a confirmed 2+1 section (including its connecting 1+1 stretches), paired one-way
+carriageways with a mapped 2/1 lane split, or a one-lane one-way piece within ISLAND_SECTION_M of a section (the road
+split around the junction's island). The data has no turn bans (Overture's prohibited_transitions are not
+downloaded), so the turning link is told by shape: a one-way link leaving the main road on the right that comes
+back across it, or ends beside it heading along it. Of
 148 such links across Sweden 92% had OpenStreetMap's no_left_turn on the main road; 42% of plain right slip roads did.
 
 Tile independence: every place is worked out from motesfri._ways, which are the same near a place whichever tile reads
@@ -42,7 +51,8 @@ COUNTRIES = {"SE"}
 # Heights (mod trees.lua SE_SIGNS, tools/build_median_props.py): a row's height over its catalog's is its scale.
 HEIGHTS = {"se_f17": 2.70, "se_f17_400": 2.78, "se_f17_300": 2.78, "se_f17_200": 2.78, "se_f18_11": 2.70,
            "se_f18_12": 2.70, "se_f18_21": 2.70, "se_f2": 3.50, "se_c1": 2.10, "se_b3": 2.60, "se_e1": 2.70,
-           "se_e2": 2.70, "se_a19": 2.30}
+           "se_e2": 2.70, "se_a19": 2.30, "se_c1_t": 2.70, "se_e16_r": 2.40, "se_e16_l": 2.40, "se_e9": 2.70,
+           "se_e10": 2.70}
 
 MIN_RUN_M = 300.0           # m of two lanes that are an overtaking stretch and not a junction's lane
 NEAR_M = 50.0               # F17 before the lane is 2.5 m wide where the arrows don't fit; and F18 before the barrier
@@ -60,6 +70,9 @@ RURAL_KMH = 70.0
 MAIN_CLASSES = {"trunk", "primary", "secondary"}
 LINK_M = (20.0, 300.0)      # m long, a spansk sväng's link: the real ones are 30-163
 NEAR_MAIN_M = 3.0           # m from the main road a link starts
+ISLAND_SECTION_M = 400.0    # m from a 2+1 section (or its connector) a one-lane one-way main road may be, split around a
+                            # spansk sväng's island: OSM draws the road there as short one-way pieces with no lane tags
+                            # (Rv 27 south of Borås, 57.6600 12.9184: the section 236 m north, another 1.1 km south)
 SIDE_ROAD_M = (6.0, 45.0)   # m from it a form B or C link ends
 TAIL_M = 12.0               # m of a link's end its heading is read over
 LINK_BACK = 0.7             # forms' limits: the unit heading across the main road, towards it (A, C) ...
@@ -365,11 +378,48 @@ def _link(w):
             and (s.link or s.cls in ("unclassified", "tertiary")) and LINK_M[0] <= _length(w.xy) <= LINK_M[1])
 
 
+def _spanish_main(main, at, ways, sections):
+    """A confirmed 2+1 corridor at the turning link, rather than any fast rural main road. sections: {id: way} of
+    motesfri.sections' pieces."""
+    if not main.spec.oneway:
+        return id(main) in sections
+    lanes = motesfri._lanes(main.spec, main.tags)
+    p, u = _point(main.xy[:, :2], at)
+    if lanes == 1 and _island(main, p, sections):
+        return True
+    if lanes not in (1, 2) or _length(main.xy) < motesfri.MIN_WAY_M:
+        return False
+    u = u * _travel(main)
+    for other in ways:
+        if (other is main or not _main(other.spec) or not other.spec.oneway
+                or other.spec.cls != main.spec.cls or _length(other.xy) < motesfri.MIN_WAY_M
+                or motesfri._lanes(other.spec, other.tags) != 3 - lanes):
+            continue
+        s, _, dist = motesfri._project(p[None], other.xy[:, :2])
+        q, t = _point(other.xy[:, :2], float(s[0]))
+        # Close, parallel, opposing traffic on the left: not a crossing or a nearby slip road.
+        if (dist[0] <= (main.spec.width + other.spec.width) / 2 + CLEAR_M
+                and float(dnp.dot(q - p, _right(u))) < 0
+                and float(dnp.dot(u, t * _travel(other))) < -0.85
+                and abs(float(dnp.dot(q - p, u))) < NEAR_MAIN_M):
+            return True
+    return False
+
+
+def _island(main, p, sections):
+    """Is p on a one-way piece of a 2+1 road split around a junction's island: a section of its class this near?"""
+    for w in sections.values():
+        if w.spec.cls == main.spec.cls and float(motesfri._project(p[None], w.xy[:, :2])[2][0]) <= ISLAND_SECTION_M:
+            return True
+    return False
+
+
 def spanish(ways):
     """[(link, main way, arc length on it of the link's start, travel on it +1 / -1)] of ways' spansk svängar."""
     mains = [w for w in ways if _main(w.spec)]
     if not mains:
         return []
+    sections = {id(p.way): p.way for p in motesfri.sections(ways)}
     a = np.vstack([w.xy[:-1, :2] for w in mains])
     b = np.vstack([w.xy[1:, :2] for w in mains])
     own = np.repeat(np.arange(len(mains)), [len(w.xy) - 1 for w in mains])
@@ -392,6 +442,8 @@ def spanish(ways):
         main = mains[int(own[k])]
         first = int(np.flatnonzero(own == own[k])[0])
         at = float(dnp.hypot(*ab[first:k].T).sum() + t * math.sqrt(l2[k]))
+        if not _spanish_main(main, at, ways, sections):
+            continue
         u = ab[k] / math.sqrt(l2[k])
         left = np.array([-u[1], u[0]])
         mid = _point(xy, _length(xy) / 2)[0]
@@ -565,6 +617,150 @@ def zebra_signs(near_roads, zebras):
     return out
 
 
+ONEWAY_SKIP = {"motorway", "trunk", "service"}   # (motorways and their ramps have theirs; a service road's one-way is a
+                                                # drive-through or a car park's, signed by its owner if at all)
+ONEWAY_PIECE_M = 12.0                           # m: a one-way piece shorter is a junction's own link (none on it)
+ONE_CORNER_M = 4.0                              # m: two of a group's signs this close, read the same way, are one
+STREET_BACK_M = (1.5, 3.0, 5.0, 8.0)            # m past the crossing road's edge a street's C1 / E16 stands: the first
+                                                # clear of every carriageway on both sides
+
+
+def _town_oneway(s):
+    return bool(s.oneway) and s.urban and s.kind in ("paved", "cobble") and not s.link and s.cls not in ONEWAY_SKIP
+
+
+def oneway_signs(near_roads):
+    """C1 and E16 at the junctions of a town's one-way carriageways in near_roads (build_tile's roads_out) with other
+    streets: not on a roundabout, not where only a service road joins. A sign stands a little past the crossing road's
+    edge, 0.7 m off its own carriageway."""
+    import furniture
+    import islands
+    roads_ = [(r[0], r[1], np.asarray(r[2], np.float64), r[3] if len(r) > 3 else 0.0) for r in near_roads
+              if len(r[2]) >= 2]
+    if not any(_town_oneway(s) for _, s, _, _ in roads_):
+        return []
+    ring = islands.ring_fids(roads_)
+    ways = [motesfri.Way(fid, s, {}, pts[:, :2], fid) for fid, s, pts, _ in roads_]
+    long_ = {fid: _length(pts[:, :2]) for fid, _, pts, _ in roads_}
+    by_fid = {}
+    for w in ways:
+        by_fid.setdefault(w.fid, set()).add(id(w))
+    out = []
+    for arms in furniture._arms(roads_).values():
+        if len(arms) < 3 or any(a[0] in ring for a in arms):
+            continue
+        for a in arms:
+            fid, s, u, p = a[0], a[1], np.asarray(a[2], np.float64), np.asarray(a[3], np.float64)[:2]
+            if not _town_oneway(s) or long_[fid] < ONEWAY_PIECE_M:
+                continue
+            others = [b for b in arms if b is not a]
+            # the roads it meets: not a drive or car park's way (service), nor the street itself going on straight
+            crossing = [b for b in others if b[1].cls not in ONEWAY_SKIP | {"track"} and not (
+                b[1].oneway and float(dnp.dot(u, np.asarray(b[2], np.float64))) < -motesfri.STRAIGHT_COS)]
+            if not crossing:
+                continue
+            leaving = furniture._outbound(a)            # (its traffic leaves the junction into it: where it starts)
+            if _divided(fid, s, p, u if leaving else -u, roads_):
+                continue                                # (a divided road's carriageway: the road is two-way)
+            if leaving and all(b[1].oneway for b in crossing):
+                continue                                # (E16: a one-way street off a two-way road only)
+            if not leaving and not any((not b[1].oneway or not furniture._outbound(b)) and float(
+                    dnp.dot(u, np.asarray(b[2], np.float64))) < motesfri.STRAIGHT_COS for b in crossing):
+                continue                                # (C1: only where traffic comes that could turn in: not where
+                                                        # one-way roads merge, nor where every other one leads away)
+            wide = max(b[1].width for b in others) / 2
+            n = _right(u)
+            for side in (1.0, -1.0):
+                for back in STREET_BACK_M:
+                    q = p + u * (wide + back) + n * side * (s.width / 2 + PLAIN_SIDE_M)
+                    if _free(q, ways, by_fid[fid]):
+                        break
+                else:
+                    continue
+                if not leaving:
+                    sign = Sign("se_c1_t", q, u)        # (facing whoever would drive in against it)
+                else:
+                    f = -side * n                       # the crossing road's traffic reaching this corner first
+                    left = float(dnp.dot(u, np.array([-f[1], f[0]]))) > 0.0
+                    sign = Sign("se_e16_l" if left else "se_e16_r", q, f)
+                if not any(o.group[:5] == sign.group[:5] and float(dnp.hypot(*(o.p - q))) < ONE_CORNER_M
+                           and float(dnp.dot(o.facing, sign.facing)) > motesfri.STRAIGHT_COS for o in out):
+                    out.append(sign)
+    return out
+
+
+TWIN_M = 25.0               # m: a one-way road this near, alongside and the other way, is the other carriageway
+
+
+def _drive_dir(s, pts, k):
+    """Unit direction a one-way road's traffic drives along its segment k (Spec.dir: +1 the points' order)."""
+    d = pts[k + 1, :2] - pts[k, :2]
+    return d / max(float(dnp.hypot(*d)), 1e-9) * (1.0 if s.dir >= 0 else -1.0)
+
+
+def _divided(fid, s, p, travel, roads_):
+    """Whether one-way carriageway fid at point p, its traffic going travel, is one half of a two-way road: the map pairs
+    it with its other carriageway (Spec.median), or a one-way road runs alongside it within TWIN_M the other way (a
+    divided street the pairing did not join: no name, a gap outside its range). The user, 2026-11-17: the no-entry sign
+    only "whenever the road is one way and not when its just the wrong direction (aka the road has 2 directions)"."""
+    if s.median:
+        return True
+    for g, t, pts, _ in roads_:
+        if g == fid or not t.oneway or t.link or len(pts) < 2:
+            continue
+        a, b = pts[:-1, :2], pts[1:, :2]
+        d = b - a
+        l2 = np.maximum((d * d).sum(1), 1e-9)
+        w = np.clip(((p - a) * d).sum(1) / l2, 0.0, 1.0)
+        off = dnp.hypot(*(a + d * w[:, None] - p).T)
+        k = int(np.argmin(off))
+        if off[k] <= TWIN_M and float(dnp.dot(_drive_dir(t, pts, k), travel)) < -motesfri.STRAIGHT_COS:
+            return True
+    return False
+
+
+LIVING = "living_street"
+
+
+def living_signs(near_roads):
+    """E9 and E10 where a gångfartsområde (a living_street in near_roads, build_tile's roads_out) meets a street that is
+    not one: E9 on the right of the traffic entering it, facing them, E10 on the right of the traffic leaving it (TSFS
+    2019:74 6 kap. 1 §: E9, E10; the signs on the right, 1 kap.); on a one-way living street the one its traffic
+    passes. Not where only service roads or other living streets join (a car park's way, the area going on)."""
+    import furniture
+    roads_ = [(r[0], r[1], np.asarray(r[2], np.float64), r[3] if len(r) > 3 else 0.0) for r in near_roads
+              if len(r[2]) >= 2]
+    if not any(s.cls == LIVING for _, s, _, _ in roads_):
+        return []
+    ways = [motesfri.Way(fid, s, {}, pts[:, :2], fid) for fid, s, pts, _ in roads_]
+    by_fid = {}
+    for w in ways:
+        by_fid.setdefault(w.fid, set()).add(id(w))
+    out = []
+    for arms in furniture._arms(roads_).values():
+        streets = [b for b in arms if b[1].cls not in ONEWAY_SKIP | {"track", LIVING}]
+        if not streets:
+            continue
+        wide = max(b[1].width for b in streets) / 2
+        for a in arms:
+            fid, s, u, p = a[0], a[1], np.asarray(a[2], np.float64), np.asarray(a[3], np.float64)[:2]
+            if s.cls != LIVING:
+                continue
+            n = _right(u)
+            for group, side, facing in (("se_e9", 1.0, u), ("se_e10", -1.0, -u)):
+                if s.oneway and furniture._outbound(a) != (group == "se_e9"):
+                    continue                            # (a one-way street: only the sign its traffic passes)
+                for back in STREET_BACK_M:
+                    q = p + u * (wide + back) + n * side * (s.width / 2 + PLAIN_SIDE_M)
+                    if _free(q, ways, by_fid[fid]):
+                        break
+                else:
+                    continue
+                if not any(o.group == group and float(dnp.hypot(*(o.p - q))) < ONE_CORNER_M for o in out):
+                    out.append(Sign(group, q, facing))
+    return out
+
+
 def _limit(spec):
     """km/h, the law's default where the map has none (trafikförordningen 3 kap. 17 §)."""
     return spec.kmh if spec.kmh is not None else 50.0 if spec.urban else 70.0
@@ -618,6 +814,7 @@ def tile_rows(frame, ways, near_roads, nodes, box, elev, country):
     if (country or "").upper() not in COUNTRIES:
         return []
     signs = all_signs(ways) if ways else []
-    signs = signs + zebra_signs(near_roads, (nodes or {}).get("zebras", ())) + moose_signs(near_roads)
+    signs = signs + zebra_signs(near_roads, (nodes or {}).get("zebras", ())) + moose_signs(near_roads) \
+        + oneway_signs(near_roads) + living_signs(near_roads)
     x0, y0, x1, y1 = box
     return [_row(s.group, s.p, s.facing, frame, elev) for s in signs if x0 <= s.p[0] < x1 and y0 <= s.p[1] < y1]

@@ -280,6 +280,14 @@ def python_far_trace(lines, final=None):
     gov = modsim.Governor()
     out, keys, cam, wall, frame = [], set(), None, None, 0
     folder = "x"
+    xo = (modsim.XO["CROSS"], modsim.XO["COVER_SINK_S"])
+    try:
+        return _python_far_trace(lines, final, far, gov, out, keys, cam, wall, frame, folder)
+    finally:
+        modsim.XO["CROSS"], modsim.XO["COVER_SINK_S"] = xo
+
+
+def _python_far_trace(lines, final, far, gov, out, keys, cam, wall, frame, folder):
 
     def h(s, v):
         for ch in s.encode():
@@ -296,6 +304,8 @@ def python_far_trace(lines, final=None):
             out.append("H " + ",".join(far.held_sessions()) + " " + ",".join(str(a) for a in far.held_anchors()))
         elif c == "B":
             far.on_block_commit(float(w[1]), float(w[2]))
+        elif c == "X":
+            modsim.XO["CROSS"], modsim.XO["COVER_SINK_S"] = float(w[1]), float(w[2])
         elif c == "C":
             cam = dict(zip(("x", "y", "z", "fx", "fy", "fz", "fovDeg"), (float(v) for v in w[1:8])))
         elif c == "T":
@@ -335,7 +345,7 @@ def python_far_trace(lines, final=None):
                 if inst is not None and inst.loaded and not far.hidden(inst):
                     hv, nv = h(k + ",", hv), nv + 1
             fr = far.frame
-            covered = sum(1 for i in far.live.values() if i.cover != "none")
+            covered = sum(1 for i in far.live.values() if not far.visible_cover(i.cover))
             st = [frame, f"{gov.b:.9f}", fr["units"], len(far.live), covered,
                   sum(1 for i in far.pending.values() if i.loaded), far.n_queued,
                   sum(1 for g in far.groups if g.state == "wait"), far.active_groups, len(far.old), len(far.doomed),
@@ -399,7 +409,14 @@ class ModSimTest(unittest.TestCase):
         self.assertGreater(sum(1 for ln in py if ln.split()[3] == "-" and ln.split()[2] == "hold"), 50)
 
     def test_farfield_port_matches_lua(self):
-        lines = far_script(7)
+        self.far_port(True)
+
+    def test_farfield_port_matches_lua_instant(self):
+        """The default (crossover.CROSS = 0, COVER_SINK_S = 0, 2026-11-21): no crossover ever runs."""
+        self.far_port(False)
+
+    def far_port(self, cross):
+        lines = (["X 1 0.3"] if cross else []) + far_script(7)
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "far.script")
             with open(path, "w") as f:
@@ -420,6 +437,11 @@ class ModSimTest(unittest.TestCase):
         # columns: F frame b units live covered preloaded queued groups transitions old deleting
         #          imports crossovers instant visible hash materials
         self.assertGreater(max(col(12)), 300)       # imports
+        if not cross:
+            self.assertEqual(max(col(13)), 0)       # no crossover
+            self.assertEqual(max(col(9)), 0)        # no transition ever running
+            self.assertGreater(max(col(14)), 100)   # every swap instant
+            return
         self.assertGreater(max(col(13)), 5)         # crossovers
         self.assertGreater(max(col(14)), 5)         # instant swaps
         self.assertGreater(max(col(5)), 12)         # covered tiles (a 1 km block covers 4 x 4 L0 tiles)

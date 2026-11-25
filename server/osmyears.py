@@ -9,12 +9,13 @@ file (ODbL; 17.4 M of them, 2026-11-14) into zoom-12 tiles in PMTiles parts, as 
 A road tile asks for the year tiles under it as it starts (Fetch, on a thread); its buildings wait WAIT_S at most and
 take the year of their way (key: 2 x id, + 1 for a relation), unless they have one (3DBAG's).
 
-The build used is the one pinned on disk when this process first asks (YearShards.frozen), the same for the whole
-process, and it is the building tiles' key (identity(): MapData.versions(buildings=True), "off" or "none" without one;
+The build used is the server run's (YearShards.frozen: pagesdata.Manifest's session, decided by the main process
+before its workers start, MapData.freeze_manifests: the same in every process of the run, a worker started later
+too), and it is the building tiles' key (identity(): MapData.versions(buildings=True), "off" or "none" without one;
 Codex review of 751dc6b2: a tile built without years kept its key after the dataset came out, beside new ones with
-them). A newer manifest is fetched and pinned in the background (MapData.warm_manifests) for the next start.
-- Off (BNE_OSMYEARS=off, BNE_RAILTAGS=off), nothing pinned at the process's first ask (not published yet, a first
-  run), or a manifest this cannot read: identity "off" / "none", no years, nothing faulted.
+them). A newer manifest is fetched and pinned in the background for the next start.
+- Off (BNE_OSMYEARS=off, BNE_RAILTAGS=off), none for the run (not published yet, a first run whose fetch failed), or a
+  manifest this cannot read: identity "off" / "none", no years.
 - A tile that could not be had (offline, the host failing, a directory entry past MAX_TILE_BYTES): no years and the
   build faulted (revisit.fault: built again later, with them); not asked again for DOWN_S.
 
@@ -56,6 +57,7 @@ class YearShards(osmtagshards.TagShards):
     def __init__(self, cache_dir, fetcher):
         super().__init__(cache_dir, fetcher)
         self._frozen = self._UNSET
+        self.pages.manifest.fault_none = False      # ("none" is the building tiles' key: identity)
 
     def _on(self):
         return ON
@@ -72,23 +74,20 @@ class YearShards(osmtagshards.TagShards):
         return fast._ef.oby_decode(b)
 
     def version(self):
-        """The newest build (pinned on disk for the next start; this process keeps its frozen one)."""
+        """The run's build (pagesdata.Manifest: decided once a run, the newest pinned for the next start)."""
         return self.pages.version()
 
     def frozen(self):
-        """(build, manifest) pinned on disk when this process first asked, or None (none, or one this cannot read)."""
+        """(build, manifest) of the server run's manifest (pagesdata.Manifest's session: the same build in every process
+        of the run, workers started later too), or None (none, or one this cannot read)."""
         with self._lock:
             if self._frozen is not self._UNSET:
                 return self._frozen
         got = None
-        import json
         import railtags
         if self._on() and self.fetcher is not None and railtags.ON and self.pages.dir:
-            try:
-                with open(os.path.join(self.pages.dir, "manifest.json"), encoding="utf-8") as f:
-                    m = json.load(f)
-            except (OSError, ValueError, TypeError):
-                m = None
+            m = self.pages.manifest.current()
+            m = dict(m) if isinstance(m, dict) else None
             parts = osmtagshards.parts_of(m) if isinstance(m, dict) else None
             checks = pinned_parts(m) if parts is not None else None
             if checks is not None and isinstance(m.get("built"), str) and 0 < len(m["built"]) <= 256 \

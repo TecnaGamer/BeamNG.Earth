@@ -743,7 +743,11 @@ G_POLELAMP = "polelamp"     # a cobra-head arm on a utility pole (East Coast USA
 # Switzerland (not in that study; GitHub #911: poles along rural Swiss roads that have none): ElCom's line inventory at
 # 2009-12-31, 78,837 km of low-voltage cable (network level 7) to 12,720 km of low-voltage overhead line, 0.86; ElCom's
 # "ElCom in 2024, a brief overview": 90 % of the distribution network underground.
-BURIED_LV = {"NL": 1.0, "CH": 0.86, "GB": 0.81, "DE": 0.75, "DK": 0.65, "BE": 0.44, "NO": 0.38, "IT": 0.30,
+# Hong Kong (not in that study; its two utilities publish no low-voltage split): the Lands Department's 1:1000 map
+# (iB1000) maps the electricity poles and pole transformers. On every 4th of its 3,333 sheets (2026-11-19: 9,332 poles,
+# 2,120 pole transformers) 87 km of the 1,090 km of street centre line have one within 25 m, 0.08; the sample's two
+# halves give 0.080 and 0.081.
+BURIED_LV = {"NL": 1.0, "HK": 0.92, "CH": 0.86, "GB": 0.81, "DE": 0.75, "DK": 0.65, "BE": 0.44, "NO": 0.38, "IT": 0.30,
              "FR": 0.27, "PT": 0.19, "AT": 0.15, "ES": 0.14}
 
 
@@ -997,6 +1001,10 @@ class RoadClearance:
         return True
 
 
+# a mapped lamp's light:colour (BNE_LAMP_TAGS) -> its lens group (nightlights.lua's profile of that colour)
+LENS_COLOURS = {"white": "lamplens_white", "yellow": "lamplens_yellow"}
+
+
 def lamp_lenses(rows):
     """A lens row [G_LENS, x, y, z, yaw, 1, 1, 0] under each head of every lamp row (LAMP_HEADS, MAPPED_LAMP_HEADS: a
     double arm has two; its scale: the row's height over the catalog's, 1 for both), and a G_GLOW row at the same
@@ -1014,6 +1022,8 @@ def lamp_lenses(rows):
         k = r[6] / LAMP_H.get(r[0], r[6]) if r[6] else 1.0     # (a scaled lamp: its head scaled alike)
         group = ("fr_lantern_light" if r[0] == "fr_lantern" else G_HIGH_MAST_LENS if r[0] == "streetlight_high_mast"
                  else G_LENS)
+        if len(r) > 8 and group == G_LENS and r[8] in LENS_COLOURS:
+            group = LENS_COLOURS[r[8]]     # (a mapped lamp's light:colour, BNE_LAMP_TAGS: worldprops)
         for head in heads:
             hx, hy, hz = head[0] * k, head[1] * k, head[2] * k
             yaw = (r[4] + head[3]) % 360. if len(head) > 3 and head[3] else r[4]
@@ -1506,7 +1516,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     # (the tile's own, at their mapped points: not moved off the clearance like a guessed one)
     rows += [list(r) for r in mapped_lamps if _owns(box, r[1], r[2])]
     rows = citylamps.localize(rows, poleprofiles.lamp_country_selector(pole_profile, pole_frame))
-    return under_decks(rows + lamp_lenses(rows), list(decks), wires)
+    lenses = lamp_lenses(rows)
+    rows = [r[:8] if len(r) == 9 else r for r in rows]     # (a mapped lamp's colour: its lens's, not the row's)
+    return under_decks(rows + lenses, list(decks), wires)
 
 
 def off_rail_beds(rows, obstacles):

@@ -99,18 +99,39 @@ lines(os.path.join(L, "main/MissionGroup/Sky/items.level.json"), [
 # streaking", Fells Point; in-game 2026-10-17: each of the three drop options off in turn, only this one fixed it).
 # dropSize 0.2 as west_coast_usa's rain (the same rain_drop in a 50 m box): at 0.36 a drop beside the camera was
 # still a line across the screen.
+# The weather plan 2026-11-24, phase A (its bugs B3, B4, B6, P10): every drop fades out inside its box (fadeDistEnd
+# under the half width: the 50 m box faded only at 65 m, so drops popped in and out at its faces 25-35 m away, still
+# 50-70 % opaque, and followCam wrapped them onto the front face while driving), a smaller box for a denser rain where it
+# is seen; no splashes (the star sprites hung in the air at drops' cut-offs on invisible colliders, GitHub #615, also on
+# DX11); no turbulence on the rain (drops stretched into lines near the camera); snow collides (it fell through every
+# roof, bridge and tunnel) and draws real flakes (bngEarthSnowflake: art/weather/precipitation.datablocks.json,
+# tools/make_precip_textures.py; Snow_menu's sheet of specks drew centimetre dots: invisible). weather.lua sets the
+# flake size and speeds by temperature (M.FLAKES) and fades both out under roofs.
+os.makedirs(os.path.join(L, "art/weather"), exist_ok=True)
+with open(os.path.join(L, "art/weather/precipitation.datablocks.json"), "w") as f:
+    json.dump({"bngEarthSnowflake": {"name": "bngEarthSnowflake", "class": "PrecipitationData",
+                                     "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c26",
+                                     "dropTexture": "/levels/beamng_earth/art/weather/bngEarth_snowflake.color.dds",
+                                     "dropsPerSide": 2, "splashesPerSide": 1},
+               # (the rain's own streak, brighter than rain_drop's: the stock one read as dry at noon)
+               "bngEarthRainDrop": {"name": "bngEarthRainDrop", "class": "PrecipitationData",
+                                    "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c27",
+                                    "dropTexture": "/levels/beamng_earth/art/weather/bngEarth_raindrop.color.dds",
+                                    "splashTexture": "art/shapes/particles/Particle_rain_splash.dds",
+                                    "dropsPerSide": 1, "splashesPerSide": 1}}, f, indent=2)
+    f.write("\n")
 lines(os.path.join(L, "main/MissionGroup/Weather/items.level.json"), [
     {"name": "bngEarthClouds", "class": "CloudLayer", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c21", "__parent": "Weather",
      "texture": "art/skies/clouds/clouds_normal_displacement.png", "coverage": 0.5, "cirrusCoverage": 0.3, "exposure": 1.45,
      "windSpeed": 0.1, "baseColor": [0.99, 0.99, 0.99, 0.9], "altitudeKm": 1.5},
     {"name": "bngEarthRain", "class": "Precipitation", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c22", "__parent": "Weather",
-     "dataBlock": "rain_drop", "numDrops": 0, "boxWidth": 50, "boxHeight": 40, "dropSize": 0.2, "splashSize": 0.2,
-     "fadeDist": 6, "fadeDistEnd": 65, "followCam": True, "useWind": True, "useTurbulence": True, "doCollision": True,
+     "dataBlock": "bngEarthRainDrop", "numDrops": 0, "boxWidth": 36, "boxHeight": 24, "dropSize": 0.2, "splashSize": 0,
+     "fadeDist": 2, "fadeDistEnd": 17, "followCam": True, "useWind": True, "useTurbulence": False, "doCollision": True,
      "hitVehicles": False, "rotateWithCamVel": False},
     {"name": "bngEarthSnow", "class": "Precipitation", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c23", "__parent": "Weather",
-     "dataBlock": "Snow_menu", "numDrops": 0, "boxWidth": 40, "boxHeight": 30, "dropSize": 0.25, "splashSize": 0,
-     "minSpeed": 0.15, "maxSpeed": 0.3, "fadeDist": 6, "fadeDistEnd": 45, "followCam": True, "useWind": True,
-     "useTurbulence": True, "maxTurbulence": 0.5, "turbulenceSpeed": 0.2, "doCollision": False,
+     "dataBlock": "bngEarthSnowflake", "numDrops": 0, "boxWidth": 30, "boxHeight": 20, "dropSize": 0.08, "splashSize": 0,
+     "minSpeed": 0.7, "maxSpeed": 1.1, "fadeDist": 2, "fadeDistEnd": 14, "followCam": True, "useWind": True,
+     "useTurbulence": True, "maxTurbulence": 0.45, "turbulenceSpeed": 0.2, "doCollision": True, "hitVehicles": False,
      "rotateWithCamVel": False},
     {"name": "bngEarthWind", "class": "ForestWindEmitter", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c24", "__parent": "Weather",
      "position": [0, 0, 0], "strength": 0.5},

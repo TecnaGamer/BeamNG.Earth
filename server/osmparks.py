@@ -12,6 +12,7 @@ from concurrent.futures import CancelledError
 
 import numpy as np
 import mapgeom
+import netfetch
 import osmtags
 import recreationrules
 
@@ -45,7 +46,8 @@ class Parks(osmtags.OsmTags):
             for attempt in (0,1):
                 _,remote=self.version('demand')
                 try:
-                    features=self.read(remote,key.bounds())
+                    with netfetch.stale_ok(load(False) is not None):    # (an older copy: stale-if-error)
+                        features=self.read(remote,key.bounds())
                     break
                 except osmtags.rangeread.Changed:
                     if attempt:raise

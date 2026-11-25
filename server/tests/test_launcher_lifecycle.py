@@ -103,6 +103,22 @@ class WindowsGameHelpersTest(unittest.TestCase):
 
 
 class ServerReadinessTest(unittest.TestCase):
+    def test_windows_server_gets_time_to_flush_before_forced_stop(self):
+        with mock.patch.object(launcher, "IS_WIN", True), mock.patch.object(launcher, "row"), \
+                mock.patch.object(launcher._srvrestart(), "request_stop", return_value=True) as stop, \
+                mock.patch.object(launcher.subprocess, "run") as taskkill:
+            proc = mock.Mock(pid=1234)
+            proc.poll.return_value = None
+            launcher.stop_server(proc)
+            stop.assert_called_once_with(1234)
+            proc.wait.assert_called_once_with(15)
+            taskkill.assert_not_called()
+
+            proc.wait.side_effect = [subprocess.TimeoutExpired("earthd", 15), 0]
+            launcher.stop_server(proc)
+            taskkill.assert_called_once_with(["taskkill", "/T", "/F", "/PID", "1234"],
+                                            capture_output=True, timeout=10)
+
     def test_os_selected_port_accepts_only_a_valid_bound_port(self):
         import tempfile
         proc = mock.Mock()

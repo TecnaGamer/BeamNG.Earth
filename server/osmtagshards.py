@@ -171,6 +171,7 @@ class TagShards:
         self._inflight = {}
         self._keylocks = {}         # ("head" | "leaf", ...) -> Lock: one read of each, the other threads wait for it
         self._down = -1e9
+        self._usable_memo = None    # (manifest, build, usable): build_in_use
 
     # --- the build in use ---------------------------------------------------------------------------------------
     def manifest(self):
@@ -183,14 +184,11 @@ class TagShards:
         with self._lock:
             if self._man is not None and self._man[0] == built:
                 return self._man
-        try:
-            with open(os.path.join(self.pages.dir, "manifest.json"), encoding="utf-8") as f:
-                m = json.load(f)
-        except (OSError, ValueError, TypeError):
-            return None
-        parts = parts_of(m) if isinstance(m, dict) else None
-        if parts is None or m.get("built") != built or m.get("format") != self.FORMAT \
-                or not isinstance(m.get("zoom"), int) or not 0 < m["zoom"] <= 14 or not self._valid(m):
+        # (the run's manifest, pagesdata.Manifest's: the pin on disk may be a newer one, fetched for the next start)
+        m = self.pages.manifest.current()
+        m = dict(m) if isinstance(m, dict) else None
+        parts = self._usable(m, built)
+        if parts is None:
             return None
         m["_parts"] = parts
         m["_firsts"] = [p[0] for p in parts]
@@ -198,6 +196,49 @@ class TagShards:
         with self._lock:
             self._man = got
         return got
+
+    def _usable(self, m, built):
+        """The parts (parts_of) of manifest m when it is one of build built this reads (its format, zoom, blob), else
+        None."""
+        parts = parts_of(m) if isinstance(m, dict) else None
+        if parts is None or m.get("built") != built or m.get("format") != self.FORMAT \
+                or not isinstance(m.get("zoom"), int) or not 0 < m["zoom"] <= 14 or not self._valid(m):
+            return None
+        return parts
+
+    def build_in_use(self, network=True):
+        """The build whose tiles this run reads (mapdata's join: the run's, pagesdata's session), "" when the run reads
+        none (off, none decided for the run, a manifest this cannot read), None when not known yet (network false: not
+        decided and none pinned). Never the transient state (a read that failed a moment ago: DOWN_S): a run's build is
+        the same for the whole run."""
+        if not self._on() or self.fetcher is None or not railtags.ON:
+            return ""               # (railtags.ON off: the pages' version() is None, as manifest() reads it)
+        p = self.pages
+        built = p.version() if network else p.known()
+        if built is None:
+            return "" if network or p.manifest.decided else None
+        m = p.manifest.manifest
+        memo = self._usable_memo        # (versions() asks at every cell: the manifest's parts read once)
+        if memo is None or memo[0] is not m or memo[1] != built:
+            memo = self._usable_memo = (m, built, self._usable(m, built) is not None)
+        return built if memo[2] else ""
+
+    def cached_tile(self, key):
+        """(True, the decoded tile or None: no tile there) of map cell key when it is in this process's memory for
+        the build in use, else (False, None). No disk, no network (decisions' slices with fetch=False)."""
+        with self._lock:
+            got = self._man
+        if got is None:
+            return False, None
+        built, m = got
+        z = m["zoom"]
+        if key.z < z:
+            return False, None
+        k = (built, key.x >> (key.z - z), key.y >> (key.z - z))
+        with self._lock:
+            if k in self._mem:
+                return True, self._mem[k]
+        return False, None
 
     def _dir(self, built):
         return os.path.join(self.pages.dir, re.sub(r"[^0-9A-Za-z]+", "_", built))

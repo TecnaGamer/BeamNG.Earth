@@ -771,6 +771,12 @@ class Store:
         os.replace(tmp, self.pointer_path)
 
     def _download(self, name, kind):
+        import cip
+        r = cip.any_reader()
+        got = r.airports(kind or "demand") if r is not None else None
+        if got is not None:             # (the CIP build's snapshot, from the tile host: the same for every player)
+            body = got[FILES.index(name)]
+            return body, len(body), None
         r = self.fetcher.get(self.base_url + name, kind=kind, headers={"Accept-Encoding": "gzip"})
         body = r.body
         if (r.headers.get("content-encoding") or "").lower() == "gzip" or body[:2] == b"\x1f\x8b":
@@ -838,8 +844,9 @@ class Store:
         stale = p is None or now - p.get("checked", p.get("downloaded", 0)) >= max_age
         recent_fail = p is not None and p.get("error") and now - p.get("attempt", 0) < RETRY_S
         if stale and not recent_fail:
-            try:
-                p = self.refresh(kind=kind or ("background" if p else "demand"), force=True)
+            try:        # (a copy in hand: its refresh failing is no build's, stale-if-error, netfetch.stale_ok)
+                with netfetch.stale_ok(p is not None):
+                    p = self.refresh(kind=kind or ("background" if p else "demand"), force=True)
             except (netfetch.FetchError, DataError, OSError, EOFError) as e:
                 if p is None:
                     raise AirportsUnavailable(f"OurAirports: no copy on disk and the download failed: {e}") from e

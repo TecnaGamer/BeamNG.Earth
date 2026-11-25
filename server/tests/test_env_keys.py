@@ -37,6 +37,7 @@ OUTPUT_MODULES = (
 # BNGE_* reads of those modules that change no output, and why.
 NO_OUTPUT = {
     "BNGE_FACTS_LOG": "a log line per cell's facts",
+    "BNGE_HANDOVER_DUMP": "a probe's JSON of the deck ends' hand-over beside the exact deck (BNE_ROADSYS=structures)",
     "BNGE_PLAN_RUN": "the run's shared plan folder (where, not what)",
     "BNGE_ENU_AHEAD": "when the ENU frames are made (scheduling)",
     "BNGE_BNWT_URL": "where the prebaked input tiles are read (the same Overture rows)",
@@ -129,7 +130,7 @@ class EnvReadTest(unittest.TestCase):
 
 def _md():
     """A MapData's attributes versions() reads, nothing loaded."""
-    return types.SimpleNamespace(release="2026-test")
+    return types.SimpleNamespace(release="2026-test", osm_tags_build=lambda network=True: "layercake")   # (versions() asks it)
 
 
 class ElevationKeyTest(unittest.TestCase):

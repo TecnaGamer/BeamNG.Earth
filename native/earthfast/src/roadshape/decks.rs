@@ -56,11 +56,23 @@ const P_DEV_SHARE: usize = 11;      // ... or this share of its length
 const P_AMBIG_COS: usize = 12;      // cos of AMBIG_DEG: two approaches turning within this of each other: a fork
 const P_DIR: usize = 13;            // m of an approach its direction is read over
 const P_SKEW_NEAR: usize = 14;      // m: a crossing nearer the end than this joins it, not crossed
-const NPARAMS: usize = 15;
+// (627, the deck-end skew audit 2026-11-25: roadshape.PARAMS' tail; 15 params keep the 498 rule)
+const P_SKEW_SPAN_MAX: usize = 15;  // m: a structure (its decks joined end to end) longer than this ends square
+const P_SKEW_SET_MAX: usize = 16;   // m past the crossed line's half width the end may stand off it and still skew
+const P_SKEW_OFF_COS: usize = 17;   // cos of the least skew drawn: a crossing nearer square than that ends square
+const NPARAMS_498: usize = 15;
+const NPARAMS: usize = 18;
+/// m: a crossed line's half width where its caller gives none (a road's lane and shoulder, a track's ballast, a stream)
+const HW_ROAD_M: f64 = 3.5;
+const HW_RAIL_M: f64 = 2.0;
+const HW_WATER_M: f64 = 1.5;
+/// decks joined end to end a structure's length is walked over at most
+const SPAN_HOPS: usize = 64;
 
 const KIND_ROAD: i64 = 0;           // line kinds: a ground road, a ground railway, another deck of the chain
 const KIND_RAIL: i64 = 1;
 const KIND_DECK: i64 = 2;
+const KIND_WATER: i64 = 3;          // (627) a mapped waterway line: crossed as a road or a railway is, never an approach
 
 type P2 = [f64; 2];
 
@@ -165,6 +177,7 @@ struct Other {
     line: Line,
     kind: i64,
     own: bool,
+    hw: f64,            // (627) its half width, m (0: unknown, its kind's default)
 }
 
 /// The approach at deck end `end` (0 start, 1 end): (kind, its outward unit direction from the deck's end, the line's
@@ -177,7 +190,7 @@ fn approach(deck: &Line, end: usize, others: &[Other], prm: &[f64]) -> Option<(i
     let out = if end == 0 { mul(deck.dir(h * 0.5, h * 0.5)?, -1.0) } else { deck.dir(l - h * 0.5, h * 0.5)? };
     let mut cands: Vec<(bool, f64, P2, usize, usize, i64)> = Vec::new();
     for (k, o) in others.iter().enumerate() {
-        if o.kind == KIND_RAIL || o.line.p.len() < 2 { continue; }
+        if o.kind == KIND_RAIL || o.kind == KIND_WATER || o.line.p.len() < 2 { continue; }
         let ol = o.line.len();
         for oe in 0..2 {
             let q = if oe == 0 { o.line.p[0] } else { o.line.p[o.line.p.len() - 1] };
@@ -208,9 +221,79 @@ fn approach(deck: &Line, end: usize, others: &[Other], prm: &[f64]) -> Option<(i
     Some((b.5, b.2, b.3, b.4))
 }
 
-/// The skew end direction at deck end `end`: (unit end line pointing to the deck's left, crossing angle deg-free
-/// sine) or None (square).
-fn skew(deck: &Line, end: usize, others: &[Other], skip: &[usize], prm: &[f64]) -> Option<P2> {
+/// (627) The length of the structure deck is part of: its own and the decks going on from either end, end to end
+/// (within JOIN_M, within APPROACH_DEG of each other), each counted once, SPAN_HOPS at most.
+fn struct_len(deck: &Line, others: &[Other], prm: &[f64]) -> f64 {
+    let mut total = deck.len();
+    let mut used: Vec<usize> = Vec::new();
+    for e in 0..2 {
+        // (the free end and its outward direction, walked from deck piece to deck piece)
+        let n = deck.p.len();
+        if n < 2 { break; }
+        let mut tail = if e == 0 { deck.p[0] } else { deck.p[n - 1] };
+        let h = 1.0f64.min(0.5 * deck.len());
+        let Some(mut dir) = (if e == 0 { deck.dir(0.5 * h, 0.5 * h).map(|d| mul(d, -1.0)) }
+                             else { deck.dir(deck.len() - 0.5 * h, 0.5 * h) }) else { continue };
+        for _hop in 0..SPAN_HOPS {
+            let mut next: Option<(f64, usize, bool)> = None;
+            for (k, o) in others.iter().enumerate() {
+                if o.kind != KIND_DECK || o.line.p.len() < 2 || used.contains(&k) { continue; }
+                let ol = o.line.len();
+                let hh = 1.0f64.min(0.5 * ol);
+                for oe in 0..2 {
+                    let q = if oe == 0 { o.line.p[0] } else { o.line.p[o.line.p.len() - 1] };
+                    if norm(sub(q, tail)) > prm[P_JOIN] { continue; }
+                    let v = if oe == 0 { o.line.dir(0.5 * hh, 0.5 * hh) }
+                            else { o.line.dir(ol - 0.5 * hh, 0.5 * hh).map(|d| mul(d, -1.0)) };
+                    let Some(v) = v else { continue };
+                    let c = dot(v, dir);
+                    if c >= prm[P_APPROACH_COS] && next.is_none_or(|nx| c > nx.0) { next = Some((c, k, oe == 1)); }
+                }
+            }
+            let Some((_c, k, from_end)) = next else { break };
+            used.push(k);
+            let o = &others[k].line;
+            let ol = o.len();
+            total += ol;
+            let m = o.p.len();
+            let hh = 1.0f64.min(0.5 * ol);
+            if from_end {
+                tail = o.p[0];
+                match o.dir(0.5 * hh, 0.5 * hh) { Some(d) => dir = mul(d, -1.0), None => break }
+            } else {
+                tail = o.p[m - 1];
+                match o.dir(ol - 0.5 * hh, 0.5 * hh) { Some(d) => dir = d, None => break }
+            }
+        }
+    }
+    total
+}
+
+/// The skew end direction at deck end `end` (unit end line pointing to the deck's left) or None (square), and the
+/// audit's numbers: (the nearest crossing's reach along the deck or -1, the end's distance from the crossed line, the
+/// crossed line's half width, the structure's length slen).
+#[allow(clippy::too_many_arguments)]
+fn skew(deck: &Line, end: usize, others: &[Other], skip: &[usize], prm: &[f64], slen: f64, nbi: Option<[f64; 4]>,
+        deck_hw: f64) -> (Option<P2>, [f64; 6]) {
+    let mut diag = [-1.0, 0.0, 0.0, slen, 0.0, -1.0];
+    let d = skew_dir(deck, end, others, skip, prm, slen, nbi, &mut diag);
+    // (627) both ends' skewed rows apart along the deck (deck_hw: its half width; 0 unknown): a short deck's end line
+    // reaching past its other end's folded its slab
+    if let (Some(dv), true) = (d, deck_hw > 0.0) {
+        let l = deck.len();
+        let h = 2.0f64.min(0.5 * l);
+        if let Some(t) = if end == 0 { deck.dir(h, h) } else { deck.dir(l - h, h) } {
+            let left = [-t[1], t[0]];
+            let (ux, uy) = (dot(dv, t), dot(dv, left));
+            if uy.abs() > 1e-9 && 2.0 * deck_hw * (ux / uy).abs() + 1.0 >= l { return (None, diag); }
+        }
+    }
+    (d, diag)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn skew_dir(deck: &Line, end: usize, others: &[Other], skip: &[usize], prm: &[f64], slen: f64, nbi: Option<[f64; 4]>,
+            diag: &mut [f64; 6]) -> Option<P2> {
     let l = deck.len();
     let n = deck.p.len();
     if n < 2 || l < 1.0 { return None; }
@@ -246,7 +329,7 @@ fn skew(deck: &Line, end: usize, others: &[Other], skip: &[usize], prm: &[f64]) 
     }
     let inward = Line::new(&pts);
     let m = inward.p.len();
-    let mut best: Option<(f64, P2, P2)> = None;     // (reach, inward dir there, crossed dir)
+    let mut best: Option<(f64, P2, P2, usize)> = None;     // (reach, inward dir there, crossed dir, its line)
     for (k, o) in others.iter().enumerate() {
         if o.own || o.kind == KIND_DECK || skip.contains(&k) || o.line.p.len() < 2 { continue; }
         for i in 0..m - 1 {
@@ -264,17 +347,43 @@ fn skew(deck: &Line, end: usize, others: &[Other], skip: &[usize], prm: &[f64]) 
                 if reach <= prm[P_SKEW_NEAR] || reach > prm[P_SKEW_REACH] { continue; }
                 let (Some(md), Some(cd)) = (unit(r), unit(sv)) else { continue };
                 if cross(md, cd).abs() < prm[P_SKEW_MIN_CROSS_SIN] { continue; }     // (along it, not crossed)
-                if best.is_none_or(|b| reach < b.0) { best = Some((reach, md, cd)); }
+                if best.is_none_or(|b| reach < b.0) { best = Some((reach, md, cd, k)); }
             }
         }
     }
-    let (_reach, md, cd) = best?;
+    let (reach, md, cd, k) = best?;
+    let sn = cross(md, cd).abs();
+    let o = &others[k];
+    let hw = if o.hw > 0.0 { o.hw } else if o.kind == KIND_RAIL { HW_RAIL_M } else if o.kind == KIND_WATER { HW_WATER_M } else { HW_ROAD_M };
+    diag[0] = reach;
+    diag[1] = reach * sn;
+    diag[2] = hw;
+    diag[5] = o.kind as f64;
+    // (627) the inventory's record of the structure (NBI item 34: its skew, its length within half to double of the
+    // structure's), "varies" (99) left to the rule
+    let rec = nbi.filter(|n| n[0] >= 0.0 && n[0] < 99.0 && (n[1] <= 0.0 || (n[1] >= 0.5 * slen && n[1] <= 2.0 * slen)));
+    if rec.is_some() { diag[4] = 1.0; }
+    if prm.len() >= NPARAMS && rec.is_none() {
+        // (627) skewed only as the abutment of a short structure's crossing: the structure short (a viaduct's ends
+        // are square), the end within SET_MAX of the crossed line's edge, the crossing off square by the least skew
+        // drawn (the deck-end skew audit: NBI item 34 of 200 US ends and the finest aerials, 2026-11-25)
+        if slen > prm[P_SKEW_SPAN_MAX] || reach * sn - hw > prm[P_SKEW_SET_MAX] || sn > prm[P_SKEW_OFF_COS] {
+            return None;
+        }
+    }
+    // (an inventory's square structure: square)
+    if let Some(n) = rec { if n[2] > prm[P_SKEW_OFF_COS] { return None; } }
     let h = 2.0f64.min(0.5 * l);
     let t_in = if end == 0 { deck.dir(h, h)? } else { mul(deck.dir(l - h, h)?, -1.0) };
     if dot(t_in, md) < prm[P_SKEW_BEND_COS] { return None; }     // (the deck turns between: not that crossing's end)
     let t = if end == 0 { t_in } else { mul(t_in, -1.0) };      // (the deck's own way)
     let left = [-t[1], t[0]];
     let mut d = if dot(cd, left) >= 0.0 { cd } else { mul(cd, -1.0) };
+    if let Some(n) = rec {
+        // the inventory's angle off square, to the crossed line's side (its cos n[2] and sin n[3], given)
+        let side = if dot(d, t) >= 0.0 { 1.0 } else { -1.0 };
+        d = add(mul(left, n[2]), mul(t, side * n[3]));
+    }
     let c = dot(d, left);
     if c < prm[P_SKEW_MAX_COS] {
         // clamped SKEW_MAX_DEG off square, to the crossed line's side
@@ -285,13 +394,23 @@ fn skew(deck: &Line, end: usize, others: &[Other], skip: &[usize], prm: &[f64]) 
     unit(d)
 }
 
-/// The shape of one deck (module doc). Returns (xy, z, ends (2 x 8: approach kind or -1, tangent x y, skew 0 / 1,
-/// skew dir x y, blended 0 / 1, approach line index or -1), overlap polylines of both ends (flat x y), their offsets).
 #[allow(clippy::type_complexity)]
+#[cfg(test)]
 fn shape_core(xy: &[P2], z: &[f64], others: &[Other], prm: &[f64])
-              -> (Vec<P2>, Vec<f64>, [[f64; 8]; 2], Vec<P2>, [usize; 3]) {
+              -> (Vec<P2>, Vec<f64>, [[f64; 14]; 2], Vec<P2>, [usize; 3]) {
+    shape_core_nbi(xy, z, others, prm, None, 0.0)
+}
+
+/// The shape of one deck (module doc). Returns (xy, z, ends (2 x 13: approach kind or -1, tangent x y, skew 0 / 1,
+/// skew dir x y, blended 0 / 1, approach line index or -1, (627) the skew's audit numbers: the nearest crossing's reach
+/// or -1, the end's distance from the crossed line, its half width, the structure's length, 1 where the inventory's
+/// record decided, the crossed line's kind or -1), overlap polylines of both ends (flat x y), their offsets). nbi: (627) the inventory's record of
+/// the deck's structure: (NBI item 34 skew deg, 99 varies; structure length m or 0; cos and sin of the skew).
+#[allow(clippy::type_complexity)]
+fn shape_core_nbi(xy: &[P2], z: &[f64], others: &[Other], prm: &[f64], nbi: Option<[f64; 4]>, deck_hw: f64)
+              -> (Vec<P2>, Vec<f64>, [[f64; 14]; 2], Vec<P2>, [usize; 3]) {
     let deck = Line::new(xy);
-    let mut ends = [[-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0]; 2];
+    let mut ends = [[-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0]; 2];
     let l = deck.len();
     // the input profile by arc (the input's own points: duplicates kept in z's order)
     let mut s_in = vec![0.0; xy.len()];
@@ -403,6 +522,7 @@ fn shape_core(xy: &[P2], z: &[f64], others: &[Other], prm: &[f64])
     }).collect();
     // skew and the overlaps on the new line
     let shaped = Line::new(&out);
+    let slen = if prm.len() >= NPARAMS { struct_len(&shaped, others, prm) } else { 0.0 };
     let mut ov: Vec<P2> = Vec::new();
     let mut ooff = [0usize; 3];
     for e in 0..2 {
@@ -412,11 +532,15 @@ fn shape_core(xy: &[P2], z: &[f64], others: &[Other], prm: &[f64])
         let joint = others.iter().any(|o| o.kind == KIND_DECK && o.line.p.len() >= 2
             && [o.line.p[0], o.line.p[o.line.p.len() - 1]].iter().any(|&q| norm(sub(q, p_end)) <= prm[P_JOIN]));
         if joint { ooff[e + 1] = ov.len(); }
-        if !joint { if let Some(d) = skew(&shaped, e, others, &skip, prm) {
-            ends[e][3] = 1.0;
-            ends[e][4] = d[0];
-            ends[e][5] = d[1];
-        } }
+        if !joint {
+            let (d, diag) = skew(&shaped, e, others, &skip, prm, slen, nbi, deck_hw);
+            ends[e][8..14].copy_from_slice(&diag);
+            if let Some(d) = d {
+                ends[e][3] = 1.0;
+                ends[e][4] = d[0];
+                ends[e][5] = d[1];
+            }
+        }
         if joint { continue; }
         if let Some((kind, _v, k, oe)) = appr[e] {
             if kind == KIND_ROAD {
@@ -449,20 +573,32 @@ fn interp1(t: f64, xs: &[f64], ys: &[f64]) -> f64 {
 
 /// roadshape.shape_chain: one deck's shape (module doc). xy (n, 2), z (n,); lines (m, 2) of the lines round it, line k
 /// rows loff[k]..loff[k + 1]; lkind (L,) 0 ground road / 1 ground railway / 2 another deck of the chain; lown (L,) 1
-/// for the deck's own feature; params (roadshape.PARAMS). Returns (xy flat (2 k), z (k,), ends flat (16: per end
-/// approach kind or -1, tangent x y, skew 0 / 1, skew dir x y, blended 0 / 1, approach line or -1), the overlap
-/// polylines flat (x y), their offsets (3,): end 0's points off[0]..off[1], end 1's off[1]..off[2]).
+/// for the deck's own feature; params (roadshape.PARAMS: 15, the 498 rule, or 18, 627's); lhw (L,) (627) each line's
+/// half width, m (0: its kind's default; None: all 0); kind 3 (627): a waterway, crossed only. Returns (xy flat (2 k),
+/// z (k,), ends flat (28: per end approach kind or -1, tangent x y, skew 0 / 1, skew dir x y, blended 0 / 1, approach
+/// line or -1, and the skew's audit numbers: the nearest crossing's reach or -1, the end's distance from the crossed
+/// line, its half width, the structure's length, 1 where the inventory's record decided, the crossed kind), the overlap polylines flat (x y), their offsets (3,): end 0's points
+/// off[0]..off[1], end 1's off[1]..off[2]).
 #[pyfunction]
+#[pyo3(signature = (xy, z, lines, loff, lkind, lown, params, lhw=None, nbi=None, deck_hw=0.0))]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn deck_shape<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyReadonlyArray1<'py, f64>,
                        lines: PyReadonlyArray2<'py, f64>, loff: PyReadonlyArray1<'py, i64>,
                        lkind: PyReadonlyArray1<'py, i64>, lown: PyReadonlyArray1<'py, i64>,
-                       params: PyReadonlyArray1<'py, f64>)
+                       params: PyReadonlyArray1<'py, f64>, lhw: Option<PyReadonlyArray1<'py, f64>>,
+                       nbi: Option<PyReadonlyArray1<'py, f64>>, deck_hw: f64)
                        -> PyResult<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<i64>)> {
     let (xy, z, lines, loff, lkind, lown, prm) = (xy.as_array(), z.as_array(), lines.as_array(),
         loff.as_array().to_vec(), lkind.as_array(), lown.as_array(), params.as_array().to_vec());
     let nl = loff.len().saturating_sub(1);
-    if xy.ncols() != 2 || z.len() != xy.nrows() || xy.nrows() == 0 || lines.ncols() != 2 || prm.len() != NPARAMS
+    let hw: Vec<f64> = match &lhw { Some(a) => a.as_array().to_vec(), None => vec![0.0; nl] };
+    let rec: Option<Vec<f64>> = nbi.as_ref().map(|a| a.as_array().to_vec());
+    if rec.as_ref().is_some_and(|r| r.len() != 4 || r.iter().any(|v| !v.is_finite())) {
+        return Err(PyValueError::new_err("deck_shape: nbi is (skew deg, length m, cos, sin)"));
+    }
+    let rec: Option<[f64; 4]> = rec.map(|r| [r[0], r[1], r[2], r[3]]);
+    if xy.ncols() != 2 || z.len() != xy.nrows() || xy.nrows() == 0 || lines.ncols() != 2
+        || (prm.len() != NPARAMS && prm.len() != NPARAMS_498) || hw.len() != nl || hw.iter().any(|v| !v.is_finite())
         || lkind.len() != nl || lown.len() != nl || loff.iter().any(|&v| v < 0 || v as usize > lines.nrows())
         || loff.windows(2).any(|w| w[1] < w[0]) || xy.iter().chain(z.iter()).any(|v| !v.is_finite()) {
         return Err(PyValueError::new_err("deck_shape: shapes, offsets or values do not agree"));
@@ -471,9 +607,9 @@ pub fn deck_shape<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyRea
     let zz: Vec<f64> = z.to_vec();
     let others: Vec<Other> = (0..nl).map(|k| {
         let rows: Vec<P2> = (loff[k] as usize..loff[k + 1] as usize).map(|r| [lines[[r, 0]], lines[[r, 1]]]).collect();
-        Other { line: Line::new(&rows), kind: lkind[k], own: lown[k] != 0 }
+        Other { line: Line::new(&rows), kind: lkind[k], own: lown[k] != 0, hw: hw[k] }
     }).collect();
-    let (out, zo, ends, ov, ooff) = py.detach(|| shape_core(&pts, &zz, &others, &prm));
+    let (out, zo, ends, ov, ooff) = py.detach(|| shape_core_nbi(&pts, &zz, &others, &prm, rec, if deck_hw.is_finite() { deck_hw } else { 0.0 }));
     Ok((out.iter().flat_map(|p| [p[0], p[1]]).collect(), zo, ends.iter().flat_map(|e| e.iter().copied()).collect(),
         ov.iter().flat_map(|p| [p[0], p[1]]).collect(), ooff.iter().map(|&v| v as i64).collect()))
 }
@@ -532,7 +668,7 @@ mod tests {
         let deck: Vec<P2> = vec![[0.0, 0.0], [30.0, 0.0]];
         let a = 10.0f64 / 180.0 * std::f64::consts::PI;
         let (ca, sa) = (1.0 - a * a / 2.0, a - a * a * a / 6.0);
-        let appr = Other { line: Line::new(&[[0.0, 0.0], [-20.0 * ca, 20.0 * sa]]), kind: KIND_ROAD, own: true };
+        let appr = Other { line: Line::new(&[[0.0, 0.0], [-20.0 * ca, 20.0 * sa]]), kind: KIND_ROAD, own: true, hw: 0.0 };
         let (out, z, ends, ov, ooff) = shape_core(&deck, &[1.0, 2.0], &[appr], &prm());
         assert_eq!(ends[0][6], 1.0);
         let d0 = unit(sub(out[1], out[0])).unwrap();
@@ -544,6 +680,101 @@ mod tests {
         assert!(out.windows(2).all(|w| norm(sub(w[1], w[0])) <= 4.0 + 1e-9));
         assert_eq!(ooff[1], ov.len());
         assert!(ooff[1] >= 2);
+    }
+
+    fn prm627() -> Vec<f64> {
+        let c = |d: f64| { let r = d / 180.0 * std::f64::consts::PI; 1.0 - r * r / 2.0 + r * r * r * r / 24.0 };
+        let mut p = prm();
+        p.extend([100.0, 30.0, c(5.0)]);
+        p
+    }
+
+    fn crossing(at: f64, deg: f64, hw: f64, kind: i64) -> Other {
+        // a straight line through (at, 0) at deg to the x axis, 100 m long
+        let r = deg / 180.0 * std::f64::consts::PI;
+        let (c, s) = (1.0 - r * r / 2.0 + r * r * r * r / 24.0, r - r * r * r / 6.0 + r * r * r * r * r / 120.0);
+        Other { line: Line::new(&[[at - 50.0 * c, -50.0 * s], [at + 50.0 * c, 50.0 * s]]), kind, own: false, hw }
+    }
+
+    #[test]
+    fn a_short_overpass_ends_along_the_road_it_crosses() {
+        // a 40 m deck over a road at 60 degrees in its middle: both ends skewed along the road (the 498 rule too)
+        let deck: Vec<P2> = vec![[0.0, 0.0], [40.0, 0.0]];
+        for p in [prm(), prm627()] {
+            let (_o, _z, ends, _ov, _of) = shape_core(&deck, &[1.0, 1.0], &[crossing(20.0, 60.0, 7.0, KIND_ROAD)], &p);
+            for e in 0..2 {
+                assert_eq!(ends[e][3], 1.0, "end {} {:?}", e, ends[e]);
+                assert!(cross([ends[e][4], ends[e][5]], [0.5, 0.8660254]).abs() < 1e-2, "end {} {:?}", e, ends[e]);
+            }
+        }
+        // a stream crossed the same way (627: waterways are crossed lines too)
+        let (_o, _z, ends, _ov, _of) = shape_core(&deck, &[1.0, 1.0], &[crossing(20.0, 60.0, 0.0, KIND_WATER)], &prm627());
+        assert_eq!((ends[0][3], ends[1][3]), (1.0, 1.0));
+    }
+
+    #[test]
+    fn a_viaducts_ends_are_square() {
+        // the same crossing 30 m from one end of a 180 m structure (a 40 m deck and two 70 m decks end to end):
+        // square under 627, skewed under 498
+        let deck: Vec<P2> = vec![[0.0, 0.0], [40.0, 0.0]];
+        let mut others = vec![crossing(30.0, 60.0, 7.0, KIND_ROAD)];
+        others.push(Other { line: Line::new(&[[40.0, 0.0], [110.0, 0.0]]), kind: KIND_DECK, own: false, hw: 0.0 });
+        others.push(Other { line: Line::new(&[[180.0, 0.0], [110.0, 0.0]]), kind: KIND_DECK, own: false, hw: 0.0 });
+        let (_o, _z, ends, _ov, _of) = shape_core(&deck, &[1.0, 1.0], &others, &prm627());
+        assert_eq!(ends[0][3], 0.0, "{:?}", ends[0]);
+        assert!((ends[0][11] - 180.0).abs() < 1e-6, "structure length {:?}", ends[0]);
+        let (_o, _z, ends, _ov, _of) = shape_core(&deck, &[1.0, 1.0], &others, &prm());
+        assert_eq!(ends[0][3], 1.0);
+    }
+
+    #[test]
+    fn an_end_far_off_the_crossed_road_or_near_square_is_square() {
+        // a 90 m deck crossing a 7 m road 38 m in from its start at 80 degrees: d - hw = 38 * sin 80 - 3.5 > 30
+        let deck: Vec<P2> = vec![[0.0, 0.0], [90.0, 0.0]];
+        let (_o, _z, ends, _ov, _of) = shape_core(&deck, &[1.0, 1.0], &[crossing(38.0, 80.0, 3.5, KIND_ROAD)], &prm627());
+        assert_eq!(ends[0][3], 0.0, "{:?}", ends[0]);
+        assert!((ends[0][8] - 38.0).abs() < 0.05, "{:?}", ends[0]);
+        // a crossing 3 degrees off square: square (627), skewed (498)
+        let deck: Vec<P2> = vec![[0.0, 0.0], [40.0, 0.0]];
+        let (_o, _z, ends, _ov, _of) = shape_core(&deck, &[1.0, 1.0], &[crossing(20.0, 87.0, 7.0, KIND_ROAD)], &prm627());
+        assert_eq!((ends[0][3], ends[1][3]), (0.0, 0.0));
+        let (_o, _z, ends, _ov, _of) = shape_core(&deck, &[1.0, 1.0], &[crossing(20.0, 87.0, 7.0, KIND_ROAD)], &prm());
+        assert_eq!((ends[0][3], ends[1][3]), (1.0, 1.0));
+    }
+
+    #[test]
+    fn a_deck_shorter_than_its_skewed_rows_stays_square() {
+        // a 5 m deck 8 m wide over a stream at 60 degrees: its end lines would reach 2.3 m each way: square
+        let deck: Vec<P2> = vec![[0.0, 0.0], [5.0, 0.0]];
+        let w = [crossing(2.5, 60.0, 1.5, KIND_WATER)];
+        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &w, &prm627(), None, 4.0);
+        assert_eq!((ends[0][3], ends[1][3]), (0.0, 0.0));
+        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &w, &prm627(), None, 0.0);
+        assert_eq!((ends[0][3], ends[1][3]), (1.0, 1.0));
+    }
+
+    #[test]
+    fn the_inventorys_skew_decides() {
+        // the viaduct's end of a_viaducts_ends_are_square with a matched record: 30 deg skew (its length agreeing):
+        // skewed 30 deg off square to the crossed road's side; a 0 deg record squares a short overpass; a record whose
+        // length disagrees (50 m against 180 m), or "varies" (99), leaves the rule
+        let r = 30.0f64 / 180.0 * std::f64::consts::PI;
+        let (c30, s30) = (1.0 - r * r / 2.0 + r * r * r * r / 24.0, r - r * r * r / 6.0 + r * r * r * r * r / 120.0);
+        let deck: Vec<P2> = vec![[0.0, 0.0], [40.0, 0.0]];
+        let mut others = vec![crossing(30.0, 60.0, 7.0, KIND_ROAD)];
+        others.push(Other { line: Line::new(&[[40.0, 0.0], [110.0, 0.0]]), kind: KIND_DECK, own: false, hw: 0.0 });
+        others.push(Other { line: Line::new(&[[180.0, 0.0], [110.0, 0.0]]), kind: KIND_DECK, own: false, hw: 0.0 });
+        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &others, &prm627(), Some([30.0, 175.0, c30, s30]), 0.0);
+        assert_eq!((ends[0][3], ends[0][12]), (1.0, 1.0), "{:?}", ends[0]);
+        // the end line 30 deg off the deck's normal (0, 1), leaning toward the crossed road's direction (+x)
+        assert!((ends[0][4] - s30).abs() < 1e-3 && (ends[0][5] - c30).abs() < 1e-3, "{:?}", ends[0]);
+        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &others, &prm627(), Some([30.0, 50.0, c30, s30]), 0.0);
+        assert_eq!((ends[0][3], ends[0][12]), (0.0, 0.0));
+        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &others, &prm627(), Some([99.0, 175.0, 1.0, 0.0]), 0.0);
+        assert_eq!((ends[0][3], ends[0][12]), (0.0, 0.0));
+        let short = [crossing(20.0, 60.0, 7.0, KIND_ROAD)];
+        let (_o, _z, ends, _ov, _of) = shape_core_nbi(&deck, &[1.0, 1.0], &short, &prm627(), Some([0.0, 40.0, 1.0, 0.0]), 0.0);
+        assert_eq!((ends[0][3], ends[1][3], ends[0][12]), (0.0, 0.0, 1.0));
     }
 
     #[test]

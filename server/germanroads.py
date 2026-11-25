@@ -151,6 +151,7 @@ def _fetched(x, y):
     import railtags
     cache, fetcher = _state["cache"], _state["fetcher"]
     path = os.path.join(cache, "pagesdata", "deroads", f"{x}_{y}.npz") if cache else None
+    stale_miss = False
     if path and os.path.exists(path):
         try:
             stale_miss = os.path.getsize(path) == 0 and time.time() - os.path.getmtime(path) > MISS_TTL_S
@@ -161,21 +162,23 @@ def _fetched(x, y):
             pass
     if fetcher is None:
         return b""
+    # (a "none there" answer past MISS_TTL_S stays the answer while the site cannot be asked: stale-if-error, its failure
+    # faults no build, netfetch.stale_ok; without one, offline is today's estimates and the build is not kept)
     if time.time() - _state["down_at"] < RETRY_S:
-        return None
+        return b"" if stale_miss else None
     try:
-        body = fetcher.get(f"{railtags.PAGES}/deroads/{x}/{y}.npz", kind="demand").body
+        with netfetch.stale_ok(stale_miss):
+            body = fetcher.get(f"{railtags.PAGES}/deroads/{x}/{y}.npz", kind="demand").body
     except netfetch.NotFound:
         body = b""
-    except Exception as e:      # (offline: today's estimates, and the build is not kept)
+    except Exception as e:
         log.debug("de roads shard %s %s: %s: %s", x, y, type(e).__name__, e)
         _state["down_at"] = time.time()
-        return None
+        return b"" if stale_miss else None
     if path:
+        import pagesdata
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path + ".part", "wb") as fh:
-            fh.write(body)
-        os.replace(path + ".part", path)
+        pagesdata.write_atomic(path, body)      # (a name of this process and thread's own)
     return body
 
 

@@ -118,7 +118,7 @@ class FastTest(unittest.TestCase):
         self.assertEqual({k: v for k, v in json.loads(flat_got).items() if k not in ("audio", "biome")},
                          json.loads(flat_want))
         doc = json.loads(flat_got)
-        self.assertEqual((doc["groups"], doc["stride"]), (list(veg.GROUPS), veg.FLAT_STRIDE))
+        self.assertEqual((doc["groups"], doc["stride"]), (veg.groups_list(), veg.FLAT_STRIDE))
         self.assertEqual(doc["flat"], [v for r in json.loads(got)["items"] for v in r])
 
 

@@ -20,6 +20,13 @@ docs/research/*.jsonl
 
 # agent worktrees
 .claude/
+!/.claude/
+/.claude/*
+!/.claude/skills/
+/.claude/skills/*
+!/.claude/skills/port-review/
+/.claude/skills/port-review/*
+!/.claude/skills/port-review/SKILL.md
 tools/gcpatch/build/
 docs/research/streetview/
 docs/research/ortho/
@@ -31,5 +38,6 @@ dist/
 native/earthfast/target/
 build/
 native/serverlist/target/
+native/roadsys/target/
 server/earthfast.FAST-BUILD-do-not-commit
 *.prof

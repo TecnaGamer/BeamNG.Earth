@@ -343,15 +343,31 @@ def set_cancel(check):
 
 
 def set_thread_cancel(check):
-    """This thread's own cancel check, never the worker process's job-wide one (set_cancel): a thread beside the
-    process's jobs (blockworker._warm_loop, the road plans ahead of the anchor its list is for) neither takes the
-    abandonment of another anchor's job nor goes on for an anchor a teleport left when the process has no job."""
+    """This thread's own cancel check only, never the process's: a thread that serves no job (blockworker's road plans
+    ahead) must not see the running job's "a teleport left its place" check, or it gives up the new place's cells
+    (2026-11-22 Fells Point: every plan ahead raised Abandoned while a Bonneville job ran in the process, and no road
+    tile came for 4 minutes). check() true raises pools.Abandoned; a check returning False shields the thread."""
     _cancel.check = check
 
 
+_extra = [None]                 # BNE_V2_HOST (v2host.py): the scheduler's job flag (a place left), or None
+
+
+def extra_cancel(check):
+    """A check every thread's _cancelled also asks (v2host: earthfast.sched_cancelled, the flag of the scheduler job
+    the thread runs, raised when a teleport leaves its place); None: none (the default)."""
+    _extra[0] = check
+
+
 def _cancelled():
-    check = getattr(_cancel, "check", None) or _cancel_proc[0]
-    return check is not None and check()
+    local = getattr(_cancel, "check", None)
+    if local:                   # (this thread's own check decides: one returning False shields it, set_thread_cancel)
+        return bool(local())
+    check = _cancel_proc[0]
+    if check is not None and check():
+        return True
+    extra = _extra[0]
+    return extra is not None and extra()
 
 
 class TimeLimit(Exception):
@@ -415,6 +431,13 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_not
     got = ready()
     if got is not None:
         return got, False
+    import v2host
+    with v2host.blocked():          # (BNE_V2_HOST: a scheduler job waiting here gives its slot back)
+        return _once_wait(lock, ready, wait_s, kind, on_wait, live_s, live_note, patient)
+
+
+def _once_wait(lock, ready, wait_s, kind, on_wait, live_s, live_note, patient):
+    """once() past its first look."""
     t0 = time.monotonic()
     waited = False
     holder = seen = None

@@ -138,6 +138,33 @@ class TerrainFilesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(Path(s.out_dir).iterdir()), set(current))
         self.assertTrue(all(p.read_bytes() == p.name.encode() for p in current))
 
+    def test_first_block_finalization_failure_retires_only_its_revision(self):
+        s = self.s
+        old, installed = self.revision(1)
+        self.game().terrain_msg((1, 0, 0), old)
+        s.ter_serial = itertools.count(2)
+        s.near_visual, s.dem = "mesh", SimpleNamespace()
+        s.anchor_q = lambda a: 1 / 512
+
+        def built(_job, *args, **kw):
+            self.assertEqual(kw["ground_at"], (5.0, -7.0))
+            height, terrain = args[-2:]
+            for name in (height, terrain):
+                Path(s.out_dir, name).write_bytes(b"private revision")
+            future = Future()
+            future.set_result(dict(heightmap=height, ter=terrain))
+            return future
+
+        s.photo_pool = SimpleNamespace(submit=built)
+        s._finish_heightmap = mock.Mock(side_effect=OSError("finalization failed"))
+        anchor = SimpleNamespace(id=1, lat=0, lon=0, hm_zoom=14)
+        with mock.patch.object(earthd, "PROVISIONAL_ELSEWHERE", True):
+            with self.assertRaisesRegex(OSError, "finalization failed"):
+                s.make_provisional(anchor, 0, 0, None, ground_at=(5.0, -7.0))
+        s.removes_flush()
+        self.assertEqual(set(Path(s.out_dir).iterdir()), set(installed))
+        self.assertTrue(all(p.read_bytes() == p.name.encode() for p in installed))
+
     def test_failed_png_removes_its_own_staging_file(self):
         import numpy as np
         import heightmap

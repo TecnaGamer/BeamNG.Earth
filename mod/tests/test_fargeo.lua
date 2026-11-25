@@ -87,7 +87,7 @@ local bdata = { v = 1, key = SK, frame = { slat, slon }, h = 'b1',
 T.check(roads.onFarTile(farMsg(SK, { slat, slon }, bdata), 1, 'B'), 'far bridge geotile accepted')
 run(1, A)
 local f1 = objsWith('bf_' .. K)
-T.check(#f1 == 1 and f1[1].hidden == false, 'far buildings made and shown (no road geotile here)')
+T.check(#f1 == 1 and f1[1].hidden == true, 'far buildings made, hidden under their square\'s shown skyline (never both drawn)')
 T.check(#objsWith('bs_' .. SK) == 1 and objsWith('bs_' .. SK)[1].hidden == false, 'skyline shown: its square incomplete')
 T.check(#objsWith('bb_' .. SK) == 2, 'a far bridge piece per road geotile')
 local frame = geotile.frameOf({ frame = { clat, clon } })
@@ -99,16 +99,8 @@ do
   T.near(f1[1].pos.y, y, 1e-9, 'far buildings placed at their pivot: y')
   T.near(f1[1].pos.z, z, 1e-9, 'far buildings placed at their pivot: z')
 end
-T.check(#called('trees', 'onGeoRows', 'FLF' .. K) == 1, 'its lamps a trees geotile of its key')
+T.check(#called('trees', 'onGeoRows', 'FLF' .. K) == 0, 'its lamps off while it waits hidden')
 T.check(#called('trees', 'onGeoRows', 'FLS' .. K2) == 1, 'the skyline lamps per road geotile key')
-do      -- the lamps' rows as the trees get them: kept as flat arrays, the same rows (glow phase by the lamp's index)
-  local c = called('trees', 'onGeoRows', 'FLF' .. K)[1]
-  local rows = c and c[5]
-  local function ph(i) return ((i * 7919) % 997) / 997 * 0.19 end
-  T.check(type(rows) == 'table' and #rows == 2 and rows[1][2] == 1 and rows[1][3] == 2 and rows[1][4] == 30
-    and rows[2][2] == 5 and rows[2][4] == 31 and math.abs(rows[1][8] - ph(1)) < 1e-12 and math.abs(rows[2][8] - ph(2)) < 1e-12,
-    'lamp rows: positions and phases')
-end
 local fl = require('beamngEarth/roads').flatLamps({ a = { pivot = 3, rows = { { 1, 2, 3 }, 'x', { 4, 5, 6 } } }, b = { rows = {} } })
 T.check(fl.a.pivot == 3 and table.concat(fl.a.flat, ',') == '1,2,3,1,4,5,6,3' and fl.b == nil,
   'flatLamps: a bad lamp left out, its index kept; a key without lamps none')
@@ -125,6 +117,16 @@ for j = 0, 3 do
 end
 run(1, A)
 T.check(objsWith('bs_' .. SK)[1].hidden == true, 'skyline hidden: its square\'s far tiles all here')
+T.check(objsWith('bf_' .. K)[1].hidden == false, 'the far buildings shown in that same frame (no hole, no overlap)')
+T.check(#called('trees', 'onGeoRows', 'FLF' .. K) == 1, 'its lamps a trees geotile of its key')
+do      -- the lamps' rows as the trees get them: kept as flat arrays, the same rows (glow phase by the lamp's index)
+  local c = called('trees', 'onGeoRows', 'FLF' .. K)[1]
+  local rows = c and c[5]
+  local function ph(i) return ((i * 7919) % 997) / 997 * 0.19 end
+  T.check(type(rows) == 'table' and #rows == 2 and rows[1][2] == 1 and rows[1][3] == 2 and rows[1][4] == 30
+    and rows[2][2] == 5 and rows[2][4] == 31 and math.abs(rows[1][8] - ph(1)) < 1e-12 and math.abs(rows[2][8] - ph(2)) < 1e-12,
+    'lamp rows: positions and phases')
+end
 T.check(#called('trees', 'dropKey', 'g:FLS' .. K2) == 1, 'its lamps dropped')
 
 -- the road geotile K arrives (buildings and a deck): the far buildings of K hide once its buildings are made; the
@@ -226,7 +228,13 @@ roads.onFarDrop({ anchorId = 1, key = SK }, 'B')
 roads.onFarDrop({ anchorId = 1, key = SK }, true)
 roads.onFarDrop({ anchorId = 1, key = K })
 run(1, B)
-T.check(#objsWith('bb_') == 0 and #objsWith('bs_') == 0 and #objsWith('bf2_') == 0 and #objsWith('bf3_') == 0,
-  'dropped: their objects gone')
+T.check(#objsWith('bb_') == 0 and #objsWith('bs_') == 0 and #objsWith('bf2_') == 0, 'dropped: their objects gone')
+T.check(#objsWith('bf3_') == 1 and roads.debugFar()[roads.farGeoKey('F', K)].dropWait ~= nil,
+  'a drawn far tile near the car waits for a pack or skyline to take over')
+local hold = roads.PACK_HANDOVER_S
+roads.PACK_HANDOVER_S = 0
+run(1, B)
+roads.PACK_HANDOVER_S = hold
+T.check(#objsWith('bf3_') == 0, '... at most PACK_HANDOVER_S')
 
 T.done('test_fargeo')

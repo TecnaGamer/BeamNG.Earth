@@ -38,6 +38,33 @@ class MeshChecks(unittest.TestCase):
                 area=sum(float(x.split()[4]) for x in text.splitlines() if x.startswith("overlap "))
                 self.assertAlmostEqual(area,expected)
 
+    def test_m0_audit_reads_the_scene(self):
+        """The M0 audit (native/roadsys audit.rs) through checks.audit_input: a pad 3 cm under the ground road is a
+        double owner with the terrain, a barrier across the lane a parapet in the carriageway."""
+        import os
+        import shutil
+        from checks import audit
+        from common import ROOT, TREE
+        if not shutil.which("cargo"):
+            self.skipTest("cargo needed for the audit binary")
+        target = ROOT / "bin/roadsys-target"
+        subprocess.run(["cargo", "build", "--release", "--quiet", "-j", "2", "--bin", "roadsys"],
+                       cwd=TREE / "native/roadsys", check=True, env={**os.environ, "CARGO_TARGET_DIR": str(target)})
+        terrain = Terrain.__new__(Terrain)
+        terrain.origin = np.array([-40, -40])
+        terrain.z = np.full((81, 81), 10.)
+        terrain.mat = np.zeros((81, 81), int)
+        quad = [[-30, -30], [30, -30], [30, 30], [-30, 30]]
+        pad = [[[-10, -4, 9.97], [10, -4, 9.97], [10, 4, 9.97]], [[-10, -4, 9.97], [10, 4, 9.97], [-10, 4, 9.97]]]
+        wall = [[[20.1, -5, 9.9], [20.1, 5, 9.9], [20.1, 5, 11.]], [[20.1, -5, 9.9], [20.1, 5, 11.], [20.1, -5, 11.]]]
+        entries = [(3, True, [(0, np.array(pad))]), (5, True, [(0, np.array(wall))])]
+        lines = [dict(level="ground", width=8., xy=[[-40., 0.], [40., 0.]])]
+        with tempfile.TemporaryDirectory() as temp:
+            got = audit(Path(temp), quad, terrain, entries, lines, target / "release/roadsys")
+        self.assertTrue(100 < got["double_owner_terrain_m2"] < 200, got)
+        self.assertTrue(3 <= got["parapet_in_cw_m"] <= 8, got)
+        self.assertNotIn("handover_lip_over_5mm", {k for k, v in got.items() if v})
+
     def test_terrain_parity_and_holes(self):
         terrain = Terrain.__new__(Terrain)
         terrain.origin = np.zeros(2)
@@ -82,8 +109,13 @@ class MeshChecks(unittest.TestCase):
 class CorpusChecks(unittest.TestCase):
     def test_public_ids_and_strata(self):
         public = places(public_only=True)
-        self.assertTrue(150 <= len(public) <= 200)
+        self.assertTrue(150 <= len(public) <= 250)
         self.assertTrue(all(p["region"] and p["why"] and p["tags"] and p["name"] for p in public))
+        # (the sparse and extreme stratum, adaptive plan decision 2: ~40 places in many regions, each with its data note)
+        sparse = [p for p in public if "sparse" in p["tags"]]
+        self.assertGreaterEqual(len(sparse), 35)
+        self.assertGreaterEqual(len({p["region"] for p in sparse}), 12)
+        self.assertTrue(all(p.get("data") for p in sparse))
         tags = {tag for p in public for tag in p["tags"]}
         self.assertFalse({"stack","cloverleaf","diamond","slip","gravel","tram","rail-over-road",
                           "road-over-rail","racetrack","switchback","tunnel-portal","bridge-exit"}-tags)
@@ -106,6 +138,17 @@ class CorpusChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             pair(p,scene(10,0),{**bad,"snapshot":"same"})
 
+    def test_two_audit_versions_are_not_paired(self):
+        def scene(version):
+            m = {"step4": 1, "lane_samples": 1, **({} if version is None else {"audit_version": version})}
+            return dict(snapshot="same", code="same", tiles={"A": dict(metrics=m, seconds=1)})
+        p = {"id": "one"}
+        self.assertNotIn("audit_version", pair(p, scene(2.0), scene(2.0))["delta"])
+        with self.assertRaises(ValueError):
+            pair(p, scene(None), scene(2.0))   # (results from before the version: 1)
+        with self.assertRaises(ValueError):
+            pair(p, scene(2.0), scene(3.0))
+
     def test_missing_pair_is_reported(self):
         with tempfile.TemporaryDirectory() as d:
             result=ranking(Path(d),[{"id":"example"}],{"default":{},"revamped":{}},"code",30)
@@ -123,7 +166,7 @@ class CorpusChecks(unittest.TestCase):
     def test_confirmed_production_failure_requires_frozen_replays(self):
         p={"id":"failed"}
         configs={"default":{}, "revamped":REVAMPED}
-        key="BNE_SIDEWALK_V2"
+        key=sorted(REVAMPED)[-1]   # (any of the set: read from server/experimental.py, which changes)
         error=dict(type="IndexError",file="server/roadmesh.py",function="example",message="out of range")
         identity=digest([p,30,"code"])
         with tempfile.TemporaryDirectory() as d:
@@ -174,7 +217,7 @@ class CorpusChecks(unittest.TestCase):
                 historical(new,old,manifest)
 
     def test_bisect_requires_the_interacting_switches(self):
-        needed={"BNE_DECK_K_SPEED","BNE_SIDEWALK_V2"}
+        needed=set(sorted(REVAMPED)[1:3])   # (two of the set that only matter together)
         p={"id":"fixture"}
         configs={"default":{}, "revamped":REVAMPED}
         def build(place,radius,configs,run,code):

@@ -3,9 +3,15 @@
 Sources (all Web-Mercator XYZ, 256 px tiles, no key; verified 2026-10-10):
   usgs     USGS The National Map ImageryOnly. Public domain. US only, z <= 16 (~1.9 m/px at 36 N).
            Outside its coverage it answers 404, or (at low zooms) a uniform white tile.
-  eox2023  Sentinel-2 cloudless 2023 by EOX. Global, ~10 m (native around z14). CC BY-NC-SA 4.0.
-           Open ocean is a uniform deep blue tile (a real colour, not "no data").
-  eox2016  Sentinel-2 cloudless 2016 by EOX. Global, ~10 m. CC BY 4.0. Last fallback.
+  bngs2    the project's own Sentinel-2 packs (ESA WorldCover's 2021 composite, CC BY 4.0; cdn.py puts it in the chain):
+           the land to z13 (z12 JPEG / z13 WebP packs); open sea is black ("no data": the next source).
+  bngs2fine  the same packs enlarged for the views finer than their zoom, after USGS (whose sharper tiles keep those
+           views in the US): never asked for a view its own zoom draws (enlarge_only).
+  eox2016  Sentinel-2 cloudless 2016 by EOX. Global, ~10 m (native around z14). CC BY 4.0. Last fallback: the sea, the
+           ice past the packs, and everything when the CDN switch has the packs off. Open ocean is a uniform deep blue
+           tile (a real colour, not "no data").
+  (eox2023, EOX's 2023 mosaic, was the global layer until 2026-11-23: CC BY-NC-SA 4.0, like every EOX year after 2017,
+  so it is never fetched; --imagery still accepts the name and leaves it out, RETIRED.)
 
 A texture is rendered for a tile's ENU footprint by sampling the imagery at every texel centre:
 ENU plane point (anchor frame) -> lat/lon (the same mapping the tile geometry uses, so the
@@ -19,7 +25,7 @@ Caching: raw tiles on disk under <cache>/<source>/<z>/<x>/<y>.jpg (whatever form
 sent), 404s remembered in a column's miss index (missindex.py, as dem.py does; they expire after the host's miss_ttl,
 90 days), decoded tiles in an in-memory LRU. Downloads run on a small pool (FETCH_WORKERS <= 6)
 through a netfetch.Fetcher: the host's rate limit, concurrency cap, retries and circuit breaker
-(keyed by host, so eox2023 and eox2016 share one), one persistent HTTPS connection per thread and
+(keyed by host), one persistent HTTPS connection per thread and
 host. A source whose host cannot be asked fails at once (ImageryError), and render() takes the
 next source. prefetch() asks with kind="prefetch" (dropped when the host's bucket is low; render
 then fetches the tile on demand).
@@ -93,7 +99,7 @@ MESH_CELLS = 8                     # render(): exact reprojection on an 8 x 8 gr
 FALLBACK_RGB = (100, 89, 69)       # no imagery anywhere: the terrain material's dirt colour
 POLAR_RGB = (226, 232, 240)        # ... past Web Mercator's limit, where it is all ice (polar ice sheet, sea ice): snow
 BLANK_RANGE = 2                    # a tile whose pixels all lie within this many levels is uniform
-SEA_RGB, SEA_TOL = (24, 44, 78), 3  # ... unless it is this colour: EOX cloudless' open sea (2023 and 2016 alike), data
+SEA_RGB, SEA_TOL = (24, 44, 78), 3  # ... unless it is this colour: EOX cloudless' open sea (every year alike), data
 NODATA_MAX, NODATA_SHARE = 6, 0.02   # an export tile with > 2 % texels this black is outside the data
 NODATA_BLOCK = 8                   # px: inside a tile, a square this size all this black is outside the data
 NODATA_EDGE = 2                    # ... and this much round it (the JPEG's grey fringe on the black)
@@ -145,15 +151,23 @@ class Source:
     # ((zoom, |latitude| limit), ...): that zoom's tiles exist only within the limit (the Sentinel-2 z14 packs to 50
     # degrees: cdn.json "max_lat"); farther out the source's finest zoom is the next coarser one (zoom_caps)
     zoom_max_lat: tuple = ()
+    # The folder (and pack fetches) of another source's tiles this one shares: the same tiles under a second place in
+    # the chain (bngs2fine: bngs2's); "": its own name
+    store: str = ""
+    # Used only for views finer than its own finest zoom at that latitude (its tiles enlarged): the same source's earlier
+    # place in the chain draws the views of its own zooms
+    enlarge_only: bool = False
+
+
+def store_of(src):
+    """The name of the folder a source's tiles are kept under (Source.store)."""
+    return src.store or src.name
 
 
 SOURCES = {
     "usgs": Source("usgs", "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
                    16, "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain)", probe_zooms=(10, 12),
                    min_zoom=10),
-    "eox2023": Source("eox2023", "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg",
-                      14, "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified "
-                          "Copernicus Sentinel data 2023), CC BY-NC-SA 4.0"),
     "eox2016": Source("eox2016", "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg",
                       14, "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified "
                           "Copernicus Sentinel data 2016 & 2017), CC BY 4.0"),
@@ -186,7 +200,7 @@ SOURCES["md6in"] = Source(
              "?bbox={bbox}&bboxSR=3857&imageSR=3857&size={size},{size}&format=jpg&f=image",
     17, "State of Maryland, MD iMAP / DoIT six-inch imagery", min_zoom=17, export=2, lazy=True,
     bounds=(37.88, -79.49, 39.73, -75.04), nodata="white", leaf_off=True)
-BASE_CHAIN = ("md6in", "naipusda", "naip", "usgs", "eox2023", "eox2016")     # the chain before the regional sources
+BASE_CHAIN = ("md6in", "naipusda", "naip", "usgs", "eox2016")     # the chain before the regional sources
 # Regional aerial imagery (imagery_regional.py: state and national orthophoto services, each within its box)
 import bcortho as bcorthomod  # noqa: E402
 import imagery_regional
@@ -194,7 +208,9 @@ import tilepack as tilepackmod  # noqa: E402
 import aerialpacks as aerialpacksmod  # noqa: E402
 # The project's own tile host (cdn.py: its switch puts this in the chain): Sentinel-2 photos of the whole land, ESA
 # WorldCover's 2021 Sentinel-2 RGBNIR composite (CC BY 4.0), tone-mapped Web-Mercator JPEG tiles to z12 in packs of 8 x 8
-# (tools/build_s2_packs.py); the far rings everywhere, ahead of USGS / EOX, whose sharper tiles keep the nearer zooms
+# (tools/build_s2_packs.py); the far rings everywhere, ahead of USGS / EOX, whose sharper tiles keep the nearer zooms in
+# the US; elsewhere (bngs2fine, after USGS) its tiles enlarged keep them too: sharper than EOX's 2016 mosaic in the
+# comparison of 2026-11-23 (~/bnge-tests/eoxswap/sheets), and EOX's later years are CC BY-NC-SA
 CDN_BASE = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").rstrip("/")
 # Its finest zoom: 12 (JPEG packs) until the switch file raises it (cdn.chain: "max_zoom" 13, the WebP packs of 2026-11-11,
 # once the whole land is built); kept in the environment so the block workers (spawned) read the same
@@ -226,6 +242,7 @@ SOURCES["bngs2"] = Source(
     "bngs2", CDN_BASE + "/s2wc/v1/{z}/{px}/{py}.bngp", _s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)),
     "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)",
     pack=3, max_view_zoom=_s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)), zoom_max_lat=_s2_max_lat(os.environ.get(S2_MAX_LAT_ENV)))
+SOURCES["bngs2fine"] = dc_replace(SOURCES["bngs2"], name="bngs2fine", store="bngs2", max_view_zoom=99, enlarge_only=True)
 
 
 def set_s2_max_zoom(z, max_lat=None):
@@ -240,6 +257,7 @@ def set_s2_max_zoom(z, max_lat=None):
         os.environ[S2_MAX_LAT_ENV] = ",".join(f"{k}:{v}" for k, v in lim)
     if SOURCES["bngs2"].max_zoom != z or SOURCES["bngs2"].zoom_max_lat != lim:
         SOURCES["bngs2"] = dc_replace(SOURCES["bngs2"], max_zoom=z, max_view_zoom=z, zoom_max_lat=lim)
+        SOURCES["bngs2fine"] = dc_replace(SOURCES["bngs2fine"], max_zoom=z, zoom_max_lat=lim)
     return SOURCES["bngs2"]
 # The 1 m aerial packs (aerialpacks.py, tools/build_aerial_packs.py; the user, 2026-11-13: prebaked for metro areas and
 # main road corridors, built on demand elsewhere): AVIF 4:4:4 tiles of zooms 14-17 from openly licensed photos (NAIP,
@@ -273,11 +291,22 @@ for _n, (_url, _attr, _bounds, _kind, _leaf) in imagery_regional.REGIONAL.items(
 SOURCES["bcortho"] = Source("bcortho", bcorthomod.URL, 17, bcorthomod.ATTRIBUTION, min_zoom=17, export=2, lazy=True,
                             bounds=(47.9, -130.1, 51.1, -121.9), nodata="black")
 DEFAULT_CHAIN = ("md6in", *imagery_regional.REGIONAL, *(("bcortho",) if os.environ.get("BNE_BCORTHO", "1") != "0" else ()),
-                 "naipusda", "naip", "usgs", "eox2023", "eox2016")
+                 "naipusda", "naip", "usgs", "eox2016")
+# Names --imagery still accepts and leaves out: EOX's 2023 mosaic (CC BY-NC-SA 4.0, dropped 2026-11-23)
+RETIRED = ("eox2023",)
 # The line the mod shows (V1_3_SPEC §C), for the default chain: every source's own credit, EOX's in
 # its June 2026 wording (docs/research/2026-10-10-rate-limits.md: "EOxCloudless https://cloudless.eox.at
-# by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2023)", 2016: "... 2016 & 2017").
-ATTRIBUTION = "Imagery: " + "; ".join(SOURCES[n].attribution for n in DEFAULT_CHAIN)
+# by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016 & 2017)").
+def _attribution(srcs):
+    seen, out = set(), []
+    for s_ in srcs:
+        if s_.attribution not in seen:          # (bngs2 and bngs2fine: one credit)
+            seen.add(s_.attribution)
+            out.append(s_.attribution)
+    return "Imagery: " + "; ".join(out)
+
+
+ATTRIBUTION = _attribution(SOURCES[n] for n in DEFAULT_CHAIN)
 
 
 class ImageryError(IOError):
@@ -298,7 +327,7 @@ def parse_chain(text):
     """--imagery value -> tuple of source names, or None for 'off'."""
     if text.strip().lower() == "off":
         return None
-    chain = tuple(s.strip().lower() for s in text.split(",") if s.strip())
+    chain = tuple(s.strip().lower() for s in text.split(",") if s.strip() and s.strip().lower() not in RETIRED)
     bad = [s for s in chain if s not in SOURCES]
     if bad or not chain:
         raise ValueError(f"unknown imagery source(s) {bad or text!r}; choose from {', '.join(SOURCES)} or off")
@@ -325,7 +354,7 @@ def tone_lut(strength=1.0, lift=1.0):
 FAR_LAZY = os.environ.get("BNGE_FAR_LAZY", "1") != "0"
 FAR_WARM_MAX = 400                  # far tiles queued at most (the farthest dropped)
 FAR_BUDGET_SHARE = 0.5              # ... fetched only while the host's daily budget is less used than this
-SHARP_FALLBACK_ZOOM = 14            # Imagery.sharp_zoom while unknown (EOX's Sentinel-2, everywhere)
+SHARP_FALLBACK_ZOOM = 14            # Imagery.sharp_zoom while unknown (Sentinel-2's native zoom, everywhere)
 SHARP_PROBE_ALL = os.environ.get("BNGE_SHARP_PROBE_ALL") == "1"
 # (Imagery._needed; BNGE_PREFETCH_PAST_REGIONAL=1: on. Off by default: measured 2026-11-11 it made a cold French
 # teleport's IGN requests 2,600-3,100 (from ~2,000-2,400: tiles prefetched at a queued size the build then did not use)
@@ -357,7 +386,8 @@ def is_uniform(a):
     range is at most the tile's, so a photo is told apart without reducing every pixel (~9 s of a teleport's
     fetch threads in Fells Point, 2026-10-16); only a sample that looks blank checks them all. One colour that is
     EOX's open sea (SEA_RGB) is data, not a blank: taken for missing, the next layer was fetched for the same water
-    (Bergen: 374 of EOX 2023's tiles were its sea, and EOX 2016 drew them in the same blue)."""
+    (Bergen: 374 of EOX 2023's tiles were its sea, and EOX 2016 drew them in the same blue; EOX 2023 left the chain
+    2026-11-23)."""
     if a.ndim == 3 and a.shape[0] >= 32 and a.shape[1] >= 32:
         sm = a[::16, ::16]
         if int((sm.max(axis=(0, 1)).astype(int) - sm.min(axis=(0, 1))).max()) > BLANK_RANGE:
@@ -395,19 +425,31 @@ def match_colours(rgb, ref, sigma_px):
 
 def zoom_caps(src, lat):
     """(max_zoom, max_view_zoom) of src at latitude lat: each zoom whose zoom_max_lat limit lat is beyond is dropped
-    (a coarser one stands in, as at a source's own max_zoom)."""
+    (a coarser one stands in, as at a source's own max_zoom). An enlarge_only source keeps its max_view_zoom (it is
+    the one that draws the finer views; view_ok)."""
     mz, mv = src.max_zoom, src.max_view_zoom
     if src.zoom_max_lat:
         a = abs(float(lat))
         lim = dict(src.zoom_max_lat)
         while mz in lim and a > lim[mz]:
             mz -= 1
-        if mz != src.max_zoom and mv >= src.max_zoom:
+        if mz != src.max_zoom and mv >= src.max_zoom and not src.enlarge_only:
             mv = mz             # (its finest view zoom follows its finest zoom down, as bngs2's max_view_zoom = max_zoom)
     # (no limit hit: both as the source says; a finer view than max_zoom still takes its tiles enlarged when its
     # max_view_zoom allows: capping mv at max_zoom for every source made finer views skip them, 2026-11-13: the far
     # rings' imagery and terrain came late, the drive test's commit margin fell from +12 m to -44 m)
     return mz, mv
+
+
+def view_ok(src, zw, mz, mv):
+    """Does src draw a view of zoom zw, given its zoom_caps (mz, mv) there? Not finer than mv, and an enlarge_only
+    source only finer than mz (its own zooms are drawn by its first place in the chain)."""
+    return zw <= mv and not (src.enlarge_only and zw <= mz)
+
+
+def tile_lat(z, y):
+    """The latitude (deg) of Web-Mercator row y (tiles, fractional) at zoom z."""
+    return math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * y / 2 ** z))))
 
 
 def in_bounds(src, z, x, y):
@@ -589,15 +631,20 @@ class FarPhoto:
     pixels: object
     grade: object
 
-    def shade(self, rock):
-        fast.require(559, "finish_far_photo")
-        return fast._ef.finish_far_photo(self.pixels, self.grade, rock, None)
+    def shade(self, rock, snow=None):
+        """snow: the texture's earthfast.SnowLook (snowcover.look_from_rock; winter on), applied last."""
+        if snow is None:
+            fast.require(559, "finish_far_photo")
+            return fast._ef.finish_far_photo(self.pixels, self.grade, rock, None)
+        fast.require(625, "finish_far_photo snow")
+        return fast._ef.finish_far_photo(self.pixels, self.grade, rock, None, snow=snow)
 
-    def write(self, path, rock, srgb, paint=None):
-        fast.require(563, "finish_far_photo")
+    def write(self, path, rock, srgb, paint=None, snow=None):
+        fast.require(563 if snow is None else 625, "finish_far_photo")
         tmp = staging.tmp_for(path)
+        kw = {} if snow is None else {"snow": snow}
         size = fast._ef.finish_far_photo(self.pixels, self.grade, rock, (_TO_LIN, MIP_SHARPEN, srgb), path=tmp,
-                                         paint=paint)
+                                         paint=paint, **kw)
         staging.replace(tmp, path)
         return size
 
@@ -659,13 +706,14 @@ class Imagery:
         self._warm_want = []                # warm(): lazy tiles ahead of the player, nearest first
         self._warm_cv = threading.Condition()
         self._warm_thread = None
+        self._closed = False                # close(wait=True): the warm thread returns
         self._far_warm = {}                 # far_warm(): tag -> (priority, frame, x0, y0, size, px, done callback)
         self._far_keys = {}                 # ... tag -> (its item, its lazy keys, [any fetched]) (the warm thread's)
         self._inflight = {}
         self._lock = threading.RLock()     # RLock: a done future's callback runs at once
         self._sharp = {}                    # sharp_zoom: (lat, lon) ~5 km square -> zoom
         self._local = threading.local()     # per fetch thread: the kind of the request being loaded
-        self.stats = {}                     # counters ("usgs:net", "eox2023:404", ...), and fetch times
+        self.stats = {}                     # counters ("usgs:net", "eox2016:404", ...), and fetch times
         self.fetch_ms = []                  # network fetch latencies (ms), for the log / measurements
 
     def attribution(self):
@@ -675,7 +723,7 @@ class Imagery:
         extra = [SOURCES[n] for n in getattr(self.colormatch, "refs", ()) if n not in names]
         if names == list(DEFAULT_CHAIN) and not extra:
             return ATTRIBUTION
-        return "Imagery: " + "; ".join(s.attribution for s in list(self.chain) + extra)
+        return _attribution(list(self.chain) + extra)
 
     def aerial(self):
         """The process's coverage of the 1 m aerial packs (aerialpacks.Coverage; their files kept under this cache): the
@@ -707,6 +755,8 @@ class Imagery:
         extra = [SOURCES[n] for n in getattr(self.colormatch, "refs", ()) if n not in names]
         out = []
         for src in list(self.chain) + extra:
+            if src.store:               # (bngs2fine: bngs2's credit, listed once)
+                continue
             box = src.bounds or US_CREDIT_BOXES.get(src.name)
             if box:
                 s_, w_, n_, e_ = box
@@ -734,7 +784,7 @@ class Imagery:
         return "; ".join([lat, str(st)] + extra)
 
     def _paths(self, src, z, x, y):
-        d = os.path.join(self.cache_dir, src.name, str(z), str(x))
+        d = os.path.join(self.cache_dir, store_of(src), str(z), str(x))
         return os.path.join(d, f"{y}.jpg"), os.path.join(d, f"{y}.404")
 
     def _discard(self, src, z, x, y):
@@ -789,7 +839,7 @@ class Imagery:
         """A pack source's tile: its pack (tilepack.py) fetched as one request and every tile in it written to disk (a
         missing one as a 404 marker), one fetch per pack at a time; None if there is no tile there."""
         (pz, px, py), _ = tilepackmod.pack_of(z, x, y, src.pack)
-        key = (src.name, pz, px, py, "pack")
+        key = (store_of(src), pz, px, py, "pack")
         with self._lock:
             lock = self._export_locks.setdefault(key, threading.Lock())
         with lock:
@@ -983,7 +1033,7 @@ class Imagery:
         plat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (py + 0.5) / 2 ** pz))))
         for src in self.chain:
             mz, mv = zoom_caps(src, plat)
-            if zw > mv:
+            if not view_ok(src, zw, mz, mv):
                 continue
             z = min(zw, mz)
             p = self.fetcher.policy(netfetch.host_of(src.url))
@@ -1012,7 +1062,7 @@ class Imagery:
     def sharp_zoom(self, lat, lon, reach=None):
         """The finest zoom the chain's photos hold at (lat, lon): the most of its sources' whose coverage there is known
         (their probes on hand: NAIP's z17 in the US (lazy: FAR_LAZY, far_warm fetches them), USGS's z16, a regional
-        service's z17; EOX's z14 everywhere), SHARP_FALLBACK_ZOOM while a probe is unknown (its fetch started). Kept
+        service's z17; Sentinel-2's z14 everywhere), SHARP_FALLBACK_ZOOM while a probe is unknown (its fetch started). Kept
         per ~5 km square once known (farpvs.UP_ON: a far tile is never made finer than this). reach: the finest zoom
         the caller's texture can come to (a far tile at farpvs.UP_PX_MAX): a source that only draws finer zooms (a
         regional tile cache's REGIONAL_XYZ_MIN_ZOOM) can never draw it, its coverage there is not probed (its box
@@ -1028,7 +1078,7 @@ class Imagery:
         best, unknown = None, False
         with self._lock:
             for src in self.chain:
-                if src.lazy and not FAR_LAZY:
+                if (src.lazy and not FAR_LAZY) or src.enlarge_only:     # (the same tiles' first place counts)
                     continue
                 z = min(zoom_caps(src, lat))
                 if z < src.min_zoom or (best is not None and z <= best):
@@ -1295,7 +1345,7 @@ class Imagery:
         zw = zoom_for(clat, where.size / px)
         for k, src in enumerate(self.chain):
             mz, mv = zoom_caps(src, clat)
-            if zw > mv:
+            if not view_ok(src, zw, mz, mv):
                 continue
             z = min(zw, mz)
             if z < src.min_zoom or src.lazy:    # (a lazy source's tiles: only warm() fetches them)
@@ -1744,6 +1794,8 @@ class Imagery:
         done, want = set(), None    # keys of this list found done: not looked at on disk again at every wake
         while True:
             with self._warm_cv:
+                if self._closed:
+                    return
                 if self._warm_want is not want:     # a new list (the player moved on): looked at afresh
                     done, want = set(), self._warm_want
             # (the disk looked at outside the lock: warm(), on the server's event loop, waits for it, and 28 of the 40
@@ -1766,7 +1818,7 @@ class Imagery:
                     key = far[1]
             if key is None:
                 with self._warm_cv:
-                    if self._warm_want is want and not self._far_warm:
+                    if self._warm_want is want and not self._far_warm and not self._closed:
                         self._warm_cv.wait()
                 continue
             src, z, x, y = key
@@ -1881,10 +1933,10 @@ class Imagery:
 
     def _fin_path(self, key):
         src, z, x, y = key
-        sig = self._fin_sigs.get(src.name)
+        sig = self._fin_sigs.get(store_of(src))
         if sig is None:
-            sig = self._fin_sigs[src.name] = self._fin_sig(src)
-        return os.path.join(self.cache_dir, f"fin{FIN_VERSION}-{sig}", src.name, str(z), str(x), f"{y}.bnf")
+            sig = self._fin_sigs[store_of(src)] = self._fin_sig(src)
+        return os.path.join(self.cache_dir, f"fin{FIN_VERSION}-{sig}", store_of(src), str(z), str(x), f"{y}.bnf")
 
     def _raw_stamp(self, key):
         """(size, mtime ns) of a source tile's raw file, (0, 0) when there is none on disk."""
@@ -2193,7 +2245,7 @@ class Imagery:
         for i, src in enumerate(self.chain):
             last = i == len(self.chain) - 1
             mz, mv = zoom_caps(src, clat)
-            if zw > mv:
+            if not view_ok(src, zw, mz, mv):
                 continue
             z = min(zw, mz)
             if z < src.min_zoom or (skip_lazy and src.lazy):
@@ -2259,7 +2311,7 @@ class Imagery:
                     while len(self._fin_rgb) > MEM_DECODED:
                         self._fin_rgb.popitem(last=False)
             if hits:
-                used[src.name] = int(hits)
+                used[store_of(src)] = used.get(store_of(src), 0) + int(hits)     # (bngs2fine: bngs2's credit)
                 relit += int(rh)
                 if cm_any:
                     used["colormatch"] = used.get("colormatch", 0) + int(hits)
@@ -2280,7 +2332,19 @@ class Imagery:
             used["deshadow"] = relit
         return (canvas if keep_canvas else canvas.take_rgb()), used
 
-    def close(self):
+    def close(self, wait=False):
+        """Stop fetching: the fetches queued are dropped. wait: instead the warm thread stops and every fetch already
+        queued (urgent and fetch_later's too) is done before this returns: nothing writes in cache_dir after (a
+        test's folder removed right after, gate 293: "Directory not empty" with a prefetch still writing)."""
+        if wait:
+            with self._warm_cv:
+                self._closed = True
+                self._warm_cv.notify_all()
+            if self._warm_thread is not None:
+                self._warm_thread.join()
+            for pool in (self._later_pool, self.urgent_pool, self.pool):     # (fetch_later's batches use the pool)
+                if pool is not None:
+                    pool.shutdown(wait=True)
         if self.deshadow is not None:
             self.deshadow.close()
         if self.colormatch is not None:
