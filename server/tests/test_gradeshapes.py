@@ -929,3 +929,121 @@ def test_the_pair_index_at_its_caps_holds_the_nets_seeds_and_scans_the_rest_agai
         _assert_index_exact(_3, scan4)
     finally:
         ix.PAIRS_MAX_SEEDS, ix.PAIRS_MAX_PAIRS = 100000, 200000
+
+
+def test_the_find_asks_the_step_limit_in_its_dips_and_reaches_not_only_between_its_seeds_relations():
+    # (a growth round's find of Shanghai's Yan'an mesh: 28 s of dips and 34 s of reaches at 128k members, and a close
+    # of 3 s, none of it asking the cancel mechanism: the extent's 60 s limit was seen when the round ended, minutes
+    # late, 48 times a build. The reaches ask per deck and per 32 ramps, the dips per road dug, the close per
+    # interchange)
+    import time
+    import xproc
+    slope = lambda xy: 0.05 * xy[:, 1] + 0.01 * np.sin(xy[:, 0] / 30.0)
+    copies = 20
+    span = 300
+    m = [Member("m1", _line(-100, 0, copies * span + 100, 0, 200), "ground", "motorway", 120, 0, 12.0, None),
+         Member("m2", _line(-100, 120, copies * span + 100, 120, 200), "ground", "motorway", 120, 0, 12.0, None)]
+    for k in range(copies):
+        x = k * span
+        m += [Member("d1_%d" % k, _line(x, -30, x, 30, 13), "deck", "secondary", 60, 1, 5.0, None),
+              Member("d2_%d" % k, _line(x, 90, x, 150, 13), "deck", "secondary", 60, 1, 5.0, None),
+              Member("mid_%d" % k, _line(x, 30, x, 90, 16), "ground", "secondary", 60, 0, 5.0, None),
+              Member("s_%d" % k, _line(x, -250, x, -30), "ground", "secondary", 60, 0, 5.0, None),
+              Member("n_%d" % k, _line(x, 150, x, 250), "ground", "secondary", 60, 0, 5.0, None)]
+    calls = []
+
+    def slow_ground(xy):
+        calls.append(1)
+        time.sleep(0.01)
+        return slope(xy)
+
+    reader = lambda net: (slow_ground, None)
+    t0 = time.perf_counter()
+    net, found = ix.find_interchanges(m, reader, reach=True)
+    full_s, whole = time.perf_counter() - t0, len(calls)
+    assert len(found) == copies, "each copy's two decks' ramps meet: one interchange a copy (%d)" % len(found)
+    assert full_s > 1.5 and whole > 150, "the whole find is the slow thing here (%.1f s, %d ground reads)" % (full_s, whole)
+    calls.clear()
+    old = xproc.set_deadline("extent", 0.2)
+    try:
+        t0 = time.perf_counter()
+        try:
+            ix.find_interchanges(m, reader, reach=True)
+            raise AssertionError("the find ran past the step's limit without asking")
+        except xproc.TimeLimit as e:
+            assert e.what == "extent"
+        took = time.perf_counter() - t0
+    finally:
+        xproc.restore_deadline(old)
+    assert 0.2 <= took < full_s / 3, "stopped where it asked: %.2f s of the find's %.1f s, %d of its %d ground reads" % (
+        took, full_s, len(calls), whole)
+    xproc.check_cancel()         # (the deadline gone: the next find in the thread is not stopped)
+
+
+def _chain_members():
+    # (a road of 12 parts end to end with forks and strays at the joints, ground roads of one feature and others)
+    rng = np.random.default_rng(7)
+    m = []
+    for k in range(12):
+        m.append(Member(("r", k // 3, k), _line(k * 60.0, 0, k * 60.0 + 60.0, 0, 20), "ground", "secondary", 60, 0, 5.0, None))
+    for k in range(6):
+        y = float(rng.uniform(-3, 3))
+        m.append(Member(("f", k), _line(k * 120.0, y, k * 120.0 + 60.0, 25 * (k % 2 - 0.5), 20), "ground", "secondary", 60, 0, 5.0,
+                        None))
+    return m
+
+
+def test_next_member_asked_twice_of_a_net_is_what_it_is_computed_afresh():
+    # (a dip's road is walked on from both its ends for every crossing under it: next_member keeps its answer per end of
+    # the net, and the answer is the one _next_member computes)
+    net = ix.Net(_chain_members())
+    for i in range(len(net.m)):
+        for at_end in (False, True):
+            first = ix.next_member(net, i, at_end)
+            assert first == ix._next_member(net, i, at_end), (i, at_end)
+            assert ix.next_member(net, i, at_end) == first
+    whole = ix.walk(net, 0, True, 400.0)
+    assert [j for j, _a, _b in whole][:3] == [1, 2, 3], whole
+    assert ix.walk(net, 0, True, 400.0) == whole
+
+
+def test_piece_system_measures_the_seeds_by_one_call_what_it_measured_a_point_pair_at_a_time():
+    from ix import owner
+    rng = np.random.default_rng(3)
+
+    class M:
+        def __init__(self, key):
+            self.key, self.kind = key, "deck"
+
+    class Net:
+        pass
+
+    class Sys:
+        def __init__(self, seeds):
+            self.sysm = {"seeds": seeds}
+
+    def old(cur_net, cur, nxt_net, found, cid):
+        mid = [cur_net.lines[i][len(cur_net.lines[i]) // 2] for i in cur.sysm["seeds"]]
+        best = None
+        for x in found:
+            seeds = x.sysm["seeds"]
+            if cid not in {ix.canonical_id(nxt_net.m[i]) for i in seeds}:
+                continue
+            if not mid:
+                return x
+            d = min(float(np.min(np.hypot(nxt_net.lines[j][:, 0] - m[0], nxt_net.lines[j][:, 1] - m[1])))
+                    for j in seeds for m in mid)
+            if best is None or d < best[0]:
+                best = (d, x)
+        return None if best is None else best[1]
+    for trial in range(20):
+        nxt = Net()
+        nxt.lines = [rng.normal(size=(int(rng.integers(2, 30)), 2)) * 80 for _ in range(60)]
+        nxt.m = [M(("deck", "w%d" % (k % 7))) for k in range(60)]
+        cur = Net()
+        cur.lines = nxt.lines[:10]
+        piece = Sys(list(range(int(rng.integers(0, 5)) + 1 if trial % 5 else 0)))
+        found = [Sys(sorted(rng.choice(60, int(rng.integers(1, 9)), replace=False).tolist())) for _ in range(8)]
+        found = [Sys(x.sysm["seeds"]) for x in found]
+        for cid in ("deck:w0", "deck:w3", "deck:nowhere"):
+            assert owner.piece_system(cur, piece, nxt, found, cid) is old(cur, piece, nxt, found, cid), (trial, cid)

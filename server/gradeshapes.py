@@ -1051,6 +1051,7 @@ def find_interchanges(members, reader=None, trace=None, want=None, skip=None, sc
         cgroups.setdefault(croot(r), []).append(r)
     found = []
     for c in sorted(cgroups, key=lambda x: str(members[x].key)):
+        xproc.check_cancel()        # (each interchange's systems closed: the step's time limit)
         seeds_c = sorted((i for r in cgroups[c] for i in groups[r]), key=lambda x: str(members[x].key))
         if want is not None and not want(net, seeds_c):
             continue
@@ -1160,6 +1161,8 @@ def _ramp_reaches(net, seeds, rel, dig, clock=None, memo=None):
         mi = members[i]
         if mi.kind != "deck" or i not in with_another:
             continue
+        import xproc
+        xproc.check_cancel()        # (the growth's step time limit, ix/limits.py: asked per deck here, per ramps below)
         t0 = time.perf_counter()
         lay = _Ramper(net, ground_of, pieced, memo)
         _t = time.perf_counter()
@@ -1182,6 +1185,8 @@ def _ramp_reaches(net, seeds, rel, dig, clock=None, memo=None):
         P["lay_secs"] = P.get("lay_secs", 0.0) + time.perf_counter() - _t
         while n < len(lay.ramps):
             rp = lay.ramps[n]
+            if not n % 32:
+                xproc.check_cancel()        # (a deck's ramps branch: thousands of them, each reading the ground)
             if n >= n0:
                 lay.cover(rp[4], rp[9])
             P["ramp_calls"] += 1
@@ -1435,7 +1440,9 @@ def _shared_dips(net, seeds, rel, dig, clock=None):
         return []
     out = []
     far = max(_dip_half(net, i, si, j, sj, qq) for j, ls in under.items() for i, si, sj, qq in ls)
+    import xproc
     for d, lst in under.items():
+        xproc.check_cancel()        # (the growth's step time limit, ix/limits.py, and a place a teleport left)
         for u, su, sd, qd in lst:
             t0 = time.perf_counter()
             mu = members[u]
@@ -1643,7 +1650,19 @@ def _ends_index(net):
 
 def next_member(net, i, at_end):
     """The road going on from member i's end (its end at L if at_end, else its start): (member, entering at its start?)
-    or None: of the roads whose end is there, the same road (feature) first, else the straightest."""
+    or None: of the roads whose end is there, the same road (feature) first, else the straightest. Made once per end of
+    a net (the answer is the net's: its lines and keys do not change): a dip's road is walked on from both its ends for
+    every crossing under it and again for every other crossing it is measured to, 1.5 million asks in nine rounds of a
+    mesh's growth, 60 of the round's 140 seconds."""
+    memo = net.__dict__.setdefault("_next_member", {})
+    key = (i, bool(at_end))
+    if key in memo:
+        return memo[key]
+    got = memo[key] = _next_member(net, i, at_end)
+    return got
+
+
+def _next_member(net, i, at_end):
     idx = _ends_index(net)
     line = net.lines[i]
     p = line[-1] if at_end else line[0]
