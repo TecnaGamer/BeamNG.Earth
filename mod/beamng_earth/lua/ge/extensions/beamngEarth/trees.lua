@@ -8,6 +8,7 @@
 local M = {}
 local vienna = require('beamngEarth/vienna_convention_speed_signs')
 local geotile = require('beamngEarth/geotile')
+local clifftalus = require('beamngEarth/clifftalus')
 -- Geotiles (server --geo-tiles on, hello.geoTiles): a tile keyed 'g17_x_y' holds its items in its own frame (msg.frame,
 -- msg.pivot); it belongs to no anchor. Its items are made where its placement into the current anchor puts them
 -- (geotile.placement); at a rebase its Forest takes the move from the old placement to the new one (rendering at once,
@@ -358,6 +359,9 @@ M.CATALOG = {
   -- vineyards' rows (server vegetation.vineyard_items): Italy's grape_vine_group, three rows 2.45 m apart and 15.9 m
   -- long along its x (out to 450 m, GROUP_MAX_M: beyond it the ground photo shows the rows)
   vine = { { IT .. 'trees/trees_italy/grape_vine_group', 2.6 } },
+  -- the rows' rest up to the field's edge and its roads (server vegetation._row_fill): Italy's single row, 5.5 m
+  -- along its x (the height as the group's: the server sends the same, at scale 1)
+  vine_row = { { IT .. 'trees/trees_italy/grape_vine', 2.6 } },
   -- round bales after the harvest (server vegetation.bale_items): the stock race props, straw on farmland, wrapped
   -- silage on meadows; by hemisphere, shown in their season only (SEASON)
   straw_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_large_01', 1.22 } },
@@ -378,6 +382,53 @@ M.CATALOG = {
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler', 33.0 },
   },
 }
+-- The mapped trees' species (server natural.SPECIES, BNE_NATURAL_TREES: OpenStreetMap's genus / species / leaf type on
+-- natural=tree and tree rows): the stock shapes of that kind, all in folders MATERIALS already loads and all already
+-- drawn by other groups (no new shape's cost; only BARE's leafless oaks are new); heights from the shapes' bounds (the
+-- asset survey, 2026-11-10)
+M.CATALOG.oak = {
+  { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
+  { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.2 }, { ECA .. 'trees/trees_oak/tree_oak_large_c', 15.5 },
+  { ECA .. 'trees/trees_oak/tree_oak_large_b', 15.9 }, { ECA .. 'trees/trees_oak/tree_oak_forest_a', 15.9 },
+  { ECA .. 'trees/trees_oak/tree_oak_forest_b', 16.0 },
+}
+M.CATALOG.beech = {
+  { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 }, { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 },
+  { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
+}
+M.CATALOG.birch = {     -- (East Coast USA's aspens: white bark, the birches' and aspens' stand-in)
+  { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_c', 9.7 },
+  { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
+}
+M.CATALOG.pine = {
+  { WCA .. 'trees/trees_conifer/pine_radiata_small', 8.6 }, { IT .. 'trees/trees_italy/maritime_pine_2', 11.9 },
+  { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { WCA .. 'trees/trees_conifer/pine_radiata_large', 13.2 },
+  { WCA .. 'trees/trees_conifer/pine_radiata_forest', 13.3 }, { IT .. 'trees/trees_italy/scots_pine', 18.9 },
+}
+M.CATALOG.fir = {       -- (spruces, firs, larches, cedars, hemlocks: the Douglas firs)
+  { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
+  { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
+  { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
+}
+M.CATALOG.redwood = {
+  { WCA .. 'trees/trees_conifer/redwood_split', 38.1 }, { WCA .. 'trees/trees_conifer/redwood_tall', 38.5 },
+  { WCA .. 'trees/trees_conifer/redwood_broad', 38.5 },
+}
+M.CATALOG.cypress = { { IT .. 'trees/trees_italy/cypress_tree', 7.2 } }
+M.CATALOG.olive = { { IT .. 'trees/trees_italy/olive', 4.3 } }
+M.CATALOG.holm_oak = {  -- (evergreen oaks and the evergreen broadleaves' stand-in)
+  { IT .. 'trees/trees_italy/holm_oak_city_small', 5.6 }, { IT .. 'trees/trees_italy/holm_oak_city_tall', 9.6 },
+  { IT .. 'trees/trees_italy/holm_oak', 12.9 },
+}
+-- the mapped deciduous broadleaf forests (BNE_NATURAL_LEAF=season) by hemisphere: their leafy broadleaves, bare in
+-- their winter months (LEAFOFF: East Coast USA's leafless oaks; applySeason, at setup only)
+M.CATALOG.leafoff_n = M.CATALOG.deciduous
+M.CATALOG.leafoff_s = M.CATALOG.deciduous
+M.LEAFOFF = { leafoff_n = { 12, 1, 2, 3 }, leafoff_s = { 6, 7, 8, 9 } }
+M.BARE = { { ECA .. 'trees/trees_oak/tree_oak_dead_b', 8.69 }, { ECA .. 'trees/trees_oak/tree_oak_dead_a', 12.54 } }
+-- Winter's bare trees (baretrees.lua, set only while the server has winter on): (stock shape, the row's rank) -> the
+-- shape drawn, a deciduous tree's bare copy or itself.
+M.bareMap = nil
 -- Italy's authored three-metre crash barrier and two end treatments. The back-facing variants reuse
 -- the same mesh with its longitudinal/lateral axes reversed; the caps are swapped to flare outwards.
 M.CATALOG.guardrail = { { '/art/shapes/objects/italy_guardrails_basic', 0.9 } }
@@ -396,6 +447,25 @@ M.GROUP_MAX_M.guardrail_back_end = 4000
 -- Median barriers (server medians.py) and mapped jersey / cable barriers (guardrails.py), in the same rows: the stock
 -- 3 m jersey barrier (it runs along its y axis: the rows' basis says so) and its sloped end; the mod's cable barrier
 -- (tools/build_median_props.py: four ropes and a post every 3 m).
+-- Mapped driving features (server drivefeat.py, BNE_ROAD_BARRIERS / BNE_RAIL_PROPS; tools/build_drive_props.py): lift
+-- gates (down / raised), a field gate's leaf, height restrictor frames by road width, low bollards, railway signals,
+-- ground signals and point machines. Heights: each model's top.
+do
+  local DP = '/levels/beamng_earth/art/shapes/beamngEarth/bne_dp_'
+  for g, h in pairs({ liftgate = 1.04, liftgate_up = 5.55, gate = 1.35, hr4 = 2.5, hr6 = 2.5, hr8 = 2.5, hr10 = 2.5,
+                      bollard = 0.95, rsignal = 4.75, rsignal_dwarf = 0.8, point = 0.37 }) do
+    M.CATALOG['dp_' .. g] = { { DP .. g, h } }
+    M.GROUP_MAX_M['dp_' .. g] = (g == 'rsignal' or g:sub(1, 2) == 'hr') and 500 or 300
+    M.ONE_SPELLING['dp_' .. g] = true
+  end
+  -- the mapped lamps' lenses by their light:colour (server furniture.LENS_COLOURS, BNE_LAMP_TAGS): the stock lens,
+  -- their own night light colour (nightlights.lua)
+  for _, g in ipairs({ 'lamplens_white', 'lamplens_yellow' }) do
+    M.CATALOG[g] = M.CATALOG.lamplens
+    M.GROUP_MAX_M[g] = M.GROUP_MAX_M.lamplens
+    M.NO_COLLIDE[g] = true
+  end
+end
 M.CATALOG.jersey = { { '/art/shapes/objects/jerseybarrier_3m', 0.88 } }
 M.CATALOG.jersey_end = { { '/art/shapes/objects/jerseybarrier_end', 0.88 } }
 M.CATALOG.cable = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cable_barrier', 1.0 } }
@@ -567,6 +637,7 @@ M.GROUP_MAX_M.billboard = 900
 M.GROUP_MAX_M.barn = 800
 M.GROUP_MAX_M.golfflag = 400
 M.GROUP_MAX_M.vine = 450
+M.GROUP_MAX_M.vine_row = 450
 M.GROUP_MAX_M.creosote = 250       -- (as the other shrubs)
 M.NO_COLLIDE.creosote = true
 M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n
@@ -867,6 +938,12 @@ function M.applySeason(month)
     for _, m in ipairs(months) do if m == month then on = true end end
     M.groupOff[g] = (not on) or nil
   end
+  for g, months in pairs(M.LEAFOFF) do      -- (the mapped deciduous forests: bare in their winter)
+    local bare = false
+    for _, m in ipairs(months) do if m == month then bare = true end end
+    -- (with winter's bare trees on, baretrees.lua: the broadleaves, bare by its own rule, not the leafless snags)
+    M.CATALOG[g] = (bare and not M.bareMap) and M.BARE or M.CATALOG.deciduous
+  end
 end
 
 local function setup()
@@ -904,9 +981,12 @@ local function itemType(shape, solid)
     d = (worldEditorCppApi and worldEditorCppApi.createObject) and worldEditorCppApi.createObject('TSForestItemData')
       or createObject('TSForestItemData')
     if not d then return nil end
-    d:setField('shapeFile', 0, shape .. '.dae')
+    local compiled = shape:sub(-5) == '.cdae'     -- (the cliff rocks, winter's bare trees: compiled copies)
+    d:setField('shapeFile', 0, compiled and shape or (shape .. '.dae'))
     d:setField('collidable', 0, solid and '1' or '0')
-    d:setField('windScale', 0, '0.4'); d:setField('branchAmp', 0, '0.1'); d:setField('detailAmp', 0, '0.2')
+    local rock = shape:find('cliff_talus_', 1, true) ~= nil
+    d:setField('windScale', 0, rock and '0' or '0.4')
+    d:setField('branchAmp', 0, rock and '0' or '0.1'); d:setField('detailAmp', 0, rock and '0' or '0.2')
     d:registerObject(name)
     if Sim and Sim.getDataBlockSet then Sim.getDataBlockSet():addObject(d) end
   end
@@ -918,6 +998,7 @@ end
 -- item's rank; else the nearest. Returns shape, scale.
 function M.pick(group, h, rank)
   local list = M.CATALOG[group] or M.CATALOG.deciduous
+  if (clifftalus.enabled and clifftalus.isGroup(group)) then return clifftalus.pick(group, list, h, rank) end
   local cands = {}
   for _, range in ipairs({ { 0.8, 1.25 }, { 0.6, 1.6 } }) do      -- near its size first, then wider
     for _, v in ipairs(list) do
@@ -1046,6 +1127,7 @@ local function shapeOf(t, i)
     if not leftSignalReady then log('W', 'beamngEarth.trees', 'left signal shape: ' .. tostring(made)) end
   end
   s, sc = M.pick(g, f[b + F_HEIGHT], f[b + F_RANK])
+  if M.bareMap then s = M.bareMap(s, f[b + F_RANK]) end     -- (winter: baretrees.lua, nil otherwise)
   s = spelled(s, (M.ONE_SPELLING[g] or (g:sub(1, 5) == 'speed')) and 0 or spellingFor(s, t.variant))
   t.shapes[i], t.scales[i] = s, sc
   return s, sc
@@ -1060,6 +1142,35 @@ end
 -- thousands a second while a forest loads. Every item sets the whole rotation and the position: nothing of the item
 -- before stays.
 local itemMat, itemVec, itemPos = nil, nil, nil
+
+-- Pure: the columns (x, y, z axes; 9 numbers) of an item turned by yaw (degrees counter-clockwise from +x, the
+-- server's), then tilted by pitch (its x axis this many degrees above the horizontal) and roll (its y axis): a vine
+-- group lying on the slope (server vegetation._vine_tilt, a tile of stride F_ROLL or more). Orthonormal, right-handed.
+function M.tiltBasis(yaw, pitch, roll)
+  local y, p, r = math.rad(yaw or 0), math.rad(pitch or 0), math.rad(roll or 0)
+  local cy, sy = math.cos(y), math.sin(y)
+  local fx, fy, fz = math.cos(p) * cy, math.cos(p) * sy, math.sin(p)
+  local sx, sy2, sz = -math.cos(r) * sy, math.cos(r) * cy, math.sin(r)
+  local d = sx * fx + sy2 * fy + sz * fz           -- (the side made square to the forward axis)
+  sx, sy2, sz = sx - d * fx, sy2 - d * fy, sz - d * fz
+  local l = math.sqrt(sx * sx + sy2 * sy2 + sz * sz)
+  sx, sy2, sz = sx / l, sy2 / l, sz / l
+  return fx, fy, fz, sx, sy2, sz, fy * sz - fz * sy2, fz * sx - fx * sz, fx * sy2 - fy * sx
+end
+local F_PITCH, F_ROLL = 9, 10      -- (a vegetation tile of stride 10: server vegetation.TILT_STRIDE)
+
+-- Columns c (0-2) of a basis into the item matrix, turned by a geotile's placement rotation r (nil: none).
+local function setBasis(m, r, b)
+  for c = 0, 2 do
+    local vx, vy, vz = b[1 + 3 * c], b[2 + 3 * c], b[3 + 3 * c]
+    if r then
+      vx, vy, vz = r[1] * vx + r[2] * vy + r[3] * vz, r[4] * vx + r[5] * vy + r[6] * vz, r[7] * vx + r[8] * vy + r[9] * vz
+    end
+    itemVec:set(vx, vy, vz); m:setColumn(c, itemVec)
+  end
+end
+local basis9 = { 0, 0, 0, 0, 0, 0, 0, 0, 0 }      -- (reused: no table an item)
+
 local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   local d = itemType(shape, vienna.faceSolid(group, townsigns.faceSolid(group, solid)))
   if not d then M.errors = M.errors + 1; return nil end
@@ -1081,14 +1192,15 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   if t.s >= 17 and type(f[b + 17]) == 'number' then
     -- Guardrails carry their orthonormal world-space basis; local X follows the road chord. (A geotile's: in its
     -- frame, turned by its placement's rotation.)
-    local r = t.geo and t.madePl and t.madePl.r
-    for c = 0, 2 do
-      local vx, vy, vz = f[b + 9 + 3 * c], f[b + 10 + 3 * c], f[b + 11 + 3 * c]
-      if r then
-        vx, vy, vz = r[1] * vx + r[2] * vy + r[3] * vz, r[4] * vx + r[5] * vy + r[6] * vz, r[7] * vx + r[8] * vy + r[9] * vz
-      end
-      itemVec:set(vx, vy, vz); m:setColumn(c, itemVec)
-    end
+    for j = 1, 9 do basis9[j] = f[b + 8 + j] end
+    setBasis(m, t.geo and t.madePl and t.madePl.r, basis9)
+    m:setPosition(itemPos)
+  elseif t.s >= F_ROLL and (f[b + F_PITCH] ~= 0 or f[b + F_ROLL] ~= 0) then
+    -- A vine group on the slope (its pitch and roll, server vegetation._vine_tilt): its basis from the server's yaw,
+    -- in the tile's frame (a geotile's turned by its placement, as the guardrails').
+    basis9[1], basis9[2], basis9[3], basis9[4], basis9[5], basis9[6], basis9[7], basis9[8], basis9[9] =
+      M.tiltBasis(f[b + F_YAW], f[b + F_PITCH], f[b + F_ROLL])
+    setBasis(m, t.geo and t.madePl and t.madePl.r, basis9)
     m:setPosition(itemPos)
   else
     -- Existing props use a flat yaw (counter-clockwise in server coordinates).
@@ -1161,7 +1273,7 @@ local function addTile(anchorId, tileKey, flat, stride, groups, geo, count)
   local old = tiles[key]
   local tx, ty = tostring(tileKey):match('(%-?%d+)_(%-?%d+)$')
   -- (the shape cache is the items': every message brings items of its own)
-  local t = { anchor = anchorId, f = flat, s = stride, n = count or math.floor(#flat / stride),
+  local t = { anchor = anchorId, sourceKey = tostring(tileKey), f = flat, s = stride, n = count or math.floor(#flat / stride),
     groups = type(groups) == 'table' and groups or nil,
     made = old and old.made or {}, solid = old and old.solid or {}, near = old and old.near,
     shapes = {}, scales = {},
@@ -1619,7 +1731,11 @@ local function inCatalog(sh)
     catalogued = {}
     for _, list in pairs(M.CATALOG) do for _, e in ipairs(list) do catalogued[e[1]] = true end end
   end
-  return catalogued[(sh:gsub('/%./', '/'):gsub('/%./', '/'):gsub('/%./', '/'))] == true
+  local base = (sh:gsub('/%./', '/'):gsub('/%./', '/'):gsub('/%./', '/'))
+  if catalogued[base] then return true end
+  -- winter's bare copies while winter is on (baretrees.lua), the ones still there (the folder is the game build's)
+  return M.bareMap ~= nil and base:sub(1, 31) == '/temp/beamngEarth/shapes/bare_v' and FS ~= nil
+    and FS:fileExists(base) == true
 end
 -- Returns the shapes warmed.
 function M.prewarmSaved()
@@ -1646,7 +1762,30 @@ function M.spareWanted(frameMs)
   return frameMs >= M.LOADING_FRAME_MS and math.max(M.POOL_SPARE, M.POOL_SPARE_CALM) or M.POOL_SPARE_DRIVE
 end
 
+-- Wait for solid ground and the supporting cliff, including after rebases.
+function M.cliffGroundReady(t, i, support)
+  -- All rocks in a tile share the same cliff pieces. Their presence cannot change
+  -- during this synchronous Forest pass; retry on the next pass after imports.
+  local pieces = support and support[t]
+  if pieces == nil then
+    local source = t.key or (t.sourceKey or ''):gsub('^t', '')
+    pieces = require('beamngEarth/roads').cliffPiecesReady(source, t.anchor)
+    if support then support[t] = pieces end
+  end
+  if not pieces then return false end
+  local b = (i-1)*t.s
+  local x, y, z = t.f[b+F_X], t.f[b+F_Y], t.f[b+F_Z]
+  if t.geo then x, y, z = geotile.apply(t.pl, x, y, z) end
+  local radius = math.max(2, tonumber(t.f[b+F_HEIGHT]) or 2)
+  local ground = require('beamngEarth/terrainpatch')
+  if not ground.groundReady(x, y)
+    or not ground.groundReady(x-radius, y-radius) or not ground.groundReady(x+radius, y-radius)
+    or not ground.groundReady(x-radius, y+radius) or not ground.groundReady(x+radius, y+radius) then return false end
+  return true
+end
+
 function M.update(anchorId, player, view, frameMs, fill)
+  local cliffSupport = nil
   if not next(tiles) then return end
   if frameMs and frameMs <= 0 then return end
   if not setup() then return end
@@ -1898,7 +2037,7 @@ function M.update(anchorId, player, view, frameMs, fill)
         local b = (i - 1) * s
         local r = f[b + F_RANK]
         local g = names[f[b + F_GROUP] + 1]
-        local cap = g and M.GROUP_MAX_M[g]
+        local cap = g and (M.GROUP_MAX_M[g] or ((clifftalus.enabled and clifftalus.isGroup(g)) and clifftalus.MAX_DISTANCE_M))
         local isGuardrail = M.isBarrier(g)
         if isGuardrail then
           -- Preserve continuous 3 m runs until a tile cap actually requires thinning.
@@ -1922,13 +2061,35 @@ function M.update(anchorId, player, view, frameMs, fill)
         end
         if g and M.groupOff[g] then r = 2 end    -- a group the player turned off (setGroupEnabled)
         -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree
-        if g and not M.CATALOG[g] then
+        if g and not M.CATALOG[g] and not (clifftalus.enabled and clifftalus.isGroup(g)) then
           r = 2
           if not M.unknownGroups[g] then M.unknownGroups[g] = true; log('W', 'beamngEarth.trees', 'no shapes for group ' .. g) end
         end
         -- an item something else stands in for (navgraph.lua's switchable signal heads), or one in the way of
         -- something (townsigns.lua: a tree in front of a town sign); no call at all when nothing hides (every row)
         if g and (M.suppress or next(M.hiders)) and hidden(g, f[b + F_X], f[b + F_Y], t.anchor, t, f[b + F_Z]) then r = 2 end
+        if (clifftalus.enabled and clifftalus.isGroup(g)) then
+          if not clifftalus.available(g) or M.groupOff.cliff_rock then r = 2 end
+          if r < want and not t.made[i] then
+            cliffSupport = cliffSupport or {}
+            if not M.cliffGroundReady(t, i, cliffSupport) then
+              skipped = skipped or i
+              r = 2
+            end
+          end
+          if r < want and not M.CATALOG[g] then
+            -- One private material/model preparation step, under the existing
+            -- loading budget. Model import still uses the usual Forest budget.
+            local ok, catalog = pcall(clifftalus.catalog, g, true)
+            if ok and catalog then
+              M.CATALOG[g] = catalog
+              M.GROUP_MAX_M[g] = clifftalus.MAX_DISTANCE_M
+            elseif not ok then
+              clifftalus.fail(g, catalog)
+            end
+            stop(t, i, skipped, want, band, near); return
+          end
+        end
         local solid = near and not M.NO_COLLIDE[g or '']
         if solid and rOn2 and r < want then
           local x, y = f[b + F_X], f[b + F_Y]
@@ -2076,7 +2237,7 @@ function M.keepupMissing(px, py, r)
         if (x - lx) * (x - lx) + (y - ly) * (y - ly) <= r2 and not t.made[i] then
           local g = names[f[b + F_GROUP] + 1]
           local rk = f[b + F_RANK]
-          local cap = g and M.GROUP_MAX_M[g]
+          local cap = g and (M.GROUP_MAX_M[g] or ((clifftalus.enabled and clifftalus.isGroup(g)) and clifftalus.MAX_DISTANCE_M))
           if M.isBarrier(g) then
             local rowCap
             for _, lim in ipairs(M.TILE_CAP) do if dist <= lim[1] then rowCap = lim[2]; break end end

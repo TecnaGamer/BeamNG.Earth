@@ -68,10 +68,10 @@ def cells(keys, cell=256.0):
 
 class FakeImagery(imagery.Imagery):
     """Imagery whose 'downloads' are synthetic tiles: seeded noise, red channel 60 for usgs and
-    140 for the EOX layers (no network). usgs has data only east of LON (so the chain falls back to eox2023
-    west of it); counts every load."""
+    140 for the global Sentinel-2 layer (no network). usgs has data only east of LON (so the chain falls back to
+    eox2016 west of it); counts every load."""
 
-    def __init__(self, cache_dir, chain=("usgs", "eox2023", "eox2016"), **kw):     # (no lazy NAIP: timing)
+    def __init__(self, cache_dir, chain=("usgs", "eox2016"), **kw):     # (no lazy NAIP: timing)
         super().__init__(cache_dir, chain, **kw)
         self.loads = 0
 

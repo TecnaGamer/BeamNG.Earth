@@ -11,9 +11,9 @@ pack or far buildings tiles (roads.lua hzCovered), so nothing is drawn twice.
 
 Where the index comes from:
 - the data site (as osmyears: <BNE_DATA_PAGES>/tallbld/manifest.json + PMTiles parts in the build's own folder, each
-  tile one range read, kept on disk per build; TallShards). The build pinned on disk when the process first asks is
-  used for its whole life (its key: the tiles' cache key); a newer one is pinned in the background for the next start
-  (MapData.warm_manifests). BNE_BLDHZ_BASE: the dataset's folder elsewhere (a staged build).
+  tile one range read, kept on disk per build; TallShards). The server run's build (pagesdata's session, decided
+  before the workers start: MapData.freeze_manifests) is used by every process of the run (its key: the tiles' cache
+  key); a newer one is pinned in the background for the next start. BNE_BLDHZ_BASE: the dataset's folder elsewhere (a staged build).
 - BNE_BLDHZ_DIR=<folder>: a local index (build_tall_index.py --out: <folder>/12/<x>_<y>.npz + manifest.json with each
   tile's SHA-1), for tests; the data site is not asked then.
 - BNE_BLDHZ=off: none.

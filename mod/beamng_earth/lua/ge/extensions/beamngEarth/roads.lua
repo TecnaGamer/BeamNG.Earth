@@ -21,9 +21,32 @@
 
 local stopwatch = require('beamngEarth/stopwatch')
 local sea = require('beamngEarth/sea')
+local clifftalus = require('beamngEarth/clifftalus')
 local speedtraps = require('beamngEarth/speedtraps')
 
 local M = {}
+
+-- Bounded streamed parts, matching server/cliffscene.py. Faces are content;
+-- contact strips follow the anchor's terrain skin through swaps and rebases.
+M.CLIFF_WHATS, M.CLIFF_STRIPS = {}, {}
+for i = 1, 64 do M.CLIFF_WHATS[i] = i == 1 and 'cliff' or ('cliff'..i) end
+for i = 1, 24 do M.CLIFF_STRIPS[i] = 'cliffStrip'..i end
+M.CLIFF_COLLIDERS = {}
+for i = 1, 256 do M.CLIFF_COLLIDERS[i] = 'cliffCol'..i end
+function M.isCliffCollider(what) return type(what) == 'string' and what:match('^cliffCol%d+$') ~= nil end
+function M.isCliff(what) return what == 'cliff' or (type(what) == 'string' and what:match('^cliff%d+$') ~= nil) end
+function M.isCliffStrip(what) return type(what) == 'string' and what:match('^cliffStrip%d+$') ~= nil end
+-- PR #1412's cliffs (server BNE_CLIFFS): their parts join the tile loops only after hello says cliffs are on
+-- (M.configureCliffs); off, every list and loop is the one without them (no entries, no per-part matching).
+M._cliffsOn = false
+local function withCliffs(list)
+  if not M._cliffsOn then return list end
+  for _, what in ipairs(M.CLIFF_WHATS) do list[#list+1] = what end
+  for _, what in ipairs(M.CLIFF_STRIPS) do list[#list+1] = what end
+  for _, what in ipairs(M.CLIFF_COLLIDERS) do list[#list+1] = what end
+  return list
+end
+
 
 M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/main.materials.json',
@@ -501,7 +524,7 @@ local function dropTile(key)
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
-  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  for _, w in ipairs(withCliffs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4' })) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   for _, w in ipairs(M.SIGN_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.signs then deleteQ[#deleteQ + 1] = t.signs end
@@ -518,6 +541,7 @@ local function dropTile(key)
   if t.props then require('beamngEarth/trees').dropKey((key:gsub(':', ':p', 1))) end
   if t.guardrails then require('beamngEarth/trees').dropKey((key:gsub(':', ':g', 1))) end
   if t.props then require('beamngEarth/nightlights').dropKey(key) end
+  if t.talus then require('beamngEarth/trees').dropKey((key:gsub(':', ':t', 1))) end
   if t.park then require('beamngEarth/parking').dropKey(key) end
   if t.speedTraps then speedtraps.dropKey(key) end
   if t.fuel then require('beamngEarth/gasstations').dropKey(key) end
@@ -851,6 +875,17 @@ local swapBack = nil         -- a rollback's collision still to come: { reloaded
 local function geoKey(gkey) return 'g:' .. tostring(gkey) end
 M.geoKey = geoKey
 
+function M.cliffPiecesReady(key, aid)
+  local t = tiles[geotile.isKey(key) and geoKey(key) or tileKey(aid, key)]
+  if not t then return false end
+  for _, what in ipairs(M.CLIFF_WHATS) do
+    if (t.parts or t.cliffParts or {})[what] and (not t[what] or not scenetree.findObjectById(t[what])) then
+      return false
+    end
+  end
+  return true
+end
+
 -- A geotile's placement of a part (its pivot) into anchor a: { pl = geotile.placement, xf = rigid transform, q }.
 local function partPlacement(t, a, pivot)
   local pl = geotile.placement(t.frame, a, 0, 0, pivot or 0)
@@ -954,6 +989,11 @@ end
 -- The rows of tile t (key) handed to their modules, mapped into its current placement (made: replaced in place).
 local function geoRows(key, t, data, replacing)
   local pl = t.rowPl.pl
+  if not replacing and type(data.talus) == 'table' and type(data.talus.items) == 'table' then
+    require('beamngEarth/trees').onGeoRows('t'..t.gkey, t.gkey, data.talus.items, data.talus.groups, 17,
+      t.frame, t.rowPivot or 0, t.anchorObj)
+    t.talus = true
+  end
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
     -- (at a rebase trees.lua places its own geotiles: trees.transform)
     if not replacing then
@@ -1013,7 +1053,7 @@ local function queueGeoParts(key, t, data)
   for _, what in ipairs(M.CONTENT_WHATS) do
     if t.parts[what] then
       local q = { key = key, what = what, tile = t, geo = true,
-        renderOnly = what:sub(1, 5) == 'hedge' or what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and isRailDrawn(what)) }
+        renderOnly = what:sub(1, 5) == 'hedge' or (M._cliffsOn and (M.isCliff(what) or M.isCliffStrip(what))) or what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and isRailDrawn(what)) }
       if not q.renderOnly then t.colWant[what] = true end
       if q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
@@ -1066,6 +1106,11 @@ function M.onGeoTile(msg, currentAnchor, a)
         and not T.hasGeo('g' .. old.gkey) then
       T.onGeoRows('g' .. old.gkey, old.gkey, data.guardrails.items, data.guardrails.groups, 17, old.frame,
         old.rowPivot or 0, old.anchorObj)
+    end
+    if type(data.talus) == 'table' and type(data.talus.items) == 'table' and not T.hasGeo('t'..old.gkey) then
+      T.onGeoRows('t'..old.gkey, old.gkey, data.talus.items, data.talus.groups, 17,
+        old.frame, old.rowPivot or 0, old.anchorObj)
+      old.talus = true
     end
     M.geoStats.kept = M.geoStats.kept + 1
     return true
@@ -1188,11 +1233,12 @@ function M.onSkin(msg, currentAnchor)
   for _, what in ipairs(M.SKIN_WHATS) do
     local w = data[what]
     local sl = msgSlot(msg, what)
+    if M._cliffsOn and M.isCliffStrip(what) and not require('beamngEarth/cliffcontact').ready then w = nil end
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       if sl then w = { shape = sl.path, pos = w.pos }; t.slots[what] = sl end
       t.skin[what] = { shape = w.shape, pos = w.pos }
       local q = { key = geoKey(msg.key), walk = w, what = what, tile = t, skin = true,
-        renderOnly = what == 'road' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
+        renderOnly = (M._cliffsOn and M.isCliffStrip(what)) or what == 'road' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
       if not q.renderOnly then t.colWant[what] = true end
       t.skin.pending = t.skin.pending + 1
       if stage then swapState.expect = swapState.expect + 1 end
@@ -1421,7 +1467,7 @@ function M.onExact(msg, currentAnchor)
         walkQ = keep
         local lean = t.parts.bldcol ~= nil
         local q = { key = geoKey(msg.key), what = what, tile = t, geo = true, swap = true,
-          renderOnly = what:sub(1, 5) == 'hedge' or what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
+          renderOnly = what:sub(1, 5) == 'hedge' or (M._cliffsOn and (M.isCliff(what) or M.isCliffStrip(what))) or what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
             or (t.parts.railcol ~= nil and isRailDrawn(what)) }
         walkQ[#walkQ + 1] = q
       end
@@ -1567,8 +1613,8 @@ function M.onTile(msg, currentAnchor, a)
   M.loadWalkMaterials(data.walk)
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
-  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail', 'rail2', 'rail3',
-      'railcol', 'railcol2', 'railcol3', 'barrier', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }) do
+  for _, what in ipairs(withCliffs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail', 'rail2', 'rail3',
+      'railcol', 'railcol2', 'railcol3', 'barrier', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' })) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -1582,6 +1628,13 @@ function M.onTile(msg, currentAnchor, a)
   local road = type(data.road) == 'table' and data.road.shape and type(data.road.pos) == 'table' and data.road
   tiles[key] = { anchor = msg.anchorId, objs = {}, queued = road and 0 or #data.chunks,
     colliders = type(data.colliders) == 'table' and data.colliders or {}, slots = slots, at = now(), colWant = {} }
+  if clifftalus.enabled then
+    local parts = {}
+    for _, what in ipairs(M.CLIFF_WHATS) do
+      if data[what] then parts[what] = true end
+    end
+    if next(parts) then tiles[key].cliffParts = parts end
+  end
   protectWater(tiles[key], data, a)
   if type(data.speedTraps) == 'table' and data.speedTraps[1] then
     speedtraps.onRows(key, data.speedTraps)
@@ -1592,6 +1645,10 @@ function M.onTile(msg, currentAnchor, a)
     walkQ[#walkQ + 1] = { key = key, walk = road, what = 'road', tile = tiles[key] }
   else
     for _, c in ipairs(data.chunks) do createQ[#createQ + 1] = { key = key, chunk = c } end
+  end
+  if type(data.talus) == 'table' and type(data.talus.items) == 'table' then
+    require('beamngEarth/trees').onRows(msg.anchorId, 't'..tostring(msg.key), data.talus.items, data.talus.groups, 17)
+    tiles[key].talus = true
   end
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
     if type(data.townsigns) == 'table' then   -- the town signs' faces: their Materials and shapes first (townsigns.lua)
@@ -1664,12 +1721,13 @@ function M.onTile(msg, currentAnchor, a)
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   local leanRail = type(data.railcol) == 'table' and data.railcol.shape ~= nil
   -- tunnels (server roadmesh.tunnel: tubes and portals) and railway tracks (server railways.py) collide like the decks
-  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3',
-      'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4' }) do
+  for _, what in ipairs(withCliffs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3',
+      'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4' })) do
     local w = data[what]
+    if M._cliffsOn and M.isCliffStrip(what) and not require('beamngEarth/cliffcontact').ready then w = nil end
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
-        renderOnly = what:sub(1, 5) == 'hedge' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk')
+        renderOnly = what:sub(1, 5) == 'hedge' or (M._cliffsOn and (M.isCliff(what) or M.isCliffStrip(what))) or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk')
           or (leanRail and isRailDrawn(what)) }
       if not q.renderOnly then tiles[key].colWant[what] = true end
       if q.renderOnly or M.collideNear(tiles[key]) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
@@ -2473,6 +2531,28 @@ local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4',
   'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }
 
+-- hello's cliffs ({available, natural, roadCuts}; core.lua): the cliff parts join WHATS, CONTENT_WHATS and SKIN_WHATS
+-- (rebuilt in place) when cliffs are on; off (the default) the lists stay exactly the ones without cliffs.
+M._cliffBase = {}
+for k, list in pairs({ whats = WHATS, content = M.CONTENT_WHATS, skin = M.SKIN_WHATS }) do
+  local copy = {}
+  for i, w in ipairs(list) do copy[i] = w end
+  M._cliffBase[k] = copy
+end
+function M.configureCliffs(flags)
+  local on = type(flags) == 'table' and (flags.natural == true or flags.roadCuts == true) or false
+  if on == M._cliffsOn then return end
+  M._cliffsOn = on
+  local function rebuild(list, base, extra)
+    for i = #list, 1, -1 do list[i] = nil end
+    for _, w in ipairs(base) do list[#list + 1] = w end
+    if on then for _, e in ipairs(extra) do for _, w in ipairs(e) do list[#list + 1] = w end end end
+  end
+  rebuild(WHATS, M._cliffBase.whats, { M.CLIFF_WHATS, M.CLIFF_STRIPS, M.CLIFF_COLLIDERS })
+  rebuild(M.CONTENT_WHATS, M._cliffBase.content, { M.CLIFF_WHATS, M.CLIFF_COLLIDERS })
+  rebuild(M.SKIN_WHATS, M._cliffBase.skin, { M.CLIFF_STRIPS })
+end
+
 function M.transform(xf, geodesy)
   local bx, by, bz, bw = xf:beamngQuat()
   local function moveObj(id, q)
@@ -2750,7 +2830,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       loadMaterials()
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
-      local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol') and 'Collision Mesh' or not isRoad
+      local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol' or (M._cliffsOn and M.isCliffCollider(q.what))) and 'Collision Mesh' or not isRoad
       local ok, id = pcall(createWalk, walk, staged and 'None' or collide)
       if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
       if staged and not ok then                    -- (a shape that cannot be made: the swap must not commit)

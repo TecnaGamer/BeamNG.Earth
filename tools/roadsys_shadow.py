@@ -8,7 +8,11 @@ one process, for the M1 measurements: per-tile timings, read lists, checks, cano
 The cache must be a scratch folder (never the player's ~/.cache/beamng-earth): cells and DEM tiles it lacks are fetched
 into it only with --online. --reverse builds the tiles in the opposite order; --clear-each empties the profile solve
 store before each tile (every tile cold, as a fresh process would build it). Run it twice (orders, processes,
-platforms) and compare the outputs with --compare A.json B.json: tile hashes, piece keys and seams must be equal."""
+platforms) and compare the outputs with --compare A.json B.json: tile hashes, piece keys and seams must be equal.
+
+OSM's mapped road areas (server/osmareas.py): BNE_ROADSYS_AREAS=audit adds each tile's "areas" (the faces against
+the mapped area:highway polygons: edge distance, IoU, width error, splits), =on also fits the carriageway edges to them
+("areas_fit"); BNE_OSMAREAS_DIR names a staged build on disk (tools/build_osm_road_areas.py's output)."""
 import argparse
 import json
 import os

@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import geodesy as g  # noqa: E402
 import imagery  # noqa: E402
 import missindex  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import standins  # noqa: E402,F401  (the stand-in second layer, "s2other")
 import netfetch  # noqa: E402
 
 LAT0, LON0 = 36.5785, -118.2923
@@ -74,11 +76,17 @@ class ServeTransport:
         return status, {}, body
 
 
+# The base chain with a second global layer before EOX 2016 (the stand-in "s2other": the fallback between two layers of
+# one host; the base chain had EOX 2023 there until 2026-11-23)
+CHAIN = tuple(n for n in imagery.BASE_CHAIN if n != "eox2016") + (standins.ALT, "eox2016")
+
+
 class FakeNet(imagery.Imagery):
     """Imagery whose network is a function source_name -> (z, x, y) -> (status, body), behind a
     netfetch.Fetcher (host policies without rate limits unless `policies` is given)."""
 
-    def __init__(self, cache_dir, serve, chain=imagery.BASE_CHAIN, policies=None, clock=None, **kw):
+    def __init__(self, cache_dir, serve, chain=None, policies=None, clock=None, **kw):
+        chain = CHAIN if chain is None else chain
         self.requests = []
         self.transport = ServeTransport(serve, self.requests)
         net = netfetch.Fetcher(transport=self.transport, sleep=lambda s: None, policies=policies or FAST,
@@ -176,7 +184,7 @@ class ReprojectionTest(ImageryCase):
 class ChainTest(ImageryCase):
     @staticmethod
     def colour(name):
-        return {"usgs": (200, 30, 30), "eox2023": (30, 200, 30), "eox2016": (30, 30, 200)}[name]
+        return {"usgs": (200, 30, 30), "s2other": (30, 200, 30), "eox2016": (30, 30, 200)}[name]
 
     def tile(self, name, z, x, y, uniform=False):
         a = np.zeros((256, 256, 3), np.uint8) + np.array(self.colour(name), np.uint8)
@@ -195,10 +203,10 @@ class ChainTest(ImageryCase):
             return self.tile(name, z, x, y)
         im = FakeNet(self.tmp.name, serve, tone=0.0)
         rgb, used = self.render(im)
-        self.assertEqual(set(used), {"eox2023"})
+        self.assertEqual(set(used), {"s2other"})
         self.assertLess(np.abs(rgb.reshape(-1, 3).mean(0) - (31.5, 201.5, 31.5)).max(), 2)
         # usgs: only its z10 coverage probe (blank / 404 here); eox at its max z14
-        self.assertEqual({(r[0], r[1]) for r in im.requests}, {("usgs", 10), ("eox2023", 14)})
+        self.assertEqual({(r[0], r[1]) for r in im.requests}, {("usgs", 10), ("s2other", 14)})
 
     def test_next_source_only_under_the_holes(self):
         """An all-sea (uniform) tile of the first source: the next one is asked only for the tiles under the texels it
@@ -207,24 +215,24 @@ class ChainTest(ImageryCase):
         from unittest import mock
 
         def serve(name, z, x, y):
-            if name == "eox2023" and x == serve.x0:
+            if name == "s2other" and x == serve.x0:
                 return self.tile(name, z, x, y, uniform=True)
             return self.tile(name, z, x, y)
         frame = g.EnuFrame(LAT0, LON0)
-        im = FakeNet(self.tmp.name, serve, chain=("eox2023", "eox2016"), tone=0.0)
+        im = FakeNet(self.tmp.name, serve, chain=("s2other", "eox2016"), tone=0.0)
         lat, lon, _ = frame.enu_to_geodetic(np.array([-20000.0]), np.array([0.0]), 0.0)
         z = imagery.zoom_for(LAT0, 40000.0 / 512)
         serve.x0 = int(imagery.mercator_px(lat, lon, z)[0][0] // imagery.TILE)
         rgb, used = im.render(frame, -20000.0, -20000.0, 40000.0, 512)
-        self.assertLessEqual({"eox2023", "eox2016"}, set(used))
-        asked23 = {(r[2], r[3]) for r in im.requests if r[0] == "eox2023" and r[1] == z}
+        self.assertLessEqual({"s2other", "eox2016"}, set(used))
+        asked23 = {(r[2], r[3]) for r in im.requests if r[0] == "s2other" and r[1] == z}
         asked16 = {(r[2], r[3]) for r in im.requests if r[0] == "eox2016" and r[1] == z}
         self.assertGreater(len(asked23), 4)
         self.assertTrue(asked16 and all(abs(x - serve.x0) <= 1 for x, _ in asked16), asked16)
         self.assertLess(len(asked16), len(asked23))
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.object(imagery, "_unfilled_tiles", lambda *a: _All()):
-            ref = FakeNet(d, serve, chain=("eox2023", "eox2016"), tone=0.0)
+            ref = FakeNet(d, serve, chain=("s2other", "eox2016"), tone=0.0)
             rgb_all, used_all = ref.render(frame, -20000.0, -20000.0, 40000.0, 512)
             self.assertGreater(len({(r[2], r[3]) for r in ref.requests if r[0] == "eox2016" and r[1] == z}),
                                len(asked16), "the whole footprint again, before")
@@ -239,12 +247,12 @@ class ChainTest(ImageryCase):
         self.assertTrue(imagery.is_uniform(np.full((256, 256, 3), 255, np.uint8)), "a white blank stays a blank")
 
         def serve(name, z, x, y):
-            if name == "eox2023":
+            if name == "s2other":
                 return 200, png(sea)
             return self.tile(name, z, x, y)
-        im = FakeNet(self.tmp.name, serve, chain=("eox2023", "eox2016"), tone=0.0)
+        im = FakeNet(self.tmp.name, serve, chain=("s2other", "eox2016"), tone=0.0)
         rgb, used = self.render(im)
-        self.assertIn("eox2023", used)
+        self.assertIn("s2other", used)
         self.assertNotIn("eox2016", used)
         self.assertFalse([r for r in im.requests if r[0] == "eox2016"])
 
@@ -262,15 +270,15 @@ class ChainTest(ImageryCase):
                 _, used = self.render(im)
                 zs = {(r[0], r[1]) for r in im.requests}
                 if outside:     # the probes, no 404 storm at z15
-                    self.assertEqual(zs, {("usgs", 10), ("usgs", 12), ("eox2023", 14)})
-                    self.assertEqual(set(used), {"eox2023"})
+                    self.assertEqual(zs, {("usgs", 10), ("usgs", 12), ("s2other", 14)})
+                    self.assertEqual(set(used), {"s2other"})
                 else:           # 4 m texels: usgs at z15 (3.9 m pixels here)
                     self.assertEqual(zs, {("usgs", 10), ("usgs", 12), ("usgs", 15)})
                     self.assertEqual(set(used), {"usgs"})
         # a far tile with 600 m texels (z8) never asks usgs
         im = FakeNet(tempfile.mkdtemp(dir=self.tmp.name), serve, tone=0.0)
         _, used = im.render(g.EnuFrame(LAT0, LON0), 0.0, 0.0, 153600.0, 256)
-        self.assertEqual(set(used), {"eox2023"})
+        self.assertEqual(set(used), {"s2other"})
         self.assertFalse([r for r in im.requests if r[0] == "usgs"])
 
     def test_black_part_of_a_tile_from_the_next_source(self):
@@ -285,7 +293,7 @@ class ChainTest(ImageryCase):
             return self.tile(name, z, x, y)
         rgb, used = self.render(FakeNet(self.tmp.name, serve, tone=0.0))
         self.assertIn("usgs", used)
-        self.assertIn("eox2023", used, "the black part from the next source")
+        self.assertIn("s2other", used, "the black part from the next source")
         self.assertFalse((rgb.reshape(-1, 3).max(1) <= imagery.NODATA_MAX).any(), "no black texels left")
 
     def test_nodata_mask(self):
@@ -331,7 +339,7 @@ class ChainTest(ImageryCase):
         c, used = self.render(im2)                 # disk: tiles and 404 markers
         self.assertEqual(im2.requests, [])
         self.assertTrue((a == b).all() and (a == c).all())
-        self.assertEqual(set(used), {"eox2023"})
+        self.assertEqual(set(used), {"s2other"})
         stats = im2.stats_snapshot()
         self.assertGreater(stats.get("finished:disk", 0), 0)    # (the finished tiles: no raw tile read again)
         indexes = [f for _, _, fs in os.walk(os.path.join(self.tmp.name, "usgs")) for f in fs if f == missindex.NAME]
@@ -344,7 +352,7 @@ class ChainTest(ImageryCase):
                 return 503, b"busy"
             return self.tile(name, z, x, y)
         rgb, used = self.render(FakeNet(self.tmp.name, serve, tone=0.0))
-        self.assertEqual(set(used), {"eox2023"})
+        self.assertEqual(set(used), {"s2other"})
 
     def test_all_unreachable_raises(self):
         def serve(*a):
@@ -368,12 +376,12 @@ class ChainTest(ImageryCase):
         pol = netfetch.POLICIES["basemap.nationalmap.gov"]
         for x0 in (0.0, 2000.0):            # 3 attempts per tile: the second texture opens the circuit
             _, used = self.render(im, x0=x0)
-            self.assertEqual(set(used), {"eox2023"})
+            self.assertEqual(set(used), {"s2other"})
         n = sum(1 for r in im.requests if r[0] == "usgs")
         self.assertEqual(n, pol.breaker_threshold)     # the 6th attempt met the open circuit
         self.assertTrue(im.fetcher.host("basemap.nationalmap.gov").breaker.is_open())
         _, used = self.render(im, x0=5000.0)            # other source tiles: skipped, no requests
-        self.assertEqual(set(used), {"eox2023"})
+        self.assertEqual(set(used), {"s2other"})
         self.assertEqual(sum(1 for r in im.requests if r[0] == "usgs"), n)
         self.assertGreater(im.stats_snapshot().get("usgs:skipped", 0), 0)
         self.assertEqual(im.fetcher.unavailable_hosts(), ["basemap.nationalmap.gov"])
@@ -384,17 +392,17 @@ class ChainTest(ImageryCase):
         self.assertEqual(im.fetcher.unavailable_hosts(), [])
 
     def test_open_eox_host_skips_both_layers(self):
-        """eox2023 and eox2016 share one host and so one breaker: while it is open neither is asked
+        """s2other and eox2016 share one host and so one breaker: while it is open neither is asked
         and the next source of the chain fills the texture."""
         def serve(name, z, x, y):
             return self.tile(name, z, x, y)
-        im = FakeNet(self.tmp.name, serve, chain=("eox2023", "eox2016", "usgs"), tone=0.0)
+        im = FakeNet(self.tmp.name, serve, chain=("s2other", "eox2016", "usgs"), tone=0.0)
         im.fetcher.host("tiles.maps.eox.at").breaker.trip(60.0)
         _, used = self.render(im)
         self.assertEqual(set(used), {"usgs"})
         self.assertFalse([r for r in im.requests if r[0] != "usgs"])
         st = im.stats_snapshot()
-        self.assertGreater(st.get("eox2023:skipped", 0), 0)
+        self.assertGreater(st.get("s2other:skipped", 0), 0)
         self.assertGreater(st.get("eox2016:skipped", 0), 0)
 
     def test_400_is_not_a_miss(self):
@@ -402,7 +410,7 @@ class ChainTest(ImageryCase):
         def serve(name, z, x, y):
             return (400, b"bad request") if name == "usgs" else self.tile(name, z, x, y)
         _, used = self.render(FakeNet(self.tmp.name, serve, tone=0.0))
-        self.assertEqual(set(used), {"eox2023"})
+        self.assertEqual(set(used), {"s2other"})
         self.assertFalse([f for _, _, fs in os.walk(self.tmp.name) for f in fs if f.endswith(".404")
                           or f == missindex.NAME])
 
@@ -463,7 +471,7 @@ class ChainTest(ImageryCase):
             fut.result()
         self.assertTrue(cm.exception.deferred)
         _, used = self.render(im)
-        self.assertEqual(set(used), {"eox2023"})
+        self.assertEqual(set(used), {"s2other"})
         self.assertTrue([r for r in im.requests if r[0] == "usgs"])
         self.assertGreater(im.stats_snapshot().get("usgs:deferred", 0), 0)
 
@@ -474,10 +482,10 @@ class ChainTest(ImageryCase):
         im.fetcher.host("basemap.nationalmap.gov").breaker.trip(60.0)
         im.prefetch(g.EnuFrame(LAT0, LON0), 0.0, 0.0, 256.0, 64)
         self.idle(im)
-        self.assertEqual({r[0] for r in im.requests}, {"eox2023"})
+        self.assertEqual({r[0] for r in im.requests}, {"s2other"})
         n = len(im.requests)
         _, used = self.render(im)
-        self.assertEqual(set(used), {"eox2023"})
+        self.assertEqual(set(used), {"s2other"})
         self.assertEqual(len(im.requests), n)                   # render found everything prefetched
 
     def test_dropped_prefetch_refetched_once(self):
@@ -488,8 +496,8 @@ class ChainTest(ImageryCase):
         def serve(name, z, x, y):
             gate.wait(5)
             return self.tile(name, z, x, y)
-        im = FakeNet(self.tmp.name, serve, chain=("eox2023",), tone=0.0)
-        key = (imagery.SOURCES["eox2023"], 14, 100, 200)
+        im = FakeNet(self.tmp.name, serve, chain=("s2other",), tone=0.0)
+        key = (imagery.SOURCES["s2other"], 14, 100, 200)
         stale = futures.Future()
         stale.set_exception(imagery.ImageryError("dropped", deferred=True))
         calls = []
@@ -536,7 +544,7 @@ class ChainTest(ImageryCase):
         def serve(name, z, x, y):
             return 200, b"<html>maintenance</html>"
         with self.assertRaises(imagery.ImageryError):
-            self.render(FakeNet(self.tmp.name, serve, chain=("eox2023",), tone=0.0))
+            self.render(FakeNet(self.tmp.name, serve, chain=("s2other",), tone=0.0))
         self.assertFalse([f for _, _, fs in os.walk(self.tmp.name) for f in fs if f.endswith(".jpg")])
 
     def test_prefetch(self):
@@ -547,9 +555,9 @@ class ChainTest(ImageryCase):
         im.prefetch(f, 0.0, 0.0, 256.0, 64)
         time.sleep(0.3)
         self.assertTrue(im.requests and all(r[0] == "usgs" for r in im.requests))
-        im.prefetch(f, 0.0, 0.0, 256.0, 64)      # usgs known missing there: eox2023 next
+        im.prefetch(f, 0.0, 0.0, 256.0, 64)      # usgs known missing there: s2other next
         time.sleep(0.3)
-        self.assertIn("eox2023", {r[0] for r in im.requests})
+        self.assertIn("s2other", {r[0] for r in im.requests})
         n = len(im.requests)
         self.render(im)
         self.assertEqual(len(im.requests), n)     # render found everything prefetched
@@ -559,7 +567,7 @@ class ChainTest(ImageryCase):
         as demand; a plain prefetch does not (GitHub #116)."""
         def serve(name, z, x, y):
             return self.tile(name, z, x, y)
-        im = FakeNet(self.tmp.name, serve, chain=("eox2023",), tone=0.0)
+        im = FakeNet(self.tmp.name, serve, chain=("s2other",), tone=0.0)
         im.fetcher.allow = lambda host, kind="prefetch": kind == "demand"
         f = g.EnuFrame(LAT0, LON0)
         im.prefetch(f, 0.0, 0.0, 256.0, 64)
@@ -567,7 +575,31 @@ class ChainTest(ImageryCase):
         self.assertFalse(im.requests, "a plain prefetch past the budget: nothing")
         im.prefetch(f, 0.0, 0.0, 256.0, 64, soon=True)
         self.stop_imagery()                 # (its fetches done, not 0.3 s of a loaded machine)
-        self.assertTrue(im.requests and all(r[0] == "eox2023" for r in im.requests))
+        self.assertTrue(im.requests and all(r[0] == "s2other" for r in im.requests))
+
+    def test_packs_second_place_draws_only_finer_views(self):
+        """bngs2fine (2026-11-23, after USGS in the chain): bngs2's tiles, folder and packs, used only for the views
+        finer than their zoom there (its first place draws the rest, USGS's sharper tiles come between in the US)."""
+        from dataclasses import replace
+        s2, fine = imagery.SOURCES["bngs2"], imagery.SOURCES["bngs2fine"]
+        self.assertEqual((fine.url, fine.pack, imagery.store_of(fine), imagery.store_of(s2)),
+                         (s2.url, s2.pack, "bngs2", "bngs2"))
+        self.assertTrue(fine.enlarge_only and not s2.enlarge_only)
+        for src, want in ((s2, {12: True, 14: False, 17: False}), (fine, {12: False, 14: True, 17: True})):
+            src = replace(src, max_zoom=13, max_view_zoom=13 if src is s2 else 99)
+            mz, mv = imagery.zoom_caps(src, 40.0)
+            self.assertEqual({z: imagery.view_ok(src, z, mz, mv) for z in want}, want, src.name)
+        # z14 packs to 50 degrees: north of it the z13 ones, and the second place takes the z14 views there
+        s2l = replace(s2, max_zoom=14, max_view_zoom=14, zoom_max_lat=((14, 50.0),))
+        finel = replace(fine, max_zoom=14, zoom_max_lat=((14, 50.0),))
+        for lat, first, second in ((40.0, True, False), (60.0, False, True)):
+            self.assertEqual(imagery.view_ok(s2l, 14, *imagery.zoom_caps(s2l, lat)), first, lat)
+            self.assertEqual(imagery.view_ok(finel, 14, *imagery.zoom_caps(finel, lat)), second, lat)
+        self.assertEqual(imagery.zoom_caps(finel, 60.0), (13, 99))
+        im = imagery.Imagery(self.tmp.name, ("bngs2", "usgs", "bngs2fine", "eox2016"),
+                             fetcher=netfetch.Fetcher(offline=True))
+        self.assertEqual(im._paths(fine, 13, 1, 2), im._paths(s2, 13, 1, 2))
+        self.assertEqual(im._fin_path((fine, 13, 1, 2)), im._fin_path((s2, 13, 1, 2)))
 
     def test_parse_chain_and_attribution(self):
         self.assertIsNone(imagery.parse_chain("off"))
@@ -579,14 +611,21 @@ class ChainTest(ImageryCase):
         self.assertIn("CC BY 4.0", imagery.Imagery(self.tmp.name, ("eox2016",)).attribution())
         # EOX's required wording (June 2026, docs/research/2026-10-10-rate-limits.md)
         eox = "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data "
-        self.assertEqual(imagery.SOURCES["eox2023"].attribution, eox + "2023), CC BY-NC-SA 4.0")
         self.assertEqual(imagery.SOURCES["eox2016"].attribution, eox + "2016 & 2017), CC BY 4.0")
+        # EOX 2023 (CC BY-NC-SA 4.0) left the chain 2026-11-23: not a source; the name is accepted and left out
+        self.assertNotIn("eox2023", imagery.SOURCES)
+        self.assertEqual(imagery.parse_chain("usgs,eox2023,eox2016"), ("usgs", "eox2016"))
+        self.assertNotIn("NC-SA", imagery.ATTRIBUTION)
+        self.assertNotIn("2023)", imagery.ATTRIBUTION.split("EOxCloudless", 1)[-1])
+        # the packs' second place shares their credit, once
+        two = imagery.Imagery(self.tmp.name, ("bngs2", "usgs", "bngs2fine", "eox2016")).attribution()
+        self.assertEqual(two.count(imagery.SOURCES["bngs2"].attribution), 1)
         self.assertEqual(imagery.Imagery(self.tmp.name, imagery.BASE_CHAIN).attribution(),
                          "Imagery: State of Maryland, MD iMAP / DoIT six-inch imagery; "
                          "USDA NAIP (public domain); "
                          "USDA NAIP via USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain); "
                          "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain); " + eox
-                         + "2023), CC BY-NC-SA 4.0; " + eox + "2016 & 2017), CC BY 4.0")
+                         + "2016 & 2017), CC BY 4.0")
         self.assertNotIn("Sentinel-2 cloudless", imagery.ATTRIBUTION)
         for n in imagery.DEFAULT_CHAIN:                     # the overlay's font is ASCII only
             imagery.SOURCES[n].attribution.encode("ascii")
@@ -764,7 +803,7 @@ class ExportImageryTest(ImageryCase):
             reqs.append((name, z))
             return 200, png(background(z, x, y))
         with tempfile.TemporaryDirectory() as d:
-            im = FakeNet(d, serve, chain=("czechia", "eox2023"), tone=0.0)
+            im = FakeNet(d, serve, chain=("czechia", "s2other"), tone=0.0)
             lat, lon = 50.0, 15.0
             self.assertEqual(im.sharp_zoom(lat, lon, reach=14), 17)
             self.assertEqual(im.sharp_zoom(43.0, 20.0, reach=14), 14)        # (outside its box: EOX's)
@@ -991,8 +1030,8 @@ class GutterTest(unittest.TestCase):
         # 8 tiles round it); the footprint's texels are the same, the gutter is its edge clamped
         z, x, y = 10, 300, 400
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
-            new = FakeNet(d1, self._serve_all, chain=("eox2023",), tone=0.0)
-            old = FakeNet(d2, self._serve_all, chain=("eox2023",), tone=0.0)
+            new = FakeNet(d1, self._serve_all, chain=("s2other",), tone=0.0)
+            old = FakeNet(d2, self._serve_all, chain=("s2other",), tone=0.0)
             for px in (128, 256, 512):
                 gp = imagery.gutter(px)
                 new.requests.clear()
@@ -1013,7 +1052,7 @@ class GutterTest(unittest.TestCase):
                                                                                  (gp, px - 2 * gp, 3)))
                     np.testing.assert_array_equal(a[gp:-gp, -gp:], np.broadcast_to(a[gp:-gp, -gp - 1:-gp],
                                                                                     (px - 2 * gp, gp, 3)))
-                self.assertEqual(set(used), {"eox2023"})
+                self.assertEqual(set(used), {"s2other"})
                 # neighbours on hand (fetched before): the gutter takes them, as before
                 new.tiles([r[1:] and (imagery.SOURCES[r[0]],) + r[1:] for r in old.requests])
                 new.requests.clear()
@@ -1471,14 +1510,13 @@ class NetworkImageryTest(unittest.TestCase):
 
     def test_outside_us_falls_back_to_eox(self):
         rgb, used = self.render(48.0, 70.0)             # Kazakhstan: no regional source either
-        self.assertEqual(set(used), {"eox2023"})
+        self.assertEqual(set(used), {"eox2016"})
         self.assertGreater(rgb.std(), 5)
 
     def test_open_ocean(self):
         rgb, used = self.render(30.0, -140.0, size=4096.0)
-        # EOX's open-sea blue: EOX 2023 serves it on a fresh cache (its sea is the picture, not a blank: e2ff61f5); a
-        # cache holding an older run's blank verdict for its tiles takes EOX 2016's, the same blue
-        self.assertTrue(used and set(used) <= {"eox2023", "eox2016"}, used)
+        # EOX's open-sea blue (its sea is the picture, not a blank: e2ff61f5): EOX 2016's
+        self.assertTrue(used and set(used) <= {"eox2016"}, used)
         self.assertLess(rgb.reshape(-1, 3).std(0).max(), 2)
         self.assertGreater(int(rgb[..., 2].mean()), int(rgb[..., 0].mean()))
 

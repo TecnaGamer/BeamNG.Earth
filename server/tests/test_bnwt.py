@@ -437,7 +437,10 @@ class ContentGuard(unittest.TestCase):
     unchanged; then the fingerprint here is updated."""
     # (2026-11-18: mapgeom.text_column ported to Rust, earthfast 454; its output byte for byte the same: 11.3 M values
     # over three cold visits and test_textcol_native's parity, so the archives stay at CONTENT 1)
-    FINGERPRINT = {("base", 1): "3e0d97bbbe8d058e", ("transportation", 1): "3d94e4d2261a7dd0",
+    # (2026-11-22: Reader.query's connection made at its first statement, _run's simplification of whole division
+    # outlines kept by their WKB (_simplified): the same statements and the same pure function; no base layer
+    # simplifies; CIP units of Manhattan, the open sea, the Sahara and the Yukon byte for byte the same; base stays at 1)
+    FINGERPRINT = {("base", 1): "52c719597716ccf1", ("transportation", 1): "3d94e4d2261a7dd0",
                    ("buildings", 1): "628fa00065e3eecd", ("places", 1): "21b3b00b2b99c951"}
 
     @staticmethod

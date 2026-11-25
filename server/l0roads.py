@@ -44,10 +44,9 @@ JOIN_MAX_DZ_M = 1.5         # m: a road end this near a main road's height takes
 def _params(spec):
     """(core half width m, sigma m, median window m, rank) of a road spec: the grading's own rules (grading.py)."""
     import grading
-    import roads as roadsmod
     core = float(spec.width) / 2 + grading.shoulder(spec)
     sigma = grading.profile_sigma(spec)
-    median = grading.MEDIAN_M if spec.kind in roadsmod.BUILT else grading.DIRT_MEDIAN_M
+    median = grading.profile_median(spec)
     rank = float(grading.JUNCTION_RANK.get(spec.cls, 0)) - (0.5 if getattr(spec, "link", False) else 0.0)
     return core, float(sigma), float(median), max(rank, 0.0)
 

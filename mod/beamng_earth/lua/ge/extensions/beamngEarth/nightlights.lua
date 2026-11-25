@@ -109,6 +109,11 @@ M.MAKE_PER_STEP = 4
 M.LIGHT = { range = 36, inner = 50, outer = 130, brightness = 8.0, color = '1 0.66 0.33 1', drop = 0.12, tilt = 12 }
 
 M.HIGH_MAST = { range = 70, inner = 70, outer = 150, brightness = 12.0, color = '1 0.82 0.60 1', drop = 0.12, tilt = 0 }
+-- the mapped lamps' own colours (BNE_LAMP_TAGS: light:colour / lamp_type; server furniture.LENS_COLOURS): an LED's cool
+-- white, a warm white / yellow; the stock profile otherwise
+M.LIGHT_WHITE = { range = 36, inner = 50, outer = 130, brightness = 8.0, color = '0.86 0.92 1 1', drop = 0.12, tilt = 12 }
+M.LIGHT_YELLOW = { range = 36, inner = 50, outer = 130, brightness = 8.0, color = '1 0.86 0.55 1', drop = 0.12, tilt = 12 }
+local LENS_PROFILE = { lamplens_white = 'LIGHT_WHITE', lamplens_yellow = 'LIGHT_YELLOW' }
 M.LANTERN = { range = 20, inner = 65, outer = 150, brightness = 4.0, color = '1 0.68 0.12 1', drop = 0.12, tilt = 0 }
 
 local lastCheck = -1e9
@@ -122,13 +127,21 @@ local lenses = {}        -- road tile key -> { {x, y, z}, ... }
 M.providers = {}
 local pool = {}          -- { id, at (lens table or nil) }
 
--- Whether it is night by the stock environment (nil when there is no time of day, as in the main menu).
+-- Whether it is night by the stock environment (nil when there is no time of day, as in the main menu), or dark enough
+-- by the weather before it (beamngEarth_weather.duskDark: a thick deck in rain widens the night window by up to 1.5 h,
+-- as street lamps' photocells switch on under a storm's sky; the weather plan's 4.11).
 function M.isNight()
   local env = rawget(_G, 'core_environment')
   if type(env) ~= 'table' or type(env.getLightState) ~= 'function' then return nil end
   local ok, st = pcall(env.getLightState)
   if not ok or type(st) ~= 'table' then return nil end
-  return st.isNight == true
+  if st.isNight == true then return true end
+  local w = rawget(_G, 'beamngEarth_weather')
+  if w and w.duskDark then
+    local okd, dark = pcall(w.duskDark, st)
+    if okd and dark then return true end
+  end
+  return false
 end
 
 -- Day / night and the night's step onto the materials, each set (and reloaded) only when its glow or map changes. (By
@@ -171,13 +184,14 @@ end
 function M.onRows(key, items, groups)
   local groupsById = {}
   for i, g in ipairs(type(groups) == 'table' and groups or {}) do
-    if g == 'lamplens' or g == 'high_mast_light' or g == 'fr_lantern_light' then groupsById[i - 1] = g end
+    if g == 'lamplens' or g == 'high_mast_light' or g == 'fr_lantern_light' or LENS_PROFILE[g] then groupsById[i - 1] = g end
   end
   if type(items) ~= 'table' then lenses[key] = nil; return end
   local out = {}
   for _, r in ipairs(items) do
     if type(r) == 'table' and groupsById[r[1]] and r[2] and r[3] and r[4] then
-      out[#out + 1] = { r[2], r[3], r[4], r[5], groupsById[r[1]] == 'fr_lantern_light', groupsById[r[1]] == 'high_mast_light' }
+      out[#out + 1] = { r[2], r[3], r[4], r[5], groupsById[r[1]] == 'fr_lantern_light', groupsById[r[1]] == 'high_mast_light',
+                        LENS_PROFILE[groupsById[r[1]]] }
     end
   end
   lenses[key] = #out > 0 and out or nil
@@ -262,7 +276,7 @@ local function place(e, l)
   local o = scenetree.findObjectById(e.id)
   if not o then return end
   if l then
-    local L = l[6] and M.HIGH_MAST or l[5] and M.LANTERN or M.LIGHT
+    local L = l[6] and M.HIGH_MAST or l[5] and M.LANTERN or (l[7] and M[l[7]]) or M.LIGHT
     -- Reapply on reuse: a light previously serving a lantern can serve a stock lamp.
     if e.profile ~= L then
       for field, value in pairs({ range = L.range, innerAngle = L.inner, outerAngle = L.outer,

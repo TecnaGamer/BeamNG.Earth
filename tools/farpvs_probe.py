@@ -274,7 +274,7 @@ def where_of(frame, tile, px):
 
 def photo_keys(frame, tile, px, us, chain=None, gutter=True):
     """The source tiles imagery._render would read for a tile's texture at px (the first source of the chain that
-    takes the zoom: usgs (z10-16) in the US, else eox2023 (to z14)); chain 'eox': eox alone (the coarse cover's)."""
+    takes the zoom: usgs (z10-16) in the US, else Sentinel-2 (eox2016, to z14)); chain 'eox': eox alone (the coarse cover's)."""
     where, _ = where_of(frame, tile, px)
     lat, lon = where.grid(8)
     lat = np.clip(lat, -89.9, 89.9)
@@ -291,7 +291,7 @@ def photo_keys(frame, tile, px, us, chain=None, gutter=True):
     if chain != "eox" and us and zw >= 10:
         src, z = "usgs", min(zw, 16)
     else:
-        src, z = "eox2023", min(zw, 14)
+        src, z = "eox2016", min(zw, 14)
     while True:
         fx, fy = im.mercator_px(lat, lon, z)
         tx0, tx1 = int(math.floor(fx.min() - pad)) // 256, int(math.floor(fx.max() + pad - 1e-9)) // 256

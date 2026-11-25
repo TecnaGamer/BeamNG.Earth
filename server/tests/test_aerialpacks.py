@@ -177,7 +177,7 @@ class SwitchTest(unittest.TestCase):
         self.addCleanup(imagery.set_s2_max_zoom, 12, {})
         self.addCleanup(os.environ.pop, "BNGE_AERIAL", None)
 
-    def chain(self, doc, names=("md6in", "naip", "usgs", "eox2023")):
+    def chain(self, doc, names=("md6in", "naip", "usgs", "eox2016")):
         with open(os.path.join(self.d, "cdn", "cdn.json"), "w") as fh:
             json.dump(doc, fh)
         return list(cdn.chain(list(names), None, self.d))
@@ -185,8 +185,8 @@ class SwitchTest(unittest.TestCase):
     def test_aerial_first_by_switch(self):
         os.environ.pop("BNGE_AERIAL", None)
         on = self.chain({"imagery": {"bngaer": {"enabled": True}}})
-        self.assertEqual(on, (["bngaer"] if aerialpacks.avif_ok() else []) + ["md6in", "naip", "usgs", "eox2023"])
-        self.assertEqual(self.chain({"imagery": {"bngaer": {"enabled": False}}}), ["md6in", "naip", "usgs", "eox2023"])
+        self.assertEqual(on, (["bngaer"] if aerialpacks.avif_ok() else []) + ["md6in", "naip", "usgs", "eox2016"])
+        self.assertEqual(self.chain({"imagery": {"bngaer": {"enabled": False}}}), ["md6in", "naip", "usgs", "eox2016"])
         os.environ["BNGE_AERIAL"] = "off"
         self.assertNotIn("bngaer", self.chain({"imagery": {"bngaer": {"enabled": True}}}))
 

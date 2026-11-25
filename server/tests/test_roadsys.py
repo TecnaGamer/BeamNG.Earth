@@ -252,6 +252,49 @@ class SquareTest(unittest.TestCase):
         roadsys._squares.clear()
 
 
+class ChainEndsTest(unittest.TestCase):
+    def test_an_end_on_another_deck_of_the_chain_is_no_abutment(self):
+        """(M5) roadsys._ends_on_decks: a viaduct's two parts 1.8 m apart (past endmatch's JOIN_M): each end's
+        approach point lies on the other part, so neither is lifted or dropped to the ground under it; a real
+        abutment's point (past the chain's outer end) is on no deck; a part never covers its own end."""
+        import roadsys
+        a = np.array([[0.0, 0.0], [50.0, 0.0]])
+        b = np.array([[51.8, 0.0], [120.0, 0.0]])
+        spec = type("Spec", (), {"width": 8.3})()
+        decks = [("a", a, roadsys._half_width((spec, a))), ("b", b, roadsys._half_width((spec, b)))]
+        pts = np.array([[-0.5, 0.0], [50.5, 0.0], [51.3, 0.0], [120.5, 0.0]])
+        got = roadsys._ends_on_decks(pts, ["a", "a", "b", "b"], decks)
+        self.assertEqual(got.tolist(), [False, True, True, False])
+        self.assertEqual(roadsys._half_width((None, a)), roadsys.DECK_HALF_MIN_M)
+
+
+class StructureDepthTest(unittest.TestCase):
+    def test_some_bridges_are_thicker_than_others(self):
+        """(M5) roadsys.structure_depth: a through truss's floor system whatever its span, a deck truss a tenth of its
+        span or so, girders span / 22 within 0.6-4.0 m (a short slab thin, a long flyover deep)."""
+        import bridgetypes as bt
+        import roadsys
+        self.assertEqual(roadsys.structure_depth(120.0, bt.NBI_THROUGH_TRUSS), roadsys.DEPTH_FLOOR_SYSTEM_M)
+        self.assertAlmostEqual(roadsys.structure_depth(60.0, bt.NBI_DECK_TRUSS), 5.0)
+        self.assertAlmostEqual(roadsys.structure_depth(8.0), 0.6)
+        self.assertAlmostEqual(roadsys.structure_depth(44.0), 2.0)
+        self.assertAlmostEqual(roadsys.structure_depth(200.0, bt.PLAIN), 4.0)
+        self.assertLess(roadsys.structure_depth(15.0), roadsys.structure_depth(60.0))
+
+    def test_railway_clearance_by_line_and_country(self):
+        """(M5) roadsys.rail_clearance: a catenary's by country, a loading gauge's otherwise, light rail and metro
+        their own; trams and lines not built hold no floor (RAIL_CLASSES)."""
+        import roadsys
+        self.assertEqual(roadsys.rail_clearance("US", "standard_gauge", False), 7.0)
+        self.assertEqual(roadsys.rail_clearance("DE", "standard_gauge", True), 5.7)
+        self.assertEqual(roadsys.rail_clearance("DE", "standard_gauge", False), 5.0)
+        self.assertEqual(roadsys.rail_clearance("gb", "standard_gauge", False), 4.8)
+        self.assertEqual(roadsys.rail_clearance("XX", "standard_gauge", True), 6.0)
+        self.assertEqual(roadsys.rail_clearance("US", "light_rail", True), 5.0)
+        self.assertNotIn("tram", roadsys.RAIL_CLASSES)
+        self.assertNotIn("unknown", roadsys.RAIL_CLASSES)
+
+
 @unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 596, "earthfast 596 (roadsys) required")
 class KernelTest(unittest.TestCase):
     def test_same_bytes_whatever_the_order(self):
@@ -343,7 +386,9 @@ class KernelTest(unittest.TestCase):
         blob += struct.pack("<Iqq", n, -2, -2) + np.zeros(n * n, "<f4").tobytes() + bytes(n * n)
         blob += struct.pack("<I", 0) + struct.pack("<I", 0)
         import json
-        self.assertFalse(any(json.loads(fast._ef.roadsys_audit(blob)).values()), "an empty scene: nothing counted")
+        # (the auditor's measuring rules are stamped on every result, audit.rs AUDIT_VERSION: not a count)
+        got = json.loads(fast._ef.roadsys_audit(blob))
+        self.assertFalse(any(v for k, v in got.items() if k != "audit_version"), "an empty scene: nothing counted")
         with self.assertRaises(ValueError):
             fast._ef.roadsys_audit(b"nope")
 
@@ -411,9 +456,14 @@ class SwitchTest(unittest.TestCase):
         i = src.index("if roadsys.HEIGHTS and not roadshape.PROFILE_BUILT:")
         self.assertIn("roadsys.pins_near(", src[i:i + 400])
 
-    def test_not_on_the_settings_page(self):
+    def test_only_with_the_revamped_roads_setting(self):
+        # (the user, 2026-11-24: "make sure the revamped roads toggle uses the updated rewritten roads": no page entry
+        # of its own, only inside Revamped roads, at the M4 surface mode with the areas fit and cross-sections)
         import experimental
-        self.assertFalse(any("BNE_ROADSYS" in env for _sid, env, _n in experimental.FEATURES))
+        holders = [sid for sid, env, _n in experimental.FEATURES if any(k.startswith("BNE_ROADSYS") for k in env)]
+        self.assertEqual(holders, ["expRoadRevamp"])
+        env = {sid: env for sid, env, _n in experimental.FEATURES}["expRoadRevamp"]
+        self.assertEqual((env["BNE_ROADSYS"], env["BNE_ROADSYS_AREAS"], env["BNE_ROADSYS_XSEC"]), ("surface", "on", "on"))
 
     def test_the_tile_path_only_reads_the_flag(self):
         src = (HERE / "blockworker.py").read_text(encoding="utf-8")
@@ -560,6 +610,136 @@ class StructuresTest(unittest.TestCase):
         got = roads.geo_exact_auto(tf, tf, {"deck": {"pivot": 3.0, "relief": 0.0, "col": True, "ho": True},
                                             "bld": {"pivot": 3.0, "relief": 0.0}})
         self.assertEqual(got, {"deck": {"pivot": 3.0}})
+
+
+
+@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 606, "earthfast 606 (roadsys surface, M4) required")
+class SurfaceTest(unittest.TestCase):
+    """BNE_ROADSYS=surface (M4): structures plus the decks drawn from the road system's own faces; keyed apart from
+    structures; the decks take today's deck heights (flat across), parapets on the free edges only, the same bytes
+    whatever the map's order; today's deck chunks the faces stand in for are drawn by neither mesh."""
+
+    MOTORWAY = [(-300.0, -900.0), (-300.0, 900.0)]
+
+    def lines(self, z_end=10.0):
+        # (today's deck over the street: m|0 from 0.48 to 0.52 of its 1800 m, its middle 6 m up)
+        y0, y1 = -900.0 + 0.48 * 1800.0, -900.0 + 0.52 * 1800.0
+        g0, g1 = ground(-300.0, y0), ground(-300.0, y1)
+        return [("m", np.array([[-300.0, y0, g0 + z_end - 10.0], [-300.0, 0.0, ground(-300.0, 0.0) + 6.0],
+                                [-300.0, y1, g1 + z_end - 10.0]], np.float64))]
+
+    def decks(self, rows, lines):
+        quad = [(-428.0, -128.0), (-172.0, -128.0), (-172.0, 128.0), (-428.0, 128.0)]
+        return fast._ef.roadsys_decks(table(rows), quad, ground, lines)
+
+    def test_surface_is_structures_and_more(self):
+        import roadsys
+        with mock.patch.dict(os.environ, {"BNE_ROADSYS": "surface"}):
+            importlib.reload(roadsys)
+            self.assertTrue(roadsys.HEIGHTS and roadsys.STRUCTURES and roadsys.SURFACE)
+        with mock.patch.dict(os.environ, {"BNE_ROADSYS": "structures"}):
+            importlib.reload(roadsys)
+            self.assertTrue(roadsys.STRUCTURES)
+            self.assertFalse(roadsys.SURFACE)
+        importlib.reload(roadsys)
+        self.assertFalse(roadsys.SURFACE)
+
+    def test_keyed_apart_from_structures(self):
+        st = revisit.keyed_value("BNE_ROADSYS", "structures")
+        su = revisit.keyed_value("BNE_ROADSYS", "surface")
+        self.assertNotEqual(st, su)
+        self.assertIn(f"u{revisit.ROADSYS_SURFACE_VERSION}", su)
+        keys = {}
+        for v in ("structures", "surface"):
+            with mock.patch.dict(os.environ, {"BNE_ROADSYS": v}):
+                revisit._switches.clear()
+                keys[v] = revisit.switches_key()
+        revisit._switches.clear()
+        self.assertNotEqual(keys["structures"], keys["surface"])
+
+    def test_decks_take_todays_heights_and_parapets_on_free_edges(self):
+        V, T, K, F, D, feats, runs, MV, MT, MC, fallback, js = self.decks(bridge_network(), self.lines())
+        self.assertEqual(list(fallback), [])
+        self.assertEqual(list(feats), ["m"])
+        V, T, K = np.asarray(V), np.asarray(T), np.asarray(K)
+        top = T[K != 9]
+        self.assertGreater(len(top), 10)
+        mid = [V[i] for t in top for i in t if abs(V[i][1]) < 0.3]
+        self.assertTrue(mid)
+        for p in mid:           # (flat across: every vertex of the middle row at today's middle height)
+            self.assertAlmostEqual(p[2], ground(-300.0, 0.0) + 6.0, delta=0.02)
+        self.assertEqual(len(runs), 2, js)       # (one along each side; none across the deck's ends)
+        for pts, nrm, closed, _f in runs:
+            pts = np.asarray(pts)
+            self.assertFalse(closed)
+            self.assertGreater(float(np.ptp(pts[:, 1])), 60.0)
+            self.assertLess(float(np.ptp(pts[:, 0])), 1.0)
+
+    def test_no_deck_heights_is_todays_deck(self):
+        out = self.decks(bridge_network(), [])
+        self.assertEqual(list(out[10]), ["m"])
+        self.assertEqual(len(out[1]), 0)
+
+    def test_same_decks_whatever_the_order(self):
+        a = self.decks(bridge_network(), self.lines())
+        b = self.decks(list(reversed(bridge_network())), self.lines())
+        self.assertEqual(np.asarray(a[0]).tobytes(), np.asarray(b[0]).tobytes())
+        self.assertEqual(np.asarray(a[1]).tobytes(), np.asarray(b[1]).tobytes())
+
+    def test_ground_end_meets_the_ground(self):
+        V, T, K, F, D, feats, runs, MV, MT, MC, fallback, js = self.decks(bridge_network(), self.lines(z_end=10.4))
+        V = np.asarray(V)
+        y0 = -900.0 + 0.48 * 1800.0
+        end = [p for p in V if abs(p[1] - y0) < 0.05 and abs(p[0] + 300.0) < 4.0]
+        self.assertTrue(end)
+        want = float(ground(-300.0, y0 - 0.5))
+        for p in end:
+            self.assertAlmostEqual(p[2], want, delta=0.02)
+
+    def test_hidden_chunks_are_drawn_by_neither_mesh(self):
+        import roadmesh
+        c = {"m": "asphalt", "w": 7.0, "n": [[0.0, 0.0, 5.0], [20.0, 0.0, 5.0]], "deck": True, "fixed": True}
+        self.assertIsNotNone(roadmesh.deck([dict(c)], (0.0, 0.0, 0.0)))
+        self.assertIsNone(roadmesh.deck([dict(c, rs_hide=True)], (0.0, 0.0, 0.0)))
+        self.assertEqual(roadmesh.parapet_runs([dict(c, rs_hide=True)]), [])
+        self.assertEqual(roadmesh._shown([dict(c), dict(c, rs_hide=True)]), [dict(c)])
+
+
+class SkewTest(unittest.TestCase):
+    """(627) The deck-end skew under BNE_ROADSYS=surface: the hand-over's skewed ends, the ground roads cut along them."""
+
+    def test_the_hand_overs_ends_skew_by_the_rule(self):
+        if getattr(fast._ef, "VERSION", 0) < 627:
+            self.skipTest("earthfast < 627")
+        b = (np.array([[0.3, 0.2], [40.3, 0.2]]), 4.0)
+        gnd = (np.array([[-40.0, 0.2], [0.3, 0.2]]), 4.0)
+        road = (np.array([[-4.7, -43.10127], [45.3, 43.50127]]), 3.5)
+        e = fast._ef.RoadsysEnds([b], [gnd, road], [], 1.0, [], [None])
+        sk = e.skews()
+        self.assertEqual(len(sk), 1)
+        x, y, dx, dy = sk[0]
+        self.assertAlmostEqual(x, 0.3)
+        self.assertAlmostEqual(dx, 0.5, places=4)
+        self.assertAlmostEqual(dy, 0.8660254, places=4)
+        self.assertEqual(fast._ef.RoadsysEnds([b], [gnd, road], [], 1.0).skews(), [])     # (no skew asked: square)
+        # the inventory's record of a square structure: square
+        self.assertEqual(fast._ef.RoadsysEnds([b], [gnd, road], [], 1.0, [], [(0.0, 40.0, 1.0, 0.0)]).skews(), [])
+
+    def test_a_ground_road_ending_at_a_skewed_end_takes_its_line(self):
+        import roads
+        import roadmesh
+        g = {"m": "asphalt", "w": 7.0, "n": [[-40.0, 0.0, 5.0], [0.0, 0.0, 5.0]]}
+        far = {"m": "asphalt", "w": 7.0, "n": [[-40.0, 30.0, 5.0], [0.0, 30.0, 5.0]]}
+        chunks = [dict(g), dict(far)]
+        roads._rs_skew_ground_ends(chunks, [(0.0, 0.0, -0.5, -0.8660254037844386)])
+        self.assertEqual(chunks[0].get("rs_sk1"), [0.5, 0.866025])       # (to the chunk's left there: +y)
+        self.assertNotIn("rs_sk1", chunks[1])
+        got = roadmesh.ribbon_pairs([chunks[0]])
+        r = got[0][0] if isinstance(got[0], tuple) and len(got[0]) == 2 else got[0]
+        le, ri = r[0], r[1]
+        # the ribbon's end row along the line: left 3.5 m up at x = 3.5 cot 60, right at -3.5 cot 60
+        self.assertAlmostEqual(float(le[-1][0]), 3.5 * 0.5 / 0.8660254037844386, places=3)
+        self.assertAlmostEqual(float(ri[-1][0]), -3.5 * 0.5 / 0.8660254037844386, places=3)
 
 
 if __name__ == "__main__":

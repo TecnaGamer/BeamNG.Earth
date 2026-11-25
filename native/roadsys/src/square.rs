@@ -35,6 +35,7 @@ const MATCH_M: f64 = 3.0;               // m a deck vertex may lie off its struc
 const ROAD_MATCH_M: f64 = 1.0;          // m a point of a road may lie off the same road's knots in another square
 const MATCH_COS: f64 = 0.7071067811865476;
 const SUP_TOL_M: f64 = 3.0;
+const DECK_PAST_M: f64 = 60.0;          // (M5) m past a mapped structure end a deck of the deck builder still takes its profile
 const FEAT_TOL_M: f64 = 2.0;
 const PIN_STEP_M: f64 = 2.5;
 const PIN_FINE_M: f64 = 0.25;
@@ -130,11 +131,13 @@ impl SqStroke {
     fn feature_at(&self, s: f64) -> Option<&str> {
         self.feats.iter().find(|f| s >= f.0 - 1e-6 && s <= f.1 + 1e-6).map(|f| f.2.as_str())
     }
+    /// (M5: within DECK_PAST_M past a structure's mapped end too: the deck builder lengthens decks over roads under
+    /// them and over lidar-raised stretches; the profile is the carriageway's there as anywhere)
     fn on_structure(&self, s: f64) -> bool {
-        self.sup.iter().any(|u| u.2 == SUP_STRUCT && s >= u.0 - SUP_TOL_M && s <= u.1 + SUP_TOL_M)
+        self.sup.iter().any(|u| u.2 == SUP_STRUCT && s >= u.0 - DECK_PAST_M && s <= u.1 + DECK_PAST_M)
     }
     fn depth_at(&self, s: f64) -> Option<f64> {
-        self.sup.iter().filter(|u| u.2 == SUP_STRUCT && s >= u.0 - SUP_TOL_M && s <= u.1 + SUP_TOL_M).map(|u| u.3).next()
+        self.sup.iter().filter(|u| u.2 == SUP_STRUCT && s >= u.0 - DECK_PAST_M && s <= u.1 + DECK_PAST_M).map(|u| u.3).next()
     }
     /// (station, offset) of q on the kept knots' polyline (nearest; ties the first) and the tangent there.
     fn project(&self, q: P2) -> (f64, f64, P2) {
@@ -482,6 +485,8 @@ pub fn solve_obs(place: &Place, sq: (i64, i64), g_of: &dyn Fn(&[P2]) -> Vec<f64>
             let (sa_, sb_) = (if c.a == si { Some(c.sa) } else { None }, if c.b == si { Some(c.sb) } else { None });
             for x in [sa_, sb_].into_iter().flatten() { if c.upper == si { ss.hand.push(x); ss.floors.push(x); } else { ss.lows.push(x); } }
         }
+        // (M5) its floors over railway lines: held too (a deck end dropped onto its approach stops there)
+        for r in net.rail_floors.iter().filter(|r| r.si == si) { ss.hand.push(r.s); ss.floors.push(r.s); }
         ss.floors.sort_by(|a, b| a.partial_cmp(b).unwrap());
         ss.hand.sort_by(|a, b| a.partial_cmp(b).unwrap());
         ss.lows.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -748,14 +753,26 @@ mod tests {
 
     /// (M3) A floor takes the structure's drawn depth (+ LEVEL_MARGIN_M) and today's headroom.
     #[test]
-    fn a_floor_is_todays_headroom_and_the_decks_depth() {
-        let mut m = seg("m|0", &[[-300.0, 0.0], [300.0, 0.0]], 1, 1, 100.0, &[], Some((1.0 / 3.0, 2.0 / 3.0)));
-        m.depth = 1.2;
-        let p = Place { segs: vec![m, seg("s|0", &[[0.0, -300.0], [0.0, 300.0]], 4, 0, 50.0, &[], None)], ..Default::default() };
-        let order: Vec<usize> = (0..p.segs.len()).collect();
-        let n = net::build_opts(&p, &order, Opts::default());
-        let c = n.crossings.iter().find(|c| !c.along).expect("a crossing");
-        assert!(absf(c.floor - (net::TODAY_HEADROOM_M + 1.2 + net::LEVEL_MARGIN_M)) < 1e-9, "{}", c.floor);
+    fn a_floor_is_the_lower_roads_clearance_and_the_decks_depth() {
+        // (M5) by the lower road's class (a US secondary: 4.5 m), its maxheight sign where it has one (3.8 m + 0.25 m),
+        // a footway's 2.5 m
+        let floor = |cls: &str, maxh: Vec<(f64, f64, f64)>| {
+            let mut m = seg("m|0", &[[-300.0, 0.0], [300.0, 0.0]], 1, 1, 100.0, &[], Some((1.0 / 3.0, 2.0 / 3.0)));
+            m.depth = 1.2;
+            let mut lo = seg("s|0", &[[0.0, -300.0], [0.0, 300.0]], 4, 0, 50.0, &[], None);
+            lo.cls_s = cls.into();
+            lo.maxh = maxh;
+            let p = Place { segs: vec![m, lo], ..Default::default() };
+            let order: Vec<usize> = (0..p.segs.len()).collect();
+            let n = net::build_opts(&p, &order, Opts::default());
+            n.crossings.iter().find(|c| !c.along).expect("a crossing").floor
+        };
+        let d = 1.2 + net::LEVEL_MARGIN_M;
+        assert!(absf(floor("secondary", vec![]) - (4.5 + d)) < 1e-9);
+        assert!(absf(floor("secondary", vec![(0.45, 0.55, 3.8)]) - (3.8 + net::SIGN_MARGIN_M + d)) < 1e-9);
+        assert!(absf(floor("secondary", vec![(0.0, 0.1, 3.8)]) - (4.5 + d)) < 1e-9, "a sign elsewhere on the road");
+        assert!(absf(floor("footway", vec![]) - (2.5 + d)) < 1e-9);
+        assert!(absf(floor("motorway", vec![]) - (4.9 + d)) < 1e-9);
     }
 
     #[test]

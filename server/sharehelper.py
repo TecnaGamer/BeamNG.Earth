@@ -27,9 +27,11 @@ import dmath  # noqa: E402
 import multiprocessing  # noqa: E402
 import time  # noqa: E402
 import zlib  # noqa: E402
-# (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell)
+# (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell, nor
+# Switzerland's cut cells, roadz.tlm_tags)
 os.environ["BNE_ROADZ_HK"] = "off"
 os.environ["BNE_HKDTM"] = "off"
+os.environ["BNE_ROADZ_TLM"] = "off"
 
 log = logging.getLogger("earthd.sharehelper")
 
@@ -62,6 +64,13 @@ def _warm_versions():
                 t.version()
             except Exception as ex:
                 log.info("helper: %s version: %s: %s", type(t).__name__, type(ex).__name__, ex)
+    import roadz
+    if roadz.ON and roadz.DE_ON:        # (Germany's measured decks: their build in versions() too, decided here)
+        try:
+            import dedom
+            dedom.identity()
+        except Exception as ex:
+            log.info("helper: dedecks: %s: %s", type(ex).__name__, ex)
 
 
 def _expect(lat, lon):
@@ -190,6 +199,8 @@ def run(a):
     import overturepick
     log.info("helper: Overture release %s", overturepick.choose_for_process(a.cache))
     plancache.start_run(a.cache)
+    import pagesdata                # (the server's weekly builds when it started this helper, else one of its own)
+    pagesdata.ensure_session(a.cache)
     # (a cell whose lidar answer is late keeps the rule and its plans are not kept: wait for it, as bake_area does; the
     # items' codes are the bake expect's, without the build switches, so the players still match)
     os.environ.setdefault("BNE_LIDAR_GAPS_WAIT", "120")
@@ -212,7 +223,8 @@ def run(a):
             time.sleep(POLL_S)          # (nobody there, or the map data's weekly versions not known yet)
             continue
         sig, versions = got
-        pc = plancache.PlanCache(os.path.join(a.cache, "plans", os.environ.get(plancache.RUN_ENV) or "helper"), sig)
+        pc = plancache.PlanCache(os.path.join(a.cache, "plans", os.environ.get(plancache.RUN_ENV) or "helper"), sig,
+                                 versions=versions)
         pc.persist = (a.cache, (plancache.FRAMES, sig, versions))
         code = mpshare.expect_code(pc._bake_expect())
 

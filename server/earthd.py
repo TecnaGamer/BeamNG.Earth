@@ -3,7 +3,7 @@
 (and V1_1_SPEC.md).
 
     python3 server/earthd.py [--port 47613] [--user-dir DIR] [--cache-dir DIR] [--far-format cdae|dae]
-                             [--imagery usgs,eox2023,eox2016|off] [--near-visual mesh|terrain]
+                             [--imagery usgs,eox2016|off] [--near-visual mesh|terrain]
                              [--cells 32|64] [--tex 256,256,256,512] [--block 1024|512] [--horizon]
                              [--deshadow off|lambert|full] [--colormatch off|s2]
                              [--weather on|off] [--gravity on|off] [--offline] [--credits on|off]
@@ -121,6 +121,7 @@ import places as placesmod  # noqa: E402
 import runtimeprofiler
 import streamleases
 import pools as poolsmod  # noqa: E402
+import v2host  # noqa: E402
 import memwatch as memwatchmod  # noqa: E402
 import serverlog  # noqa: E402
 import srvrestart as srvrestartmod  # noqa: E402
@@ -158,12 +159,14 @@ import vegetation as vegetationmod
 import buildings as buildingsmod  # noqa: E402
 import bldhz as bldhzmod  # noqa: E402
 import rockface as rockfacemod  # noqa: E402
+import snowcover as snowcovermod  # noqa: E402
 import geotiles as geotilesmod  # noqa: E402
 import riverlines as riverlinesmod  # noqa: E402
 import groundahead as groundaheadmod  # noqa: E402
 import deckspans as deckspansmod  # noqa: E402
 import routeahead as routeaheadmod  # noqa: E402
 import furniture as furnituremod  # noqa: E402
+import natural as naturalmod  # noqa: E402
 import development as developmentmod  # noqa: E402
 import townentry as townentrymod  # noqa: E402     (PR #597's town entry and exit signs)
 import heightmap  # noqa: E402
@@ -183,6 +186,7 @@ import fast  # noqa: E402
 import protocol  # noqa: E402
 msgs = protocol.ef  # noqa: E402  (made in Rust: far_tile, far_swap, far_remove, far_done, status, load_progress)
 import weather as weathermod  # noqa: E402
+import snow as snowmod  # noqa: E402
 
 PROTOCOL = 4
 SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; reconcile on reconnect (PR #817 had 8 MiB:
@@ -550,9 +554,9 @@ FIRST_RAMP_NEAR_PX = 256
 # them in the chain (one request for 8 x 8 tiles; the full texture takes them at those zooms anyway, so the coarse step
 # now looks like what replaces it), EOX for the finer zooms (z13+) and without them. EOX's own throttling hits every
 # player (the user, 2026-11-11): its coarse-cover tiles (~60-100 a cold French teleport, z7-z12) were fetched only for
-# a step the full texture replaces. BNGE_COARSE_EOX=1: EOX alone, as before.
-FIRST_RAMP_CHAIN = (("eox2023", "eox2016") if os.environ.get("BNGE_COARSE_EOX") == "1"
-                    else ("bngs2", "eox2023", "eox2016"))
+# a step the full texture replaces. BNGE_COARSE_EOX=1: EOX alone, as before. EOX is its 2016 mosaic (CC BY 4.0) since
+# 2026-11-23: its 2018+ ones are CC BY-NC-SA.
+FIRST_RAMP_CHAIN = (("eox2016",) if os.environ.get("BNGE_COARSE_EOX") == "1" else ("bngs2", "eox2016"))
 FIRST_RAMP_MAX_S = 12.0
 # Far tiles that wait for the place's map data (Connection.graded: graded under the roads like the block at levels
 # <= 0, the sea floor carved to L2) in flight at most this share of the far workers (at least one): at a place never
@@ -709,6 +713,28 @@ def sharing_machine():
     # Off by default for now (2026-11-13): reviews found a shared stage can carry another process's fallback deck
     # corrections into kept plans; on again once that fix (share-fix) is in. BNE_STAGE_SHARE=on turns it on.
     return False
+
+
+def v2_warm_dir():
+    """BNE_V2_HOST: this server's folder for the block lanes' WarmBoard files (system temp, removed at exit)."""
+    global _V2_WARM_DIR
+    if _V2_WARM_DIR is None:
+        import atexit
+        import tempfile
+        _V2_WARM_DIR = tempfile.mkdtemp(prefix="bnge-warm-")
+        atexit.register(shutil.rmtree, _V2_WARM_DIR, True)
+    return _V2_WARM_DIR
+
+
+_V2_WARM_DIR = None
+
+
+def v2_pool(name, n, cls, lane=None, **kwargs):
+    """A worker process pool of n processes: pools.RespawningPool, or with BNE_V2_HOST (v2host.py) a pools.SlotPool
+    whose jobs the Rust scheduler starts by class and deadline (cls: its lane's own class; lane: the lane's name)."""
+    if not v2host.ON:
+        return poolsmod.RespawningPool(name, n, **kwargs)
+    return poolsmod.SlotPool(v2host.sched(), name, n, cls=cls, lane=lane or name, **kwargs)
 
 
 def prefetch_procs():
@@ -943,6 +969,8 @@ class TileInfo:
     credits: frozenset = frozenset()    # data-credit source ids (credits.tile_sources; --credits on only)
     tex_px: int = 0                     # its texture's size (Server.tile_tex_px; 0: tex_size of its level)
     shape: str | None = None    # its shape file when not tile_name(): a copy under a new material name (reslot)
+    cliff_colors: bool = False  # only these tiles need a mesh refresh when their photo changes
+    mesh_rev: int = 0           # latest immutable cliff-color mesh; survives material reslotting
     tile: object = None         # the farfield tile it was built for (Tile, GTile, Piece)
     coarse: bool = False        # a coarse cover's texture (Server.coarse_texture: rendered again when sent after it)
     frame: tuple | None = None  # a global tile's frame (lat, lon): its geometry is in that frame's world
@@ -1216,6 +1244,9 @@ class Server:
         self.near_radii = dict(self.layout.near_radii if near_radii is None else near_radii)
         self.tile_cache = TILE_CACHE[cells]
         self.net = net if net is not None else netfetch.Fetcher()
+        if snowcovermod.ON:     # (winter: the leaf type and water share packs for the snow's crowns and water)
+            import winterpacks
+            snowcovermod.set_packs(winterpacks.packs(cache_dir, self.net))
         self.dem = demmod.Dem(os.path.join(cache_dir, "dem"), fetcher=self.net)
         import railways as _railways    # (coarse elevation: rail decks raised over the roads under them)
         _railways.COARSE_AT = self.dem.coarse_at
@@ -1429,6 +1460,8 @@ class Server:
         self.quick_lock = threading.Lock()  # (_quick_once: a block's stand-in made once)
         self.quick_made, self.quick_running = {}, {}
         self.quick_futs = {}            # (aid, cx, cy) -> a requested block's stand-in photo started with it (fast)
+        if v2host.ON:                   # (architecture v2 V1: the build threads as lanes of the Rust scheduler)
+            Server._v2_lanes(self)
         self.photo_pool = None          # requested blocks' photos and stand-ins (main(): PHOTO_PROCESS_MIN_CPUS)
         self.recent_full = collections.deque(maxlen=RECENT_FULL)  # (aid, cx, cy, rgb, canopy or None): last photos
         self.base_lock = threading.Lock()
@@ -1466,6 +1499,8 @@ class Server:
         self._prune_scheduled = set()
         # Real weather at the player (weather.py): a weathermod.Service, or None (--weather off)
         self.weather = weather
+        # Winter W1 (snow.py): a snowmod.Service when BNE_WINTER is set (main), else None: no snowstate at all
+        self.snow = None
         # Real gravity at the player (gravity.py): a gravitymod.Provider, or None (--gravity off)
         self.gravity = gravity
         # On-screen data credits (credits.py): a creditsmod.Credits, or None (--credits off; Server()'s default)
@@ -3329,6 +3364,9 @@ class Server:
             margin = streetfront.BUILT_FRONT_M + 2. if frontage_country else 2.
             rings = buildingsmod.near_rings(anchor.frame, tx, ty, self.mapdata, margin=margin, skip=skip)
             props[:] = furnituremod.off_buildings(props, rings)
+            if naturalmod.TREES:        # (nor a made-up one by a mapped tree, natural.py)
+                props[:] = naturalmod.off_mapped(props, anchor.frame, tx, ty, self.mapdata,
+                                                 (furnituremod.G_STREET_TREE,))
             props.extend(buildingsmod.doors(items, lines, x0, y0, drives, infer_fences=frontage_country != "FR"))
             props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
             drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
@@ -3690,6 +3728,7 @@ class Server:
         it names has the value given here (the map's cache view, covermap.py). One function: a new setting that
         changes what is built goes into its revisit key, its store site's revisit.sig and here, under the same name.
         Per-anchor parts (the height quantum, country, lamp rules, driving side) are the place's, not settings."""
+        from cliffsettings import SETTINGS as cliff_settings
         im = self.imagery
         md = self.mapdata.versions() if self.mapdata is not None and hasattr(self.mapdata, "versions") else None
         return {
@@ -3697,6 +3736,7 @@ class Server:
             "sidewalks": bool(self.sidewalks),
             "lift": float(DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0),
             "buildings": bool(self.buildings),
+            **cliff_settings.cache_options,
             "gas_stations": bool(self.gas_stations),
             "pole_profile": Server.pole_profile(self),
             "de_junctions": designsmod.enabled(self.dej_on),
@@ -3710,6 +3750,7 @@ class Server:
             "tone": self.tone,
             "leaf_on": getattr(im, "leaf_on", None),
             "season_mode": getattr(im, "season_mode", None),
+            **({"winter": True} if snowcovermod.ON else {}),     # (BNE_WINTER; the snow itself: a spec in each key)
             # road plans (plancache.for_grader's signature)
             "plans": f"w{int(self.road_widths is not None)}s{int(self.sea is not None)}",
         }
@@ -3946,6 +3987,9 @@ class Server:
             return False
         fut = bp[LANE_PREFETCH][0].submit(blockworker.plan_cell, at[0], at[1], at[2],
                                           (int(key[0]), int(key[1]), int(key[2])))
+        sched = v2host.active()
+        if sched is not None:       # (BNE_V2_HOST: no slot held meanwhile; the plan inherits this job's urgency)
+            return bool(sched.wait(fut, PLAN_ELSEWHERE_S))
         return bool(fut.result(timeout=PLAN_ELSEWHERE_S))
 
     def plan_first(self, anchor, cx, cy):
@@ -4170,6 +4214,17 @@ class Server:
         with _ABANDON_LOCK:
             self.abandoned.update(add)
             self.abandoned.difference_update(remove)
+            io = getattr(self, "v2_io", None)
+            if io is not None:
+                # (BNE_V2_HOST: the anchors' scheduler jobs dropped or stopped at once, wanted again once removed;
+                # the file written by a scheduler job, never on the event loop)
+                sched = v2host.active()
+                for a in add:
+                    self.__dict__["v2_cancelled"] = sched.cancel_place(int(a))
+                for a in remove:
+                    sched.uncancel_place(int(a))
+                io.submit(Server.write_abandoned, self)
+                return True
             return self.write_abandoned()      # (the lock is re-entrant)
 
     def write_abandoned(self):
@@ -4295,6 +4350,25 @@ class Server:
         la, lo = geotiles.centre(gx, gy)
         x, y, _ = frame.geodetic_to_enu(la, lo, 0.0)
         return Server.left_behind(self, aid, float(x), float(y), 150.0)
+
+    def _v2_lanes(self):
+        """BNE_V2_HOST (v2host.py): the server's own build pools as executors of the Rust scheduler's lanes, each at
+        its class (P0: requested blocks, an anchor's first block, provisional ground; P1: prefetched blocks and the
+        urgent photos; P2: the other photos), the job's anchor its first argument (a teleport drops its queued jobs
+        and stops its running ones). A heightmap thread waiting on its block process holds no slot (result_running)."""
+        s = v2host.sched()
+        s.reset_places()                # (this server's anchor ids start at 1: none of them left yet)
+        hm, req = s.lane("heightmap", HM_THREADS), s.lane("heightmap-req", HM_REQUEST_THREADS)
+        self.hm_pool = s.executor(hm, v2host.P1, None, 0)
+        self.hm_req_pool = s.executor(req, v2host.P0, None, 0)
+        self.hm_first_pool = s.executor(req, v2host.P0, None, 0)       # (an anchor's first block: terrain(progress))
+        self.base_pool = s.executor(s.lane("base-photo", HM_THREADS, True), v2host.P2, None, 0)
+        self.urgent_base_pool = s.executor(s.lane("base-urgent", 2), v2host.P1, None, 0)
+        self.prov_pool = s.executor(s.lane("provisional", 2), v2host.P0, None, 0)
+        # (each pool its own lane, as its own threads were: a job waiting for another's never takes that one's slot)
+        self.quick_pool = s.executor(s.lane("quick-base", 1, True), v2host.P2, None, 0)
+        self.quick_early = s.executor(s.lane("quick-early", 2, True), v2host.P1, None, 0)
+        self.v2_io = s.executor(s.lane("server-io", 1), v2host.P0)    # (file writes never on the event loop)
 
     def make_heightmap(self, anchor, cx, cy, progress, lane=LANE_REQUEST, queued_at=None):
         """Worker thread: build and write one 1024² terrain. The follow / prefetch blocks (no progress
@@ -4575,6 +4649,10 @@ class Server:
             return info, stages
 
         def paint(idx, road_feats):
+            if (naturalmod.GROUND or naturalmod.CLIFFS) and hasattr(self.surface, "natural_land"):
+                land = self.surface.natural_land(keep["lat"], keep["lon"])     # (mapped rock, sand ...: natural.py)
+                if land:
+                    idx = surfacemod.paint_natural(idx, keep["lat"], keep["lon"], land)
             lots = (self.surface.lots(keep["lat"], keep["lon"]) if hasattr(self.surface, "lots") else None)
             if lots:                    # farmland under the carriageways (a field does not cover the asphalt)
                 idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
@@ -4649,6 +4727,8 @@ class Server:
                     p.wet = self.sea.depth if self.sea is not None else None    # (decks clear the water)
                     p.infra_fn = lambda key: self.mapdata.cell(
                         key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+                    p.water_fn = lambda key: self.mapdata.cell(
+                        key, layers=("water",), kind="demand").layers.get("water")
                 cls = roadsmod.BridgeProfiles
             else:
                 def setup(t):
@@ -4749,6 +4829,7 @@ class Server:
     # under it on disk and nothing read short meanwhile (revisit.faults).
     def base_revisit_key(self, anchor, cx, cy):
         """The revisit key of the block's finished base photo, or None (revisit off, no imagery)."""
+        import season as seasonmod
         im = self.imagery
         if not revisitmod.ON or im is None or not hasattr(im, "chain") or not hasattr(anchor, "lat"):
             return None
@@ -4756,7 +4837,9 @@ class Server:
             return revisitmod.key("basephoto", round(float(anchor.lat), 7), round(float(anchor.lon), 7), float(cx),
                                   float(cy), ("v", BASE_PHOTO_VERSION, BASE_SHIFT_M), self.layout.block,
                                   heightmap.SQUARE, BASE_RENDER_PX, self.base_px,
-                                  BASE_AO, [s.name for s in im.chain], self.tone, im.leaf_on, im.season_mode,
+                                  BASE_AO, [s.name for s in im.chain], self.tone, im.leaf_on,
+                                  seasonmod.season_key(im.season_mode, float(anchor.lat)),
+                                  *snowcovermod.key_parts(Server.base_snow(self, anchor, cx, cy)),
                                   self.tex_modes, roadsmod.ROADS_IN_GROUND, bool(self.buildings),
                                   self.mapdata.versions() if self.mapdata is not None else None,
                                   self.road_widths is not None, self.surface is not None, anchor.zooms[0],
@@ -4769,6 +4852,58 @@ class Server:
         except Exception as e:          # (no cache rather than no photo)
             log.debug("revisit: base photo key: %s: %s", type(e).__name__, e)
             return None
+
+    def base_snow(self, anchor, cx, cy):
+        """The snow block (cx, cy)'s base photo is made with (snowcover.spec_for_square over write_base's square; None
+        while winter is off or no snow can lie there): its revisit key's part and the photo's, from one spec.
+        Called as Server.base_snow(self, ...) (the tests' servers are namespaces)."""
+        if not snowcovermod.ON or not hasattr(anchor, "frame"):
+            return None
+        size = self.layout.block * heightmap.SQUARE
+        return snowcovermod.spec_for_square(anchor.frame, cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M,
+                                            size)
+
+    def snow_changed(self):
+        """(event loop) The snow state changed (W1's state, a preset set live: snow_mode): every far tile with a
+        texture re-rendered at the live retexture's pace, nearest a player first (each takes its new spec: far_snow),
+        every block's photo at its next base refresh (base_stale). A committed block's snow layer follows with its next
+        build (its .ter is the engine's). Returns the far tiles queued."""
+        n = 0
+        for ck, info in list(self.tiles.items()):
+            if getattr(info, "material", None) is None or getattr(info, "texture", None) is None:
+                continue
+            info.stale = True
+            self.retex_request(ck, pump=False)
+            n += 1
+        if n:
+            self._retex_pump()
+        if self.near_visual == "detail":
+            self.base_stale.update(k for k in self.hm if k[0] in self.anchors)
+        self.snow_changes = getattr(self, "snow_changes", 0) + 1
+        log.info("snow state changed (%s): %d far tiles to texture again, %d block photos", snowcovermod.MODE, n,
+                 len(self.base_stale))
+        return n
+
+    def snow_masks(self, anchor, tile, px, snow):
+        """A near far tile's paved ground (plow classes) and mapped water for its snow (snowcover.masks over its
+        texture's square, gutter included): (None, None) with no snow, a global tile, texels too coarse."""
+        if snow is None or isinstance(tile, farfield.GTile):
+            return None, None
+        node = tile.base if isinstance(tile, farfield.Piece) else tile
+        x, y, _, _ = node.bbox
+        if not surfacemod.far_photo_roads(node.size, px):
+            return None, None
+        return snowcovermod.masks(anchor.frame, *imagerymod.gutter_square(x, y, node.size, px), px,
+                                  self.surface if roadsmod.ROADS_IN_GROUND else None, self.road_widths, self.mapdata)
+
+    def far_snow(self, anchor, tile):
+        """The snow a far tile's texture is made with (snowcover.spec_for_square over tile_where's square; None while
+        winter is off): one spec per render, handed to its revisit key (tex_key, blockworker._far_tile_key) and to the
+        texture (finish_tile_texture, tex["snow"])."""
+        if not snowcovermod.ON:
+            return None
+        frame, x0, y0, size = self.tile_where(anchor, tile)
+        return snowcovermod.spec_for_square(frame, x0, y0, size)
 
     def _base_pad_digest(self, anchor, cx, cy):
         """The gas station / frontage pads a block's photo is painted with (block_fuel_pads' box: surface.pad_digest,
@@ -4936,7 +5071,7 @@ class Server:
         name = self.base_name(key, rev)
         im = self.imagery
         tex = {"chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-               "season_mode": im.season_mode}
+               "season_mode": im.season_mode, "snow": Server.base_snow(self, anchor, cx, cy)}
         if fin:
             tex["fin"] = fin
         try:
@@ -5108,6 +5243,7 @@ class Server:
                     surfacemod.photo_lawns(self.out_dir, info["ter"], info["layers"], photo[0])
                 except Exception as e:
                     log.info("photo lawns %s: %s", (anchor.id, cx, cy), e)
+                Server._snow_layers(self, anchor, cx, cy, info)
         elif (anchor.id, cx, cy) in self.base_skipped and self.near_visual == "detail" and self.imagery is not None:
             # a block built ahead (a fast player's prefetch, not waited on yet) gets its stand-in before it is ready:
             # made after it, the mod could take the block first and show the level's green base until it came (a
@@ -5135,13 +5271,35 @@ class Server:
         info["zoom"] = anchor.hm_zoom
         return info
 
-    def _photo_lawns(self, key, ter, layers, rgb):
+    def _photo_lawns(self, key, ter, layers, rgb, info=None):
         if key in self.hm_committed:            # (in use since it was asked for: its .ter is the engine's, _base_later)
             return
         try:
             surfacemod.photo_lawns(self.out_dir, ter, layers, rgb)
         except Exception as e:
             log.info("photo lawns %s: %s", key, e)
+        anchor = self.anchors.get(key[0]) if info is not None else None
+        if anchor is not None and key not in self.hm_committed:
+            Server._snow_layers(self, anchor, key[1], key[2], info)
+
+    def _snow_layers(self, anchor, cx, cy, info):
+        """Winter: the block's samples under deep snow to the snow layer (surface.snow_layers), from the snow its photo
+        was made with (base_snow) at the block's own heights (its .ter). Before the game reads the block, as the lawns.
+        Called as Server._snow_layers(self, ...)."""
+        spec = Server.base_snow(self, anchor, cx, cy)
+        if spec is None or not info.get("ter") or not info.get("layers") or info.get("zBase") is None:
+            return 0
+        try:
+            sq = heightmap.SQUARE
+            size = self.layout.block * sq
+            x0, y0 = cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M
+            step = 16
+            U, _n, _idx = surfacemod.ter_heights(self.out_dir, info["ter"], info["zBase"], info["maxHeight"], step)
+            look = snowcovermod.look(spec, anchor.frame, x0, y0, size, U, x0 + 0.5 * sq, y0 + 0.5 * sq, step * sq)
+            return surfacemod.snow_layers(self.out_dir, info["ter"], info["layers"], look, x0, y0, sq) if look else 0
+        except Exception as e:
+            log.info("snow layers %s: %s", (anchor.id, cx, cy), e)
+            return 0
 
     def _quick_later(self, anchor, cx, cy):
         """quick_pool: a block sent without its photo gets its stand-in (write_quick_base) onto its entry and to the mod
@@ -5203,7 +5361,7 @@ class Server:
                     # a drive). Never a block in use: the engine watches its .ter, reloaded it when patched here and
                     # froze in its TextureCooker (a pads refresh's block whose photo came a second after it, Billings
                     # 2026-11-11: "File changed [hm_2_0_384_5.ter]", the game hung)
-                    self.quick_pool.submit(self._photo_lawns, key, info["ter"], info["layers"], photo[0])
+                    self.quick_pool.submit(self._photo_lawns, key, info["ter"], info["layers"], photo[0], info)
             for c in list(self.connections):    # (the mod drops another anchor's)
                 c.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
                         "base": f"{self.vfs_dir}/{name}", "baseSize": size})
@@ -5456,6 +5614,7 @@ class Server:
         size = self.layout.block * heightmap.SQUARE
         x0, y0 = cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M
         quick = quick and not self._photo_data_cached(anchor, x0, y0, size)
+        snow = Server.base_snow(self, anchor, cx, cy)
         t0 = time.perf_counter()
         try:
             pending = set()
@@ -5520,6 +5679,15 @@ class Server:
                 rgb = rockfacemod.rock(rgb, anchor.frame, x0, y0, size, U, x0, y0, size / (n - 1))
             except Exception as e:      # the photo stays as it is
                 log.debug("base photo %s: rock faces: %s", (anchor.id, cx, cy), e)
+                U = None
+            if snow is not None:        # (winter: the far tiles' snow term, after the roads and rock as theirs)
+                road = water = None
+                if not quick:       # (the paved ground plowed, the mapped water: snowcover.masks)
+                    road, water = snowcovermod.masks(anchor.frame, x0, y0, size, rgb.shape[0],
+                                                     self.surface if roadsmod.ROADS_IN_GROUND else None,
+                                                     self.road_widths, self.mapdata)
+                rgb = snowcovermod.apply_kept(snow, rgb, anchor.frame, x0, y0, size, U, x0, y0, size / (n - 1), road,
+                                              water)
             return rgb
 
         fast.require(564, "terrain base rendering")
@@ -5606,6 +5774,8 @@ class Server:
         if fut is None:
             loop = asyncio.get_running_loop()
             pool = self.hm_req_pool if lane == LANE_REQUEST and progress is None and self.block_pools else self.hm_pool
+            if progress is not None and getattr(self, "hm_first_pool", None) is not None:
+                pool = self.hm_first_pool       # (BNE_V2_HOST: an anchor's first block at P0)
             removing = self.hm_removing.pop(key, None)
             if removing is not None and not removing.done():
                 # (its evicted files still being removed, under the names this build writes: after them; in the
@@ -5870,6 +6040,9 @@ class Server:
         out = [os.path.join(self.out_dir, name), os.path.join(self.out_dir, stem + ".dds"),
                os.path.join(self.out_dir, stem + "_road.dds")]
         out += [os.path.join(self.out_dir, f"{stem}_r{r}.dds") for r in range(1, rev + 1)]
+        import cliffsettings
+        if cliffsettings.SETTINGS.natural:  # (a cliff-coloured shape's photo revisions: Server.retexture, BNE_CLIFFS)
+            out += [os.path.join(self.out_dir, f"{stem}_r{r}.cdae") for r in range(1, rev + 1)]
         if texture is not None and os.path.join(self.out_dir, texture) not in out:
             out.append(os.path.join(self.out_dir, texture))
         if name.endswith(".dae"):
@@ -6103,7 +6276,7 @@ class Server:
     def up_px(self, anchor, tile, full):
         """The most texture px far tile `tile` may get where the screen resolves more of it than its level's `full`
         (farpvs.UP_ON, pvs_px): farpvs.UP_PX_MAX at most, and texels no finer than the sharpest photos at its middle
-        (Imagery.sharp_zoom: USGS's z16 in the US, EOX's z14 elsewhere: larger would only enlarge them)."""
+        (Imagery.sharp_zoom: USGS's z16 in the US, Sentinel-2's z14 elsewhere: larger would only enlarge them)."""
         return self.up_px_many(anchor, [tile], [full])[0]
 
     def up_px_many(self, anchor, tiles, fulls):
@@ -6198,7 +6371,7 @@ class Server:
         sig = f"w{int(self.road_widths is not None)}s{int(self.sea is not None)}"
         md = self.mapdata.versions() if self.mapdata is not None and hasattr(self.mapdata, "versions") else None
         pc = plancachemod.PlanCache(os.path.join(self.cache_dir, "plans",
-                                                 os.environ.get(plancachemod.RUN_ENV) or "share"), sig)
+                                                 os.environ.get(plancachemod.RUN_ENV) or "share"), sig, versions=md)
         pc.persist = (self.cache_dir, (plancachemod.FRAMES, sig, md))
         return pc
 
@@ -6322,7 +6495,7 @@ class Server:
         sq = imagerymod.gutter_square(x0q, y0q, size_q, px)
         tex = {"path": os.path.join(self.out_dir, texture), "px": px, "mask": None,
                "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-               "season_mode": im.season_mode, "quick": False}
+               "season_mode": im.season_mode, "quick": False, "snow": self.far_snow(anchor, tile)}
         args = (blockworker.far_global_tile, tile.z, tile.x, tile.y, zoom, gref, self.layout, tex)
         fut = self.far_pool.submit(*args)           # (its geometry meanwhile: kept, a second call reads it back)
         try:
@@ -6360,6 +6533,7 @@ class Server:
         node = tile.base if isinstance(tile, farfield.Piece) else tile
         ck = self.far_ck(anchor.id, tile.key)
         path = os.path.join(self.out_dir, self.tile_name(*ck))
+        snow = self.far_snow(anchor, tile)     # (one spec: the texture's key and its render, here or in the worker)
         done = None             # (texture file, bytes, sources used) when the worker rendered it (blockworker.far_tile)
         geo = None              # the geometry's future while this thread renders the texture
         coarse = None           # (Built, done) of a coarse cover's tile (coarse_texture)
@@ -6385,7 +6559,7 @@ class Server:
                     later = [im.done_token()]
                 tex = {"path": os.path.join(self.out_dir, texture), "px": px, "mask": None,
                        "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                       "season_mode": im.season_mode, "quick": quick and bool(later)}
+                       "season_mode": im.season_mode, "quick": quick and bool(later), "snow": snow}
                 fin_n = self.fin_name_len()
                 if fin_n:                   # (its shape kept for the bulk restore: farrestore.py)
                     tex["keep_fin"] = fin_n
@@ -6397,7 +6571,7 @@ class Server:
                 if got is not None:
                     done = (texture, got[0], got[1])
                     if fin_n and not later:     # (final as rendered: no analyses to come; the restore's texture)
-                        self.keep_texture(self.tex_key(anchor, tile, px), texture, got[0], got[1], (), None)
+                        self.keep_texture(self.tex_key(anchor, tile, px, snow), texture, got[0], got[1], (), None)
                 else:
                     later = []
             elif self.far_pool is not None:
@@ -6405,22 +6579,12 @@ class Server:
                                            self.layout)
                 built = None
             else:
-                base = self.airports.wrap(self.dem) if self.airports is not None else self.dem
-                if self.sea is not None:
-                    base = seacarvemod.SeaDem(base, None)
-                built = farfield.build_global(base, tile.z, tile.x, tile.y, zoom, gref, self.layout)
+                built = self._tile_geometry(anchor, tile)
         else:
             q = self.anchor_q(anchor) if lvl <= 0 else None
             ref_zoom = anchor.zooms[lvl - 1] if lvl > 0 else None
             zoom = anchor.zooms[max(lvl, 0)]
             part = self.piece_parts.get((anchor.id, node.key)) if node is not tile else None
-            g = self.grader_for(anchor) if self.far_pool is None else None   # graded like the block (levels <= 0)
-            base = self.airports.wrap(self.dem) if self.airports is not None else self.dem
-            if self.sea is not None:
-                base = seacarvemod.SeaDem(base, self.sea if lvl <= seacarvemod.CARVE_MAX_LEVEL else None)
-            # (past them: the bridges the elevation holds under decks taken out where already found, DeckGroundDem)
-            src = (gradingmod.GradedDem(base, g) if lvl <= 0 else gradingmod.DeckGroundDem(base, g)) \
-                if g is not None else base
             analyses = self.deshadow is not None or self.colormatch is not None
             if quick and analyses and self.far_pool is not None and self.imagery is not None and node is tile:
                 # the 3D map at a place not seen yet (photos still to come): the quick texture from the raw photos in
@@ -6452,7 +6616,8 @@ class Server:
                        "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                                 self.road_mask_px(lvl)) if self.road_masks else None,
                        "chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                       "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px_t), **self.gen_far_tex()}
+                       "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px_t), **self.gen_far_tex(),
+                       "snow": snow}
                 if analyses and not raw_quick:
                     tex["fin"] = {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain}
                 if not raw_quick and self.fin_name_len():   # (a final texture: kept for the bulk restore)
@@ -6504,8 +6669,7 @@ class Server:
                                            zoom, q, ref_zoom, self.near_visual in BLOCK_DRAWN, self.layout)
                 built = None
             else:
-                built = farfield.build_tile(anchor.frame, src, node, zoom, q, ref_zoom,
-                                            with_sink=self.near_visual in BLOCK_DRAWN, layout=self.layout)
+                built = self._tile_geometry(anchor, node)
         t1 = time.perf_counter()
         geo_wait = 0.0
         material = texture = used = None
@@ -6531,7 +6695,7 @@ class Server:
             try:
                 px = px_t
                 texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
-                tk = self.tex_key(anchor, tile, px)
+                tk = self.tex_key(anchor, tile, px, snow)
                 hit = revisitmod.load(self.cache_dir, "fartex", tk)
                 if hit is not None:         # (rendered in this place before: the revisit cache)
                     blobs, extra = hit
@@ -6559,7 +6723,7 @@ class Server:
                             w0 = time.perf_counter()
                             built, geo = geo.result(), None
                             geo_wait = time.perf_counter() - w0
-                        tex_bytes = self.finish_tile_texture(anchor, tile, px, rgb, built.grid, texture)
+                        tex_bytes = self.finish_tile_texture(anchor, tile, px, rgb, built.grid, texture, snow)
                     finally:
                         revisitmod.end(f0)
                     self.keep_texture(tk, texture, tex_bytes, used, pending, f0)
@@ -6596,8 +6760,25 @@ class Server:
                 while len(self.piece_parts) > PIECE_PARTS:
                     self.piece_parts.popitem(last=False)
             built = farfield.clip_built(built, tile.quad)
+        from cliffsettings import SETTINGS as cliff_settings
+        cliff_context = {}
+        photo = None
+        if cliff_settings.natural:
+            cliff_texture = os.path.join(self.out_dir, texture) if material is not None else None
+            cliff_context = dict(cliff_frame=self.tile_where(anchor, tile)[0], cliff_surface=self.surface,
+                                 cliff_texture=cliff_texture)
+            photo = farrestoremod.photo_identity(cliff_texture) if cliff_texture is not None else None
+            # Global worker photos may have been corrected here. Cache the shape
+            # against the final bytes, never pair its earlier colors with a new photo.
+            base_key = getattr(built, "fin_base_key", None)
+            if is_global and base_key is not None and material is not None and self.fin_name_len() and \
+                    getattr(built, "shape_photo", None) != photo:
+                farrestoremod.keep(self.cache_dir, farrestoremod.key(base_key, px_t, len(material), photo),
+                                   built, px_t, len(material), **cliff_context)
         t2 = time.perf_counter()
         sp = getattr(built, "shape_plain", None) if node is tile else None
+        if cliff_settings.natural and getattr(built, "shape_photo", None) != photo:
+            sp = None
         if sp is not None and material is not None and self.far_format == "cdae" and cdae.PACKED and \
                 sp[1] == len(material) and sp[2] == px_t:
             # (the worker encoded it, kept for the bulk restore: only the name stamped in here; farrestore.py)
@@ -6606,7 +6787,7 @@ class Server:
             size = len(data)
         else:
             size = farfield.write_built(path, built, self.far_format, material or farfield.MATERIAL,
-                                        textured=material is not None, tex_px=px_t)
+                                        textured=material is not None, tex_px=px_t, **cliff_context)
         dt = time.perf_counter() - t0
         self.build_stats.append(dt)
         tex_s = t2 - t1 - geo_wait
@@ -6616,9 +6797,12 @@ class Server:
             frame, x0, y0, s = self.tile_where(anchor, tile)
             sources = creditsmod.tile_sources(frame, (x0, y0, x0 + s, y0 + s), self.dem, zoom,
                                               used if material is not None else None)
+            if material is not None:        # (the winter packs its snow read)
+                sources |= snowcovermod.credit_ids(snow)
         info = TileInfo(built.pos, built.err, built.sink, built.skirt, built.grid, size, dt,
                         material, texture, tex_bytes, tex_s, credits=sources, err_n=built.lod_err)
         info.tile = tile
+        info.cliff_colors = bool(getattr(built, "cliff_colors", False))
         info.tex_px = px_t
         info.coarse = coarse is not None
         if is_global:
@@ -6633,14 +6817,20 @@ class Server:
                 info.stale = True
         return info
 
-    def tex_key(self, anchor, tile, px):
+    def tex_key(self, anchor, tile, px, snow=None):
         """The revisit cache's key of a far tile's texture rendered here (revisit.py): a global tile's names no anchor
-        (any anchor's, any session's); a piece's is its node's (the same texture)."""
+        (any anchor's, any session's); a piece's is its node's (the same texture). snow: the spec it is rendered with
+        (far_snow; None: no snow, no key part)."""
+        import season as seasonmod
         im = self.imagery
+        sn = snowcovermod.key_parts(snow)
         if isinstance(tile, farfield.GTile):
+            # (the season's week, season_key, as the far and base photo keys: "auto" alone served October's fall
+            # colours in late November; a global tile's grade is its own latitude's)
+            sk = seasonmod.season_key(im.season_mode, farfield.global_frame_ll(tile.z, tile.x, tile.y)[0])
             return revisitmod.key("fartex", "m", farfield.GLOBAL_GEO_VERSION, tile.key, px, [s.name for s in im.chain],
-                                  self.tone, im.leaf_on, im.season_mode, self.tex_modes, self.layout.cells,
-                                  farfield.global_dem_zoom(tile.z, self.layout.cells))
+                                  self.tone, im.leaf_on, sk, self.tex_modes, self.layout.cells,
+                                  farfield.global_dem_zoom(tile.z, self.layout.cells), *sn)
         if isinstance(tile, farfield.Piece):
             tile = tile.base
         # (the generated ground's near rings, render_far: its trees and map data, as blockworker._far_tile_key's; the
@@ -6650,10 +6840,11 @@ class Server:
             if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, px) is not None else ()
         return revisitmod.key("fartex", round(float(anchor.lat), 7), round(float(anchor.lon), 7), tile.key, px,
                               self.road_mask_px(tile.level) if self.road_masks else 0, [s.name for s in im.chain],
-                              self.tone, im.leaf_on, im.season_mode, self.tex_modes, roadsmod.ROADS_IN_GROUND,
+                              self.tone, im.leaf_on, seasonmod.season_key(im.season_mode, float(anchor.lat)),
+                              self.tex_modes, roadsmod.ROADS_IN_GROUND,
                               self.mapdata.versions() if self.mapdata is not None else None,
                               self.road_widths is not None, self.surface is not None, self.layout.cells,
-                              anchor.zooms[max(tile.level, 0)], *gen)
+                              anchor.zooms[max(tile.level, 0)], *gen, *sn)
 
     def keep_texture(self, tk, texture, tex_bytes, used, pending, f0):
         """A far texture rendered here kept in the revisit cache when it is final: no colour-match or de-shadow region
@@ -6725,17 +6916,19 @@ class Server:
             f.write(data)
         staging.replace(tmp, path)
 
-    def finish_tile_texture(self, anchor, tile, px, photo, grid, texture):
+    def finish_tile_texture(self, anchor, tile, px, photo, grid, texture, snow=None):
+        """snow: the spec the texture is made with (far_snow, the one its tex_key holds; None: none)."""
         path = os.path.join(self.out_dir, texture)
         if isinstance(photo, imagerymod.FarPhoto):
             frame, x0, y0, size = self.tile_where(anchor, tile)
             rock = rockfacemod.tile_inputs(frame, x0, y0, size, px, grid)
+            sl = snowcovermod.look_from_rock(snow, frame, rock, *self.snow_masks(anchor, tile, px, snow))
             if isinstance(tile, farfield.GTile):
-                return photo.write(path, rock, imagerymod.FAR_SRGB)
+                return photo.write(path, rock, imagerymod.FAR_SRGB, snow=sl)
             if not surfacemod.far_photo_roads(size, px):
                 node = tile.base if isinstance(tile, farfield.Piece) else tile
                 self.write_road_mask(anchor, node, px, texture)
-                return photo.write(path, rock, imagerymod.FAR_SRGB)
+                return photo.write(path, rock, imagerymod.FAR_SRGB, snow=sl)
             if not (PAINT_WORKER and self.far_pool is not None and self.surface is not None):
                 node = tile.base if isinstance(tile, farfield.Piece) else tile
                 x, y, _, _ = node.bbox
@@ -6746,7 +6939,7 @@ class Server:
                 except Exception as e:
                     log.debug("road faces of %s: %s", node.key, e)
                 self.write_road_mask(anchor, node, px, texture)
-                return photo.write(path, rock, imagerymod.FAR_SRGB, paint=layers)
+                return photo.write(path, rock, imagerymod.FAR_SRGB, paint=layers, snow=sl)
             rgb = photo.shade(rock)
         else:
             rgb = self.rock_faces(anchor, tile, px, photo, grid)
@@ -6754,6 +6947,12 @@ class Server:
             node = tile.base if isinstance(tile, farfield.Piece) else tile
             rgb = self.road_faces(anchor, node, px, rgb)
             self.write_road_mask(anchor, node, px, texture)
+        if snow is not None:        # (winter: after the roads, as the FarPhoto paths and the blocks)
+            frame, x0, y0, size = self.tile_where(anchor, tile)
+            g = None if grid is None else np.asarray(grid, np.float64)
+            rgb = snowcovermod.apply_kept(snow, rgb, frame, *imagerymod.gutter_square(x0, y0, size, px), g, x0, y0,
+                                          size / (g.shape[1] - 1) if g is not None and g.ndim == 2 else 1.0,
+                                          *self.snow_masks(anchor, tile, px, snow))
         return genground.write_far_dds(path, rgb, imagerymod.FAR_SRGB)
 
     def rock_faces(self, anchor, tile, px, rgb, grid):
@@ -6832,13 +7031,74 @@ class Server:
         except Exception as e:          # the tile without its asphalt layer
             log.debug("road mask of %s: %s", tile.key, e)
 
+    def _tile_geometry(self, anchor, tile):
+        """Geometry for direct builds and photo-driven cliff refreshes, without retaining meshes in RAM."""
+        base = self.airports.wrap(self.dem) if self.airports is not None else self.dem
+        if isinstance(tile, farfield.GTile):
+            zoom = farfield.global_dem_zoom(tile.z, self.layout.cells)
+            ref = farfield.global_dem_zoom(tile.z + 1, self.layout.cells)
+            if self.far_pool is not None:
+                return self.far_pool.submit(blockworker.far_global_geometry, tile.z, tile.x, tile.y,
+                                            zoom, ref, self.layout).result()
+            if self.sea is not None:
+                base = seacarvemod.SeaDem(base, None)
+            return farfield.build_global(base, tile.z, tile.x, tile.y, zoom, ref, self.layout)
+        node = tile.base if isinstance(tile, farfield.Piece) else tile
+        lvl = node.level
+        zoom = anchor.zooms[max(lvl, 0)]
+        ref = anchor.zooms[lvl - 1] if lvl > 0 else None
+        q = self.anchor_q(anchor) if lvl <= 0 else None
+        if self.far_pool is not None:
+            built = self.far_pool.submit(blockworker.far_geometry, anchor.id, anchor.lat, anchor.lon, node,
+                                        zoom, q, ref, self.near_visual in BLOCK_DRAWN, self.layout).result()
+        else:
+            if self.sea is not None:
+                base = seacarvemod.SeaDem(base, self.sea if lvl <= seacarvemod.CARVE_MAX_LEVEL else None)
+            grader = self.grader_for(anchor)
+            src = (gradingmod.GradedDem(base, grader) if lvl <= 0 else gradingmod.DeckGroundDem(base, grader)) \
+                if grader is not None else base
+            built = farfield.build_tile(anchor.frame, src, node, zoom, q, ref,
+                                        with_sink=self.near_visual in BLOCK_DRAWN, layout=self.layout)
+        return farfield.clip_built(built, tile.quad) if node is not tile else built
+
     def retexture(self, anchor, tile, prev):
+        """Refresh the photo and, when enabled, its baked cliff colors at a new immutable shape path."""
+        info = self._retexture(anchor, tile, prev)
+        from cliffsettings import SETTINGS
+        if not SETTINGS.natural or not prev.cliff_colors or self.far_format != "cdae" or \
+                info.rev == prev.rev or info.material is None:
+            return info
+        built = self._tile_geometry(anchor, tile)
+        ck = self.far_ck(anchor.id, tile.key)
+        name = f"{os.path.splitext(self.tile_name(*ck))[0]}_r{info.rev}.cdae"
+        texture = os.path.join(self.out_dir, info.texture)
+        context = dict(cliff_frame=self.tile_where(anchor, tile)[0], cliff_surface=self.surface,
+                       cliff_texture=texture)
+        base_key = getattr(built, "fin_base_key", None)
+        if isinstance(tile, farfield.GTile) and base_key is not None and self.fin_name_len():
+            photo = farrestoremod.photo_identity(texture)
+            farrestoremod.keep(self.cache_dir, farrestoremod.key(base_key, info.tex_px, len(info.material), photo),
+                               built, info.tex_px, len(info.material), **context)
+        plain = getattr(built, "shape_plain", None)
+        path = os.path.join(self.out_dir, name)
+        if plain is not None and cdae.PACKED:
+            data = farrestoremod.stamp(plain[0], plain[1], info.material)
+            self.write_file(path, data)
+            size = len(data)
+        else:
+            size = farfield.write_built(path, built, "cdae", info.material,
+                                        textured=True, tex_px=info.tex_px, **context)
+        return replace(info, shape=name, mesh_rev=info.rev, bytes=size,
+                       cliff_colors=bool(getattr(built, "cliff_colors", False)))
+
+    def _retexture(self, anchor, tile, prev):
         """Worker thread: render a stale tile's texture again (its colour-match regions are ready now)
         under the next revision's file name; the shape and its material name stay. Network trouble:
         the previous TileInfo, still stale."""
         t0 = time.perf_counter()
         px = self.tile_tex_px(anchor, tile)
         pending = set()
+        snow = self.far_snow(anchor, tile)     # (one spec: the texture and its key)
         # (a global tile sharpened from a small texture, the coarse cover's or a hidden one's (farpvs.py): in a far-tile
         # process like its first build, not in this interpreter)
         upgrade = isinstance(tile, farfield.GTile) and (prev.coarse or 0 < (prev.tex_px or 0) < px)
@@ -6849,7 +7109,7 @@ class Server:
             im = self.imagery
             tex = {"path": os.path.join(self.out_dir, texture), "px": px, "mask": None,
                    "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                   "season_mode": im.season_mode}
+                   "season_mode": im.season_mode, "snow": snow}
             args = (blockworker.far_global_tile, tile.z, tile.x, tile.y,
                     farfield.global_dem_zoom(tile.z, self.layout.cells),
                     farfield.global_dem_zoom(tile.z + 1, self.layout.cells), self.layout, tex)
@@ -6874,7 +7134,8 @@ class Server:
                    "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                             self.road_mask_px(tile.level)) if self.road_masks else None,
                    "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                   "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px), **self.gen_far_tex()}
+                   "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px), **self.gen_far_tex(),
+                   "snow": snow}
             lvl = tile.level
             got = self.far_pool.submit(blockworker.far_tile, anchor.id, anchor.lat, anchor.lon, tile,
                                        anchor.zooms[lvl], None, anchor.zooms[lvl - 1], self.near_visual in BLOCK_DRAWN,
@@ -6889,14 +7150,15 @@ class Server:
             return replace(prev, retex_repeat=prev.retex_repeat + 1)
         ck = self.far_ck(anchor.id, tile.key)
         texture = self.texture_name(*ck, prev.rev + 1)
-        tex_bytes = self.finish_tile_texture(anchor, tile, px, rgb, prev.grid, texture)
-        self.keep_texture(self.tex_key(anchor, tile, px), texture, tex_bytes, used, pending, None)
+        tex_bytes = self.finish_tile_texture(anchor, tile, px, rgb, prev.grid, texture, snow)
+        self.keep_texture(self.tex_key(anchor, tile, px, snow), texture, tex_bytes, used, pending, None)
         sources = prev.credits
         if self.credits is not None:        # the new texture's sources (the corrected one names S2 too)
             frame, x0, y0, s = self.tile_where(anchor, tile)
             zoom = (farfield.global_dem_zoom(tile.z, self.layout.cells) if isinstance(tile, farfield.GTile)
                     else anchor.zooms[max(tile.level, 0)])
-            sources = creditsmod.tile_sources(frame, (x0, y0, x0 + s, y0 + s), self.dem, zoom, used)
+            sources = creditsmod.tile_sources(frame, (x0, y0, x0 + s, y0 + s), self.dem, zoom, used) \
+                | snowcovermod.credit_ids(snow)
         return replace(prev, texture=texture, tex_bytes=tex_bytes, tex_seconds=time.perf_counter() - t0,
                        cm_pending=frozenset(pending), stale=False, rev=prev.rev + 1, credits=sources, tex_px=px,
                        coarse=False)
@@ -6940,7 +7202,7 @@ class Server:
                 edge = sum(math.hypot(q[(2 * k + 2) % 8] - q[2 * k], q[(2 * k + 3) % 8] - q[2 * k + 1])
                            for k in range(4)) / 4
                 t = farfield.GTile(z, x, y, level, q, float(edge))
-                if revisitmod.has(self.cache_dir, "fartex", self.tex_key(anchor, t, px)):
+                if revisitmod.has(self.cache_dir, "fartex", self.tex_key(anchor, t, px, self.far_snow(anchor, t))):
                     skipped += 1
                     return
                 try:
@@ -7330,8 +7592,26 @@ class Server:
     def _send_retex(self, ck, info):
         """far_retex to every connection showing (or holding) the tile: its new texture."""
         for c in self._retex_viewers(ck):
-            c.send({"type": "far_retex", "anchorId": c.active if ck[0] == GLOBAL_AID else ck[0], "key": ck[1],
-                    "texture": f"{self.vfs_dir}/{info.texture}"})
+            aid = c.active if ck[0] == GLOBAL_AID else ck[0]
+            message = {"type": "far_retex", "anchorId": aid, "key": ck[1],
+                       "texture": f"{self.vfs_dir}/{info.texture}"}
+            if info.mesh_rev:
+                tile = info.tile
+                replacement = dict(type="far_tile", anchorId=aid, key=ck[1], level=tile.level,
+                                   shape=f"{self.vfs_dir}/{info.shape}", pos=list(info.pos), err=info.err,
+                                   skirt=info.skirt, state="group", material=info.material,
+                                   texture=message["texture"], detail=True, tex=info.tex_px)
+                if info.sink is not None:
+                    replacement["sink"] = info.sink
+                if isinstance(tile, farfield.GTile):
+                    replacement.update(frame=list(info.frame), pos=[0, 0, info.pos[2]], poly=list(tile.quad))
+                elif isinstance(tile, farfield.Piece):
+                    replacement["poly"] = list(tile.poly)
+                if info.shape.startswith("slot_"):
+                    replacement["slotSerial"] = serial = next(self.slot_serial)
+                    c.slot_holds[matslotsmod.MatSlots.number(info.material)] = serial
+                message["replacement"] = replacement
+            c.send(message)
             self.retex_stats["sent"] += 1
             c.credits.poke(c)               # the new texture's sources (the corrected one names S2 too)
 
@@ -7665,6 +7945,7 @@ class Connection:
         self.radius_sent = None
         self.zmax_region = None
         self.weather = weathermod.Tracker()     # real weather: fetch rule, last message sent
+        self.snow = snowmod.Tracker()           # winter W1 (BNE_WINTER): the snow state's rule, last message sent
         self.road_geo = False                   # road tiles as geotiles (hello.geoTiles, Server.roads_geo_ok)
         self.roads = roadsmod.Tracker()         # road tiles sent to the mod (--roads on)
         self.signs = signstream.Tracker()       # their highway signs (key "s<tx>_<ty>")
@@ -8481,6 +8762,28 @@ class Connection:
                 log.debug("stations: %s", out["error"])
         self.send(out)
 
+    async def debug_map(self, msg):
+        """Bounded, read-only placement overlays; never starts world generation."""
+        out = {"type": "debug_map_result", "id": msg.get("id")}
+        import cliffsettings
+        if not (cliffsettings.available() or cliffsettings.DEBUG):     # (the overlay is BNE_CLIFFS / BNE_CLIFFS_DEBUG only)
+            out["error"] = "Debug overlays are off on this server"
+            self.send(out)
+            return
+        import debuglayers
+        try:
+            if getattr(self, "_debug_map_busy", False):
+                out["error"] = "Debug layer busy; retrying"
+            else:
+                self._debug_map_busy = True
+                try:
+                    out.update(await asyncio.get_running_loop().run_in_executor(self.s.place_pool, debuglayers.query, self, msg))
+                finally:
+                    self._debug_map_busy = False
+        except (ValueError, OSError) as e:
+            out["error"] = str(e)[:200]
+        self.send(out)
+
     async def cache_map(self, msg):
         """The map's cache view {"id", "z", "x0", "y0", "x1", "y1", "mode"?} -> cache_map_result {"id", "z", "x0",
         "y0", "w", "h", "cells" (base64, a level per cell), "gen", "ready", "error"?} (covermap.CoverMap.query)."""
@@ -8935,6 +9238,12 @@ class Connection:
             if getattr(self, "terrain_files", False):
                 m["terrainFiles"] = 1
             import budget
+            from cliffsettings import SETTINGS as cliff_settings
+            from cliffsettings import available as cliffs_available
+            from cliffsettings import DEBUG as cliffs_debug
+            if cliffs_available() or cliffs_debug:     # (PR #1412's cliffs: hello without them when off, as before)
+                m["cliffs"] = {"available": cliffs_available(), "natural": cliff_settings.natural,
+                               "roadCuts": cliff_settings.road_cuts, "debug": cliffs_debug}
             if budget.TIER in ("lean", "emergency"):    # (a low-memory machine: the mod warns on the emergency tier)
                 m["memoryTier"] = budget.TIER
                 note = budget.memory_notice(tier_=budget.TIER)
@@ -8959,6 +9268,8 @@ class Connection:
             season_mode = getattr(self.s.imagery, "season_mode", "off") if self.s.imagery is not None else "off"
             if season_mode not in (None, "off"):    # --season: the mod tints the trees' leaves to match (seasonlook.lua)
                 m["season"] = season_mode
+            if snowcovermod.ON:                 # BNE_WINTER: the snow layer's look, the grass under snow (winterlook.lua)
+                m["snow"] = snowcovermod.hello()
             if self.s.map_port:                 # the world map's tiles (maptiles.py; --map-tiles on)
                 m["mapPort"] = self.s.map_port
             # the start-time values of the settings read only at a start, and whether a supervisor starts this server
@@ -9044,6 +9355,8 @@ class Connection:
                 self.send(self.weather.msg)
             if self.gravity.msg is not None:        # ... and its gravity
                 self.send(self.gravity.msg)
+            if self.snow.msg is not None:           # ... and its snow (BNE_WINTER)
+                self.send(self.snow.msg)
             if self.credits.msg is not None:        # ... and the data credits
                 self.send(self.credits.msg)
             if self.s.net_note():                   # --offline / hosts down: say so at once
@@ -9091,11 +9404,16 @@ class Connection:
         elif kind == "commit_terrain":
             self.commit_terrain(msg)
         elif kind == "pose":
+            sched = v2host.active()
+            if sched is not None:       # (BNE_V2_HOST: the CPU target follows the game's frame time)
+                sched.note_frame(msg.get("frameMs"), msg.get("frameMaxMs"), bool(msg.get("guardHold")))
             self.on_pose(msg)
         elif kind == "map_tiles":               # the in-game map's tiles, as files (the UI cannot fetch http)
             self.spawn(self.map_tiles(msg))
         elif kind == "geocode":                 # the map's search box: addresses and places (geocode.py)
             self.spawn(self.geocode(msg))
+        elif kind == "debug_map":
+            self.spawn(self.debug_map(msg))
         elif kind == "cache_map":               # the map's cache view: what is cached where (covermap.py)
             self.spawn(self.cache_map(msg))
         elif kind == "area_plan":               # the map's picked area: the estimate for its confirm box (areas.py)
@@ -9220,6 +9538,11 @@ class Connection:
                 self.roads.close()
                 self.roads = road_tracker(self)
                 self.signs.refresh()
+        elif kind == "snow_mode":               # winter (BNE_WINTER): another snow state live (a preset; dev / tests)
+            if snowcovermod.set_mode(msg.get("mode")):
+                self.s.snow_changed()
+                for c in list(self.s.connections):
+                    c.send({"type": "snow", "snow": snowcovermod.hello()})
         elif kind == "road_wear":               # the settings page's Road detail: the road tiles again, worn or not
             if self.s.set_road_wear(msg.get("value")):
                 self.roads.close()
@@ -9302,9 +9625,11 @@ class Connection:
             return
         import globe as globemod
         frame = self.s.anchors[aid].frame
+        im = self.s.imagery
+        s2 = im is not None and any(getattr(src, "name", None) == "bngs2" for src in getattr(im, "chain", ()))
         try:
             res = await asyncio.get_running_loop().run_in_executor(
-                None, globemod.build, self.s.out_dir, self.s.vfs_dir, frame, aid, self.s.cache_dir, self.s.net)
+                None, globemod.build, self.s.out_dir, self.s.vfs_dir, frame, aid, self.s.cache_dir, self.s.net, s2)
         except Exception as e:
             log.warning("globe: %s: %s", type(e).__name__, e)
             return
@@ -9583,6 +9908,11 @@ class Connection:
         self.abandoned_from = (getattr(self, "abandoned_from", None) or []) + [aid]
         with self.s.warm_cv:
             self.s.warm_want = []
+        got = self.s.__dict__.pop("v2_cancelled", None)
+        if got is not None:             # (BNE_V2_HOST: its scheduler jobs, set_abandoned)
+            log.info("teleport: anchor %d's queued work dropped (scheduler: %d queued jobs dropped, %d running "
+                     "stopped)", aid, *got)
+            return
         log.info("teleport: anchor %d's queued work dropped", aid)
 
     def unabandon_old(self):
@@ -10176,6 +10506,8 @@ class Connection:
 
     def _pose_ground(self, aid, x, y, vx, vy, msg):
         self.gravity.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0))
+        if self.s.snow is not None:         # (BNE_WINTER only)
+            self.snow.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0))
         self.ground_ahead(aid, x, y, vx, vy)
         self.deck_spans(aid, x, y)
         if self.s.sea is not None:
@@ -10854,7 +11186,7 @@ class Connection:
             try:
                 def cell_water(key):    # a cell's water lines if its map data is at hand (else built meanwhile)
                     md = sea.md
-                    if not os.path.exists(md.path(mapdatamod._key(key), "water")):
+                    if not md.has(mapdatamod._key(key), "water"):       # (its file, or its CIP cell, at hand)
                         missing[0] = True
                         sea.warm([(key.x, key.y)])
                         return None
@@ -10871,7 +11203,7 @@ class Connection:
                     la1, lo1, _ = frame.enu_to_geodetic(x + r, y + r, 0.0)
                     try:
                         every = mapcells.cells_for_bbox(float(la0), float(lo0), float(la1), float(lo1), max_cells=256)
-                        keys = tuple(key for key in every if os.path.exists(md.path(mapdatamod._key(key), "roads")))
+                        keys = tuple(key for key in every if md.has(mapdatamod._key(key), "roads"))
                         if len(keys) < len(every):
                             missing[0] = True
                         memo = getattr(self, "_river_clear", None)   # (anchor, cells) -> clearance: built once
@@ -10908,7 +11240,7 @@ class Connection:
                     la1, lo1, _ = frame.enu_to_geodetic(x + r, y + r, 0.0)
                     try:
                         every = mapcells.cells_for_bbox(float(la0), float(lo0), float(la1), float(lo1), max_cells=256)
-                        keys = tuple(key for key in every if os.path.exists(md.path(mapdatamod._key(key), "roads")))
+                        keys = tuple(key for key in every if md.has(mapdatamod._key(key), "roads"))
                         if len(keys) < len(every):
                             missing[0] = True
                         # a cell's road points every LOW_ROAD_STEP_M and the raw DEM there, made once per cell for the
@@ -10970,6 +11302,17 @@ class Connection:
                     rivers = riverlinesmod.plan(frame, x, y, cell_water, tiled,
                                                 lambda la, lo: dem.sample(la, lo, riverlinesmod.DEM_ZOOM),
                                                 sea.outline_at, level_at=carved, road_clear=road_clear())
+                    import drivefeat        # (BNE_UNPAVED: the mapped fords' water over their dipped roads)
+                    if drivefeat.UNPAVED:
+                        try:
+                            rivers = list(rivers) + drivefeat.ford_rivers(
+                                sea.md, frame, x, y,
+                                lambda la, lo: (grader.apply(la, lo, dem.sample(la, lo, riverlinesmod.DEM_ZOOM),
+                                                             planned_only=True) if grader is not None
+                                                else dem.sample(la, lo, riverlinesmod.DEM_ZOOM)),
+                                lambda la, lo: dem.sample(la, lo, riverlinesmod.DEM_ZOOM))
+                        except Exception as e:      # (no fords' water rather than no rivers)
+                            log.debug("ford water: %s: %s", type(e).__name__, e)
                     shores = seacarvemod.shore_plan(frame, x, y, sea)     # (the mod's shore sound)
                     return tiles, rivers, shores, not missing[0] and sea.warm_asked == asked
                 tiles, rivers, shores, complete = await self.loop.run_in_executor(self.s.sea_pool, plan)
@@ -11418,13 +11761,19 @@ async def main_async(args, restart=None):
         ml = farfield.MESH_MIN_LEVEL[args.cells]
         radii = {ml: args.near_radii[0], ml + 1: args.near_radii[1]}
     net = netfetch.Fetcher(stats_dir=os.path.join(args.cache_dir, "netstats"), offline=args.offline)
+    # (the run's one build of each weekly dataset, decided here and read by every worker process: pagesdata's session,
+    # its folder in the environment they inherit; before any manifest is read)
+    import pagesdata
+    pagesdata.start_session(args.cache_dir)
     # map data (mapdata.py): land cover for the surfaces, roads; one instance shares its cache locks
     mapdata = None
+    manifests_wait = None
     try:
         mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
                    if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
         if mapdata is not None:
-            mapdata.warm_manifests()    # (versions()' weekly builds pinned before the first builds are keyed on them)
+            # (versions()' weekly builds decided before the first builds are keyed on them, and before the workers)
+            manifests_wait = mapdata.freeze_manifests()
     except BaseException:
         try:
             if mapdata is not None:
@@ -11480,6 +11829,8 @@ async def main_async(args, restart=None):
     netfetch.SHARED_DIR = os.environ[netfetch.SHARED_ENV]
     log.info("startup: preparing worker processes")
     block_pools, far_pool, photo_pool = [], None, None
+    if manifests_wait is not None:              # (the weekly builds decided before any worker can ask: freeze_manifests)
+        await asyncio.get_running_loop().run_in_executor(None, manifests_wait)
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     if not sharing_machine() and not os.environ.get("BNE_STAGE_SHARE"):
         # (likewise: no shared road stages on a small machine, here and in the workers; sharing_machine)
@@ -11517,16 +11868,22 @@ async def main_async(args, restart=None):
                 # Server.block_shared, submit_low)
                 block_pools.append(block_pools[0])
                 continue
-            warm_q = ctx.Queue(maxsize=64)
-            # its feeder thread started now, not at the first warm_roads on the event loop: Thread.start waits for the
-            # new thread to run, and a loaded machine stalled the loop 3.4 s there at a first visit's first pose
-            # (2026-11-04; blockworker._read_warm skips the empty list)
-            warm_q.put_nowait((None, 0.0, 0.0, []))
-            block_pools.append((poolsmod.RespawningPool(
-                "block", prefetch_procs() if lane == LANE_PREFETCH else 1, mp_context=ctx, initializer=blockworker.init,
+            if v2host.ON:           # (BNE_V2_HOST: a file of the latest list, no lock a preempted process could hold)
+                warm_q = v2host.WarmBoard(os.path.join(v2_warm_dir(), f"warm-{lane}.json"))
+            else:
+                warm_q = ctx.Queue(maxsize=64)
+                # its feeder thread started now, not at the first warm_roads on the event loop: Thread.start waits for
+                # the new thread to run, and a loaded machine stalled the loop 3.4 s there at a first visit's first pose
+                # (2026-11-04; blockworker._read_warm skips the empty list)
+                warm_q.put_nowait((None, 0.0, 0.0, []))
+            block_pools.append((v2_pool(
+                "block", prefetch_procs() if lane == LANE_PREFETCH else 1,
+                v2host.P1 if lane == LANE_PREFETCH else v2host.P0, "block-ahead" if lane == LANE_PREFETCH else "block-req",
+                mp_context=ctx, initializer=blockworker.init,
                 initargs=(args.cache_dir, args.offline, args.roads == "on",
                           args.grading == "on" and args.roads == "on",
-                          args.road_widths == "on" and args.roads == "on", args.surface == "on", warm_q,
+                          args.road_widths == "on" and args.roads == "on", args.surface == "on",
+                          warm_q.path if isinstance(warm_q, v2host.WarmBoard) else warm_q,
                           logging.getLogger().level, args.airports == "on", args.sea == "on", 0,
                           roadsmod.ROADS_IN_GROUND, args.gas_stations == "on" and args.roads == "on")), warm_q))
         if args.near_visual == "detail" and photo_process():
@@ -11559,8 +11916,8 @@ async def main_async(args, restart=None):
             log.warning("airports: no runway grading (%s)", e)
     road_pool = None
     if ctx is not None and args.roads == "on" and args.road_processes > 0:
-        road_pool = poolsmod.RespawningPool(      # road tiles (blockworker.roads_tile)
-            "road tile", args.road_processes, mp_context=ctx, initializer=blockworker.init,
+        road_pool = v2_pool(      # road tiles (blockworker.roads_tile)
+            "road tile", args.road_processes, v2host.P1, mp_context=ctx, initializer=blockworker.init,
             hung_s=ROAD_TILE_TIMEOUT_S + ROAD_HUNG_EXTRA_S,
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
                       args.surface == "on", None, logging.getLogger().level,
@@ -11617,6 +11974,10 @@ async def main_async(args, restart=None):
                     sea=seacarvemod.SeaCarver(mapdata, args.cache_dir) if args.sea == "on" else None,
                     vegetation=(vegetationmod.Vegetation(mapdata, args.cache_dir) if args.trees == "on" else None))
     server.make_fast_pool = make_fast_pool
+    if snowmod.ON:      # (BNE_WINTER / BNE_WET_ROADS: from the weather's source, or a winter preset, no network)
+        server.snow = snowmod.Service(fetch=lambda lat, lon, past, ahead: weathermod.fetch_hourly(lat, lon, past, ahead,
+                                                                                                 net=net))
+        log.info("road surface state %s (winter %s, wet roads %s)", snowmod.MODE, snowmod.WINTER, snowmod.WET_ROADS)
     if late_pool is not None:
         server.start_late(late_pool)
     if budget.TREE_MB or budget.LOW_FREE_GB:    # (this process's own caches: dropped by the free memory / the budget)
@@ -11664,7 +12025,8 @@ async def main_async(args, restart=None):
                         "server", server.root)
     server.photo_pool = photo_pool
     # the whole server held to its RAM limit (memwatch.py: caches dropped, a pool's processes replaced)
-    memwatchmod.register(*[p for p, _q in block_pools], photo_pool, far_pool, road_pool, far_bld_pool)
+    memwatchmod.register(*[m for p in [p for p, _q in block_pools] + [photo_pool, far_pool, road_pool, far_bld_pool]
+                           for m in (poolsmod.members(p) if isinstance(p, poolsmod.SlotPool) else [p])])
     memwatchmod.start()
     server.boost_cpus = (cpupin.boosted(server.server_cpus, server.game_cpus)
                          if getattr(args, "load_boost", "on") == "on" else None)
@@ -11684,6 +12046,9 @@ async def main_async(args, restart=None):
                 hl = server.host.summary()
                 if hl:
                     log.info("%s", hl)
+            sl = v2host.summary()           # (BNE_V2_HOST: the scheduler's lateness per class, its CPU target)
+            if sl:
+                log.info("%s", sl)
             for c in list(server.connections):     # a host that came back while nobody posed
                 c.refresh_status()
             if server.degraded and not server.imagery_down():
@@ -12202,8 +12567,10 @@ def main():
                     help="Linux: idle scheduling (the server runs only on CPU time the game leaves) or normal; auto "
                          "(default): idle unless the server has cores of its own (--pin)")
     ap.add_argument("--imagery", type=imagerymod.parse_chain, default=imagerymod.DEFAULT_CHAIN,
-                    help="satellite imagery source chain, first with data wins: any of usgs,eox2023,eox2016, "
-                         "or 'off' for the v1.2 palette look (default: usgs,eox2023,eox2016)")
+                    help="satellite imagery source chain, first with data wins: any of usgs,eox2016 (and the "
+                         "regional sources), or 'off' for the v1.2 palette look (default: the regional sources, NAIP, "
+                         "usgs,eox2016; the CDN switch adds the project's Sentinel-2 packs, bngs2 / bngs2fine). "
+                         "eox2023 is accepted and left out (CC BY-NC-SA)")
     ap.add_argument("--near-visual", choices=NEAR_VISUALS, default="mesh",
                     help="mesh: the ground near the player is drawn by 64/128 m tiles and the terrain block is "
                          "physics only (default); terrain: the v1.2 look (the terrain block is drawn); detail: the "
@@ -12242,7 +12609,7 @@ def main():
                          "shadows of the terrain; off = the imagery as served (default)")
     ap.add_argument("--colormatch", choices=colormatchmod.MODES, default=None,
                     help="remove the colour seams between NAIP flights in the USGS imagery (docs/research/"
-                         "2026-10-10-imagery-colormatch.md): s2 = the seam feather against Sentinel-2 (EOX), "
+                         "2026-10-10-imagery-colormatch.md): s2 = the seam feather against Sentinel-2 (bngs2, else EOX 2016), "
                          "only near detected survey seams (the default when the imagery chain has USGS, since "
                          "the in-game checks of 2026-10-11); off = the imagery as served")
     ap.add_argument("--retex-rate", type=float, default=RETEX_RATE,
@@ -12469,6 +12836,8 @@ def run(ap, args):
             log.info("the settings page: the server on %s", ", ".join(chosen))
     except Exception as e:          # (the defaults then)
         log.warning("could not read the settings page's server choices: %s", e)
+    import cliffsettings
+    cliffsettings.capture_startup()
     try:            # (the same moment's start-time values for the settings page's restart button: srvrestart.py)
         args.start_settings, args.start_fixed = (srvrestartmod.start_view(
             args.user_dir, square=heightmap.SQUARE, hand=hand) if args.user_dir else (None, []))

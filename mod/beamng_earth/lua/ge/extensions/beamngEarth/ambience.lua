@@ -444,11 +444,120 @@ end
 -- at the listener while it rains (weather.lua's rain share, none above the cloud base), louder with more rain, fading
 -- in and out, quiet inside a tunnel's space. At 1 the loop is as loud as an idling engine (-35 dBFS on the Steam Deck,
 -- its forest -63; recorded 2026-10-26).
+-- Weather phase B: the rain in layers (CC0 recordings, CREDITS.md "Weather sounds", levels/beamng_earth/art/sound/
+-- weather): light, medium and heavy rain crossfaded by the rain rate (weather.rainMmHNow, in log steps: RAIN_LAYERS
+-- centres), all equally loud loops (-20 LUFS) under the one volume above; under a roof (weather's shelter fade: a deck,
+-- a parking structure, a roof over the camera) they give way to a muffled copy (low-passed), quieter still in a tunnel;
+-- in the driver's camera the rain drums on the car's roof (RAIN_ROOF) and the outside is damped (RAIN_CABIN). The stock
+-- loop stays the fallback when the files are missing.
+M.RAIN_DIR = '/levels/beamng_earth/art/sound/weather/'
+M.RAIN_LAYERS = { { 'light', 'bne_rain_light.ogg', 0.5 }, { 'medium', 'bne_rain_medium.ogg', 3 },
+  { 'heavy', 'bne_rain_heavy.ogg', 12 } }
+M.RAIN_MUFFLED = 'bne_rain_muffled.ogg'
+M.RAIN_ROOF_FILE = 'bne_rain_roof.ogg'
+M.RAIN_UNDER_ROOF = 0.7  -- the muffled layer's share of the rain's volume under a roof ...
+M.RAIN_IN_TUNNEL = 0.15  -- ... and in a tunnel
+M.RAIN_CABIN = 0.35      -- the outside layers in the driver's camera
+M.RAIN_ROOF = 0.9        -- the roof drumming there
+M.RAIN_CABIN_CAMS = { driver = true, onboard = true }
 M.RAIN_TRACK = 'amb_rain_medium'
 M.RAIN_GAIN = 0.5       -- the loop's volume at full rain ...
 M.RAIN_FADE_S = 2       -- ... reached (or left) over this long
 local rainEm, rainVol, rainAt = nil, 0, nil
+local layerEm, layerVol = {}, {}      -- name -> the emitter / its volume now
+local layersOk = nil                  -- the files are there (checked once)
 M.rainVol = 0
+M.rainLayers = layerVol
+
+-- Pure: the layers' weights (name -> 0..1, summing to 1) for a rain rate (mm/h): each layer a triangle in log10(rate)
+-- between its neighbours' centres, the ends held.
+function M.rainWeights(mmh)
+  local L = M.RAIN_LAYERS
+  local w = {}
+  for _, l in ipairs(L) do w[l[1]] = 0 end
+  local x = math.log10(math.max(tonumber(mmh) or 0, 1e-3))
+  if x <= math.log10(L[1][3]) then w[L[1][1]] = 1 return w end
+  if x >= math.log10(L[#L][3]) then w[L[#L][1]] = 1 return w end
+  for i = 1, #L - 1 do
+    local a, b = math.log10(L[i][3]), math.log10(L[i + 1][3])
+    if x <= b then
+      local t = (x - a) / (b - a)
+      w[L[i][1]], w[L[i + 1][1]] = 1 - t, t
+      return w
+    end
+  end
+  return w
+end
+
+-- Pure: every layer's volume (name -> volume; 'muffled', 'roof' too) for the rain's overall volume v, its rate, the
+-- shelter fade (1 open .. 0 under a roof), in a tunnel, in the driver's camera.
+function M.rainMix(v, mmh, shelter, tunnel, cabin)
+  local out = {}
+  local w = M.rainWeights(mmh)
+  shelter = math.max(0, math.min(1, tonumber(shelter) or 1))
+  if tunnel then shelter = 0 end
+  local outside = v * shelter * (cabin and M.RAIN_CABIN or 1)
+  for _, l in ipairs(M.RAIN_LAYERS) do out[l[1]] = outside * w[l[1]] end
+  out.muffled = v * (1 - shelter) * (tunnel and M.RAIN_IN_TUNNEL or M.RAIN_UNDER_ROOF)
+  out.roof = cabin and v * shelter * M.RAIN_ROOF or 0
+  return out
+end
+
+local function layerFile(name)
+  if name == 'muffled' then return M.RAIN_MUFFLED end
+  if name == 'roof' then return M.RAIN_ROOF_FILE end
+  for _, l in ipairs(M.RAIN_LAYERS) do if l[1] == name then return l[2] end end
+end
+
+local function setLayer(name, vol)
+  local e = layerEm[name]
+  if e and not simObjectExists(e) then e = nil; layerEm[name] = nil end
+  layerVol[name] = vol
+  if vol > 0.001 and not e then
+    e = Sim.upcast(createObject('SFXEmitter'))
+    if not e then return end
+    e:setTransform(MatrixF(true))
+    e:setField('fileName', 0, M.RAIN_DIR .. layerFile(name))
+    e:setField('isLooping', 0, '1')
+    e:setField('is3D', 0, '0')
+    e:setField('isStreaming', 0, '1')
+    e:setField('volume', 0, '0')
+    e.canSave = false
+    e:registerObject('')
+    e:play()
+    layerEm[name] = e
+  end
+  if not e then return end
+  if vol <= 0.001 then
+    e:delete()
+    layerEm[name] = nil
+  else
+    e:setPosition(listener)
+    e:setVolumePitchCT(vol, 1, 0, 0)
+  end
+end
+
+-- The rain bed ducked (storm.lua: under a strike's thunder): to `to` of its volume for `seconds`, the last second easing
+-- back. Nothing runs for it otherwise.
+local duckUntil, duckLen, duckTo = 0, 0, 1
+function M.duck(seconds, to)
+  duckLen, duckTo = math.max(0.1, tonumber(seconds) or 3), math.max(0, math.min(1, tonumber(to) or 0.35))
+  duckUntil = os.clockhp() + duckLen
+end
+-- Pure-ish: the duck's factor at time now (os.clockhp).
+function M.duckFactor(now)
+  local left = duckUntil - now
+  if left <= 0 then return 1 end
+  if left >= 1 then return duckTo end
+  return duckTo + (1 - duckTo) * (1 - left)
+end
+
+local function cabinCam()
+  local cam = rawget(_G, 'core_camera')
+  if not (cam and cam.getActiveCamName) then return false end
+  local ok, n = pcall(cam.getActiveCamName)
+  return ok and M.RAIN_CABIN_CAMS[n] or false
+end
 
 -- Is (x, y, z) inside one of the road tiles' roofed spaces (tunnels, arches, parking structures: M.ROOFED)?
 local function inTunnel(x, y, z)
@@ -468,6 +577,27 @@ local function inTunnel(x, y, z)
   return false
 end
 M.inTunnel = inTunnel
+
+-- Shelter from rain and snow (weather.lua's precipitation owner): a roofed space (M.ROOFED) or a bridge's under-deck box
+-- (kind 1) holding (x, y, z): its space's name ('tunnel', 'bridge', ...), or nil in the open.
+M.SHELTER_NAMES = { [0] = 'tunnel', [1] = 'bridge', [2] = 'arch', [3] = 'parking' }
+function M.shelterAt(x, y, z)
+  for _, list in pairs(spaces) do
+    for _, sp in ipairs(list) do
+      local r = sp.row
+      local name = M.SHELTER_NAMES[r[1]]
+      if name then
+        local dx, dy = x - r[2], y - r[3]
+        local c, s = math.cos(r[8]), math.sin(r[8])
+        if math.abs(dx * c + dy * s) <= r[5] / 2 and math.abs(-dx * s + dy * c) <= r[6] / 2
+            and math.abs(z - r[4]) <= r[7] / 2 then
+          return name
+        end
+      end
+    end
+  end
+  return nil
+end
 
 -- The tunnels' lights at night (nightlights.lua's pool): along every tunnel box (kinds 0 and 2),
 -- every TUNNEL_LIGHT_M, TUNNEL_LIGHT_DROP_M under its roof.
@@ -498,10 +628,20 @@ local function updateRain()
   rainAt = now
   local w = rawget(_G, 'beamngEarth_weather')
   local want = M.RAIN_GAIN * math.max(0, math.min(1, w and tonumber(w.rainNow) or 0))
-  if want > 0 and inTunnel(listener.x, listener.y, listener.z) then want = 0 end
+  if want <= 0 and rainVol <= 0 and not rainEm and not next(layerEm) then return end    -- (dry: nothing)
+  if layersOk == nil then
+    layersOk = FS and FS.fileExists and FS:fileExists(M.RAIN_DIR .. M.RAIN_LAYERS[1][2]) or false
+  end
+  local tunnel = want > 0 and inTunnel(listener.x, listener.y, listener.z)
+  if tunnel and not layersOk then want = 0 end
   local step = math.max(M.RAIN_GAIN, rainVol) * dt / M.RAIN_FADE_S   -- (the full range in RAIN_FADE_S)
   rainVol = rainVol < want and math.min(want, rainVol + step) or math.max(want, rainVol - step)
   M.rainVol = rainVol
+  if layersOk then
+    local mix = M.rainMix(rainVol * M.duckFactor(now), w and tonumber(w.rainMmHNow) or 0, w and tonumber(w.shelter) or 1, tunnel, cabinCam())
+    for name, v in pairs(mix) do setLayer(name, v) end
+    return
+  end
   if rainEm and not simObjectExists(rainEm) then rainEm = nil end
   if rainVol > 0.001 and not rainEm then
     local e = Sim.upcast(createObject('SFXEmitter'))
@@ -509,7 +649,8 @@ local function updateRain()
       e:setTransform(MatrixF(true))
       e:setField('track', 0, M.RAIN_TRACK)
       e.canSave = false
-      e:registerObject('bngEarthRain')
+      -- Weather finds the level's Precipitation by name when crossing the cloud base.
+      e:registerObject('bngEarthRainAudio')
       e:play()
       rainEm = e
     end
@@ -554,6 +695,8 @@ end
 function M.clear()
   for key in pairs(spaces) do M.dropSpaces(key) end
   if rainEm and simObjectExists(rainEm) then rainEm:delete() end
+  for name, e in pairs(layerEm) do if simObjectExists(e) then e:delete() end; layerVol[name] = 0 end
+  layerEm = {}
   rainEm, rainVol, rainAt = nil, 0, nil
   tiles, dirty, builtAt, biome, current = {}, false, nil, nil, nil
   setRoomtone(nil)
@@ -569,6 +712,8 @@ end
 function M.reset()
   M.clear()
 end
+
+M._setLayersOk = function(v) layersOk = v end   -- (tests: nil = look again, false = the stock loop)
 
 function M.status()
   local n = 0

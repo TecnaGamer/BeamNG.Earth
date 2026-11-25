@@ -1,0 +1,214 @@
+{
+  "bngEarthRainShell0": {
+    "name": "bngEarthRainShell0",
+    "mapTo": "bngEarthRainShell0",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.6,
+          0.62,
+          0.66,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.35,
+        "opacityMap": "/levels/beamng_earth/art/weather/bngEarth_rainstreak.data.dds",
+        "opacityFactor": 0.7,
+        "instanceOpacity": true,
+        "animFlags": 1,
+        "scrollDir": [
+          0,
+          1
+        ],
+        "scrollSpeed": 1.3333333333333333
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": true,
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false,
+    "castShadows": false,
+    "doubleSided": true
+  },
+  "bngEarthRainShell1": {
+    "name": "bngEarthRainShell1",
+    "mapTo": "bngEarthRainShell1",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.6,
+          0.62,
+          0.66,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.35,
+        "opacityMap": "/levels/beamng_earth/art/weather/bngEarth_rainstreak.data.dds",
+        "opacityFactor": 0.35,
+        "instanceOpacity": true,
+        "animFlags": 1,
+        "scrollDir": [
+          0,
+          1
+        ],
+        "scrollSpeed": 1.3333333333333333
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": true,
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false,
+    "castShadows": false,
+    "doubleSided": true
+  },
+  "bngEarthRainShell2": {
+    "name": "bngEarthRainShell2",
+    "mapTo": "bngEarthRainShell2",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.6,
+          0.62,
+          0.66,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.35,
+        "opacityMap": "/levels/beamng_earth/art/weather/bngEarth_rainstreak.data.dds",
+        "opacityFactor": 0.15,
+        "instanceOpacity": true,
+        "animFlags": 1,
+        "scrollDir": [
+          0,
+          1
+        ],
+        "scrollSpeed": 1.3333333333333333
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": true,
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false,
+    "castShadows": false,
+    "doubleSided": true
+  },
+  "bngEarthBolt": {
+    "name": "bngEarthBolt",
+    "mapTo": "bngEarthBolt",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0.8,
+          0.86,
+          1.0
+        ],
+        "emissiveIntensityNits": 150000,
+        "instanceEmissive": true,
+        "instanceOpacity": true,
+        "opacityFactor": 1,
+        "opacityMap": "/levels/beamng_earth/art/weather/bngEarth_bolt.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": true,
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false,
+    "castShadows": false,
+    "doubleSided": true
+  },
+  "bngEarthFlashGlow": {
+    "name": "bngEarthFlashGlow",
+    "mapTo": "bngEarthFlashGlow",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0.8,
+          0.86,
+          1.0
+        ],
+        "emissiveIntensityNits": 5000,
+        "instanceEmissive": true,
+        "instanceOpacity": true,
+        "opacityFactor": 1,
+        "opacityMap": "/levels/beamng_earth/art/weather/bngEarth_flashglow.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": true,
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false,
+    "castShadows": false,
+    "doubleSided": true
+  },
+  "bngEarthFlashVeil": {
+    "name": "bngEarthFlashVeil",
+    "mapTo": "bngEarthFlashVeil",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0.8,
+          0.86,
+          1.0
+        ],
+        "emissiveIntensityNits": 3000,
+        "instanceEmissive": true,
+        "instanceOpacity": true,
+        "opacityFactor": 1
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": true,
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false,
+    "castShadows": false,
+    "doubleSided": true
+  }
+}

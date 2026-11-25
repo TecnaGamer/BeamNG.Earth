@@ -11,6 +11,13 @@ spending cap), read at the server's start and every SWITCH_TTL_S; unreachable or
 max_view_zoom, in this process and the block workers it spawns): the far rings of that zoom take its packs instead
 of EOX's tiles. Read once at the server's start, so a change reaches a player at their next start.
 
+With bngs2 on, its second place (imagery "bngs2fine": the same packs enlarged, enlarge_only) goes right after USGS:
+the views finer than the packs take them where USGS has nothing, EOX's 2016 mosaic only at sea, past the packs'
+latitude and wherever no pack exists (EOX's 2018+ mosaics are CC BY-NC-SA: none in the chain since 2026-11-23).
+"fine": false ({"imagery": {"bngs2": {"enabled": true, "fine": false}}}) leaves it out: EOX 2016 draws those views
+(blurrier, but none of the 2021 composite's snow and cloud in the Alps and the Arctic, ~/bnge-tests/eoxswap/sheets);
+BNGE_S2_FINE=0 / 1 overrides the switch.
+
 "max_lat" (a number: for max_zoom; or {"14": 50, ...} per zoom): the packs of that zoom end at that latitude (the z14
 packs are built to 50 degrees: tiles.yml max_lat); farther out bngs2's finest zoom is the next coarser one
 (imagery.zoom_caps), as before the switch raised it there.
@@ -38,10 +45,12 @@ the packs were built from; the server's BNGE_DEM_CDN (a release, or "off") overr
 """
 import logging
 import os
+import threading
 import time
 
 import aerialpacks as aerialpacksmod
 import imagery as imagerymod
+import netfetch
 import overturepick
 
 log = logging.getLogger("earthd.cdn")
@@ -52,11 +61,17 @@ SWITCH_URL = overturepick.SWITCH_URL     # (BNGE_CDN_SWITCH, else the data repo'
 SWITCH_TTL_S = overturepick.SWITCH_TTL_S
 CDN_HOST = CDN_BASE.split("://", 1)[-1].split("/", 1)[0]
 S2 = imagerymod.SOURCES["bngs2"]
+S2_FINE = "bngs2fine"       # its tiles enlarged for the finer views: right after BEFORE
 BEFORE = "usgs"             # the chain position: ahead of this source (after the regional and NAIP ones)
 
 
+_refresh = {"lock": threading.Lock(), "backoff": netfetch.Backoff(SWITCH_TTL_S / 6, SWITCH_TTL_S)}
+
+
 def switch(fetcher, cache_dir):
-    """The switch file's dict (from the net at most every SWITCH_TTL_S, else the copy on disk), {} when unknown."""
+    """The switch file's dict (from the net at most every SWITCH_TTL_S, else the copy on disk), {} when unknown.
+    An older copy on disk is used when the net fails (stale-if-error: no build faulted, netfetch.stale_ok), and the net
+    is asked again only after a backoff (the server's start reads the switch four times: one try, not four)."""
     path = os.path.join(cache_dir, "cdn", "cdn.json")
     try:
         fresh = time.time() - os.path.getmtime(path) < SWITCH_TTL_S
@@ -65,17 +80,27 @@ def switch(fetcher, cache_dir):
     doc = overturepick.read_switch_file(path) if fresh else None    # (past SWITCH_MAX_BYTES: not read)
     if doc is not None:
         return doc
-    try:
-        # (no more than SWITCH_MAX_BYTES read, on the wire and decoded: netfetch.TooLarge)
-        doc = overturepick.get_switch(
-            lambda url: fetcher.get(url, kind="demand", max_bytes=overturepick.SWITCH_MAX_BYTES).body)
-        if doc is None:
-            raise ValueError(f"not an object of at most {overturepick.SWITCH_MAX_BYTES} bytes")
-        overturepick.keep_switch(path, doc)     # (whole, a writer-unique temporary name: the app's pick writes it too)
-        return doc
-    except Exception as e:          # (offline, not there yet: the original sources)
-        log.info("cdn: no switch file (%s: %s): off", type(e).__name__, e)
-        return overturepick.read_switch_file(path) or {}
+    old = overturepick.read_switch_file(path)
+    with _refresh["lock"]:
+        backoff = _refresh["backoff"]
+        if old is not None and not backoff.due(time.monotonic()):
+            return old
+        try:
+            # (no more than SWITCH_MAX_BYTES read, on the wire and decoded: netfetch.TooLarge)
+            with netfetch.stale_ok(old is not None):
+                doc = overturepick.get_switch(
+                    lambda url: fetcher.get(url, kind="demand", max_bytes=overturepick.SWITCH_MAX_BYTES).body)
+            if doc is None:
+                raise ValueError(f"not an object of at most {overturepick.SWITCH_MAX_BYTES} bytes")
+            overturepick.keep_switch(path, doc)     # (whole, a writer-unique name: the app's pick writes it too)
+            backoff.ok()
+            return doc
+        except Exception as e:          # (offline, not there yet: the copy on disk, else the original sources)
+            if old is not None:
+                netfetch.refresh_failed(log, backoff, time.monotonic(), "cdn: the switch file", e)
+                return old
+            log.info("cdn: no switch file (%s: %s): off", type(e).__name__, e)
+            return {}
 
 
 AER = "bngaer"
@@ -96,7 +121,7 @@ def _max_lat(on, max_zoom):
 
 def chain(names, fetcher, cache_dir):
     """The imagery chain (source names) with the CDN's sources the switch turns on, each where it belongs."""
-    names = [n for n in names if n not in (S2.name, AER)]
+    names = [n for n in names if n not in (S2.name, S2_FINE, AER)]
     imagery = switch(fetcher, cache_dir).get("imagery") or {}
     aer = imagery.get(AER) or {}
     env = os.environ.get("BNGE_AERIAL", "").strip().lower()
@@ -118,7 +143,9 @@ def chain(names, fetcher, cache_dir):
            else imagerymod.SOURCES[S2.name])
     log.info("cdn: %s on (%s, to zoom %d%s)", S2.name, CDN_BASE, src.max_zoom,
              "".join(f", z{z} to {lim:g} deg" for z, lim in src.zoom_max_lat))
-    return tuple(names[:i] + [S2.name] + names[i:])
+    env = os.environ.get("BNGE_S2_FINE", "").strip()
+    fine = env != "0" if env in ("0", "1") else on.get("fine", True) is not False
+    return tuple(names[:i] + [S2.name, names[i]] + ([S2_FINE] if fine else []) + names[i + 1:])
 
 
 def dem_release(fetcher, cache_dir):

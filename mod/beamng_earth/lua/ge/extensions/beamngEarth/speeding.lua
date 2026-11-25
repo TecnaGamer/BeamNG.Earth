@@ -6,6 +6,8 @@
 -- "limit", the limit the game's road tracking already follows for it). The police's own speeding check (traffic
 -- vehicle.lua checkOffenses: 1.2x the limit, at least 60 km/h) stays out of reach (MAX_OVER), so speeders are not
 -- chased; the speed limits the game shows and checks the player against are untouched.
+-- In bad weather (beamngEarth_weather.trafficCap; the weather plan's 4.11) the cap comes down: x0.9 in rain, x0.8 in
+-- heavy rain or rain in fog, slower in snow, and in fog no faster than a car that stops within the visible distance.
 local M = {}
 
 M.ON = true
@@ -15,6 +17,7 @@ M.MIN_CHANGE = 0.4      -- m/s: a cap closer than this to the last one sent is n
 M.FAST_MS = 17.9        -- m/s (40 mph): a limit from this up is a fast road (the fast-road habit), under it a street
 M.MAX_OVER = 0.18       -- over the limit at most (the police check is 1.2x)
 M.MIN_OVER = -0.06      -- under it at most (the slow few)
+M.winter = nil          -- winter.lua sets itself here when it loads (its speedFactor)
 
 -- [country or region] = { share of drivers who speed, mean over the limit on fast roads (share of it), its spread,
 -- the share of that on town streets }. From traffic surveys: about 70 % of US drivers over the posted limit on
@@ -64,8 +67,60 @@ local function rough(obj)
 end
 M._rough = rough        -- (tests)
 
+-- The weather's cap for a cap (m/s): the cap itself with the weather off or without the weather extension.
+local function weatherCap(cap)
+  local w = rawget(_G, 'beamngEarth_weather')
+  if not (w and w.trafficCap) then return cap end
+  local ok, c = pcall(w.trafficCap, cap)
+  return (ok and tonumber(c)) or cap
+end
+M._weatherCap = weatherCap  -- (tests)
+
 local cars = {}         -- id -> { fast, street, sent, at, country }
 local timer, clock = 0, 0
+local grips = {}        -- id -> { mult sent, at }: the AI's winter margins (winter.aiParams), every AI car
+
+-- Pure: the AI parameter command for winter margins p ({staticFrictionCoefMult, lookAheadKv} or nil: the stock 0.95 /
+-- 0.6 back).
+function M.gripCommand(p)
+  return string.format('ai.setParameters({staticFrictionCoefMult = %.3f, lookAheadKv = %.2f})',
+    p and p.staticFrictionCoefMult or 0.95, p and p.lookAheadKv or 0.6)
+end
+
+local function sendGrips(data, player, w)
+  local p = w and w.aiParams and w.aiParams() or nil
+  local key = p and string.format('%.3f/%.2f', p.staticFrictionCoefMult, p.lookAheadKv) or 'stock'
+  for id, g in pairs(grips) do
+    if not data[id] then grips[id] = nil end
+  end
+  for id, v in pairs(data) do
+    if v.isAi and id ~= player then
+      local g = grips[id]
+      if (g and (g.key ~= key or clock - g.at >= M.RESEND_S)) or (not g and key ~= 'stock') then
+        local obj = getObjectByID(id)
+        if obj then
+          obj:queueLuaCommand(M.gripCommand(p))
+          -- (the planning-horizon patch with the margins, taken off with them: winter.aiPatchCommand)
+          local patch = w and w.aiPatchCommand and w.aiPatchCommand(key ~= 'stock') or nil
+          if patch and (key == 'stock' or not (g and g.patched)) then obj:queueLuaCommand(patch) end
+          grips[id] = key ~= 'stock' and { key = key, at = clock, patched = patch ~= nil } or nil
+        end
+      end
+      -- the fallback cap while the patch is not confirmed (speeding off: the free cars' own cap path is not running)
+      if not M.ON and w and w.aiSpeedCap then
+        local cap = w.aiSpeedCap(id)
+        local gg = grips[id]
+        if cap and gg and (not gg.capped or math.abs(gg.capped - cap) >= M.MIN_CHANGE) then
+          local obj = getObjectByID(id)
+          if obj then
+            obj:queueLuaCommand(string.format('ai.setSpeedMode("limit") ai.setSpeed(%.2f)', cap))
+            gg.capped = cap
+          end
+        end
+      end
+    end
+  end
+end
 
 local function release(id, c)
   local obj = getObjectByID(id)
@@ -82,11 +137,19 @@ function M.update(dt, graph)
   local gt = rawget(_G, 'gameplay_traffic')
   if not (gt and gt.getTrafficData) then return end
   local data = gt.getTrafficData() or {}
+  -- (the winter margins whether or not speeding is on: every AI car must know the road is icy)
+  if M.winter or next(grips) then
+    sendGrips(data, be and be.getPlayerVehicleID and be:getPlayerVehicleID(0) or -1, M.winter)
+  end
   if not M.ON then
     for id, c in pairs(cars) do release(id, c) end
     return
   end
   local cc = graph and graph.rules and graph.rules.country or nil
+  -- winter (winter.lua, loaded only with the server's BNE_WINTER): slower on snow and ice, plan 4.4 (~0.8 on packed
+  -- snow, 0.65 on ice); 1 without it
+  local w = M.winter
+  local wf = w and w.speedFactor and w.speedFactor() or 1
   local player = be and be.getPlayerVehicleID and be:getPlayerVehicleID(0) or -1
   for id, c in pairs(cars) do
     if not data[id] then cars[id] = nil end        -- (gone)
@@ -106,9 +169,13 @@ function M.update(dt, graph)
       end
       local limit = v.tracking and tonumber(v.tracking.speedLimit)
       if limit and limit > 4.2 then
-        local cap = M.cap(limit, c.fast, c.street)
+        local cap = M.cap(limit, c.fast, c.street) * wf
+        local wcap = w and w.aiSpeedCap and w.aiSpeedCap(id)       -- (winter's fallback: no horizon patch on this car)
+        if wcap then cap = math.min(cap, wcap) end
         local obj = getObjectByID(id)
-        if cap > limit and rough(obj) then cap = limit end     -- (a rough road: no speeding there)
+        if cap > limit * wf and rough(obj) then cap = math.min(cap, limit * wf) end   -- (a rough road: no speeding)
+        -- (the weather's cap from the same base, not on top of winter's factor: rain on a wet road slows once)
+        cap = math.min(cap, weatherCap(M.cap(limit, c.fast, c.street)))
         if not c.sent or math.abs(cap - c.sent) >= M.MIN_CHANGE or clock - c.at >= M.RESEND_S then
           if obj then
             obj:queueLuaCommand(string.format('ai.setSpeedMode("limit") ai.setSpeed(%.2f)', cap))
@@ -123,6 +190,16 @@ end
 function M.reset()
   for id, c in pairs(cars) do release(id, c) end
   cars = {}
+  for id in pairs(grips) do
+    local obj = getObjectByID(id)
+    if obj then obj:queueLuaCommand(M.gripCommand(nil)) end
+  end
+  grips = {}
+end
+
+-- A car whose AI module was swapped (winter.lua: the planning-horizon patch): its cap and margins sent again.
+function M.forget(id)
+  cars[id], grips[id] = nil, nil
 end
 
 function M._cars() return cars end        -- (tests)

@@ -19,7 +19,10 @@ pub struct Marks {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Kind { Lane, Centre, Edge, EdgeLeft, Gore }
+enum Kind { Lane, Centre, Edge, EdgeLeft, Gore, Cycle, CycleAdv, Park, Bus }
+
+/// (BNE_ROADSYS_XSEC) a cross-section strip slot (xsec.rs): parking, cycle lane, buffer.
+fn strip(k: u8) -> bool { k == crate::xsec::K_PARK || k == crate::xsec::K_CYCLE || k == crate::xsec::K_BUFFER }
 
 fn colour(st: &Style, k: Kind) -> u8 {
     match k {
@@ -96,6 +99,43 @@ fn ribbon(out: &mut Marks, mesh: &Mesh, rows: &[Row], k: usize, ra: usize, rb: u
     }
 }
 
+/// (BNE_ROADSYS_XSEC) boundary k's marking at station s: its sides the nearest slots with any width (a run of empty
+/// strips lies on one line; its leftmost boundary takes it, the others none), today's rules between lanes, shoulders
+/// and gores, the strips' lines beside a strip.
+fn xsec_kind(st: &Stroke, k: usize, s: f64, edge_cls: bool) -> Option<Kind> {
+    let ns = st.slots.len();
+    let l = &st.slots[k - 1];
+    let wl = l.w(s);
+    if strip(l.kind) && wl < 0.01 { return None; }
+    let mut j = k;
+    while j < ns && strip(st.slots[j].kind) && st.slots[j].w(s) < 0.01 { j += 1; }
+    if j >= ns { return None; }
+    let r = &st.slots[j];
+    let wr = r.w(s);
+    if l.kind == K_GORE && wl > 0.3 || r.kind == K_GORE && wr > 0.3 { return Some(Kind::Gore); }
+    if !strip(l.kind) && !strip(r.kind) {
+        if wl <= 0.5 || wr <= 0.5 { return None; }
+        return match (l.kind, r.kind) {
+            (K_LANE, K_LANE) if l.group != r.group => Some(Kind::Centre),
+            (K_LANE, K_LANE) => Some(if st.over_at(k - 1, s, crate::xsec::K_BUS) != st.over_at(j, s, crate::xsec::K_BUS) { Kind::Bus } else { Kind::Lane }),
+            (K_SHOULDER, K_LANE) => if edge_cls { Some(if st.oneway { Kind::EdgeLeft } else { Kind::Edge }) } else { None },
+            (K_LANE, K_SHOULDER) => if edge_cls { Some(Kind::Edge) } else { None },
+            _ => None,
+        };
+    }
+    if wl <= 0.2 || wr <= 0.2 { return None; }
+    use crate::xsec::{K_BUFFER, K_CYCLE, K_PARK};
+    let adv = |i: usize| st.slots[i].kind == K_CYCLE && st.over_at(i, s, OVER_ADV);
+    match (l.kind, r.kind) {
+        (K_LANE, K_CYCLE) | (K_BUFFER, K_CYCLE) => Some(if adv(j) { Kind::CycleAdv } else { Kind::Cycle }),
+        (K_CYCLE, K_LANE) | (K_CYCLE, K_BUFFER) => Some(if adv(k - 1) { Kind::CycleAdv } else { Kind::Cycle }),
+        (K_LANE, K_BUFFER) | (K_BUFFER, K_LANE) => Some(Kind::Cycle),
+        (K_CYCLE, K_PARK) | (K_PARK, K_CYCLE) => Some(Kind::Park),
+        (K_LANE, K_PARK) | (K_PARK, K_LANE) => if edge_cls { Some(Kind::Park) } else { None },
+        _ => None,
+    }
+}
+
 pub fn marks(net: &Net, mesh: &Mesh, rows: &[Vec<Row>], style: &Style, sel: Option<&[bool]>) -> (Marks, Vec<f64>) {
     let mut out = Marks::default();
     let mut cpu = vec![0.0; net.strokes.len()];
@@ -112,6 +152,7 @@ pub fn marks(net: &Net, mesh: &Mesh, rows: &[Vec<Row>], style: &Style, sel: Opti
             let (l, r) = (&st.slots[k - 1], &st.slots[k]);
             // classify boundary k at each row; emit runs
             let kind_at = |s: f64| -> Option<Kind> {
+                if net.xsec_on { return xsec_kind(st, k, s, edge_cls); }
                 let (wl, wr) = (l.w(s), r.w(s));
                 if l.kind == K_GORE && wl > 0.3 || r.kind == K_GORE && wr > 0.3 { return Some(Kind::Gore); }
                 if wl <= 0.5 || wr <= 0.5 { return None; }
@@ -146,6 +187,11 @@ pub fn marks(net: &Net, mesh: &Mesh, rows: &[Vec<Row>], style: &Style, sel: Opti
                             ribbon(&mut out, mesh, rs, k, r0, r1, inward, ew, None, col, piece_of(st.uid));
                         }
                         Kind::Gore => ribbon(&mut out, mesh, rs, k, r0, r1, 0.0, style.edge.max(0.15), None, col, piece_of(st.uid)),
+                        // (BNE_ROADSYS_XSEC) a cycle lane's or bus lane's broad solid line, an advisory lane's dashes,
+                        // a parking lane's thin solid line
+                        Kind::Cycle | Kind::Bus => ribbon(&mut out, mesh, rs, k, r0, r1, 0.0, (w * 2.0).min(0.3), None, col, piece_of(st.uid)),
+                        Kind::CycleAdv => ribbon(&mut out, mesh, rs, k, r0, r1, 0.0, w, Some((1.0, 1.0)), col, piece_of(st.uid)),
+                        Kind::Park => ribbon(&mut out, mesh, rs, k, r0, r1, 0.0, w, None, col, piece_of(st.uid)),
                     }
                 }
                 r0 = r1;

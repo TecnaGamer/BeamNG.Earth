@@ -61,10 +61,13 @@ class EntrypointTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual([self.setting(n) for n in ("TIME", "TIME_SPEED", "WEATHER", "LISTED")],
                          ["'20:30'", "0.5", "'rain'", "false"])
+        r = self.run_entry(BNGE_WEATHER="real-host")              # (the weather plan's decision 5)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.setting("WEATHER"), "'real-host'")
 
     def test_a_bad_value_stops_the_start_before_anything_changes(self):
         shipped = self.main_lua.read_text()
-        for name, value in (("BNGE_TIME", "29:59"), ("BNGE_TIME_SPEED", "fast"), ("BNGE_WEATHER", "hail"),
+        for name, value in (("BNGE_TIME", "29:59"), ("BNGE_TIME_SPEED", "fast"), ("BNGE_WEATHER", "tornado"),
                             ("BNGE_LISTED", "maybe"), ("BNGE_WEATHER", "rain'; os.exit() --"),
                             ("BNGE_WEATHER", "rain\nx")):
             r = self.run_entry(**{name: value})

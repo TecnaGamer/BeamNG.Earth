@@ -893,6 +893,293 @@
    "source": "levels/beamng_earth/art/shapes/beamngEarth/sign_speed_none.webp",
    "format": "BC7",
    "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_base.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_base.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_near.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_near.normal.webp",
+   "format": "BC5",
+   "role": "normal",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_near_roughness.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_near_roughness.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_ao.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_ao.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/rock_grain.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/rock_grain.normal.webp",
+   "format": "BC5",
+   "role": "normal",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut_base.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut_base.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut.normal.webp",
+   "format": "BC5",
+   "role": "normal",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut_near_roughness.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut_near_roughness.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut_ao.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/limestone_cut_ao.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near_base.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near_base.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near.normal.webp",
+   "format": "BC5",
+   "role": "normal",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near_roughness.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near_roughness.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near_ao.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_near_ao.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_near_base.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_near_base.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_near.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_near.normal.webp",
+   "format": "BC5",
+   "role": "normal",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_near_roughness.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_near_roughness.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_source_ao.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_source_ao.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_base.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_base.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far.normal.webp",
+   "format": "BC5",
+   "role": "normal",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_roughness.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_roughness.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_far.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_far.normal.webp",
+   "format": "BC5",
+   "role": "normal",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_far_roughness.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_far_roughness.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/terrain_rim.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/terrain_rim.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far_base.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far_base.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far.normal.webp",
+   "format": "BC5",
+   "role": "normal",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far_roughness.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far_roughness.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far_ao.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far_ao.data.webp",
+   "format": "BC4",
+   "role": "data",
+   "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/weather/bngEarth_snowflake.color.dds": {
+   "source": "levels/beamng_earth/art/weather/bngEarth_snowflake.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/weather/bngEarth_raindrop.color.dds": {
+   "source": "levels/beamng_earth/art/weather/bngEarth_raindrop.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_b.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_b.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_blocker_b.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_blocker_b.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_blocker_o.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_blocker_o.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_distant_b.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_distant_b.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_distant_o.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_distant_o.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_o.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_o.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_young_b.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_young_b.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_young_o.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_beech_young_o.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_b.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_b.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_distant_b.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_distant_b.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_distant_o.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_distant_o.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_o.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_birch_o.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_b.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_b.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_distant_b.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_distant_b.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_distant_o.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_distant_o.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_o.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_oak_o.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_01_b.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_01_b.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_01_o.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_01_o.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_02_b.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_02_b.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_02_o.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_02_o.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/weather/bngEarth_bolt.data.dds": {
+   "source": "levels/beamng_earth/art/weather/bngEarth_bolt.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/weather/bngEarth_flashglow.data.dds": {
+   "source": "levels/beamng_earth/art/weather/bngEarth_flashglow.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/weather/bngEarth_rainstreak.data.dds": {
+   "source": "levels/beamng_earth/art/weather/bngEarth_rainstreak.data.webp",
+   "format": "BC4",
+   "role": "data"
   }
  }
 }

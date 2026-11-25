@@ -3,11 +3,15 @@
 //! (mark.rs), G5-lite derived products (derive.rs), G6 tiles (tile.rs), the sheet's own checks (check.rs), the M0
 //! audit of any built road scene (audit.rs: today's output and the shadow product alike) and the shadow product
 //! (product.rs: per-component builds with declared read lists) and M2's profile squares for today's deck builder and
-//! grading (square.rs, BNE_ROADSYS=heights).
+//! grading (square.rs, BNE_ROADSYS=heights) and M4's decks from the partition's structure faces (deck.rs,
+//! BNE_ROADSYS=surface) and OSM's mapped road areas (areas.rs: their audit, and the carriageway edges' targets behind
+//! BNE_ROADSYS_AREAS=on).
 //!
 //! Pure Rust, no dependencies: IEEE + - * / and sqrt only (no FMA, no libm), integer-mm topology, BTreeMap only.
+pub mod areas;
 pub mod audit;
 pub mod check;
+pub mod deck;
 pub mod derive;
 pub mod endmatch;
 pub mod geom;
@@ -18,8 +22,10 @@ pub mod net;
 pub mod part;
 pub mod prof;
 pub mod product;
+pub mod skew;
 pub mod square;
 pub mod tile;
+pub mod xsec;
 
 /// Thread CPU seconds (timings only: nothing built reads them).
 #[cfg(target_os = "linux")]

@@ -749,7 +749,7 @@ local function closestRoad(x, y, z)
   local t = math.max(0, math.min(1, ((x - i.pos.x) * ex + (y - i.pos.y) * ey) / (l * l)))
   local qx, qy = i.pos.x + t * ex, i.pos.y + t * ey
   return { dist = math.sqrt((x - qx) ^ 2 + (y - qy) ^ 2), dx = ex / l, dy = ey / l, oneWay = e.oneWay,
-    speedLimit = e.speedLimit, posted = e.posted, rough = e.rough == true,
+    speedLimit = e.speedLimit, posted = e.posted, rough = e.rough == true, drivability = e.drivability,
     lateral = (ex * (y - qy) - ey * (x - qx)) / l, halfWidth = (e.inRadius or 3.5) +
       ((e.outRadius or e.inRadius or 3.5) - (e.inRadius or 3.5)) * t, rumble = e.rumble == true,
     edgeKey = tostring(e.inNode or n1) .. ':' .. tostring(e.outNode or n2) }
@@ -760,7 +760,7 @@ end
 function M.speedProfileAt(x, y, z)
   local r = closestRoad(x, y, z)
   if not r or r.dist > 35 then return nil end
-  return { target = r.speedLimit, posted = r.posted, rough = r.rough, distance = r.dist }
+  return { target = r.speedLimit, posted = r.posted, rough = r.rough, distance = r.dist, drivability = r.drivability }
 end
 
 -- Lane-departure strip metadata for the rumble audio. The server only marks selected country/road classes; only the
@@ -1365,6 +1365,13 @@ local function launch(id)
   f.z = 0
   if d:length() < 0.1 or f:length() < 0.1 then return end
   local v = M.launchSpeed(e.speedLimit, d:normalized():dot(f:normalized()), e.oneWay, nearJunction(p.x, p.y))
+  -- (winter, winter.lua: a car launched at 90 % of the limit onto ice could not stop for what lay ahead; the AI's own
+  -- winter speed instead, which may leave it under the launch floor: not launched then)
+  local w = package.loaded['beamngEarth/winter']
+  if v and w and w.speedFactor then
+    v = v * w.speedFactor()
+    if v < M.LAUNCH_MIN_MS then v = nil end
+  end
   local cmd = v and M.spawnVelocityCommand(v)
   if cmd then
     o:queueLuaCommand(cmd)

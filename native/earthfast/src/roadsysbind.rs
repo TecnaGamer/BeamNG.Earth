@@ -12,8 +12,50 @@ use std::collections::BTreeMap;
 /// The segments of a read, deduplicated (one copy per segment: the one with the most points, ties by the smaller
 /// cell name, as roadshape.SegmentWindow chooses) and with each road split into lane sections taken either whole
 /// (its sections where they cover all of it) or as its sections, never both (lanesections.replaced_roads' rule).
+/// areas (RoadsysAreas): OSM's mapped road areas round the read (the products' audit; fit: BNE_ROADSYS_AREAS=on, the
+/// carriageway edges' soft targets, native/roadsys areas.rs).
 #[pyclass(frozen)]
-pub struct RoadsysSegments { place: Place, dropped: (usize, usize, usize) }
+pub struct RoadsysSegments { place: Place, dropped: (usize, usize, usize), fit: bool }
+
+/// OSM's mapped road areas in a frame (server/osmareas.py: the tiles of a read's cells decoded by oah_decode, their
+/// points in the frame): keys (2 x the OSM id, + 1 for a relation), values, layers, flags, the rings (each ring's
+/// polygon index, role 0 outer / 1 inner, its first point in pts; pt_off has one more), pts (n, 2) and the dataset's
+/// build identity (in the keys where the fit is on).
+#[pyclass(frozen)]
+pub struct RoadsysAreas { areas: Vec<roadsys::areas::Area>, build: u64 }
+
+#[pymethods]
+impl RoadsysAreas {
+    #[new]
+    #[pyo3(signature = (keys, values, layers, flags, ring_poly, ring_role, pt_off, pts, build))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(keys: PyReadonlyArray1<'_, u64>, values: Vec<String>, layers: PyReadonlyArray1<'_, i64>, flags: PyReadonlyArray1<'_, i64>,
+           ring_poly: PyReadonlyArray1<'_, i64>, ring_role: PyReadonlyArray1<'_, i64>, pt_off: PyReadonlyArray1<'_, i64>,
+           pts: PyReadonlyArray2<'_, f64>, build: u64) -> PyResult<Self> {
+        let (keys, layers, flags) = (keys.as_slice()?, layers.as_slice()?, flags.as_slice()?);
+        let (rp, rr, po) = (ring_poly.as_slice()?, ring_role.as_slice()?, pt_off.as_slice()?);
+        let pts = pts.as_array();
+        let n = keys.len();
+        if values.len() != n || layers.len() != n || flags.len() != n || rr.len() != rp.len() || po.len() != rp.len() + 1
+            || (pts.nrows() > 0 && pts.ncols() != 2) || po.last().map(|&v| v as usize != pts.nrows()).unwrap_or(true) {
+            return Err(PyValueError::new_err("RoadsysAreas: inconsistent columns"));
+        }
+        let mut areas: Vec<roadsys::areas::Area> = (0..n).map(|i| roadsys::areas::Area {
+            key: keys[i], value: values[i].clone(), layer: layers[i], flags: flags[i].clamp(0, 255) as u8, links: Vec::new(), rings: Vec::new() }).collect();
+        for k in 0..rp.len() {
+            let (i, a, b) = (rp[k], po[k], po[k + 1]);
+            if i < 0 || i as usize >= n || a < 0 || b < a || b as usize > pts.nrows() {
+                return Err(PyValueError::new_err("RoadsysAreas: a ring out of range"));
+            }
+            let r: Vec<[f64; 2]> = (a as usize..b as usize).map(|j| [pts[[j, 0]], pts[[j, 1]]]).collect();
+            if r.iter().any(|q| !q[0].is_finite() || !q[1].is_finite()) { return Err(PyValueError::new_err("RoadsysAreas: non-finite point")); }
+            areas[i as usize].rings.push((if rr[k] != 0 { 1 } else { 0 }, r));
+        }
+        Ok(RoadsysAreas { areas, build })
+    }
+
+    fn count(&self) -> usize { self.areas.len() }
+}
 
 /// "<road>~lanes<a>-<b>" -> (road, a, b).
 fn section_of(sid: &str) -> Option<(&str, i64, i64)> {
@@ -25,18 +67,28 @@ fn section_of(sid: &str) -> Option<(&str, i64, i64)> {
 #[pymethods]
 impl RoadsysSegments {
     #[new]
-    #[pyo3(signature = (ids, cells, texts, nums, ints, pts, off, con_seg, con_id, con_v, rng_seg, rng, style))]
+    /// xsec (610, BNE_ROADSYS_XSEC): each segment's cross-section tags (native/roadsys xsec.rs's text); given, the
+    /// cross-section model is on (every stroke's strip slots) whatever the texts hold; None: off, as before.
+    /// areas / fit (608, BNE_ROADSYS_AREAS): the mapped road areas round the read and whether they are the carriageway
+    /// edges' targets. Both on (617): the fit sets the carriageway's whole width and edges, the strips divide it.
+    /// rails (626, M5): railway lines at ground level round the read [(points (n, 2) in the frame, clearance m)]: the floors
+    /// of the structures crossing them.
+    #[pyo3(signature = (ids, cells, texts, nums, ints, pts, off, con_seg, con_id, con_v, rng_seg, rng, style, areas = None, fit = false, xsec = None, rails = None))]
     #[allow(clippy::too_many_arguments)]
     fn new(ids: Vec<String>, cells: Vec<String>, texts: Vec<(String, String, String, String, String)>,
            nums: PyReadonlyArray2<'_, f64>, ints: PyReadonlyArray2<'_, i64>, pts: PyReadonlyArray2<'_, f64>,
            off: PyReadonlyArray1<'_, i64>, con_seg: PyReadonlyArray1<'_, i64>, con_id: Vec<String>,
            con_v: PyReadonlyArray1<'_, i64>, rng_seg: PyReadonlyArray1<'_, i64>, rng: PyReadonlyArray2<'_, f64>,
-           style: (String, String, f64, f64, f64, f64, (f64, f64), (f64, f64), (f64, f64), bool)) -> PyResult<Self> {
+           style: (String, String, f64, f64, f64, f64, (f64, f64), (f64, f64), (f64, f64), bool),
+           areas: Option<PyRef<'_, RoadsysAreas>>, fit: bool, xsec: Option<Vec<String>>, rails: Option<Vec<(Vec<(f64, f64)>, f64)>>) -> PyResult<Self> {
         let n = ids.len();
         let (nums, ints, pts, off) = (nums.as_array(), ints.as_array(), pts.as_array(), off.as_slice()?);
         if cells.len() != n || texts.len() != n || nums.nrows() != n || nums.ncols() != 4 || ints.nrows() != n
             || ints.ncols() != 9 || pts.ncols() != 2 || off.len() != n + 1 || off[n] as usize != pts.nrows() {
             return Err(PyValueError::new_err("RoadsysSegments: inconsistent columns"));
+        }
+        if xsec.as_ref().map(|x| x.len() != n).unwrap_or(false) {
+            return Err(PyValueError::new_err("RoadsysSegments: xsec must hold one text per segment"));
         }
         let (con_seg, con_v, rng_seg) = (con_seg.as_slice()?, con_v.as_slice()?, rng_seg.as_slice()?);
         let rng = rng.as_array();
@@ -56,6 +108,7 @@ impl RoadsysSegments {
                 inferred: ints[[i, 0]], urban: ints[[i, 1]] != 0, cls: ints[[i, 2]], link: ints[[i, 3]] != 0, dir: ints[[i, 4]],
                 lanes: ints[[i, 5]], lfw: ints[[i, 6]], lbw: ints[[i, 7]], region: ints[[i, 8]],
                 pts: p, cons: Vec::new(), bridge: Vec::new(), tunnel: Vec::new(), level: Vec::new(), depth: 0.0,
+                xsec: xsec.as_ref().map(|x| x[i].clone()).unwrap_or_default(), maxh: Vec::new(),
             });
         }
         for k in 0..con_id.len() {
@@ -66,7 +119,8 @@ impl RoadsysSegments {
             let s = rng_seg[k] as usize;
             if s >= n { continue; }
             let (a, b, kind, v) = (rng[[k, 0]], rng[[k, 1]], rng[[k, 2]], rng[[k, 3]]);
-            match kind as i64 { 0 => segs[s].bridge.push((a, b)), 1 => segs[s].tunnel.push((a, b)), 3 => { if v > segs[s].depth { segs[s].depth = v; } }, _ => segs[s].level.push((a, b, v)) }
+            // (kinds: 0 bridge, 1 tunnel, 2 level, 3 drawn depth, 4 (M5) a height limit, maxheight sign, of v m)
+            match kind as i64 { 0 => segs[s].bridge.push((a, b)), 1 => segs[s].tunnel.push((a, b)), 3 => { if v > segs[s].depth { segs[s].depth = v; } }, 4 => segs[s].maxh.push((a, b, v)), _ => segs[s].level.push((a, b, v)) }
         }
         // one copy per segment: a row's id is "<segment>|<its first point>" and the point differs between two cells'
         // copies, so copies are grouped by the segment's own id (roadshape.SegmentCell's sid), the cell whose copy has
@@ -117,15 +171,24 @@ impl RoadsysSegments {
         let segs: Vec<Seg> = keep.into_iter().map(|i| std::mem::take(&mut segs[i])).collect();
         let st = Style { centre: style.0, left_edge: style.1, w: style.2, w_motorway: style.3, edge: style.4, edge_motorway: style.5,
                          centre_urban: style.6, lane_urban: style.7, lane_motorway: style.8, double_centre: style.9 };
-        let place = Place { name: String::new(), country: segs.first().map(|s| s.code.clone()).unwrap_or_default(), style: st, segs, ..Default::default() };
-        Ok(RoadsysSegments { place, dropped: (copies, parents, sections) })
+        let (areas, area_build) = match &areas { Some(a) => (a.areas.clone(), a.build), None => (Vec::new(), 0) };
+        let fit = fit && !areas.is_empty();
+        let rails: Vec<(Vec<[f64; 2]>, f64)> = rails.unwrap_or_default().into_iter()
+            .filter(|(p, c)| p.len() >= 2 && c.is_finite() && p.iter().all(|q| q.0.is_finite() && q.1.is_finite()))
+            .map(|(p, c)| (p.into_iter().map(|q| [q.0, q.1]).collect(), c)).collect();
+        let place = Place { name: String::new(), country: segs.first().map(|s| s.code.clone()).unwrap_or_default(), style: st, segs,
+                            xsec: xsec.is_some(), areas, area_build, rails, ..Default::default() };
+        Ok(RoadsysSegments { place, dropped: (copies, parents, sections), fit })
     }
 
     /// (segments kept, copies dropped, whole roads dropped for their sections, sections dropped for their road)
     fn counts(&self) -> (usize, usize, usize, usize) { (self.place.segs.len(), self.dropped.0, self.dropped.1, self.dropped.2) }
 }
 
-fn opts(cut: (f64, f64)) -> roadsys::net::Opts { roadsys::net::Opts { cut_grid: cut.0, cut_offset: cut.1 } }
+fn opts(cut: (f64, f64)) -> roadsys::net::Opts { roadsys::net::Opts { cut_grid: cut.0, cut_offset: cut.1, ..Default::default() } }
+
+/// opts() with the areas' fit of segs (RoadsysSegments' fit: BNE_ROADSYS_AREAS=on and areas given).
+fn opts_of(segs: &RoadsysSegments, cut: (f64, f64)) -> roadsys::net::Opts { roadsys::net::Opts { areas: segs.fit, ..opts(cut) } }
 
 /// The tile's read list from the segments read so far: (boxes in the frame to read, segment ids whose every copy
 /// must be read, [delivered, full, program, profile] stroke counts, cpu s).
@@ -135,7 +198,8 @@ fn opts(cut: (f64, f64)) -> roadsys::net::Opts { roadsys::net::Opts { cut_grid: 
 pub fn roadsys_reads(py: Python<'_>, segs: PyRef<'_, RoadsysSegments>, bbox: [f64; 4], cut: (f64, f64), field: bool)
                      -> (Vec<[f64; 4]>, Vec<String>, [usize; 4], f64) {
     let place = &segs.place;
-    let r = py.detach(|| roadsys::product::reads_f(place, bbox, opts(cut), field));
+    let o = opts_of(&segs, cut);
+    let r = py.detach(|| roadsys::product::reads_f(place, bbox, o, field));
     (r.boxes, r.fids, r.counts, r.cpu)
 }
 
@@ -197,10 +261,11 @@ pub fn roadsys_build<'py>(py: Python<'py>, segs: PyRef<'py, RoadsysSegments>, qu
         })
     };
     let fld: Option<roadsys::product::Field> = if ffn.is_some() { Some((&z_of, fkey)) } else { None };
-    let out = py.detach(|| roadsys::product::build_f(place, quad, id, frame, &g_of, fld, opts(cut)));
+    let o = opts_of(&segs, cut);
+    let out = py.detach(|| roadsys::product::build_f(place, quad, id, frame, &g_of, fld, o));
     if let Some(e) = err.lock().unwrap().take() { return Err(e); }
     if let Some(path) = dump {
-        let t = roadsys::io::TileInput { place: place.clone(), quad, id, frame, cut, ground: asked.lock().unwrap().clone() };
+        let t = roadsys::io::TileInput { place: place.clone(), quad, id, frame, cut, ground: asked.lock().unwrap().clone(), areas_on: o.areas };
         std::fs::write(&path, roadsys::io::write_tile(&t)).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
     }
     Ok((out.json, PyBytes::new(py, &out.bytes)))
@@ -255,7 +320,9 @@ pub fn roadsys_squares_of_box(bbox: [f64; 4]) -> Vec<(i64, i64)> { roadsys::squa
 pub fn roadsys_square(py: Python<'_>, segs: PyRef<'_, RoadsysSegments>, sq: (i64, i64), ground: Bound<'_, PyAny>,
                       cut: (f64, f64), dump: Option<String>, obs: Option<Bound<'_, PyAny>>) -> PyResult<RoadsysSquare> {
     let win = roadsys::square::window(sq);
-    let place = Place { segs: segs.place.segs.iter().filter(|s| roadsys::product::seg_in(s, &[win])).cloned().collect(), ..segs.place.clone_meta() };
+    // (the squares' heights are the lane rules' own: no mapped areas in them, BNE_ROADSYS_AREAS or not)
+    let place = Place { segs: segs.place.segs.iter().filter(|s| roadsys::product::seg_in(s, &[win])).cloned().collect(), areas: Vec::new(),
+                        area_build: 0, ..segs.place.clone_meta() };
     let ground = ground.unbind();
     let err: std::sync::Mutex<Option<PyErr>> = std::sync::Mutex::new(None);
     let asked: std::sync::Mutex<Vec<f64>> = std::sync::Mutex::new(Vec::new());
@@ -298,7 +365,7 @@ pub fn roadsys_square(py: Python<'_>, segs: PyRef<'_, RoadsysSegments>, sq: (i64
         asked.lock().unwrap().extend_from_slice(&seen.lock().unwrap());
         // (the square's whole input, for `roadsys square` on another platform: the determinism test)
         let t = roadsys::io::TileInput { place: place.clone(), quad: [[0.0; 2]; 4], id: (sq.0 as i32, sq.1 as i32), frame: 0, cut,
-                                         ground: asked.lock().unwrap().clone() };
+                                         ground: asked.lock().unwrap().clone(), areas_on: false };
         std::fs::write(&path, roadsys::io::write_tile(&t)).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
     }
     Ok(RoadsysSquare { sq: out })
@@ -398,14 +465,21 @@ fn lines2(name: &str, v: &[(PyReadonlyArray2<'_, f64>, f64)]) -> PyResult<Vec<ro
 /// (M3, BNE_ROADSYS=structures) The ground ends of the deck parts round a place in one frame (native/roadsys
 /// handover.rs): bridges [(line (n, 2), half width)], grounds the same (every ground part of a road), tunnels [line];
 /// s the terrain lattice's square. drops(x, y): the m every evaluator of the physics ground lowers it by there.
+/// (627) crossed [(line (n, 2), kind: 1 railway, 3 waterway)] and nbi [None or (skew deg, length m, cos, sin)] per
+/// bridge part: the ends skewed by roadsys skew.rs's rule (None: square, as before); skews() lists them.
 #[pyclass(frozen)]
-pub struct RoadsysEnds { ends: roadsys::handover::Ends, src: (Vec<roadsys::handover::Part>, Vec<roadsys::handover::Part>, Vec<Vec<[f64; 2]>>) }
+#[allow(clippy::type_complexity)]
+pub struct RoadsysEnds { ends: roadsys::handover::Ends,
+                         src: (Vec<roadsys::handover::Part>, Vec<roadsys::handover::Part>, Vec<Vec<[f64; 2]>>, Option<roadsys::handover::SkewIn>) }
 
 #[pymethods]
 impl RoadsysEnds {
     #[new]
+    #[pyo3(signature = (bridges, grounds, tunnels, s, crossed=None, nbi=None, noskew=None))]
+    #[allow(clippy::type_complexity)]
     fn new(bridges: Vec<(PyReadonlyArray2<'_, f64>, f64)>, grounds: Vec<(PyReadonlyArray2<'_, f64>, f64)>,
-           tunnels: Vec<PyReadonlyArray2<'_, f64>>, s: f64) -> PyResult<Self> {
+           tunnels: Vec<PyReadonlyArray2<'_, f64>>, s: f64, crossed: Option<Vec<(PyReadonlyArray2<'_, f64>, i64)>>,
+           nbi: Option<Vec<Option<(f64, f64, f64, f64)>>>, noskew: Option<Vec<bool>>) -> PyResult<Self> {
         let b = lines2("RoadsysEnds bridges", &bridges)?;
         let g = lines2("RoadsysEnds grounds", &grounds)?;
         let mut t = Vec::with_capacity(tunnels.len());
@@ -415,10 +489,32 @@ impl RoadsysEnds {
             t.push((0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]]]).collect::<Vec<_>>());
         }
         if !(s > 0.0) { return Err(PyValueError::new_err("RoadsysEnds: the lattice square must be > 0")); }
-        let ends = roadsys::handover::Ends::new(&b, g.clone(), &t, s);
-        Ok(RoadsysEnds { ends, src: (b, g, t) })
+        let sk = match crossed {
+            None => None,
+            Some(cr) => {
+                let mut k = roadsys::handover::SkewIn::default();
+                for (p, kind) in &cr {
+                    let a = p.as_array();
+                    if a.ncols() != 2 || !(0..=255).contains(kind) { return Err(PyValueError::new_err("RoadsysEnds crossed: (n, 2) lines, kinds 0-255")); }
+                    k.crossed.push(((0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]]]).collect(), *kind as u8));
+                }
+                let nb = nbi.unwrap_or_default();
+                if !nb.is_empty() && nb.len() != b.len() { return Err(PyValueError::new_err("RoadsysEnds nbi: one per bridge part")); }
+                k.nbi = nb.into_iter().map(|r| r.map(|(a, l, c, sn)| [a, l, c, sn])).collect();
+                if k.nbi.iter().flatten().any(|r| r.iter().any(|v| !v.is_finite())) { return Err(PyValueError::new_err("RoadsysEnds nbi: finite values")); }
+                k.noskew = noskew.unwrap_or_default();
+                if !k.noskew.is_empty() && k.noskew.len() != g.len() { return Err(PyValueError::new_err("RoadsysEnds noskew: one per ground part")); }
+                Some(k)
+            }
+        };
+        let ends = roadsys::handover::Ends::build(&b, g.clone(), &t, s, sk.as_ref());
+        Ok(RoadsysEnds { ends, src: (b, g, t, sk) })
     }
     fn count(&self) -> usize { self.ends.ends.len() }
+    /// (627) [(x, y, dx, dy)] of the skewed ends: the end's point and its end line (unit, to the left of the way in).
+    fn skews(&self) -> Vec<(f64, f64, f64, f64)> {
+        self.ends.ends.iter().filter_map(|e| e.dir.map(|d| (e.p[0], e.p[1], d[0], d[1]))).collect()
+    }
     /// [(x, y)] of each end's point (tests, probes).
     fn points(&self) -> Vec<(f64, f64)> { self.ends.ends.iter().map(|e| (e.p[0], e.p[1])).collect() }
     fn boxes(&self, grow: f64) -> Vec<[f64; 4]> { self.ends.boxes(grow) }
@@ -462,8 +558,8 @@ pub fn roadsys_handover_input<'py>(py: Python<'py>, ends: PyRef<'py, RoadsysEnds
                                    t: PyReadonlyArray2<'py, i64>, m: PyReadonlyArray1<'py, i64>, top: u32, i0: i64, j0: i64, s: f64,
                                    z: PyReadonlyArray2<'py, f64>, drop: PyReadonlyArray2<'py, f64>, tile_uv: f64) -> PyResult<Bound<'py, PyBytes>> {
     let (soup, g) = zone_args(&p, &uv, &t, &m, i0, j0, s, &z, &drop, tile_uv)?;
-    let (b, gr, tu) = &ends.src;
-    Ok(PyBytes::new(py, &roadsys::handover::encode_input(b, gr, tu, &soup, top, &g, tile_uv)))
+    let (b, gr, tu, sk) = &ends.src;
+    Ok(PyBytes::new(py, &roadsys::handover::encode_input(b, gr, tu, &soup, top, &g, tile_uv, sk.as_ref())))
 }
 
 /// (M3) A deck's shape rebuilt round its ground ends on one anchor's terrain lattice (handover.rs zone): positions
@@ -491,7 +587,103 @@ pub fn roadsys_handover_zone<'py>(py: Python<'py>, ends: PyRef<'py, RoadsysEnds>
     Ok((PyArray2::from_owned_array(py, pp), PyArray2::from_owned_array(py, uu), PyArray2::from_owned_array(py, tt), PyArray1::from_vec(py, mm), js))
 }
 
+// ------------------------------------------------------------------------------- M4 surface: decks from the faces
+
+/// (M4, BNE_ROADSYS=surface) A tile's decks from the road system's own structure faces (native/roadsys deck.rs), in
+/// the tile's own frame: segs from a complete read (roadsys_reads with field = true; boxes its converged boxes), quad
+/// the tile's corners, ground(e, n) -> heights, lines [(map feature, points (n, 3))] today's deck heights. Returns
+/// (positions (n, 3), triangles (m, 3), kinds (m,), feature index (m,; -1 none), depths (m,), features,
+/// runs [(points (k, 3), outward normals (k, 2), closed, feature index)], marking positions (j, 3), marking triangles,
+/// marking colours (0 white, 1 yellow), fallback features, stats JSON).
+#[pyfunction]
+/// dump: a file to write the build's whole input to (deck::encode_input), for `roadsys decks` on another platform.
+/// skews (627): [(x, y, dx, dy)] the skewed structure ends (RoadsysEnds.skews in the tile's frame): their end rows.
+#[pyo3(signature = (segs, quad, ground, lines, cut = (4000.0, 2000.0), boxes = None, dump = None, skews = None))]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub fn roadsys_decks<'py>(py: Python<'py>, segs: PyRef<'py, RoadsysSegments>, quad: [[f64; 2]; 4], ground: Bound<'py, PyAny>,
+                          lines: Vec<(String, PyReadonlyArray2<'py, f64>)>, cut: (f64, f64), boxes: Option<Vec<[f64; 4]>>,
+                          dump: Option<String>, skews: Option<Vec<(f64, f64, f64, f64)>>)
+                          -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>,
+                                       Bound<'py, PyArray1<f64>>, Vec<String>, Vec<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, bool, i64)>,
+                                       Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>, Vec<String>, String)> {
+    let kept;
+    let place = match &boxes {
+        None => &segs.place,
+        Some(bx) => {
+            kept = Place { segs: segs.place.segs.iter().filter(|s| roadsys::product::seg_in(s, bx)).cloned().collect(), ..segs.place.clone_meta() };
+            &kept
+        }
+    };
+    let mut dl = Vec::with_capacity(lines.len());
+    for (f, p) in &lines {
+        let a = p.as_array();
+        if a.ncols() != 3 { return Err(PyValueError::new_err("roadsys_decks: a deck line's points must be (n, 3)")); }
+        dl.push(roadsys::deck::DeckLine { feat: f.clone(), p: (0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]], a[[i, 2]]]).collect() });
+    }
+    let ground = ground.unbind();
+    let err: std::sync::Mutex<Option<PyErr>> = std::sync::Mutex::new(None);
+    let asked: std::sync::Mutex<Vec<f64>> = std::sync::Mutex::new(Vec::new());
+    let g_of = |pts: &[[f64; 2]]| -> Vec<f64> {
+        Python::attach(|py| -> Vec<f64> {
+            let e = PyArray1::from_vec(py, pts.iter().map(|p| p[0]).collect());
+            let n = PyArray1::from_vec(py, pts.iter().map(|p| p[1]).collect());
+            match ground.bind(py).call1((e, n)).and_then(|r| r.extract::<Vec<f64>>()) {
+                Ok(v) if v.len() == pts.len() => { asked.lock().unwrap().extend_from_slice(&v); v }
+                Ok(_) => { *err.lock().unwrap() = Some(PyValueError::new_err("roadsys_decks: ground returned another number of heights")); vec![0.0; pts.len()] }
+                Err(e) => { *err.lock().unwrap() = Some(e); vec![0.0; pts.len()] }
+            }
+        })
+    };
+    let op = opts_of(&segs, cut);
+    let sk: Vec<[f64; 4]> = skews.unwrap_or_default().into_iter().map(|(a, b, c, d)| [a, b, c, d]).collect();
+    if sk.iter().any(|q| q.iter().any(|v| !v.is_finite())) { return Err(PyValueError::new_err("roadsys_decks: skews must be finite")); }
+    let o = py.detach(|| roadsys::deck::build_skewed(place, quad, &g_of, &dl, op, &sk));
+    if let Some(e) = err.lock().unwrap().take() { return Err(e); }
+    if let Some(path) = dump {
+        let b = roadsys::deck::encode_input_skewed(place, quad, cut, &asked.lock().unwrap(), &dl, op.areas, &sk);
+        std::fs::write(&path, b).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
+    }
+    let a3 = |v: &[[f64; 3]]| { let mut a = numpy::ndarray::Array2::<f64>::zeros((v.len(), 3)); for (i, q) in v.iter().enumerate() { for c in 0..3 { a[[i, c]] = q[c]; } } a };
+    let t3 = |v: &[[u32; 3]]| { let mut a = numpy::ndarray::Array2::<i64>::zeros((v.len(), 3)); for (i, q) in v.iter().enumerate() { for c in 0..3 { a[[i, c]] = q[c] as i64; } } a };
+    let mut runs = Vec::with_capacity(o.runs.len());
+    for r in &o.runs {
+        let mut n = numpy::ndarray::Array2::<f64>::zeros((r.out.len(), 2));
+        for (i, q) in r.out.iter().enumerate() { n[[i, 0]] = q[0]; n[[i, 1]] = q[1]; }
+        runs.push((PyArray2::from_owned_array(py, a3(&r.p)), PyArray2::from_owned_array(py, n), r.closed, r.feat as i64));
+    }
+    Ok((PyArray2::from_owned_array(py, a3(&o.v)), PyArray2::from_owned_array(py, t3(&o.t)),
+        PyArray1::from_vec(py, o.kind.iter().map(|&k| k as i64).collect()), PyArray1::from_vec(py, o.feat.iter().map(|&k| k as i64).collect()),
+        PyArray1::from_vec(py, o.depth.clone()), o.feats.clone(), runs,
+        PyArray2::from_owned_array(py, a3(&o.mv)), PyArray2::from_owned_array(py, t3(&o.mt)),
+        PyArray1::from_vec(py, o.mc.iter().map(|&k| k as i64).collect()), o.fallback.clone(), o.json.clone()))
+}
+
+/// (610, BNE_ROADSYS_XSEC) the half extent (m from its mapped line) of one segment's carriageway with its
+/// cross-section, from its RoadsysSegments columns (texts, nums, ints as server/roadsys.py _table writes them) and its
+/// cross-section text; None when the text does not shape it (today's widths). The deck ends' hand-over reads it.
+#[pyfunction]
+pub fn roadsys_xsec_half_extent(texts: (String, String, String, String, String), nums: [f64; 4], ints: [i64; 9], xsec: String) -> Option<f64> {
+    let s = Seg {
+        code: texts.0, cls_s: texts.1, turn: texts.2, turn_bw: texts.3, place: texts.4,
+        pave: nums[0], drive: nums[1], kmh: nums[2], lane_w: nums[3],
+        inferred: ints[0], urban: ints[1] != 0, cls: ints[2], link: ints[3] != 0, dir: ints[4], lanes: ints[5], lfw: ints[6],
+        lbw: ints[7], region: ints[8], xsec, ..Default::default()
+    };
+    roadsys::net::xsec_half_extent(&s)
+}
+
+/// (608) The mapped road areas' audit of a surface (native/roadsys areas.rs run_input: the "RSAREA01" input
+/// tools/widecorpus/checks.py writes): its JSON.
+#[pyfunction]
+pub fn roadsys_areas_audit(py: Python<'_>, data: &[u8]) -> PyResult<String> {
+    let b = data.to_vec();
+    py.detach(move || roadsys::areas::run_input(&b)).map_err(PyValueError::new_err)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(roadsys_decks, m)?)?;
+    m.add_class::<RoadsysAreas>()?;
+    m.add_function(wrap_pyfunction!(roadsys_areas_audit, m)?)?;
     m.add_class::<RoadsysSegments>()?;
     m.add_function(wrap_pyfunction!(roadsys_reads, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_build, m)?)?;
@@ -503,6 +695,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadsys_deck_depth, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_end_lifts, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_floor_points, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsys_xsec_half_extent, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_clear, m)?)?;
     m.add_function(wrap_pyfunction!(roadsys_audit, m)?)?;
     m.add_class::<RoadsysEnds>()?;

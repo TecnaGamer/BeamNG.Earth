@@ -18,7 +18,7 @@ The dedicated BeamMP server does not construct, render or simulate each client's
 ```mermaid
 flowchart TD
   A[Elevation: Mapterhorn, national lidar, Copernicus] --> N
-  B[Imagery: national orthophotos and EOX] --> N
+  B[Imagery: national orthophotos and Sentinel-2] --> N
   C[Overture and OSM GeoParquet, survey roads] --> N
   N[netfetch: host policies, pooled HTTPS, retries, budgets] --> R
   R[rangeread and disk cache: bounded geographic blocks] --> P

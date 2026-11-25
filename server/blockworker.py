@@ -34,6 +34,7 @@ import dem as demmod
 import development as developmentmod
 import farfield
 import furniture
+import natural
 import geodesy
 import grading as gradingmod
 import heightmap
@@ -492,6 +493,8 @@ _FIRST = [0]                # a first block's cells being planned in this proces
 
 
 def _read_warm(warm_q):
+    if isinstance(warm_q, str):     # (BNE_V2_HOST: the latest list in a file, v2host.WarmBoard)
+        return _read_warm_board(warm_q)
     while True:
         try:
             aid, lat, lon, keys, *rest = warm_q.get()
@@ -502,16 +505,37 @@ def _read_warm(warm_q):
                 aid, lat, lon, keys, *rest = warm_q.get_nowait()
         except queue.Empty:
             pass
-        if not keys:            # (earthd.main's first item: it starts the queue's feeder thread early)
-            continue
-        g, _ = _s.anchor(aid, lat, lon)
-        if g is None:
-            continue
-        with _s.cv:
-            _s.want = [(g, k) for k in keys]
-            # (earthd.Server.warm_roads: this process only reads them while it builds a block, _warm_loop)
-            _s.warm_read_only = bool(rest and rest[0])
-            _s.cv.notify()
+        _take_warm(aid, lat, lon, keys, rest)
+
+
+def _take_warm(aid, lat, lon, keys, rest):
+    """The latest list of cells to plan ahead (earthd.Server.warm_roads) for _warm_loop."""
+    if not keys:            # (earthd.main's first item: it starts the queue's feeder thread early)
+        return
+    g, _ = _s.anchor(aid, lat, lon)
+    if g is None:
+        return
+    with _s.cv:
+        _s.want = [(g, k) for k in keys]
+        # (earthd.Server.warm_roads: this process only reads them while it builds a block, _warm_loop)
+        _s.warm_read_only = bool(rest and rest[0])
+        _s.cv.notify()
+
+
+WARM_POLL_S = 0.1           # s between the looks at v2host.WarmBoard's file
+
+
+def _read_warm_board(path):
+    """_read_warm under BNE_V2_HOST: the list read again whenever its file changes. No lock is shared between the
+    processes (a multiprocessing queue's reader lock, held by a process waiting in get(), stays held for good when that
+    process is killed: pools.SlotPool preempts block processes)."""
+    import v2host
+    seen = None
+    while True:
+        time.sleep(WARM_POLL_S)
+        got, seen = v2host.read_warm(path, seen)
+        if got is not None:
+            _take_warm(*got)
 
 
 def _warm_next(want, read_only):
@@ -904,6 +928,10 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
         return info, stages
 
     def paint(idx, road_feats):
+        if (natural.GROUND or natural.CLIFFS) and hasattr(_s.surface, "natural_land"):
+            land = _s.surface.natural_land(keep["lat"], keep["lon"])   # (mapped rock, sand, ice ...: natural.py)
+            if land:
+                idx = surfacemod.paint_natural(idx, keep["lat"], keep["lon"], land)
         lots = _s.surface.lots(keep["lat"], keep["lon"]) if hasattr(_s.surface, "lots") else None
         if lots:                        # farmland under the carriageways (a field does not cover the asphalt)
             idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
@@ -1142,6 +1170,8 @@ def _bridge_setup(p):
     p.wet = sea.depth if sea is not None else None        # (decks clear the water: roads.water_clear)
     p.infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(
         "infrastructure")                                   # (bridge:structure tags: bridgetypes)
+    p.water_fn = lambda key: _s.md.cell(key, layers=("water",), kind="demand").layers.get(
+        "water")                                            # (the waterways a deck end crosses: roadshape's skew)
 
 
 def _bridges(aid, frame, elev):
@@ -1365,13 +1395,14 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
     import revisit
     import roads as roadsmod      # (ROADS_IN_GROUND: a helper's per-client setting, init())
     import threedmr
+    from cliffsettings import SETTINGS as cliff_settings
     de = ()                         # (the German junction signs on near Germany: the border data in use too)
     if de_junctions:
         import designs
         de = designs.cache_parts(True, geodesy.EnuFrame(lat, lon), designs.tile_reach(roadsmod_tile_bbox(tx, ty)))
     k = revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
-                    _md_versions(bool(buildings)), float(buried), lamp_region, country,
+                    _md_versions(bool(buildings)), float(buried), lamp_region, country, *cliff_settings.cache_parts,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
                     *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat), bool(roadsmod.ROADS_IN_GROUND),
                     *_surf_tags(geodesy.EnuFrame(lat, lon), *roadsmod_tile_bbox(tx, ty)),
@@ -1379,6 +1410,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                     bool(de_junctions), *de)     # (the German junction parts last)
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
+                    **cliff_settings.cache_options,
                     gas_stations=bool(gas_stations), de_junctions=bool(de_junctions), towns_on=bool(towns_on), road_wear=roadwear.tier_of(wear),
                     md=_md_versions(),
                     pole_profile=pole_profile)
@@ -1792,6 +1824,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         import designs
         de_nodes = designs.reads_here(True, frame, designs.tile_reach(box, skin_margin))
     nodes = secrossings.read(_s.md, frame, near_cells) if secrossings.wanted(country, de_nodes) else None
+    import drivefeat                    # (the mapped driving features' inputs: None with every switch off)
+    drive = drivefeat.tile_inputs(_s.md, frame, near_cells, nodes)
     clearance = [] if buildings else None      # (build_tile's RoadClearance, PR #629: the powerlines' too)
     roadside_jobs = []                  # sign placement after the rendered barriers and driveways
     drives = []
@@ -1831,7 +1865,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
                                  pole_profile=pole_profile, signs=signs, roadside_jobs=roadside_jobs,
                                  driveways_out=mapped_drives,
-                                 signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes,
+                                 signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes, drive=drive,
                                  development=developmentmod.for_tile(_s.md, frame, tx, ty),
                                  clearance_out=clearance, towns=towns, de_on=de_junctions, de_routes=de_routes,
                                  # (the mapped utility poles mappedpoles.tile_poles draws: no guessed ones along them)
@@ -1872,6 +1906,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         margin = streetfront.BUILT_FRONT_M + 2. if frontage_country else streetfront.CITY_FRONT_M + 2. if city else 2.
         rings = buildingsmod.near_rings(frame, tx, ty, _s.md, margin=margin, skip=skip)
         props[:] = furniture.off_buildings(props, rings)     # (no street tree in a house)
+        if natural.TREES:               # (nor a made-up one by a mapped tree, natural.py)
+            props[:] = natural.off_mapped(props, frame, tx, ty, _s.md, (furniture.G_STREET_TREE,))
         props.extend(buildingsmod.doors(items, lines, x0, y0, drives, infer_fences=frontage_country != "FR"))
         props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
         drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
@@ -1948,6 +1984,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     except Exception as ex:
         log.warning("deck pads: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         pads_near = []
+    if any(c.get("rs_face") for c in chunks):     # (BNE_ROADSYS=surface: the decks' junctions are the faces' zones)
+        pads_near = []
     pads = [p for p in pads_near if roadsmod.box_owns(box, float(p[1][0]), float(p[1][1]))]
     parapets = roadmeshmod.parapet_runs(chunks, ctx, ground=cover, pads=pads_near)
     import guardrails as guardrailsmod
@@ -1995,6 +2033,15 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("deck_mesh")
     import fences
     boundary_wall_ids = ()
+    from cliffsettings import SETTINGS as cliff_settings
+    P.cliff = None
+    if cliff_settings.enabled:
+        import cliffrocks
+        P.cliff = cliffrocks.tile_mesh(
+            frame, box, drawn, _s.surface, cells, _s.widths, cache_dir=_s.cache_dir,
+            source_elev=lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
+            settings=cliff_settings, defer_strips=hasattr(tile, "box"))
+        mark("cliffs")
     import railways
     rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
     rground = railways.point_ground(frame, elev, rkey)
@@ -2101,6 +2148,27 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             raise
         except Exception as ex:
             log.warning("street furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        if drive is not None and drive.get("nodes"):    # (BNE_RAIL_PROPS: the mapped railway signals, points)
+            try:
+                import drivefeat
+                if drivefeat.RAIL_PROPS:
+                    rcells = [cell_fn(k) for k in near_cells]
+                    props.extend(drivefeat.rail_rows(frame, box, drive["nodes"], drivefeat.rail_lines_of(frame, rcells),
+                                                     elev, left_running=bool(left_hand)))
+            except fast.NativeMissing:
+                raise
+            except Exception as ex:
+                log.warning("rail props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        if drive is not None and drive.get("infra"):    # (BNE_ROAD_BARRIERS: the mapped gates, bollards ...)
+            try:
+                import drivefeat
+                rcells = [cell_fn(k) for k in near_cells]
+                props.extend(drivefeat.barrier_rows(frame, box, drive["infra"], near_roads, elev,
+                                                    drivefeat.routed_of(rcells)))
+            except fast.NativeMissing:
+                raise
+            except Exception as ex:
+                log.warning("road barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         try:           # (tall buildings' obstruction lights, long tunnels' jet fans)
             props.extend(places.warning_rows(items, x0, y0))
             props.extend(places.tunnel_fan_rows(chunks))
@@ -2197,7 +2265,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                               signs=P.signs, custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings),
                                barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines, towns=P.town_faces,
                                walk_ground=lambda x, y: roadmeshmod.drawn_ground(frame, P.drawn, np.c_[x, y], q),
-                               speed_traps=P.speed_traps, bus_col=P.bus_col, boundary_meshes=P.boundary_meshes) + (P.fuel_pads, P.fuel_tried)
+                               speed_traps=P.speed_traps, bus_col=P.bus_col, cliff_mesh=P.cliff,
+                               boundary_meshes=P.boundary_meshes) + (P.fuel_pads, P.fuel_tried)
     mark("write")
     return out
 
@@ -2251,11 +2320,16 @@ def geo_names(key, aid=None):
     if aid is None:
         out = {"json": f"rg_{key}.json", "inputs": f"rg_{key}.skin.pkl"}
         for what in roadsmod.shape_files(0, 0, 0):
-            if what not in ("road", "walk", "walkcol"):
+            if what not in ("road", "walk", "walkcol") and not what.startswith("cliffStrip"):
                 out[what] = f"rg_{key}_{what}.cdae"
         return out
-    return {"json": f"rs_{aid}_{key}.json", "road": f"rs_{aid}_{key}_road.cdae", "walk": f"rs_{aid}_{key}_walk.cdae",
-            "walkcol": f"rs_{aid}_{key}_walkcol.cdae"}
+    out = {"json": f"rs_{aid}_{key}.json", "road": f"rs_{aid}_{key}_road.cdae", "walk": f"rs_{aid}_{key}_walk.cdae",
+           "walkcol": f"rs_{aid}_{key}_walkcol.cdae"}
+    import cliffsettings
+    if cliffsettings.SETTINGS.enabled:      # (the cliffs' contact strips: only with BNE_CLIFFS on)
+        import cliffscene
+        out.update(cliffscene.skin_files(key, aid))
+    return out
 
 
 def _shape_info(path, pos, what):
@@ -2265,11 +2339,18 @@ def _shape_info(path, pos, what):
     import geotiles
     fast.require(geotiles.NEED_CONTENT, "cdae_zstats")
     with open(path, "rb") as f:
-        n, med, lo, hi = fast._ef.cdae_zstats(f.read())
+        data = f.read()
+        n, med, lo, hi = fast._ef.cdae_zstats(data)
     oz = float(pos[2])
     piv = oz + float(med) if n else oz
     rel = max(abs(oz + float(hi) - piv), abs(piv - oz - float(lo))) if n else 0.0
-    return {"pivot": round(piv, 3), "relief": round(rel, 3)}
+    info = {"pivot": round(piv, 3), "relief": round(rel, 3)}
+    if what.startswith("cliff"):
+        # Tint, UV and normal changes can leave the bounds unchanged. Clients
+        # must still replace the registered shape when those bytes change.
+        import hashlib
+        info["meshHash"] = hashlib.sha1(data).hexdigest()[:16]
+    return info
 
 
 def _content_hash(text, vfs_dir):
@@ -2310,6 +2391,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
                                    barrier_chunks=getattr(P, "barrier_chunks", ()),
                                    turbines=getattr(P, "turbines", ()), towns=getattr(P, "town_faces", None),
                                    speed_traps=getattr(P, "speed_traps", ()), bus_col=getattr(P, "bus_col", None),
+                                   cliff_mesh=getattr(P, "cliff", None),
                                    boundary_meshes=getattr(P, "boundary_meshes", None))
         with open(os.path.join(tmpdir, f"roads_0_{tile}_None.json"), encoding="utf-8") as f:
             data = json.loads(f.read())
@@ -2344,8 +2426,9 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         else:
             data.pop("colliders", None)
         lean = "bldcol" in parts
+        import cliffscene
         for what, info in parts.items():
-            info["col"] = what in GEO_COLLIDING or (what.startswith("bld") and not lean)
+            info["col"] = what in GEO_COLLIDING or cliffscene.is_collision(what) or (what.startswith("bld") and not lean)
         import roadsys
         if roadsys.STRUCTURES and "deck" in parts:
             # (its ends hand over to each anchor's own terrain lattice: always its variant for the anchor, never the base
@@ -2363,6 +2446,8 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         text = json.dumps(data, separators=(",", ":"), sort_keys=True)
         _write_bytes(os.path.join(out_dir, names["json"]), text.encode("utf-8"))
         inputs = {"chunks": P.chunks, "ctx": P.ctx, "walks": P.walks_raw, "h": h}
+        if getattr(P, "cliff", None) is not None:
+            inputs["cliff_strips"] = P.cliff.strip_inputs
         if getattr(P, "surface_short", False):
             # A skin may be built later, in another process. Carry the content fault with its inputs.
             inputs["surface_short"] = True
@@ -2394,6 +2479,7 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
     import revisit
     import threedmr
     import geotiles
+    from cliffsettings import SETTINGS as cliff_settings
     z, gx, gy = geotiles.parse(key)
     tile = geotiles.geobox(gx, gy, z)
     # The stale-generation lookup reuses these same parts with an older code ID. Superseded slab
@@ -2405,7 +2491,7 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
         de = designs.cache_parts(True, tile.frame, designs.tile_reach(tile.box, GEO_SKIN_MARGIN_M))
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
                        _md_versions(bool(buildings)) if md is None else md, float(buried), lamp_region, country,
-                       GEO_SKIN_MARGIN_M,
+                       GEO_SKIN_MARGIN_M, *cliff_settings.cache_parts,
                        pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), *_radar_key(),
                        bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), *_surf_tags(tile.frame, *tile.box[:4]),
                        # (the ground rules: rules, the server's own when it asks, earthd.Server.geo_content_key)
@@ -2558,8 +2644,10 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
                 with open(p, "rb") as fh:
                     blobs[name] = fh.read()
             s, w, nn, e = geotiles.info(gx, gy)[2:]
+            from cliffsettings import SETTINGS as cliff_settings
             wh = revisit.where(*geotiles.centre(gx, gy), s, w, nn, e,
                                revisit.sig(buildings=bool(buildings), gas_stations=bool(gas_stations),
+                                           **cliff_settings.cache_options,
                                            de_junctions=bool(de_junctions), towns_on=bool(towns_on), road_wear=roadwear.tier_of(wear), md=_md_versions(), pole_profile=pole_profile))
             revisit.store(_s.cache_dir, "roadsg", k, blobs,
                           {"n": int(n), "info": info,
@@ -2790,7 +2878,7 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
         d["anchorId"] = 0
         blobs = {revisit.swap(names["json"], mine):
                  revisit.swap(json.dumps(d, separators=(",", ":")), mine).encode("utf-8")}
-        for what in ("road", "walk", "walkcol"):
+        for what in names:
             if isinstance(d.get(what), dict):
                 with open(os.path.join(out_dir, names[what]), "rb") as f:
                     blobs[revisit.swap(names[what], mine)] = f.read()
@@ -2894,6 +2982,15 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
                     data["colliders"] = {"walk": boxes["walk"]}
                     if "walkcol" in data:
                         data["colliders"]["walkcol"] = boxes["walk"]
+    if inputs.get("cliff_strips"):
+        import cliffscene
+        try:
+            cliffscene.write_contacts(data, out_dir, vfs_dir, names, inputs["cliff_strips"], tile, frame, drawn, q)
+        except Exception:
+            log.exception("cliff contact strips omitted; keeping road skin")
+            import revisit
+            revisit.fault()
+        mark("cliff_strips")
     mark("write")
     _write_bytes(os.path.join(out_dir, names["json"]), json.dumps(data, separators=(",", ":")).encode("utf-8"))
     _geo_stats["skins"] += 1
@@ -3607,6 +3704,7 @@ def far_bridge_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir):
     def far_setup(p):
         sea = getattr(_s, "sea", None)
         p.wet = sea.depth if sea is not None else None
+        p.water_fn = lambda key: _s.md.cell(key, layers=("water",), kind="demand").layers.get("water")
     # (the road tiles' decks where solved: the bridge looks the same near and far; else on the raw ground)
     bridges = roadsmod.ChainView(
         _chain_store(f"far_bridges_{zoom}", roadsmod.BridgeProfiles,
@@ -3677,6 +3775,7 @@ def _far_bridges(frame, gzoom, raw):
     def setup(p):
         sea = getattr(_s, "sea", None)
         p.wet = sea.depth if sea is not None else None
+        p.water_fn = lambda key: _s.md.cell(key, layers=("water",), kind="demand").layers.get("water")
     return roadsmod.ChainView(_chain_store(f"far_bridges_{gzoom}", roadsmod.BridgeProfiles, raw, setup), frame)
 
 
@@ -3915,13 +4014,16 @@ def far_global_geometry(z, x, y, zoom, ref_zoom, layout):
     k = revisit.key("fargeo", *_far_global_key(z, x, y, zoom, ref_zoom, layout))
     got = revisit.load(_s.cache_dir, "fargeo", k)
     if got is not None:
-        return _built_from(got[0]["built.npz"], got[1])
+        built = _built_from(got[0]["built.npz"], got[1])
+        built.fin_base_key = k
+        return built
     with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
         base = _s.airports.wrap(_s.dem) if _s.airports is not None else _s.dem
         if _s.sea is not None:
             base = seacarvemod.SeaDem(base, None)       # (carving stops at seacarve.CARVE_MAX_LEVEL < the global levels)
         built = farfield.build_global(base, z, x, y, zoom, ref_zoom, layout)
     if revisit.ON and f0.complete:
+        built.fin_base_key = k
         blob, meta = _built_blob(built)
         la, lo = farfield.global_frame_ll(z, x, y)
         revisit.store(_s.cache_dir, "fargeo", k, {"built.npz": blob}, meta,
@@ -3994,7 +4096,6 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
         t0, c0 = time.perf_counter(), time.process_time()
         _dem_t.v = 0.0
     built = far_global_geometry(z, x, y, zoom, ref_zoom, layout)
-    _keep_fin_global(z, x, y, zoom, ref_zoom, layout, built, tex["px"], tex.get("keep_fin"))
     if _TRACE:
         log.info("fartrace worker global %s: geometry %.0f ms (cpu %.0f, dem %.0f)", (z, x, y),
                  1000 * (time.perf_counter() - t0), 1000 * (time.process_time() - c0), 1000 * _dem_t.v)
@@ -4012,7 +4113,10 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
     rock = rockfacemod.tile_inputs(geotiles.frame(x, y, z), -s / 2, -s / 2, s, px, built.grid)
     if not isinstance(photo, imagerymod.FarPhoto):
         photo = imagerymod.FarPhoto(np.asarray(photo, np.uint8), None)  # provider RGB already has its seasonal grade
-    n = photo.write(tex["path"], rock, imagerymod.FAR_SRGB)
+    import snowcover
+    n = photo.write(tex["path"], rock, imagerymod.FAR_SRGB,
+                    snow=snowcover.look_from_rock(tex.get("snow"), geotiles.frame(x, y, z), rock))
+    _keep_fin_global(z, x, y, zoom, ref_zoom, layout, built, px, tex.get("keep_fin"), tex["path"])
     return built, (n, used)
 
 
@@ -4151,6 +4255,13 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
             rgb = rockfacemod.rock(rgb, frame, x0, y0, size, U, x0, y0, size / (n - 1))
         except Exception as e:
             log.debug("base photo: rock faces: %s", e)
+            U = None
+        if tex.get("snow") is not None:     # (earthd.Server.write_base: winter's snow after the roads and rock)
+            import snowcover
+            road, water = snowcover.masks(frame, x0, y0, size, rgb.shape[0],
+                                          getattr(_s, "surface", None) if roadsmod.ROADS_IN_GROUND else None,
+                                          _s.widths, getattr(_s, "md", None))
+            rgb = snowcover.apply_kept(tex["snow"], rgb, frame, x0, y0, size, U, x0, y0, size / (n - 1), road, water)
         return rgb
 
     fast.require(564, "terrain base rendering")
@@ -4178,6 +4289,7 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     process's own CPU, one interpreter for every thread (55 s of a drive), and the far field waited on it. A tile
     built in this anchor's place before (and its texture) comes from the revisit cache."""
     import revisit
+    import snowcover
     mask = tex.get("mask") if tex.get("mask") and tex["mask"][1] else None
     k = _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex)
     got = revisit.load(_s.cache_dir, "far", k)
@@ -4189,7 +4301,7 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
         revisit.place(blobs["tex.dds"], tex["path"])
         built, got = _built_from(blobs["built.npz"], extra), (int(extra["tex_bytes"]), extra["used"])
         if not quick:
-            _keep_fin(k, built, tex, mask, got)
+            _keep_fin(k, built, tex, mask, got, lat, lon)
         return built, got
     with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
         built, got = _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
@@ -4203,8 +4315,9 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
             revisit.store(_s.cache_dir, "far", k, blobs, meta,
                           where=_where_enu(lat, lon, *tile.bbox, layout=repr(layout), md=_md_versions(),
                                            chain=tuple(tex["chain"]), tone=tex["tone"], leaf_on=tex["leaf_on"],
-                                           season_mode=tex["season_mode"]))
-            _keep_fin(k, built, tex, mask, got)
+                                           season_mode=tex["season_mode"],
+                                           **({"winter": True} if snowcover.ON else {})))
+            _keep_fin(k, built, tex, mask, got, lat, lon)
         except Exception as e:          # (not kept rather than no tile)
             log.debug("revisit: far tile %s not kept: %s: %s", (tile.level, tile.i, tile.j), type(e).__name__, e)
     return built, got
@@ -4220,17 +4333,20 @@ def _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
         surf = _surf_tags(geodesy.EnuFrame(lat, lon), *tile.bbox)
     import genground
     import imagery as imagerymod
+    import season as seasonmod
+    import snowcover
     _gx, _gy, gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, int(tex["px"]))
     if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, int(tex["px"])) is not None \
             and not tex.get("quick"):
         surf = (*surf, genground.far_key(getattr(_s, "md", None), tex.get("gen_trees")))
     return revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
-                       mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
+                       mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"],
+                       seasonmod.season_key(tex["season_mode"], lat), *snowcover.key_parts(tex.get("snow")),
                        bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
                        *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()), *surf)
 
 
-def _keep_fin(k, built, tex, mask, got):
+def _keep_fin(k, built, tex, mask, got, lat, lon):
     """The far tile's finished shape kept for the bulk restore (farrestore.py) when the server asked for it
     (tex["keep_fin"]: its pooled names' length, given only when the texture is final) and none is kept yet."""
     n = tex.get("keep_fin")
@@ -4244,11 +4360,19 @@ def _keep_fin(k, built, tex, mask, got):
     sides = {"tex.dds": revisit.Side(tex["path"])}
     if mask and os.path.exists(mask[0]):
         sides["mask.dds"] = revisit.Side(mask[0])
+    from cliffsettings import SETTINGS as cliff_settings
+    # This path is used only for finished anchor photos. Tint the cached shape
+    # from that exact photo, after both fresh rendering and cache restoration.
+    context = {}
+    if cliff_settings.natural:
+        context = dict(cliff_frame=geodesy.EnuFrame(lat, lon), cliff_surface=_s.surface,
+                       cliff_texture=tex["path"])
     farrestore.keep(_s.cache_dir, fk, built, tex["px"], n, sides,
-                    {"tex_bytes": int(got[0]), "used": {str(a): int(c) for a, c in (got[1] or {}).items()}})
+                    {"tex_bytes": int(got[0]), "used": {str(a): int(c) for a, c in (got[1] or {}).items()}},
+                    **context)
 
 
-def _keep_fin_global(z, x, y, zoom, ref_zoom, layout, built, px, n):
+def _keep_fin_global(z, x, y, zoom, ref_zoom, layout, built, px, n, texture=None):
     """A global far tile's shape kept for the bulk restore (its texture is the server's "fartex"): when its geometry
     is kept (complete) and the server asked (n: its pooled names' length)."""
     if not n:
@@ -4256,16 +4380,28 @@ def _keep_fin_global(z, x, y, zoom, ref_zoom, layout, built, px, n):
     import farrestore
     import revisit
     kg = revisit.key("fargeo", *_far_global_key(z, x, y, zoom, ref_zoom, layout))
-    fk = farrestore.key(kg, px, n)
-    if farrestore.has(_s.cache_dir, fk) or not revisit.has(_s.cache_dir, "fargeo", kg):
+    from cliffsettings import SETTINGS
+    import geotiles
+    if not revisit.has(_s.cache_dir, "fargeo", kg):
+        return  # incomplete geometry must not become a persistent colored shape
+    built.fin_base_key = kg
+    context = {}
+    photo = None
+    if SETTINGS.natural:
+        if texture is None:
+            return
+        photo = farrestore.photo_identity(texture)
+        context = dict(cliff_frame=geotiles.frame(x, y, z), cliff_surface=_s.surface, cliff_texture=texture)
+    fk = farrestore.key(kg, px, n, photo)
+    if farrestore.has(_s.cache_dir, fk):
         return
-    farrestore.keep(_s.cache_dir, fk, built, px, n)
+    farrestore.keep(_s.cache_dir, fk, built, px, n, **context)
 
 
 def far_restore_find(aid, lat, lon, specs):
     """The far tiles of specs that the revisit cache holds finished (farrestore.py): per spec (loc, {side: kept
     file}, texture px) or None. A spec: ("tile", tile, zoom, q, ref_zoom, with_sink, layout, tex, pxs) (far_tile's
-    arguments; tex with keep_fin) or ("global", z, x, y, zoom, ref_zoom, layout, pxs, name_len); pxs: the texture
+    arguments; tex with keep_fin) or ("global", z, x, y, zoom, ref_zoom, layout, pxs, name_len, photo_identity); pxs: the texture
     sizes to look for, the first found. Nothing is read but the packs' indexes."""
     import farrestore
     import revisit
@@ -4283,10 +4419,10 @@ def far_restore_find(aid, lat, lon, specs):
                         got = got + (px,)
                         break
             else:
-                _, z, x, y, zoom, ref_zoom, layout, pxs, n = sp
+                _, z, x, y, zoom, ref_zoom, layout, pxs, n, *photo = sp
                 kg = revisit.key("fargeo", *_far_global_key(z, x, y, zoom, ref_zoom, layout))
                 for px in pxs:
-                    got = farrestore.locate(_s.cache_dir, farrestore.key(kg, px, n))
+                    got = farrestore.locate(_s.cache_dir, farrestore.key(kg, px, n, photo[0] if photo else None))
                     if got is not None:
                         got = got + (px,)
                         break
@@ -4351,6 +4487,8 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
     except imagerymod.ImageryError:
         return built, None
     import surface as surfacemod
+    import snowcover
+    import roads as roadsmod
     if isinstance(rgb, imagerymod.FarPhoto):
         rock = rockfacemod.tile_inputs(frame, x0, y0, tile.size, px, built.grid)
         paint = None
@@ -4360,7 +4498,12 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
                                                        pads=tex.get("pads") or ())
             except Exception as e:
                 log.debug("road faces of %s: %s", tile.key, e)
-        n = rgb.write(tex["path"], rock, imagerymod.FAR_SRGB, paint=paint)
+        road = water = None
+        if tex.get("snow") is not None and surfacemod.far_photo_roads(tile.size, px):     # (earthd.Server.snow_masks)
+            road, water = snowcover.masks(frame, *sq, px, _paint_surface() if roadsmod.ROADS_IN_GROUND else None,
+                                          _s.widths, getattr(_s, "md", None))
+        n = rgb.write(tex["path"], rock, imagerymod.FAR_SRGB, paint=paint,
+                      snow=snowcover.look_from_rock(tex.get("snow"), frame, rock, road, water))
         rgb = None
     elif built.grid is not None:          # (earthd.Server.rock_faces)
         try:
@@ -4386,6 +4529,15 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
         except Exception as e:
             log.debug("road mask of %s: %s", tile.key, e)
     if rgb is not None:
+        if tex.get("snow") is not None:     # (earthd.Server.finish_tile_texture: after the roads)
+            g = None if built.grid is None else np.asarray(built.grid, np.float64)
+            road = water = None
+            if surfacemod.far_photo_roads(tile.size, px):
+                road, water = snowcover.masks(frame, *sq, px, _paint_surface() if roadsmod.ROADS_IN_GROUND else None,
+                                              _s.widths, getattr(_s, "md", None))
+            rgb = snowcover.apply_kept(tex["snow"], rgb, frame, *sq, g, x0, y0,
+                                       tile.size / (g.shape[1] - 1) if g is not None and g.ndim == 2 else 1.0, road,
+                                       water)
         n = genground.write_far_dds(tex["path"], rgb, imagerymod.FAR_SRGB)
     return built, (n, used)
 
@@ -4503,3 +4655,4 @@ def _square_disk():
 if _roadsys.HEIGHTS:
     _roadsys.GROUND = plan_elev
     _roadsys.DISK_FN = _square_disk
+_roadsys.AREAS_MD_FN = lambda: getattr(_s, "md", None)     # (BNE_ROADSYS_AREAS: the decks' mapped road areas)

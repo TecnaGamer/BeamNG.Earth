@@ -146,10 +146,12 @@ local DEFAULT_LAT, DEFAULT_LON = 36.596718, -118.169991 -- Whitney Portal Road u
 local STUCK_S = 5
 local ERROR_HOLD_S = 10
 local ATTRIBUTION = 'Elevation: Mapterhorn (https://mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen'
--- shown once satellite-textured tiles arrive (docs/V1_3_SPEC.md C; EOX's required wording)
+-- shown once satellite-textured tiles arrive (docs/V1_3_SPEC.md C; EOX's required wording; the server's hello.attribution
+-- replaces it with the sources it uses. EOX's 2023 mosaic, CC BY-NC-SA, left the chain 2026-11-23)
 local IMAGERY_ATTRIBUTION = 'Imagery: USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain); '
+  .. 'Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0); '
   .. 'EOxCloudless https://cloudless.eox.at by '
-  .. 'EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2023 / 2016 & 2017; CC BY-NC-SA 4.0 / CC BY 4.0)'
+  .. 'EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016 & 2017; CC BY 4.0)'
 local FULL_ATTRIBUTION = IMAGERY_ATTRIBUTION .. '\n' .. ATTRIBUTION
 
 local st -- all runtime state, see resetState()
@@ -1290,6 +1292,12 @@ local function onMessage(msg)
   elseif t == 'runtime_profiler' then
     require('beamngEarth/profiler').receive(msg.profile)
   elseif t == 'hello' then
+    M._cliffsAvailable = msg.cliffs and msg.cliffs.available == true or false
+    M._cliffsDebug = msg.cliffs and msg.cliffs.debug == true or false     -- (server BNE_CLIFFS_DEBUG)
+    require('beamngEarth/clifftalus').configure(msg.cliffs)
+    require('beamngEarth/cliffmaterials').configure(msg.cliffs)
+    require('beamngEarth/cliffcontact').configure(msg.cliffs)
+    roads.configureCliffs(msg.cliffs)     -- (the cliff parts in the tile loops: only when on)
     if msg.streamLease == 1 and type(msg.leaseId) == 'string' then
       net.serverHello(msg.sessionId, msg.leaseId, msg)
     else
@@ -1344,9 +1352,11 @@ local function onMessage(msg)
     -- a new server session: its own gravity message follows the first pose (none with --gravity off)
     local w = rawget(_G, 'beamngEarth_weather')
     if w and w.clearGravity then w.clearGravity() end
+    if M._winter then M._winter.onHello() end   -- (a server without winter: stock grip again after a while)
     st.deshadow = msg.deshadow -- server-side imagery de-shadowing ('lambert' / 'full'; nil = off), shown on the settings page
     st.colormatch = msg.colormatch -- server-side imagery colour-seam removal ('s2'; nil = off), likewise
     seasonlook.setMode(msg.season) -- the imagery's season (server --season): the leaves follow it
+    seasonlook.setSnow(msg.snow) -- winter's snow (server BNE_WINTER; nil: off): the snow layer's look, the grass
     st.mapPort = msg.mapPort -- the world map's tile endpoint on 127.0.0.1 (server/maptiles.py; nil = an older server)
     -- the download cache: the new server's usage follows its hello; it gets the page's size cap (the
     -- server keeps it for its next start too)
@@ -1597,6 +1607,11 @@ local function onMessage(msg)
     -- real weather (server weather.py): applied by the separate beamngEarth_weather extension
     local w = rawget(_G, 'beamngEarth_weather')
     if w and w.onWeather then w.onWeather(msg) end
+  elseif t == 'snowstate' then
+    -- winter grip (server snow.py, BNE_WINTER only): winter.lua loads with the first one (nothing of it runs before)
+    M._winter = M._winter or require('beamngEarth/winter')
+    M._winter.onState(msg)
+    seasonlook.setSnowState(msg) -- (the bare trees' frost, baretrees.lua)
   elseif t == 'gravity' then
     -- real gravity at the player (server gravity.py): applied by beamngEarth_weather's setGravity path
     local w = rawget(_G, 'beamngEarth_weather')
@@ -1605,6 +1620,8 @@ local function onMessage(msg)
     -- the BeamNG.Earth servers for the tab in BeamMP's server browser (serverlist.lua)
     local sl = rawget(_G, 'beamngEarth_serverlist')
     if sl and sl.onList then sl.onList(msg) end
+  elseif t == 'snow' then
+    seasonlook.setSnow(msg.snow) -- another snow state live (server snow_mode)
   elseif t == 'block_base' then
     -- detail mode: a block's base photo rendered again with its NAIP tiles (server base_refresh): the block
     -- in use takes it now, a ready one not committed yet takes it at its commit
@@ -1709,6 +1726,8 @@ local function onMessage(msg)
     if type(msg.result) == 'table' and msg.result.id then M._areaResults = { [msg.result.id] = msg.result } end
   elseif t == 'area_plan_result' then
     if msg.id then M._areaPlans = { [msg.id] = msg } end
+  elseif t == 'debug_map_result' then
+    if msg.id then M._debugMapResults = { [msg.id] = msg } end
   elseif t == 'cache_map_result' then
     -- the map's cache view: a grid of levels for the asked box (EarthMap.vue polls takeCacheMap)
     if msg.id then M._cacheMapResults = { [msg.id] = msg } end
@@ -2053,6 +2072,7 @@ local function updateWorld(dt)
   if st.poseTimer >= POSE_INTERVAL and net.isReady() and anchorKnown() and not st.rebasing then
     st.poseTimer = 0
     local c = st.cam
+    local fMean, fMax = gov:frameWindow()     -- (the frames since the last pose: the server's CPU share follows them)
     -- held: previous anchors of this server's session only (the far field's older sessions' anchor
     -- ids are another server's); sessions: every session folder in use
     net.send({ type = 'pose', anchorId = st.anchorId, x = pl.x, y = pl.y, z = pl.z, vx = pl.vx, vy = pl.vy,
@@ -2068,6 +2088,8 @@ local function updateWorld(dt)
       -- built first, deckWait)
       guardHold = (st.guard.mode == 'hold' or M._deckguard.waiting(st.deck)) or nil,
       deckWait = M._deckguard.waitKeys(st.deck),
+      frameMs = fMean and math.floor(fMean * 10 + 0.5) / 10 or nil,
+      frameMaxMs = fMax and math.floor(fMax * 10 + 0.5) / 10 or nil,
       cam = c and { x = c.x, y = c.y, z = c.z, fx = c.fx, fy = c.fy, fz = c.fz, fovDeg = c.fovDeg, h = c.h } or nil })
   end
 
@@ -3242,6 +3264,10 @@ local function onUpdate(dtReal, dtSim)
       if not ok then log('E', 'beamngEarth', 'speeding: ' .. tostring(err)) end
     end
     t = mark('speeding', t)
+    if M._winter then                -- (winter grip: its once-a-second check; nil unless the server sent a snowstate)
+      local ok, err = pcall(M._winter.update, dtReal)
+      if not ok then log('E', 'beamngEarth', 'winter: ' .. tostring(err)) end
+    end
     require('beamngEarth/minimaproads').update(navgraph.currentGraph())
     t = mark('minimaproads', t)
     do
@@ -3401,6 +3427,7 @@ end
 M.APP_LAYOUT = 'beamngEarth'
 local function onClientPostStartMission(levelPath)
   if type(levelPath) ~= 'string' or not levelPath:find('/' .. LEVEL_ID .. '/', 1, true) then return end
+  require('beamngEarth/cliffcontact').onMissionStart()
   local gs = rawget(_G, 'core_gamestate')
   if gs and gs.setGameState then pcall(gs.setGameState, 'freeroam', M.APP_LAYOUT, 'freeroam') end
 end
@@ -3749,6 +3776,11 @@ function M.updateInfo() return updateInfo end
 -- in GB (0 = unlimited), a clear (answered with clearedBytes), fresh usage numbers. Each returns
 -- whether it went out (false without a server session; a clear also needs the server's numbers, and
 -- says why it did not go out).
+-- Only the server's explicit startup opt-in can expose Dynamic cliffs controls.
+function M.cliffsAvailable() return M._cliffsAvailable == true end
+-- The world map's "Cliff placement" overlay: only with cliffs available (BNE_CLIFFS) or the server's BNE_CLIFFS_DEBUG.
+function M.cliffDebugAvailable() return M._cliffsAvailable == true or M._cliffsDebug == true end
+
 function M.cacheState() return cacheInfo end
 local function cacheReady() return net.isConnected() and st.sessionId ~= nil end
 function M.cacheSetCap(gb)
@@ -3841,6 +3873,20 @@ end
 -- The world map's cache view (server covermap.py): what is cached in the zoom-z tiles x0..x1, y0..y1 (mode: summary,
 -- elevation, imagery, mapdata); the answer is cache_map_result. Only the newest answer is kept (M._cacheMapResults:
 -- a field, not a local: the main chunk is at Lua's 200-local limit).
+-- Regional placement debug requests share the existing companion connection.
+function M.requestDebugMap(id, layer, s, w, n, e)
+  if not net.isConnected() then return false end
+  M._debugMapResults = {}
+  net.send({ type = 'debug_map', id = id, layer = layer, s = s, w = w, n = n, e = e })
+  return true
+end
+function M.takeDebugMap(id)
+  local results = M._debugMapResults or {}
+  local result = results[id]
+  results[id] = nil
+  return result
+end
+
 function M.requestCacheMap(id, z, x0, y0, x1, y1, mode)
   if not net.isConnected() then return false end
   M._cacheMapResults = {}

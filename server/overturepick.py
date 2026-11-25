@@ -292,7 +292,11 @@ class Pick:
 
         def online():
             try:
-                got = decide_online(get or _net_get(False), cache_dir)
+                import netfetch     # (the pick's own thread: the launcher imports this module, stdlib only)
+                # (no answer is no build's missing input: the disk's pick, else RELEASE, decides then; a late failure
+                # of this thread must not fault the builds a process that is its own supervisor runs meanwhile)
+                with netfetch.stale_ok():
+                    got = decide_online(get or _net_get(False), cache_dir)
             except Exception as e:      # (Unreachable, or anything else: the disk's)
                 self._error = f"{type(e).__name__}: {e}"
                 got = None

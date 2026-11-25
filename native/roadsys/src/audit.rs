@@ -15,7 +15,16 @@
 //! - clearance under structures against the floors (`clearance_short`: under 4.25 m to the lowest overhead part;
 //!   `clearance_excess`: road to road over 7.6 m, the ski-ramp side) (D3, D4);
 //! - `tcracks` (a vertex of another piece strictly inside a free edge, in lanes), `folds` (down-facing triangles on
-//!   an up-facing road surface in lanes), zero-area triangles, the longest triangle edge (D6, D7).
+//!   an up-facing road surface in lanes), zero-area triangles, the longest triangle edge (D6, D7);
+//! - `lane_step`: a ledge or a kink in the drivable surface itself, on the lane cells' own lattice: the second
+//!   difference |z(i - 1) - 2 z(i) + z(i + 1)| of the drivable height along the line and across it over STEP (a
+//!   steady grade or crossfall has none). The hand-over lip sees a step only where a surface lies within 15 cm of a
+//!   free edge; two floors 1.5 m apart under one lane (a tunnel's two carriageways) were no lip at all.
+//! - `envelope_intrusion_terrain`: the physics ground inside a deck's or a tunnel lane's clearance; `tunnel_roofless`:
+//!   a tunnel lane with no vault over it (a road under the hill without its tube).
+//!
+//! ROADSYS_AUDIT_DUMP lists the flagged cells on stderr (EN, DO, CS, PI, lip, STEP, TE, RF lines); ROADSYS_AUDIT_SAMPLES
+//! every lane cell (`SA line station across x y level z`, z NaN in a hole).
 //!
 //! Input (little-endian), written by checks.py's `audit_input`:
 //!   "RSAUDIT1"; quad: 8 x f64 (x0 y0 .. x3 y3);
@@ -48,6 +57,9 @@ const GRID: f64 = 2.0;          // triangle buckets
 const OWN: f64 = 0.05;          // double owner / own surface tolerance
 const ENVELOPE: f64 = 4.5;
 const PIER_NEAR: f64 = 1.5;
+const STEP: f64 = 0.05;         // m: a lane cell's second difference over this is a ledge or a kink
+const ROOF_MAX: f64 = 12.0;     // m: a tunnel lane's vault this far over its floor at most (else it has none)
+const TRACK_JUMP: f64 = 0.6;    // m: a tunnel lane's floor from one cell to the next along it, at most (else seeded again)
 
 #[derive(Clone)]
 pub struct Terrain { pub n: usize, pub ox: i64, pub oy: i64, pub z: Vec<f32>, pub hole: Vec<u8> }
@@ -233,15 +245,16 @@ impl Grid {
     }
 }
 
-/// A lane sample cell: centre, level, the line it belongs to.
-struct Sample { x: f64, y: f64, level: u8 }
+/// A lane sample cell: centre, level, the line it belongs to, its station along the line (0.5 m steps from the
+/// line's start) and its place across it (0.5 m steps from the centre line, left positive).
+struct Sample { x: f64, y: f64, level: u8, line: u32, station: i64, across: i64 }
 
 fn samples(sc: &Scene) -> Vec<Sample> {
     let q = &sc.quad;
     let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     for p in q { for k in 0..2 { lo[k] = lo[k].min(p[k]); hi[k] = hi[k].max(p[k]); } }
     let mut out = Vec::new();
-    for l in &sc.lines {
+    for (li, l) in sc.lines.iter().enumerate() {
         let h = l.width / 2.0 - MARGIN;
         let nlat = if h < CELL / 2.0 { 0 } else { ((h - CELL / 2.0) / CELL).floor() as i64 };
         let mut dist = 0.0;
@@ -265,7 +278,10 @@ fn samples(sc: &Scene) -> Vec<Sample> {
                 for k in -nlat..=nlat {
                     let o = k as f64 * CELL;
                     let p = [c[0] + nrm[0] * o, c[1] + nrm[1] * o];
-                    if in_quad(q, p) { out.push(Sample { x: p[0], y: p[1], level: l.level }); }
+                    if in_quad(q, p) {
+                        let station = ((s - CELL / 2.0) / CELL).round() as i64;
+                        out.push(Sample { x: p[0], y: p[1], level: l.level, line: li as u32, station, across: k });
+                    }
                 }
                 s += CELL;
             }
@@ -325,6 +341,10 @@ fn qkey(v: [f64; 3]) -> (i64, i64, i64) {
 #[derive(Default)]
 pub struct Metrics { pub m: BTreeMap<&'static str, f64> }
 
+/// The audit's measuring rules: raised whenever a metric's meaning changes (2: tunnel lanes ride their traced floor,
+/// terrain counts as a floor). tools/widecorpus compare.py refuses to pair results of two versions.
+pub const AUDIT_VERSION: f64 = 2.0;
+
 impl Metrics {
     fn add(&mut self, k: &'static str, v: f64) { *self.m.entry(k).or_insert(0.0) += v; }
     fn max(&mut self, k: &'static str, v: f64) { let e = self.m.entry(k).or_insert(0.0); if v > *e { *e = v; } }
@@ -344,9 +364,54 @@ fn fmt(v: f64) -> String {
     if v == v.trunc() && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{:.6}", v) }
 }
 
+/// A tunnel lane's floor per sample (NaN for the other levels, and in a hole), traced as a car drives it: per cell
+/// the floor candidates (deck tops, floor faces, the ground), along each row of cells (one line, one across offset,
+/// its stations in order) the one nearest the previous cell's within TRACK_JUMP; a row's start, or a cell after a gap,
+/// takes the lowest candidate with a vault 1 m to ROOF_MAX over it, else the lowest. As the highest floor at each cell
+/// alone, the lane ran on a low arch's stone top, on a bridge over the hill and on a passage crossing 22 m over the
+/// bore; as the lowest, it would take a railway tunnel 13 m under it (the Milchbucktunnel, 2026-11-23).
+fn tunnel_floors(sc: &Scene, ss: &[Sample], deck_top: &Grid, floors: &Grid, vaults: &Grid) -> Vec<f64> {
+    let tris = &sc.tris;
+    let mut out = vec![f64::NAN; ss.len()];
+    let mut rows: BTreeMap<(u32, i64), Vec<(i64, usize)>> = BTreeMap::new();
+    for (i, s) in ss.iter().enumerate() {
+        if s.level == 2 { rows.entry((s.line, s.across)).or_default().push((s.station, i)); }
+    }
+    for (_, mut row) in rows {
+        row.sort();
+        let mut prev = f64::NAN;
+        let mut last_station: Option<i64> = None;
+        for (station, i) in row {
+            let s = &ss[i];
+            let (x, y) = (s.x, s.y);
+            let mut cands: Vec<f64> = deck_top.at(x, y).iter().chain(floors.at(x, y).iter())
+                .filter_map(|&k| ray(&tris[k as usize], x, y)).collect();
+            let zt = sc.terrain.at(x, y);
+            if zt.is_finite() { cands.push(zt); }
+            if last_station.map_or(true, |l| station - l > 2) { prev = f64::NAN; }   // (a gap in the row: seeded again)
+            last_station = Some(station);
+            if cands.is_empty() { prev = f64::NAN; continue; }
+            let near = if prev.is_finite() {
+                cands.iter().copied().min_by(|a, b| (a - prev).abs().total_cmp(&(b - prev).abs()))
+                    .filter(|c| (c - prev).abs() <= TRACK_JUMP)
+            } else { None };
+            let z = near.unwrap_or_else(|| {
+                let vs: Vec<f64> = vaults.at(x, y).iter().filter_map(|&k| ray(&tris[k as usize], x, y)).collect();
+                let roofed = cands.iter().copied().filter(|&c| vs.iter().any(|&v| v >= c + 1.0 && v <= c + ROOF_MAX))
+                    .fold(f64::NAN, f64::min);
+                if roofed.is_finite() { roofed } else { cands.iter().copied().fold(f64::NAN, f64::min) }
+            });
+            out[i] = z;
+            prev = z;
+        }
+    }
+    out
+}
+
 /// The audit of one scene.
 pub fn audit(sc: &Scene) -> Metrics {
     let mut m = Metrics::default();
+    m.add("audit_version", AUDIT_VERSION);
     let tris = &sc.tris;
     let ter = &sc.terrain;
     // colliding up / down faces (vertical rays) and every colliding face (column clipping)
@@ -354,12 +419,18 @@ pub fn audit(sc: &Scene) -> Metrics {
     let col_steep = Grid::new(tris, |t| t.collides && t.cls == STEEP);
     let deck_top = Grid::new(tris, |t| t.kind == KIND_DECK && t.flags & FLAG_DECK_TOP != 0 && t.cls == UP);
     let floors = Grid::new(tris, |t| (t.kind == KIND_DECK && t.flags & FLAG_DECK_SIDE != 0 || t.kind == KIND_TUNNEL) && t.cls == UP);
+    let vaults = Grid::new(tris, |t| t.kind == KIND_TUNNEL && t.cls == DOWN);
     let ss = samples(sc);
+    let track = tunnel_floors(sc, &ss, &deck_top, &floors, &vaults);
     let area = CELL * CELL;
     let mut cand: Vec<u32> = Vec::new();
     let mut r2r: Vec<f64> = Vec::new();
     let mut hits: Vec<(f64, u32)> = Vec::new();
-    for s in &ss {
+    // the drivable height of every lane cell (NaN in a hole), for the steps
+    let mut heights: BTreeMap<(u32, i64, i64), (f64, f64, f64, u8)> = BTreeMap::new();
+    let samples_dump = std::env::var("ROADSYS_AUDIT_SAMPLES").is_ok();
+    let dump = std::env::var("ROADSYS_AUDIT_DUMP").is_ok();
+    for (si, s) in ss.iter().enumerate() {
         let (x, y) = (s.x, s.y);
         m.add("lane_cells", 1.0);
         let zt = ter.at(x, y);
@@ -376,13 +447,21 @@ pub fn audit(sc: &Scene) -> Metrics {
                 hits.iter().map(|h| h.0).fold(f64::NAN, f64::max)
             },
             1 => deck_top.at(x, y).iter().filter_map(|&k| ray(&tris[k as usize], x, y)).fold(f64::NAN, f64::max),
-            _ => floors.at(x, y).iter().filter_map(|&k| ray(&tris[k as usize], x, y)).fold(f64::NAN, f64::max),
+            // a tunnel lane: its floor traced along it, as a car drives it (tunnel_floors)
+            _ => track[si],
         };
-        if !zref.is_finite() { m.add("hole_cells", 1.0); continue; }
+        if !zref.is_finite() {
+            m.add("hole_cells", 1.0);
+            heights.insert((s.line, s.station, s.across), (f64::NAN, x, y, s.level));
+            if samples_dump { eprintln!("SA {} {} {} {:.3} {:.3} {} NaN", s.line, s.station, s.across, x, y, s.level); }
+            continue;
+        }
         let win = if s.level == 0 { 0.5 } else { 0.3 };
         let mut drive = if s.level == 0 && zt.is_finite() { zt } else { f64::NEG_INFINITY };
         for &(z, _) in &hits { if z >= zref - win && z <= zref + win && z > drive { drive = z; } }
         if !drive.is_finite() { drive = zref; }
+        heights.insert((s.line, s.station, s.across), (drive, x, y, s.level));
+        if samples_dump { eprintln!("SA {} {} {} {:.3} {:.3} {} {:.3}", s.line, s.station, s.across, x, y, s.level, drive); }
         // double owner: distinct surfaces within 5 cm under the drivable one
         let mut owners: Vec<(u32, f64)> = Vec::new();
         let terrain_own = zt.is_finite() && zt >= drive - OWN && zt <= drive + 1e-9;
@@ -395,7 +474,7 @@ pub fn audit(sc: &Scene) -> Metrics {
         if n_own >= 2 {
             m.add("double_owner_m2", area);
             if terrain_own { m.add("double_owner_terrain_m2", area); } else { m.add("double_owner_collider_m2", area); }
-            if std::env::var("ROADSYS_AUDIT_DUMP").is_ok() { eprintln!("DO {:.1} {:.1} lvl {} ter {} zt {:.2} drive {:.2} n {}", x, y, s.level, terrain_own, zt, drive, n_own); }
+            if std::env::var("ROADSYS_AUDIT_DUMP").is_ok() { eprintln!("DO {:.1} {:.1} lvl {} ter {} zt {:.2} drive {:.2} n {} line {}", x, y, s.level, terrain_own, zt, drive, n_own, s.line); }
         }
         // the envelope above: colliding faces in (drive + 5 cm, drive + 4.5 m]
         let (lo, hi) = (drive + OWN, drive + ENVELOPE);
@@ -437,7 +516,7 @@ pub fn audit(sc: &Scene) -> Metrics {
             m.add("envelope_intrusion_m2", area);
             if std::env::var("ROADSYS_AUDIT_DUMP").is_ok() {
                 let ks: Vec<usize> = (0..10).filter(|&k| intr_kind[k]).collect();
-                eprintln!("EN {:.1} {:.1} lvl {} drive {:.2} kinds {:?}", x, y, s.level, drive, ks);
+                eprintln!("EN {:.1} {:.1} lvl {} drive {:.2} line {} kinds {:?}", x, y, s.level, drive, s.line, ks);
             }
             for (kind, name) in [(KIND_BARRIER, "envelope_intrusion_barrier_m2"), (KIND_DECK, "envelope_intrusion_deck_m2"),
                                  (KIND_WALK, "envelope_intrusion_walk_m2"), (KIND_WALKCOL, "envelope_intrusion_walk_m2"),
@@ -448,6 +527,17 @@ pub fn audit(sc: &Scene) -> Metrics {
         }
         if parapet { m.add("parapet_in_cw_m", CELL); }
         if over_min.is_finite() && over_min <= hi { m.add("envelope_overhead_m2", area); }
+        // a deck or a tunnel lane: the physics ground inside its clearance (ground left in a tube, a deck under the
+        // hill); a tunnel lane with no vault over it (a road under the hill without its tube: the Milchbucktunnel's
+        // ramps past its bore, 2026-11-23)
+        if s.level >= 1 && zt.is_finite() && zt > lo && zt <= hi {
+            m.add("envelope_intrusion_terrain_m2", area);
+            if dump { eprintln!("TE {:.3} {:.3} lvl {} drive {:.2} ter {:.2} line {}", x, y, s.level, drive, zt, s.line); }
+        }
+        if s.level == 2 && !(over_min.is_finite() && over_min <= drive + ROOF_MAX) {
+            m.add("tunnel_roofless_cells", 1.0);
+            if dump { eprintln!("RF {:.3} {:.3} drive {:.2} line {}", x, y, drive, s.line); }
+        }
         if s.level == 0 && (over_min.is_finite() || top_above.is_finite()) && over_min < drive + 15.0 {
             m.add("under_structure_cells", 1.0);
             let gap = over_min - drive;
@@ -475,13 +565,33 @@ pub fn audit(sc: &Scene) -> Metrics {
             }
         }
     }
+    // steps: the second difference of the drivable height along the line and across it, both neighbours present
+    for (&(li, st, ac), &(z, x, y, level)) in &heights {
+        if !z.is_finite() { continue; }
+        let mut worst: f64 = 0.0;
+        for (ds, da) in [(1i64, 0i64), (0, 1)] {
+            let (Some(&(za, ..)), Some(&(zb, ..))) = (heights.get(&(li, st - ds, ac - da)), heights.get(&(li, st + ds, ac + da)))
+                else { continue };
+            if !(za.is_finite() && zb.is_finite()) { continue; }
+            let d2 = (za - 2.0 * z + zb).abs();
+            if d2 > STEP {
+                if ds == 1 { m.add("lane_step_along_cells", 1.0); } else { m.add("lane_step_across_cells", 1.0); }
+                if dump { eprintln!("STEP {:.3} {:.3} lvl {} {} {:.3} line {}", x, y, level, if ds == 1 { "along" } else { "across" }, d2, li); }
+            }
+            worst = worst.max(d2);
+        }
+        if worst > STEP {
+            m.add("lane_step_cells", 1.0);
+            m.add(match level { 0 => "lane_step_cells_ground", 1 => "lane_step_cells_bridge", _ => "lane_step_cells_tunnel" }, 1.0);
+            m.max("lane_step_max_m", worst);
+        }
+    }
     if !r2r.is_empty() {
         m.max("road_to_road_max_p50_m", pct(&mut r2r, 0.5));
         m.max("road_to_road_max_m", *r2r.last().unwrap());
     }
     // free edges of the colliding tops (hand-overs) and of the road surfaces (cracks), in lanes
     let mask = LaneMask::new(&sc.lines);
-    let dump = std::env::var("ROADSYS_AUDIT_DUMP").is_ok();
     let mut lips: Vec<f64> = Vec::new();
     let mut lips_terrain: Vec<f64> = Vec::new();
     let mut by_entry: BTreeMap<(u32, bool), Vec<u32>> = BTreeMap::new();
@@ -683,6 +793,108 @@ mod tests {
         let m = audit(&sc);
         assert!((m.m["handover_lip_max_mm"] - 12.0).abs() < 0.01, "{:?}", m.m);
         assert!(m.m["handover_lip_over_5mm"] > 0.0);
+    }
+
+    /// A rectangle whose height grows `grade` per metre along x from z0 at x0 (an up face, kind `kind`).
+    fn slope_rect(entry: u32, kind: u8, x0: f64, y0: f64, x1: f64, y1: f64, z0: f64, grade: f64) -> Vec<Tri> {
+        let mk = |p: [[f64; 3]; 3]| Tri { p, entry, kind, collides: true, flags: 0, cls: classify(&p) };
+        let (za, zb) = (z0, z0 + grade * (x1 - x0));
+        vec![mk([[x0, y0, za], [x1, y0, zb], [x1, y1, zb]]), mk([[x0, y0, za], [x1, y1, zb], [x0, y1, za]])]
+    }
+
+    #[test]
+    fn a_step_across_a_tunnel_lane_is_counted_and_a_steady_grade_is_not() {
+        // two tunnel floors side by side under one lane (the Milchbucktunnel, 2026-11-23: two carriageways of one
+        // bore on floors 1.5 m apart, a hand-over lip never seen as one, nothing within 15 cm of the edge)
+        let line = Line { level: 2, width: 9.0, xy: vec![[-25.0, 0.0], [25.0, 0.0]] };
+        let mut sc = Scene { quad: quad(30.0), terrain: flat_terrain(80, 40.0), tris: vec![], lines: vec![line] };
+        sc.tris = rect(0, KIND_TUNNEL, true, 0, -30.0, -5.0, 30.0, 0.0, 10.0);
+        sc.tris.extend(rect(1, KIND_TUNNEL, true, 0, -30.0, 0.0, 30.0, 5.0, 11.5));
+        let m = audit(&sc);
+        let cells = m.m.get("lane_step_cells_tunnel").copied().unwrap_or(0.0);
+        assert!(cells > 50.0, "{:?}", m.m);
+        assert!((m.m["lane_step_max_m"] - 1.5).abs() < 1e-6, "{:?}", m.m);
+        assert_eq!(m.m.get("lane_step_cells_ground"), None);
+        // one floor at a steady 10 % grade: no step along or across
+        let line = Line { level: 2, width: 9.0, xy: vec![[-25.0, 0.0], [25.0, 0.0]] };
+        let mut sc = Scene { quad: quad(30.0), terrain: flat_terrain(80, 40.0), tris: vec![], lines: vec![line] };
+        sc.tris = slope_rect(0, KIND_TUNNEL, -30.0, -5.0, 30.0, 5.0, 10.0, 0.10);
+        let m = audit(&sc);
+        assert_eq!(m.m.get("lane_step_cells"), None, "{:?}", m.m);
+        assert!(m.m["lane_cells"] > 500.0);
+        // a 20 cm ledge along the lane: counted along it
+        let line = Line { level: 2, width: 9.0, xy: vec![[-25.0, 0.0], [25.0, 0.0]] };
+        let mut sc = Scene { quad: quad(30.0), terrain: flat_terrain(80, 40.0), tris: vec![], lines: vec![line] };
+        sc.tris = rect(0, KIND_TUNNEL, true, 0, -30.0, -5.0, 0.0, 5.0, 10.0);
+        sc.tris.extend(rect(1, KIND_TUNNEL, true, 0, 0.0, -5.0, 30.0, 5.0, 10.2));
+        let m = audit(&sc);
+        assert!(m.m.get("lane_step_cells_tunnel").copied().unwrap_or(0.0) > 10.0, "{:?}", m.m);
+        assert!((m.m["lane_step_max_m"] - 0.2).abs() < 1e-6, "{:?}", m.m);
+    }
+
+    #[test]
+    fn ground_in_a_tunnel_lane_and_a_lane_with_no_vault_are_counted() {
+        // a tunnel lane on its floor at 10 m and no vault over it (a road under the hill without its tube: the
+        // Milchbucktunnel's ramps past its bore, 2026-11-23); then a vault at 16.8 m; then the ground at 12 m in it
+        let line = || Line { level: 2, width: 7.0, xy: vec![[-25.0, 0.0], [25.0, 0.0]] };
+        let mut sc = Scene { quad: quad(30.0), terrain: flat_terrain(80, 40.0), tris: vec![], lines: vec![line()] };
+        sc.tris = rect(0, KIND_TUNNEL, true, 0, -30.0, -5.0, 30.0, 5.0, 10.0);
+        let m = audit(&sc);
+        assert!(m.m.get("tunnel_roofless_cells").copied().unwrap_or(0.0) > 500.0, "{:?}", m.m);
+        assert_eq!(m.m.get("envelope_intrusion_terrain_m2"), None, "{:?}", m.m);
+        let mut vault = rect(1, KIND_TUNNEL, true, 0, -30.0, -5.0, 30.0, 5.0, 16.8);
+        for t in vault.iter_mut() { t.p.swap(1, 2); t.cls = classify(&t.p); }
+        sc.tris.extend(vault);
+        let m = audit(&sc);
+        assert_eq!(m.m.get("tunnel_roofless_cells"), None, "{:?}", m.m);
+        sc.terrain = flat_terrain(80, 12.0);
+        let m = audit(&sc);
+        assert!(m.m.get("envelope_intrusion_terrain_m2").copied().unwrap_or(0.0) > 100.0, "{:?}", m.m);
+    }
+
+    #[test]
+    fn a_tunnel_lane_runs_on_its_deck_not_on_its_arch() {
+        // a low arch: its road deck at 10 m, the vault's underside at 15 m, its stone top facing up at 15.6 m under
+        // the ground at 16.2 m: the lane on its deck, roofed, no ground in it
+        let line = Line { level: 2, width: 7.0, xy: vec![[-25.0, 0.0], [25.0, 0.0]] };
+        let mut sc = Scene { quad: quad(30.0), terrain: flat_terrain(80, 16.2), tris: vec![], lines: vec![line] };
+        sc.tris = rect(0, KIND_DECK, true, FLAG_DECK_TOP, -30.0, -4.0, 30.0, 4.0, 10.0);
+        sc.tris.extend(rect(1, KIND_TUNNEL, true, 0, -30.0, -5.0, 30.0, 5.0, 9.9));
+        let mut vault = rect(1, KIND_TUNNEL, true, 0, -30.0, -5.0, 30.0, 5.0, 15.0);
+        for t in vault.iter_mut() { t.p.swap(1, 2); t.cls = classify(&t.p); }
+        sc.tris.extend(vault);
+        sc.tris.extend(rect(1, KIND_TUNNEL, true, 0, -30.0, -5.0, 30.0, 5.0, 15.6));
+        // and a bridge crossing high over the hill above it
+        sc.tris.extend(rect(2, KIND_DECK, true, FLAG_DECK_TOP, -4.0, -30.0, 4.0, 30.0, 40.0));
+        let m = audit(&sc);
+        assert_eq!(m.m.get("tunnel_roofless_cells"), None, "{:?}", m.m);
+        assert_eq!(m.m.get("envelope_intrusion_terrain_m2"), None, "{:?}", m.m);
+        assert_eq!(m.m.get("hole_cells"), None, "{:?}", m.m);
+        // and an open stretch of a tunnel's line, on the ground: no hole
+        let line = Line { level: 2, width: 7.0, xy: vec![[-25.0, 0.0], [25.0, 0.0]] };
+        let sc = Scene { quad: quad(30.0), terrain: flat_terrain(80, 3.0), tris: vec![], lines: vec![line] };
+        let m = audit(&sc);
+        assert_eq!(m.m.get("hole_cells"), None, "{:?}", m.m);
+    }
+
+    #[test]
+    fn a_tunnel_lane_keeps_its_floor_under_and_over_other_tunnels() {
+        // a tunnel lane on its deck at 10 m in its tube (vault 16.8 m); over x in [-5, 5] another tunnel crosses 22 m
+        // over it (its deck at 32 m, its vault at 37 m), over x in [10, 20] a railway tunnel 13 m under it (its floor
+        // at -3 m, its vault at 3 m): the lane on its own floor all along, roofed, no step
+        let line = Line { level: 2, width: 7.0, xy: vec![[-25.0, 0.0], [25.0, 0.0]] };
+        let mut sc = Scene { quad: quad(30.0), terrain: flat_terrain(80, 60.0), tris: vec![], lines: vec![line] };
+        sc.tris = rect(0, KIND_DECK, true, FLAG_DECK_TOP, -30.0, -4.0, 30.0, 4.0, 10.0);
+        let down = |mut v: Vec<Tri>| { for t in v.iter_mut() { t.p.swap(1, 2); t.cls = classify(&t.p); } v };
+        sc.tris.extend(down(rect(1, KIND_TUNNEL, true, 0, -30.0, -5.0, 30.0, 5.0, 16.8)));
+        sc.tris.extend(rect(2, KIND_DECK, true, FLAG_DECK_TOP, -5.0, -30.0, 5.0, 30.0, 32.0));
+        sc.tris.extend(down(rect(3, KIND_TUNNEL, true, 0, -6.0, -30.0, 6.0, 30.0, 37.0)));
+        sc.tris.extend(rect(4, KIND_TUNNEL, true, 0, 10.0, -30.0, 20.0, 30.0, -3.0));
+        sc.tris.extend(down(rect(5, KIND_TUNNEL, true, 0, 10.0, -30.0, 20.0, 30.0, 3.0)));
+        let m = audit(&sc);
+        assert_eq!(m.m.get("lane_step_cells"), None, "{:?}", m.m);
+        assert_eq!(m.m.get("tunnel_roofless_cells"), None, "{:?}", m.m);
+        assert_eq!(m.m.get("hole_cells"), None, "{:?}", m.m);
     }
 
     #[test]

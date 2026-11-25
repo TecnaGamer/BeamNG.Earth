@@ -77,6 +77,7 @@ import deshadow as deshadowmod  # noqa: E402
 import gravity as gravitymod  # noqa: E402
 import test_weather  # noqa: E402
 import weather  # noqa: E402
+import snow as snowmod  # noqa: E402
 
 NUM = (int, float)
 OPT = "optional"            # may be absent
@@ -128,7 +129,8 @@ CAM = NESTED["pose.cam"]                # h: the screen height px (screen-space 
 TERRAIN = SHAPES["terrain"]
 WEATHER_NESTED = {name.split(".", 1)[1]: keys for name, keys in NESTED.items() if name.startswith("weather.")}
 # message types the plain session cannot produce (each has its own session test below)
-EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
+EXERCISED_ELSEWHERE = {"debug_map_result",  # test_cliff_debuglayers exercises success/error/busy replies
+                     "far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
                        "space_clouds",                               # the clouds from space: NASA GIBS (test_spaceclouds)
                        "tunnel_floor",                               # a tunnel at the spot: needs map data
                        "roads_skin", "roads_exact",                  # road geotiles (test_roadgeo)
@@ -136,6 +138,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "swap_begin", "swap_end", "swap_abort",       # a generation swap (test_stale_revisit.StaleSwapTest)
                        "runtime_profiler", "runtime_profiler_pong",  # opt-in feed/probe (test_runtimeprofiler_server)
                        "update_status",                              # the player's "Update now" (test_selfupdate)
+                       "snow",                                       # winter's live state (BNE_WINTER: test_snowcover)
                        "catchup",                                    # the catch-up boost: a driving player behind (test_catchup)
                        "where_result",                               # the status bar: asked by the mod while driving
                        "map_labels_result",                          # the 3D map's labels: asked in map mode
@@ -171,6 +174,9 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "share_info", "share_out"}                    # only in a BeamMP session (test_mpshare)
 # events the mod's net.lua makes up itself (not on the wire)
 MOD_INTERNAL = {"_connected": set(), "_disconnected": {"error"}}
+# fields the mod sets on its OWN copy of a server message (not on the wire): weather.lua scaleMsg marks a copy scaled
+# below THUNDER_MIN_K with noThunder (the thunder class reads it)
+MOD_MARKS = {"noThunder"}
 
 LUA = modsim.MOD_DIR
 GRAVITY_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "egm2008_n36.npz"     # degree 36 (test_gravity)
@@ -223,7 +229,7 @@ def mod_sends():
     (core hands them net.send)."""
     out = {}
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
-                              "addons.lua", "api.lua", "terrainfiles.lua"), r"net(?:'\))?\.send\(\{"),
+                              "addons.lua", "api.lua", "terrainfiles.lua", "winterlook.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua", "spaceclouds.lua", "globe.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{"),
                            (("reportsend.lua",), r"\bnet\(\)\.send\(\{")):
@@ -239,7 +245,7 @@ def mod_sends():
 def mod_reads():
     """Fields the mod reads from server messages: msg.X / p.msg.X / tr.X (terrain) in its Lua."""
     out = set()
-    for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "credits.lua", "roads.lua", "mpsession.lua",
+    for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "winter.lua", "credits.lua", "roads.lua", "mpsession.lua",
                  "addons.lua", "api.lua", "reportsend.lua", "terrainfiles.lua"):
         text = code_only((LUA / name).read_text(encoding="utf-8"), "--")
         out |= set(re.findall(r"\bmsg\.(\w+)", text))
@@ -281,6 +287,7 @@ class AgreementTableTest(unittest.TestCase):
     def test_mod_reads_are_in_table(self):
         sent = {f for spec in SERVER_TO_MOD.values() for f in spec} | {"type"}
         sent |= {f for spec in MOD_INTERNAL.values() for f in spec}
+        sent |= MOD_MARKS
         sent |= {"terrain." + f for f in TERRAIN}
         unknown = mod_reads() - sent
         self.assertFalse(unknown, f"the mod reads fields no server message has: {sorted(unknown)}")
@@ -690,6 +697,7 @@ class ServerMessagesTest(test_server.ServerHarness):
     def setUp(self):
         super().setUp()
         self.server.weather = weather.Service(fetch=test_weather.FakeFetch())     # no network
+        self.server.snow = snowmod.Service(mode="light")       # winter W1 (BNE_WINTER): a preset, no network either
         self.server.gravity = gravitymod.Provider(model=gravitymod.GravityModel.from_npz(GRAVITY_FIXTURE),
                                                   download=False)               # no network either
         self.server.credits = creditsmod.Credits(interval=0.1)
@@ -765,6 +773,10 @@ class ServerMessagesTest(test_server.ServerHarness):
                     self.assertEqual(set(m[k]), fields, (k, m))
                     self.assertTrue(all(isinstance(v, NUM) for v in m[k].values()), (k, m))
             self.assertEqual((m["v"], m["credit"]), (weather.VERSION, weather.CREDIT))
+        if kind == "snowstate":
+            self.assertEqual((m["v"], m["src"]), (snowmod.VERSION, "light"))
+            self.assertEqual((len(m["ground"]), len(m["roads"]), len(m["bridges"]), len(m["bands"])), (7, 5, 5, 8))
+            self.assertTrue(all(len(r) == 7 and isinstance(r[0], str) for r in m["roads"] + m["bridges"]), m)
         if kind == "gravity":
             self.assertEqual((m["v"], m["source"]), (gravitymod.MSG_VERSION, "egm2008"))
             self.assertTrue(9.75 < m["g"] < 9.85, m)
@@ -791,6 +803,9 @@ class ServerMessagesTest(test_server.ServerHarness):
             self.assertEqual(m["shape"].rsplit("/", 1)[1], f"slot_{m['material'].rsplit('_', 1)[1]}.cdae")
             self.assertIs(m["detail"], True)
         if kind == "hello":
+            if "cliffs" in m:
+                self.assertEqual(set(m["cliffs"]), {"available", "natural", "roadCuts", "debug"})
+                self.assertTrue(all(type(v) is bool for v in m["cliffs"].values()))
             self.assertIn(m["nearVisual"], ("mesh", "terrain"))
             self.assertEqual(m["format"], self.server.layout.format)
             self.assertIn(m["format"], modsim.CORE["FORMATS"])
