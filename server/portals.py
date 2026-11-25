@@ -340,4 +340,12 @@ def cover(mid, left, z, ground, hw, th, caps, uv_m, soil_uv_m, sec=None):
                                       np.ascontiguousarray(z, np.float64), np.ascontiguousarray(ground, np.float64),
                                       float(hw + COVER_SIDE), float(th), COVER_OVER, COVER_NEED, COVER_FOOT,
                                       bool(caps[0]), bool(caps[1]), float(uv_m), float(soil_uv_m),
-                                      np.ascontiguousarray(np.zeros((0, 2)) if sec is None else sec, np.float64))
+                                      np.ascontiguousarray(np.zeros((0, 2)) if sec is None else sec, np.float64),
+                                      *((True,) if _follow() else ()))
+
+
+def _follow():
+    """(BNE_ROADSYS_TUNNELS, 629) the tube's cover's top rises to the ground over its rows (earthfast cover_follow): the
+    record's holes' edges meet it (the seam rule)."""
+    import roadsys
+    return roadsys.TUNNELS

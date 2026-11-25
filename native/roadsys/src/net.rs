@@ -69,6 +69,10 @@ pub const K_ZONE: u8 = 3;
 pub const SUP_GROUND: u8 = 0;
 pub const SUP_STRUCT: u8 = 1;
 pub const SUP_TUNNEL: u8 = 2;
+/// (T1) a crossing over a tunnel: its floor's parts (the record's lids: roads.TUNNEL_LOW_H, roads.TUNNEL_SOIL_M)
+pub const TUNNEL_LIGHTS_M: f64 = 0.3;
+pub const TUNNEL_LID_MIN_M: f64 = 3.6;
+pub const TUNNEL_ROOF_M: f64 = 1.0;
 
 pub struct Edge { pub seg: usize, pub va: usize, pub vb: usize, pub na: usize, pub nb: usize, pub len: f64 }
 
@@ -1690,9 +1694,14 @@ fn crossings(net: &mut Net) {
                 let clear = clearance_at(net, lo, if up == sa { s_b } else { s_a });
                 // (M3: nothing held over a tunnel: today's tunnels own their heights and cover (TunnelProfiles); an 8 m
                 // cover floor lifted a speedway's deck over its infield tunnel 12 m)
-                if lo_sup.kind == SUP_TUNNEL { unbridged += 1; continue; }
+                // (T1, Opts.tunnels: the tunnel record builds every tagged tunnel covered, so a road crossing over one
+                // holds its floor: the tunnel road's clearance + 0.3 m for lights and signs, at least the lowest lid
+                // the mesher draws, + its roof and soil (TUNNEL_ROOF_M); the tunnel's knots, smoothness only, take it)
+                if lo_sup.kind == SUP_TUNNEL && !net.opts.tunnels { unbridged += 1; continue; }
                 let up_sup = if up == sa { ua } else { ub };
-                let floor = if lo_sup.kind == SUP_TUNNEL { 8.0 } else { clear + deck_under(up_sup) };
+                let floor = if lo_sup.kind == SUP_TUNNEL {
+                    if net.opts.tunnels { (clear + TUNNEL_LIGHTS_M).max(TUNNEL_LID_MIN_M) + TUNNEL_ROOF_M } else { 8.0 }
+                } else { clear + deck_under(up_sup) };
                 let stacked = lo_sup.kind == SUP_STRUCT;
                 out.push(Crossing { a: sa, sa: s_a, b: sb, sb: s_b, p, upper: up, floor, along: false, stacked });
             }
