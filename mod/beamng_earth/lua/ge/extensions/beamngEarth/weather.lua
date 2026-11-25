@@ -1539,6 +1539,7 @@ function M.onAnyMissionChanged(state)
   if state == 'started' then
     S.mission = true
     pcall(restoreSun)
+    pcall(restoreFogTint)
     if S.pending then -- the mission's own setup, just before 'started': no switch
       S.pending = nil
       local sk = sky()
