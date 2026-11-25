@@ -277,9 +277,10 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
             half = np.asarray(half, np.float64)         # (per point where the road tapers: each segment's mean)
             dst[1].append(np.full(len(c) - 1, half / square) if half.ndim == 0 else (half[:-1] + half[1:]) / 2 / square)
 
-    def line(x, y, spec, aisle, tapers=()):
+    def line(x, y, spec, aisle, tapers=(), ws=None):
         width, kind = spec.width, roadsmod.surface_material_kind(spec)
-        ws = roadsmod.taper_widths(spec.width, tapers, x, y)     # (its width along it where it tapers: road_tapers)
+        if ws is None:
+            ws = roadsmod.taper_widths(spec.width, tapers, x, y)     # (its width along it where it tapers: road_tapers)
         if ws is not None:
             width = ws
         if aisle:
@@ -376,11 +377,14 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
                                                    ms * (specs[i].width / 2 + mw / 2))[:, :2] / sc + ring[0, :2]
                     c, r = to_px(off[:, 0], off[:, 1])
                     add(lawn, np.asarray(c, np.float64), np.asarray(r, np.float64), mw / 2)
-    for la, lo, spec in extra:
-        line(np.asarray(lo), np.asarray(la), spec, False)
-    # ramp gores, paved (gore_fills, in a frame at the grid's middle)
-    import geodesy
     gfr = geodesy.EnuFrame(la_c, lo_c)
+    for la, lo, spec in extra:
+        ws = None
+        if getattr(spec, "width_stops", ()):
+            e, n, _ = gfr.geodetic_to_enu(la, lo, 0.)
+            ws = roadsmod.tunnel_widths(spec, np.c_[e, n])
+        line(np.asarray(lo), np.asarray(la), spec, False, ws=ws)
+    # ramp gores, paved (gore_fills, in a frame at the grid's middle)
     gb = gfr.geodetic_to_enu(np.array([float(np.min(lat)), float(np.max(lat))]),
                              np.array([float(np.min(lon)), float(np.max(lon))]), np.zeros(2))
     for hw_, mid in gore_fills(gfr, feats_list, (float(np.min(gb[0])) - 300, float(np.min(gb[1])) - 300,

@@ -411,6 +411,11 @@ def code_key():
             import heightmap        # (the lighter ground's 2 m squares: road tiles drape on its lattice; 1 m keys as before)
             if heightmap.SQUARE != 1.0:
                 h.update(f"square={heightmap.SQUARE:g}".encode())
+            h.update(b"norway-tunnels-v1")
+            catalog = os.path.join(here, "data", "norway_portals_v1.json")
+            if os.path.isfile(catalog):
+                with open(catalog, "rb") as f:
+                    h.update(f.read())
             if SIM_BUMP:            # (tests, measurements: an update's new code without one)
                 h.update(f"sim={SIM_BUMP}".encode())
             _code.append(h.hexdigest()[:16])

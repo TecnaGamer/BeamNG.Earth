@@ -1759,7 +1759,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         rwalls = rwalls + fences.stone_walls(frame, infra_fn, box, elev, roads=near_roads)
     except Exception as ex:
         log.warning("stone walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
-    P.tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
+    rock_colour = None
+    if any("rock" in (c.get("norway_portal_style") or ()) for c in chunks):
+        import rock_portal_photo
+        rock_colour = rock_portal_photo.sampler(frame, elev, getattr(_s, "cache_dir", None))
+    P.tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls, rock_colour=rock_colour)
     mark("tunnel_mesh")
     import railways
     rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]

@@ -89,9 +89,31 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
     german = _german(source, frame, tx, ty)
     autobahn = _autobahn(md, frame, tx, ty, elev, context, left_hand) if german else None
     speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us), dej, towns)
+    # BNE_NORWAY_SIGNS_V06: Norway-only on-demand signs and destination boards.
+    # Preserve the user's original road sign and direction switches elsewhere.
+    no_signs = (str(country or '').upper() == 'NO' and
+                os.environ.get('BNE_NORWAY_SIGNS_V06', 'on').lower() not in ('off', '0', 'false'))
+    no_dirs = no_signs and os.environ.get('BNE_NORWAY_DIRECTIONS_V06', 'on').lower() not in ('off', '0', 'false')
     dir_mesh, dir_faces = (_dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, aid,
-                                 autobahn=german) if dirs else (None, {}))
-    rsign_mesh = _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country) if rsigns else None
+                                 autobahn=german) if (dirs and not no_signs) else (None, {}))
+    rsign_mesh = _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country) if (rsigns or no_signs) else None
+    # BNE_NVDB_DESTINATIONS_V07: real Norwegian sign texts and locations.
+    if no_signs:
+        try:
+            import norway_nvdb_destinations_v07 as no_dest
+            if no_dest.enabled():
+                import busstationsign as no_mesh
+                no_box = (x0, y0, x1, y1)
+                no_board, no_faces = no_dest.build_tile(frame, no_box, elev, decks, out_dir, vfs_dir)
+                if no_board is not None:
+                    dir_mesh = no_mesh.merge(dir_mesh, no_board)
+                    dir_faces = {**dir_faces, **no_faces}
+                no_prio = no_dest.build_priority_tile(frame, no_box, elev, decks, roadsigns.system(country))
+                if no_prio is not None:
+                    rsign_mesh = no_mesh.merge(rsign_mesh, no_prio)
+        except Exception as err:
+            _short()
+            log.warning('NVDB Norwegian destination boards unavailable; keeping roads/signs: %s', err, exc_info=True)
     import busstationsign               # the bus stations' name signs (on whether or not the direction boards are)
     bus_mesh, bus_faces = _optional('Bus station signs', busstationsign.sign_tile, md, frame, tx, ty, elev, out_dir,
                                     vfs_dir, country)
@@ -279,12 +301,13 @@ class Tracker:
         now = time.monotonic()
         want = [k for k in self.wanted if (k not in self.sent or k in self.stale)
                 and (aid, k) not in self.jobs and self.retry.get(k, 0.) <= now]
-        want.sort(key=lambda k: roads.tile_distance(*k, x, y))
+        self._order_tiles(want, x, y)
         if want and self.pool is None:
             self.pool = ThreadPoolExecutor(WORKERS, thread_name_prefix='highway-signs')
         for key in want[:max(0, WORKERS - len(self.jobs))]:
             future = loop.run_in_executor(self.pool, build, aid, *key)
             self.jobs[aid, key] = future
+            self._job_started(key, future)
             future.add_done_callback(lambda f, a=aid, k=key, r=self.revision: self._built(conn, a, k, r, f))
 
     def _built(self, conn, aid, key, revision, future):
@@ -323,6 +346,12 @@ class Tracker:
             slots = pool(conn, files)
             if slots:
                 message['slots'] = slots
+        if self._route:
+            message['norwaySignApproach'] = True
         conn.send(message)
         self.sent.add(key)
         self.stale.discard(key)
+
+
+from norway_signs_v073 import driving_v085 as _norway_driving
+Tracker = _norway_driving.tracker_class(Tracker, roads)

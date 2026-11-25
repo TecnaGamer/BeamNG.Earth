@@ -63,6 +63,62 @@ class SubseaProfileTest(unittest.TestCase):
             s = np.r_[0., np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
             self.assertLessEqual(np.max(np.abs(np.diff(z) / np.diff(s))), .08001)
 
+    def test_cached_bore_lowers_a_supported_portal_without_submerging_the_other(self):
+        stations = np.array([-1200., -1199.97, -950., -450., 450., 850., 1100., 1200.])
+        altitude = np.array([1.1, 1.1, -1.5, -43., -43., -13., -8., -1.])
+        lon = LON + stations / M_LON
+        lat = np.full(len(lon), FRAME.lat0)
+        record = {"id": 42, "line3d": np.c_[lat, lon, altitude].tolist()}
+        end_lon = LON - 1200. / M_LON
+
+        def search(_lat, longitude):
+            # The only cached report is at one end, far from the middle of the bore.
+            return [record] if abs(longitude - end_lon) < .001 else []
+
+        def ground(lat, lon, rough_approach=False):
+            x = (np.asarray(lon) - LON) * M_LON
+            z = np.where(np.abs(x) < 600., -30., 1.7)
+            z = np.where(np.abs(x + 1200.) < 7., 6.75, z)
+            if rough_approach:
+                z = np.where(x < -1207., 4.7, z)
+            z = np.where((x >= 600.) & (x < 1207.), 5.5, z)
+            z = np.where(x >= 1207., -.8, z)
+            return np.where((-850. < x) & (x < -820.), 30., z)
+
+        def observed(frame, xy, *_):
+            _, lo, _ = frame.enu_to_geodetic(*xy.T, 0.)
+            interior = altitude.copy()
+            interior[3:5] -= 3.
+            return np.interp((lo - LON) * M_LON, stations, interior)
+
+        for provider in (None, SimpleNamespace(enabled=True, observed=observed)):
+            with self.subTest(general_elevation_provider=provider is not None):
+                tp, f = self.setup_bay()
+                bay_water = tp.water
+
+                def water(lat, lon):
+                    x = (np.asarray(lon) - LON) * M_LON
+                    island_lake = (-850. < x) & (x < -820.)
+                    d, level = bay_water(lat, lon)
+                    return np.where(island_lake, 2., d), np.where(island_lake, 32., level)
+
+                tp.raw = lambda la, lo: ground(la, lo, rough_approach=provider is not None)
+                tp.water, tp.wet = water, lambda la, lo: water(la, lo)[0]
+                with patch.object(roadz, "PROVIDER", provider), patch("norway_tunnels.NVDB_BORE_HEIGHTS", True), \
+                        patch("norway_tunnels.in_norway", return_value=True), \
+                        patch("norway_tunnel_nvdb.bore_lines_near", side_effect=search):
+                    parts = tp.parts([f], (-1300., -100., 1300., 100.))
+                self.assertTrue(parts)
+                west, middle, east = [(str(fid), 0) for fid in f.ids]
+
+                def height(part, at):
+                    return geotiles.world_to_geodetic(FRAME, np.c_[tp.done[part][1], tp.done[part][2]])[2][at]
+
+                self.assertAlmostEqual(height(west, 0), 1.1, delta=.03)
+                self.assertAlmostEqual(height(east, -1), 5.5, delta=.03)
+                self.assertLess(height(middle, 0), -44. if provider is not None else -32.)
+                self.assertEqual(tp._subsea_survey_portals, {(tp._part_id(west), 0)})
+
     def test_grading_reads_the_same_region_profile_without_reentering_a_grader(self):
         tp, f = self.setup_bay()
         md = SimpleNamespace(cell=lambda *a, **kw: SimpleNamespace(layers={"roads": f}))

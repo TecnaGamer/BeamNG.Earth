@@ -173,6 +173,12 @@
     "no_collision": true,
     "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_nl"
   },
+  "eu_marker_no": {
+    "distance": 250,
+    "height": 1.01,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/norway_reflector/norway_reflector_post"
+  },
   "eu_marker_nordic": {
     "distance": 300,
     "height": 1.15,

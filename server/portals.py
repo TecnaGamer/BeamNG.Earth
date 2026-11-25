@@ -61,6 +61,24 @@ LOOKS = {
 }
 HOOD_FACE = 0.6             # the hill's face: the ground over the floor this share of the opening's height
 LOOK_SIDE = {0: 2.2, 1: FACE_SIDE, 2: 2.0, 3: FACE_SIDE}    # m of headwall beside the opening at most, per look
+ROCK_BACKING_TOP = 2.0      # m above a bare-rock opening before the cliff itself takes over
+ROCK_BACKING_WALL = 0.15    # m behind the section before the backing can turn into the hill
+ROCK_COVER_OVER = 0.55      # overlap the lip even where the terrain rises within a grid square
+ROCK_SHOULDER_BACK = 0.30
+
+
+def rock_cover_side():
+    """Overlap the outer corner of a terrain square removed beside the bore."""
+    from heightmap import SQUARE
+    from roads import TUNNEL_HOLE_MARGIN
+
+    return max(COVER_SIDE, TUNNEL_HOLE_MARGIN + np.sqrt(2.) * SQUARE + .20)
+
+
+def _shoulder_stations():
+    from heightmap import SQUARE
+
+    return np.array([-ROCK_SHOULDER_BACK, np.sqrt(2.) * SQUARE + .15])
 
 
 def _others(roads, cells, frame, parts):
@@ -85,7 +103,8 @@ def _others(roads, cells, frame, parts):
         if len(xy) >= 2:
             # (a twin bore's tube and its collar, not only its carriageway: the two headwalls stopped on each other's
             # roads and overlapped by the shoulders between)
-            lines.append((len(lines), spec.width / 2 + roadmesh.TUNNEL_SHOULDER + TWIN_GAP, xy))
+            half = roads.tunnel_max_width(spec) / 2 + roadmesh.tunnel_shoulder(spec)
+            lines.append((len(lines), half + TWIN_GAP, xy))
     return lines
 
 
@@ -115,17 +134,21 @@ def fit(roads, tunnels, cells, chunks, parts):
     for c in todo:
         n = np.asarray(c["n"], np.float64)
         xy, z = n[:, :2], n[:, 2]
-        hw = float(c["w"]) / 2 + roadmesh.TUNNEL_SHOULDER
+        measured = roadmesh.tunnel_width_samples(c)
+        widths = np.full(len(n), c["w"], np.float64) if measured is None else measured
+        half_widths = widths / 2 + roadmesh.tunnel_shoulder(c)
         th = float(c.get("tunnel_h") or roadmesh.TUNNEL_H)
         d = np.gradient(xy, axis=0)
         d /= np.maximum(dnp.hypot(*d.T), 1e-9)[:, None]
         left = np.c_[-d[:, 1], d[:, 0]]
-        pts = [xy, xy + left * (hw + COVER_REACH), xy - left * (hw + COVER_REACH)]
+        extent = left * (half_widths + COVER_REACH)[:, None]
+        pts = [xy, xy + extent, xy - extent]
         ends = []
         for e, at in enumerate((0, len(xy) - 1)):
             if not (c.get("portal") or (False, False))[e]:
                 ends.append(None)
                 continue
+            hw = float(half_widths[at])
             t = xy[1] - xy[0] if e == 0 else xy[-1] - xy[-2]
             t = t / max(float(dnp.hypot(*t)), 1e-9)
             ul = np.array([-t[1], t[0]])
@@ -153,8 +176,19 @@ def fit(roads, tunnels, cells, chunks, parts):
                     lp = [p + ul * sg * (hw + reach + 0.5) + out * s for s in ws]
                     ok = all(oth.clear(q, None, ROAD_GAP) for q in lp)
                 wing_ok.append(ok)
+            shoulder_room = None
+            if "tunnel_shoulder" in c:
+                pad = rock_cover_side()
+                shoulder_room = []
+                shoulder_probes = []
+                stations = _shoulder_stations()[:, None] * out
+                for sg, room in zip((1., -1.), sides):
+                    width = min(room, pad)
+                    edge = p + ul * sg * (hw + width) + stations
+                    shoulder_probes.append(edge)
+                    shoulder_room.append(width if width > .5 and all(oth.clear(q, None, ROAD_GAP) for q in edge) else 0.)
             ends.append({"p": p, "ul": ul, "out": out, "fx": fx, "sides": sides, "wing_ok": wing_ok, "at": at,
-                         "i0": sum(len(q) for q in pts), "look": look})
+                         "i0": sum(len(q) for q in pts), "look": look, "shoulder_room": shoulder_room})
             for s_in in FACE_IN:
                 pts.append(p[None] + ul[None] * fx[:, None] - out[None] * s_in)
             for sg, reach in zip((1.0, -1.0), sides):
@@ -162,6 +196,8 @@ def fit(roads, tunnels, cells, chunks, parts):
             pts.append(p[None] + out[None] * ws[:, None])
             pts.append((p - out * RISE_IN)[None])
             pts.append(np.array([p + ul * sg * (hw + SIDES_OFF) + out * s for sg in (1.0, -1.0) for s in SIDES_OUT]))
+            if shoulder_room is not None:
+                pts.append(np.vstack(shoulder_probes))
         try:
             g = np.asarray(tunnels._ground(np.vstack(pts)), np.float64)
         except Exception:               # (no ground at hand: the plain structure, the tube as it was)
@@ -175,7 +211,9 @@ def fit(roads, tunnels, cells, chunks, parts):
                 continue
             i, nx, nw = en["i0"], len(en["fx"]), len(WING_S)
             zf = float(z[en["at"]])
-            face = np.max([g[i + q * nx:i + (q + 1) * nx] for q in range(len(FACE_IN))], axis=0) - zf
+            sampled_face = g[i:i + len(FACE_IN) * nx].reshape(len(FACE_IN), nx) - zf
+            face = sampled_face.max(axis=0)
+            face_depth = np.asarray(FACE_IN)[sampled_face.argmax(axis=0)]
             # the hill's face over the axis: how far in the graded approach goes on before it (a hood reaches out of
             # the face to the mouth: Laerdal's stands ~5 m out of its slope)
             setback = 0.0
@@ -196,10 +234,14 @@ def fit(roads, tunnels, cells, chunks, parts):
             rise = float(g[i] - zf) - max(sides_h, 0.0)
             st = int(fast._ef.portal_style(c.get("cls") in MAJOR or bool(c.get("concrete")), th, rise, sides_h))
             r2 = lambda v: [round(float(x), 2) for x in v]      # noqa: E731
-            fits.append({"st": st, "fx": r2(en["fx"]), "fg": r2(face), "ws": list(WING_S),
+            fits.append({"st": st, "fx": r2(en["fx"]), "fg": r2(face), "fd": r2(face_depth),
+                         "fc": [r2(row) for row in sampled_face], "ws": list(WING_S),
                          "wl": r2(wl) if en["wing_ok"][0] else None, "wr": r2(wr) if en["wing_ok"][1] else None,
                          "rz": r2(rz), "sl": round(en["sides"][0], 2), "sr": round(en["sides"][1], 2),
                          "sb": round(setback, 2) if st in (0, 2) else 0.0})
+            if en["shoulder_room"] is not None:
+                fits[-1]["shoulder_room"] = r2(en["shoulder_room"])
+                fits[-1]["shoulder_ground"] = r2(g[i + 5:i + 9] - zf)
         if any(f is not None for f in fits):
             c["fit"] = fits
     return chunks
@@ -233,33 +275,164 @@ def setback(fitd, low=False):
     return 0.0 if low or fitd is None else float(fitd.get("sb") or 0.0)
 
 
-def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), low=False):
+def _rake_rock_face(mesh, p, ul, out, crown, fitd, samples=None, hw=None):
+    """Shape a tall backing into the surveyed cut while leaving the collar at its original plane."""
+    points, tris, uvs, codes = mesh
+    if not len(tris) or (samples is None and points[:, 2].max() < p[2] + crown + 1.5):
+        return mesh
+
+    # Split shared edges together. The face, its top and its returns must deform as one mesh.
+    for _ in range(2):
+        ends = np.sort(tris[:, [[0, 1], [1, 2], [2, 0]]], axis=2).reshape(-1, 2)
+        edges, inverse = np.unique(ends, axis=0, return_inverse=True)
+        d, e, f = (inverse.reshape(-1, 3) + len(points)).T
+        a, b, c = tris.T
+        points = np.r_[points, points[edges].mean(axis=1)]
+        uvs = np.r_[uvs, uvs[edges].mean(axis=1)]
+        tris = np.r_[np.c_[a, d, f], np.c_[d, b, e], np.c_[f, e, c], np.c_[d, e, f]]
+        codes = np.tile(codes, 4)
+
+    rel = points - p
+    across = dnp.matmul(rel[:, :2], ul)
+    along = dnp.matmul(rel[:, :2], out)
+    over = np.maximum(rel[:, 2] - crown - 0.25, 0.0)
+    support = np.interp(across, fitd["fx"], fitd.get("fd", [3.0] * len(fitd["fx"])))
+    # The upper rock leans back toward the ground sample. Shallow, staggered ledges
+    # break up the surface without moving its arch or pushing rock into the approach.
+    t = np.clip(over / 3.0, 0.0, 1.0)
+    ledges = 0.35 * dnp.sin(rel[:, 2] * 1.55 + across * 0.48) + 0.22 * dnp.sin(across * 1.8 - rel[:, 2] * 0.66)
+    drift = np.minimum(0.53 * over, 0.9 * support)
+    drift = np.clip(drift + t * ledges * np.minimum(1.0, 0.35 * support), 0.0, support)
+    drift *= np.clip(1.0 - np.maximum(along, 0.0) / 2.0, 0.0, 1.0)
+    if samples is not None:
+        # The short exposed face still joins the cut. At its rear, extend the
+        # rock over the crown until a measured depth lies inside the hillside.
+        # Keep the join outside the vault and its full driveable width at bends.
+        sampled = np.array([np.interp(across, fitd["fx"], row) for row in samples])
+        covered = sampled >= rel[:, 2] + COVER_OVER
+        depth = np.where(covered.any(axis=0), np.asarray(FACE_IN)[covered.argmax(axis=0)], 0.0)
+        rear = np.clip(-along / ROCK_BACKING_WALL, 0.0, 1.0)
+        crown_band = np.clip(over / 0.25, 0.0, 1.0)
+        crown_return = np.maximum(depth + along - drift, 0.0) * crown_band
+        if hw is not None:
+            side_band = np.clip((np.abs(across) - hw - .75) / .65, 0.0, 1.0)
+            side_return = np.maximum(np.minimum(depth, 1.5) + along - drift, 0.0) * side_band
+            crown_return = np.maximum(crown_return, side_return)
+        drift += rear * crown_return
+    points[:, :2] -= drift[:, None] * out
+    return points, tris, uvs, codes
+
+
+def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), low=False, *, collar=True,
+              compact_rock=False, rock_backing=False):
     """The mouth's structure for roadmesh.tunnel: (positions (n, 3), triangles (m, 3), uvs (n, 2), codes (m,): 0 the
     structure, 1 soil). p: the mouth's floor centre in the mesh's coordinates; walls_near: (left, right) a cutting's
-    retaining wall already stands there (no wing wall on that side)."""
+    retaining wall already stands there (no wing wall on that side). With collar=False, fit a retaining face at the
+    opening of a tube whose collar is already modeled. A compact rock face follows the near contour and joins the
+    terrain behind the vault."""
     fast.require(VERSION, "portal_mesh")
     st = _look(fitd, low)
     none = np.zeros(0)
     # a hood: its headwall back at the hill's face, the hood reaching out from there to the mouth
-    sb = setback(fitd, low)
+    sb = setback(fitd, low) if collar else 0.0
     p = np.asarray(p, np.float64) - np.r_[np.asarray(out, np.float64) * sb, 0.0]
     ws = np.asarray(fitd["ws"], np.float64) + sb
     wl = np.asarray(fitd["wl"], np.float64) if fitd.get("wl") is not None and not walls_near[0] else none
     wr = np.asarray(fitd["wr"], np.float64) if fitd.get("wr") is not None and not walls_near[1] else none
     pr = prm(st, th, hw, float(fitd["sl"]), float(fitd["sr"]), uv_m)
     pr[2] += sb
+    terrain_top = np.asarray(fitd["fg"], np.float64)
+    face_samples = None
+    if not collar:
+        pr[2:4] = 0.0  # omit the native hood; the custom rim follows this same opening
+        pr[5] = ROCK_BACKING_WALL   # keep the back face within the tube wall at a bend
+        if rock_backing:
+            pad = rock_cover_side()
+            pr[8] = max(pr[8], ROCK_COVER_OVER + .30)
+            for index, side, crowded in zip((7, 16), ("sl", "sr"), walls_near):
+                if not crowded:
+                    pr[index] = max(pr[index], min(pad, float(fitd[side])))
+            if fitd.get("fc") is not None:
+                face_samples = np.asarray(fitd["fc"], np.float64)
+        if compact_rock:
+            pr[6] = min(pr[6], COVER_OVER)
+            pr[9] = ROCK_BACKING_TOP
+            if fitd.get("fc") is not None:
+                face_samples = np.asarray(fitd["fc"], np.float64)
+                terrain_top = np.where(np.isfinite(face_samples[0]), face_samples[0], terrain_top)
+        elif np.isfinite(terrain_top).any():
+            pr[9] = np.clip(np.max(terrain_top[np.isfinite(terrain_top)]) + pr[6] - th, pr[9], 12.0)
     pr = np.r_[pr, sb]          # (inner_from: the tube's own walls are the hood's inside up to the mouth)
-    return fast._ef.portal_mesh([float(v) for v in p], [float(v) for v in ul], [float(v) for v in out], pr,
+    mesh = fast._ef.portal_mesh([float(v) for v in p], [float(v) for v in ul], [float(v) for v in out], pr,
                                 np.ascontiguousarray(sec, np.float64), np.asarray(fitd["fx"], np.float64),
-                                np.asarray(fitd["fg"], np.float64), ws, wl, wr, np.asarray(fitd["rz"], np.float64))
+                                terrain_top, ws, wl, wr, np.asarray(fitd["rz"], np.float64))
+    if not collar:
+        return _rake_rock_face(mesh, p, ul, out, float(sec[:, 1].max()), fitd, face_samples,
+                               hw if rock_backing else None)
+    return mesh
 
 
-def cover(mid, left, z, ground, hw, th, caps, uv_m, soil_uv_m, sec=None):
+def taper_frame(mid):
+    """An untwisted version of the centreline, with one identifiable station per original row."""
+    length = dnp.hypot(*np.diff(mid, axis=0).T)
+    arc = np.r_[0.0, np.cumsum(np.maximum(length, 1e-8))]
+    return np.c_[arc, np.zeros(len(arc))], np.tile((0.0, 1.0), (len(arc), 1))
+
+
+def shoulder_return(fit, p, left, out, half, near):
+    """Rock over the outside corners of the terrain cut immediately in front of the mouth."""
+    if "shoulder_ground" not in fit:
+        return None
+    ground = np.asarray(fit["shoulder_ground"], float).reshape(2, 2)
+    positions, triangles, uvs = [], [], []
+    stations = _shoulder_stations()
+    for i, (side, width) in enumerate(zip((1., -1.), fit["shoulder_room"])):
+        if near[i] or width <= 0.0 or not np.isfinite(ground[i]).all():
+            continue
+        across = side * np.array([half - .03, half + width])
+        x, s = np.meshgrid(across, stations)
+        z = np.c_[np.full(2, -.08), np.clip(ground[i], -1.5, 1.)]
+        xy = p[:2] + x.ravel()[:, None] * left + s.ravel()[:, None] * out
+        q = np.c_[xy, p[2] + z.ravel()]
+        faces = np.array([[0, 1, 3], [0, 3, 2]])
+        ab, ac = q[1] - q[0], q[3] - q[0]
+        if ab[0] * ac[1] - ab[1] * ac[0] < 0.0:
+            faces = faces[:, ::-1]
+        triangles.append(faces + 4 * len(positions))
+        positions.append(q)
+        uvs.append(np.c_[x.ravel(), s.ravel()] / 2.)
+    if not positions:
+        return None
+    tris = np.concatenate(triangles)
+    return np.concatenate(positions), tris, np.concatenate(uvs), np.zeros(len(tris), np.int64)
+
+
+def place_taper(mesh, flat, mid, left, widths, origin=(0.0, 0.0, 0.0)):
+    """Place an untwisted mesh on its original rows, fitting the width without stretching the cover margin."""
+    points, tris, uv, codes = mesh
+    if not len(points):
+        return mesh
+    at = np.searchsorted(flat[:, 0], points[:, 0])
+    across = points[:, 1]
+    inside = np.clip(across, -widths[0], widths[0])
+    scaled = across + inside * (widths[at] / widths[0] - 1.0)
+    placed = np.c_[mid[at] + left[at] * scaled[:, None], points[:, 2]] - origin
+    return placed, tris, uv, codes
+
+
+def cover(mid, left, z, ground, hw, th, caps, uv_m, soil_uv_m, sec=None, *, side=COVER_SIDE, rock=False):
     """The tube's outside over its bare rows for roadmesh.tunnel (earthfast.tunnel_cover_mesh); sec: the tube's section
     (roadmesh._tunnel_section), the opening its end caps inside the hill leave clear."""
+    tapered = np.ndim(hw) != 0
+    path, across = taper_frame(mid) if tapered else (mid, left)
+    initial_width = float(hw[0] if tapered else hw)
     fast.require(VERSION, "tunnel_cover_mesh")
-    return fast._ef.tunnel_cover_mesh(np.ascontiguousarray(mid, np.float64), np.ascontiguousarray(left, np.float64),
+    mesh = fast._ef.tunnel_cover_mesh(np.ascontiguousarray(path, np.float64), np.ascontiguousarray(across, np.float64),
                                       np.ascontiguousarray(z, np.float64), np.ascontiguousarray(ground, np.float64),
-                                      float(hw + COVER_SIDE), float(th), COVER_OVER, COVER_NEED, COVER_FOOT,
+                                      initial_width + side, float(th), ROCK_COVER_OVER if rock else COVER_OVER,
+                                      COVER_NEED, COVER_FOOT,
                                       bool(caps[0]), bool(caps[1]), float(uv_m), float(soil_uv_m),
                                       np.ascontiguousarray(np.zeros((0, 2)) if sec is None else sec, np.float64))
+    if rock:
+        mesh = (*mesh[:3], np.zeros_like(mesh[3]))
+    return place_taper(mesh, path, mid, left, hw) if tapered else mesh

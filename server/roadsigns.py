@@ -427,9 +427,26 @@ def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=
     box = roads.tile_bbox(tx, ty)
     signs = place(md, frame, box, context, left_hand, mph, sys_row)
     signs = supported(signs, sys_row)
+    # BNE_NO_NVDB_SIGNS_REAL_V04: optional real-position Norwegian signs;
+    # preserving all old road-sign behavior if the test is switched off.
+    pilot_mesh = None
+    if country == "NO":
+        import norway_nvdb_signs_v06 as _no_nvdb  # BNE_NO_NVDB_SIGNS_NATIONWIDE_V06
+        try:
+            pilot_mesh = _no_nvdb.build_tile(frame, box, elev, decks, sys_row)
+            signs = _no_nvdb.suppress_inferred(signs, frame)
+            # BNE_NVDB_DESTINATIONS_V07: real registered Norwegian signs only,
+            # no older generated duplicates. Other countries are unaffected.
+            import norway_nvdb_destinations_v07 as no_dest
+            signs = no_dest.suppress_inferred_norway(signs)
+        except Exception:
+            import logging
+            logging.getLogger('earthd.nvdb_signs_v04').warning(
+                'NVDB Norway sign pilot failed, keeping original signs', exc_info=True)
+            pilot_mesh = None
     keep = [k for k in range(len(signs)) if not exitsigns._on_deck(signs[k, :2], decks, 1.5)]
     if not keep:
-        return None
+        return pilot_mesh
     signs = signs[keep]
     pts = np.vstack([signs[:, 0:2], signs[:, 6:8]])
     la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
@@ -441,4 +458,8 @@ def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=
                                            [float(box[0]), float(box[1]), 0.0])
     if not len(t):
         return None
-    return p, t, uv, ["bne_signs_" + sys_row["atlas"], METAL], mi
+    native_mesh = (p, t, uv, ["bne_signs_" + sys_row["atlas"], METAL], mi)
+    if pilot_mesh is None:
+        return native_mesh
+    import busstationsign
+    return busstationsign.merge(native_mesh, pilot_mesh)

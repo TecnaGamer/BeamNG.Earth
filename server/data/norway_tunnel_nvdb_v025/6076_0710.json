@@ -1,0 +1,22 @@
+{
+  "schema": 3,
+  "source": "Statens vegvesen / NVDB V4 (NLOD)",
+  "lat": 60.7614357572167,
+  "lon": 7.096337577841613,
+  "radius_m": 1250,
+  "fetched_utc": "2026-11-23T18:56:13.280035+00:00",
+  "records": {
+    "69": [],
+    "67": [],
+    "581": []
+  },
+  "counts": {
+    "69": 0,
+    "67": 0,
+    "581": 0
+  },
+  "errors": {},
+  "geometry_hints": {},
+  "detail_warnings": {},
+  "ok": true
+}
