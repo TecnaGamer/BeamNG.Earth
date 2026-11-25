@@ -19,6 +19,19 @@ pub const HEARTBEAT_S: f64 = 1.0;
 pub const MUFFLED: f64 = 0.45;
 /// device reopens allowed per minute before 'failed'
 pub const REOPEN_MAX: usize = 3;
+/// the device buffer doubles on trouble (a stream error, or XRUN_GROW xruns within XRUN_WINDOW_S) up to this
+pub const BUFFER_MAX: u32 = 2048;
+pub const XRUN_GROW: usize = 2;
+pub const XRUN_WINDOW_S: f64 = 30.0;
+
+/// Pure: the next device buffer after trouble (doubled, at most BUFFER_MAX), or None when it is at the most already.
+pub fn grown_buffer(frames: u32) -> Option<u32> {
+    if frames >= BUFFER_MAX {
+        None
+    } else {
+        Some((frames.max(64) * 2).min(BUFFER_MAX))
+    }
+}
 
 /// The rain's controls and the thunders' master gain for the last message (None: none yet) and whether it is stale.
 pub fn mix_for(m: Option<&Msg>, stale: bool) -> (Controls, f64) {
@@ -76,7 +89,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let get = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     let choice = get("--thunder").unwrap_or_else(|| "procedural".into());
     let seed: u64 = get("--seed").and_then(|s| s.parse().ok()).unwrap_or(1);
-    let buffer: u32 = get("--buffer").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let mut buffer: u32 = get("--buffer").and_then(|s| s.parse().ok()).unwrap_or(crate::audio::DEFAULT_BUFFER_FRAMES);
     let fail = |why: String| -> ! {
         eprintln!("{why}");
         println!("{}", failed_line(&why));
@@ -129,6 +142,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut base_underruns: Option<u64> = None;
     let mut reopens = 0u32;
     let mut reopen_at: Vec<Instant> = Vec::new();
+    let mut xrun_at: Vec<Instant> = Vec::new();
+    let mut xruns_seen = 0u64;
+    let mut xruns_total = 0u64;
     let mut underruns_before = 0u64; // (from streams before a reopen)
     let stdout = std::io::stdout();
     loop {
@@ -156,16 +172,36 @@ pub fn run(args: &[String]) -> Result<(), String> {
         if let Ok(mut mx) = out.mix.lock() {
             *mx = crate::audio::Mix { rain, thunder };
         }
-        if out.error.load(std::sync::atomic::Ordering::Relaxed) {
-            // a stream error (ALSA POLLERR when the sound server reconfigures, a device switched or unplugged): the
-            // default device opened again, at most REOPEN_MAX times a minute; then failed (the mod's files take over)
-            reopen_at.retain(|t: &Instant| t.elapsed().as_secs_f64() < 60.0);
-            if reopen_at.len() >= REOPEN_MAX {
-                fail("the audio device keeps failing (unplugged or changed)".into());
+        let x = out.xruns.load(std::sync::atomic::Ordering::Relaxed);
+        for _ in xruns_seen..x {
+            xrun_at.push(Instant::now());
+        }
+        xruns_total += x - xruns_seen;
+        xruns_seen = x;
+        xrun_at.retain(|t: &Instant| t.elapsed().as_secs_f64() < XRUN_WINDOW_S);
+        let stream_error = out.error.load(std::sync::atomic::Ordering::Relaxed);
+        let xrun_trouble = xrun_at.len() >= XRUN_GROW && grown_buffer(buffer).is_some();
+        if stream_error || xrun_trouble {
+            // trouble: a stream error (ALSA POLLERR after an xrun the sound server did not recover, a device switched
+            // or unplugged) or repeated xruns (a starved audio thread): the default device opened again with a buffer
+            // twice as large (up to BUFFER_MAX: more latency, no gaps); at the largest, at most REOPEN_MAX reopens a
+            // minute, then failed (the mod's files take over)
+            let next = grown_buffer(buffer);
+            if next.is_none() {
+                reopen_at.retain(|t: &Instant| t.elapsed().as_secs_f64() < 60.0);
+                if reopen_at.len() >= REOPEN_MAX {
+                    fail("the audio device keeps failing (unplugged or changed)".into());
+                }
+                reopen_at.push(Instant::now());
             }
-            reopen_at.push(Instant::now());
+            buffer = next.unwrap_or(buffer);
             reopens += 1;
-            eprintln!("live-serve: the audio stream failed; opening the default device again ({reopens})");
+            xrun_at.clear();
+            xruns_seen = 0;
+            eprintln!(
+                "live-serve: {}; opening the default device again with a {buffer}-frame buffer ({reopens})",
+                if stream_error { "the audio stream failed" } else { "repeated xruns" }
+            );
             let u = out.ring.underruns.load(std::sync::atomic::Ordering::Relaxed);
             underruns_before += u - base_underruns.unwrap_or(u);
             drop(out);
@@ -186,7 +222,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let line = state_line(out.latency_ms(), underruns_before + u - base_underruns.unwrap_or(u), &rname, bus.counts(), buf);
             let (rl, rm) = bus.render_ms();
             let line = format!(
-                "{},\"reopens\":{reopens},\"renderMsLast\":{rl:.0},\"renderMsMax\":{rm:.0}}}",
+                "{},\"reopens\":{reopens},\"xruns\":{xruns_total},\"bufferAsked\":{buffer},\"renderMsLast\":{rl:.0},\"renderMsMax\":{rm:.0}}}",
                 &line[..line.len() - 1]
             );
             let mut lock = stdout.lock();
@@ -237,6 +273,14 @@ mod tests {
         }
         let (r, t) = mix_for(None, false);
         assert!(r.muted && t == 0.0);
+    }
+
+    #[test]
+    fn buffer_grows_to_the_cap() {
+        assert_eq!(grown_buffer(256), Some(512));
+        assert_eq!(grown_buffer(1024), Some(2048));
+        assert_eq!(grown_buffer(1500), Some(2048));
+        assert_eq!(grown_buffer(2048), None);
     }
 
     #[test]

@@ -113,8 +113,10 @@ pub struct Output {
     pub callback_frames: Arc<AtomicU32>,
     /// the worker's fill target now (frames)
     pub target_frames: Arc<AtomicU32>,
-    /// set by the stream's error callback (a device lost: the caller reports 'failed')
+    /// set by the stream's error callback for anything but an xrun (POLLERR, a device lost): the caller reopens
     pub error: Arc<AtomicBool>,
+    /// the device's own xruns (cpal BufferUnderrun: recovered by cpal, an audible gap)
+    pub xruns: Arc<AtomicU64>,
 }
 
 impl Output {
@@ -141,6 +143,7 @@ struct Cb {
     lat: Arc<AtomicU32>,
     frames: Arc<AtomicU32>,
     error: Arc<AtomicBool>,
+    xruns: Arc<AtomicU64>,
     channels: usize,
 }
 
@@ -166,10 +169,17 @@ fn build(
     cb: &Cb,
 ) -> Result<cpal::Stream, String> {
     let err_fn = {
-        let e2 = cb.error.clone();
-        move |err: cpal::StreamError| {
-            eprintln!("audio stream error: {err}");
-            e2.store(true, Ordering::Relaxed);
+        let (e2, x2) = (cb.error.clone(), cb.xruns.clone());
+        move |err: cpal::StreamError| match err {
+            cpal::StreamError::BufferUnderrun => {
+                x2.fetch_add(1, Ordering::Relaxed);
+            }
+            other => {
+                // (once per stream: cpal's ALSA thread repeats a POLLERR on every poll until the stream is dropped)
+                if !e2.swap(true, Ordering::Relaxed) {
+                    eprintln!("audio stream error: {other}");
+                }
+            }
         }
     };
     let scratch_len = cb.ring.cap();
@@ -241,6 +251,7 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>, buffer_frames: u32) -> Resul
         lat: Arc::new(AtomicU32::new(0)),
         frames: Arc::new(AtomicU32::new(0)),
         error: Arc::new(AtomicBool::new(false)),
+        xruns: Arc::new(AtomicU64::new(0)),
         channels: channels as usize,
     };
     config.buffer_size = cpal::BufferSize::Fixed(fixed);
@@ -297,6 +308,7 @@ pub fn open(seed: u64, initial: Mix, bus: Arc<Bus>, buffer_frames: u32) -> Resul
         callback_frames: cb.frames,
         target_frames: target,
         error: cb.error,
+        xruns: cb.xruns,
     })
 }
 
