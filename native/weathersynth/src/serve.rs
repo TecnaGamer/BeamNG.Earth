@@ -19,10 +19,21 @@ pub const HEARTBEAT_S: f64 = 1.0;
 pub const MUFFLED: f64 = 0.45;
 /// device reopens allowed per minute before 'failed'
 pub const REOPEN_MAX: usize = 3;
-/// the device buffer doubles on trouble (a stream error, or XRUN_GROW xruns within XRUN_WINDOW_S) up to this
+/// the device buffer doubles on trouble (a stream error, or XRUN_GROW xruns within XRUN_WINDOW_S) up to this, and
+/// halves again (not below the first) after SHRINK_AFTER_S without trouble: a load burst does not keep the latency up
 pub const BUFFER_MAX: u32 = 2048;
-pub const XRUN_GROW: usize = 2;
-pub const XRUN_WINDOW_S: f64 = 30.0;
+pub const XRUN_GROW: usize = 3;
+pub const XRUN_WINDOW_S: f64 = 60.0;
+pub const SHRINK_AFTER_S: f64 = 300.0;
+
+/// Pure: the buffer to step back down to after a quiet SHRINK_AFTER_S, or None (at the first size already).
+pub fn shrunk_buffer(frames: u32, first: u32) -> Option<u32> {
+    if frames > first {
+        Some((frames / 2).max(first))
+    } else {
+        None
+    }
+}
 
 /// Pure: the next device buffer after trouble (doubled, at most BUFFER_MAX), or None when it is at the most already.
 pub fn grown_buffer(frames: u32) -> Option<u32> {
@@ -90,6 +101,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let choice = get("--thunder").unwrap_or_else(|| "procedural".into());
     let seed: u64 = get("--seed").and_then(|s| s.parse().ok()).unwrap_or(1);
     let mut buffer: u32 = get("--buffer").and_then(|s| s.parse().ok()).unwrap_or(crate::audio::DEFAULT_BUFFER_FRAMES);
+    let first_buffer = buffer;
+    let mut last_trouble = Instant::now();
     let fail = |why: String| -> ! {
         eprintln!("{why}");
         println!("{}", failed_line(&why));
@@ -181,12 +194,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
         xrun_at.retain(|t: &Instant| t.elapsed().as_secs_f64() < XRUN_WINDOW_S);
         let stream_error = out.error.load(std::sync::atomic::Ordering::Relaxed);
         let xrun_trouble = xrun_at.len() >= XRUN_GROW && grown_buffer(buffer).is_some();
-        if stream_error || xrun_trouble {
+        let calm = !stream_error && xrun_at.is_empty() && last_trouble.elapsed().as_secs_f64() >= SHRINK_AFTER_S;
+        let shrink = if calm { shrunk_buffer(buffer, first_buffer) } else { None };
+        if stream_error || xrun_trouble || shrink.is_some() {
             // trouble: a stream error (ALSA POLLERR after an xrun the sound server did not recover, a device switched
             // or unplugged) or repeated xruns (a starved audio thread): the default device opened again with a buffer
             // twice as large (up to BUFFER_MAX: more latency, no gaps); at the largest, at most REOPEN_MAX reopens a
             // minute, then failed (the mod's files take over)
-            let next = grown_buffer(buffer);
+            let next = if shrink.is_some() { shrink } else { grown_buffer(buffer) };
+            last_trouble = Instant::now();
             if next.is_none() {
                 reopen_at.retain(|t: &Instant| t.elapsed().as_secs_f64() < 60.0);
                 if reopen_at.len() >= REOPEN_MAX {
@@ -200,7 +216,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
             xruns_seen = 0;
             eprintln!(
                 "live-serve: {}; opening the default device again with a {buffer}-frame buffer ({reopens})",
-                if stream_error { "the audio stream failed" } else { "repeated xruns" }
+                if stream_error {
+                    "the audio stream failed"
+                } else if shrink.is_some() {
+                    "quiet for 5 minutes"
+                } else {
+                    "repeated xruns"
+                }
             );
             let u = out.ring.underruns.load(std::sync::atomic::Ordering::Relaxed);
             underruns_before += u - base_underruns.unwrap_or(u);
@@ -273,6 +295,13 @@ mod tests {
         }
         let (r, t) = mix_for(None, false);
         assert!(r.muted && t == 0.0);
+    }
+
+    #[test]
+    fn buffer_steps_back_down_to_the_first() {
+        assert_eq!(shrunk_buffer(2048, 512), Some(1024));
+        assert_eq!(shrunk_buffer(768, 512), Some(512));
+        assert_eq!(shrunk_buffer(512, 512), None);
     }
 
     #[test]

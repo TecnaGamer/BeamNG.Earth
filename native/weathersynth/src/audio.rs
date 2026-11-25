@@ -93,7 +93,9 @@ pub const MARGIN_FRAMES: u64 = 512;
 pub const GROW_AFTER_S: f64 = 1.0;
 pub const MAX_QUEUE_S: f64 = 0.1;
 /// the device buffer asked for (frames) when the caller gives none: cpal BufferSize::Fixed, clamped to the device's range
-pub const DEFAULT_BUFFER_FRAMES: u32 = 256;
+/// (Linux 512: at 256 the Deck's ALSA thread at nice 19 under a game's load took xruns; WASAPI shared mode ignores the
+/// request and calls back with its own ~22 ms buffer anyway)
+pub const DEFAULT_BUFFER_FRAMES: u32 = if cfg!(target_os = "linux") { 512 } else { 256 };
 
 pub struct Output {
     _stream: cpal::Stream,
