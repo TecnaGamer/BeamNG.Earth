@@ -32,8 +32,9 @@ pub const LIM_REL_MS: f64 = 80.0;
 pub const HP_HZ: f64 = 28.0;
 pub const FADE_OUT_S: f64 = 3.0;
 const MAGIC: &[u8; 8] = b"WSGRAIN1";
-/// The bank's file name: `grainbank-pack` writes it to native/weathersynth/assets/ (the stable path a re-cut swaps),
-/// the app bundles it next to weathersynth.
+/// The bank's file name. `grainbank-pack` writes it to native/weathersynth/assets/ from assets/grains/ (the cutting
+/// tool's manifest.json, grains/*.ogg and CREDITS.md, committed: a re-cut replaces that folder); the release workflow
+/// packs it once and bundles it next to weathersynth.
 pub const BANK_FILE: &str = "thunder_grains.bin";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,16 +200,20 @@ pub fn pack(manifest: &str, out: &str) -> Result<String, String> {
         let kind = g.str("kind").and_then(GKind::from_name).ok_or_else(|| format!("{id}: unknown kind"))?;
         let file = g.str("file").ok_or_else(|| format!("{id}: no file"))?;
         let path = dir.join(file);
+        // ffmpeg's own Vorbis decoder named explicitly (-c:a vorbis, not libvorbis), its float output taken as is
+        // (the grains are mono 44.1 kHz: no remix, no resampling), and the conversion to i16 done here with a fixed
+        // rounding, so the decoder is the only moving part (the release workflow packs once and checks the sha256)
         let o = std::process::Command::new("ffmpeg")
-            .args(["-nostdin", "-v", "error", "-i"])
+            .args(["-nostdin", "-v", "error", "-c:a", "vorbis", "-i"])
             .arg(&path)
-            .args(["-ac", "1", "-ar", "44100", "-f", "s16le", "-"])
+            .args(["-ac", "1", "-ar", "44100", "-f", "f32le", "-"])
             .output()
             .map_err(|e| format!("ffmpeg: {e}"))?;
-        if !o.status.success() || o.stdout.len() < 2 {
+        if !o.status.success() || o.stdout.len() < 4 {
             return Err(format!("ffmpeg could not decode {}", path.display()));
         }
-        let pcm: Vec<i16> = o.stdout.chunks_exact(2).map(|p| i16::from_le_bytes([p[0], p[1]])).collect();
+        let pcm: Vec<i16> =
+            o.stdout.chunks_exact(4).map(|p| to_i16(f32::from_le_bytes([p[0], p[1], p[2], p[3]]))).collect();
         if id.len() > 255 {
             return Err(format!("{id}: id too long"));
         }
@@ -226,6 +231,15 @@ pub fn pack(manifest: &str, out: &str) -> Result<String, String> {
     std::fs::write(&tmp, &bytes).map_err(|e| format!("{tmp}: {e}"))?;
     std::fs::rename(&tmp, out).map_err(|e| format!("{out}: {e}"))?;
     Ok(format!("{} grains, {:.1} s, {:.1} MB -> {out}", bank.grains.len(), bank.seconds(), bytes.len() as f64 / 1e6))
+}
+
+/// A float sample to 16 bits: x 32767, rounded half away from zero, clamped (NaN: 0).
+pub fn to_i16(v: f32) -> i16 {
+    let x = v as f64 * 32767.0;
+    if !x.is_finite() {
+        return 0;
+    }
+    m::round(x).clamp(-32768.0, 32767.0) as i16
 }
 
 // ------------------------------------------------------------------ classes (spec section 2)
@@ -801,6 +815,7 @@ mod tests {
         assert!(Bank::parse(&bad).is_err(), "checksum");
         assert!(Bank::parse(&bytes[..bytes.len() - 3]).is_err(), "truncated");
         assert!(Bank::parse(b"WSGRAIN1\xff\xff\xff\xff").is_err(), "bad count");
+        assert_eq!((to_i16(0.5), to_i16(-1.5), to_i16(f32::NAN), to_i16(1.0), to_i16(-0.25)), (16384, -32768, 0, 32767, -8192));
     }
 
     #[test]

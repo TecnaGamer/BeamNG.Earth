@@ -1,0 +1,4563 @@
+{
+ "version": 1,
+ "sr": 44100,
+ "ref_rms_db": -18.0,
+ "total_s": 193.2,
+ "grains": [
+  {
+   "id": "body_000_338088",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_000_338088.ogg",
+   "dur_s": 2.51,
+   "source_id": 338088,
+   "source_page": "https://freesound.org/s/338088/",
+   "title": "Thunder Clap 4",
+   "author": "jzielke011",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/338/338088_4535165-hq.mp3",
+    "sha256": "5ec3228099bb1079e94736bd6311034859a707ba4e22fc601cde9ab402b76932",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.2275,
+    2.7375
+   ],
+   "bed_s": [
+    12.25,
+    13.25
+   ],
+   "onset_s": 0.2375,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -10.92,
+   "crest_db_before": 9.6,
+   "sha256_grain": "2b4ecf3c989c890ed117e69148d333f3849c0e4fc8167e993d8e7e6ac6bb0047",
+   "centroid_hz": 300,
+   "snr_db": 193.8
+  },
+  {
+   "id": "body_001_336314",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_001_336314.ogg",
+   "dur_s": 2.51,
+   "source_id": 336314,
+   "source_page": "https://freesound.org/s/336314/",
+   "title": "06/10/2014 close lightning strike",
+   "author": "supercell10",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/336/336314_2660518-hq.mp3",
+    "sha256": "d61f20336a73bcb7fa311bd55a26d5d9fe727c8b090574ba23fa740b96155eea",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    -0.009,
+    2.501
+   ],
+   "bed_s": [
+    13.0,
+    14.0
+   ],
+   "onset_s": 0.001,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": 3.12,
+   "crest_db_before": 10.9,
+   "sha256_grain": "cd9f1198c8b1f5d050805f39537e5fd49b0d096cfba5ec7be90e96632eede170",
+   "centroid_hz": 345,
+   "snr_db": 61.3
+  },
+  {
+   "id": "body_002_253953",
+   "kind": "body",
+   "class_of_source": "thunder_close",
+   "file": "grains/body_002_253953.ogg",
+   "dur_s": 2.51,
+   "source_id": 253953,
+   "source_page": "https://freesound.org/s/253953/",
+   "title": "Thunder 1",
+   "author": "Yoyodaman234",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/253/253953_2792951-hq.mp3",
+    "sha256": "a1b57d07093ba489f0c6c9d775837ab920660c1db12d8760bb76d2a9c66b5ee3",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.885,
+    3.395
+   ],
+   "bed_s": [
+    18.5,
+    19.5
+   ],
+   "onset_s": 0.895,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -5.88,
+   "crest_db_before": 12.5,
+   "sha256_grain": "09df86ea21fd614af1decf3f6877e24fe18421806f660c990cfce4a41be5a412",
+   "centroid_hz": 345,
+   "snr_db": 60.1
+  },
+  {
+   "id": "body_003_760214",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_003_760214.ogg",
+   "dur_s": 2.51,
+   "source_id": 760214,
+   "source_page": "https://freesound.org/s/760214/",
+   "title": "Thunder Clap And Rumble #7",
+   "author": "Kinoton",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/760/760214_2247456-hq.mp3",
+    "sha256": "5b9479902db171011dd6f49c2cc07db92dd487732bca991a8aceecb792805d25",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.6266,
+    3.1366
+   ],
+   "bed_s": [
+    14.0,
+    15.0
+   ],
+   "onset_s": 0.6366,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -8.36,
+   "crest_db_before": 10.0,
+   "sha256_grain": "cfde7dd761ef1e128e30d5206d76533c6acc40f437b5113b479df82707a06860",
+   "centroid_hz": 227,
+   "snr_db": 58.0
+  },
+  {
+   "id": "body_004_717358",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_004_717358.ogg",
+   "dur_s": 2.51,
+   "source_id": 717358,
+   "source_page": "https://freesound.org/s/717358/",
+   "title": "Thunder - binaural from Zoom H3-VR",
+   "author": "StephanPot",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717358_10094394-hq.mp3",
+    "sha256": "9ea8a8123b496fe55c95d6d0f1fbda3648582783b7242f8011b7168d86194578",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    18.1793,
+    20.6893
+   ],
+   "bed_s": [
+    16.2,
+    17.0
+   ],
+   "onset_s": 18.1893,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -6.61,
+   "crest_db_before": 6.3,
+   "sha256_grain": "f5f737d3f65ee6f3f6aa450d63afc947ae3d785b5b8d35765a6e07ea81f4396d",
+   "centroid_hz": 203,
+   "snr_db": 56.6
+  },
+  {
+   "id": "body_005_717907",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_005_717907.ogg",
+   "dur_s": 2.51,
+   "source_id": 717907,
+   "source_page": "https://freesound.org/s/717907/",
+   "title": "230713 Thunder, close crack crash big, mixpre6 AT875r EM272s, Stratford ON 2am",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717907_97550-hq.mp3",
+    "sha256": "b106efe7033b30553a77ebdfdd142752821022c262a138321ae2f8180dec9c44",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.6216,
+    3.1316
+   ],
+   "bed_s": [
+    35.0,
+    36.0
+   ],
+   "onset_s": 0.6316,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -5.83,
+   "crest_db_before": 13.0,
+   "sha256_grain": "0fd788eb5a9a2c75db22e83e290d7f123beae902008736d8ac1e912455d7ddbd",
+   "centroid_hz": 169,
+   "snr_db": 54.0
+  },
+  {
+   "id": "body_006_616992",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_006_616992.ogg",
+   "dur_s": 2.51,
+   "source_id": 616992,
+   "source_page": "https://freesound.org/s/616992/",
+   "title": "210914 Thunder, crack, pretty close, bit of distortion, urban, TORONTO 1am.wav",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/616/616992_97550-hq.mp3",
+    "sha256": "05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.9987,
+    3.5087
+   ],
+   "bed_s": [
+    37.5,
+    38.5
+   ],
+   "onset_s": 1.0087,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -9.51,
+   "crest_db_before": 10.8,
+   "sha256_grain": "4db6d17ba0a3e5a360ac54034d6c72cd68e9843b192ec8217a824a937e52474c",
+   "centroid_hz": 174,
+   "snr_db": 53.8
+  },
+  {
+   "id": "body_007_439550",
+   "kind": "body",
+   "class_of_source": "thunder_close",
+   "file": "grains/body_007_439550.ogg",
+   "dur_s": 2.51,
+   "source_id": 439550,
+   "source_page": "https://freesound.org/s/439550/",
+   "title": "Single huge clap of thunder",
+   "author": "richwise",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/439/439550_1481531-hq.mp3",
+    "sha256": "0ac3ded4c92c715162cd8d89758a3bb469eaea7224bcf28ba2a50e8fc9a7dce4",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    8.8701,
+    11.3801
+   ],
+   "bed_s": [
+    7.25,
+    8.05
+   ],
+   "onset_s": 8.8801,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -8.45,
+   "crest_db_before": 11.4,
+   "sha256_grain": "db39b4ea15f7205892543a96bec6cfbdcfd203b352eb5cc5ba8e5b5bfc7131e9",
+   "centroid_hz": 141,
+   "snr_db": 52.5
+  },
+  {
+   "id": "body_008_672776",
+   "kind": "body",
+   "class_of_source": "thunder_close",
+   "file": "grains/body_008_672776.ogg",
+   "dur_s": 2.51,
+   "source_id": 672776,
+   "source_page": "https://freesound.org/s/672776/",
+   "title": "Thunder Clap",
+   "author": "DaniloSFX",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/672/672776_1357949-hq.mp3",
+    "sha256": "813f57934c49e8c5185be340aca884bfdfdc50d208cb042b89f4fb6f1f5483dd",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.2095,
+    2.7195
+   ],
+   "bed_s": [
+    14.75,
+    15.75
+   ],
+   "onset_s": 0.2195,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -6.41,
+   "crest_db_before": 12.8,
+   "sha256_grain": "f08e3ee2af8f5c3eeb9f6571b620c1f6314adada1d9d7130a71b61eb8b6a2882",
+   "centroid_hz": 683,
+   "snr_db": 52.1
+  },
+  {
+   "id": "body_009_717909",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_009_717909.ogg",
+   "dur_s": 2.51,
+   "source_id": 717909,
+   "source_page": "https://freesound.org/s/717909/",
+   "title": "230724 Thunder, close crack light rain, mixpreroof, Toronto 5pm",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717909_97550-hq.mp3",
+    "sha256": "acc293ba9ea902017d00874f99f46c0eeb898750d78f289c68ec4d02b7beb68c",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.0286,
+    3.5386
+   ],
+   "bed_s": [
+    29.5,
+    30.5
+   ],
+   "onset_s": 1.0386,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": 18.69,
+   "crest_db_before": 11.9,
+   "sha256_grain": "4d6761b93574793d1bc68ef286309e8e70f7caa426bfa77eb5be8edf34d34bdf",
+   "centroid_hz": 99,
+   "snr_db": 47.8
+  },
+  {
+   "id": "body_010_434359",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_010_434359.ogg",
+   "dur_s": 2.51,
+   "source_id": 434359,
+   "source_page": "https://freesound.org/s/434359/",
+   "title": "Close lightning strike 2018 07 07",
+   "author": "csengeri",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/434/434359_197070-hq.mp3",
+    "sha256": "1eb7ddad74d711bdc337e848be80683c6650f19e92f28a3ce69c265236012d02",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    2.429,
+    4.939
+   ],
+   "bed_s": [
+    0.8,
+    1.6
+   ],
+   "onset_s": 2.439,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -12.05,
+   "crest_db_before": 9.1,
+   "sha256_grain": "b0928e3b8d2a2cc188952d83abda9fe71d96198949c59bdfe6ccfc3af4fba09c",
+   "centroid_hz": 545,
+   "snr_db": 47.3
+  },
+  {
+   "id": "body_011_188367",
+   "kind": "body",
+   "class_of_source": "thunder_close",
+   "file": "grains/body_011_188367.ogg",
+   "dur_s": 2.51,
+   "source_id": 188367,
+   "source_page": "https://freesound.org/s/188367/",
+   "title": "Huge Thunder.wav",
+   "author": "ecfike",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/188/188367_2337290-hq.mp3",
+    "sha256": "a5013844e0da437b41332cc0aa439e21097a3089daf987d79bef4cbc2bba4f49",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    76.2288,
+    78.7388
+   ],
+   "bed_s": [
+    74.5,
+    75.3
+   ],
+   "onset_s": 76.2388,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -12.01,
+   "crest_db_before": 8.9,
+   "sha256_grain": "dcb6707d52ab637f9e9852ba0e74db433cd05248267424e570fbcd1d40aa95df",
+   "centroid_hz": 212,
+   "snr_db": 47.3
+  },
+  {
+   "id": "body_012_486253",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_012_486253.ogg",
+   "dur_s": 2.51,
+   "source_id": 486253,
+   "source_page": "https://freesound.org/s/486253/",
+   "title": "R22-13-Classic Thunder Strike.wav",
+   "author": "craigsmith",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/486/486253_2524442-hq.mp3",
+    "sha256": "acaace93d16b578294bed2c83e0c8e4bfcf0199dbbf233b79536cd102c6d1d50",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    -0.01,
+    2.5
+   ],
+   "bed_s": [
+    13.0,
+    14.0
+   ],
+   "onset_s": 0.0,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -3.63,
+   "crest_db_before": 5.7,
+   "sha256_grain": "f4033698ea781e1a194eed4f2adb4877a20eaa886b758f22e4885c531fcbc4da",
+   "centroid_hz": 93,
+   "snr_db": 44.1
+  },
+  {
+   "id": "body_013_240664",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_013_240664.ogg",
+   "dur_s": 2.51,
+   "source_id": 240664,
+   "source_page": "https://freesound.org/s/240664/",
+   "title": "MS_Thunderclap Davos Laret.wav",
+   "author": "Thomas Bruderer",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/240/240664_1558130-hq.mp3",
+    "sha256": "5413649c8f7efce1f931adb99d0ceff8e233515df2d662775f7da6ae69909b8b",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    7.6356,
+    10.1456
+   ],
+   "bed_s": [
+    6.25,
+    7.05
+   ],
+   "onset_s": 7.6456,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [
+    "pre-compressed: RMS 2 ms, thr = loudest-400ms-RMS + 4 dB, ratio 4, att 1 ms, rel 150 ms (max GR 4.3 dB)"
+   ],
+   "level_gain_db": 0.71,
+   "crest_db_before": 14.5,
+   "sha256_grain": "a4aeeaeb1d21a48ad0634f222b45c0147ed050d918646377975a8b42005f6b0c",
+   "centroid_hz": 280,
+   "snr_db": 44.0
+  },
+  {
+   "id": "body_014_240230",
+   "kind": "body",
+   "class_of_source": "thunder_close",
+   "file": "grains/body_014_240230.ogg",
+   "dur_s": 2.51,
+   "source_id": 240230,
+   "source_page": "https://freesound.org/s/240230/",
+   "title": "Thunder clap # 1.wav",
+   "author": "the_yura",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/240/240230_2451161-hq.mp3",
+    "sha256": "3097e9a2c5f82ae7347d43130baeb23f4cc901d241af7289d0e8c4144e31e684",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.0516,
+    3.5616
+   ],
+   "bed_s": [
+    0.0,
+    0.6
+   ],
+   "onset_s": 1.0616,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -7.91,
+   "crest_db_before": 12.9,
+   "sha256_grain": "98af3e1deca9dc473dd03eb711624a0e7310a22bbf086342d92ebb3ad8cedc55",
+   "centroid_hz": 344,
+   "snr_db": 42.8
+  },
+  {
+   "id": "body_015_646912",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_015_646912.ogg",
+   "dur_s": 2.51,
+   "source_id": 646912,
+   "source_page": "https://freesound.org/s/646912/",
+   "title": "Lightning strike 2",
+   "author": "alexdarek",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/646/646912_10586310-hq.mp3",
+    "sha256": "93042e52364324e371ff1fc03237e7e0297b0c8a36bcf8bcd930ca79bd04c9db",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.2571,
+    3.7671
+   ],
+   "bed_s": [
+    14.25,
+    15.25
+   ],
+   "onset_s": 1.2671,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -18.15,
+   "crest_db_before": 3.2,
+   "sha256_grain": "a725d84ca4ccdf7d36cd14fb83f826e95ed95d43a437fd318751a7846e07d512",
+   "centroid_hz": 282,
+   "snr_db": 40.5
+  },
+  {
+   "id": "body_016_635121",
+   "kind": "body",
+   "class_of_source": "thunder_close",
+   "file": "grains/body_016_635121.ogg",
+   "dur_s": 2.51,
+   "source_id": 635121,
+   "source_page": "https://freesound.org/s/635121/",
+   "title": "Thunder Clap in May.wav",
+   "author": "captainbenwick",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/635/635121_12070288-hq.mp3",
+    "sha256": "5c063d7d17150af9b68ce4f4811b478b5f03c61d7a77e32595978038d988c3d1",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    2.6502,
+    5.1602
+   ],
+   "bed_s": [
+    1.1,
+    1.9
+   ],
+   "onset_s": 2.6602,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -9.16,
+   "crest_db_before": 11.1,
+   "sha256_grain": "abfb158812f1c8001be07a9e42ab522f64bd7a62c22cde78f7b7e5f7c39cdcf7",
+   "centroid_hz": 493,
+   "snr_db": 40.0
+  },
+  {
+   "id": "body_017_573677",
+   "kind": "body",
+   "class_of_source": "thunder_close",
+   "file": "grains/body_017_573677.ogg",
+   "dur_s": 2.51,
+   "source_id": 573677,
+   "source_page": "https://freesound.org/s/573677/",
+   "title": "big thunder claps 07.mp3",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/573/573677_97550-hq.mp3",
+    "sha256": "ab58496c233f8d4111a4a0bf4d9515e5ede0a2a67a37cfdafceca5ebfbe6ce09",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.9768,
+    3.4868
+   ],
+   "bed_s": [
+    16.0,
+    17.0
+   ],
+   "onset_s": 0.9868,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -7.36,
+   "crest_db_before": 8.3,
+   "sha256_grain": "cd553cca2d6c7753ddc0aa2e481c83602fc410ee94c5c72cb09ff3cf012faca7",
+   "centroid_hz": 377,
+   "snr_db": 39.7
+  },
+  {
+   "id": "body_018_501745",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_018_501745.ogg",
+   "dur_s": 2.51,
+   "source_id": 501745,
+   "source_page": "https://freesound.org/s/501745/",
+   "title": "Thunder Crack Rain Sequence January 11th 2020 Smaller File.WAV",
+   "author": "kvgarlic",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/501/501745_1050391-hq.mp3",
+    "sha256": "4ce9e39cb048b3a182e8b9b1540b91d0df9115cc701cebb5efd87fcea6b381cf",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    54.9489,
+    57.4589
+   ],
+   "bed_s": [
+    52.8,
+    53.6
+   ],
+   "onset_s": 54.9589,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -10.39,
+   "crest_db_before": 9.5,
+   "sha256_grain": "6dc3bcbf4bf5f6a92c01b3a3af26c262a046950ce73c8f4a95d23186bc0038c8",
+   "centroid_hz": 237,
+   "snr_db": 38.8
+  },
+  {
+   "id": "body_019_186907",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_019_186907.ogg",
+   "dur_s": 2.51,
+   "source_id": 186907,
+   "source_page": "https://freesound.org/s/186907/",
+   "title": "Lightning_direct_hit-Rowy101.wav",
+   "author": "Rowy101",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/186/186907_3466279-hq.mp3",
+    "sha256": "6c9ef8fb07de800dbbcd037a48d382edf2f842e16491752b672c62f4659cc1dd",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    5.3205,
+    7.8305
+   ],
+   "bed_s": [
+    4.35,
+    5.15
+   ],
+   "onset_s": 5.3305,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -9.2,
+   "crest_db_before": 11.7,
+   "sha256_grain": "ef5ac8f24fabe9922c68d983e12ad60c022b84941a4fbfb096ca27641f70142c",
+   "centroid_hz": 243,
+   "snr_db": 38.4
+  },
+  {
+   "id": "body_020_536902",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_020_536902.ogg",
+   "dur_s": 2.51,
+   "source_id": 536902,
+   "source_page": "https://freesound.org/s/536902/",
+   "title": "thunder sharp crack approaching.wav",
+   "author": "cognito perceptu",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/536/536902_57789-hq.mp3",
+    "sha256": "a4a6c673311987f0ecb0cbc3233a203b092e34e5522f23f316a6c37bfcacb38e",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    7.1491,
+    9.6591
+   ],
+   "bed_s": [
+    5.55,
+    6.35
+   ],
+   "onset_s": 7.1591,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -12.84,
+   "crest_db_before": 6.3,
+   "sha256_grain": "db144ffc0ee18a84d0da3beffcd86e85689fcab66060f47a3d1ca49b90a70b45",
+   "centroid_hz": 96,
+   "snr_db": 37.5
+  },
+  {
+   "id": "body_021_717888",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_021_717888.ogg",
+   "dur_s": 2.51,
+   "source_id": 717888,
+   "source_page": "https://freesound.org/s/717888/",
+   "title": "230812 Thunder, med crack, rain stops dry rolling, Stratford 9am 2am",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717888_97550-hq.mp3",
+    "sha256": "986c3633d3bd5a1114d4e65a2dc89dc47ef97895e8f5a4454eea45c92266a10b",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.9378,
+    3.4478
+   ],
+   "bed_s": [
+    56.0,
+    57.0
+   ],
+   "onset_s": 0.9478,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [
+    "pre-compressed: RMS 2 ms, thr = loudest-400ms-RMS + 4 dB, ratio 4, att 1 ms, rel 150 ms (max GR 7.8 dB)"
+   ],
+   "level_gain_db": 6.14,
+   "crest_db_before": 16.8,
+   "sha256_grain": "63bbc52f94cb34af3c353817d25c6d0773748f7a6dd7470101e57f6893792f76",
+   "centroid_hz": 184,
+   "snr_db": 40.1
+  },
+  {
+   "id": "body_022_534023",
+   "kind": "body",
+   "class_of_source": "thunder_strike",
+   "file": "grains/body_022_534023.ogg",
+   "dur_s": 2.51,
+   "source_id": 534023,
+   "source_page": "https://freesound.org/s/534023/",
+   "title": "Thunderclap",
+   "author": "Fission9",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/534/534023_9395330-hq.mp3",
+    "sha256": "09c8a88b55593476c5ffeb84df0810b5cfc2f6eafe14166c388801aef208cf3f",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.1713,
+    3.6813
+   ],
+   "bed_s": [
+    12.25,
+    13.25
+   ],
+   "onset_s": 1.1813,
+   "fade_ms": [
+    2,
+    700
+   ],
+   "processing": [
+    "pre-compressed: RMS 2 ms, thr = loudest-400ms-RMS + 4 dB, ratio 4, att 1 ms, rel 150 ms (max GR 5.6 dB)",
+    "soft-clipped to 0.98 (peak was 2.2 dBFS)"
+   ],
+   "level_gain_db": 5.08,
+   "crest_db_before": 22.7,
+   "sha256_grain": "199bc41df5f7b102f0d72c9318d3c88a01046ddf1d6a37857ef7625285806fe8",
+   "centroid_hz": 302,
+   "snr_db": 45.9
+  },
+  {
+   "id": "crack_023_338088",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_023_338088.ogg",
+   "dur_s": 0.36,
+   "source_id": 338088,
+   "source_page": "https://freesound.org/s/338088/",
+   "title": "Thunder Clap 4",
+   "author": "jzielke011",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/338/338088_4535165-hq.mp3",
+    "sha256": "5ec3228099bb1079e94736bd6311034859a707ba4e22fc601cde9ab402b76932",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.2275,
+    0.5875
+   ],
+   "bed_s": [
+    12.25,
+    13.25
+   ],
+   "onset_s": 0.2375,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 2.11,
+   "crest_db_before": 15.6,
+   "sha256_grain": "51ef770e1bd4594d2538e7d4dba33db44dad37a037ff3b49043c62492d4baeac",
+   "centroid_hz": null,
+   "snr_db": 193.8
+  },
+  {
+   "id": "crack_024_336314",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_024_336314.ogg",
+   "dur_s": 0.36,
+   "source_id": 336314,
+   "source_page": "https://freesound.org/s/336314/",
+   "title": "06/10/2014 close lightning strike",
+   "author": "supercell10",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/336/336314_2660518-hq.mp3",
+    "sha256": "d61f20336a73bcb7fa311bd55a26d5d9fe727c8b090574ba23fa740b96155eea",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    -0.009,
+    0.351
+   ],
+   "bed_s": [
+    13.0,
+    14.0
+   ],
+   "onset_s": 0.001,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)",
+    "soft-clipped to 0.98 (peak was 4.8 dBFS)"
+   ],
+   "level_gain_db": 11.42,
+   "crest_db_before": 21.6,
+   "sha256_grain": "2b8f473af9d9453711995b1b155d6ca7fe64a75377ddd57b9580e9b8b65c873b",
+   "centroid_hz": null,
+   "snr_db": 61.3
+  },
+  {
+   "id": "crack_025_760214",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_025_760214.ogg",
+   "dur_s": 0.36,
+   "source_id": 760214,
+   "source_page": "https://freesound.org/s/760214/",
+   "title": "Thunder Clap And Rumble #7",
+   "author": "Kinoton",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/760/760214_2247456-hq.mp3",
+    "sha256": "5b9479902db171011dd6f49c2cc07db92dd487732bca991a8aceecb792805d25",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.6266,
+    0.9866
+   ],
+   "bed_s": [
+    14.0,
+    15.0
+   ],
+   "onset_s": 0.6366,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 3.22,
+   "crest_db_before": 14.9,
+   "sha256_grain": "aec401eed60675bc95f9abd96f2e62e38d959ccf9dee1b38caae5c0de5b21208",
+   "centroid_hz": null,
+   "snr_db": 58.0
+  },
+  {
+   "id": "crack_026_717358",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_026_717358.ogg",
+   "dur_s": 0.36,
+   "source_id": 717358,
+   "source_page": "https://freesound.org/s/717358/",
+   "title": "Thunder - binaural from Zoom H3-VR",
+   "author": "StephanPot",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717358_10094394-hq.mp3",
+    "sha256": "9ea8a8123b496fe55c95d6d0f1fbda3648582783b7242f8011b7168d86194578",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    18.1793,
+    18.5393
+   ],
+   "bed_s": [
+    16.2,
+    17.0
+   ],
+   "onset_s": 18.1893,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 27.64,
+   "crest_db_before": 17.4,
+   "sha256_grain": "99464089e336031ba6bf27d65ff780adec28c3e0af7215894828fdacf4201b8c",
+   "centroid_hz": null,
+   "snr_db": 56.6
+  },
+  {
+   "id": "crack_027_253953",
+   "kind": "crack",
+   "class_of_source": "thunder_close",
+   "file": "grains/crack_027_253953.ogg",
+   "dur_s": 0.36,
+   "source_id": 253953,
+   "source_page": "https://freesound.org/s/253953/",
+   "title": "Thunder 1",
+   "author": "Yoyodaman234",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/253/253953_2792951-hq.mp3",
+    "sha256": "a1b57d07093ba489f0c6c9d775837ab920660c1db12d8760bb76d2a9c66b5ee3",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.885,
+    1.245
+   ],
+   "bed_s": [
+    18.5,
+    19.5
+   ],
+   "onset_s": 0.895,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)",
+    "soft-clipped to 0.98 (peak was -0.0 dBFS)"
+   ],
+   "level_gain_db": 6.44,
+   "crest_db_before": 17.1,
+   "sha256_grain": "c1b57b57564a816f6b431a369709f4a59a92411d40ea4aff69c38284aea411f7",
+   "centroid_hz": null,
+   "snr_db": 60.1
+  },
+  {
+   "id": "crack_028_717907",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_028_717907.ogg",
+   "dur_s": 0.36,
+   "source_id": 717907,
+   "source_page": "https://freesound.org/s/717907/",
+   "title": "230713 Thunder, close crack crash big, mixpre6 AT875r EM272s, Stratford ON 2am",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717907_97550-hq.mp3",
+    "sha256": "b106efe7033b30553a77ebdfdd142752821022c262a138321ae2f8180dec9c44",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.6216,
+    0.9816
+   ],
+   "bed_s": [
+    35.0,
+    36.0
+   ],
+   "onset_s": 0.6316,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 8.79,
+   "crest_db_before": 13.9,
+   "sha256_grain": "c0d3fb7538f8c04f5ba80e890307f3a697aaa8eb458436f9ef6003d9e91b6e71",
+   "centroid_hz": null,
+   "snr_db": 54.0
+  },
+  {
+   "id": "crack_029_616992",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_029_616992.ogg",
+   "dur_s": 0.36,
+   "source_id": 616992,
+   "source_page": "https://freesound.org/s/616992/",
+   "title": "210914 Thunder, crack, pretty close, bit of distortion, urban, TORONTO 1am.wav",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/616/616992_97550-hq.mp3",
+    "sha256": "05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.9987,
+    1.3587
+   ],
+   "bed_s": [
+    37.5,
+    38.5
+   ],
+   "onset_s": 1.0087,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 7.2,
+   "crest_db_before": 14.4,
+   "sha256_grain": "d3d597305210b1faed67e5d49f61232aea58935449d1f433dc9307a8a4cb4fdc",
+   "centroid_hz": null,
+   "snr_db": 53.8
+  },
+  {
+   "id": "crack_030_717909",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_030_717909.ogg",
+   "dur_s": 0.36,
+   "source_id": 717909,
+   "source_page": "https://freesound.org/s/717909/",
+   "title": "230724 Thunder, close crack light rain, mixpreroof, Toronto 5pm",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717909_97550-hq.mp3",
+    "sha256": "acc293ba9ea902017d00874f99f46c0eeb898750d78f289c68ec4d02b7beb68c",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.0286,
+    1.3886
+   ],
+   "bed_s": [
+    29.5,
+    30.5
+   ],
+   "onset_s": 1.0386,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 47.11,
+   "crest_db_before": 23.3,
+   "sha256_grain": "8fb2370a5855866b5e2d533f61d8e771eebe645de03f3b6a80c42a2dd440dad0",
+   "centroid_hz": null,
+   "snr_db": 47.8
+  },
+  {
+   "id": "crack_031_434359",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_031_434359.ogg",
+   "dur_s": 0.36,
+   "source_id": 434359,
+   "source_page": "https://freesound.org/s/434359/",
+   "title": "Close lightning strike 2018 07 07",
+   "author": "csengeri",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/434/434359_197070-hq.mp3",
+    "sha256": "1eb7ddad74d711bdc337e848be80683c6650f19e92f28a3ce69c265236012d02",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    2.429,
+    2.789
+   ],
+   "bed_s": [
+    0.8,
+    1.6
+   ],
+   "onset_s": 2.439,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 2.95,
+   "crest_db_before": 15.3,
+   "sha256_grain": "0cafe77cfe9f1685159f92870cb627a7a7e13bea4ef30ce2b61ac2a9a1bd0b94",
+   "centroid_hz": null,
+   "snr_db": 47.3
+  },
+  {
+   "id": "crack_032_439550",
+   "kind": "crack",
+   "class_of_source": "thunder_close",
+   "file": "grains/crack_032_439550.ogg",
+   "dur_s": 0.36,
+   "source_id": 439550,
+   "source_page": "https://freesound.org/s/439550/",
+   "title": "Single huge clap of thunder",
+   "author": "richwise",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/439/439550_1481531-hq.mp3",
+    "sha256": "0ac3ded4c92c715162cd8d89758a3bb469eaea7224bcf28ba2a50e8fc9a7dce4",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    8.8701,
+    9.2301
+   ],
+   "bed_s": [
+    7.25,
+    8.05
+   ],
+   "onset_s": 8.8801,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 13.8,
+   "crest_db_before": 15.8,
+   "sha256_grain": "cb5b2ed2fcabe1ac0a8d9b24cf6299413f5c423c8dfcd729ad460e504282f059",
+   "centroid_hz": null,
+   "snr_db": 52.5
+  },
+  {
+   "id": "crack_033_672776",
+   "kind": "crack",
+   "class_of_source": "thunder_close",
+   "file": "grains/crack_033_672776.ogg",
+   "dur_s": 0.36,
+   "source_id": 672776,
+   "source_page": "https://freesound.org/s/672776/",
+   "title": "Thunder Clap",
+   "author": "DaniloSFX",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/672/672776_1357949-hq.mp3",
+    "sha256": "813f57934c49e8c5185be340aca884bfdfdc50d208cb042b89f4fb6f1f5483dd",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.2095,
+    0.5695
+   ],
+   "bed_s": [
+    14.75,
+    15.75
+   ],
+   "onset_s": 0.2195,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)",
+    "soft-clipped to 0.98 (peak was 0.0 dBFS)"
+   ],
+   "level_gain_db": 2.2,
+   "crest_db_before": 18.5,
+   "sha256_grain": "035de6ffca68bd151dfe9650e249802f89add46cfc1ef81eb2f740301549a331",
+   "centroid_hz": null,
+   "snr_db": 52.1
+  },
+  {
+   "id": "crack_034_534023",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_034_534023.ogg",
+   "dur_s": 0.36,
+   "source_id": 534023,
+   "source_page": "https://freesound.org/s/534023/",
+   "title": "Thunderclap",
+   "author": "Fission9",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/534/534023_9395330-hq.mp3",
+    "sha256": "09c8a88b55593476c5ffeb84df0810b5cfc2f6eafe14166c388801aef208cf3f",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.1713,
+    1.5313
+   ],
+   "bed_s": [
+    12.25,
+    13.25
+   ],
+   "onset_s": 1.1813,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)",
+    "soft-clipped to 0.98 (peak was 6.3 dBFS)"
+   ],
+   "level_gain_db": 14.37,
+   "crest_db_before": 23.5,
+   "sha256_grain": "4262c447b74e036f48a3be2d5c15c029d9e6910550e0fe61e1360daef626da19",
+   "centroid_hz": null,
+   "snr_db": 45.9
+  },
+  {
+   "id": "crack_035_486253",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_035_486253.ogg",
+   "dur_s": 0.36,
+   "source_id": 486253,
+   "source_page": "https://freesound.org/s/486253/",
+   "title": "R22-13-Classic Thunder Strike.wav",
+   "author": "craigsmith",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/486/486253_2524442-hq.mp3",
+    "sha256": "acaace93d16b578294bed2c83e0c8e4bfcf0199dbbf233b79536cd102c6d1d50",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    -0.01,
+    0.35
+   ],
+   "bed_s": [
+    13.0,
+    14.0
+   ],
+   "onset_s": 0.0,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)",
+    "soft-clipped to 0.98 (peak was 0.8 dBFS)"
+   ],
+   "level_gain_db": 38.27,
+   "crest_db_before": 18.1,
+   "sha256_grain": "af9dccc5e7f8a53ed1ace4fb86d576d8b23358de327b0d855e0dce629c7e9013",
+   "centroid_hz": null,
+   "snr_db": 44.1
+  },
+  {
+   "id": "crack_036_240664",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_036_240664.ogg",
+   "dur_s": 0.36,
+   "source_id": 240664,
+   "source_page": "https://freesound.org/s/240664/",
+   "title": "MS_Thunderclap Davos Laret.wav",
+   "author": "Thomas Bruderer",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/240/240664_1558130-hq.mp3",
+    "sha256": "5413649c8f7efce1f931adb99d0ceff8e233515df2d662775f7da6ae69909b8b",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    7.6356,
+    7.9956
+   ],
+   "bed_s": [
+    6.25,
+    7.05
+   ],
+   "onset_s": 7.6456,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 8.51,
+   "crest_db_before": 15.9,
+   "sha256_grain": "ac9fa97c9085551925375df80bcd4aa0dd6f1ccc434f6d096cbb286c744f1f5b",
+   "centroid_hz": null,
+   "snr_db": 44.0
+  },
+  {
+   "id": "crack_037_188367",
+   "kind": "crack",
+   "class_of_source": "thunder_close",
+   "file": "grains/crack_037_188367.ogg",
+   "dur_s": 0.36,
+   "source_id": 188367,
+   "source_page": "https://freesound.org/s/188367/",
+   "title": "Huge Thunder.wav",
+   "author": "ecfike",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/188/188367_2337290-hq.mp3",
+    "sha256": "a5013844e0da437b41332cc0aa439e21097a3089daf987d79bef4cbc2bba4f49",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    76.2288,
+    76.5888
+   ],
+   "bed_s": [
+    74.5,
+    75.3
+   ],
+   "onset_s": 76.2388,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)",
+    "soft-clipped to 0.98 (peak was 0.0 dBFS)"
+   ],
+   "level_gain_db": 2.72,
+   "crest_db_before": 16.9,
+   "sha256_grain": "d2db918b2da6e152be191f8aecdd80821ccc62c84ae968ce11f33092433eea52",
+   "centroid_hz": null,
+   "snr_db": 47.3
+  },
+  {
+   "id": "crack_038_646912",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_038_646912.ogg",
+   "dur_s": 0.36,
+   "source_id": 646912,
+   "source_page": "https://freesound.org/s/646912/",
+   "title": "Lightning strike 2",
+   "author": "alexdarek",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/646/646912_10586310-hq.mp3",
+    "sha256": "93042e52364324e371ff1fc03237e7e0297b0c8a36bcf8bcd930ca79bd04c9db",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.2571,
+    1.6171
+   ],
+   "bed_s": [
+    14.25,
+    15.25
+   ],
+   "onset_s": 1.2671,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)",
+    "soft-clipped to 0.98 (peak was 1.7 dBFS)"
+   ],
+   "level_gain_db": -5.81,
+   "crest_db_before": 18.8,
+   "sha256_grain": "84b4e4997986de08516fe8f236d7c7626fb8c268f30c47b0ebd5142fe673e507",
+   "centroid_hz": null,
+   "snr_db": 40.5
+  },
+  {
+   "id": "crack_039_717888",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_039_717888.ogg",
+   "dur_s": 0.36,
+   "source_id": 717888,
+   "source_page": "https://freesound.org/s/717888/",
+   "title": "230812 Thunder, med crack, rain stops dry rolling, Stratford 9am 2am",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717888_97550-hq.mp3",
+    "sha256": "986c3633d3bd5a1114d4e65a2dc89dc47ef97895e8f5a4454eea45c92266a10b",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.9378,
+    1.2978
+   ],
+   "bed_s": [
+    56.0,
+    57.0
+   ],
+   "onset_s": 0.9478,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)",
+    "soft-clipped to 0.98 (peak was 1.3 dBFS)"
+   ],
+   "level_gain_db": 16.27,
+   "crest_db_before": 19.2,
+   "sha256_grain": "e2d8110ee80f0fbc37fbd81d52813ea4ff559d52cba5dcf9b98b251928789489",
+   "centroid_hz": null,
+   "snr_db": 40.1
+  },
+  {
+   "id": "crack_040_501745",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_040_501745.ogg",
+   "dur_s": 0.36,
+   "source_id": 501745,
+   "source_page": "https://freesound.org/s/501745/",
+   "title": "Thunder Crack Rain Sequence January 11th 2020 Smaller File.WAV",
+   "author": "kvgarlic",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/501/501745_1050391-hq.mp3",
+    "sha256": "4ce9e39cb048b3a182e8b9b1540b91d0df9115cc701cebb5efd87fcea6b381cf",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    54.9489,
+    55.3089
+   ],
+   "bed_s": [
+    52.8,
+    53.6
+   ],
+   "onset_s": 54.9589,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 3.21,
+   "crest_db_before": 14.6,
+   "sha256_grain": "5a3698de4a7b0981f8942d89ce2c08a90f16a6568959eee6f401aaeed8a8044d",
+   "centroid_hz": null,
+   "snr_db": 38.8
+  },
+  {
+   "id": "crack_041_186907",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_041_186907.ogg",
+   "dur_s": 0.36,
+   "source_id": 186907,
+   "source_page": "https://freesound.org/s/186907/",
+   "title": "Lightning_direct_hit-Rowy101.wav",
+   "author": "Rowy101",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/186/186907_3466279-hq.mp3",
+    "sha256": "6c9ef8fb07de800dbbcd037a48d382edf2f842e16491752b672c62f4659cc1dd",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    5.3205,
+    5.6805
+   ],
+   "bed_s": [
+    4.35,
+    5.15
+   ],
+   "onset_s": 5.3305,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 2.85,
+   "crest_db_before": 16.5,
+   "sha256_grain": "a4a1a9834cd32d7fc7109d1fe49964f2205409eb90d06619bd96eec48306c451",
+   "centroid_hz": null,
+   "snr_db": 38.4
+  },
+  {
+   "id": "crack_042_536902",
+   "kind": "crack",
+   "class_of_source": "thunder_strike",
+   "file": "grains/crack_042_536902.ogg",
+   "dur_s": 0.36,
+   "source_id": 536902,
+   "source_page": "https://freesound.org/s/536902/",
+   "title": "thunder sharp crack approaching.wav",
+   "author": "cognito perceptu",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/536/536902_57789-hq.mp3",
+    "sha256": "a4a6c673311987f0ecb0cbc3233a203b092e34e5522f23f316a6c37bfcacb38e",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    7.1491,
+    7.5091
+   ],
+   "bed_s": [
+    5.55,
+    6.35
+   ],
+   "onset_s": 7.1591,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 6.85,
+   "crest_db_before": 16.5,
+   "sha256_grain": "f8152e3fd8777482e2983b989ff10c4547ac37a0edc0fa8753b8cbf5520d43e4",
+   "centroid_hz": null,
+   "snr_db": 37.5
+  },
+  {
+   "id": "crack_043_240230",
+   "kind": "crack",
+   "class_of_source": "thunder_close",
+   "file": "grains/crack_043_240230.ogg",
+   "dur_s": 0.36,
+   "source_id": 240230,
+   "source_page": "https://freesound.org/s/240230/",
+   "title": "Thunder clap # 1.wav",
+   "author": "the_yura",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/240/240230_2451161-hq.mp3",
+    "sha256": "3097e9a2c5f82ae7347d43130baeb23f4cc901d241af7289d0e8c4144e31e684",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.0516,
+    1.4116
+   ],
+   "bed_s": [
+    0.0,
+    0.6
+   ],
+   "onset_s": 1.0616,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 1.63,
+   "crest_db_before": 15.0,
+   "sha256_grain": "76f4819d547360543d700b34f9f0d0c849d8a62c22f499abee2925b87cc9d159",
+   "centroid_hz": null,
+   "snr_db": 42.8
+  },
+  {
+   "id": "crack_044_635121",
+   "kind": "crack",
+   "class_of_source": "thunder_close",
+   "file": "grains/crack_044_635121.ogg",
+   "dur_s": 0.36,
+   "source_id": 635121,
+   "source_page": "https://freesound.org/s/635121/",
+   "title": "Thunder Clap in May.wav",
+   "author": "captainbenwick",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/635/635121_12070288-hq.mp3",
+    "sha256": "5c063d7d17150af9b68ce4f4811b478b5f03c61d7a77e32595978038d988c3d1",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    2.6502,
+    3.0102
+   ],
+   "bed_s": [
+    1.1,
+    1.9
+   ],
+   "onset_s": 2.6602,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 2.14,
+   "crest_db_before": 14.0,
+   "sha256_grain": "f9ebcc4b8e6cadded934b8acaa18479ca7b953c7c647330e01746873a8e64dc0",
+   "centroid_hz": null,
+   "snr_db": 40.0
+  },
+  {
+   "id": "crack_045_573677",
+   "kind": "crack",
+   "class_of_source": "thunder_close",
+   "file": "grains/crack_045_573677.ogg",
+   "dur_s": 0.36,
+   "source_id": 573677,
+   "source_page": "https://freesound.org/s/573677/",
+   "title": "big thunder claps 07.mp3",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/573/573677_97550-hq.mp3",
+    "sha256": "ab58496c233f8d4111a4a0bf4d9515e5ede0a2a67a37cfdafceca5ebfbe6ce09",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.9768,
+    1.3368
+   ],
+   "bed_s": [
+    16.0,
+    17.0
+   ],
+   "onset_s": 0.9868,
+   "fade_ms": [
+    2,
+    120
+   ],
+   "processing": [
+    "highpass 700 Hz 2nd order (minimum phase)"
+   ],
+   "level_gain_db": 3.21,
+   "crest_db_before": 16.0,
+   "sha256_grain": "c378fe7df28dba0fb3784e850cb012e516b60faad2938d26154416934046446a",
+   "centroid_hz": null,
+   "snr_db": 39.7
+  },
+  {
+   "id": "clap_046_486253",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_046_486253.ogg",
+   "dur_s": 0.96,
+   "source_id": 486253,
+   "source_page": "https://freesound.org/s/486253/",
+   "title": "R22-13-Classic Thunder Strike.wav",
+   "author": "craigsmith",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/486/486253_2524442-hq.mp3",
+    "sha256": "acaace93d16b578294bed2c83e0c8e4bfcf0199dbbf233b79536cd102c6d1d50",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.55,
+    1.51
+   ],
+   "bed_s": [
+    13.0,
+    14.0
+   ],
+   "onset_s": 0.0,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 1.79,
+   "crest_db_before": 10.8,
+   "sha256_grain": "e112ca8cb3eaeb62383ff1bf0cfa13b9c9f38776c54dea20cb186c54f3006fdf",
+   "centroid_hz": null,
+   "snr_db": 44.1
+  },
+  {
+   "id": "clap_047_338088",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_047_338088.ogg",
+   "dur_s": 0.96,
+   "source_id": 338088,
+   "source_page": "https://freesound.org/s/338088/",
+   "title": "Thunder Clap 4",
+   "author": "jzielke011",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/338/338088_4535165-hq.mp3",
+    "sha256": "5ec3228099bb1079e94736bd6311034859a707ba4e22fc601cde9ab402b76932",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.92,
+    1.88
+   ],
+   "bed_s": [
+    12.25,
+    13.25
+   ],
+   "onset_s": 0.2375,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -10.86,
+   "crest_db_before": 9.4,
+   "sha256_grain": "2091c1b7267303a71af2eb94cf3cc3045830a713a46b1b12f65023f0c1a19062",
+   "centroid_hz": null,
+   "snr_db": 193.8
+  },
+  {
+   "id": "clap_048_338088",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_048_338088.ogg",
+   "dur_s": 0.96,
+   "source_id": 338088,
+   "source_page": "https://freesound.org/s/338088/",
+   "title": "Thunder Clap 4",
+   "author": "jzielke011",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/338/338088_4535165-hq.mp3",
+    "sha256": "5ec3228099bb1079e94736bd6311034859a707ba4e22fc601cde9ab402b76932",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    5.9,
+    6.86
+   ],
+   "bed_s": [
+    12.25,
+    13.25
+   ],
+   "onset_s": 0.2375,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -8.12,
+   "crest_db_before": 11.6,
+   "sha256_grain": "1a7e6791a43a1cdcf7929643d26db1abf79114a9480664b3e91ad837cc04e03e",
+   "centroid_hz": null,
+   "snr_db": 193.8
+  },
+  {
+   "id": "clap_049_338088",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_049_338088.ogg",
+   "dur_s": 0.96,
+   "source_id": 338088,
+   "source_page": "https://freesound.org/s/338088/",
+   "title": "Thunder Clap 4",
+   "author": "jzielke011",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/338/338088_4535165-hq.mp3",
+    "sha256": "5ec3228099bb1079e94736bd6311034859a707ba4e22fc601cde9ab402b76932",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    4.71,
+    5.67
+   ],
+   "bed_s": [
+    12.25,
+    13.25
+   ],
+   "onset_s": 0.2375,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -10.67,
+   "crest_db_before": 9.3,
+   "sha256_grain": "b02c5871ff1c2e3a155d09db4a3d41ff80489d5cf244dbedd5056658e7b3975b",
+   "centroid_hz": null,
+   "snr_db": 193.8
+  },
+  {
+   "id": "clap_050_486253",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_050_486253.ogg",
+   "dur_s": 0.96,
+   "source_id": 486253,
+   "source_page": "https://freesound.org/s/486253/",
+   "title": "R22-13-Classic Thunder Strike.wav",
+   "author": "craigsmith",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/486/486253_2524442-hq.mp3",
+    "sha256": "acaace93d16b578294bed2c83e0c8e4bfcf0199dbbf233b79536cd102c6d1d50",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.23,
+    2.19
+   ],
+   "bed_s": [
+    13.0,
+    14.0
+   ],
+   "onset_s": 0.0,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 9.46,
+   "crest_db_before": 9.7,
+   "sha256_grain": "80c51741dbe71a2816a20fa107f88f2646696840edaefa5da7a8251a3eacb74a",
+   "centroid_hz": null,
+   "snr_db": 44.1
+  },
+  {
+   "id": "clap_051_717909",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_051_717909.ogg",
+   "dur_s": 0.96,
+   "source_id": 717909,
+   "source_page": "https://freesound.org/s/717909/",
+   "title": "230724 Thunder, close crack light rain, mixpreroof, Toronto 5pm",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717909_97550-hq.mp3",
+    "sha256": "acc293ba9ea902017d00874f99f46c0eeb898750d78f289c68ec4d02b7beb68c",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    3.76,
+    4.72
+   ],
+   "bed_s": [
+    29.5,
+    30.5
+   ],
+   "onset_s": 1.0386,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -8.14,
+   "crest_db_before": 12.4,
+   "sha256_grain": "7b434ba26d387c026fbb60670eae5ddf5c619b10cab0d9bc7b737d6f2c98edad",
+   "centroid_hz": null,
+   "snr_db": 47.8
+  },
+  {
+   "id": "clap_052_717907",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_052_717907.ogg",
+   "dur_s": 0.96,
+   "source_id": 717907,
+   "source_page": "https://freesound.org/s/717907/",
+   "title": "230713 Thunder, close crack crash big, mixpre6 AT875r EM272s, Stratford ON 2am",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717907_97550-hq.mp3",
+    "sha256": "b106efe7033b30553a77ebdfdd142752821022c262a138321ae2f8180dec9c44",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    4.58,
+    5.54
+   ],
+   "bed_s": [
+    35.0,
+    36.0
+   ],
+   "onset_s": 0.6316,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 0.9,
+   "crest_db_before": 14.5,
+   "sha256_grain": "40beaf371a629f30ccad74c82dcd1fa58c8c6ddffb61003ea271d315c1bbecf4",
+   "centroid_hz": null,
+   "snr_db": 54.0
+  },
+  {
+   "id": "clap_053_717907",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_053_717907.ogg",
+   "dur_s": 0.96,
+   "source_id": 717907,
+   "source_page": "https://freesound.org/s/717907/",
+   "title": "230713 Thunder, close crack crash big, mixpre6 AT875r EM272s, Stratford ON 2am",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717907_97550-hq.mp3",
+    "sha256": "b106efe7033b30553a77ebdfdd142752821022c262a138321ae2f8180dec9c44",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    5.38,
+    6.34
+   ],
+   "bed_s": [
+    35.0,
+    36.0
+   ],
+   "onset_s": 0.6316,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 2.81,
+   "crest_db_before": 13.7,
+   "sha256_grain": "92c3530a4aa3db615147b9461c8e30bf51042bdba109c0ac4811960e8ffb8ee5",
+   "centroid_hz": null,
+   "snr_db": 54.0
+  },
+  {
+   "id": "clap_054_619052",
+   "kind": "clap",
+   "class_of_source": "thunder_close",
+   "file": "grains/clap_054_619052.ogg",
+   "dur_s": 0.96,
+   "source_id": 619052,
+   "source_page": "https://freesound.org/s/619052/",
+   "title": "Continuous Thunder Claps And Rumbles.mp3",
+   "author": "mrrap4food",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/619/619052_781461-hq.mp3",
+    "sha256": "89c7f3a414d6d18a3b73b87dd0e2b23c89417f6a7300c7fac3d7df45a2bddceb",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    38.15,
+    39.11
+   ],
+   "bed_s": [
+    35.5,
+    36.3
+   ],
+   "onset_s": 36.5165,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -3.71,
+   "crest_db_before": 15.0,
+   "sha256_grain": "082fa28b21c949c3427d280afd8b496ab5f173f9d541072c13181a8d739e716a",
+   "centroid_hz": null,
+   "snr_db": 30.9
+  },
+  {
+   "id": "clap_055_717907",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_055_717907.ogg",
+   "dur_s": 0.96,
+   "source_id": 717907,
+   "source_page": "https://freesound.org/s/717907/",
+   "title": "230713 Thunder, close crack crash big, mixpre6 AT875r EM272s, Stratford ON 2am",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717907_97550-hq.mp3",
+    "sha256": "b106efe7033b30553a77ebdfdd142752821022c262a138321ae2f8180dec9c44",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    3.64,
+    4.6
+   ],
+   "bed_s": [
+    35.0,
+    36.0
+   ],
+   "onset_s": 0.6316,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 5.61,
+   "crest_db_before": 17.3,
+   "sha256_grain": "4bcbd706fc6d068c8e698113d2ce9d6ee5d98fd6da7502d658f3dcc5c7eb59d4",
+   "centroid_hz": null,
+   "snr_db": 54.0
+  },
+  {
+   "id": "clap_056_690039",
+   "kind": "clap",
+   "class_of_source": "thunder_close",
+   "file": "grains/clap_056_690039.ogg",
+   "dur_s": 0.96,
+   "source_id": 690039,
+   "source_page": "https://freesound.org/s/690039/",
+   "title": "Thunder clap.mp3",
+   "author": "Videoguy64",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/690/690039_63209-hq.mp3",
+    "sha256": "7ad7ff795bfd4d491f79ecf5974245c62af763684f2f578ba9c143c9c02ef4d8",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    8.76,
+    9.72
+   ],
+   "bed_s": [
+    6.3,
+    7.1
+   ],
+   "onset_s": 8.1546,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -9.39,
+   "crest_db_before": 9.4,
+   "sha256_grain": "0d5e5a4f3f1ac2e9507d5f18c74c5b652e8dcaab40382db1005879cb1b5537cc",
+   "centroid_hz": null,
+   "snr_db": 36.5
+  },
+  {
+   "id": "clap_057_336314",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_057_336314.ogg",
+   "dur_s": 0.96,
+   "source_id": 336314,
+   "source_page": "https://freesound.org/s/336314/",
+   "title": "06/10/2014 close lightning strike",
+   "author": "supercell10",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/336/336314_2660518-hq.mp3",
+    "sha256": "d61f20336a73bcb7fa311bd55a26d5d9fe727c8b090574ba23fa740b96155eea",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    6.61,
+    7.57
+   ],
+   "bed_s": [
+    13.0,
+    14.0
+   ],
+   "onset_s": 0.001,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 0.53,
+   "crest_db_before": 13.8,
+   "sha256_grain": "e69c191cfb79d2439637b5ada433f16e485fca5dfb7740ddc48f5e51515a8f6f",
+   "centroid_hz": null,
+   "snr_db": 61.3
+  },
+  {
+   "id": "clap_058_336314",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_058_336314.ogg",
+   "dur_s": 0.96,
+   "source_id": 336314,
+   "source_page": "https://freesound.org/s/336314/",
+   "title": "06/10/2014 close lightning strike",
+   "author": "supercell10",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/336/336314_2660518-hq.mp3",
+    "sha256": "d61f20336a73bcb7fa311bd55a26d5d9fe727c8b090574ba23fa740b96155eea",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    2.28,
+    3.24
+   ],
+   "bed_s": [
+    13.0,
+    14.0
+   ],
+   "onset_s": 0.001,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -5.84,
+   "crest_db_before": 14.2,
+   "sha256_grain": "3b6c5779170ffce6bcb76710e51ba2fe5c841733a9f9c9c20392c26ec6e94bf8",
+   "centroid_hz": null,
+   "snr_db": 61.3
+  },
+  {
+   "id": "clap_059_336314",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_059_336314.ogg",
+   "dur_s": 0.96,
+   "source_id": 336314,
+   "source_page": "https://freesound.org/s/336314/",
+   "title": "06/10/2014 close lightning strike",
+   "author": "supercell10",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/336/336314_2660518-hq.mp3",
+    "sha256": "d61f20336a73bcb7fa311bd55a26d5d9fe727c8b090574ba23fa740b96155eea",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    6.24,
+    7.2
+   ],
+   "bed_s": [
+    13.0,
+    14.0
+   ],
+   "onset_s": 0.001,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -1.55,
+   "crest_db_before": 15.9,
+   "sha256_grain": "a31f43cb64b5a31ae4fa4beb71048653fa66fa482c4c12954859e945b4676162",
+   "centroid_hz": null,
+   "snr_db": 61.3
+  },
+  {
+   "id": "clap_060_616992",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_060_616992.ogg",
+   "dur_s": 0.96,
+   "source_id": 616992,
+   "source_page": "https://freesound.org/s/616992/",
+   "title": "210914 Thunder, crack, pretty close, bit of distortion, urban, TORONTO 1am.wav",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/616/616992_97550-hq.mp3",
+    "sha256": "05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    4.26,
+    5.22
+   ],
+   "bed_s": [
+    37.5,
+    38.5
+   ],
+   "onset_s": 1.0087,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -6.28,
+   "crest_db_before": 11.9,
+   "sha256_grain": "9f2ef6b11a20d6a6fabfafc7a8bce11db6bdd3f869f353c44701586fe566c3cb",
+   "centroid_hz": null,
+   "snr_db": 53.8
+  },
+  {
+   "id": "clap_061_534023",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_061_534023.ogg",
+   "dur_s": 0.96,
+   "source_id": 534023,
+   "source_page": "https://freesound.org/s/534023/",
+   "title": "Thunderclap",
+   "author": "Fission9",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/534/534023_9395330-hq.mp3",
+    "sha256": "09c8a88b55593476c5ffeb84df0810b5cfc2f6eafe14166c388801aef208cf3f",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    6.28,
+    7.24
+   ],
+   "bed_s": [
+    12.25,
+    13.25
+   ],
+   "onset_s": 1.1813,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 8.03,
+   "crest_db_before": 14.2,
+   "sha256_grain": "064a90cedc77e8faa73cb8cc87d53ecc91917debc47154465630213b318e84f7",
+   "centroid_hz": null,
+   "snr_db": 45.9
+  },
+  {
+   "id": "clap_062_616992",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_062_616992.ogg",
+   "dur_s": 0.96,
+   "source_id": 616992,
+   "source_page": "https://freesound.org/s/616992/",
+   "title": "210914 Thunder, crack, pretty close, bit of distortion, urban, TORONTO 1am.wav",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/616/616992_97550-hq.mp3",
+    "sha256": "05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    7.76,
+    8.72
+   ],
+   "bed_s": [
+    37.5,
+    38.5
+   ],
+   "onset_s": 1.0087,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -5.81,
+   "crest_db_before": 12.6,
+   "sha256_grain": "76331997cb49f12c38133c3c3c0ad15cd244b55999d0be39ce0265621c5a7be4",
+   "centroid_hz": null,
+   "snr_db": 53.8
+  },
+  {
+   "id": "clap_063_486253",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_063_486253.ogg",
+   "dur_s": 0.96,
+   "source_id": 486253,
+   "source_page": "https://freesound.org/s/486253/",
+   "title": "R22-13-Classic Thunder Strike.wav",
+   "author": "craigsmith",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/486/486253_2524442-hq.mp3",
+    "sha256": "acaace93d16b578294bed2c83e0c8e4bfcf0199dbbf233b79536cd102c6d1d50",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    5.78,
+    6.74
+   ],
+   "bed_s": [
+    13.0,
+    14.0
+   ],
+   "onset_s": 0.0,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 29.35,
+   "crest_db_before": 14.9,
+   "sha256_grain": "96218b4180f792d1b49f95e572c081402ac43c3f636815b2849709f03172234d",
+   "centroid_hz": null,
+   "snr_db": 44.1
+  },
+  {
+   "id": "clap_064_573677",
+   "kind": "clap",
+   "class_of_source": "thunder_close",
+   "file": "grains/clap_064_573677.ogg",
+   "dur_s": 0.96,
+   "source_id": 573677,
+   "source_page": "https://freesound.org/s/573677/",
+   "title": "big thunder claps 07.mp3",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/573/573677_97550-hq.mp3",
+    "sha256": "ab58496c233f8d4111a4a0bf4d9515e5ede0a2a67a37cfdafceca5ebfbe6ce09",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    6.54,
+    7.5
+   ],
+   "bed_s": [
+    16.0,
+    17.0
+   ],
+   "onset_s": 0.9868,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 8.83,
+   "crest_db_before": 15.7,
+   "sha256_grain": "dd22b8a00afae3a623f5514361c9881f73d9d7998e36320baecc633dac8f2249",
+   "centroid_hz": null,
+   "snr_db": 39.7
+  },
+  {
+   "id": "clap_065_573677",
+   "kind": "clap",
+   "class_of_source": "thunder_close",
+   "file": "grains/clap_065_573677.ogg",
+   "dur_s": 0.96,
+   "source_id": 573677,
+   "source_page": "https://freesound.org/s/573677/",
+   "title": "big thunder claps 07.mp3",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/573/573677_97550-hq.mp3",
+    "sha256": "ab58496c233f8d4111a4a0bf4d9515e5ede0a2a67a37cfdafceca5ebfbe6ce09",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    5.02,
+    5.98
+   ],
+   "bed_s": [
+    16.0,
+    17.0
+   ],
+   "onset_s": 0.9868,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 10.51,
+   "crest_db_before": 16.0,
+   "sha256_grain": "7e4fe47ebf5a5b9b928b11f5cf273c8e2be9a795fa8354534a380b7df37e2371",
+   "centroid_hz": null,
+   "snr_db": 39.7
+  },
+  {
+   "id": "clap_066_240664",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_066_240664.ogg",
+   "dur_s": 0.96,
+   "source_id": 240664,
+   "source_page": "https://freesound.org/s/240664/",
+   "title": "MS_Thunderclap Davos Laret.wav",
+   "author": "Thomas Bruderer",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/240/240664_1558130-hq.mp3",
+    "sha256": "5413649c8f7efce1f931adb99d0ceff8e233515df2d662775f7da6ae69909b8b",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    8.68,
+    9.64
+   ],
+   "bed_s": [
+    6.25,
+    7.05
+   ],
+   "onset_s": 7.6456,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -1.79,
+   "crest_db_before": 12.7,
+   "sha256_grain": "e8c740890ccfcb87da929ba3af2bf0bee675fd92f66527b43cbf18a12888cbdb",
+   "centroid_hz": null,
+   "snr_db": 44.0
+  },
+  {
+   "id": "clap_067_717358",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_067_717358.ogg",
+   "dur_s": 0.96,
+   "source_id": 717358,
+   "source_page": "https://freesound.org/s/717358/",
+   "title": "Thunder - binaural from Zoom H3-VR",
+   "author": "StephanPot",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717358_10094394-hq.mp3",
+    "sha256": "9ea8a8123b496fe55c95d6d0f1fbda3648582783b7242f8011b7168d86194578",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    19.47,
+    20.43
+   ],
+   "bed_s": [
+    16.2,
+    17.0
+   ],
+   "onset_s": 18.1893,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -6.61,
+   "crest_db_before": 6.3,
+   "sha256_grain": "487489cc41e4e8066074f6ff8714625af19dd29b0d3ec54ae0fb0d5f4502d5d7",
+   "centroid_hz": null,
+   "snr_db": 56.6
+  },
+  {
+   "id": "clap_068_253953",
+   "kind": "clap",
+   "class_of_source": "thunder_close",
+   "file": "grains/clap_068_253953.ogg",
+   "dur_s": 0.96,
+   "source_id": 253953,
+   "source_page": "https://freesound.org/s/253953/",
+   "title": "Thunder 1",
+   "author": "Yoyodaman234",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/253/253953_2792951-hq.mp3",
+    "sha256": "a1b57d07093ba489f0c6c9d775837ab920660c1db12d8760bb76d2a9c66b5ee3",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    4.69,
+    5.65
+   ],
+   "bed_s": [
+    18.5,
+    19.5
+   ],
+   "onset_s": 0.895,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 10.56,
+   "crest_db_before": 15.8,
+   "sha256_grain": "f572f259a8bf0f14e412395d4de350c6b40f0221f3af7f1afef65ee164ee4670",
+   "centroid_hz": null,
+   "snr_db": 60.1
+  },
+  {
+   "id": "clap_069_195344",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_069_195344.ogg",
+   "dur_s": 0.96,
+   "source_id": 195344,
+   "source_page": "https://freesound.org/s/195344/",
+   "title": "Thunder",
+   "author": "MorningGloryProductions",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/195/195344_3633506-hq.mp3",
+    "sha256": "4b8f06542a2ddd1d993ec1a9fecb4361b0dd2e398ce960f46cc6096ca447fd74",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    13.23,
+    14.19
+   ],
+   "bed_s": [
+    5.5,
+    6.3
+   ],
+   "onset_s": 6.9215,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 27.26,
+   "crest_db_before": 11.1,
+   "sha256_grain": "590053c83a6fef1edff869d0f0598f25cfb8446e62744a5ec40c2ce075aee4d9",
+   "centroid_hz": null,
+   "snr_db": 32.5
+  },
+  {
+   "id": "clap_070_616992",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_070_616992.ogg",
+   "dur_s": 0.96,
+   "source_id": 616992,
+   "source_page": "https://freesound.org/s/616992/",
+   "title": "210914 Thunder, crack, pretty close, bit of distortion, urban, TORONTO 1am.wav",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/616/616992_97550-hq.mp3",
+    "sha256": "05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    6.61,
+    7.57
+   ],
+   "bed_s": [
+    37.5,
+    38.5
+   ],
+   "onset_s": 1.0087,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -4.46,
+   "crest_db_before": 13.9,
+   "sha256_grain": "cda2bae1d0dc0956f128637ff6ba0b76a9ffce4d5903c6f56da46f62c0f20a0a",
+   "centroid_hz": null,
+   "snr_db": 53.8
+  },
+  {
+   "id": "clap_071_439550",
+   "kind": "clap",
+   "class_of_source": "thunder_close",
+   "file": "grains/clap_071_439550.ogg",
+   "dur_s": 0.96,
+   "source_id": 439550,
+   "source_page": "https://freesound.org/s/439550/",
+   "title": "Single huge clap of thunder",
+   "author": "richwise",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/439/439550_1481531-hq.mp3",
+    "sha256": "0ac3ded4c92c715162cd8d89758a3bb469eaea7224bcf28ba2a50e8fc9a7dce4",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    13.7,
+    14.66
+   ],
+   "bed_s": [
+    7.25,
+    8.05
+   ],
+   "onset_s": 8.8801,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 10.69,
+   "crest_db_before": 13.0,
+   "sha256_grain": "c276463e61d593d72440176c54e39f4f23854e631e1499ec9d95a29ab492e00c",
+   "centroid_hz": null,
+   "snr_db": 52.5
+  },
+  {
+   "id": "clap_072_325503",
+   "kind": "clap",
+   "class_of_source": "thunder_close",
+   "file": "grains/clap_072_325503.ogg",
+   "dur_s": 0.96,
+   "source_id": 325503,
+   "source_page": "https://freesound.org/s/325503/",
+   "title": "Big rolling thunder and rain",
+   "author": "borralbi",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/325/325503_2774517-hq.mp3",
+    "sha256": "10c48a949bb239d98f6d89fc150ee963dc7d28e53fd1976eb8f3c4e12cb922ed",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    6.19,
+    7.15
+   ],
+   "bed_s": [
+    23.5,
+    24.5
+   ],
+   "onset_s": 1.2102,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 0.72,
+   "crest_db_before": 17.1,
+   "sha256_grain": "67d376b4c9cc3f2a4f2b774c9f41aa6b88f27ec12ecb6bf8685bb51fe3004ada",
+   "centroid_hz": null,
+   "snr_db": 37.0
+  },
+  {
+   "id": "clap_073_534023",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_073_534023.ogg",
+   "dur_s": 0.96,
+   "source_id": 534023,
+   "source_page": "https://freesound.org/s/534023/",
+   "title": "Thunderclap",
+   "author": "Fission9",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/534/534023_9395330-hq.mp3",
+    "sha256": "09c8a88b55593476c5ffeb84df0810b5cfc2f6eafe14166c388801aef208cf3f",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    3.31,
+    4.27
+   ],
+   "bed_s": [
+    12.25,
+    13.25
+   ],
+   "onset_s": 1.1813,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [
+    "soft-clipped to 0.98 (peak was -0.1 dBFS)"
+   ],
+   "level_gain_db": 6.58,
+   "crest_db_before": 17.9,
+   "sha256_grain": "a3fd59c25f61f32de927aa9d7a7c82f5c246e79e36dffc8c918fc423ecd6d8c6",
+   "centroid_hz": null,
+   "snr_db": 45.9
+  },
+  {
+   "id": "clap_074_253953",
+   "kind": "clap",
+   "class_of_source": "thunder_close",
+   "file": "grains/clap_074_253953.ogg",
+   "dur_s": 0.96,
+   "source_id": 253953,
+   "source_page": "https://freesound.org/s/253953/",
+   "title": "Thunder 1",
+   "author": "Yoyodaman234",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/253/253953_2792951-hq.mp3",
+    "sha256": "a1b57d07093ba489f0c6c9d775837ab920660c1db12d8760bb76d2a9c66b5ee3",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.59,
+    2.55
+   ],
+   "bed_s": [
+    18.5,
+    19.5
+   ],
+   "onset_s": 0.895,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -5.85,
+   "crest_db_before": 12.6,
+   "sha256_grain": "cac63dc79758087d4eea0bc8c60b12139eb71e312b6b9d4f4a08604b6c2683e4",
+   "centroid_hz": null,
+   "snr_db": 60.1
+  },
+  {
+   "id": "clap_075_760214",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_075_760214.ogg",
+   "dur_s": 0.96,
+   "source_id": 760214,
+   "source_page": "https://freesound.org/s/760214/",
+   "title": "Thunder Clap And Rumble #7",
+   "author": "Kinoton",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/760/760214_2247456-hq.mp3",
+    "sha256": "5b9479902db171011dd6f49c2cc07db92dd487732bca991a8aceecb792805d25",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    6.46,
+    7.42
+   ],
+   "bed_s": [
+    14.0,
+    15.0
+   ],
+   "onset_s": 0.6366,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 1.87,
+   "crest_db_before": 9.1,
+   "sha256_grain": "ae491e8fe7069cb9acf63acee6ff2a1c8dae619c6d739fbed11445b5e6606e96",
+   "centroid_hz": null,
+   "snr_db": 58.0
+  },
+  {
+   "id": "clap_076_534023",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_076_534023.ogg",
+   "dur_s": 0.96,
+   "source_id": 534023,
+   "source_page": "https://freesound.org/s/534023/",
+   "title": "Thunderclap",
+   "author": "Fission9",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/534/534023_9395330-hq.mp3",
+    "sha256": "09c8a88b55593476c5ffeb84df0810b5cfc2f6eafe14166c388801aef208cf3f",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    2.09,
+    3.05
+   ],
+   "bed_s": [
+    12.25,
+    13.25
+   ],
+   "onset_s": 1.1813,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [
+    "soft-clipped to 0.98 (peak was 6.9 dBFS)"
+   ],
+   "level_gain_db": 4.39,
+   "crest_db_before": 24.9,
+   "sha256_grain": "dc6cbac5dbd53bb8303c7c14089484189c4ddd340796333463c7955d1dfa4e59",
+   "centroid_hz": null,
+   "snr_db": 45.9
+  },
+  {
+   "id": "clap_077_253953",
+   "kind": "clap",
+   "class_of_source": "thunder_close",
+   "file": "grains/clap_077_253953.ogg",
+   "dur_s": 0.96,
+   "source_id": 253953,
+   "source_page": "https://freesound.org/s/253953/",
+   "title": "Thunder 1",
+   "author": "Yoyodaman234",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/253/253953_2792951-hq.mp3",
+    "sha256": "a1b57d07093ba489f0c6c9d775837ab920660c1db12d8760bb76d2a9c66b5ee3",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    5.5,
+    6.46
+   ],
+   "bed_s": [
+    18.5,
+    19.5
+   ],
+   "onset_s": 0.895,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 10.58,
+   "crest_db_before": 11.7,
+   "sha256_grain": "a310baae08a7b87c1ef85aaf6656671a5c8ca2874f6026b3a885003ae07fbaf9",
+   "centroid_hz": null,
+   "snr_db": 60.1
+  },
+  {
+   "id": "clap_078_347854",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_078_347854.ogg",
+   "dur_s": 0.96,
+   "source_id": 347854,
+   "source_page": "https://freesound.org/s/347854/",
+   "title": "thunder crack 2.wav",
+   "author": "cognito perceptu",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/347/347854_57789-hq.mp3",
+    "sha256": "55512e7e096bfc76d88b13784d0091b84456df81d0c82394fce7fcd6098b5656",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    7.45,
+    8.41
+   ],
+   "bed_s": [
+    14.75,
+    15.75
+   ],
+   "onset_s": 1.0576,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 13.52,
+   "crest_db_before": 13.1,
+   "sha256_grain": "bb822f746b2022b36b1998d16148dc4c241449be026004e2cd816833ee86184a",
+   "centroid_hz": null,
+   "snr_db": 32.3
+  },
+  {
+   "id": "clap_079_717909",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_079_717909.ogg",
+   "dur_s": 0.96,
+   "source_id": 717909,
+   "source_page": "https://freesound.org/s/717909/",
+   "title": "230724 Thunder, close crack light rain, mixpreroof, Toronto 5pm",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717909_97550-hq.mp3",
+    "sha256": "acc293ba9ea902017d00874f99f46c0eeb898750d78f289c68ec4d02b7beb68c",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    4.2,
+    5.16
+   ],
+   "bed_s": [
+    29.5,
+    30.5
+   ],
+   "onset_s": 1.0386,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -5.34,
+   "crest_db_before": 13.6,
+   "sha256_grain": "e558cc078954eaf4bac965d494b753fe6a2bd0c3eb7cb2beace88964c31e5dc6",
+   "centroid_hz": null,
+   "snr_db": 47.8
+  },
+  {
+   "id": "clap_080_434359",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_080_434359.ogg",
+   "dur_s": 0.96,
+   "source_id": 434359,
+   "source_page": "https://freesound.org/s/434359/",
+   "title": "Close lightning strike 2018 07 07",
+   "author": "csengeri",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/434/434359_197070-hq.mp3",
+    "sha256": "1eb7ddad74d711bdc337e848be80683c6650f19e92f28a3ce69c265236012d02",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    9.35,
+    10.31
+   ],
+   "bed_s": [
+    0.8,
+    1.6
+   ],
+   "onset_s": 2.439,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [
+    "soft-clipped to 0.98 (peak was 0.3 dBFS)"
+   ],
+   "level_gain_db": 3.36,
+   "crest_db_before": 18.2,
+   "sha256_grain": "293f858601484f43854a34abc072eec3af4b264f7a9ce86c85563e6e4786e73f",
+   "centroid_hz": null,
+   "snr_db": 47.3
+  },
+  {
+   "id": "clap_081_434359",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_081_434359.ogg",
+   "dur_s": 0.96,
+   "source_id": 434359,
+   "source_page": "https://freesound.org/s/434359/",
+   "title": "Close lightning strike 2018 07 07",
+   "author": "csengeri",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/434/434359_197070-hq.mp3",
+    "sha256": "1eb7ddad74d711bdc337e848be80683c6650f19e92f28a3ce69c265236012d02",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    8.8,
+    9.76
+   ],
+   "bed_s": [
+    0.8,
+    1.6
+   ],
+   "onset_s": 2.439,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [
+    "soft-clipped to 0.98 (peak was 1.8 dBFS)"
+   ],
+   "level_gain_db": 4.13,
+   "crest_db_before": 18.5,
+   "sha256_grain": "c24d44a270ce14616db3a66fcc6526f9ab3caeede5fd1d26afc6c6b8f383b6fe",
+   "centroid_hz": null,
+   "snr_db": 47.3
+  },
+  {
+   "id": "clap_082_347854",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_082_347854.ogg",
+   "dur_s": 0.96,
+   "source_id": 347854,
+   "source_page": "https://freesound.org/s/347854/",
+   "title": "thunder crack 2.wav",
+   "author": "cognito perceptu",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/347/347854_57789-hq.mp3",
+    "sha256": "55512e7e096bfc76d88b13784d0091b84456df81d0c82394fce7fcd6098b5656",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    4.86,
+    5.82
+   ],
+   "bed_s": [
+    14.75,
+    15.75
+   ],
+   "onset_s": 1.0576,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 9.64,
+   "crest_db_before": 16.2,
+   "sha256_grain": "782592a99a8e6ab5084c37260f260b5595e77890e433e61ca2e62b98fc1f500d",
+   "centroid_hz": null,
+   "snr_db": 32.3
+  },
+  {
+   "id": "clap_083_523905",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_083_523905.ogg",
+   "dur_s": 0.96,
+   "source_id": 523905,
+   "source_page": "https://freesound.org/s/523905/",
+   "title": "Lightning Strike.mp3",
+   "author": "fattirewhitey",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/523/523905_4838185-hq.mp3",
+    "sha256": "04ec01e41e944240693a072bfd9ca754c7adfcd41e937209f4916fe7db2ec752",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    9.34,
+    10.3
+   ],
+   "bed_s": [
+    6.5,
+    7.3
+   ],
+   "onset_s": 8.8035,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 1.82,
+   "crest_db_before": 16.1,
+   "sha256_grain": "941dfa3f7bf864a6529dbc7e90b454ccb6264cb19b059a9f6ca3a497d9b5d5a7",
+   "centroid_hz": null,
+   "snr_db": 37.8
+  },
+  {
+   "id": "clap_084_325503",
+   "kind": "clap",
+   "class_of_source": "thunder_close",
+   "file": "grains/clap_084_325503.ogg",
+   "dur_s": 0.96,
+   "source_id": 325503,
+   "source_page": "https://freesound.org/s/325503/",
+   "title": "Big rolling thunder and rain",
+   "author": "borralbi",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/325/325503_2774517-hq.mp3",
+    "sha256": "10c48a949bb239d98f6d89fc150ee963dc7d28e53fd1976eb8f3c4e12cb922ed",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    3.53,
+    4.49
+   ],
+   "bed_s": [
+    23.5,
+    24.5
+   ],
+   "onset_s": 1.2102,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 5.77,
+   "crest_db_before": 14.3,
+   "sha256_grain": "86628ae53ee6160d47dbf657190cd349096616b78baf0241c2dceaf4daca2e04",
+   "centroid_hz": null,
+   "snr_db": 37.0
+  },
+  {
+   "id": "clap_085_573677",
+   "kind": "clap",
+   "class_of_source": "thunder_close",
+   "file": "grains/clap_085_573677.ogg",
+   "dur_s": 0.96,
+   "source_id": 573677,
+   "source_page": "https://freesound.org/s/573677/",
+   "title": "big thunder claps 07.mp3",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/573/573677_97550-hq.mp3",
+    "sha256": "ab58496c233f8d4111a4a0bf4d9515e5ede0a2a67a37cfdafceca5ebfbe6ce09",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    3.08,
+    4.04
+   ],
+   "bed_s": [
+    16.0,
+    17.0
+   ],
+   "onset_s": 0.9868,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 9.87,
+   "crest_db_before": 16.0,
+   "sha256_grain": "3030f53db81ddf31d75a61697ee2bd1ecddca9bfa6423693cc784db2fa4ae887",
+   "centroid_hz": null,
+   "snr_db": 39.7
+  },
+  {
+   "id": "clap_086_840628",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_086_840628.ogg",
+   "dur_s": 0.96,
+   "source_id": 840628,
+   "source_page": "https://freesound.org/s/840628/",
+   "title": "Closeup Thunder Strike 01",
+   "author": "loganzsound",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/840/840628_16682330-hq.mp3",
+    "sha256": "3104c195a1c9b29533c724591d38dc279fb3765ad0711cf9cc0fff37fcad1547",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    4.62,
+    5.58
+   ],
+   "bed_s": [
+    10.75,
+    11.75
+   ],
+   "onset_s": 0.6505,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 9.91,
+   "crest_db_before": 11.9,
+   "sha256_grain": "5c56a22e94844fd63eadb3e1aabb3e141ffa068166e9780b9fa837aa5f6c3023",
+   "centroid_hz": null,
+   "snr_db": 36.9
+  },
+  {
+   "id": "clap_087_717358",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_087_717358.ogg",
+   "dur_s": 0.96,
+   "source_id": 717358,
+   "source_page": "https://freesound.org/s/717358/",
+   "title": "Thunder - binaural from Zoom H3-VR",
+   "author": "StephanPot",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717358_10094394-hq.mp3",
+    "sha256": "9ea8a8123b496fe55c95d6d0f1fbda3648582783b7242f8011b7168d86194578",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    23.5,
+    24.46
+   ],
+   "bed_s": [
+    16.2,
+    17.0
+   ],
+   "onset_s": 18.1893,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 2.68,
+   "crest_db_before": 12.5,
+   "sha256_grain": "aad08e0371c7b075251edae14a83f2bd6f35100a4ac2e1de0b22440b06fc1dc2",
+   "centroid_hz": null,
+   "snr_db": 56.6
+  },
+  {
+   "id": "clap_088_717909",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_088_717909.ogg",
+   "dur_s": 0.96,
+   "source_id": 717909,
+   "source_page": "https://freesound.org/s/717909/",
+   "title": "230724 Thunder, close crack light rain, mixpreroof, Toronto 5pm",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717909_97550-hq.mp3",
+    "sha256": "acc293ba9ea902017d00874f99f46c0eeb898750d78f289c68ec4d02b7beb68c",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    7.7,
+    8.66
+   ],
+   "bed_s": [
+    29.5,
+    30.5
+   ],
+   "onset_s": 1.0386,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 12.64,
+   "crest_db_before": 15.5,
+   "sha256_grain": "2f1ab4cd4329151a38580f3c9e1613d32d9cee73cf11611252210c534c910851",
+   "centroid_hz": null,
+   "snr_db": 47.8
+  },
+  {
+   "id": "clap_089_717358",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_089_717358.ogg",
+   "dur_s": 0.96,
+   "source_id": 717358,
+   "source_page": "https://freesound.org/s/717358/",
+   "title": "Thunder - binaural from Zoom H3-VR",
+   "author": "StephanPot",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717358_10094394-hq.mp3",
+    "sha256": "9ea8a8123b496fe55c95d6d0f1fbda3648582783b7242f8011b7168d86194578",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    18.83,
+    19.79
+   ],
+   "bed_s": [
+    16.2,
+    17.0
+   ],
+   "onset_s": 18.1893,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": 2.04,
+   "crest_db_before": 7.5,
+   "sha256_grain": "03924c10a910d18883e4be3a759db628d7b1726aa884d2408fd40b10b762a63a",
+   "centroid_hz": null,
+   "snr_db": 56.6
+  },
+  {
+   "id": "clap_090_325503",
+   "kind": "clap",
+   "class_of_source": "thunder_close",
+   "file": "grains/clap_090_325503.ogg",
+   "dur_s": 0.96,
+   "source_id": 325503,
+   "source_page": "https://freesound.org/s/325503/",
+   "title": "Big rolling thunder and rain",
+   "author": "borralbi",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/325/325503_2774517-hq.mp3",
+    "sha256": "10c48a949bb239d98f6d89fc150ee963dc7d28e53fd1976eb8f3c4e12cb922ed",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    5.77,
+    6.73
+   ],
+   "bed_s": [
+    23.5,
+    24.5
+   ],
+   "onset_s": 1.2102,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [
+    "soft-clipped to 0.98 (peak was 0.2 dBFS)"
+   ],
+   "level_gain_db": 1.82,
+   "crest_db_before": 17.0,
+   "sha256_grain": "5bfa23d4eaf4781656a1f8020b7fc1119b1fd599b3225993c22f2a933bc38c81",
+   "centroid_hz": null,
+   "snr_db": 37.0
+  },
+  {
+   "id": "clap_091_646912",
+   "kind": "clap",
+   "class_of_source": "thunder_strike",
+   "file": "grains/clap_091_646912.ogg",
+   "dur_s": 0.96,
+   "source_id": 646912,
+   "source_page": "https://freesound.org/s/646912/",
+   "title": "Lightning strike 2",
+   "author": "alexdarek",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/646/646912_10586310-hq.mp3",
+    "sha256": "93042e52364324e371ff1fc03237e7e0297b0c8a36bcf8bcd930ca79bd04c9db",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    3.46,
+    4.42
+   ],
+   "bed_s": [
+    14.25,
+    15.25
+   ],
+   "onset_s": 1.2671,
+   "fade_ms": [
+    15,
+    450
+   ],
+   "processing": [],
+   "level_gain_db": -12.1,
+   "crest_db_before": 8.7,
+   "sha256_grain": "2544c7ba51aa69ae1615f42a60131552a97d9f4b434f42fb30c24c9a3ea21cc1",
+   "centroid_hz": null,
+   "snr_db": 40.5
+  },
+  {
+   "id": "roll_092_338088",
+   "kind": "roll",
+   "class_of_source": "thunder_strike",
+   "file": "grains/roll_092_338088.ogg",
+   "dur_s": 3.0,
+   "source_id": 338088,
+   "source_page": "https://freesound.org/s/338088/",
+   "title": "Thunder Clap 4",
+   "author": "jzielke011",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/338/338088_4535165-hq.mp3",
+    "sha256": "5ec3228099bb1079e94736bd6311034859a707ba4e22fc601cde9ab402b76932",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    3.7375,
+    6.7375
+   ],
+   "bed_s": [
+    12.25,
+    13.25
+   ],
+   "onset_s": 0.2375,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": -11.59,
+   "crest_db_before": 9.3,
+   "sha256_grain": "25f36ab61e9dc76641236d05121f12b79d9514091a3980bf74a4718ab9fef8dc",
+   "centroid_hz": null,
+   "snr_db": 193.8
+  },
+  {
+   "id": "roll_093_336314",
+   "kind": "roll",
+   "class_of_source": "thunder_strike",
+   "file": "grains/roll_093_336314.ogg",
+   "dur_s": 3.0,
+   "source_id": 336314,
+   "source_page": "https://freesound.org/s/336314/",
+   "title": "06/10/2014 close lightning strike",
+   "author": "supercell10",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/336/336314_2660518-hq.mp3",
+    "sha256": "d61f20336a73bcb7fa311bd55a26d5d9fe727c8b090574ba23fa740b96155eea",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    2.001,
+    5.001
+   ],
+   "bed_s": [
+    13.0,
+    14.0
+   ],
+   "onset_s": 0.001,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": -5.96,
+   "crest_db_before": 14.2,
+   "sha256_grain": "cf0f1d402da77735f57ab66aa410c48122784d8957386bd0f5483faf2f262e49",
+   "centroid_hz": null,
+   "snr_db": 61.3
+  },
+  {
+   "id": "roll_094_760214",
+   "kind": "roll",
+   "class_of_source": "thunder_strike",
+   "file": "grains/roll_094_760214.ogg",
+   "dur_s": 3.0,
+   "source_id": 760214,
+   "source_page": "https://freesound.org/s/760214/",
+   "title": "Thunder Clap And Rumble #7",
+   "author": "Kinoton",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/760/760214_2247456-hq.mp3",
+    "sha256": "5b9479902db171011dd6f49c2cc07db92dd487732bca991a8aceecb792805d25",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    2.6366,
+    5.6366
+   ],
+   "bed_s": [
+    14.0,
+    15.0
+   ],
+   "onset_s": 0.6366,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": -4.38,
+   "crest_db_before": 8.3,
+   "sha256_grain": "2c3a04bf5e85465a7d2ab15e376f5403be2f583131a742d7f025cb1447cfc0e6",
+   "centroid_hz": null,
+   "snr_db": 58.0
+  },
+  {
+   "id": "roll_095_253953",
+   "kind": "roll",
+   "class_of_source": "thunder_close",
+   "file": "grains/roll_095_253953.ogg",
+   "dur_s": 3.0,
+   "source_id": 253953,
+   "source_page": "https://freesound.org/s/253953/",
+   "title": "Thunder 1",
+   "author": "Yoyodaman234",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/253/253953_2792951-hq.mp3",
+    "sha256": "a1b57d07093ba489f0c6c9d775837ab920660c1db12d8760bb76d2a9c66b5ee3",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    2.895,
+    5.895
+   ],
+   "bed_s": [
+    18.5,
+    19.5
+   ],
+   "onset_s": 0.895,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": 7.78,
+   "crest_db_before": 13.0,
+   "sha256_grain": "c244a75f412dc22600f568039a85b717feae7ce7de2d30510736f6ae21d339e2",
+   "centroid_hz": null,
+   "snr_db": 60.1
+  },
+  {
+   "id": "roll_096_717358",
+   "kind": "roll",
+   "class_of_source": "thunder_strike",
+   "file": "grains/roll_096_717358.ogg",
+   "dur_s": 3.0,
+   "source_id": 717358,
+   "source_page": "https://freesound.org/s/717358/",
+   "title": "Thunder - binaural from Zoom H3-VR",
+   "author": "StephanPot",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717358_10094394-hq.mp3",
+    "sha256": "9ea8a8123b496fe55c95d6d0f1fbda3648582783b7242f8011b7168d86194578",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    24.6893,
+    27.6893
+   ],
+   "bed_s": [
+    16.2,
+    17.0
+   ],
+   "onset_s": 18.1893,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": -3.7,
+   "crest_db_before": 9.0,
+   "sha256_grain": "02151ce0c92556e441e55716f941d85827e856e6683df2a901ba84117e646432",
+   "centroid_hz": null,
+   "snr_db": 56.6
+  },
+  {
+   "id": "roll_097_616992",
+   "kind": "roll",
+   "class_of_source": "thunder_strike",
+   "file": "grains/roll_097_616992.ogg",
+   "dur_s": 3.0,
+   "source_id": 616992,
+   "source_page": "https://freesound.org/s/616992/",
+   "title": "210914 Thunder, crack, pretty close, bit of distortion, urban, TORONTO 1am.wav",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/616/616992_97550-hq.mp3",
+    "sha256": "05c32815b4919e0b6557a720594bdc8bd36a882e2157bc683ba57a36e4827008",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    7.5087,
+    10.5087
+   ],
+   "bed_s": [
+    37.5,
+    38.5
+   ],
+   "onset_s": 1.0087,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": -7.56,
+   "crest_db_before": 10.4,
+   "sha256_grain": "07f631d5b4f29420f1ee40cdec802fe88c6b7b2e5fe5a3fc74da43e74d394ff4",
+   "centroid_hz": null,
+   "snr_db": 53.8
+  },
+  {
+   "id": "roll_098_717907",
+   "kind": "roll",
+   "class_of_source": "thunder_strike",
+   "file": "grains/roll_098_717907.ogg",
+   "dur_s": 3.0,
+   "source_id": 717907,
+   "source_page": "https://freesound.org/s/717907/",
+   "title": "230713 Thunder, close crack crash big, mixpre6 AT875r EM272s, Stratford ON 2am",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717907_97550-hq.mp3",
+    "sha256": "b106efe7033b30553a77ebdfdd142752821022c262a138321ae2f8180dec9c44",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    2.6316,
+    5.6316
+   ],
+   "bed_s": [
+    35.0,
+    36.0
+   ],
+   "onset_s": 0.6316,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": 0.27,
+   "crest_db_before": 13.9,
+   "sha256_grain": "93ad7d062addf5a063c6ff3b83dacf95e32ae63c91f3cb7258a08a0a6c7adede",
+   "centroid_hz": null,
+   "snr_db": 54.0
+  },
+  {
+   "id": "roll_099_672776",
+   "kind": "roll",
+   "class_of_source": "thunder_close",
+   "file": "grains/roll_099_672776.ogg",
+   "dur_s": 3.0,
+   "source_id": 672776,
+   "source_page": "https://freesound.org/s/672776/",
+   "title": "Thunder Clap",
+   "author": "DaniloSFX",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/672/672776_1357949-hq.mp3",
+    "sha256": "813f57934c49e8c5185be340aca884bfdfdc50d208cb042b89f4fb6f1f5483dd",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    2.2195,
+    5.2195
+   ],
+   "bed_s": [
+    14.75,
+    15.75
+   ],
+   "onset_s": 0.2195,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": 4.29,
+   "crest_db_before": 14.4,
+   "sha256_grain": "4cb82345ba49a7a160fb990535128473c81cc98aee1837b8e7a141d75b5e6ec5",
+   "centroid_hz": null,
+   "snr_db": 52.1
+  },
+  {
+   "id": "roll_100_439550",
+   "kind": "roll",
+   "class_of_source": "thunder_close",
+   "file": "grains/roll_100_439550.ogg",
+   "dur_s": 3.0,
+   "source_id": 439550,
+   "source_page": "https://freesound.org/s/439550/",
+   "title": "Single huge clap of thunder",
+   "author": "richwise",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/439/439550_1481531-hq.mp3",
+    "sha256": "0ac3ded4c92c715162cd8d89758a3bb469eaea7224bcf28ba2a50e8fc9a7dce4",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    10.8801,
+    13.8801
+   ],
+   "bed_s": [
+    7.25,
+    8.05
+   ],
+   "onset_s": 8.8801,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": 12.49,
+   "crest_db_before": 13.8,
+   "sha256_grain": "1ac2baefad5aa719da9989123a1fadeae521e36586ca5c543f434d4bc7ad7203",
+   "centroid_hz": null,
+   "snr_db": 52.5
+  },
+  {
+   "id": "roll_101_717909",
+   "kind": "roll",
+   "class_of_source": "thunder_strike",
+   "file": "grains/roll_101_717909.ogg",
+   "dur_s": 3.0,
+   "source_id": 717909,
+   "source_page": "https://freesound.org/s/717909/",
+   "title": "230724 Thunder, close crack light rain, mixpreroof, Toronto 5pm",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/717/717909_97550-hq.mp3",
+    "sha256": "acc293ba9ea902017d00874f99f46c0eeb898750d78f289c68ec4d02b7beb68c",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    3.0386,
+    6.0386
+   ],
+   "bed_s": [
+    29.5,
+    30.5
+   ],
+   "onset_s": 1.0386,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": -8.14,
+   "crest_db_before": 12.4,
+   "sha256_grain": "d7d1c191a998b7aaa8a83729cd20138eba66cdd0059fb7be10c3308690f3a246",
+   "centroid_hz": null,
+   "snr_db": 47.8
+  },
+  {
+   "id": "mid_body_102_719552",
+   "kind": "mid_body",
+   "class_of_source": "thunder_mid",
+   "file": "grains/mid_body_102_719552.ogg",
+   "dur_s": 3.52,
+   "source_id": 719552,
+   "source_page": "https://freesound.org/s/719552/",
+   "title": "Thunder -  (Rumble)",
+   "author": "betostado99",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/719/719552_13751957-hq.mp3",
+    "sha256": "6c3cf040b24e2df1a95d2aa6d5ee17e33a9ac62fbfcaf163787343b71f90f7f2",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.729,
+    5.249
+   ],
+   "bed_s": [
+    16.0,
+    17.0
+   ],
+   "onset_s": 1.749,
+   "fade_ms": [
+    5,
+    800
+   ],
+   "processing": [],
+   "level_gain_db": 11.64,
+   "crest_db_before": 11.6,
+   "sha256_grain": "dd3592cb0988b8d8099c0b611f46fe82873c97769a7e2d4a5063c2603c6732cf",
+   "centroid_hz": null,
+   "snr_db": 51.5
+  },
+  {
+   "id": "mid_body_103_574387",
+   "kind": "mid_body",
+   "class_of_source": "thunder_mid",
+   "file": "grains/mid_body_103_574387.ogg",
+   "dur_s": 3.52,
+   "source_id": 574387,
+   "source_page": "https://freesound.org/s/574387/",
+   "title": "Rolling thunder closer ms 77mel 190903.flac",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/574/574387_97550-hq.mp3",
+    "sha256": "912b13da2abb9292ad5e5c4545303d28f468cc917d5c6bc1626d57f54f7dfc6b",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.5215,
+    5.0415
+   ],
+   "bed_s": [
+    22.75,
+    23.75
+   ],
+   "onset_s": 1.5415,
+   "fade_ms": [
+    5,
+    800
+   ],
+   "processing": [],
+   "level_gain_db": -6.54,
+   "crest_db_before": 13.1,
+   "sha256_grain": "956247739eea5cf7b5288e117fe78162d6b0914f4549390a0746035c6d3ea61b",
+   "centroid_hz": null,
+   "snr_db": 50.3
+  },
+  {
+   "id": "mid_body_104_616980",
+   "kind": "mid_body",
+   "class_of_source": "thunder_mid",
+   "file": "grains/mid_body_104_616980.ogg",
+   "dur_s": 3.52,
+   "source_id": 616980,
+   "source_page": "https://freesound.org/s/616980/",
+   "title": "210724 Thunder, single rolling, rain, STRATFORD 10pm.wav",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/616/616980_97550-hq.mp3",
+    "sha256": "af8ee7403d2c2cb40aa61111cab565ab00102e2d09cffe3ed3f277aaa3f759f3",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.9808,
+    5.5008
+   ],
+   "bed_s": [
+    0.25,
+    1.05
+   ],
+   "onset_s": 2.0008,
+   "fade_ms": [
+    5,
+    800
+   ],
+   "processing": [],
+   "level_gain_db": -6.56,
+   "crest_db_before": 11.2,
+   "sha256_grain": "121b0f78403be42b5f657f25925cd018bab0adb7325043b797219ae7dfb1d10b",
+   "centroid_hz": null,
+   "snr_db": 48.9
+  },
+  {
+   "id": "mid_body_105_640249",
+   "kind": "mid_body",
+   "class_of_source": "thunder_mid",
+   "file": "grains/mid_body_105_640249.ogg",
+   "dur_s": 3.52,
+   "source_id": 640249,
+   "source_page": "https://freesound.org/s/640249/",
+   "title": "Thunder rolls.mp3",
+   "author": "rockyistanbul",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/640/640249_13893750-hq.mp3",
+    "sha256": "ee9f566c3ed4376b5bbb65933661d8a953b378214d12521eb122dc5982ab037c",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    34.6915,
+    38.2115
+   ],
+   "bed_s": [
+    33.7,
+    34.5
+   ],
+   "onset_s": 34.7115,
+   "fade_ms": [
+    5,
+    800
+   ],
+   "processing": [],
+   "level_gain_db": -4.95,
+   "crest_db_before": 12.2,
+   "sha256_grain": "a852d731effb0f47040b5633998a95f3d8295dfe38117cd6ed6670a6ff5f3e29",
+   "centroid_hz": null,
+   "snr_db": 37.2
+  },
+  {
+   "id": "mid_roll_106_719552",
+   "kind": "mid_roll",
+   "class_of_source": "thunder_mid",
+   "file": "grains/mid_roll_106_719552.ogg",
+   "dur_s": 3.0,
+   "source_id": 719552,
+   "source_page": "https://freesound.org/s/719552/",
+   "title": "Thunder -  (Rumble)",
+   "author": "betostado99",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/719/719552_13751957-hq.mp3",
+    "sha256": "6c3cf040b24e2df1a95d2aa6d5ee17e33a9ac62fbfcaf163787343b71f90f7f2",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    5.749,
+    8.749
+   ],
+   "bed_s": [
+    16.0,
+    17.0
+   ],
+   "onset_s": 1.749,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": 9.0,
+   "crest_db_before": 13.5,
+   "sha256_grain": "0c255ccb3300a473dee8265092ef5d09672c3ff0636df673091e6d71f52ef170",
+   "centroid_hz": null,
+   "snr_db": 51.5
+  },
+  {
+   "id": "mid_roll_107_616980",
+   "kind": "mid_roll",
+   "class_of_source": "thunder_mid",
+   "file": "grains/mid_roll_107_616980.ogg",
+   "dur_s": 3.0,
+   "source_id": 616980,
+   "source_page": "https://freesound.org/s/616980/",
+   "title": "210724 Thunder, single rolling, rain, STRATFORD 10pm.wav",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/616/616980_97550-hq.mp3",
+    "sha256": "af8ee7403d2c2cb40aa61111cab565ab00102e2d09cffe3ed3f277aaa3f759f3",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    4.5008,
+    7.5008
+   ],
+   "bed_s": [
+    0.25,
+    1.05
+   ],
+   "onset_s": 2.0008,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": -7.64,
+   "crest_db_before": 11.4,
+   "sha256_grain": "86666f01f32900f9cee8e6cb6ab6d1a1bf8edfa46835359d34d5e53c860124c6",
+   "centroid_hz": null,
+   "snr_db": 48.9
+  },
+  {
+   "id": "mid_roll_108_574387",
+   "kind": "mid_roll",
+   "class_of_source": "thunder_mid",
+   "file": "grains/mid_roll_108_574387.ogg",
+   "dur_s": 3.0,
+   "source_id": 574387,
+   "source_page": "https://freesound.org/s/574387/",
+   "title": "Rolling thunder closer ms 77mel 190903.flac",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/574/574387_97550-hq.mp3",
+    "sha256": "912b13da2abb9292ad5e5c4545303d28f468cc917d5c6bc1626d57f54f7dfc6b",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    4.0415,
+    7.0415
+   ],
+   "bed_s": [
+    22.75,
+    23.75
+   ],
+   "onset_s": 1.5415,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": -0.74,
+   "crest_db_before": 14.9,
+   "sha256_grain": "249a47fdd0419faeb0b1e5f78bad1b459f7e5a336cdce5ca897993c09d9804dd",
+   "centroid_hz": null,
+   "snr_db": 50.3
+  },
+  {
+   "id": "mid_roll_109_640249",
+   "kind": "mid_roll",
+   "class_of_source": "thunder_mid",
+   "file": "grains/mid_roll_109_640249.ogg",
+   "dur_s": 3.0,
+   "source_id": 640249,
+   "source_page": "https://freesound.org/s/640249/",
+   "title": "Thunder rolls.mp3",
+   "author": "rockyistanbul",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/640/640249_13893750-hq.mp3",
+    "sha256": "ee9f566c3ed4376b5bbb65933661d8a953b378214d12521eb122dc5982ab037c",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    37.2115,
+    40.2115
+   ],
+   "bed_s": [
+    33.7,
+    34.5
+   ],
+   "onset_s": 34.7115,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": 1.42,
+   "crest_db_before": 11.9,
+   "sha256_grain": "43893899a81fe74e9097cddbba4f1f55dd970bd4ddec63e3e517f1a125237afd",
+   "centroid_hz": null,
+   "snr_db": 37.2
+  },
+  {
+   "id": "mid_roll_110_400987",
+   "kind": "mid_roll",
+   "class_of_source": "thunder_mid",
+   "file": "grains/mid_roll_110_400987.ogg",
+   "dur_s": 3.0,
+   "source_id": 400987,
+   "source_page": "https://freesound.org/s/400987/",
+   "title": "Rumblings of thunder.mp3",
+   "author": "Techienanna",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/400/400987_3798635-hq.mp3",
+    "sha256": "084c5eb10b3232bd8e7f62aee71e0eefacf8c258f64bc40ec563e2e7e61c9747",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    111.8304,
+    114.8304
+   ],
+   "bed_s": [
+    108.3,
+    109.1
+   ],
+   "onset_s": 109.3304,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": 6.99,
+   "crest_db_before": 12.8,
+   "sha256_grain": "1ca113d6aa5b99621129138c379ae4b84bef96d28e071353cdd056a554d52823",
+   "centroid_hz": null,
+   "snr_db": 34.9
+  },
+  {
+   "id": "mid_roll_111_653664",
+   "kind": "mid_roll",
+   "class_of_source": "thunder_mid",
+   "file": "grains/mid_roll_111_653664.ogg",
+   "dur_s": 3.0,
+   "source_id": 653664,
+   "source_page": "https://freesound.org/s/653664/",
+   "title": "STE-050-quiet rumble thunder.wav",
+   "author": "tams_kp",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/653/653664_266548-hq.mp3",
+    "sha256": "d5169a7dd88d266751b81dda28bdeb933bd20441d456b221fd861aa0d3724412",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    9.0428,
+    12.0428
+   ],
+   "bed_s": [
+    19.5,
+    20.5
+   ],
+   "onset_s": 0.5428,
+   "fade_ms": [
+    300,
+    600
+   ],
+   "processing": [],
+   "level_gain_db": 2.11,
+   "crest_db_before": 10.8,
+   "sha256_grain": "dd261ad3d4c3284fea353f4e8530c9a18ae8a4102f8a3833d007db38e9999b42",
+   "centroid_hz": null,
+   "snr_db": 34.6
+  },
+  {
+   "id": "far_roll_112_267550",
+   "kind": "far_roll",
+   "class_of_source": "thunder_far",
+   "file": "grains/far_roll_112_267550.ogg",
+   "dur_s": 3.5,
+   "source_id": 267550,
+   "source_page": "https://freesound.org/s/267550/",
+   "title": "Thunder3",
+   "author": "Yoyodaman234",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/267/267550_2792951-hq.mp3",
+    "sha256": "59f048a72a25d52b4bdd9b8ffc32e3dfcd01abeb3be21c5df27648aaa2428bce",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    4.6834,
+    8.1834
+   ],
+   "bed_s": [
+    1.95,
+    2.75
+   ],
+   "onset_s": 2.9834,
+   "fade_ms": [
+    400,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -7.43,
+   "crest_db_before": 12.8,
+   "sha256_grain": "bba4800e702b4339464326023c856c24f52fe1b38ba23f0371876820f678abe7",
+   "centroid_hz": null,
+   "snr_db": 54.1
+  },
+  {
+   "id": "far_roll_113_414064",
+   "kind": "far_roll",
+   "class_of_source": "thunder_far",
+   "file": "grains/far_roll_113_414064.ogg",
+   "dur_s": 3.5,
+   "source_id": 414064,
+   "source_page": "https://freesound.org/s/414064/",
+   "title": "Distant Thunder isolated.wav",
+   "author": "dr19",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/414/414064_5984825-hq.mp3",
+    "sha256": "9b6bf858b8c8af66de15891e343d4ae003f2e3595d13d3c8574b4b13ed4fe594",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    1.3689,
+    4.8689
+   ],
+   "bed_s": [
+    15.5,
+    16.5
+   ],
+   "onset_s": 1.3689,
+   "fade_ms": [
+    400,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -1.65,
+   "crest_db_before": 7.7,
+   "sha256_grain": "f24e8790abecdcaf21464a2527c613fcfaa82aca214fae5674611f2f7a7a25d3",
+   "centroid_hz": null,
+   "snr_db": 46.3
+  },
+  {
+   "id": "far_roll_114_419051",
+   "kind": "far_roll",
+   "class_of_source": "thunder_far",
+   "file": "grains/far_roll_114_419051.ogg",
+   "dur_s": 3.5,
+   "source_id": 419051,
+   "source_page": "https://freesound.org/s/419051/",
+   "title": "thunder+rain1.m4a",
+   "author": "enc3062",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/419/419051_4194075-hq.mp3",
+    "sha256": "ca0cdd1c901540d5f30b790220643e34fbb8b78449ec164088bb376170328967",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.9638,
+    4.4638
+   ],
+   "bed_s": [
+    28.5,
+    29.5
+   ],
+   "onset_s": 0.9638,
+   "fade_ms": [
+    400,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -10.02,
+   "crest_db_before": 10.7,
+   "sha256_grain": "355f3f9ea56184799eda52dd0a981204e199e0927b76bf00e4deea18a1df8d30",
+   "centroid_hz": null,
+   "snr_db": 34.8
+  },
+  {
+   "id": "far_roll_115_478026",
+   "kind": "far_roll",
+   "class_of_source": "thunder_far",
+   "file": "grains/far_roll_115_478026.ogg",
+   "dur_s": 3.5,
+   "source_id": 478026,
+   "source_page": "https://freesound.org/s/478026/",
+   "title": "rain_far_thunder_ambience_dripping_trop-002.aif",
+   "author": "EricsSoundschmiede",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/478/478026_1106446-hq.mp3",
+    "sha256": "635dc763a96c63a00e6560b39b3ab5897c73ae8239287c819bbadc28d9570a73",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    7.317,
+    10.817
+   ],
+   "bed_s": [
+    6.1,
+    6.9
+   ],
+   "onset_s": 7.317,
+   "fade_ms": [
+    400,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -0.31,
+   "crest_db_before": 10.0,
+   "sha256_grain": "f62a29135780a138c80bcfb9faf28719754edd19a3e4ca1a05c162d582cd9b37",
+   "centroid_hz": null,
+   "snr_db": 34.3
+  },
+  {
+   "id": "far_roll_116_616976",
+   "kind": "far_roll",
+   "class_of_source": "thunder_far",
+   "file": "grains/far_roll_116_616976.ogg",
+   "dur_s": 3.5,
+   "source_id": 616976,
+   "source_page": "https://freesound.org/s/616976/",
+   "title": "210629 Thunder, various rolling, rain, weird screaming in bg, sparrows, robins, urban residential, TORONTO, 6pm.wav",
+   "author": "TRP",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/616/616976_97550-hq.mp3",
+    "sha256": "69c734e10baac1509587eccab66968de504e6aa0751cd3992dc04757fa173e12",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    0.876,
+    4.376
+   ],
+   "bed_s": [
+    58.25,
+    59.25
+   ],
+   "onset_s": 0.876,
+   "fade_ms": [
+    400,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -4.69,
+   "crest_db_before": 11.5,
+   "sha256_grain": "1c2546f9a0b0bb6d3d930d61afd31c48624d72dd072a6aba70a39ba76a88f86e",
+   "centroid_hz": null,
+   "snr_db": 33.2
+  },
+  {
+   "id": "far_roll_117_546677",
+   "kind": "far_roll",
+   "class_of_source": "thunder_far",
+   "file": "grains/far_roll_117_546677.ogg",
+   "dur_s": 3.5,
+   "source_id": 546677,
+   "source_page": "https://freesound.org/s/546677/",
+   "title": "Thunder",
+   "author": "trezz77",
+   "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+   "licence_checked": "2026-11-25",
+   "source_file": {
+    "file": "hq_preview",
+    "url": "https://cdn.freesound.org/previews/546/546677_5637404-hq.mp3",
+    "sha256": "ca444855c00c6368c36858f82f68230ee54ac3d05e7f071a292972bf81e68f56",
+    "offset_s": 0.0
+   },
+   "cut_s": [
+    5.0415,
+    8.5415
+   ],
+   "bed_s": [
+    4.05,
+    4.85
+   ],
+   "onset_s": 5.0415,
+   "fade_ms": [
+    400,
+    700
+   ],
+   "processing": [],
+   "level_gain_db": -8.06,
+   "crest_db_before": 8.5,
+   "sha256_grain": "98307bbe1ad4412771943693ebf52e92aa5c8b8abc57ff9e4560cc05cdc3d0a1",
+   "centroid_hz": null,
+   "snr_db": 31.9
+  }
+ ]
+}

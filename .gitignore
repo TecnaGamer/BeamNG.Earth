@@ -33,8 +33,8 @@ native/serverlist/target/
 native/weathersynth/target/
 # the reviewed crates, rebuilt by native/weathersynth/tools/vendor_reviewed.py (not committed: Cargo.lock pins their checksums)
 native/weathersynth/vendor/
-# the thunder grain bank (17 MB of raw i16 PCM, `weathersynth grainbank-pack`): how it ships is not decided yet
-# (committed, or packed once in the release workflow from the 2.2 MB Ogg grains); its credits file is committed
+# the thunder grain bank (17 MB of raw i16 PCM): built from the committed assets/grains/ by `weathersynth
+# grainbank-pack` (locally on demand; in the release workflow once, then bundled with both platforms' apps)
 native/weathersynth/assets/thunder_grains.bin
 server/earthfast.FAST-BUILD-do-not-commit
 *.prof

@@ -112,11 +112,20 @@ recordings), layered and spread in time by a random lightning channel. The behav
 `~/bnge-tests/weather/procedural/grainbank/v1/SPEC.md`, ported from its Python reference renderer. Over 10 seeds per
 class the port passes the spec's acceptance checks (`~/bnge-tests/weather/procedural/finalA/accept.py`).
 
-- **The bank:** `assets/thunder_grains.bin`, raw i16 PCM with a small header and an FNV checksum, so no Vorbis decoder
-  is involved at run time.
-  - `weathersynth grainbank-pack --manifest .../grainbank/v1/manifest.json --out assets/thunder_grains.bin` writes it
-    from the cutting tool's output. A re-cut from the original recordings only swaps this file.
-  - The credits for the 42 recordists are in `assets/thunder_grains_CREDITS.md`.
+- **The sources (committed):** `assets/grains/` is the cutting tool's output as it comes: `manifest.json`,
+  `grains/*.ogg` (2.2 MB, Vorbis q5) and `CREDITS.md` (the 42 recordists). A re-cut from the original recordings
+  replaces that folder.
+- **The bank (built, gitignored):** `assets/thunder_grains.bin`, raw i16 PCM with a small header and an FNV checksum,
+  so no Vorbis decoder is involved at run time. Build it with `weathersynth grainbank-pack`, run in this folder (the
+  defaults are `--manifest assets/grains/manifest.json --out assets/thunder_grains.bin`).
+- **How the pack decodes:**
+  - ffmpeg's own Vorbis decoder, named explicitly (`-c:a vorbis`, not libvorbis);
+  - its float output taken as is (`-f f32le`; the grains are mono 44.1 kHz, so nothing is remixed or resampled);
+  - the conversion to 16 bits done in Rust (x 32767, rounded half away from zero, clamped).
+- **The decoder as the only variable:** `assets/grains/thunder_grains.bin.sha256` is the bank packed with ffmpeg
+  n9.0.2. The release workflow packs once (Ubuntu 22.04's ffmpeg) and warns when its sha256 differs; both platforms'
+  apps then bundle that one file. A different decoder build moves samples by at most a few LSB (the finalA renders
+  moved by at most -70 dB re peak between the two pack paths).
 - **Offline:** `weathersynth grains-set --bank assets/thunder_grains.bin --out DIR --ogg` renders `bne_thunder_<class>1/2`
   (seeds 1 and 2), each levelled to its class target with a sample peak at most -1 dBFS.
   `grains-render ... --class C --seed N [--dist M] [--live]` renders a single strike.

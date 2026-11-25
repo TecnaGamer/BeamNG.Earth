@@ -12,7 +12,7 @@
 //!   weathersynth live-bench [--seconds S] [--block N] [--wav F]   the live rain engine timed (prototype)
 //!   weathersynth thunder-bench [--micro M]           live thunder render times by distance
 //!   weathersynth live-serve [--thunder grains|procedural|files:DIR]   the live weather sounds (serve.rs)
-//!   weathersynth grainbank-pack --manifest M --out BIN     the grain bank's manifest + grains/*.ogg into one i16 .bin
+//!   weathersynth grainbank-pack [--manifest M] [--out BIN]   assets/grains (manifest + grains/*.ogg) into one i16 .bin
 //!   weathersynth grains-render --bank BIN --class C --seed N [--dist M] [--live] --out F.wav   one grain-bank strike
 //!   weathersynth grains-set --bank BIN --out DIR [--seeds A,B] [--ogg]   bne_thunder_<class>1/2 from the grain bank
 
@@ -289,7 +289,7 @@ fn run() -> Result<(), String> {
         }
         "live-serve" => serve::run(&args)?,
         "grainbank-pack" => {
-            let man = arg(&args, "--manifest").ok_or("--manifest")?;
+            let man = arg(&args, "--manifest").unwrap_or_else(|| "assets/grains/manifest.json".into());
             let out = arg(&args, "--out").unwrap_or_else(|| format!("assets/{}", grainbank::BANK_FILE));
             println!("{}", grainbank::pack(&man, &out)?);
         }
