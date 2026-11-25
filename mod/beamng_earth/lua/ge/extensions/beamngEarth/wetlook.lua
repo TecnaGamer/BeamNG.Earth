@@ -25,8 +25,11 @@ M.RESCAN_S = 30           -- while wet, new materials (tiles loaded since) looke
 
 -- Surface classes: { porosity (0 none .. 1 most: how much darker wet), gloss (0..1: how much the roughness falls) }.
 M.CLASSES = {
-  asphalt = { 0.55, 0.75 },   -- mesh carriageways, decks, asphalt walks: dark and shiny wet
-  concrete = { 0.6, 0.6 },    -- sidewalks, curbs, slabs, setts, concrete decks
+  -- (phase C, broker wc19 / wc21 against the rain photos: a wet surface reads darker only when its colour falls well
+  -- below dry, the sky's sheen outweighing a smaller drop, as on the terrain's streets; the gloss of concrete lower so
+  -- the sheen does not turn it milky)
+  asphalt = { 0.75, 0.75 },   -- mesh carriageways, decks, asphalt walks: dark and shiny wet
+  concrete = { 0.9, 0.45 },   -- sidewalks, curbs, slabs, setts, concrete decks
   marking = { 0.1, 0.7 },     -- paint: hardly darker, glossy
   wall = { 0.25, 0.35 },      -- facades: rain wets them in streaks; a little
   roof = { 0.5, 0.6 },
@@ -58,8 +61,9 @@ M.WORDS = { { 'sidewalk', 'concrete' }, { 'curb', 'concrete' }, { 'kerb', 'concr
   { 'crossing', 'marking' }, { 'marking', 'marking' } }
 M.WORDS_NOT = { 'glass', 'light', 'lamp', 'sign', 'glow', 'decal_' }
 M.NOT = { bne_bld_sky = true, bne_bld_skywin = true, bne_bld_glasshouse = true, bne_bld_lobby = true }   -- (lit windows)
-M.WET_DARK = 0.7          -- a porosity-1 surface's colour at full wetness: x (1 - WET_DARK) (Lagarde's 0.2..0.5); at 0.6 the
-                          -- Tokyo sidewalks hardly showed it in the broker shots (wb9), at 0.95 clearly (wb11)
+M.WET_DARK = 0.85         -- a porosity-1 surface's colour at full wetness: x (1 - WET_DARK) (Lagarde's 0.2..0.5); at 0.6 the
+                          -- Tokyo sidewalks hardly showed it in the broker shots (wb9), at 0.95 clearly (wb11); 0.7 with
+                          -- concrete 0.6 still read pale under the sheen (wc19, wc21): concrete x 0.24, asphalt x 0.36 now
 M.WET_ROUGH = 0.85        -- a gloss-1 surface's roughness falls by this share at full wetness
 M.ROUGH_MIN = 0.06
 
