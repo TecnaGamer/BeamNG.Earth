@@ -792,6 +792,37 @@ class CeilTest(unittest.TestCase):
         finally:
             importlib.reload(roadsys)
 
+    def test_a_short_ceiling_answers_a_while_and_is_never_kept(self):
+        import mapcells
+        import roadsys
+        e, _c = self.ceil([self.low()])
+        calls = []
+
+        def inputs(frame, cell_fn, keys, reg, view):
+            calls.append(1)
+            revisit.fault()             # (a short read)
+            return [], []
+
+        class F:
+            lat0 = lon0 = 0.0
+
+            def geodetic_to_enu(self, la, lo, h):
+                return np.asarray(lo, np.float64) * 1e5, np.asarray(la, np.float64) * 1e5, np.zeros(np.shape(la))
+        key = mapcells.CellKey(mapcells.ZOOM, 1, 1)
+        roadsys._ceil_memo.clear()
+        with mock.patch.object(roadsys, "ends_of_cell", lambda f, cf, k: e), \
+                mock.patch.object(roadsys, "_decks_view", lambda f: object()), \
+                mock.patch.object(roadsys, "_ceil_inputs", inputs):
+            for _ in range(3):
+                with revisit.scope() as b:
+                    roadsys.ceil_of_cell(F(), None, key)
+                self.assertFalse(b.complete, "every use of a short ceiling is short")
+            self.assertEqual(len(calls), 1)
+            with mock.patch.object(roadsys, "CEIL_SHORT_TTL_S", -1.0):
+                roadsys.ceil_of_cell(F(), None, key)
+            self.assertEqual(len(calls), 2, "read again once its time is up")
+        roadsys._ceil_memo.clear()
+
     def test_keyed_and_wired(self):
         self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 6)
         self.assertGreaterEqual(fast.MIN_VERSION, 630)

@@ -1445,6 +1445,8 @@ def handover_drop(frame, cell_fn, la, lo):
 # ------------------------------------------------------------------------- M5: the ground under the decks
 
 CEIL_CELLS_KEPT = 64            # RoadsysCeil kept per process (per frame and centre cell)
+CEIL_SHORT_TTL_S = SHORT_TTL_S  # s a ceiling made from a short read answers again (each use faulted: never kept) before
+                                # it is read again (rebuilt on every query, the corpus' first visits took 18 s -> 35 min)
 _ceil_memo = {}
 _views = {}
 CEIL_STATS = {"built": 0, "hits": 0, "decks": 0, "short": 0, "cut": 0}
@@ -1517,8 +1519,8 @@ def ceil_of_cell(frame, cell_fn, key):
     lie over it, read from the 3 x 3 cells round it as the ends are (a deck over a point reaches it from those cells:
     a point's ceiling is the same whichever caller asks), each deck's heights its chain's published solve. None when a
     cell cannot be read; the ends alone (their drop) when no bridge chains are at hand (DECKS_FN unset) or their read
-    failed. Kept only when every read was complete (a short chain's stand-in heights answer this call alone, its fault
-    the caller's)."""
+    failed. Kept for good only when every read was complete; one made from a short read (a short chain's stand-in
+    heights) answers for CEIL_SHORT_TTL_S, each use faulted (not kept), then is read again."""
     import heightmap
     import mapcells
     import revisit
@@ -1528,9 +1530,11 @@ def ceil_of_cell(frame, cell_fn, key):
     mk = (_frame_key(frame), str(key), float(heightmap.SQUARE))
     with _ends_lock:
         got = _ceil_memo.get(mk)
-        if got is not None:
+        if got is not None and (got[1] or time.monotonic() - got[2] < CEIL_SHORT_TTL_S):
             CEIL_STATS["hits"] += 1
-            return got
+            if not got[1]:
+                revisit.fault()             # (made from a short read: whoever builds on it is short too)
+            return got[0]
     view = _decks_view(frame)
     if view is None:
         return ends.ceil([], [])
@@ -1550,9 +1554,11 @@ def ceil_of_cell(frame, cell_fn, key):
             revisit.fault()
             got = None
     if got is None:             # (the drop alone, as structures has it: not kept)
+        c = ends.ceil([], [])
         with _ends_lock:
             CEIL_STATS["short"] += 1
-        return ends.ceil([], [])
+            _ceil_memo[mk] = (c, False, time.monotonic())
+        return c
     c = ends.ceil(*got)
     if CEIL_DUMP and c.count():
         with open(os.path.join(CEIL_DUMP, f"ceil_{float(frame.lat0):.6f}_{float(frame.lon0):.6f}_{key.z}_{key.x}_{key.y}.rsce"),
@@ -1561,12 +1567,12 @@ def ceil_of_cell(frame, cell_fn, key):
     with _ends_lock:
         CEIL_STATS["built"] += 1
         CEIL_STATS["decks"] += int(c.count())
-        if read.complete:
-            _ceil_memo[mk] = c
-            while len(_ceil_memo) > CEIL_CELLS_KEPT:
-                _ceil_memo.pop(next(iter(_ceil_memo)))
-        else:
+        if not read.complete:
             CEIL_STATS["short"] += 1
+        _ceil_memo.pop(mk, None)
+        _ceil_memo[mk] = (c, bool(read.complete), time.monotonic())
+        while len(_ceil_memo) > CEIL_CELLS_KEPT:
+            _ceil_memo.pop(next(iter(_ceil_memo)))
     return c
 
 
