@@ -158,6 +158,22 @@ impl Biquad {
         let a0 = 1.0 + al;
         Biquad::new((1.0 + c) / 2.0 / a0, -(1.0 + c) / a0, (1.0 + c) / 2.0 / a0, -2.0 * c / a0, (1.0 - al) / a0)
     }
+    /// High shelf (RBJ, slope 1): gain_db above f0.
+    pub fn highshelf(fs: f64, f0: f64, gain_db: f64) -> Biquad {
+        let a = m::pow(10.0, gain_db / 40.0);
+        let w = m::TAU * f0 / fs;
+        let (s, c) = (m::sin(w), m::cos(w));
+        let alpha = s / 2.0 * m::sqrt(2.0); // S = 1
+        let sa = 2.0 * m::sqrt(a) * alpha;
+        let a0 = (a + 1.0) - (a - 1.0) * c + sa;
+        Biquad::new(
+            a * ((a + 1.0) + (a - 1.0) * c + sa) / a0,
+            -2.0 * a * ((a - 1.0) + (a + 1.0) * c) / a0,
+            a * ((a + 1.0) + (a - 1.0) * c - sa) / a0,
+            2.0 * ((a - 1.0) - (a + 1.0) * c) / a0,
+            ((a + 1.0) - (a - 1.0) * c - sa) / a0,
+        )
+    }
     /// Band-pass, 0 dB peak gain.
     pub fn bandpass(fs: f64, f0: f64, q: f64) -> Biquad {
         let w = m::TAU * f0 / fs;

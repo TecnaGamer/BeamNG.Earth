@@ -188,6 +188,7 @@ fn run() -> Result<(), String> {
             });
             println!("{}", live::bench_with(secs, block, arg(&args, "--wav").as_deref(), fixed));
         }
+        "drop-spectra" => print!("{}", rain::drop_spectra()),
         "thunder-bench" => {
             let mm: f64 = arg(&args, "--micro").unwrap_or("0.25".into()).parse().map_err(|_| "bad --micro")?;
             print!("{}", live::thunder_bench(mm));

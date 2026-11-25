@@ -164,9 +164,59 @@ fn mix_into(a: &mut Vec<f64>, b: &[f64], off: usize, g: f64) {
     }
 }
 
+/// Tone variants for the user's listening test (2026-11-25: "The droplets sound a bit high pitched"), picked with
+/// WEATHERSYNTH_TONE (unset: rain2 as rendered before).
+/// - A: fewer, lower bubbles: puddles at 0.4 of their share, no small (0.19-0.3 mm) bubbles, every bubble radius
+///   x1.8 (pitch x0.55);
+/// - B: A + impacts with more low-mid body: the splash band an octave lower, a soft 200-800 Hz thud on asphalt and
+///   car metal;
+/// - C: B + a -4 dB high shelf above 4 kHz, leaf modes and drips a fifth lower (x2/3);
+/// - D: C + metal (car panels, signs, gutters) about an octave lower and damped (Q x0.25): a knock, not a ping.
+#[derive(Clone, Copy)]
+pub(crate) struct Tone {
+    pub puddle: f64,
+    pub small_bubbles: bool,
+    pub bubble_r: f64,
+    pub splash_fc: f64,
+    pub thud: f64,
+    pub shelf_db: f64,
+    pub drip_pitch: f64,
+    /// metal modes' pitch and Q factors (D: a damped car panel, not a bell)
+    pub metal_f: f64,
+    pub metal_q: f64,
+}
+
+pub(crate) fn tone() -> Tone {
+    static T: std::sync::OnceLock<Tone> = std::sync::OnceLock::new();
+    *T.get_or_init(|| {
+        let base = Tone {
+            puddle: 1.0,
+            small_bubbles: true,
+            bubble_r: 1.0,
+            splash_fc: 1.0,
+            thud: 0.0,
+            shelf_db: 0.0,
+            drip_pitch: 1.0,
+            metal_f: 1.0,
+            metal_q: 1.0,
+        };
+        let a = Tone { puddle: 0.4, small_bubbles: false, bubble_r: 1.8, ..base };
+        let b = Tone { splash_fc: 0.5, thud: 1.0, ..a };
+        let c = Tone { shelf_db: -4.0, drip_pitch: 2.0 / 3.0, ..b };
+        let d = Tone { metal_f: 0.45, metal_q: 0.25, ..c };
+        match std::env::var("WEATHERSYNTH_TONE").as_deref() {
+            Ok("A") => a,
+            Ok("B") => b,
+            Ok("C") => c,
+            Ok("D") => d,
+            _ => base,
+        }
+    })
+}
+
 fn splash(rng: &mut Rng, d: f64, film: f64) -> Vec<f64> {
     // the impact: broadband, centred lower for bigger drops
-    let fc = (2200.0 * m::pow(2.0 / d, 0.5) * rng.range(0.7, 1.4)).min(14000.0);
+    let fc = (2200.0 * tone().splash_fc * m::pow(2.0 / d, 0.5) * rng.range(0.7, 1.4)).min(14000.0);
     let mut bp = Biquad::bandpass(FS, fc, 0.7);
     let mut ev = noise_burst(rng, 0.25 + 0.15 * d, 6.0, &mut bp);
     // the body of the splash (the sheet and crown of water): a short low burst, stronger for big drops
@@ -194,11 +244,11 @@ fn grass(rng: &mut Rng, d: f64) -> Vec<f64> {
     noise_burst(rng, 0.3 + 0.2 * d, 6.0, &mut bp)
 }
 
-fn leaf(rng: &mut Rng) -> Vec<f64> {
+fn leaf(rng: &mut Rng, pitch: f64) -> Vec<f64> {
     let modes = 2 + rng.poisson(0.6).min(2);
     let mut ev = Vec::new();
     for _ in 0..modes {
-        let f = rng.lognormal(700.0, 0.5).clamp(200.0, 3500.0);
+        let f = rng.lognormal(700.0, 0.5).clamp(200.0, 3500.0) * pitch;
         let q = rng.range(3.0, 8.0);
         let dec = m::PI * f / q;
         let n = ((6.9 / dec) * FS) as usize + 1;
@@ -249,19 +299,26 @@ fn entrained(rng: &mut Rng, d: f64) -> Option<f64> {
     } else {
         (0.45, rng.lognormal(0.9e-3, 0.5).clamp(0.3e-3, 3e-3))
     };
-    if rng.chance(p) {
-        Some(a)
-    } else {
-        None
+    let keep = rng.chance(p);
+    if !keep || (d < 1.3 && !tone().small_bubbles) {
+        return None;
     }
+    Some(a * tone().bubble_r)
+}
+
+/// A soft low thud (200-800 Hz, a few ms): the drop's knock on asphalt or a car panel under the splash.
+fn thud(rng: &mut Rng, d: f64) -> Vec<f64> {
+    let fc = rng.lognormal(400.0, 0.35).clamp(200.0, 800.0);
+    let mut bp = Biquad::bandpass(FS, fc, 0.8);
+    noise_burst(rng, 2.0 + 1.0 * d, 5.0, &mut bp)
 }
 
 fn metal(rng: &mut Rng) -> Vec<f64> {
     // thin sheet metal (a gutter, a car body, a sign): a hard tick and a few lightly damped modes
     let mut ev = Vec::new();
     for _ in 0..3 {
-        let f = rng.lognormal(2600.0, 0.45).clamp(700.0, 9000.0);
-        let q = rng.range(30.0, 110.0);
+        let f = rng.lognormal(2600.0, 0.45).clamp(700.0, 9000.0) * tone().metal_f;
+        let q = rng.range(30.0, 110.0) * tone().metal_q;
         let dec = m::PI * f / q;
         let n = ((6.9 / dec) * FS) as usize + 1;
         let a = rng.range(0.3, 1.0);
@@ -273,7 +330,7 @@ fn metal(rng: &mut Rng) -> Vec<f64> {
             .collect();
         mix_into(&mut ev, &md, 0, 0.5);
     }
-    let mut bp = Biquad::bandpass(FS, rng.range(4000.0, 8000.0), 0.8);
+    let mut bp = Biquad::bandpass(FS, rng.range(4000.0, 8000.0) * tone().metal_f.max(0.6), 0.8);
     let tick = noise_burst(rng, 0.08, 6.0, &mut bp);
     mix_into(&mut ev, &tick, 0, 1.0);
     ev
@@ -283,23 +340,38 @@ fn metal(rng: &mut Rng) -> Vec<f64> {
 /// `film`: how much standing water there is (1 a wet road; more in a downpour): more crown spray (the secondary
 /// droplets' ticks) and more small bubbles from it.
 pub(crate) fn drop_event(rng: &mut Rng, surf: Surf, d: f64, v: f64, film: f64) -> Vec<f64> {
+    drop_event_pitched(rng, surf, d, v, film, 1.0)
+}
+
+/// `pitch`: drips (tone C) sound lower: their leaf modes and bubbles scaled by it.
+fn drop_event_pitched(rng: &mut Rng, surf: Surf, d: f64, v: f64, film: f64, pitch: f64) -> Vec<f64> {
     let a = impact_amp(d, v);
+    let tn = tone();
     let mut ev: Vec<f64> = match surf {
         Surf::Road => splash(rng, d, film),
         Surf::Puddle => splash(rng, d, film).into_iter().map(|x| x * 0.7).collect(),
         Surf::Grass => grass(rng, d).into_iter().map(|x| x * 0.45).collect(),
-        Surf::Leaves => leaf(rng).into_iter().map(|x| x * 0.3).collect(),
+        Surf::Leaves => leaf(rng, tn.drip_pitch * pitch).into_iter().map(|x| x * 0.3).collect(),
         Surf::Metal => metal(rng).into_iter().map(|x| x * 1.2).collect(),
     };
+    if tn.thud > 0.0 && matches!(surf, Surf::Road | Surf::Metal) {
+        let g = tn.thud * m::sqrt(d / 2.0) * if surf == Surf::Metal { 0.8 } else { 1.0 };
+        let t = thud(rng, d);
+        mix_into(&mut ev, &t, 0, g);
+    }
     for x in ev.iter_mut() {
         *x *= a;
     }
     // bubbles: in puddles; on the wet road's film now and then (small ones)
     let bub = match surf {
         Surf::Puddle => entrained(rng, d),
-        Surf::Road if d >= 0.8 && rng.chance(0.06 * film) => Some(rng.range(0.19e-3, 0.3e-3)),
+        Surf::Road if d >= 0.8 && rng.chance(0.06 * film) => {
+            let r = rng.range(0.19e-3, 0.3e-3);
+            if tn.small_bubbles { Some(r) } else { None }
+        }
         _ => None,
     };
+    let bub = bub.map(|r| r / pitch);
     if let Some(r) = bub {
         let b = bubble(rng, r);
         let g = BUBBLE_AMP * m::sqrt(r / 0.25e-3) * rng.range(0.3, 1.0);
@@ -309,7 +381,7 @@ pub(crate) fn drop_event(rng: &mut Rng, surf: Surf, d: f64, v: f64, film: f64) -
     if matches!(surf, Surf::Puddle | Surf::Road) && film > 1.0 && d >= 1.0 {
         let k = rng.poisson(0.5 * (film - 1.0) * (d / 2.0));
         for _ in 0..k {
-            let r = rng.range(0.15e-3, 0.3e-3);
+            let r = rng.range(0.15e-3, 0.3e-3) * tn.bubble_r;
             let b = bubble(rng, r);
             let g = 0.4 * BUBBLE_AMP * rng.range(0.2, 1.0);
             mix_into(&mut ev, &b, (rng.range(0.005, 0.06) * FS) as usize, g);
@@ -483,7 +555,8 @@ const NEAR_AREA: f64 = 0.4; // m^2 of nearby objects 0.5-1.2 m from the listener
 
 fn pick_surface(rng: &mut Rng, sc: &Scene, rho: f64) -> Surf {
     let u = rng.f();
-    let s = if u < sc.puddle {
+    let pud = sc.puddle * tone().puddle;
+    let s = if u < pud {
         Surf::Puddle
     } else if u < sc.puddle + sc.grass {
         Surf::Grass
@@ -613,8 +686,10 @@ fn drips(seed: u64, sc: &Scene, air: &AirCutoff, buf: &mut [f64]) -> usize {
     for _ in 0..sc.drips {
         let rho = rng.range(1.2, 9.0);
         let u = rng.f();
-        let surf = if u < 0.4 {
+        let surf = if u < 0.4 * tone().puddle {
             Surf::Puddle
+        } else if u < 0.4 {
+            Surf::Grass
         } else if u < 0.65 {
             Surf::Road
         } else if u < 0.85 {
@@ -632,11 +707,12 @@ fn drips(seed: u64, sc: &Scene, air: &AirCutoff, buf: &mut [f64]) -> usize {
         let per_loop = (LOOP_S / period).round().max(1.0) as usize;
         let phase = rng.f();
         // its puddle's own bubble size (the plink's pitch)
-        let rb = rng.lognormal(1.3e-3, 0.35).clamp(0.5e-3, 3e-3);
+        let rb = rng.lognormal(1.3e-3, 0.35).clamp(0.5e-3, 3e-3) * tone().bubble_r / tone().drip_pitch;
         for k in 0..per_loop {
             let t = ((k as f64 + phase + rng.range(-0.15, 0.15)) / per_loop as f64).rem_euclid(1.0) * LOOP_S;
             let d = d0 * rng.range(0.95, 1.05);
-            let mut ev = drop_event(&mut rng, if surf == Surf::Puddle { Surf::Road } else { surf }, d, v, 1.0);
+            let mut ev =
+                drop_event_pitched(&mut rng, if surf == Surf::Puddle { Surf::Road } else { surf }, d, v, 1.0, tone().drip_pitch);
             if surf == Surf::Puddle {
                 for x in ev.iter_mut() {
                     *x *= 0.7;
@@ -744,7 +820,15 @@ pub fn outdoor(seed: u64, sc: &Scene) -> (Vec<f64>, OutdoorStats) {
                 continue;
             }
             let u = orng.f();
-            let surf = if u < 0.5 { Surf::Leaves } else if u < 0.8 { Surf::Metal } else { Surf::Puddle };
+            let surf = if u < 0.5 {
+                Surf::Leaves
+            } else if u < 0.8 {
+                Surf::Metal
+            } else if u < 0.8 + 0.2 * tone().puddle {
+                Surf::Puddle
+            } else {
+                Surf::Grass
+            };
             let d = ds.sample_between(&mut orng, 0.5, 6.0);
             let ev = drop_event(&mut orng, surf, d, terminal_v(d), sc.film);
             let r = orng.range(0.5, 1.2);
@@ -763,10 +847,16 @@ pub fn outdoor(seed: u64, sc: &Scene) -> (Vec<f64>, OutdoorStats) {
                 continue;
             }
             let rho = crng.range(1.5, 12.0);
-            let surf = if crng.chance(0.35) { Surf::Puddle } else if crng.chance(0.5) { Surf::Grass } else { Surf::Road };
+            let surf = if crng.chance(0.35 * tone().puddle) {
+                Surf::Puddle
+            } else if crng.chance(0.5) {
+                Surf::Grass
+            } else {
+                Surf::Road
+            };
             let d = crng.range(3.5, 5.5);
             let v = m::sqrt(2.0 * 9.81 * crng.range(2.0, 8.0)).min(terminal_v(d));
-            let ev = drop_event(&mut crng, surf, d, v, sc.film);
+            let ev = drop_event_pitched(&mut crng, surf, d, v, sc.film, tone().drip_pitch);
             let r = m::sqrt(rho * rho + h * h);
             put(&mut buf, (t * FS) as usize, &onepole(&ev, distance_fc(&air, rho, r)), 1.0 / r);
             canopy += 1;
@@ -962,6 +1052,10 @@ pub struct LoopTarget {
 pub fn finish_loop(mut x: Vec<f64>, t: &LoopTarget) -> (Vec<f64>, f64) {
     let mut hp = Biquad::highpass(FS, 30.0, 0.7071);
     hp.run_circular(&mut x);
+    if tone().shelf_db != 0.0 {
+        let mut sh = Biquad::highshelf(FS, 4000.0, tone().shelf_db);
+        sh.run_circular(&mut x);
+    }
     let mut g = m::undb(t.lufs - loudness::integrated(&x, FS, true));
     let env = loudness::tp_envelope(&x, true);
     let mut y = Vec::new();
@@ -995,3 +1089,53 @@ pub fn muffle(x: &[f64]) -> Vec<f64> {
     y
 }
 
+
+/// Diagnostic: per surface, the energy-weighted spectral centroid, the <1 k, 1-4 k and >4 kHz energy shares and the
+/// mean energy of 400 single drops at terminal speed (and a drip: 4.5 mm at 6 m/s), at 1 m, under the current tone.
+pub fn drop_spectra() -> String {
+    let mut out = String::new();
+    let cases: [(&str, Surf, f64, f64); 7] = [
+        ("road 1.3mm", Surf::Road, 1.3, terminal_v(1.3)),
+        ("puddle 1.3mm", Surf::Puddle, 1.3, terminal_v(1.3)),
+        ("puddle 1.0mm", Surf::Puddle, 1.0, terminal_v(1.0)),
+        ("grass 1.3mm", Surf::Grass, 1.3, terminal_v(1.3)),
+        ("leaves 1.3mm", Surf::Leaves, 1.3, terminal_v(1.3)),
+        ("metal 1.3mm", Surf::Metal, 1.3, terminal_v(1.3)),
+        ("puddle drip 4.5mm", Surf::Puddle, 4.5, 6.0),
+    ];
+    for (name, surf, d, v) in cases {
+        let mut rng = Rng::new(7, name);
+        let mut acc = vec![0.0; SPEC_N / 2 + 1];
+        for _ in 0..400 {
+            let ev = drop_event(&mut rng, surf, d, v, 1.0);
+            let mut x: Vec<dsp::C> =
+                (0..SPEC_N).map(|i| dsp::C::new(ev.get(i).copied().unwrap_or(0.0), 0.0)).collect();
+            dsp::fft(&mut x, false);
+            for k in 0..=SPEC_N / 2 {
+                acc[k] += x[k].re * x[k].re + x[k].im * x[k].im;
+            }
+        }
+        let df = FS / SPEC_N as f64;
+        let tot: f64 = acc.iter().skip(1).sum::<f64>().max(1e-30);
+        let cen = acc.iter().enumerate().skip(1).map(|(k, v)| k as f64 * df * v).sum::<f64>() / tot;
+        let band = |lo: f64, hi: f64| {
+            100.0
+                * acc
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .filter(|(k, _)| *k as f64 * df >= lo && (*k as f64 * df) < hi)
+                    .map(|(_, v)| v)
+                    .sum::<f64>()
+                / tot
+        };
+        out.push_str(&format!(
+            "{name:18} centroid_hz={cen:6.0} lt1k%={:5.1} 1-4k%={:5.1} gt4k%={:5.1} energy={:.3e}\n",
+            band(0.0, 1000.0),
+            band(1000.0, 4000.0),
+            band(4000.0, 30000.0),
+            tot / 400.0
+        ));
+    }
+    out
+}
