@@ -39,5 +39,6 @@ native/earthfast/target/
 build/
 native/serverlist/target/
 native/roadsys/target/
+native/weathersynth/target/
 server/earthfast.FAST-BUILD-do-not-commit
 *.prof
