@@ -83,8 +83,10 @@ core_camera = { getPosition = function() return camP end }
 -- the strike lattice laid over a flat frame: 1 degree = 100 km, the camera at lat 40.12, lon -73.95
 local LAT0, LON0 = 40.12, -73.95
 beamngEarth_api = {
-  toGeo = function(x, y) return { lat = LAT0 + y / 1e5, lon = LON0 + x / 1e5 } end,
-  toGame = function(lat, lon) return vec3((lon - LON0) * 1e5, (lat - LAT0) * 1e5, 0) end,
+  -- (as the real api.lua: plain numbers, not tables; the first broker run failed on exactly this)
+  toGeo = function(x, y) return LAT0 + y / 1e5, LON0 + x / 1e5, 0 end,
+  toGame = function(lat, lon) return (lon - LON0) * 1e5, (lat - LAT0) * 1e5, 0 end,
+  game = function(lat, lon) local x, y = (lon - LON0) * 1e5, (lat - LAT0) * 1e5 return vec3(x, y, 0) end,
 }
 -- nothing without a storm: no objects, no state
 check(storm.update(0.016, 0, {}) == false and #S.liveOf('TSStatic') == 0 and #S.liveOf('PointLight') == 0,
@@ -93,7 +95,7 @@ check(storm.update(0.016, 0, {}) == false and #S.liveOf('TSStatic') == 0 and #S.
 local strikes = storm.strikesNear(LAT0, LON0, 1.8e9, 1.8e9 + 3600, 3)
 local first
 for _, st in ipairs(strikes) do
-  local g = beamngEarth_api.toGame(st.lat, st.lon)
+  local g = beamngEarth_api.game(st.lat, st.lon)
   if st.cg and math.sqrt(g.x * g.x + g.y * g.y) < storm.BOLT_M then first = st break end
 end
 check(first ~= nil, 'a ground strike within bolt range in the hour')
@@ -110,7 +112,7 @@ run(1.5)
 check(storm.strikes == 0 and #S.liveOf('PointLight') == 0, 'before the strike: nothing drawn yet')
 -- run until just past the first strike: the flash on, its light, the glow, a bolt
 while clock < first.t + 0.02 do run(0.02) end
-local g = beamngEarth_api.toGame(first.lat, first.lon)
+local g = beamngEarth_api.game(first.lat, first.lon)
 local d = math.sqrt(g.x * g.x + g.y * g.y)
 check(storm.strikes >= 1 and storm.last and math.abs(storm.last.d - d) < 1e-6, 'the strike at its distance ' .. math.floor(d))
 local light = S.liveOf('PointLight')[1]

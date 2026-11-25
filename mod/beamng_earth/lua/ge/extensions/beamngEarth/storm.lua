@@ -280,8 +280,11 @@ local function strike(s, now, ctx)
   local a = api()
   local p = camPos()
   if not (a and a.toGame and p) then return end
-  local g = a.toGame(s.lat, s.lon, 0)
-  if not g then return end
+  -- (api.toGame / toGeo return plain numbers: x, y, z / lat, lon, h; the first broker run's error: "attempt to index
+  -- local 'geo' (a number value)", no strike was ever looked up)
+  local gx, gy = a.toGame(s.lat, s.lon, 0)
+  if not (tonumber(gx) and tonumber(gy)) then return end
+  local g = { x = gx, y = gy }
   local dx, dy = g.x - p.x, g.y - p.y
   local d = math.sqrt(dx * dx + dy * dy)
   M.strikes = M.strikes + 1
@@ -421,8 +424,10 @@ function M.update(dt, c, ctx)
   if c >= 1 and st.timer >= M.CHECK_S then
     st.timer = 0
     local a, p = api(), camPos()
-    local geo = a and a.toGeo and p and a.toGeo(p.x, p.y, p.z)
-    if geo and geo.lat then
+    local lat, lon
+    if a and a.toGeo and p then lat, lon = a.toGeo(p.x, p.y, p.z) end
+    local geo = tonumber(lat) and tonumber(lon) and { lat = lat, lon = lon }
+    if geo then
       local t0 = st.lastT or now
       if t0 < now - 1 or t0 > now + 5 then t0 = now end    -- (back from a pause, a load: no burst of old strikes)
       local t1 = now + M.LOOKAHEAD_S
