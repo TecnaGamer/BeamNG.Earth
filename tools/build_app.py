@@ -232,12 +232,18 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
     # the modules where server/liveaudio.py looks (sys._MEIPASS). Linux: copied in after PyInstaller (bundle_weathersynth)
     if IS_WIN and os.path.isfile(WEATHERSYNTH):
         cmd += ["--add-binary", f"{WEATHERSYNTH}{SEP}."]
+    # its thunder grain bank beside it (the release workflow's one pack for both platforms; weathersynth looks next to
+    # itself). Data, not a binary: PyInstaller copies it as it is
+    if IS_WIN and os.path.isfile(GRAIN_BANK):
+        cmd += ["--add-data", f"{GRAIN_BANK}{SEP}."]
     cmd.append(os.path.join(ROOT, "launcher.py"))
     subprocess.run(cmd, check=True, cwd=ROOT)
     return os.path.join(work, "dist")
 
 
 WEATHERSYNTH = os.path.join(ROOT, "build", "weathersynth", "weathersynth.exe" if IS_WIN else "weathersynth")
+# the thunder grain bank (`weathersynth grainbank-pack`; the release workflow's grains job packs it once)
+GRAIN_BANK = os.path.join(ROOT, "build", "weathersynth", "thunder_grains.bin")
 
 
 def bundle_weathersynth(dist):
@@ -247,9 +253,12 @@ def bundle_weathersynth(dist):
     Arch): the synth must load the system's own."""
     base = os.path.join(dist, NAME)
     internal = os.path.join(base, "_internal")
-    dst = os.path.join(internal if os.path.isdir(internal) else base, "weathersynth")
+    folder = internal if os.path.isdir(internal) else base
+    dst = os.path.join(folder, "weathersynth")
     shutil.copy2(WEATHERSYNTH, dst)
     os.chmod(dst, 0o755)
+    if os.path.isfile(GRAIN_BANK):
+        shutil.copy2(GRAIN_BANK, os.path.join(folder, "thunder_grains.bin"))
     return dst
 
 
@@ -304,6 +313,10 @@ def main():
         if a.require_weathersynth:
             sys.exit(f"no {WEATHERSYNTH}: run tools/build_weathersynth.py")
         print("WARNING: no live weather sounds' synth (tools/build_weathersynth.py): the Live setting falls back")
+    if not os.path.isfile(GRAIN_BANK):
+        if a.require_weathersynth:
+            sys.exit(f"no {GRAIN_BANK}: run `weathersynth grainbank-pack --out {GRAIN_BANK}` in native/weathersynth")
+        print("WARNING: no thunder grain bank: the live thunder falls back to the procedural model")
     if IS_WIN:
         boot = None if a.stock_bootloader else own_bootloader()
         if boot:

@@ -67,8 +67,43 @@ jobs:
           echo "publish=$pub" >> "$GITHUB_OUTPUT"
           echo "VERSION $v, release exists: $exists, publish: $pub"
 
-  linux:
+  # The thunder grain bank (native/weathersynth/assets/grains -> thunder_grains.bin, 17 MB of raw i16): packed ONCE
+  # here and handed to both platform jobs, so the AppImage and the .exe bundle byte-identical files. The pack decodes
+  # the committed Ogg grains with ffmpeg's own Vorbis decoder (-c:a vorbis, float output; the i16 rounding is
+  # weathersynth's); the decoder is Ubuntu 22.04's ffmpeg package, its version logged, and a sha256 other than the
+  # committed one (packed with ffmpeg n9.0.2) is a warning: the sound is the same within a few LSB, but say so.
+  grains:
     needs: [check, quality]
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: ffmpeg (the pack's Vorbis decoder)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ffmpeg
+          ffmpeg -hide_banner -version | head -1
+      - name: Pack the grain bank
+        working-directory: native/weathersynth
+        run: |
+          cargo fetch --locked --target x86_64-unknown-linux-gnu
+          cargo build --release --locked
+          target/release/weathersynth grainbank-pack --out thunder_grains.bin
+          want=$(cut -d' ' -f1 assets/grains/thunder_grains.bin.sha256)
+          got=$(sha256sum thunder_grains.bin | cut -d' ' -f1)
+          echo "thunder_grains.bin sha256 $got"
+          if [ "$got" != "$want" ]; then
+            echo "::warning::thunder_grains.bin sha256 $got differs from the committed $want (another ffmpeg Vorbis decoder build: samples move by a few LSB; both platforms still get this one file)"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: thunder-grains
+          path: native/weathersynth/thunder_grains.bin
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    needs: [check, quality, grains]
     if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-22.04          # an older glibc: the AppImage runs on more distributions
     steps:
@@ -105,6 +140,11 @@ jobs:
           [ "$(head -c 4 appimagetool | od -An -tx1 | tr -d ' ')" = 7f454c46 ]
           chmod +x appimagetool
           mv appimagetool appimagetool.AppImage
+      - name: The thunder grain bank (the grains job's one pack)
+        uses: actions/download-artifact@v8
+        with:
+          name: thunder-grains
+          path: build/weathersynth
       - name: Build the AppImage
         run: python tools/build_app.py --appimagetool "$PWD/appimagetool.AppImage" --require-weathersynth
       - name: Smoke test (the packaged server starts and answers --help)
@@ -118,6 +158,8 @@ jobs:
           ws=squashfs-root/usr/lib/BeamNG.Earth/_internal/weathersynth
           test -x "$ws"
           "$ws" storm-dump | head -2
+          # the grain bank next to it, the grains job's file unchanged
+          cmp squashfs-root/usr/lib/BeamNG.Earth/_internal/thunder_grains.bin build/weathersynth/thunder_grains.bin
           rm -rf squashfs-root
       - name: numpy starts with its AVX-512 targets held back (server/npyguard.py, -W error)
         run: |
@@ -130,7 +172,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    needs: [check, quality]
+    needs: [check, quality, grains]
     if: needs.check.outputs.build == 'true'
     runs-on: windows-latest
     # Azure Artifact Signing (the user, 2026-11-25): the GitHub environment "signing" (main and dev only) holds the
@@ -193,6 +235,11 @@ jobs:
           exclude-azure-powershell-credential: true
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
+      - name: The thunder grain bank (the grains job's one pack)
+        uses: actions/download-artifact@v8
+        with:
+          name: thunder-grains
+          path: build/weathersynth
       - name: Build the .exe
         run: python tools/build_app.py --require-own-bootloader --require-weathersynth
       # Signed through Azure Artifact Signing: a Public Trust certificate from a CA in Microsoft's trusted roots (the
@@ -239,6 +286,7 @@ jobs:
           "$f" --server --help > help.txt
           grep -q -- "--near-visual" help.txt
           build/weathersynth/weathersynth.exe storm-dump | head -2   # (the signed file the .exe bundles runs)
+          sha256sum build/weathersynth/thunder_grains.bin            # (the same as the grains job's: one file for both)
           head -3 help.txt
       - name: numpy starts with its AVX-512 targets held back (server/npyguard.py, -W error)
         shell: bash
