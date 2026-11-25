@@ -106,7 +106,7 @@ impl RoadsysSegments {
                 inferred: ints[[i, 0]], urban: ints[[i, 1]] != 0, cls: ints[[i, 2]], link: ints[[i, 3]] != 0, dir: ints[[i, 4]],
                 lanes: ints[[i, 5]], lfw: ints[[i, 6]], lbw: ints[[i, 7]], region: ints[[i, 8]],
                 pts: p, cons: Vec::new(), bridge: Vec::new(), tunnel: Vec::new(), level: Vec::new(), depth: 0.0,
-                xsec: xsec.as_ref().map(|x| x[i].clone()).unwrap_or_default(),
+                xsec: xsec.as_ref().map(|x| x[i].clone()).unwrap_or_default(), maxh: Vec::new(),
             });
         }
         for k in 0..con_id.len() {
@@ -117,7 +117,8 @@ impl RoadsysSegments {
             let s = rng_seg[k] as usize;
             if s >= n { continue; }
             let (a, b, kind, v) = (rng[[k, 0]], rng[[k, 1]], rng[[k, 2]], rng[[k, 3]]);
-            match kind as i64 { 0 => segs[s].bridge.push((a, b)), 1 => segs[s].tunnel.push((a, b)), 3 => { if v > segs[s].depth { segs[s].depth = v; } }, _ => segs[s].level.push((a, b, v)) }
+            // (kinds: 0 bridge, 1 tunnel, 2 level, 3 drawn depth, 4 (M5) a height limit, maxheight sign, of v m)
+            match kind as i64 { 0 => segs[s].bridge.push((a, b)), 1 => segs[s].tunnel.push((a, b)), 3 => { if v > segs[s].depth { segs[s].depth = v; } }, 4 => segs[s].maxh.push((a, b, v)), _ => segs[s].level.push((a, b, v)) }
         }
         // one copy per segment: a row's id is "<segment>|<its first point>" and the point differs between two cells'
         // copies, so copies are grouped by the segment's own id (roadshape.SegmentCell's sid), the cell whose copy has

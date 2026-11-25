@@ -28,6 +28,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const K_STRIP: u8 = 9;
 /// the filled gap to a twin deck (no parapet; the caller gives it a thin slab: no walls between the twins)
 pub const K_MEDIAN: u8 = 10;
+/// (M5) a ground face on today's lengthened deck past the mapped end (drawn as ground road, draped by the caller)
+pub const K_COVER: u8 = 11;
 /// m a parapet's base reaches past the deck's free edge (roadmesh.PARAPET_W)
 pub const STRIP_W: f64 = 0.45;
 /// m a knot may lie off its feature's deck line and still take its height
@@ -424,6 +426,42 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
         kept.retain(|k| !fb.contains(&k.1));
         dropped += n0 - kept.len();
     }
+    // (M5, the mapped bridge end is the truth: the faces end there.) The ground faces of a feature drawn from these
+    // faces that lie on today's deck line of that feature (MATCH_OFF_M): the stretch the deck builder lengthened its
+    // deck over, whose road today's deck drew and today's ground roads leave out; drawn as ground road (K_COVER,
+    // draped by the caller), never as deck
+    let covered_f: BTreeSet<i32> = kept.iter().map(|k| k.1).collect();
+    let cover_lines: Vec<&DeckLine> = ls.iter().copied().filter(|l| feat_ix.get(&l.feat).map(|i| covered_f.contains(i)).unwrap_or(false)).collect();
+    let mut cover: Vec<(u32, i32)> = Vec::new();
+    for (ti, tr) in m.t.iter().enumerate() {
+        let tag = m.tag[ti];
+        if tag.sup != net::SUP_GROUND || tag.kind == K_ZONE || cover_lines.is_empty() { continue; }
+        if !tr.iter().any(|&i| inside(keep, pv(i))) { continue; }
+        let Some(&si) = stroke_of.get(&tag.piece) else { continue };
+        let st = &net.strokes[si];
+        // (a stroke going on onto a deck only: never a road crossing under one)
+        if !st.sup.iter().any(|u| u.kind == SUP_STRUCT) { continue; }
+        let c = scale(add(add(pv(tr[0]), pv(tr[1])), pv(tr[2])), 1.0 / 3.0);
+        let (s, _o) = st.line.project(c, 0.0, st.len());
+        let t = st.line.at(s).1;
+        let along = |l: &DeckLine| -> bool {
+            // (on the line itself, its nearest segment's direction: not past its ends as line_z reads it)
+            let mut best = (f64::INFINITY, [1.0, 0.0]);
+            for w in l.p.windows(2) {
+                let (a, b) = ([w[0][0], w[0][1]], [w[1][0], w[1][1]]);
+                let ab = sub(b, a);
+                let l2 = dot(ab, ab);
+                if !(l2 > 0.0) { continue; }
+                let u = clampf(dot(sub(c, a), ab) / l2, 0.0, 1.0);
+                let d = norm(sub(c, add(a, scale(ab, u))));
+                if d < best.0 { best = (d, scale(ab, 1.0 / l2.sqrt())); }
+            }
+            best.0 <= MATCH_OFF_M && absf(dot(t, best.1)) >= TWIN_PAR_COS
+        };
+        if let Some(l) = cover_lines.iter().find(|l| along(l)) {
+            cover.push((ti as u32, feat_ix.get(&l.feat).copied().unwrap_or(-1)));
+        }
+    }
     // edges: uses over the whole partition, the rows' own edges
     let ekey = |a: u32, b: u32| if a < b { (a, b) } else { (b, a) };
     let mut uses: BTreeMap<(u32, u32), u32> = BTreeMap::new();
@@ -557,6 +595,14 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
         out.kind.push(m.tag[ti as usize].kind);
         out.feat.push(fi);
         out.depth.push(dep);
+    }
+    for &(ti, fi) in &cover {
+        let tr = m.t[ti as usize];
+        let t = [vid(tr[0], &mut out), vid(tr[1], &mut out), vid(tr[2], &mut out)];
+        out.t.push(t);
+        out.kind.push(K_COVER);
+        out.feat.push(fi);
+        out.depth.push(0.0);
     }
     let mut strip_tris = 0usize;
     let mut twin_m = 0.0f64;
@@ -861,6 +907,20 @@ mod tests {
         assert!(wide.runs.iter().all(|r| r.p.iter().all(|q| absf(q[1]) > 12.0)), "{}", wide.json);
         let narrow = build_pair(7.0);
         assert!(narrow.runs.iter().any(|r| r.p.iter().all(|q| absf(q[1]) < 3.0)), "{}", narrow.json);
+    }
+
+    /// (M5) The mapped end is the truth: today's deck line lengthened 15 m past it on each side gives deck faces only
+    /// inside the mapped bridge (|x| <= 40) and ground cover faces (K_COVER) on the lengthened stretches.
+    #[test]
+    fn faces_end_at_the_mapped_end_and_cover_the_lengthened_stretch() {
+        let ls = vec![DeckLine { feat: "b".into(), p: vec![[-55.0, 0.0, 10.0], [0.0, 0.0, 16.0], [55.0, 0.0, 10.0]] }];
+        let o = build(&place(false), Q, &g, &ls, Opts::default());
+        let mid = |t: &[u32; 3]| (o.v[t[0] as usize][0] + o.v[t[1] as usize][0] + o.v[t[2] as usize][0]) / 3.0;
+        let tops: Vec<f64> = o.t.iter().zip(o.kind.iter()).filter(|(_, &k)| k < K_STRIP).map(|(t, _)| mid(t)).collect();
+        let cover: Vec<f64> = o.t.iter().zip(o.kind.iter()).filter(|(_, &k)| k == K_COVER).map(|(t, _)| mid(t)).collect();
+        assert!(!tops.is_empty() && tops.iter().all(|x| absf(*x) <= 40.5), "deck faces past the mapped end");
+        assert!(cover.iter().any(|&x| x < -40.0) && cover.iter().any(|&x| x > 40.0), "{}", o.json);
+        assert!(cover.iter().all(|x| absf(*x) >= 39.5 && absf(*x) <= 59.5), "cover only on the lengthened stretch");
     }
 
     #[test]

@@ -89,9 +89,9 @@ SURFACE = MODE == "surface"             # (M4 surface: structures, and the decks
 STRUCTURES = MODE in ("structures", "surface")      # (M3 structures: heights and the deck ends' hand-over, below)
 HEIGHTS = MODE in ("heights", "structures", "surface")
 FORMAT = 2                  # the shadow records' JSON (their folder name; 2: M2's profiles, whole components read)
-HEIGHTS_KERNEL = 623        # earthfast.roadsys_heights_reads / roadsys_heights
+HEIGHTS_KERNEL = 626        # earthfast.roadsys_heights_reads / roadsys_heights
 STRUCTURES_KERNEL = 603     # earthfast.RoadsysEnds / roadsys_handover_zone, road_exact's "ho" parts
-SURFACE_KERNEL = 623        # earthfast.roadsys_decks
+SURFACE_KERNEL = 626        # earthfast.roadsys_decks
 XSEC = os.environ.get("BNE_ROADSYS_XSEC", "off").strip().lower() == "on"
 XSEC_KERNEL = 617           # earthfast.RoadsysSegments(xsec=...), native/roadsys xsec.rs (617: with areas=, fit= in one binary; trunk 616 has no xsec)
 
@@ -185,8 +185,8 @@ def _ranges(rule, i, vals=False):
 
 
 def _table(cell, feats, rows):
-    """One cell's segment columns (lon / lat points), PT3's exporter's fields; the structure and tunnel ranges the
-    deck builder's (roads.level_ranges), the levels the map's."""
+    """One cell's segment columns (lon / lat points), PT3's exporter's fields; the structure and tunnel ranges as the
+    map tags them (roads.tag_level_ranges, M5), the levels the map's."""
     import countrybounds
     import roads
     ground = roads.road_specs(feats)
@@ -227,10 +227,12 @@ def _table(cell, feats, rows):
         out["cons"].append([(str(c), int(v)) for c, v in r["cons"]])
         rg = []
         if idx is not None:
-            # (the off-ground ranges the deck builder takes, roads.level_ranges: the flags, the level rule, inferred
-            # grade separations, ranges lengthened over the roads under them; one support label for both)
+            # (M5, the user 2026-11-24: "the mapped bridge end is the truth": the structure and tunnel ranges as the
+            # map tags them, roads.tag_level_ranges, never the deck builder's lengthened or inferred ones; a deck of the
+            # deck builder reaching past them takes the profile there, square.rs DECK_PAST_M. Also the cheap read: the
+            # deck builder's level ranges were 5.5 s of a place's 6.4 s of cell conversion, Seal Beach)
             depth = 0.0
-            for a, b, v in roads.level_ranges(feats, idx):
+            for a, b, v in roads.tag_level_ranges(feats, idx):
                 if v in ("bridge", "tunnel"):
                     rg.append((float(a), float(b), 0.0 if v == "bridge" else 1.0, 0.0))
                 if v == "bridge":
@@ -239,6 +241,14 @@ def _table(cell, feats, rows):
                 rg.append((0.0, 1.0, 3.0, round(depth, 4)))
             for a, b, v in _ranges(feats.rules.get("level"), idx, vals=True):
                 rg.append((a, b, 2.0, float(v)))
+            # (M5: its height limits, maxheight signs: the clearance a structure keeps over it, net.rs clearance_of)
+            for a, b, v in _ranges(feats.rules.get("max_height_m"), idx, vals=True):
+                try:
+                    h = float(v)
+                except (TypeError, ValueError):
+                    continue
+                if np.isfinite(h) and b - a > 1e-4:
+                    rg.append((float(a), float(b), 4.0, h))
         out["rng"].append(rg)
     return out
 
@@ -263,15 +273,39 @@ def _deck_depth(ll, a, b):
     keep = (d > s0) & (d < s1)
     part = np.vstack([[dnp.interp(s0, d, xy[:, 0]), dnp.interp(s0, d, xy[:, 1])], xy[keep],
                       [dnp.interp(s1, d, xy[:, 0]), dnp.interp(s1, d, xy[:, 1])]])
-    span = 0.0
+    span, kind = 0.0, None
     try:
         import bridgetypes
         got = bridgetypes.matches(fr, [part])
         if got:
-            span = float(bridgetypes.record(got[0][1])["span"])
+            rec = bridgetypes.record(got[0][1])
+            span, kind = float(rec["span"]), int(rec["type"])
     except Exception as ex:
         log.debug("roadsys deck span: %s: %s", type(ex).__name__, ex)
-    return float(roads.deck_depth(span if span > 0 else roads.geom_span([part])))
+    return structure_depth(span if span > 0 else roads.geom_span([part]), kind)
+
+
+# (M5, the user 2026-11-24: "some bridges are thicker than others": a floor is the lower road's clearance + THIS
+# structure's own depth, drawn so too.) m of structure under the road by the inventory's main-span design (NBI item
+# 43B; None: not matched) and the main span: a through truss, through arch, suspension, cable-stayed or movable span
+# carries its road on a floor system with the structure overhead; a deck truss stands under its road at about a tenth
+# of its span; a deck arch's crown and spandrel deck a thirtieth; girders, slabs and boxes their span / 22 (AASHTO's
+# 0.045 L), a short slab thin, a long-span flyover's girders up to 4 m.
+DEPTH_FLOOR_SYSTEM_M = 1.2
+DEPTH_DECK_TRUSS = (12.0, 2.0, 8.0)     # span / this, within these
+DEPTH_DECK_ARCH = (30.0, 1.0, 3.0)
+DEPTH_GIRDER = (22.0, 0.6, 4.0)
+
+
+def structure_depth(span, kind=None):
+    import bridgetypes as bt
+    span = float(span) if span and np.isfinite(span) else 0.0
+    if kind in (bt.NBI_THROUGH_TRUSS, bt.NBI_THROUGH_ARCH, bt.NBI_SUSPENSION, bt.NBI_STAYED, bt.NBI_LIFT,
+                bt.NBI_BASCULE, bt.NBI_SWING):
+        return DEPTH_FLOOR_SYSTEM_M
+    r, lo, hi = (DEPTH_DECK_TRUSS if kind == bt.NBI_DECK_TRUSS else DEPTH_DECK_ARCH if kind == bt.NBI_DECK_ARCH
+                 else DEPTH_GIRDER)
+    return round(float(min(hi, max(lo, span / r))), 4)
 
 
 def _areas(md, cells, frame):
@@ -1030,7 +1064,7 @@ def _end_rows(feats):
     builder's lengthened or inferred ranges, which the map calls ground): kind "b" a tagged bridge part that a deck of
     the deck builder's covers (roads.bridge_parts; its half width roads.bridge_specs': the deck builder's), "g" a
     tagged ground part (its half width road_specs' plain one: no urban or measured widths, the same in every process),
-    "t" a tunnel part. BNE_ROADSYS=surface: by the support labels instead (roads.level_ranges, the decks' faces')."""
+    "t" a tunnel part."""
     got = feats.__dict__.get("_roadsys_end_rows")
     if got is not None:
         return got
@@ -1044,9 +1078,8 @@ def _end_rows(feats):
             sp = gs[i] if gs[i] is not None else bs[i]
             if sp is None:
                 continue
-            # (M4 surface: the support labels the decks are drawn from, roads.level_ranges: lengthened and inferred
-            # deck ends hand over too, where their faces end)
-            tags = roads.level_ranges(feats, i) if SURFACE else roads.tag_level_ranges(feats, i)
+            # (M5: the mapped ends in every mode: the decks' faces end there too, _table)
+            tags = roads.tag_level_ranges(feats, i)
             if bs[i] is not None:
                 decks = [np.asarray(r, np.float64)[:, :2] for r in roads.bridge_parts(feats, i)]
                 for j, ring in enumerate(roads._parts_by_level_new(feats, i, "bridge", rngs=tags)):
@@ -1241,6 +1274,7 @@ DECK_KEEP_M = 30.0          # m round the tile's box its decks' faces are built 
 DECK_LINES_M = 50.0         # m round the box today's deck heights are read (KEEP_M + EXT_M + some)
 K_STRIP = 9                 # deck.rs K_STRIP: a parapet's base, the slab's top only
 K_MEDIAN = 10               # deck.rs K_MEDIAN: the filled gap to a twin deck, the slab's top only, thin
+K_COVER = 11                # deck.rs K_COVER (M5): a ground face on today's lengthened deck past the mapped end
 MEDIAN_DEPTH_M = 0.04       # m of drawn depth a twin gap's fill takes (its slab ~2 cm: below the envelope's own band)
 DECK_GROUND_M = 300.0       # m round the tile's box the decks' build reads the ground (farther: that box's edge)
 
@@ -1395,7 +1429,10 @@ def deck_faces(frame, exact, bridges, cells, country=None):
         look = roads._deck_look(sp)
         if K[i] == K_MEDIAN:        # (a twin's filled gap: a thin slab, no walls between the twins' slabs)
             depth = MEDIAN_DEPTH_M
-        key = ("strip" if K[i] in (K_STRIP, K_MEDIAN) else "top", look["m"], look["tl"], look["p"], round(depth, 3))
+        if K[i] == K_COVER:         # (M5: a ground face on today's lengthened deck past the mapped end: ground road)
+            depth = 0.0
+        key = ("strip" if K[i] in (K_STRIP, K_MEDIAN) else "cover" if K[i] == K_COVER else "top", look["m"], look["tl"],
+               look["p"], round(depth, 3))
         groups.setdefault(key, []).append(i)
     for key in sorted(groups):
         kind, mat, tl, prio, depth = key
@@ -1404,6 +1441,9 @@ def deck_faces(frame, exact, bridges, cells, country=None):
                                                            np.ascontiguousarray(T[sel]), box_poly, True)
         xyz, clipped = np.asarray(xyz, np.float64), np.asarray(clipped, np.int64)
         if not len(clipped):
+            continue
+        if kind == "cover":         # (draped on the ground as today's ground roads are: the terrain carries it)
+            out.append(roadsurf3._tri_chunk(xyz[:, :2], np.asarray(uv, np.float64), clipped, mat, tl, prio, "base"))
             continue
         if kind == "strip":
             ch = roadsurf3._tri_chunk(xyz[:, :2], np.asarray(uv, np.float64), clipped, roadmesh.DECK_SIDE, 10.0, prio,

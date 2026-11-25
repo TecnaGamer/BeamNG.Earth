@@ -43,7 +43,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub const H_M: f64 = 5.0;
-pub const QP_FORMAT: u64 = 6;            // 2 (M2): split components, feasible floors, measured decks, the chord; 5 (M3): cut zones on the trunk, shallow and along crossings beside a deck; 6 (M5): twin decks coupled, structure runs across strokes
+pub const QP_FORMAT: u64 = 7;            // 2 (M2): split components, feasible floors, measured decks, the chord; 5 (M3): cut zones on the trunk, shallow and along crossings beside a deck; 6 (M5): twin decks coupled, structure runs across strokes; 7: clearances by class and sign, digs to 5 m
 const ROUNDS: usize = 24;              // (M3: 12 -> 24, the active set's releases)
 const RELEASES: u8 = 2;
 const RELEASE_MULT: f64 = 1e-2;       // (M3) a multiplier past this, wrong-signed: the limit leaves the active set
@@ -68,7 +68,7 @@ const FLOOR_SLACK: f64 = 0.05;
 const MEASURED_APART_M: f64 = 2.0;
 const MEASURED_MIN_CLEAR_M: f64 = 2.0;  // (M5) m a measured deck stands over the road under it at least for its floor to hold
 const MEASURED_NEAR_M: f64 = 60.0;  // (M3) m from a floor its decks' measurements are looked for  // (M3) m two measured decks may lie closer than a floor before it is left out
-const DIG_MAX: f64 = 2.0;
+const DIG_MAX: f64 = 5.0;          // (M5: 2 -> 5 m, the user 2026-11-24: where the floor needs more than the comfort limits allow the deck to lift, the road under is cut, the one solve weighing both by class)
 const OBS_W: f64 = 50.0;
 const W_CHORD: f64 = 0.05;          // a deck knot's pull toward its approaches' chord (per m: a ground knot's 1)
 const CHORD_OUT_M: f64 = 10.0;
