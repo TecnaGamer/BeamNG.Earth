@@ -16,6 +16,7 @@ import subprocess
 import sys
 
 import install
+import launchui          # (the launch screen: colours, banner, timed steps; stdlib only)
 
 ROOT = install.ROOT
 EARTHD = os.path.join(ROOT, "server", "earthd.py")
@@ -40,6 +41,7 @@ def server_flags(py):
     return r.stdout
 
 
+
 def has_flag(help_text, flag):
     return re.search(re.escape(flag) + r"(?![\w-])", help_text) is not None
 
@@ -53,6 +55,8 @@ def main():
     ap.add_argument("extra", nargs=argparse.REMAINDER, help="after --: more options for server/earthd.py")
     args = ap.parse_args()
 
+    ui = launchui.Screen()          # colours on for the console this window owns; plain text without one
+
     cfg = install.load_config()
     user_dir = args.user_dir or cfg.get("user_dir")
     if not user_dir:
@@ -64,7 +68,8 @@ def main():
     # a new version unzipped over (or next to) the old one: the game gets this folder's mod, the server this
     # folder's packages, without running the installer again (2026-10-15: easy setup)
     if not args.keep_mod:
-        install.install_mod(user_dir, True, dry_run=False)
+        with ui.step("Preparing the mod"):
+            install.install_mod(user_dir, True, dry_run=False)
 
     py = install.venv_python()
     if not os.path.isfile(py):
@@ -75,10 +80,11 @@ def main():
     except OSError:
         stamped = None
     if stamped != install.requirements_hash():
-        install.say("Python packages: checking the server's packages ...")
-        install.setup_venv(dry_run=False)
+        with ui.step("Checking the Python packages"):
+            install.setup_venv(dry_run=False)
 
-    help_text = server_flags(py)
+    with ui.step("Reading the server's options"):
+        help_text = server_flags(py)
     cmd = [py, EARTHD, "--user-dir", user_dir]
     skipped = []
     for flag, value in RECOMMENDED:
@@ -98,20 +104,20 @@ def main():
     pick = overture_pick(extra)     # (the map data's release: decided once, while the start goes on)
     experimental = experimental_env(user_dir, dict(base_env))   # (for the lines below; run_restarting applies them)
 
-    install.say(f"BeamNG.Earth {install.version()}: starting the world server")
-    install.say(f"  BeamNG.drive user folder: {user_dir}")
-    if experimental:
-        install.say("  Experimental features on (the settings page): " + ", ".join(experimental))
-    install.say("  Telemetry: " + ("on: anonymous player count and data-source load, no location "
-                                    "(BNE_TELEMETRY=off turns it off)" if "--telemetry" in cmd else "off"))
-    if skipped:
-        install.say(f"  (this server version has no {', '.join(skipped)}; left out)")
-    install.say("  Leave this window open while you play; close it (or press Ctrl+C) to stop the server.")
-    install.say("  Now start BeamNG.drive and pick the 'BeamNG.Earth' level in Freeroam.")
+    # the launch screen: what was checked, the settings that matter, how to get into the world
     log_path = server_log_path(rotate=False)
-    if log_path:
-        install.say(f"  Server log: {log_path}")
-    install.say("")
+    ui.banner(f"BeamNG.Earth {install.version()}", "world server", rows=[
+        ("Game folder", user_dir),
+        ("Map data", None),             # (the Pick's release, said when the server starts below)
+        ("Experimental", ", ".join(experimental) if experimental else None),
+        ("Telemetry", "on (anonymous player count; BNE_TELEMETRY=off turns it off)"
+         if telemetry and "--telemetry" in cmd else "off"),
+        ("Log", log_path),
+    ] + ([("Server options", "this server version has no " + ", ".join(skipped) + "; left out")] if skipped else []),
+    tips=["Leave this window open while you play; close it (or press Ctrl+C) to stop the server.",
+             "Now start BeamNG.drive and pick the 'BeamNG.Earth' level in Freeroam."])
+    ui.summary("starting the server")
+    ui.note("")
     try:
         sys.exit(run_restarting(cmd, user_dir, base_env, pick=pick))
     except KeyboardInterrupt:
@@ -134,7 +140,8 @@ def run_restarting(cmd, user_dir, base_env, run=None, limiter=None, pick=None):
     while True:
         env, ids = server_env(user_dir, base_env, limiter.times, pick.release() if pick is not None else None)
         if first and pick is not None:
-            install.say(f"  Map data: Overture {pick.release()} ({pick.why})")
+            install.say("  Map data: Overture " + launchui.paint(pick.release(), launchui.Color.title)
+                        + f" ({pick.why})")
         # Use the same lazy game lookup and private cache as the app launcher.
         # Complete conversion before the child starts, also on --keep-mod/restart.
         if pick is not None and env.get("BNE_CLIFFS", "off").strip().lower() in {"1", "on", "true"}:
@@ -147,8 +154,9 @@ def run_restarting(cmd, user_dir, base_env, run=None, limiter=None, pick=None):
         if not sr.wants_restart(code):
             return code
         if not limiter.allow(time.time()):
-            install.say(f"The world server exited asking to restart more than {sr.MAX_RESTARTS} times in "
-                        f"{sr.WINDOW_S / 60:g} minutes; it stays stopped. Start it again with this script.")
+            install.say(launchui.paint(f"The world server exited asking to restart more than {sr.MAX_RESTARTS} times in "
+                                       f"{sr.WINDOW_S / 60:g} minutes; it stays stopped. Start it again with this script.",
+                                       launchui.Color.bad))
             return code
         install.say("")
         install.say("Restarting the world server (asked from the game's settings page): the settings are read again")

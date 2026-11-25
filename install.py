@@ -28,6 +28,7 @@ import subprocess
 import sys
 
 import modtextures
+import launchui          # (the launch screen: colours, banner, timed steps; stdlib only)
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 MOD_SRC = os.path.join(ROOT, "mod", "beamng_earth")
@@ -621,29 +622,37 @@ def main():
     if sys.version_info < MIN_PY:
         fail(f"Python {MIN_PY[0]}.{MIN_PY[1]} or newer is needed (this is {sys.version.split()[0]}). "
              "Get it from https://www.python.org/downloads/")
-    say(f"BeamNG.Earth {version()} installer")
-    say("")
-    user_dir = choose_user_dir(args)
+    ui = launchui.Screen()
+    ui.banner(f"BeamNG.Earth {version()}", "installer",
+              tips=["It only changes what is out of date; run it again at any time."])
+    with ui.step("Finding the game folder"):
+        user_dir = choose_user_dir(args)
     try:
-        install_mod(user_dir, args.yes, args.dry_run)
+        with ui.step("Preparing the mod"):
+            install_mod(user_dir, args.yes, args.dry_run)
         if not args.dry_run:
-            import cliffstock
-            cliffstock.prepare_enabled(args.game_dir, user_dir, diagnostic=say)
+            with ui.step("The cliffs' contact textures"):
+                import cliffstock
+                cliffstock.prepare_enabled(args.game_dir, user_dir, diagnostic=say)
     except OSError as e:
         fail(f"could not copy the mod: {e}\n  Close BeamNG.drive if it is running and try again.")
     if args.no_venv:
-        say("Python packages: skipped (--no-venv)")
+        with ui.step("The server's Python packages") as st:
+            st.skip("left out (--no-venv)")
     else:
-        setup_venv(args.dry_run)
-    save_config(user_dir, args.dry_run)
+        with ui.step("The server's Python packages"):
+            setup_venv(args.dry_run)
+    with ui.step("Saving the configuration"):
+        save_config(user_dir, args.dry_run)
+    ui.summary("installed")
 
     launcher = "run_server.bat (double-click it)" if IS_WIN else "./run_server.sh"
-    say("")
-    say("Done. Next:")
-    say(f"  1. Start the world server: {launcher}   (or: python start.py)")
-    say("     Leave its window open while you play.")
-    say("  2. Start BeamNG.drive, open Freeroam and pick the 'BeamNG.Earth' level.")
-    say("  More help: docs/QUICKSTART.md")
+    ui.note("")
+    ui.note("Done. Next:")
+    ui.hint(f"1. Start the world server: {launcher}   (or: python start.py)")
+    ui.hint("   Leave its window open while you play.")
+    ui.hint("2. Start BeamNG.drive, open Freeroam and pick the 'BeamNG.Earth' level.")
+    ui.hint("More help: docs/QUICKSTART.md")
 
 
 if __name__ == "__main__":
