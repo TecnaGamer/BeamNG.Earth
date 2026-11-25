@@ -183,26 +183,30 @@ seaV.shores = nil
 -- rain in layers (weather phase B): the weights by rate, the mix under a roof, in a tunnel and in the car
 local w0 = amb.rainWeights(0.1)
 T.check(w0.light == 1 and w0.medium == 0 and w0.heavy == 0, 'drizzle: the light layer only')
-local w3 = amb.rainWeights(3)
-T.check(math.abs(w3.medium - 1) < 1e-9, '3 mm/h: the medium layer')
-local w6 = amb.rainWeights(6)
-T.check(w6.medium > 0 and w6.heavy > 0 and math.abs(w6.medium + w6.heavy - 1) < 1e-9 and w6.light == 0, '6 mm/h: medium into heavy')
+local w3 = amb.rainWeights(5)
+T.check(math.abs(w3.medium - 1) < 1e-9, '5 mm/h: the medium layer')
+local w6 = amb.rainWeights(10)
+T.check(w6.medium > 0 and w6.heavy > 0 and math.abs(w6.medium + w6.heavy - 1) < 1e-9 and w6.light == 0, '10 mm/h: medium into heavy')
 T.check(amb.rainWeights(50).heavy == 1, 'a downpour: heavy')
-local mx = amb.rainMix(0.5, 3, 1, false, false)
-T.check(math.abs(mx.medium - 0.5) < 1e-9 and mx.muffled == 0 and mx.roof == 0, 'in the open: the layer at the volume')
-mx = amb.rainMix(0.5, 3, 0, false, false)
+local mx = amb.rainMix(0.5, 5, 1, false, false)
+T.check(math.abs(mx.medium - 0.5) < 1e-9 and mx.muffled == 0 and mx.roof_medium == 0, 'in the open: the layer at the volume')
+mx = amb.rainMix(0.5, 5, 0, false, false)
 T.check(mx.medium == 0 and math.abs(mx.muffled - 0.5 * amb.RAIN_UNDER_ROOF) < 1e-9, 'under a roof: muffled')
-mx = amb.rainMix(0.5, 3, 1, true, false)
+mx = amb.rainMix(0.5, 5, 1, true, false)
 T.check(mx.medium == 0 and math.abs(mx.muffled - 0.5 * amb.RAIN_IN_TUNNEL) < 1e-9, 'in a tunnel: muffled, quieter')
-mx = amb.rainMix(0.5, 3, 1, false, true)
-T.check(math.abs(mx.medium - 0.5 * amb.RAIN_CABIN) < 1e-9 and math.abs(mx.roof - 0.5 * amb.RAIN_ROOF) < 1e-9, 'in the car: on the roof')
+mx = amb.rainMix(0.5, 5, 1, false, true)
+T.check(math.abs(mx.medium - 0.5 * amb.RAIN_CABIN) < 1e-9 and math.abs(mx.roof_medium - 0.5 * amb.RAIN_ROOF) < 1e-9
+  and mx.roof_light == 0 and mx.roof_heavy == 0, 'in the car: on the roof')
+mx = amb.rainMix(0.5, 13, 1, false, true)
+T.check(mx.roof_medium > 0 and mx.roof_heavy > 0 and math.abs(mx.roof_medium + mx.roof_heavy - 0.5 * amb.RAIN_ROOF) < 1e-9,
+  'heavier rain on the roof: the medium and heavy roof loops crossfaded')
 
 local rainParticles = S.newObject('Precipitation')
 rainParticles:registerObject('bngEarthRain')
 local function layer(file)
   for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.fields.fileName == amb.RAIN_DIR .. file then return o end end
 end
-beamngEarth_weather = { rainNow = 1, rainMmHNow = 3, shelter = 1 }
+beamngEarth_weather = { rainNow = 1, rainMmHNow = 5, shelter = 1 }
 clock = 380; amb.update(3, seaV)
 clock = 381; amb.update(3, seaV)
 local me = layer('bne_rain_medium.ogg')
