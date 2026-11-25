@@ -56,6 +56,7 @@ T.check(B.patchCdae('HEAD' .. fix('tree_oak_dead_a') .. fix('Oak_bark_01') .. 'T
   'no leaf cards (a dead tree): no copy')
 T.check(B.patchCdae(cdae, { oak_leaves_01 = { 'too_long_a_name', 'x' } }) == nil, 'a rename of another length: refused')
 T.check(B.patchCdae(nil, B.RENAME) == nil, 'nothing read: none')
+T.check(B.patchCdae(cdae .. fix('oak_leaves_01'), B.RENAME) == nil, 'a name found twice: no copy')
 
 -- the twig materials: each on its own textures (made by tools/make_twig_textures.py: the same names)
 do

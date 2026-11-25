@@ -72,8 +72,9 @@ function M.renamesFor(shape)
 end
 
 -- Pure: a compiled shape's bytes with its materials renamed: each MessagePack fixstr (one byte 0xa0 + length, then the
--- name) of an old name replaced by the new one of the same length. -> the new bytes and the count, or nil without any
--- (or a rename of another length: the file's offsets would move).
+-- name) of an old name replaced by the new one of the same length. -> the new bytes and the count, or nil without any,
+-- with a name found twice (the material list names each once: a second hit would be inside a binary buffer) or a rename
+-- of another length (the file's offsets would move). A compressed shape names none: no copy, the stock tree.
 function M.patchCdae(bytes, renames)
   if type(bytes) ~= 'string' or #bytes < 16 then return nil, 0 end
   local n = 0
@@ -86,6 +87,7 @@ function M.patchCdae(bytes, renames)
     local pre = string.char(0xa0 + #old)
     local c
     bytes, c = bytes:gsub(pre .. old:gsub('%p', '%%%0'), function() return pre .. new end)
+    if c > 1 then return nil, 0 end       -- (a material is named once, in the material list: more is not ours to touch)
     n = n + c
   end
   if n == 0 then return nil, 0 end
