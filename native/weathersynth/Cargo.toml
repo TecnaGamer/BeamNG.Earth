@@ -13,9 +13,9 @@ libm = "=0.2.16"
 # default features only (no asio, jack or audio_thread_priority): ALSA on Linux (alsa / alsa-sys, libasound.so.2
 # linked dynamically), WASAPI shared mode on Windows (windows 0.62.2). Read in full before it came in (2026-11-25:
 # cpal, alsa, alsa-sys, dasp_sample line by line; windows-implement / windows-interface in full; windows / windows-core
-# scanned; owners kennykerr / microsoft/windows-rs and rustaudio). Vendored: vendor/ (tools/vendor_reviewed.py: the
-# reviewed crates unmodified, checksums against crates.io; stubs for the other platforms' crates), libc 0.2.190 pinned
-# in Cargo.lock like earthfast's.
+# scanned; owners kennykerr / microsoft/windows-rs and rustaudio). Cargo.lock pins every crate's crates.io checksum
+# (libc 0.2.190 like earthfast's); build paths, including the offline vendor/ from tools/vendor_reviewed.py, in
+# README.md.
 cpal = { version = "=0.17.3", optional = true }
 
 [features]

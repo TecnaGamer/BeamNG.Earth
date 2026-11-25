@@ -9,7 +9,8 @@
   accident: building it fails loudly. This is what plain `cargo vendor` cannot do (it copies every platform's crates).
 Nothing is built or run.
 
-usage: python3 -I tools/vendor_reviewed.py CARGO_LOCK VENDOR_DIR
+usage: python3 -I tools/vendor_reviewed.py Cargo.lock vendor
+   then: cargo build --release --offline --locked --features audio --config vendor/config.toml
 """
 import glob
 import hashlib
@@ -93,28 +94,53 @@ def toml_str(s):
 
 
 def vendor_stub(out, name, vers):
+    """A stub that resolves exactly like the real crate (the index's dependencies, features and links, so the lock stays
+    valid with --locked) but whose lib is a compile_error!."""
     j = index_entry(name, vers)
     feats = dict(j.get('features', {}))
     feats.update(j.get('features2', {}) or {})
-    # optional dependencies are features too (implicitly, unless named only through dep:)
-    for d in j.get('deps', []):
-        if d.get('optional') and d['name'] not in feats:
-            feats[d['name']] = []
     dest = os.path.join(out, f'{name}-{vers}')
     os.makedirs(os.path.join(dest, 'src'), exist_ok=True)
     lines = [
         '# STUB written by native/weathersynth/tools/vendor_reviewed.py: not the real crate. cpal needs it only on',
         '# platforms we do not build for (macOS, iOS, Android, wasm); it was never reviewed and must never be compiled.',
+        '# Its dependencies and features are the real crate\'s (from the crates.io index), so Cargo.lock stays valid.',
         '[package]', f'name = {toml_str(name)}', f'version = {toml_str(vers)}', 'edition = "2021"',
-        '', '[lib]', 'path = "src/lib.rs"', '', '[features]',
     ]
+    if j.get('links'):
+        # `links` needs a build script: one that fails at once (it could only run if the stub were compiled)
+        lines.append(f'links = {toml_str(j["links"])}')
+        lines.append('build = "build.rs"')
+    lines += ['', '[lib]', 'path = "src/lib.rs"', '']
+    for d in j.get('deps', []):
+        kind = d.get('kind') or 'normal'
+        # dev-dependencies too: features may name them, and for a dependency cargo ignores them in resolution
+        table = {'normal': 'dependencies', 'build': 'build-dependencies', 'dev': 'dev-dependencies'}[kind]
+        tgt = d.get('target')
+        key = d['name']
+        head = f"[target.'{tgt}'.{table}.{toml_str(key)}]" if tgt else f'[{table}.{toml_str(key)}]'
+        lines.append(head)
+        lines.append(f'version = {toml_str(d["req"])}')
+        if d.get('package'):
+            lines.append(f'package = {toml_str(d["package"])}')
+        if d.get('optional'):
+            lines.append('optional = true')
+        if not d.get('default_features', True):
+            lines.append('default-features = false')
+        if d.get('features'):
+            lines.append('features = [' + ', '.join(toml_str(f) for f in d['features']) + ']')
+        lines.append('')
+    lines.append('[features]')
     for f in sorted(feats):
-        lines.append(f'{toml_str(f)} = []')
+        lines.append(f'{toml_str(f)} = [' + ', '.join(toml_str(x) for x in feats[f]) + ']')
     files = {}
     body_toml = ('\n'.join(lines) + '\n').encode()
     body_lib = (f'compile_error!("{name} {vers} is a stub in native/weathersynth/vendor: '
                 'it is not vendored for this platform");\n').encode()
-    for rel, body in (('Cargo.toml', body_toml), ('src/lib.rs', body_lib)):
+    stub_files = [('Cargo.toml', body_toml), ('src/lib.rs', body_lib)]
+    if j.get('links'):
+        stub_files.append(('build.rs', f'fn main() {{ panic!("{name} {vers} is a stub: not vendored for this platform"); }}\n'.encode()))
+    for rel, body in stub_files:
         with open(os.path.join(dest, rel), 'wb') as f:
             f.write(body)
         files[rel] = hashlib.sha256(body).hexdigest()
@@ -144,6 +170,12 @@ def main():
             vendor_reviewed(out, n, v)
         else:
             vendor_stub(out, n, v)
+    # the source replacement, passed explicitly (cargo build --offline --config vendor/config.toml): nothing in the
+    # repository forces it, so a normal build (cargo fetch --locked) never needs this folder
+    with open(os.path.join(out, 'config.toml'), 'w') as f:
+        f.write('[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\n'
+                f'directory = {toml_str(os.path.abspath(out))}\n')
+    print(f'wrote {os.path.join(out, "config.toml")}')
 
 
 if __name__ == '__main__':

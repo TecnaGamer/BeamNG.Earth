@@ -31,5 +31,7 @@ native/earthfast/target/
 build/
 native/serverlist/target/
 native/weathersynth/target/
+# the reviewed crates, rebuilt by native/weathersynth/tools/vendor_reviewed.py (not committed: Cargo.lock pins their checksums)
+native/weathersynth/vendor/
 server/earthfast.FAST-BUILD-do-not-commit
 *.prof
