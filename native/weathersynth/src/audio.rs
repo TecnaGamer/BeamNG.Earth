@@ -326,12 +326,13 @@ fn copy_converted<T: Copy>(ring: &Ring, tmp: &mut [f32], data: &mut [T], conv: i
 }
 
 /// Pure: the fill target (frames) for the callback size, the underruns counted since the start of growth and the cap.
-/// One callback's worth (it can ask for all of it at once) plus a margin of half a callback or MARGIN_FRAMES, whichever
-/// is more (ALSA at 256 frames: 768, as 3 callbacks; WASAPI shared mode, which calls back with its whole ~22 ms buffer
-/// whatever is asked: 1.5 callbacks), and half a callback more (at least 128 frames) per underrun.
+/// One callback's worth (it can ask for all of it at once) plus a margin of a callback or MARGIN_FRAMES, whichever is
+/// more (ALSA at 256 frames: 768, as 3 callbacks; WASAPI shared mode, which calls back with up to its whole ~22 ms
+/// buffer whatever is asked: 2 callbacks; 1.5 had 2 underruns in 10 minutes), and half a callback more (at least 128
+/// frames) per underrun.
 pub fn fill_target(callback_frames: u32, grown: u64, max_frames: u32) -> u32 {
     let cb = callback_frames.max(32) as u64;
-    let t = cb + (cb / 2).max(MARGIN_FRAMES) + grown * (cb / 2).max(128);
+    let t = cb + cb.max(MARGIN_FRAMES) + grown * (cb / 2).max(128);
     t.min(max_frames.max(cb as u32) as u64) as u32
 }
 
@@ -450,10 +451,11 @@ mod tests {
     #[test]
     fn fill_target_grows_and_caps() {
         assert_eq!(super::fill_target(256, 0, 4410), 768, "ALSA 256: three callbacks");
-        assert_eq!(super::fill_target(1056, 0, 4800), 1584, "WASAPI's 1056: one and a half");
+        assert_eq!(super::fill_target(1056, 0, 4800), 2112, "WASAPI's 1056: two");
         assert_eq!(super::fill_target(256, 2, 4410), 1024, "128 frames more per underrun");
         assert_eq!(super::fill_target(256, 100, 4410), 4410, "capped");
         assert_eq!(super::fill_target(0, 0, 4410), 544, "an unknown callback: the floor plus the margin");
+        assert_eq!(super::fill_target(1056, 1, 4800), 2640, "WASAPI: half a callback more per underrun");
     }
 
     #[test]
