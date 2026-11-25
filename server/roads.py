@@ -180,6 +180,48 @@ def look_of(spec, fid=None):
 Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf link sides parking mountain france state "
                   "street", defaults=(False, 2.5, 0, None, None, None, None, None, False, None, True, False, False, None,
                                       None))   # median: m to the other carriageway's centre line
+
+
+class NorwegianTunnelSpec(Spec):
+    """A bore's carriageway, with optional width stops along its normalized length."""
+
+    tunnel_shoulder = 0.4      # metres between each carriageway edge and the bore wall
+
+    def with_widths(self, stations, widths):
+        spec = self._replace(width=round(float(np.min(widths)), 3))
+        if np.ptp(widths) > 0.001:
+            spec.width_stops = tuple(zip(map(float, stations), map(float, widths)))
+        return spec
+
+    def width_at(self, stations):
+        stops = getattr(self, "width_stops", ())
+        if stops:
+            pos, widths = np.asarray(stops).T
+            return np.interp(stations, pos, widths)
+        return np.full(np.shape(stations), self.width, np.float64)
+
+
+class CompactNorwegianTunnelSpec(NorwegianTunnelSpec):
+    """A deep bore for a narrow local road, with a smaller vault."""
+
+
+COMPACT_NORWAY_VAULT_M = 4.5
+COMPACT_NORWAY_ROAD_M = 4.5
+COMPACT_NORWAY_CLASSES = frozenset(("unclassified", "tertiary", "residential", "service", "track"))
+
+
+def tunnel_widths(spec, xy):
+    """Widths at a tunnel part's original vertices, or None for a uniform profile."""
+    if not getattr(spec, "width_stops", ()):
+        return None
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(np.asarray(xy)[:, :2], axis=0).T))]
+    return spec.width_at(s / max(float(s[-1]), 1e-9))
+
+
+def tunnel_max_width(spec):
+    return max((w for _, w in getattr(spec, "width_stops", ())), default=spec.width)
+
+
 # (state: the US state / region whose marking profile the road takes, roadmarkings.profile; PR #843)
 # (parking: whether a town street's carriageway holds parking lanes: _swedish_specs; mountain: a mountain pass road,
 # _mountain_roads; france: PR #505's French road scenery, BNE_FR_ROADS)
@@ -3228,14 +3270,27 @@ def _spec_json(sp):
                 out[f] = v
         else:
             out[f] = v.item() if hasattr(v, "item") else list(v) if isinstance(v, tuple) else v
+    if isinstance(sp, NorwegianTunnelSpec) and getattr(sp, "width_stops", ()):
+        out["width_stops"] = sp.width_stops
+    if isinstance(sp, CompactNorwegianTunnelSpec):
+        out["compact_tunnel"] = True
     return out
 
 
 def spec_from_json(data):
     from europewalks import Street
 
-    return Spec(**{**data, "sides": tuple(data["sides"]) if data.get("sides") is not None else None,
-                   "street": Street.from_json(data["street"]) if data.get("street") is not None else None})
+    args = {**data, "sides": tuple(data["sides"]) if data.get("sides") is not None else None,
+            "street": Street.from_json(data["street"]) if data.get("street") is not None else None}
+    stops = args.pop("width_stops", None)
+    compact = args.pop("compact_tunnel", False)
+    tunnel_spec = CompactNorwegianTunnelSpec if compact else NorwegianTunnelSpec
+    if stops:
+        stations, widths = zip(*stops)
+        return tunnel_spec(**args).with_widths(stations, widths)
+    if compact:
+        return tunnel_spec(**args)
+    return Spec(**args)
 
 
 def _specs_from(data, n):
@@ -6317,14 +6372,14 @@ def section_lines(ex, feats, i, spec, pts, frame, lon, left_hand, country, ws):
 
 
 def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shift=None, defer_dashes=False, phase=0.,
-           lane_growth=None):
+           lane_growth=None, *, in_tunnel=False):
     """The sidewalk / gutter / marking polylines of one road: [(look dict with m / tl / p, width, pts)].
     pts: its centreline (k, 3) in the anchor frame (a whole ground part: its broken lines' dashes start their cycle at
     its start, so they meet across tiles); lon: its longitude; country: ISO code (markings.style: the country's line
     colours, widths and dash patterns; by longitude when unknown); osm: OpenStreetMap's lane tags of the road
     (railtags.LANE_COLUMNS: the lines lane by lane, markings.lane_plan); ws: its width at each point of pts where
     it tapers (taper_widths: its edges, curbs and lane lines follow); shift: its lines' shift (m, + left) at
-    each point at a merge or split (shift_at: its markings only). Pure."""
+    each point at a merge or split (shift_at: its markings only). in_tunnel: a covered road section. Pure."""
     import markings
     from europewalks import LOW_EDGE_HEIGHT
     out = []
@@ -6370,6 +6425,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
         pts = offset_polyline(pts, shift)
     motorway = cls == "motorway"
     lw_ = st.w_motorway if motorway else (st.w_urban or st.w) if urban else st.w           # a line's width
+    norway = st is markings.STYLES["NO"]
     sweden = st is markings.STYLES["SE"]
     barrier = sweden and kind == "paved" and _motesfri_section(spec, osm)   # (a 2+1 road's: motesfri.py)
 
@@ -6413,6 +6469,17 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
     # the driving width (a town street's parking lanes and a rural road's edge strips left out: three lanes on every
     # rural Interstate, GitHub #43) and its lanes (OpenStreetMap's count where known)
     drive, lanes = lane_layout(spec)
+    pat = st.lane_motorway if motorway else (st.lane_urban if urban else st.lane_rural)
+    cpat = st.centre_urban if urban else st.centre_rural
+    if norway:
+        speed = spec.kmh or (90 if motorway and not spec.link else 50 if urban else 80)
+        motorway_edge = motorway and not spec.link and speed >= 90
+        wide_lanes = speed >= 90 or (speed >= 60 and (motorway or lanes >= 4 or (w >= 7.5 and drive / lanes >= 3.25)))
+        lw_ = st.w_motorway if wide_lanes else st.w
+        pat = st.lane_urban if speed <= 50 else st.lane_rural
+        cpat = st.centre_urban if speed <= 50 else st.centre_rural
+        if speed > 50 and (in_tunnel or speed <= 60):
+            cpat = markings.NORWAY_WARNING_LINE
     # (tapered: the lanes' lines spread with the driving width)
     scale = 1.0 if ws is None else np.maximum(drive + (wv - w), 0.5) / max(drive, 0.5)
     if not spec.oneway and spec.lanes and lanes >= 3 and lanes % 2:
@@ -6424,8 +6491,6 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
     if plan is not None:
         # the map's lanes: each line where its lanes meet (OpenStreetMap lanes:forward / backward / both_ways,
         # overtaking, change:lanes; research §5)
-        pat = st.lane_motorway if motorway else (st.lane_urban if urban else st.lane_rural)
-        cpat = st.centre_urban if urban else st.centre_rural
         d = (st.double_gap + lw_) / 2
 
         def at(off):
@@ -6443,9 +6508,12 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
                 from_edge = drive / 2 - side * off
                 auxiliary = from_edge <= turning * drive / lanes + 1e-5
                 pattern = None if how else ((min(3., pat[0]), min(3., pat[1])) if auxiliary else pat)
+                width = lw_ * (2 if auxiliary else 1)
+                if auxiliary and norway and (motorway or cls == "trunk") and not how:
+                    pattern = markings.NORWAY_AUXILIARY_LINE
+                    width = st.edge_motorway if motorway_edge else 0.20
                 for piece, before in _lane_runs(along, from_edge - missing):
-                    mark("lane", "line_white", lw_ * (2 if auxiliary else 1), piece, pattern,
-                         dash_phase=phase + before)
+                    mark("lane", "line_white", width, piece, pattern, dash_phase=phase + before)
             elif role == "twltl":           # solid on the through side, broken on the turn lane's (MUTCD 3B.05)
                 mark("centre", st.centre, lw_, at(off + how * d))
                 mark("centre", st.centre, lw_, at(off - how * d), cpat)
@@ -6476,10 +6544,9 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
         elif solid:
             mark("centre", st.centre, lw_, pts.copy())
         else:
-            mark("centre", st.centre, lw_, pts.copy(), st.centre_urban if urban else st.centre_rural)
+            mark("centre", st.centre, lw_, pts.copy(), cpat)
     if plan is None and kind == "paved" and cls in LANE_CLASSES:
         # lane lines between the lanes of one direction, broken in the country's pattern
-        pat = st.lane_motorway if motorway else (st.lane_urban if urban else st.lane_rural)
         if spec.oneway and lanes >= 2:
             lw = drive / lanes
             for k in range(1, lanes):
@@ -6505,6 +6572,8 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
         wide = motorway or (st.edge_pattern is not None and spec.oneway and not urban)
         ew = markings.MOTESFRI_EDGE_W if barrier else st.edge_motorway if wide else (st.w_urban or st.edge) if urban \
             else st.edge
+        if norway:
+            ew = st.edge_motorway if motorway_edge and not in_tunnel else st.w_motorway if spec.link else lw_
         epat = None if wide or barrier else st.edge_pattern
         travel_left = 1 if getattr(spec, "dir", 0) >= 0 else -1      # (dir < 0: one way against the line)
         # (VGU 2024 table 12.5, mötesfri väg: left 0.30 m, right 0.20 m: a 2+1 road's carriageway, by its one or two lanes)
@@ -8495,7 +8564,7 @@ class TunnelProfiles(BridgeProfiles):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self.open = set()           # sub-part fids that are open roads
-        self.heights = {}           # sub-part fid -> a low arch's tube height
+        self.heights = {}           # sub-part fid -> a tube height different from the standard vault
         self.ups = {}               # sub-part fid -> its portal faces' reach over the vault at its start and end
         self.sections = {}          # part fid -> [(i0, i1, kind)] (inclusive sample ranges, sharing their ends)
         self.caps = {}              # sub-part fid -> a low arch's stone top's depth at its start and end (None: the
@@ -8809,7 +8878,7 @@ class TunnelProfiles(BridgeProfiles):
         """Per part: the floor (the hull of the ungraded ground, its ends at the roads' graded height at its portals,
         where the approaches arrive) and its sections; a low arch's tube under the thin part of the cover over its
         middle (a 20th percentile of the middle 60 %, less TUNNEL_SOIL_M; sized from the most, the ground came down
-        into it and was cut away, a bare stone vault), a full tunnel's roadmesh.TUNNEL_H."""
+        into it and was cut away, a bare stone vault), and the height of each full tube."""
         import roadmesh
         self._mark_drowned(comp, pool)
         gfn = self._raw_ground if self.raw is not None else self._ground
@@ -8942,7 +9011,119 @@ class TunnelProfiles(BridgeProfiles):
                 subs[n] = (kd, th, ups, mouths, caps)
             self._tls.staged[k] = (secs, subs, underwater)
             out.append(floor)
+        self._fit_norwegian_widths(comp, pool, ground, jends, jdeg)
+        self._fit_compact_norwegian_vault(comp, pool)
         return out
+
+    def _fit_compact_norwegian_vault(self, comp, pool):
+        """Keep one smaller vault along a dry local-road chain with narrow mouths."""
+        mouth_widths = []
+        covered = []
+        for k in comp:
+            spec, xy, *_ = pool[k]
+            if (not isinstance(spec, NorwegianTunnelSpec) or spec.cls not in COMPACT_NORWAY_CLASSES
+                    or self._drowned.get(self._part_id(k))):
+                return
+            staged = self._tls.staged.get(k)
+            if staged is None:
+                return
+            secs, subs, underwater = staged
+            if underwater or any(kind and (kind != 2 or th != TUNNEL_FULL_H) for kind, th, *_ in subs.values()):
+                return
+            widths = tunnel_widths(spec, xy)
+            for n, (kind, _th, ups, mouths, caps) in subs.items():
+                if kind == 2:
+                    covered.append((subs, n, ups, mouths, caps))
+                    for at, mouth in zip(secs[n][:2], mouths):
+                        if mouth:
+                            mouth_widths.append(spec.width if widths is None else widths[at])
+        if not mouth_widths or max(mouth_widths) > COMPACT_NORWAY_ROAD_M:
+            return
+        for k in comp:
+            spec, *part = pool[k]
+            compact = CompactNorwegianTunnelSpec(*spec)
+            compact.width_stops = getattr(spec, "width_stops", ())
+            pool[k] = (compact, *part)
+        for subs, n, ups, mouths, caps in covered:
+            subs[n] = (2, COMPACT_NORWAY_VAULT_M, ups, mouths, caps)
+
+    def _fit_norwegian_widths(self, comp, pool, ground, joins, degree):
+        """Match the approach at each Norwegian mouth before clipping the bore to tiles."""
+        import carriageways
+        import norway_tunnels
+
+        def fit_widths(chain, start, base, end):
+            lengths = [float(norway_tunnels.arc(lines[i][1])[-1]) for i, _ in chain]
+            total = sum(lengths)
+            if total < 1.0:
+                return
+            start = base if start is None else start
+            end = base if end is None else end
+            # Keep the outside width past the portal, then ease to the interior width.
+            hold, fade = min(28.0, total * 0.16), min(80.0, total * 0.45)
+            stations = np.array([0., hold, fade, total - fade, total - hold, total])
+            widths = [start, start, base, base, end, end]
+            lo = 0.0
+            for (i, reverse), length in zip(chain, lengths):
+                k, _ = lines[i]
+                spec, *part = pool[k]
+                hi = lo + length
+                nodes = np.r_[lo, stations[(stations > lo) & (stations < hi)], hi]
+                portion = np.interp(nodes, stations, widths)
+                pos = (nodes - lo) / max(length, 1e-9)
+                if reverse:
+                    pos, portion = 1.0 - pos[::-1], portion[::-1]
+                pool[k] = (spec.with_widths(pos, portion), *part)
+                lo = hi
+
+        def plausible(width, nominal):
+            return width is not None and 0.65 * nominal <= width <= 1.4 * nominal
+
+        eligible = [k for k in comp if len(pool[k][1]) >= 2 and norway_tunnels.in_norway(
+            *norway_tunnels.location(self.frame, pool[k][1][len(pool[k][1]) // 2]))]
+        if not eligible:
+            return
+        lines = [(k, pool[k][1]) for k in eligible]
+        road_entries = {k: (ln, self._hw[k] * 2) for k, ln in ground.items() if k in self._hw}
+        for chain in carriageways.chains(lines, tol=0.5):
+            keys = [eligible[i] for i, _ in chain]
+            endpoint_widths = [None, None]
+            for at, (i, reverse) in ((0, chain[0]), (-1, chain[-1])):
+                k, xy = lines[i]
+                end = -1 - at if reverse else at
+                if k not in joins or degree.get(joins[k][0 if end == 0 else 1], 0) > 1:
+                    continue
+                inward = norway_tunnels.unit(xy[1 if end == 0 else -2] - xy[end])
+                same_road = (k[0], "g")
+                chosen = norway_tunnels.approach_width(self.frame, xy[end], inward,
+                    [road_entries[same_road]] if same_road in road_entries else (), taper_widths)
+                if chosen is not None:
+                    endpoint_widths[at] = chosen
+                else:
+                    chosen = norway_tunnels.approach_width(self.frame, xy[end], inward, road_entries.values(), taper_widths)
+                    if plausible(chosen, pool[k][0].width):
+                        endpoint_widths[at] = chosen
+            specs = [pool[k][0] for k in keys]
+            for k in keys:
+                spec, *part = pool[k]
+                pool[k] = (NorwegianTunnelSpec(*spec), *part)
+            start, end = endpoint_widths
+            if start is None and end is None:
+                continue
+            nominal = {spec.width for spec in specs}
+            lanes = {spec.lanes for spec in specs if spec.lanes is not None}
+            same_lanes = len(lanes) <= 1 and len({spec.oneway for spec in specs}) == 1
+            if start is not None and end is not None and same_lanes and all(
+                    plausible(start, width) and plausible(end, width) for width in nominal):
+                fit_widths(chain, start, min(start, end), end)
+            elif same_lanes and len(nominal) == 1:
+                fit_widths(chain, start, specs[0].width, end)
+            else:
+                # Keep the mapped widths at interior joints while fitting each known mouth.
+                if start is not None:
+                    fit_widths(chain[:1], start, specs[0].width, None)
+                if end is not None:
+                    fit_widths(chain[-1:], None, specs[-1].width, end)
 
     def _observed_floor(self, k, pool, xy, s, floor, secs, joints=(False, False)):
         """floor with each covered section (kind 1 / 2) at the measured height where a source has one (roadz.py,
@@ -9108,7 +9289,7 @@ class TunnelProfiles(BridgeProfiles):
             return self.ups.get(fid, [roadmesh.PORTAL_FRAME, roadmesh.PORTAL_FRAME])
 
     def height(self, fid):
-        """The tube's height (floor to vault) of a sub-part: a low arch's, else roadmesh.TUNNEL_H."""
+        """The tube's height (floor to vault) of a sub-part, or the standard vault height."""
         import roadmesh
         with self.lock:
             return self.heights.get(fid, roadmesh.TUNNEL_H)
@@ -9127,9 +9308,19 @@ class TunnelProfiles(BridgeProfiles):
             if not secs:
                 out.append((f"{fid}#0", spec, xy, z, lon))
                 continue
+            variable = getattr(spec, "width_stops", ())
+            if variable:
+                arc = np.r_[0., np.cumsum(dnp.hypot(*np.diff(np.asarray(xy), axis=0).T))]
+                arc /= max(float(arc[-1]), 1e-9)
+                stations = np.asarray(variable)[:, 0]
             for n, (a, b, kd) in enumerate(secs):
                 if b > a:
-                    out.append((f"{fid}#{n}", spec, np.asarray(xy)[a:b + 1], np.asarray(z)[a:b + 1], lon))
+                    section = spec
+                    if variable and arc[b] > arc[a]:
+                        lo, hi = arc[a], arc[b]
+                        nodes = np.r_[lo, stations[(stations > lo) & (stations < hi)], hi]
+                        section = spec.with_widths((nodes - lo) / (hi - lo), spec.width_at(nodes))
+                    out.append((f"{fid}#{n}", section, np.asarray(xy)[a:b + 1], np.asarray(z)[a:b + 1], lon))
         return out
 
     def open_parts(self, cells_feats, box):
@@ -9506,9 +9697,10 @@ def tunnel_hole_mask(parts, u, cx, cy, square, heights=None, mouths=None):
         z = np.asarray(z, np.float64)
         if len(xy) < 2 or not np.isfinite(z).all():
             continue
-        hw = spec.width / 2 + roadmesh.TUNNEL_SHOULDER + TUNNEL_HOLE_MARGIN
-        th = (heights or {}).get(_fid, roadmesh.TUNNEL_H)       # heights: a low arch's tube (TunnelProfiles.heights)
-        low = th < roadmesh.TUNNEL_H - 0.05
+        shoulder = roadmesh.tunnel_shoulder(spec) + TUNNEL_HOLE_MARGIN
+        hw = spec.width / 2 + shoulder
+        th = (heights or {}).get(_fid, roadmesh.TUNNEL_H)
+        low = th < roadmesh.TUNNEL_H - 0.05 and not isinstance(spec, CompactNorwegianTunnelSpec)
         if k_ >= n_own and not low:     # a twin tube's mouths, whatever the height (the low arches' cut, no side reach)
             m0, m1 = (mouths or {}).get(_fid, (True, True))
             mouth_mask = np.zeros(u.shape, bool)
@@ -9519,10 +9711,24 @@ def tunnel_hole_mask(parts, u, cx, cy, square, heights=None, mouths=None):
         # the Rust kernel: the samples over the part between its floor and vault (a low arch: its mouths only)
         m0, m1 = (mouths or {}).get(_fid, (True, True))
         # (a low arch: the squares from its flat mouth band, LOW_HOLE_M, up to the soil over its vault)
-        fast._ef.tunnel_holes(mask, u, float(x0), float(y0), float(square), np.ascontiguousarray(xy),
-                              np.ascontiguousarray(z), float(hw), float(th), bool(low), bool(m0), bool(m1),
-                              float(TUNNEL_HOLE_MARGIN), float(LOW_HOLE_M if low else LOW_HOLE_M + LOW_HOLE_STEP),
-                              float(ARCH_SIDE_M + 1.0), not low)
+        widths = tunnel_widths(spec, xy)
+        spans = [(0, len(xy) - 1, spec.width)]
+        if widths is not None:
+            # The kernel takes one width. Follow the taper in overlapping spans
+            # bounded by width changes, treating only the real ends as mouths.
+            spans = []
+            start = 0
+            for end in range(1, len(xy)):
+                if abs(widths[end] - widths[start]) >= 0.22 or end == len(xy) - 1:
+                    spans.append((start, end, float(np.max(widths[start:end + 1]))))
+                    start = end
+        for start, end, width in spans:
+            fast._ef.tunnel_holes(mask, u, float(x0), float(y0), float(square),
+                                  np.ascontiguousarray(xy[start:end + 1]), np.ascontiguousarray(z[start:end + 1]),
+                                  float(width / 2 + shoulder), float(th), bool(low), bool(m0 and start == 0),
+                                  bool(m1 and end == len(xy) - 1), float(TUNNEL_HOLE_MARGIN),
+                                  float(LOW_HOLE_M if low else LOW_HOLE_M + LOW_HOLE_STEP),
+                                  float(ARCH_SIDE_M + 1.0), not low)
     return mask
 
 
@@ -9544,13 +9750,13 @@ def arch_raise(parts, heights, px, py, z, mouths=None):
     py = np.ascontiguousarray(py, np.float64)
     for fid, spec, xy, zf, _lon in parts:
         th = (heights or {}).get(fid)
-        if th is None or th >= roadmesh.TUNNEL_H - 0.05:
+        if th is None or th >= roadmesh.TUNNEL_H - 0.05 or isinstance(spec, CompactNorwegianTunnelSpec):
             continue
         xy = np.asarray(xy, np.float64)
         zf = np.asarray(zf, np.float64)
         if len(xy) < 2 or not np.isfinite(zf).all():
             continue
-        hw = spec.width / 2 + roadmesh.TUNNEL_SHOULDER + ARCH_SIDE_M
+        hw = tunnel_max_width(spec) / 2 + roadmesh.tunnel_shoulder(spec) + ARCH_SIDE_M
         # the Rust kernel (per part) on the points in its box
         m0, m1 = (mouths or {}).get(fid, (True, True))
         lo, hi = xy.min(0) - hw, xy.max(0) + hw
@@ -9575,13 +9781,15 @@ def tunnel_floor_at(parts, x, y):
         z = np.asarray(z, np.float64)
         if len(xy) < 2 or not np.isfinite(z).all():
             continue
-        hw = spec.width / 2 + roadmesh.TUNNEL_SHOULDER
         a, b = xy[:-1], xy[1:]
         ab = b - a
         L2 = np.maximum((ab * ab).sum(1), 1e-12)
         t = np.clip(((p - a) * ab).sum(1) / L2, 0.0, 1.0)
         d = dnp.hypot(*(a + t[:, None] * ab - p).T)
         j = int(np.argmin(d))
+        widths = tunnel_widths(spec, xy)
+        width = spec.width if widths is None else widths[j] + t[j] * (widths[j + 1] - widths[j])
+        hw = width / 2 + roadmesh.tunnel_shoulder(spec)
         if d[j] <= hw:
             f = float(z[j] + t[j] * (z[j + 1] - z[j]))
             best = f if best is None else min(best, f)
@@ -10393,7 +10601,10 @@ def twin_tunnels(parts):
             # it: its floor in the open inside the mountain (2026-11-09)
             if _tunnel_road(fa) == _tunnel_road(fb) or _goes_on(xa, xb):
                 continue
-            reach = (sa.width + sb.width) / 2 + 2 * roadmesh.TUNNEL_SHOULDER + 1.0      # their tubes would overlap
+            if isinstance(sa, CompactNorwegianTunnelSpec) != isinstance(sb, CompactNorwegianTunnelSpec):
+                continue
+            half_widths = (tunnel_max_width(sa) + tunnel_max_width(sb)) / 2
+            reach = half_widths + roadmesh.tunnel_shoulder(sa) + roadmesh.tunnel_shoulder(sb) + 1.0
             d, q = _line_near(P, xb)
             near = d < reach
             if near.mean() < TWIN_SHARE:
@@ -10407,14 +10618,14 @@ def twin_tunnels(parts):
                 continue
             mid = np.c_[(P + q) / 2, (Z + zq) / 2]
             k0, k1 = int(np.flatnonzero(near)[0]), int(np.flatnonzero(near)[-1])     # (where they run side by side)
-            width = float(np.median(d[near])) + (sa.width + sb.width) / 2
+            width = float(np.median(d[near])) + half_widths
             out.append((i, j, mid[k0:k1 + 1], width))
             taken.update((i, j))
             break
     return out
 
 
-def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
+def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True, *, left_hand=False, country=None):
     """The chunks of the tunnels crossing the tile box `exact`: the road surface ("deck", "tunnel": the tube is
     built around it, roadmesh.tunnel) and its lines, every one "fixed" at the floor's heights; a surface chunk
     ending at its part's end carries "portal": [start is one, end is one]. Twin tunnels (twin_tunnels): their surfaces
@@ -10427,16 +10638,21 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
             if not np.isfinite(z).all():
                 continue
             pts = np.c_[xy, z]
-            for look, w, line in [(look_of(spec), spec.width, pts)] + [
-                    (lk, w2, ln) for lk, w2, ln in extras(spec, pts, lon, defer_dashes=True)
+            widths = tunnel_widths(spec, pts)
+            carriageway = pts if widths is None else np.c_[pts, widths]
+            for look, w, line in [(look_of(spec), spec.width, carriageway)] + [
+                    (lk, w2, ln) for lk, w2, ln in extras(spec, pts, lon, left_hand, country, ws=widths,
+                                                          defer_dashes=True)
                     if lk["m"] not in (SIDEWALK["m"], GUTTER["m"], EDGE_DECAL["m"])]:
                 for piece in clip_polyline(line, *exact):
-                    for c in split(densify(simplify(piece))):
-                        if len(c) >= 2:
-                            # on the ground as any road (the grading lays the ground at its floor, Grader._open_tunnels:
-                            # at the floor's own heights the ground graded from the grader's profile covered it
-                            # outside 97th Street's arch, 2026-10-17)
-                            out.append(_chunk(look, w, c))
+                    variable = piece.shape[1] > 3
+                    for c in split(densify(piece if variable else simplify(piece))):
+                        if len(c) >= 2 and np.any(c[1:, :2] != c[0, :2]):
+                            # Draped over the graded floor so heightmap quantization cannot bury the asphalt.
+                            ch = _chunk(look, float(np.median(c[:, 3])) if variable else w, c[:, :3])
+                            if variable and np.ptp(c[:, 3]) > .001:
+                                ch["ws"] = [round(float(value), 3) for value in c[:, 3]]
+                            out.append(ch)
     parts = [p for p in tunnels.parts(cells, exact) if np.isfinite(p[3]).all()]
     layouts = rampmerges.plans([(fid, sp, np.c_[xy, z], lon) for fid, sp, xy, z, lon in parts])
     twins = twin_tunnels(parts)
@@ -10455,7 +10671,8 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                    and norway_tunnels.near_bore(tunnels.frame, xy))
         look = DIRT_LOOK["gravel"] if is_aurs else _deck_look(spec)
         lines = [] if look is None else [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned}, spec.width, pts)]
-        markings = [] if is_aurs else extras(spec, pts, lon, defer_dashes=True)
+        markings = [] if is_aurs else extras(spec, pts, lon, left_hand, country, ws=tunnel_widths(spec, pts),
+                                             defer_dashes=True, in_tunnel=True)
         for look, w, line in rampmerges.trim(fid, markings, layouts):
             if look["m"] not in (SIDEWALK["m"], GUTTER["m"], EDGE_DECAL["m"]):     # (no ground beside a deck)
                 lines.append((look, w, line))
@@ -10464,6 +10681,7 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
         length = max((float(dnp.hypot(*np.diff(np.asarray(ln)[:, :2], axis=0).T).sum()) for _, _, ln in lines
                       if len(ln) >= 2), default=0.0)
         for look, w, line in lines:
+            widths = tunnel_widths(spec, line) if look.get("tunnel") and not look.get("tube_only") else None
             guard = None
             if look.get("tunnel") and getattr(tunnels, "frame", None) is not None:
                 # Whole sections, in a global datum: neighbouring tiles deduplicate them; anchor rebases and
@@ -10473,19 +10691,30 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                 la, lo, h = geotiles.world_to_geodetic(tunnels.frame, q)
                 nodes = np.c_[np.round(la, 8), np.round(lo, 8), np.round(h, 3)].tolist()
                 height = tunnels.height(fid) + .2     # enclose both polylines' simplification/rounding and end overlap
-                identity = hashlib.sha1(json.dumps([nodes, w, height], separators=(",", ":")).encode()).hexdigest()[:16]
-                guard = {"id": f"{fid}:{identity}", "r": w / 2 + roadmesh.TUNNEL_SHOULDER + 1.,
+                guard_w = w if widths is None else float(np.max(widths))
+                identity = hashlib.sha1(json.dumps([nodes, guard_w, height], separators=(",", ":")).encode()).hexdigest()[:16]
+                guard = {"id": f"{fid}:{identity}", "r": guard_w / 2 + roadmesh.tunnel_shoulder(spec) + 1.,
                          "h": height, "nodes": nodes}
-            for piece in clip_polyline(line, *exact):
-                for c in split(densify(simplify(piece, ztol=SIMPLIFY_Z_M))):
-                    if len(c) >= 2:
-                        ch = _chunk(look, w, c)
+            source = line if widths is None else np.c_[line, widths]
+            for piece in clip_polyline(source, *exact):
+                keep = widths is not None and np.ptp(piece[:, 3]) > 0.001
+                for c in split(densify(piece if keep else simplify(piece, ztol=SIMPLIFY_Z_M))):
+                    if len(c) >= 2 and np.any(c[1:, :2] != c[0, :2]):
+                        ch = _chunk(look, w if widths is None else float(np.median(c[:, 3])), c[:, :3])
+                        if keep:
+                            ch["ws"] = [round(float(value), 3) for value in c[:, 3]]
                         ch["fixed"] = True
                         if look.get("tunnel"):
                             if guard is not None:
                                 ch["waterguard"] = guard
+                            if isinstance(spec, NorwegianTunnelSpec):
+                                ch["tunnel_shoulder"] = spec.tunnel_shoulder
+                            if isinstance(spec, CompactNorwegianTunnelSpec):
+                                ch["compact_tunnel"] = True
                             ch["tunnel"] = True
                             ch["deck"] = not look.get("tube_only")      # (a twin's tube: no floor, no road surface)
+                            if spec.oneway:
+                                ch["oneway"] = True
                             ch["tunnel_len"] = round(length, 1)             # (the whole sub-part's: sound_boxes)
                             if spec.cls in CONCRETE_WALL_CLASSES:
                                 ch["concrete"] = True   # (a major road's low arch: concrete, as its cutting's walls)
@@ -10494,19 +10723,17 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                                     ch[flag] = True
                             if getattr(tunnels, "height", None) is not None:
                                 ch["tunnel_h"] = tunnels.height(fid)
+                            at_start = dnp.hypot(*(c[0, :2] - ends[0])) < 1e-6
+                            at_end = dnp.hypot(*(c[-1, :2] - ends[1])) < 1e-6
                             if getattr(tunnels, "portal_ups", None) is not None:
                                 u0, u1 = tunnels.portal_ups(fid)
-                                at = lambda p: u0 if dnp.hypot(*(p - ends[0])) < 0.5 else u1    # noqa: E731
-                                ch["portal_up"] = [at(c[0, :2]), at(c[-1, :2])]
+                                ch["portal_up"] = [u0 if at_start else None, u1 if at_end else None]
                             if getattr(tunnels, "cap_m", None) is not None:
                                 c0, c1 = tunnels.cap_m(fid)
                                 if c0 is not None or c1 is not None:
-                                    atc = lambda p: c0 if dnp.hypot(*(p - ends[0])) < 0.5 else c1    # noqa: E731
-                                    ch["cap_m"] = [atc(c[0, :2]), atc(c[-1, :2])]
+                                    ch["cap_m"] = [c0 if at_start else None, c1 if at_end else None]
                             m0, m1 = tunnels.mouth(fid) if getattr(tunnels, "mouth", None) is not None else (True, True)
-                            isp = lambda p: bool((dnp.hypot(*(p - ends[0])) < 0.5 and m0) or      # noqa: E731
-                                                 (dnp.hypot(*(p - ends[1])) < 0.5 and m1))
-                            ch["portal"] = [isp(c[0, :2]), isp(c[-1, :2])]
+                            ch["portal"] = [bool(m0 and at_start), bool(m1 and at_end)]
                         out.append(ch)
     out.extend(rampmerges.chunks(layouts, exact, fixed=True))
     import portals                  # (the ground round each mouth: its headwall, wing walls and the tube's cover)
@@ -11207,7 +11434,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         for look, w, line in lines:
             for piece in clip_polyline(line, *exact):
                 for c in split(densify(simplify(piece, ztol=SIMPLIFY_Z_M))):
-                    if len(c) >= 2:
+                    if len(c) >= 2 and np.any(c[1:, :2] != c[0, :2]):
                         ch = _chunk(look, w, c)
                         ch["fixed"] = True
                         ch['fid'] = fid
@@ -11646,7 +11873,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         elif deck_context is not None:          # the decks around the tile (roadmesh.deck's parapet test)
             deck_context.append(ch)
     if tunnels is not None:                     # TunnelProfiles: road surfaces and lines through tunnels
-        tch = _tunnel_chunks(tunnels, cells, (x0, y0, x1, y1), terrain_paint)
+        tch = _tunnel_chunks(tunnels, cells, (x0, y0, x1, y1), terrain_paint, left_hand=left_hand, country=country)
         chunks.extend(tch)
         import roadmesh
         # (retaining walls: none in a tube either, its vault over them; between twin tunnels' carriageways one stood in
@@ -11655,7 +11882,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if c.get("tunnel") and not c.get("no_tube"):
                 n = np.array(c["n"], np.float64)
                 n[:, 2] += float(c.get("tunnel_h") or roadmesh.TUNNEL_H)
-                decks_near.append({"n": n, "w": float(c["w"]) + 2 * roadmesh.TUNNEL_SHOULDER})
+                decks_near.append({"n": n, "w": float(c["w"]) + 2 * roadmesh.tunnel_shoulder(c)})
     exact = (x0, y0, x1, y1)
     sm = float(skin_margin or 0.0)
     wexact = (x0 - sm, y0 - sm, x1 + sm, y1 + sm) if sm else exact    # (the skin's pieces: skin_margin)
@@ -13119,9 +13346,10 @@ def sound_boxes(chunks):
     for c in chunks:
         if c.get("tunnel") and not c.get("no_tube"):
             h = float(c.get("tunnel_h") or roadmesh.TUNNEL_H)
-            short = h < roadmesh.TUNNEL_H - 0.01 or float(c.get("tunnel_len") or 1e9) < SOUND_SHORT_TUNNEL_M
+            low_arch = h < roadmesh.TUNNEL_H - 0.01 and not c.get("compact_tunnel")
+            short = low_arch or float(c.get("tunnel_len") or 1e9) < SOUND_SHORT_TUNNEL_M
             lines.append((SOUND_TUNNEL_OPEN if short else SOUND_TUNNEL, c["n"],
-                          float(c["w"]) + 2 * roadmesh.TUNNEL_SHOULDER, 0.5, h + 0.5))
+                          float(c["w"]) + 2 * roadmesh.tunnel_shoulder(c), 0.5, h + 0.5))
             n = np.asarray(c["n"], np.float64)[:, :3]
             for end, line in ((0, n), (1, n[::-1])):
                 if not short and (c.get("portal") or (False, False))[end] and len(line) >= 2:

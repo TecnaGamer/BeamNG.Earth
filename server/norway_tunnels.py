@@ -395,6 +395,8 @@ def join_surveyed_approaches(plans, ends):
 
 def _style(chunk, fit):
     """A realistic small portal only where the world already has a mouth."""
+    if chunk.get("compact_tunnel"):
+        return "rock"
     th = float(chunk.get("tunnel_h") or 6.8)
     st = fit.get("st") if isinstance(fit, dict) else None
     major = chunk.get("concrete") or chunk.get("cls") in MAJOR
@@ -404,6 +406,51 @@ def _style(chunk, fit):
     if major:
         return "box" if st in (1, 3) else "arch"
     return "rock"
+
+
+def _concrete_style(chunk, fit, style, mapped):
+    """Choose a formed hood for a broad one-way concrete portal with fitted ground."""
+    if (style not in ("arch", "box") or mapped == "box" or not chunk.get("concrete")
+            or not chunk.get("oneway") or not fit or min(fit["sl"], fit["sr"]) < 1.0):
+        return style
+    if fit["st"] == 1:
+        return "embankment"
+    grades = np.asarray(fit["fg"], float)
+    if abs(float(grades[0] - grades[-1])) >= 2.0 or fit.get("sb", 0.0) >= 3.0:
+        return "swept"
+    return style
+
+
+def approach_width(frame, endpoint, inward, candidates, width_at):
+    """Width at the end of a connected, aligned ground road. Prefer cached survey data."""
+    matches = []
+    for lines, base_width in candidates:
+        for line in lines:
+            line = np.asarray(line, float)
+            if len(line) < 2:
+                continue
+            dist = np.linalg.norm(line[[0, -1]] - endpoint, axis=1)
+            if dist.min() > 3.0:
+                continue
+            if dist[1] < dist[0]:
+                line = line[::-1]
+            s = arc(line)
+            if s[-1] < 3.0:
+                continue
+            samples = np.minimum([0.0, 2.0, 4.0, 7.0], s[-1])
+            road = np.stack([np.interp(samples, s, line[:, axis]) for axis in (0, 1)], axis=1)
+            if np.dot(unit(road[0] - road[-1]), inward) < 0.85:
+                continue
+            lat, lon, _ = frame.enu_to_geodetic(road[:, 0], road[:, 1], 0.0)
+            measured = width_at(base_width, (), lon, lat)
+            width = float(measured[0]) if measured is not None else base_width
+            if 2.5 <= width <= 18.0:
+                matches.append((float(dist.min()), width))
+    matches.sort()
+    if not matches or (len(matches) > 1 and matches[1][0] - matches[0][0] < 0.5
+                       and abs(matches[1][1] - matches[0][1]) > 0.5):
+        return None
+    return matches[0][1]
 
 
 def tag_chunks(tunnels, chunks):
@@ -425,7 +472,9 @@ def tag_chunks(tunnels, chunks):
             if not mouth or not in_norway(*location(frame, pts[-1 if i else 0])):
                 styles.append(None)
             else:
-                style = _style(c, fits[i] if i < len(fits) else None)
+                fit = fits[i] if i < len(fits) else None
+                style = _style(c, fit)
+                mapped = None
                 if style is not None:
                     try:
                         import norway_tunnel_nvdb
@@ -435,7 +484,7 @@ def tag_chunks(tunnels, chunks):
                         # cross section overrides only the portal model, never
                         # the driveable tube, height, road surface, or position.
                         if hit and hit.get("shape") in ("box", "arch"):
-                            style = hit["shape"]
+                            mapped = style = hit["shape"]
                         elif status == "no_portal":
                             # Mapped tunnel, successful zero-object NVDB 69
                             # query: cut directly into rock, without a
@@ -443,65 +492,154 @@ def tag_chunks(tunnels, chunks):
                             style = "rock"
                     except Exception as exc:
                         LOG.debug("NVDB portal lookup unavailable: %s", exc)
-                styles.append(style)
+                styles.append(_concrete_style(c, fit, style, mapped))
         c["norway_portal_style"] = styles
-        c["norway_rock"] = rock or "rock" in styles
+        c["norway_rock"] = rock  # portal choice is local; the bore's lining is uniform across its tiles
+
+
+def _rock_portal(profile, th, hw, fit, near, out):
+    """A blasted opening: a broad crown, staggered rock faces, and a recessed outer edge."""
+    s = arc(profile)
+    stops = np.concatenate([np.linspace(lo, hi, max(1, int(np.ceil((hi - lo) / 0.64))) + 1)[:-1]
+                            for lo, hi in zip(s[:-1], s[1:])] + [s[-1:]])
+    section = np.column_stack([np.interp(stops, s, dim) for dim in profile.T])
+    x, z = section.T
+    side = np.clip(x / hw, -1.0, 1.0)
+    h = np.clip(z / th, 0.0, 1.0)
+    phase = float(np.arctan2(out[1], out[0]))
+    strata = 0.47 * x + 1.65 * z + phase
+    layer = 0.5 + 0.5 * np.cos(strata)
+    fracture = 0.5 + 0.5 * np.sin(2.7 * stops + phase - 0.65 * z)
+    broad = 0.5 + 0.5 * np.sin(0.58 * x + phase)
+
+    # Broad, broken ceiling with one shoulder higher than the other. Lift the
+    # original section outward so the new shape can only add to the clearance.
+    spring = min(float(profile[1, 1]), float(profile[-2, 1]))
+    roof = th + 0.12 + 0.44 * broad + 0.20 * fracture - 1.15 * np.abs(side)**4
+    rise = np.clip((z - 0.17 * th) / max(spring - 0.17 * th, 0.1), 0.0, 1.0)**2
+    lip = section + np.c_[np.sign(side) * (0.05 + 0.12 * layer) * np.abs(side) * h,
+                           np.maximum(roof - z, 0.0) * rise]
+    room = np.where(side >= 0.0, (fit or {}).get("sl", 3.0), (fit or {}).get("sr", 3.0))
+    crowded = np.where(side >= 0.0, near[0], near[1])
+    side_limit = np.where(crowded, 0.36, np.minimum(room * 0.78, 1.15))
+    tangent = np.gradient(section, axis=0)
+    normal = np.c_[tangent[:, 1], -tangent[:, 0]]
+    normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-9)[:, None]
+
+    def expand(amount):
+        extra = normal * amount[:, None]
+        extra[:, 0] = np.clip(extra[:, 0], -side_limit, side_limit)
+        return lip + extra
+
+    lip_depth = 0.06 + 0.18 * layer + 0.08 * fracture
+    ridge = expand(0.19 + 0.40 * layer + 0.30 * fracture)
+    fringe = expand(0.74 + 0.55 * layer + 0.40 * broad)
+    return [(section, 0.0), (lip, lip_depth), (ridge, lip_depth - 0.14 + 0.21 * fracture),
+            (fringe, -0.13 - 0.26 * layer)]
+
+
+def _concrete_portal(profile, th, hw, style, fit, near):
+    x, z = profile.T
+    h = np.clip(z / max(float(th), 0.01), 0, 1)
+    side = np.clip(x / max(float(hw), 0.01), -1.0, 1.0)
+    crowd = np.where(side >= 0.0, near[0], near[1])
+    room = np.where(side >= 0.0, (fit or {}).get("sl", 3.0), (fit or {}).get("sr", 3.0))
+    close_wall = crowd | (room < 1.0)
+    front = profile.copy()
+    if style == "box":
+        # A flat lintel and chamfered corners. Expanding upward keeps the
+        # transition to the original vault fully outside its clear opening.
+        lintel = th + 0.05 - 0.48 * np.clip((np.abs(side) - 0.84) / 0.16, 0.0, 1.0)
+        front[:, 1] = np.where(z > 0.0, np.maximum(z, lintel), z)
+        depth = 1.16 + 0.10 * (1.0 - h)
+        thickness = np.full(len(profile), 0.58)
+        bevel = 0.095
+    elif style in ("embankment", "swept"):
+        # A raked face slopes down into the banks. The extra concrete lies
+        # beyond the lane and falls away at the original, fixed rear opening.
+        wing = np.abs(side) * (1.0 - h)**1.5
+        extending = np.where(side >= 0.0, (fit or {}).get("wl", ()) is not None,
+                             (fit or {}).get("wr", ()) is not None) & ~close_wall
+        if style == "swept":
+            # Let the longer wing meet the lower bank instead of projecting
+            # through the high side of an uneven rock cut.
+            banks = (fit or {}).get("fg", (0.0, 0.0))
+            lower = 1.0 if banks[-1] <= banks[0] else -1.0
+            spread = 0.35 + 0.65 * (1.0 + side * lower) / 2.0
+            rake = 0.58 + 2.9 * spread * (1.0 - h)**1.3
+        else:
+            spread = np.full_like(side, 0.64)
+            rake = 0.43 + 2.35 * (1.0 - h)**1.4
+        lateral = np.minimum(wing * spread * 1.85, np.maximum(room - 0.62, 0.0))
+        front[:, 0] += np.sign(side) * np.where(extending, lateral, np.minimum(lateral, 0.05))
+        depth = np.where(extending, rake, np.minimum(rake, 0.95))
+        thickness = 0.48 + 0.11 * h
+        bevel = 0.072
+    else:
+        # The feet lead the crown on a raked mountain portal; the opening
+        # flares gently toward daylight alongside the road shoulders.
+        front[:, 0] += side * np.where(close_wall, 0.04, 0.17)
+        depth = 0.84 + 0.94 * (1.0 - h)
+        thickness = 0.45 + 0.16 * h
+        bevel = 0.075
+    thickness = np.where(close_wall, np.minimum(thickness, 0.42), thickness)
+
+    def offset(section, distance):
+        tangent = np.gradient(section, axis=0)
+        normal = np.c_[tangent[:, 1], -tangent[:, 0]]
+        normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-9)[:, None]
+        return section + normal * np.asarray(distance)[..., None]
+
+    return [(profile, 0.0), (front, depth), (offset(front, bevel), depth + bevel),
+            (offset(front, thickness), depth), (offset(profile, thickness), 0.0)]
 
 
 def mouth_mesh(p, left, out, sec, th, hw, style, fit, near):
-    """Narrow textured collar outside the exact roadmesh opening (no road obstruction)."""
+    """A portal attached to the tube's exact opening at its rear."""
     p, left, out = np.asarray(p, float), unit(left), unit(out)
     profile = np.asarray(sec, float)[1:-1]
-    if len(profile) < 2:
+    if len(profile) < 3 or hw <= 0.0 or th <= 0.0:
         return np.empty((0, 3)), np.empty((0, 3), int), np.empty((0, 2)), np.empty(0, int)
-    x, z = profile.T
-    h = np.clip(z / max(float(th), 0.01), 0, 1)
     rock = style == "rock"
-    rectangular = style == "box"
-    thickness = (0.34 + 0.07 * np.sin(3.0 * h + x) ** 2) if rock else 0.42
-    exterior_x = x + np.sign(x) * thickness
-    exterior_z = z + thickness * h
-    if rectangular:
-        exterior_z = np.where(h > 0.88, float(th) + 0.46, exterior_z)
-    # Extends towards the road by at most 0.8m: far less than generic headwalls.
-    projection = (0.25 + 0.15 * h) if rock else (0.55 + 0.25 * h)
-    def xyz(a, b, depth):
-        depth = np.broadcast_to(depth, np.shape(a))
-        return p + np.c_[a[:, None] * left + depth[:, None] * out, b]
-    inner = xyz(x, z, projection)
-    outer = xyz(exterior_x, exterior_z, projection)
-    back = xyz(exterior_x, exterior_z, np.zeros(len(x)))
-    rim = xyz(x, z, np.zeros(len(x)))
-    vertices, uv, tris, codes = [], [], [], []
-    def strip(a, b, code):
-        start = len(vertices)
-        vertices.extend(a)
-        vertices.extend(b)
-        t = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(a, axis=0), axis=1))] / 2.5
-        uv.extend(np.c_[t, np.zeros(len(a))])
-        uv.extend(np.c_[t, np.linalg.norm(b - a, axis=1) / 2.5])
-        for j in range(len(a) - 1):
-            i = start + j
-            k = len(a)
-            tris.extend(((i, i + 1, i + k), (i + 1, i + k + 1, i + k)))
-            codes.extend((code, code))
-    strip(rim, inner, 0)
-    strip(inner, outer, 0 if rock else 2)
-    strip(outer, back, 0)
-    v = np.asarray(vertices, float)
-    t = np.asarray(tris, int)
-    normals = np.cross(v[t[:, 1]] - v[t[:, 0]], v[t[:, 2]] - v[t[:, 0]])
-    # Explicit winding: the narrow inner lip faces the driving envelope,
-    # the visible frame faces the approaching driver, and outside faces rock.
-    count = 2 * (len(profile) - 1)
-    for i, triangle in enumerate(t):
-        centre = v[triangle].mean(axis=0) - p
-        radial = np.r_[left * np.dot(centre[:2], left), centre[2] - 0.4 * th]
-        expected = -radial if i < count else (np.r_[out, 0.0] if i < 2 * count else radial)
-        if np.dot(normals[i], expected) < 0:
-            t[i] = triangle[::-1]
-    good = np.linalg.norm(normals, axis=1) > 1e-10
-    return v, t[good], np.asarray(uv), np.asarray(codes, int)[good]
+    sections = (_rock_portal(profile, th, hw, fit, near, out) if rock
+                else _concrete_portal(profile, th, hw, style, fit, near))
+    rings = [p + np.c_[section[:, :1] * left + np.broadcast_to(axial, (len(section),))[:, None] * out,
+                        section[:, 1]] for section, axial in sections]
+    points, triangles, uvs, codes = [], [], [], []
+    n, count = len(rings[0]), 0
+    j = np.arange(n - 1)
+    local = np.r_[np.c_[j, j + 1, j + n], np.c_[j + 1, j + n + 1, j + n]]
+    for i, (a, b) in enumerate(zip(rings, rings[1:])):
+        vertices = np.r_[a, b]
+        tri = local.copy()
+        face = vertices[tri]
+        normal = np.cross(face[:, 1] - face[:, 0], face[:, 2] - face[:, 0])
+        centre = face.mean(axis=1) - p
+        radial = np.c_[(centre[:, :2] @ left)[:, None] * left, centre[:, 2] - 0.4 * th]
+        faces_out = i > 0 if rock else 0 < i < len(rings) - 2
+        expected = np.r_[out, 0.0] if faces_out else (-radial if i == 0 else radial)
+        flip = (normal * expected).sum(axis=1) < 0.0
+        tri[flip] = tri[flip, ::-1]
+        good = np.linalg.norm(normal, axis=1) > 1e-10
+        tri = tri[good]
+        if rock and i > 0:
+            # Match the backing's rock texture scale and break vertex normals
+            # along the outside faces so that the ledges catch light separately.
+            rel = vertices - p
+            axial = rel[:, :2] @ out
+            uv = np.c_[rel[:, :2] @ left + 0.28 * axial, rel[:, 2] + 0.18 * axial] / 2.0
+            order = tri.ravel()
+            vertices, uv = vertices[order], uv[order]
+            tri = np.arange(len(order)).reshape(-1, 3)
+        else:
+            s = arc(a)
+            uv = np.r_[np.c_[s, np.zeros(n)], np.c_[s, np.linalg.norm(b - a, axis=1)]] / 2.5
+        triangles.append(tri + count)
+        points.append(vertices)
+        uvs.append(uv)
+        codes.append(np.full(len(tri), 2 if faces_out and not rock else 0, int))
+        count += len(vertices)
+    return np.concatenate(points), np.concatenate(triangles), np.concatenate(uvs), np.concatenate(codes)
 
 
 def _apron_heights(s, start_z, terrain_z):

@@ -659,6 +659,33 @@
     "groundType": "GRASS",
     "translucent": false
   },
+  "bne_tunnel_rock_local": {
+    "name": "bne_tunnel_rock_local",
+    "mapTo": "bne_tunnel_rock_local",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "0f92dbe5-a3ad-486f-a3da-dbaad430d9df",
+    "Stages": [
+      {
+        "normalMap": "/assets/materials/terrain/rock/t_dirt_rocky/t_dirt_rocky_nm.png",
+        "roughnessMap": "/assets/materials/terrain/rock/t_dirt_rocky/t_dirt_rocky_r.png",
+        "ambientOcclusionMap": "/assets/materials/terrain/rock/t_dirt_rocky/t_dirt_rocky_ao.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "GRASS",
+    "translucent": false
+  },
   "bne_rail_collider": {
     "name": "bne_rail_collider",
     "mapTo": "bne_rail_collider",

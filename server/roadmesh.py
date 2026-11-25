@@ -226,7 +226,7 @@ def ribbons(chunks, keep_none=False):
     """Per chunk: (left (k, 2), right (k, 2), v (k,), material, layer, z (k,) or None) in the anchor
     frame; z: the chunk's own heights where it is "fixed" (bridge decks), else None (draped). Pure. The draped and
     plain chunks' resampling and normals in one Rust call (earthfast.ribbon_edges: numpy per chunk was ~0.9 s of 8
-    city road tiles, 2026-10-28); a fixed deck's (its profile's knots kept) here."""
+    city road tiles, 2026-10-28); fixed decks and varying widths keep their profile knots."""
     import fast
     out = [None] * len(chunks)
     batch, pts, half = [], [], []
@@ -234,17 +234,24 @@ def ribbons(chunks, keep_none=False):
         p = np.asarray(c["n"], np.float64)
         if len(p) < 2:
             continue
-        if c.get("deck") and c.get("fixed"):
-            corner_half = float(np.max(c.get("ws", c["w"]))) / 2 + PARAPET_W
+        fixed_deck = c.get("deck") and c.get("fixed")
+        ws = c.get("ws")
+        if ws is not None and len(ws) != len(p):
+            ws = None
+        if fixed_deck or ws is not None:
+            corner_half = (float(np.max(ws)) if ws is not None else c["w"]) / 2
+            if fixed_deck:
+                corner_half += PARAPET_W
             xy, s, z = _resample(p, DRAPE_STEP, keep_vertices=True, corner_half=corner_half)
             if len(xy) < 2:
                 continue
             hw = float(c["w"]) / 2
-            if c.get("ws") is not None and len(c["ws"]) == len(p):     # (tapering: roads.deck_width_fn)
+            if ws is not None:
                 s0 = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(p[:, :2], axis=0).T))]
-                hw = (np.interp(s - s[0], s0, np.asarray(c["ws"], np.float64)) / 2)[:, None]
+                hw = (np.interp(s, s0, np.asarray(ws, np.float64)) / 2)[:, None]
             n = _normals(xy) * hw
-            out[k] = (xy + n, xy - n, s / float(c.get("tl") or 10.0), c["m"], layer_of(c), z)
+            v = s / float(c.get("tl") or 10.0) if fixed_deck else _ribbon_v(s, c)
+            out[k] = (xy + n, xy - n, v, c["m"], layer_of(c), z if c.get("fixed") else None)
             LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
             continue
         batch.append(k)
@@ -753,7 +760,10 @@ def _reach_past(c, box):
         return c
     x0, y0, x1, y1 = box
     out_ = lambda p: p[0] < x0 or p[0] > x1 or p[1] < y0 or p[1] > y1     # noqa: E731
-    reach = 1.5 * float(c["w"])
+    ws = c.get("ws")
+    if ws is not None and len(ws) != len(pts):
+        ws = None
+    reach = 1.5 * (float(max(ws)) if ws is not None else float(c["w"]))
     ends = []
     for at, nb in ((0, 1), (-1, -2)):
         if not out_(pts[at]):
@@ -775,6 +785,8 @@ def _reach_past(c, box):
     if ends[1] is not None:
         n.append(ends[1][None])
     out = {**c, "n": np.concatenate(n).tolist()}
+    if ws is not None:
+        out["ws"] = ([ws[0]] if ends[0] is not None else []) + list(ws) + ([ws[-1]] if ends[1] is not None else [])
     if c.get("s0") is not None and c.get("s1") is not None:    # (a strip's distance along its road: the same reach)
         out["s0"] = float(c["s0"]) - (reach if ends[0] is not None else 0.0)
         out["s1"] = float(c["s1"]) + (reach if ends[1] is not None else 0.0)
@@ -2385,6 +2397,7 @@ TUNNEL_SOIL = "bne_tunnel_soil"     # grass on the ground over the masonry: a re
                                     # a low arch's top (stone slabs on the grass, the user 2026-10-17: "blend the
                                     # stone and terrain better")
 WALL_SCREE = "bne_wall_scree"       # ... a mountain pass road's: rocky ground (the terrain's bngEarthGroundRock detail)
+PORTAL_ROCK_LOCAL = "bne_tunnel_rock_local"  # exposed rock coloured from the two sides of the approach
 SCREE_UV_M = 2.0           # m per repeat of the scree (bngEarthGroundRock's detail size)
 SOIL_UV_M = 1.0            # m per repeat of the grass (the terrain's detail texture: bngEarthGroundGrass, size 1)
 WALL_COPING_M = 0.5        # m of a retaining wall's top in stone (its coping), the rest of it soil
@@ -2409,7 +2422,22 @@ TUNNEL_LAMP_DROP = 0.25    # ... its middle this far under the wall's top, ...
 TUNNEL_LAMP_IN = 0.08      # ... this far in from the wall
 
 
-def _tunnel_section(hw, th=TUNNEL_H, low=False, box=False):
+def tunnel_shoulder(value):
+    """Gap from the carriageway edge to the wall, in a tunnel chunk or its source spec."""
+    if isinstance(value, dict):
+        return value.get("tunnel_shoulder", TUNNEL_SHOULDER)
+    return getattr(value, "tunnel_shoulder", TUNNEL_SHOULDER)
+
+
+def tunnel_width_samples(chunk):
+    """The carriageway widths along a fixed tunnel deck, if it has a measured profile."""
+    widths = chunk.get("ws")
+    if chunk.get("fixed") and chunk.get("deck") and widths is not None and len(widths) == len(chunk["n"]):
+        return np.asarray(widths, np.float64)
+    return None
+
+
+def _tunnel_section(hw, th=TUNNEL_H, low=False, box=False, shoulder=TUNNEL_SHOULDER):
     """The tube's cross-section from the left road edge's floor over the vault to the right one: (lateral offset
     from the centre line, positive = left; height over the floor) for half-width hw (centre to wall) and a vault
     th over the floor (its walls in proportion). low: a park arch's segmental vault, a shallow circular arc rising
@@ -2429,7 +2457,7 @@ def _tunnel_section(hw, th=TUNNEL_H, low=False, box=False):
         wall = TUNNEL_WALL_H * th / TUNNEL_H
         vault = [(dnp.cos(a) * hw, wall + dnp.sin(a) * (th - wall))
                  for a in np.linspace(0.0, np.pi, 9)]
-    return np.array([(hw - TUNNEL_SHOULDER, 0.0), (hw, 0.0)] + vault + [(-hw, 0.0), (-hw + TUNNEL_SHOULDER, 0.0)],
+    return np.array([(hw - shoulder, 0.0), (hw, 0.0)] + vault + [(-hw, 0.0), (-hw + shoulder, 0.0)],
                     np.float64)
 
 
@@ -2514,67 +2542,78 @@ def _retaining_walls(walls, origin, P, T, UV, M, nv):
     return nv
 
 
-def tunnel(chunks, origin, walls=()):
+def tunnel(chunks, origin, walls=(), *, rock_colour=None):
     """The tunnels of a tile as one colliding mesh: around every "tunnel" chunk (its road surface: a deck, deck()
     makes its slab) a tube of concrete (TUNNEL_SIDE) faced inwards: shoulders, walls and a vault TUNNEL_H over the
     floor; at a chunk end that is a portal ("portal") a face around the opening, seen from both sides. (positions,
-    tris, uvs, materials, tri material index) or None. Pure."""
+    tris, uvs, materials, tri material index) or None. With a matched rock colour, append an empty secondary UV and
+    vertex RGBA to the mesh. rock_colour samples the local cliff's left and right sides at a bare rock mouth."""
     tc = [c for c in chunks if c.get("tunnel") and not c.get("no_tube")]     # (twins: one tube_only round both)
     rb = [(r, c) for r, c in ribbon_pairs(tc) if r[5] is not None]
     if not rb and not walls:
         return None
     P, T, UV, M = [], [], [], []           # M: per T entry its material index (0 concrete, 1 lamps, 2 stone, 3 dark stone,
                                             # 4 soil)
+    painted = []
     nv = _retaining_walls(walls, np.asarray(origin, np.float64), P, T, UV, M, 0) if walls else 0
     for (left, right, v, _, _, z), c in rb:
         # a piece ending at a tile edge reaches TUNNEL_OVERLAP past it: the next tile's piece meets it there without a
         # hairline of daylight (2026-10-17, inside Eisenhower)
         portal = c.get("portal") or (False, False)
+        tapered = tunnel_width_samples(c) is not None
         left, right, z = left.copy(), right.copy(), z.copy()
         for at, nb in ((0, 1), (-1, -2)):
             if portal[0 if at == 0 else 1] or len(left) < 2:
                 continue
-            for arr in (left, right):
-                t = arr[at] - arr[nb]
-                arr[at] += t / max(float(dnp.hypot(*t)), 1e-9) * TUNNEL_OVERLAP
+            if tapered:
+                # Slide the last ring as one piece, so the overlap cannot alter the seam's width.
+                t = (left[at] - left[nb]) + (right[at] - right[nb])
+                slide = t / max(float(dnp.hypot(*t)), 1e-9) * TUNNEL_OVERLAP
+                left[at] += slide
+                right[at] += slide
+            else:
+                for arr in (left, right):
+                    t = arr[at] - arr[nb]
+                    arr[at] += t / max(float(dnp.hypot(*t)), 1e-9) * TUNNEL_OVERLAP
         mid = (left + right) / 2
         lat = left - right
         lw = np.maximum(dnp.hypot(lat[:, 0], lat[:, 1]), 1e-9)
         u = lat / lw[:, None]                               # unit left
-        hw = float(np.median(lw)) / 2 + TUNNEL_SHOULDER
+        shoulder = tunnel_shoulder(c)
+        widths = lw / 2 + shoulder if tapered else np.array([float(np.median(lw)) / 2 + shoulder])
         th = float(c.get("tunnel_h") or TUNNEL_H)
-        low = th < TUNNEL_H - 0.05                          # a low arch: stone, a short portal face
+        low = th < TUNNEL_H - 0.05 and not c.get("compact_tunnel")  # a low underpass arch
         # (a major road's low arch in concrete, as its cutting's walls: the Gotthard road tunnel's portal, a cut-and-cover
         # box under the meadow at Goeschenen, stood as a park's stone arch, 2026-10-28)
         stone = low and not c.get("concrete")
         mat = 3 if stone else 5                               # (its portal faces: 2, the stone in daylight; a full
                                                             # tube's inside: 5, TUNNEL_INNER)
-        sec = _tunnel_section(hw, th, low, box=low and not stone and portals.ON)    # (a major road's low tube: a box)
+        box = low and not stone and portals.ON
+        section_rows = np.stack([_tunnel_section(hw, th, low, box=box, shoulder=shoulder) for hw in widths], axis=1)
         import norway_tunnels
         rock = bool(c.get("norway_rock"))
         looks = c.get("norway_portal_style") or (None, None)
         if rock:
-            angle = np.arctan2(sec[:,1]/th, sec[:,0]/hw)
+            angle = np.arctan2(section_rows[:, :, 1] / th, section_rows[:, :, 0] / widths)
             # Fractured crown, smoothly continuous at every chunk end. Gains clearance only.
-            sec[:,1] += .16*np.sin(4*angle+.5)**2 * np.clip(sec[:,1]/th,0.,1.)
+            section_rows[:, :, 1] += .16 * np.sin(4 * angle + .5)**2 * np.clip(section_rows[:, :, 1] / th, 0., 1.)
             mat = 6
             stone = True
-        k, m = len(mid), len(sec)
-        rows = np.empty((m, k, 3))
-        for j, (off, h) in enumerate(sec):
-            rows[j, :, :2] = mid + u * off
-            rows[j, :, 2] = z + h
+        k, m = len(mid), len(section_rows)
+        rows = np.concatenate((mid + u * section_rows[:, :, :1], (z + section_rows[:, :, 1])[:, :, None]), axis=2)
         rows -= origin
+        along = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
+        if stone:
+            spans = np.diff(section_rows, axis=0)
+            around = np.vstack((np.zeros(len(widths)), np.cumsum(dnp.hypot(spans[:, :, 0], spans[:, :, 1]), axis=0)))
+            around = np.broadcast_to(around, (m, k))
         # inward: towards the tube's axis (a point th / 2 over the floor's centre)
         axis = np.c_[mid, z + th / 2] - origin
         for j in range(m - 1):
             a, b = rows[j], rows[j + 1]
             P.append(np.concatenate([a, b]))
             if stone:                                       # the stone at its scale: around the section, along
-                sj = float(dnp.hypot(*(sec[min(j + 1, m - 1)] - sec[j])))
-                s0 = float(np.sum(dnp.hypot(*np.diff(sec[:j + 1], axis=0).T))) if j else 0.0
-                along = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))))
-                UV.append(np.column_stack((np.concatenate((np.full(k, s0), np.full(k, s0 + sj))) / STONE_UV_M, np.concatenate((along, along)) / STONE_UV_M)))
+                UV.append(np.column_stack((around[j:j + 2].reshape(-1), np.tile(along, 2))) / STONE_UV_M)
             else:
                 UV.append(np.column_stack((np.concatenate((np.full(k, j / 4.0), np.full(k, (j + 1) / 4.0))), np.concatenate((v, v)))))
             i = np.arange(k - 1)
@@ -2591,12 +2630,22 @@ def tunnel(chunks, origin, walls=()):
             M.append(mat)
             nv += 2 * k
         # the lamps: under the vault along both lines, every other step, faced down (a long tunnel's; not under an arch)
+        hw = widths if tapered else float(widths[0])
+        sec = section_rows[:, 0]
         if not low and not rock:
             nv = _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin)
         fits = c.get("fit") or (None, None)
         new_portal = portals.ON
         if rock or any(looks):
-            nv = _add_blocks(P, T, UV, M, nv, norway_tunnels.shell(mid,u,z,sec,hw,th,origin), 6 if rock else 0)
+            if tapered:
+                flat, lateral = portals.taper_frame(mid)
+                skin = norway_tunnels.shell(flat, lateral, z, sec, float(widths[0]), th, (0.0, 0.0, 0.0))
+                if len(skin[0]):
+                    outer_margin = float(np.max(np.abs(skin[0][:, 1]))) - widths[0]
+                    skin = portals.place_taper(skin, flat, mid, u, widths + outer_margin, origin)
+            else:
+                skin = norway_tunnels.shell(mid, u, z, sec, hw, th, origin)
+            nv = _add_blocks(P, T, UV, M, nv, skin, 6 if rock else 0)
         if new_portal and not low and c.get("ground") is not None and len(c["ground"]) == len(c["n"]) and k >= 2:
             # the tube's outside where the ground does not cover it (portals.cover: a box, soil on its top); the
             # chunk's ground at the ribbon's rows, by the arc along it
@@ -2617,6 +2666,8 @@ def tunnel(chunks, origin, walls=()):
         for end, at, pup, cap_m in zip(c.get("portal") or (False, False), (0, k - 1), pups, caps):
             if not end:
                 continue
+            row = at if tapered else 0
+            sec, hw = section_rows[:, row], float(widths[row])
             fitd = fits[0 if at == 0 else 1] if new_portal else None
             style = looks[0 if at == 0 else 1]
             if style:
@@ -2628,13 +2679,20 @@ def tunnel(chunks, origin, walls=()):
                     test = mid[at] + leftv*sg*(hw+2.) + outv*3.
                     near[i] = any(len(w["base"]) and np.min(np.linalg.norm(np.asarray(w["base"])[:,:2]-test,axis=1)) < 5.
                                   for w in walls)
-                mouth = norway_tunnels.mouth_mesh(np.r_[mid[at],z[at]]-origin,leftv,outv,sec,th,hw,style,fitd,near)
-                nv = _add_blocks(P, T, UV, M, nv, mouth, 6 if style == "rock" else 0)
+                colour = rock_colour(mid[at], leftv, outv, hw) if rock_colour is not None and style == "rock" else None
+                centre = np.r_[mid[at], z[at]] - origin
+                start = nv
+                rock_mat = 6 if colour is None else 8
+                mouth = norway_tunnels.mouth_mesh(centre, leftv, outv, sec, th, hw, style, fitd, near)
+                nv = _add_blocks(P, T, UV, M, nv, mouth, rock_mat if style == "rock" else 0)
                 if fitd is not None:
                     # Fit the slope behind the rim, using the exact same opening as the tube.
-                    face = portals.structure(fitd, np.r_[mid[at], z[at]] - origin, leftv, outv,
-                                             sec, th, hw, SCREE_UV_M, near, collar=False)
-                    nv = _add_blocks(P, T, UV, M, nv, face, 6)
+                    face = portals.structure(fitd, centre, leftv, outv,
+                                             sec, th, hw, SCREE_UV_M, near, collar=False,
+                                             compact_rock=bool(c.get("compact_tunnel") and style == "rock"))
+                    nv = _add_blocks(P, T, UV, M, nv, face, rock_mat)
+                if colour is not None and nv > start:
+                    painted.append((slice(start, nv), centre[:2], leftv, hw, colour))
                 continue
             if fitd is not None:
                 # the mouth's structure from the ground round it (portals.structure: collar, headwall, wing walls);
@@ -2691,13 +2749,24 @@ def tunnel(chunks, origin, walls=()):
                 nv = _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, float(np.max(o[:, 0])), float(o[:, 1].max()), th, origin,
                                LOW_CAP_M if cap_m is None else min(LOW_CAP_M, float(cap_m)), 2 if stone else 0)
     allm = [TUNNEL_SIDE, TUNNEL_LIGHT, TUNNEL_STONE, TUNNEL_STONE_IN, TUNNEL_SOIL, TUNNEL_INNER, WALL_SCREE,
-            PORTAL_COLLAR]
+            PORTAL_COLLAR, PORTAL_ROCK_LOCAL]
     Tall = np.concatenate(T)
     Mall = np.concatenate([np.full(len(t), m, np.int64) for t, m in zip(T, M)]) if M else np.zeros(len(Tall), np.int64)
     used = sorted(set(int(v) for v in np.unique(Mall)) | {0, 1})     # (concrete and lamps first, as before)
     remap = np.zeros(len(allm), np.int64)
     remap[used] = np.arange(len(used))
-    return (np.concatenate(P), Tall, np.concatenate(UV), [allm[i] for i in used], remap[Mall])
+    points = np.concatenate(P)
+    mesh = (points, Tall, np.concatenate(UV), [allm[i] for i in used], remap[Mall])
+    if not painted:
+        return mesh
+    colours = np.full((len(points), 4), 255, np.uint8)
+    for rows, centre, left, half, colour in painted:
+        lrgb, rrgb = np.broadcast_to(np.asarray(colour, float), (2, 3))
+        offset = (points[rows, :2] - centre) @ left
+        blend = np.clip(0.5 + offset / (2.0 * half), 0.0, 1.0)[:, None]
+        rgb = rrgb + blend * (lrgb - rrgb)
+        colours[rows, :3] = np.rint(np.clip(rgb, 0., 1.) * 255.).astype(np.uint8)
+    return (*mesh, None, colours)
 
 
 def _add_blocks(P, T, UV, M, nv, mesh, face_mat, collar_mat=7):
@@ -2773,9 +2842,10 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
         t = t / max(float(dnp.hypot(*t)), 1e-9)
         p = np.array([np.interp(sc, s, mid[:, 0]), np.interp(sc, s, mid[:, 1])])
         zc = float(np.interp(sc, s, z))
+        half_width = float(np.interp(sc, s, hw)) if np.ndim(hw) else hw
         uu = u[j]
         for side in (-1.0, 1.0):
-            e = p + uu * side * (hw - TUNNEL_LAMP_IN)
+            e = p + uu * side * (half_width - TUNNEL_LAMP_IN)
             quad = [[*(e + t * a * TUNNEL_LAMP_L / 2), zc + h + b * TUNNEL_LAMP_W / 2] for a in (-1, 1) for b in (-1, 1)]
             q = np.asarray(quad, np.float64) - origin
             P.append(q)
@@ -2792,12 +2862,11 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
 
 
 def write(path, mesh, close=True):
-    """mesh: build's (positions, tris, uvs, materials, tri material) and, with a dirt or gravel strip in it, its fade
-    uv: the second uv, in the vertex format that also carries a colour (white: the strips' materials leave vertColor
-    off, and the others in the mesh ignore it or multiply by 1)."""
+    """Write positions, triangles, uvs, materials, tri material, optional secondary uv and optional vertex RGBA.
+    Dirt and gravel use a secondary fade uv with white vertex colors."""
     P, T, UV, mats, M = mesh[:5]
     uvs2 = mesh[5] if len(mesh) > 5 else None
-    colors = None if uvs2 is None else np.full((len(P), 4), 255, np.uint8)
+    colors = mesh[6] if len(mesh) > 6 else None if uvs2 is None else np.full((len(P), 4), 255, np.uint8)
     over = np.array([overlay_material(m) for m in mats], bool) if len(mats) else np.zeros(0, bool)
     open_tris = over[np.asarray(M, np.int64)] if over.any() and M is not None else None
     return cdae.write(path, P, T, uvs=UV, uvs2=uvs2, material=mats, tri_materials=M, object_name="road", open_tris=open_tris,

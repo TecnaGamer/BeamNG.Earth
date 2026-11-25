@@ -2123,6 +2123,15 @@ def shoulder(spec):
     return SHOULDER_M
 
 
+def _open_tunnel_plan(spec, xy, z):
+    plan = Plan(xy, z, spec.width / 2 + shoulder(spec))
+    widths = roadsmod.tunnel_widths(spec, xy)
+    if widths is not None:
+        set_widen(plan, (widths - spec.width) / 2)
+    plan.rank = grade_rank(spec)
+    return plan
+
+
 def _twin_trimmed(secs):
     """secs ([(fid, spec, xy, z, kind)]) with the covered sections of twin tunnels (roads.twin_tunnels: side by side,
     one tube round both) cut to the stretch they share: one twin's portal a few metres deeper than the other's, the
@@ -2467,8 +2476,7 @@ class _Planner:
             covered = {f.rsplit("#", 1)[0] for f, _s, _xy, _z, k in secs if k}
             for fid, spec, xy, z, k in secs:
                 if k == 0:
-                    p = Plan(xy, z, spec.width / 2 + shoulder(spec))
-                    p.rank = grade_rank(spec)
+                    p = _open_tunnel_plan(spec, xy, z)
                     # (a tunnel part open all along, no cover anywhere over it: the map's underpass under a deck or lid
                     # the elevation leaves out. A road crossing it is that deck, mapped on the ground over the tunnel:
                     # it eases onto the held carriageway whatever its class, gradebins OPEN_TUNNEL (Kennedybruecke in
@@ -2821,6 +2829,13 @@ class _Planner:
                 except Exception as e:      # the pieces as planned rather than no grading
                     _caught(e)
                     log.debug("grading: welded continuations of %s: %s: %s", key, type(e).__name__, e)
+            if norwegian_mouths:
+                import norway_tunnel_grades
+                names = feats.attrs.get("name")
+                for (fid, p), spec in zip(plans, pspecs):
+                    fi = feats.index(fid)
+                    name = str(names[fi] or "") if names is not None and fi >= 0 else ""
+                    norway_tunnel_grades.approach(self.frame, p, spec, norwegian_mouths, name)
             if JUNCTION_SNAP_ON and plans:
                 try:            # the side roads meet the welded main again, at its new height (no step at the mouth)
                     snap_junctions([p for _f, p in plans], pspecs)
@@ -6261,7 +6276,7 @@ class _Planner:
                     _caught(e)
                     log.debug("grading: tunnel %s: %s: %s", k, type(e).__name__, e)
                     continue
-                for sub, _spec, xy, z, _lon in sorted(subs, key=lambda q: int(str(q[0]).rsplit("#", 1)[1])):
+                for sub, spec, xy, z, _lon in sorted(subs, key=lambda q: int(str(q[0]).rsplit("#", 1)[1])):
                     n = int(str(sub).rsplit("#", 1)[1])
                     kind = int(secs[n][2]) if n < len(secs) else 2
                     xy = np.asarray(xy, np.float64)[:, :2]
@@ -6272,7 +6287,7 @@ class _Planner:
                     e_, n_, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
                     pxy = np.stack([np.asarray(e_, np.float64), np.asarray(n_, np.float64)], axis=1)
                     # (by the section's own id, the networks' fid.part#section: its mouths are the networks' too)
-                    out.append((str(sub), ts[i], pxy, np.asarray(h, np.float64) - ROAD_LIFT, kind))
+                    out.append((str(sub), spec, pxy, np.asarray(h, np.float64) - ROAD_LIFT, kind))
                     if lowered_pins:
                         for at, near, outer in ((0, 1, 0), (-1, -2, len(secs) - 1)):
                             if n == outer and (st._part_id(k), at) in lowered_pins:
@@ -6300,6 +6315,7 @@ class _Planner:
             same = lambda m: 0 <= m < len(secs) and secs[m][0] == fid     # noqa: E731
             s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
             hw = spec.width / 2 + shoulder(spec)
+            widths = roadsmod.tunnel_widths(spec, xy)
             for at_start in (True, False):
                 endpoint = xy[0 if at_start else -1]
                 if portals is not None and portals.get((fid, tuple(np.round(endpoint, 3)))) is False:
@@ -6322,6 +6338,10 @@ class _Planner:
                     pxy, pzz = np.r_[p[None], xy[m]], np.r_[pz, z[m]]
                 if len(pxy) >= 2:
                     mp = Plan(pxy, pzz, hw)
+                    if widths is not None:
+                        edge_width = np.interp(t, np.arange(len(s)), widths)
+                        width = np.r_[widths[m], edge_width] if at_start else np.r_[edge_width, widths[m]]
+                        set_widen(mp, (width - spec.width) / 2)
                     mp.rank = GRADE_RANK_NONE    # (no grade rank: PR #1050's rank rule pulled the road over a
                     # portal 1.3-1.9 m down to the floor beside the covered zone, a 2.3 m step: Norway #1137)
                     out.append((fid + TUNNEL_TAG + ("m0" if at_start else "m1"), mp))
@@ -6334,9 +6354,7 @@ class _Planner:
         out = []
         for fid, spec, xy, z, kind in self._tunnel_sections(feats):
             if kind == 0:
-                p = Plan(xy, z, spec.width / 2 + shoulder(spec))
-                p.rank = grade_rank(spec)
-                out.append((fid, p))
+                out.append((fid, _open_tunnel_plan(spec, xy, z)))
         return out
 
     def planned(self, key):

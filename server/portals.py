@@ -61,6 +61,8 @@ LOOKS = {
 }
 HOOD_FACE = 0.6             # the hill's face: the ground over the floor this share of the opening's height
 LOOK_SIDE = {0: 2.2, 1: FACE_SIDE, 2: 2.0, 3: FACE_SIDE}    # m of headwall beside the opening at most, per look
+ROCK_BACKING_TOP = 2.0      # m above a bare-rock opening before the cliff itself takes over
+ROCK_BACKING_WALL = 0.15    # m behind the section before the backing can turn into the hill
 
 
 def _others(roads, cells, frame, parts):
@@ -85,7 +87,8 @@ def _others(roads, cells, frame, parts):
         if len(xy) >= 2:
             # (a twin bore's tube and its collar, not only its carriageway: the two headwalls stopped on each other's
             # roads and overlapped by the shoulders between)
-            lines.append((len(lines), spec.width / 2 + roadmesh.TUNNEL_SHOULDER + TWIN_GAP, xy))
+            half = roads.tunnel_max_width(spec) / 2 + roadmesh.tunnel_shoulder(spec)
+            lines.append((len(lines), half + TWIN_GAP, xy))
     return lines
 
 
@@ -115,17 +118,21 @@ def fit(roads, tunnels, cells, chunks, parts):
     for c in todo:
         n = np.asarray(c["n"], np.float64)
         xy, z = n[:, :2], n[:, 2]
-        hw = float(c["w"]) / 2 + roadmesh.TUNNEL_SHOULDER
+        measured = roadmesh.tunnel_width_samples(c)
+        widths = np.full(len(n), c["w"], np.float64) if measured is None else measured
+        half_widths = widths / 2 + roadmesh.tunnel_shoulder(c)
         th = float(c.get("tunnel_h") or roadmesh.TUNNEL_H)
         d = np.gradient(xy, axis=0)
         d /= np.maximum(dnp.hypot(*d.T), 1e-9)[:, None]
         left = np.c_[-d[:, 1], d[:, 0]]
-        pts = [xy, xy + left * (hw + COVER_REACH), xy - left * (hw + COVER_REACH)]
+        extent = left * (half_widths + COVER_REACH)[:, None]
+        pts = [xy, xy + extent, xy - extent]
         ends = []
         for e, at in enumerate((0, len(xy) - 1)):
             if not (c.get("portal") or (False, False))[e]:
                 ends.append(None)
                 continue
+            hw = float(half_widths[at])
             t = xy[1] - xy[0] if e == 0 else xy[-1] - xy[-2]
             t = t / max(float(dnp.hypot(*t)), 1e-9)
             ul = np.array([-t[1], t[0]])
@@ -198,7 +205,8 @@ def fit(roads, tunnels, cells, chunks, parts):
             rise = float(g[i] - zf) - max(sides_h, 0.0)
             st = int(fast._ef.portal_style(c.get("cls") in MAJOR or bool(c.get("concrete")), th, rise, sides_h))
             r2 = lambda v: [round(float(x), 2) for x in v]      # noqa: E731
-            fits.append({"st": st, "fx": r2(en["fx"]), "fg": r2(face), "fd": r2(face_depth), "ws": list(WING_S),
+            fits.append({"st": st, "fx": r2(en["fx"]), "fg": r2(face), "fd": r2(face_depth),
+                         "fc": [r2(row) for row in sampled_face], "ws": list(WING_S),
                          "wl": r2(wl) if en["wing_ok"][0] else None, "wr": r2(wr) if en["wing_ok"][1] else None,
                          "rz": r2(rz), "sl": round(en["sides"][0], 2), "sr": round(en["sides"][1], 2),
                          "sb": round(setback, 2) if st in (0, 2) else 0.0})
@@ -235,10 +243,10 @@ def setback(fitd, low=False):
     return 0.0 if low or fitd is None else float(fitd.get("sb") or 0.0)
 
 
-def _rake_rock_face(mesh, p, ul, out, crown, fitd):
+def _rake_rock_face(mesh, p, ul, out, crown, fitd, samples=None):
     """Shape a tall backing into the surveyed cut while leaving the collar at its original plane."""
     points, tris, uvs, codes = mesh
-    if not len(tris) or points[:, 2].max() < p[2] + crown + 1.5:
+    if not len(tris) or (samples is None and points[:, 2].max() < p[2] + crown + 1.5):
         return mesh
 
     # Split shared edges together. The face, its top and its returns must deform as one mesh.
@@ -264,15 +272,27 @@ def _rake_rock_face(mesh, p, ul, out, crown, fitd):
     drift = np.minimum(0.53 * over, 0.9 * support)
     drift = np.clip(drift + t * ledges * np.minimum(1.0, 0.35 * support), 0.0, support)
     drift *= np.clip(1.0 - np.maximum(along, 0.0) / 2.0, 0.0, 1.0)
+    if samples is not None:
+        # The short exposed face still joins the cut. At its rear, extend the
+        # rock over the crown until a measured depth lies inside the hillside.
+        # Moving only above the vault keeps the turning tube and its lane clear.
+        sampled = np.array([np.interp(across, fitd["fx"], row) for row in samples])
+        covered = sampled >= rel[:, 2] + COVER_OVER
+        depth = np.where(covered.any(axis=0), np.asarray(FACE_IN)[covered.argmax(axis=0)], 0.0)
+        rear = np.clip(-along / ROCK_BACKING_WALL, 0.0, 1.0)
+        crown_band = np.clip(over / 0.25, 0.0, 1.0)
+        drift += np.maximum(depth + along - drift, 0.0) * rear * crown_band
     points[:, :2] -= drift[:, None] * out
     return points, tris, uvs, codes
 
 
-def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), low=False, *, collar=True):
+def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), low=False, *, collar=True,
+              compact_rock=False):
     """The mouth's structure for roadmesh.tunnel: (positions (n, 3), triangles (m, 3), uvs (n, 2), codes (m,): 0 the
     structure, 1 soil). p: the mouth's floor centre in the mesh's coordinates; walls_near: (left, right) a cutting's
     retaining wall already stands there (no wing wall on that side). With collar=False, fit a retaining face at the
-    opening of a tube whose collar is already modeled. Its top follows the cut up to 12 m above the vault."""
+    opening of a tube whose collar is already modeled. A compact rock face follows the near contour and joins the
+    terrain behind the vault."""
     fast.require(VERSION, "portal_mesh")
     st = _look(fitd, low)
     none = np.zeros(0)
@@ -284,27 +304,58 @@ def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), lo
     wr = np.asarray(fitd["wr"], np.float64) if fitd.get("wr") is not None and not walls_near[1] else none
     pr = prm(st, th, hw, float(fitd["sl"]), float(fitd["sr"]), uv_m)
     pr[2] += sb
+    terrain_top = np.asarray(fitd["fg"], np.float64)
+    face_samples = None
     if not collar:
         pr[2:4] = 0.0  # omit the native hood; the custom rim follows this same opening
-        pr[5] = 0.15   # keep the back face within the tube wall at a bend
-        terrain_top = np.asarray(fitd["fg"], np.float64)
-        if np.isfinite(terrain_top).any():
+        pr[5] = ROCK_BACKING_WALL   # keep the back face within the tube wall at a bend
+        if compact_rock:
+            pr[6] = min(pr[6], COVER_OVER)
+            pr[9] = ROCK_BACKING_TOP
+            if fitd.get("fc") is not None:
+                face_samples = np.asarray(fitd["fc"], np.float64)
+                terrain_top = np.where(np.isfinite(face_samples[0]), face_samples[0], terrain_top)
+        elif np.isfinite(terrain_top).any():
             pr[9] = np.clip(np.max(terrain_top[np.isfinite(terrain_top)]) + pr[6] - th, pr[9], 12.0)
     pr = np.r_[pr, sb]          # (inner_from: the tube's own walls are the hood's inside up to the mouth)
     mesh = fast._ef.portal_mesh([float(v) for v in p], [float(v) for v in ul], [float(v) for v in out], pr,
                                 np.ascontiguousarray(sec, np.float64), np.asarray(fitd["fx"], np.float64),
-                                np.asarray(fitd["fg"], np.float64), ws, wl, wr, np.asarray(fitd["rz"], np.float64))
+                                terrain_top, ws, wl, wr, np.asarray(fitd["rz"], np.float64))
     if not collar:
-        return _rake_rock_face(mesh, p, ul, out, float(sec[:, 1].max()), fitd)
+        return _rake_rock_face(mesh, p, ul, out, float(sec[:, 1].max()), fitd, face_samples)
     return mesh
+
+
+def taper_frame(mid):
+    """An untwisted version of the centreline, with one identifiable station per original row."""
+    length = dnp.hypot(*np.diff(mid, axis=0).T)
+    arc = np.r_[0.0, np.cumsum(np.maximum(length, 1e-8))]
+    return np.c_[arc, np.zeros(len(arc))], np.tile((0.0, 1.0), (len(arc), 1))
+
+
+def place_taper(mesh, flat, mid, left, widths, origin=(0.0, 0.0, 0.0)):
+    """Place an untwisted mesh on its original rows, fitting the width without stretching the cover margin."""
+    points, tris, uv, codes = mesh
+    if not len(points):
+        return mesh
+    at = np.searchsorted(flat[:, 0], points[:, 0])
+    across = points[:, 1]
+    inside = np.clip(across, -widths[0], widths[0])
+    scaled = across + inside * (widths[at] / widths[0] - 1.0)
+    placed = np.c_[mid[at] + left[at] * scaled[:, None], points[:, 2]] - origin
+    return placed, tris, uv, codes
 
 
 def cover(mid, left, z, ground, hw, th, caps, uv_m, soil_uv_m, sec=None):
     """The tube's outside over its bare rows for roadmesh.tunnel (earthfast.tunnel_cover_mesh); sec: the tube's section
     (roadmesh._tunnel_section), the opening its end caps inside the hill leave clear."""
+    tapered = np.ndim(hw) != 0
+    path, across = taper_frame(mid) if tapered else (mid, left)
+    initial_width = float(hw[0] if tapered else hw)
     fast.require(VERSION, "tunnel_cover_mesh")
-    return fast._ef.tunnel_cover_mesh(np.ascontiguousarray(mid, np.float64), np.ascontiguousarray(left, np.float64),
+    mesh = fast._ef.tunnel_cover_mesh(np.ascontiguousarray(path, np.float64), np.ascontiguousarray(across, np.float64),
                                       np.ascontiguousarray(z, np.float64), np.ascontiguousarray(ground, np.float64),
-                                      float(hw + COVER_SIDE), float(th), COVER_OVER, COVER_NEED, COVER_FOOT,
+                                      initial_width + COVER_SIDE, float(th), COVER_OVER, COVER_NEED, COVER_FOOT,
                                       bool(caps[0]), bool(caps[1]), float(uv_m), float(soil_uv_m),
                                       np.ascontiguousarray(np.zeros((0, 2)) if sec is None else sec, np.float64))
+    return place_taper(mesh, path, mid, left, hw) if tapered else mesh

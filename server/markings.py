@@ -68,14 +68,20 @@ _WHITE = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.15, edge_mot
                centre_rural=(6.0, 12.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 9.0),
                lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
 _YELLOW = _WHITE._replace(centre="line_yellow")
+# Norway, N302 tables 3.1 and 5.2. Lane separators are white; the median
+# and the left edge of a one-way road or ramp are yellow.
+_NO = _YELLOW._replace(w=0.10, edge=0.10, edge_motorway=0.30, centre_rural=(3.0, 9.0),
+                       centre_urban=(3.0, 1.0), lane_urban=(1.0, 3.0), left_edge="line_yellow", min_centre_m=6.0)
+NORWAY_WARNING_LINE = (9.0, 3.0)
+NORWAY_AUXILIARY_LINE = (2.0, 2.0)
 
 STYLES = {"US": _US, "CA": _CA, "GB": _GB, "IE": _GB, "IM": _GB, "JE": _GB, "GG": _GB, "DE": _DE, "AT": _DE,
           "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _AU,
-          "SE": _SE}
-# where centre lines are yellow (outside the US and Canada): the Americas, Norway, Finland, South Korea, China, Taiwan,
+          "SE": _SE, "NO": _NO}
+# where the fallback centre lines are yellow: the Americas, Finland, South Korea, China, Taiwan,
 # Thailand (research table 4.4)
 YELLOW_CENTRE = {"MX", "GT", "BZ", "HN", "SV", "NI", "CR", "PA", "CU", "DO", "HT", "PR", "JM", "BS", "TT", "CO", "VE",
-                 "EC", "PE", "BO", "CL", "AR", "UY", "PY", "BR", "GY", "SR", "NO", "FI", "KR", "CN", "TW", "TH"}
+                 "EC", "PE", "BO", "CL", "AR", "UY", "PY", "BR", "GY", "SR", "FI", "KR", "CN", "TW", "TH"}
 
 
 def style(country=None, lon=None):

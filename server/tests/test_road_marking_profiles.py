@@ -81,4 +81,42 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(roads.road_specs(f)[0].state,'MI')
         self.assertEqual(roads.bridge_specs(f)[0].state,'MI')
 
+
+class NorwegianHighwayMarkings(unittest.TestCase):
+    def test_trunk_line_width_follows_posted_speed(self):
+        trunk = roads.Spec(7.3, "paved", False, "trunk", False, lanes=2)
+        for speed, expected in ((80, .10), (90, .15)):
+            paint = roads.extras(trunk._replace(kmh=speed), LINE, 10., country="NO")
+            widths = {width for look, width, _ in paint if look.get("kind") in ("centre", "edge")}
+            self.assertEqual(widths, {expected})
+
+    def test_direction_and_width_of_motorway_and_ramp_edges(self):
+        for direction in (1, -1):
+            main = spec()._replace(state=None, dir=direction, kmh=100)
+            for road, in_tunnel, expected_width in (
+                (main, False, .30), (main, True, .15),
+                (main._replace(kmh=80), False, .15), (main._replace(link=True), False, .15),
+            ):
+                with self.subTest(direction=direction, road=road, in_tunnel=in_tunnel):
+                    paint = roads.extras(road, LINE, 10.0, country="NO", in_tunnel=in_tunnel)
+                    edges = {look["side"]: (look, width) for look, width, _ in paint if look.get("kind") == "edge"}
+                    self.assertEqual(edges[direction][0]["m"], "line_yellow")
+                    self.assertEqual(edges[-direction][0]["m"], "line_white")
+                    self.assertTrue(all(width == expected_width and "dash" not in look for look, width in edges.values()))
+                    white = [(width, path) for look, width, path in paint if look.get("kind") == "lane"]
+                    self.assertAlmostEqual(roadmarkings.arc(white[0][1])[-1], 3.)
+                    self.assertAlmostEqual(white[1][1][0, 0] - white[0][1][-1, 0], 9.)
+                    self.assertEqual(white[0][0], .15)
+
+    def test_mapped_auxiliary_lane_keeps_short_wide_white_dashes(self):
+        highway = spec()._replace(width=17., state=None, kmh=100, lanes=3)
+        paint = roads.extras(highway, LINE, 10., country="NO", osm={"lanes": 3},
+                             lane_growth=(-1, 1, np.zeros(len(LINE))))
+        rows = [(look, width, path) for look, width, path in paint if look.get("kind") == "lane"]
+        for width, length, opening in ((.30, 2., 2.), (.15, 3., 9.)):
+            stripe = [path for look, w, path in rows if w == width and look["m"] == "line_white"]
+            self.assertGreater(len(stripe), 1)
+            self.assertAlmostEqual(roadmarkings.arc(stripe[0])[-1], length)
+            self.assertAlmostEqual(stripe[1][0, 0] - stripe[0][-1, 0], opening)
+
 if __name__=='__main__':unittest.main()
