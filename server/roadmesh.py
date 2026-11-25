@@ -1165,6 +1165,17 @@ def _reach_past(c, box):
 
 GRID_M = heightmap.SQUARE  # the terrain block's square (1 m; 2 m on the lighter ground): its samples on multiples of it, each square cut
                         # from its south-west corner to its north-east one (probed in-game 2026-10-20)
+GRID_DIAG_M = GRID_M * math.sqrt(2.0)     # a square's diagonal: the most a square reaches across a line, whatever its angle
+
+
+def jag_band(tx, ty):
+    """How far (m) either side of a slope break running along the unit direction (tx, ty) the terrain's lattice draws it
+    in teeth (arrays broadcast). The lattice is exact where the ground is planar across a square, so only the squares the
+    break crosses differ from the true ground; a square's extent across a line of unit normal (nx, ny) is
+    GRID_M (|nx| + |ny|) = GRID_M (|tx| + |ty|), and every square the line crosses lies within that of it: GRID_M for a
+    break along an axis of the lattice, GRID_DIAG_M at 45 degrees, the most (either diagonal of a square: the bound holds
+    for both). Pure."""
+    return GRID_M * (np.abs(tx) + np.abs(ty))
 
 
 FOLLOW_TOL_MIN = 0.008   # m: road_tol's finest
