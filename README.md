@@ -175,6 +175,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   off, rain visibility, the real clouds, fog, wind and rain each on or off, and a limit on how thick fog gets. Rain
   and snow stop in tunnels, parking structures and under bridges, rain thickens the air and turns the fog grey, and
   traffic turns its headlights on and slows down in rain, snow and fog.
+- **Storms**: lightning flashes and bolts with thunder delayed by the distance (the same strikes for everyone with the
+  same weather in multiplayer), darker light under storm clouds, lit rain streaks around you, a wet look on sidewalks,
+  markings, bridges and buildings, and rain sounds that follow the rain's strength and go muffled under cover.
 - **Seasons**: the photos' colours and the trees' leaves follow the time of year (autumn colours, bare
   trees in winter where the photos were taken leaf-off).
 - **Real gravity**: the WGS84 gravity for your latitude and altitude plus the EGM2008 local anomalies, so

@@ -14,6 +14,19 @@ What changed in each release of BeamNG.Earth, newest first.
   (slow enough to stop within the visible distance in thick fog); street lamps come on earlier under a dark stormy sky.
 - **BeamMP**: `G.WEATHER` takes the new presets and `real-host` (everyone gets the live weather where the
   longest-joined player is). `real` (each player's own weather) stays the default.
+- **Lightning and thunder** in thunderstorms (the real ones where the weather data has them, and the Thunderstorm and
+  Hail presets): flashes, bolts, and the thunder after the flash by the distance (about 5 seconds per mile). Players
+  with the same weather in multiplayer see the same strikes. Thunder and rain recordings are CC0 from Freesound.org
+  (credited in CREDITS.md and on the settings page).
+- **Storm light**: under a thick cloud deck, in rain and in thunderstorms the day gets darker and the sun loses its
+  sharp shadows.
+- **Rain streaks** (off by default, on the Weather page): streaks of falling rain around you, lit by the sun, headlights and street lamps, leaning in the wind
+  and as you drive, so rain shows by day and in the distance.
+- **Wet look**: sidewalks, markings, bridges and buildings get darker and glossier in rain and dry slowly after it (with
+  the winter road conditions on, they follow the road condition). City street asphalt is not wet-looking yet.
+- **Rain sounds**: light, steady and heavy rain by the rain's strength, muffled under roofs and bridges and in tunnels,
+  and rain drumming on the roof in the driver's view.
+- Each of these can be switched off on the Weather page.
 
 ### Fixed
 - Rain particles now stop above the cloud base. Rain audio no longer uses the particle emitter's name.

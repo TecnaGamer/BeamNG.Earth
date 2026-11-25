@@ -59,6 +59,11 @@ with the normal BeamMP launcher.
      `'sleet'`, `'freezingrain'`, `'hail'`.
    - A player who set Sky or Weather to Off (Manual) in BeamNG.Earth's settings keeps their own. "Show rain and snow"
      and "Rain visibility" stay each player's own.
+   - Lightning: in `'storm'`, `'hail'`, `'real-host'` in a thunderstorm (and `'real'` for players near each other,
+     who get the same weather data) every player sees the same strikes at the same moment and place, each hearing the
+     thunder after their own distance. Nothing is sent for it: the strikes follow from the place and the clock, so the
+     players' PCs need the right time (they normally sync it themselves; a PC whose clock is off sees them that much
+     earlier or later). "Lightning and thunder" stays each player's own switch.
 4. **Open the port** if players come over the internet: forward the server's port, **TCP and UDP**, in your router to
    the server's computer (and allow it in its firewall). Players on the same network need nothing.
 5. **Start the server.** Its log should show `[BeamNG.Earth] plugin loaded`.

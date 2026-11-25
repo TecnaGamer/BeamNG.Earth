@@ -154,9 +154,20 @@ class RequestTest(unittest.TestCase):
         self.assertEqual(q["wind_speed_unit"], ["ms"])
         self.assertEqual(q["timeformat"], ["unixtime"])
         self.assertNotIn("apikey", q)
-        # the recorded fixtures were fetched with this query
+        # the recorded fixtures were fetched with this query, but for the fields asked for since (weather phase B's
+        # thunder: cape everywhere, lightning_potential only over Central Europe, null elsewhere; derive reads both as
+        # absent when missing)
+        later = {"cape", "lightning_potential"}
         for name in ("baltimore", "whitney"):
-            self.assertEqual(set(fixture(name)["current"]) - {"time", "interval"}, set(weather.CURRENT))
+            self.assertEqual(set(fixture(name)["current"]) - {"time", "interval"}, set(weather.CURRENT) - later)
+
+    def test_thunder_fields(self):
+        """CAPE always (0 without it), the lightning potential only where the model has one (ICON-D2)."""
+        m = weather.derive(synthetic(95, cape=1234.5, lightning_potential=3.456))
+        self.assertEqual((m["capeJkg"], m["lpi"], m["thunder"]), (1234.5, 3.46, True))
+        m = weather.derive(synthetic(0, lightning_potential=None))
+        self.assertEqual(m["capeJkg"], 0.0)
+        self.assertNotIn("lpi", m)
 
     def test_project_user_agent(self):
         """fetch() goes through netfetch as a background request with the project's User-Agent."""
