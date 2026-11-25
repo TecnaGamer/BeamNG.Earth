@@ -11,6 +11,7 @@
 //!   weathersynth analyze FILE.wav ...               a table describing each file
 //!   weathersynth live-bench [--seconds S] [--block N] [--wav F]   the live rain engine timed (prototype)
 //!   weathersynth thunder-bench [--micro M]           live thunder render times by distance
+//!   weathersynth live-serve [--thunder procedural|files:DIR]   the live weather sounds for the world server (serve.rs)
 
 mod analyze;
 #[cfg(feature = "audio")]
@@ -19,10 +20,16 @@ mod dsp;
 mod live;
 mod loudness;
 mod m;
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
+mod proto;
 mod rain;
 mod rng;
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
+mod serve;
 mod storm;
 mod thunder;
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
+mod thunderlive;
 mod wav;
 
 use std::process::Command;
@@ -234,7 +241,7 @@ fn run() -> Result<(), String> {
                 (r.parse().unwrap_or(5.0), f("--shelter", 1.0), f("--cabin", 0.0))
             });
             let c0 = live::Controls { rain_mm_h: 0.0, shelter: 1.0, cabin: 0.0, volume: 0.5, muted: false };
-            let out = audio::open(1, c0)?;
+            let out = audio::open(1, audio::Mix { rain: c0, thunder: 0.0 }, std::sync::Arc::new(thunderlive::Bus::new()))?;
             println!("device={} rate={} channels={}", out.device_name, out.sample_rate, out.channels);
             let t0 = std::time::Instant::now();
             let mut last = -1i64;
@@ -244,8 +251,8 @@ fn run() -> Result<(), String> {
                     let fr = t / secs;
                     if fr < 0.25 { (0.7, 1.0, 0.0) } else if fr < 0.5 { (5.0, 1.0, 0.0) } else if fr < 0.75 { (35.0, 1.0, 0.0) } else { (35.0, 1.0, 1.0) }
                 });
-                if let Ok(mut c) = out.controls.lock() {
-                    *c = live::Controls { rain_mm_h: rate, shelter, cabin, volume: 0.5, muted: false };
+                if let Ok(mut c) = out.mix.lock() {
+                    c.rain = live::Controls { rain_mm_h: rate, shelter, cabin, volume: 0.5, muted: false };
                 }
                 if t as i64 != last {
                     last = t as i64;
@@ -259,6 +266,7 @@ fn run() -> Result<(), String> {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
+        "live-serve" => serve::run(&args)?,
         "storm-dump" => print!("{}", storm::dump()),
         "analyze" => {
             println!("{}", analyze::header());

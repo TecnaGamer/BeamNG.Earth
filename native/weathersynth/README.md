@@ -62,6 +62,35 @@ The tool does the following:
 - **Windows:** `cargo zigbuild --release --locked --features audio --target x86_64-pc-windows-gnu`. The binary imports
   only system DLLs. No WinRT activation function is imported, and cpal uses Win32 COM (`CoCreateInstance`) only.
 
+## Live weather sounds (`live-serve`)
+
+`weathersynth live-serve [--thunder procedural|files:DIR]` is started by the world server (server/liveaudio.py) when
+the Weather page's "Weather sounds" is Live.
+- **Input:** the mod's `weather_audio` messages on stdin, one JSON line each (src/proto.rs; server/protocol_table.json).
+- **Output:** a state line on stdout every 0.5 s (`live` with the output latency and the thunder counters), or one
+  `failed` line before a non-zero exit. The server forwards these as `audio_state`.
+- **Fallback:** the mod plays its pre-recorded files whenever the state lines stop.
+- **Quiet:** when muted, when the input stops for 1 s, or on Pre-recorded.
+- **Exit:** fades out and exits on EOF.
+
+Thunder (src/thunderlive.rs):
+- **Two messages per strike.** The mod sends a look-ahead hint up to 3 s early, rendered at once on its own thread,
+  and the final one at the strike. Only finals play, at their UTC arrival time minus the output latency.
+- **The renderer is a trait.** `ThunderRenderer::render(&Spec { seed, d, kind }) -> mono f32 at 44.1 kHz`.
+  `procedural` is thunder.rs's model, set to each class's loudness target. `files:DIR` plays
+  `bne_thunder_<kind><n>.wav` picked by the seed. Another method only needs a new impl and a `--thunder` name.
+
+Device checks so far (2026-11-25, silent: volumes 0):
+
+| Machine | Device / format | Latency | Underruns |
+|---|---|---|---|
+| PC (CachyOS, PipeWire, native binary) | ALSA default, 44.1 kHz f32 stereo | 158-174 ms | 0 |
+| Deck (Game Mode, glibc 2.35 build, a game running) | ALSA default (PipeWire), 44.1 kHz f32 | 176-194 ms | 0 |
+| Windows 11 test PC (over SSH) | WASAPI shared, 48 kHz f32 | 138-148 ms | 0 |
+
+Two thunders hinted 3 s ahead rendered and played in time on the PC and on Windows. Not yet checked: the Deck in
+Desktop Mode, and anything with the game in the loop (the broker).
+
 ## Audio rules (src/audio.rs)
 
 - **Output streams only.** On WASAPI, an input stream opened on an output device is loopback capture of the system's
@@ -74,8 +103,8 @@ The tool does the following:
 
 ## Checks
 
-- `cargo test --release --locked --features audio`: the ISO 9613-1 table, the N-wave spectrum, output-only streams and
-  the audio ring.
+- `cargo test --release --locked --features audio`: the ISO 9613-1 table, the N-wave spectrum, output-only streams,
+  the audio ring, the JSON line reader, the thunder bus (hint / final / late / kind change) and the live mix.
 - `weathersynth storm-dump` against `tools/storm_dump.lua`, run under LuaJIT on the weather branch's storm.lua. The
   strike lattice must match byte for byte.
 - `weathersynth live-bench` and `thunder-bench`: the live engine's CPU cost, with no device.
