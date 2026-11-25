@@ -40,7 +40,7 @@ sys.path.insert(0, ROOT)
 import modtextures  # noqa: E402
 
 REL = "levels/beamng_earth/art/shapes/beamngEarth/bare"
-ALPHA_REF = 70          # the materials' alphaRef (baretrees.lua MATERIAL): the preview thresholds with it
+ALPHA_REF = 100         # the materials' alphaRef (baretrees.lua MATERIAL): the preview thresholds with it
 TREE_ZIP = ("content", "assets", "materials", "tree.zip")
 
 # species habits: twig colours (sRGB: bark at the thick end, the twig tips), dead leaf colours, growth

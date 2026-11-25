@@ -29,7 +29,8 @@ M.ALPHA_REF_FAR = 50    -- the far LOD's cards (*_distant: also what the engine 
                         -- coarse mips' twigs kept as a haze (Windows shots: at 70 bare park trees 200-400 m off nearly
                         -- vanished; at 40 everywhere the near crowns read as a solid brown mass; 35 here: the far
                         -- forest right, but trees 30-60 m off, already on this LOD, dark solid crowns)
-M.ALPHA_REF = 70        -- low: the coarse mips' averaged twigs stay drawn at range as a haze (make_twig_textures.py)
+M.ALPHA_REF = 100       -- the near cards: a crown overlaps many of them, so each draws only its denser twigs (Windows
+                        -- probe: at 70 street oaks 20-40 m off read as dark solid crowns, real bare crowns show the sky)
 
 -- the stock deciduous shapes' folders and their species
 M.FOLDERS = {
