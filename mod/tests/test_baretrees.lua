@@ -74,6 +74,17 @@ do
   T.check(ok and count == 12, 'twelve twig materials, each on a texture the tool makes: ' .. count)
 end
 
+-- the copies' folder carries the materials' signature: a factor change makes new copies (and new far imposters)
+do
+  local s0 = B.signature()
+  T.check(s0:match('^%x%x%x%x%x%x%x%x$') ~= nil and s0 == B.signature(), 'a fixed 8-hex signature: ' .. s0)
+  local f = B.FACTOR
+  B.FACTOR = { 0.9, 0.9, 0.9, 1 }
+  T.check(B.signature() ~= s0, 'another colour: another signature')
+  B.FACTOR = f
+  T.check(B.signature() == s0, 'back: the same')
+end
+
 -- which trees: a fixed draw per tree, the season's share bare, a few with their dead leaves
 do
   local n, bare0, bare1, kept1, bare5, low, lowBare = 2000, 0, 0, 0, 0, 0, 0

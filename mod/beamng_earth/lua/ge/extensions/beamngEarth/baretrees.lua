@@ -21,7 +21,8 @@
 --   - nothing per frame: one lookup per tree row as it is first placed (trees.lua caches the shape per row).
 local M = {}
 
-M.VERSION = 1           -- the copies' folder (bump with any change of the renames or the copy)
+M.VERSION = 1           -- the copies' folder: bump with any change of the copy or of the twig textures (the engine's far
+                        -- imposters are baked from them once and kept in it); the materials' own signature is in it too
 M.TEX = '/levels/beamng_earth/art/shapes/beamngEarth/bare/'
 M.FACTOR = { 0.85, 0.85, 0.92, 1 }     -- the twig colour, a touch cooler (Windows shots: sunlit far crowns read pink)
 M.ALPHA_REF = 70        -- low: the coarse mips' averaged twigs stay drawn at range as a haze (make_twig_textures.py)
@@ -115,6 +116,25 @@ function M.materials()
   return out
 end
 
+-- Pure: the materials' signature (8 hex digits, FNV-1a over their fields in a fixed order): a change of a factor, the
+-- alphaRef or a texture name gives the copies a new folder, so their far imposters are baked again with it.
+function M.signature()
+  local parts = {}
+  for name, m in pairs(M.materials()) do
+    local st = m.Stages[1]
+    parts[#parts + 1] = table.concat({ name, st.baseColorMap, st.opacityMap, tostring(st.roughnessFactor),
+      table.concat(st.baseColorFactor or {}, ','), tostring(m.alphaRef), tostring(m.doubleSided) }, '|')
+  end
+  table.sort(parts)
+  local h = 2166136261
+  for c in table.concat(parts, ';'):gmatch('.') do
+    h = bit.bxor(h, c:byte()) % 4294967296
+    local lo, hi = h % 65536, math.floor(h / 65536)        -- (exact 32-bit product: each part under 2^53)
+    h = ((hi * 16777619) % 65536 * 65536 + lo * 16777619) % 4294967296
+  end
+  return string.format('%08x', h % 4294967296)
+end
+
 -- Pure: a tree's fixed draw (0..1) from its rank (the server's, 0..1): the rank's low bits, so the trees thinned away
 -- at range (by the rank itself) are no different.
 function M.draw(rank)
@@ -159,7 +179,7 @@ M.stats = { copied = 0, bare = 0, kept = 0, failed = 0 }
 local function root()
   if not M.ROOT then
     local b = tostring(rawget(_G, 'beamng_versionb') or rawget(_G, 'beamng_version') or 'x'):gsub('[^%w%.]', '_')
-    M.ROOT = '/temp/beamngEarth/shapes/bare_v' .. M.VERSION .. '_' .. b .. '/'
+    M.ROOT = '/temp/beamngEarth/shapes/bare_v' .. M.VERSION .. '_' .. M.signature() .. '_' .. b .. '/'
   end
   return M.ROOT
 end
