@@ -39,7 +39,7 @@ ON = MODE is not None
 WINDOW_WINTER = (240, 6)
 WINDOW_WET = (24, 6)
 VERSION = 1                 # snowstate.v: the message layout
-NATIVE = 623                # earthfast: snow_state / snow_preset / snow_regime
+NATIVE = 624                # earthfast: snow_state / snow_preset / snow_regime
 
 CELL_DEG = weather.CELL_DEG     # the forcing's cell (~11 km): the weather's
 CACHE_MAX = 64

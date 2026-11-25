@@ -181,8 +181,10 @@ T.check(sh and math.abs(sh.nodes[1].y - sh.nodes[2].y) == amb.SHORE_W and amb.sh
 seaV.shores = nil
 
 -- rain: the loop fades in with the weather's rain, out inside a tunnel's space, and goes when the rain stops
+local rainParticles = S.newObject('Precipitation')
+rainParticles:registerObject('bngEarthRain')
 local function rainEm()
-  for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.name == 'bngEarthRain' then return o end end
+  for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.fields.track == amb.RAIN_TRACK then return o end end
 end
 beamngEarth_weather = { rainNow = 1 }
 clock = 400; amb.update(3, seaV)
@@ -190,6 +192,7 @@ clock = 401; amb.update(3, seaV)
 local re = rainEm()
 T.check(re and re.fields.track == amb.RAIN_TRACK and math.abs(re.vol - amb.RAIN_GAIN / amb.RAIN_FADE_S) < 1e-9,
   'rain: the loop, fading in')
+T.check(scenetree.findObject('bngEarthRain') == rainParticles, 'rain sound does not shadow the particle emitter')
 for i = 1, 8 do clock = 401 + i * 0.5; amb.update(3, seaV) end
 T.check(math.abs(re.vol - amb.RAIN_GAIN) < 1e-9, 'full rain: RAIN_GAIN')
 amb.onSpaces('3:0_0', { 0, lx, 0, 0, 40, 10, 10, 0 })

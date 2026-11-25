@@ -509,7 +509,8 @@ local function updateRain()
       e:setTransform(MatrixF(true))
       e:setField('track', 0, M.RAIN_TRACK)
       e.canSave = false
-      e:registerObject('bngEarthRain')
+      -- Weather finds the level's Precipitation by name when crossing the cloud base.
+      e:registerObject('bngEarthRainAudio')
       e:play()
       rainEm = e
     end

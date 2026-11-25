@@ -49,7 +49,12 @@ FEATURES = (
                        "BNE_BATTER": "vanilla", "BNE_ROADSHAPE": "sheet",
                        # road surface v3 (2026-11-20: one continuous lane surface for motorways/trunks and their
                        # bridge decks; beats the sheet decks at all five probe sites, 0 m of parapet in a carriageway)
-                       "BNE_ROADSURF_V3": "surface"}, None),
+                       "BNE_ROADSURF_V3": "surface",
+                       # the road system rewrite (BNE_ROADSYS, bridgerewrite/DESIGN.md; the user, 2026-11-24: "make sure
+                       # the revamped roads toggle uses the updated rewritten roads"): decks from the road system's own
+                       # surface faces with the deck ends' hand-over (M4), the mapped road areas (area:highway) as the
+                       # carriageway edges and the OSM street tags' cross-sections (lanes, cycle, bus, parking strips)
+                       "BNE_ROADSYS": "surface", "BNE_ROADSYS_AREAS": "on", "BNE_ROADSYS_XSEC": "on"}, None),
     ("expSurfaceOverlay", {"BNE_SURFACE_V2": "on"}, None),                # roadsurf: the second surface layer (P1c)
     ("expNewSidewalks", {"BNE_SIDEWALK_V2": "on"}, None),                 # sidewalks_v2: town sidewalks (P1d, S5)
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),

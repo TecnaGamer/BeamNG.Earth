@@ -36,7 +36,7 @@ def last_hour(r):
     return r["hourly"]["time"][-1]
 
 
-@unittest.skipUnless(NATIVE, "needs earthfast 623 (the snow kernel)")
+@unittest.skipUnless(NATIVE, "needs earthfast 624 (the snow kernel)")
 class KernelTest(unittest.TestCase):
     def test_selftest_is_the_platforms_number(self):
         self.assertEqual(fast._ef.snow_selftest(1, 10000), SELFTEST_1_10000)
@@ -86,7 +86,7 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(snow.hour_index(times, 3600 * 99), 9)
 
 
-@unittest.skipUnless(NATIVE, "needs earthfast 623 (the snow kernel)")
+@unittest.skipUnless(NATIVE, "needs earthfast 624 (the snow kernel)")
 class MessageTest(unittest.TestCase):
     def msg(self, name, dz=0, regime=2, upto=None):
         r = RESPONSES[name]
@@ -163,7 +163,7 @@ class FakeCover:
         self.provider = fn
 
 
-@unittest.skipUnless(NATIVE, "needs earthfast 623 (the snow kernel)")
+@unittest.skipUnless(NATIVE, "needs earthfast 624 (the snow kernel)")
 class W2InterfaceTest(unittest.TestCase):
     """The band table W2's snow on the photos reads (snowcover.set_provider: Field(uniform=Table(rows, road))), its
     quantization (only a bin or an age class moving changes it), the change hook (Server.snow_changed + 'snow'), the
@@ -257,7 +257,7 @@ class FakeHourly:
         return RESPONSES[self.name]
 
 
-@unittest.skipUnless(NATIVE, "needs earthfast 623 (the snow kernel)")
+@unittest.skipUnless(NATIVE, "needs earthfast 624 (the snow kernel)")
 class ServiceTest(unittest.TestCase):
     def test_one_fetch_per_cell_and_hour(self):
         now = [last_hour(RESPONSES["davos"]) - 24 * 3600 + 600]
@@ -322,7 +322,7 @@ class TrackerTest(unittest.TestCase):
         snow.Tracker().on_pose(Conn(), None, 0.0, 0.0, 0.0)
 
 
-@unittest.skipUnless(NATIVE, "needs earthfast 623 (the snow kernel)")
+@unittest.skipUnless(NATIVE, "needs earthfast 624 (the snow kernel)")
 class ServerSnowTest(test_server.ServerHarness):
     """earthd: no snowstate without the service (BNE_WINTER off: Server().snow is None), one after the first pose on an
     anchor with it, not again while nothing changed, again on a hello."""
