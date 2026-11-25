@@ -135,7 +135,7 @@
       {}
     ],
     "translucent": true,
-    "translucentBlendOp": "AddAlpha",
+    "translucentBlendOp": "LerpAlpha",
     "translucentZWrite": false,
     "castShadows": false,
     "doubleSided": true
@@ -171,7 +171,42 @@
       {}
     ],
     "translucent": true,
-    "translucentBlendOp": "AddAlpha",
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false,
+    "castShadows": false,
+    "doubleSided": true
+  },
+  "bngEarthFlashVeil": {
+    "name": "bngEarthFlashVeil",
+    "mapTo": "bngEarthFlashVeil",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0.8,
+          0.86,
+          1.0
+        ],
+        "emissiveIntensityNits": 3000,
+        "instanceEmissive": true,
+        "instanceOpacity": true,
+        "opacityFactor": 1
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": true,
+    "translucentBlendOp": "LerpAlpha",
     "translucentZWrite": false,
     "castShadows": false,
     "doubleSided": true

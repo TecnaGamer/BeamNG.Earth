@@ -113,7 +113,7 @@ M.SCHEMA = {
   -- weather phase B: the storm light (darker under a storm deck), lightning and thunder, the rain streaks, the wet look
   weatherStormLight = { kind = 'bool', default = true, label = 'Storm light' },
   weatherLightning = { kind = 'bool', default = true, label = 'Lightning and thunder' },
-  weatherStreaks = { kind = 'bool', default = true, label = 'Rain streaks' },
+  weatherStreaks = { kind = 'bool', default = false, label = 'Rain streaks' },
   weatherWetLook = { kind = 'bool', default = true, label = 'Wet look' },
   realClouds = { kind = 'bool', default = true, label = 'Real clouds' },
   realFog = { kind = 'bool', default = true, label = 'Real fog' },

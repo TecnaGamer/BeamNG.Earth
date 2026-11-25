@@ -145,7 +145,8 @@ local function writeOne(name, k)
   if not o then
     if k == 0 then return end
     local rough = tonumber(m:getField('roughnessFactor', 0))
-    o = { class = known[name], color = parse(m:getField('baseColorFactor', 0)), rough = rough, ours = {} }
+    -- (no factor set: the engine's default white, so the colour map is darkened too)
+    o = { class = known[name], color = parse(m:getField('baseColorFactor', 0)) or { 1, 1, 1, 1 }, rough = rough, ours = {} }
     orig[name] = o
   end
   local changed = false
@@ -166,6 +167,7 @@ local function writeOne(name, k)
     if ro then m:setField('roughnessFactor', 0, ro); o.ours.rough = m:getField('roughnessFactor', 0); changed = true end
   end
   if changed then
+    m:flush()          -- (seasonlook.lua's order: flush, then reload)
     m:reload()
     M.writes = M.writes + 1
   end
@@ -225,6 +227,21 @@ function M.update(dt, rainMmH, on)
     if #queue == 0 then queue = nil end
   end
   return level > 0 or own > 0 or queue ~= nil
+end
+
+-- One line on what is wet (the probes' overlay, the console): materials written per class and a few names.
+function M.debugLine()
+  local per, names = {}, {}
+  for name, o in pairs(orig) do
+    per[o.class or '?'] = (per[o.class or '?'] or 0) + 1
+    if #names < 6 then names[#names + 1] = name end
+  end
+  local parts = {}
+  for k, n in pairs(per) do parts[#parts + 1] = k .. '=' .. n end
+  table.sort(parts)
+  table.sort(names)
+  return string.format('wet lvl=%d own=%.2f src=%s writes=%d %s | %s', level, own, tostring(M.source), M.writes,
+    table.concat(parts, ' '), table.concat(names, ' '))
 end
 
 function M.level() return level end

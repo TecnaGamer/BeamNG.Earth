@@ -54,6 +54,8 @@ BOLTS = 4
 GLOW_PX = 128
 BOLT_NITS = 150000              # cd/m2: a channel far outshines a daylit sky (~5,000-10,000)
 GLOW_NITS = 5000
+VEIL_NITS = 3000                # the lit air: a dim veil by day, the whole night view lit
+VEIL_R = 40.0                   # m
 BOLT_RGB = (0.80, 0.86, 1.0)
 
 
@@ -168,7 +170,7 @@ def materials():
                             "emissiveFactor": list(BOLT_RGB), "emissiveIntensityNits": nits,
                             "instanceEmissive": True, "instanceOpacity": True, "opacityFactor": 1,
                             "opacityMap": REF + tex}, {}, {}, {}],
-                "translucent": True, "translucentBlendOp": "AddAlpha", "translucentZWrite": False,
+                "translucent": True, "translucentBlendOp": "LerpAlpha", "translucentZWrite": False,
                 "castShadows": False, "doubleSided": True}
     out = {}
     for k, op in enumerate(SHELL_OPACITY):
@@ -182,6 +184,10 @@ def materials():
                      "castShadows": False, "doubleSided": True}
     out["bngEarthBolt"] = emissive("bngEarthBolt", "bngEarth_bolt.data.dds", BOLT_NITS)
     out["bngEarthFlashGlow"] = emissive("bngEarthFlashGlow", "bngEarth_flashglow.data.dds", GLOW_NITS)
+    # the lit air around the camera in a flash (storm.lua: a cylinder 40 m out, its opacity the flash; no texture)
+    veil = emissive("bngEarthFlashVeil", "bngEarth_flashglow.data.dds", VEIL_NITS)
+    del veil["Stages"][0]["opacityMap"]
+    out["bngEarthFlashVeil"] = veil
     path = os.path.join(OUT, "weather.materials.json")
     with open(path, "w", newline="\n") as f:
         json.dump(out, f, indent=2)
@@ -207,6 +213,8 @@ def main():
         write_shape(os.path.join(OUT, f"bne_bolt{k + 1}.cdae"), P, T, UV, "bngEarthBolt")
     P, T, UV = quad(1.0, 1.0, 0.0, 1.0, centred=True)
     write_shape(os.path.join(OUT, "bne_flashglow.cdae"), P, T, UV, "bngEarthFlashGlow")
+    P, T, UV, TM = shells((VEIL_R,))
+    write_shape(os.path.join(OUT, "bne_flashveil.cdae"), P, T, UV, ["bngEarthFlashVeil"], TM)
     materials()
 
 

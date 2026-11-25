@@ -173,7 +173,7 @@ M.SUN_EPS = 0.02           -- write only when the factor moved this much (each w
 -- GraphicEVCompensation stays underneath) and the direct sun further (no sharp shadows under a storm deck). By day the
 -- full STORM_EV_MAX; at night (the eye adapted to the dark, the lamps the light) a share of it, NIGHT_EV_SHARE.
 -- gloom = DECK * deck^2 + RAIN * sqrt(min(1, rain / GLOOM_RAIN_MMH)) + THUNDER * class / 3
-M.GLOOM_DECK, M.GLOOM_RAIN, M.GLOOM_THUNDER, M.GLOOM_RAIN_MMH = 0.3, 0.3, 0.3, 8
+M.GLOOM_DECK, M.GLOOM_RAIN, M.GLOOM_THUNDER, M.GLOOM_RAIN_MMH = 0.15, 0.3, 0.35, 8   -- (the deck alone little: overcast photos are bright, refs)
 M.STORM_EV_MAX = 2.0       -- EV at gloom 1 by day (overcast ~-0.6, rain ~-1, a thunderstorm ~-1.6)
 M.NIGHT_EV_SHARE = 0.35
 M.GLOOM_SUN = 0.85         -- the direct sun's brightness factor times (1 - GLOOM_SUN * gloom)
@@ -181,7 +181,8 @@ M.EV_EPS = 0.03            -- EV: written when it moved this much
 M.EV_POSTAPPLY = false
 M.STORM_LIGHT = true       -- the settings' "Storm light" (off: none of the above)
 M.LIGHTNING = true         -- the settings' "Lightning and thunder"
-M.STREAKS = true           -- the settings' "Rain streaks" (rainstreaks.lua)
+M.STREAKS = false          -- the settings' "Rain streaks" (rainstreaks.lua): off by default (real rain hardly shows as streaks by day:
+                           -- the reference photos, ~/bnge-tests/weather/b/refs; one shell costs ~1.5 ms a frame on the Deck)
 M.WET_LOOK = true          -- the settings' "Wet look" (wetlook.lua)
 M.GRAVITY_ENABLED = true
 M.GRAVITY_EPS = 1e-4       -- m/s^2; ~30 m of climb (setGravity queues Lua into every vehicle)
@@ -1161,7 +1162,9 @@ local function writeExposure(ev)
   if not o then return end
   local okh, have = pcall(function() return tonumber(o.exposureBiasEV) end)
   if not okh then return end
-  local want = userEV() + ev
+  -- (the engine's bias is in its exposure EV, higher = darker: the broker shots wb7, a bias of -1.6 took the metered EV from
+  -- 12.0 to 9.5 and the picture got brighter; so a storm's darkening, stormEV < 0, goes in with its sign turned)
+  local want = userEV() - ev
   local e = S.ev
   if e.applied and have and math.abs(have - want) <= M.EV_EPS and math.abs(have - e.applied) <= 1e-3 then return end
   if not e.applied and math.abs(ev) < M.EV_EPS then return end
@@ -1572,7 +1575,9 @@ local function phaseB(e, dt)
   end
   local held = storm.holdSpec and M.LIGHTNING and mode ~= 'manual'
   if cls > 0 or S.storming or held then
+    local sig = S.cur and tonumber(S.cur.fogSigma)
     local ok, on = pcall(storm.update, dt, cls, { groundZ = S.groundZ, sheltered = S.sheltered, hold = held,
+      visM = sig and sig > 0 and M.FOG_K / sig or nil,
       cloudAboveM = (S.cur and S.cur.cloudAboveKm or 1.5) * 1000 })
     S.storming = ok and on or false
     if not ok then log('W', 'beamngEarth', 'weather storm: ' .. tostring(on)) end

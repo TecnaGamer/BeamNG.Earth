@@ -992,8 +992,8 @@ W.setMode('preset')
 W.setChangeSpeed(0)
 W.setPresetChoice('storm')
 run(1)
-local wantEV = 0.5 + W.stormEV(W._cur().gloom, 1)
-check(math.abs(hdr.exposureBiasEV - wantEV) < 0.05 and hdr.exposureBiasEV < 0, 'storm: the exposure lowered over the player\'s 0.5: '
+local wantEV = 0.5 - W.stormEV(W._cur().gloom, 1)      -- (the engine's EV: higher = darker)
+check(math.abs(hdr.exposureBiasEV - wantEV) < 0.05 and hdr.exposureBiasEV > 1.5, 'storm: the bias raised (darker) over the player\'s 0.5: '
   .. tostring(hdr.exposureBiasEV))
 W.setStormLight(false)
 run(1)

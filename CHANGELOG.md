@@ -20,7 +20,7 @@ What changed in each release of BeamNG.Earth, newest first.
   (credited in CREDITS.md and on the settings page).
 - **Storm light**: under a thick cloud deck, in rain and in thunderstorms the day gets darker and the sun loses its
   sharp shadows.
-- **Rain streaks**: streaks of falling rain around you, lit by the sun, headlights and street lamps, leaning in the wind
+- **Rain streaks** (off by default, on the Weather page): streaks of falling rain around you, lit by the sun, headlights and street lamps, leaning in the wind
   and as you drive, so rain shows by day and in the distance.
 - **Wet look**: sidewalks, markings, bridges and buildings get darker and glossier in rain and dry slowly after it (with
   the winter road conditions on, they follow the road condition). City street asphalt is not wet-looking yet.

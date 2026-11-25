@@ -166,6 +166,14 @@ function M.flashGain(d)
   return 1 / (1 + (d / 3000) ^ 1.5) * (1 - d / M.SEE_M)
 end
 
+-- Pure: the distance (m) a flash d m away is drawn at with visibility visM (nil: its own).
+function M.proxyDistance(d, visM)
+  d = tonumber(d) or 0
+  local v = tonumber(visM)
+  if not v then return d end
+  return math.min(d, math.max(M.PROXY_MIN_M, M.PROXY_VIS * v))
+end
+
 -- Pure: the thunder for a strike d m away: { delay s, kind 'close' | 'mid' | 'far', gain 0..1 } or nil (too far).
 function M.thunderFor(d)
   d = tonumber(d) or math.huge
@@ -212,6 +220,10 @@ M.GLOW_SIZE_M = 6000      -- the lit cloud (a glow at the cloud base over the st
 M.GLOW_MAX_ELEV = math.rad(9)   -- ... no higher in the view than this (the cloud base over a far strike is low in the sky;
                                 -- over a near one it was out of the frame)
 M.BOLT_BOTTOM_M = -60     -- the bolt's foot under the player's ground (hidden by the horizon and buildings)
+-- the stand-in distance of the bolt and the glow: no farther than PROXY_VIS of the visibility (nor nearer than
+-- PROXY_MIN_M), so the fog leaves them most of their light
+M.PROXY_VIS, M.PROXY_MIN_M = 0.25, 300
+M.VEIL_ALPHA = 0.35       -- the lit air's opacity at a full flash overhead
 M.CLOUD_BASE_MIN_M, M.CLOUD_BASE_MAX_M = 700, 3000
 M.FLASH_S = 0.6           -- a flash's whole length (its pulses: M.pulses)
 
@@ -252,6 +264,8 @@ local function objects()
   end
   local g = makeStatic(M.ART .. 'bne_flashglow.cdae', 'bngEarthStormGlow')   -- (not the material's name: an object named like a material shadows it)
   objs.glow = g and g:getID()
+  local v = makeStatic(M.ART .. 'bne_flashveil.cdae', 'bngEarthStormVeil')
+  objs.veil = v and v:getID()
   local l = createObject('PointLight')
   if l then
     l.canSave = false
@@ -309,7 +323,7 @@ local function strike(s, now, ctx)
 end
 
 -- The flashes' look this frame: the brightest flash drives the light, the glow and its bolt.
-local function drawFlashes(now)
+local function drawFlashes(now, ctx)
   local best, bv = nil, 0
   local keep = {}
   for _, f in ipairs(st.flashes) do
@@ -343,30 +357,43 @@ local function drawFlashes(now)
     end
     local p = camPos()
     local qx, qy, qz, qw = yawQuat(-best.dx, -best.dy)
+    -- the bolt and the glow drawn at a stand-in distance r (the same picture, scaled by r / d) inside the fog: at their
+    -- real distance a storm's fog (visibility 2-3 km) hid them completely in the broker shots, a real flash outshines it
+    local f = math.min(1, M.proxyDistance(best.d, ctx and ctx.visM) / math.max(1, best.d))
+    local px, py = p and p.x + best.dx * f, p and p.y + best.dy * f
     local gl = obj(objs.glow)
     if gl and p then
-      local s = M.GLOW_SIZE_M
+      local s = M.GLOW_SIZE_M * f
       gl:setScale(vec3(s, s, s * 0.5))
       local gz = math.min(best.z + best.base, p.z + best.d * math.tan(M.GLOW_MAX_ELEV))
-      gl:setPosRot(best.x, best.y, gz, qx, qy, qz, qw)
+      gl:setPosRot(px, py, p.z + (gz - p.z) * f, qx, qy, qz, qw)
       if not shown.glow then gl:setHidden(false) end
       setAlpha(gl, math.min(1, bv * 1.5))
       want.glow = true
     end
-    if best.bolt then
+    if best.bolt and p then
       local b = obj(objs.bolts[best.bolt])
       if b then
-        local h = best.base - M.BOLT_BOTTOM_M
+        local h = (best.base - M.BOLT_BOTTOM_M) * f
         b:setScale(vec3(h, h, h))
-        b:setPosRot(best.x, best.y, best.z + M.BOLT_BOTTOM_M, qx, qy, qz, qw)
+        b:setPosRot(px, py, p.z + (best.z + M.BOLT_BOTTOM_M - p.z) * f, qx, qy, qz, qw)
         if shown.bolt ~= best.bolt then b:setHidden(false) end
         setAlpha(b, math.min(1, bv / best.gain))
         want.bolt = best.bolt
       end
     end
+    -- the lit air around the camera (rain and haze light up in a flash: the whole view brightens)
+    local v = obj(objs.veil)
+    if v and p and not (ctx and ctx.sheltered) then
+      v:setPosRot(p.x, p.y, p.z, 0, 0, 0, 1)
+      if not shown.veil then v:setHidden(false) end
+      setAlpha(v, math.min(1, M.VEIL_ALPHA * bv))
+      want.veil = true
+    end
   end
   if shown.light and not want.light then local l = obj(objs.light) if l then l:setField('isEnabled', 0, '0'); l:postApply() end end
   if shown.glow and not want.glow then local gl = obj(objs.glow) if gl then gl:setHidden(true) end end
+  if shown.veil and not want.veil then local v = obj(objs.veil) if v then v:setHidden(true) end end
   if shown.bolt and shown.bolt ~= want.bolt then local b = obj(objs.bolts[shown.bolt]) if b then b:setHidden(true) end end
   st.shown = want
 end
@@ -463,7 +490,7 @@ function M.update(dt, c, ctx)
   end
   if M.holdSpec and ctx.hold then holdFlash(now, ctx)
   elseif #st.flashes > 0 and st.flashes[1].held then st.flashes = {} end
-  if #st.flashes > 0 or (st.shown and next(st.shown)) then drawFlashes(now) end
+  if #st.flashes > 0 or (st.shown and next(st.shown)) then drawFlashes(now, ctx) end
   playThunders(now, ctx.sheltered)
   if c < 1 then st.upcoming = {} end
   if c < 1 and #st.flashes == 0 and #st.thunders == 0 and not (st.shown and next(st.shown)) then
@@ -477,7 +504,7 @@ end
 function M.reset()
   if st and st.objs then
     for _, id in ipairs(st.objs.bolts or {}) do local o = obj(id) if o then o:delete() end end
-    for _, k in ipairs({ 'glow', 'light' }) do local o = obj(st.objs[k]) if o then o:delete() end end
+    for _, k in ipairs({ 'glow', 'veil', 'light' }) do local o = obj(st.objs[k]) if o then o:delete() end end
   end
   st = nil
 end

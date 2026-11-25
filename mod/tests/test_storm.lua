@@ -68,6 +68,10 @@ near(th.delay, 10, 1e-9, '3.43 km: thunder after 10 s')
 check(th.kind == 'mid' and storm.thunderFor(500).kind == 'close' and storm.thunderFor(10000).kind == 'far', 'kinds by distance')
 check(storm.thunderFor(storm.HEAR_M + 1) == nil, 'too far to hear')
 check(storm.thunderFor(500).gain > storm.thunderFor(10000).gain, 'nearer is louder')
+-- the stand-in distance inside the fog
+check(storm.proxyDistance(5000, nil) == 5000, 'no visibility known: its own distance')
+check(storm.proxyDistance(5000, 2000) == math.max(storm.PROXY_MIN_M, storm.PROXY_VIS * 2000), 'in a storm\'s fog: nearer')
+check(storm.proxyDistance(200, 2000) == 200, 'never farther than it is')
 
 -- the clock: never ahead of os.time() by more than a second
 local now = storm.now()
@@ -128,6 +132,8 @@ for _, o in ipairs(S.liveOf('TSStatic')) do
   if not o.hidden and o.name and o.name:find('^bngEarthStormBolt') then shownBolts = shownBolts + 1 end
 end
 check(shownBolts == 1, 'one bolt shown')
+local veil = scenetree.findObject('bngEarthStormVeil')
+check(veil and not veil.hidden, 'the lit air shown in the flash')
 -- no object takes a material's name (an object named like a material shadows it: the glow was 'bngEarthFlashGlow',
 -- its own material's name, and nothing showed in the first broker shots)
 local mj = io.open(dir .. '/../beamng_earth/levels/beamng_earth/art/weather/weather.materials.json'):read('*a')
