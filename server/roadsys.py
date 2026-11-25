@@ -1516,8 +1516,9 @@ def ceil_of_cell(frame, cell_fn, key):
     """earthfast.RoadsysCeil of map cell key (in frame): its hand-over's ends (ends_of_cell) with the decks that may
     lie over it, read from the 3 x 3 cells round it as the ends are (a deck over a point reaches it from those cells:
     a point's ceiling is the same whichever caller asks), each deck's heights its chain's published solve. None when a
-    cell cannot be read; the ends alone when no bridge chains are at hand (DECKS_FN unset). Kept only when every read
-    was complete (a short chain's stand-in heights answer this call alone, its fault the caller's)."""
+    cell cannot be read; the ends alone (their drop) when no bridge chains are at hand (DECKS_FN unset) or their read
+    failed. Kept only when every read was complete (a short chain's stand-in heights answer this call alone, its fault
+    the caller's)."""
     import heightmap
     import mapcells
     import revisit
@@ -1548,10 +1549,10 @@ def ceil_of_cell(frame, cell_fn, key):
             (log.debug if isinstance(ex, OSError) else log.warning)("roadsys ceiling: %s: %s", type(ex).__name__, ex)
             revisit.fault()
             got = None
-    if got is None:
+    if got is None:             # (the drop alone, as structures has it: not kept)
         with _ends_lock:
             CEIL_STATS["short"] += 1
-        return None
+        return ends.ceil([], [])
     c = ends.ceil(*got)
     if CEIL_DUMP and c.count():
         with open(os.path.join(CEIL_DUMP, f"ceil_{float(frame.lat0):.6f}_{float(frame.lon0):.6f}_{key.z}_{key.x}_{key.y}.rsce"),
