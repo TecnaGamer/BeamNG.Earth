@@ -128,7 +128,7 @@ M.RAIN_SIGMA_K, M.RAIN_SIGMA_P = 0.33, 0.67
 M.SNOW_SIGMA_K, M.SNOW_SIGMA_P = 3.9, 0.8
 -- Grey fog (the "sandstorm" look: the lit fog takes the low sun's colour, the LA storm shots of the study): how grey
 -- the fog is, 0..1, from the rain (FOG_GREY_RAIN_MMH gives 1), the snow, the fog codes and an overcast deck.
-M.FOG_GREY_RAIN_MMH, M.FOG_GREY_SNOW_CMH, M.FOG_GREY_DECK, M.FOG_GREY_FOG = 2, 0.5, 0.5, 0.8
+M.FOG_GREY_RAIN_MMH, M.FOG_GREY_SNOW_CMH, M.FOG_GREY_DECK, M.FOG_GREY_FOG = 2, 0.5, 0.25, 0.8
 -- The fog cap (the settings' "Thickest fog"; players found real fog too thick, the plan's B11): the least visibility
 -- in m, 0 = none (the real fog down to FOG_VIS_MIN)
 M.FOG_LIMIT_M = 0
@@ -1058,17 +1058,22 @@ local function restoreSun()
 end
 M._restoreSun = function() restoreSun() end -- tests
 
--- Grey fog in rain (the weather plan's item 5: the fog is a lit medium, shaders/common/sceneLitFog.h.hlsl: the sun's
--- light through it plus the sky's, so under a low sun a rainstorm's fog took the sunrise's orange, the study's LA
+-- Grey fog in rain (the weather plan's item 5: the fog is a lit medium, shaders/common/sceneLitFog.h.hlsl, lit by the
+-- sky's physical atmosphere, so under a low sun a rainstorm's fog took the sunrise's orange, the study's LA
 -- "sandstorm"). M.FOG_TINT: the ScatterSky fields moved towards their rain values by the fog's greyness g (0..1):
--- { field, kind = 'color' (towards its own luminance times scale: grey, as bright or dimmer) | 'number' (towards
--- value) | 'string' (value while g >= on) }. Written at most every apply (2 Hz) when a value moved by TINT_EPS, put
--- back when g is 0 again (only while the field still holds what we wrote: someone else's value is theirs).
+-- { field, kind = 'color' (towards its own luminance times scale) | 'number' (towards value) | 'string' (value while
+-- g >= on) | 'mul' (every component times 1 .. k) }. Written at most every apply (2 Hz) when a value moved by TINT_EPS
+-- (relative), put back when g is 0 again (only while the field still holds what we wrote: someone else's is theirs).
+-- Broker shots 2026-11-24/25 (LA at a 7.6 degree sun, storm): fogScale, its gradient, sunScale, ambientScale and the fog
+-- fallback changed nothing visible; the atmosphere's Mie scattering and extinction x150 with a flatter phase (0.8 ->
+-- 0.2) turned the orange sky and fog a pale grey (water droplets scatter all colours alike), x15 hardly, x50 partly.
+-- Not over the 3D map nor high above the ground (applyFogTint's share: the same fade as the fog's).
 M.FOG_TINT = {
-  { field = 'fogScale', kind = 'color', scale = 0.85 },
-  { field = 'colorizeAmount', kind = 'number', value = 0 },
+  { field = 'atmoMieScattering', kind = 'mul', k = 150 },
+  { field = 'atmoMieExtinction', kind = 'mul', k = 150 },
+  { field = 'atmoMiePhaseG', kind = 'number', value = 0.2 },
 }
-M.TINT_EPS, M.TINT_ON = 0.01, 0.02
+M.TINT_EPS, M.TINT_ON = 0.05, 0.02
 
 local function parseColor(s)
   local t = {}
@@ -1274,7 +1279,8 @@ local function apply(e)
     S.temp.at = S.clock
     if writeTemperature(c.tempC) then S.temp.value = c.tempC end
   end
-  applyFogTint(c.fogGrey or 0)
+  -- (the haze only where the fog is: none over the 3D map, faded out high above the ground)
+  applyFogTint(map3dOn() and 0 or (c.fogGrey or 0) * M.fogAltitudeShare(camH))
 end
 
 local function applyWind(e, dt)

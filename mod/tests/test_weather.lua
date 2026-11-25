@@ -771,6 +771,8 @@ do
   check(W.targets(W.presetMsg('hail')).flake == 'hail' and W.targets(W.presetMsg('blizzard')).flake == 'dry'
     and W.targets(W.presetMsg('lightsnow')).flake == 'snow', 'flake kinds of the presets')
   check(W.targets(W.presetMsg('storm')).fogGrey == 1 and W.targets(W.presetMsg('clear')).fogGrey == 0, 'grey fog: storm, clear')
+  check(W.tintValue({ kind = 'mul', k = 150 }, '0.004 0.004 0.004', 1) == '0.6 0.6 0.6'
+    and W.tintValue({ kind = 'mul', k = 150 }, '0.004 0.004 0.004', 0) == '0.004 0.004 0.004', 'tint: mul keeps the components')
   check(W.hailRate({ code = 96, rainMmH = 3 }) == W.HAIL_CODE_CMH and W.hailRate({ code = 96 }) == 0
     and W.hailRate({ code = 63, rainMmH = 3 }) == 0, 'hail from the hail codes only while it rains')
 
@@ -923,20 +925,26 @@ W.setPresetChoice('hail')
 run(1)
 check(snow.fields.dropSize == tostring(W.FLAKES.hail.dropSize) and rain.hidden == false, 'hail: pellets and rain')
 -- grey fog: the sky's fog levers moved by the greyness, given back exactly when dry and clear
-sun:setField('fogScale', 0, '0.3960 0.6670 1.0000 1.0000')
-sun:setField('colorizeAmount', 0, '1')
+sun:setField('atmoMieScattering', 0, '0.004 0.004 0.004')
+sun:setField('atmoMieExtinction', 0, '0.0044 0.0044 0.0044')
+sun:setField('atmoMiePhaseG', 0, '0.8')
 W.setPresetChoice('storm')
 run(1)
-local fs = sun:getField('fogScale')
-local fr, fg, fb = tostring(fs):match('^(%S+) (%S+) (%S+)')
-check(math.abs(fr - fg) < 1e-3 and math.abs(fg - fb) < 1e-3 and tonumber(sun:getField('colorizeAmount')) == 0, 'storm: grey fog')
+local ms = { tostring(sun:getField('atmoMieScattering')):match('^(%S+) (%S+) (%S+)$') }
+check(#ms == 3 and math.abs(ms[1] - 0.6) < 1e-6 and math.abs(tonumber(sun:getField('atmoMiePhaseG')) - 0.2) < 1e-6,
+  'storm: the atmosphere\'s Mie haze x150 (three components kept), a flatter phase: ' .. tostring(sun:getField('atmoMieScattering')))
+beamngEarth_map3d = { isActive = function() return true end }
+run(1)
+check(sun:getField('atmoMieScattering') == '0.004 0.004 0.004', 'over the 3D map: the sky\'s own atmosphere')
+beamngEarth_map3d = nil
+run(1)
 W.setPresetChoice('clear')
 run(1)
-check(sun:getField('fogScale') == '0.3960 0.6670 1.0000 1.0000' and sun:getField('colorizeAmount') == '1', 'clear: the sky\'s own values back')
+check(sun:getField('atmoMieScattering') == '0.004 0.004 0.004' and sun:getField('atmoMiePhaseG') == '0.8', 'clear: the sky\'s own values back')
 W.setPresetChoice('storm')
 run(1)
 W.setMode('manual')
-check(sun:getField('fogScale') == '0.3960 0.6670 1.0000 1.0000', 'Off: the sky\'s own values back')
+check(sun:getField('atmoMieExtinction') == '0.0044 0.0044 0.0044', 'Off: the sky\'s own values back')
 -- traffic in this weather
 W.setMode('preset')
 W.setPresetChoice('rain')
