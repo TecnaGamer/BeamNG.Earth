@@ -12673,6 +12673,107 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
     return out
 
 
+# Fill walls (grading.fill_walls: the earthwork the grading made beside a road it lifted over its natural profile): where the
+# graded ground stands at the road's level over the strip behind the core and then steps down, the wall's body over the
+# whole band the lattice's teeth fill (grading.FILL_FLAT_M, the strip, and the teeth's reach past the step: 2 x
+# roadmesh.GRID_DIAG_M from the core's edge), its top flush with the road at the core's side and its face on the band's
+# outer edge, down to the natural ground.
+FILL_WALL_BAND_M = 2.0 * roadmesh.GRID_DIAG_M   # m from the core's edge to the face
+FILL_WALL_INSET_M = 0.1     # m the body's inner edge stands off the core's edge (as a cutting's face, retaining_walls)
+FILL_WALL_LEVEL_M = 0.1     # m the strip's ground may stand off the road's: the strip is the road's level
+FILL_WALL_STEP_M = 0.5      # m the strip's last decimetres and the first past it read apart: the step. (The blend's own slope,
+                            # a smoothstep at 1.5 / grading.SLOPE_RUN at most, falls under 0.4 m over this: never a step)
+FILL_WALL_PAST_M = 4.0      # m past the face where the natural ground's fall is read (no wall on a natural cliff) ...
+FILL_WALL_TOP_M = 0.02      # m the body's top stands over the strip's ground (the terrain's own height there)
+FILL_WALL_MIN_N = 3         # samples (WALL_STEP apart) a wall holds for at least, gaps of WALL_GAP_N closed (_wall_runs)
+
+
+def fill_walls(frame, roads, elev, exact, decks=()):
+    """[dict] of the fill walls along the ground roads (grading.fill_walls) in the same form as retaining_walls', the face
+    looking away from the road: where the graded ground (elev) is the road's own level over the strip behind its core,
+    and steps down by more than FILL_WALL_STEP_M within half a metre of the strip's end to ground that goes on no steeper
+    than grading.SHARP_GRADE (a natural cliff is no wall's). The body spans the band, its top flush with the road's side, its
+    face down to the natural ground at the band's edge. None under a bridge deck, none on another road's carriageway,
+    none past the tile's box (exact); none with BNE_FILL_WALLS=off. Pure given elev."""
+    import grading
+    if not grading.FILL_WALLS_ON:
+        return []
+    x0, y0, x1, y1 = exact
+    rows = []
+    for fid, spec, pts, _ in roads:
+        if spec.kind not in BUILT or len(pts) < 2 or spec.mountain:
+            continue
+        xy, s = grading.resample(np.asarray(pts[:, :2], np.float64), WALL_STEP)
+        if len(xy) < 2:
+            continue
+        inside = (xy[:, 0] >= x0 - 2) & (xy[:, 0] < x1 + 2) & (xy[:, 1] >= y0 - 2) & (xy[:, 1] < y1 + 2)
+        if not inside.any():
+            continue
+        d = np.gradient(xy, axis=0)
+        d /= np.maximum(dnp.hypot(*d.T), 1e-9)[:, None]
+        rh, core = grading.plan_halves(spec)            # (the grading's carriageway and core, the strip's start)
+        rows.append((fid, spec, xy, inside, np.stack([-d[:, 1], d[:, 0]], axis=1), rh, core))
+    if not rows:
+        return []
+
+    def ground(P):
+        la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], np.zeros(len(P)))
+        return np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64)
+    # (the road's own level, the strip's end, just past it, just outside the band and further out, one lookup)
+    pts_all = []
+    for _fid, _spec, xy, _inside, nl, _rh, core in rows:
+        o = (0.0, core + grading.FILL_FLAT_M - 0.2, core + grading.FILL_FLAT_M + 0.3, core + FILL_WALL_BAND_M + 0.5,
+             core + FILL_WALL_BAND_M + 0.5 + FILL_WALL_PAST_M)
+        for side in (1.0, -1.0):
+            pts_all.extend(xy + nl * side * o[k] for k in range(5))
+    g_all = ground(np.concatenate(pts_all))
+    others = _Segs({fid: (np.asarray(pts, np.float64)[:, :2], spec.width / 2) for fid, spec, pts, _ in roads
+                    if len(pts) >= 2})
+    out, k = [], 0
+    for fid, spec, xy, inside, nl, rh, core in rows:
+        n = len(xy)
+        for side in (1.0, -1.0):
+            g = g_all[k:k + 5 * n].reshape(5, n)
+            k += 5 * n
+            zc, strip, past, gout, gfar = g
+            out_n = nl * side
+            # (the strip the road's own level to its end, the step down just past it, the natural ground beyond: no cliff)
+            fall = (gout - gfar) / FILL_WALL_PAST_M
+            on = (np.abs(strip - zc) <= FILL_WALL_LEVEL_M) & (strip - past > FILL_WALL_STEP_M) &                 (fall < grading.SHARP_GRADE)
+            if not on.any():
+                continue
+            face = xy + out_n * (core + FILL_WALL_BAND_M)
+            inner = xy + out_n * (core + FILL_WALL_INSET_M)
+            floor = _deck_floor(face, strip, decks)
+            on &= ~np.isfinite(floor) & ~others.near(face, 0.0, fid) & ~others.near(inner, 0.0, fid)
+            on &= ~_under_decks(inner, strip, decks)
+            run = on.copy()
+            idx = np.flatnonzero(run)
+            for a, b in zip(idx[:-1], idx[1:]):         # (gaps of WALL_GAP_N closed, as the cuttings')
+                if 1 < b - a <= WALL_GAP_N + 1:
+                    run[a:b] = True
+            i = 0
+            while i < n:
+                if not run[i]:
+                    i += 1
+                    continue
+                j = i
+                while j + 1 < n and run[j + 1]:
+                    j += 1
+                if j - i + 1 >= FILL_WALL_MIN_N and inside[i:j + 1].any():
+                    sl = slice(i, j + 1)
+                    m = j - i + 1
+                    top = strip[sl] + FILL_WALL_TOP_M
+                    out.append({"base": face[sl], "top": top, "back_top": top, "foot": gout[sl] - WALL_FOOT_M,
+                                "mountain": False, "toward": out_n[sl],
+                                "thick": np.full(m, FILL_WALL_BAND_M - FILL_WALL_INSET_M),
+                                "concrete": spec.cls in CONCRETE_WALL_CLASSES, "carries": False, "rock": False,
+                                "road_z": zc[sl], "fill": True, "edge": xy[sl] + out_n[sl] * (rh + CLIFF_EDGE_M),
+                                "clear": np.full(m, np.inf)})
+                i = j + 1
+    return out
+
+
 TWIN_SHARE = 0.8        # a tunnel part beside another for this share of its length (their tubes overlapping) ...
 TWIN_DZ_M = 2.0         # ... with its floor within this of the other's: twin tubes, one tube round both (GitHub #84:
                         # the Route des Tamarins' two carriageways 9.5 m apart on Réunion, each an 11 m road in its own
@@ -14986,6 +15087,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         return box_owns(own_box, px, py)
     if walls is not None:                       # retaining walls where a road is cut into the ground (roadmesh.tunnel)
         tile_walls = retaining_walls(frame, roads, elev, exact, decks=decks_near)
+        tile_walls = tile_walls + fill_walls(frame, roads, elev, exact, decks=decks_near)   # (the earthwork made beside them)
         if props is None:                       # (no props here: stone)
             for w in tile_walls:
                 w["rock"] = False

@@ -2181,7 +2181,7 @@ macro_rules! grade_segs {
 /// end height: on a grade the ends' heights blended in made a washboard of the plan's vertex step, the Stelvio
 /// 2026-11-01); rk: a road's grading rank (grading.grade_rank: a lower one gives way over a higher one's core);
 /// abut_d (segments, 2): along its road to a start / end abutment, NaN: none.
-#[pyfunction(signature = (px, pyy, base, a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut, wall_t, wall_flat, wall_ahead, sep, sep_from, sep_full, core_fade, side_fade, sharp_step, yield_ramp, rank_fade, rank_height_fade, abut_under, abut_d, width_delta=None))]
+#[pyfunction(signature = (px, pyy, base, a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut, wall_t, wall_flat, wall_ahead, fill_flat, sep, sep_from, sep_full, core_fade, side_fade, sharp_step, yield_ramp, rank_fade, rank_height_fade, abut_under, abut_d, width_delta=None))]
 #[allow(clippy::too_many_arguments)]
 fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
                      base: PyReadonlyArray1<'py, f64>, a: PyReadonlyArray2<'py, f64>, b: PyReadonlyArray2<'py, f64>,
@@ -2191,13 +2191,13 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                      ba: PyReadonlyArray1<'py, f64>, bb: PyReadonlyArray1<'py, f64>, steep: PyReadonlyArray1<'py, u8>,
                      link: PyReadonlyArray1<'py, u8>, extrap: f64,
                      lift: f64, slope_run: f64, t_min: f64, t_max: f64, steep_run: f64, steep_t_min: f64, blend_r: f64,
-                     bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64,
+                     bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64, fill_flat: f64,
                      sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64,
                      yield_ramp: f64, rank_fade: f64, rank_height_fade: f64, abut_under: f64,
                      abut_d: PyReadonlyArray2<'py, f64>, width_delta: Option<PyReadonlyArray1<'py, f64>>)
                      -> PyResult<Bound<'py, PyArray1<f64>>> {
     let prm = gradebins::Prm { extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut,
-                               wall_t, wall_flat, wall_ahead, sep, sep_from, sep_full, core_fade, side_fade, sharp_step,
+                               wall_t, wall_flat, wall_ahead, fill_flat, sep, sep_from, sep_full, core_fade, side_fade, sharp_step,
                                yield_ramp, rank_fade, rank_height_fade, abut_under };
     let mut segs = grade_segs!(a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, abut_d);
     segs.width_delta = width_delta.as_ref().map(|d| d.as_array());
@@ -2211,7 +2211,7 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
 /// grading.grade_points (the default): grade_points' heights bit for bit by fine bins (gradebins::binned), without the
 /// GIL. keep (segments,): 1 for the segments taking part (the plans whose boxes meet the points': PlanPack.near's,
 /// without copying the arrays); bin_m: the fine bins' size (m).
-#[pyfunction(signature = (px, pyy, base, a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut, wall_t, wall_flat, wall_ahead, sep, sep_from, sep_full, core_fade, side_fade, sharp_step, yield_ramp, rank_fade, rank_height_fade, abut_under, abut_d, keep, bin_m, width_delta=None))]
+#[pyfunction(signature = (px, pyy, base, a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut, wall_t, wall_flat, wall_ahead, fill_flat, sep, sep_from, sep_full, core_fade, side_fade, sharp_step, yield_ramp, rank_fade, rank_height_fade, abut_under, abut_d, keep, bin_m, width_delta=None))]
 #[allow(clippy::too_many_arguments)]
 fn grade_points_binned<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
                             base: PyReadonlyArray1<'py, f64>, a: PyReadonlyArray2<'py, f64>,
@@ -2223,14 +2223,14 @@ fn grade_points_binned<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy
                             bb: PyReadonlyArray1<'py, f64>, steep: PyReadonlyArray1<'py, u8>,
                             link: PyReadonlyArray1<'py, u8>, extrap: f64,
                             lift: f64, slope_run: f64, t_min: f64, t_max: f64, steep_run: f64, steep_t_min: f64,
-                            blend_r: f64, bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64,
+                            blend_r: f64, bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64, fill_flat: f64,
                             sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64,
                             yield_ramp: f64, rank_fade: f64, rank_height_fade: f64, abut_under: f64,
                             abut_d: PyReadonlyArray2<'py, f64>, keep: PyReadonlyArray1<'py, u8>, bin_m: f64,
                             width_delta: Option<PyReadonlyArray1<'py, f64>>)
                             -> PyResult<Bound<'py, PyArray1<f64>>> {
     let prm = gradebins::Prm { extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut,
-                               wall_t, wall_flat, wall_ahead, sep, sep_from, sep_full, core_fade, side_fade, sharp_step,
+                               wall_t, wall_flat, wall_ahead, fill_flat, sep, sep_from, sep_full, core_fade, side_fade, sharp_step,
                                yield_ramp, rank_fade, rank_height_fade, abut_under };
     let mut segs = grade_segs!(a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, abut_d);
     segs.width_delta = width_delta.as_ref().map(|d| d.as_array());
@@ -7638,6 +7638,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 581: upstream dev (580) merged with the fork's grading kernels (509-511 above: their numbers were taken by dev's own 509-511, so
     // both sets of changes are in this build and the version is past both; rail_crossing_roads takes the road grade law's callback as its last argument
     // (the third item of a ground crossing, railways.graded_crossings); the plans' SURFACE_WIDTH flag is 8 (4 is TUNNEL))
-    m.add("VERSION", 581)?;
+    // 582: fill walls (gradebins pair1: the plan's weight on a segment's side, cut columns 6 and 7 (planset NCUT 8), gives the road's
+    // level flat for fill_flat past the core's edge, then a step to the natural ground; grade_points / grade_points_binned take fill_flat
+    // after wall_ahead)
+    m.add("VERSION", 582)?;
     Ok(())
 }

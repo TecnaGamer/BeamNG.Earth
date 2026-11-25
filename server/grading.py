@@ -235,6 +235,34 @@ WALL_T_M = 0.8              # (roadmesh.retaining_walls) and the ground at its n
 WALL_FLAT_M = roadsmod.roadmesh.GRID_M  # ... after one terrain grid step (heightmap.SQUARE) at the road's level behind the wall: rising at the
                             # wall itself, the grid's triangles stood as dark wedges in front of its face; the wall's
                             # top (roadmesh.WALL_THICK_M) covers the strip
+# Fill walls (the user, 2026-11-25: "retaining wall is for earthwork that close to the road give the jagged edge due to
+# resolution limits of the terrain ... the wall need to be thick enough so that it covers the defect and earthwork steep
+# enough to minimize the wall width, and it need to receede from the road so earthwork defect don't leak out of the wall
+# and into the road"). Only the earthwork the grading makes beside a road, a fill from the core's edge down to the natural
+# ground (fill_walls): a natural cliff or slope gets none, and the cuttings' walls above (WALL_CUT_M, level_walls,
+# abutment_walls) stay as they are.
+# The terrain is a lattice of squares GRID_M apart (heightmap.SQUARE), planar across each. Where the ground is planar over
+# a square the lattice draws it true, and a break in it (a slope's top, its foot) is drawn in teeth in the squares the
+# break crosses, as far either side of it as the squares reach: a square's extent across a line of unit normal (nx, ny)
+# is GRID_M (|nx| + |ny|), at most GRID_DIAG_M (the break along the lattice's diagonal; the road's angle to the lattice
+# is any, and a rule that changed with it would change along every bend). So the rule is the one for the worst angle:
+#   - a flat strip at the road's level FILL_FLAT_M = GRID_DIAG_M past the core's edge, the teeth's reach, so that no tooth
+#     of the break after it comes into the core (the carriageway and its shoulder: they recede from the break);
+#   - the break a step, no run: a step is as steep as the lattice draws, its square all its run, and a gentler slope
+#     widens what the wall covers by its whole run (a 1:2 batter 4-12 m);
+#   - the wall's top (roads.fill_walls) over the whole band, flush with the road at its inner side: the strip and the
+#     teeth's reach past the step, 2 x GRID_DIAG_M from the core's edge.
+# Where: a smooth slope's teeth are bounded by its curvature (the linear interpolation of a function on the lattice's
+# right triangles errs by at most its largest second derivative x GRID_M^2 / 4, at the diagonal), and the blend's
+# (a smoothstep of the height difference dz over blend_run(dz): 6 dz / run^2 at its ends) is under FILL_TEETH_M = 0.1 m,
+# the step the user set as a discontinuity, for a gentle fill; the wall stands only where the blend would be over it
+# and the fill is a wall's height (WALL_CUT_M, the cuttings' own gate, to wall_max_h).
+FILL_WALLS_ON = os.environ.get("BNE_FILL_WALLS", "on") != "off"
+FILL_TEETH_M = 0.10         # m: the lattice's error that counts as a defect (drivability.METRICS step_m's limit)
+FILL_FLAT_M = roadsmod.roadmesh.GRID_DIAG_M    # m of the road's level past the core's edge (the teeth's worst reach)
+FILL_RUN_N = 3              # vertices (VERTEX_STEP apart) a fill holds for at least: a shorter one is no embankment
+FILL_GAP_N = 1              # ... closed over gaps of this many (its height wavering round the gate)
+FILL_SLOPE_M = 4.0          # m past the strip's end the natural ground's slope is read over
 OPEN_TUNNEL_EASE = os.environ.get("BNE_OPEN_TUNNEL_EASE", "on") != "off"    # (_make_cell: Plan.open_tunnel)
 # a road running beside a covered tunnel's section in the open (a trench) keeps its own ground past the section's
 # painted edge whatever the rank gap; one crossing it, and a lower road on its carriageway, as before (_make_cell:
@@ -3457,6 +3485,12 @@ class _Planner:
                 except Exception as e:      # the road's own core rather than no grading
                     _caught(e)
                     log.debug("grading: abutment walls of %s: %s: %s", key, type(e).__name__, e)
+            if FILL_WALLS_ON and plans:
+                try:            # the earthwork the grading makes beside the roads: a wall over its edge (fill_walls)
+                    fill_walls(plans, pspecs, self._raw_at)
+                except Exception as e:      # the blend as before rather than no grading
+                    _caught(e)
+                    log.debug("grading: fill walls of %s: %s: %s", key, type(e).__name__, e)
             if CORNERS_ON and plans:
                 # the rounded corners of curbless junctions (roadcorners.py): the ground under each graded to its roads'
                 # solved heights (trimmed to the cell's box with the roads' plans below)
@@ -5011,6 +5045,12 @@ class _Planner:
                 memo.clear()
             memo[hk] = got
         return got
+
+    def _raw_at(self, xy):
+        """The natural ground (the elevation as the roads' profiles read it) at points xy (k, 2) in the frame."""
+        f64 = np.float64
+        la, lo = enu_to_ll_dense(self.frame, xy[:, 0], xy[:, 1])
+        return np.asarray(self.elev(np.asarray(la, f64), np.asarray(lo, f64)), f64).ravel()
 
     def _ground_line(self, xy):
         """The ground along points xy (frame ENU), smoothed as a road's plan reads it."""
@@ -9863,7 +9903,7 @@ def merge_plan_set(plans):
     plans): weld_continuations (WELD_ON; a failure logged, the plans left as they were), trim_side_mouths
     (TRIM_SIDE_MOUTHS_ON), each with the plans' own ranks, on plans (a plain [Plan], in place); returns PlanPack(plans)."""
     import fast
-    fast.require(581, "plan_merge")     # (217: the trimmed plans' banks / widens; 283: the plans' flags, _plan_flags; 305: TUNNEL; 560: surface widths)
+    fast.require(582, "plan_merge")     # (the fill walls' weights in the cut rows: 582; 217: the trimmed plans' banks / widens; 283: the plans' flags, _plan_flags; 305: TUNNEL; 560: surface widths)
     f64 = np.float64
     xy, off, z = _plan_lines(plans)
     wds = [getattr(p, "widen", None) for p in plans]
@@ -9874,7 +9914,7 @@ def merge_plan_set(plans):
         np.array([r if r is not None and r >= 0 else -1 for r in rids], np.int64), _plan_ranks(plans, None),
         np.array([getattr(p, "abut", (False, False)) for p in plans], bool).reshape(-1, 2),
         _plan_flags(plans), np.array([p.bbox for p in plans], f64).reshape(-1, 4),
-        *_per_plan([getattr(p, "cut", None) for p in plans], 6),
+        *_per_plan([_cut8(getattr(p, "cut", None)) for p in plans], CUT_COLS),
         np.array([float(np.max(w)) if w is not None and len(w) else 0.0 for w in wds], f64), bool(WELD_ON),
         bool(TRIM_SIDE_MOUTHS_ON), float(CHAIN_JOIN_M), float(WELD_MAX_STEP_M), float(WELD_TAPER_M),
         float(JUNCTION_REACH_M), float(TRIM_RAMP_M), float(DUPE_XY_M), -dmath.cos(math.radians(CONT_TURN_DEG)),
@@ -9911,6 +9951,20 @@ def _plan_flags(plans):
                      | (PLAN_OPEN_TUNNEL if getattr(p, "open_tunnel", False) else 0)
                      | (PLAN_TUNNEL if getattr(p, "tunnel_section", False) else 0)
                      | (PLAN_SURFACE_WIDTH if getattr(p, "surface_width", False) else 0) for p in plans], np.uint8)
+
+
+CUT_COLS = 8    # the pack's cut columns: a cutting's wall, top and top offset on the left, then the right (Plan.cut), then
+                # the fill walls' weights left and right (fill_walls)
+
+
+def _cut8(cut):
+    """Plan.cut (n - 1, 6 or 8) as the pack takes it, CUT_COLS wide (NaN where a plan has no fill walls); None as None."""
+    if cut is None:
+        return None
+    c = np.asarray(cut, np.float64).reshape(len(cut), -1)
+    if c.shape[1] >= CUT_COLS:
+        return c
+    return np.concatenate([c, np.full((len(c), CUT_COLS - c.shape[1]), np.nan)], axis=1)
 
 
 def _per_plan(vs, width=None):
@@ -9958,7 +10012,7 @@ class PlanPack:
 
     def __init__(self, plans):
         import fast
-        fast.require(581, "plan_pack")     # (283: the plans' flags, _plan_flags; 305: the TUNNEL flag; 560: surface widths)
+        fast.require(582, "plan_pack")     # (the fill walls' weights in the cut rows: 582; 283: the plans' flags, _plan_flags; 305: the TUNNEL flag; 560: surface widths)
         f64 = np.float64
         xy, off, z = _plan_lines(plans)
         rids = [getattr(p, "rid", -1) for p in plans]
@@ -9970,7 +10024,7 @@ class PlanPack:
             np.array([int(getattr(p, "rank", GRADE_RANK_NONE)) for p in plans], np.int64),
             np.array([getattr(p, "abut", (False, False)) for p in plans], bool).reshape(-1, 2),
             _plan_flags(plans), np.array([p.bbox for p in plans], f64).reshape(-1, 4),
-            *_per_plan([getattr(p, "cut", None) for p in plans], 6), float(DUPE_XY_M),
+            *_per_plan([_cut8(getattr(p, "cut", None)) for p in plans], CUT_COLS), float(DUPE_XY_M),
             -dmath.cos(math.radians(CONT_TURN_DEG)), float(CONT_JOIN_M), -dmath.cos(math.radians(LINK_TURN_DEG)),
             float(ABUT_NEAR_M), float(T_MAX), int(LEG_RID_SHIFT), float(roadsmod.MOUNTAIN_SPAN_M),
             float(roadsmod.MOUNTAIN_TURN_DEG))
@@ -10230,13 +10284,13 @@ def _grade_points_today(px, py, base, pack, lift, out, box=None):
         keep = pack.seg_keep(x0, y0, x1, y1)
         if keep is None:
             return out
-        fast.require(581, "grade_points_binned")    # (gradebins.rs; under_deck: 306, TUNNEL: 307, surface widths: 560)
+        fast.require(582, "grade_points_binned")    # (gradebins.rs; under_deck: 306, TUNNEL: 307, surface widths: 560, fill walls: 582)
         return fast._ef.grade_points_binned(
             np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64), pack.a,
             pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.rid, pack.rk, pack.ab, pack.cut, pack.ba, pack.bb, pack.st,
             pack.lk, float(EXTRAP_M), float(lift), float(SLOPE_RUN), float(T_MIN), float(T_MAX), float(STEEP_RUN),
             float(STEEP_T_MIN), float(BLEND_R), float(BUCKET), float(WALL_CUT_M), float(WALL_T_M), float(WALL_FLAT_M),
-            float(WALL_AHEAD_M), bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
+            float(WALL_AHEAD_M), float(FILL_FLAT_M), bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
             float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(RANK_SIDE_FADE_M),
             float(RANK_HEIGHT_FADE_M), float(ABUT_UNDER_GRADE), np.ascontiguousarray(pack.abd, f64), keep,
             float(GRADE_BIN_M), getattr(pack, "width_delta", None))
@@ -10248,7 +10302,7 @@ def _grade_points_today(px, py, base, pack, lift, out, box=None):
     delta = getattr(pack, "width_delta", None)
     if delta is not None and len(A) != len(delta):
         delta = delta[pack.seg_keep(x0, y0, x1, y1).astype(bool)]
-    fast.require(581, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
+    fast.require(582, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
                                              # legs blend over each other's bands: 133, a pass road's core
                                              # given way to whole: 134, no carriageway past an abutment end: 169,
                                              # a lower road over a higher one's core, easing onto it: 181,
@@ -10259,7 +10313,7 @@ def _grade_points_today(px, py, base, pack, lift, out, box=None):
                                  float(EXTRAP_M), float(lift), float(SLOPE_RUN), float(T_MIN), float(T_MAX), float(STEEP_RUN),
                                  float(STEEP_T_MIN), float(BLEND_R), float(BUCKET),
                                  float(WALL_CUT_M), float(WALL_T_M), float(WALL_FLAT_M), float(WALL_AHEAD_M),
-                                 bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
+                                 float(FILL_FLAT_M), bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
                                  float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(RANK_SIDE_FADE_M),
                                  float(RANK_HEIGHT_FADE_M), float(ABUT_UNDER_GRADE),
                                  np.ascontiguousarray(ABD, f64), delta)
@@ -11154,7 +11208,7 @@ def _wall_vertices(p):
     cut = getattr(p, "cut", None)
     if cut is None or n < 2:
         return out
-    c = np.asarray(cut, np.float64).reshape(-1, 6)
+    c = _cut8(cut)
     if len(c) != n - 1:
         return out
     seg = np.isfinite(c[:, 0]) | np.isfinite(c[:, 3])
@@ -11350,6 +11404,135 @@ def level_walls(plans, specs):
             cut[take, c0:c0 + 3] = new[take, c0:c0 + 3]
         p.cut = cut
         n_changed += 1
+    return n_changed
+
+
+def _in_other_cores(pts, segs, own):
+    """bool (m,): which of pts (m, 2) lie in the core of a plan other than own (_core_hits' test, by the Rust loop over a grid of
+    the points: segs, the plans' segments as _core_hits has them)."""
+    import fast
+    SN, SA, SB, SH, SLO, SHI = segs
+    if not len(SN) or not len(pts):
+        return np.zeros(len(pts), bool)
+    lo, hi = pts.min(0), pts.max(0)
+    sel = np.flatnonzero((SN != own) & (SHI[:, 0] >= lo[0]) & (SHI[:, 1] >= lo[1]) & (SLO[:, 0] <= hi[0]) &
+                         (SLO[:, 1] <= hi[1]))
+    if not len(sel):
+        return np.zeros(len(pts), bool)
+    fast.require(0, "points_near_segments")
+    return np.asarray(fast._ef.points_near_segments(np.ascontiguousarray(pts, np.float64), np.ascontiguousarray(SA[sel]),
+                                                    np.ascontiguousarray(SB[sel]), np.ascontiguousarray(SH[sel])), bool)
+
+
+def blend_teeth_m(dz):
+    """The most (m) the terrain's lattice can err on the blend over a fill dz m high (arrays broadcast): the blend is a
+    smoothstep of the height difference over its run (SLOPE_RUN x dz, T_MIN to T_MAX), curving 6 dz / run^2 at its ends,
+    and linear interpolation on the lattice's right triangles errs by at most the curvature x GRID_M^2 / 4 (the
+    break across the square's diagonal: roadmesh.GRID_DIAG_M). Pure."""
+    dz = np.asarray(dz, np.float64)
+    run = np.clip(SLOPE_RUN * dz, T_MIN, T_MAX)
+    return 6.0 * dz / run ** 2 * roadsmod.roadmesh.GRID_M ** 2 / 4.0
+
+
+def fill_wall_at(dz, max_h):
+    """Where a fill dz m high (arrays broadcast) gets a wall (FILL_WALLS_ON): a wall's height, over WALL_CUT_M and at
+    most max_h (wall_max_h), where the blend's teeth (blend_teeth_m) are over FILL_TEETH_M. Pure."""
+    dz = np.asarray(dz, np.float64)
+    return (dz > WALL_CUT_M) & (dz <= max_h) & (blend_teeth_m(dz) > FILL_TEETH_M)
+
+
+def fill_walls(plans, specs, ground):
+    """The fill walls' weights in Plan.cut (columns 6 and 7: left, right) of the plans of the built roads whose core's edge
+    stands over the natural ground (ground(xy (k, 2)) -> its heights, the raw elevation: the earthwork the grading makes
+    there, a fill from the core's edge down to it). A side has one on a segment where both its vertices stand over the
+    natural ground at the strip's end (the step's line, FILL_FLAT_M past the core's edge) by a height fill_wall_at takes,
+    that ground falling away no steeper than the batter's own slope 1 / SLOPE_RUN over the next FILL_SLOPE_M (a natural
+    slope as steep as the fill's is the slope the road runs along, not an embankment: no wall on a natural cliff or
+    slope), over runs of FILL_RUN_N vertices at least (gaps of FILL_GAP_N closed: no wall of a few metres), no tight bend
+    (bend_zone), where no other road's core lies within the blend's reach (T_MAX) of the side (roads close together meet
+    gently: a crossing or a road alongside took the blend of this one's ground, and would take the step), and where the
+    side has no cutting's wall or fall of its own (Plan.cut: the data's and the levels', which stay as they are). The weight is 1: the kernel gives each side its rule where the ground there lies under the road
+    (gradebins pair1), the same along the whole run. plans [(fid, Plan)] in place, the first len(specs) the roads'
+    (as level_walls: the ground roads, not a tunnel's own plans, no pass roads: their parapets and walls are their own).
+    Returns how many plans changed."""
+    f64 = np.float64
+    jobs = []
+    for i in range(min(len(plans), len(specs))):
+        fid, p = plans[i]
+        spec = specs[i]
+        if spec is None or spec.kind not in roadsmod.BUILT or getattr(spec, "mountain", False)                 or TUNNEL_TAG in str(fid) or len(p.xy) < 2:
+            continue
+        xy = np.asarray(p.xy, f64)[:, :2]
+        d = np.gradient(xy, axis=0)
+        d /= np.maximum(dnp.hypot(*d.T), 1e-9)[:, None]
+        nl = np.stack([-d[:, 1], d[:, 0]], axis=1)         # (to the road's left)
+        jobs.append((i, xy, nl, np.asarray(p.z, f64), wall_max_h(spec), float(p.half)))
+    if not jobs:
+        return 0
+    # (every road's segments, for the cores that lie within the blend's reach of a side)
+    parts = [(np.full(len(p.xy) - 1, n), np.asarray(p.xy, f64)[:-1, :2], np.asarray(p.xy, f64)[1:, :2],
+              np.full(len(p.xy) - 1, float(p.half))) for n, (_f, p) in enumerate(plans[:len(specs)]) if len(p.xy) >= 2]
+    segs = None
+    if parts:
+        SN, SA, SB, SH = (np.concatenate([q[c] for q in parts]) for c in range(4))
+        segs = (SN, SA, SB, SH, np.minimum(SA, SB) - SH[:, None], np.maximum(SA, SB) + SH[:, None])
+    reach = (0.5 * FILL_FLAT_M, FILL_FLAT_M, 3.0, 6.0, 9.0, T_MAX)
+    pts = np.concatenate([xy + nl * side * (h + off) for _i, xy, nl, _z, _m, h in jobs
+                          for side in (1.0, -1.0) for off in (FILL_FLAT_M, FILL_FLAT_M + FILL_SLOPE_M)])
+    g = np.asarray(ground(pts), f64)
+    k = 0
+    n_changed = 0
+    for i, xy, nl, z, max_h, h in jobs:
+        n = len(xy)
+        p = plans[i][1]
+        side_v = []
+        for side in (1.0, -1.0):
+            at, past = g[k:k + n], g[k + n:k + 2 * n]
+            k += 2 * n
+            near = np.zeros(n, bool)       # (another road's core within the blend's reach of the side)
+            if segs is not None:
+                across = np.concatenate([xy + nl * side * (h + off) for off in reach])
+                near = _in_other_cores(across, segs, i).reshape(len(reach), n).any(axis=0)
+            side_v.append(fill_wall_at(z - at, max_h) & ((at - past) / FILL_SLOPE_M < 1.0 / SLOPE_RUN) & ~near)
+        ok = np.stack(side_v)                              # (left, right) per vertex
+        if not ok.any():
+            continue
+        ok &= ~bend_zone(xy)[None, :]
+        cut = np.full((n - 1, CUT_COLS), np.nan) if p.cut is None else _cut8(p.cut).copy()
+        if len(cut) != n - 1:
+            continue
+        changed = False
+        for s, c0 in ((0, 0), (1, 3)):
+            v = ok[s].copy()
+            i0 = 0
+            while i0 < n:                   # (gaps of FILL_GAP_N closed, between two vertices that hold)
+                if v[i0]:
+                    i0 += 1
+                    continue
+                e = i0
+                while e < n and not v[e]:
+                    e += 1
+                if i0 > 0 and e < n and e - i0 <= FILL_GAP_N:
+                    v[i0:e] = True
+                i0 = e
+            i0 = 0
+            while i0 < n:                   # (runs shorter than FILL_RUN_N out)
+                if not v[i0]:
+                    i0 += 1
+                    continue
+                e = i0
+                while e < n and v[e]:
+                    e += 1
+                if e - i0 < FILL_RUN_N:
+                    v[i0:e] = False
+                i0 = e
+            seg = v[:-1] & v[1:] & ~np.isfinite(cut[:, c0])       # (a cutting's wall or fall of the data's: its own)
+            if seg.any():
+                cut[seg, 6 + s] = 1.0
+                changed = True
+        if changed:
+            p.cut = cut
+            n_changed += 1
     return n_changed
 
 

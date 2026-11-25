@@ -58,7 +58,7 @@ pub const EXTRAP_MAX_GRADE: f64 = 0.35;
 pub struct Prm {
     pub extrap: f64, pub lift: f64, pub slope_run: f64, pub t_min: f64, pub t_max: f64, pub steep_run: f64,
     pub steep_t_min: f64, pub blend_r: f64, pub bucket: f64, pub wall_cut: f64, pub wall_t: f64, pub wall_flat: f64,
-    pub wall_ahead: f64, pub sep: bool, pub sep_from: f64, pub sep_full: f64, pub core_fade: f64, pub side_fade: f64,
+    pub wall_ahead: f64, pub fill_flat: f64, pub sep: bool, pub sep_from: f64, pub sep_full: f64, pub core_fade: f64, pub side_fade: f64,
     pub sharp_step: f64, pub yield_ramp: f64, pub rank_fade: f64, pub rank_height_fade: f64, pub abut_under: f64,
 }
 
@@ -83,7 +83,7 @@ struct Seg {
     width_delta: f64, za: f64, zb: f64, h: f64, rh: f64, rid: i64, rk: i64,
     abut: bool, steep: bool, open: bool, tun: bool, link: u8, banked: bool, has_cut: bool, cut_reach: f64, ba: f64,
     bb: f64,
-    cut: [f64; 6], da: f64, db: f64, far0: f64, far0_base: f64,
+    cut: [f64; 6], fill: [f64; 2], da: f64, db: f64, far0: f64, far0_base: f64,
 }
 
 /// Distance from the wider endpoint edge to the interpolated edge at t.
@@ -95,6 +95,8 @@ pub(crate) fn taper_inset(delta: f64, t: f64) -> f64 {
 fn prep(s: &Segs, i: usize, p: &Prm) -> Seg {
     let cut = [s.cut[[i, 0]], s.cut[[i, 1]], s.cut[[i, 2]], s.cut[[i, 3]], s.cut[[i, 4]], s.cut[[i, 5]]];
     let has_cut = cut.iter().any(|v| v.is_finite());
+    // (the fill walls' weights, the pack's cut columns 6 and 7: left, right; NaN none)
+    let fill = [s.cut[[i, 6]], s.cut[[i, 7]]];
     let r = cut[2].max(cut[5]).max(cut[0]).max(cut[3]);
     let cut_reach = if r.is_finite() { r + 0.5 + 2.0 * p.sharp_step } else { 0.0 };
     let (ax, ay, bx, by) = (s.a[[i, 0]], s.a[[i, 1]], s.b[[i, 0]], s.b[[i, 1]]);
@@ -113,7 +115,7 @@ fn prep(s: &Segs, i: usize, p: &Prm) -> Seg {
         abut: s.abut[i] != 0, steep: s.steep[i] & STEEP != 0, open: s.steep[i] & OPEN_TUNNEL != 0,
         tun: s.steep[i] & TUNNEL != 0,
         link: s.link[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0,
-        has_cut, cut_reach, ba: s.ba[i], bb: s.bb[i], cut, da: s.abut_d[[i, 0]], db: s.abut_d[[i, 1]], far0, far0_base,
+        has_cut, cut_reach, ba: s.ba[i], bb: s.bb[i], cut, fill, da: s.abut_d[[i, 0]], db: s.abut_d[[i, 1]], far0, far0_base,
     }
 }
 
@@ -293,6 +295,7 @@ impl Lanes {
 #[derive(Clone, Copy, Default)]
 struct Pre {
     h: f64, rh: f64, qx: f64, qy: f64, d: f64, target: f64, past: f64, cwall: f64, ctop: f64, creach: f64, side: f64, ahead: f64,
+    fill: f64,
 }
 
 /// The Pre of the point (qx, qy from the segment's start, tu / t along it, d from it); SIDE: its side and ahead too
@@ -313,7 +316,12 @@ fn pre<const SIDE: bool>(g: &Seg, qx: f64, qy: f64, tu: f64, t: f64, d: f64, p: 
         side = if g.l2 > 1e-12 { (qx * g.aby - qy * g.abx).abs() / g.len } else { d };
         ahead = if g.l2 > 1e-12 { (-along).max(along - g.len).max(0.0) } else { 0.0 };
     }
-    Pre { h, rh, qx, qy, d, target, past, cwall, ctop, creach, side, ahead }
+    // (a fill wall's weight on the point's side of the segment: 0 where the plan has none)
+    let fill = if SIDE {
+        let w = g.fill[if (qx * g.aby - qy * g.abx) < 0.0 { 0 } else { 1 }];
+        if w.is_finite() { w } else { 0.0 }
+    } else { 0.0 };
+    Pre { h, rh, qx, qy, d, target, past, cwall, ctop, creach, side, ahead, fill }
 }
 
 /// The segment's target height for the point (qx, qy from its start, tu / t along it; along: m from its start along
@@ -501,7 +509,19 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
              else if g.steep { (p.steep_run * (target - st.beff).abs()).clamp(p.steep_t_min, p.t_max) }
              else { (p.slope_run * (target - st.beff).abs()).clamp(p.t_min, p.t_max) };
     // a wall: flat on one terrain step behind it (no slope in front of its face), then up
-    let u = ((d - hs - if wall { p.wall_flat } else { 0.0 }) / tt).clamp(0.0, 1.0);
+    let mut flat = if wall { p.wall_flat } else { 0.0 };
+    // a fill wall (the plan's weight q.fill on the segment's side, where the road stands over the ground there and
+    // the plan has no cutting's wall or fall): the road's level flat for fill_flat past the core, then a step to the
+    // natural ground, the slope's run taken out by the weight. Every pair says the same wherever the point lies along
+    // the road: it depends on the plan's weight and the point's offset from the segment's line, not on how far past
+    // its end the point is. Not across the core itself (side within hs): the road's own next segments blend in along
+    // its lanes there as they always did, the crests' and sags' smoothing, and the lanes keep their heights
+    let mut tt = tt;
+    if q.fill > 0.0 && !cwall.is_finite() && !wall && target > st.beff && side > hs {
+        flat = q.fill * p.fill_flat;
+        tt *= 1.0 - q.fill;
+    }
+    let u = if tt > 1e-9 { ((d - hs - flat) / tt).clamp(0.0, 1.0) } else if d - hs - flat > 0.0 { 1.0 } else { 0.0 };
     let w = 1.0 - u * u * (3.0 - 2.0 * u);
     // (another road's carriageway here, at another level: this road gives way past its own carriageway)
     // (a road's own carriageway never gives way: a hairpin's band over the leg above sank its lanes under the terrain,
