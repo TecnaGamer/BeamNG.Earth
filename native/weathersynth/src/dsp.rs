@@ -166,6 +166,13 @@ impl Biquad {
         let a0 = 1.0 + al;
         Biquad::new(al / a0, 0.0, -al / a0, -2.0 * c / a0, (1.0 - al) / a0)
     }
+    /// Take another filter's state (new coefficients without a click).
+    pub fn copy_state(&mut self, o: &Biquad) {
+        self.x1 = o.x1;
+        self.x2 = o.x2;
+        self.y1 = o.y1;
+        self.y2 = o.y2;
+    }
     pub fn reset(&mut self) {
         self.x1 = 0.0;
         self.x2 = 0.0;

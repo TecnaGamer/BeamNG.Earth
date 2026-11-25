@@ -243,11 +243,13 @@ fn micro_sigma() -> f64 {
     std::env::var("WEATHERSYNTH_MICRO").ok().and_then(|v| v.parse().ok()).unwrap_or(0.06)
 }
 
-fn fractalise(rng: &mut Rng, pts: &[V3]) -> Vec<V3> {
-    fn rec(rng: &mut Rng, a: V3, b: V3, out: &mut Vec<V3>) {
+/// `min`: the smallest piece (m). The live renderer uses coarser pieces (fewer to sum; the crack above ~3 kHz then
+/// rests on fewer, larger kinks).
+fn fractalise_to(rng: &mut Rng, pts: &[V3], min: f64) -> Vec<V3> {
+    fn rec(rng: &mut Rng, a: V3, b: V3, out: &mut Vec<V3>, min: f64) {
         let d = sub(b, a);
         let l = len(d);
-        if l <= MICRO_MIN {
+        if l <= min {
             out.push(b);
             return;
         }
@@ -257,20 +259,28 @@ fn fractalise(rng: &mut Rng, pts: &[V3]) -> Vec<V3> {
         let v = cross(dir, u);
         let s = micro_sigma() * l;
         let mid = add(sc(add(a, b), 0.5), add(sc(u, s * rng.normal()), sc(v, s * rng.normal())));
-        rec(rng, a, mid, out);
-        rec(rng, mid, b, out);
+        rec(rng, a, mid, out, min);
+        rec(rng, mid, b, out, min);
     }
     let mut out = vec![pts[0]];
     for w in pts.windows(2) {
-        rec(rng, w[0], w[1], &mut out);
+        rec(rng, w[0], w[1], &mut out, min);
     }
     out
 }
 
 fn make_channel(seed: u64, cl: &Class) -> Geometry {
+    make_channel_at(seed, cl, None, MICRO_MIN)
+}
+
+/// `at`: the strike's ground point (distance m, bearing rad) when it is known (the live renderer); else drawn from
+/// the class's distance range.
+fn make_channel_at(seed: u64, cl: &Class, at: Option<(f64, f64)>, micro_min: f64) -> Geometry {
     let mut rng = Rng::new(seed, &format!("thunder-geometry-{}", cl.name));
-    let dist = rng.range(cl.d_min, cl.d_max);
-    let az = rng.range(0.0, m::TAU);
+    let dist0 = rng.range(cl.d_min, cl.d_max);
+    let az0 = rng.range(0.0, m::TAU);
+    let (dist, az) = at.unwrap_or((dist0, az0));
+    let fractalise = |r: &mut Rng, p: &[V3]| fractalise_to(r, p, micro_min);
     let ground = [dist * m::cos(az), dist * m::sin(az), 0.0];
     let top = rng.range(4200.0, 6500.0);
     // the channel's overall lean
@@ -623,6 +633,38 @@ fn add_reverb(x: &[f64], seed: u64, cl: &Class) -> Vec<f64> {
 pub struct Rendered {
     pub signal: Vec<f64>,
     pub info: String,
+}
+
+/// Live: one strike's thunder at its real distance and bearing from the listener, no loudness normalisation (the
+/// level follows the physics: one gain for all distances), time 0 = the flash. Returns (signal, first arrival s).
+/// `micro_min` trades detail for speed (0.06 offline; 0.25-0.5 live).
+pub fn render_live(seed: u64, dist: f64, az: f64, micro_min: f64, length_s: f64) -> (Vec<f64>, f64) {
+    let name = if dist < 300.0 {
+        "strike"
+    } else if dist < 1500.0 {
+        "close"
+    } else if dist < 6000.0 {
+        "mid"
+    } else {
+        "far"
+    };
+    let cl = class(name).unwrap();
+    let geo = make_channel_at(seed, &cl, Some((dist, az)), micro_min);
+    let horizon = dist / SOUND + length_s + 9.0;
+    let (dry, first) = render_dry(&geo, &cl, horizon);
+    let s0 = (((first - 0.01) * FS).floor() as isize).max(0) as usize;
+    let nlen = (length_s * FS) as usize;
+    let dry: Vec<f64> = (0..nlen).map(|i| dry.get(s0 + i).copied().unwrap_or(0.0)).collect();
+    let echoed = add_echoes(&dry, seed, &cl);
+    let mut y = add_reverb(&echoed, seed, &cl);
+    let mut hp = Biquad::highpass(FS, 25.0, 0.7071);
+    hp.run(&mut y);
+    let fo = (3.0 * FS) as usize;
+    for i in 0..fo.min(nlen) {
+        let k = nlen - fo + i;
+        y[k] *= m::cos(0.5 * m::PI * i as f64 / fo as f64);
+    }
+    (y, s0 as f64 / FS)
 }
 
 pub fn render(seed: u64, cl: &Class) -> Rendered {

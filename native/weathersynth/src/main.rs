@@ -9,9 +9,12 @@
 //!   weathersynth rain --kind light|medium|heavy|roof_light|roof|roof_heavy|muffled --seed N --out FILE.wav
 //!   weathersynth set --out DIR --set K [--ogg] [--only thunder|rain]   the files with the mod's names (seeds from K)
 //!   weathersynth analyze FILE.wav ...               a table describing each file
+//!   weathersynth live-bench [--seconds S] [--block N] [--wav F]   the live rain engine timed (prototype)
+//!   weathersynth thunder-bench [--micro M]           live thunder render times by distance
 
 mod analyze;
 mod dsp;
+mod live;
 mod loudness;
 mod m;
 mod rain;
@@ -174,6 +177,20 @@ fn run() -> Result<(), String> {
                     shift -= tp - tp_target + 0.15;
                 }
             }
+        }
+        "live-bench" => {
+            // the live rain engine through a scripted sweep, timed (no audio device): --seconds S --block N [--wav F]
+            let secs: f64 = arg(&args, "--seconds").unwrap_or("60".into()).parse().map_err(|_| "bad --seconds")?;
+            let block: usize = arg(&args, "--block").unwrap_or("512".into()).parse().map_err(|_| "bad --block")?;
+            let fixed = arg(&args, "--rate").map(|r| {
+                let f = |k: &str, d: f64| arg(&args, k).and_then(|v| v.parse().ok()).unwrap_or(d);
+                (r.parse().unwrap_or(5.0), f("--shelter", 1.0), f("--cabin", 0.0))
+            });
+            println!("{}", live::bench_with(secs, block, arg(&args, "--wav").as_deref(), fixed));
+        }
+        "thunder-bench" => {
+            let mm: f64 = arg(&args, "--micro").unwrap_or("0.25".into()).parse().map_err(|_| "bad --micro")?;
+            print!("{}", live::thunder_bench(mm));
         }
         "analyze" => {
             println!("{}", analyze::header());

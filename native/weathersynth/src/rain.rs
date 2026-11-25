@@ -30,7 +30,7 @@ pub const FS: f64 = 44100.0;
 pub const LOOP_S: f64 = 20.0;
 const OBS_H: f64 = 1.6;
 
-fn terminal_v(d_mm: f64) -> f64 {
+pub(crate) fn terminal_v(d_mm: f64) -> f64 {
     (9.65 - 10.3 * m::exp(-0.6 * d_mm)).max(0.1)
 }
 
@@ -136,7 +136,7 @@ fn noise_burst(rng: &mut Rng, tau_ms: f64, len_tau: f64, filt: &mut Biquad) -> V
         .collect()
 }
 
-fn bubble(rng: &mut Rng, radius_m: f64) -> Vec<f64> {
+pub(crate) fn bubble(rng: &mut Rng, radius_m: f64) -> Vec<f64> {
     let f0 = 3.26 / radius_m;
     if f0 > 19000.0 {
         return Vec::new();
@@ -219,7 +219,7 @@ fn leaf(rng: &mut Rng) -> Vec<f64> {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Surf {
+pub(crate) enum Surf {
     Road,
     Puddle,
     Grass,
@@ -230,7 +230,7 @@ enum Surf {
 /// Impact amplitude at 1 m relative to a 2 mm drop at terminal speed: Guo & Ffowcs Williams (1991) find the radiated
 /// energy proportional to the drop's kinetic energy times the impact Mach number cubed, so amplitude ~ D^1.5 v^2.5.
 /// Big, fast drops dominate: a 1 mm drop is ~19 dB under a 2 mm one, a 0.3 mm drizzle droplet ~55 dB.
-fn impact_amp(d: f64, v: f64) -> f64 {
+pub(crate) fn impact_amp(d: f64, v: f64) -> f64 {
     m::pow(d / 2.0, 1.5) * m::pow(v / 6.5, 2.5)
 }
 
@@ -282,7 +282,7 @@ fn metal(rng: &mut Rng) -> Vec<f64> {
 /// One drop's sound at 1 m, absolute (impact_amp scaling included): its surface's impact plus an entrained bubble.
 /// `film`: how much standing water there is (1 a wet road; more in a downpour): more crown spray (the secondary
 /// droplets' ticks) and more small bubbles from it.
-fn drop_event(rng: &mut Rng, surf: Surf, d: f64, v: f64, film: f64) -> Vec<f64> {
+pub(crate) fn drop_event(rng: &mut Rng, surf: Surf, d: f64, v: f64, film: f64) -> Vec<f64> {
     let a = impact_amp(d, v);
     let mut ev: Vec<f64> = match surf {
         Surf::Road => splash(rng, d, film),
