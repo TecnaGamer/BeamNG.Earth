@@ -169,7 +169,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - **Real weather** at the player from Open-Meteo, updated as you travel: cloud cover and high cirrus, clouds
   drifting with the wind aloft, fog from the real visibility, ground wind with gusts that pushes the cars,
   rain and snow, the air temperature, and the sun dimming under overcast. It goes through the game's own
-  weather system, so the Time & Weather menu shows the real values; a manual mode leaves it to you.
+  weather system, so the Time & Weather menu shows the real values.
+- **Weather page and radial menu**: Real weather, one of 15 presets (clear to thunderstorm, fog, snow, blizzard,
+  sleet, freezing rain, hail) or Off (the game's own controls); intensity, how fast it changes, rain and snow on or
+  off, rain visibility, the real clouds, fog, wind and rain each on or off, and a limit on how thick fog gets. Rain
+  and snow stop in tunnels, parking structures and under bridges, rain thickens the air and turns the fog grey, and
+  traffic turns its headlights on and slows down in rain, snow and fog.
 - **Seasons**: the photos' colours and the trees' leaves follow the time of year (autumn colours, bare
   trees in winter where the photos were taken leaf-off).
 - **Real gravity**: the WGS84 gravity for your latitude and altitude plus the EGM2008 local anomalies, so
@@ -626,8 +631,9 @@ over the internet, and start it (its log shows `[BeamNG.Earth] plugin loaded`). 
 BeamMP's own public list, so players without BeamNG.Earth never see it; `Private = true`, or no AuthKey: on no list,
 players use Direct Connect. The plugin lists the server once a minute with `curl` (Linux, and Windows 10 and later).
 Update the server zip with every release: it carries the mod the server sends to players. The server's time and weather for everyone
-(`G.TIME`: real or a fixed / running time such as `'20:30'`; `G.WEATHER`: real or clear, cloudy, rain, storm, snow,
-fog) are set near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
+(`G.TIME`: real or a fixed / running time such as `'20:30'`; `G.WEATHER`: real, real-host (everyone gets the weather
+where the longest-joined player is) or a preset such as clear, overcast, rain, heavyrain, storm, fog, snow, blizzard)
+are set near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
 little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip. Releases may also carry
 ready-made host bundles (`BeamNG.Earth-Host-<version>-Windows.zip` / `-Linux-x86_64.zip`, built by
 `tools/build_host.py`): the zip above plus BeamMP's own unmodified server program (v3.9.3, checked against the

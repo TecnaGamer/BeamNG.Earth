@@ -399,11 +399,12 @@ end
 -- Hail in a message: its own rate (cm/h of pellets, the presets), or the thunderstorm-with-hail codes 96 / 99 while it
 -- rains (Open-Meteo has those only over central Europe).
 M.HAIL_CODE_CMH = 0.5
-function M.hailRate(msg)
-  local h = tonumber(msg.hailCmH)
+-- (hailCmH: the presets' own field, no world server message has it: m, not msg, for the protocol check)
+function M.hailRate(m)
+  local h = tonumber(m.hailCmH)
   if h then return h end
-  local code = tonumber(msg.code)
-  if (code == 96 or code == 99) and (tonumber(msg.rainMmH) or 0) > M.PRECIP_OFF then return M.HAIL_CODE_CMH end
+  local code = tonumber(m.code)
+  if (code == 96 or code == 99) and (tonumber(m.rainMmH) or 0) > M.PRECIP_OFF then return M.HAIL_CODE_CMH end
   return 0
 end
 
@@ -604,6 +605,34 @@ function M.scaleMsg(msg, k)
   local v = tonumber(m.visM) or M.FOG_VIS_DEFAULT
   m.visM = k > 0 and math.min(M.FOG_VIS_MAX, v / k) or M.FOG_VIS_MAX
   if k == 0 then m.fog = nil end
+  return m
+end
+
+-- Pure: a weather message from the network ('real-host': another player's, relayed by a BeamMP server) reduced to the
+-- fields the weather reads, each a number in its range (or the fog flag), so a malformed or hostile message can do no
+-- more than an odd weather; nil when it is not a table. No place, time zone or anything else is kept.
+local NUM_FIELDS = { code = { 0, 99 }, visM = { 0, 1e6 }, rainMmH = { 0, 500 }, snowCmH = { 0, 100 },
+  hailCmH = { 0, 100 }, slTempC = { -90, 60 }, tempC = { -90, 60 }, baseAglM = { 0, 20000 } }
+local function inRange(v, r)
+  v = tonumber(v)
+  if not v or v ~= v then return nil end
+  return clamp(v, r[1], r[2])
+end
+function M.sanitizeMsg(t)
+  if type(t) ~= 'table' then return nil end
+  local m = {}
+  for k, r in pairs(NUM_FIELDS) do m[k] = inRange(t[k], r) end
+  if type(t.cover) == 'table' then
+    m.cover = { low = inRange(t.cover.low, { 0, 100 }) or 0, mid = inRange(t.cover.mid, { 0, 100 }) or 0,
+      high = inRange(t.cover.high, { 0, 100 }) or 0 }
+  end
+  for _, k in ipairs({ 'wind', 'aloft' }) do
+    if type(t[k]) == 'table' then
+      m[k] = { ms = inRange(t[k].ms, { 0, 150 }) or 0, gustMs = inRange(t[k].gustMs, { 0, 200 }),
+        fromDeg = inRange(t[k].fromDeg, { 0, 360 }) or 0 }
+    end
+  end
+  m.fog = t.fog == true or nil
   return m
 end
 
@@ -1636,8 +1665,11 @@ end
 function M.setPreset(name, host)
   local n = tostring(name or ''):lower()
   if n == 'real-host' then
+    local was = serverHost
     preset, serverHost = { preset = 'real-host' }, host and true or false
     retarget()
+    local mp = rawget(_G, 'beamngEarth_mpsession')      -- (a new host sends what it has at once, not in 10 min)
+    if serverHost and not was and lastMsg and mp and mp.sendHostWeather then pcall(mp.sendHostWeather, lastMsg) end
     return true
   end
   local m = M.presetMsg(n)

@@ -489,4 +489,30 @@ do
   T.check(ms.ownRelease() == nil, 'a malformed one: none')
   guihooks = gh0
 end
+-- the server's weather (the weather plan, phase A): a preset or 'real-host' (the host told it is one), the host's weather
+-- relayed and checked (weather.sanitizeMsg), the host's own sent to the server
+do
+  local W = require('beamngEarth/weather')
+  local calls, hostGot, sent = {}, nil, {}
+  local wx0, ev0, dec0, enc0 = beamngEarth_weather, TriggerServerEvent, jsonDecode, jsonEncode
+  beamngEarth_weather = { setPreset = function(n, host) calls[#calls + 1] = tostring(n) .. '/' .. tostring(host) end,
+    setHostWeather = function(m) hostGot = m end, sanitizeMsg = W.sanitizeMsg }
+  ms.applyServerSky({ weather = 'real-host', weatherHost = true })
+  ms.applyServerSky({ weather = 'storm' })
+  ms.applyServerSky({})
+  T.check(calls[1] == 'real-host/true' and calls[2] == 'storm/false' and calls[3] == 'nil/false',
+    'server weather: real-host (host), a preset, real: ' .. table.concat(calls, ' '))
+  jsonDecode = function() return { code = 61, rainMmH = 2, lat = 10, cmd = 'x', wind = { ms = 'fast' } } end
+  ms._onWeather('{...}')
+  T.check(hostGot and hostGot.code == 61 and hostGot.rainMmH == 2 and hostGot.lat == nil and hostGot.cmd == nil
+    and hostGot.wind.ms == 0, 'the host\'s weather: checked before use')
+  hostGot = nil
+  ms._onWeather(string.rep('x', ms.WEATHER_MAX_BYTES + 1))
+  T.check(hostGot == nil, 'an oversized message is dropped')
+  TriggerServerEvent = function(name, data) sent[#sent + 1] = { name, data } end
+  jsonEncode = function(t) return 'code=' .. tostring(t.code) end
+  ms.sendHostWeather({ code = 3, lat = 1, tz = 'X' })
+  T.check(#sent == 1 and sent[1][1] == 'bngeWeather' and sent[1][2] == 'code=3', 'the host sends its weather (checked)')
+  beamngEarth_weather, TriggerServerEvent, jsonDecode, jsonEncode = wx0, ev0, dec0, enc0
+end
 T.done('test_mpsession')

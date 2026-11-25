@@ -819,6 +819,15 @@ do
     'tint: a string while on')
   check(W.tintValue({ kind = 'color' }, 'junk', 1) == nil, 'tint: an unreadable colour is left alone')
 
+  -- a weather message from the network ('real-host'): the weather's own fields only, each in range
+  local sm = W.sanitizeMsg({ code = 300, rainMmH = -4, visM = 0 / 0, cover = { low = 250, mid = 'x' }, fog = 1,
+    wind = { ms = 20, gustMs = 1e9, fromDeg = 400 }, lat = 51, tz = 'Europe/London', func = print })
+  check(sm.code == 99 and sm.rainMmH == 0 and sm.visM == nil and sm.cover.low == 100 and sm.cover.mid == 0 and sm.fog == nil
+    and sm.wind.gustMs == 200 and sm.wind.fromDeg == 360 and sm.lat == nil and sm.tz == nil and sm.func == nil,
+    'sanitizeMsg: clamped, no place, nothing foreign')
+  check(W.sanitizeMsg('x') == nil and W.sanitizeMsg({}).cover == nil, 'sanitizeMsg: not a table; missing parts stay missing')
+  check(type(W.targets(W.sanitizeMsg({ code = 61 })).fogSigma) == 'number', 'a sanitized message gives targets')
+
   -- the radial ring's choices
   local rc = W.radialChoice('rain')
   check(#rc == 2 and rc[1][1] == 'weatherPreset' and rc[1][2] == 'rain' and rc[2][2] == 'preset', 'ring: a preset')
