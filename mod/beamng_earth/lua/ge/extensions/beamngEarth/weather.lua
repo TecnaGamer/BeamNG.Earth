@@ -1202,8 +1202,10 @@ M._restoreExposure = function() restoreExposure() end -- tests
 -- 0.2) turned the orange sky and fog a pale grey (water droplets scatter all colours alike), x15 hardly, x50 partly.
 -- Not over the 3D map nor high above the ground (applyFogTint's share: the same fade as the fog's).
 M.FOG_TINT = {
-  { field = 'atmoMieScattering', kind = 'mul', k = 150 },
-  { field = 'atmoMieExtinction', kind = 'mul', k = 150 },
+  -- (phase C: the haze absorbs more than it scatters, extinction x120 over scattering x20: a darker, slate-grey veil and
+  -- sky, as the storm photos show, where scattering x150 made a bright milky one; broker wc4)
+  { field = 'atmoMieScattering', kind = 'mul', k = 20 },
+  { field = 'atmoMieExtinction', kind = 'mul', k = 120 },
   { field = 'atmoMiePhaseG', kind = 'number', value = 0.2 },
 }
 M.TINT_EPS, M.TINT_ON = 0.05, 0.02

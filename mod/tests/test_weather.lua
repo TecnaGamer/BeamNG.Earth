@@ -937,8 +937,8 @@ sun:setField('atmoMiePhaseG', 0, '0.8')
 W.setPresetChoice('storm')
 run(1)
 local ms = { tostring(sun:getField('atmoMieScattering')):match('^(%S+) (%S+) (%S+)$') }
-check(#ms == 3 and math.abs(ms[1] - 0.6) < 1e-6 and math.abs(tonumber(sun:getField('atmoMiePhaseG')) - 0.2) < 1e-6,
-  'storm: the atmosphere\'s Mie haze x150 (three components kept), a flatter phase: ' .. tostring(sun:getField('atmoMieScattering')))
+check(#ms == 3 and math.abs(ms[1] - 0.004 * W.FOG_TINT[1].k) < 1e-6 and math.abs(tonumber(sun:getField('atmoMiePhaseG')) - 0.2) < 1e-6,
+  'storm: the atmosphere\'s Mie haze up by FOG_TINT (three components kept), a flatter phase: ' .. tostring(sun:getField('atmoMieScattering')))
 beamngEarth_map3d = { isActive = function() return true end }
 run(1)
 check(sun:getField('atmoMieScattering') == '0.004 0.004 0.004', 'over the 3D map: the sky\'s own atmosphere')
