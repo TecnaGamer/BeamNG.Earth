@@ -118,9 +118,18 @@ check(light and light.fields.isEnabled == '1' and tonumber(light.fields.intensit
 check(light and math.abs(light.pos.x - g.x) < 1e-6 and math.abs(light.pos.y - g.y) < 1e-6, 'at the strike')
 local shownBolts = 0
 for _, o in ipairs(S.liveOf('TSStatic')) do
-  if not o.hidden and o.name and o.name:find('^bngEarthBolt') then shownBolts = shownBolts + 1 end
+  if not o.hidden and o.name and o.name:find('^bngEarthStormBolt') then shownBolts = shownBolts + 1 end
 end
 check(shownBolts == 1, 'one bolt shown')
+-- no object takes a material's name (an object named like a material shadows it: the glow was 'bngEarthFlashGlow',
+-- its own material's name, and nothing showed in the first broker shots)
+local mj = io.open(dir .. '/../beamng_earth/levels/beamng_earth/art/weather/weather.materials.json'):read('*a')
+local clash = {}
+for _, o in pairs(S.objects) do
+  if o.name and o.name ~= '' and mj:find('"' .. o.name .. '"', 1, true) then clash[#clash + 1] = o.name end
+end
+check(#clash == 0, 'no object named like a material: ' .. table.concat(clash, ', '))
+check(storm.debugLine():find('glow#') ~= nil, 'the debug line names the objects')
 -- the flash ends: everything hidden again
 run(storm.FLASH_S + 0.1)
 local anyShown = false

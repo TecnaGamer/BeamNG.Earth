@@ -1164,7 +1164,8 @@ local function writeExposure(ev)
   local e = S.ev
   if e.applied and have and math.abs(have - want) <= M.EV_EPS and math.abs(have - e.applied) <= 1e-3 then return end
   if not e.applied and math.abs(ev) < M.EV_EPS then return end
-  o.exposureBiasEV = want
+  o.exposureBiasEV = want                -- (the stock hdr.lua's way; the field too, in case the property is Lua-side only)
+  pcall(function() o:setField('exposureBiasEV', 0, string.format('%.3f', want)) end)
   e.applied = tonumber(o.exposureBiasEV) or want
   e.ev = ev
 end
@@ -1173,7 +1174,11 @@ local function restoreExposure()
   if not e.applied then return end
   local o = exposureObject()
   local okh, have = pcall(function() return o and tonumber(o.exposureBiasEV) end)
-  if okh and have and math.abs(have - e.applied) <= 1e-3 then o.exposureBiasEV = userEV() end
+  if okh and have and math.abs(have - e.applied) <= 1e-3 then
+    local u = userEV()
+    o.exposureBiasEV = u
+    pcall(function() o:setField('exposureBiasEV', 0, string.format('%.3f', u)) end)
+  end
   e.applied, e.ev = nil, nil
 end
 M._restoreExposure = function() restoreExposure() end -- tests
@@ -1563,8 +1568,9 @@ local function phaseB(e, dt)
   if M.LIGHTNING and mode ~= 'manual' and S.tgt and (S.tgt.thunder or 0) > 0 and not S.mission then
     if not (map3dOn() or bigMapBusy()) then cls = S.tgt.thunder end
   end
-  if cls > 0 or S.storming or storm.holdSpec then
-    local ok, on = pcall(storm.update, dt, cls, { groundZ = S.groundZ, sheltered = S.sheltered,
+  local held = storm.holdSpec and M.LIGHTNING and mode ~= 'manual'
+  if cls > 0 or S.storming or held then
+    local ok, on = pcall(storm.update, dt, cls, { groundZ = S.groundZ, sheltered = S.sheltered, hold = held,
       cloudAboveM = (S.cur and S.cur.cloudAboveKm or 1.5) * 1000 })
     S.storming = ok and on or false
     if not ok then log('W', 'beamngEarth', 'weather storm: ' .. tostring(on)) end

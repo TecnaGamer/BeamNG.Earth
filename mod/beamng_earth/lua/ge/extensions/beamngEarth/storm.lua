@@ -242,10 +242,10 @@ local function objects()
   if not scenetree.findObject('bngEarthBolt') and loadJsonMaterialsFile then pcall(loadJsonMaterialsFile, M.MATERIALS) end
   local objs = { bolts = {} }
   for k = 1, M.VARIANTS do
-    local o = makeStatic(M.ART .. 'bne_bolt' .. k .. '.cdae', 'bngEarthBolt' .. k)
+    local o = makeStatic(M.ART .. 'bne_bolt' .. k .. '.cdae', 'bngEarthStormBolt' .. k)
     objs.bolts[k] = o and o:getID()
   end
-  local g = makeStatic(M.ART .. 'bne_flashglow.cdae', 'bngEarthFlashGlow')
+  local g = makeStatic(M.ART .. 'bne_flashglow.cdae', 'bngEarthStormGlow')   -- (not the material's name: an object named like a material shadows it)
   objs.glow = g and g:getID()
   local l = createObject('PointLight')
   if l then
@@ -253,7 +253,7 @@ local function objects()
     l:setField('isEnabled', 0, '0')
     l:setField('castShadows', 0, '0')
     l:setField('color', 0, M.LIGHT_COLOR)
-    l:registerObject('bngEarthFlashLight')
+    l:registerObject('bngEarthStormLight')
     if scenetree.MissionGroup then scenetree.MissionGroup:addObject(l) end
     objs.light = l:getID()
   end
@@ -409,7 +409,7 @@ end
 -- Returns true while it has something running.
 function M.update(dt, c, ctx)
   if not st then
-    if (tonumber(c) or 0) < 1 and not M.holdSpec then return false end
+    if (tonumber(c) or 0) < 1 and not (M.holdSpec and ctx and ctx.hold) then return false end
     st = { class = c, lastT = nil, upcoming = {}, flashes = {}, thunders = {}, objs = nil, timer = M.CHECK_S }
   end
   ctx = ctx or {}
@@ -444,7 +444,8 @@ function M.update(dt, c, ctx)
     end
     st.upcoming = keep
   end
-  if M.holdSpec then holdFlash(now, ctx) end
+  if M.holdSpec and ctx.hold then holdFlash(now, ctx)
+  elseif #st.flashes > 0 and st.flashes[1].held then st.flashes = {} end
   if #st.flashes > 0 or (st.shown and next(st.shown)) then drawFlashes(now) end
   playThunders(now, ctx.sheltered)
   if c < 1 then st.upcoming = {} end
@@ -462,6 +463,33 @@ function M.reset()
     for _, k in ipairs({ 'glow', 'light' }) do local o = obj(st.objs[k]) if o then o:delete() end end
   end
   st = nil
+end
+
+-- One line on the objects' state (the probes' overlay, the console): ids, hidden flags, the light's fields, whether
+-- the materials are loaded and the shapes' world boxes.
+function M.debugLine()
+  if not st or not st.objs then return 'storm objs: none' end
+  local function f(o, k) local ok, v = pcall(function() return o:getField(k, 0) end) return ok and tostring(v) or '?' end
+  local parts = {}
+  local function one(tag, id)
+    local o = obj(id)
+    if not o then parts[#parts + 1] = tag .. '=missing' return end
+    local okh, h = pcall(function() return o:isHidden() end)
+    local okb, b = pcall(function() local wb = o:getWorldBox() return wb and string.format('%.0f..%.0f', wb.minExtents.z, wb.maxExtents.z) end)
+    parts[#parts + 1] = string.format('%s#%s h=%s ic=%s box=%s', tag, tostring(id), tostring(okh and h), f(o, 'instanceColor'),
+      tostring(okb and b))
+  end
+  one('glow', st.objs.glow)
+  local sb = st.shown and st.shown.bolt
+  if sb then one('bolt' .. sb, st.objs.bolts[sb]) end
+  local l = obj(st.objs.light)
+  if l then
+    parts[#parts + 1] = string.format('light en=%s r=%s int=%s bri=%s', f(l, 'isEnabled'), f(l, 'radius'), f(l, 'intensity'),
+      f(l, 'brightness'))
+  end
+  parts[#parts + 1] = 'mat=' .. tostring(scenetree.findObject('bngEarthBolt') ~= nil) .. '/' ..
+    tostring(scenetree.findObject('bngEarthFlashGlow') ~= nil)
+  return table.concat(parts, ' | ')
 end
 
 function M.status()
