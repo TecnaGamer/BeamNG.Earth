@@ -228,9 +228,29 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
     gc = os.path.join(ROOT, "tools", "gcpatch", "build", "libbngearth_gcpatch.so")
     if not IS_WIN and os.path.isfile(gc):
         cmd += ["--add-binary", f"{gc}{SEP}gcpatch"]
+    # the live weather sounds' synth (tools/build_weathersynth.py; signed by the release workflow before this), next to
+    # the modules where server/liveaudio.py looks (sys._MEIPASS). Linux: copied in after PyInstaller (bundle_weathersynth)
+    if IS_WIN and os.path.isfile(WEATHERSYNTH):
+        cmd += ["--add-binary", f"{WEATHERSYNTH}{SEP}."]
     cmd.append(os.path.join(ROOT, "launcher.py"))
     subprocess.run(cmd, check=True, cwd=ROOT)
     return os.path.join(work, "dist")
+
+
+WEATHERSYNTH = os.path.join(ROOT, "build", "weathersynth", "weathersynth.exe" if IS_WIN else "weathersynth")
+
+
+def bundle_weathersynth(dist):
+    """Linux: the synth into the one-folder app's module folder (sys._MEIPASS: _internal), copied as it is. Not through
+    PyInstaller's --add-binary: its dependency scan would bundle the build machine's libasound.so.2, whose compiled-in
+    plugin path (Ubuntu's) misses the player's PipeWire / PulseAudio ALSA plugins on other distributions (SteamOS,
+    Arch): the synth must load the system's own."""
+    base = os.path.join(dist, NAME)
+    internal = os.path.join(base, "_internal")
+    dst = os.path.join(internal if os.path.isdir(internal) else base, "weathersynth")
+    shutil.copy2(WEATHERSYNTH, dst)
+    os.chmod(dst, 0o755)
+    return dst
 
 
 def appimage(dist, png, out, tool):
@@ -271,6 +291,8 @@ def main():
                     help="Windows: PyInstaller's prebuilt bootloader even when tools/build_bootloader.py made one")
     ap.add_argument("--require-own-bootloader", action="store_true",
                     help="Windows: stop when tools/build_bootloader.py has not made one (CI)")
+    ap.add_argument("--require-weathersynth", action="store_true",
+                    help="stop when tools/build_weathersynth.py has not made the live weather sounds' synth (CI)")
     a = ap.parse_args()
     work = os.path.join(ROOT, "build", "app")
     shutil.rmtree(work, ignore_errors=True)
@@ -278,6 +300,10 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     png, ico = make_icons(work)
     ver = version()
+    if not os.path.isfile(WEATHERSYNTH):
+        if a.require_weathersynth:
+            sys.exit(f"no {WEATHERSYNTH}: run tools/build_weathersynth.py")
+        print("WARNING: no live weather sounds' synth (tools/build_weathersynth.py): the Live setting falls back")
     if IS_WIN:
         boot = None if a.stock_bootloader else own_bootloader()
         if boot:
@@ -292,6 +318,8 @@ def main():
         shutil.copyfile(os.path.join(dist, NAME + ".exe"), out)
     else:
         dist = pyinstaller(work, ico, onefile=False)
+        if os.path.isfile(WEATHERSYNTH):
+            print(f"bundled {bundle_weathersynth(dist)}")
         out = os.path.join(a.out, f"{NAME}-{ver}-x86_64.AppImage")
         appimage(dist, png, out, a.appimagetool)
     print(f"built {out} ({os.path.getsize(out) / 1e6:.0f} MB)")
