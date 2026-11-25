@@ -1210,14 +1210,6 @@ M.FOG_TINT = {
   { field = 'atmoMiePhaseG', kind = 'number', value = 0.2 },
 }
 M.TINT_EPS, M.TINT_ON = 0.05, 0.02
--- The storm's cloud base (applyCloudTint): the cloud layer's exposure and colour at full gloom (CLOUD_GLOOM_FULL: a
--- thunderstorm's); the level's own exposure 1.45, white. A storm cell's base is a dark slate over a ground still lit
--- (the reference photo c_3, ~/bnge-tests/weather/b/refs).
-M.CLOUD_TINT = {
-  { field = 'exposure', kind = 'number', value = 0.45 },
-  { field = 'baseColor', kind = 'rgb', value = { 0.36, 0.39, 0.45 } },
-}
-M.CLOUD_GLOOM_FULL = 0.75
 
 local function parseColor(s)
   local t = {}
@@ -1234,12 +1226,6 @@ function M.tintValue(lever, base, g)
     local y = (0.2126 * c[1] + 0.7152 * c[2] + 0.0722 * c[3]) * (lever.scale or 1)
     local out = {}
     for i = 1, 3 do out[i] = c[i] + (y - c[i]) * g end
-    return string.format('%.4f %.4f %.4f %.4f', out[1], out[2], out[3], c[4] or 1)
-  elseif lever.kind == 'rgb' then          -- (towards the colour lever.value { r, g, b }, the alpha kept)
-    local c = parseColor(base)
-    if not c then return nil end
-    local out = {}
-    for i = 1, 3 do out[i] = c[i] + (lever.value[i] - c[i]) * g end
     return string.format('%.4f %.4f %.4f %.4f', out[1], out[2], out[3], c[4] or 1)
   elseif lever.kind == 'number' then
     local b = tonumber(base)
@@ -1271,9 +1257,9 @@ local function valuesDiffer(a, b)
   return tostring(a) ~= tostring(b)
 end
 
--- The tint levers (FOG_TINT on the sky, CLOUD_TINT on the cloud layer) on an object: moved towards their storm
+-- The tint levers (FOG_TINT on the sky) on an object: moved towards their storm
 -- values by g, the object's own values kept as the base (someone else's later value becomes the base), put back when g
--- is 0 again (only fields still holding ours). key: the state's slot (S.tint, S.cloudTint).
+-- is 0 again (only fields still holding ours). key: the state's slot (S.tint).
 local function untint(getObj, levers, key)
   local t = S[key]
   if not t then return end
@@ -1325,15 +1311,6 @@ local function restoreFogTint() untint(sunObject, M.FOG_TINT, 'tint') end
 M._restoreFogTint = function() restoreFogTint() end -- tests
 local function applyFogTint(g) tint(sunObject, M.FOG_TINT, 'tint', g) end
 
--- The storm's cloud base (weather phase C: a dark slate deck over a lit ground, as the storm photos show, instead of a
--- uniform haze): the cloud layer's exposure and base colour moved by the gloom (CLOUD_TINT); none over the 3D map.
-local function cloudObject()
-  local names = scenetree.findClassObjects and scenetree.findClassObjects('CloudLayer')
-  return names and names[1] and scenetree.findObject(names[1]) or nil
-end
-local function restoreCloudTint() untint(cloudObject, M.CLOUD_TINT, 'cloudTint') end
-local function applyCloudTint(g) tint(cloudObject, M.CLOUD_TINT, 'cloudTint', g) end
-M._restoreCloudTint = function() restoreCloudTint() end -- tests
 
 -- The camera's height over the ground under the player (nil without one): what the fog and clouds go by.
 local function cameraOverGround()
@@ -1455,7 +1432,6 @@ local function apply(e)
   end
   -- (the haze only where the fog is: none over the 3D map, faded out high above the ground)
   applyFogTint(map3dOn() and 0 or (c.fogGrey or 0) * M.fogAltitudeShare(camH))
-  applyCloudTint((map3dOn() or not M.STORM_LIGHT) and 0 or clamp((c.gloom or 0) / M.CLOUD_GLOOM_FULL, 0, 1))
 end
 
 local function applyWind(e, dt)
@@ -1513,7 +1489,6 @@ local function hidePrecip()
   pcall(restoreSun)
   pcall(restoreExposure)
   pcall(restoreFogTint)
-  pcall(restoreCloudTint)
 end
 
 -- Is BWM_Weather changing the weather itself right now?
@@ -1772,8 +1747,7 @@ function M.onAnyMissionChanged(state)
     pcall(restoreSun)
     pcall(restoreExposure)
     pcall(restoreFogTint)
-    pcall(restoreCloudTint)
-    if S.pending then -- the mission's own setup, just before 'started': no switch
+      if S.pending then -- the mission's own setup, just before 'started': no switch
       S.pending = nil
       local sk = sky()
       if sk and sk.setCloudFollow then sk.setCloudFollow(true) end
