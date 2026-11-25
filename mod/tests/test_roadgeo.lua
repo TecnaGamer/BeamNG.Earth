@@ -36,6 +36,18 @@ local car = { x = 0, y = 0, z = 0 }
 getPlayerVehicle = function() return { getPosition = function() return vec3(car.x, car.y, car.z) end,
   getVelocity = function() return vec3(0, 0, 0) end } end
 
+-- Advance the road timers once per simulated frame, even when several frames
+-- fit in one tick of the host's clock.
+local frameMs = 0
+hptimer = function()
+  local last = frameMs
+  return { stopAndReset = function()
+    local elapsed = frameMs - last
+    last = frameMs
+    return elapsed
+  end }
+end
+
 local geodesy = require('beamngEarth/geodesy')
 local geotile = require('beamngEarth/geotile')
 local roads = require('beamngEarth/roads')
@@ -46,12 +58,15 @@ local gov = {}
 function gov:try() return true end
 function gov:charge() end
 function gov:chargeMotion() end
--- frames until the import queues are empty, then a few more (the deferred collision rebuild fires after them): the
--- per-frame budget is wall-clock, so a fixed 6 frames left work queued on a slow CI runner (windows-latest, 2026-11-14)
+local function step(aid, a)
+  frameMs = frameMs + 1000 / 60
+  roads.update(gov, aid, car, nil, a)
+end
+-- Drain the imports, then let the deferred collision work run.
 local function run(aid, a)
   local n = 0
-  repeat roads.update(gov, aid, car, nil, a); n = n + 1 until (roads.queued() == 0 and n >= 6) or n >= 2000
-  for _ = 1, 3 do roads.update(gov, aid, car, nil, a) end
+  repeat step(aid, a); n = n + 1 until (roads.queued() == 0 and n >= 6) or n >= 2000
+  for _ = 1, 3 do step(aid, a) end
 end
 
 local LAT, LON = 39.2834, -76.5934
@@ -292,7 +307,7 @@ do
   local function rc(want, what)
     local got = reloads()
     if got ~= want then
-      print(string.format('  %s: reloads %d, want %d, queued %d, os.clock %.2f', what, got, want, roads.queued(), os.clock()))
+      print(string.format('  %s: reloads %d, want %d, queued %d, frame time %.2f ms', what, got, want, roads.queued(), frameMs))
     end
     T.check(got == want, what)
   end
