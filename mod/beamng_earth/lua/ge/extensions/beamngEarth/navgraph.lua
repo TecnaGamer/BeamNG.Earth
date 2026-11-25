@@ -1365,6 +1365,13 @@ local function launch(id)
   f.z = 0
   if d:length() < 0.1 or f:length() < 0.1 then return end
   local v = M.launchSpeed(e.speedLimit, d:normalized():dot(f:normalized()), e.oneWay, nearJunction(p.x, p.y))
+  -- (winter, winter.lua: a car launched at 90 % of the limit onto ice could not stop for what lay ahead; the AI's own
+  -- winter speed instead, which may leave it under the launch floor: not launched then)
+  local w = package.loaded['beamngEarth/winter']
+  if v and w and w.speedFactor then
+    v = v * w.speedFactor()
+    if v < M.LAUNCH_MIN_MS then v = nil end
+  end
   local cmd = v and M.spawnVelocityCommand(v)
   if cmd then
     o:queueLuaCommand(cmd)
