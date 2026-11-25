@@ -636,11 +636,11 @@ class FarPhoto:
         if snow is None:
             fast.require(559, "finish_far_photo")
             return fast._ef.finish_far_photo(self.pixels, self.grade, rock, None)
-        fast.require(623, "finish_far_photo snow")
+        fast.require(625, "finish_far_photo snow")
         return fast._ef.finish_far_photo(self.pixels, self.grade, rock, None, snow=snow)
 
     def write(self, path, rock, srgb, paint=None, snow=None):
-        fast.require(563 if snow is None else 623, "finish_far_photo")
+        fast.require(563 if snow is None else 625, "finish_far_photo")
         tmp = staging.tmp_for(path)
         kw = {} if snow is None else {"snow": snow}
         size = fast._ef.finish_far_photo(self.pixels, self.grade, rock, (_TO_LIN, MIP_SHARPEN, srgb), path=tmp,

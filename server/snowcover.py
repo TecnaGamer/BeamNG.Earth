@@ -116,6 +116,8 @@ PARAMS = np.array((
                             # oak under snow, 2021-02-13, Vermont's hardwoods 2022-02-06), its texture the photo's own
     0.9,                    # bare_k: its share of a deciduous crown's texel under full cover
     0.3,                    # ever_dark: an evergreen crown 0.3 darker under full cover (low winter sun)
+    0.55,                   # open_dark: open water 0.55 darker under full cover (Sentinel-2's open Mississippi in
+                            # February: near black between white banks)
 ), np.float64)
 
 
@@ -298,7 +300,7 @@ def deep_possible():
 def perm_possible(south, west, north, east):
     """Can permanent snow lie in the box (a polar / alpine Koppen class within a pixel of it)?"""
     import climate
-    fast.require(623, "snow_perm_possible")
+    fast.require(625, "snow_perm_possible")
     return bool(fast._ef.snow_perm_possible(climate._load(), climate.RES, float(south), float(west), float(north),
                                             float(east)))
 
@@ -354,7 +356,7 @@ def look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road=None, water=None):
     U = np.ascontiguousarray(np.asarray(U, np.float64))
     if U.ndim != 2 or min(U.shape) < 2:
         return None
-    fast.require(623, "SnowLook")
+    fast.require(625, "SnowLook")
     t = np.linspace(0.0, 1.0, GEO_N)
     e, n = np.meshgrid(x0 + t * size, y0 + size - t * size)       # row 0 north
     lat, lon, h = frame.enu_to_geodetic(e.ravel(), n.ravel(), 0.0)

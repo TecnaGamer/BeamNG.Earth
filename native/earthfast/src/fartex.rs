@@ -920,7 +920,7 @@ type GradeInput<'py> = (PyReadonlyArray2<'py, f32>, PyReadonlyArray2<'py, f32>, 
 /// Shade a source composite. A photo that still needs road paint returns its RGB; otherwise
 /// the same detached call delivers the complete DDS, without exporting a pixel buffer to Python.
 #[pyfunction]
-/// snow (623): the texture's snow (snowlook.rs, winter on), after its rock and road paint.
+/// snow (625): the texture's snow (snowlook.rs, winter on), after its rock and road paint.
 #[pyo3(signature = (source, season, rock, dds, *, path=None, paint=None, snow=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn finish_far_photo<'py>(py: Python<'py>, source: Rendered<'py>,

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import geodesy  # noqa: E402
 import revisit  # noqa: E402
 import snowcover  # noqa: E402
@@ -283,8 +284,9 @@ class LookTest(unittest.TestCase):
                 out = img if out is None else out
                 means[preset] = [float(out[:, a:b].mean()) for a, b in ((0, 80), (80, 170), (170, 256))]
         river, lake, sea = means["heavy"]
-        self.assertLess(abs(river - np.mean(water_rgb)), 2, "a river stays open")
-        self.assertLess(abs(sea - np.mean(water_rgb)), 2, "the sea stays open")
+        # (open water stays the photo's, darker under a winter sky: snowcover.PARAMS open_dark)
+        self.assertLess(river, np.mean(water_rgb), "a river stays open, darker")
+        self.assertLess(sea, np.mean(water_rgb), "the sea stays open, darker")
         self.assertGreater(lake, 200, "a lake under heavy snow: frozen and white")
         self.assertLess(means["dusting"][1], 100, "a dusting's lakes: open")
         T = snowcover.Table
@@ -337,7 +339,7 @@ class LookTest(unittest.TestCase):
                 self.assertGreater(light, dark + 40, f"the pack's deciduous taiga: {light:.0f} against {dark:.0f}")
                 out = sl.apply(muddy).astype(int)
                 col = int(np.argmin(out[:, :, 0].mean(axis=0)))
-                self.assertLess(abs(out[:, col, 0].mean() - 92), 25, "the river stays open")
+                self.assertLess(out[:, col, 0].mean(), 92, "the river stays open (darker under a winter sky)")
                 self.assertTrue(80 < col < 176, col)
                 self.assertGreater(out[:, :40, 0].mean(), 180, "the ground beside it white")
                 sc.set_packs(Packs(0, 250, "v2-0000000000000002"))
@@ -399,6 +401,49 @@ class LiveTest(unittest.TestCase):
             table = json.loads((Path(__file__).resolve().parents[1] / "protocol_table.json").read_text())
             self.assertLessEqual(set(sc.hello()), set(table["nested"]["snow.snow"]))
             self.assertLessEqual(set(sc.hello()), set(table["nested"]["hello.snow"]))
+
+
+class W1ProviderTest(unittest.TestCase):
+    def test_w1_service_drives_the_photos(self):
+        """W1's snow.Service as snowcover's real provider (BNE_SNOW=real): no state, no spec (today's keys); its state
+        committed, a spec whose key holds its table, white ground; Server.snow_changed and the 'snow' message on a
+        change of table."""
+        import snow
+        from test_snow import FakeHourly
+
+        class Srv:
+            def __init__(self):
+                self.changes, self.connections = 0, []
+
+            def snow_changed(self):
+                self.changes += 1
+
+        class Conn:
+            def __init__(self, s):
+                self.s, self.sent = s, []
+
+            def send(self, m):
+                self.sent.append(m)
+        with winter("real") as sc:
+            svc = snow.Service(fetch=FakeHourly(), mode="light", cover=sc)
+            srv = Srv()
+            conn = Conn(srv)
+            srv.connections.append(conn)
+            frame = geodesy.EnuFrame(45.0, -93.0)
+            self.assertIsNone(sc.spec_for_square(frame, -500, -500, 1000.0), "no state yet: today's keys")
+            raw = {}
+            svc.get(45.0, -93.0, 200, -1, raw)
+            self.assertTrue(svc.commit(conn, raw))
+            self.assertEqual(srv.changes, 1)
+            self.assertTrue(any(m.get("type") == "snow" for m in conn.sent))
+            sp = sc.spec_for_square(frame, -500, -500, 1000.0)
+            self.assertIsNotNone(sp, "W1's state: snow on the photos")
+            sl = sc.look(sp, frame, -500, -500, 1000.0, np.full((65, 65), 200.0), -500, -500, 1000 / 64)
+            grass = np.zeros((256, 256, 3), np.uint8)
+            grass[...] = (95, 120, 60)
+            out = sl.apply(grass)
+            self.assertIsNotNone(out)
+            self.assertGreater(float(out[..., 0].mean()), 150.0, "W1's light snow whitens the grass")
 
 
 class LayersTest(unittest.TestCase):

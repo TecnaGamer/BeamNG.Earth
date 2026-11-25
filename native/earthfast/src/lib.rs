@@ -7801,7 +7801,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 624: snow_state / snow_preset / snow_regime / snow_band_depth / snow_band_table / snow_lake_share /
     // snow_wet_only / snow_selftest / snow_conditions (snow.rs: the winter W1 kernel, server/snow.py, BNE_WINTER /
     // BNE_WET_ROADS)
+    // 625: SnowLook / snow_ela / snow_perm_possible / snow_evergreen, finish_far_photo(snow=) (snowlook.rs: the winter
+    // W2 snow on the ground photos, server/snowcover.py)
     snow::py::register(m)?;
-    m.add("VERSION", 624)?;
+    m.add("VERSION", 625)?;
     Ok(())
 }

@@ -56,7 +56,7 @@ impl<'py> Restore<'_, 'py> {
             pxs.extend((1..=2).map(|k| px << k).filter(|&p| p <= max_px));
             pxs.extend((1..=3).map(|k| px >> k).filter(|&p| p >= min_px));
             let rev = s.getattr("tex_rev")?.call_method1("get", (&ck, 0))?;
-            // the snow its texture is keyed with (Server.far_snow: None while winter is off; 623)
+            // the snow its texture is keyed with (Server.far_snow: None while winter is off; 625)
             let snow = s.call_method1("far_snow", (anchor, &tile))?;
             let texture: String = s
                 .call_method1("texture_name", (ck.get_item(0)?, ck.get_item(1)?, rev))?

@@ -26,7 +26,7 @@ use crate::dm::Dm;
 pub const ROWS: usize = 8;          // band rows per table at most
 pub const ROAD_CLASSES: usize = 5;  // plow classes P0..P4 (W3): the share of the ground's cover a road keeps, 0..8
 const RD: usize = ROAD_CLASSES + 1; // ... and then the share of still water frozen and snow-covered (lake ice), 0..8
-pub const N_PARAMS: usize = 87;
+pub const N_PARAMS: usize = 88;
 const NO_ELA: f64 = 1.0e9;
 
 /// The constants snowcover.py passes (snowcover.PARAMS, in this order; a few slots kept for their place: canopy_sat,
@@ -73,6 +73,7 @@ pub struct SnowParams {
     bare_k: f64,                // ... its share of a deciduous crown's texel under full cover (the rest: the snow seen
                                 // through)
     ever_dark: f64,             // an evergreen crown darker by this share under full cover (low winter sun)
+    open_dark: f64,             // open water darker by this share under full cover (the winter sky it mirrors)
     white_v: (f64, f64),        // photo value above which a neutral texel counts as snow already
     white_sat: f64,             // ... at most this saturation
     shade: (f64, f64, f64),     // the snow's brightness: base + gain * photo luminance, at most max
@@ -103,7 +104,7 @@ impl SnowParams {
             treeline_band: p[59], struct_keep: p[60], struct_cv: (p[61], p[62]), struct_texel: (p[63], p[64]),
             winter_dark: p[65], rock_rel: (p[66], p[67]), lake_frac: (p[68], p[69]), lake_r_m: p[70],
             sea_h: (p[71], p[72]), flat: (p[73], p[74]), flat_v: (p[75], p[76]), flat_cv: (p[77], p[78]),
-            montane: (p[79], p[80], p[81]), bare: [p[82], p[83], p[84]], bare_k: p[85], ever_dark: p[86],
+            montane: (p[79], p[80], p[81]), bare: [p[82], p[83], p[84]], bare_k: p[85], ever_dark: p[86], open_dark: p[87],
         })
     }
 }
@@ -254,6 +255,7 @@ fn vnoise(x: f64, y: f64, seed: i64) -> f64 {
 pub struct PackGrid {
     v: Array2<u8>,
     wide: Array2<u8>,       // the 3 x 3 cells' mean round each cell (no data counted full): a wide body of water
+    near: Array2<u8>,       // the 3 x 3 cells' max: water within a cell of here (a river narrower than its cells)
     north: f64,
     west: f64,
     res: f64,
@@ -276,12 +278,31 @@ impl PackGrid {
             }
             ((sum + n / 2) / n) as u8
         });
-        PackGrid { v, wide, north, west, res, scale, nodata }
+        let near = Array2::from_shape_fn((nj, ni), |(j, i)| {
+            let mut m = 0u8;
+            for jj in j.saturating_sub(1)..=(j + 1).min(nj - 1) {
+                for ii in i.saturating_sub(1)..=(i + 1).min(ni - 1) {
+                    let x = v[[jj, ii]];
+                    m = m.max(if Some(x) == nodata { full as u8 } else { x });
+                }
+            }
+            m
+        });
+        PackGrid { v, wide, near, north, west, res, scale, nodata }
     }
 
     /// The wide-body share (the 3 x 3 cells' mean) at (lat, lon), bilinear; None outside.
     fn wide_at(&self, lat: f64, lon: f64) -> Option<f64> {
-        let (nj, ni) = (self.wide.shape()[0] as i64, self.wide.shape()[1] as i64);
+        self.grid_at(&self.wide, lat, lon)
+    }
+
+    /// The nearby share (the 3 x 3 cells' max) at (lat, lon), bilinear; None outside.
+    fn near_at(&self, lat: f64, lon: f64) -> Option<f64> {
+        self.grid_at(&self.near, lat, lon)
+    }
+
+    fn grid_at(&self, grid: &Array2<u8>, lat: f64, lon: f64) -> Option<f64> {
+        let (nj, ni) = (grid.shape()[0] as i64, grid.shape()[1] as i64);
         let fj = (self.north - lat) / self.res - 0.5;
         let fi = (lon - self.west) / self.res - 0.5;
         if fj < -1.0 || fi < -1.0 || fj > nj as f64 || fi > ni as f64 {
@@ -294,7 +315,7 @@ impl PackGrid {
             for (di, w2) in [(0i64, 1.0 - wi), (1, wi)] {
                 let j = (j0 as i64 + dj).clamp(0, nj - 1) as usize;
                 let i = (i0 as i64 + di).clamp(0, ni - 1) as usize;
-                val += w1 * w2 * self.wide[[j, i]] as f64 / self.scale;
+                val += w1 * w2 * grid[[j, i]] as f64 / self.scale;
             }
         }
         Some(val)
@@ -539,6 +560,7 @@ struct Coarse {
     wsea: Vec<f64>,     // the water pack's no-data share (the open sea past the mapped coast)
     wwide: Vec<f64>,    // the water pack's wide-body share (a lake or reservoir, not a river)
     trees: Vec<f64>,    // the leaf pack's tree cover (-1: no pack)
+    wnear: Vec<f64>,    // the water pack's nearby share (the 3 x 3 cells' max)
     o: Vec<f64>,        // opacity
     g: Vec<f64>,        // age
     rd: Vec<[f64; RD]>,
@@ -560,6 +582,7 @@ struct Pt {
     wsea: f64,
     wwide: f64,
     trees: f64,
+    wnear: f64,
 }
 
 impl SnowLook {
@@ -616,7 +639,8 @@ impl SnowLook {
         let wwide = self.wsh.as_ref().and_then(|w| w.wide_at(lat, lon)).unwrap_or(0.0);
         let trees = self.trees.as_ref().and_then(|t| t.at(lat, lon)).map(|(v, _)| v).filter(|v| v.is_finite())
             .unwrap_or(-1.0);
-        Pt { c, steep, d, g, rd, slope: tan2.sqrt(), tree, h, ever, wsh, wsea, wwide, trees }
+        let wnear = self.wsh.as_ref().and_then(|w| w.near_at(lat, lon)).unwrap_or(0.0);
+        Pt { c, steep, d, g, rd, slope: tan2.sqrt(), tree, h, ever, wsh, wsea, wwide, trees, wnear }
     }
 
     fn opacity(&self, d: f64) -> f64 {
@@ -642,6 +666,7 @@ impl SnowLook {
         let mut tree = vec![0.0; n];
         let mut ever = vec![0.0; n];
         let (mut wsh, mut wsea, mut wwide, mut trees) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+        let mut wnear = vec![0.0; n];
         let mut any = false;
         for r in 0..nk {
             let y = y0 + size - ((r * s) as f64 + 0.5) * t;
@@ -656,6 +681,7 @@ impl SnowLook {
                 wsea[q] = pt.wsea;
                 wwide[q] = pt.wwide;
                 trees[q] = pt.trees;
+                wnear[q] = pt.wnear;
                 c[q] = pt.c;
                 st[q] = pt.steep;
                 hh[q] = pt.h;
@@ -682,7 +708,7 @@ impl SnowLook {
             }
             m
         }).collect();
-        any.then_some(Coarse { s, nk, c, st, h: hh, fl, ever, wsh, wsea, wwide, trees, o, g, rd, sl, tree })
+        any.then_some(Coarse { s, nk, c, st, h: hh, fl, ever, wsh, wsea, wwide, trees, wnear, o, g, rd, sl, tree })
     }
 
     /// The photo with its snow (rgb (px, px, 3), row 0 north, covering the square), or None: no snow on it.
@@ -764,7 +790,7 @@ impl SnowLook {
         let inv_sn = 1.0 / sn as f64;
         let mut rn = vec![0.0f64; nn];
         // the coarse fields along this texel row (vertical lerp once a row; horizontal per texel)
-        let mut rows = vec![[0.0f64; 17]; nk];      // c, steep, o, g, slope, tree, vm, water share, height, flat,
+        let mut rows = vec![[0.0f64; 18]; nk];      // c, steep, o, g, slope, tree, vm, water share, height, flat,
                                                     // evergreen share, hue G - R, G - B
         let mut rr = vec![[0.0f64; RD]; nk];
         for i in 0..px {
@@ -777,7 +803,8 @@ impl SnowLook {
             for k in 0..nk {
                 rows[k] = [lv(&cg.c, k), lv(&cg.st, k), lv(&cg.o, k), lv(&cg.g, k), lv(&cg.sl, k), lv(&cg.tree, k),
                            lv(&vm, k), lv(&wf, k), lv(&cg.h, k), lv(&cg.fl, k), lv(&cg.ever, k), lv(&hgr, k),
-                           lv(&hgb, k), lv(&cg.wsh, k), lv(&cg.wsea, k), lv(&cg.wwide, k), lv(&cg.trees, k)];
+                           lv(&hgb, k), lv(&cg.wsh, k), lv(&cg.wsea, k), lv(&cg.wwide, k), lv(&cg.trees, k),
+                           lv(&cg.wnear, k)];
                 for q in 0..RD {
                     rr[k][q] = cg.rd[a0 + k][q] * (1.0 - wy) + cg.rd[a1 + k][q] * wy;
                 }
@@ -852,10 +879,11 @@ impl SnowLook {
                 let mut keep_mul = 1.0;
                 let mut is_water = 0.0f64;
                 let mut ice_w = 0.0f64;      // frozen, snow-covered still water: flat and as bright as a field
+                let mut open_w = 0.0f64;     // open water under a winter sky: darker than the summer photo's
                 if let Some(wm) = wmask {
                     // the map's water: authoritative where it is known
                     match wm[i * px + j] {
-                        WATER_MOVING | WATER_SEA => { keep_mul = 0.0; is_water = 1.0; }
+                        WATER_MOVING | WATER_SEA => { keep_mul = 0.0; is_water = 1.0; open_w = 1.0; }
                         WATER_STILL => { keep_mul *= hr(ROAD_CLASSES); is_water = 1.0; }
                         _ => {}
                     }
@@ -868,7 +896,12 @@ impl SnowLook {
                     let lush = smooth((g - r) * inv255, 0.03, 0.08);
                     let photo_ok = (1.0 - t_fv[mxi]) * (1.0 - lush);
                     let hue = water_hue(ri, gi, bi) * (1.0 - smooth(hl(4), p.water_slope.0, p.water_slope.1));
-                    let water = (smooth(share, 0.2, 0.45) * photo_ok).max(hue * smooth(share, 0.05, 0.2));
+                    // (a river narrower than the pack's 445 m cells: water within a cell of here, where the photo
+                    // is smooth and darker than the ground round it: the Mississippi through Minneapolis, its cells
+                    // 0.3-0.5 water)
+                    let river = smooth(hl(17), 0.15, 0.35) * photo_ok * (1.0 - smooth(cvar, 0.05, 0.10))
+                        * (1.0 - smooth(v / vml, 0.85, 1.0));
+                    let water = (smooth(share, 0.2, 0.45) * photo_ok).max(hue * smooth(share, 0.05, 0.2)).max(river);
                     if water > 0.0 {
                         // (a wide body: the water share of the 3 x 3 cells round it, ~1.3 km: a lake's rim and a
                         // reservoir whose level moves are still water; a river 200 m wide is not)
@@ -878,6 +911,7 @@ impl SnowLook {
                         keep_mul *= 1.0 - water * (1.0 - frozen);
                         is_water = water;
                         ice_w = water * frozen;
+                        open_w = water * (1.0 - frozen);
                     }
                 } else {
                     let hue = water_hue(ri, gi, bi) * (1.0 - smooth(hl(4), p.water_slope.0, p.water_slope.1));
@@ -895,6 +929,7 @@ impl SnowLook {
                         let frozen = lake * hr(ROAD_CLASSES) * (1.0 - sea);
                         keep_mul *= 1.0 - water * (1.0 - frozen);
                         is_water = water;
+                        open_w = water * (1.0 - frozen);
                     }
                 }
                 // a crown (green, darker than the stand round it or simply dark): an evergreen one keeps most of its
@@ -947,7 +982,10 @@ impl SnowLook {
                     keep_mul *= 1.0 - t_white[mxi] * (1.0 - smooth(sat, p.white_sat, p.white_sat * 2.0));
                 }
                 let amt = a * hl(2) * keep_mul;
-                if amt <= 0.0 {
+                // (open water in winter: Sentinel-2 shows open rivers near black between white banks, the low sun and
+                // the dark sky they mirror; the summer photo's is grey-brown)
+                let water_dim = 1.0 - p.open_dark * open_w * c.min(1.0);
+                if amt <= 0.0 && water_dim >= 1.0 {
                     continue;
                 }
                 let lum = (lw.0 * r + lw.1 * g + lw.2 * b) * inv255;
@@ -956,7 +994,8 @@ impl SnowLook {
                 let wa = age - ka as f64;
                 let sh = (p.shade.0 + p.shade.1 * lum).min(p.shade.2);
                 let sh = sh + (p.shade.2 - sh) * ice_w;
-                let dim = 1.0 - p.ever_dark * crown_k * c.min(1.0);
+                let dim = (1.0 - p.ever_dark * crown_k * c.min(1.0)) * water_dim;
+                let amt = amt.max(0.0);
                 let bt = bare_t * c.min(1.0);
                 // (a bare stand keeps its texture: crowns and gaps, lighter and darker than the stand's mean)
                 let bare_tex = (v / vml).clamp(0.5, 1.4);
