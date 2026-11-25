@@ -319,7 +319,8 @@ for n in BASE_SIZES:
 Image.new("L", (1024, 1024), 128).save(os.path.join(T, "bngEarth_flat_h_1024.png"), optimize=True)   # detail size
 # importMaps inputs, sized like the terrain block (N = 1024, docs/V1_1_SPEC.md 1a; and 512 for the
 # M4 block, docs/V1_4_SPEC.md 3.5; 2048 for the 2 km block at 1 m, --block 2048: the layer map must match the
-# heightmap size): one all-white layer map (material 0 everywhere) and a flat 16-bit heightmap per size.
+# heightmap size): one all-white layer map (material 0 everywhere) and a flat 16-bit heightmap per size. The 1024 one
+# is also the wet streets' black macro colour map (terrain.lua WET_BLACK): it must stay all zero.
 for n in (2048, 1024, 512):
     Image.new("RGB", (n, n), (255, 255, 255)).save(os.path.join(T, f"beamngEarth_layer_{n}.png"), optimize=True)
     Image.new("I;16", (n, n), 0).save(os.path.join(T, f"beamngEarth_flat_{n}.png"), optimize=True)

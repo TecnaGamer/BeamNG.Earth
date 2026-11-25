@@ -707,26 +707,38 @@ end
 -- Wet carriageways (weather phase C, the weather plan 4.4 route 1): the city's roads are terrain layers under the
 -- aerial photo, and a terrain material change costs an updateMaterial (~1 s) on its own. But every block swap rebinds
 -- all its layers anyway (terrainFile + postApply): the paved layers' flat roughness and ambient-occlusion base maps are
--- switched just before that. A wet road: a lower roughness (the sky and the lamps reflect, SSR where on) and a darker
--- ambient (under a rain deck the ambient is most of the light). The maps are the level's own flat base maps every layer
--- already uses, read as other values (the normal map's red 127 = roughness 0.5, the height map's 175 = 0.69): no new
--- texture, so no first-use load (probe P4 on the Deck: own wet maps cost the first wet swap +285 ms, their decode). The
--- step (0 dry, 1 damp, 2 wet) comes from wetlook.lua; it shows from the next swap (driving: every few hundred metres;
--- standing still: when the next block comes).
+-- switched just before that. The maps are the level's own (flat base maps every layer already uses, read as other
+-- values: the normal map's red 127 = roughness 0.5, the height map's 175 = 0.69; the zero heightmap PNG as a black
+-- colour map), so no first-use load (probe P4 on the Deck: wet maps of their own cost the first wet swap +285 ms, their
+-- decode). The step (0 dry, 1 damp, 2 wet) comes from wetlook.lua; it shows from the next swap (driving: every few
+-- hundred metres; standing still: when the next block comes).
 M.WET_LAYERS = { '^bngEarthGroundAsphalt', '^bngEarthGroundCobble', '^bngEarthGroundPavers', '^bngEarthGroundBrick' }
 -- Each step: the fields set on the paved layers ({ field, value, layers = a name pattern or nil for all of them }). A
--- '.png' value is one of the level's flat base maps (at the ground photo's size); anything else is set as it is (the
--- strengths are plain numbers in the material's constants: no texture). The shader adds (2 t - 1) x strength of the
--- detail and macro maps to the base value, then clamps: the stock asphalt AO detail (mean 0.84) at its 0.8 near strength
--- adds +0.54, so any base AO under it clamps to 1 within the detail distance (the wet road showed no darkening near the
--- camera, only its sheen) -- its AO detail goes while wet; the tile layers' AO details are offsets about 0.45 and stay.
+-- '.png' value is one of the level's maps (a flat base map at the ground photo's size); anything else is set as it is
+-- (the strengths are plain numbers in the material's constants). The shader adds (2 t - 1) x strength of the detail and
+-- macro maps to the base value, then clamps:
+--   - the colour: real wet asphalt is darker (water fills the pores; only the far road, seen at a grazing angle, shines
+--     with the sky). The macro colour map becomes the black PNG at strength 0.3 near / 0.2 at 100 m: the photo less
+--     0.3 (broker wc15 against the rain photos b_2-b_4: roughness and AO alone left the road pale, the sky's reflection
+--     outweighing them);
+--   - the stock asphalt AO detail (mean 0.84) at its 0.8 near strength adds +0.54, so any base AO under it clamped to 1
+--     within the detail distance: it goes while wet (the tile layers' AO details are offsets about 0.45 and stay);
+--   - the roughness: 0.5 wet, 0.69 damp; the asphalt's roughness grain at 0.3 (it added +0.11).
+local WET_A = '^bngEarthGroundAsphalt'
+M.WET_BLACK = 'beamngEarth_flat_1024.png'
 M.WET_FIELDS = {
-  [1] = {                                                         -- damp: roughness 0.69
+  [1] = {                                                         -- damp
     { 'roughnessBaseTex', 'bngEarth_base_h.png' },
+    { 'baseColorMacroTex', M.WET_BLACK },
+    { 'baseColorMacroStrength', '0.15 0.1' },
   },
-  [2] = {                                                         -- wet: roughness 0.5, ao 0.69
+  [2] = {                                                         -- wet
     { 'roughnessBaseTex', 'bngEarth_base_nm.png' },
     { 'aoBaseTex', 'bngEarth_base_h.png' },
+    { 'roughnessDetailStrength', '0.3 0.1', layers = WET_A },
+    { 'aoDetailStrength', '0 0', layers = WET_A },
+    { 'baseColorMacroTex', M.WET_BLACK },
+    { 'baseColorMacroStrength', '0.3 0.2' },
   },
 }
 local wetWant = 0

@@ -129,6 +129,8 @@ T.check(terrain.swap('/t/w.ter', 2, 512, 0, 0, 0, { materials = mats }, nil) == 
 T.check(wetAtFile and wetAtFile:find('bngEarth_base_nm') ~= nil and asph.fields.aoBaseTex:find('bngEarth_base_h') ~= nil,
   'the asphalt layer wet before the file is set: ' .. tostring(wetAtFile))
 T.check((calls.updateMaterial or 0) == upd0, 'no updateMaterial for it')
+T.check(tostring(asph.fields.baseColorMacroTex):find(terrain.WET_BLACK, 1, true) ~= nil and asph.fields.baseColorMacroStrength == '0.3 0.2'
+  and asph.fields.aoDetailStrength == '0 0', 'wet: the colour darkened by the black macro map, the AO detail off')
 T.check(dirt.fields.roughnessBaseTex == nil or not tostring(dirt.fields.roughnessBaseTex):find('_rw'), 'the dirt layer stays')
 local sets = terrain.wetSets
 terrain.swap('/t/w2.ter', 2, 512, 0, 0, 0, { materials = mats }, nil)
