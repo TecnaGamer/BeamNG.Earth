@@ -1467,6 +1467,9 @@ end
 ------------------------------------------------------------------------------------------
 -- hooks and console API
 
+-- (the hook for the plan's time-lapse and forecast, WX6: a player of the hourly records hands each one in here with the
+-- change speed shortened, setChangeSpeed, and the sky clock moved through sky.setServerClock when Sun = Real,
+-- decision 7; nothing of it is built in phase A)
 function M.onWeather(msg)
   if type(msg) ~= 'table' then return end
   lastMsg = msg
