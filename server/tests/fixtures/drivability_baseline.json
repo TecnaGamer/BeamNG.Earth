@@ -1,5 +1,5 @@
 {
- "_measured_on": "9d1ef7f967d9",
+ "_measured_on": "24d743528ab0+dirty",
  "a20_921": {
   "steps": 15,
   "parts": {
@@ -66,7 +66,7 @@
   }
  },
  "a61_928": {
-  "steps": 323,
+  "steps": 357,
   "parts": {
    "bridge:b62acf67-af2f-4d3d-a6fc-89f53295a925": {
     "step_m": 1.0646,
@@ -79,14 +79,14 @@
     "lift_g": 62.5074
    },
    "ground:b62acf67-af2f-4d3d-a6fc-89f53295a925": {
-    "step_m": 5.926,
+    "step_m": 21.5339,
     "grade": 0.5949,
     "lift_g": 13.5891
    },
    "ground:ceb36d5a-d36a-4615-b2c7-94a4c6937e97": {
-    "step_m": 14.0112,
-    "grade": 3.0291,
-    "lift_g": 131.7926
+    "step_m": 20.97,
+    "grade": 3.8315,
+    "lift_g": 82.4162
    }
   }
  },

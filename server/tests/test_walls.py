@@ -108,20 +108,21 @@ class BlendTeethTest(unittest.TestCase):
             self.assertGreater(max(errs.values()), 0.5 * bound, dz)     # (not slack)
 
     def test_a_wall_where_the_blend_is_over_the_step_the_user_set_and_the_fill_is_a_wall_high(self):
-        """Over the cuttings' gate (grading.WALL_CUT_M), at most a wall's height, and the blend's teeth over
-        grading.FILL_TEETH_M."""
+        """At most a wall's height, and the blend's teeth over grading.FILL_TEETH_M, at any height (under the cuttings' gate,
+        grading.WALL_CUT_M, too)."""
         dz = np.array([0.5, 1.9, 2.5, 3.0, 8.0, 12.0])
         for max_h in (4.0, 10.0):
             got = grading.fill_wall_at(dz, max_h)
-            want = (dz > grading.WALL_CUT_M) & (dz <= max_h) & (grading.blend_teeth_m(dz) > grading.FILL_TEETH_M)
+            want = (dz > 0.0) & (dz <= max_h) & (grading.blend_teeth_m(dz) > grading.FILL_TEETH_M)
             self.assertTrue(np.array_equal(got, want))
-        self.assertFalse(grading.fill_wall_at(1.5, 10.0))
+        self.assertFalse(grading.fill_wall_at(0.5, 10.0))
+        self.assertTrue(grading.fill_wall_at(1.9, 10.0), "a fill under the cuttings' gate whose teeth are over the step")
         self.assertFalse(grading.fill_wall_at(11.0, 10.0))
 
 
-def road_plan(deg, filled=True, z0=Z0, length=90.0, step=4.0):
-    """A primary road's grading plan through the origin along deg to the lattice's axes (its fill walls' weights on
-    every segment when filled), with its carriageway and core half widths."""
+def road_plan(deg, filled=True, z0=Z0, length=90.0, step=4.0, weight=1.0):
+    """A primary road's grading plan through the origin along deg to the lattice's axes (its side walls' weight, +1 a fill's,
+    -1 a cutting's, on every segment when filled), with its carriageway and core half widths."""
     spec = roads.road_specs(features([[(0.0, 0.0), (200.0, 0.0)]], ["primary"]), None)[0]
     rh, h = grading.plan_halves(spec)
     t = np.array([np.cos(np.radians(deg)), np.sin(np.radians(deg))])
@@ -130,7 +131,7 @@ def road_plan(deg, filled=True, z0=Z0, length=90.0, step=4.0):
     cut = None
     if filled:
         cut = np.full((len(s) - 1, grading.CUT_COLS), np.nan)
-        cut[:, 6:8] = 1.0
+        cut[:, 6:8] = weight
     plan = grading.Plan(xy, np.full(len(s), z0), h, cut=cut, road_half=rh)
     return spec, rh, h, t, np.array([-t[1], t[0]]), s, xy, plan
 
@@ -158,17 +159,20 @@ class FillRuleTest(unittest.TestCase):
                 self.assertTrue(np.allclose(z[d > foot + 0.01], Z0 - 3.0), (deg, side, "the natural ground past it"))
 
     def test_the_ground_where_it_lies_over_the_road_is_the_blends_as_before(self):
-        """On the uphill side (natural over the road) and where a segment has no weight: as without fill walls, bit for bit."""
+        """On the uphill side (natural over the road) a fill's weight changes nothing against a plan whose segments are decided
+        no wall (weight 0), bit for bit; with no decision (NaN) the old rule holds (the ground over the road by more than
+        WALL_CUT_M a step), and a segment with a weight 0 and none on a fill side differ."""
         spec, rh, h, t, n, s, xy, filled = road_plan(22.5)
-        plain = road_plan(22.5, filled=False)[-1]
+        none = road_plan(22.5, weight=0.0)[-1]
+        undecided = road_plan(22.5, filled=False)[-1]
         d = np.arange(0.0, 30.0, 0.37)
         px, py = np.r_[d * n[0], -d * n[0]], np.r_[d * n[1], -d * n[1]]
         up = np.full(len(px), Z0 + 3.0)
-        self.assertTrue(np.array_equal(grading.grade_points(px, py, up, [filled]), grading.grade_points(px, py, up, [plain])))
-        none = grading.Plan(xy, np.full(len(s), Z0), h, cut=np.full((len(s) - 1, grading.CUT_COLS), np.nan), road_half=rh)
+        self.assertTrue(np.array_equal(grading.grade_points(px, py, up, [filled]), grading.grade_points(px, py, up, [none])))
+        self.assertFalse(np.array_equal(grading.grade_points(px, py, up, [undecided]), grading.grade_points(px, py, up, [none])))
         down = np.full(len(px), Z0 - 3.0)
-        self.assertTrue(np.array_equal(grading.grade_points(px, py, down, [none]), grading.grade_points(px, py, down, [plain])))
-        self.assertFalse(np.array_equal(grading.grade_points(px, py, down, [filled]), grading.grade_points(px, py, down, [plain])))
+        self.assertTrue(np.array_equal(grading.grade_points(px, py, down, [none]), grading.grade_points(px, py, down, [undecided])))
+        self.assertFalse(np.array_equal(grading.grade_points(px, py, down, [filled]), grading.grade_points(px, py, down, [none])))
 
     def test_a_cuttings_wall_or_fall_on_the_side_keeps_it(self):
         """Where the plan has a cutting's wall or a fall on a side, no fill wall there (the kernel leaves the side to it)."""
@@ -221,6 +225,155 @@ class FillRuleTest(unittest.TestCase):
                 self.assertLessEqual(float(teeth.max()), h + roads.FILL_WALL_BAND_M + 0.03, (deg, side, "none past the body"))
 
 
+class CutRuleTest(unittest.TestCase):
+    """The kernel's rule for a cutting's wall (gradebins pair1, the weight -1 fill_walls puts on a side): the road's level for
+    FILL_FLAT_M past the core's edge, a step of WALL_T_M up to the natural ground, the same all along the road."""
+
+    def _graded(self, plan, natural):
+        def graded(px, py):
+            return grading.grade_points(px, py, np.asarray(natural(np.asarray(px), np.asarray(py)), np.float64).copy(), [plan])
+        return graded
+
+    def test_the_road_keeps_its_level_the_teeths_reach_past_the_core_then_steps_up_to_the_bank(self):
+        for deg in ANGLES_DEG:
+            spec, rh, h, t, n, s, xy, plan = road_plan(deg, weight=-1.0)
+            graded = self._graded(plan, lambda x, y: np.full(np.shape(x), Z0 + 3.0))
+            d = np.arange(0.0, h + 8.0, 0.01)
+            for side in (1.0, -1.0):
+                z = graded(side * d * n[0], side * d * n[1])
+                foot = h + grading.FILL_FLAT_M
+                self.assertTrue(np.allclose(z[d < foot - 0.01], Z0), (deg, side, "the road's level out to the step"))
+                self.assertTrue(np.allclose(z[d > foot + grading.WALL_T_M + 0.01], Z0 + 3.0), (deg, side, "the bank past it"))
+
+    def test_the_step_does_not_flicker_with_the_banks_height_round_the_gate(self):
+        """A bank hovering round WALL_CUT_M (+-0.1 m from one station to the next) made the step come and go a metre apart;
+        with the plan's weight it is the same step, the bank's height moving it by that much."""
+        spec, rh, h, t, n, s, xy, weighted = road_plan(22.5, weight=-1.0, length=120.0)
+        plain = road_plan(22.5, filled=False, length=120.0)[-1]
+
+        def bank(x, y):
+            return Z0 + grading.WALL_CUT_M + 0.1 * np.sign(np.sin((x * t[0] + y * t[1]) * 0.9))
+        d = np.arange(h + 0.5, h + 3.0, 0.25)
+        swing = []
+        for plan in (weighted, plain):
+            graded = self._graded(plan, bank)
+            zs = np.array([graded(st * t[0] + d * n[0], st * t[1] + d * n[1]) for st in np.arange(-40.0, 40.0, 0.5)])
+            swing.append(float(np.ptp(zs, axis=0).max()))
+        self.assertLess(swing[0], 0.25, "the weighted side: the bank's own swing, nothing more")
+        self.assertGreater(swing[1], 2.0 * swing[0], "the point's own height at the gate: the step on and off")
+
+    def test_the_lattice_draws_the_step_in_teeth_within_the_band_the_wall_covers(self):
+        """From the core's edge to GRID_DIAG_M past the step: the carriageway and its shoulder keep a clean edge."""
+        for deg in ANGLES_DEG:
+            spec, rh, h, t, n, s, xy, plan = road_plan(deg, weight=-1.0)
+            graded = self._graded(plan, lambda x, y: np.full(np.shape(x), Z0 + 3.0))
+            axis = np.arange(-110.0, 110.01, G)
+            X, Y = np.meshgrid(axis, axis)
+            nodes = graded(X.ravel(), Y.ravel()).reshape(X.shape)
+            band = grading.FILL_FLAT_M + grading.WALL_T_M + roadmesh.GRID_DIAG_M
+            for side in (1.0, -1.0):
+                got = []
+                d = np.arange(0.0, h + 10.0, 0.02)
+                for st in np.linspace(-20.0, 20.0, 9):
+                    px = st * t[0] + side * d * n[0]
+                    py = st * t[1] + side * d * n[1]
+                    got.append(d[np.abs(graded(px, py) - lattice_height(nodes, axis[0], axis[0], px, py)) > TOL_M])
+                teeth = np.concatenate(got)
+                self.assertTrue(len(teeth), "the lattice draws the step in teeth")
+                self.assertGreaterEqual(float(teeth.min()), h - 0.03, (deg, side, "none in the core: it recedes"))
+                self.assertLessEqual(float(teeth.max()), h + band + 0.03, (deg, side, "none past the band"))
+
+
+class CutWallBuilderTest(unittest.TestCase):
+    """roads.retaining_walls on the ground the kernel graded, at any angle to the lattice: the body from the core's edge over the
+    whole band, the flat strip, the step and the teeth's reach past it."""
+
+    def test_the_body_covers_the_band_from_the_core_to_the_teeths_reach_past_the_step(self):
+        for deg in ANGLES_DEG:
+            with self.subTest(deg=deg):
+                spec, rh, h, t, n, s, xy, plan = road_plan(deg, weight=-1.0)
+
+                def elev(la, lo):
+                    e, nn, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+                    return grading.grade_points(e, nn, np.full(np.shape(e), Z0 + 3.0), [plan])
+                pts = np.c_[xy, np.full(len(s), Z0)]
+                ws = roads.retaining_walls(FRAME, [("r", spec, pts, LON)], elev, (-128.0, -128.0, 128.0, 128.0))
+                self.assertEqual(len(ws), 2, "a wall each side")
+                band = grading.FILL_FLAT_M + grading.WALL_T_M + roadmesh.GRID_DIAG_M
+                for w in ws:
+                    face = np.abs(np.asarray(w["base"]) @ n)
+                    back = face + np.asarray(w["thick"])
+                    self.assertTrue(np.all(face - h < 0.2), "the face at the core's edge")
+                    self.assertTrue(np.all(back >= h + band - 0.02), "the body's back past the teeth's reach")
+
+
+class CutWallSelectionTest(unittest.TestCase):
+    """grading.fill_walls on a cutting: the natural ground behind the strip over the road along a run."""
+
+    def _run(self, bank, kind="primary"):
+        """fill_walls on a road along x (the left north): the natural ground bank (per vertex, m over the road) behind the
+        strip on the left, the road's level on the right."""
+        n = len(bank)
+        spec = roads.road_specs(features([[(0.0, 0.0), (200.0, 0.0)]], [kind]), None)[0]
+        rh, h = grading.plan_halves(spec)
+        plan = grading.Plan(np.c_[np.arange(n) * 4.0, np.zeros(n)], np.full(n, Z0), h, road_half=rh)
+        bank = np.asarray(bank, np.float64)
+
+        def ground(xy):
+            xy = np.asarray(xy, np.float64)
+            at = np.clip(np.round(xy[:, 0] / 4.0).astype(int), 0, n - 1)
+            return np.where(xy[:, 1] > 0, Z0 + bank[at], Z0)
+        return grading.fill_walls([("r", plan)], [spec], ground), plan
+
+    def test_a_bank_over_the_gate_along_a_run_is_a_wall_on_that_side(self):
+        changed, plan = self._run([0.0] * 2 + [3.0] * 7 + [0.0] * 3)
+        self.assertEqual(changed, 1)
+        cut = np.asarray(plan.cut)
+        self.assertTrue(np.all(cut[:, 7] == 0.0), "no wall on the side without a bank")
+        self.assertTrue(np.array_equal(np.flatnonzero(cut[:, 6] == -1.0), np.arange(2, 8)))
+
+    def test_a_bank_hovering_round_the_gate_is_one_wall_not_a_stub_a_vertex(self):
+        """Over WALL_KEEP_M all along, over WALL_CUT_M somewhere: one run (roads.retaining_walls' rule)."""
+        changed, plan = self._run([3.0, 1.5, 2.2, 1.6, 2.1, 1.7, 1.5, 3.0, 0.5, 0.5])
+        cut = np.asarray(plan.cut)
+        self.assertTrue(np.array_equal(np.flatnonzero(cut[:, 6] == -1.0), np.arange(0, 7)))
+        self.assertTrue(np.all(cut[7:, 6] == 0.0))
+
+    def test_a_low_bank_a_bank_that_never_reaches_the_gate_and_a_stub_have_none(self):
+        for bank in ([1.0] * 10, [1.9] * 10, [0.0] * 4 + [3.5] + [0.0] * 5):
+            changed, plan = self._run(bank)
+            self.assertEqual(changed, 0, bank)
+            self.assertTrue(np.all(np.asarray(plan.cut)[:, 6:8] == 0.0))
+
+    def test_a_bank_over_a_walls_height_is_a_hillside_and_keeps_the_points_own_rule(self):
+        """Over grading.wall_max_h: no weight (NaN) there, the kernel's old rule as before; the bank under it, one."""
+        changed, plan = self._run([3.0] * 3 + [30.0] * 4 + [3.0] * 3)
+        cut = np.asarray(plan.cut)[:, 6]
+        self.assertTrue(np.all(np.isnan(cut[2:7])), "the segments with a vertex on the hillside")
+        self.assertTrue(np.all(cut[[0, 1, 7, 8]] == -1.0), "the bank beside it, a wall's height")
+
+    def test_a_side_with_another_roads_core_near_keeps_the_points_own_rule(self):
+        spec = roads.road_specs(features([[(0.0, 0.0), (200.0, 0.0)]], ["primary"]), None)[0]
+        rh, h = grading.plan_halves(spec)
+        n = 10
+        xy = np.c_[np.arange(n) * 4.0, np.zeros(n)]
+        a = grading.Plan(xy, np.full(n, Z0), h, road_half=rh)
+        b = grading.Plan(xy + [0.0, h * 2 + 3.0], np.full(n, Z0), h, road_half=rh)    # (a parallel road a few metres past its edge)
+
+        def ground(p):
+            p = np.asarray(p, np.float64)
+            return np.where(np.abs(p[:, 1]) > h, Z0 + 3.0, Z0)
+        grading.fill_walls([("a", a), ("b", b)], [spec, spec], ground)
+        ca, cb = np.asarray(a.cut), np.asarray(b.cut)
+        self.assertTrue(np.all(np.isnan(ca[:, 6])), "the side the other road lies on")
+        self.assertTrue(np.all(ca[:, 7] == -1.0), "the other side: the plan's rule")
+
+    def test_every_kind_of_road_gets_the_cutting_rule(self):
+        changed, plan = self._run([3.0] * 10, kind="track")
+        self.assertEqual(changed, 1)
+        self.assertTrue(np.all(np.asarray(plan.cut)[:, 6] == -1.0))
+
+
 class FillWallSelectionTest(unittest.TestCase):
     """grading.fill_walls: which segments of a plan get the weights, from the natural ground (ground) at the strip's end
     beside each vertex."""
@@ -249,7 +402,7 @@ class FillWallSelectionTest(unittest.TestCase):
 
     def _window(self):
         """A height inside the wall window for the grid in use."""
-        inside = [dz for dz in np.arange(2.05, 9.9, 0.05) if grading.fill_wall_at(dz, 10.0)]
+        inside = [dz for dz in np.arange(0.05, 9.9, 0.05) if grading.fill_wall_at(dz, 10.0)]
         return float(inside[0])
 
     def test_a_run_of_vertices_over_the_natural_ground_by_a_wall_window_gets_the_weights_on_that_side(self):
@@ -258,16 +411,16 @@ class FillWallSelectionTest(unittest.TestCase):
         self.assertEqual(changed, 1)
         cut = np.asarray(plan.cut)
         self.assertEqual(cut.shape, (11, grading.CUT_COLS))
-        self.assertTrue(np.array_equal(np.flatnonzero(np.isfinite(cut[:, 6])), np.arange(2, 7)))   # (between two filled vertices)
-        self.assertFalse(np.isfinite(cut[:, 7]).any(), "no weight on the side the road does not stand over")
-        self.assertTrue(np.all(cut[2:7, 6] == 1.0))
+        self.assertTrue(np.array_equal(np.flatnonzero(cut[:, 6] == 1.0), np.arange(2, 7)))   # (between two filled vertices)
+        self.assertTrue(np.all(cut[:, 7] == 0.0), "no wall on the side the road does not stand over (weight 0: decided)")
+        self.assertTrue(np.all(cut[[0, 1, 7, 8, 9, 10], 6] == 0.0))
         self.assertFalse(np.isfinite(cut[:, :6]).any())
 
     def test_a_road_on_its_ground_a_fill_of_a_gentle_height_and_a_natural_slope_have_none(self):
         changed, plan = self._run([0.0] * 12)
         self.assertEqual(changed, 0)
-        self.assertIsNone(plan.cut)
-        changed, plan = self._run([1.5] * 12)           # (under the cuttings' gate: no wall's height)
+        self.assertTrue(np.all(np.asarray(plan.cut)[:, 6:8] == 0.0), "decided: no wall, the kernel's blend, not the point's own height")
+        changed, plan = self._run([1.0] * 12)           # (a gentle fill: teeth under the step)
         self.assertEqual(changed, 0)
         changed, plan = self._run([11.0] * 12)          # (over a wall's: the slope is the embankment's)
         self.assertEqual(changed, 0)
@@ -283,7 +436,7 @@ class FillWallSelectionTest(unittest.TestCase):
         self.assertEqual(changed, 0)
         changed, plan = self._run([lo] * 4 + [0.0] + [lo] * 4 + [0.0] * 3)
         self.assertEqual(changed, 1)
-        w = np.isfinite(np.asarray(plan.cut)[:, 6])
+        w = np.asarray(plan.cut)[:, 6] == 1.0
         self.assertTrue(w[:8].all() and not w[9:].any())
 
     def test_a_cuttings_wall_or_fall_on_the_side_stays_and_a_tunnels_plans_have_none(self):
@@ -299,7 +452,7 @@ class FillWallSelectionTest(unittest.TestCase):
         self.assertEqual(got.shape, (11, grading.CUT_COLS))
         self.assertTrue(np.array_equal(got[3, 0:3], [5.0, 12.0, 6.0]))
         self.assertFalse(np.isfinite(got[[3, 5], 6]).any(), "no weight on a side with a wall or a fall of its own")
-        self.assertTrue(np.isfinite(got[[2, 4, 6], 6]).all() and np.isfinite(got[:, 7]).all())
+        self.assertTrue(np.all(got[[2, 4, 6], 6] == 1.0) and np.all(got[:, 7] == 1.0))
         spec, plan = self._plan(12)
         self.assertEqual(grading.fill_walls([("r" + grading.TUNNEL_TAG, plan)], [spec],
                                             lambda xy: np.full(len(xy), Z0 - lo)), 0)

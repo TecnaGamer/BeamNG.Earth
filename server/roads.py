@@ -12481,9 +12481,9 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
         width = spec.width if spec.mountain else max(spec.width, carriageway(spec.cls, spec.kind, True, None, spec.oneway))
         core = width / 2 + grading.shoulder(spec)
         # (the grading's sharp cuttings end the core sooner; its flat strip behind a wall reaches past the core)
-        steps = np.arange(width / 2 + 0.5, core + grading.WALL_FLAT_M + 1.51, 1.0)
+        steps = np.arange(width / 2 + 0.5, core + grading.FILL_FLAT_M + 1.51, 1.0)
         for side in (1.0, -1.0):
-            probe = xy + nl * side * (core + grading.WALL_FLAT_M + grading.WALL_T_M + WALL_PROBE_M)
+            probe = xy + nl * side * (core + grading.FILL_FLAT_M + grading.WALL_T_M + WALL_PROBE_M)
             pts_all.append(probe)
             info.append((xy, z, nl * side, core, inside, width / 2, steps, spec.cls in CONCRETE_WALL_CLASSES,
                          fid, not spec.urban,
@@ -12553,14 +12553,16 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
             first = np.argmax(up, axis=1)
             # (the grading's flat strip in front of the climb: the terrain's 2 m lattice draws a step at an angle to it
             # as teeth reaching up to a grid diagonal out, under the wall's top; its face in front of them)
-            face = np.where(up.any(axis=1), np.maximum(steps[first] - 1.0 - grading.WALL_FLAT_M, rh + 0.1), face)
+            face = np.where(up.any(axis=1), np.maximum(steps[first] - 1.0 - grading.FILL_FLAT_M, rh + 0.1), face)
             face = np.where(at, lvl, face)     # (where two roads at other levels meet: the one line)
             # its top back to where the graded ground is up again (no trough behind it: a street above drove into one)
             full = gs >= (z + WALL_FULL * (gg - z))[:, None]
             back = np.argmax(full, axis=1)
             # (and a grid diagonal more: the terrain's lattice reaches the top that much later between its points)
+            # (the band's whole depth at most: the flat strip, the step and the teeth's reach past it, grading.FILL_FLAT_M)
+            band = grading.FILL_FLAT_M + grading.WALL_T_M + roadmesh.GRID_DIAG_M
             thick = np.where(full.any(axis=1), np.clip(steps[back] - face + WALL_DIAG_M, WALL_THICK_MIN_M,
-                                                       WALL_THICK_MAX_M), thick)
+                                                       max(WALL_THICK_MAX_M, band)), thick)
             # (its top over the highest graded ground under it, not the one probe's: the bank poked through it in
             # patches where that probe sat in a dip)
             under = steps[None, :] >= face[:, None]
@@ -12568,15 +12570,15 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
             # (and never past where the ground behind falls away again: between a hairpin's legs the bank tops out
             # and drops to the other leg, and the top hung out over that slope, its underside seen from the road
             # above, the Stelvio Pass 2026-10-21)
-            # (only past the grading's own flat strip and its climb behind the face, grading.WALL_FLAT_M / WALL_T_M:
+            # (only past the grading's own flat strip and its climb behind the face, grading.FILL_FLAT_M / WALL_T_M:
             # that strip at the road's level read as the ground falling away and cut the top to its coping, a trench
             # between the wall and the slope behind it, "they float in front of the terrain", the user 2026-10-31)
             low = (gs < (top_g - WALL_SLAB_DZ)[:, None]) & (steps[None, :] > np.maximum(
-                face + 1.0, core + grading.WALL_FLAT_M + grading.WALL_T_M)[:, None])
+                face + 1.0, core + grading.FILL_FLAT_M + grading.WALL_T_M)[:, None])
             reach = np.where(low.any(axis=1), steps[np.argmax(low, axis=1)] - face, np.inf)
             thick = np.minimum(thick, np.maximum(reach - 0.5, WALL_COPING_MIN_M))
             # the graded ground at the top's back edge (the steps', then the probe's: back_top)
-            pd = core + grading.WALL_FLAT_M + grading.WALL_T_M + WALL_PROBE_M
+            pd = core + grading.FILL_FLAT_M + grading.WALL_T_M + WALL_PROBE_M
             ground_at = lambda d, idx: np.array([dnp.interp(d[n], np.r_[steps, pd], np.r_[gs[m], gg[m]])  # noqa: E731
                                                  for n, m in enumerate(idx)])
         if parapets is not None and need:

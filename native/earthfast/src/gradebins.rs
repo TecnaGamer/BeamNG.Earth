@@ -316,11 +316,9 @@ fn pre<const SIDE: bool>(g: &Seg, qx: f64, qy: f64, tu: f64, t: f64, d: f64, p: 
         side = if g.l2 > 1e-12 { (qx * g.aby - qy * g.abx).abs() / g.len } else { d };
         ahead = if g.l2 > 1e-12 { (-along).max(along - g.len).max(0.0) } else { 0.0 };
     }
-    // (a fill wall's weight on the point's side of the segment: 0 where the plan has none)
-    let fill = if SIDE {
-        let w = g.fill[if (qx * g.aby - qy * g.abx) < 0.0 { 0 } else { 1 }];
-        if w.is_finite() { w } else { 0.0 }
-    } else { 0.0 };
+    // (the side wall's weight on the point's side of the segment: +1 a fill's wall, -1 a cutting's, 0 none; NaN the plan has none
+    // for the side: its own wall's rule, or none)
+    let fill = if SIDE { g.fill[if (qx * g.aby - qy * g.abx) < 0.0 { 0 } else { 1 }] } else { f64::NAN };
     Pre { h, rh, qx, qy, d, target, past, cwall, ctop, creach, side, ahead, fill }
 }
 
@@ -504,12 +502,21 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
     // (on a cutting's side the core ends at its wall; where the ground falls away there the road ends)
     let hs = if cwall.is_finite() { q.h.min(cwall) } else { q.h };
     let drop = cwall.is_finite() && !ctop.is_finite() && d > cwall;
-    let wall = st.beff - target > p.wall_cut && ahead < side && ahead < p.wall_ahead;
+    // a cutting's wall: the plan's weight on the segment's side (q.fill < 0: grading.fill_walls) where the ground stands over the
+    // road there, beside the core, whatever the point's place along the segment or past its end: every pair of the run says the
+    // same (a pair that stopped at wall_ahead past its end left the next segment's slope in front of the step, a sawtooth a
+    // segment long); on a side the plan gives no weight (its own wall's: the data's, the levels'), the ground more than
+    // wall_cut over the road, beside the segment, as it always was
+    let wall = if q.fill.is_finite() { q.fill < 0.0 && st.beff > target && side > hs }
+               else { st.beff - target > p.wall_cut && ahead < side && ahead < p.wall_ahead };
     let tt = if wall { p.wall_t }
              else if g.steep { (p.steep_run * (target - st.beff).abs()).clamp(p.steep_t_min, p.t_max) }
              else { (p.slope_run * (target - st.beff).abs()).clamp(p.t_min, p.t_max) };
-    // a wall: flat on one terrain step behind it (no slope in front of its face), then up
-    let mut flat = if wall { p.wall_flat } else { 0.0 };
+    // a wall: flat at the road's level for the terrain lattice's teeth reach (fill_flat) behind it, none of them coming into the
+    // core, then up
+    // (a wall of the plan's weight: the teeth's reach; the point's own rule's, a side with a wall of its own, the one grid step it
+    // always was: the data's and the levels' bands behind their faces are laid out for it)
+    let mut flat = if wall { if q.fill.is_finite() { p.fill_flat } else { p.wall_flat } } else { 0.0 };
     // a fill wall (the plan's weight q.fill on the segment's side, where the road stands over the ground there and
     // the plan has no cutting's wall or fall): the road's level flat for fill_flat past the core, then a step to the
     // natural ground, the slope's run taken out by the weight. Every pair says the same wherever the point lies along

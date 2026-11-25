@@ -7641,6 +7641,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 582: fill walls (gradebins pair1: the plan's weight on a segment's side, cut columns 6 and 7 (planset NCUT 8), gives the road's
     // level flat for fill_flat past the core's edge, then a step to the natural ground; grade_points / grade_points_binned take fill_flat
     // after wall_ahead)
-    m.add("VERSION", 582)?;
+    // 583: the cutting's wall by the plan's weight too (those columns negative: -1 a cutting's wall, +1 a fill's): the ground over the
+    // road there, the same along the plan's run, not the point's own height over the road's (it flickered round wall_cut); every wall's
+    // flat strip is fill_flat (the lattice's teeth reach) behind the core
+    m.add("VERSION", 583)?;
     Ok(())
 }
