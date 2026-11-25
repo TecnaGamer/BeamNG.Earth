@@ -1472,7 +1472,8 @@ mod tests {
             let place = crate::io::Place { segs: vec![seg("p", &[[-600.0, 0.0], [600.0, 0.0]], Some((0.45, 0.55)))], rails, ..Default::default() };
             let net = crate::net::build(&place, &[0]);
             store_clear();
-            let g = |p: &[P2]| -> Vec<f64> { p.iter().map(|_| 10.0).collect() };
+            // (the line in a 30 m cutting 6 m deep: under the deck's own ground, which spans it)
+            let g = |p: &[P2]| -> Vec<f64> { p.iter().map(|q| if q[0].abs() < 15.0 { 4.0 } else { 10.0 }).collect() };
             let pr = solve(&net, &g, None);
             let (s, _) = net.strokes[0].line.project([0.0, 0.0], 0.0, net.strokes[0].len());
             (pr.at(0, s), net.rail_floors.len())
@@ -1482,7 +1483,7 @@ mod tests {
         assert!(z0 < 13.0, "{z0}");
         let (z1, n1) = solve_with(vec![(vec![[0.0, -50.0], [0.0, 50.0]], 7.0)]);
         assert_eq!(n1, 1);
-        assert!(z1 >= 10.0 + 7.0 + crate::net::DECK_FULL_M - 0.1, "{z1}");
+        assert!(z1 >= 4.0 + 7.0 + crate::net::DECK_FULL_M - 0.1, "{z1}");
     }
 
     /// (M5) Twin decks side by side take one height: two one-way viaducts 9 m apart over ground that differs by 3 m

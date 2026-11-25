@@ -101,6 +101,18 @@ FORMAT = 2                  # the shadow records' JSON (their folder name; 2: M2
 HEIGHTS_KERNEL = 626        # earthfast.roadsys_heights_reads / roadsys_heights
 STRUCTURES_KERNEL = 603     # earthfast.RoadsysEnds / roadsys_handover_zone, road_exact's "ho" parts
 SURFACE_KERNEL = 626        # earthfast.roadsys_decks
+# (627, the deck-end skew audit 2026-11-25) BNE_ROADSYS=surface's deck ends cut along the line they cross where the rule
+# (native/roadsys skew.rs, roadshape's: a structure of 100 m or less, a crossing 5 degrees or more off square, the US
+# bridge inventory's skew first) says so: the hand-over's ends (RoadsysEnds' crossed / nbi) and the deck faces' end rows
+SKEW = SURFACE
+SKEW_KERNEL = 627
+WATER_FN = None             # water_fn(cell key) -> the water Features (set_water_fn: mapdata.MapData), None: none read
+
+
+def set_water_fn(fn):
+    """The process's water layer reader (mapdata.MapData, at its start): the waterways a deck end may cross."""
+    global WATER_FN
+    WATER_FN = fn
 XSEC = os.environ.get("BNE_ROADSYS_XSEC", "off").strip().lower() == "on"
 XSEC_KERNEL = 617           # earthfast.RoadsysSegments(xsec=...), native/roadsys xsec.rs (617: with areas=, fit= in one binary; trunk 616 has no xsec)
 
@@ -1219,6 +1231,26 @@ def _ends_from(frame, cell_fn, keys, reg):
                 hw = max(hw, xs[feature(fid)])
             rows.setdefault((kind, fid, j), (ll, hw))     # (a feature in several cells: once)
     br, gr, tu = [], [], []
+    crossed = []                # (627, SKEW) the railways and waterways that may pass under a structure
+    if SKEW:
+        for k in keys:
+            try:
+                feats = cell_fn(k)
+                rails = _rails(feats) if feats is not None and len(feats) else []
+                waters = _waterways_ll(k)
+            except Exception as ex:             # (no ends rather than ends skewed short: nothing built with it kept)
+                log.debug("roadsys hand-over: cell %s: %s: %s", k, type(ex).__name__, ex)
+                import revisit
+                revisit.fault()
+                return None
+            for kind, lines in ((1, [r[1] for r in rails]), (3, waters)):
+                for ll in lines:
+                    e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
+                    xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))))
+                    if len(xy) >= 2 and not (xy[:, 0].max() < reg[0] or xy[:, 0].min() > reg[2] or xy[:, 1].max() < reg[1]
+                                             or xy[:, 1].min() > reg[3]):
+                        crossed.append((kind, xy))
+        crossed.sort(key=lambda c: (c[0], c[1].tobytes()))       # (one order whatever the cells' order)
     for (kind, fid, j) in sorted(rows):
         ll, hw = rows[(kind, fid, j)]
         if len(ll) < 2:
@@ -1234,7 +1266,60 @@ def _ends_from(frame, cell_fn, keys, reg):
             # nodes before the portal, as at a ground end; deck ends onto tunnels had no hand-over, 65-145 mm lips at
             # Fort Pitt's portals)
             gr.append((xy, hw))
+    if SKEW:
+        fast.require(SKEW_KERNEL, "the deck ends' skew")
+        import roadshape
+        nbi = [roadshape.nbi_record(xy, frame) for xy, _hw in br]
+        return fast._ef.RoadsysEnds(br, gr, tu, float(heightmap.SQUARE), [(xy, kind) for kind, xy in crossed],
+                                    [None if r is None else tuple(float(v) for v in r) for r in nbi])
     return fast._ef.RoadsysEnds(br, gr, tu, float(heightmap.SQUARE))
+
+
+def tile_skews(frame, cell_fn, box):
+    """(627) [(x, y, dx, dy)] in frame of the skewed structure ends within the frame box (the hand-over's decisions,
+    ends_of_cell of the cells under it: one decision per end whoever asks), sorted; None when a cell cannot be read."""
+    import mapcells
+    x0, y0, x1, y1 = box
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1, x1, x0]), np.array([y0, y0, y1, y1]), np.zeros(4))
+    keys = mapcells.cells_for_bbox(float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)))
+    out = set()
+    for k in sorted(keys, key=str):
+        ends = ends_of_cell(frame, cell_fn, k)
+        if ends is None:
+            return None
+        for x, y, dx, dy in ends.skews():
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                out.add((round(float(x), 6), round(float(y), 6), float(dx), float(dy)))
+    return sorted(out)
+
+
+def _waterways_ll(key):
+    """(627) [lon / lat (n, 2)] of map cell key's mapped waterways (roadshape.WATERWAYS, not in a tunnel or culvert),
+    read through WATER_FN (none without one), memoised on the cell's water Features."""
+    if WATER_FN is None:
+        return []
+    f = WATER_FN(key)
+    if f is None or not len(f):
+        return []
+    got = f.__dict__.get("_roadsys_waterways")
+    if got is not None:
+        return got
+    import genground
+    import roadshape
+    out = []
+    for i in np.flatnonzero(np.asarray(f.kind) == 2):
+        tags = genground._tags(f, i)
+        if tags.get("tunnel") or str(tags.get("location") or "") == "underground":
+            continue
+        way = str(tags.get("waterway") or genground._attr(f, "class", i) or "")
+        if way not in roadshape.WATERWAYS:
+            continue
+        for ring in (r for part in f.parts(i) for r in part):
+            ll = np.asarray(ring, np.float64)[:, :2]
+            if len(ll) >= 2:
+                out.append(ll)
+    f.__dict__["_roadsys_waterways"] = out
+    return out
 
 
 def _xsec_extents(cell_fn, key):
@@ -1448,6 +1533,14 @@ def deck_faces(frame, exact, bridges, cells, country=None):
             DECK_STATS["short"] += 1
         return None
     segs, boxes, ncells = read
+    skews = []
+    if SKEW:
+        # (627: the hand-over's skewed ends round the tile, its own frame: the faces' end rows along the same lines)
+        skews = tile_skews(frame, cell_fn, (x0 - DECK_KEEP_M, y0 - DECK_KEEP_M, x1 + DECK_KEEP_M, y1 + DECK_KEEP_M))
+        if skews is None:
+            with _memo_lock:
+                DECK_STATS["short"] += 1
+            return None
     lines = [(feature(fid), np.ascontiguousarray(np.c_[xy[:, :2], z], np.float64)) for fid, _sp, xy, z in got]
     spec_of, depth_of = {}, {}
     dd = getattr(bridges, "depth_of", None)
@@ -1468,6 +1561,9 @@ def deck_faces(frame, exact, bridges, cells, country=None):
         return np.asarray(bridges._ground(np.column_stack((e, n))), np.float64)
     try:
         kw = {"dump": os.path.join(DECK_INPUTS, f"decks_{float(frame.lat0):.6f}_{float(frame.lon0):.6f}.rsdk")} if DECK_INPUTS else {}
+        if skews:
+            fast.require(SKEW_KERNEL, "roadsys_decks(skews=)")
+            kw["skews"] = skews
         (V, T, K, F, D, feats, runs, MV, MT, MC, fallback, js) = fast._ef.roadsys_decks(
             segs, quad, ground, lines, CUT, [list(map(float, b)) for b in boxes], **kw)
     except Exception as ex:
@@ -1544,6 +1640,7 @@ def deck_faces(frame, exact, bridges, cells, country=None):
                                  inner=r[:, :2] - o * roadmesh.PARAPET_W,
                                  line=r[:, :2] - o * (roadmesh.PARAPET_W * 0.5), ends=list(ends), nose=False, v=None))
     out[0]["deck_runs"] = runs_out
+    out[0]["rs_skews"] = list(skews)       # (627: the ground roads' ends there cut along them too, roads.py)
     # the markings on the decks' faces
     MV, MT, MC = np.asarray(MV, np.float64), np.asarray(MT, np.int64), np.asarray(MC, np.int64)
     for colour in sorted(set(MC.tolist())):

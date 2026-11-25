@@ -465,14 +465,21 @@ fn lines2(name: &str, v: &[(PyReadonlyArray2<'_, f64>, f64)]) -> PyResult<Vec<ro
 /// (M3, BNE_ROADSYS=structures) The ground ends of the deck parts round a place in one frame (native/roadsys
 /// handover.rs): bridges [(line (n, 2), half width)], grounds the same (every ground part of a road), tunnels [line];
 /// s the terrain lattice's square. drops(x, y): the m every evaluator of the physics ground lowers it by there.
+/// (627) crossed [(line (n, 2), kind: 1 railway, 3 waterway)] and nbi [None or (skew deg, length m, cos, sin)] per
+/// bridge part: the ends skewed by roadsys skew.rs's rule (None: square, as before); skews() lists them.
 #[pyclass(frozen)]
-pub struct RoadsysEnds { ends: roadsys::handover::Ends, src: (Vec<roadsys::handover::Part>, Vec<roadsys::handover::Part>, Vec<Vec<[f64; 2]>>) }
+#[allow(clippy::type_complexity)]
+pub struct RoadsysEnds { ends: roadsys::handover::Ends,
+                         src: (Vec<roadsys::handover::Part>, Vec<roadsys::handover::Part>, Vec<Vec<[f64; 2]>>, Option<roadsys::handover::SkewIn>) }
 
 #[pymethods]
 impl RoadsysEnds {
     #[new]
+    #[pyo3(signature = (bridges, grounds, tunnels, s, crossed=None, nbi=None))]
+    #[allow(clippy::type_complexity)]
     fn new(bridges: Vec<(PyReadonlyArray2<'_, f64>, f64)>, grounds: Vec<(PyReadonlyArray2<'_, f64>, f64)>,
-           tunnels: Vec<PyReadonlyArray2<'_, f64>>, s: f64) -> PyResult<Self> {
+           tunnels: Vec<PyReadonlyArray2<'_, f64>>, s: f64, crossed: Option<Vec<(PyReadonlyArray2<'_, f64>, i64)>>,
+           nbi: Option<Vec<Option<(f64, f64, f64, f64)>>>) -> PyResult<Self> {
         let b = lines2("RoadsysEnds bridges", &bridges)?;
         let g = lines2("RoadsysEnds grounds", &grounds)?;
         let mut t = Vec::with_capacity(tunnels.len());
@@ -482,10 +489,30 @@ impl RoadsysEnds {
             t.push((0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]]]).collect::<Vec<_>>());
         }
         if !(s > 0.0) { return Err(PyValueError::new_err("RoadsysEnds: the lattice square must be > 0")); }
-        let ends = roadsys::handover::Ends::new(&b, g.clone(), &t, s);
-        Ok(RoadsysEnds { ends, src: (b, g, t) })
+        let sk = match crossed {
+            None => None,
+            Some(cr) => {
+                let mut k = roadsys::handover::SkewIn::default();
+                for (p, kind) in &cr {
+                    let a = p.as_array();
+                    if a.ncols() != 2 || !(0..=255).contains(kind) { return Err(PyValueError::new_err("RoadsysEnds crossed: (n, 2) lines, kinds 0-255")); }
+                    k.crossed.push(((0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]]]).collect(), *kind as u8));
+                }
+                let nb = nbi.unwrap_or_default();
+                if !nb.is_empty() && nb.len() != b.len() { return Err(PyValueError::new_err("RoadsysEnds nbi: one per bridge part")); }
+                k.nbi = nb.into_iter().map(|r| r.map(|(a, l, c, sn)| [a, l, c, sn])).collect();
+                if k.nbi.iter().flatten().any(|r| r.iter().any(|v| !v.is_finite())) { return Err(PyValueError::new_err("RoadsysEnds nbi: finite values")); }
+                Some(k)
+            }
+        };
+        let ends = roadsys::handover::Ends::build(&b, g.clone(), &t, s, sk.as_ref());
+        Ok(RoadsysEnds { ends, src: (b, g, t, sk) })
     }
     fn count(&self) -> usize { self.ends.ends.len() }
+    /// (627) [(x, y, dx, dy)] of the skewed ends: the end's point and its end line (unit, to the left of the way in).
+    fn skews(&self) -> Vec<(f64, f64, f64, f64)> {
+        self.ends.ends.iter().filter_map(|e| e.dir.map(|d| (e.p[0], e.p[1], d[0], d[1]))).collect()
+    }
     /// [(x, y)] of each end's point (tests, probes).
     fn points(&self) -> Vec<(f64, f64)> { self.ends.ends.iter().map(|e| (e.p[0], e.p[1])).collect() }
     fn boxes(&self, grow: f64) -> Vec<[f64; 4]> { self.ends.boxes(grow) }
@@ -529,8 +556,8 @@ pub fn roadsys_handover_input<'py>(py: Python<'py>, ends: PyRef<'py, RoadsysEnds
                                    t: PyReadonlyArray2<'py, i64>, m: PyReadonlyArray1<'py, i64>, top: u32, i0: i64, j0: i64, s: f64,
                                    z: PyReadonlyArray2<'py, f64>, drop: PyReadonlyArray2<'py, f64>, tile_uv: f64) -> PyResult<Bound<'py, PyBytes>> {
     let (soup, g) = zone_args(&p, &uv, &t, &m, i0, j0, s, &z, &drop, tile_uv)?;
-    let (b, gr, tu) = &ends.src;
-    Ok(PyBytes::new(py, &roadsys::handover::encode_input(b, gr, tu, &soup, top, &g, tile_uv)))
+    let (b, gr, tu, sk) = &ends.src;
+    Ok(PyBytes::new(py, &roadsys::handover::encode_input(b, gr, tu, &soup, top, &g, tile_uv, sk.as_ref())))
 }
 
 /// (M3) A deck's shape rebuilt round its ground ends on one anchor's terrain lattice (handover.rs zone): positions
@@ -568,11 +595,12 @@ pub fn roadsys_handover_zone<'py>(py: Python<'py>, ends: PyRef<'py, RoadsysEnds>
 /// marking colours (0 white, 1 yellow), fallback features, stats JSON).
 #[pyfunction]
 /// dump: a file to write the build's whole input to (deck::encode_input), for `roadsys decks` on another platform.
-#[pyo3(signature = (segs, quad, ground, lines, cut = (4000.0, 2000.0), boxes = None, dump = None))]
+/// skews (627): [(x, y, dx, dy)] the skewed structure ends (RoadsysEnds.skews in the tile's frame): their end rows.
+#[pyo3(signature = (segs, quad, ground, lines, cut = (4000.0, 2000.0), boxes = None, dump = None, skews = None))]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn roadsys_decks<'py>(py: Python<'py>, segs: PyRef<'py, RoadsysSegments>, quad: [[f64; 2]; 4], ground: Bound<'py, PyAny>,
                           lines: Vec<(String, PyReadonlyArray2<'py, f64>)>, cut: (f64, f64), boxes: Option<Vec<[f64; 4]>>,
-                          dump: Option<String>)
+                          dump: Option<String>, skews: Option<Vec<(f64, f64, f64, f64)>>)
                           -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>,
                                        Bound<'py, PyArray1<f64>>, Vec<String>, Vec<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, bool, i64)>,
                                        Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>, Vec<String>, String)> {
@@ -605,10 +633,12 @@ pub fn roadsys_decks<'py>(py: Python<'py>, segs: PyRef<'py, RoadsysSegments>, qu
         })
     };
     let op = opts_of(&segs, cut);
-    let o = py.detach(|| roadsys::deck::build(place, quad, &g_of, &dl, op));
+    let sk: Vec<[f64; 4]> = skews.unwrap_or_default().into_iter().map(|(a, b, c, d)| [a, b, c, d]).collect();
+    if sk.iter().any(|q| q.iter().any(|v| !v.is_finite())) { return Err(PyValueError::new_err("roadsys_decks: skews must be finite")); }
+    let o = py.detach(|| roadsys::deck::build_skewed(place, quad, &g_of, &dl, op, &sk));
     if let Some(e) = err.lock().unwrap().take() { return Err(e); }
     if let Some(path) = dump {
-        let b = roadsys::deck::encode_input(place, quad, cut, &asked.lock().unwrap(), &dl, op.areas);
+        let b = roadsys::deck::encode_input_skewed(place, quad, cut, &asked.lock().unwrap(), &dl, op.areas, &sk);
         std::fs::write(&path, b).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
     }
     let a3 = |v: &[[f64; 3]]| { let mut a = numpy::ndarray::Array2::<f64>::zeros((v.len(), 3)); for (i, q) in v.iter().enumerate() { for c in 0..3 { a[[i, c]] = q[c]; } } a };

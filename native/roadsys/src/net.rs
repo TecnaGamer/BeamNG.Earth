@@ -154,6 +154,8 @@ pub struct Stroke {
                                        // (xsec::K_BUS, K_SOFT) or an advisory cycle lane's dashed line (OVER_ADV)
     pub area: Vec<crate::areas::Knot>, // (BNE_ROADSYS_AREAS) its mapped road areas' program: lane factor, outer shoulders,
                                        // shift, strip factor (the cross-section's strips, BNE_ROADSYS_XSEC)
+    pub skews: Vec<(f64, f64)>,        // (627) (station, slope): a skewed end row there, its boundary at offset t on
+                                       // station s + t * slope (deck.rs set_skews; part.rs rows)
 }
 
 /// Stroke.over's mark for an advisory cycle lane (markings only, never a face kind).
@@ -1112,7 +1114,7 @@ fn strokes(net: &mut Net) {
             anchor_r: Prog::default(), right_windows: Vec::new(), stations: Vec::new(), dense: Vec::new(), sup: merged,
             cls, cls_s: seg.cls_s.clone(), kmh: if kmh > 0.0 { kmh } else { 50.0 }, region, snap0: None, snap1: None,
             cut0: 0.0, cut1: 0.0, absorbed: false, lane_scale: Vec::new(), cap_nbrs: Vec::new(), reach: 0.0, over: Vec::new(),
-            area: Vec::new(),
+            area: Vec::new(), skews: Vec::new(),
         });
     }
     for s in &net.strokes {

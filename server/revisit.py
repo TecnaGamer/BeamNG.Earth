@@ -510,8 +510,10 @@ def keyed_env(k):
 # builder's lengthened ranges) for the structures and the hand-over; clearances by the lower road's class and maxheight
 # signs, the road under cut up to 5 m; each structure's own depth by its design and span (earthfast 626, QP_FORMAT 7).
 # BNE_ROADSYS=surface 3: decks drawn their whole depth, the lengthened stretch past a mapped end drawn as ground road.
+# BNE_ROADSYS=surface 4 (earthfast 627): the deck ends skewed by the deck-end skew rule (native/roadsys skew.rs: the
+# hand-over's ends, the faces' end rows, the ground roads' ends there), the waterways and the bridge inventory read.
 ROADSYS_STRUCTURES_VERSION = 1
-ROADSYS_SURFACE_VERSION = 3
+ROADSYS_SURFACE_VERSION = 4
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
                    "BNE_ROADSHAPE": 11, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 4, "BNE_ROADSYS_XSEC": 1}

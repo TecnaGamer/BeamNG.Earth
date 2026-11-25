@@ -13837,6 +13837,32 @@ def _reach_tag(ch, line, st):
                  "f": sub[:, 3].astype(np.int64).tolist()}
 
 
+RS_SKEW_MATCH_M = 1.5     # m a ground road chunk's end may lie off a skewed deck end (roadsys deck.rs SKEW_MATCH_M)
+
+
+def _rs_skew_ground_ends(chunks, skews):
+    """(BNE_ROADSYS=surface, 627) Each ground road chunk whose end lies at a skewed deck end (roadsys.tile_skews) takes
+    its end line ("rs_sk0" / "rs_sk1": unit, to the chunk's left there; roadmesh.ribbon_pairs cuts the ribbon along
+    it), so the asphalt meets the deck's skewed end row. In place."""
+    pts = np.asarray([s[:2] for s in skews], np.float64)
+    dirs = np.asarray([s[2:] for s in skews], np.float64)
+    for c in chunks:
+        if c.get("deck") or c.get("tunnel") or c.get("rs_face") or c.get("rs_mark") or c.get("fixed"):
+            continue
+        n = np.asarray(c.get("n"), np.float64)
+        if n.ndim != 2 or len(n) < 2:
+            continue
+        for e, at, nxt in ((0, 0, 1), (1, -1, -2)):
+            d2 = dnp.hypot(pts[:, 0] - n[at, 0], pts[:, 1] - n[at, 1])
+            j = int(np.argmin(d2))
+            if float(d2[j]) > RS_SKEW_MATCH_M:
+                continue
+            t = n[at, :2] - n[nxt, :2] if e == 1 else n[nxt, :2] - n[at, :2]
+            left = np.array([-t[1], t[0]])
+            d = dirs[j] if float(dirs[j] @ left) >= 0.0 else -dirs[j]
+            c[f"rs_sk{e}"] = [round(float(d[0]), 6), round(float(d[1]), 6)]
+
+
 def _deck_clearance(ch):
     """A generated deck chunk's (points, half-width per segment, slab-plus-girder depth) for RoadClearance."""
     half = np.asarray(ch.get("ws", ch["w"]), np.float64) / 2
@@ -14315,6 +14341,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 f = ch.get("fid")
                 if (f is not None and roadsys.feature(f) in covered) or (f is None and not ch.get("tunnel")):
                     ch["rs_hide"] = True
+            skews = face_chunks[0].get("rs_skews") if face_chunks else None
+            if skews:
+                _rs_skew_ground_ends(chunks, skews)
             chunks.extend(face_chunks)
     if tunnels is not None:                     # TunnelProfiles: road surfaces and lines through tunnels
         tch = _tunnel_chunks(tunnels, cells, (x0, y0, x1, y1), terrain_paint)

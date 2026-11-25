@@ -509,6 +509,33 @@ fn stations(st: &Stroke) -> Vec<f64> {
     for k in &st.slots { for s in [k.alive.0, k.alive.1] { if s.is_finite() && s > a && s < b { v.push(s); } } }
     v.sort_by(|x, y| x.partial_cmp(y).unwrap());
     v.dedup_by(|x, y| (*x - *y) < 0.05);
+    // (627) a skewed end row's span is its own: no other row inside it (they would cross it)
+    if !st.skews.is_empty() {
+        let mut off = Vec::new();
+        let spans: Vec<(f64, f64, f64)> = st.skews.iter().map(|&(s, k)| {
+            st.offsets(s, &mut off);
+            let w = off.iter().fold(0.0f64, |m, &t| m.max(absf(t)));
+            (s, s - absf(k) * w - SKEW_GAP_M, s + absf(k) * w + SKEW_GAP_M)
+        }).collect();
+        v.retain(|&x| spans.iter().all(|&(s, a, b)| absf(x - s) < 1e-9 || x <= a || x >= b));
+        for &(s, _, _) in &spans { if !v.iter().any(|&x| absf(x - s) < 1e-9) { v.push(s); } }
+        v.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        let mut out = Vec::with_capacity(v.len() * 2);
+        for k in 0..v.len() {
+            out.push(v[k]);
+            if k + 1 < v.len() {
+                let (s0, s1) = (v[k], v[k + 1]);
+                let mid = (s0 + s1) / 2.0;
+                // (no fill rows inside a span)
+                if spans.iter().any(|&(_, a, b)| mid > a && mid < b) { continue; }
+                let dense = st.dense.iter().any(|&(x, y)| mid >= x && mid <= y);
+                let step = if dense { 2.0 } else { 10.0 };
+                let n = ((s1 - s0) / step).ceil() as usize;
+                for i in 1..n { out.push(s0 + (s1 - s0) * i as f64 / n as f64); }
+            }
+        }
+        return out;
+    }
     // fill: 2 m inside events, else 10 m
     let mut out = Vec::with_capacity(v.len() * 2);
     for k in 0..v.len() {
@@ -524,6 +551,9 @@ fn stations(st: &Stroke) -> Vec<f64> {
     }
     out
 }
+
+/// (627) m kept free of other rows past a skewed end row's span either side
+pub const SKEW_GAP_M: f64 = 0.5;
 
 pub fn crossfall(st: &Stroke, s: f64, off: &[f64], sup: u8) -> Vec<f64> {
     let cf = if sup == SUP_STRUCT { 0.025 } else { 0.02 };
@@ -623,7 +653,13 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
                     }
                 }
             }
-            let pts_row: Vec<P2> = ts.iter().map(|&t| add(p, scale(n, t))).collect();
+            // (627) a skewed end row: each boundary `t * slope` along the stroke
+            let skew_k = st.skews.iter().find(|x| absf(x.0 - s) < 1e-9).map(|x| x.1);
+            let tg = [n[1], -n[0]];
+            let pts_row: Vec<P2> = match skew_k {
+                None => ts.iter().map(|&t| add(p, scale(n, t))).collect(),
+                Some(k) => ts.iter().map(|&t| add(add(p, scale(n, t)), scale(tg, t * k))).collect(),
+            };
             prev_row = Some((s, p, pts_row.clone()));
             let sup = st.support_at(s);
             let zc = prof.at(si, s);
@@ -642,7 +678,8 @@ pub fn mesh(net: &Net, lay: &Layout, prof: &Profiles, sel: Option<&[bool]>) -> B
                     let u = (s - st.cut0) / 20.0;
                     if u < 1.0 { let d = snap_delta[k.min(snap_delta.len() - 1)]; let f = 1.0 - quintic(u); q = add(q, scale([d.0, d.1], f)); }
                 }
-                own.push((q, zc + cf[k]));
+                let z = match skew_k { None => zc, Some(sk) => prof.at(si, clampf(s + ts[k] * sk, 0.0, st.len())) };
+                own.push((q, z + cf[k]));
             }
             if st.snap1.is_some() && !last {
                 // (merge: blend toward the trunk's row over the last 20 m, computed from the trunk row directly)

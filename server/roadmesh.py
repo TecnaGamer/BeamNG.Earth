@@ -301,7 +301,11 @@ def ribbons(chunks, keep_none=False):
             if b - a < 2:
                 continue
             c = chunks[k]
-            out[k] = (L[a:b], R[a:b], _ribbon_v(S[a:b], c), c["m"], layer_of(c),
+            le, ri = L[a:b], R[a:b]
+            if c.get("rs_sk0") is not None or c.get("rs_sk1") is not None:
+                # (BNE_ROADSYS=surface, 627: a ground road's end at a skewed deck end cut along its end line)
+                le, ri = skew_ends((le + ri) * 0.5, (le - ri) * 0.5, c.get("rs_sk0"), c.get("rs_sk1"))
+            out[k] = (le, ri, _ribbon_v(S[a:b], c), c["m"], layer_of(c),
                       Z[a:b] if c.get("fixed") else None)
             LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
     return out if keep_none else [r for r in out if r is not None]

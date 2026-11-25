@@ -22,6 +22,7 @@ pub mod net;
 pub mod part;
 pub mod prof;
 pub mod product;
+pub mod skew;
 pub mod square;
 pub mod tile;
 pub mod xsec;
