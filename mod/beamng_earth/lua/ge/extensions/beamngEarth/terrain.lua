@@ -721,9 +721,13 @@ M.WET_LAYERS = { '^bngEarthGroundAsphalt', '^bngEarthGroundCobble', '^bngEarthGr
 --     with the sky). The macro colour map becomes the black PNG at strength 0.3 near / 0.2 at 100 m: the photo less
 --     0.3 (broker wc15 against the rain photos b_2-b_4: roughness and AO alone left the road pale, the sky's reflection
 --     outweighing them);
---   - the stock asphalt AO detail (mean 0.84) at its 0.8 near strength adds +0.54, so any base AO under it clamped to 1
---     within the detail distance: it goes while wet (the tile layers' AO details are offsets about 0.45 and stay);
+--   - the stock asphalt AO detail (mean 0.84) at its 0.8 near strength adds +0.54 and clamps the AO to 1 within the
+--     detail distance: it goes while wet (the tile layers' AO details are offsets about 0.45 and stay);
 --   - the roughness: 0.5 wet, 0.69 damp; the asphalt's roughness grain at 0.3 (it added +0.11).
+-- Never aoBaseTex: the game packs the block's photo with it (RGB photo + A AO) into one cache texture keyed by both
+-- paths (server/terraincache.py); the server writes that pack for the level's own AO map, and another AO map made the
+-- game pack every block's photo again, a cache file per block that nothing removes (probe wc20 on the Deck: +1 file a
+-- wet teleport). The roughness and macro maps are the level's flat maps: one pack each, made once.
 local WET_A = '^bngEarthGroundAsphalt'
 M.WET_BLACK = 'beamngEarth_flat_1024.png'
 M.WET_FIELDS = {
@@ -734,7 +738,6 @@ M.WET_FIELDS = {
   },
   [2] = {                                                         -- wet
     { 'roughnessBaseTex', 'bngEarth_base_nm.png' },
-    { 'aoBaseTex', 'bngEarth_base_h.png' },
     { 'roughnessDetailStrength', '0.3 0.1', layers = WET_A },
     { 'aoDetailStrength', '0 0', layers = WET_A },
     { 'baseColorMacroTex', M.WET_BLACK },

@@ -714,7 +714,8 @@ in 2026-10-10-weather-probe-results.md.
   classes by name and words; wetness from W1's `beamngEarth/winter` road row or its own wet/dry model; batches of
   setField + flush + reload only on a level change). Phase C: the city carriageways (terrain layers) wet at
   the block swap: `terrain.applyWet` sets the paved layers' fields from `WET_FIELDS` just before the swap's own rebind
-  (no updateMaterial): the level's own maps read as other values (roughness 0.5 wet / 0.69 damp, AO 0.69) and the zero
+  (no updateMaterial): the level's own maps read as other values (roughness 0.5 wet / 0.69 damp; never aoBaseTex, the
+  game's cache key of each block's photo pack) and the zero
   heightmap PNG as a black macro colour map at 0.3 / 0.2 (the shader adds (2t-1) x strength: the photo darkened, as
   wet asphalt is), the asphalt's AO detail off (it clamped the AO to 1 near). Probe P4 on the Deck: swap medians 76-78
   dry / 68-70 ms wet. wetlook's level -> `terrain.setWet` 0/1/2. Storms: the fog tint's Mie extinction

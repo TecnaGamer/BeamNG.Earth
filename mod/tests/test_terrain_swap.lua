@@ -126,8 +126,16 @@ function tb:setField(k, i, v)
   return setField(self, k, i, v)
 end
 T.check(terrain.swap('/t/w.ter', 2, 512, 0, 0, 0, { materials = mats }, nil) == true, 'a swap while wet')
-T.check(wetAtFile and wetAtFile:find('bngEarth_base_nm') ~= nil and asph.fields.aoBaseTex:find('bngEarth_base_h') ~= nil,
-  'the asphalt layer wet before the file is set: ' .. tostring(wetAtFile))
+T.check(wetAtFile and wetAtFile:find('bngEarth_base_nm') ~= nil
+  and asph.fields.aoBaseTex == '/levels/beamng_earth/art/terrains/bngEarth_base_ao.png',
+  'the asphalt layer wet before the file is set, its AO base map its own: ' .. tostring(wetAtFile))
+-- never the base maps packed with the block's photo (the game's cache key is the photo + the AO map: another AO map is
+-- a new cache file for every block, which nothing removes)
+for step, list in pairs(terrain.WET_FIELDS) do
+  for _, e in ipairs(list) do
+    T.check(e[1] ~= 'aoBaseTex' and e[1] ~= 'baseColorBaseTex', 'wet step ' .. step .. ': not ' .. e[1])
+  end
+end
 T.check((calls.updateMaterial or 0) == upd0, 'no updateMaterial for it')
 T.check(tostring(asph.fields.baseColorMacroTex):find(terrain.WET_BLACK, 1, true) ~= nil and asph.fields.baseColorMacroStrength == '0.3 0.2'
   and asph.fields.aoDetailStrength == '0 0', 'wet: the colour darkened by the black macro map, the AO detail off')
