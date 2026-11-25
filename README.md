@@ -169,7 +169,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - **Real weather** at the player from Open-Meteo, updated as you travel: cloud cover and high cirrus, clouds
   drifting with the wind aloft, fog from the real visibility, ground wind with gusts that pushes the cars,
   rain and snow, the air temperature, and the sun dimming under overcast. It goes through the game's own
-  weather system, so the Time & Weather menu shows the real values; a manual mode leaves it to you.
+  weather system, so the Time & Weather menu shows the real values.
+- **Weather page and radial menu**: Real weather, one of 15 presets (clear to thunderstorm, fog, snow, blizzard,
+  sleet, freezing rain, hail) or Off (the game's own controls); intensity, how fast it changes, rain and snow on or
+  off, rain visibility, the real clouds, fog, wind and rain each on or off, and a limit on how thick fog gets. Rain
+  and snow stop in tunnels, parking structures and under bridges, rain thickens the air and turns the fog grey, and
+  traffic turns its headlights on and slows down in rain, snow and fog.
 - **Seasons**: the photos' colours and the trees' leaves follow the time of year (autumn colours, bare
   trees in winter where the photos were taken leaf-off).
 - **Real gravity**: the WGS84 gravity for your latitude and altitude plus the EGM2008 local anomalies, so
@@ -414,8 +419,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   orchards and vineyards in rows, paths, tracks, hedges, streams, piers, tree heights, roads and buildings, graded to
   the season, instead of 1 m aerial photos, which are then not downloaded at all, for roof colours neither; less real
   detail where the map has none);
-  **Show the older world while rebuilding** (after an update). A switch set by hand in the server's environment wins
-  over the page.
+  **Show the older world while rebuilding** (after an update); **Winter grip** (`BNE_WINTER=on`: roads get slippery
+  when the real weather brings snow, slush, frost or ice, from an hourly snow model of the last 10 days' weather; main
+  roads are cleared and salted first and bridges freeze first; the road's condition shows in the status bar; no white
+  ground yet. `BNE_WINTER=light` or `ice` forces a fixed light-snow or ice-storm state); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too). A switch set by hand in the
+  server's environment wins over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
   memory below 24 GB (about 5 GB on a 16 GB PC, at least 1.5 GB) and 60 % of it on a bigger computer, at most 24 GB
@@ -626,8 +634,9 @@ over the internet, and start it (its log shows `[BeamNG.Earth] plugin loaded`). 
 BeamMP's own public list, so players without BeamNG.Earth never see it; `Private = true`, or no AuthKey: on no list,
 players use Direct Connect. The plugin lists the server once a minute with `curl` (Linux, and Windows 10 and later).
 Update the server zip with every release: it carries the mod the server sends to players. The server's time and weather for everyone
-(`G.TIME`: real or a fixed / running time such as `'20:30'`; `G.WEATHER`: real or clear, cloudy, rain, storm, snow,
-fog) are set near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
+(`G.TIME`: real or a fixed / running time such as `'20:30'`; `G.WEATHER`: real, real-host (everyone gets the weather
+where the longest-joined player is) or a preset such as clear, overcast, rain, heavyrain, storm, fog, snow, blizzard)
+are set near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
 little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip. Releases may also carry
 ready-made host bundles (`BeamNG.Earth-Host-<version>-Windows.zip` / `-Linux-x86_64.zip`, built by
 `tools/build_host.py`): the zip above plus BeamMP's own unmodified server program (v3.9.3, checked against the
