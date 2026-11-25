@@ -11,11 +11,13 @@ What is shared, and its key. A version key (vkey: sha256 of vkey_doc) names ever
 holds besides the cell: PLANS_FORMAT / FACTS_FORMAT (plancache.plans_format: with the grade guard's tag), the plans'
 frames, the build switches (revisit.plans_switches_key: the BNE_* that change plans or facts), the map data's versions
 (MapData.versions(): Overture release, map source, the optional layers' versions) WITHOUT the weekly datasets' builds
-(WEEKLY: rails, lanes, stations; a weekly build made every archive unreachable). What a cell's items read of the weekly
-rail and lane tags is keyed per item instead (FORMAT 2): each item's key ends in "@<dep>", the digest of the slices of
-the cells round it (ring: RING_PLANS cells for plans, whose facts read their neighbours' facts; RING_FACTS for facts),
-a cell's slice (slice_digest) being the rail and lane shards' tags of the OSM ways of that cell's roads layer, their
-road rules, and the shards' nodes in it (what railtags' joins read). The way ids of each of those cells are in the
+(WEEKLY: rails, lanes, stations, osmtags; a weekly build made every archive unreachable). What a cell's items read of the
+weekly rail, lane and OSM road tags is keyed per item instead (FORMAT 2): each item's key ends in "@<dep>", the digest
+of the slices of the cells round it (ring: RING_PLANS cells for plans, whose facts read their neighbours' facts;
+RING_FACTS for facts), a cell's slice (slice_digest) being the rail and lane shards' tags of the OSM ways of that
+cell's roads layer, their road rules, and the shards' nodes in it (what railtags' joins read), and the digest of the
+OSM road tags the cell's roads are joined with at their decode (mapdata.MapData.osm_tags_slice: the cell's tags,
+raceways, busways and lane geometry of the run's tag shard build; SLICES, in the vkey). The way ids of each of those cells are in the
 block (w/<z>_<x>_<y>: they follow the Overture release, which the vkey holds), so a player's server makes the same
 digest from its own weekly shards without the map data: a weekly build misses only the items whose cells' tags
 changed. The station shards are no part of it: no plan or fact reads them (gasstations' road tiles do).
@@ -25,6 +27,9 @@ Inside a block, items are keyed as the local caches key them, plus their digest:
     w/<z>_<x>_<y>                                    a cell's way ids (JSON), for every cell of the block's rings
 A cell whose local key carries more (Hong Kong's measured heights, roadz.hk_tags; the photo's road-surface verdicts,
 roadsurf.cell_tags / layer_tags) never matches an item: the builder makes none there, and the client does not ask.
+Germany's measured decks (MapData.versions' "dedecks": their build, left out of the vkey as WEEKLY) are in the slice
+of each German cell (slice_digest, roadz.de_cell), so an item made with one build is read only by a server that
+measures with the same one, and a new build misses only the German items.
 A hit is copied into the local revisit cache under the client's own key (plancache._revisit_key, roads._facts_key):
 read once from the archive, from the local cache after.
 
@@ -73,7 +78,11 @@ NET_RETRY_S = 60.0              # ... after a network error
 FETCH_WAIT_S = 20.0             # s a process waits for another downloading the same block
 MAX_BLOCK_BYTES = 96 << 20
 MEM_BLOCKS = 6                  # blocks kept in memory per process
-WEEKLY = ("rails", "lanes", "stations", "osmyears", "osmcolours")     # versions() keys left out of the vkey (per item instead: slice_digest)
+WEEKLY = ("rails", "lanes", "stations", "osmyears", "osmcolours", "osmtags",     # versions() keys left out of the vkey (per item instead: slice_digest)
+          "dedecks")                # (Germany's measured decks: in the slices of the German cells, roadz.de_cell)
+# what a cell's slice holds (slice_digest), in the vkey: an archive whose items were keyed by other slices is not read
+# (osmtags: the OSM road tags joined at the roads' decode since mapdata roads 10, R7 of ~/bnge-tests/manifestaudit)
+SLICES = ("rails", "lanes", "osmtags")
 PINS = "pins.json"
 
 
@@ -107,7 +116,7 @@ def vkey_doc(versions):
     import roads
     return {"dec": FORMAT, "plans": plancache.plans_format(), "facts": roads.FACTS_FORMAT,
             "frames": plancache.FRAMES, "switches": revisit.plans_switches_key(),
-            "rings": [RING_PLANS, RING_FACTS],
+            "rings": [RING_PLANS, RING_FACTS], "slices": list(SLICES),
             "versions": json.loads(json.dumps({k: v for k, v in versions.items() if k not in WEEKLY},
                                               sort_keys=True))}
 
@@ -249,11 +258,28 @@ def _nodes_near(sh, cell):
 
 
 def slice_digest(sources, cell, ids, fetch=True):
-    """The digest (32 hex) of what cell's roads (their way ids) read of the weekly rail and lane tags, from sources
-    ({"rails": railtags.RailTags or None (off), "lanes": LaneTags or None}); None when a shard cannot be had (fetch
-    False: when it is not in memory)."""
+    """The digest (32 hex) of what cell's roads (their way ids) read of the weekly rail and lane tags and of the OSM
+    road tags, from sources ({"rails": railtags.RailTags or None (off), "lanes": LaneTags or None, "osmtags": the map
+    data's osm_tags_source() or None}: the OSM road tags' slice is the cell's whole answer, every tagged highway in it,
+    as the join reads them); None when a shard cannot be had (fetch False: when it is not in memory)."""
     import mapcells
+    import roadz
     doc = {}
+    if roadz.de_cell(cell):         # (Germany's measured decks: the build its plans read, versions' "dedecks")
+        import dedom
+        ident = dedom.identity(network=fetch)
+        if ident is None:
+            return None
+        doc["dedecks"] = ident
+    if "osmtags" in sources:
+        t = sources["osmtags"]
+        if t is None:
+            doc["osmtags"] = "off"
+        else:
+            d = t.cell_slice(mapcells.CellKey(*(int(v) for v in cell)), fetch)
+            if d is None:
+                return None
+            doc["osmtags"] = d
     for name in ("rails", "lanes"):
         t = sources.get(name)
         if t is None:
@@ -289,15 +315,22 @@ def register_weekly(md):
 
 
 def weekly_sources():
-    """{"rails", "lanes"} of the registered map data (None: that dataset off), or None (no map data)."""
+    """{"rails", "lanes", "osmtags"} of the registered map data (None: that dataset off), or None (no map data)."""
     md = _SOURCES[0]() if _SOURCES else None
     if md is None:
         return None
-    return {"rails": getattr(md, "rail_tags", None), "lanes": getattr(md, "lane_tags", None)}
+    return weekly_of(md)
+
+
+def weekly_of(md):
+    """{"rails", "lanes", "osmtags"} of map data md (slice_digest's sources; tools/build_decisions.py's too)."""
+    osm = md.osm_tags_source() if hasattr(md, "osm_tags_source") else None
+    return {"rails": getattr(md, "rail_tags", None), "lanes": getattr(md, "lane_tags", None), "osmtags": osm}
 
 
 def _weekly_builds(sources):
-    return tuple(None if t is None else t.known() for t in (sources.get("rails"), sources.get("lanes")))
+    return tuple(None if t is None else t.known()
+                 for t in (sources.get("rails"), sources.get("lanes"), sources.get("osmtags")))
 
 
 def block_of(cell):
@@ -341,6 +374,7 @@ class Store:
         self._keys = {}             # (vkey, bx, by, hash) -> frozenset of item keys
         self._slices = {}           # (cell, weekly builds, ids digest) -> slice digest
         self._failed = {}           # (vkey, bx, by) -> monotonic time a download failed
+        self._man_backoff = {}      # vkey hex -> netfetch.Backoff of its manifest's failed refreshes (monotonic s)
         self._inflight = {}         # (vkey, bx, by) -> Event
         self.stats = {"hits": 0, "misses": 0, "fetched": 0, "bytes": 0, "bad": 0, "fetch_s": 0.0, "stale": 0}
 
@@ -443,27 +477,46 @@ class Store:
                         return self._parse_manifest(vk, f.read()), MANIFEST_TTL_S - age
         except (OSError, ValueError) as e:
             log.info("%s: manifest of %s on disk unusable (%s: %s)", self.WHAT, vk, type(e).__name__, e)
+        # (an older answer on disk, a manifest or "none built", is used when the refresh fails: stale-if-error, the
+        # failure faults no build, netfetch.stale_ok; asked again after NET_RETRY_S, doubling to MANIFEST_TTL_S)
         try:
-            body = self.fetcher.get(self.url(vk, self.MANIFEST), kind="demand", lane=self.LANE).body
+            with open(path, "rb") as f:
+                old = self._parse_manifest(vk, f.read())
+        except (OSError, ValueError):
+            old = None
+        stale = old is not None or os.path.exists(absent)
+        with self._lock:
+            backoff = self._man_backoff.get(vk)
+            if backoff is None:
+                backoff = self._man_backoff[vk] = netfetch.Backoff(NET_RETRY_S, max(NET_RETRY_S, MANIFEST_TTL_S))
+        try:
+            with netfetch.stale_ok(stale):
+                body = self.fetcher.get(self.url(vk, self.MANIFEST), kind="demand", lane=self.LANE).body
             blocks = self._parse_manifest(vk, body)
             _write(path, body)
             try:
                 os.remove(absent)
             except OSError:
                 pass
+            with self._lock:
+                backoff.ok()
             log.info("%s: version %s: %d blocks built", self.WHAT, vk, len(blocks))
             return blocks, MANIFEST_TTL_S
         except netfetch.NotFound:
             _write(absent, b"")
+            with self._lock:
+                backoff.ok()
             log.info("%s: none built for version %s", self.WHAT, vk)
             return None, RETRY_S
         except (netfetch.FetchError, ValueError, OSError) as e:
-            log.info("%s: manifest of %s unavailable (%s: %s)", self.WHAT, vk, type(e).__name__, e)
-            try:                        # (the copy on disk, however old: blocks only ever get added)
-                with open(path, "rb") as f:
-                    return self._parse_manifest(vk, f.read()), NET_RETRY_S
-            except (OSError, ValueError):
+            if not stale:
+                log.info("%s: manifest of %s unavailable (%s: %s)", self.WHAT, vk, type(e).__name__, e)
                 return None, NET_RETRY_S
+            now = time.monotonic()
+            with self._lock:
+                netfetch.refresh_failed(log, backoff, now, f"{self.WHAT}: manifest of {vk}", e)
+                wait = backoff.until - now
+            return old, wait            # (the copy on disk, however old: blocks only ever get added; or "none built")
 
     # --- blocks ------------------------------------------------------------------------------------------------
     def block(self, vk, vkb, bx, by, fetch=True):

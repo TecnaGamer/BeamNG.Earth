@@ -180,9 +180,56 @@ T.check(sh and sh.emitters[2].eventNameStr == amb.SHORE_EVENT and #rb.set == 3, 
 T.check(sh and math.abs(sh.nodes[1].y - sh.nodes[2].y) == amb.SHORE_W and amb.shoreRibbons == 1, 'SHORE_W across')
 seaV.shores = nil
 
--- rain: the loop fades in with the weather's rain, out inside a tunnel's space, and goes when the rain stops
+-- rain in layers (weather phase B): the weights by rate, the mix under a roof, in a tunnel and in the car
+local w0 = amb.rainWeights(0.1)
+T.check(w0.light == 1 and w0.medium == 0 and w0.heavy == 0, 'drizzle: the light layer only')
+local w3 = amb.rainWeights(3)
+T.check(math.abs(w3.medium - 1) < 1e-9, '3 mm/h: the medium layer')
+local w6 = amb.rainWeights(6)
+T.check(w6.medium > 0 and w6.heavy > 0 and math.abs(w6.medium + w6.heavy - 1) < 1e-9 and w6.light == 0, '6 mm/h: medium into heavy')
+T.check(amb.rainWeights(50).heavy == 1, 'a downpour: heavy')
+local mx = amb.rainMix(0.5, 3, 1, false, false)
+T.check(math.abs(mx.medium - 0.5) < 1e-9 and mx.muffled == 0 and mx.roof == 0, 'in the open: the layer at the volume')
+mx = amb.rainMix(0.5, 3, 0, false, false)
+T.check(mx.medium == 0 and math.abs(mx.muffled - 0.5 * amb.RAIN_UNDER_ROOF) < 1e-9, 'under a roof: muffled')
+mx = amb.rainMix(0.5, 3, 1, true, false)
+T.check(mx.medium == 0 and math.abs(mx.muffled - 0.5 * amb.RAIN_IN_TUNNEL) < 1e-9, 'in a tunnel: muffled, quieter')
+mx = amb.rainMix(0.5, 3, 1, false, true)
+T.check(math.abs(mx.medium - 0.5 * amb.RAIN_CABIN) < 1e-9 and math.abs(mx.roof - 0.5 * amb.RAIN_ROOF) < 1e-9, 'in the car: on the roof')
+
+local rainParticles = S.newObject('Precipitation')
+rainParticles:registerObject('bngEarthRain')
+local function layer(file)
+  for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.fields.fileName == amb.RAIN_DIR .. file then return o end end
+end
+beamngEarth_weather = { rainNow = 1, rainMmHNow = 3, shelter = 1 }
+clock = 380; amb.update(3, seaV)
+clock = 381; amb.update(3, seaV)
+local me = layer('bne_rain_medium.ogg')
+T.check(me and me.fields.isLooping == '1' and math.abs(me.vol - amb.RAIN_GAIN / amb.RAIN_FADE_S) < 1e-9, 'rain layers: medium fading in')
+T.check(layer('bne_rain_heavy.ogg') == nil and layer('bne_rain_light.ogg') == nil, 'only the layer of the rate')
+for i = 1, 8 do clock = 381 + i * 0.5; amb.update(3, seaV) end
+T.check(math.abs(me.vol - amb.RAIN_GAIN) < 1e-9, 'rain layers: full')
+beamngEarth_weather.shelter = 0
+clock = 386; amb.update(3, seaV)
+local mu = layer('bne_rain_muffled.ogg')
+T.check(mu and math.abs(mu.vol - amb.RAIN_GAIN * amb.RAIN_UNDER_ROOF) < 1e-9 and layer('bne_rain_medium.ogg') == nil,
+  'under a roof: the muffled layer instead')
+beamngEarth_weather.rainNow = 0
+for i = 1, 12 do clock = 386 + i * 0.5; amb.update(3, seaV) end
+T.check(#S.liveOf('SFXEmitter') <= 1 and layer('bne_rain_muffled.ogg') == nil, 'the rain stopped: the layers gone')
+beamngEarth_weather = nil
+
+-- the stock loop (no layer files): fades in with the weather's rain, out inside a tunnel's space, goes when it stops
+-- the duck under a strike: down at once, the last second easing back
+local t0 = os.clockhp()
+amb.duck(3, 0.35)
+T.check(math.abs(amb.duckFactor(t0) - 0.35) < 1e-9 and math.abs(amb.duckFactor(t0 + 2.5) - (0.35 + 0.65 * 0.5)) < 0.02
+  and amb.duckFactor(t0 + 3.1) == 1, 'the rain ducked under a strike, back after 3 s')
+
+amb._setLayersOk(false)
 local function rainEm()
-  for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.name == 'bngEarthRain' then return o end end
+  for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.fields.track == amb.RAIN_TRACK then return o end end
 end
 beamngEarth_weather = { rainNow = 1 }
 clock = 400; amb.update(3, seaV)
@@ -190,6 +237,7 @@ clock = 401; amb.update(3, seaV)
 local re = rainEm()
 T.check(re and re.fields.track == amb.RAIN_TRACK and math.abs(re.vol - amb.RAIN_GAIN / amb.RAIN_FADE_S) < 1e-9,
   'rain: the loop, fading in')
+T.check(scenetree.findObject('bngEarthRain') == rainParticles, 'rain sound does not shadow the particle emitter')
 for i = 1, 8 do clock = 401 + i * 0.5; amb.update(3, seaV) end
 T.check(math.abs(re.vol - amb.RAIN_GAIN) < 1e-9, 'full rain: RAIN_GAIN')
 amb.onSpaces('3:0_0', { 0, lx, 0, 0, 40, 10, 10, 0 })

@@ -713,15 +713,42 @@ class StaleSwapTest(unittest.TestCase):
         self.assertEqual(server.hm[key].get("stale"), "old")
 
     def test_block_requests_wait_behind_the_swap(self):
-        import inspect
+        import asyncio
+        from types import SimpleNamespace
         import earthd
-        src = inspect.getsource(earthd.Connection.prepare_terrain)
-        self.assertIn("swap_gate", src)
-        self.assertLess(src.index("await gate.wait()"), src.index("self.s.terrain(anchor, cx, cy)"))
-        # a block the older version lacks is built only once the swap is committed
-        self.assertIn("stale_wait_swap", inspect.getsource(earthd.Server.make_heightmap))
-        # and no ungraded stand-in under the older version's skins
-        self.assertIn('getattr(anchor, "stale", ())', inspect.getsource(earthd.Connection.provisional_follow))
+
+        async def request():
+            key = (7, 0.0, 0.0)
+            gate = asyncio.Event()
+            anchor = SimpleNamespace(id=7, stale=("old",), swap_gate=gate)
+            build = asyncio.get_running_loop().create_future()
+            graded = {"heightmap": "graded.png"}
+            stand_in = {"heightmap": "provisional.png"}
+            server = SimpleNamespace(anchors={7: anchor}, snap=float, grading=True,
+                                     layout=SimpleNamespace(block_at=lambda x, y: (x, y)),
+                                     hm_sent=[], prov_info={key: stand_in}, terrain=mock.Mock(return_value=build))
+            replies = []
+            conn = SimpleNamespace(s=server, active=7, block=(0.0, 0.0), terrain_wait=0,
+                                   _send_terrain_ready=lambda req, k, info: replies.append((req, k, info)))
+            conn.provisional_follow = earthd.Connection.provisional_follow.__get__(conn)
+            task = asyncio.create_task(earthd.Connection.prepare_terrain(
+                conn, {"requestId": 9, "anchorId": 7, "cx": 0.0, "cy": 0.0}))
+            await asyncio.sleep(0)
+            server.terrain.assert_not_called()
+            self.assertFalse(task.done())
+
+            gate.set()
+            await asyncio.sleep(0)
+            server.terrain.assert_called_once_with(anchor, 0.0, 0.0)
+            # Even a ready stand-in must stay hidden under the older generation's skins.
+            self.assertIsNone(await conn.provisional_follow(anchor, 0.0, 0.0, build))
+            self.assertFalse(replies)
+            build.set_result(graded)
+            await asyncio.wait_for(task, 1.0)
+            self.assertEqual(replies, [(9, key, graded)])
+
+        with mock.patch.object(earthd, "PROVISIONAL_FIRST", True), mock.patch.object(earthd, "PROVISIONAL_FOLLOW_S", 1.0):
+            asyncio.run(request())
 
 
 class _Loop:

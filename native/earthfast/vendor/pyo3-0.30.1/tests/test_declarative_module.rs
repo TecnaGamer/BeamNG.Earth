@@ -1,0 +1,385 @@
+#![cfg(feature = "macros")]
+
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
+use pyo3::create_exception;
+use pyo3::exceptions::PyException;
+use pyo3::prelude::*;
+
+mod test_utils;
+
+mod some_module {
+    use pyo3::create_exception;
+    use pyo3::exceptions::PyException;
+    use pyo3::prelude::*;
+
+    #[pyclass]
+    pub struct SomePyClass;
+
+    create_exception!(some_module, SomeException, PyException);
+}
+
+#[pyclass]
+struct ValueClass {
+    value: usize,
+}
+
+#[pymethods]
+impl ValueClass {
+    #[new]
+    fn new(value: usize) -> Self {
+        Self { value }
+    }
+}
+
+#[pyclass(module = "module")]
+pub struct LocatedClass {}
+
+#[pyfunction]
+fn double(x: usize) -> usize {
+    x * 2
+}
+
+create_exception!(
+    declarative_module,
+    MyError,
+    PyException,
+    "Some description."
+);
+
+#[pymodule(submodule)]
+mod external_submodule {}
+
+/// A module written using declarative syntax.
+#[pymodule]
+mod declarative_module {
+    #[pymodule_export]
+    // This is not a real constraint but to test cfg attribute support
+    #[cfg(not(Py_LIMITED_API))]
+    use super::LocatedClass;
+    #[pymodule_export]
+    use super::declarative_submodule;
+    use super::*;
+    #[pymodule_export]
+    use super::{MyError, ValueClass as Value, declarative_module2, double};
+
+    // test for #4036
+    #[pymodule_export]
+    use super::some_module::SomePyClass;
+
+    // test for #4036
+    #[pymodule_export]
+    use super::some_module::SomeException;
+
+    #[pymodule_export]
+    use super::external_submodule;
+
+    #[pymodule_export]
+    const FOO: u32 = 42;
+
+    #[pymodule_export]
+    #[cfg(Py_LIMITED_API)]
+    const BAR: &str = "BAR";
+
+    #[pymodule_export]
+    #[expect(non_upper_case_globals)]
+    const r#type: char = '!';
+
+    #[expect(unused)]
+    const NOT_EXPORTED: &str = "not exported";
+
+    #[pymodule]
+    mod inner {
+        use super::*;
+
+        #[pyfunction]
+        fn triple(x: usize) -> usize {
+            x * 3
+        }
+
+        #[pyclass(name = "Struct")]
+        struct Struct;
+
+        #[pymethods]
+        impl Struct {
+            #[new]
+            fn new() -> Self {
+                Self
+            }
+        }
+
+        #[pyclass(module = "foo")]
+        struct StructInCustomModule;
+
+        #[pyclass(eq, eq_int, name = "Enum")]
+        #[derive(PartialEq)]
+        enum Enum {
+            A,
+            B,
+        }
+
+        #[pyclass(eq, eq_int, module = "foo")]
+        #[derive(PartialEq)]
+        enum EnumInCustomModule {
+            A,
+            B,
+        }
+    }
+
+    #[pymodule]
+    #[pyo3(module = "custom_root")]
+    mod inner_custom_root {
+        use super::*;
+
+        #[pyclass]
+        struct Struct;
+    }
+
+    #[pyo3::prelude::pymodule]
+    mod full_path_inner {}
+
+    #[pymodule_init]
+    fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
+        m.add("double2", m.getattr("double")?)
+    }
+}
+
+#[pyfunction]
+fn double_value(v: &ValueClass) -> usize {
+    v.value * 2
+}
+
+#[pymodule(module = "declarative_module")]
+mod declarative_submodule {
+    #[pymodule_export]
+    use super::{double, double_value};
+}
+
+#[pymodule(name = "declarative_module_renamed")]
+mod declarative_module2 {
+    #[pymodule_export]
+    use super::double;
+}
+
+fn declarative_module(py: Python<'_>) -> Bound<'_, PyModule> {
+    pyo3::wrap_pymodule!(declarative_module)(py).into_bound(py)
+}
+
+#[test]
+fn test_declarative_module() {
+    Python::attach(|py| {
+        let m = declarative_module(py);
+        py_assert!(
+            py,
+            m,
+            "m.__doc__ == 'A module written using declarative syntax.'"
+        );
+
+        py_assert!(py, m, "m.double(2) == 4");
+        py_assert!(py, m, "m.inner.triple(3) == 9");
+        py_assert!(py, m, "m.declarative_submodule.double(4) == 8");
+        py_assert!(
+            py,
+            m,
+            "m.declarative_submodule.double_value(m.ValueClass(1)) == 2"
+        );
+        py_assert!(py, m, "str(m.MyError('foo')) == 'foo'");
+        py_assert!(py, m, "m.declarative_module_renamed.double(2) == 4");
+        #[cfg(Py_LIMITED_API)]
+        py_assert!(py, m, "not hasattr(m, 'LocatedClass')");
+        #[cfg(not(Py_LIMITED_API))]
+        py_assert!(py, m, "hasattr(m, 'LocatedClass')");
+        py_assert!(py, m, "isinstance(m.inner.Struct(), m.inner.Struct)");
+        py_assert!(py, m, "isinstance(m.inner.Enum.A, m.inner.Enum)");
+        py_assert!(py, m, "hasattr(m, 'external_submodule')");
+        py_assert!(py, m, "m.FOO == 42");
+        #[cfg(Py_LIMITED_API)]
+        py_assert!(py, m, "m.BAR == 'BAR'");
+        #[cfg(not(Py_LIMITED_API))]
+        py_assert!(py, m, "not hasattr(m, 'BAR')");
+        py_assert!(py, m, "m.type == '!'");
+        py_assert!(py, m, "not hasattr(m, 'NOT_EXPORTED')");
+
+        // submodule dunder name and attribute name
+        // declarative_module.inner is declared inside
+        py_assert!(py, m, "m.inner.__name__ == 'declarative_module.inner'");
+        py_assert!(py, m, "'inner' in m.__dict__");
+        py_assert!(py, m, "'declarative_module.inner' not in m.__dict__");
+
+        // since declarative_submodule is declared outside, but the parent module name is passed
+        py_assert!(
+            py,
+            m,
+            "m.declarative_submodule.__name__ == 'declarative_module.declarative_submodule'"
+        );
+        py_assert!(py, m, "'declarative_submodule' in m.__dict__");
+        py_assert!(
+            py,
+            m,
+            "'declarative_module.declarative_submodule' not in m.__dict__"
+        );
+    })
+}
+
+#[pymodule]
+mod r#type {
+    #[pymodule_export]
+    use super::double;
+}
+
+#[test]
+fn test_raw_ident_module() {
+    Python::attach(|py| {
+        let m = pyo3::wrap_pymodule!(r#type)(py).into_bound(py);
+        py_assert!(py, m, "m.double(2) == 4");
+    })
+}
+
+#[test]
+fn test_module_names() {
+    Python::attach(|py| {
+        let m = declarative_module(py);
+        py_assert!(
+            py,
+            m,
+            "m.inner.Struct.__module__ == 'declarative_module.inner'"
+        );
+        py_assert!(py, m, "m.inner.StructInCustomModule.__module__ == 'foo'");
+        py_assert!(
+            py,
+            m,
+            "m.inner.Enum.__module__ == 'declarative_module.inner'"
+        );
+        py_assert!(py, m, "m.inner.EnumInCustomModule.__module__ == 'foo'");
+        py_assert!(
+            py,
+            m,
+            "m.inner_custom_root.Struct.__module__ == 'custom_root.inner_custom_root'"
+        );
+    })
+}
+
+#[test]
+fn test_inner_module_full_path() {
+    Python::attach(|py| {
+        let m = declarative_module(py);
+        py_assert!(py, m, "m.full_path_inner");
+    })
+}
+
+static NO_ARG_INIT_RAN: AtomicBool = AtomicBool::new(false);
+
+#[pymodule]
+mod module_with_no_arg_init {
+    use super::NO_ARG_INIT_RAN;
+    use pyo3::prelude::*;
+    use std::sync::atomic::Ordering;
+
+    #[pyfunction]
+    fn triple(x: usize) -> usize {
+        x * 3
+    }
+
+    #[pymodule_init]
+    #[expect(clippy::unnecessary_wraps)]
+    fn init() -> PyResult<()> {
+        NO_ARG_INIT_RAN.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[test]
+fn test_pymodule_init_without_module() {
+    Python::attach(|py| {
+        let m = pyo3::wrap_pymodule!(module_with_no_arg_init)(py);
+        let m = m.bind(py);
+        py_assert!(py, m, "m.triple(3) == 9");
+        assert!(NO_ARG_INIT_RAN.load(Ordering::SeqCst));
+    })
+}
+
+static UNIT_INIT_RAN: AtomicBool = AtomicBool::new(false);
+
+#[pymodule]
+mod module_with_unit_init {
+    use super::UNIT_INIT_RAN;
+    use pyo3::prelude::*;
+    use std::sync::atomic::Ordering;
+
+    #[pyfunction]
+    fn quadruple(x: usize) -> usize {
+        x * 4
+    }
+
+    #[pymodule_init]
+    fn init() {
+        UNIT_INIT_RAN.store(true, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn test_pymodule_init_returning_unit() {
+    Python::attach(|py| {
+        let m = pyo3::wrap_pymodule!(module_with_unit_init)(py);
+        let m = m.bind(py);
+        py_assert!(py, m, "m.quadruple(3) == 12");
+        assert!(UNIT_INIT_RAN.load(Ordering::SeqCst));
+    })
+}
+
+static PY_INIT_VERSION_MAJOR: AtomicU8 = AtomicU8::new(0);
+
+#[pymodule]
+mod module_with_py_init {
+    use super::PY_INIT_VERSION_MAJOR;
+    use pyo3::prelude::*;
+    use std::sync::atomic::Ordering;
+
+    #[pyfunction]
+    fn quintuple(x: usize) -> usize {
+        x * 5
+    }
+
+    #[pymodule_init]
+    fn init(py: Python<'_>) {
+        PY_INIT_VERSION_MAJOR.store(py.version_info().major, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn test_pymodule_init_with_only_python() {
+    Python::attach(|py| {
+        let m = pyo3::wrap_pymodule!(module_with_py_init)(py);
+        let m = m.bind(py);
+        py_assert!(py, m, "m.quintuple(3) == 15");
+        assert_eq!(
+            PY_INIT_VERSION_MAJOR.load(Ordering::SeqCst),
+            py.version_info().major
+        );
+    })
+}
+
+#[pymodule]
+mod module_with_py_and_module_init {
+    use pyo3::prelude::*;
+
+    #[pyfunction]
+    fn sextuple(x: usize) -> usize {
+        x * 6
+    }
+
+    #[pymodule_init]
+    fn init(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+        m.add("added_by_init", pyo3::types::PyString::new(py, "hello"))
+    }
+}
+
+#[test]
+fn test_pymodule_init_with_python_and_module() {
+    Python::attach(|py| {
+        let m = pyo3::wrap_pymodule!(module_with_py_and_module_init)(py);
+        let m = m.bind(py);
+        py_assert!(py, m, "m.sextuple(3) == 18");
+        py_assert!(py, m, "m.added_by_init == 'hello'");
+    })
+}

@@ -154,9 +154,20 @@ class RequestTest(unittest.TestCase):
         self.assertEqual(q["wind_speed_unit"], ["ms"])
         self.assertEqual(q["timeformat"], ["unixtime"])
         self.assertNotIn("apikey", q)
-        # the recorded fixtures were fetched with this query
+        # the recorded fixtures were fetched with this query, but for the fields asked for since (weather phase B's
+        # thunder: cape everywhere, lightning_potential only over Central Europe, null elsewhere; derive reads both as
+        # absent when missing)
+        later = {"cape", "lightning_potential"}
         for name in ("baltimore", "whitney"):
-            self.assertEqual(set(fixture(name)["current"]) - {"time", "interval"}, set(weather.CURRENT))
+            self.assertEqual(set(fixture(name)["current"]) - {"time", "interval"}, set(weather.CURRENT) - later)
+
+    def test_thunder_fields(self):
+        """CAPE always (0 without it), the lightning potential only where the model has one (ICON-D2)."""
+        m = weather.derive(synthetic(95, cape=1234.5, lightning_potential=3.456))
+        self.assertEqual((m["capeJkg"], m["lpi"], m["thunder"]), (1234.5, 3.46, True))
+        m = weather.derive(synthetic(0, lightning_potential=None))
+        self.assertEqual(m["capeJkg"], 0.0)
+        self.assertNotIn("lpi", m)
 
     def test_project_user_agent(self):
         """fetch() goes through netfetch as a background request with the project's User-Agent."""
@@ -308,7 +319,7 @@ class ModMappingTest(unittest.TestCase):
                "local keys = {}\n"
                "for k in pairs(t) do keys[#keys + 1] = k end\n"
                "table.sort(keys)\n"
-               "for _, k in ipairs(keys) do print(k, string.format('%.9g', t[k])) end\n")
+               "for _, k in ipairs(keys) do if type(t[k]) == 'number' then print(k, string.format('%.9g', t[k])) end end\n")
         out = subprocess.run(["luajit", "-e", lua], capture_output=True, text=True, timeout=60)
         self.assertEqual(out.returncode, 0, out.stderr)
         return {k: float(v) for k, v in (ln.split("\t") for ln in out.stdout.splitlines())}
@@ -334,10 +345,12 @@ class ModMappingTest(unittest.TestCase):
         self.assertAlmostEqual(w["gustMs"], 13.2, places=6)
 
     def test_precipitation(self):
+        # (the share by what the eye sees, weather.lua RAIN_CURVE / SNOW_CURVE: log-linear between 1 mm/h 45 % and
+        # 4 mm/h 75 %; 0.5 cm/h of snow is its row 55 %; the weather plan 2026-11-24)
         r = self.targets(weather.derive(synthetic(63, rain=0.5)))     # 2 mm/h
-        self.assertAlmostEqual(r["rainPct"], 0.5, places=6)
+        self.assertAlmostEqual(r["rainPct"], 0.45 + 0.3 * math.log(2) / math.log(4), places=6)
         s = self.targets(weather.derive(synthetic(73, snowfall=0.125)))   # 0.5 cm/h
-        self.assertAlmostEqual(s["snowPct"], 0.5, places=6)
+        self.assertAlmostEqual(s["snowPct"], 0.55, places=6)
         f = self.targets(weather.derive(synthetic(45, visibility=24000)))
         self.assertAlmostEqual(f["fogSigma"], 3.912 / weather.FOG_VIS_M, places=9)
 
@@ -377,8 +390,20 @@ class LevelObjectsTest(unittest.TestCase):
         lua_sky = (modsim.MOD_DIR / "sky.lua").read_text()
         self.assertIn(f"M.CLOUD_NAME = '{by_class['CloudLayer'][0]['name']}'", lua_sky)
         rain, snow = (modsim.lua_string("weather.lua", "RAIN_NAME"), modsim.lua_string("weather.lua", "SNOW_NAME"))
-        self.assertEqual(names[rain]["dataBlock"], "rain_drop")
-        self.assertEqual(names[snow]["dataBlock"], "Snow_menu")
+        self.assertEqual(names[rain]["dataBlock"], "bngEarthRainDrop")
+        # (snow's own flakes: Snow_menu's sheet of specks drew centimetre dots, the weather study's probe P10; the
+        # datablock is the level's own, art/weather/precipitation.datablocks.json, and its texture is a shipped source)
+        self.assertEqual(names[snow]["dataBlock"], "bngEarthSnowflake")
+        dbs = json.loads((LEVEL / "art/weather/precipitation.datablocks.json").read_text())
+        flake = dbs["bngEarthSnowflake"]
+        self.assertEqual(flake["class"], "PrecipitationData")
+        tex = flake["dropTexture"].lstrip("/").replace("levels/beamng_earth/", "")
+        manifest = json.loads((REPO / "mod" / "texture_sources" / "textures.json").read_text())["textures"]
+        self.assertIn("levels/beamng_earth/" + tex, manifest)
+        self.assertIs(names[snow]["doCollision"], True)                 # (snow fell through roofs, bridges, tunnels)
+        self.assertLess(names[rain]["fadeDistEnd"], names[rain]["boxWidth"] / 2)   # (no pops at the box faces)
+        self.assertLess(names[snow]["fadeDistEnd"], names[snow]["boxWidth"] / 2)
+        self.assertEqual(names[rain]["splashSize"], 0)                   # (GitHub #615's floating splash stars)
         for p in (names[rain], names[snow]):
             self.assertIs(p["followCam"], True)
             self.assertEqual(p["numDrops"], 0)                         # dry until real weather says otherwise

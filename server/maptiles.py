@@ -5,9 +5,12 @@ z/x/y over a small HTTP endpoint bound to 127.0.0.1 only (its port goes in hello
 tiles come from the server's own imagery chain (imagery.py: the same sources, the same disk cache
 and network limits, and the same attribution the mod already shows):
 
-  - z <= EOX_FIRST_MAX_Z: Sentinel-2 cloudless (EOX) first: one consistent global picture, and no
-    USGS coverage probes for the world view;
-  - above: the chain's order (USGS first in the US, z <= 16; EOX elsewhere, native to z14);
+  - z <= EOX_FIRST_MAX_Z: the global Sentinel-2 layers first (GLOBAL_FIRST: the project's packs, bngs2, then EOX's
+    2016 mosaic at sea and without them): one consistent global picture, and no USGS coverage probes for the world
+    view (EOX's 2023 mosaic until 2026-11-23: CC BY-NC-SA, never fetched since);
+  - above: the chain's order (USGS first in the US, z <= 16; the packs enlarged elsewhere), each source only for the
+    views it draws (imagery.view_ok: bngs2 to its own zoom, bngs2fine above it);
+  - a pack source's tile with "no data" texels (black: the packs' open sea) has them filled from the next sources;
   - above a source's max zoom the ancestor tile at that zoom is cropped and scaled up (overzoom),
     so the map zooms to MAX_Z everywhere.
 
@@ -50,7 +53,8 @@ import staging
 log = logging.getLogger("earthd.maptiles")
 
 MAX_Z = 18                  # the deepest zoom served (overzoomed above the sources' own)
-EOX_FIRST_MAX_Z = 12        # up to here EOX goes before the rest of the chain
+EOX_FIRST_MAX_Z = 12        # up to here the global layers go before the rest of the chain
+GLOBAL_FIRST = ("bngs2", "eox2016")
 JPEG_QUALITY = 85
 # netfetch kind: "demand", what the player is looking at (2026-10-15: as "prefetch" the map's tiles were dropped
 # while the terrain streamed after a teleport, "bucket low", and the map stayed blank squares for a minute; the
@@ -139,8 +143,8 @@ PROV_DIR = "prov"
 PROV_RETRY_S = (10.0, 30.0, 60.0, 120.0, 300.0)
 # The "sat" files' format: 2 since stand-ins are kept apart (PROV_DIR). Files of an older one (no FORMAT_FILE, or a
 # smaller number) may be stand-ins written as the tile for good: deleted once, a file at a time (sweep_sat), and the
-# map asks for them again.
-SAT_FORMAT = 2
+# map asks for them again. 3 (2026-11-23): every older file may hold EOX 2023 pixels (CC BY-NC-SA): deleted the same way.
+SAT_FORMAT = 3
 FORMAT_FILE = ".format"
 
 
@@ -393,7 +397,7 @@ class MapTiles:
     def order(self, z):
         chain = list(self.imagery.chain)
         if z <= EOX_FIRST_MAX_Z:
-            chain.sort(key=lambda s: 0 if s.name.startswith("eox") else 1)     # stable: chain order kept
+            chain.sort(key=lambda s: 0 if s.name in GLOBAL_FIRST else 1)     # stable: chain order kept
         return chain
 
     def tile(self, z, x, y):
@@ -411,10 +415,15 @@ class MapTiles:
         z, x, y = check_tile(z, x, y)
         err = None
         final, until = True, None
+        lat = imagerymod.tile_lat(z, y + 0.5)
+        acc = hole = name = None            # (a pack tile's "no data" texels filled from the next sources)
         for src in self.order(z):
             if z < src.min_zoom:
                 continue
-            sz = min(z, src.max_zoom)
+            mz, mv = imagerymod.zoom_caps(src, lat)
+            if not imagerymod.view_ok(src, z, mz, mv):
+                continue
+            sz = min(z, mz)
             dz = z - sz
             key = (src, sz, x >> dz, y >> dz)
             if not imagerymod.in_bounds(*key):
@@ -439,7 +448,17 @@ class MapTiles:
                 continue
             if t is None or t.uniform:
                 continue
-            return encode_jpeg(crop_up(t.rgb, dz, x, y)), src.name, final, until
+            rgb = crop_up(t.rgb, dz, x, y)
+            m = imagerymod.nodata_mask(rgb) if src.pack else None
+            if acc is None:
+                acc, hole, name = rgb.copy(), m, imagerymod.store_of(src)
+            else:
+                acc[hole] = rgb[hole]
+                hole = hole & m if m is not None else None
+            if hole is None or not hole.any():
+                return encode_jpeg(acc), name, final, until
+        if acc is not None:                 # (the rest of a coast's packs: no source had it, black as before)
+            return encode_jpeg(acc), name, final, until
         if err is not None:
             raise err
         return None

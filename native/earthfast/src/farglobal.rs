@@ -494,24 +494,52 @@ pub fn overlap_pairs(polys: &[Vec<f64>], side: &[u8], min_area: f64, rel: f64) -
 
 // --- meshes ----------------------------------------------------------------------------------------------------------
 
-/// Height of the grid's triangulated surface (cells split SW-NE where i + j is even: farfield.surface_at) at grid-index
-/// coordinates (gx east, gy north).
-fn surface_at(g: &[f64], n: usize, gx: f64, gy: f64) -> f64 {
-    let c = n - 1;
-    let i = (gx.floor() as i64).clamp(0, c as i64 - 1) as usize;
-    let j = (gy.floor() as i64).clamp(0, c as i64 - 1) as usize;
-    let (a, b) = (gx - i as f64, gy - j as f64);
-    let (z00, z10, z01, z11) = (g[j * n + i], g[j * n + i + 1], g[(j + 1) * n + i], g[(j + 1) * n + i + 1]);
-    if (i + j) % 2 == 0 {
-        if a >= b { z00 + a * (z10 - z00) + b * (z11 - z10) } else { z00 + a * (z11 - z01) + b * (z01 - z00) }
-    } else if a + b <= 1.0 {
-        z00 + a * (z10 - z00) + b * (z01 - z00)
-    } else {
-        z11 + (1.0 - a) * (z01 - z11) + (1.0 - b) * (z10 - z11)
-    }
+/// Corner indices and weights at grid coordinates (gx east, gy north).
+pub(crate) struct Triangle {
+    pub base: usize,
+    pub dx: (usize, usize),
+    pub dy: (usize, usize),
+    pub a: f64,
+    pub b: f64,
 }
 
-fn grid_tris(c: usize) -> Vec<[i64; 3]> {
+pub(crate) fn triangle_at(n: usize, gx: f64, gy: f64) -> Triangle {
+    let last = n as i64 - 2;
+    let i = (gx.floor() as i64).clamp(0, last) as usize;
+    let j = (gy.floor() as i64).clamp(0, last) as usize;
+    let (a, b) = (gx - i as f64, gy - j as f64);
+    let sw = j * n + i;
+    let (se, nw, ne) = (sw + 1, sw + n, sw + n + 1);
+    let (base, dx, dy, a, b) = if (i + j) % 2 == 0 {
+        if a >= b {
+            (sw, (se, sw), (ne, se), a, b)
+        } else {
+            (sw, (ne, nw), (nw, sw), a, b)
+        }
+    } else if a + b <= 1.0 {
+        (sw, (se, sw), (nw, sw), a, b)
+    } else {
+        (ne, (nw, ne), (se, ne), 1.0 - a, 1.0 - b)
+    };
+    Triangle { base, dx, dy, a, b }
+}
+
+pub(crate) fn surface_at(g: &[f64], n: usize, gx: f64, gy: f64) -> f64 {
+    let t = triangle_at(n, gx, gy);
+    g[t.base] + t.a * (g[t.dx.0] - g[t.dx.1]) + t.b * (g[t.dy.0] - g[t.dy.1])
+}
+
+pub(crate) fn edge_runs(n: usize) -> [Vec<usize>; 4] {
+    let c = n - 1;
+    [
+        (0..n).collect(),
+        (0..n).map(|j| j * n + c).collect(),
+        (0..n).rev().map(|i| c * n + i).collect(),
+        (0..n).rev().map(|j| j * n).collect(),
+    ]
+}
+
+pub(crate) fn grid_tris(c: usize) -> Vec<[i64; 3]> {
     let nx = c + 1;
     let mut out = Vec::with_capacity(2 * c * c);
     for j in 0..c {
@@ -534,16 +562,21 @@ fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+pub(crate) fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
-const WATER_U: f64 = 0.02;      // farfield.WATER_U
+#[pyfunction]
+pub(crate) fn far_skirt_depth(size: f64, err: f64) -> f64 {
+    2.0f64.max(0.02 * size).max(2.5 * err + 1.0)
+}
+
+pub(crate) const WATER_U: f64 = 0.02;      // farfield.WATER_U
 
 type Mesh<'py> = (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>,
                   Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>);
 
-fn arr2<'py, T: numpy::Element>(py: Python<'py>, v: Vec<T>, cols: usize) -> Bound<'py, PyArray2<T>> {
+pub(crate) fn arr2<'py, T: numpy::Element>(py: Python<'py>, v: Vec<T>, cols: usize) -> Bound<'py, PyArray2<T>> {
     let rows = v.len() / cols.max(1);
     numpy::ndarray::Array2::from_shape_vec((rows, cols), v).unwrap().into_pyarray(py)
 }
@@ -705,15 +738,9 @@ pub fn far_global_mesh<'py>(py: Python<'py>, z: u32, x: i64, y: i64, elev: PyRea
             pl.extend_from_slice(&[i as f64 / c as f64, j as f64 / c as f64]);
         }
         let mut tv: Vec<i64> = tris.iter().flat_map(|t| t.iter().map(|&v| new_of[v as usize])).collect();
-        // skirts: the edge runs ordered so each faces outwards (farfield._skirt), lowered copies
-        let skirt = 2.0f64.max(0.02 * size).max(2.5 * err + 1.0);
-        let g = |i: usize, j: usize| j * nv + i;
-        let runs: [Vec<usize>; 4] = [
-            (0..nv).map(|i| g(i, 0)).collect(),
-            (0..nv).map(|j| g(c, j)).collect(),
-            (0..nv).rev().map(|i| g(i, c)).collect(),
-            (0..nv).rev().map(|j| g(0, j)).collect(),
-        ];
+        // skirts: the edge runs ordered so each faces outwards, lowered copies
+        let skirt = far_skirt_depth(size, err);
+        let runs = edge_runs(nv);
         for run in runs.iter() {
             let used: Vec<usize> = run.iter().copied().filter(|&k| new_of[k] >= 0).collect();
             let base = cnt;

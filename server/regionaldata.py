@@ -11,9 +11,10 @@ BNE_REGIONAL_DIR: a local folder of that layout read instead (tests, probes, bef
 configure(cache_dir, fetcher): MapData does it in every process that has one; until then (or without a fetcher)
 only BNE_REGIONAL_DIR is read.
 
-The manifest in use is pagesdata.Manifest's (shared with railtags): once one is in use this run keeps it, since every
-cell decoded before another build is stale. Its "data" host is where the build's files are read (pagesdata.data_url),
-else Pages.
+The manifest in use is pagesdata.Manifest's (shared with railtags): the server run's, decided once for every process
+of the run and never replaced while it runs (every cell decoded before another build is stale; a newer one is pinned
+for the next start: the background refresh replaced it mid-run before, whatever recheck=False asked, R6). Its "data"
+host is where the build's files are read (pagesdata.data_url), else Pages while Pages serves the same build.
 """
 import gzip
 import hashlib
@@ -29,7 +30,7 @@ log = logging.getLogger("regionaldata")
 LOCAL = None               # (tests: patched; else BNE_REGIONAL_DIR, read when asked: _local)
 NAME = "regional"
 RETRY_S = 60.0              # an unreachable Pages asked again after this long
-MANIFEST_TTL_S = pagesdata.MANIFEST_TTL_S  # the manifest pinned on disk is used at once; one older is refreshed in the background
+MANIFEST_TTL_S = pagesdata.MANIFEST_TTL_S  # the manifest pinned on disk is used at once; one older is fetched again for the next start
 FETCH_WAIT_S = pagesdata.FETCH_WAIT_S      # s a caller waits for another thread's manifest fetch
 
 _lock = threading.Lock()
@@ -76,8 +77,8 @@ def _write(path, body):
 def manifest():
     """The build's manifest (dict) or None (none reachable). The one pinned on disk at once, whatever its age (one older
     than MANIFEST_TTL_S refreshed in the background); without one, one thread fetches it and the others wait for it.
-    Once one is in use it is kept (pagesdata.Manifest, recheck=False): every cell decoded before another build is
-    stale. (It was fetched by every process at its start, before the disk copy, and the night of 1.9.0 GitHub answered
+    The run's, kept for the whole run (pagesdata.Manifest: a newer one is pinned for the next start): every cell
+    decoded before another build is stale. (It was fetched by every process at its start, before the disk copy, and the night of 1.9.0 GitHub answered
     504s for hours: a road process's first tile waited for it behind the other Pages manifests.)"""
     return _pages().current()
 

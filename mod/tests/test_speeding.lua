@@ -49,6 +49,15 @@ package.loaded['beamngEarth/navgraph'].speedProfileAt = function() error('no gra
 T.check(S._rough(obj) == false, 'navgraph failing: not rough')
 package.loaded['beamngEarth/navgraph'] = nil
 T.check(S._rough(obj) == false, 'no navgraph: not rough')
+-- bad weather (beamngEarth_weather.trafficCap; the weather plan's 4.11): the cap comes down
+c5.fast, c5.street, c5.sent = 0.10, 0.05, nil
+beamngEarth_weather = { trafficCap = function(cap) return cap * 0.9 end }
+S.update(1.0, { rules = { country = 'US' } })
+T.near(tonumber(sent[#sent]:match('ai.setSpeed%(([%d%.]+)%)')), 29.06 * 1.10 * 0.9, 0.01, 'rain: the habit times 0.9')
+beamngEarth_weather = { trafficCap = function() error('x') end }
+T.check(S._weatherCap(20) == 20, 'a failing weather hook: the cap as it was')
+beamngEarth_weather = nil
+T.check(S._weatherCap(20) == 20, 'no weather: the cap as it was')
 S.reset()
 T.check(next(S._cars()) == nil and sent[#sent]:find('legal') ~= nil, 'reset: all back to legal')
 

@@ -174,6 +174,34 @@ T.check(c.time and c.time.hours == 21 and c.time.speed == 2 and c.time.epoch == 
   'the server\'s time and weather in the players\' settings')
 G.WEATHER = 'tornado'
 T.check(G.config().weather == nil, 'an unknown weather: the real one')
+-- the weather plan's presets and 'real-host' (decision 5: 'real' stays the default)
+for _, w in ipairs({ 'fewclouds', 'overcast', 'drizzle', 'heavyrain', 'lightsnow', 'blizzard', 'sleet', 'freezingrain', 'hail' }) do
+  G.WEATHER = w
+  T.check(G.config().weather == w, 'preset ' .. w)
+end
+G.players = {}
+G.WEATHER = 'real-host'
+G.onPose(5, { v = G.PROTO, aLat = 1, aLon = 2, lat = 1, lon = 2 }, 'first')
+G.clock = G.clock + 10
+G.onPose(3, { v = G.PROTO, aLat = 1, aLon = 2, lat = 1, lon = 2 }, 'second')
+T.check(G.weatherHost(G.players) == 5, 'the weather host: the longest-joined player')
+T.check(G.config(5).weather == 'real-host' and G.config(5).weatherHost == true and G.config(3).weatherHost == false,
+  'real-host: the host is told, the others not')
+T.check(G.onWeather(3, { code = 63, rainMmH = 4 }) == nil, 'a weather message from another player is dropped')
+local wm = G.onWeather(5, { code = 63, rainMmH = 4, cover = { low = 100, mid = 'x' }, wind = { ms = 1e9, fromDeg = -5 },
+  visM = 0 / 0, fog = 'yes', lat = 40.7, lon = -74, tz = 'America/New_York', evil = { nested = true } })
+T.check(wm and wm.code == 63 and wm.rainMmH == 4 and wm.cover.low == 100 and wm.cover.mid == 0 and wm.wind.ms == 150
+  and wm.wind.fromDeg == 0 and wm.visM == nil and wm.fog == nil and wm.lat == nil and wm.tz == nil and wm.evil == nil,
+  'the host\'s message: only the weather\'s fields, in range, no place')
+T.check(G.hostWeather == wm, 'kept for players who join later')
+T.check(G.weatherMsg('text') == nil and G.weatherMsg(nil) == nil, 'not a table: nothing')
+G.WEATHER = 'rain'
+T.check(G.onWeather(5, { code = 0 }) == nil and G.config(5).weatherHost == nil, 'another weather: no relay, no host')
+G.onLeave(5)
+G.WEATHER = 'real-host'
+T.check(G.weatherHost(G.players) == 3, 'the host left: the next longest-joined player')
+G.players, G.hostWeather = {}, nil
+T.check(G.weatherHost(G.players) == nil, 'no one on: no host')
 G.TIME, G.TIME_SPEED, G.WEATHER = 'real', 0, 'real'
 
 T.done('test_beammp_plugin')

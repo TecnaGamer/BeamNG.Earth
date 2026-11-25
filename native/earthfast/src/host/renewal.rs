@@ -17,9 +17,15 @@ fn write_renewal<'py>(
     let py = s.py();
     let pool = s.getattr("matslots")?;
     let material = pool.call_method1("take", (ck,))?;
-    let tile: String = s
+    let mut tile: String = s
         .call_method1("tile_name", (ck.get_item(0)?, ck.get_item(1)?))?
         .extract()?;
+    // A photo refresh writes an immutable cliff mesh; retain it when its material slot changes.
+    let mesh_rev = info.getattr("mesh_rev").and_then(|v| v.extract::<u64>()).unwrap_or(0);
+    if mesh_rev != 0 {
+        let stem = tile.rsplit_once('.').map_or(tile.as_str(), |(stem, _)| stem);
+        tile = format!("{stem}_r{mesh_rev}.cdae");
+    }
     let format = s.getattr("far_format")?;
     let pooled = format.eq("cdae")?;
     let name = if pooled {

@@ -333,11 +333,13 @@ for _, k in ipairs(kids) do
   farfield.onTile(sat(3, tonumber(l), tonumber(i), tonumber(j), { z = 62, err = 0.1 }))
 end
 step(free, camNorth)
-local x0 = farfield.stats().crossovers
+local x0, i0 = farfield.stats().crossovers, farfield.stats().instant
 local parent = obj(key(-1, 1, 1))
 farfield.onSwap(swap(3, 3, kids, { key(-1, 1, 1) }, 0.4, 0.3))
 step(free, camNorth)
-T.check(farfield.stats().crossovers == x0 + 1 and math.abs(obj(kids[1]).pos.z - (62 - 0.4)) < 0.05, 'mesh: near swap crosses over')
+-- (crossover.CROSS = 0: the in-view swap is instant, the parent hidden in the frame its children show)
+T.check(farfield.stats().crossovers == x0 and farfield.stats().instant == i0 + 1 and obj(kids[1]).pos.z == 62
+  and visible(obj(kids[1])) and (S.objects[parent.id] == nil or parent.hidden), 'mesh: near swap instant, no overlap')
 step(free, camNorth, 40)
 T.check(obj(key(-1, 1, 1)) == nil and visible(obj(kids[1])) and obj(kids[1]).pos.z == 62, 'mesh: crossover done')
 T.check(S.objects[parent.id] == nil or parent.hidden, 'mesh: replaced tile gone')

@@ -166,12 +166,20 @@ class SharedGateTest(unittest.TestCase):
         # (two fetchers, as two processes: each one's own bucket has room, the shared one makes them wait)
         fs = [nf.Fetcher(transport=_Transport(0.0), policies={HOST: policy(5.0, burst=1.0)}) for _ in range(2)]
         with mock.patch.object(nf, "GATE_LOG", log):
+            t0 = None
             for f in fs * 2:
                 f.get(URL, kind="demand")
+                t0 = time.monotonic() if t0 is None else t0
+            elapsed = time.monotonic() - t0
         lines = open(log).read().splitlines()
         self.assertGreaterEqual(len(lines), 3, "all but the first waited for the shared token")
-        self.assertTrue(all(float(ln.split()[-1]) > 0.1 for ln in lines))
-        self.assertGreaterEqual(sum(f.host(HOST).total["wait_ms"] for f in fs), 450, "counted as our own limits' wait")
+        self.assertTrue(all(float(ln.split()[-1]) > 0 for ln in lines), "each wait logged with its time")
+        # (the behaviour, not the load: the shared 5/s limit held across both fetchers, 3 more requests >= 0.6 s;
+        # on a busy machine each request takes longer itself and its logged wait is shorter, never the total)
+        self.assertGreaterEqual(elapsed, 0.55, "the shared limit held")
+        waited = sum(f.host(HOST).total["wait_ms"] for f in fs)
+        self.assertGreater(waited, 0, "counted as our own limits' wait")
+        self.assertLessEqual(waited, elapsed * 1000 + 50, "never more wait than time passed")
 
     def test_only_shared_hosts_and_only_with_a_folder(self):
         nf.SHARED_DIR = self.tmp.name

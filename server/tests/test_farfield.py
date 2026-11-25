@@ -307,6 +307,16 @@ class LayoutTest(unittest.TestCase):
             self.assertEqual(set(table), set(ff.CELL_COUNTS))
 
 
+class SurfaceSamplingTest(unittest.TestCase):
+    def test_interpolates_stored_float32_edges(self):
+        # The edge rises by 1024 + 2^-16 metres. In a stored float32 grid
+        # this edge difference rounds to 1024 before interpolation.
+        grid = np.array([[-2.0 ** -16, 1024.0], [-2.0 ** -16, 1024.0]], np.float32)
+        self.assertEqual(float(ff.surface_at(grid, 1.0, 0.25, 0.0)), 256.0 - 2.0 ** -16)
+        self.assertEqual(float(ff.surface_at(grid.astype(np.float64), 1.0, 0.25, 0.0)),
+                         256.0 - 3.0 * 2.0 ** -18)
+
+
 class TileGeometryTest(unittest.TestCase):
     """Tile shapes; parametrised over the layouts (subclasses set LAYOUT)."""
     LAYOUT = ff.V131

@@ -22,6 +22,8 @@ import os
 import re
 
 import numpy as np
+
+import drivefeat
 import dmath
 import dnp
 
@@ -119,6 +121,8 @@ def tile_props(frame, tx, ty, md, elev, lamps=None):
     for p, zz in zip(placed, z):
         row = [p["group"], round(p["x"], 2), round(p["y"], 2), round(float(zz) + p["lift"], 2),
                round(p["yaw"], 1), 1.0, round(p["h"], 2), round(p["rank"], 4)]
+        if p.get("light"):              # (BNE_LAMP_TAGS: its mapped colour, for its lens: furniture.lamp_lenses)
+            row.append(p["light"])
         (lamps if "lamp_id" in p else rows).append(row)
     return rows, skip
 
@@ -191,7 +195,14 @@ def _street_lamps(frame, feats, rows, box, placed):
             continue
         seen.add(fid)
         la, lo = _ll(frame, x, y)
-        group, height = MAPPED_LAMP_MODELS.get(tags.get("lamp_mount"), ("streetlight", STREET_LAMP_H))
+        light = None
+        if drivefeat.LAMP_TAGS:        # (the mapped mount, head count and colour: drivefeat.lamp_tags)
+            got = drivefeat.lamp_tags(tags)
+            if got is None:
+                continue                # (on a wall, hung on a wire: no post of its own)
+            group, height, light = got
+        else:
+            group, height = MAPPED_LAMP_MODELS.get(tags.get("lamp_mount"), ("streetlight", STREET_LAMP_H))
         yaw = 0.
         try:
             bearing = float(tags.get("direction", ""))
@@ -205,7 +216,7 @@ def _street_lamps(frame, feats, rows, box, placed):
         except (TypeError, ValueError):
             layer = math.nan
         placed.append({"group": group, "x": x, "y": y, "lat": la, "lon": lo, "lift": 0., "h": height, "yaw": yaw,
-                       "rank": 0., "lamp_id": fid, "arm": LAMP_ARM_KIND.get(group, 0), "layer": layer})
+                       "rank": 0., "lamp_id": fid, "arm": LAMP_ARM_KIND.get(group, 0), "layer": layer, "light": light})
 
 
 def _aim_lamps(lamps, lines_fn):

@@ -138,3 +138,35 @@ class RunningJobGivesUpTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ThreadCancelTest(unittest.TestCase):
+    """A thread that serves no job (blockworker's road plans ahead) must not see the running job's process-wide cancel
+    check (2026-11-22: a Bonneville job's "left" check cancelled every Fells Point plan ahead for 4 minutes)."""
+
+    def test_the_job_wide_check_does_not_reach_a_shielded_thread(self):
+        import xproc
+        from unittest import mock
+        seen = {}
+
+        def other(shield):
+            if shield:
+                xproc.set_thread_cancel(lambda: False)
+            try:
+                xproc.check_cancel()
+                seen[shield] = "planned"
+            except pools.Abandoned:
+                seen[shield] = "abandoned"
+
+        with mock.patch.object(xproc, "_cancel_proc", [lambda: True]):     # (a worker process's job of a place left)
+            for shield in (False, True):
+                t = _t.Thread(target=other, args=(shield,))
+                t.start()
+                t.join()
+        self.assertEqual(seen, {False: "abandoned", True: "planned"})
+
+    def test_the_warm_loop_shields_itself(self):
+        import blockworker
+        import inspect
+        src = inspect.getsource(blockworker._warm_loop)
+        self.assertIn("xproc.set_thread_cancel(lambda: False)", src.split("while True")[0])

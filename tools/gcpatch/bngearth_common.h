@@ -34,6 +34,38 @@ static inline void bnge_report(const char *tag, const char *file, const char *ms
     fclose(f);
 }
 
+// A patch that does not act (off, or not applied: another game build) says so again each time the BeamNG.Earth level
+// starts, so its status line is as fresh as an acting patch's: the mod reads the status files a few seconds after its
+// level started and warns about a patch that is not applied (enginepatches.lua, also the telemetry's setup). One
+// detached thread polling the level flag every 250 ms (an access() call); nothing else.
+#include <pthread.h>
+struct bnge_sticky { const char *tag, *file; char msg[400]; };
+static void *bnge_sticky_watch(void *arg) {
+    struct bnge_sticky *s = arg;
+    char flag[512];
+    bnge_temp_path(flag, sizeof flag, BNGE_LEVEL_FLAG);
+    int was = access(flag, F_OK) == 0;
+    for (;;) {
+        struct timespec ts = {0, BNGE_FLAG_POLL_MS * 1000000L};
+        nanosleep(&ts, NULL);
+        int on = access(flag, F_OK) == 0;
+        if (on && !was) bnge_report(s->tag, s->file, s->msg);
+        was = on;
+    }
+    return NULL;
+}
+static inline void bnge_report_sticky(const char *tag, const char *file, const char *msg) {
+    bnge_report(tag, file, msg);
+    struct bnge_sticky *s = calloc(1, sizeof *s);
+    if (!s) return;
+    s->tag = tag;
+    s->file = file;
+    snprintf(s->msg, sizeof s->msg, "%s", msg);
+    pthread_t t;
+    if (pthread_create(&t, NULL, bnge_sticky_watch, s) == 0) pthread_detach(t);
+    else free(s);
+}
+
 // The main game process: argv[0] ends in BeamNG.drive.x64 and no argument is a CEF --type=.
 static inline int bnge_is_main_game(void) {
     FILE *f = fopen("/proc/self/cmdline", "rb");
@@ -55,7 +87,8 @@ static inline int bnge_is_main_game(void) {
 // The main program (the first object dl_iterate_phdr reports): load base and its PT_LOAD segments.
 struct bnge_main {
     uintptr_t base; int seen; int nseg;
-    struct { uintptr_t start, end; int flags; } seg[16];   // vaddr ranges (base added), p_memsz
+    uintptr_t relro_start, relro_end;                       // PT_GNU_RELRO (base added; 0 if none): vtables
+    struct { uintptr_t start, end, end_file; int flags; } seg[16];   // vaddr ranges (base added): p_memsz, p_filesz
 };
 
 static inline int bnge_find_main_cb(struct dl_phdr_info *info, size_t size, void *data) {
@@ -66,9 +99,14 @@ static inline int bnge_find_main_cb(struct dl_phdr_info *info, size_t size, void
     m->base = (uintptr_t)info->dlpi_addr;
     for (int i = 0; i < info->dlpi_phnum && m->nseg < 16; i++) {
         const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+        if (ph->p_type == PT_GNU_RELRO) {
+            m->relro_start = m->base + ph->p_vaddr;
+            m->relro_end = m->base + ph->p_vaddr + ph->p_memsz;
+        }
         if (ph->p_type != PT_LOAD) continue;
         m->seg[m->nseg].start = m->base + ph->p_vaddr;
         m->seg[m->nseg].end = m->base + ph->p_vaddr + ph->p_memsz;
+        m->seg[m->nseg].end_file = m->base + ph->p_vaddr + ph->p_filesz;
         m->seg[m->nseg].flags = (int)ph->p_flags;
         m->nseg++;
     }

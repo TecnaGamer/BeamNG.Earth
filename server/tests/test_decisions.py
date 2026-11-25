@@ -35,7 +35,7 @@ from test_roads import features, FRAME  # noqa: E402
 HAVE = getattr(fast._ef, "VERSION", 0) >= decisions.NATIVE
 SEED = bytes(range(32))
 OTHER_SEED = bytes(range(1, 33))
-VERSIONS = {"pipeline": 9, "overture": "2026-test", "rails": "r1", "lanes": "l1", "stations": "s1"}
+VERSIONS = {"pipeline": 9, "overture": "2026-test", "rails": "r1", "lanes": "l1", "stations": "s1", "osmtags": "o1"}
 
 
 class VersionedMD(FakeMD):
@@ -339,7 +339,8 @@ class SharedPlansTest(unittest.TestCase):
             for n in os.listdir(os.path.join(run, sig)):
                 if n.endswith(".npz"):
                     cell = tuple(int(v) for v in n[:-4].split("_"))
-                    items.setdefault(cell, {})[decisions.plans_key(sig, cell)] = (
+                    # (the run folder: the signature and the versions' digest, plancache.PlanCache)
+                    items.setdefault(cell, {})[decisions.plans_key(sig.split(".v", 1)[0], cell)] = (
                         Path(run, sig, n).read_bytes(), True)
         self.assertTrue(items)
         return z, items
@@ -472,6 +473,82 @@ class SharedPlansTest(unittest.TestCase):
         self.assertIsNone(roads._facts_baked(f, "ranges", None), "not in the block")
         got = revisit.load(cache, "cellfacts", roads._facts_key(f, "specs", extra))
         self.assertEqual(got[0]["facts.json"], data, "kept under the player's own key")
+
+
+@unittest.skipUnless(HAVE, f"earthfast {decisions.NATIVE} not built")
+class StaleManifestTest(unittest.TestCase):
+    """A version's manifest (or its "none built" marker) past its time to live is used when its refresh fails
+    (offline, an HTTP error, a malformed answer): no build faulted (revisit.fault), asked again after NET_RETRY_S, then
+    twice as long; an answer replaces the copy. Without any copy a failure is a missing input, as before. lidarz.Store
+    is a decisions.Store (the same code)."""
+
+    def test_stale_manifest_if_error(self):
+        import time
+        import netfetch
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        p = mock.patch.dict(os.environ, {"BNGE_DECISIONS_PUBKEY": fast._ef.dec_public_key(SEED).hex()})
+        p.start()
+        self.addCleanup(p.stop)
+        vk = publish(os.path.join(d, "cdn"), VERSIONS, {}, blocks=[(1, 2)])
+        body = Path(d, "cdn", f"d{decisions.FORMAT}", vk, "manifest.bngm").read_bytes()
+
+        class Site:
+            def __init__(self):
+                self.calls, self.answer = [], netfetch.Offline
+
+            def get(self, url, kind="demand", lane=None):
+                self.calls.append(url)
+                if isinstance(self.answer, type):
+                    raise self.answer(f"down: {url}", url, "cdn")
+                return mock.Mock(body=self.answer)
+        want = {(1, 2): "0" * decisions.HASH_HEX}
+        for answer in (netfetch.Offline, netfetch.FetchFailed, b"not a manifest"):
+            site = Site()
+            site.answer = answer
+            store = decisions.Store(os.path.join(d, "cache"), fetcher=site, base="http://cdn.invalid")
+            path = os.path.join(store._dir(vk), store.MANIFEST)
+            decisions._write(path, body)
+            old = time.time() - decisions.MANIFEST_TTL_S - 60
+            os.utime(path, (old, old))
+            f0 = revisit.faults()
+            with revisit.scope() as b:
+                self.assertEqual(store.manifest(vk), want, "the stale copy")
+                self.assertEqual(store.manifest(vk), want)
+            self.assertEqual(len(site.calls), 1, "asked once")
+            self.assertTrue(b.complete, f"{answer}: no build short ({b.why_not()})")
+            self.assertEqual(revisit.faults(), f0)
+            self.assertAlmostEqual(store._man[vk][1] - time.monotonic(), decisions.NET_RETRY_S, delta=5)
+        store._man[vk] = (want, 0.0)            # (its time passed)
+        site.answer = netfetch.Offline
+        self.assertEqual(store.manifest(vk), want)
+        self.assertEqual(len(site.calls), 2, "asked again")
+        self.assertAlmostEqual(store._man[vk][1] - time.monotonic(), 2 * decisions.NET_RETRY_S, delta=5,
+                               msg="then after twice as long")
+        store._man[vk] = (want, 0.0)
+        site.answer = body
+        self.assertEqual(store.manifest(vk), want)
+        self.assertLess(time.time() - os.path.getmtime(path), 60, "the answer kept")
+        self.assertEqual(store._man_backoff[vk].failures, 0)
+        # a stale "none built" answer: kept the same way
+        os.remove(path)
+        absent = path + ".absent"
+        decisions._write(absent, b"")
+        os.utime(absent, (old, old))
+        store._man.clear()
+        site.answer = netfetch.Offline
+        f0 = revisit.faults()
+        with revisit.scope() as b:
+            self.assertIsNone(store.manifest(vk))
+        self.assertTrue(b.complete)
+        self.assertEqual(revisit.faults(), f0)
+        # nothing on disk: a missing input, as before
+        os.remove(absent)
+        store._man.clear()
+        with revisit.scope() as b:
+            self.assertIsNone(store.manifest(vk))
+        self.assertFalse(b.complete, "no copy: short, as before")
+        self.assertAlmostEqual(store._man[vk][1] - time.monotonic(), decisions.NET_RETRY_S, delta=5)
 
 
 if __name__ == "__main__":

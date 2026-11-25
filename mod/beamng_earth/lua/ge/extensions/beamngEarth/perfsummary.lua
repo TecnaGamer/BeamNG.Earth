@@ -394,7 +394,10 @@ local function short(v, n)
   return v:sub(1, n or 64)
 end
 
-function M.setup(hw, settingsGet)
+-- patches: enginepatches.states() ({ gcpatch = 'on', ... }), nil before they are read
+M.PATCH_NAMES = { 'gcpatch', 'texkeep', 'terfast', 'dtsmooth' }
+M.PATCH_STATES = { on = true, off = true, failed = true, none = true }
+function M.setup(hw, settingsGet, patches)
   hw = type(hw) == 'table' and hw or {}
   local out = { v = M.VERSION }
   local cpu = hw.cpu or {}
@@ -444,6 +447,13 @@ function M.setup(hw, settingsGet)
   local mods = hw.mods or {}
   local nm = (tonumber(mods.zip) or 0) + (tonumber(mods.unpacked) or 0)
   out.otherMods = M.step(nm, { 0, 1, 2, 5, 10, 20, 50 })
+  if type(patches) == 'table' then
+    local ep = {}
+    for _, k in ipairs(M.PATCH_NAMES) do
+      if M.PATCH_STATES[patches[k]] then ep[k] = patches[k] end
+    end
+    out.enginePatches = ep
+  end
   return out
 end
 

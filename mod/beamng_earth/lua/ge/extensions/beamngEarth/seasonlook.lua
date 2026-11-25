@@ -72,6 +72,24 @@ local lastCheck = -math.huge
 
 function M.setMode(m) mode = m end
 
+-- Winter's snow (server BNE_WINTER: hello.snow, the 'snow' message; nil without): winterlook.lua and baretrees.lua (the
+-- bare deciduous trees), loaded only when the server has winter on (nothing otherwise, not even the modules).
+local bare = nil        -- baretrees.lua while winter is on
+local bareLat = nil     -- the anchor's latitude it was last given
+function M.setSnow(s)
+  if s == nil and not package.loaded['beamngEarth/winterlook'] then return end
+  require('beamngEarth/winterlook').set(s)
+  if s ~= nil then bare = require('beamngEarth/baretrees') end
+  if bare then
+    bare.set(s, mode)
+    if s == nil then bare, bareLat = nil, nil end
+  end
+end
+-- core.lua: winter W1's snowstate (the bare trees' latch reads its frost and snow depth).
+function M.setSnowState(msg)
+  if bare then bare.setState(msg) end
+end
+
 -- Pure: the tint of a species {tint, days, winter} on day doy at lat for mode: the strongest of its fall (its own
 -- timing, eased), winter and spring tints, as {r, g, b} multipliers and that amount.
 function M.speciesTint(sp, mode_, doy, lat)
@@ -131,9 +149,11 @@ end
 -- Every frame in our level (lat: the anchor's latitude): the leaf materials tinted to the season, checked every CHECK_S.
 function M.update(inOurLevel, lat)
   if not inOurLevel or not scenetree then return end
+  if bare and lat and lat ~= bareLat then bare.setLat(lat); bareLat = lat end   -- (before the place's first tree)
   local now = os.clock()
   if now - lastCheck < M.CHECK_S then return end
   lastCheck = now
+  if bare then bare.resume(mode) end      -- (a level started again in the same server session)
   local doy = tonumber(os.date('*t').yday)
   for _, sp in ipairs(M.SPECIES) do
     local tint, t = M.speciesTint(sp, mode, doy, lat)
@@ -165,6 +185,9 @@ function M.restore()
     end
   end
   orig, applied = {}, {}
+  if package.loaded['beamngEarth/winterlook'] then require('beamngEarth/winterlook').restore() end
+  if bare then bare.restore() end         -- (kept loaded: the next level of this server session resumes it)
+  bareLat, lastCheck = nil, -math.huge
 end
 
 return M

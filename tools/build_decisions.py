@@ -43,7 +43,8 @@ sys.path.insert(0, SERVER)
 import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 
 PASSES = 3
-WEEKLY_KEYS = ("rails", "lanes", "stations")      # (decisions.WEEKLY: kept in each record's versions, not the vkey)
+WEEKLY_KEYS = ("rails", "lanes", "stations", "osmtags",   # (decisions.WEEKLY: kept in each record's versions, not the vkey)
+               "dedecks")      # (Germany's measured decks: "none" while nothing is published; absent with the source off)
 # what earthd puts in every player's environment (its --bridge-profile default; BNE_NETSTATS_PROC is not a switch)
 PLAYER_SWITCHES = {"BNE_BRIDGE_PROFILE": "curve"}
 TEST_PLACES = {"fells": (39.28, -76.60), "manhattan": (40.76, -73.98), "stelvio": (46.53, 10.45),
@@ -138,7 +139,7 @@ def _worker(args):
 
     def store(self, key, plans, keeps, covers, opens, decks=None, persist=False):
         ok = orig_store(self, key, plans, keeps, covers, opens, decks, persist=persist)
-        if ok and persist and not roadz.hk_cell(key):
+        if ok and persist and not roadz.hk_cell(key) and not roadz.tlm_tags(key):
             rec.write(json.dumps({"plans": [int(k) for k in key], "sig": self.signature, "path": self._path(key),
                                   "versions": self.persist[1][2] if self.persist else None}, sort_keys=True) + "\n")
             rec.flush()
@@ -150,7 +151,7 @@ def _worker(args):
         if cid is None or roads._facts_key(feats, kind, extra) is None:
             return
         cell = tuple(int(v) for v in cid[0].split("/"))
-        if cell[0] != decisions.CELL_Z or roadz.hk_cell(cell):
+        if cell[0] != decisions.CELL_Z or roadz.hk_cell(cell) or roadz.tlm_tags(cell):
             return
         rec.write(json.dumps({"facts": kind, "layer": cid[1], "extra": extra, "cell": cid[0], "versions": cid[2],
                               "data": json.dumps(data)}) + "\n")
@@ -201,12 +202,15 @@ WEEKLY_WAIT_S = 180.0
 
 
 def weekly_of(versions):
-    return {k: versions.get(k) for k in WEEKLY_KEYS} if isinstance(versions, dict) else None
+    if not isinstance(versions, dict):
+        return None
+    # (dedecks only where versions() has it: absent with the source off)
+    return {k: versions.get(k) for k in WEEKLY_KEYS if k != "dedecks" or k in versions}
 
 
 def wait_weekly(md, wait_s=None, sleep=time.sleep):
-    """The weekly datasets' builds ({rails, lanes, stations}) once every one is known (each manifest asked, again
-    every 10 s for up to wait_s), or None. Planning without them would make plans without their tags."""
+    """The weekly datasets' builds ({rails, lanes, stations, osmtags}) once every one is known (each manifest asked,
+    again every 10 s for up to wait_s), or None. Planning without them would make plans without their tags."""
     srcs = [getattr(md, a, None) for a in ("rail_tags", "lane_tags", "station_tags")]
     t0 = time.monotonic()
     wait_s = WEEKLY_WAIT_S if wait_s is None else wait_s
@@ -214,6 +218,12 @@ def wait_weekly(md, wait_s=None, sleep=time.sleep):
         for src in srcs:
             if src is not None:
                 src.version()
+        if hasattr(md, "osm_tags_build"):
+            md.osm_tags_build()             # (the OSM road tags' build of the run, decided)
+        import roadz
+        if roadz.ON and roadz.DE_ON:
+            import dedom
+            dedom.identity()                # (Germany's measured decks' build of the run, decided)
         got = weekly_of(md.versions())
         if all(got.get(k, 0) is not None for k in WEEKLY_KEYS):
             return got
@@ -237,7 +247,7 @@ def _ways_worker(args):
     start = wait_weekly(md)
     if start is None:
         return {"error": "the weekly datasets' manifests could not be had"}
-    sources = {"rails": getattr(md, "rail_tags", None), "lanes": getattr(md, "lane_tags", None)}
+    sources = decisions.weekly_of(md)       # (rails, lanes and the OSM road tags: the server's own slices)
     with open(out_jsonl, "w") as rec:
         for z, x, y in cells:
             try:
@@ -258,6 +268,8 @@ def plan_area(cache, cells, procs, work, label):
     os.makedirs(work, exist_ok=True)
     todo, results, jobs = cells, [], []
     t0 = time.time()
+    import pagesdata                        # (one build of each weekly dataset in every worker of the build)
+    pagesdata.ensure_session(cache)
     for pass_ in range(PASSES):
         plancache.start_run(cache)          # (a new run: the last run's short plans are not read again)
         pj = [(cache, todo[i::procs], os.path.join(work, f"{label}_p{pass_}w{i}.jsonl"), i) for i in range(procs)]

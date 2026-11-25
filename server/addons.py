@@ -358,7 +358,10 @@ class GitHubCache:
             r = None
             for attempt in range(RETRIES + 1):
                 try:
-                    r = self.net.get(url, kind="demand", headers=headers, lane=LANE)
+                    # (the add-ons page's data, no build's input: its failures fault no build, netfetch.stale_ok;
+                    # it runs in the loop's default executor, where a fault was every running build's)
+                    with netfetch.stale_ok():
+                        r = self.net.get(url, kind="demand", headers=headers, lane=LANE)
                     break
                 except netfetch.NotFound:
                     raise

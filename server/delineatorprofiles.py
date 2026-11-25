@@ -82,23 +82,6 @@ def eligible(country, spec, lit=None):
             and not (p.unlit and str(lit).lower() in {'yes', 'true', '1', '24/7'}))
 
 
-def spacing(country, spec, radius=float('inf')):
-    p = policy(country)
-    # Iceland's lower-traffic roads: one side, 100 m (class proxy, not a count).
-    base = 100. if country == 'IS' and spec.cls in {'tertiary', 'unclassified'} else p.spacing
-    for limit, distance in p.curves:
-        if radius < limit:
-            return distance * (2 if base == 100. and country == 'IS' else 1)
-    return base
-
-
-def verge(country, spec, radius, turn, side):
-    if country == 'IS' and spec.cls in {'tertiary', 'unclassified'}:
-        return side == -1
-    # N300: only the outer verge in very tight bends.
-    return not (country == 'NO' and radius < 50. and side * turn > 0)
-
-
 def legacy_share(country):
     if policy(country).mode != 'legacy':
         return 0.

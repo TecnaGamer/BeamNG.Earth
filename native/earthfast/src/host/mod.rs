@@ -30,6 +30,7 @@ pub mod msgs;
 pub mod pyjob;
 pub mod pyjson;
 mod record;
+pub mod sched;
 mod trackers;
 mod wire;
 
@@ -682,6 +683,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pyjson::pyjson_dumps_j, m)?)?;
     m.add_function(wrap_pyfunction!(pyjson::pyjson_round, m)?)?;
     pyjob::register(m)?;
+    sched::register(m)?;
     msgs::register(m)?;
     farstate::register(m)?;
     trackers::register(m)?;

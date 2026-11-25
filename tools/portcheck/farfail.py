@@ -94,7 +94,7 @@ def replay(root, scenario):
     with ExitStack() as cleanup:
         now = [1000.0]
         cls = Provider if scenario in ("provider", "provider_offline") else FakeNet
-        im = cls(str(root / "imagery"), serve, chain=("usgs", "eox2023"), clock=lambda: now[0])
+        im = cls(str(root / "imagery"), serve, chain=("usgs", "eox2016"), clock=lambda: now[0])
         cleanup.callback(im.close)
         net = im.fetcher
         server = earthd.Server(str(root), str(root / "cache"), imagery=None, net=net, credits=credits.Credits(),
@@ -144,7 +144,7 @@ def replay(root, scenario):
                 net.host(host).breaker.trip(60)
         for src in im.chain:
             if scenario == "breaker" or (scenario == "failover" and src.name == "usgs") or (
-                    scenario == "incomplete" and src.name == "eox2023"):
+                    scenario == "incomplete" and src.name == "eox2016"):
                 net.host(netfetch.host_of(src.url)).breaker.trip(60)
 
         # Observe the counts handed to the server, before conversion to the deduplicated credit IDs.

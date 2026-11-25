@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import deshadow as ds  # noqa: E402
 import geodesy  # noqa: E402
 import imagery  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import standins  # noqa: E402  (a second global layer for the golden renders, "s2other")
 
 RES_F = 1.92                # fine pixel (z16 at ~36 N)
 F = 4                       # fine px per grid cell (z14)
@@ -667,10 +669,15 @@ class SeededImagery(imagery.Imagery):
         return imagery.as_tile(rng.integers(0, 256, (256, 256, 3), dtype=np.uint8))
 
 
+# The default chain with a second global layer before EOX 2016 (EOX 2023 there until 2026-11-23; the stand-in "s2other"
+# has its name's length, which seeds the noise: the same pixels)
+GOLDEN_CHAIN = tuple(n for d in imagery.DEFAULT_CHAIN for n in ((standins.ALT, "eox2016") if d == "eox2016" else (d,)))
+
+
 def golden(**kw):
     h = hashlib.sha256()
     with tempfile.TemporaryDirectory() as d:
-        im = SeededImagery(d, **kw)
+        im = SeededImagery(d, chain=GOLDEN_CHAIN, **kw)
         f = geodesy.EnuFrame(36.5785, -118.2923)
         for (x0, y0, size, px) in [(0, 0, 64, 256), (-12000, 300, 64, 256), (-2000, -3000, 512, 256),
                                    (-9000, 5000, 4096, 512), (-40000, -20000, 32768, 256)]:
@@ -683,9 +690,10 @@ def golden(**kw):
 
 class FlagOffTest(unittest.TestCase):
     # sha256 of these renders by the imagery code without the de-shadow hook: the finished pyramid's (geotiles phase 3a,
-    # 2026-10-29: the tone curve per source tile, kept as JPEGs; before it, commit 6465d26's a280901f / b9ef73bd)
-    GOLDEN = {1.0: "f0b36dae73d66c9d15d056a6bfbf4b37aee3e0af42ccc53e1de4bdd208790b3c",
-              0.0: "a8c2eedb16fa69f148c11b613099c8d7501e60a2a9cbef2fa1cc48f420a01e47"}
+    # 2026-10-29: the tone curve per source tile, kept as JPEGs; before it, commit 6465d26's a280901f / b9ef73bd;
+    # 2026-11-23: the stand-in layer's name in the per-source counts, the pixels those of f0b36dae / a8c2eedb)
+    GOLDEN = {1.0: "b623879eeec89ebce3aac0ec36f947eb1fdc4c7cc1721a02ca3c57b94495918b",
+              0.0: "f647e1532b661e6941b08883ed71f47f5d5b57f9ad4bde2bad24d4b152828eac"}
 
     def test_render_byte_identical_without_deshadow(self):
         for tone, digest in self.GOLDEN.items():
@@ -703,7 +711,7 @@ class FlagOffTest(unittest.TestCase):
             self.assertIs(s2.imagery.deshadow, s2.deshadow)
             self.assertEqual(s2.deshadow.mode, "full")
             s2.imagery.close()
-            s3 = earthd.Server(tmp, os.path.join(tmp, "cache"), imagery=("eox2023",), deshadow="full")
+            s3 = earthd.Server(tmp, os.path.join(tmp, "cache"), imagery=("eox2016",), deshadow="full")
             self.assertIsNone(s3.deshadow)          # no USGS in the chain: nothing to de-shadow
             s3.imagery.close()
             with self.assertRaises(ValueError):

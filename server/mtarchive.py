@@ -382,7 +382,8 @@ class Archives:
         self._lock = threading.Lock()
         self._demoted = {}
         self._pruned = False
-        self._bind = {"at": -1e18, "failed_at": -1e18, "doc": None}
+        self._bind = {"at": -1e18, "failed_at": -1e18, "doc": None,
+                      "backoff": netfetch.Backoff(BIND_RETRY_S, BIND_MAX_AGE_S / 4)}
         self.pool = ThreadPoolExecutor(READ_THREADS, thread_name_prefix="dem-archive")
         self.stats = {"reads": 0, "tiles": 0, "missing": 0}
 
@@ -454,18 +455,30 @@ class Archives:
             if old is not None and age is not None and age < BIND_MAX_AGE_S:
                 st["doc"], st["at"] = old, now - age
                 return old
-            if now - st["failed_at"] >= BIND_RETRY_S:
+            # (an older copy in hand: its refresh failing is no build's, stale-if-error, netfetch.stale_ok; asked again
+            # after BIND_RETRY_S, doubling to BIND_MAX_AGE_S / 4. Without one: the endpoint, a fault, as before)
+            backoff = st["backoff"]
+            wait = BIND_RETRY_S
+            if now - st["failed_at"] >= BIND_RETRY_S and (old is None or backoff.due(now)):
                 try:
-                    body = self._bindings_body()
+                    with netfetch.stale_ok(old is not None):
+                        body = self._bindings_body()
                     doc = bindings_of(body)
                     _write(path, body)
                     st["doc"], st["at"] = doc, now
+                    backoff.ok()
                     return doc
                 except (netfetch.FetchError, OSError, ValueError) as e:
-                    log.info("mtarchive: no binding of the archives (%s: %s): %s", type(e).__name__, e,
-                             "the copy on disk" if old else "the tile endpoint meanwhile")
-                    st["failed_at"] = now
-            st["doc"], st["at"] = (old or {}), now - BIND_MAX_AGE_S + BIND_RETRY_S
+                    if old is not None:
+                        netfetch.refresh_failed(log, backoff, now, "mtarchive: the archives' binding", e)
+                        wait = backoff.until - now
+                    else:
+                        log.info("mtarchive: no binding of the archives (%s: %s): the tile endpoint meanwhile",
+                                 type(e).__name__, e)
+                        st["failed_at"] = now
+            elif old is not None and backoff.until is not None:
+                wait = max(1.0, backoff.until - now)
+            st["doc"], st["at"] = (old or {}), now - BIND_MAX_AGE_S + wait
             return st["doc"]
 
     def _bindings_body(self):

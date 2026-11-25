@@ -201,6 +201,34 @@ local function applyLook(m, name)
   end
 end
 
+-- A material's look replaced for a while (winterlook.lua: the snow layer's stock snow textures in winter): look's fields
+-- set on it now (sizes in metres, as LOOKS; the block's square), the values they replace kept; nil puts those back.
+-- The engine takes them with the next block swap (its texture arrays are made then). Returns true if applied.
+M.overridden = {}       -- material name -> { field = the value it had }
+function M.setLookOverride(name, look)
+  local m = scenetree and scenetree.findObject(name)
+  if not m then M.overridden[name] = nil; return false end   -- (gone with its level: nothing to put back)
+  local saved = M.overridden[name]
+  if look == nil then
+    if not saved then return false end
+    for k, v in pairs(saved) do pcall(function() m:setField(k, 0, v) end) end
+    M.overridden[name] = nil
+    return true
+  end
+  saved = saved or {}
+  for k, v in pairs(look) do
+    if saved[k] == nil then
+      local ok, old = pcall(function() return m:getField(k, 0) end)
+      saved[k] = ok and old or ''
+    end
+    if k:sub(-7) == 'TexSize' then v = toSamples(v) end
+    pcall(function() m:setField(k, 0, tostring(v)) end)
+  end
+  M.overridden[name] = saved
+  M.looked[name] = M.square     -- (sized for this square already: no level rescale of these values)
+  return true
+end
+
 local function baseFields(path, size)
   return path or M.LEVEL_BASE.tex, tostring(toSamples(path and (size or 1024) or M.LEVEL_BASE.sizeM))
 end

@@ -48,8 +48,17 @@ function S.newObject(class)
   function o:setScale(v) self.scale = vec3(v.x, v.y, v.z) end
   function o:setPosRot(x, y, z, qx, qy, qz, qw) S.count('setPosRot'); self.pos = vec3(x, y, z); self.rot = quat(qx, qy, qz, qw) end
   function o:getPosition() return vec3(self.pos.x, self.pos.y, self.pos.z) end
+  -- (its shape's box, only where a test sets one: the mesh S.BOX_TOP (or the object's boxTop) above its position)
+  function o:getWorldBox()
+    local top = self.boxTop or S.BOX_TOP
+    if top == nil then return nil end
+    return { minExtents = vec3(self.pos.x, self.pos.y, self.pos.z - 10), maxExtents = vec3(self.pos.x, self.pos.y, self.pos.z + top) }
+  end
   function o:delete() S.objects[self.id] = nil; S.count('delete_' .. class) end
   function o:setHidden(h) self.hidden = h end
+  function o:isHidden() return self.hidden end
+  function o:postApply() S.count("postApply_" .. class) end
+  function o:updateInstanceRenderData() S.count("updateInstanceRenderData") end
   function o:setRenderEnabled(v) S.count('setRenderEnabled'); self.renderEnabled = v end
   -- SimGroup
   function o:addObject(c) S.objects[c.id] = c; self.children = self.children or {}; self.children[#self.children + 1] = c end

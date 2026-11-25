@@ -95,6 +95,33 @@ rawset(_G, cs.GLOBAL, nil)            -- (the running copy is older than this mo
 T.check(cs.check('its modScript', false) == true and #unloadedLog == 2 and #loadedLog == 0,
   'modScript: an older running copy unloaded, nothing loaded here')
 
+-- the GPS's route carried across the swap: the mounted copy's gps.lua takes it once at load (a route set before a
+-- BeamMP join was gone after it)
+start(copyA)
+cs.remember()
+mounted = copyB
+package.loaded['beamngEarth/gps'] = { status = function()
+  return { lat = 39.28, lon = -76.59, name = 'Home', waypoints = { { lat = 39.30, lon = -76.60, name = 'Charger' } } }
+end }
+T.check(cs.check('turned on: multiplayerbeamng_earth', true) == true, 'swapped with a route set')
+local carry = rawget(_G, cs.GPS)
+T.check(type(carry) == 'table' and #carry == 2 and carry[1].name == 'Charger' and carry[2].name == 'Home',
+  'the waypoint ahead and the destination kept, the destination last')
+local G = require('beamngEarth/gps')        -- (forgotten by the swap: the mounted copy's, required again)
+local st = G.status()
+T.check(st and st.name == 'Home' and st.lat == 39.28 and st.waypoints and #st.waypoints == 1
+  and st.waypoints[1].name == 'Charger' and not st.autodrive, 'the new GPS has the destination and the waypoint')
+T.check(rawget(_G, cs.GPS) == nil and G.CARRY == cs.GPS, 'taken once; the same global on both sides')
+-- a route cleared before the swap stays cleared (and a carry an older copy never took goes too)
+start(copyA)
+cs.remember()
+mounted = copyB
+rawset(_G, cs.GPS, { { lat = 1, lon = 2, name = 'stale' } })
+package.loaded['beamngEarth/gps'] = { status = function() return nil end }
+cs.check('turned on', true)
+T.check(rawget(_G, cs.GPS) == nil, 'no destination: nothing carried')
+T.check(require('beamngEarth/gps').status() == nil, 'the new GPS starts without one')
+
 -- the rollback file
 start(copyA)
 cs.remember()
