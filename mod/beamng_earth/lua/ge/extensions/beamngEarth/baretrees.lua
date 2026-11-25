@@ -191,7 +191,7 @@ local latched = nil     -- the amount taken at the first tree
 local latchedAt, reported = nil, false      -- when (os.clock), and its log line sent
 local inputs = {}       -- mode, lat, snow, state: the latch's
 local copies = {}       -- stock shape -> its copy's path, or false (none possible)
-M.stats = { copied = 0, bare = 0, kept = 0, failed = 0 }
+M.stats = { copied = 0, bare = 0, kept = 0, failed = 0, stock = {} }      -- (stock: shapes with no copy possible)
 
 local function root()
   if not M.ROOT then
@@ -211,7 +211,10 @@ local function copyOf(shape)
   local out = root() .. shape:match('[^/]+$') .. '.cdae'
   if not FS:fileExists(out) then
     local bytes, n = M.patchCdae(readFile(shape .. '.cdae'), renames)
-    if not bytes then return nil end        -- (no leaf cards: a dead tree, already bare)
+    if not bytes then                       -- (no leaf cards: a dead tree, already bare; or not readable)
+      M.stats.stock[#M.stats.stock + 1] = shape:match('[^/]+$')
+      return nil
+    end
     writeFile(out, bytes)
     if not FS:fileExists(out) then M.stats.failed = M.stats.failed + 1; return nil end
     M.stats.copied = M.stats.copied + 1
@@ -283,8 +286,10 @@ function M.reportLine()
     local ok, files = pcall(FS.findFiles, FS, M.ROOT, '*imposter*', -1, true, false)
     imp = ok and type(files) == 'table' and #files or -1
   end
-  return string.format('bare trees: amount %s, %d bare, %d kept leafy, %d copies made, %d failed, %d imposter files',
-    latched and string.format('%.2f', latched) or 'none', M.stats.bare, M.stats.kept, M.stats.copied, M.stats.failed, imp)
+  return string.format('bare trees: amount %s at lat %s, %d bare, %d kept leafy, %d copies made, %d failed, %d imposter '
+    .. 'files, no copy: %s', latched and string.format('%.2f', latched) or 'none',
+    inputs.lat and string.format('%.2f', inputs.lat) or '-', M.stats.bare, M.stats.kept, M.stats.copied,
+    M.stats.failed, imp, #M.stats.stock > 0 and table.concat(M.stats.stock, ' ', 1, math.min(#M.stats.stock, 6)) or '-')
 end
 
 -- seasonlook.lua's check (in our level): the season's mode, and winter back on in a level started again.
