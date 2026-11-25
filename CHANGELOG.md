@@ -12,6 +12,9 @@ What changed in each release of BeamNG.Earth, newest first.
   or off, and a limit on how thick fog can get.
 - **Traffic in bad weather**: AI traffic turns its headlights on in rain, snow and fog and drives a little slower
   (slow enough to stop within the visible distance in thick fog); street lamps come on earlier under a dark stormy sky.
+- **Winter (Experimental): bare trees.** With Winter on, oaks, beeches, birches, aspens and poplars lose their leaves
+  tree by tree as winter comes (by the date and the latitude) and show their bare twigs near and far; some oaks and
+  young beeches keep their dead brown leaves, as they do in real woods. Evergreens stay green.
 - **BeamMP**: `G.WEATHER` takes the new presets and `real-host` (everyone gets the live weather where the
   longest-joined player is). `real` (each player's own weather) stays the default.
 
