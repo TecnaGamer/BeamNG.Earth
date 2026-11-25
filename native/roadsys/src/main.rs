@@ -128,7 +128,30 @@ fn main() {
         // (M4 surface) a decks input file (ROADSYS_DECK_DUMP's .rsdk): its output's FNV-1a 64 and counts
         let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(2) });
         match roadsys::deck::run_input(&b) {
-            Ok((bytes, o)) => { println!("decks {:016x} {} {} {}", roadsys::geom::fnv(&bytes), o.t.len(), o.runs.len(), o.mt.len()); return; }
+            Ok((bytes, o)) => {
+                println!("decks {:016x} {} {} {}", roadsys::geom::fnv(&bytes), o.t.len(), o.runs.len(), o.mt.len());
+                // (tools: ROADSYS_DECKS_RUNS=FILE writes the parapet runs (tile frame) and the stats as JSON)
+                if let Ok(path) = std::env::var("ROADSYS_DECKS_RUNS") {
+                    let runs: Vec<String> = o.runs.iter().map(|r| format!("[{}]", r.p.iter().map(|q| format!("[{:.3},{:.3},{:.3}]", q[0], q[1], q[2])).collect::<Vec<_>>().join(","))).collect();
+                    std::fs::write(&path, format!("{{\"stats\":{},\"runs\":[{}]}}", o.json, runs.join(","))).ok();
+                }
+                // (tools: ROADSYS_DECKS_AT=x,y,r lists the faces whose middle lies within r of (x, y): kind, feature, z)
+                if let Ok(v) = std::env::var("ROADSYS_DECKS_AT") {
+                    let f: Vec<f64> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+                    if f.len() == 3 {
+                        for (i, t) in o.t.iter().enumerate() {
+                            let c = [(o.v[t[0] as usize][0] + o.v[t[1] as usize][0] + o.v[t[2] as usize][0]) / 3.0,
+                                     (o.v[t[0] as usize][1] + o.v[t[1] as usize][1] + o.v[t[2] as usize][1]) / 3.0];
+                            let z = (o.v[t[0] as usize][2] + o.v[t[1] as usize][2] + o.v[t[2] as usize][2]) / 3.0;
+                            if (c[0] - f[0]).hypot(c[1] - f[1]) <= f[2] {
+                                let fe = if o.feat[i] >= 0 { o.feats[o.feat[i] as usize].as_str() } else { "-" };
+                                println!("face {:.2} {:.2} kind {} feat {} z {:.3}", c[0], c[1], o.kind[i], fe, z);
+                            }
+                        }
+                    }
+                }
+                return;
+            }
             Err(e) => { eprintln!("{}", e); std::process::exit(1) }
         }
     }

@@ -123,6 +123,8 @@ FEATURES = {
     "bld:nyc-3d": "NYC 3-D Building Model (OTI)",
     "roadz:hk": "HK Gov TD and CEDD (DATA.GOV.HK, CSDI)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
+    # (winterpacks.py: the winter looks' packs; the consumer names them where it used them)
+    "land:esa-cci-lc": "ESA Land Cover CCI", "land:jrc-gsw": "EC JRC/Google (Global Surface Water)",
 }
 # (the full wordings of features whose licences name each provider: hello.attribution / CREDITS.md)
 LONG = {
@@ -147,6 +149,13 @@ LONG = {
     "roof:lod2-ee": "Building 3D model data: Republic of Estonia Land and Spatial Development Board 2026 (open data "
                     "licence, https://geoportaal.maaruum.ee/opendata-licence); roof shapes read from the models' "
                     "faces, data changed",
+    "land:esa-cci-lc": "Evergreen share of the trees: ESA Land Cover CCI project team; Defourny, P. (2019): ESA Land "
+                       "Cover Climate Change Initiative (Land_Cover_cci): Global Land Cover Maps, Version 2.0.7. "
+                       "Centre for Environmental Data Analysis; with thanks to the ESA Climate Change Initiative and "
+                       "the Land Cover CCI project, data changed",
+    "land:jrc-gsw": "Water share: Source: EC JRC/Google. Pekel, J.-F., Cottam, A., Gorelick, N., Belward, A. S. (2016): "
+                    "High-resolution mapping of global surface water and its long-term changes. Nature 540, 418-422 "
+                    "(Copernicus Programme), data changed",
     "roof:lod2-wien": "Roof shapes and heights in Vienna: Datenquelle: Stadt Wien - data.wien.gv.at (Generalisiertes "
                       "Dachmodell LOD2.1, CC BY 4.0), data changed",
 }

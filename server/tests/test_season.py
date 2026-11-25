@@ -93,5 +93,31 @@ class ColourTest(unittest.TestCase):
         self.assertLess(np.abs(part[:, 10:54].astype(int) - out[:, 10:54].astype(int)).max(), 2)
 
 
+
+
+class FarTexKeyTest(unittest.TestCase):
+    def test_fartex_key_holds_the_week(self):
+        """Server.tex_key ("fartex", the main process's far textures and the bulk restore's): the season's week
+        (season_key, not "auto" alone: October's grade was served in late November; found by the winter W2 agent)."""
+        import datetime
+        from types import SimpleNamespace
+        import earthd
+        import season
+        im = SimpleNamespace(chain=[SimpleNamespace(name="eox2016")], leaf_on=True, season_mode="auto")
+        srv = SimpleNamespace(imagery=im, tone="auto", tex_modes=(), road_masks=False, mapdata=None, road_widths=None,
+                              surface=None, layout=SimpleNamespace(cells=64), road_mask_px=lambda lvl: 0)
+        anchor = SimpleNamespace(lat=40.877, lon=-77.566, zooms={k: 16 - k for k in range(9)})
+        tile = SimpleNamespace(key=(5, 0, 0), level=5, size=8192.0, bbox=(0.0, 0.0, 8192.0, 8192.0))
+        real = season.utc_today
+        try:
+            season.utc_today = lambda: datetime.date(2026, 10, 20)
+            october = earthd.Server.tex_key(srv, anchor, tile, 256)
+            season.utc_today = lambda: datetime.date(2026, 11, 24)
+            november = earthd.Server.tex_key(srv, anchor, tile, 256)
+            self.assertNotEqual(october, november)
+            self.assertEqual(earthd.Server.tex_key(srv, anchor, tile, 256), november)
+        finally:
+            season.utc_today = real
+
 if __name__ == "__main__":
     unittest.main()
