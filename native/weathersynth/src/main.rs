@@ -6,7 +6,7 @@
 //! thread, fixed summation order). The Ogg files come from ffmpeg's libvorbis, mono 44.1 kHz.
 //!
 //!   weathersynth thunder --class strike|close|mid|far --seed N --out FILE.wav
-//!   weathersynth rain --kind light|light_d2|medium|heavy|roof_light|roof|roof_heavy|muffled --seed N --out FILE.wav
+//!   weathersynth rain --kind light|light_d1|medium|heavy|roof_light|roof|roof_heavy|muffled --seed N --out FILE.wav
 //!   weathersynth set --out DIR --set K [--ogg] [--only thunder|rain]   the files with the mod's names (seeds from K)
 //!   weathersynth analyze FILE.wav ...               a table describing each file
 //!   weathersynth live-bench [--seconds S] [--block N] [--wav F]   the live rain engine timed (prototype)
@@ -45,8 +45,8 @@ fn render_rain(
 ) -> Result<(Vec<f64>, String), String> {
     // light / medium / heavy outdoors; roof_light / roof / roof_heavy inside the car; muffled from the medium loop
     let scene_name = match kind {
-        "light" | "light_d1" | "roof_light" => "light",
-        "light_d2" => "light_d2",
+        "light" | "light_d2" | "roof_light" => "light",
+        "light_d1" => "light_d1",
         "medium" | "roof" | "muffled" => "medium",
         "heavy" | "roof_heavy" => "heavy",
         _ => return Err(format!("unknown rain kind {kind}")),
@@ -141,13 +141,8 @@ fn run() -> Result<(), String> {
                 }
             }
             if only.as_deref() != Some("thunder") {
-                for kind in ["light_d1", "light_d2", "medium", "heavy", "roof_light", "roof", "roof_heavy", "muffled"] {
-                    let name = match kind {
-                        "light_d1" => "bne_rain_light_D1".to_string(),
-                        "light_d2" => "bne_rain_light_D2".to_string(),
-                        _ => format!("bne_rain_{kind}"),
-                    };
-                    jobs.push((name, "rain".into(), kind.into(), 100 * k + 1));
+                for kind in ["light", "medium", "heavy", "roof_light", "roof", "roof_heavy", "muffled"] {
+                    jobs.push((format!("bne_rain_{kind}"), "rain".into(), kind.into(), 100 * k + 1));
                 }
             }
             let mut medium_raw = Vec::new();

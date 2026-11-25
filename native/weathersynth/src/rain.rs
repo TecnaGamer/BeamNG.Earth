@@ -442,12 +442,12 @@ pub struct Scene {
 pub fn scene(name: &str) -> Option<Scene> {
     let s = match name {
         // drizzle to light rain: countable taps and drips over almost no wash
-        // light_D1 (the default light): a soft, even, distant patter (the user, 2026-11-25: "light sounds like it's
+        // light_D1 (the alternative): a soft, even, distant patter (the user, 2026-11-25: "light sounds like it's
         // hitting something close ... remove the up close noise from light and keep the background"): no near
         // objects, no drip points or canopy drips, no single drops within 3.5 m (they stay in the wash), faint single
         // drops 3.5-20 m out
-        "light" | "light_d1" => Scene {
-            name: "light",
+        "light_d1" => Scene {
+            name: "light_d1",
             rate_mm_h: 0.7,
             kind: DsdKind::Drizzle,
             puddle: 0.05,
@@ -469,10 +469,10 @@ pub fn scene(name: &str) -> Option<Scene> {
             gust: 0.3,
             lufs: -30.0,
         },
-        // light_D2: as D1 with the near layers kept faint: near objects at -15 dB and 30 % of them, 4 drip points and
-        // 2 canopy drips a second (6-15 m) at -15 dB
-        "light_d2" => Scene {
-            name: "light_d2",
+        // light (light_D2, the user's pick 2026-11-25): as D1 with the near layers kept faint: near objects at -15 dB
+        // and 30 % of them, 4 drip points and 2 canopy drips a second (6-15 m) at -15 dB
+        "light" | "light_d2" => Scene {
+            name: "light",
             rate_mm_h: 0.7,
             kind: DsdKind::Drizzle,
             puddle: 0.05,
