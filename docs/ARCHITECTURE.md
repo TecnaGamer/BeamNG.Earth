@@ -683,6 +683,21 @@ in 2026-10-10-weather-probe-results.md.
   offset, the same switch matrix for the time), `test_settings.lua` (the 'auto' migration),
   `test_core_stubbed.lua` (forwarding). Still to check in-game: the temperature-curve setter form,
   `setPercentage` drops visible, coverage calibration above 0.95 (overcast), fog k = 1/H, wind push.
+- **Weather phase A** (the weather plan 2026-11-24, `~/bnge-tests/weatherplan/PLAN.md`, approved): modes
+  real / preset / manual ("Off"); 15 presets (`M.PRESETS`, synthetic messages; deterministic, BeamMP's too);
+  `scaleMsg` (intensity), `filterReal` (the real clouds / fog / wind / precipitation each left out), change speed
+  (`M.step` with T = 0..120 s), the fog cap. A Weather page (settings.lua `weather*`, `real*`, `rainVisibility`,
+  `fogLimit`) and a radial ring (`/root/sandbox/bngEarthWeather/`). The rain and snow objects have one owner
+  (`ownPrecip` / `precipBlock`, 4 Hz while they fall, nothing when Off): Off, the setting, the 3D map, the big map,
+  missions, above the cloud base; a shelter fade (`ambience.shelterAt`: the road tiles' tunnel / arch / parking /
+  under-bridge boxes, else 3 upward `castRayStatic` rays). Shares from log-rate curves (`RAIN_CURVE`, `SNOW_CURVE`)
+  times a pool scaled by the rain visibility; rain and snow add extinction (`rainSigma`, `snowSigma`); flakes by
+  temperature (`FLAKES`); snow uses the level's own `bngEarthSnowflake` datablock (Snow_menu drew centimetre
+  specks) with collision on; the rain box fades out inside itself, without splashes or turbulence. Grey fog:
+  `FOG_TINT` levers on the ScatterSky by `fogGrey`, restored exactly. Traffic: `trafficLights` / `trafficCap` /
+  `duskDark` (wxtraffic.lua wraps the stock traffic class's checkTimeOfDay inside its onTrafficTick only;
+  speeding.lua; nightlights.lua). BeamMP: `G.WEATHER = 'real-host'` relays the longest-joined player's real
+  weather (`bngeWeather`, checked on both sides: `G.weatherMsg`, `sanitizeMsg`).
 ## Dev tools and the pause-menu settings page (docs/DEVTOOLS.md; built offline 2026-10-10)
 - `dev.lua` (extension `beamngEarth_dev`): in-world overlays (per-tile LOD tint, tile outlines by
   state, loading heat with the next imports numbered, physics block squares, rings, under-car

@@ -63,9 +63,6 @@ export const settingsSchema = [
       { id: "skyMode", type: "select", default: "real", name: "Sun and stars", desc: "Real time: the sun, moon and stars follow the real clock and date where you are. Manual: use the game's own Time & Weather controls. Changing the time in the pause menu switches this to Manual by itself; choose Real time to go back.",
         note: "Changing the time in the pause menu switches this to Manual.",
         options: [ { label: "Real time", value: "real" }, { label: "Manual", value: "manual" } ] },
-      { id: "weatherMode", type: "select", default: "real", name: "Weather", desc: "Real: clouds, fog, wind, rain, snow and temperature follow the real weather where you are. Manual: use the game's own Time & Weather controls. Changing the weather in the pause menu (or another weather mod) switches this to Manual by itself; choose Real weather to go back.",
-        note: "Changing the weather in the pause menu switches this to Manual.",
-        options: [ { label: "Real weather", value: "real" }, { label: "Manual", value: "manual" } ] },
       { id: "clouds", type: "bool", default: true, name: "Clouds", desc: "A volumetric cloud layer that follows the ground under you." },
       { id: "realGravity", type: "bool", default: true, name: "Real gravity", desc: "Gravity as it really is where you are (it varies a little with latitude, height and the ground below). Off: the usual 9.81 m/s2." },
       { id: "lowFuelPrompt", type: "bool", default: true, name: "Low fuel prompt", desc: "When the fuel or charge drops below 15 %, a message names the nearest gas station (an EV charger for an electric car) and the key that routes the GPS there (Ctrl+Shift+Q, or Nearest station in the radial menu)." },
@@ -84,6 +81,31 @@ export const settingsSchema = [
       { id: "autodriveObstacles", type: "bool", default: false, name: "Autodrive obstacle avoidance", desc: "Experimental. Autodrive checks for static obstacles ahead, brakes and tries clear lanes in your direction. The extra road sensing uses CPU time and may lower the frame rate, most at higher speeds. Off: normal AI driving. Braking for traffic lights works either way." },
       { id: "autodriveOncomingPass", type: "bool", default: false, name: "Autodrive opposing-lane passing", desc: "Experimental. With obstacle avoidance on, Autodrive may pass an obstruction through a clear opposing lane. Road markings are not checked, so it can cross solid lines. The extra visibility and traffic checks use CPU time while a pass is judged." },
       { id: "rebaseDistance", type: "float", min: 2000, max: 16000, step: 100, default: 15000, name: "Rebase distance (m)", desc: "Advanced. How far you drive before the world quietly moves back under you (keeps the physics precise). 15 km keeps precision at about 1 mm." },
+    ],
+  },
+  {
+    // the weather (lua/ge/extensions/beamngEarth/weather.lua; the weather plan 2026-11-24, phase A): Real, a preset or
+    // Off, and how it looks; also in the radial menu (Weather)
+    name: "Weather",
+    intro: "Real weather where you are, a weather of your choice, or Off. Also in the radial menu: Weather. In multiplayer the server can set the weather for everyone; Show rain and snow and Rain visibility stay yours.",
+    items: [
+      { id: "weatherNow", type: "info", name: "Now", desc: "The weather shown now and where it comes from: real, your preset, the server's (multiplayer) or off." },
+      { id: "weatherMode", type: "select", default: "real", name: "Weather", desc: "Real weather: clouds, fog, wind, rain, snow and temperature follow the real weather where you are (Open-Meteo, every 10 minutes). Preset: the weather you pick below, the same for everyone who picks it. Off: the game's own Time & Weather controls, no rain or snow from BeamNG.Earth. Changing the weather in the pause menu (or another weather mod) switches this to Off by itself; choose Real weather or Preset to go back.",
+        note: "Changing the weather in the pause menu switches this to Off.",
+        options: [ { label: "Real weather", value: "real" }, { label: "Preset", value: "preset" }, { label: "Off (game controls)", value: "manual" } ] },
+      { id: "weatherPreset", type: "select", default: "rain", name: "Preset", desc: "The weather to show with Weather set to Preset. Rain, snow, fog and wind as named; Thunderstorm is heavy rain with strong gusts (no lightning yet); Sleet is rain and wet snow together; Freezing rain falls as rain below 0 C.", showIf: c => c.weatherMode === "preset",
+        options: [ { label: "Clear", value: "clear" }, { label: "Few clouds", value: "fewclouds" }, { label: "Cloudy", value: "cloudy" }, { label: "Overcast", value: "overcast" }, { label: "Drizzle", value: "drizzle" }, { label: "Rain", value: "rain" }, { label: "Heavy rain", value: "heavyrain" }, { label: "Thunderstorm", value: "storm" }, { label: "Fog", value: "fog" }, { label: "Light snow", value: "lightsnow" }, { label: "Snow", value: "snow" }, { label: "Blizzard", value: "blizzard" }, { label: "Sleet", value: "sleet" }, { label: "Freezing rain", value: "freezingrain" }, { label: "Hail shower", value: "hail" } ] },
+      { id: "weatherIntensity", type: "float", min: 0, max: 1.5, step: 0.05, default: 1, name: "Intensity", desc: "How strong the weather is, for the real weather and the presets: rain and snow, wind and fog scale with it. 1: as it is. 0: no rain, snow or wind and clear air (the clouds stay). Up to 1.5 for more.", showIf: c => c.weatherMode !== "manual" },
+      { id: "weatherPrecip", type: "bool", default: true, name: "Show rain and snow", desc: "The falling rain and snow around you. Off: none drawn (the weather itself, its fog and wind, stays). Rain and snow always stop in tunnels, parking structures and under bridges." },
+      { id: "rainVisibility", type: "float", min: 0.5, max: 2.5, step: 0.1, default: 1.3, name: "Rain visibility", desc: "How many raindrops and snowflakes are drawn for the same rain. Real light rain is hard to see; 1.3 (the default) shows a little more than real. Higher costs a little frame time." },
+      { id: "weatherChange", type: "select", default: "60", name: "Changes take", desc: "How long the weather takes to change to a new state: a new real report, another preset or intensity. Instant: at once.", showIf: c => c.weatherMode !== "manual",
+        options: [ { label: "Instant", value: "0" }, { label: "30 seconds", value: "30" }, { label: "1 minute (default)", value: "60" }, { label: "2 minutes", value: "120" } ] },
+      { id: "realClouds", type: "bool", default: true, name: "Real clouds", desc: "With Real weather: the real cloud cover. Off: clear skies, the rest of the real weather stays.", showIf: c => c.weatherMode === "real" },
+      { id: "realFog", type: "bool", default: true, name: "Real fog", desc: "With Real weather: the real visibility (fog, haze, mist). Off: clear air; rain and snow still thicken the air a little.", showIf: c => c.weatherMode === "real" },
+      { id: "realWind", type: "bool", default: true, name: "Real wind", desc: "With Real weather: the real wind and its gusts, which push the cars too. Off: calm.", showIf: c => c.weatherMode === "real" },
+      { id: "realPrecip", type: "bool", default: true, name: "Real rain and snow", desc: "With Real weather: the real rain, snow and hail. Off: dry.", showIf: c => c.weatherMode === "real" },
+      { id: "fogLimit", type: "select", default: "0", name: "Thickest fog", desc: "Limits how thick the fog can get, for the real weather and the presets: the shortest distance you can always see. Real: as thick as it really is.", showIf: c => c.weatherMode !== "manual",
+        options: [ { label: "Real", value: "0" }, { label: "650 ft (200 m)", value: "200" }, { label: "1/3 mile (500 m)", value: "500" }, { label: "1 mile (1.6 km)", value: "1600" } ] },
     ],
   },
   {
@@ -265,7 +287,7 @@ export const settingsSchema = [
 
 // Each page's icon (the pause menu's side buttons take the icon's name, LayoutMenu's tabs the icon) and its button id
 // (the first keeps the old Mods-tab button's id: settings.lua M.BUTTON_ID, pageExists)
-export const PAGE_ICONS = { Graphics: "eyeOutlineOpened", World: "globe", Experimental: "test", Interface: "cogOutline",
+export const PAGE_ICONS = { Graphics: "eyeOutlineOpened", World: "globe", Weather: "weather", Experimental: "test", Interface: "cogOutline",
   Multiplayer: "peopleOutline", Storage: "floppyDisk", "Add-ons": "puzzleModule", Feedback: "bug", About: "info",
   Developer: "code" }
 export const pageId = (name, i) => i === 0 ? "beamngEarth-settings" : "beamngEarth-settings-" + name.toLowerCase()
@@ -382,7 +404,7 @@ export function infoValue(item) {
   if (item.id === "player") return (typeof s.playerLat === "number") ? `${fmt(s.playerLat, 5)}, ${fmt(s.playerLon, 5)}  (${fmt(s.dist / 1000, 1)} km from origin)` : "-"
   if (item.id === "attribution") return s.attribution || "-"
   if (item.id === "credits") return s.credits || "-"
-  if (item.id === "weather") return s.weather || "-"
+  if (item.id === "weather" || item.id === "weatherNow") return s.weather || "-"
   if (item.id === "gravity") return s.gravity || "-"
   if (item.id === "cacheUsage") return (s.cache && s.cache.line) || "-"
   if (item.id === "memoryUsage") return (s.memory && s.memory.line) || "-"
