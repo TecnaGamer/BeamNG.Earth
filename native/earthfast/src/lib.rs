@@ -72,6 +72,7 @@ mod roadshape;
 mod shore;
 mod photofill;
 mod ambience;
+mod snow; // winter W1 (BNE_WINTER): the hourly integer snow kernel (server/snow.py)
 mod gradeguard;
 mod power;
 mod underpass;
@@ -7796,6 +7797,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // hung the exit, server/fast.py's atexit hook calls it)
     m.add_function(wrap_pyfunction!(begin_exit, m)?)?;
     m.add_function(wrap_pyfunction!(exit_guard_counts, m)?)?;
-    m.add("VERSION", 623)?;
+    // 623: road M5 (roadsys)
+    // 624: snow_state / snow_preset / snow_regime / snow_band_depth / snow_band_table / snow_lake_share /
+    // snow_wet_only / snow_selftest / snow_conditions (snow.rs: the winter W1 kernel, server/snow.py, BNE_WINTER /
+    // BNE_WET_ROADS)
+    snow::py::register(m)?;
+    m.add("VERSION", 624)?;
     Ok(())
 }

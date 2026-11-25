@@ -1352,6 +1352,7 @@ local function onMessage(msg)
     -- a new server session: its own gravity message follows the first pose (none with --gravity off)
     local w = rawget(_G, 'beamngEarth_weather')
     if w and w.clearGravity then w.clearGravity() end
+    if M._winter then M._winter.onHello() end   -- (a server without winter: stock grip again after a while)
     st.deshadow = msg.deshadow -- server-side imagery de-shadowing ('lambert' / 'full'; nil = off), shown on the settings page
     st.colormatch = msg.colormatch -- server-side imagery colour-seam removal ('s2'; nil = off), likewise
     seasonlook.setMode(msg.season) -- the imagery's season (server --season): the leaves follow it
@@ -1606,6 +1607,10 @@ local function onMessage(msg)
     -- real weather (server weather.py): applied by the separate beamngEarth_weather extension
     local w = rawget(_G, 'beamngEarth_weather')
     if w and w.onWeather then w.onWeather(msg) end
+  elseif t == 'snowstate' then
+    -- winter grip (server snow.py, BNE_WINTER only): winter.lua loads with the first one (nothing of it runs before)
+    M._winter = M._winter or require('beamngEarth/winter')
+    M._winter.onState(msg)
   elseif t == 'gravity' then
     -- real gravity at the player (server gravity.py): applied by beamngEarth_weather's setGravity path
     local w = rawget(_G, 'beamngEarth_weather')
@@ -3258,6 +3263,10 @@ local function onUpdate(dtReal, dtSim)
       if not ok then log('E', 'beamngEarth', 'speeding: ' .. tostring(err)) end
     end
     t = mark('speeding', t)
+    if M._winter then                -- (winter grip: its once-a-second check; nil unless the server sent a snowstate)
+      local ok, err = pcall(M._winter.update, dtReal)
+      if not ok then log('E', 'beamngEarth', 'winter: ' .. tostring(err)) end
+    end
     require('beamngEarth/minimaproads').update(navgraph.currentGraph())
     t = mark('minimaproads', t)
     do

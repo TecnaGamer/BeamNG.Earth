@@ -404,12 +404,12 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 # cip.py; the weekly data builds a CIP build pins are keyed as such, MapData.versions(). Proof: the
                 # portcheck corpus's plans and facts and the sessions' tiles identical with it on and the sources gone)
                 "BNE_V2_CIP", "BNE_V2_CIP_URL", "BNE_V2_CIP_BUILD",
-                # (winter, W2: the snow on the ground photos is in the keys of the items it changes, the far tiles'
-                # textures and the blocks' base photos, as snowcover.key_parts: a spec's hash of the band tables and
-                # the look's version, nothing where no snow can lie. Keying the switches too would rebuild every road
-                # tile, block and plan of the world for a texture-only change, and summer and the tropics would churn.
-                # Anything else snow comes to change must carry its own spec part, snowcover.py)
-                "BNE_WINTER", "BNE_SNOW")
+                # (winter W1, snow.py: a live 'snowstate' message only; snow never enters plans, cell facts, tiles or
+                # the decision archives, ~/bnge-tests/winterplan/PLAN.md decisions. W2: the snow on the ground photos is
+                # in the keys of the items it changes, the far tiles' textures and the blocks' base photos, as
+                # snowcover.key_parts: a spec's hash of the band tables, the packs and the look's version, nothing
+                # where no snow can lie. Anything else snow comes to change must carry its own spec part, snowcover.py)
+                "BNE_WINTER", "BNE_SNOW", "BNE_WET_ROADS")
 
 
 # BNGE_* settings that change what is built (the road revamp's R1 audit, 2026-11-16): keyed like the build switches
