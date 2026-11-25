@@ -2210,7 +2210,10 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
             nv += len(bp)
     for c in faces:
         pp = np.column_stack((c["xy"], c["deck_z"]))
-        slab = DECK_DEPTH * c["deck_depth"] / (DECK_DEPTH + GIRDER_D)
+        # (BNE_ROADSYS=surface, M5: the structure's whole depth, its floors' (the user 2026-11-24: the underside where the
+        # clearance assumed it, "some bridges are thicker than others"); the girder kits will split it into slab and
+        # girders. M4 drew the slab's share alone: the underside 1 m over the depth the floors kept)
+        slab = float(c["deck_depth"]) if c.get("rs_face") else DECK_DEPTH * c["deck_depth"] / (DECK_DEPTH + GIRDER_D)
         tops.setdefault(round(slab, 3), []).append(len(P))
         P.append(pp - origin)
         UV.append(pp[:, :2] / DECK_TOP_TILE_M)

@@ -81,8 +81,8 @@ near(W.fogSigmaFor({ visM = 300, rainMmH = 1 }), W.fogSigma(300), 1e-15, 'thick 
 near(W.fogSigmaFor({ visM = 100 }, 500), W.FOG_K / 500, 1e-15, 'the fog cap: at most the limit\'s')
 near(W.fogSigmaFor({ visM = 100 }, 0), W.fogSigma(100), 1e-15, 'no cap')
 -- grey fog, flakes, shelter, the precipitation owner, pools
-check(W.fogGreyFor(0, 0, 0, false) == 0 and W.fogGreyFor(4, 0, 0) == 1 and W.fogGreyFor(0, 1, 0) == 1, 'grey: rain, snow')
-near(W.fogGreyFor(0.5, 0, 0), 0.25, 1e-12, 'grey: light rain partly')
+check(W.fogGreyFor(0, 0, 0, false) == 0 and W.fogGreyFor(W.FOG_GREY_RAIN_MMH, 0, 0) == 1 and W.fogGreyFor(0, 1, 0) == 1, 'grey: rain, snow')
+near(W.fogGreyFor(0.5, 0, 0), 0.5 / W.FOG_GREY_RAIN_MMH, 1e-12, 'grey: light rain partly')
 near(W.fogGreyFor(0, 0, 1), W.FOG_GREY_DECK, 1e-12, 'grey: an overcast deck')
 near(W.fogGreyFor(0, 0, 0, true), W.FOG_GREY_FOG, 1e-12, 'grey: fog')
 check(W.flakeKind(0) == 'wet' and W.flakeKind(-4) == 'snow' and W.flakeKind(-12) == 'dry' and W.flakeKind(20, true) == 'hail',
@@ -388,7 +388,9 @@ check(W.getMode() == 'real' and #toasts == 0 and env.hooks > 100, 'our own write
 -- the sun follows the deck (the rain message: low 100 %, still approaching): the level's 1.2 times
 -- the factor
 run(40)
-check(sunB() >= 1.2 * W.sunDimFor(1) - 1e-6 and sunB() < 1.2 * (W.sunDimFor(1) + 0.1),
+-- (times the storm light's gloom: phase B)
+local gl = 1 - W.GLOOM_SUN * W.gloomFor(1, W._cur().rainMmH, 0)
+check(sunB() >= 1.2 * W.sunDimFor(1) * gl - 0.02 and sunB() < 1.2 * (W.sunDimFor(1) + 0.1) * gl,
   'sun dimmed under the overcast deck: ' .. tostring(sunB()))
 local sunWrites = sun.applied
 run(10)
@@ -828,6 +830,8 @@ do
     and sm.wind.gustMs == 200 and sm.wind.fromDeg == 360 and sm.lat == nil and sm.tz == nil and sm.func == nil,
     'sanitizeMsg: clamped, no place, nothing foreign')
   check(W.sanitizeMsg('x') == nil and W.sanitizeMsg({}).cover == nil, 'sanitizeMsg: not a table; missing parts stay missing')
+  local th = W.sanitizeMsg({ code = 95, capeJkg = 2500, lpi = 3, rainMmH = 6 })
+  check(th.capeJkg == 2500 and th.lpi == 3 and W.thunderOf(th) == 2, 'sanitizeMsg: the thunder fields relayed (real-host lightning)')
   check(type(W.targets(W.sanitizeMsg({ code = 61 })).fogSigma) == 'number', 'a sanitized message gives targets')
 
   -- the radial ring's choices
@@ -970,6 +974,49 @@ local pctBefore = rain.pct
 run(3)
 check(nRay == 0 and rain.pct == pctBefore, 'Off: no shelter rays, no precipitation writes')
 castRayStatic = ray0
+
+-- phase B: the gloom, the storm's exposure on the stock HDR's bias over the player's own, given back
+check(W.gloomFor(0, 0, 0) == 0 and W.gloomFor(1, 0, 0) == W.GLOOM_DECK, 'gloom: clear 0, overcast the deck\'s')
+check(W.gloomFor(1, 15, 2) > W.gloomFor(1, 4, 0) and W.gloomFor(1, 100, 3) <= 1, 'a storm gloomier than rain, at most 1')
+check(W.dayShare(0) == 1 and W.dayShare(0.5) == 0 and W.dayShare(nil) == 1, 'day share: noon 1, midnight 0')
+near(W.stormEV(1, 1), -W.STORM_EV_MAX, 1e-12, 'full gloom by day')
+near(W.stormEV(1, 0), -W.STORM_EV_MAX * W.NIGHT_EV_SHARE, 1e-12, 'a share of it at night')
+check(W.thunderOf(W.presetMsg('storm')) == 2 and W.thunderOf(W.presetMsg('hail')) == 3 and W.thunderOf(W.presetMsg('rain')) == 0,
+  'thunder in the storm and hail presets only')
+check(W.thunderOf(W.scaleMsg(W.presetMsg('storm'), 0.1)) == 0, 'no thunder at a tiny intensity')
+local hdr = S.newObject('PostEffectLocalExposure')
+hdr:registerObject('PostEffectLocalExposureObject')
+hdr.exposureBiasEV = 0.5
+settings = { getValue = function(k) if k == 'GraphicEVCompensation' then return 0.5 end end }
+W.setMode('preset')
+W.setChangeSpeed(0)
+W.setPresetChoice('storm')
+run(1)
+local wantEV = 0.5 - W.stormEV(W._cur().gloom, 1)      -- (the engine's EV: higher = darker)
+check(math.abs(hdr.exposureBiasEV - wantEV) < 0.05 and hdr.exposureBiasEV > 1.5, 'storm: the bias raised (darker) over the player\'s 0.5: '
+  .. tostring(hdr.exposureBiasEV))
+W.setStormLight(false)
+run(1)
+check(hdr.exposureBiasEV == 0.5, 'storm light off: the player\'s own value back')
+W.setStormLight(true)
+run(1)
+W.setMode('manual')
+check(hdr.exposureBiasEV == 0.5, 'Off: the player\'s own value back')
+-- Off with nothing left running: phase B does no work (no strikes looked up, no materials, no shells)
+local stormU, wetU, strU = 0, 0, 0
+local st0, we0, sr0 = package.loaded['beamngEarth/storm'].update, package.loaded['beamngEarth/wetlook'].update,
+  package.loaded['beamngEarth/rainstreaks'].update
+package.loaded['beamngEarth/storm'].update = function(...) stormU = stormU + 1 return st0(...) end
+package.loaded['beamngEarth/wetlook'].update = function(...) wetU = wetU + 1 return we0(...) end
+package.loaded['beamngEarth/rainstreaks'].update = function(...) strU = strU + 1 return sr0(...) end
+run(70)           -- (winding down: a thunder still on its way, the materials going back)
+local s1, w1, r1 = stormU, wetU, strU
+run(5)
+check(stormU == s1 and strU == r1 and wetU == w1, 'Off, wound down: no storm, streak or wet-look work per frame ('
+  .. stormU - s1 .. ', ' .. strU - r1 .. ', ' .. wetU - w1 .. ')')
+package.loaded['beamngEarth/storm'].update, package.loaded['beamngEarth/wetlook'].update = st0, we0
+package.loaded['beamngEarth/rainstreaks'].update = sr0
+settings = nil
 -- the real weather's parts: real rain off keeps it dry with rain in the real message
 W.setMode('real')
 W.onWeather({ code = 63, cover = { low = 100, mid = 80, high = 40 }, rainMmH = 4, snowCmH = 0, visM = 8000, slTempC = 12,

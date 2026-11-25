@@ -317,6 +317,11 @@ pub struct Fork {
 /// structure too (a double deck).
 pub struct Crossing { pub a: usize, pub sa: f64, pub b: usize, pub sb: f64, pub p: P2, pub upper: usize, pub floor: f64, pub along: bool, pub stacked: bool }
 
+/// (M5) A structure of stroke si over a railway line at station s, point p: the deck's road at least floor (the line's
+/// clearance + the structure's depth) over the ground at p.
+#[derive(Clone, Copy, Debug)]
+pub struct RailFloor { pub si: usize, pub s: f64, pub p: P2, pub floor: f64 }
+
 #[derive(Default, Debug, Clone)]
 pub struct NetStats {
     pub segs: usize,
@@ -331,6 +336,7 @@ pub struct NetStats {
     pub structures: usize,
     pub tunnels: usize,
     pub crossings: usize,
+    pub rail_floors: usize,
     pub unbridged: usize,
     pub nose_beyond: usize,
     pub along: usize,
@@ -367,6 +373,8 @@ pub struct Net {
     pub strokes: Vec<Stroke>,
     pub edge_stroke: Vec<(usize, usize)>, // edge -> (stroke, part)
     pub crossings: Vec<Crossing>,
+    pub rail_floors: Vec<RailFloor>,    // (M5) a structure stroke over a railway line: (stroke, station, point, floor)
+    pub rails: Vec<(Vec<P2>, f64)>,     // (M5) the railway lines round the read (place.rails): (points, clearance m)
     pub stats: NetStats,
     pub xsec_on: bool,                  // (BNE_ROADSYS_XSEC) the cross-section model: every stroke gets its strip slots
     pub lays: Vec<Option<Lay>>,         // seg -> its cross-section's strips (sides in the segment's direction)
@@ -875,6 +883,7 @@ pub fn build_opts(place: &Place, input_order: &[usize], opts: Opts) -> Net {
     let nn = nodes.len();
     let mut net = Net { opts, segs, node_ids: ids.clone(), cut: vec![false; nn], region, edges, nodes, forks: Vec::new(),
                         fork_at: vec![None; nn], strokes: Vec::new(), edge_stroke: Vec::new(), crossings: Vec::new(),
+                        rail_floors: Vec::new(), rails: place.rails.clone(),
                         stats: NetStats::default(), xsec_on: place.xsec, lays: Vec::new(), xs_tags: Vec::new(),
                         area_fit: Default::default() };
     net.lays = vec![None; net.segs.len()];
@@ -904,6 +913,7 @@ pub fn build_opts(place: &Place, input_order: &[usize], opts: Opts) -> Net {
         net.area_fit = crate::areas::fit(&mut net, &prep);
     }
     crossings(&mut net);
+    rail_floors(&mut net);
     net.stats.strokes = net.strokes.len();
     net
 }
@@ -1529,16 +1539,81 @@ fn xsec_slots(net: &mut Net, parts: &[Part], oneway: bool, slots: &mut Vec<Slot>
     }
 }
 
-/// m of clearance under a structure over a road of class cls in country: today's deck builder's headroom
-/// (roads.MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M), not lower than the country's unsigned clearance (M2 took
-/// the country's alone: decks 1.2-1.8 m lower than today's over the same abutments, whose fills then stood under the
-/// deck ends as blocked openings until the hand-over strips (M3) end each deck on its ground; the table stays for then).
-pub fn clearance(country: &str, cls: i64) -> f64 {
-    let real = match country {
-        "CA" => 5.0, "DE" => 4.7, "FR" => 4.75, "GB" => 5.03, "JP" => 4.5,
-        _ => if cls >= 1 && cls <= 2 { 4.9 } else { 4.4 },
-    };
-    if real > TODAY_HEADROOM_M { real } else { TODAY_HEADROOM_M }
+/// m of clearance under a structure over lower road seg at its arc fraction x (M5, the user 2026-11-24: "use real when
+/// can"): its height limit there (a maxheight sign, + SIGN_MARGIN_M; within SIGN_MIN_M..SIGN_MAX_M, roads.road_sign_at's
+/// range), else the unsigned clearance its class keeps (roads.LOWER_CLEAR_M, the 2026-11-17 clearance study): main
+/// roads by country (US 16 ft, UK 16 ft 6 in, Germany 4.50 + 0.20 m, France 4.75 m, Canada 5.0 m, Japan 4.5 m), other
+/// public roads 4.5 m (France 4.3 m, the UK and Canada their main roads'), service roads and tracks 4.0 m, foot, cycle
+/// and bridle ways 2.5 m. (Was today's 6.15 m headroom over every road: decks lifted over farm tracks 1.7 m too high.)
+pub fn clearance_of(seg: &Seg, x: f64) -> f64 {
+    if let Some(h) = seg.maxh.iter().filter(|m| x >= m.0 - 1e-6 && x <= m.1 + 1e-6 && m.2 >= SIGN_MIN_M && m.2 <= SIGN_MAX_M)
+        .map(|m| m.2).fold(None, |a: Option<f64>, h| Some(a.map_or(h, |a| a.min(h)))) {
+        return h + SIGN_MARGIN_M;
+    }
+    let c = seg.code.to_ascii_uppercase();
+    let main = |c: &str| match c { "CA" => 5.0, "DE" => 4.7, "FR" => 4.75, "GB" => 5.03, "JP" => 4.5, "NL" => 4.5, _ => 4.9 };
+    let cls = seg.cls_s.as_str();
+    let base = cls.strip_suffix("_link").unwrap_or(cls);
+    match base {
+        "motorway" | "trunk" | "primary" => main(&c),
+        "service" | "track" => 4.0,
+        "footway" | "path" | "cycleway" | "pedestrian" | "bridleway" | "steps" | "corridor" => 2.5,
+        _ => match c.as_str() { "GB" => 5.03, "CA" => 5.0, "DE" => 4.7, "FR" => 4.3, "JP" => 4.5, _ => 4.5 },
+    }
+}
+
+/// The lower seg and its arc fraction at station s of stroke si (clearance_of's input).
+fn seg_at(net: &Net, si: usize, s: f64) -> (&Seg, f64) {
+    let st = &net.strokes[si];
+    let p = st.parts.iter().find(|p| s >= p.s0 - 1e-6 && s <= p.s1 + 1e-6).unwrap_or(&st.parts[0]);
+    let ed = &net.edges[p.edge];
+    let seg = &net.segs[ed.seg];
+    let l = Line::new(seg.pts.clone());
+    let (aa, ab) = (l.s[ed.va], l.s[ed.vb]);
+    let x = if p.fwd { aa + (s - p.s0) } else { ab - (s - p.s0) };
+    let len = l.len();
+    (seg, if len > 0.0 { clampf(x / len, 0.0, 1.0) } else { 0.0 })
+}
+
+/// m of clearance under a structure over stroke si at station s (clearance_of).
+pub fn clearance_at(net: &Net, si: usize, s: f64) -> f64 { let (g, x) = seg_at(net, si, s); clearance_of(g, x) }
+
+pub const SIGN_MARGIN_M: f64 = 0.25;     // roads.SIGN_MARGIN_M
+pub const SIGN_MIN_M: f64 = 2.0;         // roads.SIGN_MIN_M
+pub const SIGN_MAX_M: f64 = 8.0;         // roads.SIGN_MAX_M
+
+/// (M5) The structure strokes' crossings of the railway lines round the read (place.rails: lines at ground level),
+/// each a floor of the line's clearance + the structure's depth; strokes in index order, crossings along each in
+/// station order.
+fn rail_floors(net: &mut Net) {
+    let mut out = Vec::new();
+    for (si, st) in net.strokes.iter().enumerate() {
+        if !st.sup.iter().any(|u| u.kind == SUP_STRUCT) { continue; }
+        let mut here: Vec<RailFloor> = Vec::new();
+        for (rp, clear) in &net.rails {
+            for w in rp.windows(2) {
+                for k in 0..st.line.p.len().saturating_sub(1) {
+                    let (a, b) = (st.line.p[k], st.line.p[k + 1]);
+                    let (c, d) = (w[0], w[1]);
+                    let r = sub(b, a);
+                    let q = sub(d, c);
+                    let den = cross(r, q);
+                    if absf(den) < 1e-12 { continue; }
+                    let t = cross(sub(c, a), q) / den;
+                    let u = cross(sub(c, a), r) / den;
+                    if !(t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0) { continue; }
+                    let s = st.line.s[k] + (st.line.s[k + 1] - st.line.s[k]) * t;
+                    let su = st.support_at(s);
+                    if su.kind != SUP_STRUCT { continue; }
+                    here.push(RailFloor { si, s, p: lerp(a, b, t), floor: clear + deck_under(su) });
+                }
+            }
+        }
+        here.sort_by(|x, y| x.s.partial_cmp(&y.s).unwrap());
+        out.extend(here);
+    }
+    net.stats.rail_floors = out.len();
+    net.rail_floors = out;
 }
 
 /// m a floor adds under the clearance for a structure: the depth the deck builder draws under it (its segments' own,
@@ -1559,7 +1634,6 @@ fn crossings(net: &mut Net) {
             for gx in x0..=x1 { for gy in y0..=y1 { grid.entry((gx, gy)).or_default().push((si, k)); } }
         }
     }
-    let country = net.segs.first().map(|s| s.code.to_ascii_uppercase()).unwrap_or_default();
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     let mut unbridged = 0;
@@ -1610,8 +1684,7 @@ fn crossings(net: &mut Net) {
                         if beside { unbridged += 1; continue; }
                     }
                 }
-                let lo_st = &net.strokes[lo];
-                let clear = clearance(&country, lo_st.cls);
+                let clear = clearance_at(net, lo, if up == sa { s_b } else { s_a });
                 // (M3: nothing held over a tunnel: today's tunnels own their heights and cover (TunnelProfiles); an 8 m
                 // cover floor lifted a speedway's deck over its infield tunnel 12 m)
                 if lo_sup.kind == SUP_TUNNEL { unbridged += 1; continue; }
@@ -1679,7 +1752,7 @@ fn crossings(net: &mut Net) {
                 if let Some((_d, sb, s_b)) = best {
                     let lo_st = &net.strokes[sb];
                     let lo_sup = lo_st.support_at(s_b);
-                    let clear = clearance(&country, lo_st.cls);
+                    let clear = clearance_at(net, sb, s_b);
                     let floor = if lo_sup.kind == SUP_TUNNEL { 8.0 } else { clear + deck_under(*u) };
                     let (a, b2, s1, s2) = if sa < sb { (sa, sb, s, s_b) } else { (sb, sa, s_b, s) };
                     out.push(Crossing { a, sa: s1, b: b2, sb: s2, p, upper: sa, floor, along: true, stacked: lo_sup.kind == SUP_STRUCT });

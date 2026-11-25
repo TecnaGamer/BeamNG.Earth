@@ -7804,6 +7804,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 625: SnowLook / snow_ela / snow_perm_possible / snow_evergreen, finish_far_photo(snow=) (snowlook.rs: the winter
     // W2 snow on the ground photos, server/snowcover.py)
     snow::py::register(m)?;
-    m.add("VERSION", 625)?;
+    // 626: road M5 rounds 2-3 (roadsys: twins, widen_out, class / sign / rail clearance floors, mapped ranges,
+    // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
+    m.add("VERSION", 626)?;
     Ok(())
 }

@@ -174,6 +174,9 @@ EXERCISED_ELSEWHERE = {"debug_map_result",  # test_cliff_debuglayers exercises s
                        "share_info", "share_out"}                    # only in a BeamMP session (test_mpshare)
 # events the mod's net.lua makes up itself (not on the wire)
 MOD_INTERNAL = {"_connected": set(), "_disconnected": {"error"}}
+# fields the mod sets on its OWN copy of a server message (not on the wire): weather.lua scaleMsg marks a copy scaled
+# below THUNDER_MIN_K with noThunder (the thunder class reads it)
+MOD_MARKS = {"noThunder"}
 
 LUA = modsim.MOD_DIR
 GRAVITY_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "egm2008_n36.npz"     # degree 36 (test_gravity)
@@ -284,6 +287,7 @@ class AgreementTableTest(unittest.TestCase):
     def test_mod_reads_are_in_table(self):
         sent = {f for spec in SERVER_TO_MOD.values() for f in spec} | {"type"}
         sent |= {f for spec in MOD_INTERNAL.values() for f in spec}
+        sent |= MOD_MARKS
         sent |= {"terrain." + f for f in TERRAIN}
         unknown = mod_reads() - sent
         self.assertFalse(unknown, f"the mod reads fields no server message has: {sorted(unknown)}")

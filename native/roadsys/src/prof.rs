@@ -43,7 +43,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub const H_M: f64 = 5.0;
-pub const QP_FORMAT: u64 = 6;            // 2 (M2): split components, feasible floors, measured decks, the chord; 5 (M3): cut zones on the trunk, shallow and along crossings beside a deck; 6 (M5): twin decks coupled, structure runs across strokes
+pub const QP_FORMAT: u64 = 7;            // 2 (M2): split components, feasible floors, measured decks, the chord; 5 (M3): cut zones on the trunk, shallow and along crossings beside a deck; 6 (M5): twin decks coupled, structure runs across strokes; 7: clearances by class and sign, digs to 5 m
 const ROUNDS: usize = 24;              // (M3: 12 -> 24, the active set's releases)
 const RELEASES: u8 = 2;
 const RELEASE_MULT: f64 = 1e-2;       // (M3) a multiplier past this, wrong-signed: the limit leaves the active set
@@ -66,9 +66,10 @@ const DECK_DEPTH: f64 = crate::net::DECK_FULL_M;   // net.rs crossings' floor: c
 const STACK_DEPTH: f64 = crate::net::DECK_FULL_M;
 const FLOOR_SLACK: f64 = 0.05;
 const MEASURED_APART_M: f64 = 2.0;
-const MEASURED_MIN_CLEAR_M: f64 = 2.0;  // (M5) m a measured deck stands over the road under it at least for its floor to hold
+const MEASURED_MIN_CLEAR_M: f64 = 2.0;
+const RAIL_UNDER_M: f64 = 0.5;      // (M5) m a railway line's ground lies under the deck's own ground at least to be under it  // (M5) m a measured deck stands over the road under it at least for its floor to hold
 const MEASURED_NEAR_M: f64 = 60.0;  // (M3) m from a floor its decks' measurements are looked for  // (M3) m two measured decks may lie closer than a floor before it is left out
-const DIG_MAX: f64 = 2.0;
+const DIG_MAX: f64 = 5.0;          // (M5: 2 -> 5 m, the user 2026-11-24: where the floor needs more than the comfort limits allow the deck to lift, the road under is cut, the one solve weighing both by class)
 const OBS_W: f64 = 50.0;
 const W_CHORD: f64 = 0.05;          // a deck knot's pull toward its approaches' chord (per m: a ground knot's 1)
 const CHORD_OUT_M: f64 = 10.0;
@@ -959,6 +960,15 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
     let mut g: Vec<Vec<f64>> = vec![Vec::new(); ns];
     let mut k = 0;
     for si in 0..ns { if want(si) { g[si] = gz[k..k + nk[si]].to_vec(); k += nk[si]; } }
+    // (M5) the ground under each railway line a structure of a wanted stroke crosses (asked only where there is one:
+    // the ground's call order is the input's, as replayed from a dump)
+    let rails: Vec<(usize, f64, f64, f64)> = {
+        let rf: Vec<&crate::net::RailFloor> = net.rail_floors.iter().filter(|r| want(r.si)).collect();
+        if rf.is_empty() { Vec::new() } else {
+            let rz = g_of(&rf.iter().map(|r| r.p).collect::<Vec<_>>());
+            rf.iter().zip(rz.iter()).filter(|(_, z)| z.is_finite()).map(|(r, &z)| (r.si, r.s, z, r.floor)).collect()
+        }
+    };
     // (M2) a ground road's ground under a structure crossing over it: where the DEM rises over the line across the
     // structure's width (a surface model holding the deck itself: Canada's HRDEM, Copernicus), that line (today's
     // grading takes such bridges out of the ground too: DECK_GROUND)
@@ -1316,10 +1326,41 @@ pub fn solve_obs(net: &Net, g_of: &dyn Fn(&[P2]) -> Vec<f64>, obs_of: Option<&dy
                 }
             }
         }
+        // (M5) railway floors: the deck over the line's ground by its clearance + the structure's depth (the line
+        // never moves); a measured deck keeps the clearance it measures where that is less (as over a road)
+        for &(si, s, ground, floor) in &rails {
+            let Some(sp) = spans.iter().find(|sp| sp.si == si && s >= sp.i0 as f64 * h[si] - 1e-6 && s <= sp.i1 as f64 * h[si] + 1e-6).copied() else { continue };
+            // (a line whose ground stands at or over the deck's own ground there runs over it, on a bridge or a bank
+            // the map does not tag: no floor under it)
+            if ground > at_knots(&tier_a[si], h[si], s) - RAIL_UNDER_M { stats.floors_measured_out += 1; continue; }
+            let mut b = ground + floor;
+            let i = ((s / h[si]).round() as usize).min(nk[si].saturating_sub(1));
+            if let Some(&o) = ob[si].get(i) {
+                if o.is_finite() && o < b {
+                    if o - ground < MEASURED_MIN_CLEAR_M { stats.floors_measured_out += 1; continue; }
+                    b = o;
+                    stats.floors_measured += 1;
+                }
+            }
+            let mut t = Vec::new();
+            lin_sec(&sp, h[si], s, 1.0, &mut t);
+            qp.cons.push(Ineq { f: mklin(&t), bound: b, ge: true, w: W_FLOOR, kind: 4, orig: f64::NAN });
+            stats.crossings += 1;
+        }
         for f in &couples { add_sq(&mut qp.trip, &mut qp.rhs, f, 0.0, W_COUPLE); }
         for f in &twin_terms { add_sq(&mut qp.trip, &mut qp.rhs, f, 0.0, W_TWIN); }
         let (zz, key) = qp.solve(&mut stats);
         qp.check(&zz, &mut stats);
+        if std::env::var("ROADSYS_DEBUG_RAILS").is_ok() {
+            for &(si, s, ground, floor) in &rails {
+                let Some(sp) = spans.iter().find(|sp| sp.si == si && s >= sp.i0 as f64 * h[si] - 1e-6 && s <= sp.i1 as f64 * h[si] + 1e-6).copied() else { continue };
+                let mut t = Vec::new();
+                lin_sec(&sp, h[si], s, 1.0, &mut t);
+                let z = mklin(&t).val(&zz);
+                let p = net.strokes[si].line.at(s).0;
+                eprintln!("rail floor at {:.0},{:.0}: ground {:.2} floor {:.2} deck {:.2} short {:.2} tierA {:.2}", p[0], p[1], ground, floor, z, ground + floor - z, at_knots(&tier_a[si], h[si], s));
+            }
+        }
         if std::env::var("ROADSYS_DEBUG_COMFORT").is_ok() {
             for c in &qp.cons {
                 if c.kind != 2 { continue; }
@@ -1421,6 +1462,27 @@ mod tests {
         crate::io::Seg { fid: fid.into(), code: "US".into(), cls_s: "secondary".into(), pave: 7.0, drive: 7.0, inferred: 2, cls: 4, dir: 1,
               lanes: 2, lfw: -1, lbw: -1, kmh: 60.0, lane_w: 3.5, pts: pts.to_vec(), cons: Vec::new(),
               bridge: bridge.into_iter().collect(), level: bridge.map(|b| vec![(b.0, b.1, 1.0)]).unwrap_or_default(), ..Default::default() }
+    }
+
+    /// (M5) A deck over a railway line stands its clearance + its depth over the line's ground; without the line,
+    /// it stays near the ground.
+    #[test]
+    fn a_deck_clears_the_railway_under_it() {
+        let solve_with = |rails: Vec<(Vec<P2>, f64)>| {
+            let place = crate::io::Place { segs: vec![seg("p", &[[-600.0, 0.0], [600.0, 0.0]], Some((0.45, 0.55)))], rails, ..Default::default() };
+            let net = crate::net::build(&place, &[0]);
+            store_clear();
+            let g = |p: &[P2]| -> Vec<f64> { p.iter().map(|_| 10.0).collect() };
+            let pr = solve(&net, &g, None);
+            let (s, _) = net.strokes[0].line.project([0.0, 0.0], 0.0, net.strokes[0].len());
+            (pr.at(0, s), net.rail_floors.len())
+        };
+        let (z0, n0) = solve_with(vec![]);
+        assert_eq!(n0, 0);
+        assert!(z0 < 13.0, "{z0}");
+        let (z1, n1) = solve_with(vec![(vec![[0.0, -50.0], [0.0, 50.0]], 7.0)]);
+        assert_eq!(n1, 1);
+        assert!(z1 >= 10.0 + 7.0 + crate::net::DECK_FULL_M - 0.1, "{z1}");
     }
 
     /// (M5) Twin decks side by side take one height: two one-way viaducts 9 m apart over ground that differs by 3 m

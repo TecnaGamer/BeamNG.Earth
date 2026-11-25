@@ -1002,6 +1002,8 @@
     "elevM": {"type": "num"},
     "slTempC": {"type": "num"},
     "pressureHpa": {"type": "num"},
+    "capeJkg": {"type": "num"},
+    "lpi": {"type": "num", "optional": true},
     "utcOffsetS": {"type": "int", "optional": true},
     "tz": {"type": "str", "optional": true},
     "credit": {"type": "str"}
