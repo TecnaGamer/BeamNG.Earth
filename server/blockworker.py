@@ -4244,14 +4244,10 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
             U = None
         if tex.get("snow") is not None:     # (earthd.Server.write_base: winter's snow after the roads and rock)
             import snowcover
-            road = None
-            if roadsmod.ROADS_IN_GROUND:
-                try:
-                    road = snowcover.road_classes(frame, x0, y0, size, rgb.shape[0], getattr(_s, "surface", None),
-                                                  _s.widths)
-                except Exception as e:
-                    log.debug("base photo: snow road mask: %s", e)
-            rgb = snowcover.apply_kept(tex["snow"], rgb, frame, x0, y0, size, U, x0, y0, size / (n - 1), road)
+            road, water = snowcover.masks(frame, x0, y0, size, rgb.shape[0],
+                                          getattr(_s, "surface", None) if roadsmod.ROADS_IN_GROUND else None,
+                                          _s.widths, getattr(_s, "md", None))
+            rgb = snowcover.apply_kept(tex["snow"], rgb, frame, x0, y0, size, U, x0, y0, size / (n - 1), road, water)
         return rgb
 
     fast.require(564, "terrain base rendering")
@@ -4478,6 +4474,7 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
         return built, None
     import surface as surfacemod
     import snowcover
+    import roads as roadsmod
     if isinstance(rgb, imagerymod.FarPhoto):
         rock = rockfacemod.tile_inputs(frame, x0, y0, tile.size, px, built.grid)
         paint = None
@@ -4487,14 +4484,12 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
                                                        pads=tex.get("pads") or ())
             except Exception as e:
                 log.debug("road faces of %s: %s", tile.key, e)
-        road = None
-        if tex.get("snow") is not None and paint is not None:     # (earthd.Server.snow_roads)
-            try:
-                road = snowcover.road_classes(frame, *sq, px, _paint_surface(), _s.widths)
-            except Exception as e:
-                log.debug("snow road mask of %s: %s", tile.key, e)
+        road = water = None
+        if tex.get("snow") is not None and surfacemod.far_photo_roads(tile.size, px):     # (earthd.Server.snow_masks)
+            road, water = snowcover.masks(frame, *sq, px, _paint_surface() if roadsmod.ROADS_IN_GROUND else None,
+                                          _s.widths, getattr(_s, "md", None))
         n = rgb.write(tex["path"], rock, imagerymod.FAR_SRGB, paint=paint,
-                      snow=snowcover.look_from_rock(tex.get("snow"), frame, rock, road))
+                      snow=snowcover.look_from_rock(tex.get("snow"), frame, rock, road, water))
         rgb = None
     elif built.grid is not None:          # (earthd.Server.rock_faces)
         try:
@@ -4522,14 +4517,13 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
     if rgb is not None:
         if tex.get("snow") is not None:     # (earthd.Server.finish_tile_texture: after the roads)
             g = None if built.grid is None else np.asarray(built.grid, np.float64)
-            road = None
-            if roadsmod.ROADS_IN_GROUND and surfacemod.far_photo_roads(tile.size, px):
-                try:
-                    road = snowcover.road_classes(frame, *sq, px, _paint_surface(), _s.widths)
-                except Exception as e:
-                    log.debug("snow road mask of %s: %s", tile.key, e)
+            road = water = None
+            if surfacemod.far_photo_roads(tile.size, px):
+                road, water = snowcover.masks(frame, *sq, px, _paint_surface() if roadsmod.ROADS_IN_GROUND else None,
+                                              _s.widths, getattr(_s, "md", None))
             rgb = snowcover.apply_kept(tex["snow"], rgb, frame, *sq, g, x0, y0,
-                                       tile.size / (g.shape[1] - 1) if g is not None and g.ndim == 2 else 1.0, road)
+                                       tile.size / (g.shape[1] - 1) if g is not None and g.ndim == 2 else 1.0, road,
+                                       water)
         n = genground.write_far_dds(tex["path"], rgb, imagerymod.FAR_SRGB)
     return built, (n, used)
 

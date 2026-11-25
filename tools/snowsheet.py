@@ -121,6 +121,8 @@ def main():
     ap.add_argument("--out", default=os.path.expanduser("~/bnge-tests/winter/w2"))
     ap.add_argument("--cache", default=os.path.expanduser("~/bnge-tests/winter/w2/cache"))
     ap.add_argument("--no-s2", action="store_true")
+    ap.add_argument("--map", action="store_true", help="the map data's roads and water for the snow (block-sized squares,"
+                    " texels to 2 m: as the game's block photos and near far tiles)")
     a = ap.parse_args()
     if os.path.realpath(a.cache).startswith(os.path.realpath(os.path.expanduser("~/.cache/beamng-earth"))):
         sys.exit("snowsheet: use a scratch cache, never the player's")
@@ -154,8 +156,24 @@ def main():
     print("heights z%d %.0f..%.0f m" % (zoom, U.min(), U.max()))
     photo = rockface.rock(rgb, frame, x0, y0, a.size, U, x0, y0, a.size / (nn - 1))
     spec = snowcover.spec_for_square(frame, x0, y0, a.size)
+    road = water = None
+    if a.map:
+        import mapcells
+        import mapdata as mapdatamod
+        import surface as surfacemod
+        md = mapdatamod.MapData(a.cache, net)
+        sf = surfacemod.Surface(md)
+        s_, w_, n_, e_ = snowcover.box_of(frame, x0, y0, a.size)
+        for k in mapcells.cells_for_bbox(s_, w_, n_, e_):
+            md.cell(k, layers=mapdatamod.LAYERS, kind="demand")
+        sf.prefetch(a.lat, a.lon, a.size)
+        sf.ready(a.lat, a.lon, a.size, 120.0)
+        road, water = snowcover.masks(frame, x0, y0, a.size, a.px, sf, None, md)
+        print("map: road texels %s, water texels %s" % (None if road is None else int((road > 0).sum()),
+                                                        None if water is None else
+                                                        {int(v): int((water == v).sum()) for v in (1, 2, 3)}))
     t1 = time.perf_counter()
-    snow = snowcover.apply(spec, photo, frame, x0, y0, a.size, U, x0, y0, a.size / (nn - 1))
+    snow = snowcover.apply(spec, photo, frame, x0, y0, a.size, U, x0, y0, a.size / (nn - 1), road, water)
     print("snow %.0f ms, spec %s perm %s" % (1000 * (time.perf_counter() - t1), spec and spec.sig, spec and spec.perm))
     Image.fromarray(np.asarray(photo, np.uint8)).save(os.path.join(a.out, f"{a.name}_photo.png"))
     Image.fromarray(np.asarray(snow, np.uint8)).save(os.path.join(a.out, f"{a.name}_snow.png"))

@@ -232,8 +232,8 @@ class LookTest(unittest.TestCase):
             self.assertIsNone(sl.apply(np.full_like(grass, 255)), "blown-out white: left alone")
             # the paved ground (snowcover.road_classes: P2's share of the cover, a quarter under the heavy preset):
             # mostly the photo's asphalt, the yards white
-            asphalt = np.zeros_like(grass)
-            asphalt[...] = (70, 72, 75)
+            asphalt = grass.copy()          # (a street through a lawn)
+            asphalt[:, 100:140] = (70, 72, 75)
             road = np.zeros(grass.shape[:2], np.uint8)
             road[:, 100:140] = sc.PHOTO_ROAD_CLASS
             out = sl.apply(asphalt, road).astype(int)
@@ -254,6 +254,38 @@ class LookTest(unittest.TestCase):
             _, low = self.look(sc, np.full((65, 65), 300.0))
             self.assertIsNone(low.apply(grass), "below the preset's line: untouched")
             self.assertFalse(low.any(256))
+
+    def test_water(self):
+        """The map's water (snowcover.water_classes): a river and the sea stay the photo's open water; a lake freezes
+        and whitens by the tables' ice share (heavy: frozen; dusting: open); the ice share is in the spec's key."""
+        water_rgb = (40, 60, 90)
+        img = np.zeros((256, 256, 3), np.uint8)
+        img[...] = water_rgb
+        mask = np.zeros((256, 256), np.uint8)
+        mask[:, :80] = snowcover.WATER_MOVING
+        mask[:, 80:170] = snowcover.WATER_STILL
+        mask[:, 170:] = snowcover.WATER_SEA
+        U = np.full((65, 65), 300.0)
+        means = {}
+        for preset in ("heavy", "dusting"):
+            with winter(preset) as sc:
+                sp = sc.spec_for_square(self.frame, -500, -500, 1000.0)
+                sl = sc.look(sp, self.frame, -500, -500, 1000.0, U, -500, -500, 1000 / 64, None, mask)
+                out = sl.apply(img)
+                out = img if out is None else out
+                means[preset] = [float(out[:, a:b].mean()) for a, b in ((0, 80), (80, 170), (170, 256))]
+        river, lake, sea = means["heavy"]
+        self.assertLess(abs(river - np.mean(water_rgb)), 2, "a river stays open")
+        self.assertLess(abs(sea - np.mean(water_rgb)), 2, "the sea stays open")
+        self.assertGreater(lake, 200, "a lake under heavy snow: frozen and white")
+        self.assertLess(means["dusting"][1], 100, "a dusting's lakes: open")
+        T = snowcover.Table
+        with winter("real") as sc:
+            sigs = set()
+            for ice in (0, 4, 8):
+                sc.set_provider(lambda s_, w, n, e, ice=ice: sc.Field(0.1, uniform=T(((0, 8, 4, 0),), sc.NO_ROAD, ice)))
+                sigs.add(sc.spec_for_box(40.0, -89.0, 40.1, -88.9).sig)
+            self.assertEqual(len(sigs), 3, "the ice share is keyed")
 
     def test_no_seam(self):
         """A block photo and a far tile over the same ground: their snow agrees where they overlap (one function of

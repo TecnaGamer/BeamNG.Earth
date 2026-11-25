@@ -4869,21 +4869,17 @@ class Server:
                  len(self.base_stale))
         return n
 
-    def snow_roads(self, anchor, tile, px, snow):
-        """A near far tile's paved ground as plow classes for its snow (snowcover.road_classes over its texture's
-        square, gutter included; None: no snow, a global tile, roads not painted in, texels too coarse)."""
-        if snow is None or isinstance(tile, farfield.GTile) or not roadsmod.ROADS_IN_GROUND or self.surface is None:
-            return None
+    def snow_masks(self, anchor, tile, px, snow):
+        """A near far tile's paved ground (plow classes) and mapped water for its snow (snowcover.masks over its
+        texture's square, gutter included): (None, None) with no snow, a global tile, texels too coarse."""
+        if snow is None or isinstance(tile, farfield.GTile):
+            return None, None
         node = tile.base if isinstance(tile, farfield.Piece) else tile
         x, y, _, _ = node.bbox
         if not surfacemod.far_photo_roads(node.size, px):
-            return None
-        try:
-            return snowcovermod.road_classes(anchor.frame, *imagerymod.gutter_square(x, y, node.size, px), px,
-                                             self.surface, self.road_widths)
-        except Exception as e:
-            log.debug("snow road mask of %s: %s", node.key, e)
-            return None
+            return None, None
+        return snowcovermod.masks(anchor.frame, *imagerymod.gutter_square(x, y, node.size, px), px,
+                                  self.surface if roadsmod.ROADS_IN_GROUND else None, self.road_widths, self.mapdata)
 
     def far_snow(self, anchor, tile):
         """The snow a far tile's texture is made with (snowcover.spec_for_square over tile_where's square; None while
@@ -5670,14 +5666,13 @@ class Server:
                 log.debug("base photo %s: rock faces: %s", (anchor.id, cx, cy), e)
                 U = None
             if snow is not None:        # (winter: the far tiles' snow term, after the roads and rock as theirs)
-                road = None
-                if roadsmod.ROADS_IN_GROUND and not quick:      # (the paved ground plowed: snowcover.PHOTO_ROAD_CLASS)
-                    try:
-                        road = snowcovermod.road_classes(anchor.frame, x0, y0, size, rgb.shape[0], self.surface,
-                                                         self.road_widths)
-                    except Exception as e:
-                        log.debug("base photo %s: snow road mask: %s", (anchor.id, cx, cy), e)
-                rgb = snowcovermod.apply_kept(snow, rgb, anchor.frame, x0, y0, size, U, x0, y0, size / (n - 1), road)
+                road = water = None
+                if not quick:       # (the paved ground plowed, the mapped water: snowcover.masks)
+                    road, water = snowcovermod.masks(anchor.frame, x0, y0, size, rgb.shape[0],
+                                                     self.surface if roadsmod.ROADS_IN_GROUND else None,
+                                                     self.road_widths, self.mapdata)
+                rgb = snowcovermod.apply_kept(snow, rgb, anchor.frame, x0, y0, size, U, x0, y0, size / (n - 1), road,
+                                              water)
             return rgb
 
         fast.require(564, "terrain base rendering")
@@ -6910,7 +6905,7 @@ class Server:
         if isinstance(photo, imagerymod.FarPhoto):
             frame, x0, y0, size = self.tile_where(anchor, tile)
             rock = rockfacemod.tile_inputs(frame, x0, y0, size, px, grid)
-            sl = snowcovermod.look_from_rock(snow, frame, rock, self.snow_roads(anchor, tile, px, snow))
+            sl = snowcovermod.look_from_rock(snow, frame, rock, *self.snow_masks(anchor, tile, px, snow))
             if isinstance(tile, farfield.GTile):
                 return photo.write(path, rock, imagerymod.FAR_SRGB, snow=sl)
             if not surfacemod.far_photo_roads(size, px):
@@ -6940,7 +6935,7 @@ class Server:
             g = None if grid is None else np.asarray(grid, np.float64)
             rgb = snowcovermod.apply_kept(snow, rgb, frame, *imagerymod.gutter_square(x0, y0, size, px), g, x0, y0,
                                           size / (g.shape[1] - 1) if g is not None and g.ndim == 2 else 1.0,
-                                          self.snow_roads(anchor, tile, px, snow))
+                                          *self.snow_masks(anchor, tile, px, snow))
         return genground.write_far_dds(path, rgb, imagerymod.FAR_SRGB)
 
     def rock_faces(self, anchor, tile, px, rgb, grid):
