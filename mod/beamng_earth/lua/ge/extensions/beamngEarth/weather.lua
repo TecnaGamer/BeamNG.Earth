@@ -542,9 +542,27 @@ local function writeTemperature(tC)
   return false
 end
 
-local function drivePrecip(name, pct, pool)
+-- The level's Precipitation object of that name. (By class too: another object registered under the same name, the
+-- rain sound's emitter until #1475, shadowed it, and every write went to the sound, so the rain froze at ~2.5 % and
+-- could not be switched off, 1.7.0 to 1.10.1; the weather study 2026-11-24, 9 player reports.)
+function M._precipObject(name)
   local o = scenetree.findObject(name)
+  local okc, cls = pcall(function() return o and o:getClassName() end)
+  if o and okc and cls == 'Precipitation' then return o end
+  for _, nm in ipairs((scenetree.findClassObjects and scenetree.findClassObjects('Precipitation')) or {}) do
+    local p = scenetree.findObject(nm)
+    local okn, pn = pcall(function() return p and p:getName() end)
+    if p and (nm == name or (okn and pn == name)) then return p end
+  end
+  return nil
+end
+
+M.PRECIP_NONE = 0.005    -- a share below this is none (a stuck tiny value kept a faint rain on)
+
+local function drivePrecip(name, pct, pool)
+  local o = M._precipObject(name)
   if not o then return end
+  if pct < M.PRECIP_NONE then pct = 0 end
   local st = S.precip[name]
   if pct > 0 and st.pool ~= pool then
     o.numDrops = pool
@@ -556,8 +574,13 @@ local function drivePrecip(name, pct, pool)
     if type(o.setPercentage) == 'function' then o:setPercentage(pct) end
     st.pct = pct
   end
-  local hide = pct <= 0.001
-  if st.hidden ~= hide then o:setHidden(hide); st.hidden = hide end
+  -- (the object's own state, not a cached flag: the 3D map shows or hides every Precipitation object itself, and a
+  -- cached "hidden" then kept a rain shown that should have stopped)
+  local hide = pct <= 0
+  local okh, cur = pcall(function() return o:isHidden() end)
+  if not okh then cur = st.hidden end
+  if cur ~= hide then o:setHidden(hide) end
+  st.hidden = hide
 end
 
 local function cameraZ()

@@ -490,11 +490,17 @@ def keyed_env(k):
 # (roadsys.deck_faces, earthfast 606); keyed as "2s1u1" (structures' meaning and its own); its plans are heights' own.
 # BNE_ROADSYS_XSEC 1 (2026-11-22): the road system's cross-sections from OSM's street tags (parking, cycle and bus lanes,
 # shoulders, mapped carriageway widths; native/roadsys xsec.rs XSEC_FORMAT 1, earthfast 610).
+# BNE_ROADSYS 3 (heights, M5, 2026-11-24): twin decks side by side take one height, a structure going on past a
+# stroke's end (another deck, a nose) is no abutment for its chord or its deck-over-ground limit, a measured deck keeps
+# its measured clearance over the road under it (no dig), measured decks held to their measurement, a chain's end on
+# another deck of the chain is no abutment (earthfast 623, QP_FORMAT 6).
+# BNE_ROADSYS=surface 2 (M5): the decks' free edges widened to any structure's mapped paved width (not only their own
+# stroke's, up to 8 m), twins found across their widened gaps.
 ROADSYS_STRUCTURES_VERSION = 1
-ROADSYS_SURFACE_VERSION = 1
+ROADSYS_SURFACE_VERSION = 2
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 2, "BNE_ROADSYS_XSEC": 1}
+                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 3, "BNE_ROADSYS_XSEC": 1}
 
 
 def keyed_value(k, v):
