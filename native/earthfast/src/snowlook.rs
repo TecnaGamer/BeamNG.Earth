@@ -29,8 +29,10 @@ const RD: usize = ROAD_CLASSES + 1; // ... and then the share of still water fro
 pub const N_PARAMS: usize = 87;
 const NO_ELA: f64 = 1.0e9;
 
-/// The constants snowcover.py passes (snowcover.PARAMS, in this order).
+/// The constants snowcover.py passes (snowcover.PARAMS, in this order; a few slots kept for their place: canopy_sat,
+/// canopy_sat_floor, winter_dark, read no more since the evergreen share decides a crown's look).
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub struct SnowParams {
     aspect_m: f64,              // m the line moves on a slope facing the pole (up) / the sun (down), at shade 1
     steep_tan: (f64, f64),      // slope (tan) where snow starts to slide off, and where none holds
@@ -421,6 +423,7 @@ pub struct SnowLook {
 
 /// The mapped water mask's values (snowcover.water_classes): land, moving water (rivers, canals, streams: open), still
 /// water (lakes, ponds, reservoirs: frozen by the tables' ice share), the sea (open).
+#[allow(dead_code)]
 pub const WATER_LAND: u8 = 0;
 pub const WATER_MOVING: u8 = 1;
 pub const WATER_STILL: u8 = 2;
@@ -547,10 +550,13 @@ impl SnowLook {
         let fl: Vec<f64> = (0..n).map(|q| {
             let (r, k) = (q / nk, q % nk);
             let mut m = 0.0f64;
-            for (dr, dk) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)] {
-                let (r2, k2) = (r as i64 + dr, k as i64 + dk);
-                if r2 >= 0 && k2 >= 0 && (r2 as usize) < nk && (k2 as usize) < nk {
-                    m = m.max((hh[q] - hh[r2 as usize * nk + k2 as usize]).abs() / sp);
+            for dr in -2i64..=2 {
+                for dk in -2i64..=2 {
+                    let (r2, k2) = (r as i64 + dr, k as i64 + dk);
+                    if (dr, dk) != (0, 0) && r2 >= 0 && k2 >= 0 && (r2 as usize) < nk && (k2 as usize) < nk {
+                        let d = ((dr * dr + dk * dk) as f64).sqrt();
+                        m = m.max((hh[q] - hh[r2 as usize * nk + k2 as usize]).abs() / (sp * d));
+                    }
                 }
             }
             m
@@ -590,7 +596,6 @@ impl SnowLook {
         let by_d = |a: f64, b: f64| -> Vec<f64> { (0..511).map(|d| smooth((d as f64 - 255.0) * inv255, a, b)).collect() };
         let (t_dark, t_white, t_wv) = (by_v(p.canopy_v.0, p.canopy_v.1), by_v(p.white_v.0, p.white_v.1),
                                        by_v(p.water_v.0, p.water_v.1));
-        let (t_gr, t_gb) = (by_d(p.canopy_green.0, p.canopy_green.1), by_d(p.canopy_gb.0, p.canopy_gb.1));
         let (t_wbg, t_wbr) = (by_d(-0.01, 0.02), by_d(0.03, 0.07));
         let water_hue = |r: usize, g: usize, b: usize| if b > r {
             (1.0 - t_wv[r.max(g).max(b)]) * t_wbg[b + 255 - g] * t_wbr[b + 255 - r] } else { 0.0 };
@@ -601,7 +606,7 @@ impl SnowLook {
             (1.0 - smooth(fl, p.flat.0, p.flat.1)) * (1.0 - t_fv[r.max(g).max(b)]) * (1.0 - t_lush[g + 255 - r])
         };
         let node_r = |m: f64| ((m / (cg.s as f64 * t)).round() as usize).max(1);
-        let (mut vm, wf) = local_value(src, px, cg.s, cg.nk, node_r(p.canopy_r_m), node_r(p.lake_r_m),
+        let (mut vm, wf, hgr, hgb) = local_value(src, px, cg.s, cg.nk, node_r(p.canopy_r_m), node_r(p.lake_r_m),
                                        &|r, g, b, q| water_hue(r, g, b).max(flat_water(r, g, b, cg.fl[q])));
         // the ground's reference brightness: the local mean, at least a share of the texture's own percentile (a forest
         // wider than the local radius is still darker than the open ground of its texture)
@@ -638,8 +643,8 @@ impl SnowLook {
         let inv_sn = 1.0 / sn as f64;
         let mut rn = vec![0.0f64; nn];
         // the coarse fields along this texel row (vertical lerp once a row; horizontal per texel)
-        let mut rows = vec![[0.0f64; 11]; nk];      // c, steep, o, g, slope, tree, vm, water share, height, flat,
-                                                    // evergreen share
+        let mut rows = vec![[0.0f64; 13]; nk];      // c, steep, o, g, slope, tree, vm, water share, height, flat,
+                                                    // evergreen share, hue G - R, G - B
         let mut rr = vec![[0.0f64; RD]; nk];
         for i in 0..px {
             let (r0, wy) = (i / s, (i % s) as f64 * inv_s);
@@ -650,7 +655,8 @@ impl SnowLook {
             let lv = |v: &[f64], k: usize| v[a0 + k] * (1.0 - wy) + v[a1 + k] * wy;
             for k in 0..nk {
                 rows[k] = [lv(&cg.c, k), lv(&cg.st, k), lv(&cg.o, k), lv(&cg.g, k), lv(&cg.sl, k), lv(&cg.tree, k),
-                           lv(&vm, k), lv(&wf, k), lv(&cg.h, k), lv(&cg.fl, k), lv(&cg.ever, k)];
+                           lv(&vm, k), lv(&wf, k), lv(&cg.h, k), lv(&cg.fl, k), lv(&cg.ever, k), lv(&hgr, k),
+                           lv(&hgb, k)];
                 for q in 0..RD {
                     rr[k][q] = cg.rd[a0 + k][q] * (1.0 - wy) + cg.rd[a1 + k][q] * wy;
                 }
@@ -733,7 +739,10 @@ impl SnowLook {
                     }
                 } else {
                     let hue = water_hue(ri, gi, bi) * (1.0 - smooth(hl(4), p.water_slope.0, p.water_slope.1));
-                    let dem = flat_water(ri, gi, bi, hl(9)) * (1.0 - smooth(cvar, p.flat_cv.0, p.flat_cv.1));
+                    // (the DEM's water only as part of a wide body: the water share round it, blurred over lake_r_m,
+                    // so a quantized plateau a grid node or two wide never shows as a pale rectangle in a forest)
+                    let dem = flat_water(ri, gi, bi, hl(9)) * (1.0 - smooth(cvar, p.flat_cv.0, p.flat_cv.1))
+                        * smooth(hl(7), p.lake_frac.0, p.lake_frac.1);
                     let water = hue.max(dem);
                     if water > 0.0 {
                         // open: the sea (by height) and moving water (a narrow body: a river, a canal); still water (a
@@ -751,10 +760,12 @@ impl SnowLook {
                 // (the evergreen share: the climate's, the mountains' conifers; snow_evergreen)
                 let mut crown_k = 0.0f64;
                 let mut bare_t = 0.0f64;
-                let gr = (cgg - cr) * inv255;
+                // (the hue: the texel's own blended with the blurred one round it; the blurred one alone at coarse texels)
+                let hw = 0.5 + 0.5 * coarse_w;
+                let gr = (cgg - cr) * inv255 * (1.0 - hw) + hl(11) * hw;
+                let gb = (cgg - cb) * inv255 * (1.0 - hw) + hl(12) * hw;
                 if gr > p.canopy_green.0 && tree > 0.0 && is_water < 1.0 {
-                    let id = |x: f64| (x.round() as i64).clamp(-255, 255) as usize;
-                    let green = t_gr[id(cgg - cr) + 255] * t_gb[id(cgg - cb) + 255];
+                    let green = smooth(gr, p.canopy_green.0, p.canopy_green.1) * smooth(gb, p.canopy_gb.0, p.canopy_gb.1);
                     if green > 0.0 {
                         let rel = 1.0 - smooth(cv / vml, p.canopy_rel.0, p.canopy_rel.1);
                         let dark = 1.0 - t_dark[((cv * 255.0).round() as usize).min(255)];
@@ -766,7 +777,7 @@ impl SnowLook {
                 }
                 // a leafless stand in a leaf-off photo (brown or grey, textured, darker than the open ground round it,
                 // at a coarse texel): a bare crown too (a field as dark is smooth, and goes white)
-                if coarse_w > 0.0 && tree > 0.0 && is_water < 1.0 && (cr - cb) * inv255 > -0.01 {
+                if coarse_w > 0.0 && tree > 0.0 && is_water < 1.0 && gb - gr > -0.01 {
                     let stand = smooth(cvar, 0.04, 0.08) * (1.0 - smooth(v / vml, 0.75, 0.97)) * tree * coarse_w
                         * (1.0 - is_water);
                     bare_t = bare_t.max(stand * p.bare_k);
@@ -795,7 +806,7 @@ impl SnowLook {
                 let dim = 1.0 - p.ever_dark * crown_k * c.min(1.0);
                 let bt = bare_t * c.min(1.0);
                 // (a bare stand keeps its texture: crowns and gaps, lighter and darker than the stand's mean)
-                let bare_tex = (v / vml).clamp(0.7, 1.25);
+                let bare_tex = (v / vml).clamp(0.5, 1.4);
                 for ch in 0..3 {
                     let snow = (p.colour[ka][ch] + (p.colour[ka + 1][ch] - p.colour[ka][ch]) * wa) * sh;
                     let col = snow + (p.bare[ch] * bare_tex - snow) * bt;
@@ -826,9 +837,11 @@ impl SnowLook {
 /// Round each coarse node (nk x nk, s texels apart): the photo's mean value (max channel, 0..1) over a box of rv
 /// nodes, and its share of water-coloured texels (water(r, g, b): 0..1) over a box of rw nodes (edges clamped).
 fn local_value(src: &[u8], px: usize, s: usize, nk: usize, rv: usize, rw: usize,
-               water: &dyn Fn(usize, usize, usize, usize) -> f64) -> (Vec<f64>, Vec<f64>) {
+               water: &dyn Fn(usize, usize, usize, usize) -> f64) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
     let mut cell = vec![0.0f64; nk * nk];
     let mut wet = vec![0.0f64; nk * nk];
+    let mut cgr = vec![0.0f64; nk * nk];       // mean G - R, G - B (0..1): the hue the crown test reads
+    let mut cgb = vec![0.0f64; nk * nk];
     let half = s / 2;
     for a in 0..nk {
         let i0 = (a * s).saturating_sub(half).min(px - 1);
@@ -838,20 +851,26 @@ fn local_value(src: &[u8], px: usize, s: usize, nk: usize, rv: usize, rw: usize,
             let j1 = (b * s + s - half).clamp(j0 + 1, px);
             let mut sum = 0u64;
             let mut w = 0.0f64;
+            let (mut sgr, mut sgb) = (0i64, 0i64);
             for i in i0..i1 {
                 for j in j0..j1 {
                     let q = (i * px + j) * 3;
                     let (r, g, bb) = (src[q], src[q + 1], src[q + 2]);
                     sum += r.max(g).max(bb) as u64;
+                    sgr += g as i64 - r as i64;
+                    sgb += g as i64 - bb as i64;
                     w += water(r as usize, g as usize, bb as usize, a * nk + b);
                 }
             }
             let n = ((i1 - i0) * (j1 - j0)) as f64;
             cell[a * nk + b] = sum as f64 / (n * 255.0);
             wet[a * nk + b] = w / n;
+            cgr[a * nk + b] = sgr as f64 / (n * 255.0);
+            cgb[a * nk + b] = sgb as f64 / (n * 255.0);
         }
     }
-    (box_nodes(&cell, nk, rv), box_nodes(&wet, nk, rw))
+    // (the hue blurred over a node each way: a source mosaic's JPEG chroma blocks, 8-16 texels, never decide a crown)
+    (box_nodes(&cell, nk, rv), box_nodes(&wet, nk, rw), box_nodes(&cgr, nk, 1), box_nodes(&cgb, nk, 1))
 }
 
 /// The mean of a box of r nodes each way (edges clamped: the box shrinks), by running sums along rows, then columns.

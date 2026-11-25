@@ -90,7 +90,7 @@ PARAMS = np.array((
     -0.012, 0.012,          # canopy_green: green over red (G - R) from which a dark texel is vegetation (olive
                             # conifers in the USGS mosaic are barely green; dark soil, scree and rock are red)
     250.0,                  # canopy_r_m: the radius of "the ground round it"
-    -0.04, -0.01,           # canopy_gb: green against blue: bluer is shade or water, not a crown
+    -0.06, 0.0,             # canopy_gb: green against blue: bluer is shade or water, not a crown
     0.7, 0.85,              # canopy_pct: the ground's reference at least 0.85 of the texture's 70th percentile value
     0.22, 0.38,             # water_v: a dark ...
     0.02, 0.06,             # water_slope: ... flat blue texel is open water: the photo's own (lake ice is W6's)
@@ -112,8 +112,8 @@ PARAMS = np.array((
     0.40, 0.55,             # flat_v: ... where the photo is no brighter than this
     0.05, 0.10,             # flat_cv: ... and smooth
     700.0, 1400.0, 0.85,    # montane: mid-latitude crowns evergreen (spruce, fir, pine) from 700 m to 1,400 m, at most 0.85
-    128.0, 112.0, 96.0,     # bare: a leafless crown over snow at 10 m: brown-grey (Sentinel-2's Spessart beech and
-                            # oak under snow, 2021-02-13)
+    138.0, 106.0, 76.0,     # bare: a leafless crown over snow at 10 m: warm brown (Sentinel-2's Spessart beech and
+                            # oak under snow, 2021-02-13, Vermont's hardwoods 2022-02-06), its texture the photo's own
     0.9,                    # bare_k: its share of a deciduous crown's texel under full cover
     0.3,                    # ever_dark: an evergreen crown 0.3 darker under full cover (low winter sun)
 ), np.float64)
