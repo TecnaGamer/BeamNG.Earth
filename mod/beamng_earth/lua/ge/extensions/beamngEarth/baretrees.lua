@@ -139,11 +139,24 @@ function M.signature()
   return string.format('%08x', h % 4294967296)
 end
 
--- Pure: a tree's fixed draw (0..1) from its rank (the server's, 0..1): the rank's low bits, so the trees thinned away
--- at range (by the rank itself) are no different.
+-- Pure: the exact low 32 bits of a * b (a, b < 2^32: each partial product under 2^53).
+local function mul32(a, b)
+  local alo, ahi = a % 65536, math.floor(a / 65536)
+  return ((ahi * b) % 65536 * 65536 + alo * b) % 4294967296
+end
+local function u32(x) return x % 4294967296 end
+
+-- Pure: a tree's fixed draw (0..1) from its rank (the server's, 0..1, sent to 4 decimals): MurmurHash3's finaliser of
+-- the rank's bits, so trees of close ranks (a street's row) draw apart and the thinning by rank at range does not pick
+-- bare or leafy ones.
 function M.draw(rank)
-  local n = math.floor((tonumber(rank) or 0) * 16777216) % 16777216
-  return ((n * 40503 + 12345) % 65536) / 65536
+  local h = math.floor((tonumber(rank) or 0) * 16777216) % 16777216
+  h = u32(bit.bxor(h, bit.rshift(h, 16)))
+  h = mul32(h, 0x85ebca6b)
+  h = u32(bit.bxor(h, bit.rshift(h, 13)))
+  h = mul32(h, 0xc2b2ae35)
+  h = u32(bit.bxor(h, bit.rshift(h, 16)))
+  return h / 4294967296
 end
 
 -- Pure: does the tree of this species (young: a young beech) and rank stand bare at the amount (0..1)?

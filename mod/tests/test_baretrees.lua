@@ -106,6 +106,19 @@ do
   T.check(lowBare > 0.35 * 400 and lowBare < 0.65 * 400, 'the trees kept at range (low ranks): mixed too')
 end
 
+-- ranks sent to 4 decimals, close together (a street's row): draws spread, no long runs of one kind
+do
+  local below, run, maxRun, prev = 0, 0, 0, nil
+  for k = 1000, 2999 do
+    local b = B.draw(k / 10000) < 0.5
+    if b then below = below + 1 end
+    run = (b == prev) and run + 1 or 1
+    maxRun, prev = math.max(maxRun, run), b
+  end
+  T.check(math.abs(below / 2000 - 0.5) < 0.04 and maxRun < 16, 'close ranks: spread, longest run ' .. maxRun)
+  T.check(math.abs(B.draw(0.1234) - 0.99797579087317) < 1e-12, 'the MurmurHash3 finaliser, exact (as Python\'s)')
+end
+
 -- the amount: the season's winter amount, a preset, the frost
 do
   local nov25, jan15, jul1 = 329, 15, 182
