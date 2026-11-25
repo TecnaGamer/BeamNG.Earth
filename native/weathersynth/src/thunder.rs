@@ -152,7 +152,7 @@ pub fn iso9613_alpha(f: f64, t_c: f64, rh: f64, p_kpa: f64) -> f64 {
                 * (0.01275 * m::exp(-2239.1 / t) / (fro + f2 / fro) + 0.1068 * m::exp(-3352.0 / t) / (frn + f2 / frn)))
 }
 
-fn alpha(f: f64) -> f64 {
+pub fn alpha(f: f64) -> f64 {
     iso9613_alpha(f, 22.0, 85.0, 101.325)
 }
 

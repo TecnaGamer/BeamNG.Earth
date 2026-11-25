@@ -6,8 +6,8 @@
 //! thread, fixed summation order). The Ogg files come from ffmpeg's libvorbis, mono 44.1 kHz.
 //!
 //!   weathersynth thunder --class strike|close|mid|far --seed N --out FILE.wav
-//!   weathersynth rain --kind light|medium|heavy|roof|muffled --seed N --out FILE.wav
-//!   weathersynth set --out DIR --set K [--ogg]       all 13 files with the mod's names (seeds from K)
+//!   weathersynth rain --kind light|medium|heavy|roof_light|roof|roof_heavy|muffled --seed N --out FILE.wav
+//!   weathersynth set --out DIR --set K [--ogg] [--only thunder|rain]   the files with the mod's names (seeds from K)
 //!   weathersynth analyze FILE.wav ...               a table describing each file
 
 mod analyze;
@@ -38,37 +38,47 @@ fn render_rain(
     kind: &str,
     seed: u64,
     ceil_shift: f64,
-    medium_raw: &mut Option<(u64, Vec<f64>)>,
+    cache: &mut Vec<(String, u64, Vec<f64>, String)>,
 ) -> Result<(Vec<f64>, String), String> {
-    let rate = rain::rate_for(kind).ok_or(format!("unknown rain kind {kind}"))?;
-    // -2.1 dBTP in the WAV: Vorbis q4 adds up to ~0.5 dB of overshoot, the files then stay under -1.5 dBTP
-    let target = rain::LoopTarget { lufs: -20.0, ceil_db: -2.1 + ceil_shift };
-    let mut medium = |seed: u64| -> Vec<f64> {
-        if let Some((s, v)) = medium_raw {
-            if *s == seed {
-                return v.clone();
-            }
-        }
-        let v = rain::outdoor(seed, 6.0, "rain-outdoor");
-        *medium_raw = Some((seed, v.clone()));
-        v
+    // light / medium / heavy outdoors; roof_light / roof / roof_heavy inside the car; muffled from the medium loop
+    let scene_name = match kind {
+        "light" | "roof_light" => "light",
+        "medium" | "roof" | "muffled" => "medium",
+        "heavy" | "roof_heavy" => "heavy",
+        _ => return Err(format!("unknown rain kind {kind}")),
     };
-    let (y, g) = match kind {
-        "roof" => {
-            let out = medium(seed);
-            rain::finish_loop(rain::roof(seed, rate, &out), &target)
+    let sc = rain::scene(scene_name).unwrap();
+    // -2.1 dBTP in the WAV: Vorbis q4 adds up to ~0.5 dB of overshoot (the Ogg check lowers it further if needed)
+    let target = rain::LoopTarget { lufs: sc.lufs, ceil_db: -2.1 + ceil_shift };
+    // the scene's outdoor render, kept for the roof and muffled loops of the same seed
+    let mut outdoor = |seed: u64| -> (Vec<f64>, String) {
+        if let Some(c) = cache.iter().find(|c| c.0 == sc.name && c.1 == seed) {
+            return (c.2.clone(), c.3.clone());
         }
+        let (v, st) = rain::outdoor(seed, &sc);
+        let info = format!(
+            "drops_per_s_150m={:.0} big_drops_per_s_3m={:.0} rendered_drops_per_s={:.0} drips_per_s={:.1} wash_share_db={:.1}",
+            st.drops_per_s, st.big_per_s_3m, st.rendered_per_s, st.drips_per_s, st.wash_share_db
+        );
+        cache.push((sc.name.to_string(), seed, v.clone(), info.clone()));
+        (v, info)
+    };
+    let (out, oinfo) = outdoor(seed);
+    let (y, g) = match kind {
+        "roof_light" | "roof" | "roof_heavy" => rain::finish_loop(rain::roof(seed, &sc, &out), &target),
         "muffled" => {
             // the mod's derivation from the finished medium loop
-            let (med, g) = rain::finish_loop(medium(seed), &target);
+            let (med, g) = rain::finish_loop(out, &target);
             let muf = rain::muffle(&med);
             let env = loudness::tp_envelope(&muf, true);
             (rain::limit_loop(&muf, &env, 1.0, target.ceil_db), g)
         }
-        "medium" => rain::finish_loop(medium(seed), &target),
-        _ => rain::finish_loop(rain::outdoor(seed, rate, "rain-outdoor"), &target),
+        _ => rain::finish_loop(out, &target),
     };
-    Ok((y, format!("kind={kind} seed={seed} rate_mm_h={rate} makeup_gain_db={g:.1}")))
+    Ok((
+        y,
+        format!("kind={kind} seed={seed} scene={} rate_mm_h={} {oinfo} makeup_gain_db={g:.1}", sc.name, sc.rate_mm_h),
+    ))
 }
 
 fn encode_ogg(wav: &str, ogg: &str, q: &str) -> Result<(), String> {
@@ -107,7 +117,7 @@ fn run() -> Result<(), String> {
             let (sig, info) = if cmd == "thunder" {
                 render_thunder(&arg(&args, "--class").ok_or("--class")?, seed, 0.0)?
             } else {
-                render_rain(&arg(&args, "--kind").ok_or("--kind")?, seed, 0.0, &mut None)?
+                render_rain(&arg(&args, "--kind").ok_or("--kind")?, seed, 0.0, &mut Vec::new())?
             };
             wav::write_f32(&out, &sig, 44100).map_err(|e| e.to_string())?;
             println!("{out}\t{info}");
@@ -117,16 +127,21 @@ fn run() -> Result<(), String> {
             let k: u64 = arg(&args, "--set").unwrap_or("1".into()).parse().map_err(|_| "bad --set")?;
             let ogg = args.iter().any(|a| a == "--ogg");
             std::fs::create_dir_all(format!("{dir}/wav")).map_err(|e| e.to_string())?;
+            let only = arg(&args, "--only"); // thunder | rain
             let mut jobs: Vec<(String, String, String, u64)> = Vec::new();
-            for class in ["strike", "close", "mid", "far"] {
-                for v in 1..=2u64 {
-                    jobs.push((format!("bne_thunder_{class}{v}"), "thunder".into(), class.into(), 100 * k + v));
+            if only.as_deref() != Some("rain") {
+                for class in ["strike", "close", "mid", "far"] {
+                    for v in 1..=2u64 {
+                        jobs.push((format!("bne_thunder_{class}{v}"), "thunder".into(), class.into(), 100 * k + v));
+                    }
                 }
             }
-            for kind in ["light", "medium", "heavy", "roof", "muffled"] {
-                jobs.push((format!("bne_rain_{kind}"), "rain".into(), kind.into(), 100 * k + 1));
+            if only.as_deref() != Some("thunder") {
+                for kind in ["light", "medium", "heavy", "roof_light", "roof", "roof_heavy", "muffled"] {
+                    jobs.push((format!("bne_rain_{kind}"), "rain".into(), kind.into(), 100 * k + 1));
+                }
             }
-            let mut medium_raw = None;
+            let mut medium_raw = Vec::new();
             for (name, what, sub, seed) in jobs {
                 // The true-peak targets hold for the Ogg the game plays: Vorbis overshoots the WAV's peaks (more on
                 // bright files), so each Ogg is decoded and measured, and rendered again with a lower ceiling if over.
