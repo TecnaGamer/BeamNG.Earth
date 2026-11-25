@@ -1022,6 +1022,7 @@ local function ownPrecip(e, dt)
   drivePrecip(M.SNOW_NAME, snow * S.shelter, M.poolFor(M.SNOW_POOL, vis), c and c.flake)
 end
 M._ownPrecip = function(e, dt) ownPrecip(e or rawget(_G, 'core_environment'), dt or M.PRECIP_S) end -- tests
+M._cur = function() return S.cur end    -- (tests, probes)
 
 -- The sun: ScatterSky.brightness = the level's own value * factor. Restored only while it still
 -- holds our value (another mod may have set its own since).
