@@ -691,4 +691,15 @@ do  -- the fixed view distance's fog in manual weather (viewFog alone): raised, 
   T.check(fog == 0.02, 'a fog set by something else is never taken back')
   beamngEarth_settings = saved
 end
+
+-- the rain hotfix (#1475 + guards): the Precipitation object is found by class when another object holds its name;
+-- a tiny share is none; the object's own hidden state is used, not a cached flag
+do
+  local fake = S.newObject('SFXEmitter'); fake:registerObject('bngEarthRainShadowTest')
+  local real = S.newObject('Precipitation'); real:registerObject('bngEarthRainShadowTest2')
+  check(W._precipObject('bngEarthRainShadowTest2') == real, 'precip: found by name when it is a Precipitation')
+  check(W._precipObject('bngEarthRainShadowTest') ~= fake, 'precip: another class under the name is never driven')
+  check(W.PRECIP_NONE > 0 and W.PRECIP_NONE < W.PRECIP_MIN, 'precip: the none threshold sits under the drizzle floor')
+end
+
 T.done('test_weather')
