@@ -18,7 +18,31 @@ pub const HEARTBEAT_S: f64 = 1.0;
 /// the thunder's volume in a tunnel or under a deck (storm.lua MUFFLED)
 pub const MUFFLED: f64 = 0.45;
 /// device reopens allowed per minute before 'failed'
-pub const REOPEN_MAX: usize = 3;
+pub const REOPEN_MAX: usize = 5;
+/// ... within this window
+pub const REOPEN_WINDOW_S: f64 = 120.0;
+/// failures in the first GRACE_S after the start do not count toward giving up
+pub const GRACE_S: f64 = 60.0;
+/// the first open tried again after these waits
+pub const OPEN_RETRY_S: [f64; 2] = [0.5, 1.5];
+/// a start on a machine busier than this (the 1-minute load per cpu, Linux) asks for twice the first buffer
+pub const BUSY_LOAD: f64 = 1.0;
+
+/// Pure: the first buffer for the load per cpu (None: not known).
+pub fn start_buffer(first: u32, load_per_cpu: Option<f64>) -> u32 {
+    match load_per_cpu {
+        Some(l) if l > BUSY_LOAD => grown_buffer(first).unwrap_or(first),
+        _ => first,
+    }
+}
+
+/// The 1-minute load average per cpu (Linux /proc/loadavg), None elsewhere.
+pub fn load_per_cpu() -> Option<f64> {
+    let s = std::fs::read_to_string("/proc/loadavg").ok()?;
+    let l: f64 = s.split_whitespace().next()?.parse().ok()?;
+    let n = std::thread::available_parallelism().ok()?.get() as f64;
+    Some(l / n)
+}
 /// the device buffer doubles on trouble (a stream error, or XRUN_GROW xruns within XRUN_WINDOW_S) up to this, and
 /// halves again (not below the first) after SHRINK_AFTER_S without trouble: a load burst does not keep the latency up
 pub const BUFFER_MAX: u32 = 2048;
@@ -100,31 +124,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let get = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     let choice = get("--thunder").unwrap_or_else(|| "procedural".into());
     let seed: u64 = get("--seed").and_then(|s| s.parse().ok()).unwrap_or(1);
-    let mut buffer: u32 = get("--buffer").and_then(|s| s.parse().ok()).unwrap_or(crate::audio::DEFAULT_BUFFER_FRAMES);
-    let first_buffer = buffer;
-    let mut last_trouble = Instant::now();
-    let fail = |why: String| -> ! {
-        eprintln!("{why}");
-        println!("{}", failed_line(&why));
-        let _ = std::io::stdout().flush();
-        std::process::exit(2);
-    };
-    let renderer = thunderlive::renderer(&choice).unwrap_or_else(|e| fail(e));
-    let rname = renderer.name();
-    let bus = Arc::new(Bus::new());
-    let (silent, _) = mix_for(None, true);
-    let mut out = crate::audio::open(seed, crate::audio::Mix { rain: silent, thunder: 0.0 }, bus.clone(), buffer)
-        .unwrap_or_else(|e| fail(format!("audio device: {e}")));
-    eprintln!(
-        "live-serve: device {:?} {} Hz x{} {} buffer={:?} thunder={rname}",
-        out.device_name, out.sample_rate, out.channels, out.format, out.fixed_frames
-    );
-    let b2 = bus.clone();
-    let render = std::thread::Builder::new()
-        .name("thunder-render".into())
-        .spawn(move || thunderlive::render_loop(b2, renderer, thunderlive::utc_now))
-        .map_err(|e| e.to_string())?;
-
+    // the server's lines are read from the start, before the device opens (a slow open never fills the pipe: the
+    // server's writer would wait on it)
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     std::thread::Builder::new()
         .name("stdin".into())
@@ -146,6 +147,45 @@ pub fn run(args: &[String]) -> Result<(), String> {
         })
         .map_err(|e| e.to_string())?;
 
+    let asked: Option<u32> = get("--buffer").and_then(|s| s.parse().ok());
+    let load = load_per_cpu();
+    let mut buffer: u32 = asked.unwrap_or_else(|| start_buffer(crate::audio::DEFAULT_BUFFER_FRAMES, load));
+    let first_buffer = asked.unwrap_or(crate::audio::DEFAULT_BUFFER_FRAMES);
+    let mut last_trouble = Instant::now();
+    let fail = |why: String| -> ! {
+        eprintln!("{why}");
+        println!("{}", failed_line(&why));
+        let _ = std::io::stdout().flush();
+        std::process::exit(2);
+    };
+    let renderer = thunderlive::renderer(&choice).unwrap_or_else(|e| fail(e));
+    let rname = renderer.name();
+    let bus = Arc::new(Bus::new());
+    let (silent, _) = mix_for(None, true);
+    // the first open tried again after OPEN_RETRY_S (a device busy at the game's own start)
+    let mut tries = 0;
+    let mut out = loop {
+        match crate::audio::open(seed, crate::audio::Mix { rain: silent, thunder: 0.0 }, bus.clone(), buffer) {
+            Ok(o) => break o,
+            Err(e) if tries < OPEN_RETRY_S.len() => {
+                eprintln!("live-serve: audio device: {e}; trying again in {} s", OPEN_RETRY_S[tries]);
+                std::thread::sleep(Duration::from_secs_f64(OPEN_RETRY_S[tries]));
+                tries += 1;
+            }
+            Err(e) => fail(format!("audio device: {e}")),
+        }
+    };
+    let started_at = Instant::now();
+    eprintln!(
+        "live-serve: device {:?} {} Hz x{} {} buffer={:?} (load {:.2} per cpu) thunder={rname}",
+        out.device_name, out.sample_rate, out.channels, out.format, out.fixed_frames, load.unwrap_or(-1.0)
+    );
+    let b2 = bus.clone();
+    let render = std::thread::Builder::new()
+        .name("thunder-render".into())
+        .spawn(move || thunderlive::render_loop(b2, renderer, thunderlive::utc_now))
+        .map_err(|e| e.to_string())?;
+
     let mut last: Option<Msg> = None;
     let mut last_at = Instant::now();
     let mut state_at = Instant::now() - Duration::from_secs(1);
@@ -155,6 +195,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut base_underruns: Option<u64> = None;
     let mut reopens = 0u32;
     let mut reopen_at: Vec<Instant> = Vec::new();
+    let mut trouble_run = 0u32; // troubles since the last quiet minute
     let mut xrun_at: Vec<Instant> = Vec::new();
     let mut xruns_seen = 0u64;
     let mut xruns_total = 0u64;
@@ -203,12 +244,18 @@ pub fn run(args: &[String]) -> Result<(), String> {
             // minute, then failed (the mod's files take over)
             let next = if shrink.is_some() { shrink } else { grown_buffer(buffer) };
             last_trouble = Instant::now();
-            if next.is_none() {
-                reopen_at.retain(|t: &Instant| t.elapsed().as_secs_f64() < 60.0);
+            if next.is_none() && started_at.elapsed().as_secs_f64() >= GRACE_S {
+                // (failures in the first GRACE_S do not count: a start while the game loads keeps going)
+                reopen_at.retain(|t: &Instant| t.elapsed().as_secs_f64() < REOPEN_WINDOW_S);
                 if reopen_at.len() >= REOPEN_MAX {
                     fail("the audio device keeps failing (unplugged or changed)".into());
                 }
                 reopen_at.push(Instant::now());
+            }
+            if shrink.is_none() {
+                trouble_run += 1;
+            } else {
+                trouble_run = 0;
             }
             buffer = next.unwrap_or(buffer);
             reopens += 1;
@@ -227,7 +274,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let u = out.ring.underruns.load(std::sync::atomic::Ordering::Relaxed);
             underruns_before += u - base_underruns.unwrap_or(u);
             drop(out);
-            std::thread::sleep(Duration::from_millis(200));
+            // (a little longer after each trouble in a row: a loaded machine gets time to settle)
+            std::thread::sleep(Duration::from_millis(200 * trouble_run.clamp(1, 5) as u64));
             out = crate::audio::open(seed, crate::audio::Mix { rain, thunder }, bus.clone(), buffer)
                 .unwrap_or_else(|e| fail(format!("audio device (reopening): {e}")));
             base_underruns = None;
@@ -295,6 +343,14 @@ mod tests {
         }
         let (r, t) = mix_for(None, false);
         assert!(r.muted && t == 0.0);
+    }
+
+    #[test]
+    fn a_busy_start_asks_for_more() {
+        assert_eq!(start_buffer(512, None), 512);
+        assert_eq!(start_buffer(512, Some(0.5)), 512);
+        assert_eq!(start_buffer(512, Some(1.3)), 1024);
+        assert_eq!(start_buffer(2048, Some(3.0)), 2048);
     }
 
     #[test]
