@@ -25,6 +25,9 @@ M.VERSION = 1           -- the copies' folder: bump with any change of the copy 
                         -- imposters are baked from them once and kept in it); the materials' own signature is in it too
 M.TEX = '/levels/beamng_earth/art/shapes/beamngEarth/bare/'
 M.FACTOR = { 0.85, 0.85, 0.92, 1 }     -- the twig colour, a touch cooler (Windows shots: sunlit far crowns read pink)
+M.ALPHA_REF_FAR = 35    -- the far LOD's cards (*_distant: also what the engine bakes the far imposter from): their
+                        -- coarse mips' twigs kept as a haze (Windows shots: at 70 bare park trees 200-400 m off nearly
+                        -- vanished; at 40 everywhere the near crowns read as a solid brown mass)
 M.ALPHA_REF = 70        -- low: the coarse mips' averaged twigs stay drawn at range as a haze (make_twig_textures.py)
 
 -- the stock deciduous shapes' folders and their species
@@ -110,7 +113,8 @@ function M.materials()
         Stages = { { baseColorMap = M.TEX .. 'bne_twig_' .. tex .. '_b.color.dds',
           opacityMap = M.TEX .. 'bne_twig_' .. tex .. '_o.data.dds', roughnessFactor = 0.85,
           baseColorFactor = M.FACTOR }, {}, {}, {} },
-        alphaTest = true, alphaRef = M.ALPHA_REF, doubleSided = true, invertBackFaceNormals = true }
+        alphaTest = true, alphaRef = name:find('distant', 1, true) and M.ALPHA_REF_FAR or M.ALPHA_REF,
+        doubleSided = true, invertBackFaceNormals = true }
     end
   end
   return out

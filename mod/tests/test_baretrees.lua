@@ -67,7 +67,8 @@ do
     count = count + 1
     local st = m.Stages[1]
     local tex = st.baseColorMap:match('bne_twig_(.-)_b%.color%.dds$')
-    ok = ok and m.name == name and m.mapTo == name and m.alphaTest and m.alphaRef == B.ALPHA_REF and m.doubleSided
+    ok = ok and m.name == name and m.mapTo == name and m.alphaTest and m.doubleSided
+      and m.alphaRef == (name:find('distant', 1, true) and B.ALPHA_REF_FAR or B.ALPHA_REF)
       and tex and st.opacityMap == B.TEX .. 'bne_twig_' .. tex .. '_o.data.dds'
       and tool:find('\n    "' .. tex .. '": (', 1, true) ~= nil
   end
