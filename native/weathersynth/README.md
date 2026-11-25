@@ -80,16 +80,30 @@ Thunder (src/thunderlive.rs):
   `procedural` is thunder.rs's model, set to each class's loudness target. `files:DIR` plays
   `bne_thunder_<kind><n>.wav` picked by the seed. Another method only needs a new impl and a `--thunder` name.
 
-Device checks so far (2026-11-25, silent: volumes 0):
+Output latency (src/audio.rs, serve.rs):
+- **Device buffer:** cpal is asked for a fixed buffer (`--buffer`; 512 frames on Linux, 256 elsewhere), clamped to the
+  device's range. WASAPI shared mode ignores the request and calls back with its own ~22 ms buffer.
+- **Fill target:** one callback plus max(one callback, 512 frames), and half a callback more per ring underrun.
+- **Trouble:** a stream error (ALSA POLLERR after an unrecovered xrun, a device lost), or 3 xruns within 60 s, reopens
+  the default device with twice the buffer, up to 2048 frames. After 5 quiet minutes the buffer halves again, never
+  below the first size. Only failures at 2048 frames count toward `failed` (3 a minute).
 
-| Machine | Device / format | Latency | Underruns |
-|---|---|---|---|
-| PC (CachyOS, PipeWire, native binary) | ALSA default, 44.1 kHz f32 stereo | 158-174 ms | 0 |
-| Deck (Game Mode, glibc 2.35 build, a game running) | ALSA default (PipeWire), 44.1 kHz f32 | 176-194 ms | 0 |
-| Windows 11 test PC (over SSH) | WASAPI shared, 48 kHz f32 | 138-148 ms | 0 |
+Ten-minute soaks (2026-11-25; silent, volumes 0; rain at 4 Hz, a hinted thunder every 30 s):
 
-Two thunders hinted 3 s ahead rendered and played in time on the PC and on Windows. Not yet checked: the Deck in
-Desktop Mode, and anything with the game in the loop (the broker).
+| Machine | Priority, load | Device | Latency min / p50 / p95 / max | Underruns | xruns |
+|---|---|---|---|---|---|
+| PC (CachyOS, PipeWire) | nice 19, a 13-core job at nice -4 | ALSA, 512 frames | 34 / 50 / 56 / 56 ms | 0 | 0 |
+| Windows 11 test PC | normal | WASAPI 48 kHz, 1056-frame callbacks | 44 / 54 / 54 / 54 ms | 0 | 0 |
+| Deck, Game Mode, broker game running (it at nice 10) | nice 19, load 8-10 on 8 threads | ALSA (PipeWire); 512, grew to 1024 | 50 / 99 / 132 / 134 ms | 0 | 7 |
+| Deck, same | nice 0, load 7-9 | ALSA, 512 frames | 51 / 71 / 77 / 77 ms | 0 | 0 |
+
+On the Deck a nice-19 process gets little CPU next to a nice-10 game at load 10, and it cannot raise its own priority
+(RLIMIT_NICE 0). A player's server, and so the synth, runs at normal priority.
+
+The thunder renderer (procedural) took up to 1.9 s per strike on the PC and Windows, and up to 3.5-4.3 s on the loaded
+Deck. It runs on its own thread, so the output never waits for it. On the Deck, 2 of 20 thunders started late
+(their renders took longer than the 3 s look-ahead). Not yet checked: the Deck in Desktop
+Mode, and anything with the game in the loop (the broker).
 
 ## Audio rules (src/audio.rs)
 
