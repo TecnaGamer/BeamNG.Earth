@@ -43,17 +43,25 @@ FIELD_PAD_CELLS = 1     # cells past the square a spec holds (the texels near it
 
 Table = namedtuple("Table", "rows road")        # rows: ((z m, cover 0..8, depth 0..6, age 0..3), ...); road: 5 x 0..8
 NO_ROAD = (8, 8, 8, 8, 8)
+# The photos' paved surfaces (surface.road_mask: carriageways, lots, pads) as one plow class until W3 tells them apart
+# (W3: the road graph's classes P0..P4): P2's share of the cover. Main and residential streets are plowed within hours
+# of a storm in most snowy places (Minneapolis in January, Mapillary 2026-01-21: bare wet streets, white yards).
+PHOTO_ROAD_CLASS = 3            # 1..5 = P0..P4
+ROAD_MASK_ON = 128              # of road_mask's 0..255 coverage
+# preset road shares (eighths of the ground's cover, P0..P4): plowed main roads, packed side streets
+PLOWED = (1, 1, 2, 3, 6)
+BARE_ROADS = (0, 0, 0, 1, 3)    # a dusting does not lie on pavement
 
 # Debug presets (the plan's 2.11: "a preset is a fixed synthetic forcing record"; here the band table it leads to)
 PRESETS = {
-    "dusting": Table(((0, 4, 1, 0),), NO_ROAD),
-    "light": Table(((0, 7, 2, 0),), NO_ROAD),
-    "heavy": Table(((0, 8, 4, 0),), NO_ROAD),
-    "deep": Table(((0, 8, 6, 0),), NO_ROAD),
+    "dusting": Table(((0, 4, 1, 0),), BARE_ROADS),
+    "light": Table(((0, 7, 2, 0),), PLOWED),
+    "heavy": Table(((0, 8, 4, 0),), PLOWED),
+    "deep": Table(((0, 8, 6, 0),), PLOWED),
     # valleys bare, a line about 900 m, deep above 2,200 m
-    "alpine": Table(((700, 0, 0, 1), (1100, 8, 3, 0), (2200, 8, 5, 0)), NO_ROAD),
+    "alpine": Table(((700, 0, 0, 1), (1100, 8, 3, 0), (2200, 8, 5, 0)), PLOWED),
     # a late-spring line about 1,700 m, old snow
-    "spring": Table(((1500, 0, 0, 2), (1900, 6, 2, 2), (2600, 8, 4, 1)), NO_ROAD),
+    "spring": Table(((1500, 0, 0, 2), (1900, 6, 2, 2), (2600, 8, 4, 1)), BARE_ROADS),
 }
 
 # snowlook.rs SnowParams, in its order
@@ -63,8 +71,9 @@ PARAMS = np.array((
     150.0, 250.0,           # perm_band: permanent snow fades in from 150 m below the climatic snowline to 250 m above
     3.0, 20.0, 0.4,         # patch_m, patch_w: grass tips through a dusting, drifts and melt patches
     0.15, 1.4, 0.2,         # soft, gain, bias of the patch threshold
-    0.16, 0.32, 0.75,       # canopy_v, canopy_keep: dark green crowns keep most of their colour (shadows do not)
-    0.72, 0.88, 0.12,       # white_v, white_sat: texels already snow (snowy imagery) left as they are
+    0.16, 0.32, 0.85,       # canopy_v, canopy_keep: dark green crowns keep most of their colour (shadows do not)
+    0.97, 1.0, 0.12,        # white_v, white_sat: only blown-out white texels left as they are (snowy imagery takes
+                            # the snow's colour and keeps its own shading: no yellow summer firn beside our white)
     0.80, 0.45, 1.04,       # shade: the snow's brightness follows the photo's own shading a little
     236.0, 240.0, 246.0,    # colour: fresh
     222.0, 225.0, 230.0,    # settled
@@ -73,9 +82,16 @@ PARAMS = np.array((
     0.0, 0.6, 0.85, 1.0, 1.0, 1.0, 1.0,    # opacity by depth bin D0..D6
     4.0, 256.0,             # coarse_m, coarse_max: the cover's grid
     6.0, 1.0,               # perm_depth, perm_age
-    0.50, 0.80,             # canopy_rel: a green texel this much darker than the ground round it is a crown
-    0.0, 0.04,              # canopy_green: green over red (G - R) from which a dark texel is vegetation
+    0.65, 0.92,             # canopy_rel: a green texel this much darker than the ground round it is a crown
+    -0.012, 0.012,          # canopy_green: green over red (G - R) from which a dark texel is vegetation (olive
+                            # conifers in the USGS mosaic are barely green; dark soil, scree and rock are red)
     250.0,                  # canopy_r_m: the radius of "the ground round it"
+    -0.04, -0.01,           # canopy_gb: green against blue: bluer is shade or water, not a crown
+    0.7, 0.85,              # canopy_pct: the ground's reference at least 0.85 of the texture's 70th percentile value
+    0.22, 0.38,             # water_v: a dark ...
+    0.02, 0.06,             # water_slope: ... flat blue texel is open water: the photo's own (lake ice is W6's)
+    0.08, 0.20, 0.65,       # canopy_sat, canopy_sat_floor: a grey (bare, the winter grade's) crown keeps 0.65 of it
+    300.0,                  # treeline_band: m, crowns fade out about the climatic treeline
 ), np.float64)
 
 
@@ -230,9 +246,10 @@ def spec_for_square(frame, x0, y0, size):
     return spec_for_box(*box_of(frame, x0, y0, size))
 
 
-def look(spec, frame, x0, y0, size, U, ux0, uy0, usp):
+def look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road=None):
     """The earthfast.SnowLook of a texture over [x0, x0 + size]^2 of frame with height grid U (frame z, [j north from
-    uy0, i east from ux0], spacing usp), or None (no spec / no heights)."""
+    uy0, i east from ux0], spacing usp), or None (no spec / no heights). road: its plow classes per texel (road_classes),
+    or None."""
     if spec is None or U is None:
         return None
     U = np.ascontiguousarray(np.asarray(U, np.float64))
@@ -259,10 +276,24 @@ def look(spec, frame, x0, y0, size, U, ux0, uy0, usp):
         field = (float(res), int(ci0), int(cj0), np.ascontiguousarray(idx, np.int32),
                  np.ascontiguousarray(tables, np.int32), np.ascontiguousarray(counts, np.int32))
     return fast._ef.SnowLook((float(x0), float(y0), float(size)), (frame.lat0, frame.lon0), U,
-                             (float(ux0), float(uy0), float(usp)), geo, field, PARAMS)
+                             (float(ux0), float(uy0), float(usp)), geo, field, PARAMS,
+                             None if road is None else np.ascontiguousarray(road, np.uint8))
 
 
-def look_from_rock(spec, frame, rock):
+def road_classes(frame, x0, y0, size, px, surface, widths=None):
+    """The plow class per texel (px x px uint8: 0 none, PHOTO_ROAD_CLASS on paved ground) of a photo over
+    [x0, x0 + size]^2 (surface.road_mask's carriageways, lots and pads, without the curb corners), or None (no surface,
+    texels coarser than surface.ROAD_MASK_MAX_TEXEL, no roads)."""
+    if surface is None:
+        return None
+    import surface as surfacemod
+    m = surfacemod.road_mask(frame, x0, y0, size, px, surface, widths, corners=False)
+    if m is None:
+        return None
+    return np.where(np.asarray(m) >= ROAD_MASK_ON, PHOTO_ROAD_CLASS, 0).astype(np.uint8)
+
+
+def look_from_rock(spec, frame, rock, road=None):
     """look() from a far texture's rock inputs (rockface.tile_inputs: (U, (x0, y0, size, ux0, uy0, usp, lat, lon))).
     A spec whose look cannot be made (no heights, an error): None, and the texture is not kept (revisit.fault: its
     key says snow)."""
@@ -272,7 +303,7 @@ def look_from_rock(spec, frame, rock):
         if rock is None:
             raise ValueError("no height grid")
         U, (x0, y0, size, ux0, uy0, usp, _lat, _lon) = rock
-        sl = look(spec, frame, x0, y0, size, U, ux0, uy0, usp)
+        sl = look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road)
         if sl is None:
             raise ValueError("no look")
         return sl
@@ -284,16 +315,17 @@ def look_from_rock(spec, frame, rock):
         return None
 
 
-def apply(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp):
-    """rgb (px, px, 3) over [x0, x0 + size]^2 of frame with its snow, or rgb itself (no snow on it)."""
-    sl = look(spec, frame, x0, y0, size, U, ux0, uy0, usp)
+def apply(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp, road=None):
+    """rgb (px, px, 3) over [x0, x0 + size]^2 of frame with its snow, or rgb itself (no snow on it). road: its plow
+    classes (road_classes) or None."""
+    sl = look(spec, frame, x0, y0, size, U, ux0, uy0, usp, road)
     if sl is None:
         return rgb
     out = sl.apply(np.ascontiguousarray(np.asarray(rgb, np.uint8)[..., :3]))
     return rgb if out is None else out
 
 
-def apply_kept(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp):
+def apply_kept(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp, road=None):
     """apply() for a texture that is kept under its spec's key: when its snow cannot be made (no heights, an error) it
     is shown without it and not kept (revisit.fault: its key says snow)."""
     if spec is None:
@@ -301,7 +333,7 @@ def apply_kept(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp):
     try:
         if U is None:
             raise ValueError("no height grid")
-        return apply(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp)
+        return apply(spec, rgb, frame, x0, y0, size, U, ux0, uy0, usp, road)
     except Exception as e:          # (the photo without its snow, this once)
         import logging
         import revisit

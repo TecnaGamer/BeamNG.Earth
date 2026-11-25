@@ -25,7 +25,7 @@ use crate::dm::Dm;
 
 pub const ROWS: usize = 8;          // band rows per table at most
 pub const ROAD_CLASSES: usize = 5;  // plow classes P0..P4 (W3): the share of the ground's cover a road keeps, 0..8
-pub const N_PARAMS: usize = 48;
+pub const N_PARAMS: usize = 60;
 const NO_ELA: f64 = 1.0e9;
 
 /// The constants snowcover.py passes (snowcover.PARAMS, in this order).
@@ -44,6 +44,13 @@ pub struct SnowParams {
     canopy_rel: (f64, f64),     // ... or its value against the local mean below which it is (a darker stand)
     canopy_green: (f64, f64),   // green over red (G - R, 0..1) from which a dark texel is a crown, not shade
     canopy_r_m: f64,            // m: the local mean's radius
+    canopy_gb: (f64, f64),      // green against blue (G - B): bluer than this is shade or water, not a crown
+    canopy_pct: (f64, f64),     // the ground's reference value: at least this share of the texture's this percentile
+    water_v: (f64, f64),        // a flat, dark, blue texel is open water (the photo's own: no snow on it, W6 ices it)
+    water_slope: (f64, f64),    // ... flat: slope (tan) below which
+    canopy_sat: (f64, f64),     // saturation from which a crown keeps all of canopy_keep (a bare, grey crown less) ...
+    canopy_sat_floor: f64,      // ... at least this share of it
+    treeline_band: f64,         // m: crowns fade out over this band about the climatic treeline (none above it)
     white_v: (f64, f64),        // photo value above which a neutral texel counts as snow already
     white_sat: f64,             // ... at most this saturation
     shade: (f64, f64, f64),     // the snow's brightness: base + gain * photo luminance, at most max
@@ -69,6 +76,9 @@ impl SnowParams {
             opacity: [p[32], p[33], p[34], p[35], p[36], p[37], p[38]],
             coarse_m: p[39], coarse_max: p[40].max(2.0), perm_depth: p[41], perm_age: p[42],
             canopy_rel: (p[43], p[44]), canopy_green: (p[45], p[46]), canopy_r_m: p[47],
+            canopy_gb: (p[48], p[49]), canopy_pct: (p[50], p[51]), water_v: (p[52], p[53]),
+            water_slope: (p[54], p[55]), canopy_sat: (p[56], p[57]), canopy_sat_floor: p[58],
+            treeline_band: p[59],
         })
     }
 }
@@ -220,6 +230,23 @@ const ELA_TABLE: [(f64, f64); 14] = [(0.0, 5000.0), (15.0, 5400.0), (25.0, 5800.
     (80.0, 50.0), (90.0, 0.0)];
 const ELA_E_PEN: f64 = 800.0;       // m higher where the polar / alpine class is only at the edge of the point
 
+/// The climatic treeline (m) by |lat| (deg): no crowns above it (the alpine meadows, scree and rock above it are not
+/// forest, however dark the photo).
+const TREELINE_TABLE: [(f64, f64); 11] = [(0.0, 3800.0), (20.0, 3900.0), (30.0, 3800.0), (35.0, 3700.0), (40.0, 3500.0),
+    (45.0, 2400.0), (50.0, 1800.0), (60.0, 900.0), (66.0, 450.0), (70.0, 150.0), (90.0, 0.0)];
+
+fn treeline_lat(lat: f64) -> f64 {
+    let a = lat.abs().min(90.0);
+    for k in 0..TREELINE_TABLE.len() - 1 {
+        let (l0, z0) = TREELINE_TABLE[k];
+        let (l1, z1) = TREELINE_TABLE[k + 1];
+        if a <= l1 {
+            return z0 + (z1 - z0) * (a - l0) / (l1 - l0);
+        }
+    }
+    0.0
+}
+
 fn ela_lat(lat: f64) -> f64 {
     let a = lat.abs().min(90.0);
     for k in 0..ELA_TABLE.len() - 1 {
@@ -318,6 +345,7 @@ pub struct SnowLook {
     geo: [Array2<f64>; 4],          // lat, lon, zoff (geodetic h - frame z), ela, on G x G nodes (row 0 north)
     field: Option<SnowField>,
     p: SnowParams,
+    road: Option<Array2<u8>>,       // the texture's plow class per texel (0 none, 1..5 P0..P4), when known
 }
 
 struct Coarse {
@@ -327,11 +355,19 @@ struct Coarse {
     o: Vec<f64>,        // opacity
     g: Vec<f64>,        // age
     rd: Vec<[f64; ROAD_CLASSES]>,
+    sl: Vec<f64>,       // slope (tan)
+    tree: Vec<f64>,     // 1 below the climatic treeline, 0 above
 }
 
 impl SnowLook {
     /// (cover, depth, age, road shares) at frame point (x, y).
     fn point(&self, x: f64, y: f64) -> (f64, f64, f64, [f64; ROAD_CLASSES]) {
+        let (c, d, g, rd, _, _) = self.point_slope(x, y);
+        (c, d, g, rd)
+    }
+
+    /// point() and the ground's slope (tan) and whether trees can stand there (1 below the treeline).
+    fn point_slope(&self, x: f64, y: f64) -> (f64, f64, f64, [f64; ROAD_CLASSES], f64, f64) {
         let (x0, y0, size) = self.area;
         let gn = (self.geo[0].shape()[0] - 1) as f64;
         let (fy, fx) = ((y0 + size - y) / size * gn, (x - x0) / size * gn);
@@ -362,7 +398,9 @@ impl SnowLook {
             d = d.max(self.p.perm_depth * pc);
         }
         let steep = 1.0 - smooth(tan2.sqrt(), self.p.steep_tan.0, self.p.steep_tan.1);
-        (c * steep, d, g, rd)
+        let tl = treeline_lat(lat);
+        let tree = 1.0 - smooth(h, tl - 0.5 * self.p.treeline_band, tl + 0.5 * self.p.treeline_band);
+        (c * steep, d, g, rd, tan2.sqrt(), tree)
     }
 
     fn opacity(&self, d: f64) -> f64 {
@@ -380,12 +418,16 @@ impl SnowLook {
         let nk = (px - 1) / s + 2;
         let n = nk * nk;
         let (mut c, mut o, mut g, mut rd) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![[0.0; ROAD_CLASSES]; n]);
+        let mut sl = vec![0.0; n];
+        let mut tree = vec![0.0; n];
         let mut any = false;
         for r in 0..nk {
             let y = y0 + size - ((r * s) as f64 + 0.5) * t;
             for k in 0..nk {
                 let x = x0 + ((k * s) as f64 + 0.5) * t;
-                let (cc, dd, gg, rr) = self.point(x, y);
+                let (cc, dd, gg, rr, ss, tt) = self.point_slope(x, y);
+                sl[r * nk + k] = ss;
+                tree[r * nk + k] = tt;
                 let q = r * nk + k;
                 c[q] = cc;
                 o[q] = self.opacity(dd);
@@ -396,17 +438,20 @@ impl SnowLook {
                 }
             }
         }
-        any.then_some(Coarse { s, nk, c, o, g, rd })
+        any.then_some(Coarse { s, nk, c, o, g, rd, sl, tree })
     }
 
     /// The photo with its snow (rgb (px, px, 3), row 0 north, covering the square), or None: no snow on it.
     /// road: an optional (px, px) plow class per texel (0 not a road, 1..5 = P0..P4): the cover there times the
     /// table's share for that class (W3's hook; None: the roads take the ground's cover).
-    pub fn apply_core(&self, img: ArrayView3<u8>, road: Option<ArrayView2<u8>>) -> Option<Array3<u8>> {
+    pub fn apply_core<'a>(&'a self, img: ArrayView3<u8>, road: Option<ArrayView2<'a, u8>>) -> Option<Array3<u8>> {
         let px = img.shape()[0];
         if px < 2 || img.shape()[1] != px || img.shape()[2] != 3 {
             return None;
         }
+        // (the look's own road mask when none is given and it is the texture's size)
+        let own_road = self.road.as_ref().filter(|r| r.shape() == [px, px]).map(|r| r.view());
+        let road = match road { Some(r) => Some(r), None => own_road };
         let cg = self.coarse(px)?;
         let (x0, y0, size) = self.area;
         let t = size / px as f64;
@@ -420,7 +465,13 @@ impl SnowLook {
         let wn = (w1 + w2).min(1.0);
         let own = img.as_standard_layout();
         let src = own.as_slice().expect("standard layout");
-        let vm = local_value(src, px, cg.s, cg.nk, ((p.canopy_r_m / (cg.s as f64 * t)).round() as usize).max(1));
+        let mut vm = local_value(src, px, cg.s, cg.nk, ((p.canopy_r_m / (cg.s as f64 * t)).round() as usize).max(1));
+        // the ground's reference brightness: the local mean, at least a share of the texture's own percentile (a forest
+        // wider than the local radius is still darker than the open ground of its texture)
+        let vref = p.canopy_pct.1 * value_percentile(src, p.canopy_pct.0);
+        for v in vm.iter_mut() {
+            *v = v.max(vref);
+        }
         let mut out = src.to_vec();
         let road_own = road.map(|r| r.as_standard_layout().into_owned());
         let road_s = road_own.as_ref().map(|r| r.as_slice().expect("standard layout"));
@@ -481,11 +532,18 @@ impl SnowLook {
                 // (green over red; blue no more than a little above it: conifers are blue-green in Sentinel-2,
                 // shadows blue, meadows and rock red-grey)
                 let green = smooth((g - r) / 255.0, p.canopy_green.0, p.canopy_green.1)
-                    * smooth((g - b) / 255.0, -p.canopy_green.1, -0.25 * p.canopy_green.1);
+                    * smooth((g - b) / 255.0, p.canopy_gb.0, p.canopy_gb.1);
                 let rel = 1.0 - smooth(v / lerp4(&vm).max(1e-3), p.canopy_rel.0, p.canopy_rel.1);
-                let canopy = green * rel.max(1.0 - smooth(v, p.canopy_v.0, p.canopy_v.1));
+                let canopy = green * rel.max(1.0 - smooth(v, p.canopy_v.0, p.canopy_v.1)) * lerp4(&cg.tree);
+                // (a grey, bare crown lets the snow under it show: less of its colour kept than a saturated one)
+                let keep = p.canopy_keep * (p.canopy_sat_floor
+                    + (1.0 - p.canopy_sat_floor) * smooth(sat, p.canopy_sat.0, p.canopy_sat.1));
                 let white = smooth(v, p.white_v.0, p.white_v.1) * (1.0 - smooth(sat, p.white_sat, p.white_sat * 2.0));
-                let amt = a * lerp4(&cg.o) * (1.0 - p.canopy_keep * canopy) * (1.0 - white);
+                // (blue over red as well: grey asphalt and roofs are a hint bluish too)
+                let water = (1.0 - smooth(v, p.water_v.0, p.water_v.1)) * smooth((b - g) / 255.0, -0.01, 0.02)
+                    * smooth((b - r) / 255.0, 0.03, 0.07)
+                    * (1.0 - smooth(lerp4(&cg.sl), p.water_slope.0, p.water_slope.1));
+                let amt = a * lerp4(&cg.o) * (1.0 - keep * canopy) * (1.0 - white) * (1.0 - water);
                 if amt <= 0.0 {
                     continue;
                 }
@@ -558,6 +616,24 @@ fn local_value(src: &[u8], px: usize, s: usize, nk: usize, r: usize) -> Vec<f64>
     out
 }
 
+/// The q-quantile (0..1) of the photo's value (max channel, 0..1), from its histogram.
+fn value_percentile(src: &[u8], q: f64) -> f64 {
+    let mut hist = [0u64; 256];
+    for px in src.chunks_exact(3) {
+        hist[px[0].max(px[1]).max(px[2]) as usize] += 1;
+    }
+    let n: u64 = hist.iter().sum();
+    let want = ((n as f64) * q.clamp(0.0, 1.0)).ceil() as u64;
+    let mut acc = 0u64;
+    for (v, &h) in hist.iter().enumerate() {
+        acc += h;
+        if acc >= want.max(1) {
+            return v as f64 / 255.0;
+        }
+    }
+    1.0
+}
+
 fn gradient(u: &Array2<f64>, sp: f64) -> (Array2<f64>, Array2<f64>) {
     let (ny, nx) = (u.shape()[0], u.shape()[1]);
     let d = |a: usize, n: usize, f: &dyn Fn(usize) -> f64| -> f64 {
@@ -574,14 +650,16 @@ impl SnowLook {
     /// area (x0, y0, size): the texture's square (frame m); origin (lat0, lon0): the frame's; u: the height grid
     /// (frame z, [j north, i east]) at uarea (ux0, uy0, spacing); geo (lat, lon, zoff, ela): G x G grids over the
     /// square (row 0 north, corner to corner); field: None or (res, ci0, cj0, idx (nj, ni) int32, tables (n, 8, 4)
-    /// int32, counts (n, 6) int32: rows, then the road shares P0..P4 in eighths); params: snowcover.PARAMS.
+    /// int32, counts (n, 6) int32: rows, then the road shares P0..P4 in eighths); params: snowcover.PARAMS; road: the
+    /// texture's plow class per texel (px x px uint8: 0 none, 1..5 P0..P4), or None.
     #[new]
+    #[pyo3(signature = (area, origin, u, uarea, geo, field, params, road=None))]
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn new(area: (f64, f64, f64), origin: (f64, f64), u: PyReadonlyArray2<'_, f64>, uarea: (f64, f64, f64),
            geo: (PyReadonlyArray2<'_, f64>, PyReadonlyArray2<'_, f64>, PyReadonlyArray2<'_, f64>,
                  PyReadonlyArray2<'_, f64>),
            field: Option<(f64, i64, i64, PyReadonlyArray2<'_, i32>, PyReadonlyArray3<'_, i32>, PyReadonlyArray2<'_, i32>)>,
-           params: PyReadonlyArray1<'_, f64>) -> PyResult<Self> {
+           params: PyReadonlyArray1<'_, f64>, road: Option<PyReadonlyArray2<'_, u8>>) -> PyResult<Self> {
         let p = SnowParams::from_slice(params.as_slice()?)?;
         let u = u.as_array().to_owned();
         let g = [geo.0.as_array().to_owned(), geo.1.as_array().to_owned(), geo.2.as_array().to_owned(),
@@ -596,7 +674,8 @@ impl SnowLook {
             None => None,
         };
         let (gx, gy) = gradient(&u, uarea.2);
-        Ok(SnowLook { area, origin, u, gx, gy, uarea, geo: g, field, p })
+        let road = road.map(|r| r.as_array().to_owned());
+        Ok(SnowLook { area, origin, u, gx, gy, uarea, geo: g, field, p, road })
     }
 
     /// The photo with its snow, or None (no texel changed). road: see apply_core.

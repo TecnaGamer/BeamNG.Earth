@@ -222,7 +222,26 @@ class LookTest(unittest.TestCase):
             crowns[...] = (24, 40, 30)
             self.assertLess(int(sl.apply(crowns)[..., 0].mean()), 90, "dark conifer crowns keep most of their colour")
             snowy = np.full_like(grass, 246)
-            self.assertIsNone(sl.apply(snowy), "imagery already snowy is not whitened again")
+            got = sl.apply(snowy)
+            self.assertLessEqual(int(np.abs(got.astype(int) - 246).max()), 12,
+                                 "imagery already snowy keeps its brightness (the snow's tint only)")
+            firn = np.zeros_like(grass)
+            firn[...] = (205, 195, 150)     # (summer firn in a photo: yellowish)
+            out = sl.apply(firn).astype(int)
+            self.assertLess(int(np.abs(out[..., 0] - out[..., 2]).max()), 25, "it takes the snow's colour")
+            self.assertIsNone(sl.apply(np.full_like(grass, 255)), "blown-out white: left alone")
+            # the paved ground (snowcover.road_classes: P2's share of the cover, a quarter under the heavy preset):
+            # mostly the photo's asphalt, the yards white
+            asphalt = np.zeros_like(grass)
+            asphalt[...] = (70, 72, 75)
+            road = np.zeros(grass.shape[:2], np.uint8)
+            road[:, 100:140] = sc.PHOTO_ROAD_CLASS
+            out = sl.apply(asphalt, road).astype(int)
+            self.assertLess(out[:, 110:130].mean(), 140, "a plowed street")
+            self.assertGreater(out[:, :80].mean(), 200, "the white ground beside it")
+            _, own = self.look(sc, np.full((65, 65), 300.0))
+            sl2 = sc.look(sp, self.frame, -500, -500, 1000.0, np.full((65, 65), 300.0), -500, -500, 1000 / 64, road)
+            self.assertTrue(np.array_equal(sl2.apply(asphalt), out), "the look's own road mask, its texture's size")
             self.assertTrue(sl.any(256))
         with winter("dusting") as sc:
             _, dust = self.look(sc, np.full((65, 65), 300.0))
