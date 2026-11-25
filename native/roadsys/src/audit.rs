@@ -112,7 +112,7 @@ impl Rd<'_> {
     fn f32(&mut self) -> Result<f32, String> { Ok(f32::from_le_bytes(self.take(4)?.try_into().unwrap())) }
 }
 
-fn classify(p: &[[f64; 3]; 3]) -> u8 {
+pub(crate) fn classify(p: &[[f64; 3]; 3]) -> u8 {
     let (ux, uy, uz) = (p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]);
     let (vx, vy, vz) = (p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]);
     let n = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
@@ -213,7 +213,7 @@ fn clip_z(t: &Tri, x0: f64, y0: f64, x1: f64, y1: f64) -> Option<(f64, f64)> {
     Some((lo, hi))
 }
 
-struct Grid { cells: BTreeMap<(i64, i64), Vec<u32>> }
+pub(crate) struct Grid { cells: BTreeMap<(i64, i64), Vec<u32>> }
 
 impl Grid {
     fn new(tris: &[Tri], keep: impl Fn(&Tri) -> bool) -> Grid {
@@ -343,11 +343,12 @@ pub struct Metrics { pub m: BTreeMap<&'static str, f64> }
 
 /// The audit's measuring rules: raised whenever a metric's meaning changes (2: tunnel lanes ride their traced floor,
 /// terrain counts as a floor). tools/widecorpus compare.py refuses to pair results of two versions.
-pub const AUDIT_VERSION: f64 = 2.0;
+/// 3: the tunnel checks (tunaudit.rs; new keys only, the others as in 2).
+pub const AUDIT_VERSION: f64 = 3.0;
 
 impl Metrics {
-    fn add(&mut self, k: &'static str, v: f64) { *self.m.entry(k).or_insert(0.0) += v; }
-    fn max(&mut self, k: &'static str, v: f64) { let e = self.m.entry(k).or_insert(0.0); if v > *e { *e = v; } }
+    pub(crate) fn add(&mut self, k: &'static str, v: f64) { *self.m.entry(k).or_insert(0.0) += v; }
+    pub(crate) fn max(&mut self, k: &'static str, v: f64) { let e = self.m.entry(k).or_insert(0.0); if v > *e { *e = v; } }
     pub fn json(&self) -> String {
         let mut s = String::from("{");
         for (i, (k, v)) in self.m.iter().enumerate() {
@@ -422,6 +423,7 @@ pub fn audit(sc: &Scene) -> Metrics {
     let vaults = Grid::new(tris, |t| t.kind == KIND_TUNNEL && t.cls == DOWN);
     let ss = samples(sc);
     let track = tunnel_floors(sc, &ss, &deck_top, &floors, &vaults);
+    let mut roofed: BTreeMap<(u32, i64, i64), bool> = BTreeMap::new();     // (tunaudit: the built portals)
     let area = CELL * CELL;
     let mut cand: Vec<u32> = Vec::new();
     let mut r2r: Vec<f64> = Vec::new();
@@ -524,6 +526,8 @@ pub fn audit(sc: &Scene) -> Metrics {
                                  (KIND_RAILCOL, "envelope_intrusion_rail_m2")] {
                 if intr_kind[kind as usize] { m.add(name, area); }
             }
+            // (T0) a tube through the road over it: a tunnel part inside a ground or bridge lane's envelope
+            if s.level != 2 && intr_kind[KIND_TUNNEL as usize] { m.add("tube_breaks_upper_m2", area); }
         }
         if parapet { m.add("parapet_in_cw_m", CELL); }
         if over_min.is_finite() && over_min <= hi { m.add("envelope_overhead_m2", area); }
@@ -532,8 +536,10 @@ pub fn audit(sc: &Scene) -> Metrics {
         // ramps past its bore, 2026-11-23)
         if s.level >= 1 && zt.is_finite() && zt > lo && zt <= hi {
             m.add("envelope_intrusion_terrain_m2", area);
+            if s.level == 2 { m.add("opening_blocked_tunnel_m2", area); }       // (T0: terrain across a tunnel's mouth)
             if dump { eprintln!("TE {:.3} {:.3} lvl {} drive {:.2} ter {:.2} line {}", x, y, s.level, drive, zt, s.line); }
         }
+        if s.level == 2 { roofed.insert((s.line, s.station, s.across), over_min.is_finite() && over_min <= drive + ROOF_MAX); }
         if s.level == 2 && !(over_min.is_finite() && over_min <= drive + ROOF_MAX) {
             m.add("tunnel_roofless_cells", 1.0);
             if dump { eprintln!("RF {:.3} {:.3} drive {:.2} line {}", x, y, drive, s.line); }
@@ -594,6 +600,7 @@ pub fn audit(sc: &Scene) -> Metrics {
     let mask = LaneMask::new(&sc.lines);
     let mut lips: Vec<f64> = Vec::new();
     let mut lips_terrain: Vec<f64> = Vec::new();
+    let mut lips_tunnel: Vec<f64> = Vec::new();
     let mut by_entry: BTreeMap<(u32, bool), Vec<u32>> = BTreeMap::new();
     for (k, t) in tris.iter().enumerate() {
         if t.cls != UP { continue; }
@@ -696,6 +703,7 @@ pub fn audit(sc: &Scene) -> Metrics {
                     if dump && best > 0.005 { eprintln!("lip {:.3} {:.3} {:.3} {:.1} terrain={} entry={} kind={}", p[0], p[1], ze, best * 1000.0, terrain, entry, tri.kind); }
                     lips.push(best * 1000.0);
                     if terrain { lips_terrain.push(best * 1000.0); }
+                    if tri.kind == KIND_TUNNEL { lips_tunnel.push(best * 1000.0); }
                 }
             }
         }
@@ -710,6 +718,25 @@ pub fn audit(sc: &Scene) -> Metrics {
         m.max("handover_lip_max_p95_mm", pct(&mut lips, 0.95));
     }
     if !lips_terrain.is_empty() { m.max("handover_terrain_lip_max_p95_mm", pct(&mut lips_terrain, 0.95)); }
+    if !lips_tunnel.is_empty() {
+        m.add("handover_lip_tunnel_samples", lips_tunnel.len() as f64);
+        m.add("handover_lip_tunnel_over_1mm", lips_tunnel.iter().filter(|&&v| v > 1.0).count() as f64);
+        m.add("handover_lip_tunnel_over_5mm", lips_tunnel.iter().filter(|&&v| v > 5.0).count() as f64);
+        m.max("handover_lip_tunnel_max_mm", lips_tunnel.iter().cloned().fold(0.0, f64::max));
+    }
+    // (T0) the tunnel checks: holes and their edges, mouth steps, the built portals (tunaudit.rs)
+    {
+        let all_flat = Grid::new(tris, crate::tunaudit::is_flat);
+        let all_steep = Grid::new(tris, crate::tunaudit::is_steep);
+        let flat_at = |x: f64, y: f64| all_flat.at(x, y).to_vec();
+        let steep_around = |x0: f64, y0: f64, x1: f64, y1: f64| { let mut v = Vec::new(); all_steep.around(x0, y0, x1, y1, &mut v); v };
+        let rayf = |t: &Tri, x: f64, y: f64| ray(t, x, y);
+        let clipf = |t: &Tri, x0: f64, y0: f64, x1: f64, y1: f64| clip_z(t, x0, y0, x1, y1);
+        let inq = |x: f64, y: f64| in_quad(&sc.quad, [x, y]);
+        let faces = crate::tunaudit::Faces { flat_at: &flat_at, steep_around: &steep_around, ray: &rayf, clip_z: &clipf, in_quad: &inq };
+        crate::tunaudit::holes(sc, &faces, &mut m);
+        crate::tunaudit::mouths(sc, &heights, &roofed, &faces, &mut m);
+    }
     // folds, zero-area and long triangles on the drivable / drawn road surfaces
     for t in tris.iter() {
         let road = (t.kind == KIND_ROAD && t.flags & FLAG_MARK == 0) || (t.collides && t.kind == KIND_DECK && t.flags & FLAG_DECK_TOP != 0);
