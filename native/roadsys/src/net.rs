@@ -358,9 +358,10 @@ pub struct NetStats {
 /// flat_struct (M4, deck.rs): no crossfall on structure faces (today's decks are flat across: the terrain and the
 /// hand-over were made for them).
 /// areas (BNE_ROADSYS_AREAS=on): the place's mapped road areas are the carriageway edges' soft targets (areas::fit).
-pub struct Opts { pub cut_grid: f64, pub cut_offset: f64, pub flat_struct: bool, pub areas: bool }
+/// tunnels (T1, BNE_ROADSYS_TUNNELS=on): the profile squares make the tunnel record (tunnel.rs) with their profiles.
+pub struct Opts { pub cut_grid: f64, pub cut_offset: f64, pub flat_struct: bool, pub areas: bool, pub tunnels: bool }
 
-impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0, flat_struct: false, areas: false } } }
+impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0, flat_struct: false, areas: false, tunnels: false } } }
 
 pub struct Net {
     pub opts: Opts,

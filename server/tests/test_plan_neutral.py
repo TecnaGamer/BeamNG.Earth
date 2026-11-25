@@ -77,7 +77,10 @@ PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARE
               "BNE_BATTER", "BNE_ROADSHAPE", "BNE_SIDEWALK_V2", "BNE_ROADSURF_V3",
               # (the road system rewrite in the Revamped roads setting, 2026-11-24: the plans' format suffix, the
               # areas fit's and cross-sections' lane widths)
-              "BNE_ROADSYS", "BNE_ROADSYS_AREAS", "BNE_ROADSYS_XSEC")
+              "BNE_ROADSYS", "BNE_ROADSYS_AREAS", "BNE_ROADSYS_XSEC",
+              # (tunnel plan T1, 2026-11-25: the tunnels' floors, sections and mouths from the road system's record;
+              # the plans' ".rst" suffix)
+              "BNE_ROADSYS_TUNNELS")
 # Experimental switches the planning does not read that are still NOT on the list, and why (each keeps its keys)
 NOT_LISTED = {
     "BNE_SURFACE_V2": "road tiles' surface overlays and marking lift only (roadmesh / roadwear, revamp v2 P1c); comes with the Revamped roads setting, whose other switches the plans read, so it stays keyed with it",

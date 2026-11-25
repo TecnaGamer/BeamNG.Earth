@@ -165,6 +165,16 @@ pub fn mouths(sc: &Scene, heights: &Heights, roofed: &BTreeMap<(u32, i64, i64), 
         let mut row: Vec<(i64, bool, f64, f64)> = roofed.iter().filter(|(k, _)| k.0 == li && k.2 == 0)
             .filter_map(|(k, &r)| heights.get(k).map(|h| (k.1, r, h.1, h.2))).collect();
         row.sort_by(|a, b| a.0.cmp(&b.0));
+        // (a row roofed from its first or to its last cell at the range's mapped end in the tile: the portal is that end)
+        if let (Some(r0), Some(r1)) = (row.first(), row.last()) {
+            let (p0, p1) = (l.xy[0], l.xy[l.xy.len() - 1]);
+            if r0.1 && r0.0 <= 1 && (f.in_quad)(p0[0], p0[1]) {
+                out.push_str(&format!("PORTAL {:.3} {:.3} {}\n", r0.2, r0.3, li));
+            }
+            if r1.1 && r1.0 >= last_station - 1 && (f.in_quad)(p1[0], p1[1]) {
+                out.push_str(&format!("PORTAL {:.3} {:.3} {}\n", r1.2, r1.3, li));
+            }
+        }
         for w in row.windows(2) {
             if w[1].0 - w[0].0 <= 2 && w[0].1 != w[1].1 {
                 out.push_str(&format!("PORTAL {:.3} {:.3} {}\n", (w[0].2 + w[1].2) / 2.0, (w[0].3 + w[1].3) / 2.0, li));
