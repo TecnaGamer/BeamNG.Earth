@@ -186,9 +186,10 @@ fn struct_boxes(net: &Net) -> Vec<(usize, [f64; 4])> {
 
 /// m a free edge's strip widens at point q, facing out: to the farthest mapped paved edge (line +- the map's paved
 /// half width) of any structure stroke whose mapped band holds q, across it (within 60 deg of its normal), past q
-/// outward; at most WIDEN_MAX_M. (M5: any stroke's, not only the edge's own: a ramp mapped beside the main deck
+/// outward; at most WIDEN_MAX_M. own: the edge's stroke (its map level), usize::MAX for a zone's edge. (M5: any stroke's, not only the edge's own: a ramp mapped beside the main deck
 /// before its nose, its line 1.5 m past the main deck's faces, had the parapet across its mapped lanes, I-95)
-fn widen_out(net: &Net, sts: &[(usize, [f64; 4])], q: P2, out: P2) -> f64 {
+fn widen_out(net: &Net, sts: &[(usize, [f64; 4])], q: P2, out: P2, own: usize) -> f64 {
+    let lvl = if own == usize::MAX { None } else { let st = &net.strokes[own]; Some(st.support_at(st.line.project(q, 0.0, st.len()).0).level) };
     let mut best = 0.0f64;
     for &(sj, b) in sts {
         if !inside(b, q) { continue; }
@@ -198,9 +199,12 @@ fn widen_out(net: &Net, sts: &[(usize, [f64; 4])], q: P2, out: P2) -> f64 {
         let part = st.parts.iter().find(|p| s_ >= p.s0 - 1e-6 && s_ <= p.s1 + 1e-6).unwrap_or(&st.parts[0]);
         let half = net.segs[net.edges[part.edge].seg].pave * 0.5;
         if !(half > 0.0) || absf(off) >= half { continue; }
+        // (a stroke running along the edge (within 25 deg) at its own map level: never one crossing it or one over it,
+        // whose mapped band filled the gap between two carriageways round a ramp crossing them, I-95)
+        if let Some(l) = lvl { if st.support_at(s_).level != l { continue; } }
         let t = st.line.at(s_).1;
         let c = dot(out, [-t[1], t[0]]);
-        if absf(c) < 0.5 { continue; }
+        if absf(c) < TWIN_PAR_COS { continue; }
         let ext = if c > 0.0 { half - off } else { half + off };
         if ext > best { best = ext; }
     }
@@ -465,7 +469,7 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
             // (M5: a twin is a kept face across a gap of at most TWIN_M once both decks are widened to their map's
             // paved half widths (the strips below): two 14 m carriageways 12 m apart are twins, the gap filled, not
             // two parapets each 2.5 m into the other's mapped lanes)
-            let r_self = widen_out(&net, &sboxes, mid, out);
+            let r_self = widen_out(&net, &sboxes, mid, out, si_of);
             let mut gap = 0.0;
             let mut dd = COVER_OUT_M + TWIN_STEP_M;
             while dd <= TWIN_M + r_self + WIDEN_MAX_M + 1e-9 {
@@ -482,7 +486,7 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
                     let st2 = &net.strokes[sj];
                     let (s2, _o) = st2.line.project(q, 0.0, st2.len());
                     absf(dot(dir, st2.line.at(s2).1)) >= TWIN_PAR_COS
-                        && dd <= TWIN_M + r_self + widen_out(&net, &sboxes, q, [-out[0], -out[1]]) + 1e-9
+                        && dd <= TWIN_M + r_self + widen_out(&net, &sboxes, q, [-out[0], -out[1]], sj) + 1e-9
                 });
                 if hit { gap = dd; break; }
                 dd += TWIN_STEP_M;
@@ -568,7 +572,7 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
         // (a strip's width per edge: half the gap to a twin deck; else STRIP_W past the map's paved half width from its
         // line where the faces end short of it (a carriageway's lanes on its line, its shoulders apart): the slab and
         // parapet as wide as the map's road, as today's decks)
-        let reach = |i: usize, e: usize| -> f64 { widen_out(&net, &sboxes, p[i], rn[e]) };
+        let reach = |i: usize, e: usize| -> f64 { widen_out(&net, &sboxes, p[i], rn[e], _sis[e]) };
         // (M5: a widened strip stops short of any kept face it would reach (another deck at its height, a zone): one
         // owner per drivable point, never a strip lying on a neighbour's face)
         let clear = |e: usize, w: f64| -> f64 {
