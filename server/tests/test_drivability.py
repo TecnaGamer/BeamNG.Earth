@@ -10,9 +10,6 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 import drivability as dv  # noqa: E402
 
-STEPS_TOL = 2           # metres of wheel track over the limit (a sample beside the limit on another platform)
-REL_TOL = 0.05          # of a value already over its limit, when more than the absolute tolerance: a crest of 22 g
-                        # becoming 22.1 g is a road already broken shifting a little, not a new defect
 UPDATE = "python server/tests/drivability.py --update {}"
 
 # The baseline was 20 merged PRs behind the code at 2026-11-18 (402b4d85d, PR 19, was its last). Re-measured on the head and bisected
@@ -47,29 +44,7 @@ UPDATE = "python server/tests/drivability.py --update {}"
 # Fix the defect, then lock the improvement in with UPDATE.
 
 
-def compare(result, base):
-    """([worse], [better]) of a measurement against its baseline entry, each a line for whoever reads the failure."""
-    worse, better = [], []
-    steps_tol = _tolerance(base["steps"], 0, STEPS_TOL)
-    if result["steps"] > base["steps"] + steps_tol:
-        worse.append(f"steps {base['steps']} -> {result['steps']}")
-    elif result["steps"] < base["steps"] - steps_tol:
-        better.append(f"steps {base['steps']} -> {result['steps']}")
-    for key in sorted(set(result["parts"]) | set(base["parts"])):
-        now, was = result["parts"].get(key), base["parts"].get(key)
-        for m, (limit, abs_tol, *_rest) in dv.METRICS.items():
-            was_m, now_m = (was or {}).get(m, 0.0), (now or {}).get(m, 0.0)
-            tol = _tolerance(was_m, limit, abs_tol)
-            if now_m > max(was_m, limit) + tol:
-                worse.append(f"{key} ({now['class']}, at {now.get(m + '_at')}): {m} {was_m if was else 'ok'} -> {now_m}")
-            elif was_m > limit and now_m < was_m - tol:
-                better.append(f"{key}: {m} {was_m} -> {now_m if now_m > limit else 'ok'}")
-    return worse, better
-
-
-def _tolerance(was, limit, abs_tol):
-    """How far a value may move before it counts: abs_tol, or REL_TOL of a value already over its limit."""
-    return max(abs_tol, REL_TOL * was) if was > limit else abs_tol
+compare = dv.compare
 
 
 class DrivabilityTest(unittest.TestCase):
