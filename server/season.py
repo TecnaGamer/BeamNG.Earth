@@ -10,7 +10,8 @@ they agree):
      their colours (the reference is not green there).
   2. grade: from that summer look toward the season of the date at the place (season_amounts): fall turns the
      tree canopy yellow / orange / rust in patches (world-anchored noise, so tiles and anchors agree) and yellows
-     everything green a little; the share of turned trees grows with the amount. Winter and spring: later.
+     everything green a little; the share of turned trees grows with the amount. Winter grades the bare canopy
+     and keeps the source colour of smooth grassland.
 Pure functions of their inputs (no state); numpy, and the grade in Rust (earthfast.season_img).
 """
 import datetime
@@ -70,15 +71,23 @@ def amounts_for(mode, lat, today=None):
 
 
 def season_key(mode, lat, today=None):
-    """The season's part of a texture's cache key at latitude lat: mode itself, or for "auto" the slot's date where
-    any amount is above 0 within SEASON_KEY_LAT_PAD of lat (a far tile lies within that of its anchor), else "none"
-    (the tropics and full summer: the textures stay put all those weeks)."""
+    """The seasonal part of a texture's cache key, versioned when a winter grade can affect the result.
+
+    Auto keys use the slot's date when any grade is active within SEASON_KEY_LAT_PAD of lat (the spread of far
+    tiles from their anchor). In the tropics and full summer, auto textures stay cached across slots.
+    """
+    winter_grade = "canopy-only"
+    if mode == "winter":
+        return (mode, winter_grade)
     if mode != "auto":
         return mode
     d = slot_date(today)
-    for la in (float(lat) - SEASON_KEY_LAT_PAD, float(lat), float(lat) + SEASON_KEY_LAT_PAD):
-        if any(v > 0.0 for v in season_amounts(d, max(-90.0, min(90.0, la))).values()):
-            return ("auto", d.isoformat())
+    lats = (float(lat) - SEASON_KEY_LAT_PAD, float(lat), float(lat) + SEASON_KEY_LAT_PAD)
+    amounts = [season_amounts(d, max(-90.0, min(90.0, la))) for la in lats]
+    if any(a["winter"] > 0.0 for a in amounts):
+        return ("auto", d.isoformat(), winter_grade)
+    if any(any(value > 0.0 for value in a.values()) for a in amounts):
+        return ("auto", d.isoformat())
     return ("auto", "none")
 
 
