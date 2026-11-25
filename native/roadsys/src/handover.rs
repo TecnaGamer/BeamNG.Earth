@@ -47,6 +47,9 @@ pub const TOP_ON_GROUND_M: f64 = END_TOL_M; // a top there goes only where it li
                                      // bridging a dip there stays)
 pub const REACH_M: f64 = FULL_M + TAPER_M + 2.0;
 pub const MIN_PART_M: f64 = 2.0;
+/// (628) an approach shorter than this is a stub into a junction: the roads meeting at its far end are the end's own
+/// (their surface over the deck's first metres, a roundabout's ring at a deck end, no road under it)
+pub const STUB_M: f64 = REACH_M;
 
 #[derive(Clone, Debug)]
 pub struct Part { pub pts: Vec<P2>, pub hw: f64 }
@@ -59,6 +62,9 @@ pub struct End {
     pub hw: f64,             // the drop's half width
     pub bb: [f64; 4],
     pub approach: Vec<usize>,
+    /// (628) the ground parts meeting a short approach (STUB_M) at its far end: a junction at the end, whose surface
+    /// over the deck's first metres is no road under it (on_ground leaves them out, as the approaches)
+    pub junction: Vec<usize>,
     /// (M5, 627) the end line (unit, to the left of the way in) when the end is skewed (skew.rs), and its slope against
     /// the way in: a point `lat` to the left of the line in lies on the end line `lat * sk` along it (0: square)
     pub dir: Option<P2>,
@@ -206,6 +212,17 @@ impl Ends {
                     .filter(|(_, g)| dist(g.pts[0], p) < JOIN_M || dist(*g.pts.last().unwrap(), p) < JOIN_M)
                     .map(|(i, _)| i).collect();
                 if approach.is_empty() { continue; }
+                let mut junction: Vec<usize> = Vec::new();
+                for &a in &approach {
+                    let g = &grounds[a];
+                    if length(&g.pts) >= STUB_M { continue; }
+                    let far = if dist(g.pts[0], p) < JOIN_M { *g.pts.last().unwrap() } else { g.pts[0] };
+                    for (gi, o) in grounds.iter().enumerate() {
+                        if gi == a || approach.contains(&gi) || junction.contains(&gi) { continue; }
+                        if dist(o.pts[0], far) < JOIN_M || dist(*o.pts.last().unwrap(), far) < JOIN_M { junction.push(gi); }
+                    }
+                }
+                junction.sort_unstable();
                 let path = head(&line, REACH_M);
                 if path.len() < 2 { continue; }
                 let mut cum = vec![0.0];
@@ -243,7 +260,7 @@ impl Ends {
                         }
                     }
                 }
-                ends.push(End { p, path, cum, hw, bb, approach, dir: dir_e, sk });
+                ends.push(End { p, path, cum, hw, bb, approach, junction, dir: dir_e, sk });
             }
         }
         Ends { ends, grounds, gbb, s }
@@ -284,11 +301,11 @@ impl Ends {
     }
 
     /// Is q on a ground road's own surface (projecting inside one of its segments within its half width + CLEAR_M),
-    /// other than end k's approaches?
+    /// other than end k's approaches and the junction at a short approach's far end?
     fn on_ground(&self, k: usize, q: P2) -> bool {
         let e = &self.ends[k];
         for (gi, g) in self.grounds.iter().enumerate() {
-            if !inside(&self.gbb[gi], q[0], q[1]) || e.approach.contains(&gi) { continue; }
+            if !inside(&self.gbb[gi], q[0], q[1]) || e.approach.contains(&gi) || e.junction.contains(&gi) { continue; }
             for w in g.pts.windows(2) {
                 let ab = sub(w[1], w[0]);
                 let l2 = dot(ab, ab);
@@ -928,6 +945,24 @@ pub fn run_input(b: &[u8]) -> Result<(Vec<f64>, Soup, ZoneStats), String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_junction_at_a_short_approachs_far_end_is_the_ends_own() {
+        // a deck from x = 0 west to -40, a 3 m stub east of its end into a ring road whose surface (half width 5)
+        // reaches over the deck's first metres: dropped there as at a plain end; a road crossing under it is not
+        let deck = Part { pts: vec![[0.0, 0.0], [-40.0, 0.0]], hw: 5.0 };
+        let stub = Part { pts: vec![[0.0, 0.0], [3.0, 0.0]], hw: 4.0 };
+        let ring = Part { pts: vec![[3.0, 0.0], [3.0, 20.0]], hw: 5.0 };
+        let e = Ends::new(&[deck.clone()], vec![stub.clone(), ring.clone()], &[], 1.0);
+        assert_eq!(e.ends.len(), 1);
+        assert!(e.drop_at(-2.0, 1.0) > 0.0, "the ring at the end is the end's junction");
+        // (a long approach: the roads at its far end are no junction of the end's)
+        let long = Part { pts: vec![[0.0, 0.0], [30.0, 0.0]], hw: 4.0 };
+        let ring2 = Part { pts: vec![[-3.0, -20.0], [-3.0, 20.0]], hw: 5.0 };
+        let f = Ends::new(&[deck], vec![long, ring2], &[], 1.0);
+        assert_eq!(f.drop_at(-2.0, 1.0), 0.0, "a road under the deck keeps its ground");
+    }
+
     use super::*;
 
     fn flat_grid(i0: i64, j0: i64, n: usize, s: f64, z: f64, ends: &Ends) -> Grid {

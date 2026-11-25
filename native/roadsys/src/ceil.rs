@@ -119,7 +119,10 @@ impl Ceil {
                     if dd < JOIN_M && best.map_or(true, |b| dd < b.0) { best = Some((dd, k)); }
                 }
                 out[i].end_of[side] = best.map(|b| b.1);
-                if let Some((_, k)) = best { out[i].skip.extend(ends.ends[k].approach.iter().copied()); }
+                if let Some((_, k)) = best {
+                    out[i].skip.extend(ends.ends[k].approach.iter().copied());
+                    out[i].skip.extend(ends.ends[k].junction.iter().copied());
+                }
                 for (gi, g) in ends.grounds.iter().enumerate() {
                     if norm(sub(g.pts[0], p)) < JOIN_M || norm(sub(*g.pts.last().unwrap(), p)) < JOIN_M { out[i].skip.insert(gi); }
                 }
