@@ -163,6 +163,14 @@ class LiveAudioTest(unittest.TestCase):
         self.assertEqual(set(liveaudio.FIELDS), set(TABLE["mod_to_server"]["weather_audio"]["fields"]))
         self.assertIsNone(liveaudio.find_binary({"BNE_WEATHERSYNTH": "/nonexistent/weathersynth"}))
 
+    def test_child_env(self):
+        env = {"LD_LIBRARY_PATH": "/tmp/_MEI/x", "LD_LIBRARY_PATH_ORIG": "/opt/lib", "HOME": "/h"}
+        self.assertEqual(liveaudio.child_env(env, frozen=False), env, "a source run: as it is")
+        if os.name != "nt":
+            self.assertEqual(liveaudio.child_env(env, frozen=True), {"LD_LIBRARY_PATH": "/opt/lib", "HOME": "/h"})
+            self.assertEqual(liveaudio.child_env({"LD_LIBRARY_PATH": "/tmp/_MEI/x"}, frozen=True), {},
+                             "frozen without an original: none")
+
 
 if __name__ == "__main__":
     unittest.main()

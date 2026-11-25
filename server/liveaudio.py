@@ -45,6 +45,21 @@ def find_binary(env=os.environ):
     return shutil.which("weathersynth")
 
 
+def child_env(env=os.environ, frozen=None):
+    """The synth's environment: in a frozen Linux app (PyInstaller) the bundle's LD_LIBRARY_PATH would reach the child
+    and could load the bundle's libraries before the system's (libasound and its ALSA plugins must be the player's
+    own): PyInstaller's saved original back, or none."""
+    frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+    out = dict(env)
+    if frozen and os.name != "nt":
+        orig = out.pop("LD_LIBRARY_PATH_ORIG", None)
+        if orig:
+            out["LD_LIBRARY_PATH"] = orig
+        else:
+            out.pop("LD_LIBRARY_PATH", None)
+    return out
+
+
 def clean(msg):
     """The synth's line for a weather_audio message: the known fields only, the thunders' known keys only."""
     out = {k: msg[k] for k in FIELDS if k in msg and k != "thunders"}
@@ -115,7 +130,7 @@ class LiveAudio:
         try:
             kw = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
             proc = self.popen([exe, "live-serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE, bufsize=0, **kw)
+                              stderr=subprocess.PIPE, bufsize=0, env=child_env(), **kw)
         except OSError as e:
             self.blocked.add(conn)
             conn.send({"type": "audio_state", "state": "failed", "reason": f"could not start weathersynth: {e}"})
