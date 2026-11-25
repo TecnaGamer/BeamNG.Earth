@@ -184,6 +184,11 @@ function M.reset()
   grips = {}
 end
 
+-- A car whose AI module was swapped (winter.lua: the planning-horizon patch): its cap and margins sent again.
+function M.forget(id)
+  cars[id], grips[id] = nil, nil
+end
+
 function M._cars() return cars end        -- (tests)
 
 return M

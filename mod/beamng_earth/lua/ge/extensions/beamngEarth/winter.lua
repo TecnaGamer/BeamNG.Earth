@@ -355,13 +355,23 @@ function M.aiPatchCommand(on)
     M.AI_FLOOR)
 end
 
--- winterAi's answer (vehicle Lua -> game engine).
+-- winterAi's answer (vehicle Lua -> game engine). A swapped module (either way) starts without the car's AI setup: the
+-- traffic system sets its mode, aggression and speed mode again, and speeding.lua sends its cap and margins again.
 function M.aiPatchResult(id, ok, wanted)
+  local was = aiPatched[id]
   if wanted then
     aiPatched[id] = ok == true
     if not ok then warnOnce('a vehicle AI could not take the planning-horizon patch: its speed is capped on snow and ice') end
   else
     aiPatched[id] = nil
+  end
+  -- (only on a change: a repeated command finds the module already swapped and answers again)
+  if (ok and was ~= true) or (not wanted and was == true) then
+    local gt = rawget(_G, 'gameplay_traffic')
+    local veh = gt and gt.getTrafficData and (gt.getTrafficData() or {})[id]
+    if veh and veh.setAiMode then pcall(veh.setAiMode, veh) end
+    local sp = package.loaded['beamngEarth/speeding']
+    if sp and sp.forget then sp.forget(id) end
   end
 end
 function M.aiPatchedCar(id) return aiPatched[id] end
