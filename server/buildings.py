@@ -4201,6 +4201,14 @@ ROAD_CLEAR_SKIP_SUB = ("driveway", "parking_aisle", "drive-through")    # (a gar
 # of 282 and 679 m2, 4.0 and 4.9 m from the track's centre line, stood on its asphalt). Only the clearance: a raceway
 # is still not a road that lifts a building over it (THROUGH_CLASSES).
 ROAD_CLEAR_CLASSES = THROUGH_CLASSES | {"service", "raceway"}
+# ... and a mapped station building the roads run through, which no cut clears, is the outline of the station's
+# complex (its concourse and tracks below the streets), not a building over them: left out, not split into pieces
+# beside the lanes (Lenox MARTA station, Atlanta: building=train_station drawn 137 x 197 m over the open junction of
+# East Paces Ferry Road and Lenox Road, the user's report 2026-11-21). BNE_ROAD_CLEAR_STATION=off: a passage as before.
+ROAD_CLEAR_STATION_ON = os.environ.get("BNE_ROAD_CLEAR_STATION", "on") != "off"
+ROAD_CLEAR_STATION_CLASSES = {"train_station"}      # (not "transportation": bus terminals a road runs under)
+ROAD_CLEAR_STATION_MIN_M2 = 2500.0      # m2 an outline has at least (Lenox's drawn outline: about 6,000 m2 in its
+                                        # 137 x 197 m box): a station building a road clips keeps its passage
 ROAD_CLEAR_SKIP_CLS = CANOPY_CLASSES | BRIDGE_CLASSES | {"ship", "toll_booth", landmarks.LANDMARK}
 
 
@@ -4372,6 +4380,9 @@ def _clear_roads(items, carriageways, frame, x0, y0, elev, count):
         elif st and spec.ml:
             drop.add(k)
             count(spec, "dropped")
+        elif st and ROAD_CLEAR_STATION_ON and spec.cls in ROAD_CLEAR_STATION_CLASSES                 and abs(_area2(rings[j])) / 2 >= ROAD_CLEAR_STATION_MIN_M2:
+            drop.add(k)
+            count(spec, "station_dropped")
         elif st:
             split.append((k, rings[j], bool(boxed[j])))
     items = list(items)

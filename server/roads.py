@@ -12380,9 +12380,9 @@ DECK_CONTEXT_M = 24.0   # m around a tile its bridges' decks are passed as conte
 
 
 def _deck_look(spec):
-    """A bridge deck's look: the concrete of a `surface=concrete` street (it stays concrete over the bridge) or of a
-    motorway's or trunk road's (DECK_CONCRETE_CLASSES), else asphalt — and asphalt for rock/grass surfaces, whose ground mask cannot be painted on a deck at all."""
-    if not terrain_surface(spec) and spec.kind == "paved" and spec.surf == "concrete":
+    """A bridge deck's look: asphalt, a `surface=concrete` deck too (BNE_DECK_SURFACE_CONCRETE=on: in plain concrete,
+    as before), or a motorway's or trunk road's highway concrete (DECK_CONCRETE_ON, DECK_CONCRETE_CLASSES) — and asphalt for rock/grass surfaces, whose ground mask cannot be painted on a deck at all."""
+    if DECK_SURFACE_CONCRETE_ON and not terrain_surface(spec) and spec.kind == "paved" and spec.surf == "concrete":
         return CONCRETE
     if DECK_CONCRETE_ON and spec.kind == "paved" and spec.cls in DECK_CONCRETE_CLASSES:
         return DECK_CONCRETE
@@ -12819,6 +12819,13 @@ DECK_WALK_LIFT_M = 0.03         # m the strip is drawn over the deck (no z fight
 # deck pale concrete; the user, 2026-10-31: "the entire real bridge is concrete ... concrete shoulders [alone] don't
 # look good or realistic")
 DECK_CONCRETE_CLASSES = {"motorway", "trunk"}
+# A bridge tagged surface=concrete (most US road bridges are: OSM's mappers tag the deck's own surface) was drawn with
+# gridmap v2's plain concrete, no tining, no joints, between asphalt approaches: the user read Roswell Road's bridge over
+# I-285 and Akers Mill Road's over I-75 (Atlanta) as "missing road texture" (2026-11-21), as the motorway decks' concrete
+# was read on 2026-10-31. A deck takes the road's asphalt (or DECK_CONCRETE, when on); a concrete street on the ground
+# keeps its concrete.
+# BNE_DECK_SURFACE_CONCRETE=on: a concrete-tagged deck in concrete, as before.
+DECK_SURFACE_CONCRETE_ON = os.environ.get("BNE_DECK_SURFACE_CONCRETE", "off") == "on"
 # the stock highway concrete (West Coast USA's road_concrete: tined, jointed; its square tile two lanes wide), the
 # texture once per DECK_CONCRETE_TILE_M across ("tu") and as long along; the plain slab concrete looked like paving slabs
 DECK_CONCRETE_TILE_M = 7.3

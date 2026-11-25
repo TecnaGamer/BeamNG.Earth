@@ -29,7 +29,7 @@ FEATURES = (
     # builds yet make it a single experemental toggle"); each later revamp switch joins this set, not the page
     # (BNE_LEVEL_SPACING left out: on the 33-place ride corpus it made perth_915 and a5_underpass worse, 2026-11-17)
     ("expRoadRevamp", {"BNE_SPEED_TAPERS": "on", "BNE_DECK_K_SPEED": "on",
-                       "BNE_FOOT_CLEAR": "on", "BNE_RAIL_LIFECYCLE": "on", "BNE_RACEWAY_DIG": "on",
+                       "BNE_RAIL_LIFECYCLE": "on", "BNE_RACEWAY_DIG": "on",
                        "BNE_TUNNEL_ROAD_OVER": "on",
                        # the ski-ramp fixes (the clearance study's causes 1-3; BNE_UNDER_SPEED left out: no gain)
                        "BNE_FAST_DECK_ENDS": "on", "BNE_FAST_GAP": "on", "BNE_FAST_DECK_GROUND": "on",

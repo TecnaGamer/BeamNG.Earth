@@ -4,6 +4,7 @@ blocking the road", GitHub #523 #543 #1184 #433 #74."""
 import os
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -105,6 +106,24 @@ class RoadClearanceTest(unittest.TestCase):
         for s, a, b in out:
             if s.min_h <= 0.5:
                 self.assertAlmostEqual(bld.base_z(s, a, b) + s.height, under, places=6)
+
+    def test_a_station_outline_the_road_runs_through_is_left_out(self):
+        """Lenox MARTA station, Atlanta: building=train_station drawn 137 x 197 m over the open junction (2026-11-21)."""
+        cw = street()
+        with mock.patch.object(bld, "ROAD_CLEAR_STATION_ON", True):
+            out, stats = items_of([ll(20, 10, 137, 197)], cw, heights=[15.0], classes=["train_station"])
+        self.assertEqual(stats, {"osm_station_dropped": 1})
+        self.assertEqual(out, [])
+        with mock.patch.object(bld, "ROAD_CLEAR_STATION_ON", False):
+            out, stats = items_of([ll(20, 10, 137, 197)], cw, heights=[15.0], classes=["train_station"])
+        self.assertEqual(stats, {"osm_passage": 1})
+
+    def test_a_small_station_or_a_bus_terminal_a_road_runs_through_keeps_its_passage(self):
+        cw = street()
+        with mock.patch.object(bld, "ROAD_CLEAR_STATION_ON", True):
+            for cls, ring in (("train_station", ll(20, 80, 20, 40)), ("transportation", ll(20, 10, 137, 197))):
+                out, stats = items_of([ring], cw, heights=[15.0], classes=[cls])
+                self.assertEqual(stats, {"osm_passage": 1}, cls)
 
     def test_a_low_shed_on_the_roads_line_is_left_out_a_low_house_keeps_its_pieces(self):
         cw = street()

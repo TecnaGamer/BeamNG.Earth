@@ -77,8 +77,11 @@ FOOTBRIDGES_ON = os.environ.get("BNE_FOOTBRIDGES", "on") != "off"     # (footbri
 # line is near, so a footbridge over a motorway near a railway saw no road under it and its slab stood 0.5-1.9 m over
 # the lanes (Brisbane's Ipswich Motorway, a 72 m footway over a secondary road near Hofheim). With BNE_FOOT_CLEAR=on it
 # gets every carriageway (and tunnel) near the tile: one that cannot clear them is left out, as footbridges.py
-# intends. Off by default until reviewed in game.
-FOOT_CLEAR = os.environ.get("BNE_FOOT_CLEAR", "off") == "on"
+# intends. On by default: Decatur Street's sidewalk in Atlanta, mapped as its own bridge beside the street's over
+# the Downtown Connector, sloped from the Connector's cut up to the far abutment 0.3-4 m over its lanes (33.74975,
+# -84.38259), and the Buford-Spring Connector's at Peachtree (33.79905, -84.39162) the same. BNE_FOOT_CLEAR=off: the
+# rail's crossers only, as before.
+FOOT_CLEAR = os.environ.get("BNE_FOOT_CLEAR", "on") != "off"
 # Worn railways (disused, abandoned; OSM railway=historic not drawn) cut at every road they cross on the ground (the
 # road revamp's R1, plan §2.2 LIFE; 1.9.0 cut them at motorways and, abandoned, trunk roads only: complaints of old
 # lines across country roads in South Wales, Rheinland-Pfalz, Indiana). BNE_RAIL_LIFECYCLE=on; off by default until
@@ -1693,6 +1696,14 @@ def _sleepers(s, xy, u, top, i, j, gone=0.0):
 
 
 PIER_ROAD_M = 1.5           # m a pier keeps off a road's carriageway (its sidewalks included) or a footway under the bridge
+# ... and a motorway's or trunk road's PIER_ROAD_M off the flat verge graded beyond its carriageway (grading.shoulder;
+# its paved shoulders are inside spec.width already; earthfast rail_pier_obstacles reads these): the Norfolk Southern
+# bridges over I-75 / I-85 at 17th Street, Atlanta, stood their piers 1.5 m past the carriageway's edge, on that verge
+# beside the lanes ("railroad track support ... walls still obstructing the roadway"); now 2.5 m. BNE_PIER_SHOULDER=off:
+# the carriageway and sidewalks only.
+PIER_SHOULDER_ON = os.environ.get("BNE_PIER_SHOULDER", "on") != "off"
+PIER_SHOULDER_CLASSES = {"motorway", "trunk", "motorway_link", "trunk_link"}     # (a town street's "shoulder" is its
+                            # sidewalk, already kept off)
 PIER_OBST_REACH_M = 60.0    # m round the tile the roads and footways the piers keep off are taken (a site moves up to
                             # 0.4 of a span along the deck: within reach of any tile that draws it)
 
@@ -1702,7 +1713,7 @@ def pier_obstacles(frame, cells, box, reach=PIER_OBST_REACH_M):
     sidewalks) and footway near box, what a bridge's piers keep off. The level crossings' list (crossers: the roads the
     track's own ground parts cross) has none of the roads under a bridge: a pier stood on the kerb of Caledonian Road
     under the North London line (the user's report, London 2026-11-12)."""
-    fast.require(584, "rail_pier_obstacles")
+    fast.require(623, "rail_pier_obstacles")
     return fast._ef.rail_pier_obstacles(frame, cells, box, reach)
 
 

@@ -5,7 +5,15 @@ type Lines = Vec<(Vec<Point>, f64)>;
 fn nearby(py: Python, frame: &Obj, cells: &Obj, b: Bounds, walks: bool) -> PyResult<Lines> {
     let rd = py.import("roads")?;
     let geo = py.import("mapgeom")?;
-    let widths = py.import("railways")?.getattr("WALK_CLASSES")?;
+    let rw = py.import("railways")?;
+    let widths = rw.getattr("WALK_CLASSES")?;
+    // a motorway's or trunk road's piers keep off the flat verge beyond its carriageway too (railways.PIER_SHOULDER_ON,
+    // grading.shoulder)
+    let shoulders = if !walks && rw.getattr("PIER_SHOULDER_ON")?.is_truthy()? {
+        Some((rw.getattr("PIER_SHOULDER_CLASSES")?, py.import("grading")?))
+    } else {
+        None
+    };
     let mut seen = BTreeSet::new();
     let mut out = vec![];
     for f in cells.try_iter()? {
@@ -35,13 +43,19 @@ fn nearby(py: Python, frame: &Obj, cells: &Obj, b: Bounds, walks: bool) -> PyRes
                     continue;
                 }
                 let walk = spec.getattr("walk")?;
-                let extra = if rd.call_method1("has_sidewalks", (&spec,))?.is_truthy()?
+                let mut extra: f64 = if rd.call_method1("has_sidewalks", (&spec,))?.is_truthy()?
                     && walk.is_truthy()?
                 {
                     walk.extract()?
                 } else {
                     0.
                 };
+                if let Some((classes, grading)) = &shoulders {
+                    if classes.contains(spec.getattr("cls")?)? {
+                        let s: f64 = grading.call_method1("shoulder", (&spec,))?.extract()?;
+                        extra = extra.max(s);
+                    }
+                }
                 spec.getattr("width")?.extract::<f64>()? / 2. + extra
             } else {
                 if !attrs.get_item("subtype")?.get_item(i)?.eq("road")? {
