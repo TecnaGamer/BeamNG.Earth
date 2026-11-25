@@ -91,8 +91,6 @@ NOT_LISTED = {
     "BNE_TUNNEL_ROAD_OVER": "road tiles' tunnel entrances only (portals.fit: the headwall's top under a road crossing "
                             "over the mouth); not yet proven plan-neutral both ways, so it stays keyed with the "
                             "Revamped roads setting",
-    "BNE_FOOT_CLEAR": "railway tiles only (railways.FOOT_CLEAR: a footbridge that cannot clear drops its walls over the "
-                      "road); not yet proven plan-neutral both ways, so it stays keyed with the Revamped roads setting",
     "BNE_RACEWAY_PROPS": "road tiles' props only (furniture.RACEWAY_PROPS: no street poles, wires or lamps along a "
                          "racetrack); comes with the Revamped roads setting, whose other switches the plans read, so "
                          "not proving it plan-neutral costs no shared plans; it stays keyed",

@@ -7754,6 +7754,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(terrainblock::block_height_at, m)?)?;
     m.add_function(wrap_pyfunction!(landcover::landcover_dry_west, m)?)?;
     // 564: merged
+    // 623: rail_pier_obstacles keeps a motorway's or trunk road's piers off the verge beyond its carriageway
+    // (railways.PIER_SHOULDER_ON)
     railmesh::register(m)?;
     railstations::register(m)?;
     catenary::register(m)?;
@@ -7791,6 +7793,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // hung the exit, server/fast.py's atexit hook calls it)
     m.add_function(wrap_pyfunction!(begin_exit, m)?)?;
     m.add_function(wrap_pyfunction!(exit_guard_counts, m)?)?;
-    m.add("VERSION", 622)?;
+    m.add("VERSION", 623)?;
     Ok(())
 }

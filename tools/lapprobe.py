@@ -34,7 +34,7 @@ RECOMMENDED = ["--deshadow", "full", "--near-visual", "detail", "--airports", "o
 # the Experimental switches of the session this tool was made for (Daytona, 2026-11-19: Generated ground + Revamped
 # roads on); --switches "" for none
 SWITCHES = ("BNE_BATTER=vanilla,BNE_DECK_K_SPEED=on,BNE_FAST_DECK_ENDS=on,BNE_FAST_DECK_GROUND=on,BNE_FAST_GAP=on,"
-            "BNE_FOOT_CLEAR=on,BNE_GEN_GROUND=on,BNE_RACEWAY_DIG=on,BNE_RACEWAY_PROPS=on,BNE_RAIL_CURVES=on,"
+            "BNE_GEN_GROUND=on,BNE_RACEWAY_DIG=on,BNE_RACEWAY_PROPS=on,BNE_RAIL_CURVES=on,"
             "BNE_RAIL_LIFECYCLE=on,BNE_RAIL_ROAD_FIT=on,BNE_RAIL_SEAM_NATURAL=on,BNE_ROADSHAPE=sheet,BNE_SIDEWALK_V2=on,"
             "BNE_SPEED_TAPERS=on,BNE_SURFACE_V2=on,BNE_TUNNEL_ROAD_OVER=on")
 DT = 1.0 / 60.0
