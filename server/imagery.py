@@ -631,15 +631,20 @@ class FarPhoto:
     pixels: object
     grade: object
 
-    def shade(self, rock):
-        fast.require(559, "finish_far_photo")
-        return fast._ef.finish_far_photo(self.pixels, self.grade, rock, None)
+    def shade(self, rock, snow=None):
+        """snow: the texture's earthfast.SnowLook (snowcover.look_from_rock; winter on), applied last."""
+        if snow is None:
+            fast.require(559, "finish_far_photo")
+            return fast._ef.finish_far_photo(self.pixels, self.grade, rock, None)
+        fast.require(625, "finish_far_photo snow")
+        return fast._ef.finish_far_photo(self.pixels, self.grade, rock, None, snow=snow)
 
-    def write(self, path, rock, srgb, paint=None):
-        fast.require(563, "finish_far_photo")
+    def write(self, path, rock, srgb, paint=None, snow=None):
+        fast.require(563 if snow is None else 625, "finish_far_photo")
         tmp = staging.tmp_for(path)
+        kw = {} if snow is None else {"snow": snow}
         size = fast._ef.finish_far_photo(self.pixels, self.grade, rock, (_TO_LIN, MIP_SHARPEN, srgb), path=tmp,
-                                         paint=paint)
+                                         paint=paint, **kw)
         staging.replace(tmp, path)
         return size
 

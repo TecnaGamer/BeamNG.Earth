@@ -6737,11 +6737,14 @@ class _Planner:
                     continue
                 h = homes[i]
                 src, j = (h[0], h[1]) if h is not None else (f, i)
-                row = src.__dict__.get("_level_ranges", {}).get(j)
-                if row is None:
-                    short = True        # (not published: never made here)
-                    continue
-                rngs = roadsmod.home_ranges(f, i, h[0], h[1], list(row)) if h is not None else list(row)
+                if roadsmod.MAPPED_RANGES():      # (BNE_ROADSYS=surface: the map's own ranges, roads.MAPPED_RANGES)
+                    rngs = roadsmod.tag_level_ranges(f, i)
+                else:
+                    row = src.__dict__.get("_level_ranges", {}).get(j)
+                    if row is None:
+                        short = True        # (not published: never made here)
+                        continue
+                    rngs = roadsmod.home_ranges(f, i, h[0], h[1], list(row)) if h is not None else list(row)
                 for kind, sp, want in (("bridges", rs[i] if rs[i] is not None else bs[i], "bridge"),
                                        ("ground", rs[i], "ground")):
                     if sp is None:

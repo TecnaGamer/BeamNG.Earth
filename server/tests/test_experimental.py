@@ -142,7 +142,8 @@ class KeysTest(unittest.TestCase):
                 got = self.keys(experimental.env_for({"version": 3, sid: True, **({needs: True} if needs else {})}))
                 if all(k in revisit.NOT_SWITCHES for k in env):
                     # (an older version shown while this one builds: what is kept is this version's either way)
-                    self.assertEqual(sid, "expStaleRevisit")
+                    # (winter: a live snowstate message only, snow.py; W2's snow is keyed by its specs, snowcover.key_parts)
+                    self.assertIn(sid, ("expStaleRevisit", "expWinter", "expWetRoads"))
                     self.assertEqual(got, base, "not a key")
                 else:
                     self.assertNotEqual(got, base)

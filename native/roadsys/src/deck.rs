@@ -583,7 +583,8 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
             let mut d = COVER_OUT_M + TWIN_STEP_M;
             while d <= w + 1e-9 {
                 kgrid.heights(&m.v, &m.t, add(mid, scale(rn[e], d)), &mut hs2);
-                if hs2.iter().any(|&(_t, z)| absf(z - zm) <= COVER_DZ_M) { return (d - TWIN_STEP_M).max(STRIP_W.min(w)); }
+                // (to the middle of the gap: the deck across widens or fills its half the same way, never over this one's)
+                if hs2.iter().any(|&(_t, z)| absf(z - zm) <= COVER_DZ_M) { return (d * 0.5).max(STRIP_W.min(w)); }
                 d += TWIN_STEP_M;
             }
             w
@@ -663,8 +664,8 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
     out.fallback = fallback.into_iter().collect();
     let t4 = crate::cpu_now();
     out.json = format!(
-        "{{\"strokes\":{},\"delivered\":{},\"knots_fixed\":{},\"blends\":{},\"blend_max_mm\":{:.1},\"faces\":{},\"dropped\":{},\"fallback\":{},\"runs\":{},\"twin_m\":{:.1},\"strip_tris\":{},\"marks\":{},\"cpu_ms\":{{\"profile\":{:.3},\"heights\":{:.3},\"surface\":{:.3},\"decks\":{:.3},\"total\":{:.3}}}}}",
-        ns, d.iter().filter(|&&x| x).count(), knots_fixed, blends, blend_max_mm, kept.len(), dropped, out.fallback.len(), out.runs.len(), twin_m, strip_tris, out.mt.len(),
+        "{{\"strokes\":{},\"rail_floors\":{},\"delivered\":{},\"knots_fixed\":{},\"blends\":{},\"blend_max_mm\":{:.1},\"faces\":{},\"dropped\":{},\"fallback\":{},\"runs\":{},\"twin_m\":{:.1},\"strip_tris\":{},\"marks\":{},\"cpu_ms\":{{\"profile\":{:.3},\"heights\":{:.3},\"surface\":{:.3},\"decks\":{:.3},\"total\":{:.3}}}}}",
+        ns, net.rail_floors.len(), d.iter().filter(|&&x| x).count(), knots_fixed, blends, blend_max_mm, kept.len(), dropped, out.fallback.len(), out.runs.len(), twin_m, strip_tris, out.mt.len(),
         (t1 - t0) * 1e3, (t2 - t1) * 1e3, (t3 - t2) * 1e3, (t4 - t3) * 1e3, (t4 - t0) * 1e3);
     out
 }

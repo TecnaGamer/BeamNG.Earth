@@ -520,6 +520,8 @@ def level_ranges(feats, i, _home=True):
     Its home cell's copy's (home_copy): lengthened over the roads crossing under it and joined over the lidar's
     elevated stretches, the copy in each cell saw other roads (a ramp by I-395 in Baltimore: one deck from 9.5 % in
     one cell, two with a ground gap at 14-16 % in the next, both drawn, one 8 m under the other)."""
+    if MAPPED_RANGES():
+        return tag_level_ranges(feats, i)
     if _home and HOME_RANGES_ON:
         h = home_copy(feats, i)
         if h is not None:
@@ -541,9 +543,20 @@ def level_ranges(feats, i, _home=True):
     return list(got)
 
 
+def MAPPED_RANGES():
+    """BNE_ROADSYS=surface (the road system's M5, the user 2026-11-25: "the map's tag strictly"): every off-ground range
+    is the map's own (tag_level_ranges): no range lengthened over the roads under it, joined over lidar stretches or
+    inferred from a grade separation, for the deck builder, its bents and caps, the ground roads and the grading alike,
+    so a bridge stops at its mapped end and the road goes on onto its graded approach. The facts made from them are
+    keyed apart (_facts_key) and the plans too (plancache.plans_format)."""
+    return roadsys.SURFACE
+
+
 def _level_lists(feats, idx):
     """{i: level_ranges(feats, i)} of features idx (the memos' lists themselves: callers must not change them): the
     home copies' (home_copy) and this layer's each made at once, the neighbours asked once."""
+    if MAPPED_RANGES():
+        return {i: tag_level_ranges(feats, i) for i in idx}
     out, own, by = {}, [], {}
     me = feats.__dict__.get("_bnge_cell")
     hook = feats.__dict__.get("_bnge_neighbours")
@@ -730,6 +743,9 @@ def _facts_key(feats, kind, extra):
     if cid is None or not revisit.ON or revisit.CACHE_DIR is None:
         return None
     # (by FACTS_FORMAT, not the code: kept across updates, the user, 2026-11-02; cid carries the map data's versions)
+    # (MAPPED_RANGES: the facts of the mapped ranges, apart from everyone else's)
+    if MAPPED_RANGES():
+        kind = f"{kind}.mapped"
     return revisit.format_key("cellfacts", FACTS_FORMAT, kind, cid, extra)
 
 
@@ -760,6 +776,8 @@ FACTS_FORMAT = 32     # 32: a segment Overture merged from several OSM ways take
 def _facts_baked(feats, kind, extra):
     """A baked pack's facts of this layer's cell (bakepack.py), as JSON bytes, or None."""
     import revisit
+    if MAPPED_RANGES():             # (the shared and baked facts are the lengthened ranges': none here)
+        return None
     cid = feats.__dict__.get("_bnge_cell")
     if cid is None or revisit.CACHE_DIR is None:
         return None

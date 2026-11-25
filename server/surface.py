@@ -1526,6 +1526,89 @@ def photo_lawns(out_dir, ter_name, mask_names_, rgb):
     return k
 
 
+# Winter (snowcover.py, BNE_WINTER): a block's samples under deep snow (depth bin D3, 5 cm, and up; full cover) take
+# the snow layer (the plan's 3.1 "better" half): its detail texture and ground model, no 3D grass. Land layers only:
+# roads, paving and squares stay theirs (plowed or not is W3's), as do the wetlands' mud and the snow itself.
+SNOW_FROM = (GRASS, DUSTY, LOOSE, ROCK, LAWN, GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, DIRT, FOREST, DRYGRASS,
+             CROP, SAND)
+SNOW_DEPTH_BIN = 3
+SNOW_COVER = 230            # of 255
+SNOW_STEP = 4               # samples between the cover's evaluations (nearest in between: 4 m at 1 m squares)
+
+
+def _read_ter(path):
+    """(the file's bytes, n, offset of its layer map, its layer map in MATERIALS indices (row 0 = south), to_local)."""
+    with open(path, "rb") as f:
+        data = bytearray(f.read())
+    n = struct.unpack_from("<I", data, 1)[0]
+    off = 5 + 2 * n * n
+    lay = np.frombuffer(bytes(data[off:off + n * n]), np.uint8).reshape(n, n)
+    o = off + n * n + 4
+    names = []
+    for _ in range(struct.unpack_from("<I", data, off + n * n)[0]):
+        names.append(bytes(data[o + 1:o + 1 + data[o]]).decode())
+        o += 1 + data[o]
+    order = [m for m, _ in MATERIALS]
+    glob = [order.index(m) if m in order else DIRT for m in names]
+    to_glob = np.full(256, heightmap.TER_HOLE, np.uint8)
+    to_glob[:len(glob)] = glob
+    to_local = np.full(256, heightmap.TER_HOLE, np.uint8)
+    for li, gi in enumerate(glob):
+        to_local[gi] = li
+    return data, n, off, to_glob[lay], to_local
+
+
+def ter_heights(out_dir, ter_name, z_base, max_height, step=16):
+    """The block's heights (frame z) from its .ter, every step-th sample from the south-west one: (U [j north, i east],
+    n, the sample indices)."""
+    with open(os.path.join(out_dir, ter_name), "rb") as f:
+        data = f.read()
+    n = struct.unpack_from("<I", data, 1)[0]
+    q = np.frombuffer(data[5:5 + 2 * n * n], "<u2").reshape(n, n)
+    idx = np.arange(0, n, step)
+    return heightmap.heights(q[np.ix_(idx, idx)], z_base, max_height), n, idx
+
+
+def snow_layers(out_dir, ter_name, mask_names_, look, x0, y0, square):
+    """Winter: the block's land samples under deep snow (look: its earthfast.SnowLook, the photo's; sample (r from the
+    south, c) at (x0 + (c + 0.5) square, y0 + (r + 0.5) square) of the frame) moved to the snow layer when the .ter lists
+    it (write_ter's winter listing). Patches the .ter and the masks in place, atomically, as photo_lawns. Returns the
+    number of samples changed."""
+    path = os.path.join(out_dir, ter_name)
+    data, n, off, lay, to_local = _read_ter(path)
+    if to_local[SNOW] == heightmap.TER_HOLE:
+        return 0
+    land = np.isin(lay, SNOW_FROM)
+    if not land.any():
+        return 0
+    k = np.arange(0, n, SNOW_STEP)
+    cx, cy = np.meshgrid(x0 + (k + 0.5) * square, y0 + (k + 0.5) * square)
+    cov, dep = look.sample(np.ascontiguousarray(cx.ravel()), np.ascontiguousarray(cy.ravel()))
+    deep = ((np.asarray(dep) >= SNOW_DEPTH_BIN) & (np.asarray(cov) >= SNOW_COVER)).reshape(len(k), len(k))
+    if not deep.any():
+        return 0
+    deep = np.repeat(np.repeat(deep, SNOW_STEP, 0), SNOW_STEP, 1)[:n, :n]
+    change = deep & land
+    m = int(change.sum())
+    if not m:
+        return 0
+    before = set(np.unique(lay[change]).tolist())
+    lay = lay.copy()
+    lay[change] = SNOW
+    data[off:off + n * n] = to_local[lay].tobytes()
+    tmp = staging.tmp_for(path)
+    with open(tmp, "wb") as f:
+        f.write(data)
+    staging.replace(tmp, path)
+    north = lay[::-1]
+    for i in sorted(before | {SNOW}):
+        p = os.path.join(out_dir, mask_names_[i])
+        tmp = staging.tmp_for(p)
+        Image.fromarray(np.where(north == i, 255, 0).astype(np.uint8), "L").save(tmp, format="PNG", compress_level=1)
+        staging.replace(tmp, p)
+    return m
+
+
 def used_materials(idx):
     """The MATERIALS indices a block's .ter lists: those its samples use (holes aside), plus what photo_lawns may
     turn them into (LAWN -> DIRT, SNOW -> LOOSE), in MATERIALS order, DIRT last. Each distinct material a .ter lists costs
@@ -1608,6 +1691,11 @@ def write_ter(out_dir, name, qgrid, idx):
         heightmap.write_ter(os.path.join(out_dir, name), qgrid, None, [MATERIALS[DIRT][0]])
         return name, None
     used = used_materials(idx)
+    import snowcover
+    if snowcover.deep_possible() and SNOW not in used and np.isin(np.asarray(idx), SNOW_FROM).any():
+        # (winter: the snow layer listed for snow_layers, which patches the samples once the photo's snow is known;
+        # the message's slots are this list, so the snow samples take the block's photo too)
+        used = sorted(set(used) | {SNOW}, key=lambda m: (m == DIRT, m))
     heightmap.write_ter(os.path.join(out_dir, name), qgrid, idx, [MATERIALS[i][0] for i in used], used)
     return name, used
 

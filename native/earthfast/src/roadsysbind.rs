@@ -71,14 +71,16 @@ impl RoadsysSegments {
     /// cross-section model is on (every stroke's strip slots) whatever the texts hold; None: off, as before.
     /// areas / fit (608, BNE_ROADSYS_AREAS): the mapped road areas round the read and whether they are the carriageway
     /// edges' targets. Both on (617): the fit sets the carriageway's whole width and edges, the strips divide it.
-    #[pyo3(signature = (ids, cells, texts, nums, ints, pts, off, con_seg, con_id, con_v, rng_seg, rng, style, areas = None, fit = false, xsec = None))]
+    /// rails (626, M5): railway lines at ground level round the read [(points (n, 2) in the frame, clearance m)]: the floors
+    /// of the structures crossing them.
+    #[pyo3(signature = (ids, cells, texts, nums, ints, pts, off, con_seg, con_id, con_v, rng_seg, rng, style, areas = None, fit = false, xsec = None, rails = None))]
     #[allow(clippy::too_many_arguments)]
     fn new(ids: Vec<String>, cells: Vec<String>, texts: Vec<(String, String, String, String, String)>,
            nums: PyReadonlyArray2<'_, f64>, ints: PyReadonlyArray2<'_, i64>, pts: PyReadonlyArray2<'_, f64>,
            off: PyReadonlyArray1<'_, i64>, con_seg: PyReadonlyArray1<'_, i64>, con_id: Vec<String>,
            con_v: PyReadonlyArray1<'_, i64>, rng_seg: PyReadonlyArray1<'_, i64>, rng: PyReadonlyArray2<'_, f64>,
            style: (String, String, f64, f64, f64, f64, (f64, f64), (f64, f64), (f64, f64), bool),
-           areas: Option<PyRef<'_, RoadsysAreas>>, fit: bool, xsec: Option<Vec<String>>) -> PyResult<Self> {
+           areas: Option<PyRef<'_, RoadsysAreas>>, fit: bool, xsec: Option<Vec<String>>, rails: Option<Vec<(Vec<(f64, f64)>, f64)>>) -> PyResult<Self> {
         let n = ids.len();
         let (nums, ints, pts, off) = (nums.as_array(), ints.as_array(), pts.as_array(), off.as_slice()?);
         if cells.len() != n || texts.len() != n || nums.nrows() != n || nums.ncols() != 4 || ints.nrows() != n
@@ -106,7 +108,7 @@ impl RoadsysSegments {
                 inferred: ints[[i, 0]], urban: ints[[i, 1]] != 0, cls: ints[[i, 2]], link: ints[[i, 3]] != 0, dir: ints[[i, 4]],
                 lanes: ints[[i, 5]], lfw: ints[[i, 6]], lbw: ints[[i, 7]], region: ints[[i, 8]],
                 pts: p, cons: Vec::new(), bridge: Vec::new(), tunnel: Vec::new(), level: Vec::new(), depth: 0.0,
-                xsec: xsec.as_ref().map(|x| x[i].clone()).unwrap_or_default(),
+                xsec: xsec.as_ref().map(|x| x[i].clone()).unwrap_or_default(), maxh: Vec::new(),
             });
         }
         for k in 0..con_id.len() {
@@ -117,7 +119,8 @@ impl RoadsysSegments {
             let s = rng_seg[k] as usize;
             if s >= n { continue; }
             let (a, b, kind, v) = (rng[[k, 0]], rng[[k, 1]], rng[[k, 2]], rng[[k, 3]]);
-            match kind as i64 { 0 => segs[s].bridge.push((a, b)), 1 => segs[s].tunnel.push((a, b)), 3 => { if v > segs[s].depth { segs[s].depth = v; } }, _ => segs[s].level.push((a, b, v)) }
+            // (kinds: 0 bridge, 1 tunnel, 2 level, 3 drawn depth, 4 (M5) a height limit, maxheight sign, of v m)
+            match kind as i64 { 0 => segs[s].bridge.push((a, b)), 1 => segs[s].tunnel.push((a, b)), 3 => { if v > segs[s].depth { segs[s].depth = v; } }, 4 => segs[s].maxh.push((a, b, v)), _ => segs[s].level.push((a, b, v)) }
         }
         // one copy per segment: a row's id is "<segment>|<its first point>" and the point differs between two cells'
         // copies, so copies are grouped by the segment's own id (roadshape.SegmentCell's sid), the cell whose copy has
@@ -170,8 +173,11 @@ impl RoadsysSegments {
                          centre_urban: style.6, lane_urban: style.7, lane_motorway: style.8, double_centre: style.9 };
         let (areas, area_build) = match &areas { Some(a) => (a.areas.clone(), a.build), None => (Vec::new(), 0) };
         let fit = fit && !areas.is_empty();
+        let rails: Vec<(Vec<[f64; 2]>, f64)> = rails.unwrap_or_default().into_iter()
+            .filter(|(p, c)| p.len() >= 2 && c.is_finite() && p.iter().all(|q| q.0.is_finite() && q.1.is_finite()))
+            .map(|(p, c)| (p.into_iter().map(|q| [q.0, q.1]).collect(), c)).collect();
         let place = Place { name: String::new(), country: segs.first().map(|s| s.code.clone()).unwrap_or_default(), style: st, segs,
-                            xsec: xsec.is_some(), areas, area_build, ..Default::default() };
+                            xsec: xsec.is_some(), areas, area_build, rails, ..Default::default() };
         Ok(RoadsysSegments { place, dropped: (copies, parents, sections), fit })
     }
 

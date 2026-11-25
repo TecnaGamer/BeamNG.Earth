@@ -204,8 +204,14 @@ local function loadingPart(status, line)
 end
 
 -- The bar's location line now (the UI app's too: hudapps.lua), '' when there is nothing to say.
+M.extra = nil      -- a function giving one more part ('' for none): winter.lua's road condition, set when it loads
 function M.text(status, line)
-  return M.compose(loc, nil, M.SHOW_FPS and fps or nil)
+  local t = M.compose(loc, nil, M.SHOW_FPS and fps or nil)
+  if M.extra then
+    local x = M.extra()
+    if x and x ~= '' then t = t ~= '' and (t .. M.SEP .. x) or x end
+  end
+  return t
 end
 
 -- The loading line under it (the user, 2026-10-23: "make loading on a separate line"), '' when none.
