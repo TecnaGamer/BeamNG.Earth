@@ -98,7 +98,8 @@ lines(os.path.join(L, "main/MissionGroup/Sky/items.level.json"), [
 # across the whole screen at odd angles even with the car standing still (the user's "raindrops jumping /
 # streaking", Fells Point; in-game 2026-10-17: each of the three drop options off in turn, only this one fixed it).
 # dropSize 0.2 as west_coast_usa's rain (the same rain_drop in a 50 m box): at 0.36 a drop beside the camera was
-# still a line across the screen.
+# still a line across the screen. Weather phase C: 0.14 with the near-fade drop shader
+# (weather.lua NEAR_FADE): at 0.2 the nearest drops still read as white flakes in the broker shots (wc1).
 # The weather plan 2026-11-24, phase A (its bugs B3, B4, B6, P10): every drop fades out inside its box (fadeDistEnd
 # under the half width: the 50 m box faded only at 65 m, so drops popped in and out at its faces 25-35 m away, still
 # 50-70 % opaque, and followCam wrapped them onto the front face while driving), a smaller box for a denser rain where it
@@ -125,7 +126,7 @@ lines(os.path.join(L, "main/MissionGroup/Weather/items.level.json"), [
      "texture": "art/skies/clouds/clouds_normal_displacement.png", "coverage": 0.5, "cirrusCoverage": 0.3, "exposure": 1.45,
      "windSpeed": 0.1, "baseColor": [0.99, 0.99, 0.99, 0.9], "altitudeKm": 1.5},
     {"name": "bngEarthRain", "class": "Precipitation", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c22", "__parent": "Weather",
-     "dataBlock": "bngEarthRainDrop", "numDrops": 0, "boxWidth": 36, "boxHeight": 24, "dropSize": 0.2, "splashSize": 0,
+     "dataBlock": "bngEarthRainDrop", "numDrops": 0, "boxWidth": 36, "boxHeight": 24, "dropSize": 0.14, "splashSize": 0,
      "fadeDist": 2, "fadeDistEnd": 17, "followCam": True, "useWind": True, "useTurbulence": False, "doCollision": True,
      "hitVehicles": False, "rotateWithCamVel": False},
     {"name": "bngEarthSnow", "class": "Precipitation", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c23", "__parent": "Weather",

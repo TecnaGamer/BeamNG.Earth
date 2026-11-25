@@ -986,7 +986,8 @@ end
 -- shader (shaders/beamngEarth/precipNearV.hlsl: the stock one plus a fade from 2.5 m to 0.8 m from the camera, so a
 -- drop passing the lens is no blob) as a ShaderData of our own, named in both datablocks, the objects made again.
 -- Once per level, at the first drops.
-M.NEAR_FADE = false
+M.NEAR_FADE = true         -- (on since phase C: it draws on DX11 and Vulkan, broker shots wc1 / wc2, and with the 0.14 drops the
+                           -- nearest ones no longer read as white flakes)
 M.NEAR_SHADER = 'bngEarthPrecipNearShader'
 local function setupNearFade(o)
   if not M.NEAR_FADE or S.nearFade ~= nil then return end
