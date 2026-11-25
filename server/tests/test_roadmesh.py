@@ -26,6 +26,20 @@ def slope(la, lo):
 
 
 class RoadMeshTest(unittest.TestCase):
+    def test_paint_on_a_neighbour_cannot_trim_a_driving_surface(self):
+        road = dict(chunk("road_asphalt_2lane", 12., [(0, 0, 10), (40, 0, 10)]), fixed=True, deck=True)
+        line = dict(chunk("line_white", .15, [(4, 5, 11), (36, 5, 11)]), fixed=True, layer="mark")
+
+        def pavement(chunks, context=()):
+            p, t, _, mats, mi = roadmesh.build(FRAME, chunks, slope, (0., 0., 0.), context=context)
+            return p[t[mi == mats.index("road_asphalt_2lane")]]
+
+        for coplanar in (False, True):
+            with self.subTest(coplanar=coplanar), patch.object(roadmesh, "_coplanar_decks", return_value=coplanar):
+                control = pavement([road])
+                for surface in (pavement([road, line]), pavement([road], [line])):
+                    np.testing.assert_allclose(surface, control)
+
     def test_sharp_ground_ribbon_covers_both_arms_without_miter_pinching(self):
         """#740: every interior point of both mapped road rectangles remains covered at an isolated hairpin."""
         for degrees in (121, 130, 150, -130, -150):
