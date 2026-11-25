@@ -88,6 +88,7 @@ pub struct Place {
     pub xsec: bool,          // (BNE_ROADSYS_XSEC) the cross-section model on: every stroke gets its strip slots
     pub areas: Vec<crate::areas::Area>,     // OSM's mapped road areas round the read (areas.rs: the audit, the fit)
     pub area_build: u64,                    // their dataset build's identity (in the keys where the fit is on)
+    pub rails: Vec<(Vec<P2>, f64)>,         // (M5) railway lines at ground level round the read: (points, clearance m)
 }
 
 impl Place {
@@ -95,7 +96,7 @@ impl Place {
     pub fn clone_meta(&self) -> Place {
         Place { name: self.name.clone(), lat: self.lat, lon: self.lon, core: self.core, halo: self.halo,
                 country: self.country.clone(), style: self.style.clone(), segs: Vec::new(), dem: Dem::default(), xsec: self.xsec,
-                areas: self.areas.clone(), area_build: self.area_build }
+                areas: self.areas.clone(), area_build: self.area_build, rails: self.rails.clone() }
     }
 }
 
@@ -188,8 +189,10 @@ pub fn write_tile(t: &TileInput) -> Vec<u8> {
     // byte for byte as before)
     // (RSTILE05, M5: a segment has height limits: the cross-section switch as a byte after the magic, every segment's
     // limits after its depth and tags)
-    let v5 = t.place.segs.iter().any(|s| !s.maxh.is_empty());
-    w.0.extend_from_slice(if v5 { b"RSTILE05" } else if t.place.xsec { b"RSTILE04" } else { b"RSTILE03" });
+    // (RSTILE06, M5: railway lines round the read: RSTILE05 with the rails after the areas)
+    let v6 = !t.place.rails.is_empty();
+    let v5 = v6 || t.place.segs.iter().any(|s| !s.maxh.is_empty());
+    w.0.extend_from_slice(if v6 { b"RSTILE06" } else if v5 { b"RSTILE05" } else if t.place.xsec { b"RSTILE04" } else { b"RSTILE03" });
     if v5 { w.u8(t.place.xsec as u8); }
     let st = &t.place.style;
     w.s(&st.centre); w.s(&st.left_edge);
@@ -242,6 +245,14 @@ pub fn write_tile(t: &TileInput) -> Vec<u8> {
             for p in r { w.f64(p[0]); w.f64(p[1]); }
         }
     }
+    if v6 {
+        w.u32(t.place.rails.len() as u32);
+        for (p, c) in &t.place.rails {
+            w.f64(*c);
+            w.u32(p.len() as u32);
+            for q in p { w.f64(q[0]); w.f64(q[1]); }
+        }
+    }
     w.0
 }
 
@@ -249,7 +260,8 @@ pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
     let mut r = R { b, i: 0 };
     if b.len() < 8 { return Err("not a roadsys tile input".into()); }
     let magic = r.take(8).to_vec();
-    let v5 = magic == b"RSTILE05";
+    let v6 = magic == b"RSTILE06";
+    let v5 = v6 || magic == b"RSTILE05";
     let xs5 = if v5 { r.u8() != 0 } else { false };
     let v4 = magic == b"RSTILE04" || (v5 && xs5);
     let v3 = v4 || v5 || magic == b"RSTILE03";
@@ -296,6 +308,15 @@ pub fn read_tile(b: &[u8]) -> Result<TileInput, String> {
         let (build, areas) = areas_block(&mut r);
         place.area_build = build;
         place.areas = areas;
+    }
+    if v6 {
+        let nr = r.u32() as usize;
+        for _ in 0..nr {
+            let c = r.f64();
+            let np = r.u32() as usize;
+            let p: Vec<P2> = (0..np).map(|_| { let x = r.f64(); let y = r.f64(); [x, y] }).collect();
+            place.rails.push((p, c));
+        }
     }
     Ok(TileInput { place, quad, id, frame, cut, ground, areas_on })
 }

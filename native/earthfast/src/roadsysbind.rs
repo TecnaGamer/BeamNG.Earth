@@ -71,14 +71,16 @@ impl RoadsysSegments {
     /// cross-section model is on (every stroke's strip slots) whatever the texts hold; None: off, as before.
     /// areas / fit (608, BNE_ROADSYS_AREAS): the mapped road areas round the read and whether they are the carriageway
     /// edges' targets. Both on (617): the fit sets the carriageway's whole width and edges, the strips divide it.
-    #[pyo3(signature = (ids, cells, texts, nums, ints, pts, off, con_seg, con_id, con_v, rng_seg, rng, style, areas = None, fit = false, xsec = None))]
+    /// rails (626, M5): railway lines at ground level round the read [(points (n, 2) in the frame, clearance m)]: the floors
+    /// of the structures crossing them.
+    #[pyo3(signature = (ids, cells, texts, nums, ints, pts, off, con_seg, con_id, con_v, rng_seg, rng, style, areas = None, fit = false, xsec = None, rails = None))]
     #[allow(clippy::too_many_arguments)]
     fn new(ids: Vec<String>, cells: Vec<String>, texts: Vec<(String, String, String, String, String)>,
            nums: PyReadonlyArray2<'_, f64>, ints: PyReadonlyArray2<'_, i64>, pts: PyReadonlyArray2<'_, f64>,
            off: PyReadonlyArray1<'_, i64>, con_seg: PyReadonlyArray1<'_, i64>, con_id: Vec<String>,
            con_v: PyReadonlyArray1<'_, i64>, rng_seg: PyReadonlyArray1<'_, i64>, rng: PyReadonlyArray2<'_, f64>,
            style: (String, String, f64, f64, f64, f64, (f64, f64), (f64, f64), (f64, f64), bool),
-           areas: Option<PyRef<'_, RoadsysAreas>>, fit: bool, xsec: Option<Vec<String>>) -> PyResult<Self> {
+           areas: Option<PyRef<'_, RoadsysAreas>>, fit: bool, xsec: Option<Vec<String>>, rails: Option<Vec<(Vec<(f64, f64)>, f64)>>) -> PyResult<Self> {
         let n = ids.len();
         let (nums, ints, pts, off) = (nums.as_array(), ints.as_array(), pts.as_array(), off.as_slice()?);
         if cells.len() != n || texts.len() != n || nums.nrows() != n || nums.ncols() != 4 || ints.nrows() != n
@@ -171,8 +173,11 @@ impl RoadsysSegments {
                          centre_urban: style.6, lane_urban: style.7, lane_motorway: style.8, double_centre: style.9 };
         let (areas, area_build) = match &areas { Some(a) => (a.areas.clone(), a.build), None => (Vec::new(), 0) };
         let fit = fit && !areas.is_empty();
+        let rails: Vec<(Vec<[f64; 2]>, f64)> = rails.unwrap_or_default().into_iter()
+            .filter(|(p, c)| p.len() >= 2 && c.is_finite() && p.iter().all(|q| q.0.is_finite() && q.1.is_finite()))
+            .map(|(p, c)| (p.into_iter().map(|q| [q.0, q.1]).collect(), c)).collect();
         let place = Place { name: String::new(), country: segs.first().map(|s| s.code.clone()).unwrap_or_default(), style: st, segs,
-                            xsec: xsec.is_some(), areas, area_build, ..Default::default() };
+                            xsec: xsec.is_some(), areas, area_build, rails, ..Default::default() };
         Ok(RoadsysSegments { place, dropped: (copies, parents, sections), fit })
     }
 

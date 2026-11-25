@@ -51,8 +51,9 @@ product declares and hands them over.
 
   M5 (the user's decisions 2026-11-24, every mode from heights up): the mapped bridge end is the truth (the structure
       and tunnel ranges and the hand-over ends from the map's tags, roads.tag_level_ranges; a deck of the deck builder
-      lengthened past them takes the profile there, and under surface the stretch it lengthened over is drawn as
-      ground road, K_COVER); a floor is the lower road's clearance (its maxheight sign, else its class's: main roads by
+      lengthened past them takes the profile there; under surface the deck builder and the grading take the map's
+      ranges too, roads.MAPPED_RANGES: a bridge stops at its mapped end, the road goes on onto its graded approach); a
+      railway line under a structure holds a floor (rail_clearance), as a road does; a floor is the lower road's clearance (its maxheight sign, else its class's: main roads by
       country, other public roads, service roads and tracks, foot and cycle ways; net.rs clearance_of) + the
       structure's own depth (structure_depth: its design and span), the road under cut up to 5 m where that is gentler
       than lifting (one solve); twin decks one height; surface decks drawn their whole depth until the girder kits.
@@ -192,6 +193,57 @@ def _ranges(rule, i, vals=False):
     return [(float(rule.start[j]), float(rule.end[j]), rule.value[j] if vals else str(rule.value[j])) for j in sel]
 
 
+# (M5) A railway line's clearance under a structure, rail top to the structure's underside, by country: an electrified
+# line its catenary's (US / Canada AREMA 23 ft = 7.0 m, Britain 5.1 m, Germany 5.7 m, France 6.0 m, the Netherlands and
+# Switzerland 5.5 m, Japan 5.7 m, elsewhere 6.0 m), any other line its loading gauge's (US / Canada 7.0 m, Britain
+# 4.8 m, elsewhere 5.0 m); light rail 5.0 m and metro lines 4.5 m; trams (in the street), funiculars, monorails and
+# lines not built (Overture's "unknown") hold no floor.
+RAIL_CLASSES = ("standard_gauge", "narrow_gauge", "light_rail", "subway")
+RAIL_CLEAR_ELECTRIC = {"US": 7.0, "CA": 7.0, "GB": 5.1, "DE": 5.7, "FR": 6.0, "NL": 5.5, "CH": 5.5, "JP": 5.7}
+RAIL_CLEAR_GAUGE = {"US": 7.0, "CA": 7.0, "GB": 4.8}
+
+
+def rail_clearance(code, cls, electric):
+    if cls == "light_rail":
+        return 5.0
+    if cls == "subway":
+        return 4.5
+    code = str(code or "").upper()
+    if electric:
+        return RAIL_CLEAR_ELECTRIC.get(code, 6.0)
+    return RAIL_CLEAR_GAUGE.get(code, 5.0)
+
+
+def _rails(feats):
+    """[(fid, lon / lat (n, 2), clearance m)]: the cell's railway lines at ground level (their mapped ground parts,
+    roads.tag_level_ranges) that hold a floor (RAIL_CLASSES), each with its clearance (rail_clearance)."""
+    import countrybounds
+    import roads
+    a = feats.attrs
+    sub_, cls_ = a.get("subtype"), a.get("class")
+    if sub_ is None or cls_ is None:
+        return []
+    idx = [i for i in range(len(feats)) if str(sub_[i]) == "rail" and str(cls_[i]) in RAIL_CLASSES]
+    if not idx:
+        return []
+    try:
+        import catenary
+        electric = catenary.electrified([feats])
+    except Exception as ex:             # (no contact line known: the loading gauge's)
+        log.debug("roadsys rails: electrified: %s: %s", type(ex).__name__, ex)
+        electric = {}
+    out = []
+    for i in idx:
+        fid = str(feats.ids[i])
+        for ring in roads._parts_by_level_new(feats, i, "ground", rngs=roads.tag_level_ranges(feats, i)):
+            ll = np.asarray(ring, np.float64)[:, :2]
+            if len(ll) < 2:
+                continue
+            code = countrybounds.bundled().codes_at([(float(ll[0, 1]), float(ll[0, 0]))])[0]
+            out.append((fid, ll, rail_clearance(code, str(cls_[i]), bool(electric.get(fid)))))
+    return out
+
+
 def _table(cell, feats, rows):
     """One cell's segment columns (lon / lat points), PT3's exporter's fields; the structure and tunnel ranges as the
     map tags them (roads.tag_level_ranges, M5), the levels the map's."""
@@ -206,7 +258,7 @@ def _table(cell, feats, rows):
     keys = sorted(rows)
     lls = [np.asarray(rows[k]["ll"], np.float64) for k in keys]
     codes = countrybounds.bundled().codes_at([(ll[0, 1], ll[0, 0]) for ll in lls]) if keys else []
-    out = dict(ids=[], texts=[], nums=[], ints=[], ll=[], cons=[], rng=[], cell=cell, xsec=[])
+    out = dict(ids=[], texts=[], nums=[], ints=[], ll=[], cons=[], rng=[], cell=cell, xsec=[], rails=_rails(feats))
     for k, ll, code in zip(keys, lls, codes):
         r = rows[k]
         fid = k.split("|", 1)[0]
@@ -365,6 +417,22 @@ def _segments(tables, frame, style, areas=None, fit=False):
     e, n, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
     pts = np.ascontiguousarray(np.column_stack((e, n)), np.float64)
     kw = {}
+    # (M5) the railway lines at ground level round the read (one copy per line and part: the copy with the most points)
+    best = {}
+    for tab in tables:
+        if tab is None:
+            continue
+        for j, (fid, rl, clear) in enumerate(tab.get("rails") or ()):
+            k = (fid, round(float(rl[0, 0]), 7), round(float(rl[0, 1]), 7))
+            if k not in best or len(rl) > len(best[k][0]):
+                best[k] = (rl, clear)
+    if best:
+        rails = []
+        for k in sorted(best):
+            rl, clear = best[k]
+            re_, rn_, _ru = frame.geodetic_to_enu(rl[:, 1], rl[:, 0], 0.0)
+            rails.append(([(float(x), float(y)) for x, y in zip(re_, rn_)], float(clear)))
+        kw["rails"] = rails
     if XSEC:                # (the cross-section model on: every stroke's strips; the texts in the segments' digests)
         fast.require(XSEC_KERNEL, "RoadsysSegments xsec")
         kw["xsec"] = xs
@@ -1072,7 +1140,7 @@ def _end_rows(feats):
     builder's lengthened or inferred ranges, which the map calls ground): kind "b" a tagged bridge part that a deck of
     the deck builder's covers (roads.bridge_parts; its half width roads.bridge_specs': the deck builder's), "g" a
     tagged ground part (its half width road_specs' plain one: no urban or measured widths, the same in every process),
-    "t" a tunnel part."""
+    "t" a tunnel part (M5: a deck end's approach too, _ends_from)."""
     got = feats.__dict__.get("_roadsys_end_rows")
     if got is not None:
         return got
@@ -1097,7 +1165,7 @@ def _end_rows(feats):
             for j, ring in enumerate(roads._parts_by_level_new(feats, i, "ground", rngs=tags)):
                 out.append(("g", fid, j, np.asarray(ring, np.float64)[:, :2], float(sp.width) / 2))
             for j, ring in enumerate(roads.tunnel_parts(feats, i)):
-                out.append(("t", fid, j, np.asarray(ring, np.float64)[:, :2], 0.0))
+                out.append(("t", fid, j, np.asarray(ring, np.float64)[:, :2], float(sp.width) / 2))
     feats.__dict__["_roadsys_end_rows"] = out
     return out
 
@@ -1161,10 +1229,11 @@ def _ends_from(frame, cell_fn, keys, reg):
             continue
         if kind == "b":
             br.append((xy, hw))
-        elif kind == "g":
-            gr.append((xy, hw))
         else:
-            tu.append(xy)
+            # (M5: a tunnel's part is a deck end's approach as a ground road is: the deck meets the terrain on its own
+            # nodes before the portal, as at a ground end; deck ends onto tunnels had no hand-over, 65-145 mm lips at
+            # Fort Pitt's portals)
+            gr.append((xy, hw))
     return fast._ef.RoadsysEnds(br, gr, tu, float(heightmap.SQUARE))
 
 
@@ -1282,7 +1351,6 @@ DECK_KEEP_M = 30.0          # m round the tile's box its decks' faces are built 
 DECK_LINES_M = 50.0         # m round the box today's deck heights are read (KEEP_M + EXT_M + some)
 K_STRIP = 9                 # deck.rs K_STRIP: a parapet's base, the slab's top only
 K_MEDIAN = 10               # deck.rs K_MEDIAN: the filled gap to a twin deck, the slab's top only, thin
-K_COVER = 11                # deck.rs K_COVER (M5): a ground face on today's lengthened deck past the mapped end
 MEDIAN_DEPTH_M = 0.04       # m of drawn depth a twin gap's fill takes (its slab ~2 cm: below the envelope's own band)
 DECK_GROUND_M = 300.0       # m round the tile's box the decks' build reads the ground (farther: that box's edge)
 
@@ -1437,10 +1505,7 @@ def deck_faces(frame, exact, bridges, cells, country=None):
         look = roads._deck_look(sp)
         if K[i] == K_MEDIAN:        # (a twin's filled gap: a thin slab, no walls between the twins' slabs)
             depth = MEDIAN_DEPTH_M
-        if K[i] == K_COVER:         # (M5: a ground face on today's lengthened deck past the mapped end: ground road)
-            depth = 0.0
-        key = ("strip" if K[i] in (K_STRIP, K_MEDIAN) else "cover" if K[i] == K_COVER else "top", look["m"], look["tl"],
-               look["p"], round(depth, 3))
+        key = ("strip" if K[i] in (K_STRIP, K_MEDIAN) else "top", look["m"], look["tl"], look["p"], round(depth, 3))
         groups.setdefault(key, []).append(i)
     for key in sorted(groups):
         kind, mat, tl, prio, depth = key
@@ -1449,14 +1514,6 @@ def deck_faces(frame, exact, bridges, cells, country=None):
                                                            np.ascontiguousarray(T[sel]), box_poly, True)
         xyz, clipped = np.asarray(xyz, np.float64), np.asarray(clipped, np.int64)
         if not len(clipped):
-            continue
-        if kind == "cover":
-            # (at the faces' own heights, today's deck's there (deck.rs EXT_M), the ground the plans fill up to it: the
-            # skin's ground under a lengthened deck is not the terrain's (draped on it, the road lay 0.4 m under the
-            # terrain, Silver Spring); drawn as ground road, colliding nothing)
-            ch = roadsurf3._tri_chunk(xyz[:, :2], np.asarray(uv, np.float64), clipped, mat, tl, prio, "base")
-            ch.update(fixed=True, deck_z=xyz[np.unique(clipped), 2], rs_cover=True)
-            out.append(ch)
             continue
         if kind == "strip":
             ch = roadsurf3._tri_chunk(xyz[:, :2], np.asarray(uv, np.float64), clipped, roadmesh.DECK_SIDE, 10.0, prio,

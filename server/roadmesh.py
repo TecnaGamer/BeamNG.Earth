@@ -2064,7 +2064,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
     rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all, junctions,
                        coplanar=_coplanar_decks())
-    faces = [c for c in chunks if "deck_z" in c and not c.get("rs_mark") and not c.get("rs_cover")]   # (M5 cover: road only)
+    faces = [c for c in chunks if "deck_z" in c and not c.get("rs_mark")]
     if not rb and not piers and not beams and not pads and not faces:
         return None
     low_parapet_decks = set(low_parapet_decks or ())

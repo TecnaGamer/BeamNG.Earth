@@ -317,6 +317,11 @@ pub struct Fork {
 /// structure too (a double deck).
 pub struct Crossing { pub a: usize, pub sa: f64, pub b: usize, pub sb: f64, pub p: P2, pub upper: usize, pub floor: f64, pub along: bool, pub stacked: bool }
 
+/// (M5) A structure of stroke si over a railway line at station s, point p: the deck's road at least floor (the line's
+/// clearance + the structure's depth) over the ground at p.
+#[derive(Clone, Copy, Debug)]
+pub struct RailFloor { pub si: usize, pub s: f64, pub p: P2, pub floor: f64 }
+
 #[derive(Default, Debug, Clone)]
 pub struct NetStats {
     pub segs: usize,
@@ -331,6 +336,7 @@ pub struct NetStats {
     pub structures: usize,
     pub tunnels: usize,
     pub crossings: usize,
+    pub rail_floors: usize,
     pub unbridged: usize,
     pub nose_beyond: usize,
     pub along: usize,
@@ -367,6 +373,8 @@ pub struct Net {
     pub strokes: Vec<Stroke>,
     pub edge_stroke: Vec<(usize, usize)>, // edge -> (stroke, part)
     pub crossings: Vec<Crossing>,
+    pub rail_floors: Vec<RailFloor>,    // (M5) a structure stroke over a railway line: (stroke, station, point, floor)
+    pub rails: Vec<(Vec<P2>, f64)>,     // (M5) the railway lines round the read (place.rails): (points, clearance m)
     pub stats: NetStats,
     pub xsec_on: bool,                  // (BNE_ROADSYS_XSEC) the cross-section model: every stroke gets its strip slots
     pub lays: Vec<Option<Lay>>,         // seg -> its cross-section's strips (sides in the segment's direction)
@@ -875,6 +883,7 @@ pub fn build_opts(place: &Place, input_order: &[usize], opts: Opts) -> Net {
     let nn = nodes.len();
     let mut net = Net { opts, segs, node_ids: ids.clone(), cut: vec![false; nn], region, edges, nodes, forks: Vec::new(),
                         fork_at: vec![None; nn], strokes: Vec::new(), edge_stroke: Vec::new(), crossings: Vec::new(),
+                        rail_floors: Vec::new(), rails: place.rails.clone(),
                         stats: NetStats::default(), xsec_on: place.xsec, lays: Vec::new(), xs_tags: Vec::new(),
                         area_fit: Default::default() };
     net.lays = vec![None; net.segs.len()];
@@ -904,6 +913,7 @@ pub fn build_opts(place: &Place, input_order: &[usize], opts: Opts) -> Net {
         net.area_fit = crate::areas::fit(&mut net, &prep);
     }
     crossings(&mut net);
+    rail_floors(&mut net);
     net.stats.strokes = net.strokes.len();
     net
 }
@@ -1571,6 +1581,40 @@ pub fn clearance_at(net: &Net, si: usize, s: f64) -> f64 { let (g, x) = seg_at(n
 pub const SIGN_MARGIN_M: f64 = 0.25;     // roads.SIGN_MARGIN_M
 pub const SIGN_MIN_M: f64 = 2.0;         // roads.SIGN_MIN_M
 pub const SIGN_MAX_M: f64 = 8.0;         // roads.SIGN_MAX_M
+
+/// (M5) The structure strokes' crossings of the railway lines round the read (place.rails: lines at ground level),
+/// each a floor of the line's clearance + the structure's depth; strokes in index order, crossings along each in
+/// station order.
+fn rail_floors(net: &mut Net) {
+    let mut out = Vec::new();
+    for (si, st) in net.strokes.iter().enumerate() {
+        if !st.sup.iter().any(|u| u.kind == SUP_STRUCT) { continue; }
+        let mut here: Vec<RailFloor> = Vec::new();
+        for (rp, clear) in &net.rails {
+            for w in rp.windows(2) {
+                for k in 0..st.line.p.len().saturating_sub(1) {
+                    let (a, b) = (st.line.p[k], st.line.p[k + 1]);
+                    let (c, d) = (w[0], w[1]);
+                    let r = sub(b, a);
+                    let q = sub(d, c);
+                    let den = cross(r, q);
+                    if absf(den) < 1e-12 { continue; }
+                    let t = cross(sub(c, a), q) / den;
+                    let u = cross(sub(c, a), r) / den;
+                    if !(t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0) { continue; }
+                    let s = st.line.s[k] + (st.line.s[k + 1] - st.line.s[k]) * t;
+                    let su = st.support_at(s);
+                    if su.kind != SUP_STRUCT { continue; }
+                    here.push(RailFloor { si, s, p: lerp(a, b, t), floor: clear + deck_under(su) });
+                }
+            }
+        }
+        here.sort_by(|x, y| x.s.partial_cmp(&y.s).unwrap());
+        out.extend(here);
+    }
+    net.stats.rail_floors = out.len();
+    net.rail_floors = out;
+}
 
 /// m a floor adds under the clearance for a structure: the depth the deck builder draws under it (its segments' own,
 /// Seg.depth: the inventory's main span or the part's geometry, roads.deck_depth) + LEVEL_MARGIN_M; DECK_FULL_M when

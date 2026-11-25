@@ -485,6 +485,8 @@ pub fn solve_obs(place: &Place, sq: (i64, i64), g_of: &dyn Fn(&[P2]) -> Vec<f64>
             let (sa_, sb_) = (if c.a == si { Some(c.sa) } else { None }, if c.b == si { Some(c.sb) } else { None });
             for x in [sa_, sb_].into_iter().flatten() { if c.upper == si { ss.hand.push(x); ss.floors.push(x); } else { ss.lows.push(x); } }
         }
+        // (M5) its floors over railway lines: held too (a deck end dropped onto its approach stops there)
+        for r in net.rail_floors.iter().filter(|r| r.si == si) { ss.hand.push(r.s); ss.floors.push(r.s); }
         ss.floors.sort_by(|a, b| a.partial_cmp(b).unwrap());
         ss.hand.sort_by(|a, b| a.partial_cmp(b).unwrap());
         ss.lows.sort_by(|a, b| a.partial_cmp(b).unwrap());
