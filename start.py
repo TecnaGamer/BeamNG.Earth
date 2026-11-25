@@ -10,6 +10,7 @@ It uses the Python in .venv (made by install.py) and the BeamNG.drive user folde
 """
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -17,6 +18,7 @@ import sys
 
 import install
 import launchui          # (the launch screen: colours, banner, timed steps; stdlib only)
+import statcache         # (the files' cached digests: the launch's up-to-date checks do not re-read them)
 
 ROOT = install.ROOT
 EARTHD = os.path.join(ROOT, "server", "earthd.py")
@@ -34,12 +36,32 @@ RECOMMENDED = [
 
 
 def server_flags(py):
+    """earthd --help's text, which has_flag only looks flags up in. Running the server's modules to
+    print it takes over a second of every launch, and the text changes only with server/earthd.py:
+    the flagcache keeps it against that file's stat (its size, mtime and inode; an update reads it
+    again). No cache (a data folder that cannot be made): run and return, as before."""
+    import apppaths
+    key = statcache._stat_key(os.stat(EARTHD))
+    path = os.path.join(apppaths.data_dir(), "flagcache.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            kept = json.load(f)
+        if kept.get("key") == key:
+            return kept.get("text", "")
+    except (OSError, ValueError):
+        pass
     r = subprocess.run([py, EARTHD, "--help"], capture_output=True, text=True, errors="replace", cwd=ROOT)
     if r.returncode != 0:
         install.fail("the server does not start:\n" + (r.stderr or r.stdout).strip() +
                      "\n  Run the installer again: python install.py")
+    try:
+        os.makedirs(apppaths.data_dir(), exist_ok=True)
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump({"key": key, "text": r.stdout}, f)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass                                # (no cache: read again next launch, as before)
     return r.stdout
-
 
 
 def has_flag(help_text, flag):

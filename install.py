@@ -29,6 +29,7 @@ import sys
 
 import modtextures
 import launchui          # (the launch screen: colours, banner, timed steps; stdlib only)
+import statcache
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 MOD_SRC = os.path.join(ROOT, "mod", "beamng_earth")
@@ -231,17 +232,22 @@ GENERATED = ("lua/ge/extensions/beamngEarth/skypatch_flag.lua",)
 
 
 def tree_hash(path, skip=()):
+    """The folder's content digest: every file's name and SHA-256 (with modtextures's GENERATED and
+    skip left out), the walk sorted so the same tree always hashes the same. Each file's digest
+    comes from the stat cache (statcache.py) when the file's size, mtime and inode are as the last
+    launch saw them: the up-to-date check does not read every file again (~240 MB of mod on disk).
+    A file that changed is read, and the cache learns its new digest."""
     h = hashlib.sha256()
-    for dirpath, dirnames, filenames in os.walk(path):
-        dirnames.sort()
-        for name in sorted(filenames):
-            full = os.path.join(dirpath, name)
-            rel = os.path.relpath(full, path).replace(os.sep, "/")
-            if rel in GENERATED or rel in skip:
-                continue
-            h.update(rel.encode())
-            with open(full, "rb") as f:
-                h.update(hashlib.sha256(f.read()).digest())
+    with statcache.Cache() as cache:
+        for dirpath, dirnames, filenames in os.walk(path):
+            dirnames.sort()
+            for name in sorted(filenames):
+                full = os.path.join(dirpath, name)
+                rel = os.path.relpath(full, path).replace(os.sep, "/")
+                if rel in GENERATED or rel in skip:
+                    continue
+                h.update(rel.encode())
+                h.update(cache.digest(full))
     return h.hexdigest()
 
 
