@@ -7808,6 +7808,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
     // 627: deck_shape(lhw=, nbi=): the deck ends' skew only as the abutment of a short structure's crossing, waterways
     // (kind 3) crossed too, the US bridge inventory's skew first (roadshape.py, nbiskew.py); its ends' audit numbers
-    m.add("VERSION", 627)?;
+    // 628: RoadsysEnds.ceil / RoadsysCeil (roadsys ceil.rs: the ground under a deck at most at its soffit less 0.3 m,
+    // BNE_ROADSYS=surface; every evaluator of the physics ground, roads.block_arch_raise)
+    m.add("VERSION", 628)?;
     Ok(())
 }

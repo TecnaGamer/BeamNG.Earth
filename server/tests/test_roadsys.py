@@ -533,7 +533,7 @@ class StructuresTest(unittest.TestCase):
         applied; the exact deck reads its nodes through heightmap.surface and the same drop."""
         src = (HERE / "roads.py").read_text(encoding="utf-8")
         i = src.index("def block_arch_raise(")
-        self.assertIn("roadsys.handover_drop(frame, cell_fn, la, lo)", src[i:i + 1500])
+        self.assertIn("roadsys.ground_cut(frame, cell_fn, la, lo, z)", src[i:i + 1500])
         bw = (HERE / "blockworker.py").read_text(encoding="utf-8")
         for caller in ("def gen(la, lo):", "def drawn(la, lo):"):
             j = bw.index(caller)
@@ -542,7 +542,25 @@ class StructuresTest(unittest.TestCase):
         body = bw[j:j + 6000]
         self.assertIn("heightmap.surface(fr, drawn, xs, ys, keep)", body)
         self.assertIn('roadsys.handover_drop(fr, cell_fn, keep["lat"], keep["lon"])', body)
+        # (M5: under surface the lattice's lowering is the drop and the ceiling together, from the same ground before)
+        self.assertIn('roadsys.ground_lowering(fr, cell_fn, keep["lat"], keep["lon"],', body)
         self.assertIn("np.rint(np.asarray(u, np.float64) * (1.0 / q)) * q", body)
+
+    def test_ground_cut_is_the_drop_alone_under_structures(self):
+        import roadsys
+        try:
+            with mock.patch.dict(os.environ, {"BNE_ROADSYS": "structures"}):
+                importlib.reload(roadsys)
+                self.assertFalse(roadsys.CEIL)
+                with mock.patch.object(roadsys, "handover_drop", lambda f, c, la, lo: np.full(np.shape(la), 0.25)):
+                    got = roadsys.ground_cut(None, None, np.zeros(3), np.zeros(3), np.array([1.0, 2.0, 3.0]))
+                    self.assertEqual(got.tolist(), [0.75, 1.75, 2.75])
+                    self.assertEqual(roadsys.ground_lowering(None, None, np.zeros(3), np.zeros(3), np.ones(3)).tolist(),
+                                     [0.25] * 3)
+        finally:
+            importlib.reload(roadsys)
+        z = np.array([1.0, 2.0])
+        self.assertIs(roadsys.ground_cut(None, None, np.zeros(2), np.zeros(2), z), z)     # (off: untouched)
 
     def test_ends_are_the_maps_alone(self):
         deck = ([[0.3, 0.2], [60.0, 0.2]], 4.0)
@@ -703,6 +721,82 @@ class SurfaceTest(unittest.TestCase):
         self.assertIsNone(roadmesh.deck([dict(c, rs_hide=True)], (0.0, 0.0, 0.0)))
         self.assertEqual(roadmesh.parapet_runs([dict(c, rs_hide=True)]), [])
         self.assertEqual(roadmesh._shown([dict(c), dict(c, rs_hide=True)]), [dict(c)])
+
+
+class CeilTest(unittest.TestCase):
+    """M5 round 4 (BNE_ROADSYS=surface, earthfast 628): the ground under a deck at most at its soffit less 0.3 m
+    (bridgerewrite/DESIGN.md G5), eased in from its free ends past the hand-over's own metres, a road under it and its
+    lattice square kept; one value per point whatever the order of the decks; the drop as before where no deck is."""
+
+    DECK = [[0.0, 0.0], [30.0, 0.0], [60.0, 0.0]]
+
+    def ceil(self, decks, grounds=(), rails=()):
+        e = _ends([(self.DECK, 5.0)], [([[-50.0, 0.0], [0.0, 0.0]], 5.0), ([[60.0, 0.0], [110.0, 0.0]], 5.0)] + list(grounds))
+        return e, e.ceil([(np.asarray(p, np.float64), hw, d) for p, hw, d in decks],
+                         [np.asarray(r, np.float64) for r in rails])
+
+    def low(self, top=10.0, depth=1.2):
+        return [[x, y, top] for x, y in self.DECK], 5.0, depth
+
+    def test_under_a_low_deck_at_most_its_soffit_less_clearance(self):
+        e, c = self.ceil([self.low()])
+        x = np.array([30.0, 30.0, 3.0, 1.0, 7.0, 30.0, -3.0])
+        y = np.array([0.0, 4.9, 0.0, 0.0, 0.0, 5.5, 0.0])
+        got = c.ground(x, y, np.full(7, 10.0))
+        want = [10.0 - 1.5, 10.0 - 1.5, 9.7, 10.0, 10.0 - 1.3, 10.0, 10.0]
+        self.assertEqual(np.round(got, 9).tolist(), want)
+        # (where no deck is: the drop alone, as before)
+        np.testing.assert_array_equal(c.ground(x, y + 40.0, np.full(7, 10.0)), 10.0 - e.drops(x, y + 40.0))
+        # (a deck high over its ground cuts nothing)
+        _e, hi = self.ceil([self.low(top=30.0)])
+        self.assertEqual(hi.ground(np.array([30.0]), np.array([0.0]), np.array([10.0])).tolist(), [10.0])
+
+    def test_a_road_under_it_keeps_its_ground(self):
+        _e, c = self.ceil([self.low()], grounds=[([[30.0, -40.0], [30.0, 40.0]], 3.0)])
+        got = c.ground(np.array([30.0, 35.5, 36.5, 42.0]), np.array([1.0, 1.0, 1.0, 1.0]), np.full(4, 10.0))
+        self.assertEqual(np.round(got, 9).tolist(), [10.0, 10.0, 9.5, 8.5])
+
+    def test_same_ground_whatever_the_order_of_the_decks(self):
+        a = self.low()
+        b = ([[20.0, -20.0, 9.0], [20.0, 20.0, 9.0]], 4.0, 0.8)
+        rv = ([list(p) for p in reversed(a[0])], a[1], a[2])
+        _e, c1 = self.ceil([a, b])
+        _e, c2 = self.ceil([b, rv, a])
+        g = np.mgrid[-10:70:0.5, -25:25:0.5].reshape(2, -1)
+        z = np.full(g.shape[1], 12.0)
+        self.assertEqual(c1.ground(g[0], g[1], z).tobytes(), c2.ground(g[0], g[1], z).tobytes())
+        self.assertGreater(len(c1.input()), 100)
+
+    def test_ground_cut_reads_the_cells_ceilings(self):
+        """roadsys.ground_cut under surface: each point by its own map cell's ceiling (ceil_of_cell), the ground
+        before the drop and the ceiling in, the lowering what it took off."""
+        import roadsys
+        _e, c = self.ceil([self.low()])
+
+        class F:
+            lat0 = lon0 = 0.0
+
+            def geodetic_to_enu(self, la, lo, h):
+                return np.asarray(lo, np.float64) * 1e5, np.asarray(la, np.float64) * 1e5, np.zeros(np.shape(la))
+        try:
+            with mock.patch.dict(os.environ, {"BNE_ROADSYS": "surface"}):
+                importlib.reload(roadsys)
+                self.assertTrue(roadsys.CEIL)
+                with mock.patch.object(roadsys, "ceil_of_cell", lambda f, cf, k: c):
+                    la = np.array([0.0, 0.0, 4e-4])
+                    lo = np.array([3e-4, -3e-5, 3e-4])
+                    z = np.full(3, 10.0)
+                    got = roadsys.ground_cut(F(), None, la, lo, z)
+                    self.assertEqual(np.round(got, 9).tolist(), [8.5, 10.0, 10.0])
+                    self.assertEqual(np.round(roadsys.ground_lowering(F(), None, la, lo, z), 9).tolist(), [1.5, 0.0, 0.0])
+        finally:
+            importlib.reload(roadsys)
+
+    def test_keyed_and_wired(self):
+        self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 6)
+        self.assertGreaterEqual(fast.MIN_VERSION, 628)
+        bw = (HERE / "blockworker.py").read_text(encoding="utf-8")
+        self.assertIn("_roadsys.DECKS_FN = lambda frame: _bridges(None, frame, _elev_stage1)", bw)
 
 
 class SkewTest(unittest.TestCase):

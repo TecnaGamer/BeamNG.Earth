@@ -57,6 +57,12 @@ product declares and hands them over.
       country, other public roads, service roads and tracks, foot and cycle ways; net.rs clearance_of) + the
       structure's own depth (structure_depth: its design and span), the road under cut up to 5 m where that is gentler
       than lifting (one solve); twin decks one height; surface decks drawn their whole depth until the girder kits.
+      Round 4 (surface, earthfast 628): the ground under a deck at most at its soffit less 0.3 m (DESIGN.md G5; native/
+      roadsys ceil.rs): every evaluator of the physics ground (ground_cut, through roads.block_arch_raise) caps it by
+      the decks the bridge chains publish round its map cell (ceil_of_cell: the 3 x 3 cells, as the hand-over's ends;
+      each deck's top heights less its structure's drawn depth), eased in from a free end past the hand-over's metres
+      at 1:2, a ground road's or railway's surface and the lattice square round it kept, eased off them at 1:2; the
+      hand-over's lattice takes a node so lowered as the deck's (ground_lowering).
 
   BNE_ROADSYS_AREAS (osmareas.py; with shadow or surface): audit: the products read OSM's mapped road areas
       (area:highway=*) of their read's cells and report how their faces meet them (the shadow record's "areas": edge
@@ -106,6 +112,11 @@ SURFACE_KERNEL = 626        # earthfast.roadsys_decks
 # bridge inventory's skew first) says so: the hand-over's ends (RoadsysEnds' crossed / nbi) and the deck faces' end rows
 SKEW = SURFACE
 SKEW_KERNEL = 627
+# (628, M5 round 4) BNE_ROADSYS=surface: the ground under a deck at most at its soffit less 0.3 m (bridgerewrite/DESIGN.md
+# G5; native/roadsys ceil.rs), every evaluator of the physics ground (ground_cut through roads.block_arch_raise)
+CEIL = SURFACE
+CEIL_KERNEL = 628
+DECKS_FN = None             # (frame) -> the road bridges' ChainView in frame (blockworker: its bridge chain store), or None
 WATER_FN = None             # water_fn(cell key) -> the water Features (set_water_fn: mapdata.MapData), None: none read
 
 
@@ -1429,6 +1440,180 @@ def handover_drop(frame, cell_fn, la, lo):
     HANDOVER_STATS["points"] += int(la.size)
     HANDOVER_STATS["dropped"] += int((out > 0).sum())
     return out.reshape(shape)
+
+
+# ------------------------------------------------------------------------- M5: the ground under the decks
+
+CEIL_CELLS_KEPT = 64            # RoadsysCeil kept per process (per frame and centre cell)
+_ceil_memo = {}
+_views = {}
+CEIL_STATS = {"built": 0, "hits": 0, "decks": 0, "short": 0, "cut": 0}
+CEIL_DUMP = os.environ.get("ROADSYS_CEIL_DUMP") or None     # (tools only: each ceiling's whole input, `roadsys ceil`)
+
+
+def _decks_view(frame):
+    """The road bridges' ChainView in frame (DECKS_FN's, one per frame), or None."""
+    if DECKS_FN is None:
+        return None
+    fk = _frame_key(frame)
+    with _ends_lock:
+        v = _views.get(fk)
+    if v is None:
+        v = DECKS_FN(frame)
+        if v is None:
+            return None
+        with _ends_lock:
+            _views[fk] = v
+            while len(_views) > 16:
+                _views.pop(next(iter(_views)))
+    return v
+
+
+def _ceil_inputs(frame, cell_fn, keys, reg, view):
+    """(decks [(x, y, top height (n, 3), half width, depth)], rails [(n, 2)]) round the frame box reg from map cells
+    keys: every road deck part the bridge chains publish there (each solved with its chain: the heights the deck faces
+    are drawn at, as geodetic heights, the evaluators' own), its half width the deck builder's (or its cross-section's)
+    and its structure's drawn depth; the railways at ground level there. None when a cell cannot be read."""
+    import roads
+    cells = []
+    for k in keys:
+        try:
+            cells.append(cell_fn(k))
+        except Exception as ex:             # (no ceiling rather than no ground: nothing built with it kept)
+            log.debug("roadsys ceiling: cell %s: %s: %s", k, type(ex).__name__, ex)
+            import revisit
+            revisit.fault()
+            return None
+    xs = {}
+    if XSEC:
+        for k in keys:
+            for f, e in _xsec_extents(cell_fn, k).items():
+                xs[f] = max(xs.get(f, 0.0), e)
+    decks = []
+    for key, spec, xy, z, _lon in view.parts_with_ids(cells, reg):
+        xy, z = np.asarray(xy, np.float64), np.asarray(z, np.float64)
+        if len(xy) < 2 or len(z) != len(xy) or not np.isfinite(z).all() or spec is None:
+            continue
+        _la, _lo, h = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], z)
+        hw = max(float(spec.width) / 2, xs.get(feature(key[0]), 0.0))
+        depth = view.depth_of_part(key)
+        decks.append((np.ascontiguousarray(np.c_[xy[:, :2], np.asarray(h, np.float64)], np.float64), hw,
+                      float(roads.DECK_FULL_DEPTH if depth is None else depth)))
+    rails = []
+    for feats in cells:
+        if feats is None or not len(feats):
+            continue
+        for _fid, ll, _clear in _rails(feats):
+            e, nn, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
+            xy = np.ascontiguousarray(np.column_stack((np.asarray(e, np.float64), np.asarray(nn, np.float64))))
+            if len(xy) >= 2 and not (xy[:, 0].max() < reg[0] - 10 or xy[:, 0].min() > reg[2] + 10
+                                     or xy[:, 1].max() < reg[1] - 10 or xy[:, 1].min() > reg[3] + 10):
+                rails.append(xy)
+    return decks, rails
+
+
+def ceil_of_cell(frame, cell_fn, key):
+    """earthfast.RoadsysCeil of map cell key (in frame): its hand-over's ends (ends_of_cell) with the decks that may
+    lie over it, read from the 3 x 3 cells round it as the ends are (a deck over a point reaches it from those cells:
+    a point's ceiling is the same whichever caller asks), each deck's heights its chain's published solve. None when a
+    cell cannot be read; the ends alone when no bridge chains are at hand (DECKS_FN unset). Kept only when every read
+    was complete (a short chain's stand-in heights answer this call alone, its fault the caller's)."""
+    import heightmap
+    import mapcells
+    import revisit
+    ends = ends_of_cell(frame, cell_fn, key)
+    if ends is None:
+        return None
+    mk = (_frame_key(frame), str(key), float(heightmap.SQUARE))
+    with _ends_lock:
+        got = _ceil_memo.get(mk)
+        if got is not None:
+            CEIL_STATS["hits"] += 1
+            return got
+    view = _decks_view(frame)
+    if view is None:
+        return ends.ceil([], [])
+    import fast
+    fast.require(CEIL_KERNEL, "the ground under the decks")
+    n = 1 << key.z
+    keys = [mapcells.CellKey(key.z, (key.x + dx) % n, key.y + dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1)
+            if 0 <= key.y + dy < n]
+    la0, lo0, la1, lo1 = _cell_bounds(key)
+    bx, by, _ = frame.geodetic_to_enu(np.array([la0, la0, la1, la1]), np.array([lo0, lo1, lo0, lo1]), np.zeros(4))
+    reg = (float(np.min(bx)) - 60.0, float(np.min(by)) - 60.0, float(np.max(bx)) + 60.0, float(np.max(by)) + 60.0)
+    with revisit.scope() as read:
+        try:
+            got = _ceil_inputs(frame, cell_fn, keys, reg, view)
+        except Exception as ex:             # (no ceiling rather than no ground: not kept)
+            (log.debug if isinstance(ex, OSError) else log.warning)("roadsys ceiling: %s: %s", type(ex).__name__, ex)
+            revisit.fault()
+            got = None
+    if got is None:
+        with _ends_lock:
+            CEIL_STATS["short"] += 1
+        return None
+    c = ends.ceil(*got)
+    if CEIL_DUMP and c.count():
+        with open(os.path.join(CEIL_DUMP, f"ceil_{float(frame.lat0):.6f}_{float(frame.lon0):.6f}_{key.z}_{key.x}_{key.y}.rsce"),
+                  "wb") as f:
+            f.write(c.input())
+    with _ends_lock:
+        CEIL_STATS["built"] += 1
+        CEIL_STATS["decks"] += int(c.count())
+        if read.complete:
+            _ceil_memo[mk] = c
+            while len(_ceil_memo) > CEIL_CELLS_KEPT:
+                _ceil_memo.pop(next(iter(_ceil_memo)))
+        else:
+            CEIL_STATS["short"] += 1
+    return c
+
+
+def ground_cut(frame, cell_fn, la, lo, z):
+    """The physics ground at the points (la, lo) from its ground z there (geodetic m), in frame: lowered under the first
+    metres of the decks' ground ends (BNE_ROADSYS=structures: handover_drop) and, under surface, nowhere over a deck's
+    soffit less 0.3 m (ceil_of_cell); z itself in any other mode. Each point by its own map cell's neighbourhood."""
+    z = np.asarray(z, np.float64)
+    if not STRUCTURES or not z.size:
+        return z
+    if not CEIL:
+        return z - handover_drop(frame, cell_fn, la, lo)
+    import mapcells
+    shape = z.shape
+    la = np.asarray(la, np.float64).ravel()
+    lo = np.asarray(lo, np.float64).ravel()
+    zf = z.ravel().copy()
+    e, n, _u = frame.geodetic_to_enu(la, lo, 0.0)
+    e = np.ascontiguousarray(np.asarray(e, np.float64).ravel())
+    n = np.ascontiguousarray(np.asarray(n, np.float64).ravel())
+    ok = np.isfinite(la) & np.isfinite(lo)
+    keys = mapcells.cells_of(np.where(ok, la, 0.0), np.where(ok, lo, 0.0))
+    groups = {}
+    for i, k in enumerate(keys):
+        if ok[i]:
+            groups.setdefault(k, []).append(i)
+    cut = 0
+    for k in sorted(groups, key=str):
+        c = ceil_of_cell(frame, cell_fn, k)
+        if c is None:
+            continue
+        idx = np.asarray(groups[k], np.int64)
+        before = zf[idx]
+        after = c.ground(np.ascontiguousarray(e[idx]), np.ascontiguousarray(n[idx]), np.ascontiguousarray(before))
+        zf[idx] = after
+        cut += int((after < before).sum())
+    HANDOVER_STATS["points"] += int(la.size)
+    CEIL_STATS["cut"] += cut
+    return zf.reshape(shape)
+
+
+def ground_lowering(frame, cell_fn, la, lo, z):
+    """m ground_cut lowers the ground z at the points (la, lo) by (the hand-over's lattice: a node lowered by the drop
+    or the ceiling is the deck's there, roadsys handover.rs zone)."""
+    z = np.asarray(z, np.float64)
+    if not CEIL:
+        return handover_drop(frame, cell_fn, la, lo).reshape(z.shape) if z.size else z * 0.0
+    return z - ground_cut(frame, cell_fn, la, lo, z)
 
 
 # ------------------------------------------------------------------------- M4 surface: decks from the road faces

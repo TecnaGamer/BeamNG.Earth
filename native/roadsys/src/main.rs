@@ -197,6 +197,15 @@ fn main() {
             Err(e) => { eprintln!("{}", e); std::process::exit(1) }
         }
     }
+    if args.len() == 3 && args[1] == "ceil" {
+        // (M5) an under-deck ceiling's input file (ROADSYS_CEIL_DUMP's .rsce): the FNV-1a 64 of its ceiling and drop on
+        // a 0.5 m grid over its decks, the points and those with a ceiling
+        let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(2) });
+        match roadsys::ceil::run_input(&b) {
+            Ok((bytes, n, hit)) => { println!("ceil {:016x} {} {}", roadsys::geom::fnv(&bytes), n, hit); return; }
+            Err(e) => { eprintln!("{}", e); std::process::exit(1) }
+        }
+    }
     if args.len() == 3 && args[1] == "decks" {
         // (M4 surface) a decks input file (ROADSYS_DECK_DUMP's .rsdk): its output's FNV-1a 64 and counts
         let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(2) });

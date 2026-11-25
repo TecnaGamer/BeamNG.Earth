@@ -10981,6 +10981,15 @@ class ChainView:
                 out.extend(st.__dict__.get("profiles", {}).values())
         return out
 
+    def depth_of_part(self, key):
+        """(M5) m of structure under part key's road as its chain's solve gave it (None: not solved here)."""
+        for st in self._stores():
+            with st.lock:
+                d = st.__dict__.get("depth", {}).get(key)
+            if d is not None:
+                return float(d)
+        return None
+
     def depth_of(self, fid):
         ds = []
         for st in self._stores():
@@ -11155,11 +11164,12 @@ def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
     """arch_raise for ground heights at the points (la, lo) of a block in the anchor-frame box (x0, y0, x1, y1),
     the tunnels from the map cells under it. z as it was when the cells are not at hand. BNE_ROADSYS=structures: then
     the ground under the decks' ground ends lowered (roadsys.handover_drop: every evaluator of the physics ground is
-    one of this function's callers, so the blocks, the skins and the decks' hand-over agree node for node)."""
+    one of this function's callers, so the blocks, the skins and the decks' hand-over agree node for node);
+    BNE_ROADSYS=surface: and nowhere over a deck's soffit less 0.3 m (roadsys.ground_cut)."""
     z = _block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box)
     if roadsys.STRUCTURES:
         try:
-            z = np.asarray(z, np.float64) - roadsys.handover_drop(frame, cell_fn, la, lo)
+            z = roadsys.ground_cut(frame, cell_fn, la, lo, z)
         except Exception as ex:     # no drop rather than no ground (nothing built with it kept)
             (log.debug if isinstance(ex, OSError) else log.warning)("deck ends' hand-over: %s: %s", type(ex).__name__, ex)
             import revisit
