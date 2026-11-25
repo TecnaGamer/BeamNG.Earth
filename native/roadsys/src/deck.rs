@@ -443,6 +443,9 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
         if !st.sup.iter().any(|u| u.kind == SUP_STRUCT) { continue; }
         let c = scale(add(add(pv(tr[0]), pv(tr[1])), pv(tr[2])), 1.0 / 3.0);
         let (s, _o) = st.line.project(c, 0.0, st.len());
+        // (within EXT_M of the structure's end only: there its knots carry today's deck heights, the ground the plans
+        // fill up to that deck; farther, the profile's own heights lay over or under that ground)
+        if !st.sup.iter().any(|u| u.kind == SUP_STRUCT && s >= u.s0 - EXT_M && s <= u.s1 + EXT_M) { continue; }
         let t = st.line.at(s).1;
         let along = |l: &DeckLine| -> bool {
             // (on the line itself, its nearest segment's direction: not past its ends as line_z reads it)

@@ -1342,37 +1342,6 @@ def _deck_read(frame, cell_fn, box, style):
     return None
 
 
-COVER_EDGE_M = 2.0           # m: the longest edge of a cover face draped on the ground (deck_faces' K_COVER)
-
-
-def _subdivide(v, uv, t, max_edge):
-    """Triangles t over vertices v (n, 2) with uv (n, 2) split at their edges' middles until no edge is longer than
-    max_edge (each triangle by its own longest edges: 1 -> 2, 3 or 4; a shared edge's middle made once). Pure, ordered."""
-    v, uv, t = [tuple(map(float, p)) for p in v], [tuple(map(float, p)) for p in uv], [tuple(map(int, x)) for x in t]
-    for _round in range(8):
-        mids, out, changed = {}, [], False
-
-        def mid(a, b):
-            k = (a, b) if a < b else (b, a)
-            if k not in mids:
-                mids[k] = len(v)
-                v.append(((v[a][0] + v[b][0]) * 0.5, (v[a][1] + v[b][1]) * 0.5))
-                uv.append(((uv[a][0] + uv[b][0]) * 0.5, (uv[a][1] + uv[b][1]) * 0.5))
-            return mids[k]
-        for a, b, c in t:
-            long_ = [((v[p][0] - v[q][0]) ** 2 + (v[p][1] - v[q][1]) ** 2) > max_edge * max_edge for p, q in ((a, b), (b, c), (c, a))]
-            if not any(long_):
-                out.append((a, b, c))
-                continue
-            changed = True
-            ab, bc, ca = mid(a, b), mid(b, c), mid(c, a)
-            out.extend([(a, ab, ca), (ab, b, bc), (ca, bc, c), (ab, bc, ca)])
-        t = out
-        if not changed:
-            break
-    return np.asarray(v, np.float64), np.asarray(uv, np.float64), np.asarray(t, np.int64).reshape(-1, 3)
-
-
 def deck_faces(frame, exact, bridges, cells, country=None):
     """BNE_ROADSYS=surface: the decks of the tile box exact (x0, y0, x1, y1, in frame) from the road system's own
     faces (native/roadsys deck.rs) as roads.build_tile chunks: ([chunk], {map features drawn so}), or None (no deck
@@ -1481,11 +1450,13 @@ def deck_faces(frame, exact, bridges, cells, country=None):
         xyz, clipped = np.asarray(xyz, np.float64), np.asarray(clipped, np.int64)
         if not len(clipped):
             continue
-        if kind == "cover":         # (draped on the ground as today's ground roads are: the terrain carries it)
-            # (split to COVER_EDGE_M edges first: a long face draped by its corners alone dips under the terrain between
-            # them, as the partition's sparse rows on a straight would)
-            cv, cuv, ct = _subdivide(xyz[:, :2], np.asarray(uv, np.float64), clipped, COVER_EDGE_M)
-            out.append(roadsurf3._tri_chunk(cv, cuv, ct, mat, tl, prio, "base"))
+        if kind == "cover":
+            # (at the faces' own heights, today's deck's there (deck.rs EXT_M), the ground the plans fill up to it: the
+            # skin's ground under a lengthened deck is not the terrain's (draped on it, the road lay 0.4 m under the
+            # terrain, Silver Spring); drawn as ground road, colliding nothing)
+            ch = roadsurf3._tri_chunk(xyz[:, :2], np.asarray(uv, np.float64), clipped, mat, tl, prio, "base")
+            ch.update(fixed=True, deck_z=xyz[np.unique(clipped), 2], rs_cover=True)
+            out.append(ch)
             continue
         if kind == "strip":
             ch = roadsurf3._tri_chunk(xyz[:, :2], np.asarray(uv, np.float64), clipped, roadmesh.DECK_SIDE, 10.0, prio,
