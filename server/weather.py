@@ -38,7 +38,7 @@ API = "https://api.open-meteo.com/v1/forecast"
 CURRENT = ("temperature_2m", "dew_point_2m", "relative_humidity_2m", "is_day", "precipitation", "rain",
            "showers", "snowfall", "weather_code", "cloud_cover", "cloud_cover_low", "cloud_cover_mid",
            "cloud_cover_high", "surface_pressure", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m",
-           "visibility")
+           "visibility", "cape", "lightning_potential")
 HOURLY = ("wind_speed_700hPa", "wind_direction_700hPa")      # winds aloft: where the clouds drift
 CREDIT = "Weather data by Open-Meteo.com"
 VERSION = 1                 # weather.v: the message layout
@@ -164,7 +164,13 @@ def derive(om, lat=None, lon=None):
                     "gustMs": max(ms, _f(cur.get("wind_gusts_10m"), ms))},
            "tempC": t, "dewC": td, "elevM": elev, "slTempC": round(t + LAPSE * elev, 2),
            "pressureHpa": _f(cur.get("surface_pressure"), 1013.25),
+           "capeJkg": round(_f(cur.get("cape")), 1),
            "credit": CREDIT}
+    # lightning potential (J/kg): only DWD ICON-D2 has it (Central Europe; null everywhere else, the weather plan's
+    # research note 3): the mod's thunder class takes it where present (storm.lua), else the code and the CAPE
+    lpi = cur.get("lightning_potential")
+    if isinstance(lpi, (int, float)) and not isinstance(lpi, bool) and math.isfinite(lpi):
+        msg["lpi"] = round(float(lpi), 2)
     hourly = om.get("hourly") or {}
     sp, dr = hourly.get("wind_speed_700hPa"), hourly.get("wind_direction_700hPa")
     if sp and dr and isinstance(sp[0], (int, float)) and isinstance(dr[0], (int, float)):

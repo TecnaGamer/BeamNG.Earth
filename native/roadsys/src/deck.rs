@@ -42,6 +42,8 @@ pub const COVER_DZ_M: f64 = 0.5;
 /// m outward from a free edge a structure face at its height makes a twin (the gap filled to its middle, no parapet)
 pub const TWIN_M: f64 = 3.0;
 const TWIN_STEP_M: f64 = 0.25;
+/// (M5) m a twin median's probed half gap is refined to
+const MEDIAN_TOL_M: f64 = 0.01;
 /// (M5) cos 25 deg: a twin found past TWIN_M runs this near parallel to the free edge
 const TWIN_PAR_COS: f64 = 0.9063077870366499;
 /// m a twin deck's face may lie above or below the free edge (decks side by side parting in height: no parapet
@@ -235,11 +237,65 @@ fn feature_at(net: &Net, si: usize, s: f64) -> String {
 /// The tile's decks from a complete read (product::reads_f with field = true), in the tile's own frame: quad its
 /// corners, g_of the ground, lines today's deck heights per map feature.
 pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64>, lines: &[DeckLine], opts: Opts) -> Decks {
+    build_skewed(place, quad, g_of, lines, opts, &[])
+}
+
+/// m a skewed end (the hand-over's: RoadsysEnds.skews) may lie off a structure interval's end on its stroke
+pub const SKEW_MATCH_M: f64 = 1.5;
+/// the least |sin| between an end line and its stroke (a flatter one: square)
+const SKEW_MIN_UY: f64 = 0.3;
+
+/// (627) Each structure interval end of the strokes with a skewed end (x, y, dx, dy: its point and end line, the
+/// hand-over's skew.rs decision) within SKEW_MATCH_M takes a skewed end row (Stroke.skews), unless its span would reach
+/// another event of the stroke (a cut-back, a lane's start or end, another support change, a snap): (set, dropped).
+pub fn set_skews(net: &mut Net, skews: &[[f64; 4]]) -> (usize, usize) {
+    let (mut set, mut dropped) = (0, 0);
+    if skews.is_empty() { return (0, 0); }
+    let mut off = Vec::new();
+    for si in 0..net.strokes.len() {
+        let st = &net.strokes[si];
+        if st.absorbed { continue; }
+        let mut bounds: Vec<f64> = Vec::new();
+        for u in &st.sup {
+            if u.kind != SUP_STRUCT { continue; }
+            for b in [u.s0, u.s1] { if b > 1e-6 && b < st.len() - 1e-6 { bounds.push(b); } }
+        }
+        let mut found: Vec<(f64, f64)> = Vec::new();
+        for &b in &bounds {
+            let (p, t) = st.line.at(b);
+            let Some(k) = skews.iter().filter(|q| norm(sub([q[0], q[1]], p)) <= SKEW_MATCH_M)
+                .min_by(|x, y| norm(sub([x[0], x[1]], p)).partial_cmp(&norm(sub([y[0], y[1]], p))).unwrap()) else { continue };
+            let n = [-t[1], t[0]];
+            let d = [k[2], k[3]];
+            let (ux, uy) = (dot(d, t), dot(d, n));
+            if absf(uy) < SKEW_MIN_UY { dropped += 1; continue; }
+            let sk = ux / uy;
+            st.offsets(b, &mut off);
+            let w = off.iter().fold(0.0f64, |m, &x| m.max(absf(x)));
+            let (a0, a1) = (b - absf(sk) * w - part::SKEW_GAP_M, b + absf(sk) * w + part::SKEW_GAP_M);
+            let clash = a0 <= st.cut0 || a1 >= st.len() - st.cut1
+                || st.sup.iter().any(|u| [u.s0, u.s1].iter().any(|&x| absf(x - b) > 1e-6 && x > a0 && x < a1))
+                || st.slots.iter().any(|sl| [sl.alive.0, sl.alive.1].iter().any(|&x| x.is_finite() && x > a0 && x < a1))
+                || st.stations.iter().any(|&x| absf(x - b) > 1e-6 && x > a0 && x < a1)
+                || (st.snap0.is_some() && a0 < st.cut0 + 20.0) || (st.snap1.is_some() && a1 > st.len() - st.cut1 - 20.0);
+            if clash { dropped += 1; continue; }
+            found.push((b, sk));
+        }
+        set += found.len();
+        net.strokes[si].skews = found;
+    }
+    (set, dropped)
+}
+
+/// build, the structure ends of `skews` (set_skews) cut along their end lines.
+pub fn build_skewed(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64>, lines: &[DeckLine], opts: Opts,
+                    skews: &[[f64; 4]]) -> Decks {
     let t0 = crate::cpu_now();
     let order: Vec<usize> = (0..place.segs.len()).collect();
     let opts = Opts { flat_struct: true, ..opts };
     let mut net = net::build_opts(place, &order, opts);
     let lay = part::layout(&mut net);
+    let (skews_set, skews_dropped) = set_skews(&mut net, skews);
     let plan = prof::plan(&net, None);
     let bxf = bbox_of(&quad);
     let d = product::delivered(&net, bxf);
@@ -583,7 +639,8 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
             let mut d = COVER_OUT_M + TWIN_STEP_M;
             while d <= w + 1e-9 {
                 kgrid.heights(&m.v, &m.t, add(mid, scale(rn[e], d)), &mut hs2);
-                if hs2.iter().any(|&(_t, z)| absf(z - zm) <= COVER_DZ_M) { return (d - TWIN_STEP_M).max(STRIP_W.min(w)); }
+                // (to the middle of the gap: the deck across widens or fills its half the same way, never over this one's)
+                if hs2.iter().any(|&(_t, z)| absf(z - zm) <= COVER_DZ_M) { return (d * 0.5).max(STRIP_W.min(w)); }
                 d += TWIN_STEP_M;
             }
             w
@@ -606,6 +663,36 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
             };
             nrm.push(n);
             wv.push(w / c);
+        }
+        // (M5: a twin's median fill to the middle of the gap measured at each vertex along its own normal, refined to
+        // MEDIAN_TOL_M (the per-edge gaps and the miter left the two halves overlapping by decimetres where the twins
+        // are not quite parallel: 46 m2 of coplanar double owners at 973d))
+        for i in 0..k {
+            let (prev, next) = if *closed { (Some((i + nseg - 1) % nseg), Some(i % nseg)) } else {
+                (if i > 0 { Some(i - 1) } else { None }, if i < nseg { Some(i) } else { None })
+            };
+            let med = prev.map(|a| gaps[a] > 0.0).unwrap_or(false) || next.map(|b| gaps[b] > 0.0).unwrap_or(false);
+            if !med { continue; }
+            let gmax = prev.map(|a| gaps[a]).unwrap_or(0.0).max(next.map(|b| gaps[b]).unwrap_or(0.0));
+            let zi = m.v[ch[i] as usize][2] as f64 / 1000.0;
+            let mut hs3: Vec<(u32, f64)> = Vec::new();
+            let hit = |d: f64, hs3: &mut Vec<(u32, f64)>| -> bool {
+                kgrid.heights(&m.v, &m.t, add(p[i], scale(nrm[i], d)), hs3);
+                hs3.iter().any(|&(_t, z)| absf(z - zi) <= TWIN_DZ_M)
+            };
+            let (mut lo, mut hi) = (COVER_OUT_M, f64::NAN);
+            let mut d = COVER_OUT_M + TWIN_STEP_M;
+            while d <= gmax * 1.1 + TWIN_STEP_M {
+                if hit(d, &mut hs3) { hi = d; break; }
+                lo = d;
+                d += TWIN_STEP_M;
+            }
+            if !hi.is_finite() { continue; }
+            while hi - lo > MEDIAN_TOL_M {
+                let mid = 0.5 * (lo + hi);
+                if hit(mid, &mut hs3) { hi = mid; } else { lo = mid; }
+            }
+            wv[i] = wv[i].min(0.5 * (lo + hi) * 0.5);
         }
         let inner: Vec<u32> = ch.iter().map(|&i| vid(i, &mut out)).collect();
         let mut outer: Vec<u32> = Vec::with_capacity(k);
@@ -663,8 +750,8 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
     out.fallback = fallback.into_iter().collect();
     let t4 = crate::cpu_now();
     out.json = format!(
-        "{{\"strokes\":{},\"delivered\":{},\"knots_fixed\":{},\"blends\":{},\"blend_max_mm\":{:.1},\"faces\":{},\"dropped\":{},\"fallback\":{},\"runs\":{},\"twin_m\":{:.1},\"strip_tris\":{},\"marks\":{},\"cpu_ms\":{{\"profile\":{:.3},\"heights\":{:.3},\"surface\":{:.3},\"decks\":{:.3},\"total\":{:.3}}}}}",
-        ns, d.iter().filter(|&&x| x).count(), knots_fixed, blends, blend_max_mm, kept.len(), dropped, out.fallback.len(), out.runs.len(), twin_m, strip_tris, out.mt.len(),
+        "{{\"strokes\":{},\"skews\":{},\"skews_dropped\":{},\"rail_floors\":{},\"delivered\":{},\"knots_fixed\":{},\"blends\":{},\"blend_max_mm\":{:.1},\"faces\":{},\"dropped\":{},\"fallback\":{},\"runs\":{},\"twin_m\":{:.1},\"strip_tris\":{},\"marks\":{},\"cpu_ms\":{{\"profile\":{:.3},\"heights\":{:.3},\"surface\":{:.3},\"decks\":{:.3},\"total\":{:.3}}}}}",
+        ns, skews_set, skews_dropped, net.rail_floors.len(), d.iter().filter(|&&x| x).count(), knots_fixed, blends, blend_max_mm, kept.len(), dropped, out.fallback.len(), out.runs.len(), twin_m, strip_tris, out.mt.len(),
         (t1 - t0) * 1e3, (t2 - t1) * 1e3, (t3 - t2) * 1e3, (t4 - t3) * 1e3, (t4 - t0) * 1e3);
     out
 }
@@ -672,9 +759,15 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
 /// The decks' whole input as one file (the CLI's `roadsys decks IN` builds it again, on Linux and on Windows, for the
 /// byte comparison): the place, quad and cut (io::write_tile, its ground the heights asked, in order) and the lines.
 pub fn encode_input(place: &Place, quad: [[f64; 2]; 4], cut: (f64, f64), ground: &[f64], lines: &[DeckLine], areas_on: bool) -> Vec<u8> {
+    encode_input_skewed(place, quad, cut, ground, lines, areas_on, &[])
+}
+
+/// encode_input with the skewed ends ("RSDECK02" when there are any, after the lines: their count and x y dx dy).
+pub fn encode_input_skewed(place: &Place, quad: [[f64; 2]; 4], cut: (f64, f64), ground: &[f64], lines: &[DeckLine], areas_on: bool,
+                           skews: &[[f64; 4]]) -> Vec<u8> {
     let t = crate::io::TileInput { place: place.clone(), quad, id: (0, 0), frame: 0, cut, ground: ground.to_vec(), areas_on };
     let tb = crate::io::write_tile(&t);
-    let mut b = b"RSDECK01".to_vec();
+    let mut b = if skews.is_empty() { b"RSDECK01".to_vec() } else { b"RSDECK02".to_vec() };
     b.extend_from_slice(&(tb.len() as u64).to_le_bytes());
     b.extend_from_slice(&tb);
     b.extend_from_slice(&(lines.len() as u64).to_le_bytes());
@@ -684,6 +777,10 @@ pub fn encode_input(place: &Place, quad: [[f64; 2]; 4], cut: (f64, f64), ground:
         b.extend_from_slice(&(l.p.len() as u64).to_le_bytes());
         for q in &l.p { for v in q { b.extend_from_slice(&v.to_bits().to_le_bytes()); } }
     }
+    if !skews.is_empty() {
+        b.extend_from_slice(&(skews.len() as u64).to_le_bytes());
+        for k in skews { for v in k { b.extend_from_slice(&v.to_bits().to_le_bytes()); } }
+    }
     b
 }
 
@@ -691,7 +788,8 @@ pub fn encode_input(place: &Place, quad: [[f64; 2]; 4], cut: (f64, f64), ground:
 pub fn run_input(b: &[u8]) -> Result<(Vec<u8>, Decks), String> {
     let bad = || "not a roadsys decks input".to_string();
     let u64_at = |i: usize| -> Result<u64, String> { Ok(u64::from_le_bytes(b.get(i..i + 8).ok_or_else(bad)?.try_into().unwrap())) };
-    if b.len() < 16 || &b[..8] != b"RSDECK01" { return Err(bad()); }
+    if b.len() < 16 || (&b[..8] != b"RSDECK01" && &b[..8] != b"RSDECK02") { return Err(bad()); }
+    let with_skews = &b[..8] == b"RSDECK02";
     let n = u64_at(8)? as usize;
     let t = crate::io::read_tile(b.get(16..16 + n).ok_or_else(bad)?)?;
     let mut i = 16 + n;
@@ -713,6 +811,16 @@ pub fn run_input(b: &[u8]) -> Result<(Vec<u8>, Decks), String> {
         }
         lines.push(DeckLine { feat, p });
     }
+    let mut skews: Vec<[f64; 4]> = Vec::new();
+    if with_skews {
+        let ns = u64_at(i)? as usize;
+        i += 8;
+        for _ in 0..ns.min(1 << 20) {
+            let mut q = [0.0; 4];
+            for c in 0..4 { q[c] = f64::from_bits(u64_at(i)?); i += 8; }
+            skews.push(q);
+        }
+    }
     let at = std::cell::Cell::new(0usize);
     let g = |pts: &[P2]| -> Vec<f64> {
         let k = at.get();
@@ -720,7 +828,7 @@ pub fn run_input(b: &[u8]) -> Result<(Vec<u8>, Decks), String> {
         at.set(k + pts.len());
         v
     };
-    let o = build(&t.place, t.quad, &g, &lines, Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, areas: t.areas_on, ..Default::default() });
+    let o = build_skewed(&t.place, t.quad, &g, &lines, Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, areas: t.areas_on, ..Default::default() }, &skews);
     Ok((output_bytes(&o), o))
 }
 
@@ -787,6 +895,27 @@ mod tests {
             assert!(len > 70.0 && len < 90.0, "{len}");
             assert!(r.p.iter().all(|q| absf(q[1]) > 3.0));
         }
+    }
+
+    /// (627) A skewed end (the hand-over's decision at x = -40, its end line at 60 degrees): the deck's end edge runs
+    /// along it, the top's corners at -40 -/+ (half width) * cot 60 deg; the square end stays square; the input file
+    /// (RSDECK02) builds it again.
+    #[test]
+    fn a_skewed_end_row_follows_its_end_line() {
+        let sk = [[-40.0, 0.0, 0.5, 0.8660254037844386]];
+        let o = build_skewed(&place(false), Q, &g, &lines(), Opts::default(), &sk);
+        assert!(o.json.contains("\"skews\":1"), "{}", o.json);
+        let tops: Vec<[f64; 3]> = o.t.iter().zip(o.kind.iter()).filter(|(_, &k)| k < K_STRIP)
+            .flat_map(|(t, _)| t.iter().map(|&i| o.v[i as usize])).collect();
+        let xmin_at = |y: f64| tops.iter().filter(|p| absf(p[1] - y) < 0.01).map(|p| p[0]).fold(f64::INFINITY, f64::min);
+        let (yl, yr) = (tops.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max), tops.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min));
+        let k = 0.5 / 0.8660254037844386;
+        assert!(absf(xmin_at(yl) - (-40.0 + yl * k)) < 0.02, "{} {}", xmin_at(yl), -40.0 + yl * k);
+        assert!(absf(xmin_at(yr) - (-40.0 + yr * k)) < 0.02, "{} {}", xmin_at(yr), -40.0 + yr * k);
+        let xmax_at = |y: f64| tops.iter().filter(|p| absf(p[1] - y) < 0.01).map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+        assert!(absf(xmax_at(yl) - xmax_at(yr)) < 0.02);
+        let file = encode_input_skewed(&place(false), Q, (4000.0, 2000.0), &[], &lines(), false, &sk);
+        assert_eq!(&file[..8], b"RSDECK02");
     }
 
     #[test]

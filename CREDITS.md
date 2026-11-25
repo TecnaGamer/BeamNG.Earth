@@ -271,6 +271,28 @@ weather). The pause-menu integration follows the pattern of the TAA Standalone m
   their agency badges are simple drawn shapes (no NPS arrowhead or Forest Service shield). Names come from the map
   data (Overture Maps, © OpenStreetMap contributors, ODbL).
 
+## Weather sounds (bundled, weather phase B)
+
+Thunder and rain recordings from Freesound.org, each under **Creative Commons 0** (public domain dedication, checked
+on each sound's own page 2026-11-25; no credit required, given anyway). Shipped as trimmed, looped and normalised Ogg
+Vorbis files in `mod/beamng_earth/levels/beamng_earth/art/sound/weather/`; every file's source page, direct URL,
+original name, sha256 and processing are in `SOURCES.md` there.
+
+- Thunder clap: "Thunder Clap" by DaniloSFX, https://freesound.org/s/672776/ (CC0)
+- Thunder clap: "Thunder Clap OWB KY 441x16.wav" by Dave Welsh, https://freesound.org/s/194364/ (CC0)
+- Thunder strike: "Heavy Thunder Strike - no Rain - QUADRO.wav" by BlueDelta, https://freesound.org/s/446753/ (CC0)
+- Distant thunder: "230405 Thunder DRY rolling distant low rumbles" and "230823 Thunder, dry distant rolling" by TRP,
+  https://freesound.org/s/717845/ and https://freesound.org/s/717890/ (CC0)
+- Rolling thunder: "thunder-rolling-170315_0057" by Gerent, https://freesound.org/s/558748/ (CC0)
+- Very close strikes: "Very close lightning strike." by Simon Spiers, https://freesound.org/s/437243/ (CC0), and "Zoom H4n -
+  Super Close Lightning Strike and Thunderstorm" by danielmcadams, https://freesound.org/s/483684/ (CC0)
+- Rain: "Rain light 1 (rural)" and "Rain heavy 1 (rural)" by jmbphilmes, https://freesound.org/s/200271/ and
+  https://freesound.org/s/200270/ (CC0); the muffled rain under roofs is derived from the latter
+- Rain in a car: "Ambiance_Rain_Inside_Car_Close_Roof_Loop_Stereo.wav" by Nox_Sound, https://freesound.org/s/535870/ (CC0)
+
+The lightning bolts, the cloud glow and the rain streak textures and meshes are original (tools/make_weather_assets.py,
+MIT).
+
 ## Dynamic cliffs
 
 | Set | Source and redistribution information |

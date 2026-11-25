@@ -1165,6 +1165,21 @@
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bare/bne_twig_poplar_02_o.data.webp",
    "format": "BC4",
    "role": "data"
+  },
+  "levels/beamng_earth/art/weather/bngEarth_bolt.data.dds": {
+   "source": "levels/beamng_earth/art/weather/bngEarth_bolt.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/weather/bngEarth_flashglow.data.dds": {
+   "source": "levels/beamng_earth/art/weather/bngEarth_flashglow.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/weather/bngEarth_rainstreak.data.dds": {
+   "source": "levels/beamng_earth/art/weather/bngEarth_rainstreak.data.webp",
+   "format": "BC4",
+   "role": "data"
   }
  }
 }

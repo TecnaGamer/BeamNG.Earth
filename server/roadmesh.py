@@ -301,7 +301,11 @@ def ribbons(chunks, keep_none=False):
             if b - a < 2:
                 continue
             c = chunks[k]
-            out[k] = (L[a:b], R[a:b], _ribbon_v(S[a:b], c), c["m"], layer_of(c),
+            le, ri = L[a:b], R[a:b]
+            if c.get("rs_sk0") is not None or c.get("rs_sk1") is not None:
+                # (BNE_ROADSYS=surface, 627: a ground road's end at a skewed deck end cut along its end line)
+                le, ri = skew_ends((le + ri) * 0.5, (le - ri) * 0.5, c.get("rs_sk0"), c.get("rs_sk1"))
+            out[k] = (le, ri, _ribbon_v(S[a:b], c), c["m"], layer_of(c),
                       Z[a:b] if c.get("fixed") else None)
             LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
     return out if keep_none else [r for r in out if r is not None]
@@ -2210,7 +2214,10 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
             nv += len(bp)
     for c in faces:
         pp = np.column_stack((c["xy"], c["deck_z"]))
-        slab = DECK_DEPTH * c["deck_depth"] / (DECK_DEPTH + GIRDER_D)
+        # (BNE_ROADSYS=surface, M5: the structure's whole depth, its floors' (the user 2026-11-24: the underside where the
+        # clearance assumed it, "some bridges are thicker than others"); the girder kits will split it into slab and
+        # girders. M4 drew the slab's share alone: the underside 1 m over the depth the floors kept)
+        slab = float(c["deck_depth"]) if c.get("rs_face") else DECK_DEPTH * c["deck_depth"] / (DECK_DEPTH + GIRDER_D)
         tops.setdefault(round(slab, 3), []).append(len(P))
         P.append(pp - origin)
         UV.append(pp[:, :2] / DECK_TOP_TILE_M)

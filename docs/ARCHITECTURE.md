@@ -698,6 +698,24 @@ in 2026-10-10-weather-probe-results.md.
   `duskDark` (wxtraffic.lua wraps the stock traffic class's checkTimeOfDay inside its onTrafficTick only;
   speeding.lua; nightlights.lua). BeamMP: `G.WEATHER = 'real-host'` relays the longest-joined player's real
   weather (`bngeWeather`, checked on both sides: `G.weatherMsg`, `sanitizeMsg`).
+- **Weather phase B** (same plan, items 6 / 8 / 9 / 10 and the rain sound): `weather.lua`'s targets gain `thunder`
+  (`thunderOf` -> `storm.thunderClass`: ICON-D2 lightning potential `lpi`, WMO code 95 / 96 / 99, CAPE with rain; the
+  server's message carries `capeJkg` and `lpi`), `gloom` and `rainMmH`. Storm light: `gloomFor` -> `stormEV` written to
+  the stock HDR's `PostEffectLocalExposureObject.exposureBiasEV` over the player's `GraphicEVCompensation` (the auto
+  exposure keeps a biased target; the engine's EV is higher = darker, so the bias goes UP for a storm: measured in the
+  broker shots, a -1.6 bias brightened the picture), the sun's brightness times `1 - GLOOM_SUN * gloom`; put back like
+  the sun. `phaseB` (every frame, each part only while active): `rainstreaks.lua` (off by default; one TSStatic, one
+  open cylinder `bne_rain_shell1.cdae` or three `bne_rain_shell.cdae`, scrolling streak opacity, instance opacity =
+  rain share x shelter, leaning by wind minus camera speed; Deck cost ~1.5 / ~4.3 ms), `storm.lua` (strikes =
+  hash(cell 0.1 deg, slot 10 s UTC) so all players agree with no messages; flash = a PointLight near the camera with the
+  strike's illuminance there (far lights are culled), a lit veil of air (`bne_flashveil.cdae`), an emissive glow quad and
+  a bolt quad drawn at a stand-in distance inside the fog (`proxyDistance`: storm fog hid them at their real distance);
+  thunder by `Engine.Audio.playOnce` after d / 343 m/s; objects never named like a material), `wetlook.lua` (material
+  classes by name and words; wetness from W1's `beamngEarth/winter` road row or its own wet/dry model; batches of
+  setField + flush + reload only on a level change). City carriageways are terrain and stay dry-looking (block-commit
+  or terrain-shader route later). `ambience.lua`: rain layers (`rainWeights`, `rainMix`) on SFXEmitters with
+  our own files. Optional `NEAR_FADE`: a ShaderData of our own (`shaders/beamngEarth/precipNearV.hlsl`) named in the
+  precipitation datablocks. Assets: `tools/make_weather_assets.py`; sounds: CC0, `art/sound/weather/SOURCES.md`.
 ## Dev tools and the pause-menu settings page (docs/DEVTOOLS.md; built offline 2026-10-10)
 - `dev.lua` (extension `beamngEarth_dev`): in-world overlays (per-tile LOD tint, tile outlines by
   state, loading heat with the next imports numbered, physics block squares, rings, under-car
