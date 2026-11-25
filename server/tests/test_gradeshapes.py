@@ -1047,3 +1047,20 @@ def test_piece_system_measures_the_seeds_by_one_call_what_it_measured_a_point_pa
         found = [Sys(x.sysm["seeds"]) for x in found]
         for cid in ("deck:w0", "deck:w3", "deck:nowhere"):
             assert owner.piece_system(cur, piece, nxt, found, cid) is old(cur, piece, nxt, found, cid), (trial, cid)
+
+
+def test_a_ramp_lands_on_a_line_the_road_can_drive_where_the_ground_rises_off_its_start():
+    # a deck's end in a trench: the ground 0.2 m under the deck at its end, 6 m over it a few metres on and level from
+    # there (a cut: mirrored). The ramp meets the ground at once, and its landing curve was laid onto a line of the
+    # ground's steepest grade over those samples, 0.6 and more, 0.5 rad |g2 - g1| long: a floor 40 m over level ground
+    # (A61's motorways, 235-247 m on ground of 199). An embankment stays under the ground it lands on, a cut over it
+    rad, g = 934.0, 0.065
+    d = np.arange(0.0, 400.0, ix.STEP_M)
+    for sign, z0, start, level in ((1.0, 191.2, 191.0, 197.0), (-1.0, 202.8, 203.0, 197.0)):
+        ground = np.where(d < 8.0, start, level)
+        z, k = ix.ramp(z0, 0.0, sign, g, rad, d, ground)
+        assert k > 1
+        if sign > 0:
+            assert (z[:k] <= np.maximum(ground[:k], z0) + 0.01).all(), (sign, z[:k], ground[:k])
+        else:
+            assert (z[:k] >= np.minimum(ground[:k], z0) - 0.01).all(), (sign, z[:k], ground[:k])
