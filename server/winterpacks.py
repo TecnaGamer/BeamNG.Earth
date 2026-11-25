@@ -227,7 +227,9 @@ class Pack:
             try:
                 if os.path.getsize(path) == size:
                     with open(path, "rb") as fh:
-                        return fh.read()
+                        body = fh.read()
+                    if hashlib.sha256(body).hexdigest() == sha:    # (a damaged copy is fetched again)
+                        return body
             except OSError:
                 pass
         with self.lock:
