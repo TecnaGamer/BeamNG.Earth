@@ -81,8 +81,8 @@ near(W.fogSigmaFor({ visM = 300, rainMmH = 1 }), W.fogSigma(300), 1e-15, 'thick 
 near(W.fogSigmaFor({ visM = 100 }, 500), W.FOG_K / 500, 1e-15, 'the fog cap: at most the limit\'s')
 near(W.fogSigmaFor({ visM = 100 }, 0), W.fogSigma(100), 1e-15, 'no cap')
 -- grey fog, flakes, shelter, the precipitation owner, pools
-check(W.fogGreyFor(0, 0, 0, false) == 0 and W.fogGreyFor(4, 0, 0) == 1 and W.fogGreyFor(0, 1, 0) == 1, 'grey: rain, snow')
-near(W.fogGreyFor(0.5, 0, 0), 0.25, 1e-12, 'grey: light rain partly')
+check(W.fogGreyFor(0, 0, 0, false) == 0 and W.fogGreyFor(W.FOG_GREY_RAIN_MMH, 0, 0) == 1 and W.fogGreyFor(0, 1, 0) == 1, 'grey: rain, snow')
+near(W.fogGreyFor(0.5, 0, 0), 0.5 / W.FOG_GREY_RAIN_MMH, 1e-12, 'grey: light rain partly')
 near(W.fogGreyFor(0, 0, 1), W.FOG_GREY_DECK, 1e-12, 'grey: an overcast deck')
 near(W.fogGreyFor(0, 0, 0, true), W.FOG_GREY_FOG, 1e-12, 'grey: fog')
 check(W.flakeKind(0) == 'wet' and W.flakeKind(-4) == 'snow' and W.flakeKind(-12) == 'dry' and W.flakeKind(20, true) == 'hail',

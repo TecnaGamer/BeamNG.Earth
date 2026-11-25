@@ -128,7 +128,9 @@ M.RAIN_SIGMA_K, M.RAIN_SIGMA_P = 0.33, 0.67
 M.SNOW_SIGMA_K, M.SNOW_SIGMA_P = 3.9, 0.8
 -- Grey fog (the "sandstorm" look: the lit fog takes the low sun's colour, the LA storm shots of the study): how grey
 -- the fog is, 0..1, from the rain (FOG_GREY_RAIN_MMH gives 1), the snow, the fog codes and an overcast deck.
-M.FOG_GREY_RAIN_MMH, M.FOG_GREY_SNOW_CMH, M.FOG_GREY_DECK, M.FOG_GREY_FOG = 2, 0.5, 0.25, 0.8
+-- (rain: full grey at FOG_GREY_RAIN_MMH; 2 gave light rain the storm's thick milky haze, unlike the camera-matched street
+-- photos of 1-2 mm/h rain, where only buildings 300-500 m off fade: phase B, wb11)
+M.FOG_GREY_RAIN_MMH, M.FOG_GREY_SNOW_CMH, M.FOG_GREY_DECK, M.FOG_GREY_FOG = 6, 0.5, 0.25, 0.8
 -- The fog cap (the settings' "Thickest fog"; players found real fog too thick, the plan's B11): the least visibility
 -- in m, 0 = none (the real fog down to FOG_VIS_MIN)
 M.FOG_LIMIT_M = 0
