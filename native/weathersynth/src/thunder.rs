@@ -2,19 +2,21 @@
 //!
 //! 1. A random tortuous channel: a cloud-to-ground stroke from the ground point up into the cloud, built from macro
 //!    segments (median 25 m, direction change ~16 degrees, Hill 1968) made of short meso steps (median 2.5 m, small
-//!    jitter); downward branches; horizontal in-cloud channels; 1-5 return strokes down the same channel 20-200 ms apart.
+//!    jitter) and fractal micro-tortuosity down to 6 cm; downward branches; horizontal in-cloud channels; 1-5 return
+//!    strokes 20-200 ms apart down the same channel moved by the wind (each its own small-scale shape).
 //! 2. Every 0.5 m piece of channel radiates an N-wave (a +1 to -1 linear ramp between two shocks). Its length follows
-//!    Few's relaxation radius R0: the dominant frequency 0.63 c / R0 at 1 km, shorter nearer and longer farther (weak
-//!    shock lengthening, ~sqrt(ln r)); the amplitude falls as 1/r times the matching weak-shock factor.
+//!    Few's relaxation radius R0 (0.8-2.2 m, varied +/-25 % along the channel): the dominant frequency 0.63 c / R0 at
+//!    1 km, shorter nearer and longer farther (weak-shock lengthening, ~sqrt(ln r)); the amplitude falls as 1/r times
+//!    the matching weak-shock factor. An empirical +10 dB/oct source tilt above 150 Hz (see TILT_F).
 //! 3. The pieces are summed with their propagation delay (r / c): a piece spreads its weight over the arrival times of
 //!    its two ends, so a segment seen side-on arrives all at once (a clap) and one seen end-on is smeared (a rumble).
-//!    A ground reflection (image observer, coefficient 0.85) arrives a few ms after each piece.
+//!    A ground reflection (image observer, 0.85 falling above 800 Hz: soft ground) arrives a few ms after each piece.
 //! 4. Pieces are grouped by distance (1 % bins). Each bin is convolved, in the frequency domain, with its N-wave and its
 //!    air absorption over that distance (ISO 9613-1, 22 C, 85 % humidity) as a minimum-phase filter, so the far bins
 //!    keep only the low rumble and the near bins keep the crack.
 //! 5. Echoes from the surroundings (hills, tree lines, buildings): diffuse clusters of reflections 0.1-7 s late, each
-//!    low-passed by its extra path's absorption.
-//! 6. 25 Hz high-pass, cut from the first arrival, fades, then gain into a true-peak limiter until the loudest 3 s hit
+//!    low-passed by its extra path's absorption, and a diffuse velvet-noise tail (T60 3.5-9 s by class).
+//! 6. 25 Hz high-pass, cut where the sound becomes audible, fades, then gain into a true-peak limiter until the loudest 3 s hit
 //!    the class's loudness.
 
 use crate::dsp::{self, Biquad, C};
@@ -33,10 +35,11 @@ const BIN_W: f64 = 0.01; // relative distance bin width
 /// Empirical source tilt (dB per octave above TILT_F, flat again above 8 kHz). The ideal-N-wave sum is far darker than
 /// recorded thunder (it fits Few's infrasound-capable spectra, peak 50-100 Hz); real shock fronts are spikier
 /// (turbulence, the near-source shock shape) and every recording chain rolls off the lowest octaves. Calibrated so
-/// close and strike renders sit in the recorded files' spectral balance. WEATHERSYNTH_TILT overrides it (testing).
+/// close and strike renders sit in the recorded files' spectral balance (10 dB/oct with micro-tortuosity 0.06: centroid
+/// ~200-450 Hz at 1 km, recordings 336-644 Hz). WEATHERSYNTH_TILT overrides it (testing).
 const TILT_F: f64 = 150.0;
 fn tilt_db_oct() -> f64 {
-    std::env::var("WEATHERSYNTH_TILT").ok().and_then(|v| v.parse().ok()).unwrap_or(8.0)
+    std::env::var("WEATHERSYNTH_TILT").ok().and_then(|v| v.parse().ok()).unwrap_or(10.0)
 }
 fn tilt_gain(f: f64, db_oct: f64) -> f64 {
     let x = f.min(8000.0) / TILT_F;
@@ -59,6 +62,8 @@ pub struct Class {
     pub excess: f64,
     pub fade_in_s: f64,
     pub fade_out_s: f64,
+    /// the diffuse tail's reverberation time range (s)
+    pub t60: (f64, f64),
 }
 
 pub fn class(name: &str) -> Option<Class> {
@@ -69,13 +74,14 @@ pub fn class(name: &str) -> Option<Class> {
             d_max: 280.0,
             length_s: 14.0,
             target_lufs: -9.5,
-            ceil_db: -0.6,
+            ceil_db: -1.3,
             attack_s: 0.004,
             release_s: 0.2,
             echo: 0.55,
             excess: 0.0,
             fade_in_s: 0.003,
             fade_out_s: 4.0,
+            t60: (3.5, 5.5),
         },
         "close" => Class {
             name: "close",
@@ -83,13 +89,14 @@ pub fn class(name: &str) -> Option<Class> {
             d_max: 1400.0,
             length_s: 14.0,
             target_lufs: -14.0,
-            ceil_db: -1.2,
+            ceil_db: -1.6,
             attack_s: 0.002,
             release_s: 0.08,
             echo: 0.5,
             excess: 0.0,
             fade_in_s: 0.01,
             fade_out_s: 3.5,
+            t60: (4.0, 6.0),
         },
         "mid" => Class {
             name: "mid",
@@ -97,13 +104,14 @@ pub fn class(name: &str) -> Option<Class> {
             d_max: 5000.0,
             length_s: 15.0,
             target_lufs: -18.0,
-            ceil_db: -1.2,
+            ceil_db: -1.6,
             attack_s: 0.002,
             release_s: 0.08,
-            echo: 0.35,
+            echo: 0.45,
             excess: 0.15,
             fade_in_s: 0.05,
             fade_out_s: 3.5,
+            t60: (5.0, 8.0),
         },
         "far" => Class {
             name: "far",
@@ -111,13 +119,14 @@ pub fn class(name: &str) -> Option<Class> {
             d_max: 12000.0,
             length_s: 15.0,
             target_lufs: -22.0,
-            ceil_db: -1.2,
+            ceil_db: -1.6,
             attack_s: 0.002,
             release_s: 0.08,
-            echo: 0.25,
+            echo: 0.45,
             excess: 0.2,
             fade_in_s: 0.2,
             fade_out_s: 3.5,
+            t60: (6.0, 9.0),
         },
         _ => return None,
     };
@@ -225,10 +234,14 @@ struct Geometry {
 }
 
 /// Micro-tortuosity: recursive midpoint displacement of every meso step down to pieces of `MICRO_MIN` metres (the
-/// channel is tortuous on every scale). Without it each straight step adds up coherently and smears its own shocks,
-/// and the thunder loses everything above a few hundred Hz.
+/// channel is tortuous on every scale), each midpoint moved by `micro_sigma` x the piece's length across it. Without
+/// it each straight step adds up coherently and smears its own shocks; much more of it (0.22) blurs the claps that
+/// kinks make (Ribner & Roy) into a smooth roll.
 const MICRO_MIN: f64 = 0.06;
-const MICRO_SIGMA: f64 = 0.22;
+fn micro_sigma() -> f64 {
+    // WEATHERSYNTH_MICRO overrides it (testing)
+    std::env::var("WEATHERSYNTH_MICRO").ok().and_then(|v| v.parse().ok()).unwrap_or(0.06)
+}
 
 fn fractalise(rng: &mut Rng, pts: &[V3]) -> Vec<V3> {
     fn rec(rng: &mut Rng, a: V3, b: V3, out: &mut Vec<V3>) {
@@ -242,7 +255,7 @@ fn fractalise(rng: &mut Rng, pts: &[V3]) -> Vec<V3> {
         let helper = if dir[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
         let u = norm(cross(dir, helper));
         let v = cross(dir, u);
-        let s = MICRO_SIGMA * l;
+        let s = micro_sigma() * l;
         let mid = add(sc(add(a, b), 0.5), add(sc(u, s * rng.normal()), sc(v, s * rng.normal())));
         rec(rng, a, mid, out);
         rec(rng, mid, b, out);
@@ -264,7 +277,7 @@ fn make_channel(seed: u64, cl: &Class) -> Geometry {
     let lean_az = rng.range(0.0, m::TAU);
     let lean = rng.range(0.0, 0.45);
     let up = norm([lean * m::cos(lean_az), lean * m::sin(lean_az), 1.0]);
-    let r0 = rng.range(1.0, 3.0);
+    let r0 = rng.range(0.8, 2.2);
     let mut micro = Rng::new(seed, &format!("thunder-micro-{}", cl.name));
     let meso = walk(&mut rng, ground, up, up, 0.35, 20000.0, &|p: V3| p[2] >= top);
     let main = fractalise(&mut micro, &meso);
@@ -566,12 +579,12 @@ fn add_echoes(x: &[f64], seed: u64, cl: &Class) -> Vec<f64> {
 }
 
 /// Diffuse tail: the roll's scattering off terrain, forest and buildings, as a decaying velvet-noise impulse response
-/// (600 taps/s, T60 3.5-6 s) that darkens with its delay (each 0.2 s piece low-passed for its path's air absorption).
+/// (600 taps/s, T60 3.5-9 s by class) that darkens with its delay (each 0.2 s piece low-passed for its path's air absorption).
 /// Its energy relative to the direct sound is `echo` squared.
 fn add_reverb(x: &[f64], seed: u64, cl: &Class) -> Vec<f64> {
     let mut rng = Rng::new(seed, &format!("thunder-reverb-{}", cl.name));
-    let t60 = rng.range(3.5, 6.0);
-    let n = ((t60 * 1.2).min(8.0) * FS) as usize;
+    let t60 = rng.range(cl.t60.0, cl.t60.1);
+    let n = ((t60 * 1.2).min(10.0) * FS) as usize;
     let mut h = vec![0.0; n];
     let cell = FS / 600.0;
     let mut c = 0.03 * FS;

@@ -61,11 +61,6 @@ impl Rng {
         median * m::exp(sigma * self.normal())
     }
 
-    /// Exponential with the given mean.
-    pub fn exp(&mut self, mean: f64) -> f64 {
-        -mean * m::ln(1.0 - self.f())
-    }
-
     /// Poisson count (Knuth for small means, normal approximation above 50).
     pub fn poisson(&mut self, mean: f64) -> usize {
         if mean <= 0.0 {

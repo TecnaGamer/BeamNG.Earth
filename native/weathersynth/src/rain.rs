@@ -12,10 +12,12 @@
 //!   drips (big drops off the leaves, ~1 % of leaf hits by water balance) onto the ground or into puddles.
 //! Amplitude ~ D^1.5 v / r. Far rings are thinned (each rendered drop stands for k real ones at sqrt(k) amplitude, the
 //! same energy) and low-passed by distance (ground and obstacle scattering, ISO 9613-1 air absorption).
-//! Car roof: the drops excite the roof panel's plate modes (62 Hz up, loss factor 0.04, odd modes radiating most) and
+//! Car roof: the drops excite the roof panel's plate modes (62 Hz up, loss factor 0.04, more on the lowest modes, odd
+//! modes radiating most) and
 //! the windscreen's, heard through the headliner, plus the outside rain through the body. Muffled: the medium rain
 //! through two 900 Hz low-passes, +4 dB (as the mod's derived file).
-//! Everything is written round a circular 20 s buffer, and every filter runs round the loop twice, so the loop has no
+//! Gusts swing the drop rate +/-45 % over seconds (whole periods per loop). Everything is written round a circular 20 s
+//! buffer, and every filter runs round the loop twice, so the loop has no
 //! seam.
 
 use crate::dsp::{self, Biquad};
@@ -81,6 +83,46 @@ impl AirCutoff {
         let i = (x.floor() as usize).min(Self::N - 2);
         let fr = x - i as f64;
         self.tab[i] * (1.0 - fr) + self.tab[i + 1] * fr
+    }
+}
+
+/// Gusts: the drop rate swings slowly (sum of sines with whole periods over the loop, so the loop stays seamless),
+/// relative 1 +/- `depth` at most. `accept(t)` keeps a drop drawn at the peak rate with probability rate(t) / peak.
+struct Gust {
+    parts: Vec<(f64, f64, f64)>, // (cycles per loop, amplitude, phase)
+    peak: f64,
+    mean: f64,
+}
+
+impl Gust {
+    fn new(seed: u64, stream: &str, depth: f64) -> Gust {
+        let mut rng = Rng::new(seed, stream);
+        let mut parts = Vec::new();
+        let mut tot = 0.0;
+        for k in 1..=7 {
+            let a = rng.range(0.3, 1.0) / m::sqrt(k as f64);
+            parts.push((k as f64, a, rng.range(0.0, m::TAU)));
+            tot += a;
+        }
+        for p in parts.iter_mut() {
+            p.1 *= depth / tot;
+        }
+        let mut g = Gust { parts, peak: 1.0, mean: 1.0 };
+        let n = 2000;
+        let v: Vec<f64> = (0..n).map(|i| g.rate(LOOP_S * i as f64 / n as f64)).collect();
+        g.peak = v.iter().cloned().fold(0.0, f64::max);
+        g.mean = v.iter().sum::<f64>() / n as f64;
+        g
+    }
+    fn rate(&self, t: f64) -> f64 {
+        1.0 + self.parts.iter().map(|&(k, a, ph)| a * m::sin(m::TAU * k * t / LOOP_S + ph)).sum::<f64>()
+    }
+    /// Draws needed at the peak rate for `expected` kept drops.
+    fn draws(&self, expected: f64) -> f64 {
+        expected * self.peak / self.mean
+    }
+    fn accept(&self, rng: &mut Rng, t: f64) -> bool {
+        rng.f() * self.peak < self.rate(t)
     }
 }
 
@@ -225,6 +267,7 @@ pub fn outdoor(seed: u64, rate_mm_h: f64, stream: &str) -> Vec<f64> {
     let air = AirCutoff::new();
     // WEATHERSYNTH_ONLY=road|puddle|grass|leaves renders one surface (testing; the random draws stay the same)
     let only = std::env::var("WEATHERSYNTH_ONLY").ok();
+    let gust = Gust::new(seed, "rain-gust", 0.45);
     // (inner, outer radius m, rendered drops per second at most)
     // Far rings are many quiet drops overlapping (thousands per second, each ~5-10 ms long): rendering a few thousand
     // at the same energy already sums to the same smooth wash.
@@ -234,9 +277,12 @@ pub fn outdoor(seed: u64, rate_mm_h: f64, stream: &str) -> Vec<f64> {
         let area = m::PI * (r2 * r2 - r1 * r1);
         let expected: f64 = ds.flux * area;
         let k = (expected / cap).max(1.0);
-        let count = rng.poisson(expected / k * LOOP_S);
+        let count = rng.poisson(gust.draws(expected / k * LOOP_S));
         for _ in 0..count {
             let t = rng.f() * LOOP_S;
+            if !gust.accept(&mut rng, t) {
+                continue;
+            }
             let rho = m::sqrt(rng.range(r1 * r1, r2 * r2));
             let mut u = rng.f();
             let mut surf = Surf::Road;
@@ -341,7 +387,9 @@ fn panel(
     for &(mi, ni, f) in modes.iter() {
         // jitter: the real panel is curved and stiffened
         let f = f * rng.range(0.94, 1.06);
-        let eta_f = eta * (1.0 + f / 2000.0);
+        // The headliner, its glue and the roof bows damp the lowest modes hardest (loss factor ~0.15 at 60 Hz):
+        // lightly damped, the (1,1) mode would ring as a steady drone under thousands of drops a second.
+        let eta_f = eta * (1.0 + f / 2000.0) + 0.12 * m::exp(-f / 250.0);
         let w = m::TAU * f / FS;
         let r = m::exp(-m::PI * f * eta_f / FS);
         let rad = (if mi % 2 == 1 { 1.0 } else { 0.35 }) * (if ni % 2 == 1 { 1.0 } else { 0.35 });
@@ -382,14 +430,21 @@ pub fn roof(seed: u64, rate_mm_h: f64, outside: &[f64]) -> Vec<f64> {
     let mut buf = vec![0.0; n];
     let ds = dsd(rate_mm_h);
     let mut rng = Rng::new(seed, "rain-roof-drops");
-    let mut make = |rng: &mut Rng, area: f64| -> Vec<(usize, f64, f64, f64, f64)> {
-        let cnt = rng.poisson(ds.flux * area * LOOP_S);
+    // the same gusts as the outdoor rain of this seed, so the cabin and the outside swell together
+    let gust = Gust::new(seed, "rain-gust", 0.45);
+    let make = |rng: &mut Rng, area: f64| -> Vec<(usize, f64, f64, f64, f64)> {
+        let cnt = rng.poisson(gust.draws(ds.flux * area * LOOP_S));
         let mut v = Vec::with_capacity(cnt);
         for _ in 0..cnt {
             let d = ds.sample(rng);
             let vt = terminal_v(d);
             let mass = 1000.0 * m::PI / 6.0 * (d * 1e-3) * (d * 1e-3) * (d * 1e-3);
-            v.push(((rng.f() * LOOP_S * FS) as usize, rng.f(), rng.f(), mass * vt * 1e4, d * 1e-3 / vt));
+            let t = rng.f() * LOOP_S;
+            let (x, y) = (rng.f(), rng.f());
+            if !gust.accept(rng, t) {
+                continue;
+            }
+            v.push(((t * FS) as usize, x, y, mass * vt * 1e4, d * 1e-3 / vt));
         }
         v.sort_by_key(|e| e.0);
         v

@@ -201,21 +201,3 @@ pub fn limiter_gain(env: &[f64], ceil: f64, attack: usize, release_s: f64, fs: f
     }
     g
 }
-
-/// Apply make-up gain and limit to `ceil_db` true peak. For a loop, three copies are limited and the middle one kept.
-pub fn gain_limit(x: &[f64], gain: f64, ceil_db: f64, attack_s: f64, release_s: f64, fs: f64, circular: bool) -> Vec<f64> {
-    let ceil = m::undb(ceil_db);
-    let attack = (attack_s * fs).round() as usize;
-    if circular {
-        let tri: Vec<f64> = x.iter().chain(x.iter()).chain(x.iter()).map(|v| v * gain).collect();
-        let env = tp_envelope(&tri, true);
-        let g = limiter_gain(&env, ceil, attack, release_s, fs);
-        let n = x.len();
-        (0..n).map(|i| tri[n + i] * g[n + i]).collect()
-    } else {
-        let y: Vec<f64> = x.iter().map(|v| v * gain).collect();
-        let env = tp_envelope(&y, false);
-        let g = limiter_gain(&env, ceil, attack, release_s, fs);
-        y.iter().zip(g.iter()).map(|(a, b)| a * b).collect()
-    }
-}

@@ -25,16 +25,24 @@ fn arg(args: &[String], key: &str) -> Option<String> {
     args.iter().position(|a| a == key).and_then(|i| args.get(i + 1).cloned())
 }
 
-fn render_thunder(class: &str, seed: u64) -> Result<(Vec<f64>, String), String> {
-    let cl = thunder::class(class).ok_or(format!("unknown thunder class {class}"))?;
+/// `ceil_shift` (dB, <= 0) lowers the limiter's ceiling (the Ogg check below asks for it).
+fn render_thunder(class: &str, seed: u64, ceil_shift: f64) -> Result<(Vec<f64>, String), String> {
+    let mut cl = thunder::class(class).ok_or(format!("unknown thunder class {class}"))?;
+    cl.ceil_db += ceil_shift;
     let r = thunder::render(seed, &cl);
     Ok((r.signal, r.info))
 }
 
 /// The rain loops. `medium_raw` reuses an outdoor medium render (the muffled and roof loops derive from it).
-fn render_rain(kind: &str, seed: u64, medium_raw: &mut Option<(u64, Vec<f64>)>) -> Result<(Vec<f64>, String), String> {
+fn render_rain(
+    kind: &str,
+    seed: u64,
+    ceil_shift: f64,
+    medium_raw: &mut Option<(u64, Vec<f64>)>,
+) -> Result<(Vec<f64>, String), String> {
     let rate = rain::rate_for(kind).ok_or(format!("unknown rain kind {kind}"))?;
-    let target = rain::LoopTarget { lufs: -20.0, ceil_db: -1.7 };
+    // -2.1 dBTP in the WAV: Vorbis q4 adds up to ~0.5 dB of overshoot, the files then stay under -1.5 dBTP
+    let target = rain::LoopTarget { lufs: -20.0, ceil_db: -2.1 + ceil_shift };
     let mut medium = |seed: u64| -> Vec<f64> {
         if let Some((s, v)) = medium_raw {
             if *s == seed {
@@ -75,6 +83,20 @@ fn encode_ogg(wav: &str, ogg: &str, q: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Decode an Ogg (ffmpeg) and measure its true peak.
+fn ogg_true_peak(ogg: &str, tmp_wav: &str) -> Result<f64, String> {
+    let st = Command::new("ffmpeg")
+        .args(["-y", "-hide_banner", "-loglevel", "error", "-i", ogg, "-ac", "1", "-c:a", "pcm_f32le", tmp_wav])
+        .status()
+        .map_err(|e| format!("ffmpeg: {e}"))?;
+    if !st.success() {
+        return Err(format!("ffmpeg could not decode {ogg}"));
+    }
+    let (x, _) = wav::read(tmp_wav)?;
+    let _ = std::fs::remove_file(tmp_wav);
+    Ok(loudness::true_peak_db(&x, false))
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
@@ -83,9 +105,9 @@ fn run() -> Result<(), String> {
             let seed: u64 = arg(&args, "--seed").unwrap_or("1".into()).parse().map_err(|_| "bad --seed")?;
             let out = arg(&args, "--out").ok_or("--out FILE.wav")?;
             let (sig, info) = if cmd == "thunder" {
-                render_thunder(&arg(&args, "--class").ok_or("--class")?, seed)?
+                render_thunder(&arg(&args, "--class").ok_or("--class")?, seed, 0.0)?
             } else {
-                render_rain(&arg(&args, "--kind").ok_or("--kind")?, seed, &mut None)?
+                render_rain(&arg(&args, "--kind").ok_or("--kind")?, seed, 0.0, &mut None)?
             };
             wav::write_f32(&out, &sig, 44100).map_err(|e| e.to_string())?;
             println!("{out}\t{info}");
@@ -106,18 +128,36 @@ fn run() -> Result<(), String> {
             }
             let mut medium_raw = None;
             for (name, what, sub, seed) in jobs {
-                let (sig, info) = if what == "thunder" {
-                    render_thunder(&sub, seed)?
-                } else {
-                    render_rain(&sub, seed, &mut medium_raw)?
+                // The true-peak targets hold for the Ogg the game plays: Vorbis overshoots the WAV's peaks (more on
+                // bright files), so each Ogg is decoded and measured, and rendered again with a lower ceiling if over.
+                let tp_target = match sub.as_str() {
+                    "strike" => -0.3,
+                    _ if what == "thunder" => -1.0,
+                    _ => -1.5,
                 };
-                let w = format!("{dir}/wav/{name}.wav");
-                wav::write_f32(&w, &sig, 44100).map_err(|e| e.to_string())?;
-                if ogg {
+                let mut shift = 0.0;
+                for attempt in 0..4 {
+                    let (sig, info) = if what == "thunder" {
+                        render_thunder(&sub, seed, shift)?
+                    } else {
+                        render_rain(&sub, seed, shift, &mut medium_raw)?
+                    };
+                    let w = format!("{dir}/wav/{name}.wav");
+                    wav::write_f32(&w, &sig, 44100).map_err(|e| e.to_string())?;
+                    if !ogg {
+                        println!("{name}\t{info}");
+                        break;
+                    }
                     let q = if sub == "strike" { "5" } else { "4" };
-                    encode_ogg(&w, &format!("{dir}/{name}.ogg"), q)?;
+                    let o = format!("{dir}/{name}.ogg");
+                    encode_ogg(&w, &o, q)?;
+                    let tp = ogg_true_peak(&o, &format!("{dir}/wav/{name}.check.wav"))?;
+                    if tp <= tp_target || attempt == 3 {
+                        println!("{name}\t{info} ceiling_shift_db={shift:.2} ogg_true_peak_dbtp={tp:.2}");
+                        break;
+                    }
+                    shift -= tp - tp_target + 0.15;
                 }
-                println!("{name}\t{info}");
             }
         }
         "analyze" => {
