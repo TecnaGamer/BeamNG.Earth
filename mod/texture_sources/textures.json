@@ -1055,6 +1055,11 @@
    "format": "BC4",
    "role": "data",
    "requires_any": ["BNE_CLIFFS"]
+  },
+  "levels/beamng_earth/art/weather/bngEarth_snowflake.color.dds": {
+   "source": "levels/beamng_earth/art/weather/bngEarth_snowflake.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
   }
  }
 }
