@@ -316,3 +316,9 @@ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
 CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+
+## Generic cropland crops
+
+- The three corn-like crop meshes and their texture-free material are original procedural assets
+  under the repository MIT licence. `tools/make_crop_asset.py` reproduces them without game files
+  or third-party models.

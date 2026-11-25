@@ -964,7 +964,7 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
         idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots, _us_square_looks(frame)) if lots else idx
         if hasattr(_s.surface, "paint_ground_pads"):
             idx = _s.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
-        return idx
+        return surfacemod.BlockPaint(idx, keep["lat"], keep["lon"], lots)
 
     def holes(idx, info):
         return _tunnel_holes(aid, frame, elev, keep, cx, cy, idx, info, g)

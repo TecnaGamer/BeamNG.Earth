@@ -1,0 +1,24 @@
+{
+  "bngEarthCropPlant": {
+    "name": "bngEarthCropPlant",
+    "mapTo": "bngEarthCropPlant",
+    "class": "Material",
+    "version": 1.5,
+    "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.32,
+          0.36,
+          0.05,
+          1.0
+        ],
+        "roughnessFactor": 0.8,
+        "metallicFactor": 0
+      }
+    ],
+    "groundType": "LEAVES_THIN"
+  }
+}

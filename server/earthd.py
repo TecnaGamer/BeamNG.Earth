@@ -4652,7 +4652,7 @@ class Server:
                                         blockworker._us_square_looks(anchor.frame)) if lots else idx
             if hasattr(self.surface, "paint_ground_pads"):
                 idx = self.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
-            return idx
+            return surfacemod.BlockPaint(idx, keep["lat"], keep["lon"], lots)
 
         def holes(idx, info):
             return self._tunnel_holes(anchor, elev, keep, cx, cy, idx, info)
