@@ -513,9 +513,9 @@ def keyed_env(k):
 # BNE_ROADSYS=surface 4 (earthfast 627): the deck ends skewed by the deck-end skew rule (native/roadsys skew.rs: the
 # hand-over's ends, the faces' end rows, the ground roads' ends there), the waterways and the bridge inventory read.
 # BNE_ROADSYS=surface 5: a twin's median fill to the middle measured per vertex (the two halves no longer overlap).
-# BNE_ROADSYS=surface 6 (earthfast 628): the ground under a deck at most at its soffit less 0.3 m (roadsys.ground_cut,
+# BNE_ROADSYS=surface 6 (earthfast 630): the ground under a deck at most at its soffit less 0.3 m (roadsys.ground_cut,
 # native/roadsys ceil.rs; the terrain blocks, skins and content ground from the published decks' heights).
-# BNE_ROADSYS=structures 2 (earthfast 628): the roads meeting a deck end's short approach at its far end (a junction at
+# BNE_ROADSYS=structures 2 (earthfast 630): the roads meeting a deck end's short approach at its far end (a junction at
 # the end: a roundabout's ring) are the end's own for its drop (native/roadsys handover.rs End.junction), not roads under.
 ROADSYS_STRUCTURES_VERSION = 2
 ROADSYS_SURFACE_VERSION = 6

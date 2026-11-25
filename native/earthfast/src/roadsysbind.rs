@@ -518,7 +518,7 @@ impl RoadsysEnds {
     /// [(x, y)] of each end's point (tests, probes).
     fn points(&self) -> Vec<(f64, f64)> { self.ends.ends.iter().map(|e| (e.p[0], e.p[1])).collect() }
     fn boxes(&self, grow: f64) -> Vec<[f64; 4]> { self.ends.boxes(grow) }
-    /// (628) The under-deck ceiling of decks round these ends (RoadsysCeil).
+    /// (630) The under-deck ceiling of decks round these ends (RoadsysCeil).
     fn ceil(&self, decks: Vec<(PyReadonlyArray2<'_, f64>, f64, f64)>, rails: Vec<PyReadonlyArray2<'_, f64>>) -> PyResult<RoadsysCeil> {
         let mut ds = Vec::with_capacity(decks.len());
         for (p, hw, depth) in &decks {
@@ -546,7 +546,7 @@ impl RoadsysEnds {
     }
 }
 
-/// (628, M5, BNE_ROADSYS=surface) The ground under the decks round a place at most at their soffits less 0.3 m
+/// (630, M5, BNE_ROADSYS=surface) The ground under the decks round a place at most at their soffits less 0.3 m
 /// (native/roadsys ceil.rs), with these ends' drop: decks [(line (n, 3): x, y and the top's height per vertex, half
 /// width, the structure's drawn depth)], rails [line (n, 2)] (their beds keep their ground). ground(x, y, z): the
 /// physics ground from the ground z (the drop, then the ceiling); input(): the whole input's bytes (`roadsys ceil`).

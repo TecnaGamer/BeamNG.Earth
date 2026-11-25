@@ -57,7 +57,7 @@ product declares and hands them over.
       country, other public roads, service roads and tracks, foot and cycle ways; net.rs clearance_of) + the
       structure's own depth (structure_depth: its design and span), the road under cut up to 5 m where that is gentler
       than lifting (one solve); twin decks one height; surface decks drawn their whole depth until the girder kits.
-      Round 4 (surface, earthfast 628): the ground under a deck at most at its soffit less 0.3 m (DESIGN.md G5; native/
+      Round 4 (surface, earthfast 630): the ground under a deck at most at its soffit less 0.3 m (DESIGN.md G5; native/
       roadsys ceil.rs): every evaluator of the physics ground (ground_cut, through roads.block_arch_raise) caps it by
       the decks the bridge chains publish round its map cell (ceil_of_cell: the 3 x 3 cells, as the hand-over's ends;
       each deck's top heights less its structure's drawn depth), eased in from a free end past the hand-over's metres
@@ -112,10 +112,10 @@ SURFACE_KERNEL = 626        # earthfast.roadsys_decks
 # bridge inventory's skew first) says so: the hand-over's ends (RoadsysEnds' crossed / nbi) and the deck faces' end rows
 SKEW = SURFACE
 SKEW_KERNEL = 627
-# (628, M5 round 4) BNE_ROADSYS=surface: the ground under a deck at most at its soffit less 0.3 m (bridgerewrite/DESIGN.md
+# (630, M5 round 4) BNE_ROADSYS=surface: the ground under a deck at most at its soffit less 0.3 m (bridgerewrite/DESIGN.md
 # G5; native/roadsys ceil.rs), every evaluator of the physics ground (ground_cut through roads.block_arch_raise)
 CEIL = SURFACE
-CEIL_KERNEL = 628
+CEIL_KERNEL = 630
 DECKS_FN = None             # (frame) -> the road bridges' ChainView in frame (blockworker: its bridge chain store), or None
 WATER_FN = None             # water_fn(cell key) -> the water Features (set_water_fn: mapdata.MapData), None: none read
 

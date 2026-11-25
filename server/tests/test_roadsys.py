@@ -724,7 +724,7 @@ class SurfaceTest(unittest.TestCase):
 
 
 class CeilTest(unittest.TestCase):
-    """M5 round 4 (BNE_ROADSYS=surface, earthfast 628): the ground under a deck at most at its soffit less 0.3 m
+    """M5 round 4 (BNE_ROADSYS=surface, earthfast 630): the ground under a deck at most at its soffit less 0.3 m
     (bridgerewrite/DESIGN.md G5), eased in from its free ends past the hand-over's own metres, a road under it and its
     lattice square kept; one value per point whatever the order of the decks; the drop as before where no deck is."""
 
@@ -794,7 +794,7 @@ class CeilTest(unittest.TestCase):
 
     def test_keyed_and_wired(self):
         self.assertGreaterEqual(revisit.ROADSYS_SURFACE_VERSION, 6)
-        self.assertGreaterEqual(fast.MIN_VERSION, 628)
+        self.assertGreaterEqual(fast.MIN_VERSION, 630)
         bw = (HERE / "blockworker.py").read_text(encoding="utf-8")
         self.assertIn("_roadsys.DECKS_FN = lambda frame: _bridges(None, frame, _elev_stage1)", bw)
 

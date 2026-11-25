@@ -47,7 +47,7 @@ pub const TOP_ON_GROUND_M: f64 = END_TOL_M; // a top there goes only where it li
                                      // bridging a dip there stays)
 pub const REACH_M: f64 = FULL_M + TAPER_M + 2.0;
 pub const MIN_PART_M: f64 = 2.0;
-/// (628) an approach shorter than this is a stub into a junction: the roads meeting at its far end are the end's own
+/// (630) an approach shorter than this is a stub into a junction: the roads meeting at its far end are the end's own
 /// (their surface over the deck's first metres, a roundabout's ring at a deck end, no road under it)
 pub const STUB_M: f64 = REACH_M;
 
@@ -62,7 +62,7 @@ pub struct End {
     pub hw: f64,             // the drop's half width
     pub bb: [f64; 4],
     pub approach: Vec<usize>,
-    /// (628) the ground parts meeting a short approach (STUB_M) at its far end: a junction at the end, whose surface
+    /// (630) the ground parts meeting a short approach (STUB_M) at its far end: a junction at the end, whose surface
     /// over the deck's first metres is no road under it (on_ground leaves them out, as the approaches)
     pub junction: Vec<usize>,
     /// (M5, 627) the end line (unit, to the left of the way in) when the end is skewed (skew.rs), and its slope against
