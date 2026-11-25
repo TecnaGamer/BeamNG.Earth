@@ -67,6 +67,34 @@ M._rough = rough        -- (tests)
 
 local cars = {}         -- id -> { fast, street, sent, at, country }
 local timer, clock = 0, 0
+local grips = {}        -- id -> { mult sent, at }: the AI's winter margins (winter.aiParams), every AI car
+
+-- Pure: the AI parameter command for winter margins p ({staticFrictionCoefMult, lookAheadKv} or nil: the stock 0.95 /
+-- 0.6 back).
+function M.gripCommand(p)
+  return string.format('ai.setParameters({staticFrictionCoefMult = %.3f, lookAheadKv = %.2f})',
+    p and p.staticFrictionCoefMult or 0.95, p and p.lookAheadKv or 0.6)
+end
+
+local function sendGrips(data, player, w)
+  local p = w and w.aiParams and w.aiParams() or nil
+  local key = p and string.format('%.3f/%.2f', p.staticFrictionCoefMult, p.lookAheadKv) or 'stock'
+  for id, g in pairs(grips) do
+    if not data[id] then grips[id] = nil end
+  end
+  for id, v in pairs(data) do
+    if v.isAi and id ~= player then
+      local g = grips[id]
+      if (g and (g.key ~= key or clock - g.at >= M.RESEND_S)) or (not g and key ~= 'stock') then
+        local obj = getObjectByID(id)
+        if obj then
+          obj:queueLuaCommand(M.gripCommand(p))
+          grips[id] = key ~= 'stock' and { key = key, at = clock } or nil
+        end
+      end
+    end
+  end
+end
 
 local function release(id, c)
   local obj = getObjectByID(id)
@@ -83,6 +111,10 @@ function M.update(dt, graph)
   local gt = rawget(_G, 'gameplay_traffic')
   if not (gt and gt.getTrafficData) then return end
   local data = gt.getTrafficData() or {}
+  -- (the winter margins whether or not speeding is on: every AI car must know the road is icy)
+  if M.winter or next(grips) then
+    sendGrips(data, be and be.getPlayerVehicleID and be:getPlayerVehicleID(0) or -1, M.winter)
+  end
   if not M.ON then
     for id, c in pairs(cars) do release(id, c) end
     return
@@ -128,6 +160,11 @@ end
 function M.reset()
   for id, c in pairs(cars) do release(id, c) end
   cars = {}
+  for id in pairs(grips) do
+    local obj = getObjectByID(id)
+    if obj then obj:queueLuaCommand(M.gripCommand(nil)) end
+  end
+  grips = {}
 end
 
 function M._cars() return cars end        -- (tests)

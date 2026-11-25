@@ -162,4 +162,35 @@ local cap = tonumber(sent[#sent]:match('ai.setSpeed%(([%d%.]+)%)'))
 T.check(cap and cap < 20 * 1.2 * 0.65 + 0.01 and cap > 20 * 0.9 * 0.65, 'icy: the AI cap 0.65x')
 speeding.winter = nil
 
+-- the AI's winter margins: the stock AI reads obj:getStaticFrictionCoef(), which ignores live ground models
+T.check(W.aiParamsFor({ 'dry', 0, 5 }) == nil and W.aiParamsFor({ 'damp', 0, 5 }) == nil, 'dry / damp: stock AI')
+T.check(W.aiParamsFor({ 'wet', 0, 5 }).staticFrictionCoefMult > 0.55, 'wet: a little care')
+local ap = W.aiParamsFor({ 'ice', 0, -5, 'dry', 0, 0, 1 })
+T.near(ap.staticFrictionCoefMult, 0.95 * (0.12 / 0.96) * W.AI_MARGIN, 1e-9, 'ice: the AI told of 1/8 the grip, with margin')
+T.check(ap.lookAheadKv > 1.6 and ap.lookAheadKv <= 1.8, 'ice: a longer look-ahead')
+T.check(W.aiParamsFor({ 'packed', 30, -5 }).staticFrictionCoefMult < 0.3, 'packed snow')
+T.check(speeding.gripCommand(nil) == 'ai.setParameters({staticFrictionCoefMult = 0.950, lookAheadKv = 0.60})',
+  'stock command')
+local vars = { baseAggression = 0.35 }
+gameplay_traffic.getTrafficVars = function() return vars end
+gameplay_traffic.setTrafficVars = function(v) for k, x in pairs(v) do vars[k] = x end end
+sent = {}
+speeding.winter = { aiParams = function() return ap end, speedFactor = function() return 0.65 end }
+speeding.update(1.0, { rules = { country = 'US' } })
+local got = false
+for _, c in ipairs(sent) do if c:find('staticFrictionCoefMult = 0.119', 1, true) then got = true end end
+T.check(got, 'every AI car told the icy grip')
+local n = #sent
+speeding.update(1.0, { rules = { country = 'US' } })
+T.check(#sent == n + 0 or not sent[#sent]:find('setParameters', 1, true), 'not again while unchanged')
+speeding.winter = nil
+speeding.update(1.0, { rules = { country = 'US' } })
+got = false
+for i = n + 1, #sent do if sent[i]:find('staticFrictionCoefMult = 0.950', 1, true) then got = true end end
+T.check(got, 'winter gone: stock AI grip back')
+W._aggression(true)
+T.check(vars.baseAggression == 0.25, 'slippery: traffic aggression 0.25')
+W._aggression(false)
+T.check(vars.baseAggression == 0.35, 'its own value back')
+
 T.done('test_winter')

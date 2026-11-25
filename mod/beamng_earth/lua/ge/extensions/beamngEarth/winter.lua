@@ -66,6 +66,9 @@ M.ICE_WARM, M.ICE_COLD = { -1, 0.08 }, { -15, 0.22 }    -- ice by pavement tempe
 -- Bridge deck (ASPHALT mesh, Mill Ave Tempe, from the crest down a ~6 % grade both ways): dry 11.4, wet 14.6, packed
 -- 44.7, ice ~250 m; corrected for the grade (mu = v^2 / 2gd + grade) within ~15 % of the terrain's. Wheel contact ids
 -- followed the slot on both (ASPHALT 10, ASPHALT_WET 11, SNOW 22, ICE 21).
+-- AI soak (8 traffic cars, 6 min each, W Camelback Rd, the player parked off the road; crash = a car's damage up by
+-- 1000+): dry 0 crashes, median 39 mph; ice without the AI margins 13 crashes, 15.5 mph; with them (AI_MARGIN 0.75)
+-- 4, 3.6 mph; (1.0) 5, 9.2 mph; packed snow without 16, 19.1 mph; with (0.75) 7, 16.6 mph.
 -- Open ground by depth bin D1..D6 (static, sliding, roughness): thin cover over grass to deep snow
 M.GROUND = { { 0.55, 0.45, 0.4 }, { 0.45, 0.38, 0.6 }, { 0.40, 0.35, 0.65 }, { 0.38, 0.33, 0.7 }, { 0.36, 0.32, 0.7 },
   { 0.35, 0.31, 0.7 } }
@@ -271,16 +274,56 @@ function M.speedFactor()
   return type(road) == 'table' and M.SPEED[road[1]] or 1
 end
 
+-- The AI's winter margins (plan 4.4). The stock AI plans its braking and cornering from obj:getStaticFrictionCoef()
+-- (ai.lua: ego.staticFrictionCoef = staticFrictionCoefMult * that), which does NOT follow a live ground-model change
+-- (W0 probe P1: 0.70 before and after a cut): on our ice it planned as on dry asphalt, and crashed (the soak). So its
+-- multiplier carries the slot's grip against the stock road's (0.95 x static / 0.96, the margin of PLAN 4.4 on top),
+-- its look-ahead grows with the stopping distance (0.6 x 1/sqrt(grip), at most 1.8), and traffic's base aggression
+-- drops to 0.25 on any slippery road. Pure: {staticFrictionCoefMult, lookAheadKv} or nil (stock).
+M.AI_STOCK_STATIC = 0.96     -- ASPHALT_OLD's static friction (the dry reference)
+M.AI_MARGIN = 1.0            -- the share of the grip the AI is told it has (plan 4.4 said 0.75: on ice that left
+                             -- traffic at a 3.6 mph median, 1.0 at 9.2 mph with the same crashes, 4 vs 5 in 6 min)
+M.AI_AGGRESSION = 0.25       -- traffic base aggression on a slippery road (stock 0.35)
+M.AI_MARGINS = true          -- (false: the AI left as stock: the soak's comparison)
+function M.aiParamsFor(road)
+  if not M.AI_MARGINS then return nil end
+  local v = M.roadValues(road, 0)
+  if not v then return nil end
+  local grip = math.min(1, v[1] / M.AI_STOCK_STATIC)
+  if grip >= 0.9 then return nil end
+  return { staticFrictionCoefMult = 0.95 * grip * M.AI_MARGIN,
+    lookAheadKv = math.min(1.8, 0.6 / math.sqrt(math.max(grip, 0.01))) }
+end
+function M.aiParams() return M.aiParamsFor((rows())) end
+
 local function refreshReadout()
   local road, deck = rows()
   readoutText = M.composeReadout(road, deck, state and state.ground)
+  if (state or forced) and M._aggression then M._aggression(M.aiParamsFor(road) ~= nil) end
 end
 
 -- The other modules' hooks (only once winter runs): the AI's speed factor, the status bar's readout.
+local savedAggression = nil
+-- traffic's base aggression: AI_AGGRESSION while the road is slippery, its own value back after
+local function aggression(slippery)
+  local gt = rawget(_G, 'gameplay_traffic')
+  if not (gt and gt.getTrafficVars and gt.setTrafficVars) then return end
+  if slippery and savedAggression == nil then
+    local ok, vars = pcall(gt.getTrafficVars)
+    savedAggression = ok and type(vars) == 'table' and vars.baseAggression or 0.35
+    pcall(gt.setTrafficVars, { baseAggression = M.AI_AGGRESSION })
+  elseif not slippery and savedAggression ~= nil then
+    pcall(gt.setTrafficVars, { baseAggression = savedAggression })
+    savedAggression = nil
+  end
+end
+M._aggression = aggression    -- (tests)
+
 local function hook(on)
   local sp, sb = package.loaded['beamngEarth/speeding'], package.loaded['beamngEarth/statusbar']
   if sp then sp.winter = on and M or nil end
   if sb then sb.extra = on and M.readout or nil end
+  if not on then aggression(false) end
 end
 
 -- core.lua: a snowstate from the server.

@@ -86,6 +86,7 @@ NOT_LISTED = {
                      "read; its gated code also stores into its callers' objects (buildings.tile_buildings)",
     "BNE_STALE_REVISIT": "no build switch at all (revisit.NOT_SWITCHES)",
     "BNE_WINTER": "no build switch at all (revisit.NOT_SWITCHES): a live snowstate message only (snow.py)",
+    "BNE_WET_ROADS": "no build switch at all (revisit.NOT_SWITCHES): a live snowstate message only (snow.py)",
     "BNE_TUNNEL_ROAD_OVER": "road tiles' tunnel entrances only (portals.fit: the headwall's top under a road crossing "
                             "over the mouth); not yet proven plan-neutral both ways, so it stays keyed with the "
                             "Revamped roads setting",

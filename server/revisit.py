@@ -406,7 +406,7 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 "BNE_V2_CIP", "BNE_V2_CIP_URL", "BNE_V2_CIP_BUILD",
                 # (winter W1, snow.py: a live 'snowstate' message only; snow never enters plans, cell facts, tiles or
                 # the decision archives, ~/bnge-tests/winterplan/PLAN.md decisions)
-                "BNE_WINTER")
+                "BNE_WINTER", "BNE_WET_ROADS")
 
 
 # BNGE_* settings that change what is built (the road revamp's R1 audit, 2026-11-16): keyed like the build switches

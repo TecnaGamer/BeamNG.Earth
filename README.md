@@ -417,7 +417,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   **Show the older world while rebuilding** (after an update); **Winter grip** (`BNE_WINTER=on`: roads get slippery
   when the real weather brings snow, slush, frost or ice, from an hourly snow model of the last 10 days' weather; main
   roads are cleared and salted first and bridges freeze first; the road's condition shows in the status bar; no white
-  ground yet. `BNE_WINTER=light` or `ice` forces a fixed light-snow or ice-storm state). A switch set by hand in the
+  ground yet. `BNE_WINTER=light` or `ice` forces a fixed light-snow or ice-storm state); **Wet roads** (`BNE_WET_ROADS=on`: rain leaves the roads wet for hours as they dry, less grip and tyre spray; part of Winter grip too). A switch set by hand in the
   server's environment wins over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's

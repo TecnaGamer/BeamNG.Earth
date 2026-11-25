@@ -11845,9 +11845,10 @@ async def main_async(args, restart=None):
                     sea=seacarvemod.SeaCarver(mapdata, args.cache_dir) if args.sea == "on" else None,
                     vegetation=(vegetationmod.Vegetation(mapdata, args.cache_dir) if args.trees == "on" else None))
     server.make_fast_pool = make_fast_pool
-    if snowmod.ON:      # (BNE_WINTER: real snow from the weather's source, or a preset with no network)
-        server.snow = snowmod.Service(fetch=lambda lat, lon: weathermod.fetch_hourly(lat, lon, net=net))
-        log.info("winter: snow state %s", snowmod.MODE)
+    if snowmod.ON:      # (BNE_WINTER / BNE_WET_ROADS: from the weather's source, or a winter preset, no network)
+        server.snow = snowmod.Service(fetch=lambda lat, lon, past, ahead: weathermod.fetch_hourly(lat, lon, past, ahead,
+                                                                                                 net=net))
+        log.info("road surface state %s (winter %s, wet roads %s)", snowmod.MODE, snowmod.WINTER, snowmod.WET_ROADS)
     if late_pool is not None:
         server.start_late(late_pool)
     if budget.TREE_MB or budget.LOW_FREE_GB:    # (this process's own caches: dropped by the free memory / the budget)

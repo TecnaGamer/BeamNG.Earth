@@ -758,20 +758,134 @@ pub fn run_roads(recs: &[&[i32]], upto: usize, s: &Site, regime: i64) -> [RoadOu
 
 /// The pack's band table of a cell: for each of BAND_DZ, the open ground's depth (0.1 mm) facing the pole and facing
 /// the equator, and the forest floor's (flat).
-pub fn run_bands(recs: &[&[i32]], upto: usize, z_cell: i32, lat_e2: i32) -> [[i64; 3]; 8] {
-    let mut out = [[0i64; 3]; 8];
+pub fn run_bands(recs: &[&[i32]], upto: usize, z_cell: i32, lat_e2: i32) -> [[i64; 4]; 8] {
+    let mut out = [[0i64; 4]; 8];
     for (b, dz) in BAND_DZ.iter().enumerate() {
         let base = Site { z: z_cell + dz, z_cell, lat_e2, built: 0, forest: false, aspect: -1 };
-        out[b][0] = run_ground(recs, upto, &base).0.depth();
-        out[b][1] = run_ground(recs, upto, &Site { aspect: 1, ..base }).0.depth();
+        let (pole, eq) = (run_ground(recs, upto, &base).0, run_ground(recs, upto, &Site { aspect: 1, ..base }).0);
+        out[b][0] = pole.depth();
+        out[b][1] = eq.depth();
         out[b][2] = run_ground(recs, upto, &Site { forest: true, aspect: 0, ..base }).0.depth();
+        out[b][3] = pole.age.min(eq.age) as i64;
     }
     out
 }
 
+/// Cover 0..8 of a depth bin (the band table's, W2's look: a dusting half white, light cover nearly full).
+pub const COVER_OF_BIN: [i64; 7] = [0, 4, 7, 8, 8, 8, 8];
+
+/// Age class 0..3 of hours since the last snowfall: fresh (under a day), settled (3 days), old (10 days), dirty.
+pub fn age_class(age_h: i64) -> i64 {
+    if age_h < 24 {
+        0
+    } else if age_h < 72 {
+        1
+    } else if age_h < 240 {
+        2
+    } else {
+        3
+    }
+}
+
+/// W2's band table (snowcover.Table rows) from run_bands: per band (z m, cover 0..8, depth bin 0..6, age 0..3) of the
+/// flat ground (the mean of both aspects: W2 moves the line by aspect itself); the bins with 15 % hysteresis from
+/// prev_bins (-1: none). Only a bin or an age class moving changes a row, so the texture keys change only then.
+pub fn band_table(bands: &[[i64; 4]; 8], z_cell: i32, prev_bins: &[i64]) -> [[i64; 4]; 8] {
+    let mut out = [[0i64; 4]; 8];
+    for b in 0..8 {
+        let d = (bands[b][0] + bands[b][1]) / 2;
+        let bin = depth_bin(d, prev_bins.get(b).copied().unwrap_or(-1));
+        let age = if bin == 0 { 0 } else { age_class(bands[b][3]) };
+        out[b] = [(z_cell + BAND_DZ[b]) as i64, COVER_OF_BIN[bin as usize], bin, age];
+    }
+    out
+}
+
+/// The share (eighths) of the ground's snow cover a road in this condition keeps (W2's Table.road per plow class).
+pub fn road_share(cond: u8) -> i64 {
+    match cond {
+        LOOSE => 8,
+        PACKED => 6,
+        DUSTING | PACKED_ICY => 5,
+        SLUSH => 3,
+        _ => 0,
+    }
+}
+
+/// Lake ice (plan 2.9) at a site through the records up to `upto`: freezing degree-days (0.01 degC day: cold hours
+/// add, warm hours take away, never below 0), the ice thickness 2.7 sqrt(FDD) cm (x0.7 under more than 10 cm of snow)
+/// in mm, and whole days below freezing in a row at the end. The window is 10 days: a lake frozen for weeks reads thin
+/// here until the pack (W5) carries the season's degree-days.
+pub fn lake_ice(recs: &[&[i32]], upto: usize, s: &Site, snow_depth: i64) -> [i64; 3] {
+    let mut fdd: i64 = 0; // 0.01 degC hours
+    let mut cold_run: i64 = 0;
+    for r in recs.iter().take(upto + 1) {
+        let h = downscale(r, s);
+        fdd = (fdd - h.t).max(0);
+        cold_run = if h.t < 0 { cold_run + 1 } else { 0 };
+    }
+    let fdd_days = fdd / 24; // 0.01 degC day
+    // 2.7 sqrt(FDD degC day) cm = 27 sqrt(fdd_days / 100) mm = 2.7 sqrt(fdd_days) mm
+    let mut ice = 27 * isqrt(fdd_days) / 10;
+    if snow_depth > 1000 {
+        ice = ice * 7 / 10;
+    }
+    [fdd_days, ice, cold_run / 24]
+}
+
+/// Lake ice thickness edges (mm) of W2's frozen-water share: 0 under 2 cm, 2 (a white rim) from 2 cm, 4 from 5 cm, 6
+/// from 10 cm, 8 (frozen over, snow on it) from 15 cm [guess on the look; 25 cm is SAFE to drive on, plan 2.9].
+pub const LAKE_EDGES: [i64; 4] = [20, 50, 100, 150];
+
+/// W2's Table.ice: the share 0..8 of still water frozen and white, from the ice thickness (mm), changing from `prev`
+/// (-1: none) only when the thickness passes an edge by 15 % (its texture keys follow it).
+pub fn lake_share(ice_mm: i64, prev: i64) -> i64 {
+    let level = |i: i64| LAKE_EDGES.iter().filter(|&&e| i >= e).count() as i64;
+    let raw = level(ice_mm);
+    if !(0..=4).contains(&(prev / 2)) || prev < 0 {
+        return raw * 2;
+    }
+    let mut l = prev / 2;
+    if raw > l {
+        while l < 4 && ice_mm * 100 >= LAKE_EDGES[l as usize] * 115 {
+            l += 1;
+        }
+    } else if raw < l {
+        while l > 0 && ice_mm * 100 < LAKE_EDGES[(l - 1) as usize] * 85 {
+            l -= 1;
+        }
+    }
+    l * 2
+}
+
+/// The road condition the weather's wet-road part shows with winter off (BNE_WET_ROADS without BNE_WINTER): the water
+/// film only (dry, damp, wet); snow, slush and ice are the winter part's, so a melting or salted cover reads wet and a
+/// frozen one damp.
+pub fn wet_only(cond: u8) -> u8 {
+    match cond {
+        DRY | DAMP | WET => cond,
+        SALT_WET | SLUSH | WET_ICE | LOOSE | PACKED => WET,
+        _ => DAMP,
+    }
+}
+
+/// Integer square root (floor), exact on every platform.
+pub fn isqrt(v: i64) -> i64 {
+    if v <= 0 {
+        return 0;
+    }
+    let mut x = v;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + v / x) / 2;
+    }
+    x
+}
+
 /// A site's open-ground depth (0.1 mm) read from a band table: the two bands round its elevation blended by integer
 /// weights, the aspect's column (flat: the mean of both).
-pub fn band_depth(bands: &[[i64; 3]; 8], dz: i64, aspect: i32) -> i64 {
+pub fn band_depth(bands: &[[i64; 4]; 8], dz: i64, aspect: i32) -> i64 {
     let col = |b: usize| match aspect {
         a if a < 0 => bands[b][0],
         a if a > 0 => bands[b][1],
@@ -789,17 +903,19 @@ pub fn band_depth(bands: &[[i64; 3]; 8], dz: i64, aspect: i32) -> i64 {
     col(7)
 }
 
-/// Everything the snowstate message carries for one site: the ground outputs, the road rows, the band table.
-pub fn state(f: &[i32], upto: usize, s: &Site, regime: i64, prev_bin: i64)
-             -> ([i64; GROUND_OUT], [RoadOut; 2 * CLASSES], [[i64; 3]; 8]) {
+/// Everything the snowstate message carries for one site: the ground outputs, the road rows, the band table, lake ice.
+pub type StateParts = ([i64; GROUND_OUT], [RoadOut; 2 * CLASSES], [[i64; 4]; 8], [i64; 3]);
+
+pub fn state(f: &[i32], upto: usize, s: &Site, regime: i64, prev_bin: i64) -> StateParts {
     let recs = rows(f);
     if recs.is_empty() {
         let g = Ground::default();
-        return (ground_out(&g, &Hour::default(), prev_bin), [RoadOut::default(); 2 * CLASSES], [[0; 3]; 8]);
+        return (ground_out(&g, &Hour::default(), prev_bin), [RoadOut::default(); 2 * CLASSES], [[0; 4]; 8], [0; 3]);
     }
     let upto = upto.min(recs.len() - 1);
     let (g, h) = run_ground(&recs, upto, s);
-    (ground_out(&g, &h, prev_bin), run_roads(&recs, upto, s, regime), run_bands(&recs, upto, s.z_cell, s.lat_e2))
+    let lake = lake_ice(&recs, upto, s, g.depth());
+    (ground_out(&g, &h, prev_bin), run_roads(&recs, upto, s, regime), run_bands(&recs, upto, s.z_cell, s.lat_e2), lake)
 }
 
 /// The presets (plan 2.11: a preset is a fixed synthetic forcing record, deterministic by construction): records,
@@ -947,6 +1063,11 @@ pub fn selftest(seed: u64, n: usize) -> u64 {
             }
         }
     }
+    for s in sites.iter().step_by(5) {
+        for v in lake_ice(&recs, recs.len() - 1, s, 0) {
+            hash.add(v);
+        }
+    }
     hash.0
 }
 
@@ -958,7 +1079,7 @@ pub mod py {
     use pyo3::exceptions::PyValueError;
     use pyo3::prelude::*;
 
-    type StateOut = (Vec<i64>, Vec<Vec<i64>>, Vec<Vec<i64>>);
+    type StateOut = (Vec<i64>, Vec<Vec<i64>>, Vec<Vec<i64>>, Vec<i64>);
 
     /// The snow state of a site: forcing [n x NF] int32 (snow.rs F_* layout, MISSING = -2^31), the current hour's row
     /// `upto`, the site (elevation m, the forcing cell's elevation m, latitude x 100, built-up permille, aspect -1/0/1,
@@ -975,12 +1096,12 @@ pub mod py {
         }
         let f: Vec<i32> = a.iter().copied().collect();
         let site = Site { z: z_site, z_cell, lat_e2, built: built.clamp(0, 1000), forest, aspect: aspect.signum() };
-        let (g, roads, bands) = state(&f, upto, &site, regime.clamp(0, 4), prev_bin);
+        let (g, roads, bands, lake) = state(&f, upto, &site, regime.clamp(0, 4), prev_bin);
         let roads = roads.iter().map(|o| vec![o.cond as i64, o.depth, o.tp, o.edge_cond as i64, o.edge_depth,
                                               o.grit as i64, o.track, o.banks]).collect();
-        let bands = bands.iter().enumerate().map(|(b, r)| vec![(z_cell + BAND_DZ[b]) as i64, r[0], r[1], r[2]])
-                         .collect();
-        Ok((g.to_vec(), roads, bands))
+        let bands = bands.iter().enumerate()
+                         .map(|(b, r)| vec![(z_cell + BAND_DZ[b]) as i64, r[0], r[1], r[2], r[3]]).collect();
+        Ok((g.to_vec(), roads, bands, lake.to_vec()))
     }
 
     /// A preset's synthetic forcing: (records [n x NF] int32, regime, cell elevation m, latitude x 100), or None.
@@ -997,14 +1118,42 @@ pub mod py {
     /// at dz m from the cell's elevation and aspect -1/0/1.
     #[pyfunction]
     pub fn snow_band_depth(bands: Vec<Vec<i64>>, dz: i64, aspect: i32) -> PyResult<i64> {
-        if bands.len() != 8 || bands.iter().any(|r| r.len() != 4) {
-            return Err(PyValueError::new_err("snow_band_depth: 8 band rows of 4"));
+        Ok(band_depth(&band_rows(&bands)?, dz, aspect.signum()))
+    }
+
+    fn band_rows(bands: &[Vec<i64>]) -> PyResult<[[i64; 4]; 8]> {
+        if bands.len() != 8 || bands.iter().any(|r| r.len() != 5) {
+            return Err(PyValueError::new_err("snow bands: 8 rows of 5 [z, pole, equator, forest, age h]"));
         }
-        let mut t = [[0i64; 3]; 8];
+        let mut t = [[0i64; 4]; 8];
         for (b, r) in bands.iter().enumerate() {
-            t[b] = [r[1], r[2], r[3]];
+            t[b] = [r[1], r[2], r[3], r[4]];
         }
-        Ok(band_depth(&t, dz, aspect.signum()))
+        Ok(t)
+    }
+
+    /// W2's band table from snow_state's band rows (snowcover.Table rows: [z m, cover 0..8, depth bin 0..6, age
+    /// 0..3] lowest first) with the bins' hysteresis from prev_bins (8 values, -1: none), and the road shares
+    /// (eighths of the ground's cover kept) of the given road condition codes (P0..P4).
+    #[pyfunction]
+    pub fn snow_band_table(bands: Vec<Vec<i64>>, prev_bins: Vec<i64>, road_conds: Vec<u8>)
+                           -> PyResult<(Vec<Vec<i64>>, Vec<i64>)> {
+        let t = band_rows(&bands)?;
+        let z_cell = (bands[2][0] - BAND_DZ[2] as i64) as i32;
+        let rows = band_table(&t, z_cell, &prev_bins).iter().map(|r| r.to_vec()).collect();
+        Ok((rows, road_conds.iter().map(|&c| road_share(c)).collect()))
+    }
+
+    /// W2's frozen-water share 0..8 from the ice thickness mm (snow_state's lake[1]) with hysteresis from prev.
+    #[pyfunction]
+    pub fn snow_lake_share(ice_mm: i64, prev: i64) -> i64 {
+        lake_share(ice_mm, prev)
+    }
+
+    /// The wet-road part's condition code (winter off) of a road condition code.
+    #[pyfunction]
+    pub fn snow_wet_only(cond: u8) -> u8 {
+        wet_only(cond)
     }
 
     /// The plow regime 0..4 of a Koppen-Geiger class (1-30).
@@ -1030,6 +1179,9 @@ pub mod py {
         m.add_function(wrap_pyfunction!(snow_preset, m)?)?;
         m.add_function(wrap_pyfunction!(snow_regime, m)?)?;
         m.add_function(wrap_pyfunction!(snow_band_depth, m)?)?;
+        m.add_function(wrap_pyfunction!(snow_band_table, m)?)?;
+        m.add_function(wrap_pyfunction!(snow_lake_share, m)?)?;
+        m.add_function(wrap_pyfunction!(snow_wet_only, m)?)?;
         m.add_function(wrap_pyfunction!(snow_selftest, m)?)?;
         m.add_function(wrap_pyfunction!(snow_conditions, m)?)?;
         m.add("SNOW_NF", NF)?;
@@ -1205,7 +1357,8 @@ mod tests {
             let (f, regime, z, lat) = preset(name).unwrap();
             let n = f.len() / NF;
             let site = Site { z, z_cell: z, lat_e2: lat, built: 0, forest: false, aspect: 0 };
-            let (g, roads, bands) = state(&f, n - 1, &site, regime, -1);
+            let (g, roads, bands, lake) = state(&f, n - 1, &site, regime, -1);
+            assert!(lake[0] > 0, "{name}: cold hours give degree-days");
             assert!(roads.iter().take(CLASSES).any(|o| want.contains(&o.cond)), "{name}: {:?}", roads);
             if name == "light" {
                 assert!(g[0] >= 100 && g[8] >= 2, "{name}: {:?}", g); // a light cover, D2
@@ -1219,15 +1372,53 @@ mod tests {
 
     #[test]
     fn band_read() {
-        let mut bands = [[0i64; 3]; 8];
+        let mut bands = [[0i64; 4]; 8];
         for (b, row) in bands.iter_mut().enumerate() {
-            *row = [b as i64 * 100, b as i64 * 50, 0];
+            *row = [b as i64 * 100, b as i64 * 50, 0, 5];
         }
         assert_eq!(band_depth(&bands, 0, -1), 200);
         assert_eq!(band_depth(&bands, 75, -1), 250);
         assert_eq!(band_depth(&bands, 75, 0), (250 + 125) / 2);
         assert_eq!(band_depth(&bands, -1000, 1), 0);
         assert_eq!(band_depth(&bands, 9000, -1), 700);
+    }
+
+    #[test]
+    fn w2_table_and_lake() {
+        let mut bands = [[0i64; 4]; 8];
+        for (b, row) in bands.iter_mut().enumerate() {
+            *row = [b as i64 * 300, b as i64 * 300, 0, 30];
+        }
+        let t = band_table(&bands, 1000, &[-1; 8]);
+        assert_eq!(t[0], [700, 0, 0, 0]); // no snow: no age either
+        assert_eq!(t[1], [850, 7, 2, 1]); // 3 cm: light, D2, settled (30 h)
+        assert_eq!(t[7][1..], [8, 4, 1]); // 21 cm: D4
+        bands[1] = [450, 450, 0, 30]; // 4.5 cm after D3: not 15 % under its 5 cm edge, held
+        assert_eq!(band_table(&bands, 1000, &[0, 3, 3, 3, 3, 3, 3, 4])[1][2], 3);
+        assert_eq!(band_table(&bands, 1000, &[-1; 8])[1][2], 2);
+        assert_eq!(road_share(LOOSE), 8);
+        assert_eq!(road_share(SALT_WET), 0);
+        assert_eq!(isqrt(0), 0);
+        assert_eq!(isqrt(99), 9);
+        assert_eq!(isqrt(100), 10);
+        assert_eq!(isqrt(1 << 40), 1 << 20);
+        // ten days at -10 degC: 100 degC days -> 2.7 * 10 = 27 cm
+        let f = series(&[(240, -1000, 0, 0, -1000)]);
+        let lake = lake_ice(&rows(&f), 239, &FLAT, 0);
+        assert_eq!(lake, [10_000, 270, 10]);
+        assert_eq!(lake_share(10, -1), 0);
+        assert_eq!(lake_share(60, -1), 4);
+        assert_eq!(lake_share(200, -1), 8);
+        assert_eq!(lake_share(55, 2), 2); // 5.5 cm: not 15 % past the 5 cm edge from 2
+        assert_eq!(lake_share(58, 2), 4);
+        assert_eq!(lake_share(45, 4), 4); // not 15 % under it
+        assert_eq!(lake_share(40, 4), 2);
+        assert_eq!(wet_only(PACKED), WET);
+        assert_eq!(wet_only(BLACK_ICE), DAMP);
+        assert_eq!(wet_only(DAMP), DAMP);
+        // a thaw takes it back
+        let f = series(&[(48, -500, 0, 0, -500), (72, 500, 0, 0, 500)]);
+        assert_eq!(lake_ice(&rows(&f), 119, &FLAT, 0)[0], 0);
     }
 
     #[test]

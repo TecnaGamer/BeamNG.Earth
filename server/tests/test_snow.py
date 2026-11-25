@@ -5,6 +5,7 @@ snowing) turned into kernel records and 'snowstate' messages, the presets, the r
 fetch cache, the tracker's rule, and the switch being off by default (no service, no message). No network.
 """
 import json
+import math
 import os
 import subprocess
 import sys
@@ -26,7 +27,7 @@ ICY = ("ice", "black_ice", "wet_ice", "frost")
 # snow.rs selftest(seed 1, 10,000 records): Linux (rustc, the .so) and Windows (the same file cross-built, run under
 # Wine) gave this number (~/bnge-tests/winter/w1/snowdet/build_win.sh); a kernel change that is meant to change the
 # state changes it too: run the harness on both, then update it here
-SELFTEST_1_10000 = 0x090F1E78915BF9F2
+SELFTEST_1_10000 = 0xD3418E11011E7D95
 
 NATIVE = getattr(fast._ef, "VERSION", 0) >= snow.NATIVE if fast._ef is not None else False
 
@@ -49,7 +50,7 @@ class KernelTest(unittest.TestCase):
         self.assertEqual([fast._ef.snow_regime(k) for k in (1, 15, 25, 26, 27, 30)], [0, 1, 2, 3, 4, 4])
 
     def test_band_read(self):
-        bands = [[100 * b, 10 * b, 20 * b, 5 * b] for b in range(8)]
+        bands = [[100 * b, 10 * b, 20 * b, 5 * b, 3] for b in range(8)]
         self.assertEqual(fast._ef.snow_band_depth(bands, 0, -1), 20)       # the cell's own band (index 2)
         self.assertEqual(fast._ef.snow_band_depth(bands, 0, 1), 40)
         self.assertEqual(fast._ef.snow_band_depth(bands, 0, 0), 30)
@@ -97,6 +98,8 @@ class MessageTest(unittest.TestCase):
         m = self.msg("minneapolis")
         self.assertEqual((m["type"], m["v"], m["src"], m["credit"]), ("snowstate", 1, "real", weather.CREDIT))
         self.assertEqual((len(m["ground"]), len(m["roads"]), len(m["bridges"]), len(m["bands"])), (7, 5, 5, 8))
+        self.assertTrue(all(len(b) == 5 for b in m["bands"]))
+        self.assertEqual(len(m["lake"]), 3)
         names = fast._ef.snow_conditions()
         for row in m["roads"] + m["bridges"]:
             self.assertEqual(len(row), 7)
@@ -143,12 +146,112 @@ class MessageTest(unittest.TestCase):
         self.assertEqual(snow.regime_at(1.35, 103.82), 0)         # Singapore: Af
 
 
+class FakeCover:
+    """W2's snowcover interface (its branch claude-winter-w2: set_provider, Field, Table) without its renders."""
+
+    class Field:
+        def __init__(self, res=0.25, cells=None, uniform=None):
+            self.res, self.cells, self.uniform = res, dict(cells or {}), uniform
+
+    def Table(self, rows, road, ice=0):
+        return ("Table", rows, road, ice)
+
+    def __init__(self):
+        self.provider = None
+
+    def set_provider(self, fn):
+        self.provider = fn
+
+
+@unittest.skipUnless(NATIVE, "needs earthfast 623 (the snow kernel)")
+class W2InterfaceTest(unittest.TestCase):
+    """The band table W2's snow on the photos reads (snowcover.set_provider: Field(uniform=Table(rows, road))), its
+    quantization (only a bin or an age class moving changes it), the change hook (Server.snow_changed + 'snow'), the
+    lake ice for W2's frozen lakes."""
+
+    class Server:
+        def __init__(self):
+            self.changes, self.connections = 0, []
+
+        def snow_changed(self):
+            self.changes += 1
+
+    class Conn:
+        def __init__(self, s):
+            self.s, self.sent = s, []
+
+        def send(self, m):
+            self.sent.append(m)
+
+    def setUp(self):
+        self.cover = FakeCover()
+        self.svc = snow.Service(fetch=FakeHourly(), mode="light", cover=self.cover)
+        self.server = self.Server()
+        self.conn = self.Conn(self.server)
+        self.server.connections.append(self.conn)
+
+    def state(self):
+        raw = {}
+        self.svc.get(45.0, -93.0, 200, -1, raw)
+        return raw
+
+    def test_provider_field(self):
+        self.assertIs(self.cover.provider.__self__, self.svc)
+        self.assertIsNone(self.cover.provider(44, -94, 46, -92))      # no state yet
+        self.assertTrue(self.svc.commit(self.conn, self.state()))
+        f = self.cover.provider(44, -94, 46, -92)
+        _, rows, road, _ice = f.uniform
+        self.assertEqual(len(rows), 8)
+        self.assertEqual([r[0] for r in rows], sorted(r[0] for r in rows))     # lowest first
+        for z, cover, depth, age in rows:
+            self.assertTrue(0 <= cover <= 8 and 0 <= depth <= 6 and 0 <= age <= 3, rows)
+        cell = [r for r in rows if r[0] == 200][0]
+        self.assertGreaterEqual(cell[2], 2)                 # the light preset: D2 at the cell
+        self.assertEqual(len(road), 5)
+        self.assertEqual(road[0], 0)                        # the salted motorway keeps none of it
+        self.assertGreater(road[4], 0)                      # the service road keeps loose snow
+        self.assertEqual((self.server.changes, self.conn.sent[-1]["type"]), (1, "snow"))
+        self.assertEqual(set(self.conn.sent[-1]["snow"]), {"mode", "cover", "depth"})
+
+    def test_unchanged_table_no_rerender(self):
+        self.svc.commit(self.conn, self.state())
+        self.assertFalse(self.svc.commit(self.conn, self.state()))
+        self.assertEqual((self.server.changes, len(self.conn.sent)), (1, 1))
+
+    def test_bins_hold(self):
+        raw = self.state()
+        rows, road, bins = snow.w2_table(raw, [-1] * 8)
+        held, _, _ = snow.w2_table(raw, [6] * 8)
+        self.assertTrue(all(h[2] >= r[2] for h, r in zip(held, rows)))
+        self.assertEqual(snow.w2_table(raw, bins)[0], rows)
+
+    def test_no_snowcover_no_hook(self):
+        svc = snow.Service(fetch=FakeHourly(), mode="light", cover=None)
+        if svc.cover is None:                           # (W2's module absent, or not in its real mode)
+            self.assertFalse(svc.commit(self.conn, self.state()))
+
+    def test_frozen_water_share(self):
+        self.svc.commit(self.conn, self.state())
+        t = self.cover.provider(44, -94, 46, -92).uniform
+        self.assertEqual(len(t), 4)                     # Table(rows, road, ice)
+        self.assertTrue(0 <= t[3] <= 8 and t[3] % 2 == 0)
+        self.assertEqual(fast._ef.snow_lake_share(200, -1), 8)
+        self.assertEqual(fast._ef.snow_lake_share(55, 2), 2)       # hysteresis
+
+    def test_lake(self):
+        ice = snow.preset_message("ice", 45.0, -93.0)["lake"]
+        self.assertGreater(ice[0], 0)                   # freezing degree-days from the cold hours
+        self.assertEqual(ice[1], 27 * math.isqrt(round(ice[0] * 100)) // 10)      # 2.7 sqrt(FDD) cm
+        self.assertGreaterEqual(ice[2], 0)
+
+
 class FakeHourly:
     def __init__(self, name="davos", fail=False):
         self.calls, self.name, self.fail = [], name, fail
 
-    def __call__(self, lat, lon):
+    def __call__(self, lat, lon, past=240, ahead=6):
         self.calls.append((lat, lon))
+        self.window = (past, ahead)
         if self.fail:
             raise OSError("no network in tests")
         return RESPONSES[self.name]
@@ -169,6 +272,23 @@ class ServiceTest(unittest.TestCase):
         now[0] += 3600                                 # the next hour: fetched again
         svc.get(46.79, 9.84, 1560)
         self.assertEqual(len(f.calls), 2)
+
+    def test_wet_roads_alone(self):
+        # BNE_WET_ROADS without BNE_WINTER: a day's window, the water film only, no snow parts, no W2 hook
+        now = [last_hour(RESPONSES["davos"]) - 6 * 3600 + 600]
+        f = FakeHourly()
+        cover = FakeCover()
+        svc = snow.Service(fetch=f, mode="real", clock=lambda: now[0], winter=False, cover=cover)
+        self.assertIsNone(svc.cover)
+        m = svc.get(46.79, 9.84, 1560)
+        self.assertEqual(f.window, snow.WINDOW_WET)
+        self.assertFalse(m["winter"])
+        self.assertTrue(all(r[0] in ("dry", "damp", "wet") and r[3] in ("dry", "damp", "wet")
+                            for r in m["roads"] + m["bridges"]), m["roads"])
+        self.assertEqual((m["bands"], m["lake"], m["ground"][0], m["ground"][1]), ([], [], 0, 0))
+        w = snow.Service(fetch=f, mode="real", clock=lambda: now[0], winter=True)
+        self.assertTrue(w.get(46.79, 9.84, 1560)["winter"])
+        self.assertEqual(f.window, snow.WINDOW_WINTER)
 
     def test_preset_needs_no_network(self):
         f = FakeHourly(fail=True)
@@ -245,6 +365,10 @@ class OffTest(unittest.TestCase):
         out = subprocess.run([sys.executable, "-c", code], cwd=str(Path(snow.__file__).parent), env=env,
                              capture_output=True, text=True, check=True).stdout.split()
         self.assertEqual(out, ["False", "None"])
+        out = subprocess.run([sys.executable, "-c", "import snow; print(snow.ON, snow.MODE, snow.WINTER, snow.WET_ROADS)"],
+                             cwd=str(Path(snow.__file__).parent), env={**env, "BNE_WET_ROADS": "on"},
+                             capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(out, ["True", "real", "False", "True"])
         for value, mode in (("on", "real"), ("ice", "ice"), ("light", "light"), ("off", "None"), ("bogus", "None")):
             out = subprocess.run([sys.executable, "-c", code], cwd=str(Path(snow.__file__).parent),
                                  env={**env, "BNE_WINTER": value}, capture_output=True, text=True,
@@ -253,8 +377,9 @@ class OffTest(unittest.TestCase):
 
     def test_not_a_build_switch(self):
         import revisit
-        self.assertIn("BNE_WINTER", revisit.NOT_SWITCHES)
-        self.assertFalse(revisit.keyed_env("BNE_WINTER"))
+        for k in ("BNE_WINTER", "BNE_WET_ROADS"):
+            self.assertIn(k, revisit.NOT_SWITCHES)
+            self.assertFalse(revisit.keyed_env(k))
 
 
 if __name__ == "__main__":

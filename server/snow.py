@@ -1,16 +1,18 @@
-"""Winter W1 (BNE_WINTER, off by default): the snow state at the player as the 'snowstate' message, from the Rust snow
-kernel (native/earthfast/src/snow.rs, ~/bnge-tests/winterplan/PLAN.md sections 2 and 4). This module is glue: it
-turns Open-Meteo's hourly forcing (weather.fetch_hourly: 10 past days and the next one) into the kernel's integer
-records, calls it for the player's site and builds the message; the mod (beamngEarth/winter.lua) sets the ground
-models' grip from it.
+"""The road surface and snow state at the player as the 'snowstate' message (winter W1; the weather's wet roads), from
+the Rust kernel (native/earthfast/src/snow.rs, ~/bnge-tests/winterplan/PLAN.md sections 2 and 4). This module is glue:
+it turns Open-Meteo's hourly forcing (weather.fetch_hourly) into the kernel's integer records, calls it for the player's
+site and builds the message; the mod (beamngEarth/winter.lua) sets the ground models' grip from it.
 
-BNE_WINTER:
-  on (or real)   the real weather's snow (Open-Meteo stage A: the same API and caps as the weather; one hourly request
-                 per 0.1-degree cell and UTC hour, shared by every connection)
-  light / ice    a preset: a fixed synthetic forcing (snow.rs preset), the same for everyone, no network
-Unset or off: no service, no tracker work, no message (the server's output is the same as without this module).
+Two parts, two switches (the user, 2026-11-24: wet roads all year, snow and ice under winter), off by default:
+  BNE_WET_ROADS=on   the road-surface part alone: rain's water film drying over hours (dry / damp / wet slots, the stock
+                     ASPHALT_WET collision type for tyre spray and sound); the window is the past 24 h and the next 6 h
+  BNE_WINTER=on      everything: the wet roads and the snow and ice (roads by plow class, decks, the ground's pack, lake
+                     ice, W2's band table); the window is the past 10 days (the pack's memory) and the next 6 h
+  BNE_WINTER=light / ice: a preset (a fixed synthetic forcing, snow.rs preset), the same for everyone, no network
+One hourly Open-Meteo request per 0.1-degree cell and UTC hour serves both (the weather's API, caps and credit).
+Neither set: no service, no tracker work, no message (the server's output is the same as without this module).
 
-Snow never enters plans, cell facts or the decision archives (revisit.NOT_SWITCHES has BNE_WINTER): the state is live.
+Never in plans, cell facts or the decision archives (revisit.NOT_SWITCHES has both): the state is live.
 """
 import logging
 import math
@@ -27,9 +29,15 @@ import weather
 log = logging.getLogger("earthd.snow")
 
 PRESETS = ("light", "ice")
+_YES = ("on", "1", "true", "real", "yes")
 _RAW = os.environ.get("BNE_WINTER", "").strip().lower()
-MODE = "real" if _RAW in ("on", "1", "true", "real", "yes") else (_RAW if _RAW in PRESETS else None)
+WET_ROADS = os.environ.get("BNE_WET_ROADS", "").strip().lower() in _YES
+WINTER = _RAW in _YES or _RAW in PRESETS
+MODE = ("real" if _RAW in _YES else _RAW) if WINTER else ("real" if WET_ROADS else None)
 ON = MODE is not None
+# the request's window (hours before the current one, after it): the pack's memory with winter, a day for wet roads
+WINDOW_WINTER = (240, 6)
+WINDOW_WET = (24, 6)
 VERSION = 1                 # snowstate.v: the message layout
 NATIVE = 623                # earthfast: snow_state / snow_preset / snow_regime
 
@@ -105,20 +113,31 @@ def _mm(v01):
     return round(v01 / 10.0, 1)
 
 
-def message(recs, upto, t, lat, lon, z_site, z_cell, regime, prev_bin=-1, src="real", built=0):
+def message(recs, upto, t, lat, lon, z_site, z_cell, regime, prev_bin=-1, src="real", built=0, raw=None,
+            winter=True):
     """The 'snowstate' message for a site (pure but for the kernel): recs [n, NF] int32, the current row `upto`, its
-    UTC hour t, the site's elevation (m) and the forcing's (m), the regime, the previous depth bin (hysteresis)."""
+    UTC hour t, the site's elevation (m) and the forcing's (m), the regime, the previous depth bin (hysteresis).
+    raw: a dict that gets the kernel's own band rows and road condition codes (the W2 table: w2_table). winter False:
+    the wet-road part only (conditions dry / damp / wet: snow.rs wet_only; no ground snow, bands or lake ice)."""
     fast.require(NATIVE, "snow state")
     names = fast._ef.snow_conditions()
     lat_e2 = int(round(lat * 100))
-    g, roads, bands = fast._ef.snow_state(np.ascontiguousarray(recs, np.int32), int(upto), int(z_site), int(z_cell),
-                                          lat_e2, int(built), 0, False, int(regime), int(prev_bin))
+    g, roads, bands, lake = fast._ef.snow_state(np.ascontiguousarray(recs, np.int32), int(upto), int(z_site),
+                                                int(z_cell), lat_e2, int(built), 0, False, int(regime), int(prev_bin))
+    if not winter:
+        roads = [[fast._ef.snow_wet_only(r[0])] + list(r[1:3]) + [fast._ef.snow_wet_only(r[3]), 0, 0] + list(r[6:])
+                 for r in roads]
+        g = [0] * 10 + list(g[10:])
+        bands, lake = [], []
+    if raw is not None:
+        raw["bands"], raw["conds"], raw["ground"], raw["lake"] = bands, [int(r[0]) for r in roads[:5]], g, lake
 
     def row(r):
         return [names[r[0]], _mm(r[1]), round(r[2] / 100.0, 2), names[r[3]], _mm(r[4]), int(r[5]),
                 round(r[6] / 1000.0, 3)]
 
-    return {"type": "snowstate", "v": VERSION, "t": int(t), "src": src, "lat": float(lat), "lon": float(lon),
+    return {"type": "snowstate", "v": VERSION, "t": int(t), "src": src, "winter": bool(winter),
+            "lat": float(lat), "lon": float(lon),
             "elevM": int(z_site), "cellElevM": int(z_cell), "regime": int(regime),
             "airC": round(g[10] / 100.0, 2), "surfC": round(g[11] / 100.0, 2),
             # ground: depth mm, bin D0..D6, cover 0..8, wet, crust, SWE mm, hours since the last snowfall
@@ -126,32 +145,104 @@ def message(recs, upto, t, lat, lon, z_site, z_cell, regime, prev_bin=-1, src="r
             # per plow class P0..P4: [condition, lane depth mm, pavement degC, edge condition, edge depth mm, grit,
             # wheel-track progress 0..1]; bridges: the same classes' decks
             "roads": [row(r) for r in roads[:5]], "bridges": [row(r) for r in roads[5:]],
-            # the pack's band table: [elevation m, depth mm facing the pole, facing the equator, forest floor]
-            "bands": [[int(b[0]), _mm(b[1]), _mm(b[2]), _mm(b[3])] for b in bands],
+            # the pack's band table: [elevation m, depth mm facing the pole, facing the equator, forest floor,
+            # hours since snow]
+            "bands": [[int(b[0]), _mm(b[1]), _mm(b[2]), _mm(b[3]), int(b[4])] for b in bands],
+            # lake ice at the site (plan 2.9; the 10-day window's memory only): freezing degree-days (degC day), ice
+            # mm (2.7 sqrt(FDD) cm), whole days below 0 degC in a row
+            "lake": [round(lake[0] / 100.0, 2), int(lake[1]), int(lake[2])] if lake else [],
             "credit": weather.CREDIT if src == "real" else ""}
 
 
-def preset_message(name, lat, lon, prev_bin=-1):
+def preset_message(name, lat, lon, prev_bin=-1, raw=None):
     """A preset's snowstate (the same for every player: its own synthetic window, regime and site)."""
     fast.require(NATIVE, "snow preset")
     recs, regime, z, lat_e2 = fast._ef.snow_preset(name)
     n = recs.shape[0]
-    msg = message(recs, n - 1, 0, lat_e2 / 100.0, lon, z, z, regime, prev_bin, src=name)
+    msg = message(recs, n - 1, 0, lat_e2 / 100.0, lon, z, z, regime, prev_bin, src=name, raw=raw)
     msg["lat"], msg["lon"] = float(lat), float(lon)
     return msg
 
 
+def w2_table(raw, prev_bins):
+    """(rows, road shares, new bins) of W2's snowcover.Table from message()'s raw parts: up to 8 rows (z m, cover 0..8,
+    depth bin 0..6, age 0..3) lowest first, the bins with 15 % hysteresis from prev_bins; road = the eighths of the
+    ground's cover a P0..P4 road keeps (by its condition)."""
+    rows, road = fast._ef.snow_band_table([list(b) for b in raw["bands"]], list(prev_bins), raw["conds"])
+    rows = tuple(tuple(int(v) for v in r) for r in rows)
+    return rows, tuple(int(v) for v in road), [r[2] for r in rows]
+
+
+def _snowcover():
+    """W2's snowcover module when it is there, on and in its real mode (the provider's consumer), else None."""
+    try:
+        import snowcover
+    except ImportError:
+        return None
+    return snowcover if getattr(snowcover, "ON", False) and getattr(snowcover, "MODE", "") == "real" else None
+
+
 class Service:
     """The hourly forcing shared by every connection: fetch (injectable: tests pass a fake) + the (cell, UTC hour)
-    cache, one fetch in flight per key. get() blocks: run it in an executor."""
+    cache, one fetch in flight per key. get() blocks: run it in an executor.
 
-    def __init__(self, fetch=None, mode=None, clock=time.time, retry_s=RETRY_S):
+    For W2's snow on the ground photos (snowcover.py, BNE_SNOW=real): the band table of the last state computed (any
+    connection's) is the provider's Field, one table everywhere (Open-Meteo stage A fetches the player's cell only;
+    the band rows carry the elevation; W5's pack will give tables by cell). The table is quantized (depth bins with
+    hysteresis, age classes): a change is a new key for every texture, so commit() tells the server (snow_changed)
+    only when the table itself changed."""
+
+    def __init__(self, fetch=None, mode=None, clock=time.time, retry_s=RETRY_S, cover=None, winter=None):
         self.fetch = fetch if fetch is not None else weather.fetch_hourly
         self.mode = mode or MODE or "real"
+        self.winter = (WINTER or self.mode in PRESETS) if winter is None else bool(winter)
+        self.window = WINDOW_WINTER if self.winter else WINDOW_WET
         self.clock, self.retry_s = clock, retry_s
         self.cache, self.inflight = {}, {}
         self.lock = threading.Lock()
         self.fetches = 0
+        self.table = None           # (rows, road) of W2's Table, the provider's
+        self.view = None            # {mode, cover, depth}: winterlook.lua's ('snow' message)
+        self.bins = [-1] * 8
+        self.ice = -1
+        self.table_changes = 0
+        self.cover = (cover if cover is not None else _snowcover()) if self.winter else None
+        if self.cover is not None:
+            self.cover.set_provider(self.provider)
+
+    def provider(self, south, west, north, east):
+        """snowcover's provider: the last table as a uniform Field (None while there is none or no cover in it)."""
+        t = self.table
+        if t is None or not (any(r[1] > 0 for r in t[0]) or t[2] > 0):
+            return None
+        try:
+            table = self.cover.Table(t[0], t[1], t[2])
+        except TypeError:           # (a snowcover before Table.ice)
+            table = self.cover.Table(t[0], t[1])
+        return self.cover.Field(CELL_DEG, uniform=table)
+
+    def commit(self, conn, raw):
+        """(event loop) The W2 table of a new state: when it differs from the last, the provider's Field changes, the
+        server re-renders what is shown (Server.snow_changed) and every connection gets {"type": "snow"}."""
+        if self.cover is None or raw is None or not raw.get("bands"):
+            return False
+        with self.lock:
+            rows, road, bins = w2_table(raw, self.bins)
+            self.bins = bins
+            lake = raw.get("lake") or [0, 0, 0]
+            self.ice = int(fast._ef.snow_lake_share(int(lake[1]), self.ice))
+            g = raw["ground"]
+            view = {"mode": "real", "cover": int(g[9]), "depth": int(g[8])}
+            changed = (rows, road, self.ice) != self.table
+            self.table, self.view = (rows, road, self.ice), view
+        if changed:
+            self.table_changes += 1
+            s = conn.s
+            if hasattr(s, "snow_changed"):
+                s.snow_changed()
+            for c in list(getattr(s, "connections", ()) or ()):
+                c.send({"type": "snow", "snow": dict(view)})
+        return changed
 
     def key(self, lat, lon, now):
         return weather.cell(lat, lon) + (int(now // 3600),)
@@ -174,7 +265,7 @@ class Service:
                 return hit
             raise IOError("snow: the shared fetch for this cell failed")
         try:
-            recs, times, z_cell, _off = records(self.fetch(k[0], k[1]))
+            recs, times, z_cell, _off = records(self.fetch(k[0], k[1], *self.window))
             if not times:
                 raise IOError("snow: no hourly data")
             hit = (recs, times, z_cell, k[0], k[1])
@@ -188,14 +279,15 @@ class Service:
                 self.inflight.pop(k).set()
         return hit
 
-    def get(self, lat, lon, z_site, prev_bin=-1):
-        """The snowstate message at (lat, lon) with the ground z_site m above sea level."""
+    def get(self, lat, lon, z_site, prev_bin=-1, raw=None):
+        """The snowstate message at (lat, lon) with the ground z_site m above sea level (raw: see message)."""
         if self.mode in PRESETS:
-            return preset_message(self.mode, lat, lon, prev_bin)
+            return preset_message(self.mode, lat, lon, prev_bin, raw=raw)
         recs, times, z_cell, clat, clon = self.forcing(lat, lon)
         now = self.clock()
         i = hour_index(times, now)
-        return message(recs, i, times[i], clat, clon, z_site, z_cell, regime_at(lat, lon), prev_bin)
+        return message(recs, i, times[i], clat, clon, z_site, z_cell, regime_at(lat, lon), prev_bin, raw=raw,
+                       winter=self.winter)
 
 
 class Tracker:
@@ -232,9 +324,9 @@ class Tracker:
         zq = int(round(h / 10.0)) * 10
 
         async def run():
-            msg, wait = None, 0.0
+            msg, wait, raw = None, 0.0, {}
             try:
-                msg = await conn.loop.run_in_executor(None, svc.get, lat, lon, zq, self.bin)
+                msg = await conn.loop.run_in_executor(None, svc.get, lat, lon, zq, self.bin, raw)
             except Exception as e:      # network, HTTP, JSON, the rate limiter: keep the last state
                 wait = getattr(e, "retry_after", 0.0) or 0.0
                 (log.info if isinstance(e, netfetch.Offline) else log.warning)(
@@ -247,4 +339,5 @@ class Tracker:
                     self.last, self.msg, self.bin = (lat, lon, h, int(now // 3600)), msg, msg["ground"][1]
             if msg is not None:
                 conn.send(msg)
+                svc.commit(conn, raw)
         conn.spawn(run())

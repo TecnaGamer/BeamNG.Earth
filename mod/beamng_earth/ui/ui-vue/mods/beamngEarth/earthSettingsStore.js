@@ -152,6 +152,8 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expWinter", type: "bool", default: false, name: "Winter grip", desc: "Experimental. Roads get slippery when the real weather brings snow, slush, frost or ice: grip follows the snow on the ground and the road's class (main roads are cleared and salted first, bridges freeze first). The road's condition shows in the status bar. No snow on the ground yet.",
         note: RESTART_NOTE },
+      { id: "expWetRoads", type: "bool", default: false, name: "Wet roads", desc: "Experimental. Rain leaves the roads wet for hours as they dry: less grip and tyre spray while they are wet (included in Winter grip).",
+        note: RESTART_NOTE },
     ],
   },
   {
