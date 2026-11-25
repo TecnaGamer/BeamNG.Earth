@@ -48,11 +48,24 @@ M.SLOTS = {
   slush      = { 0.40, 0.33, 0.6, 2.5, 0.002, 'SNOW', true },
   dusting    = { 0.42, 0.40, 0.4, 2.5, 0, 'SNOW' },
   loose      = { 0.38, 0.33, 0.6, 2.5, 0, 'SNOW', true },
-  packed     = { 0.30, 0.27, 0.55, 2.0, 0, 'SNOW' },
+  packed     = { 0.27, 0.24, 0.55, 2.0, 0, 'SNOW' },
   packed_icy = { 0.17, 0.13, 0.3, 1.0, 0, 'ICE' },
 }
 M.GRIT = { 0.25, 0.22 }      -- gritted ice / packed ice: at least this (Nordic minor roads)
 M.ICE_WARM, M.ICE_COLD = { -1, 0.08 }, { -15, 0.22 }    -- ice by pavement temperature: most slippery near 0 degC
+-- CALIBRATION (2026-11-24, PC, stock pickup, its own tyres (all-season class), full ABS stops, the run's distance
+-- scaled to the exact speed; ~/bnge-tests/winter/w1/calib_runs.jsonl). Terrain carriageway (ASPHALT_OLD), W Colter St,
+-- Glendale AZ, flat; median of 3 (2 for the rest), m (ft):
+--   condition    30 mph          50 mph         cited target at 31 mph (PLAN.md 4.5 [R2])
+--   dry          11.2 (37)       33.0 (108)     10-12 m
+--   wet          13.6 (45)       39.2 (129)     13-15 m
+--   packed       36.6 (120)      97.7 (321)     36-40 m all-season (27-32 winter tyres); 0.30 gave 32.5 m: now 0.27
+--   ice (-5 C)   82.4 (270)      213 (700)      65-80 m winter tyres; all-season ~80-100 m
+--   wet_ice      148 (486)                      120-165 m
+--   salt_wet 14.9, frost 29.4, slush 25.1, loose 26.2 (3 cm: drag), packed_icy 64.1, black_ice 72.4 (30 mph)
+-- Bridge deck (ASPHALT mesh, Mill Ave Tempe, from the crest down a ~6 % grade both ways): dry 11.4, wet 14.6, packed
+-- 44.7, ice ~250 m; corrected for the grade (mu = v^2 / 2gd + grade) within ~15 % of the terrain's. Wheel contact ids
+-- followed the slot on both (ASPHALT 10, ASPHALT_WET 11, SNOW 22, ICE 21).
 -- Open ground by depth bin D1..D6 (static, sliding, roughness): thin cover over grass to deep snow
 M.GROUND = { { 0.55, 0.45, 0.4 }, { 0.45, 0.38, 0.6 }, { 0.40, 0.35, 0.65 }, { 0.38, 0.33, 0.7 }, { 0.36, 0.32, 0.7 },
   { 0.35, 0.31, 0.7 } }

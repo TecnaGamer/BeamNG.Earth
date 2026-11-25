@@ -98,7 +98,7 @@ local asphStock = core_environment.groundModels.ASPHALT.cdata
 W.onState(state({ 'packed', 40, -5, 'loose', 80, 0, 0.9 }, { 'black_ice', 0, -7, 'dusting', 10, 0, 0.9 },
   { 200, 4, 8, 0, 0, 30, 12 }))
 local m = byName()
-T.check(m.ASPHALT_OLD and m.ASPHALT_OLD.staticFrictionCoefficient == 0.30 and m.ASPHALT_OLD.collisiontype == 22,
+T.check(m.ASPHALT_OLD and m.ASPHALT_OLD.staticFrictionCoefficient == 0.27 and m.ASPHALT_OLD.collisiontype == 22,
   'terrain roads: packed snow (SNOW particles)')
 T.check(m.GROUNDMODEL_ASPHALT_OLD and m.GROUNDMODEL_ASPHALT_OLD ~= m.ASPHALT_OLD, 'its alias set too, its own copy')
 T.check(m.ASPHALT and m.ASPHALT.staticFrictionCoefficient == 0.15 and m.ASPHALT.collisiontype == 21, 'decks: black ice')
@@ -121,7 +121,7 @@ W.update(1.0)
 T.check(#calls == n, 'steady: no calls')
 core_environment.groundModels = models()
 W.update(1.0)
-T.check(#calls > n and byName().ASPHALT_OLD.staticFrictionCoefficient == 0.30, 'a reload: applied again')
+T.check(#calls > n and byName().ASPHALT_OLD.staticFrictionCoefficient == 0.27, 'a reload: applied again')
 
 -- the road under the car changes class: after the dwell the slots follow the new class's row
 n = #calls
