@@ -298,6 +298,17 @@ def setback(fitd, low=False):
     return 0.0 if low or fitd is None else float(fitd.get("sb") or 0.0)
 
 
+def inset(fitd, low=False):
+    """(BNE_ROADSYS_TUNNELS, tunnel plan T1) m the whole structure stands back so that nothing of it reaches out past
+    the mouth (the record's portal: the map's tag end, nothing moved inward or outward): a hood's collar and its raked
+    feet ended at the mouth, not over the approach's lanes. 0 otherwise (the structure as before)."""
+    import roadsys
+    if not roadsys.TUNNELS or fitd is None:
+        return 0.0
+    lk = LOOKS[_look(fitd, low)]
+    return float(lk[0] + lk[1])
+
+
 def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), low=False):
     """The mouth's structure for roadmesh.tunnel: (positions (n, 3), triangles (m, 3), uvs (n, 2), codes (m,): 0 the
     structure, 1 soil). p: the mouth's floor centre in the mesh's coordinates; walls_near: (left, right) a cutting's
@@ -307,8 +318,9 @@ def structure(fitd, p, ul, out, sec, th, hw, uv_m, walls_near=(False, False), lo
     none = np.zeros(0)
     # a hood: its headwall back at the hill's face, the hood reaching out from there to the mouth
     sb = setback(fitd, low)
-    p = np.asarray(p, np.float64) - np.r_[np.asarray(out, np.float64) * sb, 0.0]
-    ws = np.asarray(fitd["ws"], np.float64) + sb
+    ins = inset(fitd, low)
+    p = np.asarray(p, np.float64) - np.r_[np.asarray(out, np.float64) * (sb + ins), 0.0]
+    ws = np.asarray(fitd["ws"], np.float64) + sb + ins
     wl = np.asarray(fitd["wl"], np.float64) if fitd.get("wl") is not None and not walls_near[0] else none
     wr = np.asarray(fitd["wr"], np.float64) if fitd.get("wr") is not None and not walls_near[1] else none
     pr = prm(st, th, hw, float(fitd["sl"]), float(fitd["sr"]), uv_m)
@@ -328,4 +340,12 @@ def cover(mid, left, z, ground, hw, th, caps, uv_m, soil_uv_m, sec=None):
                                       np.ascontiguousarray(z, np.float64), np.ascontiguousarray(ground, np.float64),
                                       float(hw + COVER_SIDE), float(th), COVER_OVER, COVER_NEED, COVER_FOOT,
                                       bool(caps[0]), bool(caps[1]), float(uv_m), float(soil_uv_m),
-                                      np.ascontiguousarray(np.zeros((0, 2)) if sec is None else sec, np.float64))
+                                      np.ascontiguousarray(np.zeros((0, 2)) if sec is None else sec, np.float64),
+                                      *((True,) if _follow() else ()))
+
+
+def _follow():
+    """(BNE_ROADSYS_TUNNELS, 629) the tube's cover's top rises to the ground over its rows (earthfast cover_follow): the
+    record's holes' edges meet it (the seam rule)."""
+    import roadsys
+    return roadsys.TUNNELS

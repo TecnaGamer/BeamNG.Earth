@@ -632,3 +632,42 @@ class ChainPins(unittest.TestCase):
         floor, kinds = roads.tunnel_sections(s, gp, cover_g=g)
         self.assertAlmostEqual(floor[-1], 104.0)
         self.assertEqual(int(kinds[-1]), 2, "deep in the hill at the joint: the tube goes on")
+
+
+class CanonicalPool(unittest.TestCase):
+    """One tunnel network, the same parts whichever cell asked for it (TunnelProfiles._resolve): two map cells hold
+    copies of one part whose coordinates differ (each cell's tile quantises them: I-395's copies 0.33 m apart), and the
+    copy a solve took was the asker's first cell's. Wacker Drive's network was asked from two cells by two threads and
+    solved from different copies; whichever published first won: two builds' tunnel and road meshes differed
+    (2026-11-25). Now the home copy (the cell the part starts in) whichever cell asked, not the first in key order."""
+
+    def test_the_home_copy_from_either_cell(self):
+        import geodesy
+        import mapcells
+        lat0, lon0 = 41.8856, -87.6368
+        a = mapcells.cell_of(lat0, lon0)
+        b = mapcells.CellKey(a.z, a.x - 1, a.y)          # (west of a: first in key order)
+        edge = mapcells._lon_of(a.x, 2 ** a.z)            # (a's west edge)
+        frame = geodesy.EnuFrame(lat0, edge)
+        spec = Spec(7.0, "paved", False, "primary", False)
+        base = line(20, -20, step=-4.0)                   # (from 20 m inside a across its west edge into b)
+        self.assertEqual(str(mapcells.cell_of(lat0, edge + 0.0002)), str(a))
+        copies = {str(a): base + 1e-6, str(b): base - 1e-6}
+
+        def entries(key):
+            xy = copies[str(key)]
+            return [((("f", 0)), (spec, xy, lon0, -1.0, len(xy), ""))], []
+
+        got = []
+        for first in (b, a):
+            tp = roads.TunnelProfiles(frame, lambda key: None, lambda la, lo: np.zeros(np.shape(la)))
+            tp._cell_entries = entries
+            pool, ground, loaded = {}, {}, set()
+            for ck in (first, a if first is b else b):  # (the asker's cell first, as _chain_solve loads its ends')
+                loaded.add(str(ck))
+                tp._load(ck, pool, ground)
+            comp = tp._resolve(("f", 0), pool, ground, loaded)
+            self.assertEqual(comp, [("f", 0)])
+            got.append(np.asarray(pool[("f", 0)][1]))
+        self.assertTrue(np.array_equal(got[0], got[1]), "the copy depended on the asker's cell")
+        self.assertTrue(np.array_equal(got[0], copies[str(a)]), "not the home copy")

@@ -1,0 +1,1448 @@
+{
+ "about": "The tunnel corpus's truth table (2026-11-25): 52 real road/rail tunnel mouths at 36 places, each at its real portal face (lat/lon), the OSM tunnel tag end used (osm_end, osm_off_m: its distance from the face along the road, null = not checked), out = the compass heading a car leaves the tunnel by, bores, kind, the portal style seen (from Mapillary photos and public aerials) and its kit class (tunnel plan 4.4: K1 raked hood, K2 headwall / collar / canopy in a face, K3 box at a U-trough, K4 portal or ventilation building, K5 stacked deck edge, K6 gallery, arch = stone or brick arch; null = not seen). Photos: Mapillary contributors, CC BY-SA 4.0 (ids and creators listed).",
+ "license": "Photo references: Mapillary, CC BY-SA 4.0. Positions read from public aerials and OSM (ODbL).",
+ "mouths": [
+  {
+   "id": "fortmchenry-e",
+   "place": "fortmchenry",
+   "mouth": "e",
+   "lat": 39.26375,
+   "lon": -76.56645,
+   "osm_end": [
+    39.26379,
+    -76.56646
+   ],
+   "osm_off_m": 4,
+   "out": 61,
+   "bores": 4,
+   "kind": "subsea immersed tube",
+   "style": "cut-and-cover box under the ventilation building",
+   "style_class": "K4",
+   "water_m": "~400 (port fill)",
+   "photos": [
+    {
+     "mapillary_id": "137824961724239",
+     "creator": "mdroads"
+    },
+    {
+     "mapillary_id": "571218367189175",
+     "creator": "emil_d"
+    },
+    {
+     "mapillary_id": "819520608943400",
+     "creator": "richlv"
+    },
+    {
+     "mapillary_id": "2019430708209516",
+     "creator": "talllguy"
+    }
+   ]
+  },
+  {
+   "id": "fortmchenry-w",
+   "place": "fortmchenry",
+   "mouth": "w",
+   "lat": 39.2644,
+   "lon": -76.5897,
+   "osm_end": [
+    39.26437,
+    -76.58972
+   ],
+   "osm_off_m": 3,
+   "out": 294,
+   "bores": 4,
+   "kind": "subsea immersed tube",
+   "style": "cut-and-cover box between U-trough walls",
+   "style_class": "K3",
+   "water_m": "~400-450 (port fill)",
+   "photos": [
+    {
+     "mapillary_id": "1128412702726794",
+     "creator": "mdroads"
+    },
+    {
+     "mapillary_id": "1895910051304753",
+     "creator": "Satsuka_Osaka"
+    },
+    {
+     "mapillary_id": "503302422717409",
+     "creator": "roadgeek_md99"
+    },
+    {
+     "mapillary_id": "253517056463333",
+     "creator": "mdroads"
+    }
+   ]
+  },
+  {
+   "id": "harbortunnel-n",
+   "place": "harbortunnel",
+   "mouth": "n",
+   "lat": 39.2626,
+   "lon": -76.5655,
+   "osm_end": [
+    39.26272,
+    -76.56541
+   ],
+   "osm_off_m": 15,
+   "out": 38,
+   "bores": 2,
+   "kind": "subsea immersed tube",
+   "style": "cut-and-cover box in a tiled trough, steel lattice light screen over the first ~60-80 m",
+   "style_class": "K3",
+   "water_m": "~300-350 (port fill)",
+   "photos": [
+    {
+     "mapillary_id": "972161513550668",
+     "creator": "mdroads"
+    },
+    {
+     "mapillary_id": "286945286397519",
+     "creator": "mdroads"
+    },
+    {
+     "mapillary_id": "1404474433981848",
+     "creator": "amaiman"
+    }
+   ]
+  },
+  {
+   "id": "harbortunnel-s",
+   "place": "harbortunnel",
+   "mouth": "s",
+   "lat": 39.24604,
+   "lon": -76.5767,
+   "osm_end": [
+    39.24604,
+    -76.5767
+   ],
+   "osm_off_m": 3,
+   "out": 205,
+   "bores": 2,
+   "kind": "subsea immersed tube",
+   "style": "portal/ventilation building over both openings",
+   "style_class": "K4",
+   "water_m": "~200 (port fill/bulkhead)",
+   "photos": [
+    {
+     "mapillary_id": "1592205744319630",
+     "creator": "mdroads"
+    },
+    {
+     "mapillary_id": "564589374504701",
+     "creator": "mimit"
+    },
+    {
+     "mapillary_id": "1577897826256403",
+     "creator": "amaiman"
+    },
+    {
+     "mapillary_id": "1129479710906147",
+     "creator": "dgearhart"
+    }
+   ]
+  },
+  {
+   "id": "drogden-kastrup",
+   "place": "drogden",
+   "mouth": "kastrup",
+   "lat": 55.63119,
+   "lon": 12.6773,
+   "osm_end": [
+    55.63119,
+    12.6773
+   ],
+   "osm_off_m": 5,
+   "out": 306,
+   "bores": "2 road + 2 rail",
+   "kind": "subsea immersed tube",
+   "style": "cut-and-cover box, long flat headwall over road + rail openings, portal building behind",
+   "style_class": "K4",
+   "water_m": "~190 along axis, ~60 sideways (artificial peninsula, riprap)",
+   "photos": [
+    {
+     "mapillary_id": "545436059798529",
+     "creator": "lvl5"
+    },
+    {
+     "mapillary_id": "979063709529538",
+     "creator": "jesolem"
+    },
+    {
+     "mapillary_id": "173981297942561",
+     "creator": "sannemik"
+    }
+   ]
+  },
+  {
+   "id": "drogden-peberholm",
+   "place": "drogden",
+   "mouth": "peberholm",
+   "lat": 55.6099,
+   "lon": 12.7295,
+   "osm_end": [
+    55.6099,
+    12.7295
+   ],
+   "osm_off_m": 5,
+   "out": 126,
+   "bores": "2 road + 2 rail",
+   "kind": "subsea immersed tube",
+   "style": "same as Kastrup: long flat headwall, portal building on the island tip",
+   "style_class": "K4",
+   "water_m": "~230 along axis, ~60-80 sideways (artificial island)",
+   "photos": [
+    {
+     "mapillary_id": "763344132910650",
+     "creator": "zuse"
+    },
+    {
+     "mapillary_id": "3949567701799017",
+     "creator": "ludvigemgard"
+    },
+    {
+     "mapillary_id": "4027252814001373",
+     "creator": "lvl5"
+    }
+   ]
+  },
+  {
+   "id": "ryfylke-solbakk",
+   "place": "ryfylke",
+   "mouth": "solbakk",
+   "lat": 59.03917,
+   "lon": 5.93211,
+   "osm_end": [
+    59.03917,
+    5.93211
+   ],
+   "osm_off_m": 5,
+   "out": 157,
+   "bores": 2,
+   "kind": "subsea bored (rock)",
+   "style": "twin raked concrete hoods in an artificial grass embankment",
+   "style_class": "K1",
+   "water_m": "~50 (reclaimed fill, riprap seawall)",
+   "photos": [
+    {
+     "mapillary_id": "865616971858734",
+     "creator": "Albergarri788"
+    },
+    {
+     "mapillary_id": "956668101765692",
+     "creator": "macmakesmaps"
+    },
+    {
+     "mapillary_id": "325243433184521",
+     "creator": "Albergarri788"
+    }
+   ]
+  },
+  {
+   "id": "ryfylke-stavanger",
+   "place": "ryfylke",
+   "mouth": "stavanger",
+   "lat": 58.95369,
+   "lon": 5.72168,
+   "osm_end": [
+    58.95369,
+    5.72168
+   ],
+   "osm_off_m": 5,
+   "out": 194,
+   "bores": 2,
+   "kind": "urban land portal of the Ryfast/E39 system",
+   "style": "twin raked hoods under a planted mound, U-trough",
+   "style_class": "K1",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "1062196040978753",
+     "creator": "brokenpike"
+    },
+    {
+     "mapillary_id": "809437229555687",
+     "creator": "brokenpike"
+    },
+    {
+     "mapillary_id": "308495457342355",
+     "creator": "derzornigemarkus"
+    }
+   ]
+  },
+  {
+   "id": "tromsoysund-e",
+   "place": "tromsoysund",
+   "mouth": "e",
+   "lat": 69.6621,
+   "lon": 19.0186,
+   "osm_end": [
+    69.6621,
+    19.0186
+   ],
+   "osm_off_m": null,
+   "out": 267,
+   "bores": 2,
+   "kind": "subsea bored (rock)",
+   "style": "not seen (no photos); twin bores by the Tomasjord junction",
+   "style_class": null,
+   "water_m": "~150 (fill, riprap shore)",
+   "photos": []
+  },
+  {
+   "id": "tromsoysund-w",
+   "place": "tromsoysund",
+   "mouth": "w",
+   "lat": 69.68297,
+   "lon": 18.99316,
+   "osm_end": [
+    69.68297,
+    18.99316
+   ],
+   "osm_off_m": null,
+   "out": 309,
+   "bores": 2,
+   "kind": "subsea bored (rock)",
+   "style": "not seen (no photos, aerial unreliable)",
+   "style_class": null,
+   "water_m": null,
+   "photos": []
+  },
+  {
+   "id": "burnley-domain-e",
+   "place": "burnley",
+   "mouth": "domain_e",
+   "lat": -37.82638,
+   "lon": 144.9843,
+   "osm_end": [
+    -37.82638,
+    144.9843
+   ],
+   "osm_off_m": null,
+   "out": 104,
+   "bores": 1,
+   "kind": "under river, mined (rock)",
+   "style": "not seen (aerial only): short cut beside Punt Rd interchange",
+   "style_class": null,
+   "water_m": "~80 (Yarra, natural banks)",
+   "photos": []
+  },
+  {
+   "id": "burnley-e",
+   "place": "burnley",
+   "mouth": "e",
+   "lat": -37.8295,
+   "lon": 145.00221,
+   "osm_end": [
+    -37.8295,
+    145.00221
+   ],
+   "osm_off_m": null,
+   "out": 108,
+   "bores": 1,
+   "kind": "under river, mined (rock)",
+   "style": "not seen (no outside photo); cut onto the Monash Fwy, round brick vent building beside",
+   "style_class": null,
+   "water_m": "~150-200 (Yarra bank)",
+   "photos": [
+    {
+     "mapillary_id": "330828965116993",
+     "creator": "skillsy"
+    },
+    {
+     "mapillary_id": "319513126434558",
+     "creator": "mander"
+    }
+   ]
+  },
+  {
+   "id": "burnley-w",
+   "place": "burnley",
+   "mouth": "w",
+   "lat": -37.8264,
+   "lon": 144.9663,
+   "osm_end": [
+    -37.82635,
+    144.96629
+   ],
+   "osm_off_m": 6,
+   "out": 250,
+   "bores": "2 tunnels x 3 lanes",
+   "kind": "under river, mined (rock)",
+   "style": "underpass box under a wide road deck (Kings Way overpass), columns between carriageways",
+   "style_class": "K3",
+   "water_m": "~1200 (Yarra; not at the portal)",
+   "photos": [
+    {
+     "mapillary_id": "295916952151058",
+     "creator": "stev391"
+    },
+    {
+     "mapillary_id": "1818436532689817",
+     "creator": "DanXCI"
+    },
+    {
+     "mapillary_id": "1165834965650440",
+     "creator": "skillsy"
+    },
+    {
+     "mapillary_id": "1327563001597245",
+     "creator": "TonyStark"
+    }
+   ]
+  },
+  {
+   "id": "holland-nj-entry",
+   "place": "holland",
+   "mouth": "nj_entry",
+   "lat": 40.7297,
+   "lon": -74.03605,
+   "osm_end": [
+    40.7297,
+    -74.03605
+   ],
+   "osm_off_m": 5,
+   "out": 287,
+   "bores": 1,
+   "kind": "under river, shield-driven tubes",
+   "style": "cut-and-cover box at the end of a deep U-trough",
+   "style_class": "K3",
+   "water_m": "~500 (Hudson)",
+   "photos": [
+    {
+     "mapillary_id": "227685355360615",
+     "creator": "9rxy85b5tlsy"
+    },
+    {
+     "mapillary_id": "174599674564543",
+     "creator": "mdroads"
+    },
+    {
+     "mapillary_id": "3942981875818027",
+     "creator": "nykera96"
+    }
+   ]
+  },
+  {
+   "id": "holland-nj-exit",
+   "place": "holland",
+   "mouth": "nj_exit",
+   "lat": 40.73056,
+   "lon": -74.03633,
+   "osm_end": [
+    40.73056,
+    -74.03633
+   ],
+   "osm_off_m": null,
+   "out": 311,
+   "bores": 1,
+   "kind": "under river, shield-driven tubes",
+   "style": "not seen (open trough rising NW, aerial)",
+   "style_class": null,
+   "water_m": "~500",
+   "photos": []
+  },
+  {
+   "id": "holland-ny-entry",
+   "place": "holland",
+   "mouth": "ny_entry",
+   "lat": 40.72501,
+   "lon": -74.00697,
+   "osm_end": [
+    40.72501,
+    -74.00697
+   ],
+   "osm_off_m": 5,
+   "out": 181,
+   "bores": 1,
+   "kind": "under river, shield-driven tubes",
+   "style": "cut-and-cover box under buildings at the end of a granite U-trough",
+   "style_class": "K3",
+   "water_m": "~400 (Hudson)",
+   "photos": [
+    {
+     "mapillary_id": "217522129845588",
+     "creator": "smartmaper"
+    },
+    {
+     "mapillary_id": "464285901301401",
+     "creator": "nykera96"
+    },
+    {
+     "mapillary_id": "796591350978032",
+     "creator": "bhousel"
+    },
+    {
+     "mapillary_id": "963602414951673",
+     "creator": "raveneye"
+    }
+   ]
+  },
+  {
+   "id": "holland-ny-exit",
+   "place": "holland",
+   "mouth": "ny_exit",
+   "lat": 40.72337,
+   "lon": -74.00777,
+   "osm_end": [
+    40.72337,
+    -74.00777
+   ],
+   "osm_off_m": null,
+   "out": 137,
+   "bores": 1,
+   "kind": "under river, shield-driven tubes",
+   "style": "not seen",
+   "style_class": null,
+   "water_m": "~400",
+   "photos": []
+  },
+  {
+   "id": "elbtunnel-n",
+   "place": "elbtunnel",
+   "mouth": "n",
+   "lat": 53.55381,
+   "lon": 9.89745,
+   "osm_end": [
+    53.55383,
+    9.89769
+   ],
+   "osm_off_m": 16,
+   "out": 353,
+   "bores": 4,
+   "kind": "under river, bored tubes",
+   "style": "brick portal building over 4 bores (curved face), big gantry 60-80 m out",
+   "style_class": "K4",
+   "water_m": "~1000 (Elbe)",
+   "photos": [
+    {
+     "mapillary_id": "1143800899431755",
+     "creator": "saschahaberkorn"
+    },
+    {
+     "mapillary_id": "118644113596089",
+     "creator": "amenophis"
+    },
+    {
+     "mapillary_id": "1558043081875157",
+     "creator": "Hightower-"
+    },
+    {
+     "mapillary_id": "512920073465612",
+     "creator": "chuck"
+    }
+   ]
+  },
+  {
+   "id": "elbtunnel-s",
+   "place": "elbtunnel",
+   "mouth": "s",
+   "lat": 53.5365,
+   "lon": 9.9299,
+   "osm_end": [
+    53.5375,
+    9.9289
+   ],
+   "osm_off_m": 130,
+   "out": 130,
+   "bores": 4,
+   "kind": "under river, bored tubes",
+   "style": "light-blue folded-plate portal canopy over 4 openings between tall noise walls",
+   "style_class": "K2",
+   "water_m": "~350-400 (harbour basin)",
+   "photos": [
+    {
+     "mapillary_id": "4167386613313259",
+     "creator": "ma_rt_in"
+    },
+    {
+     "mapillary_id": "2549668398663251",
+     "creator": "adverburg"
+    },
+    {
+     "mapillary_id": "1958416497677462",
+     "creator": "heetENkoel"
+    },
+    {
+     "mapillary_id": "134868611915222",
+     "creator": "chuck"
+    }
+   ]
+  },
+  {
+   "id": "dartford-n",
+   "place": "dartford",
+   "mouth": "n",
+   "lat": 51.4702,
+   "lon": 0.26252,
+   "osm_end": [
+    51.4702,
+    0.26252
+   ],
+   "osm_off_m": null,
+   "out": 29,
+   "bores": 2,
+   "kind": "under river, shield-driven",
+   "style": "not seen (cut in industrial area, aerial only)",
+   "style_class": null,
+   "water_m": "~300 (salt marsh)",
+   "photos": []
+  },
+  {
+   "id": "dartford-s",
+   "place": "dartford",
+   "mouth": "s",
+   "lat": 51.45933,
+   "lon": 0.25162,
+   "osm_end": [
+    51.45933,
+    0.25162
+   ],
+   "osm_off_m": 5,
+   "out": 222,
+   "bores": "2 (separate troughs)",
+   "kind": "under river, shield-driven",
+   "style": "flat headwall with horseshoe arch at the end of a deep battered-wall trough",
+   "style_class": "K3",
+   "water_m": "~300-350 (Thames, mudflat bank)",
+   "photos": [
+    {
+     "mapillary_id": "1665990740257717",
+     "creator": "wasd42"
+    },
+    {
+     "mapillary_id": "7414914405267696",
+     "creator": "edloach"
+    },
+    {
+     "mapillary_id": "480697359843658",
+     "creator": "petermead"
+    },
+    {
+     "mapillary_id": "1341307707860739",
+     "creator": "Semir_Mapillary"
+    }
+   ]
+  },
+  {
+   "id": "folkestone-portal",
+   "place": "folkestone",
+   "mouth": "portal",
+   "lat": 51.0971,
+   "lon": 1.1558,
+   "osm_end": [
+    51.09724,
+    1.15693
+   ],
+   "osm_off_m": 80,
+   "out": 259,
+   "bores": "2 running + service",
+   "kind": "rail subsea, bored",
+   "style": "cut-and-cover portal box at the foot of chalk downs, grassed over",
+   "style_class": "K3",
+   "water_m": "~2500-3000 inland",
+   "photos": []
+  },
+  {
+   "id": "coquelles-portal",
+   "place": "coquelles",
+   "mouth": "portal",
+   "lat": 50.92286,
+   "lon": 1.78048,
+   "osm_end": [
+    50.92286,
+    1.78048
+   ],
+   "osm_off_m": 5,
+   "out": 121,
+   "bores": "2 running + service",
+   "kind": "rail subsea, bored",
+   "style": "curved concrete headwall with lip and service road on top, portal buildings",
+   "style_class": "K4",
+   "water_m": "~3000 inland",
+   "photos": []
+  },
+  {
+   "id": "aspfjord-n",
+   "place": "aspfjord",
+   "mouth": "n",
+   "lat": 67.47112,
+   "lon": 15.58223,
+   "osm_end": [
+    67.47112,
+    15.58223
+   ],
+   "osm_off_m": null,
+   "out": 18,
+   "bores": 1,
+   "kind": "rock tunnel along a fjord (not subsea)",
+   "style": "not seen (no outside photo, Esri shows no road)",
+   "style_class": null,
+   "water_m": null,
+   "photos": []
+  },
+  {
+   "id": "aspfjord-s",
+   "place": "aspfjord",
+   "mouth": "s",
+   "lat": 67.46769,
+   "lon": 15.58111,
+   "osm_end": [
+    67.46769,
+    15.58111
+   ],
+   "osm_off_m": 10,
+   "out": 177,
+   "bores": 1,
+   "kind": "rock tunnel along a fjord (not subsea)",
+   "style": "flat concrete collar flush with a blasted rock face",
+   "style_class": "K2",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "765262658864859",
+     "creator": "VegvesenITS"
+    },
+    {
+     "mapillary_id": "1079756963331838",
+     "creator": "VegvesenITS"
+    }
+   ]
+  },
+  {
+   "id": "malta-sw",
+   "place": "malta",
+   "mouth": "sw",
+   "lat": 35.84686,
+   "lon": 14.48817,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 225,
+   "bores": "2 cells (centre wall)",
+   "kind": "urban twin box under an airport runway",
+   "style": "cut-and-cover twin box (mouth not photographed; inside: tiled cells, centre wall)",
+   "style_class": "K3",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "815362986070515",
+     "creator": "bicyclize"
+    }
+   ]
+  },
+  {
+   "id": "tromso-hansjordnes-e",
+   "place": "tromso",
+   "mouth": "hansjordnes_e",
+   "lat": 69.65732,
+   "lon": 18.96244,
+   "osm_end": [
+    69.65732,
+    18.96244
+   ],
+   "osm_off_m": 5,
+   "out": 96,
+   "bores": 1,
+   "kind": "urban rock tunnel network",
+   "style": "flat headwall in rock: concrete horseshoe arch in a vertical headwall",
+   "style_class": "K2",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "1759495571314261",
+     "creator": "kino"
+    },
+    {
+     "mapillary_id": "1013246160972330",
+     "creator": "kino"
+    },
+    {
+     "mapillary_id": "328447868630945",
+     "creator": "pbb"
+    }
+   ]
+  },
+  {
+   "id": "bergen-lovstakk-n",
+   "place": "bergen",
+   "mouth": "lovstakk_n",
+   "lat": 60.38195,
+   "lon": 5.31393,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 54,
+   "bores": 4,
+   "kind": "reused 2026-11-12 survey",
+   "style": "mountain bore, raked concrete hood (bell-mouth sticking out of the slope)",
+   "style_class": "K1",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "1111786364607747",
+     "creator": "BergenStreetView"
+    },
+    {
+     "mapillary_id": "559860210436985",
+     "creator": "southglos"
+    },
+    {
+     "mapillary_id": "525096323408392",
+     "creator": "southglos"
+    }
+   ]
+  },
+  {
+   "id": "floyfjell-s",
+   "place": "floyfjell",
+   "mouth": "s",
+   "lat": 60.38905,
+   "lon": 5.3398,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 216,
+   "bores": 2,
+   "kind": "reused 2026-11-12 survey",
+   "style": "cut-and-cover concrete box between retaining walls (U-trough approach)",
+   "style_class": "K3",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "1537741393475493",
+     "creator": "karlis"
+    },
+    {
+     "mapillary_id": "1372812636638207",
+     "creator": "karlis"
+    }
+   ]
+  },
+  {
+   "id": "milchbuck-n",
+   "place": "milchbuck",
+   "mouth": "n",
+   "lat": 47.39971,
+   "lon": 8.54779,
+   "osm_end": [
+    47.39971,
+    8.54779
+   ],
+   "osm_off_m": 5,
+   "out": 46,
+   "bores": 1,
+   "kind": "urban",
+   "style": "cut-and-cover box under a road deck in a deep U-trough inside a loop ramp",
+   "style_class": "K3",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "124581703752136",
+     "creator": "u001"
+    },
+    {
+     "mapillary_id": "477369713478638",
+     "creator": "beat"
+    },
+    {
+     "mapillary_id": "725906559981878",
+     "creator": "fcignat"
+    }
+   ]
+  },
+  {
+   "id": "milchbuck-s",
+   "place": "milchbuck",
+   "mouth": "s",
+   "lat": 47.3855,
+   "lon": 8.5365,
+   "osm_end": [
+    47.3855,
+    8.5365
+   ],
+   "osm_off_m": null,
+   "out": 300,
+   "bores": 1,
+   "kind": "urban",
+   "style": "not seen (portal under Letten park hillside, aerial only)",
+   "style_class": null,
+   "water_m": null,
+   "photos": []
+  },
+  {
+   "id": "sydney-e",
+   "place": "sydney",
+   "mouth": "e",
+   "lat": -33.87633,
+   "lon": 151.225,
+   "osm_end": [
+    -33.8765,
+    151.22499
+   ],
+   "osm_off_m": 20,
+   "out": 99,
+   "bores": 2,
+   "kind": "urban",
+   "style": "cut-and-cover box under a park with a green angular steel light-transition hood per carriageway",
+   "style_class": "K1",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "218743522991422",
+     "creator": "mfr80"
+    },
+    {
+     "mapillary_id": "2469420903575378",
+     "creator": "jlstudio"
+    },
+    {
+     "mapillary_id": "4030183313768467",
+     "creator": "ortho_is_hot"
+    }
+   ]
+  },
+  {
+   "id": "kanan-e",
+   "place": "kanan",
+   "mouth": "e",
+   "lat": 34.1056,
+   "lon": -118.8081,
+   "osm_end": [
+    34.10556,
+    -118.80803
+   ],
+   "osm_off_m": 8,
+   "out": 80,
+   "bores": "2 (separate offset headwalls)",
+   "kind": "mountain",
+   "style": "stone/masonry arch: semicircular arch in a stone-veneer headwall with stepped top, in a rock cut",
+   "style_class": "arch",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "392644488419330",
+     "creator": "cscrivens"
+    },
+    {
+     "mapillary_id": "280872760360988",
+     "creator": "cscrivens"
+    },
+    {
+     "mapillary_id": "4467783796773034",
+     "creator": "n-wong"
+    }
+   ]
+  },
+  {
+   "id": "kanan-w",
+   "place": "kanan",
+   "mouth": "w",
+   "lat": 34.10525,
+   "lon": -118.8108,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 260,
+   "bores": 2,
+   "kind": "mountain",
+   "style": "same twin stone arches (backlit photo)",
+   "style_class": "arch",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "305642891138640",
+     "creator": "cscrivens"
+    }
+   ]
+  },
+  {
+   "id": "compiegne-s",
+   "place": "compiegne",
+   "mouth": "s",
+   "lat": 49.42225,
+   "lon": 2.80635,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 165,
+   "bores": 1,
+   "kind": "lowarch under a railway embankment",
+   "style": "stone/masonry arch: single red-brick segmental arch through a rail embankment beside a roundabout",
+   "style_class": "arch",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "337177124830369",
+     "creator": "polyglot"
+    },
+    {
+     "mapillary_id": "390953888692930",
+     "creator": "polyglot"
+    }
+   ]
+  },
+  {
+   "id": "wacker-x",
+   "place": "wacker",
+   "mouth": "x",
+   "lat": 41.88561,
+   "lon": -87.63683,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": null,
+   "bores": "2+2 lanes",
+   "kind": "stacked",
+   "style": "stacked roadway: Lower Wacker under Upper Wacker, column forest, deck-edge 'portals' at ramps/cross streets",
+   "style_class": "K5",
+   "water_m": "river beside (Riverwalk)",
+   "photos": [
+    {
+     "mapillary_id": "584069192566349",
+     "creator": "juvie96"
+    },
+    {
+     "mapillary_id": "295827482012436",
+     "creator": "glendachagas"
+    },
+    {
+     "mapillary_id": "1187488795026239",
+     "creator": "juvie96"
+    },
+    {
+     "mapillary_id": "320365293004317",
+     "creator": "glendachagas"
+    }
+   ]
+  },
+  {
+   "id": "portland-x",
+   "place": "portland",
+   "mouth": "x",
+   "lat": 45.52313,
+   "lon": -122.66969,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": null,
+   "bores": null,
+   "kind": "stacked",
+   "style": "stacked roadway: Burnside Bridge W approach viaduct over Naito Pkwy / 1st Ave, square columns",
+   "style_class": "K5",
+   "water_m": "~100 (Willamette, Waterfront Park)",
+   "photos": [
+    {
+     "mapillary_id": "1161108025753400",
+     "creator": "omapme"
+    },
+    {
+     "mapillary_id": "485265919466552",
+     "creator": "imagecapture"
+    },
+    {
+     "mapillary_id": "1476755012963297",
+     "creator": "iragersh"
+    },
+    {
+     "mapillary_id": "649635927919117",
+     "creator": "asturksever"
+    }
+   ]
+  },
+  {
+   "id": "goeschenen-n",
+   "place": "goeschenen",
+   "mouth": "n",
+   "lat": 46.6717,
+   "lon": 8.59237,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 16,
+   "bores": 1,
+   "kind": "reused 2026-11-12 survey",
+   "style": "other: flat concrete portal under a large curved concrete canopy roof over the forecourt (cut-and-cover front)",
+   "style_class": "K2",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "853020695333676",
+     "creator": "alexanderar"
+    },
+    {
+     "mapillary_id": "728766702472527",
+     "creator": "maxim752"
+    },
+    {
+     "mapillary_id": "2861770440738820",
+     "creator": "emil_d"
+    }
+   ]
+  },
+  {
+   "id": "hochschwab-ntunnel-s",
+   "place": "hochschwab",
+   "mouth": "ntunnel_s",
+   "lat": 47.66173,
+   "lon": 15.15389,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 200,
+   "bores": 1,
+   "kind": "reused 2026-11-12 survey",
+   "style": "aerial only: short tunnel with a protruding concrete hood (raked hood), forested cover",
+   "style_class": "K1",
+   "water_m": "reservoir shore beside the road",
+   "photos": []
+  },
+  {
+   "id": "hochschwab-stunnel-n",
+   "place": "hochschwab",
+   "mouth": "stunnel_n",
+   "lat": 47.66006,
+   "lon": 15.15307,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 15,
+   "bores": 1,
+   "kind": "reused 2026-11-12 survey",
+   "style": "aerial: short tunnels with a protruding concrete hood (raked hood), forested/grassy cover",
+   "style_class": "K1",
+   "water_m": null,
+   "photos": []
+  },
+  {
+   "id": "eisenhower-w",
+   "place": "eisenhower",
+   "mouth": "w",
+   "lat": 39.67883,
+   "lon": -105.93513,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 267,
+   "bores": 2,
+   "kind": "reused 2026-11-12 survey",
+   "style": "other: large portal/ventilation building built over both bores",
+   "style_class": "K4",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "318171746768047",
+     "creator": "vorpalblade"
+    },
+    {
+     "mapillary_id": "2283170805765295",
+     "creator": "bct"
+    },
+    {
+     "mapillary_id": "1729393351618317",
+     "creator": "bct"
+    }
+   ]
+  },
+  {
+   "id": "fortpitt-n",
+   "place": "fortpitt",
+   "mouth": "n",
+   "lat": 40.43755,
+   "lon": -80.01382,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 55,
+   "bores": 2,
+   "kind": "reused 2026-11-12 survey",
+   "style": "other: flat Art Deco concrete portal building/headwall at the end of a bridge",
+   "style_class": "K4",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "216008250081806",
+     "creator": "lvl5"
+    },
+    {
+     "mapillary_id": "183548140299751",
+     "creator": "lvl5"
+    },
+    {
+     "mapillary_id": "148688147237178",
+     "creator": "lvl5"
+    }
+   ]
+  },
+  {
+   "id": "caldecott-e",
+   "place": "caldecott",
+   "mouth": "e",
+   "lat": 37.8616,
+   "lon": -122.2103,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 30,
+   "bores": 4,
+   "kind": "reused 2026-11-12 survey",
+   "style": "mountain bore, flat headwall in a rock face (Art Deco concrete headwall with pylons)",
+   "style_class": "K2",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "1020431625027977",
+     "creator": "lvl5"
+    },
+    {
+     "mapillary_id": "508312893631048",
+     "creator": "lvl5"
+    },
+    {
+     "mapillary_id": "507589253697857",
+     "creator": "jalessio"
+    }
+   ]
+  },
+  {
+   "id": "laerdal-e",
+   "place": "laerdal",
+   "mouth": "e",
+   "lat": 61.06395,
+   "lon": 7.50193,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 71,
+   "bores": 1,
+   "kind": "reused 2026-11-12 survey",
+   "style": "mountain bore, raked concrete hood (bell-mouth sticking out of the slope)",
+   "style_class": "K1",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "1346960199191864",
+     "creator": "Albergarri788"
+    },
+    {
+     "mapillary_id": "253750374240311",
+     "creator": "Albergarri788"
+    },
+    {
+     "mapillary_id": "743420986324149",
+     "creator": "derzornigemarkus"
+    }
+   ]
+  },
+  {
+   "id": "malibu-s",
+   "place": "malibu",
+   "mouth": "s",
+   "lat": 34.06937,
+   "lon": -118.7079,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 213,
+   "bores": 1,
+   "kind": "reused 2026-11-12 survey",
+   "style": "stone/masonry arch",
+   "style_class": "arch",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "3067098510187660",
+     "creator": "jesolem"
+    },
+    {
+     "mapillary_id": "493768301667520",
+     "creator": "cscrivens"
+    },
+    {
+     "mapillary_id": "1530163887331419",
+     "creator": "jesolem"
+    }
+   ]
+  },
+  {
+   "id": "loibl-n",
+   "place": "loibl",
+   "mouth": "n",
+   "lat": 46.445,
+   "lon": 14.2537,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 355,
+   "bores": 1,
+   "kind": "reused 2026-11-12 survey",
+   "style": "mountain bore, raked concrete hood (bell-mouth sticking out of the slope)",
+   "style_class": "K1",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "694149488218143",
+     "creator": "mik007"
+    },
+    {
+     "mapillary_id": "311354450586874",
+     "creator": "mik007"
+    },
+    {
+     "mapillary_id": "143933711321070",
+     "creator": "mik007"
+    }
+   ]
+  },
+  {
+   "id": "lantos-n",
+   "place": "lantos",
+   "mouth": "n",
+   "lat": 37.58248,
+   "lon": -122.50978,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 23,
+   "bores": 2,
+   "kind": "reused 2026-11-12 survey",
+   "style": "mountain bore, raked concrete hood (bell-mouth sticking out of the slope)",
+   "style_class": "K1",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "523970115401123",
+     "creator": "lvl5"
+    },
+    {
+     "mapillary_id": "1381015436147738",
+     "creator": "networklanman"
+    },
+    {
+     "mapillary_id": "167853095179397",
+     "creator": "lvl5"
+    }
+   ]
+  },
+  {
+   "id": "centralpark-w",
+   "place": "centralpark",
+   "mouth": "w",
+   "lat": 40.77826,
+   "lon": -73.96675,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 286,
+   "bores": 1,
+   "kind": "reused 2026-11-12 survey",
+   "style": "stone/masonry arch",
+   "style_class": "arch",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "2982722252017287",
+     "creator": "lvl5"
+    },
+    {
+     "mapillary_id": "3731152063674325",
+     "creator": "lvl5"
+    },
+    {
+     "mapillary_id": "305512354524366",
+     "creator": "lvl5"
+    }
+   ]
+  },
+  {
+   "id": "mysen-e18",
+   "place": "mysen",
+   "mouth": "e18",
+   "lat": 59.56708,
+   "lon": 11.36501,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 50,
+   "bores": 1,
+   "kind": "reused 2026-11-12 survey",
+   "style": "underpass/bridge-like short box under a road (from aerial and OSM layer=-1 only)",
+   "style_class": "K3",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "789644791702133",
+     "creator": "kino"
+    }
+   ]
+  },
+  {
+   "id": "konrad-n",
+   "place": "konrad",
+   "mouth": "n",
+   "lat": 48.7769,
+   "lon": 9.1837,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 25,
+   "bores": 2,
+   "kind": "reused 2026-11-12 survey",
+   "style": "cut-and-cover concrete box between retaining walls (U-trough approach)",
+   "style_class": "K3",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "1178835746756458",
+     "creator": "chuck"
+    },
+    {
+     "mapillary_id": "830849387839044",
+     "creator": "plexi32"
+    }
+   ]
+  },
+  {
+   "id": "i395-n",
+   "place": "i395",
+   "mouth": "n",
+   "lat": 38.90264,
+   "lon": -77.01469,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 332,
+   "bores": 2,
+   "kind": "reused 2026-11-12 survey",
+   "style": "cut-and-cover concrete box between retaining walls (U-trough approach)",
+   "style_class": "K3",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "1085319995531100",
+     "creator": "lvl5"
+    },
+    {
+     "mapillary_id": "1027008788215231",
+     "creator": "lvl5"
+    },
+    {
+     "mapillary_id": "1036654128130974",
+     "creator": "danbjoseph"
+    },
+    {
+     "mapillary_id": "630060845178891",
+     "creator": "dcpsi"
+    }
+   ]
+  },
+  {
+   "id": "paris-n",
+   "place": "paris",
+   "mouth": "n",
+   "lat": 48.8139,
+   "lon": 2.35505,
+   "osm_end": null,
+   "osm_off_m": null,
+   "out": 32,
+   "bores": 3,
+   "kind": "reused 2026-11-12 survey",
+   "style": "cut-and-cover concrete box between retaining walls (U-trough approach)",
+   "style_class": "K3",
+   "water_m": null,
+   "photos": [
+    {
+     "mapillary_id": "1478082562989544",
+     "creator": "eric_s"
+    },
+    {
+     "mapillary_id": "1414006545624987",
+     "creator": "jibec"
+    },
+    {
+     "mapillary_id": "373448194098294",
+     "creator": "tr4sk"
+    }
+   ]
+  }
+ ]
+}

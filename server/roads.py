@@ -9995,6 +9995,8 @@ class TunnelProfiles(BridgeProfiles):
         self._pins = {}             # part id -> (start, end) geodetic floor heights of its ends inside the hill
                                     # (_chain_pins; NaN at a portal)
         self._subsea = set()        # part ids whose underwater profile was solved successfully
+        self.holes = {}             # (T1, BNE_ROADSYS_TUNNELS) sub-part fid -> its holes' reach in from its start / end
+                                    # portal (the road system's record, tunnelrec.py; 0: no portal there)
 
     def _raw_ground(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
@@ -10008,8 +10010,7 @@ class TunnelProfiles(BridgeProfiles):
         blocks and the grading each ask for a network from their own cell, and solved it with whatever cells that had
         brought: I-395's ramps under Washington pinned to different joints by the tunnel store and the grading, a 1.4 m
         step in the ground between them (2026-11-12)."""
-        while True:
-            comp = super()._resolve(start, pool, ground, loaded)
+        def end_cells(comp):
             cells = {}
             for k in comp:
                 xy = np.asarray(pool[k][1], np.float64)
@@ -10017,6 +10018,21 @@ class TunnelProfiles(BridgeProfiles):
                 for la_, lo_ in zip(np.asarray(la), np.asarray(lo)):
                     ck = mapcells.cell_of(float(la_), float(lo_))
                     cells.setdefault(str(ck), ck)
+            return cells
+
+        while True:
+            comp = super()._resolve(start, pool, ground, loaded)
+            # the parts as the network's own cells give them (each part's home copy, _canon_pool), whichever cell the
+            # asker loaded first: copies of one part from different cells differ (each cell's tile quantises them, up
+            # to 0.33 m on I-395), and Wacker Drive's network, asked from two cells by two threads, was solved from
+            # different copies and published by whichever finished first (two builds' tunnel meshes 1.5e-5 m apart,
+            # 2026-11-25). Until its cells settle (a copy's ends can lie in other cells).
+            cells = end_cells(comp)
+            for _ in range(4):
+                if not self._canon_pool(pool, [c for c in cells if c in loaded]):
+                    break
+                comp = BridgeProfiles._resolve(self, start, pool, ground, loaded, grow=False)
+                cells = end_cells(comp)
             new = [cells[c] for c in sorted(cells) if c not in loaded]
             if not new or len(loaded) >= CHAIN_CELLS:
                 break
@@ -10036,6 +10052,34 @@ class TunnelProfiles(BridgeProfiles):
         self._tls.read = frozenset(loaded)
         return comp
 
+    def _canon_pool(self, pool, cells):
+        """pool again from these cells (keys): each part's home copy (the copy of the cell its start lies in), else
+        the longest line, then the most map vertices, then the first cell's in key order; a part none of them gives
+        is kept as it was. True when a part changed."""
+        old = dict(pool)
+        pool.clear()
+        best = {}
+        for c in sorted(cells):
+            z, x, y = (int(v) for v in c.split("/"))
+            for k, v in self._cell_entries(mapcells.CellKey(z, x, y))[0]:
+                xy = np.asarray(v[1], np.float64)
+                # (the home copy: the cell's own copy of a part that starts in it, as roads.home_copy takes a feature's;
+                # then the longest line, in mm; then the most map vertices; then the first cell's)
+                la, lo, _ = self.frame.enu_to_geodetic(xy[:1, 0], xy[:1, 1], 0.0)
+                home = str(mapcells.cell_of(float(np.asarray(la)[0]), float(np.asarray(lo)[0]))) == c
+                rank = (home, int(round(math.fsum(dnp.hypot(*np.diff(xy[:, :2], axis=0).T).tolist()) * 1000.0))
+                        if len(xy) > 1 else 0, v[4])
+                got = best.get(k)
+                if got is None or rank > got[0]:
+                    best[k] = (rank, v)
+        for k in sorted(best, key=str):
+            pool[k] = best[k][1]
+        for k in sorted(set(old) - set(pool), key=str):
+            pool[k] = old[k]
+        def same(a, b):
+            return a is b or (a is not None and a[4] == b[4] and a[0] == b[0] and np.array_equal(a[1], b[1]))
+        return not all(same(old.get(k), v) for k, v in pool.items())
+
     @staticmethod
     def _part_id(key):
         # one feature can come as several parts (clipped differently in the map cells around: 97th Street's arch as
@@ -10050,7 +10094,9 @@ class TunnelProfiles(BridgeProfiles):
         if staged is None:
             return
         pid = self._part_id(k)
-        secs, subs, underwater = staged
+        secs, subs, underwater = staged[:3]
+        for n, h in (staged[3] if len(staged) > 3 else {}).items():
+            self.holes[f"{pid}#{n}"] = h
         if underwater:
             self._subsea.add(pid)
         self.sections[pid] = secs
@@ -10301,6 +10347,28 @@ class TunnelProfiles(BridgeProfiles):
         gfn = self._raw_ground if self.raw is not None else self._ground
         out = []
         self._tls.staged = {}           # (committed by parts() right after, the rest dropped with the next solve)
+        if roadsys.TUNNELS:
+            # (T1, BNE_ROADSYS_TUNNELS: the road system's record decides the floor, sections, portals and holes of a dry
+            # network; one under water stays on this solve until T3)
+            import tunnelrec
+            if any(self._drowned.get(self._part_id(k)) for k in comp):
+                tunnelrec._count("wet")
+            else:
+                rec = tunnelrec.solve(self, comp, pool, ground)
+                if rec is not None:
+                    for k in comp:
+                        got = rec.get(k)
+                        if got is None:
+                            out.append(np.full(len(pool[k][1]), np.nan))
+                            continue
+                        floor, secs, subs, holes = got
+                        xy = np.asarray(pool[k][1], np.float64)
+                        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy[:, :2], axis=0).T))]
+                        floor = self._observed_floor(k, pool, xy, s, floor, secs, (False, False))
+                        self._tls.staged[k] = (secs, subs, False, holes)
+                        out.append(floor)
+                    return out
+                tunnelrec._count("fallback")
         underwater_floors = {}
         if any(self._drowned.get(self._part_id(k)) for k in comp):
             import subsea
@@ -10668,6 +10736,7 @@ class TunnelProfiles(BridgeProfiles):
         def mine(d):
             return {k: v for k, v in d.items() if str(k).split("#")[0] in pids}
         return {"sections": mine(self.sections), "heights": mine(self.heights), "ups": mine(self.ups),
+                "holes": mine(self.holes),
                 "caps": mine(self.caps), "mouths": mine(self.mouths), "open": {o for o in self.open
                                                                                if o.split("#")[0] in pids},
                 "drowned": {k: v for k, v in self._drowned.items() if k in pids},
@@ -10676,8 +10745,8 @@ class TunnelProfiles(BridgeProfiles):
     def _adopt_take(self, extra):
         if not extra:
             return
-        for name in ("sections", "heights", "ups", "caps", "mouths"):
-            for k, v in extra[name].items():
+        for name in ("sections", "heights", "ups", "caps", "mouths", "holes"):
+            for k, v in extra.get(name, {}).items():
                 getattr(self, name).setdefault(k, v)
         self.open.update(extra["open"])
         self._subsea.update(extra.get("subsea", ()))
@@ -11012,6 +11081,7 @@ class ChainView:
 
     heights = property(lambda self: self._merged("heights"))
     mouths = property(lambda self: self._merged("mouths"))
+    holes = property(lambda self: self._merged("holes"))
 
     def _sub(self, method, fid, default):
         for st in self._stores():
@@ -11232,7 +11302,19 @@ def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square, rail_parts
     if not parts and not rail:
         return None
     mask = None
-    if parts:
+    if parts and roadsys.TUNNELS:
+        # (T1: the record's sections cut by its hole rule, only where a tube enters a hill; the legacy rule for the rest)
+        import tunnelrec
+        half_ = u.shape[0] * square / 2
+        mask = np.zeros(u.shape, bool)
+        rest = tunnelrec.holes(mask, u, cx - half_, cy - half_, square, parts, getattr(tunnels, "heights", None),
+                               getattr(tunnels, "holes", {}) or {})
+        if rest:
+            mask |= tunnel_hole_mask(rest, u, cx, cy, square, getattr(tunnels, "heights", None),
+                                     getattr(tunnels, "mouths", None))
+        if mask.any():
+            mask = spare_carriageways(mask, parts, cells, frame, cx, cy, square)
+    elif parts:
         mask = tunnel_hole_mask(parts, u, cx, cy, square, getattr(tunnels, "heights", None),
                                 getattr(tunnels, "mouths", None))
         if mask is not None and mask.any():

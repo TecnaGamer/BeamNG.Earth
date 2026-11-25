@@ -26,6 +26,8 @@ pub mod product;
 pub mod skew;
 pub mod square;
 pub mod tile;
+pub mod tunnel;
+pub mod tunaudit;
 pub mod xsec;
 
 /// Thread CPU seconds (timings only: nothing built reads them).

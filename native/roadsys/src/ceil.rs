@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const CLEAR_UNDER_M: f64 = 0.3;  // m under the soffit the ground stays at least (G5)
 pub const RAMP: f64 = 0.5;           // m of need per m along the deck past FULL_M from a free end (1:2)
 pub const COVER_M: f64 = 0.5;        // a deck end within another deck's half width + this goes on onto it (not free)
-pub const RAIL_HW_M: f64 = 2.5;      // a railway's bed: its line + this keeps its ground
+pub const RAIL_HW_M: f64 = 4.0;      // a railway's bed (double track and its ballast shoulders): its line + this keeps its ground
 pub const KEEP_PAST_M: f64 = 1.0;    // m past a ground road's surface (half width + CLEAR_M) + one lattice square its
                                      // ground is kept whole (its drawn surface wider than the plain width, the
                                      // lattice's squares round it flat: its mesh, draped node by node, is never under
@@ -414,7 +414,7 @@ mod tests {
                           &[vec![[20.0, -40.0], [20.0, 40.0]]]);
         assert_eq!(r.ground(21.0, 0.0, 10.0), 10.0);
         assert!((r.ground(30.0, 0.0, 10.0) - 8.5).abs() < 1e-12);
-        assert!((r.ground(25.5, 0.0, 10.0) - 9.5).abs() < 1e-12);
+        assert!((r.ground(27.0, 0.0, 10.0) - 9.5).abs() < 1e-12);
     }
 
     #[test]

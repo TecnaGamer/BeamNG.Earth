@@ -513,6 +513,9 @@ def keyed_env(k):
 # BNE_ROADSYS=surface 4 (earthfast 627): the deck ends skewed by the deck-end skew rule (native/roadsys skew.rs: the
 # hand-over's ends, the faces' end rows, the ground roads' ends there), the waterways and the bridge inventory read.
 # BNE_ROADSYS=surface 5: a twin's median fill to the middle measured per vertex (the two halves no longer overlap).
+# BNE_ROADSYS_TUNNELS 1 (T1, earthfast 629, the tunnel plan approved 2026-11-25): the tunnels from the road system's
+# record (floors from the one profile, sections never open for want of cover, portals and holes only where a tube
+# enters a hill; tunnelrec.py).
 # BNE_ROADSYS=surface 6 (earthfast 630): the ground under a deck at most at its soffit less 0.3 m (roadsys.ground_cut,
 # native/roadsys ceil.rs; the terrain blocks, skins and content ground from the published decks' heights).
 # BNE_ROADSYS=structures 2 (earthfast 630): the roads meeting a deck end's short approach at its far end (a junction at
@@ -521,7 +524,8 @@ ROADSYS_STRUCTURES_VERSION = 2
 ROADSYS_SURFACE_VERSION = 6
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 11, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 4, "BNE_ROADSYS_XSEC": 1}
+                   "BNE_ROADSHAPE": 11, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 4, "BNE_ROADSYS_XSEC": 1,
+                   "BNE_ROADSYS_TUNNELS": 1}
 
 
 def keyed_value(k, v):

@@ -3271,7 +3271,8 @@ def tunnel(chunks, origin, walls=()):
             for e_, f_ in enumerate(fits if c.get("portal") else ()):
                 if f_ is not None and (c.get("portal") or (False, False))[e_]:
                     d_ = sm if e_ == 0 else sm[-1] - sm
-                    gr = np.where(d_ <= portals.setback(f_) + 0.5 if portals.setback(f_) > 0 else False, np.inf, gr)
+                    sb_ = portals.setback(f_) + portals.inset(f_)
+                    gr = np.where(d_ <= sb_ + 0.5 if sb_ > 0 else False, np.inf, gr)
             nv = _add_blocks(P, T, UV, M, nv, portals.cover(mid - np.asarray(origin, np.float64)[:2], u, z - origin[2],
                                                              gr - origin[2], hw, th, (False, False), CONCRETE_UV_M,
                                                              SOIL_UV_M, sec), 0)

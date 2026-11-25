@@ -124,6 +124,11 @@ def set_water_fn(fn):
     """The process's water layer reader (mapdata.MapData, at its start): the waterways a deck end may cross."""
     global WATER_FN
     WATER_FN = fn
+# (629, T1) BNE_ROADSYS_TUNNELS=on with surface: the tunnels from the road system's record (native/roadsys tunnel.rs,
+# server/tunnelrec.py): the profile squares make it with their profiles; roads.TunnelProfiles hands it on to every
+# consumer (floors, sections, portals, holes), its own solve left to the networks under water (T3)
+TUNNELS = SURFACE and os.environ.get("BNE_ROADSYS_TUNNELS", "off").strip().lower() == "on"
+TUNNELS_KERNEL = 629
 XSEC = os.environ.get("BNE_ROADSYS_XSEC", "off").strip().lower() == "on"
 XSEC_KERNEL = 617           # earthfast.RoadsysSegments(xsec=...), native/roadsys xsec.rs (617: with areas=, fit= in one binary; trunk 616 has no xsec)
 
@@ -717,7 +722,7 @@ def square(fid, frame, sq, cell_fn, ground_ll=None):
         revisit.fault(here=True)        # (the caller's scope too: what is made from this square is not kept)
     stamps = tuple(cc.rows.get(str(k), (None,))[0] for k in cells)
     gfn = ground_ll or GROUND
-    mk = (fid, sq, stamps, getattr(gfn, "tag", getattr(gfn, "__name__", "")))
+    mk = (fid, sq, stamps, getattr(gfn, "tag", getattr(gfn, "__name__", ""))) + (("tun1",) if TUNNELS else ())
     with _memo_lock:
         got = _squares.get(mk)
         lk = _sq_locks.setdefault((fid, sq), threading.Lock())
@@ -746,7 +751,7 @@ def square(fid, frame, sq, cell_fn, ground_ll=None):
         if disk is not None and b.complete:
             import hashlib
             name = "sq%d.%d_%d_%d_%s" % (FORMAT, int(getattr(fast._ef, "VERSION", 0)), sq[0], sq[1],
-                                          hashlib.sha256(repr((fid, stamps, mk[3])).encode()).hexdigest()[:24])
+                                          hashlib.sha256(repr((fid, stamps, mk[3]) if not TUNNELS else (fid, stamps, mk[3:])).encode()).hexdigest()[:24])
             try:
                 data = disk[0](name)
                 if data is not None:
@@ -766,7 +771,11 @@ def square(fid, frame, sq, cell_fn, ground_ll=None):
                 dump = os.path.join(DUMP_DIR, "%d_%d.rssq" % sq)
             try:
                 with revisit.scope() as sb:     # (what it reads: its ground, the measured decks)
-                    got = fast._ef.roadsys_square(segs, sq, _g(gfn, frame), CUT, dump, _obs(frame))
+                    if TUNNELS:     # (T1: with the tunnel record; its bytes and key apart, mk and the disk name too)
+                        fast.require(TUNNELS_KERNEL, "roadsys_tunnel_kinds")
+                        got = fast._ef.roadsys_square(segs, sq, _g(gfn, frame), CUT, dump, _obs(frame), True)
+                    else:
+                        got = fast._ef.roadsys_square(segs, sq, _g(gfn, frame), CUT, dump, _obs(frame))
             except Exception as e:      # (its ground not at hand, a DEM tile missing: no square, the asker not kept)
                 revisit.fault(here=True)
                 with _memo_lock:
