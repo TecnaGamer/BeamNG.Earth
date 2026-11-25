@@ -1046,12 +1046,13 @@ local function placePlayer(z, again)
   local veh = getPlayerVehicle(0)
   local x, y = st.placeX or 0, st.placeY or 0
   -- (a snapped teleport's spot: the server's height there is the first block's, as at the origin; a ray from above
-  -- hit the old place's buildings, still in the static collision, and the car fell 30 m, 2026-10-25)
-  if (x ~= 0 or y ~= 0) and not st.placeSnapped then
+  -- hit the old place's buildings, still in the static collision, and the car fell 30 m, 2026-10-25. Still check
+  -- ground under the spot so a surface higher than z lifts the spawn above ground instead of spawning underground.)
+  local g = M.groundRay(z)(x, y)
+  if g and (g > z or ((x ~= 0 or y ~= 0) and not st.placeSnapped)) then
     -- away from the origin (a BeamMP player's anchor): the server's height there is the raw elevation data; set down
-    -- on the collision under it (a graded road can be a few metres off)
-    local g = M.groundRay(z)(x, y)
-    if g then z = g + 1.0 end
+    -- on the collision under it (a graded road can be a few metres off); when snapped, only lift if ground > z
+    z = g + 1.0
   end
   -- nothing under the spot (a hole in the terrain: a tunnel's portal before its road tile): the nearest spot that has
   -- some (safeSpot); a tunnel's tube (floorZ) is left to floorCheck
