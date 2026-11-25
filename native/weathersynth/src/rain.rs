@@ -1048,7 +1048,8 @@ pub fn roof(seed: u64, sc: &Scene, outside: &[f64]) -> Vec<f64> {
     let mut roof_drops = make(&mut rng, 1.30 * 1.45);
     // Parked under a tree or a roof edge in light and medium rain: a few drip points onto the roof, each a big drop
     // (4-5.5 mm from 2-6 m) at its own spot every ~1.5 drip periods (a whole number per loop).
-    if sc.drips > 0 {
+    // (not tied to the outdoor drip points: light outdoors has none now, the roof keeps its ticks; none in a downpour)
+    if sc.rate_mm_h < 20.0 {
         let mut drng = Rng::new(seed, "rain-roof-drips");
         for _ in 0..3 {
             let (x, y) = (drng.range(0.1, 0.9), drng.range(0.1, 0.9));
