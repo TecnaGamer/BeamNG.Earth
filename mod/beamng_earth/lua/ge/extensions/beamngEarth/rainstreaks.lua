@@ -16,7 +16,8 @@ M.MATERIALS = '/levels/beamng_earth/art/weather/weather.materials.json'
 M.NAME = 'bngEarthRainShells'
 M.FALL_MS = 8.0          -- m/s: the drops' fall (the material's scroll: make_weather_assets.py FALL_MS)
 M.TILT_MAX = math.rad(60)
-M.GAIN = 1.0             -- the shells' opacity at full rain (times the rain share)
+M.GAIN = 0.2             -- the shells' opacity at full rain (times the rain share; 1.0 read as a white blizzard in the
+                         -- first broker shots, wb1 2026-11-25: to be tuned with the streak texture)
 M.ALPHA_STEP = 1 / 64    -- the instance opacity written when it moved this much
 M.VEL_TAU_S = 0.3        -- the camera's speed smoothed over this long
 M.JUMP_M = 50            -- a camera move this far in one frame: a cut (a teleport, a camera switch), no speed

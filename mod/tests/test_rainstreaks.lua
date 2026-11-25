@@ -27,7 +27,7 @@ check(R.update(0.5, { x = 0, y = 0 }, 0.016) == true, 'rain: shown')
 local o = S.liveOf('TSStatic')[1]
 check(o and o.fields.shapeName == R.SHAPE and o.hidden == false, 'the shells made and shown')
 check(o.pos.x == 100 and o.pos.y == 200 and o.pos.z == 30, 'at the camera')
-check(o.fields.instanceColor == '1 1 1 0.5000', 'its strength')
+check(o.fields.instanceColor == string.format('1 1 1 %.4f', math.floor(0.5 * R.GAIN / R.ALPHA_STEP + 0.5) * R.ALPHA_STEP), 'its strength')
 local w0 = R.writes
 camP = vec3(101, 200, 30)
 R.update(0.505, { x = 0, y = 0 }, 0.016)
