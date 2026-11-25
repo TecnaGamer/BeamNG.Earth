@@ -11,12 +11,16 @@
 //!   weathersynth analyze FILE.wav ...               a table describing each file
 //!   weathersynth live-bench [--seconds S] [--block N] [--wav F]   the live rain engine timed (prototype)
 //!   weathersynth thunder-bench [--micro M]           live thunder render times by distance
-//!   weathersynth live-serve [--thunder procedural|files:DIR]   the live weather sounds for the world server (serve.rs)
+//!   weathersynth live-serve [--thunder grains|procedural|files:DIR]   the live weather sounds (serve.rs)
+//!   weathersynth grainbank-pack --manifest M --out BIN     the grain bank's manifest + grains/*.ogg into one i16 .bin
+//!   weathersynth grains-render --bank BIN --class C --seed N [--dist M] [--live] --out F.wav   one grain-bank strike
+//!   weathersynth grains-set --bank BIN --out DIR [--seeds A,B] [--ogg]   bne_thunder_<class>1/2 from the grain bank
 
 mod analyze;
 #[cfg(feature = "audio")]
 mod audio;
 mod dsp;
+mod grainbank;
 mod live;
 mod loudness;
 mod m;
@@ -93,6 +97,23 @@ fn render_rain(
         y,
         format!("kind={kind} seed={seed} scene={} rate_mm_h={} {oinfo} makeup_gain_db={g:.1}", sc.name, sc.rate_mm_h),
     ))
+}
+
+/// One grain-bank render's description (the reference JSON's main fields, on one line).
+fn grains_info(i: &grainbank::Info, lufs: f64, gr: f64, ms: f64) -> String {
+    let ids: Vec<String> = i.grains.iter().map(|g| format!("{}@{:.3}/{:.1}", g.0, g.1, g.2)).collect();
+    let ech: Vec<String> = i.echoes.iter().map(|e| format!("{:.3}s/{:.0}Hz/{:.1}dB", e.0, e.1, e.2)).collect();
+    format!(
+        "class={} dist_m={:.1} claps={} lufs_st_max={:.2} limiter_gr_db={:.1} render_ms={:.0} echoes=[{}] grains=[{}]",
+        i.class,
+        i.dist,
+        i.claps,
+        lufs,
+        gr,
+        ms,
+        ech.join(" "),
+        ids.join(" ")
+    )
 }
 
 fn encode_ogg(wav: &str, ogg: &str, q: &str) -> Result<(), String> {
@@ -267,6 +288,58 @@ fn run() -> Result<(), String> {
             }
         }
         "live-serve" => serve::run(&args)?,
+        "grainbank-pack" => {
+            let man = arg(&args, "--manifest").ok_or("--manifest")?;
+            let out = arg(&args, "--out").unwrap_or_else(|| format!("assets/{}", grainbank::BANK_FILE));
+            println!("{}", grainbank::pack(&man, &out)?);
+        }
+        "grains-render" => {
+            let bank = grainbank::Bank::load(&arg(&args, "--bank").ok_or("--bank")?)?;
+            let kind = proto::Kind::from_str(&arg(&args, "--class").ok_or("--class")?).ok_or("bad --class")?;
+            let seed: u64 = arg(&args, "--seed").ok_or("--seed")?.parse().map_err(|_| "bad --seed")?;
+            let dist: Option<f64> = arg(&args, "--dist").and_then(|v| v.parse().ok());
+            let out = arg(&args, "--out").ok_or("--out")?;
+            let live = args.iter().any(|a| a == "--live");
+            let t0 = std::time::Instant::now();
+            let (mix, info) = grainbank::render_mix(&bank, kind, seed, dist, if live { 0.0 } else { grainbank::PRE_S });
+            let (y, lufs, gr) = if live {
+                (grainbank::level_live(&mix, info.dist), f64::NAN, f64::NAN)
+            } else {
+                grainbank::level_offline(&mix, grainbank::class(kind).lufs)
+            };
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            wav::write_f32(&out, &y, 44100).map_err(|e| e.to_string())?;
+            println!("{}", grains_info(&info, lufs, gr, ms));
+        }
+        "grains-set" => {
+            let bank = grainbank::Bank::load(&arg(&args, "--bank").ok_or("--bank")?)?;
+            let dir = arg(&args, "--out").ok_or("--out")?;
+            let seeds: Vec<u64> = arg(&args, "--seeds")
+                .unwrap_or_else(|| "1,2".into())
+                .split(',')
+                .filter_map(|v| v.trim().parse().ok())
+                .collect();
+            let ogg = args.iter().any(|a| a == "--ogg");
+            std::fs::create_dir_all(format!("{dir}/wav")).map_err(|e| e.to_string())?;
+            for kind in [proto::Kind::Strike, proto::Kind::Close, proto::Kind::Mid, proto::Kind::Far] {
+                for (i, seed) in seeds.iter().enumerate() {
+                    let name = format!("bne_thunder_{}{}", kind.name(), i + 1);
+                    let (mix, info) = grainbank::render_mix(&bank, kind, *seed, None, grainbank::PRE_S);
+                    let (y, lufs, gr) = grainbank::level_offline(&mix, grainbank::class(kind).lufs);
+                    let w = format!("{dir}/wav/{name}.wav");
+                    wav::write_f32(&w, &y, 44100).map_err(|e| e.to_string())?;
+                    let peak = y.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+                    let mut line = format!("{name}\tseed={seed} peak_dbfs={:.2} {}", m::db(peak), grains_info(&info, lufs, gr, f64::NAN));
+                    if ogg {
+                        let o = format!("{dir}/{name}.ogg");
+                        encode_ogg(&w, &o, "6")?;
+                        let tp = ogg_true_peak(&o, &format!("{dir}/wav/{name}.check.wav"))?;
+                        line += &format!(" ogg_true_peak_dbtp={tp:.2}");
+                    }
+                    println!("{line}");
+                }
+            }
+        }
         "storm-dump" => print!("{}", storm::dump()),
         "analyze" => {
             println!("{}", analyze::header());

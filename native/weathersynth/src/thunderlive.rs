@@ -109,6 +109,16 @@ impl ThunderRenderer for Files {
 
 /// `--thunder procedural` (default) or `--thunder files:DIR`.
 pub fn renderer(choice: &str) -> Result<Box<dyn ThunderRenderer>, String> {
+    // the grain bank (method A, the default): `grains` looks for thunder_grains.bin next to this program (the app
+    // bundle) or in native/weathersynth/assets/ (a source tree); `grains:PATH` names the file
+    if choice == "grains" || choice.starts_with("grains:") {
+        let path = match choice.strip_prefix("grains:") {
+            Some(p) => p.to_string(),
+            None => default_bank().ok_or("no thunder_grains.bin next to weathersynth")?,
+        };
+        let bank = crate::grainbank::Bank::load(&path)?;
+        return Ok(Box::new(crate::grainbank::Grains { bank: Arc::new(bank) }));
+    }
     if choice == "procedural" {
         let micro_min = std::env::var("WEATHERSYNTH_MICRO").ok().and_then(|v| v.parse().ok()).unwrap_or(0.06);
         return Ok(Box::new(Procedural { micro_min, length_s: 14.0 }));
@@ -116,7 +126,18 @@ pub fn renderer(choice: &str) -> Result<Box<dyn ThunderRenderer>, String> {
     if let Some(dir) = choice.strip_prefix("files:") {
         return Ok(Box::new(Files::load(dir)?));
     }
-    Err(format!("unknown --thunder {choice:?} (procedural | files:DIR)"))
+    Err(format!("unknown --thunder {choice:?} (grains | grains:PATH | procedural | files:DIR)"))
+}
+
+/// The bank file's places: next to this program, then the source tree's assets folder.
+pub fn default_bank() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let mut c = vec![dir.join(crate::grainbank::BANK_FILE)];
+    for up in dir.ancestors().take(4) {
+        c.push(up.join("assets").join(crate::grainbank::BANK_FILE));
+    }
+    c.into_iter().find(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned())
 }
 
 struct Entry {

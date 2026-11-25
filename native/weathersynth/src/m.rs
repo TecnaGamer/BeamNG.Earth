@@ -44,3 +44,14 @@ pub fn db(x: f64) -> f64 {
 pub fn undb(d: f64) -> f64 {
     pow(10.0, d / 20.0)
 }
+
+pub const LN_10: f64 = std::f64::consts::LN_10;
+
+pub fn tanh(x: f64) -> f64 {
+    libm::tanh(x)
+}
+
+/// Round half away from zero (libm, the same on every platform).
+pub fn round(x: f64) -> f64 {
+    libm::round(x)
+}

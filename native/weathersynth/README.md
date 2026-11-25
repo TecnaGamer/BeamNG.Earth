@@ -105,6 +105,30 @@ Deck. It runs on its own thread, so the output never waits for it. On the Deck, 
 (their renders took longer than the 3 s look-ahead). Not yet checked: the Deck in Desktop
 Mode, and anything with the game in the loop (the broker).
 
+## Thunder from the grain bank (src/grainbank.rs; method A, the user's pick on 2026-11-25)
+
+The thunder is built from 118 short CC0 field recordings ("grains": bodies, cracks, claps and rolls, from 42
+recordings), layered and spread in time by a random lightning channel. The behaviour follows
+`~/bnge-tests/weather/procedural/grainbank/v1/SPEC.md`, ported from its Python reference renderer. Over 10 seeds per
+class the port passes the spec's acceptance checks (`~/bnge-tests/weather/procedural/finalA/accept.py`).
+
+- **The bank:** `assets/thunder_grains.bin`, raw i16 PCM with a small header and an FNV checksum, so no Vorbis decoder
+  is involved at run time.
+  - `weathersynth grainbank-pack --manifest .../grainbank/v1/manifest.json --out assets/thunder_grains.bin` writes it
+    from the cutting tool's output. A re-cut from the original recordings only swaps this file.
+  - The credits for the 42 recordists are in `assets/thunder_grains_CREDITS.md`.
+- **Offline:** `weathersynth grains-set --bank assets/thunder_grains.bin --out DIR --ogg` renders `bne_thunder_<class>1/2`
+  (seeds 1 and 2), each levelled to its class target with a sample peak at most -1 dBFS.
+  `grains-render ... --class C --seed N [--dist M] [--live]` renders a single strike.
+- **Live:** `live-serve --thunder grains` (the default) reads the bank from next to the program, or from `assets/` in a
+  source tree. A strike renders in 66-120 ms on the PC, against 0.8-1.9 s for the procedural model, which is the
+  fallback when the bank file is missing.
+- **Determinism:**
+  - one named `Rng` stream per strike (`thunder-grains`);
+  - libm maths and f64 mixing in a fixed order;
+  - absorption through minimum-phase kernels designed per distance in 1 % steps. A kernel depends only on its key, so
+    the cache never changes the output.
+
 ## Audio rules (src/audio.rs)
 
 - **Output streams only.** On WASAPI, an input stream opened on an output device is loopback capture of the system's

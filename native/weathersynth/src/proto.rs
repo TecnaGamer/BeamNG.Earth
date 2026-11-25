@@ -43,7 +43,12 @@ impl Json {
 }
 
 pub fn parse(s: &str) -> Result<Json, String> {
-    if s.len() > MAX_LINE {
+    parse_limit(s, MAX_LINE)
+}
+
+/// A whole JSON document of at most `max` bytes (the grain bank's manifest; the same depth limit).
+pub fn parse_limit(s: &str, max: usize) -> Result<Json, String> {
+    if s.len() > max {
         return Err("line too long".into());
     }
     let b = s.as_bytes();

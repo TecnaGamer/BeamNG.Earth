@@ -8,7 +8,7 @@
 //! Quiet (rain and thunder faded to silence, the device kept open) while the mod says muted (paused, unfocused), when
 //! its lines stop for HEARTBEAT_S (a hung game), and in Pre-recorded mode.
 //!
-//!   weathersynth live-serve [--thunder procedural|files:DIR] [--seed N] [--buffer FRAMES (default 256)]
+//!   weathersynth live-serve [--thunder grains|grains:PATH|procedural|files:DIR] [--seed N] [--buffer FRAMES (default 256)]
 
 use crate::live::Controls;
 use crate::proto::Msg;
@@ -122,7 +122,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     use std::time::{Duration, Instant};
 
     let get = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
-    let choice = get("--thunder").unwrap_or_else(|| "procedural".into());
+    let choice = get("--thunder").unwrap_or_else(|| "grains".into());
     let seed: u64 = get("--seed").and_then(|s| s.parse().ok()).unwrap_or(1);
     // the server's lines are read from the start, before the device opens (a slow open never fills the pipe: the
     // server's writer would wait on it)
@@ -158,7 +158,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let _ = std::io::stdout().flush();
         std::process::exit(2);
     };
-    let renderer = thunderlive::renderer(&choice).unwrap_or_else(|e| fail(e));
+    // (the grain bank by default; without its file the physical model, said on stderr: thunder still plays)
+    let renderer = match thunderlive::renderer(&choice) {
+        Ok(r) => r,
+        Err(e) if choice == "grains" => {
+            eprintln!("live-serve: {e}; the procedural thunder instead");
+            thunderlive::renderer("procedural").unwrap_or_else(|e| fail(e))
+        }
+        Err(e) => fail(e),
+    };
     let rname = renderer.name();
     let bus = Arc::new(Bus::new());
     let (silent, _) = mix_for(None, true);
