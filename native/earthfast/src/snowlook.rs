@@ -415,6 +415,9 @@ impl SnowLook {
         let t = size / px as f64;
         let mut s = ((self.p.coarse_m / t).round() as usize).max(1);
         s = s.max(px.div_ceil(self.p.coarse_max as usize));
+        // (the cover follows the height grid: nodes twice as dense as its spacing resolve it; finer is only cost)
+        let u_nodes = ((size / self.uarea.2).ceil() as usize).max(1) * 2;
+        s = s.max(px.div_ceil(u_nodes.max(16)));
         let nk = (px - 1) / s + 2;
         let n = nk * nk;
         let (mut c, mut o, mut g, mut rd) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![[0.0; ROAD_CLASSES]; n]);
@@ -490,16 +493,20 @@ impl SnowLook {
                                        by_v(p.water_v.0, p.water_v.1));
         let (t_gr, t_gb) = (by_d(p.canopy_green.0, p.canopy_green.1), by_d(p.canopy_gb.0, p.canopy_gb.1));
         let (t_wbg, t_wbr) = (by_d(-0.01, 0.02), by_d(0.03, 0.07));
-        // the drift scale's noise (smooth at its 20 m) on the coarse nodes, interpolated like the cover
+        // the drift scale's noise (smooth at its 20 m) on a grid of its own, a quarter of its scale apart whatever the
+        // cover's grid (a block photo and a far tile sample the same world noise: no seam in the patches), interpolated
+        let sn = ((p.patch_m.1 * 0.25 / t).floor() as usize).max(1);
+        let nn = (px - 1) / sn + 2;
         let n2: Vec<f64> = if w2 > 0.0 {
-            (0..nk * nk).map(|q| {
-                let (r, k) = (q / nk, q % nk);
-                let ex = ex0 + ((k * s) as f64 + 0.5) * t;
-                let ny = ny0 - ((r * s) as f64 + 0.5) * t;
+            (0..nn * nn).map(|q| {
+                let (r, k) = (q / nn, q % nn);
+                let ex = ex0 + ((k * sn) as f64 + 0.5) * t;
+                let ny = ny0 - ((r * sn) as f64 + 0.5) * t;
                 vnoise(ex / p.patch_m.1, ny / p.patch_m.1, 12)
             }).collect()
         } else { Vec::new() };
-        let mut rn = vec![0.0f64; nk];
+        let inv_sn = 1.0 / sn as f64;
+        let mut rn = vec![0.0f64; nn];
         // the coarse fields along this texel row (vertical lerp once a row; horizontal per texel)
         let mut rc = vec![0.0f64; nk];
         let mut ro = vec![0.0f64; nk];
@@ -525,9 +532,6 @@ impl SnowLook {
                 rs[k] = cg.sl[a0 + k] * (1.0 - wy) + cg.sl[a1 + k] * wy;
                 rt[k] = cg.tree[a0 + k] * (1.0 - wy) + cg.tree[a1 + k] * wy;
                 rv[k] = vm[a0 + k] * (1.0 - wy) + vm[a1 + k] * wy;
-                if w2 > 0.0 {
-                    rn[k] = n2[a0 + k] * (1.0 - wy) + n2[a1 + k] * wy;
-                }
                 if road_s.is_some() {
                     for q in 0..ROAD_CLASSES {
                         rr[k][q] = cg.rd[a0 + k][q] * (1.0 - wy) + cg.rd[a1 + k][q] * wy;
@@ -535,6 +539,12 @@ impl SnowLook {
                 }
             }
             let ny = ny0 - (i as f64 + 0.5) * t;
+            if w2 > 0.0 {
+                let (b0, wn_y) = ((i / sn) * nn, (i % sn) as f64 * inv_sn);
+                for k in 0..nn {
+                    rn[k] = n2[b0 + k] * (1.0 - wn_y) + n2[b0 + nn + k] * wn_y;
+                }
+            }
             for j in 0..px {
                 let k0 = j / s;
                 let (c0, c1) = (rc[k0], rc[k0 + 1]);
@@ -561,7 +571,10 @@ impl SnowLook {
                     let ex = ex0 + (j as f64 + 0.5) * t;
                     let mut n = 0.0;
                     if w1 > 0.0 { n += w1 * vnoise(ex / p.patch_m.0, ny / p.patch_m.0, 11); }
-                    if w2 > 0.0 { n += w2 * hl(&rn); }
+                    if w2 > 0.0 {
+                        let (kn, wxn) = (j / sn, (j % sn) as f64 * inv_sn);
+                        n += w2 * (rn[kn] + (rn[kn + 1] - rn[kn]) * wxn);
+                    }
                     let a_noise = ((c * p.gain - p.bias - n / wn) / p.soft + 0.5).clamp(0.0, 1.0);
                     wn * a_noise + (1.0 - wn) * a_lin
                 };
