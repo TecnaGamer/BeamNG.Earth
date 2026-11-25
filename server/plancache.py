@@ -102,7 +102,7 @@ def plans_format():
     import grading
     # (the grade guard, off by default, makes other plans: its own key, so that the two never mix and nobody else's
     # plans are thrown away)
-    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}.norway-tunnels-6" + (".gg1" if grading.GUARD_ON else "")
+    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}.norway-tunnels-7" + (".gg1" if grading.GUARD_ON else "")
 
 
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's

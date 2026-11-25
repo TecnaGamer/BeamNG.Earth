@@ -2593,6 +2593,7 @@ def tunnel(chunks, origin, walls=(), *, rock_colour=None):
         import norway_tunnels
         rock = bool(c.get("norway_rock"))
         looks = c.get("norway_portal_style") or (None, None)
+        rock_backing = "norway_rock" in c
         if rock:
             angle = np.arctan2(section_rows[:, :, 1] / th, section_rows[:, :, 0] / widths)
             # Fractured crown, smoothly continuous at every chunk end. Gains clearance only.
@@ -2655,12 +2656,24 @@ def tunnel(chunks, origin, walls=(), *, rock_colour=None):
             gr = np.interp(sm * (sc[-1] / max(float(sm[-1]), 1e-9)), sc, np.asarray(c["ground"], np.float64))
             # (no cover under a hood: it is the tube's outside from its mouth back to the hill's face)
             for e_, f_ in enumerate(fits if c.get("portal") else ()):
-                if f_ is not None and portal[e_] and not looks[e_]:
+                if f_ is None or not portal[e_]:
+                    continue
+                if rock_backing and looks[e_]:
+                    # Even a high ground probe can border a cut terrain square. Overlap
+                    # the headwall with the first cover span at a fitted, physical mouth.
+                    at = -1 if e_ else 0
+                    gr[at] = z[at]
+                elif not looks[e_]:
                     d_ = sm if e_ == 0 else sm[-1] - sm
                     gr = np.where(d_ <= portals.setback(f_) + 0.5 if portals.setback(f_) > 0 else False, np.inf, gr)
-            nv = _add_blocks(P, T, UV, M, nv, portals.cover(mid - np.asarray(origin, np.float64)[:2], u, z - origin[2],
-                                                             gr - origin[2], hw, th, (False, False), CONCRETE_UV_M,
-                                                             SOIL_UV_M, sec), 0)
+            side = portals.COVER_SIDE
+            if rock_backing:
+                room = [f[key] for f in fits if f is not None for key in ("sl", "sr")]
+                side = max(side, min([portals.rock_cover_side(), *room]))
+            cover_uv = SCREE_UV_M if rock_backing else CONCRETE_UV_M
+            cover = portals.cover(mid - np.asarray(origin, np.float64)[:2], u, z - origin[2], gr - origin[2],
+                                  hw, th, (False, False), cover_uv, SOIL_UV_M, sec, side=side, rock=rock_backing)
+            nv = _add_blocks(P, T, UV, M, nv, cover, 6 if rock_backing else 0)
         pups = c.get("portal_up") or (None, None)
         caps = c.get("cap_m") or (None, None)       # (a road over the mouth: its stone top shorter, TunnelProfiles.caps)
         for end, at, pup, cap_m in zip(c.get("portal") or (False, False), (0, k - 1), pups, caps):
@@ -2689,8 +2702,13 @@ def tunnel(chunks, origin, walls=(), *, rock_colour=None):
                     # Fit the slope behind the rim, using the exact same opening as the tube.
                     face = portals.structure(fitd, centre, leftv, outv,
                                              sec, th, hw, SCREE_UV_M, near, collar=False,
-                                             compact_rock=bool(c.get("compact_tunnel") and style == "rock"))
+                                             compact_rock=bool(c.get("compact_tunnel") and style == "rock"),
+                                             rock_backing=rock_backing)
                     nv = _add_blocks(P, T, UV, M, nv, face, rock_mat)
+                    if rock_backing:
+                        shoulder = portals.shoulder_return(fitd, centre, leftv, outv, hw, near)
+                        if shoulder is not None:
+                            nv = _add_blocks(P, T, UV, M, nv, shoulder, rock_mat)
                 if colour is not None and nv > start:
                     painted.append((slice(start, nv), centre[:2], leftv, hw, colour))
                 continue

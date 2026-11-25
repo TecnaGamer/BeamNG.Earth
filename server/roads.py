@@ -3274,6 +3274,8 @@ def _spec_json(sp):
         out["width_stops"] = sp.width_stops
     if isinstance(sp, CompactNorwegianTunnelSpec):
         out["compact_tunnel"] = True
+    elif isinstance(sp, NorwegianTunnelSpec) and "width_stops" not in out:
+        out["norwegian_tunnel"] = True
     return out
 
 
@@ -3284,11 +3286,12 @@ def spec_from_json(data):
             "street": Street.from_json(data["street"]) if data.get("street") is not None else None}
     stops = args.pop("width_stops", None)
     compact = args.pop("compact_tunnel", False)
+    norwegian = args.pop("norwegian_tunnel", False)
     tunnel_spec = CompactNorwegianTunnelSpec if compact else NorwegianTunnelSpec
     if stops:
         stations, widths = zip(*stops)
         return tunnel_spec(**args).with_widths(stations, widths)
-    if compact:
+    if compact or norwegian:
         return tunnel_spec(**args)
     return Spec(**args)
 
@@ -6446,7 +6449,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
                 look["side"] = side
             out.append((look, width, along))
             return
-        if defer_dashes and profile is not None:
+        if defer_dashes and (profile is not None or (norway and in_tunnel)):
             out.append((dict(m=mat, tl=max(1., pattern[0]), p=CENTRE["p"], kind=kind_,
                              dash=pattern, _source=along, _phase0=float(dash_phase)), width, along))
             return
@@ -9088,6 +9091,7 @@ class TunnelProfiles(BridgeProfiles):
         for chain in carriageways.chains(lines, tol=0.5):
             keys = [eligible[i] for i, _ in chain]
             endpoint_widths = [None, None]
+            same_feature_ends = 0
             for at, (i, reverse) in ((0, chain[0]), (-1, chain[-1])):
                 k, xy = lines[i]
                 end = -1 - at if reverse else at
@@ -9099,6 +9103,7 @@ class TunnelProfiles(BridgeProfiles):
                     [road_entries[same_road]] if same_road in road_entries else (), taper_widths)
                 if chosen is not None:
                     endpoint_widths[at] = chosen
+                    same_feature_ends += 1
                 else:
                     chosen = norway_tunnels.approach_width(self.frame, xy[end], inward, road_entries.values(), taper_widths)
                     if plausible(chosen, pool[k][0].width):
@@ -9113,8 +9118,11 @@ class TunnelProfiles(BridgeProfiles):
             nominal = {spec.width for spec in specs}
             lanes = {spec.lanes for spec in specs if spec.lanes is not None}
             same_lanes = len(lanes) <= 1 and len({spec.oneway for spec in specs}) == 1
-            if start is not None and end is not None and same_lanes and all(
-                    plausible(start, width) and plausible(end, width) for width in nominal):
+            # Two agreeing continuations of the mapped bore outweigh a class-default width.
+            # A single match can still size its own mouth but cannot resize the unobserved far end.
+            confirmed = same_feature_ends == 2 and abs(start - end) <= 0.5
+            fits_nominal = all(plausible(start, width) and plausible(end, width) for width in nominal)
+            if same_lanes and (confirmed or fits_nominal):
                 fit_widths(chain, start, min(start, end), end)
             elif same_lanes and len(nominal) == 1:
                 fit_widths(chain, start, specs[0].width, end)
@@ -10640,8 +10648,9 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True, *, left_hand=False
             pts = np.c_[xy, z]
             widths = tunnel_widths(spec, pts)
             carriageway = pts if widths is None else np.c_[pts, widths]
+            area = "NO" if isinstance(spec, NorwegianTunnelSpec) else country
             for look, w, line in [(look_of(spec), spec.width, carriageway)] + [
-                    (lk, w2, ln) for lk, w2, ln in extras(spec, pts, lon, left_hand, country, ws=widths,
+                    (lk, w2, ln) for lk, w2, ln in extras(spec, pts, lon, left_hand, area, ws=widths,
                                                           defer_dashes=True)
                     if lk["m"] not in (SIDEWALK["m"], GUTTER["m"], EDGE_DECAL["m"])]:
                 for piece in clip_polyline(line, *exact):
@@ -10671,8 +10680,15 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True, *, left_hand=False
                    and norway_tunnels.near_bore(tunnels.frame, xy))
         look = DIRT_LOOK["gravel"] if is_aurs else _deck_look(spec)
         lines = [] if look is None else [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned}, spec.width, pts)]
-        markings = [] if is_aurs else extras(spec, pts, lon, left_hand, country, ws=tunnel_widths(spec, pts),
+        area = "NO" if isinstance(spec, NorwegianTunnelSpec) else country
+        widths = tunnel_widths(spec, pts)
+        markings = [] if is_aurs else extras(spec, pts, lon, left_hand, area, ws=widths,
                                              defer_dashes=True, in_tunnel=True)
+        if markings and str(area or "").upper() == "NO" and not spec.oneway and getattr(tunnels, "frame", None) is not None:
+            import nvdb_marking_overlay_v046
+            lat, lons, _ = tunnels.frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+            markings = nvdb_marking_overlay_v046.adjust(markings, pts, lons, lat,
+                                                       spec.width if widths is None else widths, spec, in_tunnel=True)
         for look, w, line in rampmerges.trim(fid, markings, layouts):
             if look["m"] not in (SIDEWALK["m"], GUTTER["m"], EDGE_DECAL["m"]):     # (no ground beside a deck)
                 lines.append((look, w, line))
@@ -10704,6 +10720,7 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True, *, left_hand=False
                         if keep:
                             ch["ws"] = [round(float(value), 3) for value in c[:, 3]]
                         ch["fixed"] = True
+                        ch["fid"] = fid
                         if look.get("tunnel"):
                             if guard is not None:
                                 ch["waterguard"] = guard

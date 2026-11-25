@@ -38,7 +38,9 @@ def fit(parts, approaches):
         joins[key] = (float(xy[0, 0]), float(xy[-1, 0]))
         for endpoint in joins[key]:
             degree[endpoint] = degree.get(endpoint, 0) + 1
-    ground = {(fid, "g"): [xy] for fid, _, xy in approaches}
+    ground = {}
+    for fid, _, xy in approaches:
+        ground.setdefault((fid, "g"), []).append(xy)
     profiles._hw = {(fid, "g"): width / 2 for fid, width, _ in approaches}
     with mock.patch.object(norway_tunnels, "in_norway", return_value=True), \
             mock.patch.object(roads, "taper_widths", return_value=None):
@@ -47,6 +49,26 @@ def fit(parts, approaches):
 
 
 class TunnelWidths(unittest.TestCase):
+    def test_two_agreeing_approaches_keep_the_measured_width_through_the_bore(self):
+        fitted, = fit([("bore", spec(5.5), line(0., 120.))],
+                      [("bore", 2.5, line(-30., 0.)), ("bore", 2.5, line(120., 150.))])
+        np.testing.assert_allclose(fitted.width_at([0., .25, .5, .75, 1.]), [2.5] * 5)
+
+    def test_agreeing_approaches_keep_width_across_connected_parts(self):
+        entrance, interior, exit_ = fit(
+            [("a", spec(5.5), line(0., 40.)), ("b", spec(7.), line(80., 40.)), ("c", spec(5.5), line(80., 120.))],
+            [("a", 2.5, line(-30., 0.)), ("c", 2.5, line(120., 150.))],
+        )
+        for part in (entrance, interior, exit_):
+            np.testing.assert_allclose(part.width_at([0., .5, 1.]), [2.5] * 3)
+
+    def test_the_cached_uniform_bore_keeps_its_shoulder_and_width(self):
+        original = roads.NorwegianTunnelSpec(*spec(5.5)).with_widths([0., 1.], [2.5, 2.5])
+        restored = roads.spec_from_json(json.loads(json.dumps(roads._spec_json(original))))
+        self.assertIsInstance(restored, roads.NorwegianTunnelSpec)
+        self.assertEqual(restored.width, 2.5)
+        self.assertEqual(restored.tunnel_shoulder, 0.4)
+
     def test_unreliable_far_approach_does_not_cancel_valid_different_road_match(self):
         entry, exit_ = fit([("a", spec(8.), line(0., 140.)), ("b", spec(8.), line(280., 140.))],
                            [("road west", 6., line(-30., 0.)), ("unreliable", 16., line(280., 310.))])

@@ -34,6 +34,44 @@ def _ridge(peak=40.0, slope=0.8, half=30.0):
 
 @unittest.skipUnless(portals.ON, "BNE_PORTALS=0")
 class Entrance(unittest.TestCase):
+    def test_rock_backing_seals_above_the_vault_and_reaches_behind_the_mouth(self):
+        half, height = 2., 4.5
+        section = roadmesh._tunnel_section(half, height, shoulder=.4)
+        fit = {"st": 2, "fx": [-5., -3., 0., 3., 5.], "fg": [8., 8., 9., 8., 8.],
+               "fd": [5.] * 5, "fc": [[2.] * 5, [4.] * 5, [9.] * 5],
+               "sl": 3., "sr": 3., "ws": [], "rz": []}
+        points, tri, _, _ = portals.structure(fit, np.zeros(3), np.array([0., 1.]), np.array([-1., 0.]),
+                                               section, height, half, 2., collar=False, compact_rock=True,
+                                               rock_backing=True)
+        self.assertGreaterEqual(points[:, 2].max(), height + .8)
+        self.assertGreater(float(points[np.abs(points[:, 1]) > half + 1., 0].max()), .9)
+        faces = points[tri]
+        a, b, c = faces[:, :, 1:].transpose(1, 0, 2)
+        ab, ac = b - a, c - a
+        det = ab[:, 0] * ac[:, 1] - ab[:, 1] * ac[:, 0]
+
+        def hits(y, z):
+            rel = [y, z] - a
+            with np.errstate(divide="ignore", invalid="ignore"):
+                u = (rel[:, 0] * ac[:, 1] - rel[:, 1] * ac[:, 0]) / det
+                v = (ab[:, 0] * rel[:, 1] - ab[:, 1] * rel[:, 0]) / det
+                return ((np.abs(det) > 1e-9) & (u >= 0.) & (v >= 0.) & (u + v <= 1.)).any()
+
+        self.assertTrue(hits(-.7, height + .7))
+        self.assertFalse(any(hits(y, z) for y in (-1.4, 0., 1.4) for z in (.5, 1.7, 3.)))
+
+    def test_shoulder_return_overlaps_cut_without_crossing_the_aperture(self):
+        pad = portals.rock_cover_side()
+        fit = {"shoulder_room": [pad, pad], "shoulder_ground": [0., -.3, 0., -.3]}
+        points, faces, _, _ = portals.shoulder_return(fit, np.zeros(3), np.array([0., 1.]),
+                                                       np.array([-1., 0.]), 2., (False, True))
+        self.assertLess(float(points[:, 0].min()), -.7)
+        self.assertGreater(float(points[:, 0].max()), 0.)
+        self.assertGreater(float(points[:, 1].min()), 1.9)
+        self.assertEqual(len(faces), 2)
+        a, b, c = points[faces].transpose(1, 0, 2)
+        self.assertTrue(np.all(np.cross(b - a, c - a)[:, 2] > 0.))
+
     def test_bare_portal_exports_both_cliff_colours_with_the_same_mesh(self):
         from tempfile import TemporaryDirectory
 

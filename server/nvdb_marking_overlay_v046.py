@@ -391,7 +391,7 @@ def _pattern_mask(s, style):
     return np.mod((s[:-1] + s[1:]) * 0.5, dash + gap) < dash
 
 
-def _paint_runs(path, enabled, style, values):
+def _paint_runs(path, enabled, style, values, *, town_pattern=(3.0, 3.0)):
     """Render accurate solid/dashed line spans in NVDB's global record phase.
 
     Unlike a point-midpoint dash mask, cut at exact dash boundaries so a 3 m
@@ -401,7 +401,7 @@ def _paint_runs(path, enabled, style, values):
     if style in ('solid', 'S'):
         return _runs(path, enabled)
     pattern = {'V': (9.0, 3.0), 'F': (3.0, 9.0),
-               'T': (3.0, 3.0), 'dashed': (3.0, 3.0)}.get(style)
+               'T': town_pattern, 'dashed': (3.0, 3.0)}.get(style)
     if pattern is None:
         return _runs(path, enabled)
     dash, gap = pattern
@@ -471,11 +471,29 @@ def _centre_styles(styles):
                             (x in ('F', 'V', 'T', 'S') or x.startswith('pair_')))))
 
 
-def adjust(items, pts, lon, lat, width_profile, spec):
+def _tunnel_fallback(items, pts, sample, recorded):
+    """Keep the generated marking over intervals with no source match."""
+    stations = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(pts[:, :2], axis=0), axis=1))]
+    output = []
+    for look, width, line in items:
+        kind = look.get('kind')
+        role = 'M' if kind == 'centre' else {1: 'V', -1: 'H'}.get(look.get('side')) if kind == 'edge' else None
+        if role not in recorded or not recorded[role].any():
+            output.append((look, width, line))
+            continue
+        for run in _runs(sample[:, None], ~recorded[role]):
+            start, end = run[0, 0], run[-1, 0]
+            at = np.r_[start, stations[(stations > start) & (stations < end)], end]
+            section = np.column_stack([np.interp(at, stations, line[:, dim]) for dim in range(line.shape[1])])
+            output.append((look, width, section))
+    return output
+
+
+def adjust(items, pts, lon, lat, width_profile, spec, *, in_tunnel=False):
     """Return a source-only overlay in cached NVDB regions, without guesses.
 
-    Preserve non-marking paint. In an uncached area, keep original BeamNG
-    markings until the map data arrives. Performance is bounded by sampling.
+    Preserve non-marking paint. In an uncached area and in uncovered portions
+    of a tunnel, keep the generated markings. Performance is bounded by sampling.
     """
     t0 = time.perf_counter()
     if (getattr(spec, 'kind', None) != 'paved' or getattr(spec, 'oneway', False)
@@ -500,8 +518,12 @@ def adjust(items, pts, lon, lat, width_profile, spec):
     found = {role: _coherent(_drop_isolated_record_switches(vals, s), s,
                              MIN_RUN_CENTRE_M if role == 'M' else MIN_RUN_EDGE_M)
              for role, vals in raw.items()}
+    if in_tunnel:
+        # The mapped road may carry the approach's ordinary dashed centre
+        # through the bore. Keep the tunnel warning line when it does.
+        found['M'] = [v if v and 'F' not in v[0] else None for v in found['M']]
     source_present = any(any(v is not None for v in vals) for vals in found.values())
-    if MODE == 'hybrid' and not source_present:
+    if (in_tunnel or MODE == 'hybrid') and not source_present:
         return items
     # Remove generic guessed paint in cached areas, including phantom white
     # internal lane dashes on roads not explicitly mapped with 4+ lanes.
@@ -520,6 +542,16 @@ def adjust(items, pts, lon, lat, width_profile, spec):
     # IMPORTANT: never infer the missing 1006 types from road width alone.
     centre_style = np.array([v[0] if v else '' for v in found['M']], dtype=object)
     yellow_segments, edge_sources, conflicting = _resolve_marking_conflicts(found, s, wi)
+    town_pattern = (3.0, 1.0) if in_tunnel else (3.0, 3.0)
+    if in_tunnel:
+        # In Norway's one-lane layout the two dashed edge lines replace the
+        # centre line. Preserve that layout where both edges are recorded.
+        dashed_edges = np.array([a is not None and a[0] == 'dashed' and b is not None and b[0] == 'dashed'
+                                 for a, b in zip(edge_sources['H'], edge_sources['V'])], dtype=bool)
+        recorded = {side: np.asarray([v is not None for v in values], dtype=bool)
+                    for side, values in edge_sources.items()}
+        recorded['M'] = yellow_segments | dashed_edges
+        output = _tunnel_fallback(items, np.asarray(pts, np.float64), s, recorded)
     if conflicting and os.environ.get('BNE_NVDB_MARKING_DEBUG') == '1':
         LOG.info('NVDB v0.5.9: %d conflicting yellow/dashed edge segments', conflicting)
 
@@ -527,10 +559,10 @@ def adjust(items, pts, lon, lat, width_profile, spec):
     # Road-edge lines are always placed using the *width profile*, not the
     # position of NVDB's (usually road-centreline-derived) geometries.
     for side, sign in (('V', 1), ('H', -1)):
-        edge_path = roadsmod.offset_polyline(centre, sign * np.maximum(0.1, wi / 2.0 - INSET_M))
-        per_style = []
-        for i in range(len(s)-1):
-            per_style.append(_source_edge_policy(edge_sources[side][i], bool(yellow_segments[i])))
+        inset = roadsmod.edge_inset(spec, sign) if in_tunnel else INSET_M
+        edge_path = roadsmod.offset_polyline(centre, sign * np.maximum(0.1, wi / 2.0 - inset))
+        per_style = edge_sources[side] if in_tunnel else [
+            _source_edge_policy(source, bool(yellow)) for source, yellow in zip(edge_sources[side], yellow_segments)]
         for sty in ('solid','dashed'):
             # Synthetic solid-only fallback segments need no source chainage.
             mask = np.array([v is not None and v[0] == sty for v in per_style], bool)
@@ -538,10 +570,10 @@ def adjust(items, pts, lon, lat, width_profile, spec):
                 lines = _runs(edge_path, mask)
             else:
                 lines = _paint_runs(edge_path, mask, sty, found[side])
+            # Use measured NVDB paint width where the source provides it.
+            active_widths = [float(v[1]) for v in per_style if v is not None and v[0] == sty]
+            paint_width = round(float(np.clip(np.median(active_widths), .08, .25)), 3) if active_widths else .10
             for line in lines:
-                # Use measured NVDB paint width where the source provides it.
-                active_widths = [float(v[1]) for v in per_style if v is not None and v[0] == sty]
-                paint_width = round(float(np.clip(np.median(active_widths), .08, .25)), 3) if active_widths else .10
                 output.append(({'m':'line_white','kind':'edge','side':sign,'tl':6.4,
                                 'p':6,'nvdb_v055':sty,'nvdb_v059':True}, paint_width, line))
 
@@ -551,6 +583,7 @@ def adjust(items, pts, lon, lat, width_profile, spec):
     for style in _centre_styles(centre_style):
         mask = _same_record_mask(found['M'], style, s) & yellow_segments
         if not np.any(mask): continue
+        paint_width = round(float(np.clip(np.median([v[1] for v in found['M'] if v and v[0] == style]), .08, .25)), 3)
         if style.startswith('pair_'):
             letters = style[5:]
             # First stripe is to the left of the NVDB geometry direction;
@@ -558,15 +591,15 @@ def adjust(items, pts, lon, lat, width_profile, spec):
             for letter, offset, part in ((letters[0], 0.14, 'L'),
                                          (letters[1], -0.14, 'R')):
                 stripe_path = roadsmod.offset_polyline(centre, offset)
-                for line in _paint_runs(stripe_path, mask, letter, found['M']):
+                for line in _paint_runs(stripe_path, mask, letter, found['M'], town_pattern=town_pattern):
                     output.append(({'m':'line_yellow','kind':'centre','tl':6.4,
                                     'p':6,'nvdb_v055':style,'nvdb_v059':True,'part':part},
-                                   round(float(np.clip(np.median([v[1] for v in found['M'] if v and v[0] == style]), .08, .25)), 3), line))
+                                   paint_width, line))
         else:
-            for line in _paint_runs(centre, mask, style, found['M']):
+            for line in _paint_runs(centre, mask, style, found['M'], town_pattern=town_pattern):
                 output.append(({'m':'line_yellow','kind':'centre','tl':6.4,
                                 'p':6,'nvdb_v055':style,'nvdb_v059':True},
-                               round(float(np.clip(np.median([v[1] for v in found['M'] if v and v[0] == style]), .08, .25)), 3), line))
+                               paint_width, line))
 
     dt = time.perf_counter() - t0
     if dt > SLOW_SEC:
