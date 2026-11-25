@@ -80,6 +80,7 @@ mod coarseease;
 mod junctionsnap;
 mod tunnelcover;
 mod tunnelchain;
+mod tunnelrec;
 mod portal;
 mod gradesep;
 mod lamps;
@@ -7769,6 +7770,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // road_exact's always-exact parts, "ho"); 606: M4's surface decks (roadsys_decks: decks from the road system's own
     // structure faces, BNE_ROADSYS=surface)
     roadsysbind::register(m)?;
+    tunnelrec::register(m)?;
     // 599: unalign::collider_unalign (colliders off the axis-aligned lattice, cdae.COLLIDER_UNALIGN_M)
     unalign::register(m)?;
     // 604 (603 and 605 kept for other branches): cip (architecture v2's compact per-cell inputs: the lossless cell
@@ -7806,6 +7808,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     snow::py::register(m)?;
     // 626: road M5 rounds 2-3 (roadsys: twins, widen_out, class / sign / rail clearance floors, mapped ranges,
     // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
-    m.add("VERSION", 626)?;
+    // 627: deck_shape(lhw=, nbi=): the deck ends' skew only as the abutment of a short structure's crossing, waterways
+    // (kind 3) crossed too, the US bridge inventory's skew first (roadshape.py, nbiskew.py); its ends' audit numbers
+    m.add("VERSION", 629)?;
     Ok(())
 }

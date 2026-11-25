@@ -69,6 +69,10 @@ pub const K_ZONE: u8 = 3;
 pub const SUP_GROUND: u8 = 0;
 pub const SUP_STRUCT: u8 = 1;
 pub const SUP_TUNNEL: u8 = 2;
+/// (T1) a crossing over a tunnel: its floor's parts (the record's lids: roads.TUNNEL_LOW_H, roads.TUNNEL_SOIL_M)
+pub const TUNNEL_LIGHTS_M: f64 = 0.3;
+pub const TUNNEL_LID_MIN_M: f64 = 3.6;
+pub const TUNNEL_ROOF_M: f64 = 1.0;
 
 pub struct Edge { pub seg: usize, pub va: usize, pub vb: usize, pub na: usize, pub nb: usize, pub len: f64 }
 
@@ -154,6 +158,8 @@ pub struct Stroke {
                                        // (xsec::K_BUS, K_SOFT) or an advisory cycle lane's dashed line (OVER_ADV)
     pub area: Vec<crate::areas::Knot>, // (BNE_ROADSYS_AREAS) its mapped road areas' program: lane factor, outer shoulders,
                                        // shift, strip factor (the cross-section's strips, BNE_ROADSYS_XSEC)
+    pub skews: Vec<(f64, f64)>,        // (627) (station, slope): a skewed end row there, its boundary at offset t on
+                                       // station s + t * slope (deck.rs set_skews; part.rs rows)
 }
 
 /// Stroke.over's mark for an advisory cycle lane (markings only, never a face kind).
@@ -356,9 +362,10 @@ pub struct NetStats {
 /// flat_struct (M4, deck.rs): no crossfall on structure faces (today's decks are flat across: the terrain and the
 /// hand-over were made for them).
 /// areas (BNE_ROADSYS_AREAS=on): the place's mapped road areas are the carriageway edges' soft targets (areas::fit).
-pub struct Opts { pub cut_grid: f64, pub cut_offset: f64, pub flat_struct: bool, pub areas: bool }
+/// tunnels (T1, BNE_ROADSYS_TUNNELS=on): the profile squares make the tunnel record (tunnel.rs) with their profiles.
+pub struct Opts { pub cut_grid: f64, pub cut_offset: f64, pub flat_struct: bool, pub areas: bool, pub tunnels: bool }
 
-impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0, flat_struct: false, areas: false } } }
+impl Default for Opts { fn default() -> Opts { Opts { cut_grid: 4000.0, cut_offset: 2000.0, flat_struct: false, areas: false, tunnels: false } } }
 
 pub struct Net {
     pub opts: Opts,
@@ -1112,7 +1119,7 @@ fn strokes(net: &mut Net) {
             anchor_r: Prog::default(), right_windows: Vec::new(), stations: Vec::new(), dense: Vec::new(), sup: merged,
             cls, cls_s: seg.cls_s.clone(), kmh: if kmh > 0.0 { kmh } else { 50.0 }, region, snap0: None, snap1: None,
             cut0: 0.0, cut1: 0.0, absorbed: false, lane_scale: Vec::new(), cap_nbrs: Vec::new(), reach: 0.0, over: Vec::new(),
-            area: Vec::new(),
+            area: Vec::new(), skews: Vec::new(),
         });
     }
     for s in &net.strokes {
@@ -1687,9 +1694,14 @@ fn crossings(net: &mut Net) {
                 let clear = clearance_at(net, lo, if up == sa { s_b } else { s_a });
                 // (M3: nothing held over a tunnel: today's tunnels own their heights and cover (TunnelProfiles); an 8 m
                 // cover floor lifted a speedway's deck over its infield tunnel 12 m)
-                if lo_sup.kind == SUP_TUNNEL { unbridged += 1; continue; }
+                // (T1, Opts.tunnels: the tunnel record builds every tagged tunnel covered, so a road crossing over one
+                // holds its floor: the tunnel road's clearance + 0.3 m for lights and signs, at least the lowest lid
+                // the mesher draws, + its roof and soil (TUNNEL_ROOF_M); the tunnel's knots, smoothness only, take it)
+                if lo_sup.kind == SUP_TUNNEL && !net.opts.tunnels { unbridged += 1; continue; }
                 let up_sup = if up == sa { ua } else { ub };
-                let floor = if lo_sup.kind == SUP_TUNNEL { 8.0 } else { clear + deck_under(up_sup) };
+                let floor = if lo_sup.kind == SUP_TUNNEL {
+                    if net.opts.tunnels { (clear + TUNNEL_LIGHTS_M).max(TUNNEL_LID_MIN_M) + TUNNEL_ROOF_M } else { 8.0 }
+                } else { clear + deck_under(up_sup) };
                 let stacked = lo_sup.kind == SUP_STRUCT;
                 out.push(Crossing { a: sa, sa: s_a, b: sb, sb: s_b, p, upper: up, floor, along: false, stacked });
             }

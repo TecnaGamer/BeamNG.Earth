@@ -1170,6 +1170,8 @@ def _bridge_setup(p):
     p.wet = sea.depth if sea is not None else None        # (decks clear the water: roads.water_clear)
     p.infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(
         "infrastructure")                                   # (bridge:structure tags: bridgetypes)
+    p.water_fn = lambda key: _s.md.cell(key, layers=("water",), kind="demand").layers.get(
+        "water")                                            # (the waterways a deck end crosses: roadshape's skew)
 
 
 def _bridges(aid, frame, elev):
@@ -3692,6 +3694,7 @@ def far_bridge_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir):
     def far_setup(p):
         sea = getattr(_s, "sea", None)
         p.wet = sea.depth if sea is not None else None
+        p.water_fn = lambda key: _s.md.cell(key, layers=("water",), kind="demand").layers.get("water")
     # (the road tiles' decks where solved: the bridge looks the same near and far; else on the raw ground)
     bridges = roadsmod.ChainView(
         _chain_store(f"far_bridges_{zoom}", roadsmod.BridgeProfiles,
@@ -3762,6 +3765,7 @@ def _far_bridges(frame, gzoom, raw):
     def setup(p):
         sea = getattr(_s, "sea", None)
         p.wet = sea.depth if sea is not None else None
+        p.water_fn = lambda key: _s.md.cell(key, layers=("water",), kind="demand").layers.get("water")
     return roadsmod.ChainView(_chain_store(f"far_bridges_{gzoom}", roadsmod.BridgeProfiles, raw, setup), frame)
 
 

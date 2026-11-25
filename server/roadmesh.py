@@ -301,7 +301,11 @@ def ribbons(chunks, keep_none=False):
             if b - a < 2:
                 continue
             c = chunks[k]
-            out[k] = (L[a:b], R[a:b], _ribbon_v(S[a:b], c), c["m"], layer_of(c),
+            le, ri = L[a:b], R[a:b]
+            if c.get("rs_sk0") is not None or c.get("rs_sk1") is not None:
+                # (BNE_ROADSYS=surface, 627: a ground road's end at a skewed deck end cut along its end line)
+                le, ri = skew_ends((le + ri) * 0.5, (le - ri) * 0.5, c.get("rs_sk0"), c.get("rs_sk1"))
+            out[k] = (le, ri, _ribbon_v(S[a:b], c), c["m"], layer_of(c),
                       Z[a:b] if c.get("fixed") else None)
             LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
     return out if keep_none else [r for r in out if r is not None]
@@ -3267,7 +3271,8 @@ def tunnel(chunks, origin, walls=()):
             for e_, f_ in enumerate(fits if c.get("portal") else ()):
                 if f_ is not None and (c.get("portal") or (False, False))[e_]:
                     d_ = sm if e_ == 0 else sm[-1] - sm
-                    gr = np.where(d_ <= portals.setback(f_) + 0.5 if portals.setback(f_) > 0 else False, np.inf, gr)
+                    sb_ = portals.setback(f_) + portals.inset(f_)
+                    gr = np.where(d_ <= sb_ + 0.5 if sb_ > 0 else False, np.inf, gr)
             nv = _add_blocks(P, T, UV, M, nv, portals.cover(mid - np.asarray(origin, np.float64)[:2], u, z - origin[2],
                                                              gr - origin[2], hw, th, (False, False), CONCRETE_UV_M,
                                                              SOIL_UV_M, sec), 0)

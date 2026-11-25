@@ -705,5 +705,42 @@ class SurfaceTest(unittest.TestCase):
         self.assertEqual(roadmesh._shown([dict(c), dict(c, rs_hide=True)]), [dict(c)])
 
 
+class SkewTest(unittest.TestCase):
+    """(627) The deck-end skew under BNE_ROADSYS=surface: the hand-over's skewed ends, the ground roads cut along them."""
+
+    def test_the_hand_overs_ends_skew_by_the_rule(self):
+        if getattr(fast._ef, "VERSION", 0) < 627:
+            self.skipTest("earthfast < 627")
+        b = (np.array([[0.3, 0.2], [40.3, 0.2]]), 4.0)
+        gnd = (np.array([[-40.0, 0.2], [0.3, 0.2]]), 4.0)
+        road = (np.array([[-4.7, -43.10127], [45.3, 43.50127]]), 3.5)
+        e = fast._ef.RoadsysEnds([b], [gnd, road], [], 1.0, [], [None])
+        sk = e.skews()
+        self.assertEqual(len(sk), 1)
+        x, y, dx, dy = sk[0]
+        self.assertAlmostEqual(x, 0.3)
+        self.assertAlmostEqual(dx, 0.5, places=4)
+        self.assertAlmostEqual(dy, 0.8660254, places=4)
+        self.assertEqual(fast._ef.RoadsysEnds([b], [gnd, road], [], 1.0).skews(), [])     # (no skew asked: square)
+        # the inventory's record of a square structure: square
+        self.assertEqual(fast._ef.RoadsysEnds([b], [gnd, road], [], 1.0, [], [(0.0, 40.0, 1.0, 0.0)]).skews(), [])
+
+    def test_a_ground_road_ending_at_a_skewed_end_takes_its_line(self):
+        import roads
+        import roadmesh
+        g = {"m": "asphalt", "w": 7.0, "n": [[-40.0, 0.0, 5.0], [0.0, 0.0, 5.0]]}
+        far = {"m": "asphalt", "w": 7.0, "n": [[-40.0, 30.0, 5.0], [0.0, 30.0, 5.0]]}
+        chunks = [dict(g), dict(far)]
+        roads._rs_skew_ground_ends(chunks, [(0.0, 0.0, -0.5, -0.8660254037844386)])
+        self.assertEqual(chunks[0].get("rs_sk1"), [0.5, 0.866025])       # (to the chunk's left there: +y)
+        self.assertNotIn("rs_sk1", chunks[1])
+        got = roadmesh.ribbon_pairs([chunks[0]])
+        r = got[0][0] if isinstance(got[0], tuple) and len(got[0]) == 2 else got[0]
+        le, ri = r[0], r[1]
+        # the ribbon's end row along the line: left 3.5 m up at x = 3.5 cot 60, right at -3.5 cot 60
+        self.assertAlmostEqual(float(le[-1][0]), 3.5 * 0.5 / 0.8660254037844386, places=3)
+        self.assertAlmostEqual(float(ri[-1][0]), -3.5 * 0.5 / 0.8660254037844386, places=3)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1613,6 +1613,7 @@ local function onMessage(msg)
     -- winter grip (server snow.py, BNE_WINTER only): winter.lua loads with the first one (nothing of it runs before)
     M._winter = M._winter or require('beamngEarth/winter')
     M._winter.onState(msg)
+    seasonlook.setSnowState(msg) -- (the bare trees' frost, baretrees.lua)
   elseif t == 'gravity' then
     -- real gravity at the player (server gravity.py): applied by beamngEarth_weather's setGravity path
     local w = rawget(_G, 'beamngEarth_weather')

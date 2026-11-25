@@ -8275,6 +8275,7 @@ class BridgeProfiles:
 
     wet = None      # wet(lat, lon) -> water depth (m) or None: decks clear the water (water_clear)
     infra_fn = None     # infra_fn(cell key) -> the infrastructure Features (bridge:structure tags: bridgetypes)
+    water_fn = None     # water_fn(cell key) -> the water Features (BNE_DECK_SKEW: the waterways a deck end crosses)
 
     def __init__(self, frame, cell_fn, elev):
         self.frame, self.cell_fn, self.elev = frame, cell_fn, elev
@@ -8505,6 +8506,7 @@ class BridgeProfiles:
                         lines += mapgeom.enu_rings(feats, self.frame, rings)
                         roads_.append(((fid, "g"), lines))
                         self.__dict__.setdefault("_gcls", {})[(fid, "g")] = rs[i].cls     # (LEVEL_SPACING)
+                        self.__dict__.setdefault("_ghw", {})[(fid, "g")] = rs[i].width / 2  # (roadshape's skew)
                     elif _rail_drawn(feats, i):
                         # a railway on the ground: the decks over it keep their headroom too (GitHub #324: a road bridge
                         # lay on the tracks; only roads under a deck were counted)
@@ -9432,7 +9434,10 @@ class BridgeProfiles:
         if roadshape.DECKS and self.STRUCTURES:
             shapes = roadshape.shape_chain(comp, pool, zs, ground,
                                            lambda k: (k in keep or (own is not None and k == key))
-                                           and self._deck_simple(k, pool))
+                                           and self._deck_simple(k, pool),
+                                           hw_of=self.__dict__.get("_ghw"),
+                                           water=self._waterways(comp, pool) if roadshape.SKEW_627 else (),
+                                           frame=self.frame)
         shaped = {k: ((v[0], _shaped_line(shapes[k]["xy"], shapes[k], len(v[1])), shapes[k]["z"], v[3]) if k in shapes
                       else v) for k, v in keep.items()}
         if own is not None and key in shapes:
@@ -9729,6 +9734,59 @@ class BridgeProfiles:
                         out.append(np.stack([e, n], axis=1))
         return out
 
+    def _waterways(self, comp, pool):
+        """[((fid, "w"), [xy (k, 2)], half width m)] of the mapped waterways (OSM waterway=river / stream / canal /
+        drain, not in a tunnel or culvert: roadshape.WATERWAYS) in the cells within roadshape.NEAR_M of the chain's
+        decks, this frame (roadshape's skew: the line a deck end may be the abutment of). Each cell's read once; a cell
+        that cannot be read: none from it, the build not kept (revisit.fault)."""
+        if self.water_fn is None or not comp:
+            return []
+        import genground
+        import revisit
+        pts = np.concatenate([np.asarray(pool[k][1], np.float64)[:, :2] for k in comp])
+        lo, hi = pts.min(0) - roadshape.NEAR_M, pts.max(0) + roadshape.NEAR_M
+        la, lon, _ = self.frame.enu_to_geodetic(np.array([lo[0], hi[0]]), np.array([lo[1], hi[1]]), np.zeros(2))
+        keys = mapcells.cells_for_bbox(float(la.min()), float(lon.min()), float(la.max()), float(lon.max()))
+        memo = self.__dict__.setdefault("_wlines", {})
+        out = []
+        for key in sorted(keys, key=str):
+            with self.lock:
+                got = memo.get(str(key))
+            if got is None:
+                got = []
+                try:
+                    with revisit.scope() as read:
+                        f = self.water_fn(key)
+                        if f is not None and len(f):
+                            xy = None
+                            for i in np.flatnonzero(np.asarray(f.kind) == 2):
+                                tags = genground._tags(f, i)
+                                if tags.get("tunnel") or str(tags.get("location") or "") == "underground":
+                                    continue
+                                way = str(tags.get("waterway") or genground._attr(f, "class", i) or "")
+                                if way not in roadshape.WATERWAYS:
+                                    continue
+                                w = genground._width(tags.get("width"))
+                                hw = w / 2 if w else genground.WATERWAY_HALF.get(way, 1.5)
+                                if xy is None:
+                                    xy = f.xy_in(self.frame)
+                                rings = [np.asarray(r, np.float64)[:, :2] for part in f.parts(i, xy) for r in part
+                                         if len(r) >= 2]
+                                if rings:
+                                    got.append(((str(f.ids[i]), "w"), rings, float(hw)))
+                    if read.complete:
+                        with self.lock:
+                            memo[str(key)] = got
+                except Exception as ex:     # (no waterways from it rather than no deck: not kept)
+                    log.debug("waterways: %s: %s", type(ex).__name__, ex)
+                    revisit.fault()
+                    got = []
+            for k, rings, hw in got:
+                keep = [r for r in rings if not ((r.max(0) < lo).any() or (r.min(0) > hi).any())]
+                if keep:
+                    out.append((k, keep, hw))
+        return out
+
     def _structure(self, chain, infra_out=None):
         """The truss beams of a solved chain [(xy, z, width)] and the piers under its ends (bridgetypes); ([], []) for a
         plain deck. infra_out (a list): the infrastructure Features read are added to it (structures.shadow's bridge
@@ -9937,6 +9995,8 @@ class TunnelProfiles(BridgeProfiles):
         self._pins = {}             # part id -> (start, end) geodetic floor heights of its ends inside the hill
                                     # (_chain_pins; NaN at a portal)
         self._subsea = set()        # part ids whose underwater profile was solved successfully
+        self.holes = {}             # (T1, BNE_ROADSYS_TUNNELS) sub-part fid -> its holes' reach in from its start / end
+                                    # portal (the road system's record, tunnelrec.py; 0: no portal there)
 
     def _raw_ground(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
@@ -9992,7 +10052,9 @@ class TunnelProfiles(BridgeProfiles):
         if staged is None:
             return
         pid = self._part_id(k)
-        secs, subs, underwater = staged
+        secs, subs, underwater = staged[:3]
+        for n, h in (staged[3] if len(staged) > 3 else {}).items():
+            self.holes[f"{pid}#{n}"] = h
         if underwater:
             self._subsea.add(pid)
         self.sections[pid] = secs
@@ -10243,6 +10305,28 @@ class TunnelProfiles(BridgeProfiles):
         gfn = self._raw_ground if self.raw is not None else self._ground
         out = []
         self._tls.staged = {}           # (committed by parts() right after, the rest dropped with the next solve)
+        if roadsys.TUNNELS:
+            # (T1, BNE_ROADSYS_TUNNELS: the road system's record decides the floor, sections, portals and holes of a dry
+            # network; one under water stays on this solve until T3)
+            import tunnelrec
+            if any(self._drowned.get(self._part_id(k)) for k in comp):
+                tunnelrec._count("wet")
+            else:
+                rec = tunnelrec.solve(self, comp, pool, ground)
+                if rec is not None:
+                    for k in comp:
+                        got = rec.get(k)
+                        if got is None:
+                            out.append(np.full(len(pool[k][1]), np.nan))
+                            continue
+                        floor, secs, subs, holes = got
+                        xy = np.asarray(pool[k][1], np.float64)
+                        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy[:, :2], axis=0).T))]
+                        floor = self._observed_floor(k, pool, xy, s, floor, secs, (False, False))
+                        self._tls.staged[k] = (secs, subs, False, holes)
+                        out.append(floor)
+                    return out
+                tunnelrec._count("fallback")
         underwater_floors = {}
         if any(self._drowned.get(self._part_id(k)) for k in comp):
             import subsea
@@ -10610,6 +10694,7 @@ class TunnelProfiles(BridgeProfiles):
         def mine(d):
             return {k: v for k, v in d.items() if str(k).split("#")[0] in pids}
         return {"sections": mine(self.sections), "heights": mine(self.heights), "ups": mine(self.ups),
+                "holes": mine(self.holes),
                 "caps": mine(self.caps), "mouths": mine(self.mouths), "open": {o for o in self.open
                                                                                if o.split("#")[0] in pids},
                 "drowned": {k: v for k, v in self._drowned.items() if k in pids},
@@ -10618,8 +10703,8 @@ class TunnelProfiles(BridgeProfiles):
     def _adopt_take(self, extra):
         if not extra:
             return
-        for name in ("sections", "heights", "ups", "caps", "mouths"):
-            for k, v in extra[name].items():
+        for name in ("sections", "heights", "ups", "caps", "mouths", "holes"):
+            for k, v in extra.get(name, {}).items():
                 getattr(self, name).setdefault(k, v)
         self.open.update(extra["open"])
         self._subsea.update(extra.get("subsea", ()))
@@ -10759,8 +10844,8 @@ class ChainView:
 
     mapper = staticmethod(lambda src, dst: _Mapper(src, dst))
 
-    def __getattr__(self, name):        # wet, infra_fn, raw, ends: the stores' settings (setup)
-        if name in ("wet", "infra_fn", "raw", "ends"):
+    def __getattr__(self, name):        # wet, infra_fn, water_fn, raw, ends: the stores' settings (setup)
+        if name in ("wet", "infra_fn", "water_fn", "raw", "ends"):
             st = list(self.cs.stores.values())
             return getattr(st[0], name, None) if st else None
         raise AttributeError(name)
@@ -10945,6 +11030,7 @@ class ChainView:
 
     heights = property(lambda self: self._merged("heights"))
     mouths = property(lambda self: self._merged("mouths"))
+    holes = property(lambda self: self._merged("holes"))
 
     def _sub(self, method, fid, default):
         for st in self._stores():
@@ -11164,7 +11250,19 @@ def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square, rail_parts
     if not parts and not rail:
         return None
     mask = None
-    if parts:
+    if parts and roadsys.TUNNELS:
+        # (T1: the record's sections cut by its hole rule, only where a tube enters a hill; the legacy rule for the rest)
+        import tunnelrec
+        half_ = u.shape[0] * square / 2
+        mask = np.zeros(u.shape, bool)
+        rest = tunnelrec.holes(mask, u, cx - half_, cy - half_, square, parts, getattr(tunnels, "heights", None),
+                               getattr(tunnels, "holes", {}) or {})
+        if rest:
+            mask |= tunnel_hole_mask(rest, u, cx, cy, square, getattr(tunnels, "heights", None),
+                                     getattr(tunnels, "mouths", None))
+        if mask.any():
+            mask = spare_carriageways(mask, parts, cells, frame, cx, cy, square)
+    elif parts:
         mask = tunnel_hole_mask(parts, u, cx, cy, square, getattr(tunnels, "heights", None),
                                 getattr(tunnels, "mouths", None))
         if mask is not None and mask.any():
@@ -13779,6 +13877,32 @@ def _reach_tag(ch, line, st):
                  "f": sub[:, 3].astype(np.int64).tolist()}
 
 
+RS_SKEW_MATCH_M = 1.5     # m a ground road chunk's end may lie off a skewed deck end (roadsys deck.rs SKEW_MATCH_M)
+
+
+def _rs_skew_ground_ends(chunks, skews):
+    """(BNE_ROADSYS=surface, 627) Each ground road chunk whose end lies at a skewed deck end (roadsys.tile_skews) takes
+    its end line ("rs_sk0" / "rs_sk1": unit, to the chunk's left there; roadmesh.ribbon_pairs cuts the ribbon along
+    it), so the asphalt meets the deck's skewed end row. In place."""
+    pts = np.asarray([s[:2] for s in skews], np.float64)
+    dirs = np.asarray([s[2:] for s in skews], np.float64)
+    for c in chunks:
+        if c.get("deck") or c.get("tunnel") or c.get("rs_face") or c.get("rs_mark") or c.get("fixed"):
+            continue
+        n = np.asarray(c.get("n"), np.float64)
+        if n.ndim != 2 or len(n) < 2:
+            continue
+        for e, at, nxt in ((0, 0, 1), (1, -1, -2)):
+            d2 = dnp.hypot(pts[:, 0] - n[at, 0], pts[:, 1] - n[at, 1])
+            j = int(np.argmin(d2))
+            if float(d2[j]) > RS_SKEW_MATCH_M:
+                continue
+            t = n[at, :2] - n[nxt, :2] if e == 1 else n[nxt, :2] - n[at, :2]
+            left = np.array([-t[1], t[0]])
+            d = dirs[j] if float(dirs[j][0]) * float(left[0]) + float(dirs[j][1]) * float(left[1]) >= 0.0 else -dirs[j]
+            c[f"rs_sk{e}"] = [round(float(d[0]), 6), round(float(d[1]), 6)]
+
+
 def _deck_clearance(ch):
     """A generated deck chunk's (points, half-width per segment, slab-plus-girder depth) for RoadClearance."""
     half = np.asarray(ch.get("ws", ch["w"]), np.float64) / 2
@@ -14257,6 +14381,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 f = ch.get("fid")
                 if (f is not None and roadsys.feature(f) in covered) or (f is None and not ch.get("tunnel")):
                     ch["rs_hide"] = True
+            skews = face_chunks[0].get("rs_skews") if face_chunks else None
+            if skews:
+                _rs_skew_ground_ends(chunks, skews)
             chunks.extend(face_chunks)
     if tunnels is not None:                     # TunnelProfiles: road surfaces and lines through tunnels
         tch = _tunnel_chunks(tunnels, cells, (x0, y0, x1, y1), terrain_paint)

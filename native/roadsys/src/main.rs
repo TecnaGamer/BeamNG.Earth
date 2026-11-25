@@ -67,6 +67,79 @@ fn seg_box(a: geom::P2, b: geom::P2, bx: [f64; 4]) -> bool {
     (0..4).any(|k| geom::seg_x(a, b, c[k], c[(k + 1) % 4]).is_some())
 }
 
+/// (tools) the deck-end skew audit's lines (main's "endaudit").
+fn endaudit(place: &io::Place) {
+    use geom::*;
+    let lines: Vec<Line> = place.segs.iter().map(|s| Line::new(s.pts.clone())).collect();
+    // every mapped bridge range's ends (a joint: another bridge range's end within 0.75 m)
+    let mut ends: Vec<(usize, f64, bool, P2)> = Vec::new();     // (seg, arc, at the range's start, point)
+    for (i, s) in place.segs.iter().enumerate() {
+        let l = lines[i].len();
+        if s.pts.len() < 2 || l < 1.0 { continue; }
+        for &(a, b) in &s.bridge {
+            ends.push((i, a * l, true, lines[i].at(a * l).0));
+            ends.push((i, b * l, false, lines[i].at(b * l).0));
+        }
+    }
+    for (k, &(i, t, start, p)) in ends.iter().enumerate() {
+        let joint = ends.iter().enumerate().any(|(k2, e)| k2 != k && norm(sub(e.3, p)) <= 0.75);
+        let s = &place.segs[i];
+        let ln = &lines[i];
+        let (rs, re) = s.bridge.iter().map(|&(a, b)| (a * ln.len(), b * ln.len())).find(|&(a, b)| if start { (a - t).abs() < 1e-9 } else { (b - t).abs() < 1e-9 }).unwrap();
+        let span = re - rs;
+        // the inward polyline: from the end along the range, 80 m at most
+        let reach_max = 80.0f64.min(span);
+        let mut pts: Vec<P2> = Vec::new();
+        let nstep = (reach_max / 1.0).ceil().max(1.0) as usize;
+        for j in 0..=nstep {
+            let a = reach_max * j as f64 / nstep as f64;
+            pts.push(ln.at(if start { t + a } else { t - a }).0);
+        }
+        let inward = unit(sub(pts[pts.len().min(6) - 1], pts[0])).unwrap_or([1.0, 0.0]);
+        let mut best: Option<(f64, f64, String, String, f64, P2)> = None;  // (reach, sin, kind, class, crossed width, crossed dir)
+        let mut test = |q: &[P2], kind: &str, cls: &str, w: f64, on_struct: &dyn Fn(f64) -> bool, qlen: f64| {
+            let mut acc = 0.0;
+            for j in 0..q.len().saturating_sub(1) {
+                let (q0, q1) = (q[j], q[j + 1]);
+                let ql = norm(sub(q1, q0));
+                for m in 0..pts.len() - 1 {
+                    if let Some((u, v)) = seg_x(pts[m], pts[m + 1], q0, q1) {
+                        if on_struct((acc + v * ql) / qlen.max(1e-9)) { continue; }
+                        let reach = reach_max * (m as f64 + u) / nstep as f64;
+                        if reach <= 1.0 { continue; }
+                        let md = unit(sub(pts[m + 1], pts[m])).unwrap_or(inward);
+                        let cd = unit(sub(q1, q0)).unwrap_or([1.0, 0.0]);
+                        let sn = cross(md, cd).abs();
+                        if sn < 0.2588 { continue; }      // (along it: under 15 deg)
+                        if best.as_ref().is_none_or(|b| reach < b.0) { best = Some((reach, sn, kind.to_string(), cls.to_string(), w, cd)); }
+                    }
+                }
+                acc += ql;
+            }
+        };
+        for (o, so) in place.segs.iter().enumerate() {
+            if o == i || so.fid == s.fid || so.pts.len() < 2 { continue; }
+            let ol = lines[o].len();
+            let br: Vec<(f64, f64)> = so.bridge.iter().chain(so.tunnel.iter()).copied().collect();
+            let in_tunnel: Vec<(f64, f64)> = so.tunnel.clone();
+            let on = move |f: f64| br.iter().any(|&(a, b)| f >= a - 1e-6 && f <= b + 1e-6) && !in_tunnel.iter().any(|&(a, b)| f >= a && f <= b);
+            test(&so.pts, "road", &so.cls_s, so.pave, &on, ol);
+        }
+        for (q, _clear) in &place.rails {
+            let ql = Line::new(q.clone()).len();
+            test(q, "rail", "rail", 0.0, &|_f: f64| false, ql);
+        }
+        let mut o = String::new();
+        let _ = write!(o, "{{\"place\":[{:.7},{:.7}],\"fid\":\"{}\",\"cls\":\"{}\",\"p\":[{:.2},{:.2}],\"in\":[{:.5},{:.5}],\"pave\":{:.2},\"span\":{:.1},\"joint\":{}",
+                       place.lat, place.lon, s.fid, s.cls_s, p[0], p[1], inward[0], inward[1], s.pave, span, joint);
+        if let Some((reach, sn, kind, cls, w, cd)) = best {
+            let _ = write!(o, ",\"x\":{{\"reach\":{:.2},\"sin\":{:.4},\"kind\":\"{}\",\"cls\":\"{}\",\"w\":{:.2},\"d\":{:.2},\"dir\":[{:.5},{:.5}]}}", reach, sn, kind, cls, w, reach * sn, cd[0], cd[1]);
+        }
+        o.push('}');
+        println!("{}", o);
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() == 4 && args[1] == "tile" {
@@ -92,17 +165,23 @@ fn main() {
         let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(1) });
         let t = io::read_tile(&b).unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
         // (the recorded ground heights, then the measured deck heights run by run)
+        // (T1: the ground is asked more than once (the railway lines' ground, the tunnel record's side ground), each call
+        // recorded after the last in the dump, the measured decks after them all: read in turn, the decks from the end)
         let ng = std::cell::Cell::new(0usize);
         let g = |pts: &[geom::P2]| -> Vec<f64> {
-            if pts.len() > t.ground.len() { eprintln!("ground: {} points asked, {} recorded", pts.len(), t.ground.len()); std::process::exit(1); }
-            ng.set(pts.len());
-            t.ground[..pts.len()].to_vec()
+            let k = ng.get();
+            if k + pts.len() > t.ground.len() { eprintln!("ground: {} points asked at {}, {} recorded", pts.len(), k, t.ground.len()); std::process::exit(1); }
+            ng.set(k + pts.len());
+            t.ground[k..k + pts.len()].to_vec()
         };
         let o = |runs: &[prof::ObsRun]| -> Vec<Vec<f64>> {
-            let mut k = ng.get();
+            let total: usize = runs.iter().map(|r| r.pts.len()).sum();
+            let mut k = t.ground.len().saturating_sub(total);
             runs.iter().map(|r| { let n = r.pts.len(); let v = if k + n <= t.ground.len() { t.ground[k..k + n].to_vec() } else { vec![f64::NAN; n] }; k += n; v }).collect()
         };
-        let out = square::solve_obs(&t.place, (t.id.0 as i64, t.id.1 as i64), &g, Some(&o), net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, ..Default::default() });
+        // (ROADSYS_TUNNELS=1: a square dumped with the tunnel record, BNE_ROADSYS_TUNNELS: replayed with it)
+        let tunnels = std::env::var("ROADSYS_TUNNELS").map(|v| v == "1").unwrap_or(false);
+        let out = square::solve_obs(&t.place, (t.id.0 as i64, t.id.1 as i64), &g, Some(&o), net::Opts { cut_grid: t.cut.0, cut_offset: t.cut.1, tunnels, ..Default::default() });
         std::fs::create_dir_all(&args[3]).ok();
         let name = format!("{}_{}", t.id.0, t.id.1);
         let bytes = out.to_bytes();
@@ -134,6 +213,14 @@ fn main() {
                 if let Ok(path) = std::env::var("ROADSYS_DECKS_RUNS") {
                     let runs: Vec<String> = o.runs.iter().map(|r| format!("[{}]", r.p.iter().map(|q| format!("[{:.3},{:.3},{:.3}]", q[0], q[1], q[2])).collect::<Vec<_>>().join(","))).collect();
                     std::fs::write(&path, format!("{{\"stats\":{},\"runs\":[{}]}}", o.json, runs.join(","))).ok();
+                }
+                // (tools: ROADSYS_DECKS_FACES=FILE writes the faces as JSON {"faces": {v, t, k, f}}, decks_*.json's shape)
+                if let Ok(path) = std::env::var("ROADSYS_DECKS_FACES") {
+                    let v: Vec<String> = o.v.iter().map(|q| format!("[{:.3},{:.3},{:.3}]", q[0], q[1], q[2])).collect();
+                    let t: Vec<String> = o.t.iter().map(|q| format!("[{},{},{}]", q[0], q[1], q[2])).collect();
+                    let k: Vec<String> = o.kind.iter().map(|x| x.to_string()).collect();
+                    let f: Vec<String> = o.feat.iter().map(|x| x.to_string()).collect();
+                    std::fs::write(&path, format!("{{\"faces\":{{\"v\":[{}],\"t\":[{}],\"k\":[{}],\"f\":[{}]}}}}", v.join(","), t.join(","), k.join(","), f.join(","))).ok();
                 }
                 // (tools: ROADSYS_DECKS_AT=x,y,r lists the faces whose middle lies within r of (x, y): kind, feature, z)
                 if let Ok(v) = std::env::var("ROADSYS_DECKS_AT") {
@@ -183,6 +270,16 @@ fn main() {
             Ok(j) => { std::fs::write(&args[3], j).unwrap_or_else(|e| { eprintln!("{}: {}", args[3], e); std::process::exit(1) }); }
             Err(e) => { eprintln!("{}", e); std::process::exit(1); }
         }
+        return;
+    }
+    if args.len() == 3 && args[1] == "endaudit" {
+        // (tools: the deck-end skew audit) a decks input file's (.rsdk) mapped bridge ends, one JSON line each: the
+        // end (place frame), the deck's inward direction, its paved width, and the nearest road or railway crossing
+        // under it within 80 m inward (its reach along the deck, the crossing's sine, the crossed paved width, class)
+        let b = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {}", args[2], e); std::process::exit(2) });
+        let n = u64::from_le_bytes(b[8..16].try_into().unwrap()) as usize;
+        let t = io::read_tile(&b[16..16 + n]).unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
+        endaudit(&t.place);
         return;
     }
     if args.len() == 4 && args[1] == "audit" {

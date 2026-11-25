@@ -115,6 +115,8 @@ pub struct SqStroke {
     pub lows: Vec<f64>,                     // (M3) floors it is the lower road of (the ground there only dug)
     pub hand_m: f64,                        // (M3) m from those over which the ground goes back to the plans' own
     pub floors: Vec<f64>,                   // (M3) stations of the floors it is the upper road of (chain_heights' holds)
+    pub tun: Vec<crate::tunnel::Run>,       // (T1, BNE_ROADSYS_TUNNELS) its tunnel record: covered runs (tunnel.rs)
+    pub tsnap: Vec<crate::tunnel::Snap>,    // (T1) rule P's outward snaps of its mapped ranges' ends
 }
 
 impl SqStroke {
@@ -162,6 +164,7 @@ pub struct Square {
     pub json: String,               // its stats (in its bytes: a function of its inputs)
     pub key: u64,
     pub cpu_json: String,           // its timings (not in its bytes)
+    pub tunnels: bool,              // (T1) solved with the tunnel record (BNE_ROADSYS_TUNNELS): its "TUN1" block
 }
 
 impl Square {
@@ -204,6 +207,51 @@ impl Square {
             if best.map(|b| (d, st.uid) < (b.0, b.1)).unwrap_or(true) { best = Some((d, st.uid, st.at(s))); }
         }
         best.map(|b| b.2)
+    }
+
+    /// (T1) The tunnel record at q (tangent t) on map feature `feat`: (kind of the covered run there: 0 daylight gap,
+    /// 1 lid, 2 full tube; 255 not covered; its least inner cover) on the nearest stroke of that feature within
+    /// ROAD_MATCH_M (ties by uid), as `sample` finds it. None: no such stroke here.
+    pub fn tunnel_at(&self, q: P2, t: Option<P2>, feat: &str) -> Option<(u8, f64)> {
+        let mut best: Option<(f64, u64, (u8, f64))> = None;
+        for k in self.near(q, ROAD_MATCH_M) {
+            let st = &self.strokes[k];
+            let (s, d, ts) = st.project(q);
+            if d > ROAD_MATCH_M { continue; }
+            if !st.feats.iter().any(|f| f.2 == feat && s >= f.0 - FEAT_TOL_M && s <= f.1 + FEAT_TOL_M) { continue; }
+            if let Some(t) = t { if absf(dot(t, ts)) < MATCH_COS { continue; } }
+            let got = st.tun.iter().find(|r| s >= r.s0 - 1e-6 && s <= r.s1 + 1e-6).map(|r| (r.kind, r.cmin)).unwrap_or((255, f64::NAN));
+            if best.map(|b| (d, st.uid) < (b.0, b.1)).unwrap_or(true) { best = Some((d, st.uid, got)); }
+        }
+        best.map(|b| b.2)
+    }
+
+    /// (T1) The portals of the record whose point lies in this square itself (each portal in exactly one square):
+    /// (point, outward unit direction, hole reach in (m), map feature there, stroke uid), in stroke order.
+    pub fn tunnel_mouths(&self) -> Vec<(P2, P2, f64, String, u64)> {
+        let b = bounds(self.sq);
+        let mut out = Vec::new();
+        for st in &self.strokes {
+            let n = st.s.len();
+            if n < 2 { continue; }
+            let at = |s: f64| -> Option<(P2, P2)> {
+                if s < st.s[0] - 1e-6 || s > st.s[n - 1] + 1e-6 { return None; }
+                let k = st.s.partition_point(|&x| x <= s).saturating_sub(1).min(n - 2);
+                let l = st.s[k + 1] - st.s[k];
+                let u = if l > 0.0 { clampf((s - st.s[k]) / l, 0.0, 1.0) } else { 0.0 };
+                Some((lerp(st.pts[k], st.pts[k + 1], u), unit(sub(st.pts[k + 1], st.pts[k])).unwrap_or([1.0, 0.0])))
+            };
+            for r in &st.tun {
+                for (on, s, hole, sign) in [(r.mouth0, r.s0, r.hole0, -1.0), (r.mouth1, r.s1, r.hole1, 1.0)] {
+                    if !on { continue; }
+                    let Some((p, t)) = at(s) else { continue };
+                    if !(p[0] >= b[0] && p[0] < b[2] && p[1] >= b[1] && p[1] < b[3]) { continue; }
+                    let f = st.feature_at(s).unwrap_or("").to_string();
+                    out.push((p, [t[0] * sign, t[1] * sign], hole, f, st.uid));
+                }
+            }
+        }
+        out
     }
 
     /// (M3) The drawn depth (m) of the structure of map feature `feat` under q (as `sample` with deck: the nearest
@@ -277,6 +325,23 @@ impl Square {
             u(&mut b, st.floors.len() as u64);
             for a in &st.floors { f(&mut b, *a); }
         }
+        // (T1) the tunnel record, only for a square solved with it: the bytes of every other square as before
+        if self.tunnels {
+            b.extend_from_slice(b"TUN1");
+            for (k, st) in self.strokes.iter().enumerate() {
+                if st.tun.is_empty() && st.tsnap.is_empty() { continue; }
+                u(&mut b, k as u64);
+                u(&mut b, st.tun.len() as u64);
+                for r in &st.tun {
+                    f(&mut b, r.s0); f(&mut b, r.s1);
+                    u(&mut b, r.kind as u64 | (r.mouth0 as u64) << 8 | (r.mouth1 as u64) << 9);
+                    f(&mut b, r.cmin); f(&mut b, r.hole0); f(&mut b, r.hole1);
+                }
+                u(&mut b, st.tsnap.len() as u64);
+                for q in &st.tsnap { f(&mut b, q.mapped); f(&mut b, q.built); f(&mut b, q.cut); }
+            }
+            u(&mut b, u64::MAX);
+        }
         let h = fnv(&b);
         u(&mut b, h);
         b
@@ -343,6 +408,27 @@ impl Square {
             for _ in 0..n { st.floors.push(fl(&mut pos)?); }
             sqr.strokes.push(st);
         }
+        if pos + 4 <= body.len() && &body[pos..pos + 4] == b"TUN1" {
+            pos += 4;
+            sqr.tunnels = true;
+            loop {
+                let k = rd(&mut pos)?;
+                if k == u64::MAX { break; }
+                let k = k as usize;
+                if k >= sqr.strokes.len() { return Err("roadsys square: tunnel record stroke".into()); }
+                let n = rd(&mut pos)? as usize;
+                if n > 1_000_000 { return Err("roadsys square: size".into()); }
+                for _ in 0..n {
+                    let (s0, s1) = (fl(&mut pos)?, fl(&mut pos)?);
+                    let fb = rd(&mut pos)?;
+                    let (cmin, hole0, hole1) = (fl(&mut pos)?, fl(&mut pos)?, fl(&mut pos)?);
+                    sqr.strokes[k].tun.push(crate::tunnel::Run { s0, s1, kind: (fb & 0xff) as u8, mouth0: fb & 0x100 != 0, mouth1: fb & 0x200 != 0, cmin, hole0, hole1 });
+                }
+                let n = rd(&mut pos)? as usize;
+                if n > 1_000_000 { return Err("roadsys square: size".into()); }
+                for _ in 0..n { let (a, b2, c) = (fl(&mut pos)?, fl(&mut pos)?, fl(&mut pos)?); sqr.strokes[k].tsnap.push(crate::tunnel::Snap { mapped: a, built: b2, cut: c }); }
+            }
+        }
         if pos != body.len() { return Err("roadsys square: trailing bytes".into()); }
         sqr.index();
         Ok(sqr)
@@ -375,6 +461,50 @@ pub fn need(net: &Net) -> Vec<bool> {
         nd = add;
     }
     nd
+}
+
+/// (T1) The tunnel record of stroke si (tunnel.rs) from its profile and ground, the side ground read for the knots
+/// round its tunnels (one g_of call, the knots' order: replayed as asked).
+fn tunnel_record(net: &Net, si: usize, pr: &prof::Profiles, ends: &[Vec<usize>], g_of: &dyn Fn(&[P2]) -> Vec<f64>)
+                 -> (Vec<crate::tunnel::Run>, Vec<crate::tunnel::Snap>) {
+    use crate::tunnel::{stroke_record, StrokeIn, SIDE_OFFS, X_MAX};
+    let st = &net.strokes[si];
+    let (z, g, h) = (&pr.z[si], &pr.g[si], pr.h[si]);
+    let m = z.len();
+    if m < 2 || g.len() != m { return (Vec::new(), Vec::new()); }
+    let len = st.len();
+    let s: Vec<f64> = (0..m).map(|i| (i as f64 * h).min(len)).collect();
+    let ranges: Vec<(f64, f64)> = st.sup.iter().filter(|u| u.kind == SUP_TUNNEL).map(|u| (u.s0, u.s1)).collect();
+    let near = |x: f64| ranges.iter().any(|&(a, b)| x >= a - X_MAX - 10.0 && x <= b + X_MAX + 10.0);
+    let mut pts: Vec<P2> = Vec::new();
+    let mut at: Vec<usize> = Vec::new();
+    let mut offs = Vec::new();
+    for (i, &x) in s.iter().enumerate() {
+        if !near(x) { continue; }
+        let (p, t) = st.line.at(x);
+        st.offsets(x, &mut offs);
+        let half = if offs.is_empty() { 3.5 } else { offs[0].max(-offs[offs.len() - 1]) };
+        let nrm = [-t[1], t[0]];
+        for side in [1.0f64, -1.0] { for o in SIDE_OFFS { let d = side * (half + o); pts.push([p[0] + nrm[0] * d, p[1] + nrm[1] * d]); } }
+        at.push(i);
+    }
+    let gz = if pts.is_empty() { Vec::new() } else { g_of(&pts) };
+    let mut side_l = vec![[f64::NAN; 3]; m];
+    let mut side_r = vec![[f64::NAN; 3]; m];
+    for (k, &i) in at.iter().enumerate() {
+        if gz.len() < (k + 1) * 6 { break; }
+        for j in 0..3 { side_l[i][j] = gz[k * 6 + j]; side_r[i][j] = gz[k * 6 + 3 + j]; }
+    }
+    // a range's end at a stroke end where another stroke goes on in a tunnel: a joint
+    let joined = |node: usize| -> bool {
+        ends[node].iter().any(|&o| o != si && {
+            let so = &net.strokes[o];
+            let e = if so.n0 == node { 0.0 } else { so.len() };
+            so.sup.iter().any(|u| u.kind == SUP_TUNNEL && e >= u.s0 - SUP_TOL_M && e <= u.s1 + SUP_TOL_M)
+        })
+    };
+    let inp = StrokeIn { s: &s, z, g, side_l: &side_l, side_r: &side_r, ranges: &ranges, joined0: joined(st.n0), joined1: joined(st.n1), kmh: st.kmh };
+    stroke_record(&inp)
 }
 
 /// A square solved from its window's segments (the caller reads the map cells covering window(sq)); g_of: ground
@@ -491,8 +621,17 @@ pub fn solve_obs(place: &Place, sq: (i64, i64), g_of: &dyn Fn(&[P2]) -> Vec<f64>
         ss.hand.sort_by(|a, b| a.partial_cmp(b).unwrap());
         ss.lows.sort_by(|a, b| a.partial_cmp(b).unwrap());
         ss.hand_m = clampf(0.5 * reach, HAND_MIN_M, HAND_MAX_M);
+        if opts.tunnels && st.sup.iter().any(|u| u.kind == SUP_TUNNEL) {
+            let (runs, snaps) = tunnel_record(&net, si, &pr, &ends, g_of);
+            // (the portals are where the profile owns the ground: the approach meets the floor there, pins)
+            for r in &runs { if r.mouth0 { ss.hand.push(r.s0); } if r.mouth1 { ss.hand.push(r.s1); } }
+            ss.hand.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            ss.tun = runs;
+            ss.tsnap = snaps;
+        }
         out.strokes.push(ss);
     }
+    out.tunnels = opts.tunnels;
     out.strokes.sort_by(|a, b| a.uid.cmp(&b.uid).then(a.s.first().partial_cmp(&b.s.first()).unwrap()));
     out.index();
     // steps where strokes meet inside the kept area (nodes: every solved end there; noses and joints: the branch's
@@ -547,6 +686,10 @@ pub fn solve_obs(place: &Place, sq: (i64, i64), g_of: &dyn Fn(&[P2]) -> Vec<f64>
     let t3 = crate::cpu_now();
     let mut h = net::uid_of("square", &[SQ_FORMAT, sq.0 as u64, sq.1 as u64]);
     for st in &out.strokes { h = net::uid_of("st", &[h, st.uid]); for &z in &st.z { h = net::uid_of("z", &[h, z.to_bits()]); } }
+    if out.tunnels {        // (T1: the record in the key; squares without it keyed as before)
+        h = net::uid_of("tun1", &[h]);
+        for st in &out.strokes { for r in &st.tun { h = net::uid_of("run", &[h, r.s0.to_bits(), r.s1.to_bits(), r.kind as u64, r.mouth0 as u64, r.mouth1 as u64, r.cmin.to_bits(), r.hole0.to_bits(), r.hole1.to_bits()]); } }
+    }
     out.key = h;
     let ps = &pr.stats;
     let _ = write!(out.json,
@@ -640,7 +783,8 @@ pub fn pins(sqr: &Square) -> Vec<PinRaw> {
                     let df = { let mut v = f64::INFINITY; if free0 { v = v.min(s - s0); } if free1 { v = v.min(s1 - s); } v };
                     let wf = if df.is_finite() { smooth(df / fade) } else { 1.0 };
                     let dt = tunnels.iter().fold(f64::INFINITY, |m, &(a, b)| m.min(if s < a { a - s } else if s > b { s - b } else { 0.0 }));
-                    let wt = if dt.is_finite() { smooth(dt / TUNNEL_FADE_M) } else { 1.0 };
+                    // (T1: the record's floor is this profile: the approach takes it right up to the portal, no fade)
+                    let wt = if sqr.tunnels { 1.0 } else if dt.is_finite() { smooth(dt / TUNNEL_FADE_M) } else { 1.0 };
                     let c = cur.get_or_insert_with(|| PinRaw { feat: feat.clone(), pts: Vec::new(), tan: Vec::new(), w: Vec::new(), share: Vec::new(), half: 0.0, hand: Vec::new(), low: Vec::new() });
                     c.hand.push(hand_w(s));
                     c.low.push(low_w(s));
