@@ -23,7 +23,7 @@ local M = {}
 
 M.VERSION = 1           -- the copies' folder (bump with any change of the renames or the copy)
 M.TEX = '/levels/beamng_earth/art/shapes/beamngEarth/bare/'
-M.ALPHA_REF = 40        -- low: the coarse mips' averaged twigs stay drawn at range as a haze (make_twig_textures.py)
+M.ALPHA_REF = 70        -- low: the coarse mips' averaged twigs stay drawn at range as a haze (make_twig_textures.py)
 
 -- the stock deciduous shapes' folders and their species
 M.FOLDERS = {
