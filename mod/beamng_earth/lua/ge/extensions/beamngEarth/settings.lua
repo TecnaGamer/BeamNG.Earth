@@ -115,6 +115,9 @@ M.SCHEMA = {
   weatherLightning = { kind = 'bool', default = true, label = 'Lightning and thunder' },
   weatherStreaks = { kind = 'bool', default = false, label = 'Rain streaks' },
   weatherWetLook = { kind = 'bool', default = true, label = 'Wet look' },
+  -- the weather sounds: the mod's pre-recorded files, or played live by the world server (native/weathersynth;
+  -- liveaudio.lua), which falls back to the files by itself when the live sound fails (the user, 2026-11-25)
+  weatherSoundSource = { kind = 'enum', default = 'prerecorded', values = { 'prerecorded', 'live' }, label = 'Weather sounds' },
   realClouds = { kind = 'bool', default = true, label = 'Real clouds' },
   realFog = { kind = 'bool', default = true, label = 'Real fog' },
   realWind = { kind = 'bool', default = true, label = 'Real wind' },
@@ -253,7 +256,7 @@ M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'cliffTe
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'weatherPreset', 'weatherIntensity', 'weatherChange', 'weatherPrecip', 'rainVisibility', 'weatherStormLight',
-  'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'realClouds',
+  'weatherLightning', 'weatherStreaks', 'weatherWetLook', 'weatherSoundSource', 'realClouds',
   'realFog', 'realWind', 'realPrecip', 'fogLimit', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'stationBuses', 'autodriveObstacles', 'autodriveOncomingPass', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
@@ -657,6 +660,7 @@ M.APPLY = {
   weatherLightning = function(v) local w = ext('beamngEarth_weather') if w and w.setLightning then w.setLightning(v) end end,
   weatherStreaks = function(v) local w = ext('beamngEarth_weather') if w and w.setStreaks then w.setStreaks(v) end end,
   weatherWetLook = function(v) local w = ext('beamngEarth_weather') if w and w.setWetLook then w.setWetLook(v) end end,
+  weatherSoundSource = function(v) require('beamngEarth/liveaudio').setMode(v) end,
   realClouds = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('clouds', v) end end,
   realFog = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('fog', v) end end,
   realWind = function(v) local w = ext('beamngEarth_weather') if w and w.setRealPart then w.setRealPart('wind', v) end end,
@@ -839,6 +843,8 @@ function M.uiState()
   local w = ext('beamngEarth_weather')
   status.weather = w and w.statusLine and w.statusLine() or nil
   status.gravity = w and w.gravityLine and w.gravityLine() or nil
+  local la = package.loaded['beamngEarth/liveaudio']
+  status.weatherSound = la and la.status().text or 'Pre-recorded'
   -- the download cache: the server's last numbers, fresh ones asked every CACHE_POLL-th call (the page
   -- polls every 2 s while it is open)
   cachePolls = cachePolls + 1

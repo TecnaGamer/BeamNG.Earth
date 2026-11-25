@@ -6,6 +6,7 @@
 local M = {}
 
 local kdTree = nil       -- the stock kdtreepoint3d (required at the first cloud: not there outside the game)
+local liveaudio = require('beamngEarth/liveaudio') -- the Weather page's Weather sounds: Live (the server plays them)
 
 M.RADIUS_M = 600      -- the node cloud: the nodes this close to the listener (the stock emitter hears 150 m) ...
 M.MOVE_M = 300        -- ... made again once the listener is this far from where it was made, or a tile near changed
@@ -632,6 +633,16 @@ local function updateRain()
   rainAt = now
   local w = rawget(_G, 'beamngEarth_weather')
   local want = M.RAIN_GAIN * math.max(0, math.min(1, w and tonumber(w.rainNow) or 0))
+  -- live weather sounds: the synth's heartbeat (nothing once Pre-recorded has been said); the mod's own rain fades
+  -- out while the server says it plays (liveaudio.ownFactor), and back in when it stops answering
+  if liveaudio.mode() == 'live' then
+    liveaudio.tick(now, { rainMmH = w and tonumber(w.rainMmHNow) or 0,
+      windMs = w and tonumber(w.windMsNow) or 0, shelter = w and tonumber(w.shelter) or 1,
+      tunnel = inTunnel(listener.x, listener.y, listener.z), cabin = cabinCam(), duck = M.duckFactor(now) })
+  else
+    liveaudio.tick(now, nil)
+  end
+  want = want * liveaudio.ownFactor(now)
   if want <= 0 and rainVol <= 0 and not rainEm and not next(layerEm) then return end    -- (dry: nothing)
   if layersOk == nil then
     layersOk = FS and FS.fileExists and FS:fileExists(M.RAIN_DIR .. M.RAIN_LAYERS[1][2]) or false

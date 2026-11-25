@@ -1096,6 +1096,7 @@ local function ownPrecip(e, dt)
   if block then rain, snow = 0, 0 end
   M.rainNow = rain                          -- (its sound: ambience.lua; api.weather)
   M.rainMmHNow = (not block and c and tonumber(c.rainMmH)) or 0   -- (the rain sound's layers)
+  M.windMsNow = c and tonumber(c.windMs) or 0  -- (the live weather sounds' gusts: liveaudio.lua)
   M.snowNow = snow
   local falling = rain >= M.PRECIP_NONE or snow >= M.PRECIP_NONE
   local r, sn = S.precip[M.RAIN_NAME], S.precip[M.SNOW_NAME]

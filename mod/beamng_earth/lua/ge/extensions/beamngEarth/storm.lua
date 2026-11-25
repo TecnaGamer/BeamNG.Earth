@@ -44,6 +44,7 @@ M.LPI_MIN, M.LPI_STRONG = 0.5, 5    -- J/kg (ICON-D2's lightning potential index
 M.CAPE_MIN, M.CAPE_RAIN_MMH = 800, 0.5
 M.CHECK_S = 0.25          -- the strike walk while a storm is on ...
 M.LOOKAHEAD_S = 1.0       -- ... looking this far ahead
+M.LIVE_LOOKAHEAD_S = 3.0  -- ... or this far with the live weather sounds (their synth renders a thunder ahead)
 
 ------------------------------------------------------------------------------------------
 -- pure
@@ -317,6 +318,8 @@ local function strike(s, now, ctx)
   M.last = { t = s.t, d = d, cg = s.cg, lat = s.lat, lon = s.lon }
   local th = M.thunderFor(d)
   if th then
+    local la = package.loaded['beamngEarth/liveaudio']
+    if la and la.mode() == 'live' then la.onThunder(la.thunder(s, d, th, true)) end
     local files = M.THUNDER[th.kind]
     st.thunders[#st.thunders + 1] = { at = s.t + th.delay, file = files[1 + s.seed % #files], gain = th.gain, kind = th.kind }
   end
@@ -410,7 +413,10 @@ local function playThunders(now, muffled)
   local keep = {}
   for _, t in ipairs(st.thunders) do
     if now >= t.at then
-      if now - t.at < 2 then          -- (a thunder missed by more than that, a pause or a hitch: dropped)
+      local la = package.loaded['beamngEarth/liveaudio']
+      if la and la.isLive() then
+        M.thunders = M.thunders + 1   -- (the live synth plays it: liveaudio sent it at the strike)
+      elseif now - t.at < 2 then      -- (a thunder missed by more than that, a pause or a hitch: dropped)
         local au = Engine and Engine.Audio
         if au and au.playOnce then
           pcall(au.playOnce, 'AudioGui', M.SOUND .. t.file, { volume = t.gain * M.THUNDER_VOL * (muffled and M.MUFFLED or 1) })
@@ -480,8 +486,20 @@ function M.update(dt, c, ctx)
     if geo then
       local t0 = st.lastT or now
       if t0 < now - 1 or t0 > now + 5 then t0 = now end    -- (back from a pause, a load: no burst of old strikes)
-      local t1 = now + M.LOOKAHEAD_S
-      for _, s in ipairs(M.strikesNear(geo.lat, geo.lon, t0, t1, c)) do st.upcoming[#st.upcoming + 1] = s end
+      local la = package.loaded['beamngEarth/liveaudio']
+      local live = la and la.mode() == 'live'
+      local t1 = now + (live and M.LIVE_LOOKAHEAD_S or M.LOOKAHEAD_S)
+      for _, s in ipairs(M.strikesNear(geo.lat, geo.lon, t0, t1, c)) do
+        st.upcoming[#st.upcoming + 1] = s
+        if live and a.toGame then           -- (a hint: the distance now; the final one at the strike has the real one)
+          local gx, gy = a.toGame(s.lat, s.lon, 0)
+          if tonumber(gx) and tonumber(gy) then
+            local d = math.sqrt((gx - p.x) ^ 2 + (gy - p.y) ^ 2)
+            local th = M.thunderFor(d)
+            if th then la.onThunder(la.thunder(s, d, th, false)) end
+          end
+        end
+      end
       st.lastT = math.max(t0, t1)
     end
   end

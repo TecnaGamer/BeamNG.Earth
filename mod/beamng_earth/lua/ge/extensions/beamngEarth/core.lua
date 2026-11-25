@@ -1285,6 +1285,7 @@ local function onMessage(msg)
     sea.clear()
     trees.clear()
     ambience.clear()
+    require('beamngEarth/liveaudio').reset()    -- (the pre-recorded weather sounds back at once)
     M._trafficvisuals.session(nil, false)
     setStatus('Disconnected from companion server: ' .. tostring(msg.error))
   elseif t == 'runtime_profiler_pong' then
@@ -1366,6 +1367,12 @@ local function onMessage(msg)
     if settings and settings.cacheCapGb then net.send({ type = 'cache', capGb = settings.cacheCapGb() }) end
     -- gas stations on, after every hello (a server started without them too; this comes before any tile request)
     net.send({ type = 'gas_stations', on = true })
+    -- live weather sounds: the Weather sounds setting said again to this server (liveaudio.lua)
+    do
+      local la = require('beamngEarth/liveaudio')
+      la.reset()
+      la.setSender(function(m) if st.sessionId and net.isConnected() then net.send(m) return true end return false end)
+    end
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
     net.send({ type = 'highway_signs', on = roads.signsEnabled })
     -- the direction signs' switch (settings directionSigns, on by default): sign tiles with boards only while it is on
@@ -1607,6 +1614,8 @@ local function onMessage(msg)
     -- real weather (server weather.py): applied by the separate beamngEarth_weather extension
     local w = rawget(_G, 'beamngEarth_weather')
     if w and w.onWeather then w.onWeather(msg) end
+  elseif t == 'audio_state' then
+    require('beamngEarth/liveaudio').onAudioState(msg) -- live weather sounds (server liveaudio.py): the synth's state
   elseif t == 'snowstate' then
     -- winter grip (server snow.py, BNE_WINTER only): winter.lua loads with the first one (nothing of it runs before)
     M._winter = M._winter or require('beamngEarth/winter')
