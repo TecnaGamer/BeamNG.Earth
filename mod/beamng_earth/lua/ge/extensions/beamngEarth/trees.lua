@@ -426,6 +426,9 @@ M.CATALOG.leafoff_n = M.CATALOG.deciduous
 M.CATALOG.leafoff_s = M.CATALOG.deciduous
 M.LEAFOFF = { leafoff_n = { 12, 1, 2, 3 }, leafoff_s = { 6, 7, 8, 9 } }
 M.BARE = { { ECA .. 'trees/trees_oak/tree_oak_dead_b', 8.69 }, { ECA .. 'trees/trees_oak/tree_oak_dead_a', 12.54 } }
+-- Winter's bare trees (baretrees.lua, set only while the server has winter on): (stock shape, the row's rank) -> the
+-- shape drawn, a deciduous tree's bare copy or itself.
+M.bareMap = nil
 -- Italy's authored three-metre crash barrier and two end treatments. The back-facing variants reuse
 -- the same mesh with its longitudinal/lateral axes reversed; the caps are swapped to flare outwards.
 M.CATALOG.guardrail = { { '/art/shapes/objects/italy_guardrails_basic', 0.9 } }
@@ -938,7 +941,8 @@ function M.applySeason(month)
   for g, months in pairs(M.LEAFOFF) do      -- (the mapped deciduous forests: bare in their winter)
     local bare = false
     for _, m in ipairs(months) do if m == month then bare = true end end
-    M.CATALOG[g] = bare and M.BARE or M.CATALOG.deciduous
+    -- (with winter's bare trees on, baretrees.lua: the broadleaves, bare by its own rule, not the leafless snags)
+    M.CATALOG[g] = (bare and not M.bareMap) and M.BARE or M.CATALOG.deciduous
   end
 end
 
@@ -977,8 +981,8 @@ local function itemType(shape, solid)
     d = (worldEditorCppApi and worldEditorCppApi.createObject) and worldEditorCppApi.createObject('TSForestItemData')
       or createObject('TSForestItemData')
     if not d then return nil end
-    local compiledRock = shape:find('cliff_talus_', 1, true) and shape:sub(-5) == '.cdae'
-    d:setField('shapeFile', 0, compiledRock and shape or (shape .. '.dae'))
+    local compiled = shape:sub(-5) == '.cdae'     -- (the cliff rocks, winter's bare trees: compiled copies)
+    d:setField('shapeFile', 0, compiled and shape or (shape .. '.dae'))
     d:setField('collidable', 0, solid and '1' or '0')
     local rock = shape:find('cliff_talus_', 1, true) ~= nil
     d:setField('windScale', 0, rock and '0' or '0.4')
@@ -1120,6 +1124,7 @@ local function shapeOf(t, i)
     if not leftSignalReady then log('W', 'beamngEarth.trees', 'left signal shape: ' .. tostring(made)) end
   end
   s, sc = M.pick(g, f[b + F_HEIGHT], f[b + F_RANK])
+  if M.bareMap then s = M.bareMap(s, f[b + F_RANK]) end     -- (winter: baretrees.lua, nil otherwise)
   s = spelled(s, (M.ONE_SPELLING[g] or (g:sub(1, 5) == 'speed')) and 0 or spellingFor(s, t.variant))
   t.shapes[i], t.scales[i] = s, sc
   return s, sc
@@ -1723,7 +1728,11 @@ local function inCatalog(sh)
     catalogued = {}
     for _, list in pairs(M.CATALOG) do for _, e in ipairs(list) do catalogued[e[1]] = true end end
   end
-  return catalogued[(sh:gsub('/%./', '/'):gsub('/%./', '/'):gsub('/%./', '/'))] == true
+  local base = (sh:gsub('/%./', '/'):gsub('/%./', '/'):gsub('/%./', '/'))
+  if catalogued[base] then return true end
+  -- winter's bare copies while winter is on (baretrees.lua), the ones still there (the folder is the game build's)
+  return M.bareMap ~= nil and base:sub(1, 31) == '/temp/beamngEarth/shapes/bare_v' and FS ~= nil
+    and FS:fileExists(base) == true
 end
 -- Returns the shapes warmed.
 function M.prewarmSaved()
