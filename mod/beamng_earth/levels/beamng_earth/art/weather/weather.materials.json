@@ -124,7 +124,7 @@
           0.86,
           1.0
         ],
-        "emissiveIntensityNits": 60000,
+        "emissiveIntensityNits": 150000,
         "instanceEmissive": true,
         "instanceOpacity": true,
         "opacityFactor": 1,
@@ -160,7 +160,7 @@
           0.86,
           1.0
         ],
-        "emissiveIntensityNits": 2500,
+        "emissiveIntensityNits": 5000,
         "instanceEmissive": true,
         "instanceOpacity": true,
         "opacityFactor": 1,

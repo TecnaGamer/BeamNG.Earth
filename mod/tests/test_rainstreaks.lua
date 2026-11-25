@@ -37,6 +37,12 @@ check(o.hidden == true and R.shown() == false, 'dry again: hidden')
 local n = S.calls.setPosRot or 0
 R.update(0, nil, 0.016)
 check((S.calls.setPosRot or 0) == n, 'dry and hidden: no work')
+check(o.fields.shapeName == R.SHAPES.near, 'one shell by default (the Deck paid ~4.3 ms for three)')
+R.SHELLS = 'full'
+R.update(0.5, nil, 0.016)
+local o2 = S.liveOf('TSStatic')[1]
+check(#S.liveOf('TSStatic') == 1 and o2.fields.shapeName == R.SHAPES.full, 'the full set: the object made again with its shape')
+R.SHELLS = 'near'
 R.reset()
 check(#S.liveOf('TSStatic') == 0, 'reset: deleted')
 

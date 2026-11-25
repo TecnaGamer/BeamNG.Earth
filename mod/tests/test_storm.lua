@@ -117,7 +117,12 @@ local d = math.sqrt(g.x * g.x + g.y * g.y)
 check(storm.strikes >= 1 and storm.last and math.abs(storm.last.d - d) < 1e-6, 'the strike at its distance ' .. math.floor(d))
 local light = S.liveOf('PointLight')[1]
 check(light and light.fields.isEnabled == '1' and tonumber(light.fields.intensity) > 0, 'the flash light on')
-check(light and math.abs(light.pos.x - g.x) < 1e-6 and math.abs(light.pos.y - g.y) < 1e-6, 'at the strike')
+-- the light near the camera towards the strike (far lights are culled), as bright at the camera as the strike
+local kk = math.min(1, storm.LIGHT_NEAR_M / d)
+check(light and math.abs(light.pos.x - (camP.x + g.x * kk)) < 1e-6 and math.abs(light.pos.y - (camP.y + g.y * kk)) < 1e-6
+  and math.abs(light.pos.z - (camP.z + storm.LIGHT_UP_M)) < 1e-6, 'the light near the camera, towards the strike')
+local rl = math.sqrt((g.x * kk) ^ 2 + (g.y * kk) ^ 2 + storm.LIGHT_UP_M ^ 2)
+check(tonumber(light.fields.intensity) <= storm.LIGHT_LM * (rl / d) ^ 2 * 1.0001, 'its lumens: the strike\'s illuminance at the camera')
 local shownBolts = 0
 for _, o in ipairs(S.liveOf('TSStatic')) do
   if not o.hidden and o.name and o.name:find('^bngEarthStormBolt') then shownBolts = shownBolts + 1 end

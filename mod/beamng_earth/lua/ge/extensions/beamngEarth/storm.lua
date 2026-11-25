@@ -201,11 +201,16 @@ M.THUNDER = { close = { 'bne_thunder_close1.ogg', 'bne_thunder_close2.ogg' }, mi
   'bne_thunder_mid2.ogg' }, far = { 'bne_thunder_far1.ogg', 'bne_thunder_far2.ogg' } }
 M.THUNDER_VOL = 1.0
 M.MUFFLED = 0.45          -- the thunder's volume in a tunnel or under a deck
--- the flash's light: a point light at the strike (lumens at full brightness: ~50 lux 3 km away, a night lit up, lost in
--- daylight as a real flash is), its radius reaching past the camera
+-- the flash's light: as bright at the camera as a strike of LIGHT_LM lumens d m away (~50 lux at 3 km: a night lit up,
+-- lost in daylight as a real flash is), but put LIGHT_NEAR_M from the camera towards the strike and LIGHT_UP_M up, its
+-- lumens scaled by the distance squared (a light kilometres away drew nothing on the ground in the broker shots: the
+-- engine culls far lights)
 M.LIGHT_LM = 6e9
+M.LIGHT_NEAR_M, M.LIGHT_UP_M = 250, 200
 M.LIGHT_COLOR = '0.8 0.85 1 1'
-M.GLOW_SIZE_M = 3500      -- the lit cloud (a glow at the cloud base over the strike)
+M.GLOW_SIZE_M = 6000      -- the lit cloud (a glow at the cloud base over the strike) ...
+M.GLOW_MAX_ELEV = math.rad(9)   -- ... no higher in the view than this (the cloud base over a far strike is low in the sky;
+                                -- over a near one it was out of the frame)
 M.BOLT_BOTTOM_M = -60     -- the bolt's foot under the player's ground (hidden by the horizon and buildings)
 M.CLOUD_BASE_MIN_M, M.CLOUD_BASE_MAX_M = 700, 3000
 M.FLASH_S = 0.6           -- a flash's whole length (its pulses: M.pulses)
@@ -322,10 +327,16 @@ local function drawFlashes(now)
   local want = {}
   if best and bv > 0.001 then
     local l = obj(objs.light)
-    if l then
-      l:setPosition(vec3(best.x, best.y, best.z + (best.bolt and 300 or best.base)))
-      l:setField('radius', 0, string.format('%.0f', best.d * 1.5 + 2000))
-      l:setField('intensity', 0, string.format('%.6g', M.LIGHT_LM * bv / best.gain * math.min(1, best.gain * 4)))
+    local cp = camPos()
+    if l and cp then
+      local d = math.max(1, best.d)
+      local k = math.min(1, M.LIGHT_NEAR_M / d)
+      local lx, ly, lz = cp.x + best.dx * k, cp.y + best.dy * k, cp.z + M.LIGHT_UP_M
+      local rl = math.sqrt((lx - cp.x) ^ 2 + (ly - cp.y) ^ 2 + M.LIGHT_UP_M ^ 2)
+      l:setPosition(vec3(lx, ly, lz))
+      l:setField('radius', 0, string.format('%.0f', rl * 3))
+      -- (the strike's own illuminance at the camera, LIGHT_LM / d^2, from a light rl away; the pulse's level times)
+      l:setField('intensity', 0, string.format('%.6g', M.LIGHT_LM * (rl / d) ^ 2 * bv / best.gain))
       if not shown.light then l:setField('isEnabled', 0, '1') end
       l:postApply()
       want.light = true
@@ -336,7 +347,8 @@ local function drawFlashes(now)
     if gl and p then
       local s = M.GLOW_SIZE_M
       gl:setScale(vec3(s, s, s * 0.5))
-      gl:setPosRot(best.x, best.y, best.z + best.base, qx, qy, qz, qw)
+      local gz = math.min(best.z + best.base, p.z + best.d * math.tan(M.GLOW_MAX_ELEV))
+      gl:setPosRot(best.x, best.y, gz, qx, qy, qz, qw)
       if not shown.glow then gl:setHidden(false) end
       setAlpha(gl, math.min(1, bv * 1.5))
       want.glow = true

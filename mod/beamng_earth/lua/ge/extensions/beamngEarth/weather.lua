@@ -178,6 +178,7 @@ M.STORM_EV_MAX = 2.0       -- EV at gloom 1 by day (overcast ~-0.6, rain ~-1, a 
 M.NIGHT_EV_SHARE = 0.35
 M.GLOOM_SUN = 0.85         -- the direct sun's brightness factor times (1 - GLOOM_SUN * gloom)
 M.EV_EPS = 0.03            -- EV: written when it moved this much
+M.EV_POSTAPPLY = false
 M.STORM_LIGHT = true       -- the settings' "Storm light" (off: none of the above)
 M.LIGHTNING = true         -- the settings' "Lightning and thunder"
 M.STREAKS = true           -- the settings' "Rain streaks" (rainstreaks.lua)
@@ -1166,6 +1167,7 @@ local function writeExposure(ev)
   if not e.applied and math.abs(ev) < M.EV_EPS then return end
   o.exposureBiasEV = want                -- (the stock hdr.lua's way; the field too, in case the property is Lua-side only)
   pcall(function() o:setField('exposureBiasEV', 0, string.format('%.3f', want)) end)
+  if M.EV_POSTAPPLY then pcall(function() o:postApply() end) end      -- (probe: does the bias need it?)
   e.applied = tonumber(o.exposureBiasEV) or want
   e.ev = ev
 end

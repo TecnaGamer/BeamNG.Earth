@@ -11,7 +11,12 @@
 -- or the shells are shown).
 local M = {}
 
-M.SHAPE = '/levels/beamng_earth/art/weather/bne_rain_shell.cdae'
+-- the shell sets: 'full' three cylinders (4.5 / 10 / 22 m), 'near' one at 6 m (a third of the fill: the three cost ~4.3 ms a
+-- frame on the Deck at 720p in the broker's perf run, wb6 2026-11-25)
+M.SHAPES = { full = '/levels/beamng_earth/art/weather/bne_rain_shell.cdae',
+  near = '/levels/beamng_earth/art/weather/bne_rain_shell1.cdae' }
+M.SHELLS = 'near'
+M.SHAPE = M.SHAPES.full     -- (the shape of the object made: M.SHAPES[M.SHELLS] at its making)
 M.MATERIALS = '/levels/beamng_earth/art/weather/weather.materials.json'
 M.NAME = 'bngEarthRainShells'
 M.FALL_MS = 8.0          -- m/s: the drops' fall (the material's scroll: make_weather_assets.py FALL_MS)
@@ -42,12 +47,14 @@ end
 
 local function object()
   local o = id and scenetree.findObjectById(id)
+  if o and o:getField('shapeName', 0) ~= (M.SHAPES[M.SHELLS] or M.SHAPES.near) then o:delete(); o = nil end   -- (the set changed)
   if o then return o end
   id = nil
   if not scenetree.MissionGroup then return nil end
   if not scenetree.findObject('bngEarthRainShell0') and loadJsonMaterialsFile then pcall(loadJsonMaterialsFile, M.MATERIALS) end
   o = createObject('TSStatic')
   if not o then return nil end
+  M.SHAPE = M.SHAPES[M.SHELLS] or M.SHAPES.near
   o:setField('shapeName', 0, M.SHAPE)
   o:setField('collisionType', 0, 'None')
   o:setField('decalType', 0, 'None')

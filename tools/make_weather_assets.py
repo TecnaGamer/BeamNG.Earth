@@ -39,6 +39,7 @@ REF = "/levels/beamng_earth/art/weather/"
 
 SHELL_R = (4.5, 10.0, 22.0)     # m: the shells' radii, nearest first
 SHELL_H = (-45.0, 45.0)         # m: below and above the camera (tilted by the wind and the speed: long enough)
+SHELL_NEAR_R = 6.0              # m: the one-shell set's radius
 SHELL_SEG = 48
 TEX_W_M, TEX_H_M = 3.0, 6.0     # m of the world per texture repeat
 STREAK_PX = (256, 1024)         # the streak texture (w, h)
@@ -51,8 +52,8 @@ SHELL_RGB = (0.60, 0.62, 0.66)  # a mid grey: a little lighter than dark backgro
 BOLT_PX = (256, 1024)           # each bolt's cell (w, h)
 BOLTS = 4
 GLOW_PX = 128
-BOLT_NITS = 60000               # cd/m2: a channel far outshines a daylit sky (~5,000-10,000)
-GLOW_NITS = 2500
+BOLT_NITS = 150000              # cd/m2: a channel far outshines a daylit sky (~5,000-10,000)
+GLOW_NITS = 5000
 BOLT_RGB = (0.80, 0.86, 1.0)
 
 
@@ -108,7 +109,7 @@ def bolt_cell(seed):
                 walk(nx, ny, min(h, ny + rng.uniform(80, 260)), width * 0.6, glow * 0.6, strength * 0.6, depth + 1)
             x, y = nx, ny
 
-    walk(w / 2 + rng.normal(0, 20), 0.0, h - 2, 1.6, 7.0, 1.0, 0)
+    walk(w / 2 + rng.normal(0, 20), 0.0, h - 2, 4.5, 18.0, 1.0, 0)     # (1.6 / 7 px: a smear of mips at 3 km)
     # the channel ends at the bottom middle (where the shape's origin is)
     return np.clip(a, 0, 1)
 
@@ -125,10 +126,10 @@ def save_gray(a, path):
     print(path)
 
 
-def shells():
+def shells(radii=SHELL_R):
     """The three open cylinders: positions, tris (seen from inside: the camera's side), uvs, the shell of each tri."""
     P, T, UV, TM = [], [], [], []
-    for k, r in enumerate(SHELL_R):
+    for k, r in enumerate(radii):
         reps = max(1, round(2 * math.pi * r / TEX_W_M))          # whole repeats around: no seam
         base = len(P)
         for i in range(SHELL_SEG + 1):
@@ -197,6 +198,9 @@ def main():
     P, T, UV, TM = shells()
     write_shape(os.path.join(OUT, "bne_rain_shell.cdae"), P, T, UV,
                 [f"bngEarthRainShell{k}" for k in range(len(SHELL_R))], TM)
+    # the one-shell set (rainstreaks.lua SHELLS "near": a third of the fill, the Deck paid ~4.3 ms for the three)
+    P, T, UV, TM = shells((SHELL_NEAR_R,))
+    write_shape(os.path.join(OUT, "bne_rain_shell1.cdae"), P, T, UV, ["bngEarthRainShell0"], TM)
     aspect = BOLT_PX[0] / BOLT_PX[1]
     for k in range(BOLTS):
         P, T, UV = quad(aspect, 1.0, k / BOLTS, (k + 1) / BOLTS)
