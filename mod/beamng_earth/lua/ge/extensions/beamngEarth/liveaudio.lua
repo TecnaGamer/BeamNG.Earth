@@ -139,11 +139,23 @@ end
 
 function M.isLive(now) return M.liveNow(mode, state, now or clockhp()) end
 
+-- Anything to do this frame? (Live, a Pre-recorded not said yet, or the mod's own sounds still fading back.) False
+-- in Pre-recorded once said and faded: ambience.lua skips the rest.
+function M.active() return mode == 'live' or (sender ~= nil and modeSent ~= 'prerecorded') or fade > 0 end
+
+-- A message due now? (Pre-recorded: once, not said yet; Live: a thunder waiting, or SEND_S since the last.) The
+-- caller builds the context (the tunnel walk, the volumes) only then.
+function M.due(now)
+  if not sender then return false end
+  if mode ~= 'live' then return modeSent ~= 'prerecorded' end
+  return #pending > 0 or lastSig == nil or lastSendT == nil or now - lastSendT >= M.SEND_S
+end
+
 -- The mod's own weather sounds' factor (1 full .. 0 silent), faded over FADE_S between the two.
 function M.ownFactor(now)
   now = now or clockhp()
   local target = M.isLive(now) and 1 or 0
-  local dt = fadeAt and math.max(0, math.min(now - fadeAt, 0.5)) or 0
+  local dt = fadeAt and math.max(0, math.min(now - fadeAt, 0.1)) or 0   -- (not called while inactive: no jump back)
   fadeAt = now
   local step = dt / M.FADE_S
   fade = fade < target and math.min(target, fade + step) or math.max(target, fade - step)
@@ -191,7 +203,8 @@ function M.clock()
   return os.time()
 end
 
--- Every frame from ambience.update. ctx as M.fields' (the volumes and the quiet reasons filled here while live).
+-- From ambience.update when M.due (every SEND_S while live, or a thunder waiting). ctx as M.fields' (the volumes and
+-- the quiet reasons filled here while live).
 function M.tick(now, ctx)
   if mode ~= 'live' and modeSent == 'prerecorded' then return end   -- (pre-recorded and said so: nothing)
   local send = sender

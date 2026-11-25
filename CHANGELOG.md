@@ -27,6 +27,10 @@ What changed in each release of BeamNG.Earth, newest first.
   change as new ground loads around you (every few hundred metres while driving).
 - **Rain sounds**: light, steady and heavy rain by the rain's strength, muffled under roofs and bridges and in tunnels,
   and rain drumming on the roof in the driver's view.
+- **Weather sounds: Live** (experimental, on the Weather page; Pre-recorded stays the default): the BeamNG.Earth app
+  makes the rain and thunder as you hear them and plays them through your default audio device at the game's volume.
+  The rain follows the real rate and every strike sounds different. If the live sound can't start or stops, the
+  pre-recorded sounds come back by themselves, and the page says why.
 - Each of these can be switched off on the Weather page.
 
 ### Fixed

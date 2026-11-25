@@ -98,10 +98,14 @@ local now0 = os.clockhp and os.clockhp() or os.clock()
 check(la.ownFactor(now0 - 1) == 1, 'own: full before the server answers')
 check(la.ownFactor(now0) == 1, 'own: still full')
 la.onAudioState({ state = 'live', latencyMs = 20 })
-near(la.ownFactor(now0 + la.FADE_S / 2), 0.5, 1e-9, 'own: half way')
-near(la.ownFactor(now0 + la.FADE_S), 0, 1e-9, 'own: silent while live')
+near(la.ownFactor(now0 + 0.05), 1 - 0.05 / la.FADE_S, 1e-9, 'own: fading')
+near(la.ownFactor(now0 + 0.1), 1 - 0.1 / la.FADE_S, 1e-9, 'own: fading on')
+near(la.ownFactor(now0 + 0.4), 1 - 0.2 / la.FADE_S, 1e-9, 'own: a long frame counts 0.1 s at most')
+near(la.ownFactor(now0 + 0.5), 0, 1e-9, 'own: silent while live')
 check(la.ownFactor(now0 - 5) == 0, 'own: a clock step back changes nothing')
 check(la.ownFactor(now0 + la.STALE_S + 0.2) > 0, 'own: back when the server stops answering')
+-- active / due: what ambience.lua does each frame
+check(la.active() and la.due(1000) and not la.due(1.65), 'live: active; a message due SEND_S after the last, not before')
 check(la.status(now0).live and la.status(now0).text:find('Live', 1, true) == 1, 'status: live')
 
 -- a reset (a new connection): the mode said again, the server's word forgotten
@@ -111,7 +115,14 @@ local n = #sent
 la.tick(5, { rainMmH = 0 })
 check(#sent == n + 1 and sent[#sent].mode == 'live', 'reset: said again')
 la.setMode('prerecorded')
+check(la.due(5.01), 'back to pre-recorded: due')
 la.tick(5.01, nil)
 check(sent[#sent].mode == 'prerecorded', 'back to pre-recorded: said at once')
+check(not la.due(5.02), 'pre-recorded said: nothing due')
+for i = 1, 40 do la.ownFactor(10 + i * 0.05) end
+check(not la.active(), 'pre-recorded, said and faded back: inactive (ambience skips it all)')
+la.setSender(nil)
+la.setMode('live')
+check(la.active() and not la.due(20), 'live but disconnected: active (the fade), nothing due')
 
 T.done('test_liveaudio')
