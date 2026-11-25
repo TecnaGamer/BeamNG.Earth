@@ -223,7 +223,7 @@ M.BOLT_BOTTOM_M = -60     -- the bolt's foot under the player's ground (hidden b
 -- the stand-in distance of the bolt and the glow: no farther than PROXY_VIS of the visibility (nor nearer than
 -- PROXY_MIN_M), so the fog leaves them most of their light
 M.PROXY_VIS, M.PROXY_MIN_M = 0.25, 300
-M.VEIL_ALPHA = 0.35       -- the lit air's opacity at a full flash overhead
+M.VEIL_ALPHA = 0.2        -- the lit air's opacity at a full flash overhead (0.35 turned a night street flat white, wb9)
 M.CLOUD_BASE_MIN_M, M.CLOUD_BASE_MAX_M = 700, 3000
 M.FLASH_S = 0.6           -- a flash's whole length (its pulses: M.pulses)
 

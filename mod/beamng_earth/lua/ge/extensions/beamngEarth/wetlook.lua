@@ -51,6 +51,12 @@ M.PREFIXES = {
   { '^bne_steel_', 'metal' }, { '^bne_wear_', 'asphalt' }, { '^bne_spot_', 'asphalt' }, { '^bne_crack_', 'asphalt' },
   { '^line_', 'marking' }, { '^bne_rr_concrete', 'concrete' }, { '^bne_eui_concrete', 'concrete' },
 }
+-- ... and, for the materials of other sets the road tiles borrow (stock levels' sidewalks, curbs, pavers), words in the
+-- name (lower case; not our terrain layers bngEarth*, not glass, lights or signs)
+M.WORDS = { { 'sidewalk', 'concrete' }, { 'curb', 'concrete' }, { 'kerb', 'concrete' }, { 'pavement', 'concrete' },
+  { 'paver', 'concrete' }, { 'cobble', 'concrete' }, { 'concrete', 'concrete' }, { 'asphalt', 'asphalt' },
+  { 'crossing', 'marking' }, { 'marking', 'marking' } }
+M.WORDS_NOT = { 'glass', 'light', 'lamp', 'sign', 'glow', 'decal_' }
 M.NOT = { bne_bld_sky = true, bne_bld_skywin = true, bne_bld_glasshouse = true, bne_bld_lobby = true }   -- (lit windows)
 M.WET_DARK = 0.6          -- a porosity-1 surface's colour at full wetness: x (1 - WET_DARK) (Lagarde's 0.2..0.5)
 M.WET_ROUGH = 0.85        -- a gloss-1 surface's roughness falls by this share at full wetness
@@ -71,6 +77,10 @@ function M.classOf(name)
   for _, p in ipairs(M.PREFIXES) do
     if name:find(p[1]) then return p[2] end
   end
+  local l = name:lower()
+  if l:find('^bngearth') then return nil end
+  for _, w in ipairs(M.WORDS_NOT) do if l:find(w, 1, true) then return nil end end
+  for _, w in ipairs(M.WORDS) do if l:find(w[1], 1, true) then return w[2] end end
   return nil
 end
 
@@ -242,6 +252,14 @@ function M.debugLine()
   table.sort(names)
   return string.format('wet lvl=%d own=%.2f src=%s writes=%d %s | %s', level, own, tostring(M.source), M.writes,
     table.concat(parts, ' '), table.concat(names, ' '))
+end
+
+-- The names written of one class, sorted (the probes).
+function M.debugNames(class)
+  local out = {}
+  for name, o in pairs(orig) do if o.class == class then out[#out + 1] = name end end
+  table.sort(out)
+  return table.concat(out, ' ')
 end
 
 function M.level() return level end

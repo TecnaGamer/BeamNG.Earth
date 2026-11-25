@@ -11,6 +11,8 @@ local check, near = T.check, T.near
 check(W.classOf('sidewalk_concrete') == 'concrete' and W.classOf('line_white') == 'marking', 'exact names')
 check(W.classOf('bne_bld_roof_flat') == 'roof' and W.classOf('bne_bld_brick') == 'wall', 'roofs before walls')
 check(W.classOf('bne_bld_skywin') == nil and W.classOf('bngEarthFar_v3') == nil and W.classOf(nil) == nil, 'not ours to wet')
+check(W.classOf('Sidewalk_Tiles_02') == 'concrete' and W.classOf('road_kerb_glass') == nil and W.classOf('bngEarthGroundAsphalt') == nil,
+  'words: other sets\' sidewalks; not glass, not our terrain layers')
 check(W.levelOf(0) == 0 and W.levelOf(1) == W.LEVELS and W.levelOf(0.5) == 2, 'levels')
 -- the own model: rain wets within minutes, the dry spell dries over DRY_S
 local w = 0
