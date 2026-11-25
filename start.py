@@ -13,11 +13,14 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
 
 import install
 import launchui          # (the launch screen: colours, banner, timed steps; stdlib only)
+import modtextures       # (--status reads the installed textures' stamp)
 import statcache         # (the files' cached digests: the launch's up-to-date checks do not re-read them)
 
 ROOT = install.ROOT
@@ -64,6 +67,69 @@ def server_flags(py):
     return r.stdout
 
 
+def status():
+    """--status: what this machine's BeamNG.Earth is, without starting anything: the versions, the
+    mod's state in the game, the download cache's size, the disk room left and the last logs. Read
+    only: a launch question ("is it installed? why is the cache so big?") answered from the files."""
+    import apppaths
+    cfg = install.load_config()
+    rows = [("Version", install.version()), ("Folder", ROOT)]
+    user_dir = cfg.get("user_dir")
+    if user_dir:
+        rows.append(("Game folder", user_dir))
+        mod = os.path.join(user_dir, "mods", "unpacked", install.MOD_NAME)
+        if os.path.isdir(mod):
+            stamp = modtextures_stamp(mod)
+            rows.append(("Mod", f"installed{f' ({stamp})' if stamp else ''}"))
+        else:
+            rows.append(("Mod", launchui.paint("not installed (run install.py)", launchui.Color.warn)))
+    else:
+        rows.append(("Mod", launchui.paint("no game folder known (run install.py)", launchui.Color.warn)))
+    cache = apppaths.saved_cache_dir() or apppaths.default_cache_dir()
+    if os.path.isdir(cache):
+        size, files = folder_size(cache)
+        rows.append(("Cache", f"{cache}  ({size / 1e9:.1f} GB, {files} files)"))
+    else:
+        rows.append(("Cache", f"{cache}  (empty: nothing downloaded yet)"))
+    try:
+        free = shutil.disk_usage(cache or os.path.expanduser("~")).free
+        rows.append(("Disk free", f"{free / 1e9:.1f} GB"))
+    except OSError:
+        pass
+    logs = os.path.join(apppaths.data_dir(), "logs")
+    if os.path.isdir(logs):
+        for name in ("server.log", "server.log.1"):
+            path = os.path.join(logs, name)
+            if os.path.isfile(path):
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
+                rows.append((f"Log {name}", f"{os.path.getsize(path) / 1e6:.1f} MB, last written {when}"))
+    ui = launchui.Screen()
+    ui.banner(f"BeamNG.Earth {install.version()}", "status", rows=rows,
+              tips=["python start.py starts the world server (python install.py sets it up).",
+                    "More help: docs/QUICKSTART.md and docs/DEVTOOLS.md"])
+
+
+def folder_size(path):
+    """A folder's bytes and file count, walked once (the cache's size: what --status is asked)."""
+    size = files = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for name in filenames:
+            try:
+                size += os.path.getsize(os.path.join(dirpath, name))
+            except OSError:
+                pass
+            files += 1
+    return size, files
+
+
+def modtextures_stamp(mod):
+    """The installed textures' count, one line (the stamp the encoder wrote; "" without one)."""
+    try:
+        return f"{len(modtextures.read_stamp(mod))} textures" if modtextures.read_stamp(mod) else ""
+    except OSError:
+        return ""
+
+
 def has_flag(help_text, flag):
     return re.search(re.escape(flag) + r"(?![\w-])", help_text) is not None
 
@@ -74,10 +140,15 @@ def main():
     ap.add_argument("--keep-mod", action="store_true", help="leave the game's copy of the mod as it is")
     ap.add_argument("--user-dir", help="BeamNG.drive user folder (default: the one install.py found)")
     ap.add_argument("--yes", "-y", action="store_true", help="with --update-mod: replace the installed mod without asking")
+    ap.add_argument("--status", action="store_true", help="what this machine's BeamNG.Earth is, without starting anything")
     ap.add_argument("extra", nargs=argparse.REMAINDER, help="after --: more options for server/earthd.py")
     args = ap.parse_args()
 
     ui = launchui.Screen()          # colours on for the console this window owns; plain text without one
+
+    if args.status:
+        status()
+        return
 
     cfg = install.load_config()
     user_dir = args.user_dir or cfg.get("user_dir")
