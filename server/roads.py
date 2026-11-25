@@ -10406,10 +10406,6 @@ class TunnelProfiles(BridgeProfiles):
             ge = g[[0, -1]].copy()
             if at and not underwater:
                 ge[at] = np.asarray(self._ends_ground(xy[[0, -1]][at]), np.float64)
-                if roadsys.TUNNELS:     # (T1: no higher than the record's dug approach, tunnelrec.profile_ends)
-                    import tunnelrec
-                    pz = tunnelrec.profile_ends(self, k, xy, [0 if e == 0 else len(xy) - 1 for e in at])
-                    ge[at] = np.where(np.isfinite(pz), np.minimum(ge[at], pz), ge[at])
             g = g.copy()
             g[0], g[-1] = ge[0], ge[-1]
             pinned = [False, False]

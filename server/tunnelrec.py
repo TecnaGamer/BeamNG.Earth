@@ -48,38 +48,6 @@ def portal_ground(plans, floor):
     return float(min(plans, floor)) if np.isfinite(floor) else float(plans)
 
 
-def profile_ends(store, key, xy, idx):
-    """(T1) The one profile's height (store frame) at vertices idx of tunnel part key's line xy (k, 2, store frame), NaN
-    where no square answers: a network left on the legacy solve (under water, until T3) takes its portals' ground no
-    higher than this, so its floor meets the approach the record's mouths dig (square.rs lows) instead of the plans'
-    first stage over it (Fort McHenry's east trench dug 8 m, the legacy portal at the ground over it)."""
-    import fast
-    fast.require(KERNEL, "roadsys_tunnel_kinds")
-    xy = np.asarray(xy, np.float64)[:, :2]
-    idx = list(idx)
-    if len(xy) < 2 or not idx:
-        return np.full(len(idx), np.nan)
-    sf = store.frame
-    la, lo, _ = sf.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
-    la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
-    fid, frame = roadsys.region(float(la[0]), float(lo[0]))
-    e, n, _u = frame.geodetic_to_enu(la, lo, 0.0)
-    d = np.ascontiguousarray(np.column_stack((e, n)), np.float64)
-    box = [float(d[:, 0].min()), float(d[:, 1].min()), float(d[:, 0].max()), float(d[:, 1].max())]
-    sqs = roadsys._squares_for(fid, frame, box, store.cell_fn, None)
-    if any(q is None for q in sqs):
-        return np.full(len(idx), np.nan)
-    feat = roadsys.feature(key[0] if isinstance(key, tuple) else key)
-    tg = roadsys._tangents(d)[idx]
-    z = np.asarray(fast._ef.roadsys_blend(sqs, np.ascontiguousarray(d[idx]), np.ascontiguousarray(tg), [feat] * len(idx),
-                                          False), np.float64)
-    out = np.full(len(idx), np.nan)
-    ok = np.isfinite(z)
-    if ok.any():
-        out[ok] = np.asarray(sf.geodetic_to_enu(la[idx][ok], lo[idx][ok], z[ok])[2], np.float64)
-    return out
-
-
 def _runs(kinds):
     """[(i0, i1, kind)] of runs of one kind, neighbours sharing their end sample (as TunnelProfiles' sections)."""
     secs, i = [], 0
