@@ -164,8 +164,8 @@ fn mix_into(a: &mut Vec<f64>, b: &[f64], off: usize, g: f64) {
     }
 }
 
-/// Tone variants for the user's listening test (2026-11-25: "The droplets sound a bit high pitched"), picked with
-/// WEATHERSYNTH_TONE (unset: rain2 as rendered before).
+/// Tone variants for the user's listening test (2026-11-25: "The droplets sound a bit high pitched"); the user picked
+/// D, the default now (WEATHERSYNTH_TONE=rain2|A|B|C for the others).
 /// - A: fewer, lower bubbles: puddles at 0.4 of their share, no small (0.19-0.3 mm) bubbles, every bubble radius
 ///   x1.8 (pitch x0.55);
 /// - B: A + impacts with more low-mid body: the splash band an octave lower, a soft 200-800 Hz thud on asphalt and
@@ -204,12 +204,13 @@ pub(crate) fn tone() -> Tone {
         let b = Tone { splash_fc: 0.5, thud: 1.0, ..a };
         let c = Tone { shelf_db: -4.0, drip_pitch: 2.0 / 3.0, ..b };
         let d = Tone { metal_f: 0.45, metal_q: 0.25, ..c };
+        // D is the default (the user picked it, 2026-11-25); "rain2" gives the earlier tone
         match std::env::var("WEATHERSYNTH_TONE").as_deref() {
+            Ok("rain2") => base,
             Ok("A") => a,
             Ok("B") => b,
             Ok("C") => c,
-            Ok("D") => d,
-            _ => base,
+            _ => d,
         }
     })
 }
@@ -421,6 +422,14 @@ pub struct Scene {
     d_max: f64,
     /// random drips off the canopy (per second) on top of the fixed drip points
     canopy_drips: f64,
+    /// drops nearer than this (m) only in the wash: no single close hits (light: "remove the up close noise")
+    r_ev_min: f64,
+    /// near objects (0.5-1.2 m): level and share of their drops rendered
+    near_gain: f64,
+    near_frac: f64,
+    /// fixed drip points and canopy drips: level, and the canopy drips' nearest distance (m)
+    drip_gain: f64,
+    canopy_rmin: f64,
     /// fixed drip points (eaves, branches, gutters) and their median period (s)
     drips: usize,
     drip_period: f64,
@@ -433,19 +442,53 @@ pub struct Scene {
 pub fn scene(name: &str) -> Option<Scene> {
     let s = match name {
         // drizzle to light rain: countable taps and drips over almost no wash
-        "light" => Scene {
+        // light_D1 (the default light): a soft, even, distant patter (the user, 2026-11-25: "light sounds like it's
+        // hitting something close ... remove the up close noise from light and keep the background"): no near
+        // objects, no drip points or canopy drips, no single drops within 3.5 m (they stay in the wash), faint single
+        // drops 3.5-20 m out
+        "light" | "light_d1" => Scene {
             name: "light",
             rate_mm_h: 0.7,
             kind: DsdKind::Drizzle,
             puddle: 0.05,
             grass: 0.25,
             leaves: 0.2,
-            r_events: 8.0,
+            r_events: 20.0,
             elevated: 0.05,
             film: 1.0,
             d_max: 1.4,
-            canopy_drips: 5.0,
-            drips: 9,
+            canopy_drips: 0.0,
+            r_ev_min: 3.5,
+            near_gain: 0.0,
+            near_frac: 0.0,
+            drip_gain: 0.0,
+            canopy_rmin: 6.0,
+            drips: 0,
+            drip_period: 1.6,
+            runoff: 0.0,
+            gust: 0.3,
+            lufs: -30.0,
+        },
+        // light_D2: as D1 with the near layers kept faint: near objects at -15 dB and 30 % of them, 4 drip points and
+        // 2 canopy drips a second (6-15 m) at -15 dB
+        "light_d2" => Scene {
+            name: "light_d2",
+            rate_mm_h: 0.7,
+            kind: DsdKind::Drizzle,
+            puddle: 0.05,
+            grass: 0.25,
+            leaves: 0.2,
+            r_events: 20.0,
+            elevated: 0.05,
+            film: 1.0,
+            d_max: 1.4,
+            canopy_drips: 2.0,
+            r_ev_min: 3.5,
+            near_gain: 0.178,
+            near_frac: 0.3,
+            drip_gain: 0.178,
+            canopy_rmin: 6.0,
+            drips: 4,
             drip_period: 1.6,
             runoff: 0.0,
             gust: 0.3,
@@ -464,6 +507,11 @@ pub fn scene(name: &str) -> Option<Scene> {
             film: 1.5,
             d_max: 6.0,
             canopy_drips: 10.0,
+            r_ev_min: 0.0,
+            near_gain: 1.0,
+            near_frac: 1.0,
+            drip_gain: 1.0,
+            canopy_rmin: 1.5,
             drips: 12,
             drip_period: 0.7,
             runoff: 0.25,
@@ -483,6 +531,11 @@ pub fn scene(name: &str) -> Option<Scene> {
             film: 4.0,
             d_max: 6.0,
             canopy_drips: 0.0,
+            r_ev_min: 0.0,
+            near_gain: 1.0,
+            near_frac: 1.0,
+            drip_gain: 1.0,
+            canopy_rmin: 1.5,
             drips: 0,
             drip_period: 1.0,
             runoff: 1.0,
@@ -723,7 +776,7 @@ fn drips(seed: u64, sc: &Scene, air: &AirCutoff, buf: &mut [f64]) -> usize {
                     mix_into(&mut ev, &b, (rng.range(0.001, 0.004) * FS) as usize, 0.6 * impact_amp(d, v));
                 }
             }
-            put(buf, (t * FS) as usize, &onepole(&ev, fc), 1.0 / r);
+            put(buf, (t * FS) as usize, &onepole(&ev, fc), sc.drip_gain / r);
             total += 1;
         }
     }
@@ -782,7 +835,18 @@ pub fn outdoor(seed: u64, sc: &Scene) -> (Vec<f64>, OutdoorStats) {
         if r2 <= 3.0 + 1e-9 {
             big_near = flux_big * area;
         }
-        if r2 <= sc.r_events + 1e-9 {
+        // the part of the ring nearer than r_ev_min: its big drops in the wash
+        let r_lo = r1.max(sc.r_ev_min.min(r2));
+        if r_lo > r1 {
+            let geo_near = m::PI * m::ln((r_lo * r_lo + h * h) / (r1 * r1 + h * h));
+            for k in 0..=SPEC_N / 2 {
+                wash[k] += flux_big * geo_near * env * spec_big[k] * lp2[k];
+            }
+        }
+        let area = m::PI * (r2 * r2 - r_lo * r_lo);
+        if r2 <= r_lo + 1e-9 {
+            // all of it in the wash (above)
+        } else if r2 <= sc.r_events + 1e-9 {
             let expected = flux_big * area;
             let k_thin = (expected / EVENT_CAP).max(1.0);
             let count = rng.poisson(gust.draws(expected / k_thin * LOOP_S));
@@ -791,7 +855,7 @@ pub fn outdoor(seed: u64, sc: &Scene) -> (Vec<f64>, OutdoorStats) {
                 if !gust.accept(&mut rng, t) {
                     continue;
                 }
-                let rho = m::sqrt(rng.range(r1 * r1, r2 * r2));
+                let rho = m::sqrt(rng.range(r_lo * r_lo, r2 * r2));
                 let surf = pick_surface(&mut rng, sc, rho);
                 let d = ds.sample_between(&mut rng, D_SPLIT, 6.0);
                 let v = terminal_v(d);
@@ -803,8 +867,9 @@ pub fn outdoor(seed: u64, sc: &Scene) -> (Vec<f64>, OutdoorStats) {
                 rendered += 1;
             }
         } else {
+            let geo_far = m::PI * m::ln((r2 * r2 + h * h) / (r_lo * r_lo + h * h));
             for k in 0..=SPEC_N / 2 {
-                wash[k] += flux_big * geo * env * spec_big[k] * lp2[k];
+                wash[k] += flux_big * geo_far * env * spec_big[k] * lp2[k];
             }
         }
     }
@@ -812,8 +877,8 @@ pub fn outdoor(seed: u64, sc: &Scene) -> (Vec<f64>, OutdoorStats) {
     // few drops a second land this close, but each is several dB over the bed, the patter one hears as single drops.
     {
         let mut orng = Rng::new(seed, &format!("rain-near-{}", sc.name));
-        let expected = ds.flux_between(0.5, 10.0) * NEAR_AREA;
-        let count = orng.poisson(gust.draws(expected * LOOP_S));
+        let expected = ds.flux_between(0.5, 10.0) * NEAR_AREA * sc.near_frac;
+        let count = if sc.near_gain > 0.0 { orng.poisson(gust.draws(expected * LOOP_S)) } else { 0 };
         for _ in 0..count {
             let t = orng.f() * LOOP_S;
             if !gust.accept(&mut orng, t) {
@@ -832,7 +897,7 @@ pub fn outdoor(seed: u64, sc: &Scene) -> (Vec<f64>, OutdoorStats) {
             let d = ds.sample_between(&mut orng, 0.5, 6.0);
             let ev = drop_event(&mut orng, surf, d, terminal_v(d), sc.film);
             let r = orng.range(0.5, 1.2);
-            put(&mut buf, (t * FS) as usize, &ev, 1.0 / r);
+            put(&mut buf, (t * FS) as usize, &ev, sc.near_gain / r);
             rendered += 1;
         }
     }
@@ -846,7 +911,7 @@ pub fn outdoor(seed: u64, sc: &Scene) -> (Vec<f64>, OutdoorStats) {
             if !gust.accept(&mut crng, t) {
                 continue;
             }
-            let rho = crng.range(1.5, 12.0);
+            let rho = crng.range(sc.canopy_rmin, sc.canopy_rmin.max(12.0) + if sc.canopy_rmin > 1.5 { 3.0 } else { 0.0 });
             let surf = if crng.chance(0.35 * tone().puddle) {
                 Surf::Puddle
             } else if crng.chance(0.5) {
@@ -858,7 +923,7 @@ pub fn outdoor(seed: u64, sc: &Scene) -> (Vec<f64>, OutdoorStats) {
             let v = m::sqrt(2.0 * 9.81 * crng.range(2.0, 8.0)).min(terminal_v(d));
             let ev = drop_event_pitched(&mut crng, surf, d, v, sc.film, tone().drip_pitch);
             let r = m::sqrt(rho * rho + h * h);
-            put(&mut buf, (t * FS) as usize, &onepole(&ev, distance_fc(&air, rho, r)), 1.0 / r);
+            put(&mut buf, (t * FS) as usize, &onepole(&ev, distance_fc(&air, rho, r)), sc.drip_gain / r);
             canopy += 1;
         }
     }
