@@ -561,8 +561,24 @@ pub fn build(place: &Place, quad: [[f64; 2]; 4], g_of: &dyn Fn(&[P2]) -> Vec<f64
         // line where the faces end short of it (a carriageway's lanes on its line, its shoulders apart): the slab and
         // parapet as wide as the map's road, as today's decks)
         let reach = |i: usize, e: usize| -> f64 { widen_out(&net, &sboxes, p[i], rn[e]) };
+        // (M5: a widened strip stops short of any kept face it would reach (another deck at its height, a zone): one
+        // owner per drivable point, never a strip lying on a neighbour's face)
+        let clear = |e: usize, w: f64| -> f64 {
+            let (a, b) = (p[e], p[(e + 1) % k]);
+            let mid = scale(add(a, b), 0.5);
+            let zm = (m.v[ch[e] as usize][2] + m.v[ch[(e + 1) % k] as usize][2]) as f64 / 2000.0;
+            let mut hs2: Vec<(u32, f64)> = Vec::new();
+            let mut d = COVER_OUT_M + TWIN_STEP_M;
+            while d <= w + 1e-9 {
+                kgrid.heights(&m.v, &m.t, add(mid, scale(rn[e], d)), &mut hs2);
+                if hs2.iter().any(|&(_t, z)| absf(z - zm) <= COVER_DZ_M) { return (d - TWIN_STEP_M).max(STRIP_W.min(w)); }
+                d += TWIN_STEP_M;
+            }
+            w
+        };
         let ew: Vec<f64> = (0..nseg).map(|e| if gaps[e] > 0.0 { gaps[e] * 0.5 } else {
-            STRIP_W + reach(e, e).max(reach((e + 1) % k, e))
+            let w = STRIP_W + reach(e, e).max(reach((e + 1) % k, e));
+            if w > STRIP_W { clear(e, w) } else { w }
         }).collect();
         let mut nrm: Vec<P2> = Vec::with_capacity(k);
         let mut wv: Vec<f64> = Vec::with_capacity(k);
