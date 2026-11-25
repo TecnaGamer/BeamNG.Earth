@@ -3275,7 +3275,7 @@ def tunnel(chunks, origin, walls=()):
                     gr = np.where(d_ <= sb_ + 0.5 if sb_ > 0 else False, np.inf, gr)
             nv = _add_blocks(P, T, UV, M, nv, portals.cover(mid - np.asarray(origin, np.float64)[:2], u, z - origin[2],
                                                              gr - origin[2], hw, th, (False, False), CONCRETE_UV_M,
-                                                             SOIL_UV_M, sec), 0)
+                                                             SOIL_UV_M, sec, rec=bool(c.get("rec"))), 0)
         pups = c.get("portal_up") or (None, None)
         caps = c.get("cap_m") or (None, None)       # (a road over the mouth: its stone top shorter, TunnelProfiles.caps)
         for end, at, pup, cap_m in zip(c.get("portal") or (False, False), (0, k - 1), pups, caps):

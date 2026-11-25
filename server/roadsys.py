@@ -117,7 +117,7 @@ def set_water_fn(fn):
 # server/tunnelrec.py): the profile squares make it with their profiles; roads.TunnelProfiles hands it on to every
 # consumer (floors, sections, portals, holes), its own solve left to the networks under water (T3)
 TUNNELS = SURFACE and os.environ.get("BNE_ROADSYS_TUNNELS", "off").strip().lower() == "on"
-TUNNELS_KERNEL = 629
+TUNNELS_KERNEL = 631
 XSEC = os.environ.get("BNE_ROADSYS_XSEC", "off").strip().lower() == "on"
 XSEC_KERNEL = 617           # earthfast.RoadsysSegments(xsec=...), native/roadsys xsec.rs (617: with areas=, fit= in one binary; trunk 616 has no xsec)
 

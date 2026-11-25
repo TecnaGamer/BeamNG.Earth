@@ -10406,6 +10406,10 @@ class TunnelProfiles(BridgeProfiles):
             ge = g[[0, -1]].copy()
             if at and not underwater:
                 ge[at] = np.asarray(self._ends_ground(xy[[0, -1]][at]), np.float64)
+                if roadsys.TUNNELS:     # (T1: no higher than the record's dug approach, tunnelrec.profile_ends)
+                    import tunnelrec
+                    pz = tunnelrec.profile_ends(self, k, xy, [0 if e == 0 else len(xy) - 1 for e in at])
+                    ge[at] = np.where(np.isfinite(pz), np.minimum(ge[at], pz), ge[at])
             g = g.copy()
             g[0], g[-1] = ge[0], ge[-1]
             pinned = [False, False]
@@ -12247,6 +12251,14 @@ def twin_tunnels(parts):
             if near.mean() < TWIN_SHARE:
                 continue
             tb = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xb, axis=0).T))]
+            if roadsys.TUNNELS:
+                # (T1: and b beside a for that share of b's length too: the tube round both runs along a only, and a
+                # short section of one carriageway paired with the other's long one left the long one without a tube
+                # (Moscow's Garden Ring, its twin floors held together by the record))
+                sb_ = np.linspace(0.0, tb[-1], max(2, int(tb[-1] / TWIN_STEP_M) + 1))
+                Pb = np.c_[dnp.interp(sb_, tb, xb[:, 0]), dnp.interp(sb_, tb, xb[:, 1])]
+                if (_line_near(Pb, xa)[0] < reach).mean() < TWIN_SHARE:
+                    continue
             _, qb = _line_near(q, xb)           # (q on xb: its floor by the arc to it)
             sb_at = np.array([tb[k] + dnp.hypot(*(qb[n] - xb[k])) for n, k in enumerate(
                 [int(np.argmin(dnp.hypot(*(xb[:-1] - p).T) + dnp.hypot(*(xb[1:] - p).T))) for p in qb])])
@@ -12289,17 +12301,21 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
     layouts = rampmerges.plans([(fid, sp, np.c_[xy, z], lon) for fid, sp, xy, z, lon in parts])
     twins = twin_tunnels(parts)
     twinned = {k for i, j, _, _ in twins for k in (i, j)}
+    # (T1: the sub-parts the road system's record built (its holes): their cover meets the ground, portals.cover; a
+    # network on the legacy solve keeps its cover as before)
+    rec = set(getattr(tunnels, "holes", None) or ()) if roadsys.TUNNELS else set()
     jobs = []                                   # (fid, its ends, [(look, width, line)])
     for i, j, mid, width in twins:              # the tube round both, with the first's portals
         if len(mid) >= 2:
-            jobs.append((parts[i][0], (mid[0, :2], mid[-1, :2]), [({**TUNNEL, "tunnel": True, "tube_only": True}, width, mid)],
-                         parts[i][1]))
+            jobs.append((parts[i][0], (mid[0, :2], mid[-1, :2]),
+                         [({**TUNNEL, "tunnel": True, "tube_only": True, "rec": parts[i][0] in rec}, width, mid)], parts[i][1]))
     for n, (fid, spec, xy, z, lon) in enumerate(parts):
         pts = np.c_[xy, z]
         # A covered road needs its own colliding floor even when its mapped surface normally belongs to the
         # terrain paint (rock/grass). That paint lies on the hill/seabed above the bore, never inside it.
         look = _deck_look(spec)
-        lines = [] if look is None else [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned}, spec.width, pts)]
+        lines = [] if look is None else [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned, "rec": fid in rec},
+                                          spec.width, pts)]
         for look, w, line in rampmerges.trim(fid, extras(spec, pts, lon, defer_dashes=True), layouts):
             if look["m"] not in (SIDEWALK["m"], GUTTER["m"], EDGE_DECAL["m"]):     # (no ground beside a deck)
                 lines.append((look, w, line))
@@ -12333,7 +12349,7 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                             ch["tunnel_len"] = round(length, 1)             # (the whole sub-part's: sound_boxes)
                             if spec.cls in CONCRETE_WALL_CLASSES:
                                 ch["concrete"] = True   # (a major road's low arch: concrete, as its cutting's walls)
-                            for flag in ("no_tube", "tube_only"):
+                            for flag in ("no_tube", "tube_only", "rec"):
                                 if look.get(flag):
                                     ch[flag] = True
                             if getattr(tunnels, "height", None) is not None:

@@ -133,7 +133,18 @@ def _profiles(owner, comp, pool):
         level = np.asarray(owner.frame.geodetic_to_enu(lat, lon, np.where(np.isfinite(level), level, 0.))[2])
         # Pin to the common raw ground datum. Asking the grader for the endpoints here would recurse into
         # its own tunnel plans. Open approaches are graded to this very same solved floor afterwards.
-        portal = ground[[0, -1]]
+        portal = ground[[0, -1]].copy()
+        import roadsys
+        if roadsys.TUNNELS:
+            # (T1: no higher than the one profile at the portal: the record's mouths dig the approach to it (square.rs
+            # lows), and a portal on the raw ground over that cut stood 0.14 m over its approach, Harbor Tunnel south)
+            import tunnelrec
+            for e, (index, reverse) in ((0, seq[0]), (1, seq[-1])):
+                key, pxy = parts[index]
+                at = (len(pxy) - 1 if reverse else 0) if e == 0 else (0 if reverse else len(pxy) - 1)
+                pz = float(tunnelrec.profile_ends(owner, key, pxy, [at])[0])
+                if np.isfinite(pz) and pz < portal[e]:
+                    portal[e] = pz
         if not np.isfinite(ground).all() or not np.isfinite(depth).all():
             log.warning("subsea profile has incomplete ground/water inputs")
             return None

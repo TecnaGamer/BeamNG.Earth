@@ -344,7 +344,10 @@ pub struct Metrics { pub m: BTreeMap<&'static str, f64> }
 /// The audit's measuring rules: raised whenever a metric's meaning changes (2: tunnel lanes ride their traced floor,
 /// terrain counts as a floor). tools/widecorpus compare.py refuses to pair results of two versions.
 /// 3: the tunnel checks (tunaudit.rs; new keys only, the others as in 2).
-pub const AUDIT_VERSION: f64 = 3.0;
+/// 4: a tunnel lane's drawn road surface is a floor candidate, and a row on the terrain over a tube takes the roofed
+///    floor under it again (a row seeded where the tube's slab is clipped by the tile's edge took the terrain over the
+///    tube and followed it: Moscow's Garden Ring roofless along 0.25 mi).
+pub const AUDIT_VERSION: f64 = 4.0;
 
 impl Metrics {
     pub(crate) fn add(&mut self, k: &'static str, v: f64) { *self.m.entry(k).or_insert(0.0) += v; }
@@ -392,14 +395,21 @@ fn tunnel_floors(sc: &Scene, ss: &[Sample], deck_top: &Grid, floors: &Grid, vaul
             if last_station.map_or(true, |l| station - l > 2) { prev = f64::NAN; }   // (a gap in the row: seeded again)
             last_station = Some(station);
             if cands.is_empty() { prev = f64::NAN; continue; }
-            let near = if prev.is_finite() {
+            let mut near = if prev.is_finite() {
                 cands.iter().copied().min_by(|a, b| (a - prev).abs().total_cmp(&(b - prev).abs()))
                     .filter(|c| (c - prev).abs() <= TRACK_JUMP)
             } else { None };
+            let vs: Vec<f64> = vaults.at(x, y).iter().filter_map(|&k| ray(&tris[k as usize], x, y)).collect();
+            let roofed = cands.iter().copied().filter(|&c| vs.iter().any(|&v| v >= c + 1.0 && v <= c + ROOF_MAX))
+                .fold(f64::NAN, f64::min);
+            // (4: a row tracking a surface with no vault over it (the terrain over a tube whose floor it lost at a gap
+            // between two drawn sections or a tile's edge, the tube's cover rising to the ground at a mouth) takes the
+            // roofed floor under it: a car on the lane is in the tube, not on the hill over it)
+            if let Some(nz) = near {
+                let nz_roofed = vs.iter().any(|&v| v >= nz + 1.0 && v <= nz + ROOF_MAX);
+                if !nz_roofed && roofed.is_finite() && roofed < nz { near = None; }
+            }
             let z = near.unwrap_or_else(|| {
-                let vs: Vec<f64> = vaults.at(x, y).iter().filter_map(|&k| ray(&tris[k as usize], x, y)).collect();
-                let roofed = cands.iter().copied().filter(|&c| vs.iter().any(|&v| v >= c + 1.0 && v <= c + ROOF_MAX))
-                    .fold(f64::NAN, f64::min);
                 if roofed.is_finite() { roofed } else { cands.iter().copied().fold(f64::NAN, f64::min) }
             });
             out[i] = z;
@@ -419,7 +429,7 @@ pub fn audit(sc: &Scene) -> Metrics {
     let col_flat = Grid::new(tris, |t| t.collides && (t.cls == UP || t.cls == DOWN));
     let col_steep = Grid::new(tris, |t| t.collides && t.cls == STEEP);
     let deck_top = Grid::new(tris, |t| t.kind == KIND_DECK && t.flags & FLAG_DECK_TOP != 0 && t.cls == UP);
-    let floors = Grid::new(tris, |t| (t.kind == KIND_DECK && t.flags & FLAG_DECK_SIDE != 0 || t.kind == KIND_TUNNEL) && t.cls == UP);
+    let floors = Grid::new(tris, |t| (t.kind == KIND_DECK && t.flags & FLAG_DECK_SIDE != 0 || t.kind == KIND_TUNNEL || t.kind == KIND_ROAD) && t.cls == UP);
     let vaults = Grid::new(tris, |t| t.kind == KIND_TUNNEL && t.cls == DOWN);
     let ss = samples(sc);
     let track = tunnel_floors(sc, &ss, &deck_top, &floors, &vaults);

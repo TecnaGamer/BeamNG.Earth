@@ -516,12 +516,14 @@ def keyed_env(k):
 # BNE_ROADSYS_TUNNELS 1 (T1, earthfast 629, the tunnel plan approved 2026-11-25): the tunnels from the road system's
 # record (floors from the one profile, sections never open for want of cover, portals and holes only where a tube
 # enters a hill; tunnelrec.py).
+# BNE_ROADSYS_TUNNELS 2 (earthfast 631): the record's portals dig the approach to the floor (no lift of the floor onto
+# the plans' ground), twin tunnels held at one floor, a twin tube only where both carriageways run side by side.
 ROADSYS_STRUCTURES_VERSION = 1
 ROADSYS_SURFACE_VERSION = 5
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
                    "BNE_ROADSHAPE": 11, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 4, "BNE_ROADSYS_XSEC": 1,
-                   "BNE_ROADSYS_TUNNELS": 1}
+                   "BNE_ROADSYS_TUNNELS": 2}
 
 
 def keyed_value(k, v):
