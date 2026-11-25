@@ -453,6 +453,8 @@ class MapData:
             drivetags.DEFAULT[:] = [self.drive_tags]
         import regionaldata
         regionaldata.configure(cache_dir, self.fetcher)     # (PR #505's regional scenery data, fetched on demand)
+        import nbiskew                  # (the US bridge inventory's skews: roadshape's deck ends, BNE_DECK_SKEW)
+        nbiskew.configure(cache_dir, self.fetcher)
         import germanroads              # (Germany's surveyed road widths, lanes and surfaces, fetched on demand)
         germanroads.configure(cache_dir, self.fetcher)
         import roadz                    # (real road / deck / tunnel heights where a source has them: BNE_ROADZ)
@@ -850,6 +852,10 @@ class MapData:
         import osmareas
         if osmareas.FIT:                        # (BNE_ROADSYS_AREAS=on: the mapped road areas' build, keyed only while on)
             v["osmareas"] = osmareas.identity(self)
+        import roadshape
+        if roadshape.SKEW_627:                  # (the deck ends' skew reads the bridge inventory's table: its build, keyed
+            import nbiskew                      # only while the rule reads it; None: no table this run)
+            v["nbiskew"] = nbiskew.identity()
         return v
 
     def freeze_manifests(self, wait_s=None):

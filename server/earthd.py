@@ -4720,6 +4720,8 @@ class Server:
                     p.wet = self.sea.depth if self.sea is not None else None    # (decks clear the water)
                     p.infra_fn = lambda key: self.mapdata.cell(
                         key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+                    p.water_fn = lambda key: self.mapdata.cell(
+                        key, layers=("water",), kind="demand").layers.get("water")
                 cls = roadsmod.BridgeProfiles
             else:
                 def setup(t):

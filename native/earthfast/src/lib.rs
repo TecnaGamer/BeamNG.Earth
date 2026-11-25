@@ -7806,6 +7806,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     snow::py::register(m)?;
     // 626: road M5 rounds 2-3 (roadsys: twins, widen_out, class / sign / rail clearance floors, mapped ranges,
     // RoadsysSegments(rails=), RSTILE06) on top of 624 and 625
-    m.add("VERSION", 626)?;
+    // 627: deck_shape(lhw=, nbi=): the deck ends' skew only as the abutment of a short structure's crossing, waterways
+    // (kind 3) crossed too, the US bridge inventory's skew first (roadshape.py, nbiskew.py); its ends' audit numbers
+    m.add("VERSION", 627)?;
     Ok(())
 }

@@ -16,7 +16,10 @@ a plain overpass is three members joined end to end.) Each of its decks gets (ea
   so the slab ran straight across a curving road;
 - skewed end lines along the road or railway it crosses near each end (BNE_DECK_SKEW, on with the switch): the end
   rows of its slab, its road surface and its parapets (roadmesh.ribbons), and the approach's end row (roadmesh.build's
-  deck-end weld);
+  deck-end weld); since earthfast 627 (the deck-end skew audit, 2026-11-25) only on a structure of SKEW_SPAN_MAX_M
+  or less (a viaduct's ends are square), along the road, railway or mapped waterway (WATERWAYS) it crosses within
+  SKEW_REACH_627_M, SKEW_MIN_DEG or more off square; where the US bridge inventory has a record of the structure
+  (nbiskew.py, NBI item 34: nbi_record) its skew decides (BNE_DECK_SKEW=498: the old rule);
 - buried ends: OVERLAP_M of its approach under a skirt that continues the slab and girders, its top SKIRT_TOP_M under
   the road at the abutment and SKIRT_DIP_M at the far end, its soffit up to a SKIRT_LIP_M lip (roadmesh.deck), in place
   of a step;
@@ -67,11 +70,29 @@ SKIRT_DIP_M = 0.45          # ... and at its far end (the design's 0.3-0.5 m)
 SKIRT_LIP_M = 0.3           # m of slab at its far end (the soffit pulled up to a lip)
 SKIRT_GRADE_MAX = 0.08      # the deck's end grade carried over the skirt at most
 
+# (earthfast 627, the deck-end skew audit 2026-11-25: every mapped bridge end of the 66-place corpus against NBI item
+# 34 (200 US ends) and the finest aerials: the 498 rule skewed every end with a crossing within SKEW_REACH_M, long
+# viaducts' too, 64 % right. A short structure's ends follow the line it crosses even where the abutment stands well
+# back from it (Maryland's 7.5 cm aerials: 15-21 m back, skewed), a viaduct's are square: the structure's length is
+# the one threshold kept (fitted on four states and scored on the fifth, rotating: 72 % held out, 78 % in sample; the
+# four-threshold fit with a set-back limit scored 77 % in sample but 67 % held out))
+SKEW_SPAN_MAX_M = 100.0     # m: a structure (its decks end to end) longer than this ends square (a viaduct)
+SKEW_SET_MAX_M = 1000.0     # m an end may stand off the crossed line's edge (no limit: see above)
+SKEW_MIN_DEG = 5.0          # a crossing nearer square than this: a square end
+SKEW_REACH_627_M = 80.0     # m along the structure from its end to the crossing it is the end of (627)
+# the mapped waterways a deck end may be the abutment of (OSM waterway=; ditches and brooks under a road are culverts)
+WATERWAYS = ("river", "stream", "canal", "drain")
+SKEW_627 = SKEW and os.environ.get("BNE_DECK_SKEW", "on") not in ("498",)   # (498: the old rule, for comparisons)
+
 PARAMS = np.array([CHORD_TOL_M, MAX_STEP_M, BLEND_MAX_M, dmath.cos(math.radians(APPROACH_DEG)), JOIN_M, OVERLAP_M,
-                   SKEW_REACH_M, dmath.sin(math.radians(SKEW_MIN_CROSS_DEG)), dmath.cos(math.radians(SKEW_MAX_DEG)),
+                   SKEW_REACH_627_M if SKEW_627 else SKEW_REACH_M, dmath.sin(math.radians(SKEW_MIN_CROSS_DEG)), dmath.cos(math.radians(SKEW_MAX_DEG)),
                    dmath.cos(math.radians(SKEW_BEND_DEG)), DEV_MIN_M, DEV_SHARE, dmath.cos(math.radians(AMBIG_DEG)),
-                   DIR_M, SKEW_NEAR_M], np.float64)
-VERSION = 505               # the earthfast kernels (498 on its branch; merged into try598 as 505)
+                   DIR_M, SKEW_NEAR_M]
+                  + ([SKEW_SPAN_MAX_M, SKEW_SET_MAX_M, dmath.cos(math.radians(SKEW_MIN_DEG))] if SKEW_627 else []),
+                  np.float64)
+VERSION = 627 if SKEW_627 else 505  # the earthfast kernels (498 on its branch; merged into try598 as 505; 627: the
+                                    # skew's abutment rule, waterways, the lines' half widths)
+SKEW_DUMP = os.environ.get("ROADSHAPE_SKEW_DUMP") or None     # (tools only: each deck end's skew numbers, JSON lines)
 
 
 def simple_members(members, got):
@@ -321,7 +342,7 @@ def deck_end_at(cell_fn, frame, xy, touch):
     return best[0], best[1], (tuple(float(v) for v in ring[0]), tuple(float(v) for v in ring[-1])), decks[best[0]][1]
 
 
-def shape_chain(comp, pool, zs, ground, simple_of=None):
+def shape_chain(comp, pool, zs, ground, simple_of=None, hw_of=None, water=(), frame=None):
     """{part key: shape} of the simple decks of a chain's solve: comp its parts' keys (its order), pool {key: (spec,
     xy, lon, level, ...)}, zs their heights (comp's order), ground the chain's ground {(fid, "g" | "r"): [lines]},
     simple_of(key) -> bool: is the deck simple (part_simple, the rule grading's bank_through reads too; None: none
@@ -341,14 +362,19 @@ def shape_chain(comp, pool, zs, ground, simple_of=None):
     got = structures.groups(members)
     simple = [simple_of is not None and bool(simple_of(k)) for k in comp]
     dup = [int(d) for d in got["dup"]]          # (one way kept twice under two part keys: never the other's joint)
-    glines = []                                 # (xy (k, 2), kind, fid) in the ground's keys' order
+    glines = []                                 # (xy (k, 2), kind, fid, half width) in the ground's keys' order
     for gk in sorted(ground, key=str):
         if len(gk) != 2 or gk[1] not in ("g", "r"):
             continue
+        hw = float((hw_of or {}).get(gk, 0.0)) if gk[1] == "g" else 0.0
         for ln in ground[gk]:
             ln = np.asarray(ln, np.float64)
             if ln.ndim == 2 and len(ln) >= 2:
-                glines.append((ln[:, :2], 0 if gk[1] == "g" else 1, str(gk[0])))
+                glines.append((ln[:, :2], 0 if gk[1] == "g" else 1, str(gk[0]), hw))
+    if SKEW_627:
+        for gk, rings, hw in sorted(water or (), key=lambda w: str(w[0])):     # (627: kind 3, crossed only)
+            for ln in rings:
+                glines.append((np.asarray(ln, np.float64)[:, :2], 3, str(gk[0]), float(hw)))
     out = {}
     for n, k in enumerate(comp):
         if not simple[n]:
@@ -358,28 +384,39 @@ def shape_chain(comp, pool, zs, ground, simple_of=None):
         if len(xy) < 2 or len(z) != len(xy) or not np.isfinite(z).all():
             continue
         lo, hi = xy.min(0) - NEAR_M, xy.max(0) + NEAR_M
-        lines, kinds, owns = [], [], []
-        for ln, kind, fid in glines:
+        lines, kinds, owns, hws = [], [], [], []
+        for ln, kind, fid, hw in glines:
             if (ln.max(0) < lo).any() or (ln.min(0) > hi).any():
                 continue
             lines.append(ln)
             kinds.append(kind)
             owns.append(1 if fid == str(k[0]) else 0)
+            hws.append(hw)
         for m, k2 in enumerate(comp):
             if m == n or dup[m] == n or dup[n] == m or dup[m] == dup[n]:
                 continue
             ln = np.asarray(pool[k2][1], np.float64)[:, :2]
-            if (ln.max(0) < lo).any() or (ln.min(0) > hi).any():
+            # (627: every deck of the chain, near or not: a structure's length is walked end to end over them)
+            if not SKEW_627 and ((ln.max(0) < lo).any() or (ln.min(0) > hi).any()):
                 continue
             lines.append(ln)
             kinds.append(2)
             owns.append(0)
+            hws.append(0.0)
         off = np.r_[0, np.cumsum([len(a) for a in lines])].astype(np.int64)
         pts = np.ascontiguousarray(np.concatenate(lines) if lines else np.zeros((0, 2)), np.float64)
-        sxy, sz, ends, ov, ooff = fast._ef.deck_shape(xy, z, pts, off, np.asarray(kinds, np.int64),
-                                                      np.asarray(owns, np.int64), PARAMS)
+        if SKEW_627:
+            rec = nbi_record(xy, frame)
+            sxy, sz, ends, ov, ooff = fast._ef.deck_shape(xy, z, pts, off, np.asarray(kinds, np.int64),
+                                                          np.asarray(owns, np.int64), PARAMS,
+                                                          np.asarray(hws, np.float64), rec)
+        else:
+            sxy, sz, ends, ov, ooff = fast._ef.deck_shape(xy, z, pts, off, np.asarray(kinds, np.int64),
+                                                          np.asarray(owns, np.int64), PARAMS)
         sxy = np.asarray(sxy, np.float64).reshape(-1, 2)
-        ends = np.asarray(ends, np.float64).reshape(2, 8)
+        ends = np.asarray(ends, np.float64).reshape(2, -1)
+        if SKEW_DUMP and frame is not None:
+            _dump_ends(k, sxy, ends, frame, rec if SKEW_627 else None)
         ov = np.asarray(ov, np.float64).reshape(-1, 2)
         rec = {"xy": sxy, "z": np.asarray(sz, np.float64), "skew": [None, None], "ov": [None, None],
                "tan": [None, None], "bank": None}
@@ -394,6 +431,60 @@ def shape_chain(comp, pool, zs, ground, simple_of=None):
         rec["bank"] = deck_bank(pool[k][0], sxy, [lines[int(ends[e, 7])] if ends[e, 0] >= 0 else None for e in (0, 1)])
         out[k] = rec
     return out
+
+
+NBI_MATCH_M = 30.0          # m an inventory record's point may lie off a deck's line and still be its structure's
+
+
+def nbi_record(xy, frame):
+    """The inventory's record of the structure deck xy (k, 2) in frame is part of (nbiskew.py: NBI item 34's skew,
+    item 49's length), as deck_shape's nbi (skew deg or 99, length m, cos, sin) float64 (4,), or None (no table, none
+    within NBI_MATCH_M of the line). The nearest record to the line wins, the lower index on a tie: one answer for one
+    deck line whoever asks."""
+    import nbiskew
+    if frame is None:
+        return None
+    t = nbiskew.table()
+    if t is None:
+        return None
+    xy = np.asarray(xy, np.float64)[:, :2]
+    la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+    idx = t.near(float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)), NBI_MATCH_M)
+    if not len(idx):
+        return None
+    e, n, _ = frame.geodetic_to_enu(t.lat[idx].astype(np.float64), t.lon[idx].astype(np.float64), np.zeros(len(idx)))
+    q = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
+    a, b = xy[:-1], xy[1:]
+    ab = b - a
+    l2 = np.maximum((ab * ab).sum(1), 1e-12)
+    best, bi = None, None
+    for j in range(len(idx)):
+        u = np.clip(((q[j] - a) * ab).sum(1) / l2, 0.0, 1.0)
+        dv = a + ab * u[:, None] - q[j]
+        d = float(np.min(np.sqrt((dv * dv).sum(1))))
+        if d <= NBI_MATCH_M and (best is None or d < best):
+            best, bi = d, int(idx[j])
+    if bi is None:
+        return None
+    sk = int(t.skew[bi])
+    r = math.radians(min(sk, 89))
+    return np.array([float(sk), float(t.length[bi]) / 10.0, dmath.cos(r), dmath.sin(r)], np.float64)
+
+
+def _dump_ends(k, sxy, ends, frame, rec):
+    """(tools: ROADSHAPE_SKEW_DUMP) each end of a shaped deck with its skew numbers, a JSON line."""
+    import json
+    sxy = np.asarray(sxy, np.float64)
+    lines = []
+    for e in (0, 1):
+        p = sxy[0] if e == 0 else sxy[-1]
+        q = sxy[1] if e == 0 else sxy[-2]
+        la, lo, _ = frame.enu_to_geodetic(np.array([p[0], q[0]]), np.array([p[1], q[1]]), np.zeros(2))
+        lines.append(json.dumps({"part": [str(k[0]), str(k[1])], "end": e, "lat": float(la[0]), "lon": float(lo[0]),
+                                 "lat_in": float(la[1]), "lon_in": float(lo[1]), "ends": [float(v) for v in ends[e]],
+                                 "nbi": None if rec is None else [float(v) for v in rec]}))
+    with open(SKEW_DUMP, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 BANK_CONTEXT_M = 150.0      # m of the road going on from each end of a deck its curve is read over (grading's stencil,

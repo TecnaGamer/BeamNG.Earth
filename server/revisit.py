@@ -484,6 +484,10 @@ def keyed_env(k):
 # (deck_trim_coplanar); a branch's surface in its union laid on the through deck's; union decks' rows unsimplified.
 # BNE_ROADSHAPE 10 and BNE_ROADSURF_V3=surface 8 (2026-11-22): the fork records' and the v3 lane graph's segment
 # windows never hold a road both whole and as its lane sections (roadshape.whole_or_sections).
+# BNE_ROADSHAPE 11 (2026-11-25, earthfast 627): the deck ends' skew only as the abutment of a short structure's
+# crossing (roadshape.SKEW_SPAN_MAX_M / SKEW_SET_MAX_M / SKEW_MIN_DEG: the deck-end skew audit), the mapped waterways
+# crossed lines too, the US bridge inventory's skew first where a record matches (nbiskew.py, its build in the map
+# data's versions).
 # BNE_ROADSYS 1 (heights, M2, 2026-11-22): the one profile per carriageway in today's decks and as the plans' terrain
 # targets (roads.BridgeProfiles._chain_solve, roadsys.chain_heights; earthfast 600).
 # BNE_ROADSYS 2 (heights, M3, 2026-11-22): crossings beside a deck no floor, a branch past its nose on its trunk, the
@@ -510,7 +514,7 @@ ROADSYS_STRUCTURES_VERSION = 1
 ROADSYS_SURFACE_VERSION = 3
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 10, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 4, "BNE_ROADSYS_XSEC": 1}
+                   "BNE_ROADSHAPE": 11, "BNE_DECK_SKEW": 1, "BNE_ROADSYS": 4, "BNE_ROADSYS_XSEC": 1}
 
 
 def keyed_value(k, v):

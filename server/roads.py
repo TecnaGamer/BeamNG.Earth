@@ -8275,6 +8275,7 @@ class BridgeProfiles:
 
     wet = None      # wet(lat, lon) -> water depth (m) or None: decks clear the water (water_clear)
     infra_fn = None     # infra_fn(cell key) -> the infrastructure Features (bridge:structure tags: bridgetypes)
+    water_fn = None     # water_fn(cell key) -> the water Features (BNE_DECK_SKEW: the waterways a deck end crosses)
 
     def __init__(self, frame, cell_fn, elev):
         self.frame, self.cell_fn, self.elev = frame, cell_fn, elev
@@ -8505,6 +8506,7 @@ class BridgeProfiles:
                         lines += mapgeom.enu_rings(feats, self.frame, rings)
                         roads_.append(((fid, "g"), lines))
                         self.__dict__.setdefault("_gcls", {})[(fid, "g")] = rs[i].cls     # (LEVEL_SPACING)
+                        self.__dict__.setdefault("_ghw", {})[(fid, "g")] = rs[i].width / 2  # (roadshape's skew)
                     elif _rail_drawn(feats, i):
                         # a railway on the ground: the decks over it keep their headroom too (GitHub #324: a road bridge
                         # lay on the tracks; only roads under a deck were counted)
@@ -9432,7 +9434,10 @@ class BridgeProfiles:
         if roadshape.DECKS and self.STRUCTURES:
             shapes = roadshape.shape_chain(comp, pool, zs, ground,
                                            lambda k: (k in keep or (own is not None and k == key))
-                                           and self._deck_simple(k, pool))
+                                           and self._deck_simple(k, pool),
+                                           hw_of=self.__dict__.get("_ghw"),
+                                           water=self._waterways(comp, pool) if roadshape.SKEW_627 else (),
+                                           frame=self.frame)
         shaped = {k: ((v[0], _shaped_line(shapes[k]["xy"], shapes[k], len(v[1])), shapes[k]["z"], v[3]) if k in shapes
                       else v) for k, v in keep.items()}
         if own is not None and key in shapes:
@@ -9727,6 +9732,59 @@ class BridgeProfiles:
                     for ring in ground_parts(feats, i):
                         e, n = mapgeom.enu_xy(feats, self.frame, ring)
                         out.append(np.stack([e, n], axis=1))
+        return out
+
+    def _waterways(self, comp, pool):
+        """[((fid, "w"), [xy (k, 2)], half width m)] of the mapped waterways (OSM waterway=river / stream / canal /
+        drain, not in a tunnel or culvert: roadshape.WATERWAYS) in the cells within roadshape.NEAR_M of the chain's
+        decks, this frame (roadshape's skew: the line a deck end may be the abutment of). Each cell's read once; a cell
+        that cannot be read: none from it, the build not kept (revisit.fault)."""
+        if self.water_fn is None or not comp:
+            return []
+        import genground
+        import revisit
+        pts = np.concatenate([np.asarray(pool[k][1], np.float64)[:, :2] for k in comp])
+        lo, hi = pts.min(0) - roadshape.NEAR_M, pts.max(0) + roadshape.NEAR_M
+        la, lon, _ = self.frame.enu_to_geodetic(np.array([lo[0], hi[0]]), np.array([lo[1], hi[1]]), np.zeros(2))
+        keys = mapcells.cells_for_bbox(float(la.min()), float(lon.min()), float(la.max()), float(lon.max()))
+        memo = self.__dict__.setdefault("_wlines", {})
+        out = []
+        for key in sorted(keys, key=str):
+            with self.lock:
+                got = memo.get(str(key))
+            if got is None:
+                got = []
+                try:
+                    with revisit.scope() as read:
+                        f = self.water_fn(key)
+                        if f is not None and len(f):
+                            xy = None
+                            for i in np.flatnonzero(np.asarray(f.kind) == 2):
+                                tags = genground._tags(f, i)
+                                if tags.get("tunnel") or str(tags.get("location") or "") == "underground":
+                                    continue
+                                way = str(tags.get("waterway") or genground._attr(f, "class", i) or "")
+                                if way not in roadshape.WATERWAYS:
+                                    continue
+                                w = genground._width(tags.get("width"))
+                                hw = w / 2 if w else genground.WATERWAY_HALF.get(way, 1.5)
+                                if xy is None:
+                                    xy = f.xy_in(self.frame)
+                                rings = [np.asarray(r, np.float64)[:, :2] for part in f.parts(i, xy) for r in part
+                                         if len(r) >= 2]
+                                if rings:
+                                    got.append(((str(f.ids[i]), "w"), rings, float(hw)))
+                    if read.complete:
+                        with self.lock:
+                            memo[str(key)] = got
+                except Exception as ex:     # (no waterways from it rather than no deck: not kept)
+                    log.debug("waterways: %s: %s", type(ex).__name__, ex)
+                    revisit.fault()
+                    got = []
+            for k, rings, hw in got:
+                keep = [r for r in rings if not ((r.max(0) < lo).any() or (r.min(0) > hi).any())]
+                if keep:
+                    out.append((k, keep, hw))
         return out
 
     def _structure(self, chain, infra_out=None):
@@ -10759,8 +10817,8 @@ class ChainView:
 
     mapper = staticmethod(lambda src, dst: _Mapper(src, dst))
 
-    def __getattr__(self, name):        # wet, infra_fn, raw, ends: the stores' settings (setup)
-        if name in ("wet", "infra_fn", "raw", "ends"):
+    def __getattr__(self, name):        # wet, infra_fn, water_fn, raw, ends: the stores' settings (setup)
+        if name in ("wet", "infra_fn", "water_fn", "raw", "ends"):
             st = list(self.cs.stores.values())
             return getattr(st[0], name, None) if st else None
         raise AttributeError(name)

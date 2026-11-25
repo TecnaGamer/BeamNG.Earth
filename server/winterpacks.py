@@ -117,7 +117,22 @@ def _entry_ok(size, sha):
 
 
 class Pack:
-    """One pack's manifest in use (decided once for the server run) and its files (checked, kept on disk)."""
+    """One pack's manifest in use (decided once for the server run) and its files (checked, kept on disk). Another
+    pack reader of the data repo's (nbiskew.py) subclasses it: ROOT (its folder under pagesdata and its log name),
+    env_value (the switch's override) and check (its manifest's own test)."""
+
+    ROOT = "winterpacks"
+
+    def env_value(self):
+        """The switch's override (BNGE_LEAFTYPE / BNGE_WATERSHARE), read by its literal name."""
+        if self.name == LEAF:
+            return os.environ.get("BNGE_LEAFTYPE", "")
+        if self.name == WATER:
+            return os.environ.get("BNGE_WATERSHARE", "")
+        return ""
+
+    def check(self, m, version=None):
+        return check_manifest(m, self.name, version)
 
     def __init__(self, cache_dir, fetcher, name, local=None):
         self.name = name
@@ -132,7 +147,7 @@ class Pack:
     # --- the manifest ------------------------------------------------------------------------------------------------
     def _wanted_version(self):
         """The version the switch (or BNGE_LEAFTYPE / BNGE_WATERSHARE) turns on, else None."""
-        env = os.environ.get(ENV[self.name], "").strip().lower()
+        env = self.env_value().strip().lower()
         if env == "off":
             return None
         if VERSION_RE.fullmatch(env):
@@ -145,7 +160,7 @@ class Pack:
         return v if VERSION_RE.fullmatch(v) else None
 
     def _pin_dir(self, version):
-        return os.path.join(self.cache_dir, "pagesdata", "winterpacks", self.name, version) if self.cache_dir else None
+        return os.path.join(self.cache_dir, "pagesdata", self.ROOT, self.name, version) if self.cache_dir else None
 
     def _decide(self):
         """The manifest's text for this run (None: no pack this run): the pin of the version the switch names, else
@@ -158,7 +173,7 @@ class Pack:
             try:
                 with open(os.path.join(d, "manifest.json"), encoding="utf-8") as fh:
                     text = fh.read(MAX_MANIFEST + 1)
-                if check_manifest(json.loads(text), self.name, v) is not None:
+                if self.check(json.loads(text), v) is not None:
                     return text
             except (OSError, ValueError):
                 pass
@@ -166,15 +181,15 @@ class Pack:
         try:
             body = self.fetcher.get(url, kind="demand", max_bytes=MAX_MANIFEST).body
             text = body.decode("utf-8")
-            if check_manifest(json.loads(text), self.name, v) is None:
+            if self.check(json.loads(text), v) is None:
                 raise ValueError("not a manifest of this pack and version")
         except Exception as e:      # (a FetchError faulted the asking build already: what it made is not kept)
-            log.info("winterpacks %s %s: no manifest this run (%s: %s)", self.name, v, type(e).__name__, e)
+            log.info("%s %s %s: no manifest this run (%s: %s)", self.ROOT, self.name, v, type(e).__name__, e)
             return None
         if d:
             os.makedirs(d, exist_ok=True)
             pagesdata.write_atomic(os.path.join(d, "manifest.json"), body)
-        log.info("winterpacks %s %s: build %s", self.name, v, json.loads(text)["build"])
+        log.info("%s %s %s: build %s", self.ROOT, self.name, v, json.loads(text)["build"])
         return text
 
     def manifest(self):
@@ -189,12 +204,12 @@ class Pack:
             except OSError:
                 text = None
         else:
-            ident = f"winterpacks:{self.name}|{cdn_base()}/{self.name}"
+            ident = f"{self.ROOT}:{self.name}|{cdn_base()}/{self.name}"
             text, _ = pagesdata.session_take(self.cache_dir, ident, self._decide, self.name)
         m = None
         if text is not None:
             try:
-                m = check_manifest(json.loads(text), self.name)
+                m = self.check(json.loads(text))
             except ValueError:
                 m = None
         with self.lock:
@@ -220,7 +235,7 @@ class Pack:
                     return fh.read()
             except OSError:
                 return None
-        d = os.path.join(self.cache_dir, "pagesdata", "winterpacks", self.name, self.version()) \
+        d = os.path.join(self.cache_dir, "pagesdata", self.ROOT, self.name, self.version()) \
             if self.cache_dir else None
         path = os.path.join(d, *rel.split("/")) if d else None
         if path:
@@ -246,7 +261,7 @@ class Pack:
             if not isinstance(e, netfetch.FetchError):
                 import revisit
                 revisit.fault()
-            log.info("winterpacks %s %s: %s: %s", self.name, rel, type(e).__name__, e)
+            log.info("%s %s %s: %s: %s", self.ROOT, self.name, rel, type(e).__name__, e)
             with self.lock:
                 self._down[rel] = time.monotonic()
             return None
