@@ -19,6 +19,7 @@ mod loudness;
 mod m;
 mod rain;
 mod rng;
+mod storm;
 mod thunder;
 mod wav;
 
@@ -69,7 +70,7 @@ fn render_rain(
     };
     let (out, oinfo) = outdoor(seed);
     let (y, g) = match kind {
-        "roof_light" | "roof" | "roof_heavy" => rain::finish_loop(rain::roof(seed, &sc, &out), &target),
+        "roof_light" | "roof" | "roof_heavy" => rain::finish_loop_shelf(rain::roof(seed, &sc, &out), &target, false),
         "muffled" => {
             // the mod's derivation from the finished medium loop
             let (med, g) = rain::finish_loop(out, &target);
@@ -111,6 +112,51 @@ fn ogg_true_peak(ogg: &str, tmp_wav: &str) -> Result<f64, String> {
     Ok(loudness::true_peak_db(&x, false))
 }
 
+/// One file of a set: render, write the WAV, and with `ogg` encode it, decode it, measure its true peak and render it
+/// again with a lower limiter ceiling until the class's target holds.
+fn job(
+    dir: &str,
+    name: &str,
+    what: &str,
+    sub: &str,
+    seed: u64,
+    ogg: bool,
+    medium_raw: &mut Vec<(String, u64, Vec<f64>, String)>,
+) -> Result<(), String> {
+    let (name, what, sub) = (name.to_string(), what.to_string(), sub.to_string());
+    // The true-peak targets hold for the Ogg the game plays: Vorbis overshoots the WAV's peaks (more on
+    // bright files), so each Ogg is decoded and measured, and rendered again with a lower ceiling if over.
+    let tp_target = match sub.as_str() {
+        "strike" => -0.3,
+        _ if what == "thunder" => -1.0,
+        _ => -1.5,
+    };
+    let mut shift = 0.0;
+    for attempt in 0..4 {
+        let (sig, info) = if what == "thunder" {
+            render_thunder(&sub, seed, shift)?
+        } else {
+            render_rain(&sub, seed, shift, medium_raw)?
+        };
+        let w = format!("{dir}/wav/{name}.wav");
+        wav::write_f32(&w, &sig, 44100).map_err(|e| e.to_string())?;
+        if !ogg {
+            println!("{name}\t{info}");
+            break;
+        }
+        let q = if sub == "strike" { "5" } else { "4" };
+        let o = format!("{dir}/{name}.ogg");
+        encode_ogg(&w, &o, q)?;
+        let tp = ogg_true_peak(&o, &format!("{dir}/wav/{name}.check.wav"))?;
+        if tp <= tp_target || attempt == 3 {
+            println!("{name}\t{info} ceiling_shift_db={shift:.2} ogg_true_peak_dbtp={tp:.2}");
+            break;
+        }
+        shift -= tp - tp_target + 0.15;
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
@@ -147,37 +193,19 @@ fn run() -> Result<(), String> {
             }
             let mut medium_raw = Vec::new();
             for (name, what, sub, seed) in jobs {
-                // The true-peak targets hold for the Ogg the game plays: Vorbis overshoots the WAV's peaks (more on
-                // bright files), so each Ogg is decoded and measured, and rendered again with a lower ceiling if over.
-                let tp_target = match sub.as_str() {
-                    "strike" => -0.3,
-                    _ if what == "thunder" => -1.0,
-                    _ => -1.5,
-                };
-                let mut shift = 0.0;
-                for attempt in 0..4 {
-                    let (sig, info) = if what == "thunder" {
-                        render_thunder(&sub, seed, shift)?
-                    } else {
-                        render_rain(&sub, seed, shift, &mut medium_raw)?
-                    };
-                    let w = format!("{dir}/wav/{name}.wav");
-                    wav::write_f32(&w, &sig, 44100).map_err(|e| e.to_string())?;
-                    if !ogg {
-                        println!("{name}\t{info}");
-                        break;
-                    }
-                    let q = if sub == "strike" { "5" } else { "4" };
-                    let o = format!("{dir}/{name}.ogg");
-                    encode_ogg(&w, &o, q)?;
-                    let tp = ogg_true_peak(&o, &format!("{dir}/wav/{name}.check.wav"))?;
-                    if tp <= tp_target || attempt == 3 {
-                        println!("{name}\t{info} ceiling_shift_db={shift:.2} ogg_true_peak_dbtp={tp:.2}");
-                        break;
-                    }
-                    shift -= tp - tp_target + 0.15;
-                }
+                job(&dir, &name, &what, &sub, seed, ogg, &mut medium_raw)?;
             }
+        }
+        "job" => {
+            // one file, as `set` makes it: --out DIR --name NAME --what thunder|rain --sub CLASS|KIND --seed N [--ogg]
+            let dir = arg(&args, "--out").ok_or("--out DIR")?;
+            let name = arg(&args, "--name").ok_or("--name")?;
+            let what = arg(&args, "--what").ok_or("--what")?;
+            let sub = arg(&args, "--sub").ok_or("--sub")?;
+            let seed: u64 = arg(&args, "--seed").ok_or("--seed")?.parse().map_err(|_| "bad --seed")?;
+            let ogg = args.iter().any(|a| a == "--ogg");
+            std::fs::create_dir_all(format!("{dir}/wav")).map_err(|e| e.to_string())?;
+            job(&dir, &name, &what, &sub, seed, ogg, &mut Vec::new())?;
         }
         "live-bench" => {
             // the live rain engine through a scripted sweep, timed (no audio device): --seconds S --block N [--wav F]
@@ -189,11 +217,12 @@ fn run() -> Result<(), String> {
             });
             println!("{}", live::bench_with(secs, block, arg(&args, "--wav").as_deref(), fixed));
         }
-        "drop-spectra" => print!("{}", rain::drop_spectra()),
         "thunder-bench" => {
             let mm: f64 = arg(&args, "--micro").unwrap_or("0.25".into()).parse().map_err(|_| "bad --micro")?;
             print!("{}", live::thunder_bench(mm));
         }
+        "drop-spectra" => print!("{}", rain::drop_spectra()),
+        "storm-dump" => print!("{}", storm::dump()),
         "analyze" => {
             println!("{}", analyze::header());
             for f in &args[2..] {

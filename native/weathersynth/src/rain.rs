@@ -40,14 +40,6 @@ struct Dsd {
     flux: f64, // impacts per m^2 per s
 }
 
-impl Dsd {
-    fn sample(&self, rng: &mut Rng) -> f64 {
-        let u = rng.f() * self.flux;
-        let i = self.cdf.partition_point(|&c| c < u).min(self.d.len() - 1);
-        self.d[i] + rng.range(-0.005, 0.005)
-    }
-}
-
 /// The air-absorption cutoff (ISO 9613-1, 6 dB point) by distance, tabulated on a log grid 0.25-400 m.
 struct AirCutoff {
     tab: Vec<f64>,
@@ -1026,15 +1018,22 @@ fn panel(
 pub fn roof(seed: u64, sc: &Scene, outside: &[f64]) -> Vec<f64> {
     let n = (LOOP_S * FS) as usize;
     let mut buf = vec![0.0; n];
-    let ds = dsd_for(sc);
+    // On a car the light rain is light rain, not drizzle: Marshall-Palmer drops at 1.2 mm/h or more, so the roof
+    // and glass get a dense patter of 1-2 mm drops (the real in-car recordings' envelopes are dense, not peaky)
+    let roof_sc = match sc.kind {
+        DsdKind::Drizzle => Scene { kind: DsdKind::MarshallPalmer, rate_mm_h: sc.rate_mm_h.max(1.2), d_max: 6.0, ..*sc },
+        _ => *sc,
+    };
+    let ds = dsd_for(&roof_sc);
     let mut rng = Rng::new(seed, "rain-roof-drops");
     // the same gusts as the outdoor rain of this seed, so the cabin and the outside swell together
     let gust = Gust::new(seed, "rain-gust", sc.gust);
-    let make = |rng: &mut Rng, area: f64| -> Vec<(usize, f64, f64, f64, f64)> {
-        let cnt = rng.poisson(gust.draws(ds.flux * area * LOOP_S));
+    // (sample, x 0..1, y 0..1, impulse, contact time s, drop mm)
+    let make = |rng: &mut Rng, area: f64| -> Vec<(usize, f64, f64, f64, f64, f64)> {
+        let cnt = rng.poisson(gust.draws(ds.flux_between(0.5, 10.0) * area * LOOP_S));
         let mut v = Vec::with_capacity(cnt);
         for _ in 0..cnt {
-            let d = ds.sample(rng);
+            let d = ds.sample_between(rng, 0.5, 6.0);
             let vt = terminal_v(d);
             let mass = 1000.0 * m::PI / 6.0 * (d * 1e-3) * (d * 1e-3) * (d * 1e-3);
             let t = rng.f() * LOOP_S;
@@ -1042,52 +1041,64 @@ pub fn roof(seed: u64, sc: &Scene, outside: &[f64]) -> Vec<f64> {
             if !gust.accept(rng, t) {
                 continue;
             }
-            v.push(((t * FS) as usize, x, y, mass * vt * 1e4, d * 1e-3 / vt));
+            v.push(((t * FS) as usize, x, y, mass * vt * 1e4, d * 1e-3 / vt, d));
         }
         v.sort_by_key(|e| e.0);
         v
     };
-    let mut roof_drops = make(&mut rng, 1.30 * 1.45);
-    // Parked under a tree or a roof edge in light and medium rain: a few drip points onto the roof, each a big drop
-    // (4-5.5 mm from 2-6 m) at its own spot every ~1.5 drip periods (a whole number per loop).
-    // (not tied to the outdoor drip points: light outdoors has none now, the roof keeps its ticks; none in a downpour)
-    if sc.rate_mm_h < 20.0 {
-        let mut drng = Rng::new(seed, "rain-roof-drips");
-        for _ in 0..3 {
-            let (x, y) = (drng.range(0.1, 0.9), drng.range(0.1, 0.9));
-            let d0 = drng.range(4.0, 5.5);
-            let v = m::sqrt(2.0 * 9.81 * drng.range(2.0, 6.0)).min(terminal_v(d0));
-            let period = drng.lognormal(1.5 * sc.drip_period, 0.4).clamp(0.3, 6.0);
-            let per_loop = (LOOP_S / period).round().max(1.0) as usize;
-            let phase = drng.f();
-            for k in 0..per_loop {
-                let t = ((k as f64 + phase + drng.range(-0.15, 0.15)) / per_loop as f64).rem_euclid(1.0) * LOOP_S;
-                let d = d0 * drng.range(0.95, 1.05);
-                let mass = 1000.0 * m::PI / 6.0 * (d * 1e-3) * (d * 1e-3) * (d * 1e-3);
-                roof_drops.push(((t * FS) as usize, x, y, mass * v * 1e4, d * 1e-3 / v));
-            }
-        }
-        roof_drops.sort_by_key(|e| e.0);
-    }
+    let roof_drops = make(&mut rng, 1.30 * 1.45);
     let glass_drops = make(&mut rng, 1.40 * 0.85 * 0.6); // the windscreen is raked: less rain per m^2
+    // panel impulses ~ momentum^jexp: < 1 evens out the rare big drops' thumps (the real in-car rain is a dense
+    // patter, not a few loud knocks over a quiet bed)
+    let jexp = std::env::var("WEATHERSYNTH_ROOF_JEXP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
+    let strip = |v: &[(usize, f64, f64, f64, f64, f64)]| -> Vec<(usize, f64, f64, f64, f64)> {
+        v.iter().map(|e| (e.0, e.1, e.2, m::pow(e.3, jexp), e.4)).collect()
+    };
     let mut mrng = Rng::new(seed, "rain-roof-modes");
-    panel(&mut mrng, &mut buf, &roof_drops, 1.30, 1.45, 62.0, 3500.0, 0.04, 1.0);
-    // the headliner and cabin: the roof's high modes and its ticks heard dulled
+    panel(&mut mrng, &mut buf, &strip(&roof_drops), 1.30, 1.45, 62.0, 3500.0, 0.04, 1.0);
+    // the headliner and cabin: the roof's high modes heard dulled
     let mut lp = Biquad::lowpass(FS, 1100.0, 0.6);
     lp.run_circular(&mut buf);
     let mut glass = vec![0.0; n];
-    panel(&mut mrng, &mut glass, &glass_drops, 1.40, 0.85, 110.0, 5000.0, 0.05, 0.2);
+    panel(&mut mrng, &mut glass, &strip(&glass_drops), 1.40, 0.85, 110.0, 5000.0, 0.05, 0.2);
     let mut lpg = Biquad::lowpass(FS, 2500.0, 0.7);
     lpg.run_circular(&mut glass);
-    // contact ticks on the glass (no headliner)
-    let mut trng = Rng::new(seed, "rain-roof-ticks");
-    for &(at, _, _, imp, _) in glass_drops.iter() {
-        let mut bp = Biquad::bandpass(FS, trng.range(2500.0, 4500.0), 1.0);
-        let t = noise_burst(&mut trng, 0.12, 6.0, &mut bp);
-        put(&mut glass, at, &t, imp * 0.08);
-    }
     for i in 0..n {
         buf[i] += glass[i];
+    }
+    // The bright part: every drop on the glass taps it, and the roof's splashes come through the glass and the body:
+    // a short 2-12 kHz tick per drop with a little crown spray (the real in-car recordings hold 20-40 dB more above
+    // 2.5 kHz than the panel modes alone). Tick level ~ impact_amp, from 0.8 mm drops (tuned against the real
+    // in-car corpus with compare.py: tick layer at 0.4 of the panel level, panel impulses ~ momentum^0.5).
+    let mut ticks = vec![0.0; n];
+    let mut trng = Rng::new(seed, "rain-roof-ticks");
+    let texp = std::env::var("WEATHERSYNTH_ROOF_TICKEXP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+    let tmin = std::env::var("WEATHERSYNTH_ROOF_TICKMIN").ok().and_then(|v| v.parse().ok()).unwrap_or(0.8);
+    for (drops, g) in [(&glass_drops, 1.0), (&roof_drops, 0.35)] {
+        for &(at, _, _, _, _, d) in drops.iter() {
+            if d < tmin {
+                continue;
+            }
+            let a = m::pow(impact_amp(d, terminal_v(d)), texp) * g;
+            let fc = trng.lognormal(5000.0, 0.35).clamp(2000.0, 12000.0);
+            let mut bp = Biquad::bandpass(FS, fc, 0.7);
+            let t = noise_burst(&mut trng, 0.12 + 0.05 * d, 6.0, &mut bp);
+            put(&mut ticks, at, &t, a);
+            let k = trng.poisson(0.6 * d);
+            for _ in 0..k {
+                let mut bp2 = Biquad::bandpass(FS, trng.range(5000.0, 10000.0), 1.0);
+                let c = noise_burst(&mut trng, 0.06, 6.0, &mut bp2);
+                put(&mut ticks, at + (trng.range(0.002, 0.015) * FS) as usize, &c, a * trng.range(0.1, 0.25));
+            }
+        }
+    }
+    let k_hf = std::env::var("WEATHERSYNTH_ROOF_HF").ok().and_then(|v| v.parse().ok()).unwrap_or(0.4);
+    let (rb, rt) = (rms(&buf), rms(&ticks));
+    if rt > 0.0 {
+        let g = k_hf * rb / rt;
+        for i in 0..n {
+            buf[i] += g * ticks[i];
+        }
     }
     // the outside rain through the body: low-passed hard and quiet
     let mut out = outside.to_vec();
@@ -1117,10 +1128,15 @@ pub struct LoopTarget {
 
 /// High-pass 30 Hz round the loop, gain to the loudness (measured over the loop played twice), then a true-peak limiter
 /// round three copies (the middle one kept). Two corrections for what the limiter takes.
-pub fn finish_loop(mut x: Vec<f64>, t: &LoopTarget) -> (Vec<f64>, f64) {
+pub fn finish_loop(x: Vec<f64>, t: &LoopTarget) -> (Vec<f64>, f64) {
+    finish_loop_shelf(x, t, true)
+}
+
+/// `shelf`: the tone's high shelf (off for the roof loops: their brightness is the glass ticks').
+pub fn finish_loop_shelf(mut x: Vec<f64>, t: &LoopTarget, shelf: bool) -> (Vec<f64>, f64) {
     let mut hp = Biquad::highpass(FS, 30.0, 0.7071);
     hp.run_circular(&mut x);
-    if tone().shelf_db != 0.0 {
+    if shelf && tone().shelf_db != 0.0 {
         let mut sh = Biquad::highshelf(FS, 4000.0, tone().shelf_db);
         sh.run_circular(&mut x);
     }

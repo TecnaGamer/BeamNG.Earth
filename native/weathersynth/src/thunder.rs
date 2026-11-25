@@ -38,8 +38,8 @@ const BIN_W: f64 = 0.01; // relative distance bin width
 /// close and strike renders sit in the recorded files' spectral balance (10 dB/oct with micro-tortuosity 0.06: centroid
 /// ~200-450 Hz at 1 km, recordings 336-644 Hz). WEATHERSYNTH_TILT overrides it (testing).
 const TILT_F: f64 = 150.0;
-fn tilt_db_oct() -> f64 {
-    std::env::var("WEATHERSYNTH_TILT").ok().and_then(|v| v.parse().ok()).unwrap_or(10.0)
+fn tilt_db_oct(class_tilt: f64) -> f64 {
+    std::env::var("WEATHERSYNTH_TILT").ok().and_then(|v| v.parse().ok()).unwrap_or(class_tilt)
 }
 fn tilt_gain(f: f64, db_oct: f64) -> f64 {
     let x = f.min(8000.0) / TILT_F;
@@ -64,24 +64,46 @@ pub struct Class {
     pub fade_out_s: f64,
     /// the diffuse tail's reverberation time range (s)
     pub t60: (f64, f64),
+    /// the diffuse tail's energy re the direct sound (amplitude factor; was `echo` for every class)
+    pub tail: f64,
+    /// the source tilt (dB/oct above TILT_F); WEATHERSYNTH_TILT overrides every class
+    pub tilt: f64,
+    /// restore the pre-limiter envelope after limiting (see normalise_peak_class)
+    pub restore: bool,
+    /// the onset builds to the boom: starts `ramp_db` down, full after ~`ramp_s` (+/-30 % per seed); 0 dB: none
+    pub ramp_db: f64,
+    pub ramp_s: f64,
+    /// soft saturation (tanh to the ceiling) before the limiter: lower crest factor without flattening the envelope
+    pub saturate: bool,
 }
 
 pub fn class(name: &str) -> Option<Class> {
     let c = match name {
         "strike" => Class {
+            // fix1 (the user, 2026-11-25: "the strike sounds dont sound very good anyway. they sound to muffled and
+            // echoy"; tuned against 32 screened real close-strike recordings with compare.py: every seed now under
+            // the real median distance): drier (echo 0.3, tail 0.4, T60 2.5-4 s), less boomy-muddy treble balance
+            // (tilt 6), soft saturation with a fast limiter (no held-up plateau), the rip building into the boom
+            // over ~0.45 s (-12 dB at the onset)
             name: "strike",
             d_min: 60.0,
             d_max: 280.0,
             length_s: 14.0,
             target_lufs: -9.5,
             ceil_db: -1.3,
-            attack_s: 0.004,
-            release_s: 0.2,
-            echo: 0.55,
+            attack_s: 0.001,
+            release_s: 0.04,
+            echo: 0.3,
             excess: 0.0,
             fade_in_s: 0.003,
             fade_out_s: 4.0,
-            t60: (3.5, 5.5),
+            t60: (2.5, 4.0),
+            tail: 0.4,
+            tilt: 6.0,
+            restore: false,
+            ramp_db: -12.0,
+            ramp_s: 0.45,
+            saturate: true,
         },
         "close" => Class {
             name: "close",
@@ -97,6 +119,12 @@ pub fn class(name: &str) -> Option<Class> {
             fade_in_s: 0.01,
             fade_out_s: 3.5,
             t60: (4.0, 6.0),
+            tail: 0.5,
+            tilt: 10.0,
+            restore: false,
+            ramp_db: 0.0,
+            ramp_s: 0.0,
+            saturate: false,
         },
         "mid" => Class {
             name: "mid",
@@ -112,6 +140,12 @@ pub fn class(name: &str) -> Option<Class> {
             fade_in_s: 0.05,
             fade_out_s: 3.5,
             t60: (5.0, 8.0),
+            tail: 0.45,
+            tilt: 10.0,
+            restore: false,
+            ramp_db: 0.0,
+            ramp_s: 0.0,
+            saturate: false,
         },
         "far" => Class {
             name: "far",
@@ -127,9 +161,46 @@ pub fn class(name: &str) -> Option<Class> {
             fade_in_s: 0.2,
             fade_out_s: 3.5,
             t60: (6.0, 9.0),
+            tail: 0.45,
+            tilt: 10.0,
+            restore: false,
+            ramp_db: 0.0,
+            ramp_s: 0.0,
+            saturate: false,
         },
         _ => return None,
     };
+    let mut c = c;
+    // WEATHERSYNTH_STRIKE="echo,tail,t60lo,t60hi,tilt,attack_s,release_s[,restore[,d_min,d_max]]" (testing)
+    if c.name == "strike" {
+        if let Ok(v) = std::env::var("WEATHERSYNTH_STRIKE") {
+            let f: Vec<f64> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            if f.len() >= 7 {
+                c.echo = f[0];
+                c.tail = f[1];
+                c.t60 = (f[2], f[3]);
+                c.tilt = f[4];
+                c.attack_s = f[5];
+                c.release_s = f[6];
+            }
+            if f.len() >= 8 {
+                c.restore = f[7] > 0.5;
+            }
+            if f.len() >= 10 {
+                c.d_min = f[8];
+                c.d_max = f[9];
+            }
+        }
+        // WEATHERSYNTH_STRIKE_SHAPE="ramp_db,ramp_s,saturate" (testing)
+        if let Ok(v) = std::env::var("WEATHERSYNTH_STRIKE_SHAPE") {
+            let f: Vec<f64> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            if f.len() >= 3 {
+                c.ramp_db = f[0];
+                c.ramp_s = f[1];
+                c.saturate = f[2] > 0.5;
+            }
+        }
+    }
     Some(c)
 }
 
@@ -435,7 +506,7 @@ fn render_dry(geo: &Geometry, cl: &Class, total_s: f64) -> (Vec<f64>, f64) {
     let mut first = f64::INFINITY;
     let mut amin_cache: HashMap<(usize, usize), Vec<C>> = HashMap::new();
     let mut tilt_cache: HashMap<usize, Vec<f64>> = HashMap::new();
-    let tdb = tilt_db_oct();
+    let tdb = tilt_db_oct(cl.tilt);
     for (li, layer) in geo.layers.iter().enumerate() {
         let mut bins: Vec<Vec<Entry>> = Vec::new();
         for w in layer.pts.windows(2) {
@@ -622,7 +693,7 @@ fn add_reverb(x: &[f64], seed: u64, cl: &Class) -> Vec<f64> {
         i0 = i1;
     }
     let e: f64 = h.iter().map(|v| v * v).sum();
-    let g = cl.echo / m::sqrt(e.max(1e-30));
+    let g = cl.tail / m::sqrt(e.max(1e-30));
     for v in h.iter_mut() {
         *v *= g;
     }
@@ -685,6 +756,14 @@ pub fn render(seed: u64, cl: &Class) -> Rendered {
     let s0 = ((start * FS).floor() as isize).max(0) as usize;
     let nlen = (cl.length_s * FS) as usize;
     let dry: Vec<f64> = (0..nlen).map(|i| dry.get(s0 + i).copied().unwrap_or(0.0)).collect();
+    // the onset's rip builds into the boom (real close strikes peak ~0.5 s after the onset): applied after the
+    // saturation and the limiter (normalise_peak_class), which would flatten it
+    let ramp = if cl.ramp_db < 0.0 && cl.ramp_s > 0.0 {
+        let mut rr = Rng::new(seed, "thunder-ramp");
+        Some((m::undb(cl.ramp_db), (cl.ramp_s * rr.range(0.7, 1.3) * FS) as usize))
+    } else {
+        None
+    };
     let echoed = add_echoes(&dry, seed, cl);
     let mut y = add_reverb(&echoed, seed, cl);
     let mut hp = Biquad::highpass(FS, 25.0, 0.7071);
@@ -703,7 +782,7 @@ pub fn render(seed: u64, cl: &Class) -> Rendered {
         let pk = y.iter().fold(0.0f64, |a, v| a.max(v.abs())).max(1e-30);
         (y.iter().map(|v| v * 0.9 / pk).collect(), m::db(0.9 / pk))
     } else {
-        normalise_peak_class(&y, cl)
+        normalise_peak_class(&y, cl, ramp)
     };
     let info = format!(
         "class={} seed={} ground_distance_m={:.0} channel_m={:.0} layers={} r0_m={:.2} first_arrival_s={:.3} file_start_s={:.3} makeup_gain_db={:.1}",
@@ -722,15 +801,55 @@ pub fn render(seed: u64, cl: &Class) -> Rendered {
 
 /// Gain into the limiter until the loudest 3 s reach the class's loudness (bisection; the loudness never falls as the
 /// gain rises).
-fn normalise_peak_class(x: &[f64], cl: &Class) -> (Vec<f64>, f64) {
+fn normalise_peak_class(x: &[f64], cl: &Class, ramp: Option<(f64, usize)>) -> (Vec<f64>, f64) {
     let env = loudness::tp_envelope(x, false);
     let ceil = m::undb(cl.ceil_db);
     let attack = (cl.attack_s * FS).round() as usize;
+    let env400_x = if cl.restore { env400(x) } else { Vec::new() };
     let apply = |gdb: f64| -> Vec<f64> {
         let g = m::undb(gdb);
-        let e: Vec<f64> = env.iter().map(|v| v * g).collect();
-        let gc = loudness::limiter_gain(&e, ceil, attack, cl.release_s, FS);
-        x.iter().zip(gc.iter()).map(|(a, b)| a * g * b).collect()
+        let y: Vec<f64> = if cl.saturate {
+            // tanh to the ceiling, then the limiter catches what tanh's inter-sample peaks leave
+            let sat: Vec<f64> = x.iter().map(|v| ceil * libm::tanh(v * g / ceil)).collect();
+            let e = loudness::tp_envelope(&sat, false);
+            let gc = loudness::limiter_gain(&e, ceil, attack, cl.release_s, FS);
+            sat.iter().zip(gc.iter()).map(|(a, b)| a * b).collect()
+        } else {
+            let e: Vec<f64> = env.iter().map(|v| v * g).collect();
+            let gc = loudness::limiter_gain(&e, ceil, attack, cl.release_s, FS);
+            x.iter().zip(gc.iter()).map(|(a, b)| a * g * b).collect()
+        };
+        let y: Vec<f64> = match ramp {
+            Some((g0, npk)) => y
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    if i >= npk {
+                        *v
+                    } else {
+                        let u = i as f64 / npk as f64;
+                        v * (g0 + (1.0 - g0) * u * u * (3.0 - 2.0 * u))
+                    }
+                })
+                .collect(),
+            None => y,
+        };
+        if !cl.restore {
+            return y;
+        }
+        // Envelope restoration: the limiter squashes the waveform's peaks but also lifts the tail against the peak
+        // (the "held up" plateau). A smooth 400 ms gain puts the pre-limiter envelope shape back: never above 1, so
+        // no peak grows; the crack hits and the tail falls away as recorded.
+        let e1 = env400(&y);
+        let m0 = env400_x.iter().cloned().fold(0.0, f64::max).max(1e-30);
+        let m1 = e1.iter().cloned().fold(0.0, f64::max).max(1e-30);
+        y.iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let r = (env400_x[i] / m0) / (e1[i] / m1).max(1e-12);
+                v * r.min(1.0)
+            })
+            .collect()
     };
     let (mut lo, mut hi) = (-80.0, 80.0);
     for _ in 0..32 {
@@ -743,6 +862,37 @@ fn normalise_peak_class(x: &[f64], cl: &Class) -> (Vec<f64>, f64) {
     }
     let g = 0.5 * (lo + hi);
     (apply(g), g)
+}
+
+/// 400 ms RMS envelope per sample (centred, linear between 10 ms steps).
+fn env400(x: &[f64]) -> Vec<f64> {
+    let n = x.len();
+    let hop = (0.01 * FS) as usize;
+    let half = (0.2 * FS) as usize;
+    let mut pre = Vec::with_capacity(n + 1);
+    pre.push(0.0f64);
+    let mut acc = 0.0;
+    for v in x {
+        acc += v * v;
+        pre.push(acc);
+    }
+    let pts: Vec<f64> = (0..=n / hop)
+        .map(|k| {
+            let c = k * hop;
+            let lo = c.saturating_sub(half);
+            let hi = (c + half).min(n);
+            m::sqrt(((pre[hi] - pre[lo]) / (hi - lo).max(1) as f64).max(0.0))
+        })
+        .collect();
+    (0..n)
+        .map(|i| {
+            let k = i / hop;
+            let fr = (i % hop) as f64 / hop as f64;
+            let a = pts[k.min(pts.len() - 1)];
+            let b = pts[(k + 1).min(pts.len() - 1)];
+            a + (b - a) * fr
+        })
+        .collect()
 }
 
 #[cfg(test)]
