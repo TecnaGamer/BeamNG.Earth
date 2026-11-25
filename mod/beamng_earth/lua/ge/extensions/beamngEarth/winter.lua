@@ -299,7 +299,7 @@ function M.aiParams() return M.aiParamsFor((rows())) end
 local function refreshReadout()
   local road, deck = rows()
   readoutText = M.composeReadout(road, deck, state and state.ground)
-  if (state or forced) and M._aggression then M._aggression(M.aiParamsFor(road) ~= nil) end
+  if (state or forced) and M._aggression then M._aggression(M.AI_MARGINS and M.speedFactor() < 0.9) end
 end
 
 -- The other modules' hooks (only once winter runs): the AI's speed factor, the status bar's readout.
