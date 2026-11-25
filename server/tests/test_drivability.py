@@ -87,6 +87,26 @@ class IndependenceTest(unittest.TestCase):
                     self.assertEqual(run.result(), pinned[name].result())
 
 
+class PlansFormatTest(unittest.TestCase):
+    """The roads must not depend on the plans' format number, which only says which plans are the code's (it is in every
+    interchange's key, a hash). A61 near Marignane, where three interchanges give the same two roads' pieces, got 326
+    steps at format 95 and 357 at 97 (a motorway's step_m 5.9 m and 21.5 m): the pieces were put together in the keys'
+    order, and where two tie the first wins. test_ix_pipeline holds the order on its own, in a second."""
+    SITE = "a61_928"
+    FORMATS = (95, 96, 97)
+
+    def test_the_numbers_change_nothing(self):
+        import grading
+        self.assertTrue(grading.SHAPES_ON, "the interchange solver (BNE_SHAPES=1) is what the format number reached")
+        with ProcessPoolExecutor() as pool:
+            runs = [pool.submit(dv.measure, self.SITE, plans_format=n) for n in self.FORMATS]
+            results = [run.result() for run in runs]
+        for n, result in zip(self.FORMATS[1:], results[1:]):
+            with self.subTest(plans_format=n):
+                self.assertEqual(result["tracks"], results[0]["tracks"])
+                self.assertEqual(result, results[0])
+
+
 class ScoreTest(unittest.TestCase):
     def test_a_point_per_doubling_over_the_limit(self):
         entry = {"parts": {"ground:a": {"step_m": 0.4, "grade": 0.15}, "bridge:b": {"lift_g": 0.4, "step_m": 0.05}}}

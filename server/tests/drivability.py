@@ -128,11 +128,12 @@ METRICS = {
 }
 
 
-def measure(name, threads=1, approach=None):
+def measure(name, threads=1, approach=None, plans_format=None):
     """The site's drivability (the module's docstring). threads: cells planned at once (grading.PLAN_THREADS); approach:
-    (east, north) m of a place graded first, as a session arriving from there would (test_drivability: neither may
-    change the result)."""
+    (east, north) m of a place graded first, as a session arriving from there would; plans_format: the number the plans'
+    format (plancache.PLANS_FORMAT) is taken to be (test_drivability: none of them may change the result)."""
     import grading
+    import plancache
     import revisit
     import roads
     import roadsurf
@@ -145,7 +146,8 @@ def measure(name, threads=1, approach=None):
     # site (2026-11-12: Vienna's and DC's cells got verdicts from a game session; the gate's test_drivability failed on
     # every commit, its steps 0.26 -> 0.34 m at S1 Rautenweg, while BNE_ROADSURF=off runs passed).
     with mock.patch.object(revisit, "ON", False), mock.patch.object(grading, "PLAN_THREADS", threads), \
-            mock.patch.object(roadsurf, "ON", False):
+            mock.patch.object(roadsurf, "ON", False), \
+            mock.patch.object(plancache, "PLANS_FORMAT", plancache.PLANS_FORMAT if plans_format is None else plans_format):
         site = interchanges.load(name, prefix, keep_m=KEEP_M_SITE.get(name, KEEP_M))
         md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": site.cells.get(str(key))}),
                              dem=SimpleNamespace(sample=site.sample))

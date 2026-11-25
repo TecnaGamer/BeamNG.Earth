@@ -41,7 +41,7 @@ INDEX = {}                  # road canonical id -> [(interchange key, lat / lon 
 KEPT = 512                  # solutions kept (per planner, per process)
 EXTENTS = {}                # interchange key -> its extent record: {"box": (lat0, lon0, lat1, lon1) of its seeds, "keys": the
 #                             member keys of its seeds, all its systems'} (the growth's: the reach, computed once, is in it)
-FIELDS = ("key", "failed", "pieces", "crossings", "owner", "pid", "secs", "relaxed")
+FIELDS = ("key", "failed", "pieces", "crossings", "owner", "pid", "secs", "relaxed", "rank")
 LIMITED = {}                # interchange key (or ("road", id) of a growth) -> its failure, where a step went past its time limit
 #                             (ix/limits.py): this process does not make it again for every region that reaches it, and the
 #                             run's store never has it: another process tries it once
@@ -142,15 +142,22 @@ def key_of(planner, net, sysm):
     return _gsh.interchange_key(_gsh.system_ids(net, sysm), centre(planner, net, sysm), version())
 
 
+def rank_of(planner, net, sysm):
+    """The rank of the interchange sysm is (the whole one: grow), gradeshapes.interchange_rank: what its solution is
+    ordered by among the others, the same from every region and process and under any plans' format."""
+    return _gsh.interchange_rank(_gsh.system_ids(net, sysm), centre(planner, net, sysm))
+
+
 def pick(entries, pt):
     """The key of the entry [(key, (lat0, lon0, lat1, lon1))] whose box holds pt (lat, lon) within BOX_DEG (the smallest
-    box where several do), else None."""
+    box where several do, the lower left one of those the same size: the entries come in the order they were found in, and
+    a key is not a place), else None."""
     best = None
     for ik, (a, b, c, d) in entries:
         if a - BOX_DEG <= pt[0] <= c + BOX_DEG and b - BOX_DEG <= pt[1] <= d + BOX_DEG:
-            area = (c - a) * (d - b)
-            if best is None or area < best[0]:
-                best = (area, ik)
+            at = ((c - a) * (d - b), (a, b, c, d))
+            if best is None or at < best[0]:
+                best = (at, ik)
     return None if best is None else best[1]
 
 
@@ -478,7 +485,8 @@ def unpack(planner, meta, lat, lon, z):
     for r in meta["roads"]:
         roads.setdefault(r["fid"], []).append((xy[k:k + r["n"]], np.array(z[k:k + r["n"]]), r["mode"]))
         k += r["n"]
-    got = {key: meta.get(key, 0 if key == "relaxed" else None) for key in FIELDS}     # (relaxed: from a store before it)
+    got = {key: meta.get(key, 0 if key == "relaxed" else None) for key in FIELDS if key != "rank"}     # (relaxed: from a store before it)
+    got["rank"] = meta["rank"]
     got["roads"] = roads
     return got
 
@@ -505,7 +513,7 @@ def interchange(planner, net, ix, hk, clock):
                   len(sysm["crossings"]), len(sysm["ends"]), limits.reason(e.what, e.secs),
                   ", ".join(sorted({str(net.m[i].key[0])[:8] + ":" + net.m[i].kind for i in sysm["seeds"]}))[:600])
         got = dict(key="limit:%s" % cid, roads={}, failed=limits.reason(e.what, e.secs), pieces=0, crossings=0, relaxed=0,
-                   owner="", pid=os.getpid(), secs=0.0)
+                   owner="", pid=os.getpid(), secs=0.0, rank=rank_of(planner, net, sysm))
         LIMITED[("road", cid)] = got
         return got
 
@@ -594,7 +602,8 @@ def made(planner, ik, hk, clock, net, ix, others):
     with revisit.scope() as b:
         roads, why = pipeline.interchange(planner, net, ix, others, hk, clock)
     got = dict(key=ik, roads=roads, failed=why, pieces=pieces, crossings=crossings, relaxed=clock.get("relaxed", 0) - r0,
-               owner=str(owner_cell(planner, net, ix.sysm)), pid=os.getpid(), secs=round(time.perf_counter() - t0, 3))
+               owner=str(owner_cell(planner, net, ix.sysm)), pid=os.getpid(), secs=round(time.perf_counter() - t0, 3),
+               rank=rank_of(planner, net, ix.sysm))
     if limits.is_limit(why):    # (a step ran past its time limit: not stored, not kept, nothing in its place: no answer, the
         LIMITED[ik] = got       # claim is given back when this returns; the process does not try it again for each region)
         return got
