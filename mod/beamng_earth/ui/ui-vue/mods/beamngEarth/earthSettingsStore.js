@@ -406,7 +406,7 @@ export function infoValue(item) {
   if (item.id === "anchor") return s.anchorId ? `#${s.anchorId}  ${fmt(s.anchorLat, 5)}, ${fmt(s.anchorLon, 5)}` : "none"
   if (item.id === "player") return (typeof s.playerLat === "number") ? `${fmt(s.playerLat, 5)}, ${fmt(s.playerLon, 5)}  (${fmt(s.dist / 1000, 1)} km from origin)` : "-"
   if (item.id === "attribution") return s.attribution || "-"
-  if (item.id === "weatherSounds") return "Thunder: DaniloSFX, Dave Welsh, BlueDelta, TRP. Rain: jmbphilmes, Nox_Sound. All from Freesound.org under CC0."
+  if (item.id === "weatherSounds") return "Thunder: DaniloSFX, Dave Welsh, BlueDelta, TRP, Gerent, Simon Spiers, danielmcadams. Rain: jmbphilmes, Nox_Sound. All from Freesound.org under CC0."
   if (item.id === "credits") return s.credits || "-"
   if (item.id === "weather" || item.id === "weatherNow") return s.weather || "-"
   if (item.id === "gravity") return s.gravity || "-"

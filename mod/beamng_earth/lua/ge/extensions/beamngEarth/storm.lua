@@ -35,6 +35,11 @@ M.SEE_M = 30000           -- flashes seen up to this far (fading with distance)
 M.HEAR_M = 22000          -- thunder heard up to this far (real: 15-25 km)
 M.BOLT_M = 15000          -- bolts drawn up to this far
 M.CLOSE_M, M.MID_M = 1500, 6000     -- thunder sounds: a crack nearer than CLOSE_M, a peal to MID_M, a rumble beyond
+-- ... and a strike nearer than STRIKE_M (the user, 2026-11-25: "super close", scary loud): its own recordings made by a
+-- strike, no delay after the flash (at 300 m the sound needs 0.9 s; the crack of a strike that near reads as at once),
+-- full volume, the rain bed ducked under it for DUCK_S
+M.STRIKE_M = 300
+M.DUCK_S, M.DUCK_TO = 3.0, 0.35
 M.LPI_MIN, M.LPI_STRONG = 0.5, 5    -- J/kg (ICON-D2's lightning potential index)
 M.CAPE_MIN, M.CAPE_RAIN_MMH = 800, 0.5
 M.CHECK_S = 0.25          -- the strike walk while a storm is on ...
@@ -174,10 +179,11 @@ function M.proxyDistance(d, visM)
   return math.min(d, math.max(M.PROXY_MIN_M, M.PROXY_VIS * v))
 end
 
--- Pure: the thunder for a strike d m away: { delay s, kind 'close' | 'mid' | 'far', gain 0..1 } or nil (too far).
+-- Pure: the thunder for a strike d m away: { delay s, kind 'strike' | 'close' | 'mid' | 'far', gain 0..1 } or nil (too far).
 function M.thunderFor(d)
   d = tonumber(d) or math.huge
   if d > M.HEAR_M then return nil end
+  if d < M.STRIKE_M then return { delay = 0, kind = 'strike', gain = 1 } end
   local kind = d < M.CLOSE_M and 'close' or (d < M.MID_M and 'mid' or 'far')
   local gain = math.min(1, 1.2 / (1 + d / 2500)) * (1 - 0.5 * d / M.HEAR_M)
   return { delay = d / M.SOUND_MS, kind = kind, gain = gain }
@@ -206,7 +212,8 @@ M.MATERIALS = M.ART .. 'weather.materials.json'
 M.SOUND = '/levels/beamng_earth/art/sound/weather/'
 -- thunder files per kind (tools: ~/bnge-tests/weather/b/audio; CREDITS.md "Weather sounds")
 M.THUNDER = { close = { 'bne_thunder_close1.ogg', 'bne_thunder_close2.ogg' }, mid = { 'bne_thunder_mid1.ogg',
-  'bne_thunder_mid2.ogg' }, far = { 'bne_thunder_far1.ogg', 'bne_thunder_far2.ogg' } }
+  'bne_thunder_mid2.ogg' }, far = { 'bne_thunder_far1.ogg', 'bne_thunder_far2.ogg' },
+  strike = { 'bne_thunder_strike1.ogg', 'bne_thunder_strike2.ogg' } }
 M.THUNDER_VOL = 1.0
 M.MUFFLED = 0.45          -- the thunder's volume in a tunnel or under a deck
 -- the flash's light: as bright at the camera as a strike of LIGHT_LM lumens d m away (~50 lux at 3 km: a night lit up,
@@ -311,7 +318,7 @@ local function strike(s, now, ctx)
   local th = M.thunderFor(d)
   if th then
     local files = M.THUNDER[th.kind]
-    st.thunders[#st.thunders + 1] = { at = s.t + th.delay, file = files[1 + s.seed % #files], gain = th.gain }
+    st.thunders[#st.thunders + 1] = { at = s.t + th.delay, file = files[1 + s.seed % #files], gain = th.gain, kind = th.kind }
   end
   local gain = M.flashGain(d)
   if gain <= 0.002 then return end
@@ -408,6 +415,10 @@ local function playThunders(now, muffled)
         if au and au.playOnce then
           pcall(au.playOnce, 'AudioGui', M.SOUND .. t.file, { volume = t.gain * M.THUNDER_VOL * (muffled and M.MUFFLED or 1) })
           M.thunders = M.thunders + 1
+          if t.kind == 'strike' then          -- (the rain bed ducked under a strike's crack and boom)
+            local amb = package.loaded['beamngEarth/ambience']
+            if amb and amb.duck then pcall(amb.duck, M.DUCK_S, M.DUCK_TO) end
+          end
         end
       end
     else

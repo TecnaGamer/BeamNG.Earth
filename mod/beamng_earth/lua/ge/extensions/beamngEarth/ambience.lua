@@ -537,6 +537,21 @@ local function setLayer(name, vol)
   end
 end
 
+-- The rain bed ducked (storm.lua: under a strike's thunder): to `to` of its volume for `seconds`, the last second easing
+-- back. Nothing runs for it otherwise.
+local duckUntil, duckLen, duckTo = 0, 0, 1
+function M.duck(seconds, to)
+  duckLen, duckTo = math.max(0.1, tonumber(seconds) or 3), math.max(0, math.min(1, tonumber(to) or 0.35))
+  duckUntil = os.clockhp() + duckLen
+end
+-- Pure-ish: the duck's factor at time now (os.clockhp).
+function M.duckFactor(now)
+  local left = duckUntil - now
+  if left <= 0 then return 1 end
+  if left >= 1 then return duckTo end
+  return duckTo + (1 - duckTo) * (1 - left)
+end
+
 local function cabinCam()
   local cam = rawget(_G, 'core_camera')
   if not (cam and cam.getActiveCamName) then return false end
@@ -623,7 +638,7 @@ local function updateRain()
   rainVol = rainVol < want and math.min(want, rainVol + step) or math.max(want, rainVol - step)
   M.rainVol = rainVol
   if layersOk then
-    local mix = M.rainMix(rainVol, w and tonumber(w.rainMmHNow) or 0, w and tonumber(w.shelter) or 1, tunnel, cabinCam())
+    local mix = M.rainMix(rainVol * M.duckFactor(now), w and tonumber(w.rainMmHNow) or 0, w and tonumber(w.shelter) or 1, tunnel, cabinCam())
     for name, v in pairs(mix) do setLayer(name, v) end
     return
   end

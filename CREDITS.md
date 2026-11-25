@@ -283,6 +283,9 @@ original name, sha256 and processing are in `SOURCES.md` there.
 - Thunder strike: "Heavy Thunder Strike - no Rain - QUADRO.wav" by BlueDelta, https://freesound.org/s/446753/ (CC0)
 - Distant thunder: "230405 Thunder DRY rolling distant low rumbles" and "230823 Thunder, dry distant rolling" by TRP,
   https://freesound.org/s/717845/ and https://freesound.org/s/717890/ (CC0)
+- Rolling thunder: "thunder-rolling-170315_0057" by Gerent, https://freesound.org/s/558748/ (CC0)
+- Very close strikes: "Very close lightning strike." by Simon Spiers, https://freesound.org/s/437243/ (CC0), and "Zoom H4n -
+  Super Close Lightning Strike and Thunderstorm" by danielmcadams, https://freesound.org/s/483684/ (CC0)
 - Rain: "Rain light 1 (rural)" and "Rain heavy 1 (rural)" by jmbphilmes, https://freesound.org/s/200271/ and
   https://freesound.org/s/200270/ (CC0); the muffled rain under roofs is derived from the latter
 - Rain in a car: "Ambiance_Rain_Inside_Car_Close_Roof_Loop_Stereo.wav" by Nox_Sound, https://freesound.org/s/535870/ (CC0)

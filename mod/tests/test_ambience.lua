@@ -221,6 +221,12 @@ T.check(#S.liveOf('SFXEmitter') <= 1 and layer('bne_rain_muffled.ogg') == nil, '
 beamngEarth_weather = nil
 
 -- the stock loop (no layer files): fades in with the weather's rain, out inside a tunnel's space, goes when it stops
+-- the duck under a strike: down at once, the last second easing back
+local t0 = os.clockhp()
+amb.duck(3, 0.35)
+T.check(math.abs(amb.duckFactor(t0) - 0.35) < 1e-9 and math.abs(amb.duckFactor(t0 + 2.5) - (0.35 + 0.65 * 0.5)) < 0.02
+  and amb.duckFactor(t0 + 3.1) == 1, 'the rain ducked under a strike, back after 3 s')
+
 amb._setLayersOk(false)
 local function rainEm()
   for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.fields.track == amb.RAIN_TRACK then return o end end
