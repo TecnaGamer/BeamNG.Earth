@@ -104,6 +104,43 @@ near(la.ownFactor(now0 + 0.4), 1 - 0.2 / la.FADE_S, 1e-9, 'own: a long frame cou
 near(la.ownFactor(now0 + 0.5), 0, 1e-9, 'own: silent while live')
 check(la.ownFactor(now0 - 5) == 0, 'own: a clock step back changes nothing')
 check(la.ownFactor(now0 + la.STALE_S + 0.2) > 0, 'own: back when the server stops answering')
+-- many frames of odd lengths (and a clock far from 0, where sums of steps round): the fade ends exactly at 0 / 1
+do
+  local saved = os.clockhp
+  local t = 98765.4321
+  os.clockhp = function() return t end
+  local odd = { 0.0137, 0.0161, 0.00833, 0.0219, 0.0071, 0.0333 }
+  local function frames(n, live)
+    local f
+    for i = 1, n do
+      t = t + odd[i % #odd + 1]
+      if live then la.onAudioState({ state = 'live', latencyMs = 20 }) end
+      f = la.ownFactor(t)
+    end
+    return f
+  end
+  -- three 0.1 s frames make exactly FADE_S, but differences of a large clock round: without the snap the fade stopped
+  -- a hair short of 1 (the flake: 'a clock step back' then found 1e-16, not 0)
+  for k = 1, 20 do
+    t = 98765.4321 + k * 13.37
+    la.onAudioState({ state = 'live', latencyMs = 20 })
+    t = t + la.STALE_S + 1
+    for _ = 1, 6 do t = t + 0.1; la.ownFactor(t) end   -- (stale: the mod's sounds back to full, fade exactly 0)
+    la.onAudioState({ state = 'live', latencyMs = 20 })
+    local base = t
+    for _, d in ipairs({ 0.1, 0.2, 0.3 }) do t = base + d; la.ownFactor(t) end
+    local f = la.ownFactor(t)                   -- (dt 0)
+    check(f == 0, 'three frames of FADE_S / 3 at clock ' .. k .. ': exactly silent: ' .. string.format('%.17g', f))
+  end
+  for round = 1, 5 do
+    local f = frames(97 + round, true)
+    check(f == 0, 'odd frames, live: the mod\'s own sounds exactly silent: ' .. string.format('%.17g', f))
+    t = t + la.STALE_S + 0.01
+    f = frames(89 + round, false)
+    check(f == 1, 'odd frames, stale: exactly full again: ' .. string.format('%.17g', f))
+  end
+  os.clockhp = saved
+end
 -- active / due: what ambience.lua does each frame
 check(la.active() and la.due(1000) and not la.due(1.65), 'live: active; a message due SEND_S after the last, not before')
 check(la.status(now0).live and la.status(now0).text:find('Live', 1, true) == 1, 'status: live')

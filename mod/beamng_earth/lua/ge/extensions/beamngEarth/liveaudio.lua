@@ -159,6 +159,7 @@ function M.ownFactor(now)
   fadeAt = now
   local step = dt / M.FADE_S
   fade = fade < target and math.min(target, fade + step) or math.max(target, fade - step)
+  if math.abs(fade - target) < 1e-6 then fade = target end   -- (sums of steps stop just short: exactly 0 / 1)
   return 1 - fade
 end
 
