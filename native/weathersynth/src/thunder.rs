@@ -81,18 +81,23 @@ pub struct Class {
     pub micro_height: f64,
     /// the bang (the main channel's boom) held ~12 dB down for this long after the first arrival (s); 0: none
     pub bang_delay: f64,
-    /// a low shelf below 80 Hz (dB; 0: none): less of a blast's thump
+    /// a low shelf below `low_shelf_hz` (dB; 0: none): less of a blast's thump
     pub low_shelf_db: f64,
+    pub low_shelf_hz: f64,
+    /// a late horizontal side channel whose sound arrives ~`late_t` s after the flash (+/-15 % per seed): the second
+    /// roll of a close strike's peal (0: none); its gain
+    pub late_t: f64,
+    pub late_gain: f64,
 }
 
 pub fn class(name: &str) -> Option<Class> {
     let c = match name {
         "strike" => Class {
-            // fix2 (the user on fix1: "They sound a little like bombs going off"): an instant crack at t = 0 (no onset
-            // ramp), a near-field micro-crack layer (the lowest 250 m of channel, rough, sub-millisecond N-waves: the
-            // ripping tear), tilt 10, 9 dB less below 80 Hz (no blast thump), the bang held back a little after the
-            // crack; kept from fix1: the drier tail (echo 0.3, tail 0.4, T60 2.5-4 s) and the soft saturation with a
-            // fast limiter (no held-up plateau)
+            // fix3 (fix1 "like bombs going off", fix2 "like gunshots"; matched to the user's reference recording on
+            // band shares, centroid, attack and the envelope): a fast 60 ms attack from -6 dB, the bang at the onset, a
+            // full low-mid body (tilt 7, only -4 dB below 50 Hz), a hint of micro-crackle (0.03), a rolling peal
+            // (echo / tail 0.5, T60 3-4.5 s) with a second roll ~3.5 s in (a late side channel); soft saturation and
+            // a fast limiter (no held-up plateau)
             name: "strike",
             d_min: 60.0,
             d_max: 280.0,
@@ -101,22 +106,25 @@ pub fn class(name: &str) -> Option<Class> {
             ceil_db: -1.3,
             attack_s: 0.001,
             release_s: 0.04,
-            echo: 0.3,
+            echo: 0.5,
             excess: 0.0,
             fade_in_s: 0.003,
             fade_out_s: 4.0,
-            t60: (2.5, 4.0),
-            tail: 0.4,
-            tilt: 10.0,
+            t60: (3.0, 4.5),
+            tail: 0.5,
+            tilt: 7.0,
             restore: false,
-            ramp_db: 0.0,
-            ramp_s: 0.0,
+            ramp_db: -6.0,
+            ramp_s: 0.06,
             saturate: true,
-            micro_gain: 0.25,
+            micro_gain: 0.03,
             micro_r0: 0.25,
             micro_height: 250.0,
-            bang_delay: 0.15,
-            low_shelf_db: -9.0,
+            bang_delay: 0.0,
+            low_shelf_db: -4.0,
+            low_shelf_hz: 50.0,
+            late_t: 3.5,
+            late_gain: 0.8,
         },
         "close" => Class {
             name: "close",
@@ -143,6 +151,9 @@ pub fn class(name: &str) -> Option<Class> {
             micro_height: 250.0,
             bang_delay: 0.0,
             low_shelf_db: 0.0,
+            low_shelf_hz: 80.0,
+            late_t: 0.0,
+            late_gain: 0.0,
         },
         "mid" => Class {
             name: "mid",
@@ -169,6 +180,9 @@ pub fn class(name: &str) -> Option<Class> {
             micro_height: 250.0,
             bang_delay: 0.0,
             low_shelf_db: 0.0,
+            low_shelf_hz: 80.0,
+            late_t: 0.0,
+            late_gain: 0.0,
         },
         "far" => Class {
             name: "far",
@@ -195,6 +209,9 @@ pub fn class(name: &str) -> Option<Class> {
             micro_height: 250.0,
             bang_delay: 0.0,
             low_shelf_db: 0.0,
+            low_shelf_hz: 80.0,
+            late_t: 0.0,
+            late_gain: 0.0,
         },
         _ => return None,
     };
@@ -219,7 +236,7 @@ pub fn class(name: &str) -> Option<Class> {
                 c.d_max = f[9];
             }
         }
-        // WEATHERSYNTH_STRIKE_FIX2="micro_gain,micro_r0,micro_height,bang_delay,low_shelf_db" (testing)
+        // WEATHERSYNTH_STRIKE_FIX2="micro_gain,micro_r0,micro_height,bang_delay,low_shelf_db[,low_shelf_hz]" (testing)
         if let Ok(v) = std::env::var("WEATHERSYNTH_STRIKE_FIX2") {
             let f: Vec<f64> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
             if f.len() >= 5 {
@@ -228,6 +245,13 @@ pub fn class(name: &str) -> Option<Class> {
                 c.micro_height = f[2];
                 c.bang_delay = f[3];
                 c.low_shelf_db = f[4];
+            }
+            if f.len() >= 6 {
+                c.low_shelf_hz = f[5];
+            }
+            if f.len() >= 8 {
+                c.late_t = f[6];
+                c.late_gain = f[7];
             }
         }
         // WEATHERSYNTH_STRIKE_SHAPE="ramp_db,ramp_s,saturate" (testing)
@@ -457,6 +481,21 @@ fn make_channel_at(seed: u64, cl: &Class, at: Option<(f64, f64)>, micro_min: f64
         let pts = walk(&mut brng, topp, h, norm(h), 0.6, ilen, &|p: V3| p[2] < zlo || p[2] > zhi);
         let pts = fractalise(&mut micro, &pts);
         layers.push(Layer { pts, r0: r0 * 0.55, gain: 0.45, t_off: brng.range(0.0, 0.05), micro: false });
+    }
+    // The late side channel (strike): leaves the main channel where its sound arrives ~late_t s after the flash and
+    // runs sideways 400-1200 m at about that height, so its pieces arrive together: a second swell of the peal.
+    if cl.late_t > 0.0 && cl.late_gain > 0.0 {
+        let mut lrng = Rng::new(seed, &format!("thunder-late-{}", cl.name));
+        let want = cl.late_t * lrng.range(0.85, 1.15) * SOUND;
+        let obs: V3 = [0.0, 0.0, OBS_H];
+        if let Some(i) = meso.iter().position(|p| len(sub(*p, obs)) >= want) {
+            let az = lrng.range(0.0, m::TAU);
+            let h = [m::cos(az), m::sin(az), lrng.range(-0.05, 0.05)];
+            let blen = lrng.lognormal(700.0, 0.4).clamp(400.0, 1200.0);
+            let pts = walk(&mut lrng, meso[i], h, norm(h), 0.5, blen, &|p: V3| p[2] < 50.0);
+            let pts = fractalise(&mut micro, &pts);
+            layers.push(Layer { pts, r0, gain: cl.late_gain, t_off: 0.0, micro: false });
+        }
     }
     // The near-field micro-crack layer (strike): the lowest `micro_height` m of the main channel again, fractalised far
     // finer and rougher, its pieces short N-waves (R0 `micro_r0`): many sub-millisecond shocks arriving in quick
@@ -867,7 +906,7 @@ pub fn render_live(seed: u64, dist: f64, az: f64, micro_min: f64, length_s: f64)
     let mut hp = Biquad::highpass(FS, 25.0, 0.7071);
     hp.run(&mut y);
     if cl.low_shelf_db != 0.0 {
-        let mut ls = Biquad::lowshelf(FS, 80.0, cl.low_shelf_db);
+        let mut ls = Biquad::lowshelf(FS, cl.low_shelf_hz, cl.low_shelf_db);
         ls.run(&mut y);
     }
     let fo = (3.0 * FS) as usize;
@@ -909,7 +948,7 @@ pub fn render(seed: u64, cl: &Class) -> Rendered {
     let mut hp = Biquad::highpass(FS, 25.0, 0.7071);
     hp.run(&mut y);
     if cl.low_shelf_db != 0.0 {
-        let mut ls = Biquad::lowshelf(FS, 80.0, cl.low_shelf_db);
+        let mut ls = Biquad::lowshelf(FS, cl.low_shelf_hz, cl.low_shelf_db);
         ls.run(&mut y);
     }
     let fi = (cl.fade_in_s * FS) as usize;
