@@ -476,45 +476,92 @@ impl SnowLook {
         let road_own = road.map(|r| r.as_standard_layout().into_owned());
         let road_s = road_own.as_ref().map(|r| r.as_slice().expect("standard layout"));
         let full = (1.0 + p.bias + p.soft * 0.5) / p.gain;     // cover at which every texel is white
+        let lin_k = 1.0 / (p.gain - p.bias).max(1e-6);
         let lw = (0.299f64, 0.587f64, 0.114f64);
         let s = cg.s;
         let nk = cg.nk;
         let inv_s = 1.0 / s as f64;
+        let inv255 = 1.0 / 255.0;
         let mut changed = false;
+        // the photo rules' smoothsteps of a channel value or a channel difference, tabled (the same values)
+        let by_v = |a: f64, b: f64| -> Vec<f64> { (0..256).map(|v| smooth(v as f64 * inv255, a, b)).collect() };
+        let by_d = |a: f64, b: f64| -> Vec<f64> { (0..511).map(|d| smooth((d as f64 - 255.0) * inv255, a, b)).collect() };
+        let (t_dark, t_white, t_wv) = (by_v(p.canopy_v.0, p.canopy_v.1), by_v(p.white_v.0, p.white_v.1),
+                                       by_v(p.water_v.0, p.water_v.1));
+        let (t_gr, t_gb) = (by_d(p.canopy_green.0, p.canopy_green.1), by_d(p.canopy_gb.0, p.canopy_gb.1));
+        let (t_wbg, t_wbr) = (by_d(-0.01, 0.02), by_d(0.03, 0.07));
+        // the drift scale's noise (smooth at its 20 m) on the coarse nodes, interpolated like the cover
+        let n2: Vec<f64> = if w2 > 0.0 {
+            (0..nk * nk).map(|q| {
+                let (r, k) = (q / nk, q % nk);
+                let ex = ex0 + ((k * s) as f64 + 0.5) * t;
+                let ny = ny0 - ((r * s) as f64 + 0.5) * t;
+                vnoise(ex / p.patch_m.1, ny / p.patch_m.1, 12)
+            }).collect()
+        } else { Vec::new() };
+        let mut rn = vec![0.0f64; nk];
+        // the coarse fields along this texel row (vertical lerp once a row; horizontal per texel)
+        let mut rc = vec![0.0f64; nk];
+        let mut ro = vec![0.0f64; nk];
+        let mut rg = vec![0.0f64; nk];
+        let mut rs = vec![0.0f64; nk];
+        let mut rt = vec![0.0f64; nk];
+        let mut rv = vec![0.0f64; nk];
+        let mut rr = vec![[0.0f64; ROAD_CLASSES]; nk];
         for i in 0..px {
             let (r0, wy) = (i / s, (i % s) as f64 * inv_s);
+            let (a0, a1) = (r0 * nk, (r0 + 1) * nk);
+            let mut any = false;
+            for k in 0..nk {
+                rc[k] = cg.c[a0 + k] * (1.0 - wy) + cg.c[a1 + k] * wy;
+                any |= cg.c[a0 + k] > 1e-4 || cg.c[a1 + k] > 1e-4;
+            }
+            if !any {
+                continue;
+            }
+            for k in 0..nk {
+                ro[k] = cg.o[a0 + k] * (1.0 - wy) + cg.o[a1 + k] * wy;
+                rg[k] = cg.g[a0 + k] * (1.0 - wy) + cg.g[a1 + k] * wy;
+                rs[k] = cg.sl[a0 + k] * (1.0 - wy) + cg.sl[a1 + k] * wy;
+                rt[k] = cg.tree[a0 + k] * (1.0 - wy) + cg.tree[a1 + k] * wy;
+                rv[k] = vm[a0 + k] * (1.0 - wy) + vm[a1 + k] * wy;
+                if w2 > 0.0 {
+                    rn[k] = n2[a0 + k] * (1.0 - wy) + n2[a1 + k] * wy;
+                }
+                if road_s.is_some() {
+                    for q in 0..ROAD_CLASSES {
+                        rr[k][q] = cg.rd[a0 + k][q] * (1.0 - wy) + cg.rd[a1 + k][q] * wy;
+                    }
+                }
+            }
             let ny = ny0 - (i as f64 + 0.5) * t;
             for j in 0..px {
                 let k0 = j / s;
-                let q00 = r0 * nk + k0;
-                let (q01, q10, q11) = (q00 + 1, q00 + nk, q00 + nk + 1);
-                let (c00, c01, c10, c11) = (cg.c[q00], cg.c[q01], cg.c[q10], cg.c[q11]);
-                if c00 <= 1e-4 && c01 <= 1e-4 && c10 <= 1e-4 && c11 <= 1e-4 {
+                let (c0, c1) = (rc[k0], rc[k0 + 1]);
+                if c0 <= 1e-4 && c1 <= 1e-4 && cg.c[a0 + k0] <= 1e-4 && cg.c[a0 + k0 + 1] <= 1e-4
+                    && cg.c[a1 + k0] <= 1e-4 && cg.c[a1 + k0 + 1] <= 1e-4 {
                     continue;
                 }
                 let wx = (j % s) as f64 * inv_s;
-                let lerp4 = |v: &[f64]| (v[q00] * (1.0 - wx) + v[q01] * wx) * (1.0 - wy)
-                    + (v[q10] * (1.0 - wx) + v[q11] * wx) * wy;
-                let mut c = (c00 * (1.0 - wx) + c01 * wx) * (1.0 - wy) + (c10 * (1.0 - wx) + c11 * wx) * wy;
+                let hl = |v: &[f64]| v[k0] + (v[k0 + 1] - v[k0]) * wx;
+                let mut c = c0 + (c1 - c0) * wx;
                 if let Some(rm) = road_s {
                     let k = rm[i * px + j] as usize;
                     if (1..=ROAD_CLASSES).contains(&k) {
-                        let rs = (cg.rd[q00][k - 1] * (1.0 - wx) + cg.rd[q01][k - 1] * wx) * (1.0 - wy)
-                            + (cg.rd[q10][k - 1] * (1.0 - wx) + cg.rd[q11][k - 1] * wx) * wy;
-                        c *= rs;
+                        c *= rr[k0][k - 1] + (rr[k0 + 1][k - 1] - rr[k0][k - 1]) * wx;
                     }
                 }
                 // partial cover: world-anchored patches where the texel can show them, else an even share
                 let a = if wn <= 0.0 {
-                    ((c * p.gain - p.bias) / (p.gain - p.bias).max(1e-6)).clamp(0.0, 1.0)
+                    ((c * p.gain - p.bias) * lin_k).clamp(0.0, 1.0)
                 } else if c >= full && wn >= 1.0 {
                     1.0
                 } else {
-                    let a_lin = ((c * p.gain - p.bias) / (p.gain - p.bias).max(1e-6)).clamp(0.0, 1.0);
+                    let a_lin = ((c * p.gain - p.bias) * lin_k).clamp(0.0, 1.0);
                     let ex = ex0 + (j as f64 + 0.5) * t;
                     let mut n = 0.0;
                     if w1 > 0.0 { n += w1 * vnoise(ex / p.patch_m.0, ny / p.patch_m.0, 11); }
-                    if w2 > 0.0 { n += w2 * vnoise(ex / p.patch_m.1, ny / p.patch_m.1, 12); }
+                    if w2 > 0.0 { n += w2 * hl(&rn); }
                     let a_noise = ((c * p.gain - p.bias - n / wn) / p.soft + 0.5).clamp(0.0, 1.0);
                     wn * a_noise + (1.0 - wn) * a_lin
                 };
@@ -522,33 +569,45 @@ impl SnowLook {
                     continue;
                 }
                 let q = (i * px + j) * 3;
-                let (r, g, b) = (src[q] as f64, src[q + 1] as f64, src[q + 2] as f64);
-                let mx = r.max(g).max(b);
+                let (ri, gi, bi) = (src[q] as usize, src[q + 1] as usize, src[q + 2] as usize);
+                let (r, g, b) = (ri as f64, gi as f64, bi as f64);
+                let mxi = ri.max(gi).max(bi);
+                let mx = mxi as f64;
                 let mn = r.min(g).min(b);
-                let v = mx / 255.0;
+                let v = mx * inv255;
                 let sat = if mx > 0.0 { (mx - mn) / mx } else { 0.0 };
                 // a crown (green, darker than the stand round it or simply dark) keeps most of its colour; a shadow
                 // (not green) takes the snow, darker by the shading below
                 // (green over red; blue no more than a little above it: conifers are blue-green in Sentinel-2,
                 // shadows blue, meadows and rock red-grey)
-                let green = smooth((g - r) / 255.0, p.canopy_green.0, p.canopy_green.1)
-                    * smooth((g - b) / 255.0, p.canopy_gb.0, p.canopy_gb.1);
-                let rel = 1.0 - smooth(v / lerp4(&vm).max(1e-3), p.canopy_rel.0, p.canopy_rel.1);
-                let canopy = green * rel.max(1.0 - smooth(v, p.canopy_v.0, p.canopy_v.1)) * lerp4(&cg.tree);
-                // (a grey, bare crown lets the snow under it show: less of its colour kept than a saturated one)
-                let keep = p.canopy_keep * (p.canopy_sat_floor
-                    + (1.0 - p.canopy_sat_floor) * smooth(sat, p.canopy_sat.0, p.canopy_sat.1));
-                let white = smooth(v, p.white_v.0, p.white_v.1) * (1.0 - smooth(sat, p.white_sat, p.white_sat * 2.0));
+                let mut keep_mul = 1.0;
+                let gr = (g - r) * inv255;
+                let tree = hl(&rt);
+                if gr > p.canopy_green.0 && tree > 0.0 {
+                    let green = t_gr[gi + 255 - ri] * t_gb[gi + 255 - bi];
+                    if green > 0.0 {
+                        let rel = 1.0 - smooth(v / hl(&rv).max(1e-3), p.canopy_rel.0, p.canopy_rel.1);
+                        let canopy = green * rel.max(1.0 - t_dark[mxi]) * tree;
+                        // (a grey, bare crown lets the snow under it show: less of its colour kept than a saturated one)
+                        let keep = p.canopy_keep * (p.canopy_sat_floor
+                            + (1.0 - p.canopy_sat_floor) * smooth(sat, p.canopy_sat.0, p.canopy_sat.1));
+                        keep_mul = 1.0 - keep * canopy;
+                    }
+                }
+                if v > p.white_v.0 {
+                    keep_mul *= 1.0 - t_white[mxi] * (1.0 - smooth(sat, p.white_sat, p.white_sat * 2.0));
+                }
                 // (blue over red as well: grey asphalt and roofs are a hint bluish too)
-                let water = (1.0 - smooth(v, p.water_v.0, p.water_v.1)) * smooth((b - g) / 255.0, -0.01, 0.02)
-                    * smooth((b - r) / 255.0, 0.03, 0.07)
-                    * (1.0 - smooth(lerp4(&cg.sl), p.water_slope.0, p.water_slope.1));
-                let amt = a * lerp4(&cg.o) * (1.0 - keep * canopy) * (1.0 - white) * (1.0 - water);
+                if v < p.water_v.1 && b > r {
+                    keep_mul *= 1.0 - (1.0 - t_wv[mxi]) * t_wbg[bi + 255 - gi] * t_wbr[bi + 255 - ri]
+                        * (1.0 - smooth(hl(&rs), p.water_slope.0, p.water_slope.1));
+                }
+                let amt = a * hl(&ro) * keep_mul;
                 if amt <= 0.0 {
                     continue;
                 }
-                let lum = (lw.0 * r + lw.1 * g + lw.2 * b) / 255.0;
-                let age = lerp4(&cg.g).clamp(0.0, 3.0);
+                let lum = (lw.0 * r + lw.1 * g + lw.2 * b) * inv255;
+                let age = hl(&rg).clamp(0.0, 3.0);
                 let ka = (age.floor() as usize).min(2);
                 let wa = age - ka as f64;
                 let sh = (p.shade.0 + p.shade.1 * lum).min(p.shade.2);
@@ -599,18 +658,26 @@ fn local_value(src: &[u8], px: usize, s: usize, nk: usize, r: usize) -> Vec<f64>
             cell[a * nk + b] = sum as f64 / (((i1 - i0) * (j1 - j0)) as f64 * 255.0);
         }
     }
+    // the box by running sums along rows, then columns (edges clamped: the box shrinks)
     let mut tmp = vec![0.0f64; nk * nk];
+    let mut pre = vec![0.0f64; nk + 1];
     for a in 0..nk {
         for b in 0..nk {
+            pre[b + 1] = pre[b] + cell[a * nk + b];
+        }
+        for b in 0..nk {
             let (b0, b1) = (b.saturating_sub(r), (b + r).min(nk - 1));
-            tmp[a * nk + b] = (b0..=b1).map(|k| cell[a * nk + k]).sum::<f64>() / (b1 - b0 + 1) as f64;
+            tmp[a * nk + b] = (pre[b1 + 1] - pre[b0]) / (b1 - b0 + 1) as f64;
         }
     }
     let mut out = vec![0.0f64; nk * nk];
-    for a in 0..nk {
-        let (a0, a1) = (a.saturating_sub(r), (a + r).min(nk - 1));
-        for b in 0..nk {
-            out[a * nk + b] = (a0..=a1).map(|k| tmp[k * nk + b]).sum::<f64>() / (a1 - a0 + 1) as f64;
+    for b in 0..nk {
+        for a in 0..nk {
+            pre[a + 1] = pre[a] + tmp[a * nk + b];
+        }
+        for a in 0..nk {
+            let (a0, a1) = (a.saturating_sub(r), (a + r).min(nk - 1));
+            out[a * nk + b] = (pre[a1 + 1] - pre[a0]) / (a1 - a0 + 1) as f64;
         }
     }
     out
