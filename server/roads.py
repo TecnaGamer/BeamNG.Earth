@@ -13859,7 +13859,7 @@ def _rs_skew_ground_ends(chunks, skews):
                 continue
             t = n[at, :2] - n[nxt, :2] if e == 1 else n[nxt, :2] - n[at, :2]
             left = np.array([-t[1], t[0]])
-            d = dirs[j] if float(dirs[j] @ left) >= 0.0 else -dirs[j]
+            d = dirs[j] if float(dirs[j][0]) * float(left[0]) + float(dirs[j][1]) * float(left[1]) >= 0.0 else -dirs[j]
             c[f"rs_sk{e}"] = [round(float(d[0]), 6), round(float(d[1]), 6)]
 
 

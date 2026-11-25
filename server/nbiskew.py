@@ -21,6 +21,7 @@ data's versions (mapdata.MapData.versions) while the skew rule reads it. No tabl
     t.near(lat0, lon0, lat1, lon1, pad_m)       indices of the records in the box (pad m round it), ascending
 """
 import io
+import math
 import json
 import logging
 import os
@@ -30,6 +31,7 @@ from collections import namedtuple
 
 import numpy as np
 
+import dmath
 import winterpacks
 
 log = logging.getLogger("earthd.nbiskew")
@@ -79,7 +81,7 @@ class Table(namedtuple("Table", "lat lon skew length")):
         if i1 <= i0:
             return np.zeros(0, np.int64)
         mid = 0.5 * (lat0 + lat1)
-        kx = max(np.cos(np.radians(min(abs(mid), 89.0))), 0.01)
+        kx = max(dmath.cos(math.radians(min(abs(mid), 89.0))), 0.01)
         dlon = pad_m / (111320.0 * kx) + 1e-6
         lo = self.lon[i0:i1]
         keep = np.flatnonzero((lo >= np.float32(lon0 - dlon)) & (lo <= np.float32(lon1 + dlon)))
