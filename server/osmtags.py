@@ -40,7 +40,7 @@ log = logging.getLogger("earthd.mapdata")
 URL = "https://data.openstreetmap.us/layercake/highways.parquet"
 HOST = "data.openstreetmap.us"
 VERSION_TTL_S = 7 * 86400       # a pinned version is checked again after this long (the file changes ~weekly)
-RETRY_S = 3600                  # the source unreachable: asked again after this long (offline, blocked, gone)
+RETRY_S = 120                   # the source unreachable: asked again after this long (offline, blocked, gone); short: a host back up must not stay shut out (2026-11-08)
 PATH = "osm/highways.parquet"   # (the path DuckDB reads it under)
 
 # The query: OSM way id and the parsed tags (NULL where absent or not understood).
@@ -102,8 +102,10 @@ class OsmTags:
     DIR = "osmtags"             # the pinned version's and its blocks' folder under raw_dir (osmfuel.OsmFuel: its own)
 
     def __init__(self, raw_dir, fetcher, url=URL):
-        self.raw_dir, self.fetcher, self.url = raw_dir, fetcher, url
+        self.raw_dir, self.url = raw_dir, url
+        self.fetcher = rangeread.HostDown(fetcher, os.path.join(raw_dir, self.DIR, "hostdown"))
         self._lock = threading.Lock()
+        self._probing = threading.Lock()    # (the one thread asking the host for its version: _version)
         self._remote = None         # (etag, RemoteFile)
         self._checked = 0.0
         self._reader = overture.Reader(raw_dir, fetcher)
@@ -112,6 +114,8 @@ class OsmTags:
 
     def version(self, kind="demand"):
         """(etag, RemoteFile) of the version in use: the one pinned on disk while fresh, else the server's."""
+        if self._probing.locked():      # (another thread is asking the host: not waiting behind it)
+            raise rangeread.RangeError(f"{self.url}: being asked by another thread")
         with self._lock:
             if self._remote is not None and time.time() - self._checked < VERSION_TTL_S:
                 return self._remote
@@ -133,16 +137,29 @@ class OsmTags:
                     recent = False
                 if recent:
                     raise rangeread.RangeError(f"{self.url}: unreachable at the last try")
+                # The asking itself claims the marker first (every other thread and road-tile process then fails at
+                # once, their cells built without the tags: mapdata._OsmMissing) and no thread waits on the lock for
+                # it: a dead host (connect timeouts, 2 attempts) held every cell build for minutes (2026-11-08, GitHub
+                # #435: "the road workers may be stuck"). A good answer removes the marker.
+                if not self._probing.acquire(blocking=False):
+                    raise rangeread.RangeError(f"{self.url}: being asked by another thread")
                 try:
+                    os.makedirs(os.path.dirname(down), exist_ok=True)
+                    open(down, "w").close()
                     r = self.fetcher.get(self.url, kind=kind, headers={"Range": "bytes=0-15"})
                     etag = r.headers.get("etag", "").strip()
                     m = rangeread.CONTENT_RANGE.match(r.headers.get("content-range", ""))
                     if not etag or not m or m.group(3) == "*":
                         raise rangeread.RangeError(f"{self.url}: no ETag or size")
+                    try:
+                        os.remove(down)
+                    except OSError:
+                        pass
                 except Exception:
-                    os.makedirs(os.path.dirname(down), exist_ok=True)
-                    open(down, "w").close()
+                    open(down, "w").close()      # (the failure's time: the hour counts from here)
                     raise
+                finally:
+                    self._probing.release()
                 size = int(m.group(3))
                 os.makedirs(os.path.dirname(pin), exist_ok=True)
                 with open(pin + ".tmp", "w") as f:

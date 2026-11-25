@@ -778,3 +778,154 @@ def test_a_members_laws_are_made_once_and_follow_the_laws_set_anew():
     assert ix.deck_grade(m) == was
     t = Member("r", _line(0, 0, 100, 0), "rail", "rail", None, 0.0, 2.0, None)
     assert ix.max_grade(t) == ix.railways.GRADE and ix.curve_radius(t) == max(ix.R_MIN_RAIL_M, (100.0 / 3.6) ** 2 / ix.A_VERT_RAIL)
+
+
+def _scan_rounds(members, rounds, ground):
+    """find_interchanges over the members of each round in turn, one Scan kept (a growth's rounds: owner.grow): the
+    last round's (net, found)."""
+    scan = ix.Scan()
+    net = found = None
+    for part in rounds:
+        net, found = ix.find_interchanges([members[k] for k in part], lambda n_: (ground, lambda i, s: _fixed(n_, ground, i, s)),
+                                          scan=scan, reach=True)
+    return net, found
+
+
+def test_a_growth_lays_the_same_ramps_with_and_without_its_memo():
+    # (ix/owner.grow's rounds lay the same ramps again from the same ends: _Ramper.memo keeps their samples, ground
+    # and curve by the members they run along. The rounds' answer must be the one laid whole)
+    slope = lambda xy: 0.05 * xy[:, 1] + 0.01 * np.sin(xy[:, 0] / 30.0)
+    keys = ["m1", "m2", "d1", "d2", "mid", "s", "n", "side", "e"]
+    m = [Member("m1", _line(-800, 0, 800, 0, 200), "ground", "motorway", 120, 0, 12.0, None),
+         Member("m2", _line(-800, 120, 800, 120, 200), "ground", "motorway", 120, 0, 12.0, None),
+         Member("d1", _line(0, -30, 0, 30, 13), "deck", "secondary", 60, 1, 5.0, None),
+         Member("d2", _line(0, 90, 0, 150, 13), "deck", "secondary", 60, 1, 5.0, None),
+         Member("mid", _line(0, 30, 0, 90, 16), "ground", "secondary", 60, 0, 5.0, None),
+         Member("s", _line(0, -600, 0, -30), "ground", "secondary", 60, 0, 5.0, None),
+         Member("n", _line(0, 150, 0, 700), "ground", "secondary", 60, 0, 5.0, None),
+         Member("side", _line(-500, -300, 500, -300, 100), "ground", "residential", 30, 0, 4.0, None),
+         Member("e", _line(300, -700, 300, 700, 200), "ground", "primary", 70, 0, 5.0, None)]
+    # (the rounds number the members otherwise, as a growth's does: its box slides and members_of keeps those in it)
+    rounds = [[0, 1, 2, 3, 4, 5, 6], [7, 6, 5, 4, 3, 2, 1, 0], [8, 7, 6, 5, 4, 3, 2, 1, 0], [3, 1, 8, 0, 6, 2, 7, 5, 4],
+              [0, 1, 2, 3, 4, 5, 6, 7, 8]]
+    with_memo = _scan_rounds(m, rounds, slope)
+    real_init = ix._Ramper.__init__
+
+    def no_memo(self, net, ground_of, pieced, memo=None):
+        real_init(self, net, ground_of, pieced, None)
+    ix._Ramper.__init__ = no_memo
+    try:
+        whole = _scan_rounds(m, rounds, slope)
+    finally:
+        ix._Ramper.__init__ = real_init
+    assert len(with_memo[1]) == 1 and len(whole[1]) == 1, "one interchange: the two decks' ramps meet on mid"
+    a, b = with_memo[1][0], whole[1][0]
+    assert sorted(a.sysm["seeds"]) == sorted(b.sysm["seeds"])
+    assert [(c["u"], c["d"]) for c in a.sysm["crossings"]] == [(c["u"], c["d"]) for c in b.sysm["crossings"]]
+    assert sorted(a.sysm["ends"]) == sorted(b.sysm["ends"])
+    assert len(a.parts) == len(b.parts)
+    scan = ix.Scan()
+    hits = [0]
+    real_by_index = ix._x_by_index
+
+    def counting(net, x, segs):
+        hits[0] += 1
+        return real_by_index(net, x, segs)
+    ix._x_by_index = counting
+    try:
+        for part in rounds:
+            ix.find_interchanges([m[k] for k in part], lambda n_: (slope, lambda i, s: _fixed(n_, slope, i, s)), scan=scan,
+                                 reach=True)
+    finally:
+        ix._x_by_index = real_by_index
+    assert hits[0] > 4, "the ramps of the rounds before were laid again from the memo, in the round's own indices"
+
+
+def _indexed(members, reach=False):
+    """find_interchanges of the members with the process's pair index (a growth's round, as owner.grow makes it): (net,
+    found, the round's scan)."""
+    scan = ix.Scan()
+    net, found = ix.find_interchanges(members, lambda n_: (lambda xy: np.zeros(len(xy)), lambda i, s: _fixed(n_, lambda xy: np.zeros(len(xy)), i, s)),
+                                      scan=scan, reach=reach)
+    return net, found, scan
+
+
+def _seeds_relations(net, scan):
+    """{seed's key: (the index's relations, a full scan's)}."""
+    out = {}
+    for i in range(len(net.m)):
+        if ix._is_seed(net, i):
+            out[net.m[i].key] = (scan.relations(net, i), ix._relations(net, i))
+    return out
+
+
+def _assert_index_exact(net, scan):
+    for key, (got, whole) in _seeds_relations(net, scan).items():
+        assert got == whole, key
+
+
+def test_the_pair_index_gives_each_growth_the_relations_of_a_full_scan():
+    """The process's pair index across growths (PAIRS): a seed's entry names every member near it in the net, whichever
+    growth indexed each, so relations() is a full scan's. A seed the index has not seen is scanned along its line; one
+    it has is asked for the members near its box that its entry lacks: this net's new members (a road joining the deck's
+    end), a member indexed by another growth and met here for the first time, and the same part cut differently and kept
+    in this net in place of the copy the last net kept (one_part: a seed's neighbours are not the same from net to net).
+    A member that is no seed is never asked and has no entry: no relations of its own, and every seed near it is."""
+    d1 = Member("d1", _line(0, -30, 0, 30, 13), "deck", "secondary", 60, 1, 5.0, None)
+    mid = Member("mid", _line(0, 30, 0, 90, 16), "ground", "secondary", 60, 0, 5.0, None)
+    d2 = Member("d2", _line(0, 90, 0, 150, 13), "deck", "secondary", 60, 1, 5.0, None)
+    w = Member("w", _line(-500, 100, 500, 100, 100), "ground", "primary", 70, 0, 5.0, None)
+    s = Member("s", _line(0, -600, 0, -30, 100), "ground", "secondary", 60, 0, 5.0, None)
+    n = Member("n", _line(0, 151, 0, 400, 50), "deck", "secondary", 60, 1, 5.0, None)
+    n2 = Member("n", _line(0, 151.5, 0, 400, 50), "deck", "secondary", 60, 1, 5.0, None)     # (the same part, cut otherwise)
+    # (a growth over n alone first)
+    _0, _f, scan0 = _indexed([n])
+    assert scan0.scanned[-1] == 1 and len(ix.PAIRS.pairs) == 1, "the seed alone is in the index"
+    # (a growth over the decks' district: its two seeds scanned; mid and w, no seeds, never asked)
+    net1, _f, scan1 = _indexed([d1, mid, d2, w])
+    assert scan1.scanned[-1] == 2 and scan1.fresh == 2 and len(ix.PAIRS.pairs) == 3
+    _assert_index_exact(net1, scan1)
+    # (a growth with s added and n met for the first time: d1 and d2, had already, asked for what they lack: s and n)
+    net2, _f, scan2 = _indexed([d1, mid, d2, w, s, n])
+    assert scan2.scanned[-1] == 2 and scan2.fresh == 0, "d1 (lacks s) and d2 (lacks n) are asked, both ways: n lacks nothing then"
+    _assert_index_exact(net2, scan2)
+    rel = _seeds_relations(net2, scan2)
+    keys = lambda got: {net2.m[r[0]].key for r in got}
+    assert "n" in keys(rel["d2"][0]) and "d2" in keys(rel["n"][0]), "the strangers are paired"
+    # (the same part cut otherwise takes n's place, as one_part keeps another copy from one net to the next)
+    net3, _f, scan3 = _indexed([d1, mid, d2, w, s, n2])
+    assert scan3.scanned[-1] == 1 and scan3.fresh == 1, "n2 scanned (new; its scan gives d2 its side): nobody else"
+    _assert_index_exact(net3, scan3)
+    stale = ix._line_id(net2, _key_index(net2, "n"))
+    assert stale not in {ix._line_id(net3, r[0]) for r in scan3.relations(net3, _key_index(net3, "d2"))},         "n's stale entry names a member this net has not"
+    # (nothing new, nothing lacked: nobody asked)
+    net4, _f, scan4 = _indexed([d1, mid, d2, w, s, n2])
+    assert scan4.scanned[-1] == 0 and scan4.fresh == 0
+    _assert_index_exact(net4, scan4)
+
+
+def test_the_pair_index_at_its_caps_holds_the_nets_seeds_and_scans_the_rest_again():
+    """At its caps the index keeps the net's own seeds (a growth's rounds go on reading one another) and nothing of the
+    other growths: met again, they are scanned as new. A growth reading the old index goes on with it."""
+    d1 = Member("d1", _line(0, -30, 0, 30, 13), "deck", "secondary", 60, 1, 5.0, None)
+    mid = Member("mid", _line(0, 30, 0, 90, 16), "ground", "secondary", 60, 0, 5.0, None)
+    d3 = Member("d3", _line(-50, 60, 50, 60, 11), "deck", "secondary", 60, 1, 5.0, None)
+    far = Member("far", _line(-3000, 0, -3000, 500, 100), "deck", "secondary", 60, 1, 5.0, None)
+    _0, _f, scan1 = _indexed([d1, mid])
+    assert scan1.scanned[-1] == 1 and len(ix.PAIRS.pairs) == 1
+    was = ix.PAIRS
+    ix.PAIRS_MAX_SEEDS, ix.PAIRS_MAX_PAIRS = 2, 2
+    try:
+        _1, _f, scan2 = _indexed([d1, mid, d3])          # (not full yet: d3 new)
+        assert ix.PAIRS is was and scan2.scanned[-1] == 1 and scan2.fresh == 1 and len(ix.PAIRS.pairs) == 2
+        _assert_index_exact(_1, scan2)
+        _2, _f, scan3 = _indexed([d1, mid, far])         # (full: d1, this net's seed, kept; d3 out of it, dropped; far new)
+        assert ix.PAIRS is not was and len(was.pairs) == 2, "the old index is the old growth's still"
+        assert set(ix.PAIRS.pairs) == {ix._line_id(_2, _key_index(_2, "d1")), ix._line_id(_2, _key_index(_2, "far"))}
+        assert scan3.scanned[-1] == 1 and scan3.fresh == 1
+        _assert_index_exact(_2, scan3)
+        _3, _f, scan4 = _indexed([d1, mid, far, d3])     # (d3 met again: new)
+        assert scan4.scanned[-1] == 1 and scan4.fresh == 1
+        _assert_index_exact(_3, scan4)
+    finally:
+        ix.PAIRS_MAX_SEEDS, ix.PAIRS_MAX_PAIRS = 100000, 200000

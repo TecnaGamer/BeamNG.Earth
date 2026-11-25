@@ -27,6 +27,7 @@ import revisit  # noqa: E402
 import xproc  # noqa: E402
 from ix import owner, s2_extent  # noqa: E402
 from test_approaches import overpass, flat_elev  # noqa: E402
+from test_gradeshapes import _line  # noqa: E402
 from test_roads import LAT, LON  # noqa: E402
 
 REPLAY = os.path.join(HERE, "fixtures", "interchange_popoli_ss17_underpass.npz")
@@ -386,6 +387,21 @@ class GrowthOnceTest(unittest.TestCase):
         self.assertIsNotNone(box)
         again = owner.grow(pl, net, mine[0], sorted(pts)[0], pts[sorted(pts)[0]], adopt=False, hint=box)
         self.assertEqual(again[0], ik, "the stored extent gives the same interchange in its one round")
+
+    def test_a_growth_follows_the_asking_pieces_system_not_the_roads_first_one_found(self):
+        """A road's two pieces within the pad are two systems of the same road: the growth from the farther piece follows
+        that piece's (the nearest to it), not the first found with the road among its seeds, which is known already and
+        would index nothing for the asking piece: grown again for every region holding it."""
+        a = gs.Member("w", _line(0, -30, 0, 30, 13), "deck", "secondary", 60, 1, 5.0, None)
+        b = gs.Member("w", _line(600, -40, 600, 40, 21), "deck", "secondary", 60, 1, 5.0, None)
+        net = gs.Net([a, b])
+        cid = gs.canonical_id(a)
+        found = [gs.Interchange({"seeds": [0]}, 0.0, 0.0, ()), gs.Interchange({"seeds": [1]}, 0.0, 0.0, ())]
+        piece = lambda seeds: gs.Interchange({"seeds": seeds}, 0.0, 0.0, ())      # (the road's piece A is found first)
+        self.assertEqual(owner.piece_system(net, piece([1]), net, found, cid).sysm["seeds"], [1])
+        self.assertEqual(owner.piece_system(net, piece([0]), net, found, cid).sysm["seeds"], [0])
+        self.assertIsNone(owner.piece_system(net, piece([0]), net, [], cid))
+        self.assertEqual(owner.piece_system(net, piece([]), net, found, cid).sysm["seeds"], [0], "no piece: the first")
 
     def test_a_growth_that_reaches_a_piece_a_lower_growth_runs_from_gives_way(self):
         pl, home = planner()

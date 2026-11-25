@@ -772,7 +772,10 @@ class ElasticPool:
                 log.debug("%s reaper: %s: %s", self.name, type(e).__name__, e)
 
     def reap_step(self, now):
-        """The extras stopped when they have had no job in flight for idle_s up to now. True when stopped."""
+        """The extras stopped when they have had no job in flight for idle_s up to now, or at once once the server is
+        over its memory limit and they have nothing in flight (budget.OVER: while it is set every job goes to the base
+        pool, so the drained extras will see no other job; waiting out the idle window only holds their memory, a
+        teleport-heavy session's 7 far-tile processes ~1 GB each outlived every boost, 2026-11-23). True when stopped."""
         with self._lock:
             ex = self.extra
             if ex is None or self.idle_s <= 0:
@@ -780,18 +783,22 @@ class ElasticPool:
             if ex.inflight:
                 self._idle_since = None
                 return False
-            if self._idle_since is None:
-                self._idle_since = now
-                return False
-            if now - self._idle_since < self.idle_s:
-                return False
+            import budget
+            over = bool(budget.OVER)
+            if not over:
+                if self._idle_since is None:
+                    self._idle_since = now
+                    return False
+                if now - self._idle_since < self.idle_s:
+                    return False
             self.extra, self._idle_since = None, None
             self.extra_stops += 1
         try:
             ex.shutdown(wait=False)
         except Exception:
             pass
-        log.info("%s: the %d burst processes stopped (idle %.0f s)", self.name, self.extra_n, self.idle_s)
+        log.info("%s: the %d burst processes stopped (%s)", self.name, self.extra_n,
+                 "the server over its memory limit, no job in flight" if over else f"idle {self.idle_s:.0f} s")
         return True
 
     def shutdown(self, *args, **kwargs):

@@ -25,7 +25,7 @@ log = logging.getLogger("earthd.picnic")
 URL = "https://data.openstreetmap.us/layercake/pois.parquet"
 PATH = "osm/pois.parquet"
 VERSION_TTL_S = 7 * 86400
-RETRY_S = 3600
+RETRY_S = 120               # the source unreachable: asked again after this long; short: a host back up must not stay shut out (2026-11-08) (A host that does not answer is asked no more for a minute (rangeread.HostDown): after a network failure a marker in raw_dir keeps every thread and road-tile process off the host (HostUnavailable at once, not each waiting its connect timeout); the first request after the time is the probe and clears it (GitHub #435, 2026-11-08))
 COLUMNS = ("id", "leisure", "amenity", "tourism")
 TABLES = {"picnic_table"}
 SITES = {"picnic_site"}
@@ -36,9 +36,11 @@ class Source:
     """Picnic features of a map cell, from the pinned Layercake POIs version."""
 
     def __init__(self, reader, fetcher, url=URL):
-        self.reader, self.fetcher, self.url = reader, fetcher, url
+        self.reader, self.url = reader, url
         self.raw_dir = reader.raw_dir
+        self.fetcher = rangeread.HostDown(fetcher, os.path.join(self.raw_dir, "picnicsource", "hostdown"))
         self._lock = threading.Lock()
+        self._probing = threading.Lock()    # (the one thread asking the host for its version: _version)
         self._remote = None
         self._checked = 0.0
         self._meta = None           # (RemoteFile, row groups)
@@ -122,6 +124,8 @@ class Source:
         return None
 
     def _version(self, kind):
+        if self._probing.locked():      # (another thread is asking the host: not waiting behind it)
+            raise rangeread.RangeError(f"{self.url}: being asked by another thread")
         with self._lock:
             if self._remote is not None and time.time() - self._checked < VERSION_TTL_S:
                 return self._remote
@@ -143,16 +147,29 @@ class Source:
                     recent = False
                 if recent:
                     raise rangeread.RangeError(f"{self.url}: unreachable at the last try")
+                # The asking itself claims the marker first (every other thread and road-tile process then fails at
+                # once, their cells built without the tags: mapdata._OsmMissing) and no thread waits on the lock for
+                # it: a dead host (connect timeouts, 2 attempts) held every cell build for minutes (2026-11-08, GitHub
+                # #435: "the road workers may be stuck"). A good answer removes the marker.
+                if not self._probing.acquire(blocking=False):
+                    raise rangeread.RangeError(f"{self.url}: being asked by another thread")
                 try:
+                    os.makedirs(os.path.dirname(down), exist_ok=True)
+                    open(down, "w").close()
                     r = self.fetcher.get(self.url, kind=kind, headers={"Range": "bytes=0-15"})
                     etag = r.headers.get("etag", "").strip()
                     m = rangeread.CONTENT_RANGE.match(r.headers.get("content-range", ""))
                     if not etag or not m or m.group(3) == "*":
                         raise rangeread.RangeError(f"{self.url}: no ETag or size")
+                    try:
+                        os.remove(down)
+                    except OSError:
+                        pass
                 except Exception:
-                    os.makedirs(os.path.dirname(down), exist_ok=True)
-                    open(down, "w").close()
+                    open(down, "w").close()      # (the failure's time: the hour counts from here)
                     raise
+                finally:
+                    self._probing.release()
                 size = int(m.group(3))
                 os.makedirs(os.path.dirname(pin), exist_ok=True)
                 with open(pin + ".tmp", "w") as f:

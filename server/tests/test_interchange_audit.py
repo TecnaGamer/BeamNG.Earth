@@ -401,21 +401,35 @@ def test_within_the_reach_budget_the_pairs_are_the_laws_own():
 
 
 def test_a_round_scans_only_the_members_it_adds_and_finds_what_a_full_scan_finds():
-    # (a growth's rounds: the cells added in a round bring their members, each scanned against its neighbours through the
-    # grid; the relations of the members of the rounds before are kept)
+    # (a growth's rounds: the cells added in a round bring their members, their seeds scanned against the neighbours
+    # along their lines through the grid, the seeds of the rounds before asked for the neighbours they lack; the relations
+    # of the rounds before are kept)
     members = _long_overpasses(60.0)
     first = [m for m in members if m.key[0] in ("m1", "d1", "s1", "link")]
     second = first + [m for m in members if m.key[0] not in ("m1", "d1", "s1", "link")]
-    seen = []
-    real = gs.Net.near_along
+    # (gradeshapes.PAIRS, the process's index: a round scans the seeds it adds along their lines (near_along), and asks the
+    # seeds it has for the members near their boxes (near) that their entry lacks; a member that is no seed is never asked)
+    seen, boxes = [], []
+    real, real_near = gs.Net.near_along, gs.Net.near
     scan = gs.Scan()
-    with mock.patch.object(gs.Net, "near_along", lambda self, i, pad: seen.append(len(self.m)) or real(self, i, pad)):
+    net = gs.Net(second)
+
+    def along(self, i, pad):
+        seen.append(len(self.m))
+        return real(self, i, pad)
+
+    def near(self, i, pad):
+        boxes.append(len(self.m))
+        return real_near(self, i, pad)
+    with mock.patch.object(gs.Net, "near_along", along), mock.patch.object(gs.Net, "near", near):
         gs.find_interchanges(first, scan=scan)
-        round_one = len(seen)
+        round_one, boxes_one = len(seen), len(boxes)
         net_b, found_b = gs.find_interchanges(second, scan=scan)
-        round_two = len(seen) - round_one
-    assert scan.scanned == [len(first), len(second) - len(first)], scan.scanned
-    assert round_one == len(first) and round_two == len(second) - len(first), (round_one, round_two)
+        round_two, boxes_two = len(seen) - round_one, len(boxes) - boxes_one
+    seeds = [sum(gs._is_seed(net, i) for i in range(a, b)) for a, b in ((0, len(first)), (len(first), len(second)))]
+    assert round_one == scan.scanned[0] == seeds[0] and boxes_one == 0, (round_one, boxes_one, scan.scanned)
+    assert round_two == seeds[1] and boxes_two == seeds[0], (round_two, boxes_two, scan.scanned)
+    assert scan.scanned == [seeds[0], seeds[1]], "the new seed scanned; the deck of the round before, lacking nothing here"
     net_a, found_a = gs.find_interchanges(second)
     assert [sorted(str(net_a.m[i].key) for i in x.sysm["seeds"]) for x in found_a] ==         [sorted(str(net_b.m[i].key) for i in x.sysm["seeds"]) for x in found_b]
     assert repr([x.sysm for x in found_a]) == repr([x.sysm for x in found_b])
