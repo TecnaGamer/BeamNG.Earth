@@ -324,6 +324,7 @@ local function drawFlashes(now)
       l:setField('radius', 0, string.format('%.0f', best.d * 1.5 + 2000))
       l:setField('intensity', 0, string.format('%.6g', M.LIGHT_LM * bv / best.gain * math.min(1, best.gain * 4)))
       if not shown.light then l:setField('isEnabled', 0, '1') end
+      l:postApply()
       want.light = true
     end
     local p = camPos()
@@ -349,7 +350,7 @@ local function drawFlashes(now)
       end
     end
   end
-  if shown.light and not want.light then local l = obj(objs.light) if l then l:setField('isEnabled', 0, '0') end end
+  if shown.light and not want.light then local l = obj(objs.light) if l then l:setField('isEnabled', 0, '0'); l:postApply() end end
   if shown.glow and not want.glow then local gl = obj(objs.glow) if gl then gl:setHidden(true) end end
   if shown.bolt and shown.bolt ~= want.bolt then local b = obj(objs.bolts[shown.bolt]) if b then b:setHidden(true) end end
   st.shown = want

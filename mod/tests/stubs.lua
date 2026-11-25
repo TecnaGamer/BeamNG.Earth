@@ -57,6 +57,7 @@ function S.newObject(class)
   function o:delete() S.objects[self.id] = nil; S.count('delete_' .. class) end
   function o:setHidden(h) self.hidden = h end
   function o:isHidden() return self.hidden end
+  function o:postApply() S.count("postApply_" .. class) end
   function o:updateInstanceRenderData() S.count("updateInstanceRenderData") end
   function o:setRenderEnabled(v) S.count('setRenderEnabled'); self.renderEnabled = v end
   -- SimGroup
