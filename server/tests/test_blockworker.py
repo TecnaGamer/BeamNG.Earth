@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,6 +24,19 @@ from test_roads import FRAME, LAT, LON, features  # noqa: E402
 
 def setUpModule():
     borderfixtures.require()        # (no border data: the German read gates' tests would pass on today's reads)
+
+
+class ProfilePinsTest(unittest.TestCase):
+    def test_server_can_query_heights_without_worker_state(self):
+        import roadshape
+        import roadsys
+
+        with patch.object(blockworker, "_s", None):
+            for profile_built in (False, True):
+                with self.subTest(profile_built=profile_built), \
+                        patch.object(roadshape, "PROFILE_BUILT", profile_built), \
+                        patch.object(roadsys, "HEIGHTS", True):
+                    self.assertEqual(blockworker._profile_pins(None, LAT, LON, LAT, LON, 16), [])
 
 
 class FakeMapData:

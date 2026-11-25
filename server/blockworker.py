@@ -1121,6 +1121,10 @@ def _profile_pins(planner, la0, lo0, la1, lo1, pad):
     """grading.PROFILE_PINS (BNE_ROADSHAPE=profile, P3b; BNE_ROADSYS=heights, M2): the approach pins of the bridge
     chains whose parts come within pad + roadshape.PIN_REACH_M of the box (heights: roadsys.pins_near), each chain solved (or taken) in this process's bridge
     store on the plans' first stage, the pins within pad of the box (roadshape.pins_near: sorted by content)."""
+    # The main server also imports this module, but only a block worker owns the profile stores.
+    # Server-side queries such as the water planner still have the first-stage graded heights.
+    if _s is None:
+        return []
     import mapcells
     import roads as roadsmod
     import roadshape
